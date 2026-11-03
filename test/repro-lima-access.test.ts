@@ -36,6 +36,7 @@ function fakeDb(seed: Record<string, Row[]>, opts: { onRead?: (table: string, fr
     q.select = () => q;
     q.eq = (col: string, v: unknown) => { filters.push((r) => r[col] === v); return q; };
     q.neq = (col: string, v: unknown) => { filters.push((r) => r[col] !== v); return q; };
+    q.like = (col: string, v: string) => { filters.push((r) => String(r[col] ?? "").startsWith(v.replace(/%$/, ""))); return q; };
     q.in = (col: string, vs: unknown[]) => { filters.push((r) => vs.includes(r[col])); return q; };
     q.is = (col: string, v: unknown) => { filters.push((r) => (v === null ? r[col] == null : r[col] === v)); return q; };
     q.gt = (col: string, v: string) => { filters.push((r) => r[col] != null && r[col] > v); return q; };
@@ -82,7 +83,7 @@ function orderRow(id: string, extra: Row = {}): Row {
   return {
     order_id: id, store_id: "s1", order_name: `#${id}`, customer_name: "Ana", customer_phone: "987654321",
     district: "Surco", region: "Lima", province: "Lima", order_total: 120, macro_since: "2026-10-10T20:00:00Z",
-    macro_stage: "en_curso", macro_substage: "por_reprogramar_lima", operational_status: null, ...extra,
+    macro_stage: "en_curso", macro_substage: "por_reprogramar_lima", operational_status: null, coverage: "lima", ...extra,
   };
 }
 
@@ -128,6 +129,44 @@ function seed(over: { cases?: Row[]; calls?: Row[]; events?: Row[]; items?: Row[
 
 /** Lun 12/10 a las 10:00 de Lima, antes del corte. */
 const NOW = new Date("2026-10-12T15:00:00Z");
+
+describe("Atender desde todos los pendientes", () => {
+  it("carga bajo demanda un primer despacho sin inventar un fallo ni un caso", async () => {
+    const source = seed({ cases: [], stops: [], shipments: [] });
+    source.order_master = [orderRow("o1", { macro_stage: "preparacion", macro_substage: "por_generar_rotulo" })];
+    const { admin, db } = fakeDb(source);
+    const data = await loadReproLima(admin, scope, NOW, { attention: true, orderIds: ["o1"], closeStale: false });
+    expect(data.rows).toHaveLength(1);
+    expect(data.rows[0]).toMatchObject({ attentionContext: "pending", episodeKey: "attention:o1", failure: null, requestedDate: null, caseId: null, outputsUsed: 0 });
+    expect(db.lima_repro_cases).toEqual([]);
+    expect(db.order_events).toEqual([]);
+  });
+
+  it("mantiene las atenciones guardadas fuera de Por reprogramar y no precarga los otros expedientes", async () => {
+    const c = openCase({ episode_key: "attention:o1", episode_at: null });
+    const source = seed({ cases: [c], stops: [], shipments: [] });
+    source.order_master = [orderRow("o1", { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" }), orderRow("o2", { macro_stage: "preparacion" })];
+    const { admin, db } = fakeDb(source);
+    const tasks: Array<() => Promise<void>> = [];
+    const data = await loadReproLima(admin, scope, NOW, { attention: true, defer: (t) => tasks.push(t) });
+    expect(data.rows.map((r) => r.orderId)).toEqual(["o1"]);
+    expect(data.rows[0]?.caseId).toBe(c.id);
+    for (const t of tasks) await t();
+    expect(db.lima_repro_cases?.[0]?.closed_at).toBeNull();
+    await loadReproLima(admin, scope, NOW, { defer: (t) => tasks.push(t) });
+    for (const t of tasks) await t();
+    expect(db.lima_repro_cases?.[0]?.closed_at).toBeNull();
+  });
+
+  it.each([
+    { coverage: "provincia_cod" }, { macro_stage: "por_cerrar" }, { macro_stage: "finalizado" }, { store_id: "otra" },
+  ])("no abre fuera de la cobertura, etapas o tiendas autorizadas: %j", async (extra) => {
+    const source = seed({ cases: [], stops: [], shipments: [] });
+    source.order_master = [orderRow("o1", { macro_stage: "preparacion", ...extra })];
+    const { admin } = fakeDb(source);
+    expect((await loadReproLima(admin, scope, NOW, { attention: true, orderIds: ["o1"], closeStale: false })).rows).toEqual([]);
+  });
+});
 
 beforeEach(() => {
   vi.useFakeTimers();

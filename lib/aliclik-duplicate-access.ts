@@ -1,10 +1,12 @@
 import "server-only";
 import { createHash } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
-import { classifyOperation } from "@/lib/order-macro-stage";
+import { classifyOperation, gfRiderSignal, type MacroEventSnapshot } from "@/lib/order-macro-stage";
+import { OUTPUT_REPLACED_KIND } from "@/lib/gf-replaced-output";
 import { normalizePhone } from "@/lib/phone";
-import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment,
+import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment, transferredElsewhere,
   type DuplicateConflict, type DuplicateHold, type DuplicateResolution, type DuplicateShipment } from "@/lib/aliclik-duplicate";
 
 export const DUPLICATE_READ_ERROR = "No se pudo verificar si hay otro envío del mismo producto pendiente. Reintenta antes de crear la guía Aliclik.";
@@ -24,9 +26,19 @@ async function duplicatePermissions(sb: Awaited<ReturnType<typeof createServerSu
   return permissionsFor(membership.data ? [membership.data.role] : [], grants.data, functionalRoles);
 }
 
-/** RLS throughout. Never limit customer history to the 50 rows shown in the brief. */
-export async function loadAliclikDuplicateHold(orderId: string): Promise<DuplicateHold> {
-  const sb = await createServerSupabase();
+/**
+ * RLS throughout. Never limit customer history to the 50 rows shown in the brief.
+ *
+ * `scope` es la guía automática del día programado (MOM §6.2): sin sesión, lee
+ * con el service role. La búsqueda ya se acota a las tiendas de la organización
+ * del pedido; lo que cambia es que nadie puede resolver ni exceptuar desde ahí
+ * (`canResolve`/`canOverride` en false), y la retención decide igual.
+ */
+export async function loadAliclikDuplicateHold(
+  orderId: string,
+  scope?: { client: SupabaseClient },
+): Promise<DuplicateHold> {
+  const sb = scope?.client ?? (await createServerSupabase());
   const { data: row, error } = await sb.from("order_master")
     .select("order_id,store_id,customer_phone,shipping_mode,coverage,region,province,district")
     .eq("order_id", orderId).single();
@@ -56,17 +68,24 @@ export async function loadAliclikDuplicateHold(orderId: string): Promise<Duplica
   }
   if (!priors.length) return clear;
   const active: DuplicateShipment[] = [];
+  const allGuides: DuplicateShipment[] = [];
   for (let start = 0; start < priors.length; start += 100) {
     const ids = priors.slice(start, start + 100).map((p) => p.order_id);
     for (let offset = 0; ; offset += 100) {
       const { data, error: guidesError } = await sb.from("shipments")
-        .select("id,order_id,guide_code,courier,dispatched_at,custody_transferred_at,out_for_delivery_at,aliclik_reported_dispatch_date,returned_at,delivery_status,custody_state,pickup_state")
+        .select("id,order_id,guide_code,courier,created_at,dispatched_at,custody_transferred_at,out_for_delivery_at,aliclik_reported_dispatch_date,returned_at,delivery_status,custody_state,pickup_state")
         .in("order_id", ids).in("store_id", storeIds).order("id").range(offset, offset + 99);
       if (guidesError || !data) throw new Error(DUPLICATE_READ_ERROR);
+      allGuides.push(...(data as DuplicateShipment[]));
       active.push(...(data as DuplicateShipment[]).filter((g) => unresolvedDuplicateShipment(g)));
       if (data.length < 100) break;
     }
   }
+  // Una guía transferida cuyo paquete terminó en otra salida del mismo pedido
+  // ya no es una caja pendiente (owner, 30-10-2026, MOM §8.3).
+  const notTransferred = active.filter((g) => !transferredElsewhere(g, allGuides));
+  active.length = 0;
+  active.push(...notTransferred);
   if (!active.length) return clear;
   // Una salida cuyo destino alguien declaró —entregada o perdida— ya no es una
   // caja pendiente (MOM §8.3). La devolución declarada no se busca aquí: pasa
@@ -81,7 +100,29 @@ export async function loadAliclikDuplicateHold(orderId: string): Promise<Duplica
       if (event.shipment_id) declaredIds.add(event.shipment_id);
     }
   }
-  const pending = active.filter((g) => unresolvedDuplicateShipment(g, declaredIds));
+  // En Grupo GF la entrega vive en la parada, no en delivery_status (§29.13).
+  // Usa la misma señal que el Master: respeta deshacer reportes, retiros y la
+  // identidad de cada salida; el estado comercial del pedido no libera cajas.
+  const riderEvents = new Map<string, MacroEventSnapshot[]>();
+  const ownOrderIds = [...new Set(active.filter((g) => g.courier.trim().toLowerCase() === "propio").map((g) => g.order_id))];
+  for (let start = 0; start < ownOrderIds.length; start += 100) {
+    for (let offset = 0; ; offset += 100) {
+      const { data, error: riderError } = await sb.from("order_events")
+        .select("order_id,kind,shipment_id,occurred_at,payload,note")
+        .in("store_id", storeIds).in("order_id", ownOrderIds.slice(start, start + 100))
+        .in("kind", ["stop_reported", "pickup_checked", "pickup_declined", "package_removed", "returned_to_office", "custody_transferred", OUTPUT_REPLACED_KIND])
+        .order("occurred_at", { ascending: false }).order("id", { ascending: false }).range(offset, offset + 99);
+      if (riderError || !data) throw new Error(DUPLICATE_READ_ERROR);
+      for (const event of data as (MacroEventSnapshot & { order_id: string })[]) {
+        const events = riderEvents.get(event.order_id) ?? [];
+        events.push(event);
+        riderEvents.set(event.order_id, events);
+      }
+      if (data.length < 100) break;
+    }
+  }
+  const pending = active.filter((g) => unresolvedDuplicateShipment(g, declaredIds) &&
+    gfRiderSignal(riderEvents.get(g.order_id) ?? [], g)?.signal !== "entregado");
   active.length = 0;
   active.push(...pending);
   if (!active.length) return clear;
@@ -121,7 +162,7 @@ export async function loadAliclikDuplicateHold(orderId: string): Promise<Duplica
       .eq("kind", "aliclik_duplicate_resolution").order("occurred_at", { ascending: false }).order("id", { ascending: false }).limit(1),
     sb.from("order_payments").select("kind,amount,validation_status").eq("order_id", orderId)
       .eq("store_id", row.store_id).eq("validation_status", "validado").in("kind", ["adelanto", "diferencia", "total"]),
-    duplicatePermissions(sb, store.org_id),
+    scope ? Promise.resolve(null) : duplicatePermissions(sb, store.org_id),
   ]);
   if (events.error || payments.error || !events.data || !payments.data) throw new Error(DUPLICATE_READ_ERROR);
   const event = events.data[0];
@@ -134,5 +175,5 @@ export async function loadAliclikDuplicateHold(orderId: string): Promise<Duplica
     return sum + (Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) : 0);
   }, 0) / 100;
   return { ...duplicateGate(conflicts, fingerprint, resolution, validatedAmount), conflicts, fingerprint,
-    validatedAmount, canResolve: permissions.has("master.edit"), canOverride: permissions.has("master.override_status") };
+    validatedAmount, canResolve: permissions?.has("master.edit") ?? false, canOverride: permissions?.has("master.override_status") ?? false };
 }

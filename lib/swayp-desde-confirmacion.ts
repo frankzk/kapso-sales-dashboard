@@ -129,7 +129,7 @@ export const SWAYP_DESDE_CONFIRMACION_OUTCOME_LABEL: Record<SwaypDesdeConfirmaci
   entregado: "Entregado por Swayp",
   volvio_a_confirmar: "Volvió a Por confirmar",
   nueva_salida: "Salió por otra vía",
-  anulado_shopify: "Anulado en Shopify",
+  anulado_shopify: "Anulado en la tienda",
 };
 
 /**

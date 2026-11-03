@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { UrpiReport } from "./urpi-report";
-import { loadUrpiCandidateOrders, resolveUrpiLinks, type UrpiLink, type UrpiLinkMethod, type UrpiLinkStatus } from "./urpi-report-link";
+import { loadUrpiCandidateOrders, loadUrpiProgrammedIndex, resolveUrpiLinks, type UrpiLink, type UrpiLinkMethod, type UrpiLinkStatus } from "./urpi-report-link";
 
 export interface UrpiReportImportResult {
   rows: number;
@@ -54,7 +54,10 @@ export async function importUrpiReport(admin: SupabaseClient, input: {
   }]));
   const phones = report.rows.map((row) => row.phone).filter((phone): phone is string => Boolean(phone));
   const orders = await loadUrpiCandidateOrders(admin, input.stores.map((store) => store.id), phones);
-  const links = resolveUrpiLinks(report.rows, orders, existing, input.stores);
+  // La programación enviada desempata lo que el teléfono no resuelve (MOM §30.11).
+  const months = report.rows.map((row) => row.reportDate?.slice(0, 7)).filter((month): month is string => Boolean(month));
+  const programmed = await loadUrpiProgrammedIndex(admin, input.stores.map((store) => store.id), months).catch(() => new Map());
+  const links = resolveUrpiLinks(report.rows, orders, existing, input.stores, programmed);
 
   const payload = report.rows.flatMap((row) => {
     const link = links.get(row.urpiRow)!;

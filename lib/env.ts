@@ -223,6 +223,25 @@ export const env = {
   //     Se recorta por lo mismo que SHALOM_API_KEY y SWAYP_TOKEN: se pega a mano
   //     en dos paneles distintos y un blanco invisible da 401 siempre.
   chatbyWebhookSecret: () => (process.env.CHATBY_WEBHOOK_SECRET ?? "").trim(),
+  //     La clave de la API de Chatby para leer la conversación de la clienta en
+  //     la ficha del pedido (MOM §25, «Chatby», 26-10-2026). Es la clave
+  //     «KAPTA» del bot (app.chatby.io/settings#/api → «Create API Token», solo
+  //     «Manage Flow»), aparte de la de Make para poder revocarla sola. Chatby
+  //     no tiene claves de solo lectura:
+  //     Kapta solo hace los dos GET de lib/chatby-api.ts. Vacía = la pestaña
+  //     dice que falta conectar Chatby. Solo servidor.
+  chatbyApiKey: () => (process.env.CHATBY_API_KEY ?? "").trim(),
+
+  // --- Google Geocoding API: coordenada por dirección (PILOTO, 02-11-2026,
+  //     docs/kapta/geocodificacion-propuesta.md). Hoy solo la usa el botón de
+  //     Ajustes que mide el geocodificador contra los pins ya puestos por una
+  //     persona; no escribe nada. La clave es de la cuenta de Google Cloud del
+  //     owner, restringida a Geocoding API y con tope de gasto. Vacía = el botón
+  //     dice que falta y no se llama a Google. Solo servidor: nunca se manda al
+  //     navegador ni se escribe en el registro. Se recorta por lo mismo que
+  //     SHALOM_API_KEY: un blanco pegado en Vercel da REQUEST_DENIED siempre.
+  googleGeocodingApiKey: () => (process.env.GOOGLE_GEOCODING_API_KEY ?? "").trim(),
+  googleGeocodingConfigured: () => Boolean((process.env.GOOGLE_GEOCODING_API_KEY ?? "").trim()),
 
   // --- Webhooks de página de Facebook e Instagram (sonda de comentarios) ---
   //

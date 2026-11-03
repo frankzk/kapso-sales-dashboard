@@ -69,21 +69,22 @@ export function ImportReview({
             : "") +
           master;
         if (fileRef.current) fileRef.current.value = "";
-        // El auto-vínculo contra Shopify en vivo es específico de Aliclik (usa la
-        // referencia del campo NOTA); el resto de couriers traen el nº de pedido
-        // en su propia columna y ya quedan vinculados en la ingesta.
+        // El auto-vínculo (busca en `orders` de Kapta, MOM §38.12) es específico
+        // de Aliclik (usa la referencia del campo NOTA); el resto de couriers
+        // traen el nº de pedido en su propia columna y ya quedan vinculados en
+        // la ingesta.
         if (json.courier === "aliclik" && json.unmatchedCount > 0) {
           setMsg(`${base} Buscando coincidencias…`);
           const r = await runAutoLinkLoop(({ linked }) =>
             setMsg(`${base} Vinculando… (${linked} vinculados)`),
           );
-          // Now that guides carry their Shopify order, re-evaluate Fenix
+          // Now that guides carry their order, re-evaluate Fenix
           // eligibility off the order's products (best-effort; admins only).
           await recomputeFenixEligibility().catch(() => {});
           setMsg(
             r.error
               ? `${base} (auto-vínculo: ${r.error})`
-              : `${base} Auto-vinculadas ${r.linked} guías; el resto queda para revisión.`,
+              : `${base} Auto-vinculadas ${r.linked} guías; el resto queda para revisión.${r.retry ? ` ${retryNote(r.retry)}` : ""}`,
           );
         } else {
           setMsg(base);
@@ -200,18 +201,32 @@ export function ImportReview({
  */
 async function runAutoLinkLoop(
   onProgress?: (totals: { processed: number; linked: number }) => void,
-): Promise<{ processed: number; linked: number; error?: string }> {
+): Promise<{ processed: number; linked: number; retry: number; error?: string }> {
   let processed = 0;
   let linked = 0;
+  // Los que no se pudieron buscar o vincular porque la base falló: quedan sin
+  // revisar y entran en la próxima pasada. Cuentan los de la última vuelta, que
+  // son los que siguen pendientes.
+  let retry = 0;
   for (;;) {
     const r = await processSuggestionBatch();
-    if ("error" in r) return { processed, linked, error: r.error };
+    if ("error" in r) return { processed, linked, retry, error: r.error };
     processed += r.processed;
     linked += r.linked;
+    retry = r.retry ?? 0;
     onProgress?.({ processed, linked });
     if (r.done) break;
   }
-  return { processed, linked };
+  return { processed, linked, retry };
+}
+
+/** «3 guías no se pudieron buscar…», o nada. Es la base de Kapta que falló: el
+ *  auto-vínculo ya no le pregunta a Shopify (MOM §38.12, 25-10-2026). */
+function retryNote(retry: number): string {
+  if (retry <= 0) return "";
+  return retry === 1
+    ? "1 guía no se pudo buscar; se vuelve a buscar la próxima vez."
+    : `${retry} guías no se pudieron buscar; se vuelven a buscar la próxima vez.`;
 }
 
 /**
@@ -223,13 +238,16 @@ function SuggestionBatchRunner({ onDone }: { onDone: () => void }) {
   const [running, setRunning] = useState(false);
   const [stats, setStats] = useState({ processed: 0, linked: 0 });
   const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   async function run() {
     setRunning(true);
     setErr(null);
+    setNote(null);
     setStats({ processed: 0, linked: 0 });
     const r = await runAutoLinkLoop(setStats);
     if (r.error) setErr(r.error);
+    else if (r.retry) setNote(retryNote(r.retry));
     setRunning(false);
     onDone();
   }
@@ -247,6 +265,11 @@ function SuggestionBatchRunner({ onDone }: { onDone: () => void }) {
           : "Vincular coincidencias automáticas"}
       </button>
       {err && <span className="text-xs text-rose-600">{err}</span>}
+      {note && (
+        <span role="status" className="text-xs text-slate-500">
+          {note}
+        </span>
+      )}
     </div>
   );
 }

@@ -661,10 +661,17 @@ describe("reproList", () => {
     expect(r.chips).toContainEqual({ key: "programado_gf_sin_acuerdo", text: "Programado en Grupo GF · sin acuerdo" });
   });
 
-  it("5. el programa del motorizado (#908) va a «Por decidir» sin darlo por bueno (D9)", () => {
-    const r = list({ program: { scheduled_for: MIERCOLES, reason: "Reprogramado por el cliente (reporte de la parada de Roy)" } });
-    expect(r.list).toBe("por_decidir");
-    expect(r.chips).toContainEqual({ key: "fecha_motorizado", text: "Fecha del motorizado sin confirmar: mié 14/10" });
+  it("5. la fecha que el cliente dio en la puerta es el acuerdo: Programados, sin llamar (01-11-2026)", () => {
+    const r = list({ program: { scheduled_for: MIERCOLES, reason: "Reprogramado por el cliente (reporte de la parada de Roy del 12/10): acordado en la puerta." } });
+    expect(r.list).toBe("programados");
+    expect(r.chips).toContainEqual({ key: "acordado_puerta", text: "Acordado en la puerta: mié 14/10" });
+    expect(r.chips.some((c) => c.key === "pidio")).toBe(false);
+  });
+
+  it("5. si el día de la puerta pasó sin salir, vuelve a «Por decidir» para que la tienda llame", () => {
+    const r = list({ program: { scheduled_for: "2026-10-10", reason: "Reprogramado por el cliente (reporte de la parada de Roy)" } });
+    expect(r).toMatchObject({ list: "por_decidir", overdue: true });
+    expect(r.chips).toContainEqual({ key: "acordado_puerta", text: "Acordado en la puerta: sáb 10/10 · no salió" });
   });
 
   it("5. un programa de Repro Lima sin acuerdo vivo (caso de otro episodio) va a «Por decidir»", () => {
@@ -864,7 +871,8 @@ describe("kinds del historial", () => {
 
 describe("couriers y cambios", () => {
   it("Urpi no se ofrece en 1a (E16)", () => {
-    expect(REPRO_COURIER_CHOICES).toEqual(["propio", "tanders", "fenix", "axel"]);
+    // Desde el 26-10-2026 Aliclik ocupa el lugar de Tanders (MOM §9, «Aliclik en Lima»).
+    expect(REPRO_COURIER_CHOICES).toEqual(["propio", "aliclik", "fenix", "axel"]);
     expect(reproCourierDisabledReason("urpi")).toBe("Urpi solo lleva primeros despachos (§9.1); un reprogramado no pasa a Urpi en esta fase.");
     expect(reproCourierDisabledReason("propio")).toBeNull();
   });

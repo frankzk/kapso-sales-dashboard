@@ -1,5 +1,7 @@
 "use client";
 
+import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
+import { CALL_RETRY_SIGNAL_DAYS, prioritizeDueAppointments } from "@/lib/lead-call-queue";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -29,6 +31,7 @@ import { facetItems } from "@/lib/leads-facets";
 import { LEAD_COVERAGES, countLeadCoverage, leadCoverage, type LeadCoverage } from "@/lib/lead-coverage";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import { scoringProfileFor, sortLeadsByPriorityScoped } from "@/lib/lead-priority";
+import { PENDING_VOUCHER_LABEL, pendingVoucherHref } from "@/lib/pending-voucher";
 import {
   countLeadUrgency,
   goldenBreakdown,
@@ -56,6 +59,8 @@ import {
   gestionOf,
   CLAIM_HEARTBEAT_MS,
   isClaimActive,
+  leadAfter,
+  isClaimCapError,
   shouldRenewClaim,
   isQueueBucket,
   labelOf,
@@ -106,6 +111,7 @@ import {
   OpsButton,
   Skeleton,
   choiceChipClass,
+  opsButtonClass,
   type BadgeTone,
 } from "@/components/ops-ui";
 import { ChoicePill } from "@/components/facet-pill";
@@ -190,11 +196,13 @@ function measureLeadDrawerReady() {
 /** Canonical acquisition-source bucket for a lead's `source` (Fuente filter). */
 function leadSourceKey(
   s: string | null | undefined,
-): "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic" {
+): "meta_ad" | "fb_web" | "web" | "cod_cart" | "abandoned_browse" | "organic" {
   return s === "meta_ad"
     ? "meta_ad"
     : s === "fb_web"
       ? "fb_web"
+      : s === "web"
+        ? "web"
       : s === "cod_cart"
         ? "cod_cart"
         : s === "abandoned_browse"
@@ -369,9 +377,27 @@ function LeadHookLine({ lead }: { lead: LeadRow }) {
   );
 }
 
+/**
+ * El motivo de la fila cuando espera la validación de su comprobante (MOM
+ * §16.1): ocupa el renglón del anzuelo, porque lo que la asesora necesita
+ * saber ya no es qué pidió sino que pagó y espera.
+ */
+function PendingVoucherLine({ voucher }: { voucher: NonNullable<LeadRow["pending_voucher"]> }) {
+  const detalle = [
+    voucher.orderName,
+    voucher.amount > 0 ? `S/ ${voucher.amount.toFixed(2)}` : null,
+  ].filter(Boolean).join(" · ");
+  return (
+    <p title={`${voucher.reason}${detalle ? ` · ${detalle}` : ""}`} className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">
+      <span className="text-ink-500">Motivo:</span> <span className="font-medium text-warn-fg">{voucher.reason}</span>
+      {detalle && <span className="tabular-nums text-ink-500"> · {detalle}</span>}
+    </p>
+  );
+}
+
 // Gestión (estado de la llamada) → etiqueta y punto de la columna «Última gestión».
 const GESTION_DISPLAY: Record<LeadGestion, { label: string; dot: string }> = {
-  sin_llamar: { label: "Sin llamar", dot: "bg-white ring-1 ring-inset ring-warn-fg" },
+  sin_llamar: { label: "Sin gestión", dot: "bg-white ring-1 ring-inset ring-warn-fg" },
   nr: { label: "No responde", dot: "bg-ink-500" },
   buzon_cuelga: { label: "Buzón / cuelga", dot: "bg-ink-500" },
   contactados: { label: "Contactado", dot: "bg-ok-fg" },
@@ -472,6 +498,7 @@ export function LeadsBoard({
   scope,
   allStoresAvailable = false,
   canHoldNext = false,
+  routingLabel,
 }: {
   stores: StoreSummary[];
   /** Id de la tienda activa, o ALL_STORES cuando la vista es combinada. */
@@ -517,6 +544,7 @@ export function LeadsBoard({
   leadsComplete?: boolean;
   /** Tiene el rol `vendedora`: se le reserva su siguiente lead (MOM §11). */
   canHoldNext?: boolean;
+  routingLabel?: string;
 }) {
   const [board, setBoard] = useState({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
   // A route/periodic refresh replaces the local confirmed writes atomically.
@@ -555,9 +583,9 @@ export function LeadsBoard({
   // intención/gestión axes within "Por llamar".
   // Fuente y Número: multi-select (OR dentro del grupo). Set vacío = sin filtro.
   const [srcFilter, setSrcFilter] = useState<Set<string>>(new Set());
-  // Cola de DOS ejes que se combinan. Eje 1 (estado, tabs primarios): "Sin llamar"
-  // (default) = nadie lo tocó (status nuevo); "En seguimiento" = ya gestionado pero
-  // pendiente. Eje 2 (segmento, "accesos directos" debajo): frío…carrito, scopeado
+  // Cola de DOS ejes que se combinan. Eje 1 (estado, tabs primarios): "Por llamar"
+  // (default) = nuevos + reintentos listos; "En seguimiento" = los demás
+  // pendientes que aún esperan su próxima gestión. Eje 2 (segmento, "accesos directos" debajo): frío…carrito, scopeado
   // al estado activo. La Gestión es un refino que vive en Filtros (sin default).
   const [queueState, setQueueState] = useState<QueueState>(initialState ?? "sin_llamar");
   const [segFilter, setSegFilter] = useState<QueueBucket | null>(initialSeg ?? null);
@@ -593,7 +621,7 @@ export function LeadsBoard({
   const [sortMode, setSortMode] = useState<"prioridad" | "reciente">("prioridad");
   const [exportingAudience, setExportingAudience] = useState(false);
 
-  // «Tablero de hoy» (el equipo, sin llamar 7d y la carrera de pedidos). Se
+  // «Tablero de hoy» (el equipo, por llamar 7d y la carrera de pedidos). Se
   // recarga cuando cambia el conteo de la cola — y con el auto-refresco en vivo
   // eso pasa muy seguido. IMPORTANTE: NO se vacía insightsData antes de recargar;
   // si se vaciara, el tablero parpadearía a esqueleto varios segundos en CADA
@@ -853,7 +881,11 @@ export function LeadsBoard({
    * «abriendo». Un botón que no dice nada mientras trabaja se acaba pulsando
    * cuatro veces.
    */
-  async function abrirLeadPorId(leadId: string, previa?: LeadRow | null): Promise<boolean> {
+  async function abrirLeadPorId(
+    leadId: string,
+    previa?: LeadRow | null,
+    opts?: { onTaken?: (message: string) => boolean },
+  ): Promise<boolean> {
     markLeadDrawerOpen();
     activeLeadIdRef.current = leadId;
     setBanner(null);
@@ -866,6 +898,12 @@ export function LeadsBoard({
       const d = await openLeadDrawer(leadId);
       if (activeLeadIdRef.current !== leadId) return false;
       if ("error" in d) {
+        // «Siguiente lead»: otra persona lo tomó después de pintar la lista.
+        // Quien llama decide si salta al siguiente libre (sin aviso ni cierre).
+        if (opts?.onTaken && !isClaimCapError(d.error) && opts.onTaken(d.error)) {
+          activeLeadIdRef.current = null;
+          return false;
+        }
         setBanner(d.error);
         setSelected(null);
         activeLeadIdRef.current = null;
@@ -885,6 +923,8 @@ export function LeadsBoard({
       return true;
     } catch {
       if (activeLeadIdRef.current === leadId) {
+        setSelected(null);
+        activeLeadIdRef.current = null;
         setBanner("No se pudo cargar el lead. Intenta nuevamente.");
       }
       return false;
@@ -1014,19 +1054,37 @@ export function LeadsBoard({
   }, []);
   useEffect(() => {
     if (!openLeadId) return;
+    let alive = true;
     const timer = setInterval(() => {
       if (activeLeadIdRef.current !== openLeadId) return;
       if (!shouldRenewClaim(lastActivityRef.current, Date.now())) return;
       void renewLeadClaim(openLeadId)
         .then((res) => {
-          if (res.error && activeLeadIdRef.current === openLeadId) setBanner(res.error);
+          if (!alive || activeLeadIdRef.current !== openLeadId) return;
+          if (res.claimLost) loseLeadClaim(openLeadId, res.error ?? "La reserva de este lead ya no está disponible.");
+          else if (res.error) setBanner(res.error);
         })
         .catch(() => undefined); // un fallo de red se reintenta en el siguiente latido
     }, CLAIM_HEARTBEAT_MS);
-    return () => clearInterval(timer);
+    return () => { alive = false; clearInterval(timer); };
   }, [openLeadId]);
 
+  /** El lead al que se está pasando con «Siguiente lead»; cerrar lo cancela. */
+  const jumpingToRef = useRef<string | null>(null);
+
+  function loseLeadClaim(leadId: string, message: string) {
+    if (activeLeadIdRef.current !== leadId) return;
+    jumpingToRef.current = null;
+    activeLeadIdRef.current = null;
+    setSelected(null);
+    setCalls(null);
+    setHistory(null);
+    nextLead.invalidate(leadId);
+    setBanner(`${message} Se cerró la ficha para evitar una gestión doble.`);
+  }
+
   function closeDrawer() {
+    jumpingToRef.current = null;
     const leadId = selected?.id;
     activeLeadIdRef.current = null;
     setSelected(null);
@@ -1124,6 +1182,7 @@ export function LeadsBoard({
     srcCounts,
     hasCampaign,
     hasFbWeb,
+    hasWeb,
     hasCart,
     hasBrowse,
     segCounts,
@@ -1172,7 +1231,7 @@ export function LeadsBoard({
     const matchSeg = (l: LeadRow) => !inQueue || !segFilter || leadQueueBucket(l) === segFilter;
     const matchCov = (l: LeadRow) => !inQueue || !covFilter || coverageOf(l) === covFilter;
     const matchGest = (l: LeadRow) => {
-      // En "Sin llamar" todos son nuevos → la gestión no aplica (su panel se oculta).
+      // La gestión se conserva y muestra en la fila; este refino sigue en seguimiento.
       if (!inQueue || queueState === "sin_llamar" || !gestFilter) return true;
       if (gestFilter === "otros") return gestionOf(l.status) === null; // casi_cierra, repetido, volver_a_llamar…
       return gestionOf(l.status) === gestFilter;
@@ -1209,12 +1268,12 @@ export function LeadsBoard({
     });
 
     const srcBase = facets.except("src");
-    const srcCountsAcc = { meta_ad: 0, fb_web: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
+    const srcCountsAcc = { meta_ad: 0, fb_web: 0, web: 0, cod_cart: 0, abandoned_browse: 0, organic: 0 };
     for (const l of srcBase) srcCountsAcc[leadSourceKey(l.source)] += 1;
 
     // Eje 2 (segmento): conteos SCOPEADOS al estado activo. `except("seg")` pasa
     // el facet de estado, así que los segmentos suman el total del estado (p.ej. 237
-    // en Sin llamar), no los 429. "Todos" = ese total.
+    // en Por llamar), no los 429. "Todos" = ese total.
     const segBase = facets.except("seg");
     // Cobertura: mismo trato que el segmento — sus chips suman el total del
     // estado activo con los demás filtros puestos, menos el suyo.
@@ -1256,6 +1315,7 @@ export function LeadsBoard({
       srcCounts: srcCountsAcc,
       hasCampaign: leads.some((l) => l.source === "meta_ad"),
       hasFbWeb: leads.some((l) => l.source === "fb_web"),
+      hasWeb: leads.some((l) => l.source === "web"),
       hasCart: leads.some((l) => l.source === "cod_cart"),
       hasBrowse: leads.some((l) => l.source === "abandoned_browse"),
       segCounts: countQueueBuckets(segBase),
@@ -1312,7 +1372,7 @@ export function LeadsBoard({
     now,
   ]);
 
-  // Gestión solo cuenta como filtro activo donde es visible (no en "Sin llamar",
+  // Gestión solo cuenta como filtro activo donde es visible (no en "Por llamar",
   // donde su panel se oculta y matchGest la ignora) — así el badge no miente.
   const gestActive = inQueue && queueState !== "sin_llamar" && !!gestFilter;
   // Filtros de refinamiento activos (excluye el buscador, que tiene su propia ✕).
@@ -1340,7 +1400,7 @@ export function LeadsBoard({
   // view (already narrowed client-side by the query for instant feedback).
   const searchMode = results !== null;
   const baseLeads = results ?? shownLeads;
-  // Orden de la cola "Sin llamar" por probabilidad de cierre (ver lib/lead-priority).
+  // Orden de la cola "Por llamar" por probabilidad de cierre (ver lib/lead-priority).
   // Solo ahí: en "En seguimiento" la llamada tiene fecha comprometida con el
   // cliente y eso manda sobre cualquier puntaje; en una búsqueda el orden lo pone
   // la búsqueda. Se ordena en cliente porque esta vista ya trae el universo
@@ -1377,9 +1437,9 @@ export function LeadsBoard({
   const displayLeads = useMemo(
     () =>
       priorityOn
-        ? sortLeadsByPriorityScoped(baseLeads, (lead) =>
+        ? prioritizeDueAppointments(sortLeadsByPriorityScoped(baseLeads, (lead) =>
             profileByStore.get(lead.store_id) ?? scoringProfileFor(null),
-          )
+          ))
         : baseLeads,
     [priorityOn, baseLeads, profileByStore],
   );
@@ -1457,7 +1517,7 @@ export function LeadsBoard({
     }
   }
 
-  // El siguiente lead (MOM §11): solo a quien vende, en «Sin llamar», sin
+  // El siguiente lead (MOM §11): solo a quien vende, en «Por llamar», sin
   // búsqueda. La cola que mira es la que se le pasa: con sus chips y su orden.
   const nextEnabled =
     canHoldNext && !!currentUserId && view === "por_llamar" && queueState === "sin_llamar" && !searchMode;
@@ -1468,6 +1528,79 @@ export function LeadsBoard({
     drawerLeadId: selected?.id ?? null,
   });
   const nextHandle = nextLead.lead ? handleOf(nextLead.lead) : null;
+
+  // «SIGUIENTE LEAD» DE LA FICHA (25-10-2026): el de debajo en la lista que
+  // está mirando, sin cerrar la ficha. El que venía detrás se anota MIENTRAS
+  // la ficha sigue en la lista: guardar la gestión la saca de «Por llamar», y
+  // es justo entonces cuando se pide el siguiente (`leadAfter`).
+  const openIndex = selected ? displayLeads.findIndex((l) => l.id === selected.id) : -1;
+  const successorRef = useRef<{ openId: string; nextId: string | null } | null>(null);
+  useEffect(() => {
+    if (!selected || openIndex === -1) return;
+    successorRef.current = { openId: selected.id, nextId: displayLeads[openIndex + 1]?.id ?? null };
+  }, [selected, openIndex, displayLeads]);
+  const followingLead = selected
+    ? leadAfter(displayLeads, {
+        openId: selected.id,
+        userId: currentUserId,
+        rememberedNextId: successorRef.current?.openId === selected.id ? successorRef.current.nextId : null,
+      })
+    : null;
+
+  /** Cuántos leads tomados se saltan, como mucho, al pulsar «Siguiente lead». */
+  const NEXT_LEAD_MAX_SKIPS = 5;
+
+  /**
+   * Pasar de la ficha abierta a `next` sin cerrarla. La reserva de la que se
+   * deja se suelta ANTES de tomar la otra, como al cerrar: con el tope de dos
+   * leads abiertos, tomar primero podía dejarla sin cupo. Si la que se deja es
+   * su siguiente reservado, lo suelta `nextLead.release`.
+   */
+  function openFollowingLead(next: LeadRow) {
+    const leaving = selected?.id ?? null;
+    const queue = displayLeads;
+    // Apagado desde el clic (un doble clic no abre dos), y la ficha que se
+    // deja ya no es «la abierta»: su latido no la vuelve a reservar mientras
+    // se suelta.
+    setOpeningId(next.id);
+    activeLeadIdRef.current = null;
+    jumpingToRef.current = next.id;
+    void (async () => {
+      if (nextLead.heldId && nextLead.heldId !== next.id) await nextLead.release();
+      if (leaving && leaving !== next.id && leaving !== nextLead.heldId) {
+        await releaseLead(leaving).catch(() => undefined);
+      }
+      // Cerró la ficha mientras se soltaba la otra: no se le vuelve a abrir.
+      if (jumpingToRef.current !== next.id) {
+        setOpeningId((current) => (current === next.id ? null : current));
+        return;
+      }
+      jumpingToRef.current = null;
+      // Si otra asesora lo tomó después de pintarse la lista, se salta al
+      // siguiente libre de la misma lista (hasta 5 intentos), sin cerrar la
+      // ficha ni mostrar el aviso de «X está atendiendo este lead».
+      let candidate: LeadRow | null = next;
+      let lastTaken: string | null = null;
+      for (let attempt = 0; candidate && attempt < NEXT_LEAD_MAX_SKIPS; attempt++) {
+        let taken = false;
+        const opened = await abrirLeadPorId(candidate.id, candidate, {
+          onTaken: (message) => {
+            taken = true;
+            lastTaken = message;
+            return true;
+          },
+        });
+        if (opened || !taken) return;
+        candidate = leadAfter(queue, { openId: candidate.id, userId: currentUserId });
+      }
+      setSelected(null);
+      setBanner(
+        candidate
+          ? "Los siguientes leads de la lista los están atendiendo otras personas. Vuelve a la lista para elegir otro."
+          : (lastTaken ?? "No quedan leads libres después de este en la lista."),
+      );
+    })();
+  }
 
   // «Más filtros»: lo que no entra en las dos filas de chips.
   const filtersPillRef = useRef<HTMLButtonElement>(null);
@@ -1502,7 +1635,7 @@ export function LeadsBoard({
     ? "Resultados"
     : view === "por_llamar"
       ? queueState === "sin_llamar"
-        ? "Sin llamar"
+        ? "Por llamar"
         : "En seguimiento"
       : VIEW_TITLE[view];
 
@@ -1511,10 +1644,11 @@ export function LeadsBoard({
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Leads</h1>
+          {routingLabel && <p className="mt-1 text-sm font-medium text-brand-700">Tu cola: {routingLabel} · incluye tus reservas y citas</p>}
           <p className="mt-0.5 text-sm text-ink-500">
             {storeLabel}
             {" · "}
-            {counts.sin_llamar.toLocaleString("es-PE")} sin llamar
+            {counts.sin_llamar.toLocaleString("es-PE")} por llamar
             {" · "}
             {(counts.por_llamar - counts.sin_llamar).toLocaleString("es-PE")} en seguimiento
           </p>
@@ -1612,7 +1746,7 @@ export function LeadsBoard({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className={CHIP_ROW}>
             <QueueChip
-              label="Sin llamar"
+              label="Por llamar"
               count={inQueue ? stateCounts.sin_llamar : counts.sin_llamar}
               active={inQueue && queueState === "sin_llamar"}
               onClick={() => pickQueueState("sin_llamar")}
@@ -1631,7 +1765,7 @@ export function LeadsBoard({
               count={counts.handoff}
               active={view === "handoff"}
               onClick={() => navigateToView(view === "handoff" ? "por_llamar" : "handoff")}
-              hint="Clientes que pidieron hablar con una persona"
+              hint="Clientes que pidieron hablar con una persona, y los que ya pagaron y esperan que se valide su comprobante"
             />
             <AttentionPill
               icon={IconMoney}
@@ -1686,8 +1820,8 @@ export function LeadsBoard({
           </div>
         </div>
 
-        {/* Segmento y cobertura, scopeados al estado activo (en «Sin llamar»
-            suman lo que hay sin llamar, no la cola entera). Sin «Todos»: volver
+        {/* Segmento y cobertura, scopeados al estado activo (en «Por llamar»
+            suman lo que hay por llamar, no la cola entera). Sin «Todos»: volver
             a tocar el chip elegido lo quita. */}
         {inQueue && (
           <div className={cn(CHIP_ROW, "gap-x-5")}>
@@ -1805,7 +1939,7 @@ export function LeadsBoard({
                 )}
               </SheetSection>
             )}
-            {(hasCampaign || hasFbWeb || hasCart || hasBrowse) && (
+            {(hasCampaign || hasFbWeb || hasWeb || hasCart || hasBrowse) && (
               <SheetSection title="Fuente">
                 <CheckList
                   label="Fuente"
@@ -1814,6 +1948,7 @@ export function LeadsBoard({
                   options={[
                     ...(hasCampaign ? [{ key: "meta_ad", label: "Campaña", count: srcCounts.meta_ad }] : []),
                     ...(hasFbWeb ? [{ key: "fb_web", label: "Meta / web", count: srcCounts.fb_web }] : []),
+                    ...(hasWeb ? [{ key: "web", label: "Web", count: srcCounts.web }] : []),
                     ...(hasCart ? [{ key: "cod_cart", label: "Carrito", count: srcCounts.cod_cart }] : []),
                     ...(hasBrowse ? [{ key: "abandoned_browse", label: "Búsqueda", count: srcCounts.abandoned_browse }] : []),
                     { key: "organic", label: "Orgánico", count: srcCounts.organic },
@@ -1941,7 +2076,7 @@ export function LeadsBoard({
       )}
 
       {/* Aviso de hora dorada.
-          Con la cola real (1.966 sin llamar) esto muestra un puñado de leads, no
+          Con la cola real (1.966 por llamar) esto muestra un puñado de leads, no
           una lista: 21 estaban dentro de la hora y solo 3 eran carrito o interés.
           Ese es justamente el punto — son pocos, valen el doble, y hasta ahora
           iban pintados igual que los 1.945 restantes.
@@ -2002,7 +2137,7 @@ export function LeadsBoard({
       {view === "por_llamar" && queueState === "sin_llamar" && segFilter === "frio" && (
         <Banner tone="warn" title="Ojo con el costo de oportunidad.">
           Un lead con carrito cierra <span className="font-semibold">14–20 %</span> de las veces que se llama; si
-          quedan carritos sin llamar, rinde más ir por ellos primero. Cuánto rinde llamar a un frío todavía no lo
+          quedan carritos por llamar, rinde más ir por ellos primero. Cuánto rinde llamar a un frío todavía no lo
           sabemos: cuando la llamada funciona, el lead da distrito o genera pedido y{" "}
           <span className="font-semibold">deja de contarse como frío</span>.
         </Banner>
@@ -2035,6 +2170,11 @@ export function LeadsBoard({
             )}
           </div>
         </div>
+        {inQueue && queueState === "sin_llamar" && !searchMode && (
+          <p className="border-t border-line px-4 py-2 text-xs text-ink-500">
+            Nuevos sin gestionar. Reintentos: actividad del cliente o llamada acordada en los últimos {CALL_RETRY_SIGNAL_DAYS} días.
+          </p>
+        )}
         {/* Cabecera de columnas — solo md+; en el teléfono cada fila se apila. */}
         <div className="hidden grid-cols-[minmax(0,1fr)_184px_112px_80px] items-center gap-4 px-4 py-2 text-xs font-semibold text-ink-600 shadow-[inset_0_-1px_0_var(--color-line)] md:grid">
           <span>Lead y lo que pidió</span>
@@ -2095,10 +2235,19 @@ export function LeadsBoard({
                     <span className="shrink-0 text-xs font-medium text-ink-500">{storeNameById.get(lead.store_id) ?? "—"}</span>
                   )}
                   <SegmentBadge lead={lead} />
+                  <LeadAttemptBadge lead={lead} />
                   <YapeKindBadge lead={lead} />
+                  {/* Ya pagó y espera (MOM §16.1): es el motivo de la fila, así
+                      que la marca genérica «Atención» sobra. */}
+                  {lead.pending_voucher && (
+                    <Badge tone="warn" title={`${lead.pending_voucher.reason}. Se valida en la ficha del pedido, en Cobro.`}>
+                      <IconMoney aria-hidden className="size-3 shrink-0" />
+                      {PENDING_VOUCHER_LABEL}
+                    </Badge>
+                  )}
                   {/* Un reencolado, una respuesta nueva o un seguimiento vencido:
                       sin la marca solo cambiaban el orden. */}
-                  {lead.needs_attention && !isYape && (
+                  {lead.needs_attention && !lead.call_queue_ready && !isYape && !lead.pending_voucher && (
                     <Badge tone="warn" title="Requiere atención: reencolado por carrito sin contacto, respuesta nueva o seguimiento vencido">
                       Atención
                     </Badge>
@@ -2128,7 +2277,7 @@ export function LeadsBoard({
                     </Badge>
                   )}
                 </div>
-                <LeadHookLine lead={lead} />
+                {lead.pending_voucher ? <PendingVoucherLine voucher={lead.pending_voucher} /> : <LeadHookLine lead={lead} />}
               </div>
 
               <div className="min-w-0">
@@ -2183,7 +2332,19 @@ export function LeadsBoard({
                   <span className="whitespace-nowrap text-xs text-ink-500">en curso</span>
                 ) : (
                   <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                    {view === "handoff" && (
+                    {/* Quien espera la validación no sale con «Resuelto»: sale
+                        sola cuando se valida o se rechaza el pago. Lo que sí
+                        hace falta es llegar a donde se valida. */}
+                    {view === "handoff" && lead.pending_voucher && (
+                      <a
+                        href={pendingVoucherHref(lead.pending_voucher.orderId)}
+                        onClick={(e) => e.stopPropagation()}
+                        className={opsButtonClass("primary", "sm")}
+                      >
+                        Ir a validar
+                      </a>
+                    )}
+                    {view === "handoff" && !lead.pending_voucher && (
                       <OpsButton
                         size="sm"
                         title="Sacar de Atender ahora (handoff resuelto)"
@@ -2265,8 +2426,17 @@ export function LeadsBoard({
           shopifyDomain={stores.find((s) => s.id === selected.store_id)?.shopify_domain ?? null}
           currency={currency}
           onClose={closeDrawer}
+          claimConfirmed={openingId === null}
+          onClaimLost={(message) => loseLeadClaim(selected.id, message)}
           onRegistered={(update) => refreshDetail(selected.id, update)}
           onReady={measureLeadDrawerReady}
+          next={{
+            lead: followingLead,
+            opening: openingId !== null,
+            onOpen: () => {
+              if (followingLead) openFollowingLead(followingLead);
+            },
+          }}
         />
       )}
     </div>

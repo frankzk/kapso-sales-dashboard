@@ -132,6 +132,7 @@ export async function loadNotebookContext(
   if (target.routeId) {
     const detail = await getRouteDetail(target.routeId);
     for (const s of detail?.stops ?? []) {
+      if (s.status === "pendiente" && s.carried_to) continue;
       stopRefs.set(s.id, { id: s.id, order_id: s.order_id, route_id: target.routeId, photo_path: s.photo_path, voucher_path: s.voucher_path, status: s.status });
       stops.push({
         stopId: s.id,
@@ -183,14 +184,13 @@ async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget
   if (!routeDates.size) return [];
   const { data: stopRows } = await admin
     .from("delivery_stops")
-    .select("id,order_id,shipment_id,dispatch_manifest_id,route_id")
+    .select("id,order_id,shipment_id,dispatch_manifest_id,route_id,status,outcome_reason")
     .in("route_id", [...routeDates.keys()])
-    .eq("status", "no_entregado")
-    .eq("outcome_reason", "reprogramado")
+    .in("status", ["pendiente", "no_entregado"])
     .not("dispatch_manifest_id", "is", null)
     .not("shipment_id", "is", null);
-  const reprogrammed = ((stopRows ?? []) as { id: string; order_id: string; shipment_id: string; dispatch_manifest_id: string; route_id: string }[])
-    .filter((s) => !onRoute.has(s.order_id));
+  const reprogrammed = ((stopRows ?? []) as { id: string; order_id: string; shipment_id: string; dispatch_manifest_id: string; route_id: string; status: string; outcome_reason: string | null }[])
+    .filter((s) => !onRoute.has(s.order_id) && (s.status === "pendiente" || s.outcome_reason === "reprogramado"));
   if (!reprogrammed.length) return [];
   const { data: items } = await admin
     .from("dispatch_manifest_items")
@@ -219,17 +219,17 @@ async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget
   const orderIds = [...new Set(live.map((s) => s.order_id))];
   const [{ data: orders }, { data: master }, balances] = await Promise.all([
     admin.from("orders").select("id,name,cancelled_at").in("id", orderIds),
-    admin.from("order_master").select("order_id,customer_name,order_total").in("order_id", orderIds),
+    admin.from("order_master").select("order_id,customer_name,order_total,general_status").in("order_id", orderIds),
     loadRouteCollectionBalances(orderIds),
   ]);
   const orderById = new Map(((orders ?? []) as { id: string; name: string | null; cancelled_at: string | null }[]).map((o) => [o.id, o]));
-  const masterById = new Map(((master ?? []) as { order_id: string; customer_name: string | null; order_total: number | null }[]).map((m) => [m.order_id, m]));
+  const masterById = new Map(((master ?? []) as { order_id: string; customer_name: string | null; order_total: number | null; general_status: string }[]).map((m) => [m.order_id, m]));
   const seen = new Set<string>();
   const out: PlanCarry[] = [];
   // El reporte más reciente manda si el mismo paquete se reprogramó dos veces.
   for (const s of [...live].sort((a, b) => (routeDates.get(b.route_id) ?? "").localeCompare(routeDates.get(a.route_id) ?? ""))) {
     const order = orderById.get(s.order_id);
-    if (!order || order.cancelled_at || seen.has(s.shipment_id)) continue;
+    if (!order || order.cancelled_at || seen.has(s.shipment_id) || ["entregado", "anulado", "devuelto"].includes(masterById.get(s.order_id)?.general_status ?? "")) continue;
     seen.add(s.shipment_id);
     out.push({
       shipmentId: s.shipment_id,
@@ -239,6 +239,7 @@ async function loadCarryCandidates(admin: SupabaseClient, target: NotebookTarget
       fromDate: routeDates.get(s.route_id) ?? target.routeDate,
       total: masterById.get(s.order_id)?.order_total ?? null,
       remaining: balances.get(s.order_id)?.remaining ?? null,
+      unreported: s.status === "pendiente",
     });
   }
   return out;
@@ -257,7 +258,10 @@ async function loadOrdersElsewhere(admin: SupabaseClient, target: NotebookTarget
   const { data: orders } = await admin.from("orders").select("id,name,cancelled_at").in("name", names.slice(0, 300)).in("store_id", storeIds);
   const found = ((orders ?? []) as { id: string; name: string; cancelled_at: string | null }[]);
   if (!found.length) return out;
-  const { data: shipments } = await admin.from("shipments").select("id,order_id").in("order_id", found.map((o) => o.id));
+  const { data: shipments } = await admin.from("shipments").select("id,order_id,courier,delivery_status").in("order_id", found.map((o) => o.id));
+  const externalByOrder = new Map(((shipments ?? []) as { order_id: string; courier: string; delivery_status: string }[])
+    .filter((s) => !["propio", "por_definir"].includes(s.courier) && ["pendiente", "en_ruta"].includes(s.delivery_status))
+    .map((s) => [s.order_id, s.courier]));
   const orderByShipment = new Map(((shipments ?? []) as { id: string; order_id: string }[]).map((s) => [s.id, s.order_id]));
   const boxes = new Map<string, { rider_id: string | null; driver_name: string | null; route_date: string; state: string }>();
   if (orderByShipment.size) {
@@ -278,7 +282,9 @@ async function loadOrdersElsewhere(admin: SupabaseClient, target: NotebookTarget
   for (const o of found) {
     const box = boxes.get(o.id);
     let where: string;
-    if (!box) where = "no está en ninguna caja de Grupo GF";
+    if (!box) where = externalByOrder.has(o.id)
+      ? `tiene una guía de ${externalByOrder.get(o.id)} y no está en ninguna caja de Grupo GF`
+      : "no está en ninguna caja de Grupo GF";
     else if (box.rider_id === target.riderId && box.state !== "in_custody") where = `está en su carga del ${ddmm(box.route_date)}, que todavía no recibió`;
     else if (box.rider_id === target.riderId && box.route_date < target.routeDate) where = `sigue en su caja del ${ddmm(box.route_date)} sin reprogramar ni devolver; solo pasa de ruta un «Reprogramado»`;
     else if (box.rider_id === target.riderId) where = `está en su caja del ${ddmm(box.route_date)}`;

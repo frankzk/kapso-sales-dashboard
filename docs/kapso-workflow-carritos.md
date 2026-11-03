@@ -6,6 +6,14 @@ cuando el cliente acepta. Tres piezas: (A) el bloque de conocimiento que se
 pega en las instrucciones del agente, (B) las acciones/herramientas que el
 workflow necesita tener, (C) cómo se cierra el ciclo con el dashboard.
 
+> **Desde el cierre de Shopify (27-10-2026) esto cambia en una tienda que ya
+> crea sus pedidos en WooCommerce** (Ajustes → WooCommerce → «Crear los
+> pedidos nuevos en»). El bot **no** crea ni completa pedidos en Shopify: le
+> pide el pedido a Kapta (`POST /api/internal/orders/<storeId>`), también para
+> cerrar un carrito, con `cart_draft_gid` = el id del borrador. El contrato y
+> el plan del corte están en `docs/kapso-pedidos-kapta.md` (MOM §38.13). Lo que
+> sigue —completar el borrador en Shopify— vale solo **hasta** el corte.
+
 ---
 
 ## A) Conocimiento para el agente (pegar en las instrucciones del bot)
@@ -74,10 +82,17 @@ escribir por este carrito.
 
 ## B) Acciones que el workflow necesita (configuración técnica)
 
-El bot ya sabe generar pedidos en Shopify (lo hace hoy con ventas del chat).
-Para carritos hay que darle DOS acciones sobre el borrador existente, ambas
-contra la Admin GraphQL API de Shopify (token de la tienda con scope
-`write_draft_orders` — el mismo que usa "Generar pedido" del dashboard):
+Hasta el cierre de Shopify, el bot genera pedidos directamente en Shopify (lo
+hace hoy con ventas del chat). **Desde el corte, en una tienda en WooCommerce,
+los pide a Kapta** (`docs/kapso-pedidos-kapta.md`): Kapta los crea en
+WooCommerce con el mismo control de precios que «Generar pedido» y las marcas
+del bot (`kapso`, `whatsapp`, la conversación). Las dos acciones de abajo son
+del camino de Shopify y dejan de usarse ese día: un carrito se cierra pidiendo
+el pedido a Kapta con `cart_draft_gid` (sección 6 del contrato).
+
+Para carritos (hasta el corte) hay que darle DOS acciones sobre el borrador
+existente, ambas contra la Admin GraphQL API de Shopify (token de la tienda con
+scope `write_draft_orders` — el mismo que usa "Generar pedido" del dashboard):
 
 ### 1. Completar el borrador (la venta)
 
@@ -134,7 +149,8 @@ Opciones, de mejor a peor:
 3. **Pedido nuevo como último recurso**: si no se puede resolver el borrador,
    crear la orden con el flujo actual del bot. Funciona (el dashboard igual
    marca el lead como Ganado por el webhook de la orden), pero deja el
-   borrador abierto en Shopify — evitarlo cuando se pueda.
+   borrador abierto en Shopify — evitarlo cuando se pueda. Desde el corte, ese
+   «flujo actual» es pedirle el pedido a Kapta (`docs/kapso-pedidos-kapta.md`).
 
 ### Reconocer que la respuesta viene de la plantilla
 
@@ -148,14 +164,23 @@ borrador `open`** → entra a este flujo de recuperación.
 
 ## C) Cómo se cierra el ciclo con el dashboard (ya funciona, no hay que hacer nada)
 
-Cuando el bot completa el borrador:
+Cuando el bot completa el borrador (hasta el corte; después, el pedido que
+crea Kapta entra igual al Master, gana el lead, cuenta como **Bot de Kapso** y
+deja completado el carrito del lead de esa clienta —su celular o su
+conversación—, con los precios que mande el bot: mandar los del carrito, MOM
+§38.13):
 
 1. Shopify dispara los webhooks `draft_orders/update` y `orders/create` que
    el dashboard ya escucha.
-2. El dashboard marca el lead como **Ganado** (`pedido_generado`), etiqueta
-   la orden `kapso + cod_recuperado` (cuenta en ingresos y en Productividad)
-   y la secuencia de carritos se detiene sola (el borrador dejó de estar
-   `open`).
+2. El dashboard marca el lead como **Ganado** (`pedido_generado`) y la
+   secuencia de carritos se detiene sola (el borrador dejó de estar `open`).
+   La orden queda con las etiquetas que le pone Shopify: hasta el 14-10-2026
+   el dashboard le añadía `kapso + cod_recuperado` en su copia, y la
+   sincronización las borraba en minutos. Ojo: el canal de cierre (MOM §17.3)
+   todavía no lo distingue y lo cuenta como «Web», porque Shopify no le pone
+   ninguna marca que lo separe del carrito que la clienta terminó sola. Para
+   contarlo como del bot, el workflow tendría que ponerle una etiqueta al
+   borrador (por ejemplo `kapso`) antes de completarlo.
 3. El envío queda auditado en `cart_seq_sends`, así después se puede medir
    cuántos carritos recuperó la secuencia (¿pedido después de `sent_at`?).
 

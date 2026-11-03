@@ -8,8 +8,12 @@
 
 import type { OrderMasterRow } from "@/lib/types";
 import { confirmationQueueBucket, limaDayKey } from "@/lib/order-confirmation";
+import type { AgencyPaymentWindow } from "@/lib/agency-payment-cohort";
+import { scheduledWithoutLocation } from "@/lib/dispatch-date";
 
 export interface MasterFilters {
+  /** Pending balance in the Shalom/Olva shipment cohort selected in Consolidado. */
+  agencyUnpaid?: AgencyPaymentWindow | null;
   stores: Set<string>;
   generalStatuses: Set<string>;
   operationalStatuses: Set<string>;
@@ -25,6 +29,8 @@ export interface MasterFilters {
    * (rider_settlements) y esta columna nunca se les escribe.
    */
   paymentChecks: Set<string>;
+  /** Estado del pago del pedido, agrupado para la operación. Vacío = todos. */
+  paymentStates: Set<string>;
   shippingModes: Set<string>;
   regions: Set<string>;
   provinces: Set<string>;
@@ -40,6 +46,11 @@ export interface MasterFilters {
   salesChannels: Set<string>;
   /** «Salió con» (lib/dispatched-with.ts): basta con uno. Vacío = no filtra. */
   dispatchedWith: Set<string>;
+  /**
+   * «Producto» (0300, lib/order-product-titles.ts): títulos de producto sin la
+   * variante. Basta con que el pedido lleve uno. Vacío = no filtra.
+   */
+  products: Set<string>;
   /** «Programar envío» (lib/dispatch-date.ts): «» = no filtra. */
   dispatchDate: DispatchDateFilter;
   /** YYYY-MM-DD; extremos inclusive, vacío = sin límite. */
@@ -62,6 +73,34 @@ export interface MasterFilters {
   pickupStates: Set<string>;
   /** Solo pedidos en agencia con el plazo de recojo a punto de vencer. */
   expiringSoon: boolean;
+  /**
+   * «Comprobante por validar» (MOM §16.1): la clienta ya mandó su pago y espera
+   * a que alguien lo valide o lo rechace. Viaja por la URL como `pv=1`.
+   */
+  pendingVoucher: boolean;
+  /**
+   * Los pedidos que ese filtro trae, RESUELTOS EN EL SERVIDOR antes de consultar
+   * (lib/pending-voucher-access.ts). No viaja por la URL: es una lectura en vivo
+   * de `order_payments`, no una columna del Master. Sin resolver (o con la
+   * lectura caída) el filtro no trae ningún pedido, nunca todos.
+   */
+  pendingVoucherOrderIds?: readonly string[] | null;
+  /**
+   * «Pagado sin aviso» (MOM §12): en la agencia, con el plazo por vencer o
+   * vencido, ya pagado y sin ningún aviso de llegada enviado. Viaja por la URL
+   * como `pa=1`.
+   */
+  paidUnnotified: boolean;
+  /** Los pedidos que trae, resueltos en el servidor como los de `pendingVoucher`
+   *  (lib/agency-pickup-alert-access.ts). Sin resolver, ninguno. */
+  paidUnnotifiedOrderIds?: readonly string[] | null;
+  /**
+   * «Programado sin ubicación» (MOM §6.2, owner 30-10-2026): con envío
+   * programado —hoy, vencido o a futuro— y la cobertura «Por revisar» sin
+   * región, distrito o dirección. Son columnas del Master, así que se filtra
+   * en la base sin resolver nada antes. Viaja por la URL como `su=1`.
+   */
+  scheduledNoLocation: boolean;
   /** Búsqueda libre sobre código, cliente, teléfono y guía. */
   search: string;
   /** Cola de Volver a contactar: vencido | hoy | proximo. */
@@ -125,6 +164,7 @@ export function emptyFilters(): MasterFilters {
     operationalStatuses: new Set(),
     couriers: new Set(),
     paymentChecks: new Set(),
+    paymentStates: new Set(),
     shippingModes: new Set(),
     regions: new Set(),
     provinces: new Set(),
@@ -133,6 +173,7 @@ export function emptyFilters(): MasterFilters {
     swaypAvailability: new Set(),
     salesChannels: new Set(),
     dispatchedWith: new Set(),
+    products: new Set(),
     dispatchDate: "",
     createdFrom: "",
     createdTo: "",
@@ -148,6 +189,10 @@ export function emptyFilters(): MasterFilters {
     attempts: null,
     pickupStates: new Set(),
     expiringSoon: false,
+    pendingVoucher: false,
+    paidUnnotified: false,
+    scheduledNoLocation: false,
+    agencyUnpaid: null,
     search: "",
     confirmationDue: "",
     managementDays: new Set(),
@@ -180,11 +225,13 @@ export function matchesAttempts(count: number, filter: number | null): boolean {
 /** ¿Hay algún filtro activo? Para poder ofrecer "limpiar filtros". */
 export function hasActiveFilters(f: MasterFilters): boolean {
   return (
+    Boolean(f.agencyUnpaid) ||
     f.stores.size > 0 ||
     f.generalStatuses.size > 0 ||
     f.operationalStatuses.size > 0 ||
     f.couriers.size > 0 ||
     f.paymentChecks.size > 0 ||
+    f.paymentStates.size > 0 ||
     f.shippingModes.size > 0 ||
     f.regions.size > 0 ||
     f.provinces.size > 0 ||
@@ -193,6 +240,7 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.swaypAvailability.size > 0 ||
     f.salesChannels.size > 0 ||
     f.dispatchedWith.size > 0 ||
+    f.products.size > 0 ||
     Boolean(f.dispatchDate) ||
     Boolean(f.createdFrom || f.createdTo) ||
     Boolean(f.dispatchedFrom || f.dispatchedTo) ||
@@ -204,6 +252,9 @@ export function hasActiveFilters(f: MasterFilters): boolean {
     f.attempts !== null ||
     f.pickupStates.size > 0 ||
     f.expiringSoon ||
+    f.pendingVoucher ||
+    f.paidUnnotified ||
+    f.scheduledNoLocation ||
     f.search.trim().length > 0
     || Boolean(f.confirmationDue)
     || f.managementDays.size > 0
@@ -256,6 +307,31 @@ export const PAYMENT_CHECK_OPTIONS: { value: string; label: string }[] = [
   { value: PAYMENT_CHECK_NONE, label: "Courier sin constancia por guía" },
 ];
 
+export const PAYMENT_STATUS_OPTIONS = [
+  { value: "pago_completo", label: "Pago completo" },
+  { value: "pendiente_validacion", label: "Pago pendiente de validar" },
+  { value: "pago_parcial", label: "Pago parcial" },
+  { value: "sin_pago", label: "Sin pago registrado" },
+] as const;
+
+// `payment_state` ya incluye el prepago web confirmado. Un posible duplicado
+// sigue pendiente de revisión; nunca equivale a un pago confirmado.
+const PAYMENT_STATUS_GROUPS: Readonly<Record<string, readonly (string | null)[]>> = {
+  pago_completo: ["pago_completo"],
+  pendiente_validacion: ["adelanto_cargado", "diferencia_cargada", "pago_total_cargado", "posible_duplicado"],
+  pago_parcial: ["adelanto_validado"],
+  // NULL significa que el Master no tiene señales de pago registradas. No
+  // afirma que el cliente deba dinero ni que un courier no lo haya cobrado.
+  sin_pago: ["sin_pago", null],
+};
+
+/** El MISMO agrupamiento para el listado en memoria y la consulta del servidor. */
+export function paymentStatesForFilter(selected: ReadonlySet<string>): (string | null)[] {
+  return [...new Set([...selected].flatMap((value) =>
+    Object.hasOwn(PAYMENT_STATUS_GROUPS, value) ? (PAYMENT_STATUS_GROUPS[value] ?? []) : [],
+  ))];
+}
+
 /** Un conjunto vacío no filtra; si no, la fila debe pertenecer al conjunto. */
 function inSet(set: Set<string>, value: string | null | undefined): boolean {
   if (!set.size) return true;
@@ -289,6 +365,8 @@ export function matchesFilters(
   if (!inSet(f.generalStatuses, row.general_status)) return false;
   if (!inSet(f.operationalStatuses, row.operational_status)) return false;
   if (!inSet(f.shippingModes, row.shipping_mode)) return false;
+  const paymentStates = paymentStatesForFilter(f.paymentStates);
+  if (paymentStates.length && !paymentStates.includes(row.payment_state ?? null)) return false;
   if (!inSet(f.regions, row.region)) return false;
   if (!inSet(f.provinces, row.province)) return false;
   if (!inSet(f.districts, row.district)) return false;
@@ -296,6 +374,8 @@ export function matchesFilters(
   if (!inSet(f.swaypAvailability, row.swayp_availability)) return false;
   if (!inSet(f.salesChannels, row.sales_channel)) return false;
   if (f.dispatchedWith.size && !(row.dispatched_with ?? []).some((code) => f.dispatchedWith.has(code))) return false;
+  // «Producto» (0300): basta con uno, como en la base (`&&`).
+  if (f.products.size && !(row.product_titles ?? []).some((title) => f.products.has(title))) return false;
   if (!matchesDispatchDate(row.dispatch_scheduled_on ?? null, f.dispatchDate, limaDayKey(now))) return false;
 
   // El filtro de courier mira el actual Y el último: buscar "los pedidos que
@@ -333,6 +413,13 @@ export function matchesFilters(
     const left = Date.parse(row.agency_expires_at!) - Date.parse(now);
     if (!Number.isFinite(left) || left > EXPIRING_WINDOW_MS) return false;
   }
+
+  // Lo trae la fila ya decorada (lib/pending-voucher.ts, `withPendingVouchers`).
+  if (f.pendingVoucher && !row.pending_voucher) return false;
+  // Igual: lo trae la fila decorada (lib/agency-pickup-alert.ts).
+  if (f.paidUnnotified && !row.paid_unnotified) return false;
+  // «Programado sin ubicación» (MOM §6.2): la misma regla que la base.
+  if (f.scheduledNoLocation && !(row.scheduled_no_location ?? scheduledWithoutLocation(row))) return false;
 
   if (f.staleDays > 0) {
     // "Sin movimientos recientes": un pedido que nunca se movió también cuenta —

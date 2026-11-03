@@ -90,9 +90,12 @@ export function SalesAttributionModule({
     <div className="flex flex-col gap-6">
       <section aria-labelledby="atrib-canal">
         <h3 id="atrib-canal" className="text-sm font-semibold text-ink-900">
-          Canal de cierre
+          Cierre de los pedidos del bot, por etiquetas
         </h3>
-        <p className="mt-0.5 text-[13px] text-ink-500">Quién cerró cada venta, de menos a más mano humana.</p>
+        <p className="mt-0.5 text-[13px] text-ink-500">
+          Solo los pedidos del bot de Kapso, de menos a más mano humana. No ve las ventas que registran las asesoras: quién cerró
+          todas las ventas de la tienda está en «Canal de cierre».
+        </p>
         <dl className={cn(FIGURE_FRAME, "mt-3 grid-cols-1 sm:grid-cols-3")}>
           {CHANNEL_ORDER.map((c) => (
             <Figure

@@ -224,21 +224,97 @@ echo "  ✅ unidades × días − días antes, ventana, quien volvió a comprar 
 echo "▶ Repro Lima «Todos» (0256): Lima sin Finalizado por etapa y subetapa, días de Lima, solo service_role"
 $PSQL -f "$ROOT/scripts/sql/lima_open_counts_smoke.sql"
 echo "  ✅ igual a un GROUP BY directo, sin Finalizado ni Provincia, borde de medianoche de Lima, authenticated sin permiso"
+echo "▶ Canal de cierre (0259): un canal por pedido, la venta registrada manda, «ayudado» solo con gestión de la misma tienda en 7 días, y RLS"
+$PSQL -f "$ROOT/scripts/sql/canal_de_cierre_smoke.sql"
+echo "  ✅ asesora > recompra > bot Kapso > bot externo > web > otros, cancelados aparte, día local, cada quien sus tiendas"
 
 # SimpleFact no tiene llave de idempotencia: la misma boleta mandada dos veces
 # son dos boletas ante SUNAT, y una boleta enviada no se borra. Lo que lo impide
 # —el turno con candado, un solo comprobante real vivo por pedido, estados que
 # solo avanzan, «real» y «manual» solo con la conexión probada, y ninguna fila
-# sin que la empresa haya recibido el pago— vive en la base (0257, 0260, 0261 y
-# 0262, MOM §35), así que se prueba en la base y no solo en el código. La 0257
+# sin que la empresa haya recibido el pago, y nada antes de «Emitir desde» salvo
+# lo que pide una persona con el botón— vive en la base (0257, 0260, 0261, 0262
+# y 0269, MOM §35), así que se prueba en la base y no solo en el código. La 0257
 # ya corrió en producción y no se reescribe: la 0260 cambia cuatro de sus
 # funciones, la 0261 trae el modo «Manual» (el turno da la fila que se pide, y
-# quién la pidió) y la 0262 hace que el turno vuelva a revisar el pago (un pago
-# rechazado entre la lectura del código y el turno no deja fila); la prueba
-# corre cada una sobre lo que había en producción cuando se aplicó.
-echo "▶ Comprobantes por RUC (0257, 0260, 0261 y 0262): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido, la 0260 sobre la 0257, el modo «Manual» y el pago revisado en el turno"
+# quién la pidió), la 0262 hace que el turno vuelva a revisar el pago (un pago
+# rechazado entre la lectura del código y el turno no deja fila) y la 0269 deja
+# emitir con «Emitir esta boleta» lo pagado antes de «Emitir desde», desde el
+# 01/10/2026 (`p_backfill`); la prueba corre cada una sobre lo que había en
+# producción cuando se aplicó.
+echo "▶ Comprobantes por RUC (0257, 0260, 0261, 0262 y 0269): semilla apagada, cuenta → RUC de su organización, turno con candado, uno real vivo por pedido, la 0260 sobre la 0257, el modo «Manual», el pago revisado en el turno y lo pagado antes de «Emitir desde» con el botón"
 $PSQL -f "$ROOT/scripts/sql/invoices_smoke.sql"
-echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una; la 0261 admite «Manual» con lo que exige Real, baja como Real, da la fila pedida con quién la pidió (modo_distinto si no), cuenta el tope por modo pedido, deja un solo turno que el código de hoy llama con nueve argumentos por nombre, y dos veces es una; con la 0262 el turno no da fila si lo validado no cubre el total, si un pago de la base del comprobante ya no está validado o si el prepago no es un prepago web sin comprobantes, bloquea los pagos mientras dura, cambia solo el turno en su lugar, se detiene sin la 0261 delante, y dos veces es una (los tres ERROR de su guarda se esperan)"
+echo "  ✅ GRUPO GF S.A.C. sembrado apagado y sin pisar al owner, real solo con token, fecha y prueba del mismo RUC, cada motivo del turno, tope del día, índice único, estados que solo avanzan, solo service_role; la 0260 cambia las cuatro funciones sin tocar datos ni triggers, y dos veces es una; la 0261 admite «Manual» con lo que exige Real, baja como Real, da la fila pedida con quién la pidió (modo_distinto si no), cuenta el tope por modo pedido, deja un solo turno que el código de hoy llama con nueve argumentos por nombre, y dos veces es una; con la 0262 el turno no da fila si lo validado no cubre el total, si un pago de la base del comprobante ya no está validado o si el prepago no es un prepago web sin comprobantes, bloquea los pagos mientras dura, cambia solo el turno en su lugar, se detiene sin la 0261 delante, y dos veces es una (los tres ERROR de su guarda se esperan); con la 0269 lo pagado antes de «Emitir desde» sale solo con p_backfill, una real pedida por una persona, el RUC en Manual, «Emitir desde» ya llegado y las dos fechas y el primer dinero (la fecha más temprana entre el comprobante y el registro de cada pago validado) desde el 01/10/2026 de Lima, con la marca en su base; el barrido, una simulada y Real siguen en antes_de_inicio; deja un solo turno, el de doce, con el cuerpo de la 0262 salvo la fecha y la base, se detiene sin la 0262 delante, y dos veces es una (los tres ERROR de su guarda se esperan)"
+
+echo "▶ Ventas por origen y conversión por fuente (0268): día local, cancelados aparte, cohorte de 7 días por cualquier canal, ya clientas aparte, y RLS"
+$PSQL -f "$ROOT/scripts/sql/ventas_por_origen_smoke.sql"
+echo "  ✅ todas las ventas por día y canal, la regla del canal en una sola vista, conversión por nacimiento con 7 días, asesoras como en Productividad, cada quien sus tiendas"
+
+# Es un relleno de datos sobre producción (decisión del dueño, 19-10-2026): lo
+# que hay que fijar es qué caja toca y qué no, porque un error no se ve hasta
+# que alguien liquida.
+echo "▶ Caja «por definir» del cuaderno de Grupo GF (0270): pasa a salida entregada del motorizado propio solo en el objetivo"
+$PSQL -f "$ROOT/scripts/sql/cuaderno_s01_fill_smoke.sql"
+
+# La promesa del owner (23-10-2026) es que conectar una tienda con su app
+# propia no toca a Kenku, Aurela ni las tiendas cliente. La base la sostiene:
+# se prueba aplicando la 0271 sobre el esquema de la 0249 con esas tiendas.
+echo "▶ App propia de Shopify (0271): Kenku, Aurela y las tiendas clientes no cambian"
+$PSQL -f "$ROOT/scripts/sql/shopify_app_propia_smoke.sql"
+
+# También un relleno de datos sobre producción (23-10-2026): el día de la
+# entrega en las salidas de Urpi ya rellenadas y las cajas «por definir» de
+# entregas viejas de Urpi. Se fija qué salida toca, qué le escribe y qué no.
+echo "▶ Salida de Urpi (0272): closed_at del día de la entrega y las cajas «por definir» de entregas viejas de Urpi, solo en el objetivo"
+$PSQL -f "$ROOT/scripts/sql/urpi_salida_fecha_smoke.sql"
+
+# Shopify cierra Kenku y Aurela el 28-10-2026 y pasan a WooCommerce (MOM §38).
+# La 0274 solo prepara la base: hasta el cambio, las dos siguen en Shopify
+# exactamente igual. Se prueba aplicándola sobre el esquema de la 0273 con esas
+# tiendas, sus pedidos y sus borradores.
+echo "▶ Base de WooCommerce (0274): Kenku, Aurela y sus pedidos no cambian; el cambio de plataforma exige credenciales"
+$PSQL -f "$ROOT/scripts/sql/woocommerce_base_smoke.sql"
+
+# Shopify cierra Kenku y Aurela el 28-10-2026 y sus pedidos se siguen
+# facturando después (owner, 23-10-2026): la boleta sale de la foto que se tomó
+# mientras Shopify respondía. Se fija qué pedidos la necesitan, que solo se
+# guarda la de un pedido de Shopify (nunca de WooCommerce) y que solo el
+# servidor la ve.
+echo "▶ Foto del pedido para su boleta (0275): la lista de la regla, solo pedidos de Shopify, nunca una foto vieja sobre una nueva, solo service_role"
+$PSQL -f "$ROOT/scripts/sql/invoice_snapshots_smoke.sql"
+echo "  ✅ ninguna fila cambiada; la lista: de esa tienda, de Shopify con su id, desde el 29-08, sin boleta viva, sin foto y no anulado o con foto vieja, en curso primero; guarda solo un pedido de Shopify de esa tienda con su gid y su respuesta, nunca una foto vieja sobre una nueva ni una sin el pedido sobre una con él; un pedido que falla va detrás, espera y se borra al guardar; un turno por tienda; ni anon ni authenticated; dos veces es una; sin la 0274 se detiene"
+
+# Desde el corte el bot de Kapso le pide el pedido a Kapta, que lo crea en
+# WooCommerce (MOM §38.13, plan D5). El bot reintenta solo y en paralelo: lo que
+# impide que dos llamadas con el mismo id creen dos pedidos es la clave única de
+# la base, así que se prueba aquí y no solo en el código.
+echo "▶ Pedidos del bot por Kapta (0277): un candado por (tienda, request_id), el secreto solo en sha256, solo service_role"
+$PSQL -f "$ROOT/scripts/sql/bot_orders_smoke.sql"
 
 echo ""
+echo "▶ Retiro de salida GF antes de despacho (0284): atómico, auditado y solo servicio"
+$PSQL -f "$ROOT/scripts/sql/gf_cancel_output_smoke.sql"
+
+echo "▶ WooCommerce venta terminada con retorno pendiente (0285): fuente intacta, recepción e inventario, un turno, recuperación y recepción GF"
+$PSQL -f "$ROOT/scripts/sql/woo_sale_return_smoke.sql"
+echo "▶ Pago validado: monto positivo obligatorio (0287), incompletos y retiro de validación"
+$PSQL -f "$ROOT/scripts/sql/payment_positive_amount_smoke.sql"
+echo "▶ Atender todos los pendientes de Lima (0288): cobertura, etapas, tienda, candado e historial"
+$PSQL -f "$ROOT/scripts/sql/lima_attention_all_pending_smoke.sql"
+echo "▶ Por llamar y reintentos (0289): fechas, límites, historial, contador, citas y RLS"
+$PSQL -f "$ROOT/scripts/sql/lead_call_queue_smoke.sql"
+
+echo "▶ Agencia: cohorte pendiente, checkout, validación, fechas Lima, deduplicación y RLS (0290)"
+$PSQL -f "$ROOT/scripts/sql/agency_unpaid_cohort_smoke.sql"
+echo "▶ Reintentos con señal real de 7 días (0291): históricos retirados, mensajes, carritos, citas, reservas e historial"
+$PSQL -f "$ROOT/scripts/sql/lead_retry_recent_signal_smoke.sql"
+
+echo "▶ Hoja del motorizado: incluir sin reporte anterior, custodia, auditoría, lote atómico y permisos (0292)"
+$PSQL -f "$ROOT/scripts/sql/gf_notebook_missing_reports_smoke.sql"
+
+echo "▶ Bloques de Leads por asesora (0295): cobertura, permisos, reservas, citas y respaldo"
+$PSQL -f "$ROOT/scripts/sql/team_lead_blocks_smoke.sql"
+
+echo "▶ Bloques para asesoras administradoras (0299): cola restringida, supervisión, reservas y permisos intactos"
+$PSQL -f "$ROOT/scripts/sql/lead_routing_admin_smoke.sql"
 echo "✅ DB verification passed."

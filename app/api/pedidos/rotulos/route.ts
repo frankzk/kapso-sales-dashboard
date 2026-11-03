@@ -19,6 +19,7 @@ import { orderFullyPaid } from "@/lib/order-paid";
 import type { PaymentGateway } from "@/lib/payment-gateway";
 import { companionLabelContent } from "@/lib/order-companion";
 import { loadCompanionRides } from "@/lib/order-companion-access";
+import { printedProvince } from "@/lib/district-learning";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -266,8 +267,10 @@ export async function GET(request: NextRequest) {
         currency: money?.currency ?? null,
         note: row.order_id ? (noteByOrder.get(row.order_id) ?? null) : null,
         // Sin la región: repite la provincia en casi todo el país y gastaba una
-        // línea del rótulo sin decir nada que el motorizado no supiera.
-        destination: [row.district, row.province].filter(Boolean).join(" / "),
+        // línea del rótulo sin decir nada que el motorizado no supiera. La
+        // provincia, solo si cabe en su departamento (`printedProvince`): una
+        // caja de Miraflores de Lima salía «Miraflores / arequipa».
+        destination: [row.district, printedProvince(row.province, row.region, row.district)].filter(Boolean).join(" / "),
         address: row.delivery_address,
         reference: row.delivery_reference,
         qrPayload: payload,

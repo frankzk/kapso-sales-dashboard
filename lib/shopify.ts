@@ -427,10 +427,40 @@ export interface ShopifyClientOpts {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Tope de cada llamada a Shopify (23-10-2026, salida de Kenku y Aurela de
+ * Shopify). Antes no había ninguno: un Shopify que acepta la conexión y no
+ * contesta —lo esperable mientras una tienda se da de baja— dejaba «Generar
+ * pedido» en «Generando…» y se comía el tiempo del sync. 30 s es mucho más de
+ * lo que tarda cualquier página del sync, así que una llamada que hoy sale bien
+ * sigue saliendo igual. Quien necesita otro tope lo pide (`timeoutMs`), o pone
+ * su propia señal en `fetchImpl`, que gana (la boleta usa 15 s).
+ */
+export const SHOPIFY_GRAPHQL_TIMEOUT_MS = 30_000;
+
+/** El costo de una consulta y el cupo de la tienda (`extensions.cost` de la Admin API). */
+export interface ShopifyQueryCost {
+  requestedQueryCost?: number;
+  actualQueryCost?: number | null;
+  throttleStatus?: {
+    maximumAvailable?: number;
+    currentlyAvailable?: number;
+    restoreRate?: number;
+  };
+}
+
 export async function shopifyGraphQL<T = any>(
   opts: ShopifyClientOpts & {
     query: string;
     variables?: Record<string, unknown>;
+    /** Tope de esta llamada; por defecto `SHOPIFY_GRAPHQL_TIMEOUT_MS`. */
+    timeoutMs?: number;
+    /**
+     * Recibe el costo y el cupo que Shopify informa, también cuando contesta
+     * THROTTLED. Lo usa quien reparte el cupo de la tienda (las fotos de
+     * boletas, lib/invoicing/snapshots.ts). Si lanza, se ignora.
+     */
+    onCost?: (cost: ShopifyQueryCost) => void;
   },
 ): Promise<T> {
   const apiVersion = opts.apiVersion ?? SHOPIFY_DEFAULT_API_VERSION;
@@ -445,6 +475,7 @@ export async function shopifyGraphQL<T = any>(
       "X-Shopify-Access-Token": opts.token,
     },
     body: JSON.stringify({ query: opts.query, variables: opts.variables ?? {} }),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? SHOPIFY_GRAPHQL_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -452,12 +483,63 @@ export async function shopifyGraphQL<T = any>(
     throw new Error(`Shopify GraphQL HTTP ${res.status}: ${text.slice(0, 500)}`);
   }
   const json: any = await res.json();
+  if (opts.onCost) {
+    const cost = json?.extensions?.cost;
+    if (cost && typeof cost === "object") {
+      try {
+        opts.onCost(cost as ShopifyQueryCost);
+      } catch {
+        // Quien mide no puede tumbar la llamada.
+      }
+    }
+  }
   if (json?.errors) {
     throw new Error(
       `Shopify GraphQL errors: ${JSON.stringify(json.errors).slice(0, 500)}`,
     );
   }
   return json.data as T;
+}
+
+/** El código HTTP de un error de `shopifyGraphQL` («Shopify GraphQL HTTP 402: …»), o null. */
+export function shopifyHttpStatusOf(e: unknown): number | null {
+  const message = e instanceof Error ? e.message : typeof e === "string" ? e : "";
+  const m = /^Shopify GraphQL HTTP (\d{3})\b/.exec(message);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Lo que Shopify contesta por una tienda que ya no está, o a la que ya no se
+ * puede entrar: token revocado o app desinstalada (401), tienda sin pagar o
+ * congelada (402), prohibida (403), que no existe (404) o bloqueada (423). No
+ * entra un 5xx ni un tiempo agotado: eso es Shopify con un mal momento, y se
+ * reintenta.
+ */
+export const SHOPIFY_SHOP_GONE_STATUSES: ReadonlySet<number> = new Set([401, 402, 403, 404, 423]);
+
+/** ¿El error dice que la tienda ya no responde por sí misma (cerrada, sin pagar, sin acceso)? */
+export function isShopifyShopGone(e: unknown): boolean {
+  const status = shopifyHttpStatusOf(e);
+  return status !== null && SHOPIFY_SHOP_GONE_STATUSES.has(status);
+}
+
+/**
+ * Por qué falló una llamada a Shopify, en corto y sin nada de la respuesta: el
+ * cuerpo de un error puede traer cualquier cosa, y el motivo se guarda y se
+ * muestra.
+ */
+export function shopifyFailureDetail(e: unknown): string {
+  const name = e instanceof Error ? e.name : "";
+  const message = e instanceof Error ? e.message : String(e);
+  if (name === "TimeoutError" || name === "AbortError") return "Shopify no respondió a tiempo.";
+  if (name === "SyntaxError") return "Shopify contestó algo que no se entiende.";
+  const status = shopifyHttpStatusOf(e);
+  if (status !== null) return `Shopify contestó HTTP ${status}.`;
+  if (message.startsWith("Shopify GraphQL errors")) {
+    const code = /"code"\s*:\s*"([A-Z_]{2,40})"/.exec(message);
+    return code ? `Shopify devolvió un error (${code[1]}).` : "Shopify devolvió un error de GraphQL.";
+  }
+  return "No se pudo conectar con Shopify.";
 }
 
 /**
@@ -592,8 +674,10 @@ export function buildKapsoOrdersSearchQuery(
  * Convive con `buildKapsoOrdersSearchQuery` a propósito: los KPIs (ventas,
  * embudo, rollups) siguen contando únicamente `tag:kapso`, tanto en
  * `recompute_daily_rollups` como en `lib/access.ts:getOrders`, así que traer el
- * resto de pedidos no mueve ninguna métrica histórica. Cada pasada lleva su
- * propio cursor en `sync_state` (`shopify` vs `shopify_all`).
+ * resto de pedidos no mueve esas métricas. La cabecera del tablero, «Canal de
+ * cierre» y «Conversión por fuente» sí leen todos los pedidos que trae esta
+ * pasada (0259 y 0268, MOM §17.3 y §17.4). Cada pasada lleva su propio cursor
+ * en `sync_state` (`shopify` vs `shopify_all`).
  */
 export function buildAllOrdersSearchQuery(
   updatedAtCursorIso?: string | null,
@@ -1112,6 +1196,27 @@ export async function completeDraftOrder(
     orderName: draft?.order?.name ?? null,
     status: normalizeDraftStatus(draft?.status),
   };
+}
+
+const DRAFT_ORDER_ORDER_QUERY = /* GraphQL */ `
+  query DraftOrderOrder($id: ID!) {
+    draftOrder(id: $id) { id order { id name } }
+  }
+`;
+
+/**
+ * El pedido REAL de un borrador ya completado. Cuando `draftOrderComplete`
+ * responde «ya completado» —la clienta lo cerró segundos antes, o un primer
+ * intento sí llegó— no trae el pedido, y sin él la venta quedaba en una fila
+ * `draft-<id>` al lado del pedido verdadero: dos filas para una venta, y el
+ * canal de cierre (MOM §17.3) la contaba dos veces. null si no hay pedido.
+ */
+export async function getDraftOrderOrder(
+  opts: ShopifyClientOpts & { gid: string },
+): Promise<{ orderGid: string; orderName: string | null } | null> {
+  const data = await shopifyGraphQL<any>({ ...opts, query: DRAFT_ORDER_ORDER_QUERY, variables: { id: opts.gid } });
+  const order = data?.draftOrder?.order;
+  return order?.id ? { orderGid: String(order.id), orderName: order.name ?? null } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1777,24 +1882,40 @@ export type PriceMismatchCleanup = "deleted" | "kept_cart" | "delete_failed";
  * carrito del cliente se deja sin completar, y si el borrado falla se pide
  * borrarlo a mano.
  */
-export function priceMismatchRejection(input: {
-  desajustes: readonly PriceMismatch[];
-  currency: string;
-  draftName: string | null;
-  cleanup: PriceMismatchCleanup;
-}): { error: string; note: string } {
+export function priceMismatchRejection(
+  input: {
+    desajustes: readonly PriceMismatch[];
+    currency: string;
+    draftName: string | null;
+  } & (
+    | { tienda?: "Shopify"; cleanup: PriceMismatchCleanup }
+    | {
+        /**
+         * WooCommerce (MOM §38.12): no hay borrador ni carrito. El pedido
+         * rechazado se borra (seguía `pending`) o se anula (un plugin ya lo
+         * había dejado vivo), y qué pasó lo dice quien llama
+         * (`wooCleanupText`, lib/woocommerce-orders.ts).
+         */
+        tienda: "WooCommerce";
+        limpieza: string;
+      }
+  ),
+): { error: string; note: string } {
+  const tienda = input.tienda ?? "Shopify";
   const money = (n: number | null) => (n == null ? "sin precio" : `${input.currency} ${n.toFixed(2)}`);
   const detalle = input.desajustes
-    .map((d) => `«${d.title}» (pediste ${money(d.pedido)}, Shopify guardó ${money(d.aplicado)})`)
+    .map((d) => `«${d.title}» (pediste ${money(d.pedido)}, ${tienda} guardó ${money(d.aplicado)})`)
     .join("; ");
-  const draft = input.draftName ?? "de Shopify";
+  const draft = input.draftName ?? `de ${tienda}`;
   const borrador =
-    input.cleanup === "deleted"
-      ? `El borrador ${draft} se eliminó.`
-      : input.cleanup === "kept_cart"
-        ? `El carrito ${draft} quedó sin completar.`
-        : `No se pudo eliminar el borrador ${draft}: bórralo en Shopify.`;
-  const causa = `Shopify no respetó el precio pactado en ${detalle}.`;
+    input.tienda === "WooCommerce"
+      ? input.limpieza
+      : input.cleanup === "deleted"
+        ? `El borrador ${draft} se eliminó.`
+        : input.cleanup === "kept_cart"
+          ? `El carrito ${draft} quedó sin completar.`
+          : `No se pudo eliminar el borrador ${draft}: bórralo en Shopify.`;
+  const causa = `${tienda} no respetó el precio pactado en ${detalle}.`;
   return {
     error:
       `Pedido NO generado: ${causa} ${borrador} Elige el producto desde el catálogo o revisa el ` +

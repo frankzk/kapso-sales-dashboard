@@ -140,7 +140,8 @@ describe("getLeadsForDashboard: cursor por tienda en vez de OFFSET", () => {
     expect(queries).toHaveLength(3);
     expect(queries.every((q) => q.eq.store_id === A)).toBe(true);
     expect(queries[0]!.or).toBeNull();
-    expect(queries[0]!.lte).toBe("2026-09-30T23:59:59Z");
+    // Sin zona, el día UTC como en la base, hasta su último microsegundo.
+    expect(queries[0]!.lte).toBe("2026-09-30T23:59:59.999999Z");
     // Cada página arranca donde terminó la anterior: el cursor es su última fila.
     expect(queries[1]!.lte).toBe(rows[PAGE - 1]!.last_interaction_at);
     expect(queries[1]!.or).toBe(
@@ -182,7 +183,7 @@ describe("getLeadsForDashboard: cursor por tienda en vez de OFFSET", () => {
 
   it("si falta una columna opcional, baja de juego de columnas y sigue con él en las páginas siguientes", async () => {
     const table = storeLeads(A, 1500, 0);
-    const full = "wa_phone_number_id";
+    const full = "draft_order_status";
     const { queries } = servePostgrest(table, { brokenSelects: [] });
     // Primero averiguamos qué select manda con todas las columnas y lo rompemos.
     await getLeadsForDashboard([A], RANGE);

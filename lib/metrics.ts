@@ -367,33 +367,200 @@ export function businessBreakdown(orders: OrderRow[]): BusinessBreakdown {
   };
 }
 
+export interface TopProductVariant {
+  /** Nombre de la variante («Negro / L»), o null para las líneas sin variante. */
+  label: string | null;
+  quantity: number;
+  revenue: number;
+  orders: number;
+}
+
 export interface TopProduct {
   key: string;
   title: string;
   quantity: number;
   revenue: number;
   orders: number;
+  /**
+   * Las variantes vendidas, de más a menos unidades, y al final las líneas sin
+   * variante (`label: null`). Vacío si ninguna línea trae variante: el panel
+   * no pinta filas debajo. Sus unidades suman las del producto.
+   */
+  variants: TopProductVariant[];
 }
 
-/** Aggregate line_items across orders. Groups by SKU when present, else title. */
-export function topProducts(orders: OrderRow[], limit = 10): TopProduct[] {
-  const acc = new Map<string, TopProduct>();
-  for (const o of activeOrders(orders)) {
-    const seen = new Set<string>();
-    for (const li of o.line_items ?? []) {
-      const key = (li.sku && li.sku.trim()) || li.title || "—";
-      const entry =
-        acc.get(key) ?? { key, title: li.title || key, quantity: 0, revenue: 0, orders: 0 };
-      entry.quantity += li.quantity ?? 0;
-      entry.revenue = round2(entry.revenue + (li.price ?? 0) * (li.quantity ?? 0));
-      if (!seen.has(key)) {
-        entry.orders += 1;
-        seen.add(key);
-      }
-      acc.set(key, entry);
+/** Shopify escribe esto cuando el producto no tiene variantes reales. */
+const DEFAULT_VARIANT = "default title";
+
+/**
+ * Lo que la oferta por cantidad de WooCommerce añade a los atributos («1
+ * unidad», «2 und. + 1 GRATIS (Total 3 und.)»). No es una variante: las
+ * unidades ya vienen en `quantity`. Solo se quita cuando no es el único
+ * segmento.
+ */
+const OFFER_SEGMENT = /^\d+\s*(?:unidad(?:es)?|unds?\.?|uds?\.?)(?:$|[\s+(])/i;
+
+function squish(value: unknown): string {
+  if (value == null) return "";
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * El nombre de la variante de una línea, igual en Shopify y en WooCommerce: las
+ * dos lo traen en `variant_title` (Shopify, sus opciones; WooCommerce, los
+ * atributos de la variación). Null sin variante o con «Default Title». El
+ * título nunca se parte: «Fat‑Burn Shorts - Shorts…» es el nombre del producto,
+ * no producto y variante (MOM §17.4.1).
+ */
+export function productVariantLabel(li: { variant_title?: string | null }): string | null {
+  const raw = squish(li.variant_title);
+  if (!raw || raw.toLowerCase() === DEFAULT_VARIANT) return null;
+  const parts = raw.split(" / ").map((p) => p.trim()).filter(Boolean);
+  const kept = parts.length > 1 ? parts.filter((p) => !OFFER_SEGMENT.test(p)) : parts;
+  const label = (kept.length ? kept : parts).join(" / ");
+  return label && label.toLowerCase() !== DEFAULT_VARIANT ? label : null;
+}
+
+/** El texto con más unidades; si empatan, el primero visto. */
+function mostUsed(counts: Map<string, number>): string {
+  let best = "";
+  let bestN = -1;
+  for (const [text, n] of counts) {
+    if (n > bestN) {
+      best = text;
+      bestN = n;
     }
   }
-  return [...acc.values()]
+  return best;
+}
+
+/**
+ * Aggregate line_items across orders: by product and, under it, by variant
+ * (MOM §17.4.1).
+ *
+ * Un producto junta las líneas que comparten SKU, título o `product_id` (de la
+ * misma tienda): las variantes de un producto llevan SKU distintos, el mismo
+ * producto tiene otro `product_id` en Shopify y en WooCommerce, y uno duplicado
+ * en el catálogo comparte SKU con otro título. Es un superconjunto de la
+ * agrupación anterior (SKU, o título sin SKU), así que las unidades no cambian:
+ * solo se juntan filas. La variante va por su nombre (`productVariantLabel`),
+ * sin distinguir mayúsculas: el mismo «Negro / L» tiene otro `variant_id` en
+ * cada plataforma.
+ */
+export function topProducts(orders: OrderRow[], limit = 10): TopProduct[] {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => {
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    for (let cur = x; cur !== root; ) {
+      const next = parent.get(cur)!;
+      parent.set(cur, root);
+      cur = next;
+    }
+    return root;
+  };
+
+  interface Line {
+    order: number;
+    node: string;
+    key: string;
+    title: string;
+    variant: string | null;
+    quantity: number;
+    revenue: number;
+  }
+  const lines: Line[] = [];
+  activeOrders(orders).forEach((o, order) => {
+    for (const li of o.line_items ?? []) {
+      const sku = squish(li.sku);
+      const title = li.title || "";
+      const titleKey = squish(title).toLowerCase();
+      const pid = squish(li.product_id);
+      const nodes = [
+        sku ? `s:${sku}` : null,
+        titleKey ? `t:${titleKey}` : null,
+        pid ? `p:${o.store_id ?? ""}:${pid}` : null,
+      ].filter((n): n is string => n != null);
+      if (!nodes.length) nodes.push("t:—");
+      for (const n of nodes) if (!parent.has(n)) parent.set(n, n);
+      const head = find(nodes[0]!);
+      for (const n of nodes.slice(1)) {
+        const r = find(n);
+        if (r !== head) parent.set(r, head);
+      }
+      const quantity = li.quantity ?? 0;
+      lines.push({
+        order,
+        node: nodes[0]!,
+        key: sku || title || (pid ? `#${pid}` : "—"),
+        title: title || sku || "—",
+        variant: productVariantLabel(li),
+        quantity,
+        revenue: (li.price ?? 0) * quantity,
+      });
+    }
+  });
+
+  interface VariantAcc { labels: Map<string, number>; quantity: number; revenue: number; orders: Set<number> }
+  interface ProductAcc {
+    key: string;
+    titles: Map<string, number>;
+    quantity: number;
+    revenue: number;
+    orders: Set<number>;
+    variants: Map<string, VariantAcc>;
+  }
+  const products = new Map<string, ProductAcc>();
+  for (const line of lines) {
+    const root = find(line.node);
+    let p = products.get(root);
+    if (!p) {
+      p = { key: line.key, titles: new Map(), quantity: 0, revenue: 0, orders: new Set(), variants: new Map() };
+      products.set(root, p);
+    }
+    p.titles.set(line.title, (p.titles.get(line.title) ?? 0) + line.quantity);
+    p.quantity += line.quantity;
+    p.revenue += line.revenue;
+    p.orders.add(line.order);
+    const vKey = line.variant?.toLowerCase() ?? "";
+    let v = p.variants.get(vKey);
+    if (!v) {
+      v = { labels: new Map(), quantity: 0, revenue: 0, orders: new Set() };
+      p.variants.set(vKey, v);
+    }
+    if (line.variant) v.labels.set(line.variant, (v.labels.get(line.variant) ?? 0) + line.quantity);
+    v.quantity += line.quantity;
+    v.revenue += line.revenue;
+    v.orders.add(line.order);
+  }
+
+  return [...products.values()]
+    .map((p): TopProduct => {
+      const hasVariants = [...p.variants.keys()].some((k) => k !== "");
+      const variants: TopProductVariant[] = hasVariants
+        ? [...p.variants.entries()]
+            .map(([k, v]) => ({
+              label: k ? mostUsed(v.labels) : null,
+              quantity: v.quantity,
+              revenue: round2(v.revenue),
+              orders: v.orders.size,
+            }))
+            .sort(
+              (a, b) =>
+                Number(a.label == null) - Number(b.label == null) ||
+                b.quantity - a.quantity ||
+                b.revenue - a.revenue,
+            )
+        : [];
+      return {
+        key: p.key,
+        title: mostUsed(p.titles),
+        quantity: p.quantity,
+        revenue: round2(p.revenue),
+        orders: p.orders.size,
+        variants,
+      };
+    })
     .sort((a, b) => b.quantity - a.quantity || b.revenue - a.revenue)
     .slice(0, limit);
 }
@@ -702,6 +869,8 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
         ? "meta_ad"
         : l.source === "fb_web"
           ? "fb_web"
+          : l.source === "web"
+            ? "web"
           : l.source === "cod_cart"
             ? "cod_cart"
             : l.source === "abandoned_browse"
@@ -718,6 +887,7 @@ export function sourceBreakdown(leads: LeadRow[], orders: OrderRow[]): SourceSta
   const labels: Record<string, string> = {
     meta_ad: "Meta Ads (campañas)",
     fb_web: "🌐 Meta / Web (FB·IG)",
+    web: "🛍️ Web de la tienda",
     cod_cart: "🛒 Carrito abandonado",
     abandoned_browse: "🔎 Búsqueda abandonada",
     organic: "Orgánico",
@@ -748,8 +918,13 @@ export interface CartRecoveryStats {
   pendientes: number; // still open / workable
   perdidos: number; // marked lost (cancelado, ya compró en otro lado, …)
   tasaRecuperacion: number; // recuperados / total, 0..1
-  ingresosRecuperados: number; // net revenue of recovered carts
-  ticketPromedio: number; // ingresosRecuperados / recuperados (0 if none)
+  ingresosRecuperados: number; // net revenue of recovered carts, from the bot orders it receives
+  /** Recuperados con un pedido del bot que sume ingresos: el divisor del ticket. */
+  recuperadosBot: number;
+  // ingresosRecuperados / recuperadosBot (0 if none). Not / recuperados: a cart
+  // recovered by an advisor or the web adds no bot revenue, and dividing by it
+  // understated the ticket.
+  ticketPromedio: number;
   valorEnRiesgo: number; // Σ cart_value of the pendientes (money still on the table)
 }
 
@@ -775,12 +950,15 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
   let pendientes = 0;
   let perdidos = 0;
   let ingresosRecuperados = 0;
+  let recuperadosBot = 0;
   let valorEnRiesgo = 0;
   for (const l of carts) {
     const recovered = !!l.has_order || l.draft_order_status === "completed";
     if (recovered) {
       recuperados += 1;
-      ingresosRecuperados += (l.phone ? (netByPhone.get(l.phone) ?? 0) : 0);
+      const net = l.phone ? (netByPhone.get(l.phone) ?? 0) : 0;
+      ingresosRecuperados += net;
+      if (net > 0) recuperadosBot += 1;
     } else if (l.category === "lost") {
       perdidos += 1;
     } else {
@@ -796,7 +974,8 @@ export function cartRecovery(leads: LeadRow[], orders: OrderRow[]): CartRecovery
     perdidos,
     tasaRecuperacion: total ? recuperados / total : 0,
     ingresosRecuperados: round2(ingresosRecuperados),
-    ticketPromedio: recuperados ? round2(ingresosRecuperados / recuperados) : 0,
+    recuperadosBot,
+    ticketPromedio: recuperadosBot ? round2(ingresosRecuperados / recuperadosBot) : 0,
     valorEnRiesgo: round2(valorEnRiesgo),
   };
 }
@@ -1547,8 +1726,9 @@ export function lostRevenueByReason(
 // Ventas por FUENTE y CIERRE — order-centric attribution (auditable).
 //
 // Every ACTIVE order is assigned exactly ONE acquisition source and ONE closing
-// channel, so the buckets always reconcile to headline net revenue (Σ sources
-// = Σ channels = total). This is the audit tool: the numbers can't silently
+// channel, so the buckets always reconcile to the net revenue of the bot orders
+// it reads (Σ sources = Σ channels = total). Since 0268 the dashboard headline
+// counts ALL orders (MOM §17.4), so this total is smaller than the headline. This is the audit tool: the numbers can't silently
 // double-count or drop a sale, and each order carries its assigned source +
 // channel so the UI can drill down and a human can sanity-check the call.
 //
@@ -1572,6 +1752,7 @@ export type AttributionSource =
   | "winback"
   | "meta_ad"
   | "fb_web"
+  | "web"
   | "cod_cart"
   | "abandoned_browse"
   | "organic"
@@ -1642,6 +1823,7 @@ const SOURCE_LABELS: Record<AttributionSource, string> = {
   winback: "Recuperación 60d",
   meta_ad: "Meta Ads (campañas)",
   fb_web: "Meta / Web (FB·IG)",
+  web: "Web de la tienda",
   cod_cart: "Carrito abandonado",
   abandoned_browse: "Búsqueda abandonada",
   organic: "Orgánico (WhatsApp)",
@@ -1653,6 +1835,7 @@ const SOURCE_LABELS: Record<AttributionSource, string> = {
 export const ATTRIBUTION_SOURCE_ORDER: AttributionSource[] = [
   "meta_ad",
   "fb_web",
+  "web",
   "cod_cart",
   "abandoned_browse",
   "winback",

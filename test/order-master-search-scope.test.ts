@@ -19,6 +19,7 @@ import { emptyFilters, type MasterFilters } from "@/lib/order-master-filters";
  * que es justo donde estaba el fallo.
  */
 function recordingBuilder() {
+  const selectCalls: string[] = [];
   const eq: [string, unknown][] = [];
   const inCalls: [string, unknown][] = [];
   const or: string[] = [];
@@ -31,7 +32,7 @@ function recordingBuilder() {
     };
 
   Object.assign(builder, {
-    select: chain(),
+    select: chain(((columns: string) => selectCalls.push(columns)) as never),
     in: chain(((col: string, val: unknown) => inCalls.push([col, val])) as never),
     eq: chain(((col: string, val: unknown) => eq.push([col, val])) as never),
     or: chain(((expr: string) => or.push(expr)) as never),
@@ -45,7 +46,7 @@ function recordingBuilder() {
     then: (resolve: (v: unknown) => unknown) => resolve({ data: [], count: 0, error: null }),
   });
 
-  return { builder, eq, inCalls, or, ranges };
+  return { builder, eq, inCalls, or, ranges, selectCalls };
 }
 
 interface RpcCall {
@@ -94,6 +95,15 @@ describe("Master de Pedidos: alcance de la búsqueda", () => {
   it("sin búsqueda, la pestaña acota por etapa", async () => {
     const { eq } = await runPage({ view: "por_confirmar", search: "" });
     expect(eq).toContainEqual(["macro_stage", "por_confirmar"]);
+  });
+
+  it.each(["", "KP200307"])("trae los hechos del prepago web para el listado (búsqueda: %s)", async (search) => {
+    const { selectCalls, rpcs } = await runPage({ view: "por_confirmar", search });
+    const columns = (search ? rpcs[0]!.builder.selectCalls : selectCalls)
+      .flatMap((select) => select.split(","));
+    expect(columns).toEqual(expect.arrayContaining([
+      "financial_status", "total_refunded", "payment_gateway",
+    ]));
   });
 
   it("buscando, NO acota por etapa: el pedido puede estar en cualquiera", async () => {

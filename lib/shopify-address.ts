@@ -168,3 +168,53 @@ export function reprogramDestination(
   // nulos haría creer al llamador que hay dato.
   return address.address1 || address.city ? address : null;
 }
+
+/** Lo que guarda «Corregir ubicación» (`order_geo_overrides`). */
+export interface GeoOverrideAddress {
+  region?: string | null;
+  province?: string | null;
+  district?: string | null;
+  address?: string | null;
+  reference?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+/**
+ * El destino de una guía con la corrección de ubicación aplicada encima.
+ *
+ * POR QUÉ. El Master arma la dirección con `order_geo_overrides` por delante de
+ * todo (0051: «la corrección GANA sobre todo lo demás»), pero la guía directa
+ * solo buscaba en Shopify, el carrito y el lead. #KP144042 (Sullana, 02-11-2026)
+ * entró por el catálogo de WhatsApp sin dirección de Shopify; el equipo le puso
+ * la del último pedido de la clienta con «Corregir ubicación», el Master la
+ * mostraba y la mesa de confirmación decía «Swayp lo puede llevar hoy», y el
+ * panel de la guía decía «Sin dirección registrada» y «Swayp no tiene
+ * cobertura en este destino». Mismo dato, dos respuestas.
+ *
+ * CAMPO A CAMPO, como el Master: un nulo en la corrección es «esto no lo toco»,
+ * no «bórralo». La provincia de la guía es la de Shopify, que en Perú es el
+ * departamento; de la corrección se toma la provincia y, si no hay, la región,
+ * igual que con un lead. Media coordenada no ubica nada: o las dos o ninguna.
+ * Pura.
+ */
+export function withGeoOverride(
+  base: OrderShippingAddress | null,
+  override: GeoOverrideAddress | null | undefined,
+): OrderShippingAddress | null {
+  if (!override) return base;
+  const pick = (a: string | null | undefined, b: string | null | undefined): string | null =>
+    (a ?? "").trim() || (b ?? "").trim() || null;
+  const conPunto = override.latitude != null && override.longitude != null;
+  const address: OrderShippingAddress = {
+    address1: pick(override.address, base?.address1),
+    address2: pick(override.reference, base?.address2),
+    city: pick(override.district, base?.city),
+    province: pick(override.province ?? override.region, base?.province),
+    name: base?.name ?? null,
+    phone: base?.phone ?? null,
+    latitude: conPunto ? override.latitude! : (base?.latitude ?? null),
+    longitude: conPunto ? override.longitude! : (base?.longitude ?? null),
+  };
+  return address.address1 || address.city ? address : base;
+}

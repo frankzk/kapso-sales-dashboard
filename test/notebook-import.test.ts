@@ -118,6 +118,34 @@ const ctx = (): NotebookContext => ({
   ]),
 });
 
+describe("incluir desde la hoja un paquete sin reporte anterior", () => {
+  it("propone añadir y reportar por código sin inventar un reprogramado", () => {
+    const context = ctx();
+    context.carry[0]!.unreported = true;
+    const row = buildNotebookPlan([line({ order: "#KP138029", written: "EFECTIVO", amount: 159 })], context).rows[0]!;
+    expect(row).toMatchObject({ action: "pasar_y_reportar", match: { kind: "arrastre", via: "codigo", shipmentId: "sh9" } });
+    expect(row.match.detail).toContain("sin reporte");
+    expect(row.match.detail).not.toContain("Reprogramado");
+  });
+
+  it("sin código no toma un paquete pendiente de una caja anterior por nombre", () => {
+    const context = ctx();
+    context.carry[0]!.unreported = true;
+    const row = buildNotebookPlan([line({ order: null, customer: "Gisenia Caycho", written: "EFECTIVO", amount: 159 })], context).rows[0]!;
+    expect(row.action).toBe("omitir");
+    expect(row.match.shipmentId).toBeNull();
+  });
+
+  it("un número sin prefijo que coincide con dos tiendas no elige la primera", () => {
+    const context = ctx();
+    context.elsewhere.set("#AUR138029", { orderId: "other-store-order", orderName: "#AUR138029", cancelled: false, where: "en otra caja" });
+    const row = buildNotebookPlan([line({ order: "138029", written: "EFECTIVO", amount: 159 })], context).rows[0]!;
+    expect(row.action).toBe("omitir");
+    expect(row.match.kind).toBe("ambiguo");
+    expect(row.match.orderId).toBeNull();
+  });
+});
+
 describe("el cruce de la hoja con la ruta", () => {
   const lines: NotebookLine[] = [
     line({ item: 2, order: "#KP138611", written: "YAPE PROV", amount: 0, customer: "Carlos Castan." }),
@@ -220,7 +248,7 @@ describe("la nota de la parada", () => {
       "Cuaderno de Alexis del 05/10 (punto 3): aún no usa la app, va sin foto. Cargado por Frankz Kastner el 06/10. " +
         "SOLO ENTREGA en el cuaderno: el pedido ya estaba pagado y no se cobró nada.",
     );
-    expect(note(1)).toContain("Lo traía desde su ruta del 03/10 (reprogramado) y salió en la del 05/10.");
+    expect(note(1)).toContain("Lo traía desde su ruta del 03/10 y la hoja confirma que volvió a llevarlo en la del 05/10.");
     expect(note(1)).toContain("MIERCOLES en el cuaderno: reprogramado para el miércoles 07/10.");
     expect(note(1)).not.toContain(NOTEBOOK_PAST_DAY_NOTE);
     expect(note(2)).toContain("La hoja no trae el código; se cruzó por el nombre (Clay Sena Caya) y el monto (S/ 297.00).");
@@ -275,7 +303,7 @@ describe("lo que manda la pantalla al aplicar", () => {
 describe("la hoja se carga desde Kapta (08-10-2026)", () => {
   it("MOM, runbook, panel, rutas y migración dicen lo mismo", async () => {
     const { readFileSync } = await import("node:fs");
-    const read = (f: string) => readFileSync(`${process.cwd()}/${f}`, "utf8");
+    const read = (f: string) => readFileSync(`${process.cwd()}/${f}`, "utf8").replace(/\r\n/g, "\n");
     expect(read("docs/mom/master-pedidos-v1.md")).toContain("**La hoja del motorizado sin app se carga desde Kapta (08-10-2026, decisión de\nFrankz).**");
     expect(read("docs/runbooks/cuaderno-a-rutas.md")).toContain("**Desde el 08/10/2026 se hace en Kapta, no con SQL**");
     expect(read("components/courier-route-report-drawer.tsx")).toContain("<RiderNotebookImport");
@@ -285,7 +313,7 @@ describe("la hoja se carga desde Kapta (08-10-2026)", () => {
     const apply = read("lib/notebook-apply.ts");
     expect(apply).toContain("writeStopReport(");
     expect(apply).toContain("notebook: { riderName, importId }");
-    expect(apply).toContain('admin.rpc("gf_carry_over"');
+    expect(apply).toContain('admin.rpc("gf_notebook_carry_over"');
     // El día escrito es la fecha que pidió el cliente si no pasó; sin día, no se toca (D9).
     expect(apply).toContain("const requestedDate = day ? (iso && iso >= loadedOn ? iso : null) : undefined;");
     expect(apply).toContain("        requestedDate,\n      },\n      { stop: t.stop!, routeStatus: routeNow?.status },");

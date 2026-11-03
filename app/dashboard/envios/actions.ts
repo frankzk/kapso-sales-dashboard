@@ -48,6 +48,7 @@ import {
   type RerouteDisposition,
 } from "@/lib/shipments";
 import { getStoreCreds } from "@/lib/ingest";
+import { flattenCatalog, loadStoreOrderPlatform, searchWooCatalog, wooSaleClient } from "@/lib/woocommerce-orders";
 import { getAccessibleStores } from "@/lib/access";
 import { ElegibilidadError, recalcularElegibilidadFenix } from "@/lib/fenix-eligibility";
 import {
@@ -55,10 +56,16 @@ import {
   pickStoresForOrderQuery,
   searchOrdersLive,
   searchProductVariants,
-  updateOrderShippingAddress,
   type ProductVariantResult,
 } from "@/lib/shopify";
 import { runSuggestionBatch, SUGGESTION_BATCH_SIZE, type BatchResult } from "@/lib/shipment-auto-match";
+import {
+  captureShopifyOrderForLink,
+  orderPlatformOf,
+  pushShippingAddressToShopify,
+  type OrderCapture,
+  type ShopifyAddressPush,
+} from "@/lib/shipment-order-capture";
 import {
   coverageCityOf,
   coverageInputOf,
@@ -135,6 +142,7 @@ import {
 } from "@/lib/swayp-guide";
 import { avisoSinVinculoSwayp, normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp, cargarMapaSwaypDeOrg } from "@/lib/swayp-sku-map";
+import { swaypDestinationRefusal } from "@/lib/swayp-destination-guard";
 import { NOVELTY_ACTIONS, buildNoveltySolution, noveltyActionIsReturn } from "@/lib/swayp-novelty";
 import { getMasterPermissions, orgsWithPermission } from "@/lib/permissions-access";
 import {
@@ -150,11 +158,13 @@ import {
 } from "@/lib/swayp-reenvio";
 import type {
   LinkedShipmentSummary,
+  OrderPlatform,
   ShipmentCallRow,
   ShipmentHistoryGuide,
   ShipmentOrderDetail,
   ShipmentRow,
 } from "@/lib/types";
+import { orderPlatformName } from "@/lib/order-admin-url";
 
 export interface ShipmentActionState {
   error?: string;
@@ -193,6 +203,42 @@ function errorDeBase(
     return `No se pudo ${accion}: la conexión falló. Inténtalo de nuevo.`;
   }
   return `No se pudo ${accion}. Inténtalo de nuevo; si vuelve a pasar, avisa a soporte.`;
+}
+
+/**
+ * El mensaje de un pedido de Shopify que no se pudo capturar para vincular
+ * (`captureShopifyOrderForLink`): los mismos textos de antes, salvo el de la
+ * tienda sin Shopify, que ahora solo sale si el pedido tampoco está en Kapta.
+ */
+function orderCaptureError(captured: Exclude<OrderCapture, { ok: true }>, accion: string, sinFila: string): string {
+  switch (captured.why) {
+    case "sin_shopify":
+      return "La tienda no tiene Shopify conectado y el pedido no está en Kapta.";
+    case "shopify_fallo":
+      return "No se pudo obtener el pedido de Shopify.";
+    case "no_encontrado":
+      return "Pedido no encontrado en Shopify.";
+    case "base":
+      return errorDeBase(captured.error, accion);
+    case "sin_fila":
+      return sinFila;
+  }
+}
+
+/** El aviso de `updateShipmentDeliveryAddress`: dónde quedó la dirección nueva. */
+function addressUpdateNotice(isRealShopifyOrder: boolean, push: ShopifyAddressPush | null): string {
+  if (!isRealShopifyOrder) {
+    return "Dirección y coordenadas actualizadas en el envío; no había un pedido Shopify vinculado.";
+  }
+  if (!push?.ok || push.wrote) return "Dirección y coordenadas actualizadas en Shopify y en el envío.";
+  switch (push.why) {
+    case "sin_shopify":
+      return "Dirección y coordenadas actualizadas en el envío. La tienda ya no tiene Shopify conectado: el pedido de Shopify no cambió.";
+    case "tienda_caida":
+      return `Dirección y coordenadas actualizadas en el envío. Shopify no atendió a la tienda (HTTP ${push.status}): el pedido de Shopify no cambió.`;
+    case "woocommerce":
+      return "Dirección y coordenadas actualizadas en el envío. El pedido es de WooCommerce: allí no se cambió.";
+  }
 }
 
 /** Filas crudas de reprogramaciones (guías Swayp hijas) + nombres de asesor,
@@ -332,7 +378,9 @@ export async function loadShipmentDetail(
   // If the local order came from an older no-phone Shopify fallback, its raw
   // payload can have products but no shippingAddress. Refresh that one order
   // live, cache the repaired payload, and keep the drawer fast on later opens.
-  if (order && !order.shipping_address && order.shopify_order_id) {
+  // Solo un pedido de Shopify: el de WooCommerce no se le pide a Shopify, que
+  // no lo tiene y con `wc-…` solo devuelve un error (MOM §38.12).
+  if (order && !order.shipping_address && order.shopify_order_id && order.platform !== "woocommerce") {
     const creds = await getStoreCreds(ctx.storeId, admin);
     if (creds?.shopify_token) {
       try {
@@ -349,6 +397,7 @@ export async function loadShipmentDetail(
             shopify_order_id: liveOrder.shopify_order_id,
             line_items: liveOrder.line_items,
             shipping_address: liveAddress,
+            platform: "shopify",
           };
           if (detail.shipment.order_id) {
             await admin
@@ -1015,32 +1064,28 @@ export async function updateShipmentDeliveryAddress(
 
   const shopifyOrderId = order?.shopify_order_id;
   const isRealShopifyOrder = !!shopifyOrderId && !shopifyOrderId.startsWith("manual-");
+  // Primero en Shopify, como siempre. Si la tienda ya no tiene Shopify, o
+  // Shopify contesta que la tienda ya no está, el cambio sigue solo en el envío
+  // (lib/shipment-order-capture.ts); un rechazo de Shopify lo sigue cortando.
+  // Un pedido de WooCommerce (`orders.platform`, MOM §38.12) nunca va a
+  // Shopify: su id (`wc-kp-1532`) no es de Shopify aunque tenga un número.
+  let shopifyPush: ShopifyAddressPush | null = null;
   if (isRealShopifyOrder) {
-    const creds = await getStoreCreds(current.store_id);
-    if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
-    try {
-      await updateOrderShippingAddress({
-        domain: creds.shopify_domain,
-        token: creds.shopify_token,
-        orderGid: `gid://shopify/Order/${shopifyOrderId}`,
-        address: {
-          name: current.customer_name,
-          phone: current.customer_phone,
-          address1: address,
-          address2: reference,
-          city: district,
-          province: region,
-          country: "Peru",
-        },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        error: message.includes("Access denied") || message.includes("write_orders")
-          ? "Shopify no autorizó el cambio. La tienda necesita el permiso write_orders."
-          : `Shopify rechazó la dirección: ${message}`,
-      };
-    }
+    shopifyPush = await pushShippingAddressToShopify({
+      storeId: current.store_id,
+      shopifyOrderId,
+      platform: current.order_id ? await orderPlatformOf(admin, current.order_id) : "shopify",
+      address: {
+        name: current.customer_name,
+        phone: current.customer_phone,
+        address1: address,
+        address2: reference,
+        city: district,
+        province: region,
+        country: "Peru",
+      },
+    });
+    if (!shopifyPush.ok) return { error: shopifyPush.error };
   }
 
   const combinedCity = normalizeCity([district, cityLabel, region].join(" "));
@@ -1102,9 +1147,7 @@ export async function updateShipmentDeliveryAddress(
   await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return {
-    notice: isRealShopifyOrder
-      ? "Dirección y coordenadas actualizadas en Shopify y en el envío."
-      : "Dirección y coordenadas actualizadas en el envío; no había un pedido Shopify vinculado.",
+    notice: addressUpdateNotice(isRealShopifyOrder, shopifyPush),
   };
 }
 
@@ -1345,6 +1388,11 @@ export interface DirectFenixGuidePreview {
   orderId: string;
   storeId: string;
   orderName: string | null;
+  /**
+   * La tienda del pedido (`orders.platform`, MOM §38.12): con ella se nombra de
+   * dónde salió la dirección y dónde está anulado o reembolsado.
+   */
+  platform: OrderPlatform;
   totalAmount: number | null;
   currency: string | null;
   customerName: string | null;
@@ -1357,9 +1405,19 @@ export interface DirectFenixGuidePreview {
     address2: string | null;
     district: string | null;
     region: string | null;
-    source: "shopify" | "carrito" | "lead" | null;
+    /** «manual»: la dirección sale de «Corregir ubicación», como en el Master. */
+    source: "shopify" | "carrito" | "lead" | "manual" | null;
   };
   city: string;
+  /**
+   * Lima, provincia o agencia del pedido (`order_master.macro_operation`, leído
+   * con `operacionDelPedido`). Es la misma fuente con la que «Swayp por salir ·
+   * Lima» decide quién arma la caja (MOM §9.1, owner 03-11-2026): con `lima`
+   * —que incluye el Callao— la arma nuestro almacén, y el modal dice a qué lote
+   * entra la guía. No se deduce de `city`: «Huaral, Lima» resuelve a la clave
+   * `lima` de Swayp y es agencia. Provincia no cambia.
+   */
+  operation: "lima" | "provincia_cod" | "agencia" | "desconocida";
   schedule: FenixDeliverySchedule | null;
   stockOk: boolean;
   stockReason: "sin_cobertura" | "sin_stock" | null;
@@ -1466,32 +1524,15 @@ export async function previewDirectFenixGuide(input: {
     // RLS: can the caller see this store?
     const { data: store } = await sb.from("stores").select("id").eq("id", input.storeId).maybeSingle();
     if (!store) return { error: "Tienda inválida o sin acceso." };
-    const creds = await getStoreCreds(input.storeId);
-    if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
-    let order;
-    try {
-      order = await fetchOrderById({
-        domain: creds.shopify_domain,
-        token: creds.shopify_token,
-        storeId: input.storeId,
-        orderGid: input.orderGid,
-      });
-    } catch {
-      return { error: "No se pudo obtener el pedido de Shopify." };
+    // Con Shopify, como siempre; sin él, o si falla, la fila que ya está en
+    // Kapta (lib/shipment-order-capture.ts).
+    const captured = await captureShopifyOrderForLink(admin, { storeId: input.storeId, orderGid: input.orderGid });
+    if (!captured.ok) {
+      return {
+        error: orderCaptureError(captured, "preparar la guía Swayp directa", "No se pudo registrar el pedido."),
+      };
     }
-    if (!order) return { error: "Pedido no encontrado en Shopify." };
-    const { error: upsertErr } = await admin
-      .from("orders")
-      .upsert([order], { onConflict: "store_id,shopify_order_id" });
-    if (upsertErr) return { error: errorDeBase(upsertErr, "preparar la guía Swayp directa") };
-    const { data: row } = await admin
-      .from("orders")
-      .select("id")
-      .eq("store_id", input.storeId)
-      .eq("shopify_order_id", order.shopify_order_id)
-      .maybeSingle();
-    orderId = (row as { id: string } | null)?.id ?? null;
-    if (!orderId) return { error: "No se pudo registrar el pedido." };
+    orderId = captured.orderId;
   }
 
   // RLS-scoped read: resolves only if the caller can access the order's store.
@@ -1504,6 +1545,10 @@ export async function previewDirectFenixGuide(input: {
   if (!order) return { error: "Pedido inválido o sin acceso." };
 
   const { address, source } = await resolveDirectGuideAddress(admin, order);
+  // De qué tienda es (sin la columna, Shopify): `source: "shopify"` solo dice
+  // que la dirección salió del pedido (`raw`), que un pedido de WooCommerce
+  // también trae.
+  const platform = await orderPlatformOf(admin, order.id);
   const district = address?.city ?? null;
   const region = address?.province ?? null;
   const city = deriveFenixCoverageCity(district, region);
@@ -1541,9 +1586,12 @@ export async function previewDirectFenixGuide(input: {
   const activeGuides = activas.filter((g) => !esRellenable(g));
   const rellenable = pickFillableRouteOutput(activas);
   const closedGuidesCount = guides.length - activas.length;
+  // Una sola lectura de la operación: decide la salida adicional y, en el
+  // modal, si la guía entra al lote Swayp de Lima del almacén (MOM §9.1).
+  const operation = await operacionDelPedido(admin, order.id);
   const puerta = puertaDeSalidaAdicional({
     courier: "fenix",
-    operation: await operacionDelPedido(admin, order.id),
+    operation,
     outputs: guides,
     motivo: null,
   });
@@ -1554,6 +1602,10 @@ export async function previewDirectFenixGuide(input: {
   const totalRefunded = order.total_refunded ?? 0;
   const refundedTotal = (order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0);
   const warnings: string[] = [];
+  // La guarda de destino (#KP142611) también se avisa en la vista previa, para
+  // no descubrirla al pulsar: `emitirGuiaSwaypDirecta` la vuelve a aplicar.
+  const destinoContradictorio = await swaypDestinationRefusal(admin, order.id, city);
+  if (destinoContradictorio) warnings.push(destinoContradictorio);
   if (!address?.address1) {
     warnings.push(
       "El pedido no tiene dirección de envío registrada; la guía se creará sin dirección y podrás completarla en el panel del envío.",
@@ -1570,7 +1622,7 @@ export async function previewDirectFenixGuide(input: {
     );
   }
   if (!refundedTotal && totalRefunded > 0) {
-    warnings.push("El pedido tiene un reembolso parcial en Shopify; verifica el monto a cobrar.");
+    warnings.push(`El pedido tiene un reembolso parcial en ${orderPlatformName(platform)}; verifica el monto a cobrar.`);
   }
   if (closedGuidesCount > 0) {
     warnings.push(
@@ -1585,6 +1637,7 @@ export async function previewDirectFenixGuide(input: {
     orderId: order.id,
     storeId: order.store_id,
     orderName: order.name,
+    platform,
     totalAmount: order.total_amount,
     currency: order.currency,
     customerName: address?.name ?? null,
@@ -1600,6 +1653,7 @@ export async function previewDirectFenixGuide(input: {
       source,
     },
     city,
+    operation,
     schedule: getFenixDeliverySchedule(city, district),
     stockOk: check.ok,
     stockReason: check.ok ? null : check.reason ?? null,
@@ -1815,49 +1869,27 @@ export async function linkShipmentToShopifyOrder(
   const sb = await createServerSupabase();
   const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
   if (!store) return { error: "Tienda inválida o sin acceso." };
-  const creds = await getStoreCreds(storeId);
-  if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify conectado." };
 
-  let order;
-  try {
-    order = await fetchOrderById({
-      domain: creds.shopify_domain,
-      token: creds.shopify_token,
-      storeId,
-      orderGid,
-    });
-  } catch {
-    return { error: "No se pudo obtener el pedido de Shopify." };
+  // Con Shopify, como siempre; sin él, o si falla, la fila que ya está en
+  // Kapta (lib/shipment-order-capture.ts). Una sugerencia guardada se puede
+  // confirmar aunque la tienda ya no tenga Shopify.
+  const captured = await captureShopifyOrderForLink(createAdminSupabase(), { storeId, orderGid });
+  if (!captured.ok) {
+    return { error: orderCaptureError(captured, "vincular el pedido de Shopify", "No se pudo vincular el pedido.") };
   }
-  if (!order) return { error: "Pedido no encontrado en Shopify." };
 
-  const admin = createAdminSupabase();
-  const { error: upsertErr } = await admin
-    .from("orders")
-    .upsert([order], { onConflict: "store_id,shopify_order_id" });
-  if (upsertErr) return { error: errorDeBase(upsertErr, "vincular el pedido de Shopify") };
-
-  const { data: row } = await admin
-    .from("orders")
-    .select("id")
-    .eq("store_id", storeId)
-    .eq("shopify_order_id", order.shopify_order_id)
-    .maybeSingle();
-  const orderId = (row as { id: string } | null)?.id ?? null;
-  if (!orderId) return { error: "No se pudo vincular el pedido." };
-
-  return resolveShipmentMatch(shipmentId, { orderId });
+  return resolveShipmentMatch(shipmentId, { orderId: captured.orderId });
 }
 
 /**
- * Process one chunk of the "Revisión" queue against live Shopify: for each
- * unchecked unmatched shipment, search (routed by store like the live picker)
- * and — only when exactly one candidate's phone cross-validates the shipment's
- * own phone (NOTA reference + same phone) — LINK it directly to that Shopify
- * order (falling back to a saved suggestion only if the link's fetch/upsert
- * fails). Admin-gated: it fans out many live Shopify calls and writes across
- * potentially hundreds of shipments in one org, same category as
- * upsertFenixStock's bulk-maintenance gate.
+ * Process one chunk of the "Revisión" queue against Kapta's `orders` (Shopify
+ * and WooCommerce orders alike; never live Shopify — owner's decision of
+ * 25-10-2026, MOM §38.12): for each unchecked unmatched shipment, search
+ * (routed by store like the live picker) and — only when exactly one
+ * candidate's phone cross-validates the shipment's own phone (NOTA reference +
+ * same phone) — LINK it directly to that order. Admin-gated: it fans out many
+ * queries and writes across potentially hundreds of shipments in one org,
+ * same category as upsertFenixStock's bulk-maintenance gate.
  */
 export async function processSuggestionBatch(): Promise<
   { error: string } | BatchResult
@@ -1914,6 +1946,17 @@ export async function searchStockProducts(
   // RLS check: can the caller see this store?
   const { data: store } = await sb.from("stores").select("id").eq("id", storeId).maybeSingle();
   if (!store) return [];
+  // La tienda que ya crea sus pedidos en WooCommerce busca en su catálogo
+  // (MOM §38.12). Este selector solo usa el título y el SKU.
+  const plataforma = await loadStoreOrderPlatform(createAdminSupabase(), storeId);
+  if (!plataforma.ok) return [];
+  if (plataforma.platform === "woocommerce") {
+    try {
+      return flattenCatalog(await searchWooCatalog(wooSaleClient(plataforma.creds), { query, first: 12 }));
+    } catch {
+      return [];
+    }
+  }
   const creds = await getStoreCreds(storeId);
   if (!creds?.shopify_token) return [];
   try {
@@ -2607,4 +2650,36 @@ export async function solveSwaypNovelty(input: {
   revalidatePath("/dashboard/envios");
   revalidatePath("/dashboard/pedidos");
   return { notice: `Novedad resuelta en Swayp: ${meta.label.toLowerCase()}.` };
+}
+
+/**
+ * Descarta un aviso de «Guías de Swayp que Kapta no tiene» (MOM §11.2, 0282): no
+ * es nuestra, o ya se resolvió por otro lado. Solo quien gestiona envíos y
+ * puede ver el aviso (RLS); queda quién y por qué. No toca ni la guía ni el
+ * pedido. Una guía que se registra en Kapta sale sola, sin descartarla.
+ */
+export async function dismissSwaypUnknownGuide(guideNumber: string, note: string): Promise<ShipmentActionState> {
+  if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) redirect("/login");
+
+  const { data: row } = await sb
+    .from("swayp_unknown_guides")
+    .select("guide_number")
+    .eq("guide_number", guideNumber)
+    .maybeSingle();
+  if (!row) return { error: "No se encontró ese aviso de Swayp o no tienes acceso." };
+
+  const { error } = await createAdminSupabase()
+    .from("swayp_unknown_guides")
+    .update({ dismissed_at: new Date().toISOString(), dismissed_by: user.id, dismiss_note: note.trim().slice(0, 300) || null })
+    .eq("guide_number", guideNumber)
+    .is("dismissed_at", null);
+  if (error) return { error: errorDeBase(error, "descartar el aviso") };
+
+  revalidatePath("/dashboard/envios");
+  return { notice: `Guía ${guideNumber} descartada.` };
 }

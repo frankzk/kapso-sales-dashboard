@@ -16,6 +16,7 @@
 import { revalidatePath } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
+import { carryKeptStop } from "@/lib/gf-carry-kept-server";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { routeReportAccess } from "@/lib/route-report-access";
 import type { StopStatus } from "@/lib/routes";
@@ -36,6 +37,9 @@ export interface ReportResult {
 }
 
 export interface ReportStopInput {
+  /** «Me lo quedo y lo llevo» (MOM §29.7, 01-11-2026): con un reprogramado de
+   *  una caja de Grupo GF, el día de la ruta en que lo vuelve a llevar. */
+  keepForDate?: string | null;
   stopId: string;
   status: StopStatus;
   paymentMethod: string | null;
@@ -55,8 +59,9 @@ export interface ReportStopInput {
    *  de S/ 0,50 (MOM §30.9): abren la observación de monto con su motivo. */
   reasonCode?: string | null;
   reasonNote?: string | null;
-  /** Fecha que pidió el cliente (YYYY-MM-DD, Lima; 12-10-2026, MOM §9.5): queda
-   *  en la parada; la tienda la confirma en Repro Lima; nunca programa.
+  /** Fecha que pidió el cliente (YYYY-MM-DD, Lima; MOM §29.7): queda en la
+   *  parada y, desde el 01-11-2026, programa la salida de Grupo GF para ese
+   *  día (`syncDoorDateProgram`); la tienda puede cambiarla en Repro Lima.
    *  undefined conserva la que ya tenía; null la borra. */
   requestedDate?: string | null;
   /** @deprecated Nombre de la pantalla del 10-10-2026 (pestañas abiertas sin
@@ -226,11 +231,20 @@ export async function reportStop(input: ReportStopInput): Promise<ReportResult> 
   // la confirma antes de programarla.
   const asked =
     input.status === "no_entregado" && input.outcomeReason === "reprogramado" && requestedDate
-      ? ` Fecha que pidió el cliente: ${programDayLabel(requestedDate)}. La tienda la confirma antes de programarla.`
+      ? ` Sale con Grupo GF el ${programDayLabel(requestedDate)}, la fecha que pidió el cliente.`
       : "";
+  // «Me lo quedo y lo llevo»: el paquete pasa a su ruta de ese día sin volver
+  // a la oficina. El reporte ya quedó; si el traspaso no se puede, se dice.
+  let kept = "";
+  if (input.status === "no_entregado" && input.outcomeReason === "reprogramado" && input.keepForDate) {
+    const carry = await carryKeptStop(admin, { stopId: input.stopId, toDate: input.keepForDate, actor: user.id });
+    kept = carry.ok
+      ? ` Sale en tu ruta del ${carry.toDate.slice(8, 10)}/${carry.toDate.slice(5, 7)}: no lo devuelves a la oficina.`
+      : ` No se pudo pasar a tu ruta siguiente (${carry.error}): avisa a Coordinación.`;
+  }
   return {
     ok: true,
-    message: input.status === "entregado" ? "Entrega registrada." : `Reportado como no entregado.${asked}`,
+    message: input.status === "entregado" ? "Entrega registrada." : `Reportado como no entregado.${asked}${kept}`,
   };
 }
 

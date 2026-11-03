@@ -79,6 +79,15 @@ select set_config('gf.withdraw', 'off', true);
 commit;
 ```
 
+Desde el 31/10/2026, la carga desde fotos también puede pasar en la misma
+aplicación los paquetes **sin reporte** que siguen en una caja anterior del
+mismo motorizado. La hoja debe identificarlos por código: se proponen como
+«Añadir a esta ruta» y `gf_notebook_carry_over` valida la hoja aplicada, el actor,
+la organización y la custodia actual. No se inventa un «Reprogramado» ni se
+cambia la parada anterior. La función antigua mantiene sus guardas. Un pedido
+en otra caja, anulado, reemplazado o con código ambiguo sigue señalado para
+revisión. La instalación de la 0292 no traslada ni reporta paquetes.
+
 ## 4. El Master
 
 Nada de lo anterior toca el Master. Las entregas cruzan por la puerta única
@@ -86,6 +95,14 @@ Nada de lo anterior toca el Master. Las entregas cruzan por la puerta única
 aceptar las observaciones de monto, o en bloque con
 `scripts/apply-cuaderno-history-to-master.ts` (deja `master_backfill_log`,
 reversible con `scripts/rollback-master-backfill.ts`).
+
+Desde el 21-10-2026 los dos caminos, con una entrega de Alexis o de Reparto
+propio que trae su fecha, rellenan además la caja «por definir» del pedido
+como salida entregada de Grupo GF (`lib/own-salida.ts`, MOM §30.8); lo
+aplicado antes lo rellena la migración 0270. Ese relleno no queda en
+`master_backfill_log` y el rollback no lo deshace: revertir un lote deja esos
+pedidos entregados por su salida, y el script los lista como distintos para
+revisar a mano.
 
 ## Un motorizado sin app, con la ruta ya en Kapta (foto de su hoja)
 

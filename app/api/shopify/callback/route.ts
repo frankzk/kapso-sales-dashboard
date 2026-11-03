@@ -57,10 +57,16 @@ export async function GET(req: NextRequest) {
   const admin = createAdminSupabase();
   const { data: store } = await admin
     .from("stores")
-    .select("id, org_id, shopify_domain")
+    .select("id, org_id, shopify_domain, shopify_app")
     .eq("id", storeId)
     .maybeSingle();
   if (!store) return back(req, storeId, { shopify_error: "tienda-no-encontrada" });
+  // Una tienda con su app propia (0271, MOM §36.4) no se reconecta con la app
+  // interna: pisaría su token y el secreto de sus webhooks. Kenku, Aurela y
+  // las demás siguen igual.
+  if ((store as { shopify_app?: string | null }).shopify_app === "propia") {
+    return back(req, storeId, { shopify_error: "app-propia" });
+  }
   if (String(store.shopify_domain).toLowerCase() !== shop) {
     return back(req, storeId, { shopify_error: "shop-no-coincide" });
   }

@@ -2,8 +2,9 @@
 
 import type { RecoveryKind } from "@/lib/reproprovincia";
 import type { PaymentGateway } from "@/lib/payment-gateway";
+import type { LeadCartDetail } from "@/lib/lead-cart-detail";
 
-export type Role = "owner" | "admin" | "viewer" | "vendedora";
+export type Role = "owner" | "admin" | "viewer" | "vendedora" | "motorizado";
 export type ShippingMode = "cod" | "agency" | null;
 export type SyncSource = "shopify" | "kapso" | "ops";
 
@@ -78,7 +79,22 @@ export interface ShipmentOrderDetail {
   shopify_order_id: string | null;
   line_items: OrderLineItem[];
   shipping_address: OrderShippingAddress | null;
+  /**
+   * `orders.platform` (0274, MOM §38.12): de qué tienda vino. Sin dato, Shopify.
+   * El cajón de Envíos no le pide a Shopify un pedido de WooCommerce y nombra
+   * su tienda.
+   */
+  platform?: OrderPlatform;
 }
+
+/**
+ * De qué plataforma vino un pedido o un borrador (`orders.platform`,
+ * `draft_orders.platform`, migración 0274, MOM §38). Las decisiones por
+ * plataforma se toman con esto, nunca por la forma del id: `extractNumericId`
+ * convierte `wc-kp-1532` en `1532`, que parece un id de Shopify.
+ */
+export type OrderPlatform = "shopify" | "woocommerce";
+export const ORDER_PLATFORMS: readonly OrderPlatform[] = ["shopify", "woocommerce"];
 
 /** A row ready to be upserted into the `orders` table. */
 export interface OrderRow {
@@ -110,6 +126,13 @@ export interface OrderRow {
   kapso_conversation_id: string | null;
   line_items: OrderLineItem[];
   raw?: unknown;
+  /**
+   * De qué plataforma vino (0274). Los mapeadores de Shopify NO lo ponen a
+   * propósito: la columna nace en 'shopify' y sus escrituras quedan idénticas a
+   * las de antes de la 0274. Solo `mapWooOrder` (lib/woocommerce.ts) lo llena,
+   * con 'woocommerce'.
+   */
+  platform?: OrderPlatform;
 }
 
 export type DraftOrderStatus = "open" | "invoice_sent" | "completed" | null;
@@ -143,6 +166,8 @@ export interface DraftOrderRow {
   line_items: OrderLineItem[];
   order_gid: string | null; // the resulting order GID once completed
   raw?: unknown;
+  /** `draft_orders.platform` (0274). Sin él, la base pone 'shopify'. */
+  platform?: "shopify" | "woocommerce";
 }
 
 export interface ConversationRow {
@@ -186,6 +211,12 @@ export interface StoreSummary {
   org_id: string;
   name: string;
   shopify_domain: string;
+  /**
+   * `stores.woo_site_url` (0274, MOM §38.1): el sitio WordPress de la tienda.
+   * No es secreto. Con él la ficha arma el enlace a un pedido de WooCommerce
+   * (`orderAdminLink`, §38.12). Null sin sitio guardado o antes de la 0274.
+   */
+  woo_site_url?: string | null;
   currency: string;
   timezone: string;
   status: string;
@@ -218,8 +249,18 @@ export interface LeadRow {
   category: string; // won | hot | open | lost
   status: string;
   needs_attention: boolean;
+  /** 0289: operational retry queue; never replaces the last call disposition. */
+  call_queue_ready?: boolean;
+  /** Human call records, including the historical backfill (0289). */
+  call_attempt_count?: number;
   order_id: string | null;
   has_order: boolean;
+  /**
+   * El pedido de este lead tiene un comprobante por validar (MOM §16.1). Solo
+   * lo trae la vista «Atender ahora», que lo calcula en vivo; no es columna de
+   * `leads`. Ausente o null = no hay.
+   */
+  pending_voucher?: LeadPendingVoucher | null;
   // Enrichment signals for sub-segmenting "Por llamar" (0007). Informational —
   // do not affect category/status. Cart + district come from an open Shopify
   // draft order (COD form); inbound_count from the Kapso conversation. Optional:
@@ -228,6 +269,8 @@ export interface LeadRow {
   cart_value?: number | null;
   cart_item_count?: number | null;
   cart_summary?: string | null;
+  /** Solo al abrir la ficha: fecha y artículos del carrito original, no columna de leads. */
+  cart_detail?: LeadCartDetail | null;
   draft_order_gid?: string | null;
   // Draft-order denormalized fields (0013): the board reads these directly so it
   // never needs to join `draft_orders`. Extended address mirrors the COD form.
@@ -300,6 +343,10 @@ export interface ShipmentRow {
    *  que distingue una guía cerrada porque la entrega FALLÓ —y cuyo pedido
    *  todavía merece otra salida— de una cerrada por decisión nuestra. */
   reported_status?: string | null;
+  /** Aliclik, del Excel (0304): «SUB ESTADO» (DE VIAJE, POR CLIENTE…) y el
+   *  último comentario del motorizado, del reporte más reciente. */
+  aliclik_sub_status?: string | null;
+  aliclik_rider_comment?: string | null;
   /** Cuándo el courier cerró la guía sin entregar. Ancla de la ventana de
    *  recuperación; el barrido de Aliclik lo sella al anular. */
   closed_at?: string | null;
@@ -518,6 +565,11 @@ export interface OrderMasterRow {
   dispatch_scheduled_on?: string | null;
   /** Con quién salió (0266, lib/dispatched-with.ts): `gf:Roy`, `tanders`… */
   dispatched_with?: string[] | null;
+  /**
+   * Títulos de producto del pedido, sin variante (0300, lib/order-product-titles.ts).
+   * No viaja en el listado (`MASTER_COLUMNS`): el filtro «Producto» va en la base.
+   */
+  product_titles?: string[] | null;
   /** Por dónde se generó el pedido (0264, lib/sales-channel.ts). */
   sales_channel?: import("@/lib/sales-channel").SalesChannel | null;
   address?: string | null;
@@ -587,6 +639,26 @@ export interface OrderMasterRow {
   agency_expires_at: string | null;
   recomputed_at?: string;
   updated_at?: string;
+  /**
+   * «Comprobante por validar» (MOM §16.1): NO es una columna de `order_master`.
+   * Se lee en vivo de `order_payments` al pintar la página
+   * (lib/pending-voucher-access.ts) porque la cobranza de WhatsApp registra el
+   * pago sin recalcular el Master, y un indicador materializado llegaría tarde
+   * justo en el caso que lo motivó (#KP143616). Ausente o null = no hay.
+   */
+  pending_voucher?: import("@/lib/pending-voucher").PendingVoucherSummary | null;
+  /**
+   * «Pagado sin aviso» (MOM §12): tampoco es una columna. Pagado, en la agencia
+   * con el plazo por vencer o vencido, y sin aviso de llegada enviado — esto
+   * último se lee de la cola de avisos (lib/agency-pickup-alert-access.ts).
+   */
+  paid_unnotified?: boolean | null;
+  /**
+   * «Programado sin ubicación» (MOM §6.2): envío programado y cobertura «Por
+   * revisar» sin región, distrito o dirección. La lista no trae la dirección,
+   * así que lo marca el servidor (`getScheduledNoLocationIds`).
+   */
+  scheduled_no_location?: boolean | null;
 }
 
 /** Un movimiento de la línea de tiempo (`order_events`, append-only). */
@@ -641,4 +713,15 @@ export interface ImportRowRow {
   shipment_id: string | null;
   error: string | null;
   created_at?: string;
+}
+
+/** El comprobante por validar del pedido de un lead, tal como lo lee «Atender ahora». */
+export interface LeadPendingVoucher {
+  orderId: string;
+  orderName: string | null;
+  /** «Comprobante por validar · espera su clave», o sin la clave fuera del flujo de agencia. */
+  reason: string;
+  amount: number;
+  /** Desde cuándo espera (el comprobante más antiguo). */
+  since: string | null;
 }

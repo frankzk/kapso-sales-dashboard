@@ -1,5 +1,6 @@
 import type { LeadCounts, LeadView } from "./leads-access";
 import type { LeadRow } from "./types";
+import { isInCallQueue } from "./lead-call-queue";
 
 /** Same membership predicates as getStoreLeads / lead_queue_counts (0059).
  * Only used to reconcile a confirmed write; periodic reads remain authoritative. */
@@ -7,12 +8,18 @@ export function leadMembership(lead: LeadRow, now = Date.now()): LeadCounts {
   const callable = lead.category === "open" || lead.category === "hot";
   return {
     por_llamar: Number(callable && lead.status != null && lead.status !== "yape_por_verificar"),
-    handoff: Number(!!lead.needs_attention && !!lead.handoff_at && Date.parse(lead.handoff_at) >= now - 24 * 3_600_000),
+    // «Atender ahora» también lista a quien espera la validación de su
+    // comprobante (MOM §16.1): una gestión sobre su lead no lo saca de ahí,
+    // solo validar o rechazar el pago, y eso lo trae la próxima lectura.
+    handoff: Number(
+      (!!lead.needs_attention && !!lead.handoff_at && Date.parse(lead.handoff_at) >= now - 24 * 3_600_000) ||
+        !!lead.pending_voucher,
+    ),
     yape: Number(lead.status === "yape_por_verificar"),
     seguimientos: Number(!!lead.next_followup_at && Date.parse(lead.next_followup_at) <= now),
     ganados: Number(lead.category === "won"),
     perdidos: Number(lead.category === "lost"),
-    sin_llamar: Number(callable && lead.status === "nuevo"),
+    sin_llamar: Number(callable && isInCallQueue(lead)),
   };
 }
 

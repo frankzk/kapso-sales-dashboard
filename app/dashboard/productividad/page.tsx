@@ -73,6 +73,7 @@ async function ProductividadContent({
   const source =
     sp.src === "meta_ad" ||
     sp.src === "fb_web" ||
+    sp.src === "web" ||
     sp.src === "cod_cart" ||
     sp.src === "abandoned_browse" ||
     sp.src === "organic"

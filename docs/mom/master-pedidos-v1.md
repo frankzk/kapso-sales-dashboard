@@ -27,10 +27,16 @@ heredados continúan disponibles como evidencia y compatibilidad.
 
 ## 2. Principios no negociables
 
-1. Shopify es la única fuente de pedidos.
-2. Todo pedido de Shopify aparece en el Master: ni más ni menos.
+1. La tienda es la única fuente de pedidos: Shopify hasta su cierre
+   (28-10-2026) y WooCommerce después (§38, decisión del owner del 23-10-2026).
+   Cada pedido lleva su plataforma (`orders.platform`).
+2. Todo pedido de la tienda aparece en el Master: ni más ni menos (lo que
+   WooCommerce no considera pedido, §38.3, tampoco entra).
 3. Kapta no crea pedidos comerciales. Las correcciones comerciales se realizan
-   anulando el pedido incorrecto en Shopify y creando otro.
+   anulando el pedido incorrecto en la tienda de la que vino y creando otro.
+   Un pedido de la era Shopify después del cierre: §6.4, pendiente del owner
+   (§38.9). Excepción identificativa autorizada: corregir nombres y apellidos
+   de un pedido WooCommerce desde su ficha (§38.12), conservando el historial.
 4. Kapta es la fuente de verdad operativa, logística, financiera y de auditoría.
 5. El historial se conserva indefinidamente. Excepción: los datos personales
    del comprador de una tienda cliente de otra organización se anonimizan
@@ -40,8 +46,8 @@ heredados continúan disponibles como evidencia y compatibilidad.
 7. Un pedido puede tener varias salidas físicas simultáneas o sucesivas.
 8. El estado del pedido no reemplaza el estado de cada salida.
 9. `Entregado` en logística y `cerrado financieramente` son hechos distintos.
-10. Ningún resultado de courier cancela por sí solo el pedido en Shopify.
-11. Nunca se automatizan sin intervención humana: cancelación en Shopify,
+10. Ningún resultado de courier cancela por sí solo el pedido en la tienda.
+11. Nunca se automatizan sin intervención humana: cancelación en la tienda,
     reembolsos, excepción de adelanto, merma y cierre de una liquidación
     observada.
 
@@ -49,8 +55,11 @@ heredados continúan disponibles como evidencia y compatibilidad.
 
 ### Pedido
 
-Orden comercial creada en Shopify. Tiene una identidad única y puede sobrevivir
-a múltiples intentos logísticos.
+Orden comercial creada en la tienda (Shopify o WooCommerce). Tiene una
+identidad única y puede sobrevivir a múltiples intentos logísticos. De qué
+plataforma vino cada pedido lo guarda `orders.platform` (§38, 23-10-2026): hasta
+el cierre de Shopify (28-10-2026) todos son de Shopify, y un pedido de
+WooCommerce entra a la misma tabla y al mismo Master, con la misma forma.
 
 **No todos nacen de una conversación.** Desde agosto de 2026 las dos tiendas
 venden también por un formulario COD en la web (EasySell, etiqueta
@@ -59,10 +68,14 @@ venden también por un formulario COD en la web (EasySell, etiqueta
 nada —los 591 están en `order_master` y 499 ya tienen guía—, pero sí para todo
 lo que se calcula recorriendo leads: ese camino no los ve. El anuncio que los
 trajo viaja en `orders.utm_meta`, y las reglas para leerlo están en
-`lib/cod-cart-attribution.ts`.
+`lib/cod-cart-attribution.ts`. Quién cerró cada pedido —asesora, bot, la
+clienta sola en la web— se decide por hechos que la sincronización no borra,
+no por etiquetas locales (§17.3).
 
-**Canal de venta (15-10-2026).** Todos los pedidos nacen en Shopify, pero no
-por el mismo camino, y lo dicen las etiquetas que cada camino le pone. El
+**Canal de venta (15-10-2026).** Todos los pedidos nacen en la tienda, pero no
+por el mismo camino, y lo dicen las etiquetas que cada camino le pone. Un
+pedido de WooCommerce no trae etiquetas: Kapta le escribe las mismas palabras
+de esta tabla desde sus metadatos (§38.5), así que la regla no cambia. El
 Master lo guarda en `order_master.sales_channel` (0264) y lo filtra con la
 píldora «Canal» (parámetro `cn` de la URL). Un pedido tiene un solo canal; si
 lleva marcas de dos, gana el primero de esta lista —quien cerró la venta antes
@@ -70,19 +83,63 @@ que la herramienta donde quedó escrita—:
 
 | Canal | Etiqueta en Shopify | 45 días al 15-10-2026 |
 | --- | --- | --- |
-| Asesora (Leads) | `venta_manual`, `carrito_recuperado` | 15 % |
+| Asesora (Leads) | `venta_manual` (la regla también acepta `carrito_recuperado`, pero esa era una etiqueta solo de la copia local: ningún pedido de Shopify la lleva y desde §17.3 nadie la escribe) | 15 % |
 | Chatbot WhatsApp | `kapso`, `whatsapp`, o el pedido trae conversación de Kapso | 9 % |
 | Bot de carritos | `CARRITO RECUPERADO`, `BOT`, `BOT (whatsapp_cloud)` | 4 % |
 | Catálogo WhatsApp | `catalogo-wsp` (el catálogo privado del agradecimiento, §31) | 1 % |
-| Web · carrito completado | `easysell-abandoned-checkout` (formulario abandonado que la clienta completó después) | 15 % |
+| Web · carrito completado | `easysell-abandoned-checkout`, `abandoned_checkout_releasit_cod_form` (formulario abandonado que se completó después; ver abajo quién lo completa) | 15 % |
 | Web · formulario | `easysell_cod_form` | 55 % |
 | Sin marca | ninguna de las anteriores (sobre todo pedidos creados a mano en Shopify con el nombre de la asesora como etiqueta) | 1,5 % |
 
 La regla vive en `lib/sales-channel.ts` y la escribe el recálculo del pedido;
 la misma regla en SQL (`order_sales_channel`) solo rellenó lo existente al
 aplicar la 0264. No se usa para atribuir ventas a una asesora: eso lo decide
-`order_sales` y el reparto bot/asesora de Consolidado (`lib/metrics.ts`), que
-además mira la gestión del lead.
+`order_sales`, y el Consolidado reparte las ventas con «Canal de cierre»
+(§17.3), que además marca la venta que ayudó una gestión de asesora. Por eso
+las dos cifras no coinciden: cuando la asesora completa un carrito abandonado
+de EasySell, el borrador conserva sus etiquetas y no recibe `venta_manual`.
+Del 14-09 al 13-10-2026, de 1.105 pedidos activos «Web · carrito completado»,
+1.076 tenían venta de asesora en `order_sales`, y 294 de 3.229 «Web ·
+formulario» también. La recompra automática tampoco deja marca propia en
+Shopify: sus 28 pedidos de ese periodo salen como «Web · carrito completado»
+(23) o «Web · formulario» (5), y en «Canal de cierre» como «Recompra
+automática».
+
+**Origen en la ficha (30-10-2026, pedido del owner del 27-10-2026).** En el
+cajón del Master, «Información» → «Pedido y cliente» lleva el campo
+**Origen**: la fuente exacta del pedido en pocas palabras, con la evidencia
+debajo (en 12 px y en el `title` del valor) para que se vea de dónde se dedujo.
+No es un canal nuevo ni cambia el canal de venta ni el de cierre: lee las
+mismas señales que ya existen con la precedencia de §17.3 y nombra el detalle
+que esos canales agrupan. Se lee solo para el pedido abierto (la venta en
+`order_sales` y el `source` de su lead, el borrador de `draft_orders` cuyo
+`order_gid` es este pedido, `auto_order_trials`, y de `orders` las etiquetas,
+`kapso_conversation_id`, `payment_gateway` y en `raw` el `kapta_channel`, el
+`created_via` y el `payment_method` de WooCommerce y el `source_name` de
+Shopify); nunca por fila en las listas. Una lectura que falla es un dato que
+falta, no un error de la ficha. Regla en `lib/order-origin.ts`
+(`orderOrigin`), en este orden:
+
+| Señal | Origen que se ve |
+| --- | --- |
+| Venta en `order_sales` y su lead nació en «Venta telefónica» (`leads.source = manual`) | «Venta telefónica · por <asesora>» (con «· carrito #D…» si cerró un carrito) |
+| Venta en `order_sales` sobre un carrito (canal «Web · carrito completado») | «Kapta Leads · completó el carrito #D… · por <asesora>» |
+| Venta en `order_sales` (`sale_action`) | «Kapta Leads · Generar pedido · por <asesora>»; el borrador que crea el botón en Shopify va en la evidencia |
+| Venta emparejada después (`backfill_match`) | «Kapta Leads · por <asesora>» |
+| Prueba de recompra (`auto_order_trials`) | «Recompra automática» (con el carrito si lo hay) |
+| `venta_manual` sin venta registrada | WooCommerce: «Cargado en wp-admin» (`created_via = admin`) o «Kapta Leads · Generar pedido» (`created_via = kapta`); Shopify: «Asesora · sin venta registrada» |
+| Chatbot (`kapso`, `whatsapp`, conversación de Kapso; en WooCommerce `kapta_channel = kapso`/`whatsapp_bot`) | «Bot de WhatsApp (Kapso)» |
+| `BOT` / `CARRITO RECUPERADO` | «Bot de carritos externo · carrito recuperado» |
+| `catalogo-wsp` | «Catálogo de WhatsApp» |
+| Carrito completado, WooCommerce `created_via = cod-core-chatby` | «Chatby · carrito recuperado #F…» |
+| Carrito completado sin venta de asesora | «Carrito completado · #D…» (sin borrador: «Web · carrito completado»); la evidencia dice que lo completó la clienta o un bot, porque la tienda no lo distingue (§17.3) |
+| Formulario web y pagó con Flow (`payment_method = flowpayment`) | «Web · checkout (Flow)» |
+| Formulario web y `payment_gateway = checkout` en Shopify | «Web · checkout» |
+| Formulario web | «Web · formulario contra entrega» |
+| Sin etiqueta de canal | WooCommerce: «Cargado en wp-admin» / «Web · checkout» por `created_via`; Shopify: «Shopify admin · borrador #D…» si salió de un borrador o `source_name = shopify_draft_order`, «App de Shopify» si `source_name` es el id de una app, «Web» si es `web`; si nada, «Sin marca» |
+
+El nombre de la asesora es el mismo que la línea de tiempo de la ficha
+(su usuario de Kapta). Pruebas: `test/order-origin.test.ts`.
 
 ### Salida
 
@@ -153,6 +210,13 @@ Reglas:
   puesto, escribir encima escondería un cambio de courier. Al rellenarla, la vía
   pasa a ser la del courier, así que deja de ofrecerse «Anular salida»: esa guía
   ya existe del otro lado y se anula desde su propio botón.
+- **El reporte de Urpi y el cuaderno de Grupo GF también la rellenan, ya entregada**
+  (§30.11, §30.8): la caja de Urpi y la del motorizado propio se armaron «por
+  definir» y nadie les puso el courier. Mismas condiciones, y solo si es la
+  única caja viva del pedido: con otra salida viva no se sabe qué caja se llevó
+  y no se toca; sin «por definir», no se crea una salida. Las dos le escriben
+  `closed_at` = el día de la entrega que dice el reporte o el cuaderno, que es
+  de donde el Master saca el suyo.
 - **Por lo mismo, una salida `por definir` no cuenta como «guía activa»** para el
   freno que impide emitir dos guías. No es otro paquete en la calle: es esta caja
   esperando courier. Contarla obligaba a anular la salida para poder emitir la
@@ -255,6 +319,18 @@ Reglas iniciales:
   partir de ella y la ruta reaparece sola.
 - Tanders es exclusivo de cobertura Lima. No se muestra ni se acepta desde el
   servidor para Provincia COD o Agencia.
+- **La nota de la guía Tanders llega precargada (25-10-2026).** Al abrir «Crear
+  guía Tanders» la nota trae, en este orden: la referencia de la dirección, la
+  nota del pedido escrita por el equipo, el número de pedido, una línea
+  `X<cantidad> <producto> (<variante>)` por producto y, separado por una línea en
+  blanco, «Datos de cobro:» con el Yape principal y la primera cuenta bancaria
+  activa de Ajustes → Cuentas de cobro, en dígitos corridos. Es el formato que
+  se tecleaba a mano en cada guía; el operador puede editarla antes de crear.
+  - Si la guía no cobra (pedido ya pagado, monto 0) no lleva datos de cobro.
+  - La nota automática de Kapso («Pedido WhatsApp/Kapso…», «Pedido creado desde
+    WhatsApp/Kapso.») no entra: repite productos, contacto y dirección que la
+    guía ya lleva.
+  - Sin cuentas configuradas no se inventa ninguna: el bloque se omite.
 - Cañete siempre se clasifica como Agencia, aunque Shopify lo etiquete como
   `Lima (provincia)` o exista una tarifa COD histórica que coincida.
 - La cobertura tiene UNA sola definición, `order_coverage_for` en la base. Decide
@@ -318,6 +394,27 @@ subetapa es cuántos pedidos de esa etapa pasan esos filtros, con la misma
 definición que la tabla (`applyServerFilters`). Sin filtros se cuenta todo el
 Master de las tiendas visibles. La búsqueda sigue aparte: mientras se busca, las
 pestañas no se muestran.
+
+**Filtro «Producto» (owner, 02-11-2026).** Junto a los demás filtros del Master
+(Tienda, Estado operativo, Courier, Estado de pago, Cobro del courier, Región,
+Provincia, Distrito, Cobertura, Swayp, Salió con, Canal, Agencia y Más filtros)
+está **Producto**: varias opciones con buscador, y basta con que el pedido lleve
+una. Un producto es el título de la línea del pedido en la tienda (Shopify o
+WooCommerce) **sin la variante**, con los espacios recortados; dos variantes del
+mismo producto son un solo producto. Cada opción dice cuántos pedidos lo llevan
+en las tiendas elegidas (todas si no hay ninguna), las más pedidas primero.
+
+- **Vive en `order_master.product_titles`** (0300, índice GIN) porque el Master
+  filtra en la base y pagina; `orders.line_items` no está en el Master. La
+  escribe el recálculo del pedido (`orderProductTitles`,
+  `lib/order-product-titles.ts`) y la 0300 rellenó lo existente con la misma
+  regla. Las opciones salen de `order_master_product_options` (por tienda).
+- **Viaja por `pr`** en la URL y se aplica en servidor a la lista, las pestañas,
+  los chips, la paginación y el Excel, como los demás. Al buscar un pedido se
+  ignora, como los demás. Limpiar filtros también lo quita.
+- **Sin la 0300** la píldora no se ofrece y un `pr` que llegue por la URL no se
+  aplica: la pantalla lo avisa y enseña todo, nunca una lista vacía ni un error.
+- No cambia estados, etapas, stock ni permisos: es solo una forma de mirar.
 
 ### 6.1 Por confirmar
 
@@ -510,7 +607,8 @@ Registro:
   es opcional.
 - Los comentarios y el cambio manual de estado **no** son registro de gestión.
   El cambio manual es un override que congela el pedido frente al recálculo:
-  usarlo como bitácora de llamadas lo desconecta del MOM.
+  usarlo como bitácora de llamadas lo desconecta del MOM. Desde el 15-10-2026,
+  además, el cambio manual es solo de owner y admin (`master.set_status`, §16).
 - **El congelamiento es frente a lo automático, no frente a otra persona.**
   Anular el pedido en Shopify también lo decide alguien, así que entre dos
   decisiones humanas manda la más reciente: una anulación **posterior** al cambio
@@ -547,6 +645,187 @@ Registro:
 - La subetapa y el conteo de días se derivan de esos hechos. No hay un contador
   que alguien tenga que mantener.
 
+#### Confirmó por Chatby (decisión del owner, 01-11-2026)
+
+La clienta de **Provincia COD** que compra en la web responde al bot de
+confirmación de Chatby (§25) con un mensaje que arma la tienda: «Hola equipo
+Aurela, deseo confirmar mi pedido AUR900226 y pagaré S/ 178.00 en casa.», el
+producto y «Dirección: Jr huallaga 765 barrio huayco, San Martín, Tarapoto». Ese
+mensaje dice lo que la asesora valida al teléfono —el pedido, el monto, que paga
+al recibir y la dirección—, y el pedido seguía en Por confirmar hasta que alguien
+abría la ficha y leía la pestaña Chatby. Decisión del owner: **ese mensaje
+confirma solo, y el pedido confirmado así sale con su guía Aliclik sola, con un
+tope de 20 guías por día**; desde el 02-11-2026, **solo se confirma si la guía
+se creó**.
+
+- **Cuándo.** Cada 10 minutos, todo el día (`/api/cron/chatby-autoconfirm`,
+  con `CRON_SECRET` como los demás). `?dry=1` lee y dice qué haría, sin escribir.
+- **Qué pedidos se leen.** Provincia COD (`classifyOperation`), en Por confirmar
+  · «Sin llamar» o «Por confirmar» (no «Volver a contactar» ni «Pendiente de
+  abono»: ahí hay una fecha o un abono pactado), creados hace a lo sumo 72 h,
+  vivos (sin anular ni reembolsar, en soles), **sin pagos registrados**, con
+  celular, sin recojo en agencia y sin un rechazo anotado en la nota del pedido
+  o de las gestiones. Ni Lima (no pasa por confirmación) ni Agencia (confirma con
+  el pago validado).
+- **Cuánto se lee.** Lo mismo que la ficha: los dos GET de `lib/chatby-api.ts`
+  (`fetchChatbyConversation`, solo lectura: la confirmación automática nunca
+  manda nada por Chatby; lo único que escribe es una persona desde la ficha, §25).
+  Hasta **20 pedidos por pasada** (40 GET); primero los que nunca se leyeron, el
+  más nuevo primero, y después el que se leyó hace más. Un pedido que todavía no
+  escribió se vuelve a leer cada **30 minutos** mientras siga en la ventana. Dos
+  errores seguidos de Chatby paran las lecturas de esa pasada. Es la única
+  lectura de Chatby en segundo plano: la de §25 sigue siendo a pedido.
+- **Qué mensaje confirma** (`evaluateChatbyConfirmation`,
+  `lib/chatby-autoconfirm.ts`). Un mensaje **de la clienta** (`type = in`: nunca
+  el bot, el equipo ni un botón), de después de creado el pedido, que:
+  1. nombra **este** pedido, con o sin «#» (`chatbyMentionsOrder`: #AUR900226 no
+     es #AUR9002261 ni el #KP de la otra marca);
+  2. dice **confirmar**;
+  3. dice que **paga al recibir** («en casa», «contraentrega», «al recibir»);
+  4. dice un monto «S/ …» —el que sigue a «pagaré», si no el primero— que
+     difiere del total del pedido en **menos de S/ 1** (el redondeo de
+     `lib/payment-rounding.ts`);
+  5. trae «Dirección:» con una dirección **completa** —calle, jirón, avenida,
+     pasaje, prolongación, carretera, o manzana y lote, y su número
+     (`direccionConNumero`, §11.13)— y la del pedido también lo es;
+  6. esa dirección es **la del pedido**: toda la dirección del pedido está en el
+     mensaje, el mensaje no dice nada más que eso, la referencia y los nombres
+     del destino del pedido (departamento, provincia, distrito del Master), y
+     nombra el distrito o la provincia. Otra calle, otro número u otro distrito
+     («…, San Martín, Morales» en un pedido de Tarapoto) no confirma;
+  7. y después la clienta no escribió nada más que cortesía («gracias 🙏», «ok»)
+     o su ubicación.
+- **Lo que no confirma y queda para la asesora.** Si había un mensaje de
+  confirmación y algo de lo anterior no cuadra, o la clienta escribió que no lo
+  quiere («no lo deseo», «quiero anular», `explicitRejection`), o el equipo dejó
+  una nota de anulación, el pedido sigue en Por confirmar como hoy y queda el
+  hecho **`chatby_confirmation_held`** («Confirmación por Chatby para la
+  asesora») en la línea de tiempo, sin actor, con el motivo —el monto no
+  coincide, la dirección no es la del pedido, el distrito no es el del pedido,
+  escribió algo después…— y sin copiar la dirección. **Una sola vez**: ese pedido
+  ya no se vuelve a leer, la asesora lo confirma desde la mesa. Sin un mensaje
+  de confirmación (todavía no escribió) no se escribe nada.
+- **Solo sale de Por confirmar con la guía creada** (owner, 02-11-2026). Al
+  principio la pasada confirmaba y creaba la guía después; las 14 primeras
+  confirmaciones (01-11) salieron a Preparación y ninguna guía se pudo crear
+  —WooCommerce no trae coordenada—, así que quedaron fuera de Por confirmar sin
+  rótulo. Ahora confirmar y crear la guía son **un solo paso, con la guía
+  primero**: si la guía no se crea, el pedido no se confirma y sigue en Por
+  confirmar. Con la guía automática apagada (`guide_enabled`) o
+  `ALICLIK_WRITE_ENABLED` cerrado, la pasada **no confirma nada**.
+- **La guía Aliclik, con tope.** Cuando el mensaje confirma, y justo después de
+  releer que el pedido sigue en Por confirmar, crea la guía por el **mismo
+  camino que el botón** y que la guía del día programado (§6.2, §10.2):
+  `createAliclikGuideFor` con todas sus rejas —`ALICLIK_WRITE_ENABLED`,
+  prepago, rechazos en la puerta, posible duplicado (`lib/aliclik-duplicate.ts`),
+  riesgo del historial, salida viva, pin respaldado, stock y cobertura del
+  almacén, cotización del destino, monto recalculado y el candado—, la
+  transportadora más barata de las que se pueden agendar y ninguna excepción
+  escrita por nadie. **Hasta 20 por día de Lima en toda la organización**,
+  contando las ya creadas hoy. La guía lleva su `guide_registered` sin actor con
+  el motivo «Guía automática: #AUR900226 confirmó por Chatby.» y
+  `payload.auto.kind = confirmado_chatby`; la nota del lead dice «Guía de
+  Aliclik creada automáticamente (confirmó por Chatby) · …». Si el pedido **ya
+  tenía** una guía viva, no se crea otra y se confirma.
+- **La coordenada sale de WhatsApp** (owner, 02-11-2026). Aliclik exige
+  coordenada para cotizar y los pedidos de WooCommerce no la traen. Si el pedido
+  no tiene coordenada, se usa la **última ubicación que mandó la clienta en esta
+  compra** (como mucho 3 días antes del pedido; `chatbyGuidePin`), de la misma
+  conversación que se acaba de leer y la misma que el panel le propone a la
+  asesora (§38, «De dónde sale ahora»). La guía guarda esa coordenada como la
+  del botón. Nunca se escribe la excepción del pin respaldado (§10).
+- **Sin ubicación de WhatsApp, la dirección en Google, solo con el edificio**
+  (owner, 02-11-2026; decisiones A y B de `docs/kapta/geocodificacion-propuesta.md`).
+  Si el pedido de Provincia COD no trae coordenada y la clienta no mandó su
+  ubicación, la guía prueba la dirección escrita en la Geocoding API de Google
+  con el candado de siempre: exacta, sin coincidencia parcial, en el distrito
+  y el departamento del pedido, dentro del Perú. Para la guía automática solo
+  vale el **edificio** (`ROOFTOP`). En el piloto de Kenku (02-11-2026), Provincia
+  COD con `ROOFTOP` quedó al 92,7 % a 300 m o menos del pin real, sobre el
+  90 % pedido; con el número de cuadra incluido bajaba al 84,5 %.
+  - **Una consulta por pedido y dirección.** La respuesta se guarda en
+    `order_geocodes` (0301) con la huella de lo consultado; si la dirección
+    cambia se vuelve a consultar. Los errores y el cupo agotado (400 por día en
+    Google Cloud) no se guardan: se reintenta.
+  - **Las puertas de siempre.** Después vienen el pin respaldado de Aliclik (§10)
+    y todas las rejas de la guía. La guía deja escrito de dónde salió la
+    coordenada (`guide_detail`: «coordenada: dirección en Google (edificio)» o
+    «… ubicación de WhatsApp»). La coordenada del pedido no se toca.
+  - **Interruptor:** `chatby_auto_settings.geocode_enabled`, por organización;
+    nace encendido. Sin `GOOGLE_GEOCODING_API_KEY`, no consulta. Nunca en
+    `?dry=1`.
+  - **Si Google no da el edificio,** el pedido queda `sin_ubicacion` como antes,
+    y Kapta sigue mirando el chat por si la clienta manda su ubicación.
+- **Cómo confirma, con la guía ya creada.** Por el mismo registro atómico que
+  la mesa: `register_confirmation_attempt_v2`, la misma función del botón (v1)
+  con `source`, que ya usa el agente de voz. Resultado «Confirmó el pedido»,
+  canal «Mensaje escrito», **sin actor** y `source = 'chatby'`; el
+  `operation_id` sale del pedido y del mensaje, así que un reintento devuelve lo
+  escrito y no duplica. Escribe `confirmation_contact` y `confirmed`, gasta el
+  día de gestión como cualquier intento y el pedido pasa a **Preparación · Por
+  armar** por la cadena normal (ya tiene rótulo). La nota dice «Confirmó por
+  Chatby: mensaje de la clienta del 01-11 a las 10:32 con el pedido #AUR900226,
+  S/ 178.00 contra entrega y la dirección del pedido.»; la línea de tiempo lo
+  firma «Chatby». Si la confirmación falla con la guía ya creada, la pasada
+  siguiente encuentra la guía y solo confirma.
+- **Si la guía no sale, sigue en Por confirmar para la asesora**, con el mismo
+  hecho `chatby_confirmation_held` y una nota que lo dice: «La clienta confirmó
+  por Chatby, pero Kapta no creó la guía de Aliclik: … Sigue en Por confirmar:
+  crea la guía desde el panel de Aliclik y registra la confirmación en la
+  mesa.» Los motivos: `sin_ubicacion` (no mandó ubicación en esta compra),
+  `pin_sin_respaldo` (el pedido contradice el pin), `shalom` («DNI y agencia
+  Shalom» guardado), `programado` (envío programado: es de la guía de ese día,
+  §6.2) y `guia_no_creada` (Aliclik no la dejó crear: sin cobertura, sin stock,
+  posible duplicado…, con su texto). **Una sola vez**, como los demás motivos.
+  Un timeout de Aliclik también queda para la asesora (pudo crearse: se mira
+  Aliclik antes de crear otra) y cuenta para el tope. Sin aviso por Telegram.
+- **Sin ubicación, Kapta sigue mirando el chat** (owner, 02-11-2026). El que
+  quedó para la asesora por `sin_ubicacion` no es final como los demás: cada
+  30 minutos, dentro de las 72 h del pedido, la pasada vuelve a leer su chat
+  (aparte de las 20 lecturas de la confirmación, hasta 10 más por pasada). La
+  asesora le pide la ubicación a la clienta; cuando la manda, Kapta crea la guía
+  por el mismo camino y con el mismo tope y **confirma con la guía creada**. La
+  confirmación se vuelve a evaluar entera, con una sola diferencia: lo que la
+  clienta escribió después de confirmar («ya te mando») no la anula si **lo
+  último que mandó es su ubicación**; si lo último es otra cosa, se espera. Un
+  «no lo quiero» lo deja definitivamente para la asesora. Mientras no llega, no
+  se escribe nada visible (ni otro hecho). Si una persona lo confirma, lo anula
+  o lo mueve, se deja de mirar (`reason = sin_ubicacion_cerrado`).
+  Los 14 primeros (01-11), confirmados antes de esta regla y sin guía, también
+  se miran así mientras sigan en Preparación · Por generar rótulo: cuando la
+  clienta manda su ubicación, Kapta les crea la guía (`guide_detail =
+  sin_ubicacion` → `creada`). Si la guía no sale, queda el hecho «Guía
+  automática no creada» como antes.
+- **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
+  con otra creación en curso (el candado), no se escribe nada visible: el
+  pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.
+- **Interruptores** (`chatby_auto_settings`, 0297, uno por organización):
+  `enabled` (toda la pasada), `guide_enabled` (solo la guía), `daily_cap` (20),
+  `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30). Nace
+  **encendido** con 20 guías por día porque lo pidió el owner, y no para las
+  organizaciones cliente de Grupo GF (§29.15.1). Sin la tabla, o con la fila
+  apagada, la pasada no hace nada. Las claves de siempre: `CHATBY_API_KEY` para
+  leer y `ALICLIK_WRITE_ENABLED` / `stores.aliclik_enabled` para la guía.
+- **La marca de procesado** (`chatby_auto_checks`, una fila por pedido mirado):
+  el resultado (`confirmado`, `para_asesora`, `sin_confirmacion`,
+  `sin_conversacion`, `error`), el motivo, el id del mensaje y el estado de la
+  guía. **No guarda la conversación ni la dirección** (§25): lo que dijo la
+  clienta sigue en Chatby, a un clic desde la ficha.
+- **No es un estado nuevo.** El pedido confirmado por Chatby está en
+  Preparación como cualquier confirmado; el que no, en Por confirmar con su
+  subetapa de siempre. Lo nuevo son dos hechos y su origen.
+
+Dimensión al decidirlo (01-11-2026): entraban ~110–150 pedidos de Provincia COD
+por día, con ~100 en Por confirmar dentro de las 72 h en un momento cualquiera,
+y las asesoras confirmaban ~50–77 por día (40–60 con guía Aliclik). Con 20
+lecturas cada 10 minutos la ventana entera se relee en menos de una hora; el
+tope de 20 guías es cerca de un tercio de lo confirmado en un día.
+
+Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
+`lib/chatby-autoconfirm-server.ts` (carga, lectura y escritura),
+`app/api/cron/chatby-autoconfirm/route.ts`. Pruebas:
+`test/chatby-autoconfirm.test.ts`.
+
 ### 6.2 Preparación
 
 Responsable principal: Yelitza.
@@ -564,10 +843,15 @@ en su trabajo el lunes, o pidió que se despache el sábado—. Hasta esta fecha
 equipo lo anotaba en su Excel de provincia («enviar lunes 26-10») y en Kapta el
 pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 
-- **Dónde.** En la ficha, pestaña Operar, dentro de «Elegir ruta y generar el
-  rótulo»: **«Programar envío»**, con la fecha y una nota opcional. Solo en
-  Preparación · Por generar rótulo, con permiso para editar el Master.
-  Programar otra vez cambia la fecha; **«Quitar»** pide motivo.
+- **Dónde.** En vivo, al confirmar: en la gestión de confirmación, con
+  «Confirmó el pedido», el campo **«Sale el (opcional)»** guarda la fecha
+  acordada en la llamada junto con el intento (vacío = sale apenas se genere la
+  guía). Y después, en la ficha, pestaña Operar, dentro de «Elegir ruta y
+  generar el rótulo»: **«Programar envío»**, con la fecha y una nota opcional,
+  solo en Preparación · Por generar rótulo. Las dos exigen permiso para editar
+  el Master. Programar otra vez cambia la fecha; **«Quitar»** pide motivo. En
+  Agencia, confirmar de palabra no basta para pasar a Preparación (§6.1): la
+  fecha se guarda igual y aparece cuando el pago exigido se valida.
 - **Qué queda.** Un hecho del historial con actor: `dispatch_date_set` (fecha
   y nota) o `dispatch_date_cleared` (motivo). Manda el último. Se programa hoy
   o hasta 45 días adelante.
@@ -584,6 +868,161 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 - **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
   (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
   anterior a la guía.
+
+#### Guía Aliclik automática el día programado (16-10-2026)
+
+Decisión del owner: en **Provincia COD**, el día programado la guía Aliclik se
+crea sola. Solo esos pedidos: «el automático solo lo programamos en fecha». Un
+pedido sin fecha programada sigue esperando a que una persona cree su guía,
+salvo el que confirmó por Chatby (§6.1, «Confirmó por Chatby», 01-11-2026), que
+tiene su propia guía automática con tope diario.
+
+- **Cuándo.** Cada hora de 8:00 a. m. a 1:00 p. m. de Lima
+  (`/api/cron/aliclik-scheduled`, 13–18 UTC), antes del corte de Aliclik
+  (~14:00), para que lo recojan ese mismo día. Varias pasadas y no una: un
+  pedido programado para hoy a media mañana también entra.
+- **Qué pedidos.** Provincia COD, en Preparación · Por generar rótulo, con
+  `dispatch_scheduled_on` = hoy, de una tienda con Aliclik habilitado. Ni Lima
+  ni Agencia, ni una fecha futura, ni una que ya pasó: si su día pasó sin guía,
+  la chapa roja «no salió» es para una persona. Un pedido de Provincia COD
+  programado que vaya a salir con otro courier (Swayp, Shalom) necesita su guía
+  antes de ese día; si no, sale por Aliclik.
+- **Lo que es de una persona y el automático no toca (20-10-2026).** Sin
+  aviso ni hecho, el pedido sigue esperando a quien lo trabaja si:
+  - tiene **«DNI y agencia Shalom»** guardado (`shalom_order_drafts`): ya se
+    eligió Shalom;
+  - tiene **un pago registrado** (adelanto cargado o validado, diferencia o
+    pago completo): en Provincia COD el adelanto es de Agencia o de un cliente
+    con historial, y además Aliclik cobraría el total en la puerta aunque ya se
+    adelantó;
+  - la fecha se **acordó hoy**: la asesora que confirma con «Sale el» hoy está
+    con el pedido en la mano. El automático es para lo que se acordó otro día.
+
+  > ⚠️ **Ocurrió el 18 y 19-10-2026.** El automático creó guías Aliclik a cinco
+  > pedidos que iban por Shalom: #KP142443, #KP140883, #KP142598, #KP142667 y
+  > #KP142743. Para el Master eran Provincia COD (el checkout decía
+  > contraentrega), pero cuatro tenían el Shalom guardado, cuatro un adelanto
+  > de S/ 20–30 que Aliclik no descuenta, y #KP142443 se confirmó con «Sale el»
+  > hoy a la 1:05 p. m. y la pasada de la 1:07 le creó la guía antes de que se
+  > guardara su Shalom (1:20). Las cinco guías ya estaban en manos de Aliclik
+  > cuando se vio.
+- **Por dónde.** El mismo camino que el botón «Crear guía» (§10.2):
+  `lib/aliclik-guide.ts`, con todas sus compuertas —prepago, rechazos en la
+  puerta, posible duplicado, riesgo del historial, guía viva, pin respaldado,
+  monto recalculado— y el mismo candado. Transportadora: la más barata de las
+  que se pueden agendar, que es la que el panel preselecciona. Sin sesión, el
+  historial del cliente se lee con el service role **acotado a las tiendas de
+  la organización** del pedido.
+- **Sin excepciones.** El automático no escribe motivos por nadie: si una
+  compuerta pide una excepción justificada (el pago que exige el historial, un
+  pin que el pedido no respalda), no la levanta. Falla y avisa.
+- **Qué queda.** La guía creada lleva su hecho `guide_registered` sin actor
+  (lo creó el sistema), con el motivo «Guía automática: envío programado para
+  el lun 26/10.» y `payload.auto` con el día. La nota del lead dice «Guía de
+  Aliclik creada automáticamente (envío programado) · …».
+- **Si falla: una alerta por ese pedido.** Telegram al grupo de alertas urgentes
+  de la tienda (o, si no tiene, al del resumen diario) con el pedido, la
+  clienta, el motivo y el enlace a la ficha; y el hecho
+  `aliclik_auto_guide_failed` en el historial («Guía automática no creada»), con
+  el motivo y la fecha. **Un intento por pedido y fecha**: lo que falló lo toma
+  una persona —crea la guía a mano o reprograma—; reprogramado a otro día,
+  vuelve a intentarse ese día.
+- **No es un fallo y no avisa:** que otra creación del mismo pedido tenga el
+  candado (una persona creándola en ese momento, o un timeout que el barrido
+  todavía resuelve), ni que el pedido ya tenga guía y el Master no lo haya
+  recalculado. Con Aliclik en rojo —la sonda de cotización falla o las últimas
+  creaciones fallaron (§10.2)— la pasada espera a la hora siguiente sin avisar,
+  salvo en la de la 1:00 p. m.: ahí se intenta igual y lo que falle avisa.
+- **Interruptores.** Los mismos de toda escritura hacia Aliclik:
+  `ALICLIK_WRITE_ENABLED` y `stores.aliclik_enabled`. `?dry=1` cotiza y dice qué
+  haría, sin crear ni avisar.
+- **Se dice al programar.** En un pedido de Provincia COD, «Programar envío» y
+  «Sale el (opcional)» avisan que ese día la guía se crea sola.
+
+#### Sin ubicación no se programa el envío (owner, 30-10-2026)
+
+> ⚠️ **Ocurrió.** #KP142558 (Kenku) llegó sin dirección ni cliente: cobertura
+> «Por revisar», región y distrito vacíos. El 22-10-2026 una asesora lo
+> confirmó y, en la misma confirmación, programó el envío para el 27-10. Sin
+> destino no había courier ni guía posible: se quedó en Preparación · Por
+> generar rótulo con la chapa roja «no salió» y nadie se enteró.
+
+Decisión del owner:
+
+- **Confirmar sí, programar no.** Un pedido «Por revisar» al que le falta la
+  región, el distrito o la dirección —la misma condición que pide «Último
+  destino conocido» (§37.8): cobertura `por_revisar` o sin calcular, y alguno
+  de los tres vacío— **se puede confirmar** (la clienta puede dar la dirección
+  después), pero **no se le puede programar el envío** por ninguna de las dos
+  puertas: «Programar envío» de la ficha (`scheduleOrderDispatch`) y «Sale el»
+  al confirmar (`registerConfirmationAttempt`). Son los dos únicos puntos que
+  escriben `dispatch_date_set`, y por tanto `dispatch_scheduled_on`.
+- **El servidor lo rechaza** con «Falta la ubicación: corrígela antes de
+  programar el envío.» y no escribe nada. Al confirmar con fecha, el rechazo va
+  antes de registrar el intento (como una fecha inválida), y dice que se puede
+  confirmar dejando «Sale el» vacío.
+- **La ficha lo explica.** En la gestión de confirmación, «Sale el» queda
+  desactivado con el mismo mensaje y «Corregir ubicación»; en «Programar
+  envío», el botón cambia a «Corregir ubicación». Los dos llevan a Información
+  → «Ubicación y cobertura», donde están «Último destino conocido» y el
+  formulario. Una fecha que ya tenga se puede «Quitar» con su motivo.
+- **Con ubicación nada cambia**, tampoco la guía Aliclik automática del día
+  programado.
+- **Alerta en el Master: «Programado sin ubicación».** Los pedidos con
+  `dispatch_scheduled_on` (hoy, vencido **o a futuro**) y la ubicación
+  incompleta —la fecha solo vive en Por generar rótulo, así que no tienen
+  salida— llevan en la fila una chapa crítica con el pin, y la línea de
+  excepciones una píldora con su conteo (tras «Comprobante por validar»).
+  Tocarla filtra (`su=1`, en la base por columnas del Master: la lista, los
+  conteos de las pestañas y el Excel respetan el filtro). Cada fila abre la
+  ficha en Información → Ubicación. La píldora y la chapa salen de **una**
+  lectura de ids por carga, a la par del resto; si falla, la píldora no se
+  pinta (un cero sería afirmar algo que nadie contó). Se apaga sola al corregir
+  la ubicación (el recálculo cambia la cobertura) o al quitar la fecha.
+- **El 30-10-2026** caía en la alerta un solo pedido: #KP142558, vencido.
+
+Implementación: `dispatchLocationMissing`, `scheduledWithoutLocation` y
+`withScheduledNoLocation` en `lib/dispatch-date.ts`;
+`applyScheduledNoLocation` y `getScheduledNoLocationIds` en
+`lib/orders-master-access.ts`. Pruebas: `test/programar-sin-ubicacion.test.ts`.
+
+#### Provincia COD: programar pide la coordenada (owner, 02-11-2026)
+
+> ⚠️ **Ocurrió.** #AUR900167 (Aurela) se confirmó y se programó con
+> «Programado · sale hoy», pero no tenía coordenada: el panel de Aliclik decía
+> «Obligatoria: el pedido no la tiene». Aliclik no cotiza ni crea sin ella, así
+> que la guía automática del día programado no podía salir. Ese día había 15
+> Provincia COD programados así.
+
+Decisión del owner: **en Provincia COD, programar la salida exige la
+ubicación** (la coordenada que pide Aliclik), y se guarda en el pedido.
+
+- **Las dos puertas de programar la piden** cuando el pedido no la tiene: «Sale
+  el» al confirmar (`registerConfirmationAttempt`) y «Programar envío / Cambiar
+  fecha» (`scheduleOrderDispatch`). Un campo «Ubicación» acepta el enlace de
+  Google Maps o el par (`parseCoordinateInput`, el mismo del panel de Aliclik);
+  sin él no se puede guardar. Un enlace acortado (`maps.app.goo.gl`) no trae la
+  coordenada escrita y se pide el largo o el par.
+- **El servidor la valida y la guarda** en `order_geo_overrides` (donde la deja
+  «Corregir ubicación» y de donde la lee el recálculo), sin borrar lo demás que
+  ese registro tuviera, y deja en el historial «Ubicación guardada al programar
+  el envío». Al confirmar con fecha, va antes de registrar el intento; si falta
+  o no sirve, se rechaza y se dice que se puede confirmar dejando «Sale el»
+  vacío. **Confirmar sin fecha no la pide.**
+- **Lo ya programado sin ella** lo dice la ficha: «Sin ubicación: ese día
+  Aliclik no podrá crear la guía.», con «Agregar ubicación», que abre el mismo
+  formulario con la fecha que ya tiene.
+- Lima, Agencia y lo que ya tiene coordenada no cambian.
+- **Y si ya la tiene, se dice (02-11-2026).** Bajo «Sale el» al confirmar y en
+  «Programar envío», un Provincia COD con coordenada muestra «Ubicación: ya
+  tiene coordenada · Ver en el mapa». Sin esa línea, que no se pidiera parecía
+  un fallo (#KP201412: la coordenada se había guardado dos minutos antes en
+  «Corregir ubicación»).
+
+Implementación: `dispatchCoordinateMissing`, `dispatchCoordinateInput` y
+`DISPATCH_NEEDS_COORDINATE_ERROR` en `lib/dispatch-date.ts`;
+`ensureDispatchCoordinate` en `app/dashboard/pedidos/actions.ts`. Pruebas:
+`test/dispatch-date.test.ts`.
 
 Flujo físico:
 
@@ -610,6 +1049,18 @@ Reglas:
   no entra en los recuadros de «Por empacar» ni en el pendiente de la Mesa de
   despacho, no usa los cortes de turno, y lo que ya está en «Por armar» no se
   cuenta dos veces.
+- Desde el 03-11-2026 tiene otro apartado aparte, «Swayp por salir · Lima»
+  (§9.1): las guías Swayp de Lima y Callao por día de despacho, cuántas hay,
+  cuántas se armaron y cuál falta, con dónde está su caja y quién creó la guía.
+  **En Lima y Callao la caja de Swayp la arma este almacén y Swayp la recoge en
+  la oficina; la de provincia la arma la bodega regional de Swayp** (decisión
+  del owner, 03-11-2026). Tampoco es esta cola: la guía Swayp nace `en_ruta`,
+  el Master la lee como custodia del courier (`hasExternalCustody`) aunque la
+  caja siga aquí, y sale de «Por armar» al nacer. Por eso el almacén no la veía
+  en ninguna lista, y por eso esta no suma en «Por armar», ni en el número de
+  Lima de «Por empacar», ni en «Entregas a couriers». En «Por empacar» lleva
+  su propia celda, «Swayp · Lima», que no se suma a la de Lima. Sí usa el
+  corte del turno noche (21:20) de la víspera: es el límite real del lote.
 - La cola de armado se define por el PEDIDO, no por la salida suelta: una salida
   cuyo pedido ya no está en `Por armar` —cancelado, o despachado por otra caja—
   no es trabajo de almacén y no se lista.
@@ -860,7 +1311,36 @@ Motivos simultáneos posibles:
   medido y no supuesto: lo tiene el 87,7 % de los recogidos por cerrar y el
   89,4 % de los recogidos finalizados, contra **0 % de los 1.642 anulados o
   devueltos**, y solo el 9-10 % de los pedidos de cada mes.
-  **Esta regla laxa no se extiende** a cuánto cobra el courier en la puerta
+  **El redondeo de la clienta (owner, 01-11-2026, `mom-v1.33`).** Faltar
+  **menos de S/ 1** es redondeo y el pedido está pagado completo
+  (`lib/payment-rounding.ts`): el descuento deja céntimos (S/ 134,10) y la
+  clienta yapea redondo (S/ 30 + S/ 104 = S/ 134,00). Al decidirlo había 10
+  pedidos en la alerta por S/ 1,20 entre todos, sin boleta (§35.3) y con un
+  saldo de céntimos que nadie iba a cobrar. Vale para todo lo que pregunta
+  «¿lo validado cubre el total?» (`paymentProgress`, `paymentState`, la clave,
+  el saldo de los mensajes de Shalom, lo que cobra el courier y la boleta), y
+  exige que se haya pagado algo. La boleta sale **por el total del pedido**: la
+  diferencia es redondeo, no un descuento.
+  **El envío pagado en la agencia (owner, 01-11-2026, `mom-v1.34`).** En
+  Agencia la clienta recoge en Shalom u Olva y ahí le cobran el envío; la
+  vendedora se lo descuenta de la diferencia, así que el Yape nunca llega al
+  total (S/ 141 por Yape + S/ 8 en el mostrador = S/ 149). Ese dinero no deja
+  comprobante en ninguna cuenta de la empresa, y 21 pedidos estaban en esta
+  alerta por S/ 8 o S/ 10. Ahora, **con el paquete ya recogido**, lo que falta
+  hasta **S/ 15** —el tope de la excepción por descuento de la clave, §12— es
+  el envío pagado en la agencia y el pedido está **pagado completo**, solo, sin
+  botón (`agencyShippingPaid`, `lib/agency-shipping.ts`). Pide al menos un
+  comprobante validado y ninguno vivo sin validar. Al principio pedía dos, con
+  el adelanto entre ellos, como la excepción de la clave; desde el 01-11-2026
+  (`mom-v1.35`, 0298) vale también un solo Yape: la clienta que paga todo menos
+  el envío de una vez está en la misma situación (#KP138744: S/ 134 de S/ 149). Menos de S/ 1 sigue siendo redondeo. La
+  ficha lo enseña como «Envío pagado en agencia · sin comprobante» en vez de
+  «Saldo por cargar». La boleta sale **por el total**: el precio no cambió, la
+  clienta pagó el envío por cuenta de la tienda (§35.3, 0296). No se carga como
+  costo logístico: ningún pedido de Agencia lo tiene hoy, y cargarlo solo en
+  éstos descuadraría el margen contra los demás. Con más de S/ 15 el pedido
+  sigue en la alerta y hace falta un administrador.
+  **La regla laxa de `paid` en Shopify no se extiende** a cuánto cobra el courier en la puerta
   (`expectedCollectAmount`) ni al abono que Agencia exige para pasar a
   Preparación (§6.1): ahí el pedido aún no se ha recogido y equivocarse cuesta
   dinero, no una llamada de más.
@@ -1201,6 +1681,16 @@ Una guía creada pero sin despacho no activa esta regla. Tampoco un envío ya
 entregado o recuperado. Cancelar en Shopify, cerrar la guía o solicitar retorno
 no prueba que la caja volvió. Se revisan todas las salidas del otro pedido.
 
+**Entrega de Grupo GF (corrección 29-10-2026).** La retención reconoce la
+señal vigente del motorizado sobre cada salida (`gfRiderSignal`, §29.13), igual
+que el Master. `shipments.delivery_status` puede seguir pendiente después de
+reportar la entrega en la parada: eso no convierte la caja entregada en otra
+pendiente. Caso KP201004/KP141320: Yhoni reportó la salida anterior entregada
+el 14/10 a las 15:41, pero la lectura de la guía sola retenía la nueva. Un
+reporte deshecho o corregido deja de liberar; entregar una salida no libera
+otra del mismo pedido. No se modifica el estado de la guía ni se cierra la ruta
+o la liquidación para levantar esta retención.
+
 La operadora registra una resolución con motivo, actor, fecha y las salidas
 concretas que revisó:
 
@@ -1224,12 +1714,26 @@ no se crea la guía. Esta excepción tampoco levanta el veto de dos rechazos del
 distintas; la regla impide emitir una nueva. Lima y los demás couriers conservan
 sus reglas. Las resoluciones quedan en `order_events`, sin borrar historial.
 
+#### Una guía transferida que terminó en otra salida (30-10-2026)
+
+Decisión del owner. `transferido` es que el courier pasó el paquete a otra
+guía, y la guía vieja deja de consultarse: quedaba «despachada, sin entrega ni
+recuperación» para siempre y retenía la guía de cualquier pedido nuevo del
+mismo teléfono y producto. Caso: #KP122115, cuya Aliclik AUR5X447250066858
+pasó a la Fénix #KP12211529072026, entregada el 28-07-2026, retenía a
+#KP201071. Ahora una salida `transferido` **no retiene** cuando una salida
+**posterior del mismo pedido** terminó: entregada, recogida o devuelta
+(`transferredElsewhere`, `lib/aliclik-duplicate.ts`). Si esa otra salida sigue
+viva, la caja sigue pendiente por ella, no por la transferida. Pruebas:
+`test/aliclik-duplicate.test.ts`.
+
 #### Reemplazo: se declara el destino del envío anterior (10-10-2026)
 
 Decisión del owner. Hasta esta fecha «reemplaza» esperaba una constancia de
 entrega o retorno que, en los casos reales, el seguimiento ya no iba a traer:
-una guía `transferido` deja de consultarse, una anulada se consulta solo tres
-semanas y un paquete que el courier perdió no vuelve nunca. Del 02 al
+una guía `transferido` deja de consultarse (desde el 01-11-2026, salvo la que
+tiene el paquete en Aliclik y espera su devolución, §11), una anulada se
+consulta solo tres semanas y un paquete que el courier perdió no vuelve nunca. Del 02 al
 10-10-2026 hubo 4 pedidos y 15 intentos con «reemplaza», y los 4 terminaron en
 la excepción de un responsable; las vendedoras no podían cerrar el caso.
 
@@ -1247,8 +1751,8 @@ corresponde. Queda con actor, fecha y motivo sobre el pedido anterior:
   entregada: esa puerta es del courier (§11). Lo que cambia es el pedido.
 - **Entrega declarada** se cierra cuando el pedido pasa a `entregado` —lo
   reporta el courier o se confirma a mano, y desde ahí manda la liquidación— o
-  cuando alguien fija el estado en «Gestión manual» después de la declaración,
-  también si resultó falsa. Una declaración sin salida sería otro pedido
+  cuando un admin fija el estado en «Gestión manual» después de la declaración
+  (solo owner y admin, §16, 15-10-2026), también si resultó falsa. Una declaración sin salida sería otro pedido
   atascado.
 - **La pérdida declarada abre la indemnización** igual que la solicitud formal;
   finanzas la completa con monto y la cierra con «Resolver indemnización».
@@ -1323,6 +1827,10 @@ la clienta ve el número de la empresa, no el de la asesora.
 
 - Todos los pedidos entran directamente a Preparación.
 - Almacén arma todos los pedidos del turno.
+- **También las guías Swayp de Lima y Callao (decisión del owner, 03-11-2026):**
+  la caja la arma nuestro almacén en la oficina y Swayp la recoge ahí. Solo
+  provincia sale armada de una bodega regional de Swayp. Almacén las ve por día
+  de despacho en «Swayp por salir · Lima» (§9.1).
 - Seguimiento Lima decide el courier; la asignación automática será inicialmente
   una sugerencia.
 - Un no entregado pasa a `Por reprogramar Lima`.
@@ -1332,6 +1840,80 @@ la clienta ve el número de la empresa, no el de la asesora.
   Tampoco el reporte ni la liquidación de la ruta del otro courier: si Grupo GF
   no entregó hoy, el pedido puede salir mañana por Tanders o Swayp con la caja
   de Grupo GF todavía en la calle.
+
+#### Aliclik en Lima, solo con AUTOECOM, y Tanders sin guías nuevas (26-10-2026)
+
+**Decisión del owner (26-10-2026).** Aliclik entra a Lima y Tanders deja de
+crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
+
+- **El plan de rutas de Lima** (`buildOrderRoutePlan`, `lib/order-route-plan.ts`)
+  ofrece Grupo GF, **Aliclik** (en el lugar de Tanders), Swayp y, plegados,
+  Axel y Urpi. Sugiere Grupo GF si es elegible y entra al corte; si no,
+  Aliclik. Con Aliclik en el plan, la ficha enseña el panel de crear la guía
+  de Aliclik (§11) igual que en Provincia COD. El envío programado automático
+  de Aliclik sigue sin tocar Lima.
+- **AUTOECOM** (`limaTransportPolicy`, `lib/aliclik-lima.ts`): en un pedido de
+  Lima, si la cotización de Aliclik trae AUTOECOM, **solo AUTOECOM se puede
+  elegir** («En Lima se envía solo con AUTOECOM.»). Si no lo trae, se puede
+  elegir el transporte que Aliclik ofrezca (mejor salir con otro que no salir)
+  y la cotización lo avisa. El nombre se compara sin espacios, guiones ni
+  mayúsculas: Kapta nunca había cotizado una dirección de Lima (sus 7.476
+  guías de Aliclik eran ALIDRIVER), así que la primera cotización de Lima
+  confirma cómo lo llama Aliclik. **Confirmado el 26-10-2026: Aliclik lo llama
+  «AutoEcom Logistic»**, que la comparación reconoce. La creación vuelve a cotizar y exige que el
+  transporte se pueda elegir: la regla vale también en el servidor.
+- **Después de AUTOECOM, ALIDRIVER (02-11-2026, decisión del owner).** Si el
+  pedido **ya salió con AUTOECOM** —una guía Aliclik suya con ese transporte y
+  despachada, aunque hoy esté anulada o devuelta (`alreadyLeftWithAutoecom`)—
+  y se vuelve a enviar por Aliclik, **recién entonces se puede elegir
+  ALIDRIVER**; AUTOECOM sigue disponible y los demás no («En Lima, después de
+  AUTOECOM, se envía con AUTOECOM o ALIDRIVER.»). La cotización lo avisa. Una
+  guía AUTOECOM anulada antes de salir no cuenta. Caso: #KP143987, guía
+  AUR5X246218871979 (AutoEcom, despachada el 29-10, anulada).
+- **El detalle del Excel de Aliclik (03-11-2026, owner, `0304`).** La API de
+  Aliclik solo da tres estados (entrega, despacho, llamada): «CANCEL ·
+  TO_RETURN · CONFIRMED» no dice por qué. El Excel del portal sí: «SUB ESTADO»
+  (DE VIAJE, POR CLIENTE, NO CONFIRMADO, DEVOLUCIÓN EXCESIVA, FUERA DE
+  COBERTURA, ANULADO POR MOTORIZADO) y «ÚLTIMO COMENTARIO MOTORIZADO». Al
+  subirlo en «Subir reporte», Kapta guarda los dos en la guía
+  (`aliclik_sub_status`, `aliclik_rider_comment`), con lo que diga el reporte
+  más reciente; el comentario se limpia de «-», «.» y letras sueltas
+  (`cleanRiderComment`). Se ven en la ficha del envío («Aliclik: de viaje ·
+  «…»») y en la línea del fallo de Repro Lima, y el subestado decide el motivo
+  de la cadena de reintentos (§9.5). Para tenerlos, el Excel se sube a diario.
+  **La API no los trae** (sonda del 03-11-2026 sobre 1.814 pedidos de las dos
+  tiendas, guías canceladas y no contestadas incluidas): `GET
+  /integration/order` solo devuelve el número, total, los tres estados, canal,
+  producto, nota, fechas, cliente, envío y productos. No hay subestado,
+  comentario ni historial; el Excel es la única fuente.
+- **Siempre entrega Normal, nunca Express (03-11-2026, decisión del owner).**
+  La cotización de Aliclik marca `flagDeliveryExpress` en el transporte que
+  *puede* ir Express (ALIDRIVER en Lima, p. ej. Ventanilla en #KP200108) con
+  la tarifa normal. Reenviar el bloque tal cual creaba la guía Express (+S/ 5
+  en su portal) y solo dejaba elegirla de 05:01 a 14:00. Kapta crea la entrega
+  **Normal**, la que el portal de Aliclik elige por defecto: el bloque viaja con
+  `flagDeliveryExpress: false` (`asNormalDelivery`, `lib/aliclik-geo.ts`), sin
+  ventana horaria, y la fecha la calcula Aliclik con su hora de corte. Aplica a
+  toda guía de Aliclik, Lima y Provincia.
+- **Tanders no crea guías nuevas** (`TANDERS_NEW_GUIDES_ENABLED = false`,
+  `lib/tanders/new-guides.ts`): el plan de rutas no lo ofrece en ninguna
+  operación y `createTandersGuide` responde «Tanders ya no crea guías nuevas»
+  antes de llamar a Tanders. Las guías de Tanders que ya existen siguen igual:
+  su estado, sus cobros, sus devoluciones, su liquidación y el resto de esta
+  sección.
+- **Si Aliclik no entrega en Lima, el pedido va a «Por reprogramar Lima»**
+  (no a Gestión Reproprovincia): la falla sigue la regla de la operación,
+  como Tanders y Swayp en Lima (`resolveMacroStage`), y Repro Lima toma casos
+  de cualquier courier.
+- **Repro Lima acuerda con Aliclik en lugar de Tanders**
+  (`REPRO_COURIER_CHOICES`: Grupo GF, Aliclik, Swayp, Axel). Los acuerdos ya
+  guardados con Tanders se siguen leyendo. La fecha más temprana con Aliclik es
+  hoy, como Tanders y Axel: la guía trae su propio horario de recojo. La 0283
+  admite `aliclik` en `lima_repro_cases.agreed_courier` y
+  `lima_repro_calls.courier`.
+
+Pruebas: `test/aliclik-lima.test.ts`, `test/order-route-plan.test.ts` y
+`test/reproprovincia.test.ts` («Aliclik en Lima»).
 
 #### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)
 
@@ -1460,8 +2042,9 @@ Tanders:
   Gestión Reproprovincia**, donde Swayp sí se repite: desde el 08-10-2026 la
   guía en devolución es la madre del reenvío por Swayp, sin esperar a que se
   confirme la devolución (§11.8).
-- **La ventana es la de la tienda** (`return_recovery_max_days`), no los 65 días
-  de Tanders, que eran por su antigüedad. Se ancla igual, en la **salida** del
+- **La ventana es la de la tienda** (`return_recovery_max_days`) en provincia y
+  21 días en Lima (§11, 03-11-2026), no los 65 días de Tanders, que eran por su
+  antigüedad. Se ancla igual, en la **salida** del
   intento fallido: el barrido sella la guía en cada pasada y la Devolución
   confirmada llega días después de la Devolución, así que ninguna de las dos
   sirve de ancla.
@@ -1511,7 +2094,8 @@ Decisión del owner (30-09-2026), para **todos los couriers de Lima**:
   caja anterior lo recibe y lo asigna. Un rechazo que la 0189 ya recibió como
   devuelto va igual a «Por reprogramar Lima», con el inventario como razón.
 - La ventana, el ancla y lo demás no cambian: Tanders 65 días, los demás la de
-  la tienda, contadas desde la **salida** del intento fallido. El paquete que
+  la tienda (desde el 03-11-2026, 21 días en Lima, §11), contadas desde la
+  **salida** del intento fallido. El paquete que
   vuelve sigue arrastrando `Devolución pendiente de inventario` como razón.
 - **Anulado en Shopify**: el pedido espera la caja en **Por cerrar** (§13:
   toda salida despachada necesita devolución física para cerrar una
@@ -1540,11 +2124,11 @@ esa salida no bloquea la toma, no se reusa ni se rotula, no es la salida
 vigente del pedido y no abre una recuperación.
 
 Lo que queda fuera: Axel no reporta sus no entregados a Kapta —solo llegan por
-la liquidación, que únicamente mueve entregas—. Urpi sí los reporta desde el
-05-10-2026 (§30.11), pero se registran y listan sin cambiar el Master porque sus
-despachos no tienen salida en Kapta. Hasta que eso cambie, el no entregado de
-ambos llega a «Por reprogramar Lima» cuando alguien anula esa salida con la caja
-ya fuera.
+la liquidación, que únicamente mueve entregas—, así que su no entregado llega a
+«Por reprogramar Lima» cuando alguien anula esa salida con la caja ya fuera.
+Urpi los reporta desde el 05-10-2026 (§30.11); desde el 03-11-2026 la
+programación registra su salida (§30.10) y su cancelado la anula sola como
+intento fallido.
 
 #### Las guías con API también aceptan la salida adicional
 
@@ -1554,7 +2138,9 @@ pedido ya tiene una guía activa, anúlala antes de crear otra» — y una salid
 la caja en la calle no se puede anular, así que el pedido quedaba sin ninguna
 acción posible. Pasó con #KP134960 (Tanders) y #KP134416 (Swayp) el 24-09-2026.
 
-Las dos pasan ahora por la misma regla, `puertaDeSalidaAdicional`:
+Tanders y Swayp directa pasan por la misma regla, `puertaDeSalidaAdicional`.
+Aliclik se suma para la creación manual en Lima (owner, 27-10-2026,
+**#KP200077**, con la S01 todavía con Alexis sin reporte):
 
 - **En Lima, otra salida viva pide motivo, no bloquea.** El motivo queda en su
   propio evento (`additional_output_reason`) con las salidas que seguían vivas.
@@ -1570,6 +2156,20 @@ Las dos pasan ahora por la misma regla, `puertaDeSalidaAdicional`:
   una salida de Grupo GF, mandando a buscarla al panel equivocado.
 - Si una de las salidas entrega, las demás siguen vivas y hay que cancelarlas:
   es la tarea urgente de §4.
+- **Aliclik manual en Lima:** una salida de otro courier aún pendiente o en
+  ruta permite preparar la siguiente guía sin esperar el reporte, con motivo
+  obligatorio en la cotización. La salida anterior conserva su estado, ruta y
+  custodia; no se inventa una devolución ni se anula. El motivo de la nueva
+  salida queda en `additional_output_reason`, con actor, guía nueva y las
+  salidas que seguían vivas. Además se guarda en la intención antes del POST,
+  para conservar la justificación aunque Aliclik responda con timeout.
+  Se releen antes de emitir: una entrega recién
+  reportada o una Aliclik activa bloquea; también se conserva el candado de
+  `aliclik_order_requests` y el límite de cinco salidas, incluidas las cerradas.
+  Una «por definir» que se rellena no gasta otra salida. El motivo es interno,
+  separado de la nota al courier. AUTOECOM, pagos, pin, duplicados y permisos
+  conservan sus reglas. El automático no decide ni justifica otra salida;
+  fuera de Lima sigue el bloqueo anterior.
 
 Responsable principal: Daysi. Diana apoya rutas y cotejo.
 
@@ -1609,6 +2209,372 @@ a las 12:30 y cubre todo Lima. Es el `same_day_cutoff` del proveedor (0244) y
 reemplaza al de las 11:30 en §29.2 y §29.6; después de las 12:00 el pedido sale
 al día siguiente salvo que Despacho GF apruebe el cambio (§29.6). No es un
 estado del pedido.
+
+**Swayp en Lima: quién arma y hasta cuándo (03-11-2026, decisiones del
+owner).** La fila de Swayp de la tabla dice cuándo Swayp cierra su ruta (de
+16:00 a 17:00 del día anterior). En Lima y Callao la caja la arma nuestro
+almacén y Swayp la recoge en la oficina; el límite práctico para que salga es
+el corte del turno noche de la víspera, a las 21:20 (§6.2). Provincia sale
+armada de la bodega regional de Swayp y no pasa por nuestro almacén. Almacén lo
+lee en «Swayp por salir · Lima» (abajo).
+
+#### Swayp por salir · Lima (Almacén, fase 1, 03-11-2026)
+
+**Por qué.** Toda guía Swayp nace `en_ruta` / `in_route`, con su fecha de
+despacho en `next_followup_at` (`lib/swayp-directa.ts`, `lib/swayp-reenvio.ts`),
+y el Master la lee como custodia del courier (`hasExternalCustody`) aunque la
+caja siga en la oficina: sale de «Por armar» al nacer y el almacén no la veía en
+ninguna lista. Las asesoras creaban guías Swayp para el día siguiente sin
+avisar, y el almacén no sabía cuántas eran ni cuál faltaba. Días con faltas
+reales: el 02-11-2026, 11 programadas y 7 armadas (las 11 creadas entre las
+20:18 y las 20:29 del domingo); el 31-10, 7 y 5; el 27-10, 8 y 4. El almacén
+necesita una lista explícita, «Swayp miércoles 4 nov: 9 programadas · 8 armadas
+· falta 1», y saber CUÁL falta: con nombre, dónde está la caja física y quién
+creó la guía.
+
+**Decisiones del owner (03-11-2026), aprobadas tal cual:**
+
+1. **Quién arma (D1).** Las guías Swayp de Lima y Callao las arma nuestro
+   almacén y Swayp las recoge en la oficina; las de provincia las arma la
+   bodega regional de Swayp («En Lima los arma nuestro almacén, provincia los
+   arma Swayp»).
+2. **El límite práctico (D2)** es el corte del turno noche de la víspera, a las
+   21:20 (`lib/warehouse-shift.ts`, §6.2). Swayp toma la guía en su sistema
+   pasada la medianoche, y desde que Kapta pasa la custodia a `courier` el
+   escáner (`markShipmentReady`) ya no acepta la caja.
+3. **Lo que llega tarde (D3). Nada bloquea.** Una guía de Lima para el próximo
+   día de despacho creada después de las 21:20 de su víspera lleva un aviso
+   fuerte a la asesora, y la puerta propone el siguiente día de despacho.
+   Creada después de las 17:00 de la víspera, el almacén la ve con la chapa
+   «Agregada …, después de las 17:00» y la asesora recibe un aviso suave.
+4. **La caja armada con otra salida (D4).** Si la caja se armó como la S01 de
+   Grupo GF o de Tanders y la guía Swayp está en la S02, la caja lleva el
+   rótulo de la S02, la S02 cuenta como falta hasta que se escanee y Despacho
+   retira la S01.
+5. **El lunes (D5).** El lote del lunes lo arma el turno noche del domingo (el
+   sábado no hay turno noche). La zona se titula «Próximo despacho · lunes 9
+   nov», no «Mañana».
+
+- **Dónde y quién.**
+  - Apartado de `/dashboard/pedidos/almacen` (`id="swayp"`), con la misma
+    puerta que «Reintentos por salir» (§9.5): quien prepara paquetes
+    (`warehouse.prepare`) en sus tiendas de Equipo (`getAccessibleStores`),
+    dentro del cargador (`requireWarehouse`). Las lecturas van por `store_id`:
+    `shipments` no tiene `org_id`.
+  - Título «Swayp por salir · Lima». Ayuda: «Guías Swayp de Lima y Callao. La
+    caja se arma aquí y Swayp la recoge en la oficina. Se cuenta por día de
+    despacho y no suma en «Por armar».». A la derecha, «Leído 17:42» y
+    «Actualizar».
+- **Solo lee (fase 1).**
+  - No escribe en la base, no hay migración ni kinds nuevos y no cambia el
+    Master: no sube `MOM_RESOLUTION_VERSION`. No toca el pendiente de armado
+    (`loadWarehousePending`, `warehouseBlocker`).
+  - Nunca hay «marcar armada» a mano: armada es el escaneo.
+  - Llega por GET (`/api/almacen/swayp`, sin caché) después de que carga la
+    estación, por la misma razón que «Reintentos por salir»: una acción de
+    servidor haría esperar al escáner.
+  - Se vuelve a leer con «Actualizar», al volver a la pestaña y, con la
+    pestaña visible, cada 5 minutos entre las 16:00 y las 21:30 de Lima (de
+    cuando Swayp cierra su ruta a pasado el corte). Una sola lectura a la vez.
+    Un escaneo no relee: la salida pasa a armada en la copia local, con la hora
+    del escaneo.
+  - Los 5 minutos son la edad de la lectura del servidor, no de la copia
+    local: un escaneo no reinicia la cuenta (con el turno noche escaneando cada
+    pocos minutos, la lista no se releía nunca; revisión del 03-11-2026). Al
+    volver a la pestaña se relee si lo leído tiene un minuto o más. Si cambió
+    el día de Lima, se relee a cualquier hora, aunque la pestaña no se haya
+    ido: la estación pasa la noche abierta, y el miércoles «Mañana · miércoles»
+    y «Hoy · martes» serían falsos.
+  - Si no carga: «No pudimos cargar «Swayp por salir».», con «Reintentar», y
+    la estación de arriba sigue funcionando. Mientras llega la primera
+    lectura, las dos zonas en esqueleto («Cargando «Swayp por salir»…» para
+    el lector de pantalla).
+  - Si falla una relectura con un lote ya en pantalla, el lote se sigue
+    viendo, con «No pudimos actualizar «Swayp por salir».», «Se ve lo leído a
+    las 17:42.» y «Reintentar» (a las 20:30 el turno trabaja con él). La
+    celda «Swayp · Lima» lleva también «Se ve lo leído a las 17:42.» y el
+    enlace de la cabecera, «sin actualizar».
+- **Quién arma lo dice el pedido (R1).** Las guías de Swayp (`courier =
+  'fenix'`) se reparten por `order_master.macro_operation`, nunca por
+  `shipments.city` (hay hijas de provincia con `city` nulo):
+  - `lima` (incluye el Callao): el lote del almacén;
+  - `provincia_cod`: solo el pie de provincia, que no cuenta: «Provincia: 9
+    guías Swayp salen el miércoles 4 nov desde bodegas de Swayp (Arequipa 2,
+    Ica 2). No se empacan aquí.» (con una: «Provincia: 1 guía Swayp sale el
+    miércoles 4 nov desde la bodega de Swayp (Arequipa 1). No se empaca
+    aquí.»);
+  - otra o vacía (agencia, desconocida): «Revisar», que se lista y no cuenta:
+    «Guías Swayp de este día cuyo pedido no es de Lima ni de provincia
+    (agencia o sin clasificar): ábrelas y revisa la dirección. No cuentan.»,
+    con «Operación del pedido: Agencia».
+- **El día (R2).** El día de despacho es la FECHA UTC de `next_followup_at`,
+  que la app guarda a medianoche UTC del día elegido (`2026-11-04 00:00:00+00`
+  es del 04-11). Nunca se convierte a hora de Lima: caería un día antes. Es el
+  mismo día que filtra el Excel de programación de Swayp
+  (`app/api/export/fenix-programacion`), así que las programadas coinciden con
+  ese Excel filtrado a Lima, salvo en dos cosas: el Excel solo exporta
+  `in_route` y no mira el pedido, así que una guía en ruta de un pedido anulado
+  o cancelado en la tienda va en el Excel y aquí sale en «Salieron»; y aquí
+  cuentan como vivas las que ya avanzaron en Swayp (transferidas, entregadas,
+  devueltas), que el Excel ya no lleva. Dos zonas:
+  - «Hoy», solo si hoy Swayp despacha (lunes a sábado): «Hoy · martes 3 nov»;
+  - «Próximo», el primer día de despacho después de hoy
+    (`firstSwaypDispatchDay`): «Mañana · miércoles 4 nov» si es mañana y, si no
+    (sábado o domingo para el lunes), «Próximo despacho · lunes 9 nov».
+- **Programadas (R3).** Las guías de Lima vivas del día: ni anuladas
+  (`anulado` / `closed`), ni canceladas por Swayp (estado 10, el único de
+  cancelación del mapa de `lib/swayp-states.ts`), ni de un pedido anulado. En
+  las dos zonas cuentan también las que ya avanzaron en Swayp (transferida,
+  entregada): «Hoy» las necesita para cuadrar. También las devueltas o
+  indemnizadas por Swayp (9 «Devolución confirmada», 11 «Indemnizada» y 12
+  «Devolución confirmada con cobro», `SWAYP_CLOSED_AFTER_PICKUP_STATES`): la
+  sincronización las deja `anulado` / `closed` (`mapSwaypState`), pero la caja
+  salió con Swayp; no son «Guía anulada en Kapta» (de 45 días, los 319
+  anulado/closed/9 eran devoluciones; revisión del 03-11-2026).
+- **Armada (R4)** es la PROPIA salida Swayp en `listo_despacho`, es decir,
+  escaneada. Una caja armada con otra salida no cuenta (D4). Si se escaneó
+  antes de que existiera la guía (la caja «por definir» que la guía rellenó),
+  lleva «Armada como «por definir»».
+- **Faltan (R5)** = programadas − armadas, siempre con nombre, sin tope ni
+  paginación.
+- **La víspera (R6)** es el día calendario anterior al de despacho, en Lima.
+  Sus dos horas son etiquetas, no estados: las 17:00 (Swayp cierra su ruta;
+  desde ahí lo nuevo es «agregado tarde») y las 21:20 (el corte del turno
+  noche, el límite real).
+- **Agregada tarde (R7).** Por la hora REAL de creación de la guía:
+  `swayp_guide_emissions.created_at` o, sin emisión, la primera gestión de la
+  guía (`shipment_calls`). Nunca `shipments.created_at`: una salida «por
+  definir» puede existir desde antes (KP201878-S01: creada 12:06Z, armada
+  12:19Z, guía escrita 21:02Z). Estrictamente después de las 17:00 de la
+  víspera: «Agregada 20:43, después de las 17:00»; si no se creó la víspera, la
+  chapa dice el día. Informa; no bloquea.
+- **Quién creó la guía:** la gestión que acompaña a la creación, con su nombre
+  (`resolveAgentNames`): «Creó la guía: <nombre> · martes 3 nov 00:11». Sin
+  gestión, «Creó la guía: sin registro · martes 3 nov 00:11»; la emitida por el
+  automático (§11.13), «el automático».
+- **Salieron de la lista (R8).** Nada desaparece en silencio. Solo Lima; el
+  primer motivo que aplica gana:
+  1. el pedido se canceló en la tienda (`orders.cancelled_at`): «Pedido anulado
+     en la tienda», aunque después Kapta anulara la guía y Swayp la cancelara
+     (anular la guía en Kapta también deja el pedido `anulado`, #KP127639);
+  2. «Swayp la canceló» (estado 10);
+  3. «Guía anulada en Kapta»;
+  4. el pedido `anulado` con la guía viva: «Pedido anulado en la tienda».
+
+  Y «Fecha cambiada: ahora sale el viernes 6 nov» (con «(cambió el martes 3
+  nov 18:02)» si se sabe, por la última gestión que la dejó en su día nuevo),
+  solo en las guías directas: su emisión guarda el día original
+  (`direct:<pedido>:<día>`); las demás emisiones no lo guardan. Si estaba
+  armada y la caja sigue en la empresa, además: «Estaba armada: sácala del
+  sitio de Swayp.» (si ya salió con Swayp o viene de regreso, no hay nada que
+  sacar).
+
+  Una directa anulada en Kapta (`cancelFenixDirectGuide`) pierde la fecha
+  (`next_followup_at` en null) y, si era una «por definir» rellenada, vuelve a
+  `por_definir` sin la guía: la lectura por fecha ya no la trae. Se encuentra
+  por su emisión (el día del `source_key`) y sale como «Guía anulada en Kapta»,
+  con la guía que se anuló (KP139661-S01, 08-10-2026; revisión del
+  03-11-2026). Una directa sin fecha pero viva (una recuperación descartada
+  suelta la fecha sin tocar la guía) no sale: no se sabe adónde fue.
+- **Sin doble conteo (R9).** No suma en «Por armar», ni en el número de Lima
+  de «Por empacar», ni en «Entregas a couriers».
+- **Dónde está la caja física (R11).** Para cada falta, un renglón; mirando las
+  salidas hermanas del mismo pedido, de cualquier courier, la primera que
+  aplica gana (con varias, la de consecutivo más alto):
+  1. esta misma salida existía antes de la guía (una «por definir» rellenada,
+     nacida más de 2 minutos antes de la guía, o ya `rotulo_generado` /
+     `en_armado`): «Es la caja «por definir» KP201878-S01: ármala y escanéala;
+     el rótulo no cambia.», con la chapa «Era «por definir»»;
+  2. una hermana armada que sigue en la empresa (`listo_despacho`, custodia
+     `empresa`, D4): «La caja está armada como KP1-S01 (Grupo GF): ponle el
+     rótulo KP1-S02, escanéalo y avisa a Despacho que la S01 no sale.»;
+  3. una hermana que se armó y volvió a la oficina (custodia `devuelto` o
+     `returned_at`): «La KP143987-S01 (Aliclik) volvió a la oficina: si la
+     caja está entera, úsala con el rótulo KP143987-S02; si no, ármala desde
+     stock.». `retorno` no es «volvió»: la caja sigue con el courier camino de
+     vuelta y el `devuelto` lo pone quien la recibe (§9.4);
+  4. una hermana que se armó, salió con su courier (custodia `courier` o
+     `retorno`) y no se entregó: «La caja salió como KP142666-S01 (Grupo GF) y
+     no se entregó: pide a Despacho que la traiga de vuelta, ponle el rótulo
+     KP142666-S02 y escanéalo; si no vuelve a tiempo, ármala desde stock.». Es
+     el caso más común: la S02 de Swayp que nace del re-ruteo de una S01 de
+     Grupo GF que no se entregó (14 de 31 faltas de Lima de 45 días caían en
+     «desde stock» teniendo esa caja). **Regla y texto propuestos en la
+     revisión del 03-11-2026, pendientes de que el owner los confirme**;
+  5. si no: «No hay caja armada en Kapta para esta salida: ármala desde stock
+     con el rótulo KP1-S02.».
+
+  Una hermana que nunca se armó no dice dónde está ninguna caja. En 2 a 5 la
+  fila lleva «Salida nueva». El courier se nombra como en el resto de Kapta
+  (`courierDisplayName`).
+- **La falta que Swayp ya tomó.** Si Swayp ya tomó la guía en su sistema
+  (custodia distinta de `empresa`, estado 3 o más, entregada o transferida;
+  `swaypTaken`), el escáner ya no acepta la caja (`markShipmentReady` exige
+  custodia `empresa`, D2). Sigue siendo falta —no se armó aquí—, pero sin el
+  renglón de dónde está la caja (pedir que se arme sería falso) y, en las dos
+  zonas, con «No se armó y Swayp ya la tomó en su sistema: si la caja sigue
+  aquí, avisa hoy a Seguimiento.». Pasa antes de su día: KP143987-S02, creada
+  el 03-11 a las 00:11 para el 04-11, la tomó Swayp a las 00:37 y estaba en
+  Reparto a las 05:52 sin escaneo del almacén.
+- **La zona «Próximo».**
+  - Cabecera, una frase que se entiende sin colores: «Swayp miércoles 4 nov: 9
+    programadas · 8 armadas · falta 1» («faltan 2»; sin faltas, «… · lote
+    completo»). Sin nada: «Swayp no lleva nada de Lima el miércoles 4 nov.».
+  - Cifras que filtran la zona (The Cifras Navegan Rule, DESIGN.md):
+    «Programadas», «Armadas», «Faltan» y «Agregadas tarde».
+  - Cada falta, siempre abierta: el código y la guía («KP143987-S02 · guía
+    50000165022») con «Sin armar» y «Salida nueva» o «Era «por definir»»; el
+    cliente y el distrito; el pedido, la tienda y el producto; quién creó la
+    guía; dónde está la caja, y la chapa de agregada tarde si aplica. Botones
+    «Imprimir rótulo» (`/api/pedidos/rotulos`) y «Abrir pedido».
+  - Las armadas, en una lista plegada: «KP202022-S01 · armada lunes 2 nov 17:19
+    · <quién> · <cliente> · <distrito>».
+  - El tono, siempre con su frase y según la hora de Lima respecto de la
+    víspera; la primera que aplica gana:
+    1. con programadas y sin faltas, ok: «Lote completo.»;
+    2. si todas las faltas ya las tomó Swayp, ámbar a cualquier hora: «1 no se
+       armó y Swayp ya la tomó en su sistema: si la caja sigue aquí, avisa hoy
+       a Seguimiento.» («2 no se armaron y Swayp ya las tomó en su sistema: si
+       las cajas siguen aquí, avisa hoy a Seguimiento.»), porque «déjalo
+       listo» sería falso. **Texto propuesto en la revisión del 03-11-2026,
+       pendiente de que el owner lo confirme**;
+    3. la víspera aún no llega (el sábado para el lunes), neutro: «Lo arma el
+       turno noche del domingo 8 nov, antes del corte de las 21:20.»;
+    4. la víspera antes de las 17:00, neutro: «Swayp cierra su ruta entre las
+       16:00 y las 17:00. Déjalo listo antes del corte de las 21:20.»;
+    5. la víspera de 17:00 a 21:20, ámbar: «Faltan 1 h 10 min para el corte de
+       las 21:20: déjalo listo.»;
+    6. desde las 21:20 de la víspera, crítico: «El turno noche cerró con 1 sin
+       armar: avisa a Seguimiento.» (cuenta todas las que no se armaron).
+
+    La cuenta atrás se recalcula cada minuto con el reloj del equipo, en la
+    zona y en la celda; «Leído 17:42» sigue siendo la hora de la lectura.
+  - Las cifras filtran: «Programadas» enseña las faltas abiertas, las armadas
+    plegadas y además «Salieron», «Revisar» y el pie de provincia; «Faltan» y
+    «Armadas» dejan solo su lista; «Agregadas tarde», las tardías de las dos.
+    Tocar la cifra elegida vuelve a «Programadas». Las listas se titulan
+    «Faltan», «Armadas» y «Salieron de la lista» (con «Ya no salen en este
+    lote. Si alguna estaba armada, sácala del sitio de Swayp.»); un filtro sin
+    filas dice «No falta ninguna.», «Todavía no se armó ninguna.» o «Ninguna
+    se agregó después de las 17:00.». Una zona sin guías dice solo su frase
+    vacía, una vez.
+- **La zona «Hoy», para cuadrar.** Cabecera «Swayp hoy: 7 programadas · 7
+  armadas»; cada fila con el estado de Swayp como dato («Swayp: Generada ·
+  00:38», etiquetas de `lib/swayp-states.ts`) y, una vez en la zona, «Kapta no
+  registra la entrega a Swayp.». No hay cifra de «recogidas». Una falta de hoy:
+  - en la empresa y sin que Swayp la tomara (sin estado, 1 «Generada» o 2
+    «Preparada»), crítico: «Sale hoy y no está armada: ármala, escanéala y
+    avisa a Seguimiento.», y la cifra «Faltan» de «Hoy» en rojo;
+  - si no: «No se armó y Swayp ya la tomó en su sistema: si la caja sigue aquí,
+    avisa hoy a Seguimiento.», sin el renglón de dónde está la caja.
+
+  Lo urgente de hoy (las críticas) sube a la celda «Swayp · Lima» y al enlace
+  de la cabecera como «Hoy: 1 sin armar» («hoy: 1 sin armar · faltan 2» en el
+  enlace), porque «Hoy» va debajo o al lado de «Próximo» (revisión del
+  03-11-2026).
+- **La celda «Swayp · Lima» de «Por empacar»**, junto a Lima, Agencia y
+  Provincia COD; no suma al número de Lima y toda la celda lleva al apartado.
+  Cifra grande «Falta 1», «Faltan 2», «Completo» o «0»; debajo, «miércoles 4
+  nov · 9 programadas · 8 armadas», y el renglón de tono de la zona «Próximo».
+  Con algo urgente de hoy, además «Hoy: 1 sin armar» y la celda en rojo. Si no
+  se pudo leer: «No se pudo leer». Con «Sin clasificar» en el marco son cinco
+  celdas, y la de Swayp ocupa la última fila entera. Con faltas Swayp de Lima,
+  la celda Lima en cero dice «En cero en «Por armar».» y no «Nada por
+  empacar»: esas cajas también se arman aquí (D1), aunque no sumen (R9).
+- **Escáner.** Uno solo, el de siempre (`markShipmentReady`). Tras un escaneo
+  que sale bien, un segundo aviso calculado en el navegador con el lote ya
+  cargado, sin pedir nada al servidor; el primero que aplica:
+  1. la salida es de un lote: «Swayp miércoles 4 nov · 8 de 9 armadas · falta
+     KP143987-S02 (San Bartolo).» (varias: «faltan 2: …», hasta 3 códigos y «y
+     N más»), o, si lo completa, «Swayp miércoles 4 nov · 9 de 9 armadas. Lote
+     completo: júntalas en el sitio de Swayp.»;
+  2. el rótulo viejo de una hermana cuyo pedido tiene una falta: «Ese rótulo es
+     KP1-S01 (Grupo GF). El pedido sale por Swayp con KP1-S02: imprime ese
+     rótulo y escanéalo.»;
+  3. una guía que salió de la lista: «Swayp canceló esta guía: no la juntes con
+     el lote.», «Esta guía está anulada: no la juntes con el lote.» o «Esta guía
+     ahora sale el viernes 6 nov: guárdala aparte.»;
+  4. de provincia o de «Revisar»: nada;
+  5. una caja Swayp que no es de ningún lote cargado: «Esta caja Swayp no sale
+     hoy ni el miércoles 4 nov: guárdala aparte y revisa la fecha en el
+     pedido.» (el domingo, sin «Hoy»: «Esta caja Swayp no sale el lunes 9 nov:
+     …»).
+
+  Antes de decir 5, y si lo cargado es de otro día, la estación relee una vez
+  por GET (fuera de la fila de acciones: no frena el escáner) y decide con lo
+  leído (`swaypHintAfterScan`): una guía agregada después de la última
+  lectura no puede mandarse a guardar aparte (el 02-11 se crearon 11 entre las
+  20:18 y las 20:29). Si la relectura falla, no hay segundo aviso: mejor
+  ninguno que uno falso. Si el segundo aviso es ámbar o rojo (el rótulo viejo,
+  una que salió, una fuera de lote), el primero («… listo para despacho.») no
+  queda en verde: pasa a informativo.
+- **«Armados hoy».** La caja de un lote cargado lleva «Swayp · mié 4 nov».
+- **La asesora (D3).** En la puerta «Guía Swayp directa» (§11.6.1), solo con
+  destino de Lima o Callao con certeza, que es la misma operación del pedido
+  con la que el almacén arma su lote (`operation` de la vista previa, de
+  `order_master.macro_operation`):
+  - el subtítulo dice quién arma: «Lima y Callao: la caja la arma nuestro
+    almacén y Swayp la recoge en la oficina. Sin guía Aliclik previa.»;
+  - bajo la fecha, si es el próximo día de despacho y ya pasaron las 21:20 de
+    su víspera, el aviso fuerte: «Ya no hay turno de almacén hoy y Swayp la
+    toma en su sistema pasada la medianoche. Elige el siguiente día o avisa a
+    Almacén.». En ese caso la fecha que propone la puerta es el siguiente día
+    de despacho (`swaypSuggestedDispatchDay`);
+  - al crear: «Entró al lote Swayp de Lima del miércoles 4 nov. Almacén lo ve
+    en «Swayp por salir».»; después de las 17:00 de la víspera, además, «El
+    almacén ya está cerrando ese lote: la verá como agregada tarde.», y después
+    de las 21:20, el aviso fuerte en su lugar.
+  - La hora se lee en el navegador, al cargar el pedido, al elegir la fecha y
+    al confirmar, y con un pedido de Lima cargado se refresca cada minuto:
+    quien carga a las 21:10 y crea a las 21:25 ve el aviso antes de crear. La
+    fecha propuesta no cambia sola. Nada bloquea. Provincia no cambia.
+- **Lo que se midió (03-11-2026, solo lectura en producción).** El lote del
+  03-11 (martes): 7 programadas y 7 armadas; cuatro llevan «Armada como «por
+  definir»» (armadas hacia las 07:18, guía escrita a las 16:00). Provincia ese
+  día: 10 vivas. El del 04-11 (miércoles): 1 programada y 0 armadas, la
+  KP143987-S02 (San Bartolo, guía creada el martes 3 nov a las 00:11, salida
+  nueva) con «La KP143987-S01 (Aliclik) volvió a la oficina: …». El del 02-11:
+  11 programadas, 7 armadas y 4 sin armar, las 11 agregadas tarde.
+
+**Fases siguientes, pendientes del owner.** Fase 2: cerrar una falta con
+motivo. Fase 3: la entrega cotejada a Swayp (hoy Kapta no la registra). Fase 4:
+«Salida Swayp programada» en el Master. Ninguna existe todavía: esta fase no
+escribe nada.
+
+**Lagunas conocidas de la fase 1.**
+
+- El agente de voz escribe `next_followup_at` al agendar «volver a llamar», y
+  en una guía Swayp ese campo es la fecha de despacho (KP140760-S01 pasó así
+  del 13-10 al 20-10). Una guía directa movida así sale como «Fecha cambiada».
+- «Fecha cambiada» solo se detecta en guías directas.
+- Las otras puertas que crean o fechan guías Swayp de Lima no llevan todavía el
+  aviso a la asesora: la fecha de Swayp en Repro Lima (§9.5), «Cliente
+  confirma» por Swayp, la guía Swayp a mano y la nueva fecha de la excepción de
+  una guía anulada (§11.6.1).
+- Pendiente del owner (revisión del 03-11-2026): Swayp a veces toma pasada la
+  medianoche una guía creada esa misma madrugada para el día siguiente y la
+  reparte un día antes, sin armar (KP143987-S02: creada a las 00:11, tomada a
+  las 00:37; AUR177549-S02, 06-10). D2 y D3 suponen que Swayp respeta la
+  fecha; otras creadas a las 00:12 sí salieron en su día. Mientras no decida,
+  la asesora no recibe aviso en esa franja y la lista la muestra como «Swayp
+  ya la tomó».
+- Si el pedido dice `provincia_cod` y la guía Swayp va a Lima (KP143049-S01,
+  22-10: pedido en Chilca, guía con `city` lima, armada aquí; el único caso en
+  45 días), sale en el pie de provincia: R1 decide por `macro_operation`.
+  Queda para el owner.
+- «Lote completo» en el escáner se dice con lo cargado: una guía agregada
+  después de la última lectura aparece en la siguiente (a lo sumo 5 minutos
+  entre las 16:00 y las 21:30).
+
+Implementación: `lib/warehouse-swayp.ts` (las reglas y los textos, puros; el
+reloj entra como parámetro), `lib/warehouse-swayp-access.ts` (la puerta y las
+lecturas), la ruta `app/api/almacen/swayp/route.ts` (la lectura por GET),
+`components/warehouse-swayp.tsx` y `components/warehouse-station.tsx` (el
+apartado, la celda, el escáner y «Armados hoy») y, para la asesora,
+`components/direct-fenix-guide-modal.tsx` con `operation` en
+`previewDirectFenixGuide`. Pruebas en `test/warehouse-swayp.test.ts`,
+`test/warehouse-swayp-access.test.ts`, `test/warehouse-swayp-ui.test.ts`,
+`test/warehouse-swayp-mom.test.ts` y `test/swayp-asesora-lote.test.ts`.
 
 ### 9.2 Sugerencia de courier en Lima
 
@@ -1791,7 +2757,8 @@ Reglas:
   toca, como ya hacía «Abrir Mesa de cierre ↓».
 - El motivo nombra **dónde se arregla**, porque hay dos «reabrir» y no sirven
   para lo mismo: el del expediente vive en la **Mesa de cierre** y el del estado
-  en **Gestión manual → Registrar estado**. Un aviso que manda a un panel
+  en **Gestión manual → Registrar estado**, que desde el 15-10-2026 solo ve un
+  admin (§16): el aviso dice que lo reabre un admin. Un aviso que manda a un panel
   inexistente es peor que no decir nada — el de Tanders mandaba a «Estado del
   pedido», que no existe con ese nombre.
 - La frase la escribe una sola función para las tres pantallas. Cuando cada una
@@ -1813,11 +2780,12 @@ Master solo sumaba lo externo: los 487 pedidos con un «No entregado» de Grupo 
 decían «0 intentos» (#KP140941: salió el 13/10 y el 14/10 con Roy, «No
 contesta» las dos veces, y la fila decía 0).
 
-- **No cambia el costo.** El costo logístico sigue con los intentos del
-  courier: ni Grupo GF, ni Urpi, ni Swayp ni Tanders cobran por intento
-  adicional en las tarifas, y sumar sus visitas a la
-  tarifa de otro courier (un pedido que luego salió con Aliclik) inventaría un
-  costo.
+- **No cambia el costo.** El costo logístico sigue con los intentos que
+  reportan las guías: ni Urpi, ni Swayp ni Tanders cobran por intento
+  adicional en las tarifas, y sumar sus visitas a la tarifa de otro courier (un
+  pedido que luego salió con Aliclik) inventaría un costo. Grupo GF cobra desde
+  v1.31 con su Tarifario (§14) solo los intentos que reportan sus propias
+  salidas: ni los de otro courier ni estas visitas.
 - **No cambia la etapa.** Es un dato de la fila; la macroetapa se decide como
   antes. `MOM_RESOLUTION_VERSION` sube a `mom-v1.27` para que el cron recalcule
   la columna.
@@ -2014,6 +2982,96 @@ sin tope de antigüedad. Reglas:
       quien puede.
     - **Un duplicado NO entra a la cola**: no es un cobro por confirmar, es una
       incidencia. Queda bloqueado y avisa — una sola vez, no en cada pasada.
+    - **La guía validada que se quedó sin ficha la recibe ahora (15-10-2026).**
+      La auditoría del atraso de Lima (14-10-2026) encontró **203 guías**
+      `entregado` con el cobro `validado` por el lector y sin ficha
+      `cobro_courier`: 202 se validaron del 10 al 12-09-2026, antes de que
+      existiera la cola, y una el 15-10 sin que su ficha llegara a crearse. El
+      barrido solo relee las guías vivas, así que no volvían nunca: nadie podía
+      firmar su cobro y **201 pedidos** se quedaban en «Por cerrar · Pendiente
+      de liquidación» para siempre.
+      - Al final de cada pasada el barrido mira también las guías `entregado`
+        + `validado` cuyo pedido no tiene ficha, y se la prepara **con la
+        lectura que quedó guardada** (`tanders_payment_checks`): no vuelve a
+        pasar la imagen por el modelo ni le pregunta a Tanders. Baja la
+        imagen, la guarda en nuestro bucket y la ficha entra
+        **`pendiente_revision`**, como cualquier cobro que el lector dio por
+        bueno. **Nada se cierra solo**: la guía no se toca y la firma la pone
+        una persona.
+      - Esa lectura no transcribía la hora del pago, así que el estado de
+        cuenta de Yape (§16.2) no la cruza al minuto: la confirma alguien. El
+        medio que queda en lo leído es el que Tanders reporta de esa imagen.
+      - **No se duplica**: se salta el pedido que ya tiene ficha viva o
+        decidida por una persona, y el alta lo vuelve a comprobar antes de
+        escribir.
+      - **Acotado**: hasta 60 guías miradas y 20 fichas creadas por pasada, por
+        la misma cola ordenada por `payment_checked_at`; cada guía mirada deja
+        sello y la que no cupo va primero en la siguiente.
+      - **La que el barrido validó y cuya ficha falló va primera
+        (16-10-2026).** Si el barrido deja una guía `entregado` + `validado` y
+        su ficha no se puede crear (error al subir la imagen o al escribirla),
+        se le **borra** el sello (`payment_checked_at` = null) en vez de
+        ponerle el de ahora, y la recuperación no la reintenta en esa misma
+        pasada. La cola ordena con los nulos primero, así que la mira en la
+        pasada siguiente. Con el sello de ahora esperaba detrás de todas las
+        validadas que ya tienen ficha —575 el 16-10-2026, unas 80 más por
+        semana—: una vuelta entera, unas 20 horas hoy y más cada mes.
+        **Pendiente:** la recuperación sigue releyendo las guías que ya tienen
+        ficha (60 lecturas por pasada). Excluirlas en la consulta pide un
+        anti-join anidado de PostgREST que hay que comprobar contra la base real
+        antes de confiar en él, o una vista o RPC (migración); no se hizo aquí.
+      - **Un pedido anulado en Shopify no recibe ficha (16-10-2026).** Entre
+        las 203 había cuatro anulados en Shopify (#KP131617, anulado el 08-09
+        antes de la entrega del 11-09; #AUR174710; #KP130888; #KP129592).
+        «Validar pagos» no enseña la anulación, y firmar el cobro escribe
+        `liquidation_closed`: el pedido se cerraría como venta cobrada, en contra
+        de §30.3 regla 3 (entregado y anulado en Shopify queda como observación
+        abierta) y de la puerta a «entregado» (§11.4). La recuperación lee
+        `orders.cancelled_at` del lote y a esos no les crea ficha: los sella, no
+        los cuenta como error y los cuenta aparte (`fichasAnuladas`, con sus
+        nombres). Decide una persona desde la ficha del pedido. Si la anulación
+        no se puede leer, no crea ninguna: «no lo sé» no es «no está anulado».
+        El barrido de las guías vivas tampoco mira la anulación, desde antes de
+        este cambio; queda fuera de él.
+      - **Un comprobante que ya se sabe repetido no entra**: si ya está en otro
+        pedido, o tiene alerta de comprobante repetido —abierta o cerrada, por
+        la huella del archivo o por el nº de operación—, es una incidencia y no
+        un cobro por confirmar. Es el caso del Lemon de S/ 89 de #KP124940,
+        #KP126075, #KP126468 y #KP126871: los cuatro están entre las 203, sin
+        ningún pago con el que chocar, y el primero habría entrado a la cola
+        como un cobro de rutina. Lo que choca con otro pedido avisa una sola
+        vez. Decidir cuál de los cuatro está pagado sigue siendo de una
+        persona.
+      - «Cobros Tanders · revisión en seco» (/dashboard/pedidos/cobros-tanders)
+        dice cuántas validadas sin ficha encontró **en esta pasada**
+        (`sinFicha`, hasta 20: es la muestra que esa pasada prepararía, no el
+        total; al llegar al tope avisa que puede haber más), cuántas no entran
+        por comprobante repetido (`fichasBloqueadas`) y cuáles son de pedidos
+        anulados en Shopify (`fichasAnuladas`). En seco no se sella nada, así
+        que cada revisión enseña las mismas hasta que corre la pasada real.
+      - **La constancia que Tanders no tiene se carga a mano (03-11-2026).**
+        El 03-11-2026 había 33 pedidos entregados por Tanders sin constancia
+        válida —21 sin ninguna en Tanders (S/ 3.069), dos pares con un solo
+        Yape, los cuatro del «89yape.png» y cuatro anulados en Shopify—, y la
+        imagen solía existir igual: llegó por WhatsApp a alguien del equipo. En
+        un pedido de Lima contra entrega el drawer no ofrece «Registrar un
+        pago», así que no había dónde subirla. «Validar pagos → Cargar
+        constancia de courier» (/dashboard/pagos/constancia) busca la guía por
+        **nuestro código de pedido o por la guía de Tanders**, se pega la imagen
+        (Ctrl+V) y entra por el mismo puente que la del barrido
+        (`registerCourierCollection`): lector de constancias, huella sha256, nº
+        de operación único y alerta de comprobante repetido. Además choca con
+        las lecturas del barrido en OTRA guía (`tanders_payment_checks`), que es
+        donde viven los pares con un solo Yape. Queda con `registered_by`,
+        `vision.source = subida_manual` y un hecho en la Actividad; la firma la
+        sigue poniendo quien valida. Reglas (lib/tanders/manual-collection.ts):
+        no entra si el pedido ya tiene un cobro de courier vivo ni si la guía
+        está anulada; si Tanders aún no la da por entregada, avisa sin frenar.
+        **Un pedido anulado en Shopify sí se puede cargar, pero solo marcando
+        expresamente que la caja se entregó y se cobró**: es la decisión de una
+        persona que la regla de arriba pide, y al validarla se cierra como venta
+        cobrada. Lo puede hacer quien sube comprobantes
+        (`shalom.register_payment`); validar sigue siendo `payments.validate`.
     - Al entrar aquí se hereda lo que la vía paralela de Tanders no tenía: nº de
       operación único en todo el sistema, huella `sha256` que atrapa la misma
       imagen renombrada (es lo que habría cazado el «198yape.png» sin depender
@@ -2039,6 +3097,22 @@ sin tope de antigüedad. Reglas:
     - No confundir con `payment_state`, que es el cobro del PEDIDO (adelantos
       de la clienta). Este dice si el dinero que cobró el motorizado llegó a la
       cuenta.
+  - **Filtro «Estado de pago» en el Master** (owner, 27-10-2026). Está junto
+    a «Cobro del courier» y consulta `order_master.payment_state`, con varias
+    opciones combinables:
+    - **Pago completo:** `pago_completo`, incluidos los prepagos web confirmados
+      que ya resuelve el Master. No basta con un `paid` sin pasarela confirmada.
+    - **Pago pendiente de validar:** `adelanto_cargado`, `diferencia_cargada`,
+      `pago_total_cargado` y `posible_duplicado`. El posible duplicado necesita
+      revisión; nunca se presenta como pago confirmado.
+    - **Pago parcial:** `adelanto_validado`, con diferencia pendiente.
+    - **Sin pago registrado:** `sin_pago` o sin señales de pago (`NULL`). Esto
+      describe lo registrado en Kapta, no afirma que el cliente deba dinero
+      ni sustituye la liquidación del courier.
+    El filtro viaja por `ps` en la URL y se aplica en servidor a los resultados,
+    conteos, paginación y Excel. Sigue las reglas del buscador: al buscar un
+    pedido, se ocultan y se ignoran los filtros de la lista. No cambia pagos,
+    validaciones, estados ni permisos; limpiar filtros también lo quita.
   - **Vocabulario de estados de Tanders, confirmado por la operación el
     10-09-2026** (hasta entonces 105 guías vivían en estados que el Master no
     traducía, entre ellas paquetes ya de vuelta que nadie sabía que habían
@@ -2159,6 +3233,19 @@ sin tope de antigüedad. Reglas:
       acusar en falso como tapar el duplicado bueno.
     - Al implantarlo (10-09-2026) el histórico de 78 comprobaciones no tenía
       **ninguna** colisión.
+    - **Releer y llegar a lo mismo no deja otra fila (15-10-2026).** La guía
+      con el comprobante repetido no entra a la cola, así que se relee en cada
+      pasada, y cada relectura escribía una comprobación nueva: cuatro guías
+      tenían entre 175 y 189 filas idénticas, y 44 tenían más de una (las
+      demás, de los primeros días). Ahora una comprobación se escribe solo si
+      cambia el **veredicto** (estado y motivos) o el **comprobante leído**
+      (imagen, nº de operación o monto). Si no cambia, la fila que ya está lo
+      cuenta y la última mirada queda en el sello de la guía
+      (`payment_checked_at`). La fila vieja no se reescribe —sigue diciendo
+      cuándo se llegó a ese veredicto— y las repetidas que ya existen no se
+      borran. El bloqueo y el aviso único no cambian, y la guía se sigue
+      releyendo en cada pasada (una llamada al modelo cada vez: cortar ese
+      gasto es otro cambio).
   - **Medios de cobro aceptados: Yape, Plin, transferencia BCP y cualquier app
     que pague a un Yape** (ver abajo). Plin entró
     el 10-09-2026: el motorizado remite con la billetera que tenga, y Plin y
@@ -2276,8 +3363,9 @@ subetapas ni estados nuevos.
   aprueba Despacho GF (§29.6).
 - **Paso a paso de un «No entregado» de Grupo GF:**
   1. El motorizado reporta el motivo y la foto en su ruta; si el cliente pide
-     otro día, lo anota en **«Fecha que pidió el cliente»** (§29.7): queda en
-     la parada para que la tienda la confirme y no programa nada. Puede
+     otro día, lo anota en **«Fecha que pidió el cliente»** (§29.7): desde el
+     01-11-2026 programa la salida de Grupo GF para ese día y la tienda la ve
+     en Repro Lima como «Acordado en la puerta», sin llamar. Puede
      reintentarlo el mismo día con la misma caja (§9.3). La caja no entregada
      se queda con él hasta que la trae a la oficina: Johnny (Yhoni) y Roy al
      día siguiente, Alexis cada dos o tres días (§9.4).
@@ -2328,24 +3416,93 @@ subetapas ni estados nuevos.
 - **Urpi**, mientras no se registre su despacho en Kapta (§30.11): un pedido con
   reporte de Urpi no se toma en Grupo GF sin revisar antes si ya salió con Urpi.
 
+#### «Reintentos Aliclik»: la cadena de reintentos en Lima (03-11-2026, entrega 1)
+
+**Decisión del owner (03-11-2026).** Un no entregado de Lima que solo necesita
+otra salida vuelve a salir por Aliclik, sin llamar, hasta tres intentos. Hasta
+hoy, de 670 pedidos de Grupo GF no entregados por «no contesta», «no estaba» u
+«otro» en 60 días, solo 194 volvieron a salir; los que salieron se entregaron
+en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
+
+- **La cadena** (`limaRetryChain`, `lib/lima-retry-chain.ts`):
+  - **Alexis** (de Grupo GF, solo sus rutas) **o Urpi → AUTOECOM → ALIDRIVER**.
+  - **AUTOECOM → ALIDRIVER**, también cuando AUTOECOM fue el primer intento.
+  - Los demás motorizados de Grupo GF, Swayp, Axel y ALIDRIVER como primer
+    intento no abren cadena.
+- **Entran** «no contesta», «no estaba» y «otro». **No entran** el rechazo en
+  puerta, el reprogramado, la dirección errada ni «sin dinero»: siguen en Repro
+  Lima como siempre. El motivo de Aliclik sale de su estado (`REFUSED` rechazo,
+  `RESCHEDULED` reprogramado, `NOT_RESPOND` no contestó, lo demás «otro»),
+  salvo que el «SUB ESTADO» del Excel de Aliclik diga más (03-11-2026): «DE
+  VIAJE» y «POR CLIENTE» cuentan como reprogramado (hay que llamar, no
+  reintentar al día siguiente) y «FUERA DE COBERTURA» como dirección errada;
+  el de
+  Urpi, del resultado y el motivo en texto libre de su último reporte.
+- **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
+  pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un
+  acuerdo en Repro Lima para ese episodio (lo acordado manda).
+- **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
+  con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
+  el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los
+  couriers no devuelven en un plazo fijo). Es informativo: el reintento **no
+  espera la devolución**, solo sale **otro día** que el intento que falló
+  (`chainReadyOn`; decisión del owner, 03-11-2026: «no necesito esperar la
+  devolución para sacar el pedido, solo que se saque un día distinto»). En «Todos» los mismos pedidos llevan
+  la chapa, para que no se llamen.
+- **Quién:** las asesoras (`repro_lima.manage`) y Despacho, que entra con el
+  permiso nuevo `repro_lima.retries` y ve solo esa tarjeta, sin «Atender»:
+  llamar y acordar siguen siendo de la tienda.
+- **Entrega 1:** la guía la crea una persona desde la ficha, con el transporte
+  que indica la chapa (AUTOECOM; ALIDRIVER ya se habilita después de AUTOECOM,
+  §11 «Aliclik en Lima»).
+- **Entrega 2, la bandeja (03-11-2026).** En cada fila de «Reintentos Aliclik»:
+  - **«Aprobar · AUTOECOM/ALIDRIVER»** crea ya la guía de Aliclik con ese
+    transporte (`approveAliclikRetry`). Antes recalcula la cadena con los
+    hechos de ahora y exige que el intento que falló haya sido un día anterior
+    a hoy en Lima (no exige el paquete en oficina); la guía sale por el mismo
+    camino que el panel de la ficha (`createAliclikGuideFor`: monto, pin,
+    historial), con el motivo de la salida adicional de Lima «Reintento Aliclik
+    N de M aprobado en Repro Lima». Pide `repro_lima.retries` y
+    `aliclik.create_guide`. Pasado el corte de Aliclik (2:00 p. m.), Aliclik la
+    recoge al día siguiente. Deja el hecho `lima_retry_approved` con quién,
+    cuándo, el transporte y la guía.
+  - **Si Aliclik no ofrece ese transporte para la dirección**, el pedido pasa a
+    Repro Lima solo (decisión del owner). Si lo ofrece pero Aliclik no deja
+    elegirlo, solo lo dice. ALIDRIVER sale como entrega Normal, nunca Express
+    (ver «Siempre entrega Normal» en §9, «Aliclik en Lima»).
+  - **«A Repro Lima»** lo saca de la cadena con un motivo
+    (`lima_retry_dismissed`); un fallo nuevo la vuelve a abrir.
+  - **«Aprobar todos los listos»** aprueba los de la tarjeta que ya se pueden
+    aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
+    y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
+    reintento se aprueba desde mañana».
+  - Sigue la creación automática, medidas dos semanas de aprobaciones.
+
+Pruebas: `test/lima-retry-chain.test.ts`.
+
 #### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)
 
 Decisión del owner sobre el plan de la fase 1 (decisiones 1 a 12, 12-10-2026):
 la fecha que da el cliente en la puerta se confirma con él y **nunca se
-programa sola** (decisión 7).
+programa sola** (decisión 7). **Reemplazada el 01-11-2026** (decisión del
+owner): esa fecha ya es el acuerdo y programa la salida sola; el pedido sale en
+«Programados» como «Acordado en la puerta» (§29.7).
 
 - **Dónde.** `/dashboard/pedidos/repro-lima`: «Repro Lima» en la navegación,
   justo después de «Repro Provincia».
-- **Quién.** Quien llama a los clientes o despacha: permiso propio
+- **Quién.** El equipo de la tienda que llama a los clientes: permiso propio
   `repro_lima.manage` («Repro Lima: llamar y reprogramar en Lima», 13-10-2026,
-  decisión del owner), que traen los roles «Asesora» y «Despacho y Grupo GF»
-  (§16), la vendedora que aún no tiene roles, los admins y el owner. La Asesora
-  lo tiene sin tener Despacho del día (`dispatch.manage`). Vale en las tiendas
-  que la persona tiene asignadas en Equipo: el mismo alcance que Despacho del
-  día (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es
-  de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo
-  GF»). Pide uno de esos roles en Equipo.»; sin tiendas, «No tienes tiendas
-  asignadas». El actor real queda en cada llamada y en cada evento.
+  decisión del owner), que trae el rol «Asesora» (§16), la vendedora que aún no
+  tiene roles, los admins y el owner. **Desde el 01-11-2026 el rol «Despacho y
+  Grupo GF» ya no lo trae** (decisión del owner: solo llama la tienda; Grupo GF
+  es el courier y recibe lo acordado en «Reintentos para hoy», §29.13). Quien
+  tiene los dos roles entra por el de Asesora. La Asesora lo tiene sin tener
+  Despacho del día (`dispatch.manage`). Vale en las tiendas que la persona tiene
+  asignadas en Equipo: el mismo alcance que Despacho del día
+  (`getAccessibleStores`). Sin el permiso, la pantalla dice «Repro Lima es del
+  equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en
+  Equipo.»; sin tiendas, «No tienes tiendas asignadas». El actor real queda en
+  cada llamada y en cada evento.
 - **Qué pedidos.** Todo pedido de esas tiendas en «En curso · Por reprogramar
   Lima» (`order_master`), de cualquier courier. La lista se calcula desde el
   Master, no desde los casos.
@@ -2410,7 +3567,7 @@ Cada lista es una tarjeta de estado que filtra y dice su número. La primera
 regla que aplica gana:
 
 1. **Cerrados**: sin caso abierto, y el último caso del episodio vigente se
-   cerró con «Desarmar y cerrar». Espera que Shopify anule la venta. No tiene
+   cerró con «Desarmar y cerrar». Espera que la tienda anule la venta. No tiene
    plazo: sale cuando el pedido deja la etapa o un fallo nuevo abre otro
    episodio.
 2. **Programados**: un acuerdo vigente (su día no pasó), programado o no.
@@ -2441,6 +3598,86 @@ fallaron, es el día en que salió el intento: el mismo ancla que `macro_since`
 pone primero lo que pide a alguien (derivas, vencidos, lo que falta y lo que
 no se programó) y después sigue la fecha acordada. «Cerrados» pone arriba el
 último cierre.
+
+**Ampliación de Repro Lima (28-10-2026, decisión del owner).** La pantalla
+también sirve para gestionar todos los pendientes de entrega de Lima, incluidos
+los que nunca salieron y los antiguos por revisar. Esta decisión reemplaza la
+presentación inicial de «Todos» como solo un resumen, descrita a continuación.
+
+- **Entrada inicial:** «Todos · por entregar», una lista de pedidos del Master
+  de las tiendas accesibles, con `coverage = 'lima'` y macroetapa Por confirmar,
+  Preparación, Por despachar o En curso. Se lee por páginas de 500 hasta terminar,
+  sin truncar en 1000; muestra 100 filas y permite cargar las siguientes. No se
+  agregan Por cerrar ni Finalizado al pendiente de entrega. Si falla esta lectura,
+  se informa el error; no se presenta una lista parcial como si fuera el total.
+- **Filtros:** debajo de las tarjetas superiores, macroestados con sus subetapas
+  y cantidades, en el orden canónico del Master, presentados como chips en dos
+  filas compactas («Macroestado» y «Subetapa», ajuste visual del owner del
+  28-10-2026). Todos activos al entrar; cada chip desmarca una subetapa, o una
+  macroetapa completa. Una selección parcial lleva «−» y estado accesible mixto.
+  Se permite desmarcar todo y el chip «Todos» restaura la vista. Las exclusiones
+  viven en `ocultar` en la URL y se
+  conservan al abrir/cerrar la ficha; tienda y búsqueda se combinan con ellas.
+  Las cantidades de los chips cuentan la tienda sin búsqueda ni exclusiones;
+  las tarjetas y la tabla sí respetan las selecciones y la búsqueda.
+- **Contexto:** entrega fallida para la subetapa Por reprogramar Lima; antiguo
+  por revisar si se creó hace más de 30 días o si Tanders sigue En tránsito
+  con despacho anterior al corte del siguiente día hábil (§29.13); pendiente de primer despacho si
+  no está En curso y no consta una salida real; los demás son seguimiento
+  de entrega. Son etiquetas de lectura, nunca nuevos estados ni prueba de que
+  un paquete haya vuelto. Un antiguo de Tanders que siga En tránsito también
+  queda visible, conservando ese estado real.
+- **Presentación unificada (corrección del owner, 28-10-2026):** una sola tabla
+  con «Todos · por entregar» primero y activo al entrar. Todos los renglones
+  tienen «Atender» como acción principal. Las otras tarjetas filtran esa misma
+  tabla por programación e historial de salidas, con los apartados de Grupo GF.
+  Un pendiente sin caso aparece en Todos, sin inventarle una llamada o decisión.
+  Las cantidades de las tarjetas respetan tienda, búsqueda y exclusiones; la
+  línea de la tabla indica cuántos se muestran respecto del total de la tienda.
+- **Apartados operativos (28-10-2026, decisión del owner):** después de Todos
+  aparecen Reprogramados, Programados para hoy, Programados para mañana, Nunca
+  salieron, Ya salieron, Más de 30 días y Programados para después. Los seis
+  apartados desde Hoy hasta Después usan `queueSegment` de Grupo GF (§29.13):
+  una programación persistida manda; una fecha vencida sigue en Hoy; sin fecha,
+  una salida real manda sobre la antigüedad; sin ambas, más de 30 días desde el
+  día de creación en Lima entra en Más de 30 días y el resto en Nunca salieron.
+  Estos seis apartados suman Todos sin duplicar pedidos. Ya salieron no afirma
+  que la caja haya retornado: la custodia sigue mostrándose con los hechos reales.
+  **Reprogramados significa una nueva fecha acordada vigente con el cliente**,
+  según confirmó el owner: requiere un acuerdo vivo de Repro Lima, no basta una
+  fecha propuesta ni un programa de Grupo GF sin acuerdo. Se superpone con Hoy,
+  Mañana o Después, sin duplicar filas en Todos. La fecha del acuerdo vigente
+  prevalece sobre un programa anterior. Llamar después y Cerrados · esperan
+  anulación siguen como chips secundarios junto a la búsqueda; ya no ocupan
+  tarjetas principales. Todas las tarjetas respetan los filtros y «Atender».
+  Los programas se leen de `gf_dispatch_programs`, paginados; el historial real
+  sale de `gf_order_departures` en lotes de 500 pedidos, la misma fuente de Grupo
+  GF. No se deduce «Nunca salieron» de un `dispatched_at` vacío en el Master,
+  porque una devolución puede limpiarlo. Si falla la lectura, se muestra el error
+  y no cantidades parciales. Consultar estos apartados no programa, recibe,
+  asigna ni modifica ningún pedido o salida. No requiere migraciones.
+- **Gestión (corrección del owner, 28-10-2026):** «Atender» abre siempre la
+  hoja de llamada y programación/reprogramación, también desde Todos y para
+  pendientes que nunca salieron. El código del pedido abre la ficha compartida.
+  Los pendientes sin fallo usan un contexto de atención `attention:<order_id>`:
+  no se inventa un «No entregado», una parada ni un despacho. Conserva las
+  mismas llamadas, acuerdos, exclusión de edición y guardas de custodia, fechas
+  y guías. El servidor y la RPC admiten ese contexto solo para cobertura Lima
+  en Por confirmar, Preparación, Por despachar o En curso, con tienda y permiso
+  comprobados; una anulación o salida de esas etapas lo invalida. Un fallo real
+  posterior inicia su episodio de reprogramación y conserva la atención anterior
+  en el historial. Los casos programados o cerrados se abren en
+  lectura; reabrir un cierre conserva su segundo clic de confirmación. Leer o
+  abrir cualquier pedido no crea un episodio fallido, no programa ni genera
+  otra salida y no cambia la custodia.
+- **Sin doble vista:** se retiran el selector de vistas, la tabla exclusiva de
+  casos y «Resumen y cierres pendientes» de esta pantalla. Los enlaces antiguos
+  `vista=listas|todos|resumen` abren Todos y limpian ese parámetro sin perder la
+  ficha ni las exclusiones. El filtro nuevo `atencion` identifica únicamente la
+  tarjeta elegida; sin él, o con un valor desconocido, abre Todos. El antiguo
+  `atencion=programados` abre Reprogramados y `por_decidir` abre Todos. Los cierres
+  siguen disponibles como filtro secundario y en el Master. No requiere
+  migraciones ni recalcular estados.
 
 **«Todos»: los pedidos de Lima sin estado final (14-10-2026, pedido del owner
 del 13-10-2026).** Además de las cuatro listas, Repro Lima tiene una quinta
@@ -2984,10 +4221,9 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
 
 **Lagunas conocidas de las entregas 1a y 1c.**
 
-- Kapta no puede anular una salida de Grupo GF (`manualOutputIsCancelable`).
-  Un cambio de producto con su salida viva queda «Falta la salida nueva», y
-  pasar de Grupo GF a otro courier deja viva la salida anterior de Grupo GF.
-  Se anota en la ficha y se avisa a Despacho GF. Lo resuelve la fase 2.
+- Grupo GF ya permite retirar y anular una salida interna que nunca salió de
+  almacén (§38.17). Si ya pasó al motorizado o tiene parada, sigue el circuito
+  de Despacho y retorno; no se usa esa anulación para fingir que volvió.
 - La recepción de Tanders o Swayp en Devoluciones no programa el acuerdo: al
   llegar la caja, la fila ofrece «Programar ahora».
 - «Reprogramar para» de Liquidaciones 2 sigue desconectado.
@@ -3292,6 +4528,29 @@ Seguimiento de una guía hasta que cierra:
   perderse el retorno, que es justo lo que abre §11.1. Pasadas las tres semanas
   ya no va a volver y se deja de preguntar. `entregado` y `transferido` sí
   cierran: una entregada terminó, y una transferida vive en otra guía.
+- **Salvo la transferida con el paquete todavía en Aliclik (owner,
+  01-11-2026).** El pedido sigue por otra guía —el reenvío por Swayp sale del
+  stock de Swayp, no de este paquete—, pero este paquete tiene que volver al
+  almacén. Se dejaba de preguntar al transferir y la devolución que Aliclik
+  reportaba después no llegaba nunca: #KP117015, con la hija de Swayp anulada,
+  quedó 107 días «En curso · En tránsito» mientras Aliclik ya la tenía devuelta
+  y cancelada; eran 137 pedidos así. Ahora una guía `transferido` con custodia
+  del courier y sin `returned_at` se sigue consultando como las que esperan
+  devolución (`transferredAwaitingReturn`, `lib/aliclik-followup.ts`), con
+  **180 días** de silencio para alcanzar las transferidas desde julio. La guía
+  se queda `transferido` (la precedencia no la mueve); lo que llega es
+  `returned_at` y la custodia `devuelto`, y con eso el pedido pasa a «Por
+  cerrar · Devolución física pendiente», como los que ya funcionaban.
+- **La recogida del courier prueba la salida (owner, 01-11-2026,
+  `mom-v1.35`).** Un pedido solo se da por devuelto si la devolución está
+  **probada**: la guía salió de verdad y volvió. «Salió» exigía fecha de
+  despacho, de reparto o un estado de agencia, y las guías de Aliclik que
+  llegaron por el Excel no traen ninguna: #KP117015 tenía la devolución sellada
+  y seguía «En curso · En tránsito», como ~50 pedidos más. Ahora también prueba
+  la salida que el courier haya recogido el paquete en el almacén
+  (`custody_transferred_at`, el PICKED de Aliclik; `leftWithCourier`,
+  `lib/order-status.ts`). Una devolución sin ninguna de esas pruebas sigue
+  siendo solo reclamada («en proceso de retorno»).
 - Existe porque la **devolución** es el tramo más lento: un paquete rechazado
   tarda semanas en volver al origen, mucho más que la ventana del barrido. Si el
   seguimiento se anclara a la fecha, el `RETURNED` de Aliclik llegaría cuando ya
@@ -3375,7 +4634,9 @@ Marcar `recogido`, `entregado`, `disponible_para_recojo` o cualquier otro estado
 que signifique que la caja ya está en la sucursal **exige que exista una salida**.
 Si el pedido es de cobertura Agencia y no consta ninguna, el Master pide **por qué
 agencia se envió** —Shalom u Olva— y registra la salida con la firma de quien
-marca. Sin courier elegido el marcado no se guarda.
+marca. Sin courier elegido el marcado no se guarda. Quien marca es, desde el
+15-10-2026, un owner o un admin: el estado a mano ya no es de «Gestionar
+pedidos» (§16).
 
 **Por qué.** Una salida es lo único por lo que el tablero sabe que un pedido se
 despachó. Un pedido que llega a la agencia sin ella desaparece de los indicadores
@@ -3509,6 +4770,46 @@ candado.
 - **Un timeout no es un rechazo.** Aliclik pudo haber creado el pedido y
   habérsenos perdido la respuesta. La intención queda a la espera y **sigue
   bloqueando** el reintento: reintentar a ciegas es lo que crea el duplicado.
+- **El botón y la guía automática pasan por la misma puerta.** Desde el
+  16-10-2026 cotizar y crear viven en `lib/aliclik-guide.ts`; la acción del
+  Master solo añade el permiso y la sesión de quien pulsa. La guía automática
+  del día programado (§6.2) usa ese mismo núcleo, con el mismo candado, y no
+  levanta ninguna excepción por nadie.
+
+**Una guía anulada suelta el candado (03-11-2026).** El candado protege de
+crear **la misma** guía dos veces, no de que el pedido vuelva a salir por
+Aliclik. Hasta hoy una intención completada (`sent`) quedaba viva para siempre,
+aunque su guía terminara anulada, y el pedido ya no podía salir otra vez por
+Aliclik: lo que piden la cadena de reintentos (§9.5) y «después de AUTOECOM,
+ALIDRIVER» (§9). Caso: #KP200108, guía AUTOECOM AUR5X510805505383 anulada el
+02-11; «Aprobar · ALIDRIVER» respondía «Este pedido ya tiene una guía en
+Aliclik».
+
+- Justo antes de escribir la nueva intención, y solo si la regla de salidas ya
+  dio paso, `createAliclikGuideFor` suelta (`released_at`, `released_reason`)
+  las intenciones `sent` o `duplicate` cuya guía está en las salidas del pedido
+  —por el número que devolvió Aliclik— y **todas** esas salidas están
+  **anuladas o transferidas** en Kapta **y Aliclik las reportó devueltas o
+  anuladas** (`reported_status`: RETURNED, de vuelta en almacén tras un intento,
+  CANCEL, ANNULLED o una llamada que cancela; también «ANULADO» o
+  «CANCELADO» del Excel; `releasableIntents` y `aliclikReportSaysClosed`,
+  `lib/aliclik-intent-release.ts`). La etiqueta se lee por vocabulario y no por
+  posición (`parseAliclikLabel`), porque descarta los campos vacíos. El reporte de Aliclik hace falta porque
+  Kapta también escribe `anulado` o `transferido` sin cancelar nada allá (la
+  gestión «cliente cancela», el séptimo «no contesta», el paso a Swayp), y esa
+  guía puede seguir viva en Aliclik.
+- **Nunca se suelta un `pending`** (lo resuelven el barrido y la caducidad de
+  abajo), ni una intención sin número o cuyo número no aparece en las salidas,
+  ni una guía viva, entregada o que solo Kapta dio por cerrada.
+- **Con dos guías de Aliclik en el pedido**, «Cancelar guía Aliclik» cancela la
+  viva más reciente (`pickGuideToCancel`), y el rescate de una creación en
+  timeout solo le pone el número nuevo a una salida sin código o con ese mismo
+  código, nunca a la guía anterior.
+- El único parcial excluye las soltadas (`0303_aliclik_intent_release.sql`,
+  mismo nombre de índice; va a mano antes del código, ver DEPLOY.md).
+  Soltar no cambia el estado de la fila: el historial y la salud de Aliclik la
+  siguen contando como una creación completada. Dos creaciones a la vez sueltan
+  la misma fila y la segunda sigue chocando en el candado.
 
 El barrido periódico resuelve esa espera, y tiene que cerrar **las dos** ramas
 posibles:
@@ -3708,7 +5009,11 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   reprogramar Lima»). La guía Aliclik no se toca —sigue `anulado`, con su
   `returned_at` cuando vuelva— y el paquete devuelto sigue arrastrando el motivo
   `devolucion_pendiente_inventario` **como razón**, conviviendo con la gestión.
-- **La ventana** es `return_recovery_max_days` (30 por defecto), el mismo número
+- **La ventana** es `return_recovery_max_days` (30 por defecto; **7 días en
+  Kenku y Aurela desde el 01-11-2026**, decisión del owner para limpiar la cola:
+  había 1.218 pedidos en gestión y ~800 con el cierre de hace más de 7 días.
+  La edad máxima del agente de voz, `voice_recovery_max_age_days`, también
+  quedó en 7, para no llamar por pedidos ya vencidos), el mismo número
   que la recuperación por WhatsApp, contada desde que el courier cerró la guía
   (`closed_at`, que el barrido sella al anular). Las guías anteriores al sello
   no lo tienen: el ancla se deriva del historial de llamadas —la última
@@ -3716,6 +5021,20 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   Master y en Envíos**. Caer a `returned_at` no vale: el retorno llega días
   después del cierre (medido: 58 guías con más de un día de diferencia) y
   estiraría la ventana solo en una de las dos pantallas.
+- **Lima tiene su ventana: 21 días (decisión del owner, 03-11-2026).** «Esa
+  regla de recuperación de 7 días era para Provincia. No es para Lima. Lima debe
+  tener unas 3 semanas aprox». La operación del pedido elige la ventana
+  (`LIMA_RECOVERY_DAYS`, `recoveryWindowDaysForOperation`, `lib/reproprovincia.ts`):
+  Lima, 21 días; Provincia COD y Agencia, `return_recovery_max_days`; Tanders
+  sigue con sus 65. La usan igual el estado y la macroetapa del Master, el
+  barrido que baja las ventanas vencidas (`reconcileOrderMaster`, con un corte
+  propio para «Por reprogramar Lima») y Envíos, que del Master solo lee la
+  operación (`macro_operation`) y sigue calculando la decisión con los hechos
+  del pedido. Medido el 03-11-2026: 20 pedidos de Lima con la salida de Urpi
+  cancelada entre el 16 y el 26-10 habían caído a anulado (18) o devuelto (2) a
+  los 7 días; con la v1.37 vuelven a «En curso · Por reprogramar Lima». La
+  recuperación por WhatsApp y el agente de voz no cambian: siguen con
+  `return_recovery_max_days`.
 - **No aplica si alguna guía del pedido ya ENTREGÓ**: ése es el reenvío que
   funcionó, la venta terminó bien. Ni si hay una guía viva: la gestión la lleva
   ella.
@@ -3900,6 +5219,33 @@ de Lima Metropolitana por su distrito. Las frases del bot que el lector del
 chat guardó como distrito («indicarte bien 🚚», «coordinarlo») no son lugar y
 quedan Sin identificar.
 
+**La ubicación que trae el salto de la web al WhatsApp (31-10-2026).** Desde
+el 29-10 el botón de WhatsApp de la ficha (WooCommerce) le pide a la clienta
+departamento, provincia y distrito antes de abrir el chat, y los escribe en el
+mensaje: «Hola, quiero pedir <producto>. Soy de Lima / Lima / Santa Anita.
+https://…». Lo traen 215 de los 216 mensajes de la web del 29 al 31-10. El
+lector del chat no lo veía —espera «soy de Arequipa» y las barras lo
+cortaban—, así que esos leads quedaban sin distrito y en Sin identificar
+(`lib/web-location.ts`).
+
+- **En la cola**, si el lead no tiene región guardada, se lee del primer
+  mensaje y gana a un distrito suelto del chat y al pedido anterior: está
+  elegido de una lista y es lo que dijo hoy. Es exacto, sin adivinar por el
+  distrito: Lima / Lima y Callao son **Lima**; cualquier otra provincia,
+  también las del departamento de Lima (Huaral, Cañete), es **Provincia**. Las
+  excepciones de `district_coverage` mandan primero, como en el pedido
+  (Lima / Lima / Pucusana → Provincia). Así quedan clasificados también los
+  leads que ya estaban en la cola, sin escribir en la base.
+- **La sincronización lo guarda** en el lead (`parseOrderSignals` →
+  `web_location`): `region` con la convención del carrito («Lima (provincia)»
+  para Lima / Lima, «Lima (departamento)» para el resto del departamento, o el
+  departamento), `province` con la provincia del INEI que eligió (la que la
+  ficha le pasa a `order_coverage_for` si `peru_districts` no conoce el
+  distrito, y la que separa «Lima / Cañete / San Luis» del San Luis
+  metropolitano) y `district`. Reemplaza lo que hubiera, salvo la dirección de
+  un borrador real. Desde ahí el lead va a «Dio distrito» y la ficha muestra la
+  cobertura del Master como con un carrito.
+
 **La cobertura en «Entrega» (14-10-2026).** La tarjeta del siguiente lead y la
 ficha ponen, junto a la dirección, la cobertura **del Master** —Lima, Provincia
 COD o Agencia, la misma chapa que lleva el pedido—, porque es lo que la
@@ -3984,7 +5330,124 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
-**El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Sin llamar»,
+**Bloques por asesora (31-10-2026, decisión del owner; migración 0295).**
+En Equipo → Leads, quien gestiona el equipo marca varios bloques por persona.
+Los atajos Principal (cuatro primeros) y Recuperación (quinto) solo rellenan
+checks; el respaldo se concede aparte. Propuesta acordada: Medaly
+(`millonestania5`), Albornoz, Jessica y Daphne en Principal; Reyna en
+Recuperación. La instalación no activa ni asigna: guardar una configuración
+completa y activarla es un acto humano posterior.
+
+**Asesoras con rol Administrador (01-11-2026, decisión del owner; 0299).**
+El rol base Administrador no exime del reparto a quien también tiene la
+función Asesora: Albornoz y las demás asesoras administradoras atienden sus
+bloques, conservando sus permisos administrativos en el resto del sistema.
+Sin bloques asignados no reciben la cola general. Dueño, los roles funcionales
+Supervisión/Administración y los administradores sin función Asesora mantienen
+la vista completa. Se conservan las reservas y citas propias según las reglas
+siguientes. Activar usa la configuración guardada, con cobertura completa e
+historial; la migración no activa ni reasigna por sí misma.
+
+- Clasificación exhaustiva y excluyente: carrito reciente, interés reciente
+  (producto/distrito o atención de pago), nuevo sin intención definida,
+  pendiente/reintento con interés, recuperación de baja intención. El último
+  incluye también los reintentos de baja intención; desconocer la antigüedad
+  nunca deja a alguien sin bloque. Yape por verificar es interés prioritario.
+- Oportunidad inicial configurable, 24 horas **corridas** por defecto (1–168).
+  Se usa ingreso, mensaje entrante o creación del carrito actual de la misma
+  tienda. Fechas futuras, notas y llamadas fallidas no rejuvenecen. Un cliente
+  antiguo con señal posterior a su última llamada vuelve a prioridad. No se
+  reencola a nadie: frescura de siete días, intentos, exclusiones y citas siguen
+  las reglas de 0289/0291.
+- La reserva propia vigente y la cita de una llamada firmada conservan su
+  asesora aunque cambien sus bloques, mientras siga en el equipo y con acceso
+  a la tienda. Una cita sin asesora habilitada vuelve al bloque correspondiente.
+  Nadie toma una reserva ajena. El máximo
+  sigue siendo dos abiertas por asesora.
+- Respaldo optativo: recibe otros bloques prioritarios de su tienda cuando
+  ninguna asesora explícitamente asignada esté en línea (presencia menor a
+  40 segundos) y con menos de dos reservas vivas. No da acceso al bloque de
+  recuperación. Al regresar una asesora no se arrebatan reservas activas.
+- Lista, buscador, apertura directa, acciones, siguiente lead, contadores y
+  ofertas Yape comprueban el alcance en servidor. Supervisión conserva el
+  universo de sus tiendas; los historiales ganados/perdidos siguen consultables.
+  Si no se puede comprobar la asignación, se deniega, no se concede por error.
+- Activar exige una asesora con acceso a cada tienda para cada uno de los cinco
+  bloques. El respaldo no sustituye esa cobertura. Quitar tiendas, membresías o
+  roles tampoco puede dejarla huérfana: la base valida la transacción completa.
+  Sin nadie conectado el bloque sigue pendiente y visible para supervisión.
+- Cada guardado comprueba revisión y deja actor, antes y después en
+  `lead_routing_audit`. Configuración y RPCs solo de servicio; no se confía en
+  actor, bloque o ids autorizados enviados por el navegador.
+
+**Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
+La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
+trabajan ahí, así que los reintentos que merecen una nueva llamada regresan a
+esa misma cola; no basta con marcar atención en En seguimiento.
+
+- La pertenencia es operativa (`call_queue_ready`), separada de `status`:
+  «No responde», «Buzón» o la última disposición siguen intactos, igual que
+  todas las gestiones del historial. Las URL `state=sin_llamar` se conservan.
+- Un carrito en No responde/Buzón/Cuelga vuelve tras **48 h sin interacción**,
+  siempre que ya se haya registrado al menos una llamada de asesora.
+- Una próxima llamada acordada vuelve **cuando vence su fecha**, con la
+  misma agenda automática de Casi cierra/Volver a llamar si no se eligió hora.
+  En el orden por prioridad, las citas vencidas van primero; entre los demás
+  se conserva la prioridad medida por intención de compra y tienda.
+- Solo se reencola con **menos de tres llamadas de asesora registradas**:
+  primer intento y hasta dos reintentos. El contador se rellena desde las
+  filas `lead_calls.kind=call` con asesora; notas, ventas y olas automáticas
+  no cuentan. Las llamadas del agente de voz conservan su propio tope (§33).
+- Lista, tarjeta del siguiente y cabecera de ficha muestran **Primer intento /
+  Segundo intento / Tercer intento**, según las llamadas ya registradas. Si
+  alguien registra llamadas adicionales manualmente, se muestra su número
+  real: nunca se finge un tercer intento para una cuarta llamada.
+- No se reencolan ventas ganadas/perdidas, rechazos, números inválidos,
+  personas que pidieron no ser contactadas, sin stock ni leads con pedido
+  vinculado. Tampoco se reencola sobre una reserva vigente de una asesora.
+  El regreso por stock sigue el flujo de reposición existente, sin saltarlo.
+- Un **carrito genuinamente nuevo posterior a la última gestión** sigue la
+  reapertura existente de no contactados/recompra; no se reinicia ni borra el
+  contador de llamadas históricas.
+- Guardar una llamada consume el pendiente y la cita anterior ya vencida;
+  una nueva fecha se conserva. Se escribe una nota de sistema por cada
+  regreso. El sync usa una sola transacción con bloqueo por fila: dos pasadas
+  simultáneas no duplican el regreso ni su nota.
+- La migración 0289 prepara contador, funciones y conteos, **sin reencolar
+  leads al instalarla**. Los reingresos arrancan con el sync del código nuevo.
+  Los conteos, gráfico, filtros y «Siguiente lead» usan la misma pertenencia.
+
+**Corrección de frescura (29-10-2026, ventana de 7 días aprobada por el owner).**
+La primera selección de la 0289 no tenía antigüedad máxima: volvió a poner en
+Por llamar carritos y citas olvidadas desde julio, y la prioridad de citas
+vencidas los colocó por encima de compras recientes. No eran carritos nuevos.
+
+- Los **reintentos automáticos** exigen al menos una señal real de los últimos
+  **7 días**: la creación del carrito actual, un mensaje entrante del cliente,
+  o el registro reciente de la llamada que pactó la cita vigente. No se usa la
+  edad del lead: un cliente de hace meses con carrito nuevo sí es elegible.
+- Para el carrito se usa `draft_orders.created_at`, de la misma tienda y del
+  mismo borrador. Nunca `updated_at`: notas o sincronizaciones no son compras
+  nuevas. Un carrito sin fecha comprobable no inventa frescura.
+- La cita debe corresponder al `next_followup_at` de una llamada de asesora
+  (`kind=call`, con firma) o a un resultado aplicado del agente de voz
+  (`voice_agent`, Casi cierra/Volver a llamar). Su señal es `occurred_at`, no
+  la fecha vencida por sí sola. Una cita olvidada en julio no es intención de hoy.
+- Ni reencolamientos ni notas de sistema ni llamadas fallidas sin cita
+  rejuvenecen el lead. Se conservan 48 h sin interacción, máximo tres llamadas,
+  exclusiones y reservas de la 0289.
+- La 0291 retira de la cola los reintentos ya activados sin esa frescura,
+  con nota de sistema, **sin borrar ni cambiar disposiciones, llamadas, citas
+  ni pedidos**. Conserva la marca de atención existente porque puede tener
+  otro origen. Vuelven a En seguimiento, no a Perdidos.
+- No interrumpe reservas activas: esos casos se retiran cuando la asesora los
+  suelta o vence su reserva. Cada sync vuelve a retirar los que pierden frescura
+  antes de incorporar candidatos nuevos. El historial del retiro no cuenta
+  como señal reciente ni como intento.
+- Los nuevos sin gestionar conservan su funcionamiento. La ventana se aplica
+  al retorno automático desde En seguimiento, no a la edad de todo el CRM.
+
+**El siguiente lead de cada vendedora (14-10-2026).** Arriba de «Por llamar»,
 cada vendedora ve UN lead para llamar ahora, con lo que pidió, el chat y el
 resultado de la llamada, y nunca el mismo que otra (`pickNextLead`,
 `lib/leads.ts`). Es el primero de **su** cola tal como la está mirando —con sus
@@ -4012,7 +5475,13 @@ saltó.
   - **Una ficha olvidada abierta** deja de renovarse y el lead se suelta solo,
     como antes.
   - **Si otra asesora ya lo tomó** cuando la reserva había vencido, no se le
-    quita a nadie: la ficha avisa quién lo tiene.
+    quita a nadie: la ficha se cierra y el aviso dice quién lo tiene
+    (corrección del owner, 29-10-2026, Ross y Tania). La consulta liviana que
+    ya corre cada 12 segundos también comprueba si otra asesora tiene una
+    reserva vigente, y se consulta al volver a la pestaña o enfocar la ventana.
+    Espera a que termine la toma inicial; un fallo de red o de lectura no se
+    interpreta como pérdida de reserva. El cierre invalida las respuestas
+    pendientes y la tarjeta del siguiente, sin soltar ni tomar la reserva ajena.
 - **Saltar** lo suelta y no se le vuelve a ofrecer en esa pestaña; para las
   demás sigue en la cola.
 - **Guardar el resultado** desde la tarjeta es lo mismo que guardarlo en la
@@ -4022,6 +5491,48 @@ saltó.
   cambia bajo la mano; ese será el siguiente.
 - Solo la ve quien tiene el rol `vendedora`, y solo en «Sin llamar» sin
   búsqueda: quien solo supervisa no retiene leads por mirar la cola.
+
+**Carritos anteriores de la clienta (25-10-2026, pedido del owner).** Las
+asesoras entraban a Shopify → Pedidos → Borradores para ver, cliente por
+cliente, si deja puro carrito o sí compra: cada envío del formulario contra
+entrega deja un borrador, «Completado» si terminó en pedido y «Abierto» si lo
+abandonó. Ahora lo dice Kapta (`getCustomerCarts`, `lib/customer-carts.ts`), con
+los dos lados que ya viven aquí: el espejo `draft_orders` y el archivo de
+Shopify `shopify_history_carts` (§37.6: 106 mil borradores de Aurela desde 2021
+y 105 mil de Kenku desde 2023, más los checkouts abandonados de la web). Un
+borrador que está en los dos cuenta una vez y manda el espejo. Se busca por el
+celular en sus formas (el archivo lo guarda como venía) y en la misma tienda;
+el carrito del propio lead no cuenta (ya está en «Lo que pidió»).
+
+- **En la ficha**, bajo «Pedidos anteriores», la tarjeta «Carritos anteriores»:
+  el hecho primero —«Ninguno terminó en pedido.» en ámbar, «Todos terminaron en
+  pedido.» en verde, «3 de 12 terminaron en pedido.»— y los últimos cuatro con su
+  producto, monto y en qué quedaron («Pedido #KP…» o «Abandonado»); «Ver los N»
+  abre hasta 40. Sin carritos anteriores no sale.
+- **En la tarjeta del siguiente lead**, la fila «Carritos antes»: cuántos y el
+  mismo hecho, o «Ninguno: es su primer carrito».
+- Si la lectura falla, no se adivina: la ficha sale sin el bloque y la tarjeta
+  dice «No se pudo consultar ahora».
+- **WooCommerce**: sus formularios abandonados llegan a `draft_orders` desde
+  el 27-10-2026, cuando COD Core los mande (§38.12, «Los formularios
+  abandonados de WooCommerce»), y salen aquí sin tocar nada.
+
+**«Siguiente lead» en la ficha (25-10-2026, pedido del owner).** Arriba a la
+derecha de la ficha del lead, entre el QR y «Cerrar», abre el siguiente sin
+cerrar la ficha (`leadAfter`, `lib/leads.ts`). Es el de **debajo** del abierto
+en la lista que la asesora está mirando, con sus chips, su búsqueda y su orden,
+saltando los que otra persona tiene reservados. Si guardar la gestión sacó el
+lead de la lista, como pasa en «Sin llamar», abre el que venía detrás; si ese
+tampoco está, el primero libre. En el último de la lista el botón queda
+apagado. Al pasar, **primero suelta** la reserva del lead que deja, igual que
+«Cerrar» (con el tope de dos abiertos, tomar primero podía dejarla sin cupo), y
+después toma el otro. **Si otra persona lo tomó en ese instante** (la lista
+todavía no lo sabía), **salta al siguiente libre** de la misma lista, sin
+cerrar la ficha ni avisar, hasta 5 seguidos (owner, 26-10-2026; antes la ficha
+se cerraba con «X está atendiendo este lead»). Si los 5 están tomados, o no
+queda ninguno libre debajo, la ficha se cierra con un aviso que lo dice. El
+tope de dos leads abiertos no se salta: ese aviso sale igual. Lo que se
+escribió y no se guardó se pierde igual que al cerrar.
 
 La cola de abajo sigue siendo **una sola lista** en el orden medido, con la
 edad en cada fila. Se descartó agruparla por edad (hora dorada, 1–6 h, …):
@@ -4205,6 +5716,16 @@ Se enciende y se apaga en `auto_order_cohorts` (interruptor, ventana con
 inicio y fin obligatorios, tope diario por tienda). Sin ventana no inscribe:
 una cohorte sin fin sería una automatización completa que nadie decidió. El
 cron inscribe como mucho cada 20 minutos por tienda.
+
+**Con la tienda en WooCommerce (25-10-2026, §38.12, «Los carritos de Shopify
+en una tienda que ya crea en WooCommerce»).** El pedido de las dos pruebas es el
+borrador de Shopify completado, así que solo se genera en una tienda con
+`stores.platform = 'shopify'`. En una que ya crea en WooCommerce la fila queda
+`omitido` con el motivo `tienda_en_woocommerce`, sin crear nada en Shopify, y
+el carrito sigue en la cola como uno de `control`. La inscripción no cambia. En
+`auto_order_ab_results` esas filas salen `sin_pedido`; cómo se mide lo
+inscrito después del cambio de plataforma lo decide el owner (pendiente,
+§38.12).
 
 **Qué couriers ve la cola.** `shipments` es el libro de TODAS las salidas, así
 que la cola tiene que recortar: quedan fuera **Shalom, Olva, Tanders, Urpi y el
@@ -4435,15 +5956,22 @@ comprobante y clave de recojo (§12) ya existe y no cambia.
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
 Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo, Lima/Callao.
 
-**Lima y Callao** entraron el 14-09-2026, cuando la bodega de Lima de Swayp pasó
-a despachar pedidos desde el sistema. Lima provincia son 44 distritos (el padrón
-ya trae Santa María de Huachipa, `150144`, creado en 2023) y Callao 7. **El
-Callao es destino propio pero se despacha desde la bodega de Lima**, con el
-stock de Lima — el mismo arreglo que Puno con Juliaca: tabla de ubigeo aparte
-para no mandar el paquete a un distrito equivocado, y alias al almacén para no
-inventar una bodega que no existe. En `SWAYP_SENDERS` van las dos claves,
-`lima` y `callao`, porque el envío llega con su ciudad y el remitente se busca
-por ella.
+**Lima y Callao** entraron el 14-09-2026, cuando Swayp empezó a tomar pedidos
+de Lima desde el sistema. Lima provincia son 44 distritos (el padrón ya trae
+Santa María de Huachipa, `150144`, creado en 2023) y Callao 7. **El Callao es
+destino propio pero se emite con el remitente de Lima**, con el stock de Lima —
+el mismo arreglo que Puno con Juliaca: tabla de ubigeo aparte para no mandar el
+paquete a un distrito equivocado, y alias al almacén para no inventar una
+bodega que no existe. En `SWAYP_SENDERS` van las dos claves, `lima` y `callao`,
+porque el envío llega con su ciudad y el remitente se busca por ella.
+
+**En Lima y Callao la caja no sale de una bodega de Swayp (decisión del owner,
+03-11-2026).** La arma nuestro almacén en la oficina y Swayp la recoge ahí;
+solo provincia sale armada de una bodega regional de Swayp. El texto de arriba
+decía «la bodega de Lima de Swayp» y «se despacha desde la bodega de Lima»: lo
+que hay en Lima es el remitente de Lima en el sistema de Swayp, con el que se
+emite la guía, no el sitio donde se arma la caja. Almacén ve esas guías por día
+de despacho en «Swayp por salir · Lima» (§9.1).
 
 Estar en la lista habilita la ciudad para cargarle stock; **no** la vuelve
 elegible por sí sola. La elegibilidad exige cobertura **y** stock del producto
@@ -4459,6 +5987,14 @@ la tabla se rechaza con mensaje explícito en vez de salir con un código
 aproximado: un ubigeo equivocado desvía el paquete sin avisar.
 
 Los códigos son INEI, nunca RENIEC — numeran distinto los mismos distritos.
+
+**Sullana sale de la bodega de Piura (02-11-2026, owner, #KP144042).** Es otra
+provincia (Sullana, `2006`), pero el panel de Swayp la lista bajo PIURA y la
+reparte desde esa bodega. Se suma a la tabla de Piura **solo el distrito de
+Sullana** (`200601`); el resto de esa provincia (Bellavista, Marcavelica,
+Querecotillo…) no se confirmó y sigue rechazándose con el mensaje de siempre.
+Antes, «Sullana» resolvía al cercado de Piura (`200101`) marcado como no exacto
+y la guía se negaba.
 
 «Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
 campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
@@ -4618,13 +6154,15 @@ las mismas reglas y además:
 ### Stock sin control de cantidad (Lima)
 
 Lima entró a cobertura el 14-09-2026 y la operación decidió **no contar
-unidades** ahí: la bodega de Lima repone sola y lo que importa es *qué*
-productos despacha, no cuántos hay. **Es una regla de la ciudad**
+unidades** ahí: lo que importa es *qué* productos despacha Swayp, no cuántos
+hay. Se dijo entonces que «la bodega de Lima repone sola»; el owner precisó el
+03-11-2026 que la caja de Lima y Callao la arma nuestro almacén y Swayp la
+recoge en la oficina (§9.1, D1). **Es una regla de la ciudad**
 (`CIUDADES_SIN_CONTROL_DE_CANTIDAD` en `lib/fenix.ts`): todo producto anotado
-en Lima —y en el Callao, que se sirve desde esa bodega— vale como disponible
-sin que nadie marque nada. Se decidió por ciudad y no por renglón porque la
-carga de Lima son decenas de productos y una casilla por producto es una forma
-de olvidarse una; un renglón olvidado es un pedido rechazado por «sin stock» en
+en Lima —y en el Callao, que se emite con el remitente de Lima— vale como
+disponible sin que nadie marque nada. Se decidió por ciudad y no por renglón
+porque la carga de Lima son decenas de productos y una casilla por producto es
+una forma de olvidarse una; un renglón olvidado es un pedido rechazado por «sin stock» en
 una ciudad donde el stock no se cuenta. La marca por renglón
 (`fenix_stock.unlimited`) queda para la excepción inversa: un producto sin
 control en una ciudad que sí cuenta. En cualquiera de los dos casos, el renglón
@@ -4886,6 +6424,47 @@ misma puerta que el webhook (`applySwaypState`, `lib/swayp-ingest.ts`). Reglas:
   sin datos de clientes— para fijar la lectura con lo que la API manda de
   verdad.
 
+#### Guías de Swayp que Kapta no tiene (26-10-2026, pedido del owner)
+
+**Qué pasaba.** El webhook de Swayp manda `{guide_number, state}` y Kapta busca
+esa guía en `shipments.swayp_guide`. Si no estaba, el aviso se **descartaba en
+silencio** (`no_shipment`). Pasa cuando alguien crea la guía directo en el panel
+de Swayp y no la registra en Kapta. Con #KP143754 (Independencia, Lima): la caja
+se armó el 24-10 «sin courier definido», salió por Swayp desde su panel, Swayp
+avisó la entrega y Kapta la seguía viendo **Por despachar · asignado a
+courier**.
+
+**Qué hace ahora.**
+
+- El aviso de una guía desconocida se guarda en `swayp_unknown_guides` (0282):
+  una fila por número, con el último estado, cuántas veces avisó y cuándo. La
+  primera vez Kapta le pregunta a Swayp por la guía (`GET /v2/guias/<n>`, tope
+  de 4 s) y guarda solo el destinatario, su celular y la referencia, buscados
+  por el nombre de los campos (`swaypGuideContact`); un número de pedido
+  escrito en la guía (#KP…, #AUR…) gana como referencia. El webhook responde
+  igual (`ignored · no_shipment`) y nunca crea una guía ni toca un pedido.
+- **Envíos** enseña, bajo la cabecera, la tarjeta **«Guías de Swayp que Kapta no
+  tiene»**: el número (para copiar), el estado de Swayp, cuándo avisó, el
+  destinatario y **el pedido sugerido** («la guía lo nombra», o «mismo
+  celular»: el pedido más reciente con ese celular creado hasta 45 días antes
+  del aviso), con el enlace a su ficha. Arriba dice cómo registrarla: en la
+  ficha, Operar → ruta Swayp → «N° de guía Swayp» con ese número (con el número
+  escrito no se pide otra guía a Swayp; el barrido de estados la lee y el
+  pedido avanza solo).
+- **Sale sola** cuando la guía ya está en `shipments` (se registró). Si no es
+  nuestra o ya se resolvió por otro lado, **«Descartar»** con el motivo
+  (`dismissSwaypUnknownGuide`: quién, cuándo y por qué; solo quien gestiona
+  envíos).
+- La ve la organización de la cuenta de Swayp (`SWAYP_INVENTORY_ORG_ID`, como
+  el stock); los pedidos sugeridos, solo de las tiendas que la persona ve.
+- Lo anterior a la 0282 no se recupera: el webhook no lo guardaba.
+
+Implementación: `lib/swayp-unknown-guides.ts` (`recordUnknownSwaypGuide`,
+`swaypGuideContact`), `processSwaypWebhook` en `lib/swayp-ingest.ts`,
+`lib/swayp-unknown-guides-access.ts` (`getSwaypUnknownGuides`),
+`components/swayp-unknown-guides.tsx` y `db/migrations/0282_swayp_unknown_guides.sql`.
+Pruebas: `test/swayp-unknown-guides.test.ts`.
+
 ### 11.3 Quién emite el número de guía al reprogramar
 
 Al reprogramar hacia Swayp desde Reproprovincia, el número de guía **lo emite
@@ -5053,7 +6632,9 @@ mandaron el 14-09-2026 no lleva `idWarehouse` en absoluto, y las guías de
 Arequipa salen sin él: **no es obligatorio para habilitar una ciudad**. El campo
 existe para no dejarle la elección a Swayp cuando el ubigeo no alcance; va junto
 al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES la
-bodega y separarlos dejaría dos sitios que pueden discrepar.
+bodega y separarlos dejaría dos sitios que pueden discrepar. En Lima el
+remitente no es donde se arma la caja: la arma nuestro almacén y Swayp la
+recoge en la oficina (decisión del owner, 03-11-2026, §9.1).
 
 **El RUC del remitente puede ir vacío.** El mismo `curl` lleva
 `"nitRemitente": ""`. Exigirlo era una regla nuestra, y era cara: `parseSenders`
@@ -5131,6 +6712,37 @@ puerta a «entregado»: «Confirma fecha» guarda un acuerdo, no un resultado. Y
 «Ya no lo quiere» no anula nada: cierra el caso para desarmar la caja, y la
 venta sigue hasta que Shopify la anule.
 
+**La puerta a «entregado» no escribe sobre una anulación de Shopify
+(15-10-2026).** La puerta única de las fuentes de reparto
+(`lib/master-door.ts`: cierre de ruta, Liquidaciones 1, Liquidaciones 2, el
+reporte de Urpi y la carga histórica del cuaderno) lee ella misma
+`orders.cancelled_at`. Si el pedido está anulado en Shopify, no escribe el
+`status_override` «entregado» y lo devuelve rechazado con el código
+`anulado_en_shopify`. Hasta ahora cada fuente lo comprobaba por su cuenta, y el
+cierre de ruta y Liquidaciones 1 no lo hacían. Como el override nuevo es
+posterior a la anulación, la tapaba (regla 0 del resolver). La auditoría del
+atraso de Lima (14-10-2026) encontró #KP137541: anulado en Shopify el 05/10 y
+entregado con foto en la ruta de Yhoni del 01/10, que seguía abierta.
+Terminarla lo habría pasado a entregado. Lo mismo vale para un pedido
+acompañante (§32 regla 12) anulado después de vincularlo: no sigue a su
+principal. Si la puerta no puede leer la anulación, no escribe nada: «no lo sé»
+no es «no está anulado».
+
+Nada se decide solo. El pedido sigue donde estaba (anulado; con la parada
+entregada, en «Por cerrar · Validación de cierre pendiente»), la parada y la
+línea de la liquidación se conservan, y quien cerró la ruta o aplicó la
+liquidación del courier (Liquidaciones 1) recibe un aviso que nombra cada
+pedido saltado; Liquidaciones 2 y Urpi ya los saltaban antes de la puerta y los
+cuentan con los anulados. Si la entrega vale, la cambia desde la ficha, con
+motivo, una persona con el permiso «Corregir pedidos cerrados»
+(`master.override_status`).
+El reporte de parada (/reparto) no pasa por esta puerta: escribe solo en la
+parada y no toca el estado del pedido.
+`MOM_RESOLUTION_VERSION` no cambia (`mom-v1.30`): el resolver es el mismo, lo
+que cambia es que la puerta no escribe. La Mesa de cierre no promete lo
+contrario: con la ruta abierta, a un pedido así le dice que terminarla no lo
+marca entregado (§29.13).
+
 ### 11.5 Lo que cierra una venta se confirma, y se avisa antes
 
 Tres salidas del cajón de Envíos terminan una venta. Las tres piden la misma
@@ -5158,7 +6770,8 @@ la asesora acaba de oír por teléfono.
 «Desarmar y cerrar sin llamada» (§9.5) cierran el caso y mandan a desarmar la
 caja. Piden lo mismo que el descarte: un motivo de `DISCARD_REASON_MIN`
 caracteres como mínimo y un segundo clic que nombra el pedido («Sí, desarmar y
-cerrar #KP138029»), con «No anula la venta: solo Shopify la anula.» al lado. El
+cerrar #KP138029»), con «No anula la venta: solo la tienda la anula.» al lado
+(«la tienda» desde el 24-10-2026, §38.12). El
 servidor vuelve a comparar el nombre del pedido. La hoja también avisa antes de
 cerrarse con una nota a medio escribir.
 
@@ -5241,6 +6854,33 @@ reparte los domingos (§11, «Horarios Swayp documentados»). Decisión del owne
 - El agente de voz ya no ofrecía domingos (§11.8) y el automático Aliclik →
   Swayp ya los saltaba (`nextAutoDelivery`, que además salta el sábado en
   Arequipa).
+
+**Con destino de Lima, la fecha es el lote del almacén (03-11-2026, decisiones
+del owner D1 y D3).** En Lima y Callao la caja de Swayp la arma nuestro almacén
+y Swayp la recoge en la oficina; el límite práctico es el corte del turno noche
+de la víspera, a las 21:20 (§9.1, «Swayp por salir · Lima»). En la **Guía Swayp
+directa**, solo cuando la operación del pedido es Lima (`operation` de la vista
+previa, de `order_master.macro_operation`, la misma con la que el almacén arma
+su lote; no la ciudad de cobertura, que pone «Huaral, Lima» en la clave `lima`
+de Swayp):
+
+- Bajo el selector, si la fecha elegida es el próximo día de despacho y ya
+  pasaron las 21:20 de su víspera: «Ya no hay turno de almacén hoy y Swayp la
+  toma en su sistema pasada la medianoche. Elige el siguiente día o avisa a
+  Almacén.». En ese caso la puerta propone el siguiente día de despacho
+  (`swaypSuggestedDispatchDay`): el martes a las 22:00 propone el jueves, no
+  el miércoles. Una fecha que la persona ya eligió no se pisa.
+- Al crear: «Entró al lote Swayp de Lima del miércoles 4 nov. Almacén lo ve en
+  «Swayp por salir».». Después de las 17:00 de la víspera añade «El almacén ya
+  está cerrando ese lote: la verá como agregada tarde.» (aviso suave); después
+  de las 21:20, el aviso fuerte de arriba.
+- La hora se lee en el navegador al cargar el pedido, al elegir la fecha y al
+  confirmar; nunca al pintar. Nada bloquea: la fecha sigue siendo válida y el
+  botón no cambia. Provincia no cambia: la misma propuesta (el primer día de
+  despacho) y ningún aviso.
+- Las otras puertas de esta lista (Cliente confirma, guía a mano, excepción de
+  la anulada) y la fecha de Swayp de Repro Lima todavía no lo dicen (§9.1,
+  lagunas).
 
 ### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
 
@@ -6383,7 +8023,7 @@ implica confirmación» (§6.1), como la del §11.9.
 - **Registro**: Master de Pedidos → Por confirmar → «Swayp desde Por confirmar»
   (`/dashboard/pedidos/swayp-desde-confirmar`). Cada envío con su guía, el
   estado y la novedad de Swayp, el resultado (en camino, entregado, volvió a Por
-  confirmar, salió por otra vía, anulado en Shopify), el motivo y la salida que
+  confirmar, salió por otra vía, anulado en la tienda), el motivo y la salida que
   vino después. Arriba, enviados, entregados y la tasa de entrega sobre los ya
   resueltos.
 
@@ -6560,7 +8200,11 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
   días al 13-10, segundos después de consultarla, con el paquete todavía en la
   agencia. Si la clienta la perdía y la pedía días después, «pedido cerrado» la
   bloqueaba, y la salida era devolver el pedido a «pendiente» a mano (motivo
-  «dar clave»). Ahora «entregado» solo cierra la clave si lo **validado** no
+  «dar clave»). Desde el 15-10-2026 ni ese marcado ni esa vuelta atrás los hace
+  una vendedora o asesora que dicta la clave: el estado a mano es de owner y
+  admin (§16), y el pedido sigue al rastreo de Shalom.
+
+  Desde el 13-10-2026, «entregado» solo cierra la clave si lo **validado** no
   cubre el total (o el checkout no lo cobró): con el dinero confirmado no hay
   nada que proteger. **Anulado y devuelto siguen cerrándola** siempre.
 - La clave pertenece a la salida Shalom: se registra, consulta y entrega desde
@@ -6668,6 +8312,12 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
         no recibe el aviso de llegada. Ya tiene su clave, y el mensaje de la
         clave le dijo «cuando llegue, preséntala con tu DNI». Un «ya llegó» para
         pagados necesitaría su propia plantilla, sin saldo ni botones de cobro.
+      - **En Olva esa consecuencia no se asume** (0281, 25-10-2026): Olva no
+        tiene clave, así que la clienta que pagó entero no se enteraba de que su
+        paquete llegó. Ahí la llegada de quien ya no debe nada sale con su
+        propia plantilla en vez de omitirse (ver «El aviso de llegada para
+        pagados» en Olva, abajo). **Shalom no cambia**: a quien ya pagó no le
+        sale el aviso de llegada, porque tiene su clave.
       - **Pagado en el checkout es «ya no debe nada»** (09-10-2026, decisión
         del owner), tenga o no comprobantes. El saldo se calculaba solo con los
         Yape validados y un pedido cobrado por la pasarela no tiene ninguno:
@@ -6762,11 +8412,14 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
       que la prueba de carritos (0233): el espejo `shopify_product_images`,
       por `product_id` y, si no, por título contra `catalog_title`; en un
       pedido de varios productos, **el primero que tenga foto**. Va servida en
-      JPG por `/api/wa-image`, porque Meta no acepta WebP. Sin foto, la
+      JPG por `/api/wa-image`, porque Meta no acepta WebP; desde el cierre de
+      Shopify, solo la foto con su copia guardada en Kapta (§39). Sin foto, la
       **imagen de respaldo** de la tienda (Ajustes, una para los dos
       couriers, `https://`). **Sin ninguna de las dos no se manda** y la fila
       queda `skipped` con el motivo: Meta rechaza una plantilla de cabecera de
-      imagen sin imagen. La URL que viajó queda en la fila
+      imagen sin imagen. Un catálogo que **no se pudo leer** (la base, o
+      Storage: §39.5) no es «sin foto»: con respaldo sale con él; sin
+      respaldo la fila **se reintenta** (revisión del 23-10-2026). La URL que viajó queda en la fila
       (`header_image_url`). No lleva el ticket de Shalom en la cabecera —es
       una sola—, pero el ticket **sí sale al pulsar cualquier botón**, como
       con los otros avisos.
@@ -7430,7 +9083,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   operación ya hacía a mano pegando el número en `tracking.olvaexpress.pe`.
   La apikey es de Olva y la pueden rotar sin aviso: vive en el entorno
   (`OLVA_TRACKING_APIKEY`) y, cuando falle, **el cron reporta y no toca
-  estados**; el marcado a mano sigue siendo el camino de respaldo.
+  estados**; el marcado a mano sigue siendo el camino de respaldo, y desde el
+  15-10-2026 lo hace un admin (§16).
 - **Manda el estado que Olva declara vigente** (`nombre_estado_tracking`), no el
   hito «más avanzado» como en Shalom. Se comprobó en un envío real: asignado a
   un operador el 09/09, confirmado en tienda el 10/09 y asignado de nuevo el
@@ -7483,6 +9137,110 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   nacimiento y `vence` a 6 días. La llegada sale de `agency_arrived_at`, que el
   rastreo de Olva sí escribe, si no hay antes un `courier_status` de esa guía.
   Lo encola `olva-reconcile` antes de drenar la cola.
+
+#### El aviso de llegada para pagados de Olva (migración 0281, decidido el 25-10-2026)
+
+- **El hueco.** El aviso de llegada es de cobro y no sale a quien ya no debe
+  nada («ya pagó todo» / «pagado en el checkout», arriba en Shalom). En Shalom
+  se sostiene porque la clienta tiene su clave; **Olva no tiene clave**
+  (`lib/pickup-key.ts`), así que la clienta de Olva que pagó completo nunca se
+  enteraba de que su paquete llegó, y Olva lo devuelve a los 6 días. Casos:
+  #KP141593, #KP142910, #KP140003. Del 17-09 al 25-10-2026, 8 llegadas de Olva
+  quedaron omitidas por eso.
+- **La decisión (owner).** Cuando el rastreo pone la guía de Olva en
+  `disponible_para_recojo` y la clienta **no debe saldo**, en vez de omitir se
+  manda «ya llegó, recógelo con tu DNI», **sin importes, sin botones y sin
+  texto de cobro**, con su **propia plantilla**.
+- **Es la misma fila, no otro aviso.** Viaja en la fila `disponible` de esa
+  guía: al enviar, con el saldo delante, se elige la plantilla de cobro o la
+  de pagados. La unique `(shipment_id, kind)` sigue dando **un solo aviso de
+  llegada por guía**. Consecuencia buscada: si la clienta recibió el de cobro y
+  **paga después**, no se le manda nada más.
+- **Cuándo toca** (`olvaPaidArrivalApplies`): aviso de llegada, courier Olva,
+  pedido abierto (no anulado, entregado ni devuelto) y sin nada que cobrar
+  (`isWebPrepaid`, o el saldo validado en 0). Quien debe algo recibe el de
+  cobro como siempre. El de tránsito y el recordatorio no cambian.
+- **Configuración.** Ajustes → «Avisos de guía Olva» → «Aviso de llegada ·
+  pedido ya pagado»: interruptor, nombre de plantilla (por omisión
+  `guias_olva_llegada_pagado`) y orden de variables (por omisión
+  `nombre,producto,agencia,guia,vence`). **Nace apagado.** Es independiente del
+  de cobro: puede estar encendido con el de cobro apagado. Comparte número,
+  idioma, horario, tope (0194) y cuentas con los demás. **No admite variables
+  de dinero** (`total`, `adelanto`, `saldo`, `yape`): la config se rechaza con
+  el motivo, porque un «saldo S/ 0.00» a quien pagó es justo lo que no hay que
+  hacer. Sin la 0281 aplicada, Ajustes no enseña el bloque.
+- **Apagado o sin configurar, se omite como antes**, con el motivo completo en
+  la fila: «ya pagó todo: no hay saldo que cobrar · no salió «ya llegó» para
+  pagados: aviso de llegada para pagados de Olva apagado en la tienda (Ajustes →
+  Avisos de guía Olva)».
+- **Las variables** son las de las plantillas que ya existen, sin las de cobro:
+  `nombre` (el primer nombre), `producto` («1× Zapatilla Runner (39-40)»),
+  `agencia` (la oficina de Olva que apuntó el rastreo), `guia` (el tracking
+  «2552504-26», lo que dice en el mostrador) y `vence`. **Aquí sí va la fecha
+  límite**, a diferencia del de llegada con cobro: allí se quitó porque 28 días
+  de Shalom invitan a dejarlo para después; en Olva son 6, y sin la fecha la
+  clienta que ya pagó no tiene ninguna razón para ir pronto. Se calcula desde
+  `agency_arrived_at` de la guía —la misma de la que sale `agency_expires_at`—
+  para que el mensaje y el Master digan la misma fecha.
+- **Cuerpo sugerido** para crear en Kapso / Meta (categoría utilidad, español,
+  sin cabecera ni botones; cinco variables en este orden):
+
+  ```
+  Hola {{1}} 👋 Tu pedido ya llegó a la oficina de Olva y está listo para recoger 📦
+
+  🛍️ Pedido: {{2}}
+  📍 Oficina: {{3}}
+  🔢 Tracking Olva: {{4}}
+
+  ✅ Tu pedido ya está pagado: no tienes nada que pagar. Acércate con tu DNI y da el número de tracking.
+  ⏰ Olva lo guarda hasta el {{5}}; después lo devuelve.
+  ```
+
+  Si Meta lo aprueba con otro orden, se cambia el «Orden de las variables» en
+  Ajustes; no hace falta tocar código.
+- **Línea de tiempo.** Al salir queda «📤 Aviso de llegada a la agencia (pedido
+  pagado, sin cobro): plantilla «…» enviada», junto al `courier_status` que lo
+  disparó.
+
+#### El plazo de la agencia en el Master: «Pagado sin aviso» (decidido el 25-10-2026)
+
+- **Para qué.** Aunque salga el aviso de pagados, mientras su plantilla no esté
+  aprobada —o si el envío falla— alguien tiene que ver a tiempo al pedido que
+  ya pagó, está en la agencia con el plazo corriendo y no recibió ningún aviso
+  de llegada. Vale para Olva y para Shalom cuando el rastreo dejó la fecha de
+  vencimiento (`agency_expires_at`).
+- **No es un estado nuevo.** Lee lo que el Master ya tiene: el sub-estado de
+  recojo, `agency_expires_at` y `payment_state = pago_completo` (que ya cuenta
+  lo pagado en el checkout).
+- **La chapa en la fila**, bajo la subetapa y antes de «Comprobante por
+  validar», cuando el paquete **sigue esperando en la agencia** y el plazo vence
+  en **2 días o menos** (el mismo margen que la píldora «Próximos a vencer») o
+  ya venció: «Vence hoy» / «Vence mañana» / «Vence pronto» en `warn`, «Plazo
+  vencido» en `crit`; y, si además es «Pagado sin aviso», **«Pagado sin aviso ·
+  vence …»** en `crit`. El título dice la fecha límite y, para pagados, «avísale
+  que lo recoja con su DNI». Se apaga sola al recogerse, entregarse o
+  devolverse.
+- **«Pagado sin aviso»**, filtro rápido con su cifra en la línea de
+  excepciones, junto a «Próximos a vencer» (es un subconjunto). Cuenta los
+  pedidos que: están en `disponible_para_recojo`, `pendiente_de_recojo` o
+  `proximo_a_vencer` (no `cliente_notificado`: ahí el courier ya dice que avisó);
+  vencen en 2 días o menos, o ya vencieron; están pagados; y **no tienen
+  enviado** ningún aviso de llegada de la cola (`disponible`, sea el de cobro o
+  el de pagados, ni recordatorio de recojo). Un aviso omitido o fallido no
+  cuenta como aviso; el de tránsito tampoco (dice que va en camino). En la URL
+  es `pa=1`; se combina con la pestaña y los demás filtros, las pestañas cuentan
+  lo que trae, y el Excel lo respeta.
+- **Sin N+1.** Como «Comprobante por validar»: **dos lecturas por carga** —los
+  candidatos de `order_master` (unas pocas filas: medido el 25-10-2026, 4) y,
+  solo de ésos, sus avisos enviados—, a la par de los conteos. Con el resultado
+  se decoran las 100 filas de la página, se cuenta la píldora y se resuelve el
+  filtro. Si la lectura falla, la píldora no se pinta (no se afirma un cero) y
+  el filtro no trae ningún pedido, nunca todos.
+- **Lo que no cubre.** Un aviso dado a mano por WhatsApp fuera de la cola no
+  se ve: el pedido seguirá saliendo hasta que se recoja o el courier diga
+  «notificado». Y la mayoría de las guías de Shalom no tienen
+  `agency_expires_at` (Shalom no escribe la llegada): sin esa fecha no hay
+  plazo que vigilar.
 
 #### Cotejar Olva: el tracking sale del portal de clientes (migración 0218, decidido el 02-10-2026)
 
@@ -7655,6 +9413,41 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - El panel de cobro colapsa a una constancia: ni pide comprobante ni enseña
     saldo por cargar. Lo que sí sigue haciendo falta en Agencia —DNI y agencia de
     Shalom— no es cobro: son datos de entrega.
+  - **«DNI y agencia Shalom» también en el pedido pagado (owner, 26-10-2026,
+    #KP200104).** El DNI (o RUC/CE) y la agencia de destino se pueden
+    pre-guardar en **cualquier** pedido —pagado o no— **sin generar la guía ni
+    el rótulo**. En un pedido con saldo es el paso 1 de «Registrar un pago»
+    («Prepara el destino…»); en uno pagado por web ese formulario no existe, y
+    el bloque se perdía con él: la única forma de escribirlos era «Abrir
+    Shalom», que los pide y crea la guía en el mismo acto. Ahora la tarjeta
+    «Cobro» del pedido pagado lleva el mismo bloque, sin la parte de cobro:
+    - Es **el mismo borrador** (`shalom_order_drafts`, 0073), el mismo
+      componente y el mismo validador de documento que la guía
+      (`documentError`); se guarda solo al decidirse (salir del documento,
+      elegir o quitar la agencia) y su chapa dice en qué quedó (Opcional ·
+      Guardando… · Guardado · Sin guardar · Ya en la guía).
+    - Se ofrece donde Shalom puede ser el destino: salida Shalom o agencia,
+      operación Agencia, o el plan de rutas ofrece Shalom (Provincia COD
+      incluido, como #KP200104). En Lima no aparece
+      (`offersShalomDestination`, `lib/order-payment-panel.ts`).
+    - Permiso: el del borrador, `master.edit` (ver «Ver no es tocar»), no el de
+      registrar pagos: aquí no se registra ninguno.
+  - **Si el pedido ya va por Olva, no se pide (owner, 01-11-2026, #KP143233).**
+    Con una guía viva de Olva y ninguna de Shalom, el paso 1 de «Registrar un
+    pago» dice «Va por Olva» con su guía, sin campos, y el bloque del pedido
+    pagado no aparece: pedir DNI y agencia de Shalom a un pedido que ya tiene
+    su courier de agencia era pedir un dato que no se va a usar. Una guía de
+    Olva anulada o devuelta no cuenta: el destino se vuelve a poder preparar.
+    - Con la guía Shalom viva el bloque es de solo lectura, igual que en el
+      paso 1: el destinatario y el destino ya viajan en el rótulo.
+    - «Abrir Shalom» / crear la guía trae puestos el documento y la agencia
+      guardados, como ya hacía con los apuntados al registrar un pago.
+    - El borrador no guarda el nombre del destinatario (no hay columna): el
+      modal de la guía lo sigue tomando del pedido, editable allí.
+    - En un pedido pagado por web, guardar el borrador no confirma el pedido
+      por sí solo: la confirmación expresa de Agencia exige un pago Yape que
+      comprometa, y no se cambió.
+    `test/shalom-destino-prepago.test.ts`.
   - **La clave de recojo se entrega sin comprobantes.** Exigirlos a quien pagó
     con tarjeta la bloqueaba para siempre: no existe un Yape que cargar, así que
     «falta el adelanto» era cierto de forma permanente y el paquete se quedaba en
@@ -7861,6 +9654,25 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   aunque cubra** — un duplicado no es dinero nuevo. Lo mismo vale para el
   indicador de estado: si lo validado cubre el total, es `pago_completo`, y de
   ahí cuelgan la subetapa y el monto que se manda al courier.
+- **Monto obligatorio para validar (28-10-2026, KP200188).** Se había aprobado
+  manualmente un adelanto con operación pero sin importe: ni la foto ni su lectura
+  aportaban monto, y el Master sumaba S/ 0.00. Una validación exige un importe
+  finito mayor que cero; operación y cuenta receptora no sustituyen ese dato.
+  La misma guarda rige en validatePayment, su núcleo compartido con Flow/estado
+  de cuenta y los botones del Master y Validar pagos. El UPDATE condiciona el
+  monto leído para no firmar un pago cuyo importe cambió entretanto. Completar
+  una operación no saca de información incompleta si todavía falta el monto.
+  Completar solo el monto conserva la operación y fecha ya registradas.
+  La excepción administrativa de receptor tampoco dispensa del importe.
+- La migración 0287 protege cualquier INSERT/UPDATE validado con una restricción
+  NOT VALID: no inventa importes ni reescribe pagos históricos al instalarse.
+  Un registro antiguo validado sin monto se muestra «Validado sin monto»;
+  quien tiene payments.validate puede enviarlo a Observados con motivo y el
+  historial normal, después pedir la constancia legible y completar el dato.
+  Cambiar el importe de un pago ya validado exige enviarlo primero a Observados
+  y volver a validarlo; completar datos no firma un monto nuevo por sí solo.
+  Nunca se completa usando el total del pedido o el mínimo del adelanto.
+  Los historiales de validación previa se conservan; no hay reclasificación masiva.
 - Si el pago es menor al requerido, la clave permanece bloqueada y se alerta al
   asesor.
 - Solo Frankz ejecuta reembolsos.
@@ -7938,6 +9750,179 @@ Couriers que cobran y luego liquidan: Aliclik, Swayp, Axel y Urpi.
   cobro, Kapta aún no registra entrega» indica que primero debe aplicarse o
   validar el resultado operativo; no implica automáticamente fraude ni cierre.
 - El costo faltante bloquea el cierre.
+- **Falta no es cero (15-10-2026).** La auditoría del atraso de Lima
+  (14-10-2026) encontró que el Master guardaba S/ 0 cuando a un concepto del
+  envío le faltaba tarifa, y «Conciliar liquidación» solo bloqueaba un costo
+  vacío: 4.586 de los 4.629 pedidos de Lima en «Pendiente de liquidación»
+  tenían el flete en S/ 0, casi todos sin courier registrado o de Grupo GF,
+  «por definir» o Urpi, que no tienen ninguna tarifa en Costos › Costos
+  logísticos (`cost_tariffs`). Conciliarlos los habría cerrado con flete cero.
+  Desde entonces:
+  - Si a algún concepto (primer intento, intento adicional, envío por agencia,
+    devolución) le falta tarifa, `order_master.logistics_cost` queda **vacío**,
+    no en S/ 0 (`masterLogisticsCost`, `lib/order-master.ts`), y la ficha
+    enseña «—».
+  - Un cero legítimo sigue siendo cero: una tarifa configurada en S/ 0, el
+    precio real que cotizó el courier, o el pedido acompañante que viaja en la
+    caja del principal (§32).
+  - «Conciliar liquidación» recalcula el pedido al guardar, con las tarifas
+    leídas en ese momento. Si falta alguna, se niega y dice qué concepto falta,
+    de qué courier y distrito, y dónde se carga: en Costos › Costos logísticos
+    con el código de ese courier o, para Grupo GF, en Grupo GF Courier ›
+    Tarifario (desde v1.31, abajo).
+  - **Con qué courier se busca la tarifa (16-10-2026).** Con el courier
+    vigente. Si el pedido está **entregado** y el vigente está vacío o es «por
+    definir», con el de la entrega, en el mismo orden que el plazo de
+    «Liquidación vencida» (§17.1; `costCourier` y `deliveryCourier`,
+    `lib/delivery-courier.ts`): el courier de la entrega; el vigente o el
+    último, saltando «por definir»; y «Salió con» (§9.3): solo motorizados de
+    Grupo GF es «propio», un único courier es ese, varios distintos no dicen
+    quién entregó. El courier guardado en la fila no cambia, y un pedido que no
+    se entregó no infiere nada: un anulado con una salida cancelada no tuvo
+    primer intento de nadie. Antes la entrega del cuaderno de Grupo GF, que no
+    tiene salida, se calculaba con courier vacío, y ni una tarifa de «propio»
+    le habría llegado. Medido el 16-10-2026 sobre los 4.247 pedidos en
+    «Pendiente de liquidación» con el courier vacío (3.486) o «por definir»
+    (761): 1.868 son entregas de Grupo GF del cuaderno, 323 de Urpi y 2.056 sin
+    courier conocido. Ese día seguían todos bloqueados, porque ni «propio» ni
+    Urpi tenían tarifa; la de «propio» sale desde v1.31 del Tarifario de Grupo
+    GF (abajo). Lo que cambia es que el aviso
+    se puede seguir y que la tarifa, cuando exista, les llega.
+  - **«Por definir» no es un courier.** El aviso nunca pide una tarifa para
+    «por_definir» ni lo nombra como courier: una tarifa así se aplicaría a todas
+    las cajas sin courier decidido. Dice que la salida sigue «Por definir» y que
+    no se sabe quién la entregó; si fue Urpi, que se pase en Urpi › Resultados
+    («Pasar a salida de Urpi entregada», §30.11). Para el resto —la mayoría,
+    entregas de Grupo GF cargadas desde las hojas de liquidación— Kapta no tiene
+    ese paso, y el aviso lo dice.
+  - **Sin courier conocido**, el aviso lo dice y no pide tarifa: una tarifa sin
+    courier se aplicaría a todos los couriers sin tarifa propia (Grupo GF,
+    Urpi, los distritos de Aliclik sin tarifa), con ese flete y sin avisar.
+    **Pendiente del owner:** cómo se registra quién entregó un pedido sin salida
+    ni «Salió con», y con qué courier se liquida una caja «por definir» que no
+    entregó Urpi.
+  - **La tarifa tiene que regir el día del pedido (16-10-2026).** El costo se
+    calcula con la tarifa vigente el día al que se imputa (`costDay`: el último
+    movimiento del pedido, o su creación si no lo hay), no con la de hoy. Costos
+    › Costos logísticos propone «desde» = hoy, y una tarifa cargada así no le
+    llega a un pedido entregado antes: quien seguía el aviso volvía a conciliar y
+    recibía el mismo rechazo sin saber por qué. Ningún pedido de Lima en
+    «Pendiente de liquidación» se había movido desde el día anterior (mediana
+    del último movimiento: 11-07-2026 sin courier, 02-10-2026 de Grupo GF). El
+    aviso nombra el día («vigente desde el DD-MM-AAAA o antes») y advierte que
+    una tarifa que empiece después de ese día no le llega. Ojo: registrar una tarifa con una fecha
+    anterior a otra abierta del mismo ámbito y concepto la **reemplaza**
+    (`upsertTariff` borra la que empezaría después); antes de cargarla se mira
+    qué rige ya para ese courier y distrito. Grupo GF también, desde v1.31,
+    con su Tarifario (abajo).
+  - Cargar una tarifa exige `costs.manage` (administración); conciliar,
+    `closure.finance` (liquidaciones). A quien concilia sin `costs.manage` el
+    aviso le dice que se la pida a quien administra Costos, y la Mesa no le
+    enseña el enlace a Costos, que lo dejaría en «Sección de administradores».
+    Con Grupo GF es lo mismo con su Tarifario y `logistics.manage` (v1.31).
+  - La Mesa de cierre lo avisa antes del clic y deja guardar igual: cargar una
+    tarifa no recalcula los pedidos, y quien acaba de cargarla tiene que poder
+    conciliar sin esperar.
+  - `MOM_RESOLUTION_VERSION` no cambia (`mom-v1.30`): una fila guardada antes
+    con S/ 0 cambia en su próximo recálculo. Hasta entonces la Mesa no avisa
+    antes del clic, pero la conciliación igual se niega, porque decide con el
+    costo recalculado.
+  - **Grupo GF cobra lo de su Tarifario (v1.31, decisión del owner del
+    19-10-2026).** Desde el 21-10-2026 el costo logístico de un pedido cuyo
+    courier del costo es «propio» (`costCourier`: todos los motorizados de
+    Grupo GF, Alexis, Roy, Yhoni, Duglas y Yukio) sale del Tarifario de Grupo
+    GF (`logistics_district_tariffs`, Grupo GF Courier › Tarifario, §29.8), no
+    de Costos › Costos logísticos, que para «propio» ya no se mira: el mismo
+    precio en dos tablas acabaría distinto en una (`resolveGfCostTariff`,
+    `lib/gf-tariff.ts`).
+    - **Qué tarifa.** La del distrito del pedido, resuelto con el catálogo
+      canónico y sus alias, igual que la Mesa de ruta y el pago de motorizados
+      (`riderPayDistrictKey`: Surco → Santiago de Surco; Chosica y Lurigancho
+      Chosica → Lurigancho), activa y vigente el día del costo (abajo).
+      Gana la del contrato de la tienda (`logistics_service_agreements` activo
+      ese día) y, si no hay, la general, con la regla de la Mesa de ruta
+      (`resolveDistrictTariff`). A diferencia de la Mesa de ruta no exige
+      contrato ni mira pausas: el envío ya se hizo.
+    - **El día es el del último movimiento, como con cualquier courier.** El
+      día del costo de Grupo GF es el de los demás (`costDay`, arriba: la
+      regla del 16-10-2026, sin cambio), y la tarifa tiene que regir ese día.
+      La Mesa (`logisticsCostFactsFromRow`) y el servidor usan el mismo día.
+      El relleno de la caja «por definir» de la 0270 (§30.8) —su `UPDATE` y su
+      evento— mueve el último movimiento de esos pedidos al día en que se
+      aplica, así que toman la tarifa del Tarifario vigente ese día.
+    - **Primer intento:** el importe del distrito. **Intento adicional:** el
+      mismo importe por cada intento adicional de sus propias salidas: solo
+      cuentan los que reportan las salidas de «propio», no los de una guía
+      anterior de Aliclik, Swayp u otro courier, que no son visitas de Grupo GF
+      y cobrarlos a su tarifa inventaría un flete. Hoy esas salidas no reportan
+      intentos —las visitas de Grupo GF viven en las paradas del motorizado, la
+      columna de intentos de §9.3, que no entra al costo—, así que el costo de
+      Grupo GF es el del primer intento. **Pendiente del owner:** si cada
+      visita adicional «no entregada» (no estaba, no contesta) también se
+      cobra, o solo la entrega y el rechazo, que es lo único que se le paga al
+      motorizado (§29.10).
+    - **Sin devolución aparte.** Grupo GF no cobra la devolución: el rechazo ya
+      paga la tarifa del distrito (§29.8), así que un pedido devuelto de
+      «propio» no suma la línea «Devolución». El envío por agencia no es
+      reparto por distrito y sigue en Costos › Costos logísticos.
+    - **Sin tarifa, vacío.** Un distrito que no se reconoce, uno sin tarifa
+      vigente o un día del costo anterior a su vigencia dejan el costo vacío y
+      bloquean la conciliación; nunca S/ 0. El aviso manda a Grupo GF Courier ›
+      Tarifario y nombra el permiso que lo edita («Administrar Grupo GF»,
+      `logistics.manage`); a quien no lo tiene le dice a quién pedírsela, y la
+      Mesa solo le enseña «Abrir Tarifario» a quien lo tiene. Un distrito que no
+      se reconoce se corrige en el pedido: el Tarifario no crea distritos.
+    - **Un último movimiento anterior al 31-08-2026 sigue «falta tarifa».** El
+      Tarifario rige desde el 31-08-2026: sus 44 tarifas son generales y
+      empiezan ese día (medido el 20-10-2026). Si el día del costo —el último
+      movimiento del pedido— es anterior a la tarifa del distrito, el aviso
+      nombra ese día y la fecha que tiene el Tarifario («la de ese distrito
+      rige desde el DD-MM-AAAA») y no manda a cargarla: el Tarifario solo abre
+      vigencias después de la que rige (`saveDistrictTariff`), así que una
+      tarifa para días anteriores no se carga desde la pantalla. Kapta no
+      extiende la vigencia en código: lo decide el owner. Esos pedidos siguen
+      «falta tarifa» y no se concilian mientras su último movimiento siga
+      antes del 31-08-2026. Pero cualquier movimiento posterior del pedido
+      —«Observar liquidación», un comentario, el relleno de la 0270— es su
+      nuevo último movimiento y lleva el día del costo a ese día: el pedido
+      toma la tarifa vigente entonces y el siguiente «Conciliar liquidación»
+      pasa. Lo que cuenta es el último movimiento, no el día de la entrega: un
+      pedido entregado en agosto que se movió después toma la tarifa del día
+      de ese movimiento, como los ~575 que rellena la 0270 (§30.8). Medido el
+      22-10-2026 en Lima, «Pendiente de liquidación»: de los 2.833 pedidos de
+      Grupo GF, 1.044 se movieron por última vez del 31-08-2026 en adelante y
+      toman la tarifa de su distrito; 1.789 son anteriores y siguen «falta
+      tarifa» mientras no se muevan. Ninguno se podía conciliar antes de este
+      cambio: Costos › Costos logísticos no tiene ninguna tarifa de «propio» y
+      los 2.833 mostraban S/ 0. **Pendiente del owner:** qué vigencia toca a
+      los pedidos de Grupo GF cuyo último movimiento es anterior al
+      31-08-2026. Y si está bien que un movimiento posterior (observar la
+      liquidación, un comentario) les dé la tarifa vigente ese día, o el
+      bloqueo tiene que aguantar hasta que lo decida.
+    - **Si el Tarifario no se pudo leer** (un error de la base al recalcular),
+      el costo queda vacío y el aviso dice eso («No se pudo leer Grupo GF
+      Courier › Tarifario…», y que se vuelva a conciliar en un momento): ni
+      manda a activar Grupo GF ni a cargar una tarifa que quizá ya existe
+      (`sin_lectura`).
+    - La Mesa de cierre lo dice antes del clic con lo mismo que lee el servidor:
+      la ficha resuelve la tarifa de ese pedido (`gfCostTariffGap`) solo cuando
+      la Mesa va a avisar de una que falta. Si la encuentra, es la fila la que
+      está vieja (todavía no se recalculó, o la tarifa se cargó después): la
+      Mesa dice que el Tarifario ya la tiene y que «Conciliar liquidación» la
+      calcula al guardar, sin enseñar «Abrir Tarifario» (`vigente`); cargar
+      otra abriría una versión nueva sin necesidad.
+    - El Master lee el Tarifario una vez por recálculo y lo recuerda cinco
+      minutos por instancia, como `cost_tariffs` (`fetchTariffs`); una lectura
+      que falló no se recuerda, y el siguiente recálculo vuelve a leerlo.
+      «Conciliar liquidación» lo vuelve a leer.
+    - `MOM_RESOLUTION_VERSION` sube a `mom-v1.31` para que el cron recalcule
+      `logistics_cost` con la nueva fuente: los S/ 0 que quedaran de antes de
+      «Falta no es cero» pasan a la tarifa o a vacío. Pruebas:
+      `test/gf-tariff-resolve.test.ts`, `test/gf-tariff-master.test.ts` y
+      `test/gf-tariff-mom.test.ts`.
+  - **Pendiente del owner:** Validar pagos y el estado de cuenta de Yape
+    (§16.1, §16.2) cierran la liquidación al validar el cobro sin mirar el
+    costo logístico; esta regla todavía no les aplica.
 - **Sin courier no hay liquidación (v1.25, §6.5).** Un pedido entregado (no
   Agencia) sin ninguna salida ni parada de motorizado, pagado completo a la tienda y sin
   reembolso, no espera `liquidation_closed`: no hay cobro que rendir ni costo
@@ -7990,6 +9975,17 @@ registra en cada evento.
   **Equipo** (a un admin también se le puede quitar ahí). Sin el permiso el
   botón no aparece y las rutas (`/api/export`, `/api/export/pedidos`)
   responden 403 sin leer la base.
+- Anular en WooCommerce un pedido de WooCommerce desde la ficha (26-10-2026,
+  §38.15): permiso propio **«Anular pedidos de WooCommerce»**
+  (`orders.cancel_woo`), con motivo obligatorio. Shopify se sigue anulando en
+  Shopify. Decisión del owner (26-10-2026): viene con **owner y admin** por su
+  acceso —ya anulaban con «Registrar estado a mano», nadie pierde la
+  capacidad— y el owner se lo concede a la asesora que quiera con su casilla en
+  **Equipo** (es de los que da solo él, `ownerOnly`; a un admin también se le
+  puede quitar ahí). Así anula sin recibir wp-admin ni «Registrar estado a
+  mano». Ningún rol por función lo trae (lo fija una prueba). Las reglas que
+  impiden anular (§38.15, `wooCancelBlocks`) son las mismas para todos. Sin
+  migración: `user_permissions.permission` es texto libre.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
@@ -7999,8 +9995,8 @@ registra en cada evento.
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
   datos —«Validar pagos», «Corregir pagos», «Alerta de comprobante repetido»,
-  «Administrar Grupo GF» (tarifas y pago de motorizados), «Exportar datos» y
-  «Boletas y facturas» (§35.7)— solo los da o los quita el owner, también a sí
+  «Administrar Grupo GF» (tarifas y pago de motorizados), «Exportar datos»,
+  «Boletas y facturas» (§35.7) y «Anular pedidos de WooCommerce» (§38.15)— solo los da o los quita el owner, también a sí
   mismo; un admin sigue concediendo lo operativo («Reportar entregas de
   rutas»). Las casillas que no puede tocar le salen apagadas, con el motivo al
   pasar el ratón, y el servidor lo rechaza igual (`lib/team.ts`,
@@ -8018,12 +10014,12 @@ registra en cada evento.
 
   | Rol | Qué trae |
   | --- | --- |
-  | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en Shopify, responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
+  | Asesora | Gestionar pedidos, subir comprobantes, ver la clave de recojo (con el cobro completo, o con la excepción por descuento, §12), crear guías de Aliclik, Tanders y Shalom, crear pedidos en la tienda (Shopify o WooCommerce según `stores.platform`, §38.12), responder novedades de Swayp, escribir a clientas con devolución, reprogramar entregas en Lima (§9.5), recibir devoluciones |
   | Almacén | Gestionar pedidos, preparar paquetes, recibir devoluciones, reingresar al inventario |
-  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, reprogramar entregas en Lima (§9.5), armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
+  | Despacho y Grupo GF | Gestionar pedidos, despachar, entregar la caja al motorizado, armar rutas, reportar entregas por un motorizado, subir reportes de couriers, manejar stock de Swayp y Fénix, preparar paquetes, crear guías, recibir devoluciones |
   | Liquidaciones | Gestionar pedidos, subir y cerrar liquidaciones de motorizados, cuadrar hojas de couriers, conciliar el dinero del pedido |
   | Cobranza | Gestionar pedidos, subir comprobantes, ver y registrar claves de recojo, aprobar cobros de Tanders rechazados |
-  | Supervisión | Gestionar pedidos, corregir pedidos cerrados, cerrar o reabrir pedidos, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio |
+  | Supervisión | Gestionar pedidos, registrar la devolución de pedidos cerrados, cerrar o reabrir el expediente de cierre, anular guías de Aliclik, recibir devoluciones, reingresar al inventario, ver reportes del negocio (el estado a mano, no: es de admin) |
   | Administración | Gestionar pedidos, gestionar el equipo, administrar tiendas, editar costos, manejar stock, editar el catálogo de Aliclik, asignar producto a anuncios, configurar hojas de couriers, dar de alta motorizados, subir reportes de couriers, ver reportes del negocio |
 
   Reglas:
@@ -8032,9 +10028,13 @@ registra en cada evento.
     lo tienen todo: un rol no les suma nada.
   - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
     (validar y corregir pagos, alerta de comprobante repetido, Administrar
-    Grupo GF, exportar datos, boletas y facturas), ni confirmar reembolsos. Lo
+    Grupo GF, exportar datos, boletas y facturas, anular pedidos de
+    WooCommerce), ni confirmar reembolsos. Lo
     fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
+  - «Gestionar pedidos» ya **no** incluye cambiar el estado a mano
+    (15-10-2026, abajo): eso es «Registrar estado a mano»
+    (`master.set_status`), de owner y admin, y ningún rol lo trae.
   - Solo el dueño asigna o quita roles. Equipo muestra, para cada persona, lo
     que puede hacer hoy y de dónde le viene (ver «Glosario de Equipo»).
   - Lo que el código decidía con «¿es owner o admin?» ahora pide un permiso:
@@ -8048,7 +10048,8 @@ registra en cada evento.
     la misma regla: armar rutas ← Despacho, cerrar liquidaciones ←
     Liquidaciones, costos ← Administración.
 
-  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes. Antes de
+  Mientras nadie tenga roles, todos ven y pueden lo mismo que antes, salvo el
+  estado a mano, que desde el 15-10-2026 es solo de owner y admin. Antes de
   bajar a alguien de admin a vendedora hay que darle acceso explícito a sus
   tiendas (`user_store_access`): owner y admin ven todas las tiendas de la
   organización sin esa lista.
@@ -8087,7 +10088,9 @@ registra en cada evento.
     «Tu rol no permite gestionar envíos.» y el panel queda bloqueado. Soltar
     la reserva no lleva puerta porque solo suelta la propia.
   - **Datos de Shalom** (DNI y agencia antes de la guía): `master.edit`.
-    Guardarlos puede confirmar el pedido, igual que una confirmación.
+    Guardarlos puede confirmar el pedido, igual que una confirmación. En un
+    pedido pagado por web el bloque solo se ofrece a quien tiene ese permiso
+    (`canEditShalomDraft`, 26-10-2026).
   - **Pedido cerrado**: «Registrar devolución» sobre un pedido entregado o
     anulado pide `master.override_status` y motivo, como «Cambiar estado»
     (`closedStatusChangeError`, lib/order-status.ts). Antes pasaba un
@@ -8095,6 +10098,52 @@ registra en cada evento.
 
   `test/escrituras-piden-permiso.test.ts` falla si una acción de Repro
   Provincia vuelve a escribir sin pedir permiso.
+- **El estado a mano es de un admin (15-10-2026).** Decisión del dueño, con
+  sus palabras: «solo quienes tienen acceso de Admin pueden realizar esa
+  acción». La acción es **Gestión manual → Registrar estado** en la ficha del
+  pedido y **Registrar estado…** en la barra de lote del Master: cambiar a mano
+  el estado general y el operativo de un pedido, un cambio que **congela** el
+  pedido frente al recálculo (§6.1). Pedía «Gestionar pedidos» (`master.edit`),
+  que traen el paquete de la vendedora y los siete roles por función.
+  - **Permiso propio: `master.set_status`** («Registrar estado a mano»). Lo
+    tienen **owner y admin por su acceso**. No se concede uno por uno en
+    **Equipo** ni lo trae ningún rol, tampoco Supervisión, que corrige pedidos
+    cerrados (`master.override_status`) y aun así no cambia estados a mano.
+    Una revocación puntual se lo quita a un admin, como cualquier permiso.
+  - **Lo exige el servidor**, en la **organización del pedido**
+    (`hasOrgPermission`, no la unión de las de la persona: ser admin en otra
+    empresa no sirve), después de comprobar que el pedido se ve y antes de leer
+    o escribir nada más. El lote no intenta ningún pedido sin el permiso y
+    después lo pregunta pedido por pedido. Responde «Solo un admin puede
+    registrar el estado a mano.» (`setOrderStatus`, `applyOrderStatusBulk`).
+  - **No cambia lo demás.** `master.edit` sigue haciendo falta, y un pedido
+    cerrado pide además `master.override_status` y motivo
+    (`closedStatusChangeError`). Comentar, registrar la devolución, corregir el
+    vínculo de una guía, confirmar, crear salidas y el resto de escrituras del
+    Master siguen con «Gestionar pedidos».
+  - **En pantalla.** Sin el permiso, la ficha no pinta la tarjeta y deja en su
+    sitio «Registrar el estado a mano lo hace un admin.»; la barra de lote no
+    ofrece «Registrar estado…». Los avisos que mandan a reabrir un pedido
+    cerrado dicen que lo hace un admin (`REOPEN_HINT`), y la entrega declarada
+    de la Mesa de cierre, que el estado lo fija un admin.
+  - **No son «Registrar estado»**, y siguen con su permiso: «Registrar
+    devolución» (§13; escribe `devuelto` solo con despacho y guía), las
+    entregas por la puerta única de Rutas, Liquidaciones 1 y 2 y Urpi (§11.4,
+    §29.12, §30.8), anular una guía de Aliclik (`aliclik.cancel_guide`), el
+    resultado del courier y el estado de la guía en Repro Provincia (son de la
+    salida, no del pedido: principio 8, §2), la gestión de confirmación (§8),
+    el pedido acompañante (§32) y finalizar o reabrir el expediente en la Mesa
+    de cierre.
+  - **Lo que deja de hacer el equipo.** Marcar «Entregado» al dictar la clave
+    de Shalom (469 veces en los 30 días al 13-10, §12), el marcado a mano de
+    los pedidos de Agencia (§10) y el respaldo de Olva cuando su rastreo falla
+    (§12): ahora el estado sigue al rastreo y, cuando haga falta a mano, lo
+    registra un admin.
+
+  `test/estado-a-mano-solo-admin.test.ts` lo fija contra la acción de verdad, y
+  `test/escrituras-piden-permiso.test.ts` falla si otra acción de
+  `app/dashboard/pedidos/actions.ts` (salvo `registerReturn`) escribe un
+  `status_override` sin preguntarlo.
 
 ### 16.1 Bandeja de validación de pagos
 
@@ -8164,6 +10213,69 @@ para continuar y registra actor y fecha, pero **no cambia por sí solo la
 macroetapa ni marca el pedido como pagado en Shopify**. Esas automatizaciones se
 activan cuando la migración operativa al sistema sea completa.
 
+#### Un comprobante por validar se ve en el Master y en Leads (owner, 25-10-2026)
+
+**Lo que pasó.** #KP143616: la clienta depositó la diferencia, el comprobante
+entró por WhatsApp a la cobranza de Shalom, se atribuyó por monto y quedó
+«Pendiente de revisión». La alerta escaló tres veces y ella seguía esperando su
+clave. El único aviso era el pop-up flotante de la cola de cobranza y esta
+bandeja; en el Master y en Leads, donde trabaja casi todo el equipo, ese pedido
+no se distinguía de ningún otro.
+
+**La decisión.** Un pedido con un comprobante por validar se ve como prioritario
+en las dos pantallas. No es un estado nuevo del pedido ni de la macroetapa: es
+una señal que se lee del pago.
+
+- **Qué cuenta.** Un pago de la clienta (`adelanto`, `diferencia` o `total`; no
+  `cobro_courier`, que es el efectivo del motorizado y lo revisa finanzas) en
+  `pendiente_revision` o `info_incompleta`. Son **los mismos estados que
+  mantienen abierta la alerta** «Comprobante por validar» de la cobranza
+  (`sweepResolvedAlerts`), y la lista vive una sola vez
+  (`VOUCHER_AWAITING_STATUSES`, `lib/pending-voucher.ts`).
+- **Se apaga solo, con el hecho.** Validar o rechazar el pago (o pasarlo a
+  `revision_admin`, que ya es una decisión de alguien) lo quita del Master, de
+  Leads y del pop-up a la vez. Nadie lo desmarca a mano ni pulsa «Resuelto».
+- **Se lee en vivo de `order_payments`, no del Master.** La cobranza de WhatsApp
+  registra el pago sin recalcular `order_master`; una columna materializada
+  habría llegado tarde justo en este caso. Es una sola lectura por carga, por
+  el índice `(store_id, validation_status)`: unas decenas de filas.
+- **Master de Pedidos.**
+  - En la fila, bajo la subetapa, la chapa `warn` **«Comprobante por
+    validar»**. Su título dice cuántos, por cuánto y dónde se resuelve
+    («Validar y enviar la clave, en Cobro» en agencia; «Validar en Cobro»
+    fuera de ella).
+  - La fila con la chapa abre la ficha **en Cobro**, donde está «Validar y
+    enviar la clave», igual que «Ir a validar» del pop-up
+    (`?abrir=<pedido>&ir=pagos`).
+  - Filtro rápido **«Comprobante por validar»** con su cifra, delante de las
+    píldoras de agencia en la línea de excepciones (se ve aunque no haya nada
+    por agencia). Cuenta los pedidos de todas las tiendas que se ven, como las
+    de agencia; se combina con la pestaña y los demás filtros, y las pestañas
+    cuentan lo que trae. En la URL es `pv=1`.
+  - Si la lectura de pagos falla, la píldora no enseña un cero: dice que no se
+    pudo leer, y el filtro no trae ningún pedido (nunca todos).
+- **Leads, «Atender ahora».**
+  - Sube el lead de ese pedido aunque el bot no lo haya derivado o su handoff
+    haya caducado, con el motivo **«Comprobante por validar · espera su
+    clave»** en agencia mientras la clave no se haya enviado, y **«Comprobante
+    por validar»** fuera de ese flujo (no hay clave que prometer).
+  - Va **arriba**, el que más espera primero; los handoffs de siempre siguen
+    debajo en su orden. Es una llave aparte: el puntaje de «Por llamar»
+    (`lib/lead-priority.ts`) es una probabilidad de cierre medida y no se toca.
+  - En vez de «Resuelto», la fila ofrece **«Ir a validar»** (la ficha del
+    pedido en Cobro). El contador de la pestaña suma a quien sube por esto y no
+    estaba ya por un handoff.
+  - No se escribe nada en `leads` (`needs_attention`, `handoff_*` quedan como
+    estaban): lo decide el pago.
+- **El límite: el lead tiene que estar atado al pedido** (`leads.order_id`, lo
+  deja la venta). Si no lo está, el pedido se ve en el Master y en el pop-up,
+  pero en Leads no sube. **No se adivina por teléfono**: el mismo celular puede
+  tener otro lead en otra tienda o de otra compra, y subirlo con un «espera su
+  clave» ajeno sería peor que no subirlo. Medido el 25-10-2026: 16 de los 20
+  pedidos con comprobante por validar tenían su lead atado.
+- **Índice (0280).** `leads(order_id)` parcial, para encontrar esos leads sin
+  recorrer la tabla (~70.000 filas). El código funciona sin él, solo más lento.
+
 ### 16.2 Validación por el estado de cuenta de Yape
 
 **Lo que una persona hacía mirando la app de Yape lo hace ahora el estado de
@@ -8188,7 +10300,12 @@ solo «casi».
      holgura a cada lado;
   3. **quién pagó**: en un adelanto, diferencia o pago total, el pagador del
      reporte es **la clienta del pedido** («Benito Cac\*» ↔ Benito Cachique
-     Puga; con el nombre completo, dos palabras suyas en cualquier orden). En
+     Puga; con el nombre completo, dos palabras suyas en cualquier orden).
+     **Desde el 02-11-2026 se perdona una letra** en palabras de cinco o más
+     —la clienta escribe su nombre con el pulgar— y una letra rota cuenta como
+     comodín: «Cesar Cha\*» ↔ «Céssr chßvez pereyra» (#KP200869, validado a
+     mano con el movimiento en el reporte). El apellido recortado sigue
+     exigiendo sus tres letras exactas, y un nombre corto, el nombre exacto. En
      el **cobro del courier** paga el motorizado, así que el nombre no dice
      nada: se exige que **el canal** del reporte sea el de la constancia (un
      Yape sale como Yape directo; Plin, BBVA o Scotiabank como «PLIN - …»; el
@@ -8246,6 +10363,9 @@ solo «casi».
   - **el mismo monto y minuto pero pagó otra persona**. El 04-10 fueron nueve
     («Tito Gab\*» pagando el pedido de Gilberto Gabino, «Luis Pal\*» el de
     Alfredo Palao): probablemente un familiar, pero eso lo decide alguien.
+    Desde el 02-11-2026 el reporte del cruce lo dice aparte —«otro_pagador»,
+    con el nombre del reporte— y no como «sin movimiento»: el dinero sí está
+    (#KP200200, diferencia de S/ 268 yapeada por «Silvia Anc\*»).
 - **Dos imposibles se descartan**: un movimiento **posterior** a la carga del
   comprobante —nadie sube la constancia de un pago que aún no hizo— y uno que
   ya concilió otro comprobante.
@@ -8296,6 +10416,16 @@ El primer tablero operativo de la Fase 4 usa cinco ventanas fijas en hora de
 Lima: hoy, ayer, últimos 7 días, mes actual y mes anterior. Cada porcentaje
 muestra siempre su numerador y denominador; un universo vacío se presenta como
 `Sin datos`, nunca como 0 %.
+
+**Y cualquier mes cerrado, con su mes y año (02-11-2026, pedido del owner).**
+Junto a los chips, «Otro mes…» ofrece los meses anteriores al mes anterior,
+desde enero de 2025 (`?mm=2026-05` en el Consolidado; `momChosenMonth`,
+`lib/mom-owner-summary.ts`). Es el mes entero en días de Lima, con las mismas
+reglas de cohorte de abajo. Se lee aparte: los pedidos creados en ese mes, y
+sus salidas y confirmaciones hasta un mes después —el pedido del 31 que salió
+el 2 sigue siendo de ese mes—, sin traer todo lo que hay entre él y el mes
+anterior. La línea de abajo lo compara con el mes en curso, como a las demás
+ventanas.
 
 **Las ventanas se leen según su madurez, no una contra otra.** Todas las tasas
 de confirmación y adelanto son de cohorte: el denominador son los pedidos
@@ -8372,6 +10502,23 @@ distintas en filas contiguas se leen como comparables sin serlo.
 en la ventana pero despachado fuera no entra; si entrara, «Ayer» acabaría
 contando el mes entero.
 
+**Abrir los pendientes de Agencia (29-10-2026).** «Pago completo de Agencia»
+enlaza al Master, en Todas las etapas, con los pedidos de esa misma cohorte de
+guías Shalom/Olva que todavía no cubren su total. El enlace conserva los días
+del periodo elegido, con corte de medianoche de Lima, sin filtrar por creación
+del pedido. Se deduplica por pedido aunque tenga varias guías. El Master muestra
+el contexto y permite quitarlo; paginación, conteos y Excel usan la misma lectura
+`order_master_agency_unpaid` bajo RLS. Un fallo de lectura se muestra como error,
+no como «sin pendientes» ni como la lista completa. No se excluyen etapas o
+anulaciones por fuera de la cohorte: es el complemento exacto del indicador.
+
+El indicador y su lista reconocen también el checkout confirmado (§6, `paid`,
+pasarela `checkout`, sin reembolso), además de los comprobantes validados que
+cubren el total. Se compara en céntimos. No basta marcar pagado manualmente,
+subir un comprobante sin validar o registrar un pago parcial. Al validar el
+saldo, el pedido sale de la lista en la siguiente lectura; no se modifican
+pedidos, envíos ni pagos al abrirla. Requiere la migración 0290 antes del código.
+
 **Cómo leer las ventanas cortas de esta fila.** «Hoy» y «Ayer» seguirán
 mostrando cifras cercanas a cero, y no es un fallo: con una mediana de cobro de
 5,6 días, casi ningún pedido despachado hoy puede estar cobrado hoy. Lo mismo
@@ -8383,10 +10530,45 @@ cerrado.
 Alertas del primer tablero:
 
 - `Recogido sin pago completo`: razón crítica abierta en el Master.
+
+  **La cifra y su lista no siempre cuadran (16-10-2026).** La cifra cuenta por
+  motivo y su enlace abre la subetapa Recogido sin pago completo: un pedido con
+  el motivo y otra subetapa delante (Salida adicional activa) cuenta y no sale
+  en esa lista. En la auditoría del atraso de Lima (14-10-2026) eran 6 contra 5
+  en Lima y 156 contra 152 en total; el 16-10-2026, 155 contra 152 (3 entregados
+  con «Salida adicional activa», S/ 475,10). No se cambió: contar por subetapa
+  escondería dinero recogido sin cobrar, el mismo criterio que «Liquidación
+  vencida». **Pendiente del owner:** si la cifra pasa a contar por subetapa, o
+  si el enlace pasa a listar por motivo.
 - `Liquidación vencida`: obligación pendiente u observada que superó el SLA
   desde la entrega. Aliclik y motorizado propio vencen al día siguiente; Axel y
   Urpi a los 3 días; Swayp (antes Fénix) a los 4 días. Tanders no genera esta
   alerta porque el dinero entra directamente a la empresa.
+
+  **Entregas registradas a mano (15-10-2026).** La entrega que se registra con
+  `status_override` (el cuaderno, los lotes, la ruta de Grupo GF, el reporte de
+  Urpi) no deja `delivered_at` ni `delivered_courier`, y la alerta las
+  descartaba: en Lima contaba 59 con 5.123 pedidos así delante. Desde entonces
+  (`settlementDeliveredAt` y `settlementCourier`, `lib/mom-owner-summary.ts`):
+
+  - **Fecha de la entrega:** `delivered_at`; si no la hay y el pedido está
+    entregado, desde cuándo lo está (`status_since`: el cambio manual que lo
+    marcó). Fuera de «entregado» no hay entrega que medir.
+  - **Courier, para el plazo:** el de la entrega; si no lo hay, el courier
+    vigente y si no el último («por definir» no cuenta); si tampoco, «Salió
+    con» (§9.3): solo motorizados de Grupo GF es motorizado propio, un único
+    courier es ese, y varios distintos no dicen quién entregó.
+  - Sin courier conocido no hay plazo y el pedido no entra, como antes. Al
+    implantarlo el total pasa de 5.592 a 8.795 (Lima, de 59 a 3.261); 1.921
+    pedidos de Lima y 135 de Provincia siguen fuera por no tener ni salida ni
+    «Salió con». Darles un plazo por defecto lo decide el owner.
+  - La cifra cuenta por motivo y su enlace abre la subetapa Pendiente de
+    liquidación: los pedidos con el motivo y otra subetapa delante (Salida
+    adicional activa, Devolución física pendiente) cuentan y no salen en esa
+    lista. No se cambió: contar por subetapa escondería liquidaciones
+    vencidas.
+
+  Solo cambia la cifra del tablero: desde aquí nada se liquida ni se cierra.
 - `Manifiesto incompleto`: ruta que ya inició el cotejo de oficina o de recojo y
   todavía no alcanzó el 100 %.
 - `Sin movimiento por 60 días`: pedido no finalizado cuya última señal quedó
@@ -8453,6 +10635,574 @@ ratio en `lib/ltv.ts`):
 - **Para subirlo:** el recordatorio de reposición (§34) le escribe a la
   clienta cuando se le está por acabar lo que compró. Mide su efecto contra un
   grupo de control.
+
+### 17.3 Canal de cierre de todas las ventas (14-10-2026)
+
+Responde quién cerró cada venta de la tienda: una asesora, el bot o una
+automatización, la clienta sola en la web, u otra vía. Está en **Consolidado**
+y en la página de cada tienda, en la tarjeta «Canal de cierre».
+
+**Por qué cambió.** La tarjeta solo veía los pedidos con etiqueta `kapso` y
+decidía «asesora» por las etiquetas `venta_manual` / `carrito_recuperado`. El
+botón «Generar pedido» escribía `kapso` solo en la copia local del pedido —en
+Shopify el pedido nace con `venta_manual`, o con las etiquetas del borrador de
+EasySell cuando se reusa el carrito— y la sincronización con Shopify reescribe
+las etiquetas cada 5 minutos. Del 14-09 al 13-10-2026, de 2.916 pedidos de
+asesoras quedaba 1 con `kapso`: la tarjeta decía «0 % lo cerró una asesora»
+mientras Productividad les contaba S/ 484.645.
+
+**Universo.** Todos los pedidos de Shopify de la tienda (`orders`), por el día
+**local** de la tienda en que se crearon. Los cancelados van aparte —fuera de
+pedidos e ingresos—, y el ingreso es total − reembolsado, igual que el resto
+del Consolidado.
+
+**Desde cuándo responde.** El canal solo es verdad desde que Kapta tiene, a la
+vez, todos los pedidos de la tienda y las ventas que registran sus asesoras:
+
+- todos los pedidos, desde `ORDERS_SYNC_FROM` (2026-06-01): antes de esa fecha
+  la sincronización no trae los pedidos que no son del bot;
+- las ventas de las asesoras, desde el día local de la primera fila de
+  `order_sales` de la tienda (si todavía no tiene ninguna, el de su primer
+  lead). Antes, una venta de asesora no tenía dónde registrarse y caería en
+  «Web» u «Otros». Medido: una tienda tenía 3.898 pedidos en junio de 2026 y
+  ninguna venta registrada; su primera es del 04-07-2026, y la de la otra
+  tienda del 25-06-2026.
+
+Cada tienda cuenta desde el más tardío de esos días, **su propio día** (desde
+el 14-10-2026, §17.4: antes, con varias tiendas, se recortaba a todas al día
+de la que empezó último, y conectar una tienda nueva habría dejado el total de
+todas en un solo día). Con varias tiendas, cada una suma su parte del periodo
+y el aviso nombra cada tienda que cuenta desde otra fecha. Un periodo que
+empieza antes se cuenta desde ese día y la tarjeta lo dice («desde el 4 jul
+2026», o «Aurela desde el 4 jul 2026»), con la razón que fijó el día: el
+inicio de la tienda en Kapta o `ORDERS_SYNC_FROM`. Una tienda cuyo día cae
+después del periodo no entra, y el aviso lo dice («no entra: empezó a usar
+Kapta el …»). Si ninguna tienda tiene con qué responder, la tarjeta vuelve a la
+vista anterior con un aviso, sin cifra de cabecera.
+
+Una tienda que todavía no usa Kapta —sin ventas registradas ni leads— no tiene
+inicio: sola, su tarjeta vuelve a la vista anterior con ese aviso; con otras
+tiendas, queda fuera del conteo y la tarjeta la nombra («sus pedidos no entran
+en este total»). Si no se puede leer desde cuándo usa Kapta una tienda, es un
+error y la tarjeta lo dice: contar sin saberlo es justo el «0 % asesora» falso.
+Si falla la lectura de UNA tienda, también: nunca un total con una tienda de
+menos. Mover `ORDERS_SYNC_FROM` hacia atrás no amplía la tarjeta más allá del
+inicio de cada tienda; adelantarlo sí la recorta.
+
+**Un canal por pedido**, el primero que aplique en este orden. Así los canales
+suman el total de la tienda:
+
+| Orden | Canal | Cómo se reconoce | Grupo |
+| --- | --- | --- | --- |
+| 1 | Asesora | Tiene fila en `order_sales`: la venta que la asesora registró al generar el pedido | Asesora |
+| 2 | Recompra automática | Es el pedido de una prueba de recompra (`auto_order_trials` en `generado`; §11, «Prueba: pedido de recompra sin llamada») | Bot o automatización |
+| 3 | Bot de Kapso | Etiqueta `kapso` puesta en Shopify (sin distinguir mayúsculas); en WooCommerce, la que pone la entrada por `kapta_channel = kapso` o `kapso_conversation_id` (§38.5, §38.13) | Bot o automatización |
+| 4 | Bot de carritos externo | Etiquetas `BOT`, `CARRITO RECUPERADO` o `BOT (whatsapp_cloud)` | Bot o automatización |
+| 5 | Web, la clienta sola | Etiquetas de EasySell (`easysell_cod_form` y las que empiezan con `easysell`) | La clienta sola en la web |
+| 6 | Otros | Todo lo demás: catálogo de WhatsApp, pedidos hechos a mano en Shopify… | Otros |
+
+La venta de la asesora gana a cualquier etiqueta porque es el único hecho que
+nada sobrescribe: la asesora la registró y `order_sales` es append-only. El
+orden **sí decide**, y mucho: en el mes medido, 1.375 de las 2.651 ventas
+activas de asesora llevan las etiquetas de EasySell (la asesora reusó el
+borrador del carrito) y las 29 recompras llevan la etiqueta de otro canal. Sin
+el orden, la mitad de las ventas de asesora caería en «Web». Entre etiquetas no
+hubo choques: ningún pedido tenía `kapso` y además otra etiqueta de canal.
+
+**«Ayudado por asesora».** Para lo que NO cerró una asesora: una asesora
+gestionó a esa clienta en los 7 días previos al pedido, con una fila firmada de
+`lead_calls` de tipo `call`, `message` o `sale` (la misma definición de «tocado»
+del agente de voz, §33.2) en el lead de la **misma tienda** con el **mismo
+teléfono**. Ayudar no es cerrar: el pedido queda en su canal, y la ayuda se
+cuenta aparte en su fila. Una fila del sistema sin firma o una nota no es
+gestión.
+
+**Lo que no decide el canal.** Ninguna etiqueta que Kapta escriba en su copia:
+las tiendas no dieron `write_orders`, así que Kapta no puede etiquetar pedidos
+en Shopify, y lo que escribe solo en su copia lo borra la siguiente
+sincronización. Por eso, desde este cambio, «Generar pedido», la captura del
+carrito recuperado sin asesora y la recompra automática registran la fila local
+**solo si el webhook no la trajo ya, y tal como viene de Shopify**: sin `kapso`,
+sin `cod_recuperado`, sin pisar la fecha ni los productos reales. «Generar
+pedido» crea el pedido en la tienda (Shopify o WooCommerce según
+`stores.platform`, §38.12); en WooCommerce la fila es la que escribiría la
+entrada, con `kapta_channel = venta_manual` (o `web_carrito` si cierra el
+carrito abierto del lead, §38.12) y sin la conversación de Kapso, y la venta de
+la asesora queda en `order_sales` igual.
+
+Si al completar el borrador Shopify contesta que ya estaba completado, Kapta
+le pregunta a Shopify cuál es el pedido real de ese borrador y registra la venta
+sobre él. Antes inventaba una fila `draft-<id>` que no era ningún pedido de
+Shopify: la venta se contaba dos veces, una en la fila inventada y otra en el
+pedido real que traía la sincronización. Solo si Shopify tampoco lo dice queda
+el respaldo de antes, la fila `draft-<id>`, para no perder la venta; hasta el
+14-10-2026 no había ninguna en la base.
+
+**Lo que el canal todavía no distingue.** Un carrito de EasySell que completa el
+bot de Kapso por WhatsApp (`draftOrderComplete` sobre el borrador del carrito)
+cuenta como **Web**: Shopify no le pone ninguna marca que lo separe del carrito
+que la clienta terminó sola, y Kapta no puede etiquetarlo. Para contarlo como
+del bot, el workflow del bot tendría que ponerle una etiqueta al borrador (por
+ejemplo `kapso`) antes de completarlo; eso es un cambio del bot, no de esta
+tarjeta. **Desde el cierre de Shopify sí se distingue** en una tienda en
+WooCommerce: el bot ya no completa el borrador, le pide el pedido a Kapta
+(§38.13), que lo crea con `kapta_channel = kapso`, y el carrito que cierra el
+bot cuenta como **Bot de Kapso**.
+
+**Productividad y el canal no cuadran exacto, y no tienen por qué.**
+Productividad cuenta ventas registradas por la fecha en que la asesora apretó
+el botón e incluye las que después se cancelaron; el canal cuenta pedidos por
+su fecha de creación en Shopify y deja los cancelados aparte.
+
+**Lo que todavía no cambia.** Desde el 14-10-2026 (§17.4) las cifras de
+cabecera, «Ventas por día», «Por tienda» y «Conversión por fuente» cuentan
+también todas las ventas, y esta tarjeta es la que las parte por origen, con
+el cambio contra el periodo anterior por canal. Siguen contando solo los
+pedidos del bot de Kapso, y lo dicen: «Conversión del bot», Productos, Fuente,
+Embudo y su salud, los ingresos de Carritos y de Números de WhatsApp, Desglose
+de negocio, Integridad y, en la página de una tienda, Patrón de horas
+(DEPLOY.md §5h). La
+operación del Master y LTV : CPA (§17.2), arriba de esa sección en el
+Consolidado, cuentan todos los pedidos del Master. El panel de «Fuente»
+conserva su propio cierre por etiquetas, con el nombre «Cierre de los pedidos
+del bot, por etiquetas»: no ve las ventas de las asesoras y remite a esta
+tarjeta.
+
+Medido del 14-09 al 13-10-2026, días de Lima, pedidos activos:
+
+| Canal | Pedidos | Ingresos | Cancelados aparte | Ayudados |
+| --- | --- | --- | --- | --- |
+| Asesora | 2.651 | S/ 481.451 | 243 | — |
+| Recompra automática | 29 | S/ 5.826 | 11 | 0 |
+| Bot de Kapso | 593 | S/ 103.880 | 140 | 57 |
+| Bot de carritos externo | 244 | S/ 41.090 | 102 | 51 |
+| Web, la clienta sola | 3.012 | S/ 527.865 | 1.105 | 66 |
+| Otros | 93 | S/ 20.968 | 26 | 15 |
+
+Cómo se calcula: `canal_de_cierre` (migración 0259, de lectura, con la sesión
+de quien mira: cada persona ve solo sus tiendas), resumido en
+`lib/closing-channel.ts` y dibujado en `components/closing-channels.tsx`. Desde
+la 0268 la regla del canal —la tabla de arriba— vive en un solo lugar, la vista
+`pedidos_canal` (con la sesión de quien mira, solo de lectura), y la función la
+lee; las ventas por origen de §17.4 leen la misma vista. Una llamada por tienda,
+en su ventana (`lib/sales-coverage.ts`). Si la migración todavía no se aplicó o
+la función falla, la tarjeta vuelve a la vista anterior (solo pedidos del bot)
+con un aviso y sin cifra de cabecera («—»): su porcentaje sería el número
+equivocado. Nunca con ceros.
+
+### 17.4 Ventas del periodo por origen y conversión por fuente (14-10-2026)
+
+Responde cuánto vendió la tienda —todas sus ventas, no solo las del bot—, quién
+las cerró y, por cada fuente de leads, cuántos de los que llegaron compraron.
+Está en **Consolidado** y en la página de cada tienda, en «Ventas del periodo».
+
+**Por qué cambió.** Las cifras de cabecera (Ingresos, Pedidos, Ticket
+promedio), «Ventas por día» y «Por tienda» salían de `daily_rollups`, que solo
+cuenta los pedidos con la etiqueta `kapso`. Del 14-09 al 13-10-2026 eran cerca
+de 600 de 6.622 pedidos activos: el tablero enseñaba la undécima parte del
+negocio, y
+«Canal de cierre» (§17.3) —que ya contaba todo— no cuadraba con la cabecera de
+arriba.
+
+**Universo.** El mismo de §17.3: todos los pedidos de la tienda (`orders`), por
+el día **local** en que se crearon, con los cancelados aparte y el ingreso como
+total − reembolsado. Cada pedido con su canal de la tabla de §17.3, leído de la
+vista `pedidos_canal`: la cabecera, «Ventas por día», «Por tienda» y «Canal de
+cierre» son las mismas ventas y cuadran entre sí.
+
+| Módulo | Qué cuenta ahora |
+| --- | --- |
+| Ingresos, Pedidos, Ticket promedio | Todas las ventas de las tiendas que cuentan, cada una en su ventana |
+| Ventas por día | Las mismas, cada día partido por grupo de cierre (asesora, bot o automatización, la clienta sola en la web, otros) |
+| Por tienda | Las mismas por tienda, con la parte que cerró una asesora y la conversión del bot de cada una |
+| Canal de cierre | Las mismas por canal (§17.3), con el cambio contra el periodo anterior |
+| Conversión del bot | Pedidos del canal «Bot de Kapso» ÷ conversaciones (abajo) |
+| Conversión por fuente | La cohorte de leads del periodo (abajo) |
+
+**Desde cuándo.** Cada tienda cuenta desde su propio día, como en §17.3: el más
+tardío de `ORDERS_SYNC_FROM` y su inicio en Kapta. Con varias tiendas, la
+cabecera suma cada tienda en su ventana y un aviso arriba de las cifras nombra
+cada tienda que cuenta desde otra fecha, la que empieza después del periodo (no
+entra) y la que todavía no usa Kapta (fuera). Los días de «Ventas por día» van
+desde el primero que cuenta alguna tienda. Si ninguna tienda tiene ventas que
+contar en el periodo, la cabecera vuelve a la vista anterior con un aviso.
+
+**Contra el periodo anterior.** El cambio («+7,7 %») solo se muestra si cada
+tienda que cuenta ahora contaba el periodo anterior **entero**. Si no —el
+periodo actual está recortado, o el anterior cae antes del inicio de alguna
+tienda—, el anterior saldría con menos ventas de las que hubo y el cambio sería
+falso: las cifras dicen «sin comparar: el anterior no tiene todas las ventas».
+El anterior sale de las mismas ventas por origen, con la misma regla.
+
+**«Conversión del bot»** (antes «Conversión»). Los pedidos del canal «Bot de
+Kapso» ÷ las conversaciones de `daily_rollups`, los dos en la ventana de cada
+tienda: dividir un numerador recortado por un denominador entero daría una
+tasa falsa. Un pedido con `kapso` que registró una asesora es de la asesora
+(§17.3) y no entra en el numerador; lo que cerró la web u otro canal, tampoco.
+En el mes medido casi ninguna venta de asesora conservaba `kapso` (§17.3), así
+que la tasa casi no se mueve, pero ahora dice lo que mide.
+
+**Lo que sigue siendo solo del bot, y lo dice.** «Conversión del bot» lo dice
+en su nombre. Productos, Fuente, Embudo y su salud, Desglose de negocio,
+Integridad y Patrón de horas leen los pedidos del bot y llevan «Pedidos del
+bot» en el contexto de su panel; donde la tarjeta enseña pedidos o ingresos,
+también lo dice («pedidos creados por el bot»). Carritos y Números de WhatsApp
+cuentan como compra la del lead por cualquier vía, pero sus ingresos solo
+suman pedidos del bot y lo dicen («Ingresos recuperados del bot», con el ticket
+sobre los carritos que trajeron un pedido del bot; «vende más por el bot»,
+«Ingresos del bot»). La Primera respuesta sale de los cierres diarios. «Venta perdida estimada» multiplica los leads que
+no compraron por el ticket de todas las ventas. El CSV de los cierres diarios
+se llama «Resumen diario del bot CSV».
+
+**Sin la migración 0268**, con error o sin ninguna tienda que contar, la
+cabecera, «Ventas por día» y «Por tienda» vuelven a la vista anterior —los
+cierres diarios del bot, con las etiquetas «Ingresos del bot», «Pedidos del
+bot» y «Ticket promedio del bot»— y un aviso arriba de las cifras dice por qué.
+Nunca con ceros.
+
+**«Conversión por fuente».** Una cohorte: de los leads que **nacieron** en el
+periodo, cuántos compraron en sus primeros 7 días.
+
+- **Nacer.** El día local de la tienda de `coalesce(first_seen_at,
+  created_at)`, dentro de la ventana de su tienda. No nace la fila que Kapta
+  creó desde un pedido del bot cuyo teléfono no tenía lead (llega sin
+  `first_seen_at` y después de su propio pedido): no es alguien que escribió.
+  Medido: 120 de unos 21.800 leads en 30 días.
+- **Madurar.** Un lead entra en la tasa cuando cumplió 7 días al momento de
+  mirar. Los más nuevos son «por madurar»: se cuentan, pero no entran. Por eso
+  esta tarjeta no se compara con el periodo anterior: los últimos días de
+  cualquier periodo todavía están madurando.
+- **Ya era clienta.** Un lead maduro con un pedido activo de la misma tienda
+  **antes** de nacer, por su teléfono o por su propio pedido (`order_id`). Va
+  aparte: comprar otra vez no es convertir. `leads.has_order` no sirve para
+  esto: se marca con cualquier pedido del teléfono, también los anteriores al
+  lead y los cancelados, y nunca se borra. Límite conocido: antes de
+  `ORDERS_SYNC_FROM` (2026-06-01) Kapta solo tiene los pedidos del bot, así
+  que una compra anterior por la web de esa época no se ve; en las cohortes
+  cercanas al inicio de cada tienda alguna clienta puede contar como nueva.
+  El error se achica a medida que el periodo se aleja de esa fecha.
+- **Convirtió.** Un pedido activo de la misma tienda, por el teléfono del lead
+  o su `order_id`, creado después de nacer y antes de 7 días, **por cualquier
+  canal**. Se toma el primero, y su canal (§17.3) dice quién cerró la compra.
+  Un lead sin teléfono (solo `bsuid`) convierte solo por su `order_id`.
+- **La tasa** es convertidos ÷ los maduros que no eran clientas. Sin ninguno,
+  la tasa dice «Sin datos», nunca 0 %. Con varias tiendas se suman
+  numeradores y denominadores; nunca se promedian porcentajes.
+
+| Fuente | `leads.source` |
+| --- | --- |
+| Anuncios de Meta | `meta_ad` |
+| Carritos COD abandonados | `cod_cart` |
+| Orgánico de WhatsApp | sin fuente, o `whatsapp-bot` (la marca que recibe el lead orgánico que ganó, `lib/leads-ingest.ts`) |
+| Web de la tienda | `web` |
+| Web de Facebook | `fb_web` |
+| Búsquedas abandonadas | `abandoned_browse` |
+
+**La fuente `web` (owner, 01-11-2026, 0294).** Desde el 29-10 el botón de
+WhatsApp de cada producto en la web (WooCommerce) abre el chat con «Hola,
+quiero pedir <producto>. Soy de Depto / Provincia / Distrito. <enlace>». No
+trae ninguna señal de Meta, así que esos leads quedaban sin fuente y se
+contaban como orgánicos: unos 150 de los ~200 diarios del botón. La
+sincronización los marca `web` cuando un mensaje de la clienta es el del botón
+(«quiero pedir …» con el enlace `/products/` de la tienda, o la ubicación «Soy
+de … / … / …»; `isWebButtonMessage` en `lib/kapso.ts`). Va último: si la
+conversación trae un anuncio de Meta (`meta_ad`) o un enlace de Facebook o
+Instagram (`fb_web`), gana ése. Como toda fuente, se escribe una sola vez
+(`source` vacío). En Leads es el filtro «Web»; en Consolidado y Productividad,
+«Web de la tienda», con el color de «Meta / Web» (la paleta validada tiene seis
+colores y no hay séptimo; las separa la etiqueta). `conversion_por_fuente` la
+cuenta con tasa desde la 0294; sin ella, un lead `web` caería en `sin_tasa`.
+
+La venta telefónica (`manual`) y cualquier fuente que no esté en la tabla no
+tienen tasa —no hay un canal que medir—: se cuentan aparte, en una línea bajo
+la tabla.
+
+**«Cierre de las asesoras».** En el mismo panel: las ventas que registraron en
+`order_sales` en el periodo, por la hora del botón y también las que después se
+anularon (contadas aparte), ÷ los leads **distintos** de la tienda que
+trabajaron —una gestión firmada de `lead_calls` que no es `system` ni
+`voice_agent`—. No es la conversión de una fuente: una asesora trabaja leads de
+cualquier fuente y de cualquier fecha. Productividad suma esos leads por
+asesora, así que allí un lead que trabajaron dos cuenta dos veces y aquí una.
+
+Medido del 14-09 al 13-10-2026, días de Lima, con la regla de arriba:
+
+| Fuente | Conversión en 7 días | Compras que cerró una asesora |
+| --- | --- | --- |
+| Anuncios de Meta | 6,3 % | 240 de 324 |
+| Carritos COD abandonados | 30,2 % | 714 de 917 |
+| Orgánico de WhatsApp | 9,4 % | 262 de 355 |
+| Web de Facebook | 15,9 % | — |
+| Búsquedas abandonadas | 3,6 % | — |
+
+Cómo se calcula: `ventas_por_origen` y `conversion_por_fuente` (migración 0268,
+de lectura, con la sesión de quien mira), una llamada por tienda en su ventana
+(`getOriginSales` y `getSourceConversion` en `lib/access.ts`), leídas en
+`lib/consolidado-origen.ts` y dibujadas en `components/executive-dashboard.tsx`
+y `components/source-conversion.tsx`. La cohorte parte el nacimiento en dos
+rangos de columnas simples —`first_seen_at` y, sin él, `created_at`— con sus
+índices (`leads_store_first_seen_idx` y `leads_store_created_sin_first_seen_idx`),
+que en producción se crean a mano con `create index concurrently` antes de la
+migración (DEPLOY.md): bajo RLS, Postgres no lleva al índice un rango sobre
+`coalesce(...)`.
+
+### 17.4.1 «Productos» del Consolidado: todas las ventas y la lista completa (26-10-2026)
+
+El panel «Productos» contaba solo los pedidos del bot (etiqueta `kapso`, los
+mismos de los módulos del bot) y mostraba los 10 con más unidades: con 99
+pedidos en el día y 10 del bot, subreportaba las unidades vendidas. Desde el
+26-10-2026 (owner) cuenta las líneas de **todas las ventas del periodo**, de
+cualquier canal y tienda, sin las anuladas (`getSalesProductOrders` en
+`lib/access.ts`, `topProducts` en `lib/metrics.ts`), y muestra **la lista
+completa**, de más a menos unidades, por SKU o por título sin SKU. El panel
+dice «Todas las ventas». Prueba: `test/executive-products-all.test.ts`.
+
+**Las variantes debajo de cada producto (31-10-2026).** El owner: «Quiero
+saber qué variantes se venden en Productos. Muestras el nombre del producto,
+pero no muestras la variante». Al agrupar por SKU, las tallas de un mismo
+producto salían como filas sueltas con el mismo título (en Aurela, el 30-10,
+«Fat‑Burn Shorts» en tres filas y «Calzón Faja Moldeador 360° SoyKora®» en
+cuatro) y la variante no se veía. Desde el 31-10-2026:
+
+- **De dónde sale la variante.** De `variant_title` en las dos plataformas:
+  Shopify guarda ahí sus opciones («Negro / L»; sin «Default Title», que
+  descarta al leer el pedido) y WooCommerce los atributos de la variación,
+  unidos con « / » (`lib/woocommerce.ts`), solo cuando la línea es una
+  variación (`variant_id` lleno). El título es siempre el del producto
+  (`parent_name` en WooCommerce) y no se parte: «Fat‑Burn Shorts - Shorts para
+  Quemar Grasa…» es un nombre, no producto y variante. La oferta por cantidad
+  que WooCommerce añade como último atributo («1 unidad», «2 und. + 1 GRATIS
+  (Total 3 und.)») no es una variante y se quita del nombre, porque las
+  unidades ya vienen en la cantidad; si es el único segmento, se queda.
+- **Qué es un producto.** Las líneas que comparten SKU, título o `product_id`
+  de la misma tienda: así se juntan las variantes (cada una con su SKU), el
+  mismo producto en Shopify y en WooCommerce (otro `product_id`) y uno
+  duplicado o renombrado en el catálogo (mismo SKU). Solo junta filas que
+  antes iban separadas: las unidades del periodo no cambian. El nombre es el
+  título con más unidades.
+- **Qué es una variante.** El nombre de la variante, sin distinguir
+  mayúsculas: el mismo «Negro / L» tiene otro `variant_id` en cada
+  plataforma. Se escribe como más unidades se vendió.
+- **El panel** muestra cada producto con su total (unidades, órdenes,
+  ingresos) y, debajo, sus variantes con las mismas tres cifras, de más a
+  menos unidades; sus unidades suman las del producto. Las líneas sin
+  variante de un producto que sí las tiene van al final como «Sin variante».
+  Un producto sin variantes no lleva filas debajo, y nunca se escribe
+  «Default Title». Tabla desde 640 px; en el teléfono, una lista con las
+  cifras bajo cada nombre. Las tres barras de la celda siguen siendo por
+  producto.
+
+Prueba: `test/executive-products-variants.test.ts`.
+
+### 17.4.2 Primero toda la tienda; el chatbot de Kapso, aparte y con su nombre (31-10-2026)
+
+El owner (31-10-2026): «la sección Consolidado quiero que tome las ventas de
+toda la tienda sin excepción; si mostramos estadísticas del chatbot de Kapso,
+mencionémoslo de manera explícita, pero primero que sea de toda la tienda y más
+abajo el detalle por canal». La página de una tienda (Aurela) mostraba en
+«Productos» solo las unidades del bot (4 u con 36 pedidos en el día): no le
+llegaban las líneas de todas las ventas que el Consolidado ya recibía (§17.4.1).
+
+**Qué cambia**, en el Consolidado y en la página de cada tienda:
+
+- **La página de la tienda** pide `getSalesProductOrders` como el Consolidado.
+  «Productos» y «Patrón de horas» cuentan todas las ventas de la tienda; solo
+  si esas líneas no llegan vuelven a los pedidos del bot y lo dicen.
+- **La cabecera** solo lleva cifras de toda la tienda: Ingresos, Pedidos y
+  Ticket promedio. «Conversión del bot» y «Primera respuesta del bot» bajan a
+  la rejilla, al grupo del chatbot.
+- **La rejilla va de lo general a lo particular:**
+  1. «Ventas de toda la tienda»: Ventas por día, Por tienda (o Patrón de horas
+     en una tienda), Productos y Canal de cierre.
+  2. «Por canal y origen»: Conversión por fuente, Anuncios de Meta y Leads por
+     anuncio.
+  3. «Chatbot de Kapso: sus ventas»: Conversión del bot, Primera respuesta del
+     bot, Fuente de las ventas del bot, Carritos y Desglose de negocio.
+  4. «Chatbot de Kapso: lo que se pierde»: Embudo, Salud del embudo, Por qué
+     no compraron y Venta perdida estimada.
+  5. «Chatbot de Kapso: números y sistema»: Números de WhatsApp, Integridad de
+     conversión y Salud operativa.
+- «Fuente de las ventas» pasa a llamarse **«Fuente de las ventas del bot»**:
+  solo atribuye los pedidos del bot.
+
+**El día es el de la tienda (31-10-2026).** Las líneas de todas las ventas se
+cortan en el día LOCAL de cada tienda (`acquisitionRangeBounds`), igual que la
+cabecera (`ventas_por_origen`). Antes se cortaban en UTC: «Hoy» a las 00:45 de
+Lima traía los 11 pedidos de Aurela de las 7 p. m. a medianoche del viernes, y
+«Productos» enseñaba unidades con Ingresos en S/ 0.
+
+**Todas las líneas o ninguna (31-10-2026, auditoría del Consolidado).** Las
+líneas de todas las ventas llegan enteras, una vez cada pedido, o no llegan.
+Antes, si una página de la lectura fallaba (por ejemplo, por tiempo de espera),
+el bucle terminaba en silencio: «Productos» decía «Sin líneas de producto en el
+periodo», o contaba solo las páginas leídas, y seguía diciendo «Todas las
+ventas». Además paginaba con OFFSET y sin desempate: los pedidos que comparten
+instante (24 en Kenku desde septiembre) podían salir dos veces o ninguna al
+cruzar el borde de una página. Ahora lee cada tienda por cursor
+(`created_at DESC, id DESC`, como los leads y las conversaciones) y, si una
+página falla o una tienda llega al tope de 50.000 pedidos, «Productos» y
+«Patrón de horas» vuelven a los pedidos del bot y lo dicen («Pedidos del bot»,
+«el más vendido por el bot»): nunca una cifra a medias con el nombre de todas.
+
+Prueba: `test/consolidado-toda-la-tienda.test.ts` y
+`test/sales-product-orders.test.ts`.
+
+**Los módulos del chatbot, también en el día de la tienda (31-10-2026).**
+Fuente de las ventas del bot, Carritos, Desglose de negocio, Embudo y su salud,
+Por qué no compraron, Venta perdida estimada, Números de WhatsApp e Integridad
+leen los pedidos del bot (`getOrders`), las conversaciones (`getConversations`)
+y los leads (`getLeadsForDashboard`). Los tres se cortaban en el día UTC
+(`T00:00:00Z`–`T23:59:59Z`) mientras «Conversión del bot» y la Primera
+respuesta salen de `daily_rollups`, que corta en el día local. Medido el
+31-10-2026, «Ayer» (30-10) en las dos tiendas: Desglose y Embudo contaban 30
+pedidos del bot y «Conversión del bot» 29; en «7 días», 151 contra 142 y
+S/ 24.418 contra S/ 22.849; el Embudo contaba 1.366 conversaciones y la
+conversión 1.350. Desde ahora los tres cortan en el día local de cada tienda
+(`storeDayBounds` en `lib/access.ts`, la zona de `stores.timezone`; sin zona,
+UTC, como la base), hasta el último microsegundo del día.
+
+**«Carritos abandonados» con el carrito completo (31-10-2026).** El lector de
+leads no pedía `cart_value`, `draft_order_gid` ni `draft_order_status`: el
+«Valor en riesgo» («… por trabajar») salía siempre S/ 0, los borradores del bot
+sin fuente `cod_cart` no contaban como carrito y un borrador completado sin
+`has_order` no contaba como recuperado. Medido «Ayer» en Kenku: 97 de 283
+recuperados y S/ 0 por trabajar; con las columnas, 137 de 350 y S/ 34.042. Las
+tres columnas van en el juego más completo de `getLeadsForDashboard`, con su
+escalón de respaldo como las demás.
+
+Prueba: `test/consolidado-chatbot-dia-local.test.ts`.
+
+### 17.4.3 «Anuncios de Meta»: los pedidos web, en el día de la tienda (31-10-2026)
+
+«Anuncios de Meta» suma a cada anuncio dos clases de pedidos: los de los leads
+de anuncios que **nacieron** en el periodo (`getCampaignLeadsForDashboard`, en
+el día local de la tienda) y los pedidos con UTM del formulario o el carrito
+de la web (`getWebAdOrders`, `orders.utm_meta`, §«Pedido» y
+`lib/cod-cart-attribution.ts`). Los primeros ya se cortaban en el día de la
+tienda; los segundos se cortaban en **UTC**. «Ayer» (30-10-2026) en Lima traía
+los pedidos web de las 7 p. m. a medianoche del 29 y perdía los del 30 a esa
+hora: Aurela, 14 pedidos web en vez de 19 (S/ 1.793 en vez de S/ 2.387).
+
+**Desde el 31-10-2026** los pedidos web se cortan en el día LOCAL de cada
+tienda (`acquisitionRangeBounds`), como la cohorte de leads, la cabecera
+(`ventas_por_origen`) y «Productos» (§17.4.2). Prueba:
+`test/web-ad-orders-dia-local.test.ts`.
+
+**Lo que este panel cuenta y la cabecera no, y lo dice este apartado** (medido
+el 31-10-2026; no cambia con este arreglo):
+
+- **Los cancelados.** Un pedido cancelado sigue contando en los pedidos e
+  ingresos del anuncio (el ROAS entregado no: solo suma lo entregado). En
+  Shopify casi todo cancelado con UTM tenía guía —la anulación en reparto, que
+  el panel enseña como «anulado»—; en WooCommerce casi ninguno la tiene, y uno
+  de cada cuatro tiene otro pedido activo del mismo celular en 3 días: es un
+  duplicado del formulario. Kenku, 7 días al 31-10: 116 de 738 pedidos web con
+  UTM están cancelados.
+- **El gasto en dólares.** La cifra de la tarjeta («gasto S/ …» y el ROAS
+  entregado) solo suma los anuncios cuya moneda es la de la tienda. Toda la
+  cuenta de Aurela y tres cuentas de Kenku gastan en USD (Kenku, 30-10: S/
+  3.224 en soles y USD 836 fuera de la cifra). Sin tipo de cambio no se
+  mezclan.
+- **El pedido del bot que nace de un anuncio de WhatsApp.** En WooCommerce trae
+  el `utm_id` del anuncio (`utm_medium = ctwa`). Si su lead nació en el periodo,
+  cuenta por el lead; si nació antes, cuenta como pedido «web» del anuncio
+  (Kenku, 7 días: 16 de 35).
+
+### 17.5 Cómo van las ventas: hoy, esta semana y este mes contra el anterior a esta altura (25-10-2026)
+
+Arriba de todo el Consolidado, antes de «Operación», el bloque «Cómo van las
+ventas» (antes «Hoy») dice cómo van las ventas de las tiendas que mira la
+persona, como el inicio de Shopify: pedido de Frankz del 25-10-2026, opción
+«Pulso con curva» y comparación «Ayer a esta hora»; el mismo día pidió tres
+pestañas para elegir el comparativo: **Hoy**, **Esta semana** y **Este mes**.
+Entra en «Hoy». No sigue al selector de periodo del Consolidado.
+
+**Qué cuenta.** La venta de la cabecera del Consolidado (§17.4): todos los
+pedidos de la tienda, los cierre quien los cierre. Cuentan los activos
+(`cancelled_at` vacío) y el ingreso es total − reembolsado. Los pedidos del
+periodo que ya están cancelados van aparte, en una línea bajo las cifras, y no
+suman (en «Hoy» con su monto; en la semana y el mes solo cuántos, porque
+`ventas_por_origen` los cuenta pero no los suma). Medido el 25-10-2026 a las
+4:52 p. m.: Kenku llevaba 98 pedidos activos, los mismos 98 que mostraba
+Shopify, y el −26 % de Shopify era contra ayer a esa hora (132), igual que aquí.
+
+**Contra qué compara.** Siempre contra el periodo anterior **a esta misma
+altura**, con el estado que cada pedido tiene hoy (uno que se canceló después
+ya no cuenta):
+
+| Pestaña | El periodo | Contra |
+| --- | --- | --- |
+| Hoy | de la medianoche a ahora | ayer, hasta la misma hora |
+| Esta semana | del lunes a ahora | la semana pasada, de su lunes hasta el mismo día de la semana y la misma hora |
+| Este mes | del día 1 a ahora | el mes anterior, de su día 1 hasta el mismo día del mes y la misma hora |
+
+Si el mes anterior no tiene ese día (el 30 de marzo contra febrero), se compara
+contra el mes anterior **entero** y lo dice («contra febrero completo»). El
+cambio va en porcentaje, con flecha y «vs ayer», «vs semana pasada» o «vs
+setiembre» (el mes anterior por su nombre); si el anterior a esta altura no
+tenía nada, no hay porcentaje: dice «ayer a esta hora no había» (o «la semana
+pasada a esta altura…», «setiembre a esta altura…») o «sin ventas todavía»,
+nunca un porcentaje sobre cero.
+
+**Solo compara con un anterior completo.** Una tienda se compara si Kapta tiene
+todas sus ventas desde el inicio del periodo anterior: desde el más tardío
+entre `ORDERS_SYNC_FROM` (antes, solo los pedidos del bot) y el día de su
+primer pedido en Kapta. Si alguna tienda no llega, no hay porcentaje ni curva
+anterior: la cabecera dice «sin comparación: Kapta tiene todas las ventas de
+Aurela desde el 13 de octubre» y su fila, «sin comparación». No usa el inicio
+en Kapta de §17.3: ese piso es para decir quién cerró cada venta, y este
+bloque no parte por canal.
+
+**El día.** Cada tienda se mide en su día local (`stores.timezone`): el día
+empieza a su medianoche, la semana a su lunes, y el corte del anterior es a su
+hora local. El reloj del corte y el eje de la curva usan la zona de la primera
+tienda; hoy las dos están en Lima.
+
+**Lo que muestra.**
+
+- **Ventas** (S/ neto) y **Pedidos** (activos), cada una con su cambio contra
+  el anterior a esta altura y lo que el anterior llevaba a esa altura. Las dos
+  cifras son botones: la elegida (de entrada, Ventas) decide lo que dibuja la
+  curva, y sigue elegida al cambiar de pestaña.
+- **La curva acumulada**: en «Hoy», por cuarto de hora; en la semana y el mes,
+  por día (lo acumulado al cerrar cada día y, en el de hoy, hasta ahora). Lo
+  de ahora en azul hasta el corte y el anterior entero, punteado, para ver qué
+  le faltaba a estas alturas, con el punto de «a esta altura» sobre su línea.
+  Al pasar el cursor, tocar o recorrer con las flechas del teclado, las dos
+  cifras de esa hora («A las 3:45 p. m.») o hasta ese día («Hasta el jueves»,
+  «Hasta el día 16», «Hasta hoy, 8:45 p. m.»). Una tabla hora por hora o día
+  por día la acompaña para quien no ve el gráfico.
+- **Una línea por tienda** (con dos tiendas o más): ventas y pedidos, cada uno
+  con su cambio contra el anterior a esta altura.
+
+Medido el 25-10-2026 a las 8:45 p. m., las dos tiendas: la semana llevaba 1,486
+pedidos y S/ 277,818 contra 1,631 y S/ 309,100 de la semana pasada a esa
+altura (−9 % y −10 %); el mes, 5,453 pedidos y S/ 1,019,031 contra 4,672 y
+S/ 772,254 de setiembre a esa altura (+17 % y +32 %). Tienda por tienda, lo
+mismo que contar `orders` directamente.
+
+**Frescura.** Lee los pedidos que ya están en Kapta (webhook y sincronización,
+unos minutos de retraso). La pestaña elegida se relee sola cada minuto mientras
+la pestaña del navegador está a la vista, y al volver a ella si ya pasó el
+minuto; una pestaña se lee al elegirla (y al acercarse a ella, para que el
+cambio sea inmediato). Si un refresco falla, quedan las últimas cifras y la
+cabecera dice a qué hora falló; si falla la primera lectura de una pestaña, un
+aviso `warn` con «Reintentar» y las otras pestañas siguen; si falla la primera
+lectura de la página, un aviso `warn` en su lugar y el resto del Consolidado
+sigue.
+
+**Lo que no tiene.** Visitantes en vivo, sesiones y tasa de conversión de la
+tienda: son de la analítica de Shopify, que Kapta no recibe. No se simulan.
+
+Cómo se calcula: con la sesión de quien mira (`getSalesPulse` en
+`lib/sales-pulse-access.ts`, sin migración). «Hoy» lee los pedidos de ayer y
+hoy de `orders`; la semana y el mes, el total por tienda y día local de
+`ventas_por_origen` (0268; el mes con el anterior, unos 143 ms bajo RLS como
+dueña) y los pedidos del día del corte, para cortar al minuto. Se arma en
+`lib/sales-pulse.ts` y `lib/today-sales.ts` (puros) y se dibuja en
+`components/sales-pulse.tsx`. El refresco es `GET
+/api/dashboard/pulso?periodo=hoy|semana|mes`, con las mismas puertas que la
+página: sin tiendas, o solo vendedora o solo motorizado, no hay ventas que ver.
 
 ## 18. Implementación incremental
 
@@ -8890,6 +11640,83 @@ el guardarraíl de ambigüedad, la que busca dentro del texto y la que rompe la
 rama sin región— y los caza los cuatro. Una prueba que no falla ante ninguno de
 esos no habría estado protegiendo nada.
 
+**Recordar la provincia de un distrito, con guarda (25-10-2026, `mom-v1.32`).**
+Corregir a mano la ubicación de un pedido ofrecía «Recordar esta provincia para
+los próximos pedidos del mismo distrito», **marcado por defecto**, y lo
+recordado va a `peru_districts` por **nombre** de distrito. Los nombres se
+repiten: el 21-10-2026 la corrección —correcta— de un pedido de Miraflores de
+Arequipa (#KP143187) dejó «miraflores → arequipa» para todos, y durante cuatro
+días los pedidos de Miraflores de **Lima** salieron con provincia «arequipa»
+(#KP143872, #AUR178625, #AUR178621 y #KP143948, entre otros; la cobertura
+siguió en Lima porque su departamento era Lima). El 19-10-2026 otra dejó
+«independencia → HUARAZ (Lima)», que no existe. Medido el 25-10-2026: ~700
+pedidos de Lima con una provincia imposible («arequipa», «HUARAZ», «lince»,
+«comas», «san roman»…). Desde ahora (`lib/district-learning.ts`):
+
+- **Recordar va desmarcado** y dice que vale para todos los pedidos, no solo
+  ese. Y no se recuerda (`districtLearnVerdict`, el aviso dice por qué) un
+  departamento que no se reconoce, una provincia que no es de ese departamento
+  (en Lima, solo sus diez provincias y el Callao) ni un distrito que ya está
+  guardado en **otro** departamento. La corrección del pedido vale igual.
+- **Lo aprendido no manda sobre el departamento del pedido**
+  (`learnedDistrictFits`): para un distrito de Lima Metropolitana o el Callao,
+  una fila de otro departamento no se usa, y una provincia que no es de Lima se
+  deja vacía. Lo mismo con la provincia de una guía (`guideProvinceFits`): una
+  salida «por definir» la copia de la fila del Master. Fuera de esos distritos
+  no se juzga nada: «Huaraz» con el departamento «Lima» —la clienta eligió mal
+  el desplegable— sigue tomando la provincia de Huaraz, que es la que acierta.
+  La cobertura de Leads usa la misma guarda (`leadDeliveryProbe`).
+- No cambia coberturas: con el departamento del pedido conocido, la provincia
+  solo entra a `order_coverage_for` por Cañete, que es provincia de Lima. La
+  versión sube a `mom-v1.32` para que el cron recalcule los pedidos ya
+  guardados.
+- **El rótulo de una caja ya creada** (25-10-2026): la caja guarda la provincia
+  que copió del Master al crearse, y KP143872-S01 salía «Miraflores /
+  arequipa» con el pedido ya corregido. El rótulo imprime la provincia solo si
+  cabe en su departamento (`printedProvince`); si no, «Lima» o «Callao». La
+  ruta del motorizado (y su Google Maps sin coordenadas) lee la del Master, que
+  recalcula el cron.
+
+**El homónimo de Lima contra el pin y la región (02-11-2026, owner, #KP142611,
+`mom-v1.36`).** Un pedido de provincia COD de **La Victoria, Chiclayo**, llegó
+del bot antiguo de Kapso (carrito de Shopify del 18-10) con «Chiclayo» donde
+Shopify pone el departamento: es una provincia. Como «Chiclayo» no es un
+departamento, las guardas del 25-10 no tenían con qué descartar «la victoria →
+lima» aprendido: el Master resolvió provincia «lima», la salida la copió y la
+guía de reenvío de Swayp salió a La Victoria de **Lima**. El pedido tenía con
+qué saberlo: el pin en Chiclayo (-6,83, -79,83) y el ubigeo que Aliclik guardó
+en su primera guía (`guide_registered`: La Victoria / Chiclayo / Lambayeque).
+Desde ahora (`limaProvinceTrusted` en `lib/district-learning.ts`), para un
+distrito de Lima Metropolitana o el Callao el Master **no da provincia Lima ni
+Callao** —ni de lo aprendido, ni de una guía, ni del carrito, ni del
+historial— cuando:
+
+- **el pin cae claramente fuera de Lima** (caja conservadora `LIMA_METRO_BBOX`,
+  lat −12,6 a −11,5 y lng −77,3 a −76,6, en `lib/peru-departamentos.ts`: deja
+  dentro Chancay o Chilca, porque solo sirve para decir «esto NO es Lima»). Un
+  pin dentro de la caja, al revés, es la prueba de que sí;
+- sin pin, **el ubigeo de la primera guía de Aliclik** es de otro departamento;
+- sin pin ni ubigeo, **la región es otro departamento**, leyendo una **provincia
+  capital** escrita en su lugar como su departamento (`orderDepartmentKey`):
+  «Chiclayo» → Lambayeque, «Huaraz» → Áncash, «Mariscal Nieto» → Moquegua. Son
+  solo las capitales cuyo nombre difiere del departamento, cotejadas con lo que
+  hay en el repo (no hay un catálogo completo del INEI y no se inventa); lo
+  ambiguo, como «Bellavista» (Callao y San Martín), no se mapea: ahí decide el
+  pin;
+- o **la región no es ningún departamento** y el distrito es un homónimo
+  (`lima_ambiguous_districts`: La Victoria, Independencia, Miraflores…). Una
+  región que nombra Lima («La Molina, Lima») o un distrito de Lima que no se
+  repite («HUACHIPA») cuenta como Lima, y un distrito que solo existe en Lima
+  (Comas, Surquillo) sigue siendo Lima: su nombre es la prueba. **Sin región**
+  todo sigue como antes.
+
+En esos casos la provincia queda vacía, salvo que el ubigeo de Aliclik dé una
+que case con el pedido («CHICLAYO»), que entonces se usa. La corrección manual
+manda como siempre, y la región que se muestra no cambia: «Chiclayo» sigue
+diciendo «Chiclayo». Un pedido normal de Lima —Miraflores con «Lima
+(provincia)» y el pin en Lima, o con «Lima» y sin pin— sale igual que antes.
+La versión sube a `mom-v1.36` para que el cron recalcule.
+
 ### 19.0.1 La ortografía del departamento se unifica; el matiz de Lima no
 
 Medido el 14-09-2026: `shipments.region` tenía **77 valores distintos para 25
@@ -8951,6 +11778,45 @@ el barrido masivo que resincroniza la elegibilidad.
 `province` llegó en la migración 0039 y el histórico guarda la suya en `region`.
 Se resuelve una sola vez (`province ?? region`): sin ese respaldo, media base
 pierde la provincia y con ella la derivación.
+
+**Una guía Swayp a Lima para un pedido que no es de Lima no se crea
+(02-11-2026, owner, #KP142611).** Derivar la ciudad del distrito y la provincia
+copia lo que diga la salida, y la del #KP142611 decía «La Victoria» + «lima»
+(ver §19.0, el homónimo de Lima): el reenvío por Swayp que confirmó el agente de
+voz salió a Lima para un pedido que el Master clasificaba como Provincia COD.
+Antes de pedirle a Swayp **cualquier** guía —reenvío y reprogramación
+(`swaypGuideForReprogram`), guía directa y «Enviar por Swayp» desde Por
+confirmar (`emitirGuiaSwaypDirecta`), y los dos automáticos, que pasan por
+`createFenixGuideViaApi`, la última puerta de todas—, si la ciudad resuelve a
+Lima Metropolitana o el Callao y la fila del Master dice que el pedido no es de
+Lima —**cobertura Provincia COD o Agencia**, **región de otro departamento**
+(una provincia capital se lee como su departamento) o **pin fuera de
+`LIMA_METRO_BBOX`**—, no se crea y se responde: «Destino contradictorio: la guía
+Swayp saldría a Lima, pero el pedido es de <región/cobertura>. Revisa la
+ubicación del pedido (Corregir ubicación) antes de crear la guía.»
+(`lib/swayp-destination-guard.ts`). La vista previa de la guía directa lo avisa
+antes de pulsar. Si la fila del Master no se puede leer, tampoco sale: reintentar
+cuesta un clic y una guía mal dirigida es un paquete en la ciudad equivocada.
+Una guía a una ciudad Fenix de provincia (Chiclayo, Arequipa…) no pasa por esta
+reja.
+
+**La guía directa lee la ubicación corregida (02-11-2026, owner, #KP144042).**
+El Master arma el destino con «Corregir ubicación» (`order_geo_overrides`) por
+delante de todo (0051), pero la guía directa —y con ella «Enviar por Swayp»
+desde Por confirmar, el automático y la reprogramación cuando la salida no trae
+destino— solo buscaba en Shopify, el carrito COD y el lead. #KP144042 entró por
+el catálogo de WhatsApp sin dirección de Shopify; el equipo le puso la de la
+compra anterior de la clienta (Av. Santa Rosa 409, Sullana). El Master la
+mostraba y la mesa de confirmación decía «Swayp lo puede llevar hoy», y el panel
+de la guía decía «Sin dirección registrada» y «Swayp no tiene cobertura en este
+destino». Ahora `resolveDirectGuideAddress` aplica la corrección **campo a
+campo** (`withGeoOverride`, la misma precedencia que el Master: un nulo en la
+corrección no borra lo que trae el pedido) y el panel lo dice con la chapa
+«Ubicación corregida». Una corrección que solo trae la coordenada no cambia el
+origen de la dirección. En la reprogramación sigue mandando el destino de la
+salida (`reprogramDestination`), que es el que usó el courier. Registrar a mano un número que ya emitió Swayp desde su panel
+(`createFenixGuide`) no se frena: esa guía ya existe en Swayp y negarse a
+registrarla solo la dejaría sin seguimiento.
 
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
@@ -9232,7 +12098,8 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
   Excepción (v1.25, §6.5): entregado sin ninguna salida ni parada de
   motorizado y pagado completo a la tienda, sin reembolso, finaliza sin
   liquidación, porque no hubo courier que cobrara.
-- Falta de costo logístico bloquea la conciliación financiera.
+- Falta de costo logístico bloquea la conciliación financiera; una tarifa
+  ausente no cuenta como S/ 0 (§14, 15-10-2026).
 - Una liquidación observada conserva el lote abierto hasta su conciliación.
 - La indemnización formal solo se abre sobre una salida Aliclik.
 - Un administrador puede solicitar un reembolso, pero solo el owner puede
@@ -9240,6 +12107,12 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
 - Reabrir un pedido finalizado crea una obligación de validación; las señales
   históricas no lo vuelven a cerrar automáticamente.
 - Finalizar se bloquea mientras existan salidas activas u otras obligaciones.
+  Si la única salida viva es de Grupo GF y su parada está entregada en una ruta
+  abierta, la Mesa no ofrece «Finalizar expediente» y el servidor lo niega con
+  «Termina la ruta en Grupo GF Courier › Rutas › «Reparto y liquidación»»
+  (§29.13, 15-10-2026). Si además está anulado en Shopify, no promete que
+  cerrar la ruta lo pase a entregado: lo cambia una persona desde la ficha
+  (§11.4, §29.13, 16-10-2026).
 - Todas las acciones se guardan como eventos append-only y recalculan el Master.
 
 ### 24.1 Criterios de aceptación de Por confirmar
@@ -9284,7 +12157,8 @@ que aparecer en el drawer en el mismo cambio.
 
 El drawer no es un formulario largo ni un resumen de tablas. Es la mesa de
 trabajo de un pedido concreto. La experiencia principal se diseña primero para
-el equipo que opera desde una computadora y se divide en tres espacios estables:
+el equipo que opera desde una computadora y se divide en cinco espacios
+estables:
 
 1. **Operar:** muestra macroetapa, subetapa, antigüedad, avance del MOM y una sola
    próxima acción. Aquí viven pagos requeridos, elección de ruta, rótulos,
@@ -9295,6 +12169,168 @@ el equipo que opera desde una computadora y se divide en tres espacios estables:
 3. **Actividad:** conserva cronológicamente eventos, actores, fuentes, guías,
    motivos y correcciones. Es evidencia de solo lectura; no compite con el
    trabajo pendiente.
+4. **Punto (24-10-2026, pedido del owner):** el texto con el que se le pasa el
+   pedido al punto de entrega, listo para copiar. Es el mismo que Shopify
+   guardaba en el metacampo «Pedido» con su plantilla Liquid, carácter por
+   carácter (`lib/order-punto.ts`, probado contra el metacampo real de
+   #KP143817): `PUNTO`, nombre, dirección, referencia ` - ` código postal,
+   distrito ` - `, teléfono, `Pedido de <marca> <pedido>`, `COBRAR <total>
+   SOLES`, la nota y los productos. La dirección es la de envío y, si no hay,
+   la de facturación (`displayAddress`); la marca es la tienda sin el país
+   («Kenku Peru» → «Kenku»). Si la dirección no trae teléfono va el del
+   cliente. Kapta lo arma porque Shopify cierra el 28-10-2026 (§37) y los
+   pedidos de WooCommerce nunca lo tuvieron. Es un texto para copiar: no
+   escribe nada ni cambia el monto a cobrar del pedido.
+   **Dos diferencias con la plantilla (decisión del owner, 25-10-2026):**
+   - **«COBRAR» es el saldo, no el total** (`puntoCollect`): el total vigente
+     de Shopify (sin él, el de Kapta) menos lo que la clienta ya pagó y está
+     validado (adelanto, diferencia), con la misma regla de la ruta del
+     motorizado (`collectionBalance`: la rendición de un courier y lo rechazado
+     no cuentan; pagado en el checkout, 0). Con la forma de Shopify («89.1»,
+     «218.5»). Lo que está por validar no se resta: la pestaña lo avisa, porque
+     si se valida antes de la entrega hay que volver a copiar. Si los pagos no
+     se pueden leer, el Punto sale sin monto y la pestaña lo dice; nunca se
+     adivina el total. Antes la plantilla ponía el total aunque hubiera
+     adelanto, y el punto cobraba de más.
+   - **Cada producto lleva su cantidad**: «  2 x Producto - Variante». Una línea
+     quitada del pedido (cantidad 0) no va.
+5. **Chatby (26-10-2026, pedido del owner):** la conversación de WhatsApp de la
+   clienta con el bot de confirmación de Chatby, para no salir de Kapta a ver qué
+   se le dijo: **para leer** y, desde el 02-11-2026, para **responderle** (abajo). Kenku y Aurela comparten el bot y el número. El
+   contrato es el documento del equipo de la tienda
+   (`docs/kapta/chatby-conversaciones.md`), probado el 25-10-2026 contra la API
+   real.
+   - **Qué muestra:** los últimos 20 mensajes, del más viejo (arriba) al más
+     nuevo (abajo), agrupados por día y con la hora **en Lima**. La clienta a la
+     izquierda; el bot (con el nombre de la plantilla) y las personas del equipo
+     (con su nombre si Chatby lo da) a la derecha; las **notas internas**
+     aparte, en ámbar, porque la clienta no las vio; el botón que tocó
+     («Tocó el botón «Confirmar Dirección»»); los archivos como enlace (solo
+     https); y los **errores de WhatsApp** («no entregado») en rojo. Los
+     eventos internos («Tag added…») no se piden. Como una misma clienta puede
+     tener mensajes de las dos marcas, el mensaje que nombra el pedido de la
+     ficha lleva la chapa «Este pedido». Arriba, «Actualizar» y **«Abrir en
+     Chatby»** (`https://app.chatby.io/inbox/<user_ns>`, pide la sesión de
+     Chatby).
+   - **La cifra de la pestaña (26-10-2026, pedido del owner):** cuántos de los
+     20 mensajes son de la clienta (texto, botón o archivo;
+     `chatbyCustomerCount`), en la misma chapa que la cifra de «Actividad».
+     Solo sale si respondió: sin respuesta, sin error o sin clave, no hay
+     chapa. Así se sabe sin abrir la pestaña si la clienta contestó al bot.
+   - **A pedido:** se lee al abrir la ficha del pedido (para la cifra; antes,
+     al abrir la pestaña), nunca en segundo plano para todos, con un tope de **5 segundos** para las dos llamadas y **un
+     minuto** de caché por celular en la memoria del servidor. **La única
+     excepción** es la confirmación automática por Chatby (§6.1, «Confirmó por
+     Chatby», decisión del owner del 01-11-2026): los mismos dos GET, solo para
+     Provincia COD en Por confirmar de las últimas 72 h y con un tope de
+     lecturas por pasada. Si falla, la
+     pestaña lo dice («No se pudo cargar la conversación de Chatby» y el
+     motivo: la clave rechazada, el código de Chatby o que no respondió), con
+     «Abrir en Chatby» si ya se encontró a la clienta; el resto de la ficha no
+     cambia. Sin la clave, dice que falta conectar Chatby. Sin conversación:
+     «Esta clienta no tiene conversación en Chatby».
+   - **Cómo se lee:** `GET /subscribers?phone=%2B51…` (el celular del pedido
+     **con el `+`**: con «51…» o los 9 dígitos Chatby devuelve 0) da el
+     `user_ns`; con más de una clienta, la del mensaje más reciente. Luego
+     `GET /subscriber/chat-messages?user_ns=…&limit=20&include_bot=1&include_note=1`
+     (sin `include_bot` no salen las plantillas). Para leer, solo esos dos
+     GET. Chatby no tiene claves de solo lectura: Kapta solo escribe cuando una
+     persona responde desde la ficha (abajo).
+   - **Lo que no sale de la lectura:** la clave (`CHATBY_API_KEY`, la clave
+     «KAPTA» del bot, creada en `app.chatby.io/settings#/api` → «Create API Token»
+     con solo el permiso «Manage Flow», aparte de la de Make para
+     revocarla sola; solo en el servidor), los campos del contacto
+     (`user_fields`, uno trae la clave de pedidos de una tienda: de la clienta
+     solo se copian `user_ns` y el nombre) y la conversación (no se guarda en
+     Kapta; los registros solo llevan el paso y el código HTTP). La ve quien ya
+     puede ver el pedido (RLS, como la ficha). El `user_ns` no se guarda: se
+     busca cada vez por el celular.
+   - **Grupo GF:** es una de las integraciones con credenciales únicas de Grupo
+     GF; para una organización cliente queda apagada (§29.15.1).
+   - **El celular en grande (26-10-2026, owner):** arriba de la conversación,
+     «Celular de la clienta» en letra grande, agrupado de a tres
+     (`+51 973 972 968`), con el botón «Copiar celular», que copia el número
+     tal cual está guardado. Hay asesoras con miopía que lo copian para
+     buscarlo en Chatby; en la cabecera de la ficha va en letra chica
+     (`ChatbyPhone`).
+   - Implementación: `lib/chatby-conversation.ts` (reglas puras),
+     `lib/chatby-api.ts` (las dos llamadas, el tope y la caché),
+     `loadOrderChatby` en `app/dashboard/pedidos/actions.ts` y
+     `components/order-chatby-panel.tsx`; `?seccion=chatby` abre la pestaña.
+     Las primeras horas se llamó «WhatsApp»; el owner pidió «Chatby» el mismo
+     día, porque «WhatsApp» ya es el botón de la cabecera que abre el chat.
+     Pruebas: `test/chatby-conversation.test.ts`.
+   - **Responder desde la ficha (02-11-2026, pedido del owner).** Debajo de la
+     conversación, «Responder por WhatsApp»: una caja de texto y «Enviar por
+     WhatsApp». Decisiones del owner:
+     - **Quién:** quien puede editar el pedido (`master.edit`, como el resto de
+       la ficha). Sin ese permiso la pestaña sigue «Solo lectura».
+     - **Cómo sale:** solo texto (hasta 1.000 caracteres), **como persona del
+       equipo** y no como bot: `POST /subscriber/send-content` con
+       `send_as_agent: 1` y `data.content.messages = [{type: "text"}]`.
+     - **La ventana de 24 h de WhatsApp:** se puede escribir solo hasta 24 h
+       después del último mensaje de la clienta (texto, botón o archivo) en los
+       20 que se traen (`chatbyReplyWindow`); la caja dice hasta cuándo. Pasado
+       eso, o si la clienta no escribió, no hay caja: un aviso explica que
+       WhatsApp no deja mandar texto libre y que se le escribe con una
+       plantilla desde Chatby. El servidor lo vuelve a comprobar con la
+       conversación al día (sin la caché) antes de mandar.
+     - **El bot en pausa 60 minutos** para esa clienta
+       (`POST /subscriber/pause-bot`), para que sus flujos y recordatorios no
+       hablen encima de la persona, como cuando se responde desde el panel de
+       Chatby. Si la pausa falla, el mensaje igual salió y el aviso lo dice.
+     - **Queda en la Actividad:** «Mensaje por WhatsApp (Chatby)» (`kind =
+       chatby_message`, `source = 'chatby'`), con el texto como nota y quien lo
+       mandó como actor (Chatby no sabe quién es en Kapta). Es lo que escribió
+       el equipo: la conversación de la clienta sigue sin guardarse.
+     - Después de mandar, la conversación se vuelve a leer (sin la caché) y se
+       ve lo enviado. Si Chatby rechaza el envío, sale su motivo y no se anota
+       nada.
+     Implementación: `sendOrderChatbyReply` en
+     `app/dashboard/pedidos/actions.ts`, `sendChatbyReply` y
+     `forgetChatbyConversation` en `lib/chatby-api.ts`, `ReplyBox` en
+     `components/order-chatby-panel.tsx`. Pruebas: `test/chatby-reply.test.ts`.
+
+**El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
+La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
+y las notas del sistema), pero un cliente tiene un solo lead por tienda y ese
+lead apunta a su última venta. Por eso cada gestión pertenece a **un** pedido
+del cliente (`lib/lead-calls-by-order.ts`): a la venta que nombra su nota
+(«pedido #KP134581»); si no nombra ninguna, a la primera venta creada después
+de ella (con 10 minutos de margen para la nota «Venta cerrada»); y lo posterior
+a la última venta, a esa última. Con una sola compra no cambia nada. Pasó con
+#KP141951: el lead pasó a apuntarle y su Actividad mostraba la guía de
+septiembre de #KP134581, que a su vez se había quedado sin su historial.
+**Una gestión de más de 14 días antes de esa venta no es de ningún pedido
+(24-10-2026)**: es un interés anterior que no compró y se queda solo en Leads
+(`LEAD_CALL_MAX_BEFORE_MS`). La nota que nombra un pedido manda igual, y lo
+posterior a la última venta sigue siendo suyo. Pasó con #AUR900004: el número
+tenía dos «Handoff resuelto» de septiembre y, sin otro pedido anterior, salían
+en la Actividad del pedido de octubre.
+
+**La nota de la guía dice quién la creó (16-10-2026, decisión del owner).** «Guía
+de Aliclik creada por millonestania5@gmail.com · AUR5X… · pedido #KP… · cobrar
+S/ …» (y «Guía Aliclik existente vinculada por …»). La nota sigue **sin
+vendedora**: firmarla le daría la venta a quien creó la guía y no a la asesora
+que la cerró; por eso el nombre va en el texto. Sin él, la Actividad la
+enseñaba como «Automático (Leads)» y una guía creada a mano parecía salida de la
+nada (#KP134581). Las notas anteriores quedan como se escribieron —el historial
+no se reescribe—; quién creó esas guías consta en su hecho «Guía registrada».
+
+**La anulación en WooCommerce está en la Actividad (24-10-2026, §38.3).** Un
+pedido de WooCommerce que se anula en la tienda tiene su hecho **«Anulado en
+WooCommerce»**, a la hora en que WooCommerce lo cambió, con el detalle **«por
+<usuario de WordPress>»** o **«WooCommerce (automático)»** (sin detalle si no se
+supo quién) y el origen **«WooCommerce»** en la línea de la fecha; si vuelve a
+estar vivo, **«Reactivado en WooCommerce»**. Es un hito de cierre (naranja, como
+«Anulado en Shopify»); la reactivación va en gris de consulta, porque la
+macroetapa a la que vuelve la decide el Master. Quien lo hizo no es un usuario
+de Kapta: va en el detalle, no como actor. Antes el Master decía «Anulado y
+cerrado» (#AUR900004, prueba del owner) y la Actividad no explicaba por qué. La
+anulación de un pedido de Shopify sigue sin hecho propio. Implementación:
+`orderEventsToTimeline` (lib/orders-master-access.ts), `timelineOriginLabel` y
+`timelineFact` (lib/order-timeline-fact.ts) y `TIMELINE_LABEL`
+(components/order-master-shared.tsx).
 
 Dentro de `Operar`, el orden de decisión es:
 
@@ -9313,8 +12349,9 @@ Reglas de interfaz:
 
 - El encabezado conserva siempre pedido, estado comercial, monto, tienda,
   cliente y accesos de llamada/WhatsApp.
-- La navegación usa las pestañas `Operar`, `Información` y `Actividad`. No se
-  reemplaza por una lista horizontal de enlaces a formularios.
+- La navegación usa las pestañas `Operar`, `Información`, `Actividad` y
+  `Punto` (`?seccion=punto` la abre). No se reemplaza por una lista
+  horizontal de enlaces a formularios.
 - La próxima acción nunca se deduce por color ni queda enterrada entre
   formularios; tiene título, explicación y acceso directo a su herramienta.
 - El color refuerza significado sin ser la única señal: ámbar para confirmación
@@ -9485,6 +12522,15 @@ separada del usuario de acceso.
 
 - Gestionar motorizados en Equipo: owner/admin (`riders.manage`). El alta rápida
   por nombre desde Liquidaciones sigue disponible bajo `settlements.manage`.
+
+**El acceso «Motorizado» en Equipo (23-10-2026).** Para darle `/reparto` a un
+motorizado: se le invita en Equipo con el acceso **Motorizado** (su correo; él
+crea su contraseña desde la invitación) y después se vincula ese usuario a su
+ficha en Equipo → Motorizados. El acceso solo da `routes.deliver` y ninguna
+tienda («Solo su ruta»); lo pueden invitar el dueño y los admins, igual que una
+vendedora. El rol existía en la base desde 0066 pero no en la lista de Equipo:
+no se podía elegir y el selector pintaba a Roy y Yhoni —motorizados— como
+«Dueño», la primera opción. Nunca tuvieron permisos de dueño.
 
 ### En la Mesa de despacho
 
@@ -9982,9 +13028,10 @@ altas y ediciones nuevas. Un `courier` nulo, vacío, `propio` o
 compatibilidad permite conservar `riders.id`, usuarios vinculados, rutas y
 liquidaciones; la normalización del texto no crea una segunda ficha.
 
-Shopify continúa siendo la única fuente de **pedidos comerciales administrados
-por Kapta** (§2). Una solicitud recibida directamente por API o Excel es una
-solicitud logística, no un pedido Shopify inventado. Debe conservar el código
+La tienda (Shopify hasta su cierre, WooCommerce después) continúa siendo la
+única fuente de **pedidos comerciales administrados por Kapta** (§2). Una
+solicitud recibida directamente por API o Excel es una solicitud logística, no
+un pedido de la tienda inventado. Debe conservar el código
 externo de la tienda y una clave de idempotencia para impedir duplicados.
 
 ### 29.3 Inventario preparado, pero no obligatorio
@@ -10154,10 +13201,13 @@ confirmar, porque que salga es justo lo que falta. Lo confirmado queda como
   (…)»: al decidir el acuerdo, o al recibir en oficina la caja que el acuerdo
   esperaba (§29.13).
 
-El reporte de la parada ya no programa: desde el 12-10-2026 la fecha que da el
-cliente en la puerta queda como «Fecha que pidió el cliente» y se confirma en
-Repro Lima (§29.7). Los programas que creó entre el 10 y el 12-10-2026 se
-respetan.
+**El reporte de la parada programa la fecha de la puerta (01-11-2026).** Del
+12-10 al 01-11-2026 la fecha que da el cliente en la puerta solo se anotaba y se
+confirmaba en Repro Lima. Desde el 01-11-2026 es un tercer camino que escribe el
+programa, con el motivo del motorizado: «Reprogramado por el cliente (reporte de
+la parada de … del dd/mm): acordado en la puerta.» (§29.7,
+`syncDoorDateProgram`). Los programas que creó entre el 10 y el 12-10-2026 se
+leen igual.
 
 **Excepción: «Caja nueva desde stock».** Repro Lima programa ese acuerdo al
 decidir aunque la caja anterior siga en la caja del motorizado, porque sale
@@ -10313,6 +13363,45 @@ cargar: #KP138029 (S/ 89) y #KP138037 (S/ 567) del 01/10, entregados el 02/10.
 - Si la hoja del día siguiente no lo trae, no se pasa: se le pregunta a quien
   liquida, porque una parada sin reporte frena el cierre de esa ruta.
 
+**El reprogramado que el motorizado conserva, sin su hoja (01-11-2026, pedido
+del owner).** El traspaso de arriba solo ocurría al cargar la hoja del día
+siguiente y solo si la hoja nombraba el paquete. Del 21 al 31/10 no se cargó
+ninguna hoja de Alexis: sus reprogramados quedaron «Por devolver» en la caja
+vieja aunque él los tuviera y los volviera a llevar, y sus rutas, con 268
+paradas sin reporte. Ahora el traspaso no espera la hoja:
+
+- **En Reparto y liquidación** (quien arma rutas, `routes.manage`), un «No
+  entregado · Reprogramado» que sigue en su caja de Grupo GF, sin devolver ni
+  pasar, ofrece **«Sale con él en otra ruta…»**: se elige el día (propone el
+  siguiente a la ruta, o mañana si ese ya pasó; cualquier día después de la
+  ruta y hasta 7 días adelante) y pasa con «Pasar».
+- **Arriba del panel de la ruta**, la lista **«{motorizado} conserva N
+  reprogramados de rutas anteriores sin ruta nueva»**: los de sus rutas de los
+  últimos 30 días que siguen en su caja vieja, el más reciente por pedido y sin
+  los que ya tienen parada en esa ruta. Cada uno con **«Pasar a esta ruta»**.
+  Un pedido anulado en la tienda sale con «Anulado: vuelve a la oficina» y sin
+  botón: no pasa (como arriba).
+- **En la app**, al reportar «No entregado · Reprogramado» de un paquete de su
+  caja, el motorizado puede marcar **«Me lo quedo y lo llevo mañana»**: el
+  paquete pasa a su ruta del día siguiente sin volver a la oficina. Sin
+  marcarlo, vuelve a la oficina como siempre. Vale para cualquier motorizado de
+  Grupo GF y es opcional en cada reporte. El reporte se guarda primero; si el
+  traspaso no se puede, la app lo dice y pide avisar a Coordinación.
+- **Es el mismo traspaso** que el de la hoja (`gf_carry_over`, 0234 y 0248):
+  sale de la caja anterior con `carried_over` y `package_removed`, entra
+  cotejado en una carga adicional de esa ruta y pasa a custodia, con su parada
+  pendiente. La parada anterior dice «Pasó a la ruta del dd/mm». Si Despacho
+  está armando la carga de ese día, no pasa y lo dice («pasa los reprogramados
+  cuando él la reciba»).
+- Sin migración. Implementación: `lib/gf-carry-kept.ts` (`carryKeptProblem`,
+  `defaultCarryDate`, `isKeptReprogrammed`), `lib/gf-carry-kept-server.ts`
+  (`carryKeptStop`, `loadKeptReprogrammed`), `carryKeptReprogrammed`
+  (`app/dashboard/rutas/actions.ts`), `loadCourierRouteReport`
+  (`app/dashboard/courier/actions.ts`), `keepForDate` en `reportStop`
+  (`app/reparto/actions.ts`), `CarryKept` y `KeptPanel`
+  (`components/routes.tsx`) y la casilla de `components/rider-route.tsx`.
+  Pruebas: `test/gf-carry-kept.test.ts`.
+
 **La fecha que pidió el cliente (12-10-2026).** Del 10 al 12-10-2026 el
 reporte «No entregado · Reprogramado por el cliente» ofrecía «Nueva fecha
 (opcional)» y, con fecha, programaba la salida en Grupo GF con el motivo
@@ -10342,6 +13431,39 @@ programa sola**.
   Lima».
 - El traspaso del reprogramado que el motorizado conserva (07-10-2026, arriba)
   no cambia.
+
+**La fecha de la puerta programa la salida (01-11-2026, decisión del owner:
+«que Grupo GF le imponga a la tienda la reprogramación que ya tiene»).**
+Reemplaza el «No programa» de arriba. La llamada de la tienda sobraba cuando el
+cliente ya había dicho el día en la puerta.
+
+- **Al guardar el reporte** «No entregado · Reprogramado por el cliente» con la
+  «Fecha que pidió el cliente», Kapta programa la salida de Grupo GF para ese
+  día (`syncDoorDateProgram`, `lib/door-date-program.ts`, después del
+  recálculo del Master en `writeStopReport`). Vale para la app, para
+  Coordinación por el motorizado y para la hoja cargada desde el cuaderno (un
+  día de la semana escrito, «MIÉRCOLES»). El motivo es el del motorizado:
+  «Reprogramado por el cliente (reporte de la parada de Alexis del 31/10):
+  acordado en la puerta.».
+- **Si el reporte deja de traer la fecha** (se corrige a otro resultado o se
+  borra), se quita ese programa. Nunca toca uno de Repro Lima ni de Despacho.
+- **En Repro Lima** el pedido sale en «Programados» con «Acordado en la puerta:
+  mié 05/11», sin llamar. La tienda puede cambiarlo o cancelarlo como cualquier
+  acuerdo. Si el día pasó sin salir, vuelve a «Por decidir» con «Acordado en la
+  puerta: … · no salió», para que la tienda llame.
+- **En Grupo GF** entra a la cola con su día («Reintentos para hoy» cuando
+  toca, §29.13). La caja que el motorizado todavía tiene se recibe primero en
+  «Devoluciones», como siempre.
+- **En Almacén** («Reintentos por salir») va al anaquel de su día, como un
+  programa de Grupo GF: ya no lleva «No va al anaquel hasta que Repro Lima la
+  confirme». Ese aviso queda solo para el acuerdo anterior de Repro Lima.
+- **Si el motorizado se lo queda** («Me lo quedo y lo llevo mañana», o «Sale
+  con él en otra ruta…»), el paquete entra en la caja de esa ruta y el programa
+  se borra (`clearGfDispatchPrograms`): ya se cumplió.
+- En la app, la ayuda del campo dice «Sale ese día con Grupo GF: Kapta lo
+  programa solo.», y el aviso al guardar, «Sale con Grupo GF el mié 05/11, la
+  fecha que pidió el cliente.». En el historial del pedido: «pidió el mié 05/11
+  (sale ese día con Grupo GF)».
 
 **La hoja del motorizado sin app se carga desde Kapta (08-10-2026, decisión de
 Frankz).** Hasta el 07/10 cada hoja de Alexis se cargaba con SQL desde una
@@ -10387,6 +13509,36 @@ Courier (`routes.manage`), desde «Reparto y liquidación» de la ruta, con
 - Terminar la ruta y aprobar el pago siguen siendo de quien liquida. El SQL de
   `docs/runbooks/cuaderno-a-rutas.md` queda como respaldo.
 
+**Incluir en la misma carga los pedidos del día que siguen en una caja anterior
+del mismo motorizado (31-10-2026, decisión del dueño).** En la hoja de Alexis
+del 29/10 aparecían pedidos que todavía figuraban sin reporte en sus cajas del
+27 y 28/10. No hay que registrar un «Reprogramado» ficticio para poder cargarlos:
+la hoja revisada confirma que volvió a llevarlos.
+
+- Al revisar la foto se proponen marcados como **«Añadir a esta ruta»**, junto
+  con su resultado. **Aplicar** pasa el paquete y reporta la parada; no exige
+  salir del panel, agregarlo a mano ni volver a subir la foto.
+- Para una parada anterior sin reporte se exige código de pedido inequívoco
+  en la hoja, mismo motorizado y misma organización, caja anterior recibida,
+  paquete todavía activo allí y pedido sin anular. El cruce por nombre sigue
+  permitido solo para las paradas del día y los reprogramados de siempre.
+- La parada anterior se conserva **sin reporte**: no se inventa una llamada,
+  un intento fallido ni un resultado. El traspaso deja el id de la hoja y el
+  motivo «La hoja del día confirma que lo volvió a llevar» en ambas cajas y en
+  el pedido. El retiro resuelve la custodia de la caja anterior, no su reporte.
+  La parada sin reporte lleva un marcador de continuación con la ruta destino y
+  la hoja: queda histórica, protegida frente a cambios y sin bloquear la identidad
+  única de la nueva parada abierta. No se da por pagada ni por entregada la visita
+  anterior. La interfaz la distingue como «Continuó en otra ruta».
+- La relectura al aplicar vuelve a validar todas las condiciones. Una salida
+  reemplazada o recibida en oficina, un pedido anulado, una parada ya reportada,
+  la caja de otro motorizado o un código ambiguo se muestran con su motivo;
+  no se trasladan silenciosamente. Los resultados válidos restantes se cargan.
+- Se conserva el camino anterior de los reprogramados y sus guardas. La nueva
+  función solo permite pasar sin reporte los paquetes nombrados en una hoja
+  revisada y aplicada por quien la está cargando. No modifica stock, pagos ni
+  liquidaciones y no habilita la función antigua para trasladar cualquier caja.
+
 ### 29.8 Tarifas por distrito y comisión Yape
 
 Grupo GF Courier cobra una tarifa por distrito/zona que **incluye IGV**. Debe
@@ -10422,6 +13574,19 @@ Grupo GF Courier. Sin coincidencia se muestra `Sin tarifa configurada`, no S/0,
 y se bloquea el cierre financiero. Daysi y Frankz pueden administrar tarifas;
 la pantalla permite edición por zona e importar/exportar Excel.
 
+**El costo logístico de Grupo GF sale de esta tabla (v1.31, 19-10-2026).** El
+Master calcula el flete de cada pedido de «propio» con la tarifa del distrito
+vigente el día del costo —su último movimiento, §14; la del contrato de la
+tienda si la hay, si no la general—, por el primer intento y por cada intento
+adicional de sus propias salidas, sin devolución aparte: el rechazo ya paga el
+distrito. Sin tarifa, o con un día del costo anterior a su vigencia, el costo
+queda vacío y la conciliación se bloquea (§14). Como una edición solo abre
+vigencia después de la que rige, esta pantalla no carga una tarifa para días
+anteriores a la vigente: hoy todas rigen desde el 31-08-2026, y un pedido cuyo
+último movimiento es anterior sigue «falta tarifa» mientras su último
+movimiento siga antes del 31-08-2026 (cualquier movimiento posterior, también
+observar la liquidación o un comentario, le da la tarifa vigente ese día; §14).
+
 La comisión general por pagos recibidos en el Yape de Grupo GF es **3.5 %**:
 
 - se calcula solo sobre el importe efectivamente pagado por Yape;
@@ -10448,11 +13613,17 @@ rutas. Una parada pendiente bloquea la liquidación. Daysi o Frankz pueden
 completar el reporte faltante con la auditoría de §29.5; no existe cierre
 automático silencioso.
 
-El efectivo máximo planificado por motorizado es S/ 9,000 por ruta:
+El efectivo máximo planificado por motorizado es S/ 11,000 por ruta:
 
 - advertencia desde S/ 4,000;
-- bloqueo de nuevas asignaciones al superar S/ 9,000; y
+- bloqueo de nuevas asignaciones al superar S/ 11,000; y
 - Daysi o Frankz pueden autorizar una excepción con motivo auditado.
+
+**Límite subido de S/ 9,000 a S/ 11,000 (16-10-2026, decisión de Frankz).** La
+caja de Alexis, con 53 paquetes, llegaba a S/ 9,027.20 y el escáner bloqueaba
+#KP134309 en plena carga. Mismo camino que la subida anterior: un UPDATE sobre
+la fila de Grupo GF en `logistics_providers`, sin desplegar. El aviso sigue en
+S/ 4,000.
 
 **Límite subido de S/ 5,000 a S/ 9,000 (28-09-2026, decisión de Frankz).** Una
 ruta de Roy con 29 paquetes llegaba a S/ 5,363.10 y el escáner la bloqueaba en
@@ -10634,7 +13805,10 @@ Reparto propio es una vista con vocabulario y cuadre encima de ella:
   (`reported_by` presente) y se exige, como en las cargas de Grupo GF; y sin
   observación abierta en la fila. Las paradas de backfill histórico
   (`reported_by` null, ruta con nota «Completada desde el cuaderno histórico»)
-  no pueden tener foto y no se les exige.
+  no pueden tener foto y no se les exige. Antes que esas guardas, y para toda
+  fuente, la puerta no escribe la entrega de un pedido anulado en Shopify: lo
+  devuelve como `anulado_en_shopify` y quien llama lo nombra (§11.4,
+  15-10-2026).
 - **Una sola pantalla del motorizado**, /reparto: escribe como en el cuaderno
   (texto libre con sugerencias de su hoja), el detalle del pago, y el motivo
   obligatorio cuando cobra distinto al total. Un pedido que lleva sin haber
@@ -11015,13 +14189,49 @@ y, cerrada, el pedido entregado pasa a «Pendiente de liquidación» y con la
 liquidación a «Finalizado · Entregado cerrado», como cualquier Lima. Para que
 eso ocurra, una salida propia cuya parada se reportó entregada **cuenta como
 entregada** en las obligaciones de cierre: nadie escribe
-`delivery_status = entregado` en esas salidas, y sin esta regla todo pedido de
-Grupo GF caía en «Devolución física pendiente» o «Salida adicional activa» al
-cerrar la ruta. Reasignar un paquete postergado deja un `pickup_checked`
+`delivery_status = entregado` en esas salidas —salvo la caja «por definir» que
+rellena el cuaderno de Grupo GF (§30.8), que no tiene parada—, y sin esta regla
+todo pedido de Grupo GF caía en «Devolución física pendiente» o «Salida
+adicional activa» al cerrar la ruta. Reasignar un paquete postergado deja un `pickup_checked`
 nuevo, más reciente, y el pedido vuelve a «En reparto». La versión del
 resolver sube a `mom-v1.14` para que el cron reconcilie el histórico. Pruebas
 en `test/order-macro-stage.test.ts` («motorizado propio: lo que reporta mueve
 la etapa»).
+
+**La Mesa de cierre no finaliza lo que cierra la ruta (15-10-2026).** Con la
+parada entregada y la ruta abierta, el pedido está en «Por cerrar · Validación
+de cierre pendiente». La Mesa ofrecía «Finalizar expediente» y el servidor lo
+negaba («Todavía existen salidas activas»): 667 pedidos según la auditoría del
+atraso de Lima (14-10-2026). Finalizar no es el paso, porque el pedido no está
+entregado en el Master ni liquidado; el paso es cerrar la ruta. Cuando la única
+salida viva es propia y su parada vigente (la misma que enseña la ficha) está
+entregada en una ruta planificada o en curso, la Mesa no ofrece «Finalizar
+expediente» y dice «Termina la ruta en Grupo GF Courier › Rutas › «Reparto y
+liquidación»», con enlace al reparto de esa ruta cuando se conoce. Si alguien
+lo intenta igual, el servidor da la misma explicación (`gfOpenRouteBlock`,
+`lib/closure-blocks.ts`). Con otra salida viva de otro courier, o con la ruta
+cerrada, el mensaje es el de siempre. **Pendiente:** cerrada la ruta, la salida
+propia conserva `delivery_status = pendiente`; si un pedido así vuelve a
+necesitar «Finalizar» (por ejemplo, tras reabrirse), el servidor todavía lo
+niega por «salidas activas», en contra de la regla de arriba («cuenta como
+entregada»).
+
+**Si está anulado en Shopify, cerrar la ruta no lo marca entregado
+(16-10-2026).** Es el caso de #KP137541: anulado en Shopify el 05/10, su única
+salida propia pendiente y su parada entregada en la ruta del 01/10, en curso.
+La puerta a «entregado» lo rechaza como `anulado_en_shopify` al cerrar la ruta
+(§11.4), así que prometer «al cerrarla, el pedido pasa a entregado» mandaba a un
+bucle: cerrar la ruta, volver, «Finalizar» y «salidas activas». Ahora, con el
+pedido anulado en Shopify (`orders.cancelled_at`, lo mismo que lee la puerta),
+la Mesa sigue sin ofrecer «Finalizar expediente» y dice que terminar la ruta no
+lo marca entregado y que, si la entrega vale, la cambia desde la ficha
+(«Gestión manual»), con motivo, quien tenga «Corregir pedidos cerrados»; el
+servidor responde lo mismo. Un pedido «anulado» solo en Kapta, sin
+`cancelled_at` (#KP130784, #KP139661), sí pasa a entregado al cerrar la ruta y
+conserva el texto de siempre. Cerrada la ruta, a un pedido como #KP137541 le
+pasa lo del pendiente de arriba: la Mesa vuelve a ofrecer «Finalizar» y el
+servidor lo niega por «salidas activas», porque su salida propia sigue
+pendiente. Resolverlo es otra decisión.
 
 **No entregado → recibir en oficina → reprogramar (v1.15, 22-09-2026).** Todo
 «No entregado» es reprogramable salvo «Rechazó el pedido» (§9: un no
@@ -11042,6 +14252,36 @@ reprogramar»**, antes de «Tomados sin caja», cuenta los pedidos de Grupo GF e
 aplica ese filtro de etapa y subetapa. La versión del resolver sube a
 `mom-v1.15`.
 
+**«Reintentos para hoy»: Grupo GF solo ve lo que la tienda ya acordó
+(01-11-2026, decisión del owner, entrega 1 de la propuesta «Repro Lima y Grupo
+GF Courier: separar funciones»).** Llamar al cliente y decidir un reintento en
+Lima es **solo de la tienda**, en Repro Lima (§9.5). Grupo GF es el courier:
+recibe lo acordado y lo saca.
+
+- **La cola de Despacho del día** ya no trae los «En curso · Por reprogramar
+  Lima» sin acuerdo. Un pedido de esa etapa entra solo con su día en
+  `gf_dispatch_programs`, que escribe Repro Lima al decidir con Grupo GF (o al
+  recibir la caja que el acuerdo esperaba, §29.6). Un programa puesto desde
+  Despacho antes de esta regla se respeta. Lo mismo para «Sin condiciones»:
+  un reprogramado sin acuerdo no se lista ahí (`awaitingStoreAgreement`,
+  `app/dashboard/courier/actions.ts`).
+- **La caja que el motorizado todavía tiene** sigue llegando a Despacho, con o
+  sin acuerdo: recibirla en oficina es trabajo del courier («Devoluciones»).
+- **La tarjeta «Por reprogramar» pasa a «Reintentos para hoy»**
+  (`reintentos_hoy`, `isRetryForToday`, `lib/dispatch-day.ts`): cuenta los
+  reprogramados de la cola con su día acordado hoy o ya vencido. Al tocarla
+  filtra esa etapa en el apartado «Programados hoy». Lo acordado para otro
+  día espera en «Programados mañana» o «Programados después».
+- **Junto a «por asignar»** la línea dice cuántos esperan a la tienda («N
+  esperan a la tienda en Repro Lima»), con enlace a Repro Lima.
+- **Por QR sigue abierto (01-11-2026, decisión del owner: menos pasos).**
+  Despacho puede meter en una caja, por QR, un reprogramado que tiene en la
+  mano aunque la tienda no lo haya acordado. Al entrar a la caja deja «Por
+  reprogramar Lima» y su caso de Repro Lima se cierra solo (`fuera_de_etapa`,
+  §9.5): nadie llama a un cliente cuyo pedido ya va en ruta.
+- **El permiso de Repro Lima** ya no está en el rol «Despacho y Grupo GF»
+  (entrega 4, 01-11-2026, §9.5). Queda pendiente «Programar» (entrega 2).
+
 **Devoluciones en Rutas y el rechazo en puerta (v1.16, 22-09-2026).** Todo
 «No entregado» que salió en una caja tiene que volver físicamente. En Rutas,
 la columna **«Devolver»** dice devueltos / por devolver de cada ruta (verde
@@ -11050,8 +14290,21 @@ completo, rojo si falta alguno). En Despacho del día, la tarjeta
 devoluciones pendientes de cualquier fecha; al tocarla, el recuadro de
 asignar muestra solo «Escanear» y el campo de código para confirmar que cada
 paquete llegó a la oficina (cámara en serie, «Devueltos X de N»), y cada
-lectura hace «Recibir en oficina». Tocarla otra vez vuelve a asignar. En «Reparto y
-liquidación», cada no entregado dice **«Devuelto · fecha hora»** o **«Por
+lectura hace «Recibir en oficina». Tocarla otra vez vuelve a asignar.
+
+**Lectura repetida de una devolución (28-10-2026).** KP200152 ya había sido
+recibido en oficina, pero volver a leer su QR respondía «Ninguno de esos pedidos
+está No entregado dentro de una caja». Ahora se confirma «Ya recibido» solo
+si esa salida tiene evidencia de recepción de despacho con actor, está en
+custodia de la empresa o devuelta y no tiene caja activa ni despacho posterior.
+No se crea otro evento, ni se mueve inventario ni se anula la venta. La
+respuesta identifica las salidas confirmadas para actualizar el avance del
+escáner por salida, también si otra persona ya la recibió. La recepción de una
+ruta solo confirma sus propias cajas. Sin evidencia, o si volvió a salir,
+se conserva el bloqueo. Para terminar una venta WooCommerce después de esa
+recepción se usa §38.18; §38.17 se reserva a paquetes que nunca salieron.
+
+En «Reparto y liquidación», cada no entregado dice **«Devuelto · fecha hora»** o **«Por
 devolver»**. **Hasta la v1.23, «Rechazó el pedido» no se reprogramaba** (0189;
 desde la v1.23 se reprograma como los demás motivos, §9): mientras estaba en
 la caja va a «Por cerrar · Devolución física pendiente»; recibido en oficina,
@@ -11330,8 +14583,8 @@ Implementación: `lib/gf-replaced-output.ts`, `lib/gf-retry.ts`
 `0248_gf_replace_output.sql`. Pruebas en `test/gf-replace-output.test.ts` y
 `scripts/sql/gf_replace_output_smoke.sql`.
 
-**Escanear un «No entregado» de una caja anterior lo recibe y lo asigna
-(29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron
+**Escanear un «No entregado» de una caja anterior —o de hoy, desde el
+26-10-2026— lo recibe y lo asigna (29-09-2026).** #KP136779 y #KP136896 salieron el 26/09 con Yhoni y volvieron
 «No entregado · reprogramado». La ruta se cerró el 28/09, pero nadie los
 recibió en oficina, así que seguían dentro de esa caja: cerrar la ruta no vacía
 la caja. El 29/09, con los paquetes en la mano, el escaneo de «Por QR»
@@ -11352,8 +14605,46 @@ prueba que volvió, igual que en «Devoluciones».
 Si algo impide asignarlo después de recibirlo (programado para otro día,
 límite de efectivo), la línea lo dice y el paquete queda recibido, «por
 asignar». Si el cliente ya no lo quiere (Repro Lima, «Desarmar y cerrar»,
-§9.5), lo recibe y no lo asigna (abajo). Lo del **mismo día** no cambia: «Ya
-estaba» es solo la caja de ese día, y la de otro motorizado ofrece «Mover».
+§9.5), lo recibe y no lo asigna (abajo).
+
+**La caja de HOY con la parada reportada también (26-10-2026, decisión del
+owner).** #KP142954 salió el 26/10 en la caja de Yhoni, que lo reportó «No
+entregado», y volvió a la oficina ese mismo día. Al escanearlo para la caja de
+Alexis del 26/10 la línea decía «Está en la caja de Yhoni del 2026-10-26» y
+«Mover» fallaba («Esa parada ya fue reportada: se resuelve por su reporte»):
+`gf_office_reclaim` (0230) solo recupera una parada pendiente, y la regla de
+arriba solo miraba cajas de días anteriores. No había camino. Ahora la regla
+mira las cajas del día que se arma o anteriores (`pastBoxDecision`, mismo RPC
+`gf_return_to_office`, misma relectura de custodia y de `outputWasReplaced`,
+mismos avisos de Repro Lima y «no lo quiere», mismo programa y mismo límite de
+efectivo al asignar). Sin migración: el RPC no mira el día.
+
+| Caja de HOY donde está, reporte de su parada | Qué hace el escaneo |
+| --- | --- |
+| De otro motorizado, «No entregado» (rechazo incluido) | Lo recibe en oficina y lo asigna a la caja que se arma. La chapa dice «volvió de Yhoni del 26/10». |
+| Del MISMO motorizado, «No entregado» | No lo toca: es el reintento del mismo día con la misma salida (§9.3). Sigue en su caja y él lo reporta otra vez en su misma parada. La línea lo dice. |
+| «Entregado» | No hace nada: lo dice (antes ofrecía un «Mover» que la base negaba). |
+| Sin reporte (o la caja todavía no salió) | La regla de siempre: «Ya estaba» si es de ese motorizado; si es de otro, «En la caja de…» con «Mover» (0230, abajo). |
+
+- **La ruta de Yhoni no cambia.** Su parada queda «No entregado» con su motivo
+  y su foto: es su reporte y su liquidación, como cuando se recibe con
+  «Recibir en oficina». Su caja registra que el paquete salió («No entregado
+  por Yhoni (…): recibido en oficina», evento `returned_to_office`), así que
+  al cerrar su ruta no aparece como devolución física pendiente. No suma
+  efectivo a su cuadre.
+- **La ruta de Alexis suma una parada nueva** cuando su carga se entrega: la
+  unicidad es por ruta y pedido, y solo puede haber una parada abierta por
+  salida (0192); la de Yhoni ya no está abierta. En Repro Lima es el intento
+  siguiente (la parada que nació después, §9.5).
+- **La segunda vuelta con el mismo motorizado no se recibe.** Su ruta del día
+  ya tiene la parada de ese pedido y no admite otra: recibirlo y asignárselo
+  dejaría el paquete en su carga sin parada que reportar. El reintento del
+  mismo día (§9.3) es el camino; para otro motorizado, se escanea en su caja.
+- **«Mover» sobre una parada que se reportó después del escaneo** ya no dice el
+  mensaje de la base: pide volver a escanearlo, y el escaneo decide por esta
+  regla (`REPORTED_STOP_MOVE_ERROR`).
+
+Pruebas en `test/gf-scan-return.test.ts` y `test/gf-scan-same-day-return.test.ts`.
 
 **«Ya estaba» dice la carga y lo que falta (12-10-2026).** #KP139615 volvió de
 la ruta del 08/10 y el escaneo lo puso en la Carga 5 de Alexis, una carga nueva
@@ -11380,6 +14671,15 @@ custodia a la empresa y lo mete en la caja del segundo. Solo con la parada
 de la caja y del pedido. Si algo falla, el motivo se dice en la misma fila del
 escaneo; antes salía arriba de la página, fuera de la pantalla del celular, y
 parecía que el botón no hacía nada.
+
+**«Mover a esta caja» dentro de la cámara (26-10-2026).** Con la cámara
+continua abierta —«Agregar pedidos» de la caja y «Por QR» de Despacho del
+día—, una lectura «Está en la caja de…» que se puede mover trae el botón
+«Mover a esta caja» dentro del aviso de la cámara (en ámbar), sin cerrarla. El
+resultado se dice en el mismo aviso: verde si pasó, rojo con el motivo si
+falló. La fila de la lista conserva su «Mover». «Agregar pedidos» mueve también
+con el paquete en la mano (`inHand`, como «Por QR»). Pruebas en
+`test/scan-camera-move.test.ts`.
 
 **Devoluciones de Almacén también recibe lo que vuelve de Grupo GF
 (05-10-2026).** El escáner de Almacén → Devoluciones solo aceptaba Tanders y
@@ -11411,7 +14711,7 @@ La caja va al anaquel de ese día, no al estante de reprogramados.
 - **Por las tres puertas** que llaman a `gf_return_to_office`: «Recibir en
   oficina» de Despacho del día (lista, QR de «Devoluciones», número de pedido
   y cierre de una ruta: `returnUndeliveredShipments`), Devoluciones de Almacén
-  (`receiveGrupoGfReturn`) y el escaneo de una caja anterior en «Por QR»
+  (`receiveGrupoGfReturn`) y el escaneo de una caja anterior (o de hoy) en «Por QR»
   (`scanAssignToRider`, antes de comprobar el programa). Solo lo que vuelve a
   «por asignar»: la caja reemplazada, que va a stock, no programa nada.
 - **Qué acuerdos.** Con Grupo GF, «Mantener» o «Reimprimir el rótulo de la
@@ -11462,12 +14762,39 @@ La caja va al anaquel de ese día, no al estante de reprogramados.
 
 **Un pedido anulado se dice primero, en cualquier escaneo (05-10-2026).** Al
 escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja o
-caja del motorizado de Grupo GF—, si su pedido está anulado (en Shopify o en
-Kapta) la respuesta es esa y nada más: «#AUR177767 está ANULADO en Shopify (el
-04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.».
+caja del motorizado de Grupo GF—, si su pedido está anulado (en la tienda o en
+Kapta) la respuesta es esa y nada más: «#AUR177767 está ANULADO en la tienda (el
+04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.»
+(«en la tienda» desde el 24-10-2026, §38.12).
 Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenece a
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
+
+**Una salida anulada se dice con quién, cuándo y qué hacer (24-10-2026).**
+AUR178551-S01 la anuló una compañera a las 10:28 de Lima con «Anular salida»
+de la ficha (`route_output_cancelled`, §4: la caja nunca salió). Más tarde
+alguien escaneó su rótulo impreso en «Asignar por QR» y la línea respondió «La
+caja existente ya no está disponible para asignarla.»: cierto, pero no decía
+que esa salida estaba anulada. Ahora, cuando el escaneo de asignación **ya
+falló** y el QR es de una salida con `delivery_status = anulado`, la línea lo
+dice así: «AUR178551-S01 está ANULADA (la anuló {quien} el 24/10 a las 10:28).
+Crea una salida nueva desde la ficha del pedido (Operar → Crear salida) e
+imprime su rótulo; este rótulo ya no sirve.» Quién y cuándo salen del hecho
+más reciente que anuló esa salida (`route_output_cancelled` o
+`guide_cancelled` con su `shipment_id`); quien la anuló se nombra como en Leads
+y Repro Lima (la parte local de su correo) y, sin actor, «se anuló el …». Si el
+pedido tiene **otra salida viva** (`isActiveOutput` en Lima), no se manda a
+crear otra: «…: este rótulo ya no sirve; el pedido sigue con AUR178551-S02.»
+seguido del motivo de siempre. Solo cambia el mensaje: no se reactiva nada,
+tomar y asignar siguen con sus reglas, y si el escaneo asigna (por ejemplo,
+porque al tomarlo nació la salida nueva) responde como siempre, con el aviso de
+pegar su rótulo encima. El pedido anulado se sigue diciendo antes que esto; el
+límite de efectivo y un rótulo vivo responden lo de antes. Las lecturas se
+pagan solo en el escaneo que falla (`lib/scan-annulled-output.ts`, en
+`scanAssignToRider`), probado en `test/scan-salida-anulada.test.ts`.
+**Pendiente:** una salida anulada que siguiera dentro de una caja activa
+responde «Ya está en la caja…» o «Está en la caja de…» como cualquier otra; no
+se ha visto el caso.
 
 **Verificar una caja dice cuál es, y dónde está lo que no es suyo
 (07-10-2026).** KP136825-S01 ya estaba en la caja de Alexis —la única que le
@@ -11483,6 +14810,48 @@ palabras:
   Alexis (07/10), no en la de Roy. Verifícalo en esa caja.» Si no está en
   ninguna: «No está en la caja de Roy ni en otra. Agrégalo primero a una
   caja.» El anulado sigue diciéndose antes que esto.
+
+**Buscar en «Desde la lista» dice dónde está lo que no está por asignar
+(24-10-2026).** El owner buscó #KP141876 para reprogramarlo y la lista respondió
+«Nada por asignar con ese filtro.». Estaba en «Sin condiciones» (76 ese día):
+Ancón no tiene tarifa y está pausado para Grupo GF. Ahora, si la búsqueda no
+encuentra nada en la lista pero el texto nombra un pedido que el tablero ya
+tiene en otro sitio, el vacío lo dice debajo, un aviso por pedido con su botón:
+
+- **Cómo se reconoce.** Por número de pedido sin «#» ni mayúsculas, también una
+  parte («141876»), o por teléfono como la búsqueda de la lista (cuatro dígitos
+  o más). Con menos de cuatro caracteres no se busca fuera. Hasta tres avisos,
+  el número entero primero; los demás se cuentan («Y 2 pedidos más fuera de la
+  lista con ese texto…»).
+- **«Sin condiciones»**, en ámbar, con el motivo y el distrito: «#KP141876 está
+  en «Sin condiciones»: tarifa faltante para Ancón. Ponle tarifa en Tarifario.»
+  y «Abrir Tarifario». Si además el servicio está pausado ahí, lo dice («…, y el
+  servicio está pausado ahí. Ponle tarifa y reanuda el servicio en Tarifario.»):
+  el motivo sigue siendo uno (`tarifa_faltante`), y la foto lleva aparte
+  `paused`. Sin el Tarifario (§29.10), dice que lo corrige quien administra
+  Grupo GF y abre la hoja «Sin condiciones» con ese pedido primero y resaltado.
+  Distrito inválido abre la ficha en Información; sin salida armable, ya en una
+  caja de despacho y los motivos de un «Por reprogramar» que no sale, la
+  ficha en Operar.
+- **Escondido por un apartado o un filtro**: «#KP300001 está por asignar en
+  «Programados después» (programado mar 27/10).» (o «…, pero lo esconden los
+  filtros de la lista»), con «Ver en «…»», que abre ese apartado sin los demás
+  filtros y deja el texto. Un «No entregado» que sigue en una caja lleva «Quitar
+  filtros».
+- **Ya no está por asignar**: «#KP500001 ya no está por asignar: está en la caja
+  de Roy del sáb 24/10 (carga 2), lo lleva (En curso · En reparto).», o, si se
+  está cerrando, «… ya no se asigna: está en «Por cerrar · …»». «Ver en
+  seguimiento» abre su etapa (la lista de seguimiento de arriba).
+- **«En devolución»** («… vuelve con Alexis (caja del …) y el pedido sale con
+  …») abre esa hoja, y **«Devoluciones»** su escáner.
+
+Sin lecturas nuevas: es la foto que ya trae Despacho del día (cola, seguimiento,
+«Sin condiciones», «En devolución», «Devoluciones»), y la fila de «Sin
+condiciones» suma el teléfono y `paused`, que ya se leían. Un pedido que el
+tablero no tiene (otra cobertura, otra etapa) sigue con «Nada por asignar con
+ese filtro.». Nada de esto cambia la cola ni las acciones. Lógica pura en
+`lib/dispatch-day.ts` (`locateOutsideList`, `matchesOrderSearch`), probada en
+`test/despacho-busqueda-donde-esta.test.ts`.
 
 ### 29.14 Rutas: una sola lista y la caja al lado (19-09-2026)
 
@@ -11826,10 +15195,12 @@ del comprador se anonimizan.** Aurela y Kenku no cambian.
 **Implementación (Fase 1b, primera parte, 10-10-2026).**
 
 - **Qué app usa cada tienda.** Cada tienda guarda con qué app de Shopify se
-  conectó: `interna` (la app actual de Aurela y Kenku) o `clientes` (la app
-  pública). No hay otro valor. Un mismo dominio de Shopify no puede estar en
-  dos tiendas con la app de clientes, y la app de clientes no toma una tienda
-  que ya está con la interna.
+  conectó: `interna` (la app actual de Aurela y Kenku), `clientes` (la app
+  pública) o, desde el 23-10-2026, `propia` (la app que la organización de
+  Shopify de la tienda creó en su Dev Dashboard, §36). No hay otro valor. Un
+  mismo dominio de Shopify no puede estar en dos tiendas con la app de
+  clientes, y la app de clientes no toma una tienda que ya está con la interna
+  ni con una app propia.
 - **Instalación.** La tienda instala desde Shopify y autoriza en el acto. Kapta
   guarda esa autorización como **instalación pendiente** por 30 minutos. El
   dueño la reclama dentro de Kapta: elige una organización donde sea owner o
@@ -11854,7 +15225,7 @@ del comprador se anonimizan.** Aurela y Kenku no cambian.
 
 #### 29.15.10 Lo que no cambia
 
-- Shopify sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
+- La tienda sigue siendo la única fuente de pedidos (§2). Kapta no crea pedidos
   para la tienda, y cancelar una solicitud no cancela el pedido en Shopify.
 - Aurela y Kenku siguen con la cola automática de «Pedidos disponibles», la
   tabla interna, el 3.5 % y el reintento gestionado por Grupo GF.
@@ -11995,6 +15366,18 @@ lado:
   sin captura.
 - El panel ya no carga la muestra de pedidos asignables ni la cola de
   reintentos, que se pedían en cada apertura y no se enseñaban.
+
+**Un pedido anulado en Shopify no impide terminar la ruta, pero no cruza al
+Master (15-10-2026).** Si una parada entregada es de un pedido anulado en
+Shopify, «Terminar ruta operativa» cierra la ruta y crea su liquidación con
+esa línea, como siempre. La entrega no se escribe en el Master (§11.4), y el
+mensaje del cierre lo dice en «Ojo:» con el código del pedido: «#KP137541 está
+anulado en la tienda: no se marcó entregado en el Master y sigue donde estaba.
+Decide en su ficha qué pasó con la entrega.» («en la tienda» desde el
+24-10-2026, §38.12). Con varios, los nombra a todos,
+acompañantes incluidos. Los demás pedidos que no cruzan (parada sin entrega o
+sin evidencia) siguen con su propio aviso. El panel «Para terminar la ruta»
+todavía no lo avisa antes del clic: llega en el mensaje del cierre.
 
 **Cerrar una ruta no vacía la caja: los «No entregado» se reciben o se dejan a
 conciencia (29-09-2026).** La ruta de Yhoni del 26/09 se cerró el 28/09 con
@@ -12214,7 +15597,10 @@ Desde el 19-09-2026 la puerta es `lib/master-door.ts`, compartida con el
 cierre de ruta y Liquidaciones 1 (§29.12): para una fila atada a su parada se
 exige parada entregada, con evidencia si el reporte es real, y sin
 observación abierta; una fila del Excel sin parada conserva solo la guarda de
-observaciones. Lo demás de esta sección sigue vigente.
+observaciones. Desde el 15-10-2026 la puerta también comprueba ella misma la
+anulación en Shopify, para toda fuente (§11.4); la hoja ya la saltaba antes de
+llegar a la puerta («Qué nunca aplica», abajo). Lo demás de esta sección sigue
+vigente.
 
 **Qué aplica.** Desde una hoja cuaderno, una fila vinculada a un pedido de
 Kapta cuyo estado tiene efecto *entrega* puede marcar ese pedido como
@@ -12235,6 +15621,88 @@ hasta que exista una puerta propia. **Una fila con observación abierta no
 cruza al Master: alguien lee el motivo del motorizado y lo acepta primero.**
 El motivo lo escribe quien repartió; aceptarlo es de quien liquida
 (`sheets.edit`); aplicar al Master exige `master.edit`.
+
+**La caja de Grupo GF se rellena (decisión del owner, 19-10-2026).** Aplicar
+la entrega escribe el `status_override` y nada más: la caja se había armado y
+rotulado como salida «por definir» y nadie le puso el courier, así que el
+pedido quedaba entregado con su salida pendiente y la Mesa de cierre pedía
+«Salida adicional activa» (581 pedidos medidos el 20-10-2026, 437 de Kenku,
+casi todos con la entrega en la hoja de Alexis). Desde el 21-10-2026, cuando la
+entrega es de un motorizado de Grupo GF —la hoja de Reparto propio o la de
+Alexis (`config.courier = alexis`), que es motorizado de Grupo GF (decisión
+11, §9)— y la fila trae su fecha, Kapta **rellena** esa salida como entregada
+por el motorizado propio (`lib/own-salida.ts`), igual que el reporte de Urpi
+rellena la suya (§30.11) y las guías de courier la suya (§4): se conservan
+consecutivo, `output_code`, QR, preparación y custodia; pasa a courier
+`propio`, `created_via` y `delivered_source` `cuaderno_gf`, entregada, con la
+guía interna `MOM-<pedido>-PROPIO-<id>` y `dispatched_at` = `closed_at` = el
+día del cuaderno a mediodía de Lima (17:00Z, el instante del evento de la
+entrega). Una fecha futura del cuaderno es un error de tecleo: se acota a hoy,
+en la carga histórica y en «Aplicar al Master», para la entrega y para la
+caja. `closed_at` es de donde el Master saca el día de la entrega: sin él, la
+entrega quedaría con el día en que se rellenó. La vigencia de la tarifa de
+Grupo GF no sale de ahí sino del último movimiento (§14). Queda el evento
+`route_output_filled`. Lo hacen la carga histórica
+(`scripts/apply-cuaderno-history-to-master.ts`) y «Aplicar al Master» de esta
+hoja, solo con lo que la puerta entregó —ni lo rechazado ni los acompañantes
+(§32), que viajan en la caja de su principal—, y recalculan el Master de lo
+rellenado. **Solo si** es la única caja viva del pedido, es «por definir» de
+ruta manual pendiente en la empresa y sin transferir, está escaneada «listo
+despacho» y no quedó lista más de un día después del día del cuaderno (si no,
+es otra caja: la de un reenvío armado después). No se toca si el pedido tiene
+otra salida viva, una salida ya entregada (de cualquier courier) o filas del
+reporte de Urpi, porque no se sabe qué caja se llevó el motorizado; tampoco si
+una fila de cualquier hoja de un día posterior al del cuaderno lo da por
+devuelto, anulado o sin salida (un estado con efecto `devolucion`, `anulacion`
+o `sin_salida`), porque el paquete pudo volver al almacén: es la misma guarda
+`cuaderno_contradicho` de la 0270, y el pedido queda para revisar a mano. Si la
+caja ya salió con él en su ruta, su verdad es la parada (§29.13) y no hay nada
+que rellenar. Sin fecha en la fila, la entrega se marca igual y la caja queda para
+revisar a mano. Una entrega de otro courier (Urpi incluido) no rellena nada. El
+aviso de «Aplicar al Master» dice cuántas cajas pasaron a Grupo GF entregada y
+cuántas quedaron por revisar, también las que no se pudieron actualizar por un
+error al leerlas o escribirlas: volver a aplicar no las reintenta, porque el
+pedido ya quedó entregado, así que también se revisan a mano. El pedido sale de «Salida adicional activa» hacia
+«Pendiente de liquidación»; **no se cierra ninguna liquidación** (decisión 3
+del owner: el cierre histórico de la liquidación del cuaderno no se decidió), y
+su costo sale del Tarifario con el día de su último movimiento (§14), que el
+relleno lleva al día en que se hace: toma la tarifa vigente ese día si su
+distrito la tiene. Lo aplicado antes de esta regla lo rellena la migración 0270
+con los mismos valores (se aplica antes que el código, `DEPLOY.md`), solo en la
+clase `cuaderno_caja_sin_registrar` de la auditoría del atraso de Lima con
+salida «por definir», override de Alexis o de Reparto propio y fecha: 575
+pedidos medidos el 21-10-2026 (432 de Kenku Peru y 143 de Aurela), con días del
+cuaderno del 10-08 al 15-09-2026 (308 anteriores al 31-08-2026). Su último
+movimiento pasa a ser el día en que se aplica la 0270, así que toman la tarifa
+del Tarifario vigente ese día si su distrito la tiene, aunque el día del
+cuaderno sea anterior a la vigencia. Quedan fuera Urpi, el override sin
+courier, sin fecha, contradicho por una fila posterior, la fecha imposible y la
+caja dudosa, que se revisan a mano. La carga histórica
+no guarda el relleno en su bitácora y `scripts/rollback-master-backfill.ts` no
+lo deshace: si se revierte un lote, esos pedidos siguen entregados por su
+salida y el script los lista para revisar. Pruebas:
+`test/own-salida-plan.test.ts`, `test/own-salida-source.test.ts`,
+`test/own-salida-mom.test.ts` y `scripts/sql/cuaderno_s01_fill_smoke.sql`.
+
+**El lote del Master respeta la misma guarda (15-10-2026).** El cambio de
+estado en lote del Master (`applyOrderStatusBulk`) a «entregado» salta los
+pedidos que tienen alguna observación de cuadre abierta
+(`sheet_observations.status = 'abierta'`, de monto o de estado, de cualquier
+hoja). El aviso dice cuántos se saltaron y por qué, cada uno aparece con su
+motivo en la lista de «con problemas», y el resto del lote sigue. Como
+Liquidaciones 2 está fuera del menú desde el 22-09-2026 (a pedido de
+operación) y ninguna otra pantalla la enlaza, el aviso trae el enlace «Abrir
+Liquidaciones 2» y los textos dan su dirección (/dashboard/liquidaciones-2;
+`OBSERVATIONS_SCREEN_LABEL`, `lib/bulk-status-guard.ts`). **Pendiente del
+owner:** dónde se aceptan las observaciones con la pantalla oculta. Desde el
+17-09-2026 nadie ha aceptado una a mano, y el 16-10-2026 había 300 abiertas, 90
+de ellas en pedidos todavía no entregados. Si las
+observaciones no se pueden leer, no se aplica nada. Hacia otros estados no se
+salta ninguno. El cambio de un solo pedido desde «Gestión manual» no cambia
+(**pendiente:** decidir si la guarda va también ahí). La auditoría del atraso
+de Lima (14-10-2026) encontró 68 pedidos con observación de monto abierta
+marcados entregados después de abrirse; se escribieron con scripts directos a
+la base, no con el lote de la app, y siguen así: nada se deshace solo.
 
 **Observaciones automáticas.** Al importar un cuaderno y al editar a mano el
 estado, el monto o el pedido de una fila, cada fila que declara entrega se
@@ -12309,8 +15777,9 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
 ### 30.10 Programaciones mensuales enviadas a Urpi (01/10/2026)
 
 `/dashboard/urpi` reúne los Google Sheets mensuales de programación de Urpi.
-Es una fuente documental de lo enviado: no confirma custodia, salida a reparto,
-entrega, cobro ni liquidación. Vive separada de las rutas propias de Grupo GF.
+Es la fuente de lo enviado: desde el 03-11-2026 registra el **despacho** a Urpi
+(«Registro del despacho», abajo); no confirma custodia, entrega, cobro ni
+liquidación. Vive separada de las rutas propias de Grupo GF.
 
 Una fuente se registra por tienda, archivo y mes. El prefijo no se escribe: sale
 de `stores.order_prefix` (0115) y una tienda sin prefijo no se registra. Un libro
@@ -12319,7 +15788,8 @@ creando una fuente por tienda que aísla KP y AUR; prefijos solapados se rechaza
 Se leen todas las pestañas con fecha del mes y las columnas reales de la plantilla.
 El vínculo se resuelve por código completo dentro de la tienda; sin coincidencia
 o con varias coincidencias, se conserva el registro y se pide revisión. Nunca
-crea pedidos fuera de Shopify ni salidas físicas a partir de una fila del Sheet.
+crea pedidos fuera de Shopify ni salidas físicas nuevas a partir de una fila del
+Sheet: el despacho se registra sobre la caja que ya existe.
 
 Cada cambio importado conserva una versión inmutable, con origen, actor y hora.
 Reimportar el contenido actual no duplica la versión. Las importaciones fallidas,
@@ -12344,9 +15814,40 @@ más antiguo; al agotar el tiempo, el resto queda para el siguiente ciclo.
 Un fallo conserva la versión vigente, queda visible y se reintenta en el ciclo
 siguiente. Las versiones automáticas registran actor de sistema (`created_by`
 nulo); una lectura manual más reciente prevalece sobre datos automáticos previos.
-El proceso no modifica estados de entrega ni genera reprogramaciones.
+El proceso no modifica estados de entrega ni genera reprogramaciones; sí
+registra el despacho de lo programado (abajo).
 RLS restringe fuentes y versiones a `auth_store_ids()`; registrar
 exige `sheets.manage` e importar `sheets.edit`, dentro de la organización elegida.
+
+**Registro del despacho (decisión del owner, 03-11-2026).** La auditoría del
+26/10 al 02/11 encontró 101 pedidos programados a Urpi y 85 sin salida de Urpi
+en Kapta: 50 seguían «Listo para asignar» con su caja «por definir» en el
+almacén y 31 parecían en manos de otro courier, casi siempre un motorizado de
+Grupo GF que había fallado antes. La programación nunca se había cargado (0
+versiones de septiembre a noviembre). Desde entonces, cada vez que se guarda
+una programación —«Cargar Excel del mes», «Actualizar desde Google» o la
+lectura automática—, Kapta registra el despacho de cada pedido vinculado por
+código cuya fecha programada ya llegó, en hora de Lima; un pedido programado
+varios días toma el último que ya llegó (`lib/urpi-dispatch.ts`):
+
+| El pedido en Kapta | Qué pasa |
+| --- | --- |
+| Su única caja viva es la «por definir», creada a más tardar el día programado | Se **rellena** como salida de Urpi en ruta (§4, `lib/route-output-fill.ts`): courier `urpi`, `created_via = urpi_programacion`, `delivery_status = en_ruta`, `dispatched_at` el mediodía de Lima del día programado. Consecutivo, QR, preparación y custodia se conservan y queda `route_output_filled`. El pedido pasa a «En curso · En tránsito». |
+| Ya tiene salida de Urpi, en ruta o entregada | Nada: una programación posterior es un reintento de la misma caja. |
+| Urpi ya canceló su salida (anulada después de salir) | La programación de ese día o de antes, nada. Una posterior no se toca y se nombra: Urpi solo lleva primeros despachos (§9.1). |
+| Otra salida viva (otro courier u otra «por definir») | No se toca: no se sabe qué caja se llevó Urpi. La carga lo nombra para revisar a mano. |
+| Sin caja «por definir», o creada después del día programado | No se crea una salida. La carga lo nombra. |
+| Entregado, anulado, devuelto o anulado en Shopify | Nada. |
+
+La custodia no cambia: la programación no prueba el traspaso (no hay cotejo),
+y el Master ya lee una salida en ruta como fuera del almacén. Cuando Urpi
+reporta la entrega, esa misma salida se cierra (§30.11). La carga dice cuántas
+cajas pasaron a Urpi y nombra lo que hay que revisar; lo que ya estaba al día
+no se repite. Si el registro falla, la programación ya quedó guardada y volver
+a cargarla lo reintenta. Lo hace quien puede importar (`sheets.edit`), como
+emitir la guía de un courier rellena la caja; la lectura automática, como
+sistema. Mientras la conexión de Google esté pendiente, el registro depende de
+que alguien cargue el Excel del mes cada día.
 
 **Regla de Urpi confirmada por el owner:** «Reprogramado» es para el día siguiente
 de lunes a sábado. Viernes pasa a sábado, sábado a lunes. Se calcula desde la
@@ -12355,7 +15856,7 @@ identidad de pedido ni otra salida física. Se omiten domingos; no se estableci�
 excepción para feriados. La usan los resultados de Urpi (§30.11) para el día del
 reintento; la programación enviada conserva su fecha original.
 
-Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215–0216.
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215–0216; el registro del despacho no lleva migración.
 
 ### 30.11 Resultados de entrega que reporta Urpi (05/10/2026)
 
@@ -12387,6 +15888,19 @@ intentos de septiembre y octubre: 395 con un único pedido, 27 con varios, 0 sin
 pedido. Esta regla vale para el reporte de resultados; la programación enviada
 (§30.10) sigue cruzando solo por código.
 
+**La programación desempata (decisión del owner, 03-11-2026).** Cuando el
+teléfono no basta —varios pedidos en la ventana, o ninguno—, decide la
+programación enviada a Urpi: si ese día ese teléfono se programó con **un
+solo** pedido, el intento se vincula a ese pedido, porque la programación lo
+nombra por código (`link_method = programacion`, migración 0302; «Vinculado por
+la programación»). Solo desempata o completa: un vínculo por teléfono único no
+se cambia, y dos pedidos programados el mismo día con el mismo teléfono siguen
+por vincular. Los reintentos lo heredan por cadena. Se usa la programación
+vigente de cada tienda en los meses del reporte; si no se puede leer, el
+reporte se vincula solo por teléfono. Auditoría del 26/10 al 02/11: 13 de los 15
+pedidos programados sin vínculo estaban por vincular por teléfono repetido, y
+#KP130409 no tenía pedido en la ventana.
+
 **Qué hace cada resultado.** Lo decide el **último** intento del pedido:
 
 | Urpi | Kapta |
@@ -12394,7 +15908,7 @@ pedido. Esta regla vale para el reporte de resultados; la programación enviada
 | Entregado, pedido abierto en Kapta | Se marca entregado **al cargar el reporte** (desde el 15-10-2026) por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. Lo que la carga no pudo marcar queda en «Entregados por marcar», para marcarlo uno a uno o en lote. |
 | Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | Igual, se marca: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
 | Entregado, pedido anulado **en Shopify** o devuelto | Observación. Nunca se marca. Se resuelve de dos formas: si el pedido se rehízo en Shopify, se vincula el envío al pedido nuevo con su código (y pasa a «por marcar»); si no, se **cierra con motivo** —evento `urpi_observation_resolved` en el historial del pedido, que no cambia su estado— y el dinero se cuadra en la liquidación de Urpi. Un intento posterior de Urpi la reabre. El 05-10-2026 eran 6: anulados en Shopify entre 7 y 14 días después de que Urpi los entregara y cobrara. |
-| Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. **No cambia el estado del Master** ni anula el pedido en Shopify. |
+| Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. Desde el 03-11-2026, si el pedido tiene su salida de Urpi **en ruta** despachada a más tardar ese día, la salida se **anula como intento fallido** y el pedido pasa a «En curso · Por reprogramar Lima» (abajo). Nunca anula el pedido en Shopify. |
 | Reprogramado | Se registra y se lista con su nuevo día: el siguiente de lunes a sábado desde la fecha del reporte (§30.10). No cambia el estado del Master. |
 | Programado, En coordinación, sin resultado | En curso; solo informa. |
 | Cualquier otro valor | «Estado no reconocido»: se guarda tal cual y no se interpreta. |
@@ -12412,12 +15926,29 @@ entregado, Kapta **rellena** la salida «por definir» como salida de Urpi, igua
 que la rellenan Tanders, Aliclik, Shalom y Swayp al emitir su guía (§4,
 `lib/route-output-fill.ts`): se conservan consecutivo, QR, preparación y
 custodia; pasa a courier `urpi`, `created_via = urpi_report`, entregada
-(`delivered_source = urpi_report`) y con `dispatched_at` el mediodía de Lima del
-primer intento de Urpi; queda el evento `route_output_filled`. Solo si es la
+(`delivered_source = urpi_report`), con `dispatched_at` el mediodía de Lima del
+primer intento de Urpi y `closed_at` el mediodía de Lima de la fila más
+reciente, la «Entregado» (desde el 23-10-2026, abajo): cuando Kapta marca la
+entrega en ese mismo paso, es el mismo instante que su evento; en un pedido que
+ya estaba entregado (p. ej. por la carga histórica del cuaderno), es el día que
+dice Urpi, aunque el evento de su entrega sea de otro día. Queda el evento
+`route_output_filled`. Solo si es la
 **única** caja viva del pedido: con otra salida viva —otro courier u otra «por
 definir»— no se sabe qué caja se llevó Urpi y no se toca; sin «por definir», no
-se crea una salida. La pantalla ofrece completar las ya marcadas antes de esta
-regla con el mismo botón.
+se crea una salida. La pantalla ofrece rellenar con el mismo botón las cajas
+«por definir» de los pedidos marcados antes de esta regla (05-10-2026); no
+completa el `closed_at` de las salidas ya rellenadas (eso lo hizo la 0272,
+abajo).
+
+**La salida que ya salió como de Urpi (03-11-2026).** Desde que la programación
+registra el despacho (§30.10), la caja suele estar ya como salida de Urpi en
+ruta cuando Urpi reporta la entrega. Entonces no hay nada que rellenar: se
+**cierra** esa salida —entregada, `delivered_source = urpi_report`, `closed_at`
+el mediodía de Lima de la fila «Entregado»; courier, guía y despacho no se
+tocan— y queda un `courier_status` de Urpi en el historial. Se cierra aunque el
+pedido tenga otra salida viva, porque esa caja es la de Urpi sin duda; la otra
+se revisa a mano, como hasta ahora. El aviso «Pasar a salida de Urpi
+entregada» cuenta también estas salidas sin cerrar.
 
 **Marcado automático (decisión del owner, 15-10-2026).** Hasta esta fecha
 una persona revisaba «Entregados por marcar» y pulsaba «Marcar entregados».
@@ -12452,12 +15983,92 @@ Así funciona desde entonces (`lib/urpi-report-apply.ts`):
   (su salida se revisa a mano) y salidas que no se pudieron actualizar. Lo que
   ya estaba al día no se repite en cada carga.
 
-**Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
-Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
-Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
-en Kapta, todas de agosto), así que no hay salida sobre la que apoyar el intento
-fallido. Pasar los cancelados a «Por reprogramar Lima» queda para una decisión
-posterior: crear la salida desde el reporte o despachar a Urpi desde Kapta.
+**Entregados de antes de la ventana (15-10-2026).** La pantalla lee los
+intentos de los últimos 60 días, y el botón «Pasar a salida de Urpi entregada»
+solo alcanza lo que la pantalla enseña. Por eso un pedido que Urpi entregó hace
+más de 60 días y cuya caja seguía «por definir» desaparecía del aviso y se
+quedaba en «Por cerrar · Salida adicional activa» sin forma de completarse (15
+al implantarlo, entregados del 10 al 15 de agosto). Desde entonces esos pedidos
+se muestran aunque sean viejos (en «Al día», y contados en el aviso): los que
+tienen su último intento «Entregado» y ningún intento dentro de la ventana,
+están entregados en Kapta y tienen la salida que se puede rellenar
+(`lib/urpi-results-window.ts`, con la misma regla del botón). La cabecera lo
+dice. De lo anterior a la ventana no se carga nada más: ni lo que ya está al
+día, ni los cancelados o reprogramados, ni los entregados sin vincular. El
+marcado automático sigue rellenando solo lo de los 60 días; lo de antes se
+completa con el botón.
+
+**Entregados de antes de la ventana que Kapta tiene abiertos (02-11-2026,
+owner).** Con la regla anterior tampoco se veían los pedidos que Urpi entregó
+hace más de 60 días y que Kapta seguía teniendo abiertos, y nadie podía
+marcarlos: #AUR174784, entregado y cobrado por Urpi el 31/07, seguía en
+«Preparación · Por armar» el 01-11-2026, y con él #KP120308 (01/07) y #KP117336
+(11/06). Desde entonces se cargan también y caen en «Entregados por marcar»:
+los que tienen su último intento «Entregado», ningún intento dentro de la
+ventana y Kapta no ha cerrado —ni entregados, ni anulados (en Kapta o en
+Shopify), ni devueltos— (`olderUrpiFollowUp`). Los marca una persona con el
+mismo botón y por la misma puerta; el marcado automático de la carga sigue en
+los 60 días. Los anulados y devueltos de antes de la ventana siguen sin
+cargarse.
+
+**El día de la entrega en la salida y las cajas viejas (23-10-2026).** Hasta
+este día la salida rellenada no llevaba `closed_at`, y el Master saca el día de
+la entrega de `closed_at` de la salida entregada y, sin él, de su último
+movimiento (`lib/order-status.ts`): el `delivered_at` de esos pedidos era el día
+en que se rellenó la caja, no el que dice Urpi. Medido el 23-10-2026: 107
+salidas rellenadas, ninguna con `closed_at`, y en 106 el día del relleno no era
+el del reporte (entregas del 24-08 al 21-10-2026). Desde entonces el relleno
+escribe `closed_at` = el día de la fila más reciente de Urpi a mediodía de Lima
+(`urpiSalidaRow`, `lib/urpi-salida.ts`); si esa fila no trae fecha, la salida
+se rellena sin `closed_at`, como antes. La migración 0272 lo completa en las
+107 ya rellenadas (sin evento nuevo: `closed_at` estaba vacío, no se sobrescribe
+ningún hecho, §2) y rellena, con la misma regla del botón, las cajas «por
+definir» que el marcado automático no alcanzó por ser de antes de la ventana y
+que nadie pasó con el botón: 32 pedidos entregados en Kapta y no anulados, con
+reportes del 10-08 al 22-08-2026, cada uno con su `route_output_filled`
+(`payload.backfill = true`). Otros 13 con la misma caja no están entregados en
+Kapta (12 anulados en Shopify) y quedan fuera, como en el flujo de Urpi. El
+`delivered_at` de esos pedidos pasa al día del reporte y los 32 dejan «Salida
+adicional activa»: pasan a «Pendiente de liquidación», o a donde los lleve su
+liquidación si ya está cerrada; no se cierra ninguna liquidación. Como con la
+0270, la 0272 —el `closed_at` de las 107 y el relleno de las 32— mueve el último
+movimiento de esos pedidos al día en que se aplica: es el día al que se imputa
+el costo (§14) y el que mira «Sin movimiento por 60 días» (§17.1).
+
+**Por qué el cancelado no movía el Master.** «Por reprogramar Lima» (§9) exige
+una salida que conste fuera. Los despachos a Urpi salen del Google Sheet de
+programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi en Kapta,
+todas de agosto), así que no había salida sobre la que apoyar el intento
+fallido. Desde el 03-11-2026 la programación registra esa salida (§30.10).
+
+**El cancelado de Urpi pasa a «Por reprogramar Lima» (decisión del owner,
+03-11-2026).** Es la regla v1.23 de §9 —una salida de Urpi anulada con la caja
+ya en la calle es un no entregado— aplicada sin que nadie tenga que anularla a
+mano (`cancelUrpiSalidas`, `lib/urpi-salida.ts`; `applyUrpiCancellationsFor`,
+`lib/urpi-report-apply.ts`):
+
+- **Cuándo.** Al cargar el reporte, sobre los pedidos con algún «Cancelado» de
+  los últimos 60 días; al vincular a mano un envío; y al registrar el despacho
+  desde la programación, si el reporte ya traía el cancelado: da igual qué se
+  cargue primero.
+- **Qué.** Si el **último** intento del pedido es «Cancelado», Kapta lo tiene
+  abierto (ni entregado, ni anulado, ni devuelto, ni anulado en Shopify) y su
+  salida de Urpi está en ruta despachada a más tardar el día del cancelado, esa
+  salida pasa a `anulado` (`status_category = closed`, `closed_at` el mediodía
+  de Lima del día del reporte) con un `courier_status` que lleva el motivo de
+  Urpi. Courier, guía y despacho no se tocan. El Master lo lee como intento
+  fallido (`guideAnnulledAfterDispatch`) y el pedido pasa a «En curso · Por
+  reprogramar Lima», con la ventana anclada en la salida, como cualquier courier
+  de Lima.
+- **Qué no.** Sin salida de Urpi en ruta no hay nada que anular: el cancelado
+  solo se lista, como antes. Una salida despachada después del cancelado es otro
+  intento y no se toca. «Reprogramado» no mueve nada: Urpi lo reintenta él.
+- **Después.** El pedido se reprograma por Repro Lima (§9.3). Urpi solo lleva
+  primeros despachos (§9.1): si el Sheet lo vuelve a programar a Urpi, el
+  registro del despacho no lo toca y lo nombra para revisar. Si aun así Urpi lo
+  entrega, la carga cierra esa misma salida como entregada.
+- **Quién.** Es lo que dice el courier, como un barrido de estados: basta con
+  poder cargar el reporte (`sheets.edit`); no pide `master.edit`.
 
 **Historial.** Cada fila se guarda como llegó y cada cambio deja una versión
 inmutable; reimportar el mismo archivo no escribe filas, aunque la lectura queda
@@ -12472,7 +16083,7 @@ pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
 con su tienda (`auth_store_ids()`); una sin vincular, con la organización
 (`auth_org_ids()`). Escritura solo del servidor.
 
-Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migración 0229.
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0229 y 0302.
 
 ## 31. Agradecimiento con catálogo al entregar
 
@@ -12610,7 +16221,10 @@ más de lo esperado» y deja el lote observado (§14).
     entregado al principal, el acompañante vigente se marca entregado con él,
     con la misma fuente y un motivo que nombra al principal y la guía. Las
     fuentes de esa puerta no escriben en la salida, así que sin esto el
-    acompañante se quedaría «En curso».
+    acompañante se quedaría «En curso». Un acompañante anulado en Shopify
+    después de vincularlo no se marca (§11.4, 15-10-2026): la puerta lo deja
+    en `companionsCancelled` y el cierre de ruta y Liquidaciones 1 lo nombran
+    en su aviso.
 13. **El agente de voz no llama dos veces** a la clienta: comprueba la
     recuperación con las salidas propias del pedido (§11.8), y el acompañante
     no tiene ninguna. Llama solo al principal.
@@ -13174,7 +16788,9 @@ canal es WhatsApp: solo ~1 % de los pedidos trae correo.
   - La plantilla lleva **cabecera de imagen**, y cada envío pone la foto del
     producto en Shopify (`shopify_product_images`).
   - La foto se convierte a JPG en `/api/wa-image`, porque Meta no acepta el
-    WebP de Shopify.
+    WebP de Shopify. Desde el 23-10-2026 la ruta la sirve de la copia guardada
+    en Kapta, y desde el cierre de Shopify (28-10-2026), en Kenku y Aurela,
+    **una foto sin copia cuenta como «sin foto»** (§39).
   - **Un producto sin foto no recibe recordatorio**, ni la clienta ni el grupo
     de control. Ajustes lo avisa en la fila del producto.
 - **El número.** Kenku lo envía desde el **451** (`restock_phone_number_id`),
@@ -13275,7 +16891,17 @@ nuevo que borra el motivo de la prueba anterior y los pedidos por revisar), las
 dos ya corridas en producción; la 0261 (el modo «Manual» y el turno que dice
 qué fila pide y quién la pidió, 15-10-2026), y la 0262 (el turno que vuelve a
 revisar que la empresa recibió el pago, 15-10-2026), que se aplican a mano, en
-ese orden, antes de su código (35.8). Están también las reglas puras, el
+ese orden, antes de su código (35.8). La 0269 (el turno que deja a «Emitir esta
+boleta» emitir lo pagado antes de «Emitir desde», 15-10-2026) va después de la
+0262, también a mano y antes de su código. La 0275 (la foto del pedido para
+cuando Shopify ya no responde, 23-10-2026, 35.10) va después de la 0274, igual.
+La boleta de un pedido de WooCommerce (25-10-2026, 35.11) no tiene migración.
+La 0293 (faltar menos de S/ 1 es redondeo y cubre, 01-11-2026, §6.5) va
+después de la 0269, a mano y antes de su código. La 0296 (en Agencia, con el
+paquete recogido, hasta S/ 15 sin comprobante son el envío pagado en el
+mostrador, 01-11-2026, §6.5) va después de la 0293, igual, y la 0298 (lo mismo
+con un solo pago validado) después de la 0296.
+Están también las reglas puras, el
 cliente de SimpleFact, el barrido (`/api/cron/invoices`), la sección «Boletas
 y facturas» de Ajustes y el panel «Comprobante» del drawer, con su «Emitir esta
 boleta» (35.7), que solo emite en producción.
@@ -13388,12 +17014,12 @@ panel (`invoiceEligibility`, función pura; los textos en
 | --- | --- | --- |
 | 1 | El pedido no está anulado ni reembolsado y está en soles | `anulado` / `reembolsado` / `moneda` |
 | 2 | Todos sus pagos vivos (no rechazados) están validados. Un posible duplicado bloquea aunque cubra el total | `posible_duplicado` / `pagos_en_revision` |
-| 3 | La empresa recibió el pago: lo validado cubre el total del pedido, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
+| 3 | La empresa recibió el pago: lo validado cubre el total del pedido —faltar menos de S/ 1 es redondeo y cubre; y en Agencia, con el paquete recogido, hasta S/ 15 sin comprobante son el envío pagado en el mostrador (0296); la boleta sale igual por el total (owner, 01-11-2026, §6.5)—, o es un prepago web confirmado (§6.5, §12 Pagos). Un prepago web que además tiene comprobantes cargados no se adivina | `sin_pago_completo` / `prepago_con_comprobantes` |
 | 4 | Cada pago validado tiene cuenta (35.2) | `pago_sin_cuenta` |
 | 5 | Todas sus cuentas tienen RUC, y es el mismo | `cuenta_sin_ruc` / `ruc_mezclados` |
 | 6 | El total es mayor que 0 y no pasa de S/ 700 (35.5) | `monto_cero` / `monto_mayor_700` |
 | 7 | Ese RUC no está apagado | `ruc_apagado` |
-| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite | `antes_de_inicio` |
+| 8 | El pedido quedó pagado desde «Emitir desde» del RUC: cuenta cuándo se registró en Kapta el último de sus pagos validados (`registered_at`, que no cambia si el pago se observa y se vuelve a validar; la fecha de validación, `validated_at`, sí), o la fecha del pedido si es prepago web. Un pago validado sin fecha de registro, o un RUC sin fecha de inicio, no emite. La única excepción es de «Emitir esta boleta» con el RUC en Manual: lo pagado antes, pero desde el 01/10/2026 00:00 (hora de Lima), si quien pulsa confirma que en SimpleFact no tiene boleta (abajo; owner 15-10-2026) | `antes_de_inicio` |
 | 9 | No tiene comprobante real vivo ni uno registrado como emitido fuera de Kapta (35.4). En simulación, tampoco una simulación | `ya_tiene` / `ya_simulado` |
 | 10 | Su último intento real no terminó en `error` sin que una persona pidiera reintentar | `error_previo` |
 
@@ -13406,9 +17032,41 @@ conexión del RUC (`sin_conexion`). Y justo después de la condición 7, el RUC
 tiene que estar en Manual o en Real (`modo_distinto`); el botón, además, solo
 emite en Manual (35.7).
 
+**Lo pagado antes de «Emitir desde»** (owner, 15-10-2026). La condición 8
+tiene una sola excepción, y es del botón. Antes de Kapta las boletas se
+emitían a mano en SimpleFact, y Kapta no sabe si un pedido de entonces ya tiene
+la suya: una boleta de más es pagar el impuesto dos veces. «Emitir esta
+boleta» (35.7), con el RUC en Manual, deja pasar un pedido que quedó pagado
+antes de «Emitir desde» si quedó pagado desde el **01/10/2026 00:00** (hora de
+Lima, `INVOICE_BACKFILL_FROM`), con la misma cuenta de la condición 8, **y si
+su primer dinero también es de esa hora en adelante**. Para esta excepción,
+«pagado» es además la fecha más temprana entre la del comprobante
+(`order_payments.paid_at`, cuándo se movió la plata según el comprobante;
+puede faltar) y la de registro (`registered_at`) de cada uno de sus pagos
+validados; en un prepago web, la fecha del pedido (`firstPaidAt`). Sin fecha
+de comprobante, o con una que no se entiende, cuenta la de registro. Un pago
+cuyo comprobante dice 29/09 y que se registró en Kapta el 01/10 no pasa: la
+plata se movió cuando las boletas se emitían a mano. Un adelanto movido antes
+del 01/10 tampoco, aunque la diferencia sea de después; un pago rechazado no
+cuenta. La condición 8 no cambia: lo pagado desde «Emitir desde» no mira el
+comprobante. Las reglas lo marcan (`beforeStart`), y quien pulsa tiene que
+confirmar que lo buscó en SimpleFact y no tiene boleta; sin eso no se emite
+(`sin_revision_simplefact`). Las demás condiciones valen igual. Sigue en
+`antes_de_inicio` lo pagado antes del 01/10/2026, lo que no tiene fecha de
+pago, un RUC sin «Emitir desde» y todo pedido de un RUC en Real, porque ahí no
+hay botón. **Con «Emitir desde» en el futuro** (Ajustes lo acepta), nada pagado
+antes de él sale, ni con el botón: la excepción es para lo pagado antes de un
+inicio que ya llegó, nunca para emitir antes de la fecha que puso el owner.
+**El barrido nunca va hacia atrás**: en Simulación, en Manual y en Real, lo
+pagado antes de «Emitir desde» no se simula ni se emite.
+
 **Justo antes de emitir, Kapta vuelve a leer el pedido en Shopify**
 (`fetchOrderForInvoice`), porque lo guardado no alcanza para armar la boleta
-(35.5). Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
+(35.5). Si la tienda ya no tiene Shopify —Kenku y Aurela desde el
+28-10-2026—, lee la foto del pedido que se tomó mientras Shopify respondía
+(35.10), con las mismas reglas. Un pedido de WooCommerce (por `orders.platform`,
+nunca por la forma del id) se relee en WooCommerce, nunca en Shopify ni en una
+foto, con lo que WooCommerce dice de esto mismo (35.11). Esa lectura bloquea un pedido de prueba (`prueba`), anulado,
 reembolsado o en otra moneda, uno editado (`editado`, `cantidad_editada`,
 `envio_editado`), con propina, con tarjeta de regalo (`gift_card`), con una
 línea gratis (`linea_gratuita`), con impuesto sumado encima
@@ -13445,7 +17103,17 @@ validado o, sin pagos validados, la fecha del pedido. Esa fecha y la que manda
 el barrido tienen que ser las dos desde «Emitir desde»; si falta una, o una es
 anterior, no da el turno (`antes_de_inicio`). Así, un error en las reglas o en
 una lectura no manda a SUNAT la boleta de algo pagado antes de la fecha de
-inicio.
+inicio. La única excepción es la de arriba, y la base la vuelve a exigir
+entera (0269): da el turno a algo pagado antes de «Emitir desde» solo si se
+pide con `p_backfill`, una fila real, el RUC en Manual, quién la pide
+(`p_created_by`) y las dos fechas del 01/10/2026 00:00 (hora de Lima) en
+adelante. Sin «Emitir desde», con «Emitir desde» todavía en el futuro (la base
+exige `emit_from <= now()`) o sin una de las fechas, sigue `antes_de_inicio`.
+El primer dinero también lo saca de la base: la fecha más temprana entre
+`paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha del
+pedido), y tiene que ser del 01/10/2026 00:00 (hora de Lima) en adelante.
+La fila que sale así lo dice en su base (`pagado_antes_de_emitir_desde`). El
+barrido nunca manda `p_backfill`.
 
 **Que la empresa recibió el pago tampoco se lo cree** (0262). Entre la lectura
 del código y el turno pasa la relectura en Shopify, y en ese rato un pago
@@ -13456,7 +17124,8 @@ recibió. Ahora, justo después de `pagos_en_revision`, el turno vuelve a revisa
 la condición 3 con los pagos y el pedido guardados, por el camino que dice la
 base del comprobante que manda el código (`p_basis`: prepago web o no). Sin
 prepago, tiene que haber pagos validados y su suma tiene que cubrir el total
-que se va a emitir, al céntimo (`sin_pago_completo`); y si el pedido guardado
+que se va a emitir, salvo menos de S/ 1 de redondeo (0293, owner 01-11-2026;
+§6.5) (`sin_pago_completo`); y si el pedido guardado
 es un prepago web con pagos validados, `prepago_con_comprobantes`, como en las
 reglas. Con prepago, no puede quedar ningún pago vivo
 (`prepago_con_comprobantes`) y el pedido guardado tiene que ser de verdad un
@@ -13538,10 +17207,26 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
   una boleta real, ni al revés. Lo que excede espera al día siguiente y no se
   pierde. El defecto cubre el pico medido (34) más los prepagos web.
 - **Por pasada,** a lo más 15 comprobantes por RUC.
-- **«Emitir desde».** Ningún RUC emite hacia atrás: solo pedidos que quedaron
-  pagados desde esa fecha, y Ajustes no la deja en el pasado. Al cambiar de
-  modo, si quedó atrás, se mueve sola al momento del cambio. Asignar un RUC a
-  una cuenta no emite nada pagado antes de esa fecha. Pasar de Manual a Real
+- **«Emitir desde».** El barrido nunca emite hacia atrás, en ningún modo: solo
+  pedidos que quedaron pagados desde esa fecha, y Ajustes no la deja en el
+  pasado. Al cambiar de modo, si quedó atrás, se mueve sola al momento del
+  cambio. Asignar un RUC a una cuenta no hace que el barrido emita nada pagado
+  antes de esa fecha. La única excepción es de una persona, no del barrido
+  (owner 15-10-2026; 35.3, 35.7): con el RUC en Manual, «Emitir esta boleta»
+  emite lo pagado antes de «Emitir desde» si quedó pagado desde el 01/10/2026
+  00:00 (hora de Lima) y quien pulsa confirmó que en SimpleFact no tiene
+  boleta. La excepción no cambia «Emitir desde»: Ajustes sigue sin aceptar una
+  fecha pasada, y un cambio de modo la sigue moviendo. Con «Emitir desde» en el
+  futuro, nada pagado antes de él sale, ni con el botón (35.3). Ajustes dice lo
+  mismo, sin prometer de más: junto a «Emitir desde», «El barrido solo toma
+  pedidos que quedaron pagados desde aquí (en Manual y con esta fecha ya
+  llegada, «Emitir esta boleta» también puede emitir lo pagado desde el
+  01/10/2026, después de revisar SimpleFact)»;
+  al mover la fecha por un cambio de modo, «Al cambiar de modo, «Emitir desde»
+  quedó en ahora: el barrido no emite nada pagado antes. En Manual, lo pagado
+  desde el 01/10/2026 solo sale con «Emitir esta boleta», después de revisar
+  SimpleFact.»; y en las cuentas de cobro, «Asignar un RUC no hace que el
+  barrido emita nada pagado antes de su «Emitir desde».». Pasar de Manual a Real
   también es cambiar de modo: lo que quedó pagado en Manual y nadie emitió con
   «Emitir esta boleta» no sale en Real. Se emite antes de cambiar, o a mano en
   SimpleFact y se registra con «Ya tiene comprobante».
@@ -13617,7 +17302,8 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
 - **Shopify no se relee en cada pasada.** Un pedido bloqueado por lo que dijo
   Shopify —incluida una tienda sin conexión con Shopify (`sin_token_shopify`)—
   no se vuelve a leer en Shopify antes de 6 horas, bajo ninguno de los dos
-  modos. Un corte de Shopify (`lectura_fallida`) se reintenta en la pasada
+  modos. Lo mismo un pedido de WooCommerce bloqueado por lo que dijo
+  WooCommerce, también sin las claves de su API (`sin_claves_woo`, 35.11). Un corte de Shopify (`lectura_fallida`) se reintenta en la pasada
   siguiente. «Emitir esta boleta» sí relee Shopify al pulsar, aunque la última
   lectura sea de hace menos de 6 horas: es una persona y un pedido.
 - **Presupuesto de la pasada.** No empieza un pedido nuevo pasados 20 segundos
@@ -13662,7 +17348,7 @@ comprobante armado con datos a medias puede ir al RUC equivocado.
 | --- | --- |
 | `invoice_issuers` | Los RUC: subdominio, token cifrado (AES-256-GCM, `lib/crypto.ts`), modo, «Emitir desde», tope y la última prueba de conexión (RUC leído, fecha y error). Sin policy de lectura: solo la lee el servidor |
 | `store_collection_accounts.invoice_issuer_id` | El RUC de cada cuenta (35.2). Un trigger exige que el RUC sea de la misma organización que la tienda |
-| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar |
+| `order_invoices` | Una fila por intento: pedido, RUC (copiado), modo, estado, total, cuándo quedó pagado, los pagos y cuentas en que se basó (`basis`, que dice también si salió pagado antes de «Emitir desde», 35.3), lo enviado (`request`), lo recibido (`response` y código HTTP), el id de SimpleFact, serie, correlativo y enlaces al PDF y al XML, quién la emitió con «Emitir esta boleta» o la registró como externa (`created_by`) y quién pidió reintentar |
 | `invoice_order_checks` | La última revisión del barrido por pedido y modo (motivo y fecha). Con ella el panel dice por qué un pedido no lleva comprobante, y el barrido no relee en Shopify cada 10 minutos un pedido bloqueado |
 
 Reglas de esa tabla:
@@ -13723,7 +17409,9 @@ Reglas de esa tabla:
     porque ese pedido no se relee antes de 6 horas. Si no —un pedido de
     prueba, editado, con propina, con tarjeta de regalo, un prepago web que
     Flow no cobró entero—, dice «Se emite a mano»: no se emite sola, se emite a
-    mano en SimpleFact y se registra con «Ya tiene comprobante».
+    mano en SimpleFact y se registra con «Ya tiene comprobante». De un pedido
+    de WooCommerce dice «Espera a WooCommerce», y sus motivos nombran a
+    WooCommerce (35.11).
   - Con el RUC en Manual, el panel tampoco dice «Lista para emitirse», porque
     el barrido no la emite: dice «Lista para simularse en la próxima pasada
     (RUC ‹ruc›, modo Manual)» y «En Manual el barrido solo simula: la boleta
@@ -13774,7 +17462,9 @@ Reglas de esa tabla:
     como una emisión real (cuentan el error sin reintento y la conexión del RUC; una
     simulación no frena) y sin que la última pasada lo haya frenado por lo que
     dijo Shopify: ahí el panel dice ese motivo, como siempre. El badge dice
-    «Lista para emitir». Con el RUC en Manual, si algo de la emisión real lo
+    «Lista para emitir». Aparece también en un pedido pagado antes de «Emitir
+    desde», si quedó pagado desde el 01/10/2026 (35.3, abajo). Con el RUC en
+    Manual, si algo de la emisión real lo
     frena y el panel no lo dice de otra forma —sin la conexión probada, por
     ejemplo—, a quien gestiona le dice por qué no hay botón. En Ajustes,
     «Emitir» va en la simulada más nueva de un pedido solo cuando el panel de
@@ -13785,7 +17475,41 @@ Reglas de esa tabla:
     CLIENTES VARIOS con el RUC ‹ruc› (‹razón social›). Va a SUNAT y no se
     puede borrar.», con «Sí, emitir» y «Cancelar». Desde el primer «Sí,
     emitir» hasta que vuelve la respuesta, no sale un segundo envío y los
-    botones quedan deshabilitados.
+    botones quedan deshabilitados. Si el pedido quedó pagado antes de «Emitir
+    desde», pide además una casilla (abajo).
+  - **Lo pagado antes de «Emitir desde»** (owner, 15-10-2026; 35.3). Con el
+    RUC en Manual, el botón también emite un pedido que quedó pagado antes de
+    «Emitir desde», si quedó pagado desde el **01/10/2026 00:00** (hora de
+    Lima). Solo el botón: una persona, nunca el barrido. Con «Emitir desde»
+    en el futuro, nada pagado antes de él sale, ni con el botón (35.3).
+    «Quedó pagado» es aquí también el primer dinero (35.3): un pago cuyo
+    comprobante es de antes del 01/10/2026 no lleva botón, aunque se
+    registrara después. Antes de Kapta las boletas se emitían a mano en
+    SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya; una boleta de
+    más es pagar el impuesto dos veces.
+    Por eso la confirmación agrega «Quedó pagado el ‹dd/mm/aaaa hh:mm›, antes
+    de «Emitir desde» (‹dd/mm/aaaa hh:mm›). Kapta no sabe si ya se emitió a
+    mano: búscalo en SimpleFact antes de emitir.» —cuándo quedó pagado y desde
+    cuándo emite el RUC, las dos en hora de Lima— y una casilla «Revisé en
+    SimpleFact y este pedido no tiene boleta». Si el primer pago es de otro
+    momento (la fecha más temprana entre su comprobante y su registro), entre
+    las dos frases dice «El primer pago se hizo el ‹dd/mm/aaaa hh:mm›.»: una
+    boleta hecha a mano pudo salir desde ahí, y con esa fecha se busca en
+    SimpleFact. La casilla empieza sin marcar cada vez que se abre la
+    confirmación, y se desmarca al cancelar y al volver la respuesta. «Sí,
+    emitir» no se puede pulsar hasta marcarla. **La confirmación es de la
+    oferta que se veía al abrirla**: si el panel se relee con ella abierta y
+    cambia el RUC, el total, las fechas o si es de antes de «Emitir desde», se
+    cierra y la casilla se desmarca —lo revisado en SimpleFact era para la
+    otra, y cada RUC tiene su SimpleFact—; y «Sí, emitir» manda lo que se vio,
+    no lo que diga el panel al pulsar: si cambió, el servidor contesta
+    `pedido_cambio`. Si en SimpleFact ya tiene boleta, no se emite: se
+    registra con «Ya tiene comprobante». Sin esta excepción nada cambia: un pedido pagado desde
+    «Emitir desde» no lleva ni el texto ni la casilla. En el panel, la
+    revisión sigue diciendo «Quedó pagado antes de «Emitir desde» del RUC.»
+    —el barrido no lo emite— y, al lado del botón, agrega «No sale sola: se
+    puede emitir con «Emitir esta boleta» después de revisar SimpleFact.».
+    «Emitir» en Ajustes es la misma acción, con la misma casilla.
   - **Qué hace el servidor** (`emitInvoiceAction`). Primero, que es
     producción, antes de leer nada. Después lo que es de quien pulsa: que ve
     el pedido y tiene `invoices.manage`, antes de leer nada con el service
@@ -13798,12 +17522,17 @@ Reglas de esa tabla:
     emite en «Manual»») y que el RUC y el total que se van a enviar son los
     que confirmó. Si el pedido cambió desde que lo abrió, no emite
     (`pedido_cambio`): «El pedido cambió desde que lo abriste (el RUC o el
-    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». La acción
-    no lee el pedido por su cuenta: antes comparaba con una lectura propia,
+    total): vuelve a abrirlo y revisa la boleta antes de emitirla.». Si quedó
+    pagado antes de «Emitir desde» y quien pulsó no marcó la casilla, tampoco
+    emite (`sin_revision_simplefact`): «Quedó pagado antes de «Emitir desde»:
+    falta confirmar que en SimpleFact no tiene boleta.». Solo cuenta una
+    casilla marcada (`true`). La acción no lee el pedido por su cuenta:
+    antes comparaba con una lectura propia,
     `emitInvoiceNow` volvía a leer sin comparar, y entre las dos el pedido
     podía cambiar y salir una boleta que nadie confirmó. Después, el token, la
     relectura en Shopify (el total y, en un prepago web, lo que cobró Flow),
-    la boleta, el turno pidiendo una fila real con quien pulsó (35.3), UNA
+    la boleta, el turno pidiendo una fila real con quien pulsó (35.3) —y, si
+    quedó pagado antes de «Emitir desde», con `p_backfill` (0269)—, UNA
     llamada a SimpleFact, la lectura de la respuesta, la fila (solo si sigue
     en `emitiendo`) y las reglas que apagan el RUC (35.4). Los mismos
     candados: un comprobante real vivo por pedido (el índice único), el tope
@@ -13921,6 +17650,26 @@ pago, que es lo que el turno revisa: lo bien pagado sigue dando su fila. Va
 después de la 0261: sin ella —sigue el turno de nueve argumentos, o falta el
 de once— se detiene sin cambiar nada. Si después alguien vuelve a correr la
 0261, el turno queda otra vez sin esta revisión hasta volver a correr la 0262.
+Con la 0269 aplicada, lo que se vuelve a correr después de la 0261 es la 0269
+(no la 0262): la 0262 pasaría su guarda y dejaría los dos turnos.
+
+**Antes de la 0269** (owner, 15-10-2026). También se aplica a mano, después de
+la 0262 y antes de su código (DEPLOY.md). Cambia la firma del turno: borra la
+de once argumentos y crea la de doce, con `p_backfill` al final, falso por
+defecto; el cuerpo es el de la 0262. El código de antes y el de ahora piden el
+turno por nombre, y con un solo turno esas llamadas van al de doce con
+`p_backfill` en falso: hace lo mismo que la 0262. El código solo manda
+`p_backfill` desde «Emitir esta boleta», con un pedido pagado antes de «Emitir
+desde» (35.3). Si llega antes que la 0269, nada se emite de más y nada se pone
+rojo: lo pagado desde «Emitir desde» se simula y se emite como siempre, y un
+pedido pagado antes no reserva ni envía nada: es `sin_migracion`, y «Emitir
+esta boleta» dice «Falta aplicar la migración 0269 de comprobantes
+(invoice_claim con p_backfill).». La 0269 se reconoce por ese parámetro
+(`INVOICE_CLAIM_BACKFILL_MIGRATION`). Va después de la 0262: con el turno de
+nueve argumentos, o sin el de once ni el de doce, se detiene sin cambiar nada.
+Si después alguien vuelve a correr la 0261, quedan dos turnos —el de once y el
+de doce— y la llamada por nombre del código falla: no se simula ni se emite
+nada hasta volver a correr la 0269.
 
 Para el barrido, «falta una migración de comprobantes» es solo un «no existe»
 (de tabla o de función) que nombra algo que crean la 0257 —`invoice_issuers`,
@@ -13964,6 +17713,13 @@ comprobantes sino una base rota, y el cron se pone rojo (502).
   ingreso sin pago completo. **Decisión pendiente del owner.**
 - **Los otros tres RUC.** El owner los da de alta con su subdominio y su token,
   y les asigna cuentas.
+- **Lo que la boleta de WooCommerce no emite sola (35.11). Decisiones
+  pendientes del owner y del contador:** el prepago web por Flow de
+  WooCommerce («Tarjeta o Yape»), porque WooCommerce no dice cuánto cobró Flow;
+  el regalo a S/ 0 de los packs del formulario (`linea_gratuita`), que en
+  Aurela es lo común; y un cargo suelto (`fee_lines`). Hasta que decidan, esos
+  pedidos se emiten a mano en SimpleFact y se registran con «Ya tiene
+  comprobante».
 
 Implementación:
 
@@ -13971,8 +17727,8 @@ Implementación:
   `store_collection_accounts.invoice_issuer_id` con su trigger,
   `order_invoices`, `invoice_order_checks`, la función `invoice_claim` (el
   turno) y la semilla de GRUPO GF S.A.C. Es la que corrió en producción el
-  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261
-  y la 0262.
+  14-10-2026, y no se reescribe: lo que cambió después va en la 0260, la 0261,
+  la 0262 y la 0269.
 - `db/migrations/0260_invoices_hardening.sql`: los arreglos de la revisión
   adversaria, sobre la 0257: las funciones `invoice_claim` (el turno) e
   `invoice_candidates` (qué pedidos mira el barrido), y las de los triggers
@@ -13992,8 +17748,20 @@ Implementación:
   `prepago_con_comprobantes`), que cada pago de la base del comprobante siga
   validado, y bloquea los pagos del pedido mientras dura. Se detiene sin la
   0261 delante. No toca filas.
+- `db/migrations/0269_invoices_backfill.sql`: lo pagado antes de «Emitir
+  desde» con «Emitir esta boleta» (owner 15-10-2026), sobre la 0262: solo
+  `invoice_claim`, que pasa a doce argumentos con `p_backfill` (falso por
+  defecto) y borra la firma de once. El cuerpo es el de la 0262 salvo dos
+  cosas: con `p_backfill`, una fila real, el RUC en Manual, quién la pide
+  (`p_created_by`) y «Emitir desde» ya llegado, da el turno a lo pagado antes
+  de «Emitir desde» si las dos fechas son del 01/10/2026 00:00 (hora de Lima)
+  en adelante, y también el primer dinero (la fecha más temprana entre
+  `paid_at` y `registered_at` de sus pagos validados); y esa fila lleva en su
+  base `pagado_antes_de_emitir_desde`. Se detiene con el turno de nueve
+  argumentos, o sin el de once ni el de doce. No toca filas.
 - `lib/invoicing/rules.ts`: reglas puras (cuenta y RUC de cada pago,
-  elegibilidad, la boleta, la lectura de la respuesta) y cuándo se puede
+  elegibilidad —con `INVOICE_BACKFILL_FROM`, el 01/10/2026 de lo pagado antes
+  de «Emitir desde»—, la boleta, la lectura de la respuesta) y cuándo se puede
   liberar un `en_duda` (`invoiceReleaseAvailableAt` e `invoiceReleaseBlock`,
   con `INVOICE_RELEASE_MIN_AGE_MS`).
 - `lib/invoicing/shopify-order.ts`: la lectura del pedido en Shopify y su
@@ -14004,7 +17772,10 @@ Implementación:
   emisión real del barrido, para un pedido, que compara lo que la persona
   confirmó) e `invoiceEmitNowReadiness` / `loadInvoiceEmitNowOffers` (cuándo
   se ofrece el botón, en el panel y en Ajustes), y `invoiceEmitAllowedHere`
-  (solo producción emite).
+  (solo producción emite). Con un pedido pagado antes de «Emitir desde»,
+  `emitInvoiceNow` pide la casilla (`sin_revision_simplefact`) y el turno va
+  con `p_backfill`; sin la 0269, contesta `sin_migracion`
+  (`INVOICE_CLAIM_BACKFILL_MIGRATION`).
 - `app/api/cron/invoices/route.ts`: el barrido, cada 10 minutos.
 - Ajustes, en `app/dashboard/[storeId]/settings/invoice-actions.ts` y
   `components/invoice-settings-section.tsx`; el panel, en
@@ -14012,3 +17783,3413 @@ Implementación:
   corre al pulsar «Emitir esta boleta») y `components/order-invoice-panel.tsx`;
   el permiso, en `lib/permissions.ts`.
 - Pruebas: `test/invoicing-*.test.ts` y `scripts/sql/invoices_smoke.sql`.
+
+### 35.10 La foto del pedido para cuando Shopify ya no responde (owner, 23-10-2026)
+
+**Por qué.** Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC; se
+planifica para el 27-10 a las 19:00 de Lima). La boleta vuelve a leer el pedido
+en Shopify justo antes de emitir (35.3), y los pedidos vendidos en Shopify se
+siguen cobrando después del cierre: al 23-10-2026, 11.036 pedidos no anulados
+creados desde el 29-08 no tenían boleta (Kenku 9.171, Aurela 1.865). Sin una
+copia de esa lectura, ninguno la tendría.
+
+**La decisión del owner (23-10-2026):** guardar ahora, mientras Shopify
+responde, lo que esa lectura devuelve. Los pedidos de WooCommerce se leen con
+su propio lector (35.11, 25-10-2026).
+
+**La foto** (`order_invoice_snapshots`, 0275). Por pedido de Shopify,
+exactamente lo que contesta `ORDER_FOR_INVOICE_QUERY` (el `data` de la
+respuesta, `{order: …}`; `order: null` si Shopify no lo devolvió) y cuándo se
+pidió (`fetched_at`). Nada de la clienta: la consulta no lo pide. Solo el
+servidor la lee y la escribe. **Una foto con el pedido nunca se pisa con una
+que no lo trae** (`{order: null}`; revisión del 23-10-2026): si Shopify, al
+volver a leer un pedido que cambió, ya no lo devuelve, la buena se conserva
+(con su hora), el log lo cuenta en `kept` y el pedido se anota en
+`invoice_snapshot_attempts` para volver a mirarlo más espaciado, sin poner el
+cron en rojo. Al revés sí: una foto con el pedido reemplaza a una sin él.
+
+**Varios pedidos por llamada, los mismos campos** (revisión del 23-10-2026: de
+a uno no alcanzaba para Kenku antes del cierre). El cron pide los pedidos de a
+lotes con `nodes(ids: …)` y **los mismos campos de `ORDER_FOR_INVOICE_QUERY`,
+en el mismo orden** (`ORDERS_FOR_INVOICE_BATCH_QUERY`, armada desde la consulta
+de la boleta), con páginas más cortas para que el lote quepa en el tope de
+costo de una consulta de Shopify (1000 puntos): 10 líneas, 10 cobros y 5 envíos
+en vez de 100, 20 y 10 (los pedidos de Kenku y Aurela desde el 29-08 tienen a
+lo más 7 líneas y 1 envío). Un pedido del lote que **llenó** alguna de esas
+páginas (puede tener más), que no volvió o que no se entiende **se pide solo,
+con la consulta y la llamada exactas de la boleta** (`requestOrderForInvoice`).
+Así lo guardado es siempre, campo por campo, lo que la boleta habría leído. El
+tamaño del lote sale de lo que Shopify dice que pide cada pedido
+(`requestedQueryCost`, unos 135 puntos), entre 1 y 25 (unos 7 en el tope de
+1000; 1 con un balde de 1000, por la reserva); si Shopify contesta que el lote
+pasa el tope (`MAX_COST_EXCEEDED`), se achica sin perder pedidos.
+
+**Qué pedidos.** El cron `/api/cron/invoice-snapshots`, **cada 2 minutos, en
+los minutos impares** (`1-59/2`: nunca arranca con el barrido de boletas de
+los minutos 6, 16, …), toma por tienda lo que la base dice que falta
+(`invoice_snapshot_candidates`, hasta 600 por pasada). Entra un pedido:
+
+- de una tienda activa de una organización que factura en Kapta (con un RUC
+  dado de alta, 35.2). Las tiendas cliente facturan fuera (§29.15) y su
+  Shopify no se toca;
+- de Shopify según `orders.platform` (0274, §38), con su id de Shopify;
+- creado desde el **29-08-2026 00:00 UTC**: el cierre menos los 60 días que
+  mira el barrido de boletas (`invoice_candidates`, 0260). Un pedido más viejo
+  no vuelve a entrar al barrido después del cierre;
+- sin comprobante real vivo (emitiendo, emitida, en duda o externa);
+- sin foto y no anulado, o con una foto anterior a su último cambio en Shopify
+  (`orders.updated_at`): así la foto queda con lo último que dijo Shopify.
+
+Primero los que no tienen foto; entre ellos, los que nunca fallaron antes que
+los que fallaron (ver «Una falla no tapa la cola»); después, primero los que
+siguen en curso (sin macroetapa o con una que no es «Finalizado»), del más
+nuevo al más viejo.
+
+**Sin quitarle Shopify a nadie.** Las dos tiendas a la vez (cada una tiene su
+propio cupo en Shopify), un lote a la vez por tienda, y ninguna llamada nueva
+pasados **95 s** (la ruta tiene 120 s y el cron vuelve a los 2 minutos). Antes
+de cada llamada espera a que la tienda tenga en Shopify el costo que pide el
+lote **más una reserva**: un cuarto del balde y **nunca menos que lo que pide
+la lectura de una boleta** (850 puntos; la consulta de la boleta pide unos
+810), sin pasar del balde. El lote se arma para que eso quepa: después de
+cobrar la llamada por adelantado, a la tienda le queda siempre esa reserva, y
+una boleta que se lee mientras corre la foto (el barrido o «Emitir esta
+boleta») entra en vez de quedar en `lectura_fallida`. Con un balde de 1000 la
+reserva es 850 y la foto va de a un pedido por llamada; el ritmo casi no cambia
+porque lo pone la reposición. (La única excepción: con un balde de 1000, la
+consulta de un pedido solo, unos 810 puntos, espera el balde lleno y mientras
+corre deja menos.) Y la foto gasta, en promedio, **a lo más el 75 % de lo que
+el balde se repone por segundo** (entre llamada y llamada espera lo gastado ÷
+0,75 × reposición). El sync, los webhooks y «Generar pedido» tienen siempre esa
+reserva y un cuarto de la reposición. Si
+Shopify contesta THROTTLED, la tienda para hasta la próxima pasada. Un **turno
+por tienda** en la base (`invoice_snapshot_lease`, 125 s, se suelta al
+terminar) impide dos pasadas a la vez sobre la misma tienda (un cron repetido,
+uno atrasado, una llamada a mano). La base guarda solo un pedido de Shopify de
+esa tienda y con su gid, nunca una foto más vieja sobre una más nueva y nunca
+`{order: null}` sobre una con el pedido (`invoice_snapshot_put`). La línea de
+log lleva conteos y el ritmo: fotos de la pasada (`orders`), por minuto
+(`perMinute`), lo que tardó (`ms`) y por tienda las llamadas (`calls`), el
+tamaño del lote (`batch`), los puntos que se pidieron y se gastaron
+(`points.requested`, `points.actual`), las fotos buenas conservadas (`kept`) y
+el cupo que informó Shopify (`quota`): ni pedidos, ni clientas, ni el token.
+Con `?dry=1` solo cuenta lo que falta. Con 95 s de trabajo cada 120 s, Kenku
+(9.171) termina en ~1,7 h con el balde del plan básico (2000 / 100 por s) y
+pedidos de ~40 puntos, y en ~9 h en el peor caso razonable (balde de 1000 / 50
+por s y 100 puntos por pedido); Aurela, a la vez, antes (DEPLOY.md, entrada
+del 23-10-2026).
+
+**Una falla no tapa la cola** (revisión del 23-10-2026). Lo que es de la tienda
+para la tienda hasta la próxima pasada: THROTTLED (sin rojo), la tienda que ya
+no está (401, 402, 403, 404, 423), un 5xx, la red, o un tiempo agotado sin
+ninguna llamada buena antes en la pasada. Lo que es de un pedido —un error de
+GraphQL, una respuesta sin el pedido o con otro, un tiempo agotado después de
+otras buenas— se anota en `invoice_snapshot_attempts` (cuántas fallas seguidas,
+cuándo la última y por qué, en corto) y la pasada **sigue con el siguiente**;
+si el error vino en un lote, el lote se pide de a uno para saber cuál fue. Lo
+que estaba en vuelo cuando la tienda paró también se anota. Un pedido anotado
+va detrás de los que nunca fallaron y espera 2 minutos por cada falla seguida
+(30 como mucho) antes de volver; guardar su foto borra sus fallas. Cinco
+pedidos seguidos que fallan solos paran la tienda. **El cron se ve rojo** (502)
+si la tienda para por Shopify (`shopify` o `tienda_caida`), si un pedido llega
+a **3 fallas seguidas**, o si falla la base.
+
+**Cuándo se usa.** Solo si la tienda ya no tiene token de Shopify (la llave de
+la operación, a cualquier hora), o si **desde el cierre** (28-10-2026 00:00
+UTC, `SNAPSHOT_FALLBACK_FROM`, sin margen) Shopify contesta por ella HTTP 401,
+402, 403, 404 o 423 (la tienda ya no está, o ya no se puede entrar). Ahí
+`fetchOrderForInvoice` arma la boleta con la foto, con el mismo mapeo
+(`mapOrderForInvoice`), y todo lo de 35.3 vale igual: los bloqueos, el total
+contra el de Kapta, el prepago web por Flow y el turno. **Con Shopify
+funcionando se lee en vivo, como siempre**, aunque haya foto: **antes del
+cierre**, un 401 (un token revocado al reinstalar), un 403 o un 423 son un
+problema que se arregla y la boleta queda en `lectura_fallida`, como siempre
+(revisión del 23-10-2026). Un 5xx, un tiempo agotado o un error de GraphQL
+tampoco usan la foto: se reintentan en la próxima pasada. Sin foto, el motivo
+es el de siempre (`sin_token_shopify`, `lectura_fallida`).
+
+**Lo dice.** Una boleta armada con la foto lleva en su base
+(`order_invoices.basis`) `foto_shopify`, con la hora de la foto. Un bloqueo que
+sale de la foto lo dice en su detalle: «Foto del pedido del 26/10/2026 15:04:
+…».
+
+**Nunca un pedido de WooCommerce.** Se decide por `orders.platform`, nunca por
+la forma del id: la foto solo se busca con un id de Shopify tal cual (un
+`wc-kp-1532` no lo es, aunque se le pueda sacar un número), su pedido tiene que
+ser de Shopify y de esa tienda, y la base no guarda la foto de otro pedido.
+
+**Lo que no cubre.**
+
+- Lo que cambie en Shopify después de la última foto. Hasta el cierre, un
+  pedido que cambia se vuelve a tomar; después ya no se puede ver.
+- Un pedido creado antes del 29-08 que alguien quiera emitir con «Emitir esta
+  boleta» después del cierre: queda en `sin_token_shopify`. Si no puede
+  esperar, se emite a mano en SimpleFact y se registra como `externa` (35.4).
+- Los pedidos de WooCommerce: tienen su propio lector (35.11) y nunca una foto.
+
+Implementación:
+
+- `db/migrations/0275_invoice_snapshots.sql`: la tabla de fotos, la de fallas
+  (`invoice_snapshot_attempts`) y la de turnos (`invoice_snapshot_leases`), sin
+  acceso para `anon` ni `authenticated`; `invoice_snapshot_candidates`,
+  `invoice_snapshot_put`, `invoice_snapshot_failed`, `invoice_snapshot_lease` e
+  `invoice_snapshot_release`, solo para `service_role`. Se detiene sin la 0257
+  o la 0274.
+- `lib/invoicing/snapshots.ts`: el barrido (`runInvoiceSnapshotSweep`), con
+  `INVOICE_SNAPSHOT_SINCE`, la consulta del lote
+  (`ORDERS_FOR_INVOICE_BATCH_QUERY`, `isCompleteBatchNode`), el tamaño del lote
+  (`snapshotBatchSize`), la reserva y el ritmo (`snapshotWaitMs`,
+  `INVOICE_SNAPSHOT_RESERVE`), el tiempo (`INVOICE_SNAPSHOT_BUDGET_MS`), las
+  fallas (`INVOICE_SNAPSHOT_ALERT_FAILS`) y la foto buena que se conserva
+  (`INVOICE_SNAPSHOT_KEPT_DETAIL`).
+- `lib/invoicing/shopify-cutoff.ts`: `SHOPIFY_SHUTDOWN_AT` y
+  `SNAPSHOT_FALLBACK_FROM`.
+- `app/api/cron/invoice-snapshots/route.ts`: la ruta (`maxDuration` 120), con
+  `CRON_SECRET`; fuera de producción no llama a Shopify, y sin la 0275 contesta
+  `sin_migracion`. En `vercel.json`, `1-59/2 * * * *`.
+- `lib/invoicing/shopify-order.ts`: `requestOrderForInvoice` (la misma llamada
+  para la boleta y para la foto) y la lectura de la foto en
+  `fetchOrderForInvoice`; `lib/invoicing/server.ts` pone `foto_shopify` en la
+  base del comprobante.
+- Pruebas: `test/invoicing-snapshots.test.ts`, `test/invoicing-shopify.test.ts`,
+  `test/invoicing-server.test.ts` y `scripts/sql/invoice_snapshots_smoke.sql`.
+
+### 35.11 La boleta de un pedido de WooCommerce (25-10-2026)
+
+**Por qué.** Aurela vende por WooCommerce desde el 24-10-2026 y Kenku lo hará
+desde el cierre de Shopify (martes 27-10-2026, 19:00 de Lima). La relectura de
+35.3 le preguntaba a Shopify por el número del id de un pedido de WooCommerce
+(`wc-aur-11075` → 11075), que no existe: quedaba en `no_encontrado` (o, sin
+token, `sin_token_shopify`) y nunca salía. Las reglas de Kapta (35.2, 35.3), el
+turno (35.4), la boleta (35.5), los modos y los candados no cambian: cambia
+solo de dónde se relee el pedido justo antes de emitir.
+
+**Quién decide.** `orders.platform` (§38.1), nunca la forma del id. El barrido
+y «Emitir esta boleta» leen la plataforma junto con el pedido. Con
+`woocommerce`, la relectura va a WooCommerce (`fetchWooOrderForInvoice`); con
+`shopify`, exactamente como antes: la misma llamada, sin plataforma, y la foto
+de 35.10 cuando Shopify ya no responde. Sin la columna (antes de la 0274, cuando
+no puede haber pedidos de WooCommerce) se leen sin ella y todos son de Shopify;
+cualquier otro error al leer los pedidos frena la pasada, como siempre. Un
+pedido de WooCommerce nunca se le pregunta a Shopify ni sale de una foto.
+
+**De dónde (decisión de implementación, 25-10-2026).** De la API de
+WooCommerce, `GET /wp-json/wc/v3/orders/<id>`, con las claves guardadas de la
+tienda y el mismo cliente que la entrada de pedidos (§38.8, §38.11: 15 s por
+llamada, sin seguir redirecciones, autenticación Basic y, si el hosting borra
+la cabecera, las claves en la dirección), justo antes de emitir, como en
+Shopify. **No de `orders.raw.woo`:** eso es lo que trajo el último webhook o la
+última pasada; WooCommerce no reintenta un webhook que falló, y un reembolso o
+una anulación de hace un minuto pueden no estar ahí todavía. WooCommerce no se
+apaga como Shopify: si no contesta, el pedido espera a la próxima pasada
+(`lectura_fallida`) y nunca sale de una copia. La lectura no mira ni guarda nada
+de la clienta: la boleta va a «CLIENTES VARIOS» (35.5).
+
+**La boleta, al céntimo.** Cada línea es un ítem con su SKU —sin SKU, la
+variación (`V…`), el producto (`P…`) o la línea (`L…`)— y su nombre en
+WooCommerce. Su neta es el `total` de la línea, que en WooCommerce ya trae su
+parte de los cupones (`subtotal` es antes de ellos). Si la neta no se divide
+exacto entre la cantidad, la línea se parte en dos ítems que difieren en un
+céntimo, como en Shopify. El envío cobrado va como «Servicio de envío -
+‹método›»; el gratis no va. La suma tiene que dar exactamente el `total` de
+WooCommerce, y ese total tiene que ser el de Kapta (35.3, con «WooCommerce dice
+S/ …; Kapta, S/ …»). Los montos llegan como texto decimal: uno que no se
+entiende, o con fracción de céntimo, no se redondea y la lectura falla. El
+estado de WooCommerce (`processing`, `completed`, `on-hold`, «Por confirmar»)
+no dice si se cobró: el pago lo prueban los comprobantes validados en Kapta,
+como en Shopify (§38.4).
+
+**Lo que bloquea**, con los motivos de siempre:
+
+| En WooCommerce | Motivo |
+| --- | --- |
+| `cancelled` o `trash` | `anulado` |
+| `refunded`, o cualquier reembolso en `refunds` | `reembolsado` |
+| `pending`, `failed` o un borrador: no es un pedido vivo (§38.3) | `no_encontrado` |
+| Otra moneda que soles | `moneda` |
+| Un impuesto distinto de cero —del pedido, de una línea, del envío o de un cargo— o una línea de impuesto | `impuesto_encima` |
+| Una línea a S/ 0, o con menos de un céntimo por unidad (el regalo del pack «3 + 2 gratis» de COD Core) | `linea_gratuita` |
+| Un cargo suelto distinto de cero (`fee_lines`: un recargo, o un descuento armado como cargo negativo) | `no_cuadra` |
+| Ninguna línea, una línea que cuesta más que su precio antes de descuentos, o un detalle que no suma el total | `no_cuadra` |
+| Más de 100 líneas | `demasiadas_lineas` |
+| Una línea sin nombre | `sin_boleta` |
+| Un dato que falta o no se entiende, una respuesta de otro pedido, la base, la red, un tiempo agotado, un 5xx, un 401 o 403 | `lectura_fallida` |
+| WooCommerce no lo tiene (404), o el id es de otro sitio que el de la tienda | `no_encontrado` |
+| La tienda sin la dirección del sitio, la clave del sitio o las dos claves de la API, o con claves que no se descifran | `sin_claves_woo` |
+
+`sin_claves_woo` es el `sin_token_shopify` de WooCommerce: entra en la lista de
+6 horas del barrido (35.4) y se vuelve a intentar solo. Los demás que dicen
+«se emite a mano» en Shopify lo dicen igual aquí.
+
+**Lo que WooCommerce no dice, y por eso no se emite solo:**
+
+- **El prepago web.** WooCommerce no guarda cuánto cobró la pasarela, solo que
+  el plugin la marcó pagada. La regla de 35.3 pide que lo cobrado por Flow sume
+  el total, así que un prepago web de WooCommerce (el «Tarjeta o Yape» de
+  Aurela, §38.4) queda en `pago_web_no_confirmado`, con el porqué, y se emite a
+  mano. Decisión pendiente del owner (35.9).
+- **El pedido editado.** WooCommerce no marca un pedido editado ni guarda la
+  cantidad original: `editado`, `cantidad_editada` y `envio_editado` son de
+  Shopify. Lo cubren el cuadre de arriba, que el total sea el de Kapta y que lo
+  validado cubra ese total (35.3, condición 3, y el turno, 0262): un pedido que
+  alguien edita en wp-admin cambia su total en Kapta con el webhook o la pasada
+  siguiente, y si lo validado ya no lo cubre no sale.
+- **Pedido de prueba, propina, tarjeta de regalo.** WooCommerce no tiene pedidos
+  de prueba ni propina; los pedidos de prueba del sitio conectado se anulan
+  (`anulado`). Las tiendas no tienen un plugin de tarjetas de regalo: uno que
+  canjee con un cargo negativo queda en `no_cuadra`.
+
+**Lo dice.** La base del comprobante (`order_invoices.basis`) lleva
+`plataforma: "woocommerce"` y la hora de la lectura (`lectura_woocommerce`); la
+de un pedido de Shopify no cambia. El panel dice los motivos de un pedido de
+WooCommerce con la frase de WooCommerce (`invoiceReasonLabel`, con
+`WOO_INVOICE_REASON_LABEL`: «El total de WooCommerce no es el de Kapta.»),
+«Espera a WooCommerce» en vez de «Espera a Shopify», «Se vuelve a revisar en
+unas horas, cuando la tienda tenga guardadas sus claves de la API de
+WooCommerce.» y «Antes de emitir, el barrido vuelve a leer el pedido en
+WooCommerce.»; «Emitir esta boleta» contesta igual. Un pedido de Shopify se ve
+exactamente como antes.
+
+**Sin migración.** Los motivos y la base del comprobante son texto y JSON
+libres; el turno (`invoice_claim`) solo lee de la base `prepaid` y `payments`,
+que no cambian, y la lista de 6 horas le llega como parámetro (`p_blocked`).
+
+Implementación:
+
+- `lib/invoicing/woocommerce-order.ts`: `mapWooOrderForInvoice` (puro: los
+  ítems al céntimo y los bloqueos), `fetchWooOrderForInvoice` (las claves de la
+  tienda, `loadWooStoreCreds`, y `fetchWooOrder` con `withWooAuthFallback`),
+  `WOO_INVOICE_MAX_LINES` y `WOO_PREPAID_UNCONFIRMED_DETAIL`.
+- `lib/invoicing/shopify-order.ts`: la rama por `platform` en
+  `fetchOrderForInvoice`, y `webPrepaidConfirmed`, que nunca confirma una
+  lectura de WooCommerce.
+- `lib/invoicing/rules.ts`: `sin_claves_woo`, `WOO_INVOICE_REASON_LABEL` e
+  `invoiceReasonLabel`.
+- `lib/invoicing/server.ts`: la plataforma con los pedidos (`selectOrderRows`,
+  sin la columna antes de la 0274), `prepareSale` y `invoiceBasis`;
+  `sin_claves_woo` en `SHOPIFY_LEVEL_REASONS`.
+- `app/dashboard/pedidos/invoice-actions.ts` y
+  `components/order-invoice-panel.tsx`: las frases de WooCommerce
+  (`WOO_NO_KEYS_TEXT`).
+- Pruebas: `test/invoicing-woocommerce.test.ts`, y las de un pedido de
+  WooCommerce en `test/invoicing-server.test.ts` y
+  `test/invoicing-drawer.test.ts`.
+
+## 36. Tiendas conectadas con su app propia de Shopify (23-10-2026)
+
+Estado: decisión del owner del 23-10-2026. La migración 0271 se aplica a mano
+y antes del código (DEPLOY.md, entrada del 23-10-2026). Primera tienda:
+«Súper Human Perú».
+
+Una tienda de Kapta se conecta a Shopify con una de tres apps, y guarda cuál
+en `stores.shopify_app`:
+
+- `interna`: la app de Kapta para Kenku Peru y Aurela, con un token fijo.
+- `clientes`: la app pública «Kapta» para tiendas cliente de otra
+  organización (§29.15.9).
+- `propia`: la app que la organización de Shopify de la tienda creó en su Dev
+  Dashboard. Es lo nuevo de esta sección.
+
+No hay otro valor, y una tienda no cambia de app sola.
+
+### 36.1 Qué es y por qué
+
+- **Ya no hay apps personalizadas.** Desde el 01-01-2026 Shopify no deja crear
+  apps personalizadas desde el admin de una tienda. Era la forma de sacar un
+  token fijo para una tienda nueva.
+- **La app pública no sirve todavía.** La app «Kapta» de §29.15.9 no pasó la
+  revisión de Shopify, así que no se ofrece a una tienda real.
+- **La app propia.** La organización de Shopify dueña de la tienda crea una app
+  en su Dev Dashboard y la instala en su tienda. Esa app no recibe un token
+  fijo: lo pide con su **Client ID** y su **Client secret** (*client
+  credentials grant*). Cada token dura unas **24 horas**. Pedir uno nuevo no
+  invalida el anterior: el anterior sirve hasta que vence.
+- **Solo su propia tienda.** Shopify solo da el token si la app está instalada
+  en esa tienda y la creó la misma organización de Shopify que es dueña de la
+  tienda.
+- **La decisión del owner (23-10-2026):** «sí, empieza con el cambio para la
+  app propia. Ojo: Aun no estoy dejando los otros shopify: Kenku Peru y
+  Aurela. no vayas a desconectar nada, estoy conectando».
+
+### 36.2 Conectar una tienda con su app propia
+
+- **Dónde y quién.** «Conectar con app propia de Shopify», al lado de crear una
+  tienda. Pide el mismo permiso que crear una tienda, «Administrar tiendas»
+  (`stores.manage`: owner, admin o Administración), y la organización se elige
+  igual. La pantalla dice: «Para tiendas cuya organización de Shopify creó su
+  propia app en el Dev Dashboard. Kapta renueva el acceso cada día.»
+- **Va primero, y cada camino con su título.** «Conectar tienda» muestra arriba
+  «Conectar con app propia de Shopify» («Dev Dashboard: Client ID + Client
+  secret») y debajo «Crear tienda con token de Admin API», que aclara que es
+  para un token `shpat_` o para instalar después con la app interna, y que con
+  Client ID y Client secret se usa la app propia. Pegar las credenciales de la
+  app propia en el formulario del token creaba una tienda `interna` que después
+  bloqueaba este camino.
+- **Qué se escribe:** el dominio `*.myshopify.com` (también sirve la dirección
+  del admin, `admin.shopify.com/store/<tienda>`), el Client ID y el Client
+  secret. El Client secret va en un campo de contraseña y Kapta nunca lo
+  vuelve a mostrar.
+- **Alcances.** La app propia tiene que tener los mismos que la app de
+  clientes (`SHOPIFY_CLIENT_APP_SCOPES`): `read_orders`, `read_draft_orders`,
+  `write_draft_orders`, `read_products`, `read_customers` y `write_orders`. Un
+  `write_X` cuenta también como `read_X`.
+- **Qué hace Kapta, en orden:**
+  1. Valida el dominio. Si no es `*.myshopify.com`, no conecta.
+  2. Pide un token. Si Shopify lo niega, dice por qué sin repetir el secreto:
+     las credenciales no son válidas, la app no está instalada en esa tienda,
+     o la tienda no es de la organización que creó la app.
+  3. Compara los alcances que dio Shopify con los de arriba. Si falta alguno,
+     no conecta y nombra los que faltan.
+  4. Si ya hay una tienda con ese dominio en Kapta, con cualquier app, no
+     conecta y **no la toca**. Se mira recién después del token: así solo se
+     entera quien tiene una app instalada en esa tienda, y nadie usa el
+     formulario para averiguar qué tiendas de Shopify son de Kapta. Pedir ese
+     token no le cambia nada a la otra tienda. Si las filas con ese dominio son
+     todas de otra organización y sin token (un dominio registrado sin
+     conexión), lo dice así y pide escribirle a soporte, que es quien lo
+     libera; tampoco las toca. Si ninguna tiene token y una es de **esta**
+     organización y `interna` (se creó con «Crear tienda con token de Admin
+     API»), dice que la tienda ya está en esta organización sin acceso a
+     Shopify y pide a soporte que la pase a app propia; tampoco la toca.
+     Soporte la convierte a mano (DEPLOY.md, entrada del 23-10-2026):
+     `update stores set shopify_app='propia' where id='<id>' and shopify_app='interna' and shopify_token_enc is null;`
+     y después alguien con «Administrar tiendas» pega el Client ID y el Client
+     secret en sus Ajustes → Shopify → «Credenciales de la app» → «Probar y
+     guardar» (36.4), que pide el token y, si la tienda está activa o en
+     pausa, registra sus webhooks. Como no tenía Client ID guardado, no hay
+     app anterior: el aviso no pide desinstalar ninguna. Con token en alguna
+     fila, o una `propia` o `clientes` sin token en esta organización, es «ya
+     está conectada».
+  5. Lee la moneda y la zona horaria de la tienda.
+  6. Crea la tienda con app `propia`: el token y el Client secret cifrados, el
+     Client ID y el vencimiento del token. El secreto de sus webhooks es el
+     Client secret, porque Shopify firma con él los webhooks de la app.
+  7. Registra los webhooks de pedidos y `app/uninstalled`.
+  8. Hace la primera sincronización. Si algo de 7 u 8 falla, la tienda queda
+     creada y el aviso lo dice, como en las otras altas.
+
+### 36.3 El token se renueva solo
+
+- **Cada hora.** Un cron (`/api/cron/shopify-own-app-tokens`) renueva el token
+  de cada tienda `active` o `paused` con app `propia` al que le quedan menos de **12
+  horas** (`OWN_APP_RENEW_BEFORE_MS`), o que no tiene token.
+- **En pausa también.** Pausar una tienda solo detiene los barridos: sus
+  webhooks, «Sincronizar ahora» y las demás acciones siguen usando Shopify, así
+  que una tienda `paused` renueva igual que una `active`. Solo una `disabled`
+  (por ejemplo, desinstalada) no renueva.
+- **Al usarlo.** Antes de llamar a Shopify por una tienda propia, si al token
+  le quedan menos de **15 minutos** (`OWN_APP_RENEW_ON_USE_MS`) o no hay
+  token, Kapta lo renueva primero. Si esa renovación falla y el token todavía
+  vale, usa el que tiene.
+- **Con freno.** La renovación al usar no pide otro token en los **5 minutos**
+  siguientes a un intento (`OWN_APP_ON_USE_RETRY_MS`), ni en los **15
+  minutos** siguientes a un fallo de red o a un 429/5xx de Shopify
+  (`OWN_APP_ON_USE_RETRY_AFTER_RED_MS`). El intento se reserva en la base
+  (`shopify_token_retry_at`): si dos usos llegan juntos, solo uno sale a
+  Shopify. Con Shopify caído o el secreto revocado, cada webhook, cada
+  sincronización y cada boleta ya no le mandan el Client secret a Shopify otra
+  vez. El cron y «Renovar ahora» no miran el freno.
+- **Primero se autentica.** Un webhook de Shopify, de Shopify Flow, de Kapso,
+  de Aliclik o de Flow.cl lee la tienda **sin** renovar: primero comprueba su
+  firma o su secreto. Solo después, y solo donde se usa el token de Shopify
+  (los borradores), se renueva. Una petición falsa no hace salir el Client
+  secret.
+- **Nunca hacia atrás.** Si dos renovaciones se cruzan, gana la que vence más
+  tarde. Una renovación nunca reemplaza un token por otro que vence antes.
+- **Si falla.** Kapta guarda el motivo en `shopify_token_error`, sin secretos,
+  y conserva el token mientras valga. La tienda **no** se deshabilita por eso:
+  el cron lo vuelve a intentar a la hora siguiente. La primera renovación que
+  sale bien borra el motivo. Si a la app le faltan permisos, guarda el token
+  igual y deja como motivo los permisos que faltan.
+- **Un fallo viejo no pisa un éxito nuevo.** El motivo solo se guarda si nadie
+  renovó después de que empezó ese intento: si mientras Shopify tardaba otro
+  proceso (o «Probar y guardar») guardó un token, el fallo no se anota.
+
+### 36.4 Ajustes de la tienda
+
+- Una tienda propia muestra «App propia · acceso renovado hace X · vence a las
+  HH:MM» y, si lo hay, el aviso de `shopify_token_error`. Su título es «La
+  última renovación falló» o, si lo que dice son permisos que faltan tras una
+  renovación que salió bien, «Faltan permisos en la app».
+- Las horas van en la zona de la tienda. Una zona que no se entiende («Lima»,
+  «GMT-5») no rompe Ajustes: se muestran en la de Lima.
+- **Sin acceso que valga, no dice «vence».** Una tienda propia desinstalada
+  muestra «App propia · app desinstalada el DD/MM a las HH:MM» y los pasos para
+  volver (36.5), sin «Renovar ahora». Una deshabilitada a mano, «tienda
+  deshabilitada: Kapta no renueva su acceso». Una activa o en pausa sin token,
+  «sin token vigente».
+- **Rotar el Client secret** (mismo Client ID): Kapta pide un token con el
+  nuevo y revisa los permisos antes de guardar. Si Shopify lo niega o falta
+  un permiso, no guarda nada. Si sirve, guarda el secreto nuevo, que también
+  es el de sus webhooks, y el token nuevo. El secreto nunca se muestra.
+  Shopify sigue firmando los webhooks con el secreto **más viejo que no se
+  revocó**: Kapta guarda el anterior (`shopify_webhook_secret_prev_enc`) y
+  acepta también los webhooks firmados con él durante **48 horas**
+  (`OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS`), o hasta que alguien pulsa «Ya
+  revoqué el secreto anterior». Los pasos, en orden: rotar en el Dev Dashboard,
+  pegar el nuevo en Ajustes, revocar el anterior en el Dev Dashboard y
+  confirmar en Ajustes. Si el anterior no se revoca en 48 h, Shopify sigue
+  firmando con él y Kapta deja de aceptar esos webhooks.
+- **El anterior no desinstala.** La gracia vale para pedidos y borradores (y
+  los temas que se ignoran), **nunca para `app/uninstalled`**: una
+  desinstalación firmada solo con el secreto anterior se rechaza con 401,
+  como una firma mal, y la tienda sigue igual. Deshabilita la tienda y le
+  borra el token, y quien tuviera el secreto anterior filtrado podría
+  falsificarla. Si la tienda desinstala la app de verdad antes de que se
+  revoque el anterior, Shopify reintenta la desinstalación: cuando llega
+  firmada con el vigente (ya revocado el anterior), entra como siempre (36.5).
+  Mientras no entre, la renovación falla («La app no está instalada…») y
+  Ajustes lo muestra; si no llega, la tienda se deshabilita a mano.
+- **Cambiar el Client ID** (otra app): se prueba igual. Las suscripciones de
+  webhooks son de la app anterior y llegan firmadas con su secreto: Kapta ya
+  no las acepta (su desinstalación no deshabilita la tienda). Si la tienda
+  está activa o en pausa, Kapta registra los webhooks de la app nueva (pedidos,
+  borradores y `app/uninstalled`) y avisa que se desinstale la anterior; si
+  fallan, lo dice y pide «Re-registrar webhooks».
+- **«Renovar ahora»** hace lo mismo que el cron, solo para esa tienda.
+- Las tres acciones (guardar las credenciales, «Renovar ahora» y «Ya revoqué
+  el secreto anterior») piden «Administrar tiendas» y solo actúan sobre una
+  tienda propia. Ninguna cambia el estado de la tienda.
+- Una tienda propia no muestra «Reconectar con Shopify» (eso es la app
+  interna) ni los campos del token y del secreto HMAC a mano: el token lo
+  renueva Kapta y el secreto de los webhooks es el Client secret. Y aunque
+  alguien los mande igual, el servidor los rechaza sin guardar nada, y el
+  OAuth de la app interna (instalar y su vuelta) no toca una tienda propia.
+  Kenku, Aurela y las tiendas `clientes` siguen igual que siempre.
+
+### 36.5 Desinstalar
+
+- `app/uninstalled` hace lo mismo que con la app de clientes (§29.15.9): borra
+  el token, la tienda pasa a `disabled` y se anota la fecha de desinstalación.
+  Pedidos, historial y liquidaciones no se tocan. Solo entra firmada con el
+  Client secret vigente, nunca solo con el anterior (36.4).
+- El cron y la renovación al usar solo toman tiendas `active` o `paused` con
+  app `propia`. Una tienda desinstalada no vuelve a tener token sola: volver a
+  conectarla es un paso de una persona con «Administrar tiendas», nunca del
+  cron. Se reinstala la app en Shopify, se guardan otra vez las credenciales
+  en Ajustes (36.4), se pasa la tienda a «Activa» y se registran otra vez los
+  webhooks. Ajustes lo dice así, con la fecha de la desinstalación, en vez de
+  un vencimiento que ya no vale.
+
+### 36.6 Lo que no cambia
+
+- **Kenku Peru y Aurela (`interna`) y las tiendas `clientes` quedan
+  exactamente igual:** su token, sus webhooks, su estado y su forma de leer
+  Shopify. Nada de esta sección las desconecta, les registra webhooks, les
+  cambia el token ni les escribe una columna.
+- **La base lo sostiene.** La 0271 no actualiza ninguna fila. Las ocho
+  columnas de la app propia (`shopify_client_id`, `shopify_client_secret_enc`,
+  `shopify_token_expires_at`, `shopify_token_renewed_at`,
+  `shopify_token_error`, `shopify_token_retry_at`,
+  `shopify_webhook_secret_prev_enc` y `shopify_webhook_secret_prev_set_at`)
+  solo pueden tener valor en una tienda `propia`
+  (`stores_own_app_columns_check`). Un código que intente llenarlas en otra
+  tienda falla en vez de cambiarla.
+- **El secreto anterior solo cuenta en una propia.** La firma de los webhooks
+  de Kenku, Aurela y las tiendas `clientes` se comprueba exactamente como
+  antes, con su único secreto.
+- **Sin migración de datos.** Ninguna tienda existente pasa a app propia. Pasar
+  Kenku o Aurela a una app propia sería otra decisión del owner. La única
+  excepción es a mano, la hace soporte y es para una tienda `interna`
+  **sin token** que alguien creó con el formulario del token (36.2): el
+  `where ... and shopify_token_enc is null` deja fuera a Kenku y Aurela, que
+  tienen token. Ni la 0271 ni el código convierten una fila.
+- **Un dominio, una tienda.** Un dominio está en una sola tienda con app propia
+  (`stores_own_app_shop_uniq`). Además, la conexión rechaza un dominio que ya
+  está en Kapta con cualquier app (36.2).
+
+### 36.7 Implementación
+
+- `db/migrations/0271_shopify_app_propia.sql`: el tercer valor de
+  `stores_shopify_app_check`, las ocho columnas, `stores_own_app_columns_check`
+  y `stores_own_app_shop_uniq`. Los secretos se guardan como los demás de
+  `stores`: cifrados con AES-256-GCM (`lib/crypto.ts`), descifrados solo en el
+  servidor, y la fila la protege la misma RLS. No toca filas.
+- `lib/shopify-own-app.ts`: el pedido del token (`requestClientCredentialsToken`),
+  los alcances (`OWN_APP_REQUIRED_SCOPES`, `missingScopes`), cuándo renovar
+  (`shouldRenew`, `OWN_APP_RENEW_BEFORE_MS`, `OWN_APP_RENEW_ON_USE_MS`), el
+  freno (`OWN_APP_ON_USE_RETRY_MS`, `OWN_APP_ON_USE_RETRY_AFTER_RED_MS`), la
+  renovación (`renewOwnAppToken`, `ownAppTokenForUse`), la gracia del secreto
+  anterior (`OWN_APP_PREV_WEBHOOK_SECRET_GRACE_MS`) y lo que muestra Ajustes
+  (`ownAppStatusLine`, `ownAppAccessHint`, `ownAppErrorTitle`).
+- `getStoreCreds` (`lib/ingest.ts`) y la lectura del pedido para comprobantes
+  (`lib/invoicing/shopify-order.ts`) renuevan antes de usar, solo en tiendas
+  `propia`. Los webhooks leen con `renewOwnApp: false` y, ya autenticados,
+  renuevan con `ownAppCredsForUse`; la firma de Shopify se comprueba con
+  `verifyStoreShopifyHmac` (el secreto anterior, solo en una propia y solo en
+  las ramas de `PREV_SECRET_ROUTES`: pedidos, borradores y temas ignorados).
+- `app/api/cron/shopify-own-app-tokens/route.ts`: el cron de cada hora.
+- `app/dashboard/stores/new/actions.ts` (`connectOwnAppStore`) y
+  `ConnectOwnAppStoreForm` en `components/forms.tsx`: la conexión (36.2).
+- `app/dashboard/[storeId]/settings/actions.ts` (`saveOwnAppCredentials`,
+  `renewOwnAppTokenNow`, `clearOwnAppPreviousSecret`) y
+  `components/store-settings.tsx`: Ajustes (36.4).
+  «Re-registrar webhooks» suma `app/uninstalled` solo en una tienda propia; en
+  las demás registra lo mismo que antes. `updateStore` y el OAuth de la app
+  interna (`app/api/shopify/install/route.ts`,
+  `app/api/shopify/callback/route.ts`) rechazan pisar el token o el secreto de
+  una tienda propia.
+- Pruebas: `test/shopify-own-app.test.ts`, `test/shopify-own-app-cron.test.ts`,
+  `test/shopify-own-app-connect.test.ts`, `test/shopify-own-app-webhooks.test.ts`,
+  `test/shopify-app-propia-mom.test.ts` y
+  `scripts/sql/shopify_app_propia_smoke.sql` (la 0271 aplicada sobre el
+  esquema de la 0249 con tiendas `interna` y `clientes`: ninguna fila cambia;
+  y la conversión de soporte de 36.2 solo toma una `interna` sin token).
+
+## 37. Historial de Shopify (23-10-2026)
+
+Pedido de Frankz (23-10-2026): Shopify estaba por suspender la tienda de Aurela
+y con ella se iba el historial de pedidos y de cada clienta desde 2021. Kapta
+solo tiene los pedidos de junio de 2026 en adelante: la conexión con Shopify no
+tiene `read_all_orders` y no ve nada de más de 60 días. La salida es la
+exportación del propio Shopify (un CSV de pedidos por año y uno de clientes),
+que Kapta guarda como **archivo de consulta**.
+
+### 37.1 Qué es y qué no es
+
+- **Es un archivo.** Quién compró, qué, cuándo, a dónde, por cuánto y cómo
+  terminó en Shopify (pagado, enviado, cancelado), y la ficha de cada clienta
+  si se sube el CSV de clientes.
+- **No son pedidos de Kapta.** No entran a `orders` ni a `order_master`, no
+  tienen macroetapa ni estado del MOM, no generan eventos, alertas, tareas,
+  liquidaciones ni comprobantes, y no cuentan en el Consolidado. Los estados
+  que se ven son los de Shopify, tal como vinieron (`financial_status`,
+  `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
+  Lo único que lee del archivo fuera de su pantalla es «Pedidos antes» de la
+  ficha del lead (§37.7), solo para contar y listar, y el «Último destino
+  conocido de esta clienta» del cajón del Master (§37.8), solo para sugerir.
+- La tienda sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
+  una copia de lo que Shopify ya tenía, no un canal de entrada.
+
+### 37.2 La pantalla
+
+`/dashboard/stores/historial` («Historial Shopify» en el menú). Pide el permiso
+«Descargar la base de pedidos» (`data.export`): lo que se ve son nombres,
+celulares y direcciones de clientas, lo mismo que la descarga del Master. Muestra
+solo las tiendas que la persona ve.
+
+1. **Cargar archivos.** La tienda es la de la pestaña de arriba (Aurela,
+   Kenku Peru): la carga no tiene otro selector, y el botón dice en qué tienda
+   carga («Cargar 2 archivos en Aurela»). Con un segundo selector, cambiar de
+   pestaña dejaba el título en una tienda y la carga en otra (23-10-2026). Se
+   eligen uno o varios CSV. El navegador
+   lee cada archivo (UTF-8, o el UTF-16 del «CSV para Excel»; separado por coma,
+   punto y coma o tabulación), reconoce el tipo por sus cabeceras —pedidos,
+   clientes, productos u otro— y:
+   - guarda el **original comprimido** en el bucket privado `shopify-history`
+     (`<tienda>/<archivo>/<nombre>.gz`), sea del tipo que sea;
+   - de pedidos y clientes, carga los registros por tandas, con el avance a la
+     vista. Productos y lo que no se reconoce quedan solo como respaldo.
+2. **Lo que hay guardado.** Pedidos por año, clientes, y cada archivo subido con
+   su estado (`subiendo`, `cargando`, `listo`, `error`), cuántos registros dejó
+   y de qué fecha a qué fecha.
+3. **Buscar.** Por celular (todas las compras de esa clienta, su total comprado
+   sin los cancelados y su ficha del CSV de clientes), correo, nombre o número
+   de pedido. Hasta 200 resultados.
+
+### 37.3 Reglas de la carga
+
+- El CSV de pedidos de Shopify trae **una fila por producto**: la primera fila
+  del pedido lleva todo y las siguientes solo el número y su producto. Se
+  juntan en un pedido con su lista de productos (`line_items`). La primera fila
+  se guarda además tal cual vino (`raw`), para no perder ninguna columna.
+- **Volver a subir no duplica.** La clave es (tienda, número de pedido) y
+  (tienda, cliente); lo repetido se reemplaza con lo último subido. Si un
+  archivo se corta a mitad, se vuelve a subir entero.
+- **Textos limpios.** Antes de guardar se quitan los caracteres nulos y las
+  mitades sueltas de un emoji (las deja un recorte que cae en medio de un emoji,
+  o vienen así de Shopify): Postgres rechazaba la tanda entera con «invalid
+  input syntax for type json». Así se detuvo la traída de Kenku Peru el
+  23-10-2026, a los 44.000 pedidos. Los emojis enteros se guardan igual.
+- **Números repetidos.** En Shopify dos pedidos distintos pueden tener el mismo
+  número (en Aurela la traída por API se detuvo así el 23-10-2026, a los
+  106.000 pedidos). El primero conserva su número y el otro se guarda como
+  «#1234 · ‹id de Shopify›»: no se pierde ninguno. El mismo pedido repetido
+  (mismo id) queda una sola vez.
+- La clienta se identifica por el «Customer ID» de Shopify; sin él, por el
+  correo; sin correo, por el celular. Una fila sin nada de eso no se guarda.
+- El celular se normaliza igual que en Kapta (`normalizePhone`, 51 + nueve
+  dígitos) y se quita el apóstrofo que Shopify antepone para Excel a ids,
+  celulares y códigos postales.
+- Las fechas conservan su zona (`2021-12-31 21:55:31 -0500`); los años de la
+  pantalla se cuentan en hora de Lima.
+
+### 37.4 Permisos y datos
+
+- Leer: quien ve la tienda (`auth_store_ids()`), y la pantalla además pide
+  `data.export`. Escribir: solo las acciones del servidor, con el service role,
+  después de comprobar `data.export` y que la tienda es de la persona. Nadie
+  edita ni borra desde el panel.
+
+### 37.5 Traer el historial por la API de Shopify
+
+Shopify solo deja leer por API los pedidos de los últimos 60 días, salvo que
+el token tenga `read_all_orders`. Aurela y Kenku se conectan con un token fijo
+de una app creada en su propio admin (`interna`, §36), y nunca se probó si ese
+token ve pedidos más antiguos: la primera sincronización solo pidió el último
+mes. Por eso la pantalla tiene **«Probar acceso a pedidos antiguos»**: una
+consulta de solo lectura que cuenta los pedidos anteriores a 2022 que ve el
+token, el más antiguo y los permisos del token. No guarda nada.
+
+Se puede traer por API si el token **ve todos los pedidos de la tienda**:
+tiene `read_all_orders`, o el más antiguo que alcanza es de antes de la
+ventana de 60 días. No se mira «antes de 2022»: Kenku Peru abrió en 2023 (su
+#1001 es del 14-04-2023) y la prueba la bloqueaba aunque su token ve todo
+(corregido el 23-10-2026).
+
+Resultado en Aurela (23-10-2026): el token tiene `read_all_orders` y ve
+8.959 pedidos anteriores a 2022, el más antiguo el #1001 del 13-04-2021.
+
+**«Traer pedidos y clientes».** Con el acceso probado, la pantalla trae todo
+por API, primero los pedidos y después los clientes:
+
+1. Kapta le pide a Shopify el archivo completo (`bulkOperationRunQuery`):
+   todos los pedidos con sus productos, o todos los clientes. Es la única
+   escritura que se le hace a Shopify, y no cambia ningún dato de la tienda.
+2. Mientras Shopify lo arma, la traída está `preparando`. La pantalla pregunta
+   cada 5 segundos.
+3. Con el archivo listo (`importando`), Kapta lo lee por tandas de ~100
+   segundos desde el byte donde quedó la anterior, y guarda cada 500 pedidos o
+   clientes. Corta siempre justo antes de un pedido nuevo: ningún pedido queda
+   partido. Un producto cuyo pedido quedó en otra tanda se suma al pedido ya
+   guardado, sin repetir los que ya tenía.
+4. Al llegar al final, `listo`, con cuántos guardó y de qué fecha a qué fecha.
+   Si Shopify falla o el archivo vence (dura 7 días), `error`, y se vuelve a
+   traer.
+
+Reglas:
+
+- **Solo al historial.** Va a las mismas tablas y con la misma clave que el
+  CSV: (tienda, número de pedido) y (tienda, id de cliente de Shopify). Si un
+  pedido ya estaba por CSV, se reemplaza con lo de la API, sin duplicarse.
+  **Nunca** a `orders`, al Master ni a sus eventos (37.1).
+- **Una a la vez.** Solo una traída en curso por tienda y tipo. Cada tanda la
+  toma una sola pestaña (`lease_until`); otra pestaña espera.
+- **Se puede cerrar la pestaña.** Lo leído queda guardado y anotado.
+  «Continuar la traída» sigue desde ahí.
+- **Mismo permiso** que la pantalla (`data.export`) y solo en las tiendas de
+  la persona.
+
+Con la tienda suspendida por Shopify, la API deja de responder: los CSV siguen
+siendo el respaldo.
+
+### 37.6 Todo lo demás que se puede traer por API
+
+Pedido de Frankz (24-10-2026): «dale con todo lo que puedas por API», antes del
+cierre del 28-10-2026 00:00 UTC (§35.10). «Traer todo» va paso por paso:
+
+1. **Productos**: el catálogo completo (descripción en HTML, variantes con SKU,
+   código de barras, precio, precio tachado y stock, opciones, colecciones,
+   metacampos y SEO) en `shopify_history_products`.
+2. **Fotos de productos**: cada foto en su tamaño original, copiada al bucket
+   privado `shopify-history` (`<tienda>/productos/<producto>/<foto>.<ext>`).
+   Va por tandas de ~60 s; una foto que falla tres veces queda marcada y deja
+   de intentarse. Es un respaldo: no es la foto de las plantillas de WhatsApp
+   (§39). **Una foto que está en dos productos se guarda una vez
+   (25-10-2026)**, con el último producto en que aparece: la tabla tiene una
+   fila por foto, y dos iguales en la misma tanda tumbaban el guardado entero.
+   Pasó con Kenku: 3 fotos compartidas de 3.773 dejaron «Productos» trabado en
+   «No se pudieron guardar las fotos: ON CONFLICT DO UPDATE…».
+3. **Carritos abandonados** de la web y 4. **borradores** (el formulario contra
+   entrega deja uno por envío), en `shopify_history_carts`: quién dejó sus
+   datos, qué quería, el enlace para retomar o la factura, sus UTM y el pedido
+   en que terminó, si terminó.
+5. **Clientes**, ahora con permiso de SMS y de WhatsApp, todas sus
+   direcciones, desde cuándo son clientes y su estado de cuenta.
+6. **Pedidos**, ahora con método de envío, despachos con guía y courier,
+   devoluciones y de qué visita o campaña vino la compra.
+
+Reglas:
+
+- Los pasos 5 y 6 vuelven a traer clientes y pedidos con la misma clave: se
+  completan las filas que ya estaban, sin duplicarlas. Un CSV posterior no
+  borra lo que solo trae la API.
+- Si un paso falla, se anota y se sigue con el siguiente.
+- Los archivos se piden con la API **2026-10** (`HISTORY_API_VERSION`),
+  probada contra Shopify el 24-10-2026: desde ella el correo y el celular del
+  cliente van en `defaultEmailAddress` y `defaultPhoneNumber`.
+- En «Buscar», por celular o correo se ven también los carritos y borradores
+  que esa persona dejó sin comprar.
+- Lo que el token no puede leer queda fuera: códigos de descuento, páginas,
+  blog, redirecciones, tema y tarjetas de regalo. Se bajan a mano desde el
+  admin de Shopify.
+
+Implementación:
+
+- `db/migrations/0273_shopify_history.sql`: `shopify_history_files`,
+  `shopify_history_orders` y `shopify_history_customers`, con RLS de lectura
+  por tienda.
+- `lib/shopify-history.ts`: el lector puro (tipo, separador, codificación,
+  agrupación por pedido, clientes, montos y fechas).
+- `app/dashboard/stores/historial/actions.ts`: registrar el archivo y su URL
+  firmada de subida, cargar tandas y cerrar el archivo.
+- `db/migrations/0276_shopify_history_imports.sql`: `shopify_history_imports`
+  (cada traída por API) e `import_id` en pedidos y clientes del historial.
+- `lib/shopify-history-bulk.ts`: las consultas a Shopify y la lectura pura del
+  archivo (líneas, pedidos con sus productos, clientes).
+- `lib/shopify-history-import.ts`: pedir el archivo, preguntar por él y leerlo
+  por tandas.
+- `db/migrations/0278_shopify_history_more.sql`: productos, fotos, carritos y
+  borradores; más columnas en pedidos y clientes; los cinco tipos de traída.
+- `lib/shopify-history-images.ts`: la copia de las fotos a Storage.
+- `components/shopify-history-upload.tsx`, `components/shopify-history-api.tsx`
+  (la prueba y la traída de 37.5 y 37.6) y `app/dashboard/stores/historial/page.tsx`:
+  la pantalla.
+- Pruebas: `test/shopify-history.test.ts`, `test/shopify-history-ui.test.ts`,
+  `test/shopify-history-bulk.test.ts` y `test/shopify-history-more.test.ts`.
+
+### 37.7 «Pedidos antes» en Leads (25-10-2026)
+
+**Por qué.** La ficha del lead (el cajón de Leads y la ficha de la cola nueva)
+decía «Pedidos antes: Ninguno: es cliente nuevo» a clientas que habían
+comprado muchas veces: solo leía `orders`, que en Kenku empieza en julio de
+2024 y en Aurela en mayo de 2024, mientras el historial importado (§37) va
+desde 2023 y 2021. **Decisión del owner (25-10-2026):** «Pedidos antes» también
+cuenta el historial de Shopify.
+
+Reglas:
+
+- **Misma clienta, misma tienda.** Se buscan en `shopify_history_orders` los
+  pedidos de la tienda del lead con el mismo celular normalizado
+  (`phone_norm` = `normalizePhone` del celular del lead). No se cruza por
+  correo ni por nombre, ni entre tiendas.
+- **Sin anulados.** Como en `orders`, el anulado en Shopify
+  (`cancelled_at`) no cuenta.
+- **Un pedido cuenta una vez.** Si el número (`order_name`) ya está en `orders`
+  de esa clienta, manda el de Kapta, también si Kapta lo tiene anulado: la copia
+  del historial puede ser de antes de la anulación. El pedido propio del lead
+  tampoco cuenta, ni por su id ni por su copia en el historial.
+- **Conteo y lista.** El número («3 pedidos», «3 pedidos antes») suma los de
+  Kapta y los del historial. La lista sigue mostrando los tres más recientes,
+  de cualquiera de los dos lados, y el «último producto» es el del más reciente.
+  El pedido que viene del historial lleva al lado, en tinta tenue, «del
+  historial de Shopify» y **no tiene enlace**: es un archivo y la tienda puede
+  ya no existir en Shopify; se consulta en «Historial Shopify» (§37.2).
+- **Con Shopify en vivo.** Cuando Shopify contesta con los pedidos de la clienta,
+  esa lista sigue mandando (§38.12), y se le suman los del historial que no trajo
+  (con otro número), además de los de WooCommerce.
+- **Rendimiento.** Una sola consulta por el índice `(store_id, phone_norm)` de
+  la 0273, en paralelo con la de `orders`, con límite de 25 (el celular con más
+  pedidos en el historial tiene 73) y el conteo exacto. Los que el límite deja
+  fuera se suman al conteo sin compararlos con `orders`: son los más viejos, y
+  `orders` empieza en 2024. No hizo falta migración: el índice ya estaba.
+- **Si falla** (sin la tabla, sin permiso, error de la base), la ficha queda
+  como antes, solo con `orders`. No se registra nada con datos de la clienta.
+- **Sigue siendo un archivo (§37.1).** Solo se lee, con la sesión de quien
+  mira (RLS por tienda, `auth_store_ids()`): nada pasa a `orders` ni a
+  `order_master`. No hace falta «Descargar la base de pedidos»: la ficha
+  muestra número, fecha y monto de la misma clienta que el lead ya enseña, no
+  la base.
+- **Qué no cambia.** «Cliente nuevo» en otros lugares sigue igual: el aviso de
+  pedido duplicado o recompra (`lib/pedido-duplicado.ts`) mira pedidos vivos de
+  Kapta en las últimas 48 h y lo entregado por Kapta, y el historial no sabe si
+  Kapta entregó; el segmento y los conteos de la cola tampoco lo leen. El único
+  lector de `getCustomerHistory` es la ficha del lead.
+
+Implementación: `lib/customer-history-merge.ts` (la unión pura, sin repetidos,
+y el conteo), `getCustomerHistory` en `lib/leads-access.ts` (las dos
+consultas), `mergePriorOrders` en `lib/order-admin-url.ts` (con Shopify en
+vivo), `components/leads-drawer.tsx` y `components/leads-next.tsx` (la marca).
+Pruebas: `test/leads-prior-orders-history.test.ts`.
+
+### 37.8 Último destino conocido de la clienta (owner, 30-10-2026)
+
+**Por qué.** Hay pedidos que entran sin dirección: #KP144042 (Kenku, «Catálogo
+de WhatsApp») llegó con región, provincia, distrito y dirección vacíos, y su
+Ubicación y cobertura quedó en «Por revisar». El mismo celular ya tenía
+#KP200293 (Kenku, 27-10-2026) con dirección en Sullana, Piura, y nadie lo
+veía sin ir a buscarlo. **Decisión del owner (30-10-2026):** con el celular,
+Kapta busca a la clienta en las dos tiendas de la organización (Kenku y
+Aurela) y **sugiere** la dirección.
+
+Dónde y cuándo:
+
+- En el cajón del Master → Información → «Ubicación y cobertura», debajo del
+  aviso «Completa la región y el distrito…», con el título «Último destino
+  conocido de esta clienta».
+- Solo si el pedido está «Por revisar» y le falta la región, el distrito o la
+  dirección (`needsDestinationSuggestion`). Un pedido con su ubicación completa
+  no lleva sugerencia.
+- Cada sugerencia muestra la dirección, la referencia, distrito / provincia /
+  región, la coordenada si la hay y de qué pedido sale (número, tienda y
+  fecha), con «entregado ahí» si ese pedido se entregó y «anulado» si lo está.
+
+De dónde sale, en este orden (una fuente solo se mira si la anterior no dio
+ninguna dirección que sirva):
+
+1. **Pedidos de Kapta** (`order_master`, la ubicación ya resuelta: corrección
+   manual, courier, tienda…) de las tiendas de la organización del pedido que
+   quien mira puede ver, con el mismo celular (guardado, normalizado 51 +
+   nueve dígitos o nacional).
+2. **Historial de Shopify** (§37, `shopify_history_orders`): `shipping_address1`
+   es la dirección, `shipping_address2` la referencia, `shipping_city` el
+   distrito y `shipping_province` la región (Shopify llama «province» al
+   departamento); la provincia no viene y la infiere el ubigeo al guardar.
+   No se toma la copia del propio pedido ni un número que ya está en Kapta.
+3. **Ficha de clienta del historial** (`shopify_history_customers`, su
+   dirección por defecto), sin pedido ni fecha.
+
+Reglas:
+
+- **Nunca se aplica sola.** La clienta pudo mudarse. «Usar esta dirección»
+  abre el formulario existente de «Corregir ubicación» ya lleno (y su nota:
+  «Último destino conocido de la clienta (pedido #KP200293, Kenku Peru,
+  27-10-2026).»). Solo al «Guardar ubicación» entra al pedido, por la misma
+  acción del servidor (`updateOrderGeo`): corrección aparte de `orders`, evento
+  «Ubicación corregida manualmente» con quién la guardó y el cambio de
+  cobertura registrado (§19.0.1). Sin permiso de editar, la sugerencia se ve
+  sin el botón.
+- **Una dirección sirve** si trae la calle y al menos el distrito o la región.
+  El propio pedido nunca se sugiere; un anulado entra solo si su dirección
+  sirve, y se marca.
+- **La más reciente primero** y sin repetir la misma dirección (se comparan sin
+  tildes, mayúsculas ni signos, junto con el distrito). Si hay varias
+  distintas, se muestran **hasta 3** para elegir.
+- **Solo lectura.** Con la sesión de quien mira (RLS por tienda); no escribe en
+  `orders`, en `order_master` ni en el historial (§37.1). No se registra nada
+  con datos de la clienta; si algo falla, simplemente no hay sugerencia.
+- **Rendimiento.** Solo para el pedido abierto en el cajón, nunca para la lista
+  del Master: una lectura por el índice de teléfono de `order_master` y, solo si
+  hace falta, otra por `(store_id, phone_norm)` del historial (0273), con
+  límite de 25. Sin migración.
+- **Qué no cambia.** El autocompletado conservador de región, provincia y
+  distrito por historial de la misma tienda (`geo_source = history`, 0078) sigue
+  igual: esa regla rellena sola solo con antecedentes que coinciden; esta solo
+  sugiere la dirección completa y una persona decide.
+
+Implementación: `lib/last-known-destination.ts` (qué pedido necesita
+sugerencia, con qué celulares se busca y qué direcciones se ofrecen),
+`app/dashboard/pedidos/last-destination-actions.ts` (las lecturas) y
+`LastDestinationSuggestions` en `components/order-drawer.tsx`. Pruebas:
+`test/last-known-destination.test.ts`.
+
+## 38. WooCommerce (23-10-2026)
+
+Estado: base técnica del 23-10-2026. **Al 25-10-2026** las dos tiendas tienen
+su sitio WooCommerce conectado en Ajustes (la entrada de 38.11), cada una con
+una dirección temporal: Aurela desde el 24-10-2026 (clave del sitio `aur`) y
+Kenku Peru desde esa noche (`kp`, 19:13 de Lima). Desde el 25-10-2026 a las
+16:11 (Kenku) y 16:12 (Aurela) de Lima las dos tienen `stores.platform =
+woocommerce`: «Generar pedido» y «Venta telefónica» crean en WooCommerce
+(primeros: #AUR900007 y #KP200005), mientras la web y el bot siguen en
+Shopify hasta su corte. Los únicos pedidos de WooCommerce en Kapta son
+#AUR900004, #AUR900005 y #AUR900006, tres pruebas del formulario de Aurela,
+anuladas (la última del 25-10 a las 12:54 de Lima); el primer pedido real de
+Aurela será el #AUR900007 o uno mayor. En un sitio conectado ya no se hacen
+pruebas: entran al Master como cualquier pedido (38.11, «El piso no frena una
+prueba»).
+La migración 0274 se aplica a mano y antes del código (DEPLOY.md, entrada del
+23-10-2026). Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC); se
+planifica para el peor caso, el martes 27-10 a las 19:00 de Lima. Las dos
+tiendas pasan a WooCommerce. Hasta entonces siguen en Shopify exactamente igual.
+
+**Decisión del owner (23-10-2026): WooCommerce va en la misma fila** de la
+tienda de Kapta. Kenku Peru y Aurela siguen siendo una tienda cada una,
+alimentada por dos fuentes (Shopify hasta el cierre, WooCommerce después), con
+la misma configuración de Kapso, WhatsApp, couriers, Flow, Meta y cuentas de
+cobro, y el mismo historial. No se crean tiendas nuevas. Las credenciales de
+WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
+
+### 38.1 La plataforma de la tienda y la del pedido
+
+- **`stores.platform`** dice dónde se crean los pedidos **nuevos** que Kapta
+  crea para esa tienda: `shopify` (todas hoy) o `woocommerce`. No dice de dónde
+  viene cada pedido. **Quién lo lee (23-10-2026, 38.12):** «Generar pedido»
+  (y «Venta telefónica», que abre el mismo formulario), su prellenado y los tres
+  buscadores de productos (el de Leads, el del producto de un anuncio y el del
+  stock de Swayp), siempre en el servidor; el endpoint del bot de Kapso, que
+  solo crea con `woocommerce` (38.13); la prueba de recompra sin llamada
+  (`auto_order_trials`) y las acciones viejas de Leads `recoverCart` y
+  `closeSale`, que solo crean con `shopify` (25-10-2026, 38.12, «Los carritos
+  de Shopify en una tienda que ya crea en WooCommerce»); la lista de Envíos →
+  «Catálogo de productos» y la siembra del mapeo de Aliclik, que con
+  `woocommerce` salen del catálogo de WooCommerce (25-10-2026, 38.12, «Envíos →
+  Catálogo de productos en WooCommerce»); y, desde el cierre de
+  Shopify, las fotos de producto de WhatsApp (`shopifyGoneForStore`, §39.5,
+  que también mira `woo_site_url`). La entrada de pedidos no lo mira (38.11). **Quién lo cambia:** el owner, en Ajustes → WooCommerce → «Crear los
+  pedidos nuevos en», con «Administrar tiendas» y una confirmación explícita;
+  y de la misma forma se vuelve a Shopify (38.12).
+- **`orders.platform`** (y `draft_orders.platform`) dice de qué plataforma vino
+  cada pedido: `shopify` o `woocommerce`. No hay otro valor. Entre la salida a
+  producción de WooCommerce y el cierre de Shopify llegan a la vez cambios de
+  pedidos viejos de Shopify y pedidos nuevos de WooCommerce, así que **todo lo
+  que dependa de la plataforma se decide con `orders.platform`, nunca por la
+  forma del id**: `extractNumericId("wc-kp-1532")` devuelve `1532`, que parece
+  un id de Shopify.
+- **Credenciales en la fila de la tienda.** `woo_site_url` (solo https),
+  `woo_site_key` (la clave corta del sitio, 38.2), la Consumer key y el Consumer
+  secret de la API REST (`woo_consumer_key_enc`, `woo_consumer_secret_enc`) y el
+  secreto de los webhooks (`woo_webhook_secret_enc`), cifrados como los demás
+  secretos de `stores`. `woo_last_error` guarda el último fallo, sin secretos;
+  `platform_switched_at`, cuándo la tienda pasó a WooCommerce por primera vez
+  (no se mueve después, 38.12); y
+  `woo_intake_from`, desde cuándo entran los pedidos de su sitio (38.11).
+- **La base lo sostiene.** Una tienda solo pasa a `woocommerce` con la
+  dirección, la clave del sitio y las dos claves de la API guardadas
+  (`stores_woo_platform_check`); las credenciales sí pueden guardarse antes, para
+  el ensayo. Una clave de sitio y un sitio están en una sola tienda de toda la
+  base (`stores_woo_site_key_uniq`, `stores_woo_site_url_uniq`).
+- **El token de Shopify no se borra al cambiar.** Mientras Shopify viva siguen
+  llegando cambios y anulaciones de los pedidos viejos. Nunca se apaga Shopify
+  con `status = 'disabled'`: los crons solo procesan tiendas activas y se
+  perderían también Kapso, los couriers y los leads.
+
+### 38.2 Identidad del pedido
+
+- **Id:** `orders.shopify_order_id = "wc-<clave del sitio>-<id de WooCommerce>"`,
+  por ejemplo `wc-kp-1532` o `wc-aur-1532`. La clave va porque los dos
+  WordPress numeran desde 1 y hay consultas que buscan por id sin filtrar por
+  tienda. La clave son minúsculas y dígitos, de 2 a 12, empezando por letra
+  (`stores_woo_site_key_check`), y no se cambia después del primer pedido.
+- **Nombre:** `"#" + number`, el número que pone el plugin de numeración de la
+  tienda (`#KP200001`). Sin el plugin, WooCommerce manda su id interno, sin
+  prefijo: por eso el plugin va instalado antes del primer pedido real.
+- **Numeración (decisión del owner, 23-10-2026):** Kenku Peru desde
+  **`KP200001`** y Aurela desde **`AUR900001`**: el prefijo de siempre y seis
+  dígitos, como en Shopify. Los dos rangos no se cruzan entre sí ni con los de
+  Shopify (el 23-10-2026 Kenku iba por el 143.572 y Aurela por el 178.540): el
+  cruce por código de guía busca el número sin prefijo en las dos tiendas. Los
+  pedidos de prueba se borran y el contador se fija después, antes del primer
+  pedido real.
+- **Fechas:** las `*_gmt` de WooCommerce, que llegan sin zona, más «Z».
+  `created_at` y `processed_at` son la fecha del pedido, `updated_at` la de su
+  último cambio. Nunca la hora local de la tienda ni la del pago.
+
+### 38.3 Estados
+
+| Estado en WooCommerce | Qué hace Kapta |
+| --- | --- |
+| `pending`, `failed`, `checkout-draft` (y los borradores internos `draft`, `auto-draft`) | No es un pedido: no entra a `orders` ni al Master. |
+| `processing`, `on-hold`, `completed` y estados de plugins | Pedido vivo. `completed` no significa entregado ni cobrado: eso lo dicen las salidas y los cobros de Kapta (§2 punto 9). |
+
+- **«Por confirmar» (23-10-2026).** El formulario contraentrega de Kenku y
+  Aurela crea sus pedidos en un estado propio, «Por confirmar». En Aurela
+  (plugin COD Core, 24-10-2026) su slug es **`cod-pending`** (o
+  `wc-cod-pending`: Kapta quita el `wc-`); no es `pending`, así que entra. Es un estado de
+  plugin: el pedido entra vivo, con `cod` y `pending`, y la confirmación sigue
+  siendo la de Kapta. Nadie tiene que moverlo a «processing» para que entre.
+  Solo no sirve si «Por confirmar» es `pending` con otra etiqueta: eso no entra
+  (por eso el equipo de WordPress manda el `status` exacto que devuelve la
+  API).
+| `cancelled`, `trash` | Anulado: `financial_status = voided` y `cancelled_at`. |
+| `refunded` | `financial_status = refunded`. No anula el pedido; pero un pedido que ya estaba anulado en Kapta **sigue anulado** (conserva su `cancelled_at`, decisión del owner del 24-10-2026). |
+
+- **Cuándo se anuló.** WooCommerce no guarda la fecha de la anulación. Kapta
+  pone la del cambio en que la vio anulada (`date_modified_gmt`) la **primera
+  vez**, y la conserva en los cambios siguientes.
+- **Si vuelve a un estado vivo** en WooCommerce (sale de la papelera o alguien
+  lo reactiva), el pedido deja de estar anulado en Kapta, como en la tienda. El
+  historial operativo no se toca.
+- **La Actividad lo dice, y quién fue (24-10-2026).** En la prueba del owner,
+  #AUR900004 se anuló en wp-admin: el Master lo dio por «Anulado y cerrado» y
+  la Actividad de la ficha no decía nada. Desde ahora, la **primera** vez que la
+  entrada (el webhook o la pasada `woo_orders`, la que lo aplique antes) ve un
+  pedido pasar de vivo a anulado —el `cancelled_at` vacío que queda puesto, el
+  mismo momento del punto «Cuándo se anuló»— escribe un hecho en
+  `order_events`: **«Anulado en WooCommerce»**, a la hora en que WooCommerce lo
+  cambió (`date_modified_gmt`), con origen «WooCommerce». Cuando un anulado
+  vuelve a estar vivo, **«Reactivado en WooCommerce»**, igual. Un pedido que
+  Kapta no tenía y que entra ya anulado (llegó a «processing», 38.11) también
+  lo registra.
+  - **Quién.** Kapta lee las notas internas del pedido
+    (`GET /wp-json/wc/v3/orders/<id>/notes?type=internal`) y toma la más nueva
+    que diga el cambio —«Estado del pedido cambiado de … a Cancelado.» (o «El
+    estado del pedido cambió…», o en inglés), también detrás de un prefijo como
+    el del pedido sin pagar que venció; «de Cancelado a …» para la
+    reactivación— escrita entre 10 minutos antes y 2 después del cambio. En la
+    anulación, si ninguna lo dice así, la más nueva que la nombre sin ser otro
+    cambio de estado y que haya escrito WooCommerce solo (un plugin con su
+    propio texto). La nota de una persona que no es un cambio de estado (un
+    comentario del equipo, «la clienta pidió cancelar») no dice quién anuló:
+    nunca cuenta (revisión del 24-10-2026). Nunca una nota para la clienta, y
+    una reactivación nunca toma la nota de una anulación ni al revés.
+    Si la escribió una persona (`added_by_user`; si la versión no lo manda, un
+    autor que no es `system` ni `WooCommerce`), el detalle dice **«por
+    <nombre>»**, el nombre visible de su usuario de WordPress; si la escribió
+    WooCommerce solo (un pedido sin pagar que venció, un plugin), **«WooCommerce
+    (automático)»**. Sin una nota que cuadre, sin detalle: no se adivina.
+  - **No es un usuario de Kapta.** El nombre va como texto en la nota del hecho
+    y en `payload` (`woo_author`, `woo_by`, `woo_note_id`, `woo_note_at`),
+    nunca en `order_events.actor`. **El texto de la nota no se guarda**, solo
+    cuál fue (`woo_note_id`) y su hora: puede llevar datos de la clienta
+    (nombre, DNI, teléfono, dirección) y `order_events` no se edita ni se borra
+    (`order_events_append_only`, 0045).
+  - **Nunca frena la entrada.** La lectura de notas corta a los 4 segundos
+    (`WOO_NOTES_TIMEOUT_MS`) y se hacen como mucho 10 por llamada, en paralelo
+    (`WOO_NOTES_MAX_LOOKUPS`: un cambio masivo en wp-admin no se come la
+    pasada). Si la lectura falla, el hecho queda sin autor y
+    `payload.woo_notes_error` dice por qué. Si la tienda no tiene las claves de
+    la API, o pasado el tope, las notas no se leen: el hecho queda sin autor,
+    sin ese campo. En todos los casos el pedido entra igual. El hecho se
+    escribe antes de recalcular la fila del Master.
+  - **Una vez por cambio.** Solo cuenta el paso de lo guardado a lo nuevo: el
+    webhook repetido, un cambio posterior de un pedido ya anulado y la pasada
+    que lo ve después no agregan otro. Si el webhook y la pasada leen a la vez
+    el mismo pedido vivo, los dos calculan la misma clave
+    (`order_events.operation_id`, un uuid derivado del estado guardado del que
+    se sale, `wooTransitionOperationId`), aunque cada uno haya visto otra
+    versión del pedido, y el índice único de la 0122
+    (`order_events_operation_kind_uniq`) deja entrar solo un hecho. Y si el
+    último hecho de WooCommerce del pedido ya es del mismo tipo, no se escribe
+    otro: la pasada que pisó la anulación con una versión anterior del pedido
+    (la carrera entre la pasada y el webhook) la vuelve a ver desde otro estado
+    guardado, con otra clave, y no es otra anulación. Anular, reactivar y volver
+    a anular son tres hechos.
+  - **La papelera.** Releída por la API es una anulación más, con «enviado a la
+    papelera» en el detalle. WooCommerce no escribe nota al mandar un pedido a
+    la papelera: el autor sale solo de una nota que diga que fue a la papelera
+    («… a Papelera»), nunca de otra. Si WooCommerce no contesta y Kapta la
+    marca anulada por su cuenta (38.11), el hecho lleva la hora en que Kapta la
+    marcó y el detalle «Enviado a la papelera», y solo lo escribe la escritura
+    que la anuló (`cancelled_at is null`).
+  - **El reembolso no reactiva.** Un anulado que WooCommerce pasa a
+    «Reembolsado» (`refunded`: el reembolso completo de un pedido pagado y
+    anulado) no vuelve a un estado vivo: no deja «Reactivado en WooCommerce».
+    **Y sigue anulado (decisión del owner, 24-10-2026):** `mapWooOrder`
+    conserva su `cancelled_at` cuando llega `refunded` sobre un pedido que Kapta
+    ya tenía anulado; el Master lo sigue mostrando «Anulado» y el equipo no
+    tiene que volver a ponerlo en «Cancelado» a mano.
+  - **Anulado desde Kapta (26-10-2026).** Si lo anuló una persona con «Anular
+    pedido» de la ficha (38.15), el hecho lo escribe Kapta con su usuario en
+    `actor`, `source = 'kapta'` y el motivo en la nota, antes de guardar la
+    fila; la entrada ya no escribe otro.
+  - **No cambia el estado.** El hecho no lleva `new_status`: la macroetapa la
+    sigue decidiendo `cancelled_at`. Los pedidos de Shopify no cambian: su
+    anulación sigue sin hecho propio (el tipo viejo `cancelled_shopify`
+    conserva su título).
+  - **Sin migración.** `order_events.kind` y `source` son texto libre (0045, sin
+    CHECK) y `operation_id` con su índice único parcial ya están (0122). Los
+    tipos nuevos son `cancelled_woocommerce` y `reactivated_woocommerce`, con
+    `source = 'woocommerce'`.
+  - Implementación: `lib/woocommerce-activity.ts` (`wooStatusTransition`,
+    `wooTransitionOperationId`, `wooNoteTransition`, `pickWooStatusNote`,
+    `wooNoteActor`, `wooTransitionDetail`, `wooTransitionEvent`,
+    `latestWooTransitionKinds`, `recordWooStatusTransitions`), `fetchWooOrderNotes` (lib/woocommerce.ts) y,
+    en lib/ingest.ts, `applyWooOrderPayload`, `applyWooOrdersPage` y
+    `markWooOrderDeleted`. Pruebas: `test/woocommerce-activity.test.ts`.
+- **Un pedido borrado** (`order.deleted`) nunca se borra en Kapta (§2 punto 6).
+
+### 38.4 Cobro
+
+- **Contraentrega** (`payment_method = cod`): pasarela `cod` y
+  `financial_status = pending` **siempre**. WooCommerce llena `date_paid` en
+  cuanto el pedido pasa a «processing», así que `date_paid` nunca cuenta como
+  pagado.
+- **Pago en la web** (Flow con tarjeta): `paid` cuando WooCommerce lo deja en
+  «processing» o «completed», **solo si el título exacto de la pasarela está en
+  `CHECKOUT_GATEWAYS`** (`lib/payment-gateway.ts`); entonces cuenta también
+  como prepago del checkout. **Aurela (24-10-2026):** el plugin «Flow Payment»
+  (slug `flowpayment`) con el título **«Tarjeta o Yape»**, confirmado por el
+  equipo de WordPress y agregado a `CHECKOUT_GATEWAYS`. Kenku entra cuando su
+  equipo confirme su título. Un pedido de Flow con otro título (también si lo
+  cambian después) es `pending` y sigue el camino de la confirmación y las
+  constancias, que es el seguro (23-10-2026, revisión).
+- **Transferencia** (`bacs`): pasarela desconocida (null), conducto regular de
+  constancias. `pending` mientras está «on-hold»; `paid` cuando alguien la pasa
+  a «processing», como el «manual» de Shopify. Es la única pasarela por slug en
+  la lista de prepago (`WOO_PREPAID_METHODS`); la operación puede sacarla.
+- **Cualquier otra pasarela, también vacía o desconocida** (el «Añadir pedido»
+  de wp-admin con «N/D», un plugin de contraentrega con su propio slug, una
+  nueva): **`pending` en cualquier estado.** En wp-admin «processing» quiere
+  decir «en preparación», no «cobrado»: si se tomara por pagado, un pedido
+  contraentrega cargado a mano se saltaría la llamada de confirmación y contaría
+  como cobrado (revisión del 23-10-2026). La pasarela queda null, como en
+  `wooPaymentGateway`.
+- **Reembolsos:** `total_refunded` es la suma de los reembolsos del pedido. Un
+  pedido pagado con un reembolso parcial queda `partially_refunded`; uno
+  contraentrega sigue `pending`. El total del pedido no baja.
+
+### 38.5 Etiquetas y canal de venta
+
+Un pedido de WooCommerce no tiene etiquetas. Kapta escribe en `orders.tags` las
+**mismas palabras de hoy** a partir de los metadatos del pedido, para que el
+canal de venta (§3), el canal de cierre (§17.3), los rollups y el «lead ganado»
+no cambien:
+
+| `kapta_channel` | Etiquetas | Canal de venta |
+| --- | --- | --- |
+| `venta_manual` o `asesora` | `venta_manual` | Asesora (Leads) |
+| `kapso` o `chatbot` o `whatsapp_bot` | `kapso`, `whatsapp` | Chatbot WhatsApp |
+| `bot_carritos` | `BOT`, `CARRITO RECUPERADO` | Bot de carritos |
+| `catalogo` o `catalogo-wsp` | `catalogo-wsp` | Catálogo WhatsApp |
+| `web_carrito` | `easysell-abandoned-checkout` | Web · carrito completado |
+| `web_formulario` | `easysell_cod_form` | Web · formulario |
+
+- **Qué manda cada fuente (Aurela, decisión del owner del 24-10-2026):** el
+  formulario contra entrega de la ficha **y el checkout de la web (Flow)**
+  mandan `web_formulario` («Web · formulario»: lo que la clienta compra sola en
+  la web va en un solo canal); un formulario abandonado que termina en pedido,
+  `web_carrito`; un pedido cargado a mano en wp-admin, `venta_manual`. Las
+  ventas de las asesoras las crea Kapta (38.12). **El bot de WhatsApp de Aurela
+  crea sus pedidos directo en WooCommerce** por la API, con su propio usuario
+  (decisión del owner del 24-10-2026, en vez del endpoint de 38.13): llegan por
+  los mismos webhooks, en `cod-pending` y `cod`, con `kapta_channel =
+  whatsapp_bot` (= `kapso`: Chatbot WhatsApp). Sin `kapso_conversation_id`, el
+  lead se gana por el celular. Kapta no revisa sus precios (como con Shopify).
+- Un valor que no está en la tabla, o ningún `kapta_channel`, no pone etiqueta:
+  «Sin marca». No se adivina.
+- `kapta_tags` (lista JSON o separada por comas) se copia tal cual, delante:
+  así el bot puede mandar `promo-whatsapp`, `stock-por-validar`,
+  `contraentrega`…
+- El pedido con `kapso_conversation_id`, o con el meta `kapso` verdadero, lleva
+  la etiqueta `kapso`: es la que gana el lead y cuenta en los rollups del bot.
+- El pedido que Kapta crea a pedido del bot (38.13) lleva `kapta_channel =
+  kapso` y su `kapso_conversation_id`, también cuando cierra un carrito, más
+  el meta visible `shipping_mode` (`cod` o `agency`, el mismo atributo que hoy
+  escribe en Shopify y que lee `deriveOrderFlags`) y, si el bot las manda,
+  `kapta_tags` con `promo-whatsapp` y/o `stock-por-validar`: así sus pedidos
+  siguen contando como contraentrega o agencia, promo y stock por validar.
+- Los meta de Kapta y de Kapso (`kapta_*`, `kapso_*`, `kapso`) se leen también
+  ocultos (con «_» delante) y sin importar mayúsculas.
+
+### 38.6 Dirección y departamento
+
+- **Dos Limas.** WooCommerce distingue `LMA` (Municipalidad Metropolitana de
+  Lima) de `LIM` (el resto del departamento: Huaral, Cañete, Barranca…). Kapta
+  las guarda como Shopify: «Lima (provincia)» y «Lima (departamento)», que es
+  lo que separa Lima de Provincia en la cobertura (§19.0.1). Los demás códigos
+  son los del ISO 3166-2:PE. Al revés, para crear un pedido en WooCommerce,
+  «Lima (departamento)» es `LIM` y «Lima» a secas es `LMA`, como hoy en
+  Shopify.
+- **Departamento elegido.** El código del departamento se guarda también como
+  el atributo «Provincia:» (`PE-LMA`, `PE-LIM`…), igual que el formulario COD de
+  hoy: es una elección de una lista cerrada.
+- **Sin coordenada.** WooCommerce no geocodifica la dirección. Una guía de
+  Aliclik pide pegar la ubicación a mano (§10) hasta que el formulario de la
+  tienda la mande. Desde el 26-10-2026 hay dos fuentes: la que la clienta
+  confirma en el formulario y la que manda por WhatsApp a Chatby.
+
+#### La coordenada de un pedido de WooCommerce (26-10-2026)
+
+**Qué pasaba.** Shopify geocodificaba la dirección y Kapta cotizaba Aliclik con
+esa coordenada. WooCommerce no lo hace y el formulario de COD Core no la
+guarda: #AUR900024 (Los Olivos, 26-10-2026) llegó con dirección, distrito y
+ubigeo (`_cod_territorio`), pero sin coordenada, y el panel de Aliclik la pidió
+a mano. Pasa con todos los pedidos de la web en WooCommerce. No se geocodifica
+la dirección escrita (decisión del owner): con «MZ B LT 22» el punto cae lejos,
+y en Aliclik el pin decide a dónde va el paquete.
+
+**De dónde sale ahora** (en este orden):
+
+1. **La que confirma la clienta en el formulario de COD Core** (pedido al
+   equipo de la tienda, `docs/kapta/cod-core-ubicacion.md`): `_cod_ubicacion` en
+   `meta_data`, con `{lat, lng, precision_m, fuente, confirmado}`. Kapta la
+   lee al recibir el pedido o su actualización (`wooConfirmedPin`,
+   `lib/woocommerce.ts`) y la pone en la latitud y la longitud de la dirección
+   de envío, donde Shopify ponía la suya: la ficha, el Master y Aliclik la usan
+   sin más cambios. Solo si cae en el Perú.
+2. **La que manda por WhatsApp al bot de Chatby.** El bot le pide la ubicación
+   («compártenos tu ubicación») y la clienta la comparte. Sin coordenada en el
+   pedido, el panel de Aliclik lee la conversación (§25, pestaña «Chatby», con
+   su minuto de caché) y propone la **última ubicación que mandó la clienta**:
+   «La clienta mandó su ubicación por WhatsApp (26-10 11:41): -12.04, -77.03 ·
+   Usar esta ubicación · Ver en el mapa» (`chatbyCustomerLocation`,
+   `coordinateInText`). Vale la ubicación compartida, un enlace de Maps con la
+   coordenada o la coordenada escrita; un enlace acortado no la trae. Solo
+   mensajes de la clienta, y solo dentro del Perú. **No se llena sola**: quien
+   cotiza la mira y la usa con un clic. Sin Chatby, el campo se llena a mano
+   como siempre. **La excepción es la guía automática del que confirmó por
+   Chatby** (§6.1, owner, 02-11-2026): ahí no hay nadie que la mire, así que la
+   usa sola con dos condiciones más (`chatbyGuidePin`): que sea de esta compra
+   —enviada como mucho 3 días antes del pedido; si la última es más vieja, no
+   vale— y que el pedido respalde el pin, sin excepción escrita.
+3. **La de la dirección en Google, solo para la guía automática de Provincia
+   COD y solo con el edificio** (§6.1, «Confirmó por Chatby», 02-11-2026; 0301).
+   No se muestra en el panel ni pasa a ser la coordenada del pedido.
+
+Pruebas: `test/order-pin-sources.test.ts`.
+- **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de
+  envío, se usa la de facturación.
+
+### 38.7 Lo que se guarda en `raw`
+
+`orders.raw` lleva el pedido de WooCommerce entero en `raw.woo` y, al lado, una
+copia con la forma de Shopify REST que leen los lectores de hoy sin cambios:
+`shipping_address`, `billing_address`, `note` (la nota de la clienta),
+`note_attributes` (los metadatos visibles y los de Kapta, más los `utm_*` de la
+atribución de WooCommerce), `payment_gateway_names`, `subtotal_price`,
+`total_discounts`, `total_shipping_price_set` y `total_price`. Así siguen
+funcionando la dirección del Master, la nota, los totales del cajón,
+`orders.utm_meta` y Swayp automático.
+
+### 38.8 Webhooks y API
+
+- **Firma:** `X-WC-Webhook-Signature` es el HMAC-SHA256 del cuerpo crudo con el
+  secreto del webhook, en base64: el mismo algoritmo que Shopify.
+- **Ping de alta:** al crear un webhook WooCommerce manda `webhook_id=<n>`, sin
+  firma, y no lo activa si no recibe un 200.
+- **Duplicados:** por el sha256 del cuerpo, nunca por
+  `X-WC-Webhook-Delivery-ID`, que se repite dentro del mismo segundo.
+- **Temas:** `order.created`, `order.updated`, `order.deleted` y
+  `order.restored`.
+- **Desactivación:** WooCommerce desactiva un webhook después de 5 fallos
+  seguidos y no avisa. Kapta lo revisa cada hora leyendo la lista de webhooks
+  del sitio, sin cambiarla nunca (38.14).
+- **API REST v3:** solo por https y a un dominio público (nunca una IP ni un
+  nombre interno), con la Consumer key y el Consumer secret por cabecera
+  `Authorization: Basic`; por query string solo si el hosting borra esa
+  cabecera. Cada llamada corta a los **15 segundos** y no sigue redirecciones.
+  Ningún mensaje de error lleva las claves ni la dirección de la llamada.
+
+### 38.9 Lo que no cambia
+
+- **Kenku Perú y Aurela siguen en Shopify** hasta el cierre: sus webhooks, su
+  sincronización, «Generar pedido» (hasta que el owner cambie
+  `stores.platform`, 38.12) y sus comprobantes. La 0274 no actualiza
+  ninguna fila: todas las tiendas nacen `shopify`, sin nada de WooCommerce, y
+  todos los pedidos y borradores, `shopify`. Los mapeadores de Shopify no
+  escriben la plataforma.
+- **Los principios 1-3, 10 y 11 de §2 dicen «la tienda»** (Shopify hasta el
+  cierre, WooCommerce después) desde la decisión del owner del 23-10-2026.
+- **Decidido por el owner, 28-10-2026 (§38.16).** Los históricos de Shopify
+  pueden anular su venta en Kapta, con motivo e historial, después de migrar la
+  tienda a WooCommerce. La anulación comercial no cierra retornos ni dinero.
+  Los canales de WooCommerce
+  quedaron decididos (38.5, 24-10-2026).
+
+### 38.10 Implementación
+
+- `db/migrations/0274_woocommerce_base.sql`: `stores.platform`, las columnas
+  `woo_*`, `platform_switched_at` y `woo_intake_from`, `orders.platform`,
+  `draft_orders.platform`, `stores_woo_platform_check`,
+  `stores_woo_site_key_check`, `stores_woo_site_url_check`,
+  `stores_woo_site_key_uniq` y `stores_woo_site_url_uniq`. No toca filas ni
+  `shopify_domain`. **Los candados** (revisión del 23-10-2026): Kenku y Aurela
+  escriben en `orders` todo el tiempo, así que cada paso es una sentencia
+  aparte en modo autocommit: `orders.platform` y `draft_orders.platform` nacen
+  sin CHECK (solo catálogo, sin recorrer la tabla); su CHECK entra `not valid`
+  y se valida aparte (VALIDATE no frena lecturas ni escrituras); lo de `stores`
+  va al final. Cada paso mira antes si ya está hecho: volver a correrla no toma
+  ningún candado exclusivo.
+- `lib/woocommerce.ts`: el mapeador (`mapWooOrder`), el id (`wooOrderId`,
+  `parseWooOrderId`), los estados (`WOO_SKIPPED_STATUSES`,
+  `WOO_CANCELLED_STATUSES`), el cobro (`wooFinancialStatus`,
+  `wooPaymentGateway`), las etiquetas (`WOO_CHANNEL_TAGS`, `wooTags`), los
+  departamentos (`WOO_PE_STATE_NAMES`, `toWooPeruState`), la firma
+  (`verifyWooSignature`, `parseWooWebhookPing`) y el cliente REST
+  (`wooRequest`, `wooPaginate`, `fetchWooOrdersPage`, `fetchWooOrder`,
+  `WOO_TIMEOUT_MS`; las notas del pedido, `fetchWooOrderNotes` con
+  `WOO_NOTES_TIMEOUT_MS`, para la Actividad de 38.3).
+- Pruebas: `test/woocommerce.test.ts`, `test/woocommerce-mom.test.ts` y
+  `scripts/sql/woocommerce_base_smoke.sql` (la 0274 aplicada sobre el esquema de
+  la 0273 con Kenku, Aurela y una tienda cliente: ninguna fila cambia).
+
+### 38.11 La entrada de pedidos de WooCommerce: webhook, sincronización y Ajustes (25-10-2026)
+
+**Por qué.** Desde que la tienda WooCommerce sale a producción, los pedidos
+nuevos llegan por ahí. Entran al mismo `orders` y al mismo Master por dos
+caminos, como los de Shopify: el webhook, al instante, y la sincronización cada
+5 minutos, que es la red de seguridad. WooCommerce **no reintenta** un aviso
+que falló y **desactiva el webhook después de 5 fallos seguidos**: por eso la
+sincronización no es opcional.
+
+**El webhook** (`/api/webhooks/woocommerce/<storeId>`). En este orden:
+
+1. **El ping de alta** (`webhook_id=<n>`, sin firma) recibe **200 antes de
+   mirar la firma**; si la tienda no existe, **404**, para que una dirección
+   mal pegada se vea en WooCommerce al crear el webhook. Si no se pudo leer la
+   tienda, 503 (se vuelve a guardar el webhook).
+2. **Sin secreto de webhooks guardado** no hay cómo saber quién lo manda: no se
+   procesa (200). Ajustes lo dice solo si la tienda ya tiene su sitio
+   WooCommerce guardado: este paso va antes de la firma, y un POST de
+   cualquiera a una tienda solo de Shopify (Kenku y Aurela hasta que
+   conectaron su sitio) no escribe nada en ella.
+3. **La firma** (`X-WC-Webhook-Signature`) que no cuadra recibe **401**. Es lo
+   único que contesta un error: un secreto mal puesto tiene que verse en
+   WooCommerce.
+4. **Otro sitio.** Un aviso bien firmado cuyo `X-WC-Webhook-Source` no es el
+   sitio guardado (con o sin `www.` y barra final es el mismo) no se procesa:
+   un sitio de prueba que comparte secreto no mete pedidos de prueba al Master.
+5. **El tema.** Solo `order.created`, `order.updated`, `order.restored` y
+   `order.deleted`; los demás reciben 200 y se ignoran.
+6. **Repetidos:** `webhook_events.webhook_id = "wc:" + sha256 del cuerpo`. Nunca
+   el `X-WC-Webhook-Delivery-ID` solo, que se repite dentro del mismo segundo.
+   En `order.deleted`, cuyo cuerpo es solo `{id}`, la clave lleva además el
+   Delivery-ID: el mismo pedido puede ir a la papelera, volver y volver a ir.
+
+- **Creado, actualizado o restaurado:** el pedido pasa por el mapeador (38.2 a
+  38.7) y `upsertOrders`, con los mismos pasos que un pedido de Shopify: si es
+  del bot (`kapso`), rollups del día y lead ganado; si no, sale de la cola el
+  carrito del mismo teléfono; y siempre se recalcula su fila del Master. Un
+  pedido anulado conserva la fecha en que Kapta lo vio anulado la primera vez,
+  y ese cambio (o la reactivación) deja su hecho en la Actividad (38.3).
+  `pending`, `failed` y `checkout-draft` no entran (38.3).
+- **La historia importada no entra como pedido nuevo** (revisión del
+  23-10-2026). Si Kenku o Aurela pasan su historia de Shopify al WordPress
+  (Cart2Cart, LitExtension o un import por la API), esos pedidos llegan con su
+  fecha de creación vieja y su fecha de modificación de hoy, por el webhook
+  `order.created` y por la pasada. Entrarían como pedidos nuevos `wc-kp-…`
+  duplicando a los de Shopify en el Master, la atribución y el cierre. Por eso
+  cada tienda tiene un **piso de entrada**: `stores.woo_intake_from`, que Ajustes
+  fija la primera vez que se guardan las claves de la API (y no mueve después);
+  si no hay, `platform_switched_at`; y solo si no hay ninguno,
+  `ORDERS_SYNC_FROM`. Un pedido **creado** antes del piso que Kapta no tiene no
+  se crea (el webhook lo dice en su mensaje; la pasada lo cuenta en `skipped`);
+  uno que Kapta ya tiene se actualiza como siempre. **La historia de Shopify se
+  queda fuera de Kapta**: sus pedidos ya están, con su id de Shopify.
+  **El piso no frena una prueba (25-10-2026).** Solo deja fuera lo creado
+  antes de él: un pedido de prueba hecho después en el sitio conectado entra
+  como cualquier otro, y uno que ya entró se queda (Kapta nunca borra un
+  pedido, 38.3) y sigue recibiendo sus cambios. Mover `woo_intake_from`
+  después no lo saca del Master. Así entraron las tres pruebas de Aurela,
+  #AUR900004, #AUR900005 y #AUR900006: siguen en el Master, anuladas. Contra
+  las pruebas lo único que sirve es no hacerlas en el sitio conectado.
+- **Un estado más viejo no pisa uno más nuevo.** WooCommerce entrega los
+  webhooks en segundo plano y uno puede llegar después de que la sincronización
+  ya leyó un cambio posterior. Si la fecha de modificación de WooCommerce de lo
+  que llega es anterior a la guardada (`orders.updated_at`), no se aplica (el
+  aviso queda procesado). Vale también para la sincronización. Solo WooCommerce:
+  Shopify sigue como siempre.
+- **Un anulado que nunca fue pedido no entra.** WooCommerce anula solos los
+  pedidos que quedaron `pending` sin pagar (el checkout abandonado). Uno anulado
+  que Kapta no tiene y que nunca llegó a «processing» (`date_paid` vacío;
+  WooCommerce lo llena al pasar a «processing», también en contraentrega) no se
+  crea: sería un Anulado en el Master de algo que no fue un pedido (38.3). Uno
+  que Kapta ya tiene se anula como siempre, y uno que llegó a «processing» entra
+  aunque Kapta no lo hubiera visto vivo.
+- **Borrado** (`order.deleted`, que WooCommerce manda al mandar el pedido a la
+  papelera): **Kapta nunca lo borra**, y un pedido que no tiene no lo crea desde
+  la papelera. Primero lo vuelve a leer por la API
+  (`GET /wp-json/wc/v3/orders/<id>`, que devuelve también los de la papelera):
+  entra anulado con su fecha de WooCommerce, y si ya volvió de la papelera
+  (el aviso llegó tarde) queda con su estado actual. Sin claves de la API, si
+  WooCommerce no contesta o si el pedido ya no existe, lo marca anulado como un
+  `trash` (`cancelled_at` la primera vez, `financial_status = voided`). En los
+  dos casos recalcula su fila del Master. Si vuelve de la papelera llega
+  `order.restored` y queda vivo.
+- **Todo lo demás contesta 200**, también lo que no se pudo procesar (cuerpo
+  que no es JSON, pedido sin id, tienda sin clave del sitio, una base caída): un
+  error no trae el aviso de vuelta, solo acerca la desactivación. El motivo va
+  en el cuerpo de la respuesta (WooCommerce lo guarda en su registro de
+  entregas), en `webhook_events.error` y, si es de configuración, en
+  `stores.woo_last_error` («Webhook: …»).
+
+**La sincronización** (`sync_state`, fuente `woo_orders`, dentro de
+`runStoreSync`, cada 5 minutos):
+
+- **Quién:** solo una tienda con la dirección del sitio, la clave del sitio, la
+  Consumer key y el Consumer secret guardados. No mira el token de Shopify ni
+  `stores.platform`: **guardar las claves completas es activarla.** Una tienda
+  sin eso no hace ni una llamada.
+- **Qué pide:** `GET /wp-json/wc/v3/orders?modified_after=<cursor>&dates_are_gmt=true&orderby=modified&order=asc&per_page=100&page=N`
+  (`status=any`). La primera vez desde el piso de la tienda (`woo_intake_from`,
+  `platform_switched_at` o `ORDERS_SYNC_FROM`); después de una pasada que llegó
+  al final, desde el cursor **menos 2 minutos** (WooCommerce fija la fecha de
+  modificación al empezar a guardar: un pedido que se guardaba durante la
+  pasada anterior puede tener una fecha anterior al cursor). Releer es inocuo.
+  Después de una pasada que **no** llegó al final, desde la página exacta que
+  iba a pedir, **sin solape** (ver «El cursor»).
+- **Por fecha, no por número de página:** cada página siguiente se pide desde un
+  segundo antes del último pedido leído. Con `page=N` sobre una lista que se
+  mueve (un pedido modificado salta al final), otro quedaría sin leer para
+  siempre. Solo si una página entera es del mismo segundo se pasa a la página
+  siguiente.
+- **Topes:** a lo más **10 páginas de 100** y **40 segundos** por tienda (cada
+  llamada corta a los 15 s); lo que quede sigue en la próxima pasada. Corre
+  después de los pedidos y carritos de Shopify y antes de sacar de la cola los
+  carritos que ya son pedido, para que eso valga también para WooCommerce.
+- **El cursor** es el `date_modified` más nuevo leído. Si la pasada no llegó al
+  final (tope de páginas, reloj o un fallo a mitad), guarda además la página
+  exacta que iba a pedir (`{"high": …, "resume": {"modifiedAfter": …, "page": …}}`)
+  y la próxima sigue de ahí sin solape (revisión del 23-10-2026: con el solape,
+  una ráfaga de más de ~8 pedidos modificados por segundo durante más de 2
+  minutos —una importación, un cambio de estado masivo en wp-admin— hacía que
+  cada pasada releyera las mismas 10 páginas y el cursor quedara clavado para
+  siempre, en `ok`). Nunca queda en blanco ni retrocede, y lo que avanzó antes
+  de un fallo se guarda. Una pasada que no se mueve de donde empezó queda en
+  `sync_state.status = 'warning'` y en `stores.woo_last_error`: no se ve «bien».
+- **Un fallo** queda en `sync_state` (`error`) y en `stores.woo_last_error`
+  («Sincronización: …»), va a los errores del reporte y **no corta** las pasadas
+  de Shopify, Kapso ni leads. La pasada que vuelve a salir bien borra su aviso
+  (no el de un webhook).
+- **El hosting que borra la cabecera `Authorization`:** si WooCommerce contesta
+  `woocommerce_rest_cannot_*` con claves buenas, se reintenta una vez con las
+  claves en la dirección (solo por https; esa dirección nunca se registra).
+- **La papelera no se ve** en esta lista (`status=any` no la incluye): un pedido
+  mandado a la papelera solo llega por `order.deleted`.
+
+**Ajustes → WooCommerce** (con «Administrar tiendas», `stores.manage`, como las
+demás credenciales):
+
+- La dirección del sitio (solo https, de un dominio público), la clave del
+  sitio, la Consumer key (`ck_…`) y el Consumer secret (`cs_…`), que van de a
+  dos, y el secreto de los webhooks. Un campo en blanco conserva lo guardado.
+- **Los secretos se guardan cifrados y nunca vuelven a la pantalla:** la página
+  solo sabe si hay uno. El secreto de webhooks se genera en Kapta
+  (hexadecimal, sin `& < > " '`, que WooCommerce transforma antes de firmar) y
+  se muestra **una sola vez** para pegarlo en los cuatro webhooks.
+- **La clave del sitio no se cambia** cuando ya hay pedidos de WooCommerce con
+  ella, y una clave o un sitio están en una sola tienda.
+- **Si cambian el sitio o las claves de la API, se prueban antes de guardar**
+  (`GET /wp-json/wc/v3/orders?per_page=1`, y la moneda si se puede): si no
+  sirven, no se guarda nada. «Probar conexión» prueba lo escrito sin guardarlo,
+  o lo guardado si no se escribió nada.
+- **Las claves guardadas solo viajan al sitio guardado** (revisión del
+  23-10-2026). Para guardar o probar **otra dirección** hay que volver a pegar
+  la Consumer key y el Consumer secret en el mismo envío: si no, Kapta
+  mandaría las claves de la tienda a una dirección que puede ser de otro (un
+  dominio mal escrito, o alguien con «Administrar tiendas»).
+- **Cambiar la dirección del sitio (25-10-2026: de la dirección temporal a la
+  definitiva, como Aurela a `https://aurela.pe`).** Se escribe la dirección
+  nueva, se vuelven a pegar la Consumer key y el Consumer secret y se pulsa
+  **«Guardar»**: Kapta prueba las claves en la dirección nueva y, solo si
+  sirven, guarda todo junto. **«Probar conexión» no guarda nada** de lo
+  escrito (su aviso dice «todavía no se guardó»). Mientras no se guarde, Kapta
+  sigue con la dirección vieja: la pasada le pide a ella (sin seguir
+  redirecciones, 38.8) y los avisos firmados que llegan con la dirección nueva
+  no se procesan («Otro sitio», arriba; el último fallo lo dice). Guardar la
+  dirección no mueve `woo_intake_from` ni cambia `stores.platform`, y la clave
+  del sitio sigue siendo la misma. El aviso de «Guardar» suma la revisión de
+  los webhooks del sitio nuevo («Webhooks: …», 38.14).
+- **La primera vez que se guardan las claves de la API** se fija
+  `woo_intake_from` (el piso de la entrada, ver arriba), y el aviso lo dice.
+  Volver a pegarlas después (al cambiar la dirección) no lo mueve.
+- La sección muestra la dirección para WooCommerce → Ajustes → Avanzado →
+  Webhooks (`<Kapta>/api/webhooks/woocommerce/<storeId>`, con `<Kapta>` la
+  dirección de `NEXT_PUBLIC_SITE_URL` o la de producción de Vercel: la que
+  acepta la revisión de 38.14; sin ninguna, la del navegador), los cuatro temas,
+  la versión «WP REST API Integration v3», el último fallo, la última pasada
+  y la última revisión de los webhooks (38.14).
+- **No cambia `stores.platform`** (dónde crea Kapta los pedidos nuevos): eso es
+  del día del corte y lo decide el owner (38.1). Lo cambia otro control de la
+  misma sección, «Crear los pedidos nuevos en», con su propia acción y su
+  confirmación (38.12); guardar o probar las claves nunca lo toca.
+
+**Lo que no cambia:** el webhook, la sincronización y «Generar pedido» de
+Shopify, y `getStoreCreds`. La pasada y el webhook de WooCommerce leen la tienda
+aparte (solo sus columnas `woo_*`) y descifran cada secreto por su cuenta: uno
+que no se pueda descifrar no tumba la tienda ni su Shopify.
+
+Implementación:
+
+- `app/api/webhooks/woocommerce/[storeId]/route.ts`: la ruta.
+- `lib/ingest.ts`: `processWooWebhook` y `syncWooOrders` (la pasada
+  `woo_orders` de `runStoreSync`, que suma `wooOrders` al reporte).
+- `lib/woocommerce-intake.ts`: la lectura de las credenciales
+  (`loadWooStoreCreds`), la clave de los repetidos (`wooWebhookEventKey`), el
+  sitio de origen (`wooSourceMatchesSite`), los códigos HTTP
+  (`wooWebhookHttpStatus`), el piso (`wooIntakeFloor`,
+  `isWooCreatedBeforeFloor`), el cursor (`parseWooSyncCursor`,
+  `formatWooSyncCursor`, `wooSyncFirstRequest`, `wooSyncStart`, `nextWooPage`) y los topes
+  (`WOO_SYNC_PER_PAGE`, `WOO_SYNC_MAX_PAGES`, `WOO_SYNC_BUDGET_MS`,
+  `WOO_SYNC_OVERLAP_MS`).
+- `lib/woocommerce-settings.ts` (`validateWooSettings`, `buildWooSettingsPatch`),
+  `app/dashboard/[storeId]/settings/woo-actions.ts` (`saveWooSettings`,
+  `testWooConnection`, `generateWooWebhookSecret`) y
+  `components/woocommerce-settings-section.tsx`.
+- Pruebas: `test/woocommerce-webhook.test.ts`, `test/woocommerce-sync.test.ts`,
+  `test/woocommerce-settings.test.ts` y `test/woocommerce-intake-mom.test.ts`.
+- La anulación y la reactivación en la Actividad (38.3):
+  `lib/woocommerce-activity.ts`, llamado desde `applyWooOrderPayload` (webhook
+  y papelera releída), `applyWooOrdersPage` (la pasada) y `markWooOrderDeleted`.
+  Pruebas: `test/woocommerce-activity.test.ts`.
+
+### 38.12 Lo que decide la plataforma del pedido, y lo que falta (integración, 23-10-2026)
+
+**Por qué.** La base de WooCommerce (38.1-38.10), su entrada (38.11) y los
+respaldos de Shopify con la foto de las boletas (§35.10) se hicieron a la vez.
+Juntos, un pedido de Shopify y uno de WooCommerce conviven en la misma tienda y
+en el mismo `orders`; esto fija dónde se mira `orders.platform` hoy, dónde
+manda `stores.platform` («Generar pedido» y los buscadores, abajo) y qué falta.
+
+**Dónde manda `orders.platform` hoy** (nunca la forma del id, 38.1):
+
+- **La entrada.** Lo que escriben el webhook y la pasada `woo_orders` lleva
+  `woocommerce`. Los mapeadores de Shopify no escriben la plataforma y sus
+  pedidos quedan en `shopify`. Nunca se mezclan los dos en un mismo upsert.
+- **La foto de la boleta** (§35.10). Solo pedidos `shopify`: qué falta
+  (`invoice_snapshot_candidates`), qué se guarda (`invoice_snapshot_put`) y qué
+  se lee (`fetchOrderForInvoice`). Un pedido de WooCommerce nunca tiene foto.
+- **La boleta** (§35.11, 25-10-2026). Antes de emitir, un pedido
+  `woocommerce` se relee en la API de WooCommerce con las claves de la tienda
+  (`fetchWooOrderForInvoice`); uno `shopify`, en Shopify o en su foto, como
+  siempre. Sin la columna, todos son `shopify`.
+- **Envíos → corregir la dirección.** Un pedido `woocommerce` **nunca se
+  escribe en Shopify**, ni con el token puesto: el cambio queda en el envío y el
+  aviso dice «El pedido es de WooCommerce: allí no se cambió». Sin la 0274, o si
+  la columna no se puede leer, el pedido es `shopify`, como siempre
+  (`orderPlatformOf`).
+- **Envíos → el auto-vínculo** (25-10-2026, abajo). No mira la plataforma:
+  busca en `orders` los pedidos de las dos, por decisión del owner, y nunca le
+  pregunta a Shopify.
+
+**Los respaldos de Shopify no cambian a Kenku ni a Aurela mientras Shopify
+responda.** El tope de 30 s de cada llamada a Shopify, el catálogo de Aliclik
+con el historial de pedidos y Envíos con la fila de Kapta solo entran cuando
+una llamada a Shopify falla o la tienda no tiene token. El catálogo de Aliclik
+de una tienda con `stores.platform = woocommerce` ya no le pregunta a Shopify:
+lee el de WooCommerce, con el mismo historial de respaldo (25-10-2026, «Envíos →
+Catálogo de productos en WooCommerce», abajo). **El auto-vínculo de
+Envíos es la excepción** (abajo): desde el 25-10-2026, por decisión del owner,
+ya no le pregunta a Shopify ni con Shopify funcionando; busca siempre en la
+base de Kapta.
+
+#### Envíos: el auto-vínculo y la búsqueda con pedidos de WooCommerce (25-10-2026)
+
+**Por qué.** El auto-vínculo de la cola «Revisión» («Vincular coincidencias
+automáticas» y la pasada que corre después de importar un reporte de Aliclik)
+buscaba la referencia de la NOTA solo en Shopify. Un pedido de WooCommerce no
+está en Shopify: su guía nunca se vinculaba sola. Y desde el cierre toda
+búsqueda en Shopify falla (402 y compañía): el respaldo que deja «sin revisar»
+lo que no se pudo buscar dejaba cada guía esperando para siempre, también las
+de WooCommerce de la misma tienda (con una tienda que falló no se decide).
+
+**Decisión del owner (25-10-2026): el auto-vínculo busca siempre en la base de
+Kapta** (`orders`), que ya tiene los pedidos de Shopify (la pasada
+`shopify_all` y el historial, §37) y los de WooCommerce (el webhook y la pasada
+`woo_orders`, 38.11). **No le pregunta nada a Shopify**, ni con la tienda con
+token y Shopify contestando: no lee credenciales, no busca en vivo
+(`searchOrdersLive`) y no lee ni guarda el pedido al vincular
+(`fetchOrderById`, `captureShopifyOrderForLink`). Tampoco le pregunta a
+WooCommerce. Reemplaza la regla del mismo día (commit 9857c60c) que seguía
+buscando los de Shopify en Shopify mientras contestara: una sola fuente, la
+misma para las dos plataformas, y nada que cambiar el día del cierre.
+
+**Dónde se busca**, en cada tienda que toca la referencia (la misma elección
+por prefijo de siempre, `pickStoresForOrderQuery`; `storeCandidates` en
+`lib/shipment-auto-match.ts`): en `orders` de esa tienda, **las dos
+plataformas**, sin filtrar por `platform`.
+
+**Lo que cuesta: un pedido que la sincronización todavía no trajo no se
+encuentra.** La búsqueda en vivo veía el pedido que la pasada aún no había
+traído (una guía puede importarse minutos después de crearse el pedido); la
+base, no. Lo que pasa exactamente, según el código:
+
+- **La búsqueda no encontró ningún candidato con el mismo celular** (tampoco
+  el pedido que falta): el envío queda **revisado sin vínculo**
+  (`suggestion_checked_at`) y queda en «Por revisar» para una persona. **La
+  próxima pasada no lo vuelve a intentar**: solo busca los que no quedaron
+  revisados. Se vincula a mano desde «Por revisar» (el buscador del cajón mira
+  la base apenas se abre, abajo).
+- **La base falló** al buscar en alguna de sus tiendas, o al escribir el
+  vínculo: el envío **queda sin revisar**, sin sugerencia, y la próxima pasada
+  lo vuelve a buscar. Con una tienda que falló no se decide con lo que dijo la
+  otra. Si en una tanda nada avanzó, la tanda termina (`done`) en vez de
+  pedirse otra vez.
+
+**La búsqueda en la base** (`searchLocalOrderCandidates`): primero el nombre
+exacto (`#AUR900006`, sin distinguir mayúsculas) y, solo si no hay, el nombre
+que contiene la referencia o sus dígitos (`900006`). Cinco por tienda. No busca
+por celular: el celular es la segunda señal. La referencia pierde el «#» y todo
+lo que no sea letra, dígito o guion (`localOrderReference`), para que no haga de
+comodín ni rompa el filtro.
+
+**La regla para vincular no cambia** (§19.0, `decideSuggestion`): un solo
+candidato con el mismo celular de la guía, sumando los de todas las tiendas que
+toca la referencia. Si uno de Shopify y uno de WooCommerce tienen el mismo
+celular, no hay uno solo y la guía se queda para una persona.
+
+**El vínculo.** Siempre con la fila que ya está en Kapta (`autoLinkShipment`):
+la del candidato. Una **sugerencia guardada antes** (con el gid de Shopify del
+pedido) se vincula con la fila de ese pedido en `orders` (misma tienda,
+`shopify_order_id` = el número del gid); si el pedido no está en `orders`, la
+sugerencia se limpia y el envío queda en «Por revisar», sin volver a buscarse
+solo; si la base falló al leerlo, la sugerencia se queda como estaba y se
+reintenta en la próxima pasada. El auto-vínculo ya no guarda sugerencias
+nuevas. El aviso del botón dice «N guías no se pudieron buscar; se vuelven a
+buscar la próxima vez.»: es la base que falló.
+
+**La búsqueda a mano ya miraba la base.** El buscador del cajón y de «Por
+revisar» (`OrderLinkPicker`) y el de la guía directa
+(`direct-fenix-guide-modal.tsx`) buscan primero en `orders`
+(`searchOrdersForLink`, por número o celular, de las dos plataformas) apenas se
+abren, con la referencia de la guía: un pedido de WooCommerce aparece ahí, con
+«Mismo teléfono». «Buscar en Shopify» sigue siendo solo para los pedidos de
+Shopify que la base aún no trajo; desde el cierre contesta «Sin coincidencias en
+Shopify», sin daño. El auto-vínculo no usa ese botón.
+
+Implementación: `lib/shipment-auto-match.ts` (`storeCandidates`,
+`searchLocalOrderCandidates`, `localOrderReference`, `shopifyOrderIdFromGid` y
+`autoLinkShipment`), `app/dashboard/envios/actions.ts`
+(`processSuggestionBatch`) y `components/import-review.tsx` (`retryNote`).
+Pruebas: `test/shipment-auto-match-local.test.ts` y
+`test/shipment-auto-match-retry.test.ts` (las dos fallan si algo llama a
+Shopify).
+
+#### «Generar pedido» y los buscadores en WooCommerce (23-10-2026)
+
+**Dónde manda `stores.platform`.** Con `woocommerce`, «Generar pedido» (y «Venta
+telefónica», que abre el mismo formulario) crea el pedido en WooCommerce, y los
+tres buscadores de productos —el del formulario, el del producto de un anuncio
+y el del stock de Swayp— buscan en su catálogo. Con `shopify` todo sigue
+exactamente como antes: ni una llamada a WooCommerce. La plataforma y las
+claves se leen solo en el servidor (`loadStoreOrderPlatform`); si la tienda no
+se pudo leer, o sus claves no se pueden descifrar, la venta no se crea y el
+formulario no se abre (no se adivina «Shopify»): nunca cae a Shopify en
+silencio. Sin la 0274, toda tienda es `shopify`.
+
+**El pedido** (`POST /wp-json/wc/v3/orders`, `buildWooSaleOrder`):
+
+- `status: pending`, `payment_method: cod` con el título por defecto de
+  WooCommerce («Cash on delivery»; Kapta lee el slug, no el título, 38.4),
+  `set_paid: false` y `created_via: kapta` (la API lo declara de solo lectura y
+  guarda `rest-api`: Kapta no depende de él);
+- facturación y envío completos e iguales: nombre y apellido (la primera
+  palabra y el resto, como en Shopify), el celular en E.164 en `phone`, la
+  calle, la referencia en `address_2`, el distrito en `city`, el departamento
+  con el código de WooCommerce (`toWooPeruState`: «Lima» → `LMA`, «Lima
+  (departamento)» → `LIM`, «Callao» → `CAL`; uno que no se reconoce va tal
+  cual, como en Shopify) y `PE`. Lo que falta va vacío, nunca null (la API lo
+  rechaza);
+- cada línea **por SKU** (WooCommerce busca el producto o la variación por
+  `sku`), con `quantity`, `subtotal` (precio pactado × cantidad) y `total` (con
+  su parte del descuento). El descuento del formulario es uno para todo el
+  pedido: se reparte entre las líneas con precio, en proporción a su subtotal y
+  al céntimo, y la suma de los `total` es el total pactado. Un regalo a S/ 0 va
+  a S/ 0. **Toda línea lleva su precio fijado**: una sin precio no se manda
+  (abajo);
+- el envío como método de envío a S/ 0 (`free_shipping`), nunca como cargo:
+  «Generar pedido» no cobra envío, como en Shopify;
+- `customer_note` con la nota del formulario, y los metadatos
+  `kapta_channel = venta_manual` (la etiqueta que el pedido lleva hoy en
+  Shopify, 38.5; `web_carrito` si la venta cierra el carrito abierto del lead,
+  ver «La fila local»), `kapta_lead_id`, `kapta_request_id` y `kapta_request_hash`
+  (el intento y su huella, abajo). **No lleva `kapso_conversation_id`**: el
+  borrador de Shopify tampoco, y con ella la venta de la asesora entraría como
+  del bot (§17.3). Tampoco `shipping_mode` ni `stock_por_validar`: el borrador
+  de Shopify no los escribe.
+
+**Lo que se frena antes de llamar a la tienda** (`wooSaleLinesProblem`), cada
+cosa con su mensaje:
+
+- **Ítems manuales.** WooCommerce no crea una línea sin producto (con un SKU
+  que no existe la guarda vacía). Por eso cada línea necesita SKU, y una sin él
+  —el «Ítem manual» del formulario, o una línea de un carrito de Shopify sin
+  SKU— se frena: «… es un ítem manual: WooCommerce no crea productos sin SKU.
+  Quítalos y agrégalos desde «Producto del catálogo».». En una tienda en
+  WooCommerce (o mientras no se sabe dónde se crea) el formulario no ofrece
+  «Ítem manual».
+- **Una variación sin SKU propio** (WooCommerce le muestra el del padre, y por
+  ese SKU crearía el producto con variaciones): «no tiene SKU propio en
+  WooCommerce … Pide al administrador que le ponga su SKU». No es un ítem
+  manual ni se arregla volviendo a elegirla.
+- **Un producto sin precio.** WooCommerce permite productos sin precio
+  (Shopify no): el formulario lo muestra a 0.00, pero sin `subtotal` ni `total`
+  WooCommerce cobraría el de su catálogo y Kapta no tendría con qué
+  compararlo. Se frena: «no tiene precio … Pide al administrador que le ponga
+  precio en WooCommerce». Un regalo es un precio de 0, no la falta de precio.
+- **Un precio negativo** (o que no es un número), que WooCommerce aceptaría
+  sin decir nada.
+
+**La secuencia** (`createWooSaleOrder`), con las garantías de Shopify:
+
+1. busca el intento anterior (abajo) y, si lo hay, lo resuelve sin crear otro;
+2. crea el pedido `pending`, que la entrada no toma (38.3): un pedido a medio
+   hacer nunca entra al Master;
+3. compara lo que guardó WooCommerce con lo pactado (`wooSaleMismatches`), con
+   las reglas de `priceMismatches` (las líneas por posición, un céntimo de
+   tolerancia), y además: que cada línea quedó con un producto, con el SKU
+   pedido, con la cantidad pedida y, si vino del buscador, con ese mismo
+   producto (un SKU repetido, o el del padre de una variación sin SKU propio,
+   crearían otro); que una línea que llegó sin la elección del buscador (un
+   carrito, un producto elegido antes del cambio) no quedó en un producto con
+   variaciones sin variación (`wooLinesToVerify`: un
+   `GET /products?include=…&_fields=id,type` solo para esas líneas); que el
+   envío, los cargos y los impuestos son 0; y que el total es el pactado;
+4. si no cuadra: `DELETE /orders/<id>?force=true`, y la venta se rechaza con el
+   texto de Shopify (`priceMismatchRejection` con `tienda: "WooCommerce"`, o el
+   del producto o la cantidad, `wooLineRejection`) y la misma constancia en el
+   lead (`system`). Si el borrado falla se dice «bórralo en WooCommerce»;
+   mientras siga `pending`, Kapta no lo toma. **Si un plugin ya dejó el pedido
+   vivo al crearlo** (por ejemplo en «Por confirmar»), no se borra: se anula
+   (`PUT {status: "cancelled"}`), que devuelve el stock y deja el Anulado en el
+   Master si ya había entrado; borrar un pedido vivo no devuelve el stock;
+5. si cuadra: `PUT {status: "processing"}`. Si el PUT falla, se relee el
+   pedido: si quedó vivo, es la venta. **Solo se borra lo que se VIO
+   `pending` después de que WooCommerce contestara que no** (un 4xx, o un 500
+   de PHP). Si el PUT no contestó (tiempo, red, o un 502/503/504 de un proxy,
+   detrás del cual WordPress puede seguir trabajando) y el pedido se ve
+   `pending`, se deja así: «quedó Pendiente de pago … No cierres este
+   formulario: vuelve a pulsar «Generar pedido» y Kapta retoma ese mismo
+   pedido». Y si ni siquiera se pudo releer, no se toca nada: «No se pudo ver
+   cómo quedó … vuelve a pulsar «Generar pedido» en unos segundos». Borrar a
+   ciegas podía llevarse un pedido ya vivo (stock descontado, aviso de pedido
+   nuevo enviado, quizá ya en el Master) y empujar a la asesora a crear otro.
+
+**`processing`, no «Por confirmar».** Es el estado estándar que el brief pide
+para un pedido cargado a mano, existe en toda tienda, y para Kapta los dos son
+lo mismo (vivo, contraentrega, sin cobrar: 38.3 y 38.4); la confirmación es la
+de Kapta. El slug de «Por confirmar» es de cada tienda: en Aurela es
+`cod-pending` (38.3) y en Kenku todavía no está confirmado, y un estado que la
+tienda no tiene registrado haría fallar el PUT.
+
+**La fila local** es la de la entrada: `mapWooOrder` sobre la respuesta de
+WooCommerce (`wc-<clave>-<id>`, `platform = woocommerce`, `venta_manual`),
+insertada solo si falta (`insertOrderIfAbsent`). El webhook y la pasada que
+lleguen después traen el mismo id con una fecha de modificación igual o más
+nueva: actualizan, no duplican ni se toman por viejos. Después, lo mismo que
+en Shopify y por el mismo código (`registrarVentaGenerada`): la fila del
+Master, el lead ganado (con el celular tecleado si el lead no tenía), la venta
+de la asesora (`lead_calls` y `order_sales`), los rollups del día y la
+confirmación por WhatsApp con el número del pedido (`#KP2…`). El carrito de
+Shopify del lead no se completa (no hay dónde): prellena el formulario desde
+la copia local (`draft_orders`) con sus SKU y sin preguntarle a Shopify. Si esa
+copia dice que el carrito estaba abierto (`open` o `invoice_sent`) y la venta
+no es un «pedido nuevo», es un **carrito recuperado**, como en Shopify: la nota
+de la venta lo dice y el lead queda con `draft_order_status = completed` (deja
+de verse «Carrito abandonado» y la secuencia de carritos no lo toca). La copia
+del borrador no se toca, porque refleja lo que dice Shopify, y el borrador de
+Shopify tampoco: no es de Kapta, y después del cierre no hay a quién pedírselo.
+**El canal del carrito completado, como en Shopify (decisión del owner,
+23-10-2026):** allí el carrito completado conservaba las etiquetas de su
+borrador (EasySell: canal «Web · carrito completado», `lib/sales-channel.ts`).
+En WooCommerce el pedido es nuevo, así que Kapta decide si el carrito estaba
+abierto **antes** de crearlo y, si lo estaba, lo manda con
+`kapta_channel = web_carrito` en vez de `venta_manual`: la entrada le pone
+`easysell-abandoned-checkout` (38.5) y el canal queda «Web · carrito
+completado». La venta de la asesora queda en `order_sales` igual (§3, «Canal
+de venta» vs «Canal de cierre», §17.3).
+
+**Un doble clic o un reintento no crea dos pedidos.** El formulario manda un id
+por intento (`requestId`, el mismo en cada reintento hasta que sale bien), que
+viaja como `kapta_request_id`, y Kapta le suma la huella de lo pedido
+(`kapta_request_hash`: el sha256 de los productos, cantidades, precios, envío,
+dirección, nota y lead, `wooSaleFingerprint`). Antes de crear, Kapta lista los
+pedidos creados en las últimas 2 horas (`after`, `status=any`, solo `id`,
+`status`, `number` y `meta_data`: la API no filtra por metadatos), busca ese id
+y lee entero el que encuentre:
+
+- **vivo, con la misma huella y los precios en regla**: es esta venta; se usa
+  ese (y si su venta ya está registrada, no se registra otra vez);
+- **vivo, pero el formulario cambió** (otra cantidad, otro producto, otro
+  descuento, otra dirección u otra nota), o WooCommerce guarda otros precios:
+  **no se registra con lo de ahora ni se crea otro**. «Pedido NO registrado:
+  Este formulario ya creó el pedido #KP… en WooCommerce, y está vivo, pero con
+  otros datos que los de ahora…», con las diferencias que se puedan nombrar, y
+  la constancia en el lead (`⛔ Venta NO registrada`). Sale de ahí dejando el
+  formulario como estaba (se adopta) o anulando ese pedido en WooCommerce (el
+  siguiente intento crea uno nuevo). Antes se adoptaba sin mirar: la asesora
+  veía «Pedido generado ✓» con lo de antes y la clienta recibía otra cosa;
+- **`pending` con la misma huella y los precios en regla**: un intento que no
+  llegó a `processing`; se **retoma** (paso 5), sin borrar, así que no hay
+  carrera con un PUT anterior que tarde;
+- **`pending` con otra huella**: se borra y se crea el nuevo; si no se puede
+  borrar, no se crea otro (quedarían dos pedidos con el mismo intento);
+- **anulado o reembolsado**: como si no estuviera; se crea uno nuevo.
+
+Si el POST no contesta (pudo crearse igual), se busca: uno `pending` se borra;
+uno que ya está vivo se deja para el reintento, que lo adopta o avisa. Si no
+aparece (o no se pudo buscar), WordPress puede guardarlo DESPUÉS de esa
+búsqueda: `createWooSaleOrder` lo dice (`postUnanswered`), y ni el bot (38.13)
+ni el formulario (abajo) sueltan su candado hasta su plazo: un reintento
+inmediato no lo vería y crearía otro. Quien ya conoce el pedido de su intento
+(el bot y el formulario, `woo_order_id` del candado) lo lee por su id a
+cualquier edad (`knownOrderId`; si ya no está o está anulado, busca como
+siempre), y `onCreated` le avisa el id apenas el pedido existe o la búsqueda
+lo encuentra. En Shopify el candado es el borrador; aquí, este id, su huella y
+el candado en la base. Un formulario nuevo (otra pestaña, una recarga, cerrar
+y volver a abrir el formulario) es otro intento: ahí sigue mandando el aviso
+de duplicado. **Dos llamadas a la vez con el mismo id** crearían dos pedidos
+solo con la búsqueda (la de las dos llega antes que cualquier POST): el botón
+se bloquea mientras genera, pero una acción sigue corriendo en el servidor
+cuando la pantalla ya mostró un error de red y la asesora vuelve a pulsar. Por
+eso el formulario y el bot tienen el candado en la base, por (tienda, id del
+intento).
+
+**Corregir nombres y apellidos (28-10-2026).** El dueño autorizó corregir el
+nombre del cliente en Información → Pedido y cliente. «Editar nombre» ofrece
+Nombres y Apellidos (opcional), sin inferir apellidos de una cadena completa ni
+recortar nombres compuestos. Usa orders.create de la organización del pedido,
+el mismo permiso que ya permite a la asesora registrar esos datos al crearlo;
+sesión y alcance se revalidan por RLS y organización en el servidor. No se
+conceden roles nuevos. Por ahora se aplica solo a pedidos WooCommerce; los
+históricos Shopify conservan su fuente.
+
+La corrección se guarda en el pedido de WooCommerce (first_name/last_name de
+billing y shipping), se verifica su respuesta y se ingiere por el flujo normal
+para que el Master y las siguientes sincronizaciones conserven el nombre.
+No cambia el perfil general del cliente, teléfono, dirección, productos,
+importes ni estado. Las guías emitidas conservan sus datos; las futuras leen
+el pedido corregido. Dos campos de hasta 100 caracteres, nombre obligatorio,
+apellidos vacíos permitidos y espacios normalizados. Una ficha antigua se
+rechaza si los nombres de la tienda cambiaron desde que se abrió.
+
+Antes de escribir en WooCommerce se registra customer_name_update_requested
+con actor, nombres anteriores y solicitados. Solo tras confirmar la respuesta
+se registra customer_name_updated con su antes/después. Los eventos son
+inmutables y comparten una clave de intento: un reintento no duplica hechos;
+una edición ya completada no puede sobrescribir una posterior al reintentarse.
+Si se pierde la respuesta se relee antes de continuar, sin repetir el PUT a
+ciegas. Si falla el historial o el espejo se indica que WooCommerce pudo haber
+guardado y se completa con el mismo intento. Los errores conservan lo escrito.
+
+**Acceso desde Master de Pedidos (28-10-2026).** «Venta por teléfono» está
+también en la cabecera del Master, antes del buscador. En Información → Pedido
+y cliente, «Crearle pedido a este cliente» abre esa misma entrada con tienda,
+nombre y celular precargados. Sin celular válido se indica por qué no se ofrece
+ese acceso directo; la cabecera permite ingresarlo. Ambos accesos requieren
+orders.create, además del acceso a la tienda que comprueba el servidor.
+
+Se reutilizan VentaTelefonica, la búsqueda/alta de lead y OrderFormPanel de
+Leads: mismas validaciones, catálogo, avisos de duplicado, atribución a la asesora,
+confirmación e idempotencia. No hay otro formulario ni endpoint de creación. La
+ficha del pedido original queda en pausa y vuelve a su pestaña al cerrar, con
+los filtros del Master conservados. Desde un cliente de un pedido existente es
+siempre una venta nueva: no se copia el pedido ni se reutiliza su borrador anterior.
+La reserva de atención conserva renovación por actividad y liberación al cerrar.
+
+**El candado del formulario (25-10-2026).** Cuando una tienda pasa a crear
+sus pedidos en WooCommerce («Crear los pedidos nuevos en», Aurela y Kenku en
+el corte del 27-10), «Generar pedido» (y «Venta telefónica») usa **el mismo
+candado que el bot**
+(`bot_order_requests`, 0277, ya aplicada: sin migración nueva), con la llave
+`form-<id del intento>` (`wooFormGuardKey`; si no cabe en los 64 caracteres de
+la 0277, `form-` y el comienzo de su sha256), los mismos plazos
+(`BOT_ORDER_CLAIM_TTL_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`) y el mismo
+`claim_token` para retomar (`claimWooFormSale`, lib/woo-sale-guard.ts). Se
+toma después de todas las validaciones y antes de la primera llamada a
+WooCommerce; ningún paso de Shopify lo toca:
+
+- **No hay fila:** se inserta (`processing`) y se crea el pedido. Si otra
+  llamada con el mismo intento la insertó en el mismo instante, manda la suya.
+- **`processing` dentro de su plazo** (otro clic, o un POST sin respuesta que
+  espera a WordPress): no se llama a WooCommerce. «Pedido NO generado todavía:
+  este mismo pedido ya se está generando … No cierres este formulario: espera
+  … y vuelve a pulsar «Generar pedido». Kapta retoma ese mismo intento y no
+  crea otro pedido.» (`wooFormBusyText`).
+- **`failed`, `done` o `processing` vencido:** se retoma, solo si el
+  `claim_token` sigue siendo el que se leyó (de dos, uno gana; el otro recibe
+  el aviso de arriba). `createWooSaleOrder` lee el pedido del intento por su
+  `woo_order_id` o lo encuentra por `kapta_request_id`, y lo adopta, lo retoma
+  o avisa del conflicto como siempre (arriba): un intento terminado (`done`)
+  no se devuelve desde la base, para que la venta se registre si faltaba.
+- **Sin `woo_order_id` y empezado hace más de 90 min:** no se crea nada
+  (`WOO_FORM_EXPIRED_TEXT`): la búsqueda de 2 horas ya podría no ver su pedido.
+  La asesora revisa WooCommerce y, si no está, cierra y vuelve a abrir el
+  formulario (otro intento).
+
+**A diferencia del bot**, el mismo intento con otra huella no es un conflicto
+en el candado: la asesora puede corregir el formulario después de un rechazo, y
+lo decide `createWooSaleOrder` (un pedido anterior vivo con otros datos es
+`conflict`; uno pendiente se borra). Tampoco hay «el mismo pedido con otro
+id» ni tope por minuto. La huella de cada intento queda en `body_hash`.
+
+**Cómo termina.** Apenas existe el pedido, su id queda en el candado
+(`noteWooFormOrder`). Vivo, el candado se cierra con él (`done`, con el
+número, el total y la moneda: `finishWooFormClaim`) **recién cuando la venta
+quedó registrada** (la fila local, `order_sales` y la nota «sale»;
+`onSaleRecorded`, antes de la confirmación por WhatsApp), o cuando la llamada
+termina por otro camino (sin fila local, por ejemplo). A diferencia del bot,
+no antes de la fila local: un `done` se retoma enseguida, y un segundo clic
+que llegara entre el cierre y `order_sales` adoptaría el pedido sin ver la
+venta de la llamada que sigue corriendo y la registraría otra vez (dos notas
+de venta y dos WhatsApp de confirmación); con el candado todavía
+`processing`, recibe «ya se está generando».
+
+**Un POST sin respuesta no suelta el candado** (`rearmWooFormClaim`): se vuelve
+a armar desde ese momento y la asesora lee «… WooCommerce pudo haber
+creado el pedido igual … espera 2 minutos y vuelve a pulsar «Generar pedido».
+Kapta lo busca y, si se creó, lo retoma en vez de crear otro.»
+(`wooFormPostUnansweredText`); el reintento después del plazo encuentra el
+pedido tardío y lo retoma (`pending`) o lo adopta (vivo). Lo demás (rechazo de
+precio o de productos, conflicto, un error con respuesta) lo suelta
+(`failed`, `releaseWooFormClaim`) y el reintento lo retoma enseguida. Si la base
+no deja tomar el candado (falla o no contesta en 5 s), no se llama a
+WooCommerce: «no se pudo reservar este pedido en Kapta …»
+(`WOO_FORM_DB_ERROR_TEXT`). Sin la 0277 (una base de pruebas) sigue como antes,
+solo con la búsqueda, y lo deja en el registro (`[woo-form-guard]`
+`unguarded`). Si cerrar o soltar el candado falla, vence solo: el reintento lee
+el pedido por su id. Del candado a su cierre pasan los 45 s de la venta como
+mucho, los topes de la base y las escrituras de la fila local y de la venta
+(sin la confirmación por WhatsApp, que va después): menos que su plazo de
+120 s.
+
+**Tiempos.** Cada llamada tiene su tope —buscar el intento 12 s, crear 15 s,
+comprobar un producto 5 s, pasar a `processing` 10 s, releer, borrar o anular
+5 s— y además toda la venta tiene un reloj de 45 s (`WOO_SALE_BUDGET_MS`):
+cada llamada espera como mucho lo que le queda, el POST solo sale con su tope
+entero (un POST cortado es el que deja pedidos sin respuesta) y lo que no
+alcanza queda para el reintento, que lo resuelve sin crear otro. La página de
+Leads da 300 s a su función (`maxDuration`, como Pedidos y Ajustes): el botón
+nunca se queda en «Generando…» ni la venta se corta a mitad.
+
+**La búsqueda del intento anterior, solo en un reintento (03-11-2026).** El
+candado (`bot_order_requests`) sabe si es la primera vez que ve el id del
+formulario o del bot: intento 1 y sin pedido anotado (`firstAttempt`). Ahí
+Kapta nunca mandó a WooCommerce un pedido con ese `kapta_request_id`, así que no
+hay nada que buscar y se va directo al POST (`lookup_skipped` en el log). La
+búsqueda —los pedidos de las últimas 2 horas con sus metadatos, la llamada más
+lenta de WooCommerce— queda para los reintentos, que es donde puede haber un
+pedido de un intento anterior. El candado no borra sus filas, así que un id ya
+visto nunca vuelve a ser «intento 1»; sin candado (una base sin la 0277) se
+busca como siempre. Si el formulario ya mandó ese id antes (`requestIdSent`: un
+clic que falló o que pidió confirmar un duplicado), también se busca, aunque el
+candado lo vea por primera vez: un clic anterior pudo llegar a WooCommerce sin
+candado. Como la búsqueda era la que averiguaba si el hosting borra la cabecera
+`Authorization` (§38.11), el POST trae ahora su propio respaldo por query
+string: un 401 `woocommerce_rest_cannot_create` no creó nada y repetirlo no
+duplica. Si WooCommerce no contesta al buscar el intento anterior, no
+se crea nada y el aviso pide volver a pulsar «Generar pedido» en un momento. La búsqueda tuvo 6 s hasta el 03-11-2026:
+ese día, de 11:45 a 11:48, WooCommerce de Kenku tardó más en listar los pedidos
+de las últimas 2 horas y dos ventas se cortaron ahí (y otras tres solo salieron
+al segundo intento); con 12 s esa búsqueda sobra, y buscar dos veces (por id y
+por lista) más el POST entero (15 s) siguen cabiendo en los 45 s.
+
+**El buscador** (`searchWooCatalog`) devuelve la misma forma que el de Shopify:
+`GET /products?search=…&status=publish&per_page=12` (y, si lo escrito no tiene
+espacios, también `?sku=…` exacto, primero) y, para cada producto variable, sus
+variaciones publicadas (`GET /products/<id>/variations`, de a 4). Con `sku`
+WooCommerce busca también entre las variaciones (y `search` solo mira nombre y
+descripción): pegar el SKU de una talla la encuentra, como en Shopify, con el
+nombre y la foto de su producto (`GET /products?include=…`); si su producto
+también salió, va con él. Un producto simple es una variante; los agrupados y
+externos no se venden por aquí. Los ids son `woo:<id>` y nada los manda a
+Shopify: si la tienda vuelve a Shopify con un formulario abierto, «Generar
+pedido» pide volver a elegir esos productos. Una variación sin SKU propio va
+sin SKU y se frena al generar con su mensaje. Acotado: 12 productos, 1000
+variaciones cada uno y 10 s en total; si WooCommerce no contesta, «Sin
+resultados».
+
+**El cambio de plataforma** (Ajustes → WooCommerce → «Crear los pedidos nuevos
+en: Shopify / WooCommerce», `switchStorePlatform`): con «Administrar tiendas»,
+marcando la confirmación y aceptando el diálogo. A WooCommerce, solo con el
+sitio, la clave del sitio y las dos claves de la API guardadas (lo que exige
+`stores_woo_platform_check`; si la base lo rechaza igual, el mensaje es el
+mismo) y después de probar con lo guardado que WooCommerce **lee y deja
+escribir**: `GET /orders?per_page=1` y un lote vacío
+(`POST /orders/batch` con `{}`, que no crea, cambia ni borra nada). Una clave de
+solo «Lectura» le basta a la entrada de pedidos, pero cada venta fallaría en el
+POST: el cambio se niega con «las claves guardadas leen pero no pueden crear
+pedidos … La clave de la API de WooCommerce es de solo lectura», y ese mismo
+401 se dice así en cualquier llamada (`wooErrorFromResponse`), no como una
+clave mal copiada. `platform_switched_at` se fija la primera vez y no se
+mueve: sin `woo_intake_from` es el piso de la entrada (38.11). Volver a
+Shopify solo cambia `platform` y no prueba nada: es la marcha atrás. Nunca toca
+`woo_intake_from`, las claves de WooCommerce ni el token de Shopify. Cada
+cambio deja una línea `[woo-platform]` en el registro (tienda, de qué a qué,
+quién y cuándo), y solo se guarda si nadie la cambió entre la lectura y el
+guardado.
+
+#### Envíos → Catálogo de productos en WooCommerce (25-10-2026)
+
+**Por qué.** La pantalla «Catálogo de productos» (Envíos → Aliclik) lista los
+productos de la tienda para asociarlos a un EAN de Aliclik (`aliclik_sku_map`)
+y a un código de barras de Swayp (`swayp_sku_map`), y la sincronización del
+catálogo de Aliclik (el botón, Ajustes y el cron de cada hora) siembra el
+mapeo por nombre con la misma lista. Salía del catálogo activo de Shopify, con
+el historial de pedidos del último año de respaldo. Con Shopify cerrado el
+28-10-2026 (UTC) y las dos tiendas creando en WooCommerce (decisión del owner,
+25-10-2026), un producto que nunca se vendió desaparecía de la lista y los
+avisos decían «sin SKU en Shopify».
+
+**La regla.** La fuente la decide `stores.platform` (38.1,
+`loadSkuCatalogSource`):
+
+- **`woocommerce` con la dirección, la clave del sitio y las dos claves de la
+  API**: el catálogo **publicado** de WooCommerce (`listWooCatalogVariants`,
+  solo `GET`): `GET /products?status=publish&per_page=100&orderby=id&order=asc`
+  página a página, y para cada producto variable sus variaciones publicadas
+  (`GET /products/<id>/variations`), con el cliente de `lib/woocommerce.ts` y
+  su respaldo de autenticación por query string, como el buscador
+  (`searchWooCatalog`). Un producto simple es una fila; uno variable, una fila
+  por variación («M / Negro»); agrupados y externos no se venden y no salen.
+  Una variación sin SKU propio (WooCommerce le muestra el del padre) sale **sin
+  SKU**, como en el buscador. **Shopify no se consulta**, ni con su token.
+- **`woocommerce` sin claves usables**: solo el historial, y la pantalla lo
+  dice («Catálogo de WooCommerce: Sus claves de la API no se pueden usar …»).
+- **`shopify`** (o la base sin la 0274): **nada cambia**, el catálogo activo de
+  Shopify con su token, sus avisos y su respaldo de siempre.
+- **No se pudo leer la tienda**: solo el historial, con el aviso «Catálogo de
+  la tienda: No se pudo leer la plataforma de la tienda …».
+
+**El respaldo no cambia.** Encima del catálogo se suman los productos vistos
+en `orders` del último año (de las dos plataformas): si WooCommerce falla, la
+lista sale entera del historial; si se lee a medias, el historial completa.
+Un producto que nunca se vendió y que WooCommerce no llegó a entregar es lo
+único que falta.
+
+**Las asociaciones no se tocan.** `aliclik_sku_map` y `swayp_sku_map` van por
+SKU (normalizado, `normalizeSku`) y WooCommerce usa los mismos SKU que Shopify:
+un mapeo hecho con la lista de Shopify sigue valiendo, sin migrar nada. La
+siembra automática solo agrega (`ignoreDuplicates`), por SKU igual o por
+nombre normalizado, ahora con los nombres de WooCommerce.
+
+**Tiempos.** La lectura tiene un reloj de 20 s (`WOO_CATALOG_BUDGET_MS`),
+10 s por llamada, 30 páginas de 100 productos como mucho
+(`WOO_CATALOG_MAX_PAGES`), 3 páginas de variaciones por producto y 6
+productos variables a la vez (`WOO_CATALOG_CONCURRENCY`). Lo que no llega (el
+reloj, el tope o una llamada que falla después de la primera página) deja la
+lectura «en parte» y lo completa el historial; si falla la primera página, no
+hay catálogo y queda solo el historial. El resultado se guarda **5 minutos en
+memoria** por tienda (`WOO_CATALOG_CACHE_MS`): asociar o vincular vuelve a
+pintar la pantalla y no relee WooCommerce cada vez. «Sincronizar catálogo» y el
+cron siempre lo releen (quien acaba de poner un SKU en WooCommerce y sincroniza
+tiene que verlo). Una lectura que falló no se guarda.
+
+**Lo que dice la pantalla** (`lib/catalog-source.ts`): la etiqueta de cada fila
+nombra la fuente («Variante WooCommerce», «SKU WooCommerce», «Falta SKU en
+WooCommerce», «Abre este producto en WooCommerce, asigna un SKU a la variante
+y vuelve a sincronizar»), el aviso general dice «N producto(s) publicado(s) no
+tienen SKU en WooCommerce» y, si WooCommerce falló o se leyó a medias, un aviso
+ámbar arriba: «Catálogo de WooCommerce: <por qué> La lista se completó con el
+historial de pedidos del último año …». Con Shopify no hay ese aviso, como
+antes. La sincronización cuenta «N SKUs de WooCommerce» y su aviso de fallo
+dice «Catálogo de WooCommerce: <por qué> Se asoció con el historial de
+pedidos.» (con Shopify, «Catálogo activo de Shopify: …», como siempre). El
+detalle es el mensaje del `WooError`, sin secretos ni la dirección.
+
+Pruebas: `test/aliclik-catalog-woo.test.ts`.
+
+#### El enlace al pedido y el nombre de su tienda (24-10-2026)
+
+**Por qué.** El 24-10-2026, ya con Aurela recibiendo pedidos de WooCommerce, la
+flechita junto al nombre del pedido en la ficha del Master («Abrir en
+Shopify») abrió `admin.shopify.com/store/aurela-peru/orders/11076` para el
+#AUR900004, que es de WooCommerce (`wc-aur-11076`): el enlace se armaba siempre
+con Shopify y el número del id.
+
+**La regla.** Todo enlace al admin de un pedido lo arma `orderAdminLink`
+(`lib/order-admin-url.ts`, puro y sin Node, para el navegador) y lo decide
+**solo `orders.platform`**; sin dato, Shopify, como `orderPlatformOf`:
+
+- `woocommerce`: `<woo_site_url>/wp-admin/admin.php?page=wc-orders&action=edit&id=<id>`
+  con el id de `wc-<clave>-<id>`, y la etiqueta «Abrir en WooCommerce». **Sin
+  el sitio guardado** (o con un id que no es `wc-…`) **no hay enlace**: ninguno
+  antes que uno equivocado;
+- `shopify`: el de siempre (`admin.shopify.com/store/<tienda>/orders/<id>`),
+  «Abrir en Shopify», pero solo con un id de Shopify (los dígitos o su gid). La
+  forma del id no elige la plataforma: solo impide armar un enlace de Shopify
+  con lo que no es suyo (`wc-aur-11076` leído sin la columna, o el
+  `draft-<id>` de un borrador, que antes abría el pedido con el número del
+  borrador).
+
+`woo_site_url` no es secreto: viaja con la lista de tiendas que el panel ya
+recibe (`getAccessibleStores`; sin la 0274 se lee sin ella), y Leads lo lee
+aparte (`storeWooSiteUrl`): `getStoreCreds` sigue sin leer nada de
+WooCommerce (38.11). El carrito de Shopify («Ver borrador en Shopify») sigue igual:
+es un borrador de Shopify.
+
+**Dónde:**
+
+- **La ficha del Master** (`components/order-drawer.tsx`, desde el Master y
+  desde `?ficha=`): la flechita de la cabecera, «Revisar en …» del último
+  intento de confirmación y los textos que nombran la tienda del pedido —«la
+  anulación se crea a mano en …», «Datos comerciales sincronizados desde …»,
+  la dirección «según …» y «Esta corrección gana sobre …» de la Ubicación—. La
+  plataforma llega en el detalle (`OrderMasterDetail.platform`, que lee
+  `orders.platform`; sin la columna, `shopify`). La Mesa de cierre decía
+  «anulado en …» con la tienda del pedido; desde el 24-10-2026 dice «anulado en
+  la tienda», como el servidor (la regla de «anulado en la tienda», abajo).
+- **El séptimo día de confirmación:** el aviso «se creó la tarea para revisar
+  y anular manualmente en …» (`registerConfirmationAttempt`) nombra la tienda
+  del pedido (`orderPlatformOf`). La nota del hecho
+  `confirmation_cancellation_task_created` la escribe la base
+  (`register_confirmation_attempt_v1`) con «Shopify» para todo pedido y **así
+  se sigue guardando**; la Actividad de la ficha la lee «… en WooCommerce …» en
+  un pedido de WooCommerce (`eventNoteLabel`, solo esa nota exacta: una nota
+  escrita por una persona sale tal cual).
+- **«fuente:» de la Situación.** `order_master.status_source = 'shopify'`
+  quiere decir «el estado del pedido en su tienda» (pendiente o anulado,
+  `lib/order-status.ts`) y **así se sigue guardando**: solo se lee distinto.
+  En un pedido de WooCommerce dice «tienda (WooCommerce)»
+  (`statusSourceLabel`); en uno de Shopify, `shopify`, como siempre.
+- **Leads, «Pedidos anteriores»** (`getCustomerHistory`): cada pedido local
+  enlaza a su tienda y la flechita la nombra. Cuando Shopify contesta con los
+  pedidos del cliente, esa lista sigue mandando, pero se le suman los locales
+  de WooCommerce (`mergePriorOrders`): antes los tapaba. Desde el 25-10-2026 se suman
+  también los del historial de Shopify que no trajo (§37.7).
+- **Envíos, el cajón:** un pedido de WooCommerce no se le pide a Shopify (ni
+  la dirección en vivo ni el borrador por gid); «Obtenido de …», «Productos de
+  …», «Revisa el destino… la dirección de … es …» y el aviso de corregir la
+  dirección («el pedido es de WooCommerce: allí no se cambia») nombran su
+  tienda.
+- **La guía Swayp directa (el modal):** la insignia del «Destino» (cuando la
+  dirección sale del pedido), «reembolsado por completo en …» y el aviso de
+  reembolso parcial nombran la tienda del pedido
+  (`DirectFenixGuidePreview.platform`, de `orderPlatformOf`). El pedido anulado
+  dice «anulado en la tienda», como el servidor (abajo).
+- **La nota de la guía de Tanders:** de un pedido de WooCommerce va la nota
+  guardada (`raw.note`, 38.7), sin llamar a Shopify.
+
+#### El pedido anulado se dice «anulado en la tienda» (24-10-2026)
+
+**Por qué.** Un pedido de WooCommerce anulado también tiene `orders.cancelled_at`
+(`mapWooOrder`, 38.3), y los textos que lo leen decían «anulado en Shopify» de
+cualquier pedido. **Decisión del owner (24-10-2026):** un solo texto para las
+dos plataformas, «anulado en la tienda», también donde la ficha sabía la
+plataforma (la Mesa de cierre, el modal de la guía Swayp directa), para que la
+pantalla y el servidor digan lo mismo.
+
+**Solo cambia el texto.** La anulación sigue siendo `orders.cancelled_at`, con
+las mismas reglas, y las claves y los nombres internos se quedan:
+`anulado_en_shopify` (la puerta a «entregado»), `anulado_shopify` (Swayp desde
+Por confirmar y el bloqueo de la Mesa), `data-closure-block="ruta-gf-anulado-shopify"`,
+`cancelledInShopify`, `SHOPIFY_CANCELLED_REASON` y `shopifyCancelledNotice`.
+Sin migración: lo ya guardado no se reescribe.
+
+**Dónde** (lo que dice ahora):
+
+- **La puerta a «entregado»** (`lib/master-door.ts`): «El pedido está anulado
+  en la tienda: la entrega no se escribe encima. Decide una persona desde su
+  ficha.»; el aviso al cerrar una ruta y en Liquidaciones, «#KP137541 está
+  anulado en la tienda: no se marcó entregado en el Master y sigue donde
+  estaba. …» (con varios, «N pedidos están anulados en la tienda (…)»), y si
+  no se puede leer, «no se pudo comprobar si los pedidos están anulados en la
+  tienda (…)».
+- **La Mesa de cierre y su servidor** (`lib/closure-blocks.ts`,
+  `components/order-closure-desk.tsx`): «El motorizado de Grupo GF reportó la
+  entrega y su ruta sigue abierta, pero el pedido está anulado en la tienda:
+  terminar la ruta en … no lo marca entregado. …». La Mesa ya no recibe la
+  plataforma del pedido.
+- **Tanders:** el barrido (`lib/tanders/payment-sweep.ts`), «No se pudo
+  comprobar qué guías validadas tienen el pedido anulado en la tienda: no se
+  creó ninguna ficha.», y Tanders cobros (`components/tanders-cobros.tsx`), «1
+  guía validada sin ficha es de un pedido anulado en la tienda» (o «N guías
+  validadas sin ficha son de pedidos anulados en la tienda»).
+- **La ficha:** los acompañantes (`lib/order-companion.ts`), «Este pedido está
+  anulado en la tienda: no viaja en ninguna caja.», y el estado cerrado
+  (`lib/order-status.ts`), «… si lo anuló la tienda o el courier, lo vuelve a
+  abrir un admin …».
+- **El escaneo** (`lib/scan-cancelled.ts`): «#AUR177767 está ANULADO en la
+  tienda (el 04/10, lo canceló el cliente): no sale. …»; **el cuaderno del
+  motorizado** (`lib/notebook-import.ts`): «Anulado en la tienda: no se carga;
+  …».
+- **Urpi:** la carga (`lib/urpi-report-apply.ts`), «N anulados en la tienda o
+  devueltos no se tocaron»; el tablero (`components/urpi-results-board.tsx`),
+  la ayuda de «Observaciones» («… el pedido está anulado en la tienda o
+  devuelto. No se marca entregado: solo la tienda termina una venta. Si se
+  rehízo el pedido en la tienda, vincúlalo al nuevo; …»), «Anulado en la tienda
+  el …» y «Anulado solo en Kapta; en la tienda sigue vivo, así que se puede
+  marcar.».
+- **Swayp desde Por confirmar** (`lib/swayp-desde-confirmacion.ts` y su
+  página): el resultado «Anulado en la tienda» y la tarjeta «Anulados en la
+  tienda».
+- **La guía Swayp directa:** el servidor (`lib/swayp-directa.ts`) y el modal
+  dicen «El pedido está anulado en la tienda; no se puede crear la guía.»; el
+  servidor, «El pedido fue reembolsado por completo en la tienda; …» (el modal
+  nombra la tienda del pedido, arriba).
+- **Repro Lima** (`app/dashboard/pedidos/repro-lima/actions.ts`,
+  `components/repro-lima-sheet.tsx`, `components/repro-lima-board.tsx`): «No
+  anula la venta: solo la tienda la anula.», «Espera que la tienda anule la
+  venta» y «… hasta que la tienda anule la venta.».
+- **Leads** (`app/dashboard/leads/actions.ts`): «Si el cliente canceló, anula
+  el pedido en la tienda primero.»; **las hojas**
+  (`components/sheets-board.tsx`): «… una cancelación del courier nunca anula
+  el pedido en la tienda.».
+
+**Lo que sigue diciendo «Shopify», a propósito:** el título del hecho viejo
+`cancelled_shopify` («Anulado en Shopify»: es de un pedido de Shopify, 38.3),
+la nota guardada de la tarea del séptimo día (`CANCELLATION_TASK_STORED_NOTE`,
+que la Actividad ya lee con la tienda del pedido) y la nota interna «Shopify
+reportó el pedido anulado.» de `order_tasks.resolution_note`, que ninguna
+pantalla muestra.
+
+Pruebas: `test/anulado-en-la-tienda.test.ts`, y las de cada pantalla
+(`test/rutas-anulado-shopify.test.ts`, `test/pedidos-closure-blocks.test.ts`,
+`test/pedidos-closure-behavior.test.ts`, `test/pedidos-closure-source.test.ts`,
+`test/scan-cancelled.test.ts`, `test/order-companion.test.ts`,
+`test/order-admin-url.test.ts`, entre otras).
+
+**Pendiente** (no está en este cambio):
+
+- **La boleta de un pedido de WooCommerce:** **hecho (25-10-2026, §35.11)**,
+  con su rama por `orders.platform` en `fetchOrderForInvoice`. Antes la lectura
+  en vivo no miraba la plataforma: con el token de Shopify puesto preguntaba a
+  Shopify por el número del id (`wc-kp-1532` → 1532), que no existe, y quedaba
+  `no_encontrado`; sin token, `sin_token_shopify`. Quedan sin boleta automática,
+  a la espera del owner y del contador, el prepago web por Flow, el regalo a
+  S/ 0 de los packs y los cargos sueltos (§35.9).
+- **Auto-vínculo y búsqueda de Envíos** con pedidos de WooCommerce: **hecho
+  (25-10-2026)** («Envíos: el auto-vínculo y la búsqueda con pedidos de
+  WooCommerce», arriba). El auto-vínculo busca todos los pedidos, de Shopify y
+  de WooCommerce, en la base de Kapta (decisión del owner, 25-10-2026); la
+  búsqueda a mano ya miraba la base.
+- **Otros gid de Shopify armados con `shopify_order_id`** (el cajón de un envío
+  sin dirección, la nota de la guía de Tanders, «Ver en Shopify»): **hecho
+  (24-10-2026)**, con `orders.platform` («El enlace al pedido y el nombre de su
+  tienda», arriba). Quedan, sin daño para un pedido de WooCommerce: la
+  dirección en vivo del export de Programación de Swayp, que se salta (el id
+  `wc-…` no es de Shopify: `app/api/export/fenix-programacion/route.ts` solo
+  pregunta por ids de dígitos) y sale con lo guardado, y los cruces con
+  `draft_orders` por gid (`lib/order-master.ts`, el export), que no encuentran
+  nada.
+- **Textos que decían «anulado en Shopify» de cualquier pedido:** **hecho
+  (24-10-2026)**, con un solo texto, «anulado en la tienda» (la regla de
+  «anulado en la tienda», arriba). Quedan, porque no hablan de una anulación:
+  la boleta («Espera a Shopify», que en un pedido de WooCommerce dice «Espera a
+  WooCommerce» desde el 25-10-2026, §35.11) y el panel de Aliclik
+  («En Shopify el pedido son S/ …»). El hecho viejo `cancelled_shopify`
+  conserva su título: es de un pedido de Shopify.
+- **El endpoint del bot** (`POST /api/internal/orders/[storeId]`): **hecho
+  (23-10-2026, 38.13)**, con el mismo núcleo (`wooSaleLinesProblem`,
+  `buildWooSaleOrder`, `createWooSaleOrder`) y el candado en la base por
+  (tienda, id del intento) que pedía esta lista (0277, con su entrada en
+  DEPLOY): la búsqueda por `kapta_request_id` no frena dos llamadas
+  simultáneas. Hasta que alguien cambie el flujo en Kapso (Kenku: que su
+  acción apunte a Kapta; Aurela: que cree directo en WooCommerce, 38.5), el
+  bot sigue creando sus pedidos en Shopify (al 25-10-2026, en las dos
+  tiendas), también con la tienda ya en WooCommerce. Desde el cierre esa
+  acción falla y, con el flujo de Kenku de hoy, **nada deriva la conversación
+  a una asesora**.
+- **Los carritos.** Los formularios abandonados de WooCommerce entran a
+  `draft_orders` y a la cola **desde el 27-10-2026**, cuando COD Core los
+  mande («Los formularios abandonados de WooCommerce», abajo); un carrito de Shopify en la cola solo prellena el
+  pedido (arriba). **Lo que completaba un borrador de Shopify sin mirar
+  `stores.platform` ya lo mira (25-10-2026)**: la recompra automática
+  (`auto_order_trials`), `recoverCart` y `closeSale` solo crean con `shopify`
+  («Los carritos de Shopify en una tienda que ya crea en WooCommerce», abajo).
+  La captura del carrito recuperado no crea nada y sigue igual. **Pendiente,
+  decisión del owner:** qué hace la prueba A/B `ab-recompra-prov-1` en una
+  tienda que ya crea en WooCommerce (seguir inscribiendo o cerrarla antes del
+  30-10) y cómo se mide lo inscrito después del cambio de plataforma.
+- **Los principios de §2 y `AGENTS.md`** («Shopify como única fuente de
+  pedidos»): **hecho (23-10-2026)**, con la decisión del owner: dicen «la
+  tienda», Shopify hasta el cierre y WooCommerce después (38.9).
+- **Un POST sin respuesta en «Generar pedido»:** **hecho (25-10-2026)**, con
+  el candado del bot (`bot_order_requests`, 0277, sin migración nueva; «El
+  candado del formulario», arriba): el reintento espera a que WordPress haya
+  podido guardar el pedido y lo retoma o lo adopta, y dos llamadas a la vez con
+  el mismo intento no llegan las dos a WooCommerce. Queda lo que ninguna
+  búsqueda ve: un WordPress que guarde un pedido más de 2 minutos después de
+  que su POST se cortó (el plazo del candado), y dos formularios distintos
+  (otra pestaña, una recarga) para la misma venta, que sigue frenando el aviso
+  de duplicado.
+
+Implementación del enlace y del nombre de la tienda: `lib/order-admin-url.ts`
+(`orderAdminLink`, `orderPlatform`, `orderPlatformName`, `parseWooOrderId` y
+`wooOrderAdminUrl`, que lib/woocommerce.ts y lib/woocommerce-orders.ts
+reexportan, `statusSourceLabel`, `eventNoteLabel`, `mergePriorOrders`),
+`getAccessibleStores` (lib/access.ts), `storeWooSiteUrl` y
+`loadLeadCustomerHistory` (app/dashboard/leads/actions.ts),
+`registerConfirmationAttempt` (app/dashboard/pedidos/actions.ts),
+`getOrderMasterDetail` (lib/orders-master-access.ts), `getCustomerHistory`
+(lib/leads-access.ts), `getShipmentWithCalls` (lib/shipments-access.ts),
+`loadShipmentDetail` y `previewDirectFenixGuide`
+(app/dashboard/envios/actions.ts), `liveOrderNote`
+(app/dashboard/pedidos/tanders-actions.ts) y los componentes
+`order-drawer.tsx`, `order-drawer-host.tsx`, `orders-master.tsx`,
+`leads-drawer.tsx`, `leads-next.tsx`, `shipments.tsx` y
+`direct-fenix-guide-modal.tsx`. Pruebas:
+`test/order-admin-url.test.ts`.
+
+Implementación: `lib/shipment-order-capture.ts` (`orderPlatformOf`,
+`pushShippingAddressToShopify` con `platform`) y
+`updateShipmentDeliveryAddress` en `app/dashboard/envios/actions.ts`. Pruebas:
+`test/shipment-order-capture.test.ts` y `test/woocommerce-integration-mom.test.ts`.
+
+Implementación de «Generar pedido» y los buscadores en WooCommerce:
+
+**Buscador de variantes (29-10-2026).** Leads, productos promocionados y selector de stock recorren las páginas
+de variaciones publicadas con 100 por página, leyendo `X-WP-TotalPages`. El corte anterior de 50 ocultaba toda
+la talla 38–39 de CloudSlides (66 variantes en Aurela). Se conservan ids, SKU, precios y stock de la tienda,
+incluidas las variantes con stock 0. Hasta 1000 por producto y el presupuesto total de 10 segundos; si una página
+falla, vence el presupuesto o se supera el límite, no se ofrece ese producto con una lista incompleta.
+Esto corrige la lectura del catálogo; no crea variantes ni modifica pedidos o inventario.
+Pruebas: 66 con 11 variantes 38–39, 125 en dos páginas, fallo de página posterior, presupuesto y límite seguro,
+en `test/woocommerce-orders.test.ts`; la tienda falsa ahora implementa paginación y cabeceras de variaciones.
+
+`lib/woocommerce-orders.ts` (`loadStoreOrderPlatform`, `buildWooSaleOrder`,
+`wooSaleFingerprint`, `wooLineCents`, `wooSaleLinesProblem`,
+`wooSaleMismatches`, `wooLinesToVerify`, `createWooSaleOrder`,
+`findWooOrderByRequestId`, `wooCleanupText`, `wooLineRejection`,
+`wooConflictRejection`, `searchWooCatalog`, `flattenCatalog`),
+`wooErrorFromResponse` con la clave de solo lectura (lib/woocommerce.ts),
+`priceMismatchRejection` con `tienda` y `limpieza` (lib/shopify.ts),
+`maxDuration` de `app/dashboard/leads/page.tsx`, `generateOrder`, `generateWooOrder`,
+`registrarVentaGenerada`, `loadOrderDraft` y `searchStoreProducts` en
+`app/dashboard/leads/actions.ts`, `searchPromotedProducts`
+(`app/dashboard/actions.ts`), `searchStockProducts`
+(`app/dashboard/envios/actions.ts`) y el formulario de `components/leads-drawer.tsx`.
+El cambio de plataforma: `lib/woocommerce-platform.ts`,
+`app/dashboard/[storeId]/settings/woo-platform-actions.ts` y
+`components/woocommerce-settings-section.tsx`. Pruebas:
+`test/woocommerce-orders.test.ts`, `test/woocommerce-generate-order.test.ts`,
+`test/woocommerce-platform-switch.test.ts` y `test/woocommerce-sale-mom.test.ts`.
+
+Implementación del candado del formulario (25-10-2026): `lib/woo-sale-guard.ts`
+(`claimWooFormSale`, `wooFormGuardKey`, `noteWooFormOrder`,
+`rearmWooFormClaim`, `finishWooFormClaim`, `releaseWooFormClaim`,
+`wooFormBusyText`, `wooFormPostUnansweredText`, `WOO_FORM_EXPIRED_TEXT`,
+`WOO_FORM_DB_ERROR_TEXT`), `WOO_FORM_GUARD_PREFIX` y el tope por minuto sin
+las filas `form-` (lib/bot-orders.ts) y `generateWooOrder`
+(app/dashboard/leads/actions.ts). Pruebas:
+`test/woocommerce-generate-order.test.ts` (timeout del POST y reintento,
+WordPress que guarda tarde, doble clic simultáneo),
+`test/woo-sale-guard.test.ts` y `test/bot-orders.test.ts`.
+
+#### Los carritos de Shopify en una tienda que ya crea en WooCommerce (25-10-2026)
+
+**Por qué.** `stores.platform` dice dónde crea Kapta los pedidos nuevos de la
+tienda (38.1). Tres caminos completaban un borrador de Shopify, o registraban
+una venta, sin mirarlo: la prueba de recompra sin llamada (§11,
+`auto_order_trials`; la cohorte `ab-recompra-prov-1` está encendida hasta el
+30-10-2026 y sus únicas tiendas son Kenku Peru y Aurela) y dos acciones viejas
+de Leads sin uso en la pantalla (`recoverCart` y `closeSale`). Con la tienda en
+`woocommerce` y Shopify todavía vivo (hasta el martes 27-10 a las 19:00 de
+Lima), la prueba completaba el borrador y dejaba un pedido nuevo en Shopify:
+con la numeración vieja, con el stock descontado en Shopify y no en
+WooCommerce, y desde el cierre sin dónde anularlo. Esto no es una regla nueva:
+aplica 38.1.
+
+**La regla.** Solo crea en Shopify lo que corre en una tienda con
+`stores.platform = 'shopify'`:
+
+- **La prueba de recompra** (`processAutoOrderTrials`) lee la plataforma antes
+  de tomar cada fila (`readTrialStorePlatform`: solo esa columna, sin claves;
+  un cambio a mitad de corrida también cuenta). Con `woocommerce` la fila queda
+  `omitido` con el motivo **`tienda_en_woocommerce`**
+  (`AUTO_TRIAL_PLATFORM_REASON`), sin ninguna llamada a Shopify. **La vuelve a
+  leer justo antes de completar el borrador:** entre una lectura y otra van la
+  base y hasta dos llamadas a Shopify (el estado del borrador y la dirección,
+  cada una con tope de 30 s), y completar es lo único que no se deshace. Si
+  para entonces la tienda ya crea en WooCommerce, la fila queda `omitido` con
+  el mismo motivo: pudo consultar el borrador en Shopify y ponerle la
+  dirección, pero no crea el pedido. El carrito sigue en la cola y lo trabaja
+  una asesora, como uno de `control`; «Generar pedido» lo crea en WooCommerce
+  con lo del carrito (arriba). La sincronización lo cuenta en su reporte
+  (`autoOrdersBlockedByPlatform`). Si la plataforma no se puede leer, no se
+  adivina: la fila no se toma (o, si ya estaba tomada, vuelve a `pendiente`),
+  las que faltaban también siguen `pendiente`, la corrida no genera nada más y
+  el reporte dice «pedidos_auto: no se pudo leer en qué plataforma crea sus
+  pedidos la tienda …», con cuántos pedidos se generaron antes en esa misma
+  corrida (`platformUnreadableError`). Sin la 0274, toda tienda es `shopify`.
+- **`recoverCart`** (completar el borrador de Shopify del lead) y **`closeSale`**
+  (una venta solo en Kapta, `manual-…`, que quedaba `shopify` por defecto) leen
+  la plataforma con `loadStoreOrderPlatform`. Con `woocommerce` no crean nada:
+  «La tienda crea sus pedidos nuevos en WooCommerce: …», y mandan a «Generar
+  pedido» (`SHOPIFY_CART_IN_WOO_STORE`, `LOCAL_SALE_IN_WOO_STORE`). Si la
+  tienda no se pudo leer, tampoco.
+- **Con `shopify` no cambia nada:** la prueba y las dos acciones hacen lo de
+  siempre.
+
+**Lo que no se tocó, a propósito:**
+
+- **La inscripción de la prueba A/B** (`enrollAbCohorts`, paso 1d-0) no mira
+  la plataforma. En una tienda en WooCommerce sigue sorteando los carritos de
+  Shopify que queden (de 3 a 48 horas): las filas `control` siguen como siempre
+  y las `auto` quedan `omitido` con `tienda_en_woocommerce`. En
+  `auto_order_ab_results` esas filas salen `sin_pedido`, porque nunca se
+  generaron. **Cómo se mide lo inscrito después del cambio lo decide el
+  owner**, igual que si se deja de inscribir en esas tiendas o se cierra la
+  cohorte antes del 30-10 (pendiente, arriba). Separar solo por `reason` no es
+  un corte parejo: quita de la mitad `auto` lo inscrito después del cambio y
+  deja lo de `control`. Un corte por `platform_switched_at` en las dos mitades
+  sí lo es; es un ejemplo, no una decisión.
+- **La captura del carrito recuperado** (`linkCompletedDraftToLead`, paso 1b)
+  no crea: registra en `orders` el pedido de Shopify de un borrador que ya se
+  completó en Shopify, un pedido que existe, y gana el lead. Sigue igual con
+  cualquier plataforma; desde el cierre la pasada de borradores no trae nada.
+- **El cierre de Shopify no se adivina por la fecha** ni por `woo_site_url`.
+  Una tienda que siga en `shopify` después del 28-10-2026 (UTC) sigue con la
+  prueba como siempre: si Shopify ya no contesta, la fila termina `error` (o
+  `omitido`, `carrito_cerrado_en_shopify`) y no se crea nada.
+
+Implementación: `lib/auto-order-trials.ts` (`AUTO_TRIAL_PLATFORM_REASON`,
+`readTrialStorePlatform`, `processAutoOrderTrials`, `platformUnreadableError`,
+`autoTrialDeps`), el paso
+1d de `runStoreSync` (`lib/ingest.ts`), `SHOPIFY_CART_IN_WOO_STORE` y
+`LOCAL_SALE_IN_WOO_STORE` (`lib/woocommerce-orders.ts`), y `recoverCart` y
+`closeSale` (`app/dashboard/leads/actions.ts`). Pruebas:
+`test/auto-order-trials.test.ts` y `test/carritos-plataforma.test.ts`.
+
+#### Los formularios abandonados de WooCommerce (27-10-2026)
+
+**Por qué (pedido del owner).** COD Core, el formulario contra entrega de
+WooCommerce, guarda en su pantalla «Formularios abandonados» a quien escribió
+su celular y no terminó el pedido en 30 minutos, y lo pasa a «Recuperados»
+cuando ese celular compra. Ninguno llegaba a Kapta: desde el cierre de Shopify
+la cola no recibía carritos nuevos y «Carritos anteriores» solo contaba los de
+Shopify. Un formulario abandonado es lo mismo que era un borrador de Releasit:
+un carrito. Esto no es una regla nueva de leads: entra por la de los
+carritos, sin cambiarla.
+
+**Cómo entra.** COD Core manda cada formulario por POST a
+`/api/webhooks/woocommerce/<storeId>/abandonados` (el contrato para el equipo
+de COD Core: `docs/kapta/cod-core-abandonados.md`). La dirección sale en
+Ajustes → WooCommerce, bajo la de los webhooks de pedidos.
+
+- **La firma:** el mismo secreto de los webhooks de pedidos de WooCommerce de
+  la tienda (no hay uno nuevo), HMAC-SHA256 del cuerpo crudo en base64, en
+  `X-Kapta-Signature`. Sin secreto guardado o con la firma mala, 401 y no se
+  escribe nada.
+- **Dos eventos:** `abandonado` (entra a «Formularios abandonados») y
+  `recuperado` (pasa a «Recuperados», con `pedido_id`). Cualquier otro, o un
+  formulario sin `id` o sin celular, es 422: reenviarlo no lo arregla. Si la
+  base no contesta, 503 y COD Core reintenta.
+- **La fila:** `draft_orders` con `platform = 'woocommerce'`, la llave
+  `cod-<clave del sitio>-<id>` (un reenvío actualiza la misma fila), el gid
+  `cod-core://<clave>/formulario/<id>` (no se confunde con uno de Shopify),
+  el nombre `#F<id>`, las etiquetas `cod_form` y `cod-core`, los productos con
+  su SKU y su id de WooCommerce, y el departamento como «región», igual que un
+  borrador de Shopify. La provincia queda en `raw`.
+
+**Qué hace.**
+
+- **`abandonado`:** `linkDraftOrdersToLeads`, el camino de los borradores de
+  Shopify, con todas sus reglas: crea el lead «Carrito» (`cod_cart`) si el
+  celular es nuevo, no pisa la gestión de uno que existe, reabre un ganado con
+  una recompra o un perdido con un carrito fresco, el periodo de gracia y
+  `cart_count_48h`. **Solo los de los últimos 2 días**
+  (`DRAFT_OPEN_WINDOW_DAYS`, la misma ventana de los borradores de Shopify):
+  uno más viejo, como lo que ya estaba en la pantalla al activar el envío,
+  queda solo como historia en «Carritos anteriores». Sin ese corte entraba a
+  la cola y el archivador de 7 días lo pasaba a Perdido sin que nadie lo
+  llamara.
+- **`recuperado`:** el carrito queda `completed` con el pedido
+  (`wc-<clave>-<pedido_id>`), y el lead de ese formulario sale de la cola
+  («ya tiene pedido», ganado, con una fila en el historial que lo dice) si
+  Kapta ya tiene ese pedido y no hay una gestión de la asesora posterior a él.
+  Después corre el barrido de siempre (`closeCartLeadsWithOrders`): un pedido
+  del mismo celular con un producto del carrito. Un `abandonado` que llega
+  después del `recuperado` del mismo formulario no lo reabre.
+- **La red de seguridad:** cada pasada de 5 minutos vuelve a enlazar los
+  formularios abiertos de los últimos 2 días (`relinkCodCoreForms`, paso
+  1b-ter de `runStoreSync`), como 1b con los borradores de Shopify: uno que
+  llegó dentro del periodo de gracia o cuyo enlace falló entra igual.
+- **En la ficha:** «Formulario abandonado #F…» (o «recuperado») en «Lo que
+  pidió». «Ver en COD Core» queda oculto por pedido del owner (27-10-2026);
+  el enlace se conserva en los datos y nunca se convierte en uno de Shopify.
+  La ficha lee del carrito original su fecha y hora de creación en Lima y los
+  artículos con cantidad y variante; no usa el nacimiento del lead como fecha
+  del carrito. Sin fecha válida dice «No registrado». Es una lectura acotada al
+  carrito de la misma tienda al abrir la ficha, sin ampliar la cola ni traer el
+  payload crudo. Aplica también a los carritos de Shopify, que conservan su
+  enlace al borrador. «Generar pedido» lo prellena con los productos por SKU y crea el
+  pedido en WooCommerce (arriba, «Los carritos»). Sale también en «Carritos
+  anteriores» y en la tarjeta del siguiente lead sin tocar nada de eso.
+
+**Lo que no cambia, a propósito.**
+
+- **La prueba A/B de recompra** no los inscribe: `auto_order_ab_candidates`
+  une el lead con su carrito por el id numérico del gid de Shopify, y el de un
+  formulario no calza. Sigue pendiente la decisión del owner sobre esa prueba
+  en una tienda en WooCommerce (arriba).
+- **El borrado de los 30 días de COD Core** no se manda: en Kapta el carrito
+  queda como historia.
+- **La secuencia de WhatsApp de carritos** los trata como a cualquier carrito
+  abierto, con su configuración de siempre. La foto del producto sale del
+  espejo de catálogo de Shopify por id: con el id de WooCommerce no la
+  encuentra y la plantilla sale sin foto.
+
+Implementación: `lib/cod-core-abandoned.ts` (el contrato, puro:
+`parseCodCoreForm`, `codCoreDate`, `codCoreFormGid`, `isCodCoreFormGid`,
+`codCoreAbandonedUrl`), `lib/cod-core-abandoned-ingest.ts`
+(`processCodCoreAbandoned`, `codCoreHttpStatus`, `isPastLeadWindow`,
+`relinkCodCoreForms`), `app/api/webhooks/woocommerce/[storeId]/abandonados/route.ts`,
+`DraftOrderRow.platform` (`lib/types.ts`), la ficha
+(`components/leads-drawer.tsx`) y Ajustes
+(`components/woocommerce-settings-section.tsx`). Sin migración: la 0274 ya
+puso `draft_orders.platform`. Pruebas: `test/cod-core-abandoned.test.ts`.
+
+### 38.13 Pedidos del bot de Kapso por Kapta (23-10-2026)
+
+**Por qué.** Hoy el bot de Kapso crea unos 31 pedidos al día directamente en
+Shopify (Admin API). Desde el cierre (27-10-2026, 19:00 de Lima en el peor
+caso) los pedidos nuevos de Kenku y Aurela van a WooCommerce. **Decisión del
+owner (plan D5, 23-10-2026):** el bot no habla con WooCommerce; le pide el
+pedido a Kapta, y Kapta lo crea con el mismo núcleo que «Generar pedido»
+(38.12). Un solo camino: el mismo control de precios, las mismas marcas que la
+entrada reconoce (38.5) y ninguna clave de WooCommerce en Kapso. El contrato
+para quien edita el workflow está en `docs/kapso-pedidos-kapta.md`.
+
+**La llamada** (`POST /api/internal/orders/<storeId>`,
+`Authorization: Bearer <secreto>`), en este orden:
+
+1. **El tamaño y el secreto.** Un `Content-Length` de más de 16 KB
+   (`BOT_ORDER_MAX_BODY_BYTES`) es 413 `body_too_large` sin leer nada ni
+   consultar la base. El secreto: uno por tienda, generado en Ajustes → «Bot
+   de Kapso → pedidos por Kapta» (con «Administrar tiendas», `stores.manage`)
+   y mostrado **una sola vez**. Kapta guarda solo su sha256
+   (`bot_order_secrets.secret_hash`, 0277) y compara el sha256 de lo que llega
+   en tiempo constante. Sin secreto, con otro o con una tienda que no existe:
+   401 «No autorizado.», sin decir cuál. `CRON_SECRET` y el secreto de los
+   webhooks de Kapso no sirven. Cambiarlo invalida el anterior en el acto;
+   «Desactivar» lo borra. **Recién con el secreto bueno se lee el cuerpo**, con
+   tope (`readBodyCapped`: la lectura se corta al pasar los 16 KB).
+2. **El cuerpo**, estricto, con los nombres en inglés (un campo desconocido es
+   un error): `request_id`, `conversation_id`, `phone` (con `normalizePhone` y
+   `peruMobileProblem`, la regla del formulario), `customer_name`, `address1`,
+   `reference`, `district`, `department` (como lo dice el bot, con
+   `toWooPeruState`: «Lima» → `LMA`, «Callao» → `CAL`; uno que no se reconoce
+   es un error), `items` (`sku`, `quantity` y `unit_price`, obligatorio: 0 es un
+   regalo, nunca negativo), `discount` (`fixed` o `percent`, como el
+   formulario), `shipping_mode` (`contraentrega`/`cod` o `agencia`/`agency`;
+   sin decir, contraentrega), `tags` (solo `promo-whatsapp` y
+   `stock-por-validar`), `note` y `cart_draft_gid`. Si falta algo: 400
+   `invalid_body` con cada problema en castellano. Va antes que la plataforma:
+   con la tienda todavía en Shopify, un 409 `wrong_platform` quiere decir que
+   el cuerpo está bien (el ensayo del equipo de Kapso).
+3. **La tienda**: activa y con `stores.platform = 'woocommerce'`
+   (`loadStoreOrderPlatform`). Si no, 409 (`wrong_platform`, `store_inactive`)
+   **sin ninguna llamada a WooCommerce ni a Shopify**: este endpoint nunca crea
+   un pedido en Shopify. Sin la 0274, toda tienda es de Shopify. El total
+   (productos − descuento) tiene que ser mayor que 0, como en «Generar pedido».
+4. **El candado** (abajo).
+5. **El pedido**, con `buildWooSaleOrder` y `createWooSaleOrder` (38.12):
+   `pending` → comparación con lo pactado → `processing`, o borrado si no cuadra.
+   Lo único distinto: `kapta_channel = kapso`, `kapso_conversation_id` (la
+   conversación), `shipping_mode` y `kapta_tags` (38.5),
+   `kapta_request_id = kapso-<request_id>` (el prefijo lo separa de los ids del
+   formulario), sin `kapta_lead_id`, y la huella (`kapta_request_hash`) con la
+   conversación en lugar del lead (y el modo de entrega y las etiquetas). Como
+   el bot manda solo SKU, cada línea pasa por la comprobación de productos con
+   variaciones (`wooLinesToVerify`): el SKU del producto «padre» se rechaza.
+   **Apenas el pedido existe** (el POST contestó), su id queda en el candado
+   (`woo_order_id`, `onCreated`), antes de comprobarlo.
+6. **El candado cerrado con el pedido** (`done`, con el número, el total y la
+   moneda) **apenas está vivo**, y recién después **la fila local**, la de la
+   entrada (`mapWooOrder` + `insertOrderIfAbsent`: `wc-<clave>-<id>`,
+   etiquetas `kapso` y `whatsapp`, con su `kapso_conversation_id`). Lo que
+   impide un segundo pedido es el candado; la fila puede faltar: si no se
+   puede guardar o no contesta, el pedido existe igual, el bot lo confirma y el
+   webhook o la pasada lo traen. **Sin `order_sales`** ni nota de venta en el
+   lead: no hay asesora que lo haya vendido.
+7. **Después de responder** (`after`), los pasos que la entrada da a un pedido
+   del bot, por el mismo código (`applyWooOrderEffects`, lib/ingest.ts):
+   rollups del día, lead ganado por teléfono (`linkOrderToLead`, con su regla
+   de recompra) y la fila del Master. Antes, si el único lead de esa
+   conversación no tiene celular (escribe con nombre de usuario de WhatsApp),
+   se le rellena el del pedido con la regla de «Generar pedido»
+   (`debeGuardarTelefono`: solo el hueco, nunca pisar), para que gane ese lead
+   y no uno nuevo. Con `cart_draft_gid`, el lead **de esa clienta** con ese
+   carrito (su celular o su conversación) queda con `draft_order_status =
+   completed` (deja de verse «Carrito abandonado» y la secuencia no le
+   escribe); un gid que no es de ella no cierra nada (queda en el registro); la
+   copia del borrador no se toca. Y el último uso y el último fallo, para
+   Ajustes.
+
+**Todo tiene tope.** Cada lectura o escritura de la base espera como mucho 5 s
+(`BOT_ORDER_DB_TIMEOUT_MS`): antes del candado, una base que no contesta es
+503 `store_unavailable` (reintentable). La venta en WooCommerce termina a los
+**42 s de empezada la llamada** (`BOT_ORDER_SALE_DEADLINE_MS`: lo que tardó la
+base antes se le descuenta, y nunca más que `WOO_SALE_BUDGET_MS`); si no le
+alcanza para un POST entero, no lo manda. Después quedan cerrar el candado y
+la fila local, con su tope: la respuesta sale antes de los 60 s de la función
+(`maxDuration`).
+
+**El candado** (`bot_order_requests`, 0277, `unique (store_id, request_id)`).
+El bot reintenta solo y en paralelo, y la búsqueda por `kapta_request_id` en
+WooCommerce no frena dos llamadas a la vez (38.12). La primera llamada inserta
+su fila (`processing`, con un `claim_token`) **antes** de llamar a WooCommerce;
+otra con el mismo id choca con ella y no llama:
+
+| Lo que encuentra | Qué contesta |
+| --- | --- |
+| Otra huella (`body_hash`: el sha256 de lo pedido, normalizado, sin el request_id ni los nombres de los productos) | 409 `conflict`, con el pedido que ya creó si lo hay. No crea nada. |
+| `done`, con la misma huella | 200, el mismo pedido, con `replay: true`. Ninguna llamada a WooCommerce. |
+| `processing` de hace menos de 120 s (`BOT_ORDER_CLAIM_TTL_MS`) | 409 `duplicate_in_progress`, con `retry_after_seconds` = lo que le falta al candado, entre 5 y 15 s (`botOrderRetryAfter`). |
+| `failed`, o `processing` vencido, sin `woo_order_id` y de hace más de 90 min (`BOT_ORDER_RETAKE_MAX_AGE_MS`) | 409 `expired`, no reintentable. No crea nada: la búsqueda de 2 horas ya podría no ver el pedido de ese intento. |
+| `failed`, o `processing` vencido (lo demás) | Lo retoma, solo si el `claim_token` sigue siendo el que leyó: de dos que lo intentan, uno gana y el otro recibe `duplicate_in_progress`. `createWooSaleOrder` lee el pedido de ese intento por su `woo_order_id` (a cualquier edad) o lo encuentra por su `kapta_request_id`, y lo adopta o lo retoma: no crea otro. |
+| Ninguna fila, pero otro request_id con **la misma huella** en los últimos 10 min (`BOT_ORDER_SAME_BODY_WINDOW_MS`) | El mismo pedido pedido dos veces (la herramienta llamada dos veces): `done`, 200 con ese pedido y `replay: true`; `processing` vigente, `duplicate_in_progress`; `processing` vencido, `conflict`. No crea otro. Dos llamadas **simultáneas** con ids distintos no se frenan así (el contrato pide generar el id una vez). |
+
+120 s es más que la función entera (`maxDuration` 60 s, con la venta
+terminada a los 42 s, `BOT_ORDER_SALE_DEADLINE_MS`): un candado vivo nunca se
+toma por vencido. **Un POST sin respuesta no suelta el candado**: si
+`createWooSaleOrder` dice `postUnanswered` (WordPress pudo guardarlo después
+de la búsqueda), el candado sigue `processing` y se vuelve a armar desde ese
+momento (`claimed_at`), y la respuesta es 503 `woocommerce_unavailable`
+reintentable: los reintentos reciben `duplicate_in_progress` hasta el plazo, y
+el que llega después encuentra el pedido tardío y lo retoma o adopta en vez de
+crear otro. El contrato pide reintentar con el mismo id **durante 3 minutos**
+(`BOT_ORDER_RETRY_WINDOW_S`) sin derivar mientras la respuesta sea
+`duplicate_in_progress`. Antes de una fila nueva hay un tope de **20 pedidos
+nuevos por tienda y minuto** (`BOT_ORDER_RATE_PER_MINUTE`, 429
+`rate_limited`): hoy son unos 31 al día, y el tope solo frena un bot en bucle
+que manda ids nuevos. Un reintento no cuenta.
+
+**La tabla la comparte «Generar pedido» (25-10-2026).** El formulario de la
+asesora usa este mismo candado para sus pedidos en WooCommerce (38.12, «El
+candado del formulario»), con la llave `form-<id del intento>`
+(`WOO_FORM_GUARD_PREFIX`): sus filas no se cruzan con las del bot y el tope por
+minuto del bot no las cuenta. La huella del bot (`botOrderBodyHash`) y la del
+formulario (`kapta_request_hash`) no coinciden nunca, así que «la misma huella»
+de la tabla de arriba solo encuentra filas del bot.
+
+**Un pedido que quedó en WooCommerce sin confirmar** (no se pudo anular uno
+vivo con otro precio, no se pudo borrar uno pendiente, quedó a medias, o el de
+un intento anterior está vivo con otros datos: `botOrderLeftOpen`) va en la
+respuesta como `order_left_open` (su número, para el motivo del handoff) y deja
+una constancia `system` en el lead de esa clienta (su conversación o su
+celular), que sube a «Atender ahora» sin tocar su estado: es donde la asesora
+generaría otro pedido. Sin un único lead, queda en el registro y en el último
+fallo de Ajustes.
+
+**Los códigos.** Estables: el workflow decide por ellos, y el contrato dice qué
+hace el bot con cada uno. `message` va en castellano y sin datos de la clienta;
+no se le lee a la clienta. `retryable` dice si reintentar **con el mismo
+request_id** puede salir bien (nunca crea un segundo pedido); los reintentables
+llevan `retry_after_seconds` (10 s, o lo del candado).
+
+| Código | HTTP | Reintentable |
+| --- | --- | --- |
+| `unauthorized` | 401 | no |
+| `body_too_large` | 413 | no |
+| `invalid_body` | 400 | no |
+| `agency_needs_advisor` | 422 | no |
+| `wrong_platform` | 409 | no |
+| `store_inactive` | 409 | no |
+| `rate_limited` | 429 | sí |
+| `duplicate_in_progress` | 409 | sí |
+| `conflict` | 409 | no |
+| `expired` | 409 | no |
+| `sku_not_found` | 422 | no |
+| `price_mismatch` | 422 | no |
+| `order_mismatch` | 422 | no |
+| `woocommerce_unavailable` | 503 | sí |
+| `store_unavailable` | 503 | sí |
+| `migration_missing` | 503 | no |
+| `internal_error` | 500 | sí |
+
+Lo que sale bien: 200 `{ok: true, order: {name: "#KP200123", id: "wc-kp-123",
+total, currency}}`, para que el bot confirme a la clienta con el número.
+
+**El canal (decisión, 23-10-2026): siempre `kapso`**, también cuando el bot
+cierra un carrito: etiquetas `kapso` y `whatsapp`, «Chatbot WhatsApp» en el
+canal de venta (§3) y «Bot de Kapso» en el de cierre (§17.3). `bot_carritos`
+(«BOT + CARRITO RECUPERADO») es el bot de carritos **externo**, otro sistema:
+ponérselo al bot de Kapso mezclaría los dos. Quien cerró la venta manda sobre
+la herramienta donde quedó escrita, como en `lib/sales-channel.ts`.
+
+**El modo de entrega y las etiquetas, como hoy.** En Shopify el bot escribe
+`shipping_mode` y las etiquetas `promo-whatsapp` y `stock-por-validar`; sin
+ellas sus pedidos contarían todos como contraentrega sin promo (rollups
+`cod_orders`, `agency_orders`, `promo_orders`, `stock_validar_orders`; el
+filtro de agencia del Master; «Provincia Sin COD» de la hoja). Por eso
+`shipping_mode` y `tags` viajan como `shipping_mode` y `kapta_tags` (38.5) y
+entran a la huella. **Agencia: el bot no crea el pedido (decisión del owner,
+23-10-2026).** Con `shipping_mode` de agencia Kapta contesta
+`agency_needs_advisor` (422) antes de leer la tienda o tomar el candado, sin
+crear nada, y el bot deriva a una asesora, que genera el pedido con el adelanto
+desde Leads. Desde el bot solo entran pedidos contraentrega.
+
+**Los precios los decide el bot, como hoy en Shopify (decisión del owner,
+23-10-2026: sin piso por ahora).** El
+control de precios de 38.12 comprueba que WooCommerce guarde **lo que mandó el
+bot**, no lo compara con el catálogo: cualquier `unit_price` de 0 o más pasa
+(0 en cualquier SKU como regalo, un descuento de hasta el 100 % menos un
+céntimo), y con `cart_draft_gid` no se exige el precio del borrador (en
+Shopify `draftOrderComplete` cobraba el guardado). Es la regla que pidió el
+owner para el cuerpo («0 para regalos, nunca negativo») y la del formulario de
+la asesora, pero aquí quien llama es un agente que conversa con la clienta.
+Sin piso, el contrato pide fijar los precios en las instrucciones del agente y
+derivar lo que diga la clienta. Un piso (precio de catálogo menos un descuento
+máximo por tienda, lista de regalos, el precio de la copia del carrito) queda
+para después del corte, con un código nuevo (`price_not_allowed`).
+
+**El registro.** Una línea `[bot-orders]` por llamada: la tienda, los 12
+primeros caracteres del sha256 del request_id, el resultado, el código HTTP,
+los milisegundos, el id de WooCommerce, los pasos de `createWooSaleOrder`
+(`woo.sale.adopted`, `woo.sale.deleted`, `woo.sale.post_unanswered`…) y las
+marcas `replay`, `twin`, `left_open`, `local` y `guard` cuando aplican. Nunca el
+teléfono, el nombre, la dirección, el request_id entero ni el secreto. Si un
+paso de después de responder falla, otra línea con el paso y el error.
+
+**Sin la 0277** (el código puede salir antes que la base): 503
+`migration_missing` («Falta aplicar la migración 0277…») sin crear nada, y
+Ajustes lo dice en vez de ofrecer el secreto (`isBotOrdersMigrationMissing`, que
+solo reconoce las dos tablas de la 0277).
+
+**El corte.** Hasta que la tienda pase a WooCommerce, el bot sigue con su
+acción de Shopify. El 27-10, después del cambio de plataforma, se genera el
+secreto en Ajustes y la acción de Kapso pasa a apuntar a Kapta
+(`docs/kapso-pedidos-kapta.md`, sección 7; DEPLOY.md). Marcha atrás: la acción
+vuelve a Shopify mientras Shopify viva, o «Desactivar» en Ajustes (401, y el
+bot deriva a una asesora). **Aurela no pasa por este endpoint:** su bot crea
+sus pedidos directo en WooCommerce (decisión del owner del 24-10-2026, 38.5).
+
+**Consultar un pedido que ya existe (25-10-2026).** El caso (24-10-2026): la
+página de gracias del checkout de la web (plugin «COD Core») abre el chat del
+bot con «… deseo confirmar mi pedido KP200001 y pagaré S/ 599.60 en casa»; el
+bot no sabía que ese pedido existía, lo volvió a cotizar con sus precios
+(S/ 665) y ofreció «Confirmar pedido»: habría sido un **segundo pedido**. Desde
+ahora el bot tiene `POST /api/internal/orders/<storeId>/lookup`
+(`handleBotOrderLookup`), con **el mismo secreto y la misma puerta** que para
+crear (`authenticateBotCall`, 401 «No autorizado.» sin detalles) y el mismo
+tope de la base (`withTimeout`, `BOT_ORDER_DB_TIMEOUT_MS`). Cuerpo estricto:
+`order_name` (con o sin `#`, en cualquier caja: `normalizeBotOrderName`) y
+`phone` (el `phone_number` de la conversación). **Solo lectura**: no crea, no
+escribe nada (tampoco el último uso de Ajustes), no llama a WooCommerce ni a
+Shopify y no mira la plataforma de la tienda. Devuelve el número, la
+plataforma, la fecha, el total que Kapta tiene **hoy** (`orders.total_amount`),
+cómo se paga (`contraentrega`, `pagado` o null, derivado de `payment_gateway`,
+`financial_status` y las constancias con `orderFullyPaid`: `botLookupPayment`),
+si está anulado, la entrega vigente (el distrito y la dirección del Master, o
+los del pedido), los productos sin precios y la macroetapa y subetapa del
+Master con sus nombres de pantalla. **La privacidad (decisión de diseño,
+25-10-2026):** cualquiera puede escribir ese número en WhatsApp, así que el
+pedido se busca por su número **y** el celular de la conversación en la misma
+consulta (el índice `(store_id, customer_phone)` de `orders`) y se vuelve a
+comparar en memoria (`sameLookupPhone`); con otro celular la respuesta es
+**exactamente** la de un número que no existe, 404 `not_found` (reintentable
+una vez a los 10 s, `BOT_ORDER_LOOKUP_RETRY_AFTER_S`): Kapta nunca lee el pedido
+de otro celular, y un código aparte confirmaría que el número existe sin
+servirle al workflow. Cuenta solo el celular del pedido, nunca el de la guía
+(es el de quien recibe). **La regla del workflow** (la edita el owner en Kapso):
+un mensaje como «deseo confirmar mi pedido KP…/AUR…» no se cotiza ni se crea;
+se consulta, y si Kapta lo tiene se confirma **ese** pedido con su total y su
+dirección (nunca el monto escrito en el mensaje), «pagas al recibir» si es
+contraentrega, y la conversación queda como «pedido ya creado»; si después de
+una consulta más sigue `not_found`, o está anulado o finalizado, se deriva a una
+asesora. Contrato, respuesta campo por campo y regla completa:
+`docs/kapso-pedidos-kapta.md`, sección 10.
+
+**Lo que no cubre.** Después del cierre el bot no puede leer un borrador en
+Shopify: para cerrar un carrito necesita sus SKU y precios, y si no los tiene
+deriva a una asesora (que lo genera desde Leads con la copia de Kapta). Los
+carritos de WooCommerce todavía no entran a Kapta (38.12, «Los carritos»). El
+piso de precios y los pedidos de agencia esperan al owner (arriba).
+
+Implementación: `db/migrations/0277_bot_orders.sql` (`bot_order_secrets`,
+`bot_order_requests` con `woo_order_id`); `lib/bot-orders.ts` (`handleBotOrder`,
+`parseBotOrderBody`, `botOrderBodyHash`, `botSecretMatches`, `hashBotSecret`,
+`generateBotSecret`, `readBodyCapped`, `botOrderRetryAfter`,
+`botOrderLeftOpen`, `botOrderLeftOpenNote`, `isBotOrdersMigrationMissing`,
+`BOT_ORDER_CODES`, `BOT_ORDER_HTTP`, `BOT_ORDER_CLAIM_TTL_MS`,
+`BOT_ORDER_SALE_DEADLINE_MS`, `BOT_ORDER_RETAKE_MAX_AGE_MS`,
+`BOT_ORDER_SAME_BODY_WINDOW_MS`, `BOT_ORDER_RATE_PER_MINUTE`);
+`app/api/internal/orders/[storeId]/route.ts`; la consulta,
+`lib/bot-order-lookup.ts` (`handleBotOrderLookup`, `parseBotOrderLookupBody`,
+`normalizeBotOrderName`, `botLookupPayment`, `BOT_ORDER_LOOKUP_CODES`) y
+`app/api/internal/orders/[storeId]/lookup/route.ts`, con sus pruebas
+`test/bot-order-lookup.test.ts` y `test/bot-order-lookup-mom.test.ts`;
+`buildWooSaleOrder` con
+`conversationId`, `shippingMode`, `tags` y `WOO_BOT_SALE_CHANNEL`, y
+`createWooSaleOrder` con `knownOrderId`, `onCreated` y `postUnanswered`
+(`lib/woocommerce-orders.ts`); `applyWooOrderEffects` (`lib/ingest.ts`);
+Ajustes: `app/dashboard/[storeId]/settings/bot-orders-actions.ts` y
+`components/bot-orders-settings-section.tsx`. Pruebas: `test/bot-orders.test.ts`,
+`test/bot-orders-settings.test.ts`, `test/bot-orders-mom.test.ts` y
+`scripts/sql/bot_orders_smoke.sql`. Contrato: `docs/kapso-pedidos-kapta.md`.
+
+### 38.14 La revisión de los webhooks de WooCommerce (25-10-2026)
+
+**Por qué.** WooCommerce no reintenta un aviso que falló y **desactiva el
+webhook después de 5 fallos seguidos** (38.8, 38.11). Desactivado no vuelve
+solo ni avisa a nadie. Los pedidos nuevos y sus cambios siguen entrando por la
+pasada `woo_orders`, con hasta 5 minutos de retraso; **lo que se manda a la
+papelera, no:** la pasada pide `status=any`, que no incluye la papelera, y lo
+único que anula en Kapta un pedido mandado a la papelera es `order.deleted`
+(38.11). Sin ese webhook, ese pedido sigue vivo en el Master para siempre: se
+despacha, cuenta en los totales y entra al cierre. Hasta el 25-10-2026 nadie se
+enteraba. Desde entonces Kapta lo revisa y lo dice en Ajustes → WooCommerce,
+donde el owner ya mira el último fallo.
+
+**Qué revisa.** Lee la lista de webhooks del sitio **solo con
+`GET /wp-json/wc/v3/webhooks`** (de a **100**, como mucho **2 páginas** y
+**30 segundos** por tienda; cada llamada corta a los 15 s, como todas las de
+38.8), con las claves de la API de la tienda y el mismo respaldo por la
+dirección si el hosting borra la cabecera `Authorization` (38.11). Cada uno de
+los cuatro temas (`order.created`, `order.updated`, `order.deleted` y
+`order.restored`) tiene que tener **al menos un webhook en «Activo» que
+entregue a esta tienda en una dirección de Kapta**:
+`<Kapta>/api/webhooks/woocommerce/<storeId>`, la dirección que muestra Ajustes.
+
+| Lo que encuentra en un tema | Qué dice |
+| --- | --- |
+| Uno activo que entrega a esta tienda en una dirección de Kapta (aunque haya otros viejos desactivados o a otra parte) | Bien |
+| Los activos de esta tienda, en otra dirección (otro entorno, http, una que redirige) | «order.created va a otra dirección» |
+| Los que entregan a esta tienda, desactivados | «order.created está desactivado» (y que WooCommerce lo hace tras 5 fallos seguidos) |
+| Los que entregan a esta tienda, en pausa | «… está en pausa» |
+| Los que entregan a esta tienda, en otro estado | «… no está activo» |
+| Ninguno a esta tienda, alguno a otra tienda de Kapta | «… va a otra tienda de Kapta» |
+| Ninguno a Kapta | «falta …» |
+
+Después de la lista de temas, el aviso dice qué pasa mientras tanto y dónde se
+arregla:
+
+- Si `order.deleted` está bien, falte lo que falte: «Mientras tanto los pedidos
+  llegan por la sincronización, cada 5 minutos.»
+- Si lo único mal es `order.deleted`: «Sin order.deleted, un pedido mandado a
+  la papelera sigue vivo en Kapta: la sincronización no ve la papelera.»
+- Si están mal `order.deleted` y otros: «La sincronización trae lo demás cada 5
+  minutos, pero no ve la papelera: sin order.deleted, un pedido mandado a la
+  papelera sigue vivo en Kapta.» (Es el caso de Kenku si de verdad solo tiene
+  `order.updated`.)
+- Y al final dónde se arregla: «Se arregla en WooCommerce → Ajustes → Avanzado
+  → Webhooks: uno «Activo» por tema, con la dirección y el secreto de esta
+  tienda.», o, con alguno desactivado, «Se arregla en WooCommerce → Ajustes →
+  Avanzado → Webhooks. WooCommerce desactiva uno tras 5 fallos seguidos:
+  revisa la dirección y el secreto antes de reactivarlo.»
+
+Con el prefijo de `woo_last_error`, cualquier combinación de estados cabe
+entera en sus 500 caracteres (la peor, uno desactivado y tres a otra tienda de
+Kapta, en 488): el aviso nunca queda cortado.
+
+- **La dirección se compara entera.** La tienda va en la ruta
+  (`/api/webhooks/woocommerce/<storeId>`, con o sin barra final) y el origen
+  (esquema y host) tiene que ser uno de Kapta: el de `NEXT_PUBLIC_SITE_URL` o
+  el de producción de Vercel (`VERCEL_PROJECT_PRODUCTION_URL`, https). Una
+  dirección que no llega a Kapta **no** siempre termina desactivada: WooCommerce
+  entrega sin seguir redirecciones y cuenta como éxito un 2xx, un 301 o un 302,
+  y la ruta de Kapta contesta 200 a una tienda que no conoce (salvo el ping de
+  alta, 38.11). Un webhook a otra dirección puede quedar «Activo» para siempre
+  sin que Kapta reciba nada; y en `order.deleted` u `order.restored`, que se
+  disparan poco, cinco fallos pueden tardar semanas. Ajustes muestra la
+  dirección de los webhooks con el primero de esos orígenes (sin ninguno, con
+  la del navegador), así que lo que se copia de ahí es lo que la revisión
+  acepta. Sin ninguna de las dos variables (desarrollo, pruebas) el origen no
+  se compara.
+- **Los webhooks de otros servicios** (un CRM, Make) y los de otros temas no
+  cuentan ni molestan.
+- **Solo lectura.** Kapta nunca crea, reactiva, cambia ni borra un webhook. Se
+  arreglan en WooCommerce → Ajustes → Avanzado → Webhooks: la dirección y el
+  secreto de esta tienda, estado «Activo». Reactivar a ciegas uno que se
+  desactivó por un secreto mal puesto solo lo vuelve a desactivar.
+- **De la respuesta no se guarda nada** salvo el estado de cada tema: ni las
+  direcciones de entrega (ni la que no es de Kapta), ni los nombres, ni nada
+  más llega a la base, al reporte o al log. El secreto de un webhook es de solo
+  escritura en la API.
+- **Lo que la lista no dice, y por eso no se revisa.** `GET /webhooks` devuelve
+  id, nombre, estado, tema, recurso, evento, hooks, dirección de entrega y
+  fechas; **no la versión de la API** de cada webhook, ni el secreto, ni
+  cuántas veces falló. La versión («WP REST API Integration v3», 38.11) y el
+  secreto se miran a mano en cada webhook. Un webhook con el secreto mal puesto
+  recibe 401 en cada aviso pero sigue «Activo» hasta el quinto fallo seguido:
+  la revisión lo ve cuando WooCommerce lo desactiva, no antes (en
+  `order.deleted`, que se dispara poco, eso puede tardar semanas: por eso el
+  secreto se revisa a mano en los cuatro).
+- **Si una página siguiente falla** y lo ya leído tiene los cuatro temas bien,
+  es «bien»: lo que falte no puede estar en lo que no se leyó. Al revés no: sin
+  la lista entera no se dice «falta», se dice que no se pudo revisar.
+
+**Cuándo corre.**
+
+- **Cada hora, en el minuto 34** (`/api/cron/woo-webhooks`, `34 * * * *`,
+  autenticado con `CRON_SECRET` como los demás), en cada tienda **activa** con
+  el sitio, la clave del sitio y las dos claves de la API guardadas (lo mismo
+  que activa la pasada, 38.11), en paralelo. Una tienda sin eso no hace ni una
+  llamada. `?dry=1` revisa sin escribir nada; `?storeId=<uuid>`, solo esa
+  tienda. Si una tienda tiene algo mal o no se pudo revisar, el cron contesta
+  502 (se ve rojo, como el de comprobantes).
+- **En Ajustes → WooCommerce**, con las claves que se acaban de probar: después
+  de **«Guardar»** con el sitio o las claves de la API nuevos, y con **«Probar
+  conexión»** cuando la conexión sirve. El aviso suma una línea («Webhooks: …»).
+  Con lo escrito y sin guardar, solo esa línea: no se registra nada. «Guardar»
+  solo el secreto de los webhooks sigue sin llamar a WooCommerce.
+
+**Dónde se ve.**
+
+- **`sync_state`, fuente `woo_webhooks`:** `ok` (los cuatro bien), `warning`
+  (falta algo; el texto en `error`) o `error` (no se pudo revisar), con
+  `last_run_at`. No usa el cursor. Ajustes → WooCommerce lo muestra debajo de
+  la última sincronización: «Revisión de los webhooks en WooCommerce (cada
+  hora): <cuándo> · los cuatro activos y con la dirección de esta tienda / falta
+  algo / no se pudo revisar», esta última con el motivo cuando el último fallo
+  no lo dice ya. Con `warning` la sección queda «Con error». El último fallo
+  «lo dice ya» cuando es exactamente el texto que la revisión escribió (con su
+  prefijo y cortado a 500, como lo corta `recordWooLastError`).
+- **`stores.woo_last_error`, con el prefijo «Webhooks en WooCommerce: »**,
+  cuando falta algo, o cuando no se pudo revisar por otra cosa que WooCommerce
+  caído, lento o pidiendo esperar (`red`, `tiempo`, `servidor`, `limite`: eso
+  ya lo dice la pasada cada 5 minutos). Es el «Último fallo con WooCommerce» de
+  Ajustes. **Solo lo borra una revisión que encuentra todo bien**: un aviso que
+  entra bien borra solo lo suyo («Webhook: »), y la pasada, lo suyo
+  («Sincronización: »). Si otro fallo lo pisa, Ajustes muestra aparte el
+  detalle de la revisión, y la siguiente lo vuelve a escribir.
+
+**Sin migración.** `sync_state.source` es texto libre (0001) y
+`woo_last_error` ya está (0274).
+
+**Hoy (25-10-2026).** Las tiendas que revisa son Aurela y Kenku, las dos con
+su WooCommerce conectado desde el 24-10 en la dirección temporal. De Kenku solo
+llegaron avisos `order.updated`, y ni Kenku ni Aurela mandaron nunca un
+`order.deleted`, así que no se sabe si tienen los cuatro: la primera revisión
+(o «Probar conexión» con lo guardado) lo dice en Ajustes. Si falta
+`order.deleted`, el aviso lo dice aparte, porque es el único que la
+sincronización no cubre; conviene tenerlo antes del corte (38). Al pasar cada
+una a su dominio final con «Guardar» y las dos claves (38.11), el aviso de
+«Guardar» ya trae la línea de los webhooks.
+
+Implementación: `lib/woocommerce-webhooks-health.ts` (`checkWooWebhooks`,
+`kaptaWebhookOrigins`, `summarizeWooWebhooks`, `wooWebhookKaptaStore`,
+`evaluateWooWebhooks`, `wooWebhooksLastError`, `recordWooWebhooksCheck`,
+`wooWebhooksNotice`, `runWooWebhooksChecks`, `WOO_WEBHOOKS_PER_PAGE`,
+`WOO_WEBHOOKS_MAX_PAGES`, `WOO_WEBHOOKS_BUDGET_MS`,
+`WOO_WEBHOOKS_TRANSIENT_ERRORS`, `WOO_WEBHOOKS_SYNC_COVERS`,
+`WOO_WEBHOOKS_NO_TRASH`, `WOO_WEBHOOKS_SYNC_COVERS_BUT_TRASH`,
+`WOO_WEBHOOKS_FIX`, `WOO_WEBHOOKS_FIX_DISABLED`);
+`lib/woocommerce-webhooks-view.ts`, pura, para Ajustes (`WOO_WEBHOOKS_SOURCE`,
+`WOO_WEBHOOKS_ERROR_PREFIX`, `WOO_LAST_ERROR_MAX`, `wooSyncStateRow`,
+`wooWebhooksLastErrorText`, `wooWebhooksView`, `wooSectionBadge`);
+`app/api/cron/woo-webhooks/route.ts`; `saveWooSettings` y `testWooConnection`
+(`app/dashboard/[storeId]/settings/woo-actions.ts`);
+`components/woocommerce-settings-section.tsx` y la página de Ajustes. Pruebas:
+`test/woocommerce-webhooks-health.test.ts`,
+`test/woocommerce-webhooks-view.test.ts` (la sección renderizada) y
+`test/woocommerce-settings.test.ts`.
+
+### 38.15 Anular un pedido de WooCommerce desde Kapta (26-10-2026)
+
+Desde §38.18 hay una acción separada para terminar ventas cuyo paquete ya salió:
+se anulan comercialmente en Kapta y la cancelación en WooCommerce espera recepción
+e inventario. Las reglas de esta sección siguen rigiendo la anulación directa.
+
+**Pedido del owner (26-10-2026).** Hasta hoy un pedido de WooCommerce se anulaba
+solo en wp-admin, y la entrada (webhook o pasada) lo marcaba anulado y dejaba
+«Anulado en WooCommerce» en la Actividad (38.3). Para no dar wp-admin a cada
+persona del equipo, la ficha del Master tiene **«Anular pedido»**: pasa el pedido
+a «Cancelado» en WooCommerce con las claves guardadas de la tienda. No es una
+anulación automática (§2 punto 11): la decide y la firma una persona.
+
+- **Solo pedidos de WooCommerce** (`orders.platform = 'woocommerce'`, nunca por
+  la forma del id, 38.1) y vivos. Esta acción no anula Shopify: el servidor
+  rechaza un pedido Shopify sin llamar a nadie. Desde el 28-10-2026 los
+  históricos de una tienda migrada tienen su acción local separada (§38.16),
+  que termina la venta en Kapta sin modificar el original.
+- **Quién (decisión del owner, 26-10-2026):** el permiso propio **«Anular
+  pedidos de WooCommerce»** (`orders.cancel_woo`, §16), comprobado en la
+  organización de la tienda del pedido, que además tiene que verse por RLS. Lo
+  traen **owner y admin** por su acceso (el primer día era «Registrar estado a
+  mano», `master.set_status`, y nadie pierde lo que tenía) y el owner se lo
+  concede **persona por persona** con su casilla en **Equipo** a las asesoras
+  que quiera, sin darles wp-admin ni «Registrar estado a mano». Ningún rol por
+  función lo trae. Va aparte de `master.set_status`: en la ficha la zona se
+  pinta con este permiso (`canCancelWoo`), y una asesora que lo tiene la ve en
+  «Gestión manual» sin ver «Registrar estado»; quien lo tiene sin «Gestionar
+  pedidos» la ve bajo «Solo lectura». Sin el permiso, la zona no aparece y el
+  servidor responde `WOO_CANCEL_DENIED`.
+- **Nunca la papelera.** Solo `PUT /wp-json/wc/v3/orders/<id>
+  {"status": "cancelled"}`, que devuelve el stock. Ni `DELETE` ni `trash`.
+- **Motivo obligatorio:** uno de la lista corta —«La clienta ya no lo quiere»,
+  «Pedido duplicado», «Se rehace con otros datos» (§2 punto 3), «Sin stock»,
+  «Otro motivo»— y siempre una línea de texto (5 a 500 caracteres). Se confirma
+  con un segundo clic en peligro que nombra el pedido.
+
+**Lo que impide anular (decisión conservadora, 26-10-2026).** El MOM no tenía
+reglas para anular desde Kapta: wp-admin deja anular cualquier pedido, y una
+anulación con la caja en la calle lleva el pedido a «Por cerrar · Devolución
+física pendiente» (§7). Desde Kapta se elige el lado seguro; lo que no está aquí
+sigue siendo de wp-admin y de quien tenga acceso a él. **No se anula** (cada
+cosa con lo que hay que hacer antes, `wooCancelBlocks`):
+
+1. el pedido `entregado` o `devuelto` en el Master;
+2. una salida `entregado`;
+3. una caja fuera del almacén (`custody_state` `courier` o `retorno`), también
+   con su guía ya anulada: anular la venta no la trae de vuelta;
+4. una salida o guía viva (las de `activeOutputs`: `pendiente`, `en_ruta`,
+   `por_preparar`, sin devolver): se anula primero con su propio botón, que
+   avisa al courier;
+5. dinero en la mano: cobrado en la tienda (`financial_status` `paid`,
+   `partially_paid`, `partially_refunded` o `refunded`), un comprobante
+   `validado` (anularlo exige un reembolso, que solo confirma el owner, §16) o
+   un comprobante sin resolver (ni `validado` ni `rechazado`);
+6. compartir caja con otro pedido (§32), como acompañante o como principal.
+
+La ficha lo dice antes del clic con las mismas reglas; el servidor las vuelve a
+calcular con lo leído de la base y, si algo no se pudo leer, no anula («no lo
+sé» no es «no hay»).
+
+**La llamada.** Los topes de «Generar pedido» (38.12): el PUT 10 s
+(`WOO_SALE_TIMEOUTS.update`) y, si no tuvo respuesta clara (tiempo, red, una
+respuesta rota o un 502/503/504 de un proxy), releer el pedido 5 s
+(`WOO_SALE_TIMEOUTS.cleanup`) para saber cómo quedó; con el reintento de
+autenticación por query string si el hosting borra la cabecera (38.11). Un 4xx
+es un «no» y no se relee. **Si WooCommerce no contesta, o contesta pero el
+pedido no quedó anulado (un plugin), no se marca nada en Kapta** y el mensaje lo
+dice; si no se pudo saber, avisa que el Master lo mostrará solo si WooCommerce sí
+lo anuló.
+
+**Lo que queda en Kapta.**
+
+- **La fila, al instante:** `mapWooOrder` sobre la respuesta de WooCommerce y
+  `upsertOrders`, por el camino de la entrada (`applyWooOrderResponse`, con el
+  `cancelled_at` que tenía y sin pisar un estado más nuevo) y la fila del
+  Master. El webhook y la pasada que lleguen después traen lo mismo.
+- **Un solo «Anulado en WooCommerce» en la Actividad:** el hecho lo escribe
+  Kapta, `cancelled_woocommerce` con `source = 'kapta'`, el usuario de Kapta en
+  `actor` y la nota «Desde Kapta · Motivo: <motivo> — <texto>» (el código del
+  motivo, el id de WooCommerce y el intento en `payload`). Va **antes** de
+  guardar la fila: la entrada no escribe el suyo porque el último hecho de
+  WooCommerce del pedido ya es una anulación (38.3, «Una vez por cambio») y
+  porque ya encuentra el pedido anulado. Sin migración: el tipo es el de 38.3 y
+  `source` es texto libre (0045).
+- **Idempotente:** cada confirmación lleva su id de intento (`requestId`) y el
+  hecho su `operation_id` derivado de él (`wooKaptaCancelOperationId`): el doble
+  clic o el reintento del mismo intento no escriben otro (índice único de la
+  0122). Un pedido que Kapta ya tiene anulado no llama a WooCommerce: «ya está
+  anulado en la tienda».
+- **La carrera que queda:** si el webhook de esa anulación se procesara entre la
+  respuesta del PUT y la escritura de Kapta (milisegundos; WooCommerce entrega
+  sus webhooks en segundo plano), quedarían los dos hechos: el de la entrada,
+  sin motivo, y el de Kapta, con quién y el motivo. Se prefiere eso a perder el
+  motivo: `order_events` no se edita (0045).
+- Volver atrás es reactivar el pedido en WooCommerce: llega «Reactivado en
+  WooCommerce» como siempre (38.3).
+
+**Dónde.** En la ficha, «Gestión manual», debajo de «Registrar estado» (si la
+persona lo ve; si no, en su lugar): la zona
+«Anular pedido» con su explicación y «Anular pedido…»; si algo lo impide, un
+aviso con la lista en vez del botón. Al abrirla, en su sitio y sin modal: el
+motivo en chips, «Qué pasó», el aviso en crítico de que la venta queda anulada
+en la tienda y en el Master, «Sí, anular #KP… en WooCommerce» en peligro y «No
+anular».
+
+Implementación: `lib/woo-cancel.ts` (pura, la comparte la ficha:
+`WOO_CANCEL_REASONS`, `validateWooCancelReason`, `wooCancelEventNote`,
+`wooCancelBlocks`, `WOO_CANCEL_PERMISSION`, `WOO_CANCEL_DENIED`),
+`lib/woo-cancel-server.ts` (`cancelWooOrderInStore`, `WOO_CANCEL_TIMEOUTS`,
+`wooKaptaCancelOperationId`, `cancelWooOrderFromKapta`, `WOO_CANCEL_SOURCE`),
+`applyWooOrderResponse` en lib/ingest.ts, la acción
+`app/dashboard/pedidos/woo-cancel-actions.ts` (`cancelWooOrder`) y
+`components/woo-cancel-zone.tsx` en `OrderActions` (components/order-drawer.tsx).
+Pruebas: `test/woo-cancel.test.ts` y `test/woo-cancel-action.test.ts`.
+
+### 38.16 Anular la venta de un histórico Shopify en Kapta (28-10-2026)
+
+**Decisión del owner.** «La venta terminó: no se intentará entregar nuevamente»
+también se puede registrar en los históricos de Shopify desde Kapta. Esta
+decisión reemplaza el pendiente de 38.9. El pedido sigue siendo de Shopify;
+no se crea un pedido en WooCommerce ni se toca el original de Shopify.
+
+- **Alcance comprobado en servidor:** `orders.platform = shopify`, tienda ya
+  migrada a WooCommerce, `platform_switched_at` válido y creación del pedido
+  anterior a ese cambio. No se usa este flujo para una tienda aún en Shopify.
+- **Permiso:** se conserva `orders.cancel_woo`, con el nombre visible
+  **«Anular pedidos»** y una explicación de ambos alcances. Owner y admin lo
+  traen y el owner lo concede persona por persona. Diana conserva el que ya
+  tiene; no se concede `master.set_status`, no cambian sus roles ni se
+  habilita a todas las asesoras. RLS y permiso de la organización de la tienda
+  se comprueban antes de usar el cliente de servicio.
+- **Dónde:** ficha → Gestión manual → **«Anular venta de pedido histórico»**.
+  Lista de motivos, incluido «No se logró entregar; no se reintentará», texto
+  obligatorio de 5 a 500 caracteres y segundo clic que nombra el pedido y
+  dice **«en Kapta»**. Un pedido ya anulado no ofrece repetir la acción.
+- **Hecho duradero:** `legacy_shopify_sale_cancelled`, `source=kapta`, actor,
+  motivo, estados anterior/nuevo y `payload.scope=kapta_only`. El id de operación
+  se deriva del pedido e intento; reintentar no duplica el hecho y vuelve a
+  intentar recalcular. Si falla el recálculo, el hecho permanece y se avisa.
+  No se cambia `orders.cancelled_at`, no se llama a Shopify o WooCommerce y no
+  se devuelve stock ni dinero. No se borran o actualizan salidas ni su historial.
+- **Resultado comercial:** el Master queda **Anulado**, aunque después llegue
+  una confirmación, guía, reporte o cierre de ruta/liquidación. Solo una
+  corrección explícita posterior de un admin (`status_override`,
+  `source=manual`, con los permisos y motivo de 16) permite reactivar la venta.
+  Reabrir el expediente de cierre por sí solo no reactiva la venta.
+- **La logística sigue abierta:** se permite terminar la venta con la caja en
+  calle, en retorno o ya devuelta. Una salida viva conserva su estado y debe
+  cancelarse por su flujo propio. El Master sigue **Por cerrar** mientras haya
+  salida activa, devolución física, inventario, reembolso u otro pendiente.
+  En Lima y Provincia COD, si la caja salió, su liquidación sigue pendiente
+  hasta `liquidation_closed`; Agencia conserva su cierre propio de §12.
+  recibir e inventariar la caja no liquida el flete. La anulación comercial no
+  abre otra ventana de recuperación o reintentos.
+- **No se acepta una entrega ya registrada:** se comprueban el Master, las
+  guías, los hechos de entrega y las paradas de Rutas, incluso antes de cerrar
+  la ruta. Si hay dinero confirmado, comprobantes sin resolver o un pedido
+  acompañante activo, se pide resolverlos con su flujo/owner primero. Una
+  lectura fallida no autoriza la anulación.
+- **No más envíos:** las puertas de guías Aliclik, Tanders, Swayp y salidas
+  manuales vuelven a leer la anulación antes de escribir; un error de lectura
+  bloquea. El escaneo de almacén/despacho y el cierre de una caja ya cotejada
+  también la respetan. Los reportes logísticos se conservan, pero la puerta a
+  Entregado no escribe encima de la anulación comercial.
+
+Sin migración: hechos sobre `order_events` y la proyección existente del Master.
+La anulación de WooCommerce de 38.15 conserva sus guardas y su llamada a la
+tienda; este alcance nuevo es solo para los históricos de Shopify.
+
+## 39. Fotos de producto de WhatsApp para cuando Shopify ya no responde (23-10-2026)
+
+Estado: implementado el 23-10-2026, **sin migración**, con su revisión del
+mismo día (la regla por tienda de 39.5, los topes de Storage, el espejo diario
+que no cambia de foto, 39.6). La copia la hace el cron
+`/api/cron/product-photos` (DEPLOY.md, entrada del 23-10-2026).
+
+### 39.1 Por qué
+
+Tres plantillas de WhatsApp llevan la foto del producto en la cabecera: la
+prueba de carritos (0233, `docs/carritos-secuencia-whatsapp.md`), el
+recordatorio de recojo (§12) y el recordatorio de reposición (§34). La tarjeta
+del siguiente lead la muestra también. Todas apuntan a
+`/api/wa-image/<tienda>/<producto>.jpg`, que bajaba la foto del CDN de Shopify
+**en cada envío** y la convertía a JPG.
+
+Shopify cierra Kenku Perú y Aurela el 28-10-2026 00:00 UTC
+(`SHOPIFY_SHUTDOWN_AT`, §35.10). Cuando su CDN deje de servir esos archivos, la
+ruta contestaría 502 y Meta rechazaría la plantilla, en vez de caer a la imagen
+de respaldo de la tienda. Los pedidos de WooCommerce (§38) casan con el mismo
+catálogo por el título, así que también dependen de esas fotos.
+
+### 39.2 La copia
+
+- **Dónde.** Bucket **privado** `product-photos`, como todos los del
+  repositorio salvo el de los adjuntos de WhatsApp. Nadie lo lee directo: la
+  foto sale por `/api/wa-image`, que sigue siendo la única puerta.
+- **Qué.** El **mismo JPG** que la ruta sirve en vivo (`toWhatsappJpeg`:
+  girada según su EXIF, 800 px de ancho como mucho sin agrandar, fondo blanco
+  para los PNG transparentes, JPG calidad 82 con mozjpeg). Solo fotos del CDN
+  de Shopify (`https://cdn.shopify.com/`) de un id de producto numérico: lo
+  mismo que la ruta acepta servir.
+- **La ruta lleva la huella de la URL:** `<tienda>/<producto>-<huella>.jpg`,
+  con la huella = 16 caracteres del sha256 de `image_url`.
+  - Si la foto cambia en Shopify, cambia la URL, cambia la ruta y **la copia
+    nueva se hace sola**. La vieja nunca se sirve por la nueva: la ruta pide la
+    copia de la URL **actual**.
+  - Lo que hay en una ruta es siempre la copia de esa URL: no hay un momento en
+    que el archivo sea uno y sus metadatos digan otro.
+  - Saber qué está copiado es **un listado** de la carpeta de la tienda, sin
+    leer metadatos objeto por objeto.
+- **Nada se pisa ni se borra.** La subida va sin `upsert`: una copia buena no
+  se reemplaza nunca (después del cierre no habría con qué reponerla). Una
+  versión vieja queda en el bucket (unos KB; pasa poco).
+
+### 39.3 El cron
+
+- **Cada hora, en el minuto 48** (`48 * * * *`), con `CRON_SECRET`. Lee las
+  filas del espejo `shopify_product_images` (0164) con foto, lista la carpeta
+  de cada tienda y copia **solo lo que falta**: una pasada sobre lo ya copiado
+  es la lectura del espejo, asegurar el bucket (crearlo, que falla si ya está,
+  y forzarlo privado, como `backup` y `label-cache`) y el listado de cada
+  tienda, sin ninguna descarga ni subida.
+- **El listado lee hasta una página vacía**, no hasta la primera corta: si
+  Storage devolviera menos por página de lo pedido, cortar ahí daría por
+  faltantes copias que están. Una carpeta de más de 50 páginas cuenta como
+  «no se pudo leer».
+- **Acotado.** No empieza una copia pasados **90 s**
+  (`PRODUCT_PHOTO_COPY_BUDGET_MS`), cuatro a la vez, cada descarga con 10 s
+  de tope y cada subida con 10 s (`PRODUCT_PHOTO_UPLOAD_TIMEOUT_MS`: storage-js
+  no deja cortarla, así que se deja de esperar y cuenta como `subida`); la ruta
+  tiene 120 s, más que 90 + 10 + 10, así que la línea de log siempre sale. Cada
+  página del listado tiene 5 s de tope, crear o forzar el bucket otros 5. Una
+  foto que el CDN declara de más de 8 MB ni se baja. Lo que no cupo sigue la
+  hora siguiente. Con
+  unas 330-390 fotos, la primera pasada en producción copia todo o casi; las
+  siguientes solo copian las fotos nuevas que trae el espejo diario (09:30
+  UTC).
+- **Todas las tiendas, también después del cierre**: a las que siguen en
+  Shopify la copia no les hace falta para elegir foto (39.5), pero la ruta la
+  sirve primero y queda lista si la tienda deja Shopify o se vacía su token; y
+  si el CDN de Kenku o Aurela todavía responde un rato, lo que faltaba se copia.
+- **Rojo (502) solo por Kapta:** si no se puede leer el espejo, la carpeta de
+  una tienda, o Storage rechaza una subida. Una foto que el CDN no da (`http_404`,
+  `red`, …) se cuenta en `fallidas` y `motivos` por tienda y se reintenta a la
+  hora siguiente, sin rojo.
+- **El log** es una línea `[product-photos] {…}` con conteos por tienda
+  (`filas`, `guardadas`, `copiadas`, `fallidas`, `pendientes`, `motivos`) y si
+  se acabó el tiempo (`agotado`): ni URLs ni títulos de producto.
+- **`?dry=1`** solo cuenta (`filas`, `guardadas`, `pendientes`), sin crear el
+  bucket, sin bajar ni subir nada; antes de la primera pasada dice
+  `sinBucket: true`. **`?storeId=<uuid>`**, solo esa tienda. Fuera de
+  producción solo corre con `?dry=1`.
+
+### 39.4 `/api/wa-image`
+
+Primero la copia guardada de la URL actual de la fila, con **3 s de tope**
+(`PRODUCT_PHOTO_DOWNLOAD_TIMEOUT_MS`): antes de la copia la ruta no tocaba
+Storage, y un Storage lento no puede comerse el tiempo en que Meta espera la
+foto. Sin copia (o con Storage sin responder a tiempo), la baja en vivo del CDN,
+como siempre. El id de la tienda se lee en minúsculas, como lo escribe la base:
+la carpeta distingue mayúsculas. Las mismas
+cabeceras en los dos casos (`image/jpeg`, su largo, `public, max-age=86400,
+s-maxage=604800`). Sigue sin ser un proxy abierto: recibe tienda y producto,
+y solo sirve filas del espejo con foto del CDN de Shopify.
+
+### 39.5 Quién elige foto, antes y después del cierre
+
+**Se decide por tienda** (`shopifyGoneForStore`, revisión del 23-10-2026), no
+por la fecha sola: las tiendas cliente siguen en Shopify (§35.10) y su CDN
+sigue sirviendo. Shopify **ya no sirve** las fotos de una tienda:
+
+- **sin token de Shopify, a cualquier hora**. Es la llave de la operación de
+  §35.10: si Shopify cerrara antes del 28-10, se vacía el token de la tienda y
+  desde ese momento solo valen las copias;
+- **desde el cierre** (28-10-2026 00:00 UTC, `isAfterShopifyShutdown`, sin
+  margen), **la tienda que pasa a WooCommerce** (§38: `platform =
+  'woocommerce'`, o su sitio ya guardado en `woo_site_url`): Kenku Perú y
+  Aurela;
+- si la fila de la tienda no se puede leer: antes del cierre, sí sirve (lo de
+  siempre); desde el cierre, no (solo copias, que el cron hace para todas).
+  Antes de la 0274 no hay columnas de WooCommerce y cuenta solo el token.
+
+Lo que pasa en cada caso:
+
+- **Mientras Shopify sirve a la tienda, nada cambia**, y ni se mira Storage:
+  los envíos eligen foto como siempre y la ruta baja en vivo lo que todavía no
+  está copiado. Eso vale para Kenku y Aurela antes del cierre y para las
+  tiendas cliente siempre: quitar o cambiar una foto en su Shopify se ve como
+  siempre.
+- **Cuando ya no**, una foto **sin copia guardada para su URL actual cuenta
+  como «sin foto»** (`productPhotosThatLoad`), y cada uso hace exactamente lo
+  que ya hacía con un producto sin foto:
+  - el recordatorio de recojo (§12) sale con la **imagen de respaldo** de la
+    tienda; sin respaldo, no sale;
+  - el recordatorio de reposición (§34) **no sale**, ni a la clienta ni al
+    grupo de control; Ajustes muestra el producto sin foto;
+  - la prueba de carritos (0233) deja ese carrito **fuera de la prueba, antes
+    del sorteo**, y sale el mensaje 1 de siempre;
+  - la tarjeta del siguiente lead se queda **sin foto**.
+- **Si Storage no contesta** (o se pasa de su tope), no se sabe qué fotos
+  cargan: nunca se manda una cabecera que no va a cargar, pero tampoco se da
+  por «sin foto» lo que puede estar copiado:
+  - el recordatorio de recojo sale con el respaldo si la tienda lo tiene; sin
+    respaldo, **se reintenta** (como cualquier falla pasajera, hasta
+    `TRANSIT_MAX_ATTEMPTS`) en vez de quedar omitido. Lo mismo si la base no
+    deja leer el espejo;
+  - la pasada del recordatorio de reposición de esa tienda **se corta** con el
+    error en el reporte, como cuando la base no contesta; la próxima vuelve a
+    mirar;
+  - el carrito queda fuera de la prueba (mensaje 1 de siempre), la tarjeta y
+    Ajustes, sin foto.
+- Antes del cierre, el envío lee la fila de la tienda (una lectura por tienda
+  y pasada) y nada de Storage.
+
+### 39.6 El espejo diario no borra ni vacía
+
+`/api/cron/shopify-product-images` (lib/shopify-product-images.ts) **nunca
+borra una fila**:
+
+- un lote que Shopify no contesta —un error HTTP, como el 402, 404 o 423 de una
+  tienda cerrada, un 401 o un 5xx, o un error de GraphQL aunque traiga datos a
+  medias— no escribe nada;
+- un producto que no vuelve (borrado del catálogo) no se toca;
+- una tienda sin token ni se pregunta. El token de Kenku y Aurela se vacía en
+  cuanto Shopify deje de contestar (§35.10, DEPLOY.md): desde entonces el
+  espejo de esas tiendas queda como estaba.
+- **En Kenku y Aurela, desde el cierre** (la misma regla de 39.5), **una fila
+  con foto conserva la que tenía**: una respuesta sin foto no la vacía y **otra
+  URL tampoco la reemplaza** (una tienda que se apaga puede contestar con otro
+  `?v=`; la copia guardada es la de la URL que estaba y la nueva ya no se puede
+  bajar). La misma URL se vuelve a escribir. Lo que no se escribe se cuenta en
+  `conservados`; si no se puede comprobar qué había, no se escribe nada de ese
+  lote. Antes del cierre, y siempre en una tienda cliente, quitar o cambiar la
+  foto de un producto en Shopify la cambia en el espejo, como siempre.
+
+### 39.7 Lo que no cubre
+
+- Una foto que no llegó a copiarse antes de que el CDN se apague: ese producto
+  queda «sin foto» (39.5). Por eso se revisa antes del 27-10 que `pendientes`
+  sea 0 (DEPLOY.md).
+- Kenku o Aurela, desde el cierre, con el token puesto y **sin** WooCommerce
+  conectado: para la regla siguen en Shopify y una foto sin copia se sigue
+  eligiendo. El corte del 27-10 conecta WooCommerce o vacía el token
+  (DEPLOY.md); cualquiera de los dos basta.
+- Un producto que el espejo no tiene (ningún pedido de los últimos 180 días lo
+  cita): no tenía foto antes y no la tiene ahora.
+- Un producto de WooCommerce sin igual en el catálogo de Shopify (título
+  distinto, o nuevo): no hay espejo de WooCommerce todavía.
+- Las miniaturas del desglose de productos del Master y de Envíos
+  (`productImagesFor`) siguen apuntando a la URL del CDN: no pasan por
+  `/api/wa-image` ni por esta copia.
+
+### 39.8 Implementación
+
+- `lib/product-photos.ts`: el bucket (`PRODUCT_PHOTO_BUCKET`), la ruta
+  (`productPhotoPath`, `photoSourceTag`), qué se puede copiar
+  (`isCopyableProductPhoto`), la lectura (`storedPhotoNames`,
+  `readStoredPhoto`, con `PRODUCT_PHOTO_LIST_TIMEOUT_MS` y
+  `PRODUCT_PHOTO_DOWNLOAD_TIMEOUT_MS`) y la regla de 39.5
+  (`shopifyGoneForStore`, `productPhotosThatLoad`, con
+  `isAfterShopifyShutdown` de `lib/invoicing/shopify-cutoff.ts`).
+- `lib/product-photos-copy.ts`: la conversión (`toWhatsappJpeg`), la descarga
+  (`fetchProductPhotoJpeg`) y la pasada (`copyProductPhotos`, con
+  `PRODUCT_PHOTO_COPY_BUDGET_MS`, `PRODUCT_PHOTO_UPLOAD_TIMEOUT_MS` y
+  `PRODUCT_PHOTO_COPY_MAX_DURATION_S`).
+- `app/api/cron/product-photos/route.ts` (`maxDuration` 120, `CRON_SECRET`); en
+  `vercel.json`, `48 * * * *`.
+- `app/api/wa-image/[storeId]/[file]/route.ts`: primero la copia.
+- Los usos: `lib/cart-sequence.ts`, `lib/restock-reminder.ts`,
+  `lib/shalom/transit-notify.ts` (`loadStoreCatalog`), `loadNextLeadCart` en
+  `app/dashboard/leads/actions.ts` y Ajustes
+  (`app/dashboard/[storeId]/settings/page.tsx`).
+- `lib/shopify-product-images.ts`: la guarda de 39.6 (`conservados`), con
+  `shopifyGoneForStore`.
+- Pruebas: `test/product-photos.test.ts`, `test/product-photos-cron.test.ts`,
+  `test/wa-image-route.test.ts`, `test/shopify-product-images.test.ts`,
+  `test/cart-image-test.test.ts`, `test/restock-reminder.test.ts`,
+  `test/pickup-reminder.test.ts` y `test/lead-next-cart-photo.test.ts`.
+
+### 38.17 Retirar una salida de Grupo GF que nunca salió (28-10-2026)
+
+El caso #AUR900064 mostraba «Anular pedido», pero la salida interna GF pendiente
+lo bloqueaba y no tenía botón de anulación. Se añade «Retirar y anular salida»
+en Salidas y guías para quien tiene orders.cancel_woo en la organización del pedido.
+No concede administración ni el permiso general de modificar estados.
+
+Solo grupo_gf_courier + propio + pendiente + custodia empresa, sin despacho,
+transferencia, retorno, reporte, «Lo llevo» (incluso histórico) ni parada. Una caja
+en custodia o cerrada bloquea. La comprobación final ocurre en un RPC de servicio
+(0284) que serializa con el cotejo y cierre de la caja. La UI exige motivo de
+5–500 caracteres y confirmar que el paquete sigue en almacén.
+
+En una transacción retira el ítem de la caja conservando sus cotejos y QR, cancela
+la solicitud logística y su programación vigente si no hay otra solicitud activa,
+y marca la salida anulada con route_output_cancelled y actor/motivo. La foto del
+programa queda en un evento; no se borra historial ni se reutiliza el consecutivo.
+No transfiere automáticamente los otros paquetes de la caja. Un fallo revierte
+todo; repetir una anulación completada no duplica eventos. La asignación de una
+salida GF anulada queda bloqueada en base, también ante un escaneo concurrente.
+
+Esto anula solo la salida: no cancela WooCommerce/Shopify, no devuelve stock, no
+registra retorno ni toca pagos o liquidaciones. Después la persona usa «Anular
+pedido» (WooCommerce) o «Anular venta de pedido histórico» (§38.16), sujeto a sus
+reglas. Las cajas que ya salieron siguen el circuito físico de Despacho y retorno.
+
+### 38.18 WooCommerce: venta terminada con retorno y stock pendientes (28-10-2026)
+
+Decisión del dueño: la venta puede terminar antes del retorno, sin otro intento
+de entrega. Se conserva el seguimiento de cada paquete y el stock solo se repone
+después de la recepción física y el reingreso apto confirmado por almacén.
+
+En Gestión manual aparece «Terminar venta · retorno pendiente» para un pedido
+WooCommerce con prueba de salida (despacho, transferencia o custodia fuera/devuelta).
+También cuenta una recepción GF `returned_to_office` de esa salida con actor y
+fuente despacho: recibirla para reprogramar borra los sellos operativos actuales,
+pero no el hecho de haber salido.
+Se reutiliza orders.cancel_woo de la organización objetivo y la autorización por
+sesión/RLS, sin ampliar roles. Motivo de la lista y texto de 5–500 caracteres,
+confirmación que nombra el pedido. Sin entrega, dinero, comprobantes pendientes
+ni caja compartida; las lecturas fallidas bloquean. La anulación directa de §38.15
+sigue para pedidos que nunca salieron.
+
+La transacción woo_end_sale_pending_return (0285) guarda el hecho inmutable
+woo_sale_ended_pending_return y una ficha única woo_sale_returns con las salidas
+despachadas, productos/cantidades, actor y motivo. Revalida entregas/pagos y bloquea las salidas mientras
+toma la foto. No cambia orders.cancelled_at, stock, dinero, guías, solicitudes ni
+liquidaciones. La venta queda Anulada en el Master y no admite nuevos envíos,
+escaneos de despacho ni arrastre GF a otro reparto. Un webhook, reporte o override
+logístico no reactiva esta venta. Corregir una venta terminada con stock pendiente
+exige revisión del dueño fuera de este flujo; no se ofrece reactivación automática.
+
+**Recepción anterior a terminar la venta (0286, 28-10-2026).** KP200152 ya había
+vuelto a oficina para reprogramar y quedaba bloqueado entre la anulación de venta
+y la de salida. La transacción incluye esa salida por su recepción histórica.
+Si sigue en custodia empresa, sin caja activa ni transferencia posterior a la
+recepción, la deja devuelta y cancela su solicitud GF con evento propio. Añade
+`return_received` enlazado al evento original, conservando su fecha y actor; el
+payload identifica a quien termina la venta. No sobrescribe la recepción ni el
+reporte del intento. Una repetición no duplica recepción ni venta terminada.
+Las salidas que siguen fuera mantienen su seguimiento. No se repone stock ni se
+cancela WooCommerce al terminar la venta: todavía se exige inventario apto de
+todas las salidas. Instalar 0286 no modifica pedidos existentes.
+
+WooCommerce conserva su estado actual hasta el retorno: su transición nativa a
+cancelled restaura el stock reducido y no debe enviarse mientras la caja está
+fuera. Esta separación no modifica plugins o acciones manuales externas a Kapta.
+La recepción GF mantiene el despacho y la parada histórica, retira el ítem y
+registra return_received; no devuelve el paquete a por asignar.
+La solicitud GF conserva su seguimiento hasta esa recepción; entonces queda
+cancelada con su propio evento, incluso si venía in_route, sin borrar el reporte.
+Las demás vías
+usan su recepción existente. Un returned_at o estado devuelto del courier no
+cuenta como recepción humana.
+
+Para reponer: todas las salidas de la foto deben seguir vinculadas al pedido y
+tener return_received con actor y source manual/dispatch, seguido por
+inventory_reconciled con actor de almacén. Falta de una caja, merma, otra salida
+despachada, pago/entrega posteriores, cambio de productos o cantidades en WooCommerce,
+vínculo corregido, custodia aún fuera de almacén o salida interna activa
+bloquean la reposición automática. No se repone parcialmente al llegar la primera
+caja ni se toma una merma por mercancía apta. Almacén confirma recepción e
+inventario con los permisos existentes. Las liquidaciones conservan su cierre
+independiente; reponer stock no liquida fletes.
+
+Confirmar «Reingreso a stock» intenta el cierre al momento. El cron
+/api/cron/woo-sale-returns (minutos 4,8,14,18,24,28,38,44,54,58 de cada hora,
+sin coincidir con los barridos existentes; dos expedientes por ejecución) recupera
+pendientes. Un turno de cinco minutos con token y SKIP LOCKED evita dos trabajos
+simultáneos y se recupera si el proceso muere. Se vuelven a comprobar las pruebas
+físicas, pagos, entregas y el estado vivo en WooCommerce antes de enviar cancelled.
+La respuesta se ingiere por el camino habitual. Si la cancelación se aplicó pero
+falló la respuesta o escritura local, el reintento relee la fuente; nunca suma
+stock mediante un PUT de cantidades ni repite una reposición manual.
+
+woo_sale_return_synced conserva la constancia del cierre. Los fallos se ven en
+Actividad y en la ficha de seguimiento y se reintentan a los cinco minutos.
+Mientras falta ese hecho, stock_woo_pendiente mantiene el expediente Por cerrar,
+aunque ya tenga retorno, inventario o un cierre manual anterior. La mercancía
+puede estar recibida mientras la sincronización de Woo sigue pendiente; la UI
+no dice que la fuente confirmó el stock hasta recibir su cancelación.
+
+Instalar la 0285 no termina ventas ni repone stock. Pruebas: woo-sale-return*.test.ts
+y scripts/sql/woo_sale_return_smoke.sql (flujo GF, fuente intacta, permisos,
+idempotencia, prueba de recepción/inventario y turno recuperable).

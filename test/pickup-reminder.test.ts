@@ -37,6 +37,7 @@ import {
   type ReminderCandidate,
 } from "@/lib/shalom/pickup-reminder";
 import { firstProductWithImage } from "@/lib/cart-image-test";
+import { productPhotoName } from "@/lib/product-photos";
 import { buildStoreUpdate } from "@/lib/store-settings";
 
 const DAY = 24 * 3600 * 1000;
@@ -661,6 +662,125 @@ function enqueueTables(over: Record<string, any[]> = {}) {
   };
 }
 const NOW_ENQ = "2026-10-11T15:00:00Z";
+
+describe("processTransitNotifications desde el cierre de Shopify (MOM §39)", () => {
+  // Las mismas tablas corridas 38 días: la guía llega el 26-10 y el recordatorio
+  // sale el 29-10, con el CDN de Shopify de Kenku y Aurela ya apagado.
+  const SHIFT = Date.parse("2026-10-26T15:00:00Z") - Date.parse(LLEGADA);
+  const shift = <T,>(v: T): T =>
+    JSON.parse(JSON.stringify(v), (_k, x) =>
+      typeof x === "string" && /^2026-\d\d-\d\dT[\d:.]+Z$/.test(x) ? new Date(Date.parse(x) + SHIFT).toISOString() : x,
+    );
+  const DESPUES = shift(NOW);
+  const ZAPATILLA = "https://cdn.shopify.com/s/files/zapatilla.webp";
+  // La fila de la tienda que mira `shopifyGoneForStore`: Kenku, con token de
+  // Shopify y WooCommerce conectado (MOM §38); y una tienda cliente.
+  const KENKU = { id: "store", shopify_token_enc: "enc:token", platform: "shopify", woo_site_url: "https://kenku.pe" };
+  const CLIENTE = { ...KENKU, woo_site_url: null };
+  const conBucket = (admin: any, stored: string[] | "caido") => {
+    admin.listed = [] as string[];
+    admin.storage = {
+      from: () => ({
+        list: async (prefix: string, o: { offset: number }) => {
+          admin.listed.push(prefix);
+          if (stored === "caido") return { data: null, error: { message: "storage caído" } };
+          return { data: o.offset ? [] : stored.map((name) => ({ name, id: name })), error: null };
+        },
+      }),
+    };
+    return admin;
+  };
+  const tablas = (tienda: Record<string, unknown> = KENKU) => ({ ...shift(sendTables()), stores: [tienda] });
+
+  it("con la copia guardada, la cabecera sigue siendo la foto del producto", async () => {
+    expect(Date.parse(DESPUES)).toBeGreaterThan(Date.parse("2026-10-28T00:00:00Z"));
+    const admin = conBucket(memoryAdmin(tablas()), [productPhotoName("111", ZAPATILLA)]);
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.R" });
+    const report = await processTransitNotifications(admin, { nowIso: DESPUES, sendTemplate: send, loadCreds: async () => ON, siteUrl: "https://kapta.test" });
+    expect(report).toMatchObject({ sent: 1, skipped: 0 });
+    expect(send.mock.calls[0]![1].headerImage).toEqual({ link: "https://kapta.test/api/wa-image/store/111.jpg" });
+    expect(admin.listed[0]).toBe("store");
+  });
+
+  it("una tienda cliente sigue en Shopify: desde el cierre, la foto del espejo sin mirar Storage", async () => {
+    const admin = conBucket(memoryAdmin(tablas(CLIENTE)), []);
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.R" });
+    await processTransitNotifications(admin, { nowIso: DESPUES, sendTemplate: send, loadCreds: async () => ON, siteUrl: "https://kapta.test" });
+    expect(send.mock.calls[0]![1].headerImage).toEqual({ link: "https://kapta.test/api/wa-image/store/111.jpg" });
+    expect(admin.listed).toEqual([]);
+  });
+
+  it("si Storage no contesta y no hay respaldo, se reintenta: no queda omitido para siempre", async () => {
+    const admin = conBucket(memoryAdmin(tablas()), "caido");
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, { nowIso: DESPUES, sendTemplate: send, loadCreds: async () => ON, siteUrl: "https://kapta.test" });
+    expect(report).toMatchObject({ sent: 0, skipped: 0, deferred: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(admin.updates.at(-1)!.patch).toMatchObject({ status: "pending", attempts: 1 });
+    expect(admin.updates.at(-1)!.patch.error).toMatch(/no se pudo leer el catálogo de fotos/);
+  });
+
+  it("si Storage no contesta pero hay respaldo, sale con el respaldo, como siempre", async () => {
+    const admin = conBucket(memoryAdmin(tablas()), "caido");
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.R" });
+    await processTransitNotifications(admin, {
+      nowIso: DESPUES,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...ON, shalom_reminder_fallback_image_url: "https://cdn.test/kenku.jpg" }),
+      siteUrl: "https://kapta.test",
+    });
+    expect(send.mock.calls[0]![1].headerImage).toEqual({ link: "https://cdn.test/kenku.jpg" });
+  });
+
+  it("si el espejo no se puede leer y no hay respaldo, también se reintenta (antes del cierre)", async () => {
+    const admin = memoryAdmin(sendTables(), { failOn: "shopify_product_images" });
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, { nowIso: NOW, sendTemplate: send, loadCreds: async () => ON, siteUrl: "https://kapta.test" });
+    expect(report).toMatchObject({ sent: 0, skipped: 0, deferred: 1 });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("sin copia, sale con la imagen de respaldo de la tienda, igual que un producto sin foto", async () => {
+    const admin = conBucket(memoryAdmin(tablas()), []);
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.R" });
+    await processTransitNotifications(admin, {
+      nowIso: DESPUES,
+      sendTemplate: send,
+      loadCreds: async () => ({ ...ON, shalom_reminder_fallback_image_url: "https://cdn.test/kenku.jpg" }),
+      siteUrl: "https://kapta.test",
+    });
+    expect(send.mock.calls[0]![1].headerImage).toEqual({ link: "https://cdn.test/kenku.jpg" });
+    expect(admin.inserts.at(-1)!.row.note).toMatch(/con la imagen de respaldo\.$/);
+  });
+
+  it("un pedido de WooCommerce casa por el título con la copia guardada", async () => {
+    const t = shift(sendTables());
+    // El id de WooCommerce no es el de Shopify (y llega en texto, como lo guarda
+    // lib/woocommerce.ts): casa por el título del catálogo.
+    (t.orders[0] as any).line_items = [{ product_id: "1532", title: "Zapatilla Runner", quantity: 1 }];
+    const admin = conBucket(memoryAdmin({ ...t, stores: [KENKU] }), [productPhotoName("111", ZAPATILLA)]);
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.R" });
+    await processTransitNotifications(admin, { nowIso: DESPUES, sendTemplate: send, loadCreds: async () => ON, siteUrl: "https://kapta.test" });
+    expect(send.mock.calls[0]![1].headerImage).toEqual({ link: "https://kapta.test/api/wa-image/store/111.jpg" });
+  });
+
+  it("sin copia ni respaldo NO se manda", async () => {
+    const admin = conBucket(memoryAdmin(tablas()), []);
+    const send = vi.fn();
+    const report = await processTransitNotifications(admin, { nowIso: DESPUES, sendTemplate: send, loadCreds: async () => ON, siteUrl: "https://kapta.test" });
+    expect(report).toMatchObject({ sent: 0, skipped: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(admin.updates.at(-1)!.patch.error).toMatch(/sin foto del producto ni imagen de respaldo/);
+  });
+
+  it("antes del cierre no mira Storage: la foto del espejo sale como siempre", async () => {
+    const admin = conBucket(memoryAdmin({ ...sendTables(), stores: [KENKU] }), []);
+    const send = vi.fn().mockResolvedValue({ ok: true, id: "wamid.R" });
+    await processTransitNotifications(admin, { nowIso: NOW, sendTemplate: send, loadCreds: async () => ON, siteUrl: "https://kapta.test" });
+    expect(send.mock.calls[0]![1].headerImage).toEqual({ link: "https://kapta.test/api/wa-image/store/111.jpg" });
+    expect(admin.listed).toEqual([]);
+  });
+});
 
 describe("enqueueDueReminders", () => {
   it("encola solo lo que toca, el más avanzado, y dice por qué no el resto", async () => {

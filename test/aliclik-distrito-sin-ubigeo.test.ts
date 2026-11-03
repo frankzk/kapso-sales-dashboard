@@ -76,7 +76,8 @@ describe("el aviso dice la causa y descarta la pista falsa", () => {
 
 describe("la cotización deja de nombrar el almacén cuando el problema es el distrito", () => {
   const src = readFileSync(
-    resolve(process.cwd(), "app/dashboard/pedidos/aliclik-actions.ts"),
+    // Cotizar y crear viven en el núcleo compartido desde el 16-10-2026.
+    resolve(process.cwd(), "lib/aliclik-guide.ts"),
     "utf8",
   );
 

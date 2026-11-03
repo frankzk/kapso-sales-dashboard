@@ -54,7 +54,10 @@ describe("cómo se suman", () => {
     const asesora = permissionsFor(["vendedora"], [], ["asesora"]);
     expect(asesora.has("repro_lima.manage")).toBe(true);
     expect(asesora.has("dispatch.manage")).toBe(false);
-    expect(permissionsFor(["vendedora"], [], ["despacho"]).has("repro_lima.manage")).toBe(true);
+    // Desde el 01-11-2026 solo llama la tienda: «Despacho y Grupo GF» ya no la trae.
+    expect(permissionsFor(["vendedora"], [], ["despacho"]).has("repro_lima.manage")).toBe(false);
+    expect(permissionsFor(["vendedora"], [], ["despacho"]).has("dispatch.manage")).toBe(true);
+    expect(permissionsFor(["vendedora"], [], ["despacho", "asesora"]).has("repro_lima.manage")).toBe(true);
     for (const role of ["owner", "admin", "vendedora"]) expect(permissionsFor([role]).has("repro_lima.manage")).toBe(true);
     for (const role of ["almacen", "liquidaciones", "cobranza"]) expect(permissionsFor(["vendedora"], [], [role]).has("repro_lima.manage")).toBe(false);
     expect(permissionsFor(["viewer"]).has("repro_lima.manage")).toBe(false);
@@ -76,11 +79,13 @@ describe("cómo se suman", () => {
 });
 
 describe("lo que ningún rol puede traer", () => {
-  it("los permisos de dinero o datos que da el dueño uno por uno, ni reembolsos", () => {
+  it("los permisos de dinero o datos que da el dueño uno por uno, ni reembolsos, ni el estado a mano", () => {
     const forbidden = new Set<string>([
       ...GRANTED_ONE_BY_ONE.filter((entry) => entry.ownerOnly).map((entry) => entry.permission),
       "closure.refund",
       "shalom.validate_payment",
+      // Cambiar el estado a mano es del acceso admin (15-10-2026, MOM §16).
+      "master.set_status",
     ]);
     for (const entry of FUNCTIONAL_ROLES) {
       for (const perm of entry.permissions) expect(forbidden.has(perm), `${entry.role} trae ${perm}`).toBe(false);
@@ -142,6 +147,7 @@ describe("el menú", () => {
       "/dashboard/leads/anuncios",
       "/dashboard/productividad",
       "/dashboard/stores",
+      "/dashboard/stores/historial",
       "/dashboard/costos",
       "/dashboard/courier",
       "/dashboard/urpi",
@@ -152,7 +158,7 @@ describe("el menú", () => {
   });
 
   it("Supervisión entra al panel completo y ve solo lo suyo", () => {
-    const items = navItems(false, false, false, { reports: true, catalog: false, mapAds: false, stores: false, costs: false, team: false });
+    const items = navItems(false, false, false, { reports: true, catalog: false, mapAds: false, stores: false, costs: false, team: false, history: false });
     expect(hrefs(items)).toEqual([
       "/dashboard",
       "/dashboard/leads",

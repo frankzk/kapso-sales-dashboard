@@ -1,4 +1,4 @@
-type Stage = "authorize" | "db.lead" | "db.credentials" | "db.history" | "db.outbox" | "db.labels" | "db.cart" | "permissions"
+type Stage = "authorize" | "db.lead" | "db.credentials" | "db.history" | "db.carts" | "db.outbox" | "db.labels" | "db.cart" | "permissions"
   | "shopify.history" | "kapso.discovery" | "kapso.transcript" | "kapso.older" | "kapso.http" | "shopify.http";
 type Timing = { count: number; totalMs: number; maxMs: number; failures: number };
 

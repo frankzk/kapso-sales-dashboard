@@ -144,6 +144,9 @@ export function photoHref(path: string): string {
 
 /** El fallo en una línea (§11.7); en `crit-fg` si lo rechazó en la puerta. */
 export function FailureLine({ row, className }: { row: ReproRow; className?: string }) {
+  if (row.attentionContext === "pending") {
+    return <p className={cn("text-[13px] leading-5 text-ink-700", className)}>Programación y seguimiento de entrega: confirma con el cliente la fecha y el courier.</p>;
+  }
   if (!row.failure) {
     return <p className={cn("text-[13px] leading-5 text-ink-500", className)}>Sin «No entregado» registrado: revisa la ficha.</p>;
   }
@@ -195,7 +198,7 @@ const CHIP_TONE: Record<ReproChipKey, BadgeTone> = {
   acuerdo_vencido: "warn",
   programado_gf_sin_acuerdo: "info",
   programado_acuerdo_anterior: "warn",
-  fecha_motorizado: "warn",
+  acordado_puerta: "info",
   pidio: "info",
 };
 
@@ -209,7 +212,7 @@ export function ReproRowChips({ row, today }: { row: ReproRow; today: string }) 
   if (row.list === "cerrados" && row.closed) {
     const day = limaStamp(row.closed.at, today);
     chips.push({ key: "cerrado", tone: "neutral", text: `Desarmar y cerrar${row.closed.byName ? ` · ${row.closed.byName}` : ""}${day ? ` · ${day}` : ""}` });
-    chips.push({ key: "anula", tone: "neutral", text: "Espera que Shopify anule la venta" });
+    chips.push({ key: "anula", tone: "neutral", text: "Espera que la tienda anule la venta" });
   }
   if (row.agreement && row.state.kind !== "sin_acuerdo") {
     chips.push({ key: "estado", tone: stateTone(row.state.kind), text: row.stateLabel });
@@ -978,7 +981,7 @@ export function ReproLimaSheet({
             <dt className="text-ink-500">Pidió</dt>
             <dd className="text-ink-900">
               {current.requestedDate
-                ? `${programDayLabel(current.requestedDate)} · ${current.requestedDate < today ? "ya pasó" : "sin confirmar"}`
+                ? `${programDayLabel(current.requestedDate)} · ${current.requestedDate < today ? "ya pasó" : "acordado en la puerta"}`
                 : "No consta una fecha pedida"}
             </dd>
             <dt className="text-ink-500">Salidas</dt>
@@ -1082,7 +1085,7 @@ export function ReproLimaSheet({
             </p>
             {current.closed.note && <p className="text-[13px] text-ink-700">«{current.closed.note}»</p>}
             <p className="text-[13px] text-ink-500">
-              Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo Shopify la anula.
+              Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo la tienda la anula.
             </p>
           </Section>
         )}
@@ -1327,7 +1330,7 @@ export function ReproLimaSheet({
           )}
           {mine && confirmClose && destructive && !blocker && (
             <Banner tone="warn" role="alert" title="Almacén desarma la caja cuando esté en oficina">
-              <p>No anula la venta: solo Shopify la anula.</p>
+              <p>No anula la venta: solo la tienda la anula.</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <OpsButton size="sm" variant="danger" disabled={pending} className="whitespace-normal pointer-coarse:h-11" onClick={() => save(hasNext)}>
                   Sí, desarmar y cerrar {current.orderName}

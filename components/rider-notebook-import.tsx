@@ -46,11 +46,12 @@ const SHEET_MAX_SIDE = 2400;
 const MATCH: Record<MatchKind, { label: string; tone: BadgeTone }> = {
   pendiente: { label: "Pendiente", tone: "info" },
   reportada: { label: "Ya reportada", tone: "neutral" },
-  arrastre: { label: "Pasa a esta ruta", tone: "brand" },
+  arrastre: { label: "Añadir a esta ruta", tone: "brand" },
   anulado: { label: "Anulado", tone: "crit" },
   otra_caja: { label: "No está en la caja", tone: "warn" },
   no_existe: { label: "No existe", tone: "warn" },
   sin_codigo: { label: "Sin código", tone: "warn" },
+  ambiguo: { label: "Código ambiguo", tone: "warn" },
 };
 
 type ReadResponse = {
@@ -224,7 +225,7 @@ export function RiderNotebookImport({ routeId, riderName, routeDate, onApplied }
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink-900">¿{riderName} no usa la app?</p>
-            <p className="text-[13px] leading-5 text-ink-500">Sube las fotos de su hoja del día: Kapta la lee, la cruza con esta ruta y te propone qué cargar.</p>
+            <p className="text-[13px] leading-5 text-ink-500">Sube su hoja: revisa los resultados y añade los pedidos que conserva de rutas anteriores en una sola carga.</p>
           </div>
           <OpsButton variant="secondary" onClick={() => setOpen(true)}>
             <IconImage /> Cargar hoja
@@ -241,7 +242,7 @@ export function RiderNotebookImport({ routeId, riderName, routeDate, onApplied }
         id="hoja-motorizado"
         title={`Hoja de ${riderName}`}
         badge={<Badge tone="brand">Sin app</Badge>}
-        help="Cada fila se carga como reporte del cuaderno: sin foto y con tu nombre en la actividad del pedido. Solo entra lo que está en su caja y los reprogramados que él conserva (§29.7)."
+        help="Revisa qué pasó y cuánto cobró. Al aplicar, también se añaden los pedidos identificados que conserva en cajas anteriores. La hoja y tu nombre quedan en el historial."
         aside={!busy && (
           <OpsButton variant="ghost" size="sm" onClick={() => { reset(); setOpen(false); }}>
             <IconX /> Cerrar
@@ -321,7 +322,7 @@ export function RiderNotebookImport({ routeId, riderName, routeDate, onApplied }
               <span>
                 Se carga: efectivo <b className="text-ink-900">{money(totals.loadCash)}</b> · POS {money(totals.loadPos)} · Yape {money(totals.loadYape)}
               </span>
-              {totals.notLoadedAmount > 0 && <span>Fuera de la ruta: {money(totals.notLoadedAmount)}</span>}
+              {totals.notLoadedAmount > 0 && <span>Sin cargar: {money(totals.notLoadedAmount)}</span>}
               <span className="flex gap-2">
                 {read.photos.map((p, i) => (
                   <a key={p} href={`/api/courier/notebook/photo?path=${encodeURIComponent(p)}`} target="_blank" rel="noreferrer" className="text-brand-700 underline">
@@ -471,7 +472,7 @@ export function RiderNotebookImport({ routeId, riderName, routeDate, onApplied }
               {invalid.length > 0 && <span className="text-[13px] text-crit-fg">{invalid.length} {invalid.length === 1 ? "fila marcada no dice" : "filas marcadas no dicen"} qué pasó o cuánto cobró.</span>}
               {toApply.some((r) => r.action === "pasar_y_reportar") && (
                 <span className="text-[13px] text-ink-500">
-                  {toApply.filter((r) => r.action === "pasar_y_reportar").length} reprogramado(s) pasan a la ruta del {ddmm(read.target.routeDate)}, ya cotejados.
+                  {toApply.filter((r) => r.action === "pasar_y_reportar").length} pedido(s) se añaden y reportan en esta misma carga, en la ruta del {ddmm(read.target.routeDate)}.
                 </span>
               )}
             </div>
@@ -482,7 +483,7 @@ export function RiderNotebookImport({ routeId, riderName, routeDate, onApplied }
           <div className="space-y-3">
             <Banner tone={applied.failed ? "warn" : "ok"} title={applied.failed ? "Hoja aplicada con pendientes" : "Hoja aplicada"}>
               {applied.reported} {applied.reported === 1 ? "parada reportada" : "paradas reportadas"}
-              {applied.carried ? `, ${applied.carried} ${applied.carried === 1 ? "reprogramado pasó" : "reprogramados pasaron"} a esta ruta` : ""}
+              {applied.carried ? `, ${applied.carried} ${applied.carried === 1 ? "pedido añadido" : "pedidos añadidos"} a esta ruta` : ""}
               {applied.skipped ? ` · ${applied.skipped} sin cargar` : ""}. Revisa abajo el efectivo y la ganancia antes de terminar la ruta.
             </Banner>
             {applied.rows.filter((r) => !r.ok).length > 0 && (

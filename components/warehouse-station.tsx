@@ -9,6 +9,7 @@ import { IconCamera, IconSearch } from "@/components/icons";
 import { markShipmentReady, type DispatchActionResult } from "@/app/dashboard/pedidos/despacho/actions";
 import { loadWarehouseStation } from "@/app/dashboard/pedidos/almacen/actions";
 import { WarehouseRetries, retryScanHint, type RetryScanHint } from "@/components/warehouse-retries";
+import { WarehouseSwayp, WarehouseSwaypCell, swaypHeaderLinkText, swaypLiveZone } from "@/components/warehouse-swayp";
 import { OPERATION_LABELS } from "@/lib/dispatch-routing";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import {
@@ -38,6 +39,16 @@ import {
   type WarehouseHandoffRow,
   type WarehouseRetriesData,
 } from "@/lib/warehouse-retries";
+import {
+  SWAYP_ERROR,
+  SWAYP_LIMA_PANEL_ZERO,
+  applySwaypScan,
+  emptyWarehouseSwayp,
+  swaypArmedChip,
+  swaypHintAfterScan,
+  type SwaypScanHint,
+  type WarehouseSwaypData,
+} from "@/lib/warehouse-swayp";
 import type { StoreSummary } from "@/lib/types";
 
 /**
@@ -54,6 +65,16 @@ import type { StoreSummary } from "@/lib/types";
  * con cada escaneo; el escáner es el mismo y, si la caja es de un reintento
  * listado, dice qué hacer con ella. Se lee aquí, después de montar: la página
  * no la lee al pintar en servidor (ver `refreshRetries`).
+ *
+ * Entre las dos, «Swayp por salir · Lima» (fase 1, owner 03-11-2026): las
+ * guías Swayp de Lima y Callao del próximo día de despacho y de hoy, que nacen
+ * `en_ruta` y por eso nunca pasan por «Por armar». Tampoco suman en esta cola
+ * ni en el número de Lima de «Por empacar» (R9): llevan su propia celda en ese
+ * marco y su propio apartado. Se lee igual, por GET después de montar; el
+ * escaneo no la relee: mueve la salida a armada en la copia local y dice, con
+ * lo cargado, cuántas faltan del lote. Solo relee una vez antes de decir que
+ * una caja Swayp no es de ningún lote, o si lo cargado es de otro día (ver
+ * `executeScan` y `swaypHintAfterScan`).
  */
 
 /**
@@ -67,9 +88,18 @@ async function fetchWarehouseRetries(): Promise<WarehouseRetriesData> {
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as WarehouseRetriesData;
 }
+
+/** «Swayp por salir» por GET (`/api/almacen/swayp`), por lo mismo que los reintentos. */
+async function fetchWarehouseSwayp(): Promise<WarehouseSwaypData> {
+  const response = await fetch("/api/almacen/swayp", { cache: "no-store", credentials: "same-origin" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as WarehouseSwaypData;
+}
+
 export function WarehouseStation({
   initialData,
   initialRetries,
+  initialSwayp,
   stores,
 }: {
   initialData: WarehouseStationData;
@@ -78,6 +108,8 @@ export function WarehouseStation({
    * datos). La página no los pasa: sin ellos, se leen después de montar.
    */
   initialRetries?: WarehouseRetriesData;
+  /** «Swayp por salir» ya leído, igual que `initialRetries`: solo las pruebas. */
+  initialSwayp?: WarehouseSwaypData;
   stores: StoreSummary[];
 }) {
   const [data, setData] = useState(initialData);
@@ -86,14 +118,61 @@ export function WarehouseStation({
   // Marca síncrona de la lectura en curso (ver `refreshRetries`).
   const retriesInFlight = useRef(false);
   const [retryHint, setRetryHint] = useState<RetryScanHint | null>(null);
+  const [swayp, setSwayp] = useState<WarehouseSwaypData | null>(initialSwayp ?? null);
+  const [swaypBusy, setSwaypBusy] = useState(false);
+  // La última relectura falló y se sigue viendo la anterior (ver `refreshSwayp`).
+  const [swaypStale, setSwaypStale] = useState(false);
+  const swaypInFlight = useRef(false);
+  // Escaneos de Swayp hechos aquí: una lectura que salió antes puede no traerlos.
+  const swaypScans = useRef<{ id: string; at: string }[]>([]);
+  const [swaypHint, setSwaypHint] = useState<SwaypScanHint | null>(null);
   const [scan, setScan] = useState("");
   const [query, setQuery] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: "ok" | "info" | "error"; text: string } | null>(null);
+  // El aviso Swayp llega después del primero y puede esperar una relectura: el
+  // de un escaneo anterior no pisa al del siguiente.
+  const scanSeq = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const storeName = useMemo(() => new Map(stores.map((store) => [store.id, store.name])), [stores]);
+
+  /**
+   * Relee «Swayp por salir» y devuelve lo que quedó en pantalla, o null si no
+   * se pudo (o ya había una lectura en curso).
+   */
+  const refreshSwayp = useCallback(async (): Promise<WarehouseSwaypData | null> => {
+    // Una sola lectura a la vez, con la marca puesta antes de esperar (como
+    // `refreshRetries`).
+    if (swaypInFlight.current) return null;
+    swaypInFlight.current = true;
+    setSwaypBusy(true);
+    const startedAt = new Date().toISOString();
+    try {
+      const fresh = await fetchWarehouseSwayp();
+      if (fresh.error) throw new Error(fresh.error);
+      // Un escaneo de esta pantalla posterior a la salida de la lectura puede no
+      // venir en ella: se vuelve a aplicar (sobre una que ya está armada, no hace
+      // nada). Los anteriores ya los trae el servidor.
+      const recent = swaypScans.current.filter((scanned) => scanned.at >= startedAt);
+      swaypScans.current = recent;
+      const lot = recent.reduce((current, scanned) => applySwaypScan(current, scanned.id, scanned.at), fresh);
+      setSwayp(lot);
+      setSwaypStale(false);
+      return lot;
+    } catch {
+      // Sin red, sin sesión o la lectura falló: si ya hay un lote en pantalla se
+      // sigue viendo, con su hora y el aviso (a las 20:30 el turno trabaja con
+      // él); sin lote, el aviso de error. La estación sigue funcionando.
+      setSwayp((prev) => (prev && !prev.error ? prev : emptyWarehouseSwayp({ nowIso: new Date().toISOString(), error: SWAYP_ERROR })));
+      setSwaypStale(true);
+      return null;
+    } finally {
+      swaypInFlight.current = false;
+      setSwaypBusy(false);
+    }
+  }, []);
 
   const executeScan = useCallback(async (raw: string) => {
     const value = raw.trim();
@@ -101,16 +180,38 @@ export function WarehouseStation({
     setBusy(true);
     setMessage(null);
     setRetryHint(null);
+    setSwaypHint(null);
+    const seq = ++scanSeq.current;
     const result: DispatchActionResult = await markShipmentReady(value);
     setMessage({ tone: result.error ? "error" : "ok", text: result.error ?? result.notice ?? "Listo." });
     // Si la caja es de un reintento listado, se dice qué hacer con ella. Solo
     // se busca en lo que ya está en pantalla: el escaneo no relee los reintentos.
     setRetryHint(retryScanHint(retries, result.shipment?.order_id));
+    // «Swayp por salir» (R10): la salida armada pasa a «Armadas» en la copia
+    // local con la hora del escaneo, sin releer, y el segundo aviso sale del
+    // lote cargado (vale antes o después de moverla). Solo antes de decir que
+    // una caja Swayp no es de ningún lote, o con un lote de otro día, se relee
+    // una vez por GET, que no entra en la fila de acciones ni frena el escáner.
+    const scanned = result.error ? null : result.shipment ?? null;
+    if (scanned?.courier === "fenix") {
+      const at = new Date().toISOString();
+      swaypScans.current = [...swaypScans.current, { id: scanned.id, at }];
+      setSwayp((prev) => (prev ? applySwaypScan(prev, scanned.id, at) : prev));
+    }
+    void swaypHintAfterScan(swayp, scanned, { now: new Date(), reread: refreshSwayp }).then((hint) => {
+      if (scanSeq.current !== seq) return;
+      setSwaypHint(hint);
+      // El primero no puede quedar en verde si el segundo dice que esa caja no
+      // va con el lote (el rótulo viejo, una que salió, una de otro día).
+      if (hint && (hint.tone === "warn" || hint.tone === "crit")) {
+        setMessage((current) => (current?.tone === "ok" ? { ...current, tone: "info" } : current));
+      }
+    });
     setScan("");
     setData(await loadWarehouseStation());
     setBusy(false);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [busy, retries]);
+  }, [busy, retries, swayp, refreshSwayp]);
 
   const refreshRetries = useCallback(async () => {
     // Una sola lectura a la vez. Al volver a la pestaña llegan `visibilitychange`
@@ -140,6 +241,11 @@ export function WarehouseStation({
   useEffect(() => {
     if (!retries) void refreshRetries();
   }, [retries, refreshRetries]);
+
+  // «Swayp por salir», por lo mismo: después de montar, nunca en servidor.
+  useEffect(() => {
+    if (!swayp) void refreshSwayp();
+  }, [swayp, refreshSwayp]);
 
   // La chapa de «Por armar» de un pedido cuyo reintento ya tiene su salida nueva.
   const handoffByOrder = useMemo(
@@ -176,6 +282,11 @@ export function WarehouseStation({
     return () => clearInterval(id);
   }, []);
   const shift = useMemo(() => (now ? warehouseShiftStatus(now) : null), [now]);
+  // El lote del próximo día de despacho con el tono a la hora de este equipo.
+  const swaypNext = useMemo(() => (swayp && !swayp.error ? swaypLiveZone(swayp.proximo, now) : null), [swayp, now]);
+  // La celda Swayp va al final del marco y ocupa lo que sobra de la última fila:
+  // con «Sin clasificar» son cinco celdas y quedarían huecos grises.
+  const swaypCellSpan = SWAYP_CELL_SPAN[(panels.length + 1) % 4] ?? "";
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-5 pb-24">
@@ -190,6 +301,11 @@ export function WarehouseStation({
           <Link href="/dashboard/courier/rutas" className={LINK_SECONDARY}>Cajas de Grupo GF <span aria-hidden className="text-ink-500">→</span></Link>
           <Link href="/dashboard/pedidos/devoluciones" className={LINK_SECONDARY}>Devoluciones <span aria-hidden className="text-ink-500">→</span></Link>
           {/* La cifra navega: baja a su apartado. */}
+          {swaypNext && (
+            <a href="#swayp" className={LINK_SECONDARY}>
+              Swayp por salir · <span className="tabular-nums">{swaypHeaderLinkText(swaypNext, { hoy: swayp?.hoy, stale: swaypStale })}</span> <span aria-hidden className="text-ink-500">↓</span>
+            </a>
+          )}
           {retries && !retries.error && (
             <a href="#reintentos" className={LINK_SECONDARY}>
               Reintentos por salir · <span className="tabular-nums">{retries.counts.hoy.toLocaleString("es-PE")}</span> hoy <span aria-hidden className="text-ink-500">↓</span>
@@ -227,8 +343,9 @@ export function WarehouseStation({
             </OpsButton>
             <OpsButton type="submit" variant="primary" size="lg" className="h-12 px-6" disabled={busy || !scan.trim()}>{busy ? "Procesando…" : "Confirmar"}</OpsButton>
           </form>
-          {message && <Banner tone={message.tone === "error" ? "crit" : "ok"} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>}
+          {message && <Banner tone={message.tone === "error" ? "crit" : message.tone} role={message.tone === "error" ? "alert" : "status"} className="mt-4">{message.text}</Banner>}
           {retryHint && <Banner tone={retryHint.tone} role="status" className="mt-2">{retryHint.text}</Banner>}
+          {swaypHint && <Banner tone={swaypHint.tone} role="status" className="mt-2">{swaypHint.text}</Banner>}
         </div>
 
         <div className="p-4 shadow-[inset_0_1px_0_var(--color-line)] sm:p-6">
@@ -237,15 +354,21 @@ export function WarehouseStation({
             <p className="text-xs text-ink-500">Cuenta la cola completa, no lo que filtre el buscador.</p>
           </div>
           {/* Un marco con una celda por operación: el estado lo dice el lavado
-              de cada celda (en cero, cerca del corte, corte vencido). */}
-          <div className="mt-3 grid grid-cols-1 gap-px overflow-hidden rounded-lg bg-line ring-1 ring-line sm:grid-cols-3">
+              de cada celda (en cero, cerca del corte, corte vencido). La última
+              es la de las guías Swayp de Lima: no suma al número de Lima (esas
+              guías nunca están en «Por armar») y lleva a su apartado. Cuatro
+              celdas: una columna en el teléfono, 2 × 2 en la tableta, una fila
+              desde 1280 px. */}
+          <div className="mt-3 grid grid-cols-1 gap-px overflow-hidden rounded-lg bg-line ring-1 ring-line sm:grid-cols-2 xl:grid-cols-4">
             {panels.map((panel) => (
               <OperationPanel
                 key={panel.operation}
                 panel={panel}
                 shift={panel.operation === "lima" ? shift : null}
+                swaypMissing={panel.operation === "lima" ? swaypNext?.counts.faltan ?? 0 : 0}
               />
             ))}
+            <WarehouseSwaypCell data={swayp} now={now} stale={swaypStale} className={swaypCellSpan} />
           </div>
         </div>
 
@@ -305,15 +428,23 @@ export function WarehouseStation({
             </div>
             {data.armedToday.length ? (
               <ul className="divide-y divide-line rounded-lg ring-1 ring-line">
-                {data.armedToday.slice(0, 30).map((shipment) => (
-                  <li key={shipment.id} className="px-3 py-2">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <p className="truncate font-mono text-xs font-semibold text-ink-900">{packageCode(shipment)}</p>
-                      <span className="shrink-0 text-xs tabular-nums text-ink-500">{fmtTime(shipment.ready_at)}</span>
-                    </div>
-                    <p className="truncate text-xs text-ink-600">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</p>
-                  </li>
-                ))}
+                {data.armedToday.slice(0, 30).map((shipment) => {
+                  // La caja de un lote Swayp cargado: a qué lote va («Swayp · mié 4 nov»).
+                  const lot = swaypArmedChip(swayp, shipment.id);
+                  return (
+                    <li key={shipment.id} className="px-3 py-2">
+                      <div className="flex items-baseline justify-between gap-2">
+                        {/* El código no cede ancho: con poco espacio la chapa baja de renglón. */}
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <p className="shrink-0 font-mono text-xs font-semibold text-ink-900">{packageCode(shipment)}</p>
+                          {lot && <Badge tone="info" className="tabular-nums">{lot}</Badge>}
+                        </div>
+                        <span className="shrink-0 text-xs tabular-nums text-ink-500">{fmtTime(shipment.ready_at)}</span>
+                      </div>
+                      <p className="truncate text-xs text-ink-600">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</p>
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <div className="rounded-lg border border-dashed border-line-strong py-12 text-center text-sm text-ink-500">Escanea un paquete terminado y aparecerá aquí.</div>
@@ -322,12 +453,21 @@ export function WarehouseStation({
         </div>
       </section>
 
+      <WarehouseSwayp data={swayp} onRefresh={refreshSwayp} busy={swaypBusy} stale={swaypStale} now={now} />
+
       <WarehouseRetries data={retries} onRefresh={refreshRetries} busy={retriesBusy} />
 
       <DispatchCamera open={cameraOpen} onClose={() => setCameraOpen(false)} onScan={onCameraScan} />
     </div>
   );
 }
+
+/**
+ * Cuánto ocupa la celda Swayp según cuántas celdas hay en el marco (resto de
+ * dividir entre 4): con 5 (Lima, Agencia, Provincia COD, Sin clasificar y
+ * Swayp) va sola en la segunda fila de 2 y de 4 columnas.
+ */
+const SWAYP_CELL_SPAN: Record<number, string> = { 1: "sm:col-span-2 xl:col-span-4", 3: "sm:col-span-2 xl:col-span-2" };
 
 /** Enlace con forma de botón secundario (`OpsButton`). */
 const LINK_SECONDARY = "inline-flex h-9 pointer-coarse:h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-white px-3 text-sm font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong transition-colors duration-150 hover:bg-wash hover:text-ink-900";
@@ -342,10 +482,16 @@ const LINK_SECONDARY = "inline-flex h-9 pointer-coarse:h-11 shrink-0 items-cente
 function OperationPanel({
   panel,
   shift,
+  swaypMissing = 0,
 }: {
   panel: WarehousePanel;
   /** Solo Lima rinde cuentas al corte del turno; el resto va sin él. */
   shift: WarehouseShiftStatus | null;
+  /**
+   * Solo Lima: faltas del próximo lote Swayp de Lima. No suman al número (R9),
+   * pero con ellas «Nada por empacar» sería falso: esas cajas se arman aquí (D1).
+   */
+  swaypMissing?: number;
 }) {
   const done = panel.total === 0;
   const tone = shift ? shiftTone(shift, panel.total) : "normal";
@@ -367,7 +513,7 @@ function OperationPanel({
         {panel.total.toLocaleString("es-PE")}
       </p>
       <p className={cn("text-xs", fg ?? "text-ink-600")}>
-        {done ? "En cero. Nada por empacar." : panelHint(panel.closer)}
+        {done ? (swaypMissing > 0 ? SWAYP_LIMA_PANEL_ZERO : "En cero. Nada por empacar.") : panelHint(panel.closer)}
       </p>
       {shift && <p className={cn("mt-1.5 text-xs tabular-nums", shiftLineClass(tone, done))}>{shiftLine(shift, tone, done)}</p>}
     </div>

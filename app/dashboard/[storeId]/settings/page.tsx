@@ -13,7 +13,21 @@ import { leadVoiceOwnNumber, loadLeadVoiceCampaigns } from "@/lib/store-settings
 import { leadVoiceSettingsFrom } from "@/lib/voice-leads";
 import { leadVoiceConfigured, loadLeadVoicePilotReport } from "@/lib/voice-leads-server";
 import { RESTOCK_CATALOG_DAYS, RESTOCK_RESULTS_DAYS } from "@/lib/restock-view";
+import {
+  OWN_APP,
+  ownAppAccessHint,
+  ownAppErrorTitle,
+  ownAppPrevSecretLine,
+  ownAppPrevSecretValidUntil,
+  ownAppStatusLine,
+} from "@/lib/shopify-own-app";
 import { limaDateTimeInputValue } from "@/lib/repro-lima";
+import { WOO_INTAKE_TOPICS, WOO_SYNC_SOURCE, wooWebhookDeliveryUrl } from "@/lib/woocommerce-intake";
+import { codCoreAbandonedUrl } from "@/lib/cod-core-abandoned";
+import { kaptaWebhookOrigins } from "@/lib/woocommerce-webhooks-health";
+import { WOO_WEBHOOKS_SOURCE, wooSyncStateRow, type WooSyncStateRow } from "@/lib/woocommerce-webhooks-view";
+import { botOrdersEndpointUrl, isBotOrdersMigrationMissing } from "@/lib/bot-orders";
+import { botOrderLookupUrl } from "@/lib/bot-order-lookup";
 import { limaDayStartIso } from "@/lib/auto-order-ab";
 import type { InvoiceMode, InvoiceStatus, InvoiceWriteMode } from "@/lib/invoicing/rules";
 import {
@@ -26,6 +40,7 @@ import { StoreSettings, type StoreSettingsData } from "@/components/store-settin
 import type { InvoiceSettingsData } from "@/components/invoice-settings-section";
 import { listEscalation } from "./actions";
 import { listEscalationCandidates } from "@/app/dashboard/cobranza/actions";
+import { productPhotosThatLoad } from "@/lib/product-photos";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +61,7 @@ const SHOPIFY_ERRORS: Record<string, string> = {
   "sin-permiso": "No tienes permiso sobre esta tienda.",
   "intercambio-fallo": "Shopify rechazó el intercambio del código por token.",
   "guardado-fallo": "No se pudo guardar el token.",
+  "app-propia": "Esta tienda usa su app propia de Shopify: no se reconecta con la app interna. Cambia sus credenciales en Shopify → Credenciales de la app.",
 };
 
 /**
@@ -348,10 +364,33 @@ export default async function StoreSettingsPage({
       : Promise.resolve(NO_INVOICES),
   ]);
 
+  // El bot de Kapso pide sus pedidos a Kapta (0277, MOM §38.13): si hay
+  // secreto y su último uso. Nunca el hash. Pre-0277 la tabla no existe y la
+  // sección lo dice; otro fallo de lectura la deja como «sin secreto».
+  const botSecretRead = await admin
+    .from("bot_order_secrets")
+    .select("created_at, rotated_at, last_used_at, last_outcome, last_error, last_error_at")
+    .eq("store_id", storeId)
+    .maybeSingle();
+  const botSecret = (botSecretRead.data ?? null) as {
+    created_at: string | null;
+    rotated_at: string | null;
+    last_used_at: string | null;
+    last_outcome: string | null;
+    last_error: string | null;
+    last_error_at: string | null;
+  } | null;
+
   // Los ajustes del agente de leads (MOM §33) con los defectos de 0247: lo que
   // la página pinta es lo mismo que lee el agente al llamar.
   const leadVoice = leadVoiceSettingsFrom(full);
   const now = new Date();
+  // App propia de Shopify (0271): si hay token (sí/no) y hasta cuándo vale el
+  // Client secret anterior para los webhooks. Nada de esto lleva un secreto.
+  const ownAppHasToken = Boolean(full?.shopify_token_enc);
+  const ownAppPrevUntil = full?.shopify_webhook_secret_prev_enc
+    ? ownAppPrevSecretValidUntil(full.shopify_webhook_secret_prev_set_at ?? null, now)
+    : null;
 
   // La escalera de cobranza y quién puede entrar en ella (0172). Van aparte
   // del Promise.all porque pasan por `requireStoreAdmin`, que ya comprueba
@@ -392,8 +431,19 @@ export default async function StoreSettingsPage({
       p_since: new Date(now.getTime() - RESTOCK_RESULTS_DAYS * 86_400_000).toISOString(),
     }),
     // Qué productos tienen foto: sin foto no se envía (la plantilla la lleva).
-    admin.from("shopify_product_images").select("product_id").eq("store_id", storeId).not("image_url", "is", null),
+    admin.from("shopify_product_images").select("product_id,image_url").eq("store_id", storeId).not("image_url", "is", null),
   ]);
+  // Si Shopify ya no sirve las fotos de la tienda, la foto que cuenta es la de
+  // la copia guardada (MOM §39): la misma regla con la que el recordatorio
+  // decide si sale. Con Storage sin contestar, ninguna (el recordatorio
+  // tampoco sale en esa pasada).
+  const restockWithImage =
+    (await productPhotosThatLoad(
+      admin,
+      storeId,
+      (restockImages.data as { product_id: string; image_url?: string | null }[] | null) ?? [],
+      now.getTime(),
+    )) ?? [];
 
   const data: StoreSettingsData = {
     store: {
@@ -532,6 +582,12 @@ export default async function StoreSettingsPage({
       olva_arrival_template_enabled: full.olva_arrival_template_enabled ?? false,
       olva_arrival_template_name: full.olva_arrival_template_name ?? null,
       olva_arrival_params: full.olva_arrival_params ?? null,
+      // Pre-0281 las columnas no existen: Ajustes no enseña el bloque (y así
+      // no manda campos que la base rechazaría al guardar).
+      olva_paid_arrival_available: full.olva_paid_arrival_template_enabled !== undefined,
+      olva_paid_arrival_template_enabled: full.olva_paid_arrival_template_enabled ?? false,
+      olva_paid_arrival_template_name: full.olva_paid_arrival_template_name ?? "guias_olva_llegada_pagado",
+      olva_paid_arrival_params: full.olva_paid_arrival_params ?? "nombre,producto,agencia,guia,vence",
       // Pre-0242 las columnas no existen ⇒ recordatorio apagado, defaults de la
       // migración.
       shalom_reminder_template_enabled: full.shalom_reminder_template_enabled ?? false,
@@ -572,6 +628,76 @@ export default async function StoreSettingsPage({
       olvaPortalPassword: Boolean(full.olva_portal_password_enc),
     },
     oauthAvailable: env.shopifyOAuthConfigured(),
+    // App propia de Shopify (0271): la línea de estado y el Client ID. Nunca el
+    // Client secret ni el token, solo si hay uno. Pre-0271 ninguna tienda es
+    // 'propia' y esto queda en null.
+    ownApp:
+      full.shopify_app === OWN_APP
+        ? {
+            clientId: full.shopify_client_id ?? null,
+            hasSecret: Boolean(full.shopify_client_secret_enc),
+            statusLine: ownAppStatusLine({
+              renewedAt: full.shopify_token_renewed_at ?? null,
+              expiresAt: full.shopify_token_expires_at ?? null,
+              now,
+              timeZone: full.timezone ?? "America/Lima",
+              status: full.status ?? null,
+              hasToken: ownAppHasToken,
+              uninstalledAt: full.shopify_uninstalled_at ?? null,
+            }),
+            hint: ownAppAccessHint({
+              status: full.status ?? null,
+              hasToken: ownAppHasToken,
+              uninstalledAt: full.shopify_uninstalled_at ?? null,
+            }),
+            disabled: full.status === "disabled",
+            error: full.shopify_token_error ?? null,
+            errorTitle: ownAppErrorTitle(full.shopify_token_error),
+            prevSecretUntil: ownAppPrevUntil ? ownAppPrevSecretLine(ownAppPrevUntil, full.timezone) : null,
+          }
+        : null,
+    // WooCommerce (0274, MOM §38.11): el sitio y la clave del sitio, y de cada
+    // secreto solo si hay uno. Pre-0274 la fila no trae `platform` y la sección
+    // lo dice en vez de ofrecer guardar.
+    woo: {
+      siteUrl: full.woo_site_url ?? null,
+      siteKey: full.woo_site_key ?? null,
+      suggestedSiteKey: typeof full.order_prefix === "string" && /^[A-Za-z][A-Za-z0-9]{1,11}$/.test(full.order_prefix)
+        ? full.order_prefix.toLowerCase()
+        : null,
+      platform: full.platform ?? "shopify",
+      platformSwitchedAt: full.platform_switched_at ?? null,
+      hasConsumerKey: Boolean(full.woo_consumer_key_enc),
+      hasConsumerSecret: Boolean(full.woo_consumer_secret_enc),
+      hasWebhookSecret: Boolean(full.woo_webhook_secret_enc),
+      lastError: full.woo_last_error ?? null,
+      // Con la dirección de Kapta que acepta la revisión de los webhooks (MOM
+      // §38.14: `NEXT_PUBLIC_SITE_URL` o la de producción de Vercel); sin
+      // ninguna, la del navegador, como las demás direcciones de Ajustes.
+      webhookUrl: wooWebhookDeliveryUrl(kaptaWebhookOrigins()[0] ?? (siteUrl || env.siteUrl()), storeId),
+      abandonedUrl: codCoreAbandonedUrl(kaptaWebhookOrigins()[0] ?? (siteUrl || env.siteUrl()), storeId),
+      topics: WOO_INTAKE_TOPICS,
+      sync: wooSyncStateRow(sync as WooSyncStateRow[] | null, WOO_SYNC_SOURCE),
+      // La revisión de los webhooks en WooCommerce (MOM §38.14): cada hora, y
+      // al guardar o probar la conexión.
+      webhooks: wooSyncStateRow(sync as WooSyncStateRow[] | null, WOO_WEBHOOKS_SOURCE),
+      migrationMissing: !("platform" in (full ?? {})),
+    },
+    botOrders: {
+      endpointUrl: botOrdersEndpointUrl(siteUrl || env.siteUrl(), storeId),
+      lookupUrl: botOrderLookupUrl(siteUrl || env.siteUrl(), storeId),
+      configured: Boolean(botSecret),
+      createdAt: botSecret?.created_at ?? null,
+      rotatedAt: botSecret?.rotated_at ?? null,
+      lastUsedAt: botSecret?.last_used_at ?? null,
+      lastOutcome: botSecret?.last_outcome ?? null,
+      lastError: botSecret?.last_error ?? null,
+      lastErrorAt: botSecret?.last_error_at ?? null,
+      platform: full.platform ?? "shopify",
+      migrationMissing: isBotOrdersMigrationMissing(botSecretRead.error),
+    },
+    // Coordenada por dirección (piloto): solo si la clave está, nunca su valor.
+    geocodePilot: { configured: env.googleGeocodingConfigured() },
     // Solo sí/no, nunca los valores: la página llega al navegador.
     leadVoice: {
       configured: leadVoiceConfigured(),
@@ -598,7 +724,7 @@ export default async function StoreSettingsPage({
       catalog: (restockCatalog.data as StoreSettingsData["restock"]["catalog"] | null) ?? [],
       products: (restockProducts.data as StoreSettingsData["restock"]["products"] | null) ?? [],
       results: (restockResults.data as StoreSettingsData["restock"]["results"] | null) ?? [],
-      withImage: ((restockImages.data as { product_id: string }[] | null) ?? []).map((r) => String(r.product_id)),
+      withImage: restockWithImage.map((r) => String(r.product_id)),
     },
   };
 

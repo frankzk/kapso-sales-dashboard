@@ -397,7 +397,7 @@ describe("ningún courier se queda fuera del relleno", () => {
   const CAMINOS = [
     "app/dashboard/courier/actions.ts", // Grupo GF
     "app/dashboard/pedidos/tanders-actions.ts",
-    "app/dashboard/pedidos/aliclik-actions.ts",
+    "lib/aliclik-guide.ts", // Aliclik: el botón y la guía del día programado (16-10-2026)
     "app/dashboard/pedidos/shalom-actions.ts",
     "lib/swayp-directa.ts", // Swayp: el botón y el automático (13-10-2026)
   ];

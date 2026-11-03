@@ -261,7 +261,8 @@ describe("leer el desplegable del pedido de Shopify", () => {
 
 describe("la puerta está en el sitio por el que pasan las dos acciones", () => {
   const src = readFileSync(
-    resolve(process.cwd(), "app/dashboard/pedidos/aliclik-actions.ts"),
+    // Cotizar y crear viven en el núcleo compartido desde el 16-10-2026.
+    resolve(process.cwd(), "lib/aliclik-guide.ts"),
     "utf8",
   );
 

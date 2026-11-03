@@ -519,6 +519,8 @@
 \ir migrations/0257_invoices.sql
 \echo 'Applying 0258_restock_reply_sweep.sql'
 \ir migrations/0258_restock_reply_sweep.sql
+\echo 'Applying 0259_canal_de_cierre.sql'
+\ir migrations/0259_canal_de_cierre.sql
 \echo 'Applying 0260_invoices_hardening.sql'
 \ir migrations/0260_invoices_hardening.sql
 \echo 'Applying 0261_invoices_manual.sql'
@@ -535,4 +537,78 @@
 \ir migrations/0266_order_master_dispatched_with.sql
 \echo 'Applying 0267_order_master_dispatch_scheduled_on.sql'
 \ir migrations/0267_order_master_dispatch_scheduled_on.sql
+\echo 'Applying 0268_ventas_por_origen.sql'
+\ir migrations/0268_ventas_por_origen.sql
+\echo 'Applying 0269_invoices_backfill.sql'
+\ir migrations/0269_invoices_backfill.sql
+\echo 'Applying 0270_cuaderno_s01_fill.sql'
+\ir migrations/0270_cuaderno_s01_fill.sql
+\echo 'Applying 0271_shopify_app_propia.sql'
+\ir migrations/0271_shopify_app_propia.sql
+\echo 'Applying 0272_urpi_salida_fecha.sql'
+\ir migrations/0272_urpi_salida_fecha.sql
+\echo 'Applying 0273_shopify_history.sql'
+\ir migrations/0273_shopify_history.sql
+\echo 'Applying 0274_woocommerce_base.sql'
+\ir migrations/0274_woocommerce_base.sql
+\echo 'Applying 0275_invoice_snapshots.sql'
+\ir migrations/0275_invoice_snapshots.sql
+\echo 'Applying 0276_shopify_history_imports.sql'
+\ir migrations/0276_shopify_history_imports.sql
+\echo 'Applying 0277_bot_orders.sql'
+\ir migrations/0277_bot_orders.sql
+\echo 'Applying 0278_shopify_history_more.sql'
+\ir migrations/0278_shopify_history_more.sql
+\echo 'Applying 0279_shipments_lima_province_fix.sql'
+\ir migrations/0279_shipments_lima_province_fix.sql
+\echo 'Applying 0280_leads_order_id_idx.sql'
+\ir migrations/0280_leads_order_id_idx.sql
+\echo 'Applying 0281_olva_paid_arrival_notice.sql'
+\ir migrations/0281_olva_paid_arrival_notice.sql
+\echo 'Applying 0282_swayp_unknown_guides.sql'
+\ir migrations/0282_swayp_unknown_guides.sql
+\echo 'Applying 0283_lima_repro_aliclik.sql'
+\ir migrations/0283_lima_repro_aliclik.sql
+\echo 'Applying 0284_gf_cancel_pre_dispatch_output.sql'
+\ir migrations/0284_gf_cancel_pre_dispatch_output.sql
+\echo 'Applying 0285_woo_sale_pending_return.sql'
+\ir migrations/0285_woo_sale_pending_return.sql
+\echo 'Applying 0286_woo_sale_after_gf_office_return.sql'
+\ir migrations/0286_woo_sale_after_gf_office_return.sql
+\echo 'Applying 0287_validated_payment_positive_amount.sql'
+\ir migrations/0287_validated_payment_positive_amount.sql
+\echo 'Applying 0288_lima_attention_all_pending.sql'
+\ir migrations/0288_lima_attention_all_pending.sql
+\echo 'Applying 0289_lead_call_queue_retries.sql'
+\ir migrations/0289_lead_call_queue_retries.sql
+\echo 'Applying 0290_agency_unpaid_cohort.sql'
+\ir migrations/0290_agency_unpaid_cohort.sql
+\echo 'Applying 0291_lead_retry_recent_signal.sql'
+\ir migrations/0291_lead_retry_recent_signal.sql
+\echo 'Applying 0292_gf_notebook_missing_reports.sql'
+\ir migrations/0292_gf_notebook_missing_reports.sql
+\echo 'Applying 0293_invoices_claim_rounding.sql'
+\ir migrations/0293_invoices_claim_rounding.sql
+\echo 'Applying 0294_conversion_fuente_web.sql'
+\ir migrations/0294_conversion_fuente_web.sql
+\echo 'Applying 0295_team_lead_blocks.sql'
+\ir migrations/0295_team_lead_blocks.sql
+\echo 'Applying 0296_invoices_claim_agency_shipping.sql'
+\ir migrations/0296_invoices_claim_agency_shipping.sql
+\echo 'Applying 0297_chatby_autoconfirm.sql'
+\ir migrations/0297_chatby_autoconfirm.sql
+\echo 'Applying 0298_invoices_claim_agency_one_payment.sql'
+\ir migrations/0298_invoices_claim_agency_one_payment.sql
+\echo 'Applying 0299_lead_routing_admin_advisors.sql'
+\ir migrations/0299_lead_routing_admin_advisors.sql
+\echo 'Applying 0300_order_master_product_titles.sql'
+\ir migrations/0300_order_master_product_titles.sql
+\echo 'Applying 0301_order_geocodes.sql'
+\ir migrations/0301_order_geocodes.sql
+\echo 'Applying 0302_urpi_link_programacion.sql'
+\ir migrations/0302_urpi_link_programacion.sql
+\echo 'Applying 0303_aliclik_intent_release.sql'
+\ir migrations/0303_aliclik_intent_release.sql
+\echo 'Applying 0304_aliclik_report_detail.sql'
+\ir migrations/0304_aliclik_report_detail.sql
 \echo 'Done.'

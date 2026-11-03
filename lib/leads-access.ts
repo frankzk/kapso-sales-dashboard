@@ -1,12 +1,38 @@
 // RLS-scoped reads for the leads module (queue views, lead detail, counts).
 
 import { createServerSupabase } from "@/lib/db";
-import { shopifyOrderAdminUrl } from "@/lib/shopify";
+import { filterRoutedLeads, getLeadRoutingScope } from "@/lib/lead-routing-access";
+import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
+import { leadCartDetailOf } from "@/lib/lead-cart-detail";
+import { normalizePhone } from "@/lib/phone";
+import {
+  combinePriorOrders,
+  firstProductTitle,
+  historyNetAmount,
+  HISTORY_PRIOR_LIMIT,
+  type HistoryPriorRow,
+  type LocalPriorRow,
+} from "@/lib/customer-history-merge";
+import { orderAdminLink, orderPlatform } from "@/lib/order-admin-url";
+import {
+  cartPhoneVariants,
+  mergeCustomerCarts,
+  summarizeCarts,
+  type ArchiveCartRow,
+  type CustomerCarts,
+  type MirrorDraftRow,
+} from "@/lib/customer-carts";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
-import type { LeadCallRow, LeadRow } from "@/lib/types";
+import type { LeadCallRow, LeadRow, OrderPlatform } from "@/lib/types";
 import type { DistrictCoverageRule } from "@/lib/district-coverage";
 import type { PedidoPrevio } from "@/lib/pedido-duplicado";
+import { sortHandoffWithPendingVouchers } from "@/lib/pending-voucher";
+import {
+  countExtraPendingVoucherLeads,
+  loadPendingVoucherLeads,
+  loadPendingVouchers,
+} from "@/lib/pending-voucher-access";
 import {
   buildAnomalyReport,
   EMPTY_REPORT,
@@ -53,7 +79,12 @@ const LEAD_BOARD_SELECT = [
   "category",
   "status",
   "needs_attention",
+  "call_queue_ready",
+  "call_attempt_count",
+  "next_followup_at",
+  "contact_opt_out_at",
   "has_order",
+  "order_id",
   "district",
   "cart_value",
   "cart_item_count",
@@ -89,6 +120,8 @@ const LEAD_BOARD_SELECT = [
 // mientras la migración no corra, la cola tiene que seguir dibujándose sin el
 // filtro de producto en vez de quedarse en blanco.
 const COLUMNAS_CON_MIGRACION_PENDIENTE = new Set([
+  "call_queue_ready",
+  "call_attempt_count",
   "first_inbound_text",
   "last_product_handle",
   "cart_product_handle",
@@ -137,6 +170,7 @@ export async function getStoreLeads(
 ): Promise<LeadRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
+  const routing = await getLeadRoutingScope(storeIds);
   const buildQuery = (select: string = LEAD_BOARD_SELECT, count?: "exact") => {
     let q = sb
       .from("leads")
@@ -197,14 +231,56 @@ export async function getStoreLeads(
     return q;
   };
 
-  if (limit !== null) {
+  if (limit !== null && (!routing.enabled || view === "ganados" || view === "perdidos")) {
+    // «Atender ahora»: los pagos por validar se leen a la par de la vista.
+    const pendingIndex = view === "handoff" ? loadPendingVouchers(sb, storeIds) : null;
     let res = await buildQuery().limit(limit);
-    if (res.error) res = await buildQuery(LEAD_BOARD_SELECT_LEGACY).limit(limit);
+    let select = LEAD_BOARD_SELECT;
+    if (res.error) {
+      select = LEAD_BOARD_SELECT_LEGACY;
+      res = await buildQuery(select).limit(limit);
+    }
     const limited = (res.data as unknown as LeadRow[]) ?? [];
+    if (pendingIndex) return withPendingVoucherLeads(sb, storeIds, limited, select, await pendingIndex);
     return view === "por_llamar" ? sortPorLlamar(limited) : limited;
   }
   const all = await drainLeads(buildQuery);
-  return view === "por_llamar" ? sortPorLlamar(all) : all;
+  let visible = filterRoutedLeads(all, routing);
+  if (view === "handoff") visible = filterRoutedLeads(await withPendingVoucherLeads(sb, storeIds, visible, LEAD_BOARD_SELECT, await loadPendingVouchers(sb, storeIds)), routing);
+  const sorted = view === "por_llamar" ? sortPorLlamar(visible) : visible;
+  return limit === null ? sorted : sorted.slice(0, limit);
+}
+
+/**
+ * «Atender ahora» con los comprobantes por validar delante (MOM §16.1).
+ *
+ * La clienta que ya pagó y espera —su clave, en agencia— sube aquí aunque el
+ * bot no la haya derivado o su handoff haya caducado: se busca por
+ * `leads.order_id` el lead de cada pedido con un comprobante en
+ * `pendiente_revision` / `info_incompleta`, se le pone el motivo y va arriba.
+ * No se escribe nada en `leads`: lo decide el pago, así que sale solo cuando
+ * alguien lo valida o lo rechaza, igual que el pop-up de cobranza, y nadie
+ * tiene que pulsar «Resuelto».
+ *
+ * Los handoffs de siempre siguen debajo, en su orden. Si la lectura de pagos
+ * falla, la vista queda como era (no se inventa ni se quita a nadie).
+ */
+async function withPendingVoucherLeads(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: StoreScope,
+  handoffs: LeadRow[],
+  select: string,
+  index: Awaited<ReturnType<typeof loadPendingVouchers>>,
+): Promise<LeadRow[]> {
+  if (!index || !index.size) return handoffs;
+  const voucherLeads = await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index, select);
+  if (!voucherLeads.length) return handoffs;
+  const byId = new Map(voucherLeads.map((l) => [l.id, l]));
+  // Un lead que ya estaba por un handoff conserva su fila; solo gana el motivo.
+  const merged: LeadRow[] = handoffs.map((l) => (byId.has(l.id) ? { ...l, pending_voucher: byId.get(l.id)!.pending_voucher } : l));
+  const present = new Set(handoffs.map((l) => l.id));
+  for (const l of voucherLeads) if (!present.has(l.id)) merged.push(l);
+  return sortHandoffWithPendingVouchers(merged);
 }
 
 /**
@@ -360,26 +436,42 @@ export async function getLeadWithCalls(
   const sb = await createServerSupabase();
   const { data: lead } = await sb.from("leads").select("*").eq("id", leadId).maybeSingle();
   if (!lead) return null;
-  const { data: calls } = await sb
-    .from("lead_calls")
-    .select("*")
-    .eq("lead_id", leadId)
-    .order("occurred_at", { ascending: false });
-  return { lead: lead as LeadRow, calls: (calls as LeadCallRow[]) ?? [] };
+  const row = lead as LeadRow;
+  const [callsRes, draftRes] = await Promise.all([
+    sb.from("lead_calls").select("*").eq("lead_id", leadId)
+      .order("occurred_at", { ascending: false }),
+    row.draft_order_gid
+      ? sb.from("draft_orders").select("created_at,line_items")
+        .eq("store_id", row.store_id).eq("draft_order_gid", row.draft_order_gid).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  return {
+    lead: { ...row, cart_detail: draftRes.error ? null : leadCartDetailOf(draftRes.data) },
+    calls: (callsRes.data as LeadCallRow[]) ?? [],
+  };
 }
 
-/** One prior Shopify order, for the drawer's "Pedidos anteriores" list. */
+/** One prior order, for the drawer's "Pedidos anteriores" list. */
 export interface PriorOrder {
-  name: string | null; // Shopify order name, e.g. "#AUR1234"
+  name: string | null; // order name, e.g. "#AUR1234" o "#AUR900004"
   createdAt: string | null;
   amount: number; // net (total_amount − refunds); un anulado de Shopify trae su total original
-  adminUrl: string | null; // deep-link to the order in Shopify admin (new tab)
+  /** El pedido en el admin de SU tienda (`orderAdminLink`, MOM §38.12), en pestaña nueva. */
+  adminUrl: string | null;
+  /**
+   * `orders.platform` (MOM §38): de qué tienda vino. Sin dato, Shopify (la lista
+   * que se lee en vivo de Shopify no lo trae: todos sus pedidos son de Shopify).
+   */
+  platform?: OrderPlatform;
   /** Anulado en Shopify (solo la lista de Shopify lo sabe; la local ya los excluye). */
   cancelled?: boolean;
+  /** Viene del historial de Shopify importado (MOM §37.7), no de `orders`. */
+  fromHistory?: boolean;
 }
 
 export interface CustomerHistory {
-  orderCount: number; // prior non-cancelled orders for this phone (excl. the lead's own)
+  /** Pedidos antes, no anulados, sin el propio: los de `orders` más los del historial de Shopify (§37.7). */
+  orderCount: number;
   lastOrderName: string | null;
   lastOrderAt: string | null;
   lastProduct: string | null;
@@ -397,19 +489,35 @@ export interface CustomerHistory {
   /** Foco de salud de la API de Aliclik, para el panel de crear guía. */
   currentOrderAliclikHealth: AliclikHealthState;
   recentOrders: PriorOrder[]; // last 3 prior orders (excl. own), newest first
+  /**
+   * Sus carritos anteriores: ¿termina la compra o solo deja carritos? (MOM §11,
+   * 25-10-2026, `getCustomerCarts`). Lo rellena quien carga la ficha; null si no
+   * se pudo leer o no hay celular.
+   */
+  carts?: CustomerCarts | null;
 }
+
+const PRIOR_ORDER_COLUMNS = "id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items";
 
 /**
  * Prior purchase history for a phone — powers the "cliente recurrente" pill, the
  * "Pedidos anteriores" list, and the current order's Shopify name in the drawer.
  * RLS-scoped (only stores the caller may access). Excludes the lead's own order
  * from the prior list, but resolves its name separately for the footer.
+ *
+ * Desde el 25-10-2026 (MOM §37.7) también lee el historial de Shopify
+ * importado (`shopify_history_orders`, mismo celular normalizado y tienda), en
+ * paralelo con `orders`: así la clienta que compró antes de que Kapta existiera
+ * no sale como «cliente nuevo». Un pedido que ya está en `orders` (mismo
+ * número) cuenta una vez. Solo lee: el historial nunca se copia a `orders`.
  */
 export async function getCustomerHistory(
   storeId: string,
   phone: string | null,
   excludeOrderId?: string | null,
   shopDomain?: string | null,
+  /** `stores.woo_site_url`: el enlace de un pedido de WooCommerce (MOM §38.12). */
+  wooSiteUrl?: string | null,
 ): Promise<CustomerHistory | null> {
   const sb = await createServerSupabase();
 
@@ -453,43 +561,150 @@ export async function getCustomerHistory(
   // que el lead tenía un pedido sin guía.
   if (!phone) return { ...emptyPrior, ...own, recentOrders: [] };
 
-  const { data } = await sb
-    .from("orders")
-    .select("id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items")
-    .eq("store_id", storeId)
-    .eq("customer_phone", phone)
-    .is("cancelled_at", null)
-    .order("created_at", { ascending: false })
-    .limit(10);
-  let rows =
-    (data as {
-      id: string;
+  // Los de Kapta, anulados incluidos: el anulado no cuenta, pero su número
+  // descarta la copia del historial de Shopify que aún lo tenía vivo.
+  const readOrders = (columns: string) =>
+    sb
+      .from("orders")
+      .select(columns)
+      .eq("store_id", storeId)
+      .eq("customer_phone", phone)
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_PRIOR_LIMIT);
+  // Con `platform` (0274): el enlace de cada pedido va al admin de su tienda
+  // (MOM §38.12). Sin la columna, se repite sin ella y todos son de Shopify.
+  const readLocal = async () => {
+    const res = await readOrders(`${PRIOR_ORDER_COLUMNS}, cancelled_at, platform`);
+    return res.error ? readOrders(`${PRIOR_ORDER_COLUMNS}, cancelled_at`) : res;
+  };
+  const [ordersRes, history] = await Promise.all([readLocal(), readShopifyHistory(sb, storeId, phone)]);
+  const rows =
+    (ordersRes.data as unknown as (LocalPriorRow & {
       shopify_order_id: string | null;
-      name: string | null;
-      created_at: string | null;
       total_amount: number | null;
       total_refunded: number | null;
-      line_items: unknown;
-    }[]) ?? [];
-  if (excludeOrderId) rows = rows.filter((r) => r.id !== excludeOrderId);
-  if (!rows.length) return { ...emptyPrior, ...own, recentOrders: [] };
-  const last = rows[0]!;
-  const items = Array.isArray(last.line_items) ? (last.line_items as { title?: string }[]) : [];
-  const lastProduct = items.length ? String(items[0]?.title ?? "").trim() || null : null;
-  const recentOrders: PriorOrder[] = rows.slice(0, 3).map((r) => ({
-    name: r.name,
-    createdAt: r.created_at,
-    amount: Math.round(((r.total_amount ?? 0) - (r.total_refunded ?? 0)) * 100) / 100,
-    adminUrl: shopifyOrderAdminUrl(shopDomain, r.shopify_order_id),
-  }));
+      platform?: unknown;
+    })[]) ?? [];
+  const { entries, count } = combinePriorOrders(rows, history.rows, {
+    excludeOrderId,
+    currentOrderName,
+    historyTotal: history.total,
+  });
+  if (!entries.length) return { ...emptyPrior, ...own, recentOrders: [] };
+  const last = entries[0]!;
+  const recentOrders: PriorOrder[] = entries.slice(0, 3).map((e) => {
+    if (e.kind === "history") {
+      // Del archivo (§37): sin enlace, la tienda puede ya no existir.
+      return {
+        name: e.row.order_name,
+        createdAt: e.row.created_at,
+        amount: historyNetAmount(e.row),
+        adminUrl: null,
+        platform: "shopify",
+        fromHistory: true,
+      };
+    }
+    const r = e.row;
+    const platform = orderPlatform(r.platform);
+    return {
+      name: r.name,
+      createdAt: r.created_at,
+      amount: Math.round(((r.total_amount ?? 0) - (r.total_refunded ?? 0)) * 100) / 100,
+      adminUrl: orderAdminLink({ platform, shopifyOrderId: r.shopify_order_id, shopDomain, wooSiteUrl })?.url ?? null,
+      platform,
+    };
+  });
   return {
-    orderCount: rows.length,
-    lastOrderName: last.name,
-    lastOrderAt: last.created_at,
-    lastProduct,
+    orderCount: count,
+    lastOrderName: last.kind === "history" ? last.row.order_name : last.row.name,
+    lastOrderAt: last.createdAt,
+    lastProduct: firstProductTitle(last.row.line_items),
     ...own,
     recentOrders,
   };
+}
+
+/**
+ * Los pedidos del historial de Shopify (§37) del mismo celular y tienda, para
+ * «Pedidos antes» (§37.7). Una consulta por el índice (store_id, phone_norm) de
+ * la 0273, con límite y el conteo exacto. Si falla (sin la tabla, sin permiso),
+ * nada: la ficha queda como antes, solo con `orders`. Nunca escribe.
+ */
+async function readShopifyHistory(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeId: string,
+  phone: string,
+): Promise<{ rows: HistoryPriorRow[]; total: number | null }> {
+  const phoneNorm = normalizePhone(phone);
+  if (!phoneNorm) return { rows: [], total: null };
+  try {
+    const { data, error, count } = await sb
+      .from("shopify_history_orders")
+      .select("order_name, created_at, total, refunded_amount, line_items", { count: "exact" })
+      .eq("store_id", storeId)
+      .eq("phone_norm", phoneNorm)
+      .is("cancelled_at", null)
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_PRIOR_LIMIT);
+    if (error || !data) return { rows: [], total: null };
+    return { rows: data as HistoryPriorRow[], total: typeof count === "number" ? count : null };
+  } catch {
+    return { rows: [], total: null };
+  }
+}
+
+/** Cuántos carritos de una clienta se leen de cada fuente: de sobra para contar y listar. */
+const CUSTOMER_CARTS_LIMIT = 200;
+
+/**
+ * Los carritos anteriores de la clienta en ESTA tienda (lib/customer-carts.ts):
+ * el espejo `draft_orders` y el archivo de Shopify `shopify_history_carts`
+ * (MOM §37.6), por su celular en cualquiera de sus formas. Sin el carrito del
+ * propio lead. Con RLS: solo tiendas que quien mira puede ver. Null si una
+ * lectura falla —la ficha sale sin el bloque, nunca con un conteo a medias—.
+ */
+export async function getCustomerCarts(
+  storeId: string,
+  phone: string | null,
+  excludeDraftGid?: string | null,
+): Promise<CustomerCarts | null> {
+  const phones = cartPhoneVariants(phone);
+  // Sin celular no hay por dónde buscar: como «Pedidos anteriores», sin carritos.
+  if (!phones.length) return { summary: summarizeCarts([]), carts: [] };
+  const sb = await createServerSupabase();
+  const [mirrorRes, archiveRes] = await Promise.all([
+    sb
+      .from("draft_orders")
+      .select("shopify_draft_order_id,draft_order_gid,name,status,created_at,total_amount,line_items,order_gid")
+      .eq("store_id", storeId)
+      .in("customer_phone", phones)
+      .order("created_at", { ascending: false })
+      .limit(CUSTOMER_CARTS_LIMIT),
+    sb
+      .from("shopify_history_carts")
+      .select("cart_key,kind,name,status,created_at,total,order_name,line_items")
+      .eq("store_id", storeId)
+      .in("phone_norm", phones)
+      .order("created_at", { ascending: false })
+      .limit(CUSTOMER_CARTS_LIMIT),
+  ]);
+  if (mirrorRes.error || archiveRes.error) return null;
+  const mirror = (mirrorRes.data ?? []) as (MirrorDraftRow & { order_gid: string | null })[];
+
+  // El pedido en que terminó un borrador del espejo: su `order_gid` es el id de
+  // Shopify del pedido, que en `orders` vive sin el prefijo.
+  const orderIds = [...new Set(mirror.map((row) => row.order_gid?.match(/(\d+)$/)?.[1]).filter((v): v is string => Boolean(v)))];
+  if (orderIds.length) {
+    const { data } = await sb.from("orders").select("shopify_order_id,name").eq("store_id", storeId).in("shopify_order_id", orderIds);
+    const names = new Map(((data ?? []) as { shopify_order_id: string; name: string | null }[]).map((o) => [o.shopify_order_id, o.name]));
+    for (const row of mirror) {
+      const id = row.order_gid?.match(/(\d+)$/)?.[1];
+      row.order_name = id ? (names.get(id) ?? null) : null;
+    }
+  }
+
+  const carts = mergeCustomerCarts(mirror, (archiveRes.data ?? []) as ArchiveCartRow[], excludeDraftGid);
+  return { summary: summarizeCarts(carts), carts };
 }
 
 /** Valores neutros del bloque "cliente recurrente" cuando no hay compras previas. */
@@ -542,9 +757,19 @@ const ZERO_COUNTS: LeadCounts = {
  */
 export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQueueSnapshot> {
   if (!storeIds.length) return { counts: { ...ZERO_COUNTS }, signature: "empty" };
+  const routing = await getLeadRoutingScope(storeIds);
+  if (routing.enabled && routing.counts) {
+    const sb = await createServerSupabase();
+    const index = await loadPendingVouchers(sb, storeIds);
+    const extras = filterRoutedLeads(await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index ?? new Map(), LEAD_BOARD_SELECT), routing)
+      .filter(l => !(l.needs_attention && l.handoff_at && l.handoff_at >= handoffFreshCutoffIso()));
+    return { counts: { ...routing.counts, handoff: routing.counts.handoff + extras.length }, signature: `routing:${routing.signature}:cv:${extras.map(l => l.id).sort().join(",")}` };
+  }
   const sb = await createServerSupabase();
   const nowIso = new Date().toISOString();
 
+  // A la par de los conteos por tienda: ver `pendingVoucherHandoffExtra` abajo.
+  const vouchersPromise = pendingVoucherHandoffExtra(sb, storeIds);
   const perStore = await Promise.all(
     // Orden fijo: la firma es una comparación de cadenas, y con las tiendas en
     // otro orden parecería que cambió algo en cada recarga.
@@ -590,7 +815,29 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
       counts[key] += part.counts[key];
     }
   }
-  return { counts, signature: perStore.map((p) => p.signature).join("|") };
+  // «Atender ahora» también lista a quien espera la validación de su
+  // comprobante (MOM §16.1, `withPendingVoucherLeads`). El contador suma los
+  // que NO estaban ya por un handoff, para decir lo mismo que la lista; y la
+  // firma lleva quiénes son, para que el refresco en vivo se entere cuando
+  // alguien valida y el lead sale.
+  const vouchers = await vouchersPromise;
+  counts.handoff += vouchers.extra;
+  return {
+    counts,
+    signature: perStore.map((p) => p.signature).join("|") + (vouchers.signature ? `|cv:${vouchers.signature}` : ""),
+  };
+}
+
+/** Nunca tumba los contadores: si falla, se cuentan como antes. */
+async function pendingVoucherHandoffExtra(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  storeIds: StoreScope,
+): Promise<{ extra: number; signature: string }> {
+  try {
+    return await countExtraPendingVoucherLeads(sb, storeIds, handoffFreshCutoffIso());
+  } catch {
+    return { extra: 0, signature: "" };
+  }
 }
 
 export async function getLeadCounts(storeIds: StoreScope): Promise<LeadCounts> {
@@ -611,7 +858,7 @@ async function legacyLeadCounts(
     head().not("next_followup_at", "is", null).lte("next_followup_at", nowIso),
     head().eq("category", "won"),
     head().eq("category", "lost"),
-    head().in("category", ["open", "hot"]).eq("status", "nuevo"), // "Sin llamar"
+    head().in("category", ["open", "hot"]).is("contact_opt_out_at", null).or(CALL_QUEUE_FILTER), // Por llamar
   ]);
   return {
     por_llamar: porLlamar.count ?? 0,

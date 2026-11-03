@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { cn } from "@/components/ui";
 
-export type PaymentReviewView = "comprobantes" | "estado-yape";
+export type PaymentReviewView = "comprobantes" | "estado-yape" | "constancia";
 
 const TABS: { id: PaymentReviewView; label: string; href: string }[] = [
   { id: "comprobantes", label: "Comprobantes", href: "/dashboard/pagos" },
   // Cada reporte de Yape recibido por correo y lo que validó (MOM §16.2).
   { id: "estado-yape", label: "Estado de cuenta Yape", href: "/dashboard/pagos?vista=estado-yape" },
+  // La constancia de una guía Tanders que llegó por WhatsApp (03-11-2026).
+  { id: "constancia", label: "Cargar constancia de courier", href: "/dashboard/pagos/constancia" },
 ];
 
 export function PaymentReviewTabs({ active }: { active: PaymentReviewView }) {

@@ -201,6 +201,7 @@ export function GrupoGfCourierBoard({
           pending={pending}
           run={run}
           pendingReturns={pendingReturns}
+          awaitingRepro={snapshot.operations.awaitingRepro}
         />
       )}
       {tab === "available" && (

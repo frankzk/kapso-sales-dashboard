@@ -52,6 +52,13 @@ import type { SettingsState } from "./actions";
 const SIN_PERMISO = "Sin permiso: «Boletas y facturas» lo configura quien tiene ese permiso (solo lo da el owner).";
 const LECTURA_FALLIDA = "No se pudo leer el RUC: intenta de nuevo.";
 const RUC_AJENO = "Ese RUC no es de la organización de esta tienda.";
+/**
+ * Lo que dice Ajustes cuando un cambio de modo movió «Emitir desde» a ahora
+ * (MOM §35.4): el barrido no va hacia atrás, y lo único que puede salir de lo
+ * pagado antes es lo que una persona emite con el botón (owner, 15-10-2026).
+ */
+const EMIT_FROM_MOVED_NOTICE =
+  "Al cambiar de modo, «Emitir desde» quedó en ahora: el barrido no emite nada pagado antes. En Manual, lo pagado desde el 01/10/2026 solo sale con «Emitir esta boleta», después de revisar SimpleFact.";
 
 /**
  * La puerta de las tres acciones: la tienda existe, hay sesión, y quien pide
@@ -256,7 +263,7 @@ export async function saveInvoiceIssuer(
   const effectiveFrom = nextFrom === undefined ? storedFrom : nextFrom;
   if (mode !== "apagado" && modeChanged && (effectiveFrom === null || effectiveFrom < now)) {
     nextFrom = now;
-    if (!notes.length) notes.push("Al cambiar de modo, «Emitir desde» quedó en ahora: ningún RUC emite hacia atrás.");
+    if (!notes.length) notes.push(EMIT_FROM_MOVED_NOTICE);
   }
   const finalFrom = nextFrom === undefined ? storedFrom : nextFrom;
   if (mode !== "apagado" && finalFrom === null) {
@@ -413,7 +420,9 @@ async function probe(
 /**
  * El RUC de una cuenta de cobro de esta tienda (MOM §35.2). `''` = «Sin
  * comprobante»: el dinero que entra ahí no es de ninguna empresa emisora y no
- * emite. Asignar no emite nada pagado antes de «Emitir desde» del RUC.
+ * emite. Asignar no hace que el barrido emita nada pagado antes de «Emitir
+ * desde» del RUC (MOM §35.4): lo de antes, desde el 01/10/2026 y con el RUC en
+ * «Manual», solo sale con «Emitir esta boleta», pedido por pedido.
  */
 export async function setAccountInvoiceIssuer(
   storeId: string,

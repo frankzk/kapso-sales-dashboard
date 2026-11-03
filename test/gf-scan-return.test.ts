@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { boxDayShort, pastBoxDecision, pastBoxMessage, receivedFromLabel } from "@/lib/gf-scan-return";
+import { boxDayShort, pastBoxDecision, pastBoxMessage, receivedFromLabel, scanLineCanMove } from "@/lib/gf-scan-return";
 
 const today = "2026-09-29";
 
@@ -35,9 +35,35 @@ describe("escanear un paquete que sigue en la caja de otro día", () => {
     expect(pastBoxDecision({ boxRouteDate: "2026-09-26", targetDay: today, stopStatus: "entregado", outcomeReason: null })).toBe("entregado");
   });
 
-  it("la caja del MISMO día sigue la regla de siempre, aunque la parada diga no entregado", () => {
+  it("#KP142954: «No entregado» en la caja de HOY de otro motorizado también se recibe y se asigna (26-10-2026)", () => {
     expect(
-      pastBoxDecision({ boxRouteDate: today, targetDay: today, stopStatus: "no_entregado", outcomeReason: "no_contesta" }),
+      pastBoxDecision({ boxRouteDate: today, targetDay: today, stopStatus: "no_entregado", outcomeReason: "no_contesta", sameRider: false }),
+    ).toBe("recibir_y_asignar");
+    // Rechazo incluido, como el de un día anterior (v1.23).
+    expect(
+      pastBoxDecision({ boxRouteDate: today, targetDay: today, stopStatus: "no_entregado", outcomeReason: "rechazado" }),
+    ).toBe("recibir_y_asignar");
+  });
+
+  it("hoy y con el MISMO motorizado es el reintento del mismo día (§9.3): no se toca", () => {
+    expect(
+      pastBoxDecision({ boxRouteDate: today, targetDay: today, stopStatus: "no_entregado", outcomeReason: "no_contesta", sameRider: true }),
+    ).toBe("reintento_mismo_dia");
+    // Un día anterior, el mismo motorizado sí lo recibe: su ruta de hoy es otra.
+    expect(
+      pastBoxDecision({ boxRouteDate: "2026-09-26", targetDay: today, stopStatus: "no_entregado", outcomeReason: "no_contesta", sameRider: true }),
+    ).toBe("recibir_y_asignar");
+  });
+
+  it("hoy, lo entregado se dice y lo que no tiene reporte sigue la regla de siempre («Mover»)", () => {
+    expect(pastBoxDecision({ boxRouteDate: today, targetDay: today, stopStatus: "entregado", outcomeReason: null })).toBe("entregado");
+    expect(pastBoxDecision({ boxRouteDate: today, targetDay: today, stopStatus: "pendiente", outcomeReason: null })).toBe("misma_caja");
+    expect(pastBoxDecision({ boxRouteDate: today, targetDay: today, stopStatus: null, outcomeReason: null })).toBe("misma_caja");
+  });
+
+  it("una caja de un día POSTERIOR al que se arma no cambia", () => {
+    expect(
+      pastBoxDecision({ boxRouteDate: "2026-09-30", targetDay: today, stopStatus: "no_entregado", outcomeReason: "no_contesta" }),
     ).toBe("misma_caja");
   });
 
@@ -56,6 +82,15 @@ describe("lo que dice la línea", () => {
     expect(receivedFromLabel("Yhoni", "2026-09-26")).toBe("Yhoni del 26/09");
     expect(pastBoxMessage("sin_reporte", "Yhoni", "2026-09-26")).toContain("la caja de Yhoni del 26/09");
     expect(pastBoxMessage("entregado", "Yhoni", "2026-09-26")).toMatch(/reportó entregado/);
+    expect(pastBoxMessage("reintento_mismo_dia", "Yhoni", "2026-10-26")).toBe(
+      "Yhoni lo reportó «No entregado» y sigue en la caja de Yhoni del 26/10: si vuelve a salir hoy con él, es el reintento del mismo día y lo reporta otra vez en su misma parada. No se recibe ni se asigna; para otro motorizado, escanéalo en su caja.",
+    );
+  });
+
+  it("«Mover a esta caja» solo para la línea en la caja de otro, con caja y paquete", () => {
+    expect(scanLineCanMove({ status: "en_otra_caja", manifestId: "m", shipmentId: "s" })).toBe(true);
+    expect(scanLineCanMove({ status: "en_otra_caja", manifestId: null, shipmentId: "s" })).toBe(false);
+    expect(scanLineCanMove({ status: "no_elegible", manifestId: "m", shipmentId: "s" })).toBe(false);
   });
 });
 
@@ -64,12 +99,16 @@ describe("el escaneo usa la regla antes de decir «Ya estaba»", () => {
   const scan = src.slice(src.indexOf("export async function scanAssignToRider"), src.indexOf("export interface CourierBoxDetail"));
 
   it("mira el día de la caja y recibe con el mismo RPC que «Devoluciones»", () => {
-    const past = scan.indexOf("box.dispatch_manifests.route_date < boxDay");
+    const past = scan.indexOf("box.dispatch_manifests.route_date <= boxDay");
     const already = scan.indexOf('status: "ya_en_caja"');
     expect(past).toBeGreaterThan(0);
     expect(already).toBeGreaterThan(past);
     expect(scan).toContain('admin.rpc("gf_return_to_office", { p_item_id: box.id');
     expect(scan).toContain("pastBoxDecision(");
+  });
+
+  it("pasa si la caja es del mismo motorizado (reintento del mismo día)", () => {
+    expect(scan).toContain("sameRider: box.dispatch_manifests.rider_id === rider.id");
   });
 
   it("la parada se lee de ESA caja, la más reciente", () => {

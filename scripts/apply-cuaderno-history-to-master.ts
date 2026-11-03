@@ -14,6 +14,13 @@
  * Courier externo) cuyo estado tenga efecto «entrega». Qué NO entra: pedidos
  * con alguna observación abierta (MOM §30.8), pedidos anulados en Shopify,
  * filas sin pedido. Mismas guardas que el botón «Aplicar entregas del periodo».
+ *
+ * Una entrega de Grupo GF (Reparto propio o la hoja de Alexis) con su fecha
+ * rellena además la caja «por definir» del pedido como salida entregada del
+ * motorizado propio (lib/own-salida.ts, decisión del dueño del 19-10-2026): sin
+ * eso el pedido se quedaba en «Salida adicional activa». La bitácora no guarda
+ * ese relleno —lo cuenta el evento `route_output_filled` de la salida— y
+ * `scripts/rollback-master-backfill.ts` no lo deshace.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -48,6 +55,8 @@ async function main() {
   const { createAdminSupabase } = await import("@/lib/db");
   const { applyDeliveriesToMaster } = await import("@/lib/master-door");
   const { markForEffect } = await import("@/lib/sheets/statuses");
+  const { fillOwnSalidas, hasNotebookDate } = await import("@/lib/own-salida");
+  const { recomputeOrderMasterSafe } = await import("@/lib/order-master");
   const admin = createAdminSupabase();
 
   // Estados con efecto entrega por dominio.
@@ -94,7 +103,7 @@ async function main() {
   for (let i = 0; i < orderIds.length; i += 200) {
     const { data } = await admin
       .from("order_master")
-      .select("order_id,store_id,general_status,operational_status,status_source,status_locked,delivered_at,delivered_courier,current_courier,macro_stage,macro_substage,coverage,orders(cancelled_at)")
+      .select("order_id,store_id,order_name,general_status,operational_status,status_source,status_locked,delivered_at,delivered_courier,current_courier,macro_stage,macro_substage,coverage,orders(cancelled_at)")
       .in("order_id", orderIds.slice(i, i + 200));
     for (const m of (data ?? []) as Record<string, unknown>[]) master.set(m.order_id as string, m);
   }
@@ -141,6 +150,7 @@ async function main() {
 
   let applied = 0;
   const rejected: Record<string, number> = {};
+  const salidas = { rellenadas: 0, sin_salida: 0, otra_salida_viva: 0, por_revisar: 0, errores: 0 };
   for (let i = 0; i < candidates.length; i += 200) {
     const slice = candidates.slice(i, i + 200);
     // 1) bitácora del estado anterior
@@ -195,9 +205,30 @@ async function main() {
     for (const e of (events ?? []) as { id: string; order_id: string }[]) {
       await admin.from("master_backfill_log").update({ event_id: e.id }).eq("batch_id", batchId).eq("order_id", e.order_id);
     }
+    // 4) la caja «por definir» de lo que entregó Grupo GF pasa a su salida
+    //    entregada (lib/own-salida.ts), el mismo día que el evento. Solo lo que
+    //    la puerta aplicó de este lote: los acompañantes viajan en la caja de
+    //    su principal y no tienen caja que rellenar.
+    const done = new Set(result.applied);
+    const boxes = slice
+      .filter(({ row }) => done.has(row.order_id) && hasNotebookDate(row.values.fecha))
+      .map(({ row, m }) => ({ orderId: row.order_id, orderName: (m.order_name as string | null) ?? null, courier: courierOf(row), deliveredAt: occurredAt(row) }));
+    // Si no se pueden leer las salidas, la entrega ya está escrita: se cuenta y
+    // el lote sigue.
+    const fill = await fillOwnSalidas(admin, boxes).catch((cause) => {
+      console.error("  cajas «por definir»:", cause instanceof Error ? cause.message : cause);
+      return { filled: [], sinSalida: [], otraSalidaViva: [], porRevisar: [], errors: boxes.map((box) => box.orderId) };
+    });
+    if (fill.filled.length) await recomputeOrderMasterSafe(admin, fill.filled);
+    salidas.rellenadas += fill.filled.length;
+    salidas.sin_salida += fill.sinSalida.length;
+    salidas.otra_salida_viva += fill.otraSalidaViva.length;
+    salidas.por_revisar += fill.porRevisar.length;
+    salidas.errores += fill.errors.length;
     console.log(`  ${Math.min(i + 200, candidates.length)}/${candidates.length}`);
   }
   console.log(`aplicados: ${applied} · rechazados por la puerta: ${JSON.stringify(rejected)} · lote: ${batchId}`);
+  console.log(`cajas «por definir» de Grupo GF: ${JSON.stringify(salidas)}`);
 
   function courierOf(row: Row): string {
     const cfg = row.sheet.config ?? {};

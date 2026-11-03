@@ -1,0 +1,393 @@
+// La conversación de WhatsApp de la clienta con el bot de confirmación, en la
+// ficha del pedido (MOM §25, «Chatby», 26-10-2026, pedido del owner).
+//
+// Chatby (`app.chatby.io`, white-label de uChat) es el bot que confirma los
+// pedidos contra entrega de la web: el mismo bot y el mismo número para Kenku y
+// Aurela. El equipo salía de Kapta para ver qué se le dijo a la clienta. Ahora
+// la ficha lo lee de la API oficial, a pedido y solo para leer, con el contrato
+// de docs/kapta/chatby-conversaciones.md (probado el 25-10-2026 contra la API
+// real). La llamada vive en lib/chatby-api.ts; este archivo es puro (sin red,
+// sin claves) para que la ficha y las pruebas usen las mismas reglas.
+//
+// De cada respuesta se copian SOLO los campos de abajo. Lo demás —sobre todo
+// los campos del contacto (`user_fields`), que traen la clave de pedidos de una
+// tienda— no sale de la lectura: ni a la pantalla, ni a la base, ni a los
+// registros.
+
+/** Quién escribió: la clienta, el bot, una persona del equipo o una nota interna. */
+export type ChatbyMessageKind = "cliente" | "bot" | "equipo" | "nota" | "otro";
+
+export type ChatbyMediaKind = "imagen" | "audio" | "video" | "archivo";
+
+export interface ChatbyMessage {
+  id: string;
+  kind: ChatbyMessageKind;
+  /** ISO; null si Chatby no mandó `ts`. */
+  at: string | null;
+  text: string;
+  /** El nombre de la plantilla de WhatsApp («nuevo_pedido_cobertura_lima»). */
+  template: string | null;
+  /** La clienta tocó un botón (`postback`): `text` es el botón. */
+  button: boolean;
+  media: ChatbyMediaKind | null;
+  /** Solo https. */
+  mediaUrl: string | null;
+  /** Error de WhatsApp («no entregado»). */
+  error: boolean;
+  /** Quién del equipo escribió, si Chatby lo dice. */
+  agent: string | null;
+  /**
+   * La coordenada que trae el mensaje (una ubicación compartida, un enlace de
+   * Maps con la coordenada, o la coordenada escrita), si cae en el Perú.
+   */
+  location: { lat: number; lng: number } | null;
+}
+
+export type ChatbyConversation =
+  | { status: "ok"; userNs: string; name: string | null; inboxUrl: string; messages: ChatbyMessage[] }
+  /** Chatby no tiene a nadie con ese celular. */
+  | { status: "sin_conversacion" }
+  /** El pedido no trae un celular que se pueda buscar. */
+  | { status: "sin_celular" }
+  /** Kapta no tiene la clave de Chatby (`CHATBY_API_KEY`). */
+  | { status: "sin_clave" }
+  | { status: "error"; message: string; inboxUrl: string | null };
+
+export interface ChatbySubscriber {
+  userNs: string;
+  name: string | null;
+}
+
+/** Los mensajes que se piden: los últimos 20 (MOM §25). */
+export const CHATBY_MESSAGES_LIMIT = 20;
+const TEXT_MAX = 4_000;
+const CHATBY_INBOX_BASE = "https://app.chatby.io/inbox/";
+
+/**
+ * El celular como lo busca Chatby: internacional, con el `+` (verificado: con
+ * «51…» o los 9 dígitos solos devuelve 0 resultados). 9 dígitos que empiezan
+ * con 9 → `+51` delante; 11 que empiezan con 51 → `+` delante; uno que ya viene
+ * con `+`, tal cual. Lo demás no se busca.
+ */
+export function chatbyPhone(raw: string | null | undefined): string | null {
+  const text = (raw ?? "").trim();
+  const digits = text.replace(/\D/g, "");
+  if (digits.length === 9 && digits.startsWith("9")) return `+51${digits}`;
+  if (digits.length === 11 && digits.startsWith("51")) return `+${digits}`;
+  if (text.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+  return null;
+}
+
+/** El `user_ns` va en la dirección de Chatby: solo letras, dígitos, `_` y `-`. */
+function safeUserNs(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : null;
+}
+
+/** El enlace a la conversación en el panel de Chatby (el mismo que usa su panel). */
+export function chatbyInboxUrl(userNs: string): string {
+  return `${CHATBY_INBOX_BASE}${encodeURIComponent(userNs)}`;
+}
+
+function text(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  return t ? t.slice(0, TEXT_MAX) : null;
+}
+
+/** Milisegundos de una fecha de Chatby: unix en segundos, milisegundos o texto. */
+function timeOf(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value < 1e12 ? value * 1000 : value;
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function rowsOf(body: unknown): Record<string, unknown>[] {
+  const data = body && typeof body === "object" ? (body as { data?: unknown }).data : null;
+  return Array.isArray(data) ? data.filter((r): r is Record<string, unknown> => !!r && typeof r === "object") : [];
+}
+
+/**
+ * La clienta de `GET /subscribers?phone=…`: de cada fila solo `user_ns` y
+ * `name`. Con más de una (raro), la de `last_message_at` más reciente.
+ */
+export function pickChatbySubscriber(body: unknown): ChatbySubscriber | null {
+  let best: { sub: ChatbySubscriber; at: number } | null = null;
+  for (const row of rowsOf(body)) {
+    const userNs = safeUserNs(row.user_ns);
+    if (!userNs) continue;
+    const at = timeOf(row.last_message_at) ?? 0;
+    if (!best || at > best.at) best = { sub: { userNs, name: text(row.name) }, at };
+  }
+  return best?.sub ?? null;
+}
+
+function payloadOf(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value === "string" && value.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      /* no es JSON: sin payload */
+    }
+  }
+  return {};
+}
+
+const KIND_BY_TYPE: Record<string, ChatbyMessageKind> = { in: "cliente", out: "bot", agent: "equipo", note: "nota" };
+
+const MEDIA_BY_TYPE: Record<string, ChatbyMediaKind> = {
+  image: "imagen",
+  audio: "audio",
+  voice: "audio",
+  video: "video",
+  file: "archivo",
+  document: "archivo",
+};
+
+function httpsUrl(value: unknown): string | null {
+  const t = text(value);
+  if (!t || !/^https:\/\/[^\s]+$/i.test(t)) return null;
+  try {
+    return new URL(t).protocol === "https:" ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Un mensaje de `GET /subscriber/chat-messages`, o null si no se muestra. */
+function mapMessage(row: Record<string, unknown>, index: number): (ChatbyMessage & { ms: number | null; order: number }) | null {
+  const type = typeof row.type === "string" ? row.type : "";
+  // Los eventos internos («Tag added…») no se piden; si llegan, no se muestran.
+  if (type === "system") return null;
+  const kind = KIND_BY_TYPE[type] ?? "otro";
+  const msgType = typeof row.msg_type === "string" ? row.msg_type : "";
+  const payload = payloadOf(row.payload);
+  const content = text(row.content);
+  const ms = timeOf(row.ts);
+  const base: ChatbyMessage = {
+    id: String(row.id ?? row.mid ?? `m${index}`),
+    kind,
+    at: ms === null ? null : new Date(ms).toISOString(),
+    text: content ?? "",
+    template: null,
+    button: false,
+    media: null,
+    mediaUrl: null,
+    error: false,
+    agent: kind === "equipo" ? text(row.username) : null,
+    location: null,
+  };
+  if (msgType === "text" || msgType === "") {
+    base.text = content ?? text(payload.text) ?? "";
+  } else if (msgType === "wa_template") {
+    // Lo que leyó la clienta está en `payload.body`; `content` dice «ES <nombre>».
+    base.template = text(payload.name);
+    base.text = text(payload.body) ?? content ?? "";
+  } else if (msgType === "postback") {
+    base.button = true;
+    base.text = text(payload.title) ?? content ?? "";
+  } else if (MEDIA_BY_TYPE[msgType]) {
+    base.media = MEDIA_BY_TYPE[msgType];
+    base.mediaUrl = httpsUrl(payload.url) ?? httpsUrl(payload.link) ?? httpsUrl(payload.file_url) ?? httpsUrl(content);
+    base.text = content && content !== base.mediaUrl ? content : text(payload.caption) ?? "";
+  } else if (msgType === "location") {
+    const at = payloadLocation(payload);
+    base.text = content ?? (at ? `Ubicación: ${at.lat}, ${at.lng}` : "Ubicación");
+  } else if (msgType === "error") {
+    base.error = true;
+    base.text = content ?? "WhatsApp no entregó el mensaje.";
+  } else {
+    base.text = content ?? `[${msgType}]`;
+  }
+  if (!base.text && !base.media) return null;
+  base.location = payloadLocation(payload) ?? coordinateInText(base.text);
+  return { ...base, ms, order: index };
+}
+
+/**
+ * ¿Cae en el Perú? Lo demás es un error de tipeo o un punto de prueba. La usa
+ * también el candado de la coordenada por dirección (lib/geocode-google.ts).
+ */
+export function inPeru(lat: number, lng: number): boolean {
+  return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -18.6 && lat <= 0.1 && lng >= -81.5 && lng <= -68.5;
+}
+
+function numberOf(value: unknown): number | null {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Una ubicación compartida por WhatsApp: `latitude`/`longitude` o `lat`/`lng`. */
+function payloadLocation(payload: Record<string, unknown>): { lat: number; lng: number } | null {
+  const lat = numberOf(payload.latitude ?? payload.lat);
+  const lng = numberOf(payload.longitude ?? payload.lng ?? payload.long);
+  return lat !== null && lng !== null && inPeru(lat, lng) ? { lat, lng } : null;
+}
+
+/**
+ * La coordenada escrita en un texto: «Location: -12.12, -77.03», un enlace de
+ * Google Maps con `?q=-12.12,-77.03` o `@-12.12,-77.03`. Un enlace acortado
+ * (maps.app.goo.gl) no la trae: ahí no hay nada que leer.
+ */
+export function coordinateInText(value: string | null | undefined): { lat: number; lng: number } | null {
+  const m = (value ?? "").match(/(-\d{1,2}\.\d{3,})\s*,\s*(-\d{2}\.\d{3,})/);
+  if (!m) return null;
+  const lat = Number(m[1]);
+  const lng = Number(m[2]);
+  return inPeru(lat, lng) ? { lat, lng } : null;
+}
+
+/**
+ * La última ubicación que mandó la clienta por WhatsApp (MOM §11, «La ubicación
+ * que mandó por WhatsApp», 26-10-2026): la que propone el panel de Aliclik
+ * cuando el pedido no trae coordenada (WooCommerce no geocodifica). Solo
+ * mensajes de la clienta: una coordenada que escribió el bot o el equipo no es
+ * la suya.
+ */
+export function chatbyCustomerLocation(
+  messages: readonly Pick<ChatbyMessage, "kind" | "location" | "at">[],
+): { lat: number; lng: number; at: string | null } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.kind === "cliente" && m.location) return { ...m.location, at: m.at };
+  }
+  return null;
+}
+
+/**
+ * Los mensajes para mostrar, del más viejo (arriba) al más nuevo (abajo).
+ * Chatby los manda al revés (verificado); se ordenan por `ts` en vez de solo
+ * invertir, por si algún día llegan mezclados. Sin `ts`, donde venían.
+ */
+export function mapChatbyMessages(body: unknown): ChatbyMessage[] {
+  const rows = rowsOf(body)
+    .map(mapMessage)
+    .filter((m): m is NonNullable<ReturnType<typeof mapMessage>> => m !== null);
+  // Venían del más nuevo al más viejo: el índice invertido es el orden de respaldo.
+  rows.sort((a, b) => {
+    if (a.ms !== null && b.ms !== null && a.ms !== b.ms) return a.ms - b.ms;
+    return b.order - a.order;
+  });
+  return rows.map(({ ms: _ms, order: _order, ...message }) => message);
+}
+
+const LIMA_PARTS = new Intl.DateTimeFormat("es-PE", {
+  timeZone: "America/Lima",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function limaParts(iso: string): Record<string, string> | null {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  const out: Record<string, string> = {};
+  for (const part of LIMA_PARTS.formatToParts(date)) out[part.type] = part.value;
+  return out;
+}
+
+/** «2026-10-25»: el día en Lima, para agrupar los mensajes por día. */
+export function chatbyLimaDay(iso: string | null): string | null {
+  const p = iso ? limaParts(iso) : null;
+  return p ? `${p.year}-${p.month}-${p.day}` : null;
+}
+
+/** «12:57»: la hora en Lima, dentro del globo. */
+export function chatbyLimaTime(iso: string | null): string {
+  const p = iso ? limaParts(iso) : null;
+  return p ? `${p.hour}:${p.minute}` : "";
+}
+
+/** «Hoy», «Ayer» o «25-10-2026», contado en Lima. */
+export function chatbyDayLabel(day: string, now: Date = new Date()): string {
+  const today = chatbyLimaDay(now.toISOString());
+  const yesterday = chatbyLimaDay(new Date(now.getTime() - 86_400_000).toISOString());
+  if (day === today) return "Hoy";
+  if (day === yesterday) return "Ayer";
+  const [y, m, d] = day.split("-");
+  return `${d}-${m}-${y}`;
+}
+
+/**
+ * Cuántos de los mensajes son de la clienta (texto, botón o archivo): la cifra
+ * de la pestaña «Chatby», que dice sin abrirla si la clienta respondió. Cuenta
+ * dentro de los últimos 20 que se traen.
+ */
+export function chatbyCustomerCount(messages: readonly Pick<ChatbyMessage, "kind">[]): number {
+  return messages.filter((m) => m.kind === "cliente").length;
+}
+
+/**
+ * ¿El mensaje nombra este pedido? Las plantillas dicen el número («Hemos
+ * recibido tu pedido #KP200123»); como Kenku y Aurela comparten el bot, en la
+ * misma conversación puede haber pedidos de las dos marcas, y así se ve cuál es
+ * el de esta ficha. Con o sin `#`, sin distinguir mayúsculas y sin confundir
+ * #KP2001 con #KP20012.
+ */
+export function chatbyMentionsOrder(message: Pick<ChatbyMessage, "text">, orderName: string | null | undefined): boolean {
+  const name = (orderName ?? "").replace(/^#/, "").trim();
+  if (name.length < 3) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9])#?${escaped}(?![A-Za-z0-9])`, "i").test(message.text);
+}
+
+// --- Responder desde la ficha (MOM §25, «Chatby», decisión del owner del 02-11-2026) ---
+
+/**
+ * WhatsApp deja mandar texto libre solo hasta 24 h después del último mensaje
+ * de la clienta (texto, botón o archivo). Pasado eso, solo plantillas: desde
+ * Chatby, no desde Kapta.
+ */
+export const CHATBY_REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Lo más largo que se deja mandar desde la ficha: un mensaje, no un documento. */
+export const CHATBY_REPLY_MAX = 1_000;
+/**
+ * Minutos que el bot de esa clienta queda en pausa al responder desde Kapta,
+ * para que sus flujos y recordatorios no hablen encima de la persona (owner,
+ * 02-11-2026; lo mismo que hace Chatby cuando alguien responde desde su panel).
+ */
+export const CHATBY_REPLY_PAUSE_MINUTES = 60;
+
+export type ChatbyReplyWindow =
+  /** Se puede escribir hasta `closesAt` (ISO). */
+  | { open: true; closesAt: string }
+  /** No: la clienta no escribió en los mensajes traídos, o lo hizo hace más de 24 h. */
+  | { open: false; lastCustomerAt: string | null };
+
+/**
+ * La ventana de 24 h de WhatsApp, con los mensajes que se trajeron (los
+ * últimos 20). Si la clienta escribió antes de esos 20, cuenta como cerrada:
+ * mejor no dejar escribir que mandar algo que WhatsApp no entrega.
+ */
+export function chatbyReplyWindow(
+  messages: readonly Pick<ChatbyMessage, "kind" | "at">[],
+  now: Date = new Date(),
+): ChatbyReplyWindow {
+  let last: number | null = null;
+  for (const message of messages) {
+    if (message.kind !== "cliente" || !message.at) continue;
+    const at = Date.parse(message.at);
+    if (Number.isFinite(at) && (last === null || at > last)) last = at;
+  }
+  if (last !== null && now.getTime() - last < CHATBY_REPLY_WINDOW_MS) {
+    return { open: true, closesAt: new Date(last + CHATBY_REPLY_WINDOW_MS).toISOString() };
+  }
+  return { open: false, lastCustomerAt: last === null ? null : new Date(last).toISOString() };
+}
+
+/** El texto que escribió la persona, listo para mandar, o por qué no. */
+export function chatbyReplyText(raw: string): { text: string } | { error: string } {
+  const text = raw.replace(/\r\n?/g, "\n").trim();
+  if (!text) return { error: "El mensaje está vacío." };
+  if (text.length > CHATBY_REPLY_MAX) return { error: `El mensaje es demasiado largo (máx. ${CHATBY_REPLY_MAX} caracteres).` };
+  return { text };
+}

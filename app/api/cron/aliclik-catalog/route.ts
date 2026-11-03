@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
 import { getStoreCreds } from "@/lib/ingest";
-import { syncAliclikCatalog } from "@/lib/aliclik-catalog";
+import { loadSkuCatalogSource, syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -64,9 +64,8 @@ async function run(req: NextRequest) {
         storeId,
         { apiToken: creds.aliclik_api_token },
         admin,
-        creds.shopify_token
-          ? { domain: creds.shopify_domain, token: creds.shopify_token }
-          : undefined,
+        // Shopify o WooCommerce, según `stores.platform` (MOM §38.12).
+        await loadSkuCatalogSource(admin, storeId, creds),
       );
       reports.push({ storeId, ...report });
     } catch (e) {

@@ -4,6 +4,7 @@
     "gru1"
   ],
   "crons": [
+    { "path": "/api/cron/woo-sale-returns", "schedule": "4,8,14,18,24,28,38,44,54,58 * * * *" },
     {
       "path": "/api/cron/urpi-programming",
       "schedule": "*/15 * * * *"
@@ -11,6 +12,14 @@
     {
       "path": "/api/cron/swayp-auto-dispatch",
       "schedule": "12,42 * * * *"
+    },
+    {
+      "path": "/api/cron/aliclik-scheduled",
+      "schedule": "7 13-18 * * *"
+    },
+    {
+      "path": "/api/cron/chatby-autoconfirm",
+      "schedule": "9,19,29,39,49,59 * * * *"
     },
     {
       "path": "/api/cron/swayp-pc-auto",
@@ -104,6 +113,22 @@
     {
       "path": "/api/cron/invoices",
       "schedule": "6,16,26,36,46,56 * * * *"
+    },
+    {
+      "path": "/api/cron/shopify-own-app-tokens",
+      "schedule": "23 * * * *"
+    },
+    {
+      "path": "/api/cron/invoice-snapshots",
+      "schedule": "1-59/2 * * * *"
+    },
+    {
+      "path": "/api/cron/product-photos",
+      "schedule": "48 * * * *"
+    },
+    {
+      "path": "/api/cron/woo-webhooks",
+      "schedule": "34 * * * *"
     }
   ]
 }

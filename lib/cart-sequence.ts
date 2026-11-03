@@ -20,6 +20,7 @@ import { isSendablePhone, isTierLimitError, sanitizeTemplateParam } from "@/lib/
 import { sendWhatsappTemplate } from "@/lib/kapso";
 import { tzParts } from "@/lib/metrics";
 import { env } from "@/lib/env";
+import { productPhotosThatLoad } from "@/lib/product-photos";
 import {
   cartImageVariant,
   cartProductWithImage,
@@ -322,15 +323,25 @@ export async function runCartSequence(
 
   // Prueba de imagen (0233): solo el mensaje 1 y solo los carritos con foto en
   // el espejo de catálogo; entre esos, 50/50 por carrito (lib/cart-image-test).
+  // Cuando Shopify ya no sirve las fotos de la tienda, «con foto» es con su
+  // copia guardada (MOM §39): se decide sobre el catálogo, ANTES del sorteo,
+  // igual que hasta ahora. Si Storage no contesta, ninguna: el carrito queda
+  // fuera de la prueba, como cuando el espejo no se puede leer.
   const imageTest = creds.cart_seq_image_test_enabled && !!creds.cart_seq_image_template_1_name;
   let catalog: CatalogImage[] = [];
   if (imageTest && batch.some((l) => cartSeqTouchesFor(l) === 0)) {
     const { data: images } = await admin
       .from("shopify_product_images")
-      .select("product_id, catalog_title")
+      .select("product_id, catalog_title, image_url")
       .eq("store_id", storeId)
       .not("image_url", "is", null);
-    catalog = (images as CatalogImage[] | null) ?? [];
+    catalog =
+      (await productPhotosThatLoad(
+        admin,
+        storeId,
+        (images as (CatalogImage & { image_url?: string | null })[] | null) ?? [],
+        nowMs,
+      )) ?? [];
   }
 
   const apiKey = creds.kapso_api_key;

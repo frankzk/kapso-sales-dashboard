@@ -30,12 +30,12 @@ const RESULT_TONE: Record<string, string> = {
 };
 
 const TABS: { key: UrpiBucket; label: string; help: string }[] = [
-  { key: "por_aplicar", label: "Entregados por marcar", help: "Al cargar el reporte, Kapta marca solos los entregados por Urpi. Aquí queda lo que no pudo marcar: quien cargó no tenía permiso para editar el Master, o algo falló. Márcalos: van al Master por la misma vía que la liquidación, y su salida «Por definir» pasa a ser la salida de Urpi entregada." },
-  { key: "cancelado", label: "Cancelados por Urpi", help: "Urpi los canceló y siguen abiertos en Kapta. Seguimiento Lima decide si se llaman, salen con otro courier o vuelven. Kapta no cambia su estado." },
+  { key: "por_aplicar", label: "Entregados por marcar", help: "Al cargar el reporte, Kapta marca solos los entregados por Urpi. Aquí queda lo que no pudo marcar: quien cargó no tenía permiso para editar el Master, algo falló, o Urpi lo entregó antes de los días que se muestran (lo antiguo no se marca solo). Márcalos: van al Master por la misma vía que la liquidación, y su salida «Por definir» pasa a ser la salida de Urpi entregada." },
+  { key: "cancelado", label: "Cancelados por Urpi", help: "Urpi los canceló y siguen abiertos en Kapta. Si su salida de Urpi estaba en ruta, Kapta la anula como intento fallido y el pedido pasa a «Por reprogramar Lima»; Seguimiento Lima decide si se llaman, salen con otro courier o vuelven." },
   { key: "reprogramado", label: "Reprogramados", help: "Urpi los reintenta el siguiente día de lunes a sábado desde la fecha del reporte." },
   { key: "por_vincular_entregado", label: "Por vincular – entregados", help: "Urpi los entregó, pero el teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío y queda marcado entregado en el Master." },
   { key: "por_vincular_otro", label: "Por vincular – otros", help: "Cancelados, reprogramados o en curso cuyo teléfono no lleva a un único pedido. Elige el pedido o escribe su código: se vincula todo el envío." },
-  { key: "observacion", label: "Observaciones", help: "Urpi entregó y cobró, pero el pedido está anulado en Shopify o devuelto. No se marca entregado: solo Shopify termina una venta. Si se rehízo el pedido en Shopify, vincúlalo al nuevo; si no, ciérrala con el motivo (queda en la actividad del pedido)." },
+  { key: "observacion", label: "Observaciones", help: "Urpi entregó y cobró, pero el pedido está anulado en la tienda o devuelto. No se marca entregado: solo la tienda termina una venta. Si se rehízo el pedido en la tienda, vincúlalo al nuevo; si no, ciérrala con el motivo (queda en la actividad del pedido)." },
   { key: "no_reconocido", label: "Estado no reconocido", help: "Urpi escribió un estado que Kapta no conoce. Se guarda tal cual y no se interpreta." },
   { key: "en_curso", label: "En curso", help: "Programados o en coordinación con Urpi." },
   { key: "al_dia", label: "Al día", help: "Kapta ya los tiene entregados, anulados o devueltos, o la observación se cerró con motivo." },
@@ -101,7 +101,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Couriers externos</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Urpi · Resultados de entrega</h1>
-        <p className="mt-2 max-w-3xl text-sm text-slate-600">En Urpi, abre «Reporte del mes – detallado», pulsa <strong>Exportar</strong> y carga aquí el .csv. Kapta vincula cada envío por teléfono y te dice qué falta hacer. Se muestran los intentos de los últimos {days} días.</p>
+        <p className="mt-2 max-w-3xl text-sm text-slate-600">En Urpi, abre «Reporte del mes – detallado», pulsa <strong>Exportar</strong> y carga aquí el .csv. Kapta vincula cada envío por teléfono y te dice qué falta hacer. Se muestran los intentos de los últimos {days} días, y los entregados más antiguos que faltan marcar o cuya salida «Por definir» falta pasar a Urpi.</p>
       </div>
       {canImport && <div className="flex flex-col items-end gap-1">
         <button disabled={busy} className={primary} onClick={() => fileInput.current?.click()}>{uploading ? "Leyendo reporte…" : "Cargar reporte de Urpi"}</button>
@@ -117,7 +117,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       <p className="mt-2 text-sm text-slate-600">{canImport ? "Carga el export de «Reporte del mes – detallado» para empezar." : "Pide a quien gestiona Urpi que cargue su reporte."}</p>
     </div> : <>
       {salidaPending.length > 0 && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-        <span>{salidaPending.length} pedido(s) entregados por Urpi siguen con su salida «Por definir» pendiente, y la mesa de cierre los ve como «Salida adicional activa».</span>
+        <span>{salidaPending.length} pedido(s) entregados por Urpi siguen con su salida sin cerrar («Por definir» o de Urpi en ruta), y la mesa de cierre los ve como «Salida adicional activa».</span>
         {canApply && <button className={button} disabled={busy} onClick={() => run(() => applyUrpiDeliveries(orgId, salidaPending))}>{pending ? "Actualizando…" : "Pasar a salida de Urpi entregada"}</button>}
       </div>}
       <div role="tablist" aria-label="Resultados de Urpi" className="flex flex-wrap gap-2">
@@ -157,7 +157,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
                 : <LinkPicker shipment={shipment} canLink={canImport} busy={busy} code={codes[shipment.key] ?? ""}
                     onCode={(value) => setCodes((prev) => ({ ...prev, [shipment.key]: value }))}
                     onLink={(ref) => run(() => linkUrpiReportRow(orgId, latest.urpi_row, ref))} />}
-                {order && latest.link_method && <div className="text-xs text-slate-500">{latest.link_method === "manual" ? "Vinculado a mano" : "Vinculado por teléfono"}</div>}</td>
+                {order && latest.link_method && <div className="text-xs text-slate-500">{latest.link_method === "manual" ? "Vinculado a mano" : latest.link_method === "programacion" ? "Vinculado por la programación" : "Vinculado por teléfono"}</div>}</td>
               <td className="px-4 py-3"><div className="font-medium">{data.recipient ?? "Sin nombre"}</div><div className="text-xs text-slate-500">{data.phone ?? "Sin teléfono válido"}</div></td>
               <td className="max-w-72 px-4 py-3">
                 <div className={`font-semibold ${RESULT_TONE[latest.result_code] ?? "text-slate-700"}`}>{latest.result_code === "otro" ? data.resultWritten : URPI_RESULT_LABEL[latest.result_code]}</div>
@@ -173,8 +173,8 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
                 : <><p className="line-clamp-3 whitespace-pre-wrap text-slate-600">{data.detail ?? "Sin detalle"}</p><Evidence urls={data.evidence} /></>}</td>
               <td className="max-w-72 px-4 py-3 text-xs">{order ? <>
                 <div className="font-medium text-slate-800">{GENERAL_LABEL[order.general_status] ?? order.general_status}</div><div className="text-slate-500">{order.stage_label}</div>
-                {shipment.annulledOnlyInKapta && <div className="mt-1 text-amber-800">Anulado solo en Kapta; en Shopify sigue vivo, así que se puede marcar.</div>}
-                {shipment.bucket === "observacion" && <div className="mt-1 text-amber-800">{order.cancelled_at ? `Anulado en Shopify el ${timeLabel(order.cancelled_at).split(",")[0]}` : "Devuelto en Kapta"}{latest.report_date ? `; Urpi lo entregó el ${dateLabel(latest.report_date)}` : ""}.</div>}
+                {shipment.annulledOnlyInKapta && <div className="mt-1 text-amber-800">Anulado solo en Kapta; en la tienda sigue vivo, así que se puede marcar.</div>}
+                {shipment.bucket === "observacion" && <div className="mt-1 text-amber-800">{order.cancelled_at ? `Anulado en la tienda el ${timeLabel(order.cancelled_at).split(",")[0]}` : "Devuelto en Kapta"}{latest.report_date ? `; Urpi lo entregó el ${dateLabel(latest.report_date)}` : ""}.</div>}
                 {shipment.bucket === "al_dia" && order.observation_resolved && <div className="mt-1 text-slate-600">Observación cerrada: {order.observation_resolved.note}</div>}
                 {shipment.bucket === "observacion" && canImport && <ObservationActions busy={busy} note={notes[shipment.key] ?? ""} code={codes[shipment.key] ?? ""}
                   onNote={(value) => setNotes((prev) => ({ ...prev, [shipment.key]: value }))}
@@ -189,7 +189,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       </div>
       <div className="flex items-center justify-between text-sm text-slate-500"><span>{visible.length ? page * 50 + 1 : 0}–{Math.min((page + 1) * 50, visible.length)} de {visible.length}</span><div className="flex gap-2"><button className={button} disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Anterior</button><button className={button} disabled={(page + 1) * 50 >= visible.length} onClick={() => setPage((value) => value + 1)}>Siguiente</button></div></div>
     </>}
-    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; con varios, decides tú. Al cargar el reporte, los entregados se marcan solos en el Master si quien carga tiene permiso para editarlo, y la salida «Por definir» del pedido pasa a ser la salida de Urpi entregada. Cancelados y reprogramados quedan registrados y no cambian el estado del pedido.</p>
+    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; si el teléfono no basta, decide la programación enviada ese día (lleva el código); si tampoco, decides tú. Al cargar el reporte, los entregados se marcan solos en el Master si quien carga tiene permiso para editarlo, y la salida «Por definir» del pedido pasa a ser la salida de Urpi entregada. Un cancelado anula la salida de Urpi en ruta y pasa el pedido a «Por reprogramar Lima»; un reprogramado solo se registra, porque Urpi lo reintenta.</p>
   </div>;
 }
 

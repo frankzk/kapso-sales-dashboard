@@ -13,6 +13,7 @@
 // el carrito. Sin coordenada, 1 de cada 7 «Agencia» sería Provincia COD (el
 // desempate por cercanía a un punto donde Aliclik ya entregó, 0100).
 
+import { learnedDistrictFits } from "@/lib/district-learning";
 import { usableAddress } from "@/lib/leads";
 import { normalizeDistrict } from "@/lib/shipments";
 import type { OrderCoverage } from "@/lib/order-coverage";
@@ -40,11 +41,16 @@ const text = (v: string | null | undefined) => (v ?? "").trim() || null;
  */
 export function leadDeliveryProbe(
   lead: { district: string | null; province: string | null; region: string | null },
-  geo: { province: string | null; department: string | null } | null,
+  learned: { province: string | null; department: string | null } | null,
   shipping: OrderShippingAddress | null,
 ): LeadDeliveryProbe | null {
   const district = usableAddress(lead.district);
   if (!district) return null;
+  // Lo aprendido por nombre de distrito solo vale si cabe en el departamento
+  // del lead (25-10-2026, lib/district-learning.ts): con «miraflores →
+  // arequipa» aprendido, un lead de Miraflores de Lima sin departamento
+  // preguntaba la cobertura como si fuera de Arequipa.
+  const geo = learnedDistrictFits(learned, text(lead.region) ?? text(lead.province) ?? text(shipping?.province), district);
   const sameDistrict = !!shipping?.city && normalizeDistrict(shipping.city) === normalizeDistrict(district);
   const located = sameDistrict && shipping!.latitude != null && shipping!.longitude != null;
   return {

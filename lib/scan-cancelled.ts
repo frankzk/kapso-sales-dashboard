@@ -11,6 +11,7 @@
 // sale.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 
 /** Cómo lo dice Shopify (`cancel_reason`) → cómo lo dice la operación. */
 const CANCEL_REASON: Record<string, string> = {
@@ -52,7 +53,7 @@ export function cancelledScanMessage(facts: CancelledOrderFacts): string | null 
     const day = limaShortDate(facts.cancelledAt);
     const reason = facts.cancelReason ? CANCEL_REASON[facts.cancelReason] ?? null : null;
     const detail = [day ? `el ${day}` : null, reason].filter(Boolean).join(", ");
-    return `${name} está ANULADO en Shopify${detail ? ` (${detail})` : ""}: no sale. Sepáralo para devolverlo al stock.`;
+    return `${name} está ANULADO en la tienda${detail ? ` (${detail})` : ""}: no sale. Sepáralo para devolverlo al stock.`;
   }
   if (facts.generalStatus === "anulado") {
     return `${name} está ANULADO: no sale. Sepáralo para devolverlo al stock.`;
@@ -72,10 +73,11 @@ export async function cancelledScanNotice(
   ]);
   const o = order as { name?: string | null; cancelled_at?: string | null; cancel_reason?: string | null } | null;
   const m = master as { order_name?: string | null; general_status?: string | null } | null;
-  return cancelledScanMessage({
+  const message = cancelledScanMessage({
     orderName: o?.name ?? m?.order_name ?? null,
     cancelledAt: o?.cancelled_at ?? null,
     cancelReason: o?.cancel_reason ?? null,
     generalStatus: m?.general_status ?? null,
   });
+  return message ?? await legacySaleSendBlock(admin, orderId);
 }

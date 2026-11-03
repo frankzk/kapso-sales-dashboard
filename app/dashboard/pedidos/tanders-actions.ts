@@ -15,6 +15,7 @@ import { terminalOrderBlocker } from "@/lib/order-status";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { decrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -28,12 +29,16 @@ import {
   tandersCoverageEligible,
 } from "@/lib/tanders/draft";
 import { getStoreCreds } from "@/lib/ingest";
+import { parseLabelLineItems, type LabelLineItem } from "@/lib/labels/line-items";
+import { loadStorePaymentMethods } from "@/lib/payment-methods";
+import { orderPlatformOf } from "@/lib/shipment-order-capture";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { puertaDeSalidaAdicional, type SalidaExistente } from "@/lib/shipment-output";
 import { fetchOrderById } from "@/lib/shopify";
 import { sweepTandersPayments, type SweepReport } from "@/lib/tanders/payment-sweep";
 import { sweepTandersStatus, type TandersStatusReport } from "@/lib/tanders/status-sweep";
 import { TandersApiError } from "@/lib/tanders/types";
+import { TANDERS_NEW_GUIDES_ENABLED, TANDERS_NEW_GUIDES_OFF_MESSAGE } from "@/lib/tanders/new-guides";
 import type { OrderMasterRow } from "@/lib/types";
 
 const MASTER_PATH = "/dashboard/pedidos";
@@ -165,6 +170,10 @@ async function liveOrderNote(
   try {
     const creds = await getStoreCreds(order.store_id, admin);
     if (!creds?.shopify_token || !order.shopify_order_id) return stored;
+    // Un pedido de WooCommerce no se le pide a Shopify: no lo tiene, y con su
+    // `wc-…` solo devolvería un error (MOM §38.12). Va la nota guardada, que la
+    // entrada de WooCommerce copia en `raw.note` (§38.7).
+    if ((await orderPlatformOf(admin, orderId)) === "woocommerce") return stored;
     const live = await fetchOrderById({
       domain: creds.shopify_domain,
       token: creds.shopify_token,
@@ -181,6 +190,15 @@ async function liveOrderNote(
   } catch {
     return stored;
   }
+}
+
+/** Los productos del pedido, como los imprime el rótulo interno. */
+async function orderItems(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+): Promise<LabelLineItem[]> {
+  const { data } = await admin.from("orders").select("line_items").eq("id", orderId).maybeSingle();
+  return parseLabelLineItems((data as { line_items: unknown } | null)?.line_items);
 }
 
 /**
@@ -262,6 +280,11 @@ export async function loadTandersDraft(
     warnings.push("El pedido ya está pagado: el monto a cobrar va en 0.");
   }
 
+  const collectionAmount = defaultCollectionAmount({
+    paymentState: row.payment_state,
+    orderTotal: row.order_total,
+  });
+
   return {
     draft: {
       orderId,
@@ -274,14 +297,15 @@ export async function loadTandersDraft(
       geoSource: row.geo_source ?? null,
       recipientName: row.customer_name,
       recipientPhone: row.customer_phone,
-      collectionAmount: defaultCollectionAmount({
-        paymentState: row.payment_state,
-        orderTotal: row.order_total,
-      }),
+      collectionAmount,
       salidaAdicional,
       note: composeTandersNote({
         reference: row.reference,
         shopifyNote: await liveOrderNote(admin, orderId),
+        orderName: row.order_name,
+        items: await orderItems(admin, orderId),
+        // Un pedido que no cobra no le pide al cliente que pague.
+        paymentMethods: collectionAmount > 0 ? await loadStorePaymentMethods(admin, row.store_id) : null,
       }),
       blockers,
       warnings,
@@ -314,6 +338,10 @@ export async function createTandersGuide(
   if (!perms.can("tanders.create_guide")) {
     return { error: "Tu rol no permite crear guías de Tanders." };
   }
+  // Desde el 26-10-2026 Tanders no crea guías nuevas (MOM §9, «Aliclik en
+  // Lima»). El plan de rutas ya no lo ofrece; esto cierra la acción, que es
+  // invocable directamente.
+  if (!TANDERS_NEW_GUIDES_ENABLED) return { error: TANDERS_NEW_GUIDES_OFF_MESSAGE };
 
   const ctx = await authorize(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
@@ -333,6 +361,8 @@ export async function createTandersGuide(
 
   // Se revalida acá y no solo en el modal: entre que se abrió y se confirmó,
   // otro operador pudo haber creado una guía para el mismo pedido.
+  const saleBlock = await legacySaleSendBlock(admin, orderId);
+  if (saleBlock) return { error: saleBlock };
   const puerta = puertaDeSalidaAdicional({
     courier: "tanders",
     operation: "lima",
@@ -381,6 +411,8 @@ export async function createTandersGuide(
 
   const client = new TandersClient({ email: store.tanders_email, password });
 
+  const finalSaleBlock = await legacySaleSendBlock(admin, orderId);
+  if (finalSaleBlock) return { error: finalSaleBlock };
   let order;
   try {
     order = await client.createOrder(built.payload);

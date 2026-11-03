@@ -440,16 +440,24 @@ describe("vercel.json: el barrido de comprobantes", () => {
   it("no cae en el minuto de ningún barrido que corre cada hora o más seguido", () => {
     // Un minuto compartido con el sync (cada 5) o con el recálculo del Master
     // pelea por la misma base y mezcla los logs.
+    // Cada parte del minuto: `*`, `*/n`, `a-b`, `a-b/n` o un número.
     const minutesOf = (schedule: string): number[] => {
       const [minute, hour] = schedule.split(" ");
       if (hour !== "*" && !hour!.startsWith("*/")) return [];
-      if (minute === "*") return Array.from({ length: 60 }, (_, i) => i);
-      if (minute!.startsWith("*/")) {
-        const step = Number(minute!.slice(2));
-        return Array.from({ length: 60 / step }, (_, i) => i * step);
+      const out: number[] = [];
+      for (const part of minute!.split(",")) {
+        const [range, stepText] = part.split("/");
+        const step = stepText === undefined ? 1 : Number(stepText);
+        const [from, to] =
+          range === "*" ? [0, 59] : range!.includes("-") ? range!.split("-").map(Number) : [Number(range), stepText ? 59 : Number(range)];
+        expect(Number.isInteger(step) && step > 0 && Number.isInteger(from) && Number.isInteger(to), `${schedule}`).toBe(true);
+        for (let m = from!; m <= to!; m += step) out.push(m);
       }
-      return minute!.split(",").map(Number);
+      return out;
     };
+    expect(minutesOf("1-59/2 * * * *")).toHaveLength(30);
+    expect(minutesOf("*/5 * * * *")).toEqual([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
+    expect(minutesOf("4,14 * * * *")).toEqual([4, 14]);
     const mine = new Set(minutesOf("6,16,26,36,46,56 * * * *"));
     for (const c of crons.filter((x) => x.path !== "/api/cron/invoices")) {
       for (const m of minutesOf(c.schedule)) expect(mine.has(m), `${c.path} en el minuto ${m}`).toBe(false);

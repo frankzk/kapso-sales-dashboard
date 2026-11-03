@@ -273,9 +273,10 @@ export function stopReturnState(stop: {
   returned_at?: string | null;
   carried_to?: string | null;
 }): StopReturnState | null {
-  if (stop.status !== "no_entregado" || !stop.dispatch_manifest_id) return null;
-  if (stop.returned_at) return "devuelto";
+  if (!stop.dispatch_manifest_id || (stop.status !== "no_entregado" && stop.status !== "pendiente")) return null;
+  if (stop.status === "no_entregado" && stop.returned_at) return "devuelto";
   if (stop.carried_to) return "paso_a_otra_ruta";
+  if (stop.status !== "no_entregado") return null;
   return "por_devolver";
 }
 

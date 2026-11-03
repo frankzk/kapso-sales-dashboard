@@ -211,13 +211,17 @@ async function rescueOrphanGuide(
     .limit(1);
   if ((already ?? []).length) return true;
 
-  // 2) ¿Hay una guía del pedido todavía sin identificador? Se le pone.
+  // 2) ¿Hay una guía del pedido todavía sin identificador? Se le pone. Solo a
+  //    una sin código o con ESTE código: un pedido puede tener otra guía de
+  //    Aliclik ya cerrada, importada del Excel sin identificador (MOM §10.2,
+  //    03-11-2026), y ponerle el número de la nueva mezclaría las dos.
   const { data: linked, error: linkErr } = await admin
     .from("shipments")
     .update({ external_order_number: orderNumber })
     .eq("order_id", orphan.orderId)
     .eq("courier", "aliclik")
     .is("external_order_number", null)
+    .or(/^[A-Za-z0-9_-]+$/.test(orderNumber) ? `guide_code.is.null,guide_code.eq.${orderNumber}` : "guide_code.is.null")
     .select("id");
   if (linkErr) {
     report.errors.push(`huérfana ${orderNumber}: ${linkErr.message}`);

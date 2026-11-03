@@ -111,7 +111,8 @@ export interface StatementLog {
  * `SkipReason` (lib/yape-statement/match.ts) más las del orquestador.
  */
 const SKIP_LABEL: Record<string, string> = {
-  sin_movimiento: "Ningún movimiento cuadra en monto, minuto y quién pagó",
+  sin_movimiento: "Ningún movimiento cuadra en monto y minuto",
+  otro_pagador: "Cuadran monto y minuto, pero pagó otra persona (lo decide alguien)",
   varios_movimientos: "Más de un movimiento posible",
   movimiento_disputado: "Otro pago reclama el mismo movimiento",
   no_fue_a_yape: "Cobro del courier que no fue a Yape",

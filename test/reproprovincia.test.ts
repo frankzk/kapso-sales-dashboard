@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  LIMA_RECOVERY_DAYS,
   RECOVERY_CALL_DISPOSITIONS,
   RECOVERY_DISCARDED_KIND,
   RECOVERY_LABEL,
@@ -9,6 +10,7 @@ import {
   recoveryActive,
   recoveryOutcome,
   recoveryWindow,
+  recoveryWindowDaysForOperation,
 } from "@/lib/reproprovincia";
 import { DISCARD_REASON_MAX, DISCARD_REASON_MIN, validarMotivoDescarte } from "@/lib/recovery-discard";
 import { derivedGuideDates } from "@/lib/guide-dates";
@@ -236,6 +238,23 @@ describe("y la macroetapa la aplica IGUAL", () => {
     expect(r.since).toBe(hace(5));
   });
 
+  it("Aliclik en Lima (26-10-2026): la guía que no entregó va a «Por reprogramar Lima», no a Reproprovincia", () => {
+    // Desde que Aliclik entra a Lima con AUTOECOM (MOM §9, «Aliclik en Lima»),
+    // su falla sigue la regla de la operación, como Tanders y Swayp en Lima.
+    const legacy = resolveOrderState({ order: pedido(), guides: [guia()], events: [], override: null, now: NOW, recoveryWindowDays: 30 });
+    const r = resolveMacroStage({
+      order: macroPedido({ coverage: "lima", region: "Lima", province: "Lima", district: "Independencia" }),
+      guides: [macroGuia()],
+      events: [],
+      legacy: { general: legacy.general, operational: legacy.operational, since: legacy.since },
+      paymentState: "sin_pago",
+      recoveryWindowDays: 30,
+      now: NOW,
+    });
+    expect(r.stage).toBe("en_curso");
+    expect(r.substage).toBe("por_reprogramar_lima");
+  });
+
   it("el «acepta reenvío» del agente de voz NO mueve la etapa: la cierra la salida Swayp (§11.8)", () => {
     // El agente escribe `confirmation_contact` y `confirmed` sobre el pedido.
     // Si eso lo mandara a Preparación, saldría de la cola de Reproprovincia
@@ -337,7 +356,7 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // guía de cualquier courier de Lima anulada después de salir, también.
     // v1.24: Swayp desde Por confirmar. v1.25: entregado, pagado completo a la
     // tienda y sin courier, no espera liquidación.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.30");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.37");
   });
 });
 
@@ -374,11 +393,12 @@ describe("las piezas en el código", () => {
     expect(src).toContain('"returned_at,returned_source,closed_at,"');
   });
 
-  it("el Master lleva la etiqueta cruda y la ventana por tienda a los DOS resolvedores", () => {
+  it("el Master lleva la etiqueta cruda y la ventana por tienda (Lima, la suya) a los DOS resolvedores", () => {
     const src = read("lib/order-master.ts");
     expect(src).toContain("created_at,updated_at,reported_status");
     expect(src).toContain("recoveryWindowByStore.set(row.id, row.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS)");
-    expect((src.match(/recoveryWindowDays: recoveryWindowByStore\.get\(order\.store_id\)/g) ?? []).length).toBe(2);
+    expect(src).toContain("recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,");
+    expect((src.match(/recoveryWindowDays: recoveryDays,/g) ?? []).length).toBe(2);
   });
 
   it("el MOM lo dice, que es donde manda", () => {
@@ -490,7 +510,11 @@ describe("Envíos, en el código", () => {
     expect(fn).toContain('.eq("kind", RECOVERY_DISCARDED_KIND)');
     expect(fn).toContain('.not("cancelled_at", "is", null)');
     expect(fn).toContain('select("id,return_recovery_max_days")');
-    expect(fn).not.toContain("order_master");
+    // Del Master solo se lee la operación, que elige la ventana (Lima, 21 días);
+    // nunca su estado ni su etapa.
+    expect(fn).toContain('sb.from("order_master").select("order_id,macro_operation")');
+    expect(fn).toContain("recoveryWindowDaysForOperation(");
+    expect(fn).not.toMatch(/macro_stage|macro_substage|operational_status|general_status/);
   });
 
   it("el contador del chip pasa por la MISMA decisión que la lista", () => {
@@ -633,9 +657,24 @@ describe("cuadrar Envíos con el Master", () => {
     const start = src.indexOf("export async function reconcileOrderMaster(");
     const fn = src.slice(start, src.indexOf("\nexport ", start + 10));
     expect(fn).toContain('.eq("operational_status", "pendiente_nuevo_courier")');
-    expect(fn).toContain('.in("macro_substage", ["gestion_reproprovincia", "por_reprogramar_lima"])');
-    expect(fn).toContain('.lt("macro_since", cutoff)');
+    expect(fn).toContain('.eq("macro_substage", substage)');
+    expect(fn).toContain('["gestion_reproprovincia", false, cutoff]');
+    // Lima se corta con su propia ventana (03-11-2026).
+    expect(fn).toContain('["por_reprogramar_lima", false, limaCutoff]');
+    expect(fn).toContain("LIMA_RECOVERY_DAYS * 86_400_000");
+    expect(fn).toContain('.lt("macro_since", since)');
     expect(fn).toContain("store.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS");
+  });
+
+  it("Lima tiene su ventana de 21 días; Provincia y Agencia, la de la tienda (owner, 03-11-2026)", () => {
+    expect(LIMA_RECOVERY_DAYS).toBe(21);
+    expect(recoveryWindowDaysForOperation("lima", 7)).toBe(21);
+    expect(recoveryWindowDaysForOperation("provincia_cod", 7)).toBe(7);
+    expect(recoveryWindowDaysForOperation("agencia", 30)).toBe(30);
+    // El Master usa la misma para el estado y para la macroetapa.
+    const src = read("lib/order-master.ts");
+    expect(src).toContain("const recoveryDays = recoveryWindowDaysForOperation(");
+    expect(src.split("recoveryWindowDays: recoveryDays,").length - 1).toBe(2);
   });
 
   it("y el MOM lo dice", () => {

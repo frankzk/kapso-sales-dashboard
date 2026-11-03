@@ -9,15 +9,25 @@ import {
   getConfirmationCycleDays,
   getConfirmationQueueCounts,
   getMasterFacetsCached,
+  getMasterProductOptionsCached,
   getOrderMasterFilteredMomCounts,
   getOrderMasterMomCounts,
   getOrderMasterPage,
+  getPaidUnnotifiedIds,
+  getScheduledNoLocationIds,
+  getPendingVoucherIndex,
   isMasterView,
+  withAvailableProductFilter,
+  withPaidUnnotifiedFilter,
+  withPendingVoucherFilter,
   type MasterMomCounts,
   type MasterView,
 } from "@/lib/orders-master-access";
 import { hasActiveFilters, masterSearchTerm } from "@/lib/order-master-filters";
 import { parseMasterQuery } from "@/lib/master-query";
+import { withPendingVouchers } from "@/lib/pending-voucher";
+import { withPaidUnnotified } from "@/lib/agency-pickup-alert";
+import { withScheduledNoLocation } from "@/lib/dispatch-date";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
@@ -69,7 +79,7 @@ async function PedidosContent({
   // y unos diez segundos mirando el esqueleto antes de ver nada.
   const flat: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(sp)) flat[k] = Array.isArray(v) ? v[0] : v;
-  const { filters, page } = parseMasterQuery(flat);
+  const { filters: urlFilters, page } = parseMasterQuery(flat);
 
   const view: MasterView = isMasterView(flat.view) ? flat.view : "todos";
   const substage: MacroSubstage | null =
@@ -82,6 +92,31 @@ async function PedidosContent({
   // El Master es consolidado: se consultan TODAS las tiendas accesibles, y el
   // filtro por tienda es uno más, aplicado también en la base.
   const storeIds = stores.map((s) => s.id);
+  // «Comprobante por validar» (MOM §16.1): UNA lectura en vivo de
+  // `order_payments` por carga. Decora las filas de la página, cuenta la
+  // píldora y resuelve el filtro. Solo cuando el filtro está puesto hay que
+  // esperarla antes de consultar el Master; si no, corre a la par.
+  const pendingPromise = getPendingVoucherIndex(storeIds);
+  // «Pagado sin aviso» (MOM §12), con el mismo patrón: dos lecturas por carga
+  // (candidatos del Master y sus avisos), a la par salvo que el filtro esté puesto.
+  const paidUnnotifiedPromise = getPaidUnnotifiedIds(storeIds);
+  // «Programado sin ubicación» (MOM §6.2): UNA lectura de ids, a la par. Su
+  // filtro va por columnas del Master y no necesita esperarla.
+  const scheduledNoLocationPromise = getScheduledNoLocationIds(storeIds);
+  // «Producto» (0300): las opciones salen cacheadas y a la par. Solo con el
+  // filtro puesto hay que esperarlas: si no respondieron (la 0300 sin aplicar),
+  // el filtro se quita en vez de pedirle a la base una columna que no existe.
+  const productOptionsPromise = getMasterProductOptionsCached(storeIds);
+  const withProducts = urlFilters.products.size
+    ? withAvailableProductFilter(urlFilters, await productOptionsPromise)
+    : urlFilters;
+  const productFilterIgnored = urlFilters.products.size > 0 && withProducts.products.size === 0;
+  const withVoucher = withProducts.pendingVoucher
+    ? withPendingVoucherFilter(withProducts, await pendingPromise)
+    : withProducts;
+  const filters = withVoucher.paidUnnotified
+    ? withPaidUnnotifiedFilter(withVoucher, await paidUnnotifiedPromise)
+    : withVoucher;
   // Mientras hay búsqueda la pantalla oculta las pestañas, los chips y los
   // filtros, y enseña solo «Resultados de búsqueda». Contarlos sería pagar
   // consultas que nadie ve: se cuentan al volver a la pestaña.
@@ -91,7 +126,7 @@ async function PedidosContent({
   // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», y el
   // filtro de Gestión solo se ofrece en esta vista.
   const showConfirmation = !searching && view === "por_confirmar";
-  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays] = await Promise.all([
+  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, productOptions, pendingVouchers, paidUnnotified, scheduledNoLocation] = await Promise.all([
     // Con filtros, las pestañas cuentan lo mismo que la lista (MOM §6).
     searching
       ? Promise.resolve(EMPTY_MOM_COUNTS)
@@ -110,6 +145,10 @@ async function PedidosContent({
     showConfirmation
       ? getConfirmationCycleDays(storeIds)
       : Promise.resolve({} as Record<string, number>),
+    productOptionsPromise,
+    pendingPromise,
+    paidUnnotifiedPromise,
+    scheduledNoLocationPromise,
   ]);
   const confirmationDueCounts = showConfirmationDue
     ? confirmationCounts.due
@@ -141,17 +180,38 @@ async function PedidosContent({
       confirmationDueCounts={confirmationDueCounts}
       managementDayCounts={managementDayCounts}
       confirmationCycles={confirmationCycles}
-      rows={pageData.rows}
+      rows={withScheduledNoLocation(
+        withPaidUnnotified(withPendingVouchers(pageData.rows, pendingVouchers), paidUnnotified),
+        scheduledNoLocation,
+      )}
+      // Pedidos con comprobante por validar en las tiendas que ve; null si no
+      // se pudo leer (la píldora lo dice en vez de enseñar un cero).
+      pendingVoucherCount={pendingVouchers ? pendingVouchers.size : null}
+      // «Pagado sin aviso»: null si no se pudo leer (la píldora no enseña un cero).
+      paidUnnotifiedCount={paidUnnotified ? paidUnnotified.size : null}
+      // «Programado sin ubicación»: null si no se pudo leer.
+      scheduledNoLocationCount={scheduledNoLocation ? scheduledNoLocation.size : null}
       total={pageData.total}
       page={pageData.page}
       pageSize={pageData.pageSize || MASTER_PAGE_SIZE}
-      filters={filters}
+      filters={urlFilters}
       sortKey="created"
       facets={facets}
+      // «Producto» (0300): null si la función no respondió; la píldora no se
+      // ofrece y, si venía en la URL, se avisa de que no se aplicó.
+      productOptions={productOptions}
+      productFilterIgnored={productFilterIgnored}
       agency={agency}
       canEdit={!perms.readOnly}
+      canCreateOrder={perms.can("orders.create")}
       canExport={perms.can("data.export")}
       canOverride={perms.can("master.override_status")}
+      // «Registrar estado» a mano: owner y admin (MOM §16, 15-10-2026). Solo
+      // decide qué se pinta; el servidor lo vuelve a preguntar por pedido.
+      canSetStatus={perms.can("master.set_status")}
+      // «Anular pedido» de WooCommerce (MOM §38.15): owner, admin y quien el
+      // dueño marque en Equipo (26-10-2026). El servidor lo vuelve a preguntar.
+      canCancelWoo={perms.can("orders.cancel_woo")}
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
       canCreateShalomGuide={perms.can("shalom.create_guide")}
@@ -164,6 +224,8 @@ async function PedidosContent({
         canFinalize: perms.can("closure.finalize"),
         canRefund: perms.can("closure.refund"),
         canReopen: perms.can("master.override_status") && perms.can("closure.finalize"),
+        canManageCosts: perms.can("costs.manage"),
+        canManageLogistics: perms.can("logistics.manage"),
       }}
     />
   );

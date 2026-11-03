@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -203,7 +204,7 @@ describe("getLeadQueueSnapshot", () => {
       }),
       from: () => {
         const query: Record<string, unknown> = {};
-        for (const method of ["select", "eq", "in", "neq", "gte", "lte", "not"]) {
+        for (const method of ["select", "eq", "in", "neq", "gte", "lte", "not", "is", "or"]) {
           query[method] = vi.fn(() => query);
         }
         // El `await` de la consulta: cada una devuelve su conteo, en orden.

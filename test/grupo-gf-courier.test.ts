@@ -225,10 +225,23 @@ describe("cashLimitVerdict (MOM §29.9)", () => {
     });
   });
 
+  // 16-10-2026: la caja de Alexis (53 paquetes) llegaba a S/ 9,027.20 y el
+  // escáner bloqueaba #KP134309. Con S/ 11,000 entra con aviso.
+  it("con el límite de S/ 11,000 la caja de Alexis entra con aviso, y se bloquea al pasar S/ 11,000", () => {
+    const vigente = { warningAmount: 4000, limitAmount: 11000 };
+    expect(cashLimitVerdict({ currentCod: 8729.2, addingCod: 298, ...vigente })).toMatchObject({ status: "warning", total: 9027.2 });
+    expect(cashLimitVerdict({ currentCod: 11000, addingCod: 0, ...vigente }).status).toBe("warning");
+    expect(cashLimitVerdict({ currentCod: 10900, addingCod: 100.01, ...vigente })).toMatchObject({
+      status: "blocked",
+      message: "La ruta llevaría S/ 11000.01 en efectivo y el límite es S/ 11000.00. Reparte los pedidos en otra ruta o autoriza superar el límite.",
+    });
+  });
+
   it("el MOM dice el límite vigente en producción", () => {
     const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
-    expect(mom).toContain("El efectivo máximo planificado por motorizado es S/ 9,000 por ruta:");
-    expect(mom).toContain("- bloqueo de nuevas asignaciones al superar S/ 9,000; y");
+    expect(mom).toContain("El efectivo máximo planificado por motorizado es S/ 11,000 por ruta:");
+    expect(mom).toContain("- bloqueo de nuevas asignaciones al superar S/ 11,000; y");
+    expect(mom).toContain("**Límite subido de S/ 9,000 a S/ 11,000 (16-10-2026, decisión de Frankz).**");
     expect(mom).toContain("**Límite subido de S/ 5,000 a S/ 9,000 (28-09-2026, decisión de Frankz).**");
   });
 });

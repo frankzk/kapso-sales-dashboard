@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { UrpiReportRow } from "./urpi-report";
+import { urpiPhone, type UrpiReportRow } from "./urpi-report";
+import type { UrpiProgrammingData } from "./urpi-programming";
 
 /** El reporte de Urpi no trae código de pedido (decisión del owner, 05-10-2026,
  * MOM §30.11): una cadena de intentos se vincula por TELÉFONO a un único pedido
@@ -8,7 +9,7 @@ import type { UrpiReportRow } from "./urpi-report";
 export const URPI_LINK_WINDOW_DAYS = 45;
 
 export type UrpiLinkStatus = "vinculado" | "varios" | "sin_pedido" | "sin_telefono";
-export type UrpiLinkMethod = "telefono" | "cadena" | "manual";
+export type UrpiLinkMethod = "telefono" | "cadena" | "manual" | "programacion";
 
 export interface UrpiLink {
   orderId: string | null;
@@ -46,16 +47,46 @@ function inWindow(createdAt: string, reportDate: string | null): boolean {
   return at >= start && at < end;
 }
 
+/** Lo programado a Urpi por día y teléfono: `AAAA-MM-DD|9XXXXXXXX` → pedidos
+ *  de la programación enviada, vinculados por código exacto (MOM §30.10). */
+export type UrpiProgrammedIndex = ReadonlyMap<string, readonly { orderId: string; storeId: string }[]>;
+
+export const urpiProgrammedKey = (date: string, phone: string) => `${date}|${phone}`;
+
+/** El índice a partir de las programaciones guardadas de cada tienda. PURA. */
+export function buildUrpiProgrammedIndex(books: readonly { storeId: string; payload: Pick<UrpiProgrammingData, "rows"> }[]): Map<string, { orderId: string; storeId: string }[]> {
+  const index = new Map<string, { orderId: string; storeId: string }[]>();
+  for (const book of books) {
+    for (const row of book.payload.rows ?? []) {
+      const phone = urpiPhone(row.phone);
+      if (!row.orderId || !phone || !row.date) continue;
+      const key = urpiProgrammedKey(row.date, phone);
+      const list = index.get(key) ?? [];
+      if (!list.some((item) => item.orderId === row.orderId)) list.push({ orderId: row.orderId, storeId: book.storeId });
+      index.set(key, list);
+    }
+  }
+  return index;
+}
+
 /**
  * Vínculo de cada fila. Una fila con «Row number relacionado» sigue a su
  * cadena: es el mismo envío reintentado. La cabeza de la cadena se busca por
  * teléfono; un vínculo manual (guardado en `existing`) manda sobre todo.
+ *
+ * LA PROGRAMACIÓN (03-11-2026). Cuando el teléfono no basta —varios pedidos en
+ * la ventana, o ninguno—, decide la programación enviada a Urpi: si ese día ese
+ * teléfono se programó con UN solo pedido, es ese, porque la programación lo
+ * nombra por código. Solo desempata o completa: un vínculo por teléfono único
+ * no se cambia, y dos pedidos programados el mismo día con el mismo teléfono
+ * siguen por vincular.
  */
 export function resolveUrpiLinks(
   rows: readonly UrpiReportRow[],
   orders: readonly UrpiCandidateOrder[],
   existing: ReadonlyMap<number, UrpiLink>,
   stores: readonly { id: string; name: string }[],
+  programmed: UrpiProgrammedIndex = new Map(),
 ): Map<number, UrpiLink> {
   const byRow = new Map(rows.map((row) => [row.urpiRow, row]));
   const byPhone = new Map<string, UrpiCandidateOrder[]>();
@@ -70,6 +101,8 @@ export function resolveUrpiLinks(
     if (hinted && found.some((order) => order.storeId === hinted)) found = found.filter((order) => order.storeId === hinted);
     const ids = [...new Set(found.map((order) => order.orderId))];
     if (ids.length === 1) return { orderId: ids[0]!, storeId: found[0]!.storeId, linkStatus: "vinculado", linkMethod: "telefono", candidates: [] };
+    const sent = row.reportDate ? programmed.get(urpiProgrammedKey(row.reportDate, row.phone)) ?? [] : [];
+    if (sent.length === 1) return { orderId: sent[0]!.orderId, storeId: sent[0]!.storeId, linkStatus: "vinculado", linkMethod: "programacion", candidates: [] };
     if (ids.length > 1) return { orderId: null, storeId: null, linkStatus: "varios", linkMethod: "telefono", candidates: ids.slice(0, MAX_CANDIDATES) };
     return { orderId: null, storeId: null, linkStatus: "sin_pedido", linkMethod: null, candidates: [] };
   };
@@ -92,6 +125,23 @@ export function resolveUrpiLinks(
 
   for (const row of rows) resolve(row.urpiRow);
   return new Map(rows.map((row) => [row.urpiRow, out.get(row.urpiRow) ?? existing.get(row.urpiRow)!]));
+}
+
+/**
+ * Las programaciones vigentes de esas tiendas en esos meses (AAAA-MM), como
+ * índice por día y teléfono. Es una ayuda para vincular: si no se puede leer,
+ * el reporte se vincula solo por teléfono, como antes.
+ */
+export async function loadUrpiProgrammedIndex(admin: SupabaseClient, storeIds: readonly string[], months: readonly string[]): Promise<Map<string, { orderId: string; storeId: string }[]>> {
+  if (!storeIds.length || !months.length) return new Map();
+  const { data: sources, error } = await admin.from("urpi_programming_sources").select("store_id,current_snapshot_id")
+    .in("store_id", [...storeIds]).in("month", [...new Set(months)]).not("current_snapshot_id", "is", null);
+  if (error || !sources?.length) return new Map();
+  const storeOf = new Map((sources as { store_id: string; current_snapshot_id: string }[]).map((source) => [source.current_snapshot_id, source.store_id]));
+  const { data: snapshots, error: snapshotError } = await admin.from("urpi_programming_snapshots").select("id,payload").in("id", [...storeOf.keys()]);
+  if (snapshotError) return new Map();
+  return buildUrpiProgrammedIndex(((snapshots ?? []) as { id: string; payload: UrpiProgrammingData }[])
+    .map((snapshot) => ({ storeId: storeOf.get(snapshot.id)!, payload: snapshot.payload })));
 }
 
 /** Pedidos de las tiendas con esos teléfonos. `order_master` guarda «51» + 9. */

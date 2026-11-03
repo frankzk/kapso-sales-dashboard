@@ -296,7 +296,7 @@ async function followUpLiveGuides(
   // nunca se consultaron y, entre iguales, la más callada.
   const { data, error } = await admin
     .from("shipments")
-    .select("id,external_order_number,guide_code,delivery_status,last_report_at,created_at,reported_status,aliclik_followup_at,api_report_at")
+    .select("id,external_order_number,guide_code,delivery_status,last_report_at,created_at,reported_status,aliclik_followup_at,api_report_at,custody_state,returned_at")
     .eq("store_id", storeId)
     .eq("courier", "aliclik")
     // `anulado` entra junto a las vivas: el paquete vuelve DESPUÉS de anularse,
@@ -304,11 +304,18 @@ async function followUpLiveGuides(
     // devolución. El recorte por antigüedad lo hace `selectFollowUpGuides`, que
     // le da a una anulada tres semanas de silencio en vez de sesenta días; acá
     // se acota en SQL para no arrastrar el histórico entero al pool.
-    .in("delivery_status", ["pendiente", "en_ruta", "anulado"])
+    //
+    // Y la `transferido` con el paquete todavía en Aliclik y sin devolución
+    // sellada (owner, 01-11-2026, `transferredAwaitingReturn`): el pedido siguió
+    // por otra guía, pero este paquete tiene que volver.
     .or(
-      `delivery_status.neq.anulado,last_report_at.gte.${new Date(
-        now.getTime() - FOLLOW_UP_RETURN_WINDOW_MS,
-      ).toISOString()}`,
+      [
+        "delivery_status.in.(pendiente,en_ruta)",
+        `and(delivery_status.eq.anulado,last_report_at.gte.${new Date(
+          now.getTime() - FOLLOW_UP_RETURN_WINDOW_MS,
+        ).toISOString()})`,
+        "and(delivery_status.eq.transferido,custody_state.eq.courier,returned_at.is.null)",
+      ].join(","),
     )
     .order("aliclik_followup_at", { ascending: true, nullsFirst: true })
     .order("last_report_at", { ascending: true, nullsFirst: true })

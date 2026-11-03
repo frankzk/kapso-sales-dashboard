@@ -20,7 +20,22 @@ import { chunk } from "@/lib/access";
 import { normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { keyState, paymentState, type PaymentSnapshot } from "@/lib/pickup-key";
-import { computeLogisticsCost, costDay, type CostTariff } from "@/lib/costs";
+import { agencyShippingPaid } from "@/lib/agency-shipping";
+import {
+  computeLogisticsCost,
+  costDay,
+  isOwnCourier,
+  type CostConcept,
+  type CostTariff,
+  type LogisticsCostInput,
+} from "@/lib/costs";
+import {
+  EMPTY_GF_TARIFF_BOOK,
+  loadGfTariffBook,
+  resolveGfCostTariff,
+  type GfTariffBook,
+  type GfTariffGap,
+} from "@/lib/gf-tariff";
 import {
   CONFIRMATION_CONTACT_KINDS,
   CONFIRMATION_FOLLOWUP_KINDS,
@@ -31,13 +46,14 @@ import {
 } from "@/lib/order-confirmation";
 import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
-import { TANDERS_RECOVERY_DAYS } from "@/lib/reproprovincia";
+import { LIMA_RECOVERY_DAYS, recoveryWindowDaysForOperation, TANDERS_RECOVERY_DAYS } from "@/lib/reproprovincia";
 import { derivedGuideDates } from "@/lib/guide-dates";
 import { FENIX_DIRECT_CREATED_VIA } from "@/lib/shipment-output";
 import { ttlCache } from "@/lib/ttl-cache";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { paymentGatewayOf, type PaymentGateway } from "@/lib/payment-gateway";
 import {
+  classifyOperation,
   MOM_RESOLUTION_VERSION,
   resolveMacroStage,
   type MacroGuideSnapshot,
@@ -54,7 +70,18 @@ import {
   type StatusOverride,
 } from "@/lib/order-status";
 import { salesChannel } from "@/lib/sales-channel";
+import {
+  firstAliclikUbigeo,
+  guideProvinceFits,
+  learnedDistrictFits,
+  learnedIsLima,
+  limaProvinceTrusted,
+  ubigeoProvinceFor,
+} from "@/lib/district-learning";
+import { isLimaOrCallaoProvince } from "@/lib/peru-departamentos";
 import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
+import { orderProductTitles } from "@/lib/order-product-titles";
+import { costCourier } from "@/lib/delivery-courier";
 import { currentDispatchDate } from "@/lib/dispatch-date";
 import {
   activeCompanionLinks,
@@ -63,8 +90,9 @@ import {
   lentShipment,
 } from "@/lib/order-companion";
 
+// `line_items` es de la 0001: da el filtro «Producto» (0300, `product_titles`).
 const ORDER_COLUMNS =
-  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw,tags,kapso_conversation_id";
+  "id,store_id,shopify_order_id,name,created_at,cancelled_at,financial_status,payment_gateway,shipping_mode,customer_phone,total_amount,total_refunded,raw,tags,kapso_conversation_id,line_items";
 
 // Las columnas de gestión (assigned_at … agency_expires_at) las añade 0047. El
 // código se despliega antes que la migración, así que se intenta el conjunto
@@ -153,6 +181,7 @@ interface OrderRecord {
   raw: unknown;
   tags?: string[] | null;
   kapso_conversation_id?: string | null;
+  line_items?: unknown;
 }
 
 interface ShipmentRecord {
@@ -215,6 +244,7 @@ interface CallRecord {
 
 interface EventRecord {
   order_id: string;
+  source?: string | null;
   shipment_id: string | null;
   kind: string;
   occurred_at: string;
@@ -445,7 +475,7 @@ async function fetchEvents(admin: SupabaseClient, ids: string[]): Promise<EventR
   for (const batch of chunk(ids, ID_BATCH)) {
     const { data, error } = await admin
       .from("order_events")
-      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,note,payload")
+      .select("order_id,shipment_id,kind,occurred_at,actor,courier,new_status,new_operational,reason,note,payload,source")
       .in("order_id", batch);
     if (error) throw new Error(`order_master: no se pudieron leer los eventos — ${error.message}`);
     out.push(...((data ?? []) as unknown as EventRecord[]));
@@ -618,12 +648,18 @@ async function fetchPaymentSignals(
  * fila del Master durante el recálculo en vez de resolverse en cada render: son
  * datos con vigencia, y recalcularlos al leer haría que un cambio de tarifa
  * moviera cifras históricas.
+ *
+ * Dos fuentes: `cost_tariffs` (Costos › Costos logísticos) para los couriers
+ * externos y el Tarifario de Grupo GF (`logistics_district_tariffs`,
+ * lib/gf-tariff.ts) para «propio» (MOM §14, §29.8).
  */
 async function fetchTariffs(
   admin: SupabaseClient,
   storeIds: string[],
 ): Promise<{
   tariffs: CostTariff[];
+  /** El Tarifario de Grupo GF de esas organizaciones: proveedor, contratos y tarifas. */
+  gfTariffs: GfTariffBook;
   orgByStore: Map<string, string>;
   confirmationActivationByStore: Map<string, string>;
   confirmationCycleByStore: Map<string, number>;
@@ -633,6 +669,7 @@ async function fetchTariffs(
 }> {
   const out = {
     tariffs: [] as CostTariff[],
+    gfTariffs: EMPTY_GF_TARIFF_BOOK,
     orgByStore: new Map<string, string>(),
     confirmationActivationByStore: new Map<string, string>(),
     confirmationCycleByStore: new Map<string, number>(),
@@ -686,7 +723,8 @@ async function fetchTariffs(
   // partida más grande del egress de Supabase (333 GB sobre 250). Las tarifas
   // cambian cuando alguien las edita; recordarlas unos minutos por instancia
   // se lleva casi todas esas lecturas. Ver `lib/ttl-cache.ts`.
-  const tariffs = await tariffCache.get([...orgIds].sort().join(","), Date.now(), async () => {
+  const cacheKey = [...orgIds].sort().join(",");
+  const tariffs = await tariffCache.get(cacheKey, Date.now(), async () => {
     const { data, error } = await admin
       .from("cost_tariffs")
       .select("id,org_id,store_id,courier,region,province,district,concept,amount,effective_from,effective_to")
@@ -696,15 +734,107 @@ async function fetchTariffs(
     return (data ?? []) as unknown as CostTariff[];
   });
   out.tariffs.push(...tariffs);
+  // El Tarifario de Grupo GF, con la misma memoria: tres lecturas por instancia
+  // cada cinco minutos, no tres por recálculo ni una por pedido. Una lectura
+  // que falló no se recuerda: el siguiente recálculo vuelve a intentarlo, en
+  // vez de dejar cinco minutos de pedidos sin tarifa.
+  out.gfTariffs = await gfTariffCache.get(cacheKey, Date.now(), () => loadGfTariffBook(admin, orgIds));
+  if (out.gfTariffs.unreadable) gfTariffCache.clear();
   return out;
 }
 
 /** Cuánto se recuerdan las tarifas dentro de una instancia. */
 export const TARIFF_CACHE_MS = 5 * 60_000;
 const tariffCache = ttlCache<CostTariff[]>(TARIFF_CACHE_MS);
-/** Para pruebas y para quien edite tarifas en la misma instancia. */
+const gfTariffCache = ttlCache<GfTariffBook>(TARIFF_CACHE_MS);
+/** Para pruebas y para quien edite tarifas en la misma instancia (las dos fuentes). */
 export function clearTariffCache(): void {
   tariffCache.clear();
+  gfTariffCache.clear();
+}
+
+/** El costo logístico de una fila del Master y los conceptos que no tienen tarifa. */
+export interface MasterLogisticsCost {
+  /** S/ del envío, o null si falta alguna tarifa: nunca un cero inventado. */
+  cost: number | null;
+  missing: CostConcept[];
+}
+
+export interface LogisticsCostSnapshot extends MasterLogisticsCost {
+  /**
+   * El courier con el que se buscó la tarifa (`costCourier`): el vigente, o en
+   * una entrega sin courier o «por definir», el de la entrega. Vacío o «por
+   * definir» si no se sabe quién la llevó.
+   */
+  courier: string | null;
+  district: string | null;
+  /** Día (YYYY-MM-DD) al que se imputa el costo (`costDay`): la tarifa tiene que regir ese día. */
+  day: string;
+  /**
+   * Solo con «propio» y sin tarifa: por qué el Tarifario de Grupo GF no se la
+   * dio y, si la de ese distrito empieza después del día, desde cuándo rige
+   * (`resolveGfCostTariff`, lib/gf-tariff.ts). Lo cita el aviso de la conciliación.
+   */
+  tarifario?: GfTariffGap;
+}
+
+/**
+ * El costo que se guarda en `order_master.logistics_cost`. Puro, probado en
+ * test/pedidos-logistics-cost.test.ts.
+ *
+ * FALTA NO ES CERO (MOM §14, §29.8). Hasta la auditoría del 14-10-2026 se
+ * guardaba el total de `computeLogisticsCost` aunque viniera con conceptos en
+ * `missing`, así que un pedido sin tarifa —todo Grupo GF y Urpi, que no tienen
+ * ninguna en `cost_tariffs`— quedaba con S/ 0, y la conciliación de la Mesa de
+ * cierre, que solo miraba `null`, lo habría cerrado con flete cero: 4.586 de
+ * los 4.629 pedidos de Lima en «Pendiente de liquidación». Ahora, si a algún
+ * concepto le falta tarifa, el costo es null: la pantalla enseña «—» y la
+ * conciliación se bloquea diciendo qué tarifa falta.
+ *
+ * Un cero LEGÍTIMO sigue siendo cero: una tarifa configurada en S/ 0 (las hay:
+ * devoluciones de Aliclik), el precio real del courier en cero, o el pedido
+ * acompañante que viaja en la caja del principal (el flete ya está en el
+ * principal, MOM §32).
+ *
+ * Grupo GF («propio») se calcula con la tarifa de su Tarifario que llega en
+ * `ownDistrictRate` (lib/gf-tariff.ts, mom-v1.31); sin ella, también null.
+ */
+export function masterLogisticsCost(
+  tariffs: readonly CostTariff[],
+  input: LogisticsCostInput & { ridesInHostBox?: boolean },
+): MasterLogisticsCost {
+  if (input.ridesInHostBox) return { cost: 0, missing: [] };
+  const breakdown = computeLogisticsCost(tariffs, input);
+  return breakdown.missing.length
+    ? { cost: null, missing: breakdown.missing }
+    : { cost: breakdown.total, missing: [] };
+}
+
+/**
+ * Recalcula el pedido y devuelve el costo logístico que quedó escrito, con lo
+ * que le falta. Lo usa «Conciliar liquidación» (MOM §14): decide sobre el costo
+ * de AHORA y no sobre el último recálculo, que pudo ser de antes de cargar la
+ * tarifa —subir una tarifa no recalcula los pedidos— o de antes de que el
+ * Master dejara de guardar S/ 0 por una tarifa ausente.
+ *
+ * Olvida las tarifas recordadas de esta instancia antes de recalcular: quien
+ * acaba de cargar la que faltaba no tiene que esperar cinco minutos. Es una
+ * acción manual y rara; la lectura de más no se nota.
+ *
+ * null si el pedido no se pudo recalcular (no existe o no se escribió).
+ */
+export async function freshLogisticsCost(
+  admin: SupabaseClient,
+  orderId: string,
+): Promise<LogisticsCostSnapshot | null> {
+  clearTariffCache();
+  let snapshot: LogisticsCostSnapshot | null = null;
+  const result = await recomputeOrderMaster(admin, [orderId], {
+    onLogisticsCost: (id, cost) => {
+      if (id === orderId) snapshot = cost;
+    },
+  });
+  return result.written > 0 ? snapshot : null;
 }
 
 function confirmationRollup(
@@ -858,10 +988,23 @@ export interface RecomputeResult {
  * pedido del vínculo se recalcula en la misma pasada, y `requested`/`written`
  * lo cuentan.
  */
+/**
+ * ¿El upsert falló porque `order_master.product_titles` (0300) todavía no
+ * existe? PostgREST lo dice como «Could not find the 'product_titles' column…»
+ * (PGRST204) y Postgres como «column "product_titles" … does not exist».
+ */
+export function isMissingProductTitles(message: string | null | undefined): boolean {
+  return /product_titles/i.test(message ?? "") && /(could not find|does not exist|schema cache)/i.test(message ?? "");
+}
+
 export async function recomputeOrderMaster(
   admin: SupabaseClient,
   orderIds: readonly string[],
-  opts: { now?: string } = {},
+  opts: {
+    now?: string;
+    /** Lo que quedó de costo logístico en cada fila, con lo que le falta. */
+    onLogisticsCost?: (orderId: string, cost: LogisticsCostSnapshot) => void;
+  } = {},
 ): Promise<RecomputeResult> {
   const requested = [...new Set(orderIds.filter(Boolean))];
   if (!requested.length) return { requested: 0, written: 0 };
@@ -895,6 +1038,7 @@ export async function recomputeOrderMaster(
   const riderStopsByOrder = await fetchRiderStops(admin, ids);
   const {
     tariffs,
+    gfTariffs,
     orgByStore,
     confirmationActivationByStore,
     confirmationCycleByStore,
@@ -949,18 +1093,68 @@ export async function recomputeOrderMaster(
 
     const geoOverride = geoOverrides.get(order.id) ?? null;
     const district = districtByOrder.get(order.id) ?? null;
-    const geoHit = geo.get(normalizeDistrict(district));
+    // EL DEPARTAMENTO DEL PROPIO PEDIDO manda sobre lo aprendido por nombre de
+    // distrito (25-10-2026). `peru_districts` va por nombre y los nombres se
+    // repiten: con «miraflores → arequipa» aprendido de un pedido de Arequipa,
+    // los de Miraflores de Lima salieron cuatro días con provincia «arequipa»
+    // (#KP143872, #AUR178625, #AUR178621, #KP143948). Lo aprendido, y la
+    // provincia de una guía —que la copió de esta misma fila—, solo valen si
+    // caben en el departamento del pedido (lib/district-learning.ts).
+    const ownRegion =
+      geoOverride?.region ?? text(address?.province) ?? guides.find((g) => g.region)?.region ?? draft?.region ?? null;
+
+    // El punto del mapa, de más fiable a menos:
+    //
+    //   1. La corrección manual del equipo, que gana siempre.
+    //   2. Lo que el courier geolocalizó al ir FÍSICAMENTE a la puerta. Es la
+    //      verdad de campo: alguien estuvo ahí.
+    //   3. Lo que Shopify geocodificó de la dirección escrita. Es una
+    //      estimación a partir de texto, así que va después de las dos
+    //      anteriores — pero llega desde el minuto cero del pedido, mientras
+    //      que las otras dos solo existen después de un intento de entrega o de
+    //      una corrección a mano.
+    //
+    // El punto 3 estuvo en `orders.raw` todo el tiempo sin usarse: la consulta
+    // GraphQL no pedía `latitude`/`longitude`, así que solo lo traían los
+    // pedidos que entraban por webhook. Es la coordenada que Aliclik exige para
+    // cotizar y crear una guía. Se resuelve ANTES que la provincia porque es
+    // la prueba con que se juzga el homónimo de Lima (abajo).
+    const geoPin = guides.find((g) => g.latitude != null && g.longitude != null);
+    const latitude = geoOverride?.latitude ?? geoPin?.latitude ?? address?.latitude ?? null;
+    const longitude = geoOverride?.longitude ?? geoPin?.longitude ?? address?.longitude ?? null;
+
+    // EL HOMÓNIMO DE LIMA CONTRA EL PIN (02-11-2026, #KP142611). Un distrito de
+    // Lima Metropolitana que se repite en provincia —La Victoria también es
+    // Chiclayo— no toma provincia Lima/Callao de lo aprendido, de una guía, del
+    // carrito ni del historial si el pin está claramente fuera de Lima, si el
+    // ubigeo de la primera guía de Aliclik es de otro departamento, o si el
+    // «departamento» del pedido no es uno («Chiclayo», una provincia, se lee
+    // como Lambayeque). Ver `limaProvinceTrusted`. La corrección manual manda
+    // igual que siempre.
+    const ubigeo = firstAliclikUbigeo(orderEvents);
+    const limaTrusted = limaProvinceTrusted(district, {
+      region: ownRegion,
+      latitude,
+      longitude,
+      ubigeoDepartment: ubigeo?.department ?? null,
+    });
+    const fitsLimaEvidence = (p: string | null | undefined) => limaTrusted || !isLimaOrCallaoProvince(p);
+    const learned = learnedDistrictFits(geo.get(normalizeDistrict(district)), ownRegion, district);
+    const geoHit = limaTrusted || !learnedIsLima(learned) ? learned : null;
 
     // Prioridad de la ubicación, de mayor a menor:
     //   1. corrección manual del equipo (0051),
     //   2. lo que reportó el courier (conoce la zona mejor que el formulario),
     //   3. Shopify / el ubigeo / el draft order.
+    // Sin Lima para el homónimo, la provincia que Aliclik sacó del pin va
+    // después de lo aprendido: es la que casa con la evidencia.
     const province =
       geoOverride?.province ??
-      guides.find((g) => g.province)?.province ??
+      guides.find((g) => guideProvinceFits(g.province, ownRegion, district) && fitsLimaEvidence(g.province))?.province ??
       geoHit?.province ??
-      draft?.province ??
-      historical?.province ??
+      (limaTrusted ? null : ubigeoProvinceFor(ubigeo, ownRegion)) ??
+      (fitsLimaEvidence(draft?.province) ? draft?.province : null) ??
+      (fitsLimaEvidence(historical?.province) ? historical?.province : null) ??
       null;
     // Shopify llama `province` al DEPARTAMENTO (Perú no tiene un tercer nivel).
     const region =
@@ -980,24 +1174,6 @@ export async function recomputeOrderMaster(
       guideAddress?.delivery_reference ??
       draft?.referencia ??
       null;
-    // El punto del mapa, de más fiable a menos:
-    //
-    //   1. La corrección manual del equipo, que gana siempre.
-    //   2. Lo que el courier geolocalizó al ir FÍSICAMENTE a la puerta. Es la
-    //      verdad de campo: alguien estuvo ahí.
-    //   3. Lo que Shopify geocodificó de la dirección escrita. Es una
-    //      estimación a partir de texto, así que va después de las dos
-    //      anteriores — pero llega desde el minuto cero del pedido, mientras
-    //      que las otras dos solo existen después de un intento de entrega o de
-    //      una corrección a mano.
-    //
-    // El punto 3 estuvo en `orders.raw` todo el tiempo sin usarse: la consulta
-    // GraphQL no pedía `latitude`/`longitude`, así que solo lo traían los
-    // pedidos que entraban por webhook. Es la coordenada que Aliclik exige para
-    // cotizar y crear una guía.
-    const geoPin = guides.find((g) => g.latitude != null && g.longitude != null);
-    const latitude = geoOverride?.latitude ?? geoPin?.latitude ?? address?.latitude ?? null;
-    const longitude = geoOverride?.longitude ?? geoPin?.longitude ?? address?.longitude ?? null;
     const geoSource = geoOverride
       ? "manual"
       : geoPin
@@ -1082,6 +1258,7 @@ export async function recomputeOrderMaster(
 
     const eventSnapshots: OrderEventSnapshot[] = stateEvents.map((e) => ({
       kind: e.kind,
+      source: e.source,
       shipment_id: e.shipment_id,
       occurred_at: e.occurred_at,
       courier: e.courier,
@@ -1112,7 +1289,7 @@ export async function recomputeOrderMaster(
       paymentState: voucherState,
       paymentGateway,
     };
-    const resolvedPaymentState = isWebPrepaid(paymentFacts) ? "pago_completo" : voucherState;
+    let resolvedPaymentState = isWebPrepaid(paymentFacts) ? "pago_completo" : voucherState;
     // `classifyOrderCoverage` queda como reserva para el caso en que la 0104 no
     // esté aplicada todavía: resuelve solo por nombre, así que da el mismo
     // resultado que la base salvo en los destinos que dependen del mapa COD.
@@ -1129,6 +1306,16 @@ export async function recomputeOrderMaster(
         tariffs,
         now.slice(0, 10),
       );
+    // La ventana de recuperación es por operación (owner, 03-11-2026): Lima tiene
+    // la suya (`LIMA_RECOVERY_DAYS`); Provincia y Agencia, la de la tienda. El
+    // estado y la macroetapa usan la misma, con la operación que ve el resolvedor.
+    const recoveryDays = recoveryWindowDaysForOperation(
+      classifyOperation(
+        { shipping_mode: order.shipping_mode, coverage: resolvedCoverage, region, province, district },
+        stateShipments.map((s) => ({ courier: s.courier })),
+      ),
+      recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+    );
 
     const state = resolveOrderState({
       order: {
@@ -1141,9 +1328,9 @@ export async function recomputeOrderMaster(
       events: eventSnapshots,
       override,
       now,
-      recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+      recoveryWindowDays: recoveryDays,
     });
-    const macro = resolveMacroStage({
+    const macroInput: Parameters<typeof resolveMacroStage>[0] = {
       order: {
         created_at: order.created_at,
         confirmation_activation_date:
@@ -1163,6 +1350,8 @@ export async function recomputeOrderMaster(
       ],
       events: stateEvents.map((event) => ({
         kind: event.kind,
+        source: event.source,
+        new_status: event.new_status,
         occurred_at: event.occurred_at,
         shipment_id: event.shipment_id,
         reason: event.reason ?? null,
@@ -1175,9 +1364,28 @@ export async function recomputeOrderMaster(
         since: state.since,
       },
       paymentState: resolvedPaymentState,
-      recoveryWindowDays: recoveryWindowByStore.get(order.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+      recoveryWindowDays: recoveryDays,
       now,
-    });
+    };
+    let macro = resolveMacroStage(macroInput);
+    // EL ENVÍO PAGADO EN LA AGENCIA (owner, 01-11-2026, lib/agency-shipping.ts).
+    // Con el paquete recogido, hasta S/ 15 que faltan son el envío que la
+    // clienta pagó en el mostrador: el pedido está pagado completo. Se decide
+    // con la operación que acaba de resolver la macroetapa, y se vuelve a
+    // resolver con el pago completo (puro: misma entrada, otro estado de cobro).
+    if (
+      resolvedPaymentState !== "pago_completo" &&
+      paymentSignals &&
+      agencyShippingPaid({
+        operation: macro.operation,
+        pickedUp: state.general === "entregado" || state.pickupState === "recogido",
+        payments: paymentSignals.payments,
+        orderTotal: order.total_amount,
+      }) !== null
+    ) {
+      resolvedPaymentState = "pago_completo";
+      macro = resolveMacroStage({ ...macroInput, paymentState: resolvedPaymentState });
+    }
 
     // El costo REAL del envío, cuando el courier nos lo dijo. Solo lo tienen las
     // guías creadas por API: al cotizar, Aliclik devuelve lo que va a cobrar por
@@ -1202,6 +1410,76 @@ export async function recomputeOrderMaster(
     // una y su costo ya está en el principal (MOM §32). Sin esto, la tarifa del
     // distrito se cobraba dos veces por un solo paquete.
     const ridesInHostBox = Boolean(ride?.guide_code) && state.guideCode === ride?.guide_code;
+    // Con quién salió: cada motorizado de Grupo GF y cada courier externo
+    // cuya guía llegó a salir (0266, lib/dispatched-with.ts). Se calcula una
+    // vez: la fila lo guarda y el costo de una entrega sin courier lo usa.
+    const dispatched = dispatchedWith({
+      guides,
+      stops: riderStopsByOrder.get(order.id) ?? [],
+      events: orderEvents,
+      urpiAttempts: urpiAttemptsByOrder.get(order.id) ?? 0,
+    });
+    // La tarifa se busca con el courier vigente; en una entrega sin courier o
+    // «por definir», con el de la entrega (MOM §14, lib/delivery-courier.ts).
+    const courierForCost = costCourier({
+      generalStatus: state.general,
+      currentCourier: state.currentCourier,
+      lastCourier: state.lastCourier,
+      deliveredCourier: state.deliveredCourier,
+      dispatchedWith: dispatched,
+    });
+    // El día al que se imputa el costo: la tarifa tiene que regir ESE día, no
+    // hoy (MOM §14). Va también al aviso de la conciliación. El último
+    // movimiento, con cualquier courier: también con Grupo GF.
+    const logisticsDay = costDay({
+      last_movement_at: state.lastMovementAt,
+      order_created_at: order.created_at,
+    }, now);
+    const own = isOwnCourier(courierForCost);
+    // Grupo GF cobra lo de su Tarifario, no lo de `cost_tariffs` (MOM §14,
+    // §29.8; decisión del dueño del 19-10-2026): la tarifa del distrito que
+    // regía ese día, la del contrato de la tienda si la hay.
+    const ownTariff = own
+      ? resolveGfCostTariff(gfTariffs, {
+          orgId: orgByStore.get(order.store_id) ?? null,
+          storeId: order.store_id,
+          district,
+          day: logisticsDay,
+        })
+      : null;
+    const logistics = masterLogisticsCost(tariffs, {
+      ridesInHostBox,
+      ctx: {
+        storeId: order.store_id,
+        courier: courierForCost,
+        region,
+        province,
+        district,
+      },
+      // Grupo GF cobra solo los intentos de sus propias salidas: los de una
+      // guía de Aliclik o Swayp anterior no son visitas suyas, y cobrarlos a la
+      // tarifa de su Tarifario inventaría un flete (MOM §14). Hoy esas salidas
+      // no reportan intentos —sus visitas viven en las paradas—: el primero.
+      attempts: own
+        ? stateShipments
+            .filter((s) => isOwnCourier(s.courier))
+            .reduce((sum, s) => sum + Math.max(0, s.aliclik_attempts ?? s.reroute_attempts ?? 0), 0)
+        : state.attemptCount,
+      generalStatus: state.general,
+      agency: Boolean(state.pickupState) || order.shipping_mode === "agency",
+      day: logisticsDay,
+      actual: actualCost ?? undefined,
+      ownDistrictRate: ownTariff?.kind === "found" ? ownTariff.amount : null,
+    });
+    opts.onLogisticsCost?.(order.id, {
+      ...logistics,
+      courier: courierForCost,
+      district,
+      day: logisticsDay,
+      ...(ownTariff?.kind === "missing" && logistics.cost === null
+        ? { tarifario: { reason: ownTariff.reason, since: ownTariff.since } }
+        : {}),
+    });
 
     return {
       store_id: order.store_id,
@@ -1230,6 +1508,10 @@ export async function recomputeOrderMaster(
       // Por dónde se generó (formulario web, asesora, chatbot…): el filtro
       // «Canal» del Master (0264, lib/sales-channel.ts).
       sales_channel: salesChannel(order.tags, order.kapso_conversation_id),
+      // Los productos del pedido, sin variante: el filtro «Producto» del Master
+      // (0300, lib/order-product-titles.ts). Si la columna aún no existe, el
+      // upsert de abajo la quita y sigue.
+      product_titles: orderProductTitles(order.line_items),
       order_total: order.total_amount,
       general_status: state.general,
       operational_status: state.operational,
@@ -1260,9 +1542,10 @@ export async function recomputeOrderMaster(
       last_courier: state.lastCourier,
       courier_count: state.courierCount,
       // Lo que reportan los couriers, más las paradas de nuestros motorizados
-      // y los intentos del reporte de Urpi. El costo logístico sigue con
-      // `state.attemptCount`: ni Grupo GF ni Urpi cobran por intento adicional
-      // en `cost_tariffs`, y sumar sus visitas a la tarifa de otro courier (un
+      // y los intentos del reporte de Urpi. El costo logístico no usa esta
+      // columna: sigue con `state.attemptCount`, y Grupo GF solo con los de sus
+      // propias salidas (mom-v1.31; si un «no estaba» también cobra, lo
+      // confirma el dueño). Sumar estas visitas a la tarifa de otro courier (un
       // pedido que luego salió con Aliclik) inventaría un costo.
       attempt_count:
         state.attemptCount +
@@ -1274,14 +1557,7 @@ export async function recomputeOrderMaster(
         ) +
         ownRiderAttempts(stateEvents, riderStopsByOrder.get(order.id) ?? []) +
         (urpiAttemptsByOrder.get(order.id) ?? 0),
-      // Con quién salió: cada motorizado de Grupo GF y cada courier externo
-      // cuya guía llegó a salir (0266, lib/dispatched-with.ts).
-      dispatched_with: dispatchedWith({
-        guides,
-        stops: riderStopsByOrder.get(order.id) ?? [],
-        events: orderEvents,
-        urpiAttempts: urpiAttemptsByOrder.get(order.id) ?? 0,
-      }),
+      dispatched_with: dispatched,
       guide_code: state.guideCode,
       // De la guía VIGENTE, igual que el costo real de arriba: si un pedido
       // salió dos veces, lo que importa es el cobro de la que está entregando.
@@ -1291,27 +1567,7 @@ export async function recomputeOrderMaster(
       delivered_courier: state.deliveredCourier,
       returned_at: state.returnedAt,
       last_movement_at: state.lastMovementAt,
-      logistics_cost: ridesInHostBox
-        ? 0
-        : tariffs.length || actualCost
-        ? computeLogisticsCost(tariffs, {
-            ctx: {
-              storeId: order.store_id,
-              courier: state.currentCourier,
-              region,
-              province,
-              district,
-            },
-            attempts: state.attemptCount,
-            generalStatus: state.general,
-            agency: Boolean(state.pickupState) || order.shipping_mode === "agency",
-            day: costDay({
-              last_movement_at: state.lastMovementAt,
-              order_created_at: order.created_at,
-            }, now),
-            actual: actualCost ?? undefined,
-          }).total
-        : null,
+      logistics_cost: logistics.cost,
       comment_count: orderEvents.filter((e) => e.kind === "comment").length,
       payment_state: resolvedPaymentState,
       key_state: paymentSignals
@@ -1354,8 +1610,16 @@ export async function recomputeOrderMaster(
   });
 
   let written = 0;
-  for (const batch of chunk(rows, ID_BATCH)) {
+  for (let batch of chunk(rows, ID_BATCH)) {
     let { error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" });
+    // Deploy compatible con la 0300: si el código llega antes que la columna
+    // `product_titles`, el Master se sigue escribiendo sin ella. La migración
+    // rellena después todas las filas desde `orders.line_items`, así que no se
+    // pierde nada de lo escrito mientras tanto.
+    if (error && isMissingProductTitles(error.message)) {
+      batch = batch.map(({ product_titles: _omit, ...row }) => row) as typeof batch;
+      ({ error } = await admin.from("order_master").upsert(batch, { onConflict: "order_id" }));
+    }
     // Deploy compatible: si el código llega antes que 0059, el Master antiguo
     // continúa recalculándose. Tras aplicar la migración, el siguiente barrido
     // llena automáticamente las columnas MOM.
@@ -1808,6 +2072,9 @@ export async function reconcileOrderMaster(
   // Tanders tiene su propia ventana (`TANDERS_RECOVERY_DAYS`), así que se busca
   // aparte: con el corte de la tienda, sus filas entre los 30 y los 65 días se
   // recalcularían en cada pasada sin cambiar nada, ocupando el cupo del barrido.
+  // Lima también tiene la suya (`LIMA_RECOVERY_DAYS`, 03-11-2026): «Por
+  // reprogramar Lima» se corta con ella y «En gestión Reproprovincia» con la de
+  // la tienda.
   if (pending.length < limit) {
     const { data: storeRows } = await admin
       .from("stores")
@@ -1815,20 +2082,26 @@ export async function reconcileOrderMaster(
       .in("id", storeIds as string[]);
     const seenVencidas = new Set(pending);
     const tandersCutoff = new Date(Date.now() - TANDERS_RECOVERY_DAYS * 86_400_000).toISOString();
+    const limaCutoff = new Date(Date.now() - LIMA_RECOVERY_DAYS * 86_400_000).toISOString();
     for (const store of (storeRows ?? []) as { id: string; return_recovery_max_days: number | null }[]) {
       const windowDays = store.return_recovery_max_days ?? RECOVERY_DEFAULT_MAX_DAYS;
       const cutoff = new Date(Date.now() - windowDays * 86_400_000).toISOString();
-      for (const tanders of [false, true]) {
+      for (const [substage, tanders, since] of [
+        ["gestion_reproprovincia", false, cutoff],
+        ["por_reprogramar_lima", false, limaCutoff],
+        ["gestion_reproprovincia", true, tandersCutoff],
+        ["por_reprogramar_lima", true, tandersCutoff],
+      ] as const) {
         if (pending.length >= limit) break;
         let query = admin
           .from("order_master")
           .select("order_id")
           .eq("store_id", store.id)
           .eq("operational_status", "pendiente_nuevo_courier")
-          .in("macro_substage", ["gestion_reproprovincia", "por_reprogramar_lima"]);
+          .eq("macro_substage", substage);
         query = tanders
-          ? query.eq("last_courier", "tanders").lt("macro_since", tandersCutoff)
-          : query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", cutoff);
+          ? query.eq("last_courier", "tanders").lt("macro_since", since)
+          : query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", since);
         const { data: vencidas } = await query.limit(limit - pending.length);
         for (const row of (vencidas ?? []) as { order_id: string }[]) {
           if (seenVencidas.has(row.order_id) || pending.length >= limit) continue;

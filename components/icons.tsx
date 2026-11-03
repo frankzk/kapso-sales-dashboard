@@ -398,6 +398,15 @@ export function IconArrowLeft(props: IconProps) {
   );
 }
 
+/** Pasar al siguiente (el «Siguiente lead» de la ficha). */
+export function IconArrowRight(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M5 12h14M13 5l7 7-7 7" />
+    </svg>
+  );
+}
+
 /** Subió contra la referencia (el «vs. ayer» del tablero de Leads). */
 export function IconArrowUp(props: IconProps) {
   return (

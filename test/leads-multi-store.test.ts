@@ -1,3 +1,4 @@
+vi.mock("@/lib/lead-routing-access", () => import("./helpers/lead-routing-disabled"));
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createServerSupabaseMock } = vi.hoisted(() => ({

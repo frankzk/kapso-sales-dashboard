@@ -12,8 +12,17 @@
 // manipulada o de una versión vieja tiene que dar un listado sensato, no un
 // error — es la pantalla de trabajo diaria del equipo.
 
-import { ATTEMPTS_OR_MORE, DISPATCH_DATE_FILTERS, emptyFilters, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
+import { ATTEMPTS_OR_MORE, DISPATCH_DATE_FILTERS, emptyFilters, PAYMENT_STATUS_OPTIONS, type MasterFilters, type MasterSortKey } from "@/lib/order-master-filters";
 import { MASTER_PATH } from "@/lib/order-drawer-href";
+import { agencyPaymentWindow } from "@/lib/agency-payment-cohort";
+import { decodeProductParam, encodeProductParam } from "@/lib/order-product-titles";
+
+/**
+ * «Producto» (0300) va aparte de `SET_KEYS`: un título puede llevar comas
+ * («Faja, talla única»), que son el separador de esas listas, así que se
+ * escapan (`encodeProductParam`). `p` ya es Provincia; `pr`, Producto.
+ */
+const PRODUCTS_PARAM = "pr";
 
 /** Claves cortas: la URL se lee y se comparte, y `?d=lince,ate` gana a
  *  `?districts=lince%2Cate` para algo que se mira todo el día. */
@@ -23,6 +32,7 @@ const SET_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "op", field: "operationalStatuses" },
   { param: "c", field: "couriers" },
   { param: "pc", field: "paymentChecks" },
+  { param: "ps", field: "paymentStates" },
   { param: "sm", field: "shippingModes" },
   { param: "r", field: "regions" },
   { param: "p", field: "provinces" },
@@ -50,6 +60,12 @@ const FLAG_KEYS: { param: string; field: keyof MasterFilters }[] = [
   { param: "wc", field: "withComments" },
   { param: "mc", field: "multiCourier" },
   { param: "ex", field: "expiringSoon" },
+  // «Comprobante por validar» (MOM §16.1).
+  { param: "pv", field: "pendingVoucher" },
+  // «Pagado sin aviso» (MOM §12).
+  { param: "pa", field: "paidUnnotified" },
+  // «Programado sin ubicación» (MOM §6.2).
+  { param: "su", field: "scheduledNoLocation" },
 ];
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -77,6 +93,7 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   };
 
   const f = emptyFilters();
+  if (get("agency_unpaid") === "1") f.agencyUnpaid = agencyPaymentWindow(get("apf"), get("apt"));
 
   for (const { param, field } of SET_KEYS) {
     const raw = get(param);
@@ -87,6 +104,12 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
       .filter(Boolean);
     (f[field] as Set<string>) = new Set(values);
   }
+  const rawProducts = get(PRODUCTS_PARAM);
+  if (rawProducts) f.products = new Set(decodeProductParam(rawProducts));
+  // Solo valores conocidos: una URL vieja o manipulada no agrega estados al
+  // filtro ni cambia el significado de «Pago completo».
+  const paymentOptions = new Set<string>(PAYMENT_STATUS_OPTIONS.map((option) => option.value));
+  f.paymentStates = new Set([...f.paymentStates].filter((value) => paymentOptions.has(value)));
 
   for (const { param, field } of DATE_KEYS) {
     const raw = get(param)?.trim() ?? "";
@@ -136,11 +159,17 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
 export function buildMasterQuery(q: MasterQuery): URLSearchParams {
   const out = new URLSearchParams();
   const f = q.filters;
+  if (f.agencyUnpaid) {
+    out.set("agency_unpaid", "1");
+    out.set("apf", f.agencyUnpaid.from);
+    out.set("apt", f.agencyUnpaid.to);
+  }
 
   for (const { param, field } of SET_KEYS) {
     const set = f[field] as Set<string>;
     if (set?.size) out.set(param, [...set].join(","));
   }
+  if (f.products?.size) out.set(PRODUCTS_PARAM, encodeProductParam(f.products));
   for (const { param, field } of DATE_KEYS) {
     const v = (f[field] as string) ?? "";
     if (v) out.set(param, v);
@@ -164,7 +193,9 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
 /** ¿Hay algo puesto? Sirve para ofrecer "limpiar filtros" solo cuando toca. */
 export function hasQueryFilters(f: MasterFilters): boolean {
   return (
+    Boolean(f.agencyUnpaid) ||
     SET_KEYS.some(({ field }) => (f[field] as Set<string>)?.size > 0) ||
+    (f.products?.size ?? 0) > 0 ||
     DATE_KEYS.some(({ field }) => Boolean(f[field] as string)) ||
     FLAG_KEYS.some(({ field }) => Boolean(f[field] as boolean)) ||
     f.staleDays > 0 ||

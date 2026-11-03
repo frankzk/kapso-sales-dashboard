@@ -1552,7 +1552,7 @@ function StatusesPanel(props: {
       {/* Vocabulario del dominio */}
       <section className="space-y-2 border-t border-slate-100 pt-4">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Vocabulario del dominio «{domain.name}»</h4>
-        <p className="text-xs text-slate-500">Vale para todas las hojas del dominio. El efecto dice qué aporta al Consolidado; una cancelación del courier nunca anula el pedido Shopify.</p>
+        <p className="text-xs text-slate-500">Vale para todas las hojas del dominio. El efecto dice qué aporta al Consolidado; una cancelación del courier nunca anula el pedido en la tienda.</p>
         <div className="space-y-1">
           {domain.statuses.map((s) => {
             const d = draftOf(s);

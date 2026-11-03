@@ -1,5 +1,88 @@
 # Deployment runbook
 
+### 02-11-2026 · Coordenada por dirección: el piloto (sin migración)
+
+Solo la variable `GOOGLE_GEOCODING_API_KEY` en Vercel (Production, sensible,
+solo servidor: sin `NEXT_PUBLIC_`). **La crea el owner** en Google Cloud: un
+proyecto con **Geocoding API** (la clásica, «v3»: `maps/api/geocode/json`, no
+la v4 GeocodeAddress) y facturación, la clave **restringida a Geocoding API** y
+la cuota «v3 requests per day» en **400**, más un tope o alerta de gasto. No se
+pega en el chat. Con ella aparece activo el botón de Ajustes → «Coordenada por
+dirección (piloto)», que mide y no escribe nada (ver
+`docs/kapta/geocodificacion-propuesta.md`). Sin ella el botón dice «Falta
+GOOGLE_GEOCODING_API_KEY en Vercel» y no se llama a Google. Marcha atrás:
+borrar la variable.
+
+### 01-11-2026 · Bloques para asesoras administradoras (0299)
+
+Aplicar `db/migrations/0299_lead_routing_admin_advisors.sql` antes de publicar.
+Reemplaza únicamente el alcance de Leads: una persona con rol base Admin y
+función Asesora respeta sus bloques. No modifica roles, permisos, asignaciones,
+reservas ni citas. Dueño, Supervisión/Administración funcional y administradores
+sin función Asesora conservan la vista completa.
+
+El owner autorizó activar el reparto con los bloques ya guardados. Hacerlo
+tras verificar la migración y los controles, mediante `save_lead_routing` con
+la revisión actual y las mismas asignaciones: conservar la cobertura, las 24
+horas y el historial de activación. Comprobar el alcance de Albornoz y Reyna,
+los contadores y el rechazo de un frío antiguo sin reserva ni cita propia;
+un frío nuevo sigue en Principal durante su oportunidad inicial.
+
+### 01-11-2026 · Confirmó por Chatby: confirmación y guía Aliclik automáticas con tope (0297, MOM §6.1)
+
+Decisión del owner (01-11-2026). Cada 10 minutos (`/api/cron/chatby-autoconfirm`,
+`9,19,29,39,49,59 * * * *`) Kapta lee en Chatby —los mismos dos GET de la
+ficha, solo lectura, hasta 20 pedidos por pasada— los pedidos de Provincia COD
+en Por confirmar de las últimas 72 h. Si el mensaje de la clienta nombra el
+pedido, dice confirmar y pagar en casa, el monto coincide con el total (menos
+de S/ 1) y la dirección es completa y la del pedido, lo confirma por
+`register_confirmation_attempt_v2` (sin actor, `source = 'chatby'`). Después
+crea su guía Aliclik por el camino del botón, hasta 20 por día de Lima. Lo que
+no cuadra queda para la asesora con el motivo en la línea de tiempo. Sin
+variables nuevas: usa `CHATBY_API_KEY`, `ALICLIK_WRITE_ENABLED` y `CRON_SECRET`.
+
+1. **Migración `0297_chatby_autoconfirm.sql`**, a mano, ANTES del código (sin
+   ella el cron responde `skipped: sin_migracion_0297` y no hace nada). Crea
+   `chatby_auto_settings` (por organización: `enabled`, `guide_enabled`,
+   `daily_cap`, `window_hours`, `max_orders_per_run`, `recheck_minutes`) y
+   `chatby_auto_checks` (la marca de procesado por pedido: resultado, motivo, id
+   del mensaje y estado de la guía; sin conversación ni dirección), con RLS de
+   lectura y escritura solo del servidor. Inserta una fila **encendida** con
+   `daily_cap = 20` por organización con tiendas activas que no sea tienda
+   cliente de Grupo GF: lo pidió el owner. Es idempotente.
+2. Comprobar:
+   ```sql
+   select org_id, enabled, guide_enabled, daily_cap from chatby_auto_settings;
+   ```
+3. Desplegar el código. Primera pasada en seco, con el secreto:
+   `GET /api/cron/chatby-autoconfirm?dry=1` (lee Chatby y dice qué confirmaría y
+   qué guía cotizaría, sin escribir nada).
+4. Para apagarlo: `update chatby_auto_settings set enabled = false where org_id = …;`
+   (o `guide_enabled = false` para confirmar sin crear guías).
+
+**Marcha atrás.** Apagar la fila basta. Revertir el commit quita el cron; las
+tablas pueden quedarse (nadie más las lee). Lo ya confirmado y las guías creadas
+quedan como hechos del historial.
+
+### 31-10-2026 · Equipo → Leads: bloques por asesora (0295)
+
+Aplicar `db/migrations/0295_team_lead_blocks.sql` antes del código. Instala
+tablas de configuración e historial con RLS, RPCs solo de servicio y validación
+diferida de cobertura; no cambia leads, llamadas, reservas ni asignaciones.
+El código nuevo falla cerrado si no puede comprobar el alcance.
+
+Después del despliegue: Equipo → Leads. Marcar Principal en Medaly
+(`millonestania5`), Albornoz, Jessica y Daphne; Recuperación en Reyna. Revisar
+también los permisos de las demás asesoras. El respaldo es optativo y separado.
+Guardar puede preparar la selección con el reparto apagado. Para activarlo,
+marcar «Activar reparto por bloques» y guardar: los cinco bloques deben tener
+alguien asignado con acceso a cada tienda. El plazo inicial es 24 horas corridas.
+Verificar con dos sesiones, una principal y otra de recuperación: misma tienda,
+listas y contadores propios, búsqueda/apertura de un lead ajeno denegada,
+reserva propia y cita conservadas. Probar respaldo con principal desconectado
+y ocupado. Supervisión mantiene el universo. Desactivar desde Equipo devuelve
+el acceso previo, sin borrar configuración ni historial.
+
 Turnkey checklist to put the dashboard live on **Supabase + Vercel**. The steps
 below are the ones that need a browser/computer (creating projects, OAuth,
 pasting credentials). Everything else (code, migrations, tests, CI) is already
@@ -114,6 +197,8 @@ roles and the `auth` schema, so it just works.
    | `SHALOM_API_BASE` | `https://api.shalom-api-peru.com` (optional). **El host a secas, sin `/v1`**: el cliente ya añade la ruta, y una base con `/v1` produce `/v1/v1/…` → 404. Si no existe la variable, el valor por defecto ya es el correcto |
    | `OLVA_TRACKING_APIKEY` | La `apikey` con la que la página pública de Olva (`tracking.olvaexpress.pe`) llama a `reports.olvaexpress.pe/webservice/rest/getTrackingInformation`. **Es de Olva, no nuestra**: se captura en DevTools → Red al consultar un tracking, y la pueden rotar sin aviso. Sin ella el cron `olva-reconcile` se salta y los estados de Olva se marcan a mano (ver §12 del MOM) |
    | `OLVA_TRACKING_API_BASE` | `https://reports.olvaexpress.pe` (optional) |
+   | `CHATBY_API_KEY` | La clave «KAPTA» de la API de Chatby, para la pestaña «Chatby» de la ficha del pedido. **La emite Chatby**: `app.chatby.io/settings#/api` → «Create API Token» (nombre «KAPTA», solo «Manage Flow», workspace AURELA KENKU, bot Aurela Kenku BOT), aparte de la de Make para poder revocarla sola. Solo servidor (sin `NEXT_PUBLIC_`). Sin ella la pestaña dice que falta conectar Chatby (ver 5q.1) |
+   | `GOOGLE_GEOCODING_API_KEY` | Clave de la Geocoding API clásica («v3») de Google, para el piloto de Ajustes → «Coordenada por dirección (piloto)». **La crea el owner** en Google Cloud, restringida a Geocoding API, con la cuota «v3 requests per day» en 400 y tope de gasto. Solo servidor (sin `NEXT_PUBLIC_`). Sin ella el botón dice que falta y no consulta nada |
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
    | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
    | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |
@@ -161,6 +246,13 @@ roles and the `auth` schema, so it just works.
      `maxDuration`. Si vuelven a fallar, el informe dice por dónde: `orphansHeld`
      explica cada candado que no se soltó y `sweepAgeMinutes` delata un barrido
      que dejó de completarse.
+   - `/api/cron/aliclik-scheduled` — cada hora de 8:00 a 13:00 de Lima
+     (`7 13-18 * * *` UTC). Crea la guía Aliclik de los pedidos de Provincia COD
+     programados para hoy (MOM §6.2), por el mismo camino que el botón y sin
+     levantar excepciones. Lo que falla avisa por Telegram, un mensaje por
+     pedido, al grupo urgente de la tienda o, si no tiene, al del resumen diario.
+     Solo en producción y con `ALICLIK_WRITE_ENABLED=true`; `?dry=1` cotiza y
+     dice qué haría sin crear ni avisar. **Sin migración.**
    - `/api/cron/backup` — daily 08:00 UTC (~03:00 Lima). Snapshots the
      dashboard-native tables (`leads`, `lead_calls`, `shipment_calls`) to CSV in
      the private Supabase Storage bucket `db-backups` (auto-created, keeps the
@@ -172,6 +264,16 @@ roles and the `auth` schema, so it just works.
    - `/api/cron/invoices` — cada 10 min (a los :06, :16, …). Emite o simula las
      boletas por RUC (MOM §35). No hace nada mientras todos los RUC estén
      «Apagado»; ver la sección «Comprobantes SimpleFact por RUC».
+   - `/api/cron/product-photos` — cada hora, en el minuto 48. Copia al bucket
+     privado `product-photos` (se crea solo) las fotos de producto que
+     `/api/wa-image` pone en la cabecera de las plantillas de WhatsApp, para
+     cuando el CDN de Shopify ya no las sirva (MOM §39). `?dry=1` solo cuenta.
+     **Sin migración.** Ver la entrada del 23-10-2026.
+   - `/api/cron/woo-webhooks` — cada hora, en el minuto 34. Lee (solo `GET`)
+     los webhooks de cada tienda con WooCommerce conectado y avisa en Ajustes →
+     WooCommerce si un tema de pedido no tiene uno activo que entregue a esa
+     tienda (MOM §38.14). Nunca los cambia. `?dry=1` revisa sin escribir.
+     **Sin migración.** Ver la entrada del 25-10-2026.
 
 ### Pases a mano (bajo `/api/cron`, pero SIN horario)
 
@@ -369,7 +471,14 @@ neto, canal, cupón) and sanity-check the assignment.
   checkout / histórico, surfaced on purpose).
 - **Closing channel**: Asesora (closed via the dashboard: `venta_manual` /
   `carrito_recuperado`) ▸ Bot asistido (an advisor logged activity on the lead
-  ≤7 días antes del pedido) ▸ Bot.
+  ≤7 días antes del pedido) ▸ Bot. **Solo dentro de los pedidos del bot y por
+  etiquetas**, que la sincronización con Shopify reescribe: aquí «Asesora»
+  queda casi siempre en cero. La tarjeta «Canal de cierre» del Consolidado ya
+  no usa esto desde el 14-10-2026: clasifica TODAS las ventas por
+  `order_sales` (0259, MOM §17.3).
+- **Corrección (14-10-2026, 0268):** desde la 0268 la cabecera del tablero
+  cuenta todas las ventas (MOM §17.4). Este módulo sigue sobre los pedidos del
+  bot: cuadra con el total de esos pedidos, no con la cabecera.
 - **ROAS** on the Meta row = attributed revenue / Meta ad spend for the range
   (live from the Marketing API; shows "—" if Meta isn't connected).
 - Needs **migration 0030** (`discount_codes` on orders + `winback_sends`). Before
@@ -488,12 +597,29 @@ de couriers, intentos y comentarios.
   **Las métricas no se mueven**: `recompute_daily_rollups` y
   `lib/access.ts:getOrders` siguen filtrando por `tag:kapso`, y los rollups y el
   vínculo con el lead solo se disparan para pedidos del bot.
+  **Corrección (14-10-2026): sí se movieron.** Esto suponía que la etiqueta
+  `kapso` que el dashboard añadía en su copia a las ventas de asesora, a los
+  carritos recuperados y a la recompra automática sobreviviría. No sobrevive:
+  la pasada `shopify_all` y el webhook reescriben `tags` con lo de Shopify, y
+  esos pedidos salían del conteo en minutos (1 de 2.916 ventas de asesora la
+  conservaba). Desde el 14-10-2026 ya no se escribe; quién cerró cada venta lo
+  decide `canal_de_cierre` (0259, MOM §17.3). Y desde la 0268 (MOM §17.4) la
+  cabecera, «Ventas por día» y «Por tienda» cuentan todas las ventas con
+  `ventas_por_origen`; `getOrders`, `getRollups` y `recompute_daily_rollups`
+  siguen con `tag:kapso` para los módulos que son del bot y lo dicen.
 - **`ORDERS_SYNC_FROM` acota el histórico** (por defecto `2026-06-01`). La pasada
   nueva solo trae pedidos **creados** a partir de esa fecha, así que no arrastra
   años de pedidos cerrados. Se filtra por `created_at` y no por `updated_at`, para
   que un pedido viejo que alguien edite hoy no vuelva a entrar. Para ampliar el
   histórico basta mover la variable en Vercel y borrar el cursor:
   `delete from sync_state where source = 'shopify_all';`
+  También es el piso de «Canal de cierre» (MOM §17.3), que cuenta desde el más
+  tardío entre esta fecha y el día en que cada tienda empezó a usar Kapta (su
+  primera venta de asesora registrada o, sin ninguna, su primer lead); con
+  varias tiendas, cada una desde su propio día (desde la 0268; antes, desde la
+  que empezó último). Lo mismo vale para la cabecera y «Conversión por fuente»
+  (MOM §17.4). Moverla hacia atrás no amplía nada más allá de ese inicio;
+  adelantarla sí recorta.
 - **El Master se rellena solo.** `runStoreSync` termina con un barrido de
   reconciliación (`reconcileOrderMaster`) que crea o refresca las filas que
   falten, así que no hace falta ningún backfill manual. Las acciones de Repro
@@ -1550,6 +1676,9 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   webhook, y **no hay forma de pedir el histórico**: lo que no se capture
   mientras está apagado se pierde para siempre. Por eso conviene activarlo
   aunque la interfaz que lo consuma todavía no exista.
+  **Corregido el 25-10-2026:** sí la expone. `GET /subscriber/chat-messages`
+  devuelve los mensajes de una clienta (con `include_bot=1`, también los del
+  bot), probado contra la API real; la ficha del pedido la lee así (5q.1).
 - Generá el secreto (`openssl rand -hex 32`), cargalo como `CHATBY_WEBHOOK_SECRET`
   y en Chatby → **Integrations → Live Chat Support → Webhook**:
 
@@ -1581,6 +1710,33 @@ que dice si el dinero llegó, y hasta ahora nadie lo miraba uno por uno.
   en la tienda equivocada.
 - Es una bitácora **append-only y sin pérdida**: guarda el JSON entero tal como
   llegó, incluso si no es JSON válido. La tabla definitiva se rellena desde acá.
+
+## 5q.1 Chatby — la conversación en la ficha del pedido (26-10-2026)
+
+- **Sin migración.** Solo la variable `CHATBY_API_KEY` en Vercel (Production),
+  y volver a desplegar para que la tome.
+- La clave: en Chatby **no** está en los ajustes del bot ni en «Workspace
+  Settings». Está en la configuración de la cuenta, sección API
+  (`app.chatby.io/settings#/api`), tarjeta **«Create API Token»**: Token Name
+  **«KAPTA»**; en «Token Can», **solo «Manage Flow»** (desmarcar «Manage
+  Team», que viene marcado); Workspace **AURELA KENKU**; Bot **Aurela Kenku
+  BOT**; «Create». La clave se ve una sola vez. Creada así el 26-10-2026 y
+  cargada en Vercel como `CHATBY_API_KEY` (Production, sensible). Chatby no
+  tiene claves de solo lectura:
+  Kapta solo hace dos `GET` (buscar a la clienta por su celular y traer sus
+  últimos 20 mensajes), y con una clave aparte de la de Make se puede revocar
+  sin cortar Make. Se pega directamente en Vercel, nunca en un chat ni en un
+  correo.
+- Comprobar: abrir un pedido de alguien del equipo que ya recibió una
+  plantilla de confirmación → pestaña **Chatby**. Deben salir sus mensajes en
+  hora de Lima y «Abrir en Chatby» debe abrir esa conversación. «Chatby rechazó
+  la clave de Kapta» = la clave está mal copiada o la revocaron.
+- Kapta no guarda la conversación ni los campos del contacto (uno trae la clave
+  de pedidos de una tienda), y sus registros solo llevan el paso y el código
+  HTTP (`[chatby] {"paso":…,"status":…}`). Contrato:
+  `docs/kapta/chatby-conversaciones.md`; regla: MOM §25 («Chatby»).
+- Marcha atrás: borrar `CHATBY_API_KEY` (la pestaña vuelve a decir que falta
+  conectar Chatby) o revocar la clave «KAPTA» en Chatby.
 
 ## 5r. Anomalías de ingesta — ver lo que se descarta
 
@@ -1818,8 +1974,9 @@ vencimiento son lo único que lo acota.
 - **Health**: `curl https://<domain>/api/health` → `{ "ok": true, … }` (public,
   no secrets) confirms the deployment is serving.
 - **Backfill parity**: in Shopify Admin, filter orders by `tag:kapso` for a date
-  range and compare the count with the dashboard's order count for the same
-  range. They should match.
+  range and compare the count with the sum of `ordenes` in «Resumen diario del
+  bot CSV» for the same range. They should match. (Since 0268 the headline
+  «Pedidos» counts ALL orders, MOM §17.4: compare it with the Master instead.)
 - **Webhook**: create a test order in Shopify (or re-trigger a webhook) → it
   appears in the dashboard within seconds; re-delivering it does not duplicate.
 - **Cron**: `curl -H "Authorization: Bearer $CRON_SECRET" https://<domain>/api/cron/sync`
@@ -2635,6 +2792,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
    0261: aplica primero db/migrations/0261_invoices_manual.sql.» y no cambia
    nada. **Si alguien vuelve a correr la 0261 después, hay que volver a correr
    la 0262**: la 0261 reescribe el turno sin esta revisión, y nada lo avisa.
+   **Con la 0269 aplicada, lo que se vuelve a correr después de la 0261 es la
+   0269 (no la 0262)**: la 0262 pasaría su guarda y dejaría los dos turnos, el
+   de once y el de doce, y la llamada por nombre del código seguiría fallando
+   (sección «15-10-2026 · 0269», más abajo).
    **Se puede aplicar ya, con el código que hoy está en producción** (con la
    0261 delante): ese código pide el turno con los nueve argumentos por nombre
    y ya manda en `p_basis` si es prepago web y el id de cada pago, que es lo
@@ -2712,7 +2873,10 @@ no se borra, así que se cerró lo que podía mandar una que nadie pidió:
 9. **Manual: las primeras boletas reales, una a una** (MOM §35.7). Pasar el
    RUC a «Manual» en Ajustes. La base lo rechaza sin token, sin «Emitir desde»
    o sin una prueba de conexión que leyó el mismo RUC, y «Emitir desde» se
-   mueve al momento del cambio: nada pagado antes sale. El barrido sigue
+   mueve al momento del cambio: el barrido no emite nada pagado antes. Un
+   pedido pagado desde el 01/10/2026 y antes de ese momento solo sale con
+   «Emitir esta boleta» y la casilla «Revisé en SimpleFact y este pedido no
+   tiene boleta» (sección «15-10-2026 · 0269», más abajo). El barrido sigue
    simulando, nunca le pide a SimpleFact una venta, y concilia lo que quede en
    duda. Antes, la 0262 aplicada (paso 4). Para emitir, en producción —una
    vista previa no emite (paso 5)—: abrir el pedido, panel «Comprobante»,
@@ -2830,6 +2994,127 @@ conexión, también cuando sale de «Emitir esta boleta». Ajustes lo dice en ro
 volver a Real hay que corregir lo que falló (el token o el subdominio) y pulsar
 «Probar conexión» de nuevo. Lo mismo para volver a Manual.
 
+### 15-10-2026 · «Emitir esta boleta» para lo pagado antes de «Emitir desde» (0269, MOM §35)
+
+Decisión del owner (15-10-2026). Con el RUC en «Manual», «Emitir esta boleta»
+también sirve para un pedido pagado **antes** de «Emitir desde», si se pagó
+desde el **01/10/2026 00:00 (hora de Lima)**: el último pago registrado y
+también el primer dinero, la fecha más temprana entre la del comprobante
+(`order_payments.paid_at`, cuándo se movió la plata) y la de registro de cada
+pago validado. Un pago cuyo comprobante dice 29/09 y que entró a Kapta el
+01/10 no pasa. Antes de Kapta las boletas se
+emitían a mano en SimpleFact, y Kapta no sabe si ese pedido ya tiene la suya:
+por eso la confirmación pide marcar «Revisé en SimpleFact y este pedido no
+tiene boleta», y sin esa marca no emite. Una boleta de más es pagar el
+impuesto dos veces. **El barrido nunca va hacia atrás**: en Simulación, en
+Manual y en Real, lo pagado antes de «Emitir desde» sigue en
+`antes_de_inicio`. «Emitir desde» no cambia: Ajustes sigue sin aceptar una
+fecha pasada, y un cambio de modo la sigue moviendo al momento del cambio. Con
+«Emitir desde» en el futuro, nada pagado antes de él sale, ni con el botón. Sin
+variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
+
+**En producción ya está aplicada (15-10-2026, editor SQL de Supabase).** Se
+aplicó con el número 0267, antes de que main tomara ese número para
+«Programar envío» (`0267_order_master_dispatch_scheduled_on.sql`); la 0268 es
+«Ventas por origen», así que el archivo pasó a 0269, con el mismo contenido.
+Como se corrió desde el editor, no figura en el historial de migraciones de
+Supabase. Comprobada el mismo día: queda solo el turno de doce argumentos, con
+su cuerpo igual al del archivo y `execute` solo para `service_role`. No hace
+falta volver a correrla.
+
+1. **Migración `0269_invoices_backfill.sql`**, a mano, DESPUÉS de la 0262 y
+   ANTES del código que manda `p_backfill`. Pegar el archivo en el editor SQL
+   de Supabase, que la corre en una transacción (con `psql`:
+   `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0269_invoices_backfill.sql`;
+   sin `-1` hay un instante sin `invoice_claim` entre el `drop` de la firma de
+   once y el `create` de la de doce). Cambia solo `invoice_claim`: borra la
+   firma de once argumentos y crea la de doce, con un argumento nuevo al
+   final, `p_backfill boolean default false`, y el cuerpo de la 0262 tal cual
+   salvo dos cosas:
+   - la fecha: lo pagado antes de «Emitir desde» pasa solo con `p_backfill`,
+     una fila real, el RUC en Manual, quién la pidió (`p_created_by`) y las
+     dos fechas de pago —la del código y la de la base— desde el 01/10/2026
+     00:00 de Lima, y el primer dinero también: la fecha más temprana entre
+     `paid_at` y `registered_at` de los pagos validados (sin ellos, la fecha
+     del pedido). Y solo con «Emitir desde» ya llegado
+     (`v_iss.emit_from <= now()`). Sin «Emitir desde» o sin fecha de pago,
+     `antes_de_inicio`, como siempre;
+   - la fila que sale así lleva en su base `pagado_antes_de_emitir_desde: true`.
+
+   El turno sigue solo para `service_role`. No toca filas, ni triggers, ni otra
+   función, y no toma candados de tablas. Es idempotente: si en alguna base ya
+   se corrió una versión anterior de la 0269 (sin el primer dinero, o sin
+   mirar que «Emitir desde» ya llegó), se vuelve a correr y el turno queda con
+   los dos (`like '%v_first%'` y `like '%v_iss.emit_from <= now()%'`, abajo).
+   **Va después de la 0262**: si sigue el turno de nueve argumentos, o no hay
+   ni el de once ni el de doce, se detiene con «La 0269 va después de la 0262:
+   aplica primero db/migrations/0261_invoices_manual.sql y
+   db/migrations/0262_invoices_claim_coverage.sql.» y no cambia nada. **Si
+   alguien vuelve a correr la 0261 después, hay que volver a correr la 0269**:
+   quedan dos turnos, el de once y el de doce, y la llamada por nombre del
+   código falla por ambigua: no emite ni simula nada hasta volver a correr la
+   0269. La 0262 sola, después de la 0269, se detiene en su guarda y no
+   cambia nada.
+   **Se puede aplicar ya, con el código que hoy está en producción**: ese
+   código pide el turno por nombre, con nueve u once argumentos, y con un solo
+   turno esas llamadas van al de doce con `p_backfill` en falso: hace lo mismo
+   que antes. **Si el código llega antes que la 0269, nada se emite de más y
+   nada se pone rojo**: lo pagado desde «Emitir desde» se emite como siempre
+   (el código no manda `p_backfill` en un pedido normal), y un pedido pagado
+   antes contesta `sin_migracion`, nombrando la 0269, sin reservar ni enviar
+   nada. Aplicarla y volver a pulsar.
+   **Comprobar**, solo lectura:
+   - `select pg_get_function_identity_arguments(oid) from pg_proc where proname = 'invoice_claim' and pronamespace = 'public'::regnamespace;`
+     — una sola fila, que termina en `p_created_by uuid, p_backfill boolean`;
+   - `select to_regprocedure('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid)') is null;`
+     tiene que dar `true`: el de once ya no está;
+   - `select pg_get_functiondef('public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)'::regprocedure) like '%pagado_antes_de_emitir_desde%';`
+     tiene que dar `true` (y lo mismo con `like '%v_first%'`, el primer
+     dinero, con `like '%v_iss.emit_from <= now()%'`, «Emitir desde» ya
+     llegado, y con `like '%sin_pago_completo%'` y `like '%for share%'`, que
+     trae de la 0262);
+   - `select has_function_privilege('authenticated', 'public.invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean)', 'execute');`
+     tiene que dar `false` (y lo mismo con `anon`; con `service_role`, `true`);
+   - `select ruc, mode, emit_from, checked_ruc, check_error from invoice_issuers;`
+     y `select count(*) from order_invoices;` dicen lo mismo que antes de
+     aplicarla.
+2. **Desplegar** el código. Desde ahí, en un pedido pagado desde el 01/10 y
+   antes de «Emitir desde» (con su primer dinero también desde el 01/10), con
+   el RUC en «Manual», el panel «Comprobante» (y «Emitir» en Ajustes →
+   últimos comprobantes) ofrece «Emitir esta boleta», y la confirmación dice
+   cuándo se pagó, desde cuándo emite el RUC y, si es de otro momento, cuándo
+   se hizo el primer pago. **Antes de marcar la casilla, buscar el pedido en
+   SimpleFact** (por su número, su total y su fecha, desde la del primer
+   pago): si ya tiene boleta, no se emite; se registra con «Ya tiene
+   comprobante». Si el panel se relee con la confirmación abierta y cambia el
+   RUC, el total o las fechas, la confirmación se cierra y la casilla se
+   desmarca: se vuelve a abrir y a revisar. En una vista previa no hay botón,
+   como siempre.
+
+**Qué mirar después**, solo lectura:
+`select order_name, paid_at, mode, status, created_by is not null as con_quien from order_invoices where basis ? 'pagado_antes_de_emitir_desde' order by created_at desc;`
+— cada fila `real`, con `con_quien = true` y `paid_at` desde el 01/10/2026
+05:00 UTC; nada en `emitiendo` por más de unos minutos. Y el primer dinero de
+cada una, también desde el 01/10/2026 05:00 UTC:
+`select i.order_name, min(least(coalesce(p.paid_at, p.registered_at), p.registered_at)) as primer_dinero from order_invoices i join order_payments p on p.order_id = i.order_id and p.validation_status = 'validado' where i.basis ? 'pagado_antes_de_emitir_desde' group by 1 order by 2;`
+Revisar cada una en SimpleFact, como las demás de Manual.
+
+**Antes de subir**: `bash scripts/verify-db.sh` corre
+`scripts/sql/invoices_smoke.sql`, que también corre la 0269 sobre la 0262 (dos
+veces), con la 0261 corrida otra vez después, y su guarda sin la 0262 delante.
+
+**Marcha atrás.** Lo emitido no se borra: ya está en SUNAT, y una boleta que no
+correspondía se anula con nota de crédito en SimpleFact (MOM §35.9). Para que
+nadie más emita hacia atrás basta con no pulsar el botón en esos pedidos, o
+bajar el RUC a «Simulación». No hace falta revertir la 0269: el código
+anterior pide el turno por nombre, sin `p_backfill`, y el de doce lo acepta con
+`p_backfill` en falso. Si aun así se quiere volver al turno de la 0262, en una
+sola transacción:
+`psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -c "drop function invoice_claim(uuid, uuid, uuid, uuid, numeric, timestamptz, text, jsonb, jsonb, text, uuid, boolean);" -f db/migrations/0261_invoices_manual.sql -f db/migrations/0262_invoices_claim_coverage.sql`
+(la 0261 recrea el turno de once y la 0262 le pone la revisión del pago).
+Desde ahí, el código nuevo contesta `sin_migracion` en lo pagado antes de
+«Emitir desde», y lo demás sigue igual.
+
 ### 15-10-2026 · Intentos del motorizado propio y filtro de intentos (`mom-v1.27`)
 
 Sin migraciones, variables de entorno ni RPC nuevas. `MOM_RESOLUTION_VERSION`
@@ -2872,9 +3157,2538 @@ etapas ni costos.
   suma a los intentos de Grupo GF las paradas del cuaderno histórico. No cambia
   etapas ni costos.
 
+### 14-10-2026 · Canal de cierre de todas las ventas (0259, MOM §17.3)
+
+La tarjeta «Canal de cierre» del Consolidado y de la página de cada tienda deja
+de mirar solo los pedidos con `kapso` y clasifica TODAS las ventas por quién
+las cerró: asesora (`order_sales`) > recompra automática > bot de Kapso > bot de
+carritos externo > la clienta sola en la web (EasySell) > otros, con la marca
+«ayudado por asesora». Y «Generar pedido», la captura del carrito recuperado
+sin asesora y la recompra automática dejan de escribir `kapso` /
+`cod_recuperado` / `auto_recompra` en la copia local: registran la fila solo si
+el webhook no la trajo, tal como viene de Shopify.
+
+1. **Migración `0259_canal_de_cierre.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0259_canal_de_cierre.sql`. Crea solo
+   la función de lectura `canal_de_cierre(uuid[], date, date)` (SECURITY
+   INVOKER, ejecutable por `authenticated` y `service_role`). No escribe datos,
+   no toma bloqueos sobre tablas y no lleva `drop`. Medida en producción como
+   el owner, 30 días y dos tiendas: 0,32 s, con los índices que ya existen.
+   **Sin ella el código no se rompe**: la tarjeta vuelve a la vista anterior
+   (solo pedidos del bot) con un aviso de que falta la migración y sin cifra
+   de cabecera («—»), porque ese porcentaje es justo el número equivocado.
+   **Ya aplicada en producción el 14-10-2026** con `apply_migration` (historial
+   `20261014172812 0257_canal_de_cierre`: se aplicó con ese número y el mismo
+   día se renumeró a 0258, porque la integración ya tenía `0257_invoices.sql`,
+   y el 15-10 a 0259, porque llegó `0258_restock_reply_sweep.sql`; la función
+   es la misma y no hay que volver a aplicarla). Comprobado ese día: el cuerpo de la
+   función es idéntico al del archivo (mismo md5), `anon` no la puede ejecutar,
+   y como el owner, con RLS, del 14-09 al 13-10 ve las dos tiendas en 0,27 s con
+   los mismos pedidos por canal que la tabla del MOM §17.3 (solo cambian los
+   que se cancelaron después de medirla).
+2. **Qué cambia en las cifras**:
+   - «Canal de cierre» pasa de «0 % lo cerró una asesora» a la parte real. Con
+     el periodo 14-09 → 13-10-2026: asesora 2.651 pedidos y S/ 481.451 de
+     S/ 1.181.080 en total (≈ 41 %).
+   - Las cifras de arriba (Ingresos, Pedidos, Conversión) siguen siendo solo
+     del bot (§5h; con la 0268, Ingresos, Pedidos y Ticket pasan a todas las
+     ventas y la Conversión sigue siendo del bot, ahora «Conversión del bot»;
+     ver su entrada), pero ya no suben unos minutos con cada venta de asesora: la
+     etiqueta `kapso` que les ponía el botón duraba hasta la siguiente
+     sincronización. Es más correcto; el cambio es pequeño y se nota sobre
+     todo en el día en curso.
+   - La tarjeta cuenta desde que Kapta tiene todos los pedidos
+     (`ORDERS_SYNC_FROM`, 2026-06-01) y las ventas de las asesoras de cada
+     tienda (su primera fila de `order_sales` o, sin ninguna, su primer lead:
+     25-06 y 04-07-2026 en las dos tiendas de hoy). Antes, una venta de asesora
+     caería en «Web» u «Otros». En el Consolidado cuenta desde la tienda que
+     empezó último (hoy, 04-07-2026) y el aviso la nombra (**corrección, mismo
+     día, 0268:** cada tienda cuenta desde su propio día, ver su entrada). Un periodo que empieza
+     antes se cuenta desde ese día y la tarjeta lo dice; uno entero anterior
+     vuelve a la vista de respaldo con su aviso. Una tienda que todavía no usa
+     Kapta queda fuera del conteo, nombrada; si no se puede leer desde cuándo
+     usa Kapta una tienda, la tarjeta muestra el error.
+   - En el panel de «Fuente», el bloque que se llamaba «Canal de cierre» pasa a
+     llamarse «Cierre de los pedidos del bot, por etiquetas» y remite a la
+     tarjeta: es el mismo cálculo de siempre, solo sobre pedidos del bot.
+   - Limitación conocida: un carrito de EasySell que completa el bot de Kapso
+     por WhatsApp cuenta como «Web», porque Shopify no le deja ninguna marca
+     del bot. Para separarlo, el workflow del bot tendría que etiquetar el
+     borrador antes de completarlo (MOM §17.3).
+   - Si al generar el pedido Shopify contesta que el borrador ya estaba
+     completado, la venta se registra sobre el pedido real del borrador y no
+     sobre una fila inventada `draft-<id>`, que la contaba dos veces.
+3. **Qué mirar después**:
+   - la tarjeta muestra «Todas las ventas de la tienda» y su total se parece a
+     los pedidos del Master del mismo periodo, no a los S/ ~100k del bot;
+   - ninguna venta nueva de asesora queda con `kapso` en `orders`:
+     `select count(*) from orders o join order_sales v on v.order_id = o.id where o.created_at > '<hora del despliegue>' and 'kapso' = any(o.tags);`
+     tiene que dar 0, salvo que el borrador reusado ya trajera `kapso` de
+     Shopify;
+   - los pedidos generados desde el drawer conservan sus productos con SKU
+     después del webhook (antes nuestra copia los pisaba con líneas sin id).
+4. **Marcha atrás**: revertir el código basta; la función puede quedarse (es
+   de lectura y nadie más la llama). Si se quiere quitar:
+   `drop function if exists public.canal_de_cierre(uuid[], date, date);`
+
+### 14-10-2026 · Ventas del periodo por origen y conversión por fuente (0268, MOM §17.4)
+
+Las cifras de cabecera (Ingresos, Pedidos, Ticket promedio), «Ventas por día»
+y «Por tienda» dejan de contar solo los pedidos con `kapso` y cuentan TODAS las
+ventas de la tienda, partidas por quién las cerró con la regla de «Canal de
+cierre». «Conversión» pasa a llamarse «Conversión del bot». Nace la tarjeta
+«Conversión por fuente»: de los leads que llegaron en el periodo, cuántos
+compraron en sus primeros 7 días, por fuente. Cada tienda cuenta desde su
+propio día en Kapta, también en «Canal de cierre».
+
+0. **Los dos índices, a mano y PRIMERO**, fuera de una transacción (`psql`
+   en modo normal; `apply_migration` no sirve porque envuelve en transacción),
+   uno por uno:
+   `create index concurrently if not exists leads_store_first_seen_idx on public.leads (store_id, first_seen_at);`
+   `create index concurrently if not exists leads_store_created_sin_first_seen_idx on public.leads (store_id, created_at) where first_seen_at is null;`
+   Un `create index` normal bloquearía las escrituras de `leads` mientras se
+   construye. La migración los vuelve a pedir con `if not exists`, que entonces
+   no los construye, pero toma por un instante un bloqueo de escritura sobre
+   `leads`; por eso la migración pone `lock_timeout = '5s'` en esas dos líneas y
+   falla en limpio si tuviera que esperar (se reintenta). Son de columnas simples a propósito: la app lee como
+   `authenticated`, bajo RLS, y Postgres no lleva al índice un rango sobre
+   `coalesce(first_seen_at, created_at)`. Comprobar que quedaron válidos:
+   `select indexrelid::regclass, indisvalid from pg_index where indexrelid in ('public.leads_store_first_seen_idx'::regclass, 'public.leads_store_created_sin_first_seen_idx'::regclass);`
+   → `t` en los dos (si uno da `f`, `drop index concurrently` de ese y
+   repetirlo).
+1. **Migración `0268_ventas_por_origen.sql`**, a mano y ANTES del código:
+   `psql "$DATABASE_URL" -f db/migrations/0268_ventas_por_origen.sql`. Crea la
+   vista `pedidos_canal` (con la sesión de quien mira; `authenticated` solo
+   puede leerla y `anon` nada), rehace `canal_de_cierre` encima de ella —mismo
+   resultado que la 0259, la regla del canal pasa a vivir en un solo lugar— y
+   crea las funciones de lectura `ventas_por_origen` y `conversion_por_fuente`
+   (SECURITY INVOKER, sin `anon`). No escribe datos y no lleva `drop`. Solo
+   necesita la 0259 delante; no depende de la 0264 a la 0267 (Master), que
+   llevan número menor solo porque llegaron antes a la integración, ni de la
+   0269 (comprobantes). Medido
+   en producción como el owner, 30 días, con la primera versión de la consulta:
+   la cohorte de `conversion_por_fuente`, 0,39 s recorriendo los 59.598 leads.
+   La versión final parte el nacimiento en dos rangos de columnas simples y
+   materializa las tiendas, para que bajo RLS los rangos de `leads` y de
+   `orders` vayan por índice. Medido en una base de prueba con la cadena entera
+   de migraciones, 60.000 leads y unos 440.000 pedidos, como el owner bajo RLS
+   y sin JIT (producción lo tiene apagado): `conversion_por_fuente` de 465 a
+   66 ms, `ventas_por_origen` de 110 a 69 ms y `canal_de_cierre` de 198 a 88 ms,
+   con el mismo resultado byte a byte; antes leía todos los pedidos y todos
+   los leads de la tienda en cada llamada. (Después, la cohorte dejó fuera las
+   filas que Kapta crea desde su propio pedido, MOM §17.4: eso sí cambia
+   «Orgánico», a propósito.)
+   **Sin ella el código no se rompe**: la cabecera, «Ventas por día» y «Por
+   tienda» vuelven a la vista anterior —«Ingresos del bot», «Pedidos del bot»…—
+   con un aviso arriba de las cifras («Falta aplicar la migración 0268…»), y
+   «Conversión por fuente» dice lo mismo. «Canal de cierre» sigue con la 0259.
+   **No está aplicada en producción**: necesita la autorización del owner.
+2. **Qué cambia en las cifras**:
+   - La cabecera sube unas once veces: del 14-09 al 13-10-2026 pasa de cerca de
+     600 pedidos del bot a 6.622 pedidos y S/ 1.181.080. Es el mismo total que
+     «Canal de cierre»: cuadran entre sí.
+   - El cambio contra el periodo anterior solo aparece si cada tienda contaba
+     el periodo anterior entero (con las tiendas de hoy, cuando el periodo
+     anterior empieza el 04-07-2026 o después); si no, «sin comparar: el
+     anterior no tiene todas las ventas».
+   - «Conversión del bot» es pedidos del canal «Bot de Kapso» ÷
+     conversaciones: casi igual que la «Conversión» de antes (las ventas de
+     asesora ya no conservaban `kapso`, §5h), ahora con el nombre que dice lo
+     que mide.
+   - «Ventas por día» parte cada día por grupo de cierre; «Por tienda» suma
+     todas las ventas de cada tienda, con la parte de la asesora; «Canal de
+     cierre» gana el cambio contra el periodo anterior por canal.
+   - «Conversión por fuente», medido en el mes: Anuncios de Meta 6,3 %, Carritos
+     COD 30,2 %, Orgánico 9,4 %, Web de Facebook 15,9 %, Búsquedas abandonadas
+     3,6 % (MOM §17.4). Junto, el cierre de las asesoras, como en Productividad
+     pero con leads distintos por tienda.
+   - Con varias tiendas, cada una cuenta desde su propio día en Kapta (antes
+     «Canal de cierre» recortaba todas al día de la que empezó último) y un aviso
+     arriba de las cifras nombra cada tienda que cuenta desde otra fecha.
+   - Siguen siendo solo del bot, y lo dicen: «Conversión del bot», Productos,
+     Fuente, Embudo y su salud, los ingresos de Carritos y de Números de
+     WhatsApp, Desglose de negocio, Integridad y Patrón de horas. «Resumen diario CSV»
+     se llama ahora «Resumen diario del bot CSV» (el mismo archivo).
+3. **Qué mirar después**:
+   - «Ingresos» de la cabecera es igual al total de «Canal de cierre» del mismo
+     periodo y se parece a los pedidos del Master, no a los S/ ~100k del bot;
+   - con una tienda recortada (un periodo de junio, por ejemplo), el aviso
+     azul nombra la tienda y el día, y no hay cambio contra el anterior;
+   - que la cohorte va por los índices nuevos bajo RLS. `explain` de la
+     función no sirve (solo muestra un `Result`: Postgres no la expande); se
+     mira la consulta de la cohorte, como el owner:
+     `begin; select set_config('request.jwt.claims', '{"sub":"<uid del owner>","role":"authenticated"}', true); set local role authenticated; explain analyze select count(*) from public.leads where store_id = '<tienda>' and first_seen_at >= '<desde>T00:00-05' and first_seen_at < '<hasta + 1>T00:00-05'; rollback;`
+     → `Index Cond` sobre `leads_store_first_seen_idx` con el rango de fechas.
+4. **Marcha atrás**: revertir el código basta; las funciones y la vista pueden
+   quedarse (son de lectura). Para quitarlas, primero devolver `canal_de_cierre`
+   a la 0259 y después borrar lo demás:
+   `psql "$DATABASE_URL" -f db/migrations/0259_canal_de_cierre.sql`,
+   `drop function if exists public.ventas_por_origen(uuid[], date, date);`,
+   `drop function if exists public.conversion_por_fuente(uuid[], date, date);`,
+   `drop view if exists public.pedidos_canal;` y, si se quiere,
+   `drop index concurrently if exists public.leads_store_first_seen_idx;` y
+   `drop index concurrently if exists public.leads_store_created_sin_first_seen_idx;`.
+
 ### 16-10-2026 · Programar envío (0267)
 
 - **0267 antes del código**: `order_master.dispatch_scheduled_on` (date) e
   índice parcial. El recálculo la escribe; sin la columna el upsert fallaría.
 - Sin cambio de versión: nadie había programado un envío, así que no hay nada
   que rellenar. Los pedidos la toman cuando alguien programa.
+
+### 15-10-2026 · Arreglos de la auditoría del atraso de Lima (sin migración)
+
+Sin migraciones, variables de entorno, RPC ni crons nuevos.
+`MOM_RESOLUTION_VERSION` **no** sube (`mom-v1.30`): el resolver no cambia.
+
+- **Costo logístico** (MOM §14): cuando falta una tarifa, el recálculo guarda
+  `order_master.logistics_cost` vacío y no S/ 0. Como la versión no sube, las
+  filas ya guardadas en S/ 0 cambian en su próximo recálculo; «Conciliar
+  liquidación» no espera a eso, porque recalcula el pedido al guardar.
+- **Puerta a «entregado»** (MOM §11.4): lee `orders.cancelled_at` en cada
+  llamada (lotes de 200). Si esa lectura falla no escribe nada, y el cierre de
+  la ruta dice «No se pudo actualizar el Master: …».
+- **Barrido de cobros Tanders** (MOM §9.4): al final de cada pasada de
+  `/api/cron/tanders-payments` crea, como mucho, 20 fichas `pendiente_revision`
+  para las guías validadas que se quedaron sin ficha. Unas 200 entran en las
+  primeras ~11 pasadas, y cada una necesita la firma de una persona en Validar
+  pagos.
+
+**Qué mirar después.** La próxima pasada del barrido trae `sinFicha` y
+`fichasRecuperadas` en su informe. Terminar la ruta de Yhoni del 01/10
+(`00bd7063`) nombra a #KP137541 en «Ojo:» y lo deja anulado.
+
+### 21-10-2026 · Grupo GF cobra lo de su Tarifario (`mom-v1.31`) y la caja S01 del cuaderno (0270)
+
+Dos decisiones del owner del 19-10-2026 (MOM §14, §29.8, §30.8). Sin variables
+de entorno, RPC ni crons nuevos.
+
+1. **Migración `0270_cuaderno_s01_fill.sql`, a mano y ANTES del código.**
+   **Ya aplicada en producción el 22-10-2026** (conteo previo 575, `NOTICE` y
+   comprobación: 575 salidas y 575 eventos, los 575 pedidos en «Pendiente de
+   liquidación», ninguno en Finalizado). Es un relleno de datos, no de
+   esquema: la caja S01 «por definir» de los pedidos que el cuaderno de Alexis
+   o de Reparto propio da por entregados pasa a salida entregada de Grupo GF
+   Courier (courier `propio`, `created_via` y `delivered_source`
+   `cuaderno_gf`, `dispatched_at` = `closed_at` = el día del cuaderno a las
+   17:00Z), con un evento `route_output_filled` por salida. Conserva
+   consecutivo, `output_code`, QR, preparación y custodia, y **no cierra
+   ninguna liquidación**: los pedidos dejan «Salida adicional activa» y pasan a
+   «Pendiente de liquidación». Sin `drop` ni `begin`/`commit`; correrla otra
+   vez escribe 0 filas. Quien la aplica pone la transacción y el freno:
+
+   ```bash
+   psql "$DATABASE_URL" <<'SQL'
+   begin;
+   set local lock_timeout = '15s';
+   \i db/migrations/0270_cuaderno_s01_fill.sql
+   commit;
+   SQL
+   ```
+
+   El `NOTICE` «0270: N caja(s) «por definir» pasaron a salida entregada de
+   Grupo GF» tiene que dar lo mismo que el conteo previo. Va antes del código
+   porque el recálculo no depende de él: el `UPDATE` mueve
+   `shipments.updated_at`, `order_master_stale` da esos pedidos por desfasados
+   y el barrido los recalcula con el código que haya; al salir `mom-v1.31` se
+   recalculan otra vez. El día de su costo es el de su último movimiento, y el
+   relleno (el `UPDATE` y su evento) lo lleva al día en que se aplica: con
+   `mom-v1.31` toman la tarifa del Tarifario vigente ese día si su distrito la
+   tiene, también los 308 con día del cuaderno anterior al 31-08-2026 (punto 4).
+
+   **Conteo previo** (solo lectura; el 21-10-2026, 575: 432 de Kenku Peru y 143
+   de Aurela, días del cuaderno del 10-08 al 15-09-2026). Es el mismo filtro de
+   la migración, el mismo con el que se midieron las 575; si sale distinto, son
+   cambios de datos desde el 21-10 (cajas resueltas o anuladas a mano, filas de
+   hoja posteriores que lo contradicen, pedidos que el barrido sacó o metió en
+   «Salida adicional activa»): revisar la diferencia antes de aplicar:
+
+   ```sql
+   with pop as (
+     select om.order_id, om.store_id, om.order_name
+       from order_master om
+       join orders o on o.id = om.order_id
+      where om.coverage = 'lima'
+        and om.macro_stage = 'por_cerrar'
+        and om.macro_substage = 'salida_adicional_activa'
+        and om.status_source = 'manual'
+        and o.cancelled_at is null
+   ),
+   -- Las salidas vivas, como en la auditoría y en `planOwnSalida`.
+   live as (
+     select x.id, x.order_id, x.output_code, x.courier, x.created_via, x.delivery_status, x.custody_state,
+            x.custody_transferred_at, x.preparation_state, x.ready_at, x.created_at
+       from shipments x
+       join pop p on p.order_id = x.order_id
+      where x.delivery_status in ('pendiente', 'en_ruta')
+        and x.returned_at is null
+        and coalesce(x.custody_state, '') <> 'devuelto'
+   ),
+   a as (
+     select distinct on (l.order_id) l.*, count(*) over (partition by l.order_id) as n_live
+       from live l
+      order by l.order_id, l.created_at desc
+   ),
+   ov as (
+     select distinct on (e.order_id) e.order_id, lower(btrim(e.courier)) as rider, e.new_status,
+            e.payload->>'fecha' as fecha, e.occurred_at
+       from order_events e
+       join pop p on p.order_id = e.order_id
+      where e.kind = 'status_override'
+      order by e.order_id, e.occurred_at desc, e.created_at desc
+   ),
+   target as (
+     select p.order_id, p.store_id, a.id as shipment_id, ov.rider, ov.fecha,
+            -- `manualRouteGuideCode(order_name, id, 'propio')` (lib/shipment-output.ts).
+            'MOM-' || coalesce(
+              nullif(regexp_replace(regexp_replace(upper(regexp_replace(btrim(coalesce(p.order_name, '')), '^#+', '')),
+                                                   '[^A-Z0-9_-]+', '', 'g'), '_+', '-', 'g'), ''),
+              upper(left(a.id::text, 8))
+            ) || '-PROPIO-' || upper(left(a.id::text, 8)) as guide_code
+       from pop p
+       join a on a.order_id = p.order_id
+       join ov on ov.order_id = p.order_id
+      where a.n_live = 1
+        and a.courier = 'por_definir'
+        and a.created_via = 'mom_manual_route'
+        and a.delivery_status = 'pendiente'
+        and coalesce(a.custody_state, 'empresa') = 'empresa'
+        and a.custody_transferred_at is null
+        and a.preparation_state = 'listo_despacho'
+        and ov.new_status = 'entregado'
+        and ov.rider in ('alexis', 'propio')
+        and ov.fecha ~ '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
+        and ov.fecha <= '2026-10-21'
+        and not exists (select 1 from shipments y where y.order_id = p.order_id and y.delivery_status = 'entregado')
+        and not exists (select 1 from urpi_report_rows r where r.order_id = p.order_id)
+        and (ov.occurred_at at time zone 'America/Lima')::date >= (a.created_at at time zone 'America/Lima')::date - 30
+        and ov.occurred_at >= coalesce(a.ready_at, a.created_at) - interval '1 day'
+        and not exists (
+          select 1
+            from sheet_rows r
+            join sheets sh on sh.id = r.sheet_id
+            join sheet_domain_statuses st on st.domain_id = sh.domain_id and st.code = r.values->>'estado'
+           where r.order_id = p.order_id
+             and r.values->>'fecha' > ov.fecha
+             and st.effect in ('devolucion', 'anulacion', 'sin_salida')
+        )
+   )
+   select coalesce(st.name, 'TOTAL') as tienda, count(*) as cajas,
+          count(*) filter (where t.rider = 'alexis') as alexis,
+          count(*) filter (where t.rider = 'propio') as propio,
+          min(t.fecha) as desde, max(t.fecha) as hasta
+     from target t
+     join stores st on st.id = t.store_id
+    group by rollup (st.name)
+    order by st.name nulls last;
+   ```
+
+   **Comprobación después** (solo lectura): `eventos_0270` = `salidas_0270` =
+   el `NOTICE`, `con_fecha_rara` = 0 y el conteo previo, otra vez, en 0.
+   Cuando el barrido o `mom-v1.31` los recalculen, los pedidos están en «Por
+   cerrar · Pendiente de liquidación» y `desfasados` baja a 0:
+
+   ```sql
+   -- 1) Lo que escribió: tantas salidas como eventos, y el conteo previo en 0.
+   select (select count(*) from order_events e
+            where e.kind = 'route_output_filled' and e.payload->>'backfill' = 'true'
+              and e.payload ? 'rider' and e.courier = 'propio') as eventos_0270,
+          (select count(*) from shipments s
+            where s.created_via = 'cuaderno_gf' and s.courier = 'propio' and s.delivery_status = 'entregado'
+              and exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                           and e.payload->>'backfill' = 'true')) as salidas_0270,
+          (select count(*) from shipments s
+            where s.created_via = 'cuaderno_gf'
+              and (s.closed_at is null or s.dispatched_at is distinct from s.closed_at
+                   or to_char(s.closed_at at time zone 'UTC', 'HH24:MI') <> '17:00')) as con_fecha_rara;
+   -- 2) Dónde quedaron los pedidos, cuando el barrido (o mom-v1.31) los recalcule:
+   --    Por cerrar · Pendiente de liquidación; «desfasados» baja a 0.
+   select om.macro_stage, om.macro_substage, count(*) as pedidos,
+          count(*) filter (where s.updated_at > om.recomputed_at) as desfasados
+     from shipments s
+     join order_master om on om.order_id = s.order_id
+    where s.created_via = 'cuaderno_gf'
+      and exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                   and e.payload->>'backfill' = 'true')
+    group by 1, 2
+    order by 3 desc;
+   ```
+
+2. **El código.** Desde aquí, «Aplicar al Master» de Liquidaciones 2 y la carga
+   histórica (`scripts/apply-cuaderno-history-to-master.ts`) rellenan la caja
+   al aplicar la entrega (`lib/own-salida.ts`), con las mismas condiciones
+   (también la de `cuaderno_contradicho`: una fila posterior de cualquier hoja
+   que lo da por devuelto, anulado o sin salida lo deja para revisar). Las dos
+   acotan a hoy una fecha futura del cuaderno.
+   `scripts/rollback-master-backfill.ts` no deshace ese relleno.
+3. **Grupo GF cobra lo de su Tarifario.** El costo logístico de «propio» sale
+   de `logistics_district_tariffs` (Grupo GF Courier › Tarifario), no de
+   `cost_tariffs`: la tarifa del distrito vigente el día del costo (el último
+   movimiento, como con cualquier courier), la del contrato de la tienda si la
+   hay, por el primer intento y cada intento adicional de sus propias salidas
+   (no los de Aliclik o Swayp; hoy solo el primero), sin devolución aparte. El
+   Master lee con la clave de servicio `logistics_providers` (código
+   `grupo-gf-courier`),
+   `logistics_service_agreements` y `logistics_district_tariffs` (0134 y 0136,
+   ya en producción) y las recuerda cinco minutos por instancia, como
+   `cost_tariffs`; una lectura que falla no se recuerda y el aviso dice «No se
+   pudo leer…». Los demás couriers no cambian.
+4. **`MOM_RESOLUTION_VERSION` sube a `mom-v1.31`**: el cron recalcula poco a
+   poco todo el Master. Para «propio», `logistics_cost` pasa a la tarifa del
+   distrito si su último movimiento es del 31-08-2026 en adelante (las 44
+   tarifas rigen desde ese día) y queda vacío si es anterior, si el distrito no
+   se reconoce o si no tiene tarifa. Los S/ 0 viejos de «propio» desaparecen.
+   Un pedido de Grupo GF cuyo último movimiento es anterior al 31-08-2026 sigue
+   «falta tarifa» (el aviso nombra ese día y desde cuándo rige la del
+   distrito) y no se concilia mientras su último movimiento siga antes de esa
+   fecha: la pantalla del Tarifario no abre vigencias anteriores a la que rige
+   (`saveDistrictTariff`), y cubrir esos días es una decisión del owner que
+   pediría un cambio de datos. Pero cualquier movimiento posterior del pedido
+   («Observar liquidación», un comentario, el relleno de la 0270) lleva el día
+   del costo a ese día: toma la tarifa vigente entonces y el siguiente
+   «Conciliar liquidación» pasa. Si eso vale o el bloqueo tiene que aguantar
+   hasta que el owner decida, es punto suyo (MOM §14).
+
+   **Qué mirar después** (solo lectura, cuando termine el barrido):
+
+   ```sql
+   select macro_version, (logistics_cost is not null) as con_costo, count(*)
+     from order_master
+    where coverage = 'lima' and macro_stage = 'por_cerrar'
+      and 'pendiente_liquidacion' = any(macro_reasons)
+      and (current_courier = 'propio' or delivered_courier = 'propio' or last_courier = 'propio'
+           or exists (select 1 from unnest(dispatched_with) c where c = 'gf' or c like 'gf:%'))
+    group by 1, 2
+    order by 1, 2;
+   ```
+
+   Con `mom-v1.31`, para «propio» quedan con costo los que se movieron por
+   última vez del 31-08-2026 en adelante y tienen distrito con tarifa, y sin él
+   los demás. Medido el 22-10-2026 por último movimiento: de los 2.833 pedidos
+   de Grupo GF en «Pendiente de liquidación», 1.044 son del 31-08-2026 en
+   adelante (esperado: con costo, salvo distrito sin tarifa) y 1.789 anteriores
+   (esperado: sin costo). Hoy los 2.833 muestran S/ 0 y ninguno se concilia
+   (Costos no tiene tarifas de «propio»). Los ~575 de la 0270 se suman a los
+   que tienen costo si su distrito tiene tarifa: su último movimiento es el día
+   en que se aplicó.
+
+**Marcha atrás.** Para la tarifa basta revertir el código: las filas en
+`mom-v1.31` no coinciden con la versión anterior y el cron las vuelve a
+calcular con `cost_tariffs`. La 0270 no se deshace sola: las salidas
+rellenadas se reconocen por su `route_output_filled` con
+`payload.backfill = true`.
+
+### 23-10-2026 · Tiendas con su app propia de Shopify (0271, MOM §36)
+
+Conectar «Súper Human Perú» con la app que su propia organización de Shopify
+creó en el Dev Dashboard («app propia»): Shopify ya no deja crear apps
+personalizadas en el admin, y la app pública «Kapta» no está revisada. La app
+propia pide su token con su Client ID y su Client secret (*client credentials
+grant*) y cada token dura ~24 h; Kapta lo renueva cada hora (cron) y antes de
+usarlo.
+
+**Kenku y Aurela no cambian.** Siguen con la app interna, su token y sus
+webhooks; las tiendas `clientes`, igual. Nada de esto las desconecta, les
+registra webhooks ni les cambia el token, y la 0271 no actualiza ninguna fila.
+Sin variables de entorno nuevas: el Client ID y el Client secret son de cada
+tienda, se escriben en Kapta y nunca van a Vercel, al chat ni al repositorio.
+
+1. **Migración `0271_shopify_app_propia.sql`, a mano y ANTES del código.**
+   Amplía `stores_shopify_app_check` a `('interna', 'clientes', 'propia')`;
+   añade `stores.shopify_client_id`, `shopify_client_secret_enc` (cifrado como
+   los demás `*_enc`), `shopify_token_expires_at`, `shopify_token_renewed_at`,
+   `shopify_token_error`, `shopify_token_retry_at` (el freno de la renovación
+   al usar), `shopify_webhook_secret_prev_enc` (el Client secret anterior tras
+   rotarlo, cifrado) y `shopify_webhook_secret_prev_set_at`; y pone
+   `stores_own_app_columns_check` (esas ocho columnas solo tienen valor en una
+   tienda `propia`) y `stores_own_app_shop_uniq` (un dominio, una sola tienda
+   con app propia).
+   Sin grants nuevos: la fila la protege la RLS de siempre. Sin ella, la
+   conexión con app propia responde «falta la migración 0271» y el cron
+   contesta `sin_migracion`; las tiendas de hoy siguen igual.
+
+   **Antes** (solo lectura; anotar la huella):
+
+   ```sql
+   -- a) Un solo CHECK de la lista de apps, el de la 0249: 'interna' y 'clientes'.
+   select conname, pg_get_constraintdef(oid)
+     from pg_constraint
+    where conrelid = 'stores'::regclass and contype = 'c'
+      and pg_get_constraintdef(oid) like '%shopify_app%';
+   -- b) Tiendas por app y estado (Kenku Peru y Aurela: interna, active).
+   select shopify_app, status, count(*) from stores group by 1, 2 order by 1, 2;
+   -- c) La huella de lo que la 0271 promete no tocar (sin mostrar secretos).
+   select md5(string_agg(concat_ws('|', id, name, shopify_domain, shopify_app, status,
+                                   md5(coalesce(shopify_token_enc, '')),
+                                   md5(coalesce(shopify_webhook_secret_enc, '')),
+                                   shopify_uninstalled_at), ',' order by id)) as huella
+     from stores;
+   ```
+
+   **Aplicar.** Toma un momento el candado exclusivo de `stores` (cambia dos
+   CHECK y crea un índice). Mientras lo espera, todo lo que lee `stores` hace
+   cola detrás: cada consulta del dashboard y cada webhook de Kenku y Aurela.
+   Por eso el `lock_timeout` es corto, **3 s**: si una consulta larga tiene la
+   tabla, la migración se corta sola (`canceling statement due to lock
+   timeout`), no cambia nada, y se vuelve a correr el mismo bloque unos
+   segundos después, las veces que haga falta:
+
+   ```bash
+   psql "$DATABASE_URL" <<'SQL'
+   begin;
+   set local lock_timeout = '3s';
+   \i db/migrations/0271_shopify_app_propia.sql
+   commit;
+   SQL
+   ```
+
+   **Después** (solo lectura):
+
+   ```sql
+   -- 1) Las piezas nuevas: el CHECK con 'interna', 'clientes' y 'propia',
+   --    stores_own_app_columns_check y el índice parcial.
+   select conname, pg_get_constraintdef(oid)
+     from pg_constraint
+    where conrelid = 'stores'::regclass
+      and conname in ('stores_shopify_app_check', 'stores_own_app_columns_check');
+   select indexdef from pg_indexes where tablename = 'stores' and indexname = 'stores_own_app_shop_uniq';
+   -- 2) Ninguna tienda cambió: la huella (c) tiene que dar lo mismo que antes.
+   --    Si no, comparar fila por fila: una desinstalación o una reconexión en
+   --    medio también la mueve.
+   -- 3) Las columnas nuevas, vacías en todas (0 hasta conectar la primera propia).
+   select count(*) from stores
+    where shopify_client_id is not null or shopify_client_secret_enc is not null
+       or shopify_token_expires_at is not null or shopify_token_renewed_at is not null
+       or shopify_token_error is not null or shopify_token_retry_at is not null
+       or shopify_webhook_secret_prev_enc is not null or shopify_webhook_secret_prev_set_at is not null;
+   ```
+
+   Correrla otra vez no hace nada: no vuelve a validar la tabla ni toca filas.
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). Trae el cron `/api/cron/shopify-own-app-tokens` en
+   `vercel.json`, cada hora, protegido con `CRON_SECRET` como los demás.
+   Mientras no haya una tienda propia no renueva nada. Comprobar en Vercel →
+   Crons que aparece, y que una llamada sin el secreto responde 401.
+
+3. **Conectar «Súper Human Perú».**
+   - En la organización de Shopify de la tienda → Dev Dashboard: crear la app,
+     darle los alcances `read_orders`, `read_draft_orders`,
+     `write_draft_orders`, `read_products`, `read_customers` y `write_orders`
+     (los de `SHOPIFY_CLIENT_APP_SCOPES`), publicar la versión e instalarla en
+     la tienda. Revisar que tenga acceso a los datos protegidos de clientes
+     (nombre, teléfono, dirección y correo): si los pedidos llegan sin datos
+     del comprador, es eso.
+   - En Kapta: «Conectar con app propia de Shopify» (el primer formulario de
+     «Conectar tienda»; **no** el de «Crear tienda con token de Admin API»),
+     con el dominio `*.myshopify.com`, el Client ID, el Client secret y la
+     organización. Copiar el secreto directo del Dev Dashboard al campo; nunca
+     por chat. Si dice que la tienda ya está en Kapta, no se tocó nada: mirar
+     con la consulta de abajo (sin filtrar por app) qué fila tiene ese dominio.
+     Si dice que «ya está en esta organización, sin acceso a Shopify», es el
+     paso 5.
+   - Si Kapta dice que faltan alcances, añadirlos en una versión nueva de la
+     app, instalarla otra vez y volver a conectar.
+
+   **Qué mirar después:**
+
+   ```sql
+   select name, shopify_app, status, shopify_client_id is not null as con_client_id,
+          shopify_token_expires_at, shopify_token_renewed_at, shopify_token_error
+     from stores
+    where shopify_app = 'propia';
+   ```
+
+   Recién conectada: `active`, vencimiento a ~24 h y sin error. Unas 12 h
+   después el cron la renueva: `shopify_token_renewed_at` avanza y el
+   vencimiento vuelve a quedar a ~24 h. Un `shopify_token_error` que no se
+   borra en la hora siguiente es un problema de la app (secreto rotado, app
+   desinstalada, alcances quitados): el texto dice cuál. Si el texto son
+   permisos que faltan, el token se renovó igual (Ajustes lo titula «Faltan
+   permisos en la app»). Y otra vez la huella (c) y el conteo (b) de las
+   tiendas `interna` y `clientes`: no cambian.
+
+4. **Rotar el Client secret de una tienda propia** (cuando haga falta, MOM
+   §36.4), en este orden: rotarlo en el Dev Dashboard; pegar el nuevo en
+   Ajustes → Shopify → «Credenciales de la app» → «Probar y guardar»; revocar
+   el anterior en el Dev Dashboard; y pulsar «Ya revoqué el secreto anterior».
+   Mientras tanto Kapta acepta los webhooks de pedidos y borradores firmados
+   con el anterior, hasta 48 h; un `app/uninstalled` firmado solo con el
+   anterior se rechaza con 401 y la tienda sigue activa (MOM §36.4). Si se
+   cambia el Client ID (otra app), Kapta registra los webhooks de la nueva:
+   después, desinstalar la anterior de la tienda.
+
+5. **Si al conectar Kapta dice que la tienda «ya está en esta organización,
+   sin acceso a Shopify»** (MOM §36.2): alguien la creó con «Crear tienda con
+   token de Admin API» y quedó `interna` sin token. «Conectar con app propia»
+   no la toca; la convierte soporte, a mano, y solo esa fila:
+
+   ```sql
+   -- a) La fila (solo lectura): de esa organización, interna y sin token.
+   select id, org_id, name, shopify_app, status, shopify_token_enc is null as sin_token
+     from stores
+    where lower(shopify_domain) = lower('<tienda>.myshopify.com');
+   -- b) Pasarla a app propia (el id de a).
+   update stores set shopify_app='propia' where id='<id>' and shopify_app='interna' and shopify_token_enc is null;
+   ```
+
+   Tiene que decir `UPDATE 1`. `UPDATE 0` es que la fila tiene token o ya no
+   es `interna`: no seguir (Kenku y Aurela tienen token, así que el `where`
+   nunca las toma). Si falla por `stores_own_app_shop_uniq`, ya hay otra
+   tienda propia con ese dominio: no seguir. Después, en Kapta, alguien con
+   «Administrar tiendas»: Ajustes de esa tienda → Shopify → «Credenciales de
+   la app» → el Client ID y el Client secret → «Probar y guardar». Pide el
+   token, guarda las credenciales y, si la tienda está activa o en pausa,
+   registra sus webhooks (pedidos, borradores y `app/uninstalled`) y dice
+   «Credenciales probadas y guardadas, y los webhooks registrados»: no hay app
+   anterior, no se desinstala nada; si está deshabilitada, el aviso dice que
+   se active y se re-registren. Luego
+   «Sincronizar ahora». Entre el `update` y «Probar y guardar», el cron puede
+   anotar «Faltan el Client ID o el Client secret…» en `shopify_token_error`:
+   se borra al guardar. Comprobar con la consulta de «Qué mirar después» del
+   paso 3.
+
+**Marcha atrás.** Revertir el código basta: las tiendas propias dejan de
+renovar y su token vence en menos de 24 h; Kenku, Aurela y las tiendas
+`clientes` no lo notan. La 0271 puede quedarse: con las columnas vacías y el
+CHECK más amplio no cambia nada para ellas. Si hubiera que quitarla, primero
+el código, y solo con `select count(*) from stores where shopify_app = 'propia'`
+en 0:
+
+```sql
+begin;
+alter table stores drop constraint if exists stores_own_app_columns_check;
+drop index if exists stores_own_app_shop_uniq;
+alter table stores drop constraint stores_shopify_app_check;
+alter table stores add constraint stores_shopify_app_check check (shopify_app in ('interna', 'clientes'));
+alter table stores
+  drop column shopify_client_id,
+  drop column shopify_client_secret_enc,
+  drop column shopify_token_expires_at,
+  drop column shopify_token_renewed_at,
+  drop column shopify_token_error,
+  drop column shopify_token_retry_at,
+  drop column shopify_webhook_secret_prev_enc,
+  drop column shopify_webhook_secret_prev_set_at;
+commit;
+```
+
+### 23-10-2026 · La salida de Urpi lleva el día de la entrega, y las cajas viejas de Urpi (0272)
+
+MOM §30.11 y §4. Sin variables de entorno, RPC ni crons nuevos.
+`MOM_RESOLUTION_VERSION` **no** sube (`mom-v1.31`): el resolver no cambia, y los
+pedidos que toca la 0272 se recalculan por el desfase.
+
+1. **El código.** Al rellenar la caja «por definir» como salida de Urpi
+   (`urpiSalidaRow`, `lib/urpi-salida.ts`) escribe también `closed_at` = el día
+   de la fila más reciente de Urpi del pedido —la «Entregado» de la que sale la
+   entrega del Master— a las 17:00Z. Hasta aquí no lo escribía y el Master
+   tomaba como día de la entrega el del relleno. Si esa fila no trae fecha, la
+   salida se rellena sin `closed_at`, como antes.
+2. **Migración `0272_urpi_salida_fecha.sql`, a mano y DESPUÉS del código.**
+   **Ya aplicada en producción el 23-10-2026**, con el código ya desplegado
+   (conteos previos 107 y 32; después, las 139 salidas de Urpi con el día del
+   reporte en el Master, 32 eventos `route_output_filled` y los 32 pedidos
+   fuera de «Salida adicional activa»: 31 en «Pendiente de liquidación» y 1 en
+   «Recogido sin pago completo»). Después, para que ninguna salida
+   nueva de Urpi quede sin `closed_at` entre una cosa y otra (si se aplica
+   antes, correrla otra vez tras el despliegue completa las que se rellenaron en
+   medio). Es un relleno de datos, no de esquema, en dos pasos:
+   1. a las salidas `created_via = urpi_report` entregadas y sin `closed_at`,
+      `closed_at` = el día de la fila más reciente de Urpi del pedido a las
+      17:00Z, si esa fila es «Entregado» y tiene fecha. Sin evento: no
+      sobrescribe ningún hecho (estaba vacío) y la salida ya tiene el
+      `route_output_filled` de su relleno;
+   2. la caja «por definir» de los pedidos que Urpi entregó y el marcado
+      automático no alcanzó (antes de la ventana de 60 días) pasa a salida de
+      Urpi entregada, con la regla del botón (`planUrpiSalida`: última fila
+      «Entregado» con fecha, ninguna salida de Urpi entregada, la «por definir»
+      de ruta manual como única salida viva, pendiente, en la empresa y nunca
+      transferida) y solo si el pedido está entregado en Kapta y no anulado en
+      Shopify. Escribe lo mismo que el código (courier `urpi`, `created_via` y
+      `delivered_source` `urpi_report`, la guía `MOM-<pedido>-URPI-<id>`,
+      `dispatched_at` = el primer intento y `closed_at` = la entrega, a las
+      17:00Z), con las guardas del UPDATE de `writeCourierGuide`, y un
+      `route_output_filled` por salida con `payload` {outputCode,
+      previousCourier, backfill, urpi_row, fecha}. Conserva consecutivo,
+      `output_code`, QR, preparación y custodia, y **no cierra ninguna
+      liquidación**.
+
+   Sin `drop` ni `begin`/`commit`; correrla otra vez escribe 0 filas. Quien la
+   aplica pone la transacción y el freno:
+
+   ```bash
+   psql "$DATABASE_URL" <<'SQL'
+   begin;
+   set local lock_timeout = '15s';
+   \i db/migrations/0272_urpi_salida_fecha.sql
+   commit;
+   SQL
+   ```
+
+   Da dos `NOTICE`: «0272: N salida(s) de Urpi con el día de la entrega» tiene
+   que dar el conteo previo 1, y «0272: N caja(s) «por definir» pasaron a
+   salida de Urpi entregada», el `se_rellenan` del conteo previo 2.
+
+   **Conteo previo 1** (solo lectura; el 23-10-2026, **107**, con días del
+   reporte del 24-08 al 21-10-2026). Es el mismo filtro del paso 1. Si sale
+   más, son salidas que el código viejo rellenó desde el 23-10; si sale menos,
+   salidas cuya última fila de Urpi ya no es «Entregado» con fecha (un intento
+   posterior) o que alguien cerró a mano: revisar la diferencia antes de
+   aplicar:
+
+   ```sql
+   with latest as (
+     select distinct on (r.order_id) r.order_id, r.result_code, r.report_date
+       from urpi_report_rows r
+      where r.order_id is not null
+      order by r.order_id, r.urpi_row desc
+   )
+   select count(*) as salidas, min(l.report_date) as desde, max(l.report_date) as hasta
+     from shipments s
+     join latest l on l.order_id = s.order_id
+    where s.created_via = 'urpi_report'
+      and s.delivery_status = 'entregado'
+      and s.closed_at is null
+      and l.result_code = 'entregado'
+      and l.report_date is not null;
+   ```
+
+   **Conteo previo 2** (solo lectura; el 23-10-2026, **32**, reportes del
+   10-08 al 22-08-2026; `cajas` = `se_rellenan`). Es el mismo filtro del paso 2.
+   El `NOTICE` tiene que dar `se_rellenan`; si es menor que `cajas`, la
+   diferencia son cajas con el courier escrito distinto o cuya guía ya existe,
+   que tampoco rellena el código y se miran a mano. Si sale distinto de 32, son
+   cambios de datos desde el 23-10 (cajas pasadas con el botón, anuladas o
+   despachadas a mano, intentos nuevos de Urpi): revisar la diferencia antes de
+   aplicar:
+
+   ```sql
+   with latest as (
+     select distinct on (r.order_id) r.order_id, r.urpi_row, r.result_code, r.report_date
+       from urpi_report_rows r
+      where r.order_id is not null
+      order by r.order_id, r.urpi_row desc
+   ),
+   first_try as (
+     select r.order_id, min(r.report_date) as first_on
+       from urpi_report_rows r
+      where r.order_id is not null
+        and r.report_date is not null
+      group by r.order_id
+   ),
+   pop as (
+     select om.order_id, om.store_id, om.order_name, l.urpi_row, l.report_date as delivered_on, f.first_on
+       from latest l
+       join first_try f on f.order_id = l.order_id
+       join order_master om on om.order_id = l.order_id
+       join orders o on o.id = om.order_id
+      where l.result_code = 'entregado'
+        and l.report_date is not null
+        and om.general_status = 'entregado'
+        and o.cancelled_at is null
+        and not exists (select 1 from shipments y where y.order_id = om.order_id and y.courier = 'urpi' and y.delivery_status = 'entregado')
+   ),
+   live as (
+     select x.id, x.order_id, x.courier, x.created_via, x.delivery_status, x.custody_state, x.custody_transferred_at,
+            count(*) over (partition by x.order_id) as n_live
+       from shipments x
+       join pop p on p.order_id = x.order_id
+      where x.delivery_status in ('pendiente', 'en_ruta')
+        and x.returned_at is null
+        and coalesce(x.custody_state, '') <> 'devuelto'
+   ),
+   target as (
+     select p.*, l.id as shipment_id, l.courier,
+            -- `manualRouteGuideCode(order_name, id, 'urpi')` (lib/shipment-output.ts).
+            'MOM-' || coalesce(
+              nullif(regexp_replace(regexp_replace(upper(regexp_replace(btrim(coalesce(p.order_name, '')), '^#+', '')),
+                                                   '[^A-Z0-9_-]+', '', 'g'), '_+', '-', 'g'), ''),
+              upper(left(l.id::text, 8))
+            ) || '-URPI-' || upper(left(l.id::text, 8)) as guide_code
+       from pop p
+       join live l on l.order_id = p.order_id
+      where l.n_live = 1
+        and lower(btrim(l.courier)) = 'por_definir'
+        and l.created_via = 'mom_manual_route'
+        and l.delivery_status = 'pendiente'
+        and coalesce(l.custody_state, 'empresa') = 'empresa'
+        and l.custody_transferred_at is null
+   )
+   -- `cajas`: la regla de `planUrpiSalida`; `se_rellenan`: además las guardas
+   -- del UPDATE (courier escrito tal cual y guía sin usar), lo que da el NOTICE.
+   select coalesce(st.name, 'TOTAL') as tienda, count(*) as cajas,
+          count(*) filter (where t.courier = 'por_definir'
+                             and not exists (select 1 from shipments z where z.courier = 'urpi' and z.guide_code = t.guide_code)) as se_rellenan,
+          min(t.delivered_on) as desde, max(t.delivered_on) as hasta
+     from target t
+     join stores st on st.id = t.store_id
+    group by rollup (st.name)
+    order by st.name nulls last;
+   ```
+
+   **Comprobación después** (solo lectura): `eventos_0272` = `cajas_0272` = el
+   segundo `NOTICE`, `sin_dia_o_raras` = 0 (si no, son salidas de Urpi cuya
+   última fila no es «Entregado» con fecha, que el paso 1 no toca) y los dos
+   conteos previos, otra vez, en 0 (el segundo, en `se_rellenan`). Cuando el barrido los recalcule, `desfasados` baja a 0, el día de la
+   entrega del Master es el del reporte y las 32 cajas están en «Por cerrar ·
+   Pendiente de liquidación» (o donde las lleve su liquidación), ninguna en
+   «Salida adicional activa»:
+
+   ```sql
+   -- 1) Lo que escribió.
+   select (select count(*) from order_events e
+            where e.kind = 'route_output_filled' and e.courier = 'urpi'
+              and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row') as eventos_0272,
+          (select count(*) from shipments s
+            where s.created_via = 'urpi_report' and s.courier = 'urpi' and s.delivery_status = 'entregado'
+              and exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                           and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as cajas_0272,
+          (select count(*) from shipments s
+            where s.created_via = 'urpi_report' and s.delivery_status = 'entregado'
+              and (s.closed_at is null or to_char(s.closed_at at time zone 'UTC', 'HH24:MI') <> '17:00'
+                   or s.dispatched_at > s.closed_at)) as sin_dia_o_raras;
+   -- 2) Dónde quedaron, cuando el barrido los recalcule: «desfasados» baja a 0
+   --    y «dia_del_reporte» = «pedidos».
+   select (exists (select 1 from order_events e where e.shipment_id = s.id and e.kind = 'route_output_filled'
+                    and e.payload->>'backfill' = 'true' and e.payload ? 'urpi_row')) as caja_0272,
+          om.macro_stage, om.macro_substage, count(*) as pedidos,
+          count(*) filter (where s.updated_at > om.recomputed_at) as desfasados,
+          count(*) filter (where om.delivered_at = s.closed_at) as dia_del_reporte
+     from shipments s
+     join order_master om on om.order_id = s.order_id
+    where s.created_via = 'urpi_report' and s.delivery_status = 'entregado'
+    group by 1, 2, 3
+    order by 1, 4 desc;
+   ```
+
+**Qué cambia en el Master.** El `delivered_at` de esos pedidos pasa del día del
+relleno al del reporte de Urpi, y «Liquidación vencida» (Urpi, a los 3 días,
+§17.1) se mide desde ese día: una entrega sin liquidar puede pasar a vencida
+antes de lo que mostraba. Las 32 cajas dejan «Salida adicional activa». El
+`UPDATE` (y en el paso 2, su evento) mueve el último movimiento —el día al que
+se imputa el costo, §14— al día en que se aplica, como en la 0270: si Urpi
+tiene tarifa en Costos › Costos logísticos, se toma la vigente ese día (el
+16-10-2026 no tenía ninguna). Por lo mismo, los pedidos cuya última señal era de
+antes del corte salen de «Sin movimiento por 60 días» (§17.1) sin que nadie los
+haya trabajado. Quedan fuera, como en el flujo de Urpi, los 13
+pedidos con la misma caja que no están entregados en Kapta (12 anulados en
+Shopify).
+
+**Marcha atrás.** Revertir el código solo hace que los rellenos nuevos vuelvan a
+salir sin `closed_at`. La 0272 no se deshace sola: las cajas del paso 2 se
+reconocen por su `route_output_filled` con `payload.backfill = true` y
+`payload.urpi_row`; las fechas del paso 1 no llevan rastro propio (estaban
+vacías y el código las escribe igual desde este cambio).
+
+### 23-10-2026 · Historial de Shopify (0273, MOM §37)
+
+Archivo de consulta con los pedidos y clientes de Shopify de antes de Kapta,
+subidos desde las exportaciones CSV de Shopify. No toca `orders`, el Master ni
+`MOM_RESOLUTION_VERSION`. Sin variables de entorno nuevas.
+
+**En producción ya está aplicada (23-10-2026, SQL por partes).** Se corrió en
+cuatro tandas (tablas, RLS, políticas y `grant`) y sin los `drop policy if
+exists`, que no hacían nada porque las políticas aún no existían. No figura en
+el historial de migraciones de Supabase. Comprobada el mismo día: las tres
+tablas con RLS, sus índices y una política de lectura cada una. No hace falta
+volver a correrla.
+
+1. **Migración `0273_shopify_history.sql`** antes del código: crea
+   `shopify_history_files`, `shopify_history_orders` y
+   `shopify_history_customers`, con RLS de lectura por tienda. Solo crea; es
+   idempotente. Si el código llega antes, la pantalla falla al leer y la subida
+   contesta «No se pudo registrar el archivo»; no se pierde nada.
+2. **Bucket** `shopify-history` (privado): lo crea la primera subida con el
+   service role. No hace falta crearlo a mano.
+3. **Comprobar:** `select count(*) from shopify_history_orders;` responde (0 al
+   principio) y, después de subir un CSV, `select kind, status, records from
+   shopify_history_files order by created_at desc limit 5;`.
+
+### 23-10-2026 · Base de WooCommerce (0274, MOM §38)
+
+Shopify cierra Kenku Perú y Aurela el 28-10-2026 (UTC; se planifica para el
+27-10 a las 19:00 de Lima) y las dos pasan a WooCommerce. Esto solo prepara la
+base y trae `lib/woocommerce.ts` (cliente REST, firma de webhooks y el mapeador
+de un pedido de WooCommerce a la misma fila de `orders`). **Nada lo llama
+todavía**: el webhook, la sincronización y «Generar pedido» en WooCommerce
+llegan en sus propias entradas.
+
+**Si sale en un mismo despliegue con las dos entradas siguientes** (la 0275 y
+la entrada de pedidos del 25-10-2026): aplicar la 0274, después la 0275 y
+recién entonces el código, cada migración con su «Antes» y su «Después». En ese
+caso sí llegan un cron (`/api/cron/invoice-snapshots`, 29 en `vercel.json`) y
+la ruta `/api/webhooks/woocommerce/<storeId>`: «nada lo llama todavía» y «sin
+crons ni rutas nuevas» valen solo si esta entrada sale sola.
+
+**Kenku y Aurela no cambian.** Siguen en Shopify con su token, sus webhooks, su
+sincronización, «Generar pedido» y sus comprobantes, exactamente igual. La 0274
+no actualiza ninguna fila: todas las tiendas nacen `platform = 'shopify'` sin
+nada de WooCommerce, y todos los pedidos y borradores, `'shopify'`. El código de
+Shopify no escribe la plataforma. Sin variables de entorno nuevas: las claves de
+WooCommerce son de cada tienda, se guardan cifradas en `stores` y nunca van a
+Vercel, al chat ni al repositorio.
+
+1. **Migración `0274_woocommerce_base.sql`, a mano y ANTES del código.**
+   **Ya aplicada en producción** (comprobado el 25-10-2026 con consultas de
+   solo lectura: las nueve columnas de `stores`, `orders.platform` y
+   `draft_orders.platform` en `information_schema.columns`, los seis CHECK
+   validados y los dos índices únicos). No hace falta volver a correrla.
+   Añade `stores.platform` (`'shopify'` | `'woocommerce'`, por defecto
+   `'shopify'`), `woo_site_url`, `woo_site_key`, `woo_consumer_key_enc`,
+   `woo_consumer_secret_enc`, `woo_webhook_secret_enc` (cifrados como los demás
+   `*_enc`), `woo_last_error`, `platform_switched_at` y `woo_intake_from` (el
+   piso de la entrada de pedidos, MOM §38.11); `orders.platform` y
+   `draft_orders.platform` (por defecto `'shopify'`); los CHECK
+   `stores_woo_platform_check` (pasar a WooCommerce exige la dirección, la clave
+   del sitio y las dos claves de la API), `stores_woo_site_key_check` y
+   `stores_woo_site_url_check`; y los índices únicos parciales
+   `stores_woo_site_key_uniq` y `stores_woo_site_url_uniq`. No toca
+   `shopify_domain`. Sin grants nuevos: la fila la protege la RLS de siempre.
+
+   **Antes** (solo lectura; anotar la huella y los conteos):
+
+   ```sql
+   -- a) Tiendas por app y estado (Kenku Peru y Aurela: interna, active).
+   select shopify_app, status, count(*) from stores group by 1, 2 order by 1, 2;
+   -- b) La huella de lo que la 0274 promete no tocar (sin mostrar secretos).
+   select md5(string_agg(concat_ws('|', id, name, shopify_domain, shopify_app, status,
+                                   md5(coalesce(shopify_token_enc, '')),
+                                   md5(coalesce(shopify_webhook_secret_enc, ''))), ',' order by id)) as huella
+     from stores;
+   -- c) Cuántos pedidos y borradores hay (el tamaño de lo que se recorre).
+   select (select count(*) from orders) as pedidos, (select count(*) from draft_orders) as borradores;
+   ```
+
+   **Aplicar.** Kenku y Aurela escriben en `orders` todo el tiempo y la RLS
+   lee `stores` en cada consulta del panel, así que la 0274 está hecha de pasos
+   cortos que se corren **cada uno en su propia transacción** (psql en modo
+   autocommit: **sin `begin`/`commit`**). `orders.platform` y
+   `draft_orders.platform` nacen sin CHECK (solo cambia el catálogo: no se
+   recorre ni se reescribe la tabla); su CHECK entra `not valid` y se valida
+   aparte, con un candado (`SHARE UPDATE EXCLUSIVE`) que no frena lecturas ni
+   escrituras; lo de `stores` va al final. Cada paso toma el candado exclusivo
+   de UNA tabla por un instante y lo suelta al terminar ese paso.
+
+   El `lock_timeout` de **3 s corta cada espera, no el total**: si una consulta
+   larga tiene la tabla, ese paso espera a lo más 3 s (y mientras espera, lo que
+   llega a esa tabla hace cola detrás, también los webhooks de Kenku y Aurela),
+   se corta solo (`canceling statement due to lock timeout`) y psql para ahí
+   (`ON_ERROR_STOP`). Los pasos anteriores quedan hechos; volver a correr el
+   mismo bloque unos segundos después termina el trabajo. Cada paso mira antes
+   si ya está hecho, así que **volver a correrla no toma ningún candado
+   exclusivo** ni vuelve a validar las tablas. Mejor fuera de las horas de más
+   pedidos:
+
+   ```bash
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+   set lock_timeout = '3s';
+   \i db/migrations/0274_woocommerce_base.sql
+   SQL
+   ```
+
+   **Después** (solo lectura):
+
+   ```sql
+   -- 1) Las piezas nuevas.
+   select conrelid::regclass, conname, pg_get_constraintdef(oid)
+     from pg_constraint
+    where conname in ('stores_platform_check', 'orders_platform_check', 'draft_orders_platform_check',
+                      'stores_woo_platform_check', 'stores_woo_site_key_check', 'stores_woo_site_url_check');
+   select indexname, indexdef from pg_indexes
+    where tablename = 'stores' and indexname in ('stores_woo_site_key_uniq', 'stores_woo_site_url_uniq');
+   -- 2) Ninguna tienda cambió: la huella (b) da lo mismo que antes.
+   -- 3) Todo nace en Shopify: las tres consultas dan 0.
+   select count(*) from stores
+    where platform <> 'shopify' or woo_site_url is not null or woo_site_key is not null
+       or woo_consumer_key_enc is not null or woo_consumer_secret_enc is not null
+       or woo_webhook_secret_enc is not null or woo_last_error is not null or platform_switched_at is not null
+       or woo_intake_from is not null;
+   select count(*) from orders where platform <> 'shopify';
+   select count(*) from draft_orders where platform <> 'shopify';
+   -- 4) Los tres CHECK de la plataforma, validados (convalidated = true).
+   select conname, convalidated from pg_constraint
+    where conname in ('stores_platform_check', 'orders_platform_check', 'draft_orders_platform_check');
+   ```
+
+   Si el paso de VALIDATE se cortó, el (4) dice `false`: volver a correr el
+   bloque de arriba. Correrla otra vez no hace nada: no toma candados
+   exclusivos, no vuelve a validar las tablas ni toca filas.
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). Sin crons ni rutas nuevas. Kenku y Aurela no lo notan.
+
+3. **Lo que NO se hace en este paso.** No se guardan todavía claves de
+   WooCommerce ni se cambia `platform`: eso va con el webhook y la
+   sincronización, contra una **rama de Supabase** y la tienda de prueba, nunca
+   contra producción (los pedidos de prueba entrarían al Master). Cuando toque,
+   la clave del sitio (`woo_site_key`, por ejemplo `kp` y `aur`) se fija antes
+   del primer pedido y no se cambia después: va dentro del id de cada pedido
+   (`wc-kp-1532`). El secreto de los webhooks lo genera Kapta en hexadecimal
+   (WooCommerce le aplica `wp_specialchars_decode` antes de firmar). Nunca se
+   apaga Shopify con `status = 'disabled'`.
+
+**Marcha atrás.** Revertir el código basta: nada lo llama. La 0274 puede
+quedarse: con todo en `'shopify'` y las columnas vacías no cambia nada. Si
+hubiera que quitarla, primero el código, y solo con
+`select count(*) from orders where platform <> 'shopify'` en 0 y ninguna
+tienda con `woo_site_url`:
+
+```sql
+begin;
+set local lock_timeout = '3s';
+drop index if exists stores_woo_site_key_uniq;
+drop index if exists stores_woo_site_url_uniq;
+alter table stores
+  drop constraint if exists stores_woo_platform_check,
+  drop constraint if exists stores_woo_site_key_check,
+  drop constraint if exists stores_woo_site_url_check,
+  drop column platform,
+  drop column woo_site_url,
+  drop column woo_site_key,
+  drop column woo_consumer_key_enc,
+  drop column woo_consumer_secret_enc,
+  drop column woo_webhook_secret_enc,
+  drop column woo_last_error,
+  drop column platform_switched_at,
+  drop column woo_intake_from;
+alter table orders drop column platform;
+alter table draft_orders drop column platform;
+commit;
+```
+
+### 23-10-2026 · La foto de los pedidos de Shopify para sus boletas (0275, MOM §35.10)
+
+Shopify cierra Kenku Perú y Aurela el 28-10-2026 (se planifica para el 27-10 a
+las 19:00 de Lima). Cada boleta vuelve a leer su pedido en Shopify antes de
+emitir; los pedidos vendidos en Shopify se siguen cobrando después. Decisión
+del owner (23-10-2026): guardar ahora lo que esa lectura devuelve. El cron
+`/api/cron/invoice-snapshots` lo guarda en `order_invoice_snapshots`, y la
+boleta lo usa **solo** cuando la tienda ya no tiene token o Shopify contesta
+401, 402, 403, 404 o 423 por ella. Con Shopify funcionando, la boleta se lee
+en vivo como siempre.
+
+**Kenku y Aurela no cambian mientras Shopify viva.** El cron solo lee pedidos
+(los campos de la consulta de la boleta, sin datos de clientas), por lotes con
+`nodes(ids: …)` (hasta 25 pedidos por llamada; con los campos de la boleta
+caben unos 7 en el tope de 1.000 puntos de una consulta, 1 con un balde de
+1.000), cada 2 minutos (en los minutos impares, `1-59/2`, para no arrancar
+nunca con el barrido de boletas de los minutos 6, 16, …), hasta 95 s por
+pasada y las dos tiendas a la vez. Antes de cada llamada espera a que la
+tienda tenga en Shopify el costo del lote **más una reserva: un cuarto del
+balde y nunca menos que una boleta (850 puntos)**, y en promedio gasta **a lo
+más el 75 % de lo que el balde se repone**: una boleta que se lee mientras
+corre la foto (el barrido o «Emitir esta boleta»), el sync, los webhooks y
+«Generar pedido» siempre tienen esa reserva y un cuarto de la reposición. Con
+un balde de 1.000 eso deja lotes de un pedido; el ritmo casi no cambia (lo pone
+la reposición). (La única excepción: con un balde de
+1.000, la consulta de un pedido solo —uno con más de 10 líneas, o que el lote
+no trajo— pide unos 810 puntos y espera el balde lleno; mientras corre deja
+menos de un cuarto.) THROTTLED para la tienda hasta la próxima pasada. Una
+foto con el pedido **nunca** se pisa con una lectura que no lo trajo
+(`{"order": null}`). Antes del cierre (28-10 00:00 UTC) la boleta nunca usa la
+foto mientras la tienda tenga token: un 401/403/423 de Shopify sigue siendo
+`lectura_fallida`, como hoy. Las tiendas cliente no se tocan (solo tiendas de
+una organización con RUC dado de alta). Sin variables de entorno nuevas.
+
+1. **Requiere la 0274** (`orders.platform`). La 0275 se detiene sin ella
+   (`0275: falta la 0274`), antes de crear nada.
+
+2. **Migración `0275_invoice_snapshots.sql`, a mano y ANTES del código.**
+   **Ya aplicada en producción** (comprobado el 25-10-2026 con consultas de
+   solo lectura: las tres tablas con RLS encendida y las cinco funciones en
+   `pg_proc`). No hace falta volver a correrla. Crea
+   `order_invoice_snapshots`, `invoice_snapshot_attempts` (las fallas de cada
+   pedido) e `invoice_snapshot_leases` (el turno de cada tienda), con RLS
+   encendida y sin acceso para `anon` ni `authenticated`, y las funciones
+   `invoice_snapshot_candidates`, `invoice_snapshot_put`,
+   `invoice_snapshot_failed`, `invoice_snapshot_lease` e
+   `invoice_snapshot_release`, solo para `service_role`. No toca ninguna fila.
+   Crear las llaves foráneas de la tabla de fotos a `orders` y `stores` toma un
+   momento un candado que frena las escrituras en esas tablas (los webhooks de
+   Kenku y Aurela hacen cola): por eso corre en modo autocommit (ese candado se
+   suelta al terminar esa sentencia, no al final del archivo) y con
+   `lock_timeout` de 3 s, que corta cada espera. Si se corta (`canceling
+   statement due to lock timeout`), se vuelve a correr el bloque entero: lo
+   hecho queda y el resto se completa.
+
+   **Antes** (solo lectura; conteos, sin datos de clientas):
+
+   ```sql
+   -- a) La 0274 está: tiene que dar 1.
+   select count(*) from information_schema.columns
+    where table_schema = 'public' and table_name = 'orders' and column_name = 'platform';
+   -- b) Cuántos pedidos necesitan foto, por tienda (el cron los irá tomando).
+   select s.name, count(*) as pedidos
+     from orders o
+     join stores s on s.id = o.store_id
+    where s.status = 'active'
+      and s.org_id in (select org_id from invoice_issuers)
+      and o.platform = 'shopify' and o.shopify_order_id ~ '^[0-9]+$'
+      and o.created_at >= '2026-08-29T00:00:00Z' and o.cancelled_at is null
+      and not exists (select 1 from order_invoices i
+                       where i.order_id = o.id and i.mode = 'real'
+                         and i.status in ('emitiendo', 'emitida', 'en_duda', 'externa'))
+    group by 1 order by 1;
+   ```
+
+   **Aplicar** (sin `begin`/`commit`):
+
+   ```bash
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+   set lock_timeout = '3s';
+   \i db/migrations/0275_invoice_snapshots.sql
+   SQL
+   ```
+
+   **Después** (solo lectura):
+
+   ```sql
+   -- 1) Las tres tablas con RLS y sin grants para anon ni authenticated (0 filas).
+   select relname, relrowsecurity from pg_class
+    where oid in ('public.order_invoice_snapshots'::regclass, 'public.invoice_snapshot_attempts'::regclass,
+                  'public.invoice_snapshot_leases'::regclass);
+   select table_name, grantee, privilege_type from information_schema.role_table_grants
+    where table_name in ('order_invoice_snapshots', 'invoice_snapshot_attempts', 'invoice_snapshot_leases')
+      and grantee in ('anon', 'authenticated');
+   -- 2) Las cinco funciones, sin execute para anon ni authenticated.
+   select p.proname, has_function_privilege('anon', p.oid, 'execute') as anon,
+          has_function_privilege('authenticated', p.oid, 'execute') as authenticated
+     from pg_proc p
+    where p.proname in ('invoice_snapshot_candidates', 'invoice_snapshot_put', 'invoice_snapshot_failed',
+                        'invoice_snapshot_lease', 'invoice_snapshot_release');
+   -- 3) Vacías hasta que corra el cron.
+   select (select count(*) from order_invoice_snapshots) as fotos,
+          (select count(*) from invoice_snapshot_attempts) as fallas,
+          (select count(*) from invoice_snapshot_leases) as turnos;
+   ```
+
+   Correrla otra vez no hace nada.
+
+3. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). Trae el cron en `vercel.json`, **cada 2 minutos en los
+   minutos impares** (`1-59/2 * * * *`), con `maxDuration` 120 (la pasada no
+   empieza llamadas nuevas pasados 95 s y termina antes de ~113 s, antes de la
+   siguiente) y `CRON_SECRET` como los demás.
+   Comprobar en Vercel → Crons que aparece y que una llamada sin el secreto
+   responde 401. Fuera de producción no llama a Shopify. Para ver cuánto falta
+   sin llamar a Shopify: `GET /api/cron/invoice-snapshots?dry=1` con
+   `Authorization: Bearer $CRON_SECRET` (cuenta hasta 600 por tienda). No hace
+   falta llamarla a mano: una llamada mientras corre el cron encuentra el turno
+   tomado (`ocupada`) y no hace nada.
+
+4. **Cuánto tarda, y seguimiento hasta el 27-10.** El ritmo lo pone el cupo de
+   cada tienda en Shopify (cada una tiene el suyo, y las dos corren a la vez):
+   la foto gasta a lo más el 75 % de lo que se repone por segundo
+   (`restoreRate`), y cada pedido gasta lo que de verdad se leyó (unos 40
+   puntos uno de 1 a 3 líneas; Shopify devuelve el resto de los ~135 que cobra
+   por adelantado por pedido). Con 95 s de trabajo cada 120 s (30 pasadas por
+   hora), simulado con el código real (llamada de 0,7 s + 40 ms por pedido,
+   40 ms por escritura en la base):
+
+   | Balde de la tienda (`quota.max` / `quota.restore`) | 40 pts/pedido: por hora · Kenku (9.171) · Aurela (1.865) | 100 pts/pedido: por hora · Kenku · Aurela |
+   |---|---|---|
+   | 1.000 / 50 por s (plan básico antiguo) | ~2.700 · **3,4 h** · 0,7 h | ~1.100 · **8,5 h** · 1,7 h |
+   | 2.000 / 100 por s (plan básico) | ~5.500 · **1,7 h** · 0,3 h | ~2.300 · **3,9 h** · 0,8 h |
+   | 4.000 / 200 por s (Advanced) | ~10.700 · **0,9 h** · 0,2 h | ~4.400 · **2,1 h** · 0,4 h |
+   | 20.000 / 1.000 por s (Plus) | ~15.800 (lo limita la latencia) · **0,6 h** · 0,1 h | igual |
+
+   Con un balde de 1.000 la foto va de a un pedido por llamada (la reserva es
+   una boleta) y las horas son las mismas: las pone la reposición, no el lote.
+   Las dos tiendas avanzan a la vez, así que el total es el de Kenku. **El peor
+   caso razonable (balde de 1.000 y pedidos de 100 puntos) termina en ~9 h**:
+   con el código en producción el 24-10, mucho antes del 27-10 a las 18:00 de
+   Lima. Después, el cron solo toma los pedidos nuevos y los que cambian (unos
+   300 por día en Kenku y 70 en Aurela), en segundos por pasada.
+
+   **La primera hora**, en Vercel → Logs, la línea `[invoice-snapshots]`: por
+   pasada, `orders` (fotos de la pasada), `perMinute` y `ms`; por tienda
+   `saved`, `refreshed`, `skipped`, `kept` (fotos con el pedido que se
+   conservaron porque Shopify ya no lo devolvió), `failed`, `pending`, `calls`,
+   `batch` (pedidos por llamada: la primera de cada pasada lleva uno, y desde
+   ahí crece con lo que Shopify dice que pide cada pedido, hasta 25), `points`
+   (`requested`: lo que cobró Shopify por adelantado; `actual`: lo que de
+   verdad gastó), `quota` (`max`, `restore` y `available` que informó Shopify)
+   y por qué paró (`presupuesto`, `cuota` y `ocupada` son normales; `shopify` o
+   `tienda_caida`, con su `detail`, ponen el cron en rojo). `orders` por
+   pasada × 30 es el ritmo por hora; `points.actual` ÷ (`saved` +
+   `refreshed`) son los puntos por pedido. Con eso y `quota`, la fila de la
+   tabla que toca. Si el ritmo es menor, mirar `quota.restore`.
+
+   **El avance, en la base** (solo lectura, solo conteos):
+
+   ```sql
+   -- a) Por tienda: cuántos faltan (sin foto), cuántas fotos hay que rehacer
+   --    (el pedido cambió después), cuántas están al día, cuántos fallaron y
+   --    la última foto.
+   select s.name,
+          count(*) filter (where x.order_id is null and o.cancelled_at is null) as sin_foto,
+          count(*) filter (where x.order_id is not null and o.updated_at > x.fetched_at) as foto_vieja,
+          count(*) filter (where x.order_id is not null and o.updated_at <= x.fetched_at) as foto_al_dia,
+          count(a.order_id) as con_fallas,
+          max(x.fetched_at) as ultima_foto
+     from orders o
+     join stores s on s.id = o.store_id
+     left join order_invoice_snapshots x on x.order_id = o.id
+     left join invoice_snapshot_attempts a on a.order_id = o.id
+    where s.status = 'active'
+      and s.org_id in (select org_id from invoice_issuers)
+      and o.platform = 'shopify' and o.shopify_order_id ~ '^[0-9]+$'
+      and o.created_at >= '2026-08-29T00:00:00Z'
+      and not exists (select 1 from order_invoices i
+                       where i.order_id = o.id and i.mode = 'real'
+                         and i.status in ('emitiendo', 'emitida', 'en_duda', 'externa'))
+    group by 1 order by 1;
+   -- b) El ritmo de la última hora y las horas que faltan a ese ritmo.
+   with ritmo as (
+     select store_id, count(*) as por_hora from order_invoice_snapshots
+      where fetched_at > now() - interval '1 hour' group by 1
+   ), falta as (
+     select o.store_id, count(*) as sin_foto
+       from orders o
+      where o.platform = 'shopify' and o.shopify_order_id ~ '^[0-9]+$'
+        and o.created_at >= '2026-08-29T00:00:00Z' and o.cancelled_at is null
+        and not exists (select 1 from order_invoice_snapshots x where x.order_id = o.id)
+        and not exists (select 1 from order_invoices i
+                         where i.order_id = o.id and i.mode = 'real'
+                           and i.status in ('emitiendo', 'emitida', 'en_duda', 'externa'))
+      group by 1
+   )
+   select s.name, f.sin_foto, r.por_hora, round(f.sin_foto::numeric / nullif(r.por_hora, 0), 1) as horas_que_faltan
+     from falta f join stores s on s.id = f.store_id
+     left join ritmo r on r.store_id = f.store_id
+    where s.org_id in (select org_id from invoice_issuers)
+    order by 1;
+   -- c) Los pedidos que fallan solos (motivo en corto, sin datos del pedido).
+   select s.name, a.fail_count, a.last_error, count(*)
+     from invoice_snapshot_attempts a join stores s on s.id = a.store_id
+    group by 1, 2, 3 order by 1, 2 desc;
+   -- d) Lo que dijo Shopify en las fotos.
+   select s.name,
+          count(*) filter (where jsonb_typeof(x.payload->'order') = 'object') as con_pedido,
+          count(*) filter (where jsonb_typeof(x.payload->'order') = 'null') as shopify_no_lo_devolvio
+     from order_invoice_snapshots x join stores s on s.id = x.store_id
+    group by 1 order by 1;
+   ```
+
+   Un pedido con 3 o más fallas seguidas pone el cron en rojo: su motivo está
+   en (c). Se reintenta solo, cada vez más espaciado (30 minutos como mucho);
+   si no sale, se emite a mano en SimpleFact y se registra como `externa`. En
+   (c), «Shopify no devolvió el pedido; se conserva su foto anterior.» no es
+   una falla: la foto con el pedido quedó (nunca se pisa con `{"order":
+   null}`), el pedido se vuelve a mirar más espaciado y no pone el cron en
+   rojo; ese pedido cuenta en `foto_vieja` de (a).
+   **El 27-10, después de la última sincronización completa**, `sin_foto` de
+   (a) tiene que dar 0 por tienda, y `foto_vieja` también, salvo los pedidos
+   de (c) con «se conserva su foto anterior». Una prueba: pasar 10 fotos
+   al azar por `mapOrderForInvoice` (o por «Emitir esta boleta» en Manual) y
+   ver que dan la misma boleta que la lectura en vivo.
+
+5. **Desde el 28-10.** Desde las 00:00 UTC, una boleta cuya lectura en vivo
+   recibe 401/402/403/404/423 sale de la foto. **Vaciar el token de Shopify de
+   Kenku y Aurela** en cuanto Shopify deje de contestar: hasta entonces el cron
+   ve `tienda_caida` y se pone rojo cada 2 minutos; con el token vaciado
+   contesta `sin_shopify` por tienda, no hace nada y no se pone rojo. Las
+   boletas de esos pedidos salen de la foto; su base lo dice:
+
+   ```sql
+   select count(*) from order_invoices where basis ? 'foto_shopify';
+   ```
+
+   Un pedido creado antes del 29-08 que haya que emitir después del cierre no
+   tiene foto: se emite a mano en SimpleFact y se registra como `externa`.
+
+**Marcha atrás.** Revertir el código basta: la boleta vuelve a leer solo en
+vivo y el cron desaparece. La 0275 puede quedarse. **No borrar la tabla
+después del 28-10**: lo que guarda ya no se puede volver a pedir a Shopify. Si
+hubiera que quitarla antes, primero el código:
+
+```sql
+begin;
+drop function if exists invoice_snapshot_release(uuid, uuid);
+drop function if exists invoice_snapshot_lease(uuid, uuid, integer);
+drop function if exists invoice_snapshot_failed(uuid, uuid[], text, integer);
+drop function if exists invoice_snapshot_put(uuid, uuid, text, jsonb, timestamptz);
+drop function if exists invoice_snapshot_candidates(uuid, timestamptz, integer);
+drop table if exists invoice_snapshot_leases;
+drop table if exists invoice_snapshot_attempts;
+drop table if exists order_invoice_snapshots;
+commit;
+```
+
+### 23-10-2026 · Las fotos de producto de WhatsApp, copiadas antes del cierre de Shopify (sin migración, MOM §39)
+
+La prueba de carritos (0233), el recordatorio de recojo (0242) y el de
+reposición (MOM §34) ponen la foto del producto en la cabecera de la plantilla
+por `/api/wa-image`, que la bajaba **en vivo** del CDN de Shopify en cada envío.
+Shopify cierra Kenku Perú y Aurela el 28-10-2026 00:00 UTC: cuando su CDN deje
+de servir esas fotos, la ruta daría 502 y Meta rechazaría la plantilla en vez
+de caer a la imagen de respaldo. Este cambio:
+
+- trae el cron `/api/cron/product-photos` (`48 * * * *`, 30 en `vercel.json`),
+  que copia cada foto del espejo `shopify_product_images` al bucket **privado**
+  `product-photos`, ya convertida al mismo JPG que sirve la ruta, en
+  `<tienda>/<producto>-<huella de la URL>.jpg`. Lo ya copiado no se vuelve a
+  bajar; si la foto cambia en Shopify (otra URL) se copia de nuevo en otra
+  ruta. Nunca pisa ni borra una copia. Hasta 90 s por pasada;
+- hace que `/api/wa-image` sirva primero la copia, y solo sin ella la baje en
+  vivo, como hasta hoy (mismas cabeceras);
+- en una tienda que **Shopify ya no sirve** —sin token de Shopify, a cualquier
+  hora; o, **desde el cierre** (28-10 00:00 UTC), la que tiene WooCommerce
+  conectado (`platform = 'woocommerce'` o `woo_site_url`): Kenku y Aurela—, una
+  foto sin copia guardada cuenta como «sin foto»: el recordatorio de recojo
+  sale con la imagen de respaldo, el de reposición no sale, el carrito queda
+  fuera de la prueba de imagen y la tarjeta del siguiente lead va sin foto — lo
+  mismo que ya pasaba con un producto sin foto. Las **tiendas cliente siguen en
+  Shopify** y no cambian. Si Storage no contesta, el recordatorio de recojo sin
+  respaldo se reintenta en vez de quedar omitido;
+- y hace que el espejo diario (`/api/cron/shopify-product-images`), en Kenku y
+  Aurela desde el cierre, no cambie una foto que ya estaba aunque Shopify
+  conteste sin ella o con otra URL (`conservados` en su reporte). Un error de
+  Shopify o una tienda sin token ya no escribían nada; ahora hay pruebas que lo
+  fijan.
+
+**Kenku y Aurela no cambian mientras Shopify viva**: antes del cierre los envíos
+eligen foto como siempre y no miran Storage (solo leen la fila de la tienda);
+la ruta sirve la copia (los mismos bytes, con 3 s de tope para leerla) o la foto
+en vivo. **Sin migración y sin variables de entorno nuevas.**
+El bucket lo crea la primera pasada; con unas 330-390 fotos de ~100 KB, ocupa
+unos 30-40 MB.
+
+1. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). Nada que aplicar en la base. El cron solo copia en
+   producción; en un preview, solo `?dry=1`.
+
+2. **Antes de la primera pasada (opcional), lo que hay que copiar** (solo
+   lectura, sin datos de clientas):
+
+   ```bash
+   curl -sS -H "Authorization: Bearer $CRON_SECRET" "https://<dominio>/api/cron/product-photos?dry=1"
+   ```
+
+   Antes de la primera pasada dice `"sinBucket": true` y `pendientes` igual a
+   `filas` (unas 330-390 entre las tiendas). No baja, no sube ni crea nada.
+
+3. **Cómo va.** Cada pasada deja una línea `[product-photos] {…}` en los logs de
+   Vercel con `filas`, `guardadas`, `copiadas`, `fallidas`, `pendientes` y
+   `motivos` por tienda. Y en la base (solo lectura):
+
+   ```sql
+   -- a) Fotos que faltan copiar, por tienda: tiene que dar 0 filas antes del
+   --    27-10 a las 19:00 de Lima. La ruta de la copia es la de
+   --    lib/product-photos.ts (`productPhotoPath`).
+   select s.name, count(*) as faltan
+     from shopify_product_images p
+     join stores s on s.id = p.store_id
+    where p.image_url like 'https://cdn.shopify.com/%'
+      and p.product_id ~ '^[0-9]{1,20}$'
+      and not exists (
+        select 1 from storage.objects o
+         where o.bucket_id = 'product-photos'
+           and o.name = p.store_id::text || '/' || p.product_id || '-'
+                        || left(encode(sha256(convert_to(p.image_url, 'UTF8')), 'hex'), 16) || '.jpg')
+    group by 1 order by 1;
+   -- b) Copias guardadas por tienda (incluye versiones viejas de fotos cambiadas).
+   select s.name, count(*) as copias, max(o.created_at) as ultima
+     from storage.objects o
+     join stores s on s.id::text = split_part(o.name, '/', 1)
+    where o.bucket_id = 'product-photos'
+    group by 1 order by 1;
+   ```
+
+   Si (a) no baja a 0: `motivos` dice por qué. `http_404` es una foto que el CDN
+   ya no tiene — casi siempre una foto reemplazada en Shopify que el espejo
+   diario todavía no vio: correr el espejo con `?force=1`
+   (`/api/cron/shopify-product-images?force=1`) y luego esta pasada a mano
+   (`/api/cron/product-photos`, mismo `Authorization`). Un `502` del cron es de
+   Kapta (la base, el listado del bucket o una subida que Storage rechazó), no
+   de Shopify.
+
+4. **El corte del 27-10.** Para que la regla vea cerradas a Kenku y Aurela desde
+   las 00:00 UTC del 28-10, cada una tiene que tener **WooCommerce conectado**
+   (`woo_site_url` guardado o `platform = 'woocommerce'`) **o el token de
+   Shopify vaciado**; cualquiera de las dos basta, y sin token la regla aplica
+   a cualquier hora (si Shopify cerrara antes, vaciar el token es la llave).
+   Comprobarlo (solo lectura; dice si hay token, no lo muestra):
+
+   ```sql
+   select name, platform, woo_site_url is not null as woo_conectado,
+          coalesce(shopify_token_enc, '') <> '' as con_token
+     from stores
+    where status = 'active'
+    order by name;
+   ```
+
+   Una tienda con `con_token = true` y `woo_conectado = false` sigue «en
+   Shopify» para las fotos: así deben quedar las tiendas cliente, no Kenku ni
+   Aurela.
+
+5. **Desde el 28-10.** Nada que hacer: desde las 00:00 UTC los envíos de Kenku
+   y Aurela solo usan fotos con copia. Para ver que los recordatorios de recojo
+   siguen saliendo con la foto del producto (solo lectura):
+
+   ```sql
+   select count(*) filter (where header_image_url like '%/api/wa-image/%') as con_foto_del_producto,
+          count(*) filter (where header_image_url not like '%/api/wa-image/%') as con_respaldo
+     from shalom_transit_notifications
+    where status = 'sent' and kind like 'recordatorio%' and sent_at >= '2026-10-28';
+   ```
+
+**Marcha atrás.** Revertir el código **antes del cierre** basta: `/api/wa-image`
+vuelve a bajar todo en vivo, los envíos dejan de mirar Storage y la fila de la
+tienda, y el cron desaparece. Después del cierre, revertir devuelve el problema (la ruta daría 502
+por cada foto de Kenku y Aurela). El bucket puede quedarse; **no borrarlo
+después del 28-10**: lo que guarda ya no se puede volver a bajar de Shopify.
+
+### 25-10-2026 · Entrada de pedidos de WooCommerce: webhook, sincronización y Ajustes (MOM §38.11)
+
+Trae la ruta `/api/webhooks/woocommerce/<storeId>`, la pasada `woo_orders`
+dentro de la sincronización de siempre (`/api/cron/sync`, cada 5 minutos) y la
+sección **Ajustes → WooCommerce**. Sin migración propia, sin crons nuevos y sin
+variables de entorno: las claves son de cada tienda y se guardan cifradas en
+`stores` desde Ajustes.
+
+**Kenku y Aurela no cambian.** Nada de esto hace una llamada ni escribe nada en
+una tienda sin las credenciales de WooCommerce guardadas: su webhook de
+Shopify, su sincronización, «Generar pedido» y sus boletas siguen igual
+(`getStoreCreds` y el camino de Shopify no se tocaron). Ajustes no cambia
+`stores.platform`.
+
+1. **Requiere la 0274** aplicada (entrada del 23-10-2026). Sin ella la sección
+   de Ajustes dice «Falta aplicar la migración 0274» y la pasada deja el error
+   en el reporte del sync, sin tocar las pasadas de Shopify.
+
+2. **El código**, por el camino de siempre. Nada que hacer en Vercel.
+
+3. **Ensayo, en una rama de Supabase y con la tienda de prueba, NUNCA en
+   producción**: guardar las claves completas de un sitio **activa** la
+   sincronización y sus pedidos entran al Master. En Ajustes → WooCommerce:
+   - dirección del sitio (https), clave del sitio (`kp` o `aur`, no se cambia
+     después del primer pedido), Consumer key y Consumer secret de una clave de
+     la API REST de lectura/escritura de un usuario «shop manager» →
+     **Guardar** (las prueba antes; si no sirven, no guarda nada). «Probar
+     conexión» prueba lo escrito sin guardarlo. Para cambiar la dirección hay
+     que volver a pegar las dos claves: las guardadas nunca se mandan a otra
+     dirección. La primera vez que se guardan las claves queda fijado
+     `woo_intake_from` (ahora): solo entran los pedidos del sitio **creados**
+     desde ese momento;
+   - **Generar secreto** (se muestra una sola vez) y, en WooCommerce → Ajustes
+     → Avanzado → Webhooks, un webhook por tema (`order.created`,
+     `order.updated`, `order.deleted`, `order.restored`) con la dirección que
+     muestra la sección, estado «Activo», versión «WP REST API Integration v3» y
+     ese secreto. Al guardarlo, WooCommerce manda una prueba que tiene que
+     recibir 200.
+
+4. **El día del corte (27-10, mañana), en producción:** lo mismo del paso 3
+   con el sitio y las claves de producción, **después** de borrar los pedidos
+   de prueba en WooCommerce y fijar la numeración, y **antes** de que el sitio
+   tome su primer pedido real: al guardar las claves por primera vez queda
+   fijado `woo_intake_from`, y un pedido creado antes de ese momento que Kapta
+   no tenga no entra (MOM §38.11). **La historia de Shopify se queda fuera de
+   Kapta**: si se importa al WordPress (Cart2Cart, LitExtension, un import por
+   la API), esos pedidos tienen su fecha de creación vieja y no entran; sus
+   pedidos ya están en Kapta con su id de Shopify. Si el sitio ya vendía antes
+   de guardar las claves, mover el piso al primer pedido real, una sola vez y
+   antes de la primera pasada:
+
+   ```sql
+   -- Solo si hace falta: el instante (UTC) del primer pedido REAL del sitio.
+   update stores set woo_intake_from = '<2026-10-27T13:00:00Z>' where id = '<store_id>';
+   ```
+
+   Verificar (solo lectura, sin datos de clientas):
+
+   ```sql
+   -- a) La pasada corre bien en cada tienda con WooCommerce.
+   select s.name, x.status, x.last_run_at, x.cursor, x.error
+     from sync_state x join stores s on s.id = x.store_id
+    where x.source = 'woo_orders' order by 1;
+   -- b) Llegan los avisos y se procesan.
+   select topic, processed, count(*) from webhook_events
+    where topic like 'order.%' and received_at > now() - interval '1 hour'
+    group by 1, 2 order by 1, 2;
+   -- c) Pedidos de WooCommerce por tienda y por hora.
+   select s.name, date_trunc('hour', o.created_at) as hora, count(*)
+     from orders o join stores s on s.id = o.store_id
+    where o.platform = 'woocommerce' and o.created_at > now() - interval '1 day'
+    group by 1, 2 order by 1, 2;
+   -- d) El último fallo con WooCommerce, si lo hay (sin secretos).
+   select name, woo_last_error from stores where woo_last_error is not null;
+   -- e) Desde cuándo entran los pedidos de cada sitio.
+   select name, woo_intake_from, platform_switched_at from stores where woo_site_url is not null;
+   ```
+
+   `sync_state.status = 'warning'` en (a) es una pasada que no avanza (el
+   motivo está en `error` y en `woo_last_error`); `cursor` en JSON
+   (`{"high": …, "resume": …}`) es una pasada que no llegó al final y sigue en
+   la próxima desde esa página, lo normal tras una ráfaga de cambios.
+
+   Un webhook que recibe 401 tiene otro secreto: WooCommerce lo desactiva tras
+   5 fallos. Pegar el de Kapta (o generar otro) y volver a activarlo; mientras
+   tanto los pedidos llegan por la sincronización.
+
+**Marcha atrás.** Revertir el código basta: la ruta desaparece (WooCommerce
+desactivará sus webhooks) y la pasada deja de correr. Para apagar solo la
+entrada de una tienda sin desplegar, desactivar sus webhooks en WooCommerce y,
+mientras la tienda siga en `platform = 'shopify'`, vaciar sus claves de la API
+(`woo_consumer_key_enc` y `woo_consumer_secret_enc` a null; con
+`platform = 'woocommerce'` la base no lo deja, `stores_woo_platform_check`):
+sin ellas la pasada no corre. Los pedidos que ya entraron se quedan: son
+pedidos reales.
+
+### 23-10-2026 · Historial de Shopify por API (0276, MOM §37.5)
+
+«Traer pedidos y clientes» en Historial Shopify: Kapta pide a Shopify el
+archivo completo (bulk operation) y lo guarda por tandas en las tablas del
+historial. No toca `orders`, el Master ni `MOM_RESOLUTION_VERSION`. Sin
+variables de entorno nuevas. La página pasa a `maxDuration = 300` (cada tanda
+lee ~100 s).
+
+**En producción ya está aplicada (23-10-2026, SQL directo).** Crea
+`shopify_history_imports` (RLS de lectura por tienda, una traída en curso por
+tienda y tipo) y la columna `import_id` en `shopify_history_orders` y
+`shopify_history_customers`. Se corrió sin el `drop policy if exists`, porque
+la política aún no existía. No figura en el historial de migraciones de
+Supabase. No hace falta volver a correrla.
+
+Comprobar: `select kind, status, records, bytes_done, file_size, error from
+shopify_history_imports order by created_at desc limit 5;`.
+
+### 23-10-2026 · «Generar pedido» y los buscadores en WooCommerce, y el cambio de plataforma (sin migración, MOM §38.12)
+
+Hace que `stores.platform` mande: con `woocommerce`, «Generar pedido» (y «Venta
+telefónica», que abre el mismo formulario) crea el pedido en WooCommerce
+(`pending` → comparación con lo pactado → `processing`, o `DELETE` si no
+cuadra) y los tres buscadores de productos (Leads, el producto de un anuncio y
+el stock de Swayp) buscan en su catálogo. Trae el control **Ajustes →
+WooCommerce → «Crear los pedidos nuevos en: Shopify / WooCommerce»**. **Sin
+migración** (usa `stores.platform` y `platform_switched_at` de la 0274), sin
+crons y sin variables de entorno nuevas. La página de Leads pasa a
+`maxDuration = 300` (como Pedidos y Ajustes), para que una venta en WooCommerce
+(hasta 45 s con su propio reloj) nunca se corte a mitad.
+
+**Kenku y Aurela no cambian mientras sigan en `platform = 'shopify'`**: el
+camino de Shopify se llama igual que antes y no hay ninguna llamada a
+WooCommerce. Lo único nuevo para ellas es una lectura de su fila de `stores`
+antes de generar o buscar.
+
+1. **Requiere la 0274** (entrada del 23-10-2026) y la entrada de pedidos de
+   WooCommerce (entrada del 25-10-2026). **El código**, por el camino de siempre
+   (rama de integración → `main` por fast-forward). Nada que aplicar en la base.
+
+2. **El 26-10, en el sitio de staging** (una tienda de prueba de Kapta, nunca
+   Kenku ni Aurela): pasar el control a WooCommerce y volverlo a Shopify, para
+   confirmar que la prueba de escritura (`POST /wp-json/wc/v3/orders/batch` con
+   `{}`, que no crea ni cambia nada) contesta 200 con una clave de
+   Lectura/Escritura y 401 con una de Lectura; y una venta de prueba desde un
+   lead de esa tienda, con un producto con variaciones elegido pegando el SKU
+   de la variación en el buscador. Si la prueba de escritura contestara otra
+   cosa con una clave buena, no cambiar Kenku ni Aurela y avisar: el cambio se
+   negaría también en producción.
+
+3. **El día del corte (27-10), en este orden y no antes:**
+   1. el sitio de producción conectado en Ajustes → WooCommerce (sitio, clave
+      del sitio, Consumer key y secret, webhooks), con la sincronización en
+      `ok` (consulta (a) de la entrada del 25-10). **La clave de la API tiene
+      que ser de «Lectura/Escritura»**: a la entrada le basta «Lectura», pero
+      con ella cada venta fallaría, y el cambio del paso 3 se niega («las
+      claves guardadas leen pero no pueden crear pedidos … de solo lectura»);
+   2. en ese sitio, **los productos con los mismos SKU que en Shopify**: buscar
+      dos o tres en el formulario de un lead de prueba **después** del cambio
+      (paso 3) y ver que salen con su precio. Mientras la tienda siga en
+      Shopify, el buscador sigue mirando Shopify;
+   3. Ajustes → WooCommerce → «Crear los pedidos nuevos en» → **WooCommerce** →
+      marcar la confirmación → «Cambiar a WooCommerce» → aceptar el diálogo.
+      Kapta prueba con las claves guardadas que WooCommerce lee y deja
+      escribir antes de cambiar; si no, no cambia. Sin las claves completas no deja (es lo mismo que
+      exige `stores_woo_platform_check`). Hacerlo con Shopify todavía vivo y
+      antes de las 19:00 de Lima: desde ese instante las ventas de Leads de esa
+      tienda se crean en WooCommerce, aunque Shopify siga abierto;
+   4. **la primera venta real de Leads** de esa tienda, mirada de cerca (no
+      hacer pedidos de prueba en producción: entrarían al Master, §38.11):
+      tiene que decir «Pedido generado ✓», aparecer como `#KP2…`/`#AUR9…` en
+      WooCommerce en «Procesando» con `kapta_channel = venta_manual`, y en el
+      Master con la misma cifra (consulta (b)).
+
+   No se toca `woo_intake_from`, las claves ni el token de Shopify: la entrada
+   de pedidos de las dos plataformas sigue igual.
+
+4. **Verificar** (solo lectura, sin datos de clientas):
+
+   ```sql
+   -- a) Dónde crea cada tienda sus pedidos nuevos, y desde cuándo.
+   select name, platform, platform_switched_at, woo_intake_from
+     from stores where status = 'active' order by name;
+   -- b) Las ventas de Leads en WooCommerce: id wc-<clave>-<id>, venta_manual y
+   --    su venta registrada (order_sales), una por pedido.
+   select s.name, o.name, o.shopify_order_id, o.tags, o.financial_status,
+          (select count(*) from order_sales x where x.order_id = o.id) as ventas
+     from orders o join stores s on s.id = o.store_id
+    where o.platform = 'woocommerce' and 'venta_manual' = any(o.tags)
+      and o.created_at > now() - interval '1 day'
+    order by o.created_at desc limit 20;
+   -- c) Ventas rechazadas hoy (precio, SKU o cantidad) y reintentos con el
+   --    pedido anterior vivo y otros datos: la constancia en el lead.
+   select created_at, left(note, 160) from lead_calls
+    where kind = 'system'
+      and (note like '⛔ Venta NO generada · WooCommerce%' or note like '⛔ Venta NO registrada · %')
+      and created_at > now() - interval '1 day' order by created_at desc;
+   ```
+
+   En los logs de Vercel: `[woo-platform]` es cada cambio de plataforma
+   (tienda, de qué a qué, quién). `[woo-sale]`, por pedido de WooCommerce (su
+   id, nunca datos de la clienta):
+   - `woo.sale.deleted` / `woo.sale.delete_failed`: un pedido pendiente que
+     Kapta borró o no pudo borrar (buscarlo en WooCommerce por su id y
+     mandarlo a la papelera; mientras siga «Pendiente de pago» Kapta no lo
+     toma);
+   - `woo.sale.cancelled` / `woo.sale.cancel_failed`: uno que un plugin dejó
+     vivo al crearlo y no cuadraba, anulado (o por anular a mano);
+   - `woo.sale.adopted` / `woo.sale.resumed`: un reintento que usó o retomó el
+     pedido de su intento anterior;
+   - `woo.sale.conflict`: un reintento que encontró vivo el pedido de su
+     intento anterior con otros datos; la asesora ve «Pedido NO registrado» y
+     el lead lo dice. Ese pedido es real: o se anula en WooCommerce, o se
+     registra la venta reintentando con el formulario como estaba;
+   - `woo.sale.kept_pending` / `woo.sale.unknown`: el paso a «Procesando» no
+     contestó; el pedido no se tocó y el reintento desde el mismo formulario
+     lo resuelve. Si la asesora cerró el formulario, mirar el pedido en
+     WooCommerce: si quedó «Pendiente de pago», borrarlo.
+
+**Marcha atrás.** Volver una tienda a Shopify no necesita despliegue: Ajustes →
+WooCommerce → «Crear los pedidos nuevos en» → **Shopify** (no prueba nada; solo
+cambia `platform`). Si la pantalla no carga, en la base:
+`update stores set platform = 'shopify' where id = '<store_id>';`. Sirve
+**mientras Shopify viva**; después del cierre una tienda en Shopify no puede
+vender desde Kapta. Revertir el código también devuelve todo a Shopify sin
+importar `platform`. Los pedidos ya creados en WooCommerce se quedan: son
+pedidos reales.
+
+### 23-10-2026 · Pedidos del bot de Kapso por Kapta (0277, MOM §38.13)
+
+Desde el cierre de Shopify, el bot de Kapso le pide sus pedidos a Kapta
+(`POST /api/internal/orders/<storeId>`, contrato en
+`docs/kapso-pedidos-kapta.md`) y Kapta los crea en WooCommerce con el mismo
+núcleo que «Generar pedido» (`pending` → comparación con lo pactado →
+`processing`), con `kapta_channel = kapso` y la conversación. Trae la sección
+**Ajustes → «Bot de Kapso → pedidos por Kapta»** (la dirección, el secreto, el
+último uso y el último fallo). Sin variables de entorno nuevas y sin crons. La
+ruta tiene `maxDuration = 60` (la venta termina a los 42 s de empezada la
+llamada, y cada paso de la base tiene 5 s de tope).
+
+**Kenku y Aurela no cambian con este despliegue.** Sin un secreto generado en
+Ajustes la ruta contesta 401 a todo, y con la tienda en `platform = 'shopify'`
+contesta 409 `wrong_platform` sin llamar a WooCommerce ni a Shopify. El bot
+sigue creando sus pedidos en Shopify hasta que, el 27-10, su acción pase a
+apuntar a Kapta (paso 4).
+
+1. **Migración `0277_bot_orders.sql`, a mano y ANTES del código.**
+   **Ya aplicada en producción** (comprobado el 25-10-2026 con consultas de
+   solo lectura: las dos tablas con RLS encendida y `woo_order_id` en
+   `bot_order_requests`). No hace falta volver a correrla. Crea
+   `bot_order_secrets` (el sha256 del secreto de cada tienda, nunca el
+   secreto, con cuándo se creó y se cambió, y el último uso y fallo) y
+   `bot_order_requests` (el candado de cada pedido del bot: `unique (store_id,
+   request_id)`, con `woo_order_id`, el pedido de WooCommerce de ese intento),
+   con RLS encendida y sin privilegios para `anon` ni `authenticated`. **No toca ninguna fila ni ninguna otra tabla**: sin llaves
+   foráneas a propósito (crearlas tomaría un candado de `stores`, que Kenku y
+   Aurela leen en cada consulta del panel). Se puede pegar entera en el SQL
+   Editor o correr con psql. Sin ella, el código contesta 503
+   `migration_missing` sin crear nada y Ajustes dice «Falta aplicar la
+   migración 0277».
+
+   **Antes** (solo lectura):
+
+   ```sql
+   -- a) Que no estén todavía: 0 filas (2 si ya se aplicó; correrla otra vez no hace nada).
+   select relname from pg_class
+    where relname in ('bot_order_secrets', 'bot_order_requests') and relkind = 'r';
+   -- b) gen_random_uuid() existe (el id de cada candado): tiene que dar 1 o más.
+   select count(*) from pg_proc where proname = 'gen_random_uuid';
+   -- c) Dónde crea hoy cada tienda sus pedidos nuevos (todas 'shopify' antes del corte).
+   select name, status, platform from stores order by name;
+   ```
+
+   **Aplicar** (SQL Editor: pegar `db/migrations/0277_bot_orders.sql` entera; o):
+
+   ```bash
+   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0277_bot_orders.sql
+   ```
+
+   **Después** (solo lectura):
+
+   ```sql
+   -- 1) Las dos tablas con RLS: relrowsecurity = true en las dos.
+   select relname, relrowsecurity from pg_class
+    where oid in ('public.bot_order_secrets'::regclass, 'public.bot_order_requests'::regclass);
+   -- 2) Sin privilegios para anon ni authenticated: 0 filas.
+   select table_name, grantee, privilege_type from information_schema.role_table_grants
+    where table_name in ('bot_order_secrets', 'bot_order_requests')
+      and grantee in ('anon', 'authenticated');
+   -- 3) El candado: 1 fila. Y la columna del pedido de cada intento: 1 fila (bigint).
+   select conname from pg_constraint where conname = 'bot_order_requests_store_request_uniq';
+   select data_type from information_schema.columns
+    where table_name = 'bot_order_requests' and column_name = 'woo_order_id';
+   -- 4) Vacías, y las tiendas como estaban (la misma salida que la consulta c de antes).
+   select (select count(*) from bot_order_secrets) as secretos,
+          (select count(*) from bot_order_requests) as pedidos;
+   select name, status, platform from stores order by name;
+   ```
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward), **después** de la 0277.
+
+3. **Ensayo, opcional, antes del 27-10** (con la tienda todavía en Shopify):
+   Ajustes de Kenku → «Bot de Kapso → pedidos por Kapta» → «Generar secreto»,
+   y una llamada con un pedido inventado (el ejemplo del contrato):
+
+   ```bash
+   curl -sS -X POST "https://<Kapta>/api/internal/orders/<storeId de Kenku>" \
+     -H "Authorization: Bearer $KAPTA_ORDERS_SECRET" -H "Content-Type: application/json" \
+     -d @pedido-de-prueba.json
+   # 409 {"ok":false,"code":"wrong_platform",…}: la dirección, el secreto y el cuerpo están bien; no se creó nada.
+   # 401: el secreto. 400: el cuerpo («errors» dice qué).
+   ```
+
+   **Nunca** ensayar contra una tienda que ya está en WooCommerce: crearía un
+   pedido real que entra al Master (§38.11).
+
+4. **El 27-10, después de pasar la tienda a WooCommerce** (entrada «Generar
+   pedido» de esta misma fecha, paso 3.3):
+   1. Ajustes → «Bot de Kapso → pedidos por Kapta» → **«Generar secreto»** (o
+      «Cambiar secreto», si el del ensayo pasó por un canal que no
+      corresponde). Copiarlo junto con la dirección a los secrets de la
+      función de Kapso que llama: se muestra una sola vez;
+   2. en el workflow de Kapso, la acción que crea el pedido (y la que cierra
+      carritos) pasa de Shopify a Kapta (`docs/kapso-pedidos-kapta.md`,
+      sección 7), con la regla de reintentos del contrato (sección 4: el mismo
+      `request_id` durante 3 minutos, sin derivar mientras la respuesta sea
+      `duplicate_in_progress`; el `request_id` y `order_left_open` en el
+      motivo del handoff);
+   3. el primer pedido del bot, mirado de cerca: `#KP2…`/`#AUR9…` en
+      WooCommerce en «Procesando» con `kapta_channel = kapso`, y en el Master
+      con `kapso`, `whatsapp` (consultas b y c).
+
+5. **Verificar** (solo lectura, sin datos de clientas):
+
+   ```sql
+   -- a) El secreto de cada tienda: cuándo, el último uso y el último fallo (nunca el hash).
+   select s.name, b.created_at, b.rotated_at, b.last_used_at, b.last_outcome,
+          b.last_error_at, left(b.last_error, 120) as ultimo_fallo
+     from bot_order_secrets b join stores s on s.id = b.store_id order by s.name;
+   -- b) Los pedidos del bot de hoy: estado del candado, intentos y su pedido.
+   select s.name, r.status, r.attempts, r.woo_order_id, r.order_name, r.order_total, r.error_code, r.created_at
+     from bot_order_requests r join stores s on s.id = r.store_id
+    where r.created_at > now() - interval '1 day' order by r.created_at desc limit 50;
+   -- c) En el Master: con kapso y su conversación, y sin venta de asesora (0 en ventas).
+   select s.name, o.name, o.tags, (o.kapso_conversation_id is not null) as con_conversacion,
+          (select count(*) from order_sales x where x.order_id = o.id) as ventas
+     from orders o join stores s on s.id = o.store_id
+    where o.platform = 'woocommerce' and 'kapso' = any(o.tags)
+      and o.created_at > now() - interval '1 day'
+    order by o.created_at desc limit 20;
+   -- d) Candados a medias (processing de hace más de 2 minutos): el reintento del bot
+   --    con el mismo request_id los retoma; si el bot no reintentó, mirar el pedido en
+   --    WooCommerce (woo_order_id, o kapta_request_id = 'kapso-' || request_id).
+   select s.name, r.request_id, r.woo_order_id, r.attempts, r.claimed_at
+     from bot_order_requests r join stores s on s.id = r.store_id
+    where r.status = 'processing' and r.claimed_at < now() - interval '2 minutes';
+   ```
+
+   En los logs de Vercel, `[bot-orders]` es una línea por llamada (tienda, el
+   comienzo del sha256 del request_id, `outcome`, `status`, `ms`, el id de
+   WooCommerce y los pasos `woo.sale.*` de 38.12), sin teléfono, nombre ni
+   dirección. `outcome` distinto de `ok` repetido en una tienda: mirar el
+   contrato (`unauthorized` = el secreto de Kapso no es el de Ajustes;
+   `sku_not_found` = un SKU del bot que no está en WooCommerce;
+   `price_mismatch` = un precio del bot que WooCommerce no respeta). Una línea
+   con `"left_open":true` es un pedido que quedó en WooCommerce sin confirmar:
+   la constancia está en el lead (⚠️ Pedido del bot de Kapso NO confirmado) y
+   hay que revisarlo en WooCommerce. `expired` = un `request_id` reusado más de
+   90 minutos después sin terminar: revisar WooCommerce antes de generar.
+
+**Marcha atrás.** Sin despliegue: en el workflow de Kapso, la acción vuelve a
+Shopify (solo mientras Shopify viva, y con la tienda vuelta a Shopify en
+Ajustes); o, para cortar al bot en seco, **«Desactivar»** en Ajustes: la ruta
+contesta 401 y el bot deriva a una asesora. Revertir el código también corta
+la ruta (404). La 0277 puede quedarse: nadie más la lee. Si se quisiera quitar,
+**solo después** de revertir el código: `drop table bot_order_requests; drop
+table bot_order_secrets;`. Los pedidos ya creados en WooCommerce se quedan: son
+pedidos reales.
+
+### 25-10-2026 · La provincia de las cajas de Lima (0279, MOM §19.0)
+
+Corrige `shipments.province` en las cajas de Lima Metropolitana y el Callao que
+copiaron una provincia imposible de `peru_districts` («arequipa» en Miraflores,
+«HUARAZ» en Independencia, «san roman» en San Miguel, el propio distrito…): 253
+cajas medidas el 25-10-2026, todas de cobertura Lima. Pasan a «Lima» o
+«Callao». Solo esa columna; correrla dos veces no cambia nada. El código del
+mismo día (`mom-v1.32`, `printedProvince`) ya no las deja pasar ni las imprime
+en el rótulo; esto limpia lo guardado para las exportaciones y los filtros.
+
+**En producción ya está aplicada (25-10-2026, con autorización del owner).**
+
+Comprobar: la misma condición de la migración como `select count(*)` da 0.
+
+### 25-10-2026 · El bot de Kapso consulta un pedido que ya existe (sin migración, MOM §38.13)
+
+El caso del 24-10-2026: la clienta llega al bot desde la página de gracias de
+la web («deseo confirmar mi pedido KP200001…») y el bot, que no sabía que ese
+pedido existía, lo volvía a cotizar y ofrecía crear otro. Este cambio trae
+`POST /api/internal/orders/<storeId>/lookup` (contrato en
+`docs/kapso-pedidos-kapta.md`, sección 10): **solo lectura**, con el mismo
+secreto del bot, que devuelve el pedido solo si es del celular de la
+conversación (con otro celular, el mismo 404 `not_found` que un número que no
+existe). Ajustes → «Bot de Kapso → pedidos por Kapta» muestra la dirección.
+`maxDuration = 20`.
+
+**Sin migración y sin variables de entorno nuevas.** Usa la 0277 (el secreto),
+que ya está, y `orders.platform` de la 0274. No escribe nada, no llama a
+WooCommerce ni a Shopify y **nada cambia para el bot hasta que el owner edite
+su workflow en Kapso** (la regla de la sección 10.1: no cotizar ni crear;
+consultar, confirmar ese pedido con el total de Kapta, o derivar a una asesora).
+
+**Verificar** (después de desplegar, sin datos de clientas en los registros):
+con el secreto de la tienda, consultar un pedido real con **su** celular (200) y
+con otro (404, el mismo cuerpo que un número inventado). En los logs de Vercel,
+`[bot-orders-lookup]` es una línea por consulta (tienda, número consultado,
+`outcome`, `status`, `ms`), sin el celular.
+
+**Marcha atrás.** Revertir el código (la ruta da 404 y el bot deriva); o, sin
+despliegue, quitar la consulta del workflow de Kapso. «Desactivar» en Ajustes
+corta las dos rutas del bot a la vez (401).
+
+### 24-10-2026 · Historial de Shopify: productos, fotos, carritos, borradores y más detalle (0278, MOM §37.6)
+
+«Traer todo» en Historial Shopify: productos con sus fotos en tamaño original
+(bucket privado `shopify-history`), carritos abandonados, borradores, y vuelve a
+traer clientes y pedidos con más detalle. No toca `orders`, el Master ni
+`MOM_RESOLUTION_VERSION`. Sin variables de entorno nuevas.
+
+**En producción ya está aplicada (24-10-2026, SQL directo).** Crea
+`shopify_history_products`, `shopify_history_product_images` y
+`shopify_history_carts` con RLS de lectura por tienda. Agrega columnas a
+`shopify_history_orders` (`shipping_method`, `fulfillments`, `refunds`,
+`attribution`) y a `shopify_history_customers` (`sms_marketing`,
+`whatsapp_marketing`, `addresses`, `customer_since`, `account_state`). Amplía
+`shopify_history_imports_kind_check` a los cinco tipos. Las políticas se crearon
+sin el `drop policy if exists`, porque aún no existían. No figura en el
+historial de migraciones de Supabase. No hace falta volver a correrla.
+
+Comprobar: `select kind, status, records, error from shopify_history_imports
+order by created_at desc limit 10;` y `select count(*) filter (where
+storage_path is not null), count(*) from shopify_history_product_images;`.
+
+### 25-10-2026 · Revisión de los webhooks de WooCommerce (sin migración, MOM §38.14)
+
+WooCommerce desactiva un webhook después de 5 fallos seguidos y no avisa. Los
+pedidos nuevos y sus cambios siguen entrando por la pasada `woo_orders`, con
+retraso; lo que se manda a la papelera, no: la pasada no ve la papelera y solo
+`order.deleted` anula ese pedido en Kapta (MOM §38.11). Trae el cron **`/api/cron/woo-webhooks`** (`34 * * * *` en
+`vercel.json`, con `CRON_SECRET` como los demás), que cada hora lee
+`GET /wp-json/wc/v3/webhooks` de cada tienda activa con el sitio y las claves de
+la API guardados, y comprueba que `order.created`, `order.updated`,
+`order.deleted` y `order.restored` tengan uno «Activo» que entregue a
+`/api/webhooks/woocommerce/<storeId>` de esa tienda en una dirección de Kapta.
+Ajustes → WooCommerce hace lo mismo al «Guardar» con claves nuevas y al
+«Probar conexión».
+
+1. **Sin migración y sin variables de entorno nuevas.** Usa `sync_state`
+   (fuente `woo_webhooks`) y `stores.woo_last_error` (0274, ya aplicada). El
+   código sale por el camino de siempre; el cron lo toma Vercel de
+   `vercel.json`. Las direcciones de Kapta que acepta son la de
+   `NEXT_PUBLIC_SITE_URL` (la que ya usan Shopify y los demás webhooks) y la de
+   producción de Vercel (`VERCEL_PROJECT_PRODUCTION_URL`, la pone Vercel):
+   un webhook a otra dirección (otro entorno, http, una que redirige) es
+   «va a otra dirección», porque WooCommerce da por buena una entrega con 2xx,
+   301 o 302 y ese webhook nunca se desactiva aunque Kapta no reciba nada.
+   Ajustes → WooCommerce muestra desde ahora la dirección de los webhooks con
+   la primera de esas dos (antes, con la del navegador). Si la primera
+   revisión dice «va a otra dirección» en Aurela o Kenku, se corrige la
+   dirección del webhook en WooCommerce con la de Ajustes; el secreto no
+   cambia.
+2. **Solo lectura contra WooCommerce.** No crea, reactiva ni cambia webhooks.
+   Hoy revisa dos tiendas, Aurela y Kenku (las dos conectadas desde el 24-10 en
+   su dirección temporal): un `GET` por hora a cada sitio, con sus claves. Una
+   tienda sin el sitio y las claves de la API guardados no recibe ni una
+   llamada.
+3. **Qué mirar después del primer :34** (solo lectura, sin datos de clientas):
+
+   ```sql
+   select s.name, x.status, x.last_run_at, x.error
+     from sync_state x join stores s on s.id = x.store_id
+    where x.source = 'woo_webhooks' order by 1;
+   select name, woo_last_error from stores where woo_last_error like 'Webhooks en WooCommerce:%';
+   ```
+
+   `ok` es que los cuatro están bien. `warning` dice qué falta (por ejemplo,
+   «order.deleted está desactivado»): se arregla en WooCommerce → Ajustes →
+   Avanzado → Webhooks (la dirección y el secreto de la tienda, estado
+   «Activo»). **Lo urgente es `order.deleted`:** sin él, un pedido mandado a
+   la papelera sigue vivo en el Master (se despacha y entra al cierre), y el
+   aviso lo dice aparte. Ni Kenku ni Aurela mandaron nunca un `order.deleted`. `error` es que no se pudo revisar: si es por permisos, la clave
+   de la API tiene que ser de un usuario «shop manager». En Vercel, el log
+   `[woo-webhooks]` lleva ids de tienda y estados por tema, sin direcciones.
+4. **Apenas sale, Kenku.** De Kenku solo llegaron avisos `order.updated` y no
+   se sabe si creó los cuatro webhooks. Para no esperar al :34: Ajustes →
+   WooCommerce de Kenku → «Probar conexión» con los campos en blanco (prueba lo
+   guardado; solo lee). El aviso suma «Webhooks: …» y la sección queda «Con
+   error» si falta alguno. Lo mismo sirve para Aurela.
+5. **El día del corte de cada tienda** (Aurela a `https://aurela.pe`, Kenku a
+   su dominio final): después de «Guardar» con la dirección nueva y las dos
+   claves, el aviso de Ajustes dice ya si los cuatro webhooks siguen activos y
+   entregando a Kapta.
+6. **Lo que no ve.** La versión de la API de cada webhook («WP REST API
+   Integration v3») y el secreto no vienen en la lista de WooCommerce: se miran
+   a mano. Un secreto mal puesto se ve cuando WooCommerce desactiva el webhook
+   (al quinto fallo seguido), no antes; en `order.deleted`, que se dispara
+   poco, eso puede tardar semanas.
+
+**Marcha atrás.** Revertir el código basta: el cron desaparece y nada más lo
+lee. Si queda un aviso «Webhooks en WooCommerce: …» en `woo_last_error`, lo
+borra la próxima prueba buena de «Probar conexión»; la fila `woo_webhooks` de
+`sync_state` puede quedarse (`delete from sync_state where source =
+'woo_webhooks';` si se quiere quitar).
+
+### 25-10-2026 · «Generar pedido» en WooCommerce con el candado del bot (sin migración, MOM §38.12)
+
+«Generar pedido» (y «Venta telefónica») en una tienda con `platform =
+'woocommerce'` toma, antes de llamar a WooCommerce, el **mismo candado que el
+bot** (`bot_order_requests`, de la 0277, **ya aplicada**), con la llave
+`form-<id del intento>`. Un POST sin respuesta deja el candado puesto 2 minutos
+(la asesora lee «espera 2 minutos y vuelve a pulsar «Generar pedido»») y el
+reintento retoma o adopta el pedido que WordPress guardó tarde; un doble clic
+o un reintento mientras la primera llamada sigue corriendo recibe «este mismo
+pedido ya se está generando» sin llamar a WooCommerce. El tope por minuto del
+bot no cuenta las filas `form-`.
+
+1. **Sin migración, sin crons, sin variables nuevas.** Requiere la 0277
+   (aplicada); sin ella el formulario sigue como antes (solo la búsqueda por
+   `kapta_request_id`) y lo deja en el registro (`[woo-form-guard]`
+   `unguarded`). **El código**, por el camino de siempre. Shopify no cambia:
+   una tienda en `shopify` nunca toca el candado.
+2. **Qué vigilar** en el registro de Vercel: `[woo-form-guard]` con
+   `claim_failed` (la base no dejó tomar el candado: la venta no se creó y la
+   asesora reintenta), `busy` (doble clic o espera de un POST sin respuesta) y
+   `[woo-sale]` `woo.sale.post_unanswered`. Ninguna línea lleva datos de la
+   clienta.
+3. **Verificar** (solo lectura):
+
+   ```sql
+   -- Los candados del formulario por tienda y estado, de las últimas 24 h.
+   select store_id, status, error_code, count(*), max(attempts)
+     from bot_order_requests
+    where request_id like 'form-%' and created_at > now() - interval '24 hours'
+    group by 1, 2, 3 order by 1, 2;
+   ```
+
+   Un `processing` de hace más de unos minutos es un POST que no contestó y que
+   nadie reintentó: revisar en WooCommerce si quedó el pedido (pendiente de
+   pago) antes de generar otro desde un formulario nuevo. Con `woo_order_id`,
+   el pedido existe y la llamada se cortó antes de registrar la venta (el
+   candado se cierra recién con `order_sales`): volver a pulsar «Generar
+   pedido» en ese formulario lo adopta y registra la venta.
+
+### 25-10-2026 · Los carritos de Shopify en una tienda que ya crea en WooCommerce (sin migración, MOM §38.12)
+
+La prueba de recompra sin llamada (`auto_order_trials`, cohorte
+`ab-recompra-prov-1` encendida hasta el 30-10) y las acciones viejas de Leads
+`recoverCart` y `closeSale` pasan a mirar `stores.platform`: solo crean con
+`shopify`. Con `woocommerce` la fila de la prueba queda `omitido` con el motivo
+`tienda_en_woocommerce` sin crear nada en Shopify (si la tienda ya estaba en
+WooCommerce al tomar la fila, sin ninguna llamada), y las dos acciones
+devuelven un aviso sin crear nada. **Sin migración**, sin crons y sin variables
+de entorno nuevas. **Aprobado por el owner el 25-10-2026.**
+
+**Kenku y Aurela no cambian mientras sigan en `platform = 'shopify'`** (las dos,
+al 25-10-2026): lo único nuevo son dos lecturas de `stores.platform` por fila
+de la prueba, una antes de tomarla y otra justo antes de completar el
+borrador. Si una falla, la fila sigue (o vuelve a) `pendiente`, la corrida se
+detiene y el reporte de la sincronización lo dice («pedidos_auto: no se pudo
+leer en qué plataforma crea sus pedidos la tienda …», con cuántos pedidos se
+generaron antes en esa corrida).
+
+1. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward), **antes** de que el owner pase la primera tienda a
+   WooCommerce en Ajustes. Nada que aplicar en la base.
+2. **Después del cambio de cada tienda**, comprobar que la prueba no generó
+   nada en Shopify desde el cambio. Se filtra por la hora del cambio, no por
+   las últimas 48 h, para no traer las `generado` legítimas de antes (Kenku
+   generó la última el 24-10 a las 12:10 UTC):
+
+   ```sql
+   select t.store_id, t.arm, t.status, t.reason, count(*)
+     from auto_order_trials t
+     join stores s on s.id = t.store_id
+    where t.cohort = 'ab-recompra-prov-1'
+      and s.platform = 'woocommerce'
+      and t.processed_at > s.platform_switched_at
+    group by 1, 2, 3, 4;
+   ```
+
+   Las filas `auto` procesadas después del cambio salen `omitido` con
+   `tienda_en_woocommerce`, y ninguna `generado` (las `control` y las
+   `pendiente` no tienen `processed_at` y no salen). Si sale una `generado`,
+   es un pedido creado en Shopify en el momento justo del cambio: mirar su
+   `order_name` y su `processed_at`. `platform_switched_at` es la primera vez
+   que la tienda pasó a WooCommerce (al 25-10-2026, `null` en las dos).
+3. **Al medir la cohorte**: en `auto_order_ab_results` las filas
+   `tienda_en_woocommerce` salen `sin_pedido`, porque nunca se generaron. Cómo
+   se mide lo inscrito después del cambio lo decide el owner, igual que si la
+   cohorte sigue inscribiendo en esas tiendas o se cierra antes del 30-10 (MOM
+   §38.12, «Los carritos»). Separar solo por `reason` no es un corte parejo:
+   quita las filas `auto` de después del cambio y deja las de `control`.
+
+**Marcha atrás.** Revertir el commit. No escribe nada en la base que haya que
+deshacer: las filas `omitido` quedan como constancia.
+
+
+### 25-10-2026 · «Comprobante por validar» en el Master y en Leads (0280 opcional, MOM §16.1)
+
+Decisión del owner tras #KP143616. El Master enseña la chapa «Comprobante por
+validar» en la fila (que abre la ficha en Cobro) y la píldora del mismo nombre
+con su cifra; «Atender ahora» de Leads sube el lead de ese pedido con «Comprobante
+por validar · espera su clave». Todo se lee en vivo de `order_payments`
+(`pendiente_revision` / `info_incompleta`, los estados que mantienen abierta la
+alerta de cobranza) y se apaga al validar o rechazar. **No escribe nada en la
+base** y no hay crons ni variables de entorno nuevas.
+
+1. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward). **No necesita la 0280 para funcionar**: sin el índice, buscar
+   los leads de esos pedidos recorre `leads` entera (~38 ms medido el
+   25-10-2026), en cada carga de Leads y en cada pasada del refresco de sus
+   contadores.
+2. **La 0280, a mano y cuando convenga** (antes o después del código). En
+   producción, **`concurrently` y fuera de una transacción**, para no bloquear
+   las escrituras en `leads` mientras se construye:
+
+   ```sql
+   create index concurrently if not exists leads_order_id_idx
+     on public.leads (order_id)
+     where order_id is not null;
+   comment on index public.leads_order_id_idx is
+     'El lead de un pedido: «Atender ahora» sube a quien tiene un comprobante por validar (MOM §16.1, 0280).';
+   ```
+
+   El fichero `db/migrations/0280_leads_order_id_idx.sql` crea el mismo índice
+   sin `concurrently` (para CI y bases nuevas); en producción, después del
+   comando de arriba, aplicarlo entero solo registra que ya existe.
+   **Comprobar:**
+
+   ```sql
+   select indexname from pg_indexes where tablename = 'leads' and indexname = 'leads_order_id_idx';
+   ```
+
+3. **Comprobar en pantalla.** La píldora «Comprobante por validar» del Master
+   (con todas las tiendas a la vista) tiene que dar lo mismo que:
+
+   ```sql
+   select count(distinct order_id) from order_payments
+    where validation_status in ('pendiente_revision', 'info_incompleta')
+      and kind in ('adelanto', 'diferencia', 'total');
+   ```
+
+   Al validar uno desde su ficha, la chapa y la cifra bajan al recargar.
+
+**Marcha atrás.** Revertir el commit. El índice puede quedarse (no lo lee nada
+más); si se quiere quitar: `drop index concurrently if exists public.leads_order_id_idx;`.
+
+### 25-10-2026 · «Ya llegó» para pagados de Olva y «Pagado sin aviso» en el Master (0281, MOM §12)
+
+Decisión del owner (#KP141593, #KP142910, #KP140003). La clienta de Olva que ya
+no debe nada recibe, en vez de nada, «ya llegó, recógelo con tu DNI» con su
+propia plantilla (sin importes ni botones), en la misma fila del aviso de
+llegada. El Master enseña la chapa del plazo de la agencia en la fila y la
+píldora «Pagado sin aviso» con su cifra. Sin crons ni variables de entorno
+nuevas; Shalom no cambia.
+
+1. **La 0281, cuando convenga** (antes o después del código). Solo añade tres
+   columnas a `stores` con valores por omisión; no reescribe filas:
+
+   ```sql
+   \i db/migrations/0281_olva_paid_arrival_notice.sql
+   ```
+
+   **El código no la necesita para arrancar**: sin ella el aviso para pagados
+   cuenta como apagado (las llegadas pagadas se siguen omitiendo como hoy) y
+   Ajustes enseña «Falta aplicar la migración 0281» en lugar del bloque. El
+   Master no depende de ella. **Comprobar:**
+
+   ```sql
+   select olva_paid_arrival_template_enabled, olva_paid_arrival_template_name, olva_paid_arrival_params
+     from stores limit 1;
+   ```
+
+2. **El código**, por el camino de siempre (rama de integración → `main` por
+   fast-forward).
+3. **Encenderlo, tienda por tienda, cuando Meta apruebe la plantilla.** Crear
+   en Kapso/Meta `guias_olva_llegada_pagado` con el cuerpo sugerido del MOM
+   §12 («El aviso de llegada para pagados de Olva»), y después Ajustes →
+   «Avisos de guía Olva» → «Aviso de llegada · pedido ya pagado». Nace apagado.
+   Las llegadas pagadas ya omitidas antes de encenderlo **no se reenvían**.
+4. **Comprobar en pantalla.** La píldora «Pagado sin aviso» del Master (todas
+   las tiendas a la vista) tiene que dar lo mismo que:
+
+   ```sql
+   select count(*) from order_master m
+    where m.pickup_state in ('disponible_para_recojo', 'pendiente_de_recojo', 'proximo_a_vencer')
+      and m.payment_state = 'pago_completo'
+      and m.agency_expires_at <= now() + interval '2 days'
+      and not exists (
+        select 1 from shalom_transit_notifications n
+         where n.order_id = m.order_id and n.status = 'sent'
+           and n.kind in ('disponible', 'recordatorio_d3', 'recordatorio_d7'));
+   ```
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse (nadie más
+las lee); si se quieren quitar, **después** de revertir:
+`alter table stores drop column olva_paid_arrival_template_enabled, drop column olva_paid_arrival_template_name, drop column olva_paid_arrival_params;`.
+
+### 25-10-2026 · «Hoy» arriba del Consolidado: las ventas del día contra ayer a esta hora (sin migración, MOM §17.5)
+
+Un bloque nuevo arriba de «Operación» en `/dashboard`: ventas y pedidos del día
+de las tiendas, su cambio contra ayer a esta misma hora, la curva acumulada de
+hoy contra ayer y una línea por tienda. **Sin migración**, sin RPC, sin crons ni
+variables de entorno nuevas: lee `orders` con la sesión de quien mira. Ruta
+nueva `GET /api/dashboard/hoy`, que el bloque llama cada minuto con la pestaña a
+la vista (dos días de pedidos de las tiendas: 385 filas el 25-10-2026, en 5 ms
+como el owner bajo RLS, por `orders_store_created_idx`).
+
+**Qué mirar después.** En el teléfono, el bloque es lo primero bajo
+«Consolidado». A mitad del día, Pedidos de cada tienda debe dar lo mismo que
+Shopify (el 25-10 a las 4:52 p. m., Kenku 98 en los dos) y el porcentaje, el de
+Shopify contra ayer. Con la pestaña abierta, «al corte» avanza solo cada minuto.
+
+**Marcha atrás.** Revertir el commit. No escribe nada en la base.
+
+### 25-10-2026 · «Cómo van las ventas»: pestañas Hoy, Esta semana y Este mes (sin migración, MOM §17.5)
+
+El bloque «Hoy» del Consolidado pasa a llamarse «Cómo van las ventas» y suma dos
+pestañas: **Esta semana** (de lunes a ahora contra la semana pasada hasta el
+mismo día y la misma hora) y **Este mes** (del 1 a ahora contra el mes anterior
+hasta el mismo día del mes y la misma hora; entero si no tiene ese día). La
+curva de la semana y del mes va por día. **Sin migración**, sin crons ni
+variables de entorno nuevas: la semana y el mes leen `ventas_por_origen` (0268,
+ya aplicada) y los pedidos del día del corte, con la sesión de quien mira; el
+mes con su anterior, 143 ms bajo RLS como dueña. La ruta `GET
+/api/dashboard/hoy` se reemplaza por `GET
+/api/dashboard/pulso?periodo=hoy|semana|mes`: una pestaña del navegador abierta
+desde antes del despliegue dirá «No se pudo actualizar…» hasta que se recargue.
+
+Una tienda solo se compara si Kapta tiene todas sus ventas desde el inicio del
+periodo anterior (`ORDERS_SYNC_FROM` o su primer pedido, el más tardío); si no,
+«sin comparación» y el porqué.
+
+**Qué mirar después.** En el teléfono, «Esta semana» y «Este mes» cambian al
+instante y sus cifras no parten en dos renglones. El 25-10-2026 a las 8:45 p.
+m. la semana daba 1,486 pedidos y S/ 277,818 (−9 % y −10 % contra la semana
+pasada a esa altura) y el mes 5,453 pedidos y S/ 1,019,031 (+17 % y +32 %
+contra setiembre a esa altura); las dos coinciden con contar `orders` directo.
+
+**Marcha atrás.** Revertir el commit. No escribe nada en la base.
+
+### 26-10-2026 · Guías de Swayp que Kapta no tiene (0282, MOM §11.2)
+
+Pedido del owner (#KP143754: salió por Swayp desde su panel, Swayp avisó la
+entrega y el webhook la descartó porque la guía no estaba en Kapta). Ahora ese
+aviso se guarda y Envíos lo enseña con el pedido sugerido hasta que la guía se
+registra o se descarta. Sin crons ni variables nuevas (usa
+`SWAYP_INVENTORY_ORG_ID`, que ya está).
+
+1. **La 0282, cuando convenga** (antes o después del código). Solo crea la
+   tabla `swayp_unknown_guides` con su RLS; no toca filas:
+
+   ```sql
+   \i db/migrations/0282_swayp_unknown_guides.sql
+   ```
+
+   **El código no la necesita para arrancar**: sin ella el webhook descarta
+   como antes (registra el fallo y responde igual) y Envíos no enseña la
+   tarjeta. **Comprobar:** `select count(*) from swayp_unknown_guides;` (0 al
+   principio: lo anterior a la 0282 no se guardaba).
+2. **El código**, por el camino de siempre.
+3. **Comprobar** con el próximo aviso de Swayp de una guía que no está en
+   Kapta: aparece en Envíos, bajo la cabecera, con su número, su estado y el
+   pedido sugerido; al registrar la guía en la ficha (Operar → Swayp → «N° de
+   guía Swayp») sale de la lista sola.
+
+**Marcha atrás.** Revertir el commit; la tabla puede quedarse (nada más la lee).
+
+### 26-10-2026 · Aliclik en Lima (solo AUTOECOM) y Tanders sin guías nuevas (0283, MOM §9)
+
+Decisión del owner. En Lima el plan de rutas ofrece Aliclik donde ofrecía
+Tanders; en un pedido de Lima la cotización de Aliclik deja elegir solo
+AUTOECOM si lo trae (si no, el transporte que ofrezca, con aviso). Tanders deja
+de crear guías (`createTandersGuide` responde con el motivo); sus guías vivas
+siguen igual. Repro Lima acuerda con Aliclik en lugar de Tanders. Sin crons ni
+variables nuevas.
+
+1. **La 0283, antes o con el código.** Solo cambia dos CHECK de Repro Lima
+   para admitir `aliclik`; no toca filas:
+
+   ```sql
+   \i db/migrations/0283_lima_repro_aliclik.sql
+   ```
+
+   Sin ella, elegir Aliclik en la hoja de Repro Lima falla con el error del
+   CHECK; lo demás funciona. **Comprobar:**
+
+   ```sql
+   select conname, pg_get_constraintdef(oid) from pg_constraint
+    where conname in ('lima_repro_cases_agreed_courier_check', 'lima_repro_calls_courier_check');
+   ```
+
+2. **El código**, por el camino de siempre.
+3. **Comprobar** con el primer pedido de Lima que salga por Aliclik: la
+   cotización enseña los transportes; si trae AUTOECOM, solo ese se puede
+   elegir. Anotar en el MOM el nombre exacto con que lo devuelve Aliclik.
+
+**Marcha atrás.** `TANDERS_NEW_GUIDES_ENABLED = true` (lib/tanders/new-guides.ts)
+y devolver Tanders al plan de Lima; o revertir el commit. La 0283 puede quedarse.
+
+### 27-10-2026 · Formularios abandonados de COD Core → Leads (sin migración, MOM §38.12)
+
+Pedido del owner. COD Core manda cada formulario que pasa a «Formularios
+abandonados» o a «Recuperados» a `/api/webhooks/woocommerce/<storeId>/abandonados`,
+firmado con el secreto de los webhooks de pedidos de WooCommerce de la tienda
+(`X-Kapta-Signature`). Entra como carrito (`draft_orders`, platform
+`woocommerce`) y, si es de los últimos 2 días, como lead «Carrito» en la cola.
+Sin migración (la 0274 ya trae `draft_orders.platform`), sin crons ni
+variables nuevas.
+
+1. **El código**, por el camino de siempre.
+2. **Pasar `docs/kapta/cod-core-abandonados.md` al equipo de COD Core.** Hasta
+   que COD Core lo mande, no entra nada (la ruta solo responde).
+3. **Comprobar** con el primer formulario que llegue:
+
+   ```sql
+   select shopify_draft_order_id, status, created_at, customer_phone, total_amount
+     from draft_orders where platform = 'woocommerce' order by ingested_at desc limit 10;
+   select phone, status, category, draft_order_name from leads
+    where draft_order_gid like 'cod-core://%' order by first_seen_at desc limit 10;
+   ```
+
+**Marcha atrás.** Que COD Core deje de mandarlos, o revertir el commit. Las
+filas `cod-…` de `draft_orders` y sus leads pueden quedarse.
+
+## 0284: retiro de salida Grupo GF antes de despacho
+
+Aplicar db/migrations/0284_gf_cancel_pre_dispatch_output.sql antes de publicar
+el botón del Master. Instala el RPC de servicio y el guard de reasignación;
+no cancela ni modifica pedidos, solicitudes o salidas existentes al instalarse.
+El RPC exige autorización previa por sesión/RLS y orders.cancel_woo en el servidor.
+Verificación de transición y rollback: scripts/sql/gf_cancel_output_smoke.sql,
+ejecutado por verify-db.sh sobre Postgres desechable.
+
+## 0285: venta WooCommerce terminada, retorno y stock diferidos
+
+Aplicar db/migrations/0285_woo_sale_pending_return.sql antes de publicar el código.
+Instala la ficha de seguimiento solo de servicio y RPCs de fin de venta y turnos;
+actualiza la recepción GF para estas ventas y bloquea otro despacho. No modifica
+ventas ni repone stock al instalarse. Confirmar la tarea /api/cron/woo-sale-returns
+en Vercel (minutos 4,8,14,18,24,28,38,44,54,58 de cada hora). La tarea solo cancela en Woo tras recepción e inventario
+humanos de todas las salidas; probar la migración con el smoke en Postgres desechable.
+
+### 01-11-2026 · Faltar menos de S/ 1 es redondeo: pago completo y boleta (0293, MOM §6.5 y §35.3)
+
+Decisión del owner (01-11-2026). El precio con descuento deja céntimos
+(S/ 134,10) y la clienta yapea redondo (S/ 30 + S/ 104): faltar **menos de
+S/ 1** cuenta como pago completo. Sale de «Recogido sin pago completo», no se
+le pide saldo y la boleta sale **por el total del pedido**. El código lo
+calcula en `lib/payment-rounding.ts`, y `MOM_RESOLUTION_VERSION` sube a
+`mom-v1.33` para que el cron recalcule los pedidos ya resueltos. Sin variables
+de entorno nuevas.
+
+1. **Migración `0293_invoices_claim_rounding.sql`**, a mano, DESPUÉS de la 0269
+   y ANTES del código. Pegar el archivo en el editor SQL de Supabase (con
+   `psql`: `psql -1 -v ON_ERROR_STOP=1 "$DATABASE_URL" -f db/migrations/0293_invoices_claim_rounding.sql`).
+   Cambia solo `invoice_claim`, con `create or replace` y la misma firma de
+   doce argumentos. El cuerpo es el de la 0269, salvo la condición 3: lo
+   validado cubre si falta menos de S/ 1 (`v_validated <= p_total - 1` es lo
+   que rechaza). No toca filas, ni triggers, ni otra función. El turno sigue
+   solo para `service_role`. Es idempotente. Sin el turno de doce argumentos se
+   detiene con «La 0293 va después de la 0269…» y no cambia nada.
+   Sin la 0293, el código ofrece «Emitir esta boleta» en un pedido al que le
+   faltan céntimos y el turno lo rechaza con `sin_pago_completo`: no emite de
+   más.
+2. Comprobar:
+   ```sql
+   select count(*) = 1 as un_turno,
+          bool_and(pg_get_functiondef(oid) like '%v_validated <= p_total - 1%') as con_redondeo
+   from pg_proc where proname = 'invoice_claim';
+   ```
+3. Desplegar el código.
+
+### 01-11-2026 · La fuente `web`: el botón de WhatsApp de la web de la tienda (0294, MOM §17.4)
+
+Decisión del owner (01-11-2026). Los leads que escriben desde el botón de
+WhatsApp de un producto («Hola, quiero pedir … Soy de … / … / …. <enlace>»)
+se marcan `source = 'web'` al sincronizar (`extractReferral` en
+`lib/kapso.ts`). Un anuncio de Meta o un enlace de Facebook o Instagram gana.
+Leads, Consolidado y Productividad la muestran como «Web» / «Web de la
+tienda». Sin variables de entorno nuevas; `MOM_RESOLUTION_VERSION` no cambia.
+
+1. **Migración `0294_conversion_fuente_web.sql`**, a mano, ANTES del código.
+   Solo `conversion_por_fuente`, con `create or replace`, la misma firma y el
+   cuerpo de la 0268 salvo la lista de fuentes con tasa, que suma `web`. Sin
+   ella, un lead `web` cae en `sin_tasa` y desaparece de «Conversión por
+   fuente». No toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select pg_get_functiondef('public.conversion_por_fuente(uuid[], date, date)'::regprocedure)
+          like '%''fb_web'', ''web'', ''cod_cart''%' as con_web;
+   ```
+3. Desplegar el código. Los leads nuevos del botón se marcan solos; los que ya
+   estaban en la cola se marcan cuando la sincronización los vuelve a leer.
+
+### 01-11-2026 · El envío pagado en la agencia: hasta S/ 15 sin comprobante (0296, MOM §6.5 y §35.3)
+
+Decisión del owner (01-11-2026). En Agencia (Shalom u Olva), con el paquete ya
+recogido, lo que le falta a lo validado hasta **S/ 15** es el envío que la
+clienta pagó en el mostrador y el pedido está pagado completo
+(`lib/agency-shipping.ts`): sale de «Recogido sin pago completo», la ficha lo
+enseña como «Envío pagado en agencia» y la boleta sale por el total. Pide al
+menos dos pagos validados con el adelanto entre ellos y ninguno sin validar.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.34` para que el cron recalcule. Sin
+variables de entorno nuevas.
+
+1. **Migración `0296_invoices_claim_agency_shipping.sql`**, a mano, DESPUÉS de
+   la 0293 y ANTES del código. Cambia solo `invoice_claim`, con `create or
+   replace` y la misma firma de doce argumentos; el cuerpo es el de la 0293
+   salvo la condición 3, que además acepta el envío pagado en la agencia
+   (Agencia con el paquete recogido en `order_master`, al menos dos pagos
+   validados con el adelanto, hasta S/ 15). No toca filas. Es idempotente. Sin
+   la 0293 se detiene con «La 0296 va después de la 0293…».
+2. Comprobar:
+   ```sql
+   select count(*) = 1 as un_turno,
+          bool_and(pg_get_functiondef(oid) like '%p_total - v_validated <= 15%') as con_envio_agencia
+   from pg_proc where proname = 'invoice_claim';
+   ```
+3. Desplegar el código.
+
+### 01-11-2026 · Grupo GF: el reprogramado que el motorizado conserva pasa sin su hoja (sin migración, MOM §29.7)
+
+Pedido del owner. En Reparto y liquidación, «Sale con él en otra ruta…» en un
+reprogramado que sigue en su caja, y la lista de lo que el motorizado conserva
+de rutas anteriores con «Pasar a esta ruta». En la app, «Me lo quedo y lo
+llevo mañana» al reportar un reprogramado. Usa `gf_carry_over` (0234, 0248),
+que ya está en la base. Sin migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Comprobar** con un reprogramado de Alexis: al pasarlo, la parada vieja
+   dice «Pasó a la ruta del dd/mm» y la ruta nueva tiene la parada pendiente.
+
+**Marcha atrás.** Revertir el commit. Lo ya pasado queda como un traspaso de
+la hoja.
+
+### 01-11-2026 · Despacho del día: «Reintentos para hoy», solo lo acordado en Repro Lima (sin migración, MOM §29.13)
+
+Decisión del owner: solo la tienda llama y decide un reintento en Lima. La cola
+de Grupo GF deja de traer los «Por reprogramar Lima» sin día acordado en Repro
+Lima; la tarjeta «Por reprogramar» pasa a «Reintentos para hoy». Las cajas que
+el motorizado todavía tiene siguen en «Devoluciones». Sin migración, crons ni
+variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar al equipo de Despacho**: lo que no tenga acuerdo ya no aparece en
+   su cola; la línea «N esperan a la tienda en Repro Lima» dice cuántos.
+
+**Marcha atrás.** Revertir el commit.
+
+### 01-11-2026 · Repro Lima solo para la tienda: el rol «Despacho y Grupo GF» deja de traerla (sin migración, MOM §9.5)
+
+Decisión del owner (entrega 4 de la propuesta de separar Repro Lima y Grupo
+GF): llamar al cliente y acordar un reintento en Lima es solo de la tienda. El
+rol «Despacho y Grupo GF» ya no trae `repro_lima.manage`; quien además tiene
+«Asesora» sigue entrando. Los permisos se calculan en el código: sin
+migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar**: al 01-11-2026 pierden Repro Lima las cuatro personas con
+   «Despacho» sin «Asesora» (en Equipo se ve quiénes). Si alguna debe seguir
+   llamando, se le da el rol «Asesora» o el permiso suelto en Equipo.
+
+**Marcha atrás.** Revertir el commit.
+
+### 01-11-2026 · La fecha que el cliente da en la puerta programa la salida (sin migración, MOM §29.7)
+
+Decisión del owner: Grupo GF le impone a la tienda la reprogramación que ya
+tiene. El reporte «No entregado · Reprogramado por el cliente» con fecha
+programa la salida de Grupo GF para ese día; en Repro Lima sale en
+«Programados» como «Acordado en la puerta», sin llamar. Reemplaza la decisión 7
+del 12-10-2026. Sin migración, crons ni variables.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar** a la tienda y a los motorizados: la fecha que anotan en la puerta
+   ya programa la salida.
+
+**Marcha atrás.** Revertir el commit. Los programas ya escritos quedan; se
+quitan con «Quitar la fecha» en Despacho del día.
+
+### 01-11-2026 · Envío pagado en la agencia con un solo pago, y la recogida del courier prueba la salida (0298, MOM §6.5)
+
+Dos decisiones del owner. El envío pagado en la agencia (hasta S/ 15 sin
+comprobante, Agencia con el paquete recogido) vale también con **un solo**
+pago validado. Y una devolución queda probada si el courier recogió el paquete
+(`custody_transferred_at`), aunque la guía no traiga fecha de despacho.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.35` para que el cron recalcule. Sin
+variables de entorno nuevas.
+
+1. **Migración `0298_invoices_claim_agency_one_payment.sql`**, a mano, DESPUÉS
+   de la 0296 y ANTES del código. Solo `invoice_claim`, con `create or replace`
+   y la misma firma; el cuerpo es el de la 0296 salvo que el envío pagado en la
+   agencia ya no exige dos pagos ni el adelanto. No toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select count(*) = 1 as un_turno,
+          bool_and(pg_get_functiondef(oid) not like '%v_live >= 2%') as un_pago
+   from pg_proc where proname = 'invoice_claim';
+   ```
+3. Desplegar el código.
+
+### 02-11-2026 · Filtro «Producto» en el Master de Pedidos (0300, MOM §6)
+
+Pedido del owner. El Master filtra por producto (título sin la variante; basta
+con uno), con su cifra de pedidos por opción. Sin `MOM_RESOLUTION_VERSION`
+nuevo: la migración rellena todo lo existente y el recálculo de cada pedido
+mantiene la columna. Sin crons ni variables de entorno.
+
+1. **Migración `0300_order_master_product_titles.sql`**, a mano, ANTES del
+   código. Añade `order_master.product_titles` (`text[] not null default
+   '{}'`), `order_product_titles(jsonb)` (la regla en SQL), la rellena desde
+   `orders.line_items` en UN `UPDATE` (35.322 filas al 02-11-2026: ~1,2 s de
+   cálculo y la reescritura de cada fila; segundos o pocas decenas de
+   segundos), y después crea el índice GIN `order_master_product_titles_idx` y
+   `order_master_product_options(uuid[])` (security invoker; `authenticated` y
+   `service_role`). Es idempotente: re-aplicarla no reescribe filas iguales.
+   Como la 0264, mueve `updated_at` de las filas que rellena. Mejor en una hora
+   tranquila: el recálculo que toque esas filas espera al commit.
+2. Comprobar:
+   ```sql
+   select count(*) filter (where cardinality(product_titles) = 0) as sin_producto,
+          count(*) as total
+   from order_master;
+   select jsonb_array_length(order_master_product_options(array(select id from stores))) as opciones;
+   ```
+   `sin_producto` debe ser 0 o casi (todos los pedidos traían líneas).
+3. Desplegar el código. Si sale antes que la migración, el Master no se cae: el
+   recálculo escribe sin la columna, la píldora «Producto» no aparece y un
+   `?pr=` en la URL se ignora con un aviso.
+
+**Marcha atrás.** Revertir el commit. La columna, el índice y las funciones
+pueden quedarse (nadie más los lee).
+
+### 02-11-2026 · El homónimo de Lima y la guía Swayp a Lima de un pedido de provincia (sin migración, MOM §19.0 y §19.0.2)
+
+Pedido del owner tras #KP142611 (La Victoria de Chiclayo con la guía Swayp
+impresa a La Victoria de Lima). Dos reglas: el Master no da provincia
+Lima/Callao a un distrito homónimo cuando el pin, el ubigeo de la primera guía
+de Aliclik o la región dicen otra cosa (una provincia capital como «Chiclayo» se
+lee como su departamento), y ninguna guía Swayp sale a Lima para un pedido de
+Provincia COD, Agencia, de otro departamento o con el pin fuera de Lima.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.36` para que el cron recalcule. Sin
+migración, crons ni variables de entorno.
+
+1. **El código**, por el camino de siempre.
+2. **Avisar** a quien crea guías Swayp: el aviso «Destino contradictorio» se
+   resuelve con «Corregir ubicación» en el pedido, no reintentando.
+
+**Marcha atrás.** Revertir el commit. Las filas recalculadas con `mom-v1.36`
+vuelven a calcularse con la versión anterior en la siguiente pasada del cron.
+
+## 02-11-2026 · 0301 — coordenada por dirección para la guía automática de Provincia COD
+
+- **Migración `0301_order_geocodes.sql`:**
+  - tabla `order_geocodes`, la caché por pedido, con RLS y sin políticas;
+  - `chatby_auto_settings.geocode_enabled`, encendido por defecto.
+- **Aplicarla antes del código.** Sin la columna, la pasada no consulta a Google (`geocode_enabled` se lee como apagado).
+- **Usa** `GOOGLE_GEOCODING_API_KEY` (ya en Vercel) y el cupo de 400 por día de «v3 requests per day».
+
+### 03-11-2026 · La programación de Urpi registra el despacho (0302, MOM §30.10 y §30.11)
+
+Decisión del owner tras la auditoría del 26/10 al 02/11: 85 de 101 pedidos
+programados a Urpi no tenían salida de Urpi en Kapta. Al guardar una
+programación, la caja «Por definir» del pedido pasa a salida de Urpi en ruta
+(`lib/urpi-dispatch.ts`); cuando Urpi reporta la entrega, esa salida se cierra.
+La programación también desempata el vínculo del reporte de Urpi
+(`link_method = programacion`). Sin `MOM_RESOLUTION_VERSION` nuevo, crons ni
+variables de entorno.
+
+1. **Migración `0302_urpi_link_programacion.sql`**, a mano, ANTES del código.
+   Solo cambia la restricción de `urpi_report_rows.link_method` para admitir
+   `programacion`; no toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select pg_get_constraintdef(oid) from pg_constraint
+   where conname = 'urpi_report_rows_link_method_check';
+   ```
+   Debe incluir `'programacion'`.
+3. Desplegar el código. Si sale antes que la migración, una carga del reporte
+   con un vínculo por la programación falla al guardar ese lote.
+4. **Avisar** a quien programa Urpi: cargar el Excel del mes cada día (o
+   configurar la lectura de Google). El aviso de la carga nombra los pedidos
+   con otra salida viva o sin caja «Por definir» para revisarlos a mano.
+
+**Marcha atrás.** Revertir el commit. Las salidas ya pasadas a Urpi en ruta se
+quedan como están (son hechos registrados); la restricción ampliada puede
+quedarse.
+
+### 03-11-2026 · Una guía de Aliclik anulada suelta el candado de creación (0303, MOM §10.2)
+
+El candado de `aliclik_order_requests` admitía una sola intención viva por
+pedido para siempre: una guía anulada impedía volver a salir por Aliclik, y la
+cadena de reintentos de Lima (AUTOECOM → ALIDRIVER) chocaba con «Este pedido ya
+tiene una guía en Aliclik» (#KP200108). Sin crons, variables ni
+`MOM_RESOLUTION_VERSION` nuevos.
+
+1. **Migración `0303_aliclik_intent_release.sql`**, a mano, ANTES del código.
+   Suma `released_at` y `released_reason` y rehace el único parcial
+   excluyendo las soltadas, con el mismo nombre. No toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select indexdef from pg_indexes where indexname = 'aliclik_order_requests_live_uniq';
+   ```
+   Debe terminar en `WHERE ((status <> 'failed'::text) AND (released_at IS NULL))`.
+3. Desplegar el código. **Si sale antes que la migración, ninguna guía de
+   Aliclik se puede crear** (la creación lee `released_at` antes del candado).
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse; para volver
+al candado anterior hay que recrear el índice con `where status <> 'failed'`,
+lo que falla si ya hay pedidos con una intención soltada y otra viva.
+
+### 03-11-2026 · El detalle del Excel de Aliclik: subestado y comentario del motorizado (0304, MOM §9)
+
+El Excel de Aliclik trae «SUB ESTADO» y «ÚLTIMO COMENTARIO MOTORIZADO», que
+la API no da. Kapta los guarda en la guía al subir el reporte, los muestra en
+la ficha y en Repro Lima, y la cadena de reintentos toma DE VIAJE y POR
+CLIENTE como reprogramado. Sin crons ni variables nuevas.
+
+1. **Migración `0304_aliclik_report_detail.sql`**, a mano, ANTES del código.
+   Suma `shipments.aliclik_sub_status` y `aliclik_rider_comment`. No toca
+   filas. Es idempotente.
+2. Desplegar el código. Si sale antes que la migración, Repro Lima y la ficha
+   del envío no cargan (leen las columnas nuevas); la importación del Excel sí
+   sigue (las quita en el reintento).
+3. **Avisar** a quien sube los reportes: volver a subir el Excel de Aliclik
+   cada día para tener el subestado y el comentario.
+
+**Marcha atrás.** Revertir el commit. Las columnas pueden quedarse.
+
+### 03-11-2026 · Lima tiene su ventana de recuperación: 21 días (sin migración, MOM §11)
+
+Decisión del owner: la ventana de 7 días de Kenku y Aurela (01-11-2026) era
+para Provincia; Lima se queda con unas tres semanas. `LIMA_RECOVERY_DAYS = 21`
+y `recoveryWindowDaysForOperation` (`lib/reproprovincia.ts`) eligen la ventana
+por operación en el Master, en el barrido de ventanas vencidas y en Envíos.
+`MOM_RESOLUTION_VERSION` sube a `mom-v1.37` para que el cron recalcule: los
+intentos fallidos de Lima de hace 8–21 días vuelven de anulado o devuelto a
+«En curso · Por reprogramar Lima». Sin migración, crons ni variables de
+entorno; `return_recovery_max_days` de las tiendas no cambia.
+
+1. **El código**, por el camino de siempre.
+2. **Comprobar** tras la pasada del cron que los 20 pedidos con la salida de
+   Urpi cancelada entre el 16 y el 26-10 están en `por_reprogramar_lima`.
+
+**Marcha atrás.** Revertir el commit. Las filas recalculadas con `mom-v1.37`
+vuelven a calcularse con la versión anterior en la siguiente pasada del cron.

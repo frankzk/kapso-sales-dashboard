@@ -24,6 +24,7 @@ import {
   type InvoiceOrderRead,
 } from "@/lib/invoicing/shopify-order";
 import { buildSalePayload } from "@/lib/invoicing/rules";
+import { SHOPIFY_SHUTDOWN_AT, SNAPSHOT_FALLBACK_FROM, isAfterShopifyShutdown } from "@/lib/invoicing/shopify-cutoff";
 
 const FAKE_TOKEN = h.token;
 
@@ -717,13 +718,18 @@ interface StoreRead {
   error: unknown;
 }
 
-/** Un cliente de Supabase que solo sabe leer una fila de `stores`. */
-function fakeAdmin(result: StoreRead) {
+/**
+ * Un cliente de Supabase que sabe leer una fila de `stores` (`result`) y, si se
+ * le dan, una de cada otra tabla (`others`: la foto del pedido y su pedido, MOM
+ * §35.10). Sin dato, una tabla devuelve que no hay fila.
+ */
+function fakeAdmin(result: StoreRead, others: Record<string, StoreRead> = {}) {
   const reads: { table: string; columns: string; filters: [string, unknown][] }[] = [];
   const admin = {
     from(table: string) {
       const read = { table, columns: "", filters: [] as [string, unknown][] };
       reads.push(read);
+      const answer = table === "stores" ? result : (others[table] ?? { data: null, error: null });
       const q = {
         select(columns: string) {
           read.columns = columns;
@@ -733,8 +739,8 @@ function fakeAdmin(result: StoreRead) {
           read.filters.push([column, value]);
           return q;
         },
-        maybeSingle: async () => result,
-        single: async () => result,
+        maybeSingle: async () => answer,
+        single: async () => answer,
       };
       return q;
     },
@@ -784,9 +790,11 @@ describe("fetchOrderForInvoice (fetch y base inyectados)", () => {
     expect(calls[0]?.body.variables).toEqual({ id: "gid://shopify/Order/6123456789012" });
     // Con tope de tiempo: un Shopify colgado no se come el barrido.
     expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
-    // Solo el dominio y el token: no descifra los demás secretos de la tienda.
+    // Solo el dominio y el token (y con qué app se conectó): no descifra los
+    // demás secretos de la tienda. Kenku es 'interna': una sola lectura, sin
+    // nada de la app propia (0271).
     expect(reads).toEqual([
-      { table: "stores", columns: "shopify_domain,shopify_token_enc", filters: [["id", "store-kenku"]] },
+      { table: "stores", columns: "shopify_domain,shopify_token_enc,shopify_app", filters: [["id", "store-kenku"]] },
     ]);
   });
 
@@ -913,5 +921,245 @@ describe("fetchOrderForInvoice (fetch y base inyectados)", () => {
       expect(read.ok).toBe(false);
       expect(JSON.stringify(read)).not.toContain(FAKE_TOKEN);
     }
+  });
+});
+
+// ── La foto del pedido (MOM §35.10, owner 23-10-2026) ────────────────────────
+//
+// Shopify cierra Kenku Perú y Aurela el 28-10-2026. Si la tienda ya no tiene
+// token, o Shopify contesta por ella que ya no está (401, 402, 403, 404, 423),
+// la boleta sale de la foto del pedido que se tomó mientras Shopify respondía,
+// con el mismo mapeo, y la lectura lo dice. Con Shopify funcionando no se mira
+// la foto. Un pedido de WooCommerce nunca sale de una foto.
+
+describe("fetchOrderForInvoice: la foto del pedido", () => {
+  const ID = "6123456789012";
+  const GID = `gid://shopify/Order/${ID}`;
+  const FETCHED_AT = "2026-10-26T20:04:31.000Z";
+
+  /** La foto: el `data` de la respuesta tal cual (`{ order }`), de un pedido de Shopify. */
+  const snapshotOf = (order: unknown, over: Record<string, unknown> = {}): Record<string, StoreRead> => ({
+    order_invoice_snapshots: {
+      data: { order_id: "ord-1", payload: { order }, fetched_at: FETCHED_AT, ...over },
+      error: null,
+    },
+    orders: { data: { platform: "shopify", shopify_order_id: ID }, error: null },
+  });
+
+  const sinToken = (): StoreRead => ({
+    data: { shopify_domain: "kenku.myshopify.com", shopify_token_enc: null },
+    error: null,
+  });
+
+  it("sin token: la boleta sale de la foto, lo dice, y no llama a Shopify", async () => {
+    const { admin, reads } = fakeAdmin(sinToken(), snapshotOf(orderNode()));
+    const { fetchImpl, calls } = fakeFetch(() => ({ payload: { data: { order: orderNode() } } }));
+
+    const read = await fetchOrderForInvoice({ storeId: "store-kenku", shopifyOrderId: ID }, { admin, fetchImpl });
+
+    expect(calls).toHaveLength(0);
+    expect(ok(read).totalCents).toBe(9990);
+    expect(ok(read).items).toEqual(ok(mapOrderForInvoice(orderNode())).items);
+    expect(ok(read).snapshot).toEqual({ fetchedAt: FETCHED_AT });
+    // La foto se busca por la tienda y el gid; la plataforma, en el pedido.
+    expect(reads.map((r) => [r.table, r.filters])).toEqual([
+      ["stores", [["id", "store-kenku"]]],
+      ["order_invoice_snapshots", [["store_id", "store-kenku"], ["shopify_order_gid", GID]]],
+      ["orders", [["id", "ord-1"], ["store_id", "store-kenku"]]],
+    ]);
+  });
+
+  it.each([401, 402, 403, 404, 423])("desde el cierre, Shopify contesta HTTP %i por la tienda: sale de la foto", async (status) => {
+    const { admin } = fakeAdmin(connected(), snapshotOf(orderNode()));
+    const { fetchImpl, calls } = fakeFetch(() => ({ ok: false, status, payload: { errors: "Unavailable Shop" } }));
+
+    const read = await fetchOrderForInvoice(
+      { storeId: "store-kenku", shopifyOrderId: ID },
+      { admin, fetchImpl, now: () => Date.parse(SHOPIFY_SHUTDOWN_AT) },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(ok(read).snapshot).toEqual({ fetchedAt: FETCHED_AT });
+  });
+
+  // Con Shopify vivo (antes del 28-10-2026 00:00 UTC), un 401 por un token
+  // revocado al reinstalar, un 403 o un 423 son un problema que se arregla: la
+  // boleta se queda en `lectura_fallida` como siempre y la foto no se mira,
+  // aunque exista. Solo vaciar el token la abre antes del cierre.
+  it.each([401, 402, 403, 404, 423])("antes del cierre, un HTTP %i no usa la foto: lectura_fallida como siempre", async (status) => {
+    const { admin, reads } = fakeAdmin(connected(), snapshotOf(orderNode()));
+    const { fetchImpl } = fakeFetch(() => ({ ok: false, status, payload: { errors: "Unavailable Shop" } }));
+    const justBefore = Date.parse(SHOPIFY_SHUTDOWN_AT) - 1;
+
+    const read = await fetchOrderForInvoice(
+      { storeId: "store-kenku", shopifyOrderId: ID },
+      { admin, fetchImpl, now: () => justBefore },
+    );
+
+    expect(read).toEqual({ ok: false, reason: "lectura_fallida", detail: `Shopify contestó HTTP ${status}.` });
+    expect(reads.map((r) => r.table)).toEqual(["stores"]);
+  });
+
+  it("el cierre de la foto es el de Shopify, sin margen", () => {
+    expect(SNAPSHOT_FALLBACK_FROM).toBe(SHOPIFY_SHUTDOWN_AT);
+    expect(SHOPIFY_SHUTDOWN_AT).toBe("2026-10-28T00:00:00.000Z");
+    expect(isAfterShopifyShutdown(Date.parse("2026-10-27T23:59:59.999Z"))).toBe(false);
+    expect(isAfterShopifyShutdown(Date.parse("2026-10-28T00:00:00.000Z"))).toBe(true);
+  });
+
+  it.each<[string, () => { fetchImpl: typeof fetch }]>([
+    ["un 5xx", () => fakeFetch(() => ({ ok: false, status: 503, payload: {} }))],
+    ["un error de GraphQL", () => fakeFetch(() => ({ payload: { errors: [{ extensions: { code: "THROTTLED" } }] } }))],
+    [
+      "un tiempo agotado",
+      () => ({
+        fetchImpl: (async () => {
+          throw new DOMException("timeout", "TimeoutError");
+        }) as unknown as typeof fetch,
+      }),
+    ],
+    [
+      "una red caída",
+      () => ({
+        fetchImpl: (async () => {
+          throw new TypeError("fetch failed");
+        }) as unknown as typeof fetch,
+      }),
+    ],
+  ])("con %s no se mira la foto: se reintenta como siempre", async (_label, make) => {
+    const { admin, reads } = fakeAdmin(connected(), snapshotOf(orderNode()));
+    const read = await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin, fetchImpl: make().fetchImpl });
+    expect(reasonOf(read)).toBe("lectura_fallida");
+    expect(reads.map((r) => r.table)).toEqual(["stores"]);
+  });
+
+  it("con Shopify funcionando se lee en vivo, aunque haya foto", async () => {
+    const { admin, reads } = fakeAdmin(connected(), snapshotOf(orderNode({ edited: true })));
+    const { fetchImpl } = fakeFetch(() => ({ payload: { data: { order: orderNode() } } }));
+    const read = await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin, fetchImpl });
+    expect(ok(read).snapshot).toBeUndefined();
+    expect(reads.map((r) => r.table)).toEqual(["stores"]);
+  });
+
+  it("sin foto, el motivo es el de siempre", async () => {
+    const { admin } = fakeAdmin(sinToken());
+    expect(await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin })).toEqual({
+      ok: false,
+      reason: "sin_token_shopify",
+    });
+    const { admin: admin402 } = fakeAdmin(connected());
+    const { fetchImpl } = fakeFetch(() => ({ ok: false, status: 402, payload: {} }));
+    expect(await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin: admin402, fetchImpl })).toEqual({
+      ok: false,
+      reason: "lectura_fallida",
+      detail: "Shopify contestó HTTP 402.",
+    });
+  });
+
+  it("sin la 0275 (la tabla no existe), igual que sin foto", async () => {
+    const { admin } = fakeAdmin(sinToken(), {
+      order_invoice_snapshots: {
+        data: null,
+        error: { code: "PGRST205", message: "Could not find the table 'public.order_invoice_snapshots' in the schema cache" },
+      },
+    });
+    expect(await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin })).toEqual({
+      ok: false,
+      reason: "sin_token_shopify",
+    });
+  });
+
+  describe("un pedido de WooCommerce nunca sale de una foto", () => {
+    it("lo dice `orders.platform`", async () => {
+      const snap = snapshotOf(orderNode());
+      snap.orders = { data: { platform: "woocommerce", shopify_order_id: ID }, error: null };
+      const { admin } = fakeAdmin(sinToken(), snap);
+      expect(await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin })).toEqual({
+        ok: false,
+        reason: "sin_token_shopify",
+      });
+    });
+
+    it("un id de WooCommerce ni siquiera busca foto, aunque `extractNumericId` le saque un número", async () => {
+      const { admin, reads } = fakeAdmin(sinToken(), snapshotOf(orderNode()));
+      const read = await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: "wc-kp-1532" }, { admin });
+      expect(read).toEqual({ ok: false, reason: "sin_token_shopify" });
+      expect(reads.map((r) => r.table)).toEqual(["stores"]);
+    });
+
+    it("tampoco si el pedido de la foto ya no es el de ese número, o no está", async () => {
+      const otro = snapshotOf(orderNode());
+      otro.orders = { data: { platform: "shopify", shopify_order_id: "999" }, error: null };
+      expect(await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin: fakeAdmin(sinToken(), otro).admin })).toEqual({
+        ok: false,
+        reason: "sin_token_shopify",
+      });
+      const ninguno = snapshotOf(orderNode());
+      ninguno.orders = { data: null, error: null };
+      expect(
+        await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin: fakeAdmin(sinToken(), ninguno).admin }),
+      ).toEqual({ ok: false, reason: "sin_token_shopify" });
+    });
+  });
+
+  it("los bloqueos salen de la foto con su fecha (hora de Lima)", async () => {
+    const editado = await fetchOrderForInvoice(
+      { storeId: "s", shopifyOrderId: ID },
+      { admin: fakeAdmin(sinToken(), snapshotOf(orderNode({ edited: true }))).admin },
+    );
+    expect(editado).toEqual({ ok: false, reason: "editado", detail: "Foto del pedido del 26/10/2026 15:04." });
+
+    const noDevuelto = await fetchOrderForInvoice(
+      { storeId: "s", shopifyOrderId: ID },
+      { admin: fakeAdmin(sinToken(), snapshotOf(null)).admin },
+    );
+    expect(noDevuelto).toEqual({ ok: false, reason: "no_encontrado", detail: "Foto del pedido del 26/10/2026 15:04." });
+
+    const ilegible = await fetchOrderForInvoice(
+      { storeId: "s", shopifyOrderId: ID },
+      { admin: fakeAdmin(sinToken(), snapshotOf(orderNode({ test: "no" }))).admin },
+    );
+    expect(ilegible).toEqual({
+      ok: false,
+      reason: "lectura_fallida",
+      detail: "Foto del pedido del 26/10/2026 15:04: Shopify devolvió un dato ilegible: test.",
+    });
+  });
+
+  it("una foto de otro pedido no se usa", async () => {
+    const { admin } = fakeAdmin(sinToken(), snapshotOf(orderNode({ id: "gid://shopify/Order/999" })));
+    expect(await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin })).toEqual({
+      ok: false,
+      reason: "lectura_fallida",
+      detail: "Foto del pedido del 26/10/2026 15:04: es de otro pedido.",
+    });
+  });
+
+  it.each<[string, Record<string, StoreRead>, string]>([
+    [
+      "la foto no se pudo leer",
+      { order_invoice_snapshots: { data: null, error: { code: "57014", message: "canceling statement" } } },
+      "No se pudo leer la foto del pedido.",
+    ],
+    [
+      "la foto no tiene la forma de la 0275",
+      { order_invoice_snapshots: { data: { order_id: "ord-1", payload: [1], fetched_at: FETCHED_AT }, error: null } },
+      "La foto del pedido no se entiende.",
+    ],
+    [
+      "el pedido de la foto no se pudo leer",
+      {
+        ...snapshotOf(orderNode()),
+        orders: { data: null, error: { code: "57014", message: "canceling statement" } },
+      },
+      "No se pudo leer el pedido de la foto.",
+    ],
+  ])("si %s: lectura_fallida, se reintenta", async (_label, others, detail) => {
+    const { admin } = fakeAdmin(sinToken(), others);
+    expect(await fetchOrderForInvoice({ storeId: "s", shopifyOrderId: ID }, { admin })).toEqual({
+      ok: false,
+      reason: "lectura_fallida",
+      detail,
+    });
   });
 });

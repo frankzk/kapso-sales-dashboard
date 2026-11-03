@@ -57,9 +57,11 @@ export interface NavAccess {
   stores: boolean;
   costs: boolean;
   team: boolean;
+  /** El historial de Shopify (MOM §37): lo mismo que bajar la base de pedidos. */
+  history: boolean;
 }
 
-const FULL_ACCESS: NavAccess = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true };
+const FULL_ACCESS: NavAccess = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true, history: true };
 
 export function navItems(
   isVendedoraOnly: boolean,
@@ -109,6 +111,8 @@ export function navItems(
     ...(access.mapAds ? [{ href: "/dashboard/leads/anuncios", label: "Producto por anuncio", icon: IconPlug }] : []),
     { href: "/dashboard/productividad", label: access.reports ? "Productividad" : "Mi productividad", icon: IconHeadset },
     ...(access.stores ? [{ href: "/dashboard/stores", label: "Tiendas", icon: IconStore }] : []),
+    // Los pedidos y clientes de Shopify de antes de Kapta, como archivo (MOM §37).
+    ...(access.history ? [{ href: "/dashboard/stores/historial", label: "Historial Shopify", icon: IconClipboard }] : []),
     // Liquidaciones (/dashboard/liquidaciones) y Liquidaciones 2
     // (/dashboard/liquidaciones-2, hojas por dominio, 0176, MOM §30) fuera del
     // menú desde el 22-09-2026 a pedido de operación. Las páginas siguen

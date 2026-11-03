@@ -270,12 +270,12 @@ export function TandersGuideModal({
 
                 <Field
                   label="Nota interna"
-                  hint="Referencia de la dirección + la nota del pedido en Shopify, traída al abrir."
+                  hint="Precargada al abrir: referencia, nota del pedido, número de pedido, productos y datos de cobro. Corrígela si hace falta."
                 >
                   <textarea
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
-                    rows={2}
+                    rows={7}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                     placeholder="Esquina con la av. Urubamba"
                   />

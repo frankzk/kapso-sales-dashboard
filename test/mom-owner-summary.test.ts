@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { CONFIRMATION_SIGNAL_KINDS as CONFIRMATION_KINDS } from "@/lib/order-confirmation";
 import {
   buildMomOwnerSummary,
   dispatchSignalAt,
+  momChosenMonth,
+  momMonthPeriod,
   momOwnerPeriods,
+  momOwnerPeriodsWith,
   type BuildMomOwnerSummaryInput,
   type MomOwnerOrderFact,
   type MomOwnerShipmentFact,
@@ -97,6 +101,57 @@ describe("ventanas del resumen diario MOM", () => {
         endIso: "2026-08-01T05:00:00.000Z",
       },
     ]);
+  });
+});
+
+describe("«Otro mes…»: un mes cerrado elegido con su mes y año (02-11-2026)", () => {
+  it("solo vale un mes anterior al mes anterior, desde enero de 2025", () => {
+    expect(momChosenMonth("2026-05", TODAY)).toBe("2026-05");
+    expect(momChosenMonth("2025-01", TODAY)).toBe("2025-01");
+    // «Este mes» y «Mes anterior» ya tienen su chip.
+    expect(momChosenMonth("2026-08", TODAY)).toBeNull();
+    expect(momChosenMonth("2026-07", TODAY)).toBeNull();
+    expect(momChosenMonth("2026-09", TODAY)).toBeNull();
+    expect(momChosenMonth("2024-12", TODAY)).toBeNull();
+    expect(momChosenMonth("2026-13", TODAY)).toBeNull();
+    expect(momChosenMonth("mayo", TODAY)).toBeNull();
+    expect(momChosenMonth(null, TODAY)).toBeNull();
+  });
+
+  it("es el mes entero en días de Lima, también al cruzar el año", () => {
+    expect(momMonthPeriod("2025-12")).toEqual({
+      key: "chosen_month",
+      label: "Diciembre 2025",
+      startIso: "2025-12-01T05:00:00.000Z",
+      endIso: "2026-01-01T05:00:00.000Z",
+    });
+    expect(momOwnerPeriodsWith(TODAY, "2026-05").map((p) => p.key)).toEqual([
+      "today",
+      "yesterday",
+      "last7",
+      "month",
+      "previous_month",
+      "chosen_month",
+    ]);
+    expect(momOwnerPeriodsWith(TODAY, "2026-07")).toEqual(momOwnerPeriods(TODAY));
+  });
+
+  it("cuenta la cohorte de ese mes y nada de los otros", () => {
+    const summary = build({
+      month: "2026-05",
+      orders: [
+        order("mayo-1", { createdAt: "2026-05-01T05:00:00.000Z", stage: "finalizado" }),
+        order("mayo-31", { createdAt: "2026-06-01T04:59:00.000Z" }),
+        order("junio-1", { createdAt: "2026-06-01T05:00:00.000Z", stage: "preparacion" }),
+        order("ayer", { stage: "preparacion" }),
+      ],
+      // El pedido del 31 salió el 2 de junio: se confirmó, y sigue siendo de mayo.
+      shipments: [guide("g-mayo-31", "mayo-31", { courier: "Shalom", createdAt: "2026-06-02T15:00:00.000Z" })],
+      events: [{ orderId: "mayo-1", kind: [...CONFIRMATION_KINDS][0]!, occurredAt: "2026-05-01T16:00:00.000Z" }],
+    });
+    const may = summary.periods.find((period) => period.key === "chosen_month")!;
+    expect(may.label).toBe("Mayo 2026");
+    expect(may.kpis.province_confirmation).toEqual({ numerator: 2, denominator: 2, rate: 1 });
   });
 });
 
@@ -352,7 +407,11 @@ describe("alertas críticas del MOM", () => {
   it("aplica el SLA por courier, excluye Tanders y respeta reprogramaciones explícitas", () => {
     const summary = build({
       orders: [
-        order("picked", { reasons: ["recogido_sin_pago_completo"], stage: "por_cerrar" }),
+        order("picked", {
+          reasons: ["recogido_sin_pago_completo"],
+          stage: "por_cerrar",
+          substage: "recogido_sin_pago_completo",
+        }),
         order("aliclik-late", {
           reasons: ["pendiente_liquidacion"],
           stage: "por_cerrar",

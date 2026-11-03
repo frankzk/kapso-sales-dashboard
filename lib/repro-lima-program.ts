@@ -38,6 +38,16 @@ import {
 import { limaClock, sameDayCutoffMinute } from "@/lib/grupo-gf-courier";
 import { isRetryAdmission, ownReplaceDecision, ownRetryOutput, type OwnReplaceDecision } from "@/lib/gf-retry";
 import { replacedOutputIds } from "@/lib/gf-replaced-output";
+import {
+  aliclikCarrier,
+  aliclikChainReason,
+  isChainRider,
+  limaRetryChain,
+  urpiChainReason,
+  withDismissal,
+  type ChainAttempt,
+  type LimaRetryChain,
+} from "@/lib/lima-retry-chain";
 import { guideFailedAfterDispatch } from "@/lib/reproprovincia";
 import { limaDay, programDayLabel } from "@/lib/dispatch-day";
 import { sameCourier } from "@/lib/shipment-output";
@@ -115,11 +125,12 @@ export interface ReproOrderRow {
   macro_stage: string | null;
   macro_substage: string | null;
   operational_status: string | null;
+  coverage?: string | null;
 }
 
 export const REPRO_ORDER_COLUMNS =
   "order_id,store_id,order_name,customer_name,customer_phone,district,region,province,order_total," +
-  "macro_since,macro_stage,macro_substage,operational_status";
+  "macro_since,macro_stage,macro_substage,operational_status,coverage";
 
 /** Una salida del pedido, con lo que deciden el episodio y la caja. */
 export interface ReproShipmentRow {
@@ -137,6 +148,11 @@ export interface ReproShipmentRow {
   status_category: string | null;
   reported_status: string | null;
   swayp_state: number | null;
+  /** Aliclik: el transporte de la guía (AUTOECOM, ALIDRIVER), para la cadena de reintentos. */
+  aliclik_transport_name?: string | null;
+  /** Aliclik, del Excel (0304): «SUB ESTADO» y el último comentario del motorizado. */
+  aliclik_sub_status?: string | null;
+  aliclik_rider_comment?: string | null;
   returned_at: string | null;
   dispatched_at: string | null;
   updated_at: string | null;
@@ -146,7 +162,7 @@ export interface ReproShipmentRow {
 const SHIPMENT_COLUMNS =
   "id,order_id,store_id,courier,created_via,delivery_status,custody_state,custody_transferred_at," +
   "output_number,output_code,guide_code,status_category,reported_status,swayp_state,returned_at," +
-  "dispatched_at,updated_at,closed_at";
+  "dispatched_at,updated_at,closed_at,aliclik_transport_name,aliclik_sub_status,aliclik_rider_comment";
 
 /** Una parada «No entregado», con su ruta y su motorizado. */
 export interface ReproStopRow {
@@ -185,6 +201,8 @@ const FACT_EVENT_KINDS = [
   "output_replaced",
   "dispatch_program_cleared",
   "dispatch_program_overridden",
+  // «A Repro Lima» de la bandeja de reintentos (lib/lima-retry-chain.ts).
+  "lima_retry_dismissed",
 ];
 
 /** Todo lo que Repro Lima sabe de un pedido, leído junto. */
@@ -196,6 +214,8 @@ export interface ReproFacts {
   order: ReproOrderRow | null;
   /** «En curso · Por reprogramar Lima». */
   inStage: boolean;
+  /** Atención de un pendiente de Lima, sin inventar un episodio fallido. */
+  attentionEligible?: boolean;
   /** Anulado (`orders.cancelled_at`). */
   cancelled: boolean;
   outputs: ReproShipmentRow[];
@@ -242,6 +262,49 @@ export interface ReproFacts {
    * armada.
    */
   reopened: boolean;
+  /**
+   * La cadena de reintentos por Aliclik (lib/lima-retry-chain.ts, 03-11-2026):
+   * qué intento toca y con qué transporte, o por qué no aplica.
+   */
+  retryChain: LimaRetryChain;
+}
+
+/** El día de la ruta de una parada, a mediodía de Lima, como instante. */
+function stopAttemptAt(stop: Pick<ReproStopRow, "routeDate" | "reported_at" | "created_at">): string | null {
+  const day = stop.routeDate?.slice(0, 10) ?? "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return `${day}T17:00:00.000Z`;
+  return stop.reported_at ?? stop.created_at ?? null;
+}
+
+/**
+ * Los intentos que fallaron, para la cadena: las paradas «No entregado» de
+ * Grupo GF (con su motorizado) y las guías de otro courier que no entregaron.
+ */
+function chainAttempts(
+  failedStops: readonly ReproStopRow[],
+  outputs: readonly ReproShipmentRow[],
+  urpiLast: { result_code: string | null; reason: string | null } | null,
+): ChainAttempt[] {
+  const attempts: ChainAttempt[] = [];
+  for (const stop of failedStops) {
+    const at = stopAttemptAt(stop);
+    if (!at) continue;
+    attempts.push({ carrier: isChainRider(stop.riderName) ? "alexis" : "otro", reason: stop.outcome_reason, at });
+  }
+  for (const output of outputs) {
+    if (sameCourier(output.courier, "propio") || !guideFailedAfterDispatch(output)) continue;
+    const at = output.dispatched_at ?? output.updated_at;
+    if (!at) continue;
+    const courier = (output.courier ?? "").trim().toLowerCase();
+    if (courier === "aliclik") {
+      attempts.push({ carrier: aliclikCarrier(output.aliclik_transport_name), reason: aliclikChainReason(output.reported_status, output.aliclik_sub_status), at });
+    } else if (courier === "urpi") {
+      attempts.push({ carrier: "urpi", reason: urpiChainReason(urpiLast?.result_code, urpiLast?.reason), at });
+    } else {
+      attempts.push({ carrier: "otro", reason: null, at });
+    }
+  }
+  return attempts;
 }
 
 function newest<T>(rows: readonly T[], at: (row: T) => string | null | undefined): T | null {
@@ -355,6 +418,20 @@ export async function loadReproFacts(
   const { data: riders } = await courierRowsByIds(riderIds, (chunk) => admin.from("riders").select("id,full_name").in("id", chunk));
   const riderName = new Map((riders as Array<{ id: string; full_name: string }>).map((rider) => [rider.id, rider.full_name]));
 
+  // El último reporte de Urpi de los pedidos con una guía de Urpi que no
+  // entregó: su resultado y su motivo (texto libre) deciden la cadena.
+  const urpiOrderIds = [...new Set(shipments
+    .filter((row) => (row.courier ?? "").trim().toLowerCase() === "urpi" && row.order_id && guideFailedAfterDispatch(row))
+    .map((row) => row.order_id as string))];
+  const { data: urpiRows } = await courierRowsByIds(urpiOrderIds, (chunk) =>
+    admin.from("urpi_report_rows").select("order_id,report_date,urpi_row,result_code,data").in("order_id", chunk));
+  const urpiLastByOrder = new Map<string, { result_code: string | null; reason: string | null; key: string }>();
+  for (const row of urpiRows as Array<{ order_id: string; report_date: string | null; urpi_row: number | null; result_code: string | null; data: { reason?: string | null } | null }>) {
+    const key = `${row.report_date ?? ""}#${String(row.urpi_row ?? 0).padStart(9, "0")}`;
+    const prev = urpiLastByOrder.get(row.order_id);
+    if (!prev || key > prev.key) urpiLastByOrder.set(row.order_id, { result_code: row.result_code, reason: row.data?.reason ?? null, key });
+  }
+
   const group = <T extends { order_id: string | null }>(rows: readonly T[]): Map<string, T[]> => {
     const map = new Map<string, T[]>();
     for (const row of rows) {
@@ -409,7 +486,11 @@ export async function loadReproFacts(
       // El mismo orden que el episodio: el día de la ruta y el nacimiento de la
       // parada antes que `reported_at`, que cada corrección del reporte reescribe.
       .sort(compareEpisodeStops);
-    const episode = reproEpisode({ orderId, outputs, failedStops });
+    const inStage = order?.macro_stage === "en_curso" && order?.macro_substage === "por_reprogramar_lima";
+    const attentionEligible = order?.coverage === "lima" && ["por_confirmar", "preparacion", "por_despachar", "en_curso"].includes(order.macro_stage ?? "");
+    const episode = !inStage && attentionEligible
+      ? { key: `attention:${orderId}`, at: null }
+      : reproEpisode({ orderId, outputs, failedStops });
     let failedOutput: ReproShipmentRow | null = null;
     for (const output of outputs) {
       if (!guideFailedAfterDispatch(output)) continue;
@@ -474,7 +555,8 @@ export async function loadReproFacts(
       storeId,
       orgId,
       order,
-      inStage: order?.macro_stage === "en_curso" && order?.macro_substage === "por_reprogramar_lima",
+      inStage,
+      attentionEligible,
       cancelled: Boolean(base?.cancelled_at),
       outputs,
       failedStops,
@@ -503,6 +585,10 @@ export async function loadReproFacts(
       open,
       latestClosed,
       reopened,
+      retryChain: withDismissal(
+        limaRetryChain(chainAttempts(failedStops, outputs, urpiLastByOrder.get(orderId) ?? null), new Date()),
+        newest(orderEvents.filter((event) => event.kind === "lima_retry_dismissed"), (event) => event.occurred_at)?.occurred_at ?? null,
+      ),
     });
   }
   return out;
@@ -520,11 +606,15 @@ export async function loadReproFacts(
  *   viejos. No se cierra nada; se pide volver a intentarlo.
  */
 export function reproCaseProblem(
-  facts: Pick<ReproFacts, "inStage" | "cancelled" | "episode">,
+  facts: Pick<ReproFacts, "inStage" | "cancelled" | "episode" | "attentionEligible">,
   c: Pick<ReproCaseRow, "episode_key" | "episode_at">,
 ): { reason: Exclude<ReproCloseReason, "desarmar_cerrar"> | "cambio"; message: string } | null {
-  if (!facts.inStage || facts.cancelled) {
-    return { reason: "fuera_de_etapa", message: "Este pedido ya no está en «Por reprogramar Lima»." };
+  const attention = c.episode_key.startsWith("attention:");
+  if (facts.cancelled || !(attention ? facts.attentionEligible : facts.inStage)) {
+    return { reason: "fuera_de_etapa", message: attention ? "Este pedido ya no está pendiente de entrega en Lima." : "Este pedido ya no está en «Por reprogramar Lima»." };
+  }
+  if (attention && facts.inStage) {
+    return { reason: "nuevo_intento", message: "El pedido tiene un fallo de entrega: vuelve a abrir su atención." };
   }
   if (facts.episode.key !== c.episode_key) {
     const freshAt = Date.parse(facts.episode.at ?? "");

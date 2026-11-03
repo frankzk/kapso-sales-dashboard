@@ -7,22 +7,30 @@
 // TypeScript — son tres consultas pequeñas de un solo pedido, no hacen falta
 // joins (que PostgREST tampoco daría).
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { masterCohortQuery } from "@/lib/agency-payment-cohort-access";
+import { customerNameFromRaw, type CustomerNameSnapshot } from "@/lib/order-customer-name";
 import { unstable_cache } from "next/cache";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
+import { leadCallsForOrder, type CustomerOrderRef } from "@/lib/lead-calls-by-order";
 import {
   shopifyDepartamentoElegido,
   shopifyOrderNote,
   shopifyShippingAddress,
 } from "@/lib/shopify-address";
 import { orderTotals, type OrderTotals } from "@/lib/order-totals";
+import { orderPuntoSource, puntoCollect, type OrderPuntoSource, type PuntoCollect } from "@/lib/order-punto";
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { loadAliclikOutlook } from "@/lib/aliclik-outlook-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
+import { logisticsCostFactsFromRow } from "@/lib/closure-blocks";
+import { isOwnCourier } from "@/lib/costs";
+import { loadGfCostTariffGap, type GfTariffCheck } from "@/lib/gf-tariff";
 import { courierKey } from "@/lib/dispatch";
 import { pickLatestBox, pickLatestStop, type GfBoxItem, type GfDelivery, type GfStop } from "@/lib/gf-delivery";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
@@ -68,9 +76,12 @@ import type {
   OrderEventRow,
   OrderLineItem,
   OrderMasterRow,
+  OrderPlatform,
   ShipmentCallRow,
   ShipmentRow,
 } from "@/lib/types";
+import { orderPlatform } from "@/lib/order-admin-url";
+import { orderOrigin, orderOriginRawFacts, type OrderOrigin } from "@/lib/order-origin";
 import {
   AGENCY_AVAILABLE_STATES,
   ATTEMPTS_OR_MORE,
@@ -78,11 +89,18 @@ import {
   MANAGEMENT_DAY_STEPS,
   masterSearchTerm,
   PAYMENT_CHECK_NONE,
+  paymentStatesForFilter,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
 import { compareDispatchCodes } from "@/lib/dispatched-with";
+import { pgTextArrayLiteral, type ProductOptionRow } from "@/lib/order-product-titles";
+import { isHistoricalShopifyOrder, legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
+import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
+import { loadPendingVouchers } from "@/lib/pending-voucher-access";
+import { AGENCY_DEADLINE_ALERT_MS, paidUnnotifiedFilterIds } from "@/lib/agency-pickup-alert";
+import { loadPaidUnnotified } from "@/lib/agency-pickup-alert-access";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
   ORDER_MACRO_STAGES,
@@ -132,6 +150,12 @@ export class OrderMasterReadError extends Error {
 // —dirección, referencia, coordenadas, origen de la geo— lo trae el detalle al
 // abrir un pedido (`getOrderMasterDetail`, que sí lee la fila entera), que es
 // exactamente cuando hace falta y para UN pedido, no para diez mil.
+// Los hechos de Cobro también identifican el prepago junto al código en la tabla.
+const MASTER_PAYMENT_COLUMNS = [
+  "financial_status",
+  "total_refunded",
+  "payment_gateway",
+] as const;
 const MASTER_COLUMNS =
   "id,store_id,order_id,order_name,order_created_at,customer_name," +
   "customer_phone,region,province,district," +
@@ -145,6 +169,7 @@ const MASTER_COLUMNS =
   "courier_count,attempt_count,guide_code,dispatched_at,delivered_at,delivered_courier,returned_at," +
   "last_movement_at,comment_count,logistics_cost,pickup_state,payment_state," +
   "payment_check_state," +
+  `${MASTER_PAYMENT_COLUMNS.join(",")},` +
   // El panel de Aliclik decide con estas dos si enseña "el pedido ya tiene
   // coordenada" o "obligatoria, el pedido no la tiene". Sin traerlas llegaban
   // como `undefined` y el panel decía SIEMPRE que faltaba, también en pedidos
@@ -163,12 +188,6 @@ export const MASTER_DETAIL_EXTRA_COLUMNS = [
   "reference",
   "geo_source",
   "status_source",
-  // Cómo se cobró (0128): el panel del drawer decide con esto si pide
-  // comprobante o solo enseña la constancia de que ya está pagado.
-  "financial_status",
-  "total_refunded",
-  // Por dónde entró el dinero (0153): solo el checkout se salta las constancias.
-  "payment_gateway",
 ] as const;
 const MASTER_DETAIL_COLUMNS =
   `${MASTER_COLUMNS},${MASTER_DETAIL_EXTRA_COLUMNS.join(",")}`;
@@ -296,9 +315,7 @@ export async function getOrderMasterFilteredMomCounts(
   const sb = await createServerSupabase();
   const now = params.now ?? new Date();
   const count = async (column: "macro_stage" | "macro_substage", value: string): Promise<number> => {
-    const q = sb
-      .from("order_master")
-      .select("id", { count: "exact", head: true })
+    const q = masterCohortQuery(sb, storeIds, params.filters, "id", { count: "exact", head: true })
       .in("store_id", storeIds)
       .eq(column, value);
     const { count: n, error } = await applyServerFilters(q, params.filters, now);
@@ -476,10 +493,41 @@ export function leadCallsToTimeline(
   }));
 }
 
+/**
+ * Los hechos de `order_events`, como entradas de la línea de tiempo. Puro y
+ * exportado para probarlo. `actor` es siempre un usuario de Kapta: quien anuló
+ * un pedido en WooCommerce (MOM §38.3) no lo es, y va en la nota del hecho
+ * («por María Torres»), no aquí.
+ */
+export function orderEventsToTimeline(
+  events: readonly OrderEventRow[],
+  names: Map<string, string>,
+): TimelineEntry[] {
+  return events.map((e) => ({
+    id: `event:${e.id}`,
+    occurredAt: e.occurred_at,
+    kind: e.kind,
+    source: e.source,
+    courier: e.courier,
+    guideCode: e.guide_code,
+    previousStatus: e.previous_status,
+    newStatus: e.new_status,
+    note: e.note,
+    reason: e.reason,
+    actorName: e.actor ? (names.get(e.actor) ?? null) : null,
+    origin: "master",
+    statusLabel: null,
+    confirmation: confirmationAttemptDetail(e.payload),
+  }));
+}
+
 export interface OrderMasterDetail {
+  customerName?: CustomerNameSnapshot;
   row: OrderMasterRow;
   guides: ShipmentRow[];
   timeline: TimelineEntry[];
+  /** Evidencia GF para terminar una venta que volvió a oficina para reprogramar. */
+  wooSaleDispatchEvents?: Pick<OrderEventRow, "kind" | "shipment_id" | "source" | "actor">[];
   lineItems: OrderLineItem[];
   /**
    * Los importes del pedido tal como los manda Shopify (subtotal, descuento,
@@ -500,6 +548,18 @@ export interface OrderMasterDetail {
    *  llevar lo que Shopify no tiene dónde guardar —el DNI del destinatario, la
    *  agencia— y hasta ahora solo se veía entrando al admin de Shopify. */
   shopifyNote: string | null;
+  /**
+   * Por dónde entró el pedido, con su evidencia (lib/order-origin.ts, MOM §3
+   * «Origen en la ficha»). Solo en la ficha: se lee para un pedido, no por fila.
+   */
+  origin: OrderOrigin;
+  /**
+   * Lo que la pestaña Punto necesita (`lib/order-punto.ts`): de `orders.raw`, la
+   * dirección con código postal, el total vigente y la nota tal cual; y lo que
+   * se cobra, el saldo (`puntoCollect`, 25-10-2026). El texto se arma en la
+   * ficha, que es la que sabe el nombre de la tienda.
+   */
+  punto: OrderPuntoSource & { collect: PuntoCollect };
   /**
    * Salidas que nacieron «por definir» y a las que se les escribió encima la
    * guía de un courier (evento `route_output_filled`).
@@ -540,6 +600,28 @@ export interface OrderMasterDetail {
    * paquete y en qué quedó. Vacío si el pedido no pasó por una caja ni ruta.
    */
   gfDeliveries: GfDelivery[];
+  /**
+   * Grupo GF sin tarifa en su Tarifario (MOM §14, mom-v1.31): por qué y, si la
+   * del distrito empieza después del día del costo, desde cuándo rige; o
+   * `vigente`, si el Tarifario ya la tiene y la fila es vieja. Solo cuando la
+   * Mesa de cierre va a avisar de una tarifa que falta; si no, null.
+   */
+  gfCostTariffGap: GfTariffCheck | null;
+  /**
+   * `orders.cancelled_at`: anulado en Shopify. Lo que lee la puerta a
+   * «entregado» (lib/master-door.ts); la Mesa de cierre lo usa para no
+   * prometer que cerrar la ruta lo marca entregado (MOM §11.4, §29.13).
+   */
+  shopifyCancelledAt: string | null;
+  /** La venta histórica se anuló solo en Kapta (§38.16). */
+  legacySaleCancelledAt?: string | null;
+  legacySaleEligible?: boolean;
+  /**
+   * `orders.platform` (0274, MOM §38): de qué tienda vino el pedido. Con esto,
+   * y nunca con la forma del id, la ficha arma el enlace al admin y nombra la
+   * tienda (`orderAdminLink`, §38.12). Sin la columna, `shopify`.
+   */
+  platform: OrderPlatform;
   /** Pedido acompañante (MOM §32): en qué caja viaja y qué lleva en las suyas. */
   companion: OrderCompanionInfo;
   /**
@@ -773,6 +855,7 @@ async function loadGfDeliveries(orderId: string, guides: readonly ShipmentRow[])
       pickupConfirmed: st.pickup_confirmed,
       routeDate: route?.route_date ?? null,
       routeStatus: route?.status ?? null,
+      routeId: st.route_id,
       riderName: route?.rider_id ? riderNames.get(route.rider_id) ?? null : null,
       seq: st.seq,
     };
@@ -832,6 +915,20 @@ async function swaypRouteCheck(
 }
 
 
+/**
+ * Grupo GF en la Mesa de cierre: por qué su Tarifario no le da tarifa, solo si
+ * la Mesa va a avisar de una que falta (Por cerrar con la liquidación abierta,
+ * sin costo y con «propio» como courier del costo). Cuatro lecturas pequeñas.
+ */
+async function loadGfCostTariffGapFor(sb: SupabaseClient, row: OrderMasterRow): Promise<GfTariffCheck | null> {
+  const reasons = row.macro_reasons ?? [];
+  if (row.macro_stage !== "por_cerrar" || row.logistics_cost !== null) return null;
+  if (!reasons.includes("pendiente_liquidacion") && !reasons.includes("liquidacion_observada")) return null;
+  const facts = logisticsCostFactsFromRow(row);
+  if (!isOwnCourier(facts.courier) || !facts.day) return null;
+  return loadGfCostTariffGap(sb, { storeId: row.store_id, district: row.district, day: facts.day });
+}
+
 function operationOf(row: OrderMasterRow, guides: ShipmentRow[]): OperationKind {
   // Cobertura y courier son señales vivas. Ganan sobre `macro_operation`, que
   // puede conservar una clasificación anterior hasta el siguiente recálculo.
@@ -856,14 +953,71 @@ function withRuntimeCoverage(row: OrderMasterRow): OrderMasterRow {
   return isNonMetroLimaLocation(row) ? { ...row, coverage: "agencia" } : row;
 }
 
+/** Las columnas de `orders` que lee la ficha (sin `platform`, que va aparte). */
+const ORDER_DETAIL_COLUMNS = "line_items,raw,cancelled_at,tags,kapso_conversation_id";
+
+/**
+ * La fila de `orders` que la ficha necesita, con su `platform` (0274, MOM
+ * §38.12). Sin la 0274 la columna no existe y la lectura falla: se repite sin
+ * ella y el pedido es de Shopify, como siempre. Perder las líneas y los totales
+ * por una columna nueva sería peor que no saber la plataforma.
+ */
+/**
+ * Los hechos del «Origen» (lib/order-origin.ts) que no están en `orders`: la
+ * venta registrada de la asesora y el lead de esa venta, el borrador que terminó
+ * en este pedido y la prueba de recompra. Solo para la ficha de UN pedido —tres
+ * lecturas por clave, más el lead—, nunca para listas. Una lectura que falla es
+ * un dato que falta: el origen dice lo que sí se sabe.
+ */
+async function loadOrderOriginSources(sb: SupabaseClient, row: OrderMasterRow, orderId: string) {
+  const ref = (row.shopify_order_id ?? "").trim();
+  const draftGids = ref ? [ref, `gid://shopify/Order/${ref}`] : [];
+  const [saleRes, draftRes, trialRes] = await Promise.all([
+    Promise.resolve(
+      sb.from("order_sales").select("vendedora,lead_id,source").eq("order_id", orderId).limit(1).maybeSingle(),
+    ).catch(() => ({ data: null })),
+    draftGids.length
+      ? Promise.resolve(
+          sb.from("draft_orders").select("name").eq("store_id", row.store_id).in("order_gid", draftGids).limit(1),
+        ).catch(() => ({ data: null }))
+      : Promise.resolve({ data: null }),
+    ref
+      ? Promise.resolve(
+          sb.from("auto_order_trials").select("id").eq("store_id", row.store_id).eq("shopify_order_id", ref).limit(1),
+        ).catch(() => ({ data: null }))
+      : Promise.resolve({ data: null }),
+  ]);
+  const sale = (saleRes.data ?? null) as { vendedora: string | null; lead_id: string | null; source: string | null } | null;
+  let leadSource: string | null = null;
+  if (sale?.lead_id) {
+    const { data } = await Promise.resolve(sb.from("leads").select("source").eq("id", sale.lead_id).maybeSingle()).catch(
+      () => ({ data: null }),
+    );
+    leadSource = (data as { source?: string | null } | null)?.source ?? null;
+  }
+  const drafts = (draftRes.data ?? []) as { name: string | null }[];
+  const trials = (trialRes.data ?? []) as unknown[];
+  return { sale, leadSource, draftName: drafts[0]?.name ?? null, autoOrderTrial: trials.length > 0 };
+}
+
+async function readOrderForDetail(sb: SupabaseClient, orderId: string) {
+  const read = (columns: string) => sb.from("orders").select(columns).eq("id", orderId).maybeSingle();
+  const res = await read(`${ORDER_DETAIL_COLUMNS},platform`);
+  return res.error ? read(ORDER_DETAIL_COLUMNS) : res;
+}
+
 /**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo
  * cronológica y los productos. La línea de tiempo MEZCLA `order_events` (lo del
  * Master) con `shipment_calls` (las gestiones de Repro Provincia) — por eso el
  * Master no necesita duplicar las gestiones en una tabla propia.
  */
-export async function getOrderMasterDetail(orderId: string): Promise<OrderMasterDetail | null> {
-  const sb = await createServerSupabase();
+export async function getOrderMasterDetail(
+  orderId: string,
+  /** Sin sesión (la guía automática, MOM §6.2): el service role. */
+  client?: SupabaseClient,
+): Promise<OrderMasterDetail | null> {
+  const sb = client ?? (await createServerSupabase());
 
   const { data: rowData, error: rowError } = await sb
     .from("order_master")
@@ -880,8 +1034,8 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   if (!rowData) return null;
   const row = withRuntimeCoverage(rowData as unknown as OrderMasterRow);
 
-  const [orderRes, guidesRes, eventsRes, tasksRes] = await Promise.all([
-    sb.from("orders").select("line_items,raw").eq("id", orderId).maybeSingle(),
+  const [orderRes, guidesRes, eventsRes, tasksRes, migrationRes, originSources] = await Promise.all([
+    readOrderForDetail(sb, orderId),
     sb.from("shipments").select(GUIDE_COLUMNS).eq("order_id", orderId).order("created_at"),
     sb
       .from("order_events")
@@ -894,6 +1048,8 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       .eq("order_id", orderId)
       .eq("status", "pending")
       .order("due_on", { ascending: true }),
+    sb.from("stores").select("platform,platform_switched_at").eq("id", row.store_id).maybeSingle(),
+    loadOrderOriginSources(sb, row, orderId),
   ]);
 
   const guides = (guidesRes.data ?? []) as unknown as ShipmentRow[];
@@ -917,7 +1073,37 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
   // El vínculo es `leads.order_id`. Se leen todos los que apunten a este pedido
   // —normalmente uno— porque dos leads del mismo cliente pueden acabar en el
   // mismo pedido y descartar el segundo escondería trabajo que sí ocurrió.
-  const { data: leadRows } = await sb.from("leads").select("id").eq("order_id", orderId);
+  //
+  // Y los que apuntan a OTRO pedido del mismo cliente: el lead apunta a la
+  // última venta, así que el pedido anterior solo encuentra su historial por
+  // ahí. Cada gestión se queda en el pedido al que pertenece
+  // (`leadCallsForOrder`, MOM §25): sin eso el pedido nuevo heredaba el ciclo
+  // del anterior —#KP141951 mostraba la guía de #KP134581— y el anterior lo
+  // perdía.
+  let customerOrders: CustomerOrderRef[] = [
+    { order_id: orderId, order_name: row.order_name, order_created_at: row.order_created_at },
+  ];
+  const customerPhone = (row.customer_phone ?? "").trim();
+  if (customerPhone) {
+    const { data, error } = await sb
+      .from("order_master")
+      .select("order_id,order_name,order_created_at")
+      .eq("store_id", row.store_id)
+      .eq("customer_phone", customerPhone)
+      .order("order_created_at", { ascending: false })
+      .limit(50);
+    if (!error && data?.length) {
+      const others = (data as CustomerOrderRef[]).filter((o) => o.order_id !== orderId);
+      customerOrders = [...customerOrders, ...others];
+    }
+  }
+  const { data: leadRows } = await sb
+    .from("leads")
+    .select("id")
+    .in(
+      "order_id",
+      customerOrders.map((o) => o.order_id),
+    );
   const leadIds = ((leadRows ?? []) as { id: string }[]).map((l) => l.id);
   let leadCalls: LeadCallTimelineRow[] = [];
   if (leadIds.length) {
@@ -926,7 +1112,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       .select("id,lead_id,vendedora,kind,new_status,note,occurred_at")
       .in("lead_id", leadIds)
       .order("occurred_at", { ascending: true });
-    leadCalls = (data ?? []) as unknown as LeadCallTimelineRow[];
+    leadCalls = leadCallsForOrder((data ?? []) as unknown as LeadCallTimelineRow[], customerOrders, orderId);
   }
 
   let calls: ShipmentCallRow[] = [];
@@ -950,28 +1136,14 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
         ...calls.map((c) => c.agent),
         ...leadCalls.map((c) => c.vendedora),
         ...taskRows.map((task) => task.assigned_to),
+        originSources.sale?.vendedora,
       ].filter((v): v is string => typeof v === "string" && v.length > 0),
     ),
   ];
   const names = await resolveEmails(actorIds);
   const guideById = new Map(guides.map((g) => [g.id, g]));
 
-  const fromEvents: TimelineEntry[] = events.map((e) => ({
-    id: `event:${e.id}`,
-    occurredAt: e.occurred_at,
-    kind: e.kind,
-    source: e.source,
-    courier: e.courier,
-    guideCode: e.guide_code,
-    previousStatus: e.previous_status,
-    newStatus: e.new_status,
-    note: e.note,
-    reason: e.reason,
-    actorName: e.actor ? (names.get(e.actor) ?? null) : null,
-    origin: "master",
-    statusLabel: null,
-    confirmation: confirmationAttemptDetail(e.payload),
-  }));
+  const fromEvents = orderEventsToTimeline(events, names);
 
   const fromLeads = leadCallsToTimeline(leadCalls, names);
 
@@ -1009,7 +1181,14 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     payload: task.payload ?? {},
   }));
 
-  const orderRow = orderRes.data as { line_items?: OrderLineItem[]; raw?: unknown } | null;
+  const orderRow = orderRes.data as {
+    line_items?: OrderLineItem[];
+    raw?: unknown;
+    cancelled_at?: string | null;
+    platform?: unknown;
+    tags?: unknown[] | null;
+    kapso_conversation_id?: string | null;
+  } | null;
   const rawItems = orderRow?.line_items ?? [];
   // La foto no viene en el line item de Shopify: se adjunta desde el espejo
   // (migración 0164). Sin espejo, la miniatura degrada a la inicial y el pedido
@@ -1019,7 +1198,7 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1035,7 +1214,26 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
       return [] as GfDelivery[];
     }),
     loadOrderCompanionInfo(sb, row),
+    // Un aviso más preciso, no un dato del pedido: si falla, la Mesa dice el
+    // de siempre y el servidor el preciso.
+    loadGfCostTariffGapFor(sb, row).catch((cause) => {
+      console.error("[order-detail] loadGfCostTariffGap", orderId, cause);
+      return null;
+    }),
+    // Los pagos de la clienta, para el saldo del Punto. Si no se leen, el
+    // Punto no adivina el monto (null) y la ficha lo avisa.
+    Promise.resolve(sb.from("order_payments").select("kind,amount,validation_status").eq("order_id", orderId)).then(
+      ({ data, error }) => {
+        if (error) {
+          console.error("[order-detail] order_payments", orderId, error.message);
+          return null;
+        }
+        return (data ?? []) as { kind: string; amount: number | null; validation_status: string }[];
+      },
+      () => null,
+    ),
   ]);
+  const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
   return {
     row,
     guides,
@@ -1046,10 +1244,49 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
     aliclikOutlook,
     tasks,
     gfDeliveries,
+    gfCostTariffGap,
+    shopifyCancelledAt: orderRow?.cancelled_at ?? null,
+    legacySaleCancelledAt: legacySaleCancelledAt(events),
+    wooSaleDispatchEvents: events.filter((e) => e.kind === "returned_to_office" && e.source === "dispatch" && e.actor)
+      .map(({kind,shipment_id,source,actor}) => ({kind,shipment_id,source,actor})),
+    legacySaleEligible: !migrationRes.error && isHistoricalShopifyOrder({
+      orderPlatform: orderPlatform(orderRow?.platform), orderCreatedAt: row.order_created_at,
+      storePlatform: migrationRes.data?.platform ?? null, switchedAt: migrationRes.data?.platform_switched_at ?? null,
+    }),
+    platform: orderPlatform(orderRow?.platform),
+    customerName: customerNameFromRaw(orderRow?.raw,row.customer_name),
     companion,
     address: shopifyShippingAddress(orderRow?.raw),
     departamentoElegido: shopifyDepartamentoElegido(orderRow?.raw),
     shopifyNote: shopifyOrderNote(orderRow?.raw),
+    origin: orderOrigin({
+      platform: orderPlatform(orderRow?.platform),
+      tags: orderRow?.tags ?? null,
+      kapsoConversationId: orderRow?.kapso_conversation_id ?? null,
+      paymentGateway: row.payment_gateway ?? null,
+      raw: orderOriginRawFacts(orderRow?.raw),
+      sale: originSources.sale
+        ? {
+            sellerName: originSources.sale.vendedora ? (names.get(originSources.sale.vendedora) ?? null) : null,
+            source: originSources.sale.source,
+            leadSource: originSources.leadSource,
+          }
+        : null,
+      draftName: originSources.draftName,
+      autoOrderTrial: originSources.autoOrderTrial,
+    }),
+    punto: {
+      ...puntoSource,
+      collect: puntoCollect(
+        puntoSource.total,
+        {
+          financialStatus: row.financial_status,
+          totalRefunded: row.total_refunded,
+          paymentGateway: row.payment_gateway,
+        },
+        puntoPayments,
+      ),
+    },
     filledOutputIds: [...filledShipmentIds(events)],
     receivedReturnIds: [...new Set(events.filter((e) => e.kind === "return_received" && e.shipment_id).map((e) => e.shipment_id as string))],
     // MISMA pregunta que hace `createManualRouteOutput` antes de dejar crear la
@@ -1101,6 +1338,86 @@ export async function getOrderMasterDetail(orderId: string): Promise<OrderMaster
 
 /** Filas por página. 100 llena la pantalla y pesa ~100 KB, frente a los 9,5 MB
  *  que costaba bajar la tabla entera. */
+/**
+ * «Comprobante por validar» de las tiendas del Master (MOM §16.1), leído en
+ * vivo de `order_payments` con la sesión de quien mira (la RLS decide). UNA
+ * consulta por carga: con el índice se decoran las 100 filas de la página, se
+ * cuenta la píldora y se resuelve el filtro. `null` = la lectura falló.
+ */
+export async function getPendingVoucherIndex(
+  storeIds: string[],
+): Promise<Map<string, PendingVoucherSummary> | null> {
+  if (!storeIds.length) return new Map();
+  return loadPendingVouchers(await createServerSupabase(), storeIds);
+}
+
+/**
+ * Los filtros con los pedidos de «Comprobante por validar» ya resueltos, para
+ * que `applyServerFilters` —que es síncrona y la comparten la página, los
+ * conteos y el Excel— no tenga que consultar nada. Sin el filtro puesto,
+ * devuelve los mismos filtros.
+ */
+export function withPendingVoucherFilter(
+  filters: MasterFilters,
+  index: ReadonlyMap<string, PendingVoucherSummary> | null,
+): MasterFilters {
+  if (!filters.pendingVoucher) return filters;
+  return { ...filters, pendingVoucherOrderIds: index ? [...index.keys()] : null };
+}
+
+/**
+ * «Pagado sin aviso» de las tiendas del Master (MOM §12): pagados, en la
+ * agencia con el plazo por vencer o vencido y sin aviso de llegada enviado.
+ * Dos consultas por carga, con la sesión de quien mira (la RLS decide).
+ * `null` = la lectura falló.
+ */
+export async function getPaidUnnotifiedIds(storeIds: string[]): Promise<Set<string> | null> {
+  if (!storeIds.length) return new Set();
+  return loadPaidUnnotified(await createServerSupabase(), storeIds);
+}
+
+/** Como `withPendingVoucherFilter`: los pedidos del filtro ya resueltos. */
+export function withPaidUnnotifiedFilter(filters: MasterFilters, ids: ReadonlySet<string> | null): MasterFilters {
+  if (!filters.paidUnnotified) return filters;
+  return { ...filters, paidUnnotifiedOrderIds: ids ? [...ids] : null };
+}
+
+/**
+ * «Programado sin ubicación» (MOM §6.2, owner 30-10-2026) como filtro de la
+ * base: con fecha de envío (cualquiera: hoy, vencida o futura), cobertura
+ * «Por revisar» o sin calcular, y sin región, distrito o dirección. Es la
+ * misma regla que `scheduledWithoutLocation`; el Master guarda el vacío como
+ * null (medido el 30-10-2026: ninguna fila con cadena vacía en esas columnas).
+ * Se exporta para probar la URL.
+ */
+export function applyScheduledNoLocation<T>(query: T): T {
+  return (query as any)
+    .not("dispatch_scheduled_on", "is", null)
+    .or("coverage.is.null,coverage.eq.por_revisar")
+    .or("region.is.null,district.is.null,address.is.null") as T;
+}
+
+/**
+ * Los pedidos «Programado sin ubicación» de las tiendas del Master. UNA
+ * consulta de ids (son pocos: 1 el 30-10-2026) con la sesión de quien mira, a
+ * la par del resto de la carga: cuenta la píldora y marca las filas de la
+ * página sin traer la dirección a la tabla (la lista no la lee, por peso).
+ * `null` = no se pudo leer: la píldora no enseña un cero.
+ */
+export async function getScheduledNoLocationIds(storeIds: string[]): Promise<Set<string> | null> {
+  if (!storeIds.length) return new Set();
+  try {
+    const sb = await createServerSupabase();
+    const { data, error } = await applyScheduledNoLocation(
+      sb.from("order_master").select("order_id").in("store_id", storeIds),
+    ).limit(1000);
+    if (error) return null;
+    return new Set(((data ?? []) as { order_id: string }[]).map((r) => r.order_id));
+  } catch {
+    return null;
+  }
+}
+
 export const MASTER_PAGE_SIZE = 100;
 
 export interface MasterPage {
@@ -1167,6 +1484,14 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.generalStatuses.size) q = q.in("general_status", [...f.generalStatuses]);
   if (f.operationalStatuses.size) q = q.in("operational_status", [...f.operationalStatuses]);
   if (f.shippingModes.size) q = q.in("shipping_mode", [...f.shippingModes]);
+  // Estado del pedido (incluye prepago web), independiente del cobro del courier.
+  const paymentStates = paymentStatesForFilter(f.paymentStates);
+  if (paymentStates.length) {
+    const states = paymentStates.filter((state): state is string => state !== null);
+    q = paymentStates.includes(null)
+      ? q.or(`payment_state.is.null,payment_state.in.(${states.join(",")})`)
+      : q.in("payment_state", states);
+  }
   if (f.regions.size) q = q.in("region", [...f.regions]);
   if (f.provinces.size) q = q.in("province", [...f.provinces]);
   if (f.districts.size) q = q.in("district", [...f.districts]);
@@ -1174,6 +1499,10 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
   if (f.swaypAvailability.size) q = q.in("swayp_availability", [...f.swaypAvailability]);
   if (f.salesChannels.size) q = q.in("sales_channel", [...f.salesChannels]);
   if (f.dispatchedWith.size) q = q.overlaps("dispatched_with", [...f.dispatchedWith]);
+  // «Producto» (0300): basta con uno. El arreglo va escrito con comillas porque
+  // un título puede llevar comas (`pgTextArrayLiteral`). Si la 0300 no está, la
+  // página quita este filtro antes de llegar aquí (`withAvailableProductFilter`).
+  if (f.products?.size) q = q.overlaps("product_titles", pgTextArrayLiteral([...f.products]));
   // «Programar envío» (0267): el día se compara contra hoy en Lima.
   if (f.dispatchDate) {
     const today = limaTodayKey(now);
@@ -1238,10 +1567,22 @@ export function applyServerFilters<T>(query: T, f: MasterFilters, now: Date): T 
     q = f.attempts >= ATTEMPTS_OR_MORE ? q.gte("attempt_count", ATTEMPTS_OR_MORE) : q.eq("attempt_count", f.attempts);
   }
 
+  // «Comprobante por validar» (MOM §16.1). No es una columna del Master: los
+  // pedidos los resolvió antes el servidor leyendo `order_payments` en vivo
+  // (`withPendingVoucherFilter`). Sin resolver, o con la lectura caída, no trae
+  // ninguno: un filtro sin efecto listaría TODOS bajo un título que dice otra cosa.
+  if (f.pendingVoucher) q = q.in("order_id", pendingVoucherFilterIds(f.pendingVoucherOrderIds));
+
+  // «Pagado sin aviso» (MOM §12): resuelto antes, como el de arriba.
+  if (f.paidUnnotified) q = q.in("order_id", paidUnnotifiedFilterIds(f.paidUnnotifiedOrderIds));
+
+  // «Programado sin ubicación» (MOM §6.2): columnas del Master, en la base.
+  if (f.scheduledNoLocation) q = applyScheduledNoLocation(q);
+
   if (f.expiringSoon) {
     // Incluye lo ya vencido: es justamente lo que hay que trabajar hoy para que
     // el paquete no se devuelva.
-    const limit = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+    const limit = new Date(now.getTime() + AGENCY_DEADLINE_ALERT_MS).toISOString();
     q = q.not("agency_expires_at", "is", null).lte("agency_expires_at", limit);
   }
 
@@ -1461,9 +1802,7 @@ export async function getConfirmationQueueCounts(
 
   const rows: ConfirmationQueueRow[] = [];
   for (let from = 0; from < MAX_LIST; from += PAGE) {
-    let query = sb
-      .from("order_master")
-      .select(CONFIRMATION_QUEUE_COLUMNS)
+    let query = masterCohortQuery(sb, storeIds, base, CONFIRMATION_QUEUE_COLUMNS)
       .in("store_id", storeIds)
       .eq("macro_stage", "por_confirmar");
     if (params.substage) query = query.eq("macro_substage", params.substage);
@@ -1552,9 +1891,7 @@ export async function getOrderMasterPage(
   }
 
   const build = (select: string, opts?: { count: "exact"; head: true }) => {
-    let q = opts
-      ? sb.from("order_master").select(select, opts)
-      : sb.from("order_master").select(select);
+    let q = masterCohortQuery(sb, storeIds, effectiveFilters, select, opts);
     q = q.in("store_id", storeIds) as typeof q;
     if (!searching && view !== "todos") q = q.eq("macro_stage", view) as typeof q;
     if (!searching && params.substage) q = q.eq("macro_substage", params.substage) as typeof q;
@@ -1576,7 +1913,10 @@ export async function getOrderMasterPage(
     })(),
   ]);
 
-  if (rowsRes.error) return empty;
+  if (rowsRes.error || countRes.error) {
+    if (effectiveFilters.agencyUnpaid) throw new Error("No se pudieron verificar los pendientes de pago de Agencia. Reintenta la consulta.");
+    return empty;
+  }
   return {
     rows: ((rowsRes.data ?? []) as unknown as OrderMasterRow[]).map(withRuntimeCoverage),
     total: countRes.count ?? 0,
@@ -1656,7 +1996,7 @@ async function loadAgencySummary(storeIds: string[]): Promise<AgencySummary> {
   // de este resumen —cliente, esta, y una `getAgencySummary` que ya no llamaba
   // nadie—, y arreglar la que no se ejecutaba no cambió nada en pantalla.
   const inAgency = (q: any) => q.or("pickup_state.not.is.null,shipping_mode.eq.agency");
-  const soon = new Date(now.getTime() + 2 * 86_400_000).toISOString();
+  const soon = new Date(now.getTime() + AGENCY_DEADLINE_ALERT_MS).toISOString();
   const [disponibles, proximosAVencer, retornoIniciado, pendienteDeEnvio, enTransito] =
     await Promise.all([
     count((q) => q.in("pickup_state", [...AGENCY_AVAILABLE_STATES])),
@@ -1674,6 +2014,44 @@ export const getMasterFacetsCached = (storeIds: string[]) =>
     ["master-facets", [...storeIds].sort().join(",")],
     { revalidate: FACETS_TTL_SECONDS },
   )();
+
+/**
+ * Las opciones del filtro «Producto» (0300): por tienda y producto, cuántos
+ * pedidos lo llevan. La píldora suma las de las tiendas elegidas.
+ *
+ * `null` = la función no respondió, que es lo que pasa mientras la 0300 no
+ * está aplicada: la píldora no se ofrece y la página ignora un `?pr=` que
+ * llegue por la URL (`withAvailableProductFilter`). El Master no se cae.
+ */
+async function loadProductOptions(storeIds: string[]): Promise<ProductOptionRow[] | null> {
+  if (!storeIds.length) return [];
+  const admin = createAdminSupabase();
+  const { data, error } = await admin.rpc("order_master_product_options", { p_store_ids: storeIds });
+  if (error || !Array.isArray(data)) return null;
+  return (data as Partial<ProductOptionRow>[])
+    .filter((r): r is ProductOptionRow => typeof r?.store_id === "string" && typeof r?.title === "string" && r.title.length > 0)
+    .map((r) => ({ store_id: r.store_id, title: r.title, orders: Number(r.orders) || 0 }));
+}
+
+export const getMasterProductOptionsCached = (storeIds: string[]) =>
+  unstable_cache(
+    async () => loadProductOptions(storeIds),
+    ["master-product-options", [...storeIds].sort().join(",")],
+    { revalidate: FACETS_TTL_SECONDS },
+  )();
+
+/**
+ * Sin la 0300 la columna `product_titles` no existe y pedir `&&` sobre ella
+ * sería un error de PostgREST: la lista, las pestañas y el Excel en blanco. Si
+ * las opciones no se pudieron leer, el filtro se quita y la pantalla lo avisa.
+ */
+export function withAvailableProductFilter(
+  filters: MasterFilters,
+  options: readonly ProductOptionRow[] | null,
+): MasterFilters {
+  if (!filters.products?.size || options) return filters;
+  return { ...filters, products: new Set() };
+}
 
 export const getAgencySummaryCached = (storeIds: string[]) =>
   unstable_cache(
@@ -1790,11 +2168,16 @@ export interface OrderConfirmationBrief {
  * Se lee con el cliente de sesión, así que la RLS decide qué pedidos anteriores
  * son visibles: el historial de un teléfono nunca cruza a una tienda que quien
  * mira no puede ver.
+ *
+ * La guía automática del día programado (MOM §6.2) no tiene sesión: pasa el
+ * service role con las tiendas de la organización del pedido, y el historial se
+ * acota a ellas a mano — el service role lo ve todo.
  */
 export async function getOrderConfirmationBrief(
   orderId: string,
+  scope?: { client: SupabaseClient; storeIds: readonly string[] },
 ): Promise<OrderConfirmationBrief | null> {
-  const sb = await createServerSupabase();
+  const sb = scope?.client ?? (await createServerSupabase());
   const { data: rowData } = await sb
     .from("order_master")
     .select("order_id,store_id,customer_phone,region,province,district,coverage,order_created_at")
@@ -1817,16 +2200,16 @@ export async function getOrderConfirmationBrief(
   const phone = (row.customer_phone ?? "").trim();
   let priors: PriorOrderSnapshot[] = [];
   if (phone) {
-    const { data } = await sb
+    let query = sb
       .from("order_master")
       .select(
         "order_id,order_name,order_created_at,general_status,operational_status,macro_stage,order_total," +
           "guide_code,current_courier,last_courier,delivered_courier,attempt_count",
       )
       .eq("customer_phone", phone)
-      .neq("order_id", orderId)
-      .order("order_created_at", { ascending: false })
-      .limit(50);
+      .neq("order_id", orderId);
+    if (scope) query = query.in("store_id", [...scope.storeIds]);
+    const { data } = await query.order("order_created_at", { ascending: false }).limit(50);
     priors = ((data ?? []) as unknown as PriorOrderSnapshot[]) ?? [];
   }
 

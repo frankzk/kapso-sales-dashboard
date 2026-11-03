@@ -19,7 +19,7 @@ import { macroStageLabel } from "@/lib/order-macro-stage";
 import { TODOS_POR_ENTREGAR, TODOS_SIN_SUBETAPA } from "@/lib/repro-lima-todos";
 
 const root = process.cwd();
-const read = (path: string) => readFileSync(resolve(root, path), "utf8");
+const read = (path: string) => readFileSync(resolve(root, path), "utf8").replace(/\r\n/g, "\n");
 /** El MOM en una línea: sus citas se parten al ajustar el párrafo. */
 const flat = (text: string) => text.replace(/\s+/g, " ");
 
@@ -29,7 +29,7 @@ function sourceFiles(dir: string): string[] {
     if (name === "node_modules" || name.startsWith(".")) continue;
     const full = join(resolve(root, dir), name);
     if (statSync(full).isDirectory()) out.push(...sourceFiles(relative(root, full)));
-    else if (/\.(ts|tsx)$/.test(name)) out.push(relative(root, full));
+    else if (/\.(ts|tsx)$/.test(name)) out.push(relative(root, full).replace(/\\/g, "/"));
   }
   return out;
 }
@@ -77,7 +77,7 @@ describe("quién entra (§9.5, D11, E32, E36)", () => {
     expect(gate).toContain('if (!user) redirect("/login");');
     expect(gate).toContain('permissions.can("repro_lima.manage")');
     expect(gate).toContain("await getAccessibleStores()");
-    expect(access).toContain('"Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo."');
+    expect(access).toContain('"Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo."');
     expect(access).toContain('"No tienes tiendas asignadas. Pide acceso en Equipo."');
     // Cada caso se mira contra la tienda antes de tocarlo.
     expect(actions).toContain("if (!scope.storeIds.has(row.store_id)) return { error: REPRO_OUTSIDE_STORE };");
@@ -305,7 +305,7 @@ describe("el historial: kinds propios que no gastan el cupo de confirmación (D3
   it("el Master no lee nada de esto: Repro Lima no subió la versión (D2; de la v1.27 a la v1.30 son por los intentos y «Salió con»)", () => {
     const macro = read("lib/order-macro-stage.ts");
     expect(macro).not.toMatch(/lima_repro|requested_date/);
-    expect(macro).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.30" as const;');
+    expect(macro).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.37" as const;');
   });
 });
 
@@ -361,7 +361,7 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
   it("y con los textos que dice la pantalla", () => {
     const text = flat(mom);
     for (const quote of [
-      "Repro Lima es de quien llama a los clientes o despacha (rol «Asesora» o «Despacho y Grupo GF»). Pide uno de esos roles en Equipo.",
+      "Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo.",
       "con acuerdo de Repro Lima: quedaron programados para su día (van al anaquel de ese día).",
       "con fecha acordada que ya pasó: vuelve a confirmarla en Repro Lima.",
       "Repro Lima: el cliente ya no lo quiere. Desármala (cuaderno «DESARMAR»); no va al estante.",
@@ -509,7 +509,6 @@ describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
     const files = ["app", "lib", "components"].flatMap(sourceFiles);
     expect(files.filter((f) => read(f).includes('"order_master_lima_open_counts"'))).toEqual(["lib/repro-lima-todos-access.ts"]);
     expect(files.filter((f) => read(f).includes("loadLimaOpenCounts(")).sort()).toEqual([
-      "app/dashboard/pedidos/repro-lima/page.tsx",
       "lib/repro-lima-todos-access.ts",
     ]);
   });
@@ -548,17 +547,12 @@ describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
       ["«Ya entregado, anulado o devuelto: falta cerrar»", todos, 'title="Ya entregado, anulado o devuelto: falta cerrar"'],
       ["«En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».»", todos, 'note="En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar»."'],
       ["«No hay pedidos de Lima sin estado final.»", todos, ">No hay pedidos de Lima sin estado final.</p>"],
-      ["«N todavía por entregar · M por cerrar», sin la segunda parte si es cero.", board, "</b> todavía por entregar"],
-      ["«N todavía por entregar · M por cerrar», sin la segunda parte si es cero.", board, '{todos.totals.porCerrar > 0 && ` · ${todos.totals.porCerrar.toLocaleString("es-PE")} por cerrar`}'],
       ["como «Sin subetapa»", pure, 'export const TODOS_SIN_SUBETAPA = "Sin subetapa";'],
       ["la ámbar «N con más de 7 días»", todos, '<Badge tone="warn">{`${fmt(s.over7)} con más de 7 días`}</Badge>'],
       ["la crítica «N con más de 30»", todos, '<Badge tone="crit">{`${fmt(s.over30)} con más de 30`}</Badge>'],
       ["«6 d en la etapa» de la fila", read("components/repro-lima-sheet.tsx"), "`${days} d en la etapa`"],
       ["«repro-lima: conteo de Todos»", todosAccess, '"repro-lima: conteo de Todos"'],
-      ["(`?vista=todos`)", board, 'searchParams.get("vista") === "todos"'],
       ["la fila abre «Por decidir»", todos, 'onOpenList("por_decidir")'],
-      ["Al tocarla se quita la búsqueda", board, 'onClick={() => { setQuery(""); showView("todos"); }}'],
-      ["con la tienda elegida y nunca con la búsqueda", board, "reproAging(storeScoped)"],
     ];
     for (const [quote, src, code] of pairs) {
       expect(block, quote).toContain(quote);

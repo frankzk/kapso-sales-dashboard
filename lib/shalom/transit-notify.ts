@@ -37,6 +37,15 @@
 // vez cada uno, y comparten número, horario, tope y botones con los otros dos.
 // Lo encola `lib/shalom/pickup-reminder.ts`; aquí solo se envía. Su plantilla
 // lleva la FOTO del producto en la cabecera.
+//
+// Y EL DE LLEGADA PARA QUIEN YA PAGÓ, SOLO OLVA (0281). El aviso de llegada es
+// de cobro y no sale a quien ya no debe nada; en Shalom vale porque tiene su
+// clave, pero Olva no tiene clave y la clienta que pagó entero nunca se enteraba
+// de que su paquete llegó (#KP141593, #KP142910, #KP140003). Así que, en la
+// MISMA fila `disponible`, si la clienta de Olva ya no debe nada se manda otra
+// plantilla —«ya llegó, recógelo con tu DNI», sin importes ni botones— en vez
+// de omitir. Misma fila ⇒ un solo aviso de llegada por guía: quien recibió el
+// de cobro y pagó después no recibe otro.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { OLVA_PICKUP_WINDOW_DAYS, formatOlvaTracking } from "@/lib/olva/tracking";
@@ -49,11 +58,13 @@ import { parseLabelLineItems } from "@/lib/labels/line-items";
 import { tzParts } from "@/lib/metrics";
 import { loadStorePaymentMethods, yapeNumberParam } from "@/lib/payment-methods";
 import { isWebPrepaid } from "@/lib/order-paid";
+import { remainingCents } from "@/lib/payment-rounding";
 import type { PaymentGateway } from "@/lib/payment-gateway";
 import { replyFirstName } from "@/lib/wa-reply-templates";
 import { shalomVoucherPdf, signedDocUrl } from "@/lib/shalom/label-cache";
 import { loadStoreShalom } from "@/lib/shalom/session";
 import { firstProductWithImage, waImageUrl, type CatalogImage } from "@/lib/cart-image-test";
+import { isShopifyCdnUrl, productPhotosThatLoad } from "@/lib/product-photos";
 import { AGENCY_AVAILABLE_STATES } from "@/lib/order-master-filters";
 import { env } from "@/lib/env";
 
@@ -109,6 +120,13 @@ export const REMINDER_DEFAULT_TEMPLATE: Record<NoticeCourier, string> = {
   shalom: "guias_shalom_recordatorio",
   olva: "guias_olva_recordatorio",
 };
+
+/** El aviso de llegada para pagados de Olva (0281): nombre, producto, oficina,
+ *  tracking y fecha límite. Ningún importe: no hay nada que cobrar. */
+export const PAID_ARRIVAL_DEFAULT_PARAMS = "nombre,producto,agencia,guia,vence";
+export const PAID_ARRIVAL_DEFAULT_TEMPLATE = "guias_olva_llegada_pagado";
+/** Los tokens de dinero, que el aviso para pagados no admite. */
+export const MONEY_TOKENS: readonly TransitToken[] = ["total", "adelanto", "saldo", "yape"];
 
 /** Días que Shalom guarda el paquete antes de devolverlo (MOM §12). */
 export const PICKUP_WINDOW_DAYS = 28;
@@ -255,7 +273,8 @@ export function pendingBalance(
 ): number | null {
   if (orderTotal == null || !Number.isFinite(orderTotal)) return null;
   const validated = Number(validatedAmount) || 0;
-  return Math.max(0, Math.round((orderTotal - validated) * 100) / 100);
+  // Menos de S/ 1 es redondeo: no hay saldo que pedirle (lib/payment-rounding.ts).
+  return remainingCents(Math.round(validated * 100), Math.round(orderTotal * 100)) / 100;
 }
 
 /**
@@ -333,11 +352,17 @@ export interface TransitConfig {
   timezone: string;
 }
 
+export type ResolvedTransitConfig = { cfg: TransitConfig } | { cfg: null; reason: string };
+
 export function transitConfig(
   creds: StoreCreds,
   kind: NoticeKind = "transito",
   courier: NoticeCourier = "shalom",
-): { cfg: TransitConfig } | { cfg: null; reason: string } {
+  /** `paid`: la plantilla de llegada para quien ya no debe nada (0281). Solo
+   *  existe para Olva y para el aviso de llegada. */
+  opts: { paid?: boolean } = {},
+): ResolvedTransitConfig {
+  if (opts.paid) return paidArrivalConfig(creds, kind, courier);
   // Lo que cambia por tipo de aviso —y por courier— es el TEXTO: plantilla,
   // variables, ticket y su propio interruptor. El número, el idioma, el horario
   // y las cuentas son de la tienda y se comparten — encender el de llegada, o
@@ -383,6 +408,48 @@ export function transitConfig(
       attachTicket: Boolean(attach),
       headerImage: recordatorio,
       fallbackImageUrl: recordatorio ? creds.shalom_reminder_fallback_image_url?.trim() || null : null,
+      phoneNumberId: creds.shalom_transit_phone_number_id?.trim() || null,
+      storePhoneNumberId: creds.whatsapp_phone_number_id,
+      apiKey: creds.kapso_api_key,
+      hourStart: creds.shalom_transit_hour_start ?? 8,
+      hourEnd: creds.shalom_transit_hour_end ?? 21,
+      timezone: creds.timezone || "America/Lima",
+    },
+  };
+}
+
+/**
+ * La config del aviso «ya llegó, recógelo con tu DNI» para la clienta de Olva
+ * que ya no debe nada (0281). Comparte con los demás el número, el idioma, el
+ * horario y las cuentas; la plantilla, sus variables y su interruptor son
+ * propios, como todos. Nunca lleva ticket ni imagen, y NO admite variables de
+ * dinero: una plantilla que dijera «saldo S/ 0.00» a quien pagó es justo lo que
+ * este aviso existe para no hacer.
+ */
+function paidArrivalConfig(creds: StoreCreds, kind: NoticeKind, courier: NoticeCourier): ResolvedTransitConfig {
+  const que = "aviso de llegada para pagados de Olva";
+  if (courier !== "olva" || kind !== "disponible") {
+    return { cfg: null, reason: `el ${que} solo existe para la llegada de Olva` };
+  }
+  if (!creds.olva_paid_arrival_template_enabled) return { cfg: null, reason: `${que} apagado en la tienda` };
+  const templateName = creds.olva_paid_arrival_template_name?.trim();
+  if (!templateName) return { cfg: null, reason: `la tienda no tiene plantilla de ${que} configurada` };
+  if (!creds.kapso_api_key) return { cfg: null, reason: "la tienda no tiene API key de Kapso" };
+  const tokens = parseTransitParams(creds.olva_paid_arrival_params);
+  if (!tokens.length) return { cfg: null, reason: `el ${que} no tiene el orden de variables configurado` };
+  const dinero = tokens.filter((t) => MONEY_TOKENS.includes(t));
+  if (dinero.length) {
+    return { cfg: null, reason: `el ${que} no lleva importes: quita ${dinero.join(", ")} del orden de variables` };
+  }
+  return {
+    cfg: {
+      courier,
+      templateName,
+      language: creds.shalom_transit_template_language ?? "es",
+      tokens,
+      attachTicket: false,
+      headerImage: false,
+      fallbackImageUrl: null,
       phoneNumberId: creds.shalom_transit_phone_number_id?.trim() || null,
       storePhoneNumberId: creds.whatsapp_phone_number_id,
       apiKey: creds.kapso_api_key,
@@ -780,6 +847,28 @@ export function noticeSkipReason(input: {
   return null;
 }
 
+/**
+ * ¿Toca el aviso de llegada PARA PAGADOS en vez de omitir? Pura (0281).
+ *
+ * Solo el de llegada de OLVA, solo a un pedido abierto, y solo cuando la razón
+ * para no mandar el de cobro es que ya no debe nada (pagado en el checkout o
+ * todo validado). Shalom no cambia: tiene su clave, y el mensaje de la clave ya
+ * le dijo que la presente con su DNI cuando llegue.
+ */
+export function olvaPaidArrivalApplies(input: {
+  kind: NoticeKind | null | undefined;
+  courier: NoticeCourier;
+  generalStatus: string | null | undefined;
+  orderTotal: number | null | undefined;
+  validatedAmount: number | null | undefined;
+  webPrepaid?: boolean;
+}): boolean {
+  if (input.kind !== "disponible" || input.courier !== "olva") return false;
+  if (input.generalStatus && CLOSED_ORDER_STATUSES.includes(input.generalStatus)) return false;
+  if (input.webPrepaid) return true;
+  return pendingBalance(input.orderTotal, input.validatedAmount) === 0;
+}
+
 type SendTemplate = typeof sendWhatsappTemplate;
 
 /**
@@ -813,9 +902,9 @@ export async function processTransitNotifications(
   const loadCreds = opts.loadCreds ?? ((id: string) => getStoreCreds(id, admin));
   // El espejo de catálogo de cada tienda, leído UNA vez por pasada y solo si
   // sale algún recordatorio: son unos cientos de filas y casi no cambian.
-  const catalogs = new Map<string, Promise<CatalogImage[]>>();
-  const loadCatalog = (storeId: string): Promise<CatalogImage[]> => {
-    if (!catalogs.has(storeId)) catalogs.set(storeId, loadStoreCatalog(admin, storeId));
+  const catalogs = new Map<string, Promise<CatalogImage[] | null>>();
+  const loadCatalog = (storeId: string): Promise<CatalogImage[] | null> => {
+    if (!catalogs.has(storeId)) catalogs.set(storeId, loadStoreCatalog(admin, storeId, Date.parse(nowIso)));
     return catalogs.get(storeId)!;
   };
   const siteUrl = opts.siteUrl ?? env.siteUrl();
@@ -931,8 +1020,22 @@ export async function processTransitNotifications(
       );
     }
     const resolved = configByStore.get(claveCfg)!;
+    // La llegada de Olva tiene una segunda plantilla, para quien ya pagó (0281).
+    // Cuál de las dos sale se sabe al enviar, con el saldo delante.
+    let paid: ResolvedTransitConfig | null = null;
+    if (kind === "disponible" && courier === "olva") {
+      const clavePagado = `${claveCfg}:pagado`;
+      if (!configByStore.has(clavePagado)) {
+        const creds = credsByStore.get(row.store_id) ?? null;
+        configByStore.set(
+          clavePagado,
+          creds ? transitConfig(creds, kind, courier, { paid: true }) : { cfg: null, reason: "tienda no encontrada" },
+        );
+      }
+      paid = configByStore.get(clavePagado)!;
+    }
 
-    if (!resolved.cfg) {
+    if (!resolved.cfg && !paid?.cfg) {
       // Apagado o sin configurar NO es un fallo: es la tienda decidiendo. Se
       // cierra la fila para que encender el aviso después no dispare avisos de
       // guías que salieron hace semanas.
@@ -943,7 +1046,8 @@ export async function processTransitNotifications(
       report.skipped += 1;
       continue;
     }
-    const cfg = resolved.cfg;
+    // El horario es de la tienda: el mismo en las dos plantillas.
+    const cfg = (resolved.cfg ?? paid?.cfg)!;
 
     if (!transitWithinHours(nowIso, cfg.timezone, cfg.hourStart, cfg.hourEnd)) {
       report.deferred += 1;
@@ -958,7 +1062,7 @@ export async function processTransitNotifications(
       continue;
     }
 
-    const outcome = await sendOne(admin, row, cfg, { nowIso, send, kind, loadCatalog, siteUrl });
+    const outcome = await sendOne(admin, row, resolved, { nowIso, send, kind, loadCatalog, siteUrl, paid });
     const cuenta = enviados.get(row.store_id);
     if (outcome === "sent" && cuenta) {
       cuenta.day += 1;
@@ -982,18 +1086,21 @@ function nextAttemptIso(nowIso: string, attempts: number): string {
 async function sendOne(
   admin: SupabaseClient,
   row: TransitQueueRow,
-  cfg: TransitConfig,
+  charge: ResolvedTransitConfig,
   ctx: {
+    /** La plantilla de llegada para pagados de Olva (0281); null fuera de ella. */
+    paid?: ResolvedTransitConfig | null;
     nowIso: string;
     send: SendTemplate;
     kind?: NoticeKind;
-    /** El espejo de catálogo de la tienda, para la foto del recordatorio. */
-    loadCatalog?: (storeId: string) => Promise<CatalogImage[]>;
+    /** El espejo de catálogo de la tienda, para la foto del recordatorio.
+     *  `null`: no se pudo leer. */
+    loadCatalog?: (storeId: string) => Promise<CatalogImage[] | null>;
     siteUrl?: string;
   },
 ): Promise<"sent" | "failed" | "retry" | "skipped"> {
   const attempts = (row.attempts ?? 0) + 1;
-  const courier = cfg.courier ?? "shalom";
+  const courier: NoticeCourier = (charge.cfg ?? ctx.paid?.cfg)?.courier ?? (row.courier === "olva" ? "olva" : "shalom");
   const recordatorio = isReminderKind(ctx.kind);
 
   /** Cerrar la fila sin mandar: no es un fallo, es que ya no toca. */
@@ -1051,7 +1158,35 @@ async function sendOne(
     validatedAmount: facts.validatedAmount,
     webPrepaid,
   });
-  if (noAvisar) return skip(noAvisar);
+  // QUÉ PLANTILLA. La de cobro, salvo que la clienta de Olva ya no deba nada:
+  // entonces la de pagados (0281) en vez de omitir. Sin esa plantilla
+  // configurada, se omite como siempre, con el motivo diciendo qué falta.
+  let cfg: TransitConfig;
+  let pagado = false;
+  if (
+    noAvisar &&
+    ctx.paid &&
+    olvaPaidArrivalApplies({
+      kind: ctx.kind,
+      courier,
+      generalStatus,
+      orderTotal: facts.orderTotal,
+      validatedAmount: facts.validatedAmount,
+      webPrepaid,
+    })
+  ) {
+    if (!ctx.paid.cfg) {
+      return skip(`${noAvisar} · no salió «ya llegó» para pagados: ${ctx.paid.reason} (Ajustes → Avisos de guía Olva)`);
+    }
+    cfg = ctx.paid.cfg;
+    pagado = true;
+  } else if (noAvisar) {
+    return skip(noAvisar);
+  } else if (!charge.cfg) {
+    return skip(charge.reason);
+  } else {
+    cfg = charge.cfg;
+  }
 
   // El recordatorio (0242) además tiene que seguir siendo verdad AL ENVIAR: el
   // paquete sigue en la agencia y el plazo no ha pasado. Su llegada se lee por
@@ -1078,6 +1213,10 @@ async function sendOne(
   // calcula siempre porque cuesta nada y así `transitBodyParams` decide con el
   // dato delante. Con los días de CADA courier: Olva devuelve a los 6, Shalom
   // a los 28.
+  // El de pagados cuenta desde la llegada que fijó el rastreo de Olva, la misma
+  // de la que sale `agency_expires_at` en el Master: la fecha del mensaje y la
+  // del Master tienen que ser la misma.
+  if (pagado) llegada = shipment.agency_arrived_at || llegada;
   facts.pickupDeadline = pickupDeadlineLabel(llegada, cfg.timezone, pickupWindowDays(courier));
 
   if (!phone || !isSendablePhone(phone)) {
@@ -1099,18 +1238,26 @@ async function sendOne(
 
   // La foto del producto en la cabecera del recordatorio (0242). Sin foto ni
   // imagen de respaldo NO se manda: Meta rechaza una plantilla de cabecera de
-  // imagen que llega sin ella, y reintentarlo no la hace aparecer.
+  // imagen que llega sin ella, y reintentarlo no la hace aparecer. Pero un
+  // catálogo que no se pudo leer (la base, o Storage desde el cierre: MOM §39)
+  // no es «sin foto»: sin respaldo, se reintenta.
   let headerImage: { link: string } | undefined;
   let imageSource: "producto" | "respaldo" | null = null;
   if (cfg.headerImage) {
     const catalog = ctx.loadCatalog ? await ctx.loadCatalog(row.store_id) : [];
     const img = reminderHeaderImage({
       lineItems: facts.lineItems,
-      catalog,
+      catalog: catalog ?? [],
       siteUrl: ctx.siteUrl ?? env.siteUrl(),
       storeId: row.store_id,
       fallbackUrl: cfg.fallbackImageUrl,
     });
+    if (!img.ok && catalog === null) {
+      return fail("no se pudo leer el catálogo de fotos del producto y la tienda no tiene imagen de respaldo", {
+        retryable: true,
+        patch: { phone, phone_number_id: phoneNumberId },
+      });
+    }
     if (!img.ok) return skip(img.reason, { phone, phone_number_id: phoneNumberId });
     headerImage = { link: img.link };
     imageSource = img.source;
@@ -1205,7 +1352,9 @@ async function sendOne(
     const que = recordatorio
       ? `Recordatorio de recojo (día ${ctx.kind === "recordatorio_d7" ? 7 : 3})`
       : ctx.kind === "disponible"
-        ? "Aviso de llegada a la agencia"
+        ? pagado
+          ? "Aviso de llegada a la agencia (pedido pagado, sin cobro)"
+          : "Aviso de llegada a la agencia"
         : "Aviso de guía en tránsito";
     const conImagen =
       imageSource === "producto" ? " con la foto del producto" : imageSource === "respaldo" ? " con la imagen de respaldo" : "";
@@ -1306,23 +1455,38 @@ export async function sendTransitTicket(
 /**
  * Los productos CON foto del espejo de catálogo de una tienda (0164), para la
  * cabecera del recordatorio. La misma lectura que la prueba de carritos
- * (lib/cart-sequence.ts). Si falla, lista vacía: el recordatorio cae a la
- * imagen de respaldo o no sale, nunca sale sin imagen.
+ * (lib/cart-sequence.ts).
+ *
+ * Si Shopify ya no sirve las fotos de la tienda (MOM §39: sin token, o desde
+ * el cierre la que pasa a WooCommerce), solo las fotos con su copia guardada:
+ * una sin copia daría a Meta un 502 en la cabecera, y el recordatorio cae a la
+ * imagen de respaldo como cuando el producto no tiene foto. Vale también para
+ * los pedidos de WooCommerce, que casan con este catálogo por el título.
+ *
+ * `null` si no se pudo leer (la base, o Storage): no es «sin foto». Con imagen
+ * de respaldo el recordatorio sale con ella, como siempre; sin ella se
+ * reintenta en vez de quedar omitido (`sendOne`).
  */
-async function loadStoreCatalog(admin: SupabaseClient, storeId: string): Promise<CatalogImage[]> {
+async function loadStoreCatalog(admin: SupabaseClient, storeId: string, nowMs: number): Promise<CatalogImage[] | null> {
   try {
     const { data, error } = await admin
       .from("shopify_product_images")
       .select("product_id,catalog_title,image_url")
       .eq("store_id", storeId);
-    if (error) return [];
-    return ((data ?? []) as (CatalogImage & { image_url: string | null })[])
+    if (error) return null;
+    const rows = ((data ?? []) as (CatalogImage & { image_url: string | null })[])
       // Solo lo que /api/wa-image acepta servir (el CDN de Shopify): otra foto
       // daría a Meta un 404 en la cabecera y el envío fallaría.
-      .filter((r) => /^https:\/\/cdn\.shopify\.com\//.test(r.image_url ?? ""))
-      .map((r) => ({ product_id: String(r.product_id), catalog_title: r.catalog_title ?? null }));
+      .filter((r) => isShopifyCdnUrl(r.image_url));
+    const usable = await productPhotosThatLoad(admin, storeId, rows, nowMs);
+    return (
+      usable?.map((r) => ({
+        product_id: String(r.product_id),
+        catalog_title: r.catalog_title ?? null,
+      })) ?? null
+    );
   } catch {
-    return [];
+    return null;
   }
 }
 

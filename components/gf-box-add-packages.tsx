@@ -10,6 +10,7 @@
 
 import { useEffect, useEffectEvent, useState, useTransition } from "react";
 import { alreadyInBoxChip } from "@/lib/gf-scan-already-in-box";
+import { scanLineCanMove } from "@/lib/gf-scan-return";
 import { cn } from "@/components/ui";
 import { ScanAction } from "@/components/scan-action";
 import { moveManifestItem, scanAssignToRider, type ScanAssignLine } from "@/app/dashboard/courier/actions";
@@ -89,6 +90,23 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
   if (!riderId) return <p className="p-5 text-sm text-ink-600">Esta caja no tiene motorizado asignado; se agrega desde Despacho del día.</p>;
   if (manifest.state === "cancelled") return <p className="p-5 text-sm text-ink-600">Esta caja está cancelada.</p>;
 
+  /**
+   * «Mover» un paquete escaneado que está en la caja de otro motorizado: el
+   * escaneo prueba que está en la mano (`inHand`, 0230). Lo usan la fila y el
+   * aviso de la cámara; el error se dice en los dos.
+   */
+  const moveLine = async (l: ScanAssignLine): Promise<{ error?: string; notice?: string }> => {
+    const reason = `Escaneado en la caja de ${riderName}`;
+    let res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, reason, { inHand: true, overrideCash: overrideCash && canAuthorizeCash });
+    // Quien administra el courier puede autorizar pasar el límite (§29.9).
+    if (res.cashBlocked && canAuthorizeCash && !overrideCash && window.confirm(`${res.error}\n\n¿Autorizas pasar el límite para mover este paquete?`)) {
+      setOverrideCash(true);
+      res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, reason, { inHand: true, overrideCash: true });
+    }
+    push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
+    return res.error ? { error: res.error } : { notice: `${l.orderName ?? l.code} pasó de la caja de ${l.riderName ?? "otro motorizado"} a esta.` };
+  };
+
   const push = (line: ScanAssignLine) => {
     setLines((cur) => [line, ...cur.filter((l) => l.code !== line.code)].slice(0, 30));
     if (line.status === "asignado" || line.status === "ya_en_caja") {
@@ -117,6 +135,7 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
         onCameraOpenChange={setCameraOpen}
         onPending={(code) => push({ code, status: "procesando", orderId: null, orderName: null, shipmentId: null, manifestId: manifest.id, riderName, amount: null, message: "Asignando…" })}
         onResult={(r) => { if (r.line) push(r.line); }}
+        lineAction={(l) => (scanLineCanMove(l) ? { label: "Mover a esta caja", busyLabel: "Moviendo…", run: () => moveLine(l) } : null)}
       />
       <p className="text-[13px] text-ink-500">Cada escaneo toma el pedido y lo pone en esta caja. Después se verifica en «Verificar caja».</p>
       {refreshError && <p role="alert" className="text-sm text-crit-fg">{refreshError}</p>}
@@ -131,17 +150,8 @@ export function GfBoxAddPackages({ manifest, canManage, canAuthorizeCash = false
                   <span className={cn("ml-2 text-xs font-medium", r.textClass)}>{r.text}</span>
                 </span>
                 {l.amount != null && <span className="shrink-0 text-xs tabular-nums text-ink-600">{money(l.amount)}</span>}
-                {l.status === "en_otra_caja" && l.manifestId && l.shipmentId && (
-                  <button type="button" disabled={busy} onClick={() => start(async () => {
-                    const reason = `Escaneado en la caja de ${riderName}`;
-                    let res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, reason, { overrideCash: overrideCash && canAuthorizeCash });
-                    // Quien administra el courier puede autorizar pasar el límite (§29.9).
-                    if (res.cashBlocked && canAuthorizeCash && !overrideCash && window.confirm(`${res.error}\n\n¿Autorizas pasar el límite para mover este paquete?`)) {
-                      setOverrideCash(true);
-                      res = await moveManifestItem(manifest.org_id, l.manifestId!, l.shipmentId!, riderId, reason, { overrideCash: true });
-                    }
-                    push({ ...l, status: res.error ? "no_elegible" : "asignado", riderName, message: res.error ?? "" });
-                  })} className={AMEND}>Mover</button>
+                {scanLineCanMove(l) && (
+                  <button type="button" disabled={busy} onClick={() => start(async () => { await moveLine(l); })} className={AMEND}>Mover</button>
                 )}
                 {l.status === "programado_otro_dia" && (
                   <button type="button" disabled={busy} onClick={() => start(async () => {

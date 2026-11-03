@@ -220,7 +220,9 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
     return {
       action: "salida_nueva_rearmar",
       newSalida: true,
-      label: courier === "propio"
+      label: input.totalOutputs === 0
+        ? `Primera salida de ${REPRO_COURIER_LABEL[courier]}: prepara el paquete y genera su guía desde la Mesa de ruta.`
+        : courier === "propio"
         ? "Salida nueva de Grupo GF: el rótulo nuevo va encima del anterior, tapando su QR (§9.3)."
         : `Salida nueva de ${REPRO_COURIER_LABEL[courier]} desde la Mesa de ruta: se rearma y se retira la etiqueta vieja.`,
     };

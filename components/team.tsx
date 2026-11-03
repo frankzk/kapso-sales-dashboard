@@ -21,6 +21,8 @@ import {
 } from "@/app/dashboard/team/actions";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { SchedulesTab } from "@/components/team-schedules";
+import { TeamLeadRouting } from "@/components/team-lead-routing";
+import { EMPTY_LEAD_ROUTING, type LeadRoutingSettings } from "@/lib/lead-routing";
 import { OpsButton } from "@/components/ops-ui";
 import { IconChevronRight, IconInfo } from "@/components/icons";
 import {
@@ -95,7 +97,7 @@ export interface RiderRow {
   user_email: string | null;
 }
 
-type TeamTab = "usuarios" | "motorizados" | "horarios";
+type TeamTab = "usuarios" | "motorizados" | "horarios" | "leads";
 
 export function TeamManager({
   org,
@@ -106,6 +108,7 @@ export function TeamManager({
   members,
   riders,
   schedules,
+  leadRouting = { settings: EMPTY_LEAD_ROUTING, installed: false },
   initialTab = "usuarios",
   initialScheduleUserId = null,
 }: {
@@ -118,6 +121,7 @@ export function TeamManager({
   riders: RiderRow[];
   /** Meta y horario por persona (Equipo › Horarios, migración 0245). */
   schedules: Record<string, AdvisorSchedule>;
+  leadRouting?: { settings: LeadRoutingSettings; installed: boolean };
   initialTab?: TeamTab;
   /** Desde Productividad, «Editar horario» abre el de esa persona. */
   initialScheduleUserId?: string | null;
@@ -162,6 +166,7 @@ export function TeamManager({
           [
             ["usuarios", "Usuarios y accesos"],
             ["horarios", "Horarios"],
+            ["leads", "Leads"],
             ["motorizados", "Motorizados"],
           ] as [TeamTab, string][]
         ).map(([key, label]) => (
@@ -176,6 +181,9 @@ export function TeamManager({
           </button>
         ))}
       </div>
+
+      {tab === "leads" && <TeamLeadRouting key={`${org.id}:${leadRouting.settings.revision}`} orgId={org.id} initial={leadRouting.settings} installed={leadRouting.installed}
+        stores={stores} advisors={members.filter(m => m.role === "vendedora" || m.functions.includes("asesora")).map(m => ({ userId: m.user_id, name: m.name ?? m.email, account: m.email.split("@")[0] ?? m.email, stores: m.stores }))} />}
 
       {tab === "usuarios" && (
         <>
@@ -319,7 +327,7 @@ function AddMemberForm({ orgId, myRole }: { orgId: string; myRole: Role }) {
             defaultValue="viewer"
             className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500"
           >
-            {/* Un admin solo invita vendedoras y solo lectura (MOM §16). */}
+            {/* Un admin solo invita vendedoras, solo lectura y motorizados (MOM §16, §27). */}
             {invitableRoles(myRole).map((r) => (
               <option key={r} value={r}>
                 {ACCESS_LABEL[r] ?? r}
@@ -536,6 +544,10 @@ function StoreAccessCell({
   stores: Store[];
 }) {
   if (!stores.length) return <span className="text-xs text-slate-400">Sin tiendas</span>;
+  // El motorizado no tiene tiendas: ve solo las paradas de su ruta (MOM §27).
+  if (member.role === "motorizado") {
+    return <span className="text-xs text-slate-400">Solo su ruta</span>;
+  }
   // Owners/admins already see every store in the org via their role; viewers and
   // vendedoras need explicit per-store grants.
   if (member.role !== "viewer" && member.role !== "vendedora") {

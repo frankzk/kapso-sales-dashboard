@@ -25,8 +25,16 @@
 
 export type PaymentGateway = "checkout" | "manual" | "cod";
 
-/** Pasarelas confirmadas que cobran en el checkout. Se añaden a mano. */
-export const CHECKOUT_GATEWAYS: readonly string[] = ["Checkout Flow | Tarjeta, Transf., Cuotas débito"];
+/**
+ * Pasarelas confirmadas que cobran en el checkout. Se añaden a mano.
+ *   · «Checkout Flow | Tarjeta, Transf., Cuotas débito»: Flow en Shopify.
+ *   · «Tarjeta o Yape»: el plugin «Flow Payment» de WooCommerce (slug
+ *     `flowpayment`), confirmado por el equipo de WordPress de Aurela el
+ *     24-10-2026 (MOM §38.4). En WooCommerce se lee el TÍTULO del pedido
+ *     (`payment_method_title`): si lo cambian, sus pedidos vuelven a
+ *     `pending` (el camino seguro de las constancias).
+ */
+export const CHECKOUT_GATEWAYS: readonly string[] = ["Checkout Flow | Tarjeta, Transf., Cuotas débito", "Tarjeta o Yape"];
 const CHECKOUT = new Set(CHECKOUT_GATEWAYS.map((n) => n.trim().toLowerCase()));
 /** Nombres que Shopify pone cuando NADIE cobró en el checkout. */
 const SIN_COBRO = new Set(["manual", "cash on delivery (cod)", "bogus"]);

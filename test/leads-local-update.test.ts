@@ -45,7 +45,8 @@ describe("confirmed call reconciliation", () => {
   });
   it("matches the inclusive SQL time boundaries and category predicates", () => {
     const boundary = { ...lead, handoff_at: new Date(now - 24 * 3600000).toISOString(), next_followup_at: new Date(now).toISOString() };
-    expect(leadMembership(boundary, now)).toMatchObject({ handoff: 1, seguimientos: 1, sin_llamar: 1 });
+    expect(leadMembership(boundary, now)).toMatchObject({ handoff: 1, seguimientos: 1, sin_llamar: 0 });
+    expect(leadMembership({ ...boundary, call_queue_ready: true }, now).sin_llamar).toBe(1);
     expect(leadMembership(boundary, now + 1).handoff).toBe(0);
     expect(leadMembership({ ...lead, category: "won" }, now)).toMatchObject({ ganados: 1, por_llamar: 0, sin_llamar: 0 });
   });

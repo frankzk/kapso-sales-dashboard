@@ -99,6 +99,10 @@ const POR_KIND: Record<string, TimelineFact> = {
   dispatch_program_overridden: consulta("programado"),
   dispatch_date_set: consulta("programado"),
   dispatch_date_cleared: consulta("programado"),
+  aliclik_auto_guide_failed: consulta("guia"),
+  chatby_confirmation_held: consulta("mensaje"),
+  // MOM §25, «Chatby» (02-11-2026): una persona le escribió a la clienta desde la ficha.
+  chatby_message: consulta("mensaje"),
 
   // Despacho (índigo): el paquete sale de nuestras manos.
   swayp_desde_por_confirmar: hito("despacho", "por_despachar"),
@@ -126,6 +130,9 @@ const POR_KIND: Record<string, TimelineFact> = {
   urpi_observation_resolved: consulta("estado"),
   lima_repro_call: consulta("llamada"),
   lima_repro_closed: consulta("expediente"),
+  // La bandeja «Reintentos Aliclik» (03-11-2026).
+  lima_retry_approved: hito("reprogramado", "en_curso"),
+  lima_retry_dismissed: consulta("expediente"),
   call: consulta("llamada"),
 
   // Completado (verde).
@@ -137,6 +144,7 @@ const POR_KIND: Record<string, TimelineFact> = {
 
   // Cierre (naranja): vuelve, se anula o queda una cuenta abierta.
   cancelled_shopify: hito("anulado", "por_cerrar"),
+  cancelled_woocommerce: hito("anulado", "por_cerrar"),
   return_started: hito("devuelto", "por_cerrar"),
   return_requested: hito("devuelto", "por_cerrar"),
   return_received: hito("devuelto", "por_cerrar"),
@@ -160,6 +168,11 @@ const POR_KIND: Record<string, TimelineFact> = {
 
   // Consulta (gris).
   order_reopened: consulta("expediente"),
+  // El pedido vuelve a estar vivo en WooCommerce (MOM §38.3): su macroetapa la
+  // decide el Master, no este hecho.
+  reactivated_woocommerce: consulta("estado"),
+  customer_name_update_requested: consulta("expediente"),
+  customer_name_updated: consulta("expediente"),
   route_reopened: consulta("expediente"),
   key_registered: consulta("clave"),
   key_view: consulta("clave"),
@@ -179,6 +192,21 @@ const POR_KIND: Record<string, TimelineFact> = {
   lead_system: consulta("automatico"),
   lead_voice_agent: consulta("agente"),
 };
+
+/**
+ * De dónde salió un movimiento, para la línea de la fecha: «Repro Provincia»,
+ * «Leads», «WooCommerce» (los hechos que escribe la entrada de WooCommerce,
+ * MOM §38.3), «Chatby» (la confirmación automática, MOM §6.1) o la fuente
+ * guardada tal cual (`shopify`, `aliclik`, `manual`…).
+ */
+export function timelineOriginLabel(t: Pick<TimelineEntry, "origin" | "source">): string {
+  if (t.origin === "gestion") return "Repro Provincia";
+  if (t.origin === "leads") return "Leads";
+  if (t.source === "woocommerce") return "WooCommerce";
+  // La confirmación automática por Chatby (MOM §6.1, 01-11-2026).
+  if (t.source === "chatby") return "Chatby";
+  return t.source;
+}
 
 export function timelineFact(t: TimelineFactInput): TimelineFact {
   // De Leads: el lead pasó a «Pedido generado». Es el nacimiento del pedido

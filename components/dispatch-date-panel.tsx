@@ -9,7 +9,39 @@ import { useState, useTransition } from "react";
 import { Badge, FIELD_BOX, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
 import { clearOrderDispatchDate, scheduleOrderDispatch } from "@/app/dashboard/pedidos/actions";
-import { DISPATCH_DATE_MAX_DAYS, dispatchDateBadge } from "@/lib/dispatch-date";
+import {
+  DISPATCH_DATE_MAX_DAYS,
+  DISPATCH_NEEDS_COORDINATE_ERROR,
+  DISPATCH_NEEDS_LOCATION_ERROR,
+  dispatchDateBadge,
+} from "@/lib/dispatch-date";
+import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
+import { IconCheck } from "@/components/icons";
+
+/**
+ * Provincia COD que ya tiene coordenada (MOM §6.2, 02-11-2026): programar no la
+ * pide, y se dice para que no parezca que se saltó. Con el punto en el mapa
+ * para revisarlo antes de que la guía Aliclik salga sola ese día.
+ */
+export function CoordinateOkLine({ latitude, longitude, className }: { latitude: number; longitude: number; className?: string }) {
+  return (
+    <p className={cn("flex flex-wrap items-center gap-x-1.5 text-[13px] leading-5 text-ink-600", className)}>
+      <IconCheck aria-hidden className="size-4 text-ok-fg" />
+      <span>
+        Ubicación: <span className="font-medium text-ok-fg">ya tiene coordenada</span>
+      </span>
+      <span aria-hidden>·</span>
+      <a
+        href={`https://www.google.com/maps?q=${latitude},${longitude}`}
+        target="_blank"
+        rel="noreferrer"
+        className="rounded-sm font-medium text-brand-700 underline decoration-brand-500/40 underline-offset-4 hover:decoration-brand-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+      >
+        Ver en el mapa
+      </a>
+    </p>
+  );
+}
 
 const TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 
@@ -25,6 +57,11 @@ export function DispatchDatePanel({
   note,
   scheduledBy,
   today,
+  autoAliclik = false,
+  locationMissing = false,
+  coordinateMissing = false,
+  coordinate: savedCoordinate = null,
+  onFixLocation,
   onSaved,
 }: {
   orderId: string;
@@ -33,11 +70,29 @@ export function DispatchDatePanel({
   scheduledBy: string | null;
   /** Hoy en Lima, YYYY-MM-DD. */
   today: string;
+  /** Provincia COD: ese día la guía Aliclik se crea sola (MOM §6.2). */
+  autoAliclik?: boolean;
+  /**
+   * «Por revisar» sin región, distrito o dirección (MOM §6.2, #KP142558): no
+   * se puede programar. Se dice por qué y se ofrece «Corregir ubicación»; la
+   * fecha que ya tenga se puede quitar.
+   */
+  locationMissing?: boolean;
+  /**
+   * Provincia COD sin coordenada (MOM §6.2, 02-11-2026): programar la pide, y
+   * se guarda en el pedido. Sin ella, ese día Aliclik no crea la guía.
+   */
+  coordinateMissing?: boolean;
+  /** La coordenada guardada, para decir que ya la tiene (solo Provincia COD). */
+  coordinate?: { latitude: number; longitude: number } | null;
+  /** Lleva a Información → Ubicación. */
+  onFixLocation?: () => void;
   onSaved: () => void;
 }) {
   const [mode, setMode] = useState<"idle" | "edit" | "clear">("idle");
   const [date, setDate] = useState(scheduledOn ?? "");
   const [text, setText] = useState("");
+  const [coordinate, setCoordinate] = useState("");
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -52,6 +107,7 @@ export function DispatchDatePanel({
       setMessage({ ok: true, text: result.notice ?? "Listo." });
       setMode("idle");
       setText("");
+      setCoordinate("");
       onSaved();
     });
   }
@@ -63,14 +119,35 @@ export function DispatchDatePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {badge ? (
           <Badge tone={TONE[badge.tone]}>{badge.text}</Badge>
-        ) : (
+        ) : locationMissing ? null : (
           <p className="text-[13px] text-ink-600">¿Se acordó despacharlo otro día? Prográmalo y no parecerá olvidado.</p>
+        )}
+        {locationMissing && (
+          <p className="text-[13px] font-medium text-warn-fg">{DISPATCH_NEEDS_LOCATION_ERROR}</p>
+        )}
+        {!locationMissing && coordinateMissing && scheduledOn && mode === "idle" && (
+          <p className="text-[13px] font-medium text-warn-fg">Sin ubicación: ese día Aliclik no podrá crear la guía.</p>
         )}
         {mode === "idle" && (
           <>
-            <OpsButton disabled={pending} onClick={() => { setDate(scheduledOn ?? ""); setMode("edit"); }} className="pointer-coarse:h-11">
-              {scheduledOn ? "Cambiar fecha" : "Programar envío"}
-            </OpsButton>
+            {locationMissing ? (
+              onFixLocation && (
+                <OpsButton disabled={pending} onClick={onFixLocation} className="pointer-coarse:h-11">
+                  Corregir ubicación
+                </OpsButton>
+              )
+            ) : (
+              <>
+                {coordinateMissing && scheduledOn && (
+                  <OpsButton variant="primary" disabled={pending} onClick={() => { setDate(scheduledOn); setMode("edit"); }} className="pointer-coarse:h-11">
+                    Agregar ubicación
+                  </OpsButton>
+                )}
+                <OpsButton disabled={pending} onClick={() => { setDate(scheduledOn ?? ""); setMode("edit"); }} className="pointer-coarse:h-11">
+                  {scheduledOn ? "Cambiar fecha" : "Programar envío"}
+                </OpsButton>
+              </>
+            )}
             {scheduledOn && (
               <OpsButton disabled={pending} onClick={() => setMode("clear")} className="pointer-coarse:h-11">
                 Quitar
@@ -86,14 +163,37 @@ export function DispatchDatePanel({
           {scheduledBy ? `programó ${scheduledBy}` : ""}
         </p>
       )}
-      {mode === "edit" && (
+      {autoAliclik && (scheduledOn || mode === "edit") && mode !== "clear" && (
+        <p className="text-[13px] text-ink-500">{AUTO_GUIDE_HINT}</p>
+      )}
+      {mode === "edit" && !locationMissing && (
         <form
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            run(() => scheduleOrderDispatch(orderId, { date, note: text }));
+            run(() => scheduleOrderDispatch(orderId, { date, note: text, coordinate: coordinateMissing ? coordinate : null }));
           }}
         >
+          {!coordinateMissing && autoAliclik && savedCoordinate && (
+            <CoordinateOkLine latitude={savedCoordinate.latitude} longitude={savedCoordinate.longitude} className="w-full" />
+          )}
+          {coordinateMissing && (
+            <label className="grid w-full gap-1 text-[13px] font-medium text-ink-700">
+              Ubicación (obligatoria en Provincia COD)
+              <input
+                required
+                value={coordinate}
+                autoFocus
+                placeholder="Enlace de Google Maps o coordenada"
+                aria-describedby="programar-ubicacion-ayuda"
+                onChange={(e) => setCoordinate(e.target.value)}
+                className={cn(FIELD_BOX, "h-9 px-3 font-normal pointer-coarse:h-11")}
+              />
+              <span id="programar-ubicacion-ayuda" className="font-normal text-ink-500">
+                {DISPATCH_NEEDS_COORDINATE_ERROR} Se guarda en el pedido.
+              </span>
+            </label>
+          )}
           <label className="grid gap-1 text-[13px] font-medium text-ink-700">
             Sale el
             <input
@@ -116,7 +216,7 @@ export function DispatchDatePanel({
               className={cn(FIELD_BOX, "h-9 px-3 pointer-coarse:h-11")}
             />
           </label>
-          <OpsButton type="submit" variant="primary" disabled={pending || !date} className="pointer-coarse:h-11">
+          <OpsButton type="submit" variant="primary" disabled={pending || !date || (coordinateMissing && !coordinate.trim())} className="pointer-coarse:h-11">
             {pending ? "Guardando…" : "Guardar"}
           </OpsButton>
           <OpsButton type="button" disabled={pending} onClick={() => setMode("idle")} className="pointer-coarse:h-11">

@@ -6,16 +6,62 @@ export function urpiGoogleConfigured(): boolean {
   return Boolean(process.env.URPI_GOOGLE_CLIENT_EMAIL && process.env.URPI_GOOGLE_PRIVATE_KEY);
 }
 
+/**
+ * La clave privada tal como se pegó en Vercel. Vercel guarda lo que se pega: con
+ * comillas, con `\n` escritos (uno o dos), con saltos reales, con `\r` de
+ * Windows, en una sola línea con espacios, o el JSON entero de la cuenta de
+ * servicio. Node solo lee el PEM limpio: con la clave pegada de otra forma la
+ * primera lectura falló con «error:1E08010C:DECODER routines::unsupported»
+ * (03-11-2026). Así que se reconstruye: cabecera, cuerpo base64 en líneas de 64
+ * y pie. Lo que no parece una clave privada se rechaza con un mensaje que dice
+ * qué copiar. PURA.
+ */
+export function urpiGooglePrivateKey(raw: string): string {
+  let value = raw.trim();
+  if (value.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value) as { private_key?: unknown };
+      if (typeof parsed.private_key === "string") value = parsed.private_key;
+    } catch { /* no era el JSON: se sigue con el texto */ }
+  }
+  value = value.replace(/^["'\s]+|["',\s]+$/g, "").replace(/\\+r/g, "").replace(/\\+n/g, "\n").replace(/\r/g, "");
+  const match = value.match(/-----BEGIN ((?:RSA )?PRIVATE KEY)-----([\s\S]*?)-----END \1-----/);
+  if (!match) {
+    throw new Error("URPI_GOOGLE_PRIVATE_KEY no es una clave privada. Copia el valor de «private_key» del JSON de la cuenta de servicio, desde -----BEGIN PRIVATE KEY----- hasta -----END PRIVATE KEY-----.");
+  }
+  const lines = match[2]!.replace(/[^A-Za-z0-9+/=]/g, "").match(/.{1,64}/g) ?? [];
+  return `-----BEGIN ${match[1]}-----\n${lines.join("\n")}\n-----END ${match[1]}-----\n`;
+}
+
+/** El correo de la cuenta de servicio, sin comillas ni espacios; también si se
+ *  pegó el JSON entero. PURA. */
+export function urpiGoogleClientEmail(raw: string): string {
+  const value = raw.trim();
+  if (value.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value) as { client_email?: unknown };
+      if (typeof parsed.client_email === "string") return parsed.client_email.trim();
+    } catch { /* no era el JSON */ }
+  }
+  return value.replace(/^["'\s]+|["',\s]+$/g, "");
+}
+
 async function googleToken(signal: AbortSignal): Promise<string> {
   if (!urpiGoogleConfigured()) throw new Error("La lectura de Google todavía no está conectada. Puedes cargar el Excel descargado del mismo Sheet.");
   const now = Math.floor(Date.now() / 1000);
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const assertion = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({
-    iss: process.env.URPI_GOOGLE_CLIENT_EMAIL,
+    iss: urpiGoogleClientEmail(process.env.URPI_GOOGLE_CLIENT_EMAIL!),
     scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
     aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600,
   })}`;
-  const signature = createSign("RSA-SHA256").update(assertion).sign(process.env.URPI_GOOGLE_PRIVATE_KEY!.replace(/\\n/g, "\n"), "base64url");
+  const key = urpiGooglePrivateKey(process.env.URPI_GOOGLE_PRIVATE_KEY!);
+  let signature: string;
+  try {
+    signature = createSign("RSA-SHA256").update(assertion).sign(key, "base64url");
+  } catch {
+    throw new Error("No se pudo leer URPI_GOOGLE_PRIVATE_KEY. Vuelve a copiar el valor de «private_key» del JSON de la cuenta de servicio, completo y sin cortar.");
+  }
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST", cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

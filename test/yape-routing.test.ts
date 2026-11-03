@@ -13,6 +13,11 @@ const lead = (id: string, over: Partial<RoutingLead> = {}): RoutingLead => ({
 });
 
 describe("planYapeOffers", () => {
+  it("respects per-lead work blocks without losing distribution or widening a reset lap", () => {
+    const plans = planYapeOffers([lead("n1"), lead("n2")], [online("A"), online("B"), online("recovery")], NOW, (_lead, advisor) => advisor !== "recovery");
+    expect(new Set(plans.map(p => p.offeredTo))).toEqual(new Set(["A", "B"]));
+    expect(planYapeOffers([lead("n1", { passed: ["A", "B"] })], [online("A"), online("B"), online("recovery")], NOW, () => false)).toEqual([]);
+  });
   it("offers a new Yape to the least-loaded advisor", () => {
     // N=4 → cap=floor(2.4)=2, so neither A nor B is capped; A holds 1, B holds 0.
     const leads = [

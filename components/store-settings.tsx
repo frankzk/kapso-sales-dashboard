@@ -59,6 +59,24 @@ import {
 } from "@/lib/restock-view";
 import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/lib/meta-marketing";
 import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
+import { WooCommerceSettingsSection, type WooSettingsView } from "@/components/woocommerce-settings-section";
+import { BotOrdersSettingsSection, type BotOrdersSettingsView } from "@/components/bot-orders-settings-section";
+import {
+  runGeocodeChatbyAction,
+  runGeocodePilotAction,
+  type GeocodeChatbyState,
+  type GeocodePilotState,
+} from "@/app/dashboard/[storeId]/settings/geocode-actions";
+import {
+  GEOCODE_COVERAGE_LABEL,
+  GEOCODE_CRITERION_B,
+  GEOCODE_DAILY_QUOTA,
+  GEOCODE_KEY_MISSING,
+  GEOCODE_REASON_LABEL,
+  GEOCODE_SMALL_SAMPLE,
+  type GeocodeCoverageStats,
+  type GeocodePilotReason,
+} from "@/lib/geocode-google";
 import {
   addPaymentMethod,
   addReplyTemplate,
@@ -74,7 +92,10 @@ import {
   setReplyTemplateActive,
   listStoreMetaAdAccounts,
   reRegisterWebhooks,
+  clearOwnAppPreviousSecret,
+  renewOwnAppTokenNow,
   saveMetaAdAccounts,
+  saveOwnAppCredentials,
   sendTelegramTest,
   sendUrgentTelegramTest,
   findTelegramGroups,
@@ -226,6 +247,12 @@ export interface StoreSettingsData {
     olva_arrival_template_enabled: boolean;
     olva_arrival_template_name: string | null;
     olva_arrival_params: string | null;
+    /** «Ya llegó» para quien ya no debe saldo, solo Olva (0281). `available`:
+     *  la 0281 está aplicada; sin ella el bloque no se enseña. */
+    olva_paid_arrival_available: boolean;
+    olva_paid_arrival_template_enabled: boolean;
+    olva_paid_arrival_template_name: string | null;
+    olva_paid_arrival_params: string | null;
     /** Recordatorio de recojo, día 3 y día 7 en la agencia (0242). */
     shalom_reminder_template_enabled: boolean;
     shalom_reminder_template_name: string | null;
@@ -262,6 +289,41 @@ export interface StoreSettingsData {
     olvaPortalPassword: boolean;
   };
   oauthAvailable: boolean;
+  /**
+   * App propia de Shopify (0271, owner 23-10-2026): solo en tiendas conectadas
+   * así; null en las demás. Nunca trae el Client secret ni el token.
+   */
+  ownApp?: {
+    clientId: string | null;
+    hasSecret: boolean;
+    /** «App propia · acceso renovado hace X · vence a las HH:MM», o «app desinstalada el …». */
+    statusLine: string;
+    /** Qué hacer según el estado (`ownAppAccessHint`): a una deshabilitada no se le dice «renueva». */
+    hint: string;
+    /** La tienda está deshabilitada: «Renovar ahora» no aplica. */
+    disabled: boolean;
+    /** El último fallo al renovar, o los permisos que faltan (`shopify_token_error`). */
+    error: string | null;
+    /** «La última renovación falló» o «Faltan permisos en la app» (`ownAppErrorTitle`). */
+    errorTitle: string;
+    /** «hasta el 25/10 a las 14:20» mientras se acepta el Client secret anterior; null si no. */
+    prevSecretUntil: string | null;
+  } | null;
+  /**
+   * WooCommerce (0274, MOM §38.11): el sitio, la clave del sitio y si hay cada
+   * secreto (nunca el valor), la dirección de los webhooks y la última pasada.
+   */
+  woo: WooSettingsView;
+  /**
+   * El bot de Kapso pide sus pedidos a Kapta (0277, MOM §38.13): la dirección,
+   * si hay secreto (nunca el valor ni su hash), y el último uso y fallo.
+   */
+  botOrders: BotOrdersSettingsView;
+  /**
+   * Coordenada por dirección, piloto (docs/kapta/geocodificacion-propuesta.md):
+   * solo si GOOGLE_GEOCODING_API_KEY está en el entorno. Nunca la clave.
+   */
+  geocodePilot: { configured: boolean };
   /** Lo del agente de leads (MOM §33) que no es una columna de la tienda. */
   leadVoice: {
     /** Telnyx, la puerta SIP y el secreto propio del agente de leads están en Vercel. */
@@ -319,7 +381,8 @@ export interface StoreSettingsData {
     catalog: RestockCatalogRow[];
     products: RestockProductRow[];
     results: RestockResultRow[];
-    /** Productos con foto en Shopify (`shopify_product_images`). */
+    /** Productos con foto en Shopify (`shopify_product_images`); si Shopify
+     *  ya no sirve las fotos de la tienda, con su copia guardada (MOM §39). */
     withImage: string[];
   };
   replyTemplates: Array<{
@@ -352,6 +415,9 @@ function webhookTopicLabel(topic: string): string {
   if (topic === "flow/bad_request") return "Payload inválido";
   if (topic.startsWith("draft_orders/")) return "Borrador (carrito)";
   if (topic.startsWith("orders/")) return "Orden";
+  // WooCommerce (MOM §38.11): «order.created», «order.updated»…
+  if (topic === "order.deleted") return "Pedido WooCommerce (papelera)";
+  if (topic.startsWith("order.")) return "Pedido WooCommerce";
   return topic;
 }
 
@@ -369,8 +435,11 @@ const INDEX: IndexGroup[] = [
     title: "Conexiones",
     items: [
       { id: "shopify", label: "Shopify" },
+      { id: "woocommerce", label: "WooCommerce" },
+      { id: "bot-pedidos", label: "Bot de Kapso → pedidos" },
       { id: "kapso", label: "Kapso" },
       { id: "aliclik", label: "Aliclik" },
+      { id: "geocodificacion", label: "Coordenada por dirección" },
       { id: "shalom", label: "Shalom" },
       { id: "olva", label: "Olva" },
       { id: "tanders", label: "Tanders" },
@@ -560,6 +629,8 @@ export function StoreSettings({
             description="Cuentas y credenciales con las que Kapta habla con cada servicio. Los secretos se guardan cifrados y no se vuelven a mostrar: déjalos en blanco para conservar el actual."
           >
             <ShopifySection data={data} />
+            <WooCommerceSettingsSection storeId={s.id} data={data.woo} />
+            <BotOrdersSettingsSection storeId={s.id} data={data.botOrders} />
             <KapsoSection data={data} />
             <AliclikSection
               siteUrl={data.siteUrl}
@@ -568,6 +639,7 @@ export function StoreSettings({
               hasSecret={has.aliclikWebhookSecret}
               enabled={s.aliclik_enabled}
             />
+            <GeocodePilotSection storeId={s.id} configured={data.geocodePilot.configured} />
             <ShalomSection data={data} />
             <OlvaPortalSection data={data} />
             <TandersSection data={data} />
@@ -873,6 +945,7 @@ function BannerRow({ tone = "warn", title, children }: { tone?: "warn" | "info" 
 /* ── Conexiones ──────────────────────────────────────────────────────────── */
 
 function ShopifySection({ data }: { data: StoreSettingsData }) {
+  if (data.ownApp) return <OwnAppShopifySection data={data} ownApp={data.ownApp} />;
   const s = data.store;
   const has = data.has;
   return (
@@ -919,6 +992,129 @@ function ShopifySection({ data }: { data: StoreSettingsData }) {
         <FieldGrid>
           <SecretField name="shopify_token" label="Shopify Admin API token" set={has.shopifyToken} />
           <SecretField name="shopify_webhook_secret" label="Shopify API secret (HMAC)" set={has.webhookSecret} />
+          <SecretField
+            name="flow_webhook_secret"
+            label="Secreto webhook de Shopify Flow (búsquedas)"
+            set={has.flowSecret}
+            className="sm:col-span-2"
+          />
+        </FieldGrid>
+      </StoreForm>
+    </SettingsSection>
+  );
+}
+
+/**
+ * Shopify de una tienda conectada con su app propia (0271, owner 23-10-2026).
+ * Sin «Reconectar con Shopify» (eso es la app interna) ni los campos del token
+ * y del secreto HMAC a mano: el token lo renueva Kapta y el secreto de los
+ * webhooks es el Client secret de la app.
+ */
+function OwnAppShopifySection({
+  data,
+  ownApp,
+}: {
+  data: StoreSettingsData;
+  ownApp: NonNullable<StoreSettingsData["ownApp"]>;
+}) {
+  const s = data.store;
+  const has = data.has;
+  const [state, action, pending] = useActionState(saveOwnAppCredentials, initial);
+  const ok = has.shopifyToken && !ownApp.error;
+  return (
+    <SettingsSection
+      id="shopify"
+      title="Shopify"
+      badge={<Badge tone={ok ? "ok" : "warn"}>{has.shopifyToken ? "App propia" : "Sin token"}</Badge>}
+      description={
+        <p>
+          Conectada con la app que la organización de Shopify de la tienda creó en el Dev Dashboard. Kapta renueva
+          el acceso cada día.
+        </p>
+      }
+    >
+      <div className={cn(CARD, "divide-y divide-line")}>
+        <div className={ROW}>
+          <p className="text-sm font-semibold leading-5 text-ink-900">{ownApp.statusLine}</p>
+          <p className={cn(HELP, "mt-0.5")}>{ownApp.hint}</p>
+        </div>
+        {ownApp.error ? (
+          <BannerRow tone="warn" title={ownApp.errorTitle}>
+            {ownApp.error}
+          </BannerRow>
+        ) : null}
+        {ownApp.prevSecretUntil ? (
+          <ActionRow
+            action={clearOwnAppPreviousSecret}
+            storeId={s.id}
+            title="Client secret anterior"
+            label="Ya revoqué el secreto anterior"
+            pendingLabel="Guardando…"
+            help={`Kapta acepta también webhooks firmados con el secreto anterior ${ownApp.prevSecretUntil}: Shopify firma con él hasta que lo revocas en el Dev Dashboard. Revócalo allí y confirma aquí.`}
+          />
+        ) : null}
+        {ownApp.disabled ? null : (
+          <ActionRow
+            action={renewOwnAppTokenNow}
+            storeId={s.id}
+            title="Acceso a Shopify"
+            label="Renovar ahora"
+            pendingLabel="Renovando…"
+            help="Pide un token nuevo con el Client ID y el Client secret guardados. El cron lo hace cada hora."
+          />
+        )}
+        <ActionRow
+          action={reRegisterWebhooks}
+          storeId={s.id}
+          title="Webhooks de pedidos"
+          label="Re-registrar webhooks"
+          help="Vuelve a registrar pedidos, borradores y la desinstalación de la app apuntando a este panel."
+        />
+      </div>
+
+      <form action={action} className={cn(CARD, "divide-y divide-line")}>
+        <input type="hidden" name="store_id" value={s.id} />
+        <CardHeader
+          title="Credenciales de la app"
+          description="Se prueban pidiendo un token antes de guardarlas. Si no sirven, no se cambia nada."
+        />
+        <FieldGrid>
+          <Field label="Client ID" htmlFor="own_client_id">
+            <input
+              id="own_client_id"
+              name="own_client_id"
+              defaultValue={ownApp.clientId ?? ""}
+              autoComplete="off"
+              className={FIELD}
+            />
+          </Field>
+          <Field
+            label="Client secret"
+            htmlFor="own_client_secret"
+            mark={<Badge tone={ownApp.hasSecret ? "ok" : "neutral"}>{ownApp.hasSecret ? "Configurado" : "Sin configurar"}</Badge>}
+            hint="No se vuelve a mostrar. Si lo rotaste en el Dev Dashboard: pega el nuevo aquí, después revoca el anterior allí y confirma con «Ya revoqué el secreto anterior». Si cambias el Client ID (otra app), Kapta registra los webhooks de la nueva: desinstala la anterior."
+          >
+            <input
+              id="own_client_secret"
+              name="own_client_secret"
+              type="password"
+              autoComplete="off"
+              required
+              placeholder="Pega el Client secret"
+              className={FIELD}
+            />
+          </Field>
+        </FieldGrid>
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 px-4 py-3 sm:px-5">
+          <ActionResult state={state} className="mr-auto min-w-0" />
+          <OpsButton type="submit" variant="primary" disabled={pending}>
+            {pending ? "Probando…" : "Probar y guardar"}
+          </OpsButton>
+        </div>
+      </form>
+
+      <StoreForm storeId={s.id} title="Shopify Flow" persisted={[has.flowSecret]}>
+        <FieldGrid>
           <SecretField
             name="flow_webhook_secret"
             label="Secreto webhook de Shopify Flow (búsquedas)"
@@ -1052,6 +1248,266 @@ function KapsoSection({ data }: { data: StoreSettingsData }) {
  * cabecera de autenticación— así que el secreto en la URL es la única barrera.
  * De ahí que se acuñe igual que el de Kapso y se revele una sola vez.
  */
+/**
+ * «Coordenada por dirección (piloto)» (docs/kapta/geocodificacion-propuesta.md):
+ * mide el geocodificador de Google contra los pedidos de WooCommerce cuyo pin
+ * ya puso una persona. No toca ningún pedido y solo enseña cuentas.
+ */
+function GeocodePilotSection({ storeId, configured }: { storeId: string; configured: boolean }) {
+  const [state, action, pending] = useActionState<GeocodePilotState, FormData>(runGeocodePilotAction, {});
+  const report = state.report ?? null;
+  return (
+    <SettingsSection
+      id="geocodificacion"
+      title="Coordenada por dirección (piloto)"
+      badge={configured ? <Badge tone="info">Solo medición</Badge> : <Badge>Sin clave</Badge>}
+      description={
+        <>
+          <p>
+            Antes de usar la coordenada que da Google para la dirección escrita, se mide contra los pedidos de
+            WooCommerce de los últimos 7 días cuyo pin ya puso una persona (Lima y Provincia COD, hasta{" "}
+            {GEOCODE_DAILY_QUOTA}: el cupo diario de la Geocoding API en Google Cloud). Solo cuenta
+            el punto que pasa el candado: exacto al edificio o al número, sin coincidencia parcial, en el distrito y el
+            departamento del pedido y dentro del Perú.
+          </p>
+          <p>
+            Para encenderla, al menos el {Math.round(GEOCODE_CRITERION_B.minShare * 100)} % de los que pasan tienen que
+            quedar a {GEOCODE_CRITERION_B.withinMeters} m o menos del pin real. No cambia ningún pedido: a Google solo
+            va la dirección, y aquí solo se ven cuentas. Cada pasada gasta una consulta por pedido: con el cupo de{" "}
+            {GEOCODE_DAILY_QUOTA} al día, una pasada por día.
+          </p>
+        </>
+      }
+    >
+      <div className={cn(CARD, "divide-y divide-line")}>
+        <CardHeader
+          title="Medición"
+          description="Tarda hasta un minuto. Si se acaba el tiempo, lo que quedó sin consultar se cuenta aparte."
+          aside={
+            <form action={action}>
+              <input type="hidden" name="store_id" value={storeId} />
+              <OpsButton type="submit" size="sm" disabled={pending || !configured} className="pointer-coarse:h-11">
+                {pending ? "Midiendo…" : "Medir con los pedidos que ya tienen ubicación"}
+              </OpsButton>
+            </form>
+          }
+        />
+        {!configured ? (
+          <div className={ROW}>
+            <Banner tone="warn" role="status">
+              <p>{GEOCODE_KEY_MISSING}</p>
+            </Banner>
+          </div>
+        ) : null}
+        {state.error ? (
+          <div className={ROW}>
+            <Banner tone="crit" role="alert">
+              <p className="whitespace-pre-line break-words">{state.error}</p>
+            </Banner>
+          </div>
+        ) : null}
+        {report ? <GeocodePilotResults report={report} /> : null}
+      </div>
+      <GeocodeChatbyCheck storeId={storeId} configured={configured} />
+    </SettingsSection>
+  );
+}
+
+/**
+ * Los confirmados por Chatby que esperan la ubicación de la clienta: ¿cuántos
+ * tendrían coordenada por dirección? Pedido por pedido, con el punto en el mapa
+ * para que una persona lo mire. No escribe nada.
+ */
+function GeocodeChatbyCheck({ storeId, configured }: { storeId: string; configured: boolean }) {
+  const [state, action, pending] = useActionState<GeocodeChatbyState, FormData>(runGeocodeChatbyAction, {});
+  const rows = state.rows ?? null;
+  const passed = rows?.filter((r) => r.ok).length ?? 0;
+  return (
+    <div className={cn(CARD, "mt-4 divide-y divide-line")}>
+      <CardHeader
+        title="Confirmados por Chatby sin ubicación"
+        description="Los que esperan que la clienta mande su ubicación: cuántos pasarían el candado. Una consulta por pedido; no cambia nada."
+        aside={
+          <form action={action}>
+            <input type="hidden" name="store_id" value={storeId} />
+            <OpsButton type="submit" size="sm" disabled={pending || !configured} className="pointer-coarse:h-11">
+              {pending ? "Probando…" : "Probar con estos pedidos"}
+            </OpsButton>
+          </form>
+        }
+      />
+      {state.error ? (
+        <div className={ROW}>
+          <Banner tone="crit" role="alert">
+            <p className="whitespace-pre-line break-words">{state.error}</p>
+          </Banner>
+        </div>
+      ) : null}
+      {rows && !rows.length ? (
+        <div className={ROW}>
+          <p className="text-sm text-ink-500">No hay pedidos de esta tienda esperando la ubicación.</p>
+        </div>
+      ) : null}
+      {rows?.length ? (
+        <div className={ROW}>
+          <p className="mb-2 text-sm">
+            Pasan el candado <strong>{passed}</strong> de {rows.length} · {state.apiCalls ?? 0} consultas a Google
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="text-left text-xs text-ink-500">
+                  <th className="py-1 pr-3 font-medium">Pedido</th>
+                  <th className="py-1 pr-3 font-medium">Etapa</th>
+                  <th className="py-1 pr-3 font-medium">Resultado</th>
+                  <th className="py-1 font-medium">Mapa</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.orderName} className="border-t border-line">
+                    <td className="py-1.5 pr-3">{r.orderName}</td>
+                    <td className="py-1.5 pr-3">{r.stage === "preparacion" ? "Preparación" : "Por confirmar"}</td>
+                    <td className="py-1.5 pr-3">
+                      {r.ok ? (
+                        <Badge tone="ok">Pasa · {r.precision === "ROOFTOP" ? "edificio" : "número"}</Badge>
+                      ) : (
+                        <span className="text-ink-500">{r.reason ? GEOCODE_REASON_LABEL[r.reason] : "No pasa"}</span>
+                      )}
+                    </td>
+                    <td className="py-1.5">
+                      {r.point ? (
+                        <a
+                          className="font-medium text-brand-700 hover:underline"
+                          href={`https://www.google.com/maps?q=${r.point.lat},${r.point.lng}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Ver punto
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GeocodePilotResults({ report }: { report: NonNullable<GeocodePilotState["report"]> }) {
+  const n = (x: number) => x.toLocaleString("es-PE");
+  const pct = (x: number | null) =>
+    x == null ? "—" : `${x.toLocaleString("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
+  const meters = (x: number | null) => (x == null ? "—" : `${Math.round(x).toLocaleString("es-PE")} m`);
+  const rows: GeocodeCoverageStats[] = [...report.byCoverage, report.total];
+  const label = (c: GeocodeCoverageStats["coverage"]) => (c === "total" ? "Total" : GEOCODE_COVERAGE_LABEL[c]);
+  const reasons = (Object.keys(GEOCODE_REASON_LABEL) as GeocodePilotReason[]).filter((r) =>
+    rows.some((s) => (s.rejections[r] ?? 0) > 0),
+  );
+  const verdict = (s: GeocodeCoverageStats) =>
+    s.criterionBMet == null ? (
+      <Badge>Sin puntos</Badge>
+    ) : s.criterionBMet ? (
+      <Badge tone="ok">Cumple</Badge>
+    ) : (
+      <Badge tone="crit">No cumple</Badge>
+    );
+  return (
+    <>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-[13px] tabular-nums">
+          <thead>
+            <tr className="text-left text-xs text-ink-500">
+              <th className="px-4 py-2 font-medium sm:px-5">Cobertura</th>
+              <th className="px-2 py-2 text-right font-medium">Muestra</th>
+              <th className="px-2 py-2 text-right font-medium">Pasan el candado</th>
+              <th className="px-2 py-2 text-right font-medium">Mediana al pin</th>
+              <th className="px-2 py-2 text-right font-medium">A {GEOCODE_CRITERION_B.withinMeters} m o menos</th>
+              <th className="px-2 py-2 text-right font-medium">A más de 1 km</th>
+              <th className="px-2 py-2 text-right font-medium">Solo ROOFTOP, a {GEOCODE_CRITERION_B.withinMeters} m o menos</th>
+              <th className="px-4 py-2 text-right font-medium sm:px-5">Criterio B</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {rows.map((s) => (
+              <tr key={s.coverage} className={cn("text-ink-700", s.coverage === "total" && "font-semibold text-ink-900")}>
+                <td className="whitespace-nowrap px-4 py-2 text-ink-900 sm:px-5">{label(s.coverage)}</td>
+                <td className="px-2 py-2 text-right">{n(s.sampled)}</td>
+                <td className="px-2 py-2 text-right">
+                  {n(s.passed)}
+                  <span className="text-ink-500"> ({n(s.rooftop)} ROOFTOP)</span>
+                </td>
+                <td className="px-2 py-2 text-right">{meters(s.medianM)}</td>
+                <td className="px-2 py-2 text-right">{pct(s.within300Pct)}</td>
+                <td className="px-2 py-2 text-right">{pct(s.beyond1kmPct)}</td>
+                <td className="px-2 py-2 text-right">{pct(s.rooftopWithin300Pct)}</td>
+                <td className="px-4 py-2 text-right sm:px-5">{verdict(s)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {reasons.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[520px] text-[13px] tabular-nums">
+            <thead>
+              <tr className="text-left text-xs text-ink-500">
+                <th className="px-4 py-2 font-medium sm:px-5">Por qué no pasaron</th>
+                {rows.map((s) => (
+                  <th key={s.coverage} className="px-2 py-2 text-right font-medium last:pr-4 sm:last:pr-5">
+                    {label(s.coverage)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {reasons.map((r) => (
+                <tr key={r} className="text-ink-700">
+                  <td className="px-4 py-2 text-ink-900 sm:px-5">{GEOCODE_REASON_LABEL[r]}</td>
+                  {rows.map((s) => (
+                    <td key={s.coverage} className="px-2 py-2 text-right last:pr-4 sm:last:pr-5">
+                      {n(s.rejections[r] ?? 0)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <div className={cn(ROW, "space-y-1.5 text-[13px] leading-5 text-ink-700")}>
+        <p className="tabular-nums">
+          {n(report.apiCalls)} {report.apiCalls === 1 ? "consulta" : "consultas"} a Google ·{" "}
+          {(report.elapsedMs / 1000).toLocaleString("es-PE", { maximumFractionDigits: 0 })} s · pedidos de los últimos{" "}
+          {report.days} días, hasta {n(report.cap)}.
+        </p>
+        {report.truncated ? (
+          <p className="text-warn-fg">
+            Se acabó el tiempo antes de consultar toda la muestra: lo que quedó está en «No se llegó a consultar».
+          </p>
+        ) : null}
+        {report.quotaHit ? (
+          <p className="text-warn-fg">
+            Google contestó que se acabó el cupo del día (OVER_QUERY_LIMIT): lo que quedó está en «No se consultó (cupo
+            diario de Google)». Vuelve a medir mañana.
+          </p>
+        ) : null}
+        {rows.some((s) => s.passed > 0 && s.smallSample) ? (
+          <p className="text-ink-500">
+            Con menos de {GEOCODE_SMALL_SAMPLE} puntos que pasan, el porcentaje de una cobertura todavía no dice mucho.
+          </p>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 function AliclikSection({
   siteUrl,
   storeId,
@@ -2964,6 +3420,9 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
             s.olva_arrival_template_enabled,
             s.olva_arrival_template_name,
             s.olva_arrival_params,
+            s.olva_paid_arrival_template_enabled,
+            s.olva_paid_arrival_template_name,
+            s.olva_paid_arrival_params,
             s.olva_reminder_template_enabled,
             s.olva_reminder_template_name,
             s.olva_reminder_params,
@@ -3031,6 +3490,58 @@ function AutomationSections({ data }: { data: StoreSettingsData }) {
               />
             </Field>
           </FieldGrid>
+          {s.olva_paid_arrival_available ? (
+            <>
+              <ToggleRow
+                name="olva_paid_arrival_template_enabled"
+                label="Aviso de llegada · pedido ya pagado"
+                defaultChecked={s.olva_paid_arrival_template_enabled}
+                description={
+                  <p>
+                    El de llegada es de cobro y no sale a quien ya no debe nada. Olva no tiene clave, así que sin este
+                    aviso la clienta que pagó completo <strong>no se entera de que su paquete llegó</strong>. Con él
+                    encendido, en vez de omitirse sale «ya llegó, recógelo con tu DNI», sin importes ni botones. Uno por
+                    guía: a quien ya recibió el de cobro y pagó después no se le manda otro.
+                  </p>
+                }
+              />
+              <FieldGrid cols={3}>
+                <Field label="Plantilla · nombre" htmlFor="olva_paid_arrival_template_name">
+                  <input
+                    id="olva_paid_arrival_template_name"
+                    name="olva_paid_arrival_template_name"
+                    defaultValue={s.olva_paid_arrival_template_name ?? ""}
+                    placeholder="guias_olva_llegada_pagado"
+                    className={FIELD}
+                  />
+                </Field>
+                <Field
+                  label="Orden de las variables"
+                  htmlFor="olva_paid_arrival_params"
+                  className="lg:col-span-2"
+                  hint={
+                    <p>
+                      Sin importes: <code>total</code>, <code>adelanto</code>, <code>saldo</code> y <code>yape</code>{" "}
+                      no se admiten. <code>vence</code> es la fecha límite, a 6 días de la llegada.
+                    </p>
+                  }
+                >
+                  <input
+                    id="olva_paid_arrival_params"
+                    name="olva_paid_arrival_params"
+                    defaultValue={s.olva_paid_arrival_params ?? ""}
+                    placeholder="nombre,producto,agencia,guia,vence"
+                    className={FIELD}
+                  />
+                </Field>
+              </FieldGrid>
+            </>
+          ) : (
+            <BannerRow tone="info" title="Aviso de llegada · pedido ya pagado">
+              Falta aplicar la migración 0281 en la base. Hasta entonces, a la clienta de Olva que ya pagó no le sale
+              el aviso de llegada.
+            </BannerRow>
+          )}
           <ToggleRow
             name="olva_reminder_template_enabled"
             label="Recordatorio de recojo"

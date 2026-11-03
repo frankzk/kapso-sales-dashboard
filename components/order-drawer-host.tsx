@@ -27,12 +27,19 @@ export interface OrderDrawerHostStore {
   id: string;
   name: string;
   shopify_domain: string | null;
+  /** `stores.woo_site_url`: el enlace de un pedido de WooCommerce (MOM §38.12). */
+  woo_site_url?: string | null;
 }
 
 export interface OrderDrawerHostProps {
   stores: OrderDrawerHostStore[];
   canEdit: boolean;
   canOverride: boolean;
+  /** «Registrar estado» a mano (`master.set_status`): owner y admin, MOM §16. */
+  canSetStatus: boolean;
+  /** «Anular pedido» de WooCommerce (`orders.cancel_woo`, MOM §38.15). */
+  canCancelWoo: boolean;
+  canEditCustomerName?: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -43,6 +50,8 @@ export interface OrderDrawerHostProps {
     canFinalize: boolean;
     canRefund: boolean;
     canReopen: boolean;
+    canManageCosts: boolean;
+    canManageLogistics: boolean;
   };
 }
 
@@ -81,6 +90,7 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
 
   const storeName = (id: string) => stores.find((s) => s.id === id)?.name ?? "Tienda";
   const storeDomain = (id: string) => stores.find((s) => s.id === id)?.shopify_domain ?? null;
+  const storeWooSite = (id: string) => stores.find((s) => s.id === id)?.woo_site_url ?? null;
 
   return (
     <OrderDrawer
@@ -88,12 +98,16 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
       orderId={request.orderId}
       canEdit={permissions.canEdit}
       canOverride={permissions.canOverride}
+      canSetStatus={permissions.canSetStatus}
+      canCancelWoo={permissions.canCancelWoo}
+      canEditCustomerName={permissions.canEditCustomerName}
       canCreateGuide={permissions.canCreateGuide}
       canCreateTandersGuide={permissions.canCreateTandersGuide}
       canCreateShalomGuide={permissions.canCreateShalomGuide}
       closurePermissions={permissions.closurePermissions}
       storeName={storeName}
       storeDomain={storeDomain}
+      storeWooSite={storeWooSite}
       onClose={close}
       onSaved={() => setRefreshTick((n) => n + 1)}
       initialWorkspace={workspaceForDrawerSection(request.section)}

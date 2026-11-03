@@ -49,6 +49,9 @@ interface ExistingShipment {
   delivered_source: string | null;
   aliclik_attempts: number | null;
   aliclik_service_date: string | null;
+  /** 0304: el detalle del reporte más reciente. Puede faltar antes de la migración. */
+  aliclik_sub_status?: string | null;
+  aliclik_rider_comment?: string | null;
   aliclik_reported_dispatch_date: string | null;
   district: string | null;
   province: string | null;
@@ -267,10 +270,8 @@ export async function ingestAliclikReport(
       linkStore = inc.resolvedStore;
     }
 
-    const last_report_at =
-      existing?.last_report_at && existing.last_report_at > meta.reportAt
-        ? existing.last_report_at
-        : meta.reportAt;
+    const reportIsLatest = !(existing?.last_report_at && existing.last_report_at > meta.reportAt);
+    const last_report_at = reportIsLatest ? meta.reportAt : existing!.last_report_at!;
 
     // La devolución se sella una sola vez, con su procedencia (0118), y no se
     // borra: un reporte posterior que ya no mencione el retorno no puede
@@ -332,6 +333,11 @@ export async function ingestAliclikReport(
       // Quedarse con el máximo escondería justamente la corrección manual, que
       // es la señal de que el incumplimiento costó trabajo.
       aliclik_reported_dispatch_date: inc.row.dispatch_date ?? existing?.aliclik_reported_dispatch_date ?? null,
+      // El subestado y el comentario del motorizado (0304) son los del reporte
+      // MÁS RECIENTE, vacíos incluidos: si la guía siguió y el subestado ya no
+      // aparece, ya no aplica. Un reporte más viejo que el último no los toca.
+      aliclik_sub_status: reportIsLatest ? inc.row.sub_status : existing?.aliclik_sub_status ?? null,
+      aliclik_rider_comment: reportIsLatest ? inc.row.rider_comment : existing?.aliclik_rider_comment ?? null,
       source_batch_id: batchId,
       last_report_at,
     });
@@ -351,7 +357,7 @@ export async function ingestAliclikReport(
     // despacho de la 0133— y la importación entera se caía con ella.
     if (isMissingColumn(upsertResult.error)) {
       const legacyChunk = chunk.map(
-        ({ province: _p, aliclik_reported_dispatch_date: _d, ...row }) => row,
+        ({ province: _p, aliclik_reported_dispatch_date: _d, aliclik_sub_status: _s, aliclik_rider_comment: _c, ...row }) => row,
       );
       upsertResult = await admin
         .from("shipments")
@@ -555,6 +561,7 @@ const EXISTING_SHIPMENT_TAIL =
   ",delivery_address,delivery_reference,latitude,longitude,address_override";
 /** Del conjunto de hoy al de ayer. Ver el bucle de `fetchExistingShipments`. */
 const EXISTING_SHIPMENT_COLUMN_SETS = [
+  `${EXISTING_SHIPMENT_BASE},aliclik_reported_dispatch_date,aliclik_sub_status,aliclik_rider_comment,district,province,city,region${EXISTING_SHIPMENT_TAIL}`,
   `${EXISTING_SHIPMENT_BASE},aliclik_reported_dispatch_date,district,province,city,region${EXISTING_SHIPMENT_TAIL}`,
   `${EXISTING_SHIPMENT_BASE},district,province,city,region${EXISTING_SHIPMENT_TAIL}`,
   `${EXISTING_SHIPMENT_BASE},district,city,region${EXISTING_SHIPMENT_TAIL}`,

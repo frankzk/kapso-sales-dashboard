@@ -18,13 +18,14 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { alreadyInBoxChip } from "@/lib/gf-scan-already-in-box";
+import { scanLineCanMove } from "@/lib/gf-scan-return";
 import Link from "next/link";
 import { OrderLink } from "@/components/order-link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Hint } from "@/components/hint";
 import { Sheet } from "@/components/filter-sheet";
-import { AttentionPill, Badge, Banner, CHECKBOX, ChoiceChip, FIELD, FilterPill, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-ui";
+import { AttentionPill, Badge, Banner, CHECKBOX, ChoiceChip, FIELD, FilterPill, OpsButton, opsButtonClass, StatusCard, type BadgeTone } from "@/components/ops-ui";
 import { IconAlert, IconCalendar, IconCheck, IconChevronDown, IconChevronRight, IconInfo, IconList, IconPackage, IconQr, IconRepeat, IconSearch, IconUndo, IconX } from "@/components/icons";
 import { ReturnsScanner } from "@/components/returns-scanner";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
@@ -44,6 +45,7 @@ import {
   filterBoxItems,
   filterQueue,
   limaDay,
+  locateOutsideList,
   PACKAGE_STAGE_LABEL,
   packageStage,
   programDayLabel,
@@ -68,7 +70,9 @@ import {
   type BoxItemFilter,
   type CreatedWindow,
   type DayManifest,
+  type LocateAction,
   type QueueFilters,
+  type QueueLocation,
   type QueueRow,
   type QueueSegment,
   type QueueTile,
@@ -132,6 +136,9 @@ interface Props {
   run: (action: () => Promise<CourierActionResult>) => void;
   /** «No entregado» que siguen en una caja, de cualquier fecha: tarjeta «Devoluciones». */
   pendingReturns?: PendingReturn[];
+  /** No entregados de Lima que la tienda todavía no acordó en Repro Lima: no
+   *  están en la cola (MOM §29.13, 01-11-2026). */
+  awaitingRepro?: number;
 }
 
 const money = (n: number) => `S/ ${n.toFixed(2)}`;
@@ -175,6 +182,8 @@ export function DispatchDayBoard(props: Props) {
     creado: useRef<HTMLButtonElement>(null),
   };
   const [blockedOpen, setBlockedOpen] = useState(false);
+  // El pedido que la búsqueda mandó a «Sin condiciones»: va primero y resaltado.
+  const [blockedFocus, setBlockedFocus] = useState<string | null>(null);
   const [declinedOpen, setDeclinedOpen] = useState(false);
   // «Sacar con salida nueva» (0248): la confirmación, y las cajas reemplazadas
   // que el motorizado todavía tiene, con su propia selección por salida (el
@@ -260,8 +269,8 @@ export function DispatchDayBoard(props: Props) {
    * esté en poder del otro (0230). El resultado se dice EN LA FILA — el aviso de
    * arriba quedaba fuera de la pantalla y parecía que el botón no hacía nada.
    */
-  async function moveScanned(line: ScanAssignLine) {
-    if (!line.manifestId || !line.shipmentId || !riderId) return;
+  async function moveScanned(line: ScanAssignLine): Promise<{ error?: string; notice?: string }> {
+    if (!line.manifestId || !line.shipmentId || !riderId) return { error: "Elige el motorizado de la caja." };
     const from = line.riderName ?? "otro motorizado";
     setLines((cur) => cur.map((l) => (l === line ? { ...l, status: "procesando", message: "Moviendo…", moveError: null } : l)));
     const reason = `Escaneado en oficina para la caja de ${riderName}`;
@@ -277,7 +286,9 @@ export function DispatchDayBoard(props: Props) {
         ? { ...line, moveError: result.error }
         : { ...line, status: "asignado", riderName, receivedFrom: from, moveError: null, message: `Movido de la caja de ${from}.` };
     }));
-    if (!("error" in result && result.error)) scheduleRefresh();
+    if ("error" in result && result.error) return { error: result.error };
+    scheduleRefresh();
+    return { notice: `${line.orderName ?? line.code} pasó de la caja de ${from} a la de ${riderName}.` };
   }
 
   /** «Asignar igual» un QR programado para otro día: su línea vuelve a «asignando…». */
@@ -448,6 +459,46 @@ export function DispatchDayBoard(props: Props) {
   // Filtrada y en el orden de los apartados: programados hoy, mañana, nunca salieron,
   // ya salieron, +30 días y programados después.
   const filtered = useMemo(() => sortQueue(filterQueue(allRows, filters, day), day), [allRows, filters, day]);
+  // La búsqueda no encontró nada aquí: ¿dónde está ese pedido? (24-10-2026,
+  // #KP141876 en «Sin condiciones» por Ancón). Solo con la lista vacía y con
+  // lo que el tablero ya tiene; `locateOutsideList` decide el texto y el botón.
+  const located = useMemo(
+    () => filtered.length || !filters.query.trim()
+      ? { found: [] as QueueLocation[], more: 0 }
+      : locateOutsideList(filters, { rows: allRows, blocked: props.blocked, returning: props.returning, pendingReturns: props.pendingReturns }, day, { canEditTariffs: props.canAuthorizeCash === true }),
+    [filtered.length, filters, allRows, props.blocked, props.returning, props.pendingReturns, day, props.canAuthorizeCash],
+  );
+  /** El botón del aviso: el mismo gesto que la tarjeta, la píldora o la hoja de siempre. */
+  function goToLocation(action: LocateAction, orderId: string) {
+    const query = filters.query;
+    switch (action.kind) {
+      case "apartado":
+        setFilters({ ...EMPTY_QUEUE_FILTERS, query, segment: action.segment });
+        setLimit(100);
+        return;
+      case "etapa":
+        setFilters(setStages({ ...EMPTY_QUEUE_FILTERS, query }, [action.stage]));
+        setLimit(100);
+        return;
+      case "quitar_filtros":
+        setFilters({ ...EMPTY_QUEUE_FILTERS, query });
+        setLimit(100);
+        return;
+      case "sin_condiciones":
+        setBlockedFocus(orderId);
+        setBlockedOpen(true);
+        return;
+      case "en_devolucion":
+        setReturningOpen(true);
+        return;
+      case "devoluciones":
+        setMethod("devoluciones");
+        return;
+      default:
+        // Tarifario y ficha son enlaces (`LocateButton`): no pasan por aquí.
+        return;
+    }
+  }
   // Chips de etapa, subetapa y fecha pactada con su cantidad facetada (cuántas
   // quedarían al tocarlo con el resto de filtros como están). Las subetapas
   // son las de la etapa elegida; sin etapa no se muestran.
@@ -546,7 +597,7 @@ export function DispatchDayBoard(props: Props) {
   }, [props.accepted, scanDay]);
   const declined = useMemo(() => declinedPackages(boxes), [boxes]);
   const dayCod = boxes.reduce((sum, b) => sum + b.loads.reduce((s, l) => s + activeDispatchItems(l.items).length, 0), 0);
-  const queueTiles = useMemo(() => queueTileCounts(queue, allRows, day), [queue, allRows, day]);
+  const queueTiles = useMemo(() => queueTileCounts(queue, day), [queue, day]);
   const boxTiles = useMemo(() => boxTileCounts(boxes), [boxes]);
   /** Tocar una tile de la cola: abre «Desde la lista» con ese filtro (o lo quita). */
   const tapQueueTile = (tile: QueueTile) => {
@@ -676,10 +727,22 @@ export function DispatchDayBoard(props: Props) {
         </div>
         <p className="min-w-0 text-[13px] text-ink-500">
           <b className="font-semibold tabular-nums text-ink-900">{queue.length.toLocaleString("es-PE")}</b> por asignar
+          {(props.awaitingRepro ?? 0) > 0 && (
+            <>
+              {" · "}
+              <a
+                href="/dashboard/pedidos/repro-lima"
+                className="text-ink-500 underline decoration-line-strong underline-offset-2 hover:text-brand-700"
+                title="No entregados de Lima que la tienda todavía no acordó con el cliente. Entran aquí, en «Reintentos para hoy», cuando la tienda confirma el día."
+              >
+                <b className="font-semibold tabular-nums text-ink-900">{props.awaitingRepro}</b> esperan a la tienda en Repro Lima
+              </a>
+            </>
+          )}
           {boxes.length > 0 && <> · <b className="font-semibold tabular-nums text-ink-900">{boxes.length}</b> {boxes.length === 1 ? "caja" : "cajas"} · <b className="font-semibold tabular-nums text-ink-900">{dayCod}</b> paq.</>}
         </p>
         <div role="group" aria-label="Excepciones del día" className="flex flex-wrap items-center gap-2 lg:ml-auto">
-          <AttentionPill icon={IconRepeat} label="Por reprogramar" count={queueTiles.por_reprogramar} hint={QUEUE_TILE_LABEL.por_reprogramar.hint} active={queueTileActive(filters, "por_reprogramar") && method === "lista"} onClick={() => tapQueueTile("por_reprogramar")} />
+          <AttentionPill icon={IconRepeat} label="Reintentos para hoy" count={queueTiles.reintentos_hoy} hint={QUEUE_TILE_LABEL.reintentos_hoy.hint} active={queueTileActive(filters, "reintentos_hoy") && method === "lista"} onClick={() => tapQueueTile("reintentos_hoy")} />
           <AttentionPill icon={IconUndo} label="Devoluciones" count={pendingReturns.length} hint="No entregados que el motorizado tiene que traer de vuelta, de cualquier fecha. Toca para escanear y confirmar que llegaron a la oficina." active={method === "devoluciones"} onClick={() => setMethod((m) => (m === "devoluciones" ? "qr" : "devoluciones"))} />
           {returning.length > 0 && (
             <AttentionPill icon={IconUndo} label="En devolución" count={returning.length} hint="Cajas que el motorizado todavía tiene y ya se reemplazaron por una salida nueva («Sacar con salida nueva»). Cuando las traiga, recíbelas en oficina: vuelven a stock y no se reprograman." active={returningOpen} onClick={() => setReturningOpen((v) => !v)} />
@@ -687,7 +750,7 @@ export function DispatchDayBoard(props: Props) {
           {declined.length > 0 && (
             <AttentionPill icon={IconPackage} label="No recogidos" count={declined.length} hint="Paquetes que el motorizado no recogió de su caja: vuelven a «por asignar». Toca para ver cuáles." active={declinedOpen} onClick={() => setDeclinedOpen((v) => !v)} />
           )}
-          <AttentionPill icon={IconAlert} label="Sin condiciones" count={props.blocked.length} hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado, sin salida armable, o un «Por reprogramar» que no se puede sacar (otra salida viva, caja sin su «No entregado»…). Abre la lista con el motivo de cada uno." active={blockedOpen} onClick={() => setBlockedOpen((v) => !v)} />
+          <AttentionPill icon={IconAlert} label="Sin condiciones" count={props.blocked.length} hint="Pedidos de Lima que no entran en la cola: tarifa faltante, distrito inválido, servicio pausado, sin salida armable, o un «Por reprogramar» que no se puede sacar (otra salida viva, caja sin su «No entregado»…). Abre la lista con el motivo de cada uno." active={blockedOpen} onClick={() => { setBlockedFocus(null); setBlockedOpen((v) => !v); }} />
         </div>
       </div>
 
@@ -702,13 +765,14 @@ export function DispatchDayBoard(props: Props) {
       </div>
 
       {blockedOpen && (
-        <Sheet look="ops" title={`${props.blocked.length.toLocaleString("es-PE")} sin condiciones para salir`} onClose={() => setBlockedOpen(false)} wide>
+        <Sheet look="ops" title={`${props.blocked.length.toLocaleString("es-PE")} sin condiciones para salir`} onClose={() => { setBlockedOpen(false); setBlockedFocus(null); }} wide>
           <p className="text-[13px] text-ink-500">No entran en la cola hasta que se arregle el motivo. {props.canAuthorizeCash ? "Tarifa y pausa se corrigen en el Tarifario" : "Tarifa y pausa las corrige quien administra Grupo GF (Daysi o Frankz)"}; el resto en el pedido o en la caja.</p>
           <ul className="mt-3 max-h-[50vh] divide-y divide-line overflow-auto border-t border-line text-sm">
-            {props.blocked.map((b) => {
+            {/* El que mandó aquí la búsqueda de la lista, primero y resaltado. */}
+            {(blockedFocus ? [...props.blocked].sort((a, b) => Number(b.orderId === blockedFocus) - Number(a.orderId === blockedFocus)) : props.blocked).map((b) => {
               const reason = BLOCKED_REASON_LABEL[b.reason];
               return (
-                <li key={b.orderId} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2">
+                <li key={b.orderId} className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 py-2", b.orderId === blockedFocus && "bg-brand-50/60")}>
                   <OrderLink orderId={b.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{b.orderName}</OrderLink>
                   <span className="text-[13px] text-ink-500">{b.storeName} · {b.customerName} · {b.district}</span>
                   <Badge tone="warn">{reason.label}</Badge>
@@ -818,6 +882,7 @@ export function DispatchDayBoard(props: Props) {
                 onQueue={(code) => setTray((cur) => addToTray(cur, code))}
                 onPending={pendingLine}
                 onResult={(r) => { if (r.line) pushLine(r.line); }}
+                lineAction={(l) => (riderId && scanLineCanMove(l) ? { label: "Mover a esta caja", busyLabel: "Moviendo…", run: () => moveScanned(l) } : null)}
               />
             ) : (
               <Banner tone="warn">Tu rol no organiza rutas: puedes mirar, no asignar.</Banner>
@@ -1231,7 +1296,12 @@ export function DispatchDayBoard(props: Props) {
                     </tr>
                   ))}
                   {!visible.length && (
-                    <tr><td colSpan={10} className="px-4 py-12 text-center text-sm text-ink-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</td></tr>
+                    <tr>
+                      <td colSpan={10} className={cn("px-4 text-center text-sm text-ink-500", located.found.length ? "py-6" : "py-12")}>
+                        {tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}
+                        <LocatedNotice located={located.found} more={located.more} onAction={goToLocation} />
+                      </td>
+                    </tr>
                   )}
                 </tbody>
               </table>
@@ -1257,7 +1327,12 @@ export function DispatchDayBoard(props: Props) {
                   </div>
                 </li>
               ))}
-              {!visible.length && <li className="px-4 py-12 text-center text-sm text-ink-500">{tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}</li>}
+              {!visible.length && (
+                <li className={cn("px-4 text-center text-sm text-ink-500", located.found.length ? "py-6" : "py-12")}>
+                  {tracking ? "Ningún pedido de Grupo GF con ese filtro." : "Nada por asignar con ese filtro."}
+                  <LocatedNotice located={located.found} more={located.more} onAction={goToLocation} />
+                </li>
+              )}
             </ul>
 
             {filtered.length > 0 && (
@@ -1370,6 +1445,37 @@ function RowCheck({ q, checked, onToggle }: { q: QueueRow; checked: boolean; onT
     return <input type="checkbox" className={CHECKBOX} checked={checked} onChange={onToggle} aria-label={`Marcar ${q.orderName}`} />;
   }
   return <span aria-hidden className="block size-4 rounded border border-dashed border-line-strong" title={q.route ? "Ya salió: se sigue, no se asigna" : "Pedido cerrado o cerrándose: no se asigna"} />;
+}
+
+/**
+ * La búsqueda no encontró nada en la lista, pero el pedido está en otro sitio
+ * del tablero (24-10-2026, #KP141876 en «Sin condiciones»): dónde, por qué y
+ * el botón que lleva allí. Avisos del mundo de operación, uno por pedido.
+ */
+function LocatedNotice({ located, more, onAction }: { located: QueueLocation[]; more: number; onAction: (action: LocateAction, orderId: string) => void }) {
+  if (!located.length) return null;
+  return (
+    <div className="mx-auto mt-4 grid max-w-2xl gap-2 text-left">
+      {located.map((loc) => (
+        <Banner key={loc.orderId} tone={loc.tone}>
+          <p>{loc.text}</p>
+          {loc.action && <div className="mt-2"><LocateButton action={loc.action} orderId={loc.orderId} onAction={onAction} /></div>}
+        </Banner>
+      ))}
+      {more > 0 && <p className="text-[13px] text-ink-500">Y {more} {more === 1 ? "pedido más" : "pedidos más"} fuera de la lista con ese texto: escribe el número entero para ver solo el tuyo.</p>}
+    </div>
+  );
+}
+
+/** Tarifario y ficha son enlaces (se abren en otra pestaña si se quiere); el resto, el gesto del tablero. */
+function LocateButton({ action, orderId, onAction }: { action: LocateAction; orderId: string; onAction: (action: LocateAction, orderId: string) => void }) {
+  if (action.kind === "tarifario") {
+    return <Link href="/dashboard/courier?tab=tariffs" className={opsButtonClass("secondary", "sm")}>{action.label}</Link>;
+  }
+  if (action.kind === "ficha") {
+    return <OrderLink orderId={action.orderId} section={action.section} className={opsButtonClass("secondary", "sm")}>{action.label}</OrderLink>;
+  }
+  return <OpsButton size="sm" onClick={() => onAction(action, orderId)}>{action.label}</OpsButton>;
 }
 
 /** Cómo se nombra la guía en revisión en la hoja de confirmación, antes de su fecha. */

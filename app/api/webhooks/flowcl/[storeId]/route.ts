@@ -54,7 +54,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: s
   // decide en qué banco cae el dinero, así que no se comparte entre tiendas de
   // distinto titular. Y no hay respaldo a una cuenta global — una tienda mal
   // configurada tiene que fallar, no cobrar en la cuenta de otro.
-  const creds = await getStoreCreds(storeId);
+  // Sin renovar el token de una app propia de Shopify (0271): aquí no se usa,
+  // y el secreto todavía no se comprobó.
+  const creds = await getStoreCreds(storeId, undefined, { renewOwnApp: false });
   if (!creds) return new NextResponse("unauthorized", { status: 401 });
   if (!secretEquals(readSecret(req), creds.flowcl_webhook_secret)) {
     return new NextResponse("unauthorized", { status: 401 });

@@ -126,6 +126,7 @@ class FakeSupabase {
     return new FakeBuilder(table, this);
   }
   async rpc(_name: string, args: any) {
+    if (_name === "requeue_leads_for_calls") return { data: 0, error: null };
     this.recomputeCalls.push(args);
     return { error: null };
   }
@@ -1680,55 +1681,21 @@ describe("sendSeguimientoDrip · envío y registro", () => {
 
 // ─────────────── Olas de reencolado de carritos (no contestan) ───────────────
 
-describe("flagCartAttentionWaves · olas de reencolado con tope", () => {
-  const waveLead = (over: Record<string, any> = {}): any => ({
-    id: "W1",
-    cart_item_count: 2,
-    draft_order_gid: null,
-    attention_waves: 0,
-    ...over,
-  });
-
-  it("sube con atención, suma la ola y deja la nota 🔁 (ola 1/2 y 2/2)", async () => {
+describe("Por llamar · reingresos atómicos (0289)", () => {
+  it("uses the store-scoped RPC count and makes no separate update/audit writes", async () => {
     const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
-    const fake = new FakeSupabase(makeStoreRow());
-    fake.waveLeads = [waveLead(), waveLead({ id: "W2", attention_waves: 1 })];
-    const n = await flagCartAttentionWaves(fake as any, "store-1");
-    expect(n).toBe(2);
-    expect(fake.leadPatches).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ needs_attention: true, attention_waves: 1 }),
-        expect.objectContaining({ needs_attention: true, attention_waves: 2 }),
-      ]),
-    );
-    const notes = fake.leadCalls.map((c) => c.note).join("\n");
-    expect(notes).toContain("ola 1/2");
-    expect(notes).toContain("ola 2/2");
-    expect(fake.leadCalls.every((c) => c.kind === "system" && c.vendedora === null)).toBe(true);
+    const calls: unknown[] = [];
+    const fake = { rpc: async (name: string,args: unknown) => {calls.push([name,args]);return {data:2,error:null};} };
+    expect(await flagCartAttentionWaves(fake as any,"store-1")).toBe(2);
+    expect(calls).toEqual([["requeue_leads_for_calls",{p_store_id:"store-1"}]]);
   });
-
-  it("descarta filas sin señal de carrito (re-chequeo fino)", async () => {
+  it("no eligible candidates is zero, not an error", async () => {
     const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
-    const fake = new FakeSupabase(makeStoreRow());
-    fake.waveLeads = [waveLead({ cart_item_count: 0, draft_order_gid: null }), waveLead({ id: "W2" })];
-    const n = await flagCartAttentionWaves(fake as any, "store-1");
-    expect(n).toBe(1);
-    expect(fake.leadPatches).toHaveLength(1);
+    expect(await flagCartAttentionWaves({rpc:async()=>({data:0,error:null})} as any,"store-1")).toBe(0);
   });
-
-  it("con draft_order_gid (sin count) también es carrito", async () => {
+  it("a missing migration is visible rather than reporting a healthy empty queue", async () => {
     const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
-    const fake = new FakeSupabase(makeStoreRow());
-    fake.waveLeads = [waveLead({ cart_item_count: null, draft_order_gid: "gid://shopify/DraftOrder/1" })];
-    expect(await flagCartAttentionWaves(fake as any, "store-1")).toBe(1);
-  });
-
-  it("pre-0036 (columna ausente) es un no-op silencioso", async () => {
-    const { flagCartAttentionWaves } = await import("@/lib/leads-ingest");
-    const fake = new FakeSupabase(makeStoreRow());
-    fake.waveSelectError = 'column leads.attention_waves does not exist';
-    fake.waveLeads = [waveLead()];
-    expect(await flagCartAttentionWaves(fake as any, "store-1")).toBe(0);
-    expect(fake.leadPatches).toHaveLength(0);
+    await expect(flagCartAttentionWaves({rpc:async()=>({data:null,error:{message:"function does not exist"}})} as any,"store-1"))
+      .rejects.toThrow("0289");
   });
 });

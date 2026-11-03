@@ -27,7 +27,9 @@ export type SalesChannel =
 
 /** Etiquetas (en minúsculas) de cada canal, en orden de precedencia. */
 export const SALES_CHANNEL_RULES: readonly { channel: Exclude<SalesChannel, "otro">; tags: readonly string[] }[] = [
-  // Leads: venta manual y carrito recuperado por la asesora (app/dashboard/leads).
+  // Leads: `venta_manual` del borrador nuevo de la asesora (app/dashboard/leads).
+  // `carrito_recuperado` era una etiqueta solo de la copia local, que nadie
+  // escribe desde MOM §17.3; queda en la regla porque no estorba.
   { channel: "asesora", tags: ["venta_manual", "carrito_recuperado"] },
   // El chatbot de WhatsApp: además de la etiqueta, el pedido trae su conversación.
   { channel: "chatbot", tags: ["kapso", "whatsapp"] },

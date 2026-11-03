@@ -1,95 +1,25 @@
 "use client";
 
-// «Repro Lima» · el tablero (fase 1, entrega 1a; MOM §9.5).
-//
-// Los clientes de Lima con entrega fallida, en cuatro listas que son ETIQUETAS
-// de esta pantalla, no subetapas del Master (D2): «Por decidir», «Llamar
-// después», «Programados» y «Cerrados»; y «Todos», un resumen del Master
-// (14-10-2026): los pedidos de Lima sin estado final por etapa y subetapa, cada
-// una con el enlace a su cola (components/repro-lima-todos.tsx). Las tarjetas
-// filtran y dicen cuántos hay (DESIGN.md, «Las cifras navegan»); la de «Todos»
-// cuenta lo que todavía no se entrega y no aparece si su conteo no se pudo
-// leer. La vista va en la URL (`?vista=todos`, con `replaceState`): «atrás»
-// desde el Master vuelve a «Todos». La lista viene ordenada del servidor
-// (`sortRepro`); aquí solo se filtra por tienda y búsqueda.
-//
-// Desde 1280 px la lista es una tabla; más angosta, filas con líneas finas
-// (sin tarjeta dentro de tarjeta, E33). Funciona a 360 px.
-//
-// «Atender» abre la hoja y toma el caso; «Ver acuerdo» y «Cerrados» la abren
-// en solo lectura (E29). Tras cada acción, y al volver a la pestaña, se relee
-// con `router.refresh()`.
-
+// Una cola, una tabla y «Atender» en todos los pedidos. Las tarjetas solo
+// filtran esa cola; `vista=listas|todos|resumen` ya no selecciona otra pantalla.
+// Las acciones conservan los permisos y guardas del pedido y de cada caso.
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, opsButtonClass } from "@/components/ops-ui";
+import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { IconCheck, IconSearch, IconX } from "@/components/icons";
 import { OrderLink } from "@/components/order-link";
 import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
-import { programReproAgreement, type ReproActionResult } from "@/app/dashboard/pedidos/repro-lima/actions";
-import { cutoffNotice, isProblemState, REPRO_LISTS, type ReproList } from "@/lib/repro-lima";
-import { limaOpenBreakdown, reproAging, type LimaOpenCounts } from "@/lib/repro-lima-todos";
-import { soles, telHref } from "@/lib/rider-contact";
-import { MAX_OUTPUTS_PER_ORDER } from "@/lib/shipment-output";
-import {
-  CallButton,
-  ClaimBadge,
-  FailureLine,
-  outputsLine,
-  phoneLabel,
-  ReproLimaSheet,
-  ReproRowChips,
-  stageAgeLabel,
-  type ReproSaved,
-} from "@/components/repro-lima-sheet";
-import { ReproLimaTodos } from "@/components/repro-lima-todos";
+import { cutoffNotice } from "@/lib/repro-lima";
+import { limaClock } from "@/lib/grupo-gf-courier";
+import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
+import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
+import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
+import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
+import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, pendingKey, pendingMatches, togglePendingKeys, type LimaAttentionFilter, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 
-/** Las cuatro tarjetas: etiqueta y lo que dice su lista vacía (§6). */
-const LIST_CARD: Record<ReproList, { label: string; hint: string; empty: string }> = {
-  por_decidir: {
-    label: "Por decidir",
-    hint: "Primero los fallos del último día de reparto, después lo vencido y lo que lleva más de 7 días.",
-    empty: "Nada por decidir. Los «No entregado» nuevos aparecen aquí.",
-  },
-  llamar_despues: {
-    label: "Llamar después",
-    hint: "El cliente pidió que lo llamen a otra hora. Por la hora de la llamada.",
-    empty: "Nadie pidió que lo llamen después.",
-  },
-  programados: {
-    label: "Programados",
-    hint: "Con acuerdo vigente o programados en Grupo GF. Primero los que hay que revisar.",
-    empty: "Todavía no hay acuerdos.",
-  },
-  cerrados: {
-    label: "Cerrados · esperan anulación",
-    hint: "«Desarmar y cerrar» del intento vigente: el pedido sigue en la etapa hasta que Shopify anule la venta.",
-    empty: "Ningún caso cerrado espera la anulación.",
-  },
-};
-
-/** La quinta tarjeta: lo que todavía no se entrega (MOM §9.5, «Todos»). */
-const TODOS_CARD_HINT =
-  "Los pedidos de Lima sin estado final, por etapa y subetapa del Master. La cifra es lo que todavía no se entrega; lo que falta cerrar va aparte.";
-
-const PAGE = 100;
-/** Al volver a la pestaña se relee, como mucho una vez cada 20 segundos. */
 const FOCUS_REFRESH_MS = 20_000;
-
-/** Minúsculas sin tildes ni «#», para buscar. */
-function norm(value: string | null | undefined): string {
-  return (value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/#/g, "").toLowerCase().trim();
-}
-
-function matches(row: ReproRow, query: string): boolean {
-  const q = norm(query);
-  if (!q) return true;
-  if (norm(row.orderName).includes(q) || norm(row.customerName).includes(q)) return true;
-  const digits = query.replace(/\D/g, "");
-  return digits.length >= 3 && (row.customerPhone ?? "").replace(/\D/g, "").includes(digits);
-}
 
 type OpenSheet = {
   row: ReproRow;
@@ -101,25 +31,65 @@ type OpenSheet = {
 };
 type Feedback = { kind: "notice" | "error"; text: string; orderId?: string; orderName?: string; mesa?: boolean; extra?: string | null };
 
-export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaData; openCounts?: LimaOpenCounts | null }) {
+export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
+  data: ReproLimaData;
+  pending: LimaPendingOrder[];
+  /** Despacho sin `repro_lima.manage` (03-11-2026): solo «Reintentos Aliclik», sin Atender. */
+  retriesOnly?: boolean;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [refreshing, startRefresh] = useTransition();
-  const [acting, startAction] = useTransition();
-  const [list, setList] = useState<ReproList>("por_decidir");
+  const list = retriesOnly ? "reintentos_aliclik" : attentionFilter(searchParams.get("atencion"));
   const [query, setQuery] = useState("");
   const [store, setStore] = useState("");
   const [storeSheet, setStoreSheet] = useState(false);
   const storePill = useRef<HTMLButtonElement>(null);
-  const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState<OpenSheet | null>(null);
+  const [loadingOrder, setLoadingOrder] = useState<string | null>(null);
+  const opening = useRef(0);
+  useEffect(() => () => { opening.current += 1; }, []);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [confirmFound, setConfirmFound] = useState<string | null>(null);
   const lastRefresh = useRef(0);
+  const [now, setNow] = useState(() => new Date(data.nowIso));
+  const today = limaClock(now).day;
+  const hiddenParam = searchParams.getAll("ocultar").join("|");
+  const hidden = useMemo(() => new Set(hiddenParam ? hiddenParam.split("|") : []), [hiddenParam]);
+  const pendingStore = useMemo(() => pending.filter((row) => !store || row.storeId === store), [pending, store]);
+  const scoped = useMemo(() => pendingStore.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [pendingStore, hidden, query]);
+  const counts = useMemo(() => attentionCounts(scoped, data.rows, today), [scoped, data.rows, today]);
+  const inQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
+  const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
+  const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
+
+  function replaceParams(params: URLSearchParams) {
+    params.delete("vista");
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
+  }
+
+  function changeHidden(next: ReadonlySet<string>) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("ocultar");
+    for (const key of [...next].sort()) params.append("ocultar", key);
+    replaceParams(params);
+  }
+
+  function chooseList(next: LimaAttentionFilter) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "todos") params.delete("atencion");
+    else params.set("atencion", next);
+    replaceParams(params);
+  }
+
+  // Un enlace guardado de la doble vista siempre abre Todos. Se conservan
+  // la ficha y las exclusiones; no se vuelve a pedir la página al servidor.
+  useEffect(() => {
+    if (searchParams.has("vista")) replaceParams(new URLSearchParams(searchParams.toString()));
+  }, [searchParams]);
 
   // El reloj del corte: empieza en la hora del servidor (sin desajuste al hidratar).
-  const [now, setNow] = useState(() => new Date(data.nowIso));
   useEffect(() => {
     setNow(new Date());
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
@@ -149,81 +119,44 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
     };
   }, [router]);
 
-  useEffect(() => { setLimit(PAGE); }, [list, query, store]);
-
-  // La tienda sin la búsqueda: de aquí sale «Por reprogramar Lima» en «Todos».
-  const storeScoped = useMemo(() => data.rows.filter((row) => !store || row.storeId === store), [data.rows, store]);
-  const scoped = useMemo(() => storeScoped.filter((row) => matches(row, query)), [storeScoped, query]);
-  const counts = useMemo(() => {
-    const out: Record<ReproList, number> = { por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
-    for (const row of scoped) out[row.list] += 1;
-    return out;
-  }, [scoped]);
-  const toReview = useMemo(
-    () => scoped.filter((row) => row.list === "programados" && isProblemState(row.state.kind)).length,
-    [scoped],
-  );
-  const inList = useMemo(() => scoped.filter((row) => row.list === list), [scoped, list]);
-  const visible = inList.slice(0, limit);
-  const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
-
-  // «Todos»: el conteo del Master con «Por reprogramar Lima» de las filas del
-  // tablero, así su cifra es la suma de las cuatro listas.
-  const breakdown = useMemo(
-    () => openCounts ? limaOpenBreakdown(openCounts.rows, { storeId: store || null, repro: reproAging(storeScoped) }) : null,
-    [openCounts, store, storeScoped],
-  );
-  // La vista vive en la URL; sin conteo, siempre las listas.
-  const view = openCounts && searchParams.get("vista") === "todos" ? "todos" : "listas";
-  const todos = view === "todos" ? breakdown : null;
-  // Las cuatro listas de «Todos» se cuentan con la tienda y sin la búsqueda, como
-  // «Por reprogramar Lima»: así siempre suman su cifra.
-  const storeCounts = useMemo(() => {
-    const out: Record<ReproList, number> = { por_decidir: 0, llamar_despues: 0, programados: 0, cerrados: 0 };
-    for (const row of storeScoped) out[row.list] += 1;
-    return out;
-  }, [storeScoped]);
-  const lists = REPRO_LISTS.map((l) => ({ list: l, label: LIST_CARD[l].label.split(" · ")[0]!, count: storeCounts[l] }));
-  // En «Todos» no hay búsqueda a la vista: se quita también si se llega por la URL
-  // (al releer, o con «atrás»), para que al volver a las listas no quede oculta.
-  useEffect(() => { if (view === "todos") setQuery(""); }, [view]);
-  // Sin conteo no hay «Todos»: se quita `vista` para que una relectura no cambie la pantalla sola.
-  const staleTodos = !openCounts && searchParams.get("vista") === "todos";
-  useEffect(() => { if (staleTodos) showView("listas"); });
-  // Al abrir una lista desde «Todos», el foco va a la sección (el control tocado ya no está).
-  const listSection = useRef<HTMLElement>(null);
-
-  /** Cambia de vista sin volver a pedir la página y sin tocar los demás parámetros (`ficha`, `seccion`). */
-  function showView(next: "listas" | "todos") {
-    const params = new URLSearchParams(searchParams.toString());
-    if (next === "todos") params.set("vista", "todos");
-    else params.delete("vista");
-    if (params.toString() === searchParams.toString()) return;
-    const qs = params.toString();
-    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
-  }
-
-  function onOpenList(l: ReproList) {
-    setList(l);
-    showView("listas");
-    window.requestAnimationFrame(() => listSection.current?.focus());
-  }
-
   // La fila viva de la hoja abierta: tras releer, la del servidor; si salió de
   // la etapa, la última que se vio.
   const sheetRow = open ? data.rows.find((row) => row.orderId === open.row.orderId) ?? open.row : null;
 
   /** El siguiente de la misma lista, que nadie más esté atendiendo. */
-  function nextAfter(orderId: string): ReproRow | null {
-    const rows = inList;
+  function nextAfter(orderId: string): LimaPendingOrder | null {
+    const rows = inQueue;
     const at = rows.findIndex((row) => row.orderId === orderId);
     const after = at >= 0 ? [...rows.slice(at + 1), ...rows.slice(0, at)] : rows;
-    return after.find((row) => row.orderId !== orderId && row.claim.view !== "otro" && row.list !== "cerrados") ?? null;
+    return after.find((row) => row.orderId !== orderId && caseById.get(row.orderId)?.claim.view !== "otro" && caseById.get(row.orderId)?.list !== "cerrados") ?? null;
   }
 
   function openRow(row: ReproRow, mode: "edit" | "read", askReopen = false, previous: OpenSheet["previous"] = null) {
-    setConfirmFound(null);
+    opening.current += 1;
+    setLoadingOrder(null);
     setOpen({ row, mode, askReopen, key: Date.now(), previous });
+  }
+
+  async function attend(row: LimaPendingOrder, previous: OpenSheet["previous"] = null) {
+    const request = ++opening.current;
+    setLoadingOrder(row.orderId);
+    setFeedback((current) => current?.kind === "error" && current.orderId === row.orderId ? null : current);
+    try {
+      const known = caseById.get(row.orderId);
+      const result = known ? { row: known } : await loadReproRow(row.orderId);
+      if (opening.current !== request) return;
+      if ("error" in result || !result.row) {
+        setFeedback({ kind: "error", text: "error" in result ? result.error : "El pedido ya no está pendiente de entrega en Lima. Actualiza la lista.", orderId: row.orderId, orderName: row.orderName });
+        return;
+      }
+      const current = result.row;
+      const read = current.list === "cerrados" || current.list === "programados" && Boolean(current.agreement);
+      openRow(current, read ? "read" : "edit", false, previous);
+    } catch {
+      if (opening.current === request) setFeedback({ kind: "error", text: "No pudimos abrir la gestión del pedido. Vuelve a intentarlo.", orderId: row.orderId, orderName: row.orderName });
+    } finally {
+      if (opening.current === request) setLoadingOrder(null);
+    }
   }
 
   function onSaved(saved: ReproSaved, advance: boolean) {
@@ -242,96 +175,67 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
       mesa: saved.mesa,
     });
     refresh();
-    if (next) openRow(next, "edit", false, { orderName: saved.orderName, text });
-    else setOpen(null);
+    setOpen(null);
+    if (next) void attend(next, { orderName: saved.orderName, text });
   }
 
-  function program(row: ReproRow, found: boolean) {
-    if (!row.caseId) return;
-    if (found && confirmFound !== row.orderId) { setConfirmFound(row.orderId); return; }
-    setConfirmFound(null);
-    const caseId = row.caseId;
-    startAction(async () => {
-      const result: ReproActionResult = await programReproAgreement({ caseId, ...(found ? { found: true } : {}) })
-        .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
-      setFeedback({
-        kind: result.error ? "error" : "notice",
-        text: result.error ?? result.notice ?? "Programado.",
-        orderId: row.orderId,
-        orderName: row.orderName,
-      });
-      refresh();
-    });
-  }
-
-  /**
-   * Los botones de la fila, según su lista y el estado del acuerdo. Una
-   * función y no un componente: así no se vuelven a montar en cada render (el
-   * foco se quedaba sin botón al pedir el segundo clic).
-   */
-  function rowActions(row: ReproRow, stacked = false): ReactNode {
+  /** Una sola entrada de atención. Las acciones específicas ya viven dentro
+   * de la hoja; abrir acuerdos o cierres no toma ni reabre el caso. */
+  function rowActions(row: LimaPendingOrder, stacked = false): ReactNode {
+    // Sin `repro_lima.manage` no se llama ni se acuerda: la guía se crea desde la ficha.
+    if (retriesOnly) return null;
     const size = stacked ? "sm" : "md";
-    const tap = "pointer-coarse:h-11";
-    const buttons: ReactNode[] = [];
-    if (row.list === "cerrados") {
-      buttons.push(<OpsButton key="ver" size={size} className={tap} onClick={() => openRow(row, "read")}>Ver</OpsButton>);
-      buttons.push(<OpsButton key="reabrir" size={size} className={tap} onClick={() => openRow(row, "read", true)}>Volver a atender</OpsButton>);
-    } else if (row.list === "programados" && row.agreement) {
-      buttons.push(<OpsButton key="ver" size={size} className={tap} onClick={() => openRow(row, "read")}>Ver acuerdo</OpsButton>);
-      if (row.state.kind === "por_programar") {
-        buttons.push(
-          <OpsButton key="programar" size={size} disabled={acting} className={tap} onClick={() => program(row, false)}>
-            Programar ahora
-          </OpsButton>,
-        );
-      }
-      if (row.state.kind === "falta_ubicar") {
-        buttons.push(
-          confirmFound === row.orderId ? (
-            <OpsButton key="encontrada" size={size} variant="primary" disabled={acting} className={cn(tap, "h-auto min-h-8 whitespace-normal py-1")} onClick={() => program(row, true)}>
-              La caja está en la oficina
-            </OpsButton>
-          ) : (
-            <OpsButton key="encontre" size={size} disabled={acting} className={cn(tap, "h-auto min-h-8 whitespace-normal py-1")} onClick={() => program(row, true)}>
-              Ya la encontré: programar
-            </OpsButton>
-          ),
-        );
-        if (confirmFound === row.orderId) {
-          buttons.push(<OpsButton key="cancelar" size={size} variant="ghost" className={tap} onClick={() => setConfirmFound(null)}>Cancelar</OpsButton>);
-        }
-      }
-      if (row.state.kind === "otro_courier") {
-        buttons.push(
-          <OrderLink key="mesa" orderId={row.orderId} section="operar" className={opsButtonClass("secondary", size, cn(tap, "h-auto min-h-8 whitespace-normal py-1"))}>
-            Crear la salida
-          </OrderLink>,
-        );
-      }
-    } else {
-      buttons.push(
-        <OpsButton key="atender" size={size} className={tap} onClick={() => openRow(row, "edit")}>
-          Atender
-        </OpsButton>,
-      );
-    }
-    return buttons;
+    return <OpsButton size={size} className="pointer-coarse:h-11" disabled={loadingOrder !== null} onClick={() => void attend(row)}>{loadingOrder === row.orderId ? "Abriendo…" : "Atender"}</OpsButton>;
   }
 
+  // «Aprobar todos» (entrega 2): los de la bandeja que ya se pueden aprobar
+  // (fallaron un día anterior; no esperan la devolución, owner 03-11-2026),
+  // uno por uno por el mismo camino que «Aprobar»; al final, el resumen.
+  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const readyToApprove = list === "reintentos_aliclik"
+    ? inQueue.filter((row) => caseById.get(row.orderId)?.retryChain?.ready)
+    : [];
+  async function approveAll() {
+    const rows = readyToApprove;
+    if (!rows.length || bulk) return;
+    if (!window.confirm(`Se crearán ${rows.length} guías de Aliclik. ¿Seguir?`)) return;
+    const failed: string[] = [];
+    let created = 0;
+    setBulk({ done: 0, total: rows.length });
+    for (const [i, row] of rows.entries()) {
+      try {
+        const result = await approveAliclikRetry(row.orderId);
+        if (result.error) failed.push(`${row.orderName}: ${result.error}`);
+        else created += 1;
+      } catch {
+        failed.push(`${row.orderName}: no se pudo crear (error de conexión).`);
+      }
+      setBulk({ done: i + 1, total: rows.length });
+    }
+    setBulk(null);
+    setFeedback({
+      kind: failed.length ? "error" : "notice",
+      text: `Guías creadas: ${created} de ${rows.length}.`,
+      extra: failed.length ? failed.join(" · ") : null,
+    });
+    refresh();
+  }
+
+  const selectedGroup = [...LIMA_QUEUE_CARDS, ...LIMA_FOLLOWUP_FILTERS].find((c) => c.key === list);
   const emptyText = query.trim()
     ? `Ningún pedido coincide con «${query.trim()}».`
-    : LIST_CARD[list].empty;
-  // La búsqueda encuentra en otra lista: se dice dónde.
-  const elsewhere = query.trim() && !inList.length
-    ? REPRO_LISTS.filter((l) => l !== list && counts[l] > 0)
-    : [];
+    : list === "todos" ? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda." : selectedGroup?.empty ?? "No hay pedidos con estos filtros.";
 
   return (
     <div className="space-y-4">
       <header className="space-y-3">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Repro Lima</h1>
-          <p className="mt-1 text-sm text-ink-500">Clientes de Lima con entrega fallida: llama, confirma fecha y courier.</p>
+          <p className="mt-1 text-sm text-ink-500">
+            {retriesOnly
+              ? "Los no entregados de Lima que vuelven a salir por Aliclik, sin llamar. Abre el pedido y crea la guía con el transporte indicado."
+              : "Todos los pendientes de Lima en una sola lista. Abre «Atender» para continuar con cada pedido."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={cutoff.passed ? "warn" : "info"} wrap>{cutoff.text}</Badge>
@@ -339,40 +243,14 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
         </div>
       </header>
 
-      {/* En el teléfono, las cuatro listas en 2×2 y «Todos» a todo el ancho
-          debajo; desde 1024 px, «Todos» es la quinta columna. */}
-      <div
-        role="group"
-        aria-label="Listas de Repro Lima"
-        className={cn(
-          "grid grid-cols-2 gap-2 sm:grid-cols-4 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto",
-          breakdown && "lg:grid-cols-5",
-        )}
-      >
-        {REPRO_LISTS.map((l) => (
-          <StatusCard
-            key={l}
-            label={l === "programados" && toReview > 0 ? `Programados · ${toReview} a revisar` : LIST_CARD[l].label}
-            value={counts[l]}
-            hint={LIST_CARD[l].hint}
-            active={view === "listas" && list === l}
-            onClick={() => { setList(l); showView("listas"); }}
-          />
+      <div role="group" aria-label="Filtros de atención" className="grid grid-cols-2 gap-2 sm:grid-cols-4 2xl:grid-cols-8 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
+        {!retriesOnly && <StatusCard label="Todos · por entregar" value={counts.todos} hint="Todos los pendientes de entrega de Lima, con Atender en cada fila." active={list === "todos"} onClick={() => chooseList("todos")} />}
+        {LIMA_QUEUE_CARDS.filter((card) => !retriesOnly || card.key === "reintentos_aliclik").map((card) => (
+          <StatusCard key={card.key} label={card.label} value={counts[card.key]} hint={card.hint} active={list === card.key} onClick={() => chooseList(list === card.key ? "todos" : card.key)} />
         ))}
-        {breakdown && (
-          // StatusCard no recibe clase: la envuelve una celda que ocupa la fila
-          // y repite los ajustes que la grilla da a sus botones.
-          <div className="col-span-2 sm:col-span-4 lg:col-span-1 flex [&>button]:flex-1 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
-            <StatusCard
-              label="Todos · por entregar"
-              value={breakdown.totals.porEntregar}
-              hint={TODOS_CARD_HINT}
-              active={view === "todos"}
-              onClick={() => { setQuery(""); showView("todos"); }}
-            />
-          </div>
-        )}
       </div>
+
+      <LimaPendingFilters rows={pendingStore} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
 
       {feedback && (
         <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
@@ -394,57 +272,33 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
         </Banner>
       )}
 
-      <section ref={listSection} tabIndex={-1} aria-label={todos ? "Todos" : LIST_CARD[list].label} className="rounded-lg bg-white shadow-control ring-1 ring-line focus:outline-none">
-        {/* Búsqueda y tienda, como en Stripe: la píldora es discontinua hasta que filtra.
-            En «Todos» no hay búsqueda: se cuentan pedidos del Master, no casos. */}
+      <section aria-label={list === "todos" ? "Todos los pendientes de Lima" : selectedGroup?.label ?? "Todos los pendientes de Lima"} className="rounded-lg bg-white shadow-control ring-1 ring-line">
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-          {!todos && (
-            <label className="relative w-full sm:w-72">
-              <span className="sr-only">Buscar pedido, cliente o teléfono</span>
-              <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Pedido, cliente o teléfono"
-                className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")}
-              />
-            </label>
+          <label className="relative w-full sm:w-72">
+            <span className="sr-only">Buscar pedido, cliente o teléfono</span>
+            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
+            <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Pedido, cliente o teléfono" className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")} />
+          </label>
+          {data.stores.length > 1 && <FilterPill ref={storePill} label="Tienda" value={storeName} expanded={storeSheet} onClick={() => setStoreSheet((v) => !v)} onClear={() => setStore("")} />}
+          <div role="group" aria-label="Seguimiento de llamadas y cierres" className="flex flex-wrap items-center gap-1.5">
+            {LIMA_FOLLOWUP_FILTERS.filter((f) => !retriesOnly && (counts[f.key] > 0 || list === f.key)).map((f) => (
+              <ChoiceChip key={f.key} label={f.label} count={counts[f.key]} title={f.hint} active={list === f.key} onClick={() => chooseList(list === f.key ? "todos" : f.key)} />
+            ))}
+          </div>
+          {list === "reintentos_aliclik" && (
+            <OpsButton size="sm" variant="primary" disabled={!readyToApprove.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
+              {bulk ? `Creando ${bulk.done} de ${bulk.total}…` : `Aprobar todos los listos (${readyToApprove.length})`}
+            </OpsButton>
           )}
-          {data.stores.length > 1 && (
-            <FilterPill
-              ref={storePill}
-              label="Tienda"
-              value={storeName}
-              expanded={storeSheet}
-              onClick={() => setStoreSheet((v) => !v)}
-              onClear={() => setStore("")}
-            />
-          )}
-          <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
-            {todos ? (
-              <>
-                <b className="font-semibold text-ink-900">{todos.totals.porEntregar.toLocaleString("es-PE")}</b> todavía por entregar
-                {todos.totals.porCerrar > 0 && ` · ${todos.totals.porCerrar.toLocaleString("es-PE")} por cerrar`}
-              </>
-            ) : (
-              <>
-                <b className="font-semibold text-ink-900">{inList.length.toLocaleString("es-PE")}</b> en {LIST_CARD[list].label.split(" · ")[0]!.toLocaleLowerCase("es")}
-              </>
-            )}
+          <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">
+            <b className="font-semibold text-ink-900">{inQueue.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega
           </p>
         </div>
         {storeSheet && (
           <Sheet look="ops" title="Tienda" onClose={() => setStoreSheet(false)} anchored anchorRef={storePill}>
             <div role="group" className="-mx-1 grid max-h-72 gap-0.5 overflow-auto">
               {[{ id: "", name: "Todas las tiendas" }, ...data.stores].map((s) => (
-                <button
-                  key={s.id || "todas"}
-                  type="button"
-                  aria-pressed={s.id === store}
-                  onClick={() => { setStore(s.id); setStoreSheet(false); }}
-                  className={cn("flex h-9 items-center justify-between gap-2 rounded-md px-2 text-left text-sm hover:bg-wash pointer-coarse:h-11", s.id === store ? "font-semibold text-ink-900" : "text-ink-700")}
-                >
+                <button key={s.id || "todas"} type="button" aria-pressed={s.id === store} onClick={() => { setStore(s.id); setStoreSheet(false); }} className={cn("flex h-9 items-center justify-between gap-2 rounded-md px-2 text-left text-sm hover:bg-wash pointer-coarse:h-11", s.id === store ? "font-semibold text-ink-900" : "text-ink-700")}>
                   <span className="truncate">{s.name}</span>
                   {s.id === store && <IconCheck className="size-4 shrink-0 text-brand-600" />}
                 </button>
@@ -452,126 +306,7 @@ export function ReproLimaBoard({ data, openCounts = null }: { data: ReproLimaDat
             </div>
           </Sheet>
         )}
-
-        {todos ? (
-          <ReproLimaTodos breakdown={todos} lists={lists} onOpenList={onOpenList} />
-        ) : !inList.length ? (
-          <div className="border-t border-line px-4 py-12 text-center">
-            <p className="text-sm text-ink-500">{emptyText}</p>
-            {elsewhere.length > 0 && (
-              <div className="mt-3 flex flex-wrap justify-center gap-2">
-                {elsewhere.map((l) => (
-                  <OpsButton key={l} size="sm" onClick={() => setList(l)}>
-                    {`Ver en ${LIST_CARD[l].label.split(" · ")[0]} (${counts[l]})`}
-                  </OpsButton>
-                ))}
-              </div>
-            )}
-            {query.trim() && (
-              <OpsButton size="sm" variant="ghost" className="mt-2" onClick={() => setQuery("")}>Quitar la búsqueda</OpsButton>
-            )}
-          </div>
-        ) : (
-          <>
-            {/* Escritorio (desde 1280 px): tabla de anchos fijos para lo corto y
-                flexibles para cliente, fallo y situación. */}
-            <div className="hidden max-h-[70vh] overflow-auto border-t border-line xl:block">
-              <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
-                <colgroup>
-                  <col className="w-[10.5rem]" />
-                  <col />
-                  <col />
-                  <col />
-                  <col className="w-[8.5rem]" />
-                  <col className="w-[10rem]" />
-                </colgroup>
-                <thead>
-                  <tr className="text-left text-xs font-semibold text-ink-600">
-                    <th className="px-4 py-2.5">Pedido</th>
-                    <th className="px-3 py-2.5">Cliente</th>
-                    <th className="px-3 py-2.5">Fallo</th>
-                    <th className="px-3 py-2.5">Situación</th>
-                    <th className="px-3 py-2.5 text-right">Venta</th>
-                    <th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((row) => (
-                    <tr key={row.orderId} className={cn("border-b border-line align-top transition-colors", open?.row.orderId === row.orderId ? "bg-brand-100/70" : "hover:bg-wash")}>
-                      <td className="px-4 py-3">
-                        <OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700" title={row.orderName}>{row.orderName}</OrderLink>
-                        <p className="truncate text-xs text-ink-500" title={row.storeName}>{row.storeName}</p>
-                        {stageAgeLabel(row.daysInStage) && <p className="text-xs tabular-nums text-ink-500">{stageAgeLabel(row.daysInStage)}</p>}
-                        <div className="mt-1"><ClaimBadge row={row} /></div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>
-                        {telHref(row.customerPhone) ? (
-                          <a href={telHref(row.customerPhone)!} className="text-xs font-medium tabular-nums text-brand-700 hover:underline">
-                            {phoneLabel(row.customerPhone)}
-                          </a>
-                        ) : (
-                          <p className="text-xs text-ink-500">sin teléfono</p>
-                        )}
-                        <p className="truncate text-xs text-ink-500" title={row.district ?? undefined}>{row.district ?? "sin distrito"}</p>
-                      </td>
-                      <td className="px-3 py-3">
-                        <FailureLine row={row} className="line-clamp-3" />
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex flex-wrap gap-1"><ReproRowChips row={row} today={data.today} /></div>
-                      </td>
-                      <td className="px-3 py-3 text-right">
-                        <p className="font-semibold tabular-nums text-ink-900">{soles(row.orderTotal)}</p>
-                        <p className="text-xs text-ink-500" title={outputsLine(row)}>{`Salidas ${row.outputsUsed} de ${MAX_OUTPUTS_PER_ORDER}`}</p>
-                        {row.lastOutput && <p className="truncate text-xs text-ink-500" title={outputsLine(row)}>{row.lastOutput.courierName}</p>}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col items-stretch gap-1.5">{rowActions(row, true)}</div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Más angosto: filas con líneas finas, sin desplazamiento lateral. */}
-            <ul className="divide-y divide-line border-t border-line xl:hidden">
-              {visible.map((row) => (
-                <li key={row.orderId} className={cn("px-4 py-3 sm:flex sm:gap-4", open?.row.orderId === row.orderId && "bg-brand-100/70")}>
-                  <div className="min-w-0 flex-1 space-y-1.5">
-                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                      <OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700" title={row.orderName}>{row.orderName}</OrderLink>
-                      <span className="text-[13px] text-ink-500">
-                        {[row.storeName, stageAgeLabel(row.daysInStage)].filter(Boolean).join(" · ")}
-                      </span>
-                      <ClaimBadge row={row} />
-                    </div>
-                    <p className="text-sm text-ink-900">
-                      {row.customerName}
-                      <span className="text-ink-500">{` · ${row.district ?? "sin distrito"} · `}</span>
-                      <span className="tabular-nums">{soles(row.orderTotal)}</span>
-                    </p>
-                    <FailureLine row={row} />
-                    <div className="flex flex-wrap gap-1"><ReproRowChips row={row} today={data.today} /></div>
-                    <p className="text-xs text-ink-500">{outputsLine(row)}</p>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2 sm:mt-0 sm:w-48 sm:flex-col sm:flex-nowrap [&>*]:grow sm:[&>*]:grow-0">
-                    <CallButton phone={row.customerPhone} size="md" />
-                    {rowActions(row)}
-                  </div>
-                </li>
-              ))}
-            </ul>
-
-            {inList.length > PAGE && (
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-3 text-[13px] tabular-nums text-ink-500">
-                <span>Mostrando <b className="font-semibold text-ink-900">{visible.length.toLocaleString("es-PE")}</b> de {inList.length.toLocaleString("es-PE")}</span>
-                {inList.length > visible.length && <OpsButton size="sm" onClick={() => setLimit((n) => n + PAGE)}>{`Mostrar ${PAGE} más`}</OpsButton>}
-              </div>
-            )}
-          </>
-        )}
+        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} />
       </section>
 
       {open && sheetRow && (

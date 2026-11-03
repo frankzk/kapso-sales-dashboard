@@ -9,6 +9,7 @@
 import type { GeneralStatus } from "@/lib/order-status";
 import { isWebPrepaid, type OrderPaymentFacts } from "@/lib/order-paid";
 import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
+import { paidCoversTotal, remainingCents } from "@/lib/payment-rounding";
 
 export type PaymentKind = "adelanto" | "diferencia" | "total";
 // El número vive en `lib/adelanto-minimo.ts` (módulo hoja, sin imports). Esto
@@ -72,16 +73,18 @@ export function paymentProgress(
     orderTotal: validOrderTotal === null ? null : validOrderTotal / 100,
     registeredTotal: registeredCents / 100,
     validatedTotal: validatedCents / 100,
+    // Menos de S/ 1 por cubrir es redondeo y está pagado (lib/payment-rounding.ts,
+    // MOM §6.5): ni saldo que cobrar ni «Recogido sin pago completo».
     registeredRemaining:
-      validOrderTotal === null ? null : Math.max(0, validOrderTotal - registeredCents) / 100,
+      validOrderTotal === null ? null : remainingCents(registeredCents, validOrderTotal) / 100,
     validatedRemaining:
-      validOrderTotal === null ? null : Math.max(0, validOrderTotal - validatedCents) / 100,
+      validOrderTotal === null ? null : remainingCents(validatedCents, validOrderTotal) / 100,
     advanceRegistered:
       hasTotalRegistered || (hasAdvance && registeredCents >= SHALOM_MINIMUM_ADVANCE * 100),
     advanceValidated:
       hasTotalValidated || (hasAdvance && validatedCents >= SHALOM_MINIMUM_ADVANCE * 100),
-    completeRegistered: validOrderTotal !== null && registeredCents >= validOrderTotal,
-    completeValidated: validOrderTotal !== null && validatedCents >= validOrderTotal,
+    completeRegistered: paidCoversTotal(registeredCents, validOrderTotal),
+    completeValidated: paidCoversTotal(validatedCents, validOrderTotal),
   };
 }
 

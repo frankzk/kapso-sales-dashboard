@@ -7,6 +7,19 @@ import type {
 } from "@/app/dashboard/pedidos/actions";
 import { cn } from "@/components/ui";
 import { Badge, Banner, CARD_ZONE, FIELD, OpsButton, SectionHead } from "@/components/ops-ui";
+import {
+  GF_ROUTE_PATH_LABEL,
+  OVERRIDE_PERMISSION_LABEL,
+  costBlockNeedsTariff,
+  costTariffScreen,
+  gfOpenRouteBlock,
+  gfRouteReportHref,
+  liquidationCostBlock,
+  logisticsCostFactsFromRow,
+  type ClosureGfDelivery,
+  type LogisticsCostRow,
+} from "@/lib/closure-blocks";
+import type { GfTariffCheck } from "@/lib/gf-tariff";
 import { macroSubstageLabel, type MacroSubstage } from "@/lib/order-macro-stage";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import type { ShipmentRow } from "@/lib/types";
@@ -18,6 +31,10 @@ interface ClosurePermissions {
   canFinalize: boolean;
   canRefund: boolean;
   canReopen: boolean;
+  /** `costs.manage`: puede cargar la tarifa que falta en Costos › Costos logísticos. */
+  canManageCosts: boolean;
+  /** `logistics.manage`: puede cargar la de Grupo GF en Grupo GF Courier › Tarifario. */
+  canManageLogistics: boolean;
 }
 
 interface ActionMeta {
@@ -103,11 +120,31 @@ function unique(actions: ClosureActionKey[]): ClosureActionKey[] {
   return [...new Set(actions)];
 }
 
+const DESK_LINK = "font-medium text-brand-700 underline-offset-2 hover:underline";
+
+/** «Grupo GF Courier › Rutas › «Reparto y liquidación»», con enlace a la ruta si se conoce. */
+function GfRoutePath({ routeId }: { routeId: string | undefined }) {
+  if (!routeId) return <>{GF_ROUTE_PATH_LABEL}</>;
+  return (
+    <>
+      Grupo GF Courier › Rutas ›{" "}
+      <a href={gfRouteReportHref(routeId)} className={DESK_LINK}>
+        «Reparto y liquidación»
+      </a>
+    </>
+  );
+}
+
 export function OrderClosureDesk({
   stage,
   reasons,
   generalStatus,
   guides,
+  row,
+  costTariffGap,
+  gfDeliveries,
+  cancelledInShopify,
+  cancelledInKapta = false,
   permissions,
   pending,
   onAction,
@@ -116,6 +153,26 @@ export function OrderClosureDesk({
   reasons: MacroSubstage[];
   generalStatus: string;
   guides: ShipmentRow[];
+  /**
+   * La fila del Master: con ella la Mesa avisa de la tarifa que falta antes del
+   * clic, con el courier y el día que usa el recálculo.
+   */
+  row?: LogisticsCostRow;
+  /**
+   * Grupo GF (`detail.gfCostTariffGap`): por qué su Tarifario no le da tarifa y
+   * desde cuándo rige la del distrito, lo mismo que dirá el servidor; o que ya
+   * la tiene y la fila es vieja (`vigente`).
+   */
+  costTariffGap?: GfTariffCheck | null;
+  /** Grupo GF (`detail.gfDeliveries`): con ellas la Mesa sabe si la ruta sigue abierta. */
+  gfDeliveries?: readonly ClosureGfDelivery[];
+  /**
+   * `orders.cancelled_at` existe (Shopify o WooCommerce): cerrar la ruta no lo
+   * marca entregado (MOM §11.4). Se dice «anulado en la tienda», el mismo texto
+   * para las dos plataformas (MOM §38.12).
+   */
+  cancelledInShopify?: boolean;
+  cancelledInKapta?: boolean;
   permissions: ClosurePermissions;
   pending: boolean;
   onAction: (input: ClosureActionInput) => Promise<boolean>;
@@ -125,6 +182,35 @@ export function OrderClosureDesk({
   // solo cuenta y muestra los suyos; si no, un pedido recién llamado aparecería
   // con «1 pendiente» en la mesa de cierre.
   const openReasons = stage === "por_cerrar" ? reasons : [];
+  // Los mismos bloqueos que aplica el servidor (lib/closure-blocks.ts), dichos
+  // antes del clic. La ruta de Grupo GF abierta quita «Finalizar expediente»:
+  // ese pedido lo cierra la ruta, no esta mesa —y si está anulado en Shopify,
+  // tampoco la ruta: decide una persona—. La tarifa que falta NO quita
+  // «Conciliar liquidación»: el servidor recalcula el costo al guardar, y quien
+  // acaba de cargar la tarifa tiene que poder conciliar sin esperar a que el
+  // Master se recalcule solo.
+  const gfRouteBlock =
+    stage === "por_cerrar" ? gfOpenRouteBlock(guides, gfDeliveries ?? [], { cancelledInShopify: cancelledInShopify || cancelledInKapta }) : null;
+  const gfRouteOpen = Boolean(gfRouteBlock);
+  const liquidationOpen = reasons.includes("pendiente_liquidacion") || reasons.includes("liquidacion_observada");
+  const costFacts =
+    stage === "por_cerrar" && liquidationOpen && row
+      ? { ...logisticsCostFactsFromRow(row), tarifario: costTariffGap ?? null }
+      : null;
+  const costBlock = costFacts
+    ? liquidationCostBlock({
+        ...costFacts,
+        canManageCosts: permissions.canManageCosts,
+        canManageLogistics: permissions.canManageLogistics,
+      })
+    : null;
+  // Una tarifa lo arregla solo si se sabe el courier; el enlace a la pantalla
+  // —Costos, o el Tarifario para Grupo GF—, además, solo a quien puede cargarla.
+  const costNeedsTariff = Boolean(costFacts && costBlockNeedsTariff(costFacts));
+  const costScreen = costTariffScreen(costFacts ?? { courier: null });
+  const costLink =
+    costNeedsTariff &&
+    (costScreen.permission === "logistics.manage" ? permissions.canManageLogistics : permissions.canManageCosts);
   const actions = useMemo(() => {
     const next: ClosureActionKey[] = [];
     if (stage === "finalizado" && permissions.canReopen) next.push("reopen");
@@ -155,7 +241,8 @@ export function OrderClosureDesk({
     if (
       reasons.length > 0 &&
       reasons.every((reason) => reason === "validacion_cierre_pendiente") &&
-      permissions.canFinalize
+      permissions.canFinalize &&
+      !gfRouteOpen
     ) {
       next.push("finalize");
     }
@@ -173,7 +260,7 @@ export function OrderClosureDesk({
       next.push("refund_request");
     }
     return unique(next);
-  }, [generalStatus, guides, permissions, reasons, stage]);
+  }, [generalStatus, gfRouteOpen, guides, permissions, reasons, stage]);
 
   const [selected, setSelected] = useState<ClosureActionKey | null>(null);
   const [note, setNote] = useState("");
@@ -264,12 +351,55 @@ export function OrderClosureDesk({
         </div>
       )}
       {/* Entrega declarada (MOM §8.3) no tiene botón aquí: la cierra el courier
-          al reportarla o quien la verifique fijando el estado. Sin esta línea
-          sería un pendiente sin salida a la vista. */}
+          al reportarla o un admin fijando el estado. Sin esta línea sería un
+          pendiente sin salida a la vista. Desde el 15-10-2026 el estado a mano
+          es solo de owner y admin (MOM §16): la frase dice quién lo fija, porque
+          esta mesa la ve también quien concilia o cierra sin ser admin. */}
       {openReasons.includes("entrega_declarada") && (
         <p className="text-[13px] leading-5 text-ink-600">
           Alguien declaró que el cliente recibió este envío y el courier no lo reportó. Confirma la entrega y el cobro
-          con el courier y fija el estado en «Gestión manual»: entregado si se confirmó; el que corresponda si no.
+          con el courier; el estado lo fija un admin en «Gestión manual»: entregado si se confirmó; el que corresponda si
+          no.
+        </p>
+      )}
+      {/* Grupo GF: el motorizado reportó la entrega y la ruta sigue abierta
+          (MOM §29.13). Finalizar no es el paso; lo es terminar la ruta. */}
+      {gfRouteBlock?.kind === "ruta_abierta" && (
+        <p className="text-[13px] leading-5 text-ink-600" data-closure-block="ruta-gf-abierta">
+          El motorizado de Grupo GF ya reportó la entrega, pero su ruta sigue abierta. Termina la ruta en{" "}
+          <GfRoutePath routeId={gfRouteBlock.routeIds[0]} />: al cerrarla, el pedido pasa a entregado y sigue a su
+          liquidación.
+        </p>
+      )}
+      {/* El mismo caso anulado en la tienda (#KP137541): la puerta a «entregado»
+          no escribe sobre la anulación (MOM §11.4), así que cerrar la ruta no
+          lo marca entregado. No se promete; decide una persona. */}
+      {gfRouteBlock?.kind === "anulado_shopify" && cancelledInKapta && (
+        <p className="text-[13px] leading-5 text-ink-600">
+          El motorizado reportó una entrega, pero la venta está terminada en Kapta. Termina la ruta por su flujo;
+          eso no reactiva la venta ni la marca entregada. Si la entrega vale, el dueño debe revisar y resolver la anulación
+          antes de cerrar el expediente. La liquidación sigue pendiente de resolución.
+        </p>
+      )}
+      {gfRouteBlock?.kind === "anulado_shopify" && !cancelledInKapta && (
+        <p className="text-[13px] leading-5 text-ink-600" data-closure-block="ruta-gf-anulado-shopify">
+          El motorizado de Grupo GF reportó la entrega y su ruta sigue abierta, pero el pedido está anulado en la tienda:
+          terminar la ruta en <GfRoutePath routeId={gfRouteBlock.routeIds[0]} /> no lo marca entregado. Si la entrega
+          vale, la cambia desde esta ficha («Gestión manual»), con motivo, quien tenga «{OVERRIDE_PERMISSION_LABEL}».
+        </p>
+      )}
+      {/* Sin tarifa no hay costo, y sin costo la liquidación no cuadra (MOM §14). */}
+      {costBlock && (
+        <p className="text-[13px] leading-5 text-ink-600" data-closure-block="tarifa-faltante">
+          {costBlock}
+          {costLink && (
+            <>
+              {" "}
+              <a href={costScreen.href} className={DESK_LINK}>
+                {costScreen.link}
+              </a>
+            </>
+          )}
         </p>
       )}
 
@@ -366,6 +496,13 @@ export function OrderClosureDesk({
               className={cn(FIELD, "font-normal pointer-coarse:h-11")}
             />
           </label>
+          {selected === "liquidation_close" && costBlock && (
+            <Banner tone="warn">
+              {costBlock}
+              {costNeedsTariff &&
+                " Al guardar se vuelve a calcular el costo: si la tarifa ya está cargada y rige el día del pedido, se concilia."}
+            </Banner>
+          )}
           {selected === "refund_complete" && (
             <Banner tone="crit">
               Este botón no envía dinero. Úsalo solamente después de que Frankz haya hecho el reembolso.

@@ -2,7 +2,7 @@
 
 // El «Tablero de hoy» de Leads, opción K (Frankz, 15-10-2026): el equipo como
 // ranking contra ayer a esta misma hora, con las horas activas contra la meta
-// del día; a la derecha, los leads sin llamar por día (filtran la cola) y la
+// del día; a la derecha, los leads por llamar por día (filtran la cola) y la
 // carrera de pedidos del día. DESIGN.md › Leads › Tablero de hoy.
 
 import Link from "next/link";
@@ -360,7 +360,7 @@ function sameInteractionFilter(a: LeadInteractionDateFilter | null, b: LeadInter
   return a.kind === "older" && b.kind === "older" && a.before === b.before;
 }
 
-/** «Sin llamar» por día de su última interacción: el +7 días primero y en rojo
+/** «Por llamar» por día de su última interacción: el +7 días primero y en rojo
  *  (gente que escribió hace más de una semana y nadie llamó). Cada barra es un
  *  botón que filtra la cola; tocar la elegida quita el filtro. */
 function SinLlamarCard({
@@ -399,7 +399,7 @@ function SinLlamarCard({
   return (
     <section className={CARD}>
       <Head
-        title="Sin llamar"
+        title="Por llamar"
         figure={n(data.sinLlamarTotal)}
         sub={
           <>
@@ -413,7 +413,7 @@ function SinLlamarCard({
           </>
         }
       />
-      <div className="mt-4 flex items-end gap-1.5 border-b border-line-strong" style={{ height: H }} role="group" aria-label="Sin llamar por día de su última interacción">
+      <div className="mt-4 flex items-end gap-1.5 border-b border-line-strong" style={{ height: H }} role="group" aria-label="Por llamar por día de su última interacción">
         {bars.map((b) => {
           const active = sameInteractionFilter(selected, b.filter);
           const dim = anySelected && !active;
@@ -423,7 +423,7 @@ function SinLlamarCard({
               type="button"
               disabled={b.count <= 0}
               aria-pressed={active}
-              aria-label={`${n(b.count)} sin llamar con última interacción ${b.long}${active ? ", filtro activo: toca para quitarlo" : ""}`}
+              aria-label={`${n(b.count)} por llamar con última interacción ${b.long}${active ? ", filtro activo: toca para quitarlo" : ""}`}
               onClick={() => onSelect(active ? null : b.filter)}
               className="group flex h-full min-w-0 flex-1 cursor-pointer flex-col items-center justify-end rounded-t-[4px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-default"
             >

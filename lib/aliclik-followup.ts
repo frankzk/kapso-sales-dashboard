@@ -41,6 +41,34 @@
 const TERMINAL = new Set(["entregado", "transferido"]);
 
 /**
+ * UNA GUÍA TRANSFERIDA CON EL PAQUETE TODAVÍA EN ALICLIK NO TERMINÓ (owner,
+ * 01-11-2026).
+ *
+ * `transferido` es que el pedido siguió por otra guía (el reenvío por Swayp sale
+ * del stock de Swayp, no de este paquete). Pero ESTE paquete sigue en manos de
+ * Aliclik y tiene que volver al almacén. Se dejaba de preguntar al transferirla,
+ * y la devolución que Aliclik reportaba después no llegaba nunca: #KP117015, con
+ * la hija de Swayp anulada, quedó 107 días «En curso · En tránsito» mientras
+ * Aliclik ya la tenía devuelta y cancelada. Eran 137 pedidos así. Se sigue
+ * preguntando mientras la custodia sea del courier y no haya devolución
+ * sellada; la guía se queda `transferido` (la precedencia no la mueve) y lo que
+ * cambia es `returned_at` y la custodia.
+ */
+function transferredAwaitingReturn(
+  c: Pick<FollowUpCandidate, "delivery_status" | "custody_state" | "returned_at">,
+): boolean {
+  return c.delivery_status === "transferido" && c.custody_state === "courier" && !c.returned_at;
+}
+
+/**
+ * Silencio que se le tolera a esa guía. Más que a una anulada, porque al
+ * aplicarlo había guías transferidas desde julio sin ninguna lectura: con tres
+ * semanas, o con los sesenta días de una viva, la puesta al día no las habría
+ * alcanzado.
+ */
+const TRANSFERRED_RETURN_WINDOW_MS = 180 * 24 * 60 * 60 * 1000;
+
+/**
  * `anulado` NO cierra el seguimiento, aunque lo parezca.
  *
  * Una guía se anula cuando la clienta cancela o se agotan los intentos — y el
@@ -57,8 +85,9 @@ const TERMINAL = new Set(["entregado", "transferido"]);
 const RETURN_WINDOW_MS = 21 * 24 * 60 * 60 * 1000;
 
 /** Cuánto silencio se le tolera a una guía según su estado. */
-function silenceBudgetMs(deliveryStatus: string, maxSilenceMs: number): number {
-  return deliveryStatus === "anulado" ? Math.min(RETURN_WINDOW_MS, maxSilenceMs) : maxSilenceMs;
+function silenceBudgetMs(c: FollowUpCandidate, maxSilenceMs: number): number {
+  if (transferredAwaitingReturn(c)) return TRANSFERRED_RETURN_WINDOW_MS;
+  return c.delivery_status === "anulado" ? Math.min(RETURN_WINDOW_MS, maxSilenceMs) : maxSilenceMs;
 }
 
 /** La fila de `shipments` que necesita el selector. */
@@ -76,6 +105,10 @@ export interface FollowUpCandidate {
   aliclik_followup_at?: string | null;
   /** Última lectura de API aplicada. Delata a las que el barrido acaba de ver. */
   api_report_at?: string | null;
+  /** Quién tiene el paquete. Solo cuenta para la guía transferida. */
+  custody_state?: string | null;
+  /** Devolución ya sellada: la transferida deja de esperarla. */
+  returned_at?: string | null;
 }
 
 /**
@@ -91,7 +124,7 @@ export interface FollowUpCandidate {
  * ventana de frescura y perder la venta entera.
  */
 function esperaDevolucion(c: FollowUpCandidate): boolean {
-  if (c.delivery_status === "anulado") return true;
+  if (c.delivery_status === "anulado" || transferredAwaitingReturn(c)) return true;
   const reported = String(c.reported_status ?? "").toUpperCase();
   return reported.includes("TO_RETURN") || reported.includes("POR DEVOLVER");
 }
@@ -204,7 +237,7 @@ export function selectFollowUpGuides(
   const refreshedSince = opts.refreshedSince?.getTime() ?? null;
 
   const live = candidates.filter((c) => {
-    if (TERMINAL.has(c.delivery_status)) return false;
+    if (TERMINAL.has(c.delivery_status) && !transferredAwaitingReturn(c)) return false;
     const key = followUpKey(c);
     if (!key) return false;
 
@@ -215,7 +248,7 @@ export function selectFollowUpGuides(
       if (Number.isFinite(readAt) && readAt >= refreshedSince) return false;
     }
 
-    const floor = opts.now.getTime() - silenceBudgetMs(c.delivery_status, opts.maxSilenceMs);
+    const floor = opts.now.getTime() - silenceBudgetMs(c, opts.maxSilenceMs);
 
     const signal = lastSignalAt(c);
     if (signal) {

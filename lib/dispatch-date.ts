@@ -18,6 +18,8 @@
 //
 // Pura.
 
+import { isShortenedMapsLink, parseCoordinateInput, type Coordinate } from "@/lib/aliclik-geo";
+
 export const DISPATCH_DATE_SET = "dispatch_date_set";
 export const DISPATCH_DATE_CLEARED = "dispatch_date_cleared";
 /** Hasta cuántos días adelante se puede programar. Más que eso no es una fecha, es un «algún día». */
@@ -68,6 +70,11 @@ function addDays(day: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** El último día que se puede programar desde hoy. */
+export function dispatchDateMax(todayLima: string): string {
+  return addDays(todayLima, DISPATCH_DATE_MAX_DAYS);
+}
+
 /** Por qué no se puede programar esa fecha, o null si se puede. */
 export function dispatchDateError(date: string, todayLima: string): string | null {
   if (!ISO_DAY.test(date) || Number.isNaN(Date.parse(`${date}T12:00:00Z`))) return "Elige una fecha válida.";
@@ -90,4 +97,113 @@ export function dispatchDateBadge(date: string, todayLima: string): { text: stri
   if (state === "hoy") return { text: "Programado · sale hoy", tone: "warn" };
   if (state === "vencido") return { text: `Programado para el ${dispatchDateLabel(date)} y no salió`, tone: "danger" };
   return { text: `Programado · sale ${dispatchDateLabel(date)}`, tone: "info" };
+}
+
+// ---------------------------------------------------------------------------
+// Programar sin ubicación (owner, 30-10-2026; MOM §6.2)
+//
+// #KP142558 (Kenku) llegó sin dirección: «Por revisar», sin región ni
+// distrito. El 22-10 se confirmó y se programó para el 27-10 desde la
+// confirmación; sin destino no había courier ni guía posible, y la fecha se
+// venció sin que nadie se enterara. Confirmar sigue permitido (la clienta
+// puede dar la dirección después); lo que no se puede es PROGRAMAR la salida
+// de un pedido que no tiene a dónde ir.
+// ---------------------------------------------------------------------------
+
+/** Lo que la acción del servidor responde al intentar programar sin ubicación. */
+export const DISPATCH_NEEDS_LOCATION_ERROR = "Falta la ubicación: corrígela antes de programar el envío.";
+
+/** La chapa de la fila y la píldora del Master. */
+export const SCHEDULED_NO_LOCATION_LABEL = "Programado sin ubicación";
+
+/** Lo que la regla mira del pedido (una fila de `order_master`). */
+export interface DispatchLocationRow {
+  coverage?: string | null;
+  region?: string | null;
+  district?: string | null;
+  address?: string | null;
+}
+
+const blank = (v: string | null | undefined): boolean => !(v ?? "").trim();
+
+/**
+ * ¿Le falta la ubicación para programar su envío? La misma regla que pide
+ * «Último destino conocido» (§37.8, `needsDestinationSuggestion`): cobertura
+ * «Por revisar» (o sin calcular) y sin región, distrito o dirección. Un pedido
+ * con su ubicación completa se programa como siempre. Pura.
+ */
+export function dispatchLocationMissing(row: DispatchLocationRow): boolean {
+  if ((row.coverage ?? "por_revisar") !== "por_revisar") return false;
+  return blank(row.region) || blank(row.district) || blank(row.address);
+}
+
+/**
+ * La alerta del Master: tiene envío programado (hoy, vencido o a futuro) y le
+ * sigue faltando la ubicación. `dispatch_scheduled_on` solo se llena en
+ * Preparación · Por generar rótulo, así que además no tiene salida. Pura.
+ */
+export function scheduledWithoutLocation(
+  row: DispatchLocationRow & { dispatch_scheduled_on?: string | null },
+): boolean {
+  return Boolean(row.dispatch_scheduled_on) && dispatchLocationMissing(row);
+}
+
+/**
+ * Marca las filas de la página con la alerta, desde los ids que leyó el
+ * servidor. Sin lectura (`null`) las deja como estaban: no afirma nada. Pura.
+ */
+export function withScheduledNoLocation<T extends { order_id: string }>(
+  rows: T[],
+  ids: ReadonlySet<string> | null,
+): (T & { scheduled_no_location?: boolean })[] {
+  if (!ids) return rows;
+  return rows.map((r) => ({ ...r, scheduled_no_location: ids.has(r.order_id) }));
+}
+
+// ---------------------------------------------------------------------------
+// Provincia COD: programar pide la coordenada (owner, 02-11-2026; MOM §6.2)
+//
+// El día programado Kapta crea sola la guía Aliclik (lib/aliclik-scheduled.ts),
+// y Aliclik no cotiza ni crea sin coordenada. Un Provincia COD programado sin
+// ella fallaba ese día (#AUR900167: «Programado · sale hoy», «Obligatoria: el
+// pedido no la tiene») y la guía quedaba para una persona. Ahora la ubicación
+// se pide al programar —al confirmar con «Sale el» o en «Programar envío»— y
+// se guarda en el pedido, la misma que usa el panel de Aliclik.
+// ---------------------------------------------------------------------------
+
+export const DISPATCH_NEEDS_COORDINATE_ERROR =
+  "Falta la ubicación: pega el enlace de Google Maps o la coordenada. Sin ella, ese día Aliclik no crea la guía.";
+
+/** Lo que la regla mira del pedido: su cobertura operativa y su coordenada. */
+export interface DispatchCoordinateRow {
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+}
+
+/** ¿Es un Provincia COD sin coordenada guardada? Pura. */
+export function dispatchCoordinateMissing(row: DispatchCoordinateRow, operation: string | null | undefined): boolean {
+  if (operation !== "provincia_cod") return false;
+  return row.latitude == null || row.longitude == null || row.latitude === "" || row.longitude === "";
+}
+
+/**
+ * La coordenada que se pegó al programar, o por qué no sirve. Un enlace
+ * acortado (maps.app.goo.gl) no trae la coordenada escrita: hay que abrirlo y
+ * copiar el enlace largo o el par. Pura.
+ */
+export function dispatchCoordinateInput(
+  raw: string | null | undefined,
+): { ok: true; coordinate: Coordinate } | { ok: false; error: string } {
+  const text = (raw ?? "").trim();
+  if (!text) return { ok: false, error: DISPATCH_NEEDS_COORDINATE_ERROR };
+  const coordinate = parseCoordinateInput(text);
+  if (coordinate) return { ok: true, coordinate };
+  if (isShortenedMapsLink(text)) {
+    return {
+      ok: false,
+      error:
+        "Ese enlace es acortado (maps.app.goo.gl) y no trae la coordenada: ábrelo y copia el enlace largo de la barra, o la coordenada (p. ej. -12.04318, -77.02824).",
+    };
+  }
+  return { ok: false, error: "No se encontró una coordenada en lo que pegaste. Usa el enlace de Google Maps o el par, p. ej. -12.04318, -77.02824." };
 }

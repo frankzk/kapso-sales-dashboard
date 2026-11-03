@@ -37,6 +37,7 @@ import {
   RECOVERY_DISCARDED_KIND,
   aliclikGuideFailedAfterDispatch,
   recoveryOutcome,
+  recoveryWindowDaysForOperation,
   type RecoveryEventLike,
   type RecoveryGuideLike,
 } from "@/lib/reproprovincia";
@@ -45,6 +46,7 @@ import { chunk } from "@/lib/access";
 import { COURIER_TBD } from "@/lib/shipment-output";
 import { resolveEmails } from "@/lib/productivity";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
+import { orderPlatform } from "@/lib/order-admin-url";
 import {
   aggregateVoiceScore,
   voiceScoreBounds,
@@ -94,7 +96,7 @@ export function isShipmentView(v: string | undefined | null): v is ShipmentView 
 }
 
 const SHIPMENT_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,swayp_synced_at,created_via,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,closed_at,returned_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
+  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched,match_method,order_name,customer_name,customer_phone,product,district,province,city,region,delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at,address_updated_by,fenix_eligible,fenix_shipment_id,swayp_guide,swayp_state,swayp_synced_at,created_via,delivered_source,aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at,next_followup_at,source_batch_id,last_report_at,reported_status,aliclik_sub_status,aliclik_rider_comment,closed_at,returned_at,suggested_order_gid,suggested_store_id,suggested_order_name,created_at,updated_at";
 
 // Deployment safety: application deploys and database migrations are separate
 // operations in production. Keep queue reads alive while 0038 is being applied;
@@ -286,8 +288,9 @@ export async function withRecoveryState(
   const guidesByOrder = new Map<string, SiblingGuide[]>();
   const eventsByOrder = new Map<string, RecoveryEventLike[]>();
   const cancelled = new Set<string>();
+  const operationByOrder = new Map<string, string>();
   for (const part of chunk(orderIds, 300)) {
-    const [guides, events, orders] = await Promise.all([
+    const [guides, events, orders, operations] = await Promise.all([
       sb
         .from("shipments")
         .select("id,order_id,courier,delivery_status,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at")
@@ -298,6 +301,9 @@ export async function withRecoveryState(
         .in("order_id", part)
         .eq("kind", RECOVERY_DISCARDED_KIND),
       sb.from("orders").select("id,cancelled_at").in("id", part).not("cancelled_at", "is", null),
+      // Solo la OPERACIÓN (Lima, Provincia, Agencia), que no vence con el tiempo,
+      // para elegir la ventana. La decisión se sigue calculando aquí.
+      sb.from("order_master").select("order_id,macro_operation").in("order_id", part),
     ]);
     for (const g of ((guides.data ?? []) as SiblingGuide[])) {
       const list = guidesByOrder.get(g.order_id) ?? [];
@@ -310,6 +316,9 @@ export async function withRecoveryState(
       eventsByOrder.set(e.order_id, list);
     }
     for (const o of ((orders.data ?? []) as { id: string }[])) cancelled.add(o.id);
+    for (const m of ((operations.data ?? []) as { order_id: string; macro_operation: string | null }[])) {
+      if (m.macro_operation) operationByOrder.set(m.order_id, m.macro_operation);
+    }
   }
 
   // EL ANCLA DE LA VENTANA ES LA MISMA QUE EN EL MASTER. Las guías anteriores al
@@ -339,7 +348,8 @@ export async function withRecoveryState(
   }
 
   // La ventana es por tienda: `return_recovery_max_days`, el mismo número que la
-  // recuperación por WhatsApp y que el Master.
+  // recuperación por WhatsApp y que el Master. Lima tiene la suya
+  // (`LIMA_RECOVERY_DAYS`, owner, 03-11-2026), con la operación del Master.
   const windowByStore = new Map<string, number>();
   const { data: stores } = await sb
     .from("stores")
@@ -362,7 +372,10 @@ export async function withRecoveryState(
         guides,
         events,
         nowIso,
-        windowByStore.get(row.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+        recoveryWindowDaysForOperation(
+          (row.order_id && operationByOrder.get(row.order_id)) || "",
+          windowByStore.get(row.store_id) ?? RECOVERY_DEFAULT_MAX_DAYS,
+        ),
       ),
     };
   });
@@ -1128,18 +1141,24 @@ export async function getShipmentWithCalls(
   let order: ShipmentOrderDetail | null = null;
   let linkedFenixShipment: LinkedShipmentSummary | null = null;
   if (shipmentRow.order_id) {
-    const { data } = await sb
-      .from("orders")
-      .select("name,shopify_order_id,line_items,raw")
-      .eq("id", shipmentRow.order_id)
-      .maybeSingle();
-    const orderRow = data as (Omit<ShipmentOrderDetail, "shipping_address"> & { raw?: unknown }) | null;
+    const readOrder = (columns: string) =>
+      sb.from("orders").select(columns).eq("id", shipmentRow.order_id!).maybeSingle();
+    // Con `platform` (0274, MOM §38.12); sin la columna, se repite sin ella y el
+    // pedido es de Shopify, como siempre.
+    let orderRes = await readOrder("name,shopify_order_id,line_items,raw,platform");
+    if (orderRes.error) orderRes = await readOrder("name,shopify_order_id,line_items,raw");
+    const orderRow = orderRes.data as unknown as
+      | (Omit<ShipmentOrderDetail, "shipping_address" | "platform"> & { raw?: unknown; platform?: unknown })
+      | null;
     if (orderRow) {
+      const platform = orderPlatform(orderRow.platform);
       let shippingAddress = shopifyShippingAddress(orderRow.raw);
       // COD apps often create a DraftOrder first. Older order syncs could omit
       // shippingAddress when Shopify rejected protected phone fields, while the
       // completed draft still retained the full destination locally.
-      if (!shippingAddress && orderRow.shopify_order_id) {
+      // Un pedido de WooCommerce no viene de un borrador de Shopify: su gid no
+      // existe (MOM §38.12).
+      if (!shippingAddress && orderRow.shopify_order_id && platform === "shopify") {
         const { data: draft } = await sb
           .from("draft_orders")
           .select("address1,referencia,district,province,customer_name,customer_phone")
@@ -1184,6 +1203,7 @@ export async function getShipmentWithCalls(
           image_url: item.product_id ? images.get(item.product_id) ?? null : null,
         })),
         shipping_address: shippingAddress,
+        platform,
       };
     }
   }

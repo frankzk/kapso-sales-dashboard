@@ -158,7 +158,7 @@ describe("la bandeja ofrece la salida", () => {
   it("el botón solo se dibuja para quien puede, y exige motivo", () => {
     expect(board).toContain("canOverrideRecipient");
     expect(board).toContain("recipientExceptionReason: recipientReason");
-    expect(board).toContain("disabled={pending || !recipientReason.trim()}");
+    expect(board).toContain("disabled={pending || !recipientReason.trim() || !hasPositivePaymentAmount(item.amount)}");
   });
 
   it("y quien no puede se entera de que existe la salida", () => {

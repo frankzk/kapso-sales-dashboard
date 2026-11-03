@@ -14,6 +14,9 @@
 // «Real» emite el barrido y no hay botón. El botón no fuerza nada: el servidor
 // corre la misma emisión real del barrido, con los mismos candados, y antes de
 // pulsar «Sí, emitir» el panel dice qué boleta sale, por cuánto y de qué RUC.
+// Si el pedido quedó pagado antes de «Emitir desde» (desde el 01/10/2026, owner
+// 15-10-2026), además pide marcar que se revisó en SimpleFact: antes de Kapta
+// las boletas se emitían a mano ahí.
 //
 // Es una zona más de la tarjeta «Cobro», sobre su hairline, como el agente de
 // voz en la de confirmación. Las acciones pasan por el `run` del drawer: sus
@@ -22,9 +25,9 @@
 // No importa lib/invoicing/server ni lib/crypto: arrastran node:crypto al
 // navegador (test/invoicing-drawer.test.ts lo vigila). Las reglas puras sí.
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useReducer, useRef, useState } from "react";
 import { cn } from "@/components/ui";
-import { Badge, Banner, CARD_ZONE, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
+import { Badge, Banner, CARD_ZONE, CHECKBOX, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { IconArrowUpRight } from "@/components/icons";
 import {
   confirmDoubtfulInvoice,
@@ -47,6 +50,7 @@ import {
   INVOICE_STATUS_LABEL,
   LIVE_REAL_STATUSES,
   invoiceNoteRef,
+  invoiceReasonLabel,
   type InvoiceMode,
   type InvoiceReason,
 } from "@/lib/invoicing/rules";
@@ -78,9 +82,15 @@ function serieDe(row: InvoicePanelRow): string | null {
   return row.correlative ? `${row.serie}-${row.correlative}` : row.serie;
 }
 
-/** El motivo con la frase del barrido; uno que no se conoce se enseña tal cual. */
-function motivo(reason: string, detail: string | null): string {
-  const label = INVOICE_REASON_LABEL[reason as InvoiceReason] ?? reason;
+/**
+ * El motivo con la frase del barrido; uno que no se conoce se enseña tal cual.
+ * De un pedido de WooCommerce, con la frase que nombra a WooCommerce (§35.11).
+ */
+function motivo(reason: string, detail: string | null, platform?: string | null): string {
+  const label =
+    INVOICE_REASON_LABEL[reason as InvoiceReason] !== undefined
+      ? invoiceReasonLabel(reason as InvoiceReason, platform)
+      : reason;
   return detail ? `${label} ${detail}` : label;
 }
 
@@ -98,6 +108,9 @@ export const SHOPIFY_LATER_TEXT = "Se vuelve a revisar en unas horas.";
 /** `sin_token_shopify`: lo mismo, con lo que falta para que salga. */
 export const SHOPIFY_NO_TOKEN_TEXT =
   "Se vuelve a revisar en unas horas, cuando la tienda tenga conexión con Shopify.";
+/** `sin_claves_woo` (§35.11): lo mismo, para un pedido de WooCommerce. */
+export const WOO_NO_KEYS_TEXT =
+  "Se vuelve a revisar en unas horas, cuando la tienda tenga guardadas sus claves de la API de WooCommerce.";
 
 /**
  * Qué pasa ahora con un pedido que frenó Shopify, según lo que de verdad hace
@@ -107,7 +120,11 @@ export const SHOPIFY_NO_TOKEN_TEXT =
  */
 export function shopifyNextText(review: Extract<InvoicePanelReview, { state: "shopify" }>): string | null {
   if (!review.retry) return SHOPIFY_MANUAL_TEXT;
-  if (review.waitsHours) return review.reason === "sin_token_shopify" ? SHOPIFY_NO_TOKEN_TEXT : SHOPIFY_LATER_TEXT;
+  if (review.waitsHours) {
+    if (review.reason === "sin_token_shopify") return SHOPIFY_NO_TOKEN_TEXT;
+    if (review.reason === "sin_claves_woo") return WOO_NO_KEYS_TEXT;
+    return SHOPIFY_LATER_TEXT;
+  }
   // `lectura_fallida` ya dice que se reintenta en la próxima pasada: no se repite.
   return /próxima pasada/i.test(motivo(review.reason, review.detail)) ? null : SHOPIFY_RETRY_TEXT;
 }
@@ -170,6 +187,49 @@ function horaLima(iso: string): string | null {
   const t = Date.parse(iso);
   return Number.isFinite(t) ? new Date(t - 5 * 3_600_000).toISOString().slice(11, 16) : null;
 }
+
+/** «30/09/2026 18:05», en hora de Lima: a mano, como `horaLima`. null si no es una fecha. */
+function fechaHoraLima(iso: string | null | undefined): string | null {
+  const t = iso ? Date.parse(iso) : Number.NaN;
+  if (!Number.isFinite(t)) return null;
+  const lima = new Date(t - 5 * 3_600_000).toISOString();
+  return `${lima.slice(8, 10)}/${lima.slice(5, 7)}/${lima.slice(0, 4)} ${lima.slice(11, 16)}`;
+}
+
+/** La casilla que pide la confirmación de un pedido pagado antes de «Emitir desde». */
+export const SIMPLEFACT_CHECK_LABEL = "Revisé en SimpleFact y este pedido no tiene boleta";
+
+/**
+ * Lo que la confirmación agrega cuando el pedido quedó pagado antes de «Emitir
+ * desde» (owner, 15-10-2026). Antes de Kapta las boletas se emitían a mano en
+ * SimpleFact, y Kapta no sabe si este pedido ya tiene una: dos boletas son dos
+ * veces el impuesto. null si el pedido no es de antes.
+ *
+ * Si el primer dinero (`firstPaidAt`: la fecha más temprana entre el
+ * comprobante y el registro de sus pagos) es de otro momento que «quedó
+ * pagado», también lo dice: una boleta hecha a mano pudo salir desde ahí, y es
+ * la fecha con la que se busca en SimpleFact.
+ */
+export function emitBeforeStartText(
+  emit: Pick<InvoicePanelEmitNow, "beforeStart" | "paidAt" | "firstPaidAt" | "emitFrom">,
+): string | null {
+  if (emit.beforeStart !== true) return null;
+  const paid = fechaHoraLima(emit.paidAt);
+  const from = fechaHoraLima(emit.emitFrom);
+  const first = fechaHoraLima(emit.firstPaidAt);
+  const head =
+    paid && from ? `Quedó pagado el ${paid}, antes de «Emitir desde» (${from}).` : "Quedó pagado antes de «Emitir desde».";
+  const firstText = first && first !== paid ? ` El primer pago se hizo el ${first}.` : "";
+  return `${head}${firstText} Kapta no sabe si ya se emitió a mano: búscalo en SimpleFact antes de emitir.`;
+}
+
+/**
+ * Lo pagado antes de «Emitir desde» no sale solo, pero con el botón sí se puede
+ * emitir: sin esto, el motivo (`antes_de_inicio`) contradecía al botón de al
+ * lado.
+ */
+export const BACKFILL_REVIEW_TEXT =
+  "No sale sola: se puede emitir con «Emitir esta boleta» después de revisar SimpleFact.";
 
 /**
  * ¿Se puede pulsar ya «No está en SimpleFact: volver a intentar» en este
@@ -239,6 +299,12 @@ export interface InvoicePanelView {
    * vuelve a exigir lo que se ve: quien gestiona y sin comprobante real vivo.
    */
   canEmitNow: boolean;
+  /**
+   * Ese botón es para un pedido pagado antes de «Emitir desde»
+   * (`emitNow.beforeStart`): la revisión, que dice `antes_de_inicio`, agrega
+   * que se puede emitir con el botón.
+   */
+  backfillOffered: boolean;
   /** El RUC del pedido, según las reglas, está en «Manual». */
   manualRuc: boolean;
   /**
@@ -276,7 +342,9 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
     badge = { tone: "crit", label: INVOICE_STATUS_LABEL.error };
   } else if (data.review.state === "shopify") {
     // El barrido lo sigue saltando por lo que dijo Shopify: no está «por emitir».
-    badge = { tone: "warn", label: data.review.retry ? "Espera a Shopify" : "Se emite a mano" };
+    // De un pedido de WooCommerce, lo que se espera es a WooCommerce (§35.11).
+    const tienda = data.platform === "woocommerce" ? "WooCommerce" : "Shopify";
+    badge = { tone: "warn", label: data.review.retry ? `Espera a ${tienda}` : "Se emite a mano" };
   } else if (canEmitNow) {
     // En «Manual» lo que falta es que una persona pulse: el barrido no la emite.
     badge = { tone: "info", label: "Lista para emitir" };
@@ -303,6 +371,7 @@ export function invoicePanelView(data: InvoicePanelData): InvoicePanelView {
     canConfirm: data.canManage && live?.status === "en_duda",
     canRegisterExternal: data.canManage && !live && data.issuers.length > 0,
     canEmitNow,
+    backfillOffered: canEmitNow && data.emitNow?.beforeStart === true,
     manualRuc: reviewIssuer?.mode === "manual",
     rucMode: reviewIssuer?.mode ?? null,
   };
@@ -543,12 +612,14 @@ export function OrderInvoicePanelView({
         </div>
       )}
 
-      {view.showReview && <Review data={data} hideSimulated={!!simulated} manual={view.manualRuc} />}
+      {view.showReview && (
+        <Review data={data} hideSimulated={!!simulated} manual={view.manualRuc} backfill={view.backfillOffered} />
+      )}
 
       {view.check && (
         <p className="text-[13px] leading-5 text-ink-500">
           Última pasada ({INVOICE_MODE_LABEL[view.check.mode as "simulacion" | "real"] ?? view.check.mode},{" "}
-          {cuando(view.check.checkedAt)}): {motivo(view.check.reason, view.check.detail)}
+          {cuando(view.check.checkedAt)}): {motivo(view.check.reason, view.check.detail, data.platform)}
         </p>
       )}
 
@@ -560,11 +631,14 @@ export function OrderInvoicePanelView({
         <EmitInvoiceControl
           emit={data.emitNow}
           pending={pending}
-          onEmit={async () => {
-            const emit = data.emitNow!;
+          onEmit={async (shown, simplefactChecked) => {
+            // Lo que se vio en la confirmación, no lo que diga el panel ahora:
+            // si se releyó con otra oferta, el servidor contesta `pedido_cambio`.
             // El aviso va en la cabecera del drawer, como el de toda acción; el
             // panel se relee después, y la boleta que salió aparece con su PDF.
-            await run(() => emitInvoiceAction(orderId, { issuerId: emit.issuerId, total: emit.total }));
+            await run(() =>
+              emitInvoiceAction(orderId, { issuerId: shown.issuerId, total: shown.total, simplefactChecked }),
+            );
             await onEmitted?.();
           }}
         />
@@ -572,7 +646,7 @@ export function OrderInvoicePanelView({
 
       {!live && view.manualRuc && data.emitNowBlocked && (
         <p className="text-[13px] leading-5 text-ink-600">
-          «Emitir esta boleta» no está disponible: {motivo(data.emitNowBlocked.reason, data.emitNowBlocked.detail)}
+          «Emitir esta boleta» no está disponible: {motivo(data.emitNowBlocked.reason, data.emitNowBlocked.detail, data.platform)}
         </p>
       )}
 
@@ -683,8 +757,22 @@ function LiveInvoice({ row }: { row: InvoicePanelRow }) {
 export const MANUAL_WHO_TEXT =
   "En Manual el barrido solo simula: la boleta real la emite, pedido por pedido, quien tiene «Boletas y facturas».";
 
-/** Lo que dicen hoy las reglas (§35.3), o que no se pudo revisar. Nunca las dos. */
-function Review({ data, hideSimulated, manual }: { data: InvoicePanelData; hideSimulated: boolean; manual: boolean }) {
+/**
+ * Lo que dicen hoy las reglas (§35.3), o que no se pudo revisar. Nunca las dos.
+ * `backfill`: hay «Emitir esta boleta» para un pedido pagado antes de «Emitir
+ * desde»; su `antes_de_inicio` dice que con el botón sí se puede.
+ */
+function Review({
+  data,
+  hideSimulated,
+  manual,
+  backfill,
+}: {
+  data: InvoicePanelData;
+  hideSimulated: boolean;
+  manual: boolean;
+  backfill: boolean;
+}) {
   const review = data.review;
   if (review.state === "sin_revisar") {
     // FALLA CERRADA: sin los hechos no se dice «lista» ni ningún motivo.
@@ -695,7 +783,7 @@ function Review({ data, hideSimulated, manual }: { data: InvoicePanelData; hideS
   if (review.state === "shopify") {
     // Kapta dice que sí, pero el barrido lo frenó al leer Shopify y lo sigue
     // saltando. «Lista para emitirse» aquí sería prometer una boleta que no sale.
-    const reason = motivo(review.reason, review.detail);
+    const reason = motivo(review.reason, review.detail, data.platform);
     const next = shopifyNextText(review);
     return (
       <div className="space-y-0.5 text-[13px] leading-5">
@@ -728,7 +816,7 @@ function Review({ data, hideSimulated, manual }: { data: InvoicePanelData; hideS
         </p>
         <p className="text-ink-500">
           {review.mode === "real"
-            ? "Antes de emitir, el barrido vuelve a leer el pedido en Shopify."
+            ? `Antes de emitir, el barrido vuelve a leer el pedido en ${data.platform === "woocommerce" ? "WooCommerce" : "Shopify"}.`
             : "En simulación se arma la boleta y se guarda sin enviarla a SimpleFact."}
         </p>
       </div>
@@ -736,7 +824,15 @@ function Review({ data, hideSimulated, manual }: { data: InvoicePanelData; hideS
   }
   // La simulación ya se ve abajo: repetir «Ya tiene su simulación» no dice nada.
   if (review.reason === "ya_simulado" && hideSimulated) return null;
-  return <p className="text-[13px] leading-5 text-ink-600">{motivo(review.reason, review.detail)}</p>;
+  // «Quedó pagado antes de «Emitir desde»» al lado de un botón que lo emite se
+  // contradice: el barrido no lo emite, una persona sí (owner, 15-10-2026).
+  const extra = backfill && review.reason === "antes_de_inicio" ? ` ${BACKFILL_REVIEW_TEXT}` : "";
+  return (
+    <p className="text-[13px] leading-5 text-ink-600">
+      {motivo(review.reason, review.detail, data.platform)}
+      {extra}
+    </p>
+  );
 }
 
 /** «Simulada: lo que habría enviado» — la boleta exacta, que no salió de Kapta. */
@@ -790,6 +886,23 @@ function SimulatedInvoice({ row }: { row: InvoicePanelRow }) {
  * la fila) también lo deshabilita. Mientras sale no se puede cancelar: lo que
  * se envió ya no se recoge.
  *
+ * PAGADO ANTES DE «EMITIR DESDE» (`emit.beforeStart`, owner 15-10-2026). La
+ * confirmación pide marcar «Revisé en SimpleFact y este pedido no tiene
+ * boleta», y «Sí, emitir» no se puede pulsar sin eso. La casilla nace sin
+ * marcar cada vez que se abre la confirmación, y se desmarca al cancelar y al
+ * volver la respuesta. `onEmit` recibe si quedó marcada; el servidor la vuelve
+ * a exigir (`sin_revision_simplefact`).
+ *
+ * LA CONFIRMACIÓN ES DE UNA OFERTA. Al abrirla se guarda la oferta que se veía
+ * (`emitControlReducer`), la confirmación dice ésa, y `onEmit` recibe ésa: no
+ * la que tenga el panel al pulsar. Si el panel se relee con la confirmación
+ * abierta y la oferta cambia —otro RUC, otro total, otras fechas, o deja de ser
+ * (o pasa a ser) de antes de «Emitir desde»—, la confirmación se cierra y la
+ * casilla se desmarca: lo que se revisó en SimpleFact era para la otra (en
+ * otro RUC, otro SimpleFact). Así una casilla marcada nunca viaja con una
+ * oferta que nadie revisó; y si se alcanzara a pulsar, va la oferta vista, y el
+ * servidor contesta `pedido_cambio`.
+ *
  * Quien lo usa decide qué hacer con la respuesta (`onEmit`), y no lanza.
  */
 export function EmitInvoiceControl({
@@ -798,39 +911,56 @@ export function EmitInvoiceControl({
   onEmit,
   label = "Emitir esta boleta",
 }: {
-  emit: Pick<InvoicePanelEmitNow, "ruc" | "legalName" | "total">;
+  emit: EmitInvoiceShownOffer;
   pending: boolean;
-  onEmit: () => Promise<void>;
+  /** `shown`: la oferta de la confirmación que se pulsó, no la de ahora. */
+  onEmit: (shown: EmitInvoiceShownOffer, simplefactChecked: boolean) => Promise<void>;
   label?: string;
 }) {
-  const [confirming, setConfirming] = useState(false);
+  const [state, dispatch] = useReducer(emitControlReducer, EMIT_CONTROL_CLOSED);
   const [sending, setSending] = useState(false);
   const lock = useRef(false);
   const busy = pending || sending;
 
-  const confirmar = () =>
+  // La oferta cambió con la confirmación abierta: se cierra y se desmarca.
+  useEffect(() => {
+    dispatch({ type: "oferta", offer: emit });
+  }, [emit]);
+  // Y mientras ese efecto llega, no se pinta una confirmación de otra oferta.
+  const shown = emitConfirmShown(state, emit);
+
+  const confirmar = (offer: EmitInvoiceShownOffer, simplefactChecked: boolean) =>
     void sendOnce(lock, async () => {
       setSending(true);
       try {
-        await onEmit();
+        await onEmit(offer, simplefactChecked);
       } finally {
         setSending(false);
-        setConfirming(false);
+        dispatch({ type: "cerrar" });
       }
     }).catch(() => {
       // `onEmit` no lanza; si lo hiciera, el aviso es de quien lo usa. Aquí
       // solo se suelta el botón (ya lo hizo `finally`).
     });
 
-  if (confirming) {
-    return <EmitInvoiceConfirm emit={emit} busy={busy} onConfirm={confirmar} onCancel={() => setConfirming(false)} />;
+  if (shown) {
+    return (
+      <EmitInvoiceConfirm
+        emit={shown}
+        busy={busy}
+        simplefactChecked={state.simplefactChecked}
+        onSimplefactChecked={(checked) => dispatch({ type: "casilla", checked })}
+        onConfirm={() => confirmar(shown, state.simplefactChecked)}
+        onCancel={() => dispatch({ type: "cerrar" })}
+      />
+    );
   }
   return (
     <OpsButton
       size="sm"
       variant="primary"
       disabled={busy}
-      onClick={() => setConfirming(true)}
+      onClick={() => dispatch({ type: "abrir", offer: emit })}
       className="pointer-coarse:h-11"
     >
       {label}
@@ -839,28 +969,134 @@ export function EmitInvoiceControl({
 }
 
 /**
+ * Lo que enseña la confirmación y lo que se envía al pulsar: el RUC (`issuerId`
+ * es el que compara el servidor), el total y, si es de antes de «Emitir
+ * desde», las fechas.
+ */
+export type EmitInvoiceShownOffer = Pick<
+  InvoicePanelEmitNow,
+  "issuerId" | "ruc" | "legalName" | "total" | "beforeStart" | "paidAt" | "firstPaidAt" | "emitFrom"
+>;
+
+/**
+ * Lo que hace distinta a una oferta para la confirmación: si cambia algo de
+ * esto, lo que la persona leyó (y revisó en SimpleFact) era otra cosa.
+ */
+export function emitOfferKey(offer: EmitInvoiceShownOffer): string {
+  return JSON.stringify([
+    offer.issuerId,
+    offer.ruc,
+    offer.legalName,
+    Math.round(Number(offer.total) * 100),
+    offer.beforeStart === true,
+    offer.paidAt ?? null,
+    offer.firstPaidAt ?? null,
+    offer.emitFrom ?? null,
+  ]);
+}
+
+/** La confirmación de «Emitir esta boleta»: la oferta que se veía al abrirla y la casilla. */
+export interface EmitControlState {
+  shown: EmitInvoiceShownOffer | null;
+  simplefactChecked: boolean;
+}
+
+export const EMIT_CONTROL_CLOSED: EmitControlState = { shown: null, simplefactChecked: false };
+
+export type EmitControlAction =
+  /** «Emitir esta boleta»: se abre con la oferta de ahora, sin marcar. */
+  | { type: "abrir"; offer: EmitInvoiceShownOffer }
+  /** La casilla «Revisé en SimpleFact…». Solo con la confirmación abierta. */
+  | { type: "casilla"; checked: boolean }
+  /** «Cancelar», o volvió la respuesta. */
+  | { type: "cerrar" }
+  /** El panel trae una oferta (otra vez la misma, o una distinta). */
+  | { type: "oferta"; offer: EmitInvoiceShownOffer };
+
+/**
+ * La confirmación, como función pura (`EmitInvoiceControl` la usa con
+ * `useReducer`). Nace cerrada; se abre con la oferta de ahora y la casilla sin
+ * marcar; cancelar y la respuesta la cierran y la desmarcan; y si llega otra
+ * oferta con la confirmación abierta, se cierra y se desmarca. La misma oferta
+ * releída (otro objeto, lo mismo) no cambia nada.
+ */
+export function emitControlReducer(state: EmitControlState, action: EmitControlAction): EmitControlState {
+  switch (action.type) {
+    case "abrir":
+      return { shown: action.offer, simplefactChecked: false };
+    case "casilla":
+      return state.shown ? { ...state, simplefactChecked: action.checked === true } : state;
+    case "cerrar":
+      return EMIT_CONTROL_CLOSED;
+    case "oferta":
+      return state.shown && emitOfferKey(state.shown) !== emitOfferKey(action.offer) ? EMIT_CONTROL_CLOSED : state;
+  }
+}
+
+/**
+ * La oferta que dice la confirmación abierta, o null si está cerrada o si ya no
+ * es la oferta de ahora (la cierra el efecto de `EmitInvoiceControl`; hasta
+ * entonces, no se pinta).
+ */
+export function emitConfirmShown(state: EmitControlState, now: EmitInvoiceShownOffer): EmitInvoiceShownOffer | null {
+  return state.shown && emitOfferKey(state.shown) === emitOfferKey(now) ? state.shown : null;
+}
+
+/**
  * El paso de confirmación: qué boleta sale, por cuánto y de qué RUC, y que no
  * se puede borrar. «Sí, emitir» queda deshabilitado mientras sale.
+ *
+ * Si el pedido quedó pagado antes de «Emitir desde» (`emit.beforeStart`), dice
+ * cuándo quedó pagado y desde cuándo emite el RUC, y pide la casilla
+ * «Revisé en SimpleFact y este pedido no tiene boleta»: sin marcarla, «Sí,
+ * emitir» no se puede pulsar. Sin `beforeStart` no cambia nada.
  */
 export function EmitInvoiceConfirm({
   emit,
   busy,
+  simplefactChecked,
+  onSimplefactChecked,
   onConfirm,
   onCancel,
 }: {
-  emit: Pick<InvoicePanelEmitNow, "ruc" | "legalName" | "total">;
+  emit: EmitInvoiceShownOffer;
   busy: boolean;
+  /** La casilla «Revisé en SimpleFact…»: la guarda quien la usa (`EmitInvoiceControl`). */
+  simplefactChecked: boolean;
+  onSimplefactChecked: (checked: boolean) => void;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const beforeStart = emitBeforeStartText(emit);
   return (
     <div role="group" aria-label="Confirmar la emisión" className="space-y-3 rounded-lg bg-wash p-3">
       <p className="text-[13px] leading-5 text-ink-900">{emitConfirmation(emit)}</p>
+      {beforeStart && (
+        <>
+          <p className="text-[13px] leading-5 text-warn-fg">{beforeStart}</p>
+          <label className="flex items-start gap-2 text-[13px] font-medium leading-5 text-ink-900 pointer-coarse:min-h-11">
+            <input
+              type="checkbox"
+              checked={simplefactChecked}
+              disabled={busy}
+              onChange={(e) => onSimplefactChecked(e.target.checked)}
+              className={cn(CHECKBOX, "mt-0.5")}
+            />
+            {SIMPLEFACT_CHECK_LABEL}
+          </label>
+        </>
+      )}
       <p className="text-[13px] leading-5 text-ink-600">
         Antes de emitir otra, revisa esta en SimpleFact: el RUC, los ítems y el total.
       </p>
       <div className="flex flex-wrap gap-2">
-        <OpsButton size="sm" variant="primary" disabled={busy} onClick={onConfirm} className="pointer-coarse:h-11">
+        <OpsButton
+          size="sm"
+          variant="primary"
+          disabled={busy || (beforeStart !== null && !simplefactChecked)}
+          onClick={onConfirm}
+          className="pointer-coarse:h-11"
+        >
           {busy ? "Emitiendo…" : "Sí, emitir"}
         </OpsButton>
         <OpsButton size="sm" variant="ghost" disabled={busy} onClick={onCancel} className="pointer-coarse:h-11">

@@ -132,21 +132,23 @@ export async function applyNotebookImport(
     }
     // pasar_y_reportar
     const carry = r.match.kind === "arrastre" ? ctx.carry.find((c) => c.shipmentId === r.match.shipmentId) ?? null : null;
-    if (!carry) { fail(r, decision.index, `Ya no es un reprogramado que ${riderName} conserva en una caja anterior.`); continue; }
+    if (!carry) { fail(r, decision.index, `Ya no es un paquete que ${riderName} conserva en una caja anterior.`); continue; }
+    if (carry.unreported && r.match.via !== "codigo") { fail(r, decision.index, "Para añadir un paquete sin reporte anterior, la hoja debe identificarlo por su código."); continue; }
     if (used.has(carry.shipmentId)) { fail(r, decision.index, "Otra fila de la hoja ya pasa ese paquete."); continue; }
     used.add(carry.shipmentId);
     tasks.push({ decision, row: r, outcome: decision.outcome, carry: { shipmentId: carry.shipmentId, orderId: carry.orderId }, stop: null, manualStop: false });
   }
 
-  // 2. Los reprogramados que conserva pasan a esta ruta, ya cotejados: todo o nada.
+  // 2. La hoja revisada confirma los paquetes que conserva: todo o nada.
   const carryTasks = tasks.filter((t) => t.carry);
   let carried = 0;
   if (carryTasks.length) {
-    const { error } = await admin.rpc("gf_carry_over", {
+    const { error } = await admin.rpc("gf_notebook_carry_over", {
       p_rider_id: row.rider_id,
       p_to_date: row.route_date,
       p_shipment_ids: carryTasks.map((t) => t.carry!.shipmentId),
       p_actor: userId,
+      p_import_id: importId,
     });
     if (error) {
       for (const t of carryTasks) fail(t.row, t.decision.index, `No se pudo pasar a la ruta: ${error.message}`);

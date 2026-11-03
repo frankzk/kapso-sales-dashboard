@@ -1,6 +1,7 @@
 "use server";
 
 import { cancelledScanNotice } from "@/lib/scan-cancelled";
+import { legacySaleManifestBlock } from "@/lib/legacy-sale-cancel-access";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -918,6 +919,8 @@ export async function handOverToCourier(
 
   const { user } = await currentUser();
   const admin = createAdminSupabase();
+  const commercialBlock = await legacySaleManifestBlock(admin, manifestId);
+  if (commercialBlock) return { error: commercialBlock };
   const { error: nameError } = await admin
     .from("dispatch_manifests")
     .update({ received_by: name })
@@ -1061,6 +1064,8 @@ export async function scanManifestItem(
       .eq("manifest_id", manifestId);
     const active = (remaining ?? []).filter((row) => !row.removed_at);
     if (active.length && active.every((row) => !!row.pickup_checked_at)) {
+      const commercialBlock = await legacySaleManifestBlock(admin, manifestId);
+      if (commercialBlock) return { error: commercialBlock };
       const { data: orderIds, error: finalizeError } = await admin.rpc("finalize_dispatch_manifest", {
         p_manifest_id: manifestId,
         p_actor: user.id,
@@ -1170,6 +1175,11 @@ async function finalizeBoxIfComplete(
   manifestId: string,
   actor: string,
 ): Promise<boolean> {
+  const commercialBlock = await legacySaleManifestBlock(admin, manifestId);
+  if (commercialBlock) {
+    console.error("[despacho] caja sin finalizar", commercialBlock);
+    return false;
+  }
   const { data, error } = await admin.rpc("gf_finalize_if_complete", { p_manifest_id: manifestId, p_actor: actor });
   if (error) {
     console.error("[despacho] no se pudo cerrar la caja completa", error.message);

@@ -340,3 +340,50 @@ describe("selectFollowUpGuides — prioridad de las que esperan devolución", ()
     expect(res.deferred).toBe(8);
   });
 });
+
+describe("la guía transferida con el paquete todavía en Aliclik (owner, 01-11-2026)", () => {
+  // #KP117015: la hija de Swayp se anuló, Aliclik devolvió y canceló, y Kapta
+  // había dejado de preguntar al transferir: 107 días «En curso · En tránsito».
+  const transferida = (over: Partial<FollowUpCandidate> = {}) =>
+    guide({
+      id: "madre",
+      external_order_number: null,
+      guide_code: "AUR5X390297258918",
+      delivery_status: "transferido",
+      custody_state: "courier",
+      returned_at: null,
+      last_report_at: daysAgo(120),
+      ...over,
+    });
+
+  it("se sigue preguntando aunque lleve 120 días callada", () => {
+    const res = selectFollowUpGuides([transferida()], opts());
+    expect(res.due.map((g) => g.id)).toEqual(["madre"]);
+    expect(res.abandoned).toBe(0);
+  });
+
+  it("deja de preguntar cuando la devolución ya está sellada o el paquete no está en Aliclik", () => {
+    expect(selectFollowUpGuides([transferida({ returned_at: daysAgo(3) })], opts()).due).toEqual([]);
+    expect(selectFollowUpGuides([transferida({ custody_state: "devuelto" })], opts()).due).toEqual([]);
+    expect(selectFollowUpGuides([transferida({ custody_state: "empresa" })], opts()).due).toEqual([]);
+  });
+
+  it("se abandona a los 180 días de silencio", () => {
+    const res = selectFollowUpGuides([transferida({ last_report_at: daysAgo(181) })], opts());
+    expect(res.due).toEqual([]);
+    expect(res.abandoned).toBe(1);
+  });
+
+  it("entra en la reserva de las que esperan devolución", () => {
+    const vivas = Array.from({ length: 10 }, (_, i) => guide({ id: `v${i}`, aliclik_followup_at: null }));
+    const res = selectFollowUpGuides([...vivas, transferida({ aliclik_followup_at: daysAgo(1) })], opts({ limit: 4 }));
+    expect(res.due.map((g) => g.id)).toContain("madre");
+  });
+
+  it("el cron la trae al pool solo con custodia del courier y sin devolución", async () => {
+    const { readFileSync } = await import("node:fs");
+    const route = readFileSync("app/api/cron/aliclik-close/route.ts", "utf8");
+    expect(route).toContain('"and(delivery_status.eq.transferido,custody_state.eq.courier,returned_at.is.null)"');
+    expect(route).toContain("custody_state,returned_at");
+  });
+});

@@ -202,7 +202,8 @@ describe("el dato viaja hasta donde se decide", () => {
 
   it("el drawer lo pide en sus columnas", () => {
     const source = read("lib/orders-master-access.ts");
-    const block = source.slice(source.indexOf("MASTER_DETAIL_EXTRA_COLUMNS"));
+    // Son compartidas por el listado y el detalle para la etiqueta de prepago.
+    const block = source.slice(source.indexOf("MASTER_PAYMENT_COLUMNS"));
     expect(block.slice(0, 600)).toContain('"financial_status"');
     expect(block.slice(0, 600)).toContain('"total_refunded"');
   });

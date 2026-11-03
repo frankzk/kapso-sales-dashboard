@@ -18,6 +18,7 @@
 //   5. Pendiente                 — todavía no arrancó bien el proceso logístico.
 
 import { PERMISSION_LABEL } from "@/lib/permissions";
+import { legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { NO_REPLACED_OUTPUTS, replacedOutputIds } from "@/lib/gf-replaced-output";
 import { hasConfirmationSignal } from "@/lib/order-confirmation";
 import { COMPANION_LINKED } from "@/lib/order-companion";
@@ -201,6 +202,17 @@ export function closedStatusChangeError(
   if (!reason.trim()) return "Describe el motivo del cambio: quedará en el historial.";
   return null;
 }
+/**
+ * Cambiar a mano el estado de un pedido es de owner y admin
+ * (`master.set_status`). Decisión del dueño del 15-10-2026, con sus palabras:
+ * «solo quienes tienen acceso de Admin pueden realizar esa acción» (MOM §16).
+ * Lo dice el servidor al rechazarlo y, en la ficha, la línea que queda donde
+ * estaba la tarjeta «Registrar estado». Viven aquí y no en las acciones porque
+ * un archivo "use server" solo exporta funciones.
+ */
+export const SET_STATUS_DENIED = "Solo un admin puede registrar el estado a mano.";
+export const SET_STATUS_ADMIN_NOTE = "Registrar el estado a mano lo hace un admin.";
+
 /** Estados operativos válidos para un estado general dado (para los selectores). */
 export function operationalStatusesFor(general: GeneralStatus): OperationalStatusDef[] {
   return OPERATIONAL_STATUSES.filter((s) => s.general === general);
@@ -214,9 +226,14 @@ export function operationalStatusesFor(general: GeneralStatus): OperationalStatu
  * panel que no existe con ese nombre. El que sí existe es «Gestión manual →
  * Registrar estado», al final de la pestaña Operar del pedido. Mandar a alguien a
  * un sitio inexistente es peor que no decirle nada: se pasa el rato buscándolo.
+ *
+ * Desde el 15-10-2026 esa tarjeta solo la ve un admin (`master.set_status`,
+ * MOM §16), y esta frase la leen sobre todo vendedoras y asesoras en los
+ * modales de guía: decirles «vuelve a abrirlo» las mandaba a buscar algo que
+ * ya no tienen. Dice quién lo hace y dónde, y sirve igual al admin que la lee.
  */
 export const REOPEN_HINT =
-  "Vuelve a abrirlo en «Gestión manual → Registrar estado», al final de la pestaña Operar del pedido.";
+  "Lo vuelve a abrir un admin en «Gestión manual → Registrar estado», al final de la pestaña Operar del pedido.";
 
 /**
  * Por qué un pedido cerrado no admite una salida nueva, y qué hacer.
@@ -233,7 +250,7 @@ export function terminalOrderBlocker(general: string): string | null {
     // un estado que se arregla solo en cuanto exista otra salida viva.
     return (
       "El pedido está anulado. Si acabas de anular su salida para cambiar de courier, el estado se " +
-      `recalcula solo y vuelve a Preparación; si lo anuló Shopify o el courier, ${lowerFirst(REOPEN_HINT)}`
+      `recalcula solo y vuelve a Preparación; si lo anuló la tienda o el courier, ${lowerFirst(REOPEN_HINT)}`
     );
   }
   return `El pedido está ${generalLabel(general).toLowerCase()}. ${REOPEN_HINT}`;
@@ -296,6 +313,7 @@ export interface GuideSnapshot {
 /** Un evento de la línea de tiempo (order_events). */
 export interface OrderEventSnapshot {
   kind: string;
+  source?: string | null;
   /** La salida que nombra el evento, cuando la nombra. Es lo que permite saber
    *  QUÉ salida se anuló por el botón de corregir. */
   shipment_id?: string | null;
@@ -396,6 +414,17 @@ function guideMovedAt(g: GuideSnapshot): string | null {
 /** ¿Esta guía llegó a salir físicamente? Requisito para poder hablar de devolución. */
 function wasDispatched(g: GuideSnapshot): boolean {
   return Boolean(g.dispatched_at || g.out_for_delivery_at || g.pickup_state);
+}
+
+/**
+ * ¿El paquete salió con el courier? Para PROBAR una devolución basta con que el
+ * courier lo haya recogido en el almacén (`custody_transferred_at`, el PICKED
+ * de Aliclik), aunque la guía no traiga fecha de despacho (owner, 01-11-2026).
+ * Las guías de Aliclik que llegaron por el Excel no la traen: #KP117015 tenía
+ * la devolución sellada y seguía «En curso · En tránsito», como ~50 pedidos más.
+ */
+function leftWithCourier(g: GuideSnapshot): boolean {
+  return wasDispatched(g) || Boolean(g.custody_transferred_at);
 }
 
 const AGENCY_COURIERS = new Set(["shalom", "olva"]);
@@ -688,7 +717,7 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
   // Solo la probada cierra el pedido como Devuelto; la reclamada se ve como
   // "en proceso de retorno" para que el equipo la trabaje sin contabilizarla
   // todavía como devolución (que además lleva costo asociado).
-  const returnedGuide = guides.find((g) => g.returned_at && wasDispatched(g) && g.guide_code);
+  const returnedGuide = guides.find((g) => g.returned_at && leftWithCourier(g) && g.guide_code);
   const returnClaimed =
     guides.some((g) => g.returned_at || g.pickup_state === "retorno_iniciado") ||
     events.some((e) => e.kind === "returned" || e.kind === "return_started");
@@ -719,6 +748,14 @@ export function resolveOrderState(inputs: ResolveInputs): ResolvedOrderState {
     // Falso por defecto: solo la regla 0 lo pone en cierto, y solo cuando el
     // override es de verdad el que manda. Es lo que dibuja el candado.
     overrideApplied: false,
+  };
+
+  // La venta histórica terminó en Kapta. Conserva el rollup de cada salida;
+  // ni una guía posterior ni un reporte del courier reactivan la venta.
+  const commercialCancelledAt = legacySaleCancelledAt(events);
+  if (commercialCancelledAt) return {
+    ...rollup, general: "anulado", operational: "anulado",
+    since: commercialCancelledAt, source: "kapta", overrideApplied: false,
   };
 
   // ── 0. Override manual: un humano decidió, nada AUTOMÁTICO lo pisa.

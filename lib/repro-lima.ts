@@ -20,7 +20,7 @@ import { rescheduleDateProblem, RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-pr
 import { programDayLabel } from "@/lib/dispatch-day";
 import { guideDoorRejection, guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
 import { ownRetryDecision, type OwnRetryBlock } from "@/lib/gf-retry";
-import { motivoDelCourier } from "@/lib/aliclik-status";
+import { courierDetail, motivoDelCourier } from "@/lib/aliclik-status";
 import { NON_DELIVERY_REASONS } from "@/lib/routes";
 import { nombreDeCourier, sameCourier } from "@/lib/shipment-output";
 import { firstSwaypDispatchDay, isSwaypDispatchDay, SWAYP_SUNDAY_ERROR } from "@/lib/swayp-dispatch-days";
@@ -64,14 +64,19 @@ export function isReproChannel(value: unknown): value is ReproChannel {
  * El courier del acuerdo, con el token que se guarda (catálogo de la Mesa de
  * despacho): Grupo GF es `propio` y Swayp es `fenix`. Urpi queda en el CHECK
  * para fase 2, pero en 1a no se ofrece (E16).
+ *
+ * Desde el 26-10-2026 (decisión del owner, MOM §9 «Aliclik en Lima») Tanders
+ * no crea guías nuevas y la hoja ofrece Aliclik en su lugar (0283 lo admite en
+ * el CHECK). `tanders` se queda en el tipo por los acuerdos ya guardados.
  */
-export type ReproCourier = "propio" | "tanders" | "fenix" | "urpi" | "axel";
-export const REPRO_COURIERS: readonly ReproCourier[] = ["propio", "tanders", "fenix", "urpi", "axel"];
-/** Los que se ofrecen en la hoja, en este orden (Grupo GF por defecto). Sin Urpi en 1a (E16). */
-export const REPRO_COURIER_CHOICES: readonly ReproCourier[] = ["propio", "tanders", "fenix", "axel"];
+export type ReproCourier = "propio" | "aliclik" | "tanders" | "fenix" | "urpi" | "axel";
+export const REPRO_COURIERS: readonly ReproCourier[] = ["propio", "aliclik", "tanders", "fenix", "urpi", "axel"];
+/** Los que se ofrecen en la hoja, en este orden (Grupo GF por defecto). Sin Urpi en 1a (E16) ni Tanders (26-10-2026). */
+export const REPRO_COURIER_CHOICES: readonly ReproCourier[] = ["propio", "aliclik", "fenix", "axel"];
 
 export const REPRO_COURIER_LABEL: Record<ReproCourier, string> = {
   propio: "Grupo GF",
+  aliclik: "Aliclik",
   tanders: "Tanders",
   fenix: "Swayp",
   urpi: "Urpi",
@@ -349,7 +354,7 @@ export function nextCallProblem(iso: string | null | undefined, now: Date = new 
  * - Una acción que se prepara la noche anterior (reimprimir, salida nueva,
  *   desarmar y rearmar): desde mañana (E14).
  * - Grupo GF: hoy hasta el corte (`same_day_cutoff`), después mañana.
- * - Tanders y Axel: hoy.
+ * - Aliclik, Tanders y Axel: hoy (la guía de Aliclik trae su propio horario de recojo).
  */
 export function firstAllowedDay(
   courier: ReproCourier,
@@ -879,7 +884,7 @@ export type ReproChipKey =
   | "acuerdo_vencido"
   | "programado_gf_sin_acuerdo"
   | "programado_acuerdo_anterior"
-  | "fecha_motorizado"
+  | "acordado_puerta"
   | "pidio";
 
 export interface ReproChip {
@@ -914,8 +919,9 @@ function callChip(iso: string, now: Date): ReproChip {
  *    programa pasó) → «Por decidir», vencido. La chapa dice cuál: el día
  *    acordado pasó, ya no alcanza hoy, o Grupo GF lo programó antes y ese día
  *    pasó sin salir (el día acordado todavía no llega).
- * 5. Programa sin acuerdo vivo: de Grupo GF → «Programados»; de un acuerdo
- *    anterior o del motorizado (#908, D9) → «Por decidir», con su chapa.
+ * 5. Programa sin acuerdo vivo: de Grupo GF, o la fecha que el cliente dio
+ *    en la puerta (01-11-2026) → «Programados»; la de la puerta que ya pasó, o
+ *    la de un acuerdo anterior → «Por decidir», con su chapa.
  * 6. Lo demás → «Por decidir» (una llamada que ya toca es vencida).
  */
 export function reproList(input: {
@@ -995,16 +1001,23 @@ export function reproList(input: {
   // 5. Programa sin acuerdo vivo.
   if (input.program && programDay) {
     const origin = programOrigin(input.program.reason);
+    // La fecha que el cliente dio en la puerta ya es el acuerdo (01-11-2026,
+    // decisión del owner, MOM §29.7): «Programados», sin llamar. Si el día
+    // pasó sin salir, vuelve a «Por decidir» para que la tienda llame.
+    if (origin === "motorizado") {
+      if (programDay >= today) {
+        chips.push({ key: "acordado_puerta", text: `Acordado en la puerta: ${programDayLabel(programDay)}` });
+        return { list: "programados", overdue: callDue, chips };
+      }
+      chips.push({ key: "acordado_puerta", text: `Acordado en la puerta: ${programDayLabel(programDay)} · no salió` });
+      return { list: "por_decidir", overdue: true, chips };
+    }
     if (origin === "grupo_gf") {
       chips.push({ key: "programado_gf_sin_acuerdo", text: "Programado en Grupo GF · sin acuerdo" });
       requestedChip();
       return { list: "programados", overdue: callDue, chips };
     }
-    chips.push(
-      origin === "motorizado"
-        ? { key: "fecha_motorizado", text: `Fecha del motorizado sin confirmar: ${programDayLabel(programDay)}` }
-        : { key: "programado_acuerdo_anterior", text: "Programado por un acuerdo anterior" },
-    );
+    chips.push({ key: "programado_acuerdo_anterior", text: "Programado por un acuerdo anterior" });
   }
 
   // 6. Por decidir.
@@ -1147,6 +1160,9 @@ export type ReproFailure =
       kind: "courier";
       courier: string;
       reportedStatus: string | null;
+      /** Aliclik, del Excel (0304): «SUB ESTADO» y el último comentario del motorizado. */
+      subStatus?: string | null;
+      riderComment?: string | null;
       swaypState?: number | null;
       /** Día del fallo (YYYY-MM-DD o ISO), cuando el courier lo sella (Aliclik al anular). */
       failedOn?: string | null;
@@ -1174,7 +1190,7 @@ export function failureLine(f: ReproFailure): { text: string; rejected: boolean 
     const note = f.note?.trim() ? ` · «${f.note.trim()}»` : "";
     return { text: `No entregado por ${who}${day} · ${reason}${note}`, rejected: f.outcomeReason === "rechazado" };
   }
-  const motivo = motivoDelCourier(f.reportedStatus).texto;
+  const motivo = `${motivoDelCourier(f.reportedStatus).texto}${courierDetail(f.subStatus, f.riderComment)}`;
   const rejected = guideDoorRejection({
     courier: f.courier,
     delivery_status: "",

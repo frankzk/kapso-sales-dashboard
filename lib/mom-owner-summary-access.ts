@@ -1,7 +1,8 @@
 import { createServerSupabase } from "@/lib/db";
+import { isWebPrepaid } from "@/lib/order-paid";
 import {
   buildMomOwnerSummary,
-  momOwnerPeriods,
+  momOwnerPeriodsWith,
   type MomOwnerEventFact,
   type MomOwnerManifestFact,
   type MomOwnerOrderFact,
@@ -63,11 +64,20 @@ interface RawOrder {
   delivered_at: string | null;
   delivered_courier: string | null;
   last_movement_at: string | null;
+  general_status: string | null;
+  status_since: string | null;
+  current_courier: string | null;
+  last_courier: string | null;
+  dispatched_with: string[] | null;
 }
 
+// Las cinco últimas sirven a «Liquidación vencida» cuando la entrega se
+// registró a mano y no dejó `delivered_at` ni `delivered_courier`
+// (`settlementDeliveredAt` y `settlementCourier`, lib/mom-owner-summary.ts).
 const ORDER_COLUMNS =
   "order_id,order_created_at,coverage,order_total,macro_stage,macro_substage," +
-  "macro_reasons,payment_state,delivered_at,delivered_courier,last_movement_at";
+  "macro_reasons,payment_state,delivered_at,delivered_courier,last_movement_at," +
+  "general_status,status_since,current_courier,last_courier,dispatched_with";
 
 interface RawShipment {
   id: string;
@@ -117,6 +127,11 @@ function orderFact(row: RawOrder): MomOwnerOrderFact {
     deliveredAt: row.delivered_at,
     deliveredCourier: row.delivered_courier,
     lastMovementAt: row.last_movement_at,
+    generalStatus: row.general_status,
+    statusSince: row.status_since,
+    currentCourier: row.current_courier,
+    lastCourier: row.last_courier,
+    dispatchedWith: row.dispatched_with,
   };
 }
 
@@ -137,16 +152,33 @@ async function readOrdersByIds(orderIds: string[]): Promise<RawOrder[]> {
 export async function getMomOwnerSummary(
   storeIds: string[],
   orgIds: string[],
-  now = new Date(),
+  options: { now?: Date; month?: string | null } = {},
 ): Promise<MomOwnerSummary> {
+  const now = options.now ?? new Date();
   const today = limaTodayKey(now);
-  const periods = momOwnerPeriods(today);
+  const periods = momOwnerPeriodsWith(today, options.month);
   const earliest = periods.find((period) => period.key === "previous_month")!.startIso;
   const currentEnd = periods.find((period) => period.key === "month")!.endIso;
+  // El mes de «Otro mes…» se lee aparte: entre él y el mes anterior puede haber
+  // un año de pedidos que ningún indicador mira.
+  const chosen = periods.find((period) => period.key === "chosen_month");
+  // Los pedidos, solo los creados en él; sus salidas y confirmaciones, hasta un
+  // mes después: el pedido del 31 que salió el 2 sigue siendo de ese mes.
+  const windows: Array<[string, string]> = [[earliest, currentEnd]];
+  const factWindows: Array<[string, string]> = [[earliest, currentEnd]];
+  if (chosen) {
+    windows.push([chosen.startIso, chosen.endIso]);
+    const tail = new Date(Date.parse(chosen.endIso) + 31 * 86_400_000).toISOString();
+    factWindows.push([chosen.startIso, tail < earliest ? tail : earliest]);
+  }
   const staleCutoff = new Date(`${today}T05:00:00.000Z`);
   staleCutoff.setUTCDate(staleCutoff.getUTCDate() - 60);
   const staleIso = staleCutoff.toISOString();
   const sb = await createServerSupabase();
+  const perWindow = <T,>(
+    read: (fromIso: string, toIso: string) => Promise<T[]>,
+    list: Array<[string, string]> = windows,
+  ): Promise<T[]> => Promise.all(list.map(([fromIso, toIso]) => read(fromIso, toIso))).then((parts) => parts.flat());
 
   const [
     cohortRows,
@@ -161,15 +193,17 @@ export async function getMomOwnerSummary(
     manifestRows,
   ] =
     await Promise.all([
-      readPages<RawOrder>("order_master", (from, to) =>
-        sb
-          .from("order_master")
-          .select(ORDER_COLUMNS)
-          .in("store_id", storeIds)
-          .gte("order_created_at", earliest)
-          .lt("order_created_at", currentEnd)
-          .order("order_created_at", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<PageResult<RawOrder>>,
+      perWindow((fromIso, toIso) =>
+        readPages<RawOrder>("order_master", (from, to) =>
+          sb
+            .from("order_master")
+            .select(ORDER_COLUMNS)
+            .in("store_id", storeIds)
+            .gte("order_created_at", fromIso)
+            .lt("order_created_at", toIso)
+            .order("order_created_at", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<PageResult<RawOrder>>,
+        ),
       ),
       readPages<RawOrder>("order_master", (from, to) =>
         sb
@@ -205,21 +239,24 @@ export async function getMomOwnerSummary(
       // despacho» según el courier (ver dispatchSignalAt): creación de la
       // guía (Shalom/Olva), `dispatched_at` (Aliclik) y «listo despacho»
       // (Lima). Se deduplican por id más abajo.
-      readShipments(sb, storeIds, "created_at", earliest, currentEnd),
-      readShipments(sb, storeIds, "dispatched_at", earliest, currentEnd),
-      readShipments(sb, storeIds, "ready_at", earliest, currentEnd),
-      readPages<{ order_id: string; kind: string; occurred_at: string }>("order_events", (from, to) =>
-        sb
-          .from("order_events")
-          .select("order_id,kind,occurred_at")
-          .in("store_id", storeIds)
-          .in("kind", [...CONFIRMATION_SIGNAL_KINDS])
-          .gte("occurred_at", earliest)
-          .lt("occurred_at", currentEnd)
-          .order("occurred_at", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<
-          PageResult<{ order_id: string; kind: string; occurred_at: string }>
-        >,
+      perWindow((fromIso, toIso) => readShipments(sb, storeIds, "created_at", fromIso, toIso), factWindows),
+      perWindow((fromIso, toIso) => readShipments(sb, storeIds, "dispatched_at", fromIso, toIso), factWindows),
+      perWindow((fromIso, toIso) => readShipments(sb, storeIds, "ready_at", fromIso, toIso), factWindows),
+      perWindow((fromIso, toIso) =>
+        readPages<{ order_id: string; kind: string; occurred_at: string }>("order_events", (from, to) =>
+          sb
+            .from("order_events")
+            .select("order_id,kind,occurred_at")
+            .in("store_id", storeIds)
+            .in("kind", [...CONFIRMATION_SIGNAL_KINDS])
+            .gte("occurred_at", fromIso)
+            .lt("occurred_at", toIso)
+            .order("occurred_at", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<
+            PageResult<{ order_id: string; kind: string; occurred_at: string }>
+          >,
+        ),
+        factWindows,
       ),
       readPages<{
         order_id: string;
@@ -295,10 +332,25 @@ export async function getMomOwnerSummary(
     state: row.state,
   }));
 
+  // The KPI and the pending list agree on both payment routes. A checkout
+  // payment must not appear as debt just because it has no uploaded voucher.
+  const prepaid = new Set<string>();
+  const agencyIds = unique(shipmentRows.filter((row) => /shalom|olva/i.test(row.courier ?? ""))
+    .map((row) => row.order_id).filter((id): id is string => Boolean(id)));
+  for (let start = 0; start < agencyIds.length; start += 200) {
+    const { data, error } = await sb.from("orders").select("id,financial_status,payment_gateway,total_refunded")
+      .in("store_id", storeIds).in("id", agencyIds.slice(start, start + 200));
+    if (error || !data) throw new Error("No se pudieron verificar los pagos de checkout de Agencia.");
+    for (const order of data) {
+      if (isWebPrepaid({ financialStatus: order.financial_status, paymentGateway: order.payment_gateway, totalRefunded: asNumber(order.total_refunded) })) prepaid.add(order.id);
+    }
+  }
+
   return buildMomOwnerSummary({
     today,
+    month: chosen ? options.month : null,
     nowIso: now.toISOString(),
-    orders: [...rawOrders.values()].map(orderFact),
+    orders: [...rawOrders.values()].map((row) => ({ ...orderFact(row), webPrepaid: prepaid.has(row.order_id) })),
     shipments,
     payments,
     events,

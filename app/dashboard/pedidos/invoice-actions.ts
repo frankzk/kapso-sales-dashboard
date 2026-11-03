@@ -56,6 +56,7 @@ import {
 import {
   INVOICE_REASON_LABEL,
   LIVE_REAL_STATUSES,
+  invoiceReasonLabel,
   creditNoteWarning,
   invoiceEligibility,
   invoiceNoteRef,
@@ -326,12 +327,24 @@ export interface InvoicePanelCheck {
  * panel dice en la confirmación y lo que el servidor vuelve a comparar antes de
  * emitir (`emitInvoiceAction`). `total` es el de las reglas evaluadas como una
  * emisión real, en soles.
+ *
+ * `beforeStart`: quedó pagado antes de «Emitir desde» (owner, 15-10-2026). La
+ * confirmación dice cuándo quedó pagado (`paidAt`), cuándo se movió el primer
+ * dinero (`firstPaidAt`) y desde cuándo emite el RUC (`emitFrom`), en ISO, y
+ * pide marcar «Revisé en SimpleFact y este pedido no tiene boleta». El
+ * servidor (`invoiceEmitNowReadiness`) siempre los manda. Sin ellos el panel
+ * no pide la casilla, y si el pedido es de antes, el servidor no emite
+ * (`sin_revision_simplefact`): falla cerrada.
  */
 export interface InvoicePanelEmitNow {
   issuerId: string;
   ruc: string;
   legalName: string;
   total: number;
+  beforeStart?: boolean;
+  paidAt?: string | null;
+  firstPaidAt?: string | null;
+  emitFrom?: string | null;
 }
 
 export interface InvoicePanelData {
@@ -373,6 +386,12 @@ export interface InvoicePanelData {
    * gestiona.
    */
   emitNowBlocked: { reason: InvoiceReason; detail: string | null } | null;
+  /**
+   * Solo en un pedido de WooCommerce (`orders.platform`, MOM §35.11): el panel
+   * dice sus motivos con la frase de WooCommerce y «Espera a WooCommerce».
+   * Sin él, el pedido es de Shopify, como siempre.
+   */
+  platform?: "woocommerce";
 }
 
 const INVOICE_PANEL_COLUMNS =
@@ -604,6 +623,7 @@ export async function loadInvoicePanel(orderId: string): Promise<{ data: Invoice
       canManage,
       canEmitNow,
       ...emit,
+      ...(facts?.platform === "woocommerce" ? { platform: "woocommerce" as const } : {}),
     },
   };
 }
@@ -989,10 +1009,15 @@ export interface EmitInvoiceState extends InvoiceActionState {
 /**
  * Lo que la persona vio en la confirmación: el RUC y el total. `emitInvoiceNow`
  * lo vuelve a comparar con lo que se va a enviar, con su propia lectura.
+ *
+ * `simplefactChecked`: marcó «Revisé en SimpleFact y este pedido no tiene
+ * boleta». Lo pide un pedido pagado antes de «Emitir desde»; en los demás no
+ * cuenta.
  */
 export interface EmitInvoiceShown {
   issuerId: string;
   total: number;
+  simplefactChecked?: boolean;
 }
 
 /**
@@ -1007,9 +1032,12 @@ const EMIT_CAMBIO = INVOICE_REASON_LABEL.pedido_cambio;
 const EMIT_SIN_SABER =
   "No se supo qué pasó con la emisión. Vuelve a abrir el pedido antes de intentar de nuevo: si quedó «Emitiendo» o «En duda», búscala en SimpleFact por su nota.";
 
-/** Un motivo con la frase del panel y del barrido, y su detalle. */
-function reasonText(reason: InvoiceReason, detail?: string | null): string {
-  const label = INVOICE_REASON_LABEL[reason] ?? reason;
+/**
+ * Un motivo con la frase del panel y del barrido, y su detalle. De un pedido de
+ * WooCommerce, con la frase que nombra a WooCommerce (§35.11).
+ */
+function reasonText(reason: InvoiceReason, detail?: string | null, platform?: string | null): string {
+  const label = INVOICE_REASON_LABEL[reason] !== undefined ? invoiceReasonLabel(reason, platform) : reason;
   return detail ? `${label} ${detail}` : label;
 }
 
@@ -1027,9 +1055,9 @@ const EMIT_NOW_REASON_LABEL: Partial<Record<InvoiceReason, string>> = {
 };
 
 /** Un motivo de «Emitir esta boleta», con la frase del panel salvo las que prometen al barrido. */
-function emitReasonText(reason: InvoiceReason, detail?: string | null): string {
+function emitReasonText(reason: InvoiceReason, detail?: string | null, platform?: string | null): string {
   const label = EMIT_NOW_REASON_LABEL[reason];
-  if (!label) return reasonText(reason, detail);
+  if (!label) return reasonText(reason, detail, platform);
   return detail ? `${label} ${detail}` : label;
 }
 
@@ -1041,7 +1069,7 @@ function emitReasonText(reason: InvoiceReason, detail?: string | null): string {
  * bloqueo no emitieron nada.
  */
 function emitResultState(result: InvoiceEmitNowResult): EmitInvoiceState {
-  if (!result.ok) return { error: emitReasonText(result.reason, result.detail) };
+  if (!result.ok) return { error: emitReasonText(result.reason, result.detail, result.platform) };
   const extra = result.error?.trim() ? result.error.trim() : null;
   if (result.status === "emitida") {
     const serie = result.serie ? (result.correlative ? `${result.serie}-${result.correlative}` : result.serie) : null;
@@ -1106,7 +1134,9 @@ function emitResultState(result: InvoiceEmitNowResult): EmitInvoiceState {
  *  · `expected`: lo que se va a enviar es lo que vio en la confirmación, el RUC
  *    y el total. Si el pedido o la cuenta del RUC cambiaron desde que lo abrió,
  *    no se emite (`pedido_cambio`): la boleta que va a SUNAT no se borra, y la
- *    persona confirmó otra.
+ *    persona confirmó otra. Y si marcó que lo revisó en SimpleFact
+ *    (`simplefactChecked`): un pedido pagado antes de «Emitir desde» no sale
+ *    sin eso (`sin_revision_simplefact`). Solo un `true` cuenta.
  *
  * Antes esta acción leía los hechos por su cuenta y comparaba con ESA lectura;
  * `emitInvoiceNow` leía de nuevo y no comparaba nada, y entre una lectura y la
@@ -1126,6 +1156,9 @@ export async function emitInvoiceAction(orderId: string, shown: EmitInvoiceShown
   const shownIssuer = typeof shown?.issuerId === "string" ? shown.issuerId : "";
   const shownCents = Math.round(Number(shown?.total) * 100);
   if (!shownIssuer || !Number.isFinite(shownCents) || shownCents <= 0) return { error: EMIT_CAMBIO };
+  // La casilla «Revisé en SimpleFact…»: solo un `true`. Un "true" o un 1 no es
+  // una casilla marcada.
+  const simplefactChecked = shown?.simplefactChecked === true;
 
   if (!ctx.storeActive) return { error: INVOICE_REASON_LABEL.tienda };
 
@@ -1136,7 +1169,7 @@ export async function emitInvoiceAction(orderId: string, shown: EmitInvoiceShown
       orderId: ctx.orderId,
       userId: ctx.userId,
       manualOnly: true,
-      expected: { issuerId: shownIssuer, totalCents: shownCents },
+      expected: { issuerId: shownIssuer, totalCents: shownCents, simplefactChecked },
     });
   } catch (cause) {
     // No debería lanzar. Si lo hace, el turno pudo haberse pedido: no se dice

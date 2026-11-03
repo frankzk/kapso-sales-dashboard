@@ -702,3 +702,26 @@ describe("shipmentStateLabel: manda lo que el courier dice hoy", () => {
     expect([...SWAYP_RETURN_STATE_IDS].sort()).toEqual([...SWAYP_RETURN_STATES].sort());
   });
 });
+
+describe("resolveOrderState — la recogida del courier prueba la salida (owner, 01-11-2026)", () => {
+  // #KP117015: la guía de Aliclik vino del Excel sin despacho; el courier la
+  // recogió (custodia transferida), se transfirió a Fénix (anulada) y volvió.
+  const madre = guide("390297258918", {
+    delivery_status: "transferido",
+    custody_transferred_at: "2026-06-30T02:06:36.000Z",
+    custody_state: "devuelto",
+    returned_at: "2026-06-27T19:32:30.000Z",
+  });
+  const hija = guide("hija", { courier: "fenix", guide_code: "#KP11701517072026", delivery_status: "anulado", custody_state: "empresa" });
+
+  it("con la devolución sellada y sin otra salida viva, el pedido queda devuelto", () => {
+    const s = resolve([madre, hija]);
+    expect(s.general).toBe("devuelto");
+    expect(s.operational).toBe("devuelto_al_origen");
+  });
+
+  it("sin despacho ni recogida, la devolución sigue siendo solo reclamada", () => {
+    const s = resolve([{ ...madre, custody_transferred_at: null }, hija]);
+    expect(s.general).not.toBe("devuelto");
+  });
+});

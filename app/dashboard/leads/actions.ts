@@ -11,6 +11,7 @@ import { after } from "next/server";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import {
+  getCustomerCarts,
   getCustomerHistory,
   getLeadQueueSnapshot,
   type LeadCounts,
@@ -18,6 +19,7 @@ import {
   getStoreLeads,
   type CustomerHistory,
   type LeadView,
+  type PriorOrder,
   type StoreScope,
 } from "@/lib/leads-access";
 import {
@@ -41,12 +43,13 @@ import type { OrderCoverage } from "@/lib/order-coverage";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { firstProductWithImage, type CatalogImage } from "@/lib/cart-image-test";
+import { productPhotosThatLoad } from "@/lib/product-photos";
 import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { recordOrderSale } from "@/lib/order-sale";
+import { insertOrderIfAbsent, recomputeRollupsForLocalDay, recordOrderSale } from "@/lib/order-sale";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getStoreCreds } from "@/lib/ingest";
 import {
@@ -56,6 +59,7 @@ import {
   extractNumericId,
   getCustomerRecentOrders,
   getDraftOrderForEdit,
+  getDraftOrderOrder,
   priceMismatchRejection,
   resolveOrderDiscount,
   searchCatalogProducts,
@@ -63,6 +67,34 @@ import {
   type PriceMismatchCleanup,
   type ProductSearchResult,
 } from "@/lib/shopify";
+import { mapWooOrder } from "@/lib/woocommerce";
+import {
+  claimWooFormSale,
+  finishWooFormClaim,
+  noteWooFormOrder,
+  rearmWooFormClaim,
+  releaseWooFormClaim,
+  wooFormPostUnansweredText,
+} from "@/lib/woo-sale-guard";
+import {
+  buildWooSaleOrder,
+  createWooSaleOrder,
+  WOO_CART_SALE_CHANNEL,
+  WOO_SALE_CHANNEL,
+  isWooVariantRef,
+  LOCAL_SALE_IN_WOO_STORE,
+  loadStoreOrderPlatform,
+  SHOPIFY_CART_IN_WOO_STORE,
+  normalizeWooRequestId,
+  searchWooCatalog,
+  wooCleanupText,
+  wooConflictRejection,
+  wooLineRejection,
+  wooOrderAdminUrl,
+  wooSaleClient,
+  wooSaleLinesProblem,
+  type WooApiCreds,
+} from "@/lib/woocommerce-orders";
 import {
   fetchConversationTranscript,
   fetchLastInboundAt,
@@ -98,6 +130,7 @@ import {
   type WhatsappOutboxRow,
 } from "@/lib/whatsapp-outbox";
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
+import { mergePriorOrders } from "@/lib/order-admin-url";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
 import {
   LEAD_VOICE_KIND,
@@ -116,21 +149,29 @@ import {
 } from "@/lib/voice-leads-server";
 import { loadDoNotCallPhones } from "@/lib/voice-recovery-server";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
+import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor } from "@/lib/lead-routing-access";
 
 export interface LeadActionState {
   error?: string;
+  /** Pérdida de reserva confirmada por la base; no un fallo transitorio de lectura. */
+  claimLost?: true;
   /** El error es un aviso que el asesor puede saltarse volviendo a confirmar. */
   requiereConfirmacion?: boolean;
   notice?: string;
   windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
   savedCall?: LeadCallRow;
   leadPatch?: Partial<
-    Pick<LeadRow, "status" | "category" | "needs_attention" | "next_followup_at" | "last_interaction_at">
+    Pick<LeadRow, "status" | "category" | "needs_attention" | "next_followup_at" | "last_interaction_at" | "call_queue_ready" | "call_attempt_count">
   >;
   sentMessage?: LeadConversationMessage;
   generatedOrder?: {
-    /** Id de SHOPIFY. Sirve para enlazar a su panel, no para nada interno. */
+    /**
+     * Id de la TIENDA (el de Shopify, o el `wc-<clave>-<id>` de WooCommerce).
+     * Sirve para enlazar a su panel, no para nada interno.
+     */
     id: string;
+    /** Dónde se creó (MOM §38.12): decide el texto del enlace. Sin él, Shopify. */
+    platform?: "shopify" | "woocommerce";
     /**
      * Id INTERNO (`orders.id`). Es el que usan `order_master`, `shipments` y el
      * panel de guías de Aliclik: crear la guía desde Leads o desde el Master
@@ -260,7 +301,9 @@ export interface NextLeadCart {
  * borrador de Shopify (`draft_orders.line_items`) y del espejo de catálogo
  * (`shopify_product_images`), con la regla de casado de la prueba de imagen
  * (lib/cart-image-test): por `product_id`, y si no viene, por el título. Sin
- * carrito o sin foto, la tarjeta se queda con `cart_summary` y sin foto.
+ * carrito o sin foto, la tarjeta se queda con `cart_summary` y sin foto. Si
+ * Shopify ya no sirve las fotos de la tienda, solo la foto con su copia
+ * guardada (MOM §39): la otra ya no carga. Si Storage no contesta, sin foto.
  */
 export async function loadNextLeadCart(leadId: string): Promise<NextLeadCart | { error: string }> {
   const ctx = await authorizeLead(leadId);
@@ -278,12 +321,20 @@ export async function loadNextLeadCart(leadId: string): Promise<NextLeadCart | {
       .maybeSingle(),
     admin
       .from("shopify_product_images")
-      .select("product_id, catalog_title")
+      .select("product_id, catalog_title, image_url")
       .eq("store_id", ctx.storeId)
       .not("image_url", "is", null),
   ]);
   const draft = draftRes.data as { line_items: unknown; created_at: string | null } | null;
-  const productId = draft ? firstProductWithImage(draft.line_items, (catalogRes.data as CatalogImage[] | null) ?? []) : null;
+  const catalog = draft
+    ? ((await productPhotosThatLoad(
+        admin,
+        ctx.storeId,
+        (catalogRes.data as (CatalogImage & { image_url?: string | null })[] | null) ?? [],
+        Date.now(),
+      )) ?? [])
+    : [];
+  const productId = draft ? firstProductWithImage(draft.line_items, catalog) : null;
   return {
     lines: cartLinesOf(draft?.line_items),
     createdAt: draft?.created_at ?? null,
@@ -344,6 +395,24 @@ export async function loadLeadDeliveryCoverage(
   return { coverage: error ? null : asOrderCoverage(coverage) };
 }
 
+/**
+ * `stores.woo_site_url` (0274): el sitio con el que «Pedidos anteriores» enlaza
+ * un pedido de WooCommerce (MOM §38.12). No es secreto. Se lee aparte porque
+ * `getStoreCreds` no lee nada de WooCommerce (38.11). Sin la columna, sin fila
+ * o si la lectura falla, null: ese pedido queda sin enlace, nunca con el de
+ * Shopify.
+ */
+async function storeWooSiteUrl(admin: SupabaseClient, storeId: string): Promise<string | null> {
+  try {
+    const { data, error } = await admin.from("stores").select("woo_site_url").eq("id", storeId).maybeSingle();
+    if (error) return null;
+    const url = (data as { woo_site_url?: unknown } | null)?.woo_site_url;
+    return typeof url === "string" && url.trim() ? url.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Non-critical customer context loaded progressively after the drawer is
  * usable. Shopify and legacy Kapso recovery can take seconds and must not block
  * the forms, call history, or lead metadata. */
@@ -359,13 +428,15 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
   const ctx = await timing.time("authorize", () => authorizeLead(leadId));
   if (!ctx) return { error: "Sin acceso a este lead." };
   const admin = createAdminSupabase();
-  const [leadRes, creds] = await Promise.all([
+  const [leadRes, creds, wooSiteUrl] = await Promise.all([
     timing.time("db.lead", () => admin
       .from("leads")
-      .select("phone,order_id,source,cart_summary,kapso_conversation_id")
+      .select("phone,order_id,source,cart_summary,kapso_conversation_id,draft_order_gid")
       .eq("id", leadId)
       .maybeSingle()),
     timing.time("db.credentials", () => getStoreCreds(ctx.storeId, admin)),
+    // Una lectura chica de `stores`, junto a las credenciales: no es una etapa aparte.
+    storeWooSiteUrl(admin, ctx.storeId),
   ]);
   const lead = leadRes.data as {
     phone: string | null;
@@ -373,15 +444,23 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
     source: string | null;
     cart_summary: string | null;
     kapso_conversation_id: string | null;
+    draft_order_gid: string | null;
   } | null;
   if (!lead) return { error: "No encontrado." };
 
-  const customerHistory = await timing.time("db.history", () => getCustomerHistory(
-    ctx.storeId,
-    lead.phone,
-    lead.order_id,
-    creds?.shopify_domain ?? null,
-  ));
+  const [customerHistory, carts] = await Promise.all([
+    timing.time("db.history", () => getCustomerHistory(
+      ctx.storeId,
+      lead.phone,
+      lead.order_id,
+      creds?.shopify_domain ?? null,
+      wooSiteUrl,
+    )),
+    // Sus carritos anteriores (MOM §11, 25-10-2026): un aviso, no un dato del
+    // lead. Si falla, la ficha sale sin el bloque.
+    timing.time("db.carts", () => getCustomerCarts(ctx.storeId, lead.phone, lead.draft_order_gid)).catch(() => null),
+  ]);
+  if (customerHistory) customerHistory.carts = carts;
   if (customerHistory && lead.phone && creds?.shopify_token) {
     try {
       const shopOrders = await timing.time("shopify.history", () => getCustomerRecentOrders(
@@ -389,7 +468,11 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
         lead.phone,
         { excludeName: customerHistory.currentOrderName, limit: 3 },
       ));
-      if (shopOrders.length) customerHistory.recentOrders = shopOrders;
+      // La lista de Shopify manda, pero no conoce los pedidos de WooCommerce de
+      // la misma tienda: esos se conservan de la lista local (MOM §38.12).
+      if (shopOrders.length) {
+        customerHistory.recentOrders = mergePriorOrders<PriorOrder>(shopOrders, customerHistory.recentOrders);
+      }
     } catch {
       /* keep the local fallback list */
     }
@@ -441,13 +524,18 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
  */
 export async function pollLeadState(
   leadId: string,
-): Promise<{ hasOrder: boolean; status: string | null; category: string | null } | { error: string }> {
+): Promise<{ hasOrder: boolean; status: string | null; category: string | null; claimLost?: true; claimError?: string } | { error: string }> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return { error: "Sin acceso a este lead." };
   const sb = await createServerSupabase();
-  const { data } = await sb.from("leads").select("has_order, status, category").eq("id", leadId).maybeSingle();
-  const l = data as { has_order: boolean; status: string | null; category: string | null } | null;
+  const { data, error } = await sb.from("leads").select("has_order, status, category, claimed_by, claimed_at").eq("id", leadId).maybeSingle();
+  if (error) return { error: "No se pudo comprobar el estado del lead." };
+  const l = data as { has_order: boolean; status: string | null; category: string | null; claimed_by: string | null; claimed_at: string | null } | null;
   if (!l) return { error: "No encontrado." };
+  if (l.claimed_by && l.claimed_by !== ctx.userId && isClaimActive(l.claimed_at)) {
+    const who = await resolveAgentName(l.claimed_by, createAdminSupabase()).catch(() => null);
+    return { hasOrder: !!l.has_order, status: l.status, category: l.category, claimLost: true, claimError: `${who ?? "Otra asesora"} está atendiendo este lead.` };
+  }
   return { hasOrder: !!l.has_order, status: l.status, category: l.category };
 }
 
@@ -500,7 +588,7 @@ export async function searchLeads(storeIds: StoreScope, query: string): Promise<
   for (const { data } of settled) {
     for (const r of (data as LeadRow[] | null) ?? []) byId.set(r.id!, r);
   }
-  return [...byId.values()]
+  return filterRoutedLeads([...byId.values()], await getLeadRoutingScope(scope))
     .sort((a, b) => (b.last_interaction_at ?? "").localeCompare(a.last_interaction_at ?? ""))
     .slice(0, 40);
 }
@@ -530,6 +618,7 @@ async function authorizeLead(leadId: string): Promise<AuthorizedLeadContext | nu
     .eq("id", leadId)
     .maybeSingle();
   if (!data) return null;
+  if (!(await getLeadRoutingScope([data.store_id as string], leadId)).allowed) return null;
   return {
     userId,
     storeId: data.store_id as string,
@@ -585,7 +674,10 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
   // claimLead, so it must never depend on the Yape-routing columns (a lead that
   // gets claimed leaves the rotation anyway — listYapeAlerts/reconcile exclude
   // claimed leads). This keeps the drawer working even if migration 0020 lags.
-  const { data, error } = await admin
+  const routing = await getLeadRoutingScope([ctx.storeId], leadId);
+  const { data, error } = routing.enabled
+    ? await admin.rpc("claim_routed_lead", { p_actor: ctx.userId, p_lead: leadId }).maybeSingle()
+    : await admin
     .from("leads")
     .update({ claimed_by: ctx.userId, claimed_at: new Date().toISOString() })
     .eq("id", leadId)
@@ -639,17 +731,19 @@ export async function renewLeadClaim(leadId: string): Promise<LeadActionState> {
     .maybeSingle();
   if (error) return { error: error.message };
   if (data) return { notice: "Reserva renovada." };
-  const { data: held } = await admin
+  const { data: held, error: readError } = await admin
     .from("leads")
     .select("claimed_by, claimed_at")
     .eq("id", leadId)
     .maybeSingle();
+  if (readError) return { error: "No se pudo comprobar la reserva del lead. Intenta nuevamente." };
   const h = held as { claimed_by: string | null; claimed_at: string | null } | null;
+  if (h?.claimed_by === ctx.userId && isClaimActive(h.claimed_at)) return { notice: "Reserva vigente." };
   if (h?.claimed_by && h.claimed_by !== ctx.userId && isClaimActive(h.claimed_at)) {
-    const who = await resolveAgentName(h.claimed_by, admin);
-    return { error: `${who ?? "Otra asesora"} tomó este lead mientras lo tenías abierto. Coordina con ella antes de seguir.` };
+    const who = await resolveAgentName(h.claimed_by, admin).catch(() => null);
+    return { claimLost: true, error: `${who ?? "Otra asesora"} tomó este lead mientras lo tenías abierto. Coordina con ella antes de seguir.` };
   }
-  return { error: "Tu reserva de este lead venció. Ciérralo y vuelve a abrirlo para seguir." };
+  return { claimLost: true, error: "Tu reserva de este lead venció. Vuelve a abrirlo para seguir." };
 }
 
 /** Release a claim (called when closing the drawer). Only releases your own. */
@@ -693,7 +787,16 @@ async function reconcileYapeOffers(admin: SupabaseClient, storeId: string, nowMs
     passed: Array.isArray(r.yape_passed) ? (r.yape_passed as string[]) : [],
   }));
   const advisors = await onlineVendedorasForStore(admin, storeId, nowMs);
-  const plans = planYapeOffers(leads, advisors, nowMs);
+  const scopes = new Map(await Promise.all(advisors.map(async a => [a.id, await readRoutingForActor(a.id, [storeId])] as const)));
+  // Never offer a payment lead to somebody whose blocks exclude it. Expire an
+  // old offer after a settings change so the eligible team need not wait 90 s.
+  for (const l of leads) {
+    if (l.offeredTo && scopes.get(l.offeredTo)?.blockedIds.includes(l.id)) {
+      await admin.from("leads").update({ yape_offered_at: null }).eq("id", l.id).eq("yape_offered_to", l.offeredTo);
+      l.offeredTo = null; l.offeredAtMs = null;
+    }
+  }
+  const plans = planYapeOffers(leads, advisors, nowMs, (leadId, advisorId) => !scopes.get(advisorId)?.blockedIds.includes(leadId));
   if (!plans.length) return;
   const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
   const nowIso = new Date(nowMs).toISOString();
@@ -739,7 +842,8 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
     .order("yape_offered_at", { ascending: true })
     .limit(20);
   if (error || !data) return [];
-  return (data as Array<Record<string, unknown>>).map((l) => ({
+  const visible = filterRoutedLeads(data as Array<Record<string, unknown> & { id: string }>, await getLeadRoutingScope(storeIds));
+  return visible.map((l) => ({
     id: l.id as string,
     storeId: l.store_id as string,
     name: (l.name as string | null) ?? null,
@@ -885,7 +989,7 @@ async function persistCall(formData: FormData): Promise<LeadActionState> {
       const hasActiveOrder = !!o && !o.cancelled_at;
       if (!canDispositionLead({ currentCategory: lead.category, newStatus: status, hasActiveOrder })) {
         return {
-          error: `Este lead ya tiene un pedido activo${o?.name ? ` (${o.name})` : ""}. Si el cliente canceló, cancela el pedido en Shopify primero.`,
+          error: `Este lead ya tiene un pedido activo${o?.name ? ` (${o.name})` : ""}. Si el cliente canceló, anula el pedido en la tienda primero.`,
         };
       }
     }
@@ -941,6 +1045,14 @@ async function persistCall(formData: FormData): Promise<LeadActionState> {
   ]);
   if (callRes.error) return { error: `No se pudo registrar la llamada: ${callRes.error.message}` };
   if (leadRes.error) return { error: `La llamada se registró, pero no se pudo actualizar el lead: ${leadRes.error.message}` };
+
+  // The insert trigger consumes a pending retry and counts the saved call.
+  // Read its confirmed result, never guess the attempt number in the browser.
+  const { data: attempts, error: attemptsError } = await admin.from("leads")
+    .select("call_queue_ready,call_attempt_count,next_followup_at")
+    .eq("id", leadId).eq("store_id", ctx.storeId).maybeSingle();
+  patch.call_queue_ready = false;
+  if (!attemptsError && attempts) Object.assign(patch, attempts);
 
   // Return the confirmed write only. Revalidation would render and serialize
   // the entire queue before the action response can finish.
@@ -1078,6 +1190,13 @@ export async function closeSale(
   const l = lead as { phone: string | null; kapso_conversation_id: string | null; has_order: boolean };
   if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
 
+  // Solo en una tienda que crea sus pedidos en Shopify (MOM §38.12, «Los
+  // carritos»): en una que ya los crea en WooCommerce, esta venta solo de Kapta
+  // no sería un pedido de la tienda. Si la tienda no se pudo leer, no se adivina.
+  const plataforma = await loadStoreOrderPlatform(admin, ctx.storeId);
+  if (!plataforma.ok) return { error: plataforma.error };
+  if (plataforma.platform !== "shopify") return { error: LOCAL_SALE_IN_WOO_STORE };
+
   const { data: store } = await admin
     .from("stores")
     .select("currency")
@@ -1158,8 +1277,7 @@ export async function closeSale(
   // 4) Recompute the day's rollups so revenue / COD / AOV reflect the sale now
   //    (otherwise it would only appear on the next 15-min cron).
   try {
-    const day = nowIso.slice(0, 10);
-    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+    await recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso);
   } catch {
     /* non-fatal: the next sync's rollup recompute will pick it up */
   }
@@ -1198,6 +1316,14 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
   if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
   if (!l.draft_order_gid) return { error: "Este lead no tiene un carrito (borrador) de Shopify." };
 
+  // Completar el borrador crea el pedido en Shopify: solo en una tienda que crea
+  // sus pedidos allí (MOM §38.12, «Los carritos»). En una que ya los crea en
+  // WooCommerce, el carrito se vende con «Generar pedido». Si la tienda no se
+  // pudo leer, no se adivina.
+  const plataforma = await loadStoreOrderPlatform(admin, ctx.storeId);
+  if (!plataforma.ok) return { error: plataforma.error };
+  if (plataforma.platform !== "shopify") return { error: SHOPIFY_CART_IN_WOO_STORE };
+
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };
 
@@ -1214,7 +1340,9 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
   } catch (e: any) {
     const msg = String(e?.message ?? e).toLowerCase();
     if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
-      completed = { orderGid: null, orderName: null, status: "completed" };
+      // Como en generateOrder: el pedido REAL del borrador, no una fila inventada.
+      const real = await getDraftOrderOrder({ domain: creds.shopify_domain, token: creds.shopify_token, gid: l.draft_order_gid }).catch(() => null);
+      completed = { orderGid: real?.orderGid ?? null, orderName: real?.orderName ?? null, status: "completed" };
     } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
       return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
     } else {
@@ -1244,43 +1372,37 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
       : [{ title: l.cart_summary || "Carrito recuperado", quantity: 1, price: amount }];
   const nowIso = new Date().toISOString();
 
-  // 3) Record the resulting order. Tagged `kapso` so recompute_daily_rollups
-  //    counts it; `carrito_recuperado` so it's identifiable. Use the real Shopify
-  //    id when returned (so a later order sync upserts the same row, no dup);
-  //    else a synthetic id. COD ⇒ financial_status 'pending'.
+  // 3) La fila local del pedido, SOLO si el webhook no la trajo ya, y con las
+  //    etiquetas que tiene en Shopify (MOM §17.3): una etiqueta local la borra la
+  //    siguiente sincronización, y pisar la fila real le quitaba fecha y
+  //    productos. Quién cerró lo decide `order_sales`, más abajo.
   const realOrderId = completed.orderGid ? extractNumericId(completed.orderGid) : null;
   const shopifyOrderId = realOrderId || `draft-${extractNumericId(l.draft_order_gid)}`;
-  const { data: order, error: orderErr } = await admin
-    .from("orders")
-    .upsert(
-      {
-        store_id: ctx.storeId,
-        shopify_order_id: shopifyOrderId,
-        name: completed.orderName ?? l.draft_order_name ?? `REC-${shopifyOrderId.slice(-6).toUpperCase()}`,
-        created_at: nowIso,
-        processed_at: nowIso,
-        total_amount: amount,
-        total_refunded: 0,
-        currency,
-        financial_status: "pending",
-        cancelled_at: null,
-        customer_phone: phone,
-        tags: ["kapso", "carrito_recuperado"],
-        promo_applied: false,
-        stock_por_validar: false,
-        shipping_mode: "cod",
-        line_items: lineItems,
-        kapso_conversation_id: null,
-      },
-      { onConflict: "store_id,shopify_order_id" },
-    )
-    .select("id")
-    .maybeSingle();
-  if (orderErr || !order) {
+  const { id: recoveredOrderId, error: orderErr } = await insertOrderIfAbsent(admin, {
+    store_id: ctx.storeId,
+    shopify_order_id: shopifyOrderId,
+    name: completed.orderName ?? l.draft_order_name ?? `REC-${shopifyOrderId.slice(-6).toUpperCase()}`,
+    created_at: nowIso,
+    processed_at: nowIso,
+    total_amount: amount,
+    total_refunded: 0,
+    currency,
+    financial_status: "pending",
+    cancelled_at: null,
+    customer_phone: phone,
+    tags: [],
+    promo_applied: false,
+    stock_por_validar: false,
+    shipping_mode: "cod",
+    line_items: lineItems,
+    kapso_conversation_id: null,
+  });
+  if (orderErr || !recoveredOrderId) {
     return {
-      error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}`,
+      error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr ?? "error"}`,
     };
   }
+  const order = { id: recoveredOrderId };
 
   // 4) Mark the lead won + link the order; reflect the draft as completed.
   await admin
@@ -1323,8 +1445,7 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
 
   // 6) Recompute the day's rollups so revenue / COD reflect the recovery now.
   try {
-    const day = nowIso.slice(0, 10);
-    await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+    await recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso);
   } catch {
     /* non-fatal: the next sync's rollup recompute will pick it up */
   }
@@ -2269,6 +2390,10 @@ export async function sendLeadTemplate(
 // Unified order form: search catalog · pre-fill from cart · generate the order
 // (supersedes closeSale + recoverCart). Cart → update+complete the draft; new
 // sale → create+complete a draft. Always a REAL Shopify order, COD pago pendiente.
+//
+// La tienda que ya crea sus pedidos en WooCommerce (`stores.platform`, MOM
+// §38.12) busca en su catálogo y crea el pedido allí (`generateWooOrder`), con
+// las mismas garantías. Las demás siguen en Shopify exactamente como antes.
 // ===========================================================================
 
 /** Search the lead's store catalog for the product picker (RLS-authorized). */
@@ -2278,6 +2403,16 @@ export async function searchStoreProducts(
 ): Promise<ProductSearchResult[]> {
   const ctx = await authorizeLead(leadId);
   if (!ctx) return [];
+  // Los ids que vuelven de WooCommerce son `woo:<id>`: nada los manda a Shopify.
+  const plataforma = await loadStoreOrderPlatform(createAdminSupabase(), ctx.storeId);
+  if (!plataforma.ok) return [];
+  if (plataforma.platform === "woocommerce") {
+    try {
+      return await searchWooCatalog(wooSaleClient(plataforma.creds), { query, first: 20 });
+    } catch {
+      return []; // WooCommerce no responde → el formulario lo dice («Sin resultados»)
+    }
+  }
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return [];
   try {
@@ -2295,7 +2430,13 @@ export async function searchStoreProducts(
 export interface OrderFormPrefill {
   isCart: boolean;
   draftGid: string | null;
-  lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null }[];
+  /**
+   * Dónde se creará el pedido (`stores.platform`, MOM §38.12). En WooCommerce
+   * no hay ítems manuales: cada línea va por SKU.
+   */
+  platform: "shopify" | "woocommerce";
+  /** `sku`: solo en WooCommerce, el del carrito guardado (`draft_orders`). */
+  lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null; sku?: string | null }[];
   customerName: string | null;
   phone: string | null;
   address1: string | null;
@@ -2329,9 +2470,19 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
     kapso_conversation_id: string | null;
   };
 
+  // En WooCommerce el carrito (un borrador de Shopify) no se completa: es el
+  // prellenado del pedido nuevo, y sale de la copia local con sus SKU, sin
+  // preguntarle nada a Shopify (MOM §38.12).
+  // Si la tienda no se pudo leer no se adivina: el formulario abierto como de
+  // Shopify ofrecería ítems manuales y líneas sin SKU que WooCommerce frena.
+  const plataforma = await loadStoreOrderPlatform(admin, ctx.storeId);
+  if (!plataforma.ok) return { error: plataforma.error };
+  const enWoo = plataforma.platform === "woocommerce";
+
   const out: OrderFormPrefill = {
     isCart: !!l.draft_order_gid,
     draftGid: l.draft_order_gid,
+    platform: enWoo ? "woocommerce" : "shopify",
     lineItems: [],
     customerName: l.name,
     phone: l.phone,
@@ -2348,7 +2499,7 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
   // sueltas del lead: entonces manda sobre lo que tomó el agente.
   let addressFromCart = false;
   if (l.draft_order_gid) {
-    const creds = await getStoreCreds(ctx.storeId);
+    const creds = enWoo ? null : await getStoreCreds(ctx.storeId);
     let filled = false;
     if (creds?.shopify_token) {
       try {
@@ -2392,6 +2543,9 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
           title: String(li?.title ?? ""),
           quantity: Number(li?.quantity ?? 1),
           unitPrice: li?.price != null ? Number(li.price) : null,
+          // El mismo SKU que en Shopify (brief de WooCommerce): con él la línea
+          // se crea en WooCommerce. Sin SKU queda como ítem manual y se frena.
+          ...(enWoo ? { sku: typeof li?.sku === "string" && li.sku.trim() ? li.sku.trim() : null } : {}),
         }));
         addressFromCart = Boolean(dd.address1?.trim());
         out.address1 = dd.address1 ?? out.address1;
@@ -2490,7 +2644,17 @@ async function capturaDelAgente(
 }
 
 export interface GenerateOrderInput {
-  lineItems: { variantId?: string | null; title?: string | null; quantity: number; unitPrice: number | null }[];
+  /**
+   * `sku`: el del producto elegido en el catálogo. Shopify no lo usa (va por
+   * `variantId`); WooCommerce crea cada línea por él (MOM §38.12).
+   */
+  lineItems: {
+    variantId?: string | null;
+    title?: string | null;
+    quantity: number;
+    unitPrice: number | null;
+    sku?: string | null;
+  }[];
   customerName?: string;
   phone?: string;
   address1: string;
@@ -2512,6 +2676,20 @@ export interface GenerateOrderInput {
   noReutilizarBorrador?: boolean;
   /** El asesor vio el aviso de duplicado y aun así quiere crear el pedido. */
   confirmarDuplicado?: boolean;
+  /**
+   * El id de ESTE intento del formulario: el mismo en cada reintento hasta que
+   * sale bien. En WooCommerce viaja como `kapta_request_id` y es lo que impide
+   * que un doble clic o un reintento creen dos pedidos (MOM §38.12). Shopify no
+   * lo usa.
+   */
+  requestId?: string;
+  /**
+   * El formulario ya mandó este `requestId` antes (otro clic que falló o que
+   * pidió confirmar un duplicado). Entonces se busca siempre el pedido del
+   * intento anterior en WooCommerce, aunque el candado lo vea por primera vez:
+   * un clic anterior pudo llegar a WooCommerce sin candado (03-11-2026).
+   */
+  requestIdSent?: boolean;
 }
 
 function defaultConfirmation(o: {
@@ -2610,6 +2788,25 @@ export async function generateOrder(
         requiereConfirmacion: true,
       };
     }
+  }
+
+  // DÓNDE SE CREA (MOM §38.12). `stores.platform = 'woocommerce'` → el pedido
+  // se crea en WooCommerce; si no, en Shopify, por el camino de siempre. Si la
+  // tienda no se pudo leer no se adivina: después del cierre, un pedido
+  // mandado a Shopify sería una venta perdida.
+  const plataforma = await loadStoreOrderPlatform(admin, ctx.storeId);
+  if (!plataforma.ok) return { error: plataforma.error };
+  if (plataforma.platform === "woocommerce") {
+    return generateWooOrder({ admin, ctx, leadId, l, input, items, address1, district, woo: plataforma.creds });
+  }
+  // Un producto del catálogo de WooCommerce (`woo:<id>`, de un formulario
+  // abierto antes de volver a Shopify) no es una variante de Shopify: no se
+  // manda.
+  if (items.some((li) => isWooVariantRef(li.variantId))) {
+    return {
+      error:
+        "La tienda volvió a crear sus pedidos en Shopify y hay productos del catálogo de WooCommerce en el pedido: quítalos y agrégalos de nuevo desde «Producto del catálogo».",
+    };
   }
 
   const creds = await getStoreCreds(ctx.storeId);
@@ -2764,7 +2961,12 @@ export async function generateOrder(
   } catch (e: any) {
     const msg = String(e?.message ?? e).toLowerCase();
     if (/already.*complet|complet.*already|has already|is complete/.test(msg)) {
-      completed = { orderGid: null, orderName: null, status: "completed" };
+      // Shopify ya lo completó (la clienta, o un primer intento que sí llegó):
+      // se busca el pedido REAL del borrador. Sin él la venta quedaba en una fila
+      // `draft-<id>` al lado del pedido verdadero y el canal de cierre la contaba
+      // dos veces (MOM §17.3). Si Shopify no lo devuelve, queda el respaldo.
+      const real = draftGid ? await getDraftOrderOrder({ ...sclient, gid: draftGid }).catch(() => null) : null;
+      completed = { orderGid: real?.orderGid ?? null, orderName: real?.orderName ?? null, status: "completed" };
     } else if (/write_draft_orders|access denied|not authorized|access scope|require/.test(msg)) {
       return { error: "Falta el permiso de escritura en Shopify (write_draft_orders). Re-autoriza la tienda en Ajustes." };
     } else {
@@ -2772,7 +2974,11 @@ export async function generateOrder(
     }
   }
 
-  // 2) Record the resulting order (tag:kapso so recompute_daily_rollups counts it).
+  // 2) La fila local del pedido, SOLO si el webhook de Shopify no la trajo ya
+  //    (MOM §17.3). Antes era un upsert con la etiqueta `kapso`, que en Shopify
+  //    no existe: pisaba la fila real (fecha, productos con id) y la etiqueta
+  //    duraba hasta la siguiente sincronización. La venta de la asesora no se
+  //    decide por etiquetas: la registra `order_sales` más abajo.
   const nowIso = new Date().toISOString();
   const realOrderId = completed.orderGid ? extractNumericId(completed.orderGid) : null;
   const shopifyOrderId = realOrderId || `draft-${extractNumericId(draftGid!)}`;
@@ -2781,36 +2987,120 @@ export async function generateOrder(
     quantity: li.quantity,
     price: li.unitPrice,
   }));
-  const { data: order, error: orderErr } = await admin
-    .from("orders")
-    .upsert(
-      {
-        store_id: ctx.storeId,
-        shopify_order_id: shopifyOrderId,
-        name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
-        created_at: nowIso,
-        processed_at: nowIso,
-        total_amount: amount,
-        total_refunded: 0,
-        currency,
-        financial_status: "pending",
-        cancelled_at: null,
-        customer_phone: phone,
-        tags: reuseExistingDraft ? ["kapso", "carrito_recuperado"] : ["kapso", "venta_manual"],
-        promo_applied: false,
-        stock_por_validar: false,
-        shipping_mode: "cod",
-        line_items: products,
-        kapso_conversation_id: l.kapso_conversation_id ?? null,
-      },
-      { onConflict: "store_id,shopify_order_id" },
-    )
-    .select("id")
-    .maybeSingle();
-  if (orderErr || !order) {
-    return { error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr?.message ?? "error"}` };
+  const { id: internalOrderId, error: orderErr } = await insertOrderIfAbsent(admin, {
+    store_id: ctx.storeId,
+    shopify_order_id: shopifyOrderId,
+    name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
+    created_at: nowIso,
+    processed_at: nowIso,
+    total_amount: amount,
+    total_refunded: 0,
+    currency,
+    financial_status: "pending",
+    cancelled_at: null,
+    customer_phone: phone,
+    // Lo mismo que lleva en Shopify: `venta_manual` en un borrador nuevo; el
+    // carrito reusado conserva las etiquetas del suyo, que llegan con el webhook.
+    tags: reuseExistingDraft ? [] : ["venta_manual"],
+    promo_applied: false,
+    stock_por_validar: false,
+    shipping_mode: "cod",
+    line_items: products,
+    // El borrador no lleva la conversación de Kapso, así que Shopify la trae
+    // vacía; con la del lead, el Master vería «Chatbot» hasta el webhook.
+    kapso_conversation_id: null,
+  });
+  if (orderErr || !internalOrderId) {
+    return { error: `Pedido generado en Shopify, pero no se pudo registrar localmente: ${orderErr ?? "error"}` };
   }
-  const internalOrderId = (order as { id: string }).id;
+
+  const phoneNote = phoneRejected
+    ? ` · ⚠️ Shopify RECHAZÓ el celular ${phone ?? ""}: el pedido quedó sin teléfono. Corrígelo en Shopify.`
+    : "";
+  // Un precio distinto al pactado ya no llega hasta aquí: se rechaza antes de
+  // completar el borrador, con el borrador borrado y la constancia en el lead.
+  return registrarVentaGenerada({
+    admin,
+    ctx,
+    leadId,
+    l,
+    input,
+    creds,
+    tienda: "Shopify",
+    internalOrderId,
+    nowIso,
+    phone,
+    amount,
+    discountAmount,
+    currency,
+    products,
+    district,
+    address1,
+    address,
+    origen: reuseExistingDraft ? "Carrito recuperado" : "Venta nueva",
+    borradorCompletado: reuseExistingDraft && draftGid ? { draftGid, orderGid: completed.orderGid } : null,
+    orderCode: completed.orderName?.trim() || null,
+    phoneNote,
+    generatedOrder: {
+      id: shopifyOrderId,
+      name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
+      adminUrl: realOrderId ? shopifyOrderAdminUrl(creds.shopify_domain, realOrderId) : null,
+    },
+  });
+}
+
+/**
+ * Lo que sigue a un pedido ya creado en la tienda y registrado en `orders`,
+ * IGUAL en Shopify y en WooCommerce (MOM §38.12): la fila del Master, el lead
+ * ganado (con el celular tecleado si no tenía), el espejo del borrador que se
+ * completó, la venta de la asesora (`lead_calls` + `order_sales`), los rollups
+ * del día y la confirmación por WhatsApp. Un solo camino para las dos tiendas:
+ * dos copias acabarían divergiendo, y la que se olvide de algo deja una venta
+ * sin dueña.
+ */
+async function registrarVentaGenerada(v: {
+  admin: SupabaseClient;
+  ctx: AuthorizedLeadContext;
+  leadId: string;
+  l: { phone: string | null; wa_phone_number_id: string | null };
+  input: GenerateOrderInput;
+  creds: { kapso_api_key: string | null; whatsapp_phone_number_id: string | null };
+  tienda: "Shopify" | "WooCommerce";
+  internalOrderId: string;
+  nowIso: string;
+  phone: string | null;
+  amount: number;
+  discountAmount: number;
+  currency: string;
+  products: { title: string; quantity: number; price: number | null }[];
+  district: string;
+  address1: string;
+  address: { name: string | null; address2: string | null };
+  /** «Venta nueva» o «Carrito recuperado», para la nota de la venta. */
+  origen: string;
+  /** El borrador (carrito) de Shopify que se completó, o null. */
+  borradorCompletado: { draftGid: string; orderGid: string | null } | null;
+  /**
+   * WooCommerce: la venta recuperó el carrito abierto del lead sin completar
+   * su borrador (no hay dónde, MOM §38.12). El lead queda con el carrito
+   * `completed`, como en Shopify; la copia del borrador no se toca: refleja lo
+   * que dice Shopify.
+   */
+  carritoRecuperado?: boolean;
+  /** El número del pedido para la confirmación (`#KP…`). */
+  orderCode: string | null;
+  /** Un aviso que va al final del mensaje (el celular rechazado por Shopify). */
+  phoneNote: string;
+  generatedOrder: { id: string; name: string; adminUrl: string | null; platform?: "shopify" | "woocommerce" };
+  /**
+   * WooCommerce: se llama apenas la venta queda registrada (`order_sales` y la
+   * nota «sale»), antes de la confirmación por WhatsApp. Cierra el candado del
+   * intento (MOM §38.12). Shopify no lo pasa.
+   */
+  onSaleRecorded?: () => Promise<void>;
+}): Promise<LeadActionState> {
+  const { admin, ctx, leadId, l, input, creds, tienda, internalOrderId, nowIso, phone, amount, discountAmount } = v;
+  const { currency, products, district, address1, address, origen, borradorCompletado, orderCode, phoneNote } = v;
 
   // `order_master` NO es una vista: es una tabla derivada que alguien tiene que
   // rellenar. Hasta ahora esta acción escribía en `orders` y la fila del Master
@@ -2847,7 +3137,7 @@ export async function generateOrder(
     category: "won",
     needs_attention: false,
     last_interaction_at: nowIso,
-    ...(reuseExistingDraft ? { draft_order_status: "completed" } : {}),
+    ...(borradorCompletado || v.carritoRecuperado ? { draft_order_status: "completed" } : {}),
   };
   // El teléfono se intenta APARTE del resto del parche. `leads` tiene índice
   // único en (store_id, phone), así que si un duplicado anterior ya se quedó con
@@ -2866,14 +3156,13 @@ export async function generateOrder(
     }
     await admin.from("leads").update(leadPatch).eq("id", leadId);
   })();
-  const draftMirror =
-    reuseExistingDraft && draftGid
-      ? admin
-          .from("draft_orders")
-          .update({ status: "completed", completed_at: nowIso, order_gid: completed.orderGid })
-          .eq("store_id", ctx.storeId)
-          .eq("draft_order_gid", draftGid)
-      : null;
+  const draftMirror = borradorCompletado
+    ? admin
+        .from("draft_orders")
+        .update({ status: "completed", completed_at: nowIso, order_gid: borradorCompletado.orderGid })
+        .eq("store_id", ctx.storeId)
+        .eq("draft_order_gid", borradorCompletado.draftGid)
+    : null;
 
   // 4) Log the sale (credits the advisor in Productividad).
   const discLabel =
@@ -2883,7 +3172,7 @@ export async function generateOrder(
         : ` · desc. ${currency} ${discountAmount.toFixed(2)}`
       : "";
   const note = [
-    `${reuseExistingDraft ? "Carrito recuperado" : "Venta nueva"} · pedido generado en Shopify · ${currency} ${amount.toFixed(2)}${discLabel} · contraentrega`,
+    `${origen} · pedido generado en ${tienda} · ${currency} ${amount.toFixed(2)}${discLabel} · contraentrega`,
     `Productos: ${products.map((p) => `${p.quantity}× ${p.title}`).join(", ")}`,
     `Entrega: ${district}${address.address2 ? " · " + address.address2 : ""}`,
   ].join(" · ");
@@ -2909,6 +3198,7 @@ export async function generateOrder(
     occurredAt: nowIso,
   });
   await Promise.all([leadUpdate, draftMirror, saleLog, saleAttribution].filter(Boolean));
+  if (v.onSaleRecorded) await v.onSaleRecorded();
 
   // 5) Recompute today's rollups so revenue/COD reflect it now — DESPUÉS de
   // responder. Es el paso más caro de toda la acción (recorre el día entero de
@@ -2916,8 +3206,9 @@ export async function generateOrder(
   // Si fallara, el siguiente sync lo recalcula igual.
   after(async () => {
     try {
-      const day = nowIso.slice(0, 10);
-      await admin.rpc("recompute_daily_rollups", { p_store_id: ctx.storeId, p_from: day, p_to: day });
+      // El día LOCAL de la tienda: después de las 19:00 de Lima el día UTC ya
+      // es el siguiente, y se recalculaba el día equivocado.
+      await recomputeRollupsForLocalDay(admin, ctx.storeId, nowIso);
     } catch {
       /* next sync recomputes */
     }
@@ -2928,7 +3219,6 @@ export async function generateOrder(
   if (input.sendConfirmation && phone) {
     const pnId = l.wa_phone_number_id ?? creds.whatsapp_phone_number_id;
     if (creds.kapso_api_key && pnId) {
-      const orderCode = completed.orderName?.trim() || null;
       const customBody = (input.confirmationText ?? "").trim();
       const body = customBody
         ? orderCode && !customBody.includes(orderCode)
@@ -2952,11 +3242,6 @@ export async function generateOrder(
     }
   }
 
-  const phoneNote = phoneRejected
-    ? ` · ⚠️ Shopify RECHAZÓ el celular ${phone ?? ""}: el pedido quedó sin teléfono. Corrígelo en Shopify.`
-    : "";
-  // Un precio distinto al pactado ya no llega hasta aquí: se rechaza antes de
-  // completar el borrador, con el borrador borrado y la constancia en el lead.
   const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}`;
   const confirmationSent = confirmNote.toLowerCase().includes("enviada");
 
@@ -2965,15 +3250,300 @@ export async function generateOrder(
   return {
     notice,
     generatedOrder: {
-      id: shopifyOrderId,
+      ...v.generatedOrder,
       orderId: internalOrderId,
-      name: completed.orderName ?? `PED-${shopifyOrderId.slice(-6).toUpperCase()}`,
       total: amount,
       currency,
-      adminUrl: realOrderId ? shopifyOrderAdminUrl(creds.shopify_domain, realOrderId) : null,
       confirmationSent,
     },
   };
+}
+
+/**
+ * «Generar pedido» en WooCommerce (MOM §38.12): la tienda ya crea sus pedidos
+ * nuevos allí (`stores.platform = 'woocommerce'`). Las mismas validaciones y
+ * el mismo rastro que en Shopify (`registrarVentaGenerada`); cambian dos
+ * cosas:
+ *
+ *   · cómo se crea el pedido: `createWooSaleOrder` lo crea `pending` (que no
+ *     entra al Master), compara lo que guardó WooCommerce con lo pactado con
+ *     las reglas de `priceMismatches` y recién entonces lo pasa a
+ *     `processing`; si no cuadra, lo borra y la venta se rechaza con el mismo
+ *     texto y la misma constancia en el lead que en Shopify;
+ *   · la fila local es la que escribiría la entrada (`mapWooOrder` sobre la
+ *     respuesta de WooCommerce, id `wc-<clave>-<id>`, `platform =
+ *     woocommerce`), insertada solo si falta: el webhook y la pasada que
+ *     lleguen después la actualizan, no la duplican.
+ *
+ * Antes de llamar a WooCommerce toma el candado del intento, el mismo del bot
+ * (`claimWooFormSale`, `bot_order_requests` con la llave `form-<requestId>`,
+ * MOM §38.12 «El candado del formulario»): un doble clic no llega dos veces a
+ * WooCommerce, y un POST sin respuesta deja el candado puesto hasta que
+ * WordPress haya podido guardar el pedido, para que el reintento lo encuentre.
+ *
+ * No hay borrador que completar: el carrito de Shopify del lead solo prellenó
+ * el formulario (por SKU). Si estaba abierto (según la copia local) y la venta
+ * no es un «pedido nuevo», el lead queda con el carrito recuperado, como en
+ * Shopify; el borrador de Shopify no se toca. Nada de aquí llama a Shopify.
+ */
+async function generateWooOrder(args: {
+  admin: SupabaseClient;
+  ctx: AuthorizedLeadContext;
+  leadId: string;
+  l: { phone: string | null; name: string | null; wa_phone_number_id: string | null; draft_order_gid: string | null };
+  input: GenerateOrderInput;
+  items: GenerateOrderInput["lineItems"];
+  address1: string;
+  district: string;
+  woo: WooApiCreds;
+}): Promise<LeadActionState> {
+  const { admin, ctx, leadId, l, input, items, address1, district, woo } = args;
+  // Kapso, el número de WhatsApp y la moneda. Sin renovar ningún token de
+  // Shopify: esta venta no pasa por allí.
+  const creds = await getStoreCreds(ctx.storeId, admin, { renewOwnApp: false });
+  if (!creds) return { error: "No se pudo leer la tienda. Intenta de nuevo en unos segundos." };
+  const currency = creds.currency ?? "PEN";
+  // El teléfono, con la misma regla que en Shopify: normalizado, y comprobado
+  // solo si lo escribió una persona.
+  const phone = normalizePhone((input.phone ?? "").trim() || l.phone);
+  const typedProblem = (input.phone ?? "").trim() ? peruMobileProblem(input.phone) : null;
+  if (typedProblem) return { error: typedProblem };
+
+  const lineItemsInput = items.map((li) => ({
+    variantId: li.variantId ?? null,
+    title: (li.title ?? "").trim(),
+    quantity: Math.max(1, Math.floor(Number(li.quantity))),
+    unitPrice: li.unitPrice != null ? Math.round(Number(li.unitPrice) * 100) / 100 : null,
+    sku: (li.sku ?? "").trim() || null,
+  }));
+  // Cada línea va por SKU y con su precio fijado: un ítem manual, una
+  // variación sin SKU propio o un producto sin precio se frenan antes de
+  // llamar a la tienda.
+  const lineasProblema = wooSaleLinesProblem(lineItemsInput);
+  if (lineasProblema) return { error: lineasProblema };
+  const subtotal = Math.round(lineItemsInput.reduce((s, li) => s + (li.unitPrice ?? 0) * li.quantity, 0) * 100) / 100;
+  if (subtotal <= 0) return { error: "El monto del pedido debe ser mayor a 0." };
+  const { total: amount, discountAmount } = resolveOrderDiscount(subtotal, input.discount);
+  if (amount <= 0) return { error: "El total del pedido no puede ser 0. Revisa el descuento." };
+
+  const address = {
+    name: (input.customerName ?? l.name ?? "").trim() || null,
+    address2: (input.referencia ?? "").trim() || null,
+  };
+  // Sin id del formulario (un cliente viejo) cada llamada es un intento nuevo,
+  // como en Shopify: el aviso de duplicado sigue siendo la red.
+  const requestId = normalizeWooRequestId(input.requestId) ?? randomUUID();
+  // El carrito del lead, como en Shopify: «Carrito recuperado» solo si estaba
+  // abierto (la copia local de su borrador) y la venta no es un pedido nuevo.
+  // Se decide ANTES de crear el pedido: su canal sale de aquí (owner,
+  // 23-10-2026: el carrito completado es «Web · carrito completado», como el
+  // borrador reusado de Shopify).
+  let carritoAbierto = false;
+  if (l.draft_order_gid && !input.noReutilizarBorrador) {
+    const { data: carrito } = await admin
+      .from("draft_orders")
+      .select("status")
+      .eq("store_id", ctx.storeId)
+      .eq("draft_order_gid", l.draft_order_gid)
+      .maybeSingle();
+    const estado = String((carrito as { status?: string | null } | null)?.status ?? "").toLowerCase();
+    carritoAbierto = estado === "open" || estado === "invoice_sent";
+  }
+  const { body, expected } = buildWooSaleOrder({
+    leadId,
+    requestId,
+    channel: carritoAbierto ? WOO_CART_SALE_CHANNEL : WOO_SALE_CHANNEL,
+    lines: lineItemsInput,
+    discountAmount,
+    address: {
+      name: address.name,
+      phone,
+      address1,
+      address2: address.address2,
+      city: district,
+      province: (input.province ?? "").trim() || null,
+    },
+    note: input.note ?? null,
+  });
+  // EL CANDADO DEL INTENTO (MOM §38.12, 25-10-2026), el mismo del bot
+  // (`bot_order_requests`, 0277, con la llave `form-<requestId>`): dos llamadas
+  // a la vez con este id no llegan las dos a WooCommerce, y un POST sin
+  // respuesta deja el candado puesto hasta que WordPress haya podido guardar el
+  // pedido, para que el reintento lo encuentre en vez de crear otro.
+  const guard = await claimWooFormSale({ admin, storeId: ctx.storeId, requestId, bodyHash: expected.fingerprint });
+  if (guard.kind === "busy" || guard.kind === "expired" || guard.kind === "error") return { error: guard.message };
+  const claim = guard.kind === "claim" ? guard.claim : null;
+
+  const outcome = await createWooSaleOrder({
+    client: wooSaleClient(woo),
+    body,
+    expected,
+    requestId,
+    // El pedido que ya creó un intento anterior de este formulario: se lee por
+    // su id a cualquier edad, antes que la búsqueda de las últimas 2 horas.
+    knownOrderId: claim?.wooOrderId ?? null,
+    // Primera vez que el candado ve este formulario: nada que buscar en WooCommerce.
+    firstAttempt: claim != null && claim.attempts === 1 && claim.wooOrderId == null && input.requestIdSent !== true,
+    onCreated: claim ? (wooId) => noteWooFormOrder(admin, claim, wooId) : undefined,
+  });
+
+  // El candado: un POST sin respuesta lo deja puesto (re-armado desde ahora);
+  // un pedido vivo lo cierra con el pedido; lo demás lo suelta (`failed`) y el
+  // reintento lo retoma enseguida. Si la base no contesta, el candado vence
+  // solo (`BOT_ORDER_CLAIM_TTL_MS`) y el reintento lee el pedido por su id.
+  const guardLog = (paso: string) => (e: unknown) =>
+    console.error(`[woo-form-guard] ${JSON.stringify({ event: `${paso}_failed`, store: ctx.storeId, error: e instanceof Error ? e.message.slice(0, 120) : "error" })}`);
+  if (claim && outcome.kind !== "created" && outcome.kind !== "adopted") {
+    if (outcome.kind === "error" && outcome.postUnanswered) {
+      await rearmWooFormClaim(admin, claim).catch(guardLog("rearm"));
+    } else {
+      const code =
+        outcome.kind === "price" ? "price_mismatch" : outcome.kind === "lines" ? "order_mismatch" : outcome.kind === "conflict" ? "conflict" : "woocommerce_unavailable";
+      await releaseWooFormClaim(admin, claim, code).catch(guardLog("release"));
+    }
+  }
+
+  /** La constancia en el lead, donde la asesora y el admin miran. */
+  const constancia = (note: string) =>
+    admin.from("lead_calls").insert({
+      lead_id: leadId,
+      store_id: ctx.storeId,
+      vendedora: ctx.userId,
+      kind: "system",
+      new_status: null,
+      note,
+    });
+
+  if (outcome.kind === "price" || outcome.kind === "lines") {
+    // Como en Shopify: rechazo en la puerta, el pedido pendiente borrado (o
+    // anulado, si un plugin ya lo dejó vivo) y la constancia en el lead.
+    const rechazo =
+      outcome.kind === "price"
+        ? priceMismatchRejection({
+            desajustes: outcome.desajustes,
+            currency,
+            draftName: outcome.orderLabel,
+            tienda: "WooCommerce",
+            limpieza: wooCleanupText(outcome.cleanup, outcome.orderLabel),
+          })
+        : wooLineRejection({ problemas: outcome.problemas, orderLabel: outcome.orderLabel, cleanup: outcome.cleanup });
+    await constancia(rechazo.note);
+    return { error: rechazo.error };
+  }
+  if (outcome.kind === "conflict") {
+    // El pedido de un intento anterior está vivo, pero no es lo que dice el
+    // formulario ahora: ni se registra como esta venta ni se crea otro.
+    const rechazo = wooConflictRejection({
+      orderLabel: outcome.orderLabel,
+      lineas: outcome.lineas,
+      desajustes: outcome.desajustes,
+      currency,
+    });
+    await constancia(rechazo.note);
+    return { error: rechazo.error };
+  }
+  if (outcome.kind === "error") {
+    // Un POST sin respuesta (y el pedido sin aparecer): con el candado, la
+    // asesora espera a que WordPress termine; sin él (sin la 0277), el texto
+    // de siempre.
+    if (outcome.postUnanswered && claim) return { error: wooFormPostUnansweredText(outcome.message) };
+    const limpieza = outcome.cleanup ? ` ${wooCleanupText(outcome.cleanup, outcome.orderLabel)}` : "";
+    return { error: `${outcome.message}${limpieza}` };
+  }
+
+  const order = outcome.order;
+  const adoptado = outcome.kind === "adopted";
+  const row = mapWooOrder(order, { id: ctx.storeId, woo_site_key: woo.siteKey });
+  // Vivo: el candado se cierra con el pedido (`done`) recién cuando la venta
+  // quedó registrada (`onSaleRecorded`), o al salir por cualquier otro camino
+  // (`finally`). Mientras tanto sigue `processing` y otro clic con este intento
+  // recibe «ya se está generando»: si lo retomara antes de `order_sales`,
+  // adoptaría el pedido sin ver la venta y la registraría otra vez (dos notas
+  // «sale» y dos WhatsApp de confirmación). Si la función se corta, el candado
+  // vence solo y el reintento lee el pedido por su id.
+  let candadoCerrado = false;
+  const cerrarCandado = async () => {
+    if (!claim || candadoCerrado) return;
+    candadoCerrado = true;
+    const numero = String(order.number ?? "").trim().replace(/^#/, "") || String(order.id);
+    await finishWooFormClaim(admin, claim, {
+      wooOrderId: Number.isInteger(Number(order.id)) && Number(order.id) > 0 ? Number(order.id) : null,
+      orderId: row?.shopify_order_id ?? `wc-${woo.siteKey}-${order.id}`,
+      orderName: row?.name ?? `#${numero}`,
+      total: row?.total_amount ?? null,
+      currency: row?.currency ?? currency,
+    }).catch(guardLog("done"));
+  };
+  try {
+    if (!row) {
+      return { error: "WooCommerce devolvió el pedido en un estado que no entra al Master. Revísalo en WooCommerce." };
+    }
+    const adminUrl = wooOrderAdminUrl(woo.siteUrl, order.id);
+    const total = row.total_amount ?? amount;
+    // La fila que escribiría la entrada, solo si el webhook no la trajo ya.
+    const { id: internalOrderId, error: orderErr } = await insertOrderIfAbsent(admin, { ...row });
+    if (orderErr || !internalOrderId) {
+      return {
+        error: `Pedido ${row.name} generado en WooCommerce, pero no se pudo registrar localmente: ${orderErr ?? "error"}. Entra al Master con la sincronización.`,
+      };
+    }
+
+    // Un reintento que encontró el pedido de su intento anterior (con lo mismo
+    // que pide el formulario ahora): si ese intento ya dejó la venta
+    // registrada, no se registra dos veces.
+    if (adoptado) {
+      const { data: venta } = await admin.from("order_sales").select("order_id").eq("order_id", internalOrderId).maybeSingle();
+      if (venta) {
+        revalidatePath("/dashboard/leads");
+        return {
+          notice: `Pedido ya generado ✓ · ${row.name}: este intento ya lo había creado en WooCommerce, no se creó otro.`,
+          generatedOrder: {
+            id: row.shopify_order_id,
+            platform: "woocommerce",
+            orderId: internalOrderId,
+            name: row.name ?? row.shopify_order_id,
+            total,
+            currency,
+            adminUrl,
+            confirmationSent: false,
+          },
+        };
+      }
+    }
+
+    // Adoptado o creado, el pedido es exactamente lo que dice el formulario
+    // (misma huella, mismos precios): la nota y la confirmación salen de él.
+    const products = lineItemsInput.map((li) => ({ title: li.title || "Producto", quantity: li.quantity, price: li.unitPrice }));
+    const origen = carritoAbierto ? "Carrito recuperado" : "Venta nueva";
+    return await registrarVentaGenerada({
+      admin,
+      ctx,
+      leadId,
+      l,
+      input,
+      creds,
+      tienda: "WooCommerce",
+      internalOrderId,
+      nowIso: new Date().toISOString(),
+      phone,
+      amount: total,
+      discountAmount,
+      currency,
+      products,
+      district,
+      address1,
+      address,
+      origen: adoptado ? `${origen} (de un intento anterior)` : origen,
+      borradorCompletado: null,
+      carritoRecuperado: carritoAbierto,
+      orderCode: row.name,
+      phoneNote: "",
+      generatedOrder: { id: row.shopify_order_id, name: row.name ?? row.shopify_order_id, adminUrl, platform: "woocommerce" },
+      onSaleRecorded: cerrarCandado,
+    });
+  } finally {
+    await cerrarCandado();
+  }
 }
 
 // ===========================================================================

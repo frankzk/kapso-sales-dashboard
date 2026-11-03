@@ -1,4 +1,5 @@
 "use client";
+import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
 
 import { OrderLink } from "@/components/order-link";
 import { useDeferredValue, useMemo, useState, useTransition } from "react";
@@ -134,7 +135,7 @@ function ReviewCard({
     item.collectionAccounts,
     item.customerName,
   );
-  const canApprove = Boolean(item.operationNumber) && recipient.status !== "mismatch";
+  const canApprove = Boolean(item.operationNumber) && hasPositivePaymentAmount(item.amount) && recipient.status !== "mismatch";
   const remaining =
     item.orderTotal === null ? null : Math.max(0, item.orderTotal - item.validatedTotal);
 
@@ -273,7 +274,8 @@ function ReviewCard({
               coincide» y ya: quien revisaba no sabía cuál de las dos señales
               mirar, y el comprobante se quedaba ahí. #KP126085 llevaba siete
               semanas con el celular receptor CORRECTO y una palabra mal leída. */}
-          {!canApprove && item.operationNumber && (
+          {!hasPositivePaymentAmount(item.amount) && <p role="alert" className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">{MISSING_PAYMENT_AMOUNT} Complétalo desde Cobro en la ficha del pedido.</p>}
+          {!canApprove && item.operationNumber && hasPositivePaymentAmount(item.amount) && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-2">
               <p className="text-xs font-medium leading-relaxed text-red-800">
                 {motivoDelDesencuentro(recipient, item.collectionAccounts) ??
@@ -310,7 +312,7 @@ function ReviewCard({
                       </button>
                       <button
                         type="button"
-                        disabled={pending || !recipientReason.trim()}
+                        disabled={pending || !recipientReason.trim() || !hasPositivePaymentAmount(item.amount)}
                         onClick={() =>
                           run(() =>
                             validatePayment(item.id, {

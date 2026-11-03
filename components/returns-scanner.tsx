@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DispatchScanner } from "@/components/dispatch-scanner";
 import { DispatchCamera } from "@/components/dispatch-camera";
@@ -20,6 +20,7 @@ import { Badge, OpsButton } from "@/components/ops-ui";
 export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: PendingReturn[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const receiving = useRef(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [lines, setLines] = useState<{ code: string; ok: boolean; text: string }[]>([]);
   const [returned, setReturned] = useState<Set<string>>(new Set());
@@ -28,7 +29,8 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
   const left = pending.filter((p) => !returned.has(p.shipmentId));
 
   async function run(code: string, row?: PendingReturn) {
-    if (busy || !code.trim()) return;
+    if (receiving.current || !code.trim()) return;
+    receiving.current = true;
     setBusy(true);
     try {
       const res = row ? await returnUndeliveredOutputs(orgId, [row.shipmentId]) : await returnUndeliveredByCode(orgId, code);
@@ -36,8 +38,9 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
       const name: string = row ? row.orderName : byCodeName ?? code;
       // La caja reemplazada dice que se desarma; el resto, lo de siempre.
       const toStock = row?.replaced || /reemplazada/i.test(res.notice ?? "");
-      setLines((cur) => [{ code: name, ok: !res.error, text: res.error ?? (toStock && res.notice ? res.notice : "Devuelto a la oficina") }, ...cur].slice(0, 50));
-      if (!res.error) {
+      const repeatReceipt = /ya estaban? recibid/i.test(res.notice ?? "");
+      setLines((cur) => [{ code: name, ok: !res.error, text: res.error ?? ((toStock || repeatReceipt) && res.notice ? res.notice : "Devuelto a la oficina") }, ...cur].slice(0, 50));
+      if (!res.error || res.receivedShipmentIds?.length) {
         // Por QR: la fila de ESA salida. Por número de pedido, solo si el
         // pedido tiene una sola caja por recibir (si tiene dos, el servidor
         // pide el QR y no llega aquí).
@@ -45,12 +48,14 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
         const byCode = pending.find((p) => p.code?.toLowerCase() === scanned);
         const byName = pending.filter((p) => p.orderName === name);
         const hit = row?.shipmentId ?? byCode?.shipmentId ?? (byName.length === 1 ? byName[0]!.shipmentId : undefined);
-        if (hit) setReturned((cur) => new Set(cur).add(hit));
+        const receivedIds = res.receivedShipmentIds ?? (hit ? [hit] : []);
+        if (receivedIds.length) setReturned((cur) => new Set([...cur, ...receivedIds]));
         router.refresh();
       }
     } catch {
       setLines((cur) => [{ code, ok: false, text: "No se pudo registrar. Reintenta el mismo código; no se duplicará." }, ...cur]);
     } finally {
+      receiving.current = false;
       setBusy(false);
     }
   }

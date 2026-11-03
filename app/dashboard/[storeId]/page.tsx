@@ -5,7 +5,10 @@ import {
   getCampaignDeliveryOutcomes,
   getCampaignLeadsForDashboard,
   getAttributionInputs,
+  getClosingChannels,
   getConversations,
+  getOriginSales,
+  getSourceConversion,
   getLatestOps,
   getLeadsForDashboard,
   getMetaAdCatalog,
@@ -14,6 +17,7 @@ import {
   getOrders,
   getOrdersByIds,
   getRollups,
+  getSalesProductOrders,
   getUserRoleSummary,
   getWaNumbers,
   getWebAdOrders,
@@ -42,13 +46,22 @@ export default async function StorePage({
   if (!store) notFound(); // not accessible (RLS) or non-existent
 
   const prev = previousRange(range);
-  const [rollups, prevRollups, orders, conversations, leads, ops] = await Promise.all([
+  // Los módulos del chatbot, en el día local de la tienda (MOM §17.4.2).
+  const timeZones = { [storeId]: store.timezone };
+  const [rollups, prevRollups, orders, conversations, leads, ops, closing, origin, sourceConversion, productOrders] = await Promise.all([
     getRollups([storeId], range),
     getRollups([storeId], prev),
-    getOrders([storeId], range),
-    getConversations([storeId], range),
-    getLeadsForDashboard([storeId], range),
+    getOrders([storeId], range, timeZones),
+    getConversations([storeId], range, timeZones),
+    getLeadsForDashboard([storeId], range, timeZones),
     getLatestOps([storeId]),
+    // Quién cerró TODAS las ventas de la tienda, no solo las del bot (MOM §17.3).
+    getClosingChannels([storeId], range),
+    // Todas las ventas por día y origen, y la conversión de cada fuente (MOM §17.4).
+    getOriginSales([storeId], range),
+    getSourceConversion([storeId], range),
+    // «Productos» y «Patrón de horas»: todas las ventas de la tienda, no solo las del bot (MOM §17.4.1).
+    getSalesProductOrders([storeId], range),
   ]);
   const campaignLeads = await getCampaignLeadsForDashboard(storeId, range, store.timezone);
   const campaignOrdersPromise = getOrdersByIds([storeId], campaignLeads.map((lead) => lead.order_id));
@@ -89,6 +102,7 @@ export default async function StorePage({
       rollups={rollups}
       prevRollups={prevRollups}
       orders={orders}
+      productOrders={productOrders}
       conversations={conversations}
       leads={leads}
       ops={ops}
@@ -98,6 +112,9 @@ export default async function StorePage({
       adNames={adNames}
       waNumbers={waNumbers}
       attribution={attribution}
+      closing={closing}
+      origin={origin}
+      sourceConversion={sourceConversion}
       metaSpend={metaSpend}
       campaignDeliveries={campaignDeliveries}
       campaignLeads={campaignLeads}

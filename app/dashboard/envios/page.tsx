@@ -11,6 +11,8 @@ import {
 import { limaTodayKey } from "@/lib/shipments";
 import { EmptyState } from "@/components/ui";
 import { ShipmentsBoard } from "@/components/shipments";
+import { SwaypUnknownGuides } from "@/components/swayp-unknown-guides";
+import { getSwaypUnknownGuides } from "@/lib/swayp-unknown-guides-access";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 
 export const dynamic = "force-dynamic";
@@ -43,11 +45,13 @@ async function EnviosContent({
   // pool); the store/province/district filters happen client-side in the board.
   const storeIds = stores.map((s) => s.id);
   const today = limaTodayKey();
-  const [counts, shipments, reprogram, teamScore] = await Promise.all([
+  const [counts, shipments, reprogram, teamScore, swaypUnknown] = await Promise.all([
     getShipmentCounts(storeIds),
     getStoreShipments(storeIds, view),
     getReprogramStats(storeIds),
     getTeamScore(storeIds, today, today),
+    // Sin la 0282 (o si falla la lectura) no hay tarjeta: nunca tumba Envíos.
+    getSwaypUnknownGuides(storeIds).catch(() => null),
   ]);
 
   // El automático Aliclik → Swayp se abre desde las acciones de la cabecera
@@ -61,6 +65,7 @@ async function EnviosContent({
       shipments={shipments}
       teamScore={teamScore}
       initialOpenId={sp.open ?? null}
+      swaypUnknown={swaypUnknown?.length ? <SwaypUnknownGuides guides={swaypUnknown} /> : null}
     />
   );
 }

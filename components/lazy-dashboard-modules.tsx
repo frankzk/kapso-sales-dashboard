@@ -22,6 +22,11 @@ const DailyLine = dynamic(() => import("@/components/charts").then((m) => m.Dail
   loading: () => <ChartSkeleton className="h-[200px]" />,
 });
 
+const StackedDailyBars = dynamic(() => import("@/components/charts").then((m) => m.StackedDailyBars), {
+  ssr: false,
+  loading: () => <ChartSkeleton className="h-[240px]" />,
+});
+
 const TrendLines = dynamic(() => import("@/components/charts").then((m) => m.TrendLines), {
   ssr: false,
   loading: () => <ChartSkeleton className="h-[240px]" />,
@@ -32,4 +37,4 @@ const SalesAttributionModule = dynamic(
   { ssr: false, loading: () => <ChartSkeleton className="h-96" /> },
 );
 
-export { DailyBars, DailyLine, TrendLines, SalesAttributionModule };
+export { DailyBars, DailyLine, StackedDailyBars, TrendLines, SalesAttributionModule };

@@ -43,6 +43,8 @@ import {
   type AliclikPreview,
 } from "@/app/dashboard/pedidos/aliclik-actions";
 import { isShortenedMapsLink } from "@/lib/aliclik-geo";
+import { loadOrderChatby } from "@/app/dashboard/pedidos/actions";
+import { chatbyCustomerLocation, chatbyLimaDay, chatbyLimaTime } from "@/lib/chatby-conversation";
 import {
   describeAliclikHealth,
   type AliclikHealthState,
@@ -108,9 +110,11 @@ export function AliclikGuidePanel({
   const [note, setNote] = useState("");
   const [riskExceptionReason, setRiskExceptionReason] = useState("");
   const [pinExceptionReason, setPinExceptionReason] = useState("");
+  const [motivoSalidaAdicional, setMotivoSalidaAdicional] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string; at: "quote" | "create" } | null>(null);
   const [pending, startTransition] = useTransition();
   const uid = useId();
+  useEffect(() => { setMotivoSalidaAdicional(""); }, [orderId]);
   /** Cuántas veces se ha reintentado por "pedido todavía sin dirección". */
   const [retries, setRetries] = useState(0);
   /**
@@ -122,6 +126,28 @@ export function AliclikGuidePanel({
    * acción que el propio panel describe como irreversible. Susto gratis.
    */
   const [busy, setBusy] = useState<null | "quote" | "create">(null);
+
+  /**
+   * La ubicación que la clienta mandó por WhatsApp al bot de Chatby (MOM §11,
+   * 26-10-2026): sin coordenada en el pedido —WooCommerce no geocodifica—, se
+   * propone con un clic. No se llena sola: quien cotiza la mira y decide.
+   */
+  const [whatsappPin, setWhatsappPin] = useState<{ lat: number; lng: number; at: string | null } | null>(null);
+  useEffect(() => {
+    if (hasCoordinate) return;
+    let alive = true;
+    loadOrderChatby(orderId)
+      .then((res) => {
+        if (alive && res.status === "ok") setWhatsappPin(chatbyCustomerLocation(res.messages));
+      })
+      .catch(() => {
+        /* sin Chatby, el campo se llena a mano como siempre */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orderId, hasCoordinate]);
+  const whatsappPinText = whatsappPin ? `${whatsappPin.lat}, ${whatsappPin.lng}` : "";
 
   const shortened = isShortenedMapsLink(coordinate);
   const waiting = Boolean(preview?.notReady);
@@ -173,6 +199,7 @@ export function AliclikGuidePanel({
         // Se devuelve el monto que se acaba de ENSEÑAR: el servidor lo recalcula
         // y aborta si cambió entre cotizar y pulsar.
         expectedCollectTotal: preview?.collectTotal ?? null,
+        motivoSalidaAdicional: motivoSalidaAdicional || null,
         riskExceptionReason: riskExceptionReason || null,
         pinExceptionReason: pinExceptionReason || null,
       });
@@ -216,15 +243,19 @@ export function AliclikGuidePanel({
   // comprobar todas las llaves; esto es para no descubrirlo al pulsar.
   const createBlockReason = !preview?.ok
     ? null
-    : preview.writeBlocked
-      ? preview.writeBlocked
-      : !duplicateAllowed
-        ? "Resuelve primero la retención por posible duplicado, arriba."
-        : !riskGate.allowed
-          ? "Justifica la excepción de pago, arriba."
-          : transportId === null
-            ? "Elige una transportadora."
-            : null;
+    : preview.additionalOutput?.blocked
+      ? preview.additionalOutput.message
+      : preview.additionalOutput?.requiresReason && !motivoSalidaAdicional.trim()
+        ? "Escribe el motivo de la salida adicional."
+        : preview.writeBlocked
+          ? preview.writeBlocked
+          : !duplicateAllowed
+            ? "Resuelve primero la retención por posible duplicado, arriba."
+            : !riskGate.allowed
+              ? "Justifica la excepción de pago, arriba."
+              : transportId === null
+                ? "Elige una transportadora."
+                : null;
   const cheapestId = (preview?.couriers ?? [])
     .filter((c) => c.selectable)
     .sort((a, b) => a.deliveryCost - b.deliveryCost)[0]?.transportId;
@@ -355,6 +386,33 @@ export function AliclikGuidePanel({
                   Pega el enlace que mandó la clienta o la coordenada, por ejemplo -12.04318, -77.02824.
                 </span>
               </label>
+              {whatsappPin && coordinate.trim() !== whatsappPinText && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-wash px-3 py-2 text-[13px] leading-5 text-ink-700">
+                  <span className="min-w-0">
+                    La clienta mandó su ubicación por WhatsApp
+                    {whatsappPin.at ? (
+                      <span className="tabular-nums text-ink-500">
+                        {" "}
+                        ({chatbyLimaDay(whatsappPin.at)?.split("-").reverse().slice(0, 2).join("-")} {chatbyLimaTime(whatsappPin.at)})
+                      </span>
+                    ) : null}
+                    : <span className="font-mono tabular-nums text-ink-900">{whatsappPinText}</span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <OpsButton size="sm" onClick={() => setCoordinate(whatsappPinText)} className="pointer-coarse:h-11">
+                      Usar esta ubicación
+                    </OpsButton>
+                    <a
+                      href={`https://www.google.com/maps?q=${whatsappPin.lat},${whatsappPin.lng}`}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="font-medium text-brand-700 hover:underline"
+                    >
+                      Ver en el mapa
+                    </a>
+                  </span>
+                </div>
+              )}
               {shortened && (
                 <p className="text-[13px] leading-5 text-warn-fg">
                   Ese enlace es acortado (maps.app.goo.gl) y no contiene las coordenadas. Ábrelo en el navegador y
@@ -551,7 +609,6 @@ export function AliclikGuidePanel({
                         badge={
                           <>
                             {c.selectable && c.transportId === cheapestId && <Badge tone="ok">Más barata</Badge>}
-                            {c.flagDeliveryExpress && <Badge tone="brand">Express</Badge>}
                           </>
                         }
                         aside={`S/ ${c.deliveryCost.toFixed(2)}`}
@@ -575,6 +632,25 @@ export function AliclikGuidePanel({
                   </div>
                 </div>
 
+                {preview.additionalOutput && (
+                  <Banner tone="warn" title={preview.additionalOutput.requiresReason ? "Salida adicional en Lima" : "Revisa las salidas del pedido"}>
+                    <p>{preview.additionalOutput.message}</p>
+                    {preview.additionalOutput.requiresReason && (
+                      <>
+                        <p className="mt-2">La salida anterior sigue activa. Coordina ambas entregas y cancela la pendiente si una ya entrega.</p>
+                        <label className={cn(LABEL, "mt-3")} htmlFor={`${uid}-additional-reason`}>
+                          Motivo de la salida adicional (obligatorio)
+                          <textarea
+                            id={`${uid}-additional-reason`} value={motivoSalidaAdicional}
+                            onChange={(event) => setMotivoSalidaAdicional(event.target.value)}
+                            className={INPUT} rows={2} maxLength={2000}
+                            placeholder="Explica por qué se prepara otra salida mientras la anterior sigue activa."
+                          />
+                        </label>
+                      </>
+                    )}
+                  </Banner>
+                )}
                 <label className={LABEL} htmlFor={`${uid}-note`}>
                   Nota para el courier (opcional)
                   <input id={`${uid}-note`} value={note} onChange={(e) => setNote(e.target.value)} className={INPUT} />

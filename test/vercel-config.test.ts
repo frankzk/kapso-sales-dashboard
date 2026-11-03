@@ -82,7 +82,19 @@ describe("vercel.json", () => {
     // 24: barrido del agente de voz para leads (MOM §33).
     // 25: Swayp automático desde Por confirmar, piloto A/B (MOM §11.13, 13-10-2026).
     // 26: barrido de comprobantes electrónicos por RUC (MOM §35, 14-10-2026).
-    expect(crons).toHaveLength(26);
+    // 27: guía Aliclik automática el día programado (MOM §6.2, 16-10-2026).
+    // 28: renovación del acceso de las tiendas con app propia de Shopify
+    //     (0271, MOM §36.3, 23-10-2026).
+    // 29: la foto de los pedidos de Shopify para sus boletas, antes del cierre
+    //     de Shopify de Kenku y Aurela (0275, MOM §35.10, 23-10-2026).
+    // 30: la copia de las fotos de producto de WhatsApp a Storage, antes del
+    //     mismo cierre (MOM §39, 23-10-2026).
+    // 31: la revisión de los webhooks de WooCommerce, que WooCommerce
+    //     desactiva solo tras 5 fallos (MOM §38.14, 25-10-2026).
+    // 32: cierre de stock Woo tras recepción e inventario, con turno recuperable (§38.18).
+    // 33: confirmación automática por Chatby y su guía Aliclik con tope diario
+    //     (0297, MOM §6.1, «Confirmó por Chatby», 01-11-2026).
+    expect(crons).toHaveLength(33);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

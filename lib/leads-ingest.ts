@@ -22,7 +22,9 @@ import { analyzeYapeVoucher } from "@/lib/vision";
 import type { StoreCreds } from "@/lib/ingest";
 import { categoryOf, deriveAutoState, nextLeadState, statusDef } from "@/lib/leads";
 import { tzParts } from "@/lib/metrics";
+import { insertOrderIfAbsent } from "@/lib/order-sale";
 import { normalizePhone } from "@/lib/phone";
+import { webLocationLeadFields } from "@/lib/web-location";
 import { LEAD_VOICE_KIND } from "@/lib/voice-leads";
 import {
   DRAFT_GRACE_MINUTES,
@@ -725,6 +727,22 @@ async function enrichLeadsFromConversations(
         .is("draft_order_gid", null);
     }
 
+    // La ubicación que eligió en la web antes de saltar al WhatsApp («Soy de
+    // Lima / Lima / Santa Anita», lib/web-location.ts): región, provincia y
+    // distrito con la convención del carrito, para que la cola, la ficha y la
+    // cobertura del Master la lean como una dirección. Es lo último que dijo la
+    // clienta, así que reemplaza a lo que hubiera; pero no a la dirección de un
+    // borrador real, como el patch de arriba. Escritura aparte: si faltan las
+    // columnas de 0013, el resto del enriquecimiento no se cae.
+    if (sig.web_location) {
+      await admin
+        .from("leads")
+        .update(webLocationLeadFields(sig.web_location))
+        .eq("store_id", storeId)
+        .eq("kapso_conversation_id", convId)
+        .is("draft_order_gid", null);
+    }
+
     // Opener context: what the customer wrote FIRST, so the advisor has a hook
     // instead of a blank "hola". Write-once (`is null`) — the first message never
     // changes, so a later page that can't read it must never blank it. Its own
@@ -847,6 +865,7 @@ export async function expireColdHandoffs(
     .update({ needs_attention: false })
     .eq("store_id", storeId)
     .eq("needs_attention", true)
+    .eq("call_queue_ready", false)
     .is("next_followup_at", null)
     .lt("handoff_at", cutoff)
     .or("attention_waves.is.null,attention_waves.eq.0")
@@ -885,6 +904,7 @@ export async function archiveStaleLeads(
     .neq("status", "yape_por_verificar")
     .is("next_followup_at", null)
     .eq("needs_attention", false)
+    .eq("call_queue_ready", false)
     .lt("last_interaction_at", cutoff)
     .limit(1000);
   const ids = (data as { id: string }[] | null)?.map((r) => r.id) ?? [];
@@ -2202,72 +2222,21 @@ export async function sendSeguimientoDrip(
   return report;
 }
 
-// ─────────────── Olas de reencolado: carritos que no contestan ───────────────
-// Un CARRITO cuyo último resultado fue "no logré contactar" (los mismos
-// estados que el drip: no_responde/buzon/cuelga) y lleva 48h quieto vuelve a
-// subir con needs_attention — la lista lo ordena PRIMERO apenas se abre "En
-// seguimiento". Tope de 2 olas por lead (ola 1 ≈ día 2, ola 2 ≈ día 4): sin
-// tope sería un ping-pong infinito, porque cada gestión apaga la atención y
-// reinicia el reloj. Los estados de "sí hablé" (contactado/otros productos) y
-// los cierres (Perdidos) NUNCA se reencolan; casi_cierra/volver_a_llamar ya se
-// agendan solos. Complementa al drip: el drip escribe, la ola hace que llamen.
-
+// ─────────────── Reintentos en la misma cola Por llamar (0289) ───────────────
+// Se conserva la disposición. El RPC reencola carritos no contactados tras 48 h
+// y citas vencidas, con menos de tres llamadas humanas, sin pedidos, sin bajas
+// ni reservas vigentes. La 0291 exige una señal real en los últimos 7 días y
+// retira reintentos obsoletos. La toma y el historial se escriben atómicamente.
+// Nombre exportado conservado para el reporte requeued del sync.
 export const ATTENTION_WAVE_MAX = 2;
 export const ATTENTION_WAVE_QUIET_HOURS = 48;
 
-/**
- * Un pase de olas para una tienda: marca con atención (y suma la ola) a los
- * carritos elegibles, dejando la nota 🔁 en el timeline. Idempotente dentro de
- * la ola (needs_attention=false es parte del filtro). Pre-0036 (columna
- * attention_waves ausente) es un no-op silencioso. Devuelve cuántos subió.
- */
 export async function flagCartAttentionWaves(admin: SupabaseClient, storeId: string): Promise<number> {
-  const cutoff = new Date(Date.now() - ATTENTION_WAVE_QUIET_HOURS * 3_600_000).toISOString();
-  const { data, error } = await admin
-    .from("leads")
-    .select("id, cart_item_count, draft_order_gid, attention_waves")
-    .eq("store_id", storeId)
-    .in("status", [...DRIP_STATUSES])
-    .in("category", ["open", "hot"])
-    .eq("needs_attention", false)
-    .is("next_followup_at", null)
-    .lt("attention_waves", ATTENTION_WAVE_MAX)
-    .lt("last_interaction_at", cutoff)
-    .or("cart_item_count.gt.0,draft_order_gid.not.is.null")
-    .limit(500);
-  if (error) {
-    if (/attention_waves/i.test(error.message)) return 0; // 0036 aún no aplicada
-    throw new Error(`attention waves select: ${error.message}`);
-  }
-  const rows =
-    (data as { id: string; cart_item_count: number | null; draft_order_gid: string | null; attention_waves: number | null }[]) ??
-    [];
-  // Re-chequeo fino del carrito por si el .or() del filtro grueso difiere.
-  const eligible = rows.filter((l) => (l.cart_item_count ?? 0) > 0 || (l.draft_order_gid ?? "").length > 0);
-  if (!eligible.length) return 0;
-
-  // Agrupa por nº de ola resultante para actualizar en bloque (waves es parte
-  // del update, así que no se puede un solo UPDATE para todos).
-  const byWave = new Map<number, string[]>();
-  for (const l of eligible) {
-    const wave = (l.attention_waves ?? 0) + 1;
-    (byWave.get(wave) ?? byWave.set(wave, []).get(wave)!).push(l.id);
-  }
-  for (const [wave, ids] of byWave) {
-    for (const part of chunkIds(ids, 300)) {
-      await admin.from("leads").update({ needs_attention: true, attention_waves: wave }).in("id", part);
-      await admin.from("lead_calls").insert(
-        part.map((id) => ({
-          lead_id: id,
-          store_id: storeId,
-          vendedora: null,
-          kind: "system",
-          note: `🔁 Reencolado automático: carrito sin contacto por ${ATTENTION_WAVE_QUIET_HOURS}h (ola ${wave}/${ATTENTION_WAVE_MAX})`,
-        })),
-      );
-    }
-  }
-  return eligible.length;
+  // 0289: both the eligibility checks and the audit record are committed under
+  // the same row lock. A simultaneous call or sync cannot enqueue a stale lead.
+  const { data, error } = await admin.rpc("requeue_leads_for_calls", { p_store_id: storeId });
+  if (error) throw new Error(`call queue retries (0289): ${error.message}`);
+  return Number(data ?? 0);
 }
 
 function chunkIds<T>(arr: T[], size: number): T[][] {
@@ -2278,8 +2247,11 @@ function chunkIds<T>(arr: T[], size: number): T[][] {
 
 /** COMPLETED draft → won lead, y SOLO si fue una recuperación real (el draft
  *  estuvo abandonado ≥30 min o la orden trae tag de abandono — isRecoveredDraft)
- *  se captura la orden en `orders` con `kapso`+`cod_recuperado` para que el
- *  rollup kapso-only cuente su ingreso. Un draft que se completó al instante es
+ *  se captura la orden en `orders` si todavía no estaba, TAL COMO VIENE de
+ *  Shopify. Antes se le añadían `kapso`+`cod_recuperado` solo en nuestra copia,
+ *  y la siguiente sincronización los borraba: no era un pedido del bot y no
+ *  quedaba nada que lo distinguiera. Quién lo cerró lo dice el canal de cierre
+ *  (MOM §17.3), no una etiqueta local. Un draft que se completó al instante es
  *  una compra COD normal (EasySell crea y completa un draft por CADA pedido):
  *  NO se etiqueta, NO entra a orders/rollups y NO crea un lead nuevo — solo
  *  marca won un lead que YA existía (el cliente sí compró). Returns the
@@ -2316,18 +2288,11 @@ async function linkCompletedDraftToLead(
             orderTags: order.tags, // el tag de abandono (p.ej. easysell-abandoned-checkout) también prueba la recuperación
           });
           if (recovered) {
-            // `kapso` so the rollup (filters lower(t)='kapso') counts it; `cod_recuperado`
-            // keeps recovered sales distinguishable from bot orders.
-            order.tags = [...new Set([...order.tags, "kapso", "cod_recuperado"])];
-            await admin.from("orders").upsert([order], { onConflict: "store_id,shopify_order_id" });
+            // Sin etiquetas propias y sin pisar una fila que el webhook haya
+            // traído mientras tanto: las etiquetas que valen son las de Shopify.
+            const { id } = await insertOrderIfAbsent(admin, order as unknown as Record<string, unknown> & { store_id: string; shopify_order_id: string });
             recoveredAt = order.created_at;
-            const { data: ins } = await admin
-              .from("orders")
-              .select("id")
-              .eq("store_id", storeId)
-              .eq("shopify_order_id", order.shopify_order_id)
-              .maybeSingle();
-            orderId = (ins as { id: string } | null)?.id ?? null;
+            orderId = id;
           }
         }
       } catch {

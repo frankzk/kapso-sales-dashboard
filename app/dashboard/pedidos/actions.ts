@@ -15,9 +15,25 @@ import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
-import { applyConfirmationCycleToStore, recomputeOrderMasterSafe } from "@/lib/order-master";
+import { orderPlatformOf } from "@/lib/shipment-order-capture";
+import { orderPlatformName } from "@/lib/order-admin-url";
+import { applyConfirmationCycleToStore, freshLogisticsCost, recomputeOrderMasterSafe } from "@/lib/order-master";
+import { processWooSaleReturn } from "@/lib/woo-sale-return-server";
+import {
+  ACTIVE_OUTPUTS_ERROR,
+  activeOutputs,
+  gfOpenRouteBlock,
+  gfOpenRouteError,
+  liquidationCostBlock,
+  logisticsCostFactsFromRow,
+  type ClosureGfDelivery,
+} from "@/lib/closure-blocks";
+import { pickLatestStop, type GfStop } from "@/lib/gf-delivery";
+import { bulkAllSkippedError, bulkDeliveredSkips, bulkStatusNotice } from "@/lib/bulk-status-guard";
+import { courierKey } from "@/lib/dispatch";
 import { coverageLabel, recordCoverageChanges } from "@/lib/coverage-change";
 import {
   VOICE_STORE_COLUMNS,
@@ -47,6 +63,7 @@ import {
   type OrderMasterDetail,
 } from "@/lib/orders-master-access";
 import {
+  SET_STATUS_DENIED,
   closedStatusChangeError,
   defaultOperationalFor,
   isGeneralStatus,
@@ -56,7 +73,17 @@ import {
 } from "@/lib/order-status";
 import { etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
 import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
-import { DISPATCH_DATE_CLEARED, DISPATCH_DATE_SET, dispatchDateError, dispatchDateLabel } from "@/lib/dispatch-date";
+import { districtLearnVerdict, type LearnedDistrict } from "@/lib/district-learning";
+import {
+  DISPATCH_DATE_CLEARED,
+  DISPATCH_DATE_SET,
+  DISPATCH_NEEDS_LOCATION_ERROR,
+  dispatchCoordinateInput,
+  dispatchCoordinateMissing,
+  dispatchDateError,
+  dispatchDateLabel,
+  dispatchLocationMissing,
+} from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
@@ -85,6 +112,13 @@ import {
 import { reprogramOutputReason } from "@/lib/gf-retry";
 import { cancelGuides, swaypOptsFromEnv } from "@/lib/swayp";
 import { env } from "@/lib/env";
+import { fetchChatbyConversation, forgetChatbyConversation, sendChatbyReply } from "@/lib/chatby-api";
+import {
+  CHATBY_REPLY_PAUSE_MINUTES,
+  chatbyReplyText,
+  chatbyReplyWindow,
+  type ChatbyConversation,
+} from "@/lib/chatby-conversation";
 import {
   decideLabelAction,
   labelCreatesOutput,
@@ -151,6 +185,22 @@ async function authorizeOrder(orderId: string): Promise<OrderContext | null> {
   return { userId: user.id, storeId: row.store_id, row };
 }
 
+/**
+ * ¿Puede quien pide cambiar A MANO el estado de este pedido? Owner o admin de
+ * la organización de su tienda (`master.set_status`, MOM §16, 15-10-2026).
+ *
+ * No la unión de `getMasterPermissions()`: con ella, ser admin en una empresa
+ * habilitaba el cambio en los pedidos de otra donde se es vendedora. La tienda
+ * se lee por RLS, como el pedido; si no se puede leer, no se concede.
+ */
+async function canSetStatusIn(ctx: OrderContext): Promise<boolean> {
+  const sb = await createServerSupabase();
+  const { data: store, error } = await sb.from("stores").select("org_id").eq("id", ctx.storeId).maybeSingle();
+  const orgId = (store as { org_id?: string | null } | null)?.org_id;
+  if (error || !orgId) return false;
+  return hasOrgPermission(orgId, "master.set_status");
+}
+
 /** Escribe un movimiento en la línea de tiempo. Nunca se puede borrar (0045). */
 async function recordEvent(
   admin: ReturnType<typeof createAdminSupabase>,
@@ -215,6 +265,87 @@ export async function loadOrderDetail(
     if (cause instanceof OrderMasterReadError) return { error: cause.message };
     throw cause;
   }
+}
+
+/**
+ * La conversación de WhatsApp de la clienta con el bot de Chatby (MOM §25,
+ * «Chatby», 26-10-2026): a pedido, al abrir esa pestaña de la ficha, y solo
+ * para leer. Solo quien ya puede leer el pedido (RLS, como la ficha); la clave
+ * de Chatby no sale del servidor y la conversación no se guarda en Kapta.
+ */
+export async function loadOrderChatby(orderId: string): Promise<ChatbyConversation> {
+  try {
+    const ctx = await authorizeOrder(orderId);
+    if (!ctx) return { status: "error", message: "Sin acceso a este pedido.", inboxUrl: null };
+    return await fetchChatbyConversation({ phone: ctx.row.customer_phone, apiKey: env.chatbyApiKey() });
+  } catch (cause) {
+    if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message, inboxUrl: null };
+    throw cause;
+  }
+}
+
+/**
+ * Responder a la clienta por Chatby desde la pestaña de la ficha (MOM §25,
+ * «Chatby», owner 02-11-2026): quien puede editar el pedido, solo texto, como
+ * persona del equipo, y solo dentro de las 24 h de WhatsApp desde el último
+ * mensaje de la clienta. El bot de esa clienta queda en pausa 60 minutos. El
+ * texto queda en la Actividad del pedido con quién lo mandó (Chatby no sabe
+ * quién es en Kapta).
+ */
+export async function sendOrderChatbyReply(orderId: string, rawText: string): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
+  const reply = chatbyReplyText(rawText);
+  if ("error" in reply) return { error: reply.error };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  // La conversación al día (no la del minuto de caché): a quién se le escribe
+  // y si la ventana de 24 h sigue abierta.
+  forgetChatbyConversation(ctx.row.customer_phone);
+  const conversation = await fetchChatbyConversation({ phone: ctx.row.customer_phone, apiKey: env.chatbyApiKey() });
+  if (conversation.status !== "ok") {
+    return {
+      error:
+        conversation.status === "error"
+          ? conversation.message
+          : conversation.status === "sin_clave"
+            ? "Chatby todavía no está conectado en Kapta."
+            : "Esta clienta no tiene conversación en Chatby.",
+    };
+  }
+  if (!chatbyReplyWindow(conversation.messages).open) {
+    return {
+      error:
+        "La clienta no escribió en las últimas 24 horas: WhatsApp no deja mandarle texto libre. Para escribirle, una plantilla desde Chatby.",
+    };
+  }
+
+  const sent = await sendChatbyReply({
+    userNs: conversation.userNs,
+    text: reply.text,
+    apiKey: env.chatbyApiKey(),
+    pauseMinutes: CHATBY_REPLY_PAUSE_MINUTES,
+  });
+  forgetChatbyConversation(ctx.row.customer_phone);
+  if (sent.status === "error") return { error: sent.message };
+
+  const admin = createAdminSupabase();
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "chatby_message",
+    source: "chatby",
+    note: reply.text,
+    payload: { paused_minutes: sent.paused ? CHATBY_REPLY_PAUSE_MINUTES : 0 },
+  });
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  const pause = sent.paused
+    ? `El bot queda en pausa ${CHATBY_REPLY_PAUSE_MINUTES} minutos para esta clienta.`
+    : "Chatby no confirmó la pausa del bot: puede seguir con sus mensajes.";
+  return eventError
+    ? { notice: `Mensaje enviado. ${pause} No se pudo anotar en la Actividad: ${eventError}` }
+    : { notice: `Mensaje enviado. ${pause}` };
 }
 
 /** Búsqueda global, para encontrar un pedido fuera de la pestaña activa. */
@@ -391,6 +522,8 @@ export async function createManualRouteOutput(
   if (dispatchDate < limaTodayKey()) return { error: "La fecha de salida no puede estar en el pasado." };
 
   const admin = createAdminSupabase();
+  const saleBlock = await legacySaleSendBlock(admin, orderId);
+  if (saleBlock) return { error: saleBlock };
   // Las salidas se leen ANTES del cierre a propósito: para saber si un pedido
   // cerrado merece otro intento hay que preguntarle a su guía POR QUÉ se cerró.
   const { data: existing, error: existingError } = await admin
@@ -1320,8 +1453,10 @@ export async function createManualRouteOutputsBulk(
 export interface BulkStatusResult extends MasterActionState {
   /** Pedidos que quedaron en el estado pedido. */
   applied: string[];
-  /** Los que no, con el motivo exacto de cada uno. */
+  /** Los que no, con el motivo exacto de cada uno (incluye los saltados). */
   failed: BulkRouteOutputFailure[];
+  /** Los que ni se intentaron: tienen una observación de cuadre abierta (§30.8). */
+  skipped?: string[];
 }
 
 /**
@@ -1339,6 +1474,13 @@ export interface BulkStatusResult extends MasterActionState {
  *
  * Si el estado falla, el comentario NO se escribe: un «PAGADO» sobre un pedido
  * que no cambió de estado es peor que no haber hecho nada, porque parece que sí.
+ *
+ * A ENTREGADO NO PASA UN PEDIDO CON OBSERVACIÓN DE CUADRE ABIERTA (MOM §30.8),
+ * la misma guarda que «Aplicar al Master» desde la hoja: el motorizado cobró
+ * distinto o la hoja contradice a Kapta, y quien liquida acepta el motivo
+ * antes. Esos pedidos se saltan, se cuentan en el aviso y salen en la lista de
+ * «con problemas» con el motivo; los demás de la tanda siguen. Si no se pueden
+ * leer las observaciones no se aplica nada: «no lo sé» no es «no hay».
  */
 export async function applyOrderStatusBulk(
   orderIds: string[],
@@ -1347,6 +1489,12 @@ export async function applyOrderStatusBulk(
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
     return { error: "Tu rol no permite modificar pedidos.", applied: [], failed: [] };
+  }
+  // Sin «Registrar estado a mano» en NINGUNA organización no se intenta ni un
+  // pedido. La unión solo sirve para cortar antes: quien decide pedido por
+  // pedido es `setOrderStatus`, contra la organización de cada uno.
+  if (!perms.can("master.set_status")) {
+    return { error: SET_STATUS_DENIED, applied: [], failed: [] };
   }
   if (!isGeneralStatus(input.general)) {
     return { error: "Estado general inválido.", applied: [], failed: [] };
@@ -1366,10 +1514,44 @@ export async function applyOrderStatusBulk(
     };
   }
 
+  let skipped: BulkRouteOutputFailure[] = [];
+  if (input.general === "entregado") {
+    // Solo los pedidos que quien pide puede ver (RLS): de los demás no se dice
+    // nada, y `setOrderStatus` responderá «Sin acceso» como siempre.
+    const sb = await createServerSupabase();
+    const { data: visible, error: visibleError } = await sb
+      .from("order_master")
+      .select("order_id")
+      .in("order_id", unique);
+    if (visibleError) {
+      return { error: `No se pudieron leer los pedidos (${visibleError.message}). Vuelve a intentarlo.`, applied: [], failed: [] };
+    }
+    const visibleIds = ((visible ?? []) as { order_id: string }[]).map((row) => row.order_id);
+    const withOpen = new Set<string>();
+    if (visibleIds.length) {
+      const { data: open, error: openError } = await createAdminSupabase()
+        .from("sheet_observations")
+        .select("order_id")
+        .eq("status", "abierta")
+        .in("order_id", visibleIds);
+      if (openError) {
+        return {
+          error: `No se pudieron leer las observaciones de cuadre (${openError.message}). No se aplicó nada; vuelve a intentarlo.`,
+          applied: [],
+          failed: [],
+        };
+      }
+      for (const row of (open ?? []) as { order_id: string | null }[]) if (row.order_id) withOpen.add(row.order_id);
+    }
+    skipped = bulkDeliveredSkips(input.general, unique, withOpen);
+  }
+  const skippedIds = new Set(skipped.map((skip) => skip.orderId));
+
   const applied: string[] = [];
   const failed: BulkRouteOutputFailure[] = [];
 
   for (const orderId of unique) {
+    if (skippedIds.has(orderId)) continue;
     try {
       const status = await setOrderStatus(orderId, {
         general: input.general,
@@ -1396,11 +1578,17 @@ export async function applyOrderStatusBulk(
   revalidatePath(MASTER_PATH);
   return {
     applied,
-    failed,
+    // Los saltados primero: es lo que hay que ir a resolver a Liquidaciones 2.
+    failed: [...skipped, ...failed],
+    skipped: skipped.map((skip) => skip.orderId),
     notice: applied.length
-      ? `${applied.length} pedido${applied.length === 1 ? "" : "s"} actualizado${applied.length === 1 ? "" : "s"}.${failed.length ? ` ${failed.length} con problemas.` : ""}`
+      ? bulkStatusNotice({ applied: applied.length, skipped: skipped.length, failed: failed.length })
       : undefined,
-    error: applied.length ? undefined : "Ningún pedido pudo actualizarse.",
+    error: applied.length
+      ? undefined
+      : skipped.length && !failed.length
+        ? bulkAllSkippedError(skipped.length)
+        : "Ningún pedido pudo actualizarse.",
   };
 }
 
@@ -1412,8 +1600,15 @@ export async function applyOrderStatusBulk(
  * Registra el estado de un pedido. Es un override manual: congela el estado
  * frente al recálculo automático hasta que alguien lo vuelva a mover a mano.
  *
- * Cambiar un pedido ya cerrado (entregado, anulado o devuelto) exige el permiso
- * `master.override_status` y un motivo obligatorio — §4: "los cambios
+ * Lo hacen solo owner y admin (`master.set_status`): decisión del dueño del
+ * 15-10-2026, «solo quienes tienen acceso de Admin pueden realizar esa acción»
+ * (MOM §16). Se pregunta en la organización DE ESTE PEDIDO —ser admin en una
+ * empresa no da mando sobre los pedidos de otra donde se es vendedora— y antes
+ * de leer o escribir nada más. `master.edit` sigue haciendo falta, y comentar,
+ * devolver o corregir vínculos se queda en él.
+ *
+ * Cambiar un pedido ya cerrado (entregado, anulado o devuelto) exige además el
+ * permiso `master.override_status` y un motivo obligatorio — §4: "los cambios
  * posteriores sobre un pedido entregado deberán requerir una modificación
  * manual y deberán quedar registrados en el historial".
  */
@@ -1437,6 +1632,7 @@ export async function setOrderStatus(
   }
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  if (!(await canSetStatusIn(ctx))) return { error: SET_STATUS_DENIED };
 
   const target: GeneralStatus = input.general;
   const reason = input.reason?.trim() ?? "";
@@ -1651,6 +1847,10 @@ export async function registerConfirmationAttempt(
     channel: string;
     note?: string;
     nextContactOn?: string;
+    /** «Programar envío» en vivo (MOM §6.2): solo con «Confirmó el pedido». */
+    dispatchOn?: string;
+    /** Provincia COD sin coordenada: la que se pegó al programar (02-11-2026). */
+    coordinate?: string;
     operationId?: string;
   },
 ): Promise<MasterActionState> {
@@ -1678,8 +1878,29 @@ export async function registerConfirmationAttempt(
   const note = input.note?.trim() ?? "";
   if (note.length > 2000) return { error: "La nota es demasiado larga (máx. 2000)." };
 
+  // La fecha de envío acordada en la llamada. Se valida antes de registrar el
+  // intento: un error después dejaría la confirmación sin su fecha.
+  const dispatchOn = result.confirms ? input.dispatchOn?.trim() ?? "" : "";
+  if (dispatchOn) {
+    const dateError = dispatchDateError(dispatchOn, limaTodayKey());
+    if (dateError) return { error: `Fecha de envío: ${dateError}` };
+  }
+
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  // Confirmar sin ubicación sí se puede (la clienta da la dirección después);
+  // programar la salida no (MOM §6.2, #KP142558). Se rechaza antes de
+  // registrar el intento, como la fecha inválida: si no, la confirmación
+  // quedaría registrada y la fecha perdida a medias.
+  if (dispatchOn && dispatchLocationMissing(ctx.row)) {
+    return { error: `${DISPATCH_NEEDS_LOCATION_ERROR} Puedes confirmar dejando «Sale el» vacío.` };
+  }
+  // Provincia COD: sin coordenada, ese día Aliclik no crea la guía. Se guarda
+  // antes del intento: una coordenada guardada no estorba si el intento falla.
+  if (dispatchOn) {
+    const coordinateError = await ensureDispatchCoordinate(ctx, input.coordinate);
+    if (coordinateError) return { error: `${coordinateError} Puedes confirmar dejando «Sale el» vacío.` };
+  }
 
   const admin = createAdminSupabase();
   const occurredAt = new Date().toISOString();
@@ -1705,14 +1926,30 @@ export async function registerConfirmationAttempt(
   });
   if (error) return { error: `No se pudo registrar el intento: ${error.message}` };
 
-  await recomputeOrderMasterSafe(admin, [orderId]);
-  revalidatePath(MASTER_PATH);
-
   const response = (data ?? {}) as {
     duplicate?: boolean;
     day_count?: number;
     last_attempt?: boolean;
   };
+
+  // Programado en vivo: el mismo actor, justo después de la confirmación. Un
+  // reintento de la misma operación (`duplicate`) no lo repite.
+  let scheduledNotice = "";
+  if (dispatchOn && !response.duplicate) {
+    const scheduleError = await recordEvent(admin, ctx, {
+      kind: DISPATCH_DATE_SET,
+      occurredAt: new Date(Date.parse(occurredAt) + 1).toISOString(),
+      // La nota del intento es lo que dijo el cliente, no una nota del envío.
+      reason: `Envío programado para el ${dispatchDateLabel(dispatchOn)}, acordado al confirmar.`,
+      payload: { date: dispatchOn, at_confirmation: true },
+    });
+    scheduledNotice = scheduleError
+      ? ` No se pudo guardar la fecha de envío (${scheduleError}): prográmala desde la ficha.`
+      : ` Envío programado para el ${dispatchDateLabel(dispatchOn)}.`;
+  }
+
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
   const days = Number(response.day_count ?? 0);
   if (result.confirms) {
     // Agencia no queda confirmada por la palabra del cliente: el pedido sigue en
@@ -1723,14 +1960,18 @@ export async function registerConfirmationAttempt(
       ctx.row.payment_state,
     );
     return {
-      notice: paymentReady
-        ? "Pedido confirmado; pasa a Preparación."
-        : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.",
+      notice:
+        (paymentReady
+          ? "Pedido confirmado; pasa a Preparación."
+          : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.") + scheduledNotice,
     };
   }
   if (days >= CONFIRMATION_MAX_DAYS) {
+    // La anulación se hace a mano en la tienda del pedido (MOM §38.12): junto
+    // al botón «Revisar en WooCommerce» no puede decir «en Shopify».
+    const platform = await orderPlatformOf(admin, orderId);
     return {
-      notice: `Día ${days} de ${CONFIRMATION_MAX_DAYS}: se creó la tarea para revisar y anular manualmente en Shopify.`,
+      notice: `Día ${days} de ${CONFIRMATION_MAX_DAYS}: se creó la tarea para revisar y anular manualmente en ${orderPlatformName(platform)}.`,
     };
   }
   return {
@@ -1741,13 +1982,53 @@ export async function registerConfirmationAttempt(
 }
 
 /**
+ * Provincia COD: la coordenada que pide programar (MOM §6.2, 02-11-2026). Si
+ * el pedido no la tiene, la pegada al programar se valida y se guarda en
+ * `order_geo_overrides` —donde la deja «Corregir ubicación» y la lee el panel
+ * de Aliclik—, sin tocar lo demás que ese registro tuviera. Devuelve el error
+ * a mostrar, o null (también cuando no hacía falta).
+ */
+async function ensureDispatchCoordinate(ctx: OrderContext, raw: string | null | undefined): Promise<string | null> {
+  if (!dispatchCoordinateMissing(ctx.row, classifyOperation(ctx.row))) return null;
+  const parsed = dispatchCoordinateInput(raw);
+  if (!parsed.ok) return parsed.error;
+  const { lat, lng } = parsed.coordinate;
+  const admin = createAdminSupabase();
+  const { data: existing, error: readError } = await admin
+    .from("order_geo_overrides")
+    .select("region,province,district,address,reference,note")
+    .eq("order_id", ctx.row.order_id)
+    .maybeSingle();
+  if (readError) return `No se pudo guardar la ubicación: ${readError.message}`;
+  const { error } = await admin.from("order_geo_overrides").upsert(
+    {
+      ...((existing as Record<string, string | null> | null) ?? {}),
+      order_id: ctx.row.order_id,
+      store_id: ctx.storeId,
+      latitude: lat,
+      longitude: lng,
+      updated_by: ctx.userId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "order_id" },
+  );
+  if (error) return `No se pudo guardar la ubicación: ${error.message}`;
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "comment",
+    commentType: "ubicacion",
+    note: `Ubicación guardada al programar el envío. coordenadas: ${lat}, ${lng}`,
+  });
+  return eventError;
+}
+
+/**
  * «Programar envío» (MOM §6.2, 15-10-2026): la fecha acordada para despachar
  * un pedido confirmado que todavía no tiene guía. Queda en el historial con
  * quien lo programó y la nota; programar otra vez cambia la fecha.
  */
 export async function scheduleOrderDispatch(
   orderId: string,
-  input: { date: string; note?: string | null },
+  input: { date: string; note?: string | null; coordinate?: string | null },
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { error: "Tu rol no permite programar envíos." };
@@ -1762,6 +2043,11 @@ export async function scheduleOrderDispatch(
   if (ctx.row.macro_stage !== "preparacion" || ctx.row.macro_substage !== "por_generar_rotulo") {
     return { error: "Solo se programa un envío que todavía no tiene guía (Preparación · Por generar rótulo)." };
   }
+  // Sin región, distrito o dirección no hay a dónde despacharlo (#KP142558).
+  if (dispatchLocationMissing(ctx.row)) return { error: DISPATCH_NEEDS_LOCATION_ERROR };
+  // Provincia COD: la coordenada para la guía Aliclik de ese día.
+  const coordinateError = await ensureDispatchCoordinate(ctx, input.coordinate);
+  if (coordinateError) return { error: coordinateError };
 
   const admin = createAdminSupabase();
   const eventError = await recordEvent(admin, ctx, {
@@ -1971,6 +2257,91 @@ function workflowIsOpen(
 }
 
 /**
+ * La parada vigente de cada salida propia, con el estado de su ruta: lo que
+ * necesita `gfOpenRouteBlock`. Elige la parada con la misma regla que la ficha
+ * (`loadGfDeliveries`, lib/orders-master-access.ts): las del cuaderno sin
+ * `shipment_id` se cuelgan de la salida propia más reciente y gana la última
+ * reportada (`pickLatestStop`). Si no se puede leer devuelve vacío: el cierre
+ * sigue bloqueado y solo se pierde la explicación precisa.
+ */
+async function loadClosureGfDeliveries(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  shipments: readonly { id: string; courier: string | null }[],
+): Promise<ClosureGfDelivery[]> {
+  const own = shipments.filter((shipment) => courierKey(shipment.courier) === "propio");
+  if (!own.length) return [];
+  const { data, error } = await admin
+    .from("delivery_stops")
+    .select("id,route_id,shipment_id,status,reported_at,delivery_routes(route_date,status)")
+    .eq("order_id", orderId);
+  if (error) {
+    console.error("[closure] paradas de Grupo GF", orderId, error.message);
+    return [];
+  }
+  type Row = {
+    id: string;
+    route_id: string | null;
+    shipment_id: string | null;
+    status: string;
+    reported_at: string | null;
+    delivery_routes: { route_date: string | null; status: string | null } | { route_date: string | null; status: string | null }[] | null;
+  };
+  const toStop = (row: Row): GfStop & { routeId: string | null } => {
+    const route = Array.isArray(row.delivery_routes) ? row.delivery_routes[0] ?? null : row.delivery_routes;
+    return {
+      id: row.id,
+      status: row.status as GfStop["status"],
+      outcomeReason: null,
+      note: null,
+      reportedAt: row.reported_at,
+      paymentMethod: null,
+      collectedAmount: null,
+      photoPath: null,
+      voucherPath: null,
+      pickupConfirmed: null,
+      routeDate: route?.route_date ?? null,
+      routeStatus: route?.status ?? null,
+      riderName: null,
+      seq: null,
+      routeId: row.route_id,
+    };
+  };
+  const rows = (data ?? []) as unknown as Row[];
+  const ownIds = new Set(own.map((shipment) => shipment.id));
+  const orphans = rows.filter((row) => !row.shipment_id || !ownIds.has(row.shipment_id)).map(toStop);
+  const latestId = own[own.length - 1]!.id;
+  return own.map((shipment) => {
+    const mine = rows.filter((row) => row.shipment_id === shipment.id).map(toStop);
+    const stop = pickLatestStop(shipment.id === latestId ? [...mine, ...orphans] : mine) as (GfStop & { routeId: string | null }) | null;
+    return {
+      shipmentId: shipment.id,
+      stop: stop ? { status: stop.status, routeStatus: stop.routeStatus, routeId: stop.routeId } : null,
+    };
+  });
+}
+
+/**
+ * ¿Está anulado en Shopify? Lo mismo que lee la puerta a «entregado»
+ * (`orders.cancelled_at`, lib/master-door.ts), que es lo que decide si cerrar
+ * la ruta lo marca entregado. Solo elige el texto del bloqueo: Finalizar se
+ * niega igual. Si no se puede leer, el estado del Master como respaldo
+ * (`anulado`), sabiendo que también cubre anulados solo en Kapta.
+ */
+async function loadShopifyCancelled(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  generalStatus: string | null,
+): Promise<boolean> {
+  const { data, error } = await admin.from("orders").select("cancelled_at").eq("id", orderId).maybeSingle();
+  if (error) {
+    console.error("[closure] anulación en Shopify", orderId, error.message);
+    return generalStatus === "anulado";
+  }
+  return Boolean((data as { cancelled_at: string | null } | null)?.cancelled_at);
+}
+
+/**
  * Registra un hecho de cierre sin sobrescribir el pasado. Las acciones sensibles
  * se autorizan por dimensión y las precondiciones se vuelven a validar en el
  * servidor; ocultar un botón en el navegador nunca es la única protección.
@@ -2019,7 +2390,10 @@ export async function registerClosureAction(
     admin
       .from("shipments")
       .select("id,courier,guide_code,delivery_status,custody_state,returned_at")
-      .eq("order_id", orderId),
+      .eq("order_id", orderId)
+      // La más reciente al final: a ella se cuelgan las paradas del cuaderno
+      // sin salida, como en la ficha (`loadClosureGfDeliveries`).
+      .order("created_at", { ascending: true }),
     admin
       .from("order_events")
       .select("kind,occurred_at,shipment_id")
@@ -2111,8 +2485,29 @@ export async function registerClosureAction(
   if (["liquidation_observe", "liquidation_close"].includes(action) && ctx.row.general_status !== "entregado") {
     return { error: "Solo se puede conciliar una liquidación cuando la entrega ya está confirmada." };
   }
-  if (action === "liquidation_close" && ctx.row.logistics_cost == null) {
-    return { error: "Falta el costo logístico. Regístralo en Costos antes de cerrar la liquidación." };
+  // FALTA NO ES CERO (MOM §14, §29.8). Se decide sobre el costo recalculado
+  // AHORA: el de la fila pudo escribirse antes de cargar la tarifa (subir una
+  // tarifa no recalcula pedidos) o cuando el Master aún guardaba S/ 0 por una
+  // tarifa ausente. Así quien acaba de cargarla concilia sin esperar a nadie, y
+  // nadie concilia con un flete cero que nadie configuró.
+  if (action === "liquidation_close") {
+    let fresh: Awaited<ReturnType<typeof freshLogisticsCost>>;
+    try {
+      fresh = await freshLogisticsCost(admin, orderId);
+    } catch (cause) {
+      return {
+        error: `No se pudo recalcular el costo logístico (${cause instanceof Error ? cause.message : String(cause)}). Vuelve a intentarlo.`,
+      };
+    }
+    // Sin recálculo, la fila guardada con la misma regla del courier y del día
+    // que la Mesa. Quien no administra Costos —o, para Grupo GF, su Tarifario—
+    // no puede cargar la tarifa: se le dice a quién pedírsela.
+    const costBlock = liquidationCostBlock({
+      ...(fresh ?? logisticsCostFactsFromRow(ctx.row)),
+      canManageCosts: perms.can("costs.manage"),
+      canManageLogistics: perms.can("logistics.manage"),
+    });
+    if (costBlock) return { error: costBlock };
   }
   if (action === "indemnity_request") {
     if (selectedShipment?.courier?.toLowerCase() !== "aliclik") {
@@ -2157,12 +2552,21 @@ export async function registerClosureAction(
     return { error: "Solo se reabre un pedido que ya está Finalizado." };
   }
   if (action === "finalize") {
-    const active = shipmentRows.filter(
-      (shipment) =>
-        shipment.custody_state !== "devuelto" &&
-        ["pendiente", "en_ruta", "por_preparar"].includes(shipment.delivery_status),
-    );
-    if (active.length) return { error: "Todavía existen salidas activas. Cancélalas o recibe su retorno antes de finalizar." };
+    if (activeOutputs(shipmentRows).length) {
+      // La salida de Grupo GF entregada en una ruta abierta no se finaliza: la
+      // cierra la ruta, que escribe la entrega y manda el pedido a liquidación
+      // (MOM §29.13). Decirlo evita buscar una salida que «cancelar». Si está
+      // anulado en Shopify, cerrar la ruta no lo marca entregado (§11.4): el
+      // texto lo dice en vez de prometerlo.
+      const [deliveries, cancelledInShopify] = await Promise.all([
+        loadClosureGfDeliveries(admin, orderId, shipmentRows),
+        loadShopifyCancelled(admin, orderId, ctx.row.general_status),
+      ]);
+      const commercialBlock = await legacySaleSendBlock(admin, orderId);
+      if (commercialBlock) return { error: `${commercialBlock} Resuelve las salidas, retornos y liquidaciones por sus flujos antes de finalizar.` };
+      const gfBlock = gfOpenRouteBlock(shipmentRows, deliveries, { cancelledInShopify });
+      return { error: gfBlock ? gfOpenRouteError(gfBlock) : ACTIVE_OUTPUTS_ERROR };
+    }
     const blockers = (ctx.row.macro_reasons ?? []).filter(
       (reason) => reason !== "validacion_cierre_pendiente",
     );
@@ -2217,6 +2621,11 @@ export async function registerClosureAction(
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
+  if (action === "inventory_restock") {
+    const stock = await processWooSaleReturn(admin,orderId);
+    if (stock.state === "synced") return { notice: "Inventario registrado. WooCommerce confirmó la cancelación tras el retorno." };
+    if (stock.state === "pending") return { notice: "Inventario registrado. El stock sigue pendiente en WooCommerce; revisa Actividad. Se volverá a intentar." };
+  }
   return { notice: "Acción de cierre registrada. El expediente fue recalculado." };
 }
 
@@ -2360,10 +2769,26 @@ export async function updateOrderGeo(
   // Si el equipo arregló la provincia de un distrito, se aprende para los
   // siguientes pedidos de ese distrito: el ubigeo del INEI no siempre está
   // cargado y esta es la forma barata de irlo completando con datos reales.
+  //
+  // CON GUARDA (25-10-2026): la tabla va por nombre y los nombres se repiten.
+  // Recordar «Miraflores → Arequipa» de un pedido de Arequipa dejó cuatro días
+  // los de Miraflores de Lima con provincia «arequipa». Nunca se recuerda un
+  // departamento que no se reconoce, una provincia que no es de él ni un
+  // distrito que ya está en OTRO departamento (`districtLearnVerdict`); la
+  // corrección de ESTE pedido vale igual.
   let learned = false;
+  let notLearned: string | null = null;
   if (input.rememberDistrict && patch.district && patch.province) {
     const key = normalizeDistrict(patch.district);
-    if (key) {
+    const { data: existing } = key
+      ? await admin.from("peru_districts").select("province,department").eq("district_key", key).maybeSingle()
+      : { data: null };
+    const verdict = districtLearnVerdict(
+      { district: patch.district, province: patch.province, department: patch.region },
+      (existing as LearnedDistrict | null) ?? null,
+    );
+    if (!verdict.ok) notLearned = verdict.reason;
+    if (key && verdict.ok) {
       const { error: geoError } = await admin.from("peru_districts").upsert(
         {
           district_key: key,
@@ -2412,6 +2837,7 @@ export async function updateOrderGeo(
       learned
         ? "Ubicación corregida. La provincia queda recordada para los próximos pedidos de ese distrito."
         : "Ubicación corregida.",
+      notLearned,
       moved ? `Cobertura: ${coverageLabel(moved.from)} → ${coverageLabel(moved.to)}.` : null,
       coverage.error,
     ]

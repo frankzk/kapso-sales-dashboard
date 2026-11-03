@@ -98,3 +98,32 @@ export function orderPaymentPanelPresentation(
     mode: paymentRequired ? "required" : "optional",
   };
 }
+
+/**
+ * ¿Lleva la tarjeta de Cobro de un pedido PAGADO POR WEB el bloque «DNI y
+ * agencia Shalom»? (MOM §Pagos, decidido el 26-10-2026 con #KP200104.)
+ *
+ * En un pedido con saldo ese bloque es el paso 1 de «Registrar un pago». En uno
+ * pagado en el checkout no hay pago que registrar y el bloque desaparecía con
+ * él: el DNI y la agencia solo se podían escribir en el modal de la guía, que
+ * los pide y crea la guía en el mismo acto. Prepararlos antes —sin generar guía
+ * ni rótulo— es justo para lo que existe el borrador (`shalom_order_drafts`),
+ * pague o no el cliente por adelantado.
+ *
+ * Solo se ofrece donde Shalom puede ser el destino: la salida ya es Shalom o
+ * agencia, la operación es Agencia, o el plan de rutas ofrece Shalom (Provincia
+ * COD también lo ofrece: #KP200104 es Provincia COD). En Lima sería ruido.
+ */
+export function offersShalomDestination(input: {
+  operation: OperationKind;
+  currentCourier: string | null;
+  shippingMode: string | null;
+  /** El plan de rutas ofrece Shalom (esté o no frenada ahora la ruta). */
+  shalomCandidate: boolean;
+}): boolean {
+  return (
+    usesPickupKeyFlow(input.currentCourier, input.shippingMode) ||
+    input.operation === "agencia" ||
+    input.shalomCandidate
+  );
+}

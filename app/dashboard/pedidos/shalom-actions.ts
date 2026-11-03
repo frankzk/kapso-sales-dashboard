@@ -313,7 +313,9 @@ export async function loadShalomDraft(
 
   if (prefilled?.document) {
     warnings.push(
-      `El documento y la agencia venían apuntados desde el registro del pago (${prefilled.document}${prefilled.destiny_terminal_name ? ` · ${prefilled.destiny_terminal_name}` : ""}). Verifícalos antes de crear.`,
+      // Ya no solo desde el registro del pago: en un pedido pagado por web se
+      // apuntan en «DNI y agencia Shalom» de la tarjeta de Cobro.
+      `El documento y la agencia venían apuntados en «DNI y agencia Shalom» (${prefilled.document}${prefilled.destiny_terminal_name ? ` · ${prefilled.destiny_terminal_name}` : ""}). Verifícalos antes de crear.`,
     );
   }
 

@@ -1,3 +1,4 @@
+import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
 // El «Tablero de hoy» de Leads (opción K, Frankz 15-10-2026):
 //
 //   • el equipo de hoy como ranking: pedidos, la diferencia contra ayer a esta
@@ -77,7 +78,8 @@ async function drainSinLlamar(sb: Sb, storeIds: StoreScope, tz: string): Promise
       .select("last_interaction_at, first_seen_at")
       .in("store_id", storeIds)
       .in("category", ["open", "hot"])
-      .eq("status", "nuevo")
+      .is("contact_opt_out_at", null)
+      .or(CALL_QUEUE_FILTER)
       .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
     if (error) break;

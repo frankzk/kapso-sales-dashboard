@@ -6,6 +6,8 @@ import type { TandersOrderPayload, TandersPackageType } from "./types";
 import { isLimaMetropolitanaOrCallao, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { expectedCollectAmount } from "@/lib/order-paid";
 import type { PaymentGateway } from "@/lib/payment-gateway";
+import type { LabelLineItem } from "@/lib/labels/line-items";
+import { primaryYape, type PaymentMethod } from "@/lib/payment-methods";
 
 /**
  * Caja y peso por defecto. La operación despacha siempre XXS con 100 g
@@ -194,12 +196,75 @@ export function buildTandersPayload(input: TandersDraftInput): TandersDraftResul
  *
  * Si una repite a la otra se manda una sola vez: en las guías la nota se lee de
  * un vistazo y el texto duplicado hace perder el dato que importa.
+ *
+ * Debajo, el pedido y lo que lleva, y aparte los datos de cobro (25-10-2026):
+ *
+ *   Entre av el parral y Av carabayllo
+ *   #KP143912
+ *   X3 Magnesio 12 en 1 Complex – … – SuperHuman™
+ *
+ *   Datos de cobro:
+ *   • Yape: 930555309
+ *   • BCP Cta: 1912434540012
+ *
+ * Es el formato que el equipo tecleaba a mano en cada guía; ahora llega
+ * precargado y el operador solo lo corrige si hace falta.
  */
 export function composeTandersNote(input: {
   reference: string | null | undefined;
   shopifyNote: string | null | undefined;
+  /** «#KP143912». Lo que el almacén y Tanders buscan para cruzar la caja. */
+  orderName?: string | null;
+  items?: readonly LabelLineItem[];
+  /** Cuentas de la tienda. Solo se pasan si la guía cobra: pagado no las lleva. */
+  paymentMethods?: readonly PaymentMethod[] | null;
 }): string {
-  const parts = [input.reference, input.shopifyNote]
+  const head = composeReferenceNote(input.reference, isKapsoAutoNote(input.shopifyNote) ? null : input.shopifyNote);
+  const order = [input.orderName?.trim() ?? "", ...(input.items ?? []).map(tandersItemLine)].filter(Boolean);
+  const payment = tandersPaymentBlock(input.paymentMethods ?? []);
+  // El bloque de cobro va separado por una línea en blanco, como en los rótulos
+  // que el equipo escribía a mano: se lee aparte de lo que va en la caja.
+  return [[head, ...order].filter(Boolean).join("\n"), payment].filter(Boolean).join("\n\n");
+}
+
+/**
+ * La nota que escribe Kapso al crear el pedido por WhatsApp («Pedido
+ * WhatsApp/Kapso · Contraentrega…», «Pedido creado desde WhatsApp/Kapso.») es
+ * un resumen automático: productos, contacto, dirección y referencia, todo lo
+ * que la guía ya lleva en sus propios campos. En la guía solo duplicaba, y el
+ * equipo la borraba a mano cada vez (#KP143995, 25-10-2026).
+ */
+export function isKapsoAutoNote(note: string | null | undefined): boolean {
+  return /^\s*Pedido (creado desde )?WhatsApp\/Kapso\b/i.test(note ?? "");
+}
+
+/** «X3 Magnesio 12 en 1 Complex…», con la variante si el producto la tiene. */
+function tandersItemLine(item: LabelLineItem): string {
+  return `X${item.quantity} ${item.name}${item.variant ? ` (${item.variant})` : ""}`;
+}
+
+/**
+ * «Datos de cobro»: el Yape principal y la primera cuenta bancaria activa de
+ * Ajustes → Cuentas de cobro, en dígitos corridos para que el cliente los
+ * teclee tal cual. Salen de la configuración de la tienda, no del código: si
+ * cambia la cuenta, cambia la guía sin desplegar.
+ */
+export function tandersPaymentBlock(methods: readonly PaymentMethod[]): string {
+  const digits = (s: string) => s.replace(/\D+/g, "");
+  const yape = primaryYape(methods);
+  const bank = methods
+    .filter((m) => m.active && m.kind === "banco")
+    .slice()
+    .sort((a, b) => a.sort - b.sort)[0];
+  const lines = [
+    yape ? `• Yape: ${digits(yape.account)}` : "",
+    bank ? `• ${bank.label} Cta: ${digits(bank.account)}` : "",
+  ].filter(Boolean);
+  return lines.length ? ["Datos de cobro:", ...lines].join("\n") : "";
+}
+
+function composeReferenceNote(reference: string | null | undefined, shopifyNote: string | null | undefined): string {
+  const parts = [reference, shopifyNote]
     .map((p) => (p ?? "").trim())
     .filter(Boolean);
 

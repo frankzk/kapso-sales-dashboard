@@ -17,7 +17,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { applyDeliveriesToMaster, type MasterDoorItem } from "@/lib/master-door";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
-import { fillUrpiSalidas, type UrpiSalidaResult } from "@/lib/urpi-salida";
+import { cancelUrpiSalidas, fillUrpiSalidas, type UrpiCancelResult, type UrpiSalidaResult } from "@/lib/urpi-salida";
 import type { UrpiResultCode } from "@/lib/urpi-report";
 
 /** Lo que muestra la pantalla y lo que se marca solo: los últimos 60 días. */
@@ -88,13 +88,24 @@ export async function applyUrpiDeliveriesFor(admin: SupabaseClient, input: {
     });
   }
   let applied: string[] = [];
+  const cancelledAtDoor = new Set<string>();
   if (items.length) {
     const door = await applyDeliveriesToMaster(admin, items);
     if (door.error) throw new Error(`No se pudo registrar la entrega: ${door.error}`);
     applied = door.applied;
+    // Anulado en Shopify entre la lectura de arriba y la puerta: la puerta lo
+    // salta (MOM §11.4), se cuenta con los anulados que no se tocaron y su
+    // salida tampoco se rellena.
+    for (const r of door.rejected) if (r.code === "anulado_en_shopify") cancelledAtDoor.add(r.orderId);
+    observed += cancelledAtDoor.size;
   }
-  const salidas = await fillUrpiSalidas(admin, delivered.map((id) => ({ orderId: id, orderName: facts.get(id)!.order_name, dispatchedOn: firstDate.get(id) ?? null })));
-  if (salidas.filled.length) await recomputeOrderMasterSafe(admin, salidas.filled);
+  // La salida se cierra el mismo día que la entrega del Master: el de la fila
+  // más reciente (`latest`), la «Entregado» de arriba (MOM §30.11).
+  const salidas = await fillUrpiSalidas(admin, delivered.filter((id) => !cancelledAtDoor.has(id)).map((id) => ({
+    orderId: id, orderName: facts.get(id)!.order_name, dispatchedOn: firstDate.get(id) ?? null, deliveredOn: latest.get(id)!.report_date,
+  })));
+  const touched = [...salidas.filled, ...salidas.closed];
+  if (touched.length) await recomputeOrderMasterSafe(admin, touched);
   return { applied, already, observed, notDelivered, salidas };
 }
 
@@ -116,16 +127,86 @@ export async function urpiDeliveredOrderIds(admin: SupabaseClient, orgId: string
   return [...ids];
 }
 
+const CLOSED_STATUSES = new Set(["entregado", "anulado", "devuelto"]);
+
+/**
+ * Los cancelados de Urpi (decisión del owner, 03-11-2026; MOM §30.11). De los
+ * pedidos de `orderIds`, los que tienen su ÚLTIMO intento «Cancelado» y Kapta
+ * tiene abiertos —ni entregados, ni anulados, ni devueltos, ni anulados en
+ * Shopify— anulan su salida de Urpi en ruta como intento fallido
+ * (lib/urpi-salida.ts) y el pedido pasa a «En curso · Por reprogramar Lima» (§9,
+ * v1.23). Sin salida de Urpi no hay nada que anular: el cancelado solo se lista.
+ * Es lo que dice el courier, como un barrido de estados: no pide `master.edit`.
+ * `visibleStoreIds` nulo = sin filtro (lo llama el registro del despacho).
+ */
+export async function applyUrpiCancellationsFor(admin: SupabaseClient, input: {
+  orgId?: string; visibleStoreIds: ReadonlySet<string> | null; orderIds: readonly string[];
+}): Promise<UrpiCancelResult> {
+  const ids = [...new Set(input.orderIds)];
+  type Row = { urpi_row: number; order_id: string; result_code: UrpiResultCode; report_date: string | null; reason: string | null };
+  const latest = new Map<string, Row>();
+  for (let i = 0; i < ids.length; i += 200) {
+    let query = admin.from("urpi_report_rows").select("urpi_row,order_id,result_code,report_date,reason:data->>reason").in("order_id", ids.slice(i, i + 200));
+    if (input.orgId) query = query.eq("org_id", input.orgId);
+    const { data, error } = await query;
+    if (error) throw new Error("No se pudieron leer los resultados de Urpi.");
+    for (const row of (data ?? []) as Row[]) if ((latest.get(row.order_id)?.urpi_row ?? 0) < row.urpi_row) latest.set(row.order_id, row);
+  }
+  const candidates = ids.filter((id) => latest.get(id)?.result_code === "cancelado" && latest.get(id)?.report_date);
+  if (!candidates.length) return { cancelled: [], errors: [] };
+  type Fact = { order_id: string; store_id: string; general_status: string; orders: { cancelled_at: string | null } | null };
+  const open = new Set<string>();
+  for (let i = 0; i < candidates.length; i += 200) {
+    const { data, error } = await admin.from("order_master").select("order_id,store_id,general_status,orders(cancelled_at)").in("order_id", candidates.slice(i, i + 200));
+    if (error) throw new Error("No se pudo leer el estado de los pedidos.");
+    for (const fact of (data ?? []) as unknown as Fact[]) {
+      if (input.visibleStoreIds && !input.visibleStoreIds.has(fact.store_id)) continue;
+      if (CLOSED_STATUSES.has(fact.general_status) || fact.orders?.cancelled_at) continue;
+      open.add(fact.order_id);
+    }
+  }
+  const result = await cancelUrpiSalidas(admin, candidates.filter((id) => open.has(id)).map((id) => ({
+    orderId: id, cancelledOn: latest.get(id)!.report_date!, reason: latest.get(id)!.reason?.trim() || null,
+  })));
+  if (result.cancelled.length) await recomputeOrderMasterSafe(admin, result.cancelled);
+  return result;
+}
+
+/** Los pedidos con algún intento «Cancelado» de los últimos 60 días: lo que se
+ *  revisa al cargar el reporte. `applyUrpiCancellationsFor` decide con el
+ *  ÚLTIMO intento de cada uno. */
+export async function urpiCancelledOrderIds(admin: SupabaseClient, orgId: string, now = new Date()): Promise<string[]> {
+  const cutoff = new Date(now.getTime() - URPI_RESULTS_DAYS * 86400000).toISOString().slice(0, 10);
+  const ids = new Set<string>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin.from("urpi_report_rows").select("order_id")
+      .eq("org_id", orgId).eq("result_code", "cancelado").gte("report_date", cutoff).order("urpi_row").range(from, from + 999);
+    if (error) throw new Error("No se pudieron leer los cancelados de Urpi.");
+    for (const row of (data ?? []) as { order_id: string | null }[]) if (row.order_id) ids.add(row.order_id);
+    if ((data ?? []).length < 1000) break;
+  }
+  return [...ids];
+}
+
+/** El resumen de los cancelados: solo lo que cambió. PURA. */
+export function urpiCancelMessage(result: UrpiCancelResult): string {
+  const parts: string[] = [];
+  if (result.cancelled.length) parts.push(`${result.cancelled.length} pedido(s) pasaron a «Por reprogramar Lima»`);
+  if (result.errors.length) parts.push(`${result.errors.length} salida(s) no se pudieron actualizar`);
+  return parts.length ? `Cancelados por Urpi: ${parts.join("; ")}.` : "";
+}
+
 /** El resumen de quien marca a mano: cuenta todo lo que pidió. PURA. */
 export function urpiApplyMessage(result: UrpiApplyResult): string {
   const { salidas } = result;
   const parts = [`${result.applied.length} pedido(s) marcados como entregados`];
   if (result.already) parts.push(`${result.already} ya estaban entregados`);
   if (salidas.filled.length) parts.push(`${salidas.filled.length} salida(s) «Por definir» pasaron a Urpi entregada`);
+  if (salidas.closed.length) parts.push(`${salidas.closed.length} salida(s) de Urpi en ruta quedaron entregadas`);
   if (salidas.sinSalida.length) parts.push(`${salidas.sinSalida.length} sin salida «Por definir» que pasar a Urpi`);
   if (salidas.otraSalidaViva.length) parts.push(`${salidas.otraSalidaViva.length} con otra salida viva: revisa su salida a mano`);
   if (salidas.errors.length) parts.push(`${salidas.errors.length} salida(s) no se pudieron actualizar`);
-  if (result.observed) parts.push(`${result.observed} anulados en Shopify o devueltos no se tocaron`);
+  if (result.observed) parts.push(`${result.observed} anulados en la tienda o devueltos no se tocaron`);
   if (result.notDelivered) parts.push(`${result.notDelivered} sin entrega de Urpi como último intento`);
   return `${parts.join("; ")}.`;
 }
@@ -143,6 +224,7 @@ export function urpiAutoApplyMessage(result: UrpiApplyResult): string {
   const parts: string[] = [];
   if (marked.size) parts.push(`${marked.size} pedido(s) marcados entregados en el Master`);
   if (salidas.filled.length) parts.push(`${salidas.filled.length} salida(s) «Por definir» pasaron a Urpi entregada`);
+  if (salidas.closed.length) parts.push(`${salidas.closed.length} salida(s) de Urpi en ruta quedaron entregadas`);
   if (otherLive) parts.push(`${otherLive} con otra salida viva: revisa su salida a mano`);
   if (salidas.errors.length) parts.push(`${salidas.errors.length} salida(s) no se pudieron actualizar`);
   return parts.length ? `Entregados según Urpi: ${parts.join("; ")}.` : "Entregados según Urpi: nada nuevo que marcar.";

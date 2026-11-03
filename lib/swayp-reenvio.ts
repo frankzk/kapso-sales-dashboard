@@ -11,6 +11,7 @@
 // nulo para el agente de voz) y ya autorizó el acceso.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { env } from "@/lib/env";
 import {
@@ -43,12 +44,15 @@ import {
 import {
   reprogramDestination,
   shopifyShippingAddress,
+  withGeoOverride,
+  type GeoOverrideAddress,
   type ShipmentDestination,
 } from "@/lib/shopify-address";
 import { normalizePhone } from "@/lib/phone";
 import type { OrderLineItem, OrderShippingAddress } from "@/lib/types";
 import { emitSwaypOnce, type AutoEmission } from "@/lib/swayp-emission";
 import { swaypGuideFailed } from "@/lib/reproprovincia";
+import { swaypDestinationRefusal } from "@/lib/swayp-destination-guard";
 
 /**
  * De qué guía sale un reenvío por Swayp (MOM §11.8). La guía de origen queda
@@ -244,12 +248,33 @@ export interface DirectGuideOrderRecord {
 export const DIRECT_GUIDE_ORDER_COLUMNS =
   "id,store_id,shopify_order_id,name,total_amount,currency,cancelled_at,total_refunded,customer_phone,line_items,raw";
 
+export type DirectGuideAddressSource = "shopify" | "carrito" | "lead" | "manual" | null;
+
 /**
- * Delivery address of an order, best source first: the Shopify payload, the
- * originating COD draft cart, or the lead that produced a manual sale — manual
- * orders (venta por llamada) have no Shopify address at all.
+ * Delivery address of an order. «Corregir ubicación» (`order_geo_overrides`)
+ * wins field by field, as in the Master (`withGeoOverride`); underneath, best
+ * source first: the Shopify payload, the originating COD draft cart, or the
+ * lead that produced a manual sale — manual orders (venta por llamada) have no
+ * Shopify address at all.
  */
 export async function resolveDirectGuideAddress(
+  admin: SupabaseClient,
+  order: DirectGuideOrderRecord,
+): Promise<{ address: OrderShippingAddress | null; source: DirectGuideAddressSource }> {
+  const base = await resolveOrderAddressSources(admin, order);
+  const { data: geo } = await admin
+    .from("order_geo_overrides")
+    .select("region,province,district,address,reference,latitude,longitude")
+    .eq("order_id", order.id)
+    .maybeSingle();
+  const override = geo as GeoOverrideAddress | null;
+  // Una corrección que solo trae la coordenada no cambia el destino: el origen
+  // sigue siendo el de la dirección.
+  const corrigeDestino = !!(override?.address || override?.district || override?.province || override?.region);
+  return { address: withGeoOverride(base.address, override), source: corrigeDestino ? "manual" : base.source };
+}
+
+async function resolveOrderAddressSources(
   admin: SupabaseClient,
   order: DirectGuideOrderRecord,
 ): Promise<{ address: OrderShippingAddress | null; source: "shopify" | "carrito" | "lead" | null }> {
@@ -378,6 +403,16 @@ export async function createFenixGuideViaApi(args: {
 }): Promise<{ ok: true; guia: string; idEstado: number } | { ok: false; reason: string }> {
   if (!env.swaypEnabled()) return { ok: false, reason: "integración Swayp desactivada" };
 
+  const saleBlock = await legacySaleSendBlock(args.admin, args.orderId);
+  if (saleBlock) return { ok: false, reason: saleBlock };
+
+  // La última puerta antes de pedirle la guía a Swayp, para TODOS los caminos
+  // que la piden (reenvío, reprogramación, guía directa, Por confirmar y los
+  // dos automáticos): una ciudad de Lima para un pedido que no es de Lima no
+  // sale (02-11-2026, #KP142611, lib/swayp-destination-guard.ts).
+  const destino = await swaypDestinationRefusal(args.admin, args.orderId, args.city);
+  if (destino) return { ok: false, reason: destino };
+
   const built = buildSwaypGuideInput({
     ...args,
     senders: parseSenders(env.swaypSenders()),
@@ -503,6 +538,11 @@ export async function swaypGuideForReprogram(
   );
   const district = address?.city ?? null;
   const city = deriveFenixCoverageCity(district, address?.province ?? null);
+  // El destino tiene que casar con el pedido (#KP142611): la salida copió la
+  // provincia del Master, y una «lima» mal aprendida mandaba a Lima el reenvío
+  // de un pedido de Chiclayo. Ver lib/swayp-destination-guard.ts.
+  const contradictorio = await swaypDestinationRefusal(admin, order.id, city);
+  if (contradictorio) return { ok: false, reason: contradictorio };
   const totalRefunded = order.total_refunded ?? 0;
   const lineItems = (order.line_items ?? []).map((li) => ({
     title: li.title ?? "",
@@ -630,6 +670,11 @@ export async function spinOffFenixGuide(
   }
 
   const p = parent as unknown as Record<string, unknown>;
+
+  if (typeof p.order_id === "string") {
+    const saleBlock = await legacySaleSendBlock(admin, p.order_id);
+    if (saleBlock) return { error: saleBlock };
+  }
 
   // LA REJA DEL CODBAR, en el único sitio por el que pasan las tres puertas que
   // paren una guía Swayp: la reprogramación confirmada, el reenvío de una guía

@@ -17,7 +17,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { relinkSettlementLine } from "@/lib/settlement-ingest";
 import { getRiderTariffs, getSettlementDetail } from "@/lib/settlements-access";
 import { computeRiderPayout, settlementMasterEffects, settlementStatus } from "@/lib/settlements";
-import { applyDeliveriesToMaster } from "@/lib/master-door";
+import { applyDeliveriesToMaster, shopifyCancelledNotice } from "@/lib/master-door";
 import {
   directOrderSearchTerm,
   evaluateSettlementCandidateScope,
@@ -608,5 +608,21 @@ export async function applySettlementToMaster(settlementId: string): Promise<Act
   revalidatePath("/dashboard/liquidaciones");
   revalidatePath("/dashboard/pedidos");
 
-  return { ok: true, message: `Master actualizado: ${pending.length} entregado(s).` };
+  // Lo que la puerta saltó por estar anulado en Shopify (MOM §11.4) se nombra,
+  // y la cuenta es la de lo que de verdad cruzó, no la de lo que se pidió.
+  const cancelledNotice = shopifyCancelledNotice([
+    ...door.rejected
+      .filter((r) => r.code === "anulado_en_shopify")
+      .map((r) => ({ orderId: r.orderId, name: detail.orderNames[r.orderId] })),
+    ...(door.companionsCancelled ?? []).map((c) => ({ orderId: c.orderId, name: c.orderName })),
+  ]);
+  const otherRejected = door.rejected.filter((r) => r.code !== "anulado_en_shopify");
+  const message = [
+    door.applied.length
+      ? `Master actualizado: ${door.applied.length} entregado(s).`
+      : "Ningún pedido se marcó entregado en el Master.",
+    cancelledNotice,
+    otherRejected.length ? `${otherRejected.length} pedido(s) no cruzaron al Master: ${otherRejected[0]!.reason}` : null,
+  ].filter(Boolean).join(" ");
+  return { ok: true, message };
 }

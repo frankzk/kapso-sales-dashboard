@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DISPATCH_NEEDS_COORDINATE_ERROR,
   currentDispatchDate,
+  dispatchCoordinateInput,
+  dispatchCoordinateMissing,
   dispatchDateBadge,
   dispatchDateError,
   dispatchDateLabel,
@@ -70,9 +73,59 @@ describe("Programar envío (MOM §6.2, 15-10-2026)", () => {
     expect(master).toContain("? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))?.date ?? null");
     expect(read("db/migrations/0267_order_master_dispatch_scheduled_on.sql")).toContain("add column if not exists dispatch_scheduled_on date");
   });
+  it("en vivo: «Confirmó el pedido» acepta «Sale el», validado antes de registrar el intento", () => {
+    const actions = read("app/dashboard/pedidos/actions.ts");
+    expect(actions).toContain('const dispatchOn = result.confirms ? input.dispatchOn?.trim() ?? "" : "";');
+    expect(actions).toContain("if (dateError) return { error: `Fecha de envío: ${dateError}` };");
+    expect(actions).toContain("if (dispatchOn && !response.duplicate) {");
+    expect(actions).toContain("payload: { date: dispatchOn, at_confirmation: true },");
+    const drawer = read("components/order-drawer.tsx");
+    expect(drawer).toContain("Sale el (opcional)");
+    // Sin ubicación no viaja la fecha (MOM §6.2, 30-10-2026).
+    expect(drawer).toContain('dispatchOn: selected?.confirms && !locationMissing ? dispatchOn : "",');
+  });
   it("el MOM lo documenta", () => {
     const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");
     expect(mom).toContain("#### Programar envío (15-10-2026)");
     expect(mom).toContain("Programado para el lun 19/10 y no salió");
+    expect(mom).toContain("el campo **«Sale el (opcional)»** guarda la fecha acordada en la llamada");
+  });
+});
+
+describe("Provincia COD: programar pide la coordenada (MOM §6.2, 02-11-2026)", () => {
+  it("#AUR900167: Provincia COD sin coordenada no se programa sin ella; con ella, o en otra ruta, sí", () => {
+    expect(dispatchCoordinateMissing({ latitude: null, longitude: null }, "provincia_cod")).toBe(true);
+    expect(dispatchCoordinateMissing({ latitude: -12.04, longitude: null }, "provincia_cod")).toBe(true);
+    expect(dispatchCoordinateMissing({ latitude: -12.04, longitude: -77.02 }, "provincia_cod")).toBe(false);
+    expect(dispatchCoordinateMissing({ latitude: null, longitude: null }, "lima")).toBe(false);
+    expect(dispatchCoordinateMissing({ latitude: null, longitude: null }, "agencia")).toBe(false);
+  });
+
+  it("acepta el enlace de Google Maps o el par, y explica el acortado", () => {
+    expect(dispatchCoordinateInput("-12.04318, -77.02824")).toEqual({ ok: true, coordinate: { lat: -12.04318, lng: -77.02824 } });
+    expect(dispatchCoordinateInput("https://www.google.com/maps/place/X/@-12.1,-77.1,17z/data=!3d-12.04318!4d-77.02824")).toEqual({
+      ok: true,
+      coordinate: { lat: -12.04318, lng: -77.02824 },
+    });
+    const short = dispatchCoordinateInput("https://maps.app.goo.gl/abc123");
+    expect(short.ok).toBe(false);
+    expect(!short.ok && short.error).toMatch(/acortado/);
+    expect(dispatchCoordinateInput("")).toEqual({ ok: false, error: DISPATCH_NEEDS_COORDINATE_ERROR });
+    expect(dispatchCoordinateInput("frente al parque").ok).toBe(false);
+  });
+
+  it("las dos puertas de programar la exigen y la guardan en el pedido", () => {
+    const actions = read("app/dashboard/pedidos/actions.ts");
+    const confirm = actions.slice(actions.indexOf("export async function registerConfirmationAttempt"), actions.indexOf("export async function scheduleOrderDispatch"));
+    const schedule = actions.slice(actions.indexOf("export async function scheduleOrderDispatch"), actions.indexOf("export async function clearOrderDispatchDate"));
+    // Al confirmar, antes de registrar el intento.
+    expect(confirm.indexOf("ensureDispatchCoordinate(ctx, input.coordinate)")).toBeGreaterThan(-1);
+    expect(confirm.indexOf("ensureDispatchCoordinate(ctx, input.coordinate)")).toBeLessThan(confirm.indexOf("register_confirmation_attempt_v1"));
+    expect(schedule.indexOf("ensureDispatchCoordinate(ctx, input.coordinate)")).toBeGreaterThan(-1);
+    expect(schedule.indexOf("ensureDispatchCoordinate(ctx, input.coordinate)")).toBeLessThan(schedule.indexOf("DISPATCH_DATE_SET"));
+    // Donde la lee el panel de Aliclik, sin borrar lo demás de la corrección.
+    const helper = actions.slice(actions.indexOf("async function ensureDispatchCoordinate"));
+    expect(helper).toContain('.from("order_geo_overrides")');
+    expect(helper).toContain('select("region,province,district,address,reference,note")');
   });
 });

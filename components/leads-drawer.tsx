@@ -10,6 +10,7 @@
 // `CallForm` y `WhatsappChat` se exportan con `variant="card"` para la tarjeta
 // del siguiente lead de la lista: la misma conducta sin el marco de la ficha.
 
+import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import { mergeConversationMessages } from "@/lib/conversation-merge";
 import { canUseActiveChatPoll, chatContextAfterRead } from "@/lib/leads-chat-poll";
 import {
@@ -67,6 +68,7 @@ import {
 } from "@/components/ops-ui";
 import {
   IconAlert,
+  IconArrowRight,
   IconArrowUpRight,
   IconCamera,
   IconChat,
@@ -128,11 +130,15 @@ import {
 } from "@/lib/leads-read-client";
 import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/lib/wa-reply-templates";
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
+import { isCodCoreFormGid } from "@/lib/cod-core-abandoned";
+import { cartCreatedAtLabel } from "@/lib/lead-cart-detail";
+import { orderPlatformName } from "@/lib/order-admin-url";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
 import { formatPeruMobile, peruMobileDigits, peruMobileProblem } from "@/lib/phone";
 import { YapeAssign } from "@/components/yape-alerts";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
+import { cartsTone, cartsVerdict, type CustomerCarts } from "@/lib/customer-carts";
 
 export type LeadDrawerProps = {
   lead: LeadRow;
@@ -143,8 +149,16 @@ export type LeadDrawerProps = {
   shopifyDomain: string | null;
   currency: string;
   onClose: () => void;
+  claimConfirmed?: boolean;
+  onClaimLost?: (message: string) => void;
   onRegistered: (update?: LeadDrawerUpdate) => void;
   onReady?: () => void;
+  /**
+   * «Siguiente lead»: el de debajo en la lista que está mirando (`leadAfter`).
+   * Sin `lead`, es el último de la lista y el botón queda apagado. Sin la prop
+   * entera (otra pantalla abre la ficha), no hay botón.
+   */
+  next?: { lead: LeadRow | null; opening: boolean; onOpen: () => void };
 };
 
 export type LeadDrawerUpdate = {
@@ -197,11 +211,13 @@ function finishUiMeasure(name: string) {
 /** Canonical acquisition-source bucket for a lead's `source` (Fuente filter). */
 function leadSourceKey(
   s: string | null | undefined,
-): "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic" {
+): "meta_ad" | "fb_web" | "web" | "cod_cart" | "abandoned_browse" | "organic" {
   return s === "meta_ad"
     ? "meta_ad"
     : s === "fb_web"
       ? "fb_web"
+      : s === "web"
+        ? "web"
       : s === "cod_cart"
         ? "cod_cart"
         : s === "abandoned_browse"
@@ -217,6 +233,90 @@ function fmtDate(value: string | null | undefined): string {
 function orderDateShort(value: string | null | undefined): string {
   if (!value) return "—";
   return new Date(value).toLocaleDateString("es-PE", { day: "numeric", month: "short" });
+}
+
+/** Cuántos carritos se ven antes de «Ver todos»: los últimos, que son los que cuentan. */
+const CARTS_PREVIEW = 4;
+/** Tope de la lista abierta; el conteo de arriba es siempre el completo. */
+const CARTS_LIST_MAX = 40;
+
+const CARTS_VERDICT_TONE: Record<ReturnType<typeof cartsTone>, string> = {
+  warn: "text-warn-fg",
+  ok: "text-ok-fg",
+  neutral: "text-ink-700",
+};
+
+/**
+ * Carritos anteriores de la clienta en esta tienda. Arriba, el hecho que cambia
+ * cómo se la llama —cuántos terminaron en pedido—; debajo, los últimos con su
+ * producto, monto y en qué quedó. Misma anatomía que «Pedidos anteriores».
+ */
+function CustomerCartsCard({ carts, currency }: { carts: CustomerCarts; currency: string }) {
+  const [open, setOpen] = useState(false);
+  const { summary } = carts;
+  const verdict = cartsVerdict(summary);
+  const shown = open ? carts.carts.slice(0, CARTS_LIST_MAX) : carts.carts.slice(0, CARTS_PREVIEW);
+  const hidden = carts.carts.length - shown.length;
+  return (
+    <section aria-label="Carritos anteriores" className={SECTION_CARD}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold text-ink-900">
+          Carritos anteriores <span className="font-normal tabular-nums text-ink-500">· {summary.total}</span>
+        </h3>
+        {summary.completed > 0 && summary.abandoned > 0 && (
+          <span className="text-[13px] tabular-nums text-ink-600">
+            {summary.abandoned} {summary.abandoned === 1 ? "abandonado" : "abandonados"}
+          </span>
+        )}
+      </div>
+      {verdict && <p className={cn("mt-0.5 text-[13px] font-medium leading-5", CARTS_VERDICT_TONE[cartsTone(summary)])}>{verdict}</p>}
+      <ul className="-mx-4 -mb-4 mt-3 divide-y divide-line border-t border-line sm:-mx-5 sm:-mb-5">
+        {shown.map((cart) => (
+          <li key={cart.key} className="flex items-start justify-between gap-3 px-4 py-2.5 sm:px-5">
+            <div className="min-w-0">
+              <p className="flex items-baseline gap-2">
+                <span className="truncate text-sm font-medium text-ink-900">
+                  {cart.kind === "carrito" ? "Checkout web" : cart.name ?? "Borrador"}
+                </span>
+                <span className="shrink-0 text-xs tabular-nums text-ink-500">{orderDateShort(cart.createdAt)}</span>
+              </p>
+              {cart.products && <p className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">{cart.products}</p>}
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              {cart.total != null && (
+                <span className="text-sm font-semibold tabular-nums text-ink-900">
+                  {currency} {cart.total.toFixed(2)}
+                </span>
+              )}
+              {cart.completed ? (
+                <Badge tone="ok">{cart.orderName ? `Pedido ${cart.orderName}` : "Terminó en pedido"}</Badge>
+              ) : (
+                <Badge>Abandonado</Badge>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {(hidden > 0 || open) && carts.carts.length > CARTS_PREVIEW && (
+        <div className="-mx-4 -mb-4 mt-4 border-t border-line px-4 py-2 sm:-mx-5 sm:-mb-5 sm:px-5">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="inline-flex min-h-8 items-center gap-1 text-[13px] font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
+          >
+            {open ? "Ver menos" : `Ver los ${Math.min(carts.carts.length, CARTS_LIST_MAX)}`}
+            <IconChevronDown aria-hidden className={cn("size-4 transition-transform", open && "rotate-180")} />
+          </button>
+          {open && carts.carts.length > CARTS_LIST_MAX && (
+            <span className="ml-2 text-[13px] tabular-nums text-ink-500">
+              y {carts.carts.length - CARTS_LIST_MAX} más antiguos
+            </span>
+          )}
+        </div>
+      )}
+    </section>
+  );
 }
 
 /** Monto corto para una chapa: «129» o «129.9», con el formato es-PE. */
@@ -373,11 +473,12 @@ function SegmentBadge({ lead, currency }: { lead: LeadRow; currency: string }) {
 
 // La fuente del lead, dicha en palabras en la línea de contexto de la cabecera.
 const SOURCE_META: Record<
-  "meta_ad" | "fb_web" | "cod_cart" | "abandoned_browse" | "organic",
+  "meta_ad" | "fb_web" | "web" | "cod_cart" | "abandoned_browse" | "organic",
   { label: string; title: string }
 > = {
   meta_ad: { label: "Campaña Meta", title: "Campaña Meta (Click-to-WhatsApp, con anuncio)" },
   fb_web: { label: "Meta/Web", title: "Llegó por un link de Meta (Facebook/Instagram) en la web (sin anuncio confirmado)" },
+  web: { label: "Web", title: "Escribió desde el botón de WhatsApp de un producto en la web de la tienda" },
   cod_cart: { label: "Carrito", title: "Carrito abandonado (formulario COD)" },
   abandoned_browse: { label: "Búsqueda", title: "Búsqueda abandonada" },
   organic: { label: "Directo", title: "Orgánico / directo" },
@@ -411,8 +512,11 @@ export function LeadDrawer({
   shopifyDomain,
   currency,
   onClose,
+  claimConfirmed = true,
+  onClaimLost,
   onRegistered,
   onReady,
+  next,
 }: LeadDrawerProps) {
   const [orderOpen, setOrderOpen] = useState(false);
   const { state: copied, copy } = useCopyToClipboard();
@@ -479,24 +583,33 @@ export function LeadDrawer({
     orderWasOpenRef.current = orderOpen;
   }, [orderOpen]);
 
-  // Live sync while a lead WITHOUT an order is open: a Yape/bot purchase links the
+  // Live sync while a claimed lead is open: a Yape/bot purchase links the
   // order a few seconds later (webhook → lead becomes won). Poll the lead's
   // order/status signal every 12s and, the moment it flips, refresh the drawer —
   // so the asesora sees "Pedido generado" instead of a stale "pendiente" (which
   // is what led to mistakenly marking a real sale as "ya compró en otro lado").
-  // Stops once the lead has an order (deps change) or the drawer closes (unmount).
+  // La misma lectura comprueba la reserva, incluso después de generar el pedido.
   const onRegisteredRef = useRef(onRegistered);
   onRegisteredRef.current = onRegistered;
+  const onClaimLostRef = useRef(onClaimLost);
+  onClaimLostRef.current = onClaimLost;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
-    if (lead.has_order) return; // already won → nothing to watch
+    if (!claimConfirmed) return; // la toma inicial todavía no terminó
     let inFlight = false;
     let alive = true;
-    const id = setInterval(() => {
+    const check = () => {
       if (inFlight || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
       inFlight = true;
       void pollLeadState(lead.id)
         .then((r) => {
           if (!alive || "error" in r) return;
+          if (r.claimLost) {
+            if (onClaimLostRef.current) onClaimLostRef.current(r.claimError ?? "Otra asesora está atendiendo este lead.");
+            else onCloseRef.current();
+            return;
+          }
           if (r.hasOrder !== lead.has_order || r.status !== lead.status || r.category !== lead.category) {
             onRegisteredRef.current(); // real change → full refresh (lead + historial + lista)
           }
@@ -505,9 +618,18 @@ export function LeadDrawer({
         .finally(() => {
           inFlight = false;
         });
-    }, 12_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [lead.id, lead.has_order, lead.status, lead.category]);
+    };
+    const id = setInterval(check, 12_000);
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    check();
+    return () => {
+      alive = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+    };
+  }, [lead.id, lead.has_order, lead.status, lead.category, claimConfirmed]);
 
   // cod_cart sin conversación → empty-state; el resto muestra el chat (que se
   // resuelve por teléfono si no hay conversation_id guardado).
@@ -515,8 +637,14 @@ export function LeadDrawer({
   const hasCart = !!lead.draft_order_gid && lead.draft_order_status !== "completed";
   // "Ver borrador" abre el draft en el ADMIN de Shopify, no el checkout del
   // cliente (invoiceUrl); ese queda solo como fallback si falta gid/dominio.
-  const draftOrderHref =
-    shopifyDraftOrderAdminUrl(shopifyDomain, lead.draft_order_gid) ?? lead.draft_order_url ?? null;
+  // COD Core conserva su enlace en los datos, pero no se ofrece a las asesoras.
+  const codCoreForm = isCodCoreFormGid(lead.draft_order_gid);
+  const draftOrderHref = codCoreForm
+    ? null
+    : (shopifyDraftOrderAdminUrl(shopifyDomain, lead.draft_order_gid) ?? lead.draft_order_url ?? null);
+  const cartCreatedIso = lead.cart_detail?.createdAt;
+  const cartCreatedAt = cartCreatedAtLabel(cartCreatedIso);
+  const cartLines = lead.cart_detail?.lines ?? [];
   // Recurrent if there are prior purchases — either the local last-order signal or
   // the (authoritative) Shopify "Pedidos anteriores" list, which catches customers
   // whose past orders were placed outside the bot (not in the kapso-only table).
@@ -568,18 +696,26 @@ export function LeadDrawer({
     const recovered = lead.draft_order_status === "completed";
     askLine.push(
       <span key="draft" className={recovered ? "font-medium text-ok-fg" : undefined}>
-        {recovered ? "Carrito recuperado" : "Carrito abandonado"}
+        {codCoreForm
+          ? recovered
+            ? "Formulario recuperado"
+            : "Formulario abandonado"
+          : recovered
+            ? "Carrito recuperado"
+            : "Carrito abandonado"}
         {lead.draft_order_name ? ` ${lead.draft_order_name}` : ""}
       </span>,
     );
   }
-  if (showContext && lead.cart_item_count) {
-    askLine.push(
-      <span key="cart">
-        {lead.draft_order_gid ? "" : "Carrito: "}
-        {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
-      </span>,
-    );
+  if (showContext && (lead.cart_item_count || cartLines.length > 0)) {
+    if (cartLines.length === 0) {
+      askLine.push(
+        <span key="cart">
+          {lead.draft_order_gid ? "" : "Carrito: "}
+          {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
+        </span>,
+      );
+    }
     if (lead.cart_value != null) {
       askLine.push(
         <span key="value" className="font-semibold tabular-nums text-ink-900">
@@ -597,7 +733,7 @@ export function LeadDrawer({
   }
   const showRecibe = showContext && !!lead.ship_name && lead.ship_name !== lead.name;
   const showAddress = showContext && !!(lead.ship_name || lead.address1 || lead.district || lead.referencia);
-  const hasAskRows = (showAddress && !!(showRecibe || lead.address1 || lead.referencia || lead.district)) || !!firstText;
+  const hasAskRows = !!lead.draft_order_gid || (showAddress && !!(showRecibe || lead.address1 || lead.referencia || lead.district)) || !!firstText;
 
   return (
     <SidePanel
@@ -606,6 +742,7 @@ export function LeadDrawer({
       badge={
         <>
           <SegmentBadge lead={lead} currency={currency} />
+                  <LeadAttemptBadge lead={lead} />
           <Badge tone={winTone} title={winTitle}>
             {winLabel}
           </Badge>
@@ -677,13 +814,36 @@ export function LeadDrawer({
         </span>
       }
       actions={
-        // QR tel: arriba a la derecha y solo, como siempre estuvo (Frankz,
-        // 14-10-2026): la asesora lo escanea con su celular y el marcador abre
-        // listo. Solo en escritorio; en el teléfono ya está «Llamar».
-        canCall ? (
-          <div className="hidden lg:block">
-            <CallQr phone={lead.phone as string} size={64} />
-          </div>
+        // QR tel: arriba a la derecha (Frankz, 14-10-2026): la asesora lo
+        // escanea con su celular y el marcador abre listo. Solo en escritorio;
+        // en el teléfono ya está «Llamar». A su derecha, antes de «Cerrar»,
+        // «Siguiente lead» (25-10-2026): pasar al de debajo en la lista sin
+        // cerrar la ficha y buscar otro.
+        canCall || next ? (
+          <>
+            {canCall && (
+              <div className="hidden lg:block">
+                <CallQr phone={lead.phone as string} size={64} />
+              </div>
+            )}
+            {next && (
+              <OpsButton
+                size="sm"
+                onClick={next.onOpen}
+                disabled={!next.lead || next.opening}
+                title={
+                  next.lead
+                    ? `Abrir ${next.lead.name?.trim() || leadPhoneLabel(next.lead)}, el que sigue en la lista`
+                    : "Es el último de la lista"
+                }
+                className="pointer-coarse:h-11"
+              >
+                <span className="sm:hidden">Siguiente</span>
+                <span className="hidden sm:inline">Siguiente lead</span>
+                <IconArrowRight aria-hidden className="size-4 text-ink-500" />
+              </OpsButton>
+            )}
+          </>
         ) : null
       }
       width="max-w-[1040px]"
@@ -785,8 +945,33 @@ export function LeadDrawer({
                     ))}
                   </p>
                 )}
+                {cartLines.length > 0 && (
+                  <ul aria-label="Productos del carrito" className="mt-2 space-y-1.5 text-[13px] leading-5 text-ink-900">
+                    {cartLines.map((line, index) => (
+                      <li key={index} className="flex items-start gap-2">
+                        <span className="shrink-0 font-semibold tabular-nums">{line.quantity} ×</span>
+                        <span className="min-w-0 break-words">
+                          {line.title}
+                          {line.variant && <span className="text-ink-500"> · {line.variant}</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {hasAskRows && (
                   <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[13px] leading-5">
+                    {lead.draft_order_gid && (
+                      <>
+                        <dt className="text-ink-500">Carrito creado</dt>
+                        <dd className="min-w-0 text-ink-900">
+                          {cartCreatedAt && cartCreatedIso ? (
+                            <time dateTime={cartCreatedIso}>
+                              {cartCreatedAt} <span className="text-ink-500">(Lima)</span>
+                            </time>
+                          ) : lead.cart_detail === undefined ? "Cargando…" : "No registrado"}
+                        </dd>
+                      </>
+                    )}
                     {showRecibe && (
                       <>
                         <dt className="text-ink-500">Recibe</dt>
@@ -828,7 +1013,7 @@ export function LeadDrawer({
               </section>
             )}
 
-            {/* Pedidos anteriores: los 3 últimos de Shopify, justo bajo «Lo que pidió»:
+            {/* Pedidos anteriores: los 3 últimos (de Shopify, de WooCommerce y del historial de Shopify, §37.7), justo bajo «Lo que pidió»:
                 es lo primero que se mira al abrir la ficha (Frankz, 14-10-2026). */}
             {history && history.recentOrders.length > 0 && (
               <section aria-label="Pedidos anteriores" className={SECTION_CARD}>
@@ -852,6 +1037,8 @@ export function LeadDrawer({
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="truncate text-sm font-medium text-ink-900">Pedido {o.name ?? "—"}</span>
                         {o.cancelled && <Badge tone="crit">Anulado</Badge>}
+                        {/* Del archivo importado de Shopify (MOM §37.7): no es un pedido de Kapta. */}
+                        {o.fromHistory && <span className="shrink-0 text-xs text-ink-500">del historial de Shopify</span>}
                       </span>
                       <span className="flex shrink-0 items-center gap-3">
                         <span className="text-xs tabular-nums text-ink-500">{orderDateShort(o.createdAt)}</span>
@@ -863,13 +1050,15 @@ export function LeadDrawer({
                         >
                           {currency} {o.amount.toFixed(2)}
                         </span>
+                        {/* El enlace va al admin de la tienda del pedido
+                            (`orders.platform`, MOM §38.12): se nombra la suya. */}
                         {o.adminUrl && (
                           <a
                             href={o.adminUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            title="Abrir en Shopify"
-                            aria-label={`Abrir ${o.name ?? "pedido"} en Shopify (nueva pestaña)`}
+                            title={`Abrir en ${orderPlatformName(o.platform)}`}
+                            aria-label={`Abrir ${o.name ?? "pedido"} en ${orderPlatformName(o.platform)} (nueva pestaña)`}
                             className="-mr-1.5 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
                           >
                             <IconArrowUpRight aria-hidden className="size-4" />
@@ -880,6 +1069,14 @@ export function LeadDrawer({
                   ))}
                 </ul>
               </section>
+            )}
+
+            {/* Carritos anteriores (25-10-2026): ¿termina la compra o solo deja
+                carritos? Las asesoras lo iban a buscar a Shopify → Borradores,
+                cliente por cliente; ahora sale del espejo y del archivo de
+                Shopify en Kapta (lib/customer-carts.ts). */}
+            {history?.carts && history.carts.summary.total > 0 && (
+              <CustomerCartsCard carts={history.carts} currency={currency} />
             )}
 
             {/* Resumen del bot */}
@@ -2438,6 +2635,9 @@ function MediaAttach({
 // the cart's draft (or blank for a new sale), products from the real catalog
 // (or a custom item), required address, then generates a REAL Shopify order
 // (contraentrega / COD: pago pendiente, lead Ganado, crédito a la asesora).
+//
+// En una tienda que ya crea sus pedidos en WooCommerce (MOM §38.12) el pedido
+// se crea allí, cada línea por su SKU: no hay ítem manual.
 // ---------------------------------------------------------------------------
 
 type OrderItem = {
@@ -2446,12 +2646,20 @@ type OrderItem = {
   title: string;
   quantity: number;
   unitPrice: number | null;
+  /** El SKU del catálogo. WooCommerce crea la línea por él; Shopify no lo usa. */
+  sku: string | null;
 };
 type ProductResult = Awaited<ReturnType<typeof searchStoreProducts>>[number]; // producto + variantes
 // A single variant flattened for the line-item add (what ProductPicker returns).
-type PickedVariant = { variantId: string; title: string; price: number | null; inventory: number | null };
+type PickedVariant = { variantId: string; title: string; price: number | null; inventory: number | null; sku: string | null };
 
 const rid = () => Math.random().toString(36).slice(2);
+/**
+ * El id de un intento de «Generar pedido»: el mismo en cada reintento hasta que
+ * sale bien. En WooCommerce es lo que evita dos pedidos por un doble clic o un
+ * reintento (`kapta_request_id`, MOM §38.12).
+ */
+const newRequestId = () => globalThis.crypto?.randomUUID?.() ?? `${rid()}${rid()}${rid()}`;
 
 const PERU_REGIONS = [
   "Amazonas", "Áncash", "Apurímac", "Arequipa", "Ayacucho", "Cajamarca", "Callao", "Cusco",
@@ -2466,7 +2674,7 @@ function matchPeruRegion(v: string | null | undefined): string {
   return PERU_REGIONS.find((r) => nv.includes(norm(r))) ?? v;
 }
 
-function OrderFormPanel({
+export function OrderFormPanel({
   leadId,
   currency,
   hasCart,
@@ -2489,7 +2697,15 @@ function OrderFormPanel({
   const [district, setDistrict] = useState("");
   const [province, setProvince] = useState("");
   const [referencia, setReferencia] = useState("");
-  const [orderNote, setOrderNote] = useState(""); // → Notas del pedido en Shopify
+  const [orderNote, setOrderNote] = useState(""); // → Notas del pedido en la tienda
+  // Dónde se creará el pedido (`stores.platform`). Null hasta que carga, o si
+  // no se pudo leer: sin saberlo no se ofrece «Ítem manual», que WooCommerce
+  // no puede crear (el servidor decide y frena igual).
+  const [platform, setPlatform] = useState<"shopify" | "woocommerce" | null>(null);
+  const requestIdRef = useRef(newRequestId());
+  // ¿Este formulario ya mandó el `requestId` actual? Un reintento siempre busca
+  // en WooCommerce el pedido del intento anterior (MOM §38.12).
+  const requestIdSentRef = useRef(false);
   const [windowOpen, setWindowOpen] = useState(false);
   const [sendConfirm, setSendConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -2515,12 +2731,16 @@ function OrderFormPanel({
     let alive = true;
     setGeneratedOrder(null);
     resetCopiedOrder();
+    requestIdRef.current = newRequestId();
+    requestIdSentRef.current = false;
+    setPlatform(null);
     loadOrderDraft(leadId).then((res) => {
       if (!alive) return;
       if ("error" in res) {
         setMsg(res.error);
       } else {
-        setItems(res.lineItems.map((li) => ({ ...li, key: rid() })));
+        setPlatform(res.platform === "woocommerce" ? "woocommerce" : "shopify");
+        setItems(res.lineItems.map((li) => ({ ...li, sku: li.sku ?? null, key: rid() })));
         setName(res.customerName ?? "");
         // Solo la parte nacional: el campo pinta el `+51` fijo al lado, y el
         // teléfono del lead viene de WhatsApp CON el 51 delante. Sin quitarlo se
@@ -2580,6 +2800,8 @@ function OrderFormPanel({
     setDuplicateWarning(null);
     setGeneratedOrder(null);
     resetCopiedOrder();
+    const wasSent = requestIdSentRef.current;
+    requestIdSentRef.current = true;
     startTransition(async () => {
       const res = await generateOrder(leadId, {
         lineItems: items.map((it) => ({
@@ -2587,6 +2809,7 @@ function OrderFormPanel({
           title: it.title,
           quantity: it.quantity,
           unitPrice: it.unitPrice,
+          sku: it.sku,
         })),
         customerName: name.trim(),
         phone: phone.trim(),
@@ -2603,6 +2826,8 @@ function OrderFormPanel({
             : { kind: discountKind, value: discountValue },
         noReutilizarBorrador,
         confirmarDuplicado,
+        requestId: requestIdRef.current,
+        requestIdSent: wasSent,
       });
       if (res.requiereConfirmacion && res.error) {
         setDuplicateWarning(res.error);
@@ -2613,6 +2838,9 @@ function OrderFormPanel({
         return;
       }
       setMsg(res.notice ?? "Pedido generado.");
+      // Salió bien: la próxima venta desde este formulario es otro intento.
+      requestIdRef.current = newRequestId();
+    requestIdSentRef.current = false;
       setGeneratedOrder(
         res.generatedOrder ?? {
           id: "",
@@ -2658,14 +2886,16 @@ function OrderFormPanel({
           <div className="space-y-3 pt-4 sm:pt-5">
             <p className={LABEL}>Productos</p>
             {items.length === 0 && (
-              <p className="text-[13px] text-ink-500">Sin productos. Agrega del catálogo o un ítem manual.</p>
+              <p className="text-[13px] text-ink-500">
+                {platform === "shopify" ? "Sin productos. Agrega del catálogo o un ítem manual." : "Sin productos. Agrega del catálogo."}
+              </p>
             )}
             {items.length > 0 && (
               <ul className="-mx-4 divide-y divide-line border-y border-line sm:-mx-5">
                 {items.map((it) => (
                   <li key={it.key} className="px-4 py-2.5 sm:px-5">
                     <div className="flex items-start gap-2">
-                      {it.variantId ? (
+                      {it.variantId || it.sku ? (
                         <span className="min-w-0 flex-1 pt-1.5 text-sm text-ink-900">{it.title}</span>
                       ) : (
                         <input
@@ -2700,7 +2930,7 @@ function OrderFormPanel({
                           disabled={pending}
                         />
                       </label>
-                      {it.variantId ? (
+                      {it.variantId || it.sku ? (
                         // Catalog product: unit price is fixed to the catalog (read-only).
                         // Any reduction is handled via the order-level "Descuento" field.
                         <span className="tabular-nums">
@@ -2739,15 +2969,21 @@ function OrderFormPanel({
                 <IconPlus aria-hidden className="text-ink-500" />
                 Producto del catálogo
               </OpsButton>
-              <OpsButton
-                variant="ghost"
-                size="sm"
-                onClick={() => setItems((x) => [...x, { key: rid(), variantId: null, title: "", quantity: 1, unitPrice: null }])}
-                disabled={pending}
-              >
-                <IconPlus aria-hidden />
-                Ítem manual
-              </OpsButton>
+              {/* WooCommerce crea cada línea por SKU: un ítem manual no se puede
+                  crear allí (el servidor lo frena igual, MOM §38.12). */}
+              {platform === "woocommerce" ? (
+                <span className="text-xs text-ink-500">WooCommerce: solo productos del catálogo (con SKU).</span>
+              ) : platform !== "shopify" ? null : (
+                <OpsButton
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setItems((x) => [...x, { key: rid(), variantId: null, title: "", quantity: 1, unitPrice: null, sku: null }])}
+                  disabled={pending}
+                >
+                  <IconPlus aria-hidden />
+                  Ítem manual
+                </OpsButton>
+              )}
             </div>
             {showPicker && (
               <ProductPicker
@@ -2756,7 +2992,7 @@ function OrderFormPanel({
                 onPick={(p) => {
                   setItems((x) => [
                     ...x,
-                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price },
+                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price, sku: p.sku },
                   ]);
                   setShowPicker(false);
                 }}
@@ -2870,7 +3106,8 @@ function OrderFormPanel({
                 disabled={pending}
               />
               <p className="mt-1 text-xs text-ink-500">
-                Se guarda en las Notas del pedido en Shopify (no se envía al cliente).
+                Se guarda en las Notas del pedido en{" "}
+                {platform === "woocommerce" ? "WooCommerce" : platform === "shopify" ? "Shopify" : "la tienda"} (no se envía al cliente).
               </p>
             </div>
           </div>
@@ -2910,7 +3147,7 @@ function OrderFormPanel({
             {!generatedOrder && (
               <p className="text-xs leading-5 text-ink-500">
                 Pago contraentrega: queda como <span className="font-medium text-ink-700">pago pendiente</span> y sube
-                como pedido real a Shopify. Marca el lead <span className="font-medium text-ink-700">Ganado</span> y suma
+                como pedido real a {platform === "woocommerce" ? "WooCommerce" : platform === "shopify" ? "Shopify" : "la tienda"}. Marca el lead <span className="font-medium text-ink-700">Ganado</span> y suma
                 a tu productividad.
               </p>
             )}
@@ -2936,7 +3173,7 @@ function OrderFormPanel({
                       rel="noreferrer"
                       className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
                     >
-                      Ver en Shopify
+                      {generatedOrder.platform === "woocommerce" ? "Ver en WooCommerce" : "Ver en Shopify"}
                       <IconArrowUpRight aria-hidden className="text-ink-500" />
                     </a>
                   )}
@@ -3096,6 +3333,7 @@ function ProductPicker({
       title: v.variantTitle ? `${p.title} · ${v.variantTitle}` : p.title,
       price: v.price,
       inventory: v.inventory,
+      sku: v.sku ?? null,
     });
   useEffect(() => {
     const term = q.trim();

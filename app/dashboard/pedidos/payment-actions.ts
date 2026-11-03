@@ -1,4 +1,6 @@
 "use server";
+import { agencyShippingPaid } from "@/lib/agency-shipping";
+import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
 
 // Pagos Yape y clave de recojo de los envíos por Shalom.
 //
@@ -173,12 +175,24 @@ export interface PickupKeyPanel {
   canManageKey: boolean;
   canOverride: boolean;
   /**
+   * Puede guardar «DNI y agencia Shalom» (`saveShalomOrderDraft`): `master.edit`,
+   * la misma puerta que el servidor. Lo usa el bloque de un pedido pagado por
+   * web, que no tiene «Registrar un pago» que lo traiga.
+   */
+  canEditShalomDraft: boolean;
+  /**
    * La excepción por descuento (MOM §12): si la clave está bloqueada solo
    * porque a lo validado le faltan hasta S/ 15, quien puede verla la muestra
    * dejando el motivo escrito. `eligible` se calcula aquí; el servidor lo
    * vuelve a comprobar al revelarla.
    */
   discountException: { eligible: boolean; shortfall: number; reason: string | null; max: number };
+  /**
+   * El envío que la clienta pagó en la agencia (S/), o null (owner, 01-11-2026,
+   * lib/agency-shipping.ts): con el paquete recogido, hasta S/ 15 que le faltan
+   * a lo validado. Con él, el pedido está pagado completo.
+   */
+  agencyShipping: number | null;
   /**
    * La guía Shalom viva del pedido, si ya existe.
    *
@@ -194,6 +208,11 @@ export interface PickupKeyPanel {
     deliveryStatus: string;
     pickupState: string | null;
   } | null;
+  /**
+   * La guía viva de OLVA, si el pedido va por Olva y no por Shalom: entonces el
+   * paso «DNI y agencia Shalom» no pide nada y dice por dónde va.
+   */
+  olvaGuide: { guideCode: string | null } | null;
   /**
    * El envío automático de la clave al validar (0173), listo para que el botón
    * diga la verdad ANTES de pulsarlo.
@@ -234,9 +253,9 @@ export async function loadPaymentPanel(
     sb.from("pickup_key_views").select("id,viewed_at,reason,override").eq("order_id", orderId).order("viewed_at", { ascending: false }).limit(50),
     sb
       .from("shipments")
-      .select("guide_code,shalom_codigo,delivery_status,pickup_state,custody_state,created_at")
+      .select("courier,guide_code,shalom_codigo,delivery_status,pickup_state,custody_state,created_at")
       .eq("order_id", orderId)
-      .eq("courier", "shalom")
+      .in("courier", ["shalom", "olva"])
       .order("created_at", { ascending: false }),
   ]);
 
@@ -298,17 +317,21 @@ export async function loadPaymentPanel(
   // que poder corregir el DNI o la agencia y volver a crear, que es exactamente
   // lo que manda hacer el modal cuando algo salió mal.
   type ShalomShipmentRow = {
+    courier: string;
     guide_code: string | null;
     shalom_codigo: string | null;
     delivery_status: string;
     pickup_state: string | null;
     custody_state: string | null;
   };
-  const shalomLive = ((shalomRes.data as ShalomShipmentRow[] | null) ?? []).find(
-    (row) =>
-      row.custody_state !== "devuelto" &&
-      ["pendiente", "en_ruta", "por_preparar"].includes(row.delivery_status),
-  );
+  const agencyRows = (shalomRes.data as ShalomShipmentRow[] | null) ?? [];
+  const isLive = (row: ShalomShipmentRow) =>
+    row.custody_state !== "devuelto" && ["pendiente", "en_ruta", "por_preparar"].includes(row.delivery_status);
+  const shalomLive = agencyRows.find((row) => row.courier === "shalom" && isLive(row));
+  // UN PEDIDO QUE YA VA POR OLVA no necesita el destino de Shalom (owner,
+  // 01-11-2026, #KP143233): el paso 1 pedía DNI y agencia de Shalom a un pedido
+  // con su guía de Olva creada. Con una guía viva de Olva, el paso lo dice.
+  const olvaLive = shalomLive ? undefined : agencyRows.find((row) => row.courier === "olva" && isLive(row));
   const shalomGuide: PickupKeyPanel["shalomGuide"] = shalomLive
     ? {
         guideCode: shalomLive.guide_code,
@@ -355,6 +378,13 @@ export async function loadPaymentPanel(
     keyPreview = pickupKeyMessage(delivery.facts, KEY_MASK);
   }
 
+  const agencyShipping = agencyShippingPaid({
+    operation: ctx.row.macro_operation,
+    pickedUp: ctx.row.pickup_state === "recogido" || ctx.row.general_status === "entregado",
+    payments: snapshots,
+    orderTotal: ctx.row.order_total,
+  });
+
   return {
     panel: {
       storeId: ctx.storeId,
@@ -362,7 +392,8 @@ export async function loadPaymentPanel(
       customerName: ctx.row.customer_name,
       orderTotal: ctx.row.order_total,
       payments,
-      paymentState: paymentState(snapshots, ctx.row.order_total),
+      paymentState: agencyShipping !== null ? "pago_completo" : paymentState(snapshots, ctx.row.order_total),
+      agencyShipping,
       hasKey: Boolean(keyRow),
       canReveal: verdict.allowed,
       blockers: describeBlockers(verdict),
@@ -373,8 +404,10 @@ export async function loadPaymentPanel(
       canViewKey: perms.can("shalom.reveal_pickup_key"),
       canManageKey: perms.can("shalom.view_pickup_key"),
       canOverride: perms.can("shalom.override_payment_validation"),
+      canEditShalomDraft: perms.can("master.edit"),
       discountException: { ...discountException(keyCtx), max: DISCOUNT_EXCEPTION_MAX },
       shalomGuide,
+      olvaGuide: olvaLive ? { guideCode: olvaLive.guide_code } : null,
       keyAutosend: {
         enabled: autosendOn,
         unlocks,
@@ -760,7 +793,7 @@ export async function registerPayment(
           vision.fields.recipientCheck === "mismatch" ||
           identityDiscrepancy || dateVerdict.tooEarly
         ? "revision_admin"
-        : !operation || (vision.ok && !vision.isVoucher)
+        : !operation || !hasPositivePaymentAmount(amount) || (vision.ok && !vision.isVoucher)
           ? "info_incompleta"
           : "pendiente_revision";
 
@@ -847,6 +880,7 @@ export async function registerPayment(
         order_id: orderId,
         kind: input.kind,
         validation_status: "pendiente_revision",
+        amount: amount ?? null,
         vision: row.vision,
       },
       who: { storeId: ctx.storeId, actor: null, source: "flow" },
@@ -939,7 +973,7 @@ async function loadPayment(paymentId: string) {
   const { data } = await admin
     .from("order_payments")
     .select(
-      "id,order_id,store_id,kind,validation_status,operation_number," +
+      "id,order_id,store_id,kind,amount,validation_status,operation_number," +
         "operation_completed_by,vision,notes,registered_at",
     )
     .eq("id", paymentId)
@@ -951,6 +985,7 @@ async function loadPayment(paymentId: string) {
         store_id: string;
         kind: string;
         validation_status: string;
+        amount: number | null;
         operation_number: string | null;
         /** Quién lo transcribió a mano; nulo si lo leyó la visión. */
         operation_completed_by: string | null;
@@ -1023,6 +1058,7 @@ export async function validatePayment(
         "con «Corregir pago».",
     };
   }
+  if(!hasPositivePaymentAmount(payment.amount))return {error:MISSING_PAYMENT_AMOUNT};
   // CUATRO OJOS SOBRE EL DATO QUE DETECTA DUPLICADOS. Un nº de operación
   // transcrito a mano puede llevar un dígito cambiado, y eso no falla el día
   // que se escribe: el índice único no choca con nada porque el número que se
@@ -1625,7 +1661,11 @@ export async function completePaymentData(
     // visión o no hay nada», y no deja a alguien atado a un dato que ya no está.
     patch.operation_completed_by = operation ? ctx.userId : null;
   }
-  if (input.amount !== undefined) patch.amount = input.amount;
+  if (input.amount !== undefined) {
+    if(input.amount!==null && !hasPositivePaymentAmount(input.amount))return {error:"El monto debe ser mayor que S/ 0.00."};
+    if(payment.validation_status==="validado" && (input.amount===null || Number(input.amount)!==Number(payment.amount)))return {error:"Envía el pago a Observados antes de cambiar el monto de un pago validado. Después deberá validarse nuevamente."};
+    patch.amount = input.amount;
+  }
   if (input.paidAt !== undefined) patch.paid_at = input.paidAt;
   if (input.payerName !== undefined) patch.payer_name = input.payerName?.trim() || null;
   if (input.payerPhone !== undefined) patch.payer_phone = normalizePhone(input.payerPhone);
@@ -1633,7 +1673,7 @@ export async function completePaymentData(
 
   // Completar el nº de operación desbloquea la validación: el pago vuelve a la
   // cola normal en vez de quedarse en "información incompleta".
-  if (operation && payment.validation_status === "info_incompleta") {
+  if ((operation || payment.operation_number) && hasPositivePaymentAmount(input.amount === undefined ? payment.amount : input.amount) && payment.validation_status === "info_incompleta") {
     patch.validation_status = "pendiente_revision";
   }
 

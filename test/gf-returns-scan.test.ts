@@ -121,7 +121,7 @@ describe("receiveReturnedPackage con un paquete de Grupo GF", () => {
     state.cancelledAt = "2026-10-04T20:00:00Z";
     const result = await receiveReturnedPackage("KP137351-S01");
     expect(result.error).toContain("recibido en oficina");
-    expect(result.error).toContain("ANULADO en Shopify");
+    expect(result.error).toContain("ANULADO en la tienda");
     expect(state.rpcs).toHaveLength(1);
   });
 

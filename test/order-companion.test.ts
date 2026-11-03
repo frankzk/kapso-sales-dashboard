@@ -207,7 +207,9 @@ describe("quién puede viajar en qué caja (reglas 2 y 3)", () => {
     expect(companionLinkProblem(check({ host: { isCompanion: true } }))).toMatch(/viaja a su vez/);
     expect(companionLinkProblem(check({ companion: { hostsCompanions: true } }))).toMatch(/ya lleva otros/);
     expect(companionLinkProblem(check({ companion: { liveOwnOutputs: 1 } }))).toMatch(/salida propia viva/);
-    expect(companionLinkProblem(check({ companion: { cancelledAt: "2026-10-01T00:00:00Z" } }))).toMatch(/anulado en Shopify/);
+    expect(companionLinkProblem(check({ companion: { cancelledAt: "2026-10-01T00:00:00Z" } }))).toBe(
+      "Este pedido está anulado en la tienda: no viaja en ninguna caja.",
+    );
     expect(companionLinkProblem(check({ companion: { macroStage: "finalizado" } }))).toMatch(/finalizado/);
   });
 

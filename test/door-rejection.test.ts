@@ -144,7 +144,8 @@ describe("aliclikDoorBan: el primer rechazo no cierra, el segundo sí", () => {
 describe("el bloqueo es duro: no hay excepción que lo levante", () => {
   const banSource = readFileSync(resolve(process.cwd(), "lib/door-rejection.ts"), "utf8");
   const actions = readFileSync(
-    resolve(process.cwd(), "app/dashboard/pedidos/aliclik-actions.ts"),
+    // Cotizar y crear viven en el núcleo compartido desde el 16-10-2026.
+    resolve(process.cwd(), "lib/aliclik-guide.ts"),
     "utf8",
   );
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { agencyPaymentWindowLabel } from "@/lib/agency-payment-cohort";
+
 // Master de Pedidos — la vista central de control de la operación logística.
 //
 // FILTRA LA BASE, NO ESTA PANTALLA. Antes se bajaban las ~10.000 filas al
@@ -19,6 +21,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { MasterPhoneSale } from "@/components/master-phone-sale";
+import type { PhoneSaleRequest } from "@/lib/master-phone-sale";
 import { cn } from "@/components/ui";
 import {
   AttentionPill,
@@ -36,8 +40,11 @@ import {
 import { Sheet } from "@/components/filter-sheet";
 import { FacetPill } from "@/components/facet-pill";
 import {
+  IconChat,
   IconClock,
   IconDownload,
+  IconMapPin,
+  IconMoney,
   IconPackage,
   IconSearch,
   IconTruck,
@@ -89,6 +96,7 @@ import {
   AGENCY_COURIER_OPTIONS,
   needsAttestedAgencyShipment,
 } from "@/lib/agency-attested-shipment";
+import { OBSERVATIONS_SCREEN_HREF } from "@/lib/bulk-status-guard";
 import {
   agencyHasActivity,
   ATTEMPTS_OR_MORE,
@@ -99,14 +107,18 @@ import {
   MASTER_SEARCH_MIN_CHARS,
   masterSearchTerm,
   PAYMENT_CHECK_OPTIONS,
+  PAYMENT_STATUS_OPTIONS,
   SWAYP_AVAILABILITY_OPTIONS,
   type AgencySummary,
   type MasterFilters,
   type MasterSortKey,
 } from "@/lib/order-master-filters";
+import { productFilterOptions, type ProductOptionRow } from "@/lib/order-product-titles";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { courierDisplayName, dispatchedWithLabel, dispatchedWithShort } from "@/lib/dispatched-with";
-import { dispatchDateBadge } from "@/lib/dispatch-date";
+import { SCHEDULED_NO_LOCATION_LABEL, dispatchDateBadge } from "@/lib/dispatch-date";
+import { PENDING_VOUCHER_LABEL, awaitsPickupKey, pendingVoucherHint } from "@/lib/pending-voucher";
+import { PAID_UNNOTIFIED_LABEL, agencyDeadlineBadge } from "@/lib/agency-pickup-alert";
 import { buildMasterQuery } from "@/lib/master-query";
 import { receiveSearchValue, shouldSendSearch } from "@/lib/search-input-echo";
 import { OrderLineItems } from "@/components/order-line-items";
@@ -133,6 +145,7 @@ import {
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
 import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
+import { isWebPrepaid } from "@/lib/order-paid";
 import { PAYMENT_GATEWAY_LABEL } from "@/lib/payment-gateway";
 import {
   CONFIRMATION_CHANNELS,
@@ -170,7 +183,6 @@ import {
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
-import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
@@ -200,10 +212,18 @@ export function OrdersMasterBoard({
   filters,
   sortKey,
   facets,
+  productOptions = null,
+  productFilterIgnored = false,
   agency,
+  pendingVoucherCount = null,
+  paidUnnotifiedCount = null,
+  scheduledNoLocationCount = null,
   canEdit,
+  canCreateOrder = false,
   canExport = false,
   canOverride,
+  canSetStatus,
+  canCancelWoo = false,
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
@@ -212,6 +232,7 @@ export function OrdersMasterBoard({
   closurePermissions,
 }: {
   stores: StoreSummary[];
+  canCreateOrder?: boolean;
   view: MasterView;
   substage: MacroSubstage | null;
   counts: MasterCounts;
@@ -244,12 +265,40 @@ export function OrdersMasterBoard({
     pickup: string[];
     dispatchedWith: string[];
   };
+  /**
+   * Opciones de «Producto» (0300): pedidos por tienda y producto. `null` = la
+   * función no respondió (la 0300 sin aplicar): la píldora no se ofrece.
+   */
+  productOptions?: ProductOptionRow[] | null;
+  /** Venía `?pr=` en la URL pero no se pudo aplicar: se avisa en vez de callar. */
+  productFilterIgnored?: boolean;
   /** Contado en la base: sobre una página daría números falsos sin avisar. */
   agency: AgencySummary;
+  /**
+   * Pedidos con «Comprobante por validar» en las tiendas que se ven (MOM §16.1),
+   * leídos en vivo de `order_payments`. `null` = no se pudo leer: la píldora lo
+   * dice en vez de enseñar un cero que nadie contó.
+   */
+  pendingVoucherCount?: number | null;
+  /**
+   * «Pagado sin aviso» (MOM §12): pagados, en la agencia con el plazo por
+   * vencer o vencido y sin aviso de llegada enviado. `null` = no se pudo leer:
+   * la píldora no se pinta (un cero sería afirmar algo que nadie contó).
+   */
+  paidUnnotifiedCount?: number | null;
+  /**
+   * «Programado sin ubicación» (MOM §6.2): con envío programado y la cobertura
+   * «Por revisar» sin región, distrito o dirección. `null` = no se pudo leer.
+   */
+  scheduledNoLocationCount?: number | null;
   canEdit: boolean;
   /** Descargar el Excel (`data.export`, 08-10-2026): owner, admin o concedido en Equipo. */
   canExport?: boolean;
   canOverride: boolean;
+  /** Cambiar el estado a mano (`master.set_status`): owner y admin (MOM §16, 15-10-2026). */
+  canSetStatus: boolean;
+  /** «Anular pedido» de WooCommerce (`orders.cancel_woo`): owner, admin o concedido en Equipo. */
+  canCancelWoo?: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -262,8 +311,18 @@ export function OrdersMasterBoard({
     canFinalize: boolean;
     canRefund: boolean;
     canReopen: boolean;
+    canManageCosts: boolean;
+    canManageLogistics: boolean;
   };
 }) {
+  const [phoneSaleRequest,setPhoneSaleRequest]=useState<PhoneSaleRequest|null>(null);
+  const [phoneSaleActive,setPhoneSaleActive]=useState(false);
+  const [phoneSaleReturnOrder,setPhoneSaleReturnOrder]=useState<string|null>(null);
+  const phoneSaleSequence=useRef(0);
+  const phoneSaleActiveChanged=useCallback((active:boolean)=>{
+    setPhoneSaleActive(active);
+    if(!active)setPhoneSaleRequest(null);
+  },[]);
   const router = useRouter();
   const pathname = usePathname();
   const [navigating, startNav] = useTransition();
@@ -285,6 +344,15 @@ export function OrdersMasterBoard({
   useEffect(() => {
     if (abrir) setOpenId(abrir);
   }, [abrir]);
+  // La sección con la que se abre un pedido desde la TABLA: el que tiene un
+  // comprobante por validar entra directo en Cobro, donde está «Validar y
+  // enviar la clave» (MOM §16.1). Los demás, como siempre, por Operar.
+  const [rowFocus, setRowFocus] = useState<DrawerSectionId | undefined>(undefined);
+  const openOrder = useCallback((orderId: string, focus?: DrawerSectionId) => {
+    setPhoneSaleReturnOrder(null);
+    setRowFocus(focus);
+    setOpenId(orderId);
+  }, []);
   const [openWorkspace, setOpenWorkspace] = useState<DrawerWorkspaceView>("operar");
   const changeToken = useRef<string | null>(null);
   // `?abrir=<pedido>&seccion=historial` abre el drawer en la pestaña Actividad
@@ -458,6 +526,12 @@ export function OrdersMasterBoard({
     const map = new Map(stores.map((s) => [s.id, s.shopify_domain]));
     return (id: string) => map.get(id) ?? null;
   }, [stores]);
+  // El sitio WooCommerce de cada tienda: el enlace de un pedido de WooCommerce
+  // va a su admin, no al de Shopify (MOM §38.12).
+  const storeWooSite = useMemo(() => {
+    const map = new Map(stores.map((s) => [s.id, s.woo_site_url ?? null]));
+    return (id: string) => map.get(id) ?? null;
+  }, [stores]);
   const stageSubstages = view === "todos" ? [] : MACRO_SUBSTAGES_BY_STAGE[view];
   // El ciclo es POR TIENDA, así que el control obedece al filtro de tienda: sin
   // filtro se leen todas y con una sola se puede cambiar la suya.
@@ -550,6 +624,8 @@ export function OrdersMasterBoard({
           <p className="mt-1 text-sm text-ink-500">Estado real de cada pedido {scope}, con su historial completo.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 min-[1400px]:pt-0.5">
+          {canCreateOrder && <MasterPhoneSale stores={stores} defaultStoreId={filters.stores.size===1 ? [...filters.stores][0] : null}
+            request={phoneSaleRequest} onActiveChange={phoneSaleActiveChanged}/>}
           <MasterSearchInput value={filters.search} onCommit={commitSearch} />
           {canWarehouse && (
             <Link href="/dashboard/pedidos/almacen" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
@@ -571,6 +647,18 @@ export function OrdersMasterBoard({
           )}
         </div>
       </header>
+
+      {!searchActive && filters.agencyUnpaid && (
+        <section aria-label="Pendientes de pago de Agencia" className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-info-wash px-4 py-3 ring-1 ring-line">
+          <div className="text-sm text-ink-700">
+            <p className="font-semibold text-ink-900">Agencia · sin pago completo</p>
+            <p>Guías Shalom u Olva del {agencyPaymentWindowLabel(filters.agencyUnpaid)}. Incluye pagos parciales y comprobantes por validar; excluye los pedidos ya pagados por checkout.</p>
+          </div>
+          <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: { agencyUnpaid: null } })}>
+            Quitar este filtro
+          </OpsButton>
+        </section>
+      )}
 
       {searchActive ? (
         <section aria-label="Resultados de búsqueda" aria-busy={navigating || undefined} className={CARD}>
@@ -595,7 +683,7 @@ export function OrdersMasterBoard({
                 storeName={storeName}
                 multiStore={multiStore}
                 showConfirmation={view === "por_confirmar"}
-                onOpen={setOpenId}
+                onOpen={openOrder}
                 openId={openId}
                 selected={selectedIds}
                 onToggleRow={toggleRow}
@@ -620,9 +708,15 @@ export function OrdersMasterBoard({
         </section>
       ) : (
         <>
-          {agencyHasActivity(agency) && (
-            <AgencyLine summary={agency} filters={filters} onFilter={(next) => patch(next)} />
-          )}
+          <AttentionLine
+            summary={agency}
+            showAgency={agencyHasActivity(agency)}
+            pendingVoucherCount={pendingVoucherCount}
+            paidUnnotifiedCount={paidUnnotifiedCount}
+            scheduledNoLocationCount={scheduledNoLocationCount}
+            filters={filters}
+            onFilter={(next) => patch(next)}
+          />
 
           {/* Las macroetapas son la navegación: siete cifras que filtran, con
               el tono del MOM (§25) en un cuadro que sirve de leyenda de las
@@ -723,6 +817,13 @@ export function OrdersMasterBoard({
                 selected={filters.couriers}
                 onChange={(couriers) => patch({ couriers })}
               />
+              <FacetPill
+                label="Estado de pago"
+                allLabel="Todos los estados de pago"
+                options={PAYMENT_STATUS_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                selected={filters.paymentStates}
+                onChange={(paymentStates) => patch({ paymentStates })}
+              />
               {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
                   poder pedirse aunque hoy no haya ninguno, que es justo cuando
                   interesa comprobar que no hay ninguno. */}
@@ -785,6 +886,18 @@ export function OrdersMasterBoard({
                 selected={filters.dispatchedWith}
                 onChange={(dispatchedWith) => patch({ dispatchedWith })}
               />
+              {/* Qué lleva el pedido (0300): el producto sin la variante, con
+                  cuántos pedidos lo llevan en las tiendas elegidas. Basta con
+                  uno. Sin la función de opciones no se ofrece. */}
+              {productOptions && (
+                <FacetPill
+                  label="Producto"
+                  allLabel="Todos los productos"
+                  options={productFilterOptions(productOptions, filters.stores, filters.products)}
+                  selected={filters.products}
+                  onChange={(products) => patch({ products })}
+                />
+              )}
               {/* Por dónde se generó el pedido: lo dicen sus etiquetas de
                   Shopify (0264). Opciones fijas, como «Swayp». */}
               <FacetPill
@@ -836,6 +949,12 @@ export function OrdersMasterBoard({
               )}
             </div>
 
+            {productFilterIgnored && (
+              <Banner tone="warn" role="status">
+                El filtro «Producto» todavía no está disponible y no se aplicó: la lista enseña todos los productos.
+              </Banner>
+            )}
+
             {showMore && (
               <MoreFilters
                 filters={filters}
@@ -881,7 +1000,7 @@ export function OrdersMasterBoard({
                   storeName={storeName}
                   multiStore={multiStore}
                   showConfirmation={view === "por_confirmar"}
-                  onOpen={setOpenId}
+                  onOpen={openOrder}
                   openId={openId}
                   selected={selectedIds}
                   onToggleRow={toggleRow}
@@ -919,20 +1038,26 @@ export function OrdersMasterBoard({
         </>
       )}
 
-      {openId && (
+      {openId && !phoneSaleActive && (
         <OrderDrawer
           orderId={openId}
           canEdit={canEdit}
           canOverride={canOverride}
+          canSetStatus={canSetStatus}
+          canCancelWoo={canCancelWoo}
+          canEditCustomerName={canCreateOrder}
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}
           closurePermissions={closurePermissions}
           storeName={storeName}
           storeDomain={storeDomain}
-          focusSection={openId === abrir ? focusSection : undefined}
+          storeWooSite={storeWooSite}
+          focusSection={phoneSaleReturnOrder===openId ? undefined : openId === abrir ? focusSection : rowFocus}
           onClose={() => {
             setOpenId(null);
+            setPhoneSaleReturnOrder(null);
+            setRowFocus(undefined);
             setOpenWorkspace("operar");
             // Se limpia la URL al cerrar: si no, recargar reabriría un pedido
             // que ya se atendió, y el enlace de la alerta quedaría pegado.
@@ -946,6 +1071,12 @@ export function OrdersMasterBoard({
           }}
           onSaved={() => router.refresh()}
           initialWorkspace={openWorkspace}
+          onNewOrderForCustomer={canCreateOrder ? (customer,workspace)=>{
+            setOpenWorkspace(workspace);
+            setPhoneSaleReturnOrder(openId);
+            setPhoneSaleRequest({...customer,requestId:++phoneSaleSequence.current});
+            setPhoneSaleActive(true);
+          } : undefined}
         />
       )}
 
@@ -956,6 +1087,7 @@ export function OrdersMasterBoard({
         visibleIds={rows.map((r) => r.order_id)}
         onToggleRow={toggleRow}
         canEdit={canEdit}
+        canSetStatus={canSetStatus}
         onClear={() => setSelectedIds(new Set())}
         // Solo refresca: limpiar la selección desmontaría la barra y con ella el
         // resumen de lo que acaba de pasar (incluidos los pedidos bloqueados).
@@ -1002,6 +1134,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.operationalStatuses,
     f.couriers,
     f.paymentChecks,
+    f.paymentStates,
     f.regions,
     f.provinces,
     f.districts,
@@ -1009,6 +1142,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.swaypAvailability,
     f.salesChannels,
     f.dispatchedWith,
+    f.products,
     f.pickupStates,
     ...(withManagement ? [f.managementDays] : []),
   ].filter((set) => set.size > 0).length;
@@ -1037,6 +1171,7 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   operationalStatuses: new Set(),
   couriers: new Set(),
   paymentChecks: new Set(),
+  paymentStates: new Set(),
   regions: new Set(),
   provinces: new Set(),
   districts: new Set(),
@@ -1044,27 +1179,45 @@ const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
   swaypAvailability: new Set(),
   salesChannels: new Set(),
   dispatchedWith: new Set(),
+  products: new Set(),
   pickupStates: new Set(),
   managementDays: new Set(),
   ...CLEARED_MORE_FILTERS,
 };
 
 /**
- * Seguimiento de agencia (§10). Es lo que evita la devolución: entre el 5 % y
- * el 6 % de estos pedidos termina devuelto por no recogerse a tiempo, así que
- * lo accionable es ver cuántos están disponibles y cuántos van a vencer.
+ * La línea de excepciones del Master: lo que está esperando a alguien.
  *
- * EL RECORRIDO EN CURSO, EN ORDEN FÍSICO, EN UNA SOLA LÍNEA: sale, viaja,
- * llega, se acerca a vencer, se devuelve. Sin total ni estados terminales
- * («Entregados», «Devueltos» ya no piden nada). Las dos primeras cifras se
- * leen; las tres últimas son filtros de un toque.
+ * Primero «Comprobante por validar» (MOM §16.1): la clienta ya pagó y espera a
+ * que una persona valide su comprobante —y, en agencia, su clave—. Va delante
+ * porque es lo único de la línea que se resuelve ya, sin esperar a un courier,
+ * y se ve aunque no haya nada por agencia. Se cuenta en todas las tiendas que
+ * se ven, como las de agencia; tocarla lista esos pedidos y cada fila abre su
+ * ficha en Cobro.
+ *
+ * Después, el seguimiento de agencia (§10). Es lo que evita la devolución:
+ * entre el 5 % y el 6 % de estos pedidos termina devuelto por no recogerse a
+ * tiempo, así que lo accionable es ver cuántos están disponibles y cuántos van
+ * a vencer. EL RECORRIDO EN CURSO, EN ORDEN FÍSICO, EN UNA SOLA LÍNEA: sale,
+ * viaja, llega, se acerca a vencer, se devuelve. Sin total ni estados
+ * terminales («Entregados», «Devueltos» ya no piden nada). Las dos primeras
+ * cifras se leen; las tres últimas son filtros de un toque.
  */
-function AgencyLine({
+function AttentionLine({
   summary,
+  showAgency,
+  pendingVoucherCount,
+  paidUnnotifiedCount,
+  scheduledNoLocationCount,
   filters,
   onFilter,
 }: {
   summary: AgencySummary;
+  /** Solo si hay algo en curso por agencia; si no, la línea lleva solo la píldora de cobro. */
+  showAgency: boolean;
+  pendingVoucherCount: number | null;
+  paidUnnotifiedCount: number | null;
+  scheduledNoLocationCount: number | null;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -1078,48 +1231,112 @@ function AgencyLine({
     // `justify-between`: en una línea, cifras a la izquierda y píldoras a la
     // derecha; si no caben, cada parte empieza a la izquierda en su renglón.
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-      <p className="min-w-0 text-[13px] leading-5 text-ink-500">
-        <span className="font-semibold text-ink-700">Envíos por agencia</span> · Shalom y Olva ·{" "}
-        {num(summary.pendienteDeEnvio)} {summary.pendienteDeEnvio === 1 ? "pendiente" : "pendientes"} de envío ·{" "}
-        {num(summary.enTransito)} en tránsito
-      </p>
-      <div role="group" aria-label="Recojo en agencia" className="flex flex-wrap items-center gap-2">
-        <AttentionPill
-          icon={IconPackage}
-          label="Disponibles para recojo"
-          count={summary.disponibles}
-          active={disponiblesActive}
-          hint="Ya llegaron a la agencia y esperan al cliente. Toca para listarlos."
-          onClick={() =>
-            onFilter({
-              pickupStates: disponiblesActive
-                ? new Set()
-                : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
-              expiringSoon: false,
-            })
-          }
-        />
-        <AttentionPill
-          icon={IconClock}
-          label="Próximos a vencer"
-          count={summary.proximosAVencer}
-          active={filters.expiringSoon}
-          hint="El plazo de recojo está por vencer: si nadie recoge, la agencia lo devuelve."
-          onClick={() => onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set() })}
-        />
-        <AttentionPill
-          icon={IconUndo}
-          label="Retorno iniciado"
-          count={summary.retornoIniciado}
-          active={retornoActive}
-          hint="La agencia ya inició la devolución."
-          onClick={() =>
-            onFilter({
-              pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
-              expiringSoon: false,
-            })
-          }
-        />
+      {showAgency && (
+        <p className="min-w-0 text-[13px] leading-5 text-ink-500">
+          <span className="font-semibold text-ink-700">Envíos por agencia</span> · Shalom y Olva ·{" "}
+          {num(summary.pendienteDeEnvio)} {summary.pendienteDeEnvio === 1 ? "pendiente" : "pendientes"} de envío ·{" "}
+          {num(summary.enTransito)} en tránsito
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <div role="group" aria-label="Cobro" className="flex items-center">
+          {pendingVoucherCount === null ? (
+            // Una lectura fallida no es un cero (MOM §12): se dice, y la
+            // píldora no se pinta para no afirmar que nadie espera.
+            <span className="text-[13px] font-medium text-warn-fg">
+              No se pudieron leer los comprobantes por validar. Recarga para reintentar.
+            </span>
+          ) : (
+            <AttentionPill
+              icon={IconMoney}
+              label={PENDING_VOUCHER_LABEL}
+              count={pendingVoucherCount}
+              active={filters.pendingVoucher}
+              hint="La clienta ya mandó su pago y espera que alguien lo valide. Toca para listarlos: cada uno se abre en Cobro."
+              onClick={() => onFilter({ pendingVoucher: !filters.pendingVoucher })}
+            />
+          )}
+        </div>
+        {/* «Programado sin ubicación» (MOM §6.2, #KP142558): tiene fecha de
+            envío y no tiene a dónde ir, así que no puede salir. Sin lectura no
+            se pinta: un cero sería afirmar algo que nadie contó. */}
+        {scheduledNoLocationCount !== null && (
+          <>
+          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+          <div role="group" aria-label="Envío" className="flex items-center">
+            <AttentionPill
+              icon={IconMapPin}
+              label={SCHEDULED_NO_LOCATION_LABEL}
+              count={scheduledNoLocationCount}
+              active={filters.scheduledNoLocation}
+              hint="Tienen envío programado (hoy, vencido o a futuro) pero les falta la región, el distrito o la dirección: así no pueden salir. Toca para listarlos: cada uno se abre en Ubicación para corregirla."
+              onClick={() => onFilter({ scheduledNoLocation: !filters.scheduledNoLocation })}
+            />
+          </div>
+          </>
+        )}
+        {showAgency && (
+          <>
+            <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+            <div role="group" aria-label="Recojo en agencia" className="flex flex-wrap items-center gap-2">
+              <AttentionPill
+                icon={IconPackage}
+                label="Disponibles para recojo"
+                count={summary.disponibles}
+                active={disponiblesActive}
+                hint="Ya llegaron a la agencia y esperan al cliente. Toca para listarlos."
+                onClick={() =>
+                  onFilter({
+                    pickupStates: disponiblesActive
+                      ? new Set()
+                      : new Set(["disponible_para_recojo", "pendiente_de_recojo"]),
+                    expiringSoon: false,
+                    paidUnnotified: false,
+                  })
+                }
+              />
+              <AttentionPill
+                icon={IconClock}
+                label="Próximos a vencer"
+                count={summary.proximosAVencer}
+                active={filters.expiringSoon}
+                hint="El plazo de recojo está por vencer: si nadie recoge, la agencia lo devuelve."
+                onClick={() =>
+                  onFilter({ expiringSoon: !filters.expiringSoon, pickupStates: new Set(), paidUnnotified: false })
+                }
+              />
+              {/* Dentro de «Próximos a vencer»: los que ya pagaron y no tienen
+                  ningún aviso de llegada enviado (MOM §12). Sin lectura, no se
+                  pinta: un cero sería afirmar algo que nadie contó. */}
+              {paidUnnotifiedCount !== null && (
+                <AttentionPill
+                  icon={IconChat}
+                  label={PAID_UNNOTIFIED_LABEL}
+                  count={paidUnnotifiedCount}
+                  active={filters.paidUnnotified}
+                  hint="Ya pagaron, el plazo de la agencia vence pronto o ya venció, y no tienen ningún aviso de llegada enviado: puede que no sepan que su paquete llegó. Toca para listarlos y avisarles."
+                  onClick={() =>
+                    onFilter({ paidUnnotified: !filters.paidUnnotified, pickupStates: new Set(), expiringSoon: false })
+                  }
+                />
+              )}
+              <AttentionPill
+                icon={IconUndo}
+                label="Retorno iniciado"
+                count={summary.retornoIniciado}
+                active={retornoActive}
+                hint="La agencia ya inició la devolución."
+                onClick={() =>
+                  onFilter({
+                    pickupStates: retornoActive ? new Set() : new Set(["retorno_iniciado"]),
+                    expiringSoon: false,
+                    paidUnnotified: false,
+                  })
+                }
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1346,12 +1563,13 @@ async function downloadCombinadas(
   return downloadPdf(`${target.url}?orders=${orderIds.join(",")}`, "x-combinadas-omitidas", target.file);
 }
 
-function BulkBar({
+export function BulkBar({
   selectedIds,
   orderNames,
   orderCouriers,
   visibleIds,
   canEdit,
+  canSetStatus,
   onClear,
   onToggleRow,
   onCreated,
@@ -1363,6 +1581,12 @@ function BulkBar({
   /** Ids de la página visible, para avisar de lo elegido que no se ve. */
   visibleIds: string[];
   canEdit: boolean;
+  /**
+   * «Registrar estado…» en lote: solo owner y admin (`master.set_status`,
+   * decisión del dueño del 15-10-2026, MOM §16). Es el mismo gesto que la
+   * tarjeta de la ficha, y el servidor lo rechaza igual sin el permiso.
+   */
+  canSetStatus: boolean;
   onClear: () => void;
   onToggleRow: (orderId: string) => void;
   onCreated: () => void;
@@ -1371,6 +1595,9 @@ function BulkBar({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failures, setFailures] = useState<BulkRouteOutputFailure[]>([]);
+  // Pedidos que el lote a entregado saltó por una observación de cuadre
+  // abierta (MOM §30.8): se aceptan en Liquidaciones 2, que no está en el menú.
+  const [observationSkips, setObservationSkips] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [courier, setCourier] = useState<ManualRouteCourier>(COURIER_TBD);
   const [dispatchDate, setDispatchDate] = useState(limaTodayKey());
@@ -1407,6 +1634,7 @@ function BulkBar({
     setError(null);
     setNotice(null);
     setFailures([]);
+    setObservationSkips(0);
   };
 
   // Pedir el rótulo ES el gesto: si el pedido todavía no tiene salida, se crea
@@ -1532,6 +1760,7 @@ function BulkBar({
         comment: bulkComment.trim() || undefined,
       });
       setFailures(result.failed);
+      setObservationSkips(result.skipped?.length ?? 0);
       if (result.error && !result.applied.length) {
         setError(result.error);
         return;
@@ -1592,7 +1821,7 @@ function BulkBar({
             {showCreate ? "Cancelar" : "Forzar courier…"}
           </OpsButton>
         )}
-        {canEdit && (
+        {canEdit && canSetStatus && (
           <OpsButton
             size="sm"
             aria-expanded={showStatus}
@@ -1693,7 +1922,7 @@ function BulkBar({
         </div>
       )}
 
-      {showStatus && (
+      {showStatus && canSetStatus && (
         <div className="flex flex-wrap items-end gap-3 border-t border-line pt-3">
           {/* El aviso no es decorativo: un override CONGELA el pedido frente al
               recálculo. Aplicado a cincuenta de golpe, cincuenta pedidos dejan
@@ -1761,6 +1990,15 @@ function BulkBar({
 
       {error && <p role="alert" className="max-w-2xl text-[13px] leading-5 text-crit-fg">{error}</p>}
       {notice && <p role="status" className="max-w-2xl text-[13px] leading-5 text-ok-fg">{notice}</p>}
+      {observationSkips > 0 && (
+        <p className="max-w-2xl text-[13px] leading-5 text-ink-700">
+          <a href={OBSERVATIONS_SCREEN_HREF} className="font-medium text-brand-700 hover:underline">
+            Abrir Liquidaciones 2
+          </a>{" "}
+          para aceptar el motivo de {observationSkips === 1 ? "ese pedido" : `esos ${observationSkips} pedidos`}: no está
+          en el menú.
+        </p>
+      )}
       {failures.length > 0 && (
         <details className="max-w-2xl text-[13px] leading-5 text-ink-700">
           <summary className="cursor-pointer font-medium text-warn-fg">
@@ -1988,7 +2226,8 @@ function MasterTable({
   storeName: (id: string) => string;
   multiStore: boolean;
   showConfirmation: boolean;
-  onOpen: (orderId: string) => void;
+  /** `focus`: la sección con la que se abre la ficha (Cobro, si espera un comprobante). */
+  onOpen: (orderId: string, focus?: DrawerSectionId) => void;
   /** El pedido cuyo drawer está abierto: su fila se resalta detrás del panel. */
   openId: string | null;
   selected: Set<string>;
@@ -1998,6 +2237,8 @@ function MasterTable({
   busy: boolean;
 }) {
   const pageIds = rows.map((r) => r.order_id);
+  // Para la chapa del plazo de la agencia: una sola hora para toda la página.
+  const nowIso = new Date().toISOString();
   const allChecked = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const someChecked = !allChecked && pageIds.some((id) => selected.has(id));
   const headCheck = useRef<HTMLInputElement>(null);
@@ -2064,10 +2305,19 @@ function MasterTable({
             const since = r.macro_since ?? r.status_since;
             const salioCon = r.dispatched_with ?? [];
             const showCourierCounts = Boolean(r.last_courier) || r.attempt_count > 0 || r.courier_count > 1 || salioCon.length > 0;
+            // Con un comprobante por validar, la ficha se abre en Cobro: es
+            // donde está «Validar y enviar la clave» (MOM §16.1).
+            // Programado sin ubicación (MOM §6.2): en Información → Ubicación,
+            // donde están «Último destino conocido» y «Corregir ubicación».
+            const focus: DrawerSectionId | undefined = r.pending_voucher
+              ? "pagos"
+              : r.scheduled_no_location
+                ? "ubicacion"
+                : undefined;
             return (
               <tr
                 key={r.id}
-                onClick={() => onOpen(r.order_id)}
+                onClick={() => onOpen(r.order_id, focus)}
                 aria-current={isOpen ? "true" : undefined}
                 className={cn(
                   "cursor-pointer transition-colors duration-100 max-xl:grid max-xl:grid-cols-[1.75rem_minmax(0,1fr)_auto] max-xl:gap-x-2 max-xl:gap-y-1 max-xl:px-4 max-xl:py-3",
@@ -2096,20 +2346,27 @@ function MasterTable({
                   </label>
                 </td>
                 <td className={cn(TD, "max-xl:col-start-2 max-xl:row-start-1")}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpen(r.order_id);
-                    }}
-                    title="Abrir la ficha del pedido"
-                    className={cn(
-                      "block max-w-full truncate text-left leading-5 underline-offset-2 hover:underline",
-                      isOpen ? "font-semibold text-brand-700" : "font-medium text-ink-900",
-                    )}
-                  >
-                    {r.order_name ?? "—"}
-                  </button>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpen(r.order_id, focus);
+                      }}
+                      title={focus ? "Abrir la ficha del pedido en Cobro" : "Abrir la ficha del pedido"}
+                      className={cn(
+                        "block max-w-full truncate text-left leading-5 underline-offset-2 hover:underline",
+                        isOpen ? "font-semibold text-brand-700" : "font-medium text-ink-900",
+                      )}
+                    >
+                      {r.order_name ?? "—"}
+                    </button>
+                    {isWebPrepaid({
+                      financialStatus: r.financial_status,
+                      totalRefunded: r.total_refunded,
+                      paymentGateway: r.payment_gateway,
+                    }) && <Badge tone="ok">Pagado por web</Badge>}
+                  </div>
                   <p
                     className="truncate text-[13px] leading-5 text-ink-500"
                     title={[
@@ -2212,6 +2469,46 @@ function MasterTable({
                         </Badge>
                       );
                     })()}
+                    {/* Sin ubicación no hay courier ni guía: la fecha se vence
+                        sola (#KP142558). Se apaga al corregir la ubicación o
+                        al quitar la fecha (MOM §6.2). */}
+                    {r.scheduled_no_location && (
+                      <Badge
+                        tone="crit"
+                        wrap
+                        className="xl:mt-0.5"
+                        title="Falta la región, el distrito o la dirección: corrige la ubicación para que pueda salir."
+                      >
+                        <IconMapPin aria-hidden className="size-3 shrink-0" />
+                        {SCHEDULED_NO_LOCATION_LABEL}
+                      </Badge>
+                    )}
+                    {/* El plazo de la agencia (MOM §12): solo si vence pronto o
+                        ya venció y el paquete sigue esperando. Se apaga solo al
+                        recogerse, entregarse o devolverse. */}
+                    {(() => {
+                      const plazo = agencyDeadlineBadge(r, nowIso);
+                      if (!plazo) return null;
+                      return (
+                        <Badge tone={plazo.tone} wrap className="xl:mt-0.5" title={plazo.title}>
+                          <IconClock aria-hidden className="size-3 shrink-0" />
+                          {plazo.text}
+                        </Badge>
+                      );
+                    })()}
+                    {/* Se apaga solo al validar o rechazar el pago: no hay
+                        nada que desmarcar a mano (MOM §16.1). */}
+                    {r.pending_voucher && (
+                      <Badge
+                        tone="warn"
+                        wrap
+                        className="xl:mt-0.5"
+                        title={pendingVoucherHint(r.pending_voucher, awaitsPickupKey(r))}
+                      >
+                        <IconMoney aria-hidden className="size-3 shrink-0" />
+                        {PENDING_VOUCHER_LABEL}
+                      </Badge>
+                    )}
                   </div>
                 </td>
                 {showConfirmation && (

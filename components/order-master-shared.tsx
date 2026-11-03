@@ -169,7 +169,6 @@ import {
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { outputDisplayCode } from "@/lib/shipment-output";
-import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 
@@ -189,6 +188,7 @@ export function fmtDateTime(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(+d)) return "—";
   return d.toLocaleString("es-PE", {
+    timeZone: "America/Lima",
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",
@@ -628,6 +628,16 @@ export const TIMELINE_LABEL: Record<string, string> = {
   created: "Pedido creado",
   confirmed: "Pedido confirmado",
   cancelled_shopify: "Anulado en Shopify",
+  legacy_shopify_sale_cancelled: "Venta histórica anulada en Kapta",
+  woo_sale_ended_pending_return: "Venta terminada · retorno pendiente",
+  woo_sale_return_synced: "Retorno e inventario confirmados · cancelado en WooCommerce",
+  woo_sale_return_sync_failed: "Stock pendiente en WooCommerce · revisar",
+  // MOM §38.3: la tienda WooCommerce anuló o reactivó el pedido. La nota dice
+  // quién («por <usuario de WordPress>» o «WooCommerce (automático)»).
+  cancelled_woocommerce: "Anulado en WooCommerce",
+  customer_name_update_requested: "Corrección de nombre solicitada",
+  customer_name_updated: "Nombre del cliente corregido",
+  reactivated_woocommerce: "Reactivado en WooCommerce",
   courier_assigned: "Courier asignado",
   guide_registered: "Guía registrada",
   guide_created: "Guía creada",
@@ -658,6 +668,14 @@ export const TIMELINE_LABEL: Record<string, string> = {
   payment: "Pago",
   payment_recipient_exception: "Pago validado con cuenta receptora no verificada",
   aliclik_risk_exception: "Excepción al riesgo de Aliclik",
+  // La guía automática del día programado (MOM §6.2) que no se pudo crear.
+  aliclik_auto_guide_failed: "Guía automática no creada",
+  // MOM §6.1, «Confirmó por Chatby» (01-11-2026): la clienta escribió para
+  // confirmar y algo no cuadró. La nota dice qué; lo confirma una persona.
+  chatby_confirmation_held: "Confirmación por Chatby para la asesora",
+  // MOM §25, «Chatby» (02-11-2026): lo que una persona le escribió a la clienta
+  // desde la ficha. La nota es el texto; el autor, quien lo mandó.
+  chatby_message: "Mensaje por WhatsApp (Chatby)",
   additional_output_reason: "Motivo de la salida adicional",
   recovery_discarded: "Recuperación de provincia descartada",
   confirmation_cancellation_task_created: "Tarea de anulación creada",
@@ -728,6 +746,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   lima_repro_call: "Repro Lima: llamada",
   lima_repro_agreed: "Repro Lima: acuerdo",
   lima_repro_closed: "Repro Lima: caso cerrado",
+  lima_retry_approved: "Reintento Aliclik aprobado",
+  lima_retry_dismissed: "Reintento Aliclik: pasó a Repro Lima",
   route_reopened: "Ruta reabierta",
   delivered_unconfirmed_pickup: "Entregado sin confirmar recojo",
   handed_to_courier: "Entregado al courier",

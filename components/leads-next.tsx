@@ -1,12 +1,13 @@
 "use client";
 
 // El siguiente lead de cada vendedora (DESIGN.md › Leads, MOM §11 › «El
-// siguiente lead de cada vendedora»). Arriba de «Sin llamar», a lo ancho: el
+// siguiente lead de cada vendedora»). Arriba de «Por llamar», a lo ancho: el
 // lead que le toca llamar ahora, ya reservado para ella, en tres columnas —el
 // cliente y lo que pregunta, registrar la gestión, y el chat—. Nunca el mismo a
 // dos vendedoras: aparecer aquí es tomarlo con la reserva de siempre
 // (claimLead, 10 minutos), que cuenta como una de sus dos.
 
+import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
@@ -39,6 +40,7 @@ import { SEGMENT_TONE } from "@/components/lead-segment-tone";
 import { CoverageBadge } from "@/components/coverage-badge";
 import type { OrderCoverage } from "@/lib/order-coverage";
 import { IconCheck, IconCopy, IconMapPin, IconPhone, IconWhatsApp } from "@/components/icons";
+import { cartsTone, cartsVerdict } from "@/lib/customer-carts";
 
 // El chat y el resultado son los de la ficha, cargados aparte: la cola no paga
 // su peso en el primer pintado (test/leads-bundle.test.ts).
@@ -138,6 +140,8 @@ export interface NextLeadState {
   skip: () => void;
   /** Suelta el siguiente (abrir otro lead de la cola lo pide ANTES de reservar el otro). */
   release: () => Promise<void>;
+  /** Descarta una reserva perdida solo en esta pestaña; no toca al nuevo dueño. */
+  invalidate: (id: string) => void;
   retry: () => void;
 }
 
@@ -324,6 +328,12 @@ export function useNextLead({
     setTaken(new Map());
   }, []);
 
+  const invalidate = useCallback((id: string) => {
+    if (heldRef.current !== id) return;
+    hold(null);
+    setTaken((m) => new Map(m).set(id, Date.now()));
+  }, [hold]);
+
   const lead = candidate && candidate.id === heldId ? candidate : null;
   return {
     lead,
@@ -334,6 +344,7 @@ export function useNextLead({
     skip,
     release,
     retry,
+    invalidate,
   };
 }
 
@@ -342,6 +353,7 @@ export function useNextLead({
 const SOURCE_WORD: Record<string, string> = {
   meta_ad: "una campaña",
   fb_web: "un enlace de Meta",
+  web: "el botón de WhatsApp de la web",
   cod_cart: "el formulario de carrito",
   abandoned_browse: "una búsqueda en la web",
 };
@@ -350,6 +362,7 @@ const SOURCE_WORD: Record<string, string> = {
 const SOURCE_LABEL: Record<string, string> = {
   meta_ad: "Campaña",
   fb_web: "Enlace de Meta",
+  web: "Web de la tienda",
   cod_cart: "Formulario de carrito",
   abandoned_browse: "Búsqueda en la web",
 };
@@ -486,8 +499,38 @@ function ContactIcons({ lead }: { lead: LeadRow }) {
   );
 }
 
+const CART_VERDICT_TONE: Record<ReturnType<typeof cartsTone>, string> = {
+  warn: "text-warn-fg",
+  ok: "text-ok-fg",
+  neutral: "text-ink-700",
+};
+
+/**
+ * ¿Termina la compra o solo deja carritos? (25-10-2026, lib/customer-carts.ts):
+ * cuántos carritos dejó antes en esta tienda y cuántos terminaron en pedido.
+ * La lista entera está en la ficha.
+ */
+function PriorCarts({ history }: { history: Loaded<CustomerHistory | null> }) {
+  if (history === "loading") return <span className="text-ink-500">Buscando carritos…</span>;
+  if (history === "error" || !history || history.carts === null) {
+    return <span className="text-ink-500">No se pudo consultar ahora.</span>;
+  }
+  const summary = history.carts?.summary;
+  if (!summary?.total) return <span className="text-ink-700">Ninguno: es su primer carrito</span>;
+  return (
+    <p>
+      <span className="font-medium tabular-nums">
+        {summary.total} {summary.total === 1 ? "carrito" : "carritos"}
+      </span>
+      <span className={`font-medium ${CART_VERDICT_TONE[cartsTone(summary)]}`}> · {cartsVerdict(summary)}</span>
+    </p>
+  );
+}
+
 function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
-  if (history === "loading") return <span className="text-ink-500">Buscando en Shopify…</span>;
+  // Busca en la base, en el historial de Shopify importado (MOM §37.7) y en Shopify;
+  // los pedidos de WooCommerce salen de la base (MOM §38.12).
+  if (history === "loading") return <span className="text-ink-500">Buscando pedidos…</span>;
   if (history === "error") return <span className="text-ink-500">No se pudo consultar ahora.</span>;
   const count = Math.max(history?.orderCount ?? 0, history?.recentOrders.length ?? 0);
   if (!history || count === 0) return <span className="text-ink-700">Ninguno: es cliente nuevo</span>;
@@ -513,6 +556,7 @@ function PriorOrders({ history }: { history: Loaded<CustomerHistory | null> }) {
               <span className="w-12 shrink-0">{shortDate(o.createdAt) ?? "—"}</span>
               <span className={o.cancelled ? "text-ink-500 line-through decoration-ink-300" : undefined}>{soles(o.amount)}</span>
               {o.cancelled && <Badge tone="crit">Anulado</Badge>}
+              {o.fromHistory && <span className="text-ink-500">del historial de Shopify</span>}
             </li>
           ))}
         </ul>
@@ -613,6 +657,7 @@ function ClientColumn({
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <SegmentBadge lead={lead} />
+                  <LeadAttemptBadge lead={lead} />
           {urgency?.tier === "dorada" && <Badge tone="ok">{`Hora dorada · quedan ${urgency.minutesLeft} min`}</Badge>}
           {(win === "por_vencer" || win === "critica") && <Badge tone="warn">Ventana por vencer</Badge>}
           {win === "cerrada" && <Badge tone="crit">Sin ventana de 24 h</Badge>}
@@ -662,6 +707,9 @@ function ClientColumn({
       <dl className="grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-2.5 border-t border-line pt-4">
         <Row label="Pedidos antes">
           <PriorOrders history={history} />
+        </Row>
+        <Row label="Carritos antes">
+          <PriorCarts history={history} />
         </Row>
         <Row label="Llamadas">
           <CallsLine calls={context.calls} now={now} />

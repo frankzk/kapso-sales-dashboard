@@ -28,6 +28,7 @@ import {
   resolveLimaDistrict,
 } from "@/lib/order-coverage";
 import { isKnownDepartment } from "@/lib/peru-departamentos";
+import { parseWebLocation, webLocationCoverage } from "@/lib/web-location";
 
 export type LeadCoverage = "lima" | "provincia" | "sin_identificar";
 
@@ -46,6 +47,8 @@ export interface LeadCoverageSignals {
   region?: string | null;
   province?: string | null;
   district?: string | null;
+  /** El primer mensaje: trae «Soy de Depto / Provincia / Distrito» si llegó desde la web. */
+  first_inbound_text?: string | null;
 }
 
 /**
@@ -208,7 +211,9 @@ function coverageFromLocation(
 /**
  * Cobertura del lead para la cola de llamadas. Primera señal que sirva:
  *
- * 1. Lo que dijo el propio lead (carrito, chat): es lo más nuevo.
+ * 1. Lo que dijo el propio lead (carrito, chat): es lo más nuevo. Si no hay
+ *    región guardada, la ubicación que eligió en la web y viene en su primer
+ *    mensaje («Soy de Lima / Lima / Santa Anita») gana a un distrito suelto.
  * 2. `priorCoverage`: la cobertura del último pedido del mismo teléfono
  *    (`order_master.coverage`), o null si no compró antes. Es una entrega real.
  * 3. `shopifyAddress`: la dirección por defecto del cliente en Shopify (0228),
@@ -228,6 +233,15 @@ export function leadCoverage(
   } = {},
 ): LeadCoverage {
   const own = coverageFromLocation(lead, overrides);
+  // Una región guardada (carrito, o la ubicación de la web ya guardada por la
+  // sincronización) es lo más nuevo y estructurado: manda.
+  const hasRegion = !!((lead.region ?? "").trim() || (lead.province ?? "").trim());
+  if (hasRegion && own !== "sin_identificar") return own;
+  // Lo que eligió en la web antes de saltar al WhatsApp (lib/web-location.ts).
+  // Se lee del primer mensaje para que la cola lo sepa antes de que la
+  // sincronización guarde la región, y gana a un distrito suelto del chat.
+  const web = parseWebLocation(lead.first_inbound_text);
+  if (web) return webLocationCoverage(web, lead.store_id, overrides);
   if (own !== "sin_identificar") return own;
   if (priorCoverage === "lima") return "lima";
   if (priorCoverage === "provincia_cod" || priorCoverage === "agencia") return "provincia";

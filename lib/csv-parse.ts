@@ -4,8 +4,12 @@
 
 const UTF8_BOM = "﻿";
 
-/** Parse CSV text into an array of string cells per row (header included). */
-export function parseCsvRows(text: string): string[][] {
+/**
+ * Parse CSV text into an array of string cells per row (header included).
+ * `delimiter` is a comma unless the file says otherwise — Shopify's «CSV para
+ * Excel» can come tab-separated (lib/shopify-history.ts detects it).
+ */
+export function parseCsvRows(text: string, delimiter = ","): string[][] {
   let s = text;
   if (s.startsWith(UTF8_BOM)) s = s.slice(1);
   const rows: string[][] = [];
@@ -47,7 +51,7 @@ export function parseCsvRows(text: string): string[][] {
       i += 1;
       continue;
     }
-    if (ch === ",") {
+    if (ch === delimiter) {
       pushCell();
       i += 1;
       continue;

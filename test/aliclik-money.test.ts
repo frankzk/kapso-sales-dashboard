@@ -292,7 +292,9 @@ describe("la compuerta de prepago está enchufada en las DOS puertas", () => {
   // no la llamaba nadie, con las pruebas en verde todo el tiempo. Una compuerta
   // que solo existe en la vista previa no es una compuerta — la creación real se
   // puede alcanzar con un reintento o llamando a la acción directamente.
-  const source = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/aliclik-actions.ts"), "utf8");
+  // Desde el 16-10-2026 las dos puertas viven en lib/aliclik-guide.ts: la acción
+  // del botón y la guía automática del día programado pasan por ahí.
+  const source = readFileSync(resolve(process.cwd(), "lib/aliclik-guide.ts"), "utf8");
 
   it("la vista previa la consulta antes de calcular el importe", () => {
     // Se busca la LLAMADA, no el nombre a secas: la línea del import contiene

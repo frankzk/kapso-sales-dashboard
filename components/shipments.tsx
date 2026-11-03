@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import { cn } from "@/components/ui";
@@ -74,7 +74,7 @@ import {
   type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
-import { motivoParaMostrar } from "@/lib/aliclik-status";
+import { courierDetail, motivoParaMostrar } from "@/lib/aliclik-status";
 import { normalizeDepartment } from "@/lib/peru-departamentos";
 import {
   REPRO_COVERAGE_OPTIONS,
@@ -91,6 +91,7 @@ import type {
   StoreSummary,
 } from "@/lib/types";
 import { SHIPMENT_VIEWS, type ShipmentView } from "@/lib/shipments-access";
+import { orderPlatformName } from "@/lib/order-admin-url";
 import { teamConversion, teamCostPerReprogramada, type TeamScore, type TeamScoreRow } from "@/lib/team-score";
 import {
   RECOVERY_CALL_DISPOSITIONS,
@@ -446,6 +447,7 @@ export function ShipmentsBoard({
   reprogram,
   teamScore,
   initialOpenId,
+  swaypUnknown,
 }: {
   stores: StoreSummary[];
   view: ShipmentView;
@@ -455,6 +457,8 @@ export function ShipmentsBoard({
   /** «Gestión por persona» de hoy; los otros rangos se piden al elegirlos. */
   teamScore?: TeamScore | null;
   initialOpenId?: string | null;
+  /** «Guías de Swayp que Kapta no tiene» (MOM §11.2, 0282), bajo la cabecera; null si no hay. */
+  swaypUnknown?: ReactNode;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(initialOpenId ?? null);
@@ -1043,6 +1047,8 @@ export function ShipmentsBoard({
           </div>
         </div>
       </header>
+
+      {swaypUnknown}
 
       {/* LA COLA VA PRIMERO. Las métricas de 30 días y el marcador por asesora
           son lectura de dirección, no de quien marca el teléfono: cada apertura
@@ -2642,6 +2648,10 @@ function ShipmentDrawer({
     shipment?.swayp_guide && (shipment.swayp_state === 6 || shipment.swayp_state === 8),
   );
   const shopifyAddress = detail && !("error" in detail) ? detail.order?.shipping_address ?? null : null;
+  // La tienda del pedido (`orders.platform`, MOM §38.12): de dónde salió la
+  // dirección, y si corregirla aquí la escribe allá (solo Shopify).
+  const orderPlatformValue = detail && !("error" in detail) ? detail.order?.platform : undefined;
+  const orderStoreName = orderPlatformName(orderPlatformValue);
   const deliveryAddress = shipment?.delivery_address ?? shopifyAddress?.address1 ?? null;
   const deliveryReference = shipment?.delivery_reference ?? shopifyAddress?.address2 ?? null;
   const deliveryLocality = !shipment?.delivery_address
@@ -2661,7 +2671,7 @@ function ShipmentDrawer({
     : shipment?.delivery_address
       ? "Importado desde Aliclik"
       : shopifyAddress?.address1
-        ? "Obtenido de Shopify"
+        ? `Obtenido de ${orderStoreName}`
         : "Sin dirección disponible";
   const aliclikDecision = shipment
     ? evaluateAliclikReschedule({
@@ -3115,7 +3125,17 @@ function ShipmentDrawer({
                     Va en la ficha que se lee mientras suena el teléfono. */}
                 {(() => {
                   const m = motivoParaMostrar(detail.shipment);
-                  if (!m) return null;
+                  // Lo que el Excel de Aliclik añade (0304): subestado y comentario.
+                  const extra = courierDetail(detail.shipment.aliclik_sub_status, detail.shipment.aliclik_rider_comment).replace(/^ · /, "");
+                  if (!m && !extra) return null;
+                  if (!m) {
+                    return (
+                      <div>
+                        <p className={DRAWER_KEY}>Detalle de Aliclik</p>
+                        <p className="text-sm leading-5 text-ink-900 [overflow-wrap:anywhere]">{extra}</p>
+                      </div>
+                    );
+                  }
                   return (
                     <div>
                       <p className={DRAWER_KEY}>Cómo terminó el intento anterior</p>
@@ -3127,6 +3147,7 @@ function ShipmentDrawer({
                       >
                         {keepDots(m.texto)}
                       </p>
+                      {extra && <p className="mt-0.5 text-[13px] leading-5 text-ink-700 [overflow-wrap:anywhere]">Aliclik: {extra}</p>}
                       {m.vioElProducto && (
                         <p className="mt-0.5 text-[13px] leading-5 text-crit-fg">
                           Vio el producto y no quedó: normalmente no se reenvía.
@@ -3151,7 +3172,7 @@ function ShipmentDrawer({
                 {localityConflict && (
                   <Banner tone="warn" title="Revisa el destino antes de despachar.">
                     El courier dice <b className="font-semibold text-ink-900">{detail.shipment.city}</b>, pero la
-                    dirección de Shopify es{" "}
+                    dirección de {orderStoreName} es{" "}
                     <b className="font-semibold text-ink-900">
                       {[shopifyAddress?.city, shopifyAddress?.province].filter(Boolean).join(" · ")}
                     </b>
@@ -4123,7 +4144,9 @@ function ShipmentDrawer({
                     </label>
                   </div>
                   <p className={DRAWER_NOTE}>
-                    Al guardar se actualizará el pedido de Shopify y esta dirección no será reemplazada por futuros Excel.
+                    {orderPlatformValue === "woocommerce"
+                      ? "Al guardar, la dirección queda en el envío (el pedido es de WooCommerce: allí no se cambia) y no será reemplazada por futuros Excel."
+                      : "Al guardar se actualizará el pedido de Shopify y esta dirección no será reemplazada por futuros Excel."}
                   </p>
                   <div className="flex flex-wrap justify-end gap-2">
                     <OpsButton onClick={() => setShowAddressEditor(false)} className="pointer-coarse:h-11">
@@ -4728,7 +4751,7 @@ function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {
   return (
     <div>
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[13px] font-medium leading-5 text-ink-700">Productos de Shopify</p>
+        <p className="text-[13px] font-medium leading-5 text-ink-700">Productos de {orderPlatformName(order.platform)}</p>
         {order.line_items.length > 0 && (
           <p className="shrink-0 text-[13px] leading-5 tabular-nums text-ink-500">
             {order.line_items.length} {order.line_items.length === 1 ? "producto" : "productos"}

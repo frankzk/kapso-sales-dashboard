@@ -1,6 +1,8 @@
 "use client";
 
-// Pantalla de mapeo SKU de Shopify → EAN de Aliclik.
+// Pantalla de mapeo SKU de la tienda → EAN de Aliclik. La lista sale del
+// catálogo de Shopify o, en una tienda que ya crea en WooCommerce, del de
+// WooCommerce (MOM §38.12): los textos nombran esa fuente (`view.source`).
 //
 // Sin esto no se puede crear ninguna guía, y el mapeo no sale gratis: los SKUs
 // de las dos plataformas no tienen relación. El sync empareja por NOMBRE lo que
@@ -12,6 +14,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Card, EmptyState } from "@/components/ui";
+import { catalogSourceIn, catalogSourceTag, type CatalogPlatform } from "@/lib/catalog-source";
 import {
   mapSku,
   mapSwaypCodbar,
@@ -116,9 +119,18 @@ export function AliclikCatalog({
         </div>
       )}
 
+      {view.sourceNotice && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {view.sourceNotice}
+        </div>
+      )}
+
       {view.missingSku > 0 && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-          <span className="font-medium">{view.missingSku} producto(s) activo(s) no tienen SKU en Shopify.</span>{" "}
+          <span className="font-medium">
+            {view.missingSku} producto(s) {view.source === "woocommerce" ? "publicado(s)" : "activo(s)"} no
+            tienen SKU {catalogSourceIn(view.source)}.
+          </span>{" "}
           Ya aparecen en esta pantalla, pero deben recibir un SKU antes de poder asociarlos y crear guías en Aliclik.
         </div>
       )}
@@ -176,6 +188,7 @@ export function AliclikCatalog({
             <CatalogRowCard
               key={r.rowKey}
               row={r}
+              source={view.source}
               storeId={storeId}
               canManage={canManage}
               pending={pending}
@@ -194,6 +207,7 @@ export function AliclikCatalog({
 
 function CatalogRowCard({
   row,
+  source,
   storeId,
   canManage,
   pending,
@@ -204,6 +218,8 @@ function CatalogRowCard({
   msg,
 }: {
   row: CatalogRow;
+  /** De dónde sale la fila: Shopify o WooCommerce. */
+  source: CatalogPlatform;
   storeId: string;
   canManage: boolean;
   pending: boolean;
@@ -223,7 +239,7 @@ function CatalogRowCard({
           <p className="truncate text-sm font-medium text-slate-900">{row.title}</p>
           <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
             <span className="font-medium uppercase tracking-wide text-slate-400">
-              Variante Shopify
+              Variante {catalogSourceTag(source)}
             </span>
             <span
               className={`rounded px-1.5 py-0.5 ${
@@ -236,19 +252,19 @@ function CatalogRowCard({
             </span>
           </p>
           <p className="mt-0.5 text-xs text-slate-500">
-            SKU Shopify{" "}
+            SKU {catalogSourceTag(source)}{" "}
             {row.shopifySku ? (
               <code className="rounded bg-slate-100 px-1">{row.shopifySku}</code>
             ) : (
               <span className="rounded bg-rose-50 px-1.5 py-0.5 font-medium text-rose-700">
-                Falta SKU en Shopify
+                Falta SKU {catalogSourceIn(source)}
               </span>
             )}
           </p>
 
           {!row.shopifySku ? (
             <p className="mt-1 text-xs text-rose-700">
-              Abre este producto en Shopify, asigna un SKU a la variante y vuelve a sincronizar.
+              Abre este producto {catalogSourceIn(source)}, asigna un SKU a la variante y vuelve a sincronizar.
             </p>
           ) : row.ean ? (
             <p className="mt-1 text-xs text-emerald-700">
@@ -348,7 +364,7 @@ function CatalogRowCard({
 }
 
 /**
- * El vínculo con Swayp: SKU de Shopify → código de barras de su inventario.
+ * El vínculo con Swayp: SKU de la tienda → código de barras de su inventario.
  *
  * Va en la MISMA fila que el de Aliclik y no en otra pantalla porque la unidad
  * de trabajo es el producto, no el courier: quien está vinculando el catálogo
@@ -377,7 +393,7 @@ function SwaypCodbarRow({
 }) {
   const [codbar, setCodbar] = useState("");
 
-  // Sin SKU en Shopify no hay clave con la que vincular, y el bloque de arriba
+  // Sin SKU en la tienda no hay clave con la que vincular, y el bloque de arriba
   // ya lo dice con su propio aviso; repetirlo sería ruido.
   if (!row.shopifySku) return null;
 

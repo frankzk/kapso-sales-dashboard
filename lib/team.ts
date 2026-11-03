@@ -7,14 +7,19 @@
 // «Validar pagos» desde Equipo, con doce admins en la organización. Pasó: una
 // admin se concedió «Corregir pagos» y «Administrar Grupo GF», y dos admins
 // dieron «Validar pagos» a otras personas. Desde entonces un admin solo puede
-// invitar o quitar vendedoras y solo lectura, y conceder lo operativo
+// invitar o quitar vendedoras, solo lectura y motorizados, y conceder lo operativo
 // («Reportar entregas de rutas»). Roles, admins y permisos de dinero o datos:
 // solo el dueño.
 
 import type { Role } from "@/lib/types";
 import { isFunctionalRole } from "@/lib/permissions";
 
-export const ROLES: Role[] = ["owner", "admin", "viewer", "vendedora"];
+// «motorizado» (0066) estuvo en la base y en los permisos desde agosto, pero no
+// en esta lista: Equipo no podía invitar con él, y a Roy y Yhoni —motorizados de
+// verdad— el selector los pintaba como «Dueño», la primera opción, porque su rol
+// no estaba entre las opciones (23-10-2026). Solo da `routes.deliver`: su ruta,
+// desde el celular (MOM §27).
+export const ROLES: Role[] = ["owner", "admin", "viewer", "vendedora", "motorizado"];
 
 export interface MemberLite {
   user_id: string;

@@ -21,7 +21,7 @@ export function UrpiAttemptsSection({ orderId, className }: { orderId: string; c
   return <section aria-label="Intentos de Urpi" className={className}>
     <div className="flex flex-wrap items-baseline justify-between gap-2">
       <h3 className="text-base font-semibold text-ink-900">Intentos de Urpi</h3>
-      <span className="text-xs text-ink-500">Según su reporte · {attempts[0]!.linkMethod === "manual" ? "vinculado a mano" : "vinculado por teléfono"}</span>
+      <span className="text-xs text-ink-500">Según su reporte · {attempts[0]!.linkMethod === "manual" ? "vinculado a mano" : attempts[0]!.linkMethod === "programacion" ? "vinculado por la programación" : "vinculado por teléfono"}</span>
     </div>
     <ol className="mt-3 space-y-3">{attempts.map((attempt) => <li key={attempt.urpiRow} className="flex gap-3 text-sm">
       <span aria-hidden className={`mt-1.5 size-2.5 shrink-0 rounded-full ${TONE[attempt.resultCode] ?? "bg-slate-400"}`} />

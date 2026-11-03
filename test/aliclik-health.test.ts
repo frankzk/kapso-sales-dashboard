@@ -180,7 +180,8 @@ describe("cuándo dejar de insistir al cotizar", () => {
 // La regla puede estar bien y no llegar a ninguna parte.
 describe("la regla llega al flujo de cotización", () => {
   const actions = readFileSync(
-    resolve(process.cwd(), "app/dashboard/pedidos/aliclik-actions.ts"),
+    // Cotizar y crear viven en el núcleo compartido desde el 16-10-2026.
+    resolve(process.cwd(), "lib/aliclik-guide.ts"),
     "utf8",
   );
 

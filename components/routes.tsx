@@ -33,6 +33,8 @@ import { courierBoxHref } from "@/lib/courier-box-href";
 import { RISK_LABELS, type RiskAssessment } from "@/lib/retries";
 import type { RouteRow, StopWithOrder } from "@/lib/routes-access";
 import type { RiderRow } from "@/lib/settlements-access";
+import { defaultCarryDate, isKeptReprogrammed } from "@/lib/gf-carry-kept";
+import type { KeptReprogrammed } from "@/lib/gf-carry-kept-server";
 import { Hint } from "@/components/hint";
 import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import { IconAlert, IconCamera, IconCameraOff, IconCheckCircle, IconClock, IconPlus, IconReceipt, IconTruck, IconUndo } from "@/components/icons";
@@ -41,6 +43,7 @@ import { checkStopRate, stopEarnings } from "@/lib/rider-pay";
 import type { RiderPayDetail } from "@/lib/rider-pay";
 import {
   addStops,
+  carryKeptReprogrammed,
   closeRoute,
   reopenRoute,
   ensureRoute,
@@ -148,7 +151,10 @@ export function RoutesBoard({
   onRefresh,
   closeContext = null,
   canCancelLoads = false,
+  kept = null,
 }: {
+  /** Reprogramados que el motorizado conserva de rutas anteriores (§29.7). */
+  kept?: KeptReprogrammed[] | null;
   /** Tras cada acción que salió bien (el panel lateral recarga su detalle). */
   onChanged?: () => void;
   /** «Volver a comprobar»: vuelve a leer paradas y cargas sin hacer nada. */
@@ -290,6 +296,10 @@ export function RoutesBoard({
           onExtra={detailOnly ? setExtraStop : undefined}
           closeContext={closeContext}
           canCancelLoads={canCancelLoads}
+          // Solo en el panel de Reparto y liquidación, que exige routes.manage
+          // (loadCourierRouteReport): el traspaso es de quien arma rutas.
+          canCarryKept={detailOnly}
+          kept={kept}
           onRefresh={onRefresh ?? (async () => router.refresh())}
         />
         {/* La clave lleva el estado: al terminar o reabrir la ruta el cálculo
@@ -456,8 +466,13 @@ function RouteDetail({
   onExtra,
   closeContext = null,
   canCancelLoads = false,
+  canCarryKept = false,
+  kept = null,
   onRefresh,
 }: {
+  /** Pasar a otra ruta el reprogramado que el motorizado conserva (§29.7). */
+  canCarryKept?: boolean;
+  kept?: KeptReprogrammed[] | null;
   /** Cargas de Grupo GF de la ruta: con esto el panel dice qué impide
    *  terminarla antes de pulsar (la misma regla que aplica el cierre). */
   closeContext?: RouteCloseContext | null;
@@ -539,6 +554,12 @@ function RouteDetail({
   const inProgress = route.status === "en_curso";
   const known = closeContext !== null;
   const isGf = closeContext?.isGf ?? false;
+  // El reprogramado que el motorizado conserva sale en otra ruta suya sin
+  // volver a la oficina (MOM §29.7, 01-11-2026): con un clic, sin la hoja.
+  const carryFor = (s: StopWithOrder) =>
+    canCarryKept && isGf && !closed && isKeptReprogrammed(s)
+      ? (toDate: string) => onRun(() => carryKeptReprogrammed(s.id, toDate))
+      : undefined;
   const blockers = useMemo(
     () => (inProgress && closeContext ? routeCloseBlockers({ isGf: closeContext.isGf, openLoads: closeContext.openLoads, stops, routeDate: route.route_date }) : []),
     [inProgress, closeContext, stops, route.route_date],
@@ -644,6 +665,16 @@ function RouteDetail({
         />
       )}
 
+      {canCarryKept && isGf && !closed && kept && kept.length > 0 && (
+        <KeptPanel
+          kept={kept}
+          riderName={riderName}
+          routeDate={route.route_date}
+          disabled={disabled}
+          onCarry={(stopId) => onRun(() => carryKeptReprogrammed(stopId, route.route_date))}
+        />
+      )}
+
       {closed && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-wash px-4 py-3">
           <p className="flex min-w-0 items-start gap-2 text-sm text-ink-700">
@@ -721,7 +752,7 @@ function RouteDetail({
                 {" · "}<span className="tabular-nums">{s.order?.total == null ? "—" : money(s.order.total)}</span>
                 {" · "}{s.order?.district ?? "—"} · {storeName(s.store_id)}
               </p>
-              <StopResult stop={s} />
+              <StopResult stop={s} routeDate={route.route_date} disabled={disabled} onCarry={carryFor(s)} />
               {(s.status === "entregado" || s.photo_path || s.voucher_path) && (
                 <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptPhoto(s)} />
               )}
@@ -789,7 +820,7 @@ function RouteDetail({
                     <p className="truncate text-xs leading-4 text-ink-500">{storeName(s.store_id)}</p>
                   </td>
                   <td className="px-2.5 py-2.5">
-                    <StopResult stop={s} />
+                    <StopResult stop={s} routeDate={route.route_date} disabled={disabled} onCarry={carryFor(s)} />
                   </td>
                   <td className="px-2.5 py-2.5">
                     <StopCollection stop={s} needsPhoto={missingPhotoIds.has(s.id)} needsVoucher={missingVoucherIds.has(s.id)} exempt={exemptPhoto(s)} />
@@ -905,7 +936,13 @@ function RouteDetail({
 }
 
 /** Resultado de la parada en dos líneas: qué pasó y, debajo, la devolución y la nota. */
-function StopResult({ stop: s }: { stop: StopWithOrder }) {
+function StopResult({ stop: s, routeDate, disabled = false, onCarry }: {
+  stop: StopWithOrder;
+  routeDate: string;
+  disabled?: boolean;
+  /** Pasa el reprogramado que el motorizado conserva a su ruta de ese día. */
+  onCarry?: (toDate: string) => void;
+}) {
   const reason = s.status === "no_entregado" ? reasonLabel(s.outcome_reason) : null;
   // Todo no entregado vuelve físicamente a la oficina (0188/0189), salvo el
   // reprogramado que el motorizado conservó y salió en su ruta siguiente (§29.7).
@@ -917,7 +954,9 @@ function StopResult({ stop: s }: { stop: StopWithOrder }) {
       {/* Un no entregado se lee por su motivo, en rojo: «Rechazó el pedido»,
           «No contesta»… El rojo ya dice que no se entregó. */}
       <p className="truncate leading-5" title={reason ? `No entregado · ${reason}` : undefined}>
-        {s.status === "pendiente" ? (
+        {s.status === "pendiente" && carriedTo ? (
+          <Badge tone="neutral">Continuó en otra ruta</Badge>
+        ) : s.status === "pendiente" ? (
           <Badge tone="warn">Sin reportar</Badge>
         ) : s.status === "entregado" ? (
           <Badge tone="ok">Entregado</Badge>
@@ -949,7 +988,100 @@ function StopResult({ stop: s }: { stop: StopWithOrder }) {
           {s.note && <span className="min-w-0 truncate text-ink-500" title={s.note}>{s.note}</span>}
         </p>
       )}
+      {onCarry && <CarryKept routeDate={routeDate} disabled={disabled} onCarry={onCarry} />}
     </div>
+  );
+}
+
+/** Hoy en Lima (UTC-5), YYYY-MM-DD. */
+function limaTodayIso(): string {
+  return new Date(Date.now() - 5 * 3_600_000).toISOString().slice(0, 10);
+}
+
+/**
+ * «Sale con él»: el reprogramado que el motorizado conserva pasa a su ruta del
+ * día elegido, ya cotejado, sin volver a la oficina (MOM §29.7, 01-11-2026).
+ */
+function CarryKept({ routeDate, disabled, onCarry }: { routeDate: string; disabled: boolean; onCarry: (toDate: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [day, setDay] = useState(() => defaultCarryDate(routeDate, limaTodayIso()));
+  const inputId = useId();
+  if (!open) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        className="mt-1 text-xs font-medium text-brand-700 hover:underline disabled:opacity-50"
+        title="El motorizado se quedó con el paquete y lo vuelve a llevar: no vuelve a la oficina"
+      >
+        Sale con él en otra ruta…
+      </button>
+    );
+  }
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      <label htmlFor={inputId} className="text-xs text-ink-600">Sale en su ruta del</label>
+      <input
+        id={inputId}
+        type="date"
+        value={day}
+        onChange={(e) => setDay(e.target.value)}
+        className={cn(FIELD, "h-8 w-auto px-2 text-xs")}
+      />
+      <OpsButton size="sm" variant="primary" disabled={disabled || !day} onClick={() => onCarry(day)}>
+        Pasar
+      </OpsButton>
+      <button type="button" onClick={() => setOpen(false)} className="text-xs text-ink-500 hover:underline">
+        Cancelar
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Lo que el motorizado conserva de rutas anteriores y todavía no tiene ruta:
+ * reprogramados que siguen en su caja vieja, ni devueltos ni pasados (MOM
+ * §29.7, 01-11-2026). Antes quedaban «en el aire» hasta que una hoja los nombrara.
+ */
+function KeptPanel({ kept, riderName, routeDate, disabled, onCarry }: {
+  kept: KeptReprogrammed[];
+  riderName: string;
+  routeDate: string;
+  disabled: boolean;
+  onCarry: (stopId: string) => void;
+}) {
+  const live = kept.filter((k) => !k.cancelled);
+  const cancelled = kept.filter((k) => k.cancelled);
+  const ddmm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+  return (
+    <section aria-label="Reprogramados que conserva" className="rounded-lg bg-warn-wash px-4 py-3 ring-1 ring-inset ring-warn-bg">
+      <p className="text-sm font-semibold text-ink-900">
+        {riderName} conserva {plural(kept.length, "reprogramado", "reprogramados")} de rutas anteriores sin ruta nueva
+      </p>
+      <p className="mt-0.5 text-xs text-ink-600">
+        Si los lleva hoy, pásalos a esta ruta del {ddmm(routeDate)}: salen ya cotejados. Si no, se quedan «Por devolver» en su ruta.
+      </p>
+      <ul className="mt-2 divide-y divide-line">
+        {[...live, ...cancelled].map((k) => (
+          <li key={k.stopId} className="flex flex-wrap items-center justify-between gap-2 py-1.5 text-sm">
+            <span className="min-w-0 truncate text-ink-700">
+              <span className="font-medium text-ink-900">{k.orderName ?? "—"}</span>
+              {" · "}{k.customerName ?? "Sin nombre"}{k.district ? ` · ${k.district}` : ""}
+              {k.total != null ? ` · ${money(k.total)}` : ""}
+              <span className="text-ink-500"> · reprogramado el {ddmm(k.fromDate)}</span>
+            </span>
+            {k.cancelled ? (
+              <span className="text-xs font-semibold text-crit-fg">Anulado: vuelve a la oficina</span>
+            ) : (
+              <OpsButton size="sm" disabled={disabled} onClick={() => onCarry(k.stopId)}>
+                Pasar a esta ruta
+              </OpsButton>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

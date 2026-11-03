@@ -356,7 +356,7 @@ describe("4. «Desde la lista» ofrece lo que otro courier no entregó", () => {
     expect(devuelta).toMatchObject({ ok: true, motivo: null });
   });
 
-  it("cuenta en «Por asignar» y en «Por reprogramar», con casilla", () => {
+  it("cuenta en «Por asignar» y, con el día acordado por la tienda, en «Reintentos para hoy»", () => {
     const row = (over: Partial<QueueRow>): QueueRow => ({
       orderId: over.orderId ?? "x",
       orderName: "#KP135161",
@@ -384,9 +384,9 @@ describe("4. «Desde la lista» ofrece lo que otro courier no entregó", () => {
     const rows = [row({ orderId: "kp135161" }), row({ orderId: "otro", macroStage: "preparacion", macroSubstage: "por_armar", failedOutput: null })];
     expect(isPorReprogramar(rows[0]!)).toBe(true);
     expect(filterQueue(rows, EMPTY_QUEUE_FILTERS, "2026-09-29").map((q) => q.orderId)).toContain("kp135161");
-    const tiles = queueTileCounts(rows, rows, "2026-09-29");
-    expect(tiles.por_asignar).toBe(2);
-    expect(tiles.por_reprogramar).toBe(1);
+    expect(queueTileCounts(rows, "2026-09-29")).toMatchObject({ por_asignar: 2, reintentos_hoy: 0 });
+    const acordado = [row({ orderId: "kp135161", programmedFor: "2026-09-29" }), rows[1]!];
+    expect(queueTileCounts(acordado, "2026-09-29")).toMatchObject({ por_asignar: 2, reintentos_hoy: 1 });
   });
 });
 
@@ -431,8 +431,10 @@ describe("las piezas en el código", () => {
   it("el barrido de vencidas busca a Tanders con SU ventana", () => {
     const src = read("lib/order-master.ts");
     expect(src).toContain("const tandersCutoff = new Date(Date.now() - TANDERS_RECOVERY_DAYS * 86_400_000).toISOString();");
-    expect(src).toContain('query.eq("last_courier", "tanders").lt("macro_since", tandersCutoff)');
-    expect(src).toContain('query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", cutoff)');
+    expect(src).toContain('["gestion_reproprovincia", true, tandersCutoff]');
+    expect(src).toContain('["por_reprogramar_lima", true, tandersCutoff]');
+    expect(src).toContain('query.eq("last_courier", "tanders").lt("macro_since", since)');
+    expect(src).toContain('query.or("last_courier.is.null,last_courier.neq.tanders").lt("macro_since", since)');
   });
 
   it("todas las lecturas de la regla traen la salida del intento (el ancla de Tanders) y el estado de Swayp", () => {
@@ -444,7 +446,7 @@ describe("las piezas en el código", () => {
     // La v1.21 (adelanto mínimo de Agencia, #KP134162) y la v1.22 (Swayp que
     // no entrega) vinieron después; lo que se vigila aquí es que el MOM
     // documente la v1.19.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.30");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.37");
     const mom = read("docs/mom/master-pedidos-v1.md");
     expect(mom).toContain("#### Lo que Tanders no entrega también es «Por reprogramar Lima» (v1.19, 29-09-2026)");
     expect(mom).toContain("**Crear la guía directa no es reprogramar (v1.19, 29-09-2026).**");

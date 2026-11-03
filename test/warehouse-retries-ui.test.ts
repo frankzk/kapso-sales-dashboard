@@ -402,7 +402,7 @@ describe("una sola lectura de los reintentos a la vez", () => {
 });
 
 describe("el escáner y la cola de armado no cambian (§4, §6)", () => {
-  const scan = between(station, "const executeScan = useCallback(async (raw: string) => {", "}, [busy, retries]);");
+  const scan = between(station, "const executeScan = useCallback(async (raw: string) => {", "}, [busy, retries, swayp, refreshSwayp]);");
 
   it("markShipmentReady se llama una sola vez por escaneo", () => {
     expect(count(scan, "markShipmentReady(")).toBe(1);

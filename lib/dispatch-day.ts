@@ -2,7 +2,7 @@
 // Sin base ni React, probado en test/dispatch-day.test.ts.
 
 import { courierKey, dispatchProgress } from "@/lib/dispatch";
-import { MACRO_SUBSTAGES_BY_STAGE, ORDER_MACRO_STAGES, type OrderMacroStage } from "@/lib/order-macro-stage";
+import { MACRO_SUBSTAGES_BY_STAGE, ORDER_MACRO_STAGES, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
 
 export interface DayItem {
   id: string;
@@ -623,6 +623,261 @@ export const BLOCKED_REASON_LABEL: Record<BlockedReason, { label: string; fix: "
 };
 
 // ---------------------------------------------------------------------------
+// La búsqueda que no encuentra nada dice dónde está (24-10-2026). El owner
+// buscó #KP141876 para reprogramarlo y la lista respondió «Nada por asignar
+// con ese filtro.»: estaba en «Sin condiciones» (76 ese día) porque Ancón no
+// tiene tarifa y está pausado para Grupo GF, y nada en la pantalla lo decía.
+// Si el texto no está en la lista pero sí en otro apartado que el tablero ya
+// tiene en memoria —«Sin condiciones», lo que se sigue (en una caja, cerrado),
+// lo escondido por un filtro o un apartado, «En devolución», «Devoluciones»—,
+// el vacío dice dónde está, por qué y la acción que lleva allí. Sin lecturas
+// nuevas: es lo que ya trae la foto de Despacho del día.
+// ---------------------------------------------------------------------------
+
+/** Un pedido de «Sin condiciones», tal como lo trae la foto (`CourierBlockedOrder`). */
+export interface LocateBlocked {
+  orderId: string;
+  orderName: string;
+  district: string;
+  reason: BlockedReason;
+  customerPhone?: string | null;
+  /** Con la tarifa faltante, el servicio también está pausado en ese distrito. */
+  paused?: boolean;
+}
+
+/** Una caja reemplazada que el motorizado todavía tiene («En devolución», 0248). */
+export interface LocateReturning {
+  orderId: string;
+  orderName: string;
+  outputCode: string | null;
+  riderName: string;
+  routeDate: string;
+  replacedByCode: string | null;
+}
+
+/** Un «No entregado» que sigue en una caja, de cualquier fecha («Devoluciones»). */
+export interface LocatePendingReturn {
+  orderId: string;
+  orderName: string;
+  riderName: string;
+  routeDate: string;
+}
+
+export interface LocateSources {
+  /** Todas las filas de la lista: la cola, lo que se sigue y lo propio en una caja. */
+  rows: readonly QueueRow[];
+  blocked: readonly LocateBlocked[];
+  returning?: readonly LocateReturning[];
+  pendingReturns?: readonly LocatePendingReturn[];
+}
+
+/** Lo que hace el botón del aviso. Cada uno reusa un gesto que el tablero ya tiene. */
+export type LocateAction =
+  /** Abre la lista en ese apartado, sin los demás filtros (el texto se queda). */
+  | { kind: "apartado"; segment: QueueSegment; label: string }
+  /** Abre esa etapa para seguimiento, sin los demás filtros (el texto se queda). */
+  | { kind: "etapa"; stage: string; label: string }
+  /** Quita los filtros y el apartado; el texto se queda. */
+  | { kind: "quitar_filtros"; label: string }
+  /** El Tarifario de Grupo GF (`?tab=tariffs`): solo quien lo administra. */
+  | { kind: "tarifario"; label: string }
+  /** La hoja «Sin condiciones». */
+  | { kind: "sin_condiciones"; label: string }
+  /** La ficha del pedido en esa sección. */
+  | { kind: "ficha"; orderId: string; section: "operar" | "informacion"; label: string }
+  /** La hoja «En devolución». */
+  | { kind: "en_devolucion"; label: string }
+  /** El escáner de «Devoluciones». */
+  | { kind: "devoluciones"; label: string };
+
+export interface QueueLocation {
+  orderId: string;
+  orderName: string;
+  /** `warn` si algo impide que salga; `info` si solo está en otro sitio. */
+  tone: "info" | "warn";
+  text: string;
+  action: LocateAction | null;
+}
+
+/** Pedido sin «#» ni mayúsculas: `#KP141876` y `kp141876` son el mismo. */
+export function normalizeOrderSearch(value: string | null | undefined): string {
+  return (value ?? "").trim().toLocaleLowerCase("es").replace(/^#+/, "").replace(/\s+/g, "");
+}
+
+/** Menos que esto («k», «kp1») encontraría cientos: no se busca fuera de la lista. */
+const LOCATE_MIN_CHARS = 4;
+
+/**
+ * ¿El texto de la búsqueda nombra este pedido? Por número de pedido (sin «#»
+ * ni mayúsculas, también una parte: «141876») o, como la lista, por teléfono
+ * con al menos cuatro dígitos (con espacios, «+» o guiones).
+ */
+export function matchesOrderSearch(query: string, orderName: string | null | undefined, phone?: string | null): boolean {
+  const needle = normalizeOrderSearch(query);
+  if (needle.length < LOCATE_MIN_CHARS) return false;
+  if (normalizeOrderSearch(orderName).includes(needle)) return true;
+  const raw = query.trim();
+  const digits = phoneDigits(raw);
+  const byPhone = digits.length >= LOCATE_MIN_CHARS && digits.length === raw.replace(/[\s+\-().]/g, "").length;
+  return byPhone && phoneDigits(phone).includes(digits);
+}
+
+const ADMIN_TARIFF = "quien administra Grupo GF (Daysi o Frankz)";
+
+/** Por qué no sale y qué lo arregla, con el distrito a la vista. */
+function blockedExplanation(b: LocateBlocked, canEditTariffs: boolean): { why: string; fix: string; action: LocateAction | null } {
+  const tariffAction: LocateAction = canEditTariffs
+    ? { kind: "tarifario", label: "Abrir Tarifario" }
+    : { kind: "sin_condiciones", label: "Ver «Sin condiciones»" };
+  const ficha = (section: "operar" | "informacion", label = "Abrir el pedido"): LocateAction => ({ kind: "ficha", orderId: b.orderId, section, label });
+  switch (b.reason) {
+    case "tarifa_faltante":
+      return b.paused
+        ? {
+            why: `tarifa faltante para ${b.district}, y el servicio está pausado ahí`,
+            fix: canEditTariffs ? "Ponle tarifa y reanuda el servicio en Tarifario." : `La tarifa y la pausa las corrige ${ADMIN_TARIFF} en Tarifario.`,
+            action: tariffAction,
+          }
+        : {
+            why: `tarifa faltante para ${b.district}`,
+            fix: canEditTariffs ? "Ponle tarifa en Tarifario." : `La tarifa la pone ${ADMIN_TARIFF} en Tarifario.`,
+            action: tariffAction,
+          };
+    case "servicio_pausado":
+      return {
+        why: `servicio pausado en ${b.district}`,
+        fix: canEditTariffs ? "Reanúdalo en Tarifario." : `Lo reanuda ${ADMIN_TARIFF} en Tarifario.`,
+        action: tariffAction,
+      };
+    case "distrito_invalido":
+      return { why: `distrito inválido o sin contrato (${b.district})`, fix: "Corrige el distrito en la ficha del pedido.", action: ficha("informacion") };
+    case "sin_salida":
+      return { why: "no tiene salida armable en Almacén", fix: "Revisa sus salidas en la ficha del pedido.", action: ficha("operar") };
+    case "ya_en_caja":
+      return { why: "ya está en una caja de despacho", fix: "Revisa sus salidas en la ficha del pedido.", action: ficha("operar") };
+    default: {
+      // Los motivos de un «Por reprogramar Lima» que no se puede sacar
+      // (`reprogramBlockReason`, `ownRetryDecision`): su etiqueta ya dice qué pasa.
+      const label = BLOCKED_REASON_LABEL[b.reason]?.label ?? "no tiene condiciones para salir";
+      return { why: label.charAt(0).toLocaleLowerCase("es") + label.slice(1), fix: "Revísalo en la ficha del pedido.", action: ficha("operar") };
+    }
+  }
+}
+
+/** «la caja de Roy del vie 23/10 (carga 2)». */
+function boxPhrase(route: QueueRoute): string {
+  return `la caja de ${route.riderName} del ${programDayLabel(route.routeDate)}${route.loadNumber > 1 ? ` (carga ${route.loadNumber})` : ""}`;
+}
+
+/** Dónde está una fila de la lista que los filtros esconden, o que ya no se asigna. */
+function rowLocation(row: QueueRow, filters: QueueFilters, today: string): QueueLocation {
+  const base = { orderId: row.orderId, orderName: row.orderName };
+  if (row.assignable) {
+    const segment = queueSegment(row, today);
+    const label = QUEUE_SEGMENT_LABEL[segment].label;
+    const programmed = row.programmedFor ? ` (programado ${programDayLabel(row.programmedFor)})` : "";
+    // Solo el apartado lo esconde: basta con abrir ese. Si no, son los filtros.
+    const onlySegment = filterQueue([row], { ...filters, segment: null, stages: [], substages: [] }, today).length > 0;
+    return {
+      ...base,
+      tone: "info",
+      text: `${row.orderName} está por asignar en «${label}»${programmed}${onlySegment ? "" : ", pero lo esconden los filtros de la lista"}.`,
+      action: { kind: "apartado", segment, label: `Ver en «${label}»` },
+    };
+  }
+  if (isReturnable(row) && row.route) {
+    return {
+      ...base,
+      tone: "info",
+      text: `${row.orderName} sigue en ${boxPhrase(row.route)} («No entregado»): se recibe en oficina para volver a asignarlo, y lo esconden los filtros de la lista.`,
+      action: { kind: "quitar_filtros", label: "Quitar filtros" },
+    };
+  }
+  const stage = rowStage(row);
+  // La etapa del Master, si se conoce: «En curso · En reparto».
+  const where = row.macroStage
+    ? row.macroSubstage ? `${macroStageLabel(row.macroStage)} · ${macroSubstageLabel(row.macroSubstage)}` : macroStageLabel(row.macroStage)
+    : null;
+  const action: LocateAction = { kind: "etapa", stage, label: "Ver en seguimiento" };
+  if (row.route) {
+    const state = row.route.pickupCheckedAt ? "lo lleva" : row.route.officeCheckedAt ? "cotejado, sin «Lo llevo»" : "sin cotejar";
+    return {
+      ...base,
+      tone: "info",
+      text: `${row.orderName} ya no está por asignar: está en ${boxPhrase(row.route)}, ${state}${where ? ` (${where})` : ""}.`,
+      action,
+    };
+  }
+  // Tomado, pero su pedido está cerrándose o cerrado (`takenIsAssignable`).
+  return {
+    ...base,
+    tone: "info",
+    text: where ? `${row.orderName} ya no se asigna: está en «${where}».` : `${row.orderName} ya no se asigna: su pedido está cerrándose o cerrado.`,
+    action,
+  };
+}
+
+/**
+ * Los pedidos que nombra la búsqueda y que la lista no enseña, con dónde
+ * están y qué hacer. Puro. Primero lo que coincide con el número entero; cada
+ * pedido una sola vez, en el primer sitio donde aparece: la lista (escondido
+ * o en seguimiento), «Sin condiciones», «En devolución», «Devoluciones».
+ * `more` cuenta los que no caben en `limit`.
+ */
+export function locateOutsideList(
+  filters: QueueFilters,
+  sources: LocateSources,
+  today: string,
+  opts: { canEditTariffs?: boolean; limit?: number } = {},
+): { found: QueueLocation[]; more: number } {
+  const query = filters.query;
+  if (normalizeOrderSearch(query).length < LOCATE_MIN_CHARS) return { found: [], more: 0 };
+  const visible = new Set(filterQueue(sources.rows, filters, today).map((row) => row.orderId));
+  const seen = new Set<string>();
+  const found: QueueLocation[] = [];
+  const add = (location: QueueLocation) => {
+    if (seen.has(location.orderId) || visible.has(location.orderId)) return;
+    seen.add(location.orderId);
+    found.push(location);
+  };
+  for (const row of sources.rows) {
+    if (matchesOrderSearch(query, row.orderName, row.customerPhone)) add(rowLocation(row, filters, today));
+  }
+  for (const b of sources.blocked) {
+    if (!matchesOrderSearch(query, b.orderName, b.customerPhone)) continue;
+    const { why, fix, action } = blockedExplanation(b, opts.canEditTariffs === true);
+    add({ orderId: b.orderId, orderName: b.orderName, tone: "warn", text: `${b.orderName} está en «Sin condiciones»: ${why}. ${fix}`, action });
+  }
+  for (const r of sources.returning ?? []) {
+    if (!matchesOrderSearch(query, r.orderName)) continue;
+    add({
+      orderId: r.orderId,
+      orderName: r.orderName,
+      tone: "info",
+      text: `${r.orderName} está en «En devolución»: ${r.outputCode ?? "su caja anterior"} vuelve con ${r.riderName} (caja del ${programDayLabel(r.routeDate)})${r.replacedByCode ? ` y el pedido sale con ${r.replacedByCode}` : ""}.`,
+      action: { kind: "en_devolucion", label: "Ver «En devolución»" },
+    });
+  }
+  for (const p of sources.pendingReturns ?? []) {
+    if (!matchesOrderSearch(query, p.orderName)) continue;
+    add({
+      orderId: p.orderId,
+      orderName: p.orderName,
+      tone: "info",
+      text: `${p.orderName} está en «Devoluciones»: ${p.riderName} tiene que traerlo de su caja del ${programDayLabel(p.routeDate)} («No entregado»).`,
+      action: { kind: "devoluciones", label: "Abrir «Devoluciones»" },
+    });
+  }
+  const exact = normalizeOrderSearch(query);
+  const ranked = found
+    .map((location, i) => ({ location, i, exact: normalizeOrderSearch(location.orderName) === exact }))
+    .sort((a, b) => Number(b.exact) - Number(a.exact) || a.i - b.i)
+    .map((entry) => entry.location);
+  const limit = opts.limit ?? 3;
+  return { found: ranked.slice(0, limit), more: Math.max(0, ranked.length - limit) };
+}
+
+// ---------------------------------------------------------------------------
 // Estado de cada paquete dentro de la caja (lo que separaban los segmentos de
 // «Pedidos tomados»: por armar · armado · cotejado · confirmado · no lo llevó).
 // ---------------------------------------------------------------------------
@@ -677,7 +932,7 @@ export function filterBoxItems<T extends Pick<DayItem, "removed_at" | "pickup_de
 // ---------------------------------------------------------------------------
 
 /** Tiles de la cola; las de apartado encienden ese apartado. */
-export type QueueTile = "por_asignar" | "nunca_salieron" | "programados_hoy" | "por_reprogramar" | "tomados_sin_caja" | "armados";
+export type QueueTile = "por_asignar" | "nunca_salieron" | "programados_hoy" | "reintentos_hoy" | "tomados_sin_caja" | "armados";
 export type BoxTile = "por_armar" | "listos_cotejo" | "sin_confirmar";
 
 const SEGMENT_TILES = new Set<QueueTile>(["nunca_salieron", "programados_hoy"]);
@@ -686,7 +941,7 @@ export const QUEUE_TILE_LABEL: Record<QueueTile, { label: string; hint: string }
   por_asignar: { label: "Por asignar", hint: "Pedidos de Lima con condiciones para salir y sin caja: disponibles más tomados sin ruta. Quita los filtros de la lista." },
   nunca_salieron: QUEUE_SEGMENT_LABEL.nunca_salieron,
   programados_hoy: QUEUE_SEGMENT_LABEL.programados_hoy,
-  por_reprogramar: { label: "Por reprogramar", hint: "No entregados (En curso · Por reprogramar Lima): los del motorizado que siguen en su caja se reciben en oficina; los que ya volvieron, y los que otro courier no entregó, se asignan o se programan con el calendario. Lo de otro courier sale en una salida nueva; lo de Grupo GF, con su misma salida. Los que no se pueden sacar están en «Sin condiciones»." },
+  reintentos_hoy: { label: "Reintentos para hoy", hint: "No entregados que la tienda ya acordó con el cliente en Repro Lima y deben salir hoy (o ya debían). Lo que todavía nadie llamó no está aquí: lo atiende la tienda en Repro Lima. Las cajas que el motorizado aún tiene se reciben en «Devoluciones»." },
   tomados_sin_caja: { label: "Tomados sin caja", hint: "Ya tomados por Grupo GF (servicio y tarifa reservados) pero todavía sin motorizado." },
   armados: { label: "Armados", hint: "Tomados cuya salida ya armó Almacén (listo para despacho) y siguen sin caja." },
 };
@@ -703,16 +958,25 @@ export function isPorReprogramar(row: Pick<QueueRow, "macroStage" | "macroSubsta
 }
 
 /**
- * `rows` es la cola de asignación; `allRows` suma los que ya salieron, porque
- * «Por reprogramar» cuenta también los no entregados que siguen en una caja.
+ * Un reintento que sale hoy (01-11-2026, MOM §29.13): un no entregado de Lima
+ * que la tienda ya acordó en Repro Lima —tiene su día programado— y ese día es
+ * hoy o ya pasó. Lo no acordado ni llega a la cola (`awaitingRepro`).
  */
-export function queueTileCounts(rows: readonly QueueRow[], allRows: readonly QueueRow[], today: string): Record<QueueTile, number> {
+export function isRetryForToday(row: Pick<QueueRow, "macroStage" | "macroSubstage" | "assignable" | "programmedFor" | "hasPriorDispatch" | "createdAt">, today: string): boolean {
+  return isPorReprogramar(row) && row.assignable && queueSegment(row, today) === "programados_hoy";
+}
+
+/**
+ * Las tarjetas cuentan sobre la cola de asignación (`rows`): lo que todavía
+ * está en la caja de un motorizado se cuenta en «Devoluciones».
+ */
+export function queueTileCounts(rows: readonly QueueRow[], today: string): Record<QueueTile, number> {
   const segments = rows.map((q) => queueSegment(q, today));
   return {
     por_asignar: rows.length,
     nunca_salieron: segments.filter((s) => s === "nunca_salieron").length,
     programados_hoy: segments.filter((s) => s === "programados_hoy").length,
-    por_reprogramar: allRows.filter(isPorReprogramar).length,
+    reintentos_hoy: rows.filter((q) => isRetryForToday(q, today)).length,
     tomados_sin_caja: rows.filter((q) => q.taken).length,
     armados: rows.filter((q) => q.armed).length,
   };
@@ -730,7 +994,7 @@ export function boxTileCounts(boxes: readonly RiderBox[]): Record<BoxTile, numbe
 /** Si la tile está «encendida» con los filtros actuales. */
 export function queueTileActive(filters: QueueFilters, tile: QueueTile): boolean {
   if (tile === "por_asignar") return false;
-  if (tile === "por_reprogramar") return filters.stages.length === 1 && filters.stages[0] === "en_curso" && filters.substages.length === 1 && filters.substages[0] === "por_reprogramar_lima";
+  if (tile === "reintentos_hoy") return filters.segment === "programados_hoy" && filters.stages.length === 1 && filters.stages[0] === "en_curso" && filters.substages.length === 1 && filters.substages[0] === "por_reprogramar_lima";
   if (tile === "tomados_sin_caja") return filters.takenOnly;
   if (tile === "armados") return filters.armedOnly;
   return filters.segment === tile;
@@ -739,10 +1003,10 @@ export function queueTileActive(filters: QueueFilters, tile: QueueTile): boolean
 /** Tocar una tile: enciende su filtro (o lo apaga si ya estaba); «Por asignar» limpia todos. */
 export function toggleQueueTile(filters: QueueFilters, tile: QueueTile): QueueFilters {
   if (tile === "por_asignar") return { ...EMPTY_QUEUE_FILTERS, query: filters.query };
-  if (tile === "por_reprogramar") {
+  if (tile === "reintentos_hoy") {
     return queueTileActive(filters, tile)
-      ? { ...filters, stages: [], substages: [] }
-      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"], segment: null };
+      ? { ...filters, stages: [], substages: [], segment: null }
+      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"], segment: "programados_hoy" };
   }
   if (tile === "tomados_sin_caja") return { ...filters, takenOnly: !filters.takenOnly };
   if (tile === "armados") return { ...filters, armedOnly: !filters.armedOnly };

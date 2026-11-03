@@ -8,6 +8,7 @@
 // El cron usa esta versión para recalcular gradualmente todo el histórico sin
 // necesitar un script con credenciales locales.
 import { isNonMetroLimaLocation } from "@/lib/order-coverage";
+import { legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { isReplacedOwnOutput, replacedOutputIds } from "@/lib/gf-replaced-output";
 import {
   CONFIRMATION_CONTACT_KINDS,
@@ -29,6 +30,59 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.37 (03-11-2026, owner): la ventana de recuperación de 7 días de Kenku y
+// Aurela es de Provincia. Lima tiene la suya, 21 días
+// (`LIMA_RECOVERY_DAYS`, `recoveryWindowDaysForOperation`, lib/reproprovincia.ts,
+// MOM §11). Un intento fallido de Lima de hace 8–21 días vuelve de anulado o
+// devuelto a «En curso · Por reprogramar Lima»; la versión sube para que el cron
+// los recalcule.
+//
+// v1.36 (02-11-2026, owner, #KP142611): un distrito de Lima Metropolitana que
+// se repite en provincia (La Victoria también es Chiclayo) ya no toma provincia
+// Lima/Callao de lo aprendido, de una guía, del carrito ni del historial cuando
+// el pin está claramente fuera de Lima, cuando el ubigeo de la primera guía de
+// Aliclik es de otro departamento o cuando el «departamento» del pedido no es
+// uno («Chiclayo», una provincia, se lee como Lambayeque)
+// (`limaProvinceTrusted`, lib/district-learning.ts, MOM §19.0). Cambia la
+// provincia de esos pedidos; la versión sube para que el cron los recalcule.
+//
+// v1.35 (01-11-2026): dos reglas del owner. (1) El envío pagado en la agencia
+// vale también con un solo Yape (lib/agency-shipping.ts; #KP138744, #KP129106).
+// (2) La devolución queda probada si el courier recogió el paquete
+// (`custody_transferred_at`), aunque la guía no traiga despacho
+// (lib/order-status.ts, `leftWithCourier`; #KP117015 y ~50 más seguían «En
+// curso · En tránsito»). La versión sube para que el cron los reconcilie.
+//
+// v1.34 (01-11-2026): en Agencia, con el paquete recogido, hasta S/ 15 que
+// faltan son el envío que la clienta pagó en el mostrador y el pedido está
+// pagado completo (lib/agency-shipping.ts, decisión del owner, MOM §6.5). Eran
+// 21 pedidos en «Recogido sin pago completo» por S/ 8 o S/ 10. La versión sube
+// para que el cron los reconcilie.
+//
+// v1.33 (01-11-2026): faltar menos de S/ 1 es redondeo y está pagado
+// (lib/payment-rounding.ts, decisión del owner, MOM §6.5). El descuento deja
+// céntimos (S/ 134,10) y la clienta yapea redondo (S/ 30 + S/ 104): 10 pedidos
+// quedaban en «Recogido sin pago completo», sin boleta, por S/ 1,20 entre
+// todos. La versión sube para que el cron los reconcilie.
+//
+// v1.32 (25-10-2026): la provincia de un pedido de Lima Metropolitana o el
+// Callao ya no sale de lo aprendido por nombre de distrito cuando contradice su
+// departamento, ni de una guía que la copió (lib/district-learning.ts, MOM
+// §19.0). «miraflores → arequipa», aprendido de un pedido de Arequipa, dejó los
+// de Miraflores de Lima con provincia «arequipa»; medidos ~700 pedidos de Lima
+// con una provincia imposible («arequipa», «HUARAZ», «lince», «san roman»…). No
+// cambia coberturas: con el departamento del pedido conocido, la provincia no
+// entra a `order_coverage_for`. La versión sube para que el cron los recalcule.
+//
+// v1.31 (21-10-2026): el costo logístico de Grupo GF («propio») sale de su
+// Tarifario (`logistics_district_tariffs`, lib/gf-tariff.ts, MOM §14, §29.8;
+// decisión del dueño del 19-10-2026), no de Costos › Costos logísticos: la
+// tarifa del distrito que regía el día del costo (el último movimiento, como
+// con cualquier courier), la del contrato de la tienda si la hay, por el primer
+// intento y por cada intento adicional de sus propias salidas; sin devolución
+// aparte. Sin tarifa, o con un día anterior a su vigencia, queda vacío. No
+// cambia etapas. La versión sube para que el cron recalcule `logistics_cost`.
+//
 // v1.30 (15-10-2026): «Salió con» (`dispatched_with`, 0266, MOM §9.3): con quién
 // salió cada pedido, motorizado de Grupo GF incluido. Y los intentos de Grupo
 // GF cuentan también las paradas del cuaderno histórico (`delivery_stops` sin
@@ -191,7 +245,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.30" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.37" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
@@ -263,6 +317,7 @@ export type MacroSubstage =
   | "salida_adicional_activa"
   | "devolucion_fisica_pendiente"
   | "devolucion_pendiente_inventario"
+  | "stock_woo_pendiente"
   | "recogido_sin_pago_completo"
   | "recuperacion_vencida"
   | "rechazo_no_reenviado"
@@ -323,6 +378,7 @@ export const MACRO_SUBSTAGES_BY_STAGE: Record<
     "salida_adicional_activa",
     "devolucion_fisica_pendiente",
     "devolucion_pendiente_inventario",
+    "stock_woo_pendiente",
     "recogido_sin_pago_completo",
     "recuperacion_vencida",
     "rechazo_no_reenviado",
@@ -379,6 +435,7 @@ export const MACRO_SUBSTAGE_LABEL: Record<MacroSubstage, string> = {
   salida_adicional_activa: "Salida adicional activa",
   devolucion_fisica_pendiente: "Devolución física pendiente",
   devolucion_pendiente_inventario: "Devolución pendiente de inventario",
+  stock_woo_pendiente: "Venta terminada · stock pendiente en WooCommerce",
   recogido_sin_pago_completo: "Recogido sin pago completo",
   recuperacion_vencida: RECOVERY_LABEL.vencida,
   rechazo_no_reenviado: RECOVERY_LABEL.rechazo_no_reenviado,
@@ -482,6 +539,8 @@ export interface MacroGuideSnapshot {
 
 export interface MacroEventSnapshot {
   kind: string;
+  source?: string | null;
+  new_status?: string | null;
   occurred_at: string;
   /** Salida física concreta a la que pertenece el hecho, cuando aplica. */
   shipment_id?: string | null;
@@ -908,6 +967,8 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   const returnedGuides = guides.filter(hasReturned);
 
   if (legacy.general === "entregado" && active.length) reasons.push("salida_adicional_activa");
+  const commercialCancelled = Boolean(legacySaleCancelledAt(events));
+  if (commercialCancelled && active.length) reasons.push("salida_adicional_activa");
   if (
     legacy.general === "entregado" &&
     operation === "agencia" &&
@@ -1006,6 +1067,9 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
   const sinLiquidacion =
     legacy.general === "entregado" && operation !== "agencia" && pagadoDirectoSinCourier(input);
   const liquidationClosed = latestEvent(events, ["liquidation_closed"]);
+  // Cancelar la venta no liquida los fletes de una caja que sí salió.
+  if (commercialCancelled && operation !== "agencia" && guides.some(hasExternalCustody) && !liquidationClosed &&
+      !reasons.includes("liquidacion_observada")) reasons.push("pendiente_liquidacion");
   if (
     legacy.general === "entregado" &&
     operation !== "agencia" &&
@@ -1154,7 +1218,7 @@ function isRiderReception(event: MacroEventSnapshot): boolean {
  */
 export function gfRiderSignal(
   events: readonly MacroEventSnapshot[],
-  guide: MacroGuideSnapshot,
+  guide: Pick<MacroGuideSnapshot, "id" | "courier" | "created_at">,
 ): { signal: GfRiderSignal; at: string } | null {
   if (!isOwnCourier(guide.courier)) return null;
   const kinds = new Set(["pickup_checked", "stop_reported", "pickup_declined", "package_removed", "returned_to_office", "custody_transferred"]);
@@ -1192,7 +1256,7 @@ export function gfRiderSignal(
  * no, un punto a mano entregado la daba por entregada y el pedido se cerraba
  * con ella todavía en manos del motorizado—.
  */
-function isGuideEvent(event: MacroEventSnapshot, guide: MacroGuideSnapshot, replaced: ReadonlySet<string>): boolean {
+function isGuideEvent(event: MacroEventSnapshot, guide: Pick<MacroGuideSnapshot, "id" | "created_at">, replaced: ReadonlySet<string>): boolean {
   if (event.shipment_id) return event.shipment_id === guide.id;
   if (event.kind !== "stop_reported") return false;
   if (replaced.has(guide.id)) return false;
@@ -1308,9 +1372,18 @@ function currentGuide(guides: readonly MacroGuideSnapshot[], replaced: ReadonlyS
 
 /** Resuelve la macroetapa MOM v1 sin leer base de datos ni reloj. */
 export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroStage {
+  const commercialCancelledAt = legacySaleCancelledAt(input.events);
+  if (commercialCancelledAt) input = {
+    ...input,
+    // Solo hechos efectivos para el cálculo: NO se escribe orders.cancelled_at.
+    order: { ...input.order, cancelled_at: input.order.cancelled_at ?? commercialCancelledAt },
+    legacy: { general: "anulado", operational: "anulado", since: commercialCancelledAt },
+  };
   const operation = classifyOperation(input.order, input.guides);
   const active = input.guides.filter(isActiveGuide);
   const closeReasons = closingReasons(input);
+  if (input.events.some((e) => e.kind === "woo_sale_ended_pending_return") &&
+    !input.events.some((e) => e.kind === "woo_sale_return_synced")) closeReasons.push("stock_woo_pendiente");
   const reopened = latestEvent(input.events, ["order_reopened"]);
   const finalized = latestEvent(input.events, ["order_finalized"]);
   const explicitFinal = Boolean(

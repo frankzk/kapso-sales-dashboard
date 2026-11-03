@@ -13,6 +13,7 @@
 // un archivo `"use server"` es un endpoint que cualquiera puede llamar.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { SWAYP_DESDE_CONFIRMACION_KIND } from "@/lib/swayp-desde-confirmacion";
 import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
@@ -24,6 +25,7 @@ import { isFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-o
 import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 import { avisoSinVinculoSwayp, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
+import { swaypDestinationRefusal } from "@/lib/swayp-destination-guard";
 import {
   createFenixGuideViaApi,
   resolveDirectGuideAddress,
@@ -147,12 +149,14 @@ export async function emitirGuiaSwaypDirecta(
   input: EmitirGuiaSwaypDirectaInput,
 ): Promise<EmitirGuiaSwaypDirectaResult> {
   const order = input.order;
+  const saleBlock = await legacySaleSendBlock(admin, order.id);
+  if (saleBlock) return { error: saleBlock };
   if (order.cancelled_at) {
-    return { error: "El pedido está cancelado en Shopify; no se puede crear la guía." };
+    return { error: "El pedido está anulado en la tienda; no se puede crear la guía." };
   }
   const totalRefunded = order.total_refunded ?? 0;
   if ((order.total_amount ?? 0) > 0 && totalRefunded >= (order.total_amount ?? 0)) {
-    return { error: "El pedido fue reembolsado por completo en Shopify; no se puede crear la guía." };
+    return { error: "El pedido fue reembolsado por completo en la tienda; no se puede crear la guía." };
   }
 
 
@@ -184,6 +188,10 @@ export async function emitirGuiaSwaypDirecta(
         "El pedido no tiene distrito/ciudad de envío, así que no se puede validar la cobertura ni el stock Swayp. Complétalo en Shopify y reintenta.",
     };
   }
+  // Lima para un pedido que no es de Lima no sale, con número de Swayp o escrito
+  // a mano (02-11-2026, #KP142611, lib/swayp-destination-guard.ts).
+  const contradictorio = await swaypDestinationRefusal(admin, order.id, city);
+  if (contradictorio) return { error: contradictorio };
 
   const { data: store } = await admin
     .from("stores")
@@ -257,6 +265,8 @@ export async function emitirGuiaSwaypDirecta(
   let swaypGuide: string | null = null;
   let swaypState: number | null = null;
   const swaypNotice = "";
+  const finalSaleBlock = await legacySaleSendBlock(admin, order.id);
+  if (finalSaleBlock) return { error: finalSaleBlock };
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({
       admin,

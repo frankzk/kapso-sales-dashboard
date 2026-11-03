@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment, duplicateGate,
+import { duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment, transferredElsewhere, duplicateGate,
   duplicateResolutionProblem, type DuplicateShipment, type DuplicateConflict, type DuplicateResolution } from "@/lib/aliclik-duplicate";
 
 const shipment: DuplicateShipment = {
@@ -71,5 +71,29 @@ describe("resoluciones", () => {
     expect(duplicateResolutionProblem("exception", "Excepción por compra confirmada", true)).toBeNull();
     expect(duplicateResolutionProblem("confirmed", "Cliente dijo que sí", true)).toMatch(/válida/);
     expect(duplicateResolutionProblem("exception", "ok", true)).toMatch(/12/);
+  });
+});
+
+describe("una guía transferida que terminó en otra salida del mismo pedido (#KP122115, 30-10-2026)", () => {
+  const madre: DuplicateShipment = { ...shipment, id: "s01", order_id: "kp122115", delivery_status: "transferido", created_at: "2026-07-17T21:20:30Z" };
+  const hija = (patch: Partial<DuplicateShipment>): DuplicateShipment =>
+    ({ ...shipment, id: "s02", order_id: "kp122115", courier: "fenix", created_at: "2026-07-28T23:18:51Z", ...patch });
+
+  it("la Fénix posterior se entregó: la Aliclik transferida ya no retiene", () => {
+    expect(transferredElsewhere(madre, [madre, hija({ delivery_status: "entregado" })])).toBe(true);
+  });
+  it("devuelta o recogida también la resuelve", () => {
+    expect(transferredElsewhere(madre, [hija({ returned_at: "2026-08-01T00:00:00Z" })])).toBe(true);
+    expect(transferredElsewhere(madre, [hija({ pickup_state: "recogido" })])).toBe(true);
+  });
+  it("si la otra salida sigue viva, la transferida sigue contando", () => {
+    expect(transferredElsewhere(madre, [madre, hija({ delivery_status: "en_ruta" })])).toBe(false);
+  });
+  it("una salida de OTRO pedido o anterior no la resuelve", () => {
+    expect(transferredElsewhere(madre, [hija({ order_id: "otro", delivery_status: "entregado" })])).toBe(false);
+    expect(transferredElsewhere(madre, [hija({ created_at: "2026-07-01T00:00:00Z", delivery_status: "entregado" })])).toBe(false);
+  });
+  it("solo aplica a una guía transferida", () => {
+    expect(transferredElsewhere({ ...madre, delivery_status: "en_ruta" }, [hija({ delivery_status: "entregado" })])).toBe(false);
   });
 });

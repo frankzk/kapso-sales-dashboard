@@ -23,6 +23,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
+import { phoneSaleCustomer, type PhoneSaleCustomer } from "@/lib/master-phone-sale";
+import { CustomerOrderButton } from "@/components/customer-order-button";
+import { CustomerNameEditor } from "@/components/customer-name-editor";
+import { customerNameFromRaw } from "@/lib/order-customer-name";
+import { updateOrderCustomerName } from "@/app/dashboard/pedidos/customer-name-actions";
 import { cn } from "@/components/ui";
 import {
   Badge,
@@ -43,6 +48,7 @@ import {
   IconCamera,
   IconCheck,
   IconChevronDown,
+  IconCopy,
   IconChevronRight,
   IconList,
   IconLock,
@@ -54,8 +60,10 @@ import {
 } from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
+import { OrderChatbyPanel } from "@/components/order-chatby-panel";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
-import { CopyButton } from "@/components/copy-button";
+import { CopyButton, copyLabel, useCopyToClipboard } from "@/components/copy-button";
+import { GuideNumber } from "@/components/guide-number";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
@@ -95,12 +103,43 @@ import {
   type OrderGeoInput,
 } from "@/app/dashboard/pedidos/actions";
 import { VoiceAgentPanel } from "@/components/voice-agent-panel";
+import { loadLastKnownDestinations } from "@/app/dashboard/pedidos/last-destination-actions";
+import {
+  destinationNote,
+  needsDestinationSuggestion,
+  type LastKnownDestination,
+} from "@/lib/last-known-destination";
+import { wooSaleWasDispatched } from "@/lib/woo-sale-return";
+import { endWooSalePendingReturn } from "@/app/dashboard/pedidos/woo-sale-return-actions";
+import { WooCancelZone } from "@/components/woo-cancel-zone";
+import { GfOutputCancelButton } from "@/components/gf-output-cancel-button";
+import { gfOutputIsCancelableBeforeDispatch } from "@/lib/gf-output-cancel";
+import { cancelWooOrder } from "@/app/dashboard/pedidos/woo-cancel-actions";
+import { cancelLegacyShopifySale } from "@/app/dashboard/pedidos/legacy-sale-cancel-actions";
+import type { WooCancelFacts } from "@/lib/woo-cancel";
 import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
-import { DispatchDatePanel } from "@/components/dispatch-date-panel";
-import { DISPATCH_DATE_SET, dispatchDateBadge } from "@/lib/dispatch-date";
+import { CoordinateOkLine, DispatchDatePanel } from "@/components/dispatch-date-panel";
+import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
+import {
+  DISPATCH_DATE_SET,
+  DISPATCH_NEEDS_COORDINATE_ERROR,
+  DISPATCH_NEEDS_LOCATION_ERROR,
+  dispatchDateBadge,
+  dispatchDateMax,
+  dispatchCoordinateMissing,
+  dispatchLocationMissing,
+} from "@/lib/dispatch-date";
+
+/** La coordenada guardada del pedido, o null (MOM §6.2: la que usa Aliclik). */
+function savedCoordinate(row: { latitude?: number | string | null; longitude?: number | string | null }): { latitude: number; longitude: number } | null {
+  const latitude = Number(row.latitude);
+  const longitude = Number(row.longitude);
+  if (row.latitude == null || row.longitude == null || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude };
+}
 
 const DISPATCH_BADGE_TONE: Record<"info" | "warn" | "danger", BadgeTone> = { info: "info", warn: "warn", danger: "crit" };
 import { downloadPdf } from "@/lib/download-pdf";
@@ -134,6 +173,7 @@ import {
 } from "@/lib/order-coverage";
 import {
   GENERAL_STATUSES,
+  SET_STATUS_ADMIN_NOTE,
   daysInAgency,
   daysInStatus,
   generalLabel,
@@ -146,13 +186,14 @@ import {
 } from "@/lib/order-status";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
+  classifyOperation,
   macroStageLabel,
   macroSubstageLabel,
   type OrderMacroStage,
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
-import { orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
+import { offersShalomDestination, orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
 import { PAYMENT_GATEWAY_LABEL } from "@/lib/payment-gateway";
 import {
   CONFIRMATION_CHANNELS,
@@ -193,7 +234,16 @@ import { aliclikDoorBan, ROUTES_STILL_ALLOWED_LABEL } from "@/lib/door-rejection
 import { outputDisplayCode } from "@/lib/shipment-output";
 import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
-import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
+import {
+  eventNoteLabel,
+  orderAdminLink,
+  orderPlatformName,
+  statusSourceLabel,
+  type OrderAdminLink,
+  type OrderPlatformName,
+} from "@/lib/order-admin-url";
+import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
+import { timelineOriginLabel } from "@/lib/order-timeline-fact";
 import type { RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 
@@ -267,7 +317,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "historial",
 ];
 
-export type DrawerWorkspaceView = "operar" | "informacion" | "actividad";
+export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -319,6 +369,8 @@ function drawerNextAction(
   showPayments: boolean,
   gfSentence: string | null = null,
   reprogram: DrawerReprogram | null = null,
+  /** La tienda del pedido (`orders.platform`, MOM §38.12): ahí se anula. */
+  storePlatform: OrderPlatformName = "Shopify",
 ): DrawerNextAction {
   const stage = row.macro_stage as OrderMacroStage | null | undefined;
   const substage = row.macro_substage as MacroSubstage | null | undefined;
@@ -342,7 +394,7 @@ function drawerNextAction(
         eyebrow: "Confirmación · último intento",
         title: "Se agotaron los siete días de gestión",
         description:
-          "Resuelve el pedido: si no hay confirmación, la anulación se crea a mano en Shopify. Kapta nunca anula por su cuenta.",
+          `Resuelve el pedido: si no hay confirmación, la anulación se crea a mano en ${storePlatform}. Kapta nunca anula por su cuenta.`,
         cta: "Ver la gestión",
         target: "confirmacion",
         tone: "amber",
@@ -630,21 +682,34 @@ export function OrderDrawer({
   orderId,
   canEdit,
   canOverride,
+  canSetStatus,
+  canCancelWoo = false,
+  canEditCustomerName = false,
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
   closurePermissions,
   storeName,
   storeDomain,
+  storeWooSite,
   focusSection,
   onClose,
   onSaved,
   initialWorkspace,
   masterHref,
+  onNewOrderForCustomer,
 }: {
   orderId: string;
   canEdit: boolean;
   canOverride: boolean;
+  /** «Registrar estado» a mano (`master.set_status`): owner y admin, MOM §16. */
+  canSetStatus: boolean;
+  /**
+   * «Anular pedido» de WooCommerce (`orders.cancel_woo`, MOM §38.15): owner,
+   * admin y quien el dueño marque en Equipo. Independiente de `canSetStatus`.
+   */
+  canCancelWoo?: boolean;
+  canEditCustomerName?: boolean;
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
@@ -655,9 +720,16 @@ export function OrderDrawer({
     canFinalize: boolean;
     canRefund: boolean;
     canReopen: boolean;
+    canManageCosts: boolean;
+    canManageLogistics: boolean;
   };
   storeName: (id: string) => string;
   storeDomain: (id: string) => string | null;
+  /**
+   * `stores.woo_site_url` de la tienda (MOM §38.12): con él se arma el enlace a
+   * un pedido de WooCommerce. Sin él, ese pedido no tiene flechita.
+   */
+  storeWooSite?: (id: string) => string | null;
   /** Sección a la que saltar en cuanto el pedido cargue (llega por la URL). */
   focusSection?: DrawerSectionId;
   onClose: () => void;
@@ -670,10 +742,13 @@ export function OrderDrawer({
    * los filtros y las acciones en lote que la ficha sola no trae.
    */
   masterHref?: string | null;
+  onNewOrderForCustomer?: (customer:PhoneSaleCustomer,workspace:DrawerWorkspaceView)=>void;
 }) {
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<DrawerWorkspaceView>(initialWorkspace ?? "operar");
+  /** Mensajes de la clienta en Chatby (de los últimos 20): la cifra de la pestaña, solo si respondió. */
+  const [chatbyCustomerMessages, setChatbyCustomerMessages] = useState<number | null>(null);
   const scrollRef = useRef<HTMLElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const indexRef = useRef<HTMLDivElement>(null);
@@ -869,6 +944,7 @@ export function OrderDrawer({
   // «Ver actividad» abría la ficha… en Operar.
   useEffect(() => {
     setWorkspace(initialWorkspace ?? "operar");
+    setChatbyCustomerMessages(null);
     scrollRef.current?.scrollTo({ top: 0 });
   }, [orderId, initialWorkspace]);
 
@@ -942,9 +1018,21 @@ export function OrderDrawer({
   }
 
   const row = detail?.row;
-  const shopifyUrl = row
-    ? shopifyOrderAdminUrl(storeDomain(row.store_id), row.shopify_order_id)
-    : null;
+  // El enlace al pedido en SU tienda: lo decide `orders.platform`, nunca la
+  // forma del id (MOM §38.12). El #AUR900004 (`wc-aur-11076`) abría el pedido
+  // 11076 del admin de Shopify. Un pedido de WooCommerce sin el sitio guardado
+  // se queda sin enlace: ninguno antes que uno equivocado.
+  const adminLink: OrderAdminLink | null =
+    detail && row
+      ? orderAdminLink({
+          platform: detail.platform,
+          shopifyOrderId: row.shopify_order_id,
+          shopDomain: storeDomain(row.store_id),
+          wooSiteUrl: storeWooSite?.(row.store_id) ?? null,
+        })
+      : null;
+  // Cómo se llama la tienda de este pedido en los textos de la ficha.
+  const storePlatform = orderPlatformName(detail?.platform);
 
   // El plan de rutas es quien sabe si Aliclik atiende a este pedido. Se lee de
   // ahí, no se vuelve a decidir: una segunda regla equivalente es una regla que
@@ -1019,6 +1107,17 @@ export function OrderDrawer({
       ? `${PAYMENT_GATEWAY_LABEL[detail.row.payment_gateway]}: no lo cobró el checkout. Para darlo por pagado, sube la constancia.`
       : null;
   const showPaymentPanel = paymentPanel?.show ?? false;
+  // «DNI y agencia Shalom» en un pedido pagado por web (MOM §Pagos, #KP200104):
+  // se ofrece donde Shalom puede ser el destino, lo pueda crear o no este rol.
+  const shalomDestination = Boolean(
+    detail &&
+      offersShalomDestination({
+        operation: detail.routePlan.operation,
+        currentCourier: detail.row.current_courier,
+        shippingMode: detail.row.shipping_mode,
+        shalomCandidate: detail.routePlan.candidates.some((candidate) => candidate.key === "shalom"),
+      }),
+  );
   // La salida GF activa (o la última) para la tarjeta de acción.
   const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
   // La salida que su courier no entregó y con qué sale ahora la caja (§28).
@@ -1030,7 +1129,9 @@ export function OrderDrawer({
   const reprogram: DrawerReprogram | null = reprogramState
     ? { ...reprogramState, received: (detail?.receivedReturnIds ?? []).includes(reprogramState.failed.shipmentId) }
     : null;
-  const nextAction = detail ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram) : null;
+  const nextAction = detail
+    ? drawerNextAction(detail.row, showPaymentPanel, gfDeliverySentence(gfActive), reprogram, storePlatform)
+    : null;
   // La última programación de envío (MOM §6.2): su nota y quién la puso.
   const dispatchDateEvent = useMemo(() => {
     if (!detail?.row.dispatch_scheduled_on) return null;
@@ -1095,10 +1196,19 @@ export function OrderDrawer({
     }
   };
 
-  const tabs: { id: DrawerWorkspaceView; label: string; count?: number }[] = [
+  const tabs: { id: DrawerWorkspaceView; label: string; count?: number; countHint?: string }[] = [
     { id: "operar", label: "Operar" },
     { id: "informacion", label: "Información" },
     { id: "actividad", label: "Actividad", count: detail?.timeline.length },
+    { id: "punto", label: "Punto" },
+    {
+      id: "chatby",
+      label: "Chatby",
+      count: chatbyCustomerMessages || undefined,
+      countHint: chatbyCustomerMessages
+        ? `${chatbyCustomerMessages === 1 ? "1 mensaje" : `${chatbyCustomerMessages} mensajes`} de la clienta en los últimos 20`
+        : undefined,
+    },
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -1119,6 +1229,34 @@ export function OrderDrawer({
     openWorkspace(target.id);
     document.getElementById(`pedido-tab-${target.id}`)?.focus();
   };
+
+  // Mismo permiso persona por persona (§38.15-16): WooCommerce se anula en la
+  // tienda; un histórico Shopify elegible termina su venta solo en Kapta.
+  const wooCancel: WooCancelInput | null =
+    canCancelWoo && detail && (detail.platform === "woocommerce" || detail.legacySaleEligible) && !detail.shopifyCancelledAt && !detail.legacySaleCancelledAt
+      ? {
+          mode: detail.platform === "shopify" ? "shopify_history" : wooSaleWasDispatched({shipments:detail.guides,events:detail.wooSaleDispatchEvents}) ? "woocommerce_return" : "woocommerce",
+          orderName: detail.row.order_name,
+          facts: {
+            platform: detail.platform,
+            generalStatus: detail.row.general_status,
+            financialStatus: detail.row.financial_status ?? null,
+            shipments: detail.guides,
+            events: detail.wooSaleDispatchEvents,
+            payments: null,
+            companion: {
+              travelsIn: detail.companion.travelsIn?.lends
+                ? (detail.companion.travelsIn.hostOrderName ?? "otro pedido")
+                : null,
+              carries: detail.companion.carries
+                .filter((c) => c.lends)
+                .map((c) => c.companionOrderName ?? "otro pedido"),
+            },
+          },
+          onCancel: (input) => run(() => detail.platform === "shopify"
+            ? cancelLegacyShopifySale(orderId, input) : wooSaleWasDispatched({shipments:detail.guides,events:detail.wooSaleDispatchEvents}) ? endWooSalePendingReturn(orderId, input) : cancelWooOrder(orderId, input)),
+        }
+      : null;
 
   return (
     <div className="fixed inset-0 z-30 flex justify-end bg-ink-900/20" onClick={onClose}>
@@ -1146,13 +1284,13 @@ export function OrderDrawer({
                 <h2 className="text-lg font-semibold leading-7 tabular-nums text-ink-900">
                   {row?.order_name ?? "Pedido"}
                 </h2>
-                {shopifyUrl && (
+                {adminLink && (
                   <a
-                    href={shopifyUrl}
+                    href={adminLink.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="Abrir en Shopify"
-                    aria-label={`Abrir ${row?.order_name ?? "pedido"} en Shopify (nueva pestaña)`}
+                    title={adminLink.label}
+                    aria-label={`Abrir ${row?.order_name ?? "pedido"} en ${adminLink.platformName} (nueva pestaña)`}
                     className="-ml-1 grid size-7 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
                   >
                     <IconArrowUpRight aria-hidden className="size-4" />
@@ -1183,7 +1321,7 @@ export function OrderDrawer({
                   {/* En el teléfono la fecha espera en Información: cada línea de
                       más en la cabecera fija es pantalla que no se usa. */}
                   <span className="hidden shrink-0 sm:inline">
-                    · creado el <span className="tabular-nums">{fmtDate(row.order_created_at)}</span>
+                    · creado el <span className="tabular-nums">{fmtDateTime(row.order_created_at)}</span>
                   </span>
                   {/* En el teléfono el cliente va en su propia línea, arriba y
                       entero: detrás de la tienda se partía a media palabra. En
@@ -1294,7 +1432,9 @@ export function OrderDrawer({
 
           {/* Tres espacios estables, como en Shopify: hacer el trabajo, consultar
               el pedido y auditar lo ocurrido. El equipo deja de navegar una
-              lista accidental de formularios. */}
+              lista accidental de formularios. La cuarta, Punto, es el texto
+              que se le pasa al punto de entrega, y la quinta, Chatby, la
+              conversación de WhatsApp de la clienta con el bot (MOM §25). */}
           {detail ? (
             <div className="mt-2 flex gap-6 px-4 sm:px-6" role="tablist" aria-label="Espacios del pedido">
               {tabs.map((tab) => {
@@ -1319,8 +1459,9 @@ export function OrderDrawer({
                   >
                     {tab.label}
                     {tab.count != null && (
-                      <Badge tone={active ? "brand" : "neutral"} className="tabular-nums">
+                      <Badge tone={active ? "brand" : "neutral"} className="tabular-nums" title={tab.countHint}>
                         {tab.count.toLocaleString("es-PE")}
+                        {tab.countHint && <span className="sr-only"> {tab.countHint}</span>}
                       </Badge>
                     )}
                   </button>
@@ -1432,7 +1573,7 @@ export function OrderDrawer({
                   help={
                     <>
                       <span className="tabular-nums">{fmtAge(detail.row.macro_since ?? detail.row.status_since)}</span> en esta
-                      macroetapa · fuente: {detail.row.status_source ?? "—"}
+                      macroetapa · fuente: {statusSourceLabel(detail.row.status_source, detail.platform)}
                     </>
                   }
                 />
@@ -1455,6 +1596,11 @@ export function OrderDrawer({
                           note={dispatchDateEvent?.note ?? null}
                           scheduledBy={dispatchDateEvent?.by ?? null}
                           today={limaTodayKey()}
+                          autoAliclik={classifyOperation(detail.row) === "provincia_cod"}
+                          locationMissing={dispatchLocationMissing(detail.row)}
+                          coordinateMissing={dispatchCoordinateMissing(detail.row, classifyOperation(detail.row))}
+                          coordinate={savedCoordinate(detail.row)}
+                          onFixLocation={() => jumpTo("ubicacion")}
                           onSaved={() => {
                             void reload();
                             onSaved();
@@ -1500,12 +1646,13 @@ export function OrderDrawer({
                     onDuplicateChanged={() => { void reload(); onSaved(); }}
                     row={detail.row}
                     tasks={detail.tasks}
-                    shopifyUrl={shopifyUrl}
+                    adminLink={adminLink}
                     timeline={detail.timeline}
                     pending={pending}
                     onAttempt={(payload) =>
                       run(() => registerConfirmationAttempt(orderId, payload))
                     }
+                    onFixLocation={() => jumpTo("ubicacion")}
                   />
                   {/* MOM §11.11: provincia COD que Swayp puede llevar hoy sale sin
                       confirmar; si Swayp no entrega, vuelve aquí. No se ofrece en
@@ -1595,8 +1742,8 @@ export function OrderDrawer({
                               teclear en el panel del courier para buscarla, y el
                               que el rótulo de Shalom titula «N° de Orden». */}
                           {g.guide_code && outputDisplayCode(g.output_code, g.courier) && (
-                            <span className="select-all font-mono text-xs font-semibold text-ink-900">
-                              N° {g.guide_code}
+                            <span className="text-xs">
+                              <GuideNumber value={g.guide_code} />
                             </span>
                           )}
                           {/* Shalom muestra en su panel el nº de orden Y un código
@@ -1769,6 +1916,15 @@ export function OrderDrawer({
                           {/* Las salidas de ruta manual no tienen API a la que
                               avisar: anularlas es corregir NUESTRO registro, así que
                               basta el permiso con el que se crearon. */}
+                          {canCancelWoo && gfOutputIsCancelableBeforeDispatch(g) && !gf?.stop &&
+                            !gf?.box?.pickupCheckedAt && !["in_custody", "cancelled"].includes(gf?.box?.boxState ?? "") && (
+                            <GfOutputCancelButton
+                              orderId={orderId}
+                              shipmentId={g.id}
+                              label={g.output_code ?? g.guide_code ?? "esta salida"}
+                              onDone={(msg) => { setNotice(msg); void reload(); onSaved(); }}
+                            />
+                          )}
                           {canEdit && manualOutputIsCancelable(g) && (
                             <ManualOutputCancelButton
                               shipmentId={g.id}
@@ -1840,6 +1996,11 @@ export function OrderDrawer({
                     reasons={(detail.row.macro_reasons ?? []) as MacroSubstage[]}
                     generalStatus={detail.row.general_status}
                     guides={detail.guides}
+                    row={detail.row}
+                    costTariffGap={detail.gfCostTariffGap}
+                    gfDeliveries={detail.gfDeliveries}
+                    cancelledInShopify={Boolean(detail.shopifyCancelledAt)}
+                    cancelledInKapta={Boolean(detail.legacySaleCancelledAt)}
                     permissions={closurePermissions}
                     pending={pending}
                     onAction={(input) => run(() => registerClosureAction(orderId, input))}
@@ -1860,6 +2021,7 @@ export function OrderDrawer({
                     orderId={orderId}
                     mode={paymentPanel.mode}
                     gatewayNote={gatewayNote}
+                    shalomDestination={shalomDestination}
                     onChanged={onSaved}
                   />
                   {/* MOM §35: la boleta sale del dinero que ya entró, así que
@@ -1936,11 +2098,21 @@ export function OrderDrawer({
                   </div>
                 </div>
               )}
+              {detail.platform === "woocommerce" && detail.timeline.some((e) => e.kind === "woo_sale_ended_pending_return") &&
+                !detail.timeline.some((e) => e.kind === "woo_sale_return_synced") && (
+                  <div className={cn("order-8", SECTION)}>
+                    <Banner tone="warn" title="Venta terminada · retorno y stock pendientes">
+                      No habrá nuevos intentos de entrega. Recibe cada caja en almacén y confirma su reingreso a stock en la Mesa de cierre.
+                      WooCommerce se cancelará después de esas confirmaciones. Los errores de conexión quedan en Actividad y se reintentan.
+                    </Banner>
+                  </div>
+                )}
               {canEdit ? (
                 <div data-drawer-section="acciones" className={cn("order-8", SECTION)}>
                   <OrderActions
                     row={detail.row}
                     canOverride={canOverride}
+                    canSetStatus={canSetStatus}
                     pending={pending}
                     outputCount={detail.routePlan.outputCount}
                     onStatus={(general, operational, reason, agencyCourier) =>
@@ -1949,10 +2121,12 @@ export function OrderDrawer({
                     onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
                     onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
                     onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
+                    canCancelWoo={canCancelWoo}
+                    wooCancel={wooCancel}
                   />
                 </div>
               ) : (
-                <div className={cn("order-8", SECTION)}>
+                <div className={cn("order-8 space-y-5", SECTION)}>
                   <div className="flex items-start gap-3">
                     <IconLock aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500" />
                     <div>
@@ -1962,6 +2136,17 @@ export function OrderDrawer({
                       </p>
                     </div>
                   </div>
+                  {/* El permiso de anular se concede aparte (MOM §38.15): quien lo
+                      tiene sin «Gestionar pedidos» lo ve igual. */}
+                  {wooCancel && (
+                    <WooCancelZone
+                      mode={wooCancel.mode}
+                      orderName={wooCancel.orderName}
+                      facts={wooCancel.facts}
+                      pending={pending}
+                      onCancel={wooCancel.onCancel}
+                    />
+                  )}
                 </div>
               )}
             </div>
@@ -1980,9 +2165,16 @@ export function OrderDrawer({
                     dedos y en la misma pantalla, sugería que eran dos datos
                     distintos. La de «Ubicación y cobertura» sí se queda: ahí es
                     el sujeto de la sección y lo que se corrige. */}
-                <SectionHead
-                  title="Pedido y cliente"
-                  help="Datos comerciales sincronizados desde Shopify y contexto operativo de Kapta."
+                <CustomerNameEditor
+                  key={orderId}
+                  help={`Datos comerciales sincronizados desde ${storePlatform} y contexto operativo de Kapta.`}
+                  value={detail.customerName ?? customerNameFromRaw(null,detail.row.customer_name)}
+                  canEdit={canEditCustomerName && detail.platform === "woocommerce"}
+                  hasGuides={detail.guides.length>0}
+                  onSave={(input)=>updateOrderCustomerName(orderId,input)}
+                  onUpdated={async()=>{await reload();onSaved();}}
+                  actions={onNewOrderForCustomer && <CustomerOrderButton customer={phoneSaleCustomer(detail.row)}
+                    onCreate={(customer)=>onNewOrderForCustomer(customer,workspace)}/>}
                 />
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
                   <Field label="Cliente" value={detail.row.customer_name} />
@@ -1998,6 +2190,21 @@ export function OrderDrawer({
                   <Field label="Monto" value={fmtMoney(detail.row.order_total)} numeric />
                   <Field label="Tienda" value={storeName(detail.row.store_id)} />
                   <Field label="Creado" value={fmtDateTime(detail.row.order_created_at)} numeric />
+                  {/* Por dónde entró, con la evidencia debajo (MOM §3, «Origen en
+                      la ficha»): a la vista y no solo en un tooltip, que en el
+                      teléfono no existe. Dos columnas: «Kapta Leads · Generar
+                      pedido · por …» no cabe en una. */}
+                  <div className="col-span-2 min-w-0">
+                    <dt className={FIELD_LABEL}>Origen</dt>
+                    <dd className={FIELD_VALUE} title={`De dónde se dedujo: ${detail.origin.evidence.join(" · ")}`}>
+                      {detail.origin.label}
+                    </dd>
+                    {detail.origin.evidence.length > 0 && (
+                      <dd className="mt-0.5 text-[12px] leading-4 text-ink-500">
+                        {detail.origin.evidence.join(" · ")}
+                      </dd>
+                    )}
+                  </div>
                   <Field label="Courier actual" value={detail.row.current_courier} capitalize />
                   <Field label="Guía actual" value={detail.row.guide_code} mono />
                   {/* Estos cuatro vivían solo en la tabla. Al sacar sus columnas
@@ -2053,6 +2260,7 @@ export function OrderDrawer({
                 <GeoSection
                   orderId={orderId}
                   row={detail.row}
+                  storePlatform={storePlatform}
                   canEdit={canEdit}
                   onSaved={() => {
                     void reload();
@@ -2122,7 +2330,9 @@ export function OrderDrawer({
                           )}
                         </p>
                         {(t.note || t.reason) && (
-                          <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">{t.note ?? t.reason}</p>
+                          <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">
+                            {eventNoteLabel(t.kind, t.note ?? t.reason, detail.platform)}
+                          </p>
                         )}
                         <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
                           <span className="tabular-nums">{fmtDateTime(t.occurredAt)}</span>
@@ -2132,19 +2342,49 @@ export function OrderDrawer({
                             : ""}
                           {t.courier ? ` · ${t.courier}` : ""}
                           {t.guideCode ? ` · ${t.guideCode}` : ""}
-                          {` · ${
-                            t.origin === "gestion"
-                              ? "Repro Provincia"
-                              : t.origin === "leads"
-                                ? "Leads"
-                                : t.source
-                          }`}
+                          {` · ${timelineOriginLabel(t)}`}
                         </p>
                       </li>
                     ))}
                   </ol>
                 )}
               </section>
+            </div>
+            <div
+              id="pedido-panel-punto"
+              role="tabpanel"
+              aria-labelledby="pedido-tab-punto"
+              hidden={workspace !== "punto"}
+              className="flex flex-col gap-4 sm:gap-6"
+            >
+              <PuntoSection
+                text={orderPuntoText({
+                  source: detail.punto,
+                  collect: detail.punto.collect,
+                  storeName: storeName(detail.row.store_id),
+                  orderName: detail.row.order_name ?? "",
+                  items: detail.lineItems,
+                  fallbackPhone: detail.row.customer_phone,
+                })}
+                hasAddress={detail.punto.address !== null}
+                total={detail.punto.total}
+                collect={detail.punto.collect}
+              />
+            </div>
+            <div
+              id="pedido-panel-chatby"
+              role="tabpanel"
+              aria-labelledby="pedido-tab-chatby"
+              hidden={workspace !== "chatby"}
+              className="flex flex-col gap-4 sm:gap-6"
+            >
+              <OrderChatbyPanel
+                orderId={orderId}
+                orderName={detail.row.order_name}
+                phone={detail.row.customer_phone ?? null}
+                canEdit={canEdit}
+                onCustomerMessages={setChatbyCustomerMessages}
+              />
             </div>
           </div>
         )}
@@ -2220,6 +2460,68 @@ const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
  */
 const RETURN_SCAN_COURIERS: ReadonlySet<string> = new Set(["tanders", "shalom"]);
 
+/**
+ * El Punto del pedido: el mismo texto que Shopify guardaba en el metacampo
+ * «Pedido» (`lib/order-punto.ts`), listo para copiar y pegar. Se ve tal cual
+ * se copia —saltos y espacios incluidos— para que nadie pegue una sorpresa.
+ */
+function PuntoSection({
+  text,
+  hasAddress,
+  total,
+  collect,
+}: {
+  text: string;
+  hasAddress: boolean;
+  total: number | null;
+  collect: PuntoCollect;
+}) {
+  const { state, copy } = useCopyToClipboard();
+  // «COBRAR» es el saldo (25-10-2026): cuando no es el total, se dice de dónde
+  // sale, para que nadie lo «corrija» a mano con el total del pedido.
+  const discounted = collect.amount !== null && total !== null && collect.paid > 0;
+  return (
+    <section aria-labelledby="pedido-punto-title" className={cn("space-y-4", SECTION)}>
+      <SectionHead
+        id="pedido-punto-title"
+        title="Punto"
+        badge={<Badge>Para copiar</Badge>}
+        help="El texto del pedido para el punto de entrega, con la forma del metacampo «Pedido» de Shopify: «COBRAR» es el saldo y cada producto lleva su cantidad."
+        aside={
+          <OpsButton onClick={() => copy(text)} className="pointer-coarse:h-11">
+            {state === "ok" ? <IconCheck aria-hidden /> : <IconCopy aria-hidden />}
+            <span aria-live="polite">{copyLabel(state, "Copiar Punto")}</span>
+          </OpsButton>
+        }
+      />
+      {discounted && (
+        <p className="text-[13px] leading-5 text-ink-600">
+          Cobra el saldo: total <span className="tabular-nums">{fmtMoney(total)}</span> menos{" "}
+          <span className="tabular-nums">{fmtMoney(collect.paid)}</span> ya pagado y validado ={" "}
+          <span className="font-semibold tabular-nums text-ink-900">{fmtMoney(collect.amount)}</span>.
+        </p>
+      )}
+      {collect.amount === null && (
+        <Banner tone="warn">
+          No se pudieron leer los pagos del pedido: el Punto sale sin el monto a cobrar. Vuelve a abrir la ficha.
+        </Banner>
+      )}
+      {collect.pending > 0 && collect.amount !== null && (
+        <Banner tone="warn">
+          Hay <span className="tabular-nums">{fmtMoney(collect.pending)}</span> por validar que no se restan. Si se
+          validan antes de la entrega, el saldo baja: vuelve a copiar el Punto.
+        </Banner>
+      )}
+      {!hasAddress && (
+        <Banner tone="warn">El pedido no trae dirección de envío: el Punto sale sin nombre ni dirección.</Banner>
+      )}
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-wash p-4 font-sans text-sm leading-6 text-ink-900">
+        {text}
+      </pre>
+    </section>
+  );
+}
+
 /** La reprogramación de la ficha, con si una persona ya recibió la caja que falló. */
 type DrawerReprogram = ReprogramLabelState & { received: boolean };
 
@@ -2268,14 +2570,20 @@ function mapUrl(row: OrderMasterRow): string | null {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.join(", "))}`;
 }
 
+// `shopify` no está: es «la dirección del pedido en su tienda» y se dice con la
+// plataforma del pedido (`geoSourceLabel`), no siempre Shopify (MOM §38.12).
 const GEO_SOURCE_LABEL: Record<string, string> = {
   manual: "corregida por el equipo",
   courier: "según el reporte del courier",
   ubigeo: "provincia inferida del distrito",
-  shopify: "según Shopify",
   draft: "según el formulario COD",
   history: "historial confiable del cliente",
 };
+
+function geoSourceLabel(source: string, storePlatform: OrderPlatformName): string {
+  if (source === "shopify") return `según ${storePlatform}`;
+  return GEO_SOURCE_LABEL[source] ?? source;
+}
 
 /**
  * Ubicación del pedido, editable. La dirección de Shopify sale del formulario que
@@ -2286,34 +2594,77 @@ const GEO_SOURCE_LABEL: Record<string, string> = {
 function GeoSection({
   orderId,
   row,
+  storePlatform = "Shopify",
   canEdit,
   onSaved,
 }: {
   orderId: string;
   row: OrderMasterRow;
+  /** La tienda del pedido (`orders.platform`), para decir de dónde salió la dirección. */
+  storePlatform?: OrderPlatformName;
   canEdit: boolean;
   onSaved: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<OrderGeoInput>({});
   const [hasOverride, setHasOverride] = useState(row.geo_source === "manual");
-  const [remember, setRemember] = useState(true);
+  // Apagado por defecto (25-10-2026): recordar cambia la provincia de TODOS los
+  // pedidos siguientes de ese distrito, y los nombres se repiten (Miraflores de
+  // Lima y de Arequipa). Se marca a propósito, no por inercia.
+  const [remember, setRemember] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  async function open() {
+  // «Último destino conocido de esta clienta» (MOM §37.8): solo para el pedido
+  // abierto y solo si está «Por revisar» por falta de región, distrito o
+  // dirección. Es una sugerencia: «Usar esta dirección» prellena este mismo
+  // formulario y la persona decide si la guarda.
+  const wantsSuggestion = needsDestinationSuggestion(row);
+  const [destinations, setDestinations] = useState<LastKnownDestination[]>([]);
+  useEffect(() => {
+    if (!wantsSuggestion) {
+      setDestinations([]);
+      return;
+    }
+    let alive = true;
+    loadLastKnownDestinations(orderId)
+      .then((list) => {
+        if (alive) setDestinations(list);
+      })
+      .catch(() => {
+        if (alive) setDestinations([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orderId, wantsSuggestion]);
+
+  async function open(suggestion?: LastKnownDestination) {
     const current = await loadOrderGeo(orderId);
     setHasOverride(current.hasOverride);
-    setForm({
-      region: current.region ?? row.region ?? "",
-      province: current.province ?? row.province ?? "",
-      district: current.district ?? row.district ?? "",
-      address: current.address ?? row.address ?? "",
-      reference: current.reference ?? row.reference ?? "",
-      latitude: current.latitude ?? row.latitude ?? "",
-      longitude: current.longitude ?? row.longitude ?? "",
-      note: "",
-    });
+    setForm(
+      suggestion
+        ? {
+            region: suggestion.region ?? current.region ?? row.region ?? "",
+            province: suggestion.province ?? current.province ?? row.province ?? "",
+            district: suggestion.district ?? current.district ?? row.district ?? "",
+            address: suggestion.address,
+            reference: suggestion.reference ?? "",
+            latitude: suggestion.latitude ?? "",
+            longitude: suggestion.longitude ?? "",
+            note: destinationNote(suggestion, (iso) => fmtDate(iso)),
+          }
+        : {
+            region: current.region ?? row.region ?? "",
+            province: current.province ?? row.province ?? "",
+            district: current.district ?? row.district ?? "",
+            address: current.address ?? row.address ?? "",
+            reference: current.reference ?? row.reference ?? "",
+            latitude: current.latitude ?? row.latitude ?? "",
+            longitude: current.longitude ?? row.longitude ?? "",
+            note: "",
+          },
+    );
     setEditing(true);
   }
 
@@ -2350,7 +2701,7 @@ function GeoSection({
         badge={
           <>
             <CoverageBadge coverage={row.coverage} />
-            {row.geo_source && <Badge>{GEO_SOURCE_LABEL[row.geo_source] ?? row.geo_source}</Badge>}
+            {row.geo_source && <Badge>{geoSourceLabel(row.geo_source, storePlatform)}</Badge>}
           </>
         }
         aside={
@@ -2362,7 +2713,7 @@ function GeoSection({
               </a>
             )}
             {canEdit && !editing && (
-              <OpsButton size="sm" onClick={open} className="pointer-coarse:h-11">
+              <OpsButton size="sm" onClick={() => void open()} className="pointer-coarse:h-11">
                 {hasOverride ? "Editar corrección" : "Corregir ubicación"}
               </OpsButton>
             )}
@@ -2381,12 +2732,20 @@ function GeoSection({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p>Completa la región y el distrito para asignar el flujo correcto.</p>
             {canEdit && (
-              <OpsButton size="sm" onClick={open} className="pointer-coarse:h-11">
+              <OpsButton size="sm" onClick={() => void open()} className="pointer-coarse:h-11">
                 Completar
               </OpsButton>
             )}
           </div>
         </Banner>
+      )}
+
+      {wantsSuggestion && !editing && destinations.length > 0 && (
+        <LastDestinationSuggestions
+          destinations={destinations}
+          canEdit={canEdit}
+          onUse={(d) => void open(d)}
+        />
       )}
 
       {!editing ? (
@@ -2415,7 +2774,7 @@ function GeoSection({
           }}
         >
           <p className="max-w-[68ch] text-[13px] leading-5 text-ink-500">
-            Deja en blanco lo que no quieras cambiar. Esta corrección gana sobre Shopify, sobre los
+            Deja en blanco lo que no quieras cambiar. Esta corrección gana sobre {storePlatform}, sobre los
             reportes de los couriers y sobre el ubigeo, y no se pierde al sincronizar.
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -2471,7 +2830,7 @@ function GeoSection({
               onChange={(e) => setRemember(e.target.checked)}
               className={CHECKBOX}
             />
-            Recordar esta provincia para los próximos pedidos del mismo distrito
+            Recordar esta provincia para los próximos pedidos del mismo distrito (de todos los pedidos, no solo este)
           </label>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <OpsButton type="submit" variant="primary" disabled={pending} className="pointer-coarse:h-11">
@@ -2489,6 +2848,73 @@ function GeoSection({
         </form>
       )}
     </section>
+  );
+}
+
+const DESTINATION_SOURCE_LABEL: Record<LastKnownDestination["source"], string> = {
+  kapta: "",
+  shopify_pedido: "del historial de Shopify",
+  shopify_clienta: "ficha de clienta del historial de Shopify",
+};
+
+/**
+ * Las direcciones que esta clienta ya usó en otro pedido de la organización
+ * (MOM §37.8). Se ven, se eligen y se revisan en el formulario; nunca se
+ * aplican solas: la clienta pudo mudarse.
+ */
+function LastDestinationSuggestions({
+  destinations,
+  canEdit,
+  onUse,
+}: {
+  destinations: LastKnownDestination[];
+  canEdit: boolean;
+  onUse: (d: LastKnownDestination) => void;
+}) {
+  const many = destinations.length > 1;
+  return (
+    <div className={cn(CARD_ZONE, "space-y-3")}>
+      <div>
+        <h3 className="text-sm font-semibold text-ink-900">Último destino conocido de esta clienta</h3>
+        <p className="mt-0.5 max-w-[68ch] text-[13px] leading-5 text-ink-500">
+          {many
+            ? "Con el mismo celular, esta clienta usó estas direcciones. Confírmala con ella antes de usarla: pudo mudarse."
+            : "Con el mismo celular, esta clienta usó esta dirección. Confírmala con ella antes de usarla: pudo mudarse."}
+        </p>
+      </div>
+      <ul className="-mx-4 divide-y divide-line border-y border-line sm:-mx-5">
+        {destinations.map((d) => {
+          const place = [d.district, d.province, d.region].filter(Boolean).join(" / ");
+          const from = [d.orderName, d.storeName, d.date ? fmtDate(d.date) : null].filter(Boolean).join(" · ");
+          const sourceLabel = DESTINATION_SOURCE_LABEL[d.source];
+          return (
+            <li key={d.key} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 sm:px-5">
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <p className="break-words text-sm font-medium text-ink-900">{d.address}</p>
+                {d.reference && <p className="break-words text-[13px] text-ink-700">Ref.: {d.reference}</p>}
+                {place && <p className="text-[13px] text-ink-700">{place}</p>}
+                {d.latitude != null && d.longitude != null && (
+                  <p className="text-[13px] tabular-nums text-ink-500">
+                    {d.latitude}, {d.longitude}
+                  </p>
+                )}
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-500">
+                  {from && <span className="tabular-nums">De {from}</span>}
+                  {sourceLabel && <span>{sourceLabel}</span>}
+                  {d.delivered && <Badge>entregado ahí</Badge>}
+                  {d.cancelled && <Badge>anulado</Badge>}
+                </p>
+              </div>
+              {canEdit && (
+                <OpsButton size="sm" onClick={() => onUse(d)} className="shrink-0 pointer-coarse:h-11">
+                  Usar esta dirección
+                </OpsButton>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -2816,16 +3242,18 @@ function ConfirmationDesk({
   onDuplicateChanged,
   row,
   tasks,
-  shopifyUrl,
+  adminLink,
   timeline,
   pending,
   onAttempt,
+  onFixLocation,
 }: {
   brief: OrderConfirmationBrief | null;
   onDuplicateChanged: () => void;
   row: OrderMasterRow;
   tasks: OrderMasterDetail["tasks"];
-  shopifyUrl: string | null;
+  /** El pedido en el admin de SU tienda (`orderAdminLink`, MOM §38.12), o null. */
+  adminLink: OrderAdminLink | null;
   timeline: TimelineEntry[];
   pending: boolean;
   onAttempt: (input: {
@@ -2833,12 +3261,20 @@ function ConfirmationDesk({
     channel: string;
     note?: string;
     nextContactOn?: string;
+    dispatchOn?: string;
+    coordinate?: string;
     operationId?: string;
   }) => void;
+  /** Lleva a Información → Ubicación (MOM §6.2: programar pide ubicación). */
+  onFixLocation: () => void;
 }) {
   const [result, setResult] = useState(CONFIRMATION_RESULTS[0]!.code);
   const [channel, setChannel] = useState<string>(CONFIRMATION_CHANNELS[0].code);
   const [nextContactOn, setNextContactOn] = useState("");
+  // «Programar envío» en vivo (MOM §6.2): la fecha se acuerda en la llamada.
+  const [dispatchOn, setDispatchOn] = useState("");
+  // Provincia COD sin coordenada: programar la pide (MOM §6.2, 02-11-2026).
+  const [coordinate, setCoordinate] = useState("");
   const [note, setNote] = useState("");
 
   const events = useMemo(
@@ -2866,7 +3302,12 @@ function ConfirmationDesk({
 
   const selected = confirmationResult(result);
   const needsDate = Boolean(selected?.schedulesFollowup);
-  const blocked = pending || lastAttempt || (needsDate && !nextContactOn);
+  // Confirmar sin ubicación sí; programar el envío no (MOM §6.2, #KP142558).
+  const locationMissing = dispatchLocationMissing(row);
+  const coordinateMissing = dispatchCoordinateMissing(row, classifyOperation(row));
+  const schedules = Boolean(selected?.confirms && !locationMissing && dispatchOn);
+  const blocked =
+    pending || lastAttempt || (needsDate && !nextContactOn) || (schedules && coordinateMissing && !coordinate.trim());
 
   return (
     <section className="space-y-4">
@@ -2900,14 +3341,14 @@ function ConfirmationDesk({
               <span>
                 Tarea asignada a {cancellationTask.assignedName ?? "la última persona que gestionó"}.
               </span>
-              {shopifyUrl && (
+              {adminLink && (
                 <a
-                  href={shopifyUrl}
+                  href={adminLink.url}
                   target="_blank"
                   rel="noreferrer"
                   className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}
                 >
-                  Revisar en Shopify
+                  Revisar en {adminLink.platformName}
                   <IconArrowUpRight aria-hidden className="text-ink-500" />
                 </a>
               )}
@@ -3016,6 +3457,57 @@ function ConfirmationDesk({
           </label>
         )}
 
+        {selected?.confirms && (
+          <div className="space-y-1">
+            <label className={cn(LABEL, "sm:w-56")}>
+              Sale el (opcional)
+              <input
+                type="date"
+                value={locationMissing ? "" : dispatchOn}
+                min={today}
+                max={dispatchDateMax(today)}
+                disabled={locationMissing}
+                aria-describedby="sale-el-ayuda"
+                onChange={(e) => setDispatchOn(e.target.value)}
+                className={cn(FIELD, "font-normal tabular-nums pointer-coarse:h-11 disabled:cursor-not-allowed disabled:bg-wash disabled:text-ink-500")}
+              />
+            </label>
+            {locationMissing ? (
+              <div id="sale-el-ayuda" className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <p className="text-[13px] leading-5 text-warn-fg">
+                  {DISPATCH_NEEDS_LOCATION_ERROR} Puedes confirmar igual: programa el envío cuando tenga dirección.
+                </p>
+                <OpsButton size="sm" onClick={onFixLocation} className="pointer-coarse:h-11">
+                  Corregir ubicación
+                </OpsButton>
+              </div>
+            ) : (
+              <p id="sale-el-ayuda" className="text-[13px] leading-5 text-ink-500">
+                Solo si acordaron otro día para el envío. Vacío: sale apenas se genere la guía.
+                {classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`}
+              </p>
+            )}
+            {selected?.confirms && !locationMissing && !coordinateMissing && classifyOperation(row) === "provincia_cod" && savedCoordinate(row) && (
+              <CoordinateOkLine latitude={savedCoordinate(row)!.latitude} longitude={savedCoordinate(row)!.longitude} className="pt-1" />
+            )}
+            {schedules && coordinateMissing && (
+              <label className={cn(LABEL, "pt-2")}>
+                Ubicación (obligatoria para programar)
+                <input
+                  value={coordinate}
+                  placeholder="Enlace de Google Maps o coordenada"
+                  aria-describedby="sale-el-ubicacion"
+                  onChange={(e) => setCoordinate(e.target.value)}
+                  className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+                />
+                <span id="sale-el-ubicacion" className="text-[13px] font-normal leading-5 text-warn-fg">
+                  {DISPATCH_NEEDS_COORDINATE_ERROR} Se guarda en el pedido.
+                </span>
+              </label>
+            )}
+          </div>
+        )}
+
         <label className={LABEL}>
           Qué dijo el cliente
           <textarea
@@ -3037,10 +3529,14 @@ function ConfirmationDesk({
                 channel,
                 note,
                 nextContactOn,
+                dispatchOn: selected?.confirms && !locationMissing ? dispatchOn : "",
+                coordinate: schedules && coordinateMissing ? coordinate : "",
                 operationId: crypto.randomUUID(),
               });
               setNote("");
               setNextContactOn("");
+              setDispatchOn("");
+              setCoordinate("");
             }}
             className="pointer-coarse:h-11"
           >
@@ -3057,18 +3553,43 @@ function ConfirmationDesk({
   );
 }
 
-function OrderActions({
+/** Lo que la zona «Anular pedido» necesita de la ficha (MOM §38.15). */
+interface WooCancelInput {
+  mode?: "woocommerce" | "shopify_history" | "woocommerce_return";
+  orderName: string | null;
+  facts: WooCancelFacts;
+  onCancel: (input: { reasonCode: string; reasonText: string; requestId: string }) => Promise<boolean>;
+}
+
+export function OrderActions({
   row,
   canOverride,
+  canSetStatus,
+  canCancelWoo = false,
   pending,
   outputCount,
   onStatus,
   onComment,
   onReturn,
   onRelink,
+  wooCancel = null,
 }: {
   row: OrderMasterRow;
   canOverride: boolean;
+  /**
+   * La tarjeta «Registrar estado» solo la ven owner y admin
+   * (`master.set_status`). Decisión del dueño del 15-10-2026: «solo quienes
+   * tienen acceso de Admin pueden realizar esa acción» (MOM §16). El resto de
+   * «Gestión manual» —comentar, devolver, corregir vínculos— sigue con
+   * «Gestionar pedidos».
+   */
+  canSetStatus: boolean;
+  /**
+   * «Anular pedidos de WooCommerce» (`orders.cancel_woo`, MOM §38.15). Va
+   * aparte de `canSetStatus`: el dueño se lo da a una asesora sin darle
+   * «Registrar estado» (26-10-2026).
+   */
+  canCancelWoo?: boolean;
   pending: boolean;
   /** Cuántas salidas tiene el pedido, activas o no. Un pedido de agencia que
    *  llega a la sucursal con CERO salidas es el que hay que preguntar. */
@@ -3077,6 +3598,11 @@ function OrderActions({
   onComment: (text: string, type: string) => void;
   onReturn: (reason: string, guideCode: string) => void;
   onRelink: (guideCode: string) => void;
+  /**
+   * «Anular pedido» en WooCommerce (MOM §38.15). Se pinta solo con
+   * `canCancelWoo`. null: el pedido no es de WooCommerce o ya está anulado.
+   */
+  wooCancel?: WooCancelInput | null;
 }) {
   const [general, setGeneral] = useState<GeneralStatus>(
     isGeneralStatus(row.general_status) ? row.general_status : "pendiente",
@@ -3114,102 +3640,125 @@ function OrderActions({
     <section className="space-y-5">
       <SectionHead
         title="Gestión manual"
-        help="Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final."
+        help={
+          canSetStatus
+            ? "Registra el resultado operativo o deja una nota. Las correcciones excepcionales están separadas al final."
+            : "Deja una nota. Las correcciones excepcionales están separadas al final."
+        }
       />
-      <div className={cn(CARD_ZONE, "space-y-3")}>
-        <h4 className="text-sm font-semibold text-ink-900">Registrar estado</h4>
-        <div className="grid gap-3 sm:grid-cols-2">
+      {/* Sin el permiso, una línea donde estaba la tarjeta: sin ella, quien la
+          usaba a diario la buscaría sin saber que ahora es de un admin. */}
+      {!canSetStatus && (
+        <p className="flex items-center gap-2 text-[13px] leading-5 text-ink-600">
+          <IconLock aria-hidden className="size-4 shrink-0 text-ink-500" />
+          {SET_STATUS_ADMIN_NOTE}
+        </p>
+      )}
+      {canSetStatus && (
+        <div className={cn(CARD_ZONE, "space-y-3")}>
+          <h4 className="text-sm font-semibold text-ink-900">Registrar estado</h4>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className={LABEL}>
+              Estado
+              <select
+                value={general}
+                onChange={(e) => setGeneral(e.target.value as GeneralStatus)}
+                className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+              >
+                {GENERAL_STATUSES.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={LABEL}>
+              Detalle
+              <select
+                value={operational}
+                onChange={(e) => setOperational(e.target.value)}
+                className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+              >
+                {options.map((o) => (
+                  <option key={o.code} value={o.code}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {changingClosed && (
+            <Banner tone="warn">
+              Este pedido ya está {generalLabel(row.general_status).toLowerCase()}. Cambiarlo exige un
+              motivo y queda registrado en el historial
+              {!canOverride && "; tu rol no lo permite"}.
+            </Banner>
+          )}
+          {/* UN PEDIDO DE AGENCIA NO PUEDE HABER LLEGADO SIN HABER SALIDO.
+              Medido el 09-09-2026: los pedidos de agencia cuyo estado viene del
+              rastreo de Shalom tienen salida el 100% de las veces (107 de 107); los
+              marcados a mano fallan el 18,5% (42 de 227). Son 43 pedidos y S/6.140
+              desde agosto invisibles para todo indicador de envío, y ocho seguían
+              en la agencia sin aviso de vencimiento, el más viejo de 62 días.
+              Se pregunta AQUÍ y no en un formulario aparte porque el formulario
+              aparte ya existe —la salida manual admite Olva— y no se usó ni una vez
+              en 40 días contra 866 salidas de Shalom. */}
+          {needsAgencyCourier && (
+            <Banner tone="warn" title="¿Por qué agencia se envió?">
+              <p>
+                Este pedido no tiene ninguna salida registrada. Queda como salida con tu firma, y sin
+                ella el pedido no aparece en los indicadores de envío ni en el aviso de vencimiento en
+                agencia.
+              </p>
+              <select
+                value={agencyCourier}
+                onChange={(e) => setAgencyCourier(e.target.value)}
+                aria-label="Agencia por la que se envió"
+                className={cn(FIELD_BOX, "mt-2 h-9 w-auto px-3 pointer-coarse:h-11")}
+              >
+                <option value="">Elige la agencia…</option>
+                {AGENCY_COURIER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Banner>
+          )}
           <label className={LABEL}>
-            Estado
-            <select
-              value={general}
-              onChange={(e) => setGeneral(e.target.value as GeneralStatus)}
+            {changingClosed ? "Motivo (obligatorio)" : "Motivo u observación"}
+            <input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={changingClosed ? "Por qué se corrige un pedido cerrado" : "Opcional"}
               className={cn(FIELD, "font-normal pointer-coarse:h-11")}
-            >
-              {GENERAL_STATUSES.map((s) => (
-                <option key={s.code} value={s.code}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
+            />
           </label>
-          <label className={LABEL}>
-            Detalle
-            <select
-              value={operational}
-              onChange={(e) => setOperational(e.target.value)}
-              className={cn(FIELD, "font-normal pointer-coarse:h-11")}
+          <div className="pt-1">
+            <OpsButton
+              variant="primary"
+              disabled={
+                pending ||
+                (changingClosed && (!canOverride || !reason.trim())) ||
+                (needsAgencyCourier && !agencyCourier)
+              }
+              onClick={() => onStatus(general, operational, reason, agencyCourier || undefined)}
+              className="pointer-coarse:h-11"
             >
-              {options.map((o) => (
-                <option key={o.code} value={o.code}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              Guardar estado
+            </OpsButton>
+          </div>
         </div>
-        {changingClosed && (
-          <Banner tone="warn">
-            Este pedido ya está {generalLabel(row.general_status).toLowerCase()}. Cambiarlo exige un
-            motivo y queda registrado en el historial
-            {!canOverride && "; tu rol no lo permite"}.
-          </Banner>
-        )}
-        {/* UN PEDIDO DE AGENCIA NO PUEDE HABER LLEGADO SIN HABER SALIDO.
-            Medido el 09-09-2026: los pedidos de agencia cuyo estado viene del
-            rastreo de Shalom tienen salida el 100% de las veces (107 de 107); los
-            marcados a mano fallan el 18,5% (42 de 227). Son 43 pedidos y S/6.140
-            desde agosto invisibles para todo indicador de envío, y ocho seguían
-            en la agencia sin aviso de vencimiento, el más viejo de 62 días.
-            Se pregunta AQUÍ y no en un formulario aparte porque el formulario
-            aparte ya existe —la salida manual admite Olva— y no se usó ni una vez
-            en 40 días contra 866 salidas de Shalom. */}
-        {needsAgencyCourier && (
-          <Banner tone="warn" title="¿Por qué agencia se envió?">
-            <p>
-              Este pedido no tiene ninguna salida registrada. Queda como salida con tu firma, y sin
-              ella el pedido no aparece en los indicadores de envío ni en el aviso de vencimiento en
-              agencia.
-            </p>
-            <select
-              value={agencyCourier}
-              onChange={(e) => setAgencyCourier(e.target.value)}
-              aria-label="Agencia por la que se envió"
-              className={cn(FIELD_BOX, "mt-2 h-9 w-auto px-3 pointer-coarse:h-11")}
-            >
-              <option value="">Elige la agencia…</option>
-              {AGENCY_COURIER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </Banner>
-        )}
-        <label className={LABEL}>
-          {changingClosed ? "Motivo (obligatorio)" : "Motivo u observación"}
-          <input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder={changingClosed ? "Por qué se corrige un pedido cerrado" : "Opcional"}
-            className={cn(FIELD, "font-normal pointer-coarse:h-11")}
-          />
-        </label>
-        <div className="pt-1">
-          <OpsButton
-            variant="primary"
-            disabled={
-              pending ||
-              (changingClosed && (!canOverride || !reason.trim())) ||
-              (needsAgencyCourier && !agencyCourier)
-            }
-            onClick={() => onStatus(general, operational, reason, agencyCourier || undefined)}
-            className="pointer-coarse:h-11"
-          >
-            Guardar estado
-          </OpsButton>
-        </div>
-      </div>
+      )}
+      {canCancelWoo && wooCancel && (
+        <WooCancelZone
+          mode={wooCancel.mode}
+          orderName={wooCancel.orderName}
+          facts={wooCancel.facts}
+          pending={pending}
+          onCancel={wooCancel.onCancel}
+        />
+      )}
 
       <div className={cn(CARD_ZONE, "space-y-3")}>
         <h4 className="text-sm font-semibold text-ink-900">Comentario</h4>

@@ -19,6 +19,8 @@ import {
 } from "@/lib/yape-recipient";
 import { statementAccountKey } from "@/lib/yape-statement/match";
 import { isWebPrepaid } from "@/lib/order-paid";
+import { paidCoversTotal } from "@/lib/payment-rounding";
+import { agencyShippingPaid } from "@/lib/agency-shipping";
 import type { PaymentGateway } from "@/lib/payment-gateway";
 
 // ── Constantes ───────────────────────────────────────────────────────────────
@@ -95,6 +97,21 @@ export const INVOICE_DAILY_LIMIT_MAX = 300;
 
 /** A lo más tantos comprobantes por RUC en una pasada del barrido (MOM §35.4). */
 export const INVOICE_MAX_PER_RUN = 15;
+
+/**
+ * Desde cuándo «Emitir esta boleta» puede emitir un pedido que quedó pagado
+ * ANTES de «Emitir desde» del RUC: el 01/10/2026 00:00 de Lima (owner,
+ * 15-10-2026), para su último registro y también para su primer dinero
+ * (`firstPaidAt`: la fecha más temprana entre el comprobante y el registro de
+ * sus pagos validados). Solo con el RUC en «Manual», solo con el botón (una
+ * persona) y solo si esa persona confirma que lo buscó en SimpleFact y no tiene
+ * boleta (`sin_revision_simplefact`): antes de Kapta las boletas se emitían a mano, y
+ * Kapta no sabe si ese pedido ya tiene una. Dos boletas son dos veces el
+ * impuesto. Y solo si «Emitir desde» ya llegó: con una fecha en el futuro
+ * (Ajustes la acepta), nada pagado antes de ella sale, ni con el botón. El
+ * barrido nunca va hacia atrás. La base exige lo mismo (0269).
+ */
+export const INVOICE_BACKFILL_FROM = "2026-10-01T05:00:00.000Z";
 
 /** El IGV va incluido en el precio de Shopify (owner, 14-10-2026). */
 export const IGV_PERCENT = 18;
@@ -228,6 +245,14 @@ export interface InvoicePayment {
    */
   registeredAt: string | null;
   /**
+   * `order_payments.paid_at`: la fecha y hora del movimiento, como la dice el
+   * comprobante. Puede faltar (el lector no siempre la lee) y NO cuenta para la
+   * condición 8. Solo cuenta para el piso de lo pagado antes de «Emitir desde»
+   * (`INVOICE_BACKFILL_FROM`): ahí vale la más temprana entre ésta y
+   * `registeredAt`, porque la plata pudo moverse antes de entrar a Kapta.
+   */
+  paidAt: string | null;
+  /**
    * `order_payments.validated_at`: solo para auditar la base del comprobante.
    * NO dice cuándo quedó pagado: observar un pago lo borra y volver a validarlo
    * lo pone en el momento de la nueva validación.
@@ -269,12 +294,23 @@ export interface InvoiceOrderFacts {
   orderDate: string | null;
   /** Para reconocer su nombre en la nota de un Yape (`yapeRecipientReading`). */
   customerName: string | null;
+  /**
+   * Agencia con el paquete ya recogido (`order_master`): lo que falta hasta
+   * S/ 15 es el envío pagado en el mostrador (lib/agency-shipping.ts, §6.5).
+   */
+  agencyPickedUp?: boolean;
   payments: InvoicePayment[];
   /** Las cuentas ACTIVAS de la tienda. */
   accounts: InvoiceAccount[];
   /** Las empresas emisoras de la organización. */
   issuers: InvoiceIssuer[];
   existing: InvoiceExisting;
+  /**
+   * Solo en un pedido de WooCommerce (`orders.platform`, MOM §35.11): de dónde
+   * se relee antes de emitir y cómo se dicen sus motivos. Las reglas no lo
+   * miran. Sin él, el pedido es de Shopify, como siempre.
+   */
+  platform?: "woocommerce";
 }
 
 // ── Motivos ──────────────────────────────────────────────────────────────────
@@ -299,9 +335,13 @@ export const INVOICE_REASONS = [
   "ya_simulado",
   "error_previo",
   "sin_conexion",
-  // La lectura de Shopify (lib/invoicing/shopify-order.ts).
+  // La lectura de Shopify (lib/invoicing/shopify-order.ts) y la de WooCommerce
+  // (lib/invoicing/woocommerce-order.ts, MOM §35.11), que usa los mismos.
   "no_encontrado",
   "sin_token_shopify",
+  // La tienda no tiene las claves de la API de WooCommerce (§35.11): el
+  // `sin_token_shopify` de un pedido de WooCommerce.
+  "sin_claves_woo",
   "prueba",
   "editado",
   "cantidad_editada",
@@ -334,6 +374,10 @@ export const INVOICE_REASONS = [
   // pedido, sus pagos o la cuenta del RUC cambiaron desde que lo abrió. Lo dice
   // `emitInvoiceNow` con SU lectura, la misma con la que arma la boleta.
   "pedido_cambio",
+  // Quedó pagado antes de «Emitir desde» (`INVOICE_BACKFILL_FROM`) y quien
+  // pulsó no marcó que lo revisó en SimpleFact. Es de quien pulsa, no del
+  // pedido: solo lo dice `emitInvoiceNow`, y el barrido nunca lo guarda.
+  "sin_revision_simplefact",
   // El despliegue no es producción: una vista previa comparte la base y la
   // llave de cifrado con producción, y desde ella saldría una boleta real.
   "no_produccion",
@@ -361,6 +405,7 @@ export const INVOICE_REASON_LABEL: Record<InvoiceReason, string> = {
   sin_conexion: "El RUC no tiene token o su prueba de conexión no confirmó el RUC.",
   no_encontrado: "Shopify no devolvió el pedido.",
   sin_token_shopify: "La tienda no tiene conexión con Shopify.",
+  sin_claves_woo: "La tienda no tiene las claves de la API de WooCommerce.",
   prueba: "Es un pedido de prueba en Shopify.",
   editado: "El pedido fue editado en Shopify.",
   cantidad_editada: "Se cambió la cantidad de una línea en Shopify.",
@@ -384,8 +429,36 @@ export const INVOICE_REASON_LABEL: Record<InvoiceReason, string> = {
   turno_fallido: "El turno de la base no respondió como se esperaba: no se envió nada a SimpleFact.",
   pedido_cambio:
     "El pedido cambió desde que lo abriste (el RUC o el total): vuelve a abrirlo y revisa la boleta antes de emitirla.",
+  sin_revision_simplefact:
+    "Quedó pagado antes de «Emitir desde»: falta confirmar que en SimpleFact no tiene boleta.",
   no_produccion: "Emitir solo funciona en producción: este despliegue es una vista previa.",
 };
+
+/**
+ * Los motivos cuya frase nombra a Shopify, dichos de un pedido de WooCommerce
+ * (MOM §35.11). El código es el mismo —el barrido, la base y el panel los
+ * tratan igual—; solo cambia de quién se habla. Los demás motivos no nombran
+ * una plataforma, o la lectura de WooCommerce no los da (`prueba`, `editado`…).
+ */
+export const WOO_INVOICE_REASON_LABEL: Readonly<Partial<Record<InvoiceReason, string>>> = {
+  no_encontrado: "WooCommerce no lo devolvió como un pedido vivo.",
+  impuesto_encima: "WooCommerce sumó el impuesto aparte del precio.",
+  no_cuadra: "El detalle de WooCommerce no suma el total.",
+  total_distinto: "El total de WooCommerce no es el de Kapta.",
+  pago_web_no_confirmado: "WooCommerce no confirma el cobro de la pasarela por el total.",
+};
+
+/**
+ * La frase de un motivo, según de qué plataforma es el pedido
+ * (`orders.platform`). Sin plataforma, o en Shopify, la de siempre.
+ */
+export function invoiceReasonLabel(reason: InvoiceReason, platform?: string | null): string {
+  if (platform === "woocommerce") {
+    const woo = WOO_INVOICE_REASON_LABEL[reason];
+    if (woo) return woo;
+  }
+  return INVOICE_REASON_LABEL[reason];
+}
 
 // ── A qué cuenta entró cada pago (MOM §35.2) ─────────────────────────────────
 
@@ -522,6 +595,23 @@ export type InvoiceEligibility =
        * validados, o la fecha del pedido en el prepago web (§35.3, fila 8).
        */
       paidAt: string;
+      /**
+       * Cuándo se movió el primer dinero del pedido: la fecha más temprana
+       * entre el comprobante (`paidAt` de cada pago) y su registro
+       * (`registeredAt`), de todos sus pagos validados; en el prepago web, la
+       * fecha del pedido. Es la que se mide contra el piso de lo pagado antes
+       * de «Emitir desde» (`INVOICE_BACKFILL_FROM`) y la que dice la
+       * confirmación. No cambia la condición 8.
+       */
+      firstPaidAt: string;
+      /**
+       * Quedó pagado antes de «Emitir desde» y solo pasa por la excepción de
+       * «Emitir esta boleta» (`INVOICE_BACKFILL_FROM`). Con él, `emitInvoiceNow`
+       * pide que la persona confirme que lo revisó en SimpleFact y el turno va
+       * con `p_backfill` (0269). Siempre false sin `emitNow`, y con «Emitir
+       * desde» en el futuro.
+       */
+      beforeStart: boolean;
       basis: InvoiceBasis;
     }
   | {
@@ -558,8 +648,20 @@ export interface InvoiceEligibilityOptions {
    * RUC tiene que estar en «Manual» o en «Real»; si no, `modo_distinto`. Sin
    * esto (el barrido y el panel) un RUC en «Manual» se evalúa como en
    * «Simulación»: el barrido no emite por él.
+   *
+   * Y con el RUC en «Manual», un pedido pagado antes de «Emitir desde» pero
+   * desde `INVOICE_BACKFILL_FROM` —su último registro y su primer dinero
+   * (`firstPaidAt`)— pasa la condición 8 con `beforeStart` (owner,
+   * 15-10-2026), si «Emitir desde» ya llegó (`now`). Sin `emitNow`, en
+   * «Real» o con «Emitir desde» en el futuro, nunca.
    */
   emitNow?: boolean;
+  /**
+   * El reloj con que se mira si «Emitir desde» ya llegó, solo para la excepción
+   * de lo pagado antes (`emitNow`). Por defecto, ahora. Un reloj que no se
+   * entiende no cuenta como «ya llegó»: no hay excepción.
+   */
+  now?: Date;
 }
 
 /**
@@ -595,7 +697,17 @@ export function invoiceEligibility(
   if (prepaid && live.length > 0) return fail("prepago_con_comprobantes");
   if (!prepaid) {
     const validatedCents = live.reduce((sum, p) => sum + Math.max(0, toCents(p.amount) ?? 0), 0);
-    if (totalCents === null || totalCents <= 0 || validatedCents < totalCents) {
+    // Menos de S/ 1 por cubrir es redondeo: está pagado y la boleta sale por el
+    // total del pedido (lib/payment-rounding.ts, owner 01-11-2026).
+    // Ni el envío que la clienta pagó en la agencia, con el paquete recogido:
+    // hasta S/ 15 sin comprobante (owner 01-11-2026, lib/agency-shipping.ts).
+    const agencyShipping = agencyShippingPaid({
+      operation: facts.agencyPickedUp ? "agencia" : null,
+      pickedUp: Boolean(facts.agencyPickedUp),
+      payments: live.map((p) => ({ kind: p.kind, validation_status: p.validationStatus, amount: p.amount })),
+      orderTotal: facts.total,
+    });
+    if (!paidCoversTotal(validatedCents, totalCents) && agencyShipping === null) {
       return fail("sin_pago_completo");
     }
   }
@@ -666,9 +778,45 @@ export function invoiceEligibility(
   // no se emite.
   const undated = !prepaid && live.some((p) => time(p.registeredAt) === null);
   const from = time(issuer.emitFrom);
-  if (paidTime === null || undated || from === null || paidTime < from) {
-    return fail("antes_de_inicio", undefined, issuer.id);
-  }
+  if (paidTime === null || undated || from === null) return fail("antes_de_inicio", undefined, issuer.id);
+  // El primer dinero: para el piso de la excepción no basta con cuándo entró a
+  // Kapta el último pago. Un pago cuyo comprobante dice 29/09 y que se registró
+  // el 01/10 movió la plata antes del piso, cuando las boletas se emitían a
+  // mano. Cuenta la fecha más temprana entre el comprobante (`paidAt`) y el
+  // registro de cada pago validado; sin fecha de comprobante, o con una que no
+  // se entiende, la de registro. En el prepago web, la fecha del pedido.
+  const firstPaidAt = prepaid
+    ? facts.orderDate
+    : live.reduce<string | null>((first, p) => {
+        const registered = time(p.registeredAt);
+        if (registered === null) return first;
+        const receipt = time(p.paidAt);
+        const at = receipt !== null && receipt < registered ? p.paidAt! : p.registeredAt!;
+        return first === null || time(at)! < time(first)! ? at : first;
+      }, null);
+  const firstTime = time(firstPaidAt);
+  // La excepción (owner, 15-10-2026): lo pagado antes de «Emitir desde», pero
+  // desde el 01/10/2026 00:00 de Lima —el último registro Y el primer dinero—,
+  // lo puede emitir una persona con «Emitir esta boleta» y el RUC en «Manual».
+  // Antes de Kapta las boletas se emitían a mano en SimpleFact: quien pulsa
+  // tiene que confirmar que lo revisó ahí (`emitInvoiceNow`). El barrido nunca
+  // va hacia atrás, y en «Real» tampoco.
+  // Solo con «Emitir desde» ya llegado: Ajustes acepta una fecha en el futuro
+  // (un cambio de modo solo mueve una que quedó atrás), y lo pagado antes de
+  // ella no sale, ni con el botón. La excepción es para lo pagado antes de un
+  // inicio que ya pasó, nunca para emitir antes de la fecha que puso el owner.
+  const floor = time(INVOICE_BACKFILL_FROM)!;
+  const nowTime = (opts.now ?? new Date()).getTime();
+  const backfill =
+    opts.emitNow === true &&
+    issuer.mode === "manual" &&
+    Number.isFinite(nowTime) &&
+    from <= nowTime &&
+    paidTime >= floor &&
+    firstTime !== null &&
+    firstTime >= floor;
+  if (paidTime < from && !backfill) return fail("antes_de_inicio", undefined, issuer.id);
+  const beforeStart = paidTime < from;
 
   // 9. Uno por pedido.
   if (facts.existing.realLive) return fail("ya_tiene", undefined, issuer.id);
@@ -690,6 +838,8 @@ export function invoiceEligibility(
     mode,
     totalCents,
     paidAt: paidAt!,
+    firstPaidAt: firstPaidAt!,
+    beforeStart,
     basis: {
       prepaid,
       payments: resolved.map((r) => ({

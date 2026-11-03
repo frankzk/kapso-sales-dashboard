@@ -1,6 +1,8 @@
 "use server";
 
+import { loadKeptReprogrammed, type KeptReprogrammed } from "@/lib/gf-carry-kept-server";
 import { cancelledScanNotice } from "@/lib/scan-cancelled";
+import { annulledOutputScanNotice } from "@/lib/scan-annulled-output";
 import { alreadyInBoxMessage, alreadyInBoxStage, type AlreadyInBoxStage } from "@/lib/gf-scan-already-in-box";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -53,7 +55,7 @@ import type { RiderRateVersion } from "@/lib/rider-pay";
 import { isGroupGfRiderCourier } from "@/lib/couriers/catalog";
 import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, limaClock, scheduledDay, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
-import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage } from "@/lib/gf-scan-return";
+import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage, REPORTED_STOP_MOVE_ERROR } from "@/lib/gf-scan-return";
 import { isReturningOwnOutput, officeReturnOutcome, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
@@ -64,6 +66,7 @@ import { loadRouteCloseContext, type RouteCloseContext } from "@/lib/route-close
 import { otherCourierBlockMessage } from "@/lib/gf-admission-message";
 import { clearGfDispatchPrograms, writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 import { loadActiveBoxes, type CourierRouteAssignment } from "@/lib/gf-active-boxes";
+import { findOfficeReceipts } from "@/lib/gf-office-receipts";
 import {
   loadReproQueueFlags,
   materializeWaitingAgreementsSafe,
@@ -79,6 +82,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export interface CourierActionResult {
   error?: string;
   notice?: string;
+  /** Salidas recibidas o cuya recepción ya estaba confirmada; solo del alcance autorizado. */
+  receivedShipmentIds?: string[];
 }
 
 export interface CourierProviderRow {
@@ -240,8 +245,15 @@ export interface CourierBlockedOrder {
   orderName: string;
   storeName: string;
   customerName: string;
+  /** Para que la búsqueda de «Desde la lista» lo encuentre por teléfono (24-10-2026). */
+  customerPhone: string | null;
   district: string;
   reason: BlockedReason;
+  /**
+   * Con `tarifa_faltante`, el servicio también está pausado en el distrito: al
+   * ponerle tarifa seguiría sin salir (#KP141876, Ancón, 24-10-2026).
+   */
+  paused?: boolean;
 }
 
 export interface CourierOperationsSnapshot {
@@ -256,6 +268,9 @@ export interface CourierOperationsSnapshot {
   blockedCount: number;
   /** Los excluidos con su motivo; `blockedCount` es su tamaño. */
   blocked: CourierBlockedOrder[];
+  /** No entregados de Lima que la tienda todavía no acordó en Repro Lima:
+   *  no entran a la cola (MOM §29.13, 01-11-2026). */
+  awaitingRepro: number;
   sourceCount: number;
 }
 
@@ -268,6 +283,7 @@ const EMPTY_OPERATIONS: CourierOperationsSnapshot = {
   riders: [],
   blockedCount: 0,
   blocked: [],
+  awaitingRepro: 0,
   sourceCount: 0,
 };
 
@@ -754,18 +770,22 @@ async function loadCourierOperations(
   const ownInRequest = new Set((ownRequestRows as Array<{ shipment_id: string }>).map((request) => request.shipment_id));
 
   let blockedCount = 0;
+  // No entregados de Lima que la tienda todavía no acordó en Repro Lima.
+  let awaitingRepro = 0;
   const blocked: CourierBlockedOrder[] = [];
   const available: CourierAvailableOrder[] = [];
   const returnable: CourierReturnableOrder[] = [];
-  const block = (order: QueueOrderRow, reason: BlockedReason) => {
+  const block = (order: QueueOrderRow, reason: BlockedReason, extra: { paused?: boolean } = {}) => {
     blockedCount += 1;
     blocked.push({
       orderId: order.order_id,
       orderName: order.order_name ?? "Pedido sin código",
       storeName: storeName.get(order.store_id) ?? agreementByStore.get(order.store_id)?.client_label ?? "Tienda",
       customerName: order.customer_name ?? "Cliente sin nombre",
+      customerPhone: order.customer_phone ?? null,
       district: order.district ?? "Sin distrito",
       reason,
+      ...(extra.paused ? { paused: true } : {}),
     });
   };
 
@@ -783,7 +803,11 @@ async function loadCourierOperations(
       // salida sigue viva (una reprogramación de Aliclik, por ejemplo) y la
       // lleva su courier, o no queda ninguna viva que sacar. Nunca
       // desaparece en silencio de la cola.
-      if (isReprogramStage(order.macro_stage, order.macro_substage)) block(order, reprogramBlockReason(outputs, replacedIds));
+      if (isReprogramStage(order.macro_stage, order.macro_substage)) {
+        // Sin acuerdo de la tienda es de Repro Lima, no de la cola (01-11-2026).
+        if (awaitingStoreAgreement(order, programByOrder)) awaitingRepro += 1;
+        else block(order, reprogramBlockReason(outputs, replacedIds));
+      }
       continue;
     }
     const fillable = own ? null : pickFillableRouteOutput(outputs);
@@ -823,7 +847,9 @@ async function loadCourierOperations(
       day,
     });
     if (tariff.kind === "missing" || availability.status === "paused") {
-      block(order, tariff.kind === "missing" ? "tarifa_faltante" : "servicio_pausado");
+      // El motivo sigue siendo uno; con los dos, la búsqueda de la lista dice
+      // también la pausa, para que ponerle tarifa no sea el único paso.
+      block(order, tariff.kind === "missing" ? "tarifa_faltante" : "servicio_pausado", { paused: tariff.kind === "missing" && availability.status === "paused" });
       continue;
     }
     const program = programByOrder.get(order.order_id) ?? null;
@@ -854,7 +880,11 @@ async function loadCourierOperations(
       tandersReview: review,
       ownOutput: own ? { outputCode: own.output_code ?? null } : null,
     };
+    // La caja que el motorizado todavía tiene se recibe igual: es del courier.
+    // Lo demás de «Por reprogramar Lima» entra solo con el día que acordó la
+    // tienda en Repro Lima (MOM §29.13, «Reintentos para hoy», 01-11-2026).
     if (ownBox && own && decision?.action === "recibir_en_oficina") returnable.push({ ...row, route: ownBox, shipmentId: own.id });
+    else if (awaitingStoreAgreement(order, programByOrder)) awaitingRepro += 1;
     else available.push(row);
   }
 
@@ -1062,7 +1092,18 @@ async function loadCourierOperations(
     if (nueva) output.reproLimaChip = reproCajaNuevaChip(nueva.day);
   }
 
-  return { available, returnable, returning, accepted, routes, riders, blockedCount, blocked, sourceCount: sourceCount ?? available.length };
+  return { available, returnable, returning, accepted, routes, riders, blockedCount, blocked, awaitingRepro, sourceCount: sourceCount ?? available.length };
+}
+
+/**
+ * ¿Es un no entregado de Lima que la tienda todavía no acordó? (MOM §29.13,
+ * 01-11-2026, decisión del owner: solo la tienda llama.) El acuerdo con Grupo
+ * GF deja su día en `gf_dispatch_programs` (Repro Lima al decidir, o al
+ * recibir la caja); sin ese día, el pedido es de Repro Lima, no de la cola.
+ * Un programa anterior a la regla, puesto desde Despacho, se respeta.
+ */
+function awaitingStoreAgreement(order: { order_id: string; macro_stage: string | null; macro_substage: string | null }, programs: Map<string, DispatchProgram>): boolean {
+  return isReprogramStage(order.macro_stage, order.macro_substage) && !programs.has(order.order_id);
 }
 
 /**
@@ -1760,18 +1801,29 @@ async function returnUndeliveredShipments(
   const changed: string[] = [];
   const received: string[] = [];
   const errors: string[] = [];
+  const receiptErrors = new Map<string, string>();
   // De qué pedido es cada caja recibida: los que vuelven a «por asignar» pasan
   // por Repro Lima (abajo).
   const orderOfShipment = new Map<string, string>();
   for (const item of undelivered) {
     const { data, error } = await admin.rpc("gf_return_to_office", { p_item_id: item.id, p_actor: auth.userId });
-    if (error) errors.push(error.message);
+    if (error) receiptErrors.set(item.shipment_id, error.message);
     else if (data) {
       changed.push(data as string);
       received.push(item.shipment_id);
       orderOfShipment.set(item.shipment_id, data as string);
     }
   }
+  // Otra lectura (o persona) pudo recibirla antes. Solo se confirma con
+  // evidencia de recepción, custodia en oficina y ninguna caja activa.
+  let alreadyReceived: string[] = [];
+  try {
+    alreadyReceived = await findOfficeReceipts(admin, shipmentIds.filter((id) => !received.includes(id)), opts.manifestIds);
+  } catch {
+    errors.push("No se pudo comprobar si el paquete ya estaba recibido. Actualiza antes de reintentar.");
+  }
+  for (const [id, message] of receiptErrors) if (!alreadyReceived.includes(id)) errors.push(message);
+  const receivedShipmentIds = [...new Set([...received, ...alreadyReceived])];
   // Lo que la 0248 mandó a stock en vez de a «por asignar» —la reemplazada y la
   // que ya constaba devuelta—, releído después de recibir: un reemplazo que
   // terminó mientras tanto cambia la rama. Una en `retorno` sin reemplazo
@@ -1802,16 +1854,17 @@ async function returnUndeliveredShipments(
   revalidatePath(COURIER_PATH);
   revalidatePath("/dashboard/pedidos");
   revalidatePath(REPRO_LIMA_PATH);
-  if (!changed.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
+  if (!changed.length && !alreadyReceived.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
   if (ambiguousNote) errors.push(ambiguousNote);
   const requeued = changed.length - toStock - alreadyReturned;
   const parts: string[] = [];
   if (requeued) parts.push(`${requeued} ${requeued === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`);
   if (toStock) parts.push(returnedToStockNotice(toStock));
   if (alreadyReturned) parts.push(`${alreadyReturned} ya ${alreadyReturned === 1 ? "constaba devuelta: salió" : "constaban devueltas: salieron"} de la caja sin volver a «por asignar».`);
+  if (alreadyReceived.length) parts.push(`${alreadyReceived.length} ${alreadyReceived.length === 1 ? "salida ya estaba recibida" : "salidas ya estaban recibidas"} en oficina. No se registra otra devolución.`);
   parts.push(...reproReceptionNotice(repro, { single: changed.length === 1 }));
   const done = parts.join(" ");
-  return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}` } : { notice: done };
+  return errors.length ? { error: `${done} ${[...new Set(errors)].join(" ")}`, receivedShipmentIds } : { notice: done, receivedShipmentIds };
 }
 
 /**
@@ -3320,7 +3373,12 @@ export async function moveManifestItem(
         .update({ removed_at: now, removed_by: auth.userId, removal_reason: `Movido a ${rider.full_name}: ${cleanReason}` })
         .eq("id", item.id)
         .is("removed_at", null);
-  if (removeError) return { error: removeError.message };
+  if (removeError) {
+    // La parada se reportó después del escaneo (0230 la niega): un «No
+    // entregado» se recibe y se asigna escaneándolo otra vez (lib/gf-scan-return.ts).
+    if (/ya fue reportada/.test(removeError.message)) return { error: REPORTED_STOP_MOVE_ERROR };
+    return { error: removeError.message };
+  }
   // 3) meter en el destino (si ya salió y la verificación está apagada, entra en custodia con su parada)
   const { error: insertError } = targetInCustody
     ? await admin.rpc("gf_add_item_in_custody", { p_manifest_id: targetManifestId as string, p_shipment_id: shipmentId, p_store_id: item.store_id, p_actor: auth.userId })
@@ -3611,27 +3669,36 @@ export async function scanAssignToRider(
         message: replacedReceivedMessage(replacedScan.outputCode, fromName, box.dispatch_manifests.route_date, replacedScan.replacedBy),
       };
     }
-    // Una caja de un día ANTERIOR (lib/gf-scan-return.ts): escanearlo en
-    // oficina prueba que volvió. Un «No entregado» se recibe y se asigna en el
-    // mismo gesto; antes respondía «Ya estaba» y no entraba en la ruta de hoy.
-    if (box && box.dispatch_manifests.route_date < boxDay) {
+    // Una caja de un día ANTERIOR, o de HOY con la parada ya reportada
+    // (lib/gf-scan-return.ts): escanearlo en oficina prueba que volvió. Un «No
+    // entregado» se recibe y se asigna en el mismo gesto; antes respondía «Ya
+    // estaba» (día anterior) o «En la caja de otro» con un «Mover» que la base
+    // negaba (hoy, 26-10-2026: #KP142954). Hoy y con el mismo motorizado es el
+    // reintento del mismo día (§9.3): no se toca.
+    const pastDecision = box && box.dispatch_manifests.route_date <= boxDay
+      ? await (async () => {
+          const { data: stop } = await admin
+            .from("delivery_stops")
+            .select("status,outcome_reason")
+            .eq("shipment_id", shipmentId)
+            .eq("dispatch_manifest_id", box.manifest_id)
+            .order("reported_at", { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          return pastBoxDecision({
+            boxRouteDate: box.dispatch_manifests.route_date,
+            targetDay: boxDay,
+            stopStatus: (stop?.status as string | null) ?? null,
+            outcomeReason: (stop?.outcome_reason as string | null) ?? null,
+            sameRider: box.dispatch_manifests.rider_id === rider.id,
+          });
+        })()
+      : null;
+    if (box && pastDecision && pastDecision !== "misma_caja") {
       const fromName = box.dispatch_manifests.driver_name ?? "otro motorizado";
-      const { data: stop } = await admin
-        .from("delivery_stops")
-        .select("status,outcome_reason")
-        .eq("shipment_id", shipmentId)
-        .eq("dispatch_manifest_id", box.manifest_id)
-        .order("reported_at", { ascending: false, nullsFirst: false })
-        .limit(1)
-        .maybeSingle();
-      const decision = pastBoxDecision({
-        boxRouteDate: box.dispatch_manifests.route_date,
-        targetDay: boxDay,
-        stopStatus: (stop?.status as string | null) ?? null,
-        outcomeReason: (stop?.outcome_reason as string | null) ?? null,
-      });
-      if (decision === "entregado" || decision === "sin_reporte") {
-        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: pastBoxMessage(decision, fromName, box.dispatch_manifests.route_date) };
+      // Entregado, sin reporte o reintento del mismo día: se dice y no se toca.
+      if (pastDecision !== "recibir_y_asignar") {
+        return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: pastBoxMessage(pastDecision, fromName, box.dispatch_manifests.route_date) };
       }
       const { error: returnError } = await admin.rpc("gf_return_to_office", { p_item_id: box.id, p_actor: auth.userId });
       if (returnError) return { ...line, status: "no_elegible", manifestId: box.manifest_id, message: returnError.message };
@@ -3714,20 +3781,31 @@ export async function scanAssignToRider(
   // 4) Tomar (idempotente) y asignar.
   // Un solo control de permisos (arriba) y efectos diferidos: ver `SideEffects`.
   const fx = deferredEffects();
+  // El QR era de una salida ANULADA (24-10-2026, AUR178551-S01): el fallo lo
+  // dice con quién y cuándo la anuló y qué hacer, en vez de «La caja existente
+  // ya no está disponible…» (lib/scan-annulled-output.ts). Solo el mensaje: lo
+  // que se toma o asigna no cambia, y un rótulo vivo responde lo de siempre.
+  const ineligible = async (why: string): Promise<ScanAssignLine> => ({
+    ...line,
+    status: "no_elegible",
+    message: receivedNote + ((await annulledOutputScanNotice(admin, found.shipment, why)) ?? why),
+  });
   try {
   // Recibido de una caja vieja: el Master se entera al final, con lo demás.
   if (receivedFrom) await fx.recompute([orderId]);
   const taken = await takeOrdersCore(auth, orgId, [orderId], { dispatchDay: opts.scheduledFor ?? limaClock().day }, fx, { gfProvider });
-  if (taken.failed.length) return { ...line, status: "no_elegible", message: receivedNote + taken.failed[0]!.error };
-  if (!taken.accepted.length && !taken.alreadyAccepted.length) return { ...line, status: "no_elegible", message: receivedNote + (taken.error ?? "No se pudo tomar el pedido.") };
+  if (taken.failed.length) return await ineligible(taken.failed[0]!.error);
+  if (!taken.accepted.length && !taken.alreadyAccepted.length) return await ineligible(taken.error ?? "No se pudo tomar el pedido.");
   const { data: requests } = await admin.from("logistics_requests").select("id,shipment_id").eq("order_id", orderId).eq("provider_id", gfProvider?.id ?? "").in("status", ["accepted", "scheduled"]);
   const requestIds = ((requests ?? []) as { id: string }[]).map((r) => r.id);
-  if (!requestIds.length) return { ...line, status: "no_elegible", message: receivedNote + "El pedido se tomó pero no se pudo asignar. Continúa desde la lista." };
+  if (!requestIds.length) return await ineligible("El pedido se tomó pero no se pudo asignar. Continúa desde la lista.");
   // La programación ya se miró arriba (o se confirmó): no se vuelve a leer.
   const assigned = await assignRouteCore(auth, orgId, rider.id, requestIds, { overrideCash: opts.overrideCash, day: opts.scheduledFor ?? null, confirmProgrammed: true }, fx);
   if (!assigned.assigned) {
     const why = assigned.failed[0]?.error ?? assigned.error ?? "No se pudo asignar.";
-    return { ...line, status: /efectivo|límite/i.test(why) ? "bloqueado_efectivo" : "no_elegible", message: receivedNote + why };
+    // El límite de efectivo no es cosa del rótulo: se autoriza y se vuelve a escanear.
+    if (/efectivo|límite/i.test(why)) return { ...line, status: "bloqueado_efectivo", message: receivedNote + why };
+    return await ineligible(why);
   }
   const manifestId = assigned.manifestIds[0] ?? null;
   // Se leyó el rótulo de OTRA salida del pedido —el de Tanders que no entregó,
@@ -3865,6 +3943,9 @@ export interface CourierRouteReport {
   closeContext: RouteCloseContext | null;
   /** Cancela aquí mismo una carga abierta y vacía (dispatch.manage). */
   canCancelLoads: boolean;
+  /** Reprogramados que el motorizado conserva de rutas anteriores, sin ruta
+   *  nueva (MOM §29.7, 01-11-2026). Null si no se pudieron leer. */
+  kept: KeptReprogrammed[] | null;
 }
 
 /**
@@ -3887,10 +3968,13 @@ export async function loadCourierRouteReport(routeId: string): Promise<CourierRo
   const detail = await getRouteDetail(id);
   if (!detail) return { error: "No encontramos esa ruta." };
   const day = detail.route.route_date;
-  const [riders, access, closeContext] = await Promise.all([
+  const [riders, access, closeContext, kept] = await Promise.all([
     getRiders(),
     routeReportAccess(id),
     loadRouteCloseContext(createAdminSupabase(), id),
+    detail.route.rider_id && detail.route.status !== "cerrada"
+      ? loadKeptReprogrammed(createAdminSupabase(), detail.route.rider_id, day).catch(() => null)
+      : Promise.resolve([] as KeptReprogrammed[]),
   ]);
   return {
     stores: stores.map((s) => ({ id: s.id, name: s.name })),
@@ -3900,5 +3984,6 @@ export async function loadCourierRouteReport(routeId: string): Promise<CourierRo
     canReport: Boolean(access),
     closeContext,
     canCancelLoads: permissions.can("dispatch.manage"),
+    kept,
   };
 }

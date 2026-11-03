@@ -32,7 +32,9 @@ describe("clasificar la pasarela", () => {
     expect(classifyPaymentGateway([CHECKOUT])).toBe("checkout");
     expect(classifyPaymentGateway([CHECKOUT.toUpperCase()])).toBe("checkout");
     expect(classifyPaymentGateway(["Cash on Delivery (COD)", CHECKOUT])).toBe("checkout");
-    expect(CHECKOUT_GATEWAYS).toEqual([CHECKOUT]);
+    // Flow en Shopify y el «Flow Payment» de WooCommerce (Aurela, 24-10-2026).
+    expect(CHECKOUT_GATEWAYS).toEqual([CHECKOUT, "Tarjeta o Yape"]);
+    expect(classifyPaymentGateway(["Tarjeta o Yape"])).toBe("checkout");
   });
 
   it("una pasarela que nadie confirmó todavía NO se salta nada: desconocida", () => {
@@ -122,7 +124,7 @@ describe("el dato viaja de Shopify al Master y a quien decide", () => {
   it("todos los que arman los hechos de pago pasan la pasarela", () => {
     for (const f of [
       "app/dashboard/pedidos/payment-actions.ts",
-      "app/dashboard/pedidos/aliclik-actions.ts",
+      "lib/aliclik-guide.ts",
       "components/order-drawer.tsx",
       "lib/collect-alert.ts",
       "app/api/pedidos/rotulos/route.ts",
@@ -165,6 +167,6 @@ describe("los pedidos pagados que siguen vivos van a buscar su pasarela", () => 
   it("y el Master reconcilia el histórico con el cambio de versión", () => {
     // La versión vigente, no la de este cambio: lo que se comprueba es que el
     // bump existe, y cualquiera posterior lo cumple igual.
-    expect(read("lib/order-macro-stage.ts")).toContain('MOM_RESOLUTION_VERSION = "mom-v1.30"');
+    expect(read("lib/order-macro-stage.ts")).toContain('MOM_RESOLUTION_VERSION = "mom-v1.37"');
   });
 });

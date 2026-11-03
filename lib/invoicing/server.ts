@@ -66,6 +66,8 @@ import {
   type SimplefactSalePayload,
 } from "@/lib/invoicing/rules";
 import { fetchOrderForInvoice, webPrepaidConfirmed, type InvoiceOrderRead } from "@/lib/invoicing/shopify-order";
+import { WOO_PREPAID_UNCONFIRMED_DETAIL } from "@/lib/invoicing/woocommerce-order";
+import type { OrderPlatform } from "@/lib/types";
 import {
   simplefactCreateSale,
   simplefactListSales,
@@ -139,6 +141,9 @@ export const SHOPIFY_LEVEL_REASONS: ReadonlySet<InvoiceReason> = new Set<Invoice
   "total_distinto",
   "pago_web_no_confirmado",
   "sin_token_shopify",
+  // El de WooCommerce (§35.11): sin las claves de la API no hay a quién
+  // preguntarle, y en 6 horas se vuelve a mirar, como sin token de Shopify.
+  "sin_claves_woo",
 ]);
 
 /**
@@ -297,12 +302,26 @@ export const INVOICE_CLAIM_MODE_MIGRATION = "0261";
 const CLAIM_0261_PARAMS = ["p_mode", "p_created_by"] as const;
 
 /**
- * El «no existe» del turno. Si se pidió con `p_mode` o `p_created_by`, lo que
- * falta es la 0261: la 0257 y la 0260 crean el turno sin esos parámetros, y
- * PostgREST no encuentra esa firma (PGRST202). Quien llega al turno ya leyó las
- * tablas de la 0257, así que no son ellas. Sin esos parámetros, como siempre.
+ * La migración que le deja al turno dar una fila real de un pedido pagado antes
+ * de «Emitir desde» (`p_backfill`, owner 15-10-2026): la 0269. Como la 0261, no
+ * crea nada con nombre nuevo, así que se reconoce por el parámetro. Solo lo
+ * manda «Emitir esta boleta» con un pedido de antes (`beforeStart`): sin la
+ * 0269, lo demás se sigue emitiendo con el turno de once argumentos.
+ */
+export const INVOICE_CLAIM_BACKFILL_MIGRATION = "0269";
+
+/**
+ * El «no existe» del turno. Si se pidió con `p_backfill`, lo que falta es la
+ * 0269: la 0261 ya corrió en producción. Si se pidió con `p_mode` o
+ * `p_created_by`, lo que falta es la 0261: la 0257 y la 0260 crean el turno sin
+ * esos parámetros, y PostgREST no encuentra esa firma (PGRST202). Quien llega
+ * al turno ya leyó las tablas de la 0257, así que no son ellas. Sin esos
+ * parámetros, como siempre.
  */
 function claimMissingError(args: Record<string, unknown>): InvoiceMigrationMissingError {
+  if ("p_backfill" in args) {
+    return new InvoiceMigrationMissingError("invoice_claim con p_backfill", "invoice_claim", INVOICE_CLAIM_BACKFILL_MIGRATION);
+  }
   const sent = CLAIM_0261_PARAMS.filter((p) => p in args);
   return sent.length
     ? new InvoiceMigrationMissingError(`invoice_claim con ${sent.join(" y ")}`, "invoice_claim", INVOICE_CLAIM_MODE_MIGRATION)
@@ -424,6 +443,8 @@ export async function loadInvoiceIssuers(admin: SupabaseClient, orgId: string): 
 
 const ORDER_COLUMNS =
   "id,store_id,shopify_order_id,name,total_amount,currency,cancelled_at,total_refunded,financial_status,payment_gateway,processed_at,created_at";
+/** Con la plataforma del pedido (0274, MOM §38.1): de dónde se relee antes de emitir. */
+const ORDER_COLUMNS_WITH_PLATFORM = `${ORDER_COLUMNS},platform`;
 
 interface OrderRow {
   id: string;
@@ -438,6 +459,8 @@ interface OrderRow {
   payment_gateway: string | null;
   processed_at: string | null;
   created_at: string | null;
+  /** `orders.platform` (0274). Sin la columna no viene, y el pedido es de Shopify. */
+  platform?: string | null;
 }
 
 interface PaymentRow {
@@ -448,6 +471,7 @@ interface PaymentRow {
   validation_status: string;
   validated_at: string | null;
   registered_at: string | null;
+  paid_at: string | null;
   vision: unknown;
 }
 
@@ -484,6 +508,33 @@ export function invoiceExistingFrom(rows: InvoiceRow[]): InvoiceExisting {
 interface LoadedOrder {
   facts: InvoiceOrderFacts;
   shopifyOrderId: string | null;
+  /** `orders.platform`: decide de dónde se relee el pedido (§35.11), nunca la forma del id. */
+  platform: OrderPlatform;
+}
+
+/** «La columna no existe» (Postgres 42703) y es `platform`: el código llegó antes que la 0274. */
+function isPlatformColumnMissing(error: { code?: string; message?: string } | null): boolean {
+  return !!error && error.code === "42703" && /\bplatform\b/.test(error.message ?? "");
+}
+
+/**
+ * Los pedidos, con su plataforma. Sin la 0274 no hay columna —y entonces no
+ * puede haber pedidos de WooCommerce—: se leen sin ella y todos son de Shopify,
+ * como en el resto de Kapta (MOM §38.1). Cualquier otro error LANZA.
+ */
+async function selectOrderRows(admin: SupabaseClient, ids: string[]): Promise<OrderRow[]> {
+  const out: OrderRow[] = [];
+  let cols = ORDER_COLUMNS_WITH_PLATFORM;
+  for (const part of chunk(unique(ids), ID_BATCH)) {
+    let res = await admin.from("orders").select(cols).in("id", part);
+    if (res.error && cols !== ORDER_COLUMNS && isPlatformColumnMissing(res.error)) {
+      cols = ORDER_COLUMNS;
+      res = await admin.from("orders").select(cols).in("id", part);
+    }
+    if (res.error) throw dbError("No se pudo leer orders", res.error);
+    out.push(...((res.data ?? []) as unknown as OrderRow[]));
+  }
+  return out;
 }
 
 async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Map<string, LoadedOrder>> {
@@ -491,7 +542,7 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
   const ids = unique(orderIds.filter(Boolean));
   if (!ids.length) return out;
 
-  const orders = await selectIn<OrderRow>(admin, "orders", ORDER_COLUMNS, "id", ids);
+  const orders = await selectOrderRows(admin, ids);
   if (!orders.length) return out;
   const found = orders.map((o) => o.id);
   const storeIds = unique(orders.map((o) => o.store_id));
@@ -500,17 +551,23 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
     selectIn<{ id: string; org_id: string | null }>(admin, "stores", "id,org_id", "id", storeIds),
     // El nombre de la clienta solo sirve para reconocerlo en la nota de un Yape
     // (`yapeRecipientReading`): no se guarda ni sale en ningún reporte.
-    selectIn<{ order_id: string; customer_name: string | null }>(
+    selectIn<{
+      order_id: string;
+      customer_name: string | null;
+      macro_operation: string | null;
+      pickup_state: string | null;
+      general_status: string | null;
+    }>(
       admin,
       "order_master",
-      "order_id,customer_name",
+      "order_id,customer_name,macro_operation,pickup_state,general_status",
       "order_id",
       found,
     ),
     selectIn<PaymentRow>(
       admin,
       "order_payments",
-      "id,order_id,kind,amount,validation_status,validated_at,registered_at,vision",
+      "id,order_id,kind,amount,validation_status,validated_at,registered_at,paid_at,vision",
       "order_id",
       found,
     ),
@@ -563,6 +620,13 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
   );
 
   const nameByOrder = new Map(masters.map((m) => [m.order_id, m.customer_name]));
+  // Agencia y el paquete ya recogido: lo que falta hasta S/ 15 es el envío que
+  // la clienta pagó en el mostrador (lib/agency-shipping.ts, §6.5).
+  const agencyPickedUp = new Set(
+    masters
+      .filter((m) => m.macro_operation === "agencia" && (m.pickup_state === "recogido" || m.general_status === "entregado"))
+      .map((m) => m.order_id),
+  );
   const paymentsByOrder = new Map<string, InvoicePayment[]>();
   for (const p of payments) {
     const list = paymentsByOrder.get(p.order_id) ?? [];
@@ -575,6 +639,9 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
       // Cuándo quedó pagado el pedido sale del último pago REGISTRADO (§35.3,
       // condición 8): es la fecha que mira `invoice_candidates`.
       registeredAt: p.registered_at,
+      // La fecha del comprobante: solo para el piso de lo pagado antes de
+      // «Emitir desde» (el primer dinero, `firstPaidAt`), no para la condición 8.
+      paidAt: p.paid_at ?? null,
       vision: p.vision,
       flowLinked: flowLinked.has(p.id),
       statementDestination: destinationByPayment.get(p.id) ?? null,
@@ -604,8 +671,10 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
 
   for (const o of orders) {
     const orgId = orgByStore.get(o.store_id) ?? null;
+    const platform: OrderPlatform = o.platform === "woocommerce" ? "woocommerce" : "shopify";
     out.set(o.id, {
       shopifyOrderId: o.shopify_order_id,
+      platform,
       facts: {
         orderId: o.id,
         storeId: o.store_id,
@@ -618,11 +687,14 @@ async function loadOrders(admin: SupabaseClient, orderIds: string[]): Promise<Ma
         paymentGateway: gatewayOf(o.payment_gateway),
         orderDate: o.processed_at ?? o.created_at,
         customerName: nameByOrder.get(o.id) ?? null,
+        ...(agencyPickedUp.has(o.id) ? { agencyPickedUp: true } : {}),
         payments: paymentsByOrder.get(o.id) ?? [],
         accounts: accountsByStore.get(o.store_id) ?? [],
         // Una tienda sin organización no tiene RUC: el pedido sale `cuenta_sin_ruc`.
         issuers: orgId ? issuers.filter((i) => i.orgId === orgId) : [],
         existing: invoiceExistingFrom(invoicesByOrder.get(o.id) ?? []),
+        // Solo en un pedido de WooCommerce: los de Shopify quedan como siempre.
+        ...(platform === "woocommerce" ? { platform } : {}),
       },
     });
   }
@@ -646,7 +718,11 @@ export async function loadInvoiceOrderFacts(
 
 /** Lo que el barrido toca fuera de la base. Las pruebas lo cambian por dobles. */
 export interface InvoiceSweepDeps {
-  fetchOrder: (input: { storeId: string; shopifyOrderId: string }) => Promise<InvoiceOrderRead>;
+  /**
+   * Relee el pedido antes de emitir. `platform` va solo en un pedido de
+   * WooCommerce (§35.11); uno de Shopify se pide como siempre, sin él.
+   */
+  fetchOrder: (input: { storeId: string; shopifyOrderId: string; platform?: OrderPlatform }) => Promise<InvoiceOrderRead>;
   createSale: (conn: SimplefactConn, payload: SimplefactSalePayload) => Promise<SimplefactHttp>;
   listSales: (conn: SimplefactConn, query: SimplefactListQuery) => Promise<SimplefactHttp>;
   decryptToken: (tokenEnc: string) => string;
@@ -1288,7 +1364,7 @@ async function sweepOrg(ctx: OrgContext): Promise<void> {
     }
 
     // Justo antes de emitir, Shopify (§35.3): los ítems al céntimo.
-    const prepared = await prepareSale(deps, facts, elig, entry.shopifyOrderId);
+    const prepared = await prepareSale(deps, facts, elig, entry);
     if (!prepared.ok) {
       note(facts, prepared.reason, prepared.detail, issuer.id);
       continue;
@@ -1561,7 +1637,16 @@ function redactSecrets(text: string, secrets: ReadonlySet<string>): string {
 
 /** La boleta lista para pedir el turno, o por qué no. */
 type PreparedSale =
-  | { ok: true; invoiceId: string; orderName: string | null; payload: SimplefactSalePayload }
+  | {
+      ok: true;
+      invoiceId: string;
+      orderName: string | null;
+      payload: SimplefactSalePayload;
+      /** Si el pedido se leyó de su foto (MOM §35.10): cuándo se tomó. Va en la base del comprobante. */
+      snapshotFetchedAt: string | null;
+      /** Si el pedido es de WooCommerce y se leyó en su API (MOM §35.11): cuándo. Va en la base. */
+      wooReadAt: string | null;
+    }
   | { ok: false; reason: InvoiceReason; detail: string | null };
 
 /**
@@ -1574,29 +1659,61 @@ async function prepareSale(
   deps: InvoiceSweepDeps,
   facts: InvoiceOrderFacts,
   elig: EligibleOrder,
-  shopifyOrderId: string | null,
+  order: Pick<LoadedOrder, "shopifyOrderId" | "platform">,
 ): Promise<PreparedSale> {
-  const read = await deps.fetchOrder({ storeId: facts.storeId, shopifyOrderId: shopifyOrderId ?? "" });
+  // Un pedido de WooCommerce se relee en WooCommerce (§35.11). El de Shopify se
+  // pide exactamente como siempre: sin `platform`.
+  const woo = order.platform === "woocommerce";
+  const read = await deps.fetchOrder({
+    storeId: facts.storeId,
+    shopifyOrderId: order.shopifyOrderId ?? "",
+    ...(woo ? { platform: "woocommerce" as const } : {}),
+  });
   if (!read.ok) return { ok: false, reason: read.reason, detail: read.detail ?? null };
   if (read.totalCents !== elig.totalCents) {
     return {
       ok: false,
       reason: "total_distinto",
-      detail: `Shopify dice S/ ${soles(read.totalCents)}; Kapta, S/ ${soles(elig.totalCents)}.`,
+      detail: `${woo ? "WooCommerce" : "Shopify"} dice S/ ${soles(read.totalCents)}; Kapta, S/ ${soles(elig.totalCents)}.`,
     };
   }
-  if (elig.basis.prepaid && !webPrepaidConfirmed(read)) return { ok: false, reason: "pago_web_no_confirmado", detail: null };
+  if (elig.basis.prepaid && !webPrepaidConfirmed(read)) {
+    return { ok: false, reason: "pago_web_no_confirmado", detail: woo ? WOO_PREPAID_UNCONFIRMED_DETAIL : null };
+  }
   const invoiceId = deps.randomUUID();
   const orderName = facts.orderName ?? read.name;
   const payload = buildSalePayload({ invoiceId, orderName, items: read.items, totalCents: elig.totalCents });
   if (!payload) return { ok: false, reason: "no_cuadra", detail: null };
-  return { ok: true, invoiceId, orderName, payload };
+  return {
+    ok: true,
+    invoiceId,
+    orderName,
+    payload,
+    snapshotFetchedAt: read.snapshot?.fetchedAt ?? null,
+    wooReadAt: woo ? (read.woocommerce?.readAt ?? null) : null,
+  };
+}
+
+/**
+ * La base del comprobante: la de las reglas y, si la boleta salió de la foto
+ * del pedido (§35.10), la hora de la foto; si salió de WooCommerce (§35.11),
+ * la plataforma y la hora de la lectura. Leído en vivo en Shopify, la de siempre.
+ */
+function invoiceBasis(elig: EligibleOrder, prepared: Extract<PreparedSale, { ok: true }>): unknown {
+  if (prepared.snapshotFetchedAt) return { ...elig.basis, foto_shopify: prepared.snapshotFetchedAt };
+  if (prepared.wooReadAt) return { ...elig.basis, plataforma: "woocommerce", lectura_woocommerce: prepared.wooReadAt };
+  return elig.basis;
 }
 
 /**
  * Los parámetros del turno (`invoice_claim`). `mode` (`p_mode`) y `createdBy`
  * (`p_created_by`) son de la 0261 y solo van si se dan: sin ellos el turno es
  * el de siempre, con el modo del RUC y sin quién.
+ *
+ * `p_backfill` (0269) va SOLO con un pedido pagado antes de «Emitir desde»
+ * (`beforeStart`, que solo da `emitNow`) y con quien lo pidió: el barrido
+ * nunca lo manda. Nunca va en false: así lo demás se sigue pidiendo con el
+ * turno de once argumentos aunque la 0269 no esté.
  */
 function claimArgs(
   facts: InvoiceOrderFacts,
@@ -1612,10 +1729,14 @@ function claimArgs(
     p_total: elig.totalCents / 100,
     p_paid_at: elig.paidAt,
     p_order_name: prepared.orderName,
-    p_basis: elig.basis,
+    // Una boleta armada con la foto del pedido (MOM §35.10), o leída en
+    // WooCommerce (§35.11), lo deja dicho en su base. Leída en vivo en Shopify,
+    // la base es la de siempre.
+    p_basis: invoiceBasis(elig, prepared),
     p_request: prepared.payload,
     ...(extra.mode ? { p_mode: extra.mode } : {}),
     ...(extra.createdBy ? { p_created_by: extra.createdBy } : {}),
+    ...(elig.beforeStart && extra.createdBy ? { p_backfill: true } : {}),
   };
 }
 
@@ -1803,7 +1924,11 @@ export type InvoiceEmitNowResult =
       error: string | null;
       rucMismatch: boolean;
     }
-  | { ok: false; reason: InvoiceReason; detail?: string };
+  /**
+   * `platform` solo cuando el pedido es de WooCommerce y lo frenó su lectura
+   * (§35.11): quien lo dice usa la frase de WooCommerce (`invoiceReasonLabel`).
+   */
+  | { ok: false; reason: InvoiceReason; detail?: string; platform?: "woocommerce" };
 
 interface EmitNowState {
   /** El token descifrado, para limpiarlo de todo texto que sale. */
@@ -1843,6 +1968,13 @@ function blocked(reason: InvoiceReason, detail?: string | null): InvoiceEmitNowR
  * Antes lo comparaba la acción con una lectura propia, y entre esa lectura y
  * esta el pedido podía cambiar: salía una boleta que nadie confirmó.
  *
+ * PAGADO ANTES DE «EMITIR DESDE» (owner, 15-10-2026). Con el RUC en «Manual»,
+ * las reglas dejan pasar lo pagado desde el 01/10/2026 (`beforeStart`). Antes
+ * de Kapta las boletas se emitían a mano en SimpleFact, así que, justo después
+ * de comparar lo que vio, hace falta que la persona haya marcado que lo revisó
+ * ahí (`expected.simplefactChecked`); si no, `sin_revision_simplefact` y no se
+ * llama a nada. El turno va con `p_backfill` y la base exige lo mismo (0269).
+ *
  * SOLO EN PRODUCCIÓN (`invoiceEmitAllowedHere`). La acción ya lo pide antes de
  * leer nada; aquí se vuelve a pedir, primero que todo, por si alguien la llama
  * desde otro lado. Se lee del entorno y no de `deps`: `deps` son los dobles de
@@ -1866,8 +1998,12 @@ export interface InvoiceEmitNowInput {
   /**
    * Lo que la persona confirmó: el RUC y el total en céntimos. Si las reglas,
    * con la lectura de aquí, dicen otro, no se emite (`pedido_cambio`).
+   *
+   * `simplefactChecked`: marcó «Revisé en SimpleFact y este pedido no tiene
+   * boleta». Hace falta, y solo cuenta un `true`, cuando el pedido quedó pagado
+   * antes de «Emitir desde» (`beforeStart`); si no, `sin_revision_simplefact`.
    */
-  expected?: { issuerId: string; totalCents: number };
+  expected?: { issuerId: string; totalCents: number; simplefactChecked?: boolean };
   /** Solo con el RUC en «Manual»: en «Real» emite el barrido (`modo_distinto`). */
   manualOnly?: boolean;
 }
@@ -1933,7 +2069,7 @@ async function emitNow(
   // 1. Los hechos. Lanza si algo no se pudo leer, y no se emite (falla cerrada).
   const loaded = (await loadOrders(admin, [input.orderId])).get(input.orderId);
   if (!loaded) return blocked("pedido", "No se encontró el pedido.");
-  const { facts, shopifyOrderId } = loaded;
+  const { facts } = loaded;
 
   // 2. Las reglas de §35.3, como una emisión real: un RUC en «Manual» o «Real».
   const elig = invoiceEligibility(facts, { emitNow: true });
@@ -1957,6 +2093,12 @@ async function emitNow(
   if (input.manualOnly && !input.expected) return blocked("pedido_cambio");
   if (input.expected && !sameAsExpected(elig, input.expected)) return blocked("pedido_cambio");
 
+  // 2d. Pagado antes de «Emitir desde» (owner, 15-10-2026): antes de Kapta las
+  // boletas se emitían a mano en SimpleFact, y Kapta no sabe si este pedido ya
+  // tiene una. Dos boletas son dos veces el impuesto: sin que la persona diga
+  // que lo buscó ahí y no está, no sale. Antes del token, de Shopify y del turno.
+  if (elig.beforeStart && input.expected?.simplefactChecked !== true) return blocked("sin_revision_simplefact");
+
   // 3. El token antes del turno, como el barrido: un turno sin token dejaría una
   // fila `emitiendo` que nunca se envió.
   const conn = await loadIssuerConn(admin, deps, issuer.id);
@@ -1971,15 +2113,21 @@ async function emitNow(
   state.secrets.add(conn.conn.token.trim());
 
   // 4. Justo antes de emitir, Shopify (§35.3): los ítems al céntimo.
-  const prepared = await prepareSale(deps, facts, elig, shopifyOrderId);
-  if (!prepared.ok) return blocked(prepared.reason, prepared.detail);
+  const prepared = await prepareSale(deps, facts, elig, loaded);
+  if (!prepared.ok) {
+    const out = blocked(prepared.reason, prepared.detail);
+    return loaded.platform === "woocommerce" && !out.ok ? { ...out, platform: "woocommerce" } : out;
+  }
 
   // 5. El turno: una fila REAL, con quién la pidió. La base vuelve a revisar
-  // todo, con el candado del RUC y el tope del día de lo real.
+  // todo, con el candado del RUC y el tope del día de lo real. Un pedido de
+  // antes de «Emitir desde» va con `p_backfill` (0269): la base vuelve a exigir
+  // la excepción entera.
   const args = claimArgs(facts, elig, prepared, { mode: "real", createdBy: input.userId });
   const claim = await admin.rpc("invoice_claim", args);
   if (claim.error) {
-    // Sin la firma con `p_mode` y `p_created_by`: falta la 0261.
+    // Sin la firma con `p_mode` y `p_created_by`: falta la 0261. Sin la de
+    // `p_backfill`: falta la 0269, y solo un pedido de antes lo nota.
     if (isInvoiceMigrationMissing(claim.error)) return blocked("sin_migracion", claimMissingError(args).message);
     return blocked("turno_fallido", `El turno falló (${sinTelefonos(claim.error.message)}).`);
   }
@@ -2054,12 +2202,29 @@ export interface InvoiceEmitNowRow {
  * Lo que sale si se pulsa: el RUC y el total de las reglas evaluadas como una
  * emisión real. Es lo que dice la confirmación y lo que `emitInvoiceAction`
  * vuelve a comparar antes de emitir.
+ *
+ * `beforeStart`: quedó pagado antes de «Emitir desde» (la excepción de
+ * `INVOICE_BACKFILL_FROM`). La confirmación lo dice, con cuándo quedó pagado
+ * (`paidAt`), cuándo se movió el primer dinero (`firstPaidAt`, la fecha más
+ * temprana entre el comprobante y el registro de sus pagos: desde ahí se busca
+ * en SimpleFact) y desde cuándo emite el RUC (`emitFrom`), y pide marcar que
+ * se revisó en SimpleFact. Las fechas en ISO, o null si no se entienden.
  */
 export interface InvoiceEmitNowOffer {
   issuerId: string;
   ruc: string;
   legalName: string;
   total: number;
+  beforeStart: boolean;
+  paidAt: string | null;
+  firstPaidAt: string | null;
+  emitFrom: string | null;
+}
+
+/** Una fecha como ISO («2026-10-14T15:00:00.000Z»), o null si no se entiende. */
+function isoOrNull(value: string | null | undefined): string | null {
+  const t = time(value);
+  return t === null ? null : new Date(t).toISOString();
 }
 
 /**
@@ -2150,6 +2315,11 @@ function emitNowShopifyBlock(checks: readonly InvoiceCheckRow[], invoices: reado
  *    a mano» o de «Espera a Shopify» se contradice, y el servidor relee Shopify
  *    igual antes de emitir.
  *
+ * Un pedido pagado antes de «Emitir desde», pero desde el 01/10/2026
+ * (`INVOICE_BACKFILL_FROM`), también lleva botón: las reglas como emisión real
+ * con el RUC en «Manual» lo dejan pasar. La oferta lo dice (`beforeStart`), y
+ * la confirmación pide marcar que se revisó en SimpleFact.
+ *
  * Quién mira (`invoices.manage`) lo pone quien llama. Esto solo decide si se
  * enseña el botón: lo que se envía lo decide el servidor al pulsar, con todo
  * leído de nuevo (`emitInvoiceAction`).
@@ -2183,6 +2353,10 @@ export function invoiceEmitNowReadiness(input: {
       ruc: elig.issuer.ruc,
       legalName: elig.issuer.legalName,
       total: elig.totalCents / 100,
+      beforeStart: elig.beforeStart,
+      paidAt: isoOrNull(elig.paidAt),
+      firstPaidAt: isoOrNull(elig.firstPaidAt),
+      emitFrom: isoOrNull(elig.issuer.emitFrom),
     },
   };
 }

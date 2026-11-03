@@ -138,10 +138,10 @@ export async function claimReproCase(orderId: string, opts: { reopen?: boolean }
     const f = await factsOf(admin, orderId);
     if (!f?.storeId || !f.order) return { error: "No encontramos el pedido." };
     if (!scope.storeIds.has(f.storeId)) return { error: REPRO_OUTSIDE_STORE };
-    if (!f.inStage || f.cancelled) {
+    if (!(f.inStage || f.attentionEligible) || f.cancelled) {
       if (f.open) await closeStaleReproCases(admin, [f.open.id], "fuera_de_etapa");
       revalidatePath(REPRO_LIMA_PATH);
-      return { error: OUT_OF_STAGE };
+      return { error: f.inStage ? OUT_OF_STAGE : "Este pedido ya no está pendiente de entrega en Lima." };
     }
     if (
       !f.open && !opts.reopen &&
@@ -508,7 +508,7 @@ async function afterCall(admin: Admin, input: {
   if (input.outcome === "no_quiere") {
     const cleared = await clearPrograms(admin, [f?.program], actor, SUFFIX_NO_LO_QUIERE);
     return {
-      notice: `Caso cerrado: Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo Shopify la anula.${cleared ? CLEARED_NOTE : ""}`,
+      notice: `Caso cerrado: Almacén la desarma cuando esté en oficina (cuaderno «DESARMAR»). No anula la venta: solo la tienda la anula.${cleared ? CLEARED_NOTE : ""}`,
       programChanged: cleared,
     };
   }
@@ -812,7 +812,7 @@ export async function loadReproRow(orderId: string): Promise<{ row: ReproRow | n
   if ("error" in scope) return { error: scope.error };
   if (!isUuid(orderId)) return { error: "No encontramos el pedido." };
   try {
-    const data = await loadReproLima(createAdminSupabase(), scope, new Date(), { orderIds: [orderId] });
+    const data = await loadReproLima(createAdminSupabase(), scope, new Date(), { orderIds: [orderId], attention: true });
     return { row: data.rows[0] ?? null };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };

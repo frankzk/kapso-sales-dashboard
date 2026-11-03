@@ -4,6 +4,7 @@
 
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { permissionsFor } from "@/lib/permissions";
+import { env } from "@/lib/env";
 import { cache } from "react";
 import { decryptOrNull } from "@/lib/crypto";
 import { fetchMetaSpend, normalizeMetaAdAccounts } from "@/lib/meta-marketing";
@@ -18,7 +19,22 @@ import type {
 import type { AdMeta } from "@/lib/meta-ads";
 import { idsEnUtm, type AnuncioMeta, type WebAdOrder } from "@/lib/cod-cart-attribution";
 import type { AttributionInputs, AttributionSource } from "@/lib/metrics";
+import {
+  isMissingFunctionError,
+  parseClosingChannels,
+  summarizeClosingChannels,
+  type ClosingChannelResult,
+} from "@/lib/closing-channel";
+import { comparablePrev, planWindows, type WindowPlan } from "@/lib/sales-coverage";
+import {
+  parseOriginRows,
+  parseSourceConversion,
+  summarizeSourceConversion,
+  type OriginSalesResult,
+  type SourceConversionResult,
+} from "@/lib/consolidado-origen";
 import type { WaNumber } from "@/lib/wa-numbers";
+import { addDays, localMidnightUtc } from "@/lib/local-day";
 
 export interface DateRange {
   from: string; // YYYY-MM-DD inclusive
@@ -80,13 +96,17 @@ async function getCurrentUserUncached(): Promise<{ id: string; email: string | n
  * from repeating the same auth/store reads during one RSC navigation. */
 export const getCurrentUser = cache(getCurrentUserUncached);
 
+const STORE_SUMMARY_COLUMNS = "id,org_id,name,shopify_domain,currency,timezone,status";
+
 async function getAccessibleStoresUncached(): Promise<StoreSummary[]> {
   const sb = await createServerSupabase();
-  const { data } = await sb
-    .from("stores")
-    .select("id,org_id,name,shopify_domain,currency,timezone,status")
-    .order("name");
-  return (data as StoreSummary[]) ?? [];
+  const read = (columns: string) => sb.from("stores").select(columns).order("name");
+  // `woo_site_url` (0274) para el enlace a un pedido de WooCommerce (MOM §38.12).
+  // Antes de la 0274 la columna no existe y la lectura falla: se repite sin
+  // ella, porque sin tiendas el panel entero se queda vacío.
+  let res = await read(`${STORE_SUMMARY_COLUMNS},woo_site_url`);
+  if (res.error) res = await read(STORE_SUMMARY_COLUMNS);
+  return (res.data as unknown as StoreSummary[]) ?? [];
 }
 
 export const getAccessibleStores = cache(getAccessibleStoresUncached);
@@ -136,6 +156,12 @@ async function getUserRoleSummaryUncached(): Promise<{
 
 export const getUserRoleSummary = cache(getUserRoleSummaryUncached);
 
+/**
+ * Los cierres diarios: SOLO los pedidos del bot (`tag:kapso`), sus
+ * conversaciones y la primera respuesta. Desde la 0268 no son la cabecera
+ * (MOM §17.4): dan el denominador de «Conversión del bot» y la vista anterior
+ * cuando las ventas por origen no responden.
+ */
 export async function getRollups(
   storeIds: string[],
   range: DateRange,
@@ -156,42 +182,6 @@ function rangeBounds(range: DateRange): { startIso: string; endIso: string } {
   return { startIso: `${range.from}T00:00:00Z`, endIso: `${range.to}T23:59:59Z` };
 }
 
-function localMidnightUtc(date: string, timeZone: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  const target = Date.UTC(year!, month! - 1, day!, 0, 0, 0);
-  let guess = target;
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const parts = Object.fromEntries(
-      formatter.formatToParts(new Date(guess)).map((part) => [part.type, part.value]),
-    );
-    const rendered = Date.UTC(
-      Number(parts.year),
-      Number(parts.month) - 1,
-      Number(parts.day),
-      Number(parts.hour),
-      Number(parts.minute),
-      Number(parts.second),
-    );
-    guess += target - rendered;
-  }
-  return new Date(guess).toISOString();
-}
-
-function nextDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(Date.UTC(year!, month! - 1, day! + 1)).toISOString().slice(0, 10);
-}
-
 /** Exact local-calendar bounds for acquisition cohorts. Unlike the legacy
  * operational widgets, campaign acquisition must not move a lead between days
  * merely because UTC is five hours ahead of Lima. */
@@ -201,20 +191,70 @@ export function acquisitionRangeBounds(
 ): { startIso: string; endExclusiveIso: string } {
   return {
     startIso: localMidnightUtc(range.from, timeZone),
-    endExclusiveIso: localMidnightUtc(nextDate(range.to), timeZone),
+    endExclusiveIso: localMidnightUtc(addDays(range.to, 1), timeZone),
   };
+}
+
+/** La zona de cada tienda (`stores.timezone`), por id. */
+export type StoreTimeZones = Readonly<Record<string, string | null | undefined>>;
+
+/**
+ * El periodo en el día LOCAL de una tienda, como lo cortan `daily_rollups` y
+ * `ventas_por_origen`: desde su medianoche de `from` hasta el último
+ * microsegundo de `to` (`endIso`, para el `lte` del drenado por cursor) o hasta
+ * la medianoche siguiente (`endExclusiveIso`). Sin zona, UTC, como en la base.
+ *
+ * Los módulos del chatbot de Kapso cortaban sus pedidos, conversaciones y leads
+ * en el día UTC (`T00:00:00Z`–`T23:59:59Z`): «Ayer» en Lima traía los pedidos
+ * del bot de las 7 p. m. de anteayer y perdía los de las 7 p. m. a medianoche
+ * de ayer, y el Embudo no cuadraba con «Conversión del bot» (MOM §17.4.2,
+ * 31-10-2026).
+ */
+export function storeDayBounds(
+  range: DateRange,
+  timeZone: string | null | undefined,
+): { startIso: string; endIso: string; endExclusiveIso: string } {
+  const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, timeZone || "UTC");
+  // Un microsegundo antes de la medianoche siguiente: la base guarda
+  // microsegundos, así que `T23:59:59Z` dejaba fuera el último segundo del día.
+  const endIso = new Date(Date.parse(endExclusiveIso) - 1).toISOString().replace(/Z$/, "999Z");
+  return { startIso, endIso, endExclusiveIso };
 }
 
 const PAGE_SIZE = 1000;
 const MAX_ROWS = 50_000;
 
+/**
+ * Los pedidos del bot (`tag:kapso`) del periodo, en el día local de cada tienda
+ * (`storeDayBounds`). Una consulta por zona horaria: las tiendas de la misma
+ * zona comparten límites.
+ */
 export async function getOrders(
   storeIds: string[],
   range: DateRange,
+  timeZones: StoreTimeZones = {},
 ): Promise<OrderRow[]> {
   if (!storeIds.length) return [];
+  const byZone = new Map<string, string[]>();
+  for (const id of new Set(storeIds)) {
+    const tz = timeZones[id] || "UTC";
+    byZone.set(tz, [...(byZone.get(tz) ?? []), id]);
+  }
+  const perZone = await Promise.all(
+    [...byZone.entries()].map(([tz, ids]) => getOrdersInZone(ids, range, tz)),
+  );
+  if (perZone.length === 1) return perZone[0]!;
+  // El orden de la base: el más reciente primero (instantes ISO de PostgREST, comparables como texto).
+  return perZone.flat().sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+}
+
+async function getOrdersInZone(
+  storeIds: string[],
+  range: DateRange,
+  timeZone: string,
+): Promise<OrderRow[]> {
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
+  const { startIso, endExclusiveIso } = storeDayBounds(range, timeZone);
   const BASE =
     "id,store_id,shopify_order_id,name,created_at,processed_at,total_amount,currency,financial_status,cancelled_at,total_refunded,customer_phone,tags,promo_applied,stock_por_validar,shipping_mode,kapso_conversation_id,line_items";
   // `discount_codes` is added by 0030; step down to the base set if the column
@@ -230,10 +270,12 @@ export async function getOrders(
         .in("store_id", storeIds)
         // Kapso orders only (tag:kapso). The webhook path can transiently write a
         // non-Kapso order before it's tagged; keep the funnel/integrity/export
-        // reads in parity with the headline rollups regardless.
+        // reads in parity with the bot rollups regardless. Desde la 0268 la
+        // cabecera ya no sale de aquí: cuenta todas las ventas con
+        // `getOriginSales` (MOM §17.4); esto alimenta los módulos del bot.
         .contains("tags", ["kapso"])
         .gte("created_at", startIso)
-        .lte("created_at", endIso)
+        .lt("created_at", endExclusiveIso)
         .order("created_at", { ascending: false })
         .range(from, from + PAGE_SIZE - 1);
     let { data, error } = await page();
@@ -247,6 +289,56 @@ export async function getOrders(
     if (data.length < PAGE_SIZE) break;
   }
   return out;
+}
+
+/**
+ * Las líneas de TODOS los pedidos del periodo, de cualquier canal (no solo los
+ * del bot), para el panel «Productos» del Consolidado (owner, 26-10-2026: con
+ * solo los del bot se subreportaban las unidades). Solo las columnas que usa
+ * `topProducts`; las anuladas se descartan allí.
+ *
+ * TODAS O NINGUNA (31-10-2026, MOM §17.4.2). Null si alguna página falla o una
+ * tienda llega al tope MAX_ROWS: el tablero vuelve entonces a los pedidos del
+ * bot y lo dice. Antes una lectura fallida terminaba el bucle en silencio:
+ * «Productos» decía «Sin líneas de producto en el periodo» o contaba solo las
+ * páginas leídas, con la etiqueta «Todas las ventas». Y paginaba con OFFSET sin
+ * desempate: los pedidos que comparten instante (24 en Kenku desde septiembre)
+ * podían salir dos veces o ninguna al cruzar el borde de una página, y un pedido
+ * nuevo entre dos páginas corría el resto una fila. Ahora drena por cursor,
+ * `created_at DESC, id DESC`, como los leads y las conversaciones.
+ */
+export async function getSalesProductOrders(storeIds: string[], range: DateRange): Promise<OrderRow[] | null> {
+  if (!storeIds.length) return [];
+  const sb = await createServerSupabase();
+  // En el día LOCAL de cada tienda, como la cabecera (`ventas_por_origen`). Con
+  // los límites en UTC, «Hoy» a las 00:45 de Lima traía las ventas de las 7 p. m.
+  // a medianoche de ayer y «Productos» no cuadraba con los ingresos (31-10-2026).
+  const { data: tzRows, error: tzError } = await sb.from("stores").select("id,timezone").in("id", storeIds);
+  if (tzError) return null;
+  const tzOf = new Map(((tzRows ?? []) as { id: string; timezone: string | null }[]).map((r) => [r.id, r.timezone]));
+  // Por tienda, el largo de la última página: si quedó llena, el drenado paró
+  // antes de terminar (el tope o un cursor que no se pudo armar). -1 = falló.
+  const lastPage = new Map<string, number>();
+  const rows = await drainStoresByRecency<OrderRow & { id: string }>(storeIds, "created_at", (row) => row.created_at, (storeId) => {
+    const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, tzOf.get(storeId) || "America/Lima");
+    return async (upper, after) => {
+      let q = sb
+        .from("orders")
+        .select("id,store_id,created_at,cancelled_at,line_items")
+        .eq("store_id", storeId)
+        .gte("created_at", startIso);
+      // La primera página va hasta el fin del día local (exclusivo); las demás,
+      // hasta el instante del cursor, con el `or` del desempate.
+      q = upper ? q.lte("created_at", upper) : q.lt("created_at", endExclusiveIso);
+      if (after) q = q.or(after);
+      const res = await q.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(PAGE_SIZE);
+      if (lastPage.get(storeId) !== -1) lastPage.set(storeId, res.error || !Array.isArray(res.data) ? -1 : res.data.length);
+      return res;
+    };
+  });
+  // El drenado también corta en MAX_ROWS a todas las tiendas juntas.
+  const incomplete = rows.length >= MAX_ROWS || [...lastPage.values()].some((n) => n === -1 || n >= PAGE_SIZE);
+  return incomplete ? null : rows;
 }
 
 /**
@@ -265,15 +357,17 @@ export async function getOrders(
 export async function getConversations(
   storeIds: string[],
   range: DateRange,
+  timeZones: StoreTimeZones = {},
 ): Promise<ConversationRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
   return drainStoresByRecency<ConversationRow & { id: string }>(
     storeIds,
     "started_at",
     (row) => row.started_at,
     (storeId) => (upper, after) => {
+      // El día local de la tienda, como `daily_rollups` (MOM §17.4.2).
+      const { startIso, endIso } = storeDayBounds(range, timeZones[storeId]);
       let q = sb
         .from("conversations")
         .select("id,store_id,kapso_conversation_id,phone_number_id,started_at,status,message_count,last_message_at")
@@ -417,10 +511,10 @@ async function drainStoresByRecency<T extends { id: string }>(
 export async function getLeadsForDashboard(
   storeIds: string[],
   range: DateRange,
+  timeZones: StoreTimeZones = {},
 ): Promise<LeadRow[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
   const BASE_COLS =
     "id,store_id,phone,wa_id,name,email,first_seen_at,last_interaction_at,kapso_conversation_id,handoff_reason,handoff_at,category,status,needs_attention,order_id,has_order";
   // Optional attribution columns, richest first. We try the fullest set and step
@@ -429,13 +523,21 @@ export async function getLeadsForDashboard(
   // ones. 0012 added wa_phone_number_id on top of 0008's source/ad_id/ad_headline;
   // the previous all-or-nothing fallback to BASE_COLS would have hidden the Meta
   // campaign breakdown whenever 0012 hadn't been applied yet.
+  //
+  // «Carritos abandonados» necesita el borrador y el valor del carrito
+  // (`cartRecovery`): sin `draft_order_gid` solo contaba los carritos COD, sin
+  // `draft_order_status` no veía el borrador completado y sin `cart_value` el
+  // «Valor en riesgo» salía siempre S/ 0 (MOM §17.4.2, 31-10-2026).
   const COL_SETS = [
+    `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id,cart_value,draft_order_gid,draft_order_status`,
     `${BASE_COLS},source,ad_id,ad_headline,wa_phone_number_id`,
     `${BASE_COLS},source,ad_id,ad_headline`,
     BASE_COLS,
   ];
 
   return drainStoresByRecency<LeadRow>(storeIds, "last_interaction_at", (row) => row.last_interaction_at, (storeId) => {
+    // El día local de la tienda, como `daily_rollups` (MOM §17.4.2).
+    const { startIso, endIso } = storeDayBounds(range, timeZones[storeId]);
     let colIdx = 0;
     const pageQuery = (select: string, upper: string | null, after: string | null) => {
       let q = sb
@@ -543,7 +645,7 @@ export async function getOrdersByIds(
  *  browse pass through; everything else (incl. null) is organic WhatsApp. Winback
  *  is never a lead source — it's derived from coupon + template send. */
 function normAttributionSource(s: string | null | undefined): AttributionSource {
-  return s === "meta_ad" || s === "fb_web" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
+  return s === "meta_ad" || s === "fb_web" || s === "web" || s === "cod_cart" || s === "abandoned_browse" ? s : "organic";
 }
 
 /** Split `arr` into consecutive slices of ≤`size` — the standard cure for
@@ -622,6 +724,169 @@ export async function getAttributionInputs(
   for (const arr of winbackByPhone.values()) arr.sort();
 
   return { sourceByPhone, advisorTouchesByPhone, winbackByPhone };
+}
+
+// ── Todas las ventas, por origen (MOM §17.3 y §17.4) ─────────────────────────
+//
+// Tres lecturas comparten UN plan de cobertura por carga de página: desde cuándo
+// cada tienda tiene todas sus ventas (lib/sales-coverage.ts). Cada tienda se
+// pide en su propia ventana; Postgres clasifica con la sesión de quien mira, así
+// que cada persona ve solo sus tiendas. Si la migración todavía no se aplicó,
+// `sin_migracion`: la pantalla vuelve a la vista anterior con un aviso.
+// Cualquier otro error se dice tal cual, nunca se convierte en ceros: un «0 %
+// lo cerró una asesora» falso es lo que este cambio vino a corregir.
+
+type ServerClient = Awaited<ReturnType<typeof createServerSupabase>>;
+
+/** El inicio en Kapta de cada tienda, leído una sola vez por render. */
+const kaptaStartsByKey = cache(async (key: string): Promise<{ starts: Map<string, string | null> } | { error: string }> => {
+  const ids = key ? key.split(",") : [];
+  const sb = await createServerSupabase();
+  const res = await kaptaStartDays(sb, ids);
+  if ("error" in res) return res;
+  return { starts: new Map(ids.map((id, i) => [id, res.days[i] ?? null])) };
+});
+
+/** El plan de ventanas de estas tiendas para un periodo, o el error de leer sus inicios. */
+async function windowPlanFor(storeIds: string[], range: DateRange): Promise<{ plan: WindowPlan } | { error: string }> {
+  const starts = await kaptaStartsByKey([...storeIds].sort().join(","));
+  if ("error" in starts) return starts;
+  return { plan: planWindows(env.ordersSyncFrom(), storeIds.map((id) => ({ id, start: starts.starts.get(id) ?? null })), range) };
+}
+
+/** Llama a una función de lectura por cada ventana de tienda, en paralelo. */
+async function rpcPerWindow(
+  sb: ServerClient,
+  fn: "canal_de_cierre" | "ventas_por_origen" | "conversion_por_fuente",
+  windows: { storeId: string; from: string; to: string }[],
+): Promise<{ data: unknown[] } | { missing: true } | { error: string }> {
+  const results = await Promise.all(
+    windows.map((w) => sb.rpc(fn, { p_store_ids: [w.storeId], p_from: w.from, p_to: w.to })),
+  );
+  const failed = results.find((r) => r.error);
+  if (failed?.error) {
+    if (isMissingFunctionError(failed.error)) return { missing: true };
+    console.error(`[consolidado] ${fn}`, failed.error.code, failed.error.message);
+    return { error: failed.error.message };
+  }
+  return { data: results.map((r) => r.data) };
+}
+
+const emptyPlan = (): WindowPlan => ({ windows: [], later: [], excluded: [], multiStore: false });
+
+/**
+ * Canal de cierre de TODAS las ventas de las tiendas en el rango (MOM §17.3),
+ * en el día local de cada tienda y desde que cada una usa Kapta.
+ */
+export async function getClosingChannels(storeIds: string[], range: DateRange): Promise<ClosingChannelResult> {
+  if (!storeIds.length) return { status: "ok", summary: summarizeClosingChannels([]), plan: emptyPlan() };
+  const planned = await windowPlanFor(storeIds, range);
+  if ("error" in planned) return { status: "error", message: planned.error };
+  const { plan } = planned;
+  if (!plan.windows.length) return { status: "sin_cobertura", plan };
+  const res = await rpcPerWindow(await createServerSupabase(), "canal_de_cierre", plan.windows);
+  if ("missing" in res) return { status: "sin_migracion" };
+  if ("error" in res) return { status: "error", message: res.error };
+  return { status: "ok", summary: summarizeClosingChannels(res.data.flatMap(parseClosingChannels)), plan };
+}
+
+/**
+ * Todas las ventas por tienda, día local y canal (MOM §17.4), y las del periodo
+ * anterior SOLO si cada tienda que cuenta ahora lo contaba entero: si no, el
+ * cambio contra el anterior sería falso y no se muestra. Una sola llamada por
+ * tienda cubre los dos periodos cuando se puede comparar.
+ */
+export async function getOriginSales(storeIds: string[], range: DateRange): Promise<OriginSalesResult> {
+  if (!storeIds.length) return { status: "ok", rows: [], prevRows: null, plan: emptyPlan() };
+  const prevR = previousRange(range);
+  const [planned, prevPlanned] = await Promise.all([windowPlanFor(storeIds, range), windowPlanFor(storeIds, prevR)]);
+  if ("error" in planned) return { status: "error", message: planned.error };
+  if ("error" in prevPlanned) return { status: "error", message: prevPlanned.error };
+  const { plan } = planned;
+  if (!plan.windows.length) return { status: "sin_cobertura", plan };
+  const compare = comparablePrev(plan, prevPlanned.plan);
+  const res = await rpcPerWindow(
+    await createServerSupabase(),
+    "ventas_por_origen",
+    plan.windows.map((w) => ({ storeId: w.storeId, from: compare ? prevR.from : w.from, to: w.to })),
+  );
+  if ("missing" in res) return { status: "sin_migracion" };
+  if ("error" in res) return { status: "error", message: res.error };
+  const all = res.data.flatMap(parseOriginRows);
+  return {
+    status: "ok",
+    rows: all.filter((r) => r.date >= range.from),
+    prevRows: compare ? all.filter((r) => r.date < range.from) : null,
+    plan,
+  };
+}
+
+/**
+ * Conversión de cada fuente de leads (MOM §17.4): cohorte de los leads nacidos
+ * en el periodo, con 7 días de vida, que compraron en sus primeros 7 días por
+ * cualquier canal; y el % de cierre de las asesoras como en Productividad. Es
+ * una cohorte: no se compara contra el periodo anterior (MOM §17.1).
+ */
+export async function getSourceConversion(storeIds: string[], range: DateRange): Promise<SourceConversionResult> {
+  if (!storeIds.length) {
+    return { status: "ok", summary: summarizeSourceConversion({ sources: [], closes: [], advisors: [] }), plan: emptyPlan() };
+  }
+  const planned = await windowPlanFor(storeIds, range);
+  if ("error" in planned) return { status: "error", message: planned.error };
+  const { plan } = planned;
+  if (!plan.windows.length) return { status: "sin_cobertura", plan };
+  const res = await rpcPerWindow(await createServerSupabase(), "conversion_por_fuente", plan.windows);
+  if ("missing" in res) return { status: "sin_migracion" };
+  if ("error" in res) return { status: "error", message: res.error };
+  const parsed = res.data.map(parseSourceConversion);
+  return {
+    status: "ok",
+    summary: summarizeSourceConversion({
+      sources: parsed.flatMap((p) => p.sources),
+      closes: parsed.flatMap((p) => p.closes),
+      advisors: parsed.flatMap((p) => p.advisors),
+    }),
+    plan,
+  };
+}
+
+/**
+ * El día local en que cada tienda empezó a usar Kapta: su primera fila de
+ * `order_sales` o, si todavía no tiene ninguna, su primer lead; null si no tiene
+ * ninguno de los dos. La de `order_sales` va por su índice (store_id,
+ * occurred_at) con `limit 1`; la de leads no tiene índice por `created_at`
+ * (los de la 0268 son por `first_seen_at` y por `created_at` solo sin él) y
+ * recorre los leads de la tienda, pero solo corre mientras la tienda no
+ * registró ninguna venta.
+ * Cualquier lectura que falle es un error, no un «no tiene».
+ */
+async function kaptaStartDays(
+  sb: ServerClient,
+  storeIds: string[],
+): Promise<{ days: (string | null)[] } | { error: string }> {
+  const first = async (table: "order_sales" | "leads", column: "occurred_at" | "created_at", storeId: string) => {
+    const { data, error } = await sb.from(table).select(column).eq("store_id", storeId).order(column, { ascending: true }).limit(1).maybeSingle();
+    if (error) throw new Error(`${table}: ${error.message}`);
+    return ((data as Record<string, string> | null)?.[column] ?? null) as string | null;
+  };
+  try {
+    const [stores, firsts] = await Promise.all([
+      sb.from("stores").select("id, timezone").in("id", storeIds),
+      Promise.all(storeIds.map(async (id) => (await first("order_sales", "occurred_at", id)) ?? (await first("leads", "created_at", id)))),
+    ]);
+    if (stores.error) throw new Error(`stores: ${stores.error.message}`);
+    const tz = new Map(((stores.data ?? []) as { id: string; timezone: string | null }[]).map((s) => [s.id, s.timezone || "UTC"]));
+    return {
+      days: storeIds.map((id, i) => {
+        const iso = firsts[i];
+        return iso ? tzParts(iso, tz.get(id) ?? "UTC").date : null;
+      }),
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("[consolidado] inicio de la tienda en Kapta", message);
+    return { error: `no se pudo leer desde cuándo usa Kapta cada tienda (${message})` };
+  }
 }
 
 /**
@@ -778,43 +1043,56 @@ export async function getWebAdOrders(
 ): Promise<WebAdOrder[]> {
   if (!storeIds.length) return [];
   const sb = await createServerSupabase();
-  const { startIso, endIso } = rangeBounds(range);
-  const out: WebAdOrder[] = [];
-  for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error } = await sb
-      .from("orders")
-      .select(
-        "id,store_id,shopify_order_id,name,created_at,total_amount,total_refunded,cancelled_at,currency,line_items,utm_meta",
-      )
-      .in("store_id", storeIds)
-      // Sin filtro por etiqueta `kapso`: estos pedidos no la llevan ninguno
-      // (medido: 0 de 591). La trae el pedido nacido en la conversación.
-      .not("utm_meta", "is", null)
-      .gte("created_at", startIso)
-      .lte("created_at", endIso)
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-    if (error || !data?.length) break;
-    type Atributo = { name?: string | null; value?: string | null };
-    for (const row of data as unknown as Array<OrderRow & { utm_meta: Atributo[] | null }>) {
-      // Por NOMBRE y no por posición: Shopify guarda los atributos en el orden
-      // que le da la gana y cambia de un pedido a otro.
-      const utm = new Map((row.utm_meta ?? []).map((a) => [a.name ?? "", a.value ?? null]));
-      out.push({
-        order: { ...row, tags: [], discount_codes: [] } as OrderRow,
-        utm: {
-          utmId: utm.get("utm_id") ?? null,
-          utmSource: utm.get("utm_source") ?? null,
-          utmMedium: utm.get("utm_medium") ?? null,
-          utmCampaign: utm.get("utm_campaign") ?? null,
-          utmContent: utm.get("utm_content") ?? null,
-          utmTerm: utm.get("utm_term") ?? null,
-        },
-      });
-    }
-    if (data.length < PAGE_SIZE) break;
-  }
-  return out;
+  // En el día LOCAL de cada tienda, como la cohorte de leads de anuncios
+  // (`getCampaignLeadsForDashboard`) y la cabecera (`ventas_por_origen`). Con
+  // los límites en UTC, «Ayer» (30-10) en Lima traía los pedidos web de las
+  // 7 p. m. a medianoche del 29 y perdía los del 30 a esa hora: Aurela, 14
+  // pedidos web en vez de 19 (MOM §17.4.3, 31-10-2026).
+  const { data: tzRows } = await sb.from("stores").select("id,timezone").in("id", storeIds);
+  const tzOf = new Map(((tzRows ?? []) as { id: string; timezone: string | null }[]).map((r) => [r.id, r.timezone]));
+  type Atributo = { name?: string | null; value?: string | null };
+  const perStore = await Promise.all(
+    storeIds.map(async (storeId) => {
+      const { startIso, endExclusiveIso } = acquisitionRangeBounds(range, tzOf.get(storeId) || "America/Lima");
+      const rows: WebAdOrder[] = [];
+      for (let from = 0; from < MAX_ROWS; from += PAGE_SIZE) {
+        const { data, error } = await sb
+          .from("orders")
+          .select(
+            "id,store_id,shopify_order_id,name,created_at,total_amount,total_refunded,cancelled_at,currency,line_items,utm_meta",
+          )
+          .eq("store_id", storeId)
+          // Sin filtro por etiqueta `kapso`. En Shopify ninguno la llevaba
+          // (medido: 0 de 591); en WooCommerce el pedido del bot que nace de un
+          // clic en un anuncio de WhatsApp sí trae `utm_id` (MOM §17.4.3).
+          .not("utm_meta", "is", null)
+          .gte("created_at", startIso)
+          .lt("created_at", endExclusiveIso)
+          .order("created_at", { ascending: false })
+          .range(from, from + PAGE_SIZE - 1);
+        if (error || !data?.length) break;
+        for (const row of data as unknown as Array<OrderRow & { utm_meta: Atributo[] | null }>) {
+          // Por NOMBRE y no por posición: Shopify guarda los atributos en el orden
+          // que le da la gana y cambia de un pedido a otro.
+          const utm = new Map((row.utm_meta ?? []).map((a) => [a.name ?? "", a.value ?? null]));
+          rows.push({
+            order: { ...row, tags: [], discount_codes: [] } as OrderRow,
+            utm: {
+              utmId: utm.get("utm_id") ?? null,
+              utmSource: utm.get("utm_source") ?? null,
+              utmMedium: utm.get("utm_medium") ?? null,
+              utmCampaign: utm.get("utm_campaign") ?? null,
+              utmContent: utm.get("utm_content") ?? null,
+              utmTerm: utm.get("utm_term") ?? null,
+            },
+          });
+        }
+        if (data.length < PAGE_SIZE) break;
+      }
+      return rows;
+    }),
+  );
+  return perStore.flat();
 }
 
 /**

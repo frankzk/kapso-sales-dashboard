@@ -40,7 +40,9 @@ function secretEquals(provided: string | null, expected: string | null): boolean
 export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: string }> }) {
   const { storeId } = await ctx.params;
 
-  const creds = await getStoreCreds(storeId);
+  // Sin renovar el token de una app propia de Shopify (0271): aquí no se usa,
+  // y el secreto todavía no se comprobó.
+  const creds = await getStoreCreds(storeId, undefined, { renewOwnApp: false });
   if (!creds) return new NextResponse("unauthorized", { status: 401 });
   if (!secretEquals(readSecret(req), creds.aliclik_webhook_secret)) {
     return new NextResponse("unauthorized", { status: 401 });
@@ -100,7 +102,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: s
 // ping sirve además para comprobar que el secreto pegado es el correcto.
 export async function GET(req: NextRequest, ctx: { params: Promise<{ storeId: string }> }) {
   const { storeId } = await ctx.params;
-  const creds = await getStoreCreds(storeId);
+  const creds = await getStoreCreds(storeId, undefined, { renewOwnApp: false });
   if (!creds || !secretEquals(readSecret(req), creds.aliclik_webhook_secret)) {
     return new NextResponse("unauthorized", { status: 401 });
   }

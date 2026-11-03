@@ -30,7 +30,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
     permissions.can("dispatch.pickup");
   // «Repro Lima» es de quien llama a los clientes o despacha
   // (`repro_lima.manage`, MOM §9.5). La página y cada acción lo vuelven a pedir.
-  const canReproLima = permissions.can("repro_lima.manage");
+  // Despacho entra a ver «Reintentos Aliclik» (`repro_lima.retries`, 03-11-2026).
+  const canReproLima = permissions.can("repro_lima.manage") || permissions.can("repro_lima.retries");
   // Lo que espera a una persona en «Cotejar Olva» (MOM §12). Un fallo aquí no
   // puede tumbar el panel entero: sin número, el menú sigue funcionando.
   const olvaPending = canManageLogistics
@@ -46,6 +47,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     stores: permissions.can("stores.manage"),
     costs: permissions.can("costs.manage"),
     team: permissions.can("team.manage"),
+    history: permissions.can("data.export"),
   };
   const roleLabel = isVendedoraOnly
     ? "Vendedora"
@@ -72,9 +74,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
           Liquidaciones 2, con los MISMOS permisos que en el Master
           (app/dashboard/pedidos/page.tsx). En el Master no actúa. */}
       <OrderDrawerHost
-        stores={stores.map((s) => ({ id: s.id, name: s.name, shopify_domain: s.shopify_domain ?? null }))}
+        stores={stores.map((s) => ({
+          id: s.id,
+          name: s.name,
+          shopify_domain: s.shopify_domain ?? null,
+          woo_site_url: s.woo_site_url ?? null,
+        }))}
         canEdit={!permissions.readOnly}
         canOverride={permissions.can("master.override_status")}
+        canSetStatus={permissions.can("master.set_status")}
+        canCancelWoo={permissions.can("orders.cancel_woo")}
+        canEditCustomerName={permissions.can("orders.create")}
         canCreateGuide={permissions.can("aliclik.create_guide")}
         canCreateTandersGuide={permissions.can("tanders.create_guide")}
         canCreateShalomGuide={permissions.can("shalom.create_guide")}
@@ -85,6 +95,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
           canFinalize: permissions.can("closure.finalize"),
           canRefund: permissions.can("closure.refund"),
           canReopen: permissions.can("master.override_status") && permissions.can("closure.finalize"),
+          canManageCosts: permissions.can("costs.manage"),
+          canManageLogistics: permissions.can("logistics.manage"),
         }}
       />
     </DashboardShell>

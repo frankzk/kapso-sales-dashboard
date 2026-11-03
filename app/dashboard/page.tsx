@@ -7,7 +7,10 @@ import {
   getAdNames,
   getAttributionInputs,
   getCampaignDeliveryOutcomes,
+  getClosingChannels,
   getCampaignLeadsForDashboard,
+  getOriginSales,
+  getSourceConversion,
   getConversations,
   getLatestOps,
   getLeadsForDashboard,
@@ -15,6 +18,7 @@ import {
   getMetaAdPerformance,
   getOrdersByIds,
   getOrders,
+  getSalesProductOrders,
   getWebAdOrders,
   getRollups,
   getUserRoleSummary,
@@ -36,13 +40,16 @@ import { LtvCpaPanel, LtvCpaSkeleton } from "@/components/ltv-cpa";
 import { getLtvInputs } from "@/lib/ltv-access";
 import { buildCohorts } from "@/lib/ltv";
 import { PENDING_INSTALL_COOKIE } from "@/lib/shopify-client-app";
+import { SalesPulseCard, SalesPulseSkeleton } from "@/components/sales-pulse";
+import { getSalesPulse } from "@/lib/sales-pulse-access";
+import type { SalesPulse } from "@/lib/sales-pulse";
 
 export const dynamic = "force-dynamic";
 
 export default function ConsolidatedPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; mm?: string }>;
 }) {
   return (
     <Suspense fallback={<DashboardRouteSkeleton />}>
@@ -54,7 +61,7 @@ export default function ConsolidatedPage({
 async function ConsolidatedContent({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; mm?: string }>;
 }) {
   // Quien instaló la app de Shopify para tiendas cliente sin sesión abierta
   // entra al login, y el login siempre aterriza aquí: se retoma el reclamo de
@@ -82,8 +89,17 @@ async function ConsolidatedContent({
   }
 
   const storeIds = stores.map((s) => s.id);
+  // «Cómo van las ventas» no sigue al periodo: entra en «Hoy», se pide ya, en
+  // paralelo con todo lo demás, y un fallo queda en su bloque (MOM §17.5). La
+  // semana y el mes los pide el bloque al elegir su pestaña.
+  const pulsePromise: Promise<SalesPulse | null> = getSalesPulse(stores, "hoy").catch((error) => {
+    console.error("No se pudieron leer las ventas de hoy", error);
+    return null;
+  });
   const prev = previousRange(range);
-  const leadsPromise = getLeadsForDashboard(storeIds, range);
+  // Los módulos del chatbot, en el día local de cada tienda (MOM §17.4.2).
+  const timeZones = Object.fromEntries(stores.map((s) => [s.id, s.timezone]));
+  const leadsPromise = getLeadsForDashboard(storeIds, range, timeZones);
   const campaignLeadsPromise = Promise.all(
     stores.map((store) => getCampaignLeadsForDashboard(store.id, range, store.timezone)),
   ).then((rows) => rows.flat());
@@ -134,12 +150,16 @@ async function ConsolidatedContent({
     metaAdPerformance,
     webAdOrders,
     metaAdCatalog,
+    closing,
+    origin,
+    sourceConversion,
+    productOrders,
   ] =
     await Promise.all([
       getRollups(storeIds, range),
       getRollups(storeIds, prev),
-      getOrders(storeIds, range),
-      getConversations(storeIds, range),
+      getOrders(storeIds, range, timeZones),
+      getConversations(storeIds, range, timeZones),
       leadsPromise,
       getLatestOps(storeIds),
       adNamesPromise,
@@ -150,6 +170,13 @@ async function ConsolidatedContent({
       metaAdPerformancePromise,
       webAdOrdersPromise,
       metaAdCatalogPromise,
+      // Quién cerró TODAS las ventas de las tiendas, no solo las del bot (MOM §17.3).
+      getClosingChannels(storeIds, range),
+      // Todas las ventas por día y origen, y la conversión de cada fuente (MOM §17.4).
+      getOriginSales(storeIds, range),
+      getSourceConversion(storeIds, range),
+      // «Productos»: las líneas de todas las ventas, no solo las del bot (26-10-2026).
+      getSalesProductOrders(storeIds, range),
     ]);
 
   // Atribución de fuente y canal de cierre, igual que en la página de tienda.
@@ -166,6 +193,11 @@ async function ConsolidatedContent({
 
   return (
     <ExecutiveDashboard
+      today={
+        <Suspense fallback={<SalesPulseSkeleton />}>
+          <SalesPulseLoader promise={pulsePromise} currency={currency} />
+        </Suspense>
+      }
       operations={
         // La operación del MOM y LTV : CPA (MOM §17.2, «debajo del resumen
         // operativo») no siguen al periodo: llegan cada una por su lado y no
@@ -175,6 +207,7 @@ async function ConsolidatedContent({
             <MomOwnerSummaryLoader
               storeIds={storeIds}
               orgIds={[...new Set(stores.map((store) => store.org_id))]}
+              month={sp.mm ?? null}
             />
           </Suspense>
           <Suspense fallback={<LtvCpaSkeleton />}>
@@ -188,6 +221,7 @@ async function ConsolidatedContent({
       rollups={rollups}
       prevRollups={prevRollups}
       orders={orders}
+      productOrders={productOrders}
       conversations={conversations}
       leads={leads}
       ops={ops}
@@ -196,6 +230,9 @@ async function ConsolidatedContent({
       adNames={adNames}
       waNumbers={waNumbers}
       attribution={attribution}
+      closing={closing}
+      origin={origin}
+      sourceConversion={sourceConversion}
       campaignDeliveries={campaignDeliveries}
       campaignLeads={campaignLeads}
       campaignOrders={campaignOrders}
@@ -206,15 +243,31 @@ async function ConsolidatedContent({
   );
 }
 
+/** «Cómo van las ventas» (MOM §17.5): hoy, la semana o el mes contra el anterior. Un fallo no tumba el resto. */
+async function SalesPulseLoader({ promise, currency }: { promise: Promise<SalesPulse | null>; currency: string }) {
+  const data = await promise;
+  if (!data) {
+    return (
+      <Banner tone="warn" role="status" title="Las ventas de hoy no pudieron leerse">
+        El resto del Consolidado sigue disponible. Recarga la página en un momento.
+      </Banner>
+    );
+  }
+  return <SalesPulseCard initial={data} currency={currency} />;
+}
+
 async function MomOwnerSummaryLoader({
   storeIds,
   orgIds,
+  month,
 }: {
   storeIds: string[];
   orgIds: string[];
+  /** «Otro mes…» de «Cierre y entregas» (`?mm=2026-08`). */
+  month: string | null;
 }) {
   try {
-    const summary = await getMomOwnerSummary(storeIds, orgIds);
+    const summary = await getMomOwnerSummary(storeIds, orgIds, { month });
     return <MomOwnerSummaryPanel summary={summary} />;
   } catch (error) {
     console.error("No se pudo cargar el resumen operativo MOM", error);
