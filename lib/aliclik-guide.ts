@@ -79,8 +79,7 @@ import { listActiveShopifyCatalogVariants, type ShopifyClientOpts } from "@/lib/
 import { MAX_ACCEPTABLE_LOSS, aliclikPrepaidBlocker, reconcileToOrderTotal } from "@/lib/aliclik-money";
 import { stampOrderMarker } from "@/lib/aliclik-reconcile";
 import {
-  canScheduleExpress,
-  limaTimeHHMM,
+  asNormalDelivery,
   parseCoordinateInput,
   toAliclikCoord,
 } from "@/lib/aliclik-geo";
@@ -680,20 +679,13 @@ export async function previewAliclikGuideFor(
     };
   }
 
-  // Los express fuera de su ventana se marcan no seleccionables aquí, para no
-  // dejar que la operadora rellene todo y se coma el 400 al final.
-  const nowHHMM = limaTimeHHMM();
-  const quoted = couriers.map((c) => {
-    if (!c.flagDeliveryExpress) return { ...c, selectable: true };
-    const open = canScheduleExpress(nowHHMM, c.scheduleExpressStart, c.scheduleExpressEnd);
-    return {
-      ...c,
-      selectable: open,
-      reason: open
-        ? undefined
-        : `Express disponible solo entre ${c.scheduleExpressStart ?? "?"} y ${c.scheduleExpressEnd ?? "?"} (ahora ${nowHHMM} en Lima).`,
-    };
-  });
+  // SIEMPRE ENTREGA NORMAL (03-11-2026, decisión del owner). La cotización marca
+  // `flagDeliveryExpress` en el transporte que PUEDE ir Express (ALIDRIVER en
+  // Lima), con la tarifa normal. Reenviarlo tal cual creaba la guía Express (en
+  // su portal, +S/ 5) y solo de 05:01 a 14:00. Kapta crea la entrega Normal,
+  // la que el portal de Aliclik elige por defecto: el bloque viaja con
+  // `flagDeliveryExpress: false` y sin ventana horaria.
+  const quoted = couriers.map((c) => ({ ...asNormalDelivery(c), selectable: true }));
   // En Lima solo AUTOECOM; si Aliclik no lo ofrece, el que ofrezca, con aviso
   // (MOM §9, «Aliclik en Lima», 26-10-2026). La creación vuelve a cotizar y
   // exige `selectable`, así que la regla vale también del lado del servidor.

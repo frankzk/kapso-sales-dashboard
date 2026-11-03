@@ -156,6 +156,17 @@ export function parseHHMM(value: string | null | undefined): number | null {
 }
 
 /**
+ * El transporte de la cotización como entrega NORMAL (03-11-2026, decisión del
+ * owner). Aliclik marca `flagDeliveryExpress` en el transporte que puede ir
+ * Express (ALIDRIVER en Lima) con la tarifa normal; reenviarlo así crea la guía
+ * Express (+S/ 5 en su portal, y solo de 05:01 a 14:00). Kapta crea siempre la
+ * Normal, la que el portal elige por defecto. Pura.
+ */
+export function asNormalDelivery<T extends { flagDeliveryExpress: boolean }>(courier: T): T {
+  return courier.flagDeliveryExpress ? { ...courier, flagDeliveryExpress: false } : courier;
+}
+
+/**
  * ¿Se puede agendar HOY un courier express?
  *
  * Regla de Aliclik: con `flagDeliveryExpress = true`, la hora local de Lima debe
