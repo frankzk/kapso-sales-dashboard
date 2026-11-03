@@ -22,6 +22,13 @@
 // (entregado, anulado, devuelto o anulado en Shopify), ni una fecha que todavía
 // no llega. Si el pedido ya tiene salida de Urpi, no la toca: una programación
 // posterior es un reintento de la misma caja.
+//
+// CANCELADOS (03-11-2026). Si el reporte de Urpi ya dice que canceló ese
+// despacho, la salida recién rellenada se anula en el acto como intento
+// fallido (lib/urpi-report-apply.ts): da igual cargar antes el reporte o la
+// programación. Y un pedido que Urpi ya canceló y se vuelve a programar a Urpi
+// no se toca y se nombra: Urpi solo lleva primeros despachos (§9.1); el
+// reprogramado va por Repro Lima.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { limaDayKey } from "@/lib/order-confirmation";
@@ -29,7 +36,8 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
 import { limaTodayKey } from "@/lib/shipments";
-import { isLiveUrpiCandidate, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
+import { applyUrpiCancellationsFor } from "@/lib/urpi-report-apply";
+import { isFailedUrpiSalida, isLiveUrpiCandidate, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
 
 /** `created_via` propio: quien audite distingue la caja que pasó a Urpi por la
  *  programación de la que se rellenó con el reporte de resultados. */
@@ -47,6 +55,7 @@ export interface UrpiDispatchOrder {
 export type UrpiDispatchPlan =
   | { kind: "rellenar"; salida: UrpiDispatchCandidate }
   | { kind: "ya_es_urpi" }
+  | { kind: "reenvio_tras_cancelado" }
   | { kind: "cerrado" }
   | { kind: "sin_salida" }
   | { kind: "otra_salida_viva" };
@@ -58,6 +67,14 @@ const CLOSED = new Set(["entregado", "anulado", "devuelto"]);
 export function planUrpiDispatch(order: UrpiDispatchOrder, salidas: readonly UrpiDispatchCandidate[], programmedOn: string): UrpiDispatchPlan {
   if (order.cancelled_at || CLOSED.has(order.general_status)) return { kind: "cerrado" };
   if (salidas.some((s) => s.courier === "urpi" && (isLiveUrpiCandidate(s) || s.delivery_status === "entregado"))) return { kind: "ya_es_urpi" };
+  // Urpi ya canceló una salida de este pedido. La programación de ese día o de
+  // antes es la que canceló; una posterior es un reenvío a Urpi tras el
+  // cancelado, que §9.1 no admite: se nombra y no se toca.
+  const failed = salidas.filter(isFailedUrpiSalida);
+  if (failed.length) {
+    const lastDay = failed.map((s) => limaDayKey(s.closed_at ?? s.dispatched_at!)).sort().at(-1)!;
+    return programmedOn > lastDay ? { kind: "reenvio_tras_cancelado" } : { kind: "ya_es_urpi" };
+  }
   const live = salidas.filter(isLiveUrpiCandidate);
   const fillable = pickFillableRouteOutput(live);
   if (!fillable) return live.length ? { kind: "otra_salida_viva" } : { kind: "sin_salida" };
@@ -106,6 +123,10 @@ export interface UrpiDispatchResult {
   sinSalida: string[];
   /** Con otra salida viva: no se sabe qué caja se llevó Urpi. */
   otraSalidaViva: string[];
+  /** Urpi ya lo canceló y se volvió a programar a Urpi (§9.1). */
+  reenvioTrasCancelado: string[];
+  /** Rellenados que el reporte ya daba por cancelados: pasaron a reprogramar. */
+  cancelled: string[];
   errors: string[];
 }
 
@@ -118,7 +139,7 @@ export async function registerUrpiDispatches(
   rows: readonly { orderId: string | null; orderCode: string; date: string }[],
   today: string = limaTodayKey(),
 ): Promise<UrpiDispatchResult> {
-  const result: UrpiDispatchResult = { filled: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], errors: [] };
+  const result: UrpiDispatchResult = { filled: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], reenvioTrasCancelado: [], cancelled: [], errors: [] };
   const due = dueUrpiDispatches(rows, today);
   const ids = [...due.keys()];
   if (!ids.length) return result;
@@ -131,7 +152,7 @@ export async function registerUrpiDispatches(
     const [master, shipments] = await Promise.all([
       admin.from("order_master").select("order_id,order_name,general_status,orders(cancelled_at)").in("order_id", slice),
       admin.from("shipments")
-        .select("id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,returned_at,output_number,created_at")
+        .select("id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,returned_at,output_number,created_at,dispatched_at,closed_at")
         .in("order_id", slice),
     ]);
     if (master.error || shipments.error) throw new Error("No se pudieron leer los pedidos y salidas programados a Urpi.");
@@ -150,11 +171,19 @@ export async function registerUrpiDispatches(
     if (plan.kind === "cerrado") { result.closed++; continue; }
     if (plan.kind === "sin_salida") { result.sinSalida.push(code); continue; }
     if (plan.kind === "otra_salida_viva") { result.otraSalidaViva.push(code); continue; }
+    if (plan.kind === "reenvio_tras_cancelado") { result.reenvioTrasCancelado.push(code); continue; }
     const written = await writeCourierGuide(admin, orderId, urpiDispatchRow(fact.order_name, plan.salida.id, programmedOn), { createIfMissing: false });
     if ("error" in written) result.errors.push(code);
     else { result.filled.push(code); filledIds.push(orderId); }
   }
-  if (filledIds.length) await recomputeOrderMasterSafe(admin, filledIds);
+  if (filledIds.length) {
+    // Si Urpi ya canceló ese despacho, la salida pasa a intento fallido ahora.
+    // `applyUrpiCancellationsFor` recalcula los que toca.
+    const cancelled = await applyUrpiCancellationsFor(admin, { visibleStoreIds: null, orderIds: filledIds }).catch(() => null);
+    const nameOf = new Map(filledIds.map((id) => [id, facts.get(id)?.order_name ?? codeOf.get(id) ?? id]));
+    result.cancelled = (cancelled?.cancelled ?? []).map((id) => nameOf.get(id)!);
+    await recomputeOrderMasterSafe(admin, filledIds.filter((id) => !cancelled?.cancelled.includes(id)));
+  }
   return result;
 }
 
@@ -168,6 +197,8 @@ export function urpiDispatchMessage(result: UrpiDispatchResult): string {
   const parts: string[] = [];
   if (result.filled.length) parts.push(`${result.filled.length} salida(s) «Por definir» pasaron a Urpi en ruta`);
   if (result.otraSalidaViva.length) parts.push(`${result.otraSalidaViva.length} con otra salida viva, revísalos a mano (${listOf(result.otraSalidaViva)})`);
+  if (result.cancelled.length) parts.push(`${result.cancelled.length} ya cancelado(s) por Urpi pasaron a «Por reprogramar Lima»`);
+  if (result.reenvioTrasCancelado.length) parts.push(`${result.reenvioTrasCancelado.length} que Urpi ya canceló se volvieron a programar a Urpi; Urpi solo lleva primeros despachos (§9.1), revísalos (${listOf(result.reenvioTrasCancelado)})`);
   if (result.sinSalida.length) parts.push(`${result.sinSalida.length} sin caja «Por definir» del día que pasar a Urpi (${listOf(result.sinSalida)})`);
   if (result.errors.length) parts.push(`${result.errors.length} no se pudieron actualizar (${listOf(result.errors)})`);
   return parts.length ? `Despachos a Urpi: ${parts.join("; ")}.` : "";

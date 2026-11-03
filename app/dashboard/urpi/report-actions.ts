@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createServerSupabase } from "@/lib/db";
-import { applyUrpiDeliveriesFor, urpiApplyMessage, urpiAutoApplyMessage } from "@/lib/urpi-report-apply";
+import { applyUrpiCancellationsFor, applyUrpiDeliveriesFor, urpiApplyMessage, urpiAutoApplyMessage, urpiCancelMessage } from "@/lib/urpi-report-apply";
 import { URPI_OBSERVATION_RESOLVED } from "@/lib/urpi-report-view";
 import { normalizeUrpiOrder } from "@/lib/urpi-programming";
 import { canMarkUrpiDeliveries, requireUrpiReportOrg } from "@/lib/urpi-report-access";
@@ -42,7 +42,12 @@ export async function linkUrpiReportRow(orgId: string, urpiRow: number, orderRef
     });
     if (linkError) throw new Error(linkError.message.includes("row_not_found") ? "Esa fila de Urpi no existe." : "No se pudo guardar el vínculo.");
     revalidatePath("/dashboard/urpi");
-    const linked = `Vinculado a ${order.order_name ?? "el pedido"}: ${Number(touched) || 1} intento(s) de Urpi.`;
+    let linked = `Vinculado a ${order.order_name ?? "el pedido"}: ${Number(touched) || 1} intento(s) de Urpi.`;
+    // Si su último intento es «Cancelado», su salida de Urpi pasa a intento fallido.
+    try {
+      const cancelled = urpiCancelMessage(await applyUrpiCancellationsFor(admin, { orgId, visibleStoreIds, orderIds: [order.order_id] }));
+      if (cancelled) { linked += ` ${cancelled}`; revalidatePath("/dashboard/pedidos"); }
+    } catch { /* el vínculo ya quedó; la próxima carga del reporte lo reintenta */ }
     if (!(await canMarkUrpiDeliveries(orgId))) return { ok: true, message: linked };
     try {
       const applied = await applyUrpiDeliveriesFor(admin, { orgId, actor: user.id, visibleStoreIds, orderIds: [order.order_id], auto: "vinculo" });

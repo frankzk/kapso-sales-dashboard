@@ -21,8 +21,16 @@
 // en ruta cuando Urpi reporta la entrega. Entonces no se rellena nada: se CIERRA
 // esa salida como entregada el día del reporte, con su evento `courier_status`,
 // aunque el pedido tenga otra salida viva —esa es la caja de Urpi, sin duda—.
+//
+// EL CANCELADO DE URPI (decisión del owner, 03-11-2026). Si el último intento
+// es «Cancelado» y la salida de Urpi está en ruta, despachada a más tardar ese
+// día, se ANULA como intento fallido (`cancelUrpiSalidas`): es la regla v1.23 de
+// §9 —una salida de Urpi anulada con la caja en la calle es un no entregado— y
+// el Master lleva el pedido a «En curso · Por reprogramar Lima». Si después Urpi
+// la entrega, esa salida se cierra entregada igual que una en ruta.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { limaDayKey } from "@/lib/order-confirmation";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { manualRouteGuideCode, pickFillableRouteOutput } from "@/lib/shipment-output";
 
@@ -40,6 +48,9 @@ export interface UrpiSalidaCandidate {
   custody_transferred_at: string | null;
   returned_at: string | null;
   output_number: number | null;
+  /** Para reconocer la salida de Urpi que ya salió y se anuló (intento fallido). */
+  dispatched_at?: string | null;
+  closed_at?: string | null;
 }
 
 export type UrpiSalidaPlan =
@@ -53,14 +64,24 @@ export type UrpiSalidaPlan =
 export const isLiveUrpiCandidate = (s: Pick<UrpiSalidaCandidate, "delivery_status" | "custody_state" | "returned_at">) =>
   ["pendiente", "en_ruta"].includes(s.delivery_status) && s.custody_state !== "devuelto" && !s.returned_at;
 
+/** La salida de Urpi que salió y se anuló: un intento fallido (§9, v1.23). */
+export const isFailedUrpiSalida = (s: Pick<UrpiSalidaCandidate, "courier" | "delivery_status" | "dispatched_at">) =>
+  s.courier === "urpi" && s.delivery_status === "anulado" && Boolean(s.dispatched_at);
+
+const byOutputDesc = (a: UrpiSalidaCandidate, b: UrpiSalidaCandidate) => (b.output_number ?? 0) - (a.output_number ?? 0);
+
 /** Qué hacer con las salidas de un pedido que Urpi entregó. PURA. */
 export function planUrpiSalida(salidas: readonly UrpiSalidaCandidate[]): UrpiSalidaPlan {
   if (salidas.some((s) => s.courier === "urpi" && s.delivery_status === "entregado")) return { kind: "ya_es_urpi" };
   const live = salidas.filter(isLiveUrpiCandidate);
   // La caja ya salió como de Urpi (la programación registró el despacho): se
   // cierra esa. Si hubiera más de una, la de consecutivo más alto.
-  const urpi = live.filter((s) => s.courier === "urpi").sort((a, b) => (b.output_number ?? 0) - (a.output_number ?? 0))[0];
+  const urpi = live.filter((s) => s.courier === "urpi").sort(byOutputDesc)[0];
   if (urpi) return { kind: "cerrar", salida: urpi };
+  // Urpi la canceló y después la entregó: se cierra la misma salida, salvo que
+  // otra caja viva deje en duda cuál entregó.
+  const failed = salidas.filter(isFailedUrpiSalida).sort(byOutputDesc)[0];
+  if (failed) return live.length ? { kind: "otra_salida_viva" } : { kind: "cerrar", salida: failed };
   const fillable = pickFillableRouteOutput(live);
   if (!fillable) return live.length ? { kind: "otra_salida_viva" } : { kind: "sin_salida" };
   // Una sola caja viva, y es la «por definir»: es la que se llevó Urpi.
@@ -99,6 +120,27 @@ export function urpiSalidaCloseRow(deliveredOn: string | null) {
   };
 }
 
+export type UrpiCancelPlan =
+  | { kind: "anular"; salida: UrpiSalidaCandidate }
+  | { kind: "sin_salida_urpi" }
+  | { kind: "posterior" };
+
+/** Qué hacer con la salida de un pedido cuyo último intento Urpi canceló el
+ *  día `cancelledOn` (AAAA-MM-DD). Solo cuenta la salida de Urpi en ruta que ya
+ *  había salido ese día: una despachada después es otro intento. PURA. */
+export function planUrpiCancel(salidas: readonly UrpiSalidaCandidate[], cancelledOn: string): UrpiCancelPlan {
+  const urpi = salidas.filter((s) => s.courier === "urpi" && isLiveUrpiCandidate(s)).sort(byOutputDesc)[0];
+  if (!urpi) return { kind: "sin_salida_urpi" };
+  if (!urpi.dispatched_at || limaDayKey(urpi.dispatched_at) > cancelledOn) return { kind: "posterior" };
+  return { kind: "anular", salida: urpi };
+}
+
+/** Lo que se escribe al anular la salida de Urpi por su cancelado: intento
+ *  fallido, cerrado el día del reporte a mediodía de Lima. PURA. */
+export function urpiSalidaCancelRow(cancelledOn: string) {
+  return { delivery_status: "anulado", status_category: "closed", closed_at: `${cancelledOn}T17:00:00.000Z` };
+}
+
 /** Cuándo la salida de Urpi de un pedido entregado todavía pide algo: rellenar
  *  la «por definir» o cerrar la que está en ruta. PURA. */
 export function urpiSalidaPending(plan: UrpiSalidaPlan): boolean {
@@ -125,7 +167,7 @@ export async function fillUrpiSalidas(
   const byOrder = new Map<string, UrpiSalidaCandidate[]>();
   for (let i = 0; i < ids.length; i += 200) {
     const { data, error } = await admin.from("shipments")
-      .select("id,order_id,store_id,guide_code,courier,created_via,delivery_status,custody_state,custody_transferred_at,returned_at,output_number")
+      .select("id,order_id,store_id,guide_code,courier,created_via,delivery_status,custody_state,custody_transferred_at,returned_at,output_number,dispatched_at,closed_at")
       .in("order_id", ids.slice(i, i + 200));
     if (error) throw new Error("No se pudieron leer las salidas de los pedidos.");
     for (const row of (data ?? []) as (UrpiSalidaCandidate & { order_id: string; store_id: string; guide_code: string | null })[]) {
@@ -164,3 +206,50 @@ export async function fillUrpiSalidas(
   return result;
 }
 
+
+export interface UrpiCancelResult {
+  /** Pedidos cuya salida de Urpi quedó anulada como intento fallido. */
+  cancelled: string[];
+  errors: string[];
+}
+
+/** Anula la salida de Urpi en ruta de cada pedido que Urpi canceló. No falla en
+ *  bloque. Quien llama decide qué pedidos (último intento «Cancelado», abiertos). */
+export async function cancelUrpiSalidas(
+  admin: SupabaseClient,
+  orders: readonly { orderId: string; cancelledOn: string; reason: string | null }[],
+): Promise<UrpiCancelResult> {
+  const result: UrpiCancelResult = { cancelled: [], errors: [] };
+  const ids = orders.map((order) => order.orderId);
+  const byOrder = new Map<string, (UrpiSalidaCandidate & { store_id: string; guide_code: string | null })[]>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await admin.from("shipments")
+      .select("id,order_id,store_id,guide_code,courier,created_via,delivery_status,custody_state,custody_transferred_at,returned_at,output_number,dispatched_at,closed_at")
+      .in("order_id", ids.slice(i, i + 200));
+    if (error) throw new Error("No se pudieron leer las salidas de los pedidos.");
+    for (const row of (data ?? []) as (UrpiSalidaCandidate & { order_id: string; store_id: string; guide_code: string | null })[]) {
+      byOrder.set(row.order_id, [...(byOrder.get(row.order_id) ?? []), row]);
+    }
+  }
+  for (const order of orders) {
+    const plan = planUrpiCancel(byOrder.get(order.orderId) ?? [], order.cancelledOn);
+    if (plan.kind !== "anular") continue;
+    const salida = plan.salida as UrpiSalidaCandidate & { store_id?: string; guide_code?: string | null };
+    const previous = salida.delivery_status;
+    const { data: updated, error } = await admin.from("shipments")
+      .update({ ...urpiSalidaCancelRow(order.cancelledOn), updated_at: new Date().toISOString() })
+      .eq("id", salida.id).eq("courier", "urpi").eq("delivery_status", previous)
+      .select("id").maybeSingle();
+    if (error || !updated) { result.errors.push(order.orderId); continue; }
+    await admin.from("order_events").insert({
+      store_id: salida.store_id, order_id: order.orderId, kind: "courier_status",
+      occurred_at: `${order.cancelledOn}T17:00:00.000Z`,
+      actor: null, source: URPI_REPORT_DELIVERED_SOURCE, courier: "urpi", guide_code: salida.guide_code ?? null,
+      shipment_id: salida.id, previous_status: previous, new_status: "anulado",
+      reason: order.reason,
+      note: `Urpi: cancelado${order.reason ? ` · ${order.reason}` : ""}. Intento fallido: el pedido pasa a reprogramar (MOM §9).`,
+    });
+    result.cancelled.push(order.orderId);
+  }
+  return result;
+}

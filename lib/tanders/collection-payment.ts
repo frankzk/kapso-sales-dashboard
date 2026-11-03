@@ -37,14 +37,20 @@ export interface CollectionInput {
   storeId: string;
   orderId: string;
   guideCode: string;
-  /** La imagen tal cual la sirve Tanders. */
-  imageUrl: string;
+  /** La imagen tal cual la sirve Tanders. null si la subió una persona. */
+  imageUrl: string | null;
   imageBytes: ArrayBuffer;
   mediaType: string;
   reading: TandersPaymentReading;
   verdict: PaymentCheckVerdict;
   /** Lo que la guía decía que había que cobrar. */
   expectedAmount: number | null;
+  /**
+   * La constancia que una persona subió a mano —la que llegó por WhatsApp y no
+   * está en Tanders (03-11-2026)—. Ya vive en nuestro bucket, así que no se
+   * vuelve a subir, y la ficha lleva quién la cargó.
+   */
+  manual?: { storedPath: string; registeredBy: string };
 }
 
 export type CollectionOutcome =
@@ -198,12 +204,15 @@ export async function registerCourierCollection(
   // La imagen se guarda en NUESTRO bucket, no se enlaza la de Tanders: la
   // evidencia de un cobro no puede depender de que un tercero conserve el
   // archivo, ni de un token de descarga que caduque.
-  const ext = input.mediaType.includes("png") ? "png" : "jpg";
-  const path = `${input.storeId}/${input.orderId}/tanders-${input.guideCode}-${Date.now()}.${ext}`;
-  const { error: upErr } = await admin.storage
-    .from(VOUCHER_BUCKET)
-    .upload(path, bytes, { contentType: input.mediaType, upsert: false });
-  if (upErr) return { registered: false, reason: "error", detail: upErr.message };
+  let path = input.manual?.storedPath ?? "";
+  if (!input.manual) {
+    const ext = input.mediaType.includes("png") ? "png" : "jpg";
+    path = `${input.storeId}/${input.orderId}/tanders-${input.guideCode}-${Date.now()}.${ext}`;
+    const { error: upErr } = await admin.storage
+      .from(VOUCHER_BUCKET)
+      .upload(path, bytes, { contentType: input.mediaType, upsert: false });
+    if (upErr) return { registered: false, reason: "error", detail: upErr.message };
+  }
 
   const status = collectionReviewStatus(input.verdict);
   const { error } = await admin.from("order_payments").insert({
@@ -219,10 +228,13 @@ export async function registerCourierCollection(
     file_type: input.mediaType,
     file_sha256: sha256,
     validation_status: status,
-    // `registered_by` va en null a propósito: no lo registró una persona.
-    notes: `Cobro de ${input.guideCode} (Tanders). ${input.verdict.summary}`,
+    // Del barrido va en null a propósito: no lo registró una persona.
+    registered_by: input.manual?.registeredBy ?? null,
+    notes: input.manual
+      ? `Cobro de ${input.guideCode} (Tanders), constancia subida a mano. ${input.verdict.summary}`
+      : `Cobro de ${input.guideCode} (Tanders). ${input.verdict.summary}`,
     vision: {
-      source: "tanders_evidences",
+      source: input.manual ? "subida_manual" : "tanders_evidences",
       guide_code: input.guideCode,
       tanders_image_url: input.imageUrl,
       model: input.reading.model,

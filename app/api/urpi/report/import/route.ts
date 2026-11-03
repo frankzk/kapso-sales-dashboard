@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { parseUrpiReport } from "@/lib/urpi-report";
 import { canMarkUrpiDeliveries, requireUrpiReportOrg } from "@/lib/urpi-report-access";
 import { importUrpiReport } from "@/lib/urpi-report-import";
-import { applyUrpiDeliveriesFor, urpiAutoApplyMessage, urpiDeliveredOrderIds } from "@/lib/urpi-report-apply";
+import { applyUrpiCancellationsFor, applyUrpiDeliveriesFor, urpiAutoApplyMessage, urpiCancelMessage, urpiCancelledOrderIds, urpiDeliveredOrderIds } from "@/lib/urpi-report-apply";
 
 export const runtime = "nodejs";
 // Además de guardar, marca los entregados y rellena sus salidas: la primera
@@ -44,11 +44,21 @@ export async function POST(request: Request) {
         delivered = `No se pudieron marcar los entregados: ${error instanceof Error ? error.message : "error desconocido"}. Márcalos desde «Entregados por marcar».`;
       }
     }
+    // Los cancelados anulan su salida de Urpi en ruta y pasan a «Por reprogramar
+    // Lima» (MOM §30.11). Es lo que dice el courier: no pide `master.edit`.
+    let cancelled = "";
+    try {
+      const ids = await urpiCancelledOrderIds(access.admin, orgId);
+      cancelled = urpiCancelMessage(await applyUrpiCancellationsFor(access.admin, { orgId, visibleStoreIds: access.visibleStoreIds, orderIds: ids }));
+      if (cancelled) revalidatePath("/dashboard/pedidos");
+    } catch (error) {
+      cancelled = `No se pudieron pasar los cancelados de Urpi a «Por reprogramar Lima»: ${error instanceof Error ? error.message : "error desconocido"}. Volver a cargar el reporte lo reintenta.`;
+    }
     revalidatePath("/dashboard/urpi");
     const unknown = result.unknownResults.length ? ` Estados que Kapta no reconoce y no interpreta: ${result.unknownResults.join(", ")}.` : "";
     return NextResponse.json({
       ok: true, ...result,
-      message: `Reporte de Urpi leído: ${result.rows} intentos (${result.new} nuevos, ${result.changed} con cambios). ${result.linked} vinculados a un pedido, ${result.review} con varios pedidos posibles y ${result.notFound} sin pedido.${unknown}\n${delivered}`,
+      message: `Reporte de Urpi leído: ${result.rows} intentos (${result.new} nuevos, ${result.changed} con cambios). ${result.linked} vinculados a un pedido, ${result.review} con varios pedidos posibles y ${result.notFound} sin pedido.${unknown}\n${delivered}${cancelled ? `\n${cancelled}` : ""}`,
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo importar el reporte." }, { status: 400 });

@@ -2090,11 +2090,11 @@ esa salida no bloquea la toma, no se reusa ni se rotula, no es la salida
 vigente del pedido y no abre una recuperación.
 
 Lo que queda fuera: Axel no reporta sus no entregados a Kapta —solo llegan por
-la liquidación, que únicamente mueve entregas—. Urpi sí los reporta desde el
-05-10-2026 (§30.11), pero se registran y listan sin cambiar el Master porque sus
-despachos no tienen salida en Kapta. Hasta que eso cambie, el no entregado de
-ambos llega a «Por reprogramar Lima» cuando alguien anula esa salida con la caja
-ya fuera.
+la liquidación, que únicamente mueve entregas—, así que su no entregado llega a
+«Por reprogramar Lima» cuando alguien anula esa salida con la caja ya fuera.
+Urpi los reporta desde el 05-10-2026 (§30.11); desde el 03-11-2026 la
+programación registra su salida (§30.10) y su cancelado la anula sola como
+intento fallido.
 
 #### Las guías con API también aceptan la salida adicional
 
@@ -2649,6 +2649,29 @@ sin tope de antigüedad. Reglas:
         por comprobante repetido (`fichasBloqueadas`) y cuáles son de pedidos
         anulados en Shopify (`fichasAnuladas`). En seco no se sella nada, así
         que cada revisión enseña las mismas hasta que corre la pasada real.
+      - **La constancia que Tanders no tiene se carga a mano (03-11-2026).**
+        El 03-11-2026 había 33 pedidos entregados por Tanders sin constancia
+        válida —21 sin ninguna en Tanders (S/ 3.069), dos pares con un solo
+        Yape, los cuatro del «89yape.png» y cuatro anulados en Shopify—, y la
+        imagen solía existir igual: llegó por WhatsApp a alguien del equipo. En
+        un pedido de Lima contra entrega el drawer no ofrece «Registrar un
+        pago», así que no había dónde subirla. «Validar pagos → Cargar
+        constancia de courier» (/dashboard/pagos/constancia) busca la guía por
+        **nuestro código de pedido o por la guía de Tanders**, se pega la imagen
+        (Ctrl+V) y entra por el mismo puente que la del barrido
+        (`registerCourierCollection`): lector de constancias, huella sha256, nº
+        de operación único y alerta de comprobante repetido. Además choca con
+        las lecturas del barrido en OTRA guía (`tanders_payment_checks`), que es
+        donde viven los pares con un solo Yape. Queda con `registered_by`,
+        `vision.source = subida_manual` y un hecho en la Actividad; la firma la
+        sigue poniendo quien valida. Reglas (lib/tanders/manual-collection.ts):
+        no entra si el pedido ya tiene un cobro de courier vivo ni si la guía
+        está anulada; si Tanders aún no la da por entregada, avisa sin frenar.
+        **Un pedido anulado en Shopify sí se puede cargar, pero solo marcando
+        expresamente que la caja se entregó y se cobró**: es la decisión de una
+        persona que la regla de arriba pide, y al validarla se cierra como venta
+        cobrada. Lo puede hacer quien sube comprobantes
+        (`shalom.register_payment`); validar sigue siendo `payments.validate`.
     - Al entrar aquí se hereda lo que la vía paralela de Tanders no tenía: nº de
       operación único en todo el sistema, huella `sha256` que atrapa la misma
       imagen renombrada (es lo que habría cazado el «198yape.png» sin depender
@@ -15349,6 +15372,7 @@ varios días toma el último que ya llegó (`lib/urpi-dispatch.ts`):
 | --- | --- |
 | Su única caja viva es la «por definir», creada a más tardar el día programado | Se **rellena** como salida de Urpi en ruta (§4, `lib/route-output-fill.ts`): courier `urpi`, `created_via = urpi_programacion`, `delivery_status = en_ruta`, `dispatched_at` el mediodía de Lima del día programado. Consecutivo, QR, preparación y custodia se conservan y queda `route_output_filled`. El pedido pasa a «En curso · En tránsito». |
 | Ya tiene salida de Urpi, en ruta o entregada | Nada: una programación posterior es un reintento de la misma caja. |
+| Urpi ya canceló su salida (anulada después de salir) | La programación de ese día o de antes, nada. Una posterior no se toca y se nombra: Urpi solo lleva primeros despachos (§9.1). |
 | Otra salida viva (otro courier u otra «por definir») | No se toca: no se sabe qué caja se llevó Urpi. La carga lo nombra para revisar a mano. |
 | Sin caja «por definir», o creada después del día programado | No se crea una salida. La carga lo nombra. |
 | Entregado, anulado, devuelto o anulado en Shopify | Nada. |
@@ -15422,7 +15446,7 @@ pedidos programados sin vínculo estaban por vincular por teléfono repetido, y
 | Entregado, pedido abierto en Kapta | Se marca entregado **al cargar el reporte** (desde el 15-10-2026) por la única puerta (§11.4, `lib/master-door.ts`): `status_override` con fuente `liquidacion`, courier `urpi`, mediodía de Lima del día del reporte y la fila de Urpi como evidencia. Lo que la carga no pudo marcar queda en «Entregados por marcar», para marcarlo uno a uno o en lote. |
 | Entregado, pedido anulado **solo en Kapta** (Shopify vivo) | Igual, se marca: solo Shopify termina una venta (v1.23). Caso real: #KP135768, entregado por Urpi el 23/09 y cerrado como anulado porque esa tarde se le emitió una guía de Tanders que se anuló sin salir. |
 | Entregado, pedido anulado **en Shopify** o devuelto | Observación. Nunca se marca. Se resuelve de dos formas: si el pedido se rehízo en Shopify, se vincula el envío al pedido nuevo con su código (y pasa a «por marcar»); si no, se **cierra con motivo** —evento `urpi_observation_resolved` en el historial del pedido, que no cambia su estado— y el dinero se cuadra en la liquidación de Urpi. Un intento posterior de Urpi la reabre. El 05-10-2026 eran 6: anulados en Shopify entre 7 y 14 días después de que Urpi los entregara y cobrara. |
-| Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. **No cambia el estado del Master** ni anula el pedido en Shopify. |
+| Cancelado | Se registra con su motivo, detalle y fotos y se lista en «Cancelados por Urpi» para Seguimiento Lima. Desde el 03-11-2026, si el pedido tiene su salida de Urpi **en ruta** despachada a más tardar ese día, la salida se **anula como intento fallido** y el pedido pasa a «En curso · Por reprogramar Lima» (abajo). Nunca anula el pedido en Shopify. |
 | Reprogramado | Se registra y se lista con su nuevo día: el siguiente de lunes a sábado desde la fecha del reporte (§30.10). No cambia el estado del Master. |
 | Programado, En coordinación, sin resultado | En curso; solo informa. |
 | Cualquier otro valor | «Estado no reconocido»: se guarda tal cual y no se interpreta. |
@@ -15549,15 +15573,40 @@ liquidación si ya está cerrada; no se cierra ninguna liquidación. Como con la
 movimiento de esos pedidos al día en que se aplica: es el día al que se imputa
 el costo (§14) y el que mira «Sin movimiento por 60 días» (§17.1).
 
-**Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
-Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
-Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
-en Kapta, todas de agosto), así que no había salida sobre la que apoyar el
-intento fallido. Desde el 03-11-2026 la programación registra esa salida
-(§30.10), pero un cancelado o un reprogramado de Urpi todavía no la mueve: el
-pedido sigue «En curso · En tránsito» con su salida de Urpi hasta que Urpi lo
-entrega o alguien actúa. Pasar los cancelados a «Por reprogramar Lima» sobre
-esa salida queda para una decisión posterior.
+**Por qué el cancelado no movía el Master.** «Por reprogramar Lima» (§9) exige
+una salida que conste fuera. Los despachos a Urpi salen del Google Sheet de
+programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi en Kapta,
+todas de agosto), así que no había salida sobre la que apoyar el intento
+fallido. Desde el 03-11-2026 la programación registra esa salida (§30.10).
+
+**El cancelado de Urpi pasa a «Por reprogramar Lima» (decisión del owner,
+03-11-2026).** Es la regla v1.23 de §9 —una salida de Urpi anulada con la caja
+ya en la calle es un no entregado— aplicada sin que nadie tenga que anularla a
+mano (`cancelUrpiSalidas`, `lib/urpi-salida.ts`; `applyUrpiCancellationsFor`,
+`lib/urpi-report-apply.ts`):
+
+- **Cuándo.** Al cargar el reporte, sobre los pedidos con algún «Cancelado» de
+  los últimos 60 días; al vincular a mano un envío; y al registrar el despacho
+  desde la programación, si el reporte ya traía el cancelado: da igual qué se
+  cargue primero.
+- **Qué.** Si el **último** intento del pedido es «Cancelado», Kapta lo tiene
+  abierto (ni entregado, ni anulado, ni devuelto, ni anulado en Shopify) y su
+  salida de Urpi está en ruta despachada a más tardar el día del cancelado, esa
+  salida pasa a `anulado` (`status_category = closed`, `closed_at` el mediodía
+  de Lima del día del reporte) con un `courier_status` que lleva el motivo de
+  Urpi. Courier, guía y despacho no se tocan. El Master lo lee como intento
+  fallido (`guideAnnulledAfterDispatch`) y el pedido pasa a «En curso · Por
+  reprogramar Lima», con la ventana anclada en la salida, como cualquier courier
+  de Lima.
+- **Qué no.** Sin salida de Urpi en ruta no hay nada que anular: el cancelado
+  solo se lista, como antes. Una salida despachada después del cancelado es otro
+  intento y no se toca. «Reprogramado» no mueve nada: Urpi lo reintenta él.
+- **Después.** El pedido se reprograma por Repro Lima (§9.3). Urpi solo lleva
+  primeros despachos (§9.1): si el Sheet lo vuelve a programar a Urpi, el
+  registro del despacho no lo toca y lo nombra para revisar. Si aun así Urpi lo
+  entrega, la carga cierra esa misma salida como entregada.
+- **Quién.** Es lo que dice el courier, como un barrido de estados: basta con
+  poder cargar el reporte (`sheets.edit`); no pide `master.edit`.
 
 **Historial.** Cada fila se guarda como llegó y cada cambio deja una versión
 inmutable; reimportar el mismo archivo no escribe filas, aunque la lectura queda
