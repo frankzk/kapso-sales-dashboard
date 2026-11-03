@@ -2267,8 +2267,8 @@ creó la guía.
     «Actualizar».
 - **Solo lee (fase 1).**
   - No escribe en la base, no hay migración ni kinds nuevos y no cambia el
-    Master: `MOM_RESOLUTION_VERSION` sigue en `mom-v1.36`. No toca el pendiente
-    de armado (`loadWarehousePending`, `warehouseBlocker`).
+    Master: no sube `MOM_RESOLUTION_VERSION`. No toca el pendiente de armado
+    (`loadWarehousePending`, `warehouseBlocker`).
   - Nunca hay «marcar armada» a mano: armada es el escaneo.
   - Llega por GET (`/api/almacen/swayp`, sin caché) después de que carga la
     estación, por la misma razón que «Reintentos por salir»: una acción de

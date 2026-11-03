@@ -85,7 +85,6 @@ import {
 } from "@/lib/warehouse-swayp";
 import { SWAYP_STATES } from "@/lib/swayp-states";
 import { WAREHOUSE_SHIFTS, formatMinutes } from "@/lib/warehouse-shift";
-import { MOM_RESOLUTION_VERSION } from "@/lib/order-macro-stage";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 /** El MOM en una línea: sus citas se parten al ajustar el párrafo. */
@@ -176,8 +175,10 @@ describe("las decisiones del owner (03-11-2026)", () => {
   });
 
   it("solo lee: sin migración y sin cambiar la versión del resolvedor", () => {
-    expect(s).toContain("No escribe en la base, no hay migración ni kinds nuevos y no cambia el Master: `MOM_RESOLUTION_VERSION` sigue en `mom-v1.36`.");
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.36");
+    expect(s).toContain("No escribe en la base, no hay migración ni kinds nuevos y no cambia el Master: no sube `MOM_RESOLUTION_VERSION`.");
+    // El resolvedor del Master no lee nada de esta pantalla.
+    expect(read("lib/order-macro-stage.ts")).not.toContain("warehouse-swayp");
+    expect(read("lib/order-master.ts")).not.toContain("warehouse-swayp");
     expect(s).toContain("Nunca hay «marcar armada» a mano: armada es el escaneo.");
     expect(s).toContain("Llega por GET (`/api/almacen/swayp`, sin caché)");
     expect(read("app/api/almacen/swayp/route.ts")).toContain('{ headers: { "Cache-Control": "no-store" } }');
