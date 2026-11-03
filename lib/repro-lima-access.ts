@@ -24,7 +24,7 @@ import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { limaClock, sameDayCutoffLabel } from "@/lib/grupo-gf-courier";
 import { limaDay } from "@/lib/dispatch-day";
 import { guideFailedAt } from "@/lib/reproprovincia";
-import { chainFailureText, type ChainNext } from "@/lib/lima-retry-chain";
+import { chainFailureText, chainReadyOn, type ChainNext } from "@/lib/lima-retry-chain";
 import type { OwnReplaceDecision } from "@/lib/gf-retry";
 import { priorOutputsWith } from "@/lib/repro-box-action";
 import {
@@ -172,8 +172,13 @@ export interface ReproRow {
     of: number;
     next: ChainNext;
     failedText: string;
-    /** El paquete ya está en la oficina: puede salir. */
+    /** El paquete ya está en la oficina. Informativo: no hace falta para aprobar. */
     inOffice: boolean;
+    /**
+     * Se puede aprobar: el intento que falló fue un día anterior a hoy. El
+     * reintento sale otro día; no espera la devolución (owner, 03-11-2026).
+     */
+    ready: boolean;
   } | null;
   /** `porDecidirRank` (solo cuenta en «Por decidir»). */
   rank: number;
@@ -388,7 +393,7 @@ function buildRow(input: {
       ? { scheduledFor: program.scheduled_for, reason: program.reason, origin: programOrigin(program.reason), setAt: program.set_at }
       : null,
     list: listed.list,
-    retryChain: retryChainOf(f, open),
+    retryChain: retryChainOf(f, open, today),
     rank,
     overdue: listed.overdue,
     chips: listed.chips,
@@ -433,6 +438,7 @@ function buildRow(input: {
 export function retryChainOf(
   f: Pick<ReproFacts, "retryChain" | "cancelled" | "inStage" | "box">,
   open: { agreed_on: string | null } | null,
+  today: string,
 ): ReproRow["retryChain"] {
   const chain = f.retryChain;
   if (chain.state !== "siguiente" || f.cancelled || !f.inStage || open?.agreed_on) return null;
@@ -442,6 +448,7 @@ export function retryChainOf(
     next: chain.next,
     failedText: chainFailureText(chain.failed),
     inOffice: f.box.kind === "en_oficina",
+    ready: chainReadyOn(chain.failed, today),
   };
 }
 

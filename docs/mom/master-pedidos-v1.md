@@ -3040,7 +3040,10 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
   con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
   el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los
-  couriers no devuelven en un plazo fijo). En «Todos» los mismos pedidos llevan
+  couriers no devuelven en un plazo fijo). Es informativo: el reintento **no
+  espera la devolución**, solo sale **otro día** que el intento que falló
+  (`chainReadyOn`; decisión del owner, 03-11-2026: «no necesito esperar la
+  devolución para sacar el pedido, solo que se saque un día distinto»). En «Todos» los mismos pedidos llevan
   la chapa, para que no se llamen.
 - **Quién:** las asesoras (`repro_lima.manage`) y Despacho, que entra con el
   permiso nuevo `repro_lima.retries` y ve solo esa tarjeta, sin «Atender»:
@@ -3051,7 +3054,8 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Entrega 2, la bandeja (03-11-2026).** En cada fila de «Reintentos Aliclik»:
   - **«Aprobar · AUTOECOM/ALIDRIVER»** crea ya la guía de Aliclik con ese
     transporte (`approveAliclikRetry`). Antes recalcula la cadena con los
-    hechos de ahora y exige el paquete en oficina; la guía sale por el mismo
+    hechos de ahora y exige que el intento que falló haya sido un día anterior
+    a hoy en Lima (no exige el paquete en oficina); la guía sale por el mismo
     camino que el panel de la ficha (`createAliclikGuideFor`: monto, pin,
     historial), con el motivo de la salida adicional de Lima «Reintento Aliclik
     N de M aprobado en Repro Lima». Pide `repro_lima.retries` y
@@ -3064,8 +3068,10 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     (ver «Siempre entrega Normal» en §9, «Aliclik en Lima»).
   - **«A Repro Lima»** lo saca de la cadena con un motivo
     (`lima_retry_dismissed`); un fallo nuevo la vuelve a abrir.
-  - **«Aprobar todos con paquete en oficina»** aprueba los de la tarjeta, uno
-    por uno, con una confirmación antes y el resumen al final.
+  - **«Aprobar todos los listos»** aprueba los de la tarjeta que ya se pueden
+    aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
+    y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
+    reintento se aprueba desde mañana».
   - Sigue la creación automática, medidas dos semanas de aprobaciones.
 
 Pruebas: `test/lima-retry-chain.test.ts`.

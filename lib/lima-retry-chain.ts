@@ -177,6 +177,24 @@ const REASON_LABEL: Record<string, string> = {
   otro: "otro motivo",
 };
 
+/** El día de Lima (YYYY-MM-DD) de un instante. */
+function limaDayOf(iso: string): string | null {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+}
+
+/**
+ * ¿Ya se puede aprobar el reintento? Sale OTRO día que el intento que falló, y
+ * no espera a que el paquete vuelva a oficina (owner, 03-11-2026: «no necesito
+ * esperar la devolución para sacar el pedido, solo que se saque un día
+ * distinto»). `today` es el día de Lima. Pura.
+ */
+export function chainReadyOn(failed: Pick<ChainAttempt, "at">, today: string): boolean {
+  const day = limaDayOf(failed.at);
+  return day !== null && day < today;
+}
+
 /** «Reintento 2 de 3 · AUTOECOM» para la chapa. Pura. */
 export function chainChipText(chain: Extract<LimaRetryChain, { state: "siguiente" }>): string {
   return `Reintento Aliclik ${chain.attempt} de ${chain.of} · ${chain.next === "autoecom" ? "AUTOECOM" : "ALIDRIVER"}`;
