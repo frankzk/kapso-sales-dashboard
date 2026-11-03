@@ -7,7 +7,8 @@ import { applyAliclikSnapshot } from "@/lib/aliclik-track";
 import { normalizePhone } from "@/lib/phone";
 import { readOrderMarker } from "@/lib/aliclik-reconcile";
 import { planSweep, readSweepCursor, recordSweep } from "@/lib/aliclik-sweep-state";
-import { categoryOf } from "@/lib/shipments";
+import { categoryOf, limaTodayKey } from "@/lib/shipments";
+import { apiShapeProbeOn, logApiShape, summarizeApiShape } from "@/lib/aliclik-api-shape";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -416,6 +417,11 @@ async function reconcileStore(
   // Por qué página tiene que seguir la próxima pasada si esta no termina.
   let resumePage: number | null = null;
 
+  // Sonda temporal de la forma de la API (lib/aliclik-api-shape.ts): qué campos
+  // trae cada pedido además de los que Kapta lee. Se apaga sola.
+  const probeShape = apiShapeProbeOn(limaTodayKey());
+  const shapeOrders: unknown[] = [];
+
   const lastPage = plan.startPage + MAX_PAGES - 1;
   for (let page = plan.startPage; page <= lastPage; page++) {
     resumePage = page;
@@ -432,6 +438,7 @@ async function reconcileStore(
     }
     report.pages = page;
     const rows = res.data.data ?? [];
+    if (probeShape) shapeOrders.push(...rows);
     if (!rows.length) {
       sweepComplete = true;
       break;
@@ -511,6 +518,7 @@ async function reconcileStore(
 
   report.sweepComplete = sweepComplete;
   if (sweepComplete) report.stoppedBy = "";
+  if (probeShape && shapeOrders.length) logApiShape(storeId, summarizeApiShape(shapeOrders));
 
   // La duda por ambigüedad se estampa en la propia intención. Antes vivía en el
   // Set de arriba y le bastaba, porque quien caducaba era esta misma invocación;
