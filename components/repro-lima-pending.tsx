@@ -171,7 +171,7 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
   if (!rows.length) return <div className="border-t border-line px-4 py-12 text-center text-sm text-ink-500">{emptyText ?? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda."}</div>;
   return (
     <>
-      <div className="hidden max-h-[70vh] overflow-auto border-t border-line xl:block">
+      <div className="hidden border-t border-line xl:block">
         <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
           <colgroup><col className="w-[10.5rem]" /><col /><col /><col /><col className="w-[8.5rem]" /><col className="w-[10rem]" /></colgroup>
           <thead><tr className="text-left text-xs font-semibold text-ink-600"><th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Gestión pendiente</th><th className="px-3 py-2.5">Estado y subetapa</th><th className="px-3 py-2.5 text-right">Venta</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>

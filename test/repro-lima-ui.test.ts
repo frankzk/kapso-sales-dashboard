@@ -401,7 +401,9 @@ describe("el tablero (E31, E33)", () => {
   });
 
   it("tabla desde 1280 px y filas con líneas finas más angosto", () => {
-    expect(pendingUI).toContain("hidden max-h-[70vh] overflow-auto border-t border-line xl:block");
+    expect(pendingUI).toContain("hidden border-t border-line xl:block");
+    // Una sola barra de scroll: la de la página (owner, 03-11-2026); la cabecera se queda pegada arriba.
+    expect(pendingUI).not.toContain("max-h-[70vh]");
     expect(pendingUI).toContain('<ul className="divide-y divide-line border-t border-line xl:hidden">');
   });
 
