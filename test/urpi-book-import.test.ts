@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   visible: new Set<string>(), denied: new Set<string>(), failSave: new Set<string>(),
   saves: [] as { sourceId: string; codes: string[]; origin: string }[],
   reads: 0,
+  dispatched: [] as string[], dispatchFilled: [] as string[],
 }));
 
 vi.mock("@/lib/urpi-programming-access", () => ({
@@ -18,8 +19,15 @@ vi.mock("@/lib/urpi-programming-db", () => ({
   saveUrpiProgramming: async (_admin: unknown, source: any, data: any, options: any) => {
     if (state.failSave.has(source.id)) throw new Error("Faltan pestañas de la última versión. No se reemplazó la programación.");
     state.saves.push({ sourceId: source.id, codes: data.rows.map((row: any) => row.orderCode), origin: options.origin });
-    return { changed: true, rows: data.rows.length, linked: data.rows.length };
+    return { changed: true, rows: data.rows.length, linked: data.rows.length, payload: data };
   },
+}));
+vi.mock("@/lib/urpi-dispatch", () => ({
+  registerUrpiDispatches: async (_admin: unknown, rows: any[]) => {
+    state.dispatched.push(...rows.map((row: any) => row.orderCode));
+    return { filled: state.dispatchFilled, alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], errors: [] };
+  },
+  urpiDispatchMessage: (result: any) => result.filled.length ? `Despachos a Urpi: ${result.filled.length} salida(s) «Por definir» pasaron a Urpi en ruta.` : "",
 }));
 vi.mock("@/lib/db", () => {
   // Doble con RLS: solo se ven fuentes de tiendas accesibles.
@@ -65,6 +73,7 @@ beforeEach(() => {
   state.visible = new Set(["kenku", "aurela"]);
   state.denied.clear(); state.failSave.clear();
   state.saves = []; state.reads = 0;
+  state.dispatched = []; state.dispatchFilled = [];
 });
 
 describe("Actualizar desde Google con un libro mixto", () => {
@@ -77,6 +86,13 @@ describe("Actualizar desde Google con un libro mixto", () => {
     ]);
     expect(result).toMatchObject({ ok: true, saved: 2 });
     expect(result.message).toBe("Kenku Peru (KP): Programación actualizada: 2 registros, 2 vinculados a Kapta.\nAurela (AUR): Programación actualizada: 1 registros, 1 vinculados a Kapta.");
+  });
+  it("después de guardar registra el despacho de lo programado y lo dice (MOM §30.10)", async () => {
+    state.sources = state.sources.filter((source) => source.id !== "src-aur");
+    state.dispatchFilled = ["#KP100"];
+    const result = await syncUrpiSource("src-kp");
+    expect(state.dispatched).toEqual(["KP100", "KP101"]);
+    expect(result.message).toBe("Programación actualizada: 2 registros, 2 vinculados a Kapta. Despachos a Urpi: 1 salida(s) «Por definir» pasaron a Urpi en ruta.");
   });
   it("una tienda sola mantiene el mensaje de siempre", async () => {
     state.sources = state.sources.filter((source) => source.id !== "src-aur");

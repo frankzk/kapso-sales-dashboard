@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseUrpiProgramming, urpiAutoMonths } from "./urpi-programming";
 import { readUrpiGoogleWorkbook, urpiGoogleConfigured } from "./urpi-google-sheets";
 import { saveUrpiProgramming, type UrpiSource } from "./urpi-programming-db";
+import { registerUrpiDispatches } from "./urpi-dispatch";
 
 export const URPI_AUTO_BATCH = 12;
 export function urpiAutoEnabled(): boolean {
@@ -50,6 +51,9 @@ export async function syncUrpiAutomatically(admin: SupabaseClient) {
       const parsed = parseUrpiProgramming(workbook.tabs, source.month, source.order_prefix);
       const saved = await saveUrpiProgramming(admin, source, parsed, { actor: null, startedAt: book.startedAt, origin: "google", filename: null });
       changed = saved.changed;
+      // Cada lectura, aunque no cambie nada: lo programado para hoy se registra
+      // cuando llega el día. Su fallo no marca la lectura como fallida.
+      await registerUrpiDispatches(admin, saved.payload.rows).catch(() => null);
     } catch {
       // Never persist raw provider errors or secrets. Manual refresh provides
       // the actionable validation error through the existing guarded action.

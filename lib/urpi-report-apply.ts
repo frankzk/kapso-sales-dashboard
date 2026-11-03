@@ -104,7 +104,8 @@ export async function applyUrpiDeliveriesFor(admin: SupabaseClient, input: {
   const salidas = await fillUrpiSalidas(admin, delivered.filter((id) => !cancelledAtDoor.has(id)).map((id) => ({
     orderId: id, orderName: facts.get(id)!.order_name, dispatchedOn: firstDate.get(id) ?? null, deliveredOn: latest.get(id)!.report_date,
   })));
-  if (salidas.filled.length) await recomputeOrderMasterSafe(admin, salidas.filled);
+  const touched = [...salidas.filled, ...salidas.closed];
+  if (touched.length) await recomputeOrderMasterSafe(admin, touched);
   return { applied, already, observed, notDelivered, salidas };
 }
 
@@ -132,6 +133,7 @@ export function urpiApplyMessage(result: UrpiApplyResult): string {
   const parts = [`${result.applied.length} pedido(s) marcados como entregados`];
   if (result.already) parts.push(`${result.already} ya estaban entregados`);
   if (salidas.filled.length) parts.push(`${salidas.filled.length} salida(s) «Por definir» pasaron a Urpi entregada`);
+  if (salidas.closed.length) parts.push(`${salidas.closed.length} salida(s) de Urpi en ruta quedaron entregadas`);
   if (salidas.sinSalida.length) parts.push(`${salidas.sinSalida.length} sin salida «Por definir» que pasar a Urpi`);
   if (salidas.otraSalidaViva.length) parts.push(`${salidas.otraSalidaViva.length} con otra salida viva: revisa su salida a mano`);
   if (salidas.errors.length) parts.push(`${salidas.errors.length} salida(s) no se pudieron actualizar`);
@@ -153,6 +155,7 @@ export function urpiAutoApplyMessage(result: UrpiApplyResult): string {
   const parts: string[] = [];
   if (marked.size) parts.push(`${marked.size} pedido(s) marcados entregados en el Master`);
   if (salidas.filled.length) parts.push(`${salidas.filled.length} salida(s) «Por definir» pasaron a Urpi entregada`);
+  if (salidas.closed.length) parts.push(`${salidas.closed.length} salida(s) de Urpi en ruta quedaron entregadas`);
   if (otherLive) parts.push(`${otherLive} con otra salida viva: revisa su salida a mano`);
   if (salidas.errors.length) parts.push(`${salidas.errors.length} salida(s) no se pudieron actualizar`);
   return parts.length ? `Entregados según Urpi: ${parts.join("; ")}.` : "Entregados según Urpi: nada nuevo que marcar.";

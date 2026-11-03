@@ -165,7 +165,9 @@ describe("coverage table", () => {
 
   it("trae las provincias completas, no solo el cercado", () => {
     expect(Object.keys(UBIGEO_BY_CITY.ica!)).toHaveLength(14);
-    expect(Object.keys(UBIGEO_BY_CITY.piura!)).toHaveLength(10);
+    // 10 de la provincia de Piura + Sullana, que Swayp reparte desde esa bodega
+    // (Frankz, 02-11-2026, #KP144042).
+    expect(Object.keys(UBIGEO_BY_CITY.piura!)).toHaveLength(11);
     expect(Object.keys(UBIGEO_BY_CITY.chimbote!)).toHaveLength(9);
     expect(Object.keys(UBIGEO_BY_CITY.chiclayo!)).toHaveLength(20);
     // 44 y no 43: Santa María de Huachipa (150144) se creó en 2023.
@@ -178,6 +180,9 @@ describe("coverage table", () => {
     expect(resolveUbigeo("Ica", "Parcona")?.code).toBe("110106");
     expect(resolveUbigeo("Piura", "Castilla")?.code).toBe("200104");
     expect(resolveUbigeo("Piura", "Catacaos")?.code).toBe("200105");
+    // Sullana es otra provincia, pero sale de la bodega de Piura: el código es
+    // el de su distrito (200601), nunca el cercado de Piura.
+    expect(resolveUbigeo("Piura", "Sullana")).toMatchObject({ code: "200601", exact: true });
     expect(resolveUbigeo("Chimbote", "Nuevo Chimbote")?.code).toBe("021809");
     expect(resolveUbigeo("Chiclayo", "José Leonardo Ortiz")?.code).toBe("140105");
     expect(resolveUbigeo("Chiclayo", "Pimentel")?.code).toBe("140112");

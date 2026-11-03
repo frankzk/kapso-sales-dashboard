@@ -54,7 +54,7 @@ export async function linkUrpiOrders(admin: SupabaseClient, storeId: string, dat
 
 export async function saveUrpiProgramming(admin: SupabaseClient, source: UrpiSource, data: UrpiProgrammingData, options: {
   actor: string | null; startedAt: string; origin: "google" | "excel"; filename: string | null;
-}): Promise<{ changed: boolean; rows: number; linked: number }> {
+}): Promise<{ changed: boolean; rows: number; linked: number; payload: UrpiProgrammingData }> {
   if (source.current_snapshot_id) {
     const { data: previous, error } = await admin.from("urpi_programming_snapshots").select("payload").eq("source_id", source.id).eq("id", source.current_snapshot_id).single();
     if (error) throw new Error("No se pudo verificar la lectura anterior.");
@@ -71,5 +71,5 @@ export async function saveUrpiProgramming(admin: SupabaseClient, source: UrpiSou
     p_digest: digest, p_payload: payload, p_origin: options.origin, p_filename: options.filename,
   });
   if (error) throw new Error(error.message.includes("newer_import") ? "Otra importación más reciente terminó primero. Vuelve a actualizar." : error.message.includes("missing_tabs") ? "Faltan pestañas de la última versión. No se reemplazó la programación." : "No se pudo guardar la programación. La versión anterior se conserva.");
-  return { changed: result === true, rows: payload.rows.length, linked };
+  return { changed: result === true, rows: payload.rows.length, linked, payload };
 }

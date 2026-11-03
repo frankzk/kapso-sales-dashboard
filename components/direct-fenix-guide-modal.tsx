@@ -408,7 +408,9 @@ export function DirectFenixGuideModal({
                         ? orderPlatformName(preview.platform)
                         : preview.address.source === "carrito"
                           ? "Carrito COD"
-                          : "Lead"}
+                          : preview.address.source === "manual"
+                            ? "Ubicación corregida"
+                            : "Lead"}
                     </Badge>
                   )}
                 </dt>

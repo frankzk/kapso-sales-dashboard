@@ -75,8 +75,9 @@ pendiente y mantiene habilitada la carga de Excel. AppSheet no está integrado.
 - Una lectura con pestañas faltantes frente a la anterior se rechaza. Fechas
   contradictorias y duplicados se señalan; las filas anteriores permanecen
   disponibles desde el historial.
-- No se crean pedidos Shopify, salidas, intentos de reparto ni movimientos de
-  dinero. Un pedido no encontrado queda sin vincular.
+- No se crean pedidos Shopify, salidas nuevas, intentos de reparto ni
+  movimientos de dinero. Un pedido no encontrado queda sin vincular. Desde el
+  03-11-2026 sí se registra el despacho sobre la caja que ya existe (abajo).
 - El prefijo y código completo se cruzan dentro de una única tienda. Varias
   coincidencias quedan a revisión; no se cruza por nombre o teléfono.
 - El conteo y monto mostrado son de **programaciones**, no ventas únicas: un
@@ -86,6 +87,35 @@ pendiente y mantiene habilitada la carga de Excel. AppSheet no está integrado.
   El lector restaura esa fecha para mantener la identidad entre ambos orígenes.
   Las fórmulas sin resultado almacenado no se ejecutan: se usa la fecha de la
   pestaña y se señala «Fecha tomada de la pestaña» para revisión.
+
+## Registro del despacho (03-11-2026)
+
+Cada vez que se guarda una programación (Excel, Google o lectura automática),
+Kapta registra el despacho de lo programado cuya fecha ya llegó
+(`lib/urpi-dispatch.ts`, MOM §30.10): si la única caja viva del pedido es la
+«Por definir», pasa a salida de Urpi en ruta con el día programado y el pedido
+queda «En curso · En tránsito». No se crea ninguna salida.
+
+1. Cargar el Excel del mes **cada día**, después de programar (o configurar la
+   lectura de Google, que lo hace cada 15 minutos). Sin carga no hay registro.
+2. Leer el aviso de la carga: «Despachos a Urpi: N salida(s) «Por definir»
+   pasaron a Urpi en ruta», y los pedidos que nombra para revisar:
+   - **Con otra salida viva**: casi siempre la salida de un motorizado de
+     Grupo GF que falló antes y sigue a su nombre. Revisar dónde está la caja
+     y cerrar o devolver esa salida a mano.
+   - **Sin caja «Por definir» del día**: el pedido no tenía caja armada ese día
+     en Kapta. Revisar por qué salió sin ella.
+3. Cuando Urpi reporta la entrega, la carga del reporte cierra esa salida de
+   Urpi como entregada; no hay que hacer nada más.
+
+Cancelado o reprogramado por Urpi todavía no mueve la salida: el pedido sigue
+en tránsito y se sigue desde «Cancelados por Urpi».
+
+Además, la programación vigente desempata el vínculo del reporte: un intento
+cuyo teléfono tiene varios pedidos (o ninguno) se vincula al único pedido
+programado ese día con ese teléfono («Vinculado por la programación»). Requiere
+la migración `db/migrations/0302_urpi_link_programacion.sql` aplicada **antes**
+de desplegar. Se nota en la siguiente carga del reporte.
 
 ## Reprogramación confirmada por operación (01/10/2026)
 
@@ -157,6 +187,9 @@ teléfono. De los pedidos que Urpi dio por entregados en ese periodo, 38 seguía
 `npm test -- test/urpi-programming.test.ts test/urpi-programming-access.test.ts test/urpi-register-source.test.ts test/urpi-book-import.test.ts test/urpi-google-sheets.test.ts test/urpi-excel.test.ts`
 y `npm run typecheck`.
 Para el proceso periódico: `npm test -- test/urpi-auto-sync.test.ts test/urpi-auto-route.test.ts`.
+Para el registro del despacho y el vínculo por la programación:
+`npm test -- test/urpi-dispatch.test.ts test/urpi-salida.test.ts test/urpi-report-link.test.ts`
+y `bash scripts/verify-urpi-report.sh` (incluye la 0302).
 
 La prueba de SQL requiere el runtime PostgreSQL local aislado:
 `node scripts/verify-urpi-programming.mjs <ruta-a-local-postgres-runtime.mjs>`.

@@ -46,7 +46,7 @@ export async function linkUrpiReportRow(orgId: string, urpiRow: number, orderRef
     if (!(await canMarkUrpiDeliveries(orgId))) return { ok: true, message: linked };
     try {
       const applied = await applyUrpiDeliveriesFor(admin, { orgId, actor: user.id, visibleStoreIds, orderIds: [order.order_id], auto: "vinculo" });
-      if (!applied.applied.length && !applied.salidas.filled.length) return { ok: true, message: linked };
+      if (!applied.applied.length && !applied.salidas.filled.length && !applied.salidas.closed.length) return { ok: true, message: linked };
       revalidatePath("/dashboard/pedidos");
       return { ok: true, message: `${linked} ${urpiAutoApplyMessage(applied)}` };
     } catch (error) {

@@ -1846,6 +1846,14 @@ crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
   confirma cómo lo llama Aliclik. **Confirmado el 26-10-2026: Aliclik lo llama
   «AutoEcom Logistic»**, que la comparación reconoce. La creación vuelve a cotizar y exige que el
   transporte se pueda elegir: la regla vale también en el servidor.
+- **Después de AUTOECOM, ALIDRIVER (02-11-2026, decisión del owner).** Si el
+  pedido **ya salió con AUTOECOM** —una guía Aliclik suya con ese transporte y
+  despachada, aunque hoy esté anulada o devuelta (`alreadyLeftWithAutoecom`)—
+  y se vuelve a enviar por Aliclik, **recién entonces se puede elegir
+  ALIDRIVER**; AUTOECOM sigue disponible y los demás no («En Lima, después de
+  AUTOECOM, se envía con AUTOECOM o ALIDRIVER.»). La cotización lo avisa. Una
+  guía AUTOECOM anulada antes de salir no cuenta. Caso: #KP143987, guía
+  AUR5X246218871979 (AutoEcom, despachada el 29-10, anulada).
 - **Tanders no crea guías nuevas** (`TANDERS_NEW_GUIDES_ENABLED = false`,
   `lib/tanders/new-guides.ts`): el plan de rutas no lo ofrece en ninguna
   operación y `createTandersGuide` responde «Tanders ya no crea guías nuevas»
@@ -5427,6 +5435,14 @@ la tabla se rechaza con mensaje explícito en vez de salir con un código
 aproximado: un ubigeo equivocado desvía el paquete sin avisar.
 
 Los códigos son INEI, nunca RENIEC — numeran distinto los mismos distritos.
+
+**Sullana sale de la bodega de Piura (02-11-2026, owner, #KP144042).** Es otra
+provincia (Sullana, `2006`), pero el panel de Swayp la lista bajo PIURA y la
+reparte desde esa bodega. Se suma a la tabla de Piura **solo el distrito de
+Sullana** (`200601`); el resto de esa provincia (Bellavista, Marcavelica,
+Querecotillo…) no se confirmó y sigue rechazándose con el mensaje de siempre.
+Antes, «Sullana» resolvía al cercado de Piura (`200101`) marcado como no exacto
+y la guía se negaba.
 
 «Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
 campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
@@ -11199,7 +11215,23 @@ ubicación del pedido (Corregir ubicación) antes de crear la guía.»
 antes de pulsar. Si la fila del Master no se puede leer, tampoco sale: reintentar
 cuesta un clic y una guía mal dirigida es un paquete en la ciudad equivocada.
 Una guía a una ciudad Fenix de provincia (Chiclayo, Arequipa…) no pasa por esta
-reja. Registrar a mano un número que ya emitió Swayp desde su panel
+reja.
+
+**La guía directa lee la ubicación corregida (02-11-2026, owner, #KP144042).**
+El Master arma el destino con «Corregir ubicación» (`order_geo_overrides`) por
+delante de todo (0051), pero la guía directa —y con ella «Enviar por Swayp»
+desde Por confirmar, el automático y la reprogramación cuando la salida no trae
+destino— solo buscaba en Shopify, el carrito COD y el lead. #KP144042 entró por
+el catálogo de WhatsApp sin dirección de Shopify; el equipo le puso la de la
+compra anterior de la clienta (Av. Santa Rosa 409, Sullana). El Master la
+mostraba y la mesa de confirmación decía «Swayp lo puede llevar hoy», y el panel
+de la guía decía «Sin dirección registrada» y «Swayp no tiene cobertura en este
+destino». Ahora `resolveDirectGuideAddress` aplica la corrección **campo a
+campo** (`withGeoOverride`, la misma precedencia que el Master: un nulo en la
+corrección no borra lo que trae el pedido) y el panel lo dice con la chapa
+«Ubicación corregida». Una corrección que solo trae la coordenada no cambia el
+origen de la dirección. En la reprogramación sigue mandando el destino de la
+salida (`reprogramDestination`), que es el que usó el courier. Registrar a mano un número que ya emitió Swayp desde su panel
 (`createFenixGuide`) no se frena: esa guía ya existe en Swayp y negarse a
 registrarla solo la dejaría sin seguimiento.
 
@@ -15162,8 +15194,9 @@ y el coordinador lo lee en Liquidaciones 2 sin que nadie copie nada.
 ### 30.10 Programaciones mensuales enviadas a Urpi (01/10/2026)
 
 `/dashboard/urpi` reúne los Google Sheets mensuales de programación de Urpi.
-Es una fuente documental de lo enviado: no confirma custodia, salida a reparto,
-entrega, cobro ni liquidación. Vive separada de las rutas propias de Grupo GF.
+Es la fuente de lo enviado: desde el 03-11-2026 registra el **despacho** a Urpi
+(«Registro del despacho», abajo); no confirma custodia, entrega, cobro ni
+liquidación. Vive separada de las rutas propias de Grupo GF.
 
 Una fuente se registra por tienda, archivo y mes. El prefijo no se escribe: sale
 de `stores.order_prefix` (0115) y una tienda sin prefijo no se registra. Un libro
@@ -15172,7 +15205,8 @@ creando una fuente por tienda que aísla KP y AUR; prefijos solapados se rechaza
 Se leen todas las pestañas con fecha del mes y las columnas reales de la plantilla.
 El vínculo se resuelve por código completo dentro de la tienda; sin coincidencia
 o con varias coincidencias, se conserva el registro y se pide revisión. Nunca
-crea pedidos fuera de Shopify ni salidas físicas a partir de una fila del Sheet.
+crea pedidos fuera de Shopify ni salidas físicas nuevas a partir de una fila del
+Sheet: el despacho se registra sobre la caja que ya existe.
 
 Cada cambio importado conserva una versión inmutable, con origen, actor y hora.
 Reimportar el contenido actual no duplica la versión. Las importaciones fallidas,
@@ -15197,9 +15231,39 @@ más antiguo; al agotar el tiempo, el resto queda para el siguiente ciclo.
 Un fallo conserva la versión vigente, queda visible y se reintenta en el ciclo
 siguiente. Las versiones automáticas registran actor de sistema (`created_by`
 nulo); una lectura manual más reciente prevalece sobre datos automáticos previos.
-El proceso no modifica estados de entrega ni genera reprogramaciones.
+El proceso no modifica estados de entrega ni genera reprogramaciones; sí
+registra el despacho de lo programado (abajo).
 RLS restringe fuentes y versiones a `auth_store_ids()`; registrar
 exige `sheets.manage` e importar `sheets.edit`, dentro de la organización elegida.
+
+**Registro del despacho (decisión del owner, 03-11-2026).** La auditoría del
+26/10 al 02/11 encontró 101 pedidos programados a Urpi y 85 sin salida de Urpi
+en Kapta: 50 seguían «Listo para asignar» con su caja «por definir» en el
+almacén y 31 parecían en manos de otro courier, casi siempre un motorizado de
+Grupo GF que había fallado antes. La programación nunca se había cargado (0
+versiones de septiembre a noviembre). Desde entonces, cada vez que se guarda
+una programación —«Cargar Excel del mes», «Actualizar desde Google» o la
+lectura automática—, Kapta registra el despacho de cada pedido vinculado por
+código cuya fecha programada ya llegó, en hora de Lima; un pedido programado
+varios días toma el último que ya llegó (`lib/urpi-dispatch.ts`):
+
+| El pedido en Kapta | Qué pasa |
+| --- | --- |
+| Su única caja viva es la «por definir», creada a más tardar el día programado | Se **rellena** como salida de Urpi en ruta (§4, `lib/route-output-fill.ts`): courier `urpi`, `created_via = urpi_programacion`, `delivery_status = en_ruta`, `dispatched_at` el mediodía de Lima del día programado. Consecutivo, QR, preparación y custodia se conservan y queda `route_output_filled`. El pedido pasa a «En curso · En tránsito». |
+| Ya tiene salida de Urpi, en ruta o entregada | Nada: una programación posterior es un reintento de la misma caja. |
+| Otra salida viva (otro courier u otra «por definir») | No se toca: no se sabe qué caja se llevó Urpi. La carga lo nombra para revisar a mano. |
+| Sin caja «por definir», o creada después del día programado | No se crea una salida. La carga lo nombra. |
+| Entregado, anulado, devuelto o anulado en Shopify | Nada. |
+
+La custodia no cambia: la programación no prueba el traspaso (no hay cotejo),
+y el Master ya lee una salida en ruta como fuera del almacén. Cuando Urpi
+reporta la entrega, esa misma salida se cierra (§30.11). La carga dice cuántas
+cajas pasaron a Urpi y nombra lo que hay que revisar; lo que ya estaba al día
+no se repite. Si el registro falla, la programación ya quedó guardada y volver
+a cargarla lo reintenta. Lo hace quien puede importar (`sheets.edit`), como
+emitir la guía de un courier rellena la caja; la lectura automática, como
+sistema. Mientras la conexión de Google esté pendiente, el registro depende de
+que alguien cargue el Excel del mes cada día.
 
 **Regla de Urpi confirmada por el owner:** «Reprogramado» es para el día siguiente
 de lunes a sábado. Viernes pasa a sábado, sábado a lunes. Se calcula desde la
@@ -15208,7 +15272,7 @@ identidad de pedido ni otra salida física. Se omiten domingos; no se estableci�
 excepción para feriados. La usan los resultados de Urpi (§30.11) para el día del
 reintento; la programación enviada conserva su fecha original.
 
-Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215–0216.
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0215–0216; el registro del despacho no lleva migración.
 
 ### 30.11 Resultados de entrega que reporta Urpi (05/10/2026)
 
@@ -15239,6 +15303,19 @@ toda la cadena y ninguna lectura posterior lo cambia. Medido sobre los 422
 intentos de septiembre y octubre: 395 con un único pedido, 27 con varios, 0 sin
 pedido. Esta regla vale para el reporte de resultados; la programación enviada
 (§30.10) sigue cruzando solo por código.
+
+**La programación desempata (decisión del owner, 03-11-2026).** Cuando el
+teléfono no basta —varios pedidos en la ventana, o ninguno—, decide la
+programación enviada a Urpi: si ese día ese teléfono se programó con **un
+solo** pedido, el intento se vincula a ese pedido, porque la programación lo
+nombra por código (`link_method = programacion`, migración 0302; «Vinculado por
+la programación»). Solo desempata o completa: un vínculo por teléfono único no
+se cambia, y dos pedidos programados el mismo día con el mismo teléfono siguen
+por vincular. Los reintentos lo heredan por cadena. Se usa la programación
+vigente de cada tienda en los meses del reporte; si no se puede leer, el
+reporte se vincula solo por teléfono. Auditoría del 26/10 al 02/11: 13 de los 15
+pedidos programados sin vínculo estaban por vincular por teléfono repetido, y
+#KP130409 no tenía pedido en la ventana.
 
 **Qué hace cada resultado.** Lo decide el **último** intento del pedido:
 
@@ -15278,6 +15355,16 @@ se crea una salida. La pantalla ofrece rellenar con el mismo botón las cajas
 «por definir» de los pedidos marcados antes de esta regla (05-10-2026); no
 completa el `closed_at` de las salidas ya rellenadas (eso lo hizo la 0272,
 abajo).
+
+**La salida que ya salió como de Urpi (03-11-2026).** Desde que la programación
+registra el despacho (§30.10), la caja suele estar ya como salida de Urpi en
+ruta cuando Urpi reporta la entrega. Entonces no hay nada que rellenar: se
+**cierra** esa salida —entregada, `delivered_source = urpi_report`, `closed_at`
+el mediodía de Lima de la fila «Entregado»; courier, guía y despacho no se
+tocan— y queda un `courier_status` de Urpi en el historial. Se cierra aunque el
+pedido tenga otra salida viva, porque esa caja es la de Urpi sin duda; la otra
+se revisa a mano, como hasta ahora. El aviso «Pasar a salida de Urpi
+entregada» cuenta también estas salidas sin cerrar.
 
 **Marcado automático (decisión del owner, 15-10-2026).** Hasta esta fecha
 una persona revisaba «Entregados por marcar» y pulsaba «Marcar entregados».
@@ -15367,9 +15454,12 @@ el costo (§14) y el que mira «Sin movimiento por 60 días» (§17.1).
 **Por qué cancelado y reprogramado no mueven el Master.** «Por reprogramar
 Lima» (§9) exige una salida que conste fuera. Los despachos a Urpi salen del
 Google Sheet de programación, no de la ruta de Urpi de Kapta (6 salidas de Urpi
-en Kapta, todas de agosto), así que no hay salida sobre la que apoyar el intento
-fallido. Pasar los cancelados a «Por reprogramar Lima» queda para una decisión
-posterior: crear la salida desde el reporte o despachar a Urpi desde Kapta.
+en Kapta, todas de agosto), así que no había salida sobre la que apoyar el
+intento fallido. Desde el 03-11-2026 la programación registra esa salida
+(§30.10), pero un cancelado o un reprogramado de Urpi todavía no la mueve: el
+pedido sigue «En curso · En tránsito» con su salida de Urpi hasta que Urpi lo
+entrega o alguien actúa. Pasar los cancelados a «Por reprogramar Lima» sobre
+esa salida queda para una decisión posterior.
 
 **Historial.** Cada fila se guarda como llegó y cada cambio deja una versión
 inmutable; reimportar el mismo archivo no escribe filas, aunque la lectura queda
@@ -15384,7 +15474,7 @@ pedidos de las tiendas que la persona ve. RLS: una fila vinculada se lee
 con su tienda (`auth_store_ids()`); una sin vincular, con la organización
 (`auth_org_ids()`). Escritura solo del servidor.
 
-Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migración 0229.
+Runbook: `docs/runbooks/urpi-programaciones.md`. Persistencia: migraciones 0229 y 0302.
 
 ## 31. Agradecimiento con catálogo al entregar
 

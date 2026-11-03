@@ -85,7 +85,7 @@ vi.mock("@/lib/master-door", () => ({
 vi.mock("@/lib/urpi-salida", () => ({
   fillUrpiSalidas: async (_admin: unknown, orders: any[]) => {
     db.fills.push(...orders);
-    return { filled: orders.filter((o) => o.orderName !== "#KP1004").map((o) => o.orderId), sinSalida: orders.filter((o) => o.orderName === "#KP1004").map((o) => o.orderId), otraSalidaViva: [], errors: [] };
+    return { filled: orders.filter((o) => o.orderName !== "#KP1004").map((o) => o.orderId), closed: [], sinSalida: orders.filter((o) => o.orderName === "#KP1004").map((o) => o.orderId), otraSalidaViva: [], errors: [] };
   },
 }));
 vi.mock("@/lib/order-master", () => ({ recomputeOrderMasterSafe: async (_admin: unknown, ids: string[]) => { db.recomputed.push(...ids); } }));
@@ -317,7 +317,7 @@ describe("vínculo manual", () => {
 });
 
 describe("resumen del marcado automático", () => {
-  const base = { applied: [] as string[], already: 0, observed: 0, notDelivered: 0, salidas: { filled: [] as string[], sinSalida: [] as string[], otraSalidaViva: [] as string[], errors: [] as string[] } };
+  const base = { applied: [] as string[], already: 0, observed: 0, notDelivered: 0, salidas: { filled: [] as string[], closed: [] as string[], sinSalida: [] as string[], otraSalidaViva: [] as string[], errors: [] as string[] } };
   it("no repite en cada carga lo que ya estaba al día", () => {
     expect(urpiAutoApplyMessage({ ...base, already: 900, notDelivered: 40, observed: 6, salidas: { ...base.salidas, sinSalida: ["a"], otraSalidaViva: ["b"] } }))
       .toBe("Entregados según Urpi: nada nuevo que marcar.");

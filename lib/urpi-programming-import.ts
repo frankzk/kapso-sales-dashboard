@@ -2,6 +2,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { requireUrpiStore } from "./urpi-programming-access";
 import { parseUrpiProgramming, type UrpiTab } from "./urpi-programming";
 import { saveUrpiProgramming, type UrpiSource } from "./urpi-programming-db";
+import { registerUrpiDispatches, urpiDispatchMessage } from "./urpi-dispatch";
 
 export interface UrpiBook {
   actor: string;
@@ -35,7 +36,8 @@ export async function openUrpiBook(sourceId: string): Promise<UrpiBook> {
 }
 
 /** El libro se lee una vez; cada tienda se separa por su prefijo y guarda su
- * propia versión. El fallo de una tienda no impide guardar la otra. */
+ * propia versión. El fallo de una tienda no impide guardar la otra. Después de
+ * guardar, se registra el despacho de lo programado (lib/urpi-dispatch.ts). */
 export async function importUrpiBook(book: UrpiBook, tabs: readonly UrpiTab[], options: {
   startedAt: string; origin: "google" | "excel"; filename: string | null;
 }): Promise<UrpiBookResult> {
@@ -49,6 +51,14 @@ export async function importUrpiBook(book: UrpiBook, tabs: readonly UrpiTab[], o
       const result = await saveUrpiProgramming(admin, source, parsed, { actor: book.actor, ...options });
       line = `${result.changed ? (options.origin === "excel" ? "Programación importada" : "Programación actualizada") : "Sin cambios"}: ${result.rows} registros, ${result.linked} vinculados a Kapta.`;
       saved++;
+      // La programación ya quedó guardada: registrar el despacho es aparte, y
+      // su fallo no la deshace (MOM §30.10, lib/urpi-dispatch.ts).
+      try {
+        const note = urpiDispatchMessage(await registerUrpiDispatches(admin, result.payload.rows));
+        if (note) line += ` ${note}`;
+      } catch (error) {
+        line += ` No se pudieron registrar los despachos a Urpi: ${error instanceof Error ? error.message : "error desconocido"}. Vuelve a cargar la programación para reintentarlo.`;
+      }
     } catch (error) { line = error instanceof Error ? error.message : "No se pudo guardar la programación."; }
     lines.push(book.targets.length > 1 || book.skipped.length ? `${label}: ${line}` : line);
   }

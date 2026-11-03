@@ -44,6 +44,8 @@ import {
 import {
   reprogramDestination,
   shopifyShippingAddress,
+  withGeoOverride,
+  type GeoOverrideAddress,
   type ShipmentDestination,
 } from "@/lib/shopify-address";
 import { normalizePhone } from "@/lib/phone";
@@ -246,12 +248,33 @@ export interface DirectGuideOrderRecord {
 export const DIRECT_GUIDE_ORDER_COLUMNS =
   "id,store_id,shopify_order_id,name,total_amount,currency,cancelled_at,total_refunded,customer_phone,line_items,raw";
 
+export type DirectGuideAddressSource = "shopify" | "carrito" | "lead" | "manual" | null;
+
 /**
- * Delivery address of an order, best source first: the Shopify payload, the
- * originating COD draft cart, or the lead that produced a manual sale — manual
- * orders (venta por llamada) have no Shopify address at all.
+ * Delivery address of an order. «Corregir ubicación» (`order_geo_overrides`)
+ * wins field by field, as in the Master (`withGeoOverride`); underneath, best
+ * source first: the Shopify payload, the originating COD draft cart, or the
+ * lead that produced a manual sale — manual orders (venta por llamada) have no
+ * Shopify address at all.
  */
 export async function resolveDirectGuideAddress(
+  admin: SupabaseClient,
+  order: DirectGuideOrderRecord,
+): Promise<{ address: OrderShippingAddress | null; source: DirectGuideAddressSource }> {
+  const base = await resolveOrderAddressSources(admin, order);
+  const { data: geo } = await admin
+    .from("order_geo_overrides")
+    .select("region,province,district,address,reference,latitude,longitude")
+    .eq("order_id", order.id)
+    .maybeSingle();
+  const override = geo as GeoOverrideAddress | null;
+  // Una corrección que solo trae la coordenada no cambia el destino: el origen
+  // sigue siendo el de la dirección.
+  const corrigeDestino = !!(override?.address || override?.district || override?.province || override?.region);
+  return { address: withGeoOverride(base.address, override), source: corrigeDestino ? "manual" : base.source };
+}
+
+async function resolveOrderAddressSources(
   admin: SupabaseClient,
   order: DirectGuideOrderRecord,
 ): Promise<{ address: OrderShippingAddress | null; source: "shopify" | "carrito" | "lead" | null }> {
