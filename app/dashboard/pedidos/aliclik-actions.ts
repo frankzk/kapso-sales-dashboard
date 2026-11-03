@@ -54,6 +54,7 @@ import { isCompatibleManualPortalGuide, selectExistingAliclikOrder } from "@/lib
 import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
 import { canAdoptExistingGuide } from "@/lib/aliclik-orphans";
 import type { OrderMasterRow } from "@/lib/types";
+import { pickGuideToCancel } from "@/lib/aliclik-intent-release";
 import {
   aliclikContextFor,
   createAliclikGuideFor,
@@ -845,14 +846,17 @@ export async function cancelAliclikGuide(
   if (!reason.trim()) return { error: "Indica el motivo de la cancelación." };
 
   const admin = createAdminSupabase();
-  const { data: guide } = await admin
+  // Un pedido puede tener más de una guía de Aliclik: la anterior anulada y la
+  // de su reintento (MOM §10.2, 03-11-2026). Se cancela la viva más reciente;
+  // solo si no hay ninguna viva, la más reciente.
+  const { data: guides } = await admin
     .from("shipments")
     .select("id,guide_code,external_order_number,delivery_status")
     .eq("order_id", orderId)
     .eq("courier", "aliclik")
     .not("external_order_number", "is", null)
-    .limit(1)
-    .maybeSingle();
+    .order("created_at", { ascending: false });
+  const guide = pickGuideToCancel(guides ?? []);
 
   if (!guide?.external_order_number) {
     return { error: "Este pedido no tiene una guía de Aliclik creada por API." };

@@ -4366,6 +4366,41 @@ candado.
   del día programado (§6.2) usa ese mismo núcleo, con el mismo candado, y no
   levanta ninguna excepción por nadie.
 
+**Una guía anulada suelta el candado (03-11-2026).** El candado protege de
+crear **la misma** guía dos veces, no de que el pedido vuelva a salir por
+Aliclik. Hasta hoy una intención completada (`sent`) quedaba viva para siempre,
+aunque su guía terminara anulada, y el pedido ya no podía salir otra vez por
+Aliclik: lo que piden la cadena de reintentos (§9.5) y «después de AUTOECOM,
+ALIDRIVER» (§9). Caso: #KP200108, guía AUTOECOM AUR5X510805505383 anulada el
+02-11; «Aprobar · ALIDRIVER» respondía «Este pedido ya tiene una guía en
+Aliclik».
+
+- Justo antes de escribir la nueva intención, y solo si la regla de salidas ya
+  dio paso, `createAliclikGuideFor` suelta (`released_at`, `released_reason`)
+  las intenciones `sent` o `duplicate` cuya guía está en las salidas del pedido
+  —por el número que devolvió Aliclik— y **todas** esas salidas están
+  **anuladas o transferidas** en Kapta **y Aliclik las reportó devueltas o
+  anuladas** (`reported_status`: RETURNED, de vuelta en almacén tras un intento,
+  CANCEL, ANNULLED o una llamada que cancela; también «ANULADO» o
+  «CANCELADO» del Excel; `releasableIntents` y `aliclikReportSaysClosed`,
+  `lib/aliclik-intent-release.ts`). La etiqueta se lee por vocabulario y no por
+  posición (`parseAliclikLabel`), porque descarta los campos vacíos. El reporte de Aliclik hace falta porque
+  Kapta también escribe `anulado` o `transferido` sin cancelar nada allá (la
+  gestión «cliente cancela», el séptimo «no contesta», el paso a Swayp), y esa
+  guía puede seguir viva en Aliclik.
+- **Nunca se suelta un `pending`** (lo resuelven el barrido y la caducidad de
+  abajo), ni una intención sin número o cuyo número no aparece en las salidas,
+  ni una guía viva, entregada o que solo Kapta dio por cerrada.
+- **Con dos guías de Aliclik en el pedido**, «Cancelar guía Aliclik» cancela la
+  viva más reciente (`pickGuideToCancel`), y el rescate de una creación en
+  timeout solo le pone el número nuevo a una salida sin código o con ese mismo
+  código, nunca a la guía anterior.
+- El único parcial excluye las soltadas (`0303_aliclik_intent_release.sql`,
+  mismo nombre de índice; va a mano antes del código, ver DEPLOY.md).
+  Soltar no cambia el estado de la fila: el historial y la salud de Aliclik la
+  siguen contando como una creación completada. Dos creaciones a la vez sueltan
+  la misma fila y la segunda sigue chocando en el candado.
+
 El barrido periódico resuelve esa espera, y tiene que cerrar **las dos** ramas
 posibles:
 
