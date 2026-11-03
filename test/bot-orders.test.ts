@@ -350,13 +350,13 @@ describe("el pedido", () => {
       status: 200,
       body: { ok: true, order: { name: "#KP200501", id: "wc-kp-501", total: 89, currency: "PEN" } },
     });
-    // Lookup del intento anterior → POST pending → ¿algún producto con
-    // variaciones sin variación? (el bot manda solo SKU: se comprueba siempre,
+    // Primer intento del id: sin búsqueda del intento anterior (03-11-2026,
+    // `firstAttempt`) → POST pending → ¿algún producto con variaciones sin
+    // variación? (el bot manda solo SKU: se comprueba siempre,
     // `wooLinesToVerify`) → PUT processing. Nada más.
-    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "POST /orders", "GET /products", "PUT /orders/501"]);
-    expect(shop.calls[0]!.query.get("after")).toBe("2026-10-28T13:00:00");
-    expect(Object.fromEntries(shop.calls[2]!.query)).toMatchObject({ include: "10,11", _fields: "id,type" });
-    expect(shop.calls[1]!.body).toEqual({
+    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /orders", "GET /products", "PUT /orders/501"]);
+    expect(Object.fromEntries(shop.calls[1]!.query)).toMatchObject({ include: "10,11", _fields: "id,type" });
+    expect(shop.calls[0]!.body).toEqual({
       status: "pending",
       set_paid: false,
       created_via: "kapta",
@@ -397,7 +397,7 @@ describe("el pedido", () => {
         { key: "kapta_request_hash", value: expect.stringMatching(/^[0-9a-f]{64}$/) },
       ],
     });
-    expect(shop.calls[3]!.body).toEqual({ status: "processing" });
+    expect(shop.calls[2]!.body).toEqual({ status: "processing" });
     expect(forbiddenFetch).not.toHaveBeenCalled();
 
     // La fila de la entrada: wc-kp-501, del bot (kapso + whatsapp, con su conversación).
@@ -479,7 +479,7 @@ describe("el pedido", () => {
     });
     const res = await call(pedido({ cart_draft_gid: "gid://shopify/DraftOrder/42" }));
     expect(res.status).toBe(200);
-    expect(shop.calls[1]!.body.meta_data[0]).toEqual({ key: "kapta_channel", value: "kapso" });
+    expect(shop.calls[0]!.body.meta_data[0]).toEqual({ key: "kapta_channel", value: "kapso" });
     await flush();
     expect(h.db.rows("leads")[0]!.draft_order_status).toBe("completed");
   });
@@ -554,16 +554,28 @@ describe("el candado: un request_id es un pedido", () => {
     expect(JSON.parse(logs.at(-1)!.line.replace("[bot-orders] ", "")).events).toContain("woo.sale.adopted");
   });
 
-  it("si WooCommerce no contesta: 503 reintentable, sin POST; el reintento con el mismo id vuelve a intentar", async () => {
+  it("si WooCommerce no contesta al buscar el intento anterior (en un reintento): 503 reintentable, sin POST; el siguiente vuelve a intentar", async () => {
+    // La huella del pedido, la de un intento real con lo mismo.
+    setup();
+    await call();
+    const hash = String(h.db.rows("bot_order_requests")[0]!.body_hash);
     setup({ shop: { failOnce: { "GET /orders": "network" } } });
+    // Un intento anterior de este id que falló sin crear nada: este es el 2.º,
+    // y en un reintento sí se busca el pedido del intento anterior.
+    h.db.rows("bot_order_requests").push({
+      id: "prev", store_id: STORE, request_id: REQ, body_hash: hash, status: "failed",
+      claim_token: "old", claimed_at: new Date(t).toISOString(), created_at: new Date(t).toISOString(),
+      attempts: 1, woo_order_id: null, error_code: "woocommerce_unavailable",
+    });
     const res = await call();
     expect(res.status).toBe(503);
     expect(res.body).toMatchObject({ code: "woocommerce_unavailable", retryable: true });
     expect(shop.calls.filter((c) => c.method === "POST")).toHaveLength(0);
     expect(h.db.rows("bot_order_requests")[0]).toMatchObject({ status: "failed", error_code: "woocommerce_unavailable" });
+    expect(shop.calls[0]!.query.get("after")).toBe("2026-10-28T13:00:00");
     const again = await call();
     expect(again.status).toBe(200);
-    expect(h.db.rows("bot_order_requests")[0]).toMatchObject({ status: "done", attempts: 2 });
+    expect(h.db.rows("bot_order_requests")[0]).toMatchObject({ status: "done", attempts: 3 });
   });
 
   it("tope por minuto: más de los permitidos frena (429); un reintento de uno ya pedido no cuenta", async () => {
@@ -599,7 +611,7 @@ describe("lo que WooCommerce guarda distinto: se borra y el código lo dice", ()
     expect(res.body).toMatchObject({ ok: false, code: "price_mismatch", retryable: false });
     expect((res.body as { message: string }).message).toContain("WooCommerce no respetó el precio pactado en «EggMixer»");
     expect((res.body as { message: string }).message).toContain("(pendiente de pago) se eliminó");
-    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "POST /orders", "GET /products", "DELETE /orders/501"]);
+    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /orders", "GET /products", "DELETE /orders/501"]);
     expect(shop.orders.size).toBe(0);
     expect(h.db.rows("orders")).toHaveLength(0);
     expect(h.db.rows("bot_order_requests")[0]).toMatchObject({ status: "failed", error_code: "price_mismatch" });
@@ -611,7 +623,7 @@ describe("lo que WooCommerce guarda distinto: se borra y el código lo dice", ()
     expect(res.status).toBe(422);
     expect(res.body).toMatchObject({ code: "sku_not_found" });
     expect((res.body as { message: string }).message).toContain("«Algo» (SKU NO-EXISTE): no existe en WooCommerce");
-    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "POST /orders", "DELETE /orders/501"]);
+    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /orders", "DELETE /orders/501"]);
     expect(h.db.rows("orders")).toHaveLength(0);
   });
 
@@ -1128,7 +1140,7 @@ describe("el modo de entrega y las etiquetas del bot, como hoy en Shopify", () =
     setup();
     const res = await call(pedido({ shipping_mode: "contraentrega", tags: ["promo-whatsapp", "stock-por-validar"] }));
     expect(res.status).toBe(200);
-    const meta = shop.calls[1]!.body.meta_data as { key: string; value: string }[];
+    const meta = shop.calls[0]!.body.meta_data as { key: string; value: string }[];
     expect(meta).toEqual(
       expect.arrayContaining([
         { key: "shipping_mode", value: "cod" },

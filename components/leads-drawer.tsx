@@ -2703,6 +2703,9 @@ export function OrderFormPanel({
   // no puede crear (el servidor decide y frena igual).
   const [platform, setPlatform] = useState<"shopify" | "woocommerce" | null>(null);
   const requestIdRef = useRef(newRequestId());
+  // ¿Este formulario ya mandó el `requestId` actual? Un reintento siempre busca
+  // en WooCommerce el pedido del intento anterior (MOM §38.12).
+  const requestIdSentRef = useRef(false);
   const [windowOpen, setWindowOpen] = useState(false);
   const [sendConfirm, setSendConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -2729,6 +2732,7 @@ export function OrderFormPanel({
     setGeneratedOrder(null);
     resetCopiedOrder();
     requestIdRef.current = newRequestId();
+    requestIdSentRef.current = false;
     setPlatform(null);
     loadOrderDraft(leadId).then((res) => {
       if (!alive) return;
@@ -2796,6 +2800,8 @@ export function OrderFormPanel({
     setDuplicateWarning(null);
     setGeneratedOrder(null);
     resetCopiedOrder();
+    const wasSent = requestIdSentRef.current;
+    requestIdSentRef.current = true;
     startTransition(async () => {
       const res = await generateOrder(leadId, {
         lineItems: items.map((it) => ({
@@ -2821,6 +2827,7 @@ export function OrderFormPanel({
         noReutilizarBorrador,
         confirmarDuplicado,
         requestId: requestIdRef.current,
+        requestIdSent: wasSent,
       });
       if (res.requiereConfirmacion && res.error) {
         setDuplicateWarning(res.error);
@@ -2833,6 +2840,7 @@ export function OrderFormPanel({
       setMsg(res.notice ?? "Pedido generado.");
       // Salió bien: la próxima venta desde este formulario es otro intento.
       requestIdRef.current = newRequestId();
+    requestIdSentRef.current = false;
       setGeneratedOrder(
         res.generatedOrder ?? {
           id: "",

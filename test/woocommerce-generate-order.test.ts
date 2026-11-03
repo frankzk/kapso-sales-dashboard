@@ -245,8 +245,9 @@ describe("stores.platform = 'woocommerce'", () => {
     vi.stubGlobal("fetch", shop.fetchImpl);
     const res = await generateOrder(LEAD, venta());
     expect(res.error).toBeUndefined();
-    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "POST /orders", "PUT /orders/501"]);
-    const post = shop.calls[1]!.body;
+    // Primer intento del formulario: sin búsqueda del intento anterior (03-11-2026).
+    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["POST /orders", "PUT /orders/501"]);
+    const post = shop.calls[0]!.body;
     expect(post).toMatchObject({
       status: "pending",
       payment_method: "cod",
@@ -446,14 +447,31 @@ describe("stores.platform = 'woocommerce'", () => {
     expect(shop.calls).toHaveLength(0);
   });
 
-  it("WooCommerce no contesta: error claro, nada creado y nada en Kapta", async () => {
-    setup("woocommerce");
+  it("WooCommerce no contesta al buscar el intento anterior (en un reintento): error claro, nada creado y nada en Kapta", async () => {
+    // Un intento anterior de este formulario que falló sin crear nada: en el
+    // reintento sí se busca el pedido del intento anterior.
+    setup("woocommerce", leadRow(), {
+      bot_order_requests: [{
+        id: "prev", store_id: STORE, request_id: `form-${REQ}`, body_hash: "0".repeat(64), status: "failed",
+        claim_token: "old", claimed_at: new Date().toISOString(), created_at: new Date().toISOString(),
+        attempts: 1, woo_order_id: null, error_code: "woocommerce_unavailable",
+      }],
+    });
     const shop = fakeWooShop({ products: CATALOG, failAlways: { "GET /orders": "timeout" } });
     vi.stubGlobal("fetch", shop.fetchImpl);
     const res = await generateOrder(LEAD, venta());
     expect(res.error).toContain("No se pudo consultar WooCommerce antes de crear el pedido");
     expect(res.error).not.toContain(CK);
     expect(h.db.rows("orders")).toHaveLength(0);
+  });
+
+  it("el formulario ya mandó este id (requestIdSent): se busca el intento anterior aunque el candado lo vea por primera vez", async () => {
+    setup("woocommerce");
+    const shop = fakeWooShop({ products: CATALOG });
+    vi.stubGlobal("fetch", shop.fetchImpl);
+    const res = await generateOrder(LEAD, venta({ requestIdSent: true }));
+    expect(res.error).toBeUndefined();
+    expect(shop.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /orders", "POST /orders", "PUT /orders/501"]);
   });
 
   it("el buscador usa el catálogo de WooCommerce, con la forma de siempre", async () => {
