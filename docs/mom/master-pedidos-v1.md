@@ -1536,6 +1536,13 @@ desperfecto aunque contradiga a las guías.
   deshacía. Las lecturas por lote del recálculo (hechos, salidas, historial de
   llamadas, pagos, claves compartidas, paradas y Urpi) van ahora por
   `readAllPages` (lib/postgrest-pages.ts), ordenadas por su clave.
+  `MOM_RESOLUTION_VERSION` sube a `mom-v1.38` para que el cron recalcule
+  todos los pedidos con los hechos completos: con el arreglo ya en producción,
+  15 de los 18 pedidos que tenían un «Entregado» a mano sin aplicar se habían
+  corregido en el siguiente barrido, pero #AUR173616 (del lote de 77 de Aurela
+  confirmado por el owner el 31-10), #KP124830 y #KP126160 no se habían vuelto
+  a recalcular. Lo mismo vale para cualquier pedido que un lote cortado dejó
+  sin ver una salida o un pago.
 
 ## 8. Confirmación y riesgo del cliente
 

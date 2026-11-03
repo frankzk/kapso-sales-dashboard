@@ -30,6 +30,11 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.38 (03-11-2026): el recálculo por lotes ya lee todos los hechos
+// (`readAllPages`, MOM §7.1). La versión sube para que el cron recalcule todo
+// con los hechos completos: quedaban pedidos con un «Entregado» a mano sin
+// aplicar (#AUR173616, #KP124830, #KP126160) que no se habían vuelto a recalcular.
+//
 // v1.37 (03-11-2026, owner): la ventana de recuperación de 7 días de Kenku y
 // Aurela es de Provincia. Lima tiene la suya, 21 días
 // (`LIMA_RECOVERY_DAYS`, `recoveryWindowDaysForOperation`, lib/reproprovincia.ts,
@@ -245,7 +250,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.37" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.38" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"
