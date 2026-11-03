@@ -24,6 +24,7 @@ import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { limaClock, sameDayCutoffLabel } from "@/lib/grupo-gf-courier";
 import { limaDay } from "@/lib/dispatch-day";
 import { guideFailedAt } from "@/lib/reproprovincia";
+import { chainFailureText, type ChainNext } from "@/lib/lima-retry-chain";
 import type { OwnReplaceDecision } from "@/lib/gf-retry";
 import { priorOutputsWith } from "@/lib/repro-box-action";
 import {
@@ -84,14 +85,20 @@ export interface ReproScope {
  * La puerta de la pantalla y de cada acción. Sin sesión, a /login. Sin el
  * permiso o sin tiendas, el motivo (`reason` dice cuál, para la pantalla).
  */
-export async function requireReproLima(): Promise<ReproScope | { error: string; reason: "permiso" | "tiendas" }> {
+export async function requireReproLima(
+  opts: { retries?: boolean } = {},
+): Promise<(ReproScope & { retriesOnly: boolean }) | { error: string; reason: "permiso" | "tiendas" }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const permissions = await getMasterPermissions();
-  if (!permissions.can("repro_lima.manage")) return { error: REPRO_NO_PERMISSION, reason: "permiso" };
+  const manage = permissions.can("repro_lima.manage");
+  // La pantalla también abre con «Reintentos Aliclik» solo (Despacho,
+  // 03-11-2026); las acciones de llamar y acordar siguen pidiendo manage.
+  const retriesOnly = !manage && Boolean(opts.retries) && permissions.can("repro_lima.retries");
+  if (!manage && !retriesOnly) return { error: REPRO_NO_PERMISSION, reason: "permiso" };
   const stores = await getAccessibleStores();
   if (!stores.length) return { error: REPRO_NO_STORES, reason: "tiendas" };
-  return { userId: user.id, storeIds: new Set(stores.map((store) => store.id)) };
+  return { userId: user.id, storeIds: new Set(stores.map((store) => store.id)), retriesOnly };
 }
 
 /** Una fila de la pantalla: todo lo de D13 y lo que hace falta para decidir. */
@@ -155,6 +162,19 @@ export interface ReproRow {
   /** `setAt`: cuándo se escribió el programa («Agregado hoy» de Almacén, entrega 1c). */
   program: { scheduledFor: string; reason: string | null; origin: ProgramOrigin; setAt: string | null } | null;
   list: ReproList;
+  /**
+   * El reintento por Aliclik que toca (lib/lima-retry-chain.ts, 03-11-2026), o
+   * null: sin cadena, motivo fuera, agotada, vencida, anulado o con acuerdo
+   * de la tienda en este episodio (lo acordado manda).
+   */
+  retryChain: {
+    attempt: number;
+    of: number;
+    next: ChainNext;
+    failedText: string;
+    /** El paquete ya está en la oficina: puede salir. */
+    inOffice: boolean;
+  } | null;
   /** `porDecidirRank` (solo cuenta en «Por decidir»). */
   rank: number;
   overdue: boolean;
@@ -368,6 +388,7 @@ function buildRow(input: {
       ? { scheduledFor: program.scheduled_for, reason: program.reason, origin: programOrigin(program.reason), setAt: program.set_at }
       : null,
     list: listed.list,
+    retryChain: retryChainOf(f, open),
     rank,
     overdue: listed.overdue,
     chips: listed.chips,
@@ -401,6 +422,26 @@ function buildRow(input: {
     agreedOn: open?.agreed_on?.slice(0, 10) ?? null,
     programDay: program?.scheduled_for ?? null,
     closedAt: closedCase?.closed_at ?? null,
+  };
+}
+
+/**
+ * La cadena de reintentos de la fila. Solo un pedido en la etapa, no anulado y
+ * sin acuerdo de la tienda en este episodio: si alguien ya llamó y acordó,
+ * eso manda y la cadena se corta. Pura.
+ */
+export function retryChainOf(
+  f: Pick<ReproFacts, "retryChain" | "cancelled" | "inStage" | "box">,
+  open: { agreed_on: string | null } | null,
+): ReproRow["retryChain"] {
+  const chain = f.retryChain;
+  if (chain.state !== "siguiente" || f.cancelled || !f.inStage || open?.agreed_on) return null;
+  return {
+    attempt: chain.attempt,
+    of: chain.of,
+    next: chain.next,
+    failedText: chainFailureText(chain.failed),
+    inOffice: f.box.kind === "en_oficina",
   };
 }
 

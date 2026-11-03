@@ -5,14 +5,17 @@ import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
 import type { ReproList } from "@/lib/repro-lima";
 import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
 
-export type LimaAttentionFilter = "todos" | "reprogramados" | QueueSegment | "llamar_despues" | "cerrados";
+export type LimaAttentionFilter = "todos" | "reintentos_aliclik" | "reprogramados" | QueueSegment | "llamar_despues" | "cerrados";
 type AttentionCase = {
   orderId: string; list: ReproList;
+  /** El reintento por Aliclik que toca (lib/lima-retry-chain.ts), o null. */
+  retryChain?: unknown;
   agreement?: { agreedOn: string } | null;
   program?: { scheduledFor: string } | null;
 };
 
 export const LIMA_QUEUE_CARDS: readonly { key: Exclude<LimaAttentionFilter, "todos" | "llamar_despues" | "cerrados">; label: string; hint: string; empty: string }[] = [
+  { key: "reintentos_aliclik", label: "Reintentos Aliclik", hint: "No entregados de Alexis, Urpi o AUTOECOM por «no contesta», «no estaba» u «otro»: vuelven a salir por Aliclik (AUTOECOM, luego ALIDRIVER), sin llamar. Crea la guía desde la ficha con el transporte indicado.", empty: "No hay reintentos por Aliclik con estos filtros." },
   { key: "reprogramados", label: "Reprogramados", hint: "Con una nueva fecha acordada y vigente en Repro Lima. También aparecen en Hoy, Mañana o Después según esa fecha.", empty: "No hay pedidos con una nueva fecha acordada con estos filtros." },
   { key: "programados_hoy", label: "Programados para hoy", hint: QUEUE_SEGMENT_LABEL.programados_hoy.hint, empty: "No hay pedidos programados para hoy con estos filtros." },
   { key: "programados_manana", label: "Programados para mañana", hint: QUEUE_SEGMENT_LABEL.programados_manana.hint, empty: "No hay pedidos programados para mañana con estos filtros." },
@@ -62,7 +65,9 @@ export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly
   // llamada y las prioridades de acuerdos, sin reconstruir otra tabla.
   return cases.flatMap((c) => {
     const row = byId.get(c.orderId);
-    const matches = filter === "reprogramados" ? c.list === "programados" && Boolean(c.agreement?.agreedOn) : c.list === filter;
+    const matches = filter === "reintentos_aliclik"
+      ? Boolean(c.retryChain)
+      : filter === "reprogramados" ? c.list === "programados" && Boolean(c.agreement?.agreedOn) : c.list === filter;
     if (!row || !matches) return [];
     byId.delete(c.orderId);
     return [row];
@@ -70,11 +75,12 @@ export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly
 }
 
 export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[], today: string): Record<LimaAttentionFilter, number> {
-  const counts: Record<LimaAttentionFilter, number> = { todos: rows.length, reprogramados: 0, programados_hoy: 0, programados_manana: 0, nunca_salieron: 0, ya_salieron: 0, mas_de_30: 0, programados_despues: 0, llamar_despues: 0, cerrados: 0 };
+  const counts: Record<LimaAttentionFilter, number> = { todos: rows.length, reintentos_aliclik: 0, reprogramados: 0, programados_hoy: 0, programados_manana: 0, nunca_salieron: 0, ya_salieron: 0, mas_de_30: 0, programados_despues: 0, llamar_despues: 0, cerrados: 0 };
   const byId = new Map(cases.map((row) => [row.orderId, row]));
   for (const row of rows) {
     const c = byId.get(row.orderId);
     counts[limaQueueSegment(row, today, c)] += 1;
+    if (c?.retryChain) counts.reintentos_aliclik += 1;
     if (c?.list === "programados" && c.agreement?.agreedOn) counts.reprogramados += 1;
     if (c?.list === "llamar_despues" || c?.list === "cerrados") counts[c.list] += 1;
   }

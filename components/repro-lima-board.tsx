@@ -30,12 +30,17 @@ type OpenSheet = {
 };
 type Feedback = { kind: "notice" | "error"; text: string; orderId?: string; orderName?: string; mesa?: boolean; extra?: string | null };
 
-export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending: LimaPendingOrder[] }) {
+export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
+  data: ReproLimaData;
+  pending: LimaPendingOrder[];
+  /** Despacho sin `repro_lima.manage` (03-11-2026): solo «Reintentos Aliclik», sin Atender. */
+  retriesOnly?: boolean;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [refreshing, startRefresh] = useTransition();
-  const list = attentionFilter(searchParams.get("atencion"));
+  const list = retriesOnly ? "reintentos_aliclik" : attentionFilter(searchParams.get("atencion"));
   const [query, setQuery] = useState("");
   const [store, setStore] = useState("");
   const [storeSheet, setStoreSheet] = useState(false);
@@ -176,6 +181,8 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
   /** Una sola entrada de atención. Las acciones específicas ya viven dentro
    * de la hoja; abrir acuerdos o cierres no toma ni reabre el caso. */
   function rowActions(row: LimaPendingOrder, stacked = false): ReactNode {
+    // Sin `repro_lima.manage` no se llama ni se acuerda: la guía se crea desde la ficha.
+    if (retriesOnly) return null;
     const size = stacked ? "sm" : "md";
     return <OpsButton size={size} className="pointer-coarse:h-11" disabled={loadingOrder !== null} onClick={() => void attend(row)}>{loadingOrder === row.orderId ? "Abriendo…" : "Atender"}</OpsButton>;
   }
@@ -190,7 +197,11 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
       <header className="space-y-3">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Repro Lima</h1>
-          <p className="mt-1 text-sm text-ink-500">Todos los pendientes de Lima en una sola lista. Abre «Atender» para continuar con cada pedido.</p>
+          <p className="mt-1 text-sm text-ink-500">
+            {retriesOnly
+              ? "Los no entregados de Lima que vuelven a salir por Aliclik, sin llamar. Abre el pedido y crea la guía con el transporte indicado."
+              : "Todos los pendientes de Lima en una sola lista. Abre «Atender» para continuar con cada pedido."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={cutoff.passed ? "warn" : "info"} wrap>{cutoff.text}</Badge>
@@ -199,8 +210,8 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
       </header>
 
       <div role="group" aria-label="Filtros de atención" className="grid grid-cols-2 gap-2 sm:grid-cols-4 2xl:grid-cols-8 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
-        <StatusCard label="Todos · por entregar" value={counts.todos} hint="Todos los pendientes de entrega de Lima, con Atender en cada fila." active={list === "todos"} onClick={() => chooseList("todos")} />
-        {LIMA_QUEUE_CARDS.map((card) => (
+        {!retriesOnly && <StatusCard label="Todos · por entregar" value={counts.todos} hint="Todos los pendientes de entrega de Lima, con Atender en cada fila." active={list === "todos"} onClick={() => chooseList("todos")} />}
+        {LIMA_QUEUE_CARDS.filter((card) => !retriesOnly || card.key === "reintentos_aliclik").map((card) => (
           <StatusCard key={card.key} label={card.label} value={counts[card.key]} hint={card.hint} active={list === card.key} onClick={() => chooseList(list === card.key ? "todos" : card.key)} />
         ))}
       </div>
@@ -236,7 +247,7 @@ export function ReproLimaBoard({ data, pending }: { data: ReproLimaData; pending
           </label>
           {data.stores.length > 1 && <FilterPill ref={storePill} label="Tienda" value={storeName} expanded={storeSheet} onClick={() => setStoreSheet((v) => !v)} onClear={() => setStore("")} />}
           <div role="group" aria-label="Seguimiento de llamadas y cierres" className="flex flex-wrap items-center gap-1.5">
-            {LIMA_FOLLOWUP_FILTERS.filter((f) => counts[f.key] > 0 || list === f.key).map((f) => (
+            {LIMA_FOLLOWUP_FILTERS.filter((f) => !retriesOnly && (counts[f.key] > 0 || list === f.key)).map((f) => (
               <ChoiceChip key={f.key} label={f.label} count={counts[f.key]} title={f.hint} active={list === f.key} onClick={() => chooseList(list === f.key ? "todos" : f.key)} />
             ))}
           </div>
