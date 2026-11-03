@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  asNormalDelivery,
   canScheduleExpress,
   isShortenedMapsLink,
   limaTimeHHMM,
@@ -124,5 +125,26 @@ describe("limaTimeHHMM", () => {
 
   it("renders midnight as 00:00, not 24:00", () => {
     expect(limaTimeHHMM(new Date("2026-07-20T05:00:00Z"))).toBe("00:00");
+  });
+});
+
+describe("asNormalDelivery (03-11-2026: siempre entrega Normal)", () => {
+  it("un ALIDRIVER que la cotización marca Express viaja como Normal, con la misma tarifa", () => {
+    const quote = { transportId: 1, transportName: "ALIDRIVER", deliveryCost: 13.5, returnCost: 0, addDays: 1, flagDeliveryExpress: true, scheduleExpressStart: "05:01", scheduleExpressEnd: "14:00" };
+    expect(asNormalDelivery(quote)).toEqual({ ...quote, flagDeliveryExpress: false });
+    expect(quote.flagDeliveryExpress).toBe(true);
+  });
+  it("uno normal no cambia", () => {
+    const quote = { transportId: 30, transportName: "AutoEcom Logistic", deliveryCost: 13.5, returnCost: 0, addDays: 1, flagDeliveryExpress: false };
+    expect(asNormalDelivery(quote)).toBe(quote);
+  });
+});
+
+describe("la cotización de la guía crea siempre la entrega Normal", () => {
+  it("previewAliclikGuideFor pasa cada transporte por asNormalDelivery y no por la ventana express", async () => {
+    const { readFileSync } = await import("node:fs");
+    const guide = readFileSync("lib/aliclik-guide.ts", "utf8");
+    expect(guide).toContain("couriers.map((c) => ({ ...asNormalDelivery(c), selectable: true }))");
+    expect(guide).not.toContain("canScheduleExpress(");
   });
 });

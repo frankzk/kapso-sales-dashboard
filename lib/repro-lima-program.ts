@@ -38,6 +38,16 @@ import {
 import { limaClock, sameDayCutoffMinute } from "@/lib/grupo-gf-courier";
 import { isRetryAdmission, ownReplaceDecision, ownRetryOutput, type OwnReplaceDecision } from "@/lib/gf-retry";
 import { replacedOutputIds } from "@/lib/gf-replaced-output";
+import {
+  aliclikCarrier,
+  aliclikChainReason,
+  isChainRider,
+  limaRetryChain,
+  urpiChainReason,
+  withDismissal,
+  type ChainAttempt,
+  type LimaRetryChain,
+} from "@/lib/lima-retry-chain";
 import { guideFailedAfterDispatch } from "@/lib/reproprovincia";
 import { limaDay, programDayLabel } from "@/lib/dispatch-day";
 import { sameCourier } from "@/lib/shipment-output";
@@ -138,6 +148,8 @@ export interface ReproShipmentRow {
   status_category: string | null;
   reported_status: string | null;
   swayp_state: number | null;
+  /** Aliclik: el transporte de la guía (AUTOECOM, ALIDRIVER), para la cadena de reintentos. */
+  aliclik_transport_name?: string | null;
   returned_at: string | null;
   dispatched_at: string | null;
   updated_at: string | null;
@@ -147,7 +159,7 @@ export interface ReproShipmentRow {
 const SHIPMENT_COLUMNS =
   "id,order_id,store_id,courier,created_via,delivery_status,custody_state,custody_transferred_at," +
   "output_number,output_code,guide_code,status_category,reported_status,swayp_state,returned_at," +
-  "dispatched_at,updated_at,closed_at";
+  "dispatched_at,updated_at,closed_at,aliclik_transport_name";
 
 /** Una parada «No entregado», con su ruta y su motorizado. */
 export interface ReproStopRow {
@@ -186,6 +198,8 @@ const FACT_EVENT_KINDS = [
   "output_replaced",
   "dispatch_program_cleared",
   "dispatch_program_overridden",
+  // «A Repro Lima» de la bandeja de reintentos (lib/lima-retry-chain.ts).
+  "lima_retry_dismissed",
 ];
 
 /** Todo lo que Repro Lima sabe de un pedido, leído junto. */
@@ -245,6 +259,49 @@ export interface ReproFacts {
    * armada.
    */
   reopened: boolean;
+  /**
+   * La cadena de reintentos por Aliclik (lib/lima-retry-chain.ts, 03-11-2026):
+   * qué intento toca y con qué transporte, o por qué no aplica.
+   */
+  retryChain: LimaRetryChain;
+}
+
+/** El día de la ruta de una parada, a mediodía de Lima, como instante. */
+function stopAttemptAt(stop: Pick<ReproStopRow, "routeDate" | "reported_at" | "created_at">): string | null {
+  const day = stop.routeDate?.slice(0, 10) ?? "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return `${day}T17:00:00.000Z`;
+  return stop.reported_at ?? stop.created_at ?? null;
+}
+
+/**
+ * Los intentos que fallaron, para la cadena: las paradas «No entregado» de
+ * Grupo GF (con su motorizado) y las guías de otro courier que no entregaron.
+ */
+function chainAttempts(
+  failedStops: readonly ReproStopRow[],
+  outputs: readonly ReproShipmentRow[],
+  urpiLast: { result_code: string | null; reason: string | null } | null,
+): ChainAttempt[] {
+  const attempts: ChainAttempt[] = [];
+  for (const stop of failedStops) {
+    const at = stopAttemptAt(stop);
+    if (!at) continue;
+    attempts.push({ carrier: isChainRider(stop.riderName) ? "alexis" : "otro", reason: stop.outcome_reason, at });
+  }
+  for (const output of outputs) {
+    if (sameCourier(output.courier, "propio") || !guideFailedAfterDispatch(output)) continue;
+    const at = output.dispatched_at ?? output.updated_at;
+    if (!at) continue;
+    const courier = (output.courier ?? "").trim().toLowerCase();
+    if (courier === "aliclik") {
+      attempts.push({ carrier: aliclikCarrier(output.aliclik_transport_name), reason: aliclikChainReason(output.reported_status), at });
+    } else if (courier === "urpi") {
+      attempts.push({ carrier: "urpi", reason: urpiChainReason(urpiLast?.result_code, urpiLast?.reason), at });
+    } else {
+      attempts.push({ carrier: "otro", reason: null, at });
+    }
+  }
+  return attempts;
 }
 
 function newest<T>(rows: readonly T[], at: (row: T) => string | null | undefined): T | null {
@@ -357,6 +414,20 @@ export async function loadReproFacts(
   const riderIds = [...new Set([...routeById.values()].map((route) => route.rider_id).filter((id): id is string => Boolean(id)))];
   const { data: riders } = await courierRowsByIds(riderIds, (chunk) => admin.from("riders").select("id,full_name").in("id", chunk));
   const riderName = new Map((riders as Array<{ id: string; full_name: string }>).map((rider) => [rider.id, rider.full_name]));
+
+  // El último reporte de Urpi de los pedidos con una guía de Urpi que no
+  // entregó: su resultado y su motivo (texto libre) deciden la cadena.
+  const urpiOrderIds = [...new Set(shipments
+    .filter((row) => (row.courier ?? "").trim().toLowerCase() === "urpi" && row.order_id && guideFailedAfterDispatch(row))
+    .map((row) => row.order_id as string))];
+  const { data: urpiRows } = await courierRowsByIds(urpiOrderIds, (chunk) =>
+    admin.from("urpi_report_rows").select("order_id,report_date,urpi_row,result_code,data").in("order_id", chunk));
+  const urpiLastByOrder = new Map<string, { result_code: string | null; reason: string | null; key: string }>();
+  for (const row of urpiRows as Array<{ order_id: string; report_date: string | null; urpi_row: number | null; result_code: string | null; data: { reason?: string | null } | null }>) {
+    const key = `${row.report_date ?? ""}#${String(row.urpi_row ?? 0).padStart(9, "0")}`;
+    const prev = urpiLastByOrder.get(row.order_id);
+    if (!prev || key > prev.key) urpiLastByOrder.set(row.order_id, { result_code: row.result_code, reason: row.data?.reason ?? null, key });
+  }
 
   const group = <T extends { order_id: string | null }>(rows: readonly T[]): Map<string, T[]> => {
     const map = new Map<string, T[]>();
@@ -511,6 +582,10 @@ export async function loadReproFacts(
       open,
       latestClosed,
       reopened,
+      retryChain: withDismissal(
+        limaRetryChain(chainAttempts(failedStops, outputs, urpiLastByOrder.get(orderId) ?? null), new Date()),
+        newest(orderEvents.filter((event) => event.kind === "lima_retry_dismissed"), (event) => event.occurred_at)?.occurred_at ?? null,
+      ),
     });
   }
   return out;

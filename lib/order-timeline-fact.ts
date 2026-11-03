@@ -130,6 +130,9 @@ const POR_KIND: Record<string, TimelineFact> = {
   urpi_observation_resolved: consulta("estado"),
   lima_repro_call: consulta("llamada"),
   lima_repro_closed: consulta("expediente"),
+  // La bandeja «Reintentos Aliclik» (03-11-2026).
+  lima_retry_approved: hito("reprogramado", "en_curso"),
+  lima_retry_dismissed: consulta("expediente"),
   call: consulta("llamada"),
 
   // Completado (verde).

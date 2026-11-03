@@ -158,6 +158,14 @@ describe("#AUR177276 en el Master", () => {
     expect(macro.reasons).not.toContain("devolucion_pendiente_inventario");
   });
 
+  it("el cancelado de Urpi que anula su salida en ruta (03-11-2026, §30.11) cae igual en «Por reprogramar Lima»", () => {
+    const urpi = salida({ courier: "urpi", guide_code: "MOM-KP1-URPI-AAAAAAAA", reported_status: null, closed_at: hace(6) });
+    const { macro } = resolverTodo([urpi]);
+    expect(macro).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
+    // Y si la caja sigue en ruta (Urpi solo la reprogramó), no.
+    expect(resolverTodo([salida({ courier: "urpi", delivery_status: "en_ruta", reported_status: null })]).macro.substage).not.toBe("por_reprogramar_lima");
+  });
+
   it("Grupo GF lo puede tomar desde la lista, con la chapa de quién no entregó", () => {
     const outputs = [{ ...salida(AUR177276), custody_state: "devuelto", output_number: 1 }];
     expect(outputsBlockingRetry(outputs)).toEqual([]);

@@ -108,8 +108,12 @@ queda «En curso · En tránsito». No se crea ninguna salida.
 3. Cuando Urpi reporta la entrega, la carga del reporte cierra esa salida de
    Urpi como entregada; no hay que hacer nada más.
 
-Cancelado o reprogramado por Urpi todavía no mueve la salida: el pedido sigue
-en tránsito y se sigue desde «Cancelados por Urpi».
+Desde el 03-11-2026, cuando Urpi cancela (último intento «Cancelado»), la carga
+del reporte anula esa salida de Urpi como intento fallido y el pedido pasa a
+«En curso · Por reprogramar Lima»: se reprograma por Repro Lima, no volviéndolo
+a poner en el Sheet de Urpi (Urpi solo lleva primeros despachos, MOM §9.1). Si
+se vuelve a programar a Urpi, la carga de la programación lo nombra. Un
+«Reprogramado» de Urpi no mueve nada: Urpi lo reintenta.
 
 Además, la programación vigente desempata el vínculo del reporte: un intento
 cuyo teléfono tiene varios pedidos (o ninguno) se vincula al único pedido

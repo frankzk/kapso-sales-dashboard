@@ -130,6 +130,7 @@ function reproRow(over: Partial<ReproRow> = {}): ReproRow {
     plan: null,
     program: null,
     list: a ? "programados" : "por_decidir",
+    retryChain: null,
     rank: 3,
     overdue: false,
     chips: [],

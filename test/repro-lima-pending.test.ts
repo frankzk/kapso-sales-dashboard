@@ -8,6 +8,7 @@ import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
 
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
+vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAliclikRetry: vi.fn(), dismissAliclikRetry: vi.fn() }));
 vi.mock("@/components/order-master-shared", () => ({ MacroStageDot: () => null }));
 const nav = vi.hoisted(() => ({ search: "" }));
 vi.mock("next/navigation", () => ({
@@ -214,7 +215,7 @@ describe("apartados operativos de la misma cola", () => {
   const cases = [{ orderId: "acuerdo", list: "programados" as const, agreement: { agreedOn: "2026-10-29" } }];
   it("los seis apartados suman Todos; Reprogramados cuenta las nuevas fechas acordadas", () => {
     const counts = attentionCounts(rows, cases, TODAY);
-    expect(counts).toEqual({ todos: 9, reprogramados: 1, programados_hoy: 2, programados_manana: 2, nunca_salieron: 2, ya_salieron: 1, mas_de_30: 1, programados_despues: 1, llamar_despues: 0, cerrados: 0 });
+    expect(counts).toEqual({ todos: 9, reintentos_aliclik: 0, reprogramados: 1, programados_hoy: 2, programados_manana: 2, nunca_salieron: 2, ya_salieron: 1, mas_de_30: 1, programados_despues: 1, llamar_despues: 0, cerrados: 0 });
     expect(counts.programados_hoy + counts.programados_manana + counts.nunca_salieron + counts.ya_salieron + counts.mas_de_30 + counts.programados_despues).toBe(counts.todos);
   });
   it("una salida que retornó no vuelve a Nunca salieron aunque Master haya borrado el despacho", () => {
