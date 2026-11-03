@@ -1049,6 +1049,18 @@ Reglas:
   no entra en los recuadros de «Por empacar» ni en el pendiente de la Mesa de
   despacho, no usa los cortes de turno, y lo que ya está en «Por armar» no se
   cuenta dos veces.
+- Desde el 03-11-2026 tiene otro apartado aparte, «Swayp por salir · Lima»
+  (§9.1): las guías Swayp de Lima y Callao por día de despacho, cuántas hay,
+  cuántas se armaron y cuál falta, con dónde está su caja y quién creó la guía.
+  **En Lima y Callao la caja de Swayp la arma este almacén y Swayp la recoge en
+  la oficina; la de provincia la arma la bodega regional de Swayp** (decisión
+  del owner, 03-11-2026). Tampoco es esta cola: la guía Swayp nace `en_ruta`,
+  el Master la lee como custodia del courier (`hasExternalCustody`) aunque la
+  caja siga aquí, y sale de «Por armar» al nacer. Por eso el almacén no la veía
+  en ninguna lista, y por eso esta no suma en «Por armar», ni en el número de
+  Lima de «Por empacar», ni en «Entregas a couriers». En «Por empacar» lleva
+  su propia celda, «Swayp · Lima», que no se suma a la de Lima. Sí usa el
+  corte del turno noche (21:20) de la víspera: es el límite real del lote.
 - La cola de armado se define por el PEDIDO, no por la salida suelta: una salida
   cuyo pedido ya no está en `Por armar` —cancelado, o despachado por otra caja—
   no es trabajo de almacén y no se lista.
@@ -1815,6 +1827,10 @@ la clienta ve el número de la empresa, no el de la asesora.
 
 - Todos los pedidos entran directamente a Preparación.
 - Almacén arma todos los pedidos del turno.
+- **También las guías Swayp de Lima y Callao (decisión del owner, 03-11-2026):**
+  la caja la arma nuestro almacén en la oficina y Swayp la recoge ahí. Solo
+  provincia sale armada de una bodega regional de Swayp. Almacén las ve por día
+  de despacho en «Swayp por salir · Lima» (§9.1).
 - Seguimiento Lima decide el courier; la asignación automática será inicialmente
   una sugerencia.
 - Un no entregado pasa a `Por reprogramar Lima`.
@@ -2193,6 +2209,372 @@ a las 12:30 y cubre todo Lima. Es el `same_day_cutoff` del proveedor (0244) y
 reemplaza al de las 11:30 en §29.2 y §29.6; después de las 12:00 el pedido sale
 al día siguiente salvo que Despacho GF apruebe el cambio (§29.6). No es un
 estado del pedido.
+
+**Swayp en Lima: quién arma y hasta cuándo (03-11-2026, decisiones del
+owner).** La fila de Swayp de la tabla dice cuándo Swayp cierra su ruta (de
+16:00 a 17:00 del día anterior). En Lima y Callao la caja la arma nuestro
+almacén y Swayp la recoge en la oficina; el límite práctico para que salga es
+el corte del turno noche de la víspera, a las 21:20 (§6.2). Provincia sale
+armada de la bodega regional de Swayp y no pasa por nuestro almacén. Almacén lo
+lee en «Swayp por salir · Lima» (abajo).
+
+#### Swayp por salir · Lima (Almacén, fase 1, 03-11-2026)
+
+**Por qué.** Toda guía Swayp nace `en_ruta` / `in_route`, con su fecha de
+despacho en `next_followup_at` (`lib/swayp-directa.ts`, `lib/swayp-reenvio.ts`),
+y el Master la lee como custodia del courier (`hasExternalCustody`) aunque la
+caja siga en la oficina: sale de «Por armar» al nacer y el almacén no la veía en
+ninguna lista. Las asesoras creaban guías Swayp para el día siguiente sin
+avisar, y el almacén no sabía cuántas eran ni cuál faltaba. Días con faltas
+reales: el 02-11-2026, 11 programadas y 7 armadas (las 11 creadas entre las
+20:18 y las 20:29 del domingo); el 31-10, 7 y 5; el 27-10, 8 y 4. El almacén
+necesita una lista explícita, «Swayp miércoles 4 nov: 9 programadas · 8 armadas
+· falta 1», y saber CUÁL falta: con nombre, dónde está la caja física y quién
+creó la guía.
+
+**Decisiones del owner (03-11-2026), aprobadas tal cual:**
+
+1. **Quién arma (D1).** Las guías Swayp de Lima y Callao las arma nuestro
+   almacén y Swayp las recoge en la oficina; las de provincia las arma la
+   bodega regional de Swayp («En Lima los arma nuestro almacén, provincia los
+   arma Swayp»).
+2. **El límite práctico (D2)** es el corte del turno noche de la víspera, a las
+   21:20 (`lib/warehouse-shift.ts`, §6.2). Swayp toma la guía en su sistema
+   pasada la medianoche, y desde que Kapta pasa la custodia a `courier` el
+   escáner (`markShipmentReady`) ya no acepta la caja.
+3. **Lo que llega tarde (D3). Nada bloquea.** Una guía de Lima para el próximo
+   día de despacho creada después de las 21:20 de su víspera lleva un aviso
+   fuerte a la asesora, y la puerta propone el siguiente día de despacho.
+   Creada después de las 17:00 de la víspera, el almacén la ve con la chapa
+   «Agregada …, después de las 17:00» y la asesora recibe un aviso suave.
+4. **La caja armada con otra salida (D4).** Si la caja se armó como la S01 de
+   Grupo GF o de Tanders y la guía Swayp está en la S02, la caja lleva el
+   rótulo de la S02, la S02 cuenta como falta hasta que se escanee y Despacho
+   retira la S01.
+5. **El lunes (D5).** El lote del lunes lo arma el turno noche del domingo (el
+   sábado no hay turno noche). La zona se titula «Próximo despacho · lunes 9
+   nov», no «Mañana».
+
+- **Dónde y quién.**
+  - Apartado de `/dashboard/pedidos/almacen` (`id="swayp"`), con la misma
+    puerta que «Reintentos por salir» (§9.5): quien prepara paquetes
+    (`warehouse.prepare`) en sus tiendas de Equipo (`getAccessibleStores`),
+    dentro del cargador (`requireWarehouse`). Las lecturas van por `store_id`:
+    `shipments` no tiene `org_id`.
+  - Título «Swayp por salir · Lima». Ayuda: «Guías Swayp de Lima y Callao. La
+    caja se arma aquí y Swayp la recoge en la oficina. Se cuenta por día de
+    despacho y no suma en «Por armar».». A la derecha, «Leído 17:42» y
+    «Actualizar».
+- **Solo lee (fase 1).**
+  - No escribe en la base, no hay migración ni kinds nuevos y no cambia el
+    Master: no sube `MOM_RESOLUTION_VERSION`. No toca el pendiente de armado
+    (`loadWarehousePending`, `warehouseBlocker`).
+  - Nunca hay «marcar armada» a mano: armada es el escaneo.
+  - Llega por GET (`/api/almacen/swayp`, sin caché) después de que carga la
+    estación, por la misma razón que «Reintentos por salir»: una acción de
+    servidor haría esperar al escáner.
+  - Se vuelve a leer con «Actualizar», al volver a la pestaña y, con la
+    pestaña visible, cada 5 minutos entre las 16:00 y las 21:30 de Lima (de
+    cuando Swayp cierra su ruta a pasado el corte). Una sola lectura a la vez.
+    Un escaneo no relee: la salida pasa a armada en la copia local, con la hora
+    del escaneo.
+  - Los 5 minutos son la edad de la lectura del servidor, no de la copia
+    local: un escaneo no reinicia la cuenta (con el turno noche escaneando cada
+    pocos minutos, la lista no se releía nunca; revisión del 03-11-2026). Al
+    volver a la pestaña se relee si lo leído tiene un minuto o más. Si cambió
+    el día de Lima, se relee a cualquier hora, aunque la pestaña no se haya
+    ido: la estación pasa la noche abierta, y el miércoles «Mañana · miércoles»
+    y «Hoy · martes» serían falsos.
+  - Si no carga: «No pudimos cargar «Swayp por salir».», con «Reintentar», y
+    la estación de arriba sigue funcionando. Mientras llega la primera
+    lectura, las dos zonas en esqueleto («Cargando «Swayp por salir»…» para
+    el lector de pantalla).
+  - Si falla una relectura con un lote ya en pantalla, el lote se sigue
+    viendo, con «No pudimos actualizar «Swayp por salir».», «Se ve lo leído a
+    las 17:42.» y «Reintentar» (a las 20:30 el turno trabaja con él). La
+    celda «Swayp · Lima» lleva también «Se ve lo leído a las 17:42.» y el
+    enlace de la cabecera, «sin actualizar».
+- **Quién arma lo dice el pedido (R1).** Las guías de Swayp (`courier =
+  'fenix'`) se reparten por `order_master.macro_operation`, nunca por
+  `shipments.city` (hay hijas de provincia con `city` nulo):
+  - `lima` (incluye el Callao): el lote del almacén;
+  - `provincia_cod`: solo el pie de provincia, que no cuenta: «Provincia: 9
+    guías Swayp salen el miércoles 4 nov desde bodegas de Swayp (Arequipa 2,
+    Ica 2). No se empacan aquí.» (con una: «Provincia: 1 guía Swayp sale el
+    miércoles 4 nov desde la bodega de Swayp (Arequipa 1). No se empaca
+    aquí.»);
+  - otra o vacía (agencia, desconocida): «Revisar», que se lista y no cuenta:
+    «Guías Swayp de este día cuyo pedido no es de Lima ni de provincia
+    (agencia o sin clasificar): ábrelas y revisa la dirección. No cuentan.»,
+    con «Operación del pedido: Agencia».
+- **El día (R2).** El día de despacho es la FECHA UTC de `next_followup_at`,
+  que la app guarda a medianoche UTC del día elegido (`2026-11-04 00:00:00+00`
+  es del 04-11). Nunca se convierte a hora de Lima: caería un día antes. Es el
+  mismo día que filtra el Excel de programación de Swayp
+  (`app/api/export/fenix-programacion`), así que las programadas coinciden con
+  ese Excel filtrado a Lima, salvo en dos cosas: el Excel solo exporta
+  `in_route` y no mira el pedido, así que una guía en ruta de un pedido anulado
+  o cancelado en la tienda va en el Excel y aquí sale en «Salieron»; y aquí
+  cuentan como vivas las que ya avanzaron en Swayp (transferidas, entregadas,
+  devueltas), que el Excel ya no lleva. Dos zonas:
+  - «Hoy», solo si hoy Swayp despacha (lunes a sábado): «Hoy · martes 3 nov»;
+  - «Próximo», el primer día de despacho después de hoy
+    (`firstSwaypDispatchDay`): «Mañana · miércoles 4 nov» si es mañana y, si no
+    (sábado o domingo para el lunes), «Próximo despacho · lunes 9 nov».
+- **Programadas (R3).** Las guías de Lima vivas del día: ni anuladas
+  (`anulado` / `closed`), ni canceladas por Swayp (estado 10, el único de
+  cancelación del mapa de `lib/swayp-states.ts`), ni de un pedido anulado. En
+  las dos zonas cuentan también las que ya avanzaron en Swayp (transferida,
+  entregada): «Hoy» las necesita para cuadrar. También las devueltas o
+  indemnizadas por Swayp (9 «Devolución confirmada», 11 «Indemnizada» y 12
+  «Devolución confirmada con cobro», `SWAYP_CLOSED_AFTER_PICKUP_STATES`): la
+  sincronización las deja `anulado` / `closed` (`mapSwaypState`), pero la caja
+  salió con Swayp; no son «Guía anulada en Kapta» (de 45 días, los 319
+  anulado/closed/9 eran devoluciones; revisión del 03-11-2026).
+- **Armada (R4)** es la PROPIA salida Swayp en `listo_despacho`, es decir,
+  escaneada. Una caja armada con otra salida no cuenta (D4). Si se escaneó
+  antes de que existiera la guía (la caja «por definir» que la guía rellenó),
+  lleva «Armada como «por definir»».
+- **Faltan (R5)** = programadas − armadas, siempre con nombre, sin tope ni
+  paginación.
+- **La víspera (R6)** es el día calendario anterior al de despacho, en Lima.
+  Sus dos horas son etiquetas, no estados: las 17:00 (Swayp cierra su ruta;
+  desde ahí lo nuevo es «agregado tarde») y las 21:20 (el corte del turno
+  noche, el límite real).
+- **Agregada tarde (R7).** Por la hora REAL de creación de la guía:
+  `swayp_guide_emissions.created_at` o, sin emisión, la primera gestión de la
+  guía (`shipment_calls`). Nunca `shipments.created_at`: una salida «por
+  definir» puede existir desde antes (KP201878-S01: creada 12:06Z, armada
+  12:19Z, guía escrita 21:02Z). Estrictamente después de las 17:00 de la
+  víspera: «Agregada 20:43, después de las 17:00»; si no se creó la víspera, la
+  chapa dice el día. Informa; no bloquea.
+- **Quién creó la guía:** la gestión que acompaña a la creación, con su nombre
+  (`resolveAgentNames`): «Creó la guía: <nombre> · martes 3 nov 00:11». Sin
+  gestión, «Creó la guía: sin registro · martes 3 nov 00:11»; la emitida por el
+  automático (§11.13), «el automático».
+- **Salieron de la lista (R8).** Nada desaparece en silencio. Solo Lima; el
+  primer motivo que aplica gana:
+  1. el pedido se canceló en la tienda (`orders.cancelled_at`): «Pedido anulado
+     en la tienda», aunque después Kapta anulara la guía y Swayp la cancelara
+     (anular la guía en Kapta también deja el pedido `anulado`, #KP127639);
+  2. «Swayp la canceló» (estado 10);
+  3. «Guía anulada en Kapta»;
+  4. el pedido `anulado` con la guía viva: «Pedido anulado en la tienda».
+
+  Y «Fecha cambiada: ahora sale el viernes 6 nov» (con «(cambió el martes 3
+  nov 18:02)» si se sabe, por la última gestión que la dejó en su día nuevo),
+  solo en las guías directas: su emisión guarda el día original
+  (`direct:<pedido>:<día>`); las demás emisiones no lo guardan. Si estaba
+  armada y la caja sigue en la empresa, además: «Estaba armada: sácala del
+  sitio de Swayp.» (si ya salió con Swayp o viene de regreso, no hay nada que
+  sacar).
+
+  Una directa anulada en Kapta (`cancelFenixDirectGuide`) pierde la fecha
+  (`next_followup_at` en null) y, si era una «por definir» rellenada, vuelve a
+  `por_definir` sin la guía: la lectura por fecha ya no la trae. Se encuentra
+  por su emisión (el día del `source_key`) y sale como «Guía anulada en Kapta»,
+  con la guía que se anuló (KP139661-S01, 08-10-2026; revisión del
+  03-11-2026). Una directa sin fecha pero viva (una recuperación descartada
+  suelta la fecha sin tocar la guía) no sale: no se sabe adónde fue.
+- **Sin doble conteo (R9).** No suma en «Por armar», ni en el número de Lima
+  de «Por empacar», ni en «Entregas a couriers».
+- **Dónde está la caja física (R11).** Para cada falta, un renglón; mirando las
+  salidas hermanas del mismo pedido, de cualquier courier, la primera que
+  aplica gana (con varias, la de consecutivo más alto):
+  1. esta misma salida existía antes de la guía (una «por definir» rellenada,
+     nacida más de 2 minutos antes de la guía, o ya `rotulo_generado` /
+     `en_armado`): «Es la caja «por definir» KP201878-S01: ármala y escanéala;
+     el rótulo no cambia.», con la chapa «Era «por definir»»;
+  2. una hermana armada que sigue en la empresa (`listo_despacho`, custodia
+     `empresa`, D4): «La caja está armada como KP1-S01 (Grupo GF): ponle el
+     rótulo KP1-S02, escanéalo y avisa a Despacho que la S01 no sale.»;
+  3. una hermana que se armó y volvió a la oficina (custodia `devuelto` o
+     `returned_at`): «La KP143987-S01 (Aliclik) volvió a la oficina: si la
+     caja está entera, úsala con el rótulo KP143987-S02; si no, ármala desde
+     stock.». `retorno` no es «volvió»: la caja sigue con el courier camino de
+     vuelta y el `devuelto` lo pone quien la recibe (§9.4);
+  4. una hermana que se armó, salió con su courier (custodia `courier` o
+     `retorno`) y no se entregó: «La caja salió como KP142666-S01 (Grupo GF) y
+     no se entregó: pide a Despacho que la traiga de vuelta, ponle el rótulo
+     KP142666-S02 y escanéalo; si no vuelve a tiempo, ármala desde stock.». Es
+     el caso más común: la S02 de Swayp que nace del re-ruteo de una S01 de
+     Grupo GF que no se entregó (14 de 31 faltas de Lima de 45 días caían en
+     «desde stock» teniendo esa caja). **Regla y texto propuestos en la
+     revisión del 03-11-2026, pendientes de que el owner los confirme**;
+  5. si no: «No hay caja armada en Kapta para esta salida: ármala desde stock
+     con el rótulo KP1-S02.».
+
+  Una hermana que nunca se armó no dice dónde está ninguna caja. En 2 a 5 la
+  fila lleva «Salida nueva». El courier se nombra como en el resto de Kapta
+  (`courierDisplayName`).
+- **La falta que Swayp ya tomó.** Si Swayp ya tomó la guía en su sistema
+  (custodia distinta de `empresa`, estado 3 o más, entregada o transferida;
+  `swaypTaken`), el escáner ya no acepta la caja (`markShipmentReady` exige
+  custodia `empresa`, D2). Sigue siendo falta —no se armó aquí—, pero sin el
+  renglón de dónde está la caja (pedir que se arme sería falso) y, en las dos
+  zonas, con «No se armó y Swayp ya la tomó en su sistema: si la caja sigue
+  aquí, avisa hoy a Seguimiento.». Pasa antes de su día: KP143987-S02, creada
+  el 03-11 a las 00:11 para el 04-11, la tomó Swayp a las 00:37 y estaba en
+  Reparto a las 05:52 sin escaneo del almacén.
+- **La zona «Próximo».**
+  - Cabecera, una frase que se entiende sin colores: «Swayp miércoles 4 nov: 9
+    programadas · 8 armadas · falta 1» («faltan 2»; sin faltas, «… · lote
+    completo»). Sin nada: «Swayp no lleva nada de Lima el miércoles 4 nov.».
+  - Cifras que filtran la zona (The Cifras Navegan Rule, DESIGN.md):
+    «Programadas», «Armadas», «Faltan» y «Agregadas tarde».
+  - Cada falta, siempre abierta: el código y la guía («KP143987-S02 · guía
+    50000165022») con «Sin armar» y «Salida nueva» o «Era «por definir»»; el
+    cliente y el distrito; el pedido, la tienda y el producto; quién creó la
+    guía; dónde está la caja, y la chapa de agregada tarde si aplica. Botones
+    «Imprimir rótulo» (`/api/pedidos/rotulos`) y «Abrir pedido».
+  - Las armadas, en una lista plegada: «KP202022-S01 · armada lunes 2 nov 17:19
+    · <quién> · <cliente> · <distrito>».
+  - El tono, siempre con su frase y según la hora de Lima respecto de la
+    víspera; la primera que aplica gana:
+    1. con programadas y sin faltas, ok: «Lote completo.»;
+    2. si todas las faltas ya las tomó Swayp, ámbar a cualquier hora: «1 no se
+       armó y Swayp ya la tomó en su sistema: si la caja sigue aquí, avisa hoy
+       a Seguimiento.» («2 no se armaron y Swayp ya las tomó en su sistema: si
+       las cajas siguen aquí, avisa hoy a Seguimiento.»), porque «déjalo
+       listo» sería falso. **Texto propuesto en la revisión del 03-11-2026,
+       pendiente de que el owner lo confirme**;
+    3. la víspera aún no llega (el sábado para el lunes), neutro: «Lo arma el
+       turno noche del domingo 8 nov, antes del corte de las 21:20.»;
+    4. la víspera antes de las 17:00, neutro: «Swayp cierra su ruta entre las
+       16:00 y las 17:00. Déjalo listo antes del corte de las 21:20.»;
+    5. la víspera de 17:00 a 21:20, ámbar: «Faltan 1 h 10 min para el corte de
+       las 21:20: déjalo listo.»;
+    6. desde las 21:20 de la víspera, crítico: «El turno noche cerró con 1 sin
+       armar: avisa a Seguimiento.» (cuenta todas las que no se armaron).
+
+    La cuenta atrás se recalcula cada minuto con el reloj del equipo, en la
+    zona y en la celda; «Leído 17:42» sigue siendo la hora de la lectura.
+  - Las cifras filtran: «Programadas» enseña las faltas abiertas, las armadas
+    plegadas y además «Salieron», «Revisar» y el pie de provincia; «Faltan» y
+    «Armadas» dejan solo su lista; «Agregadas tarde», las tardías de las dos.
+    Tocar la cifra elegida vuelve a «Programadas». Las listas se titulan
+    «Faltan», «Armadas» y «Salieron de la lista» (con «Ya no salen en este
+    lote. Si alguna estaba armada, sácala del sitio de Swayp.»); un filtro sin
+    filas dice «No falta ninguna.», «Todavía no se armó ninguna.» o «Ninguna
+    se agregó después de las 17:00.». Una zona sin guías dice solo su frase
+    vacía, una vez.
+- **La zona «Hoy», para cuadrar.** Cabecera «Swayp hoy: 7 programadas · 7
+  armadas»; cada fila con el estado de Swayp como dato («Swayp: Generada ·
+  00:38», etiquetas de `lib/swayp-states.ts`) y, una vez en la zona, «Kapta no
+  registra la entrega a Swayp.». No hay cifra de «recogidas». Una falta de hoy:
+  - en la empresa y sin que Swayp la tomara (sin estado, 1 «Generada» o 2
+    «Preparada»), crítico: «Sale hoy y no está armada: ármala, escanéala y
+    avisa a Seguimiento.», y la cifra «Faltan» de «Hoy» en rojo;
+  - si no: «No se armó y Swayp ya la tomó en su sistema: si la caja sigue aquí,
+    avisa hoy a Seguimiento.», sin el renglón de dónde está la caja.
+
+  Lo urgente de hoy (las críticas) sube a la celda «Swayp · Lima» y al enlace
+  de la cabecera como «Hoy: 1 sin armar» («hoy: 1 sin armar · faltan 2» en el
+  enlace), porque «Hoy» va debajo o al lado de «Próximo» (revisión del
+  03-11-2026).
+- **La celda «Swayp · Lima» de «Por empacar»**, junto a Lima, Agencia y
+  Provincia COD; no suma al número de Lima y toda la celda lleva al apartado.
+  Cifra grande «Falta 1», «Faltan 2», «Completo» o «0»; debajo, «miércoles 4
+  nov · 9 programadas · 8 armadas», y el renglón de tono de la zona «Próximo».
+  Con algo urgente de hoy, además «Hoy: 1 sin armar» y la celda en rojo. Si no
+  se pudo leer: «No se pudo leer». Con «Sin clasificar» en el marco son cinco
+  celdas, y la de Swayp ocupa la última fila entera. Con faltas Swayp de Lima,
+  la celda Lima en cero dice «En cero en «Por armar».» y no «Nada por
+  empacar»: esas cajas también se arman aquí (D1), aunque no sumen (R9).
+- **Escáner.** Uno solo, el de siempre (`markShipmentReady`). Tras un escaneo
+  que sale bien, un segundo aviso calculado en el navegador con el lote ya
+  cargado, sin pedir nada al servidor; el primero que aplica:
+  1. la salida es de un lote: «Swayp miércoles 4 nov · 8 de 9 armadas · falta
+     KP143987-S02 (San Bartolo).» (varias: «faltan 2: …», hasta 3 códigos y «y
+     N más»), o, si lo completa, «Swayp miércoles 4 nov · 9 de 9 armadas. Lote
+     completo: júntalas en el sitio de Swayp.»;
+  2. el rótulo viejo de una hermana cuyo pedido tiene una falta: «Ese rótulo es
+     KP1-S01 (Grupo GF). El pedido sale por Swayp con KP1-S02: imprime ese
+     rótulo y escanéalo.»;
+  3. una guía que salió de la lista: «Swayp canceló esta guía: no la juntes con
+     el lote.», «Esta guía está anulada: no la juntes con el lote.» o «Esta guía
+     ahora sale el viernes 6 nov: guárdala aparte.»;
+  4. de provincia o de «Revisar»: nada;
+  5. una caja Swayp que no es de ningún lote cargado: «Esta caja Swayp no sale
+     hoy ni el miércoles 4 nov: guárdala aparte y revisa la fecha en el
+     pedido.» (el domingo, sin «Hoy»: «Esta caja Swayp no sale el lunes 9 nov:
+     …»).
+
+  Antes de decir 5, y si lo cargado es de otro día, la estación relee una vez
+  por GET (fuera de la fila de acciones: no frena el escáner) y decide con lo
+  leído (`swaypHintAfterScan`): una guía agregada después de la última
+  lectura no puede mandarse a guardar aparte (el 02-11 se crearon 11 entre las
+  20:18 y las 20:29). Si la relectura falla, no hay segundo aviso: mejor
+  ninguno que uno falso. Si el segundo aviso es ámbar o rojo (el rótulo viejo,
+  una que salió, una fuera de lote), el primero («… listo para despacho.») no
+  queda en verde: pasa a informativo.
+- **«Armados hoy».** La caja de un lote cargado lleva «Swayp · mié 4 nov».
+- **La asesora (D3).** En la puerta «Guía Swayp directa» (§11.6.1), solo con
+  destino de Lima o Callao con certeza, que es la misma operación del pedido
+  con la que el almacén arma su lote (`operation` de la vista previa, de
+  `order_master.macro_operation`):
+  - el subtítulo dice quién arma: «Lima y Callao: la caja la arma nuestro
+    almacén y Swayp la recoge en la oficina. Sin guía Aliclik previa.»;
+  - bajo la fecha, si es el próximo día de despacho y ya pasaron las 21:20 de
+    su víspera, el aviso fuerte: «Ya no hay turno de almacén hoy y Swayp la
+    toma en su sistema pasada la medianoche. Elige el siguiente día o avisa a
+    Almacén.». En ese caso la fecha que propone la puerta es el siguiente día
+    de despacho (`swaypSuggestedDispatchDay`);
+  - al crear: «Entró al lote Swayp de Lima del miércoles 4 nov. Almacén lo ve
+    en «Swayp por salir».»; después de las 17:00 de la víspera, además, «El
+    almacén ya está cerrando ese lote: la verá como agregada tarde.», y después
+    de las 21:20, el aviso fuerte en su lugar.
+  - La hora se lee en el navegador, al cargar el pedido, al elegir la fecha y
+    al confirmar, y con un pedido de Lima cargado se refresca cada minuto:
+    quien carga a las 21:10 y crea a las 21:25 ve el aviso antes de crear. La
+    fecha propuesta no cambia sola. Nada bloquea. Provincia no cambia.
+- **Lo que se midió (03-11-2026, solo lectura en producción).** El lote del
+  03-11 (martes): 7 programadas y 7 armadas; cuatro llevan «Armada como «por
+  definir»» (armadas hacia las 07:18, guía escrita a las 16:00). Provincia ese
+  día: 10 vivas. El del 04-11 (miércoles): 1 programada y 0 armadas, la
+  KP143987-S02 (San Bartolo, guía creada el martes 3 nov a las 00:11, salida
+  nueva) con «La KP143987-S01 (Aliclik) volvió a la oficina: …». El del 02-11:
+  11 programadas, 7 armadas y 4 sin armar, las 11 agregadas tarde.
+
+**Fases siguientes, pendientes del owner.** Fase 2: cerrar una falta con
+motivo. Fase 3: la entrega cotejada a Swayp (hoy Kapta no la registra). Fase 4:
+«Salida Swayp programada» en el Master. Ninguna existe todavía: esta fase no
+escribe nada.
+
+**Lagunas conocidas de la fase 1.**
+
+- El agente de voz escribe `next_followup_at` al agendar «volver a llamar», y
+  en una guía Swayp ese campo es la fecha de despacho (KP140760-S01 pasó así
+  del 13-10 al 20-10). Una guía directa movida así sale como «Fecha cambiada».
+- «Fecha cambiada» solo se detecta en guías directas.
+- Las otras puertas que crean o fechan guías Swayp de Lima no llevan todavía el
+  aviso a la asesora: la fecha de Swayp en Repro Lima (§9.5), «Cliente
+  confirma» por Swayp, la guía Swayp a mano y la nueva fecha de la excepción de
+  una guía anulada (§11.6.1).
+- Pendiente del owner (revisión del 03-11-2026): Swayp a veces toma pasada la
+  medianoche una guía creada esa misma madrugada para el día siguiente y la
+  reparte un día antes, sin armar (KP143987-S02: creada a las 00:11, tomada a
+  las 00:37; AUR177549-S02, 06-10). D2 y D3 suponen que Swayp respeta la
+  fecha; otras creadas a las 00:12 sí salieron en su día. Mientras no decida,
+  la asesora no recibe aviso en esa franja y la lista la muestra como «Swayp
+  ya la tomó».
+- Si el pedido dice `provincia_cod` y la guía Swayp va a Lima (KP143049-S01,
+  22-10: pedido en Chilca, guía con `city` lima, armada aquí; el único caso en
+  45 días), sale en el pie de provincia: R1 decide por `macro_operation`.
+  Queda para el owner.
+- «Lote completo» en el escáner se dice con lo cargado: una guía agregada
+  después de la última lectura aparece en la siguiente (a lo sumo 5 minutos
+  entre las 16:00 y las 21:30).
+
+Implementación: `lib/warehouse-swayp.ts` (las reglas y los textos, puros; el
+reloj entra como parámetro), `lib/warehouse-swayp-access.ts` (la puerta y las
+lecturas), la ruta `app/api/almacen/swayp/route.ts` (la lectura por GET),
+`components/warehouse-swayp.tsx` y `components/warehouse-station.tsx` (el
+apartado, la celda, el escáner y «Armados hoy») y, para la asesora,
+`components/direct-fenix-guide-modal.tsx` con `operation` en
+`previewDirectFenixGuide`. Pruebas en `test/warehouse-swayp.test.ts`,
+`test/warehouse-swayp-access.test.ts`, `test/warehouse-swayp-ui.test.ts`,
+`test/warehouse-swayp-mom.test.ts` y `test/swayp-asesora-lote.test.ts`.
 
 ### 9.2 Sugerencia de courier en Lima
 
@@ -5574,15 +5956,22 @@ comprobante y clave de recojo (§12) ya existe y no cambia.
 Ciudades con stock/operación conocidas: Arequipa, Huancayo, Juliaca/Puno,
 Cusco, Trujillo, Ica, Piura, Chimbote, Chiclayo, Lima/Callao.
 
-**Lima y Callao** entraron el 14-09-2026, cuando la bodega de Lima de Swayp pasó
-a despachar pedidos desde el sistema. Lima provincia son 44 distritos (el padrón
-ya trae Santa María de Huachipa, `150144`, creado en 2023) y Callao 7. **El
-Callao es destino propio pero se despacha desde la bodega de Lima**, con el
-stock de Lima — el mismo arreglo que Puno con Juliaca: tabla de ubigeo aparte
-para no mandar el paquete a un distrito equivocado, y alias al almacén para no
-inventar una bodega que no existe. En `SWAYP_SENDERS` van las dos claves,
-`lima` y `callao`, porque el envío llega con su ciudad y el remitente se busca
-por ella.
+**Lima y Callao** entraron el 14-09-2026, cuando Swayp empezó a tomar pedidos
+de Lima desde el sistema. Lima provincia son 44 distritos (el padrón ya trae
+Santa María de Huachipa, `150144`, creado en 2023) y Callao 7. **El Callao es
+destino propio pero se emite con el remitente de Lima**, con el stock de Lima —
+el mismo arreglo que Puno con Juliaca: tabla de ubigeo aparte para no mandar el
+paquete a un distrito equivocado, y alias al almacén para no inventar una
+bodega que no existe. En `SWAYP_SENDERS` van las dos claves, `lima` y `callao`,
+porque el envío llega con su ciudad y el remitente se busca por ella.
+
+**En Lima y Callao la caja no sale de una bodega de Swayp (decisión del owner,
+03-11-2026).** La arma nuestro almacén en la oficina y Swayp la recoge ahí;
+solo provincia sale armada de una bodega regional de Swayp. El texto de arriba
+decía «la bodega de Lima de Swayp» y «se despacha desde la bodega de Lima»: lo
+que hay en Lima es el remitente de Lima en el sistema de Swayp, con el que se
+emite la guía, no el sitio donde se arma la caja. Almacén ve esas guías por día
+de despacho en «Swayp por salir · Lima» (§9.1).
 
 Estar en la lista habilita la ciudad para cargarle stock; **no** la vuelve
 elegible por sí sola. La elegibilidad exige cobertura **y** stock del producto
@@ -5765,13 +6154,15 @@ las mismas reglas y además:
 ### Stock sin control de cantidad (Lima)
 
 Lima entró a cobertura el 14-09-2026 y la operación decidió **no contar
-unidades** ahí: la bodega de Lima repone sola y lo que importa es *qué*
-productos despacha, no cuántos hay. **Es una regla de la ciudad**
+unidades** ahí: lo que importa es *qué* productos despacha Swayp, no cuántos
+hay. Se dijo entonces que «la bodega de Lima repone sola»; el owner precisó el
+03-11-2026 que la caja de Lima y Callao la arma nuestro almacén y Swayp la
+recoge en la oficina (§9.1, D1). **Es una regla de la ciudad**
 (`CIUDADES_SIN_CONTROL_DE_CANTIDAD` en `lib/fenix.ts`): todo producto anotado
-en Lima —y en el Callao, que se sirve desde esa bodega— vale como disponible
-sin que nadie marque nada. Se decidió por ciudad y no por renglón porque la
-carga de Lima son decenas de productos y una casilla por producto es una forma
-de olvidarse una; un renglón olvidado es un pedido rechazado por «sin stock» en
+en Lima —y en el Callao, que se emite con el remitente de Lima— vale como
+disponible sin que nadie marque nada. Se decidió por ciudad y no por renglón
+porque la carga de Lima son decenas de productos y una casilla por producto es
+una forma de olvidarse una; un renglón olvidado es un pedido rechazado por «sin stock» en
 una ciudad donde el stock no se cuenta. La marca por renglón
 (`fenix_stock.unlimited`) queda para la excepción inversa: un producto sin
 control en una ciudad que sí cuenta. En cualquiera de los dos casos, el renglón
@@ -6241,7 +6632,9 @@ mandaron el 14-09-2026 no lleva `idWarehouse` en absoluto, y las guías de
 Arequipa salen sin él: **no es obligatorio para habilitar una ciudad**. El campo
 existe para no dejarle la elección a Swayp cuando el ubigeo no alcance; va junto
 al remitente de esa ciudad en `SWAYP_SENDERS`, porque el remitente ya ES la
-bodega y separarlos dejaría dos sitios que pueden discrepar.
+bodega y separarlos dejaría dos sitios que pueden discrepar. En Lima el
+remitente no es donde se arma la caja: la arma nuestro almacén y Swayp la
+recoge en la oficina (decisión del owner, 03-11-2026, §9.1).
 
 **El RUC del remitente puede ir vacío.** El mismo `curl` lleva
 `"nitRemitente": ""`. Exigirlo era una regla nuestra, y era cara: `parseSenders`
@@ -6461,6 +6854,33 @@ reparte los domingos (§11, «Horarios Swayp documentados»). Decisión del owne
 - El agente de voz ya no ofrecía domingos (§11.8) y el automático Aliclik →
   Swayp ya los saltaba (`nextAutoDelivery`, que además salta el sábado en
   Arequipa).
+
+**Con destino de Lima, la fecha es el lote del almacén (03-11-2026, decisiones
+del owner D1 y D3).** En Lima y Callao la caja de Swayp la arma nuestro almacén
+y Swayp la recoge en la oficina; el límite práctico es el corte del turno noche
+de la víspera, a las 21:20 (§9.1, «Swayp por salir · Lima»). En la **Guía Swayp
+directa**, solo cuando la operación del pedido es Lima (`operation` de la vista
+previa, de `order_master.macro_operation`, la misma con la que el almacén arma
+su lote; no la ciudad de cobertura, que pone «Huaral, Lima» en la clave `lima`
+de Swayp):
+
+- Bajo el selector, si la fecha elegida es el próximo día de despacho y ya
+  pasaron las 21:20 de su víspera: «Ya no hay turno de almacén hoy y Swayp la
+  toma en su sistema pasada la medianoche. Elige el siguiente día o avisa a
+  Almacén.». En ese caso la puerta propone el siguiente día de despacho
+  (`swaypSuggestedDispatchDay`): el martes a las 22:00 propone el jueves, no
+  el miércoles. Una fecha que la persona ya eligió no se pisa.
+- Al crear: «Entró al lote Swayp de Lima del miércoles 4 nov. Almacén lo ve en
+  «Swayp por salir».». Después de las 17:00 de la víspera añade «El almacén ya
+  está cerrando ese lote: la verá como agregada tarde.» (aviso suave); después
+  de las 21:20, el aviso fuerte de arriba.
+- La hora se lee en el navegador al cargar el pedido, al elegir la fecha y al
+  confirmar; nunca al pintar. Nada bloquea: la fecha sigue siendo válida y el
+  botón no cambia. Provincia no cambia: la misma propuesta (el primer día de
+  despacho) y ningún aviso.
+- Las otras puertas de esta lista (Cliente confirma, guía a mano, excepción de
+  la anulada) y la fecha de Swayp de Repro Lima todavía no lo dicen (§9.1,
+  lagunas).
 
 ### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
 
