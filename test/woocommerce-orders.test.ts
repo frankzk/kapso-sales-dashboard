@@ -414,7 +414,7 @@ describe("crear la venta (createWooSaleOrder)", () => {
     const { body, expected } = buildWooSaleOrder(saleInput());
     const out = await createWooSaleOrder({ client: client(shop.fetchImpl), body, expected, requestId: REQ, now: () => NOW.getTime(), log: silent });
     expect(out).toMatchObject({ kind: "error", cleanup: null });
-    expect((out as { message: string }).message).toContain("No se creó nada.");
+    expect((out as { message: string }).message).toContain("No se creó nada: vuelve a pulsar «Generar pedido» en un momento.");
     expect(shop.calls.some((c) => c.method === "POST")).toBe(false);
   });
 

@@ -19274,7 +19274,7 @@ mucho, los topes de la base y las escrituras de la fila local y de la venta
 (sin la confirmación por WhatsApp, que va después): menos que su plazo de
 120 s.
 
-**Tiempos.** Cada llamada tiene su tope —buscar el intento 6 s, crear 15 s,
+**Tiempos.** Cada llamada tiene su tope —buscar el intento 12 s, crear 15 s,
 comprobar un producto 5 s, pasar a `processing` 10 s, releer, borrar o anular
 5 s— y además toda la venta tiene un reloj de 45 s (`WOO_SALE_BUDGET_MS`):
 cada llamada espera como mucho lo que le queda, el POST solo sale con su tope
@@ -19282,7 +19282,12 @@ entero (un POST cortado es el que deja pedidos sin respuesta) y lo que no
 alcanza queda para el reintento, que lo resuelve sin crear otro. La página de
 Leads da 300 s a su función (`maxDuration`, como Pedidos y Ajustes): el botón
 nunca se queda en «Generando…» ni la venta se corta a mitad. Si WooCommerce no
-contesta al buscar el intento anterior, no se crea nada.
+contesta al buscar el intento anterior, no se crea nada y el aviso pide volver a
+pulsar «Generar pedido» en un momento. La búsqueda tuvo 6 s hasta el 03-11-2026:
+ese día, de 11:45 a 11:48, WooCommerce de Kenku tardó más en listar los pedidos
+de las últimas 2 horas y dos ventas se cortaron ahí (y otras tres solo salieron
+al segundo intento); con 12 s esa búsqueda sobra, y buscar dos veces (por id y
+por lista) más el POST entero (15 s) siguen cabiendo en los 45 s.
 
 **El buscador** (`searchWooCatalog`) devuelve la misma forma que el de Shopify:
 `GET /products?search=…&status=publish&per_page=12` (y, si lo escrito no tiene

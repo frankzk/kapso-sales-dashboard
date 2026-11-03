@@ -766,8 +766,13 @@ export function wooConflictRejection(input: {
  * de toda la venta (`WOO_SALE_BUDGET_MS`).
  */
 export const WOO_SALE_TIMEOUTS = {
-  /** Buscar el intento anterior, y leer el pedido que se encontró. */
-  lookup: 6_000,
+  /**
+   * Buscar el intento anterior, y leer el pedido que se encontró. 12 s desde el
+   * 03-11-2026: con 6 s, la búsqueda (los pedidos de las últimas 2 horas con sus
+   * metadatos) se cortó en las horas lentas de WooCommerce y la asesora veía
+   * «No se pudo consultar WooCommerce» sin que nada fallara de verdad.
+   */
+  lookup: 12_000,
   /** El POST: lo más pesado que hace WooCommerce (numeración, stock, ganchos). */
   create: 15_000,
   /** ¿Es variable el producto de una línea que llegó sin la elección del buscador? */
@@ -1089,7 +1094,7 @@ export async function createWooSaleOrder(input: {
   } catch (e) {
     return {
       kind: "error",
-      message: `No se pudo consultar WooCommerce antes de crear el pedido: ${errorText(e)} No se creó nada.`,
+      message: `No se pudo consultar WooCommerce antes de crear el pedido: ${errorText(e)} No se creó nada: vuelve a pulsar «Generar pedido» en un momento.`,
       cleanup: null,
       orderLabel: null,
     };
