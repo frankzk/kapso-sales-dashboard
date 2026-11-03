@@ -270,6 +270,8 @@ function failureOf(f: ReproFacts): { line: ReproRow["failure"]; failedOn: string
       kind: "courier",
       courier: output.courier,
       reportedStatus: output.reported_status,
+      subStatus: output.aliclik_sub_status,
+      riderComment: output.aliclik_rider_comment,
       swaypState: output.swayp_state,
       failedOn: fromDispatch ? null : outputAt,
       dispatchedOn: fromDispatch ? outputAt : null,

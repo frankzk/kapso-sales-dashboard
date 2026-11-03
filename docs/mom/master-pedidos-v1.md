@@ -1854,6 +1854,19 @@ crear guías. En Lima, Aliclik se usa **solo con su transporte AUTOECOM**.
   AUTOECOM, se envía con AUTOECOM o ALIDRIVER.»). La cotización lo avisa. Una
   guía AUTOECOM anulada antes de salir no cuenta. Caso: #KP143987, guía
   AUR5X246218871979 (AutoEcom, despachada el 29-10, anulada).
+- **El detalle del Excel de Aliclik (03-11-2026, owner, `0304`).** La API de
+  Aliclik solo da tres estados (entrega, despacho, llamada): «CANCEL ·
+  TO_RETURN · CONFIRMED» no dice por qué. El Excel del portal sí: «SUB ESTADO»
+  (DE VIAJE, POR CLIENTE, NO CONFIRMADO, DEVOLUCIÓN EXCESIVA, FUERA DE
+  COBERTURA, ANULADO POR MOTORIZADO) y «ÚLTIMO COMENTARIO MOTORIZADO». Al
+  subirlo en «Subir reporte», Kapta guarda los dos en la guía
+  (`aliclik_sub_status`, `aliclik_rider_comment`), con lo que diga el reporte
+  más reciente; el comentario se limpia de «-», «.» y letras sueltas
+  (`cleanRiderComment`). Se ven en la ficha del envío («Aliclik: de viaje ·
+  «…»») y en la línea del fallo de Repro Lima, y el subestado decide el motivo
+  de la cadena de reintentos (§9.5). Para tenerlos, el Excel se sube a diario.
+  Una sonda temporal (`lib/aliclik-api-shape.ts`, hasta el 10-11-2026) revisa
+  si la API también los trae con otro nombre.
 - **Siempre entrega Normal, nunca Express (03-11-2026, decisión del owner).**
   La cotización de Aliclik marca `flagDeliveryExpress` en el transporte que
   *puede* ir Express (ALIDRIVER en Lima, p. ej. Ventanilla en #KP200108) con
@@ -3032,7 +3045,11 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Entran** «no contesta», «no estaba» y «otro». **No entran** el rechazo en
   puerta, el reprogramado, la dirección errada ni «sin dinero»: siguen en Repro
   Lima como siempre. El motivo de Aliclik sale de su estado (`REFUSED` rechazo,
-  `RESCHEDULED` reprogramado, `NOT_RESPOND` no contestó, lo demás «otro»); el de
+  `RESCHEDULED` reprogramado, `NOT_RESPOND` no contestó, lo demás «otro»),
+  salvo que el «SUB ESTADO» del Excel de Aliclik diga más (03-11-2026): «DE
+  VIAJE» y «POR CLIENTE» cuentan como reprogramado (hay que llamar, no
+  reintentar al día siguiente) y «FUERA DE COBERTURA» como dirección errada;
+  el de
   Urpi, del resultado y el motivo en texto libre de su último reporte.
 - **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
   pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un

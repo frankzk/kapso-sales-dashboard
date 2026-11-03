@@ -150,6 +150,9 @@ export interface ReproShipmentRow {
   swayp_state: number | null;
   /** Aliclik: el transporte de la guía (AUTOECOM, ALIDRIVER), para la cadena de reintentos. */
   aliclik_transport_name?: string | null;
+  /** Aliclik, del Excel (0304): «SUB ESTADO» y el último comentario del motorizado. */
+  aliclik_sub_status?: string | null;
+  aliclik_rider_comment?: string | null;
   returned_at: string | null;
   dispatched_at: string | null;
   updated_at: string | null;
@@ -159,7 +162,7 @@ export interface ReproShipmentRow {
 const SHIPMENT_COLUMNS =
   "id,order_id,store_id,courier,created_via,delivery_status,custody_state,custody_transferred_at," +
   "output_number,output_code,guide_code,status_category,reported_status,swayp_state,returned_at," +
-  "dispatched_at,updated_at,closed_at,aliclik_transport_name";
+  "dispatched_at,updated_at,closed_at,aliclik_transport_name,aliclik_sub_status,aliclik_rider_comment";
 
 /** Una parada «No entregado», con su ruta y su motorizado. */
 export interface ReproStopRow {
@@ -294,7 +297,7 @@ function chainAttempts(
     if (!at) continue;
     const courier = (output.courier ?? "").trim().toLowerCase();
     if (courier === "aliclik") {
-      attempts.push({ carrier: aliclikCarrier(output.aliclik_transport_name), reason: aliclikChainReason(output.reported_status), at });
+      attempts.push({ carrier: aliclikCarrier(output.aliclik_transport_name), reason: aliclikChainReason(output.reported_status, output.aliclik_sub_status), at });
     } else if (courier === "urpi") {
       attempts.push({ carrier: "urpi", reason: urpiChainReason(urpiLast?.result_code, urpiLast?.reason), at });
     } else {

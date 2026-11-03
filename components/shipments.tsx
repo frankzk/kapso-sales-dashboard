@@ -74,7 +74,7 @@ import {
   type CourierReportResult,
   type RerouteDisposition,
 } from "@/lib/shipments";
-import { motivoParaMostrar } from "@/lib/aliclik-status";
+import { courierDetail, motivoParaMostrar } from "@/lib/aliclik-status";
 import { normalizeDepartment } from "@/lib/peru-departamentos";
 import {
   REPRO_COVERAGE_OPTIONS,
@@ -3125,7 +3125,17 @@ function ShipmentDrawer({
                     Va en la ficha que se lee mientras suena el teléfono. */}
                 {(() => {
                   const m = motivoParaMostrar(detail.shipment);
-                  if (!m) return null;
+                  // Lo que el Excel de Aliclik añade (0304): subestado y comentario.
+                  const extra = courierDetail(detail.shipment.aliclik_sub_status, detail.shipment.aliclik_rider_comment).replace(/^ · /, "");
+                  if (!m && !extra) return null;
+                  if (!m) {
+                    return (
+                      <div>
+                        <p className={DRAWER_KEY}>Detalle de Aliclik</p>
+                        <p className="text-sm leading-5 text-ink-900 [overflow-wrap:anywhere]">{extra}</p>
+                      </div>
+                    );
+                  }
                   return (
                     <div>
                       <p className={DRAWER_KEY}>Cómo terminó el intento anterior</p>
@@ -3137,6 +3147,7 @@ function ShipmentDrawer({
                       >
                         {keepDots(m.texto)}
                       </p>
+                      {extra && <p className="mt-0.5 text-[13px] leading-5 text-ink-700 [overflow-wrap:anywhere]">Aliclik: {extra}</p>}
                       {m.vioElProducto && (
                         <p className="mt-0.5 text-[13px] leading-5 text-crit-fg">
                           Vio el producto y no quedó: normalmente no se reenvía.
