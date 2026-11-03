@@ -67,7 +67,24 @@ export type LimaRetryChain =
       /** El primer intento de la cadena. */
       startedAt: string;
     }
-  | { state: "fuera"; why: "sin_cadena" | "motivo" | "agotada" | "vencida"; failed: ChainAttempt | null };
+  | { state: "fuera"; why: "sin_cadena" | "motivo" | "agotada" | "vencida" | "descartada"; failed: ChainAttempt | null };
+
+/** Los hechos del historial que deja la bandeja (entrega 2, 03-11-2026). */
+export const CHAIN_EVENT_KINDS = {
+  /** «Aprobar»: se creó la guía de Aliclik del reintento. */
+  approved: "lima_retry_approved",
+  /** «A Repro Lima»: alguien lo sacó de la cadena, con motivo. */
+  dismissed: "lima_retry_dismissed",
+} as const;
+
+/**
+ * La cadena, salvo que alguien la haya sacado («A Repro Lima») después del
+ * último fallo: entonces sigue Repro Lima. Un fallo nuevo vuelve a abrirla. Pura.
+ */
+export function withDismissal(chain: LimaRetryChain, dismissedAt: string | null | undefined): LimaRetryChain {
+  if (chain.state !== "siguiente" || !dismissedAt) return chain;
+  return Date.parse(dismissedAt) >= Date.parse(chain.failed.at) ? { state: "fuera", why: "descartada", failed: chain.failed } : chain;
+}
 
 function isChainReason(reason: string | null | undefined): reason is ChainReason {
   return (CHAIN_REASONS as readonly string[]).includes(reason ?? "");

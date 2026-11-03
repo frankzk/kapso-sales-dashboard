@@ -16,6 +16,7 @@ import { limaClock } from "@/lib/grupo-gf-courier";
 import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
+import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, pendingKey, pendingMatches, togglePendingKeys, type LimaAttentionFilter, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
@@ -187,6 +188,38 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
     return <OpsButton size={size} className="pointer-coarse:h-11" disabled={loadingOrder !== null} onClick={() => void attend(row)}>{loadingOrder === row.orderId ? "Abriendo…" : "Atender"}</OpsButton>;
   }
 
+  // «Aprobar todos» (entrega 2): los de la bandeja con el paquete en oficina,
+  // uno por uno por el mismo camino que «Aprobar»; al final, el resumen.
+  const [bulk, setBulk] = useState<{ done: number; total: number } | null>(null);
+  const readyToApprove = list === "reintentos_aliclik"
+    ? inQueue.filter((row) => caseById.get(row.orderId)?.retryChain?.inOffice)
+    : [];
+  async function approveAll() {
+    const rows = readyToApprove;
+    if (!rows.length || bulk) return;
+    if (!window.confirm(`Se crearán ${rows.length} guías de Aliclik. ¿Seguir?`)) return;
+    const failed: string[] = [];
+    let created = 0;
+    setBulk({ done: 0, total: rows.length });
+    for (const [i, row] of rows.entries()) {
+      try {
+        const result = await approveAliclikRetry(row.orderId);
+        if (result.error) failed.push(`${row.orderName}: ${result.error}`);
+        else created += 1;
+      } catch {
+        failed.push(`${row.orderName}: no se pudo crear (error de conexión).`);
+      }
+      setBulk({ done: i + 1, total: rows.length });
+    }
+    setBulk(null);
+    setFeedback({
+      kind: failed.length ? "error" : "notice",
+      text: `Guías creadas: ${created} de ${rows.length}.`,
+      extra: failed.length ? failed.join(" · ") : null,
+    });
+    refresh();
+  }
+
   const selectedGroup = [...LIMA_QUEUE_CARDS, ...LIMA_FOLLOWUP_FILTERS].find((c) => c.key === list);
   const emptyText = query.trim()
     ? `Ningún pedido coincide con «${query.trim()}».`
@@ -251,6 +284,11 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
               <ChoiceChip key={f.key} label={f.label} count={counts[f.key]} title={f.hint} active={list === f.key} onClick={() => chooseList(list === f.key ? "todos" : f.key)} />
             ))}
           </div>
+          {list === "reintentos_aliclik" && (
+            <OpsButton size="sm" variant="primary" disabled={!readyToApprove.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
+              {bulk ? `Creando ${bulk.done} de ${bulk.total}…` : `Aprobar todos con paquete en oficina (${readyToApprove.length})`}
+            </OpsButton>
+          )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">
             <b className="font-semibold text-ink-900">{inQueue.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega
           </p>
