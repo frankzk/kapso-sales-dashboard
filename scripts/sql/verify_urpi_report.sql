@@ -1,5 +1,6 @@
 -- ⚠️  THROWAWAY TEST CLUSTERS ONLY — never run against a real Supabase DB.
--- Verifica 0229_urpi_report.sql sobre un Postgres vacío:
+-- Verifica 0229_urpi_report.sql (y 0302, el vínculo por la programación) sobre
+-- un Postgres vacío:
 --   psql -v ON_ERROR_STOP=1 -f scripts/sql/verify_urpi_report.sql
 -- (lo levanta scripts/verify-urpi-report.sh). Termina con «urpi_report: ok».
 \set ON_ERROR_STOP on
@@ -30,6 +31,8 @@ insert into orders values ('b1111111-0000-0000-0000-000000000001', '11111111-111
 
 \ir ../../db/migrations/0229_urpi_report.sql
 \ir ../../db/migrations/0229_urpi_report.sql
+\ir ../../db/migrations/0302_urpi_link_programacion.sql
+\ir ../../db/migrations/0302_urpi_link_programacion.sql
 
 create function pg_temp.check(ok boolean, what text) returns void language plpgsql as $$
 begin if not ok then raise exception 'FALLA: %', what; end if; end $$;
@@ -93,4 +96,11 @@ reset role;
 set role anon;
 select pg_temp.check(pg_temp.fails($q$select * from urpi_report_rows$q$, 'permission denied'), 'anon no lee');
 reset role;
+
+-- 0302: el vínculo por la programación se guarda; un método inventado no.
+select save_urpi_report_batch('0a000000-0000-0000-0000-000000000001', 'c0000000-0000-0000-0000-000000000002', $j$[
+  {"urpi_row":40,"previous_row":null,"report_date":"2026-11-02","result_code":"reprogramado","phone":"900000004","data":{"r":"P"},"digest":"7777777777777777777777777777777777777777777777777777777777777777","order_id":"b1111111-0000-0000-0000-000000000001","store_id":"11111111-1111-1111-1111-111111111111","link_status":"vinculado","link_method":"programacion","candidate_order_ids":[]}
+]$j$::jsonb);
+select pg_temp.check((select link_method from urpi_report_rows where urpi_row = 40) = 'programacion', 'vínculo por la programación');
+select pg_temp.check(pg_temp.fails($q$update urpi_report_rows set link_method = 'adivinado' where urpi_row = 40$q$, 'check'), 'método fuera del vocabulario');
 select 'urpi_report: ok' as resultado;

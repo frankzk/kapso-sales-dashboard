@@ -605,4 +605,6 @@
 \ir migrations/0300_order_master_product_titles.sql
 \echo 'Applying 0301_order_geocodes.sql'
 \ir migrations/0301_order_geocodes.sql
+\echo 'Applying 0302_urpi_link_programacion.sql'
+\ir migrations/0302_urpi_link_programacion.sql
 \echo 'Done.'

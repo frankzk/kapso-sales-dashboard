@@ -117,7 +117,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       <p className="mt-2 text-sm text-slate-600">{canImport ? "Carga el export de «Reporte del mes – detallado» para empezar." : "Pide a quien gestiona Urpi que cargue su reporte."}</p>
     </div> : <>
       {salidaPending.length > 0 && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-        <span>{salidaPending.length} pedido(s) entregados por Urpi siguen con su salida «Por definir» pendiente, y la mesa de cierre los ve como «Salida adicional activa».</span>
+        <span>{salidaPending.length} pedido(s) entregados por Urpi siguen con su salida sin cerrar («Por definir» o de Urpi en ruta), y la mesa de cierre los ve como «Salida adicional activa».</span>
         {canApply && <button className={button} disabled={busy} onClick={() => run(() => applyUrpiDeliveries(orgId, salidaPending))}>{pending ? "Actualizando…" : "Pasar a salida de Urpi entregada"}</button>}
       </div>}
       <div role="tablist" aria-label="Resultados de Urpi" className="flex flex-wrap gap-2">
@@ -157,7 +157,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
                 : <LinkPicker shipment={shipment} canLink={canImport} busy={busy} code={codes[shipment.key] ?? ""}
                     onCode={(value) => setCodes((prev) => ({ ...prev, [shipment.key]: value }))}
                     onLink={(ref) => run(() => linkUrpiReportRow(orgId, latest.urpi_row, ref))} />}
-                {order && latest.link_method && <div className="text-xs text-slate-500">{latest.link_method === "manual" ? "Vinculado a mano" : "Vinculado por teléfono"}</div>}</td>
+                {order && latest.link_method && <div className="text-xs text-slate-500">{latest.link_method === "manual" ? "Vinculado a mano" : latest.link_method === "programacion" ? "Vinculado por la programación" : "Vinculado por teléfono"}</div>}</td>
               <td className="px-4 py-3"><div className="font-medium">{data.recipient ?? "Sin nombre"}</div><div className="text-xs text-slate-500">{data.phone ?? "Sin teléfono válido"}</div></td>
               <td className="max-w-72 px-4 py-3">
                 <div className={`font-semibold ${RESULT_TONE[latest.result_code] ?? "text-slate-700"}`}>{latest.result_code === "otro" ? data.resultWritten : URPI_RESULT_LABEL[latest.result_code]}</div>
@@ -189,7 +189,7 @@ export function UrpiResultsBoard({ nav, orgId, canImport, canApply, days, lastIm
       </div>
       <div className="flex items-center justify-between text-sm text-slate-500"><span>{visible.length ? page * 50 + 1 : 0}–{Math.min((page + 1) * 50, visible.length)} de {visible.length}</span><div className="flex gap-2"><button className={button} disabled={page === 0} onClick={() => setPage((value) => value - 1)}>Anterior</button><button className={button} disabled={(page + 1) * 50 >= visible.length} onClick={() => setPage((value) => value + 1)}>Siguiente</button></div></div>
     </>}
-    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; con varios, decides tú. Al cargar el reporte, los entregados se marcan solos en el Master si quien carga tiene permiso para editarlo, y la salida «Por definir» del pedido pasa a ser la salida de Urpi entregada. Cancelados y reprogramados quedan registrados y no cambian el estado del pedido.</p>
+    <p className="border-t border-slate-200 pt-4 text-xs text-slate-500">Urpi no envía el código de pedido: el vínculo se hace por teléfono con un único pedido de los 45 días previos al envío; si el teléfono no basta, decide la programación enviada ese día (lleva el código); si tampoco, decides tú. Al cargar el reporte, los entregados se marcan solos en el Master si quien carga tiene permiso para editarlo, y la salida «Por definir» del pedido pasa a ser la salida de Urpi entregada. Cancelados y reprogramados quedan registrados y no cambian el estado del pedido.</p>
   </div>;
 }
 

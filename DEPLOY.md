@@ -5604,3 +5604,32 @@ vuelven a calcularse con la versión anterior en la siguiente pasada del cron.
   - `chatby_auto_settings.geocode_enabled`, encendido por defecto.
 - **Aplicarla antes del código.** Sin la columna, la pasada no consulta a Google (`geocode_enabled` se lee como apagado).
 - **Usa** `GOOGLE_GEOCODING_API_KEY` (ya en Vercel) y el cupo de 400 por día de «v3 requests per day».
+
+### 03-11-2026 · La programación de Urpi registra el despacho (0302, MOM §30.10 y §30.11)
+
+Decisión del owner tras la auditoría del 26/10 al 02/11: 85 de 101 pedidos
+programados a Urpi no tenían salida de Urpi en Kapta. Al guardar una
+programación, la caja «Por definir» del pedido pasa a salida de Urpi en ruta
+(`lib/urpi-dispatch.ts`); cuando Urpi reporta la entrega, esa salida se cierra.
+La programación también desempata el vínculo del reporte de Urpi
+(`link_method = programacion`). Sin `MOM_RESOLUTION_VERSION` nuevo, crons ni
+variables de entorno.
+
+1. **Migración `0302_urpi_link_programacion.sql`**, a mano, ANTES del código.
+   Solo cambia la restricción de `urpi_report_rows.link_method` para admitir
+   `programacion`; no toca filas. Es idempotente.
+2. Comprobar:
+   ```sql
+   select pg_get_constraintdef(oid) from pg_constraint
+   where conname = 'urpi_report_rows_link_method_check';
+   ```
+   Debe incluir `'programacion'`.
+3. Desplegar el código. Si sale antes que la migración, una carga del reporte
+   con un vínculo por la programación falla al guardar ese lote.
+4. **Avisar** a quien programa Urpi: cargar el Excel del mes cada día (o
+   configurar la lectura de Google). El aviso de la carga nombra los pedidos
+   con otra salida viva o sin caja «Por definir» para revisarlos a mano.
+
+**Marcha atrás.** Revertir el commit. Las salidas ya pasadas a Urpi en ruta se
+quedan como están (son hechos registrados); la restricción ampliada puede
+quedarse.

@@ -59,7 +59,7 @@ describe("(G) la pantalla de resultados los suma a la ventana", () => {
   });
 
   it("decide la salida pendiente con la misma regla que el botón (planUrpiSalida)", () => {
-    expect(page).toContain('planUrpiSalida(salidas.get(id) ?? []).kind === "rellenar"');
+    expect(page).toContain("urpiSalidaPending(planUrpiSalida(salidas.get(id) ?? []))");
     expect(page).toContain("facts.get(id)!.salida_pending = pending.has(id);");
   });
 });

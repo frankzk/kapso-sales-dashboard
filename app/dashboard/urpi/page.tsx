@@ -12,7 +12,7 @@ import type { UrpiSource, UrpiSnapshot } from "@/lib/urpi-programming-db";
 import { UrpiResultsBoard } from "@/components/urpi-results-board";
 import { UrpiViewNav } from "@/components/urpi-view-nav";
 import { buildUrpiShipments, URPI_OBSERVATION_RESOLVED, type UrpiOrderFacts, type UrpiStoredRow } from "@/lib/urpi-report-view";
-import { planUrpiSalida, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
+import { planUrpiSalida, urpiSalidaPending, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
 import { olderDeliveredOrderIds, olderUrpiFollowUp, type UrpiAttemptRef, type UrpiOlderFact } from "@/lib/urpi-results-window";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 
@@ -128,7 +128,7 @@ async function salidaPendingIds(sb: Supabase, delivered: readonly string[]): Pro
       .select("id,order_id,courier,created_via,delivery_status,custody_state,custody_transferred_at,returned_at,output_number").in("order_id", delivered.slice(i, i + 200));
     for (const row of (data ?? []) as (UrpiSalidaCandidate & { order_id: string })[]) salidas.set(row.order_id, [...(salidas.get(row.order_id) ?? []), row]);
   }
-  return new Set(delivered.filter((id) => planUrpiSalida(salidas.get(id) ?? []).kind === "rellenar"));
+  return new Set(delivered.filter((id) => urpiSalidaPending(planUrpiSalida(salidas.get(id) ?? []))));
 }
 
 /**

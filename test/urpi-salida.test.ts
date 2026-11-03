@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fillUrpiSalidas, planUrpiSalida, urpiSalidaRow, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
+import { fillUrpiSalidas, planUrpiSalida, urpiSalidaCloseRow, urpiSalidaPending, urpiSalidaRow, type UrpiSalidaCandidate } from "@/lib/urpi-salida";
 
 const tbd = (over: Partial<UrpiSalidaCandidate> = {}): UrpiSalidaCandidate => ({
   id: "s1", courier: "por_definir", created_via: "mom_manual_route", delivery_status: "pendiente", custody_state: "empresa",
@@ -24,6 +24,15 @@ describe("qué salida se lleva la entrega de Urpi", () => {
   it("sin salida no se inventa una; si ya es de Urpi, nada que hacer", () => {
     expect(planUrpiSalida([]).kind).toBe("sin_salida");
     expect(planUrpiSalida([tbd({ courier: "urpi", delivery_status: "entregado" })]).kind).toBe("ya_es_urpi");
+  });
+  it("si la programación ya la dejó como salida de Urpi en ruta, se cierra esa, aunque haya otra viva (03-11-2026)", () => {
+    const enRuta = tbd({ id: "u1", courier: "urpi", created_via: "urpi_programacion", delivery_status: "en_ruta" });
+    expect(planUrpiSalida([enRuta])).toMatchObject({ kind: "cerrar", salida: { id: "u1" } });
+    expect(planUrpiSalida([enRuta, tbd({ id: "g1", courier: "propio", created_via: "grupo_gf_courier", custody_state: "courier" })])).toMatchObject({ kind: "cerrar", salida: { id: "u1" } });
+    expect(urpiSalidaPending(planUrpiSalida([enRuta]))).toBe(true);
+    expect(urpiSalidaPending(planUrpiSalida([tbd({ courier: "urpi", delivery_status: "entregado" })]))).toBe(false);
+    expect(urpiSalidaCloseRow("2026-11-02")).toEqual({ delivery_status: "entregado", status_category: "delivered", delivered_source: "urpi_report", closed_at: "2026-11-02T17:00:00.000Z" });
+    expect(urpiSalidaCloseRow(null)).not.toHaveProperty("closed_at");
   });
   it("la fila: courier Urpi, entregada, con su origen, el día del primer intento y el de la entrega", () => {
     expect(urpiSalidaRow("#KP136785", "5f7bd799-0000-4000-8000-000000000000", "2026-09-26", "2026-09-29")).toEqual({
@@ -84,13 +93,24 @@ describe("rellenar la salida en la base", () => {
       { orderId: "o2", orderName: "#KP2", dispatchedOn: "2026-10-01", deliveredOn: "2026-10-01" },
       { orderId: "o3", orderName: "#KP3", dispatchedOn: "2026-10-01", deliveredOn: "2026-10-01" },
     ]);
-    expect(result).toEqual({ filled: ["o1"], sinSalida: ["o3"], otraSalidaViva: ["o2"], errors: [] });
+    expect(result).toEqual({ filled: ["o1"], closed: [], sinSalida: ["o3"], otraSalidaViva: ["o2"], errors: [] });
     expect(shipments[0]).toMatchObject({
       courier: "urpi", created_via: "urpi_report", delivery_status: "entregado", delivered_source: "urpi_report", output_code: "KP1-S01", custody_state: "empresa", output_number: 1,
       dispatched_at: "2026-10-01T17:00:00.000Z", closed_at: "2026-10-03T17:00:00.000Z",
     });
     expect(shipments[1]).toMatchObject({ courier: "tanders", delivery_status: "en_ruta" });
     expect(events).toEqual([expect.objectContaining({ kind: "route_output_filled", order_id: "o1", courier: "urpi", shipment_id: "aaaaaaaa-0000-4000-8000-000000000001" })]);
+  });
+  it("cierra la salida de Urpi en ruta sin tocar courier, guía ni despacho, y deja su estado en el historial", async () => {
+    const shipments = [{ ...tbd({ id: "cccccccc-0000-4000-8000-000000000003", courier: "urpi", created_via: "urpi_programacion", delivery_status: "en_ruta" }),
+      order_id: "o1", store_id: "kenku", guide_code: "MOM-KP1-URPI-CCCCCCCC", dispatched_at: "2026-11-02T17:00:00.000Z" }];
+    const { admin, events } = fakeAdmin(shipments);
+    const result = await fillUrpiSalidas(admin, [{ orderId: "o1", orderName: "#KP1", dispatchedOn: "2026-11-02", deliveredOn: "2026-11-03" }]);
+    expect(result).toEqual({ filled: [], closed: ["o1"], sinSalida: [], otraSalidaViva: [], errors: [] });
+    expect(shipments[0]).toMatchObject({ courier: "urpi", created_via: "urpi_programacion", guide_code: "MOM-KP1-URPI-CCCCCCCC", delivery_status: "entregado",
+      delivered_source: "urpi_report", dispatched_at: "2026-11-02T17:00:00.000Z", closed_at: "2026-11-03T17:00:00.000Z" });
+    expect(events).toEqual([expect.objectContaining({ kind: "courier_status", order_id: "o1", courier: "urpi", shipment_id: "cccccccc-0000-4000-8000-000000000003",
+      previous_status: "en_ruta", new_status: "entregado", occurred_at: "2026-11-03T17:00:00.000Z" })]);
   });
   it("si entre la lectura y la escritura la caja cambió, no crea otra", async () => {
     const shipments = [{ ...tbd({ id: "aaaaaaaa-0000-4000-8000-000000000001" }), order_id: "o1", store_id: "kenku" }];

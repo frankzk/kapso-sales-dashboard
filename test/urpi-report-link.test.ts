@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveUrpiLinks, urpiStoreFromHint, type UrpiCandidateOrder, type UrpiLink } from "@/lib/urpi-report-link";
+import { buildUrpiProgrammedIndex, resolveUrpiLinks, urpiProgrammedKey, urpiStoreFromHint, type UrpiCandidateOrder, type UrpiLink } from "@/lib/urpi-report-link";
 import { buildUrpiShipments, type UrpiOrderFacts, type UrpiStoredRow } from "@/lib/urpi-report-view";
 import type { UrpiReportRow } from "@/lib/urpi-report";
 
@@ -51,6 +51,34 @@ describe("vínculo por teléfono de un reporte de Urpi", () => {
   it("la cadena puede apuntar a una fila de una carga anterior", () => {
     const before: UrpiLink = { orderId: "o1", storeId: "kenku", linkStatus: "vinculado", linkMethod: "telefono", candidates: [] };
     expect(resolveUrpiLinks([row(5, { previousRow: 4 })], [], new Map([[4, before]]), stores).get(5)).toMatchObject({ orderId: "o1", linkMethod: "cadena" });
+  });
+  it("si el teléfono no basta, decide la programación enviada ese día (03-11-2026)", () => {
+    const orders = [order("o1", "2026-09-20T15:00:00Z"), order("o2", "2026-09-28T15:00:00Z", { storeId: "aurela" })];
+    const programmed = new Map([[urpiProgrammedKey("2026-10-03", "900000001"), [{ orderId: "o2", storeId: "aurela" }]]]);
+    expect(resolveUrpiLinks([row(1)], orders, new Map(), stores, programmed).get(1)).toEqual({ orderId: "o2", storeId: "aurela", linkStatus: "vinculado", linkMethod: "programacion", candidates: [] });
+    // Sin pedido en la ventana (pedido viejo reenviado): la programación lo nombra por código.
+    const old = new Map([[urpiProgrammedKey("2026-10-03", "900000001"), [{ orderId: "viejo", storeId: "kenku" }]]]);
+    expect(resolveUrpiLinks([row(1)], [], new Map(), stores, old).get(1)).toMatchObject({ orderId: "viejo", linkMethod: "programacion" });
+    // Los reintentos lo heredan por cadena.
+    expect(resolveUrpiLinks([row(1), row(2, { previousRow: 1, reportDate: "2026-10-05" })], orders, new Map(), stores, programmed).get(2)).toMatchObject({ orderId: "o2", linkMethod: "cadena" });
+  });
+  it("la programación solo desempata: no cambia un vínculo por teléfono único ni elige entre dos programados", () => {
+    const programmed = new Map([[urpiProgrammedKey("2026-10-03", "900000001"), [{ orderId: "otro", storeId: "kenku" }]]]);
+    expect(resolveUrpiLinks([row(1)], [order("o1", "2026-09-20T15:00:00Z")], new Map(), stores, programmed).get(1)).toMatchObject({ orderId: "o1", linkMethod: "telefono" });
+    const two = new Map([[urpiProgrammedKey("2026-10-03", "900000001"), [{ orderId: "o1", storeId: "kenku" }, { orderId: "o2", storeId: "kenku" }]]]);
+    expect(resolveUrpiLinks([row(1)], [order("o1", "2026-09-20T15:00:00Z"), order("o2", "2026-09-28T15:00:00Z")], new Map(), stores, two).get(1)!.linkStatus).toBe("varios");
+    // Otro día no cuenta.
+    const otherDay = new Map([[urpiProgrammedKey("2026-10-02", "900000001"), [{ orderId: "o2", storeId: "kenku" }]]]);
+    expect(resolveUrpiLinks([row(1)], [order("o1", "2026-09-20T15:00:00Z"), order("o2", "2026-09-28T15:00:00Z")], new Map(), stores, otherDay).get(1)!.linkStatus).toBe("varios");
+  });
+  it("el índice sale de las programaciones guardadas: teléfono normalizado y solo filas vinculadas", () => {
+    const index = buildUrpiProgrammedIndex([{ storeId: "kenku", payload: { rows: [
+      { orderId: "o1", date: "2026-11-02", phone: "+51 994 225 072" },
+      { orderId: "o1", date: "2026-11-02", phone: "994225072" },
+      { orderId: null, date: "2026-11-02", phone: "953954409" },
+      { orderId: "o3", date: "2026-11-02", phone: "12345" },
+    ] as any } }]);
+    expect([...index]).toEqual([[urpiProgrammedKey("2026-11-02", "994225072"), [{ orderId: "o1", storeId: "kenku" }]]]);
   });
   it("una cadena circular no se cuelga", () => {
     const links = resolveUrpiLinks([row(1, { previousRow: 2 }), row(2, { previousRow: 1 })], [order("o1", "2026-09-20T15:00:00Z")], new Map(), stores);

@@ -7,6 +7,8 @@ import { saveUrpiProgramming } from "@/lib/urpi-programming-db";
 
 vi.mock("@/lib/urpi-google-sheets", () => ({ readUrpiGoogleWorkbook: vi.fn(), urpiGoogleConfigured: vi.fn(() => true) }));
 vi.mock("@/lib/urpi-programming-db", () => ({ saveUrpiProgramming: vi.fn() }));
+vi.mock("@/lib/urpi-dispatch", () => ({ registerUrpiDispatches: vi.fn(async () => ({ filled: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], errors: [] })) }));
+const payload = { rows: [], tabs: [], unassigned: [] };
 const header = ["Fecha de entrega", "Tipo de Envio", "Código de pedido", "Destinatario", "Número de contacto", "Provincia", "Distrito", "Dirección", "Producto a entregar", "Monto a Cobrar"];
 const workbook = { title: "Octubre", tabs: [{ title: "01/10/26", sheetId: 42, values: [header, ["01/10/26", "Primer Turno", "KP123", "Cliente", "900000000", "Lima", "Rímac", "Dirección", "Producto", 149], ["01/10/26", "Primer Turno", "AUR123", "Cliente", "900000000", "Lima", "Rímac", "Dirección", "Producto", 149]] }] };
 const source = (id: string, prefix = "KP") => ({ id, store_id: id, spreadsheet_id: "123456789012345678901", month: "2026-10", order_prefix: prefix, current_snapshot_id: null });
@@ -27,7 +29,7 @@ beforeEach(() => {
   vi.stubEnv("URPI_AUTO_SYNC_ENABLED", "true");
   vi.mocked(urpiGoogleConfigured).mockReturnValue(true);
   vi.mocked(readUrpiGoogleWorkbook).mockResolvedValue(workbook);
-  vi.mocked(saveUrpiProgramming).mockResolvedValue({ changed: false, rows: 1, linked: 0 });
+  vi.mocked(saveUrpiProgramming).mockResolvedValue({ changed: false, rows: 1, linked: 0, payload });
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
@@ -46,7 +48,7 @@ describe("lectura automática Urpi", () => {
   });
   it("lee una vez el libro compartido, separa prefijos y usa actor de sistema", async () => {
     const db = database([source("kenku"), source("aurela", "AUR")]);
-    vi.mocked(saveUrpiProgramming).mockResolvedValueOnce({ changed: true, rows: 1, linked: 0 });
+    vi.mocked(saveUrpiProgramming).mockResolvedValueOnce({ changed: true, rows: 1, linked: 0, payload });
     expect(await syncUrpiAutomatically(db.admin)).toMatchObject({ scanned: 2, changed: 1, unchanged: 1, failed: 0 });
     expect(readUrpiGoogleWorkbook).toHaveBeenCalledTimes(1);
     expect(vi.mocked(saveUrpiProgramming).mock.calls.map((call) => call[2].rows[0]?.orderCode)).toEqual(["KP123", "AUR123"]);
@@ -73,13 +75,13 @@ describe("lectura automática Urpi", () => {
   });
   it("mantiene la fecha de lectura original al reutilizar el libro", async () => {
     const db = database([source("kenku"), source("aurela", "AUR")]);
-    vi.mocked(saveUrpiProgramming).mockImplementation(async () => { vi.setSystemTime(new Date("2026-10-01T18:01:00Z")); return { changed: false, rows: 1, linked: 0 }; });
+    vi.mocked(saveUrpiProgramming).mockImplementation(async () => { vi.setSystemTime(new Date("2026-10-01T18:01:00Z")); return { changed: false, rows: 1, linked: 0, payload }; });
     await syncUrpiAutomatically(db.admin);
     expect(vi.mocked(saveUrpiProgramming).mock.calls[1]?.[3].startedAt).toBe("2026-10-01T18:00:00.000Z");
   });
   it("difiere el resto al agotar el tiempo, sin marcarlo como leído", async () => {
     const db = database([source("kenku"), source("other")]);
-    vi.mocked(saveUrpiProgramming).mockImplementationOnce(async () => { vi.setSystemTime(new Date("2026-10-01T18:03:01Z")); return { changed: false, rows: 1, linked: 0 }; });
+    vi.mocked(saveUrpiProgramming).mockImplementationOnce(async () => { vi.setSystemTime(new Date("2026-10-01T18:03:01Z")); return { changed: false, rows: 1, linked: 0, payload }; });
     expect(await syncUrpiAutomatically(db.admin)).toMatchObject({ scanned: 1, deferred: 1 });
     expect(saveUrpiProgramming).toHaveBeenCalledTimes(1);
   });
