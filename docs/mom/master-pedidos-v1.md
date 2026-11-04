@@ -4415,6 +4415,21 @@ Reglas:
   la excepción de riesgo de pago.
 - **Sin código ISO no hay puerta.** Son 8.264 pedidos de 23.034; para ellos nada
   cambia. Bloquear con una sola fuente sería el mismo error que esta regla evita.
+- **Lima y Callao son un solo destino para esta regla (04-11-2026).** Aliclik
+  archiva los siete distritos del Callao bajo el departamento «Lima», y la
+  clienta del Callao escribe «Callao» —la provincia— como ciudad. #KP142342
+  eligió Callao, su pin cayó en Ventanilla y la guía se bloqueaba por un pin
+  correcto. En 30 días, 70 de 72 pedidos con `PE-CAL` escribieron «Callao». Si
+  el pin cae en un distrito del Callao y su departamento es Lima o Callao,
+  cualquiera de los dos en el desplegable lo respalda. Se exige el departamento
+  además del distrito porque Bellavista también existe en San Martín, Cajamarca y
+  Piura.
+- **La ubicación corregida por una persona también respalda el pin
+  (04-11-2026).** El aviso manda a «Ubicación y cobertura», y corregirla no
+  cambiaba nada: la regla solo leía el desplegable y la ciudad del checkout. Si
+  alguien fijó a mano el distrito (`geo_source = manual`) y es el del pin, la
+  guía se emite. Una ubicación deducida por Kapta no cuenta: tiene que haberla
+  mirado una persona.
 - **Kapta no mueve el pin sola**, aquí tampoco: acercarlo es decidir a dónde va
   el paquete, y eso lo hace una persona mirando la dirección.
 
