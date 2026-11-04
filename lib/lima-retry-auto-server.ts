@@ -13,9 +13,25 @@ import "server-only";
 // el candado propio de `createAliclikGuideFor` (`aliclik_order_requests`), que
 // también ataja a una persona pulsando «Aprobar» en ese momento.
 //
+// ANTES DE CREAR SE VUELVE A LEER (04-11-2026). La lista de candidatos se lee
+// al empezar y la pasada puede durar cuatro minutos. Con el renglón ya tomado,
+// se relee ESE pedido (hechos, caso, cadena, quién lo tiene) y la posición de
+// ESA variante (`retryRecheck`): si la tienda lo pasó «A Repro Lima», acordó
+// otra cosa, el owner apagó la variante o el paso cambió, no se crea y el
+// renglón se BORRA. Borrarlo —y no dejarlo en otro resultado— mantiene la
+// máquina de estados: el log no tiene un resultado «no tocaba» (0306 los
+// cierra con un check), «en curso» contaría para el tope sin haber creado
+// nada, y un resultado que se reintenta mentiría en «Hoy y ayer». Sin
+// renglón, el pedido queda como si esta pasada no lo hubiera tomado: si sigue
+// tocando, la siguiente lo toma con un insert nuevo; si no, ya no es
+// candidato. Solo se borra el renglón «en curso» propio (por id y resultado),
+// así que no pisa a otra pasada.
+//
 // QUÉ NO HACE. No llama ni decide nada que la bandeja no decidiera: si una
 // persona tiene el caso tomado en Repro Lima, espera; si Aliclik no ofrece el
-// transporte, pasa a Repro Lima como con «Aprobar».
+// transporte, pasa a Repro Lima como con «Aprobar». Si una regla de Kapta no
+// deja crear la guía (venta anulada, adelanto exigido, rechazos en la puerta,
+// salidas…), avisa una vez y lo pasa a Repro Lima: mañana diría lo mismo.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
@@ -28,6 +44,7 @@ import { telegramTarget } from "@/lib/aliclik-scheduled-server";
 import { escapeHtml, sendTelegramToAll } from "@/lib/telegram";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { loadReproFacts, retryChainOf, type ReproFacts } from "@/lib/repro-lima-access";
+import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
 import type { ReproOrderRow } from "@/lib/repro-lima-program";
 import { claimView } from "@/lib/repro-lima";
 import {
@@ -39,7 +56,9 @@ import {
   anyRetryVariantOn,
   retryCapLeft,
   retryModes,
+  retryKaptaBlockReason,
   retryPassOpen,
+  retryRecheck,
   retryVariantLabel,
   retryVariantOf,
   type RetryMode,
@@ -55,8 +74,19 @@ import {
 } from "@/lib/lima-retry-approve";
 import type { OrderMasterRow } from "@/lib/types";
 
-/** El tiempo de una pasada. Lo que no entra se intenta en la siguiente hora. */
+/**
+ * El tiempo de una pasada. Lo que no entra se intenta en la siguiente hora. La
+ * ruta del cron tiene 300 s (`maxDuration`); se corta 60 s antes porque una
+ * cotización o una creación en curso puede tardar hasta 20 s por intento.
+ */
 const TIME_BUDGET_MS = 240_000;
+/**
+ * El de «Simular ahora»: corre dentro de la acción de la página
+ * (`app/dashboard/automatizaciones/page.tsx`, `maxDuration = 300`), que además
+ * comprueba permisos antes y tiene que devolver la respuesta. Más margen que
+ * el cron: si se corta, muestra lo evaluado en vez de morir a los 300 s.
+ */
+const PREVIEW_TIME_BUDGET_MS = 200_000;
 
 const LOG = "lima_retry_auto_log";
 
@@ -82,6 +112,8 @@ export interface LimaRetryAutoOrgReport {
   /** Guías automáticas que quedan hoy, al terminar la pasada. */
   capLeft: number;
   items: LimaRetryAutoItem[];
+  /** Tomados y soltados sin crear: al releerlos ya no tocaba (`retryRecheck`). */
+  released: { orderId: string; orderName: string | null; reason: string }[];
 }
 
 export interface LimaRetryAutoReport {
@@ -123,12 +155,28 @@ export function retryFailureTelegram(input: {
   outcome: "fallo" | "incierto";
   error: string;
   url: string;
+  /** Con `incierto`: la guía que Aliclik SÍ creó y Kapta no pudo guardar. */
+  guide?: string | null;
+  /** Con `fallo`: una regla de Kapta no la deja crear y el pedido pasó a Repro Lima. */
+  kaptaBlock?: boolean;
 }): string {
   const reason = input.error.length > ALERT_REASON_MAX ? `${input.error.slice(0, ALERT_REASON_MAX - 1)}…` : input.error;
   const who = [input.customerName, input.place].filter(Boolean).join(" · ");
-  const title = input.outcome === "incierto"
-    ? "reintento Aliclik automático sin respuesta: revisar si se creó"
-    : "reintento Aliclik automático no creado";
+  const kind = retryFailureKind(input);
+  const title = {
+    sin_vincular: "reintento Aliclik automático creado en Aliclik pero sin guardar en Kapta",
+    incierto: "reintento Aliclik automático sin respuesta: revisar si se creó",
+    bloqueo_kapta: "reintento Aliclik automático bloqueado por Kapta: pasó a Repro Lima",
+    fallo: "reintento Aliclik automático no creado",
+  }[kind];
+  // Lo que hay que hacer. Con la guía ya en Aliclik, crearla «a mano» sería
+  // un segundo pedido real: se vincula o se revisa, nunca se crea otra vez.
+  const action = {
+    sin_vincular: `La guía ${input.guide ?? ""} ya existe en Aliclik: vincúlala o revísala a mano desde la ficha del pedido. No la crees otra vez:`,
+    incierto: "Revisa en Aliclik antes de crearla otra vez:",
+    bloqueo_kapta: "No se reintenta: la tienda lo atiende en Repro Lima como siempre.",
+    fallo: "Créala a mano desde Repro Lima o pásalo a Repro Lima:",
+  }[kind];
   return [
     `⚠️ <b>${escapeHtml(input.storeName)}</b> · ${title}`,
     `<b>${escapeHtml(input.orderName ?? "Pedido sin número")}</b>${who ? ` · ${escapeHtml(who)}` : ""}`,
@@ -136,12 +184,28 @@ export function retryFailureTelegram(input: {
     "",
     `Motivo: ${escapeHtml(reason)}`,
     "",
-    input.outcome === "incierto"
-      ? "Revisa en Aliclik antes de crearla otra vez:"
-      : "Créala a mano desde Repro Lima o pásalo a Repro Lima:",
+    escapeHtml(action),
     escapeHtml(input.url),
   ].join("\n");
 }
+
+/** Qué clase de aviso es: la guía existe sin guardar, sin respuesta, regla de Kapta o rechazo. Pura. */
+export function retryFailureKind(input: {
+  outcome: "fallo" | "incierto";
+  guide?: string | null;
+  kaptaBlock?: boolean;
+}): "sin_vincular" | "incierto" | "bloqueo_kapta" | "fallo" {
+  if (input.outcome === "incierto") return input.guide ? "sin_vincular" : "incierto";
+  return input.kaptaBlock ? "bloqueo_kapta" : "fallo";
+}
+
+const FAILURE_NOTE: Record<ReturnType<typeof retryFailureKind>, string> = {
+  sin_vincular:
+    "Aliclik creó la guía del reintento automático, pero Kapta no pudo guardarla. Vincúlala o revísala a mano desde la ficha; no la crees otra vez.",
+  incierto: "Aliclik no respondió al crear el reintento automático: puede haberse creado. Revísalo antes de crearlo otra vez.",
+  bloqueo_kapta: "Una regla de Kapta no deja crear el reintento Aliclik automático: el pedido pasó a Repro Lima y no se reintenta.",
+  fallo: "No se pudo crear el reintento Aliclik automático. Hay que crearlo a mano o pasarlo a Repro Lima.",
+};
 
 /** El texto que queda en el log por cada resultado del núcleo. Pura. */
 export function retryResultDetail(result: RetryApproveResult): string | null {
@@ -155,6 +219,8 @@ export function retryResultDetail(result: RetryApproveResult): string | null {
     case "creada":
       return null;
     default:
+      // La regla de Kapta saca el pedido de la cadena: el renglón lo dice.
+      if (result.stage === "creacion" && result.kaptaBlock) return `${result.error} Pasó a Repro Lima.`;
       return result.error;
   }
 }
@@ -177,6 +243,7 @@ async function recordFailure(
   variant: RetryVariant,
   outcome: "fallo" | "incierto",
   error: string,
+  extra: { guide?: string | null; kaptaBlock?: boolean } = {},
 ): Promise<void> {
   let telegram = false;
   try {
@@ -191,6 +258,7 @@ async function recordFailure(
         outcome,
         error,
         url: `${env.siteUrl()}/dashboard/pedidos?abrir=${encodeURIComponent(row.order_id)}`,
+        ...extra,
       }));
       telegram = res.sent > 0;
     }
@@ -205,12 +273,90 @@ async function recordFailure(
     actor: null,
     source: "system",
     courier: "aliclik",
+    ...(extra.guide ? { guide_code: extra.guide } : {}),
     reason: error.slice(0, 2000),
-    note: outcome === "incierto"
-      ? "Aliclik no respondió al crear el reintento automático: puede haberse creado. Revísalo antes de crearlo otra vez."
-      : "No se pudo crear el reintento Aliclik automático. Hay que crearlo a mano o pasarlo a Repro Lima.",
-    payload: { date: today, variant, outcome, telegram },
+    note: FAILURE_NOTE[retryFailureKind({ outcome, ...extra })],
+    payload: {
+      date: today, variant, outcome, telegram,
+      ...(extra.guide ? { guide: extra.guide } : {}),
+      ...(extra.kaptaBlock ? { kapta_block: true } : {}),
+    },
   });
+}
+
+/**
+ * Saca de la cadena, como sistema, un pedido que una regla de Kapta no deja
+ * crear: el mismo hecho que «A Repro Lima» (`lima_retry_dismissed`), sin
+ * persona. Sin esto la pasada volvía a tomarlo cada día, fallaba igual y
+ * volvía a avisar hasta que la cadena vencía.
+ */
+async function dismissForKaptaBlock(
+  admin: SupabaseClient,
+  c: Pick<Candidate, "row" | "chain" | "variant">,
+  error: string,
+): Promise<string | null> {
+  const { error: insertError } = await admin.from("order_events").insert({
+    store_id: c.row.store_id,
+    order_id: c.row.order_id,
+    kind: CHAIN_EVENT_KINDS.dismissed,
+    occurred_at: new Date().toISOString(),
+    actor: null,
+    source: "system",
+    reason: retryKaptaBlockReason(error),
+    payload: {
+      attempt: c.chain.attempt, of: c.chain.of, transport: RETRY_TRANSPORT_LABEL[c.chain.next],
+      why: "bloqueo_kapta", auto: true, variant: c.variant,
+    },
+  });
+  return insertError ? insertError.message : null;
+}
+
+/** Suelta el candado propio: borra el renglón «en curso» que tomó esta pasada. */
+async function releaseClaim(admin: SupabaseClient, id: number | string): Promise<string | null> {
+  const { error } = await admin.from(LOG).delete().eq("id", id).eq("outcome", "en_curso");
+  return error ? error.message : null;
+}
+
+/**
+ * Vuelve a leer UN pedido y la posición de SU variante justo antes de crear
+ * (`retryRecheck`). Con `crear`, devuelve el candidato con la fila y la cadena
+ * de ahora: se crea con lo que hay, no con lo que había al empezar.
+ */
+async function recheckCandidate(
+  admin: SupabaseClient,
+  orgId: string,
+  c: Candidate,
+  today: string,
+  at: Date,
+): Promise<{ action: "crear"; candidate: Candidate } | { action: "atendiendo" } | { action: "soltar"; reason: string }> {
+  const [orderRes, modeRes] = await Promise.all([
+    admin.from("order_master").select("*").eq("order_id", c.row.order_id).maybeSingle(),
+    admin.from("lima_retry_auto_variants").select("mode").eq("org_id", orgId).eq("variant", c.variant).maybeSingle(),
+  ]);
+  // Lo que no se pudo leer no autoriza a crear: quien llama suelta y lo anota.
+  if (orderRes.error || modeRes.error) {
+    throw new Error(`no se pudo volver a leer antes de crear: ${(orderRes.error ?? modeRes.error)!.message}`);
+  }
+  const row = orderRes.data as OrderMasterRow | null;
+  if (!row) return { action: "soltar", reason: "El pedido ya no está en el Master." };
+  const facts = (await loadReproFacts(admin as never, [row.order_id], {
+    orders: [row as unknown as ReproOrderRow],
+  })).get(row.order_id);
+  const open = facts?.open && facts.open.episode_key === facts.episode.key ? facts.open : null;
+  const chain = facts ? retryChainOf(facts, open, today) : null;
+  const saved = modeRes.data as { mode?: string } | null;
+  const mode = retryModes(saved?.mode ? [{ variant: c.variant, mode: saved.mode }] : [])[c.variant];
+  const decision = retryRecheck({
+    chain,
+    raw: facts?.retryChain ?? null,
+    variant: c.variant,
+    mode,
+    claimed: claimView(open?.claimed_by, open?.claimed_until, "", at) !== "libre",
+  });
+  if (decision.action !== "crear" || !facts || !chain || facts.retryChain.state !== "siguiente") {
+    return decision.action === "crear" ? { action: "soltar", reason: "La cadena ya no sigue." } : decision;
+  }
+  return { action: "crear", candidate: { ...c, row, facts, chain, raw: facts.retryChain, mode, claimed: false } };
 }
 
 /** Las guías automáticas de hoy que cuentan para el tope, sin contar `exceptId`. */
@@ -315,6 +461,10 @@ export async function runLimaRetryAuto(
   const started = Date.now();
   const now = opts.now ?? new Date();
   const preview = !!opts.preview;
+  const budget = preview ? PREVIEW_TIME_BUDGET_MS : TIME_BUDGET_MS;
+  // La hora de la pasada avanzada por lo que lleva corriendo: el candado de
+  // una persona en Repro Lima se mira con la hora de ahora, no la del inicio.
+  const nowish = () => new Date(now.getTime() + (Date.now() - started));
   const today = limaTodayKey(now);
   const limaHour = Number(limaTimeHHMM(now).slice(0, 2));
   const report: LimaRetryAutoReport = { today, limaHour, skipped: null, orgs: [], stopped: null, error: null };
@@ -385,7 +535,7 @@ export async function runLimaRetryAuto(
 
   outer: for (const { orgId, modes } of orgModes) {
     const dailyCap = capByOrg.get(orgId) ?? RETRY_DAILY_CAP_DEFAULT;
-    const org: LimaRetryAutoOrgReport = { orgId, dailyCap, capLeft: dailyCap, items: [] };
+    const org: LimaRetryAutoOrgReport = { orgId, dailyCap, capLeft: dailyCap, items: [], released: [] };
     report.orgs.push(org);
     try {
       const { data: stores, error: storesError } = await admin
@@ -395,7 +545,7 @@ export async function runLimaRetryAuto(
       const candidates = storeIds.length ? await candidatesOf(admin, storeIds, modes, today, now, preview) : [];
 
       for (const c of candidates) {
-        if (Date.now() - started > TIME_BUDGET_MS) {
+        if (Date.now() - started > budget) {
           report.stopped = "tiempo";
           break outer;
         }
@@ -483,14 +633,50 @@ export async function runLimaRetryAuto(
           continue;
         }
 
-        const result = await runCore(c, false);
+        // Se relee el pedido y la variante justo antes de crear (ver arriba).
+        let fresh: Candidate;
+        try {
+          const recheck = await recheckCandidate(admin, orgId, c, today, nowish());
+          if (recheck.action === "atendiendo") {
+            item.outcome = "atendiendo";
+            item.detail = "Caso tomado en Repro Lima.";
+            await finish();
+            continue;
+          }
+          if (recheck.action === "soltar") {
+            org.items.splice(org.items.indexOf(item), 1);
+            org.released.push({ orderId: row.order_id, orderName: row.order_name, reason: recheck.reason });
+            const releaseError = await releaseClaim(admin, claim.id);
+            if (releaseError) errors.push(`No se pudo soltar ${row.order_name ?? row.order_id}: ${releaseError}`);
+            continue;
+          }
+          fresh = recheck.candidate;
+        } catch (e) {
+          // Sin poder releerlo no se crea; se suelta para la pasada siguiente.
+          org.items.splice(org.items.indexOf(item), 1);
+          const releaseError = await releaseClaim(admin, claim.id);
+          errors.push(`No se pudo releer ${row.order_name ?? row.order_id}: ${e instanceof Error ? e.message : String(e)}${releaseError ? ` (y no se pudo soltar: ${releaseError})` : ""}`);
+          continue;
+        }
+
+        const result = await runCore(fresh, false);
         item.outcome = result.outcome;
         item.detail = retryResultDetail(result);
         if (result.outcome === "creada") item.guide = result.guide;
+        // Aliclik la creó y Kapta no pudo guardarla: el código queda en el log.
+        if (result.outcome === "incierto" && result.stage === "creacion" && result.guide) item.guide = result.guide;
         await finish();
         // `createAliclikGuideFor` ya recalcula el Master al crear; no se repite.
         if (result.outcome === "fallo" || result.outcome === "incierto") {
-          await recordFailure(admin, row, today, variant, result.outcome, result.error);
+          const kaptaBlock = result.stage === "creacion" && result.kaptaBlock;
+          const guide = result.stage === "creacion" ? result.guide ?? null : null;
+          await recordFailure(admin, fresh.row, today, variant, result.outcome, result.error, { guide, kaptaBlock });
+          // Una regla de Kapta: mañana diría lo mismo. Sale de la cadena y la
+          // tienda lo atiende en Repro Lima; lo de Aliclik se reintenta mañana.
+          if (kaptaBlock) {
+            const dismissError = await dismissForKaptaBlock(admin, fresh, result.error);
+            if (dismissError) errors.push(`No se pudo pasar ${row.order_name ?? row.order_id} a Repro Lima: ${dismissError}`);
+          }
         }
       }
     } catch (e) {

@@ -3515,6 +3515,17 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     la bandeja: sin acuerdo de la tienda en el episodio, sin anular, sin
     descartar. **No toca** un pedido cuyo caso tiene tomado una persona en
     Repro Lima en ese momento (lo reintenta en la pasada siguiente).
+  - **Relee antes de crear** (revisión del 04-11-2026). La lista se lee al
+    empezar y la pasada puede durar cuatro minutos. Con el renglón del log ya
+    tomado, vuelve a leer **ese** pedido (la fila del Master, sus hechos, el
+    caso, la cadena y quién lo tiene) y la posición de **esa** variante
+    (`retryRecheck`). Si entretanto la tienda lo pasó «A Repro Lima», acordó
+    otra cosa, salió de la etapa, cambió el paso o el motivo, o el owner sacó
+    la variante de Activo, **no crea** y borra su renglón «en curso» (el log no
+    tiene un resultado «ya no tocaba» y dejar «en curso» contaría para el tope
+    sin haber creado nada): el pedido queda como si esa pasada no lo hubiera
+    tomado. Si una persona tomó el caso, queda «Una persona lo está
+    atendiendo» y se reintenta. Crea con la fila de ese momento.
   - **Crea por el mismo camino que «Aprobar»** (`lib/lima-retry-approve.ts`,
     `createAliclikGuideFor`), con origen `reintento_lima`: el historial dice
     «automáticamente (reintento Lima)» y el motivo de la salida adicional de
@@ -3526,14 +3537,43 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     pasa a Repro Lima como con «Aprobar».
   - **Una creación por pedido y día** (`lima_retry_auto_log`, único por pedido,
     día y modo) y un **tope diario** por organización (10 por omisión, de 1 a
-    50) que cuenta lo creado y lo que pudo crearse (Aliclik no respondió).
+    50) que cuenta lo creado y lo que pudo crearse (Aliclik no respondió, o la
+    creó y Kapta no pudo guardarla).
     Lo que no se pudo agendar, el tope, Aliclik caído o el caso tomado se
-    reintentan; un fallo avisa por Telegram (`lima_retry_auto_failed`) y el
-    pedido sigue en la bandeja para hacerlo a mano.
+    reintentan en la pasada siguiente. Lo que no se creó avisa **una vez** por
+    Telegram y deja `lima_retry_auto_failed`, según por qué:
+    - **Aliclik lo rechazó o falló la red:** «No se pudo crear»; el pedido
+      sigue en la cadena y en la bandeja para hacerlo a mano, y la pasada lo
+      vuelve a intentar otro día.
+    - **Una regla de Kapta no deja crearla** (venta anulada en Kapta, pago
+      adelantado, rechazos en la puerta, posible duplicado, el adelanto que
+      piden los antecedentes, una salida viva o el máximo de salidas, o falta
+      el teléfono o la dirección; `kaptaBlock` de `createAliclikGuideFor`):
+      mañana diría lo mismo, así que, después del aviso y del hecho, la pasada
+      lo **saca de la cadena a Repro Lima** con `lima_retry_dismissed` sin
+      actor, `source: system` y `why: bloqueo_kapta` (el motivo lo dice). La
+      tienda lo atiende en Repro Lima como siempre. Un «no se pudo leer» no es
+      una regla: se reintenta.
+    - **Aliclik la creó pero Kapta no pudo guardarla** (devuelve el número con
+      el error): queda «Puede estar creada: revisar en Aliclik» con su código,
+      cuenta para el tope, y el aviso dice que la guía **ya existe en Aliclik**
+      y hay que vincularla o revisarla a mano, **no crearla otra vez**. «Aprobar»
+      de la bandeja sigue mostrando el mismo mensaje de siempre.
+  - **La simulación dice lo que Activo haría** (revisión del 04-11-2026). Además
+    de cotizar y elegir el transporte, pasa por las mismas compuertas de Kapta
+    que la creación (`aliclikCreateGates`, que `createAliclikGuideFor` llama
+    tal cual: mismo orden, mismos mensajes, sin candado ni POST), con el motivo,
+    el origen y el scope de Activo, y por el teléfono y la dirección. Si una la
+    rechazaría, el renglón dice «No se pudo crear» con «Activo no la crearía:
+    <motivo>», no «Habría creado la guía».
   - «Simular ahora» en el panel cotiza todas las variantes con los pedidos de
-    ese momento, sin escribir nada.
+    ese momento, sin escribir nada. Corre dentro de la página
+    (`maxDuration` de 300 s) y se para sola a los 200 s: entonces dice «La
+    simulación se cortó por tiempo: muestra lo evaluado».
 
-Pruebas: `test/lima-retry-chain.test.ts`, `test/lima-retry-auto.test.ts`.
+Pruebas: `test/lima-retry-chain.test.ts`, `test/lima-retry-auto.test.ts`,
+`test/lima-retry-approve.test.ts` y, para las compuertas compartidas,
+`test/aliclik-duplicate-create.test.ts`.
 
 #### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)
 
@@ -21355,8 +21395,12 @@ Vercel— y algunas no tenían interruptor.
     encenderlo también cambia al agente de voz, que deja de llamar los pedidos
     que tomaría el automático) y su piloto sin historial (§11.9.1, solo con el
     automático encendido); Swayp desde Por confirmar (§11.13; encenderlo borra
-    el motivo del freno, como en su página); la confirmación por Chatby y su
-    guía Aliclik (§6.1).
+    el motivo del freno, como en su página, pero el freno se vuelve a mirar al
+    empezar cada pasada: si las entregas siguen bajas, se apaga otra vez); la
+    confirmación por Chatby y su guía Aliclik (§6.1). Confirmar y crear la guía
+    son un paso, así que la confirmación **solo se enciende con la guía
+    encendida**, y apagar la guía también detiene las confirmaciones (el panel
+    lo dice en las dos filas).
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -21373,6 +21417,8 @@ Vercel— y algunas no tenían interruptor.
 - **Encender pide confirmación** cuando la automatización actúa hacia afuera
   (crea guías, confirma pedidos, llama o envía WhatsApp). Un automático que
   depende de otra función no se enciende con ella apagada; el panel dice cuál.
+  Si ya estaba encendido cuando se apagó lo que necesita, el panel dice «Está
+  encendido, pero no corre» con el motivo, y no lo cuenta entre los encendidos.
 - **Historial:** cada cambio queda en `automation_switch_events` (quién, qué,
   de qué a qué, cuándo) y el panel muestra los últimos.
 

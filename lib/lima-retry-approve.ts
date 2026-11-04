@@ -21,8 +21,10 @@ import "server-only";
 //     `reintento_lima`, el único automático al que se le acepta el motivo de la
 //     salida adicional (la caja que falló sigue viva hasta que vuelve).
 //
-// `dry` cotiza y elige el transporte pero no crea ni escribe nada: es la
-// simulación del panel.
+// `dry` cotiza, elige el transporte y pasa por las compuertas de Kapta de la
+// creación (`aliclikCreateGates`, las mismas que corre `createAliclikGuideFor`)
+// pero no crea ni escribe nada: es la simulación del panel. Así «Habría creado
+// la guía» solo sale de un pedido que Activo sí crearía (04-11-2026).
 //
 // Quién puede y qué cadena toca lo decide quien llama: la acción con permisos y
 // RLS; la pasada con el interruptor de la variante, el tope y el candado del log.
@@ -30,7 +32,9 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   aliclikContextFor,
+  aliclikCreateGates,
   aliclikReadScopeFor,
+  aliclikRecipientBlock,
   createAliclikGuideFor,
   previewAliclikGuideFor,
   type AliclikGuideOrigin,
@@ -85,12 +89,32 @@ export type RetryApproveResult =
   | { outcome: "no_seleccionable"; transport: RetryTransport; reason: string | null }
   | { outcome: "simulada"; transport: RetryTransport; detail: string }
   | {
+      /**
+       * Solo en `dry`: una compuerta de Kapta de la creación lo rechazaría.
+       * `error` ya dice «Activo no la crearía: …».
+       */
+      outcome: "fallo";
+      stage: "compuertas";
+      transport: RetryTransport;
+      error: string;
+    }
+  | {
       /** `createAliclikGuideFor` respondió con error: candado, timeout o rechazo. */
       outcome: "en_curso" | "incierto" | "fallo";
       stage: "creacion";
       transport: RetryTransport;
       error: string;
       locked: boolean;
+      /**
+       * El rechazo es una regla de Kapta sobre el pedido tal como está
+       * (`AliclikCreateResult.kaptaBlock`), no un error de Aliclik ni de red.
+       */
+      kaptaBlock: boolean;
+      /**
+       * Con `incierto`: la guía que Aliclik SÍ creó aunque Kapta no pudo
+       * guardarla. Existe allá: hay que vincularla, no crearla otra vez.
+       */
+      guide?: string | null;
     }
   | { outcome: "creada"; transport: RetryTransport; guide: string | null };
 
@@ -167,14 +191,6 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
   }
   if (!courier.selectable) return { outcome: "no_seleccionable", transport, reason: courier.reason ?? null };
 
-  if (input.dry) {
-    return {
-      outcome: "simulada",
-      transport,
-      detail: `${courier.transportName ?? transport} S/ ${courier.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}`,
-    };
-  }
-
   // El motivo de la salida adicional de Lima: la persona aprobó en la bandeja;
   // el sistema lo hace porque el owner encendió la variante, y lo dice.
   const motive = system
@@ -189,14 +205,38 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
   const origin: AliclikGuideOrigin | undefined = system
     ? { kind: "reintento_lima", scheduledOn: today, reason: motive }
     : undefined;
+
+  if (input.dry) {
+    // Lo que la creación real rechazaría siempre: las compuertas de Kapta con
+    // el mismo motivo, el mismo origen y el mismo scope que usará Activo, y el
+    // teléfono y la dirección que Aliclik exige. Se para antes del candado y
+    // del POST. Sin esto la simulación decía «Habría creado la guía» y Activo
+    // fallaba y avisaba cada día hasta que la cadena vencía.
+    const gates = await aliclikCreateGates(ctx, createInput, scope, origin);
+    const reason = gates.ok ? aliclikRecipientBlock(row) : gates.error;
+    if (reason) return { outcome: "fallo", stage: "compuertas", transport, error: `Activo no la crearía: ${reason}` };
+    return {
+      outcome: "simulada",
+      transport,
+      detail: `${courier.transportName ?? transport} S/ ${courier.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}`,
+    };
+  }
   const result = system
     ? await createAliclikGuideFor(ctx, createInput, scope, origin)
     : await createAliclikGuideFor(ctx, createInput);
   if (result.error) {
     // El candado lo tiene otra creación (una persona ahora, o un timeout que el
-    // barrido resuelve); el timeout pudo haberla creado; lo demás es un rechazo.
-    const outcome = result.locked ? "en_curso" : result.timedOut ? "incierto" : "fallo";
-    return { outcome, stage: "creacion", transport, error: result.error, locked: !!result.locked };
+    // barrido resuelve); el timeout pudo haberla creado; con número, Aliclik
+    // SÍ la creó y lo que falló fue guardarla en Kapta: es `incierto` con su
+    // código (cuenta para el tope y no se crea otra vez); lo demás es un
+    // rechazo. La persona ve el mismo mensaje de siempre (`result.error`).
+    const created = result.orderNumber?.trim() || null;
+    const outcome = result.locked ? "en_curso" : result.timedOut || created ? "incierto" : "fallo";
+    return {
+      outcome, stage: "creacion", transport, error: result.error, locked: !!result.locked,
+      kaptaBlock: outcome === "fallo" && !!result.kaptaBlock,
+      ...(created ? { guide: created } : {}),
+    };
   }
   await recordChainEvent(admin, row, actor, CHAIN_EVENT_KINDS.approved,
     `Reintento Aliclik ${chain.attempt} de ${chain.of} ${system ? "automático" : "aprobado"}: guía con ${transport}${result.orderNumber ? ` (${result.orderNumber})` : ""}.`,

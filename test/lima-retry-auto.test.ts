@@ -17,6 +17,11 @@ const h = vi.hoisted(() => ({
   core: [] as Row[],
   coreResult: (_input: Row): Row => ({ outcome: "creada", transport: "AUTOECOM", guide: "AL-9" }),
   telegrams: [] as string[],
+  /** Corre entre la toma del renglón y la relectura (la salud se lee justo antes). */
+  onHealth: null as null | (() => void),
+  /** Los hechos de la relectura, si cambiaron durante la pasada. */
+  later: null as null | ((id: string) => Row | undefined),
+  factsCalls: 0,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -25,7 +30,12 @@ vi.mock("@/lib/shipments", () => ({ limaTodayKey: () => "2026-11-04" }));
 vi.mock("@/lib/aliclik-guide", () => ({
   aliclikReadScopeFor: async (_admin: unknown, storeId: string) => ({ scope: { client: null, storeIds: [storeId] } }),
 }));
-vi.mock("@/lib/aliclik-health-access", () => ({ loadAliclikHealthState: async () => h.health }));
+vi.mock("@/lib/aliclik-health-access", () => ({
+  loadAliclikHealthState: async () => {
+    h.onHealth?.();
+    return h.health;
+  },
+}));
 vi.mock("@/lib/aliclik-scheduled-server", () => ({
   telegramTarget: async () => ({ token: "t", chats: "c", storeName: "Tienda" }),
 }));
@@ -37,8 +47,12 @@ vi.mock("@/lib/telegram", () => ({
   },
 }));
 vi.mock("@/lib/repro-lima-access", () => ({
-  loadReproFacts: async (_admin: unknown, ids: string[]) => new Map(ids.filter((id) => h.facts.has(id)).map((id) => [id, h.facts.get(id)])),
-  retryChainOf: (f: Row) => (f.retryChain.state === "siguiente"
+  loadReproFacts: async (_admin: unknown, ids: string[]) => {
+    h.factsCalls += 1;
+    const read = (id: string) => (h.factsCalls > 1 && h.later ? h.later(id) : h.facts.get(id));
+    return new Map(ids.filter((id) => read(id)).map((id) => [id, read(id)]));
+  },
+  retryChainOf: (f: Row) => (f.retryChain.state === "siguiente" && !f.open?.agreed_on
     ? { attempt: f.retryChain.attempt, of: f.retryChain.of, next: f.retryChain.next, failedText: "falló", inOffice: false, ready: f.ready !== false }
     : null),
 }));
@@ -55,13 +69,15 @@ import {
   anyRetryVariantOn,
   autoRetryMotive,
   retryCapLeft,
+  retryKaptaBlockReason,
   retryModes,
   retryPassOpen,
+  retryRecheck,
   retryVariantLabel,
   retryVariantOf,
 } from "@/lib/lima-retry-auto";
 import { aliclikMotiveAllowed, aliclikOutputPolicy } from "@/lib/aliclik-output-policy";
-import { LIMA_RETRY_AUTO_FAILED, retryFailureTelegram, runLimaRetryAuto } from "@/lib/lima-retry-auto-server";
+import { LIMA_RETRY_AUTO_FAILED, retryFailureKind, retryFailureTelegram, retryResultDetail, runLimaRetryAuto } from "@/lib/lima-retry-auto-server";
 
 // ---------------------------------------------------------------------------
 // Lo puro
@@ -137,6 +153,19 @@ describe("la salida adicional de Lima: el motivo solo para una persona o el rein
     expect(guide).toContain("const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);");
     expect(guide).toContain("manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),");
     expect(guide).toContain('kind: "envio_programado" | "confirmado_chatby" | "reintento_lima";');
+    // Una sola copia de las compuertas: la creación llama a la misma función
+    // que la simulación, antes de la cotización final, el candado y el POST.
+    const create = guide.slice(guide.indexOf("export async function createAliclikGuideFor"));
+    const order = [
+      "const gates = await aliclikCreateGates(ctx, input, scope, origin);",
+      "const preview = await previewAliclikGuideFor(",
+      '.from("aliclik_order_requests")\n    .insert(',
+    ].map((t) => create.indexOf(t));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const gatesFn = guide.slice(guide.indexOf("export async function aliclikCreateGates"), guide.indexOf("export function aliclikRecipientBlock"));
+    expect(gatesFn).not.toContain("aliclik_order_requests");
+    expect(gatesFn).not.toContain("createOrder(");
     const start = guide.indexOf("export interface CreateGuideInput");
     expect(start).toBeGreaterThan(-1);
     const input = guide.slice(start, guide.indexOf("\n}\n", start));
@@ -157,7 +186,7 @@ function fakeDb(seed: Record<string, Row[]>) {
   let seq = 100;
   const from = (table: string) => {
     const filters: Array<(row: Row) => boolean> = [];
-    let op: "select" | "update" | "insert" | "upsert" = "select";
+    let op: "select" | "update" | "insert" | "upsert" | "delete" = "select";
     let value: any = null;
     let upsertOpts: { onConflict?: string; ignoreDuplicates?: boolean } = {};
     let range: [number, number] | null = null;
@@ -171,6 +200,7 @@ function fakeDb(seed: Record<string, Row[]>) {
     q.update = (v: any) => { op = "update"; value = v; return q; };
     q.insert = (v: any) => { op = "insert"; value = v; return q; };
     q.upsert = (v: any, o: any = {}) => { op = "upsert"; value = v; upsertOpts = o; return q; };
+    q.delete = () => { op = "delete"; return q; };
     const run = () => {
       const rows = (db[table] ??= []);
       const match = (r: Row) => filters.every((f) => f(r));
@@ -190,6 +220,11 @@ function fakeDb(seed: Record<string, Row[]>) {
         for (const r of hit) Object.assign(r, value);
         return { data: hit.map((r) => ({ id: r.id })), error: null };
       }
+      if (op === "delete") {
+        const hit = rows.filter(match);
+        db[table] = rows.filter((r) => !match(r));
+        return { data: hit, error: null };
+      }
       const keys = (upsertOpts.onConflict ?? "").split(",");
       const existing = rows.find((r) => keys.every((k) => r[k] === value[k]));
       if (existing) {
@@ -202,6 +237,10 @@ function fakeDb(seed: Record<string, Row[]>) {
       return { data: [{ id: row.id }], error: null };
     };
     q.then = (resolve: (v: unknown) => void, reject: (e: unknown) => void) => Promise.resolve().then(run).then(resolve, reject);
+    q.maybeSingle = () => ({
+      then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
+        Promise.resolve().then(run).then((r: any) => ({ data: r.data[0] ?? null, error: r.error })).then(resolve, reject),
+    });
     return q;
   };
   return { admin: { from } as never, db, writes };
@@ -239,6 +278,9 @@ beforeEach(() => {
   h.core = [];
   h.telegrams = [];
   h.coreResult = () => ({ outcome: "creada", transport: "AUTOECOM", guide: "AL-9" });
+  h.onHealth = null;
+  h.later = null;
+  h.factsCalls = 0;
 });
 
 describe("la pasada", () => {
@@ -406,5 +448,219 @@ describe("la alerta y el cron", () => {
     expect(route).toContain("export const maxDuration = 300;");
     const vercel = JSON.parse(readFileSync(resolve(process.cwd(), "vercel.json"), "utf8")) as { crons: { path: string; schedule: string }[] };
     expect(vercel.crons).toContainEqual({ path: "/api/cron/lima-retry-auto", schedule: "23 13-18 * * *" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Revisión adversarial del 04-11-2026: lo que cambia mientras corre la pasada,
+// las reglas de Kapta que Activo rechaza siempre y la guía creada sin guardar.
+// ---------------------------------------------------------------------------
+
+describe("retryRecheck: justo antes de crear, con lo de ahora", () => {
+  const raw = next("alexis", "autoecom") as never;
+  const base = { chain: { ready: true }, raw, variant: "alexis_autoecom:no_contesta" as const, mode: "activo" as const, claimed: false };
+  it("crea solo si todo sigue igual", () => {
+    expect(retryRecheck(base)).toEqual({ action: "crear" });
+  });
+  it("la cadena ya no sigue (A Repro Lima, acuerdo, fuera de la etapa) o falló hoy: suelta", () => {
+    expect(retryRecheck({ ...base, chain: null })).toMatchObject({ action: "soltar" });
+    expect(retryRecheck({ ...base, raw: { state: "fuera", why: "descartada", failed: null } as never })).toMatchObject({ action: "soltar" });
+    expect(retryRecheck({ ...base, chain: { ready: false } })).toEqual({ action: "soltar", reason: "El intento falló hoy: el reintento sale otro día." });
+  });
+  it("cambió la variante o ya no está en Activo: suelta", () => {
+    expect(retryRecheck({ ...base, raw: next("alexis", "autoecom", 3, "no_estaba") as never })).toMatchObject({ action: "soltar" });
+    expect(retryRecheck({ ...base, mode: "apagado" })).toEqual({ action: "soltar", reason: "La variante pasó a Apagado durante la pasada." });
+    expect(retryRecheck({ ...base, mode: "simulacion" })).toEqual({ action: "soltar", reason: "La variante pasó a Simulación durante la pasada." });
+  });
+  it("una persona tomó el caso: atendiendo (después de las razones para soltar)", () => {
+    expect(retryRecheck({ ...base, claimed: true })).toEqual({ action: "atendiendo" });
+    expect(retryRecheck({ ...base, claimed: true, mode: "apagado" })).toMatchObject({ action: "soltar" });
+  });
+});
+
+describe("la pasada relee el pedido y la variante antes de crear", () => {
+  const dismissedNow = (id: string) => ({ ...h.facts.get(id)!, retryChain: { state: "fuera", why: "descartada", failed: null } });
+
+  it("«A Repro Lima» después de cargar: no crea y borra su renglón (no cuenta para el tope)", async () => {
+    const { admin, db } = seed("activo", [order("a")]);
+    h.later = dismissedNow;
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([]);
+    expect(report.orgs[0]).toMatchObject({ capLeft: 5, items: [] });
+    expect(report.orgs[0]!.released).toEqual([expect.objectContaining({ orderId: "a", reason: expect.stringContaining("Ya no está en la cadena") })]);
+    expect(report.error).toBeNull();
+  });
+
+  it("un acuerdo de la tienda después de cargar: tampoco crea", async () => {
+    const { admin, db } = seed("activo", [order("a")]);
+    h.later = (id) => ({ ...h.facts.get(id)!, open: { episode_key: "ep", agreed_on: "2026-11-05", claimed_by: null, claimed_until: null } });
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([]);
+  });
+
+  it("una persona toma el caso después de cargar: atendiendo, y se reintenta", async () => {
+    const { admin, db } = seed("activo", [order("a")]);
+    const open = { episode_key: "ep", claimed_by: "ana", claimed_until: "2026-11-04T15:20:00Z", agreed_on: null };
+    h.later = (id) => ({ ...h.facts.get(id)!, open });
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(report.orgs[0]!.items[0]).toMatchObject({ outcome: "atendiendo" });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ mode: "activo", outcome: "atendiendo" })]);
+    // Soltó el caso: la pasada siguiente lo toma y crea.
+    h.later = null;
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toHaveLength(1);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "creada" })]);
+  });
+
+  it("la variante se apaga (o pasa a Simulación) durante la pasada: no crea; al volver a Activo, sí", async () => {
+    const { admin, db } = seed("activo", [order("a")]);
+    h.onHealth = () => { db.lima_retry_auto_variants![0]!.mode = "apagado"; };
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([]);
+    expect(report.orgs[0]!.released[0]!.reason).toBe("La variante pasó a Apagado durante la pasada.");
+    h.onHealth = null;
+    db.lima_retry_auto_variants![0]!.mode = "activo";
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toHaveLength(1);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ mode: "activo", outcome: "creada" })]);
+  });
+
+  it("el pedido ya no está en el Master al releerlo: no crea", async () => {
+    const { admin, db } = seed("activo", [order("a")]);
+    h.onHealth = () => { db.order_master = []; };
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([]);
+    expect(report.orgs[0]!.released[0]!.reason).toBe("El pedido ya no está en el Master.");
+  });
+
+  it("crea con la fila del pedido de ahora, no la de la carga", async () => {
+    const { admin, db } = seed("activo", [order("a")]);
+    h.onHealth = () => { db.order_master![0]!.address = "Av. Nueva 123"; };
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core[0]!.row).toMatchObject({ order_id: "a", address: "Av. Nueva 123" });
+  });
+
+  it("el renglón tomado de una pasada anterior (tope) también se suelta sin dejar «en curso»", async () => {
+    const { admin, db } = seed("activo", [order("a")], {
+      lima_retry_auto_log: [{ id: 1, org_id: ORG, order_id: "a", lima_day: "2026-11-04", mode: "activo", outcome: "tope", variant: "alexis_autoecom:no_contesta" }],
+    });
+    h.later = dismissedNow;
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log!.filter((r) => r.outcome === "en_curso")).toEqual([]);
+  });
+});
+
+describe("una regla de Kapta que Activo rechaza siempre", () => {
+  const blocked = "Aliclik exige un adelanto validado de S/ 20 por los antecedentes del cliente. Para exceptuarlo, escribe una justificación corta.";
+
+  it("Activo: fallo, UN aviso, el hecho del fallo y sale de la cadena a Repro Lima (sin persona)", async () => {
+    h.coreResult = () => ({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: blocked, locked: false, kaptaBlock: true });
+    const { admin, db } = seed("activo", [order("a")]);
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "fallo", detail: `${blocked} Pasó a Repro Lima.` })]);
+    expect(h.telegrams).toHaveLength(1);
+    expect(h.telegrams[0]).toContain("bloqueado por Kapta: pasó a Repro Lima");
+    expect(h.telegrams[0]).toContain("No se reintenta");
+    expect(h.telegrams[0]).not.toContain("Créala a mano");
+    expect(db.order_events).toEqual([
+      expect.objectContaining({ kind: LIMA_RETRY_AUTO_FAILED, actor: null, source: "system", payload: expect.objectContaining({ kapta_block: true }) }),
+      expect.objectContaining({
+        kind: "lima_retry_dismissed", actor: null, source: "system", reason: retryKaptaBlockReason(blocked),
+        payload: { attempt: 2, of: 3, transport: "AUTOECOM", why: "bloqueo_kapta", auto: true, variant: "alexis_autoecom:no_contesta" },
+      }),
+    ]);
+  });
+
+  it("un error de Aliclik no lo saca de la cadena: fallo de hoy, se reintenta mañana", async () => {
+    h.coreResult = () => ({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: "Aliclik rechazó el pedido: sin stock", locked: false, kaptaBlock: false });
+    const { admin, db } = seed("activo", [order("a")]);
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(db.order_events!.map((e) => e.kind)).toEqual([LIMA_RETRY_AUTO_FAILED]);
+    expect(h.telegrams[0]).toContain("Créala a mano");
+  });
+
+  it("Simulación: «Activo no la crearía» en vez de «Habría creado la guía», sin hechos ni avisos", async () => {
+    h.coreResult = () => ({ outcome: "fallo", stage: "compuertas", transport: "AUTOECOM", error: `Activo no la crearía: ${blocked}` });
+    const { admin, db } = seed("simulacion", [order("a")]);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(report.orgs[0]!.items[0]).toMatchObject({ outcome: "fallo", detail: `Activo no la crearía: ${blocked}` });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ mode: "simulacion", outcome: "fallo" })]);
+    expect(db.order_events).toEqual([]);
+    expect(h.telegrams).toEqual([]);
+  });
+
+  it("el motivo del hecho y el detalle del log", () => {
+    expect(retryKaptaBlockReason("Este cliente rechazó en la puerta 2 pedidos.")).toBe(
+      "Kapta no deja crear el reintento automático (Este cliente rechazó en la puerta 2 pedidos). Pasa a Repro Lima.",
+    );
+    expect(retryResultDetail({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: "x.", locked: false, kaptaBlock: true })).toBe("x. Pasó a Repro Lima.");
+    expect(retryResultDetail({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: "x.", locked: false, kaptaBlock: false })).toBe("x.");
+  });
+});
+
+describe("Aliclik la creó pero Kapta no pudo guardarla", () => {
+  const error = "El pedido se creó en Aliclik (AL-5) pero no se pudo guardar la guía: timeout de la base";
+
+  it("incierto con su código, cuenta para el tope, y el aviso pide vincularla, no crearla", async () => {
+    h.coreResult = () => ({ outcome: "incierto", stage: "creacion", transport: "AUTOECOM", error, locked: false, kaptaBlock: false, guide: "AL-5" });
+    const { admin, db } = seed("activo", [order("a")]);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(report.orgs[0]).toMatchObject({ capLeft: 4 });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "incierto", guide_code: "AL-5" })]);
+    expect(h.telegrams).toHaveLength(1);
+    expect(h.telegrams[0]).toContain("creado en Aliclik pero sin guardar en Kapta");
+    expect(h.telegrams[0]).toContain("La guía AL-5 ya existe en Aliclik");
+    expect(h.telegrams[0]).toContain("No la crees otra vez");
+    expect(h.telegrams[0]).not.toContain("Créala a mano");
+    expect(db.order_events).toEqual([expect.objectContaining({
+      kind: LIMA_RETRY_AUTO_FAILED, guide_code: "AL-5", note: expect.stringContaining("no la crees otra vez"),
+      payload: expect.objectContaining({ outcome: "incierto", guide: "AL-5" }),
+    })]);
+    // No es una regla de Kapta: no sale de la cadena.
+    expect(db.order_events!.some((e) => e.kind === "lima_retry_dismissed")).toBe(false);
+  });
+
+  it("la clase de aviso", () => {
+    expect(retryFailureKind({ outcome: "incierto", guide: "AL-5" })).toBe("sin_vincular");
+    expect(retryFailureKind({ outcome: "incierto" })).toBe("incierto");
+    expect(retryFailureKind({ outcome: "fallo", kaptaBlock: true })).toBe("bloqueo_kapta");
+    expect(retryFailureKind({ outcome: "fallo" })).toBe("fallo");
+  });
+});
+
+describe("«Simular ahora» se corta antes que la página", () => {
+  it("con el tiempo de la vista previa agotado, para y dice `tiempo`, con lo evaluado", async () => {
+    let clock = 1_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      // Cada cotización tarda 90 s: la tercera ya no entra en los 200 s.
+      h.coreResult = () => {
+        clock += 90_000;
+        return { outcome: "simulada", transport: "AUTOECOM", detail: "x" };
+      };
+      const { admin, writes } = seed("simulacion", [order("a", "2026-11-01T17:00:00Z"), order("b", "2026-11-02T17:00:00Z"), order("c", "2026-11-03T17:00:00Z"), order("d", "2026-11-03T18:00:00Z")]);
+      const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR, orgId: ORG, preview: true });
+      expect(report.stopped).toBe("tiempo");
+      expect(report.orgs[0]!.items.map((i) => i.orderId)).toEqual(["a", "b", "c"]);
+      expect(writes).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("la página tiene 300 s y la acción no tumba el panel si se corta", () => {
+    const page = readFileSync(resolve(process.cwd(), "app/dashboard/automatizaciones/page.tsx"), "utf8");
+    expect(page).toContain("export const maxDuration = 300;");
+    const server = readFileSync(resolve(process.cwd(), "lib/lima-retry-auto-server.ts"), "utf8");
+    expect(server).toContain("const PREVIEW_TIME_BUDGET_MS = 200_000;");
+    const panel = readFileSync(resolve(process.cwd(), "components/automations-panel.tsx"), "utf8");
+    expect(panel).toContain("La simulación se cortó por tiempo: muestra lo evaluado");
+    expect(panel).toContain("No se pudo guardar. Revisa la conexión y vuelve a intentar.");
   });
 });

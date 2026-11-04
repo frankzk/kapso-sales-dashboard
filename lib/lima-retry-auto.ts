@@ -146,7 +146,11 @@ export function retryVariantLabel(variant: RetryVariant): string {
  *   * `simulada`         — en simulación: habría creado la guía.
  *   * `creada`           — guía creada.
  *   * `fallo`            — Aliclik o Kapta rechazaron la creación (avisa por Telegram).
- *   * `incierto`         — Aliclik no respondió a tiempo: pudo haberse creado.
+ *                          En simulación: «Activo no la crearía» (una compuerta
+ *                          de Kapta). Si el «no» es una regla de Kapta, Activo
+ *                          además lo pasa a Repro Lima (no se reintenta).
+ *   * `incierto`         — Aliclik no respondió a tiempo (pudo haberse creado), o
+ *                          la creó y Kapta no pudo guardarla (lleva su código).
  *   * `sin_transporte`   — Aliclik no ofrece ese transporte: pasa a Repro Lima.
  *   * `no_seleccionable` — lo ofrece pero hoy no se puede agendar: se reintenta.
  *   * `en_curso`         — esta pasada (u otra) la está creando; o el candado lo tiene otra creación.
@@ -178,7 +182,7 @@ export const RETRY_OUTCOME_LABEL: Record<RetryOutcome, string> = {
   simulada: "Habría creado la guía",
   creada: "Guía creada",
   fallo: "No se pudo crear",
-  incierto: "Aliclik no respondió: revisar",
+  incierto: "Puede estar creada: revisar en Aliclik",
   sin_transporte: "Sin ese transporte: pasó a Repro Lima",
   no_seleccionable: "No se puede agendar ahora",
   en_curso: "Creándose",
@@ -190,6 +194,55 @@ export const RETRY_OUTCOME_LABEL: Record<RetryOutcome, string> = {
 /** Quedan guías para hoy. Pura. */
 export function retryCapLeft(countedToday: number, cap: number): number {
   return Math.max(0, cap - countedToday);
+}
+
+/**
+ * Lo que decide la pasada justo antes de crear, con el pedido y la posición
+ * de la variante leídos OTRA VEZ (04-11-2026). La lista de candidatos se lee
+ * al empezar y la pasada puede durar cuatro minutos: entretanto la tienda pudo
+ * pasarlo «A Repro Lima», acordar otra cosa, tomar el caso, o el owner apagar
+ * la variante. Pura.
+ *   * `crear`      — todo sigue igual: se crea.
+ *   * `atendiendo` — una persona tomó el caso: es suyo, se reintenta después.
+ *   * `soltar`     — ya no toca (o no en Activo): no se crea y se suelta el
+ *                    candado del log, como si esta pasada no lo hubiera tomado.
+ */
+export type RetryRecheck = { action: "crear" } | { action: "atendiendo" } | { action: "soltar"; reason: string };
+
+export function retryRecheck(input: {
+  /** `retryChainOf` con los hechos de ahora (null: la cadena no sigue). */
+  chain: { ready: boolean } | null;
+  /** La cadena cruda de ahora (`facts.retryChain`). */
+  raw: LimaRetryChain | null;
+  /** La variante con la que se tomó el pedido. */
+  variant: RetryVariant;
+  /** La posición guardada AHORA de esa variante. */
+  mode: RetryMode;
+  /** Una persona tiene el caso tomado ahora. */
+  claimed: boolean;
+}): RetryRecheck {
+  if (!input.chain || !input.raw || input.raw.state !== "siguiente") {
+    return { action: "soltar", reason: "Ya no está en la cadena: pasó a Repro Lima, se acordó otra cosa, salió de la etapa o venció." };
+  }
+  if (!input.chain.ready) return { action: "soltar", reason: "El intento falló hoy: el reintento sale otro día." };
+  if (retryVariantOf(input.raw) !== input.variant) {
+    return { action: "soltar", reason: "Cambió el paso o el motivo de la cadena: lo decide la pasada siguiente." };
+  }
+  if (input.mode !== "activo") {
+    return { action: "soltar", reason: `La variante pasó a ${RETRY_MODE_LABEL[input.mode]} durante la pasada.` };
+  }
+  if (input.claimed) return { action: "atendiendo" };
+  return { action: "crear" };
+}
+
+/**
+ * El motivo con el que la pasada saca de la cadena un pedido que una regla de
+ * Kapta no deja crear (`kaptaBlock`): repetir mañana daría el mismo «no», así
+ * que pasa a Repro Lima en vez de fallar y avisar cada día. Pura.
+ */
+export function retryKaptaBlockReason(error: string): string {
+  const why = error.trim().replace(/\.$/, "");
+  return `Kapta no deja crear el reintento automático (${why}). Pasa a Repro Lima.`;
 }
 
 /** El motivo de la salida adicional de Lima que lleva la guía automática. Pura. */

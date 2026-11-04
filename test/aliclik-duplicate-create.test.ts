@@ -102,3 +102,74 @@ describe("llamada directa a createAliclikGuide", () => {
     expect(state.writes).not.toHaveBeenCalled();
   });
 });
+
+// Las compuertas de Kapta, aparte (MOM §9.5 entrega 3, 04-11-2026): la
+// simulación de los reintentos de Lima llama a `aliclikCreateGates` y la
+// creación real la llama tal cual. Lo que una dice es lo que la otra hace, y
+// ninguna de las dos escribe nada antes del candado.
+describe("aliclikCreateGates: las mismas compuertas que la creación, sin crear", () => {
+  const ctx = (userId: string | null = null) => ({
+    userId, storeId: "store", client: { apiToken: "t" }, clients: [{ apiToken: "t" }], shopify: null,
+    row: { order_id: "new", store_id: "store", order_name: "#KP1", macro_operation: "lima", payment_state: "sin_pago" },
+  }) as never;
+  const gf = { id: "gf", courier: "propio", guide_code: "GF-1", output_code: "KP1-S01",
+    delivery_status: "pendiente", custody_state: "courier", created_via: "grupo_gf_courier" };
+
+  async function both(origin?: { kind: "reintento_lima" | "envio_programado"; scheduledOn: string; reason: string }, motivo?: string) {
+    const { aliclikCreateGates, createAliclikGuideFor } = await import("@/lib/aliclik-guide");
+    const gates = await aliclikCreateGates(ctx(), { motivoSalidaAdicional: motivo }, undefined, origin);
+    const created = await createAliclikGuideFor(ctx(), { transportId: 1, motivoSalidaAdicional: motivo }, undefined, origin);
+    return { gates, created };
+  }
+
+  it("una regla de Kapta: el mismo mensaje en los dos y `kaptaBlock`", async () => {
+    state.check.mockResolvedValue({ allowed: false, message: "Otro envío sigue despachado" });
+    expect(await both()).toEqual({
+      gates: { ok: false, error: "Otro envío sigue despachado", kaptaBlock: true },
+      created: { error: "Otro envío sigue despachado", kaptaBlock: true },
+    });
+    state.check.mockResolvedValue({ allowed: true });
+    state.events = [{ order_id: "new", kind: "legacy_shopify_sale_cancelled", occurred_at: "2026-10-28T16:00:00Z", source: "kapta", new_status: "anulado" }];
+    const anulada = await both();
+    expect(anulada.gates).toMatchObject({ ok: false, kaptaBlock: true });
+    expect(anulada.created).toEqual({ error: (anulada.gates as { error: string }).error, kaptaBlock: true });
+    expect(state.detail).not.toHaveBeenCalled();
+    expect(state.createOrder).not.toHaveBeenCalled();
+    expect(state.writes).not.toHaveBeenCalled();
+  });
+
+  it("la caja de Grupo GF viva: el automático sin motivo choca; el reintento de Lima con su motivo pasa", async () => {
+    state.check.mockResolvedValue({ allowed: true });
+    state.outputs = [gf];
+    const sinMotivo = await both({ kind: "envio_programado", scheduledOn: "2026-11-04", reason: "x" }, "Reintento automático.");
+    expect(sinMotivo.gates).toMatchObject({ ok: false, kaptaBlock: true });
+    expect(sinMotivo.created).toMatchObject({ error: (sinMotivo.gates as { error: string }).error, kaptaBlock: true });
+    const { aliclikCreateGates } = await import("@/lib/aliclik-guide");
+    expect(await aliclikCreateGates(ctx(), { motivoSalidaAdicional: "Reintento Aliclik 2 de 3 automático." }, undefined,
+      { kind: "reintento_lima", scheduledOn: "2026-11-04", reason: "x" })).toMatchObject({ ok: true, riskExceptionReason: null });
+    expect(state.createOrder).not.toHaveBeenCalled();
+    expect(state.writes).not.toHaveBeenCalled();
+  });
+
+  it("«no se pudo leer» no es una regla: sin `kaptaBlock`, y nunca autoriza", async () => {
+    state.check.mockRejectedValue(new Error("No se pudo verificar el duplicado"));
+    expect(await both()).toEqual({
+      gates: { ok: false, error: "No se pudo verificar el duplicado", kaptaBlock: false },
+      created: { error: "No se pudo verificar el duplicado" },
+    });
+    state.check.mockResolvedValue({ allowed: true });
+    state.shipmentError = { message: "sin conexión" };
+    const salidas = await both();
+    expect(salidas.gates).toMatchObject({ ok: false, kaptaBlock: false });
+    expect(salidas.created).toEqual({ error: (salidas.gates as { error: string }).error });
+    expect(state.createOrder).not.toHaveBeenCalled();
+    expect(state.writes).not.toHaveBeenCalled();
+  });
+
+  it("el teléfono y la dirección que Aliclik exige", async () => {
+    const { aliclikRecipientBlock } = await import("@/lib/aliclik-guide");
+    expect(aliclikRecipientBlock({ customer_phone: "", address: "Av. 1" })).toBe("El pedido no tiene un teléfono válido, y Aliclik lo exige.");
+    expect(aliclikRecipientBlock({ customer_phone: "987654321", address: "  " })).toBe("El pedido no tiene dirección de envío.");
+    expect(aliclikRecipientBlock({ customer_phone: "987654321", address: "Av. 1" })).toBeNull();
+  });
+});

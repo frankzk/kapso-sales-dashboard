@@ -11,6 +11,11 @@ import AutomationsLoading from "./loading";
 // Equipo); el menú lo oculta a los demás y cada acción lo vuelve a pedir.
 
 export const dynamic = "force-dynamic";
+// «Simular ahora» corre dentro de esta página (su acción de servidor) y cotiza
+// en Aliclik pedido por pedido. Sin esto la función se cortaba al tope por
+// omisión de Vercel; la vista previa se para sola a los 200 s
+// (`PREVIEW_TIME_BUDGET_MS`) y dice que se cortó.
+export const maxDuration = 300;
 
 export default function AutomatizacionesPage() {
   return (

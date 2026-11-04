@@ -11,8 +11,9 @@ const h = vi.hoisted(() => ({
   revalidated: [] as string[],
   preview: null as null | Record<string, unknown>,
   create: null as null | Record<string, unknown>,
+  gates: null as null | Record<string, unknown>,
   ctxError: null as string | null,
-  calls: { preview: [] as unknown[][], create: [] as unknown[][], context: [] as unknown[][], scope: 0 },
+  calls: { preview: [] as unknown[][], create: [] as unknown[][], context: [] as unknown[][], gates: [] as unknown[][], scope: 0 },
   chain: null as null | Record<string, unknown>,
   raw: null as null | Record<string, unknown>,
 }));
@@ -31,7 +32,7 @@ const fakeAdmin = {
     },
   }),
 };
-const ROW = { order_id: "o1", store_id: "s1", order_name: "#KP1" };
+const ROW = { order_id: "o1", store_id: "s1", order_name: "#KP1" } as Record<string, unknown>;
 
 vi.mock("@/lib/db", () => ({
   createAdminSupabase: () => fakeAdmin,
@@ -61,11 +62,17 @@ vi.mock("@/lib/aliclik-guide", () => ({
     h.calls.create.push(args);
     return h.create;
   },
+  aliclikCreateGates: async (...args: unknown[]) => {
+    h.calls.gates.push(args);
+    return h.gates;
+  },
+  aliclikRecipientBlock: (row: { customer_phone?: string | null; address?: string | null }) =>
+    row.customer_phone === "" ? "El pedido no tiene un teléfono válido, y Aliclik lo exige." : null,
 }));
 
 import { approveLimaRetry } from "@/lib/lima-retry-approve";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { autoRetryMotive } from "@/lib/lima-retry-auto";
+import { RETRY_OUTCOMES_COUNTED, autoRetryMotive } from "@/lib/lima-retry-auto";
 
 const RAW = {
   state: "siguiente",
@@ -81,7 +88,8 @@ const AUTOECOM = { transportId: 7, transportName: "AUTOECOM", deliveryCost: 9, s
 beforeEach(() => {
   h.events = [];
   h.revalidated = [];
-  h.calls = { preview: [], create: [], context: [], scope: 0 };
+  h.calls = { preview: [], create: [], context: [], gates: [], scope: 0 };
+  h.gates = { ok: true, riskExceptionReason: null, risk: { requirement: "ninguno" } };
   h.ctxError = null;
   h.preview = { ok: true, collectTotal: 120, couriers: [AUTOECOM] };
   h.create = { orderNumber: "AL-1" };
@@ -103,6 +111,8 @@ describe("«Aprobar» dice lo mismo que antes de la entrega 3", () => {
     expect((h.calls.create[0]![1] as { motivoSalidaAdicional: string }).motivoSalidaAdicional)
       .toBe(`Reintento Aliclik 2 de 3 aprobado en Repro Lima. ${CHAIN.failedText}.`);
     expect(h.calls.scope).toBe(0);
+    // Las compuertas de la simulación no se corren aparte al crear: las corre la creación.
+    expect(h.calls.gates).toEqual([]);
     expect(h.events).toEqual([expect.objectContaining({
       kind: "lima_retry_approved", actor: "ana", source: "manual",
       reason: "Reintento Aliclik 2 de 3 aprobado: guía con AUTOECOM (AL-1).",
@@ -179,16 +189,62 @@ describe("la pasada automática por el mismo núcleo", () => {
     h.create = { error: "x", locked: true };
     expect(await system()).toMatchObject({ outcome: "en_curso", locked: true });
     h.create = { error: "x", timedOut: true };
-    expect(await system()).toMatchObject({ outcome: "incierto", error: "x" });
+    expect(await system()).toMatchObject({ outcome: "incierto", error: "x", kaptaBlock: false });
     h.create = { error: "x" };
-    expect(await system()).toMatchObject({ outcome: "fallo", stage: "creacion" });
+    expect(await system()).toMatchObject({ outcome: "fallo", stage: "creacion", kaptaBlock: false });
     expect(h.events).toEqual([]);
+  });
+
+  it("una regla de Kapta en la creación se distingue de un rechazo de Aliclik", async () => {
+    h.create = { error: "Aliclik exige un adelanto validado…", kaptaBlock: true };
+    expect(await system()).toMatchObject({ outcome: "fallo", stage: "creacion", kaptaBlock: true });
+    h.create = { error: "Aliclik rechazó el pedido: sin stock" };
+    expect(await system()).toMatchObject({ outcome: "fallo", kaptaBlock: false });
+  });
+
+  it("creada en Aliclik pero sin guardar en Kapta → incierto con su código (cuenta para el tope)", async () => {
+    h.create = { orderNumber: "AL-7", error: "El pedido se creó en Aliclik (AL-7) pero no se pudo guardar la guía: x" };
+    expect(await system()).toEqual({
+      outcome: "incierto", stage: "creacion", transport: "AUTOECOM", locked: false, kaptaBlock: false, guide: "AL-7",
+      error: "El pedido se creó en Aliclik (AL-7) pero no se pudo guardar la guía: x",
+    });
+    expect(RETRY_OUTCOMES_COUNTED).toContain("incierto");
+    // No es una guía creada: no deja el hecho de aprobado.
+    expect(h.events).toEqual([]);
+  });
+
+  it("«Aprobar» sigue diciendo lo mismo cuando la guía quedó en Aliclik sin guardar", async () => {
+    h.create = { orderNumber: "AL-7", error: "El pedido se creó en Aliclik (AL-7) pero no se pudo guardar la guía: x" };
+    expect(await approveAliclikRetry("o1")).toEqual({
+      error: "El pedido se creó en Aliclik (AL-7) pero no se pudo guardar la guía: x Si hace falta un motivo o una excepción, créala desde la ficha del pedido.",
+    });
   });
 
   it("sin transporte deja el hecho como sistema", async () => {
     h.preview = { ok: true, couriers: [] };
     expect(await system()).toEqual({ outcome: "sin_transporte", transport: "AUTOECOM" });
     expect(h.events).toEqual([expect.objectContaining({ kind: "lima_retry_dismissed", actor: null, source: "system" })]);
+  });
+
+  it("la simulación pasa por las compuertas de Kapta de la creación, con lo mismo que usará Activo", async () => {
+    h.gates = { ok: false, error: "Este cliente rechazó en la puerta 2 pedidos.", kaptaBlock: true };
+    expect(await system({ dry: true })).toEqual({
+      outcome: "fallo", stage: "compuertas", transport: "AUTOECOM", error: "Activo no la crearía: Este cliente rechazó en la puerta 2 pedidos.",
+    });
+    const [, input, scope, origin] = h.calls.gates[0]!;
+    const motive = autoRetryMotive(RAW as never, CHAIN.failedText);
+    expect(input).toMatchObject({ transportId: 7, motivoSalidaAdicional: motive, expectedCollectTotal: 120 });
+    expect(scope).toEqual({ client: fakeAdmin, storeIds: ["s1"] });
+    expect(origin).toEqual({ kind: "reintento_lima", scheduledOn: "2026-11-04", reason: motive });
+    // Las compuertas pasan pero falta el teléfono: tampoco la crearía.
+    h.gates = { ok: true, riskExceptionReason: null, risk: { requirement: "ninguno" } };
+    const sinTelefono = await approveLimaRetry({
+      admin: fakeAdmin as never, row: { ...ROW, customer_phone: "" } as never, chain: CHAIN, raw: RAW as never,
+      actor: { system: true, variant: "alexis_autoecom:no_contesta" }, today: "2026-11-04", dry: true,
+    });
+    expect(sinTelefono).toMatchObject({ outcome: "fallo", stage: "compuertas", error: "Activo no la crearía: El pedido no tiene un teléfono válido, y Aliclik lo exige." });
+    expect(h.calls.create).toEqual([]);
+    expect(h.events).toEqual([]);
   });
 
   it("la simulación cotiza y elige, pero no crea ni escribe", async () => {

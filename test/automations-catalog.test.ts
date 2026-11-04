@@ -5,7 +5,7 @@
 // puras de las acciones (requisitos, tope, confirmación, historial).
 
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AUTOMATIONS,
@@ -138,12 +138,14 @@ describe("el catálogo", () => {
     }
   });
 
-  it("los requisitos: agentes de voz, recuperar devueltos y el piloto", () => {
+  it("los requisitos: agentes de voz, recuperar devueltos, el piloto y Chatby sin su guía", () => {
     const requires = Object.fromEntries(
       AUTOMATIONS.flatMap((e) => (e.control.kind !== "readonly" && e.control.requires ? [[e.key, e.control.requires]] : [])),
     );
     expect(requires).toEqual({
       swayp_auto_pilot: "enabled",
+      // Sin la guía, Chatby no confirma nada (lib/chatby-autoconfirm-server.ts).
+      chatby_auto: "guide_enabled",
       voice_recovery_auto: "voice_recovery_enabled",
       voice_lead_auto: "voice_lead_enabled",
       return_recovery_auto: "return_recovery_enabled",
@@ -218,6 +220,8 @@ describe("las reglas de las acciones", () => {
   const pilot = switchableEntry("swayp_auto_pilot", "org_table")!;
   const voice = switchableEntry("voice_recovery_auto", "store_column")!;
   const drip = switchableEntry("drip_template", "store_column")!;
+  const chatby = switchableEntry("chatby_auto", "org_table")!;
+  const chatbyGuide = switchableEntry("chatby_auto_guide", "org_table")!;
 
   it("encender sin el requisito se rechaza con un motivo claro; apagar siempre se puede", () => {
     expect(switchRefusal(pilot, { on: true, rowExists: true, requiresOn: false })).toBe("Enciende antes «Aliclik a Swayp automático».");
@@ -227,11 +231,33 @@ describe("las reglas de las acciones", () => {
     expect(switchRefusal(drip, { on: true, rowExists: true, requiresOn: false })).toBeNull();
   });
 
+  it("Chatby no se enciende con su guía apagada (no confirmaría nada); la guía avisa que apagarla lo detiene", () => {
+    expect(switchRefusal(chatby, { on: true, rowExists: true, requiresOn: false })).toBe(
+      "Enciende antes «Guía Aliclik de la confirmación por Chatby»: sin ella Chatby no confirma ningún pedido.",
+    );
+    expect(switchRefusal(chatby, { on: true, rowExists: true, requiresOn: true })).toBeNull();
+    expect(switchRefusal(chatby, { on: false, rowExists: true, requiresOn: false })).toBeNull();
+    // Apagar la guía siempre se puede; su texto dice que también para las confirmaciones.
+    expect(switchRefusal(chatbyGuide, { on: false, rowExists: true, requiresOn: true })).toBeNull();
+    expect(chatbyGuide.what).toContain("también detiene las confirmaciones");
+    const source = readFileSync(resolve(process.cwd(), "lib/chatby-autoconfirm-server.ts"), "utf8");
+    expect(source).toContain("!settings.guide_enabled");
+  });
+
+  it("Swayp desde Por confirmar no promete quitar el freno: se vuelve a apagar si las entregas siguen bajas", () => {
+    const pc = switchableEntry("swayp_pc_auto", "org_table")!;
+    expect(pc.what).not.toContain("quita ese freno");
+    expect(pc.what).toContain("si siguen bajas se vuelve a apagar en la pasada siguiente");
+    // El freno se mira al empezar cada pasada, también después de encender a mano.
+    const server = readFileSync(resolve(process.cwd(), "lib/swayp-por-confirmar-auto-server.ts"), "utf8");
+    expect(server).toContain("const freno = frenoActivado(await casosResueltosAutomaticos(admin, storeIds), settings);");
+  });
+
   it("sin fila de configuración no se crea nada", () => {
     expect(switchRefusal(pilot, { on: false, rowExists: false, requiresOn: true })).toBe("Esta automatización no está configurada en tu organización.");
   });
 
-  it("el parche guarda quién solo donde la tabla lo tiene, y encender Swayp desde Por confirmar quita el freno", () => {
+  it("el parche guarda quién solo donde la tabla lo tiene, y encender Swayp desde Por confirmar borra el motivo del freno", () => {
     const now = "2026-11-04T15:00:00.000Z";
     expect(orgSwitchPatch("swayp_auto_settings", "enabled", true, "u1", now)).toEqual({ enabled: true, updated_at: now });
     expect(orgSwitchPatch("chatby_auto_settings", "guide_enabled", false, "u1", now)).toEqual({ guide_enabled: false, updated_at: now, updated_by: "u1" });

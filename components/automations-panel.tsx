@@ -55,6 +55,15 @@ import {
 
 type Status = { kind: "ok" | "error"; text: string } | null;
 
+/**
+ * Una acción que no llegó a responder (la red se cortó, el servidor se cayó a
+ * medias). Las acciones devuelven `{ error }` en los casos esperados y nunca
+ * lanzan; lo que lanza es el camino, no la regla. Sin atraparlo, React lo
+ * manda al límite de errores, el panel se queda en blanco y el «Guardando…»
+ * no termina nunca.
+ */
+const NETWORK_ERROR = "No se pudo guardar. Revisa la conexión y vuelve a intentar.";
+
 /** Lo que se dice tras guardar: «Guardado», o el aviso si quedó algo a medias. */
 function statusOf(result: AutomationActionResult): Status {
   if (result.error) return { kind: "error", text: result.error };
@@ -241,6 +250,15 @@ function RowStatus({ pending, status, blocked }: { pending: boolean; status: Sta
   );
 }
 
+/**
+ * Encendido pero con su requisito apagado: el automático no hace nada. Se dice
+ * en vez de dejar un «Encendido» que engaña (Chatby con la guía apagada no
+ * confirma ningún pedido, MOM §40).
+ */
+function inertText(entry: AutomationEntry): string | null {
+  return entry.requiresReason ? `Está encendido, pero no corre. ${entry.requiresReason}` : null;
+}
+
 function EffectBadge({ effect }: { effect: AutomationEffect }) {
   return <Badge tone={EFFECT_TONE[effect]}>{effect}</Badge>;
 }
@@ -344,7 +362,8 @@ function RetryGroup({ org, writable }: { org: AutomationsOrgView; writable: bool
         badge={retry.available ? <Badge>{`Hoy: ${retry.countedToday} de ${retry.dailyCap}`}</Badge> : undefined}
         description="Cuántas guías automáticas pueden salir por día entre todas las tiendas. Al llegar al tope, lo que falta espera a mañana."
       >
-        <CapCard key={retry.dailyCap} orgId={org.orgId} cap={retry.dailyCap} canEdit={canEdit} />
+        {/* Sin `key` del tope: guardar lo cambia, y remontar borraba el «Guardado». */}
+        <CapCard orgId={org.orgId} cap={retry.dailyCap} canEdit={canEdit} />
       </SettingsSection>
 
       <SimulateSection orgId={org.orgId} canEdit={canEdit} />
@@ -372,6 +391,12 @@ const MODE_TEXT: Record<RetryMode, string> = {
  * segmentado»): pista `wash` de 8 px con 2 px de relleno y la opción elegida
  * en blanco con sombra de control. Semántica de radio: una sola parada de
  * tabulador, las flechas mueven y eligen.
+ *
+ * El foco va con la decisión, no con la tecla: `onChange` dice si el cambio se
+ * aceptó. Si se rechaza (confirmación cancelada, otra fila guardando) el foco
+ * vuelve a la opción marcada; mientras esta fila guarda, se ignora. Y si el
+ * guardado falla, el foco vuelve a la opción que sigue marcada. No se usa
+ * `disabled` mientras guarda: quitarle el foco al botón lo tiraría al body.
  */
 function ModeControl({
   value,
@@ -384,9 +409,28 @@ function ModeControl({
   label: string;
   disabled: boolean;
   pending: boolean;
-  onChange: (mode: RetryMode) => void;
+  onChange: (mode: RetryMode) => boolean;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const checkedIndex = RETRY_MODES.indexOf(value);
+  const focusChecked = () => refs.current[checkedIndex]?.focus();
+  const choose = (i: number, moveFocus: boolean) => {
+    if (pending) return;
+    if (onChange(RETRY_MODES[i]!)) {
+      if (moveFocus) refs.current[i]?.focus();
+    } else focusChecked();
+  };
+  // Terminó de guardar: si el foco quedó en una opción que no es la marcada
+  // (el guardado falló), vuelve a la marcada.
+  const wasPending = useRef(pending);
+  useEffect(() => {
+    if (wasPending.current && !pending) {
+      const focused = document.activeElement;
+      const own = refs.current.some((b) => b === focused);
+      if (own && focused !== refs.current[checkedIndex]) refs.current[checkedIndex]?.focus();
+    }
+    wasPending.current = pending;
+  }, [pending, checkedIndex]);
   const onKey = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
     const last = RETRY_MODES.length - 1;
     let next: number | null = null;
@@ -396,14 +440,13 @@ function ModeControl({
     else if (e.key === "End") next = last;
     if (next == null) return;
     e.preventDefault();
-    refs.current[next]?.focus();
-    onChange(RETRY_MODES[next]!);
+    choose(next, true);
   };
   return (
     <div
       role="radiogroup"
       aria-label={label}
-      aria-disabled={disabled || undefined}
+      aria-disabled={disabled || pending || undefined}
       aria-busy={pending || undefined}
       className={cn("inline-flex rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line", pending && "opacity-60")}
     >
@@ -420,7 +463,9 @@ function ModeControl({
             aria-checked={on}
             tabIndex={on ? 0 : -1}
             disabled={disabled}
-            onClick={() => onChange(mode)}
+            onClick={() => {
+              if (!on) choose(i, false);
+            }}
             onKeyDown={(e) => onKey(e, i)}
             className={cn(
               "h-7 rounded-md px-2.5 text-xs font-medium whitespace-nowrap transition-colors duration-150 motion-reduce:transition-none",
@@ -451,25 +496,32 @@ function RetryMatrix({
   const [status, setStatus] = useState<Status>(null);
   const [, startTransition] = useTransition();
 
-  const change = (variant: RetryVariant, mode: RetryMode) => {
-    if (!canEdit || pendingVariant || modes[variant] === mode) return;
+  /** ¿Se aceptó el cambio? `ModeControl` mueve el foco solo si sí. */
+  const change = (variant: RetryVariant, mode: RetryMode): boolean => {
+    if (!canEdit || pendingVariant || modes[variant] === mode) return false;
     if (
       mode === "activo" &&
       !window.confirm(
         `¿Poner en Activo «${retryVariantLabel(variant)}»? Kapta creará guías de Aliclik de verdad, sin que nadie las apruebe, entre 8:00 a. m. y 2:00 p. m.`,
       )
     ) {
-      return;
+      return false;
     }
     setPendingVariant(variant);
     setStatus(null);
     startTransition(async () => {
-      const result = await setRetryVariantMode(orgId, variant, mode);
-      setPendingVariant(null);
-      if (!result.error) onSaved(variant, mode);
-      const s = statusOf(result);
-      setStatus(s && s.kind === "ok" ? { kind: "ok", text: `Guardado: ${retryVariantLabel(variant)} en ${RETRY_MODE_LABEL[mode]}.` } : s);
+      try {
+        const result = await setRetryVariantMode(orgId, variant, mode);
+        if (!result.error) onSaved(variant, mode);
+        const s = statusOf(result);
+        setStatus(s && s.kind === "ok" ? { kind: "ok", text: `Guardado: ${retryVariantLabel(variant)} en ${RETRY_MODE_LABEL[mode]}.` } : s);
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPendingVariant(null);
+      }
     });
+    return true;
   };
 
   const control = (step: (typeof RETRY_STEPS)[number], reason: ChainReason) => {
@@ -486,9 +538,14 @@ function RetryMatrix({
   };
 
   return (
-    <div className={CARD}>
-      {/* Desde `lg`: la matriz, pasos en filas y motivos en columnas. */}
-      <div className="hidden lg:block">
+    // La matriz depende del ancho de la TARJETA, no de la ventana: con el menú
+    // abierto y el índice a la izquierda, entre 1024 y ~1375 px la tabla no
+    // cabía y empujaba la página de lado. Tres controles de ~210 px más la
+    // columna del paso piden unos 52rem; se muestra desde `@4xl` (56rem) de
+    // tarjeta y, debajo, una tarjeta por paso.
+    <div className={cn(CARD, "@container")}>
+      {/* Desde `@4xl` de tarjeta: la matriz, pasos en filas y motivos en columnas. */}
+      <div className="hidden overflow-x-auto @4xl:block">
         <table className="w-full text-sm">
           <caption className="sr-only">Posición de cada reintento, por paso de la cadena y motivo</caption>
           <thead>
@@ -521,8 +578,8 @@ function RetryMatrix({
         </table>
       </div>
 
-      {/* En el teléfono y la tableta: una tarjeta por paso, un motivo por fila. */}
-      <ul className="divide-y divide-line lg:hidden">
+      {/* Con la tarjeta más angosta (teléfono, tableta o escritorio con menú): una tarjeta por paso, un motivo por fila. */}
+      <ul className="divide-y divide-line @4xl:hidden">
         {RETRY_STEPS.map((step) => (
           <li key={step.key} className={ROW}>
             <p className="text-sm font-semibold text-ink-900">{step.label}</p>
@@ -551,18 +608,46 @@ function RetryMatrix({
 function CapCard({ orgId, cap, canEdit }: { orgId: string; cap: number; canEdit: boolean }) {
   const id = useId();
   const [value, setValue] = useState(String(cap));
+  // Lo último guardado: el tope del servidor o lo que esta tarjeta acaba de
+  // guardar. «Sin guardar» se mide contra esto, no contra la prop, que llega
+  // un momento después de guardar.
+  const [saved, setSaved] = useState(String(cap));
+  const [seenCap, setSeenCap] = useState(cap);
   const [status, setStatus] = useState<Status>(null);
   const [pending, startTransition] = useTransition();
-  const dirty = value !== String(cap);
+  const dirty = value !== saved;
+  // El tope cambió en el servidor (otra pestaña, otra persona, o este mismo
+  // guardado): se adopta si aquí no hay nada a medias. Ajuste durante el
+  // render, sin remontar la tarjeta, para que «Guardado» siga a la vista.
+  if (cap !== seenCap) {
+    setSeenCap(cap);
+    if (!pending && !dirty) {
+      setSaved(String(cap));
+      setValue(String(cap));
+    }
+  }
 
   return (
     <form
       className={CARD}
       onSubmit={(e) => {
         e.preventDefault();
-        if (!canEdit) return;
+        if (!canEdit || pending) return;
+        const submitted = value;
         setStatus(null);
-        startTransition(async () => setStatus(statusOf(await setRetryDailyCap(orgId, value))));
+        startTransition(async () => {
+          try {
+            const result = await setRetryDailyCap(orgId, submitted);
+            if (!result.error) {
+              const normalized = String(Number(submitted));
+              setSaved(normalized);
+              setValue((current) => (current === submitted ? normalized : current));
+            }
+            setStatus(statusOf(result));
+          } catch {
+            setStatus({ kind: "error", text: NETWORK_ERROR });
+          }
+        });
       }}
     >
       <div className={ROW}>
@@ -627,7 +712,14 @@ function SimulateSection({ orgId, canEdit }: { orgId: string; canEdit: boolean }
           disabled={!canEdit || pending}
           onClick={() => {
             setResult(null);
-            startTransition(async () => setResult(await simulateRetriesNow(orgId)));
+            startTransition(async () => {
+              try {
+                setResult(await simulateRetriesNow(orgId));
+              } catch {
+                // La función se cortó o se perdió la conexión: un aviso, no el límite de errores.
+                setResult({ error: "La simulación no respondió: se cortó o se perdió la conexión. Vuelve a intentar." });
+              }
+            });
           }}
           className="pointer-coarse:h-11"
         >
@@ -644,7 +736,7 @@ function SimulateSection({ orgId, canEdit }: { orgId: string; canEdit: boolean }
         {sim && (
           <>
             {sim.skipped && <Banner tone="info">La pasada no revisó pedidos esta vez.</Banner>}
-            {sim.stopped && <Banner tone="warn">Se cortó por tiempo: quedaron pedidos sin revisar.</Banner>}
+            {sim.stopped && <Banner tone="warn">La simulación se cortó por tiempo: muestra lo evaluado. Los pedidos que faltan los revisa la pasada siguiente.</Banner>}
             <div className={CARD}>
               <div className={cn(ROW, "border-b border-line py-3 text-[13px] text-ink-600")}>
                 Quedan <span className="font-semibold tabular-nums text-ink-900">{sim.capLeft}</span> de{" "}
@@ -773,8 +865,11 @@ function RetryLog({ rows }: { rows: RetryLogView[] }) {
 function groupBadge(entries: AutomationEntry[], org: AutomationsOrgView): ReactNode {
   const switchable = entries.filter((e) => e.control.kind !== "readonly");
   if (switchable.length === 0) return undefined;
+  // Cuenta lo que de verdad corre: encendido y con su requisito encendido.
   const lit = switchable.filter((e) =>
-    e.control.kind === "org_table" ? org.org[e.key]?.state === "on" : (org.store?.[e.key] ?? []).some((s) => s.on),
+    e.control.kind === "org_table"
+      ? org.org[e.key]?.state === "on" && org.org[e.key]?.requiresOn !== false
+      : (org.store?.[e.key] ?? []).some((s) => s.on && s.requiresOn),
   ).length;
   return <Badge tone={lit ? "ok" : "neutral"}>{lit ? `${lit} de ${switchable.length} encendidas` : "Todas apagadas"}</Badge>;
 }
@@ -831,18 +926,25 @@ function OrgSwitchRow({
       ? "Sin configurar en tu organización."
       : state === "unknown"
         ? "No se pudo leer su estado."
-        : !checked && needsRequirement
-          ? (entry.requiresReason ?? null)
+        : needsRequirement
+          ? checked
+            ? inertText(entry)
+            : (entry.requiresReason ?? null)
           : null;
   const disabled = !writable || state === "missing" || state === "unknown" || (!checked && needsRequirement);
 
   const toggle = (next: boolean) => {
+    if (pending) return;
     if (next && needsConfirmation(entry) && !window.confirm(confirmationText(entry))) return;
     setStatus(null);
     startTransition(async () => {
-      const result = await setOrgAutomation(orgId, entry.key, next);
-      if (!result.error) setChecked(next);
-      setStatus(statusOf(result));
+      try {
+        const result = await setOrgAutomation(orgId, entry.key, next);
+        if (!result.error) setChecked(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      }
     });
   };
 
@@ -900,15 +1002,20 @@ function StoreSwitch({ entry, view, nameId, writable }: { entry: AutomationEntry
   const [status, setStatus] = useState<Status>(null);
   const [pending, startTransition] = useTransition();
   const needsRequirement = !view.requiresOn;
-  const blocked = !checked && needsRequirement ? (entry.requiresReason ?? null) : null;
+  const blocked = needsRequirement ? (checked ? inertText(entry) : (entry.requiresReason ?? null)) : null;
 
   const toggle = (next: boolean) => {
+    if (pending) return;
     if (next && needsConfirmation(entry) && !window.confirm(confirmationText(entry, view.storeName))) return;
     setStatus(null);
     startTransition(async () => {
-      const result = await setStoreAutomation(view.storeId, entry.key, next);
-      if (!result.error) setChecked(next);
-      setStatus(statusOf(result));
+      try {
+        const result = await setStoreAutomation(view.storeId, entry.key, next);
+        if (!result.error) setChecked(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      }
     });
   };
 
@@ -950,14 +1057,16 @@ function ReadonlyRow({
   const id = useId();
   return (
     <div className={ROW}>
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
+      {/* En el teléfono la chapa va debajo del texto: a su lado, con hasta
+          16rem de ancho, dejaba el nombre y la descripción en unos 40 px. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 sm:flex-1">
           <EntryHead entry={entry} nameId={`${id}-name`} descId={`${id}-desc`} />
           {entry.control.kind === "readonly" && <p className="mt-1.5 max-w-[68ch] text-[13px] leading-5 text-ink-700">{entry.control.how}</p>}
           <EntryLinks entry={entry} stores={stores} />
         </div>
         {/* El estado de lo que no se cambia aquí va en chapa neutra: informa, no invita a tocar. */}
-        <Badge tone={state?.tone === "warn" ? "warn" : "neutral"} wrap className="max-w-[16rem] shrink-0">
+        <Badge tone={state?.tone === "warn" ? "warn" : "neutral"} wrap className="max-w-full self-start sm:max-w-[16rem] sm:shrink-0">
           {state?.label ?? "Sin dato"}
         </Badge>
       </div>

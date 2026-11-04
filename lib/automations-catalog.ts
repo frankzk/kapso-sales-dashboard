@@ -147,7 +147,10 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     group: "logistica_provincia",
     name: "Swayp desde Por confirmar",
     what:
-      "Una vez al día envía por Swayp, sin confirmar con la clienta, una parte de los pedidos de provincia que no contestan. Se apaga solo si las entregas caen; encenderlo a mano quita ese freno.",
+      // El freno se mira al empezar CADA pasada (`frenoActivado`,
+      // lib/swayp-por-confirmar-auto-server.ts): encender a mano borra el
+      // motivo, pero si la tasa sigue baja se vuelve a apagar en la siguiente.
+      "Una vez al día envía por Swayp, sin confirmar con la clienta, una parte de los pedidos de provincia que no contestan. Se apaga solo si las entregas caen; encenderlo a mano lo reanuda, pero si siguen bajas se vuelve a apagar en la pasada siguiente.",
     effect: "Crea guías",
     scope: "org",
     control: { kind: "org_table", table: "swayp_pc_auto_settings", column: "enabled" },
@@ -163,7 +166,11 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
       "Lee en Chatby la conversación de los pedidos de provincia por confirmar. Si la clienta confirmó con el pedido, el monto y la dirección correctos, crea la guía de Aliclik y confirma el pedido.",
     effect: "Confirma pedidos",
     scope: "org",
-    control: { kind: "org_table", table: "chatby_auto_settings", column: "enabled" },
+    // Sin la guía, la pasada no confirma nada (lib/chatby-autoconfirm-server.ts:
+    // «sin guía no se confirma nada», owner 02-11-2026). Modelado como
+    // requisito para que el panel no diga «Encendido» mientras no confirma.
+    control: { kind: "org_table", table: "chatby_auto_settings", column: "enabled", requires: "guide_enabled" },
+    requiresReason: "Enciende antes «Guía Aliclik de la confirmación por Chatby»: sin ella Chatby no confirma ningún pedido.",
   },
   {
     key: "chatby_auto_guide",
@@ -173,7 +180,7 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     // confirma nada («confirmar y crear la guía son un paso», decisión del
     // owner del 02-11-2026). Se dice tal cual para que nadie lo apague
     // creyendo que solo quita la guía.
-    what: "Confirmar y crear la guía van juntos: si esto se apaga, Chatby deja de confirmar pedidos aunque el interruptor de arriba siga encendido.",
+    what: "Confirmar y crear la guía van juntos: apagar esto también detiene las confirmaciones por Chatby, aunque el interruptor de arriba siga encendido.",
     effect: "Crea guías",
     scope: "org",
     control: { kind: "org_table", table: "chatby_auto_settings", column: "guide_enabled" },
