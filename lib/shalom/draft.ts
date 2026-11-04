@@ -514,3 +514,24 @@ export function shalomAirRoute(
 export function defaultAirChoice(route: AirRoute): boolean {
   return route.offered && route.fromOrigin !== "no";
 }
+
+/**
+ * ¿Shalom rechazó la guía porque no hay vuelo en esa ruta? (04-11-2026)
+ *
+ * Con la vía aérea marcada por defecto, la ruta que el directorio no aclara
+ * (`unknown`) sale marcada, y si Shalom no vuela ahí la creación vuelve con
+ *   400 «envío aéreo no disponible: No se permite servicio aéreo entre el
+ *   origen y destino seleccionado».
+ * Pasó con #KP202237 (Pangoa, Junín) desde Breña. Ese 400 NO crea preguía: es
+ * Shalom contestando por fin lo que el directorio no dijo, y el modal lo toma
+ * como un «no» firme para esa agencia (`fromOrigin: "no"`).
+ */
+export function isShalomAirRouteRejection(message: string | null | undefined): boolean {
+  const m = message ?? "";
+  return /a[ée]reo no disponible/i.test(m) || /no se permite servicio a[ée]reo/i.test(m);
+}
+
+/** La ruta que manda: la del directorio, salvo que Shalom ya dijera que no vuela. */
+export function effectiveAirRoute(route: AirRoute, rejectedByShalom: boolean): AirRoute {
+  return rejectedByShalom && route.offered ? { offered: true, fromOrigin: "no" } : route;
+}

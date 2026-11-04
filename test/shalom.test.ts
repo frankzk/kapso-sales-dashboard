@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildShalomOrderPayload,
@@ -18,6 +19,8 @@ import {
   shalomSoftBlockers,
   shalomAirRoute,
   defaultAirChoice,
+  effectiveAirRoute,
+  isShalomAirRouteRejection,
   MIN_OVERRIDE_REASON,
 } from "@/lib/shalom/draft";
 import {
@@ -852,6 +855,34 @@ describe("shalomAirRoute", () => {
     expect(defaultAirChoice(shalomAirRoute(iquitos, 476))).toBe(false);
     expect(defaultAirChoice(shalomAirRoute({ aereo: false }, 476))).toBe(false);
     expect(defaultAirChoice(shalomAirRoute(null, 476))).toBe(false);
+  });
+
+  // 04-11-2026, #KP202237 (Pangoa) desde Breña: la ruta no constaba, la casilla
+  // salió marcada y Shalom contestó con este 400. Ese «no» manda.
+  it("reconoce el rechazo de Shalom por falta de vuelo y lo toma como un no", () => {
+    const real =
+      "Shalom rechazó la solicitud (400): envío aéreo no disponible: No se permite servicio aéreo entre el origen y destino seleccionado. (request_id 01M6KBHC7DBES87W07B1NAJNSZ).";
+    expect(isShalomAirRouteRejection(real)).toBe(true);
+    expect(isShalomAirRouteRejection("envio aereo no disponible")).toBe(true);
+    expect(isShalomAirRouteRejection("Shalom rechazó la solicitud (400): body JSON inválido")).toBe(false);
+    expect(isShalomAirRouteRejection(null)).toBe(false);
+
+    const unknown = shalomAirRoute({ aereo: true }, 476);
+    expect(effectiveAirRoute(unknown, true)).toEqual({ offered: true, fromOrigin: "no" });
+    expect(defaultAirChoice(effectiveAirRoute(unknown, true))).toBe(false);
+    expect(effectiveAirRoute(unknown, false)).toEqual(unknown);
+    // Sin casilla no hay nada que bloquear.
+    expect(effectiveAirRoute({ offered: false }, true)).toEqual({ offered: false });
+  });
+
+  it("al crear, el rechazo por falta de vuelo vuelve marcado y el modal desmarca", () => {
+    const action = readFileSync("app/dashboard/pedidos/shalom-actions.ts", "utf8");
+    expect(action).toContain("isShalomAirRouteRejection(described)");
+    expect(action).toContain("airRouteRejected: true");
+    const modal = readFileSync("components/shalom-guide-modal.tsx", "utf8");
+    expect(modal).toContain("res.airRouteRejected");
+    expect(modal).toContain("setAereo(false)");
+    expect(modal).toContain("effectiveAirRoute(");
   });
 
   it("no afirma nada si falta la lista o el origen", () => {
