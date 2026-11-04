@@ -613,4 +613,6 @@
 \ir migrations/0304_aliclik_report_detail.sql
 \echo 'Applying 0305_urpi_take_gf_output.sql'
 \ir migrations/0305_urpi_take_gf_output.sql
+\echo 'Applying 0306_automations_panel.sql'
+\ir migrations/0306_automations_panel.sql
 \echo 'Done.'
