@@ -3496,9 +3496,44 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
     y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
     reintento se aprueba desde mañana».
-  - Sigue la creación automática, medidas dos semanas de aprobaciones.
+- **Entrega 3, la creación automática por variante (owner, 04-11-2026).** En
+  vez de esperar dos semanas para encender todo junto, el owner enciende cada
+  variante desde **Automatizaciones** (§40) cuando la ve segura. Una variante es
+  el **paso** de la cadena por el **motivo** del intento que falló
+  (`lib/lima-retry-auto.ts`), doce en total:
+  - Pasos: «Alexis (Grupo GF) → AUTOECOM», «Urpi → AUTOECOM», «AUTOECOM →
+    ALIDRIVER (tercer intento)» y «AUTOECOM → ALIDRIVER (cadena de dos)».
+  - Motivos: «no contesta», «no estaba» y «otro».
+  - Cada una con tres posiciones: **Apagado** (la bandeja sigue para aprobar a
+    mano), **Simulación** (la pasada dice qué guía habría creado, con su
+    transporte, y no crea nada ni deja hechos en el pedido) y **Activo** (la
+    pasada crea la guía como «Aprobar», sin persona). Todo nace apagado.
+  - **La pasada** (`/api/cron/lima-retry-auto`, `lib/lima-retry-auto-server.ts`)
+    corre a las :23 de 8 a 13 h de Lima, antes del corte de Aliclik. Toma los
+    pedidos de «Por reprogramar Lima» cuya cadena sigue y ya está lista
+    (`retryChainOf` + `chainReadyOn`: falló otro día), con las mismas reglas que
+    la bandeja: sin acuerdo de la tienda en el episodio, sin anular, sin
+    descartar. **No toca** un pedido cuyo caso tiene tomado una persona en
+    Repro Lima en ese momento (lo reintenta en la pasada siguiente).
+  - **Crea por el mismo camino que «Aprobar»** (`lib/lima-retry-approve.ts`,
+    `createAliclikGuideFor`), con origen `reintento_lima`: el historial dice
+    «automáticamente (reintento Lima)» y el motivo de la salida adicional de
+    Lima es «Reintento Aliclik N de M automático (regla encendida en
+    Automatizaciones)». Es la **única** excepción a «el automático nunca
+    justifica otra salida en nombre de una persona»: la justifica la regla que
+    encendió el owner. Deja `lima_retry_approved` sin actor, con `source:
+    system`, `auto: true` y la variante. Sin ese transporte para la dirección,
+    pasa a Repro Lima como con «Aprobar».
+  - **Una creación por pedido y día** (`lima_retry_auto_log`, único por pedido,
+    día y modo) y un **tope diario** por organización (10 por omisión, de 1 a
+    50) que cuenta lo creado y lo que pudo crearse (Aliclik no respondió).
+    Lo que no se pudo agendar, el tope, Aliclik caído o el caso tomado se
+    reintentan; un fallo avisa por Telegram (`lima_retry_auto_failed`) y el
+    pedido sigue en la bandeja para hacerlo a mano.
+  - «Simular ahora» en el panel cotiza todas las variantes con los pedidos de
+    ese momento, sin escribir nada.
 
-Pruebas: `test/lima-retry-chain.test.ts`.
+Pruebas: `test/lima-retry-chain.test.ts`, `test/lima-retry-auto.test.ts`.
 
 #### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)
 
@@ -21292,3 +21327,54 @@ no dice que la fuente confirmó el stock hasta recibir su cancelación.
 Instalar la 0285 no termina ventas ni repone stock. Pruebas: woo-sale-return*.test.ts
 y scripts/sql/woo_sale_return_smoke.sql (flujo GF, fuente intacta, permisos,
 idempotencia, prueba de recepción/inventario y turno recuperable).
+
+## 40. Panel de automatizaciones (04-11-2026)
+
+**Decisión del owner (04-11-2026).** «Un panel de configuración con todas las
+posibles variantes de automatización, y solo activo las que veo convenientes o
+las que veamos más seguras: tipo switches para activar y desactivar según sea el
+caso». Hasta hoy cada automatización se encendía en un sitio distinto —una
+página propia, los Ajustes de cada tienda, una fila de la base o una variable de
+Vercel— y algunas no tenían interruptor.
+
+- **Dónde:** `/dashboard/automatizaciones` («Automatizaciones» en el menú).
+  Entra quien tiene el permiso nuevo **`automations.manage`** («Encender y
+  apagar automatizaciones»), de concesión individual y solo del dueño: el rol
+  admin no lo trae. Cada cambio vuelve a pedir el permiso en la organización y
+  solo se guarda en producción.
+- **Una sola fuente de verdad.** El panel no copia los ajustes: cada interruptor
+  escribe en el mismo lugar que ya leía su automatización, así que encender aquí
+  o en su página de detalle es lo mismo. Solo escribe en una lista cerrada de
+  ajustes (`lib/automations-catalog.ts`); nada que llegue del navegador elige
+  otra columna.
+- **Qué lista** (`lib/automations-catalog.ts`):
+  - **Reintentos Aliclik en Lima** (§9.5, entrega 3): la matriz de doce
+    variantes con Apagado / Simulación / Activo, el tope diario, «Simular
+    ahora» y lo que hizo o habría hecho hoy y ayer.
+  - **Con interruptor por organización:** Aliclik → Swayp automático (§11.9;
+    encenderlo también cambia al agente de voz, que deja de llamar los pedidos
+    que tomaría el automático) y su piloto sin historial (§11.9.1, solo con el
+    automático encendido); Swayp desde Por confirmar (§11.13; encenderlo borra
+    el motivo del freno, como en su página); la confirmación por Chatby y su
+    guía Aliclik (§6.1).
+  - **Con interruptor por tienda:** los automáticos de los agentes de voz
+    (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
+    función encendida en Ajustes—, las plantillas automáticas de WhatsApp
+    (búsqueda, recuperación de clientes, drip, carritos, agradecimiento,
+    reposición) y los avisos de Shalom y Olva y el envío de la clave de recojo.
+  - **Sin interruptor propio**, solo con su estado y dónde se cambian: la guía
+    Aliclik del día programado (depende de «Crear guías en Aliclik» de la
+    tienda, que también apaga las guías a mano), los comprobantes electrónicos,
+    los pedidos de recompra, el reparto de leads por bloques, los resúmenes por
+    Telegram, el cierre WooCommerce de venta terminada, la validación de cobros
+    Tanders, la programación de Urpi, el bot de Kapso → pedidos y la validación
+    de pagos por Yape. Darles interruptor es un cambio aparte, cuando el owner
+    lo pida.
+- **Encender pide confirmación** cuando la automatización actúa hacia afuera
+  (crea guías, confirma pedidos, llama o envía WhatsApp). Un automático que
+  depende de otra función no se enciende con ella apagada; el panel dice cuál.
+- **Historial:** cada cambio queda en `automation_switch_events` (quién, qué,
+  de qué a qué, cuándo) y el panel muestra los últimos.
+
+Migración `0306_automations_panel.sql`. Pruebas: `test/automations-catalog.test.ts`,
+`test/lima-retry-auto.test.ts`.

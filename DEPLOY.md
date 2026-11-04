@@ -1,5 +1,20 @@
 # Deployment runbook
 
+### 04-11-2026 · Panel de automatizaciones y reintentos Aliclik automáticos (0306)
+
+Aplicar `db/migrations/0306_automations_panel.sql` **antes** de publicar. Crea
+`lima_retry_auto_settings`, `lima_retry_auto_variants`, `lima_retry_auto_log` y
+`automation_switch_events`, con RLS de solo lectura para miembros. No cambia
+datos: todas las variantes de reintento nacen apagadas (sin fila = apagado) y
+ninguna otra automatización cambia de estado. Sin la migración, el panel no
+carga y la pasada `/api/cron/lima-retry-auto` no hace nada.
+
+Al publicar entra el cron `/api/cron/lima-retry-auto` (`23 13-18 * * *`, de 8:23
+a 13:23 de Lima). Con todo apagado no lee pedidos. El permiso nuevo
+`automations.manage` lo tiene el dueño por su rol; a otra persona se le concede
+en Equipo. Marcha atrás: dejar las variantes en Apagado desde el panel (o borrar
+sus filas); el código anterior no lee estas tablas.
+
 ### 02-11-2026 · Coordenada por dirección: el piloto (sin migración)
 
 Solo la variable `GOOGLE_GEOCODING_API_KEY` en Vercel (Production, sensible,
