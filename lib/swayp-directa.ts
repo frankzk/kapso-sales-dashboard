@@ -51,6 +51,8 @@ export interface DirectGuideExisting {
   custody_transferred_at?: string | null;
   output_number?: number | null;
   output_code?: string | null;
+  /** La etiqueta de Aliclik: dice si la guía viva ya vuelve sin entregar. */
+  reported_status?: string | null;
 }
 
 /**
@@ -81,7 +83,7 @@ export async function findGuidesOfOrder(
   order: { id: string; store_id: string; name: string | null },
 ): Promise<DirectGuideExisting[]> {
   const cols =
-    "id,guide_code,courier,delivery_status,created_via,custody_state,custody_transferred_at,output_number,output_code";
+    "id,guide_code,courier,delivery_status,created_via,custody_state,custody_transferred_at,output_number,output_code,reported_status";
   const { data: byOrder } = await admin.from("shipments").select(cols).eq("order_id", order.id).limit(50);
   let byName: DirectGuideExisting[] = [];
   if (order.name) {

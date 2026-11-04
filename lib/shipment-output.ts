@@ -406,9 +406,36 @@ export interface SalidaExistente {
   created_via?: string | null;
   custody_state?: string | null;
   custody_transferred_at?: string | null;
+  /** Etiqueta del courier (`status · dispatchStatus · callStatus` en Aliclik). */
+  reported_status?: string | null;
 }
 
 const ESTADOS_VIVOS = new Set(["pendiente", "en_ruta", "por_preparar"]);
+
+/**
+ * UNA GUÍA ALICLIK QUE YA VUELVE SIN ENTREGAR NO ESTORBA (04-11-2026).
+ *
+ * #KP143415: la guía AUR5X866423366918 dice `NOT_RESPOND · TO_RETURN` desde el
+ * 29-10. El motorizado no encontró a la clienta y el paquete viaja de vuelta,
+ * pero Aliclik todavía no la anuló, así que en Kapta seguía `pendiente` y
+ * bloqueaba la Swayp directa: «fuera de Lima hay que gestionarla o anularla»,
+ * y no hay forma de anular una guía que ya está en la calle.
+ *
+ * Medido desde el 01-09-2026: de 723 guías que llegaron a `TO_RETURN` con un
+ * intento fallido (NOT_RESPOND, REFUSED, CANCEL, ANNULLED) y nunca con
+ * PENDING_DELIVERY, se entregó UNA. Es lo mismo que el `RETURNING` de Tanders
+ * o la Devolución de Swayp, que ya no estorbaban por `liveGuideFailed`.
+ *
+ * `PENDING_DELIVERY · TO_RETURN` NO entra: de esas se entregó un tercio (650
+ * de 1.954). Tampoco `RESCHEDULED`: la clienta pidió otra fecha.
+ */
+const ALICLIK_FALLO_DEFINITIVO = new Set(["NOT_RESPOND", "REFUSED", "CANCEL", "ANNULLED"]);
+
+export function aliclikVuelveSinEntregar(o: Pick<SalidaExistente, "courier" | "reported_status">): boolean {
+  if ((o.courier ?? "").trim().toLowerCase() !== "aliclik") return false;
+  const [status = "", dispatch = ""] = (o.reported_status ?? "").split(" · ").map((p) => p.trim().toUpperCase());
+  return ALICLIK_FALLO_DEFINITIVO.has(status) && dispatch === "TO_RETURN";
+}
 
 /**
  * Las salidas que siguen vivas y que la guía nueva NO va a aprovechar.
@@ -421,6 +448,7 @@ export function salidasQueEstorban<T extends SalidaExistente>(outputs: readonly 
     (o) =>
       ESTADOS_VIVOS.has(o.delivery_status) &&
       o.custody_state !== "devuelto" &&
+      !aliclikVuelveSinEntregar(o) &&
       !isFillableRouteOutput({
         courier: o.courier,
         created_via: o.created_via ?? null,

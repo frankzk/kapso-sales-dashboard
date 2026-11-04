@@ -2186,6 +2186,18 @@ Aliclik se suma para la creación manual en Lima (owner, 27-10-2026,
   aplican igual, con `canRepeatCourier`, la misma que usa la mesa manual.
 - **Fuera de Lima no cambia**: Reproprovincia sigue exigiendo que no haya otra
   salida viva antes de una Swayp directa (Fase 3).
+- **Una guía Aliclik que ya vuelve sin entregar no bloquea otra salida
+  (04-11-2026).** #KP143415: la guía decía `NOT_RESPOND · TO_RETURN` desde
+  hacía seis días y seguía `pendiente`, porque Aliclik todavía no la anulaba. La
+  Swayp directa respondía «gestiónala o anúlala», y una guía en la calle no se
+  anula. Medido desde el 01-09-2026: de 723 guías que llegaron a `TO_RETURN` con
+  intento fallido (`NOT_RESPOND`, `REFUSED`, `CANCEL`, `ANNULLED`) y nunca con
+  `PENDING_DELIVERY`, se entregó una. Esas guías dejan de contar como salida viva
+  para esta puerta, igual que el `RETURNING` de Tanders o la Devolución de
+  Swayp (`aliclikVuelveSinEntregar`). **`PENDING_DELIVERY · TO_RETURN` sigue
+  bloqueando**: de esas se entregó un tercio (650 de 1.954). `RESCHEDULED`
+  también: la clienta pidió otra fecha. La guía Aliclik no se toca; sigue su
+  curso hasta que Aliclik la anule y vuelva la caja.
 - **Lima se decide con `order_master.macro_operation`**, la misma fuente que la
   mesa manual.
 - **El aviso nombra al courier de verdad.** El de Swayp directa elegía entre dos
