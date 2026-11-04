@@ -120,6 +120,8 @@ export async function getDispatchWorkspaceData(requestedId?: string | null): Pro
       .from("dispatch_manifests")
       .select(MANIFEST_COLUMNS)
       .not("state", "in", "(in_custody,cancelled)")
+      // La entrega a Swayp Lima vive en Almacén › «Swayp por salir» (R9, MOM §9.1).
+      .neq("courier", "fenix")
       .order("route_date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(100),
@@ -127,6 +129,7 @@ export async function getDispatchWorkspaceData(requestedId?: string | null): Pro
       .from("dispatch_manifests")
       .select(MANIFEST_COLUMNS)
       .in("state", ["in_custody", "cancelled"])
+      .neq("courier", "fenix")
       .order("route_date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(20),

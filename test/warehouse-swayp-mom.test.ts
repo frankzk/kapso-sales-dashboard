@@ -41,7 +41,6 @@ import {
   SWAYP_FIGURE_LABEL,
   SWAYP_GUIDE_LINE,
   SWAYP_HELP,
-  SWAYP_HOY_FALTA_AQUI,
   SWAYP_HOY_FALTA_TOMADA,
   SWAYP_HOY_NOTE,
   SWAYP_HOY_STATE_LINE,
@@ -163,9 +162,11 @@ describe("las decisiones del owner (03-11-2026)", () => {
     expect([...SWAYP_CANCELLED_STATES]).toEqual([10]);
     expect(SWAYP_STATES[10]).toBe("Cancelada");
     expect(s).toContain("ni canceladas por Swayp (estado 10, el único de cancelación del mapa de `lib/swayp-states.ts`)");
-    // «Hoy»: Swayp aún no la tomó con estado 1 o 2.
+    // «Próximo»: Swayp aún no la tomó con estado 1 o 2. En «Hoy» (fase 3) que
+    // Swayp la haya cargado es lo normal: la entrega la arma al escanearla.
     expect(SWAYP_NOT_TAKEN_MAX_STATE).toBe(2);
-    expect(s).toContain(`(sin estado, 1 «${SWAYP_STATES[1]}» o 2 «${SWAYP_STATES[2]}»)`);
+    expect(s).toContain("En «Próximo», la que Swayp ya tomó antes de su día sigue diciendo");
+    expect(s).toContain("la entrega la arma al escanearla");
     // Hasta 3 códigos en el aviso del escáner.
     expect(SWAYP_SCAN_LIST_MAX).toBe(3);
     expect(s).toContain("hasta 3 códigos y «y N más»");
@@ -191,8 +192,9 @@ describe("las decisiones del owner (03-11-2026)", () => {
     expect(read("lib/warehouse-swayp-access.ts")).toContain("macro_operation");
   });
 
-  it("las fases siguientes quedan pendientes", () => {
-    expect(s).toContain("**Fases siguientes, pendientes del owner.** Fase 2: cerrar una falta con motivo. Fase 3: la entrega cotejada a Swayp (hoy Kapta no la registra). Fase 4: «Salida Swayp programada» en el Master.");
+  it("la fase 3 está hecha; la 2 (para «Próximo») y la 4 quedan pendientes", () => {
+    expect(s).toContain("**Fases siguientes.** Fase 3, la entrega cotejada a Swayp: hecha el 04-11-2026");
+    expect(s).toContain("Pendientes del owner: fase 2 para el lote de «Próximo» (cerrar una falta con motivo la víspera) y fase 4, «Salida Swayp programada» en el Master.");
     expect(s).toContain("**Lagunas conocidas de la fase 1.**");
   });
 });
@@ -282,8 +284,8 @@ describe("cita los textos de la pantalla tal cual (lib/warehouse-swayp.ts)", () 
   it("«Hoy», la celda y el escáner", () => {
     const quotes = [
       SWAYP_HOY_NOTE,
-      SWAYP_HOY_STATE_LINE(SWAYP_STATES[1]!, "00:38"),
-      SWAYP_HOY_FALTA_AQUI,
+      // Sin hora mientras las horas de Swayp lleven 5 h de desfase (fase 3).
+      SWAYP_HOY_STATE_LINE(SWAYP_STATES[5]!, null),
       SWAYP_HOY_FALTA_TOMADA,
       SWAYP_CELL_TITLE,
       SWAYP_CELL_COMPLETE,

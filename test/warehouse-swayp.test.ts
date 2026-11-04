@@ -46,7 +46,6 @@ import {
   SWAYP_EMPTY,
   SWAYP_ERROR,
   SWAYP_HELP,
-  SWAYP_HOY_FALTA_AQUI,
   SWAYP_HOY_FALTA_TOMADA,
   SWAYP_SCAN_FUERA,
   SWAYP_HOY_NOTE,
@@ -69,6 +68,7 @@ import {
   type SwaypShipmentRow,
   type WarehouseSwaypData,
 } from "@/lib/warehouse-swayp";
+import { SWAYP_HOY_FALTA_ENTREGA } from "@/lib/swayp-handover";
 import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
 import { SWAYP_RETURN_STATES, mapSwaypState } from "@/lib/swayp";
 
@@ -623,7 +623,7 @@ describe("el tono de «Próximo», siempre con texto", () => {
 // ---------------------------------------------------------------------------
 
 describe("«Hoy» para cuadrar: el estado de Swayp como dato y qué hacer con la falta", () => {
-  it("en la empresa y Swayp aún no la tomó: crítico; Swayp ya la tomó: avisa a Seguimiento", () => {
+  it("antes de la entrega, toda falta de hoy se arma y se entrega en «Entregar a Swayp» o se marca «No sale» (fase 3, 04-11-2026)", () => {
     const here = limaGuide("KP30-S01", { day: "2026-11-03", guide: "530", createdAt: "2026-11-02T15:00:00Z", emittedAt: "2026-11-02T15:00:00Z" });
     const taken = limaGuide("KP31-S01", {
       day: "2026-11-03", guide: "531", createdAt: "2026-11-02T15:00:00Z", emittedAt: "2026-11-02T15:00:00Z",
@@ -636,16 +636,20 @@ describe("«Hoy» para cuadrar: el estado de Swayp como dato y qué hacer con la
     const hoy = buildWarehouseSwayp(input([here, taken, delivered]), lima("2026-11-03", "09:00")).hoy!;
     expect(hoy.headline).toBe("Swayp hoy: 3 programadas · 1 armada · faltan 2");
     expect(hoy.note).toBe(SWAYP_HOY_NOTE);
+    // Swayp carga su ruta hacia las 05:45 y pasa a las 07:00: que la haya
+    // «tomado» en su sistema es lo normal en «Hoy», y la entrega la arma al
+    // escanearla. El estado de Swayp va sin hora (las horas de Swayp llevan 5 h
+    // de desfase en Kapta).
     expect(hoy.faltan.map((f) => [f.code, f.swaypLine, f.actionLine, f.taken])).toEqual([
-      ["KP30-S01", "Swayp: Generada", { kind: "crit", text: SWAYP_HOY_FALTA_AQUI }, false],
-      ["KP31-S01", "Swayp: Reparto · 00:38", { kind: "warn", text: SWAYP_HOY_FALTA_TOMADA }, true],
+      ["KP30-S01", "Swayp: Generada", { kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA }, false],
+      ["KP31-S01", "Swayp: Reparto", { kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA }, true],
     ]);
-    // La que sigue aquí dice dónde está la caja; la que Swayp ya tomó, no: pedir
-    // que se arme desde stock contradiría «Swayp ya la tomó» (KP200486-S02, 02-11).
+    // En «Hoy» las dos dicen dónde está la caja: se arma al entregarla.
     expect(hoy.faltan[0]!.where?.kind).toBe("desde_stock");
-    expect(hoy.faltan[1]!.where).toBeNull();
-    expect(hoy.armadas[0]!.swaypLine).toBe("Swayp: Entregada · 00:38");
-    expect(swaypHoyUrgent(hoy)).toBe(1);
+    expect(hoy.faltan[1]!.where?.kind).toBe("desde_stock");
+    expect(hoy.armadas[0]!.swaypLine).toBe("Swayp: Entregada");
+    expect(hoy.entrega).toBeNull();
+    expect(swaypHoyUrgent(hoy)).toBe(2);
   });
 });
 
@@ -858,7 +862,7 @@ describe("las devoluciones de Swayp no son «Guía anulada en Kapta» (estados 9
     const hoy = buildWarehouseSwayp(input([returned]), lima("2026-11-03", "19:40")).hoy!;
     expect(hoy.headline).toBe("Swayp hoy: 1 programada · 1 armada");
     expect(hoy.salieron).toEqual([]);
-    expect(hoy.armadas[0]!.swaypLine).toBe("Swayp: Devolución confirmada · 05:44");
+    expect(hoy.armadas[0]!.swaypLine).toBe("Swayp: Devolución confirmada");
   });
 
   it("«Estaba armada: sácala del sitio de Swayp» solo si la caja sigue en la empresa", () => {

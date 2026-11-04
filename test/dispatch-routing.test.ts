@@ -11,7 +11,7 @@ import {
 
 describe("routeKindForCourier", () => {
   it("los que reparten con motorizado son rutas de reparto", () => {
-    for (const courier of ["propio", "axel", "urpi", "tanders", "fenix"]) {
+    for (const courier of ["propio", "axel", "urpi", "tanders"]) {
       expect(routeKindForCourier(courier)).toBe("reparto");
     }
   });
@@ -22,6 +22,13 @@ describe("routeKindForCourier", () => {
     for (const courier of ["aliclik", "shalom", "olva"]) {
       expect(routeKindForCourier(courier)).toBe("entrega_courier");
     }
+  });
+
+  it("Swayp Lima se entrega en la oficina: un cotejo y el nombre del chofer (MOM §9.1, 04-11-2026)", () => {
+    // Su chofer no tiene cuenta en Kapta: el segundo escaneo lo haría nuestra
+    // propia gente. Se cierra como Aliclik, con su nombre y su conteo.
+    expect(routeKindForCourier("fenix")).toBe("entrega_courier");
+    expect(needsRiderCheck(routeKindForCourier("fenix"))).toBe(false);
   });
 
   it("un courier desconocido reparte, que es el caso con más control", () => {

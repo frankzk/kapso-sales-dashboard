@@ -25,6 +25,7 @@ interface CourierRule {
  *   agencia (§5).
  * - Swayp atiende Lima y además provincia por Reproprovincia (§11).
  * - Aliclik es provincia COD (§10) y recoge; no hay motorizado que coteje.
+ * - Swayp Lima también se entrega en la oficina (§9.1, fase 3): `entrega_courier`.
  * - Shalom y Olva son agencia (§12): la caja se lleva al local.
  */
 const COURIER_RULES: Record<string, CourierRule> = {
@@ -32,7 +33,11 @@ const COURIER_RULES: Record<string, CourierRule> = {
   axel: { kind: "reparto", operations: ["lima"] },
   urpi: { kind: "reparto", operations: ["lima"] },
   tanders: { kind: "reparto", operations: ["lima"] },
-  fenix: { kind: "reparto", operations: ["lima", "provincia_cod"] },
+  // Swayp Lima se ENTREGA en la oficina (owner 04-11-2026, MOM §9.1 «Entrega a
+  // Swayp»): un cotejo caja por caja y el nombre del chofer, como Aliclik. Su
+  // chofer no tiene cuenta en Kapta para un segundo escaneo. La entrega la abre
+  // Almacén › «Swayp por salir», no la Mesa.
+  fenix: { kind: "entrega_courier", operations: ["lima", "provincia_cod"] },
   aliclik: { kind: "entrega_courier", operations: ["provincia_cod"] },
   shalom: { kind: "entrega_courier", operations: ["agencia"] },
   olva: { kind: "entrega_courier", operations: ["agencia"] },
