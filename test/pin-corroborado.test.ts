@@ -286,3 +286,60 @@ describe("la puerta está en el sitio por el que pasan las dos acciones", () => 
     expect(src).toContain("pinExceptionReason: input.pinExceptionReason");
   });
 });
+
+/**
+ * «Ventanilla queda en el Callao.» #KP142342, 04-11-2026: la clienta eligió
+ * Callao y escribió «Callao»; el pin cayó en Ventanilla y Aliclik lo archiva
+ * como «Ventanilla, Lima». La guía se bloqueaba por un pin correcto. En 30 días,
+ * 70 de 72 pedidos con `PE-CAL` escribieron «Callao» como ciudad.
+ */
+describe("Lima y Callao son un solo destino para el pin", () => {
+  const base = { isoDelCheckout: "PE-CAL", ciudadEscrita: "Callao" };
+
+  it("el caso: Callao elegido, pin en Ventanilla que Aliclik llama Lima, pasa", () => {
+    expect(pinSinCorroborar({ ...base, departamentoDelPin: "Lima", distritoDelPin: "Ventanilla" })).toBeNull();
+  });
+
+  it("los siete distritos del Callao, con Lima o Callao en el desplegable", () => {
+    for (const distrito of ["Callao", "Bellavista", "Carmen de la Legua Reynoso", "La Perla", "La Punta", "Ventanilla", "Mi Perú"]) {
+      for (const iso of ["PE-CAL", "PE-LIM", "PE-LMA"]) {
+        expect(pinSinCorroborar({ isoDelCheckout: iso, ciudadEscrita: "otra", departamentoDelPin: "Lima", distritoDelPin: distrito }), `${iso} ${distrito}`).toBeNull();
+        expect(pinSinCorroborar({ isoDelCheckout: iso, ciudadEscrita: "otra", departamentoDelPin: "Callao", distritoDelPin: distrito }), `${iso} ${distrito}`).toBeNull();
+      }
+    }
+  });
+
+  it("Bellavista de San Martín NO es el Callao: sigue bloqueado", () => {
+    expect(pinSinCorroborar({ ...base, departamentoDelPin: "San Martín", distritoDelPin: "Bellavista" })).not.toBeNull();
+  });
+
+  it("Callao elegido y pin en un distrito de Lima que no es del Callao: sigue bloqueado", () => {
+    // Puede ser un error de la clienta o del pin: lo decide una persona con la excepción.
+    expect(pinSinCorroborar({ ...base, departamentoDelPin: "Lima", distritoDelPin: "Huacho" })).not.toBeNull();
+  });
+
+  it("los cinco pines malos medidos siguen bloqueados", () => {
+    for (const c of PIN_MALO) {
+      expect(pinSinCorroborar({ isoDelCheckout: c.iso, ciudadEscrita: c.ciudad, departamentoDelPin: c.pinDepartamento, distritoDelPin: c.pinDistrito }), c.pedido).not.toBeNull();
+    }
+  });
+});
+
+describe("la ubicación corregida por una persona respalda el pin", () => {
+  const malo = PIN_MALO[0]!;
+  const caso = { isoDelCheckout: malo.iso, ciudadEscrita: malo.ciudad, departamentoDelPin: malo.pinDepartamento, distritoDelPin: malo.pinDistrito };
+
+  it("si alguien fijó el distrito donde cae el pin, pasa", () => {
+    expect(pinSinCorroborar(caso)).not.toBeNull();
+    expect(pinSinCorroborar({ ...caso, distritoCorregido: malo.pinDistrito })).toBeNull();
+  });
+
+  it("una corrección a otro distrito no lo respalda", () => {
+    expect(pinSinCorroborar({ ...caso, distritoCorregido: "Juliaca" })).not.toBeNull();
+  });
+
+  it("solo cuenta la corrección manual, no la ubicación deducida", () => {
+    const src = readFileSync(resolve(process.cwd(), "lib/aliclik-guide.ts"), "utf8");
+    expect(src).toContain('distritoCorregido: ctx.row.geo_source === "manual" ? ctx.row.district : null,');
+  });
+});

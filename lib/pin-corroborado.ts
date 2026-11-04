@@ -45,6 +45,8 @@
 // NO se corrige solo. Mover el pin es decidir a dónde va el paquete, y eso lo
 // hace una persona mirando la dirección (misma regla que §10 del MOM).
 
+import { UBIGEO_BY_CITY } from "@/lib/ubigeo";
+
 /**
  * ISO 3166-2:PE → departamento. Es lo que manda el desplegable del checkout.
  *
@@ -114,6 +116,29 @@ function lugar(value: string | null | undefined): string {
     .trim();
 }
 
+/**
+ * LIMA Y CALLAO SON UN SOLO DESTINO PARA ESTA PREGUNTA (04-11-2026).
+ *
+ * #KP142342: la clienta eligió Callao (`PE-CAL`), escribió «Callao» y su pin cae
+ * en Ventanilla, que ES Callao. Aliclik archiva los distritos del Callao bajo el
+ * departamento «Lima», así que el pin decía «Ventanilla, Lima» contra «Callao»
+ * y la guía se bloqueaba. Y la ciudad escrita no lo salvaba: «Callao» es la
+ * provincia, el distrito del pin es Ventanilla. Medido en 30 días: 72 pedidos
+ * con `PE-CAL`, 70 escribieron «Callao» como ciudad. Todos se habrían bloqueado
+ * al salir por Aliclik.
+ *
+ * Por eso: si el pin cae en uno de los siete distritos del Callao y su
+ * departamento es Lima o Callao, cualquiera de los dos en el desplegable lo
+ * respalda. Se exige el departamento además del distrito porque «Bellavista»
+ * también existe en San Martín, Cajamarca y Piura.
+ */
+const DISTRITOS_DEL_CALLAO = new Set(Object.keys(UBIGEO_BY_CITY.callao ?? {}));
+const LIMA_O_CALLAO = new Set(["lima", "callao"]);
+
+function pinEnElCallao(departamentoDelPin: string | null | undefined, distritoDelPin: string | null | undefined): boolean {
+  return LIMA_O_CALLAO.has(lugar(departamentoDelPin)) && DISTRITOS_DEL_CALLAO.has(lugar(distritoDelPin));
+}
+
 /** Lo que el pedido dice del destino, frente a lo que Aliclik dedujo del pin. */
 export interface PinContraElPedido {
   /** Departamento que Aliclik dedujo del pin. */
@@ -124,6 +149,13 @@ export interface PinContraElPedido {
   isoDelCheckout: string | null | undefined;
   /** Ciudad escrita en la dirección: el distrito, en la convención peruana. */
   ciudadEscrita: string | null | undefined;
+  /**
+   * El distrito que una PERSONA fijó en «Ubicación y cobertura», o null si
+   * nadie corrigió la ubicación. Es una tercera declaración: alguien miró la
+   * dirección. Sin esto, el aviso mandaba a «revisar la ubicación» y corregirla
+   * no cambiaba nada (#KP142342).
+   */
+  distritoCorregido?: string | null;
 }
 
 /**
@@ -142,6 +174,11 @@ export function pinSinCorroborar(x: PinContraElPedido): string | null {
   const pin = lugar(x.departamentoDelPin);
   if (!pin) return null;
   if (pin === lugar(elegido)) return null;
+  // Lima y Callao: el mismo destino para Aliclik (ver `pinEnElCallao`).
+  if (LIMA_O_CALLAO.has(lugar(elegido)) && pinEnElCallao(x.departamentoDelPin, x.distritoDelPin)) return null;
+  // Una persona corrigió la ubicación y fijó el distrito donde cae el pin.
+  const corregido = lugar(x.distritoCorregido);
+  if (corregido && corregido === lugar(x.distritoDelPin)) return null;
 
   // Segunda oportunidad: la ciudad escrita. Si el pin cae en el distrito que
   // ella misma escribió, el pin está corroborado y quien se equivocó fue el

@@ -655,6 +655,8 @@ export async function previewAliclikGuideFor(
     distritoDelPin: aliclikUbigeo.district,
     isoDelCheckout: detail.departamentoElegido,
     ciudadEscrita: detail.address?.city,
+    // Solo cuenta si la ubicación la fijó una persona (`geo_source = manual`).
+    distritoCorregido: ctx.row.geo_source === "manual" ? ctx.row.district : null,
   });
   if (pinDudoso && !input.pinExceptionReason?.trim()) {
     return {
