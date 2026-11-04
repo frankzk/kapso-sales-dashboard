@@ -11,14 +11,17 @@
 
 /**
  * «por millonestania5@gmail.com», «automáticamente (envío programado)»,
- * «automáticamente (confirmó por Chatby)» o «por el sistema». `automatic` es
- * el origen de la guía automática (`true` es el del día programado, como antes).
+ * «automáticamente (confirmó por Chatby)», «automáticamente (reintento Lima)»
+ * o «por el sistema». `automatic` es el origen de la guía automática (`true` es
+ * el del día programado, como antes).
  */
 export function guideCreatorPhrase(
   creator: string | null | undefined,
-  automatic: boolean | "envio_programado" | "confirmado_chatby" = false,
+  automatic: boolean | "envio_programado" | "confirmado_chatby" | "reintento_lima" = false,
 ): string {
   if (automatic === "confirmado_chatby") return "automáticamente (confirmó por Chatby)";
+  // El reintento de la cadena de Lima que encendió el owner (MOM §9.5, entrega 3).
+  if (automatic === "reintento_lima") return "automáticamente (reintento Lima)";
   if (automatic) return "automáticamente (envío programado)";
   const who = creator?.trim();
   return who ? `por ${who}` : "por el sistema";

@@ -122,3 +122,32 @@ export function pickGuideToCancel<T extends { delivery_status: string | null }>(
   const closed = new Set<string>([...RELEASABLE_GUIDE_STATUSES, "entregado"]);
   return guides.find((g) => !closed.has(g.delivery_status ?? "")) ?? guides[0] ?? null;
 }
+
+/**
+ * Una creación de Aliclik que quedó sin su guía en Kapta: una intención viva
+ * `pending` (Aliclik no respondió, o alguien la está creando ahora) o `sent` /
+ * `duplicate` cuyo número no está en ninguna salida Aliclik del pedido (Aliclik
+ * la creó y Kapta no pudo guardarla). La cadena de reintentos de Lima no ve esa
+ * guía —no hay salida— y seguiría pidiendo otra cada día: el candado la ataja,
+ * pero el pedido se quedaba «Creándose» todo el día. La pasada automática lo
+ * salta y lo deja a una persona (MOM §9.5, entrega 3, 04-11-2026). Pura.
+ */
+export function unsavedAliclikIntent(
+  intents: readonly CreationIntent[],
+  guides: readonly Pick<IntentGuide, "courier" | "guide_code" | "external_order_number">[],
+): { status: string; orderNumber: string | null } | null {
+  for (const intent of intents) {
+    if (intent.released_at || intent.status === "failed") continue;
+    if (intent.status === "pending") return { status: "pending", orderNumber: intent.order_number?.trim() || null };
+    if (intent.status !== "sent" && intent.status !== "duplicate") continue;
+    const number = guideNumber(intent.order_number);
+    if (!number) return { status: intent.status, orderNumber: null };
+    const saved = guides.some(
+      (g) =>
+        (g.courier ?? "").trim().toLowerCase() === "aliclik" &&
+        (guideNumber(g.guide_code) === number || guideNumber(g.external_order_number) === number),
+    );
+    if (!saved) return { status: intent.status, orderNumber: (intent.order_number ?? "").trim() };
+  }
+  return null;
+}

@@ -32,9 +32,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { swaypGuiaDeVuelta } from "@/lib/swayp-desde-confirmacion";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { isFillableRouteOutput } from "@/lib/shipment-output";
-import { aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
+import { aliclikMotiveAllowed, aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
 import { createAdminSupabase } from "@/lib/db";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
+import { LEGACY_SALE_CANCEL_REASON } from "@/lib/legacy-sale-cancel";
 import { env } from "@/lib/env";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { getStoreCreds } from "@/lib/ingest";
@@ -264,20 +265,26 @@ export async function activeAliclikBlocker(
 }
 
 async function readAliclikOutputPolicy(
-  admin: SupabaseClient, ctx: AliclikContext, motivo?: string | null,
+  admin: SupabaseClient, ctx: AliclikContext, motivo?: string | null, origin?: AliclikGuideOrigin,
 ) {
   const { data, error } = await admin.from("shipments")
     .select("id,guide_code,output_code,delivery_status,courier,created_via,custody_state,custody_transferred_at,swayp_state,returned_at")
     .eq("order_id", ctx.row.order_id);
+  // `unread`: no se pudo leer, no es la regla. Quien reintenta (la pasada de
+  // Lima) lo distingue de un «no» de verdad (`aliclikCreateGates`).
   if (error) return {
-    ok: false as const, pideMotivo: false, estorban: [],
+    ok: false as const, pideMotivo: false, estorban: [], unread: true as const,
     error: `No se pudieron leer las salidas del pedido: ${error.message}`,
   };
   const op = ctx.row.macro_operation;
   const operation = op === "lima" || op === "provincia_cod" || op === "agencia" || op === "desconocida"
     ? op : classifyOperation(ctx.row);
   return aliclikOutputPolicy({
-    outputs: (data ?? []) as AliclikExistingOutput[], operation, motivo, manual: !!ctx.userId,
+    // `manual` es «puede justificar otra salida»: una persona, o el reintento
+    // de Lima que el owner encendió (`aliclikMotiveAllowed`). El resto del
+    // automático sigue sin motivo.
+    outputs: (data ?? []) as AliclikExistingOutput[], operation, motivo,
+    manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),
   });
 }
 
@@ -861,6 +868,14 @@ export interface AliclikCreateResult {
   locked?: boolean;
   /** Aliclik no respondió a tiempo: el pedido PUEDE haberse creado. */
   timedOut?: boolean;
+  /**
+   * El «no» es una regla de Kapta sobre el pedido tal como está (venta anulada,
+   * rechazos en la puerta, pago exigido, salidas, teléfono o dirección), no un
+   * fallo de lectura ni de Aliclik: repetirlo mañana daría lo mismo. Lo usa la
+   * pasada de los reintentos de Lima para no reintentar ni avisar cada día
+   * (MOM §9.5, entrega 3). Los demás llamadores lo ignoran.
+   */
+  kaptaBlock?: boolean;
 }
 
 /**
@@ -873,12 +888,122 @@ export interface AliclikGuideOrigin {
    * `envio_programado`: la guía del día programado (MOM §6.2).
    * `confirmado_chatby`: la del pedido que confirmó por Chatby (MOM §6.1,
    * «Confirmó por Chatby», 01-11-2026), con su tope diario.
+   * `reintento_lima`: el reintento Aliclik de la cadena de Lima (MOM §9.5,
+   * entrega 3, 04-11-2026), con la variante encendida en Automatizaciones. Es
+   * el único que puede justificar otra salida en Lima (`aliclikMotiveAllowed`).
    */
-  kind: "envio_programado" | "confirmado_chatby";
+  kind: "envio_programado" | "confirmado_chatby" | "reintento_lima";
   /** El día (YYYY-MM-DD) por el que se creó hoy: el programado, o el de la pasada. */
   scheduledOn: string;
   /** El motivo que queda en el hecho `guide_registered`. */
   reason: string;
+}
+
+/**
+ * Lo que dicen las compuertas de Kapta antes de cotizar otra vez y escribir la
+ * intención. `kaptaBlock`: es una regla de Kapta sobre el pedido tal como está
+ * (venta anulada, pago adelantado, rechazos en la puerta, posible duplicado,
+ * pago exigido por los antecedentes, salidas que ya tiene), no un «no se pudo
+ * leer». Repetir el intento mañana daría el mismo «no»: hace falta que una
+ * persona cambie algo.
+ */
+export type AliclikCreateGates =
+  | {
+      ok: true;
+      riskExceptionReason: string | null;
+      /** La exigencia de pago del historial: la creación la deja en el hecho de la excepción. */
+      risk: NonNullable<Awaited<ReturnType<typeof getOrderConfirmationBrief>>>["risk"];
+    }
+  | { ok: false; error: string; kaptaBlock: boolean };
+
+/**
+ * Las compuertas de Kapta de la creación, sin crear nada: las mismas, en el
+ * mismo orden y con los mismos mensajes que `createAliclikGuideFor`, que las
+ * llama tal cual. Se para ANTES de la cotización final, del candado
+ * (`aliclik_order_requests`) y del POST, así que no escribe nada.
+ *
+ * POR QUÉ ESTÁ APARTE (04-11-2026, MOM §9.5 entrega 3). La simulación de los
+ * reintentos automáticos de Lima solo cotizaba: decía «Habría creado la guía»
+ * de pedidos que la creación real rechaza siempre (adelanto exigido, rechazos
+ * en la puerta, salidas…), y al pasar la variante a Activo fallaban y
+ * avisaban cada día. Con una sola función, la simulación y la creación no se
+ * pueden separar: lo que una dice es lo que la otra hace.
+ */
+export async function aliclikCreateGates(
+  ctx: AliclikContext,
+  input: Pick<CreateGuideInput, "riskExceptionReason" | "motivoSalidaAdicional">,
+  scope?: AliclikReadScope,
+  origin?: AliclikGuideOrigin,
+): Promise<AliclikCreateGates> {
+  const orderId = ctx.row.order_id;
+  const blocked = (error: string): AliclikCreateGates => ({ ok: false, error, kaptaBlock: true });
+  // «No se pudo leer» no es una regla: se reintenta, y nunca autoriza.
+  const unread = (error: string): AliclikCreateGates => ({ ok: false, error, kaptaBlock: false });
+
+  const admin = createAdminSupabase();
+  const saleBlock = await legacySaleSendBlock(admin, orderId);
+  if (saleBlock) return saleBlock === LEGACY_SALE_CANCEL_REASON ? blocked(saleBlock) : unread(saleBlock);
+  const confirmationBrief = await getOrderConfirmationBrief(orderId, scope);
+  if (!confirmationBrief) {
+    return unread("No se pudo verificar el historial del cliente antes de crear la guía.");
+  }
+  // La misma compuerta que la vista previa, repetida acá A PROPÓSITO: la vista
+  // previa es una cortesía y esto es la creación real. Un cliente viejo, un
+  // reintento o una llamada directa a la acción no pueden saltarse el bloqueo.
+  const prepaidBlock = aliclikPrepaidBlocker({
+    financialStatus: ctx.row.financial_status,
+    totalRefunded: ctx.row.total_refunded,
+    paymentState: ctx.row.payment_state,
+    paymentGateway: ctx.row.payment_gateway,
+  });
+  if (prepaidBlock) return blocked(prepaidBlock);
+
+  // El bloqueo por rechazo en la puerta va ANTES que el de plata, y no se
+  // parece a él: no pregunta cuánto hay que cobrar por adelantado sino si esta
+  // ruta sigue abierta para este cliente. No tiene excepción —ver
+  // `aliclikDoorBan`— así que tampoco lee `input`: no hay nada que escribir que
+  // lo levante.
+  if (confirmationBrief.doorRejections === null) {
+    // No se pudo leer el historial de guías. Cero y «no sé» se despachan
+    // distinto: lo segundo no autoriza nada.
+    return unread(
+      "No se pudo verificar si este cliente tiene rechazos en la puerta. " +
+        "Vuelve a intentarlo; si sigue fallando, despáchalo por agencia o Swayp.",
+    );
+  }
+  const doorBan = aliclikDoorBan(confirmationBrief.doorRejections);
+  if (doorBan.banned) return blocked(doorBan.message ?? "Aliclik está cerrado para este cliente.");
+
+  const duplicateCheck = await duplicateHold(orderId, scope);
+  if ("error" in duplicateCheck) return unread(duplicateCheck.error);
+  if (!duplicateCheck.hold.allowed) return blocked(duplicateCheck.hold.message ?? "Resuelve el posible duplicado antes de crear otra guía.");
+
+  const riskGate = aliclikRiskGate(
+    confirmationBrief.risk.requirement,
+    ctx.row.payment_state,
+    input.riskExceptionReason,
+  );
+  if (!riskGate.allowed) return blocked(riskGate.message ?? "Falta validar el pago exigido.");
+  const riskExceptionReason = riskGate.requiresException
+    ? input.riskExceptionReason?.trim() ?? null
+    : null;
+
+  // En Lima, otra salida pide motivo. El automático (salvo el reintento de
+  // Lima, que trae el suyo) y una Aliclik ya viva siguen bloqueados; «no se
+  // pudo leer» tampoco autoriza.
+  const outputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);
+  if (!outputPolicy.ok) {
+    const error = outputPolicy.error + (outputPolicy.pideMotivo ? " Vuelve a cotizar para ver el campo del motivo." : "");
+    return "unread" in outputPolicy ? unread(error) : blocked(error);
+  }
+  return { ok: true, riskExceptionReason, risk: confirmationBrief.risk };
+}
+
+/** El teléfono y la dirección que Aliclik exige. Lo comparten la creación y la simulación. Pura. */
+export function aliclikRecipientBlock(row: Pick<OrderMasterRow, "customer_phone" | "address">): string | null {
+  if (!normalizePhone(row.customer_phone)) return "El pedido no tiene un teléfono válido, y Aliclik lo exige.";
+  if (!(row.address ?? "").trim()) return "El pedido no tiene dirección de envío.";
+  return null;
 }
 
 export async function createAliclikGuideFor(
@@ -893,59 +1018,13 @@ export async function createAliclikGuideFor(
   const orderId = ctx.row.order_id;
 
   const admin = createAdminSupabase();
-  const saleBlock = await legacySaleSendBlock(admin, orderId);
-  if (saleBlock) return { error: saleBlock };
-  const confirmationBrief = await getOrderConfirmationBrief(orderId, scope);
-  if (!confirmationBrief) {
-    return { error: "No se pudo verificar el historial del cliente antes de crear la guía." };
-  }
-  // La misma compuerta que la vista previa, repetida acá A PROPÓSITO: la vista
-  // previa es una cortesía y esto es la creación real. Un cliente viejo, un
-  // reintento o una llamada directa a la acción no pueden saltarse el bloqueo.
-  const prepaidBlock = aliclikPrepaidBlocker({
-    financialStatus: ctx.row.financial_status,
-    totalRefunded: ctx.row.total_refunded,
-    paymentState: ctx.row.payment_state,
-    paymentGateway: ctx.row.payment_gateway,
-  });
-  if (prepaidBlock) return { error: prepaidBlock };
-
-  // El bloqueo por rechazo en la puerta va ANTES que el de plata, y no se
-  // parece a él: no pregunta cuánto hay que cobrar por adelantado sino si esta
-  // ruta sigue abierta para este cliente. No tiene excepción —ver
-  // `aliclikDoorBan`— así que tampoco lee `input`: no hay nada que escribir que
-  // lo levante.
-  if (confirmationBrief.doorRejections === null) {
-    // No se pudo leer el historial de guías. Cero y «no sé» se despachan
-    // distinto: lo segundo no autoriza nada.
-    return {
-      error:
-        "No se pudo verificar si este cliente tiene rechazos en la puerta. " +
-        "Vuelve a intentarlo; si sigue fallando, despáchalo por agencia o Swayp.",
-    };
-  }
-  const doorBan = aliclikDoorBan(confirmationBrief.doorRejections);
-  if (doorBan.banned) return { error: doorBan.message ?? "Aliclik está cerrado para este cliente." };
-
-  const duplicateCheck = await duplicateHold(orderId, scope);
-  if ("error" in duplicateCheck) return { error: duplicateCheck.error };
-  if (!duplicateCheck.hold.allowed) return { error: duplicateCheck.hold.message ?? "Resuelve el posible duplicado antes de crear otra guía." };
-
-  const riskGate = aliclikRiskGate(
-    confirmationBrief.risk.requirement,
-    ctx.row.payment_state,
-    input.riskExceptionReason,
-  );
-  if (!riskGate.allowed) return { error: riskGate.message ?? "Falta validar el pago exigido." };
-  const riskExceptionReason = riskGate.requiresException
-    ? input.riskExceptionReason?.trim() ?? null
-    : null;
+  // Las compuertas de Kapta (`aliclikCreateGates`): las mismas que mira la
+  // simulación de los reintentos de Lima, para que no puedan separarse.
+  const gates = await aliclikCreateGates(ctx, input, scope, origin);
+  if (!gates.ok) return { error: gates.error, ...(gates.kaptaBlock ? { kaptaBlock: true } : {}) };
+  const riskExceptionReason = gates.riskExceptionReason;
+  const confirmationBrief = { risk: gates.risk };
   const pinExceptionReason = input.pinExceptionReason?.trim() || null;
-
-  // En Lima, otra salida pide motivo. El automático y una Aliclik ya viva
-  // siguen bloqueados; «no se pudo leer» tampoco autoriza.
-  const outputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional);
-  if (!outputPolicy.ok) return { error: outputPolicy.error + (outputPolicy.pideMotivo ? " Vuelve a cotizar para ver el campo del motivo." : "") };
 
   // Se REVALIDA todo en el servidor. Lo que mandó el navegador es una intención,
   // no un hecho: entre el preview y el clic pudo cambiar el stock, el catálogo o
@@ -984,10 +1063,10 @@ export async function createAliclikGuideFor(
     return { error: courier.reason ?? "Ese courier no se puede agendar ahora." };
   }
 
-  const phone = normalizePhone(ctx.row.customer_phone);
-  if (!phone) return { error: "El pedido no tiene un teléfono válido, y Aliclik lo exige." };
+  const recipientBlock = aliclikRecipientBlock(ctx.row);
+  if (recipientBlock) return { error: recipientBlock, kaptaBlock: true };
+  const phone = normalizePhone(ctx.row.customer_phone)!;
   const address = (ctx.row.address ?? "").trim();
-  if (!address) return { error: "El pedido no tiene dirección de envío." };
 
   // El bloque `courier` se reenvía VERBATIM tal y como lo devolvió la cotización.
   // Recomponerlo a mano sería inventar tarifas: los costos son los que Aliclik
@@ -1021,14 +1100,19 @@ export async function createAliclikGuideFor(
   // registrar la intención. Una excepción de antecedentes NO abre esta puerta.
   const finalDuplicateCheck = await duplicateHold(orderId, scope);
   if ("error" in finalDuplicateCheck) return { error: finalDuplicateCheck.error };
-  if (!finalDuplicateCheck.hold.allowed) return { error: finalDuplicateCheck.hold.message ?? "El posible duplicado sigue retenido." };
+  if (!finalDuplicateCheck.hold.allowed) return { error: finalDuplicateCheck.hold.message ?? "El posible duplicado sigue retenido.", kaptaBlock: true };
 
   // Cotizar tarda: se vuelven a leer las salidas antes del candado y del POST.
   // La evidencia auditada describe las que seguían vivas en esta última lectura.
   const finalSaleBlock = await legacySaleSendBlock(admin, orderId);
-  if (finalSaleBlock) return { error: finalSaleBlock };
-  const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional);
-  if (!finalOutputPolicy.ok) return { error: finalOutputPolicy.error + (finalOutputPolicy.pideMotivo ? " Vuelve a cotizar para revisar las salidas." : "") };
+  if (finalSaleBlock) return { error: finalSaleBlock, ...(finalSaleBlock === LEGACY_SALE_CANCEL_REASON ? { kaptaBlock: true } : {}) };
+  const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);
+  if (!finalOutputPolicy.ok) {
+    return {
+      error: finalOutputPolicy.error + (finalOutputPolicy.pideMotivo ? " Vuelve a cotizar para revisar las salidas." : ""),
+      ...("unread" in finalOutputPolicy ? {} : { kaptaBlock: true }),
+    };
+  }
   const additionalOutputEvidence = finalOutputPolicy.motivo ? {
     motivo: finalOutputPolicy.motivo,
     salidas_vivas: finalOutputPolicy.estorban.map((output) => ({

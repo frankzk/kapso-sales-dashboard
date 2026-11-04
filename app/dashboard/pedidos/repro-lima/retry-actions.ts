@@ -16,8 +16,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import { aliclikContextFor, createAliclikGuideFor, previewAliclikGuideFor } from "@/lib/aliclik-guide";
-import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
+import { approveLimaRetry, RETRY_TRANSPORT_LABEL } from "@/lib/lima-retry-approve";
 import { loadReproFacts, retryChainOf } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
 import { limaTodayKey } from "@/lib/shipments";
@@ -32,7 +31,7 @@ export interface RetryActionState {
   done?: boolean;
 }
 
-const TRANSPORT_LABEL = { autoecom: "AUTOECOM", alidriver: "ALIDRIVER" } as const;
+const TRANSPORT_LABEL = RETRY_TRANSPORT_LABEL;
 
 /** Quién pide, con sesión; sin el permiso, el motivo. */
 async function gate(createGuide: boolean): Promise<{ userId: string } | { error: string }> {
@@ -62,80 +61,48 @@ async function readChain(orderId: string) {
   return { row, admin, facts, chain: retryChainOf(facts, open, limaTodayKey()) } as const;
 }
 
-async function recordChainEvent(
-  admin: ReturnType<typeof createAdminSupabase>,
-  row: OrderMasterRow,
-  actor: string,
-  kind: string,
-  reason: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  await admin.from("order_events").insert({
-    store_id: row.store_id,
-    order_id: row.order_id,
-    kind,
-    occurred_at: new Date().toISOString(),
-    actor,
-    source: "manual",
-    reason,
-    payload,
-  });
-}
-
 /**
  * «Aprobar»: crea ahora la guía de Aliclik del reintento. Si ya pasó el corte
  * de Aliclik (2:00 p. m.), Aliclik la recoge al día siguiente: la fecha la
  * decide Aliclik, como en la ficha.
+ *
+ * La cotización, el transporte y la creación son los de la pasada automática
+ * (`approveLimaRetry`, lib/lima-retry-approve.ts); aquí quedan el permiso, la
+ * RLS y los mensajes de la bandeja.
  */
 export async function approveAliclikRetry(orderId: string): Promise<RetryActionState> {
   const who = await gate(true);
   if ("error" in who) return { error: who.error };
   const read = await readChain(orderId);
   if ("error" in read) return { error: read.error };
-  const { row, admin, chain } = read;
-  if (!chain) {
+  const { row, admin, facts, chain } = read;
+  if (!chain || facts.retryChain.state !== "siguiente") {
     return { error: "Este pedido ya no está en la cadena (se entregó, se acordó otra cosa en Repro Lima o venció). Recarga la lista.", done: true };
   }
   // Otro día que el intento que falló; no espera la devolución (owner, 03-11-2026).
   if (!chain.ready) {
     return { error: "El intento falló hoy: el reintento sale otro día. Apruébalo desde mañana." };
   }
-  const transport = TRANSPORT_LABEL[chain.next];
 
-  const { ctx, error: ctxError } = await aliclikContextFor(row, who.userId, { blockAgencia: true });
-  if (!ctx) return { error: ctxError ?? "No se pudo preparar la conexión con Aliclik." };
-  const preview = await previewAliclikGuideFor(ctx, { modality: "cod" });
-  if (!preview.ok) return { error: preview.error ?? "No se pudo cotizar el envío." };
-
-  const wanted = (name: string | null | undefined) => (chain.next === "autoecom" ? isAutoecom(name) : isAlidriver(name));
-  const courier = preview.couriers?.find((c) => wanted(c.transportName)) ?? null;
-  if (!courier) {
-    // Decisión del owner (03-11-2026): sin ese transporte para la dirección,
-    // el pedido pasa a Repro Lima.
-    await recordChainEvent(admin, row, who.userId, CHAIN_EVENT_KINDS.dismissed,
-      `Aliclik no ofrece ${transport} para esta dirección: pasa a Repro Lima.`,
-      { attempt: chain.attempt, of: chain.of, transport, why: "sin_transporte" });
-    for (const path of PATHS) revalidatePath(path);
-    return { error: `Aliclik no ofrece ${transport} para esta dirección. El pedido pasa a Repro Lima.`, done: true };
+  const result = await approveLimaRetry({ admin, row, chain, raw: facts.retryChain, actor: { userId: who.userId } });
+  const { transport } = result;
+  switch (result.outcome) {
+    case "sin_transporte":
+      // Decisión del owner (03-11-2026): el núcleo ya dejó el hecho; el pedido pasa a Repro Lima.
+      for (const path of PATHS) revalidatePath(path);
+      return { error: `Aliclik no ofrece ${transport} para esta dirección. El pedido pasa a Repro Lima.`, done: true };
+    case "no_seleccionable":
+      return { error: result.reason ?? `${transport} no se puede agendar ahora. Vuelve a aprobar más tarde.` };
+    case "creada":
+      for (const path of PATHS) revalidatePath(path);
+      return { notice: `Guía con ${transport} creada${result.guide ? `: ${result.guide}` : ""}.`, done: true };
+    case "simulada":
+      // Sin `dry` no ocurre; si ocurriera, nada se creó.
+      return { error: "No se creó la guía. Vuelve a aprobar." };
+    default:
+      if (result.stage !== "creacion") return { error: result.error };
+      return { error: `${result.error}${result.locked ? "" : " Si hace falta un motivo o una excepción, créala desde la ficha del pedido."}` };
   }
-  if (!courier.selectable) {
-    return { error: courier.reason ?? `${transport} no se puede agendar ahora. Vuelve a aprobar más tarde.` };
-  }
-
-  const result = await createAliclikGuideFor(ctx, {
-    transportId: courier.transportId,
-    expectedCollectTotal: preview.collectTotal ?? null,
-    motivoSalidaAdicional: `Reintento Aliclik ${chain.attempt} de ${chain.of} aprobado en Repro Lima. ${chain.failedText}.`,
-    note: null,
-  });
-  if (result.error) {
-    return { error: `${result.error}${result.locked ? "" : " Si hace falta un motivo o una excepción, créala desde la ficha del pedido."}` };
-  }
-  await recordChainEvent(admin, row, who.userId, CHAIN_EVENT_KINDS.approved,
-    `Reintento Aliclik ${chain.attempt} de ${chain.of} aprobado: guía con ${transport}${result.orderNumber ? ` (${result.orderNumber})` : ""}.`,
-    { attempt: chain.attempt, of: chain.of, transport, guide: result.orderNumber ?? null, failed: chain.failedText });
-  for (const path of PATHS) revalidatePath(path);
-  return { notice: `Guía con ${transport} creada${result.orderNumber ? `: ${result.orderNumber}` : ""}.`, done: true };
 }
 
 /** «A Repro Lima»: lo saca de la cadena, con motivo. La tienda lo atiende como siempre. */
@@ -149,8 +116,16 @@ export async function dismissAliclikRetry(orderId: string, reason: string): Prom
   if ("error" in read) return { error: read.error };
   const { row, admin, chain } = read;
   if (!chain) return { notice: "Este pedido ya no estaba en la cadena.", done: true };
-  await recordChainEvent(admin, row, who.userId, CHAIN_EVENT_KINDS.dismissed, why,
-    { attempt: chain.attempt, of: chain.of, transport: TRANSPORT_LABEL[chain.next], why: "manual" });
+  await admin.from("order_events").insert({
+    store_id: row.store_id,
+    order_id: row.order_id,
+    kind: CHAIN_EVENT_KINDS.dismissed,
+    occurred_at: new Date().toISOString(),
+    actor: who.userId,
+    source: "manual",
+    reason: why,
+    payload: { attempt: chain.attempt, of: chain.of, transport: TRANSPORT_LABEL[chain.next], why: "manual" },
+  });
   for (const path of PATHS) revalidatePath(path);
   return { notice: "Pasó a Repro Lima: la tienda lo atiende como siempre.", done: true };
 }

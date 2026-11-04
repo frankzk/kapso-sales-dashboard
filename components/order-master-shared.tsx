@@ -748,6 +748,7 @@ export const TIMELINE_LABEL: Record<string, string> = {
   lima_repro_closed: "Repro Lima: caso cerrado",
   lima_retry_approved: "Reintento Aliclik aprobado",
   lima_retry_dismissed: "Reintento Aliclik: pasó a Repro Lima",
+  lima_retry_auto_failed: "Reintento Aliclik automático no creado",
   route_reopened: "Ruta reabierta",
   delivered_unconfirmed_pickup: "Entregado sin confirmar recojo",
   handed_to_courier: "Entregado al courier",

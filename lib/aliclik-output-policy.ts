@@ -10,6 +10,27 @@ export interface AliclikExistingOutput extends SalidaExistente {
   returned_at?: string | null;
 }
 
+/**
+ * El origen de guía automática que SÍ puede justificar otra salida en Lima: el
+ * reintento Aliclik de la cadena (MOM §9.5, entrega 3, owner 04-11-2026). La
+ * caja que falló sigue viva hasta que vuelve, y el reintento sale sin esperarla
+ * (owner, 03-11-2026); sin motivo, cada reintento de Alexis se cortaba en
+ * «pide motivo». El motivo no lo pone una persona: lo escribe la regla que el
+ * owner encendió en Automatizaciones, y el texto lo dice.
+ */
+export const MOTIVE_ORIGIN_KINDS = ["reintento_lima"] as const;
+
+/**
+ * ¿Puede esta creación justificar otra salida con motivo? Una persona, sí; el
+ * automático, solo con un origen de `MOTIVE_ORIGIN_KINDS`. El origen nunca
+ * viene del navegador (`AliclikGuideOrigin` va aparte de lo que manda la
+ * acción). Pura.
+ */
+export function aliclikMotiveAllowed(userId: string | null | undefined, originKind?: string | null): boolean {
+  if (userId) return true;
+  return (MOTIVE_ORIGIN_KINDS as readonly string[]).includes(originKind ?? "");
+}
+
 /** Otra caja de Grupo GF en Lima pide motivo; no implica anularla ni recibirla. */
 export function aliclikOutputPolicy(input: {
   outputs: readonly AliclikExistingOutput[];
@@ -45,7 +66,8 @@ export function aliclikOutputPolicy(input: {
   return puertaDeSalidaAdicional({
     courier: "aliclik", operation: input.operation,
     outputs: counted.filter((output) => !swaypGuiaDeVuelta(output)),
-    // El automático nunca justifica otra salida en nombre de una persona.
+    // El automático no justifica otra salida en nombre de una persona; solo el
+    // reintento de Lima, con su propio motivo (`aliclikMotiveAllowed`).
     motivo: input.manual ? input.motivo : null,
   });
 }

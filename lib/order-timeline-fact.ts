@@ -133,6 +133,7 @@ const POR_KIND: Record<string, TimelineFact> = {
   // La bandeja «Reintentos Aliclik» (03-11-2026).
   lima_retry_approved: hito("reprogramado", "en_curso"),
   lima_retry_dismissed: consulta("expediente"),
+  lima_retry_auto_failed: consulta("guia"),
   call: consulta("llamada"),
 
   // Completado (verde).

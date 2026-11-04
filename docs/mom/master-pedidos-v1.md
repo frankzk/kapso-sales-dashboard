@@ -3496,9 +3496,105 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
     y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
     reintento se aprueba desde mañana».
-  - Sigue la creación automática, medidas dos semanas de aprobaciones.
+- **Entrega 3, la creación automática por variante (owner, 04-11-2026).** En
+  vez de esperar dos semanas para encender todo junto, el owner enciende cada
+  variante desde **Automatizaciones** (§40) cuando la ve segura. Una variante es
+  el **paso** de la cadena por el **motivo** del intento que falló
+  (`lib/lima-retry-auto.ts`), doce en total:
+  - Pasos: «Alexis (Grupo GF) → AUTOECOM», «Urpi → AUTOECOM», «AUTOECOM →
+    ALIDRIVER (tercer intento)» y «AUTOECOM → ALIDRIVER (cadena de dos)».
+  - Motivos: «no contesta», «no estaba» y «otro».
+  - Cada una con tres posiciones: **Apagado** (la bandeja sigue para aprobar a
+    mano), **Simulación** (la pasada dice qué guía habría creado, con su
+    transporte, y no crea nada ni deja hechos en el pedido) y **Activo** (la
+    pasada crea la guía como «Aprobar», sin persona). Todo nace apagado.
+  - **La pasada** (`/api/cron/lima-retry-auto`, `lib/lima-retry-auto-server.ts`)
+    corre a las :23 de 8 a 13 h de Lima, antes del corte de Aliclik. Toma los
+    pedidos de «Por reprogramar Lima» cuya cadena sigue y ya está lista
+    (`retryChainOf` + `chainReadyOn`: falló otro día), con las mismas reglas que
+    la bandeja: sin acuerdo de la tienda en el episodio, sin anular, sin
+    descartar. **No toca** un pedido cuyo caso tiene tomado una persona en
+    Repro Lima en ese momento (lo reintenta en la pasada siguiente).
+  - **Relee antes de crear** (revisión del 04-11-2026). La lista se lee al
+    empezar y la pasada puede durar cuatro minutos. Con el renglón del log ya
+    tomado, vuelve a leer **ese** pedido (la fila del Master, sus hechos, el
+    caso, la cadena y quién lo tiene) y la posición de **esa** variante
+    (`retryRecheck`). Si entretanto la tienda lo pasó «A Repro Lima», acordó
+    otra cosa, salió de la etapa, cambió el paso o el motivo, o el owner sacó
+    la variante de Activo, **no crea** y borra su renglón «en curso» (el log no
+    tiene un resultado «ya no tocaba» y dejar «en curso» contaría para el tope
+    sin haber creado nada): el pedido queda como si esa pasada no lo hubiera
+    tomado. Si una persona tomó el caso, queda «Una persona lo está
+    atendiendo» y se reintenta. Crea con la fila de ese momento. Cualquier
+    error entre la toma y la creación también suelta el renglón (si no se
+    puede borrar, queda «Esperando a que Aliclik responda», que se reintenta
+    y no cuenta) y la pasada sigue con el pedido siguiente. Si la creación
+    misma lanza un error, pudo haber pasado el envío a Aliclik: queda «Puede
+    estar creada: revisar en Aliclik» y avisa.
+  - **El candado de otra creación** (una persona creándola en ese momento, o
+    una creación sin respuesta) no es de la pasada: queda «Una persona lo está
+    atendiendo» con el mensaje del candado, se reintenta y no cuenta para el
+    tope.
+  - **Una creación de Aliclik sin su guía en Kapta** (una intención viva
+    `pending`, o `sent` cuyo número no está en ninguna salida Aliclik del
+    pedido: Aliclik la creó y Kapta no la guardó) no tiene salida, así que la
+    cadena seguiría pidiendo otra cada día. La pasada **no la cotiza ni la
+    toma** y no cuenta para el tope; en Activo la informa en el reporte de la
+    pasada (el aviso salió el día que pasó), y en Simulación y «Simular ahora»
+    dice «Puede estar creada: revisar en Aliclik» con la guía. La resuelve una
+    persona (vincular o revisar en Aliclik).
+  - **Crea por el mismo camino que «Aprobar»** (`lib/lima-retry-approve.ts`,
+    `createAliclikGuideFor`), con origen `reintento_lima`: el historial dice
+    «automáticamente (reintento Lima)» y el motivo de la salida adicional de
+    Lima es «Reintento Aliclik N de M automático (regla encendida en
+    Automatizaciones)». Es la **única** excepción a «el automático nunca
+    justifica otra salida en nombre de una persona»: la justifica la regla que
+    encendió el owner. Deja `lima_retry_approved` sin actor, con `source:
+    system`, `auto: true` y la variante. Sin ese transporte para la dirección,
+    pasa a Repro Lima como con «Aprobar».
+  - **Una creación por pedido y día** (`lima_retry_auto_log`, único por pedido,
+    día y modo) y un **tope diario** por organización (10 por omisión, de 1 a
+    50) que cuenta lo creado y lo que pudo crearse (Aliclik no respondió, o la
+    creó y Kapta no pudo guardarla).
+    Lo que no se pudo agendar, el tope, Aliclik caído o el caso tomado se
+    reintentan en la pasada siguiente. Lo que no se creó avisa **una vez** por
+    Telegram y deja `lima_retry_auto_failed`, según por qué:
+    - **Aliclik lo rechazó o falló la red:** «No se pudo crear»; el pedido
+      sigue en la cadena y en la bandeja para hacerlo a mano, y la pasada lo
+      vuelve a intentar otro día.
+    - **Una regla de Kapta no deja crearla** (venta anulada en Kapta, pago
+      adelantado, rechazos en la puerta, posible duplicado, el adelanto que
+      piden los antecedentes, una salida viva o el máximo de salidas, o falta
+      el teléfono o la dirección; `kaptaBlock` de `createAliclikGuideFor`):
+      mañana diría lo mismo, así que la pasada **primero** lo saca de la
+      cadena a Repro Lima con `lima_retry_dismissed` sin actor, `source:
+      system` y `why: bloqueo_kapta` (el motivo lo dice), y solo si ese hecho
+      quedó escrito el renglón, el aviso y `lima_retry_auto_failed` dicen que
+      pasó a Repro Lima; si no, dicen «no creado» y el error de no poder
+      pasarlo. La tienda lo atiende en Repro Lima como siempre. Un «no se pudo
+      leer» no es una regla: se reintenta.
+    - **Aliclik la creó pero Kapta no pudo guardarla** (devuelve el número con
+      el error): queda «Puede estar creada: revisar en Aliclik» con su código,
+      cuenta para el tope, y el aviso dice que la guía **ya existe en Aliclik**
+      y hay que vincularla o revisarla a mano, **no crearla otra vez**. «Aprobar»
+      de la bandeja sigue mostrando el mismo mensaje de siempre.
+  - **La simulación dice lo que Activo haría** (revisión del 04-11-2026). Además
+    de cotizar y elegir el transporte, pasa por las mismas compuertas de Kapta
+    que la creación (`aliclikCreateGates`, que `createAliclikGuideFor` llama
+    tal cual: mismo orden, mismos mensajes, sin candado ni POST), con el motivo,
+    el origen y el scope de Activo, y por el teléfono y la dirección. Si una
+    regla la rechazaría, el renglón dice «No se pudo crear» con «Activo no la
+    crearía: <motivo>, y lo pasaría a Repro Lima», no «Habría creado la
+    guía». Si algo no se pudo leer, dice «No se pudo comprobar: <error>
+    (Activo lo reintentaría)».
+  - «Simular ahora» en el panel cotiza todas las variantes con los pedidos de
+    ese momento, sin escribir nada. Corre dentro de la página
+    (`maxDuration` de 300 s) y se para sola a los 200 s: entonces dice «La
+    simulación se cortó por tiempo: muestra lo evaluado».
 
-Pruebas: `test/lima-retry-chain.test.ts`.
+Pruebas: `test/lima-retry-chain.test.ts`, `test/lima-retry-auto.test.ts`,
+`test/lima-retry-approve.test.ts` y, para las compuertas compartidas,
+`test/aliclik-duplicate-create.test.ts`.
 
 #### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)
 
@@ -21302,3 +21398,60 @@ no dice que la fuente confirmó el stock hasta recibir su cancelación.
 Instalar la 0285 no termina ventas ni repone stock. Pruebas: woo-sale-return*.test.ts
 y scripts/sql/woo_sale_return_smoke.sql (flujo GF, fuente intacta, permisos,
 idempotencia, prueba de recepción/inventario y turno recuperable).
+
+## 40. Panel de automatizaciones (04-11-2026)
+
+**Decisión del owner (04-11-2026).** «Un panel de configuración con todas las
+posibles variantes de automatización, y solo activo las que veo convenientes o
+las que veamos más seguras: tipo switches para activar y desactivar según sea el
+caso». Hasta hoy cada automatización se encendía en un sitio distinto —una
+página propia, los Ajustes de cada tienda, una fila de la base o una variable de
+Vercel— y algunas no tenían interruptor.
+
+- **Dónde:** `/dashboard/automatizaciones` («Automatizaciones» en el menú).
+  Entra quien tiene el permiso nuevo **`automations.manage`** («Encender y
+  apagar automatizaciones»), de concesión individual y solo del dueño: el rol
+  admin no lo trae. Cada cambio vuelve a pedir el permiso en la organización y
+  solo se guarda en producción.
+- **Una sola fuente de verdad.** El panel no copia los ajustes: cada interruptor
+  escribe en el mismo lugar que ya leía su automatización, así que encender aquí
+  o en su página de detalle es lo mismo. Solo escribe en una lista cerrada de
+  ajustes (`lib/automations-catalog.ts`); nada que llegue del navegador elige
+  otra columna.
+- **Qué lista** (`lib/automations-catalog.ts`):
+  - **Reintentos Aliclik en Lima** (§9.5, entrega 3): la matriz de doce
+    variantes con Apagado / Simulación / Activo, el tope diario, «Simular
+    ahora» y lo que hizo o habría hecho hoy y ayer.
+  - **Con interruptor por organización:** Aliclik → Swayp automático (§11.9;
+    encenderlo también cambia al agente de voz, que deja de llamar los pedidos
+    que tomaría el automático) y su piloto sin historial (§11.9.1, solo con el
+    automático encendido); Swayp desde Por confirmar (§11.13; encenderlo borra
+    el motivo del freno, como en su página, pero el freno se vuelve a mirar al
+    empezar cada pasada: si las entregas siguen bajas, se apaga otra vez); la
+    confirmación por Chatby y su guía Aliclik (§6.1). Confirmar y crear la guía
+    son un paso, así que la confirmación **solo se enciende con la guía
+    encendida**, y apagar la guía también detiene las confirmaciones (el panel
+    lo dice en las dos filas).
+  - **Con interruptor por tienda:** los automáticos de los agentes de voz
+    (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
+    función encendida en Ajustes—, las plantillas automáticas de WhatsApp
+    (búsqueda, recuperación de clientes, drip, carritos, agradecimiento,
+    reposición) y los avisos de Shalom y Olva y el envío de la clave de recojo.
+  - **Sin interruptor propio**, solo con su estado y dónde se cambian: la guía
+    Aliclik del día programado (depende de «Crear guías en Aliclik» de la
+    tienda, que también apaga las guías a mano), los comprobantes electrónicos,
+    los pedidos de recompra, el reparto de leads por bloques, los resúmenes por
+    Telegram, el cierre WooCommerce de venta terminada, la validación de cobros
+    Tanders, la programación de Urpi, el bot de Kapso → pedidos y la validación
+    de pagos por Yape. Darles interruptor es un cambio aparte, cuando el owner
+    lo pida.
+- **Encender pide confirmación** cuando la automatización actúa hacia afuera
+  (crea guías, confirma pedidos, llama o envía WhatsApp). Un automático que
+  depende de otra función no se enciende con ella apagada; el panel dice cuál.
+  Si ya estaba encendido cuando se apagó lo que necesita, el panel dice «Está
+  encendido, pero no corre» con el motivo, y no lo cuenta entre los encendidos.
+- **Historial:** cada cambio queda en `automation_switch_events` (quién, qué,
+  de qué a qué, cuándo) y el panel muestra los últimos.
+
+Migración `0306_automations_panel.sql`. Pruebas: `test/automations-catalog.test.ts`,
+`test/lima-retry-auto.test.ts`.
