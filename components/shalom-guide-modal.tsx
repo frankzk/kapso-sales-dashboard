@@ -20,6 +20,7 @@ import {
   preferredShalomProductId,
   shalomAirRoute,
   defaultAirChoice,
+  effectiveAirRoute,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
 } from "@/lib/shalom/draft";
@@ -284,7 +285,14 @@ export function ShalomGuideModal({
   const wantsDims = needsCustomDimensions(selectedProduct?.title);
   // `aereo` en la agencia dice que ELLA vuela, no que haya vuelo desde nuestro
   // origen: eso lo dice `origenes_aereos`. Ver shalomAirRoute.
-  const air = shalomAirRoute(agency, draft?.originTerminalId ?? null);
+  // Las agencias a las que Shalom ya contestó «sin vuelo desde tu origen» al
+  // crear (04-11-2026, isShalomAirRouteRejection): su respuesta manda sobre lo
+  // que el directorio no aclaró, y la casilla queda bloqueada en tierra.
+  const [airRejected, setAirRejected] = useState<ReadonlySet<number>>(() => new Set());
+  const air = effectiveAirRoute(
+    shalomAirRoute(agency, draft?.originTerminalId ?? null),
+    agency ? airRejected.has(agency.id) : false,
+  );
   const [overrideReason, setOverrideReason] = useState("");
   const [aereo, setAereo] = useState(false);
   // Vía aérea por defecto (03-11-2026, ver defaultAirChoice). Se marca UNA vez
@@ -359,6 +367,11 @@ export function ShalomGuideModal({
         ...(canSeeKey && pickupCode ? { pickupCode } : {}),
       });
       if (res.error) {
+        if (res.airRouteRejected) {
+          const rejectedId = agency.id;
+          setAirRejected((prev) => new Set(prev).add(rejectedId));
+          setAereo(false);
+        }
         setError(res.error);
         return;
       }
@@ -736,8 +749,9 @@ export function ShalomGuideModal({
                             )}
                             {air.fromOrigin === "no" && (
                               <span className="block text-xs text-red-700">
-                                Esta agencia vuela, pero no desde tu agencia de origen. No se puede
-                                pedir aéreo en esta ruta.
+                                {airRejected.has(agency.id)
+                                  ? "Shalom confirmó que no hay vuelo entre tu agencia de origen y esta. Va por tierra."
+                                  : "Esta agencia vuela, pero no desde tu agencia de origen. No se puede pedir aéreo en esta ruta."}
                               </span>
                             )}
                             {air.fromOrigin === "unknown" && (

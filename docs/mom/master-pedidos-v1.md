@@ -9743,6 +9743,16 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - el directorio no trae la lista (`unknown`) → **marcada** también: «todo»
     incluye lo que no se pudo confirmar. Si Shalom rechaza la ruta al crear, el
     error lo dice y se desmarca.
+- **Cuando Shalom dice que no vuela (04-11-2026).** El primer caso fue
+  #KP202237 (Pangoa, Junín) desde Breña: la ruta no constaba, la casilla salió
+  marcada y Shalom contestó 400 «envío aéreo no disponible: No se permite
+  servicio aéreo entre el origen y destino seleccionado». Ese 400 no crea
+  preguía. El modal lo reconoce (`isShalomAirRouteRejection`), desmarca la
+  casilla, la deja **bloqueada en tierra para esa agencia** («Shalom confirmó
+  que no hay vuelo…», `effectiveAirRoute`) y pide pulsar «Crear guía» otra vez.
+  No reintenta solo por tierra: hay destinos sin llegada terrestre (#KP201639
+  Pucallpa y #AUR900259 Cajamarca, rechazados en el mostrador el 03-11-2026), y
+  ahí mandarla por tierra es crear una guía que el mostrador va a devolver.
 - La casilla se marca **una vez por agencia**, cuando su ficha del directorio
   ya llegó; lo que la persona cambie después no se pisa. Nunca se manda aéreo en
   una ruta bloqueada aunque el estado hubiera quedado marcado de otra agencia.

@@ -70,6 +70,7 @@ import {
   splitReceiverName,
   suggestedAgencyQuery,
   shalomGuideIsCancelable,
+  isShalomAirRouteRejection,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
 } from "@/lib/shalom/draft";
@@ -592,6 +593,9 @@ export async function createShalomGuide(
   guideCode?: string;
   codigo?: string | null;
   recovered?: boolean;
+  /** Shalom no vuela entre el origen y esa agencia: el modal desmarca y bloquea
+   *  la vía aérea para que el siguiente intento salga por tierra. */
+  airRouteRejected?: boolean;
 }> {
   const perms = await getMasterPermissions();
   if (!perms.can("shalom.create_guide")) return { error: "Tu rol no permite crear guías Shalom." };
@@ -708,7 +712,17 @@ export async function createShalomGuide(
       // Un token vencido no es un fallo de datos: se limpia la caché para que
       // el siguiente intento vuelva a conectar en vez de repetir el 401.
       if (shalomErr?.isShalomAuth) await clearSession(admin, row.store_id);
-      return { error: describeShalomError(err) };
+      const described = describeShalomError(err);
+      // Sin vuelo en esa ruta (MOM §12, 04-11-2026). El 400 no creó nada, así
+      // que reintentar por tierra es seguro; lo decide quien despacha con un
+      // clic más, no se reintenta solo: hay destinos sin llegada terrestre.
+      if (input.aereo && isShalomAirRouteRejection(described)) {
+        return {
+          error: `Shalom no tiene vuelo entre tu agencia de origen y ${input.destinyTerminalName ?? "esta agencia"}, así que no creó la guía. Se desmarcó la vía aérea: vuelve a pulsar «Crear guía» para enviarla por tierra.`,
+          airRouteRejected: true,
+        };
+      }
+      return { error: described };
     }
   }
 
