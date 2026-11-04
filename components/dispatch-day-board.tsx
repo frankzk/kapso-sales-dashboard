@@ -28,6 +28,8 @@ import { Sheet } from "@/components/filter-sheet";
 import { AttentionPill, Badge, Banner, CHECKBOX, ChoiceChip, FIELD, FilterPill, OpsButton, opsButtonClass, StatusCard, type BadgeTone } from "@/components/ops-ui";
 import { IconAlert, IconCalendar, IconCheck, IconChevronDown, IconChevronRight, IconInfo, IconList, IconPackage, IconQr, IconRepeat, IconSearch, IconUndo, IconX } from "@/components/icons";
 import { ReturnsScanner } from "@/components/returns-scanner";
+import { ReturnManifestRiderButtons } from "@/components/return-manifests";
+import type { ReturnManifestRiderOption } from "@/lib/return-manifest-access";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
 import { ScanAction } from "@/components/scan-action";
 import { activeDispatchItems } from "@/lib/dispatch";
@@ -136,6 +138,11 @@ interface Props {
   run: (action: () => Promise<CourierActionResult>) => void;
   /** «No entregado» que siguen en una caja, de cualquier fecha: tarjeta «Devoluciones». */
   pendingReturns?: PendingReturn[];
+  /**
+   * Motorizados de Grupo GF para «Nuevo manifiesto de devolución» (0307). Solo
+   * llegan si quien mira tiene el permiso de Almacén (`warehouse.prepare`).
+   */
+  returnManifestRiders?: ReturnManifestRiderOption[];
   /** No entregados de Lima que la tienda todavía no acordó en Repro Lima: no
    *  están en la cola (MOM §29.13, 01-11-2026). */
   awaitingRepro?: number;
@@ -838,6 +845,7 @@ export function DispatchDayBoard(props: Props) {
               <p className="text-sm font-semibold text-ink-900">Recibir devoluciones en oficina</p>
               <OpsButton variant="ghost" size="sm" className="ml-auto" onClick={() => setMethod("qr")}>Volver a asignar</OpsButton>
             </div>
+            {(props.returnManifestRiders?.length ?? 0) > 0 && <ReturnManifestRiderButtons riders={props.returnManifestRiders!} />}
             {canManageDispatch
               ? <ReturnsScanner key={pendingReturns.length ? "con" : "sin"} orgId={orgId} pending={pendingReturns} />
               : <Banner tone="warn">Tu rol no organiza rutas: puedes mirar, no recibir.</Banner>}

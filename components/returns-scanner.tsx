@@ -7,7 +7,9 @@ import { DispatchCamera } from "@/components/dispatch-camera";
 import { returnUndeliveredByCode, returnUndeliveredOutputs } from "@/app/dashboard/courier/actions";
 import type { PendingReturn } from "@/lib/courier-route-ledger";
 import { nonDeliveryReasonLabel } from "@/lib/gf-delivery";
-import { Badge, OpsButton } from "@/components/ops-ui";
+import { Badge, Banner, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
+import { cn } from "@/components/ui";
+import { scanReturnManifest, setReturnManifestLineNote, type ReturnManifestScanResult } from "@/app/dashboard/pedidos/devoluciones/manifest-actions";
 
 /**
  * Devoluciones (Despacho del día): el supervisor escanea (o teclea) cada paquete «No
@@ -122,6 +124,112 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
         continuous
         progress={{ done: total - left.length, total, verb: "Devueltos" }}
         status={last ? { ok: last.ok, text: `${last.code}: ${last.text}` } : null}
+      />
+    </div>
+  );
+}
+
+/** El tono de cada respuesta del manifiesto, como en el resto de escáneres. */
+function manifestScanTone(res: ReturnManifestScanResult): BadgeTone {
+  if (res.kind === "recibido") return "ok";
+  if (res.kind === "informativa") return "neutral";
+  if (res.kind === "error" || res.flags?.includes("reportada_entregada")) return "crit";
+  return "warn";
+}
+
+type ManifestScanLine = { code: string; tone: BadgeTone; text: string; lineId?: string; needsNote: boolean };
+
+/**
+ * El mismo escáner en modo manifiesto de devolución (0307, owner 04-11-2026):
+ * cada lectura se anota en el manifiesto y, si la caja se esperaba (o llegó sin
+ * reporte), se recibe con la recepción de siempre. Lo que no se recibe queda
+ * como observación con su motivo; la «no identificada» pide una nota. Cámara en
+ * serie con «Recibidos X de Y esperados».
+ */
+export function ReturnManifestScanner({ manifestId, progress, disabled = false }: {
+  manifestId: string;
+  /** Lo esperado que ya llegó, frente a lo esperado. */
+  progress: { done: number; total: number };
+  disabled?: boolean;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const receiving = useRef(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [lines, setLines] = useState<ManifestScanLine[]>([]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [noteError, setNoteError] = useState<string | null>(null);
+
+  async function run(code: string) {
+    if (receiving.current || !code.trim() || disabled) return;
+    receiving.current = true;
+    setBusy(true);
+    try {
+      const res = await scanReturnManifest(manifestId, code);
+      const text = res.error ?? res.notice ?? (res.kind === "recibido" ? "Recibido en oficina" : "Anotado");
+      setLines((cur) => [{ code: code.trim(), tone: manifestScanTone(res), text, lineId: res.lineId, needsNote: Boolean(res.needsNote) }, ...cur].slice(0, 50));
+      if (res.ok) router.refresh();
+    } catch {
+      setLines((cur) => [{ code, tone: "crit" as BadgeTone, text: "No se pudo registrar. Reintenta el mismo código; no se duplicará.", needsNote: false }, ...cur]);
+    } finally {
+      receiving.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function saveNote(lineId: string) {
+    const text = (notes[lineId] ?? "").trim();
+    setNoteError(null);
+    const res = await setReturnManifestLineNote(lineId, text);
+    if (!res.ok) { setNoteError(res.error ?? "No se pudo guardar la nota."); return; }
+    setLines((cur) => cur.map((l) => (l.lineId === lineId ? { ...l, needsNote: false, text: `${l.text} · Nota: ${text}` } : l)));
+    router.refresh();
+  }
+
+  const last = lines[0] ?? null;
+  return (
+    <div>
+      <DispatchScanner busy={busy} disabled={disabled} compact look="ops" buttonLabel="Escanear" hint="QR de la caja, código de salida o nº de pedido" onScan={(code) => void run(code)} onCamera={() => setCameraOpen(true)} />
+      <p className="mt-3 text-[13px] text-ink-500">
+        Escanea cada caja que trajo: <b className="font-semibold tabular-nums text-ink-900">{progress.done} de {progress.total}</b> esperadas recibidas. La esperada se recibe en oficina; la que llegó sin reporte se reporta «No entregado» y se recibe; la que figura entregada queda como incidencia y no se recibe. Si un pedido tiene dos cajas, escanea el QR.
+      </p>
+      {lines.length > 0 && (
+        <ul className="mt-3 max-h-64 divide-y divide-line overflow-auto rounded-lg text-sm ring-1 ring-line" aria-live="polite">
+          {lines.map((l, i) => (
+            <li key={`${l.code}:${i}`} className="space-y-2 px-3 py-2">
+              <div className="flex items-start gap-2">
+                <span className="shrink-0 font-semibold text-ink-900">{l.code}</span>
+                <Badge tone={l.tone} wrap className="min-w-0">{l.text}</Badge>
+              </div>
+              {l.needsNote && l.lineId && (
+                <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); void saveNote(l.lineId!); }}>
+                  <label className="min-w-0 flex-1">
+                    <span className="sr-only">Qué es esta caja</span>
+                    <input
+                      value={notes[l.lineId] ?? ""}
+                      onChange={(e) => setNotes((cur) => ({ ...cur, [l.lineId!]: e.target.value }))}
+                      placeholder="Qué es: lo que dice la caja, de quién es…"
+                      maxLength={600}
+                      className={cn(FIELD, "min-w-[12rem]")}
+                    />
+                  </label>
+                  <OpsButton size="sm" type="submit" disabled={(notes[l.lineId] ?? "").trim().length < 3}>Anotar</OpsButton>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {noteError && <Banner tone="crit" role="alert" className="mt-2">{noteError}</Banner>}
+      <DispatchCamera
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onScan={(value) => void run(value)}
+        continuous
+        // Sin total: llegan también cajas que no se esperaban, y la cámara no
+        // debe cerrarse sola al completar las esperadas.
+        progress={{ done: progress.done, label: `Recibidos ${progress.done} de ${progress.total} esperados` }}
+        status={last ? { ok: last.tone === "ok" || last.tone === "neutral", text: `${last.code}: ${last.text}` } : null}
       />
     </div>
   );

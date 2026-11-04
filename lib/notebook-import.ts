@@ -24,6 +24,7 @@
 // «Reparto y liquidación» antes de aplicar.
 
 import { isNonDeliveryReason, isPaymentMethod, NON_DELIVERY_REASONS, type PaymentMethod } from "@/lib/routes";
+import { notebookOfficeConflictMessage } from "@/lib/return-manifest";
 
 /** Una fila de la hoja, tal como la leyó la visión. */
 export interface NotebookLine {
@@ -195,6 +196,12 @@ export interface PlanStop {
   total: number | null;
   /** Saldo por cobrar (route-collection). Null si no se pudo leer. */
   remaining: number | null;
+  /**
+   * La caja llegó a la oficina sin reporte y un manifiesto de devolución la
+   * reportó «No entregado · Llegó a oficina sin reporte» al recibirla (0307,
+   * owner 04-11-2026). Si la hoja dice «entregado», es una incidencia.
+   */
+  officeArrival?: { manifestLabel: string; arrivedOn: string | null } | null;
 }
 
 /** Un reprogramado que el motorizado conserva en la caja de un día anterior. */
@@ -250,6 +257,12 @@ export interface PlanRow {
   action: NotebookAction;
   outcome: NotebookOutcome | null;
   warnings: string[];
+  /**
+   * La hoja dice «entregado» de una parada que ya se reportó «No entregado»
+   * porque la caja llegó a la oficina sin reporte (0307): no se carga y queda
+   * a la vista como incidencia.
+   */
+  incident?: string | null;
 }
 
 export interface NotebookPlan {
@@ -431,7 +444,9 @@ export function buildNotebookPlan(
         ? ctx.carry.find((c) => c.shipmentId === match!.shipmentId) ?? null
         : null;
     const warnings: string[] = [];
-    if (match.detail && (match.kind !== "pendiente" || match.via === "nombre")) warnings.push(match.detail);
+    const incident = officeConflict(match, target, interpretation.outcome);
+    if (incident) warnings.push(incident);
+    else if (match.detail && (match.kind !== "pendiente" || match.via === "nombre")) warnings.push(match.detail);
     const loadable = match.kind === "pendiente" || match.kind === "arrastre";
     if (loadable && interpretation.problem) warnings.push(interpretation.problem);
     if (loadable) warnings.push(...moneyWarnings(interpretation.outcome, target?.total ?? null, target?.remaining ?? null));
@@ -442,7 +457,7 @@ export function buildNotebookPlan(
     const action: NotebookAction = !loadable || !interpretation.outcome || overpaid
       ? "omitir"
       : match.kind === "arrastre" ? "pasar_y_reportar" : "reportar";
-    return { index, line, match, interpretation, action, outcome: interpretation.outcome, warnings };
+    return { index, line, match, interpretation, action, outcome: interpretation.outcome, warnings, ...(incident ? { incident } : {}) };
   });
 
   const named = new Set(rows.map((r) => r.match.stopId).filter(Boolean));
@@ -451,6 +466,20 @@ export function buildNotebookPlan(
     .map((s) => ({ stopId: s.stopId, orderName: s.orderName, customerName: s.customerName }));
 
   return { rows, missing, totals: planTotals(rows, declared) };
+}
+
+/**
+ * La incidencia de una fila: la hoja dice «entregado» de una parada que ya está
+ * «No entregado» porque la caja llegó a la oficina sin reporte. PURA.
+ */
+export function officeConflict(
+  match: Pick<PlanRow["match"], "kind" | "stopId">,
+  target: PlanStop | PlanCarry | null,
+  outcome: NotebookOutcome | null,
+): string | null {
+  if (match.kind !== "reportada" || !match.stopId || !target || !("officeArrival" in target) || !target.officeArrival) return null;
+  if (outcome?.status !== "entregado") return null;
+  return notebookOfficeConflictMessage(target.officeArrival);
 }
 
 /** Los totales de la hoja y de lo que se va a cargar. Se recalculan al editar. */

@@ -329,8 +329,11 @@ describe("las piezas en el código", () => {
   it("por número de pedido, con la reemplazada fuera, el escaneo no elige: pide el QR", () => {
     // La S01 y la S02 llevan el mismo código de barras (el número de pedido).
     const despacho = read("app/dashboard/pedidos/despacho/actions.ts");
-    expect(despacho).toContain("if (candidates.length) return { candidates, byOrderName: true, hold: await replacedOutHold(candidates) };");
-    expect(despacho).toContain('.eq("kind", OUTPUT_REPLACED_KIND)\n    .in("shipment_id", returning.map((candidate) => candidate.id));');
+    // El buscador vive en lib (04-11-2026): el manifiesto de devolución usa el mismo.
+    const lookup = read("lib/dispatch-scan-lookup.ts");
+    expect(despacho).toContain("return findScanCandidatesWith(sb, rawCode);");
+    expect(lookup).toContain("if (candidates.length) return { candidates, byOrderName: true, hold: await replacedOutHold(candidates) };");
+    expect(lookup).toContain('.eq("kind", OUTPUT_REPLACED_KIND)\n    .in("shipment_id", returning.map((candidate) => candidate.id));');
     expect(despacho).toContain("if (hold) return { error: hold, byOrderName, scanHold: true };");
     // Preparar, recibir, agregar a una ruta y cotejar tampoco eligen.
     expect(despacho.split("if (scan.hold) return { error: scan.hold };").length - 1).toBe(4);
@@ -341,12 +344,16 @@ describe("las piezas en el código", () => {
 
   it("recibida de una caja vieja, se mira lo que hizo la base antes de tomar o asignar", () => {
     const scan = body("scanAssignToRider");
-    const outcome = scan.indexOf("const outcome = officeReturnOutcome(afterRow?.custody_state, replacedNow);");
+    const outcome = scan.indexOf("const outcome = officeReturnOutcome(afterRow?.custody_state, replacedNow, saleEnded.has(orderId));");
     expect(outcome).toBeGreaterThan(0);
     expect(outcome).toBeLessThan(scan.indexOf("takeOrdersCore("));
     expect(scan).toContain('if (outcome !== "por_asignar") {');
     expect(officeReturnOutcome("devuelto", true)).toBe("a_stock_reemplazada");
     expect(officeReturnOutcome("devuelto", false)).toBe("ya_devuelta");
+    // 0307: el pedido anulado en la tienda va a inventario; la reemplazada manda.
+    expect(officeReturnOutcome("devuelto", false, true)).toBe("a_inventario_anulado");
+    expect(officeReturnOutcome("devuelto", true, true)).toBe("a_stock_reemplazada");
+    expect(officeReturnOutcome("empresa", false, true)).toBe("por_asignar");
     expect(officeReturnOutcome("empresa", true)).toBe("por_asignar");
     expect(officeReturnOutcome(null, false)).toBe("por_asignar");
     // El panel de la caja se actualiza también cuando el escaneo la recibió.
@@ -389,7 +396,7 @@ describe("las piezas en el código", () => {
     // «A stock» solo para la reemplazada o la ya devuelta, como la base, y
     // leído DESPUÉS de recibir: un reemplazo simultáneo cambia la rama.
     const core = body("returnUndeliveredToOffice");
-    expect(core).toContain("const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id));");
+    expect(core).toContain("const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id), Boolean(order && saleEnded.has(order)));");
     expect(core.indexOf('admin.rpc("gf_return_to_office"')).toBeLessThan(core.indexOf("officeReturnOutcome("));
     const despacho = read("app/dashboard/pedidos/despacho/actions.ts");
     expect(despacho).toContain("const replaced = Boolean(replacedEvents?.length);");

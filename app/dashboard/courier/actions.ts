@@ -57,6 +57,7 @@ import { custodyOnAssign, GF_SAME_DAY_CUTOFF_DEFAULT, isRiderPickupMode, limaClo
 import { BLOCKED_REASON_LABEL, programDayLabel, programNeedsConfirm, takenIsAssignable, type BlockedReason } from "@/lib/dispatch-day";
 import { pastBoxDecision, pastBoxMessage, receivedFromLabel, replacedReceivedMessage, REPORTED_STOP_MOVE_ERROR } from "@/lib/gf-scan-return";
 import { isReturningOwnOutput, officeReturnOutcome, replacedOutputIds, type ReturningOutputLike } from "@/lib/gf-replaced-output";
+import { readSaleEnded, storeCancelledReceivedMessage, storeCancelledReceivedNotice } from "@/lib/gf-office-receipt";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { riderPickupMode } from "@/lib/grupo-gf-courier-route-access";
 import { getRouteDetail, type RouteRow, type StopWithOrder } from "@/lib/routes-access";
@@ -1830,20 +1831,23 @@ async function returnUndeliveredShipments(
   // («Solicitar devolución») vuelve a «por asignar», como siempre.
   let toStock = 0;
   let alreadyReturned = 0;
+  // 0307 (owner, 04-11-2026): la caja de un pedido anulado en la tienda va a
+  // inventario; ni vuelve a «por asignar» ni pasa por Repro Lima.
+  let toInventory = 0;
   const requeuedOrders = new Set<string>();
   if (received.length) {
-    const [{ data: after }, replacedIds] = await Promise.all([
+    const [{ data: after }, replacedIds, saleEnded] = await Promise.all([
       courierRowsByIds(received, (ids) => admin.from("shipments").select("id,custody_state").in("id", ids)),
       loadReplacedIds(admin, received),
+      readSaleEnded(admin, [...orderOfShipment.values()]),
     ]);
     for (const row of after as Array<{ id: string; custody_state: string | null }>) {
-      const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id));
+      const order = orderOfShipment.get(row.id);
+      const outcome = officeReturnOutcome(row.custody_state, replacedIds.has(row.id), Boolean(order && saleEnded.has(order)));
       if (outcome === "a_stock_reemplazada") toStock += 1;
+      else if (outcome === "a_inventario_anulado") toInventory += 1;
       else if (outcome === "ya_devuelta") alreadyReturned += 1;
-      else {
-        const order = orderOfShipment.get(row.id);
-        if (order) requeuedOrders.add(order);
-      }
+      else if (order) requeuedOrders.add(order);
     }
   }
   // Repro Lima (§29.13): el acuerdo que esperaba esta caja se programa para su
@@ -1856,9 +1860,10 @@ async function returnUndeliveredShipments(
   revalidatePath(REPRO_LIMA_PATH);
   if (!changed.length && !alreadyReceived.length) return { error: [ambiguousNote, ...new Set(errors)].filter(Boolean).join(" ") || "Ninguno de esos pedidos está «No entregado» dentro de una caja." };
   if (ambiguousNote) errors.push(ambiguousNote);
-  const requeued = changed.length - toStock - alreadyReturned;
+  const requeued = changed.length - toStock - alreadyReturned - toInventory;
   const parts: string[] = [];
   if (requeued) parts.push(`${requeued} ${requeued === 1 ? "pedido recibido" : "pedidos recibidos"} en oficina. Vuelven a «por asignar» (Por reprogramar Lima), también los rechazados.`);
+  if (toInventory) parts.push(`${toInventory} ${toInventory === 1 ? "recibido" : "recibidos"} en oficina. ${storeCancelledReceivedNotice(toInventory)}`);
   if (toStock) parts.push(returnedToStockNotice(toStock));
   if (alreadyReturned) parts.push(`${alreadyReturned} ya ${alreadyReturned === 1 ? "constaba devuelta: salió" : "constaban devueltas: salieron"} de la caja sin volver a «por asignar».`);
   if (alreadyReceived.length) parts.push(`${alreadyReceived.length} ${alreadyReceived.length === 1 ? "salida ya estaba recibida" : "salidas ya estaban recibidas"} en oficina. No se registra otra devolución.`);
@@ -3705,12 +3710,13 @@ export async function scanAssignToRider(
       // Releída después de recibir (0248): si la base la mandó a stock —un
       // «Sacar con salida nueva» terminó mientras tanto, o ya constaba
       // devuelta—, no se toma ni se asigna: el pedido no sale con esta caja.
-      const [{ data: after }, replacedNow] = await Promise.all([
+      const [{ data: after }, replacedNow, saleEnded] = await Promise.all([
         admin.from("shipments").select("custody_state,output_code").eq("id", shipmentId).maybeSingle(),
         outputWasReplaced(admin, shipmentId),
+        readSaleEnded(admin, [orderId]),
       ]);
       const afterRow = after as { custody_state?: string | null; output_code?: string | null } | null;
-      const outcome = officeReturnOutcome(afterRow?.custody_state, replacedNow);
+      const outcome = officeReturnOutcome(afterRow?.custody_state, replacedNow, saleEnded.has(orderId));
       if (outcome !== "por_asignar") {
         await recomputeOrderMasterSafe(admin, [orderId]);
         const outputCode = afterRow?.output_code ?? null;
@@ -3721,7 +3727,9 @@ export async function scanAssignToRider(
           receivedFrom: receivedFromLabel(fromName, box.dispatch_manifests.route_date),
           message: outcome === "a_stock_reemplazada"
             ? replacedReceivedMessage(outputCode, fromName, box.dispatch_manifests.route_date, await replacedByCode(admin, shipmentId))
-            : `${outputCode ?? "Esta salida"} ya constaba devuelta: salió de la caja de ${fromName} sin volver a «por asignar». No se asigna.`,
+            : outcome === "a_inventario_anulado"
+              ? `${storeCancelledReceivedMessage(outputCode ?? "Esta salida", fromName, box.dispatch_manifests.route_date)} No se asigna.`
+              : `${outputCode ?? "Esta salida"} ya constaba devuelta: salió de la caja de ${fromName} sin volver a «por asignar». No se asigna.`,
         };
       }
       // Repro Lima (§29.13): el acuerdo que esperaba esta caja se programa para

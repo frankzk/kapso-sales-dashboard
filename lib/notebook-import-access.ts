@@ -147,6 +147,15 @@ export async function loadNotebookContext(
     }
   }
 
+  // Lo que un manifiesto de devolución ya reportó «No entregado · Llegó a
+  // oficina sin reporte» al recibir la caja (0307): si la hoja dice
+  // «entregado», es una incidencia y no se carga encima.
+  const arrivals = await officeArrivalsByStop(admin, stops.filter((s) => s.status === "no_entregado").map((s) => s.stopId));
+  for (const stop of stops) {
+    const arrival = arrivals.get(stop.stopId);
+    if (arrival) stop.officeArrival = arrival;
+  }
+
   const carry = await loadCarryCandidates(admin, target, new Set(stops.map((s) => s.orderId)));
 
   const known = new Set<string>([...stops, ...carry].map((x) => (x.orderName ?? "").toUpperCase()).filter(Boolean));
@@ -157,6 +166,35 @@ export async function loadNotebookContext(
     ctx: { routeDate: target.routeDate, riderName: target.riderName, stops, carry, elsewhere },
     stops: stopRefs,
   };
+}
+
+/**
+ * Las paradas que un manifiesto de devolución reportó al recibir la caja sin
+ * reporte (línea recibida con la marca `sin_reporte`). Sin la 0307 la tabla
+ * no existe y la lectura falla: ninguna, como antes.
+ */
+export async function officeArrivalsByStop(
+  admin: SupabaseClient,
+  stopIds: readonly string[],
+): Promise<Map<string, { manifestLabel: string; arrivedOn: string | null }>> {
+  const out = new Map<string, { manifestLabel: string; arrivedOn: string | null }>();
+  const ids = [...new Set(stopIds.filter(Boolean))];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await admin
+      .from("return_manifest_lines")
+      .select("stop_id,return_manifests!inner(label,arrived_on)")
+      .in("stop_id", ids.slice(i, i + 200))
+      .eq("outcome", "received")
+      .contains("flags", ["sin_reporte"])
+      .is("removed_at", null);
+    if (error) return out;
+    type Header = { label: string; arrived_on: string | null };
+    for (const row of (data ?? []) as { stop_id: string; return_manifests: Header | Header[] }[]) {
+      const header = Array.isArray(row.return_manifests) ? row.return_manifests[0] : row.return_manifests;
+      if (header) out.set(row.stop_id, { manifestLabel: header.label, arrivedOn: header.arrived_on });
+    }
+  }
+  return out;
 }
 
 function shiftDay(day: string, days: number): string {

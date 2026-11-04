@@ -10,6 +10,8 @@ import { loadCourierConfig } from "./actions";
 import { getDispatchWorkspaceData } from "@/lib/dispatch-access";
 import { getCourierRouteLedger, getPendingReturns } from "@/lib/courier-route-ledger";
 import { limaDate } from "@/lib/sheets/resolver";
+import { listReturnManifestRiders } from "@/lib/return-manifest-access";
+import { RETURN_MANIFEST_PERMISSION } from "@/lib/return-manifest";
 
 export const dynamic = "force-dynamic";
 
@@ -53,8 +55,17 @@ async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
   // Una fecha concreta en la lista de Rutas la trae el servidor (puede ser
   // anterior a las últimas 150 rutas); «hoy» y «todas» filtran en el navegador.
   const day = /^\d{4}-\d{2}-\d{2}$/.test(sp.dia ?? "") ? sp.dia! : null;
-  const [snapshot, dispatch, ledger, pendingReturns] = await Promise.all([loadCourierConfig(orgId), getDispatchWorkspaceData(), getCourierRouteLedger({ day }), getPendingReturns({ storeIds }).catch(() => [])]);
+  // «Nuevo manifiesto de devolución» (0307) es del permiso de Almacén: sin él,
+  // la tarjeta «Devoluciones» no lo ofrece.
+  const canReturnManifest = permissions.can(RETURN_MANIFEST_PERMISSION);
+  const [snapshot, dispatch, ledger, pendingReturns, returnManifestRiders] = await Promise.all([
+    loadCourierConfig(orgId),
+    getDispatchWorkspaceData(),
+    getCourierRouteLedger({ day }),
+    getPendingReturns({ storeIds }).catch(() => []),
+    canReturnManifest ? listReturnManifestRiders(orgId).catch(() => []) : Promise.resolve([]),
+  ]);
   const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
-  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} ledger={ledger} pendingReturns={pendingReturns} />;
+  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} ledger={ledger} pendingReturns={pendingReturns} returnManifestRiders={returnManifestRiders} />;
 }
 

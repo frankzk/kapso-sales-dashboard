@@ -18,6 +18,8 @@ import {
   type ReproCaseRow,
 } from "@/lib/repro-lima-program";
 import { clearGfDispatchPrograms } from "@/lib/gf-dispatch-program";
+import { ARRIVED_WITHOUT_REPORT_CHAIN_REASON, ARRIVED_WITHOUT_REPORT_NOTE, CHAIN_REASONS, stopChainReason } from "@/lib/lima-retry-chain";
+import { ARRIVED_WITHOUT_REPORT_NOTE as MANIFEST_NOTE } from "@/lib/return-manifest";
 import { materializationPlan, noEsperarCajaAplica } from "@/lib/repro-lima";
 
 // ---------------------------------------------------------------------------
@@ -192,6 +194,24 @@ afterEach(() => {
 const caseRow = (db: Record<string, Row[]>) => db.lima_repro_cases!.find((r) => r.id === "case-1")!;
 
 describe("los hechos del pedido", () => {
+  it("la parada que reportó el manifiesto de devolución (llegó sin reporte, 0307) no entra a la cadena Aliclik: sigue Repro Lima", async () => {
+    const stop = (note: string | null) => [{
+      id: "stop-1", order_id: "o1", shipment_id: "sh1", route_id: "r1", status: "no_entregado", outcome_reason: "otro",
+      note, photo_path: null, reported_at: "2026-10-10T20:00:00Z", requested_date: null, dispatch_manifest_id: "box-1",
+    }];
+    const alexis = (note: string | null) => ({ ...seed({ stops: stop(note) }), riders: [{ id: "rd1", full_name: "Alexis" }] });
+    // Un «otro» de verdad de Alexis abre la cadena…
+    const real = (await loadReproFacts(fakeDb(alexis(null)).admin, ["o1"])).get("o1")!;
+    expect(real.retryChain).toMatchObject({ state: "siguiente", next: "autoecom" });
+    // …el de la regla 4 no: nadie fue a la puerta.
+    const synthetic = (await loadReproFacts(fakeDb(alexis("Llegó a oficina sin reporte · Devolución · Alexis · 11/10")).admin, ["o1"])).get("o1")!;
+    expect(synthetic.retryChain).toMatchObject({ state: "fuera", why: "motivo" });
+    expect(stopChainReason("otro", "Llegó a oficina sin reporte · Devolución · Alexis · 11/10")).toBe(ARRIVED_WITHOUT_REPORT_CHAIN_REASON);
+    expect(stopChainReason("otro", "Cliente no salió")).toBe("otro");
+    expect(CHAIN_REASONS as readonly string[]).not.toContain(ARRIVED_WITHOUT_REPORT_CHAIN_REASON);
+    expect(ARRIVED_WITHOUT_REPORT_NOTE).toBe(MANIFEST_NOTE);
+  });
+
   it("el episodio es la parada «No entregado» y la caja está en oficina", async () => {
     const { admin } = fakeDb(seed());
     const facts = (await loadReproFacts(admin, ["o1"])).get("o1")!;

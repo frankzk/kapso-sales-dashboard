@@ -15,6 +15,7 @@ import { CourierBoxDrawer } from "@/components/courier-box-drawer";
 import { CourierRouteReportDrawer } from "@/components/courier-route-report-drawer";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import type { CourierLedgerRow, PendingReturn } from "@/lib/courier-route-ledger";
+import type { ReturnManifestRiderOption } from "@/lib/return-manifest-access";
 import { resolveRiderRate, type RiderRateVersion } from "@/lib/rider-pay";
 import { GF_SAME_DAY_CUTOFF_DEFAULT, resolveDistrictAvailability, resolveDistrictTariff } from "@/lib/grupo-gf-courier";
 import {
@@ -65,6 +66,7 @@ export function GrupoGfCourierBoard({
   today = "",
   ledger = [],
   pendingReturns = [],
+  returnManifestRiders = [],
 }: {
   orgId: string;
   snapshot: CourierConfigSnapshot;
@@ -76,6 +78,8 @@ export function GrupoGfCourierBoard({
   ledger?: CourierLedgerRow[];
   /** «No entregado» que siguen en una caja: habilitan «Recibir devoluciones». */
   pendingReturns?: PendingReturn[];
+  /** «Nuevo manifiesto de devolución» por motorizado; vacío sin el permiso de Almacén. */
+  returnManifestRiders?: ReturnManifestRiderOption[];
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +205,7 @@ export function GrupoGfCourierBoard({
           pending={pending}
           run={run}
           pendingReturns={pendingReturns}
+          returnManifestRiders={returnManifestRiders}
           awaitingRepro={snapshot.operations.awaitingRepro}
         />
       )}

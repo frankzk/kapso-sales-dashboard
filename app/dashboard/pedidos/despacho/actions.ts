@@ -25,10 +25,17 @@ import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routin
 import { courierLabelFor } from "@/lib/couriers/catalog";
 import { decideReception } from "@/lib/returns-reception";
 import { gfReturnDecision } from "@/lib/gf-returns-scan";
-import { replacedReceivedMessage } from "@/lib/gf-scan-return";
+import { gfOfficeReceiptNotice, readSaleEnded } from "@/lib/gf-office-receipt";
 import { OUTPUT_REPLACED_KIND, officeReturnOutcome, replacedOutputIds } from "@/lib/gf-replaced-output";
 import { materializeWaitingAgreementsSafe, reproReceptionNotice, REPRO_LIMA_PATH } from "@/lib/repro-lima-program";
 import { boxWho, notInThisBoxMessage, oldLabelHint } from "@/lib/scan-other-box";
+import {
+  ambiguousScanError,
+  findScanCandidatesWith,
+  NO_SCAN_CANDIDATES,
+  SCAN_NOT_FOUND,
+  type ScanCandidates,
+} from "@/lib/dispatch-scan-lookup";
 import type { OutputForDecision } from "@/lib/labels/resolve-output";
 import { loadPickupKeyFacts } from "@/lib/shalom/pickup-facts";
 import {
@@ -70,92 +77,15 @@ async function currentUser() {
   return { sb, user };
 }
 
-function outputCodeCandidate(value: string): string | null {
-  const match = value.toUpperCase().match(/^(.+-S\d{2})(?:-.+)?$/);
-  return match?.[1] ?? null;
-}
-
-/** Sólo letras, números y guiones: lo que un Code 39 puede llevar como pedido. */
-const ORDER_NAME_SCAN = /^[A-Za-z0-9][A-Za-z0-9-]{2,31}$/;
-
 /**
- * Devuelve TODAS las salidas que un escaneo puede estar designando. El QR, el
- * código de salida y la guía identifican una caja concreta; el código de barras
- * del rótulo lleva el número de pedido (MOM §4), que puede tener varias salidas.
- * Quien llama decide con `pickDispatchScanTarget` cuál corresponde a su tarea.
+ * Devuelve TODAS las salidas que un escaneo puede estar designando, con el
+ * cliente del usuario (RLS). El buscador vive en lib/dispatch-scan-lookup.ts
+ * para que el manifiesto de devolución (0307) use el MISMO.
  */
 async function findScanCandidates(rawCode: string, auth?: Awaited<ReturnType<typeof currentUser>>): Promise<ScanCandidates> {
-  const code = normalizeDispatchScan(rawCode);
-  if (!code) return NO_SCAN_CANDIDATES;
+  if (!normalizeDispatchScan(rawCode)) return NO_SCAN_CANDIDATES;
   const { sb } = auth ?? await currentUser();
-  const attempts: Array<{ column: string; value: string }> = [];
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(code)) {
-    attempts.push({ column: "qr_token", value: code });
-  }
-  const outputCode = outputCodeCandidate(code);
-  if (outputCode) attempts.push({ column: "output_code", value: outputCode });
-  attempts.push({ column: "guide_code", value: code });
-
-  for (const attempt of attempts) {
-    const query = sb.from("shipments").select(DISPATCH_SHIPMENT_COLUMNS).limit(2);
-    const { data } = attempt.column === "qr_token"
-      ? await query.eq(attempt.column, attempt.value)
-      : await query.ilike(attempt.column, attempt.value.replace(/[%_]/g, "\\$&"));
-    if (data?.length === 1) return { candidates: [data[0] as unknown as DispatchShipment], byOrderName: false, hold: null };
-  }
-
-  // El rótulo imprime `#KP126875`; el lector entrega `KP126875`. Aceptamos ambas.
-  if (ORDER_NAME_SCAN.test(code)) {
-    const { data } = await sb
-      .from("shipments")
-      .select(DISPATCH_SHIPMENT_COLUMNS)
-      .or(`order_name.ilike.${code},order_name.ilike.#${code}`)
-      .limit(10);
-    const candidates = (data ?? []) as unknown as DispatchShipment[];
-    if (candidates.length) return { candidates, byOrderName: true, hold: await replacedOutHold(candidates) };
-  }
-  return NO_SCAN_CANDIDATES;
-}
-
-/**
- * Las salidas que un escaneo designa. `byOrderName`: se llegó por el número de
- * pedido (el código de barras del rótulo), no por la caja. `hold`: el número
- * de pedido no elige ninguna salida y el escaneo pide el QR.
- */
-interface ScanCandidates {
-  candidates: DispatchShipment[];
-  byOrderName: boolean;
-  hold: string | null;
-}
-
-const NO_SCAN_CANDIDATES: ScanCandidates = { candidates: [], byOrderName: false, hold: null };
-
-/**
- * «Sacar con salida nueva» (0248, MOM §29.13): mientras la caja reemplazada
- * siga fuera, el pedido tiene dos cajas con el mismo código de barras —la que
- * vuelve con el motorizado y la nueva—. El número de pedido no dice cuál está
- * en la mano: no elige ninguna, ni para tomar, asignar, recibir o cotejar.
- */
-async function replacedOutHold(candidates: DispatchShipment[]): Promise<string | null> {
-  if (candidates.length < 2) return null;
-  const returning = candidates.filter((candidate) => courierKey(candidate.courier) === "propio" && candidate.custody_state === "retorno");
-  if (!returning.length) return null;
-  const { data } = await createAdminSupabase()
-    .from("order_events")
-    .select("kind,shipment_id")
-    .eq("kind", OUTPUT_REPLACED_KIND)
-    .in("shipment_id", returning.map((candidate) => candidate.id));
-  const replaced = replacedOutputIds((data ?? []) as { kind: string; shipment_id: string | null }[]);
-  const out = returning.find((candidate) => replaced.has(candidate.id));
-  if (!out) return null;
-  return `${out.order_name ?? "Ese pedido"} tiene ${dispatchScanLabel(out)} en devolución (reemplazada por otra salida) y sus cajas llevan el mismo código de barras: escanea el QR de la caja.`;
-}
-
-const SCAN_NOT_FOUND = "No encontramos una salida con ese QR, guía o número de pedido.";
-
-function ambiguousScanError(options: DispatchShipment[]): string {
-  const codes = options.map(dispatchScanLabel).join(", ");
-  return `Ese pedido tiene ${options.length} salidas (${codes}). Escanea el QR o el código de la salida.`;
+  return findScanCandidatesWith(sb, rawCode);
 }
 
 async function visibleManifest(manifestId: string, auth?: Awaited<ReturnType<typeof currentUser>>): Promise<DispatchManifest | null> {
@@ -463,14 +393,14 @@ export async function receiveReturnedPackage(
  * Un paquete de Grupo GF (o sin courier aún) escaneado en Devoluciones (MOM
  * §29.13, `lib/gf-returns-scan.ts`). Un «No entregado» se recibe en oficina
  * como en Despacho del día y el pedido queda por asignar para reprogramarlo;
- * lo que nunca salió solo se explica. Un pedido anulado en Shopify se recibe
- * igual —la caja tiene que salir de la del motorizado— y se dice que no vuelve
- * a salir.
+ * lo que nunca salió solo se explica. Un pedido anulado en la tienda se recibe
+ * igual —la caja tiene que salir de la del motorizado— y va a inventario
+ * (0307, owner 04-11-2026): Almacén decide stock o merma.
  */
 async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<DispatchActionResult> {
   const label = dispatchScanLabel(shipment);
   const admin = createAdminSupabase();
-  const [{ data: items }, { data: received }, cancelled, { data: replacedEvents }] = await Promise.all([
+  const [{ data: items }, { data: received }, cancelled, { data: replacedEvents }, saleEndedBefore] = await Promise.all([
     admin
       .from("dispatch_manifest_items")
       .select("id,manifest_id,dispatch_manifests!inner(courier,route_date,driver_name)")
@@ -492,6 +422,8 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
       .eq("shipment_id", shipment.id)
       .eq("kind", "output_replaced")
       .limit(1),
+    // Anulado en la tienda o venta Woo terminada: una ya recibida fue a inventario.
+    readSaleEnded(admin, shipment.order_id ? [shipment.order_id] : []),
   ]);
   // La marca es el evento: «Solicitar devolución» también deja `retorno`, y esa
   // vuelve a «por asignar» como siempre.
@@ -517,9 +449,11 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
     custodyState: shipment.custody_state,
     receivedInOffice: Boolean(received?.length),
     replaced,
+    saleEnded: Boolean(shipment.order_id && saleEndedBefore.has(shipment.order_id)),
   });
   if (decision.kind === "error") return { error: decision.message };
-  if (decision.kind === "aviso") return cancelled ? { error: cancelled } : { notice: decision.message, shipment };
+  // Ya recibida y a inventario: el anulado ya está resuelto, no es una alarma.
+  if (decision.kind === "aviso") return cancelled && !decision.toInventory ? { error: cancelled } : { notice: decision.message, shipment };
 
   const { user } = await currentUser();
   const { data: orderId, error } = await admin.rpc("gf_return_to_office", { p_item_id: item!.id, p_actor: user.id });
@@ -530,16 +464,26 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
   revalidatePath("/dashboard/pedidos");
   // El aviso dice lo que la base hizo, releído: un reemplazo que terminó
   // mientras tanto la manda a stock aunque lo leído arriba dijera otra cosa.
-  const [{ data: after }, { data: replacedAfter }] = await Promise.all([
+  // Un pedido anulado en la tienda va a inventario (0307, owner 04-11-2026).
+  const [{ data: after }, { data: replacedAfter }, saleEnded] = await Promise.all([
     admin.from("shipments").select("custody_state").eq("id", shipment.id).maybeSingle(),
     admin.from("order_events").select("id").eq("shipment_id", shipment.id).eq("kind", OUTPUT_REPLACED_KIND).limit(1),
+    readSaleEnded(admin, orderId ? [orderId as string] : []),
   ]);
-  const outcome = officeReturnOutcome((after as { custody_state?: string | null } | null)?.custody_state, Boolean(replacedAfter?.length));
-  if (outcome === "a_stock_reemplazada") {
-    return { notice: replacedReceivedMessage(label, manifest?.driver_name ?? "el motorizado", manifest?.route_date ?? ""), shipment };
-  }
-  if (outcome === "ya_devuelta") {
-    return { notice: `${label} ya constaba devuelto: salió de la caja de ${manifest?.driver_name ?? "el motorizado"} sin volver a «por asignar».`, shipment };
+  const outcome = officeReturnOutcome(
+    (after as { custody_state?: string | null } | null)?.custody_state,
+    Boolean(replacedAfter?.length),
+    Boolean(orderId && saleEnded.has(orderId as string)),
+  );
+  const notice = {
+    label,
+    outcome,
+    riderName: manifest?.driver_name ?? "el motorizado",
+    routeDate: manifest?.route_date ?? "",
+    cancelledNotice: cancelled,
+  };
+  if (outcome === "a_stock_reemplazada" || outcome === "a_inventario_anulado" || outcome === "ya_devuelta") {
+    return { ...gfOfficeReceiptNotice({ ...notice, reproParts: [] }), shipment };
   }
   // Repro Lima (§29.13): el acuerdo que esperaba esta caja se programa para su
   // día y el aviso lo dice; o dice que el cliente ya no lo quiere. Sin RPC ni
@@ -549,10 +493,7 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
     : null;
   const reproParts = repro ? reproReceptionNotice(repro, { single: true }) : [];
   revalidatePath(REPRO_LIMA_PATH);
-  const reproNote = reproParts.map((part) => ` ${part}`).join("");
-  return cancelled
-    ? { error: `${label} recibido en oficina. ${cancelled}${reproNote}`, shipment }
-    : { notice: `${label} recibido en oficina: vuelve a «por asignar» en Grupo GF para reprogramarlo.${reproNote}`, shipment };
+  return { ...gfOfficeReceiptNotice({ ...notice, reproParts }), shipment };
 }
 
 /**

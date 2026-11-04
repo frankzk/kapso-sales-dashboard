@@ -615,4 +615,6 @@
 \ir migrations/0305_urpi_take_gf_output.sql
 \echo 'Applying 0306_automations_panel.sql'
 \ir migrations/0306_automations_panel.sql
+\echo 'Applying 0307_return_manifests.sql'
+\ir migrations/0307_return_manifests.sql
 \echo 'Done.'

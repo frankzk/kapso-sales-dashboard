@@ -40,6 +40,18 @@ describe("gfReturnDecision", () => {
   it("fuera de caja y fuera de la empresa no se adivina", () => {
     expect(gfReturnDecision("KP1-S01", { box: null, custodyState: "devuelto", receivedInOffice: false })).toMatchObject({ kind: "error" });
   });
+
+  it("anulado en la tienda ya recibido (devuelto, sin caja): lo dice sin alarma, ya fue a inventario (0307)", () => {
+    const d = gfReturnDecision("KP1-S01", { box: null, custodyState: "devuelto", receivedInOffice: false, saleEnded: true });
+    expect(d).toEqual({
+      kind: "aviso",
+      toInventory: true,
+      message: "KP1-S01 ya se recibió: el pedido está anulado en la tienda (o su venta terminó), así que fue a inventario —Almacén decide stock o merma—. No vuelve a «por asignar».",
+    });
+    // Vivo y en la empresa: el aviso de siempre, no el de inventario.
+    expect(gfReturnDecision("KP1-S01", { box: null, custodyState: "empresa", receivedInOffice: true, saleEnded: true })).toMatchObject({ kind: "aviso" });
+    expect(gfReturnDecision("KP1-S01", { box: null, custodyState: "empresa", receivedInOffice: true, saleEnded: true })).not.toHaveProperty("toInventory");
+  });
 });
 
 const state = vi.hoisted(() => ({
@@ -48,6 +60,9 @@ const state = vi.hoisted(() => ({
   inBox: true,
   stopStatus: "no_entregado" as string | null,
   cancelledAt: null as string | null,
+  generalStatus: null as string | null,
+  /** La custodia que deja la base al recibir (null = la misma de antes). */
+  custodyAfter: null as string | null,
   rpcs: [] as { fn: string; args: Record<string, unknown> }[],
   recomputed: [] as string[][],
 }));
@@ -67,8 +82,10 @@ vi.mock("@/lib/db", () => {
     ready_at: null, order_id: "order-1", order_name: "#KP137351", customer_name: null, customer_phone: null,
     district: null, province: null, product: null,
   });
-  const reply = (client: string, table: string) => {
-    if (table === "shipments") return { data: client === "user" ? [SHIPMENT()] : null, error: null };
+  const reply = (client: string, table: string, many = false) => {
+    if (table === "shipments") {
+      return { data: client === "user" ? [SHIPMENT()] : { custody_state: state.custodyAfter ?? state.custody }, error: null };
+    }
     if (table === "dispatch_manifest_items") {
       return {
         data: state.inBox ? [{ id: "item-1", manifest_id: "box-1", dispatch_manifests: { route_date: "2026-10-04", driver_name: "Yhoni" } }] : [],
@@ -76,15 +93,20 @@ vi.mock("@/lib/db", () => {
       };
     }
     if (table === "delivery_stops") return { data: state.stopStatus ? { status: state.stopStatus } : null, error: null };
-    if (table === "orders") return { data: { name: "#KP137351", cancelled_at: state.cancelledAt, cancel_reason: "customer" }, error: null };
-    if (table === "order_master") return { data: { order_name: "#KP137351", general_status: null }, error: null };
+    if (table === "orders") {
+      const order = { id: "order-1", name: "#KP137351", cancelled_at: state.cancelledAt, cancel_reason: "customer" };
+      return { data: many ? [order] : order, error: null };
+    }
+    if (table === "order_master") return { data: { order_name: "#KP137351", general_status: state.generalStatus }, error: null };
     return { data: [], error: null };
   };
   const from = (client: string, table: string) => {
     const q: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in", "is", "ilike", "limit", "or", "order"]) q[m] = () => q;
+    let many = false;
+    for (const m of ["select", "eq", "is", "ilike", "limit", "or", "order"]) q[m] = () => q;
+    q.in = () => { many = true; return q; };
     q.maybeSingle = q.single = async () => reply(client, table);
-    q.then = (resolve: (r: unknown) => unknown, reject: (e: unknown) => unknown) => Promise.resolve(reply(client, table)).then(resolve, reject);
+    q.then = (resolve: (r: unknown) => unknown, reject: (e: unknown) => unknown) => Promise.resolve(reply(client, table, many)).then(resolve, reject);
     return q;
   };
   return {
@@ -105,7 +127,7 @@ vi.mock("@/lib/db", () => {
 import { receiveReturnedPackage } from "@/app/dashboard/pedidos/despacho/actions";
 
 beforeEach(() => {
-  Object.assign(state, { courier: "propio", custody: "courier", inBox: true, stopStatus: "no_entregado", cancelledAt: null, rpcs: [], recomputed: [] });
+  Object.assign(state, { courier: "propio", custody: "courier", inBox: true, stopStatus: "no_entregado", cancelledAt: null, generalStatus: null, custodyAfter: null, rpcs: [], recomputed: [] });
 });
 
 describe("receiveReturnedPackage con un paquete de Grupo GF", () => {
@@ -117,11 +139,30 @@ describe("receiveReturnedPackage con un paquete de Grupo GF", () => {
     expect(state.recomputed).toEqual([["order-1"]]);
   });
 
-  it("anulado en Shopify: se recibe igual y se dice que no vuelve a salir", async () => {
-    state.cancelledAt = "2026-10-04T20:00:00Z";
+  it("anulado en la tienda (owner, 04-11-2026): se recibe y va a inventario, no a «por asignar»", async () => {
+    // La base (0307) lo manda a stock: custodia `devuelto` y `return_received`.
+    Object.assign(state, { cancelledAt: "2026-10-04T20:00:00Z", custodyAfter: "devuelto" });
+    const result = await receiveReturnedPackage("KP137351-S01");
+    expect(result.error).toBeUndefined();
+    expect(result.notice).toBe(
+      "KP137351-S01 recibido en oficina (Yhoni del 04/10): el pedido está ANULADO en la tienda, así que va a inventario —Almacén decide stock o merma—. No vuelve a «por asignar».",
+    );
+    expect(result.notice).not.toContain("por asignar» en Grupo GF");
+    expect(state.rpcs).toEqual([{ fn: "gf_return_to_office", args: { p_item_id: "item-1", p_actor: "persona" } }]);
+    expect(state.recomputed).toEqual([["order-1"]]);
+  });
+
+  it("reactivado en la tienda (cancelled_at nulo): como siempre, vuelve a «por asignar»", async () => {
+    Object.assign(state, { cancelledAt: null, custodyAfter: "empresa" });
+    const result = await receiveReturnedPackage("KP137351-S01");
+    expect(result.notice).toBe("KP137351-S01 recibido en oficina: vuelve a «por asignar» en Grupo GF para reprogramarlo.");
+  });
+
+  it("anulado solo en Kapta (sin anular en la tienda): se recibe, vuelve a la cola y se avisa", async () => {
+    Object.assign(state, { generalStatus: "anulado", custodyAfter: "empresa" });
     const result = await receiveReturnedPackage("KP137351-S01");
     expect(result.error).toContain("recibido en oficina");
-    expect(result.error).toContain("ANULADO en la tienda");
+    expect(result.error).toContain("está ANULADO: no sale");
     expect(state.rpcs).toHaveLength(1);
   });
 
@@ -129,6 +170,15 @@ describe("receiveReturnedPackage con un paquete de Grupo GF", () => {
     Object.assign(state, { courier: "por_definir", custody: "empresa", inBox: false });
     const result = await receiveReturnedPackage("KP137351-S01");
     expect(result.notice).toContain("nunca salió en Kapta");
+    expect(state.rpcs).toEqual([]);
+  });
+
+  it("anulado en la tienda ya recibido (a inventario), escaneado otra vez: lo dice sin error y no escribe", async () => {
+    Object.assign(state, { cancelledAt: "2026-10-04T20:00:00Z", custody: "devuelto", inBox: false });
+    const result = await receiveReturnedPackage("KP137351-S01");
+    expect(result.error).toBeUndefined();
+    expect(result.notice).toContain("KP137351-S01 ya se recibió: el pedido está anulado en la tienda");
+    expect(result.notice).toContain("fue a inventario");
     expect(state.rpcs).toEqual([]);
   });
 

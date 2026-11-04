@@ -17,7 +17,7 @@ import { limaDateKey } from "@/lib/aliclik-geo";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeStopReport } from "@/lib/stop-report";
 import { loadNotebookContext, type NotebookStopRef, type NotebookTarget } from "@/lib/notebook-import-access";
-import { nextNamedDayIso, notebookStopNote, outcomeCode, type NotebookDecision, type NotebookOutcome, type PlanRow } from "@/lib/notebook-import";
+import { nextNamedDayIso, notebookStopNote, officeConflict, outcomeCode, type NotebookDecision, type NotebookOutcome, type PlanRow } from "@/lib/notebook-import";
 
 export interface NotebookApplyRow {
   index: number;
@@ -112,8 +112,18 @@ export async function applyNotebookImport(
   const used = new Set<string>();
   const tasks: Task[] = [];
   let skipped = 0;
+  // La caja ya llegó a la oficina sin reporte y un manifiesto de devolución la
+  // reportó «No entregado» (0307). Si la hoja dice «entregado», no se pisa en
+  // silencio: la fila queda fallida con la incidencia, aunque se omita.
+  const conflictOf = (r: PlanRow | undefined, outcome: NotebookOutcome | null | undefined): string | null => {
+    if (!r?.match.stopId) return null;
+    const stop = ctx.stops.find((s) => s.stopId === r.match.stopId) ?? null;
+    return officeConflict({ kind: stop && stop.status !== "pendiente" ? "reportada" : r.match.kind, stopId: r.match.stopId }, stop, outcome ?? null);
+  };
   for (const decision of decisions) {
     const r = plan.find((p) => p.index === decision.index);
+    const conflict = conflictOf(r, decision.outcome ?? r?.outcome);
+    if (conflict) { fail(r, decision.index, conflict); continue; }
     if (decision.action === "omitir") { skipped++; continue; }
     if (!r) { fail(r, decision.index, "Esa fila no está en la hoja leída."); continue; }
     if (!decision.outcome) { fail(r, decision.index, "Elige qué pasó antes de cargarla."); continue; }

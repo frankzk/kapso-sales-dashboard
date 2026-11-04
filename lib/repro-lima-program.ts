@@ -42,6 +42,7 @@ import {
   aliclikCarrier,
   aliclikChainReason,
   isChainRider,
+  stopChainReason,
   limaRetryChain,
   urpiChainReason,
   withDismissal,
@@ -289,7 +290,8 @@ function chainAttempts(
   for (const stop of failedStops) {
     const at = stopAttemptAt(stop);
     if (!at) continue;
-    attempts.push({ carrier: isChainRider(stop.riderName) ? "alexis" : "otro", reason: stop.outcome_reason, at });
+    // La que reportó el manifiesto de devolución (0307, regla 4) no fue un intento en la puerta.
+    attempts.push({ carrier: isChainRider(stop.riderName) ? "alexis" : "otro", reason: stopChainReason(stop.outcome_reason, stop.note), at });
   }
   for (const output of outputs) {
     if (sameCourier(output.courier, "propio") || !guideFailedAfterDispatch(output)) continue;

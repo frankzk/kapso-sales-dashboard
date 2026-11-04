@@ -28,6 +28,25 @@
 export const CHAIN_REASONS = ["no_contesta", "no_estaba", "otro"] as const;
 export type ChainReason = (typeof CHAIN_REASONS)[number];
 
+/**
+ * La nota con que el manifiesto de devolución reporta la parada de una caja que
+ * llegó a la oficina sin reporte (0307, regla 4: «No entregado», motivo
+ * «otro»). Nadie fue a la puerta: no es un intento que abra o siga la cadena.
+ */
+export const ARRIVED_WITHOUT_REPORT_NOTE = "Llegó a oficina sin reporte";
+/** El motivo con que esa parada entra a la cadena: ninguno de `CHAIN_REASONS`. */
+export const ARRIVED_WITHOUT_REPORT_CHAIN_REASON = "llego_sin_reporte";
+
+/**
+ * El motivo de una parada «No entregado» para la cadena. La que reportó el
+ * manifiesto de devolución (nota «Llegó a oficina sin reporte …») queda fuera:
+ * sigue Repro Lima, nunca un reintento por Aliclik sin persona. Pura.
+ */
+export function stopChainReason(outcomeReason: string | null | undefined, note: string | null | undefined): string | null {
+  if ((note ?? "").trim().startsWith(ARRIVED_WITHOUT_REPORT_NOTE)) return ARRIVED_WITHOUT_REPORT_CHAIN_REASON;
+  return outcomeReason ?? null;
+}
+
 /** Cuántos días desde el primer intento sigue abierta la cadena. */
 export const CHAIN_MAX_DAYS = 7;
 

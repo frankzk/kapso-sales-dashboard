@@ -123,6 +123,8 @@ export function gfBoxFor(salidas: readonly UrpiDispatchCandidate[], programmedOn
 
 /** Lo que devuelve `urpi_take_gf_output` cuando la caja pasó a Urpi. */
 export const GF_BOX_TAKEN = "tomada";
+/** Lo que `urpi_take_gf_output` responde cuando la venta ya terminó: cuenta como cerrado. */
+export const GF_TAKE_SALE_ENDED = ["anulado_en_tienda", "venta_terminada"] as const;
 
 /** La fila que se escribe encima. El Sheet dice el día; la hora no, y se usa
  *  mediodía de Lima, como en las demás salidas de Urpi. PURA. */
@@ -221,6 +223,10 @@ export async function registerUrpiDispatches(
       // Sin la 0305 aplicada, como antes: otra salida viva, para revisar a mano.
       if (error && error.code !== "PGRST202") result.errors.push(code);
       else if (data === GF_BOX_TAKEN) { result.filled.push(code); result.fromGf.push(code); filledIds.push(orderId); }
+      // La venta terminó mientras tanto (anulado en la tienda, 0307; venta de
+      // WooCommerce terminada, 0285): cerrado, como lo que `planUrpiDispatch` ya
+      // da por cerrado. No es «otra salida viva».
+      else if (typeof data === "string" && (GF_TAKE_SALE_ENDED as readonly string[]).includes(data)) result.closed++;
       else result.otraSalidaViva.push(code);
       continue;
     }

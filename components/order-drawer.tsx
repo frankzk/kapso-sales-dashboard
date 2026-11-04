@@ -234,6 +234,8 @@ import { aliclikDoorBan, ROUTES_STILL_ALLOWED_LABEL } from "@/lib/door-rejection
 import { outputDisplayCode } from "@/lib/shipment-output";
 import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
+import { returnManifestPath } from "@/lib/return-manifest";
+import type { ReturnManifestDrawerEntry } from "@/lib/return-manifest-access";
 import {
   eventNoteLabel,
   orderAdminLink,
@@ -1939,6 +1941,8 @@ export function OrderDrawer({
                         </div>
                         {/* Grupo GF: quién tiene el paquete y en qué quedó la parada. */}
                         {gf ? <GfDeliveryLine delivery={gf} /> : null}
+                        {/* Manifiestos de devolución (0307): por dónde pasó esta salida al volver. */}
+                        <ReturnManifestHistory entries={detail.returnManifestEntries?.[g.id] ?? []} />
                       </li>
                       );
                     })}
@@ -3992,6 +3996,35 @@ function GfDeliveryLine({ delivery }: { delivery: GfDelivery }) {
         </a>
       )}
     </div>
+  );
+}
+
+const RETURN_MANIFEST_LINE_TONE: Record<ReturnManifestDrawerEntry["outcome"], BadgeTone> = {
+  received: "ok",
+  missing: "crit",
+  held: "warn",
+  info: "neutral",
+};
+
+/**
+ * El historial de manifiestos de devolución de una salida (0307): «Recibida en
+ * Devolución · Alexis · 04/11», «Faltó en…» (y «apareció el 06/11» si llegó
+ * después) o «Incidencia en…». Enlaza al manifiesto; abrirlo pide el permiso
+ * de Almacén.
+ */
+function ReturnManifestHistory({ entries }: { entries: ReturnManifestDrawerEntry[] }) {
+  if (!entries.length) return null;
+  return (
+    <ul className="mt-1.5 space-y-1 text-[13px] leading-5" aria-label="Manifiestos de devolución">
+      {entries.map((e) => (
+        <li key={e.lineId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Badge tone={RETURN_MANIFEST_LINE_TONE[e.outcome]} wrap>{e.text}</Badge>
+          {e.appeared && <Badge tone="ok">{e.appeared}</Badge>}
+          <span className="tabular-nums text-ink-500">{fmtDateTime(e.at)}</span>
+          <Link href={returnManifestPath(e.manifestId)} className="text-xs font-medium text-brand-700 hover:underline">Ver manifiesto</Link>
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -33,6 +33,7 @@ import { isOwnCourier } from "@/lib/costs";
 import { loadGfCostTariffGap, type GfTariffCheck } from "@/lib/gf-tariff";
 import { courierKey } from "@/lib/dispatch";
 import { pickLatestBox, pickLatestStop, type GfBoxItem, type GfDelivery, type GfStop } from "@/lib/gf-delivery";
+import type { ReturnManifestDrawerEntry } from "@/lib/return-manifest-access";
 import { codCouriersFor, isNonMetroLimaLocation } from "@/lib/order-coverage";
 import { limaTodayKey } from "@/lib/shipments";
 import type { CostTariff } from "@/lib/costs";
@@ -600,6 +601,12 @@ export interface OrderMasterDetail {
    * paquete y en qué quedó. Vacío si el pedido no pasó por una caja ni ruta.
    */
   gfDeliveries: GfDelivery[];
+  /**
+   * Manifiestos de devolución (0307): por salida, sus líneas («Recibida en
+   * Devolución · Alexis · 04/11», «Faltó en…», «Incidencia en…»). Vacío sin la
+   * 0307 o si la salida nunca pasó por uno.
+   */
+  returnManifestEntries?: Record<string, ReturnManifestDrawerEntry[]>;
   /**
    * Grupo GF sin tarifa en su Tarifario (MOM §14, mom-v1.31): por qué y, si la
    * del distrito empieza después del día del costo, desde cuándo rige; o
@@ -1198,7 +1205,7 @@ export async function getOrderMasterDetail(
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments, returnManifestEntries] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1232,6 +1239,14 @@ export async function getOrderMasterDetail(
       },
       () => null,
     ),
+    // El historial de manifiestos de devolución de cada salida: un dato más de
+    // la salida, no del pedido. Si falla, la ficha sale sin él.
+    // Import diferido: el cargador es server-only (resolveAgentNames) y este
+    // módulo lo importan pruebas que no lo necesitan.
+    import("@/lib/return-manifest-access").then(({ returnManifestEntriesForShipments }) => returnManifestEntriesForShipments(guides.map((g) => g.id))).catch((cause) => {
+      console.error("[order-detail] returnManifestEntries", orderId, cause);
+      return {} as Record<string, ReturnManifestDrawerEntry[]>;
+    }),
   ]);
   const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
   return {
@@ -1244,6 +1259,7 @@ export async function getOrderMasterDetail(
     aliclikOutlook,
     tasks,
     gfDeliveries,
+    returnManifestEntries,
     gfCostTariffGap,
     shopifyCancelledAt: orderRow?.cancelled_at ?? null,
     legacySaleCancelledAt: legacySaleCancelledAt(events),

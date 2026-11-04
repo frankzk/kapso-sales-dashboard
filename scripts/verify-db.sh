@@ -317,4 +317,8 @@ $PSQL -f "$ROOT/scripts/sql/team_lead_blocks_smoke.sql"
 
 echo "▶ Bloques para asesoras administradoras (0299): cola restringida, supervisión, reservas y permisos intactos"
 $PSQL -f "$ROOT/scripts/sql/lead_routing_admin_smoke.sql"
+
+echo "▶ Manifiesto de devolución (0307): una abierta por motorizado, recepción y línea juntas, faltantes al cerrar, lo cerrado no cambia"
+$PSQL -f "$ROOT/scripts/sql/return_manifests_smoke.sql"
+echo "  ✅ recibe con la recepción de siempre; anulado en la tienda a inventario; sin reporte no se recibe; cerrar anota las que faltan; RLS de solo lectura"
 echo "✅ DB verification passed."

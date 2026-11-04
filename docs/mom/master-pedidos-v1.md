@@ -167,6 +167,15 @@ el acompañante no tiene salida propia y hereda el estado de esa caja (§32).
 Agrupación de salidas para un courier y una ruta del día. El manifiesto debe
 quedar cotejado al 100 % antes de transferir la custodia.
 
+### Manifiesto de devolución
+
+Registro de lo que un motorizado trae de vuelta a la oficina de una vez, a
+menudo de varios días juntos: qué llegó, quién lo entregó, quién lo recibió,
+qué no se esperaba y qué faltó (owner, 04-11-2026, §9.4). Va al revés que el
+manifiesto de salida: no transfiere custodia por sí mismo; cada caja se recibe
+con la recepción de siempre («Recibir en oficina», §29.13). No es un estado
+del pedido ni una subetapa. Fase 1: Grupo GF; Urpi en la fase 2.
+
 ### Evento
 
 Hecho inmutable ocurrido sobre el pedido o una salida: confirmación, llamada,
@@ -2124,6 +2133,13 @@ Decisión del owner (30-09-2026), para **todos los couriers de Lima**:
   persona y no había nada que recuperar. Antes esa razón no se apagaba nunca y
   el pedido quedaba en Por cerrar con el inventario ya conciliado (9 de Aliclik
   el 30-09-2026).
+- **La caja de Grupo GF de un pedido anulado en la tienda va a inventario
+  (owner, 04-11-2026, 0307).** Antes «Recibir en oficina» la devolvía a «por
+  asignar» como a un pedido vivo y el inventario nunca se abría (346 de las 730
+  cajas «No entregado» de Grupo GF el 04-11-2026). Ahora, la reciba quien la
+  reciba, queda devuelta (`return_received`), el pedido pasa a **«Por cerrar ·
+  Devolución pendiente de inventario»** y Almacén decide stock o merma (§13,
+  §29.13). Un pedido reactivado en la tienda sigue el camino de siempre.
 
 **La caja escaneada gana al courier atrasado (03-10-2026).** #AUR176862 salió
 con Tanders el 14-09 y su caja se escaneó en Devoluciones el 29-09; cuatro días
@@ -2135,7 +2151,8 @@ contra entrega— y su Por cerrar es correcto.) Una guía de **Tanders o Swayp**
 dando por viva pero cuya caja ya se recibió en el almacén (`returned_at`) es un
 intento fallido (`apiGuideReceivedBack`, `lib/reproprovincia.ts`), con la misma
 ventana y la misma ancla. Grupo GF y el motorizado propio no entran: su
-«Recibir en oficina» devuelve la salida a «por asignar». Lo que el motorizado
+«Recibir en oficina» devuelve la salida a «por asignar» (la de un pedido
+anulado en la tienda va a inventario desde el 04-11-2026, arriba). Lo que el motorizado
 propio no entregó se reprograma desde «Desde la lista» con su misma salida,
 también sin solicitud de Grupo GF (06-10-2026, §29.13). Si el motorizado
 todavía tiene la caja y el pedido tiene que salir antes, sale con una salida
@@ -3334,7 +3351,10 @@ Devoluciones físicas:
   lo traen al día siguiente; Alexis, cada dos o tres días (owner, 12-10-2026).
   Se recibe en oficina («Recibir en oficina», §29.13) el día que llega, pedido
   por pedido y por su salida/QR. Hasta entonces la salida sigue «No entregado»
-  a su nombre. Para Duglas no hay una cadencia confirmada.
+  a su nombre. Lo que trae de una vez se registra en un **manifiesto de
+  devolución** (abajo), con el plazo de cada motorizado para decir qué «Falta»:
+  Alexis 3 días; Johnny (Yhoni), Roy y Yordani 1; Duglas 1 mientras no se
+  defina (owner, 04-11-2026).
 - Axel: Daysi o Diana fotografía y coteja los paquetes devueltos y la fecha.
 - Swayp y Urpi: el recojo de devoluciones ocurre actualmente cada semana o cada
   quince días (Urpi, cada una o dos semanas); cada salida debe permanecer
@@ -3344,7 +3364,9 @@ Devoluciones físicas:
   la otra caja salió con «Sacar con salida nueva» (§29.13), la anterior se
   recibe por su salida/QR y se desarma: vuelve a stock.
 - Los pedidos que el cliente rechazó definitivamente y que fueron anulados en
-  Shopify no se vuelven a armar.
+  Shopify no se vuelven a armar. La caja de Grupo GF de un pedido anulado en la
+  tienda que vuelve va a inventario: Almacén decide stock o merma (04-11-2026,
+  §29.13).
 
 Cobros y liquidación observados:
 
@@ -3356,6 +3378,164 @@ Cobros y liquidación observados:
 - Daysi realiza hoy parte de estos cotejos semanalmente por capacidad. Los SLA
   financieros definidos en la sección de Liquidaciones no cambian: el sistema
   debe separar `resultado reportado`, `pago verificado` y `lote conciliado`.
+
+#### Manifiesto de devolución (fase 1, Grupo GF; decisiones del owner, 04-11-2026)
+
+**El caso.** Pedido del owner (04-11-2026): «si llegan las devoluciones de
+alexis o de urpi que llegan de varios días juntos, se pueda hacer un manifiesto
+con todo lo que llegó para llevar un registro con lo que reporta alexis».
+Hasta entonces cada caja se recibía sola («Recibir en oficina», §29.13) y nada
+dejaba constancia de qué llegó junto, quién lo entregó, quién lo recibió ni
+qué faltó. Medido el 04-11-2026: 730 «No entregado» seguían en cajas de Grupo
+GF (276 de Alexis), y 346 eran de pedidos anulados en la tienda.
+
+- **Qué es.** Una cabecera (`return_manifests`) con sus líneas
+  (`return_manifest_lines`), migración `0307_return_manifests.sql`. Cada caja
+  se recibe con la recepción de siempre (`gf_return_to_office`): el manifiesto
+  **no cambia estados de pedido por su cuenta** y no agrega estados de pedido,
+  subetapas, veredictos del Master ni tipos de `order_events` o
+  `dispatch_events`. `MOM_RESOLUTION_VERSION` no cambia (`mom-v1.38`).
+- **Quién (owner: «si, mismo almacen»).** El permiso de Almacén,
+  **`warehouse.prepare`**, en la organización del manifiesto: abrir, escanear,
+  anotar, cerrar, anular y descargar el acta. Es el mismo permiso de Almacén →
+  Devoluciones (`/dashboard/pedidos/devoluciones`), que ya recibía las cajas de
+  Grupo GF. Cada quien ve y escanea solo lo de sus tiendas: lo esperado de
+  otras tiendas solo se cuenta, y una salida de otra tienda no se encuentra ni
+  por su número de pedido.
+- **Dónde.** Almacén → Devoluciones, pestaña «Manifiestos» (abiertos primero,
+  luego los cerrados por fecha; los anulados no se listan), con el detalle en
+  `/dashboard/pedidos/devoluciones/manifiestos/[id]`, y el botón «Nuevo
+  manifiesto de devolución» por motorizado en la tarjeta «Devoluciones» de
+  Despacho del día.
+- **Abrir.** Uno abierto por courier y motorizado —no por día: una llegada
+  cubre varios días—; abrirlo otra vez vuelve al que ya está abierto. Lleva el
+  día de llegada (hoy de Lima, o un día anterior), la etiqueta «Devolución ·
+  Alexis · 04/11» y el plazo del motorizado, que se congela al abrir. Un
+  manifiesto abierto hace más de un día sale con aviso en la lista.
+- **Lo esperado.** Cada paquete activo en una caja de Grupo GF de ese
+  motorizado cuya última parada en ESA caja es «No entregado» —el criterio de
+  `gf_return_to_office`—, aunque la caja o la ruta ya estén cerradas
+  (`return_manifest_expected`).
+- **Plazos para «Falta»** (owner, 04-11-2026; `RIDER_RETURN_CADENCE_DAYS`,
+  `lib/return-manifest.ts`):
+
+  | Motorizado | Plazo |
+  | --- | --- |
+  | Alexis | 3 días |
+  | Johnny (Yhoni), Roy y Yordani | 1 día |
+  | Duglas | 1 día, mientras no se defina |
+  | Cualquier otro | 1 día (por defecto) |
+  | Urpi (fase 2) | 14 días |
+
+  El motorizado se reconoce por su primer nombre, como en la cadena de
+  reintentos (`isChainRider`). La edad de una caja es el número de días entre
+  su día de ruta (`route_date`) y el día de llegada del manifiesto, nunca
+  `reported_at`. Lo esperado que no llegó es **«Con el motorizado»** mientras
+  la edad no pase el plazo, y **«Falta»** cuando lo pasa (edad mayor que el
+  plazo).
+- **Reprogramados (owner: «los reprogramados de más de 14 días se marca como
+  "falta"»).** Un «No entregado · Reprogramado» que sigue en la caja es
+  **«Reprogramado, sigue con él»** hasta 14 días; con más de 14 días es
+  **«Falta»**, sea cual sea el plazo del motorizado.
+- **Escanear.** El mismo buscador que Devoluciones (QR, código de salida, guía
+  o número de pedido; `lib/dispatch-scan-lookup.ts`) y la misma regla
+  (`gfReturnDecision`, extendida en `classifyManifestScan`). **Nunca por número
+  de pedido si el pedido tiene dos salidas:** pide el QR (§29.13). Un escaneo
+  repetido actualiza su línea; no agrega otra.
+
+  | La caja escaneada | Qué hace | Línea |
+  | --- | --- | --- |
+  | En una caja de este motorizado, «No entregado» | La recibe en oficina | Recibida y esperada |
+  | En la caja de otro motorizado, «No entregado» | La recibe en oficina | Recibida, «De otra caja»; no cuenta como esperada |
+  | Su parada sigue pendiente y la ruta está en curso | Reporta «No entregado · Llegó a oficina sin reporte» y la recibe (abajo) | Recibida, «Llegó sin reporte»; no cuenta como esperada |
+  | Su parada sigue pendiente y la ruta ya no está en curso, el reporte no se pudo escribir, o la caja no tiene parada que reportar | No la recibe | Observación «Llegó sin reporte»: se corrige en Rutas y se vuelve a escanear |
+  | Reportada entregada | No la recibe | Observación «Reportada entregada · incidencia»: se avisa a coordinación para corregir ese reporte |
+  | Sin caja: ya recibida en oficina, o en la oficina sin haber salido nunca | Nada | Informativa «Ya recibida» |
+  | Sin caja y devuelta de un pedido anulado en la tienda (o venta terminada): ya se recibió y fue a inventario | Nada | Informativa «Ya recibida»: no bloquea el cierre |
+  | No se encuentra, es de otro courier, o no está en una caja ni en la oficina | Nada | Observación «No identificada»: pide una nota antes de cerrar |
+
+  La recepción y su línea son **una sola transacción** (`return_manifest_receive`:
+  candado de la cabecera, después el del paquete y su caja). La línea guarda lo
+  que hizo la recepción: vuelve a «por asignar», va a inventario (anulado en la
+  tienda o venta terminada), va a stock (caja reemplazada) o ya constaba
+  devuelta. Después pasa lo de siempre: Repro Lima solo para lo que vuelve a
+  «por asignar» y el Master al día. Un pedido anulado solo en Kapta (vivo en la
+  tienda) vuelve a «por asignar» con su aviso de ANULADO.
+- **Llegó a oficina sin reporte (owner: «si recibo el retorno, lo lógico es que
+  no fue entregado»).** Una caja que llega con su parada todavía pendiente —por
+  ejemplo, Alexis sin cuaderno cargado— no se entregó. Dentro del manifiesto, y
+  con la ruta en curso, Kapta reporta la parada por la vía única de reporte
+  (`writeStopReport`): «No entregado», motivo «Otro», nota «Llegó a oficina sin
+  reporte · Devolución · Alexis · 04/11», reportada por quien escanea, sin
+  cobro ni foto (no estuvo en la puerta). Después la recibe. Es una parada
+  reportada como cualquier otra: no se le paga al motorizado (solo la entrega y
+  el rechazo pagan, `stopEarns`, §29.10) y suma un intento en el Master (§9.3).
+  **No entra a la cadena de reintentos por Aliclik** (§9.5): nadie fue a la
+  puerta, así que esa parada no abre ni sigue la cadena aunque su motivo sea
+  «Otro» —se reconoce por su nota (`stopChainReason`,
+  `lib/lima-retry-chain.ts`)— y el pedido sigue Repro Lima, donde una persona
+  decide; nunca una guía de Aliclik sin persona. Pendiente de confirmar con el
+  owner, junto con la paga y el intento: si estas paradas deben contar como
+  intento del motorizado.
+  Las paradas que pasaron a otra ruta (`notebook_carried_to_route_id`, 0292) no
+  se miran. Si el reporte queda escrito y la recepción falla, la parada sigue
+  «No entregado» y volver a escanear la recibe.
+  - **El cuaderno que llega después** y dice «Entregado» de esa parada no se
+    carga encima: es una incidencia a la vista (§29.7).
+- **Cerrar.** Pide **«Entregó»** —quién trajo las cajas, al menos 3 letras; se
+  propone el nombre del motorizado— y deja anotar «Declara N paquetes» frente a
+  los que llegaron y una nota. Cada «No identificada» necesita su nota o se
+  descarta. El cierre anota como **«Falta»** lo esperado fuera de plazo que no
+  llegó (reprogramado: más de 14 días) y congela el manifiesto. **No cambia
+  ningún pedido ni ninguna salida:** lo que faltó sigue «No entregado» a nombre
+  del motorizado, y lo que está «Con el motorizado» o «Reprogramado, sigue con
+  él» no se anota, pero se cuenta: el cierre guarda, por tienda, cuántas
+  seguían dentro de plazo (`pending_at_close`). El contador dice «Recibidos X
+  de Y esperados · N sin esperarse · declaró Z» y **Y es la misma cifra antes y
+  después de cerrar**, en la pantalla y en el acta (lo recibido, más «Falta»,
+  más lo que seguía con el motorizado).
+- **Lo cerrado no cambia** (candado de la base, como `gf.withdraw`): solo se le
+  pueden añadir fotos, porque el acta se firma después. Las observaciones
+  quedan abiertas y su resolución se **deriva en vivo** sin tocar el
+  manifiesto: una caja que faltó y llega después se recibe normal, en otro
+  manifiesto o por cualquier puerta, y el cerrado la muestra «apareció el
+  dd/mm». Solo cuenta una recepción posterior hecha por una persona: ni el sello
+  del courier ni una toma del sistema sin actor (la de Urpi, §30.10) prueban
+  que la caja llegó. Una observación «Llegó sin reporte» cita su parada
+  pendiente, pero no impide quitarla después (Rutas «Quitar parada», recuperar
+  en oficina, retirar de la caja): la línea suelta el enlace y conserva lo que
+  leyó (reportado «Sin reporte»), también en un manifiesto cerrado.
+- **Descartar y anular.** Una observación o una informativa se descarta con
+  motivo (al menos 5 letras); lo recibido y lo que faltó no. Un manifiesto se
+  anula con motivo (al menos 5 letras) y solo si no recibió ninguna caja; si
+  recibió, se cierra.
+- **El acta (owner: «opcional, pero que se genere hasta un pdf y excel para
+  descargarlo»).** Se descarga en **PDF y en Excel**
+  (`/api/pedidos/devoluciones/manifiestos/[id]/acta?formato=pdf|xlsx`): #pedido,
+  código de salida, día de la caja, lo reportado, el resultado, los totales y
+  las firmas «Entregó» y «Recibió». **Sin nombres, teléfonos ni direcciones de
+  clientes.** La foto del acta firmada (o de la hoja de entrega) es
+  **opcional**: hasta 20 (con 20, la siguiente se rechaza antes de subirla),
+  en el bucket privado `rider-notebooks`, también después de cerrar; no en un
+  manifiesto anulado.
+- **En la ficha del pedido**, el historial de la salida dice «Recibida en
+  Devolución · Alexis · 04/11», «Faltó en …» (con «apareció el dd/mm» si llegó
+  después), «Incidencia en …: llegó reportada entregada» o «Llegó sin reporte
+  en …».
+- **Fase 2 (no está en este cambio).** Urpi: manifiesto con courier Urpi y
+  plazo de 14 días. Decisión del owner (04-11-2026): una salida de Urpi ya
+  programada cuenta como «salió» para poder recibir su devolución, aunque la
+  custodia siga en la empresa. Tampoco hay todavía cierre de entrega parcial,
+  marca «dañado» ni reabrir un manifiesto cerrado.
+
+Implementación: `db/migrations/0307_return_manifests.sql`,
+`lib/return-manifest.ts`, `lib/return-manifest-access.ts`,
+`lib/gf-office-receipt.ts`, `lib/dispatch-scan-lookup.ts`,
+`lib/exports/return-manifest-acta.ts`, `lib/lima-retry-chain.ts`
+(`stopChainReason`) y `app/dashboard/pedidos/devoluciones/manifest-actions.ts`.
+Pruebas: `test/return-manifest.test.ts`, `test/return-manifest-actions.test.ts`
+(el escaneo y la regla 4 con la base simulada), `test/return-manifest-mom.test.ts`
+y `scripts/sql/return_manifests_smoke.sql`.
 
 ### 9.5 Reprogramación en Lima: «Repro Lima» (fase 1, entregas 1a y 1c)
 
@@ -3390,9 +3570,11 @@ subetapas ni estados nuevos.
      se queda con él hasta que la trae a la oficina: Johnny (Yhoni) y Roy al
      día siguiente, Alexis cada dos o tres días (§9.4).
   2. El día que el motorizado la trae, alguien del equipo la recibe con
-     «Recibir en oficina» (escaneo o lista, §29.13); de noche no se recibe
+     «Recibir en oficina» (escaneo o lista, §29.13) o, si trae varios días
+     juntos, en su manifiesto de devolución (§9.4); de noche no se recibe
      nada. Hasta entonces la salida sigue «No entregado» a nombre del
-     motorizado: es lo esperado, no una caja perdida. La caja va al estante de
+     motorizado: es lo esperado, no una caja perdida —hasta su plazo: pasado,
+     el manifiesto la anota como «Falta»—. La caja va al estante de
      reprogramados, en la bandeja del día en que se recibió (bandejas fijas:
      una por día de recepción y una «sin fecha / más de 7 días», plan del
      11-10-2026). Si ya tenía un
@@ -3425,14 +3607,15 @@ subetapas ni estados nuevos.
      el pedido se cancela.
   5. Despacho GF lo asigna a un motorizado desde «Programados hoy» o por QR.
 - **Barrido inicial.** Las cajas «No entregado» que siguen registradas en la
-  caja de un motorizado se reciben en oficina una por una. Una caja de Johnny
-  o Roy del día anterior, o de Alexis con menos de tres días, no es faltante:
-  está con el motorizado. Lo que no aparezca físicamente no se recibe en
-  oficina: se anota en la ficha del pedido (caja,
-  motorizado, quién buscó y cuándo) y se avisa a Frankz o Yohalis para decidir
-  merma, descuento al motorizado o reclamo. No es una búsqueda en la calle. Un
-  registro propio de paquete que no consta queda para una fase posterior: §13
-  todavía no lo define.
+  caja de un motorizado se reciben en oficina una por una, dentro de un
+  **manifiesto de devolución** de ese motorizado (§9.4, desde el 04-11-2026).
+  Una caja dentro del plazo del motorizado —Johnny (Yhoni), Roy o Yordani, 1
+  día; Alexis, 3 días— o un reprogramado de hasta 14 días no es faltante: está
+  con el motorizado. Lo que no aparezca físicamente no se recibe en oficina:
+  al cerrar el manifiesto queda como **«Falta»** en su línea, y en la ficha del
+  pedido («Faltó en …»), con la caja, el motorizado, quién recibió y cuándo; se
+  avisa a Frankz o Yohalis para decidir merma, descuento al motorizado o
+  reclamo (§13). No es una búsqueda en la calle.
 - **Urpi**, mientras no se registre su despacho en Kapta (§30.11): un pedido con
   reporte de Urpi no se toma en Grupo GF sin revisar antes si ya salió con Urpi.
 
@@ -3451,7 +3634,9 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     intento no abren cadena.
 - **Entran** «no contesta», «no estaba» y «otro». **No entran** el rechazo en
   puerta, el reprogramado, la dirección errada ni «sin dinero»: siguen en Repro
-  Lima como siempre. El motivo de Aliclik sale de su estado (`REFUSED` rechazo,
+  Lima como siempre. Tampoco la parada que el manifiesto de devolución reportó
+  «No entregado · Otro» porque la caja llegó a la oficina sin reporte (§9.4,
+  0307): nadie fue a la puerta. El motivo de Aliclik sale de su estado (`REFUSED` rechazo,
   `RESCHEDULED` reprogramado, `NOT_RESPOND` no contestó, lo demás «otro»),
   salvo que el «SUB ESTADO» del Excel de Aliclik diga más (03-11-2026): «DE
   VIAJE» y «POR CLIENTE» cuentan como reprogramado (hay que llamar, no
@@ -9875,6 +10060,23 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   (`inventory_restock`, permiso `closure.inventory`) sobre ESA salida. Si el
   pedido ya se entregó con la salida nueva, el cierre espera ese registro
   (`Por cerrar · Devolución pendiente de inventario`, v1.26).
+- **Un pedido anulado en la tienda cuya caja de Grupo GF vuelve va a
+  inventario (owner, 04-11-2026, 0307).** Lo reciba quien lo reciba
+  (Despacho del día, Rutas, Almacén → Devoluciones o un manifiesto de
+  devolución), la salida queda devuelta (`return_received`), sale de la caja
+  del motorizado y su solicitud de Grupo GF se cancela: el pedido pasa a
+  `Por cerrar · Devolución pendiente de inventario` y Yelitza decide stock o
+  merma (`inventory_restock`, `closure.inventory`). No vuelve a «por asignar»
+  ni a Repro Lima. Un pedido reactivado en la tienda (`cancelled_at` nulo) se
+  recibe como cualquier otro, y uno anulado solo en Kapta —también la venta
+  histórica de Shopify terminada en Kapta (§38.16), pregunta abierta al
+  owner— vuelve a «por asignar», con el aviso de ANULADO (§29.13).
+- **Lo que un motorizado de Grupo GF trae de vuelta se registra en un
+  manifiesto de devolución** (§9.4): Almacén (`warehouse.prepare`) coteja lo
+  esperado contra lo recibido y lo que falta queda anotado como «Falta» al
+  cerrarlo, con su acta en PDF y Excel. Lo que faltó no cambia el pedido:
+  sigue «No entregado» a nombre del motorizado hasta que aparezca o se decida
+  merma, descuento al motorizado o reclamo.
 - Una devolución posterior del cliente mantiene el resultado Entregado y abre
   `Por cerrar · Devolución del cliente`.
 - Solo Frankz y Yohalis pueden reabrir una devolución finalizada.
@@ -10116,6 +10318,8 @@ mantiene observado el lote completo.
 | Seguimiento Lima | Seguimiento Lima | Daysi; cualquiera del equipo reprograma (§9.5) |
 | Apoyo Lima/cotejo | Operación Lima | Diana |
 | Recibir en oficina y devoluciones de Lima | Operación Lima | Cualquiera del equipo (Diana, Daysi, Yessenia, Sara…, §9.5) |
+| Manifiesto de devolución de Grupo GF: abrir, escanear, cerrar, anular y descargar el acta | Almacén (`warehouse.prepare`) | Quien recibe en Almacén → Devoluciones (§9.4) |
+| Stock o merma de una devolución (también la de un pedido anulado en la tienda) | Almacén | Yelitza (§13) |
 | Aprobar cambios después del corte de las 12:00 | Despacho GF | Despacho GF (§29.6) |
 | Reproprovincia | Jefatura Repro | Akemi |
 | Reproprovincia | Operación Repro | Mariannys |
@@ -13527,8 +13731,8 @@ cargar: #KP138029 (S/ 89) y #KP138037 (S/ 567) del 01/10, entregados el 02/10.
   evidencia del intento y cuenta en la liquidación de ese día.
 - Solo el reprogramado. «No contesta», «Otro» y el rechazo siguen volviendo a
   la oficina. Un pedido anulado en Shopify tampoco pasa aunque el motorizado lo
-  siga cargando: va a «Devolución física pendiente» y hay que recibirlo
-  (#KP138124, #AUR177704 y #KP138376 siguieron en la hoja de Alexis del 02 al
+  siga cargando: va a «Devolución física pendiente» y hay que recibirlo —al
+  recibirlo va a inventario, desde el 04-11-2026, §29.13— (#KP138124, #AUR177704 y #KP138376 siguieron en la hoja de Alexis del 02 al
   04/10).
 - Si la hoja del día siguiente no lo trae, no se pasa: se le pregunta a quien
   liquida, porque una parada sin reporte frena el cierre de esa ruta.
@@ -13674,6 +13878,16 @@ Courier (`routes.manage`), desde «Reparto y liquidación» de la ruta, con
 - **Auditoría.** `rider_notebook_imports` guarda las fotos, lo leído, la
   propuesta y lo aplicado. Una hoja se aplica una sola vez; si algo falló, se
   vuelve a leer y lo ya cargado sale como «Ya reportada».
+- **La caja que ya llegó a la oficina sin reporte (04-11-2026).** Si un
+  manifiesto de devolución (§9.4) recibió la caja con su parada pendiente y la
+  reportó «No entregado · Llegó a oficina sin reporte», y después la hoja dice
+  «Entregado» de esa parada, no se carga encima ni en silencio: la fila de la
+  propuesta lleva la incidencia («Incidencia: el cuaderno dice Entregado, pero
+  la caja llegó a la oficina el dd/mm sin reporte (…) y se recibió «No
+  entregado». No se carga: revísalo con coordinación.»), al aplicar queda como
+  fila fallida con ese texto —también si se marcó omitir— y el detalle del
+  manifiesto la muestra en su línea. Lo corrige coordinación sobre la parada
+  (`officeConflict`, `lib/notebook-import.ts`, y `lib/notebook-apply.ts`).
 - **Otro día.** «Día de la hoja» cruza con otra ruta del mismo motorizado. Si
   ese día no tiene ruta (salió solo con reprogramados), el traspaso la abre.
 - Terminar la ruta y aprobar el pago siguen siendo de quien liquida. El SQL de
@@ -14632,7 +14846,9 @@ sin devolver y otra saliendo (principio 7, §7).
 
 - **Para cualquier motorizado con caja de Grupo GF** (`propio`), sin umbral de
   días: la cadencia de cada uno es un dato, no una regla. Urpi no tiene caja en
-  Kapta y sigue por la v1.19.
+  Kapta y sigue por la v1.19. (El plazo de cada motorizado solo lo usa el
+  manifiesto de devolución, para separar «Con el motorizado» de «Falta», §9.4;
+  no frena «Sacar con salida nueva».)
 - **Dónde.** Despacho del día → la fila «No entregado · motivo» de un pedido en
   «Por reprogramar Lima» cuya salida sigue en la caja del motorizado (con
   solicitud de Grupo GF o sin ella) → marcarla → **«Sacar con salida nueva»**.
@@ -14682,8 +14898,9 @@ sin devolver y otra saliendo (principio 7, §7).
 - **Recibir en oficina va por salida, en todas partes.** Un pedido puede tener
   dos cajas «No entregado» con dos motorizados (la reemplazada con Alexis, la
   nueva con Johnny): recibir una nunca recibe la otra. La lista de Despacho del
-  día, la fila de «Devoluciones», su QR y el cierre de una ruta (solo las
-  cajas de esa ruta) reciben la caja concreta. Por número de pedido, si el
+  día, la fila de «Devoluciones», su QR, el cierre de una ruta (solo las
+  cajas de esa ruta) y el manifiesto de devolución (§9.4) reciben la caja
+  concreta. Por número de pedido, si el
   pedido tiene dos cajas por recibir, no se recibe ninguna y se pide el QR de
   la que llegó (§9.4: nunca se concilia solo por número de pedido).
 - **Por número de pedido, mientras la reemplazada siga fuera, el escaneo no
@@ -14736,7 +14953,8 @@ sin devolver y otra saliendo (principio 7, §7).
   se dice con su pedido y su motivo, también junto a lo que sí.
 - **Al recibir, el aviso dice lo que hizo la base.** Si un reemplazo termina
   mientras alguien recibe esa caja, la base la manda a stock: el aviso («a
-  stock» o «vuelve a por asignar») y el escaneo de «Por QR» se deciden
+  stock», «a inventario» si el pedido está anulado en la tienda —04-11-2026,
+  abajo— o «vuelve a por asignar») y el escaneo de «Por QR» se deciden
   releyendo la salida después de recibirla, y un escaneo cuya caja fue a stock
   no toma ni asigna la salida nueva.
 - **Límites conocidos.** Kapta no lleva un libro de stock: la caja nueva se
@@ -14860,16 +15078,65 @@ paquete de Grupo GF (o aún sin courier) se resuelve igual que en Despacho del d
 
 | Dónde está el paquete | Qué hace el escaneo |
 | --- | --- |
-| En la caja de un motorizado, reportado «No entregado» (cualquier motivo) | Lo recibe en oficina (`gf_return_to_office`): sale de la caja, la custodia vuelve a la empresa y el pedido queda por asignar en Grupo GF, en «Por reprogramar Lima». |
+| En la caja de un motorizado, reportado «No entregado» (cualquier motivo) | Lo recibe en oficina (`gf_return_to_office`): sale de la caja, la custodia vuelve a la empresa y el pedido queda por asignar en Grupo GF, en «Por reprogramar Lima». Si el pedido está anulado en la tienda, va a inventario (abajo). |
 | En la caja, reportado entregado | No lo toca: lo dice. |
 | En la caja, sin reporte | No lo toca: pide que el motorizado lo reporte. |
 | Sin caja y en la empresa, nunca recibido en oficina | Nada que recibir: dice que nunca salió en Kapta y sigue por asignar. Era el caso de KP137351 y KP137320 («Por despachar · Listo para asignar»). |
 | Sin caja y ya recibido en oficina | Lo dice sin alarma. |
+| Sin caja, devuelto y el pedido anulado en la tienda (o venta terminada) | Lo dice sin alarma: ya se recibió y fue a inventario (0307). Antes respondía «no está en una caja de Grupo GF ni en la oficina». |
 
-Solo la anulación en Shopify termina la venta: un anulado que vuelve se recibe
-igual —la caja tiene que salir de la del motorizado— y el aviso dice que está
-anulado y se separa para el stock. Aliclik y los demás siguen recibiéndose desde
-el Master. Pruebas en `test/gf-returns-scan.test.ts`.
+Solo la anulación en la tienda termina la venta: un anulado que vuelve se
+recibe igual —la caja tiene que salir de la del motorizado— y, desde el
+04-11-2026, va a inventario (abajo). Aliclik y los demás siguen recibiéndose
+desde el Master. Pruebas en `test/gf-returns-scan.test.ts`.
+
+**Un pedido anulado en la tienda que vuelve va a inventario (04-11-2026,
+decisión del owner, 0307).** Hasta entonces la caja de Grupo GF de un pedido
+anulado en la tienda (`orders.cancelled_at`, Shopify o WooCommerce) volvía a
+«por asignar» al recibirla, como la de un pedido vivo: el aviso decía «no
+sale, sepáralo para el stock», pero el inventario nunca se abría y la
+solicitud de Grupo GF seguía en la cola (346 de las 730 cajas «No entregado»
+de Grupo GF el 04-11-2026). Ahora la decisión está en la base, dentro de
+`gf_return_to_office` (misma firma), así que vale para **todas las puertas**:
+Despacho del día y Rutas («Recibir en oficina», `returnUndeliveredShipments`),
+Almacén → Devoluciones (`receiveGrupoGfReturn`) y el manifiesto de devolución
+(§9.4).
+
+- **Qué hace**, como la venta terminada de WooCommerce (0285, §38.18): la
+  salida sale de la caja con el motivo «Pedido anulado en la tienda: recibido
+  en oficina, va a inventario», queda `devuelto` con `returned_at`,
+  `returned_by` y `returned_source = manual` (conserva `dispatched_at`), se
+  escribe `return_received` («… el pedido está anulado en la tienda. Va a
+  inventario —Almacén decide stock o merma—; no vuelve a «por asignar».») y la
+  solicitud de Grupo GF aceptada o programada se cancela
+  (`store_cancelled_return_received`). El pedido pasa a «Por cerrar ·
+  Devolución pendiente de inventario» y Yelitza decide stock o merma (§13). No
+  pasa por Repro Lima. La caja reemplazada conserva su propio aviso («era la
+  caja reemplazada… a stock»).
+- **El aviso** de cada puerta lo dice: «KP1-S01 recibido en oficina (Alexis del
+  03/11): el pedido está ANULADO en la tienda, así que va a inventario —Almacén
+  decide stock o merma—. No vuelve a «por asignar».» Con varios, «N eran de
+  pedidos anulados en la tienda: van a inventario (Almacén decide stock o
+  merma); no vuelven a «por asignar».» (`lib/gf-office-receipt.ts`).
+- **«Por QR» no lo recibe ni lo asigna:** un pedido anulado se dice primero
+  (abajo) y la caja se separa; se recibe por Devoluciones, Despacho del día o
+  su manifiesto, que la mandan a inventario.
+- **Urpi no toma la caja** de un pedido anulado en la tienda
+  (`urpi_take_gf_output` responde `anulado_en_tienda`, §30.10).
+- **Lo que no cambia.** Un pedido reactivado en la tienda (`cancelled_at`
+  nulo) se recibe como siempre. Uno anulado solo en Kapta (`general_status`
+  anulado, vivo en la tienda) vuelve a «por asignar» con el aviso de ANULADO:
+  la decisión del owner habla del pedido anulado EN LA TIENDA
+  (`orders.cancelled_at`). Eso incluye, por ahora, la **venta histórica de
+  Shopify terminada en Kapta** (`legacy_shopify_sale_cancelled`, §38.16): no
+  toca `cancelled_at`, así que su caja también vuelve a «por asignar» con el
+  aviso, aunque §38.16 diga que no hay más envíos. **Pregunta abierta al
+  owner:** ¿esa venta cuenta como terminada y su caja va a inventario? No crea
+  estados, subetapas ni tipos de evento, y `MOM_RESOLUTION_VERSION` no cambia
+  (`mom-v1.38`).
+
+Pruebas: `test/gf-office-receipts.test.ts`, `test/gf-returns-scan.test.ts`,
+`test/return-manifest.test.ts` y `scripts/sql/gf_return_to_office_smoke.sql`.
 
 **«Recibir en oficina» programa el acuerdo de Repro Lima que esperaba la caja
 (12-10-2026).** Un acuerdo de Repro Lima con Grupo GF cuya caja seguía con el
@@ -14882,8 +15149,10 @@ La caja va al anaquel de ese día, no al estante de reprogramados.
   oficina» de Despacho del día (lista, QR de «Devoluciones», número de pedido
   y cierre de una ruta: `returnUndeliveredShipments`), Devoluciones de Almacén
   (`receiveGrupoGfReturn`) y el escaneo de una caja anterior (o de hoy) en «Por QR»
-  (`scanAssignToRider`, antes de comprobar el programa). Solo lo que vuelve a
-  «por asignar»: la caja reemplazada, que va a stock, no programa nada.
+  (`scanAssignToRider`, antes de comprobar el programa); desde el 04-11-2026,
+  también el manifiesto de devolución (§9.4, `afterGfOfficeReceipt`). Solo lo
+  que vuelve a «por asignar»: la caja reemplazada, que va a stock, y la de un
+  pedido anulado en la tienda, que va a inventario, no programan nada.
 - **Qué acuerdos.** Con Grupo GF, «Mantener» o «Reimprimir el rótulo de la
   misma salida», sin programar todavía, del mismo episodio, con el pedido
   todavía en «Por reprogramar Lima» y sin anular. Si no, no programa.
@@ -14935,7 +15204,10 @@ escanear un paquete —armado en almacén, agregar a una ruta, cotejo de la caja
 caja del motorizado de Grupo GF—, si su pedido está anulado (en la tienda o en
 Kapta) la respuesta es esa y nada más: «#AUR177767 está ANULADO en la tienda (el
 04/10, lo canceló el cliente): no sale. Sepáralo para devolverlo al stock.»
-(«en la tienda» desde el 24-10-2026, §38.12).
+(«en la tienda» desde el 24-10-2026, §38.12). Si la caja sigue en la de un
+motorizado con «No entregado», separarla es recibirla por «Recibir en
+oficina», Almacén → Devoluciones o su manifiesto de devolución: anulado en la
+tienda, va a inventario (04-11-2026, arriba).
 Antes cada pantalla respondía con su propio motivo —«Ese paquete no pertenece a
 esta ruta», «El pedido ya avanzó…»— y quien tenía la caja en la mano no sabía que
 la decisión era simplemente no despacharla.
@@ -15566,14 +15838,16 @@ decía «Ya estaba». Había 78 así, en cajas del 16 al 28/09, y 20 rechazos.
   recibe en oficina. Hasta entonces la caja «No entregado» sigue a su nombre.
   Lo que queda sigue en «Devoluciones» y el escaneo de «Por QR» lo recibe al
   volver a asignarlo; la caja reemplazada por otra salida (§29.13) la recibe
-  y no la asigna.
+  y no la asigna. Lo que el motorizado trae de varios días juntos se recibe en
+  su manifiesto de devolución (§9.4), que también anota lo que faltó.
   Es lo único que se fuerza en Grupo GF; lo sin reportar y la foto no.
 - **«Recibir en oficina»** en la misma fila (`receiveRouteReturns`) los recibe
   de una vez por la puerta de «Devoluciones» (`returnUndeliveredOutputs`,
   0188/0206), por salida y solo de las cajas de esa ruta: vuelven a «por
   asignar», rechazos incluidos (v1.23); la caja reemplazada por otra salida
-  vuelve a stock (0248). Pulsarlo es decir que las cajas están en la oficina, y
-  lo confirma.
+  vuelve a stock (0248), y la de un pedido anulado en la tienda va a inventario
+  (0307, §29.13), contada aparte en el aviso. Pulsarlo es decir que las cajas
+  están en la oficina, y lo confirma.
 - La tabla de la ruta filtra **«Por devolver»** con el mismo criterio.
 
 **Reabrir ruta.** Una ruta cerrada vuelve a «en curso» (`reopenRoute`, permiso
@@ -16041,8 +16315,10 @@ motivo de la cadena, el pedido entra a «Reintentos Aliclik»: Urpi → AUTOECOM
 ALIDRIVER. No toma la caja, y la carga la nombra, si es del mismo día que la
 ruta de Grupo GF o anterior, si la última parada no es «No entregado», si sigue
 en una caja sin ese reporte o de otro courier, si está devuelta, reemplazada
-(0248) o es de una venta terminada, o si no consta ni en la caja ni en la
-empresa.
+(0248) o es de una venta terminada, si el pedido está anulado en la tienda
+(`anulado_en_tienda`, 0307: esa caja, al volver, va a inventario, §29.13), o
+si no consta ni en la caja ni en la empresa. La venta terminada y el anulado en
+la tienda cuentan en la carga como cerrados, no como «con otra salida viva».
 
 La custodia no cambia: la programación no prueba el traspaso (no hay cotejo),
 y el Master ya lee una salida en ruta como fuera del almacén. Cuando Urpi

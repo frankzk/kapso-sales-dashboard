@@ -67,10 +67,15 @@ export function replacedOutputIds(events: readonly { kind: string; shipment_id?:
  * salen a stock (custodia `devuelto`); lo demás vuelve a «por asignar»
  * (`empresa`). Un «Sacar con salida nueva» que terminó entre la lectura previa
  * y la recepción cambia la rama, así que el aviso no sale de lo leído antes.
+ *
+ * 0307 (owner, 04-11-2026): la de un pedido ANULADO EN LA TIENDA (o de una
+ * venta terminada, 0285) va a inventario: `saleEnded` es `orders.cancelled_at`
+ * (o `woo_sale_returns`) releído después de recibir.
  */
-export type OfficeReturnOutcome = "a_stock_reemplazada" | "ya_devuelta" | "por_asignar";
+export type OfficeReturnOutcome = "a_stock_reemplazada" | "a_inventario_anulado" | "ya_devuelta" | "por_asignar";
 
-export function officeReturnOutcome(custodyAfter: string | null | undefined, replaced: boolean): OfficeReturnOutcome {
+export function officeReturnOutcome(custodyAfter: string | null | undefined, replaced: boolean, saleEnded = false): OfficeReturnOutcome {
   if (custodyAfter !== "devuelto") return "por_asignar";
-  return replaced ? "a_stock_reemplazada" : "ya_devuelta";
+  if (replaced) return "a_stock_reemplazada";
+  return saleEnded ? "a_inventario_anulado" : "ya_devuelta";
 }

@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   stopStatus: "no_entregado",
   failRead: false,
   store: "store",
+  cancelledAt: null as string | null,
   rpcs: [] as string[],
   writes: [] as string[],
 }));
@@ -38,7 +39,8 @@ vi.mock("@/lib/db", () => {
         : table === "shipments" ? [state.shipment]
         : table === "dispatch_manifest_items" ? (state.item ? [state.item] : [])
         : table === "order_events" ? state.receipts
-        : table === "order_master" ? [{ order_id: "order", order_name: "#KP200152" }] : [];
+        : table === "order_master" ? [{ order_id: "order", order_name: "#KP200152" }]
+        : table === "orders" ? [{ id: "order", cancelled_at: state.cancelledAt }] : [];
       const data = rows.filter(row => filters.every(filter => filter(row)));
       return { data: single ? data[0] ?? null : data, error: state.failRead && table === "order_events" ? { message: "read failed" } : null };
     };
@@ -48,7 +50,9 @@ vi.mock("@/lib/db", () => {
   };
   return { createAdminSupabase: () => ({ from, rpc: async (name: string) => {
     state.rpcs.push(name);
-    state.item = null; state.shipment.custody_state = "empresa"; state.shipment.dispatched_at = null;
+    // 0307: el pedido anulado en la tienda va a stock (custodia `devuelto`).
+    state.item = null; state.shipment.custody_state = state.cancelledAt ? "devuelto" : "empresa";
+    if (!state.cancelledAt) state.shipment.dispatched_at = null;
     state.receipts.push({ shipment_id: "s01", kind: "returned_to_office", source: "dispatch", actor: "actor", occurred_at: "2026-10-28T18:51:04Z", payload: { manifest_id: "box" } });
     return { data: "order", error: null };
   } }), createServerSupabase: async () => ({ from }) };
@@ -61,7 +65,20 @@ import { returnUndeliveredByCode, returnUndeliveredOutputs } from "@/app/dashboa
 beforeEach(() => {
   state.shipment = { id: "s01", store_id: "store", order_id: "order", courier: "propio", custody_state: "empresa", delivery_status: "pendiente", dispatched_at: null };
   state.item = null; state.receipts = [receipt()]; state.stopStatus = "no_entregado";
-  state.failRead = false; state.store = "store"; state.rpcs = []; state.writes = [];
+  state.failRead = false; state.store = "store"; state.cancelledAt = null; state.rpcs = []; state.writes = [];
+});
+
+describe("«Recibir en oficina» de un pedido anulado en la tienda (owner, 04-11-2026)", () => {
+  it("va a inventario: el aviso lo dice y no lo cuenta como «por asignar»", async () => {
+    state.item = { id: "item", manifest_id: "box", shipment_id: "s01", removed_at: null };
+    state.shipment.custody_state = "courier"; state.shipment.dispatched_at = "2026-10-27T18:11:00Z"; state.receipts = [];
+    state.cancelledAt = "2026-10-28T10:00:00Z";
+    const result = await returnUndeliveredOutputs("org", ["s01"], { manifestIds: ["box"] });
+    expect(result.error).toBeUndefined();
+    expect(result.notice).toContain("1 recibido en oficina. 1 era de un pedido anulado en la tienda: va a inventario (Almacén decide stock o merma); no vuelve a «por asignar».");
+    expect(result.notice).not.toContain("Vuelven a «por asignar»");
+    expect(state.rpcs).toEqual(["gf_return_to_office"]);
+  });
 });
 
 describe("volver a escanear una devolución GF", () => {

@@ -31,12 +31,19 @@ export interface GfReturnFacts {
    * Una salida que ya consta devuelta pero sigue en la caja también va a stock
    * (0248): `custodyState` «devuelto».
    */
+  /**
+   * La venta terminó: anulado en la tienda (`orders.cancelled_at`, 0307) o
+   * venta de WooCommerce terminada (0285). Sin caja y `devuelto`, ya se recibió
+   * y fue a inventario: escanearla otra vez solo lo dice.
+   */
+  saleEnded?: boolean;
 }
 
 export type GfReturnDecision =
   /** `toStock`: era la caja reemplazada; al recibirla se desarma, no se reprograma. */
   | { kind: "recibir"; toStock?: boolean }
-  | { kind: "aviso"; message: string }
+  /** `toInventory`: ya se recibió y fue a inventario (venta terminada); no es una alarma. */
+  | { kind: "aviso"; message: string; toInventory?: boolean }
   | { kind: "error"; message: string };
 
 /** Pura: qué hace el escaneo con un paquete de Grupo GF. `label` es el código de la salida. */
@@ -57,6 +64,13 @@ export function gfReturnDecision(label: string, facts: GfReturnFacts): GfReturnD
   }
   if (facts.replaced && facts.custodyState === "devuelto") {
     return { kind: "aviso", message: `${label} ya se recibió: era la caja reemplazada; desármala y regístrala como reingreso a stock.` };
+  }
+  if (facts.saleEnded && facts.custodyState === "devuelto") {
+    return {
+      kind: "aviso",
+      toInventory: true,
+      message: `${label} ya se recibió: el pedido está anulado en la tienda (o su venta terminó), así que fue a inventario —Almacén decide stock o merma—. No vuelve a «por asignar».`,
+    };
   }
   if (facts.custodyState !== "empresa") {
     return { kind: "error", message: `${label}: no está en una caja de Grupo GF ni en la oficina. Revísalo en el Master.` };

@@ -201,6 +201,18 @@ describe("registrar los despachos de una programación cargada", () => {
       expect(shipments[0]).toMatchObject({ courier: "propio", delivery_status: "pendiente" });
     }
   });
+  it("la venta terminada en una carrera (anulado en la tienda, 0307; Woo, 0285) cuenta como cerrado, no como otra salida viva", async () => {
+    const master = [{ order_id: "o1", order_name: "#KP1", store_id: "kenku", general_status: "en_proceso", orders: { cancelled_at: null } }];
+    const rows = [{ orderId: "o1", orderCode: "KP1", date: "2026-10-31" }];
+    for (const answer of ["anulado_en_tienda", "venta_terminada"]) {
+      const shipments = [{ ...box({ id: "g1", courier: "propio", created_via: "grupo_gf_courier" }), order_id: "o1", store_id: "kenku" }];
+      const { admin } = fakeAdmin(master, shipments, [], () => ({ data: answer, error: null }) as any);
+      const result = await registerUrpiDispatches(admin, rows, "2026-11-03");
+      expect(result.closed, answer).toBe(1);
+      expect(result.otraSalidaViva).toEqual([]);
+      expect(urpiDispatchMessage(result)).toBe("");
+    }
+  });
   it("sin nada nuevo no dice nada; las listas largas se recortan", () => {
     const empty = { filled: [], fromGf: [], alreadyUrpi: 30, closed: 4, sinSalida: [], otraSalidaViva: [], reenvioTrasCancelado: [], cancelled: [], errors: [] };
     expect(urpiDispatchMessage(empty)).toBe("");
