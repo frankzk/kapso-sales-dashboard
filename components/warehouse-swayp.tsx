@@ -26,11 +26,14 @@
 // la pestaña visible de 16:00 a 21:30 de Lima, cada 5 minutos (R10): es la
 // franja en que Swayp cierra su ruta y el turno noche arma el lote.
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, OpsButton, Skeleton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
 import { IconChevronDown } from "@/components/icons";
 import { OrderLink } from "@/components/order-link";
+import { SwaypHandoverPanel } from "@/components/warehouse-swayp-handover";
+import { openSwaypHandover } from "@/app/dashboard/pedidos/despacho/actions";
+import { SWAYP_HANDOVER_BUTTON, SWAYP_HANDOVER_NO_PERMISSION } from "@/lib/swayp-handover";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import {
   SWAYP_AUTO_REFRESH_MS,
@@ -272,11 +275,58 @@ export function WarehouseSwayp({
   const proximo = useMemo(() => (data && !data.error ? swaypLiveZone(data.proximo, now) : null), [data, now]);
   const hoy = data && !data.error ? data.hoy : null;
 
+  // «Entregar a Swayp» (fase 3): abrir concilia la entrega con el lote y relee;
+  // el panel se pinta con la zona «Hoy» ya releída.
+  const [handoverId, setHandoverId] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
+  /**
+   * Relee después de escribir. La estación no lanza una segunda lectura si ya
+   * hay una en vuelo (devuelve null), y esa pudo salir ANTES de la escritura
+   * (la de despertar o la automática): se espera a que termine y se pide otra.
+   */
+  const refreshAfterWrite = useCallback(async (): Promise<unknown> => {
+    for (let attempt = 0; attempt < SWAYP_WRITE_REREAD_TRIES; attempt += 1) {
+      const lot = await onRefresh();
+      if (lot) return lot;
+      await new Promise((done) => setTimeout(done, SWAYP_WRITE_REREAD_WAIT_MS));
+    }
+    return null;
+  }, [onRefresh]);
+  async function openHandover() {
+    setOpening(true);
+    setOpenError(null);
+    try {
+      const result = await openSwaypHandover();
+      if (result.error) setOpenError(result.error);
+      const lot = (await refreshAfterWrite()) as WarehouseSwaypData | null;
+      if (result.error || !result.manifestId) return;
+      if (lot?.hoy?.entrega?.manifestId !== result.manifestId) {
+        setOpenError(SWAYP_HANDOVER_READ_ERROR);
+        return;
+      }
+      setHandoverId(result.manifestId);
+    } catch {
+      setOpenError("No pudimos abrir la entrega. Revisa la conexión y vuelve a intentarlo.");
+    } finally {
+      setOpening(false);
+    }
+  }
+  function closeHandover() {
+    setHandoverId(null);
+    // Cerrada la entrega el botón ya no está: el foco vuelve al título del apartado.
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) document.getElementById("swayp-titulo")?.focus();
+    });
+  }
+  const handover: SwaypHandoverControl = { can: data?.canHandover ?? false, opening, error: openError, onOpen: () => void openHandover() };
+
   return (
+    <>
     <section id="swayp" aria-labelledby="swayp-titulo" aria-busy={busy || !data} className="scroll-mt-4 rounded-lg bg-white shadow-control ring-1 ring-line">
       <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-6">
         <div className="min-w-0">
-          <h2 id="swayp-titulo" className="text-base font-semibold leading-6 text-ink-900">{SWAYP_TITLE}</h2>
+          <h2 id="swayp-titulo" className="text-base font-semibold leading-6 text-ink-900" tabIndex={-1} style={{ outline: "none" }}>{SWAYP_TITLE}</h2>
           <p className="mt-0.5 max-w-2xl text-[13px] text-ink-600">{SWAYP_HELP}</p>
         </div>
         {/* La primera lectura va sola: hasta que llega no hay nada que actualizar. */}
@@ -322,6 +372,7 @@ export function WarehouseSwayp({
                 key={`hoy:${hoy.day}`}
                 zone={hoy}
                 showStore={data.showStore}
+                handover={handover}
                 className="shadow-[inset_0_1px_0_var(--color-line)] xl:shadow-[inset_1px_0_0_var(--color-line)]"
               />
             )}
@@ -329,6 +380,49 @@ export function WarehouseSwayp({
         </>
       )}
     </section>
+    {/* Fuera de la sección: su `aria-busy` de cada relectura no frena lo que anuncia el contador. */}
+    {handoverId && hoy?.entrega && hoy.entrega.manifestId === handoverId && (
+      <SwaypHandoverPanel zone={hoy} manifestId={handoverId} onClose={closeHandover} onChanged={refreshAfterWrite} />
+    )}
+    </>
+  );
+}
+
+/** Cuántas veces y cada cuánto se reintenta la relectura tras escribir, si ya había una en vuelo. */
+const SWAYP_WRITE_REREAD_TRIES = 20;
+const SWAYP_WRITE_REREAD_WAIT_MS = 200;
+const SWAYP_HANDOVER_READ_ERROR = "Abrimos la entrega pero no pudimos leerla: toca «Actualizar» y vuelve a abrirla.";
+
+interface SwaypHandoverControl {
+  /** `dispatch.manage`: Yohalis, Mildred y Yelitza (E1). */
+  can: boolean;
+  opening: boolean;
+  error: string | null;
+  onOpen: () => void;
+}
+
+const NOTE_TONE: Record<"neutral" | "warn" | "crit" | "ok", string> = {
+  neutral: "text-ink-500",
+  ok: "font-medium text-ok-fg",
+  warn: "font-medium text-warn-fg",
+  crit: "font-semibold text-crit-fg",
+};
+
+/**
+ * El botón de la entrega en «Hoy»: mientras no se cierra (o no se marca «Swayp
+ * no vino»), con permiso de Despacho; sin permiso, quién la cierra.
+ */
+function SwaypHandoverButton({ zone, handover }: { zone: SwaypZone; handover: SwaypHandoverControl }) {
+  const state = zone.entrega?.state ?? null;
+  if (state === "cerrada" || state === "no_vino") return null;
+  if (!handover.can) return <p className="mt-2 text-xs text-ink-500">{SWAYP_HANDOVER_NO_PERMISSION}</p>;
+  return (
+    <div className="mt-3">
+      <OpsButton variant="primary" onClick={handover.onOpen} disabled={handover.opening} className="w-full pointer-coarse:h-11 sm:w-auto">
+        {handover.opening ? "Abriendo…" : SWAYP_HANDOVER_BUTTON(zone.shortLabel)}
+      </OpsButton>
+      {handover.error && <p role="alert" className="mt-2 text-[13px] font-medium text-crit-fg">{handover.error}</p>}
+    </div>
   );
 }
 
@@ -357,7 +451,7 @@ function SwaypSkeleton() {
  * Una zona: su título, la cabecera-frase (se entiende sin colores), el tono de
  * la víspera, las cifras que filtran y las listas. Vacía, solo la frase.
  */
-function SwaypZoneBlock({ zone, showStore, className }: { zone: SwaypZone; showStore: boolean; className?: string }) {
+function SwaypZoneBlock({ zone, showStore, handover, className }: { zone: SwaypZone; showStore: boolean; handover?: SwaypHandoverControl; className?: string }) {
   const [chosen, setChosen] = useState<SwaypFilter>("programadas");
   const headingId = useId();
   const hasLot = zone.counts.programadas > 0;
@@ -371,8 +465,9 @@ function SwaypZoneBlock({ zone, showStore, className }: { zone: SwaypZone; showS
       {hasLot ? (
         <>
           <p className="mt-0.5 text-sm font-medium tabular-nums text-ink-900">{zone.headline}</p>
-          {zone.note && <p className="mt-0.5 text-xs text-ink-500">{zone.note}</p>}
+          {zone.note && <p className={cn("mt-0.5 text-xs tabular-nums", NOTE_TONE[zone.entrega?.statusTone ?? "neutral"])}>{zone.note}</p>}
           {zone.tone && <SwaypToneLine tone={zone.tone} />}
+          {zone.kind === "hoy" && handover && <SwaypHandoverButton zone={zone} handover={handover} />}
           <SwaypFigures zone={zone} filter={filter} onFilter={setChosen} crit={crit} />
         </>
       ) : (
@@ -551,6 +646,7 @@ function SwaypArmadaItem({ row }: { row: SwaypArmadaRow }) {
         </div>
       )}
       {row.swaypLine && <p className="mt-0.5 text-xs tabular-nums text-ink-600">{row.swaypLine}</p>}
+      {row.handoverLine && <p className={cn("mt-0.5 text-[13px] tabular-nums", NOTE_TONE[row.handoverLine.kind])}>{row.handoverLine.text}</p>}
     </li>
   );
 }

@@ -1256,6 +1256,10 @@ Reglas de manifiesto:
   `En curso`.
 - Enviar una ruta o crear una guía no prueba custodia física.
 - Para couriers con API se puede aceptar el evento equivalente de recepción.
+  Swayp Lima no: su «Asignada»/«Reparto» no prueba que tenga la caja (9 guías
+  armadas con la novedad 20 «Bodega no despachó mercancía»). Su entrega se
+  coteja en Almacén, caja por caja, y se cierra con el nombre del chofer (§9.1,
+  «Entrega a Swayp · Lima», 04-11-2026).
 
 Aliclik tiene actualmente un doble cotejo entre Excel y celular. Cuando Kapta
 reemplace el Excel, la igualdad será entre salidas esperadas en el manifiesto y
@@ -2288,9 +2292,14 @@ creó la guía.
    bodega regional de Swayp («En Lima los arma nuestro almacén, provincia los
    arma Swayp»).
 2. **El límite práctico (D2)** es el corte del turno noche de la víspera, a las
-   21:20 (`lib/warehouse-shift.ts`, §6.2). Swayp toma la guía en su sistema
-   pasada la medianoche, y desde que Kapta pasa la custodia a `courier` el
-   escáner (`markShipmentReady`) ya no acepta la caja.
+   21:20 (`lib/warehouse-shift.ts`, §6.2): no hay otro turno antes de que
+   Swayp recoja, hacia las 07:00 del día de despacho (owner, 04-11-2026). Swayp
+   carga su ruta hacia las 05:45 y, desde que la sincronización pasa la custodia
+   a `courier`, el escáner de la estación (`markShipmentReady`) ya no acepta la
+   caja: dice «Swayp ya cargó esta guía: escanéala en «Entregar a Swayp».» y se
+   arma al entregarla. Hasta el 04-11-2026 este punto decía «pasada la
+   medianoche»: las horas de Swayp llegan sin zona horaria y Kapta las guarda
+   con 5 h de desfase (pendiente de corregir; ver «Entrega a Swayp · Lima»).
 3. **Lo que llega tarde (D3). Nada bloquea.** Una guía de Lima para el próximo
    día de despacho creada después de las 21:20 de su víspera lleva un aviso
    fuerte a la asesora, y la puerta propone el siguiente día de despacho.
@@ -2426,7 +2435,8 @@ creó la guía.
   03-11-2026). Una directa sin fecha pero viva (una recuperación descartada
   suelta la fecha sin tocar la guía) no sale: no se sabe adónde fue.
 - **Sin doble conteo (R9).** No suma en «Por armar», ni en el número de Lima
-  de «Por empacar», ni en «Entregas a couriers».
+  de «Por empacar», ni en «Entregas a couriers». Su entrega a Swayp tampoco
+  sale en la Mesa de Despacho: se abre y se cierra en este apartado (fase 3).
 - **Dónde está la caja física (R11).** Para cada falta, un renglón; mirando las
   salidas hermanas del mismo pedido, de cualquier courier, la primera que
   aplica gana (con varias, la de consecutivo más alto):
@@ -2507,15 +2517,18 @@ creó la guía.
     filas dice «No falta ninguna.», «Todavía no se armó ninguna.» o «Ninguna
     se agregó después de las 17:00.». Una zona sin guías dice solo su frase
     vacía, una vez.
-- **La zona «Hoy», para cuadrar.** Cabecera «Swayp hoy: 7 programadas · 7
-  armadas»; cada fila con el estado de Swayp como dato («Swayp: Generada ·
-  00:38», etiquetas de `lib/swayp-states.ts`) y, una vez en la zona, «Kapta no
-  registra la entrega a Swayp.». No hay cifra de «recogidas». Una falta de hoy:
-  - en la empresa y sin que Swayp la tomara (sin estado, 1 «Generada» o 2
-    «Preparada»), crítico: «Sale hoy y no está armada: ármala, escanéala y
-    avisa a Seguimiento.», y la cifra «Faltan» de «Hoy» en rojo;
-  - si no: «No se armó y Swayp ya la tomó en su sistema: si la caja sigue aquí,
-    avisa hoy a Seguimiento.», sin el renglón de dónde está la caja.
+- **La zona «Hoy», para cuadrar y entregar.** Cabecera «Swayp hoy: 7
+  programadas · 7 armadas»; cada fila con el estado de Swayp como dato
+  («Swayp: Reparto», etiquetas de `lib/swayp-states.ts`, sin hora mientras
+  las horas de Swayp lleven 5 h de desfase) y, una vez en la zona, el estado de
+  la entrega a Swayp: «Swayp recoge hacia las 07:00. Entrega sin abrir.» hasta
+  que se abre (fase 3, abajo). Una falta de hoy, mientras Swayp no pasa, es
+  crítica: «Swayp pasa hacia las 07:00: ármala y entrégala en «Entregar a
+  Swayp», o márcala «No sale» con su motivo.», con su renglón de dónde está la
+  caja (aunque Swayp ya la haya cargado: la entrega la arma al escanearla), y la
+  cifra «Faltan» de «Hoy» en rojo. En «Próximo», la que Swayp ya tomó antes de
+  su día sigue diciendo «No se armó y Swayp ya la tomó en su sistema: si la caja
+  sigue aquí, avisa hoy a Seguimiento.».
 
   Lo urgente de hoy (las críticas) sube a la celda «Swayp · Lima» y al enlace
   de la cabecera como «Hoy: 1 sin armar» («hoy: 1 sin armar · faltan 2» en el
@@ -2566,8 +2579,9 @@ creó la guía.
     almacén y Swayp la recoge en la oficina. Sin guía Aliclik previa.»;
   - bajo la fecha, si es el próximo día de despacho y ya pasaron las 21:20 de
     su víspera, el aviso fuerte: «Ya no hay turno de almacén hoy y Swayp la
-    toma en su sistema pasada la medianoche. Elige el siguiente día o avisa a
-    Almacén.». En ese caso la fecha que propone la puerta es el siguiente día
+    recoge mañana a las 07:00. Elige el siguiente día o avisa a Almacén.»
+    (hasta el 04-11-2026 decía «la toma en su sistema pasada la medianoche»).
+    En ese caso la fecha que propone la puerta es el siguiente día
     de despacho (`swaypSuggestedDispatchDay`);
   - al crear: «Entró al lote Swayp de Lima del miércoles 4 nov. Almacén lo ve
     en «Swayp por salir».»; después de las 17:00 de la víspera, además, «El
@@ -2585,10 +2599,12 @@ creó la guía.
   nueva) con «La KP143987-S01 (Aliclik) volvió a la oficina: …». El del 02-11:
   11 programadas, 7 armadas y 4 sin armar, las 11 agregadas tarde.
 
-**Fases siguientes, pendientes del owner.** Fase 2: cerrar una falta con
-motivo. Fase 3: la entrega cotejada a Swayp (hoy Kapta no la registra). Fase 4:
-«Salida Swayp programada» en el Master. Ninguna existe todavía: esta fase no
-escribe nada.
+**Fases siguientes.** Fase 3, la entrega cotejada a Swayp: hecha el
+04-11-2026 («Entrega a Swayp · Lima», abajo); su «No sale» con motivo cubre,
+para el lote de hoy, lo que pedía la fase 2. Pendientes del owner: fase 2 para
+el lote de «Próximo» (cerrar una falta con motivo la víspera) y fase 4,
+«Salida Swayp programada» en el Master. La fase 1 no escribe nada; la fase 3
+escribe solo la entrega.
 
 **Lagunas conocidas de la fase 1.**
 
@@ -2603,7 +2619,8 @@ escribe nada.
 - Pendiente del owner (revisión del 03-11-2026): Swayp a veces toma pasada la
   medianoche una guía creada esa misma madrugada para el día siguiente y la
   reparte un día antes, sin armar (KP143987-S02: creada a las 00:11, tomada a
-  las 00:37; AUR177549-S02, 06-10). D2 y D3 suponen que Swayp respeta la
+  las 05:37 —Kapta la mostraba a las 00:37 por el desfase de 5 h—;
+  AUR177549-S02, 06-10). D2 y D3 suponen que Swayp respeta la
   fecha; otras creadas a las 00:12 sí salieron en su día. Mientras no decida,
   la asesora no recibe aviso en esa franja y la lista la muestra como «Swayp
   ya la tomó».
@@ -2624,6 +2641,167 @@ apartado, la celda, el escáner y «Armados hoy») y, para la asesora,
 `previewDirectFenixGuide`. Pruebas en `test/warehouse-swayp.test.ts`,
 `test/warehouse-swayp-access.test.ts`, `test/warehouse-swayp-ui.test.ts`,
 `test/warehouse-swayp-mom.test.ts` y `test/swayp-asesora-lote.test.ts`.
+
+#### Entrega a Swayp · Lima (Almacén, fase 3, 04-11-2026)
+
+**Por qué.** Kapta no registraba la entrega física a Swayp. La custodia la
+ponía la sincronización (`lib/swayp-ingest.ts`, sin persona) cuando el sistema
+de Swayp cargaba su ruta, tuviera o no la caja: en 45 días, 9 guías de Lima
+armadas tuvieron la novedad 20 «Bodega no despachó mercancía» (una caja suelta
+que se pierde en la entrega, nunca un lote entero) y quedaron esperando una
+devolución que no existe; 31 guías se fueron sin que nadie escaneara su caja,
+30 de ellas con el rótulo de otra salida (17 de Grupo GF, a la vez con el
+motorizado y con Swayp). El 04-11 a las 05:47 Swayp pasó a «Reparto» las 7
+guías de su lote en 2 segundos, entre ellas KP201453-S02 y KP201989-S02, que
+nunca se armaron como Swayp. El owner preguntó: «aqui no faltaria quizás un
+paso de cotejo? como cuando cotejamos la caja de los motorizados en grupo gf».
+
+**Decisiones del owner (04-11-2026):**
+
+1. **Cuándo y quién (E1).** «recoge a eso de las 7am de Lima. lo despacha
+   entre yohalis, mildred o yelitza». Swayp recoge hacia las 07:00 del MISMO
+   día de despacho; las tres tienen los roles de almacén y despacho
+   (`dispatch.manage`).
+2. **Un solo cotejo (E2).** «de acuerdo» con: caja por caja al entregarla al
+   chofer, más su nombre y cuántas cajas contó, como la entrega a Aliclik.
+   Swayp Lima pasa a «Entrega al courier» (`lib/dispatch-routing.ts`); su
+   chofer no tiene cuenta en Kapta.
+3. **Manda lo cargado en Swayp (E3).** «lo que sale a reparto? en teoria manda
+   lo que se tenga cargado en Swayp porque sino de ahi van a reportar que no
+   llegó el pedido». Kapta no cambia el estado ni la custodia que reporta
+   Swayp: la entrega registra quién entregó qué y a quién, y avisa las
+   diferencias para que Seguimiento corrija ese mismo día, antes de que Swayp
+   reporte que no llegó.
+4. **«No sale», bien explicado (E4).** «ok, pero que quede bien explicado
+   porqué no sale». Una caja que no sale lleva un motivo de una lista cerrada y
+   su explicación; Seguimiento cambia la fecha o anula la guía en Swayp ese
+   mismo día. Una entrega por día: cerrada, no se reabre.
+
+**Cómo funciona.**
+
+- **Abrir.** En la zona «Hoy» de «Swayp por salir», quien tiene
+  `dispatch.manage` ve «Entregar a Swayp · mié 4 nov»; sin permiso, «La
+  entrega a Swayp la cierra quien tiene permiso de Despacho.». Abrir crea (o
+  retoma) una ruta `dispatch_manifests` del día: courier `fenix`, tipo
+  `entrega_courier`, `route_date` = hoy, sin motorizado, «Swayp Lima» (una por
+  organización y día, índice de 0097), y la concilia con el lote: agrega cada
+  guía viva de Lima de hoy (misma regla R1 que la lista) que todavía no tenga
+  fila. Es idempotente; se vuelve a conciliar cada vez que se abre. Solo hoy y
+  solo si hoy Swayp despacha. Lee el lote de todas las tiendas de la
+  organización.
+- **Qué caja entra (excepción de custodia, solo Swayp Lima).** Swayp carga su
+  ruta hacia las 05:45 y la sincronización pone custodia `courier` sin persona
+  (`custody_transferred_by` nulo) antes de que el chofer pase: esa caja sigue
+  aquí y entra, solo con Swayp en los estados 1 a 6 (cargada y sin cerrar).
+  También la que sigue en custodia `empresa`. Al escanear se vuelve a mirar:
+  si Swayp la cerró después de abrir la entrega, no se arma ni se entrega. No entran, y el
+  texto dice por qué:
+  - otra salida: «Esta salida es de Grupo GF (KP201453-S01), no de Swayp: no
+    la entregues.» (o el aviso del rótulo viejo, si la salida Swayp del pedido
+    está en la entrega);
+  - provincia: «Esta guía es de provincia: la arma Swayp en su bodega, no sale
+    de aquí.»;
+  - otro día: «Esta caja sale el jueves 5 nov, no hoy: no la entregues.»;
+  - cerrada en Swayp (estados 7 a 12, o custodia `retorno`/`devuelto`):
+    «Swayp ya cerró esta guía en su sistema (Devolución): no la entregues.»;
+  - entregada antes por una persona: «Esta caja ya se entregó a Swayp.»;
+  - pedido anulado: el aviso de siempre (`cancelledScanNotice`).
+  Grupo GF, Aliclik, Urpi, Tanders, Shalom y Olva no cambian: la excepción es
+  solo `fenix` + operación `lima`.
+- **Escanear.** QR, rótulo, guía Swayp o número de pedido. Marca la fila
+  (`office_checked_at`/`_by`) y, si la caja no estaba armada, la arma
+  (`listo_despacho`, `ready_at`/`ready_by`) aunque la custodia la haya puesto la
+  sincronización. Dice «KP201878-S01 entregada a Swayp.» y deja en la
+  Actividad del pedido «Caja escaneada en la entrega a Swayp.». Una guía del
+  lote que entró después de abrir se agrega en el mismo escaneo; una marcada
+  «No sale» vuelve: «KP… vuelve a la entrega y queda escaneada.». El panel
+  muestra «5 de 8 entregadas» y «faltan 3» en grande y lo anuncia al lector.
+- **«No sale».** Por fila, «¿Por qué no sale KP…?» con un motivo de la lista
+  (`SWAYP_NO_SALE_REASONS`):
+  - «No se encontró la caja en la oficina»;
+  - «No hay stock para armarla»;
+  - «La caja salió con otro courier»;
+  - «La caja está dañada o incompleta»;
+  - «El chofer de Swayp no la llevó» (explicación obligatoria);
+  - «El pedido se anuló o la clienta canceló»;
+  - «Otro motivo» (explicación obligatoria).
+  La explicación, «Explica qué pasó», tiene al menos 10 letras cuando es
+  obligatoria y 300 como máximo. Cuando Kapta ya lo sabe, propone el motivo: la
+  caja que salió con la otra salida del pedido (regla de paradero R11) sale
+  como «La caja salió con otro courier» con «La caja salió como KP201453-S01
+  con Grupo GF.». Se guarda en la fila como «No sale: <motivo>. <explicación>»
+  y en la Actividad del pedido: «No salió con Swayp: <motivo>. <explicación>
+  Seguimiento: cambia la fecha en Swayp o anula la guía hoy.». Se puede
+  deshacer antes de cerrar.
+- **Cerrar.** Con «faltan 0», «¿Quién recoge? (nombre del chofer de Swayp)» y
+  «¿Cuántas cajas contó el chofer?». No cierra si:
+  - entró al lote una guía sin fila: «Entró KP… al lote de hoy: entrégala o
+    márcala «No sale».»;
+  - falta alguna: «Falta 1: entrégala o márcala «No sale» con su motivo.»;
+  - falta el nombre o el conteo, o el conteo no coincide: «El chofer contó 6 y
+    escaneaste 7. Cuenten de nuevo antes de cerrar.».
+  Antes de cerrar retira sola, con «No sale: Otro motivo. Swayp cerró la guía
+  en su sistema (…) antes de la recogida.», lo que Swayp cerró entretanto, para
+  que el cierre nunca pise una custodia `retorno`. Cierra como la entrega a
+  Aliclik (`handOverToCourier` + `finalize_dispatch_manifest`): custodia
+  `courier` con la persona que cierra y la hora real (la que Swayp ya dio, ahora
+  con actor), `custody_transferred` en la Actividad («Paquete entregado al
+  courier: Juan Pérez.») y `handed_to_courier` con `driver_count`. «Hoy» dice
+  «Entrega cerrada · recogió Juan Pérez (Swayp) · 7 cajas · 07:04 · 1 no
+  salió». No se reabre: «La entrega de hoy ya se cerró: no se reabre.».
+- **Una entrega de un día anterior sin cerrar** (nadie cerró ni marcó «Swayp
+  no vino») se cancela sola al abrir o cerrar la de hoy, con el motivo
+  «Entrega del martes 3 nov sin cerrar», y sus cajas quedan libres: si no,
+  sus filas activas trabarían las de hoy (revisión del 04-11-2026).
+- **«Swayp no vino».** Con confirmación («¿Swayp no vino hoy? Las 8 cajas se
+  quedan en la oficina y Seguimiento tiene que cambiar la fecha en Swayp.»)
+  cancela la entrega con el motivo «Swayp no vino». «Hoy» lo dice en rojo:
+  «Swayp no vino hoy: las 8 cajas siguen en la oficina. Seguimiento: cambia la
+  fecha en Swayp.».
+- **«Hoy», después.** La nota de la zona es el estado de la entrega: «Swayp
+  recoge hacia las 07:00. Entrega sin abrir.», «Entrega en curso: 5 de 8.», el
+  resumen del cierre o «Swayp no vino». Por fila: «Entregada a Swayp 07:04 ·
+  escaneó Yelitza» o «No salió: <motivo>». Las alertas van por estado, nunca
+  por hora (las de Swayp llevan 5 h de desfase):
+  - «No sale» y Swayp en 4, 5 o 6: «Swayp la tiene en reparto y la caja no
+    salió: Seguimiento cambia la fecha o anula la guía hoy, o Swayp reportará
+    que no llegó.» (en rojo);
+  - entregada y Swayp con la novedad 20 o 18: «Swayp dice «Bodega no despachó
+    mercancía», pero se le entregó a las 07:04 (recogió Juan Pérez).
+    Reclámalo a Swayp.» (en rojo);
+  - con la entrega cerrada, una guía viva sin fila: «Sin entrega
+    registrada.»; una que Swayp cerró antes de la recogida (KP143987-S02):
+    «Swayp ya cerró esta guía en su sistema (…): no la entregues.».
+- **Fuera de la entrega.** El escáner de la estación, ante una caja Swayp de
+  Lima con la custodia de la sincronización, dice «Swayp ya cargó esta guía:
+  escanéala en «Entregar a Swayp».». La Mesa de Despacho no crea ni lista rutas
+  de Swayp: «Swayp Lima se entrega desde Almacén › Swayp por salir.».
+
+**Qué no hace todavía.** No cambia el estado ni la custodia que reporta
+Swayp (E3): una caja «No sale» sigue como Swayp la tenga, y Kapta avisa. No
+corrige el desfase de 5 h de las horas de Swayp (`lib/swayp.ts`, `isoOrNull`
+lee como UTC una fecha de Lima sin zona horaria), que se arregla aparte. No
+hay firma ni escaneo del chofer. No coteja lo que vuelve de Swayp (152
+devoluciones de Lima en `retorno` sin recibir). Queda una ventana de
+milisegundos entre la última comprobación y el cierre en la que la
+sincronización podría pasar una caja a `retorno` y el cierre la dejaría en
+`courier` (`finalize_dispatch_manifest` no mira la custodia); se cierra con una
+guarda en la base, aparte. No toca provincia ni el Master
+(no sube `MOM_RESOLUTION_VERSION`): ningún estado de pedido es nuevo; los
+estados de ruta y los kinds (`manifest_created`, `package_added`,
+`office_checked`, `package_removed`, `handed_to_courier`,
+`custody_transferred`, `manifest_cancelled`) ya existían. Es nuevo el payload:
+`reason_code`, `detail`, `driver_count` y `swayp_handover`.
+
+Implementación: `lib/swayp-handover.ts` (las reglas y los textos, puros), las
+acciones `openSwaypHandover`, `scanSwaypHandover`, `markSwaypNoSale`,
+`undoSwaypNoSale`, `closeSwaypHandover` y `markSwaypNoVino` en
+`app/dashboard/pedidos/despacho/actions.ts`, la lectura de la entrega en
+`lib/warehouse-swayp-access.ts` y `lib/warehouse-swayp.ts`, y la pantalla en
+`components/warehouse-swayp.tsx` y `components/warehouse-swayp-handover.tsx`.
+Pruebas en `test/swayp-handover.test.ts`, `test/swayp-handover-actions.test.ts`,
+`test/swayp-handover-ui.test.ts`, `test/swayp-handover-mom.test.ts` y
+`test/dispatch-routing.test.ts`.
 
 ### 9.2 Sugerencia de courier en Lima
 
@@ -7195,8 +7373,8 @@ de Swayp):
 
 - Bajo el selector, si la fecha elegida es el próximo día de despacho y ya
   pasaron las 21:20 de su víspera: «Ya no hay turno de almacén hoy y Swayp la
-  toma en su sistema pasada la medianoche. Elige el siguiente día o avisa a
-  Almacén.». En ese caso la puerta propone el siguiente día de despacho
+  recoge mañana a las 07:00. Elige el siguiente día o avisa a Almacén.». En
+  ese caso la puerta propone el siguiente día de despacho
   (`swaypSuggestedDispatchDay`): el martes a las 22:00 propone el jueves, no
   el miércoles. Una fecha que la persona ya eligió no se pisa.
 - Al crear: «Entró al lote Swayp de Lima del miércoles 4 nov. Almacén lo ve en
@@ -11740,8 +11918,14 @@ El tipo lo decide el **courier**, no quien crea la ruta:
 
 | Tipo | Couriers | Cómo cierra |
 | --- | --- | --- |
-| **Ruta de reparto** | Motorizados propios, Axel, Urpi, Tanders, Swayp | Cotejo del motorizado al 100 % |
-| **Entrega al courier** | Aliclik, Shalom, Olva | Cotejo de oficina al 100 % **+ el nombre de quien recoge** |
+| **Ruta de reparto** | Motorizados propios, Axel, Urpi, Tanders | Cotejo del motorizado al 100 % |
+| **Entrega al courier** | Aliclik, Shalom, Olva, Swayp | Cotejo de oficina al 100 % **+ el nombre de quien recoge** |
+
+Swayp pasó de «Ruta de reparto» a «Entrega al courier» el 04-11-2026: su
+chofer no tiene cuenta en Kapta, así que el segundo escaneo lo hacía nuestra
+propia gente o no lo hacía nadie (la ruta de Urpi con doble cotejo sigue
+esperando desde agosto). Su entrega de Lima la abre Almacén › «Swayp por
+salir» y no la Mesa (§9.1, «Entrega a Swayp · Lima»).
 
 En una entrega al courier **no hay segundo cotejo**: Aliclik recoge y a las
 agencias se les lleva la caja; nadie del otro lado escanea. Exigírselo dejaba

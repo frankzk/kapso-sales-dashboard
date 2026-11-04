@@ -335,8 +335,8 @@ describe("las piezas en el código", () => {
     expect(lookup).toContain("if (candidates.length) return { candidates, byOrderName: true, hold: await replacedOutHold(candidates) };");
     expect(lookup).toContain('.eq("kind", OUTPUT_REPLACED_KIND)\n    .in("shipment_id", returning.map((candidate) => candidate.id));');
     expect(despacho).toContain("if (hold) return { error: hold, byOrderName, scanHold: true };");
-    // Preparar, recibir, agregar a una ruta y cotejar tampoco eligen.
-    expect(despacho.split("if (scan.hold) return { error: scan.hold };").length - 1).toBe(4);
+    // Preparar, recibir, agregar a una ruta, cotejar y entregar a Swayp (fase 3, 04-11-2026) tampoco eligen.
+    expect(despacho.split("if (scan.hold) return { error: scan.hold };").length - 1).toBe(5);
     const scan = body("scanAssignToRider");
     expect(scan).toContain("} else if (found.scanHold) {");
     expect(scan.indexOf("} else if (found.scanHold) {")).toBeLessThan(scan.indexOf("takeOrdersCore("));

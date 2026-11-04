@@ -89,6 +89,8 @@ function fakeDb(seed: Record<string, Row[]>, opts: { fail?: (query: Query) => bo
     q.not = (col: string, operator: string, v: unknown) =>
       filter("not", col, [operator, v], (r) => (operator === "is" && v === null ? r[col] != null : r[col] !== v));
     q.like = (col: string, pattern: string) => filter("like", col, pattern, (r) => likeTest(pattern).test(String(r[col] ?? "")));
+    q.ilike = (col: string, pattern: string) =>
+      filter("ilike", col, pattern, (r) => new RegExp(likeTest(pattern).source, "i").test(String(r[col] ?? "")));
     q.gte = cmp("gte", (a, b) => a >= b);
     q.lt = cmp("lt", (a, b) => a < b);
     q.order = (col: string, o?: { ascending?: boolean }) => {
@@ -327,6 +329,12 @@ describe("el alcance y la forma de las consultas", () => {
     for (const query of queries) {
       if (SCOPED_TABLES.has(query.table)) {
         expect(query.filters).toContainEqual(["in", "store_id", ["s1"]]);
+      } else if (query.table === "dispatch_manifests") {
+        // La entrega a Swayp es por organización (fase 3): la de las tiendas de quien mira.
+        expect(query.filters.find(([method, column]) => method === "in" && column === "org_id")).toBeTruthy();
+        expect(query.filters).not.toContainEqual(["in", "org_id", expect.arrayContaining(["org2"])]);
+      } else if (query.table === "dispatch_manifest_items") {
+        expect(query.filters.some(([method, column]) => method === "eq" && column === "manifest_id")).toBe(true);
       } else {
         expect(query.table).toBe("stores");
         expect(query.filters).toContainEqual(["in", "id", ["s1"]]);

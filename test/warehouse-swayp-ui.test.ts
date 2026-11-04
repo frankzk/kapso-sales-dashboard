@@ -23,7 +23,6 @@ import {
   SWAYP_ERROR,
   SWAYP_HELP,
   SWAYP_REFRESH_ERROR,
-  SWAYP_HOY_FALTA_AQUI,
   SWAYP_HOY_NOTE,
   SWAYP_REVISAR_HELP,
   SWAYP_SALIO_ARMADA,
@@ -34,6 +33,7 @@ import {
   emptyWarehouseSwayp,
   type WarehouseSwaypData,
 } from "@/lib/warehouse-swayp";
+import { SWAYP_HOY_FALTA_ENTREGA } from "@/lib/swayp-handover";
 import {
   SWAYP_NOW,
   limaAt,
@@ -292,10 +292,11 @@ describe("la relectura sola, con reloj de verdad (watchSwaypRefresh, R10)", () =
   });
 });
 
-describe("solo lee", () => {
-  it("el apartado no llama acciones de servidor, ni lee por su cuenta, ni guarda en el navegador", () => {
+describe("lee; solo la entrega a Swayp escribe (fase 3, 04-11-2026)", () => {
+  it("el apartado solo abre la entrega (las demás escrituras van en su panel), no lee por su cuenta ni guarda en el navegador", () => {
     expect(ui.startsWith('"use client";')).toBe(true);
-    expect(ui).not.toMatch(/from "@\/app\//);
+    expect(ui.match(/from "@\/app\/[^"]+"/g)).toEqual(['from "@/app/dashboard/pedidos/despacho/actions"']);
+    expect(ui).toContain('import { openSwaypHandover } from "@/app/dashboard/pedidos/despacho/actions";');
     expect(ui).not.toContain("fetch(");
     expect(ui).not.toContain("localStorage");
     expect(ui).not.toContain("sessionStorage");
@@ -481,13 +482,13 @@ describe("las zonas: «Mañana» primero, «Hoy» para cuadrar", () => {
     expect(t).toContain("Provincia: 1 guía Swayp sale el miércoles 4 nov desde la bodega de Swayp (Arequipa 1). No se empaca aquí.");
   });
 
-  it("«Hoy»: su cabecera, una sola vez «Kapta no registra la entrega a Swayp.», el estado de Swayp y qué hacer con la que no se armó", () => {
+  it("«Hoy»: su cabecera, una sola vez el estado de la entrega a Swayp, el estado de Swayp y qué hacer con la que no se armó", () => {
     expect(t).toContain("Swayp hoy: 2 programadas · 1 armada · falta 1");
     // La cifra «Faltan» de «Hoy» va en rojo: sale hoy y sigue aquí.
     expect(html).toMatch(/aria-label="Cifras de Hoy · martes 3 nov"[\s\S]*?text-crit-fg">1<\/span><\/button>/);
     expect(count(t, SWAYP_HOY_NOTE)).toBe(1);
     expect(t).toContain("Swayp: Generada");
-    expect(html).toContain(`<p class="mt-1 text-[13px] font-semibold text-crit-fg">${SWAYP_HOY_FALTA_AQUI}</p>`);
+    expect(html).toContain(`<p class="mt-1 text-[13px] font-semibold text-crit-fg">${SWAYP_HOY_FALTA_ENTREGA}</p>`);
     expect(t).toContain(SWAYP_CHIP_ARMADA_POR_DEFINIR);
     // «Hoy» no lleva tono ni cifra de «recogidas».
     expect(t).not.toContain("recogidas");

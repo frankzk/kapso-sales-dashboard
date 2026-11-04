@@ -1013,7 +1013,11 @@ function CreateManifestModal({ riders, onClose, onCreated }: { riders: DispatchR
   const [routeDate, setRouteDate] = useState(todayLima());
   const [busy, setBusy] = useState(false);
 
-  const { couriers } = useMemo(() => routeChoices(riders), [riders]);
+  // Swayp Lima no se arma aquí: su entrega la abre Almacén › «Swayp por salir» (MOM §9.1).
+  const { couriers } = useMemo(() => {
+    const choices = routeChoices(riders);
+    return { ...choices, couriers: choices.couriers.filter((option) => option.courier !== "fenix") };
+  }, [riders]);
   const choice = useMemo(() => routeChoiceByValue(riders, selection), [riders, selection]);
 
   return (

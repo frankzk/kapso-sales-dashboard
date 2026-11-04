@@ -16,8 +16,11 @@
 //   Swayp. Quién arma lo dice `order_master.macro_operation` («lima» incluye
 //   Callao), nunca `shipments.city`: hay hijas de provincia con `city` nulo.
 // - D2. El límite práctico es el corte del turno noche de la víspera (21:20,
-//   lib/warehouse-shift.ts): Swayp toma la guía pasada la medianoche y desde que
-//   la custodia pasa a `courier` el escáner ya no acepta la caja.
+//   lib/warehouse-shift.ts): no hay turno hasta que Swayp recoge, hacia las 07:00
+//   del día de despacho (owner 04-11-2026). Swayp carga su ruta hacia las 05:45
+//   y desde que la sincronización pasa la custodia a `courier` el escáner de la
+//   estación ya no acepta la caja: se escanea en «Entregar a Swayp» (fase 3,
+//   lib/swayp-handover.ts).
 // - D3. Lo creado después de las 17:00 de la víspera (Swayp cierra su ruta de
 //   16:00 a 17:00, MOM §9.1) es «Agregada tarde»; después de las 21:20, aviso
 //   fuerte a la asesora y el siguiente día de despacho preseleccionado. Nada
@@ -39,6 +42,15 @@ import { SWAYP_STATES } from "@/lib/swayp-states";
 import { courierDisplayName } from "@/lib/dispatched-with";
 import { OPERATION_LABELS } from "@/lib/dispatch-routing";
 import type { DispatchShipment } from "@/lib/dispatch-access";
+import {
+  SWAYP_ENTREGA_SIN_ABRIR,
+  SWAYP_HOY_FALTA_ENTREGA,
+  buildSwaypHandover,
+  swaypHandoverRowLine,
+  type SwaypHandover,
+  type SwaypHandoverItemRow,
+  type SwaypHandoverManifestRow,
+} from "@/lib/swayp-handover";
 
 // ---------------------------------------------------------------------------
 // Horas que mandan
@@ -180,12 +192,12 @@ export const SWAYP_TONE_TOMADAS = (taken: number): string =>
     ? "1 no se armó y Swayp ya la tomó en su sistema: si la caja sigue aquí, avisa hoy a Seguimiento."
     : `${taken} no se armaron y Swayp ya las tomó en su sistema: si las cajas siguen aquí, avisa hoy a Seguimiento.`;
 
-// Zona «Hoy» (para cuadrar; no hay cifra de «recogidas»).
-export const SWAYP_HOY_NOTE = "Kapta no registra la entrega a Swayp.";
+// Zona «Hoy» (para cuadrar). Desde la fase 3 (04-11-2026) su nota es el estado
+// de la entrega a Swayp (lib/swayp-handover.ts); sin entrega abierta, esta.
+export const SWAYP_HOY_NOTE = SWAYP_ENTREGA_SIN_ABRIR;
 export const SWAYP_HOY_STATE_LINE = (label: string, time: string | null): string =>
   `Swayp: ${label}${time ? ` · ${time}` : ""}`;
 export const SWAYP_STATE_UNKNOWN = "sin estado";
-export const SWAYP_HOY_FALTA_AQUI = "Sale hoy y no está armada: ármala, escanéala y avisa a Seguimiento.";
 export const SWAYP_HOY_FALTA_TOMADA =
   "No se armó y Swayp ya la tomó en su sistema: si la caja sigue aquí, avisa hoy a Seguimiento.";
 
@@ -229,7 +241,7 @@ export const SWAYP_ASESORA_CREATED = (day: string): string =>
   `Entró al lote Swayp de Lima del ${day}. Almacén lo ve en «Swayp por salir».`;
 export const SWAYP_ASESORA_TARDE = "El almacén ya está cerrando ese lote: la verá como agregada tarde.";
 export const SWAYP_ASESORA_NOCHE =
-  "Ya no hay turno de almacén hoy y Swayp la toma en su sistema pasada la medianoche. Elige el siguiente día o avisa a Almacén.";
+  "Ya no hay turno de almacén hoy y Swayp la recoge mañana a las 07:00. Elige el siguiente día o avisa a Almacén.";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -284,8 +296,13 @@ export interface SwaypGuideRow {
   /** Creada después de las 17:00 de la víspera (R7). */
   late: boolean;
   chips: SwaypChip[];
-  /** Solo «Hoy»: «Swayp: Generada · 00:38». */
+  /**
+   * Solo «Hoy»: «Swayp: Reparto». Sin hora mientras las horas de Swayp lleven
+   * 5 h de desfase en Kapta (MOM §9.1, «Entrega a Swayp»).
+   */
   swaypLine: string | null;
+  /** Solo «Hoy»: qué dice la entrega a Swayp de esta caja (entregada, no salió, alertas). */
+  handoverLine: SwaypTone | null;
   /** «Imprimir rótulo» de esta salida. */
   labelHref: string;
 }
@@ -401,8 +418,10 @@ export interface SwaypZone {
   revisar: SwaypRevisarRow[];
   /** Solo «Próximo»: el tono según la hora de Lima respecto de la víspera. */
   tone: SwaypTone | null;
-  /** Solo «Hoy»: «Kapta no registra la entrega a Swayp.». */
+  /** Solo «Hoy»: el estado de la entrega a Swayp («Entrega en curso: 5 de 8.»). */
   note: string | null;
+  /** Solo «Hoy»: la entrega a Swayp del día, si se abrió. */
+  entrega: SwaypHandover | null;
   /** «Swayp no lleva nada de Lima el miércoles 4 nov.». */
   empty: string;
   provincia: SwaypProvincia;
@@ -420,6 +439,8 @@ export interface WarehouseSwaypData {
   proximo: SwaypZone;
   /** Más de una tienda a la vista. */
   showStore: boolean;
+  /** Puede abrir y cerrar la entrega a Swayp (`dispatch.manage`). */
+  canHandover: boolean;
   error?: string;
 }
 
@@ -454,6 +475,10 @@ export interface SwaypShipmentRow {
   custody_transferred_at: string | null;
   dispatched_at: string | null;
   returned_at: string | null;
+  /** La última novedad de Swayp («Swayp · Bodega no despacho mercancía (20)»). */
+  reported_status?: string | null;
+  /** Quién pasó la custodia: nulo si la puso la sincronización de Swayp. */
+  custody_transferred_by?: string | null;
 }
 
 export interface SwaypOrderRow {
@@ -504,6 +529,10 @@ export interface SwaypInput {
   names: Readonly<Record<string, string>>;
   /** Las tiendas a la vista, con su nombre. */
   storeNames: Readonly<Record<string, string>>;
+  /** La entrega a Swayp de «Hoy» (su manifiesto y TODAS sus filas), si se abrió. */
+  handover?: { manifest: SwaypHandoverManifestRow; items: readonly SwaypHandoverItemRow[] } | null;
+  /** Lo resolvió el servidor: `dispatch.manage`. */
+  canHandover?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -915,6 +944,7 @@ interface Ctx {
   callsByShipment: Map<string, SwaypCallRow[]>;
   names: Readonly<Record<string, string>>;
   storeNames: Readonly<Record<string, string>>;
+  handover: SwaypHandover | null;
 }
 
 function guideBase(s: SwaypShipmentRow, kind: SwaypZoneKind, day: string, ctx: Ctx): SwaypGuideRow & { origin: SwaypGuideOrigin } {
@@ -935,7 +965,9 @@ function guideBase(s: SwaypShipmentRow, kind: SwaypZoneKind, day: string, ctx: C
   let swaypLine: string | null = null;
   if (kind === "hoy") {
     const label = s.swayp_state != null ? SWAYP_STATES[s.swayp_state] ?? `estado ${s.swayp_state}` : SWAYP_STATE_UNKNOWN;
-    swaypLine = SWAYP_HOY_STATE_LINE(label, timeOn(s.custody_transferred_at ?? s.dispatched_at, ctx.today));
+    // Sin hora: las horas de Swayp llegan sin zona horaria y Kapta las guarda con
+    // 5 h de desfase (MOM §9.1, «Entrega a Swayp»).
+    swaypLine = SWAYP_HOY_STATE_LINE(label, null);
   }
   return {
     shipmentId: s.id,
@@ -957,6 +989,7 @@ function guideBase(s: SwaypShipmentRow, kind: SwaypZoneKind, day: string, ctx: C
     late,
     chips,
     swaypLine,
+    handoverLine: kind === "hoy" ? swaypHandoverRowLine(ctx.handover, s) : null,
     labelHref: swaypLabelsHref([s.id]),
     origin,
   };
@@ -968,10 +1001,20 @@ function armadaLine(row: Pick<SwaypGuideRow, "code" | "customerName" | "district
   return [row.code, when ? `armada ${when}` : "armada", readyBy, row.customerName, row.district].filter(Boolean).join(" · ");
 }
 
-/** Qué hacer con una falta: la de hoy que sigue aquí, crítico; la que Swayp ya tomó (hoy o antes de su día), avisar. */
-function faltaActionLine(kind: SwaypZoneKind, taken: boolean): SwaypTone | null {
-  if (taken) return { kind: "warn", text: SWAYP_HOY_FALTA_TOMADA };
-  return kind === "hoy" ? { kind: "crit", text: SWAYP_HOY_FALTA_AQUI } : null;
+/**
+ * Qué hacer con una falta. En «Próximo», solo si Swayp ya la tomó (avisar). En
+ * «Hoy», frente a la entrega (fase 3): lo que la entrega ya dice de ella (no
+ * salió, sin entrega registrada) o, mientras Swayp no pasa, armarla y
+ * entregarla en «Entregar a Swayp» o marcarla «No sale». Swayp carga su ruta
+ * hacia las 05:45, así que en «Hoy» que la haya «tomado» es lo normal.
+ */
+function faltaActionLine(kind: SwaypZoneKind, taken: boolean, handoverLine: SwaypTone | null, handover: SwaypHandover | null): SwaypTone | null {
+  if (kind === "hoy") {
+    if (handover?.state === "no_vino") return null;
+    if (handoverLine) return handoverLine;
+    return { kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA };
+  }
+  return taken ? { kind: "warn", text: SWAYP_HOY_FALTA_TOMADA } : null;
 }
 
 function stripOrigin<T extends { origin: unknown }>(row: T): Omit<T, "origin"> {
@@ -1111,8 +1154,11 @@ function buildZone(kind: SwaypZoneKind, day: string, ctx: Ctx): SwaypZone {
       ],
       newSalida,
       taken,
-      where: taken ? null : where,
-      actionLine: faltaActionLine(kind, taken),
+      // En «Hoy» el paradero sirve aunque Swayp la haya cargado: la entrega la arma al escanearla.
+      where: taken && kind !== "hoy" ? null : where,
+      actionLine: faltaActionLine(kind, taken, base.handoverLine, ctx.handover),
+      // La falta lleva lo de la entrega en su `actionLine`.
+      handoverLine: null,
     });
   }
 
@@ -1169,7 +1215,8 @@ function buildZone(kind: SwaypZoneKind, day: string, ctx: Ctx): SwaypZone {
     armadas,
     salieron,
     revisar,
-    note: kind === "hoy" ? SWAYP_HOY_NOTE : null,
+    note: kind === "hoy" ? ctx.handover?.statusLine ?? SWAYP_HOY_NOTE : null,
+    entrega: kind === "hoy" ? ctx.handover : null,
     empty: SWAYP_EMPTY(dayLabel),
     provincia: {
       total: provinciaTotal,
@@ -1238,6 +1285,7 @@ export function buildWarehouseSwayp(input: SwaypInput, now: Date): WarehouseSway
     callsByShipment,
     names: input.names,
     storeNames: input.storeNames,
+    handover: input.handover ? buildSwaypHandover(input.handover.manifest, input.handover.items, input.names) : null,
   };
   const days = swaypZoneDays(today);
   return {
@@ -1247,6 +1295,7 @@ export function buildWarehouseSwayp(input: SwaypInput, now: Date): WarehouseSway
     hoy: days.hoy ? buildZone("hoy", days.hoy, ctx) : null,
     proximo: buildZone("proximo", days.proximo, ctx),
     showStore: Object.keys(input.storeNames).length > 1,
+    canHandover: input.canHandover ?? false,
   };
 }
 

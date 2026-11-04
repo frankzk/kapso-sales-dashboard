@@ -23,6 +23,38 @@ import {
 } from "@/lib/dispatch";
 import { operationFitsCourier, routeKindForCourier } from "@/lib/dispatch-routing";
 import { courierLabelFor } from "@/lib/couriers/catalog";
+import { limaClock, nextDay } from "@/lib/grupo-gf-courier";
+import { isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
+import { swaypDayLabel, swaypExitReason } from "@/lib/warehouse-swayp";
+import {
+  SWAYP_HANDOVER_ALREADY,
+  SWAYP_HANDOVER_CLOSED,
+  SWAYP_HANDOVER_CLOSED_STATES,
+  SWAYP_HANDOVER_EMPTY,
+  SWAYP_HANDOVER_NOT_DISPATCH_DAY,
+  SWAYP_HANDOVER_NOT_FOUND,
+  SWAYP_HANDOVER_NO_VINO_DONE,
+  SWAYP_HANDOVER_OTRA_RUTA,
+  SWAYP_HANDOVER_RESTORED,
+  SWAYP_HANDOVER_ROUTE_LABEL,
+  SWAYP_HANDOVER_SCAN_NOTE,
+  SWAYP_HANDOVER_SCANNED,
+  SWAYP_HANDOVER_STALE_REASON,
+  SWAYP_HANDOVER_UNDONE,
+  SWAYP_MANIFEST_FROM_ALMACEN,
+  SWAYP_NO_SALE_AUTO_CLOSED,
+  SWAYP_NO_SALE_DONE,
+  SWAYP_NO_VINO_REASON,
+  SWAYP_SCAN_USE_HANDOVER,
+  swaypCloseError,
+  swaypHandoverVerdict,
+  swaypNoSaleError,
+  swaypNoSaleNote,
+  swaypNoSaleText,
+  swaypStateName,
+  type SwaypHandoverShipment,
+  type SwaypNoSaleCode,
+} from "@/lib/swayp-handover";
 import { decideReception } from "@/lib/returns-reception";
 import { gfReturnDecision } from "@/lib/gf-returns-scan";
 import { gfOfficeReceiptNotice, readSaleEnded } from "@/lib/gf-office-receipt";
@@ -246,6 +278,23 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
   const cancelledReady = await cancelledScanNotice(createAdminSupabase(), shipment.order_id);
   if (cancelledReady) return { error: cancelledReady };
   if (shipment.custody_state !== "empresa") {
+    // Swayp carga su ruta hacia las 05:45 y la sincronización pone custodia
+    // `courier` sin persona antes de que el chofer pase a las 07:00: esa caja
+    // sigue aquí y se arma escaneándola en «Entregar a Swayp» (MOM §9.1).
+    if (courierKey(shipment.courier) === "fenix" && shipment.custody_state === "courier") {
+      const { data: custody } = await createAdminSupabase()
+        .from("shipments")
+        .select("custody_transferred_by,swayp_state")
+        .eq("id", shipment.id)
+        .maybeSingle();
+      const row = custody as { custody_transferred_by: string | null; swayp_state: number | null } | null;
+      // Solo la de Lima que Swayp tiene cargada y aún no cerró (1 a 6): provincia
+      // la arma Swayp, y una cerrada no se entrega.
+      if (row && !row.custody_transferred_by && row.swayp_state != null && row.swayp_state >= 1 && row.swayp_state <= 6
+        && (await operationForOrder(shipment.order_id)) === "lima") {
+        return { error: SWAYP_SCAN_USE_HANDOVER };
+      }
+    }
     // La caja que volvió con el rótulo de Tanders encima: se nombra la salida
     // con la que sale. No hay alias, el QR viejo no se marca listo (§29.4).
     return { error: (await oldLabelError(shipment, "pedido")) ?? "Ese paquete ya no figura en custodia de la empresa." };
@@ -599,6 +648,8 @@ export async function createDispatchManifest(input: z.input<typeof createManifes
   const parsed = createManifestSchema.safeParse(input);
   if (!parsed.success) return { error: "Completa el courier y la fecha de la ruta." };
   if (courierKey(parsed.data.courier) === "propio") return { error: "Las rutas de Grupo GF se crean al tomar y asignar pedidos desde Grupo GF Courier." };
+  // La entrega de Swayp Lima la abre Almacén › «Swayp por salir» (MOM §9.1, fase 3).
+  if (courierKey(parsed.data.courier) === "fenix") return { error: SWAYP_MANIFEST_FROM_ALMACEN };
   const { sb, user } = await currentUser();
   const { data: store } = await sb.from("stores").select("org_id").limit(1).maybeSingle();
   if (!store?.org_id) return { error: "No tienes una organización disponible." };
@@ -685,6 +736,7 @@ export async function addShipmentToManifest(manifestId: string, code: string): P
   const [manifest, scan] = await Promise.all([visibleManifest(manifestId), findScanCandidates(code)]);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (courierKey(manifest.courier) === "propio") return { error: "Agrega los pedidos desde Grupo GF Courier para conservar la solicitud y la tarifa." };
+  if (courierKey(manifest.courier) === "fenix") return { error: SWAYP_MANIFEST_FROM_ALMACEN };
   if (scan.hold) return { error: scan.hold };
   const pick = pickDispatchScanTarget(scan.candidates);
   if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
@@ -846,11 +898,16 @@ export async function addShipmentsToManifest(
 export async function handOverToCourier(
   manifestId: string,
   receivedBy: string,
+  details?: { driverCount?: number },
 ): Promise<DispatchActionResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("dispatch.manage")) return { error: "No tienes permiso para cerrar rutas." };
   const name = receivedBy.trim();
   if (name.length < 3) return { error: "Escribe el nombre de quien recoge." };
+  const driverCount = details?.driverCount;
+  if (driverCount !== undefined && (!Number.isInteger(driverCount) || driverCount < 0 || driverCount > 999)) {
+    return { error: "El conteo de cajas no es válido." };
+  }
   const manifest = await visibleManifest(manifestId);
   if (!manifest) return { error: "Ruta no encontrada o sin acceso." };
   if (needsRiderCheck(manifest.kind)) {
@@ -879,7 +936,7 @@ export async function handOverToCourier(
     manifestId,
     actor: user.id,
     kind: "handed_to_courier",
-    payload: { received_by: name },
+    payload: driverCount !== undefined ? { received_by: name, driver_count: driverCount } : { received_by: name },
   });
   revalidatePath(DISPATCH_PATH);
   revalidatePath("/dashboard/pedidos");
@@ -1153,4 +1210,536 @@ export async function cancelDispatchManifest(manifestId: string, reason: string)
   await auditDispatch({ orgId: manifest.org_id, manifestId, actor: user.id, kind: "manifest_cancelled", payload: { reason: cleanReason } });
   revalidatePath(DISPATCH_PATH);
   return { notice: "Ruta cancelada; sus paquetes quedaron libres para otra ruta." };
+}
+
+// ---------------------------------------------------------------------------
+// Entrega a Swayp · Lima (fase 3, owner 04-11-2026; MOM §9.1)
+//
+// Swayp recoge las cajas de Lima hacia las 07:00 del día de despacho (E1). La
+// entrega es una ruta `entrega_courier` por día (un solo cotejo, caja por caja
+// delante del chofer, y se cierra con su nombre y su conteo: E2). Manda lo
+// cargado en Swayp (E3): nada de aquí cambia el estado que reporta Swayp; el
+// cierre solo pone la custodia que Swayp ya dio, con la persona y la hora
+// reales. Lo que no sale lleva motivo y explicación (E4). Las reglas puras
+// están en lib/swayp-handover.ts.
+// ---------------------------------------------------------------------------
+
+const SWAYP_LOT_COLUMNS =
+  "id,store_id,order_id,courier,output_code,guide_code,swayp_state,custody_state,custody_transferred_by," +
+  "next_followup_at,preparation_state,delivery_status,status_category";
+
+interface SwaypLotShipment extends SwaypHandoverShipment {
+  id: string;
+  store_id: string;
+  order_id: string | null;
+  preparation_state: string | null;
+  delivery_status: string | null;
+  status_category: string | null;
+}
+
+type SwaypHandoverResult = DispatchActionResult & { manifestId?: string };
+
+interface SwaypHandoverContext {
+  user: { id: string };
+  orgId: string;
+  today: string;
+}
+
+/** Permiso, organización y día: la entrega es siempre la de HOY en Lima, y solo si hoy Swayp despacha. */
+async function swaypHandoverContext(): Promise<SwaypHandoverContext | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("dispatch.manage")) return { error: "No tienes permiso para entregar cajas a Swayp." };
+  const today = limaClock(new Date()).day;
+  if (!isSwaypDispatchDay(today)) return { error: SWAYP_HANDOVER_NOT_DISPATCH_DAY };
+  const { sb, user } = await currentUser();
+  const { data: store } = await sb.from("stores").select("org_id").limit(1).maybeSingle();
+  if (!store?.org_id) return { error: "No tienes una organización disponible." };
+  return { user, orgId: store.org_id as string, today };
+}
+
+/** La entrega abierta de hoy, con las mismas comprobaciones en cada acción. */
+async function openSwaypManifest(
+  ctx: SwaypHandoverContext,
+  manifestId: string,
+): Promise<DispatchManifest | { error: string }> {
+  const manifest = await visibleManifest(manifestId);
+  if (!manifest || manifest.org_id !== ctx.orgId || courierKey(manifest.courier) !== "fenix") return { error: SWAYP_HANDOVER_NOT_FOUND };
+  if (manifest.route_date !== ctx.today) return { error: "Esa entrega no es la de hoy." };
+  if (manifest.state === "in_custody") return { error: SWAYP_HANDOVER_CLOSED };
+  if (manifest.state === "cancelled") return { error: SWAYP_HANDOVER_NO_VINO_DONE };
+  return manifest;
+}
+
+/**
+ * El lote de Lima del día: las guías Swayp vivas con ese día de despacho, de
+ * todas las tiendas de la organización (misma regla que «Swayp por salir»:
+ * operación `lima`, sin motivo de salida, y que Swayp no haya cerrado).
+ */
+async function swaypHandoverLot(orgId: string, day: string): Promise<SwaypLotShipment[]> {
+  const admin = createAdminSupabase();
+  const { data: stores } = await admin.from("stores").select("id").eq("org_id", orgId);
+  const storeIds = ((stores ?? []) as { id: string }[]).map((store) => store.id);
+  if (!storeIds.length) return [];
+  const { data: rows } = await admin
+    .from("shipments")
+    .select(SWAYP_LOT_COLUMNS)
+    .in("store_id", storeIds)
+    .eq("courier", "fenix")
+    .gte("next_followup_at", `${day}T00:00:00.000Z`)
+    .lt("next_followup_at", `${nextDay(day)}T00:00:00.000Z`);
+  const shipments = (rows ?? []) as unknown as SwaypLotShipment[];
+  const orderIds = [...new Set(shipments.map((s) => s.order_id).filter((id): id is string => Boolean(id)))];
+  if (!orderIds.length) return [];
+  const [{ data: masters }, { data: cancelled }] = await Promise.all([
+    admin.from("order_master").select("order_id,macro_operation,general_status").in("order_id", orderIds),
+    admin.from("orders").select("id,cancelled_at").in("id", orderIds).not("cancelled_at", "is", null),
+  ]);
+  const cancelledAt = new Map(((cancelled ?? []) as { id: string; cancelled_at: string | null }[]).map((o) => [o.id, o.cancelled_at]));
+  const master = new Map(
+    ((masters ?? []) as { order_id: string; macro_operation: string | null; general_status: string | null }[]).map((m) => [m.order_id, m]),
+  );
+  return shipments.filter((s) => {
+    const order = s.order_id ? master.get(s.order_id) : undefined;
+    if (order?.macro_operation !== "lima") return false;
+    if (swaypExitReason(s, { general_status: order.general_status, cancelled_at: s.order_id ? cancelledAt.get(s.order_id) ?? null : null })) return false;
+    return swaypHandoverVerdict(s, { day, operation: "lima", courierLabel: "Swayp", dayLabelOf: swaypDayLabel }).ok;
+  });
+}
+
+interface SwaypItemRow {
+  id: string;
+  shipment_id: string;
+  store_id: string;
+  office_checked_at: string | null;
+  removed_at: string | null;
+}
+
+async function swaypItemRows(manifestId: string): Promise<SwaypItemRow[]> {
+  const { data } = await createAdminSupabase()
+    .from("dispatch_manifest_items")
+    .select("id,shipment_id,store_id,office_checked_at,removed_at")
+    .eq("manifest_id", manifestId);
+  return (data ?? []) as SwaypItemRow[];
+}
+
+/**
+ * Agrega a la entrega las guías del lote que todavía no tienen fila. Una que
+ * se marcó «No sale» conserva su fila (y su motivo): no se vuelve a meter sola.
+ * Devuelve los códigos agregados.
+ */
+async function reconcileSwaypHandover(manifestId: string, orgId: string, day: string, actor: string): Promise<string[]> {
+  const admin = createAdminSupabase();
+  const [lot, rows] = await Promise.all([swaypHandoverLot(orgId, day), swaypItemRows(manifestId)]);
+  const known = new Set(rows.map((row) => row.shipment_id));
+  const missing = lot.filter((s) => !known.has(s.id));
+  if (!missing.length) return [];
+  // Una salida activa en otra ruta no se mueve sola: se dice al escanearla.
+  const { data: elsewhere } = await admin
+    .from("dispatch_manifest_items")
+    .select("shipment_id")
+    .in("shipment_id", missing.map((s) => s.id))
+    .is("removed_at", null)
+    .neq("manifest_id", manifestId);
+  const busy = new Set(((elsewhere ?? []) as { shipment_id: string }[]).map((row) => row.shipment_id));
+  const candidates = missing.filter((s) => !busy.has(s.id));
+  // De a una: si otra pestaña agregó alguna al mismo tiempo (índice único de
+  // salida activa), esa se salta y las demás entran igual.
+  const added: SwaypLotShipment[] = [];
+  for (const s of candidates) {
+    const { error } = await admin
+      .from("dispatch_manifest_items")
+      .insert({ manifest_id: manifestId, shipment_id: s.id, store_id: s.store_id, added_by: actor });
+    if (!error) added.push(s);
+    else if (error.code !== "23505") throw new Error(error.message);
+  }
+  if (!added.length) return [];
+  await admin.from("dispatch_events").insert({
+    org_id: orgId,
+    manifest_id: manifestId,
+    actor,
+    kind: "package_added",
+    payload: { swayp_handover: true, shipments: added.map((s) => s.output_code ?? s.guide_code) },
+  });
+  return added.map((s) => s.output_code ?? s.guide_code ?? s.id);
+}
+
+/**
+ * Una entrega de un día anterior que nadie cerró (ni marcó «Swayp no vino")
+ * dejaría sus filas activas y trabaría las de hoy: se cancela sola, con su
+ * motivo, y sus cajas quedan libres (revisión del 04-11-2026).
+ */
+async function releaseStaleSwaypHandovers(orgId: string, today: string, actor: string): Promise<void> {
+  const admin = createAdminSupabase();
+  const { data } = await admin
+    .from("dispatch_manifests")
+    .select("id,route_date")
+    .eq("org_id", orgId)
+    .is("rider_id", null)
+    .ilike("courier", "fenix")
+    .lt("route_date", today)
+    .not("state", "in", "(in_custody,cancelled)");
+  for (const stale of (data ?? []) as { id: string; route_date: string }[]) {
+    const reason = SWAYP_HANDOVER_STALE_REASON(swaypDayLabel(stale.route_date));
+    const now = new Date().toISOString();
+    await admin
+      .from("dispatch_manifest_items")
+      .update({ removed_at: now, removed_by: actor, removal_reason: `Ruta cancelada: ${reason}` })
+      .eq("manifest_id", stale.id)
+      .is("removed_at", null);
+    await admin
+      .from("dispatch_manifests")
+      .update({ state: "cancelled", cancelled_at: now, cancelled_by: actor, cancellation_reason: reason })
+      .eq("id", stale.id);
+    await auditDispatch({ orgId, manifestId: stale.id, actor, kind: "manifest_cancelled", payload: { reason, swayp_handover: true, auto: true } });
+  }
+}
+
+/**
+ * Abre (o retoma) la entrega a Swayp de hoy y la concilia con el lote. Es
+ * idempotente: se puede llamar cada vez que se abre el panel.
+ */
+export async function openSwaypHandover(): Promise<SwaypHandoverResult> {
+  const ctx = await swaypHandoverContext();
+  if ("error" in ctx) return ctx;
+  await releaseStaleSwaypHandovers(ctx.orgId, ctx.today, ctx.user.id);
+  const admin = createAdminSupabase();
+  const { data: existing } = await admin
+    .from("dispatch_manifests")
+    .select("id,state,cancellation_reason")
+    .eq("org_id", ctx.orgId)
+    .eq("route_date", ctx.today)
+    .is("rider_id", null)
+    .ilike("courier", "fenix")
+    .order("created_at", { ascending: false });
+  const manifests = (existing ?? []) as { id: string; state: string; cancellation_reason: string | null }[];
+  let current = manifests.find((m) => m.state !== "cancelled") ?? null;
+  if (current?.state === "in_custody") return { error: SWAYP_HANDOVER_CLOSED, manifestId: current.id };
+  if (!current && manifests.some((m) => m.cancellation_reason === SWAYP_NO_VINO_REASON)) return { error: SWAYP_HANDOVER_NO_VINO_DONE };
+
+  if (!current) {
+    const lot = await swaypHandoverLot(ctx.orgId, ctx.today);
+    if (!lot.length) return { error: SWAYP_HANDOVER_EMPTY };
+    const { data, error } = await admin
+      .from("dispatch_manifests")
+      .insert({
+        org_id: ctx.orgId,
+        courier: "fenix",
+        kind: "entrega_courier",
+        route_date: ctx.today,
+        route_label: SWAYP_HANDOVER_ROUTE_LABEL,
+        rider_id: null,
+        driver_name: null,
+        created_by: ctx.user.id,
+      })
+      .select("id,state")
+      .single();
+    if (error) {
+      // Dos personas abrieron a la vez: la otra ya la creó (una ruta por courier y día, 0097).
+      if (error.code !== "23505") return { error: error.message };
+      const { data: again } = await admin
+        .from("dispatch_manifests")
+        .select("id,state")
+        .eq("org_id", ctx.orgId)
+        .eq("route_date", ctx.today)
+        .is("rider_id", null)
+        .ilike("courier", "fenix")
+        .neq("state", "cancelled")
+        .maybeSingle();
+      if (!again) return { error: error.message };
+      current = { id: again.id as string, state: again.state as string, cancellation_reason: null };
+    } else {
+      current = { id: data.id as string, state: data.state as string, cancellation_reason: null };
+      await auditDispatch({
+        orgId: ctx.orgId,
+        manifestId: current.id,
+        actor: ctx.user.id,
+        kind: "manifest_created",
+        payload: { courier: "fenix", routeDate: ctx.today, swayp_handover: true },
+      });
+    }
+  }
+
+  try {
+    await reconcileSwaypHandover(current.id, ctx.orgId, ctx.today, ctx.user.id);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "No pudimos armar la lista de la entrega.", manifestId: current.id };
+  }
+  await recalculateManifest(current.id, ctx.user.id);
+  revalidatePath(WAREHOUSE_PATH);
+  return { manifestId: current.id };
+}
+
+/** Marca escaneada una fila de la entrega y, si la caja no estaba armada, la arma (la custodia la puso Swayp o sigue en la empresa). */
+async function checkSwaypItem(
+  ctx: SwaypHandoverContext,
+  manifest: DispatchManifest,
+  itemId: string,
+  shipment: DispatchShipment,
+): Promise<string | null> {
+  const admin = createAdminSupabase();
+  const now = new Date().toISOString();
+  const { error } = await admin
+    .from("dispatch_manifest_items")
+    .update({ office_checked_at: now, office_checked_by: ctx.user.id })
+    .eq("id", itemId);
+  if (error) return error.message;
+  if (shipment.preparation_state !== "listo_despacho") {
+    await admin
+      .from("shipments")
+      .update({ preparation_state: "listo_despacho", ready_at: now, ready_by: ctx.user.id })
+      .eq("id", shipment.id)
+      .eq("courier", "fenix")
+      .in("custody_state", ["empresa", "courier"]);
+  }
+  await recalculateManifest(manifest.id, ctx.user.id);
+  await auditDispatch({
+    orgId: manifest.org_id,
+    manifestId: manifest.id,
+    shipment,
+    actor: ctx.user.id,
+    kind: "office_checked",
+    payload: { swayp_handover: true },
+    orderNote: SWAYP_HANDOVER_SCAN_NOTE,
+  });
+  if (shipment.order_id && shipment.preparation_state !== "listo_despacho") await recomputeOrderMasterSafe(admin, [shipment.order_id]);
+  return null;
+}
+
+/**
+ * El escaneo de la entrega: QR, rótulo, guía Swayp o número de pedido. Una caja
+ * del lote que entró después de abrir se agrega en el mismo escaneo; una que se
+ * había marcado «No sale» vuelve a la entrega. Lo que no es del lote no entra, y
+ * el texto dice por qué.
+ */
+export async function scanSwaypHandover(manifestId: string, code: string): Promise<SwaypHandoverResult> {
+  const ctx = await swaypHandoverContext();
+  if ("error" in ctx) return ctx;
+  const manifest = await openSwaypManifest(ctx, manifestId);
+  if ("error" in manifest) return manifest;
+  const scan = await findScanCandidates(code);
+  if (!scan.candidates.length) return { error: SCAN_NOT_FOUND };
+  const admin = createAdminSupabase();
+  const cancelledCheck = await cancelledScanNotice(admin, scan.candidates[0]!.order_id);
+  if (cancelledCheck) return { error: cancelledCheck };
+  if (scan.hold) return { error: scan.hold };
+  const rows = await swaypItemRows(manifestId);
+  const byShipment = new Map(rows.map((row) => [row.shipment_id, row]));
+  const pick = pickDispatchScanTarget(scan.candidates, (candidate) => byShipment.has(candidate.id));
+  if (pick.kind === "ambigua") return { error: ambiguousScanError(pick.options) };
+  if (pick.kind === "ninguna") return { error: SCAN_NOT_FOUND };
+  const shipment = pick.shipment;
+  const label = dispatchScanLabel(shipment);
+  const item = byShipment.get(shipment.id);
+
+  if (item?.office_checked_at && !item.removed_at) return { notice: SWAYP_HANDOVER_ALREADY(label), shipment, manifestId };
+
+  // Si sigue siendo del lote de hoy: Swayp pudo cerrarla después de abrir la
+  // entrega, y entonces no se arma ni se entrega (revisión del 04-11-2026).
+  const { data: extra } = await admin.from("shipments").select(SWAYP_LOT_COLUMNS).eq("id", shipment.id).maybeSingle();
+  if (!extra) return { error: SCAN_NOT_FOUND };
+  const verdict = swaypHandoverVerdict(extra as unknown as SwaypLotShipment, {
+    day: ctx.today,
+    operation: await operationForOrder(shipment.order_id),
+    courierLabel: courierLabelFor(shipment.courier),
+    dayLabelOf: swaypDayLabel,
+  });
+  if (verdict.ok && item && !item.removed_at) {
+    const failed = await checkSwaypItem(ctx, manifest, item.id, shipment);
+    if (failed) return { error: failed };
+    revalidatePath(WAREHOUSE_PATH);
+    return { notice: SWAYP_HANDOVER_SCANNED(label), shipment, manifestId };
+  }
+  if (!verdict.ok) {
+    // El rótulo viejo de la otra salida del pedido: se nombra la de Swayp (§29.4).
+    const oldLabel = courierKey(shipment.courier) !== "fenix" ? await oldLabelError(shipment, "caja", manifestId) : null;
+    return { error: oldLabel ?? verdict.error };
+  }
+  if (item) {
+    const { error } = await admin
+      .from("dispatch_manifest_items")
+      .update({ removed_at: null, removed_by: null, removal_reason: null, office_checked_at: null, office_checked_by: null })
+      .eq("id", item.id);
+    if (error) return { error: error.message };
+    const failed = await checkSwaypItem(ctx, manifest, item.id, shipment);
+    if (failed) return { error: failed };
+    revalidatePath(WAREHOUSE_PATH);
+    return { notice: SWAYP_HANDOVER_RESTORED(label), shipment, manifestId };
+  }
+  const { data: elsewhere } = await admin
+    .from("dispatch_manifest_items")
+    .select("id")
+    .eq("shipment_id", shipment.id)
+    .is("removed_at", null)
+    .limit(1);
+  if (elsewhere?.length) return { error: SWAYP_HANDOVER_OTRA_RUTA };
+  const { data: inserted, error } = await admin
+    .from("dispatch_manifest_items")
+    .insert({ manifest_id: manifestId, shipment_id: shipment.id, store_id: shipment.store_id, added_by: ctx.user.id })
+    .select("id")
+    .single();
+  if (error) return { error: error.code === "23505" ? SWAYP_HANDOVER_OTRA_RUTA : error.message };
+  const failed = await checkSwaypItem(ctx, manifest, inserted.id as string, shipment);
+  if (failed) return { error: failed };
+  revalidatePath(WAREHOUSE_PATH);
+  return { notice: SWAYP_HANDOVER_SCANNED(label), shipment, manifestId };
+}
+
+async function swaypItemShipment(shipmentId: string): Promise<DispatchShipment | null> {
+  const { data } = await createAdminSupabase().from("shipments").select(DISPATCH_SHIPMENT_COLUMNS).eq("id", shipmentId).maybeSingle();
+  return (data as unknown as DispatchShipment | null) ?? null;
+}
+
+/** «No sale»: la caja se queda en la oficina con su motivo y su explicación (E4). */
+export async function markSwaypNoSale(
+  manifestId: string,
+  shipmentId: string,
+  reasonCode: string,
+  detail: string,
+): Promise<SwaypHandoverResult> {
+  const invalid = swaypNoSaleError(reasonCode, detail);
+  if (invalid) return { error: invalid };
+  const ctx = await swaypHandoverContext();
+  if ("error" in ctx) return ctx;
+  const manifest = await openSwaypManifest(ctx, manifestId);
+  if ("error" in manifest) return manifest;
+  const item = (await swaypItemRows(manifestId)).find((row) => row.shipment_id === shipmentId && !row.removed_at);
+  if (!item) return { error: "Esa caja no está en la entrega de hoy." };
+  const shipment = await swaypItemShipment(shipmentId);
+  if (!shipment) return { error: "Paquete no encontrado." };
+  const text = swaypNoSaleText(reasonCode as SwaypNoSaleCode, detail);
+  const admin = createAdminSupabase();
+  const { error } = await admin
+    .from("dispatch_manifest_items")
+    .update({
+      removed_at: new Date().toISOString(),
+      removed_by: ctx.user.id,
+      removal_reason: text,
+      office_checked_at: null,
+      office_checked_by: null,
+    })
+    .eq("id", item.id);
+  if (error) return { error: error.message };
+  await recalculateManifest(manifestId, ctx.user.id);
+  await auditDispatch({
+    orgId: manifest.org_id,
+    manifestId,
+    shipment,
+    actor: ctx.user.id,
+    kind: "package_removed",
+    payload: { reason: text, reason_code: reasonCode, detail: detail.trim() || null, swayp_handover: true },
+    orderNote: swaypNoSaleNote(text),
+  });
+  revalidatePath(WAREHOUSE_PATH);
+  return { notice: SWAYP_NO_SALE_DONE(dispatchScanLabel(shipment)), shipment, manifestId };
+}
+
+/** Deshace un «No sale» antes de cerrar: la caja vuelve a «por entregar» (si Swayp no la cerró entretanto). */
+export async function undoSwaypNoSale(manifestId: string, shipmentId: string): Promise<SwaypHandoverResult> {
+  const ctx = await swaypHandoverContext();
+  if ("error" in ctx) return ctx;
+  const manifest = await openSwaypManifest(ctx, manifestId);
+  if ("error" in manifest) return manifest;
+  const item = (await swaypItemRows(manifestId)).find((row) => row.shipment_id === shipmentId && row.removed_at);
+  if (!item) return { error: "Esa caja no está marcada «No sale»." };
+  const admin = createAdminSupabase();
+  const { data: extra } = await admin.from("shipments").select(SWAYP_LOT_COLUMNS).eq("id", shipmentId).maybeSingle();
+  const shipment = await swaypItemShipment(shipmentId);
+  if (!extra || !shipment) return { error: "Paquete no encontrado." };
+  const verdict = swaypHandoverVerdict(extra as unknown as SwaypLotShipment, {
+    day: ctx.today,
+    operation: await operationForOrder(shipment.order_id),
+    courierLabel: courierLabelFor(shipment.courier),
+    dayLabelOf: swaypDayLabel,
+  });
+  if (!verdict.ok) return { error: verdict.error };
+  const { error } = await admin
+    .from("dispatch_manifest_items")
+    .update({ removed_at: null, removed_by: null, removal_reason: null })
+    .eq("id", item.id);
+  if (error) return { error: error.code === "23505" ? SWAYP_HANDOVER_OTRA_RUTA : error.message };
+  await recalculateManifest(manifestId, ctx.user.id);
+  await auditDispatch({
+    orgId: manifest.org_id,
+    manifestId,
+    shipment,
+    actor: ctx.user.id,
+    kind: "package_added",
+    payload: { swayp_handover: true, undo_no_sale: true },
+    orderNote: "Vuelve a la entrega a Swayp: se deshizo el «No sale».",
+  });
+  revalidatePath(WAREHOUSE_PATH);
+  return { notice: SWAYP_HANDOVER_UNDONE(dispatchScanLabel(shipment)), shipment, manifestId };
+}
+
+/**
+ * Cierra la entrega con el nombre del chofer y su conteo (E2). Antes vuelve a
+ * leer el lote (una guía que entró después de abrir no se queda fuera sin que
+ * nadie la vea) y retira con motivo lo que Swayp cerró entretanto, para que el
+ * cierre nunca pise una custodia `retorno`.
+ */
+export async function closeSwaypHandover(
+  manifestId: string,
+  driverName: string,
+  driverCount: number,
+): Promise<SwaypHandoverResult> {
+  const ctx = await swaypHandoverContext();
+  if ("error" in ctx) return ctx;
+  await releaseStaleSwaypHandovers(ctx.orgId, ctx.today, ctx.user.id);
+  const manifest = await openSwaypManifest(ctx, manifestId);
+  if ("error" in manifest) return manifest;
+  const admin = createAdminSupabase();
+  const [lot, rows] = await Promise.all([swaypHandoverLot(ctx.orgId, ctx.today), swaypItemRows(manifestId)]);
+  const known = new Set(rows.map((row) => row.shipment_id));
+  const newInLot = lot.filter((s) => !known.has(s.id)).map((s) => s.output_code ?? s.guide_code ?? s.id);
+
+  const active = rows.filter((row) => !row.removed_at);
+  if (active.length) {
+    const { data: current } = await admin.from("shipments").select(SWAYP_LOT_COLUMNS).in("id", active.map((row) => row.shipment_id));
+    for (const s of (current ?? []) as unknown as SwaypLotShipment[]) {
+      const closed = (s.swayp_state != null && SWAYP_HANDOVER_CLOSED_STATES.has(s.swayp_state))
+        || s.custody_state === "retorno" || s.custody_state === "devuelto";
+      if (!closed) continue;
+      const row = active.find((r) => r.shipment_id === s.id)!;
+      const text = SWAYP_NO_SALE_AUTO_CLOSED(swaypStateName(s.swayp_state));
+      await admin
+        .from("dispatch_manifest_items")
+        .update({ removed_at: new Date().toISOString(), removed_by: ctx.user.id, removal_reason: text, office_checked_at: null, office_checked_by: null })
+        .eq("id", row.id);
+      const shipment = await swaypItemShipment(s.id);
+      await auditDispatch({
+        orgId: manifest.org_id,
+        manifestId,
+        shipment,
+        actor: ctx.user.id,
+        kind: "package_removed",
+        payload: { reason: text, reason_code: "otro", swayp_handover: true, auto: true },
+        orderNote: swaypNoSaleNote(text),
+      });
+      row.removed_at = "now";
+    }
+  }
+  const stillActive = rows.filter((row) => !row.removed_at);
+  const scanned = stillActive.filter((row) => row.office_checked_at).length;
+  const invalid = swaypCloseError({ newInLot, active: stillActive.length, scanned, driverName, driverCount });
+  if (invalid) {
+    await recalculateManifest(manifestId, ctx.user.id);
+    return { error: invalid };
+  }
+  await recalculateManifest(manifestId, ctx.user.id);
+  const closed = await handOverToCourier(manifestId, driverName.trim(), { driverCount });
+  if (closed.error) return closed;
+  revalidatePath(WAREHOUSE_PATH);
+  return { notice: closed.notice, manifestId };
+}
+
+/** «Swayp no vino»: la entrega del día se cancela con ese motivo y las cajas se quedan en la oficina. */
+export async function markSwaypNoVino(manifestId: string): Promise<SwaypHandoverResult> {
+  const ctx = await swaypHandoverContext();
+  if ("error" in ctx) return ctx;
+  const manifest = await openSwaypManifest(ctx, manifestId);
+  if ("error" in manifest) return manifest;
+  const result = await cancelDispatchManifest(manifestId, SWAYP_NO_VINO_REASON);
+  if (result.error) return result;
+  revalidatePath(WAREHOUSE_PATH);
+  return { notice: SWAYP_NO_VINO_REASON + ": las cajas se quedan en la oficina.", manifestId };
 }
