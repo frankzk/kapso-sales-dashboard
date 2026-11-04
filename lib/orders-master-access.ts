@@ -604,7 +604,9 @@ export interface OrderMasterDetail {
   /**
    * Manifiestos de devolución (0307): por salida, sus líneas («Recibida en
    * Devolución · Alexis · 04/11», «Faltó en…», «Incidencia en…»). Vacío sin la
-   * 0307 o si la salida nunca pasó por uno.
+   * 0307 o si la salida nunca pasó por uno. Lo agrega `loadOrderDetail`
+   * (app/dashboard/pedidos/actions.ts): el cargador es server-only y este
+   * módulo también entra al bundle del cliente (orders-master.tsx).
    */
   returnManifestEntries?: Record<string, ReturnManifestDrawerEntry[]>;
   /**
@@ -1205,7 +1207,7 @@ export async function getOrderMasterDetail(
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments, returnManifestEntries] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1239,14 +1241,6 @@ export async function getOrderMasterDetail(
       },
       () => null,
     ),
-    // El historial de manifiestos de devolución de cada salida: un dato más de
-    // la salida, no del pedido. Si falla, la ficha sale sin él.
-    // Import diferido: el cargador es server-only (resolveAgentNames) y este
-    // módulo lo importan pruebas que no lo necesitan.
-    import("@/lib/return-manifest-access").then(({ returnManifestEntriesForShipments }) => returnManifestEntriesForShipments(guides.map((g) => g.id))).catch((cause) => {
-      console.error("[order-detail] returnManifestEntries", orderId, cause);
-      return {} as Record<string, ReturnManifestDrawerEntry[]>;
-    }),
   ]);
   const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
   return {
@@ -1259,7 +1253,6 @@ export async function getOrderMasterDetail(
     aliclikOutlook,
     tasks,
     gfDeliveries,
-    returnManifestEntries,
     gfCostTariffGap,
     shopifyCancelledAt: orderRow?.cancelled_at ?? null,
     legacySaleCancelledAt: legacySaleCancelledAt(events),

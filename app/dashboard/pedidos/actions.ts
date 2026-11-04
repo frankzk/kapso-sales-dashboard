@@ -11,6 +11,7 @@
 // gestiona despachos ni asignaciones: eso sigue en Repro Provincia.
 
 import { revalidatePath } from "next/cache";
+import { returnManifestEntriesForShipments } from "@/lib/return-manifest-access";
 import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
@@ -256,7 +257,13 @@ export async function loadOrderDetail(
     if (!ctx) return { error: "Sin acceso a este pedido." };
     const detail = await getOrderMasterDetail(orderId);
     if (!detail) return { error: "No encontrado." };
-    return { detail: { ...detail, browserCallEnabled: webrtcConfigFromEnv() !== null } };
+    // El historial de manifiestos de devolución de cada salida (0307). Si
+    // falla, la ficha sale sin él.
+    const returnManifestEntries = await returnManifestEntriesForShipments(detail.guides.map((g) => g.id)).catch((cause) => {
+      console.error("[order-detail] returnManifestEntries", orderId, cause);
+      return {};
+    });
+    return { detail: { ...detail, returnManifestEntries, browserCallEnabled: webrtcConfigFromEnv() !== null } };
   } catch (cause) {
     // El drawer enseña este texto y nada más, así que tiene que decir la verdad:
     // "No encontrado" solo cuando la base respondió que no hay fila. Si respondió

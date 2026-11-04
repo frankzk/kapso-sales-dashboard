@@ -124,9 +124,13 @@ describe("Despacho del día: «Nuevo manifiesto de devolución» por motorizado"
 
 describe("el drawer del pedido: el historial de manifiestos de la salida", () => {
   it("se lee con el cargador del backend y se pinta bajo la salida", () => {
+    // Lo carga la acción del servidor: lib/orders-master-access.ts entra al
+    // bundle del cliente (orders-master.tsx) y el cargador es server-only.
+    const action = read("app/dashboard/pedidos/actions.ts");
+    expect(action).toContain("returnManifestEntriesForShipments(detail.guides.map((g) => g.id))");
     const loader = read("lib/orders-master-access.ts");
-    expect(loader).toContain("returnManifestEntriesForShipments(guides.map((g) => g.id))");
-    expect(loader).toContain('import("@/lib/return-manifest-access")');
+    for (const m of loader.matchAll(/^import (.*) from "@\/lib\/return-manifest-access";$/gm)) expect(m[1]).toMatch(/^type /);
+    expect(loader).not.toContain('import("@/lib/return-manifest-access")');
     const drawer = read("components/order-drawer.tsx");
     expect(drawer).toContain("<ReturnManifestHistory entries={detail.returnManifestEntries?.[g.id] ?? []} />");
     expect(drawer).toContain("<Badge tone={RETURN_MANIFEST_LINE_TONE[e.outcome]} wrap>{e.text}</Badge>");
