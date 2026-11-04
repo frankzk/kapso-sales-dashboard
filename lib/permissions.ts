@@ -178,6 +178,11 @@ export const PERMISSIONS = [
   "stores.manage", // Tiendas: conectar, ajustes, ciclo de confirmación y procesos masivos de la tienda
   "stock.manage", // Stock Swayp y Fénix: cargar, mover e importar inventario
   "reports.view", // Consolidado, panel de cada tienda y productividad de todo el equipo
+  // Panel «Automatizaciones» (MOM §40, 04-11-2026): encender y apagar lo que
+  // crea guías, llama o escribe a clientas sin que una persona lo dispare,
+  // incluidos los reintentos Aliclik automáticos de Lima. Decisión del owner:
+  // es suyo y lo da él persona por persona; un admin no lo trae.
+  "automations.manage",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -244,6 +249,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "stores.manage": "Administrar tiendas",
   "stock.manage": "Manejar stock de Swayp y Fénix",
   "reports.view": "Ver reportes del negocio",
+  "automations.manage": "Encender y apagar automatizaciones",
 };
 
 /** Lo que deja hacer cada permiso, en una línea que se lee sin pasar el ratón. */
@@ -299,6 +305,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "stores.manage": "Conectar Shopify, los ajustes de cada tienda y su ciclo de confirmación.",
   "stock.manage": "Cargar, mover e importar el inventario de los almacenes de Swayp y Fénix.",
   "reports.view": "Consolidado, panel de cada tienda y productividad de todo el equipo.",
+  "automations.manage": "Encender lo que crea guías, llama o escribe a clientas solo, desde el panel de Automatizaciones.",
 };
 
 /**
@@ -373,7 +380,7 @@ export const PERMISSION_AREAS = [
   {
     key: "administracion",
     label: "Administración",
-    permissions: ["team.manage", "stores.manage", "costs.manage", "leads.map_ads", "reports.view"],
+    permissions: ["team.manage", "stores.manage", "costs.manage", "leads.map_ads", "reports.view", "automations.manage"],
   },
 ] as const satisfies readonly { key: string; label: string; permissions: readonly Permission[] }[];
 
@@ -521,6 +528,16 @@ export const GRANTED_ONE_BY_ONE = [
     // (decisión del owner, 26-10-2026, MOM §38.15).
     withAdminRole: true,
     // Anular la venta en la tienda: lo concede el dueño, no un admin.
+    ownerOnly: true,
+  },
+  {
+    permission: "automations.manage",
+    label: PERMISSION_LABEL["automations.manage"],
+    description: PERMISSION_HELP["automations.manage"],
+    // Sin nadie con la casilla, las automatizaciones siguen como estaban: el
+    // dueño lo conserva siempre y nada se queda parado.
+    lastOneMatters: false,
+    // Guías, llamadas y mensajes que salen sin persona (MOM §40): lo da el dueño.
     ownerOnly: true,
   },
 ] as const satisfies readonly {

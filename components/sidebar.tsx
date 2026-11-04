@@ -13,6 +13,7 @@ import {
 } from "react";
 import { cn } from "@/components/ui";
 import {
+  IconBot,
   IconChat,
   IconClipboard,
   IconMoney,
@@ -59,9 +60,11 @@ export interface NavAccess {
   team: boolean;
   /** El historial de Shopify (MOM §37): lo mismo que bajar la base de pedidos. */
   history: boolean;
+  /** El panel «Automatizaciones» (MOM §40): `automations.manage`, del dueño. */
+  automations: boolean;
 }
 
-const FULL_ACCESS: NavAccess = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true, history: true };
+const FULL_ACCESS: NavAccess = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true, history: true, automations: true };
 
 export function navItems(
   isVendedoraOnly: boolean,
@@ -127,6 +130,9 @@ export function navItems(
       ]
       : []),
     ...(access.team ? [{ href: "/dashboard/team", label: "Equipo", icon: IconUsers }] : []),
+    // Un solo lugar para encender y apagar lo que crea guías, llama o escribe
+    // a clientas sin persona (MOM §40). Junto a Equipo: es administración.
+    ...(access.automations ? [{ href: "/dashboard/automatizaciones", label: "Automatizaciones", icon: IconBot }] : []),
     ...(access.stores ? [{ href: "/dashboard/stores/new", label: "Conectar tienda", icon: IconPlug }] : []),
   ];
   if (canValidatePayments) {

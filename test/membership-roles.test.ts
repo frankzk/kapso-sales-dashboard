@@ -153,12 +153,13 @@ describe("el menú", () => {
       "/dashboard/urpi",
       "/dashboard/olva",
       "/dashboard/team",
+      "/dashboard/automatizaciones",
       "/dashboard/stores/new",
     ]);
   });
 
   it("Supervisión entra al panel completo y ve solo lo suyo", () => {
-    const items = navItems(false, false, false, { reports: true, catalog: false, mapAds: false, stores: false, costs: false, team: false, history: false });
+    const items = navItems(false, false, false, { reports: true, catalog: false, mapAds: false, stores: false, costs: false, team: false, history: false, automations: false });
     expect(hrefs(items)).toEqual([
       "/dashboard",
       "/dashboard/leads",

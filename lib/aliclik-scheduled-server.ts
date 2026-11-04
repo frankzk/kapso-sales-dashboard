@@ -74,7 +74,12 @@ function placeOf(row: OrderMasterRow): string | null {
   return [...new Set(parts)].join(", ") || null;
 }
 
-async function telegramTarget(
+/**
+ * A quién avisa una guía automática que falló: el grupo urgente de la tienda o,
+ * si no tiene, el del resumen diario. Exportada para el reintento automático de
+ * Lima (lib/lima-retry-auto-server.ts), que avisa al mismo destino.
+ */
+export async function telegramTarget(
   admin: SupabaseClient,
   storeId: string,
 ): Promise<{ token: string; chats: string; storeName: string } | null> {

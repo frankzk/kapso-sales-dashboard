@@ -200,22 +200,31 @@ describe("entrega 2: la bandeja «Aprobar» / «A Repro Lima»", () => {
   });
 
   const actions = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/repro-lima/retry-actions.ts"), "utf8");
+  // Desde la entrega 3 (04-11-2026) la cotización y la creación viven en el
+  // núcleo compartido con la pasada automática.
+  const core = readFileSync(resolve(process.cwd(), "lib/lima-retry-approve.ts"), "utf8");
 
   it("aprobar pide los reintentos y crear guías, y recalcula la cadena antes de crear", () => {
     expect(actions).toContain('perms.can("repro_lima.retries")');
     expect(actions).toContain('perms.can("aliclik.create_guide")');
     const approve = actions.slice(actions.indexOf("export async function approveAliclikRetry"));
-    // El orden: la cadena de ahora, otro día que el fallo, la cotización, la guía.
-    const order = ["readChain(orderId)", "if (!chain.ready)", "previewAliclikGuideFor(ctx", "createAliclikGuideFor(ctx"].map((t) => approve.indexOf(t));
+    // El orden: la cadena de ahora, otro día que el fallo, y recién el núcleo.
+    const order = ["readChain(orderId)", "if (!chain.ready)", "approveLimaRetry({"].map((t) => approve.indexOf(t));
     expect(order.every((i) => i > -1)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
+    // En el núcleo: la cotización antes de la guía.
+    const body = core.slice(core.indexOf("export async function approveLimaRetry"));
+    const coreOrder = ["previewAliclikGuideFor(ctx", "createAliclikGuideFor(ctx"].map((t) => body.indexOf(t));
+    expect(coreOrder.every((i) => i > -1)).toBe(true);
+    expect([...coreOrder].sort((x, y) => x - y)).toEqual(coreOrder);
     // Por el mismo camino que la ficha, con el motivo de la salida adicional de Lima.
-    expect(approve).toContain("motivoSalidaAdicional: `Reintento Aliclik ${chain.attempt} de ${chain.of} aprobado en Repro Lima.");
-    expect(approve).toContain("CHAIN_EVENT_KINDS.approved");
+    expect(body).toContain("`Reintento Aliclik ${chain.attempt} de ${chain.of} aprobado en Repro Lima. ${chain.failedText}.`");
+    expect(body).toContain("motivoSalidaAdicional: motive");
+    expect(body).toContain("CHAIN_EVENT_KINDS.approved");
   });
 
   it("sin ese transporte para la dirección pasa a Repro Lima; fuera de horario solo avisa", () => {
-    const approve = actions.slice(actions.indexOf("export async function approveAliclikRetry"));
+    const approve = core.slice(core.indexOf("export async function approveLimaRetry"));
     const missing = approve.slice(approve.indexOf("if (!courier) {"), approve.indexOf("if (!courier.selectable)"));
     expect(missing).toContain("CHAIN_EVENT_KINDS.dismissed");
     const closed = approve.slice(approve.indexOf("if (!courier.selectable)"), approve.indexOf("createAliclikGuideFor(ctx"));

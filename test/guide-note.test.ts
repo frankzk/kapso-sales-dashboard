@@ -19,6 +19,10 @@ describe("la nota de la guía dice quién la creó", () => {
     expect(guideCreatorPhrase(null, "confirmado_chatby")).toBe("automáticamente (confirmó por Chatby)");
   });
 
+  it("el reintento automático de la cadena de Lima lo dice (MOM §9.5, entrega 3, 04-11-2026)", () => {
+    expect(guideCreatorPhrase(null, "reintento_lima")).toBe("automáticamente (reintento Lima)");
+  });
+
   it("sin nombre que poner, no inventa uno", () => {
     expect(guideCreatorPhrase(null)).toBe("por el sistema");
     expect(guideCreatorPhrase("  ")).toBe("por el sistema");

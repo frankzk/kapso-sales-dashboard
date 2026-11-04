@@ -48,6 +48,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     costs: permissions.can("costs.manage"),
     team: permissions.can("team.manage"),
     history: permissions.can("data.export"),
+    automations: permissions.can("automations.manage"),
   };
   const roleLabel = isVendedoraOnly
     ? "Vendedora"

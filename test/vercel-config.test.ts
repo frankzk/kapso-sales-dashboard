@@ -94,7 +94,9 @@ describe("vercel.json", () => {
     // 32: cierre de stock Woo tras recepción e inventario, con turno recuperable (§38.18).
     // 33: confirmación automática por Chatby y su guía Aliclik con tope diario
     //     (0297, MOM §6.1, «Confirmó por Chatby», 01-11-2026).
-    expect(crons).toHaveLength(33);
+    // 34: reintentos Aliclik automáticos en Lima, por variante y con tope
+    //     (0306, MOM §9.5 entrega 3, 04-11-2026).
+    expect(crons).toHaveLength(34);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

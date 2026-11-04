@@ -32,7 +32,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { swaypGuiaDeVuelta } from "@/lib/swayp-desde-confirmacion";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { isFillableRouteOutput } from "@/lib/shipment-output";
-import { aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
+import { aliclikMotiveAllowed, aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
 import { createAdminSupabase } from "@/lib/db";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { env } from "@/lib/env";
@@ -264,7 +264,7 @@ export async function activeAliclikBlocker(
 }
 
 async function readAliclikOutputPolicy(
-  admin: SupabaseClient, ctx: AliclikContext, motivo?: string | null,
+  admin: SupabaseClient, ctx: AliclikContext, motivo?: string | null, origin?: AliclikGuideOrigin,
 ) {
   const { data, error } = await admin.from("shipments")
     .select("id,guide_code,output_code,delivery_status,courier,created_via,custody_state,custody_transferred_at,swayp_state,returned_at")
@@ -277,7 +277,11 @@ async function readAliclikOutputPolicy(
   const operation = op === "lima" || op === "provincia_cod" || op === "agencia" || op === "desconocida"
     ? op : classifyOperation(ctx.row);
   return aliclikOutputPolicy({
-    outputs: (data ?? []) as AliclikExistingOutput[], operation, motivo, manual: !!ctx.userId,
+    // `manual` es «puede justificar otra salida»: una persona, o el reintento
+    // de Lima que el owner encendió (`aliclikMotiveAllowed`). El resto del
+    // automático sigue sin motivo.
+    outputs: (data ?? []) as AliclikExistingOutput[], operation, motivo,
+    manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),
   });
 }
 
@@ -873,8 +877,11 @@ export interface AliclikGuideOrigin {
    * `envio_programado`: la guía del día programado (MOM §6.2).
    * `confirmado_chatby`: la del pedido que confirmó por Chatby (MOM §6.1,
    * «Confirmó por Chatby», 01-11-2026), con su tope diario.
+   * `reintento_lima`: el reintento Aliclik de la cadena de Lima (MOM §9.5,
+   * entrega 3, 04-11-2026), con la variante encendida en Automatizaciones. Es
+   * el único que puede justificar otra salida en Lima (`aliclikMotiveAllowed`).
    */
-  kind: "envio_programado" | "confirmado_chatby";
+  kind: "envio_programado" | "confirmado_chatby" | "reintento_lima";
   /** El día (YYYY-MM-DD) por el que se creó hoy: el programado, o el de la pasada. */
   scheduledOn: string;
   /** El motivo que queda en el hecho `guide_registered`. */
@@ -942,9 +949,10 @@ export async function createAliclikGuideFor(
     : null;
   const pinExceptionReason = input.pinExceptionReason?.trim() || null;
 
-  // En Lima, otra salida pide motivo. El automático y una Aliclik ya viva
-  // siguen bloqueados; «no se pudo leer» tampoco autoriza.
-  const outputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional);
+  // En Lima, otra salida pide motivo. El automático (salvo el reintento de
+  // Lima, que trae el suyo) y una Aliclik ya viva siguen bloqueados; «no se
+  // pudo leer» tampoco autoriza.
+  const outputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);
   if (!outputPolicy.ok) return { error: outputPolicy.error + (outputPolicy.pideMotivo ? " Vuelve a cotizar para ver el campo del motivo." : "") };
 
   // Se REVALIDA todo en el servidor. Lo que mandó el navegador es una intención,
@@ -1027,7 +1035,7 @@ export async function createAliclikGuideFor(
   // La evidencia auditada describe las que seguían vivas en esta última lectura.
   const finalSaleBlock = await legacySaleSendBlock(admin, orderId);
   if (finalSaleBlock) return { error: finalSaleBlock };
-  const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional);
+  const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);
   if (!finalOutputPolicy.ok) return { error: finalOutputPolicy.error + (finalOutputPolicy.pideMotivo ? " Vuelve a cotizar para revisar las salidas." : "") };
   const additionalOutputEvidence = finalOutputPolicy.motivo ? {
     motivo: finalOutputPolicy.motivo,

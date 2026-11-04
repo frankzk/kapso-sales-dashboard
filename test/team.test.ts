@@ -137,6 +137,8 @@ describe("team guards", () => {
       expect(ownerOnly.sort()).toEqual(
         [
           "alerts.repeated_voucher",
+          // Panel «Automatizaciones» (MOM §40, 04-11-2026).
+          "automations.manage",
           "data.export",
           "invoices.manage",
           "logistics.manage",
