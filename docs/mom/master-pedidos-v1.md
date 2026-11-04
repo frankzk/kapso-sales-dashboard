@@ -3525,7 +3525,24 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     tiene un resultado «ya no tocaba» y dejar «en curso» contaría para el tope
     sin haber creado nada): el pedido queda como si esa pasada no lo hubiera
     tomado. Si una persona tomó el caso, queda «Una persona lo está
-    atendiendo» y se reintenta. Crea con la fila de ese momento.
+    atendiendo» y se reintenta. Crea con la fila de ese momento. Cualquier
+    error entre la toma y la creación también suelta el renglón (si no se
+    puede borrar, queda «Esperando a que Aliclik responda», que se reintenta
+    y no cuenta) y la pasada sigue con el pedido siguiente. Si la creación
+    misma lanza un error, pudo haber pasado el envío a Aliclik: queda «Puede
+    estar creada: revisar en Aliclik» y avisa.
+  - **El candado de otra creación** (una persona creándola en ese momento, o
+    una creación sin respuesta) no es de la pasada: queda «Una persona lo está
+    atendiendo» con el mensaje del candado, se reintenta y no cuenta para el
+    tope.
+  - **Una creación de Aliclik sin su guía en Kapta** (una intención viva
+    `pending`, o `sent` cuyo número no está en ninguna salida Aliclik del
+    pedido: Aliclik la creó y Kapta no la guardó) no tiene salida, así que la
+    cadena seguiría pidiendo otra cada día. La pasada **no la cotiza ni la
+    toma** y no cuenta para el tope; en Activo la informa en el reporte de la
+    pasada (el aviso salió el día que pasó), y en Simulación y «Simular ahora»
+    dice «Puede estar creada: revisar en Aliclik» con la guía. La resuelve una
+    persona (vincular o revisar en Aliclik).
   - **Crea por el mismo camino que «Aprobar»** (`lib/lima-retry-approve.ts`,
     `createAliclikGuideFor`), con origen `reintento_lima`: el historial dice
     «automáticamente (reintento Lima)» y el motivo de la salida adicional de
@@ -3549,11 +3566,13 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
       adelantado, rechazos en la puerta, posible duplicado, el adelanto que
       piden los antecedentes, una salida viva o el máximo de salidas, o falta
       el teléfono o la dirección; `kaptaBlock` de `createAliclikGuideFor`):
-      mañana diría lo mismo, así que, después del aviso y del hecho, la pasada
-      lo **saca de la cadena a Repro Lima** con `lima_retry_dismissed` sin
-      actor, `source: system` y `why: bloqueo_kapta` (el motivo lo dice). La
-      tienda lo atiende en Repro Lima como siempre. Un «no se pudo leer» no es
-      una regla: se reintenta.
+      mañana diría lo mismo, así que la pasada **primero** lo saca de la
+      cadena a Repro Lima con `lima_retry_dismissed` sin actor, `source:
+      system` y `why: bloqueo_kapta` (el motivo lo dice), y solo si ese hecho
+      quedó escrito el renglón, el aviso y `lima_retry_auto_failed` dicen que
+      pasó a Repro Lima; si no, dicen «no creado» y el error de no poder
+      pasarlo. La tienda lo atiende en Repro Lima como siempre. Un «no se pudo
+      leer» no es una regla: se reintenta.
     - **Aliclik la creó pero Kapta no pudo guardarla** (devuelve el número con
       el error): queda «Puede estar creada: revisar en Aliclik» con su código,
       cuenta para el tope, y el aviso dice que la guía **ya existe en Aliclik**
@@ -3563,9 +3582,11 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     de cotizar y elegir el transporte, pasa por las mismas compuertas de Kapta
     que la creación (`aliclikCreateGates`, que `createAliclikGuideFor` llama
     tal cual: mismo orden, mismos mensajes, sin candado ni POST), con el motivo,
-    el origen y el scope de Activo, y por el teléfono y la dirección. Si una la
-    rechazaría, el renglón dice «No se pudo crear» con «Activo no la crearía:
-    <motivo>», no «Habría creado la guía».
+    el origen y el scope de Activo, y por el teléfono y la dirección. Si una
+    regla la rechazaría, el renglón dice «No se pudo crear» con «Activo no la
+    crearía: <motivo>, y lo pasaría a Repro Lima», no «Habría creado la
+    guía». Si algo no se pudo leer, dice «No se pudo comprobar: <error>
+    (Activo lo reintentaría)».
   - «Simular ahora» en el panel cotiza todas las variantes con los pedidos de
     ese momento, sin escribir nada. Corre dentro de la página
     (`maxDuration` de 300 s) y se para sola a los 200 s: entonces dice «La

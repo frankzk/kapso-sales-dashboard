@@ -69,6 +69,7 @@ import {
   anyRetryVariantOn,
   autoRetryMotive,
   retryCapLeft,
+  retryHeldDetail,
   retryKaptaBlockReason,
   retryModes,
   retryPassOpen,
@@ -183,6 +184,8 @@ type Write = { table: string; op: string; value: any };
 function fakeDb(seed: Record<string, Row[]>) {
   const db: Record<string, Row[]> = Object.fromEntries(Object.entries(seed).map(([t, rows]) => [t, rows.map((r) => ({ ...r }))]));
   const writes: Write[] = [];
+  /** Hace fallar una lectura o escritura: devuelve el mensaje de error, o null. */
+  const ctl = { fail: null as null | ((table: string, op: string, value: any) => string | null) };
   let seq = 100;
   const from = (table: string) => {
     const filters: Array<(row: Row) => boolean> = [];
@@ -195,6 +198,7 @@ function fakeDb(seed: Record<string, Row[]>) {
     q.eq = (c: string, v: unknown) => { filters.push((r) => r[c] === v); return q; };
     q.neq = (c: string, v: unknown) => { filters.push((r) => r[c] !== v); return q; };
     q.in = (c: string, vs: unknown[]) => { filters.push((r) => vs.includes(r[c])); return q; };
+    q.is = (c: string, v: unknown) => { filters.push((r) => (r[c] ?? null) === v); return q; };
     q.order = () => q;
     q.range = (a: number, b: number) => { range = [a, b]; return q; };
     q.update = (v: any) => { op = "update"; value = v; return q; };
@@ -202,6 +206,8 @@ function fakeDb(seed: Record<string, Row[]>) {
     q.upsert = (v: any, o: any = {}) => { op = "upsert"; value = v; upsertOpts = o; return q; };
     q.delete = () => { op = "delete"; return q; };
     const run = () => {
+      const failed = ctl.fail?.(table, op, value);
+      if (failed) return { data: null, error: { message: failed } };
       const rows = (db[table] ??= []);
       const match = (r: Row) => filters.every((f) => f(r));
       if (op === "select") {
@@ -239,11 +245,11 @@ function fakeDb(seed: Record<string, Row[]>) {
     q.then = (resolve: (v: unknown) => void, reject: (e: unknown) => void) => Promise.resolve().then(run).then(resolve, reject);
     q.maybeSingle = () => ({
       then: (resolve: (v: unknown) => void, reject: (e: unknown) => void) =>
-        Promise.resolve().then(run).then((r: any) => ({ data: r.data[0] ?? null, error: r.error })).then(resolve, reject),
+        Promise.resolve().then(run).then((r: any) => ({ data: r.data?.[0] ?? null, error: r.error })).then(resolve, reject),
     });
     return q;
   };
-  return { admin: { from } as never, db, writes };
+  return { admin: { from } as never, db, writes, ctl };
 }
 
 const ORG = "org-1";
@@ -568,12 +574,13 @@ describe("una regla de Kapta que Activo rechaza siempre", () => {
     expect(h.telegrams[0]).toContain("bloqueado por Kapta: pasó a Repro Lima");
     expect(h.telegrams[0]).toContain("No se reintenta");
     expect(h.telegrams[0]).not.toContain("Créala a mano");
+    // Primero sale de la cadena; solo después el aviso y el hecho lo dicen.
     expect(db.order_events).toEqual([
-      expect.objectContaining({ kind: LIMA_RETRY_AUTO_FAILED, actor: null, source: "system", payload: expect.objectContaining({ kapta_block: true }) }),
       expect.objectContaining({
         kind: "lima_retry_dismissed", actor: null, source: "system", reason: retryKaptaBlockReason(blocked),
         payload: { attempt: 2, of: 3, transport: "AUTOECOM", why: "bloqueo_kapta", auto: true, variant: "alexis_autoecom:no_contesta" },
       }),
+      expect.objectContaining({ kind: LIMA_RETRY_AUTO_FAILED, actor: null, source: "system", payload: expect.objectContaining({ kapta_block: true }) }),
     ]);
   });
 
@@ -586,7 +593,7 @@ describe("una regla de Kapta que Activo rechaza siempre", () => {
   });
 
   it("Simulación: «Activo no la crearía» en vez de «Habría creado la guía», sin hechos ni avisos", async () => {
-    h.coreResult = () => ({ outcome: "fallo", stage: "compuertas", transport: "AUTOECOM", error: `Activo no la crearía: ${blocked}` });
+    h.coreResult = () => ({ outcome: "fallo", stage: "compuertas", transport: "AUTOECOM", kaptaBlock: true, error: `Activo no la crearía: ${blocked}` });
     const { admin, db } = seed("simulacion", [order("a")]);
     const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
     expect(report.orgs[0]!.items[0]).toMatchObject({ outcome: "fallo", detail: `Activo no la crearía: ${blocked}` });
@@ -599,7 +606,8 @@ describe("una regla de Kapta que Activo rechaza siempre", () => {
     expect(retryKaptaBlockReason("Este cliente rechazó en la puerta 2 pedidos.")).toBe(
       "Kapta no deja crear el reintento automático (Este cliente rechazó en la puerta 2 pedidos). Pasa a Repro Lima.",
     );
-    expect(retryResultDetail({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: "x.", locked: false, kaptaBlock: true })).toBe("x. Pasó a Repro Lima.");
+    // «Pasó a Repro Lima» lo agrega la pasada solo si el hecho quedó escrito.
+    expect(retryResultDetail({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: "x.", locked: false, kaptaBlock: true })).toBe("x.");
     expect(retryResultDetail({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: "x.", locked: false, kaptaBlock: false })).toBe("x.");
   });
 });
@@ -662,5 +670,132 @@ describe("«Simular ahora» se corta antes que la página", () => {
     const panel = readFileSync(resolve(process.cwd(), "components/automations-panel.tsx"), "utf8");
     expect(panel).toContain("La simulación se cortó por tiempo: muestra lo evaluado");
     expect(panel).toContain("No se pudo guardar. Revisa la conexión y vuelve a intentar.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Segunda verificación del 04-11-2026: el candado de otra creación, la guía de
+// Aliclik sin guardar, las excepciones entre la toma y la creación y el orden
+// de «A Repro Lima».
+// ---------------------------------------------------------------------------
+
+describe("el candado de otra creación y la guía sin guardar", () => {
+  it("el candado lo tiene otra creación: atendiendo (no cuenta ni se queda «Creándose»), y se reintenta", async () => {
+    h.coreResult = () => ({ outcome: "en_curso", stage: "creacion", transport: "AUTOECOM", error: "Hay otra creación en curso.", locked: true, kaptaBlock: false });
+    const { admin, db } = seed("activo", [order("a")]);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(report.orgs[0]).toMatchObject({ capLeft: 5 });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "atendiendo", detail: "Hay otra creación en curso." })]);
+    h.coreResult = () => ({ outcome: "creada", transport: "AUTOECOM", guide: "AL-9" });
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "creada" })]);
+  });
+
+  const unsaved = { id: "i1", order_id: "a", status: "sent", order_number: "AL-5", released_at: null };
+
+  it("Activo: una guía que Aliclik creó y Kapta no guardó no se cotiza, no se toma ni cuenta; se informa", async () => {
+    const { admin, db } = seed("activo", [order("a")], { aliclik_order_requests: [unsaved], shipments: [] });
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([]);
+    expect(report.orgs[0]).toMatchObject({ capLeft: 5, items: [] });
+    expect(report.orgs[0]!.held).toEqual([expect.objectContaining({ orderId: "a", detail: expect.stringContaining("Aliclik ya tiene la guía AL-5") })]);
+    expect(h.telegrams).toEqual([]);
+  });
+
+  it("con su salida guardada no es eso: se cotiza como siempre", async () => {
+    const { admin } = seed("activo", [order("a")], {
+      aliclik_order_requests: [unsaved],
+      shipments: [{ order_id: "a", courier: "aliclik", guide_code: "AL-5", external_order_number: "AL-5" }],
+    });
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toHaveLength(1);
+  });
+
+  it("Simulación y «Simular ahora»: lo dicen como «Puede estar creada», sin cotizar", async () => {
+    const sim = seed("simulacion", [order("a")], { aliclik_order_requests: [unsaved] });
+    await runLimaRetryAuto(sim.admin, { now: OPEN_HOUR });
+    expect(sim.db.lima_retry_auto_log).toEqual([expect.objectContaining({ mode: "simulacion", outcome: "incierto", detail: expect.stringContaining("AL-5") })]);
+    const prev = seed("apagado", [order("a")], { aliclik_order_requests: [unsaved] });
+    const report = await runLimaRetryAuto(prev.admin, { now: LATE, orgId: ORG, preview: true });
+    expect(report.orgs[0]!.items[0]).toMatchObject({ outcome: "incierto" });
+    expect(h.core).toEqual([]);
+  });
+
+  it("una creación aparece entre la carga y la creación: suelta sin crear", async () => {
+    const { admin, db } = seed("activo", [order("a")]);
+    h.onHealth = () => { db.aliclik_order_requests = [{ ...unsaved, status: "pending", order_number: null }]; };
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([]);
+    expect(report.orgs[0]!.released[0]!.reason).toContain("sin respuesta o en curso");
+  });
+
+  it("retryHeldDetail", () => {
+    expect(retryHeldDetail({ status: "sent", orderNumber: "AL-5" })).toContain("vincúlala o revísala a mano");
+    expect(retryHeldDetail({ status: "pending", orderNumber: null })).toContain("revisa en Aliclik antes de crear otra");
+  });
+});
+
+describe("una excepción entre la toma y la creación", () => {
+  it("suelta el candado y sigue con el siguiente pedido", async () => {
+    const { admin, db, ctl } = seed("activo", [order("a", "2026-11-01T17:00:00Z"), order("b", "2026-11-02T17:00:00Z")]);
+    let once = true;
+    // El tope no se puede leer para el primero.
+    ctl.fail = (table, op) => (table === "lima_retry_auto_log" && op === "select" && once ? ((once = false), "sin conexión") : null);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core.map((c) => c.row.order_id)).toEqual(["b"]);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ order_id: "b", outcome: "creada" })]);
+    expect(report.error).toContain("No se pudo preparar #a");
+  });
+
+  it("si no se puede borrar el renglón, queda para reintentar sin contar", async () => {
+    const { admin, db, ctl } = seed("activo", [order("a")]);
+    let once = true;
+    ctl.fail = (table, op) => {
+      if (table !== "lima_retry_auto_log") return null;
+      if (op === "delete") return "sin permiso";
+      if (op === "select" && once) return ((once = false), "sin conexión");
+      return null;
+    };
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "esperando_aliclik", detail: expect.stringContaining("sin conexión") })]);
+    expect(report.orgs[0]).toMatchObject({ capLeft: 5 });
+    // La pasada siguiente lo vuelve a tomar.
+    ctl.fail = null;
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toHaveLength(1);
+  });
+
+  it("si la creación lanza, queda en duda (pudo pasar el POST), avisa y sigue", async () => {
+    let n = 0;
+    h.coreResult = () => {
+      n += 1;
+      if (n === 1) throw new Error("socket hang up");
+      return { outcome: "creada", transport: "AUTOECOM", guide: "AL-9" };
+    };
+    const { admin, db } = seed("activo", [order("a", "2026-11-01T17:00:00Z"), order("b", "2026-11-02T17:00:00Z")]);
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(db.lima_retry_auto_log).toEqual([
+      expect.objectContaining({ order_id: "a", outcome: "incierto", detail: "Error inesperado al crear: socket hang up" }),
+      expect.objectContaining({ order_id: "b", outcome: "creada" }),
+    ]);
+    expect(h.telegrams).toHaveLength(1);
+    expect(h.telegrams[0]).toContain("Revisa en Aliclik antes de crearla otra vez");
+  });
+});
+
+describe("una regla de Kapta: «pasó a Repro Lima» solo si quedó escrito", () => {
+  it("si el hecho de «A Repro Lima» no se pudo escribir, el log y el aviso no lo dicen", async () => {
+    h.coreResult = () => ({ outcome: "fallo", stage: "creacion", transport: "AUTOECOM", error: "Venta anulada.", locked: false, kaptaBlock: true });
+    const { admin, db, ctl } = seed("activo", [order("a")]);
+    ctl.fail = (table, op, value) => (table === "order_events" && op === "insert" && value?.kind === "lima_retry_dismissed" ? "sin permiso" : null);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "fallo", detail: "Venta anulada. No se pudo pasar a Repro Lima: sin permiso." })]);
+    expect(h.telegrams[0]).not.toContain("pasó a Repro Lima");
+    expect(h.telegrams[0]).toContain("No se pudo pasar a Repro Lima: sin permiso");
+    expect(db.order_events).toEqual([expect.objectContaining({ kind: LIMA_RETRY_AUTO_FAILED, payload: expect.not.objectContaining({ kapta_block: true }) })]);
+    expect(report.error).toContain("No se pudo pasar #a a Repro Lima");
   });
 });

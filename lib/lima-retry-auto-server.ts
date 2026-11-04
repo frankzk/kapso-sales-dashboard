@@ -45,6 +45,7 @@ import { escapeHtml, sendTelegramToAll } from "@/lib/telegram";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { loadReproFacts, retryChainOf, type ReproFacts } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
+import { unsavedAliclikIntent, type CreationIntent } from "@/lib/aliclik-intent-release";
 import type { ReproOrderRow } from "@/lib/repro-lima-program";
 import { claimView } from "@/lib/repro-lima";
 import {
@@ -56,6 +57,7 @@ import {
   anyRetryVariantOn,
   retryCapLeft,
   retryModes,
+  retryHeldDetail,
   retryKaptaBlockReason,
   retryPassOpen,
   retryRecheck,
@@ -114,6 +116,12 @@ export interface LimaRetryAutoOrgReport {
   items: LimaRetryAutoItem[];
   /** Tomados y soltados sin crear: al releerlos ya no tocaba (`retryRecheck`). */
   released: { orderId: string; orderName: string | null; reason: string }[];
+  /**
+   * En Activo, los que tienen una creación de Aliclik sin guardar en Kapta: no
+   * se toman ni cuentan para el tope; los resuelve una persona (el aviso salió
+   * el día que pasó, como «Puede estar creada»).
+   */
+  held: { orderId: string; orderName: string | null; detail: string }[];
 }
 
 export interface LimaRetryAutoReport {
@@ -135,6 +143,11 @@ type Candidate = {
   variant: RetryVariant;
   mode: RetryMode;
   claimed: boolean;
+  /**
+   * Una creación de Aliclik de este pedido sin su guía en Kapta
+   * (`unsavedAliclikIntent`): la pasada no lo cotiza ni lo toma, es de una persona.
+   */
+  unsaved: { status: string; orderNumber: string | null } | null;
 };
 
 /** Ubicación corta para la alerta: distrito y provincia, sin repetir. */
@@ -219,8 +232,8 @@ export function retryResultDetail(result: RetryApproveResult): string | null {
     case "creada":
       return null;
     default:
-      // La regla de Kapta saca el pedido de la cadena: el renglón lo dice.
-      if (result.stage === "creacion" && result.kaptaBlock) return `${result.error} Pasó a Repro Lima.`;
+      // Si una regla de Kapta lo sacó de la cadena, lo agrega la pasada, y
+      // solo cuando el hecho de «A Repro Lima» quedó escrito.
       return result.error;
   }
 }
@@ -312,9 +325,58 @@ async function dismissForKaptaBlock(
 }
 
 /** Suelta el candado propio: borra el renglón «en curso» que tomó esta pasada. */
-async function releaseClaim(admin: SupabaseClient, id: number | string): Promise<string | null> {
-  const { error } = await admin.from(LOG).delete().eq("id", id).eq("outcome", "en_curso");
-  return error ? error.message : null;
+async function releaseClaim(admin: SupabaseClient, id: number | string, why: string): Promise<string | null> {
+  let failure: string;
+  try {
+    const { error } = await admin.from(LOG).delete().eq("id", id).eq("outcome", "en_curso");
+    if (!error) return null;
+    failure = error.message;
+  } catch (e) {
+    failure = e instanceof Error ? e.message : String(e);
+  }
+  // No se pudo borrar: que al menos no se quede «en curso» todo el día (cuenta
+  // para el tope y no se vuelve a tomar). `esperando_aliclik` se reintenta y
+  // no cuenta; el detalle dice por qué.
+  try {
+    const { error } = await admin.from(LOG)
+      .update({ outcome: "esperando_aliclik", detail: `Se reintenta en la pasada siguiente: ${why}`, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    return error ? `${failure}; tampoco se pudo dejar para reintentar: ${error.message}` : `${failure} (quedó para reintentar)`;
+  } catch (e) {
+    return `${failure}; tampoco se pudo dejar para reintentar: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+/**
+ * Las creaciones de Aliclik sin su guía en Kapta de estos pedidos
+ * (`unsavedAliclikIntent`). Una lectura que falla lanza: sin saberlo no se
+ * cotiza ni se crea (el candado de la creación lo ataja igual).
+ */
+async function unsavedIntentsOf(
+  admin: SupabaseClient,
+  orderIds: string[],
+): Promise<Map<string, { status: string; orderNumber: string | null }>> {
+  const out = new Map<string, { status: string; orderNumber: string | null }>();
+  if (!orderIds.length) return out;
+  const [intents, guides] = await Promise.all([
+    courierRowsByIds(orderIds, (chunk) => admin.from("aliclik_order_requests")
+      .select("id,order_id,status,order_number,released_at")
+      .in("order_id", chunk).neq("status", "failed").is("released_at", null) as unknown as PromiseLike<{
+        data: (CreationIntent & { order_id: string })[] | null; error: { message: string } | null }>),
+    courierRowsByIds(orderIds, (chunk) => admin.from("shipments")
+      .select("order_id,courier,guide_code,external_order_number")
+      .in("order_id", chunk).eq("courier", "aliclik") as unknown as PromiseLike<{
+        data: { order_id: string; courier: string | null; guide_code: string | null; external_order_number: string | null }[] | null;
+        error: { message: string } | null }>),
+  ]);
+  for (const id of orderIds) {
+    const unsaved = unsavedAliclikIntent(
+      intents.data.filter((i) => i.order_id === id),
+      guides.data.filter((g) => g.order_id === id),
+    );
+    if (unsaved) out.set(id, unsaved);
+  }
+  return out;
 }
 
 /**
@@ -329,9 +391,10 @@ async function recheckCandidate(
   today: string,
   at: Date,
 ): Promise<{ action: "crear"; candidate: Candidate } | { action: "atendiendo" } | { action: "soltar"; reason: string }> {
-  const [orderRes, modeRes] = await Promise.all([
+  const [orderRes, modeRes, unsaved] = await Promise.all([
     admin.from("order_master").select("*").eq("order_id", c.row.order_id).maybeSingle(),
     admin.from("lima_retry_auto_variants").select("mode").eq("org_id", orgId).eq("variant", c.variant).maybeSingle(),
+    unsavedIntentsOf(admin, [c.row.order_id]),
   ]);
   // Lo que no se pudo leer no autoriza a crear: quien llama suelta y lo anota.
   if (orderRes.error || modeRes.error) {
@@ -356,7 +419,11 @@ async function recheckCandidate(
   if (decision.action !== "crear" || !facts || !chain || facts.retryChain.state !== "siguiente") {
     return decision.action === "crear" ? { action: "soltar", reason: "La cadena ya no sigue." } : decision;
   }
-  return { action: "crear", candidate: { ...c, row, facts, chain, raw: facts.retryChain, mode, claimed: false } };
+  // Apareció una creación sin guardar (una persona creándola, o una que
+  // quedó sin respuesta): no se pide otra.
+  const held = unsaved.get(row.order_id);
+  if (held) return { action: "soltar", reason: retryHeldDetail(held) };
+  return { action: "crear", candidate: { ...c, row, facts, chain, raw: facts.retryChain, mode, claimed: false, unsaved: null } };
 }
 
 /** Las guías automáticas de hoy que cuentan para el tope, sin contar `exceptId`. */
@@ -441,8 +508,13 @@ async function candidatesOf(
     if (mode === "apagado" && !preview) continue;
     // Una persona con el caso tomado ahora mismo: es suyo, la pasada espera.
     const claimed = claimView(open?.claimed_by, open?.claimed_until, "", now) !== "libre";
-    out.push({ row, facts: f, chain, raw, variant, mode, claimed });
+    out.push({ row, facts: f, chain, raw, variant, mode, claimed, unsaved: null });
   }
+  // Una guía que Aliclik ya creó y Kapta no guardó (o una creación sin
+  // respuesta) no tiene salida, así que la cadena sigue pidiendo otra: se
+  // marca para no cotizarla ni tomarla cada día.
+  const unsaved = await unsavedIntentsOf(admin, out.map((c) => c.row.order_id));
+  for (const c of out) c.unsaved = unsaved.get(c.row.order_id) ?? null;
   // El fallo más viejo primero: es el que más tiempo lleva esperando.
   return out.sort((a, b) => Date.parse(a.raw.failed.at) - Date.parse(b.raw.failed.at));
 }
@@ -535,7 +607,7 @@ export async function runLimaRetryAuto(
 
   outer: for (const { orgId, modes } of orgModes) {
     const dailyCap = capByOrg.get(orgId) ?? RETRY_DAILY_CAP_DEFAULT;
-    const org: LimaRetryAutoOrgReport = { orgId, dailyCap, capLeft: dailyCap, items: [], released: [] };
+    const org: LimaRetryAutoOrgReport = { orgId, dailyCap, capLeft: dailyCap, items: [], released: [], held: [] };
     report.orgs.push(org);
     try {
       const { data: stores, error: storesError } = await admin
@@ -559,6 +631,11 @@ export async function runLimaRetryAuto(
         // --- Vista previa: todo como simulación, sin escribir nada. --------
         if (preview) {
           org.items.push(item);
+          if (c.unsaved) {
+            item.outcome = "incierto";
+            item.detail = retryHeldDetail(c.unsaved);
+            continue;
+          }
           if (c.claimed) {
             item.detail = "Caso tomado en Repro Lima.";
             continue;
@@ -577,7 +654,11 @@ export async function runLimaRetryAuto(
         // --- Simulación: dice qué haría, deja el renglón y nada más. -------
         if (mode === "simulacion") {
           org.items.push(item);
-          if (c.claimed) {
+          if (c.unsaved) {
+            // Simulación no cuenta para el tope: dice que es de una persona.
+            item.outcome = "incierto";
+            item.detail = retryHeldDetail(c.unsaved);
+          } else if (c.claimed) {
             item.detail = "Caso tomado en Repro Lima.";
           } else {
             const result = await runCore(c, true);
@@ -594,48 +675,70 @@ export async function runLimaRetryAuto(
 
         // --- Activo: candado, persona, tope, salud de Aliclik y creación. --
         if (mode !== "activo" || !writeOk) continue;
-        const claim = await claimActive(admin, base);
+        if (c.unsaved) {
+          // No se toma ni cuenta para el tope: Aliclik ya tiene (o puede
+          // tener) su guía. El aviso salió el día que pasó; aquí se informa.
+          org.held.push({ orderId: row.order_id, orderName: row.order_name, detail: retryHeldDetail(c.unsaved) });
+          continue;
+        }
+        const label = row.order_name ?? row.order_id;
+        let claim: { id: number | string | null; error?: string };
+        try {
+          claim = await claimActive(admin, base);
+        } catch (e) {
+          claim = { id: null, error: e instanceof Error ? e.message : String(e) };
+        }
         if (claim.error) {
-          errors.push(`No se pudo tomar ${row.order_name ?? row.order_id}: ${claim.error}`);
+          errors.push(`No se pudo tomar ${label}: ${claim.error}`);
           continue;
         }
         if (claim.id === null) continue; // Ya resuelto (o en curso) hoy.
+        const claimId = claim.id;
         org.items.push(item);
         const finish = async () => {
           const { error } = await admin.from(LOG).update({
             outcome: item.outcome, transport: item.transport ?? null, guide_code: item.guide ?? null,
             detail: item.detail ?? null, updated_at: new Date().toISOString(),
-          }).eq("id", claim.id as number | string);
-          if (error) errors.push(`No se pudo guardar el resultado de ${row.order_name ?? row.order_id}: ${error.message}`);
+          }).eq("id", claimId);
+          if (error) errors.push(`No se pudo guardar el resultado de ${label}: ${error.message}`);
+        };
+        // Se suelta sin crear: el renglón se borra (o, si no se puede, queda
+        // para reintentar sin contar) y la pasada sigue con el siguiente.
+        const release = async (why: string) => {
+          org.items.splice(org.items.indexOf(item), 1);
+          const releaseError = await releaseClaim(admin, claimId, why);
+          if (releaseError) errors.push(`No se pudo soltar ${label}: ${releaseError}`);
         };
 
-        if (c.claimed) {
-          item.outcome = "atendiendo";
-          item.detail = "Caso tomado en Repro Lima.";
-          await finish();
-          continue;
-        }
-        const counted = await countedToday(admin, orgId, today, claim.id);
-        if (retryCapLeft(counted, dailyCap) <= 0) {
-          item.outcome = "tope";
-          item.detail = `Tope de ${dailyCap} guías automáticas del día.`;
-          await finish();
-          continue;
-        }
-        // La salud es de la organización (un token Aliclik): se lee una vez por tienda.
-        if (!waiting.has(row.store_id)) {
-          waiting.set(row.store_id, waitForAliclik(await loadAliclikHealthState(admin as never, row.store_id), limaHour));
-        }
-        if (waiting.get(row.store_id)) {
-          item.outcome = "esperando_aliclik";
-          item.detail = "Aliclik está fallando: se reintenta en la pasada siguiente.";
-          await finish();
-          continue;
-        }
-
-        // Se relee el pedido y la variante justo antes de crear (ver arriba).
+        // De la toma a la creación, cualquier excepción suelta el candado:
+        // nada se creó todavía, y un «en curso» olvidado contaría para el tope
+        // todo el día y dejaría sin revisar al resto de la organización.
         let fresh: Candidate;
         try {
+          if (c.claimed) {
+            item.outcome = "atendiendo";
+            item.detail = "Caso tomado en Repro Lima.";
+            await finish();
+            continue;
+          }
+          const counted = await countedToday(admin, orgId, today, claimId);
+          if (retryCapLeft(counted, dailyCap) <= 0) {
+            item.outcome = "tope";
+            item.detail = `Tope de ${dailyCap} guías automáticas del día.`;
+            await finish();
+            continue;
+          }
+          // La salud es de la organización (un token Aliclik): se lee una vez por tienda.
+          if (!waiting.has(row.store_id)) {
+            waiting.set(row.store_id, waitForAliclik(await loadAliclikHealthState(admin as never, row.store_id), limaHour));
+          }
+          if (waiting.get(row.store_id)) {
+            item.outcome = "esperando_aliclik";
+            item.detail = "Aliclik está fallando: se reintenta en la pasada siguiente.";
+            await finish();
+            continue;
+          }
+          // Se relee el pedido y la variante justo antes de crear (ver arriba).
           const recheck = await recheckCandidate(admin, orgId, c, today, nowish());
           if (recheck.action === "atendiendo") {
             item.outcome = "atendiendo";
@@ -644,39 +747,73 @@ export async function runLimaRetryAuto(
             continue;
           }
           if (recheck.action === "soltar") {
-            org.items.splice(org.items.indexOf(item), 1);
             org.released.push({ orderId: row.order_id, orderName: row.order_name, reason: recheck.reason });
-            const releaseError = await releaseClaim(admin, claim.id);
-            if (releaseError) errors.push(`No se pudo soltar ${row.order_name ?? row.order_id}: ${releaseError}`);
+            await release(recheck.reason);
             continue;
           }
           fresh = recheck.candidate;
         } catch (e) {
-          // Sin poder releerlo no se crea; se suelta para la pasada siguiente.
-          org.items.splice(org.items.indexOf(item), 1);
-          const releaseError = await releaseClaim(admin, claim.id);
-          errors.push(`No se pudo releer ${row.order_name ?? row.order_id}: ${e instanceof Error ? e.message : String(e)}${releaseError ? ` (y no se pudo soltar: ${releaseError})` : ""}`);
+          const message = e instanceof Error ? e.message : String(e);
+          await release(message);
+          errors.push(`No se pudo preparar ${label}: ${message}`);
           continue;
         }
 
-        const result = await runCore(fresh, false);
-        item.outcome = result.outcome;
-        item.detail = retryResultDetail(result);
-        if (result.outcome === "creada") item.guide = result.guide;
-        // Aliclik la creó y Kapta no pudo guardarla: el código queda en el log.
-        if (result.outcome === "incierto" && result.stage === "creacion" && result.guide) item.guide = result.guide;
-        await finish();
-        // `createAliclikGuideFor` ya recalcula el Master al crear; no se repite.
-        if (result.outcome === "fallo" || result.outcome === "incierto") {
-          const kaptaBlock = result.stage === "creacion" && result.kaptaBlock;
-          const guide = result.stage === "creacion" ? result.guide ?? null : null;
-          await recordFailure(admin, fresh.row, today, variant, result.outcome, result.error, { guide, kaptaBlock });
-          // Una regla de Kapta: mañana diría lo mismo. Sale de la cadena y la
-          // tienda lo atiende en Repro Lima; lo de Aliclik se reintenta mañana.
-          if (kaptaBlock) {
-            const dismissError = await dismissForKaptaBlock(admin, fresh, result.error);
-            if (dismissError) errors.push(`No se pudo pasar ${row.order_name ?? row.order_id} a Repro Lima: ${dismissError}`);
+        let attempted: RetryApproveResult;
+        try {
+          attempted = await runCore(fresh, false);
+        } catch (e) {
+          // Pudo haber pasado el POST: no se suelta. Queda en duda (cuenta
+          // para el tope y no se repite hoy) y avisa como «revisar».
+          const message = `Error inesperado al crear: ${e instanceof Error ? e.message : String(e)}`;
+          item.outcome = "incierto";
+          item.detail = message;
+          try {
+            await finish();
+            await recordFailure(admin, fresh.row, today, variant, "incierto", message);
+          } catch (inner) {
+            errors.push(`${label}: ${inner instanceof Error ? inner.message : String(inner)}`);
           }
+          continue;
+        }
+
+        const result = attempted;
+        try {
+          item.outcome = result.outcome;
+          item.detail = retryResultDetail(result);
+          if (result.outcome === "creada") item.guide = result.guide;
+          // El candado lo tiene otra creación (una persona creándola ahora, o una
+          // sin respuesta): no es de esta pasada. `atendiendo` se reintenta y no
+          // cuenta para el tope; «en curso» quedaba así todo el día.
+          if (result.outcome === "en_curso") item.outcome = "atendiendo";
+          // Aliclik la creó y Kapta no pudo guardarla: el código queda en el log.
+          if (result.outcome === "incierto" && result.stage === "creacion" && result.guide) item.guide = result.guide;
+
+          // Una regla de Kapta: mañana diría lo mismo. PRIMERO sale de la
+          // cadena (`lima_retry_dismissed`); solo si quedó escrito, el log, el
+          // aviso y el hecho dicen «pasó a Repro Lima».
+          const kaptaBlock = result.outcome === "fallo" && result.stage === "creacion" && result.kaptaBlock;
+          let dismissError: string | null = null;
+          if (kaptaBlock) {
+            try {
+              dismissError = await dismissForKaptaBlock(admin, fresh, result.error);
+            } catch (e) {
+              dismissError = e instanceof Error ? e.message : String(e);
+            }
+            if (dismissError) errors.push(`No se pudo pasar ${label} a Repro Lima: ${dismissError}`);
+          }
+          const dismissed = kaptaBlock && !dismissError;
+          if (dismissed) item.detail = `${item.detail ?? ""} Pasó a Repro Lima.`.trim();
+          else if (kaptaBlock) item.detail = `${item.detail ?? ""} No se pudo pasar a Repro Lima: ${dismissError}.`.trim();
+          await finish();
+          // `createAliclikGuideFor` ya recalcula el Master al crear; no se repite.
+          if (result.outcome === "fallo" || result.outcome === "incierto") {
+            const guide = result.stage === "creacion" ? result.guide ?? null : null;
+            const error = kaptaBlock && !dismissed ? `${result.error} (No se pudo pasar a Repro Lima: ${dismissError}.)` : result.error;
+            await recordFailure(admin, fresh.row, today, variant, result.outcome, error, { guide, kaptaBlock: dismissed });
+          }
+        } catch (e) {
+          errors.push(`${label}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     } catch (e) {

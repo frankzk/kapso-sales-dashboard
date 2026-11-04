@@ -90,13 +90,16 @@ export type RetryApproveResult =
   | { outcome: "simulada"; transport: RetryTransport; detail: string }
   | {
       /**
-       * Solo en `dry`: una compuerta de Kapta de la creación lo rechazaría.
-       * `error` ya dice «Activo no la crearía: …».
+       * Solo en `dry`: las compuertas de Kapta de la creación no la dejan
+       * pasar. Con `kaptaBlock` es una regla («Activo no la crearía: … y lo
+       * pasaría a Repro Lima»); sin él, no se pudo leer algo («No se pudo
+       * comprobar: … (Activo lo reintentaría)»). `error` ya lo dice.
        */
       outcome: "fallo";
       stage: "compuertas";
       transport: RetryTransport;
       error: string;
+      kaptaBlock: boolean;
     }
   | {
       /** `createAliclikGuideFor` respondió con error: candado, timeout o rechazo. */
@@ -212,9 +215,16 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
     // teléfono y la dirección que Aliclik exige. Se para antes del candado y
     // del POST. Sin esto la simulación decía «Habría creado la guía» y Activo
     // fallaba y avisaba cada día hasta que la cadena vencía.
+    // Solo una REGLA dice qué haría Activo (no crearla y pasarlo a Repro
+    // Lima); un «no se pudo leer» Activo lo reintenta, y la simulación lo dice.
     const gates = await aliclikCreateGates(ctx, createInput, scope, origin);
+    if (!gates.ok && !gates.kaptaBlock) {
+      return { outcome: "fallo", stage: "compuertas", transport, kaptaBlock: false, error: `No se pudo comprobar: ${gates.error.replace(/\.$/, "")} (Activo lo reintentaría).` };
+    }
     const reason = gates.ok ? aliclikRecipientBlock(row) : gates.error;
-    if (reason) return { outcome: "fallo", stage: "compuertas", transport, error: `Activo no la crearía: ${reason}` };
+    if (reason) {
+      return { outcome: "fallo", stage: "compuertas", transport, kaptaBlock: true, error: `Activo no la crearía: ${reason.replace(/\.$/, "")}, y lo pasaría a Repro Lima.` };
+    }
     return {
       outcome: "simulada",
       transport,

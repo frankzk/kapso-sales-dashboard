@@ -245,6 +245,18 @@ export function retryKaptaBlockReason(error: string): string {
   return `Kapta no deja crear el reintento automático (${why}). Pasa a Repro Lima.`;
 }
 
+/**
+ * Qué decir de un pedido con una creación de Aliclik sin su guía en Kapta
+ * (`unsavedAliclikIntent`): la pasada no lo cotiza ni lo toma, es de una
+ * persona. Pura.
+ */
+export function retryHeldDetail(unsaved: { status: string; orderNumber: string | null }): string {
+  if (unsaved.status !== "pending" && unsaved.orderNumber) {
+    return `Aliclik ya tiene la guía ${unsaved.orderNumber} de este pedido y Kapta no la guardó: vincúlala o revísala a mano. No se crea otra.`;
+  }
+  return "Hay una creación en Aliclik sin respuesta o en curso: revisa en Aliclik antes de crear otra. No se crea otra.";
+}
+
 /** El motivo de la salida adicional de Lima que lleva la guía automática. Pura. */
 export function autoRetryMotive(chain: Extract<LimaRetryChain, { state: "siguiente" }>, failedText: string): string {
   return `Reintento Aliclik ${chain.attempt} de ${chain.of} automático (regla encendida en Automatizaciones). ${failedText}.`;

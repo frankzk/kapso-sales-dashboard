@@ -229,7 +229,8 @@ describe("la pasada automática por el mismo núcleo", () => {
   it("la simulación pasa por las compuertas de Kapta de la creación, con lo mismo que usará Activo", async () => {
     h.gates = { ok: false, error: "Este cliente rechazó en la puerta 2 pedidos.", kaptaBlock: true };
     expect(await system({ dry: true })).toEqual({
-      outcome: "fallo", stage: "compuertas", transport: "AUTOECOM", error: "Activo no la crearía: Este cliente rechazó en la puerta 2 pedidos.",
+      outcome: "fallo", stage: "compuertas", transport: "AUTOECOM", kaptaBlock: true,
+      error: "Activo no la crearía: Este cliente rechazó en la puerta 2 pedidos, y lo pasaría a Repro Lima.",
     });
     const [, input, scope, origin] = h.calls.gates[0]!;
     const motive = autoRetryMotive(RAW as never, CHAIN.failedText);
@@ -242,7 +243,16 @@ describe("la pasada automática por el mismo núcleo", () => {
       admin: fakeAdmin as never, row: { ...ROW, customer_phone: "" } as never, chain: CHAIN, raw: RAW as never,
       actor: { system: true, variant: "alexis_autoecom:no_contesta" }, today: "2026-11-04", dry: true,
     });
-    expect(sinTelefono).toMatchObject({ outcome: "fallo", stage: "compuertas", error: "Activo no la crearía: El pedido no tiene un teléfono válido, y Aliclik lo exige." });
+    expect(sinTelefono).toMatchObject({
+      outcome: "fallo", stage: "compuertas", kaptaBlock: true,
+      error: "Activo no la crearía: El pedido no tiene un teléfono válido, y Aliclik lo exige, y lo pasaría a Repro Lima.",
+    });
+    // Un «no se pudo leer» no es una regla: Activo lo reintentaría, y la simulación lo dice.
+    h.gates = { ok: false, error: "No se pudieron leer las salidas del pedido: sin conexión", kaptaBlock: false };
+    expect(await system({ dry: true })).toEqual({
+      outcome: "fallo", stage: "compuertas", transport: "AUTOECOM", kaptaBlock: false,
+      error: "No se pudo comprobar: No se pudieron leer las salidas del pedido: sin conexión (Activo lo reintentaría).",
+    });
     expect(h.calls.create).toEqual([]);
     expect(h.events).toEqual([]);
   });

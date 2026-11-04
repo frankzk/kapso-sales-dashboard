@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { RELEASABLE_GUIDE_STATUSES, aliclikReportSaysClosed, pickGuideToCancel, releasableIntents, type CreationIntent, type IntentGuide } from "@/lib/aliclik-intent-release";
+import { RELEASABLE_GUIDE_STATUSES, aliclikReportSaysClosed, pickGuideToCancel, releasableIntents, unsavedAliclikIntent, type CreationIntent, type IntentGuide } from "@/lib/aliclik-intent-release";
 
 // MOM §10.2, «Una guía anulada suelta el candado» (03-11-2026). Caso real:
 // #KP200108, guía AUTOECOM AUR5X510805505383 anulada; «Aprobar · ALIDRIVER»
@@ -148,5 +148,22 @@ describe("con dos guías de Aliclik en el pedido", () => {
   it("el rescate de una huérfana no le pone el número nuevo a otra guía del pedido", () => {
     const reconcile = readFileSync("app/api/cron/aliclik-reconcile/route.ts", "utf8");
     expect(reconcile).toContain("guide_code.is.null,guide_code.eq.${orderNumber}");
+  });
+});
+
+describe("unsavedAliclikIntent: una creación de Aliclik sin su guía en Kapta", () => {
+  it("sent con número que no está en las salidas: la creó Aliclik y Kapta no la guardó", () => {
+    expect(unsavedAliclikIntent([sent], [])).toEqual({ status: "sent", orderNumber: "AUR5X510805505383" });
+    expect(unsavedAliclikIntent([sent], [guide("pendiente", { courier: "propio" })])).toMatchObject({ status: "sent" });
+  });
+  it("con su salida guardada (viva o anulada) no es eso: lo decide la regla de salidas", () => {
+    expect(unsavedAliclikIntent([sent], [guide("pendiente")])).toBeNull();
+    expect(unsavedAliclikIntent([sent], [guide("anulado", { guide_code: null, external_order_number: "#aur5x510805505383" })])).toBeNull();
+  });
+  it("pending (sin respuesta, o creándose ahora) cuenta; failed y soltadas no", () => {
+    expect(unsavedAliclikIntent([{ ...sent, status: "pending", order_number: null }], [])).toEqual({ status: "pending", orderNumber: null });
+    expect(unsavedAliclikIntent([{ ...sent, status: "failed" }], [])).toBeNull();
+    expect(unsavedAliclikIntent([{ ...sent, released_at: "2026-11-03T07:00:00Z" }], [])).toBeNull();
+    expect(unsavedAliclikIntent([], [])).toBeNull();
   });
 });
