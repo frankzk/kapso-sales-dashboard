@@ -1536,6 +1536,13 @@ desperfecto aunque contradiga a las guías.
   deshacía. Las lecturas por lote del recálculo (hechos, salidas, historial de
   llamadas, pagos, claves compartidas, paradas y Urpi) van ahora por
   `readAllPages` (lib/postgrest-pages.ts), ordenadas por su clave.
+  `MOM_RESOLUTION_VERSION` sube a `mom-v1.38` para que el cron recalcule
+  todos los pedidos con los hechos completos: con el arreglo ya en producción,
+  15 de los 18 pedidos que tenían un «Entregado» a mano sin aplicar se habían
+  corregido en el siguiente barrido, pero #AUR173616 (del lote de 77 de Aurela
+  confirmado por el owner el 31-10), #KP124830 y #KP126160 no se habían vuelto
+  a recalcular. Lo mismo vale para cualquier pedido que un lote cortado dejó
+  sin ver una salida o un pago.
 
 ## 8. Confirmación y riesgo del cliente
 
@@ -2206,7 +2213,7 @@ sale en la siguiente salida de ese courier.
 | Grupo GF Courier: Johnny (Yhoni), Roy, Duglas y Alexis | Hasta las 12:00 del mismo día (`same_day_cutoff` del proveedor, abajo). Después, al día siguiente, salvo que Despacho GF apruebe el cambio (§29.6) | Alexis recoge a las 12:30 y reparte esa tarde en todo Lima; sus entregas empiezan normalmente entre 14:00 y 15:00 |
 | Swayp | De 16:00 a 17:00 del día anterior, de lunes a sábado | Al día siguiente; nunca el mismo día ni en domingo (§11.6.1) |
 | Tanders | Antes de su recojo | El día en que recolecta (§9) |
-| Urpi | Solo primeros despachos, en una ruta de Urpi de la Mesa de despacho («Excel para Urpi») | En su turno de mañana o de tarde (§9.2). Un reprogramado no pasa a Urpi (§9.5); desde Kapta, en la fase 2 |
+| Urpi | Primeros despachos, en una ruta de Urpi de la Mesa de despacho («Excel para Urpi»), y la caja que Grupo GF no entregó (owner, 03-11-2026: la programación la toma, §30.10) | En su turno de mañana o de tarde (§9.2). Un reprogramado de Urpi no vuelve a Urpi (§9.5); desde Kapta, en la fase 2 |
 | Axel Courier | Por la Mesa de despacho; ya no se sugiere (§9.2) | Sin horario vigente: el de antes era el de Alexis |
 
 - **Alexis es motorizado de Grupo GF** (decisión 11), no el operador de Axel
@@ -3946,8 +3953,9 @@ Mesa de ruta»). Ahí se crea la salida con `canRepeatCourier` y el tope de cinc
 salidas. Repro Lima no crea salidas en la entrega 1a. Cambiar de courier es
 salida nueva y rearmado (decisión 9, §9.3). **Urpi está apagado en la 1a**:
 «Urpi solo lleva primeros despachos (§9.1); un reprogramado no pasa a Urpi en
-esta fase.». Un reprogramado de Grupo GF nunca pasa a Urpi. Urpi desde Kapta
-llega en la fase 2 (decisión 12).
+esta fase.». Repro Lima no ofrece Urpi; si el equipo le da a Urpi la caja que
+Grupo GF no entregó, la programación de Urpi la registra (03-11-2026, §30.10).
+Urpi desde Kapta llega en la fase 2 (decisión 12).
 
 **«Ya no lo quiere» quita la fecha y no anula la venta.** Cierra el caso con
 «Desarmar y cerrar» y quita el programa de Grupo GF que hubiera
@@ -4407,6 +4415,21 @@ Reglas:
   la excepción de riesgo de pago.
 - **Sin código ISO no hay puerta.** Son 8.264 pedidos de 23.034; para ellos nada
   cambia. Bloquear con una sola fuente sería el mismo error que esta regla evita.
+- **Lima y Callao son un solo destino para esta regla (04-11-2026).** Aliclik
+  archiva los siete distritos del Callao bajo el departamento «Lima», y la
+  clienta del Callao escribe «Callao» —la provincia— como ciudad. #KP142342
+  eligió Callao, su pin cayó en Ventanilla y la guía se bloqueaba por un pin
+  correcto. En 30 días, 70 de 72 pedidos con `PE-CAL` escribieron «Callao». Si
+  el pin cae en un distrito del Callao y su departamento es Lima o Callao,
+  cualquiera de los dos en el desplegable lo respalda. Se exige el departamento
+  además del distrito porque Bellavista también existe en San Martín, Cajamarca y
+  Piura.
+- **La ubicación corregida por una persona también respalda el pin
+  (04-11-2026).** El aviso manda a «Ubicación y cobertura», y corregirla no
+  cambiaba nada: la regla solo leía el desplegable y la ciudad del checkout. Si
+  alguien fijó a mano el distrito (`geo_source = manual`) y es el del pin, la
+  guía se emite. Una ubicación deducida por Kapta no cuenta: tiene que haberla
+  mirado una persona.
 - **Kapta no mueve el pin sola**, aquí tampoco: acercarlo es decidir a dónde va
   el paquete, y eso lo hace una persona mirando la dirección.
 
@@ -15876,9 +15899,44 @@ varios días toma el último que ya llegó (`lib/urpi-dispatch.ts`):
 | Su única caja viva es la «por definir», creada a más tardar el día programado | Se **rellena** como salida de Urpi en ruta (§4, `lib/route-output-fill.ts`): courier `urpi`, `created_via = urpi_programacion`, `delivery_status = en_ruta`, `dispatched_at` el mediodía de Lima del día programado. Consecutivo, QR, preparación y custodia se conservan y queda `route_output_filled`. El pedido pasa a «En curso · En tránsito». |
 | Ya tiene salida de Urpi, en ruta o entregada | Nada: una programación posterior es un reintento de la misma caja. |
 | Urpi ya canceló su salida (anulada después de salir) | La programación de ese día o de antes, nada. Una posterior no se toca y se nombra: Urpi solo lleva primeros despachos (§9.1). |
-| Otra salida viva (otro courier u otra «por definir») | No se toca: no se sabe qué caja se llevó Urpi. La carga lo nombra para revisar a mano. |
+| Su única salida viva es la propia de Grupo GF y su motorizado la reportó «No entregado» en una ruta anterior al día programado | Esa caja es la que se llevó Urpi (ver abajo, «La caja que Grupo GF no entregó»): se recibe en oficina, se cancela la solicitud de Grupo GF y pasa a Urpi en ruta con el mismo consecutivo, QR y rótulo. Vale también si Urpi ya la entregó, para poder cerrarla como entrega de Urpi. |
+| Otra salida viva (otro courier, otra «por definir», o la de Grupo GF sin ese «No entregado») | No se toca: no se sabe qué caja se llevó Urpi. La carga lo nombra para revisar a mano. |
 | Sin caja «por definir», o creada después del día programado | No se crea una salida. La carga lo nombra. |
-| Entregado, anulado, devuelto o anulado en Shopify | Nada. |
+| Entregado, anulado, devuelto o anulado en Shopify | Nada, salvo la caja de Grupo GF de un entregado (fila de arriba). |
+
+**La caja que Grupo GF no entregó (decisión del owner, 03-11-2026).** Urpi
+también lleva el siguiente intento de una caja que Grupo GF no entregó.
+#KP200665 salió el 29/10 con Yordani, que la reportó «No entregado · No
+contesta»; nadie la recibió en oficina, así que su KP200665-S01 siguió
+`propio · pendiente` en la caja de Yordani. El 31/10 salió con Urpi y el 02/11
+Urpi la canceló. Kapta veía «otra salida viva», no registraba el despacho, y el
+cancelado no tenía salida que anular: el pedido no entraba a «Reintentos
+Aliclik» (§9.5). Medido el 03-11-2026: 25 pedidos abiertos en «Por reprogramar
+Lima» que Urpi canceló, en la misma situación.
+
+Si la única salida viva es la propia de Grupo GF, nada se entregó con otra, la
+caja ya existía el día programado y lo último que se reportó en ella es «No
+entregado» en una ruta **anterior** al día programado, la programación la toma
+en una sola transacción (`urpi_take_gf_output`, migración 0305;
+`planUrpiDispatch`, `lib/urpi-dispatch.ts`):
+
+1. Si sigue en la caja del motorizado, se **recibe en oficina** con
+   `gf_return_to_office`, la misma función de «Recibir en oficina» (§29.13).
+2. La **solicitud de Grupo GF** de esa salida se cancela —la lleva Urpi— con el
+   evento `taken_by_urpi`.
+3. La salida pasa a **Urpi en ruta** como en la primera fila (`dispatched_at` el
+   mediodía de Lima del día programado), con `route_output_filled` y
+   `previousCourier = propio`. Consecutivo, QR y rótulo no cambian.
+
+El intento de Grupo GF no se pierde: es su parada «No entregado», que leen
+Repro Lima, la cadena de reintentos y la paga del motorizado. Si Urpi ya la
+canceló, la salida se anula en el acto como intento fallido (§30.11) y, con un
+motivo de la cadena, el pedido entra a «Reintentos Aliclik»: Urpi → AUTOECOM →
+ALIDRIVER. No toma la caja, y la carga la nombra, si es del mismo día que la
+ruta de Grupo GF o anterior, si la última parada no es «No entregado», si sigue
+en una caja sin ese reporte o de otro courier, si está devuelta, reemplazada
+(0248) o es de una venta terminada, o si no consta ni en la caja ni en la
+empresa.
 
 La custodia no cambia: la programación no prueba el traspaso (no hay cotejo),
 y el Master ya lee una salida en ruta como fuera del almacén. Cuando Urpi

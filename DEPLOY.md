@@ -5692,3 +5692,34 @@ entorno; `return_recovery_max_days` de las tiendas no cambia.
 
 **Marcha atrás.** Revertir el commit. Las filas recalculadas con `mom-v1.37`
 vuelven a calcularse con la versión anterior en la siguiente pasada del cron.
+
+### 03-11-2026 · La programación de Urpi toma la caja que Grupo GF no entregó (0305, MOM §9.1 y §30.10)
+
+Decisión del owner tras #KP200665: Yordani (Grupo GF) no la entregó el 29/10,
+nadie la recibió en oficina, el 31/10 salió con Urpi y el 02/11 Urpi la
+canceló. Kapta veía «otra salida viva», no registraba el despacho y el pedido no
+entraba a «Reintentos Aliclik». Ahora, si la única salida viva es la propia de
+Grupo GF y su motorizado la reportó «No entregado» en una ruta anterior al día
+programado, la programación la recibe en oficina, cancela la solicitud de Grupo
+GF y la pasa a Urpi en ruta, en una sola transacción. Simulado el 03-11-2026
+sobre producción: 32 pedidos (25 en «Por reprogramar Lima» y 7 entregados por
+Urpi con la caja de Grupo GF abierta). Sin crons ni variables nuevas.
+
+1. **Migración `0305_urpi_take_gf_output.sql`**, a mano, ANTES del código. Crea
+   `urpi_take_gf_output(uuid, date, text)` (solo `service_role`). No toca filas
+   al aplicarse. Es idempotente.
+2. Comprobar:
+   ```sql
+   select proname from pg_proc where proname = 'urpi_take_gf_output';
+   ```
+3. Desplegar el código. Si sale antes que la migración, nada cambia: esas cajas
+   se siguen nombrando como «otra salida viva».
+4. La lectura automática de Google la aplica sola en su siguiente pasada (cada
+   15 minutos). Los 7 entregados quedan en el aviso «entregados por Urpi siguen
+   con su salida sin cerrar» de Programaciones Urpi: «Pasar a salida de Urpi
+   entregada».
+
+**Marcha atrás.** Revertir el commit: la programación vuelve a nombrar esas
+cajas. Las salidas que ya pasaron a Urpi se quedan como están; la función puede
+quedarse (nadie más la llama) o borrarse con
+`drop function public.urpi_take_gf_output(uuid, date, text);`.

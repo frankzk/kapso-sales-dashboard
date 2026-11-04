@@ -7,7 +7,7 @@ import { saveUrpiProgramming } from "@/lib/urpi-programming-db";
 
 vi.mock("@/lib/urpi-google-sheets", () => ({ readUrpiGoogleWorkbook: vi.fn(), urpiGoogleConfigured: vi.fn(() => true) }));
 vi.mock("@/lib/urpi-programming-db", () => ({ saveUrpiProgramming: vi.fn() }));
-vi.mock("@/lib/urpi-dispatch", () => ({ registerUrpiDispatches: vi.fn(async () => ({ filled: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], errors: [] })) }));
+vi.mock("@/lib/urpi-dispatch", () => ({ registerUrpiDispatches: vi.fn(async () => ({ filled: [], fromGf: [], alreadyUrpi: 0, closed: 0, sinSalida: [], otraSalidaViva: [], errors: [] })) }));
 const payload = { rows: [], tabs: [], unassigned: [] };
 const header = ["Fecha de entrega", "Tipo de Envio", "Código de pedido", "Destinatario", "Número de contacto", "Provincia", "Distrito", "Dirección", "Producto a entregar", "Monto a Cobrar"];
 const workbook = { title: "Octubre", tabs: [{ title: "01/10/26", sheetId: 42, values: [header, ["01/10/26", "Primer Turno", "KP123", "Cliente", "900000000", "Lima", "Rímac", "Dirección", "Producto", 149], ["01/10/26", "Primer Turno", "AUR123", "Cliente", "900000000", "Lima", "Rímac", "Dirección", "Producto", 149]] }] };
