@@ -4,6 +4,13 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
+import {
+  SWAYP_ADDRESS_NOT_SENT,
+  SWAYP_REROUTE_ADDRESS_REQUIRED,
+  swaypLiveGuides,
+  swaypMotiveMentionsAddress,
+  type SwaypGuideRow,
+} from "@/lib/swayp-address";
 import { createServerSupabase, createAdminSupabase } from "@/lib/db";
 import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import { recomputeOrderMasterForShipmentsSafe } from "@/lib/order-master";
@@ -1147,8 +1154,22 @@ export async function updateShipmentDeliveryAddress(
   await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
   return {
-    notice: addressUpdateNotice(isRealShopifyOrder, shopifyPush),
+    notice: [addressUpdateNotice(isRealShopifyOrder, shopifyPush), await swaypAddressNotSent(admin, current.order_id, targetIds)]
+      .filter(Boolean)
+      .join(" "),
   };
+}
+
+/**
+ * Si el pedido tiene una guía Swayp viva, el cambio de destino no le llega:
+ * Swayp recibe la dirección al crear la guía y su API no la deja cambiar
+ * (MOM §11.6.2, KP143594-S02). Null si no hay ninguna.
+ */
+async function swaypAddressNotSent(admin: SupabaseClient, orderId: string | null, shipmentIds: string[]): Promise<string | null> {
+  const query = admin.from("shipments").select("courier,guide_code,swayp_guide,delivery_status,status_category,swayp_state");
+  const { data } = orderId ? await query.eq("order_id", orderId) : await query.in("id", shipmentIds);
+  const guides = swaypLiveGuides((data ?? []) as SwaypGuideRow[]);
+  return guides.length ? SWAYP_ADDRESS_NOT_SENT(guides) : null;
 }
 
 /** Register one row/result from the Swayp courier report. Operators choose the
@@ -1309,9 +1330,14 @@ export async function setShipmentStatus(
  */
 export async function reprogramCancelledShipmentException(
   shipmentId: string,
-  input: { nextFollowupAt?: string | null; note?: string | null },
+  input: { nextFollowupAt?: string | null; note?: string | null; addressConfirmed?: boolean },
 ): Promise<ShipmentActionState> {
   if (!(await canManageShipments())) return { error: READ_ONLY_SHIPMENTS };
+  // Si el motivo es la dirección, se corrige ANTES: Swayp la recibe al crear la
+  // guía y después ya no se le puede cambiar (MOM §11.6.2, KP143594-S02).
+  if (swaypMotiveMentionsAddress(input.note) && !input.addressConfirmed) {
+    return { error: SWAYP_REROUTE_ADDRESS_REQUIRED };
+  }
   const ctx = await authorizeShipment(shipmentId);
   if (!ctx) return { error: "Sin acceso a esta guía." };
 

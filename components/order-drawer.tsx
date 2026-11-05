@@ -43,6 +43,7 @@ import {
   opsButtonClass,
   type BadgeTone,
 } from "@/components/ops-ui";
+import { SWAYP_ADDRESS_LIVE_BEFORE, swaypLiveGuides } from "@/lib/swayp-address";
 import {
   IconArrowUpRight,
   IconCamera,
@@ -2777,6 +2778,14 @@ function GeoSection({
             save();
           }}
         >
+          {/* Swayp recibe la dirección al crear la guía y no se le puede cambiar
+              después (MOM §11.6.2, KP143594-S02). */}
+          {(() => {
+            const guides = swaypLiveGuides([
+              { courier: row.current_courier, guide_code: row.guide_code, delivery_status: row.general_status },
+            ]);
+            return guides.length ? <Banner tone="warn">{SWAYP_ADDRESS_LIVE_BEFORE(guides)}</Banner> : null;
+          })()}
           <p className="max-w-[68ch] text-[13px] leading-5 text-ink-500">
             Deja en blanco lo que no quieras cambiar. Esta corrección gana sobre {storePlatform}, sobre los
             reportes de los couriers y sobre el ubigeo, y no se pierde al sincronizar.

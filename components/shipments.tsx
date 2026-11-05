@@ -23,6 +23,17 @@ import {
   opsButtonClass,
   type BadgeTone,
 } from "@/components/ops-ui";
+import {
+  SWAYP_ADDRESS_LIVE_BEFORE,
+  SWAYP_REROUTE_ADDRESS_CONFIRM,
+  SWAYP_REROUTE_ADDRESS_NOTE,
+  SWAYP_REROUTE_ADDRESS_TITLE,
+  SWAYP_REROUTE_NO_ADDRESS,
+  SWAYP_REROUTE_NO_REFERENCE,
+  swaypAddressLine,
+  swaypLiveGuides,
+  swaypMotiveMentionsAddress,
+} from "@/lib/swayp-address";
 import { ChoicePill, DatePill, FacetPill } from "@/components/facet-pill";
 import {
   IconAlert,
@@ -2354,6 +2365,8 @@ function ShipmentDrawer({
   const [showCancelledException, setShowCancelledException] = useState(false);
   const [cancelledExceptionDate, setCancelledExceptionDate] = useState("");
   const [cancelledExceptionNote, setCancelledExceptionNote] = useState("");
+  // El motivo habla de la dirección: se confirma que ya se corrigió (MOM §11.6.2).
+  const [cancelledExceptionAddressOk, setCancelledExceptionAddressOk] = useState(false);
   // Llamadas sobre la guía anulada cuando el PEDIDO sigue en recuperación.
   const [recoveryDisposition, setRecoveryDisposition] = useState<RecoveryCallDisposition>("programar");
   const [recoveryDate, setRecoveryDate] = useState("");
@@ -2806,11 +2819,27 @@ function ShipmentDrawer({
     aliclikDecision.reason !== "three_attempts";
   const showRouteChooser =
     canForceAliclik || (!!aliclikDecision?.eligible && fenixRouteAvailable);
+  // Lo que Swayp va a recibir en la guía nueva: la dirección y la referencia de
+  // esta guía, o las del pedido si están vacías (`reprogramDestination`).
+  const swaypAddressPreview = (shipment?.delivery_address ?? "").trim() || (shopifyAddress?.address1 ?? "").trim() || null;
+  const swaypReferencePreview = (shipment?.delivery_reference ?? "").trim() || (shopifyAddress?.address2 ?? "").trim() || null;
+  const cancelledExceptionNeedsAddressOk = swaypMotiveMentionsAddress(cancelledExceptionNote);
   const cancelledExceptionReady =
     cancelledExceptionTienePedido &&
     !cancelledExceptionDateInvalid &&
     !!cancelledExceptionNote.trim() &&
-    !cancelledExceptionUnavailable;
+    !cancelledExceptionUnavailable &&
+    (!cancelledExceptionNeedsAddressOk || cancelledExceptionAddressOk);
+  // Guías Swayp vivas de esta salida: Swayp las tiene con la dirección con que
+  // se crearon, y corregirla aquí no se la cambia (MOM §11.6.2, KP143594-S02).
+  const swaypGuidesLive = shipment
+    ? swaypLiveGuides([
+        shipment,
+        ...(detail && !("error" in detail) && detail.linkedFenixShipment
+          ? [{ ...detail.linkedFenixShipment, swayp_state: null }]
+          : []),
+      ])
+    : [];
 
   // «No contesta» con los intentos agotados anula la guía: la opción lo dice
   // antes de elegirla, no solo el aviso de después.
@@ -3315,6 +3344,40 @@ function ShipmentDrawer({
                         (`#KP…`). Ya no lo acuña nadie: el número lo emite Swayp
                         al registrar el reenvío, así que prometer uno concreto
                         sería enseñar un número que no va a existir. */}
+                    {/* Lo que Swayp va a recibir, tal cual: después de crear la
+                        guía ya no se le puede cambiar (MOM §11.6.2, KP143594-S02). */}
+                    <div className="space-y-1 rounded-md bg-wash p-3">
+                      <p className={DRAWER_KEY}>{SWAYP_REROUTE_ADDRESS_TITLE}</p>
+                      <p className="text-sm leading-5 text-ink-900">
+                        {swaypAddressPreview ? swaypAddressLine(swaypAddressPreview, swaypReferencePreview) : SWAYP_REROUTE_NO_ADDRESS}
+                      </p>
+                      {swaypAddressPreview && !swaypReferencePreview && (
+                        <p className="text-[13px] font-medium leading-5 text-warn-fg">{SWAYP_REROUTE_NO_REFERENCE}</p>
+                      )}
+                      <p className="text-[13px] leading-5 text-ink-600">{SWAYP_REROUTE_ADDRESS_NOTE}</p>
+                      <OpsButton
+                        size="sm"
+                        onClick={() => {
+                          setShowAddressEditor(true);
+                          document.getElementById("guia-destino")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }}
+                        className="mt-1 pointer-coarse:h-11"
+                      >
+                        Modificar destino
+                      </OpsButton>
+                    </div>
+                    {cancelledExceptionNeedsAddressOk && (
+                      <label className="flex items-start gap-2 text-[13px] font-medium leading-5 text-ink-900">
+                        <input
+                          type="checkbox"
+                          checked={cancelledExceptionAddressOk}
+                          onChange={(e) => setCancelledExceptionAddressOk(e.target.checked)}
+                          className={cn(CHECKBOX, "mt-0.5")}
+                        />
+                        {SWAYP_REROUTE_ADDRESS_CONFIRM}
+                      </label>
+                    )}
+
                     <p className={DRAWER_NOTE}>
                       El número de la nueva guía <b className="font-semibold text-ink-900">lo emite Swayp</b> al
                       registrar el reenvío. Si Swayp no responde, el reenvío no se registra y el aviso dice por qué.
@@ -3327,6 +3390,7 @@ function ShipmentDrawer({
                           setShowCancelledException(false);
                           setCancelledExceptionDate("");
                           setCancelledExceptionNote("");
+                          setCancelledExceptionAddressOk(false);
                         }}
                         className="pointer-coarse:h-11"
                       >
@@ -3339,11 +3403,13 @@ function ShipmentDrawer({
                             () => reprogramCancelledShipmentException(shipmentId, {
                               nextFollowupAt: new Date(cancelledExceptionDate).toISOString(),
                               note: cancelledExceptionNote,
+                              addressConfirmed: cancelledExceptionAddressOk,
                             }),
                             () => {
                               setShowCancelledException(false);
                               setCancelledExceptionDate("");
                               setCancelledExceptionNote("");
+                              setCancelledExceptionAddressOk(false);
                             },
                           )
                         }
@@ -4076,6 +4142,7 @@ function ShipmentDrawer({
                 </div>
               ) : (
                 <div className="space-y-4 pt-4">
+                  {swaypGuidesLive.length > 0 && <Banner tone="warn">{SWAYP_ADDRESS_LIVE_BEFORE(swaypGuidesLive)}</Banner>}
                   <label className={DRAWER_LABEL}>
                     Dirección completa
                     <textarea

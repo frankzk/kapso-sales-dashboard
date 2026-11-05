@@ -11,6 +11,7 @@
 // gestiona despachos ni asignaciones: eso sigue en Repro Provincia.
 
 import { revalidatePath } from "next/cache";
+import { SWAYP_ADDRESS_NOT_SENT, swaypLiveGuides, type SwaypGuideRow } from "@/lib/swayp-address";
 import { returnManifestEntriesForShipments } from "@/lib/return-manifest-access";
 import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
@@ -2847,6 +2848,15 @@ export async function updateOrderGeo(
       notLearned,
       moved ? `Cobertura: ${coverageLabel(moved.from)} → ${coverageLabel(moved.to)}.` : null,
       coverage.error,
+      // Una guía Swayp viva no recibe la corrección (MOM §11.6.2, KP143594-S02).
+      await (async () => {
+        const { data } = await admin
+          .from("shipments")
+          .select("courier,guide_code,swayp_guide,delivery_status,status_category,swayp_state")
+          .eq("order_id", orderId);
+        const guides = swaypLiveGuides((data ?? []) as SwaypGuideRow[]);
+        return guides.length ? SWAYP_ADDRESS_NOT_SENT(guides) : null;
+      })(),
     ]
       .filter(Boolean)
       .join(" "),
