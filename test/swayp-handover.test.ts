@@ -24,10 +24,13 @@ import {
   SWAYP_HANDOVER_SIN_FECHA,
   SWAYP_HANDOVER_YA_ENTREGADA,
   SWAYP_HOY_FALTA_ENTREGA,
+  SWAYP_HOY_FALTA_PASO,
   SWAYP_NO_SALE_EXPLAIN,
   SWAYP_NO_SALE_PICK,
   SWAYP_NO_SALE_REASONS,
   SWAYP_NO_SALE_TOO_LONG,
+  SWAYP_PICKUP_LABEL,
+  SWAYP_PICKUP_MINUTE,
   SWAYP_ROW_SIN_ENTREGA,
   buildSwaypHandover,
   swaypCloseError,
@@ -182,13 +185,51 @@ describe("«Hoy» con la entrega", () => {
     extra: { custody_state: "courier", swayp_state: 5 },
   });
 
-  it("sin abrir: la nota y la falta que se arma al entregarla", () => {
-    const hoy = buildWarehouseSwayp(swaypInput([armed, loaded]), now).hoy!;
+  it("sin abrir, antes de las 07:00: la nota y la falta que se arma al entregarla", () => {
+    const hoy = buildWarehouseSwayp(swaypInput([armed, loaded]), limaAt(WED, "06:40")).hoy!;
     expect(hoy.note).toBe(SWAYP_HOY_NOTE);
     expect(SWAYP_HOY_NOTE).toBe(SWAYP_ENTREGA_SIN_ABRIR);
     expect(hoy.entrega).toBeNull();
     expect(hoy.faltan[0]!.actionLine).toEqual({ kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA });
     expect(swaypHoyUrgent(hoy)).toBe(1);
+  });
+
+  it("sin abrir, pasadas las 07:00: el chofer pudo irse sin ella (owner, 05-11-2026)", () => {
+    expect(SWAYP_PICKUP_MINUTE).toBe(7 * 60);
+    expect(SWAYP_PICKUP_LABEL).toBe("07:00");
+    expect(SWAYP_HOY_FALTA_PASO).toBe(
+      "Pasó la hora de Swayp (07:00) sin entrega registrada. Si el chofer aún no se fue, entrégala en «Entregar a Swayp» o márcala «No sale»; si se fue sin ella, avisa a Seguimiento para que cambie la fecha en Swayp o anule la guía hoy.",
+    );
+    const at = (time: string) => buildWarehouseSwayp(swaypInput([armed, loaded]), limaAt(WED, time)).hoy!;
+    // 06:59 todavía espera a Swayp; desde las 07:00 en punto ya no.
+    expect(at("06:59").faltan[0]!.actionLine).toEqual({ kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA });
+    for (const time of ["07:00", "07:20", "13:00", "23:59"]) {
+      const hoy = at(time);
+      expect(hoy.faltan[0]!.actionLine, time).toEqual({ kind: "crit", text: SWAYP_HOY_FALTA_PASO });
+      // La nota no cambia y la falta sigue siendo urgente.
+      expect(hoy.note, time).toBe(SWAYP_HOY_NOTE);
+      expect(swaypHoyUrgent(hoy), time).toBe(1);
+    }
+  });
+
+  it("pasadas las 07:00 con la entrega abierta se sigue entregando; con «Swayp no vino», la falta no dice nada", () => {
+    const open = {
+      manifest: { id: "m1", state: "office_check", received_by: null, custody_completed_at: null, cancelled_at: null, cancellation_reason: null },
+      items: [
+        { shipment_id: "sh-KP1-S01", office_checked_at: "2026-11-04T12:04:00Z", office_checked_by: "u-almacen-a", removed_at: null, removed_by: null, removal_reason: null },
+        { shipment_id: "sh-KP2-S02", office_checked_at: null, office_checked_by: null, removed_at: null, removed_by: null, removal_reason: null },
+      ],
+    };
+    const inProgress = buildWarehouseSwayp({ ...swaypInput([armed, loaded]), handover: open, canHandover: true }, now).hoy!;
+    expect(inProgress.note).toBe(SWAYP_ENTREGA_EN_CURSO(1, 2));
+    expect(inProgress.faltan[0]!.actionLine).toEqual({ kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA });
+    const noVino = {
+      manifest: { ...open.manifest, state: "cancelled", cancelled_at: "2026-11-04T13:00:00Z", cancellation_reason: "Swayp no vino" },
+      items: open.items.map((row) => ({ ...row, removed_at: "2026-11-04T13:00:00Z", removal_reason: "Ruta cancelada: Swayp no vino" })),
+    };
+    const quiet = buildWarehouseSwayp({ ...swaypInput([armed, loaded]), handover: noVino, canHandover: true }, now).hoy!;
+    expect(quiet.note).toBe(SWAYP_ENTREGA_NO_VINO(2));
+    expect(quiet.faltan[0]!.actionLine).toBeNull();
   });
 
   it("cerrada: la nota es el resumen, la armada dice quién la entregó y la falta, por qué no salió", () => {

@@ -52,6 +52,7 @@ import {
   SWAYP_REVISAR_TITLE,
   SWAYP_TITLE,
   swaypAutoRefreshActive,
+  swaypPickupPassedSinceRead,
   swaypCell,
   swaypHoyUrgent,
   swaypToneCounts,
@@ -197,6 +198,8 @@ export interface SwaypRefreshEnv {
  *   cuando lo leído tiene 5 minutos; y a cualquier hora si cambió el día de
  *   Lima (la estación pasa la noche abierta: el miércoles «Mañana · miércoles»
  *   y «Hoy · martes» serían falsos, y el escáner apartaría cajas del jueves).
+ * - Una vez al pasar las 07:00 de un día de despacho, si lo leído es de antes:
+ *   la falta de «Hoy» sin la entrega abierta cambia de texto (05-11-2026).
  * `readAt` es cuándo llegó del servidor lo que se ve; se adelanta al pedir.
  */
 export function watchSwaypRefresh(
@@ -217,6 +220,7 @@ export function watchSwaypRefresh(
     if (!idle()) return;
     const now = env.clock();
     if (limaClock(now).day !== opts.today) return refresh(now);
+    if (swaypPickupPassedSinceRead(opts.readAt.current, now)) return refresh(now);
     if (!swaypAutoRefreshActive(now)) return;
     if (now.getTime() - opts.readAt.current < SWAYP_AUTO_REFRESH_MS) return;
     refresh(now);

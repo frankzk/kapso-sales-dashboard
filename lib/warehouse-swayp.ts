@@ -45,6 +45,8 @@ import type { DispatchShipment } from "@/lib/dispatch-access";
 import {
   SWAYP_ENTREGA_SIN_ABRIR,
   SWAYP_HOY_FALTA_ENTREGA,
+  SWAYP_HOY_FALTA_PASO,
+  SWAYP_PICKUP_MINUTE,
   buildSwaypHandover,
   swaypHandoverRowLine,
   type SwaypHandover,
@@ -635,6 +637,16 @@ export function swaypAutoRefreshActive(now: Date): boolean {
   return minute >= SWAYP_AUTO_REFRESH_FROM_MINUTE && minute <= SWAYP_AUTO_REFRESH_UNTIL_MINUTE;
 }
 
+/**
+ * ¿Lo leído es de antes de las 07:00 de un día de despacho y ya pasaron? Se
+ * relee una vez: a esa hora la falta de «Hoy» sin la entrega abierta cambia de
+ * texto (owner, 05-11-2026), y la estación pasa la noche abierta.
+ */
+export function swaypPickupPassedSinceRead(readAt: number, now: Date): boolean {
+  const { day, minute } = limaClock(now);
+  return isSwaypDispatchDay(day) && minute >= SWAYP_PICKUP_MINUTE && readAt < limaInstant(day, SWAYP_PICKUP_MINUTE);
+}
+
 // ---------------------------------------------------------------------------
 // Pequeñas piezas
 // ---------------------------------------------------------------------------
@@ -1005,13 +1017,23 @@ function armadaLine(row: Pick<SwaypGuideRow, "code" | "customerName" | "district
  * Qué hacer con una falta. En «Próximo», solo si Swayp ya la tomó (avisar). En
  * «Hoy», frente a la entrega (fase 3): lo que la entrega ya dice de ella (no
  * salió, sin entrega registrada) o, mientras Swayp no pasa, armarla y
- * entregarla en «Entregar a Swayp» o marcarla «No sale». Swayp carga su ruta
- * hacia las 05:45, así que en «Hoy» que la haya «tomado» es lo normal.
+ * entregarla en «Entregar a Swayp» o marcarla «No sale». Pasadas las 07:00 sin
+ * la entrega abierta, el chofer pudo irse sin ella: entregarla si sigue aquí o
+ * avisar a Seguimiento (owner, 05-11-2026). Con la entrega abierta se sigue
+ * entregando. Swayp carga su ruta hacia las 05:45, así que en «Hoy» que la
+ * haya «tomado» es lo normal.
  */
-function faltaActionLine(kind: SwaypZoneKind, taken: boolean, handoverLine: SwaypTone | null, handover: SwaypHandover | null): SwaypTone | null {
+function faltaActionLine(
+  kind: SwaypZoneKind,
+  taken: boolean,
+  handoverLine: SwaypTone | null,
+  handover: SwaypHandover | null,
+  afterPickup: boolean,
+): SwaypTone | null {
   if (kind === "hoy") {
     if (handover?.state === "no_vino") return null;
     if (handoverLine) return handoverLine;
+    if (!handover && afterPickup) return { kind: "crit", text: SWAYP_HOY_FALTA_PASO };
     return { kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA };
   }
   return taken ? { kind: "warn", text: SWAYP_HOY_FALTA_TOMADA } : null;
@@ -1156,7 +1178,8 @@ function buildZone(kind: SwaypZoneKind, day: string, ctx: Ctx): SwaypZone {
       taken,
       // En «Hoy» el paradero sirve aunque Swayp la haya cargado: la entrega la arma al escanearla.
       where: taken && kind !== "hoy" ? null : where,
-      actionLine: faltaActionLine(kind, taken, base.handoverLine, ctx.handover),
+      // La hora de Lima al leer el lote («Leído 07:05»); «Hoy» es siempre el día de hoy.
+      actionLine: faltaActionLine(kind, taken, base.handoverLine, ctx.handover, limaClock(ctx.now).minute >= SWAYP_PICKUP_MINUTE),
       // La falta lleva lo de la entrega en su `actionLine`.
       handoverLine: null,
     });

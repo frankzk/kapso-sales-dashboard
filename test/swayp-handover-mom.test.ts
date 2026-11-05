@@ -30,6 +30,7 @@ import {
   SWAYP_HANDOVER_STALE_REASON,
   SWAYP_HANDOVER_YA_ENTREGADA,
   SWAYP_HOY_FALTA_ENTREGA,
+  SWAYP_HOY_FALTA_PASO,
   SWAYP_MANIFEST_FROM_ALMACEN,
   SWAYP_NO_SALE_DETAIL_LABEL,
   SWAYP_NO_SALE_DETAIL_MAX,
@@ -124,6 +125,16 @@ describe("cita los textos de la pantalla tal cual (lib/swayp-handover.ts)", () =
   it("la falta de hoy en «Swayp por salir»", () => {
     expect(section("### 9.1 Preparación, corte y capacidad diaria", "### 9.2 ")).toContain(`«${SWAYP_HOY_FALTA_ENTREGA}»`);
   });
+
+  it("la falta de hoy pasadas las 07:00 sin la entrega abierta (owner, 05-11-2026)", () => {
+    const s91 = section("### 9.1 Preparación, corte y capacidad diaria", "### 9.2 ");
+    expect(s91).toContain(`Desde las 07:00 de Lima (la hora al leer el lote, «Leído 07:05»), si nadie abrió la entrega, la falta dice «${SWAYP_HOY_FALTA_PASO}»`);
+    expect(s91).toContain("KP200244-S02");
+    expect(s91).toContain("Con la entrega abierta se sigue entregando: la falta no cambia; con «Swayp no vino», la falta no dice nada (lo dice la nota).");
+    expect(s).toContain("Las alertas van por estado, nunca por una hora de Swayp");
+    // La estación pasa la noche abierta: se relee una vez al pasar las 07:00.
+    expect(s91).toContain("un día de despacho se relee una vez al pasar las 07:00 si lo leído es de antes");
+  });
 });
 
 describe("lo que cambia fuera de la subsección", () => {
@@ -155,9 +166,18 @@ describe("lo que cambia fuera de la subsección", () => {
   it("las horas de Swayp: corregidas el 05-11-2026, con la prueba y lo que queda", () => {
     expect(s).toContain("**Las horas de Swayp (corregido el 05-11-2026).** Swayp escribe sus fechas en hora de Lima y Kapta las leía como UTC");
     expect(s).toContain("«Por recolectar 4 nov 03:19 a. m.», «Reparto 05:49 a. m.», «Novedad 10:25 a. m.» y «05:38 p. m.», guardados como 03:19:37Z, 05:49:11Z, 10:25:52Z y 17:38:01Z");
-    expect(s).toContain("Lo guardado antes sigue con 5 h de menos: corregirlo es una escritura en la base, pendiente del owner.");
     expect(s).not.toContain("que se arregla aparte");
     expect(readFileSync(resolve(process.cwd(), "lib/swayp.ts"), "utf8")).toContain("export function swaypInstant(");
+  });
+
+  it("lo guardado antes con 5 h de menos se queda así: decisión del owner (05-11-2026), con el conteo y el criterio", () => {
+    expect(s).toContain("Lo guardado antes sigue con 5 h de menos, y se queda así: el owner decidió no corregirlo (05-11-2026).");
+    expect(s).toContain("Son 902 eventos «Swayp: …» de la Actividad (139 caen el día anterior");
+    expect(s).toContain("1.115 horas de 378 salidas Swayp de 373 pedidos");
+    expect(s).toContain("el owner preguntó «es realmente necesario?» y aprobó dejarlo así («si, haz los dos»)");
+    expect(s).toContain("corregirlo era escribir unos 2.000 valores en producción y recalcular esos 373 pedidos");
+    expect(s).toContain("una hora es de Swayp si viene al segundo exacto (Kapta escribe milésimas) y se guardó al menos 5 h después de lo que dice");
+    expect(s).not.toContain("pendiente del owner");
   });
 
   it("no toca el Master: ningún estado de pedido nuevo y la versión del resolvedor no cambia por esto", () => {

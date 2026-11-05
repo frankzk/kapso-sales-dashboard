@@ -21,6 +21,12 @@ import { SWAYP_STATES } from "@/lib/swayp-states";
 
 /** La hora a la que pasa Swayp (E1, «a eso de las 7am de Lima»). */
 export const SWAYP_PICKUP_LABEL = "07:00";
+/**
+ * La misma hora en minutos de Lima. Desde ahí, en «Hoy», una falta sin la
+ * entrega abierta ya no espera a Swayp: el chofer pudo irse sin ella (owner,
+ * 05-11-2026). Es la hora de Kapta al leer el lote, no una hora de Swayp.
+ */
+export const SWAYP_PICKUP_MINUTE = 7 * 60;
 
 /** Estados de Swayp que ya cerraron la guía: la caja no se entrega (7 Entregada … 12). */
 export const SWAYP_HANDOVER_CLOSED_STATES: ReadonlySet<number> = new Set([7, 8, 9, 10, 11, 12]);
@@ -144,6 +150,9 @@ export const SWAYP_ROW_NO_SALIO = (reason: string): string => `No salió: ${reas
 export const SWAYP_ROW_SIN_ENTREGA = "Sin entrega registrada.";
 export const SWAYP_HOY_FALTA_ENTREGA =
   `Swayp pasa hacia las ${SWAYP_PICKUP_LABEL}: ármala y entrégala en «Entregar a Swayp», o márcala «No sale» con su motivo.`;
+/** La falta de hoy pasada la hora de Swayp y sin la entrega abierta (owner, 05-11-2026). */
+export const SWAYP_HOY_FALTA_PASO =
+  `Pasó la hora de Swayp (${SWAYP_PICKUP_LABEL}) sin entrega registrada. Si el chofer aún no se fue, entrégala en «Entregar a Swayp» o márcala «No sale»; si se fue sin ella, avisa a Seguimiento para que cambie la fecha en Swayp o anule la guía hoy.`;
 export const SWAYP_ALERT_NO_SALIO_EN_REPARTO =
   "Swayp la tiene en reparto y la caja no salió: Seguimiento cambia la fecha o anula la guía hoy, o Swayp reportará que no llegó.";
 export const SWAYP_ALERT_NO_DESPACHO = (time: string | null, receivedBy: string | null): string =>
