@@ -171,6 +171,7 @@ Cuerpo de un error:
 | `body_too_large` | 413 | no | El cuerpo pasa de 16 KB. | Derivar y avisar al equipo: es un error del workflow. |
 | `invalid_body` | 400 | no | Faltan datos o no sirven (`errors`). | Si falta un dato de la clienta (celular, dirección, distrito), pedírselo y volver a llamar con un `request_id` **nuevo**. Si es un error del workflow, derivar. |
 | `agency_needs_advisor` | 422 | no | El pedido es para recoger en agencia: el bot no lo crea (owner, 23-10-2026). Kapta no creó nada. | Derivar a una asesora (con el voucher si ya llegó). |
+| `prepay_required` | 422 | no | El celular está en la «Lista de pago adelantado» (MOM §41, 05-11-2026): paga el total por adelantado y Kapta no le crea pedidos contra entrega. Kapta no creó nada. | Derivar a una asesora, que cobra el total por adelantado. No ofrecer contra entrega ni decirle a la clienta por qué. |
 | `wrong_platform` | 409 | no | La tienda todavía crea sus pedidos en Shopify. Kapta no creó nada. | Antes del corte: seguir con la acción de Shopify de hoy. Después del corte no debería pasar: derivar y avisar. |
 | `store_inactive` | 409 | no | La tienda está pausada en Kapta. | Derivar a una asesora. |
 | `rate_limited` | 429 | sí | Más de 20 pedidos nuevos del bot en un minuto en la tienda (un bucle). | Reintentar (regla de abajo); si no sale, derivar y avisar. |

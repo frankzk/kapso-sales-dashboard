@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   AUTO_TRIAL_MAX_CART_AGE_DAYS,
   AUTO_TRIAL_PLATFORM_REASON,
+  AUTO_TRIAL_PREPAY_REASON,
   AUTO_TRIAL_TAG,
   isLaterOrderOf,
   isUsableAddress,
@@ -227,6 +228,21 @@ describe("processAutoOrderTrials", () => {
       order_name: "#KP140001",
       reason: null,
     });
+  });
+
+  it("un celular de la lista de pago adelantado (§41): no se completa el carrito; queda omitido con su motivo", async () => {
+    const seen: (string | null)[][] = [];
+    const { deps, calls, finished } = fakeDeps({
+      prepayRequired: async (phones) => {
+        seen.push(phones);
+        return true;
+      },
+    });
+    const r = await processAutoOrderTrials(deps);
+    expect(r).toMatchObject({ generated: 0, skipped: 1 });
+    expect(calls).toEqual([]);
+    expect(finished.t1).toMatchObject({ status: "omitido", reason: AUTO_TRIAL_PREPAY_REASON });
+    expect(seen).toHaveLength(1);
   });
 
   it("grupo B: la dirección va al BORRADOR antes de completarlo", async () => {

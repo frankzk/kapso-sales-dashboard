@@ -53,7 +53,19 @@ import {
   type GeocodePilotReason,
 } from "@/lib/geocode-google";
 import {
+  PREPAY_LIST_LABEL,
+  PREPAY_LIST_PATH,
+  PREPAY_LIST_SYNONYM,
+  PREPAY_MODE_LABEL,
+  prepaySimulationHeadline,
+  type PrepayMode,
+  type PrepaySimulationSummary,
+} from "@/lib/prepay-list";
+import {
   measureLimaGeocodeNow,
+  setPrepayAutoMode,
+  simulatePrepayNow,
+  type PrepaySimulationResult,
   setOrgAutomation,
   setRetryDailyCap,
   setRetryGeocode,
@@ -119,6 +131,13 @@ const INDEX: IndexGroup[] = [
       { id: "retry-registro", label: "Hoy y ayer" },
     ],
   },
+  {
+    title: "Lista de pago adelantado",
+    items: [
+      { id: "prepay-regla", label: "Regla automática" },
+      { id: "prepay-simular", label: "Simular ahora" },
+    ],
+  },
   { title: "Interruptores", items: AUTOMATION_GROUPS.map((g) => ({ id: groupId(g.key), label: g.title })) },
   { title: "Historial", items: [{ id: "ultimos-cambios", label: "Últimos cambios" }] },
 ];
@@ -174,6 +193,7 @@ export function AutomationsPanel({ orgs, writable }: { orgs: AutomationsOrgView[
         {/* La clave remonta el panel al cambiar de organización: nada de un estado local de otra. */}
         <SettingsIndex groups={INDEX} key={org.orgId}>
           <RetryGroup org={org} writable={writable} />
+          <PrepayGroup org={org} writable={writable} />
           <SettingsGroup title="Interruptores" description="Cada uno guarda al moverlo. Los que salen de Kapta piden confirmación antes de encenderse.">
             {AUTOMATION_GROUPS.map((group) => (
               <CatalogSection key={group.key} group={group} org={org} writable={writable} />
@@ -786,6 +806,169 @@ function SimulateSection({ orgId, canEdit }: { orgId: string; canEdit: boolean }
         )}
       </div>
     </SettingsSection>
+  );
+}
+
+// ── La «Lista de pago adelantado» (0309, MOM §41) ───────────────────────────
+
+function prepayBadge(mode: PrepayMode, available: boolean): ReactNode {
+  if (!available) return <Badge tone="warn">No instalado</Badge>;
+  if (mode === "activo") return <Badge tone="ok">Activo</Badge>;
+  if (mode === "simulacion") return <Badge tone="info">En simulación</Badge>;
+  return <Badge>Apagado</Badge>;
+}
+
+function PrepaySummaryCard({ title, summary }: { title: string; summary: PrepaySimulationSummary }) {
+  return (
+    <div className={CARD}>
+      <div className={cn(ROW, "space-y-1.5")}>
+        <p className="text-sm font-semibold text-ink-900">{title}</p>
+        <p className="text-sm text-ink-700">{prepaySimulationHeadline(summary)}</p>
+        <p className={HELP}>
+          {fmtInt(summary.phonesWithFacts)} celulares con un rechazo en la puerta o un no recogido en los últimos seis meses ·{" "}
+          {fmtInt(summary.alreadyListed)} ya estaban en la lista · {fmtInt(summary.respectedRemovals)} quitados a mano sin hecho nuevo (se respetan)
+          {summary.withoutPhone ? ` · ${fmtInt(summary.withoutPhone)} pedidos sin celular válido` : ""}
+          {summary.inserted != null ? ` · ${fmtInt(summary.inserted)} agregados de verdad` : ""}.
+        </p>
+        {summary.samples.length > 0 && (
+          <details className="text-[13px] text-ink-600">
+            <summary className="cursor-pointer font-medium text-ink-700">Pedidos que lo disparan ({fmtInt(summary.samples.length)})</summary>
+            <p className="mt-1 leading-5">{summary.samples.join(", ")}</p>
+          </details>
+        )}
+        {summary.error && <p className="text-[13px] text-crit-fg">{summary.error}</p>}
+      </div>
+    </div>
+  );
+}
+
+function PrepayGroup({ org, writable }: { org: AutomationsOrgView; writable: boolean }) {
+  const view = org.prepay;
+  const [mode, setMode] = useState<PrepayMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [sim, setSim] = useState<PrepaySimulationResult | null>(null);
+  const [simPending, startSim] = useTransition();
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available;
+
+  const change = (next: PrepayMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (
+      next === "activo" &&
+      !window.confirm(
+        `¿Poner en Activo la regla de la «${PREPAY_LIST_LABEL}»? Kapta agregará sola a la lista a quien rechazó un pedido en la puerta o no lo recogió en la agencia: desde entonces paga el total por adelantado y la tienda le esconde el contra entrega.`,
+      )
+    ) {
+      return false;
+    }
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setPrepayAutoMode(org.orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  const latestSim = sim?.summary ?? view.lastSimulation?.summary ?? null;
+
+  return (
+    <SettingsGroup
+      title={PREPAY_LIST_LABEL}
+      description={`La ${PREPAY_LIST_SYNONYM}: los celulares que pagan el total por adelantado. La lista se ve y se cambia a mano en «Pago adelantado».`}
+    >
+      <SettingsSection
+        id="prepay-regla"
+        title="Regla automática"
+        badge={prepayBadge(mode, view.available)}
+        description={
+          <>
+            <p>
+              Agrega a la lista a quien tenga al menos un pedido <strong>rechazado en la puerta</strong> (Aliclik, Swayp o el motorizado propio) o{" "}
+              <strong>no recogido en la agencia</strong>, en los últimos seis meses. A quien se quitó a mano solo lo vuelve a agregar un pedido
+              que no tenía ya al quitarlo.
+            </p>
+            <p>
+              <strong>Apagado:</strong> no agrega a nadie (la lista y sus frenos siguen). <strong>Simulación:</strong> cada hora dice quién
+              entraría, sin agregarlo. <strong>Activo:</strong> los agrega.
+            </p>
+          </>
+        }
+        actions={
+          <Link href={PREPAY_LIST_PATH} className={cn(LINK, "text-[13px]")}>
+            Ver la lista{view.activeCount != null ? ` (${fmtInt(view.activeCount)})` : ""}
+          </Link>
+        }
+      >
+        {view.error && (
+          <Banner tone="warn" role="status">
+            {view.error}
+          </Banner>
+        )}
+        <div className={CARD}>
+          <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-3")}>
+            <span className="text-sm font-medium text-ink-900">Posición de la regla</span>
+            <ModeControl value={mode} label="Regla automática de la lista de pago adelantado" disabled={!canEdit} pending={pending} onChange={change} />
+          </div>
+          {(pending || status) && (
+            <div className={cn(ROW, "border-t border-line py-3")}>
+              <RowStatus pending={pending} status={status} />
+            </div>
+          )}
+        </div>
+        {view.lastRun && <PrepaySummaryCard title={`Última pasada en Activo · ${view.lastRun.at}`} summary={view.lastRun.summary} />}
+      </SettingsSection>
+
+      <SettingsSection
+        id="prepay-simular"
+        title="Simular ahora"
+        description="Revisa ahora los últimos seis meses y dice quién entraría a la lista, sin agregar a nadie. Guarda el resumen (cuentas y números de pedido, nunca celulares)."
+        actions={
+          <OpsButton
+            size="sm"
+            disabled={!canEdit || simPending}
+            onClick={() => {
+              setSim(null);
+              startSim(async () => {
+                try {
+                  setSim(await simulatePrepayNow(org.orgId));
+                } catch {
+                  setSim({ error: "La simulación no respondió: se cortó o se perdió la conexión. Vuelve a intentar." });
+                }
+              });
+            }}
+            className="pointer-coarse:h-11"
+          >
+            {simPending ? "Simulando…" : "Simular ahora"}
+          </OpsButton>
+        }
+      >
+        <div aria-live="polite" className="space-y-3">
+          {sim?.error && (
+            <Banner tone="crit" role="alert">
+              {sim.error}
+            </Banner>
+          )}
+          {latestSim ? (
+            <PrepaySummaryCard
+              title={sim?.summary ? "Simulación de ahora" : `Última simulación · ${view.lastSimulation?.at ?? ""}`}
+              summary={latestSim}
+            />
+          ) : (
+            !sim?.error && <p className={cn(CARD, ROW, "text-sm text-ink-500")}>Todavía no hay ninguna simulación.</p>
+          )}
+        </div>
+      </SettingsSection>
+    </SettingsGroup>
   );
 }
 

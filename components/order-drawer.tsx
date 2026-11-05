@@ -75,6 +75,8 @@ import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
+import { createPrepayPaymentLink, loadOrderPrepayStatus, type OrderPrepayStatus } from "@/app/dashboard/pedidos/prepay-actions";
+import { PrepayListBanner } from "@/components/prepay-list-banner";
 import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
 import { fenixOutputIsCancelable, manualOutputIsCancelable, nombreDeCourier } from "@/lib/shipment-output";
 import {
@@ -1078,6 +1080,22 @@ export function OrderDrawer({
       alive = false;
     };
   }, [orderId, wantsBrief, detail]);
+  // La «Lista de pago adelantado» (MOM §41): en cualquier etapa, no solo en
+  // confirmación. Se vuelve a leer con el detalle (un pago validado lo cambia).
+  const [prepay, setPrepay] = useState<OrderPrepayStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadOrderPrepayStatus(orderId)
+      .then((res) => {
+        if (alive) setPrepay(res);
+      })
+      .catch(() => {
+        if (alive) setPrepay(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orderId, detail]);
   const paymentPanel = detail
     ? orderPaymentPanelPresentation({
         operation: detail.routePlan.operation,
@@ -1583,6 +1601,15 @@ export function OrderDrawer({
 
                 <DrawerJourneyRail current={detail.row.macro_stage} />
               </section>
+              {/* El cliente paga el total por adelantado (MOM §41): arriba, antes
+                  de llamar y antes de cualquier guía. */}
+              <PrepayListBanner
+                status={prepay}
+                context="order"
+                canCreateLink={canEdit}
+                onCreateLink={() => createPrepayPaymentLink(orderId)}
+                className="order-2"
+              />
               {nextAction && workspace === "operar" && (
                 <div className="order-2">
                   {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en

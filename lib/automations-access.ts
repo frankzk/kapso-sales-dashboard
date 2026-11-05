@@ -41,6 +41,8 @@ import {
   joinNames,
   type OrgAutomationTable,
 } from "@/lib/automations-catalog";
+import { loadPrepaySettings } from "@/lib/prepay-list-server";
+import { parsePrepaySimulationSummary, type PrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import {
   GEOCODE_KEY_MISSING,
   geocodeLimaGate,
@@ -126,12 +128,25 @@ export interface SwitchEventView {
   actor: string;
 }
 
+/** La regla automática de la «Lista de pago adelantado» (0309, MOM §41). */
+export interface PrepayAutoView {
+  /** Falso si la migración 0309 aún no está: el control se bloquea. */
+  available: boolean;
+  mode: PrepayMode;
+  /** Cuántos celulares hay hoy en la lista (vivos). Null: no se pudo contar. */
+  activeCount: number | null;
+  lastSimulation: { at: string; summary: PrepaySimulationSummary } | null;
+  lastRun: { at: string; summary: PrepaySimulationSummary } | null;
+  error: string | null;
+}
+
 export interface AutomationsOrgView {
   orgId: string;
   orgName: string;
   /** Las tiendas activas: una por interruptor de tienda y por enlace a sus ajustes. */
   stores: { id: string; name: string }[];
   retry: RetryView;
+  prepay: PrepayAutoView;
   org: Record<string, OrgSwitchView>;
   /** Interruptores de tienda; `null` si no se pudieron leer las tiendas. */
   store: Record<string, StoreSwitchView[]> | null;
@@ -184,7 +199,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
   const storeColumns = ["id", "name", "status", ...STORE_AUTOMATION_COLUMNS, "aliclik_enabled", "telegram_chat_id"];
   const storesQuery = admin.from("stores").select(storeColumns.join(",")).eq("org_id", orgId).order("name");
 
-  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes] = await Promise.all([
+  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes, prepay] = await Promise.all([
     storesQuery,
     loadRetry(admin, orgId, today, yesterday),
     loadOrgSwitches(admin, orgId),
@@ -197,6 +212,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     admin.from("invoice_issuers").select("mode").eq("org_id", orgId),
     admin.from("lead_routing_settings").select("enabled").eq("org_id", orgId).maybeSingle(),
     admin.from("auto_order_cohorts").select("enabled,starts_at,ends_at"),
+    loadPrepayAuto(admin, orgId),
   ]);
 
   const allStores = storesRes.error ? [] : ((storesRes.data ?? []) as unknown as StoreRow[]);
@@ -303,6 +319,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
   }
 
   if (retry.error) errors.push(retry.error);
+  if (prepay.error) errors.push(prepay.error);
   errors.push(...orgSwitches.errors);
 
   // El nombre de la tienda en el registro de los reintentos.
@@ -313,6 +330,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     orgName,
     stores: active.map((s) => ({ id: s.id, name: s.name ?? "Tienda" })),
     retry,
+    prepay,
     org: orgSwitches.view,
     store,
     readonly,
@@ -473,4 +491,27 @@ async function loadOrgSwitches(admin: SupabaseClient, orgId: string): Promise<{ 
     };
   }
   return { view, errors: [...new Set(errors)] };
+}
+
+/** La posición de la regla de la lista de pago adelantado y sus últimos resúmenes. */
+async function loadPrepayAuto(admin: SupabaseClient, orgId: string): Promise<PrepayAutoView> {
+  const { settings, missing, error } = await loadPrepaySettings(admin, orgId);
+  const empty: PrepayAutoView = { available: false, mode: "apagado", activeCount: null, lastSimulation: null, lastRun: null, error: null };
+  if (missing) return empty;
+  if (error) return { ...empty, error: "No se pudo leer la regla de la lista de pago adelantado: no se puede cambiar ahora." };
+  const { count } = await admin
+    .from("prepay_list_entries")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .is("removed_at", null);
+  const sim = parsePrepaySimulationSummary(settings.last_simulation);
+  const run = parsePrepaySimulationSummary(settings.last_run);
+  return {
+    available: true,
+    mode: settings.auto_mode,
+    activeCount: typeof count === "number" ? count : null,
+    lastSimulation: sim ? { at: formatLimaDateTime(sim.at), summary: sim } : null,
+    lastRun: run ? { at: formatLimaDateTime(run.at), summary: run } : null,
+    error: null,
+  };
 }

@@ -18,6 +18,7 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
+import { prepayGuideBlock, prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { getCurrentUser } from "@/lib/access";
 import { orderPlatformOf } from "@/lib/shipment-order-capture";
@@ -532,6 +533,10 @@ export async function createManualRouteOutput(
   const admin = createAdminSupabase();
   const saleBlock = await legacySaleSendBlock(admin, orderId);
   if (saleBlock) return { error: saleBlock };
+  // La lista de pago adelantado (MOM §41): la salida de Grupo GF, Urpi y los
+  // demás motorizados sale solo con el pedido pagado completo (cobro cero).
+  const prepayBlock = await prepayGuideBlock(admin, ctx.row as unknown as PrepayOrderRow);
+  if (prepayBlock) return { error: prepayBlock };
   // Las salidas se leen ANTES del cierre a propósito: para saber si un pedido
   // cerrado merece otro intento hay que preguntarle a su guía POR QUÉ se cerró.
   const { data: existing, error: existingError } = await admin
@@ -1896,6 +1901,14 @@ export async function registerConfirmationAttempt(
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  // LA LISTA DE PAGO ADELANTADO (MOM §41). Un cliente de la lista no se
+  // confirma contra entrega: paga el total antes. Se rechaza antes de registrar
+  // el intento (y antes de guardar una coordenada), como la fecha inválida. Los
+  // demás resultados (no contestó, volver a contactar…) se registran igual.
+  if (result.confirms) {
+    const prepay = await prepayOrderCheck(createAdminSupabase(), ctx.row as unknown as PrepayOrderRow, "confirmar");
+    if (prepay.state !== "ok") return { error: prepay.message };
+  }
   // Confirmar sin ubicación sí se puede (la clienta da la dirección después);
   // programar la salida no (MOM §6.2, #KP142558). Se rechaza antes de
   // registrar el intento, como la fecha inválida: si no, la confirmación

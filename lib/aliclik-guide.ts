@@ -35,6 +35,7 @@ import { isFillableRouteOutput } from "@/lib/shipment-output";
 import { aliclikMotiveAllowed, aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
 import { createAdminSupabase } from "@/lib/db";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
+import { prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { LEGACY_SALE_CANCEL_REASON } from "@/lib/legacy-sale-cancel";
 import { env } from "@/lib/env";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
@@ -957,6 +958,17 @@ export async function aliclikCreateGates(
     paymentGateway: ctx.row.payment_gateway,
   });
   if (prepaidBlock) return blocked(prepaidBlock);
+
+  // LA LISTA DE PAGO ADELANTADO (MOM §41). Un cliente de la lista solo sale
+  // pagado completo, y pagado completo Aliclik ya quedó cerrado arriba (es solo
+  // contraentrega): para él Aliclik nunca sale. Es una regla de Kapta
+  // (`kaptaBlock`): el reintento de Lima lo pasa a Repro Lima en vez de fallar
+  // cada día. «No se pudo leer» no autoriza.
+  const prepay = await prepayOrderCheck(admin, ctx.row as unknown as PrepayOrderRow, "guia");
+  if (prepay.state === "blocked") {
+    return blocked(`${prepay.message} Aliclik es solo contraentrega: con el pago completo sale por Grupo GF o Swayp con cobro cero en Lima, o por agencia en provincia.`);
+  }
+  if (prepay.state === "unread") return unread(prepay.message);
 
   // El bloqueo por rechazo en la puerta va ANTES que el de plata, y no se
   // parece a él: no pregunta cuánto hay que cobrar por adelantado sino si esta

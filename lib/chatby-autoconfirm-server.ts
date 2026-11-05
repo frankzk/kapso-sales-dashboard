@@ -21,6 +21,7 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
+import { prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { fetchChatbyConversation } from "@/lib/chatby-api";
 import { geocodeOrderAddress } from "@/lib/geocode-google-server";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -590,6 +591,11 @@ type GuideTry =
 async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly ChatbyMessage[]): Promise<GuideTry> {
   const { admin } = g;
   if (chatbyGuideBlock(row)) return { kind: "hold", reason: "programado", detail: null, state: "para_persona" };
+  // La lista de pago adelantado (MOM §41): Chatby no confirma contra entrega a
+  // un cliente de la lista. Lo deja a una persona, que cobra el total por
+  // adelantado. Va antes de cotizar: también en la simulación.
+  const prepay = await prepayOrderCheck(admin, row as unknown as PrepayOrderRow, "confirmar");
+  if (prepay.state !== "ok") return { kind: "hold", reason: "guia_no_creada", detail: prepay.message, state: "para_persona" };
   // Sin saber si va por Shalom no se crea nada: es la diferencia entre esperar
   // diez minutos y mandar un paquete por el courier equivocado (§6.2).
   const { data: draft, error: dErr } = await admin

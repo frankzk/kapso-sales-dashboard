@@ -221,7 +221,11 @@ describe("aliclikPrepaidBlocker (Aliclik es solo contraentrega)", () => {
   it("bloquea un pedido pagado en el checkout", () => {
     const msg = aliclikPrepaidBlocker({ financialStatus: "paid", totalRefunded: 0, paymentGateway: "checkout" });
     expect(msg).toContain("YA ESTÁ PAGADO");
-    expect(msg).toContain("Tanders"); // la salida, no solo la negativa
+    // La salida, no solo la negativa. Ya no Tanders: no crea guías nuevas
+    // desde el 26-10-2026 (MOM §41.6).
+    expect(msg).toContain("Grupo GF");
+    expect(msg).toContain("Swayp con cobro cero");
+    expect(msg).not.toContain("Tanders");
   });
 
   it("bloquea un pedido cubierto por comprobantes Yape", () => {

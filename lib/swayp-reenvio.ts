@@ -12,6 +12,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
+import { prepayOrderCheck } from "@/lib/prepay-list-server";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { env } from "@/lib/env";
 import {
@@ -406,6 +407,21 @@ export async function createFenixGuideViaApi(args: {
   const saleBlock = await legacySaleSendBlock(args.admin, args.orderId);
   if (saleBlock) return { ok: false, reason: saleBlock };
 
+  // La lista de pago adelantado (MOM §41), en la misma última puerta: un
+  // cliente de la lista solo sale pagado completo, con cobro cero. Vale para
+  // todos los caminos que piden la guía a Swayp, también los automáticos, que
+  // lo dejan para una persona.
+  const prepay = await prepayOrderCheck(args.admin, args.orderId, "guia");
+  if (prepay.state !== "ok") return { ok: false, reason: prepay.message };
+  // COBRO CERO PARA EL CLIENTE DE LA LISTA YA PAGADO. Cada camino manda el
+  // total del pedido como lo que se cobra en la puerta; un cliente de la lista
+  // solo sale pagado completo (`orderFullyPaid`), así que sale con
+  // `valorRecaudo` 0, la respuesta de `expectedCollectAmount`
+  // (lib/order-paid.ts). Fuera de la lista no cambia nada todavía: el cobro de
+  // Swayp para un pedido web prepagado queda como estaba hasta que el owner lo
+  // decida (MOM §41.5).
+  const codAmount = prepay.listed && prepay.fullyPaid ? 0 : args.codAmount;
+
   // La última puerta antes de pedirle la guía a Swayp, para TODOS los caminos
   // que la piden (reenvío, reprogramación, guía directa, Por confirmar y los
   // dos automáticos): una ciudad de Lima para un pedido que no es de Lima no
@@ -415,6 +431,7 @@ export async function createFenixGuideViaApi(args: {
 
   const built = buildSwaypGuideInput({
     ...args,
+    codAmount,
     senders: parseSenders(env.swaypSenders()),
     idBusiness: env.swaypIdBusiness(),
     skuMap: await loadSwaypSkuMap(args.admin, args.storeId),

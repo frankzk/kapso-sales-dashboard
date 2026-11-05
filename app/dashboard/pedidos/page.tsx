@@ -28,6 +28,9 @@ import { parseMasterQuery } from "@/lib/master-query";
 import { withPendingVouchers } from "@/lib/pending-voucher";
 import { withPaidUnnotified } from "@/lib/agency-pickup-alert";
 import { withScheduledNoLocation } from "@/lib/dispatch-date";
+import { withPrepayListed } from "@/lib/prepay-list";
+import { listedPhonesAmong } from "@/lib/prepay-list-server";
+import { createServerSupabase } from "@/lib/db";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
@@ -150,6 +153,19 @@ async function PedidosContent({
     paidUnnotifiedPromise,
     scheduledNoLocationPromise,
   ]);
+  // «Lista de pago adelantado» (MOM §41): UNA lectura para los celulares de la
+  // página, con la RLS de quien mira. Sin lectura, las filas no dicen nada.
+  const prepayListed = await (async () => {
+    try {
+      return await listedPhonesAmong(
+        await createServerSupabase(),
+        [...new Set(stores.map((s) => s.org_id))],
+        pageData.rows.map((r) => r.customer_phone),
+      );
+    } catch {
+      return null;
+    }
+  })();
   const confirmationDueCounts = showConfirmationDue
     ? confirmationCounts.due
     : emptyConfirmationQueueCounts().due;
@@ -180,9 +196,13 @@ async function PedidosContent({
       confirmationDueCounts={confirmationDueCounts}
       managementDayCounts={managementDayCounts}
       confirmationCycles={confirmationCycles}
-      rows={withScheduledNoLocation(
-        withPaidUnnotified(withPendingVouchers(pageData.rows, pendingVouchers), paidUnnotified),
-        scheduledNoLocation,
+      rows={withPrepayListed(
+        withScheduledNoLocation(
+          withPaidUnnotified(withPendingVouchers(pageData.rows, pendingVouchers), paidUnnotified),
+          scheduledNoLocation,
+        ),
+        prepayListed,
+        new Map(stores.map((s) => [s.id, s.org_id])),
       )}
       // Pedidos con comprobante por validar en las tiendas que ve; null si no
       // se pudo leer (la píldora lo dice en vez de enseñar un cero).

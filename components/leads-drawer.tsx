@@ -128,6 +128,8 @@ import {
   pollLeadState,
   searchStoreProducts,
 } from "@/lib/leads-read-client";
+import { loadLeadPrepayStatus, type LeadPrepayStatus } from "@/app/dashboard/leads/prepay-actions";
+import { PrepayListBanner } from "@/components/prepay-list-banner";
 import { REPLY_TOKEN_LABEL, renderReplyPreview, validateReplyParams } from "@/lib/wa-reply-templates";
 import { shopifyDraftOrderAdminUrl } from "@/lib/shopify-urls";
 import { isCodCoreFormGid } from "@/lib/cod-core-abandoned";
@@ -553,6 +555,25 @@ export function LeadDrawer({
   }, [deliveryKey, lead.id, lead.district]);
   const masterCoverage = deliveryCoverage?.key === deliveryKey ? deliveryCoverage.coverage : null;
 
+  // La «Lista de pago adelantado» (MOM §41): la asesora lo sabe antes de
+  // ofrecer contra entrega. Se vuelve a preguntar si cambia el lead o su número.
+  const [prepay, setPrepay] = useState<{ key: string; status: LeadPrepayStatus } | null>(null);
+  const prepayKey = `${lead.id}|${lead.phone ?? ""}`;
+  useEffect(() => {
+    if (!lead.phone) return;
+    let alive = true;
+    loadLeadPrepayStatus(lead.id).then(
+      (status) => {
+        if (alive) setPrepay({ key: prepayKey, status });
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [prepayKey, lead.id, lead.phone]);
+  const prepayStatus = prepay?.key === prepayKey ? prepay.status : null;
+
   // La conversación queda fija bajo la cabecera del panel mientras se baja por
   // la columna de trabajo. La cabecera crece si las chapas o el contexto parten
   // en dos líneas, así que se mide en vez de suponerla: el alto va en
@@ -919,6 +940,7 @@ export function LeadDrawer({
               está abierto: una nota a medio escribir en el resultado de la
               llamada o el panel de la guía siguen ahí al cerrarlo. */}
           <div className={orderOpen ? "hidden" : "flex flex-col gap-4"}>
+            <PrepayListBanner status={prepayStatus} context="lead" />
             {(showContext || firstText) && (
               <section aria-label="Lo que pidió" className={SECTION_CARD}>
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">

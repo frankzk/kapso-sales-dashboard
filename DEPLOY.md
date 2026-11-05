@@ -1,5 +1,51 @@
 # Deployment runbook
 
+### 05-11-2026 · Lista de pago adelantado (la lista negra) por celular (0309, MOM §41)
+
+Quien rechazó un pedido en la puerta o no lo recogió en la agencia paga el
+total por adelantado. Kapta lo frena al confirmar, al crear cualquier guía, en
+«Generar pedido» y en el bot de Kapso (422 `prepay_required`); la ficha muestra
+el aviso y «Enviar link de pago» (Flow, por el total o por el saldo si ya hay
+un adelanto). Una guía Swayp de un pedido pagado completo sale con cobro cero. La regla automática nace
+**apagada**; la lista se ve en «Pago adelantado» y se cambia con
+`prepay_list.manage` (dueño y admin). Sin variables nuevas.
+
+1. **Migración `0309_prepay_list.sql`**, a mano, ANTES del código. No toca
+   filas y es idempotente:
+   - tabla `prepay_list_entries` (una alta viva por organización y celular,
+     índice único parcial; una alta no se reescribe, solo se quita, con un
+     trigger que lo sostiene; al quitarla guarda en `removed_known_order_ids`
+     los pedidos que ya la disparaban);
+   - tabla `prepay_list_settings` (`auto_mode` apagado/simulación/activo,
+     `last_simulation`, `last_run`);
+   - lectura para miembros de la organización (`auth_org_ids()`), todo para
+     `service_role`.
+2. Comprobar:
+   ```sql
+   select to_regclass('public.prepay_list_entries'), to_regclass('public.prepay_list_settings');
+   select indexname from pg_indexes where indexname = 'prepay_list_entries_active_uniq';
+   ```
+3. Desplegar el código. Si sale antes de la migración no frena nada (la lista
+   se lee vacía), pero la página dice «Aún no está instalada» y el panel muestra
+   la regla como «No instalado».
+4. Cron nuevo en `vercel.json`: `/api/cron/prepay-list` a los 11 de cada hora
+   (solo producción, `CRON_SECRET`). Con la regla apagada no hace nada.
+5. **El owner**, en Automatizaciones → Lista de pago adelantado: pasar la regla
+   a **Simulación**, revisar «Entrarían N clientes…» (medido el 05-11-2026:
+   unos 692 en seis meses) y luego a **Activo**.
+6. **WordPress** (lo entrega el owner): copiar
+   `docs/kapta/wordpress/kapta-prepago.php` a `wp-content/mu-plugins/` de cada
+   tienda y definir en `wp-config.php` `KAPTA_PREPAY_URL`
+   (`https://<Kapta>/api/webhooks/woocommerce/<id de la tienda>/prepago`) y
+   `KAPTA_PREPAY_SECRET` (el secreto de los webhooks de WooCommerce que van a
+   Kapta). **COD Core**: entregar `docs/kapta/cod-core-prepago.md` (la llamada
+   a Kapta va solo desde el servidor: el secreto nunca en el navegador).
+
+**Marcha atrás.** Poner la regla en Apagado (no quita a nadie) o quitar las
+altas desde «Pago adelantado». Revertir el commit: el código anterior no lee las
+tablas; pueden quedarse. Quitar el mu-plugin devuelve el contra entrega en el
+checkout.
+
 ### 05-11-2026 · Reintentos de Lima: «Sin ubicación» y la ubicación por dirección (Google) (0308, MOM §9.5, §38 y §40)
 
 La simulación de los reintentos Aliclik de Lima dio 18 de 19 «Este pedido no

@@ -1581,6 +1581,13 @@ por separado.
 Una excepción COD es posible con justificación corta, actor y fecha. Las
 promesas de pago incumplidas aumentan el riesgo futuro.
 
+**Antes que esta escalera va la «Lista de pago adelantado» (§41, owner
+05-11-2026).** Un celular con un pedido rechazado en la puerta o no recogido en
+la agencia (o agregado a mano) paga el **total** por adelantado, sin la
+excepción con motivo de la escalera: no se confirma contra entrega ni sale
+ninguna guía hasta que el pago total esté validado. Para quien no está en la
+lista, la escalera sigue igual.
+
 ### 8.1 La ficha previa a la llamada
 
 Kapta arma esa revisión y la muestra dentro de la gestión de confirmación, sin
@@ -1698,6 +1705,11 @@ se lee bajo la misma RLS que el resto de la ficha (`shipments`, por tienda).
 Corregir un bloqueo mal puesto se hace **sobre el dato** —la etiqueta de la
 guía— y no sobre el permiso. Es el precio de que la regla no se pueda ablandar
 a las 7 de la tarde con el pedido esperando.
+
+Desde el 05-11-2026 el **primer** rechazo en la puerta ya mete al cliente en la
+«Lista de pago adelantado» (§41): paga el total por adelantado. Este cierre de
+Aliclik sigue siendo otro eje (por qué ruta, no cuánta plata) y se cuenta igual,
+con el mismo `REFUSED`.
 
 ### 8.3 Otro pedido del mismo producto todavía despachado (01-10-2026)
 
@@ -19728,6 +19740,12 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 - **Reembolsos:** `total_refunded` es la suma de los reembolsos del pedido. Un
   pedido pagado con un reembolso parcial queda `partially_refunded`; uno
   contraentrega sigue `pending`. El total del pedido no baja.
+- **Lista de pago adelantado (§41, 05-11-2026):** el checkout le pregunta a
+  Kapta por el celular (`POST /api/webhooks/woocommerce/<id>/prepago`, firmado
+  como los formularios abandonados) y le esconde `cod` a quien está en la lista
+  (mu-plugin `docs/kapta/wordpress/kapta-prepago.php`; contrato de COD Core en
+  `docs/kapta/cod-core-prepago.md`). Falla abierto: Kapta lo frena igual al
+  confirmar y al crear la guía.
 
 ### 38.5 Etiquetas y canal de venta
 
@@ -21259,6 +21277,7 @@ llevan `retry_after_seconds` (10 s, o lo del candado).
 | `body_too_large` | 413 | no |
 | `invalid_body` | 400 | no |
 | `agency_needs_advisor` | 422 | no |
+| `prepay_required` | 422 | no |
 | `wrong_platform` | 409 | no |
 | `store_inactive` | 409 | no |
 | `rate_limited` | 429 | sí |
@@ -21293,7 +21312,10 @@ entran a la huella. **Agencia: el bot no crea el pedido (decisión del owner,
 23-10-2026).** Con `shipping_mode` de agencia Kapta contesta
 `agency_needs_advisor` (422) antes de leer la tienda o tomar el candado, sin
 crear nada, y el bot deriva a una asesora, que genera el pedido con el adelanto
-desde Leads. Desde el bot solo entran pedidos contraentrega.
+desde Leads. Desde el bot solo entran pedidos contraentrega. **Lista de pago
+adelantado (§41, 05-11-2026):** si el celular está en la lista, Kapta contesta
+`prepay_required` (422) después de leer la tienda y antes del candado, sin
+crear nada, y el bot deriva a una asesora, que cobra el total por adelantado.
 
 **Los precios los decide el bot, como hoy en Shopify (decisión del owner,
 23-10-2026: sin piso por ahora).** El
@@ -22073,6 +22095,11 @@ Vercel— y algunas no tenían interruptor.
     el motivo. Apagar se puede siempre. El botón de medir pide confirmación
     (gasta cupo de Google) y, como todo el panel, solo funciona en producción y
     con `automations.manage`.
+  - **Lista de pago adelantado** (§41, 05-11-2026; 0309): la regla automática
+    con Apagado / Simulación / Activo (confirmación antes de Activo), el
+    resumen de la última simulación («Entrarían N clientes…», con cuentas y
+    números de pedido, nunca celulares) y de la última pasada activa, y
+    «Simular ahora». La lista se ve y se cambia a mano en «Pago adelantado».
   - **Con interruptor por organización:** Aliclik → Swayp automático (§11.9;
     encenderlo también cambia al agente de voz, que deja de llamar los pedidos
     que tomaría el automático) y su piloto sin historial (§11.9.1, solo con el
@@ -22107,3 +22134,250 @@ Vercel— y algunas no tenían interruptor.
 Migraciones `0306_automations_panel.sql` y `0308_lima_retry_geocode.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`.
+
+## 41. Lista de pago adelantado (05-11-2026)
+
+**Decisión del owner (05-11-2026).** Un cliente que **rechazó un pedido en la
+puerta o no lo recogió en la agencia** ya no compra contra entrega: **paga el
+total por adelantado, en línea**. Basta **un** pedido. La lista es por
+**celular** y por **organización** (Kenku y Aurela comparten la suya), se llena
+sola con la regla de abajo y también se agrega y se quita a mano, con motivo,
+persona y fecha. En pantalla se llama **«Lista de pago adelantado»**; en el
+habla del equipo, **lista negra** (el mismo concepto). Para WordPress y COD
+Core, Kapta construye su lado, un mu-plugin y un contrato, y el owner se los
+entrega a sus equipos.
+
+### 41.1 Quién es «el cliente»
+
+El celular, normalizado como siempre (`normalizePhone`, lib/phone.ts) y
+comparado en su forma canónica **`51` + 9 dígitos que empiezan por 9**
+(`prepayPhoneKey`). Un número que no es un móvil peruano no entra a la lista
+ni se busca en ella: para él la lista siempre dice «no». No se cruzan DNI,
+dirección ni correo: el teléfono sigue siendo la identidad del cliente (§8.1),
+con sus límites conocidos (otro número, un número compartido).
+
+### 41.2 Quién entra solo: la regla automática
+
+Un pedido **de los últimos seis meses** dispara el alta de su celular si tiene
+cualquiera de estos hechos. Es UNA definición (`prepayTriggersOfOrder`,
+lib/prepay-list.ts) que reusa los detectores que ya existían en vez de
+inventar otro:
+
+- **Rechazó en la puerta** (`rechazo_en_puerta`):
+  - el `REFUSED` de Aliclik o la novedad 15/16 de Swayp/Fénix («ya no desea el
+    producto», «no ha comprado ningún producto») — es `guideDoorRejection`
+    (lib/reproprovincia.ts), el mismo `REFUSED` que cuenta el §8.2;
+  - el «rechazado» del motorizado propio de Grupo GF
+    (`delivery_stops.outcome_reason = 'rechazado'`), que ningún detector
+    miraba.
+- **No recogió en la agencia** (`no_recogio_en_agencia`): el estado de recojo
+  `retorno_iniciado`, `devuelto_al_origen` o `devuelto` (de la guía o del
+  Master), o un pedido de agencia que **salió** y terminó devuelto o anulado.
+
+`NOT_RESPOND`, `CANCEL` y las fallas del courier no cuentan (la definición
+estricta medida). Un pedido rechazado dos veces es un pedido, como en el §8.2.
+
+**El tamaño medido** (Supabase, 6 meses, solo lectura, 05-11-2026): con esta
+definición entran **692 clientes** (703 pedidos fallidos): 598 por rechazo en la
+puerta y 94 por no recoger; 681 fallaron una vez y 11 dos veces. De ellos, 90
+volvieron a pedir (121 pedidos) y entregan **47,7 %** contra **79,7 %** de los
+clientes sin fallo previo. Hoy pesan el **0,55 % de los pedidos abiertos** (24
+de 4.348) y el 0,97 % de los que están antes de despachar. Con la definición
+amplia (cualquier fallo después de despachar) serían 4.393 clientes y el 3,6 %
+de los abiertos; el owner eligió la estricta. Advertencias de la medición:
+`shipments.non_delivery_reason` está vacío (el motivo vive en
+`reported_status`), «no recogió» encuentra pocos porque `pickup_state` y
+`agency_branch` están casi vacíos, y la ventana es de seis meses (el historial
+de Shopify del §37 no entra todavía).
+
+**Posición de la regla:** `prepay_list_settings.auto_mode` por organización,
+**Apagado / Simulación / Activo** (sin fila = Apagado; nace apagada). La
+cambia quien tiene `automations.manage` en Automatizaciones (§40), con
+confirmación antes de Activo y su fila en `automation_switch_events`
+(`prepay_list_auto`). El cron `/api/cron/prepay-list` corre cada hora (solo
+producción, `CRON_SECRET`): en **Simulación** guarda en `last_simulation` quién
+entraría (cuentas y hasta 200 números de pedido, **nunca celulares**); en
+**Activo** escribe las altas nuevas por lotes (`source = 'auto'`, motivo y
+evidencia: los pedidos, el tipo, el detalle y la fecha de cada hecho) y guarda
+el resumen en `last_run`. Correrlo dos veces no duplica nada: una sola alta
+viva por (organización, celular), y el índice único lo sostiene en la base. Si
+el resumen no se pudo guardar, la pasada lo reporta como error (el cron
+contesta 502 y «Simular ahora» lo dice): el panel no sigue mostrando el
+anterior como si fuera de hoy.
+«Simular ahora» en el panel hace la simulación en el momento. Apagar la regla
+**no quita a nadie** de la lista: solo deja de agregar.
+
+### 41.3 Altas y bajas a mano, y por qué una baja se respeta
+
+En **Clientes → «Pago adelantado»** (`/dashboard/clientes/pago-adelantado`):
+los activos con su último pedido, si los agregó la regla («Automático») o una
+persona («Manual»), el motivo, cuándo y quién; la búsqueda por celular;
+**«Agregar»** (celular + motivo) y **«Quitar»** (motivo); y los quitados, que no
+se borran. El motivo pide al menos 8 caracteres. **Ver** la lista puede
+cualquiera que vea pedidos de la organización (la RLS de la 0309 la deja leer a
+sus miembros); **cambiarla** pide el permiso nuevo **`prepay_list.manage`**
+(«Gestionar la lista de pago adelantado»), que dueño y admin traen por su rol y
+que no se da uno por uno. Cada acción vuelve a pedirlo en la organización y
+solo se guarda en producción.
+
+Una alta no se reescribe: solo se **quita**, una vez, con motivo, y queda como
+historia (un trigger de la 0309 lo impide en la base). **La baja se respeta:**
+la regla no vuelve a agregar ese celular por los mismos hechos. Al quitarlo,
+Kapta guarda **lo que ya se sabía**: los pedidos que en ese momento disparaban
+el alta de ese celular, con la misma regla y la misma ventana que la pasada
+(`removed_known_order_ids`, que la 0309 deja escribir solo en la baja misma).
+Si no los puede leer, no lo quita (se vuelve a intentar). Después, la regla lo
+vuelve a agregar **solo por un pedido que no estaba ahí** ni en la evidencia de
+ninguna alta quitada (`prepayAutoDecision`).
+
+**No se decide por la fecha del hecho**, a propósito: `last_report_at` avanza
+con cada reporte del courier (un `REFUSED` de Aliclik sigue «en ruta» semanas,
+sin `closed_at`) y `status_since` con cada cambio de estado, así que un rechazo
+viejo parecía posterior a la baja; y al revés, una guía de Swayp creada antes de
+la baja y rechazada después quedaba fechada antes. La fecha de cada hecho se
+guarda solo para mostrarla, y sale de lo que no se mueve con el mismo hecho
+(cierre o devolución de la guía, el reporte del motorizado, la salida del
+pedido; la creación de la guía como último recurso), nunca de `last_report_at`
+ni de `status_since`. Una baja sin lo sabido (no debería haber) cae a la fecha:
+solo cuenta un hecho fechado después de esa baja.
+
+### 41.4 Lo que se exige: el pago completo
+
+Para un celular de la lista, el pedido sigue solo **pagado completo** —el
+prepago del checkout o los comprobantes que cubren el total y están validados:
+`orderFullyPaid` (lib/order-paid.ts), la misma definición que pone la guía en
+cobro cero—. El adelanto de S/20 no basta. «Pago completo por adelantado» es el
+requisito; no tiene excepción con motivo (a diferencia de la escalera del §8):
+quien no deba estar, se quita de la lista.
+
+### 41.5 Dónde lo frena Kapta
+
+| Punto | Qué pasa con un celular de la lista sin el pago completo |
+| --- | --- |
+| **Confirmar** (Por confirmar → Preparación) | «Confirmó el pedido» se rechaza con el mensaje de la lista; los demás resultados (no contestó, volver a contactar…) se registran igual. La confirmación por **Chatby** (§6.1) lo deja «para asesora» con el motivo, también en la simulación; la confirmación expresa de **agencia** no se escribe sola. |
+| **Crear cualquier guía o salida** | **Aliclik** (todas sus entradas: el botón, Chatby, el día programado y los reintentos de Lima) lo rechaza como regla de Kapta (`kaptaBlock`): el reintento de Lima lo pasa a Repro Lima en vez de fallar cada día. **Swayp/Fénix** en su última puerta (`createFenixGuideViaApi`), que cubre el reenvío, la reprogramación, la guía directa, Por confirmar y los dos automáticos. Las **salidas manuales** (Axel, Urpi, propio, Olva, por definir), la **toma de Grupo GF**, **«Sacar con salida nueva»** de Repro Lima (arma otra salida contra entrega de Grupo GF desde el stock) y **Shalom**. Pagado completo, todas salen con cobro cero (Aliclik no: ver §41.6). **Swayp** pone el cobro en cero en esa misma última puerta: cada camino le pasa el total del pedido, y para un pedido **de la lista** pagado completo (`orderFullyPaid`) `valorRecaudo` sale en 0, la respuesta de `expectedCollectAmount`. Un pedido web prepagado **fuera** de la lista sigue saliendo por Swayp con el cobro de antes, hasta que el owner decida extenderlo (pendiente). |
+| **«Generar pedido»** (Leads) | No crea un pedido contra entrega para ese celular (ni el del pedido ni el del lead). Tampoco **«Recuperar carrito»** (completa el borrador de Shopify contra entrega) ni la **prueba de auto-recompra** (`auto_order_trials`), que deja la fila `omitido` con el motivo `lista_pago_adelantado` antes de completar el borrador. Si la lista no se pudo leer, deja pasar: se frena al confirmar y al crear la guía. |
+| **Bot de Kapso** (`POST /api/internal/orders`, §38.13) | **422 `prepay_required`**, no reintentable, antes del candado: «deriva la conversación a una asesora, que cobra el total por adelantado». Igual que `agency_needs_advisor`. |
+| **Ficha del pedido** | Aviso crítico «Lista de pago adelantado: este cliente paga el total por adelantado», en cualquier etapa, con el motivo, el origen y los pedidos que lo dispararon, y **«Enviar link de pago»** por **lo que falta** (`prepayLinkPlan`), con el importe en el botón: sin comprobantes, el **total** (`kind: 'total'`); con un adelanto validado (y quizá diferencias), el **saldo** (`kind: 'diferencia'`, total menos lo validado), porque un segundo primer pago no cabe en el plan de cobro (0092: un solo adelanto o total vivo) y el pago de Flow entraría sin registrarse. Con un comprobante por validar no crea nada («valídalo antes»), y sin nada que cobrar no ofrece el botón. Crea (o reusa) el link de Flow (lib/flow/link.ts) si la tienda tiene Flow configurado y lo muestra para copiar; **Kapta no lo manda por WhatsApp**. Sin Flow, dice que se pida por Yape y se suba como «Pago total» o, si ya hay adelanto, como «Diferencia». Al pagarse, el webhook de Flow lo deja validado. |
+| **Ficha del lead** | El mismo aviso, antes de ofrecer contra entrega. |
+| **Lista del Master** | La chapa «Pago adelantado» en la fila, con una sola lectura por página. Se compara por **organización y celular**: quien ve dos organizaciones no ve la chapa en el pedido de una por un alta de la otra. |
+
+**Lo que NO se frena, a propósito:** **vincular** una guía que ya existe (la
+Aliclik del portal, la Shalom hecha a mano en pro.shalom.pe, un número de Swayp
+escrito a mano) y los cotejos de los crons: son hechos y se registran (AGENTS:
+registrar hechos, no esconderlos). El cambio de estado a mano de dueño y admin
+tampoco. «No se pudo leer la lista» frena una guía (falla cerrado, como el
+§8.2), pero no la entrada de un pedido ni WordPress (fallan abierto). Sin la
+migración 0309, la lista está vacía y nada se frena.
+
+### 41.6 La consecuencia en Lima
+
+Aliclik es solo contraentrega: un pedido pagado completo ya no sale por él
+(`aliclikPrepaidBlocker`), y uno sin pagar de la lista tampoco. Y **Tanders no
+crea guías nuevas** desde el 26-10-2026. Así que en **Lima** un cliente de la
+lista sale por **Grupo GF (motorizado propio) o Swayp con cobro cero**; en
+**provincia**, por **agencia** (Shalom u Olva) o Swayp con cobro cero. El cobro
+cero de Swayp lo pone Kapta en la última puerta (`createFenixGuideViaApi`), no
+cada camino (§41.5). El texto de
+`aliclikPrepaidBlocker` recomendaba Tanders y ya no (05-11-2026).
+
+### 41.7 La tienda: WordPress y COD Core
+
+Kapta expone **`POST /api/webhooks/woocommerce/<id de la tienda>/prepago`**:
+
+- **Cuerpo** `{"phone": "…", "timestamp": <segundos unix>}`; **respuesta**
+  `{"prepay_required": true|false}` y nada más: nunca el motivo, la evidencia
+  ni otro dato.
+- **Firma:** la de los formularios abandonados de COD Core (§38.12), con el
+  mismo secreto de los webhooks de pedidos de WooCommerce de la tienda:
+  `X-Kapta-Signature` = base64(HMAC-SHA256(cuerpo crudo)). **Sello:**
+  `X-Kapta-Timestamp` repite el `timestamp` del cuerpo (que va firmado) y Kapta
+  rechaza más de 5 minutos de diferencia: una llamada capturada no sirve
+  después.
+- La tienda tiene que ser WooCommerce y estar activa. Es liviana: una lectura de
+  la tienda y una del índice de la lista.
+
+Del lado de la tienda:
+
+- **Checkout de WooCommerce:** el mu-plugin
+  `docs/kapta/wordpress/kapta-prepago.php` (PHP 7.4+, sin dependencias;
+  `KAPTA_PREPAY_URL` y `KAPTA_PREPAY_SECRET` en `wp-config.php`) pregunta con el
+  celular de facturación (3 s de espera, la respuesta se guarda 10 minutos por
+  un hash del celular **salado con el secreto**; una sola pregunta por celular
+  en cada pedido de página, y si Kapta no contesta deja de preguntar un minuto,
+  para que una caída de Kapta tampoco vuelva lento el checkout), quita `cod` de
+  `woocommerce_available_payment_gateways` (solo con el carrito no vacío),
+  lo vuelve a rechazar en `woocommerce_after_checkout_validation` (y en el
+  checkout de bloques) con un mensaje en castellano, y recalcula el checkout
+  cuando cambia el celular.
+- **Formulario de COD Core** en la ficha del producto (la entrada más grande):
+  el contrato `docs/kapta/cod-core-prepago.md` les pide preguntar con el celular
+  escrito antes de ofrecer «Pago contra entrega» y, si dice que sí, esconderlo y
+  mandar a la clienta al checkout a pagar con Flow. **La firma y la llamada van
+  solo desde el servidor de WordPress**: el secreto es el de los webhooks de
+  pedidos, y en el JavaScript de la página dejaría fabricar pedidos y formularios
+  abandonados en Kapta. El formulario pregunta a un endpoint propio de COD Core
+  (`admin-ajax` o REST) que llama a Kapta y devuelve solo sí o no; la caché, con
+  el mismo hash salado.
+- **Esconder `cod` dice quién está en la lista.** Kapta nunca devuelve el motivo
+  ni nada más que sí o no, pero el checkout, al esconder el contra entrega, le
+  dice a quien mira si un celular rechazó un pedido, y cualquiera puede pedir el
+  recálculo con otro `billing_phone`. Por eso el mu-plugin (y el endpoint de COD
+  Core) preguntan como mucho **3 celulares distintos por visitante cada 10
+  minutos** (sesión de WooCommerce o IP); pasado eso dejan los métodos de pago
+  como están, y Kapta lo frena igual en Por confirmar y en la guía.
+- **Falla abierto (decisión de diseño):** si Kapta no responde, la tienda sigue
+  ofreciendo contra entrega. Kapta lo frena igual en Por confirmar y en la
+  guía (§41.5). Una caída de Kapta no deja a la tienda sin vender.
+
+**Cuánto cubre cada canal** (de los 661 pedidos de clientes con un fallo previo,
+definición amplia, 6 meses): «Web · formulario» 368 (339 contra entrega),
+«Web · carrito» 42 —la web suma **410, el 62 %**, que es lo que cubren el
+mu-plugin y COD Core—; asesora 110, chatbot 90, bot de carritos 21, otros 30.
+Ese 38 % que no entra por la web lo frenan los puntos de Kapta del §41.5. El bot
+de WhatsApp de Aurela crea sus pedidos directo en WooCommerce (§38.5) sin pasar
+por el endpoint del bot de Kapso: a esos solo los frena Kapta al confirmar y al
+crear la guía.
+
+### 41.8 Precedencia con el §8 y el §8.2
+
+- **La lista va primero.** Pide más que la escalera del §8 (el total, no S/20),
+  así que para un celular de la lista la escalera no decide nada; para quien no
+  está, la escalera sigue igual, con su excepción con motivo.
+- **El §8.2 sigue siendo otro eje** (por qué ruta, no cuánta plata) y no se
+  mezcla: dos rechazos en la puerta cierran Aliclik aunque el cliente pague
+  todo, y eso ya es lo que pasa con un cliente de la lista (§41.6).
+- Lo que solo informa sigue igual: la ficha «Antes de llamar» (§8.1), las
+  exclusiones del agente de voz (§11.8) y de Swayp automático (§11.13), y el
+  estado `lista_negra` de un lead (que es de la fila del lead y no frena
+  pedidos).
+
+### 41.9 Lo que falta
+
+- La chapa en la **lista de Leads** (la de la ficha sí está).
+- Las funciones `check-coverage` del bot de Kapso (`docs/kapso-functions/`)
+  todavía ofrecen contra entrega sin preguntar a la lista; además piden «S/30»
+  de adelanto cuando `ADELANTO_MINIMO` es S/20.
+- Kenku: su título de Flow está pendiente (§38.4), así que un pago con Flow de
+  Kenku entra `pending` y no cuenta como pagado: un cliente de la lista que pague
+  así queda frenado hasta que alguien valide el pago.
+- Un pago de Flow abandonado no llega a Kapta (§38.3): si la tienda le esconde
+  el contra entrega y no paga, Kapta no se entera.
+- El historial de Shopify (§37) no entra en la regla.
+- «Generar pedido» no crea pedidos para la lista: la venta de un cliente de la
+  lista se hace en la web, con Flow.
+
+### 41.10 Implementación
+
+Migración `0309_prepay_list.sql` (`prepay_list_entries` con
+`removed_known_order_ids`, `prepay_list_settings`; lectura para miembros de la
+organización y todo para `service_role`; no cambia datos). La regla, pura:
+`lib/prepay-list.ts` (también `prepayLinkPlan`, el cobro del link); lecturas,
+altas, bajas, la compuerta (`prepayOrderCheck`, `prepayGuideBlock`) y la pasada:
+`lib/prepay-list-server.ts`; la consulta de la tienda: `lib/prepay-woo.ts`; la
+página: `lib/prepay-list-access.ts` y `components/prepay-list-page.tsx`; el
+aviso: `components/prepay-list-banner.tsx`. Pruebas: `test/prepay-list.test.ts`,
+`test/prepay-woo.test.ts`, `test/prepay-gates.test.ts`,
+`test/prepay-list-actions.test.ts`, `test/auto-order-trials.test.ts`,
+`scripts/sql/prepay_list_smoke.sql`, el glosario de permisos y el catálogo de
+Automatizaciones.

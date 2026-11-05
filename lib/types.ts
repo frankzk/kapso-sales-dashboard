@@ -659,6 +659,12 @@ export interface OrderMasterRow {
    * así que lo marca el servidor (`getScheduledNoLocationIds`).
    */
   scheduled_no_location?: boolean | null;
+  /**
+   * El celular está en la «Lista de pago adelantado» (MOM §41): paga el total
+   * por adelantado. Lo marca el servidor en lote para la página
+   * (`withPrepayListed`); null o ausente = no se sabe.
+   */
+  prepay_listed?: boolean | null;
 }
 
 /** Un movimiento de la línea de tiempo (`order_events`, append-only). */

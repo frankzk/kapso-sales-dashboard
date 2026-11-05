@@ -58,6 +58,8 @@ import { applyWooOrderEffects } from "@/lib/ingest";
 import { insertOrderIfAbsent } from "@/lib/order-sale";
 import { debeGuardarTelefono } from "@/lib/lead-sin-numero";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
+import { isPrepayRequired, orgOfStore } from "@/lib/prepay-list-server";
+import { prepayBlockMessage } from "@/lib/prepay-list";
 import { priceMismatchRejection, resolveOrderDiscount, type OrderDiscountInput } from "@/lib/shopify";
 import { TAGS } from "@/lib/types";
 import { mapWooOrder, toWooPeruState, type WooClientOpts, type WooOrder } from "@/lib/woocommerce";
@@ -197,6 +199,9 @@ export const BOT_ORDER_CODES = [
   "body_too_large",
   "invalid_body",
   "agency_needs_advisor",
+  // La «Lista de pago adelantado» (MOM §41): el celular paga el total por
+  // adelantado; el bot no crea contra entrega y deriva a una asesora.
+  "prepay_required",
   "wrong_platform",
   "store_inactive",
   "rate_limited",
@@ -219,6 +224,7 @@ export const BOT_ORDER_HTTP: Readonly<Record<BotOrderCode, number>> = Object.fre
   body_too_large: 413,
   invalid_body: 400,
   agency_needs_advisor: 422,
+  prepay_required: 422,
   wrong_platform: 409,
   store_inactive: 409,
   rate_limited: 429,
@@ -922,6 +928,19 @@ export async function handleBotOrder(req: BotOrderRequest, deps: BotOrderDeps): 
     if (woo.status !== "active") {
       return finish(fail("store_inactive", "La tienda no está activa en Kapta: no se crean pedidos. Deriva la conversación a una asesora."));
     }
+
+    // La «Lista de pago adelantado» (MOM §41): a un celular de la lista no se
+    // le crea un pedido contra entrega. Antes del candado: no se toca nada.
+    // Si no se pudo leer, se sigue (falla abierto): el pedido se vuelve a
+    // frenar al confirmarlo y al crear su guía.
+    let prepayRequired = false;
+    try {
+      const orgId = await step("prepay_org", orgOfStore(admin, storeId));
+      prepayRequired = !!orgId && (await step("prepay", isPrepayRequired(admin, orgId, input.phone)));
+    } catch {
+      events.push("prepay.unread");
+    }
+    if (prepayRequired) return finish(fail("prepay_required", prepayBlockMessage("bot")));
 
     // Los montos, con las reglas de «Generar pedido»: contraentrega, el total
     // tiene que ser mayor que 0 (un pedido solo de regalos no se cobra).

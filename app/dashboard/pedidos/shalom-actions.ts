@@ -30,6 +30,7 @@ import { shopifyOrderNote } from "@/lib/shopify-address";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { prepayGuideBlock, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { encrypt } from "@/lib/crypto";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { writeCourierGuide } from "@/lib/route-output-fill";
@@ -612,6 +613,12 @@ export async function createShalomGuide(
   if (active) {
     return { error: `El pedido ya tiene una guía activa: ${active.guide_code} (${active.courier}).` };
   }
+
+  // La lista de pago adelantado (MOM §41): por agencia también sale solo con el
+  // pedido pagado completo. A diferencia del adelanto mínimo, no se exceptúa
+  // con un motivo: es la decisión del owner del 05-11-2026.
+  const prepayBlock = await prepayGuideBlock(admin, row as unknown as PrepayOrderRow);
+  if (prepayBlock) return { error: prepayBlock };
 
   // Se revalida el freno blando ACÁ, no solo en el modal: un botón deshabilitado
   // no es una autorización, y entre abrir el modal y confirmar pudo cargarse (o

@@ -42,6 +42,7 @@ import { peruMobileDigits } from "@/lib/phone";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { insertOrderIfAbsent } from "@/lib/order-sale";
 import { isWooMigrationMissing } from "@/lib/woocommerce-settings";
+import { isPrepayRequired, orgOfStore } from "@/lib/prepay-list-server";
 
 /** Etiqueta común a todas las pruebas; la del grupo (`cohort`) va además. */
 export const AUTO_TRIAL_TAG = "auto_recompra";
@@ -57,6 +58,14 @@ export const AUTO_TRIAL_MAX_CART_AGE_DAYS = 12;
  * después del cambio lo decide el owner (MOM §38.12, «Los carritos»).
  */
 export const AUTO_TRIAL_PLATFORM_REASON = "tienda_en_woocommerce";
+
+/**
+ * El motivo de una fila que NO se completa porque el celular está en la «Lista
+ * de pago adelantado» (MOM §41): completar el borrador crea un pedido contra
+ * entrega, y a ese celular Kapta no le crea ninguno. El carrito queda para una
+ * asesora, que cobra el total por adelantado.
+ */
+export const AUTO_TRIAL_PREPAY_REASON = "lista_pago_adelantado";
 
 /** Dónde crea la tienda sus pedidos nuevos (`stores.platform`). */
 export type TrialStorePlatform = "shopify" | "woocommerce";
@@ -200,6 +209,12 @@ export interface AutoTrialDeps {
   loadLead(leadId: string): Promise<TrialLead | null>;
   loadDraft(gid: string): Promise<TrialDraft | null>;
   hasLaterOrder(phone: string, cartCreatedAt: string): Promise<boolean>;
+  /**
+   * ¿Alguno de estos celulares está en la lista de pago adelantado (§41)?
+   * Falla abierto (false): la confirmación y la guía lo vuelven a frenar.
+   * Opcional para las pruebas que no lo miran.
+   */
+  prepayRequired?(phones: (string | null)[]): Promise<boolean>;
   liveDraftStatus(gid: string): Promise<string | null>;
   completeDraft(gid: string): Promise<{ orderGid: string | null; orderName: string | null }>;
   /** Pone la dirección en el borrador antes de completarlo. */
@@ -306,6 +321,10 @@ export async function processAutoOrderTrials(
       const reason = trialSkipReason({ row, lead, draft, laterOrder, nowMs: deps.now() });
       if (reason || !lead || !draft) {
         await skip(reason ?? "sin_datos");
+        continue;
+      }
+      if (deps.prepayRequired && (await deps.prepayRequired([draft.customer_phone ?? null, lead.phone ?? null]))) {
+        await skip(AUTO_TRIAL_PREPAY_REASON);
         continue;
       }
       // Lo que dice NUESTRA copia del carrito puede tener horas de atraso.
@@ -454,6 +473,16 @@ export function autoTrialDeps(
 ): AutoTrialDeps {
   return {
     storePlatform: () => readTrialStorePlatform(admin, storeId),
+    async prepayRequired(phones) {
+      try {
+        const orgId = await orgOfStore(admin, storeId);
+        if (!orgId) return false;
+        for (const phone of phones) if (phone && (await isPrepayRequired(admin, orgId, phone))) return true;
+      } catch {
+        return false;
+      }
+      return false;
+    },
     async listPending(limit) {
       const { data, error } = await admin
         .from("auto_order_trials")

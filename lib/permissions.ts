@@ -164,6 +164,11 @@ export const PERMISSIONS = [
   // las guías de Aliclik, Tanders y Shalom: quien puede leer la cola no queda
   // habilitado por eso a vender a nombre de la tienda.
   "orders.create",
+  // «Lista de pago adelantado» (MOM §41, 05-11-2026): agregar o quitar a mano,
+  // con motivo, el celular que paga el total por adelantado. Verla puede
+  // cualquiera que vea pedidos; cambiarla es de dueño y admin (viene con el
+  // rol, no se da uno por uno): quitar a alguien le devuelve el contra entrega.
+  "prepay_list.manage",
   // Descargar en Excel/CSV el Master de Pedidos, los pedidos o el resumen
   // diario (08-10-2026). Una descarga es la base de clientes entera —nombre,
   // teléfono, distrito y monto de ~28.000 pedidos— en un clic, y ninguna
@@ -244,6 +249,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "riders.manage": "Dar de alta motorizados",
   "leads.map_ads": "Asignar producto a anuncios",
   "orders.create": "Crear pedidos en Shopify",
+  "prepay_list.manage": "Gestionar la lista de pago adelantado",
   "data.export": "Descargar la base de pedidos",
   "team.manage": "Gestionar el equipo",
   "stores.manage": "Administrar tiendas",
@@ -300,6 +306,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "riders.manage": "Crear la ficha del motorizado y darle acceso a su ruta en el celular.",
   "leads.map_ads": "Decir qué producto vende cada anuncio de Meta, para ordenar la cola de leads.",
   "orders.create": "Crear un pedido desde Kapta. Se crea de verdad en la tienda de Shopify.",
+  "prepay_list.manage": "Agregar o quitar, con motivo, clientes de la lista de pago adelantado (lista negra). Verla puede todo el equipo.",
   "data.export": "Descargar en Excel o CSV el Master de Pedidos, con nombres y teléfonos de las clientas.",
   "team.manage": "Invitar y quitar vendedoras, darles tiendas y fijar sus horarios.",
   "stores.manage": "Conectar Shopify, los ajustes de cada tienda y su ciclo de confirmación.",
@@ -322,6 +329,7 @@ export const PERMISSION_AREAS = [
       "orders.cancel_woo",
       "master.override_status",
       "orders.create",
+      "prepay_list.manage",
       "master.import_report",
       "data.export",
     ],

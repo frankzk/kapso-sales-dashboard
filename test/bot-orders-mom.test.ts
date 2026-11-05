@@ -84,7 +84,7 @@ describe("MOM §38.13", () => {
   });
 
   it("cada código, con su HTTP y si se reintenta, en el MOM y en el contrato", () => {
-    expect(BOT_ORDER_CODES).toHaveLength(17);
+    expect(BOT_ORDER_CODES).toHaveLength(18);
     for (const code of BOT_ORDER_CODES) {
       const http = BOT_ORDER_HTTP[code];
       const retry = BOT_ORDER_RETRYABLE.has(code);

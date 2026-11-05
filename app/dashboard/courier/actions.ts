@@ -9,6 +9,7 @@ import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { prepayGuideBlock, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { getAccessibleStores, getAdminOrgs, getCurrentUser } from "@/lib/access";
 import { getDispatchWorkspaceData, type DispatchWorkspaceData } from "@/lib/dispatch-access";
 import { canOperateGroupGf } from "@/lib/permissions";
@@ -1371,6 +1372,13 @@ async function takeOrdersCore(
         failed.push({ orderId, error: OUTSIDE_STORE });
         continue;
       }
+      // La lista de pago adelantado (MOM §41): Grupo GF lo toma solo con el
+      // pedido pagado completo, para salir con cobro cero.
+      const prepayBlock = await prepayGuideBlock(admin, row as unknown as PrepayOrderRow);
+      if (prepayBlock) {
+        failed.push({ orderId, error: `${(row.order_name as string | null) ?? "El pedido"}: ${prepayBlock}` });
+        continue;
+      }
 
       const { data: outputRows, error: outputError } = await admin
         .from("shipments")
@@ -2038,6 +2046,15 @@ export async function replaceOwnOutputs(
       }
       if (decision.action === "bloquear") {
         failed.push({ shipmentId, error: `${orderName}: ${replaceDecisionMessage(decision, box, old.output_code)}` });
+        continue;
+      }
+      // La lista de pago adelantado (MOM §41): «Sacar con salida nueva» arma
+      // otra salida contra entrega desde el stock, así que pasa por la misma
+      // compuerta que la toma de Grupo GF. Es justo la población que acaba de
+      // rechazar en la puerta.
+      const prepayBlock = await prepayGuideBlock(admin, row as unknown as PrepayOrderRow);
+      if (prepayBlock) {
+        failed.push({ shipmentId, error: `${orderName}: ${prepayBlock}` });
         continue;
       }
       const riderName = box!.riderName;

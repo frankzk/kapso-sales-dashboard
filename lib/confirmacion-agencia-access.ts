@@ -18,6 +18,7 @@ import {
   notaDeConfirmacionExpresa,
 } from "@/lib/confirmacion-agencia";
 import type { PaymentSnapshot } from "@/lib/pickup-key";
+import { prepayOrderCheck } from "@/lib/prepay-list-server";
 
 /**
  * Registra la confirmación si los hechos ya la sostienen. Idempotente: si el
@@ -73,6 +74,10 @@ export async function registrarConfirmacionExpresaDeAgencia(
     if (!hayConfirmacionExpresaDeAgencia(borrador, pagos, Number.isFinite(total) ? total : null)) {
       return false;
     }
+    // La lista de pago adelantado (MOM §41): con el adelanto no basta, paga el
+    // total. Esta confirmación automática no la escribe; la deja a una persona.
+    const prepay = await prepayOrderCheck(admin, orderId, "confirmar");
+    if (prepay.state !== "ok") return false;
 
     const { error } = await admin.from("order_events").insert({
       store_id: storeId,

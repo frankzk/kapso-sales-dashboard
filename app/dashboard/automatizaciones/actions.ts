@@ -36,7 +36,10 @@ import { runLimaRetryAuto } from "@/lib/lima-retry-auto-server";
 import { env } from "@/lib/env";
 import { GEOCODE_KEY_MISSING, geocodeLimaGate, type GeocodeLimaRunSummary } from "@/lib/geocode-google";
 import { latestGeocodeLimaRun, runGeocodeLimaMeasure } from "@/lib/geocode-google-server";
+import { loadPrepaySettings, runPrepayAutoRule } from "@/lib/prepay-list-server";
+import { PREPAY_LIST_PATH, PREPAY_MODE_LABEL, isPrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import {
+  PREPAY_MODE_EVENT,
   RETRY_CAP_EVENT,
   RETRY_GEOCODE_EVENT,
   detailPaths,
@@ -356,6 +359,60 @@ export async function simulateRetriesNow(orgId: string): Promise<RetrySimulation
         }),
       },
     };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `La simulación no terminó: ${message}` };
+  }
+}
+
+// ── La «Lista de pago adelantado» (0309, MOM §41) ───────────────────────────
+
+/**
+ * Apagado / Simulación / Activo de la regla automática de la lista. En
+ * Activo agrega a la lista, en cada pasada, a quien rechazó en la puerta o no
+ * recogió en la agencia (respetando las bajas a mano). Apagarla no quita a
+ * nadie de la lista.
+ */
+export async function setPrepayAutoMode(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isPrepayMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const current = await loadPrepaySettings(g.admin, orgId);
+  if (current.missing) return { error: "Falta la migración 0309 en la base de datos." };
+  if (current.error) return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  const previous = current.settings.auto_mode;
+  if (previous === mode) return { notice: "Ya estaba así." };
+  const { error } = await g.admin
+    .from("prepay_list_settings")
+    .upsert({ org_id: orgId, auto_mode: mode, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) return { error: "No se pudo guardar. Intenta de nuevo." };
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: PREPAY_MODE_EVENT,
+    previous,
+    next: mode,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  revalidatePath(PREPAY_LIST_PATH);
+  return { notice: warn ?? `Lista de pago adelantado: regla en ${PREPAY_MODE_LABEL[mode]}.` };
+}
+
+export interface PrepaySimulationResult extends AutomationActionResult {
+  summary?: PrepaySimulationSummary;
+}
+
+/** «Simular ahora»: quién entraría a la lista hoy, sin agregar a nadie. Guarda el resumen. */
+export async function simulatePrepayNow(orgId: string): Promise<PrepaySimulationResult> {
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  try {
+    const report = await runPrepayAutoRule(g.admin, { orgId, mode: "simulacion" });
+    if (report.error) return { error: `La simulación no terminó: ${report.error}` };
+    const summary = report.orgs.find((o) => o.orgId === orgId)?.summary ?? undefined;
+    revalidatePath(PANEL_PATH);
+    return { summary };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { error: `La simulación no terminó: ${message}` };

@@ -44,6 +44,12 @@ interface NavItem {
  * Provincia» y gana al Master por el prefijo más largo.
  */
 const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };
+/**
+ * «Pago adelantado» (MOM §41): la lista negra de celulares que pagan el total
+ * por adelantado. La ve todo el equipo que ve pedidos; cambiarla pide
+ * `prepay_list.manage`, que la página y sus acciones vuelven a mirar.
+ */
+const PREPAY_LIST_ITEM: NavItem = { href: "/dashboard/clientes/pago-adelantado", label: "Pago adelantado", icon: IconMoney };
 
 /**
  * Qué entradas de administración ve la persona, por permiso (MOM §16,
@@ -77,6 +83,7 @@ export function navItems(
     const items: NavItem[] = [
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
+      PREPAY_LIST_ITEM,
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
       ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
       { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
@@ -100,6 +107,7 @@ export function navItems(
     ...(access.reports ? [{ href: "/dashboard", label: "Consolidado", icon: IconGrid }] : []),
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
+    PREPAY_LIST_ITEM,
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
     ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
     // Primer contacto con la clienta cuya guía volvió (MOM §11.1). Va acá y no
