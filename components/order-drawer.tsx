@@ -234,6 +234,12 @@ import {
   type PriorOutcome,
 } from "@/lib/order-confirmation-brief";
 import { aliclikDoorBan, ROUTES_STILL_ALLOWED_LABEL } from "@/lib/door-rejection";
+import {
+  aliclikRouteRisk,
+  routeRiskReasonText,
+  ROUTE_RISK_ROUTES_LABEL,
+  ROUTE_RISK_TITLE,
+} from "@/lib/aliclik-route-risk";
 import { outputDisplayCode } from "@/lib/shipment-output";
 import { formatOlvaTracking, OLVA_TRACKING_URL } from "@/lib/olva/tracking";
 import { gfDeliverySentence, gfDeliverySummary, type GfDelivery } from "@/lib/gf-delivery";
@@ -2083,6 +2089,17 @@ export function OrderDrawer({
                     riskRequirement={brief?.risk.requirement ?? "ninguno"}
                     paymentState={detail.row.payment_state}
                     riskReasons={brief?.risk.reasons ?? []}
+                    routeRisk={
+                      brief
+                        ? aliclikRouteRisk({
+                            operation: detail.routePlan.operation,
+                            orderCreatedAt: detail.row.order_created_at,
+                            confirmationDays: detail.row.confirmation_day_count,
+                            alreadyDispatched: Boolean(detail.row.dispatched_at),
+                            priors: brief.priors,
+                          })
+                        : null
+                    }
                     duplicateHold={brief?.duplicateHold}
                     outlook={detail.aliclikOutlook}
                     storeName={storeName(detail.row.store_id)}
@@ -3328,6 +3345,18 @@ function ConfirmationDesk({
   // no la llamada, y decirle al operador que gasta un cupo que no gasta lo
   // empujaría a no registrar los intentos siguientes.
   const opensNewDay = !days.includes(today);
+  // Aliclik cerrado por riesgo de no entrega (MOM §8.6). Los días son los del
+  // master, los mismos que mira la creación de la guía: lo que se avisa aquí
+  // es lo que el servidor va a hacer.
+  const routeRisk = brief
+    ? aliclikRouteRisk({
+        operation: classifyOperation(row),
+        orderCreatedAt: row.order_created_at,
+        confirmationDays: row.confirmation_day_count ?? used,
+        alreadyDispatched: Boolean(row.dispatched_at),
+        priors: brief.priors,
+      })
+    : null;
   const projected = Math.min(used + (opensNewDay ? 1 : 0), CONFIRMATION_MAX_DAYS);
   const lastAttempt = used >= CONFIRMATION_MAX_DAYS;
   const cancellationTask = tasks.find(
@@ -3451,6 +3480,27 @@ function ConfirmationDesk({
           día de gestión. El intento se registra solo con el botón. */}
       <div className={cn(CARD_ZONE, "space-y-4")}>
         <h4 className="text-sm font-semibold text-ink-900">Registrar intento</h4>
+        {/* MOM §8.6: lo que se le ofrece al cliente cambia ANTES de llamar.
+            Dicho aquí, donde la asesora registra el intento, y no solo en el
+            panel de Aliclik: para cuando llega allá ya le prometió una ruta. */}
+        {routeRisk?.closed && (
+          <Banner tone="crit" role="alert" title={ROUTE_RISK_TITLE}>
+            <ul className="list-disc space-y-0.5 pl-4 text-[13px] leading-5">
+              {routeRisk.reasons.map((reason) => (
+                <li key={reason.kind}>{routeRiskReasonText(reason)}</li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              Ofrécele {ROUTE_RISK_ROUTES_LABEL}. Aliclik solo sale si quien crea la guía escribe por qué.
+            </p>
+          </Banner>
+        )}
+        {routeRisk?.nightPending && (
+          <p className="rounded-lg bg-wash px-4 py-2.5 text-[13px] leading-5 text-ink-700">
+            Pedido hecho de madrugada: si no queda confirmado en este día de gestión, desde el segundo
+            día Aliclik se cierra para este pedido y quedan {ROUTE_RISK_ROUTES_LABEL}.
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className={LABEL}>
             Canal

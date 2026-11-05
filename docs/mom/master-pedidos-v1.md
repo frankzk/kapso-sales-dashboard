@@ -1588,6 +1588,12 @@ excepción con motivo de la escalera: no se confirma contra entrega ni sale
 ninguna guía hasta que el pago total esté validado. Para quien no está en la
 lista, la escalera sigue igual.
 
+**Y en Provincia COD, Aliclik puede quedar cerrado para el pedido (§8.6,
+owner 05-11-2026)**: si el cliente ya tuvo un despacho que no se entregó y
+ninguno entregado, o si el pedido se hizo de madrugada y va por su segundo día
+de gestión. Quedan Swayp/Fénix o la agencia con adelanto; se levanta con motivo
+escrito.
+
 ### 8.1 La ficha previa a la llamada
 
 Kapta arma esa revisión y la muestra dentro de la gestión de confirmación, sin
@@ -1867,6 +1873,66 @@ la clienta ve el número de la empresa, no el de la asesora.
   no sirve para esto. El sitio permite el micrófono a su propio origen
   (`Permissions-Policy: microphone=(self)`) y la conexión a
   `wss://rtc.telnyx.com`.
+
+### 8.6 Aliclik cerrado para el pedido por riesgo de no entrega (05-11-2026)
+
+**Decisión del owner (05-11-2026).** En **Provincia COD**, dos grupos de
+pedidos ya no salen por Aliclik: les quedan **Swayp/Fénix** (contraentrega a
+domicilio, sin costo por intento fallido) o la **agencia con su adelanto**. Se
+cierra solo Aliclik, por la misma razón que el §8.2: es la única ruta que nos
+cobra el intento no entregado (~S/ 18 de ida y S/ 10 de vuelta, cotizado). La
+cobertura del pedido **no cambia**: sigue siendo Provincia COD, porque la
+cobertura dice dónde está el destino y no el riesgo del cliente.
+
+**Los dos grupos.** Kenku, Provincia COD, medido en abr–ago 2026 y contrastado
+en sep–nov 2026 (base: ~69 % entregado sobre cerrados). Se probaron 4.930
+cruces de dos y tres variables. Casi todos los que parecían bajísimos
+(departamento, producto, dirección sin número) volvían a lo normal en el
+período siguiente. Solo estos dos se sostuvieron:
+
+| Grupo | abr–ago | sep–nov |
+|---|---|---|
+| El cliente ya tuvo un pedido que **salió y no se entregó**, y **ninguno entregado** | 35/76 (46 %) | 41/76 (54 %) |
+| Pedido hecho **de madrugada** (00:00–05:59, Lima) que va por su **2.º día de gestión o más** sin guía | 3/14 (21 %) | 14/43 (33 %) |
+
+- **«Salió y no se entregó»** es `devuelto`, o `anulado` con fecha de despacho.
+  El anulado antes de salir no cuenta: no costó flete y no dice si el cliente
+  recibe. Un pedido que sigue en curso todavía no es un fallo. Se cuentan los
+  otros pedidos del mismo teléfono, los mismos de la ficha del §8.1.
+- **Los días de gestión** son los de `confirmation_day_count`, la misma cuenta
+  de la mesa. Solo valen **antes de la primera salida**: un pedido que ya salió
+  suma días de reprogramación, que no son lo medido, y la regla de madrugada no
+  lo toca.
+- **Cada señal sola no cierra nada.** De madrugada solo, o dos días de gestión
+  solos, se entrega ~55 %. La regla las exige juntas.
+- **Otro eje que el §8.2 y el §41.** El §8.2 cierra Aliclik para siempre por
+  rechazos en la puerta; la lista del §41 exige el pago total. Esta regla es
+  del **pedido**, no del cliente para siempre: el próximo pedido se vuelve a
+  evaluar.
+
+**Se levanta con motivo escrito**, como la escalera de adelanto del §8: con
+76 y 57 pedidos de evidencia, una persona puede saber algo que los datos no
+dicen. El motivo (8 caracteres o más) se escribe en el panel de Aliclik y queda
+en la línea de tiempo como `aliclik_route_risk_exception` («Aliclik pese al
+riesgo de no entrega»), con las señales del pedido en `payload.reasons`. El
+automático (guía del día programado, Chatby, reintentos) no escribe motivos por
+nadie: a él lo para siempre, y el pedido queda para una persona.
+
+**Dónde se ve.**
+
+- **Registrar intento** (mesa de confirmación). El aviso rojo «Aliclik cerrado
+  para este pedido» lleva el motivo y le dice a la asesora qué ofrecer
+  (Swayp/Fénix o agencia con adelanto) **antes** de prometer una ruta. Un
+  pedido de madrugada que todavía va en su primer día lleva una línea gris:
+  si no queda confirmado hoy, desde el segundo día se cierra Aliclik.
+- **Crear guía en Aliclik.** El mismo aviso, con el campo «Por qué sale por
+  Aliclik». Sin motivo, «Crear» se apaga y dice por qué.
+- **La creación de la guía** (`aliclikCreateGates`) lo vuelve a comprobar en el
+  servidor, después del cierre por rechazos en la puerta. Es una regla de Kapta
+  (`kaptaBlock`), no un error de lectura.
+
+Código: `lib/aliclik-route-risk.ts`. Prueba:
+`test/aliclik-route-risk.test.ts`.
 
 ## 9. Lima
 

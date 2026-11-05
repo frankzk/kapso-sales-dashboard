@@ -75,6 +75,7 @@ const POR_KIND: Record<string, TimelineFact> = {
   browser_call: consulta("llamada"),
   confirmation_followup: consulta("programado"),
   aliclik_risk_exception: consulta("pago"),
+  aliclik_route_risk_exception: consulta("guia"),
   payment_recipient_exception: consulta("pago"),
 
   // Preparación (celeste): la guía o la salida existe.

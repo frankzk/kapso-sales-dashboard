@@ -43,6 +43,13 @@ import {
   type AliclikPreview,
 } from "@/app/dashboard/pedidos/aliclik-actions";
 import { isShortenedMapsLink } from "@/lib/aliclik-geo";
+import {
+  aliclikRouteRiskGate,
+  routeRiskReasonText,
+  ROUTE_RISK_ROUTES_LABEL,
+  ROUTE_RISK_TITLE,
+  type AliclikRouteRisk,
+} from "@/lib/aliclik-route-risk";
 import { loadOrderChatby } from "@/app/dashboard/pedidos/actions";
 import { chatbyCustomerLocation, chatbyLimaDay, chatbyLimaTime } from "@/lib/chatby-conversation";
 import {
@@ -84,6 +91,7 @@ export function AliclikGuidePanel({
   riskRequirement = "ninguno",
   paymentState = null,
   riskReasons = [],
+  routeRisk = null,
   duplicateHold,
   outlook,
   storeName,
@@ -96,6 +104,8 @@ export function AliclikGuidePanel({
   riskRequirement?: PaymentRequirement;
   paymentState?: string | null;
   riskReasons?: string[];
+  /** Aliclik cerrado para este pedido por riesgo de no entrega (MOM §8.6). */
+  routeRisk?: AliclikRouteRisk | null;
   duplicateHold?: DuplicateHold | null;
   /** Cuántas guías de Aliclik se entregan según los días del pedido (09-10-2026). */
   outlook?: AliclikOutlook | null;
@@ -109,12 +119,13 @@ export function AliclikGuidePanel({
   const [transportId, setTransportId] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const [riskExceptionReason, setRiskExceptionReason] = useState("");
+  const [routeRiskExceptionReason, setRouteRiskExceptionReason] = useState("");
   const [pinExceptionReason, setPinExceptionReason] = useState("");
   const [motivoSalidaAdicional, setMotivoSalidaAdicional] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string; at: "quote" | "create" } | null>(null);
   const [pending, startTransition] = useTransition();
   const uid = useId();
-  useEffect(() => { setMotivoSalidaAdicional(""); }, [orderId]);
+  useEffect(() => { setMotivoSalidaAdicional(""); setRouteRiskExceptionReason(""); }, [orderId]);
   /** Cuántas veces se ha reintentado por "pedido todavía sin dirección". */
   const [retries, setRetries] = useState(0);
   /**
@@ -153,6 +164,9 @@ export function AliclikGuidePanel({
   const waiting = Boolean(preview?.notReady);
   const creating = busy === "create";
   const riskGate = aliclikRiskGate(riskRequirement, paymentState, riskExceptionReason);
+  const routeGate = routeRisk
+    ? aliclikRouteRiskGate(routeRisk, routeRiskExceptionReason)
+    : { allowed: true, requiresException: false, message: null };
 
   const quote = () => {
     setMessage(null);
@@ -201,6 +215,7 @@ export function AliclikGuidePanel({
         expectedCollectTotal: preview?.collectTotal ?? null,
         motivoSalidaAdicional: motivoSalidaAdicional || null,
         riskExceptionReason: riskExceptionReason || null,
+        routeRiskExceptionReason: routeRiskExceptionReason || null,
         pinExceptionReason: pinExceptionReason || null,
       });
       if (res.error) setMessage({ kind: "error", text: res.error, at: "create" });
@@ -251,7 +266,9 @@ export function AliclikGuidePanel({
           ? preview.writeBlocked
           : !duplicateAllowed
             ? "Resuelve primero la retención por posible duplicado, arriba."
-            : !riskGate.allowed
+            : !routeGate.allowed
+              ? "Escribe por qué sale por Aliclik pese al riesgo, arriba."
+              : !riskGate.allowed
               ? "Justifica la excepción de pago, arriba."
               : transportId === null
                 ? "Elige una transportadora."
@@ -289,6 +306,33 @@ export function AliclikGuidePanel({
           {(healthCopy.tone === "ambar" || healthCopy.tone === "rojo") && (
             <Banner tone={healthCopy.tone === "rojo" ? "crit" : "warn"} title={healthCopy.label}>
               <p>{healthCopy.hint}</p>
+            </Banner>
+          )}
+
+          {/* MOM §8.6: va antes que el adelanto porque responde otra pregunta
+              —por qué ruta sale, no cuánto se cobra antes— y la asesora tiene
+              que leerla antes de prometer Aliclik. */}
+          {routeGate.requiresException && routeRisk && (
+            <Banner tone="crit" title={ROUTE_RISK_TITLE}>
+              <ul className="list-disc space-y-0.5 pl-4 text-[13px] leading-5">
+                {routeRisk.reasons.map((reason) => (
+                  <li key={reason.kind}>{routeRiskReasonText(reason)}</li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                Este grupo se entrega la mitad o menos y Aliclik cobra el intento no entregado. Despáchalo por{" "}
+                {ROUTE_RISK_ROUTES_LABEL}. Si igual debe salir por Aliclik, deja escrito por qué.
+              </p>
+              <label className={cn(LABEL, "mt-3")}>
+                Por qué sale por Aliclik
+                <textarea
+                  value={routeRiskExceptionReason}
+                  onChange={(event) => setRouteRiskExceptionReason(event.target.value)}
+                  rows={2}
+                  placeholder="Ej. Confirmó por videollamada y dio la ubicación exacta; recibe hoy."
+                  className={cn(FIELD_BOX, "w-full px-3 py-2 font-normal leading-5")}
+                />
+              </label>
             </Banner>
           )}
 
