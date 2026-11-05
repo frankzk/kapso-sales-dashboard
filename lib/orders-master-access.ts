@@ -2213,7 +2213,7 @@ export async function getOrderConfirmationBrief(
       .from("order_master")
       .select(
         "order_id,order_name,order_created_at,general_status,operational_status,macro_stage,order_total," +
-          "guide_code,current_courier,last_courier,delivered_courier,attempt_count",
+          "guide_code,current_courier,last_courier,delivered_courier,attempt_count,dispatched_at",
       )
       .eq("customer_phone", phone)
       .neq("order_id", orderId);
