@@ -6073,6 +6073,13 @@ saltó.
   condición 12).
 - **Abrir otro lead de la cola suelta el siguiente** antes de reservar el otro,
   y pasa a otra vendedora. Al cerrar esa ficha, la tarjeta vuelve a reservar.
+- **«Soltar» en el aviso del tope (05-11-2026).** Jessica veía «Ya tienes 2
+  leads abiertos» con un solo lead en pantalla: la otra reserva era de otra
+  pestaña (su propio siguiente) o de una ficha que quedó abierta, y vencía
+  sola a los 10 minutos. Ahora el aviso «Tu siguiente lead está en pausa»
+  lista esas reservas (`claimCapHolders`, `lib/leads.ts`) con un botón
+  «Soltar» cada una: suelta esa reserva al instante (`releaseLead`, solo las
+  propias) y la tarjeta vuelve a buscar. El tope de dos no cambia.
 - **La reserva de la ficha abierta también se renueva (14-10-2026).**
   - **Lo que pasaba.** Abrir un lead lo reservaba 10 minutos y la reserva
     vencía aunque la ficha siguiera abierta. Una asesora en una llamada larga,

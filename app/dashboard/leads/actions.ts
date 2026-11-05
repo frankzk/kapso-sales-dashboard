@@ -26,6 +26,7 @@ import {
   AUTO_FOLLOWUP_STATUSES,
   CLAIM_TTL_MINUTES,
   MAX_OPEN_LEADS,
+  claimCapHolders,
   claimsBlocking,
   canDispositionLead,
   cartLinesOf,
@@ -37,6 +38,7 @@ import {
   leadSearchPasses,
   usableAddress,
   type CartLine,
+  type ClaimCapHolder,
 } from "@/lib/leads";
 import { asOrderCoverage, leadDeliveryProbe } from "@/lib/lead-delivery-coverage";
 import type { OrderCoverage } from "@/lib/order-coverage";
@@ -158,6 +160,8 @@ export interface LeadActionState {
   /** El error es un aviso que el asesor puede saltarse volviendo a confirmar. */
   requiereConfirmacion?: boolean;
   notice?: string;
+  /** Con el aviso del tope: las reservas propias que lo ocupan, para soltarlas. */
+  capHolders?: ClaimCapHolder[];
   windowClosed?: boolean; // the 24h WhatsApp session window is closed (retry won't help)
   savedCall?: LeadCallRow;
   leadPatch?: Partial<
@@ -664,9 +668,11 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
   // ganados o perdidos: por eso la consulta trae `category`.
   const abiertos = claimsBlocking((mine ?? []) as Mine[], ctx.userId, leadId);
   if (abiertos.length >= MAX_OPEN_LEADS) {
-    const nombres = abiertos.map((l) => l.name?.trim() || l.phone || "un lead").join(" y ");
+    const capHolders = claimCapHolders(abiertos);
+    const nombres = capHolders.map((h) => h.label).join(" y ");
     return {
       error: `Ya tienes ${abiertos.length} leads abiertos (${nombres}). Cierra uno para tomar este.`,
+      capHolders,
     };
   }
 
