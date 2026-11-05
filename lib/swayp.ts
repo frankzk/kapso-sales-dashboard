@@ -665,10 +665,47 @@ export function swaypLabelSaysOwnFailure(label: string | null | undefined): bool
   return id ? SWAYP_OWN_FAILURE_NOVELTIES.has(Number(id)) : false;
 }
 
-function isoOrNull(value: unknown): string | null {
+/**
+ * Una fecha de la API de Swayp, como instante ISO.
+ *
+ * SWAYP ESCRIBE LA HORA DE LIMA. Las cifras de sus fechas son la hora de
+ * Lima, y Kapta las leía como UTC: todo quedaba 5 h antes (MOM §9.1, «Entrega
+ * a Swayp · Lima»; corregido el 05-11-2026). Lo prueban los 437 eventos de
+ * Swayp de 14 días, guardados todos entre 300 y 330 minutos después de su
+ * hora con un barrido cada 30 minutos, y el tracking público de la guía
+ * 50000165308: «Por recolectar 4 nov 03:19 a. m.», «Reparto 05:49 a. m.»,
+ * «Novedad 10:25 a. m.» y «05:38 p. m.», que Kapta guardó como 03:19:37Z,
+ * 05:49:11Z, 10:25:52Z y 17:38:01Z.
+ *
+ * Por eso las cifras se leen como hora de Lima (UTC−5), traigan o no una «Z»
+ * (no está documentado si la traen; la «Z» de Swayp no sería UTC). Un desfase
+ * explícito (`-05:00`, `+00:00`) se respeta. Y si leída como Lima quedara en
+ * el futuro, imposible para algo que ya pasó, Swayp habría corregido su API:
+ * se lee tal cual viene. `now` entra para las pruebas.
+ */
+export function swaypInstant(value: unknown, now: Date = new Date()): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  const raw = value.trim();
+  const wall = SWAYP_WALL_CLOCK.exec(raw);
+  if (wall) {
+    const [, day, hour = "00", minute = "00", second = "00", fraction = ""] = wall;
+    const ms = fraction ? `.${fraction.slice(0, 3).padEnd(3, "0")}` : "";
+    const lima = Date.parse(`${day}T${hour}:${minute}:${second}${ms}${SWAYP_LIMA_OFFSET}`);
+    if (Number.isFinite(lima) && lima <= now.getTime() + SWAYP_FUTURE_SLACK_MS) return new Date(lima).toISOString();
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+/** «2026-11-04», «2026-11-04 05:49», «2026-11-04T05:49:11.123» y lo mismo con «Z»: cifras de reloj, sin desfase numérico. */
+const SWAYP_WALL_CLOCK = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?[Zz]?$/;
+/** Lima no tiene horario de verano: UTC−5 todo el año. */
+const SWAYP_LIMA_OFFSET = "-05:00";
+/** Margen para relojes un poco adelantados antes de dar una fecha por «en el futuro». */
+const SWAYP_FUTURE_SLACK_MS = 10 * 60_000;
+
+function isoOrNull(value: unknown): string | null {
+  return swaypInstant(value);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

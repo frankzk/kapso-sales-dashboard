@@ -434,8 +434,8 @@ export interface SwaypHandoverRowTone {
 
 /**
  * Qué dice «Hoy» de una guía del lote frente a la entrega (E3: manda lo cargado
- * en Swayp; Kapta solo avisa). Las alertas van por estado, no por hora: las horas
- * de Swayp en Kapta llevan 5 h de desfase.
+ * en Swayp; Kapta solo avisa). Las alertas van por estado, no por hora: lo que
+ * Swayp dejó guardado antes del 05-11-2026 lleva 5 h de menos (`swaypInstant`).
  */
 export function swaypHandoverRowLine(
   handover: SwaypHandover | null,

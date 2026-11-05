@@ -284,7 +284,7 @@ describe("cita los textos de la pantalla tal cual (lib/warehouse-swayp.ts)", () 
   it("«Hoy», la celda y el escáner", () => {
     const quotes = [
       SWAYP_HOY_NOTE,
-      // Sin hora mientras las horas de Swayp lleven 5 h de desfase (fase 3).
+      // Sin hora: la que cuenta es la de la entrega (fase 3).
       SWAYP_HOY_STATE_LINE(SWAYP_STATES[5]!, null),
       SWAYP_HOY_FALTA_TOMADA,
       SWAYP_CELL_TITLE,

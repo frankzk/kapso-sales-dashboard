@@ -150,6 +150,14 @@ describe("lo que cambia fuera de la subsección", () => {
     expect(flat(MOM)).not.toContain("Swayp la toma en su sistema pasada la medianoche. Elige");
   });
 
+  it("las horas de Swayp: corregidas el 05-11-2026, con la prueba y lo que queda", () => {
+    expect(s).toContain("**Las horas de Swayp (corregido el 05-11-2026).** Swayp escribe sus fechas en hora de Lima y Kapta las leía como UTC");
+    expect(s).toContain("«Por recolectar 4 nov 03:19 a. m.», «Reparto 05:49 a. m.», «Novedad 10:25 a. m.» y «05:38 p. m.», guardados como 03:19:37Z, 05:49:11Z, 10:25:52Z y 17:38:01Z");
+    expect(s).toContain("Lo guardado antes sigue con 5 h de menos: corregirlo es una escritura en la base, pendiente del owner.");
+    expect(s).not.toContain("que se arregla aparte");
+    expect(readFileSync(resolve(process.cwd(), "lib/swayp.ts"), "utf8")).toContain("export function swaypInstant(");
+  });
+
   it("no toca el Master: ningún estado de pedido nuevo y la versión del resolvedor no cambia por esto", () => {
     expect(s).toContain("No toca provincia ni el Master (no sube `MOM_RESOLUTION_VERSION`)");
     expect(MOM_RESOLUTION_VERSION).toMatch(/^mom-v1\.\d+$/);
