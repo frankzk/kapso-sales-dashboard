@@ -18,6 +18,7 @@ import {
   SWAYP_ENTREGA_NO_VINO,
   SWAYP_ENTREGA_SIN_ABRIR,
   SWAYP_HANDOVER_BUTTON,
+  SWAYP_HANDOVER_CAMERA,
   SWAYP_HANDOVER_CERRADA,
   SWAYP_HANDOVER_CLOSED,
   SWAYP_HANDOVER_NO_PERMISSION,
@@ -83,6 +84,7 @@ describe("cita los textos de la pantalla tal cual (lib/swayp-handover.ts)", () =
       SWAYP_MANIFEST_FROM_ALMACEN,
     ];
     for (const quote of quotes) expect(s, quote).toContain(`«${quote}`);
+    expect(s).toContain(`«${SWAYP_HANDOVER_CAMERA}» abre la cámara en serie`);
   });
 
   it("«No sale»: la lista cerrada, la pregunta, la explicación y sus límites", () => {

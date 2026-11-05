@@ -11,6 +11,8 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, FIELD_BOX, OpsButton, SidePanel } from "@/components/ops-ui";
+import { DispatchCamera } from "@/components/dispatch-camera";
+import { IconCamera } from "@/components/icons";
 import {
   closeSwaypHandover,
   markSwaypNoSale,
@@ -28,6 +30,8 @@ import {
   SWAYP_HANDOVER_HELP,
   SWAYP_HANDOVER_REMAINING,
   SWAYP_HANDOVER_SCAN_LABEL,
+  SWAYP_HANDOVER_CAMERA,
+  SWAYP_HANDOVER_CAMERA_HINT,
   SWAYP_HANDOVER_TITLE,
   SWAYP_NO_SALE_BUTTON,
   SWAYP_NO_SALE_DETAIL_LABEL,
@@ -76,6 +80,12 @@ export function SwaypHandoverPanel({
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
+  // La cámara del teléfono, en serie como «Verificar caja»: queda abierta tras
+  // cada lectura y dice cuántas van; se cierra con «Listo» o sola al completar.
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [queued, setQueued] = useState(0);
+  const [lastCaptured, setLastCaptured] = useState<string | null>(null);
+  const [scanIssues, setScanIssues] = useState<string[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [noSaleFor, setNoSaleFor] = useState<string | null>(null);
   const [confirmNoVino, setConfirmNoVino] = useState(false);
@@ -105,11 +115,15 @@ export function SwaypHandoverPanel({
     try {
       while (queue.current.length) {
         const next = queue.current.shift()!;
+        let outcome: Result;
         try {
-          setResult(await scanSwaypHandover(manifestId, next));
+          outcome = await scanSwaypHandover(manifestId, next);
         } catch {
-          setResult({ error: NETWORK_ERROR });
+          outcome = { error: NETWORK_ERROR };
         }
+        setResult(outcome);
+        setQueued(queue.current.length);
+        if (outcome.error) setScanIssues((issues) => [`${next}: ${outcome.error}`, ...issues].slice(0, 5));
         // Se relee al vaciar la cola; lo que llegue mientras tanto sigue en el bucle.
         if (!queue.current.length) await onChanged();
       }
@@ -119,14 +133,26 @@ export function SwaypHandoverPanel({
     }
   }
 
+  function enqueue(value: string) {
+    queue.current.push(value);
+    setQueued(queue.current.length);
+    void drain();
+  }
+
   function onScan(event: FormEvent) {
     event.preventDefault();
     const value = code.trim();
     setCode("");
     inputRef.current?.focus();
     if (!value) return;
-    queue.current.push(value);
-    void drain();
+    enqueue(value);
+  }
+
+  function onCameraScan(value: string) {
+    const clean = value.trim();
+    if (!clean) return;
+    setLastCaptured(clean);
+    enqueue(clean);
   }
 
   /**
@@ -199,6 +225,17 @@ export function SwaypHandoverPanel({
                 Entregar
               </OpsButton>
             </div>
+            {/* En el teléfono no hay lector: la cámara, a lo ancho. */}
+            <OpsButton
+              onClick={() => {
+                setScanIssues([]);
+                setCameraOpen(true);
+              }}
+              className="w-full pointer-coarse:h-11 sm:w-auto"
+            >
+              <IconCamera aria-hidden />
+              {SWAYP_HANDOVER_CAMERA}
+            </OpsButton>
             {scanning && <p className="text-xs text-ink-500">Guardando el escaneo…</p>}
           </form>
         )}
@@ -316,6 +353,24 @@ export function SwaypHandoverPanel({
           </div>
         )}
       </div>
+      {open && (
+        <DispatchCamera
+          open={cameraOpen}
+          onClose={() => {
+            setCameraOpen(false);
+            focusScanner();
+          }}
+          onScan={onCameraScan}
+          continuous
+          progress={{ done: entrega?.delivered ?? 0, total, verb: "Entregadas" }}
+          status={result ? { ok: !result.error, text: result.error ?? result.notice ?? "" } : null}
+          pending={queued + (scanning ? 1 : 0)}
+          lastCaptured={lastCaptured}
+          issues={scanIssues}
+          title={SWAYP_HANDOVER_TITLE(zone.shortLabel)}
+          hint={SWAYP_HANDOVER_CAMERA_HINT}
+        />
+      )}
     </SidePanel>
   );
 }

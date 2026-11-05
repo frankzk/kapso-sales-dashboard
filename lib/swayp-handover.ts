@@ -42,6 +42,9 @@ export const SWAYP_HANDOVER_COUNTER = (done: number, total: number): string => `
 export const SWAYP_HANDOVER_REMAINING = (missing: number): string =>
   missing === 0 ? "completa" : missing === 1 ? "falta 1" : `faltan ${missing}`;
 export const SWAYP_HANDOVER_SCAN_LABEL = "QR, rótulo, guía Swayp o número de pedido";
+/** En el teléfono no hay lector: la cámara en serie, como «Verificar caja» (05-11-2026). */
+export const SWAYP_HANDOVER_CAMERA = "Abrir cámara";
+export const SWAYP_HANDOVER_CAMERA_HINT = "Apunta al QR o al código de barras de cada caja al dársela al chofer. La cámara sigue abierta para la siguiente.";
 export const SWAYP_HANDOVER_SCANNED = (code: string): string => `${code} entregada a Swayp.`;
 export const SWAYP_HANDOVER_ALREADY = (code: string): string => `${code} ya estaba escaneada.`;
 export const SWAYP_HANDOVER_RESTORED = (code: string): string => `${code} vuelve a la entrega y queda escaneada.`;

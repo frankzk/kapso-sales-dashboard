@@ -118,6 +118,7 @@ describe("el panel de la entrega", () => {
     expect(t).toContain("Entregadas 1");
     expect(t).toContain("KP1-S01 · Entregada a Swayp 07:04 · escaneó Almacén A");
     expect(t).toContain(SWAYP_NO_VINO_BUTTON);
+    expect(t).toContain("Abrir cámara");
     // Con una por entregar todavía no se puede cerrar.
     expect(t).not.toContain(SWAYP_CLOSE_BUTTON);
   });
@@ -152,6 +153,13 @@ describe("el código del panel", () => {
     expect(src).not.toContain("window.confirm");
     expect(src).not.toContain("fetch(");
     expect(src).not.toContain("localStorage");
+  });
+  it("en el teléfono, la cámara en serie de «Verificar caja», que suma a la misma cola (05-11-2026)", () => {
+    expect(src).toContain("<DispatchCamera");
+    expect(src).toContain("continuous");
+    expect(src).toContain('verb: "Entregadas"');
+    expect(src).toContain("onScan={onCameraScan}");
+    expect(src.slice(src.indexOf("function onCameraScan("), src.indexOf("function onCameraScan(") + 200)).toContain("enqueue(clean);");
   });
   it("los escaneos del lector van en cola: «Entregar» no se apaga mientras se guarda y el campo se limpia siempre", () => {
     expect(src).toContain("queue.current.push(value);");
