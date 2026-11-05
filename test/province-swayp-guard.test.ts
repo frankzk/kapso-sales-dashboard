@@ -440,6 +440,6 @@ describe("MOM y versión", () => {
     expect(mom).toContain("**Una guía Swayp a Lima para un pedido que no es de Lima no se crea");
     expect(mom).toContain("`limaProvinceTrusted`");
     expect(mom).toContain("`lib/swayp-destination-guard.ts`");
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.38");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.39");
   });
 });

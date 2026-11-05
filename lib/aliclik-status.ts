@@ -478,6 +478,33 @@ export function etiquetaDiceRechazoEnPuerta(reportedStatus: string | null | unde
   return status.trim().toUpperCase() === "REFUSED";
 }
 
+/** Un resultado de entrega que ya no se vuelve a intentar en esa misma guía. */
+const FALLO_DEFINITIVO = new Set(["NOT_RESPOND", "REFUSED", "CANCEL", "ANNULLED"]);
+
+/** El paquete viaja de vuelta (`TO_RETURN`) o ya está en el almacén central de Aliclik (`STORE_CENTRAL`). */
+const DESPACHO_DE_VUELTA = new Set(["TO_RETURN", "STORE_CENTRAL"]);
+
+/**
+ * ¿La etiqueta dice que el intento ya falló y el paquete VUELVE, aunque Aliclik
+ * todavía no anule la guía? (04-11-2026; `STORE_CENTRAL`, 05-11-2026)
+ *
+ * Un resultado definitivo (`NOT_RESPOND`, `REFUSED`, `CANCEL`, `ANNULLED`) con el
+ * paquete de vuelta o ya en el almacén central de Aliclik. Medido en 120 días al
+ * 05-11-2026, por pedido: de 1.744 que llegaron así a `STORE_CENTRAL` ninguno se
+ * entregó después, y de 1.862 con `TO_RETURN`, 4. Aliclik tarda unos nueve días
+ * más en anular la guía (mediana del rechazo al cierre en 60 días), y mientras
+ * tanto Kapta la daba por viva (#KP200684: `REFUSED · STORE_CENTRAL`).
+ *
+ * No entra `PENDING_DELIVERY · TO_RETURN` (de esas se entregó un tercio, 650 de
+ * 1.954), ni `RESCHEDULED` (la clienta pidió otra fecha), ni un fallo todavía con
+ * el motorizado (`REFUSED · PICKED`): de las 5 entregas tras un rechazo, 3
+ * salieron de ahí, en la misma ruta.
+ */
+export function etiquetaDiceVuelveSinEntregar(reportedStatus: string | null | undefined): boolean {
+  const [status = "", dispatch = ""] = (reportedStatus ?? "").split(" · ").map((part) => norm(part));
+  return FALLO_DEFINITIVO.has(status) && DESPACHO_DE_VUELTA.has(dispatch);
+}
+
 /** Cómo terminó el intento anterior, en castellano, para leerlo antes de llamar. */
 export interface MotivoDelCourier {
   /** Frase corta para la cola. */

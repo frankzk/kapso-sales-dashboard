@@ -2280,6 +2280,13 @@ Aliclik se suma para la creación manual en Lima (owner, 27-10-2026,
   bloqueando**: de esas se entregó un tercio (650 de 1.954). `RESCHEDULED`
   también: la clienta pidió otra fecha. La guía Aliclik no se toca; sigue su
   curso hasta que Aliclik la anule y vuelva la caja.
+  **Desde el 05-11-2026 también `STORE_CENTRAL`** (el paquete ya en el almacén
+  central de Aliclik) tras ese intento fallido: medido en 120 días, de 1.744
+  pedidos que llegaron así ninguno se entregó después (de 1.862 con `TO_RETURN`,
+  4). #KP200684 lo pedía: `REFUSED · STORE_CENTRAL`. Un fallo todavía con el
+  motorizado (`REFUSED · PICKED`) sigue bloqueando: 3 de las 5 entregas tras un
+  rechazo salieron de ahí, en la misma ruta. El vocabulario vive en
+  `etiquetaDiceVuelveSinEntregar` (`lib/aliclik-status.ts`).
 - **Lima se decide con `order_master.macro_operation`**, la misma fuente que la
   mesa manual.
 - **El aviso nombra al courier de verdad.** El de Swayp directa elegía entre dos
@@ -5795,6 +5802,32 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   guía de **Tanders** en `RETURNING` o `RETURNED` (Lima, ventana de 65 días,
   §9): esa guía sigue `en_ruta` mientras vuelve, pero no cuenta como «guía
   viva» para esta regla, porque ya no la trabaja nadie.
+- **El rechazo en la puerta de Aliclik que ya vuelve entra sin esperar la
+  anulación (05-11-2026, owner, v1.39).** «En Aliclik ya está rechazada, no hay
+  más que pedir» (#KP200684: `REFUSED · STORE_CENTRAL` desde el 05-11, la guía
+  `en_ruta` y el pedido «En tránsito», así que Grupo GF no lo podía tomar para
+  mandarlo con Alexis). Aliclik tarda unos nueve días más en anular la guía
+  (mediana del rechazo al cierre en 60 días). Ahora `REFUSED · TO_RETURN` y
+  `REFUSED · STORE_CENTRAL` cuentan como el `RETURNING` de Tanders
+  (`aliclikRefusedReturning`): de 126 pedidos rechazados que llegaron al almacén
+  central ninguno se entregó después, y de 123 con `TO_RETURN`, 2. En Lima el
+  pedido pasa a **«Por reprogramar Lima»** y Grupo GF lo toma con una salida
+  nueva, que Almacén arma desde el stock porque la caja sigue en Aliclik.
+  - **Solo el rechazo.** La recuperación por WhatsApp, el agente de voz y el
+    reintento automático de Lima ya excluyen el rechazo en la puerta, así que
+    abrir la ventana antes no hace que nadie llame ni cree una guía sola. «No
+    contestó» y «cancelado» que vuelven siguen esperando la anulación: abrirlos
+    antes haría que el agente de voz los llamara antes, y eso lo decide el
+    owner (pendiente).
+  - **La ventana no vence mientras Aliclik no cierre la guía.** Se ancla en la
+    salida, como Tanders, para que los días en la etapa no vuelvan a cero en
+    cada pasada del barrido; pero en Provincia son 7 días que una salida de hace
+    dos semanas ya habría gastado. Cuando Aliclik la anula, la ventana de la
+    tienda corre desde ese cierre (`closed_at`), como siempre.
+  - Si Aliclik la vuelve a mandar a reparto y la entrega (2 de 123), el pedido
+    queda entregado como cualquier otro; si para entonces ya salió con Grupo GF,
+    es la tarea urgente de §4 (cancelar la otra salida).
+  - Medido el 05-11-2026: 3 pedidos de Lima y 9 de Provincia vivos así.
 - **Mientras dura**, el pedido es `en_proceso · pendiente_nuevo_courier` y el
   Master lo enseña en **En curso · En gestión Reproprovincia** (Lima: «Por
   reprogramar Lima»). La guía Aliclik no se toca —sigue `anulado`, con su
