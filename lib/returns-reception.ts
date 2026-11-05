@@ -126,3 +126,50 @@ export function daysSince(iso: string | null, now: Date = new Date()): number | 
   const ms = now.getTime() - Date.parse(iso);
   return Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 86_400_000)) : null;
 }
+
+/**
+ * Grupo GF en la pantalla Devoluciones (05-11-2026): un «No entregado» que
+ * sigue en la caja de un motorizado, sin datos del cliente. Sale de la misma
+ * lista que «Devoluciones» de Despacho del día (`getPendingReturns`).
+ */
+export interface GfPendingReturnRow {
+  shipmentId: string;
+  orderName: string;
+  code: string | null;
+  riderName: string;
+  routeDate: string;
+  reason: string | null;
+  /** La caja reemplazada (0248): al recibirla vuelve a stock. */
+  replaced: boolean;
+}
+
+export interface GfReturnsBucket {
+  /** Lo que el motorizado aún tiene que traer de vuelta, de cualquier fecha. */
+  pendientes: GfPendingReturnRow[];
+  /** Salidas de Grupo GF recibidas en oficina hoy (día Lima), en cualquier pantalla. */
+  recibidasHoy: number;
+}
+
+/**
+ * Cuántas salidas de Grupo GF se recibieron en oficina, de unos eventos
+ * `returned_to_office` de `dispatch_events` (los escribe `gf_return_to_office`
+ * en sus dos ramas). Una salida cuenta una vez aunque tenga dos. NO cuenta
+ * «Mover» en la oficina (`gf_office_reclaim`, 0230): ese paquete nunca salió
+ * con el motorizado —su parada estaba pendiente— y no es un «No entregado» que
+ * vuelva. En `dispatch_events` ya tiene otro tipo (`reclaimed_in_office`); en
+ * `order_events` escribe `returned_to_office` con `payload.reclaimed_in_office`,
+ * y esa marca se descarta igual por si la lectura cambia de tabla. PURA.
+ */
+export function countGfReceivedToday(
+  rows: readonly { shipment_id: string | null; payload?: unknown }[],
+): number {
+  const seen = new Set<string>();
+  let anonymous = 0;
+  for (const row of rows) {
+    const payload = row.payload && typeof row.payload === "object" ? (row.payload as Record<string, unknown>) : null;
+    if (payload?.reclaimed_in_office === true) continue;
+    if (row.shipment_id) seen.add(row.shipment_id);
+    else anonymous += 1;
+  }
+  return seen.size + anonymous;
+}

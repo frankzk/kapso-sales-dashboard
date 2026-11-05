@@ -17,13 +17,18 @@
 // igual, pero vuelve a stock: el pedido ya salió con otra salida.
 
 import { boxDayShort } from "@/lib/gf-scan-return";
+import type { ReturnScanOutcome } from "@/lib/returns-scan-outcome";
 
 export interface GfReturnFacts {
   /** La caja de Grupo GF donde está el paquete ahora, si está en una. */
   box: { riderName: string; routeDate: string; stopStatus: string | null } | null;
   /** `shipments.custody_state`. */
   custodyState: string | null;
-  /** Ya se recibió en oficina (`returned_to_office`) y no volvió a salir. */
+  /**
+   * Ya se recibió en oficina y no volvió a salir: `returned_to_office`, o
+   * `return_received` de la rama a stock de `gf_return_to_office` (0248/0307:
+   * la reemplazada, el anulado en la tienda, la que ya constaba devuelta).
+   */
   receivedInOffice: boolean;
   /** El pedido salió con otra salida (`output_replaced`): esta vuelve a stock. */
   replaced?: boolean;
@@ -42,8 +47,11 @@ export interface GfReturnFacts {
 export type GfReturnDecision =
   /** `toStock`: era la caja reemplazada; al recibirla se desarma, no se reprograma. */
   | { kind: "recibir"; toStock?: boolean }
-  /** `toInventory`: ya se recibió y fue a inventario (venta terminada); no es una alarma. */
-  | { kind: "aviso"; message: string; toInventory?: boolean }
+  /**
+   * `toInventory`: ya se recibió y fue a inventario (venta terminada); no es una alarma.
+   * `repeat`: la caja ya se había recibido antes: el escaneo no suma (05-11-2026).
+   */
+  | { kind: "aviso"; message: string; toInventory?: boolean; repeat?: true }
   | { kind: "error"; message: string };
 
 /** Pura: qué hace el escaneo con un paquete de Grupo GF. `label` es el código de la salida. */
@@ -63,19 +71,38 @@ export function gfReturnDecision(label: string, facts: GfReturnFacts): GfReturnD
     };
   }
   if (facts.replaced && facts.custodyState === "devuelto") {
-    return { kind: "aviso", message: `${label} ya se recibió: era la caja reemplazada; desármala y regístrala como reingreso a stock.` };
+    return { kind: "aviso", repeat: true, message: `${label} ya se recibió: era la caja reemplazada; desármala y regístrala como reingreso a stock.` };
   }
   if (facts.saleEnded && facts.custodyState === "devuelto") {
     return {
       kind: "aviso",
       toInventory: true,
+      repeat: true,
       message: `${label} ya se recibió: el pedido está anulado en la tienda (o su venta terminó), así que fue a inventario —Almacén decide stock o merma—. No vuelve a «por asignar».`,
     };
+  }
+  // La que ya constaba devuelta (sin reemplazo ni venta terminada): la rama a
+  // stock la sacó de la caja y sigue `devuelto`. Escanearla otra vez es la
+  // misma caja que pasa dos veces por el lector, no un error (05-11-2026).
+  if (facts.custodyState === "devuelto" && facts.receivedInOffice) {
+    return { kind: "aviso", repeat: true, message: `${label} ya se recibió en oficina y consta devuelto: ya salió de la caja y no vuelve a «por asignar».` };
   }
   if (facts.custodyState !== "empresa") {
     return { kind: "error", message: `${label}: no está en una caja de Grupo GF ni en la oficina. Revísalo en el Master.` };
   }
   return facts.receivedInOffice
-    ? { kind: "aviso", message: `${label} ya estaba recibido en oficina: sigue por asignar en Grupo GF para reprogramarlo.` }
+    ? { kind: "aviso", repeat: true, message: `${label} ya estaba recibido en oficina: sigue por asignar en Grupo GF para reprogramarlo.` }
     : { kind: "aviso", message: `${label} nunca salió en Kapta: no hay devolución que registrar. Sigue por asignar en Grupo GF.` };
+}
+
+/**
+ * Qué fue el escaneo, para que la pantalla lo cuente (05-11-2026): recibirla
+ * es `nueva` (también la reemplazada a stock y la del anulado a inventario);
+ * un aviso de algo ya recibido es `repetida` —no suma—; el resto de avisos
+ * («nunca salió en Kapta») es `informativa`. Un error no tiene resultado. PURA.
+ */
+export function gfReceptionOutcome(decision: GfReturnDecision): ReturnScanOutcome | null {
+  if (decision.kind === "recibir") return "nueva";
+  if (decision.kind === "aviso") return decision.repeat ? "repetida" : "informativa";
+  return null;
 }

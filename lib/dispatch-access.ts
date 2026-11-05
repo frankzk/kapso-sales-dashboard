@@ -6,9 +6,12 @@ import { warehouseBlocker } from "@/lib/warehouse-queue";
 import { isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import {
   bucketReturns,
+  countGfReceivedToday,
+  type GfReturnsBucket,
   type ReconciliationBuckets,
   type ReconciliationRow,
 } from "@/lib/returns-reception";
+import { getPendingReturns } from "@/lib/courier-route-ledger";
 import { bucketShalomReturns, type ShalomReturnBuckets, type ShalomReturnRow } from "@/lib/shalom/returns";
 
 export interface DispatchShipment {
@@ -333,6 +336,8 @@ export async function getWarehouseStationData(): Promise<WarehouseStationData> {
 export interface ReturnsReceptionData {
   tanders: ReconciliationBuckets;
   shalom: ShalomReturnBuckets;
+  /** Grupo GF (05-11-2026): lo que sigue en cajas y lo recibido hoy. */
+  gf: GfReturnsBucket;
 }
 
 /**
@@ -344,8 +349,8 @@ export interface ReturnsReceptionData {
  */
 export async function getReturnsReceptionData(): Promise<ReturnsReceptionData> {
   const sb = await createServerSupabase();
-  const [tanders, shalom] = await Promise.all([tandersReturns(sb), shalomReturns(sb)]);
-  return { tanders, shalom };
+  const [tanders, shalom, gf] = await Promise.all([tandersReturns(sb), shalomReturns(sb), gfReturns(sb)]);
+  return { tanders, shalom, gf };
 }
 
 type UserSupabase = Awaited<ReturnType<typeof createServerSupabase>>;
@@ -390,6 +395,63 @@ async function shalomReturns(sb: UserSupabase): Promise<ShalomReturnBuckets> {
   if (!rows.length) return bucketShalomReturns([]);
   const received = await receivedAtByShipment(sb, rows.map((r) => r.id));
   return bucketShalomReturns(rows.map((r) => ({ ...r, received_at: received.get(r.id) ?? null })));
+}
+
+/**
+ * Grupo GF (05-11-2026): sus cajas se reciben en esta misma pantalla y son el
+ * grueso del día, pero el cuadre no las contaba.
+ *
+ * - **Lo que falta**: los «No entregado» que siguen en la caja de un motorizado,
+ *   la MISMA lista que «Devoluciones» de Despacho del día (`getPendingReturns`).
+ *   Esa lectura usa el service role (paradas e ítems tienen políticas
+ *   distintas), así que se acota a las tiendas que el usuario ve por RLS: sin
+ *   ninguna, nada.
+ * - **Lo recibido hoy** (día Lima), en cualquier pantalla: los
+ *   `returned_to_office` de hoy en `dispatch_events`, con el cliente del
+ *   usuario (RLS por organización). Es el único evento que `gf_return_to_office`
+ *   escribe SIEMPRE, en sus dos ramas: la de «por asignar» y la de stock o
+ *   inventario (la reemplazada, el anulado en la tienda, la venta terminada, la
+ *   que ya constaba devuelta; 0248/0307), que en `order_events` solo deja un
+ *   `return_received` y no siempre. Así lo que «Esta tanda» cuenta como
+ *   recibida también sube aquí. «Mover» en la oficina escribe otro tipo
+ *   (`reclaimed_in_office`) y no cuenta (`countGfReceivedToday`).
+ *
+ * Como el resto del cuadre, una lectura que falla LANZA.
+ */
+async function gfReturns(sb: UserSupabase): Promise<GfReturnsBucket> {
+  const today = limaDayBounds(limaDateKey());
+  const [storesRead, eventsRead] = await Promise.all([
+    sb.from("stores").select("id"),
+    sb
+      .from("dispatch_events")
+      .select("shipment_id,payload")
+      .eq("kind", "returned_to_office")
+      .gte("occurred_at", today.startIso)
+      .lt("occurred_at", today.endIso)
+      .limit(5000),
+  ]);
+  if (storesRead.error) throw new Error(`tiendas de Grupo GF: ${storesRead.error.message}`);
+  if (eventsRead.error) throw new Error(`recepciones de Grupo GF en oficina: ${eventsRead.error.message}`);
+  const storeIds = ((storesRead.data ?? []) as { id: string }[]).map((store) => store.id);
+  let pending: Awaited<ReturnType<typeof getPendingReturns>>;
+  try {
+    pending = await getPendingReturns({ storeIds });
+  } catch (cause) {
+    throw new Error(`devoluciones de Grupo GF: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+  return {
+    // Sin datos del cliente: aquí basta el pedido, la caja y el motivo.
+    pendientes: pending.map((p) => ({
+      shipmentId: p.shipmentId,
+      orderName: p.orderName,
+      code: p.code,
+      riderName: p.riderName,
+      routeDate: p.routeDate,
+      reason: p.reason,
+      replaced: p.replaced,
+    })),
+    recibidasHoy: countGfReceivedToday((eventsRead.data ?? []) as { shipment_id: string | null; payload?: unknown }[]),
+  };
 }
 
 /** La primera recepción en almacén (`return_received`) de cada guía. */
