@@ -599,6 +599,8 @@ export function switchValue(on: boolean): string {
 /** La clave del historial de una variante de los reintentos de Lima. */
 export const RETRY_EVENT_PREFIX = "lima_retry:";
 export const RETRY_CAP_EVENT = "lima_retry_cap";
+/** «Usar la ubicación por dirección (Google)» de los reintentos de Lima (0308). */
+export const RETRY_GEOCODE_EVENT = "lima_retry_geocode";
 export function retryVariantEventKey(variant: string): string {
   return `${RETRY_EVENT_PREFIX}${variant}`;
 }
@@ -606,6 +608,7 @@ export function retryVariantEventKey(variant: string): string {
 /** El nombre de lo que cambió, para «Últimos cambios». Pura. */
 export function automationEventLabel(key: string): string {
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
+  if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
   if (key.startsWith(RETRY_EVENT_PREFIX)) {
     const variant = key.slice(RETRY_EVENT_PREFIX.length);
     return isRetryVariant(variant) ? `Reintentos Aliclik · ${retryVariantLabel(variant)}` : "Reintentos Aliclik";

@@ -686,3 +686,278 @@ describe("la coordenada por dirección para la guía automática (0301)", () => 
     expect(fresh.state.upserts).toHaveLength(0);
   });
 });
+
+// ─── La medición de Lima para los reintentos automáticos (0308) ──────────────
+
+describe("la medición de Lima: el criterio B con el edificio", () => {
+  it("sin medición, con pocos puntos ROOFTOP o por debajo del 90 %: no deja encender", async () => {
+    const { geocodeLimaGate, GEOCODE_SMALL_SAMPLE } = await import("@/lib/geocode-google");
+    const base = { ranAt: "2026-11-05T15:00:00Z", rooftop: 40, rooftopWithin300Pct: 92 } as never as import("@/lib/geocode-google").GeocodeLimaRunSummary;
+    expect(geocodeLimaGate(null)).toMatchObject({ ok: false, reason: expect.stringContaining("Todavía no hay una medición de Lima") });
+    expect(geocodeLimaGate({ ...base, rooftop: GEOCODE_SMALL_SAMPLE - 1 })).toMatchObject({ ok: false, reason: expect.stringContaining("hacen falta al menos 30") });
+    expect(geocodeLimaGate({ ...base, rooftopWithin300Pct: 89.9 })).toMatchObject({ ok: false, reason: expect.stringContaining("hace falta el 90 %") });
+    expect(geocodeLimaGate({ ...base, rooftopWithin300Pct: null })).toMatchObject({ ok: false });
+    expect(geocodeLimaGate({ ...base, rooftop: GEOCODE_SMALL_SAMPLE, rooftopWithin300Pct: 90 })).toEqual({ ok: true });
+  });
+
+  it("la cuenta guardada se lee con cuidado: lo roto no enciende nada", async () => {
+    const { parseGeocodeLimaRunSummary, geocodeLimaRunSummary, aggregateGeocodePilot } = await import("@/lib/geocode-google");
+    const samples: GeocodePilotSample[] = [
+      { coverage: "lima", ok: true, precision: "ROOFTOP", distanceM: 50 },
+      { coverage: "lima", ok: true, precision: "RANGE_INTERPOLATED", distanceM: 900 },
+      { coverage: "lima", ok: false, reason: "impreciso" },
+    ];
+    const lima = aggregateGeocodePilot(samples).byCoverage[0]!;
+    const summary = geocodeLimaRunSummary(lima, { ranAt: "x", days: 7, cap: 150, stores: 2, apiCalls: 3, truncated: false, quotaHit: false });
+    expect(summary).toMatchObject({ sampled: 3, passed: 2, rooftop: 1, rangeInterpolated: 1, rooftopWithin300Pct: 100, rooftopMeetsB: true, within300Pct: 50, rejections: { impreciso: 1 } });
+    expect(parseGeocodeLimaRunSummary(JSON.parse(JSON.stringify(summary)))).toEqual(summary);
+    expect(parseGeocodeLimaRunSummary(null)).toBeNull();
+    expect(parseGeocodeLimaRunSummary({ sampled: "x" })).toBeNull();
+    expect(parseGeocodeLimaRunSummary({ ...summary, rejections: { inventado: 3, impreciso: "y" } })!.rejections).toEqual({});
+  });
+});
+
+describe("runGeocodeLimaMeasure: solo Lima, con tope, y guarda solo cuentas", () => {
+  function limaAdmin(rows: Record<string, unknown>[]) {
+    const calls: Call[] = [];
+    const inserts: { table: string; row: Record<string, unknown> }[] = [];
+    const client = {
+      from(table: string) {
+        const chain: Record<string, unknown> = {};
+        let rangeFrom = 0;
+        let rangeTo = Infinity;
+        let ids: string[] | null = null;
+        for (const m of ["select", "eq", "gte", "not", "order"]) {
+          chain[m] = (...args: unknown[]) => {
+            calls.push({ table, method: m, args });
+            return chain;
+          };
+        }
+        chain.in = (...args: unknown[]) => {
+          calls.push({ table, method: "in", args });
+          if (args[0] === "id") ids = args[1] as string[];
+          return chain;
+        };
+        chain.range = (a: number, b: number) => {
+          rangeFrom = a;
+          rangeTo = b;
+          return chain;
+        };
+        chain.insert = async (row: Record<string, unknown>) => {
+          if (table !== "geocode_pilot_runs") throw new Error(`escritura prohibida: ${table}`);
+          inserts.push({ table, row });
+          return { error: null };
+        };
+        for (const w of ["update", "upsert", "delete", "rpc"]) {
+          chain[w] = () => {
+            throw new Error(`escritura prohibida: ${table}.${w}`);
+          };
+        }
+        chain.then = (res: (v: unknown) => unknown) => {
+          const data = table === "order_master" ? rows.slice(rangeFrom, rangeTo + 1) : (ids ?? []).map((id) => ({ id }));
+          return Promise.resolve({ data, error: null }).then(res);
+        };
+        return chain;
+      },
+    };
+    return { client: client as never, calls, inserts };
+  }
+
+  it("mide como mucho 150 pedidos de Lima entre las tiendas, y guarda la cuenta sin direcciones ni pedidos", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.doUnmock("@/lib/geocode-google-server");
+    vi.resetModules();
+    const { runGeocodeLimaMeasure } = await import("@/lib/geocode-google-server");
+    const { GEOCODE_LIMA_CAP } = await import("@/lib/geocode-google");
+    expect(GEOCODE_LIMA_CAP).toBe(150);
+    const lima = Array.from({ length: 220 }, (_, i) => ({
+      order_id: `L${i}`, coverage: "lima", address: `Av. Larco ${100 + i}`, district: "Miraflores", province: "Lima", region: "Lima",
+      latitude: -12.1211, longitude: -77.0297,
+    }));
+    const prov = Array.from({ length: 30 }, (_, i) => ({
+      order_id: `P${i}`, coverage: "provincia_cod", address: `Av. Ejército ${i}`, district: "Yanahuara", province: "Arequipa", region: "Arequipa",
+      latitude: -16.3989, longitude: -71.535,
+    }));
+    // Provincia primero: aun así no entra a la muestra.
+    const { client, calls, inserts } = limaAdmin([...prov, ...lima]);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(googleOk(-12.1212, -77.0297, "Miraflores", "Provincia de Lima")), { status: 200 }));
+    const run = await runGeocodeLimaMeasure(client, {
+      orgId: "org-1", storeIds: ["s1", "s2"], key: "CLAVE-FALSA", actor: "user-1", fetchImpl: fetchImpl as never, now: new Date("2026-11-05T15:00:00Z"),
+    });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(fetchImpl).toHaveBeenCalledTimes(150);
+    expect(run.summary).toMatchObject({ sampled: 150, passed: 150, rooftop: 150, rooftopWithin300Pct: 100, rooftopMeetsB: true, apiCalls: 150, cap: 150, stores: 2 });
+    expect(calls).toContainEqual({ table: "order_master", method: "in", args: ["store_id", ["s1", "s2"]] });
+    expect(calls).toContainEqual({ table: "order_master", method: "in", args: ["coverage", ["lima"]] });
+    expect(calls).toContainEqual({ table: "orders", method: "not", args: ["raw->woo", "is", null] });
+    for (const u of fetchImpl.mock.calls.map((c) => String((c as unknown[])[0]))) expect(u).not.toContain("Ej%C3%A9rcito");
+
+    // Lo guardado: una fila de Lima de la organización, con solo cuentas.
+    expect(inserts).toHaveLength(1);
+    const saved = inserts[0]!.row;
+    expect(saved).toMatchObject({ org_id: "org-1", store_id: null, coverage: "lima", created_by: "user-1", summary: run.summary });
+    const out = JSON.stringify(saved) + JSON.stringify(run) + vi.mocked(console.info).mock.calls.map((c) => String(c[0])).join("\n");
+    for (const s of ["Larco", "Miraflores", "L0", "L149", "CLAVE-FALSA", "-12.12", "-77.02"]) expect(out).not.toContain(s);
+  });
+
+  it("una clave rechazada no guarda nada", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { runGeocodeLimaMeasure } = await import("@/lib/geocode-google-server");
+    const { client, inserts } = limaAdmin([
+      { order_id: "L1", coverage: "lima", address: "Av. Larco 1", district: "Miraflores", province: "Lima", region: "Lima", latitude: -12.12, longitude: -77.03 },
+    ]);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ status: "REQUEST_DENIED" }), { status: 200 }));
+    const run = await runGeocodeLimaMeasure(client, { orgId: "org-1", storeIds: ["s1"], key: "k", actor: null, fetchImpl: fetchImpl as never });
+    expect(run).toEqual({ ok: false, error: expect.stringContaining("REQUEST_DENIED") });
+    expect(inserts).toEqual([]);
+  });
+});
+
+describe("el panel: medir Lima y el interruptor de los reintentos", () => {
+  const ACTIONS = readFileSync(resolve(process.cwd(), "app/dashboard/automatizaciones/actions.ts"), "utf8");
+  it("medir y encender pasan por la misma puerta (automations.manage y producción); encender exige B", () => {
+    const measure = ACTIONS.slice(ACTIONS.indexOf("export async function measureLimaGeocodeNow"));
+    expect(measure.indexOf("await gate(orgId)")).toBeGreaterThan(-1);
+    expect(measure.indexOf("await gate(orgId)")).toBeLessThan(measure.indexOf("runGeocodeLimaMeasure("));
+    const toggle = ACTIONS.slice(ACTIONS.indexOf("export async function setRetryGeocode"), ACTIONS.indexOf("export interface LimaGeocodeMeasureResult"));
+    expect(toggle).toContain("await gate(orgId)");
+    expect(toggle).toContain("geocodeLimaGate(latest?.summary ?? null)");
+    expect(toggle).toContain("if (on) {");
+    expect(toggle).toContain("automation: RETRY_GEOCODE_EVENT");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// La medición de Lima no se confirma sola y tiene tope por día (05-11-2026)
+// ---------------------------------------------------------------------------
+
+describe("el pin del Master que es el punto de Google", () => {
+  it("a 5 m o menos del punto bueno de la caché es Google; una corrección a mano nunca", async () => {
+    const { masterPinIsGoogle, GEOCODE_SAME_PIN_METERS } = await import("@/lib/geocode-google");
+    expect(GEOCODE_SAME_PIN_METERS).toBe(5);
+    const google = { latitude: -12.1211, longitude: -77.0297 };
+    expect(masterPinIsGoogle({ latitude: "-12.1211", longitude: "-77.0297", geo_source: "courier" }, google)).toBe(true);
+    expect(masterPinIsGoogle({ latitude: -12.12112, longitude: -77.0297, geo_source: "courier" }, google)).toBe(true);
+    // ~50 m: lo puso otra persona (el courier en la puerta, por ejemplo).
+    expect(masterPinIsGoogle({ latitude: -12.1216, longitude: -77.0297, geo_source: "courier" }, google)).toBe(false);
+    expect(masterPinIsGoogle({ latitude: -12.1211, longitude: -77.0297, geo_source: "manual" }, google)).toBe(false);
+    expect(masterPinIsGoogle({ latitude: null, longitude: null }, google)).toBe(false);
+    expect(masterPinIsGoogle({ latitude: -12.1211, longitude: -77.0297 }, null)).toBe(false);
+  });
+});
+
+describe("runGeocodeLimaMeasure: sin los pins de Google y con 150 consultas por día", () => {
+  function dayAdmin(tables: { order_master: Record<string, unknown>[]; order_geocodes?: Record<string, unknown>[]; runs?: Record<string, unknown>[] }) {
+    const inserts: Record<string, unknown>[] = [];
+    const client = {
+      from(table: string) {
+        const chain: Record<string, unknown> = {};
+        let rangeFrom = 0;
+        let rangeTo = Infinity;
+        const filters: Array<(r: Record<string, unknown>) => boolean> = [];
+        let ids: string[] | null = null;
+        for (const m of ["select", "not", "order"]) chain[m] = () => chain;
+        chain.eq = (c: string, v: unknown) => {
+          filters.push((r) => r[c] === v);
+          return chain;
+        };
+        chain.gte = (c: string, v: string) => {
+          if (table === "geocode_pilot_runs") filters.push((r) => Date.parse(String(r[c])) >= Date.parse(v));
+          return chain;
+        };
+        chain.in = (c: string, vs: string[]) => {
+          if (c === "id") ids = vs;
+          if (c === "order_id") filters.push((r) => vs.includes(String(r.order_id)));
+          return chain;
+        };
+        chain.range = (a: number, b: number) => {
+          rangeFrom = a;
+          rangeTo = b;
+          return chain;
+        };
+        chain.insert = async (row: Record<string, unknown>) => {
+          if (table !== "geocode_pilot_runs") throw new Error(`escritura prohibida: ${table}`);
+          inserts.push(row);
+          return { error: null };
+        };
+        for (const w of ["update", "upsert", "delete", "rpc"]) {
+          chain[w] = () => {
+            throw new Error(`escritura prohibida: ${table}.${w}`);
+          };
+        }
+        chain.then = (res: (v: unknown) => unknown) => {
+          let data: unknown[];
+          if (table === "order_master") data = tables.order_master.slice(rangeFrom, rangeTo + 1);
+          else if (table === "orders") data = (ids ?? []).map((id) => ({ id }));
+          else if (table === "order_geocodes") data = (tables.order_geocodes ?? []).filter((r) => filters.every((f) => f(r)));
+          else if (table === "geocode_pilot_runs") data = (tables.runs ?? []).filter((r) => filters.every((f) => f(r)));
+          else data = [];
+          return Promise.resolve({ data, error: null }).then(res);
+        };
+        return chain;
+      },
+    };
+    return { client: client as never, inserts };
+  }
+
+  const limaRow = (i: number, extra: Record<string, unknown> = {}) => ({
+    order_id: `L${i}`, coverage: "lima", address: `Av. Larco ${100 + i}`, district: "Miraflores", province: "Lima", region: "Lima",
+    latitude: -12.1211, longitude: -77.0297, geo_source: "courier", ...extra,
+  });
+  const NOW = new Date("2026-11-05T20:00:00Z"); // 15:00 en Lima
+
+  it("un pedido cuyo pin es su punto de Google (una guía automática) no entra a la muestra", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.doUnmock("@/lib/geocode-google-server");
+    vi.resetModules();
+    const { runGeocodeLimaMeasure } = await import("@/lib/geocode-google-server");
+    const rows = [limaRow(0), limaRow(1), limaRow(2, { geo_source: "manual" }), limaRow(3)];
+    const order_geocodes = [
+      // L0: el pin del Master es el de Google → fuera.
+      { order_id: "L0", ok: true, latitude: -12.1211, longitude: -77.0297 },
+      // L1: Google dio otro punto (a ~50 m): el pin es de una persona → entra.
+      { order_id: "L1", ok: true, latitude: -12.1216, longitude: -77.0297 },
+      // L2: corrección a mano igual al punto de Google → entra.
+      { order_id: "L2", ok: true, latitude: -12.1211, longitude: -77.0297 },
+    ];
+    const { client } = dayAdmin({ order_master: rows, order_geocodes });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(googleOk(-12.1212, -77.0297, "Miraflores", "Provincia de Lima")), { status: 200 }));
+    const run = await runGeocodeLimaMeasure(client, { orgId: "org-1", storeIds: ["s1"], key: "k", actor: null, fetchImpl: fetchImpl as never, now: NOW });
+    expect(run.ok).toBe(true);
+    if (!run.ok) return;
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(run.summary.sampled).toBe(3);
+  });
+
+  it("descuenta lo que ya gastaron las mediciones de hoy; ayer no cuenta", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const { runGeocodeLimaMeasure } = await import("@/lib/geocode-google-server");
+    const rows = Array.from({ length: 200 }, (_, i) => limaRow(i));
+    const runs = [
+      { org_id: "org-1", coverage: "lima", created_at: "2026-11-05T14:00:00Z", summary: { apiCalls: 120 } },
+      { org_id: "org-1", coverage: "lima", created_at: "2026-11-05T04:00:00Z", summary: { apiCalls: 150 } }, // 23:00 de ayer en Lima
+      { org_id: "org-2", coverage: "lima", created_at: "2026-11-05T14:00:00Z", summary: { apiCalls: 150 } },
+    ];
+    const { client, inserts } = dayAdmin({ order_master: rows, runs });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(googleOk(-12.1212, -77.0297, "Miraflores", "Provincia de Lima")), { status: 200 }));
+    const run = await runGeocodeLimaMeasure(client, { orgId: "org-1", storeIds: ["s1"], key: "k", actor: null, fetchImpl: fetchImpl as never, now: NOW });
+    expect(run.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(30);
+    expect(inserts[0]).toMatchObject({ summary: expect.objectContaining({ apiCalls: 30, cap: 30 }) });
+  });
+
+  it("con las 150 de hoy gastadas no consulta nada y lo dice", async () => {
+    const { runGeocodeLimaMeasure } = await import("@/lib/geocode-google-server");
+    const runs = [
+      { org_id: "org-1", coverage: "lima", created_at: "2026-11-05T14:00:00Z", summary: { apiCalls: 100 } },
+      { org_id: "org-1", coverage: "lima", created_at: "2026-11-05T15:00:00Z", summary: { apiCalls: 50 } },
+    ];
+    const { client, inserts } = dayAdmin({ order_master: [limaRow(0)], runs });
+    const fetchImpl = vi.fn();
+    const run = await runGeocodeLimaMeasure(client, { orgId: "org-1", storeIds: ["s1"], key: "k", actor: null, fetchImpl: fetchImpl as never, now: NOW });
+    expect(run).toEqual({ ok: false, error: "Ya se usaron las 150 consultas de hoy para medir Lima; vuelve mañana." });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(inserts).toEqual([]);
+  });
+});

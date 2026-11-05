@@ -617,4 +617,6 @@
 \ir migrations/0306_automations_panel.sql
 \echo 'Applying 0307_return_manifests.sql'
 \ir migrations/0307_return_manifests.sql
+\echo 'Applying 0308_lima_retry_geocode.sql'
+\ir migrations/0308_lima_retry_geocode.sql
 \echo 'Done.'

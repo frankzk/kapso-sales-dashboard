@@ -6,7 +6,9 @@ import "server-only";
 //
 //   · Muestra: pedidos de WooCommerce (`orders.raw ? 'woo'`) de los últimos 7
 //     días, con `order_master.latitude`/`longitude` (el pin de la asesora al
-//     crear la guía) y cobertura Lima o Provincia COD. Como mucho 400: el tope
+//     crear la guía) y cobertura Lima o Provincia COD, sin los pins que son
+//     el punto de Google del propio pedido (`googlePinnedOrderIds`, 05-11-2026:
+//     los guardó una guía automática). Como mucho 400: el tope
 //     diario que el owner pone a la cuota «v3 requests per day» en Google Cloud
 //     (el encargo decía 450; con un cupo de 400 los últimos 50 nunca saldrían).
 //   · Se consulta la Geocoding API clásica («v3», .../maps/api/geocode/json), no
@@ -20,6 +22,9 @@ import "server-only";
 //     nombres, ni celulares, ni números de pedido, ni en el resultado ni en el
 //     registro. La clave tampoco sale de aquí: va en la URL de la consulta y
 //     esa URL no se registra nunca.
+//   · La medición de LIMA para los reintentos automáticos (`runGeocodeLimaMeasure`,
+//     más abajo) usa la misma muestra y la misma cuenta, solo Lima y hasta 150
+//     consultas, y guarda esa cuenta (solo números) en `geocode_pilot_runs`.
 //
 // TIEMPO. Corre dentro de una acción de servidor de Ajustes. La página admite
 // 300 s, pero el piloto se queda en ~45 s: 5 consultas a la vez, 6 s como mucho
@@ -30,19 +35,25 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { inPeru } from "@/lib/chatby-conversation";
+import { limaTodayKey } from "@/lib/shipments";
 import {
   GEOCODE_DAILY_QUOTA,
+  GEOCODE_LIMA_CAP,
   GEOCODE_PILOT_COVERAGES,
   QUOTA_STATUS,
   GOOGLE_GEOCODE_ENDPOINT,
   aggregateGeocodePilot,
+  geocodeLimaRunSummary,
   geocodeQueryString,
   geocodeRequestParams,
   geocodeSafeguard,
   geocodeUsableForAutoGuide,
   haversineMeters,
+  masterPinIsGoogle,
+  parseGeocodeLimaRunSummary,
   parseGeocodeResponse,
   type GeocodeCoverage,
+  type GeocodeLimaRunSummary,
   type GeocodeParsed,
   type GeocodePilotReason,
   type GeocodePilotReport,
@@ -87,6 +98,7 @@ interface MasterRow {
   region: string | null;
   latitude: number | string | null;
   longitude: number | string | null;
+  geo_source: string | null;
 }
 
 const isPilotCoverage = (c: string | null): c is GeocodeCoverage =>
@@ -105,20 +117,74 @@ async function wooOrderIds(admin: SupabaseClient, ids: string[]): Promise<Set<st
 }
 
 /**
+ * Los pedidos cuyo pin del Master es el punto que dio Google (05-11-2026): la
+ * caché `order_geocodes` tiene un punto bueno (`ok`) y el Master está a
+ * `GEOCODE_SAME_PIN_METERS` o menos de él (`masterPinIsGoogle`). Pasa cuando
+ * una guía automática se creó con la ubicación por dirección: la guía guarda
+ * el punto y el Master lo toma como pin. No lo puso una persona. Lanza si no se
+ * pudo leer la caché.
+ */
+export async function googlePinnedOrderIds(
+  admin: SupabaseClient,
+  rows: readonly {
+    order_id: string;
+    latitude?: number | string | null;
+    longitude?: number | string | null;
+    geo_source?: string | null;
+  }[],
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  const withPin = rows.filter((r) => r.latitude != null && r.longitude != null && r.geo_source !== "manual");
+  const byId = new Map(withPin.map((r) => [r.order_id, r]));
+  const ids = [...byId.keys()];
+  for (let i = 0; i < ids.length; i += GEOCODE_PILOT.idChunk) {
+    const chunk = ids.slice(i, i + GEOCODE_PILOT.idChunk);
+    const { data, error } = await admin
+      .from("order_geocodes")
+      .select("order_id,latitude,longitude")
+      .in("order_id", chunk)
+      .eq("ok", true);
+    if (error) throw new Error(`leer la caché de Google: ${error.message}`);
+    for (const g of (data ?? []) as { order_id: string; latitude: number | null; longitude: number | null }[]) {
+      const master = byId.get(g.order_id);
+      if (master && masterPinIsGoogle(master, g)) out.add(g.order_id);
+    }
+  }
+  return out;
+}
+
+/**
  * La muestra: los pedidos más recientes primero, hasta `cap`, y la cola
  * alternando coberturas. Solo pins que caen en el Perú: otro es un error de
  * tipeo y no sirve de referencia.
  */
 export async function loadGeocodePilotSample(admin: SupabaseClient, storeId: string, now: Date): Promise<PilotOrder[]> {
-  const since = new Date(now.getTime() - GEOCODE_PILOT.days * 86_400_000).toISOString();
+  return loadPilotSample(admin, { storeIds: [storeId], coverages: GEOCODE_PILOT_COVERAGES, cap: GEOCODE_PILOT.cap, now });
+}
+
+/**
+ * La muestra de una o varias tiendas y una o varias coberturas, la misma regla
+ * que el piloto: WooCommerce, últimos 7 días, con el pin de una persona, en el
+ * Perú, los más recientes primero y hasta `cap`. Un pin que es el punto de
+ * Google de ese pedido (`googlePinnedOrderIds`: lo guardó una guía automática
+ * creada con la ubicación por dirección) no entra: compararía a Google consigo
+ * mismo, a 0 m, y la medición se confirmaría sola (05-11-2026).
+ */
+async function loadPilotSample(
+  admin: SupabaseClient,
+  opts: { storeIds: string[]; coverages: readonly GeocodeCoverage[]; cap: number; now: Date },
+): Promise<PilotOrder[]> {
+  if (!opts.storeIds.length || opts.cap <= 0) return [];
+  const since = new Date(opts.now.getTime() - GEOCODE_PILOT.days * 86_400_000).toISOString();
+  const wanted = (c: string | null): c is GeocodeCoverage => isPilotCoverage(c) && opts.coverages.includes(c);
   const picked: PilotOrder[] = [];
-  for (let page = 0; page < GEOCODE_PILOT.maxPages && picked.length < GEOCODE_PILOT.cap; page++) {
+  for (let page = 0; page < GEOCODE_PILOT.maxPages && picked.length < opts.cap; page++) {
     const from = page * GEOCODE_PILOT.pageSize;
     const { data, error } = await admin
       .from("order_master")
-      .select("order_id,coverage,address,district,province,region,latitude,longitude")
-      .eq("store_id", storeId)
-      .in("coverage", [...GEOCODE_PILOT_COVERAGES])
+      .select("order_id,coverage,address,district,province,region,latitude,longitude,geo_source")
+      .in("store_id", opts.storeIds)
+      .in("coverage", [...opts.coverages])
       .gte("order_created_at", since)
       .not("latitude", "is", null)
       .not("longitude", "is", null)
@@ -131,9 +197,13 @@ export async function loadGeocodePilotSample(admin: SupabaseClient, storeId: str
       admin,
       rows.map((r) => r.order_id),
     );
+    const google = await googlePinnedOrderIds(
+      admin,
+      rows.filter((r) => woo.has(r.order_id) && wanted(r.coverage)),
+    );
     for (const r of rows) {
-      if (picked.length >= GEOCODE_PILOT.cap) break;
-      if (!woo.has(r.order_id) || !isPilotCoverage(r.coverage)) continue;
+      if (picked.length >= opts.cap) break;
+      if (!woo.has(r.order_id) || !wanted(r.coverage) || google.has(r.order_id)) continue;
       const lat = Number(r.latitude);
       const lng = Number(r.longitude);
       if (!inPeru(lat, lng)) continue;
@@ -191,21 +261,27 @@ function fatalMessage(status: string): string {
 
 export type GeocodePilotRun = { ok: true; report: GeocodePilotReport } | { ok: false; error: string };
 
-/**
- * El piloto de una tienda. Lee el Master y `orders`, consulta Google y devuelve
- * la cuenta. No escribe en la base.
- */
-export async function runGeocodePilot(
-  admin: SupabaseClient,
-  storeId: string,
-  opts: { key: string; now?: Date; fetchImpl?: typeof fetch; clock?: () => number },
-): Promise<GeocodePilotRun> {
-  const clock = opts.clock ?? Date.now;
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const now = opts.now ?? new Date();
-  const started = clock();
+/** Lo que deja una pasada de consultas sobre una muestra: los resultados, sin direcciones. */
+interface MeasuredQueue {
+  samples: GeocodePilotSample[];
+  apiCalls: number;
+  truncated: boolean;
+  quotaHit: boolean;
+  /** Un estado de Google que rechaza la clave o la cuenta (no se midió nada). */
+  fatal: string | null;
+  elapsedMs: number;
+}
 
-  const queue = await loadGeocodePilotSample(admin, storeId, now);
+/**
+ * Consulta la cola con el candado y la distancia al pin: 5 a la vez, con el
+ * presupuesto de tiempo y el corte por cupo del piloto. No escribe nada.
+ */
+async function measureQueue(
+  queue: PilotOrder[],
+  opts: { key: string; fetchImpl: typeof fetch; clock: () => number },
+): Promise<MeasuredQueue> {
+  const { clock, fetchImpl } = opts;
+  const started = clock();
   const samples: GeocodePilotSample[] = new Array(queue.length);
   let next = 0;
   let apiCalls = 0;
@@ -251,8 +327,25 @@ export async function runGeocodePilot(
     }
   };
   await Promise.all(Array.from({ length: Math.min(GEOCODE_PILOT.concurrency, queue.length) }, worker));
+  return { samples, apiCalls, truncated, quotaHit, fatal, elapsedMs: Math.max(0, clock() - started) };
+}
 
-  const elapsedMs = Math.max(0, clock() - started);
+/**
+ * El piloto de una tienda. Lee el Master y `orders`, consulta Google y devuelve
+ * la cuenta. No escribe en la base.
+ */
+export async function runGeocodePilot(
+  admin: SupabaseClient,
+  storeId: string,
+  opts: { key: string; now?: Date; fetchImpl?: typeof fetch; clock?: () => number },
+): Promise<GeocodePilotRun> {
+  const now = opts.now ?? new Date();
+  const queue = await loadGeocodePilotSample(admin, storeId, now);
+  const { samples, apiCalls, truncated, quotaHit, fatal, elapsedMs } = await measureQueue(queue, {
+    key: opts.key,
+    fetchImpl: opts.fetchImpl ?? fetch,
+    clock: opts.clock ?? Date.now,
+  });
   if (fatal) {
     console.warn(`[geocode-pilot] ${JSON.stringify({ store: storeId, step: "rejected", status: fatal, apiCalls, elapsedMs })}`);
     return { ok: false, error: fatalMessage(fatal) };
@@ -284,6 +377,129 @@ export async function runGeocodePilot(
     })}`,
   );
   return { ok: true, report };
+}
+
+// ---------------------------------------------------------------------------
+// La medición de LIMA para los reintentos automáticos (MOM §9.5, entrega 3;
+// owner, 05-11-2026)
+//
+// Lo mismo que el piloto —la muestra, el candado, la distancia al pin y la
+// cuenta— pero solo Lima, entre todas las tiendas activas de la organización,
+// y como mucho `GEOCODE_LIMA_CAP` (150) consultas: el cupo diario de Google
+// (400) lo comparte con la guía automática de Chatby, que tiene que seguir
+// teniendo sitio ese día. A diferencia del piloto, la cuenta SE GUARDA en
+// `geocode_pilot_runs` (0308), porque de ella depende que se pueda encender el
+// interruptor de los reintentos (`geocodeLimaGate`). Solo cuentas: ni
+// direcciones, ni nombres, ni celulares, ni números de pedido, ni en la base
+// ni en el registro.
+
+export type GeocodeLimaRun =
+  | { ok: true; summary: GeocodeLimaRunSummary; saveError: string | null }
+  | { ok: false; error: string };
+
+export async function runGeocodeLimaMeasure(
+  admin: SupabaseClient,
+  opts: {
+    orgId: string;
+    storeIds: string[];
+    key: string;
+    actor: string | null;
+    now?: Date;
+    fetchImpl?: typeof fetch;
+    clock?: () => number;
+  },
+): Promise<GeocodeLimaRun> {
+  const now = opts.now ?? new Date();
+  // El tope de 150 es POR DÍA de Lima, no por pulsación: lo que ya gastaron
+  // las mediciones guardadas de hoy se descuenta (el cupo de 400 lo comparte
+  // con Chatby y con los reintentos).
+  let usedToday: number;
+  try {
+    usedToday = await limaMeasureCallsToday(admin, opts.orgId, now);
+  } catch (e) {
+    return { ok: false, error: `No se pudo leer lo que ya se midió hoy: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  const cap = Math.max(0, GEOCODE_LIMA_CAP - usedToday);
+  if (cap <= 0) return { ok: false, error: GEOCODE_LIMA_DAY_SPENT };
+  const queue = await loadPilotSample(admin, { storeIds: opts.storeIds, coverages: ["lima"], cap, now });
+  const measured = await measureQueue(queue, {
+    key: opts.key,
+    fetchImpl: opts.fetchImpl ?? fetch,
+    clock: opts.clock ?? Date.now,
+  });
+  if (measured.fatal) {
+    console.warn(`[geocode-lima] ${JSON.stringify({ step: "rejected", status: measured.fatal, apiCalls: measured.apiCalls })}`);
+    return { ok: false, error: fatalMessage(measured.fatal) };
+  }
+  const lima = aggregateGeocodePilot(measured.samples).byCoverage.find((c) => c.coverage === "lima")!;
+  const summary = geocodeLimaRunSummary(lima, {
+    ranAt: now.toISOString(),
+    days: GEOCODE_PILOT.days,
+    cap,
+    stores: opts.storeIds.length,
+    apiCalls: measured.apiCalls,
+    truncated: measured.truncated,
+    quotaHit: measured.quotaHit,
+  });
+  const { error } = await admin.from("geocode_pilot_runs").insert({
+    org_id: opts.orgId,
+    store_id: null,
+    coverage: "lima",
+    created_by: opts.actor,
+    created_at: now.toISOString(),
+    summary,
+  });
+  console.info(
+    `[geocode-lima] ${JSON.stringify({
+      step: "measured",
+      sampled: summary.sampled,
+      passed: summary.passed,
+      rooftop: summary.rooftop,
+      apiCalls: summary.apiCalls,
+      saved: !error,
+    })}`,
+  );
+  return { ok: true, summary, saveError: error ? error.message : null };
+}
+
+/** Lo que dice el panel cuando las mediciones de hoy ya usaron las 150 consultas. */
+export const GEOCODE_LIMA_DAY_SPENT = `Ya se usaron las ${GEOCODE_LIMA_CAP} consultas de hoy para medir Lima; vuelve mañana.`;
+
+/**
+ * Consultas a Google que ya gastaron hoy (día de Lima) las mediciones de Lima
+ * guardadas de la organización. Lanza si no se pudo leer.
+ */
+export async function limaMeasureCallsToday(admin: SupabaseClient, orgId: string, now: Date): Promise<number> {
+  const { data, error } = await admin
+    .from("geocode_pilot_runs")
+    .select("summary")
+    .eq("org_id", orgId)
+    .eq("coverage", "lima")
+    .gte("created_at", `${limaTodayKey(now)}T00:00:00-05:00`);
+  if (error) throw new Error(error.message);
+  let used = 0;
+  for (const r of (data ?? []) as { summary: unknown }[]) {
+    const calls = (r.summary as { apiCalls?: unknown } | null)?.apiCalls;
+    if (typeof calls === "number" && Number.isFinite(calls) && calls > 0) used += calls;
+  }
+  return used;
+}
+
+/** La última medición de Lima guardada de la organización, o null. Lanza si no se pudo leer. */
+export async function latestGeocodeLimaRun(
+  admin: SupabaseClient,
+  orgId: string,
+): Promise<{ at: string; summary: GeocodeLimaRunSummary | null } | null> {
+  const { data, error } = await admin
+    .from("geocode_pilot_runs")
+    .select("created_at,summary")
+    .eq("org_id", orgId)
+    .eq("coverage", "lima")
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`leer la medición de Lima: ${error.message}`);
+  const row = ((data ?? []) as { created_at: string; summary: unknown }[])[0];
+  return row ? { at: row.created_at, summary: parseGeocodeLimaRunSummary(row.summary) } : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -267,3 +267,61 @@ describe("la pasada automática por el mismo núcleo", () => {
     expect(h.events).toEqual([]);
   });
 });
+
+describe("la ubicación (05-11-2026): «Sin ubicación» y la coordenada de Google, solo del sistema", () => {
+  const GOOGLE = { value: "-12.1211, -77.0297", source: "google" as const };
+  const NO_COORD = {
+    ok: false, needsCoordinate: true,
+    error: "Este pedido no tiene coordenada, y Aliclik la exige para cotizar y crear. Pega el enlace de Google Maps que mandó la clienta.",
+  };
+
+  it("sin coordenada, el sistema dice «Sin ubicación» (no un fallo)", async () => {
+    h.preview = NO_COORD;
+    expect(await system()).toMatchObject({ outcome: "sin_ubicacion", stage: "ubicacion", transport: "AUTOECOM", error: expect.stringContaining("no tiene coordenada") });
+    expect(await system({ dry: true })).toMatchObject({ outcome: "sin_ubicacion" });
+    expect(h.calls.create).toEqual([]);
+    expect(h.events).toEqual([]);
+  });
+
+  it("«Aprobar» sin coordenada sigue diciendo lo mismo que antes", async () => {
+    h.preview = NO_COORD;
+    expect(await approveAliclikRetry("o1")).toEqual({ error: NO_COORD.error });
+    // La persona nunca manda coordenada: cotiza sin ella, como siempre.
+    expect(h.calls.preview[0]![1]).toEqual({ modality: "cod" });
+  });
+
+  it("la coordenada de Google va a la cotización Y a la creación, y queda escrito de dónde salió", async () => {
+    expect(await system({ coordinate: GOOGLE })).toEqual({
+      outcome: "creada", transport: "AUTOECOM", guide: "AL-1", coordinateNote: "Con la ubicación por dirección (Google, edificio).",
+    });
+    expect(h.calls.preview[0]![1]).toEqual({ modality: "cod", coordinate: GOOGLE.value });
+    expect(h.calls.create[0]![1]).toMatchObject({ coordinate: GOOGLE.value, transportId: 7 });
+    expect(h.events).toEqual([expect.objectContaining({
+      kind: "lima_retry_approved", payload: expect.objectContaining({ coordinate_source: "google", auto: true }),
+    })]);
+    // En la simulación, el detalle lo dice.
+    expect(await system({ coordinate: GOOGLE, dry: true })).toEqual({
+      outcome: "simulada", transport: "AUTOECOM", detail: "AUTOECOM S/ 9 · cobrar S/ 120.00 · ubicación por dirección (Google, edificio)",
+    });
+    expect((h.calls.gates[0]![1] as { coordinate?: string }).coordinate).toBe(GOOGLE.value);
+  });
+
+  it("el pin de Google que el pedido no respalda: «Sin ubicación» para una persona (no saca el pedido de la cadena ni avisa)", async () => {
+    h.preview = { ok: false, pinSinCorroborar: "El pin cae en Cusco y el pedido dice Lima.", error: "El pin cae en Cusco y el pedido dice Lima." };
+    expect(await system({ coordinate: GOOGLE })).toMatchObject({
+      outcome: "sin_ubicacion", error: expect.stringContaining("La ubicación por dirección (Google) no la respalda el pedido"),
+    });
+    // Con el pin del propio pedido sigue siendo el fallo de cotización de siempre.
+    expect(await system()).toMatchObject({ outcome: "fallo", stage: "cotizacion" });
+    expect(h.calls.create).toEqual([]);
+    expect(h.events).toEqual([]);
+  });
+
+  it("una persona no puede colar la coordenada de Google por el núcleo", async () => {
+    await approveLimaRetry({
+      admin: fakeAdmin as never, row: ROW as never, chain: CHAIN, raw: RAW as never, actor: { userId: "ana" }, coordinate: GOOGLE,
+    });
+    expect(h.calls.preview[0]![1]).toEqual({ modality: "cod" });
+    expect(h.calls.create[0]![1]).not.toHaveProperty("coordinate");
+  });
+});

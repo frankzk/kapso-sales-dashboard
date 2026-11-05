@@ -20,6 +20,10 @@ import "server-only";
 //     actor null y `source: "system"`, y la guía lleva el origen
 //     `reintento_lima`, el único automático al que se le acepta el motivo de la
 //     salida adicional (la caja que falló sigue viva hasta que vuelve).
+//     Además (05-11-2026), la falta de ubicación es `sin_ubicacion` y no un
+//     fallo, y puede cotizar y crear con la coordenada de la dirección en
+//     Google (el edificio) que le pasa la pasada, como la guía de Chatby.
+//     «Aprobar» no cambia: ni manda coordenada ni ve `sin_ubicacion`.
 //
 // `dry` cotiza, elige el transporte y pasa por las compuertas de Kapta de la
 // creación (`aliclikCreateGates`, las mismas que corre `createAliclikGuideFor`)
@@ -42,7 +46,12 @@ import {
 } from "@/lib/aliclik-guide";
 import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
 import { CHAIN_EVENT_KINDS, type LimaRetryChain } from "@/lib/lima-retry-chain";
-import { autoRetryMotive, type RetryVariant } from "@/lib/lima-retry-auto";
+import {
+  RETRY_GOOGLE_COORDINATE_NOTE,
+  autoRetryMotive,
+  retryLocationMissing,
+  type RetryVariant,
+} from "@/lib/lima-retry-auto";
 import { limaTodayKey } from "@/lib/shipments";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import type { OrderMasterRow } from "@/lib/types";
@@ -71,6 +80,14 @@ export interface RetryApproveInput {
   dry?: boolean;
   /** El scope ya resuelto de la tienda (la pasada lo guarda por tienda). Solo sistema. */
   scope?: AliclikReadScope;
+  /**
+   * Solo sistema (05-11-2026): la coordenada de la dirección en Google (el
+   * edificio, `geocodeOrderAddress`) para un pedido que no la trae. Se cotiza y
+   * se crea con ella como la guía automática de Chatby (§6.1). «Aprobar» no la
+   * manda nunca: la persona pone la ubicación en la ficha del pedido
+   * («Corregir ubicación») y «Aprobar» cotiza con la del pedido.
+   */
+  coordinate?: { value: string; source: "google" } | null;
 }
 
 /**
@@ -119,7 +136,24 @@ export type RetryApproveResult =
        */
       guide?: string | null;
     }
-  | { outcome: "creada"; transport: RetryTransport; guide: string | null };
+  | {
+      /**
+       * Solo sistema (05-11-2026): falta la coordenada (Aliclik la pide) o el
+       * pin de Google no lo respalda el pedido. Lo resuelve una persona con la
+       * ubicación de la clienta; no es un fallo. `error` es el detalle.
+       */
+      outcome: "sin_ubicacion";
+      stage: "ubicacion";
+      transport: RetryTransport;
+      error: string;
+    }
+  | {
+      outcome: "creada";
+      transport: RetryTransport;
+      guide: string | null;
+      /** La coordenada vino de Google (solo sistema): el log lo dice. */
+      coordinateNote?: string | null;
+    };
 
 function isSystem(actor: RetryActor): actor is { system: true; variant: RetryVariant } {
   return "system" in actor;
@@ -175,9 +209,18 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
 
   const { ctx, error: ctxError } = await aliclikContextFor(row, system ? null : actor.userId, { blockAgencia: true });
   if (!ctx) return { outcome: "fallo", stage: "contexto", transport, error: ctxError ?? "No se pudo preparar la conexión con Aliclik." };
+  // La coordenada de Google, solo del sistema. Sin ella, la cotización usa la
+  // del pedido, como siempre (y «Aprobar» manda exactamente lo de antes).
+  const google = system && input.coordinate?.source === "google" ? input.coordinate.value : null;
   const preview = scope
-    ? await previewAliclikGuideFor(ctx, { modality: "cod" }, scope)
+    ? await previewAliclikGuideFor(ctx, google ? { modality: "cod", coordinate: google } : { modality: "cod" }, scope)
     : await previewAliclikGuideFor(ctx, { modality: "cod" });
+  if (!preview.ok && system) {
+    // Falta la ubicación (o el pin de Google no lo respalda el pedido): no es
+    // un fallo ni una regla, es un dato que pone una persona (05-11-2026).
+    const missing = retryLocationMissing(preview, google ? "google" : "pedido");
+    if (missing) return { outcome: "sin_ubicacion", stage: "ubicacion", transport, error: missing };
+  }
   if (!preview.ok) return { outcome: "fallo", stage: "cotizacion", transport, error: preview.error ?? "No se pudo cotizar el envío." };
 
   const wanted = (name: string | null | undefined) => (chain.next === "autoecom" ? isAutoecom(name) : isAlidriver(name));
@@ -204,6 +247,8 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
     expectedCollectTotal: preview.collectTotal ?? null,
     motivoSalidaAdicional: motive,
     note: null,
+    // Como Chatby: la creación vuelve a cotizar con la MISMA coordenada.
+    ...(google ? { coordinate: google } : {}),
   };
   const origin: AliclikGuideOrigin | undefined = system
     ? { kind: "reintento_lima", scheduledOn: today, reason: motive }
@@ -228,7 +273,7 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
     return {
       outcome: "simulada",
       transport,
-      detail: `${courier.transportName ?? transport} S/ ${courier.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}`,
+      detail: `${courier.transportName ?? transport} S/ ${courier.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}${google ? ` · ${RETRY_GOOGLE_COORDINATE_NOTE}` : ""}`,
     };
   }
   const result = system
@@ -250,6 +295,12 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
   }
   await recordChainEvent(admin, row, actor, CHAIN_EVENT_KINDS.approved,
     `Reintento Aliclik ${chain.attempt} de ${chain.of} ${system ? "automático" : "aprobado"}: guía con ${transport}${result.orderNumber ? ` (${result.orderNumber})` : ""}.`,
-    { attempt: chain.attempt, of: chain.of, transport, guide: result.orderNumber ?? null, failed: chain.failedText });
-  return { outcome: "creada", transport, guide: result.orderNumber ?? null };
+    {
+      attempt: chain.attempt, of: chain.of, transport, guide: result.orderNumber ?? null, failed: chain.failedText,
+      ...(google ? { coordinate_source: "google" } : {}),
+    });
+  return {
+    outcome: "creada", transport, guide: result.orderNumber ?? null,
+    ...(google ? { coordinateNote: `Con la ${RETRY_GOOGLE_COORDINATE_NOTE}.` } : {}),
+  };
 }

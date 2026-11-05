@@ -1,5 +1,47 @@
 # Deployment runbook
 
+### 05-11-2026 · Reintentos de Lima: «Sin ubicación» y la ubicación por dirección (Google) (0308, MOM §9.5, §38 y §40)
+
+La simulación de los reintentos Aliclik de Lima dio 18 de 19 «Este pedido no
+tiene coordenada»: los pedidos de WooCommerce en Lima casi nunca la traen.
+Ahora eso es «Sin ubicación: falta la coordenada» (se reintenta, no cuenta para
+el tope, no avisa), y el owner puede medir Lima y, si cumple B con el edificio,
+encender la ubicación por dirección (Google) para los reintentos. Sin crons ni
+variables nuevas: usa `GOOGLE_GEOCODING_API_KEY` (ya en Vercel) y el cupo de
+400 por día que comparte con Chatby.
+
+1. **Migración `0308_lima_retry_geocode.sql`**, a mano, ANTES del código. No
+   toca filas y es idempotente:
+   - `lima_retry_auto_settings.geocode_enabled` (boolean, **apagado** por
+     defecto);
+   - el check de `lima_retry_auto_log.outcome` acepta `sin_ubicacion`;
+   - tabla `geocode_pilot_runs` (solo cuentas), lectura para miembros de la
+     organización y todo para `service_role`.
+2. Comprobar:
+   ```sql
+   select column_name from information_schema.columns
+    where table_name = 'lima_retry_auto_settings' and column_name = 'geocode_enabled';
+   select to_regclass('public.geocode_pilot_runs');
+   ```
+3. Desplegar el código. **No antes de la migración:** el check viejo rechaza
+   `sin_ubicacion`, así que en Activo el renglón de un pedido sin coordenada se
+   quedaría «en curso» (cuenta para el tope todo el día) y la simulación no lo
+   guardaría. El panel mostraría la ubicación por dirección como «No
+   instalado».
+4. **El owner**, en Automatizaciones → Reintentos Aliclik en Lima → Ubicación
+   por dirección: «Medir la ubicación por dirección en Lima» (hasta 150
+   consultas a Google por día de Lima, sumando las mediciones de hoy; mejor no
+   el mismo día que otro piloto). Si la última
+   medición cumple B con el edificio (≥ 90 % de los puntos ROOFTOP a 300 m o
+   menos, con ≥ 30 puntos), puede encender el interruptor. Escribir el
+   resultado en `docs/kapta/geocodificacion-propuesta.md`.
+
+**Marcha atrás.** Apagar el interruptor desde el panel (o
+`update lima_retry_auto_settings set geocode_enabled = false`). Revertir el
+commit: el código anterior no lee la columna ni la tabla, pero un renglón
+`sin_ubicacion` en el log se mostraría con su clave en vez de la etiqueta; la
+columna, el check y la tabla pueden quedarse.
+
 ### 04-11-2026 · Panel de automatizaciones y reintentos Aliclik automáticos (0306)
 
 Aplicar `db/migrations/0306_automations_panel.sql` **antes** de publicar. Crea

@@ -313,6 +313,32 @@ export function haversineMeters(a: { lat: number; lng: number }, b: { lat: numbe
 }
 
 /**
+ * Metros dentro de los que el punto del Master ES el de Google guardado en
+ * `order_geocodes` (05-11-2026). Una guía automática creada con la ubicación
+ * por dirección guarda ese punto en `shipments.latitude/longitude`, y el
+ * Master lo toma como el pin del pedido (`geoPin`, `geo_source = courier`).
+ * Ese punto no lo puso una persona: no cuenta como pin real en las mediciones
+ * ni como coordenada propia del pedido en los reintentos.
+ */
+export const GEOCODE_SAME_PIN_METERS = 5;
+
+/**
+ * ¿El pin del Master es el punto de Google de ese pedido? Una corrección a mano
+ * (`geo_source = manual`) nunca lo es: la puso una persona. Pura.
+ */
+export function masterPinIsGoogle(
+  master: { latitude?: number | string | null; longitude?: number | string | null; geo_source?: string | null },
+  google: { latitude: number | string | null | undefined; longitude: number | string | null | undefined } | null | undefined,
+): boolean {
+  if (!google || master.geo_source === "manual") return false;
+  const a = { lat: Number(master.latitude), lng: Number(master.longitude) };
+  const b = { lat: Number(google.latitude), lng: Number(google.longitude) };
+  if (master.latitude == null || master.longitude == null || google.latitude == null || google.longitude == null) return false;
+  if (![a.lat, a.lng, b.lat, b.lng].every(Number.isFinite)) return false;
+  return haversineMeters(a, b) <= GEOCODE_SAME_PIN_METERS;
+}
+
+/**
  * Por qué un pedido de la muestra no aportó un punto: los motivos del candado
  * más los del propio piloto (sin calle que mandar, error de la API, se acabó el
  * tiempo de la pasada antes de consultarlo).
@@ -447,4 +473,143 @@ export const GEOCODE_AUTO_PRECISION: GeocodePrecision = "ROOFTOP";
 /** ¿Este resultado del candado sirve para crear una guía sin que nadie lo mire? */
 export function geocodeUsableForAutoGuide(v: GeocodeSafeguard): boolean {
   return v.ok && v.precision === GEOCODE_AUTO_PRECISION;
+}
+
+// ---------------------------------------------------------------------------
+// Los reintentos Aliclik automáticos de Lima (MOM §9.5, entrega 3; owner,
+// 05-11-2026)
+//
+// Lima nunca se midió sola: en el piloto de Kenku eran 84 de 400 pedidos. Antes
+// de que el reintento automático use la dirección en Google, se mide SOLO Lima
+// (decisión C) entre todas las tiendas de la organización y se guarda la cuenta
+// (`geocode_pilot_runs`, 0308). El interruptor de los reintentos solo se
+// enciende si la última medición de Lima cumple B con lo que usaría la guía
+// automática: los puntos con EDIFICIO (`ROOFTOP`, decisión A), al menos el 90 %
+// a 300 m o menos, y con al menos `GEOCODE_SMALL_SAMPLE` puntos (con menos, el
+// porcentaje no dice nada: 3 de 3 es «100 %»).
+
+/** Consultas como mucho por medición de Lima: el cupo diario (400) lo comparte con Chatby. */
+export const GEOCODE_LIMA_CAP = 150;
+
+/**
+ * Lo que se guarda de una medición de Lima: SOLO cuentas. Ni direcciones, ni
+ * nombres, ni celulares, ni números de pedido.
+ */
+export interface GeocodeLimaRunSummary {
+  ranAt: string;
+  days: number;
+  cap: number;
+  /** Tiendas de la organización que entraron en la muestra. */
+  stores: number;
+  apiCalls: number;
+  truncated: boolean;
+  quotaHit: boolean;
+  sampled: number;
+  passed: number;
+  rooftop: number;
+  rangeInterpolated: number;
+  medianM: number | null;
+  within300Pct: number | null;
+  beyond1kmPct: number | null;
+  /** % de los puntos ROOFTOP a 300 m o menos del pin: lo que usaría el reintento automático. */
+  rooftopWithin300Pct: number | null;
+  /** Criterio B solo con ROOFTOP (el porcentaje; el mínimo de puntos lo mira `geocodeLimaGate`). */
+  rooftopMeetsB: boolean | null;
+  rejections: Partial<Record<GeocodePilotReason, number>>;
+}
+
+/** La cuenta de Lima a guardar, desde la estadística del piloto. Pura. */
+export function geocodeLimaRunSummary(
+  stats: GeocodeCoverageStats,
+  meta: Pick<GeocodeLimaRunSummary, "ranAt" | "days" | "cap" | "stores" | "apiCalls" | "truncated" | "quotaHit">,
+): GeocodeLimaRunSummary {
+  return {
+    ranAt: meta.ranAt,
+    days: meta.days,
+    cap: meta.cap,
+    stores: meta.stores,
+    apiCalls: meta.apiCalls,
+    truncated: meta.truncated,
+    quotaHit: meta.quotaHit,
+    sampled: stats.sampled,
+    passed: stats.passed,
+    rooftop: stats.rooftop,
+    rangeInterpolated: stats.rangeInterpolated,
+    medianM: stats.medianM,
+    within300Pct: stats.within300Pct,
+    beyond1kmPct: stats.beyond1kmPct,
+    rooftopWithin300Pct: stats.rooftopWithin300Pct,
+    rooftopMeetsB: stats.rooftopWithin300Pct == null ? null : stats.rooftopWithin300Pct >= GEOCODE_CRITERION_B.minShare * 100,
+    rejections: { ...stats.rejections },
+  };
+}
+
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/**
+ * Lee el `summary` guardado (jsonb). Lo que no tiene la forma esperada es null:
+ * un dato roto no enciende nada. Pura.
+ */
+export function parseGeocodeLimaRunSummary(json: unknown): GeocodeLimaRunSummary | null {
+  if (!json || typeof json !== "object") return null;
+  const s = json as Record<string, unknown>;
+  const sampled = num(s.sampled);
+  const passed = num(s.passed);
+  const rooftop = num(s.rooftop);
+  if (sampled == null || passed == null || rooftop == null || typeof s.ranAt !== "string") return null;
+  const rejections: Partial<Record<GeocodePilotReason, number>> = {};
+  if (s.rejections && typeof s.rejections === "object") {
+    for (const [k, v] of Object.entries(s.rejections as Record<string, unknown>)) {
+      if (k in GEOCODE_REASON_LABEL && num(v) != null) rejections[k as GeocodePilotReason] = v as number;
+    }
+  }
+  const rooftopWithin300Pct = num(s.rooftopWithin300Pct);
+  return {
+    ranAt: s.ranAt,
+    days: num(s.days) ?? 0,
+    cap: num(s.cap) ?? 0,
+    stores: num(s.stores) ?? 0,
+    apiCalls: num(s.apiCalls) ?? 0,
+    truncated: s.truncated === true,
+    quotaHit: s.quotaHit === true,
+    sampled,
+    passed,
+    rooftop,
+    rangeInterpolated: num(s.rangeInterpolated) ?? 0,
+    medianM: num(s.medianM),
+    within300Pct: num(s.within300Pct),
+    beyond1kmPct: num(s.beyond1kmPct),
+    rooftopWithin300Pct,
+    rooftopMeetsB: rooftopWithin300Pct == null ? null : rooftopWithin300Pct >= GEOCODE_CRITERION_B.minShare * 100,
+    rejections,
+  };
+}
+
+export type GeocodeLimaGate = { ok: true } | { ok: false; reason: string };
+
+const pct = (v: number) => `${v.toLocaleString("es-PE", { maximumFractionDigits: 1 })} %`;
+
+/**
+ * ¿La última medición de Lima deja encender la ubicación por dirección en los
+ * reintentos? Criterio B con los puntos ROOFTOP y al menos
+ * `GEOCODE_SMALL_SAMPLE` de ellos. Pura.
+ */
+export function geocodeLimaGate(summary: GeocodeLimaRunSummary | null): GeocodeLimaGate {
+  if (!summary) {
+    return { ok: false, reason: "Todavía no hay una medición de Lima. Pulsa «Medir la ubicación por dirección en Lima» primero." };
+  }
+  if (summary.rooftop < GEOCODE_SMALL_SAMPLE) {
+    return {
+      ok: false,
+      reason: `La última medición de Lima tiene ${summary.rooftop} ${summary.rooftop === 1 ? "punto" : "puntos"} con el edificio (ROOFTOP); hacen falta al menos ${GEOCODE_SMALL_SAMPLE} para decidir.`,
+    };
+  }
+  const share = summary.rooftopWithin300Pct ?? 0;
+  if (share < GEOCODE_CRITERION_B.minShare * 100) {
+    return {
+      ok: false,
+      reason: `En la última medición de Lima, solo el ${pct(share)} de los puntos con el edificio (ROOFTOP) quedó a ${GEOCODE_CRITERION_B.withinMeters} m o menos del pin real; hace falta el ${GEOCODE_CRITERION_B.minShare * 100} %.`,
+    };
+  }
+  return { ok: true };
 }
