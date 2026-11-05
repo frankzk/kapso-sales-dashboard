@@ -122,6 +122,8 @@ import { cancelLegacyShopifySale } from "@/app/dashboard/pedidos/legacy-sale-can
 import type { WooCancelFacts } from "@/lib/woo-cancel";
 import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
+import { AnuraCallButton, AnuraCallHistoryDetail, useAnuraOrderPanel } from "@/components/anura-call";
+import { anuraCallForEntry } from "@/lib/anura/ui";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
 import { CoordinateOkLine, DispatchDatePanel } from "@/components/dispatch-date-panel";
@@ -944,6 +946,17 @@ export function OrderDrawer({
     void reload();
   }, [reload]);
 
+  // «Llamar con Anura» (fase 1): si sale el botón y las llamadas del pedido
+  // con su grabación. Se pide después de la ficha, no antes.
+  const anura = useAnuraOrderPanel(orderId, detail?.row.order_id === orderId);
+  // La misma condición con la que se pinta la mesa de confirmación (abajo):
+  // la tarjeta de la llamada lleva hasta ella solo si existe.
+  const hasConfirmationDesk = Boolean(
+    detail &&
+      canEdit &&
+      (detail.row.macro_stage === "por_confirmar" || detail.row.macro_substage === "gestion_reproprovincia"),
+  );
+
   // Al cambiar de pedido la ficha vuelve a la pestaña pedida (o a Operar).
   // Antes ponía «operar» a secas y pisaba `initialWorkspace` nada más montar:
   // «Ver actividad» abría la ficha… en Operar.
@@ -1401,6 +1414,22 @@ export function OrderDrawer({
                       orderId={orderId}
                       phone={detail.row.customer_phone}
                       onRecorded={() => void reload()}
+                    />
+                  )}
+                  {/* «Llamar con Anura» (fase 1): suena el teléfono de Anura de
+                      la asesora y Anura marca a la clienta. Solo con el token,
+                      un anexo activo de quien mira y un celular peruano. */}
+                  {anura.panel?.enabled && canEdit && (
+                    <AnuraCallButton
+                      key={orderId}
+                      orderId={orderId}
+                      extension={anura.panel.extension}
+                      resume={anura.panel.activeCall}
+                      onEnded={() => {
+                        void reload();
+                        void anura.reload();
+                      }}
+                      onGoToDesk={() => jumpTo("confirmacion")}
                     />
                   )}
                 </>
@@ -2365,6 +2394,13 @@ export function OrderDrawer({
                           <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">
                             {eventNoteLabel(t.kind, t.note ?? t.reason, detail.platform)}
                           </p>
+                        )}
+                        {t.kind === "anura_call" && (
+                          <AnuraCallHistoryDetail
+                            call={anuraCallForEntry(t.occurredAt, anura.panel?.calls ?? [])}
+                            onReload={() => void anura.reload()}
+                            onGoToDesk={hasConfirmationDesk ? () => jumpTo("confirmacion") : undefined}
+                          />
                         )}
                         <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
                           <span className="tabular-nums">{fmtDateTime(t.occurredAt)}</span>

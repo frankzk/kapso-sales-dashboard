@@ -64,6 +64,28 @@ export const env = {
   telnyxWebrtcFromNumber: () =>
     (process.env.TELNYX_WEBRTC_FROM_NUMBER || process.env.TELNYX_FROM_NUMBER || "").trim(),
 
+  // «Llamar con Anura» (fase 1, Click2Dial): el token de Click2Dial de la
+  // central de Anura (Integraciones → Click 2 Dial). Una central para la org.
+  // Vacío = no aparece nada de Anura. Se limpian comillas, «Bearer » y
+  // espacios pegados al copiarlo del panel. Nunca sale del servidor.
+  anuraClick2DialToken: () =>
+    (process.env.ANURA_CLICK2DIAL_TOKEN ?? "")
+      .trim()
+      .replace(/^["']+|["']+$/g, "")
+      .replace(/^bearer\s+/i, "")
+      .replace(/\s+/g, ""),
+  // La organización dueña de esa central. El token es uno solo para toda la
+  // plataforma: con este valor, ninguna otra org puede llamar con él (ni ve
+  // el botón ni la sección de Ajustes). Vacío = cualquier org (hoy hay una).
+  anuraOrgId: () => (process.env.ANURA_ORG_ID ?? "").trim().toLowerCase(),
+  // Hosts extra de los que se bajan grabaciones, además de anura.pe,
+  // anura.com.pe y anura.com.ar (separados por comas). Vacío = solo esos.
+  anuraRecordingHosts: () =>
+    (process.env.ANURA_RECORDING_HOSTS ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+
   // Número propio del Agente Telnyx (el `?agente=` de su agente en xAI), para
   // que llame a la vez que Daaph. Vacío = comparte número y turno con Daaph.
   voiceAgentNumberTelnyx: () => (process.env.VOICE_AGENT_NUMBER_TELNYX ?? "").trim(),

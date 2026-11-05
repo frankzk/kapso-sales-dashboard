@@ -61,6 +61,7 @@ import type { MetaAdAccount, MetaConnectionProbe, StoreMetaAdAccount } from "@/l
 import { InvoiceSettingsSection, type InvoiceSettingsData } from "@/components/invoice-settings-section";
 import { WooCommerceSettingsSection, type WooSettingsView } from "@/components/woocommerce-settings-section";
 import { BotOrdersSettingsSection, type BotOrdersSettingsView } from "@/components/bot-orders-settings-section";
+import { AnuraSettingsSection } from "@/components/anura-settings-section";
 import {
   runGeocodeChatbyAction,
   runGeocodePilotAction,
@@ -446,6 +447,7 @@ const INDEX: IndexGroup[] = [
       { id: "flowcl", label: "Flow.cl" },
       { id: "meta", label: "Meta Ads" },
       { id: "telegram", label: "Telegram" },
+      { id: "anura", label: "Telefonía Anura" },
       { id: "comprobantes", label: "Lectura de comprobantes" },
     ],
   },
@@ -646,6 +648,7 @@ export function StoreSettings({
             <FlowclSection data={data} />
             <MetaSection data={data} />
             <TelegramSection data={data} />
+            <AnuraSettingsSection storeId={s.id} />
             <ComprobantesSection data={data} />
           </SettingsGroup>
 

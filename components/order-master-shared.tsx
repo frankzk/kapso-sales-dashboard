@@ -684,6 +684,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   confirmation_contact: "Intento de confirmación",
   // MOM §8.5: la llamada que hizo una persona desde la ficha, por Telnyx.
   browser_call: "Llamada desde Kapta",
+  // MOM §8.6: la llamada que Anura hizo sonar desde la ficha (Click2Dial).
+  anura_call: "Llamada con Anura",
   confirmation_followup: "Próximo contacto pactado",
   reschedule: "Reprogramación",
   reroute: "Reprogramación",

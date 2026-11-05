@@ -621,4 +621,6 @@
 \ir migrations/0308_lima_retry_geocode.sql
 \echo 'Applying 0309_prepay_list.sql'
 \ir migrations/0309_prepay_list.sql
+\echo 'Applying 0310_anura_click2dial.sql'
+\ir migrations/0310_anura_click2dial.sql
 \echo 'Done.'

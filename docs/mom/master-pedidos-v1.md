@@ -1868,6 +1868,238 @@ la clienta ve el número de la empresa, no el de la asesora.
   (`Permissions-Policy: microphone=(self)`) y la conexión a
   `wss://rtc.telnyx.com`.
 
+### 8.6 Llamar con Anura (fase 1, 05-11-2026)
+
+Pedido por el owner: la asesora llama a la clienta desde la ficha del pedido
+por la central de Anura de la empresa, y la clienta ve un número peruano. Se
+apoya en lo que otro ERP (Rentabilify) ya probó con llamadas reales en Anura
+Perú entre el 24 y el 26-10-2026. En la fase 1 **no hay teléfono dentro del
+navegador**: Kapta le pide la llamada a Anura por Click2Dial, Anura hace sonar
+primero el teléfono de Anura de la asesora (la terminal principal de su anexo)
+y, cuando ella contesta, marca a la clienta. La asesora habla por ese
+teléfono, no por la computadora.
+
+- **Dónde.** «Llamar con Anura», en la cabecera de la ficha, junto a «Llamar
+  desde Kapta» (§8.5). Sale solo si se cumplen las cuatro cosas: Anura está
+  configurado (`ANURA_CLICK2DIAL_TOKEN`), la persona puede editar el Master
+  (`master.edit`, el mismo permiso que registra la gestión), tiene un anexo
+  activo en la organización de la tienda del pedido y el teléfono del pedido
+  es un **celular peruano** (9 dígitos que empiezan por 9; se acepta con +51,
+  51 o 0051 delante). Un fijo o un número extranjero no se marca en la fase 1.
+  El teléfono lo lee el servidor del pedido: el navegador nunca lo manda.
+  Mientras la llamada está viva, la ficha muestra su estado y lo vuelve a
+  preguntar cada 2,5 segundos.
+- **Una llamada viva por persona.** Si la asesora ya tiene una, la segunda se
+  rechaza y la ficha sigue la que está viva. El aviso depende de cómo está esa
+  llamada: si todavía no sonó, «Ya tienes una llamada de Anura pedida. Si tu
+  teléfono de Anura no suena, se libera sola al minuto.»; si ya suena o está en
+  curso, «Ya tienes una llamada de Anura en curso. Cuelga en tu teléfono de
+  Anura; si Anura no avisa el final, Kapta la libera sola a las 2 horas.». Lo
+  sostiene la base (un índice único), también con dos pestañas o dos clics a la
+  vez. La ficha retoma la llamada viva de quien mira aunque sea de otro pedido:
+  entonces lo dice y enlaza a ese pedido, y no ofrece registrar el resultado en
+  la ficha abierta.
+- **Con qué número.** El de la central en Anura: el número que Anura tenga
+  configurado para la central o para la ruta de salida del anexo. Click2Dial no
+  tiene un campo para elegirlo, así que Kapta no lo decide llamada por llamada:
+  cambiarlo es cambiarlo en Anura. Hay **una sola central para la
+  organización** (Kenku y Aurela comparten la cuenta de Anura), así que las dos
+  tiendas salen con el mismo número mientras Anura no separe sus rutas. El
+  token es uno solo para toda la plataforma: `ANURA_ORG_ID` (opcional) lo ata a
+  la organización dueña de la central, y ninguna otra ve el botón, la sección
+  de Ajustes ni puede llamar con él. Vacío, sirve a cualquier organización (hoy
+  hay una); antes de sumar una segunda organización hay que ponerlo.
+- **Qué queda.** Cada llamada es una fila en `anura_calls` (migración 0310). Al
+  terminar una llamada de un pedido, el servidor deja **un** hecho en el
+  historial del pedido (`order_events`, `anura_call`, fuente `anura`, «Llamada
+  con Anura»): quién llamó, a qué número (enmascarado en la nota, `98••••321`),
+  con qué anexo, si contestó y cuánto se habló, o por qué no se habló. El
+  número entero queda solo en la fila de la llamada y en el `to` del hecho,
+  donde §8.5 ya lo guarda. El hecho lo escribe **solo el aviso de fin de
+  Anura**, también cuando el fin trae un fallo (CONGESTION, CHANUNAVAIL,
+  FAILED: «no se pudo llamar» y el motivo). Una petición que Anura rechazó, o
+  que Kapta cerró porque Anura no avisó nada en 60 s, queda en la fila como «No
+  se pudo llamar» con el motivo y **no** entra al historial: como en §8.5, una
+  llamada que no llegó a timbrar no es un intento de contacto. Una llamada que
+  sonó y que Kapta cerró a las 2 horas porque el fin nunca llegó tampoco entra
+  al historial **mientras el fin de Anura no llegue**; si llega después, entra
+  con lo que diga.
+- **No reemplaza la gestión.** La llamada es un hecho; el resultado
+  («confirma», «no contesta», «reprograma»…) se sigue registrando en la mesa de
+  confirmación (§6.1), y la tarjeta de la llamada lleva hasta ella (el aviso
+  de la ficha, solo si la llamada dejó su hecho y es de ese pedido). Kapta no
+  sube la gestión sola cuando la clienta no contesta (Rentabilify sí lo hace).
+  El hecho no recalcula el pedido ni cuenta en «Gestión por persona», que sigue
+  contando lo mismo que antes. Por eso las llamadas viven en una tabla propia y
+  no en `voice_calls` (las llamadas de los agentes de voz, que «Gestión por
+  persona» cuenta como agente) ni en `shipment_calls` (las gestiones).
+- **Grabaciones.** El enlace de la grabación que manda Anura **vence a los 30
+  minutos**. Por eso Kapta la descarga a su Storage privado (bucket
+  `anura-recordings`) en cuanto llega el aviso de fin, después de responderle a
+  Anura. Si la copia falla, se reintenta al abrir la ficha del pedido mientras
+  no pasen los 30 minutos, hasta 6 intentos. Queda «grabación vencida» al
+  sexto intento fallido o cuando pasan los 30 minutos (la ficha la muestra
+  vencida en cuanto pasan, aunque nadie la haya reintentado). La ficha recibe
+  un enlace firmado que dura 5 minutos. La escucha quien ve la tienda del
+  pedido. El enlace de Anura no sale del servidor: vive solo en la bitácora de
+  avisos, y se borra de ella cuando la grabación queda guardada o vencida.
+
+  Kapta solo baja grabaciones de **hosts de Anura**: `anura.pe`,
+  `anura.com.pe`, `anura.com.ar` o un subdominio suyo, por https y puerto
+  443, también después de una redirección (cada salto se vuelve a comprobar,
+  hasta 3), y nunca más de 40 MB. El aviso no viene firmado: sin esta regla,
+  quien tuviera la URL del aviso podría hacer que el servidor de Kapta pidiera
+  cualquier dirección. Un enlace de otro host se descarta y la bitácora lo dice
+  («Grabación descartada: el enlace no es de Anura (host)»). Si la prueba real
+  muestra que Anura sirve las grabaciones desde otro host, se agrega en
+  `ANURA_RECORDING_HOSTS` (separados por comas).
+- **Avisos de Anura.** Anura avisa cada llamada de los anexos (START, TALK y
+  END) a `/api/webhooks/anura?org=<orgId>&t=<token>`. El token no es una
+  variable nueva: son los primeros 32 caracteres hex de
+  HMAC-SHA256(`ENCRYPTION_KEY`, "anura-webhook:" + orgId), comparados en tiempo
+  constante (también se acepta `Authorization: Bearer`). Solo vale para su
+  organización. Cambiar `ENCRYPTION_KEY` cambia la URL y hay que volver a
+  pegarla en Anura. Un token malo recibe 401; todo lo demás recibe 200, aunque
+  se ignore o falle, porque si no Anura reintenta.
+
+  La llamada se encuentra primero por `custom1` (`kapta-<id>`: Click2Dial
+  responde sin id, así que el de Kapta viaja en `customs` y vuelve en cada
+  aviso) y después por el id de llamada de Anura. El estado **solo sube**: un
+  aviso repetido o fuera de orden no cambia nada.
+
+  La plantilla del aviso, la misma que Ajustes da para copiar:
+
+  ```json
+  {
+    "callId": "{{ cdrid }}",
+    "event": "{{ hooktrigger }}",
+    "direction": "{{ direction }}",
+    "status": "{{ status }}",
+    "calling": "{{ calling }}",
+    "called": "{{ called }}",
+    "dialTime": "{{ dialtime }}",
+    "billSeconds": "{{ billseconds }}",
+    "wasRecorded": "{{ wasrecorded }}",
+    "accountExtension": "{{ accountextension }}",
+    "answerExtension": "{{ answerextension }}",
+    "custom1": "{{ custom1 }}",
+    "recordingUrl": "{{ audio_play_mp3 }}"
+  }
+  ```
+
+  | Aviso | Condición | Estado | En la ficha | Rango |
+  | --- | --- | --- | --- | --- |
+  | — | Kapta la pidió | `solicitada` | «Llamada pedida» | 0 |
+  | START | — | `sonando` | «Sonando» | 10 |
+  | TALK | — | `en_curso` | «En llamada» | 20 |
+  | END | `billSeconds` > 0 o status ANSWER | `contestada` | «Contestó» | 100 |
+  | END | BUSY | `ocupado` | «Ocupado» | 100 |
+  | END | NOANSWER o CANCEL | `no_contestada` | «No contestó» | 100 |
+  | END | FAILED, CONGESTION o CHANUNAVAIL | `fallida` | «No se pudo llamar» | 100 |
+  | END | cualquier otro | `no_contestada` | «No contestó» | 100 |
+  | END de una entrante | sin anexo de asesora o sin conversación | `perdida` | «Perdida» | 100 |
+
+  Lo que lee la asesora cuando el fin trae un fallo: CONGESTION, «Destino
+  restringido para tu anexo o sin ruta en Anura: revisa en Anura que tu anexo
+  pueda llamar a celulares.»; CHANUNAVAIL, «El número no está disponible.»;
+  FAILED, «Anura no pudo completar la llamada.».
+
+  Kapta cierra sola, como «No se pudo llamar», la llamada que Anura deja
+  colgada:
+  - pedida y sin ningún aviso a los 60 s: «Anura no llegó a hacer la llamada.
+    Revisa que tu teléfono de Anura esté conectado y vuelve a intentar.»;
+  - sonando o en curso y sin aviso de fin a las 2 horas: «Anura no avisó el
+    final de la llamada.» Este tope lo agrega Kapta para que nadie quede
+    bloqueado si Anura nunca manda el fin.
+
+  Si después llega el fin de verdad, todavía se aplica y dice cómo terminó.
+
+  Lo que Anura rechaza al pedir la llamada (Kapta espera su respuesta 12
+  segundos como mucho):
+  - token malo: «El token de Anura no es válido. Hay que pegar uno nuevo de
+    Integraciones → Click 2 Dial.»;
+  - anexo sin terminal principal: «Tu anexo no tiene una terminal principal en
+    Anura. Pide que marquen una como principal en tu anexo.»;
+  - terminal no conectada: «Anura no encuentra conectado tu teléfono de Anura
+    (la terminal principal de tu anexo). Ábrelo, espera a que diga «Listo» y
+    vuelve a intentar.»;
+  - sin respuesta en 12 s: «Anura no respondió a tiempo y puede que igual haga
+    la llamada. Si tu teléfono de Anura suena, contesta; si en un minuto no
+    pasa nada, Kapta la da por fallida y puedes volver a intentar.»;
+  - corte de red: «No se supo si Anura recibió el pedido de llamada. Si tu
+    teléfono de Anura suena, contesta; si en un minuto no pasa nada, Kapta la
+    da por fallida y puedes volver a intentar.»
+
+  Los dos últimos no son un rechazo: Anura pudo haber hecho la llamada. Por eso
+  la fila sigue «Llamada pedida» (la asesora no puede pedir otra encima y
+  marcar dos veces a la clienta), la ficha la sigue, y si Anura no avisa nada
+  se cierra sola al minuto como las demás; si sus avisos llegan, la llamada se
+  sigue y entra al historial como cualquier otra. Los rechazos de verdad
+  (token, terminal, «Anura rechazó la llamada») cierran la fila en el acto.
+
+  Las salientes que no se pidieron desde Kapta se ignoran (quedan «ignorado»
+  en la bitácora), como hace Rentabilify. Las **entrantes** se guardan solo
+  como información, sin pedido ni tienda y con el número de quien llamó
+  **enmascarado**: «Contestó» si la tomó el anexo de una asesora y se habló, y
+  si no, «Perdida» (Anura marca ANSWER también cuando contesta su mensaje
+  automático). En la fase 1 no entran al historial de ningún pedido ni se ven
+  en ninguna pantalla.
+
+  Cada aviso queda en una bitácora (`anura_webhook_events`): aplicado,
+  repetido, ignorado o error, con los teléfonos enmascarados. Guarda 30 días y
+  la ve solo quien administra, en Ajustes.
+- **Configuración (una vez).** En el panel de Anura (lo hace quien administra
+  la cuenta de Anura; los pasos los repite Ajustes › «Telefonía Anura»):
+  1. **Configuración → Cuentas:** un anexo de usuario por asesora.
+  2. **Integraciones → Click 2 Dial → Generar token:** el token va en Vercel
+     como `ANURA_CLICK2DIAL_TOKEN`, nunca en un chat ni en Kapta. Sin él no
+     aparece nada de Anura; Kapta solo dice si está configurado, nunca el
+     valor.
+  3. **En cada anexo, Terminales:** la terminal del teléfono que la asesora va
+     a contestar (la app o el softphone de Anura), marcada como principal y
+     registrada. Click2Dial hace sonar siempre la principal: una terminal
+     extra en el mismo anexo nunca suena.
+  4. **En cada anexo, Avanzado:** Auto answer apagado. Si queda encendido, el
+     teléfono contesta solo y Anura marca a la clienta sin que la asesora
+     esté.
+  5. **En cada anexo, Límites:** celulares permitidos. Si no, las llamadas a
+     celular terminan en CONGESTION («destino restringido»).
+  6. **Configuración → Eventos → Agregar:** petición `POST`, `HTTPS`, el host
+     de Kapta, puerto `443`, la ruta con el token que da Kapta (sin la barra
+     inicial), tipo JSON, sin autenticación, y como cuerpo la plantilla que da
+     Kapta.
+  7. **En cada anexo, Eventos → Agregar tres veces con esa plantilla:**
+     `START` («Se inicia una llamada»), `TALK` («La llamada es atendida») y
+     `END` («Se finaliza una llamada»), dirección Ambas.
+
+  Después, en Kapta, Ajustes › «Telefonía Anura»: el anexo de cada persona y
+  una «Llamada de prueba».
+- **Un anexo por persona.** Se asigna en Ajustes › «Telefonía Anura»: uno por
+  persona y uno por anexo en la organización, de 2 a 6 dígitos. Sin anexo no
+  hay botón, así que Anura queda apagado hasta que se asignen. Un anexo se
+  puede desactivar sin borrarlo. Para pasarlo a otra persona, primero se le
+  quita a quien lo tiene.
+- **Lo que Kapta no guarda.** Ni usuarios ni contraseñas SIP de Anura: en la
+  fase 1 no hacen falta, porque suena el teléfono de Anura de la asesora. El
+  token de Click2Dial no sale del servidor. La fase 2 es el teléfono dentro del
+  navegador (con las credenciales SIP de cada anexo); no se hace ahora.
+- **Permisos.** Llamar pide «Gestionar pedidos» (`master.edit`), como §8.5.
+  Ajustes › «Telefonía Anura» —anexos, URL del aviso, plantilla, bitácora y
+  llamada de prueba— pide «Administrar tiendas» (`stores.manage`) en la
+  organización de la tienda, lo mismo que Ajustes entero. No hay permiso nuevo.
+- **Llamada de prueba.** Desde Ajustes, quien administra llama a un celular
+  peruano que escribe, con su propio anexo o con cualquier anexo activo de la
+  organización. No es un intento de ningún pedido: no escribe nada en ningún
+  pedido. La fila de la prueba no lleva tienda, así que nadie más lee por RLS
+  el número que se escribió.
+- **«Llamar desde Kapta» se queda.** La llamada por Telnyx desde la
+  computadora (§8.5) sigue igual, al lado. Anura no la reemplaza en la fase 1.
+- **Por confirmar en la prueba real del owner.** Si la asesora no contesta su
+  propio teléfono de Anura, el fin probablemente llega como NOANSWER y no se
+  distingue de que la clienta no contestó: quedaría «no contestó» en el
+  historial. Y desde qué host sirve Anura la grabación: si la bitácora dice
+  «Grabación descartada», ese host va en `ANURA_RECORDING_HOSTS`.
+
 ## 9. Lima
 
 - Todos los pedidos entran directamente a Preparación.
@@ -10680,6 +10912,7 @@ mantiene observado el lote completo.
 | Reproprovincia | Operación Repro | Mariannys |
 | Shalom/Olva | Seguimiento Agencia | Gerardo |
 | Finanzas/liquidación | Responsable financiera | Yohalis |
+| Anexos de Anura, URL del aviso y llamada de prueba (§8.6) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
 | Reembolsos/propietario | Owner | Frankz |
 
 La autorización futura se asigna al rol estable, no al nombre. El actor real se
@@ -10715,6 +10948,12 @@ registra en cada evento.
   mano». Ningún rol por función lo trae (lo fija una prueba). Las reglas que
   impiden anular (§38.15, `wooCancelBlocks`) son las mismas para todos. Sin
   migración: `user_permissions.permission` es texto libre.
+- Telefonía Anura (05-11-2026, §8.6): **sin permiso nuevo**. «Llamar con
+  Anura» pide «Gestionar pedidos» (`master.edit`), como «Llamar desde Kapta»
+  (§8.5). Asignar anexos, ver la URL del aviso, la plantilla y la bitácora de
+  avisos, y hacer la llamada de prueba piden «Administrar tiendas»
+  (`stores.manage`) en la organización de la tienda. El token de Click2Dial es
+  una variable de Vercel (`ANURA_CLICK2DIAL_TOKEN`): nadie lo ve en Kapta.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
@@ -12726,6 +12965,8 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
   obligación financiera por pedido de la Mesa de cierre.
 - Agente de voz fuera de Reproprovincia: Agencia con adelanto y Por confirmar
   (§11.8, pendientes).
+- Anura, fase 2: el teléfono dentro del navegador, con las credenciales SIP de
+  cada anexo (§8.6). En la fase 1 Kapta no guarda credenciales SIP.
 
 ## 22. Criterios de aceptación de la Fase 2
 

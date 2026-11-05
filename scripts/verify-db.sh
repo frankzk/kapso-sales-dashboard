@@ -324,4 +324,7 @@ echo "  ✅ recibe con la recepción de siempre; anulado en la tienda a inventar
 echo "▶ Lista de pago adelantado (0309): una alta viva por celular, celular canónico, alta que no se reescribe, baja con motivo y RLS"
 $PSQL -f "$ROOT/scripts/sql/prepay_list_smoke.sql"
 echo "  ✅ una sola alta viva por organización y celular; la baja queda como historia y no se reabre; la regla nace apagada; cada quien lee su organización y nadie escribe"
+echo "▶ Llamar con Anura (0310): anexo por persona y por org, estado con su rango, una llamada viva por persona, cdrid único y RLS"
+$PSQL -f "$ROOT/scripts/sql/anura_click2dial_smoke.sql"
+echo "  ✅ anexos de 2 a 6 dígitos únicos por persona y por anexo; el modo fija el pedido; la grabación guardada con ruta; anexos por org, llamadas por tienda, bitácora solo del servidor y nadie escribe"
 echo "✅ DB verification passed."
