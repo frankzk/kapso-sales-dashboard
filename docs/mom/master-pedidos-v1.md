@@ -2718,6 +2718,10 @@ paso de cotejo? como cuando cotejamos la caja de los motorizados en grupo gf».
   lote que entró después de abrir se agrega en el mismo escaneo; una marcada
   «No sale» vuelve: «KP… vuelve a la entrega y queda escaneada.». El panel
   muestra «5 de 8 entregadas» y «faltan 3» en grande y lo anuncia al lector.
+  En el teléfono, sin lector, «Abrir cámara» abre la cámara en serie, como
+  «Verificar caja» de Grupo GF: queda abierta tras cada lectura, dice
+  «Entregadas 5 de 8» y se cierra con «Listo» o sola al completar (owner,
+  05-11-2026: «No sale el boton para abrir la camara»).
 - **«No sale».** Por fila, «¿Por qué no sale KP…?» con un motivo de la lista
   (`SWAYP_NO_SALE_REASONS`):
   - «No se encontró la caja en la oficina»;
