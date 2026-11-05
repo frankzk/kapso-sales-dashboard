@@ -66,7 +66,7 @@
 // diga lo que diga el vocabulario de su courier. Lo que se anuló sin salir sigue
 // siendo lo que era: una corrección, no un intento.
 
-import { etiquetaDiceRechazoEnPuerta, etiquetaDiceTerminoSinEntregar } from "@/lib/aliclik-status";
+import { etiquetaDiceRechazoEnPuerta, etiquetaDiceTerminoSinEntregar, etiquetaDiceVuelveSinEntregar } from "@/lib/aliclik-status";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { SWAYP_RETURN_STATES, swaypLabelSaysRejection } from "@/lib/swayp";
 import { tandersStatusCode } from "@/lib/tanders/status";
@@ -199,12 +199,38 @@ export function apiGuideReceivedBack(guide: RecoveryGuideLike): boolean {
 }
 
 /**
+ * ¿Aliclik ya dio el RECHAZO EN LA PUERTA y el paquete vuelve, aunque todavía
+ * no anule la guía? (05-11-2026, owner: «en Aliclik ya está rechazada, no hay
+ * más que pedir»)
+ *
+ * #KP200684: `REFUSED · STORE_CENTRAL` desde el 05-11, la guía seguía `en_ruta`
+ * y el pedido «En tránsito», así que Grupo GF no lo podía tomar para mandarlo
+ * con Alexis: la recuperación solo se abría cuando Aliclik anulaba la guía,
+ * unos nueve días después del rechazo (mediana). Es el `RETURNING` de Tanders
+ * en el vocabulario de Aliclik (`etiquetaDiceVuelveSinEntregar`): de 126
+ * pedidos rechazados que llegaron a su almacén central, ninguno se entregó
+ * después; de 123 con `TO_RETURN`, 2.
+ *
+ * Solo el RECHAZO: los dos canales automáticos de la recuperación (WhatsApp y
+ * el agente de voz) y el reintento automático de Lima lo excluyen, así que abrir
+ * la ventana antes no hace que nadie llame ni cree una guía sola. «No contestó»
+ * y «cancelado» que vuelven siguen esperando a que Aliclik anule (decisión
+ * pendiente: el agente de voz sí los llamaría antes).
+ */
+export function aliclikRefusedReturning(guide: RecoveryGuideLike): boolean {
+  if ((guide.courier ?? "").trim().toLowerCase() !== "aliclik") return false;
+  if (guide.delivery_status !== "pendiente" && guide.delivery_status !== "en_ruta") return false;
+  return etiquetaDiceRechazoEnPuerta(guide.reported_status) && etiquetaDiceVuelveSinEntregar(guide.reported_status);
+}
+
+/**
  * La guía no entregó y su paquete todavía vuelve —o ya volvió y el courier no
  * se enteró—, así que sigue `en_ruta` sin que nadie la trabaje: el `RETURNING`
- * de Tanders, la Devolución de Swayp, o la caja ya escaneada en el almacén.
+ * de Tanders, la Devolución de Swayp, el rechazo de Aliclik que vuelve, o la
+ * caja ya escaneada en el almacén.
  */
 function liveGuideFailed(guide: RecoveryGuideLike): boolean {
-  return tandersGuideFailed(guide) || swaypGuideFailed(guide) || apiGuideReceivedBack(guide);
+  return tandersGuideFailed(guide) || swaypGuideFailed(guide) || aliclikRefusedReturning(guide) || apiGuideReceivedBack(guide);
 }
 
 /**
@@ -342,7 +368,11 @@ export function recoveryWindow(
     guide,
     closedAt,
     deadline,
-    expired: nowIso > deadline,
+    // El rechazo de Aliclik que vuelve se ancla en su salida, como Tanders,
+    // pero su ventana no vence mientras Aliclik no cierre la guía: la de la
+    // tienda se cuenta desde ese cierre (`closed_at`), y en Provincia son 7
+    // días que una salida de hace dos semanas ya habría gastado antes de abrir.
+    expired: nowIso > deadline && !aliclikRefusedReturning(guide),
     // Decide la MISMA guía que ancla la ventana, la del último intento: si el
     // cliente primero no contestó y después lo rechazó en la puerta, lo que
     // cuenta es cómo terminó la última vez.

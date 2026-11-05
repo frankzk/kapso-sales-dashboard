@@ -2,6 +2,8 @@
 // El QR usa un token opaco de base de datos; este código es la etiqueta legible
 // que permite al equipo hablar de "la salida 2" sin confundirla con el pedido.
 
+import { etiquetaDiceVuelveSinEntregar } from "@/lib/aliclik-status";
+
 export const MAX_OUTPUTS_PER_ORDER = 5;
 
 /**
@@ -428,13 +430,16 @@ const ESTADOS_VIVOS = new Set(["pendiente", "en_ruta", "por_preparar"]);
  *
  * `PENDING_DELIVERY · TO_RETURN` NO entra: de esas se entregó un tercio (650
  * de 1.954). Tampoco `RESCHEDULED`: la clienta pidió otra fecha.
+ *
+ * Desde el 05-11-2026 también el paquete que ya llegó al almacén central de
+ * Aliclik (`STORE_CENTRAL`) tras ese intento: de 1.744 pedidos, ninguno se
+ * entregó después (#KP200684, rechazado en la puerta). El vocabulario vive en
+ * `etiquetaDiceVuelveSinEntregar` (lib/aliclik-status.ts), junto a quien arma
+ * la etiqueta.
  */
-const ALICLIK_FALLO_DEFINITIVO = new Set(["NOT_RESPOND", "REFUSED", "CANCEL", "ANNULLED"]);
-
 export function aliclikVuelveSinEntregar(o: Pick<SalidaExistente, "courier" | "reported_status">): boolean {
   if ((o.courier ?? "").trim().toLowerCase() !== "aliclik") return false;
-  const [status = "", dispatch = ""] = (o.reported_status ?? "").split(" · ").map((p) => p.trim().toUpperCase());
-  return ALICLIK_FALLO_DEFINITIVO.has(status) && dispatch === "TO_RETURN";
+  return etiquetaDiceVuelveSinEntregar(o.reported_status);
 }
 
 /**
