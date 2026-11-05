@@ -31,9 +31,10 @@ import {
   SWAYP_TONE_COMPLETO,
   applySwaypScan,
   emptyWarehouseSwayp,
+  swaypPickupPassedSinceRead,
   type WarehouseSwaypData,
 } from "@/lib/warehouse-swayp";
-import { SWAYP_HOY_FALTA_ENTREGA } from "@/lib/swayp-handover";
+import { SWAYP_HOY_FALTA_PASO } from "@/lib/swayp-handover";
 import {
   SWAYP_NOW,
   limaAt,
@@ -290,6 +291,30 @@ describe("la relectura sola, con reloj de verdad (watchSwaypRefresh, R10)", () =
     expect(w.onRefresh).toHaveBeenCalledTimes(1);
     w.stop();
   });
+
+  it("un día de despacho relee una vez al pasar las 07:00 si lo leído es de antes: la falta de «Hoy» cambia de texto (05-11-2026)", () => {
+    // Leído a las 00:00 (el cambio de día) y la estación abierta toda la mañana.
+    const w = watch({ at: limaAt("2026-11-04", "06:50"), readAt: limaAt("2026-11-04", "00:00"), today: "2026-11-04" });
+    vi.advanceTimersByTime(9 * 60_000);
+    expect(w.onRefresh).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(60_000);
+    expect(w.onRefresh).toHaveBeenCalledTimes(1);
+    expect(w.readAt.current).toBe(limaAt("2026-11-04", "07:00").getTime());
+    // Una sola vez: hasta las 16:00 no vuelve a releer sola.
+    vi.advanceTimersByTime(8 * 60 * 60_000 + 59 * 60_000);
+    expect(w.onRefresh).toHaveBeenCalledTimes(1);
+    w.stop();
+
+    // Leído después de las 07:00, o en domingo (Swayp no despacha), no relee por esto.
+    const afterPickup = watch({ at: limaAt("2026-11-04", "07:05"), today: "2026-11-04" });
+    vi.advanceTimersByTime(60 * 60_000);
+    expect(afterPickup.onRefresh).not.toHaveBeenCalled();
+    afterPickup.stop();
+    expect(swaypPickupPassedSinceRead(limaAt("2026-11-04", "06:59").getTime(), limaAt("2026-11-04", "07:00"))).toBe(true);
+    expect(swaypPickupPassedSinceRead(limaAt("2026-11-04", "06:59").getTime(), limaAt("2026-11-04", "06:59"))).toBe(false);
+    expect(swaypPickupPassedSinceRead(limaAt("2026-11-04", "07:00").getTime(), limaAt("2026-11-04", "09:00"))).toBe(false);
+    expect(swaypPickupPassedSinceRead(limaAt("2026-11-08", "00:00").getTime(), limaAt("2026-11-08", "09:00"))).toBe(false);
+  });
 });
 
 describe("lee; solo la entrega a Swayp escribe (fase 3, 04-11-2026)", () => {
@@ -488,7 +513,8 @@ describe("las zonas: «Mañana» primero, «Hoy» para cuadrar", () => {
     expect(html).toMatch(/aria-label="Cifras de Hoy · martes 3 nov"[\s\S]*?text-crit-fg">1<\/span><\/button>/);
     expect(count(t, SWAYP_HOY_NOTE)).toBe(1);
     expect(t).toContain("Swayp: Generada");
-    expect(html).toContain(`<p class="mt-1 text-[13px] font-semibold text-crit-fg">${SWAYP_HOY_FALTA_ENTREGA}</p>`);
+    // Leído a las 17:42 y sin la entrega abierta: Swayp ya pasó (05-11-2026).
+    expect(html).toContain(`<p class="mt-1 text-[13px] font-semibold text-crit-fg">${SWAYP_HOY_FALTA_PASO}</p>`);
     expect(t).toContain(SWAYP_CHIP_ARMADA_POR_DEFINIR);
     // «Hoy» no lleva tono ni cifra de «recogidas».
     expect(t).not.toContain("recogidas");

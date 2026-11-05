@@ -2421,7 +2421,9 @@ creó la guía.
     volver a la pestaña se relee si lo leído tiene un minuto o más. Si cambió
     el día de Lima, se relee a cualquier hora, aunque la pestaña no se haya
     ido: la estación pasa la noche abierta, y el miércoles «Mañana · miércoles»
-    y «Hoy · martes» serían falsos.
+    y «Hoy · martes» serían falsos. Por lo mismo, un día de despacho se relee
+    una vez al pasar las 07:00 si lo leído es de antes: a esa hora la falta de
+    «Hoy» sin la entrega abierta cambia de texto (05-11-2026, abajo).
   - Si no carga: «No pudimos cargar «Swayp por salir».», con «Reintentar», y
     la estación de arriba sigue funcionando. Mientras llega la primera
     lectura, las dos zonas en esqueleto («Cargando «Swayp por salir»…» para
@@ -2606,7 +2608,15 @@ creó la guía.
   crítica: «Swayp pasa hacia las 07:00: ármala y entrégala en «Entregar a
   Swayp», o márcala «No sale» con su motivo.», con su renglón de dónde está la
   caja (aunque Swayp ya la haya cargado: la entrega la arma al escanearla), y la
-  cifra «Faltan» de «Hoy» en rojo. En «Próximo», la que Swayp ya tomó antes de
+  cifra «Faltan» de «Hoy» en rojo. Desde las 07:00 de Lima (la hora al leer el
+  lote, «Leído 07:05»), si nadie abrió la entrega, la falta dice «Pasó la hora
+  de Swayp (07:00) sin entrega registrada. Si el chofer aún no se fue,
+  entrégala en «Entregar a Swayp» o márcala «No sale»; si se fue sin ella,
+  avisa a Seguimiento para que cambie la fecha en Swayp o anule la guía hoy.»
+  (owner, 05-11-2026: la captura de esa mañana seguía diciendo «Swayp pasa
+  hacia las 07:00…» con Swayp ya ido y KP200244-S02 en su «Reparto» sin la
+  caja; «si, haz los dos»). Con la entrega abierta se sigue entregando: la falta
+  no cambia; con «Swayp no vino», la falta no dice nada (lo dice la nota). En «Próximo», la que Swayp ya tomó antes de
   su día sigue diciendo «No se armó y Swayp ya la tomó en su sistema: si la caja
   sigue aquí, avisa hoy a Seguimiento.».
 
@@ -2846,7 +2856,8 @@ paso de cotejo? como cuando cotejamos la caja de los motorizados en grupo gf».
   recoge hacia las 07:00. Entrega sin abrir.», «Entrega en curso: 5 de 8.», el
   resumen del cierre o «Swayp no vino». Por fila: «Entregada a Swayp 07:04 ·
   escaneó Yelitza» o «No salió: <motivo>». Las alertas van por estado, nunca
-  por hora:
+  por una hora de Swayp (la única hora que cuenta es la del reloj de Kapta para
+  la falta sin entrega abierta, arriba en «La zona «Hoy»»):
   - «No sale» y Swayp en 4, 5 o 6: «Swayp la tiene en reparto y la caja no
     salió: Seguimiento cambia la fecha o anula la guía hoy, o Swayp reportará
     que no llegó.» (en rojo);
@@ -2874,9 +2885,32 @@ guardados como 03:19:37Z, 05:49:11Z, 10:25:52Z y 17:38:01Z. Desde el
 (UTC−5), traigan o no una «Z»; respeta un desfase explícito, un día suelto es
 la medianoche de Lima, y si leída como Lima una fecha quedara en el futuro
 (Swayp habría corregido su API) se lee tal cual viene. El webhook no trae
-fechas (usa la hora de llegada) y no cambia. Lo guardado antes sigue con 5 h
-de menos: corregirlo es una escritura en la base, pendiente del owner. Los
-textos que decían «pasada la medianoche» ya se corrigieron el 04-11-2026.
+fechas (usa la hora de llegada) y no cambia. Los textos que decían «pasada la
+medianoche» ya se corrigieron el 04-11-2026.
+
+Lo guardado antes sigue con 5 h de menos, y se queda así: el owner decidió no
+corregirlo (05-11-2026). Son 902 eventos «Swayp: …» de la Actividad (139 caen
+el día anterior: los de 00:00 a 04:59 de Lima se ven entre las 19:00 y las
+23:59) y 1.115 horas de 378 salidas Swayp de 373 pedidos
+(`custody_transferred_at`, `dispatched_at`, `out_for_delivery_at` y
+`closed_at`), del 30-09 al 04-11-2026. Ante el conteo, el owner preguntó «es
+realmente necesario?» y aprobó dejarlo así («si, haz los dos»):
+
+- las duraciones entre dos horas de Swayp salen bien, porque todas llevan el
+  mismo desfase; solo se descuadran frente a una hora de Kapta (la de armado,
+  por ejemplo);
+- la etapa del Master la deciden los estados de Swayp, no sus horas. Las horas
+  solo cuentan en las ventanas de días (los 7 o 21 días para recuperar), y ahí
+  el plazo se cruza a lo más 5 h antes;
+- corregirlo era escribir unos 2.000 valores en producción y recalcular esos
+  373 pedidos.
+
+Si algún día hace falta medir a Swayp contra la operación con ese historial
+(de la caja armada a la recogida, por ejemplo), el criterio ya probado es:
+una hora es de Swayp si viene al segundo exacto (Kapta escribe milésimas) y se
+guardó al menos 5 h después de lo que dice; a esas se les suman 5 h y se
+recalcula el Master de sus pedidos. Las horas de Kapta y las que llegaron
+desde el arreglo no se tocan.
 
 **Qué no hace todavía.** No cambia el estado ni la custodia que reporta
 Swayp (E3): una caja «No sale» sigue como Swayp la tenga, y Kapta avisa. No
