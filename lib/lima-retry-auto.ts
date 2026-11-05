@@ -157,6 +157,12 @@ export function retryVariantLabel(variant: RetryVariant): string {
  *   * `tope`             — se llegó al tope del día: se reintenta mañana.
  *   * `atendiendo`       — una persona tiene el caso tomado en Repro Lima: se reintenta.
  *   * `esperando_aliclik`— Aliclik está fallando: se reintenta en la pasada siguiente.
+ *   * `sin_ubicacion`    — el pedido no tiene coordenada usable y Aliclik la exige
+ *                          (05-11-2026). Se reintenta, no cuenta para el tope, no
+ *                          avisa por Telegram, no deja hecho de fallo y no saca
+ *                          el pedido de la cadena: sigue en la bandeja hasta
+ *                          que una persona pone la ubicación en la ficha del
+ *                          pedido («Corregir ubicación»).
  */
 export const RETRY_OUTCOMES = [
   "simulada",
@@ -169,11 +175,12 @@ export const RETRY_OUTCOMES = [
   "tope",
   "atendiendo",
   "esperando_aliclik",
+  "sin_ubicacion",
 ] as const;
 export type RetryOutcome = (typeof RETRY_OUTCOMES)[number];
 
 /** Lo que se vuelve a intentar en la siguiente pasada del mismo día. */
-export const RETRY_OUTCOMES_RETRYABLE: readonly RetryOutcome[] = ["no_seleccionable", "tope", "atendiendo", "esperando_aliclik"];
+export const RETRY_OUTCOMES_RETRYABLE: readonly RetryOutcome[] = ["no_seleccionable", "tope", "atendiendo", "esperando_aliclik", "sin_ubicacion"];
 
 /** Lo que cuenta para el tope del día: lo creado y lo que pudo crearse. */
 export const RETRY_OUTCOMES_COUNTED: readonly RetryOutcome[] = ["creada", "incierto", "en_curso"];
@@ -189,6 +196,7 @@ export const RETRY_OUTCOME_LABEL: Record<RetryOutcome, string> = {
   tope: "Tope del día alcanzado",
   atendiendo: "Una persona lo está atendiendo",
   esperando_aliclik: "Esperando a que Aliclik responda",
+  sin_ubicacion: "Sin ubicación: falta la coordenada",
 };
 
 /** Quedan guías para hoy. Pura. */
@@ -260,4 +268,76 @@ export function retryHeldDetail(unsaved: { status: string; orderNumber: string |
 /** El motivo de la salida adicional de Lima que lleva la guía automática. Pura. */
 export function autoRetryMotive(chain: Extract<LimaRetryChain, { state: "siguiente" }>, failedText: string): string {
   return `Reintento Aliclik ${chain.attempt} de ${chain.of} automático (regla encendida en Automatizaciones). ${failedText}.`;
+}
+
+// ---------------------------------------------------------------------------
+// Sin ubicación (owner, 05-11-2026)
+//
+// Desde WooCommerce, en Lima solo un 10–20 % de los pedidos trae coordenada (en
+// Shopify, el 99 %), y Aliclik no cotiza sin ella: la simulación del 05-11-2026
+// dio 1 de 19 «Habría creado» y 18 «Este pedido no tiene coordenada». No es un
+// fallo de Aliclik ni una regla de Kapta: falta un dato que una persona puede
+// poner (el enlace de Maps de la clienta) o que la ubicación por dirección
+// (Google, edificio) puede dar si el owner la encendió. Por eso es su propio
+// resultado: se reintenta, no cuenta para el tope, no avisa por Telegram, no
+// deja `lima_retry_auto_failed` y no saca el pedido de la cadena.
+
+/** De dónde salió la coordenada con la que se cotiza el reintento. */
+export type RetryCoordinateSource = "pedido" | "google";
+
+/** Lo que queda en el detalle del log cuando la coordenada vino de Google (como Chatby). */
+export const RETRY_GOOGLE_COORDINATE_NOTE = "ubicación por dirección (Google, edificio)";
+
+/** Por qué no se buscó o no sirvió la ubicación por dirección. */
+export type RetryGeocodeMiss =
+  /** El interruptor apagado, sin clave o la última medición de Lima no cumple B. */
+  | "apagado"
+  /** Google no dio el edificio, o el candado no lo dejó pasar. */
+  | "sin_edificio"
+  /** El pedido no trae calle que mandar. */
+  | "sin_direccion"
+  /** Se agotó el cupo diario de Google en esta pasada. */
+  | "sin_cupo"
+  /** Google o la caché fallaron: se vuelve a probar en la pasada siguiente. */
+  | "error";
+
+/** El detalle de un `sin_ubicacion` según por qué no hubo coordenada. Pura. */
+export function retryNoLocationDetail(miss: RetryGeocodeMiss): string {
+  // «Aprobar» en Repro Lima no tiene dónde pegar la ubicación: se pone en la
+  // ficha del pedido («Corregir ubicación»), que la guarda en el pedido.
+  const base =
+    "El pedido no tiene coordenada y Aliclik la exige. Pon la ubicación de la clienta en la ficha del pedido («Corregir ubicación», con el enlace de Maps) y apruébalo en Repro Lima";
+  switch (miss) {
+    case "sin_edificio":
+      return `${base}: Google no dio el edificio para esta dirección.`;
+    case "sin_direccion":
+      return `${base}: la dirección no trae calle para buscarla en Google.`;
+    case "sin_cupo":
+      return `${base}: se acabó el cupo diario de Google; se vuelve a buscar mañana.`;
+    case "error":
+      return `${base}: Google no respondió; se vuelve a buscar en la pasada siguiente.`;
+    default:
+      return `${base}.`;
+  }
+}
+
+/**
+ * ¿La cotización dice que falta la ubicación? Para la pasada automática, sí
+ * cuando Aliclik pide la coordenada (`needsCoordinate`), y cuando el pin que
+ * dio GOOGLE no lo respalda el pedido (`pinSinCorroborar`): es un punto que
+ * puso Kapta, no la clienta, así que hace falta que una persona lo mire. Un pin
+ * del propio pedido que no se respalda sigue siendo un fallo, como hoy.
+ * Devuelve el detalle, o null si no es falta de ubicación. Pura.
+ */
+export function retryLocationMissing(
+  preview: { ok: boolean; needsCoordinate?: boolean; pinSinCorroborar?: string },
+  source: RetryCoordinateSource,
+): string | null {
+  if (preview.ok) return null;
+  if (preview.needsCoordinate) return retryNoLocationDetail("apagado");
+  if (preview.pinSinCorroborar && source === "google") {
+    const why = preview.pinSinCorroborar.trim().replace(/\.$/, "");
+    return `La ubicación por dirección (Google) no la respalda el pedido: ${why}. Pon la ubicación de la clienta en la ficha del pedido («Corregir ubicación») y apruébalo en Repro Lima.`;
+  }
+  return null;
 }

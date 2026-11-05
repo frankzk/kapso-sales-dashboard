@@ -22,10 +22,34 @@ const h = vi.hoisted(() => ({
   /** Los hechos de la relectura, si cambiaron durante la pasada. */
   later: null as null | ((id: string) => Row | undefined),
   factsCalls: 0,
+  /** La clave de Google en el entorno. */
+  key: "",
+  /** Lo que devuelve `geocodeOrderAddress` para cada pedido. */
+  geo: (_order: Row): Row => ({ kind: "ok", lat: -12.1211, lng: -77.0297, precision: "ROOFTOP", cached: false }),
+  geocoded: [] as Row[],
+  /** La última medición de Lima guardada (`latestGeocodeLimaRun`). */
+  latest: null as null | Row,
+  /** Pedidos cuyo pin del Master es el punto de Google (`googlePinnedOrderIds`). */
+  googlePins: [] as string[],
+  /** Hace fallar la lectura de la caché de Google. */
+  googlePinsError: null as null | string,
 }));
 
 vi.mock("server-only", () => ({}));
-vi.mock("@/lib/env", () => ({ env: { aliclikWriteEnabled: () => h.write, siteUrl: () => "https://kapta.test" } }));
+vi.mock("@/lib/env", () => ({
+  env: { aliclikWriteEnabled: () => h.write, siteUrl: () => "https://kapta.test", googleGeocodingApiKey: () => h.key },
+}));
+vi.mock("@/lib/geocode-google-server", () => ({
+  geocodeOrderAddress: async (_admin: unknown, order: Row, opts: Row) => {
+    h.geocoded.push({ ...order, key: opts.key });
+    return h.geo(order);
+  },
+  latestGeocodeLimaRun: async () => h.latest,
+  googlePinnedOrderIds: async (_admin: unknown, rows: Row[]) => {
+    if (h.googlePinsError) throw new Error(h.googlePinsError);
+    return new Set(rows.filter((r) => r.latitude != null && h.googlePins.includes(r.order_id)).map((r) => r.order_id));
+  },
+}));
 vi.mock("@/lib/shipments", () => ({ limaTodayKey: () => "2026-11-04" }));
 vi.mock("@/lib/aliclik-guide", () => ({
   aliclikReadScopeFor: async (_admin: unknown, storeId: string) => ({ scope: { client: null, storeIds: [storeId] } }),
@@ -65,8 +89,13 @@ vi.mock("@/lib/lima-retry-approve", () => ({
 }));
 
 import {
+  RETRY_OUTCOME_LABEL,
+  RETRY_OUTCOMES_COUNTED,
+  RETRY_OUTCOMES_RETRYABLE,
   RETRY_VARIANTS,
   anyRetryVariantOn,
+  retryLocationMissing,
+  retryNoLocationDetail,
   autoRetryMotive,
   retryCapLeft,
   retryHeldDetail,
@@ -262,7 +291,13 @@ function order(id: string, at = "2026-11-02T17:00:00Z", carrier = "alexis", extr
     episode: { key: "ep" },
     retryChain: next(carrier, "autoecom", 3, "no_contesta", at),
   });
-  return { order_id: id, store_id: "s1", order_name: `#${id}`, macro_stage: "en_curso", macro_substage: "por_reprogramar_lima" };
+  // Con coordenada, como un pedido de Shopify; los de WooCommerce sin ella se prueban aparte.
+  return {
+    order_id: id, store_id: "s1", order_name: `#${id}`, macro_stage: "en_curso", macro_substage: "por_reprogramar_lima",
+    coverage: "lima", address: "Av. Larco 345", district: "Miraflores", province: "Lima", region: "Lima",
+    latitude: -12.12, longitude: -77.03,
+    ...(extra.row ?? {}),
+  };
 }
 
 function seed(mode: "apagado" | "simulacion" | "activo", orders: Row[], extra: Record<string, Row[]> = {}) {
@@ -287,6 +322,12 @@ beforeEach(() => {
   h.onHealth = null;
   h.later = null;
   h.factsCalls = 0;
+  h.key = "";
+  h.geo = () => ({ kind: "ok", lat: -12.1211, lng: -77.0297, precision: "ROOFTOP", cached: false });
+  h.geocoded = [];
+  h.latest = null;
+  h.googlePins = [];
+  h.googlePinsError = null;
 });
 
 describe("la pasada", () => {
@@ -450,7 +491,7 @@ describe("la alerta y el cron", () => {
     const route = readFileSync(resolve(process.cwd(), "app/api/cron/lima-retry-auto/route.ts"), "utf8");
     expect(route).toContain("if (!internalAuthorized(req))");
     expect(route).toContain('if (!dry && process.env.VERCEL_ENV !== "production")');
-    expect(route).toContain("runLimaRetryAuto(createAdminSupabase(), { preview: dry })");
+    expect(route).toContain("runLimaRetryAuto(createAdminSupabase(), { preview: dry, noGeocode: dry })");
     expect(route).toContain("export const maxDuration = 300;");
     const vercel = JSON.parse(readFileSync(resolve(process.cwd(), "vercel.json"), "utf8")) as { crons: { path: string; schedule: string }[] };
     expect(vercel.crons).toContainEqual({ path: "/api/cron/lima-retry-auto", schedule: "23 13-18 * * *" });
@@ -797,5 +838,225 @@ describe("una regla de Kapta: «pasó a Repro Lima» solo si quedó escrito", ()
     expect(h.telegrams[0]).toContain("No se pudo pasar a Repro Lima: sin permiso");
     expect(db.order_events).toEqual([expect.objectContaining({ kind: LIMA_RETRY_AUTO_FAILED, payload: expect.not.objectContaining({ kapta_block: true }) })]);
     expect(report.error).toContain("No se pudo pasar #a a Repro Lima");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sin ubicación y la ubicación por dirección (Google), 05-11-2026
+// ---------------------------------------------------------------------------
+
+describe("«Sin ubicación»: lo puro", () => {
+  it("se reintenta, no cuenta para el tope y tiene su etiqueta", () => {
+    expect(RETRY_OUTCOMES_RETRYABLE).toContain("sin_ubicacion");
+    expect(RETRY_OUTCOMES_COUNTED).not.toContain("sin_ubicacion");
+    expect(RETRY_OUTCOME_LABEL.sin_ubicacion).toBe("Sin ubicación: falta la coordenada");
+  });
+
+  it("falta la coordenada, o el pin de GOOGLE no lo respalda el pedido; un pin del pedido sigue siendo fallo", () => {
+    expect(retryLocationMissing({ ok: false, needsCoordinate: true }, "pedido")).toContain("no tiene coordenada");
+    expect(retryLocationMissing({ ok: false, pinSinCorroborar: "El pin cae en Cusco." }, "google"))
+      .toBe("La ubicación por dirección (Google) no la respalda el pedido: El pin cae en Cusco. Pon la ubicación de la clienta en la ficha del pedido («Corregir ubicación») y apruébalo en Repro Lima.");
+    expect(retryLocationMissing({ ok: false, pinSinCorroborar: "El pin cae en Cusco." }, "pedido")).toBeNull();
+    expect(retryLocationMissing({ ok: false }, "google")).toBeNull();
+    expect(retryLocationMissing({ ok: true }, "google")).toBeNull();
+  });
+
+  it("el detalle dice por qué no hubo coordenada", () => {
+    expect(retryNoLocationDetail("sin_edificio")).toContain("Google no dio el edificio");
+    expect(retryNoLocationDetail("sin_cupo")).toContain("cupo diario de Google");
+    // «Aprobar» de Repro Lima no tiene dónde pegarla: se pone en la ficha del pedido.
+    expect(retryNoLocationDetail("apagado")).toBe(
+      "El pedido no tiene coordenada y Aliclik la exige. Pon la ubicación de la clienta en la ficha del pedido («Corregir ubicación», con el enlace de Maps) y apruébalo en Repro Lima.",
+    );
+  });
+});
+
+/** Una medición de Lima que cumple B con el edificio. */
+const MEETS_B = { at: "2026-11-05T15:00:00Z", summary: { ranAt: "2026-11-05T15:00:00Z", sampled: 120, passed: 60, rooftop: 40, rooftopWithin300Pct: 95, rejections: {} } };
+
+function noPin(id: string) {
+  return order(id, undefined, "alexis", { row: { latitude: null, longitude: null } });
+}
+
+describe("la pasada sin coordenada", () => {
+  it("con el interruptor apagado: «Sin ubicación», sin Google, sin cotizar, sin aviso ni hecho; se reintenta y no cuenta", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    const { admin, db } = seed("activo", [noPin("a")]);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.geocoded).toEqual([]);
+    expect(h.core).toEqual([]);
+    expect(report.orgs[0]!.items).toEqual([expect.objectContaining({ orderId: "a", outcome: "sin_ubicacion" })]);
+    expect(report.orgs[0]!.capLeft).toBe(5);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "sin_ubicacion", mode: "activo" })]);
+    expect(db.order_events).toEqual([]);
+    expect(h.telegrams).toEqual([]);
+    // La pasada siguiente lo vuelve a tomar (se reintenta).
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(db.lima_retry_auto_log).toHaveLength(1);
+    expect(db.lima_retry_auto_log![0]).toMatchObject({ outcome: "sin_ubicacion" });
+    expect(h.telegrams).toEqual([]);
+  });
+
+  it("el núcleo dice «Sin ubicación» (Aliclik pide la coordenada): tampoco avisa ni deja hecho ni cuenta", async () => {
+    h.coreResult = () => ({ outcome: "sin_ubicacion", stage: "ubicacion", transport: "AUTOECOM", error: "Falta la coordenada." });
+    const { admin, db } = seed("activo", [order("a")]);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(report.orgs[0]).toMatchObject({ capLeft: 5 });
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "sin_ubicacion", detail: "Falta la coordenada." })]);
+    expect(db.order_events).toEqual([]);
+    expect(h.telegrams).toEqual([]);
+  });
+
+  it("encendido, con clave y la medición que cumple B: busca en Google UNA vez y cotiza y crea con ese punto", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    h.coreResult = (input) => ({ outcome: "creada", transport: "AUTOECOM", guide: "AL-9", coordinateNote: input.coordinate ? "Con la ubicación por dirección (Google, edificio)." : null });
+    const { admin, db } = seed("activo", [noPin("a"), order("b", "2026-11-03T17:00:00Z")], {
+      lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, geocode_enabled: true }],
+    });
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    // Solo el que no tiene coordenada va a Google; a Google van la dirección, no el pedido entero.
+    expect(h.geocoded).toEqual([{ order_id: "a", store_id: "s1", address: "Av. Larco 345", district: "Miraflores", province: "Lima", region: "Lima", key: "k" }]);
+    expect(h.core.find((c) => c.row.order_id === "a")).toMatchObject({ dry: false, coordinate: { value: "-12.1211, -77.0297", source: "google" } });
+    expect(h.core.find((c) => c.row.order_id === "b")!.coordinate).toBeUndefined();
+    expect(db.lima_retry_auto_log!.find((r) => r.order_id === "a")).toMatchObject({ outcome: "creada", detail: "Con la ubicación por dirección (Google, edificio)." });
+    expect(report.geocode).toEqual({ lookups: 1, quotaHit: false });
+  });
+
+  it("en Simulación y en «Simular ahora» también usa Google", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    h.coreResult = () => ({ outcome: "simulada", transport: "AUTOECOM", detail: "x" });
+    const settings = { lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, geocode_enabled: true }] };
+    const sim = seed("simulacion", [noPin("a")], settings);
+    await runLimaRetryAuto(sim.admin, { now: OPEN_HOUR });
+    expect(h.core[0]).toMatchObject({ dry: true, coordinate: { source: "google" } });
+    h.core = [];
+    const prev = seed("apagado", [noPin("a")], settings);
+    await runLimaRetryAuto(prev.admin, { now: LATE, orgId: ORG, preview: true });
+    expect(h.core[0]).toMatchObject({ dry: true, coordinate: { source: "google" } });
+  });
+
+  it("encendido pero sin clave, o con una última medición que no cumple B: no usa Google", async () => {
+    const settings = { lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, geocode_enabled: true }] };
+    h.latest = MEETS_B;
+    await runLimaRetryAuto(seed("activo", [noPin("a")], settings).admin, { now: OPEN_HOUR });
+    expect(h.geocoded).toEqual([]);
+    h.key = "k";
+    h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftopWithin300Pct: 85 } };
+    const run = await runLimaRetryAuto(seed("activo", [noPin("a")], settings).admin, { now: OPEN_HOUR });
+    expect(h.geocoded).toEqual([]);
+    expect(run.orgs[0]!.items[0]).toMatchObject({ outcome: "sin_ubicacion" });
+  });
+
+  it("Google no da el edificio: «Sin ubicación» con el motivo, sin cotizar", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    h.geo = () => ({ kind: "rejected", reason: "impreciso", precision: "RANGE_INTERPOLATED", cached: false });
+    const { admin, db } = seed("activo", [noPin("a")], { lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, geocode_enabled: true }] });
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "sin_ubicacion", detail: expect.stringContaining("Google no dio el edificio") })]);
+    expect(h.telegrams).toEqual([]);
+  });
+
+  it("se acaba el cupo de Google: no se le pregunta más en la pasada y lo que falta queda «Sin ubicación»", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    h.coreResult = () => ({ outcome: "simulada", transport: "AUTOECOM", detail: "x" });
+    h.geo = () => ({ kind: "unavailable", reason: "sin_cupo" });
+    const rows = [noPin("a"), noPin("b"), noPin("c")];
+    const { admin } = seed("simulacion", rows, { lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, geocode_enabled: true }] });
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.geocoded).toHaveLength(1);
+    expect(report.geocode).toEqual({ lookups: 1, quotaHit: true });
+    expect(report.orgs[0]!.items.map((i) => i.outcome)).toEqual(["sin_ubicacion", "sin_ubicacion", "sin_ubicacion"]);
+    expect(report.orgs[0]!.items.every((i) => i.detail?.includes("cupo diario de Google"))).toBe(true);
+    expect(h.core).toEqual([]);
+  });
+
+  it("el motor solo pasa la coordenada de Google al núcleo cuando el pedido no trae la suya (o la suya es la de Google)", () => {
+    const server = readFileSync(resolve(process.cwd(), "lib/lima-retry-auto-server.ts"), "utf8");
+    expect(server).toContain("google = (await googlePinnedOrderIds(admin, [row])).has(row.order_id);");
+    // El `?dry=1` del cron no busca en Google.
+    const route = readFileSync(resolve(process.cwd(), "app/api/cron/lima-retry-auto/route.ts"), "utf8");
+    expect(route).toContain("runLimaRetryAuto(createAdminSupabase(), { preview: dry, noGeocode: dry })");
+    // «Aprobar» (la acción manual) no manda coordenada.
+    const manual = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/repro-lima/retry-actions.ts"), "utf8");
+    expect(manual).toContain("approveLimaRetry({ admin, row, chain, raw: facts.retryChain, actor: { userId: who.userId } })");
+  });
+});
+
+describe("el reintento siguiente a una guía creada con Google", () => {
+  // La guía del reintento 2 se creó con el punto de Google: la guía lo guarda y
+  // el Master lo toma como pin del pedido. El reintento 3 ve una coordenada,
+  // pero es la de Google, no la de la clienta.
+  const googlePinned = (id: string) => order(id, undefined, "alexis", { row: { latitude: -12.1211, longitude: -77.0297, geo_source: "courier" } });
+  const ON = { lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, geocode_enabled: true }] };
+
+  it("con el interruptor apagado no usa ese punto: «Sin ubicación», sin cotizar, sin aviso ni hecho", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    h.googlePins = ["a"];
+    const { admin, db } = seed("activo", [googlePinned("a")]);
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(h.geocoded).toEqual([]);
+    expect(report.orgs[0]!.items).toEqual([expect.objectContaining({ orderId: "a", outcome: "sin_ubicacion" })]);
+    expect(report.orgs[0]!.capLeft).toBe(5);
+    expect(db.order_events).toEqual([]);
+    expect(h.telegrams).toEqual([]);
+  });
+
+  it("con una medición nueva que ya no cumple B, tampoco", async () => {
+    h.key = "k";
+    h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftopWithin300Pct: 85 } };
+    h.googlePins = ["a"];
+    const run = await runLimaRetryAuto(seed("activo", [googlePinned("a")], ON).admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(run.orgs[0]!.items[0]).toMatchObject({ outcome: "sin_ubicacion" });
+  });
+
+  it("encendido y cumpliendo B: lo trata como Google (la caché), con la nota en el log", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    h.googlePins = ["a"];
+    h.geo = () => ({ kind: "ok", lat: -12.1211, lng: -77.0297, precision: "ROOFTOP", cached: true });
+    h.coreResult = (input) => ({ outcome: "creada", transport: "ALIDRIVER", guide: "AL-10", coordinateNote: input.coordinate ? "Con la ubicación por dirección (Google, edificio)." : null });
+    const { admin, db } = seed("activo", [googlePinned("a")], ON);
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.geocoded).toHaveLength(1);
+    expect(h.core[0]).toMatchObject({ coordinate: { value: "-12.1211, -77.0297", source: "google" } });
+    expect(db.lima_retry_auto_log![0]).toMatchObject({ outcome: "creada", detail: "Con la ubicación por dirección (Google, edificio)." });
+  });
+
+  it("un pin propio (no es el de Google) se cotiza tal cual, sin Google", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    h.coreResult = () => ({ outcome: "simulada", transport: "AUTOECOM", detail: "x" });
+    await runLimaRetryAuto(seed("simulacion", [googlePinned("a")], ON).admin, { now: OPEN_HOUR });
+    expect(h.geocoded).toEqual([]);
+    expect(h.core[0]!.coordinate).toBeUndefined();
+  });
+
+  it("si no se pudo leer la caché de Google, no cotiza con ese pin: «Sin ubicación» y se reintenta", async () => {
+    h.googlePinsError = "boom";
+    const { admin, db } = seed("activo", [googlePinned("a")]);
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.core).toEqual([]);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({ outcome: "sin_ubicacion" })]);
+    expect(h.telegrams).toEqual([]);
+  });
+});
+
+describe("el ?dry=1 del cron no busca en Google", () => {
+  it("con `noGeocode`, ni con el interruptor encendido consulta Google", async () => {
+    h.key = "k";
+    h.latest = MEETS_B;
+    const settings = { lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, geocode_enabled: true }] };
+    const report = await runLimaRetryAuto(seed("simulacion", [noPin("a")], settings).admin, { now: LATE, preview: true, noGeocode: true });
+    expect(h.geocoded).toEqual([]);
+    expect(report.orgs[0]!.items[0]).toMatchObject({ outcome: "sin_ubicacion" });
   });
 });

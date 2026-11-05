@@ -42,14 +42,26 @@ import {
   type AutomationEntry,
   type AutomationGroup,
 } from "@/lib/automations-catalog";
-import type { AutomationsOrgView, OrgSwitchView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
+import type { AutomationsOrgView, OrgSwitchView, RetryGeocodeView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
 import {
+  GEOCODE_CRITERION_B,
+  GEOCODE_LIMA_CAP,
+  GEOCODE_REASON_LABEL,
+  GEOCODE_SMALL_SAMPLE,
+  geocodeLimaGate,
+  type GeocodeLimaRunSummary,
+  type GeocodePilotReason,
+} from "@/lib/geocode-google";
+import {
+  measureLimaGeocodeNow,
   setOrgAutomation,
   setRetryDailyCap,
+  setRetryGeocode,
   setRetryVariantMode,
   setStoreAutomation,
   simulateRetriesNow,
   type AutomationActionResult,
+  type LimaGeocodeMeasureResult,
   type RetrySimulationResult,
 } from "@/app/dashboard/automatizaciones/actions";
 
@@ -91,6 +103,7 @@ const OUTCOME_TONE: Partial<Record<RetryOutcome, BadgeTone>> = {
   fallo: "crit",
   incierto: "warn",
   sin_transporte: "warn",
+  sin_ubicacion: "warn",
 };
 
 const groupId = (key: AutomationGroup) => `grupo-${key}`;
@@ -101,6 +114,7 @@ const INDEX: IndexGroup[] = [
     items: [
       { id: "retry-variantes", label: "Posición de cada reintento" },
       { id: "retry-tope", label: "Tope del día" },
+      { id: "retry-ubicacion", label: "Ubicación por dirección" },
       { id: "retry-simular", label: "Simular ahora" },
       { id: "retry-registro", label: "Hoy y ayer" },
     ],
@@ -365,6 +379,8 @@ function RetryGroup({ org, writable }: { org: AutomationsOrgView; writable: bool
         {/* Sin `key` del tope: guardar lo cambia, y remontar borraba el «Guardado». */}
         <CapCard orgId={org.orgId} cap={retry.dailyCap} canEdit={canEdit} />
       </SettingsSection>
+
+      <GeocodeSection orgId={org.orgId} view={retry.geocode} writable={writable && retry.available} />
 
       <SimulateSection orgId={org.orgId} canEdit={canEdit} />
 
@@ -705,7 +721,7 @@ function SimulateSection({ orgId, canEdit }: { orgId: string; canEdit: boolean }
     <SettingsSection
       id="retry-simular"
       title="Simular ahora"
-      description="Revisa ahora los pedidos listos para reintentar y dice qué guía saldría, sin crear ninguna. Mira todos los pasos, también los apagados. Consulta a Aliclik, así que puede tardar."
+      description="Revisa ahora los pedidos listos para reintentar y dice qué guía saldría, sin crear ninguna. Mira todos los pasos, también los apagados. Consulta a Aliclik, así que puede tardar. Con la ubicación por dirección encendida, también busca en Google la dirección de los pedidos sin coordenada y guarda esa respuesta (una vez por pedido), para que la pasada no la vuelva a pedir."
       actions={
         <OpsButton
           size="sm"
@@ -769,6 +785,195 @@ function SimulateSection({ orgId, canEdit }: { orgId: string; canEdit: boolean }
           </>
         )}
       </div>
+    </SettingsSection>
+  );
+}
+
+// ── La ubicación por dirección (Google) en los reintentos (0308) ────────────
+
+const fmtPct = (v: number | null) => (v == null ? "—" : `${v.toLocaleString("es-PE", { maximumFractionDigits: 1 })} %`);
+const fmtInt = (v: number) => v.toLocaleString("es-PE");
+
+/** Una medición de Lima: solo cuentas, y si deja encender el interruptor. */
+function LimaRunCard({ title, summary }: { title: string; summary: GeocodeLimaRunSummary }) {
+  const gate = geocodeLimaGate(summary);
+  const reasons = (Object.keys(GEOCODE_REASON_LABEL) as GeocodePilotReason[]).filter((r) => (summary.rejections[r] ?? 0) > 0);
+  const stat = (label: string, value: string) => (
+    <div className="min-w-0">
+      <dt className="text-xs text-ink-500">{label}</dt>
+      <dd className="text-sm font-semibold tabular-nums text-ink-900">{value}</dd>
+    </div>
+  );
+  return (
+    <div className={CARD}>
+      <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-2 border-b border-line py-3")}>
+        <p className="text-[13px] font-medium text-ink-700">{title}</p>
+        {gate.ok ? <Badge tone="ok">Cumple el criterio B</Badge> : <Badge tone="warn">No cumple el criterio B</Badge>}
+      </div>
+      <dl className={cn(ROW, "grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4")}>
+        {stat("Pedidos de Lima medidos", fmtInt(summary.sampled))}
+        {stat("Pasan el candado", fmtInt(summary.passed))}
+        {stat("Con el edificio (ROOFTOP)", fmtInt(summary.rooftop))}
+        {stat("Mediana al pin", summary.medianM == null ? "—" : `${fmtInt(Math.round(summary.medianM))} m`)}
+        {stat(`A ${GEOCODE_CRITERION_B.withinMeters} m o menos`, fmtPct(summary.within300Pct))}
+        {stat("A más de 1 km", fmtPct(summary.beyond1kmPct))}
+        {stat(`Solo edificio, a ${GEOCODE_CRITERION_B.withinMeters} m o menos`, fmtPct(summary.rooftopWithin300Pct))}
+        {stat("Consultas a Google", fmtInt(summary.apiCalls))}
+      </dl>
+      <div className={cn(ROW, "space-y-1 border-t border-line py-3")}>
+        <p className={HELP}>
+          Para encender hace falta que al menos el {GEOCODE_CRITERION_B.minShare * 100} % de los puntos con el edificio quede a{" "}
+          {GEOCODE_CRITERION_B.withinMeters} m o menos del pin que puso una persona, con al menos {GEOCODE_SMALL_SAMPLE} puntos.
+        </p>
+        {!gate.ok && <p className="text-[13px] text-warn-fg">{gate.reason}</p>}
+        {summary.truncated && <p className={HELP}>Se cortó por tiempo antes de consultar toda la muestra.</p>}
+        {summary.quotaHit && <p className={HELP}>Google cortó por el cupo diario: lo que faltó no se consultó.</p>}
+        {reasons.length > 0 && (
+          <p className={HELP}>
+            No pasaron: {reasons.map((r) => `${GEOCODE_REASON_LABEL[r].toLowerCase()} (${fmtInt(summary.rejections[r] ?? 0)})`).join(" · ")}.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GeocodeSection({ orgId, view, writable }: { orgId: string; view: RetryGeocodeView; writable: boolean }) {
+  const id = useId();
+  const [checked, setChecked] = useState(view.enabled);
+  useEffect(() => setChecked(view.enabled), [view.enabled]);
+  const [status, setStatus] = useState<Status>(null);
+  const [pending, startTransition] = useTransition();
+  const [measure, setMeasure] = useState<LimaGeocodeMeasureResult | null>(null);
+  const [measuring, startMeasure] = useTransition();
+  const canEdit = writable && view.available;
+  // Apagar se puede siempre; encender, solo con la clave y una medición de Lima que cumpla B.
+  const disabled = !canEdit || (!checked && !!view.blocked);
+  const blocked = view.error ?? (view.blocked ? (checked ? `Está encendido, pero no se usa: ${view.blocked}` : view.blocked) : null);
+
+  const toggle = (next: boolean) => {
+    if (pending) return;
+    if (
+      next &&
+      !window.confirm(
+        "¿Usar la ubicación por dirección (Google) en los reintentos de Lima? Cuando un pedido no tenga coordenada, Kapta buscará su dirección en Google y, si da el edificio, cotizará y creará la guía de Aliclik con ese punto, sin que una persona lo mire.",
+      )
+    ) {
+      return;
+    }
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setRetryGeocode(orgId, next);
+        if (!result.error) setChecked(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      }
+    });
+  };
+
+  return (
+    <SettingsSection
+      id="retry-ubicacion"
+      title="Ubicación por dirección (Google)"
+      badge={!view.available ? <Badge tone="warn">No instalado</Badge> : checked ? <Badge tone="ok">Encendida</Badge> : <Badge>Apagada</Badge>}
+      description={
+        <>
+          <p>
+            Aliclik exige la coordenada y casi ningún pedido de WooCommerce en Lima la trae. Sin ella, el reintento queda «Sin ubicación: falta la
+            coordenada»: se vuelve a mirar en la pasada siguiente, no cuenta para el tope, no avisa y sigue en la bandeja hasta que una persona pone la
+            ubicación en la ficha del pedido («Corregir ubicación»).
+          </p>
+          <p>
+            Encendida, la pasada busca la dirección en Google una vez por pedido y solo usa el punto si Google da el edificio. Antes hay que medir Lima:
+            solo se enciende si la última medición cumple el criterio B.
+          </p>
+        </>
+      }
+    >
+      <div className={CARD}>
+        <div className={ROW}>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <p id={`${id}-name`} className="text-sm font-semibold leading-5 text-ink-900">
+                Usar la ubicación por dirección (Google) si el pedido no tiene
+              </p>
+              <p id={`${id}-desc`} className={cn(HELP, "mt-0.5 max-w-[68ch]")}>
+                En Simulación y Activo, y en «Simular ahora» del panel. El log y el hecho de la aprobación dicen que la coordenada vino de Google. Si
+                el pedido no respalda el punto de Google, queda para una persona.
+              </p>
+            </div>
+            <LiveSwitch
+              checked={checked}
+              disabled={disabled}
+              pending={pending}
+              onChange={toggle}
+              labelledBy={`${id}-name`}
+              describedBy={`${id}-desc`}
+            />
+          </div>
+          <div className="mt-1.5">
+            <RowStatus pending={pending} status={status} blocked={blocked} />
+          </div>
+        </div>
+        <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-3 border-t border-line py-3")}>
+          <p className={cn(HELP, "max-w-[60ch]")}>
+            Mide solo Lima, con los pedidos de WooCommerce de los últimos 7 días que ya tienen el pin de una persona (no el punto de Google de una guía
+            automática), entre todas las tiendas. Hasta {GEOCODE_LIMA_CAP} consultas a Google por día, sumando las mediciones de hoy, para que el cupo
+            del día (400) siga alcanzando para Chatby. Guarda solo las cuentas.
+          </p>
+          <OpsButton
+            size="sm"
+            disabled={!canEdit || !view.keyPresent || measuring}
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `¿Medir ahora? Kapta consultará en Google hasta ${GEOCODE_LIMA_CAP} direcciones de Lima, del cupo diario de 400 que también usa Chatby.`,
+                )
+              ) {
+                return;
+              }
+              setMeasure(null);
+              startMeasure(async () => {
+                try {
+                  setMeasure(await measureLimaGeocodeNow(orgId));
+                } catch {
+                  setMeasure({ error: "La medición no respondió: se cortó o se perdió la conexión. Vuelve a intentar." });
+                }
+              });
+            }}
+            className="pointer-coarse:h-11"
+          >
+            {measuring ? "Midiendo…" : "Medir la ubicación por dirección en Lima"}
+          </OpsButton>
+        </div>
+      </div>
+
+      <div aria-live="polite" className="space-y-3 empty:hidden">
+        {measure?.error && (
+          <Banner tone="crit" role="alert">
+            {measure.error}
+          </Banner>
+        )}
+        {measure?.notice && (
+          <Banner tone="warn" role="status">
+            {measure.notice}
+          </Banner>
+        )}
+        {measure?.summary && <LimaRunCard title="Resultado de esta medición" summary={measure.summary} />}
+      </div>
+
+      {!measure?.summary &&
+        (view.latest?.summary ? (
+          <LimaRunCard title={`Última medición de Lima: ${view.latest.at}`} summary={view.latest.summary} />
+        ) : view.available ? (
+          <div className={CARD}>
+            <p className={cn(ROW, "text-sm text-ink-500")}>
+              {view.latest ? `La medición del ${view.latest.at} no se pudo leer.` : "Todavía no se midió Lima."}
+            </p>
+          </div>
+        ) : null)}
     </SettingsSection>
   );
 }

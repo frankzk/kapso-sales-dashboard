@@ -41,6 +41,13 @@ import {
   joinNames,
   type OrgAutomationTable,
 } from "@/lib/automations-catalog";
+import {
+  GEOCODE_KEY_MISSING,
+  geocodeLimaGate,
+  parseGeocodeLimaRunSummary,
+  type GeocodeLimaGate,
+  type GeocodeLimaRunSummary,
+} from "@/lib/geocode-google";
 
 /** Un renglón de «Hoy y ayer». */
 export interface RetryLogView {
@@ -69,6 +76,26 @@ export interface RetryView {
   /** Guías automáticas que hoy cuentan para el tope. */
   countedToday: number;
   log: RetryLogView[];
+  geocode: RetryGeocodeView;
+}
+
+/**
+ * «Usar la ubicación por dirección (Google)» de los reintentos (0308, owner
+ * 05-11-2026) y la última medición de Lima, de la que depende poder encenderlo.
+ */
+export interface RetryGeocodeView {
+  /** Falso si la migración 0308 aún no está: el interruptor y el botón se bloquean. */
+  available: boolean;
+  enabled: boolean;
+  /** `GOOGLE_GEOCODING_API_KEY` está en el entorno. */
+  keyPresent: boolean;
+  /** La última medición de Lima: fecha de Lima y solo cuentas. */
+  latest: { at: string; summary: GeocodeLimaRunSummary | null } | null;
+  /** ¿La última medición deja encenderlo? Apagar se puede siempre. */
+  gate: GeocodeLimaGate;
+  /** Por qué no se puede encender ahora (la clave, la medición o la base), o null. */
+  blocked: string | null;
+  error: string | null;
 }
 
 /** El estado de un interruptor de la organización. `unknown`: no se pudo leer. */
@@ -296,6 +323,16 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
 
 /** Posición de cada variante, tope y lo que hicieron las pasadas de hoy y ayer. */
 async function loadRetry(admin: SupabaseClient, orgId: string, today: string, yesterday: string): Promise<RetryView> {
+  const keyPresent = !!env.googleGeocodingApiKey();
+  const noGeocode = (error: string | null): RetryGeocodeView => ({
+    available: false,
+    enabled: false,
+    keyPresent,
+    latest: null,
+    gate: geocodeLimaGate(null),
+    blocked: "La ubicación por dirección aún no está instalada en la base de datos.",
+    error,
+  });
   const empty: RetryView = {
     available: false,
     error: null,
@@ -303,10 +340,12 @@ async function loadRetry(admin: SupabaseClient, orgId: string, today: string, ye
     dailyCap: RETRY_DAILY_CAP_DEFAULT,
     countedToday: 0,
     log: [],
+    geocode: noGeocode(null),
   };
-  const [variantsRes, settingsRes, logRes] = await Promise.all([
+  const [variantsRes, settingsRes, logRes, runRes] = await Promise.all([
     admin.from("lima_retry_auto_variants").select("variant,mode").eq("org_id", orgId),
-    admin.from("lima_retry_auto_settings").select("daily_cap").eq("org_id", orgId).maybeSingle(),
+    // `*`: sin la 0308, `geocode_enabled` no viene y el interruptor se bloquea.
+    admin.from("lima_retry_auto_settings").select("*").eq("org_id", orgId).maybeSingle(),
     admin
       .from("lima_retry_auto_log")
       .select("id,store_id,order_id,order_name,lima_day,variant,mode,outcome,transport,guide_code,detail,updated_at")
@@ -314,6 +353,13 @@ async function loadRetry(admin: SupabaseClient, orgId: string, today: string, ye
       .in("lima_day", [today, yesterday])
       .order("updated_at", { ascending: false })
       .limit(LOG_LIMIT),
+    admin
+      .from("geocode_pilot_runs")
+      .select("created_at,summary")
+      .eq("org_id", orgId)
+      .eq("coverage", "lima")
+      .order("created_at", { ascending: false })
+      .limit(1),
   ]);
   if ([variantsRes.error, settingsRes.error, logRes.error].some(isMissingTable)) {
     return { ...empty, error: "Los reintentos automáticos aún no están instalados en la base de datos." };
@@ -357,13 +403,42 @@ async function loadRetry(admin: SupabaseClient, orgId: string, today: string, ye
     };
   });
   const countedToday = log.filter((r) => r.day === "hoy" && r.mode === "activo" && r.outcome && RETRY_OUTCOMES_COUNTED.includes(r.outcome)).length;
+
+  // La ubicación por dirección: el interruptor y la última medición de Lima.
+  const settings = settingsRes.data as { daily_cap?: number; geocode_enabled?: boolean } | null;
+  let geocode: RetryGeocodeView;
+  const installed = (settings ? "geocode_enabled" in settings : true) && !isMissingTable(runRes.error);
+  if (!installed) geocode = noGeocode(null);
+  else if (runRes.error) {
+    geocode = {
+      ...noGeocode("No se pudo leer la última medición de Lima: el interruptor no se puede encender ahora."),
+      available: true,
+      enabled: settings?.geocode_enabled === true,
+      blocked: "No se pudo leer la última medición de Lima.",
+    };
+  } else {
+    const row = ((runRes.data ?? []) as { created_at: string; summary: unknown }[])[0];
+    const latest = row ? { at: formatLimaDateTime(row.created_at), summary: parseGeocodeLimaRunSummary(row.summary) } : null;
+    const gate = geocodeLimaGate(latest?.summary ?? null);
+    geocode = {
+      available: true,
+      enabled: settings?.geocode_enabled === true,
+      keyPresent,
+      latest,
+      gate,
+      blocked: !keyPresent ? GEOCODE_KEY_MISSING : gate.ok ? null : gate.reason,
+      error: null,
+    };
+  }
+
   return {
     available: true,
     error: logRes.error ? "No se pudo leer lo que hicieron las pasadas de hoy y ayer." : null,
     modes: retryModes((variantsRes.data ?? []) as { variant: string; mode: string }[]),
-    dailyCap: (settingsRes.data as { daily_cap?: number } | null)?.daily_cap ?? RETRY_DAILY_CAP_DEFAULT,
+    dailyCap: settings?.daily_cap ?? RETRY_DAILY_CAP_DEFAULT,
     countedToday,
     log,
+    geocode,
   };
 }
 

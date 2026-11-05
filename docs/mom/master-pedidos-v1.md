@@ -3984,12 +3984,94 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     guía». Si algo no se pudo leer, dice «No se pudo comprobar: <error>
     (Activo lo reintentaría)».
   - «Simular ahora» en el panel cotiza todas las variantes con los pedidos de
-    ese momento, sin escribir nada. Corre dentro de la página
+    ese momento, sin escribir nada del reintento (ni log, ni hechos, ni
+    Telegram). Con la ubicación por dirección encendida, lo único que puede
+    guardar es la respuesta de Google en su caché (`order_geocodes`), para que
+    la pasada no la vuelva a pedir. El `?dry=1` del cron
+    (`/api/cron/lima-retry-auto`) **no** busca en Google (`noGeocode`): no gasta
+    el cupo compartido ni llena la caché, aunque corra en un preview con la
+    clave; los pedidos sin coordenada propia salen «Sin ubicación». Corre dentro de la página
     (`maxDuration` de 300 s) y se para sola a los 200 s: entonces dice «La
     simulación se cortó por tiempo: muestra lo evaluado».
+  - **«Sin ubicación: falta la coordenada»** (owner, 05-11-2026). Aliclik
+    exige la coordenada y, desde WooCommerce, en Lima solo la trae un 10–20 %
+    de los pedidos (en Shopify, el 99 %): la simulación del 05-11-2026 dio 1 de
+    19 «Habría creado» y 18 «Este pedido no tiene coordenada». No es un fallo
+    de Aliclik ni una regla de Kapta, así que tiene su propio resultado
+    (`sin_ubicacion`, 0308): **se reintenta** en la pasada siguiente, **no
+    cuenta** para el tope, **no avisa** por Telegram, **no deja**
+    `lima_retry_auto_failed` y **no saca** el pedido de la cadena: sigue en la
+    bandeja hasta que una persona pone la ubicación de la clienta en la
+    **ficha del pedido** («Corregir ubicación», el enlace de Maps; queda en el
+    pedido) y lo aprueba en Repro Lima, o la pasada siguiente lo toma con esa
+    coordenada. «Aprobar» de Repro Lima no tiene dónde pegarla: cotiza con la
+    del pedido. Sale en Simulación, Activo y «Simular ahora» por igual. Un
+    pedido sin coordenada ni ubicación por dirección ni siquiera se cotiza.
+    «Aprobar» no cambia: sigue diciendo «Este pedido no tiene coordenada…».
+  - **La ubicación por dirección (Google), solo con el edificio** (owner,
+    05-11-2026; decisiones A, B y C de `docs/kapta/geocodificacion-propuesta.md`).
+    Interruptor «Usar la ubicación por dirección (Google) si el pedido no
+    tiene» en Automatizaciones (`lima_retry_auto_settings.geocode_enabled`, por
+    organización; nace **apagado**). Con él encendido, la clave
+    `GOOGLE_GEOCODING_API_KEY` y la **última medición de Lima** cumpliendo B, la
+    pasada busca en Google la dirección de un pedido de Lima **sin
+    coordenada** (`geocodeOrderAddress`: una consulta por pedido y dirección,
+    con la caché `order_geocodes` de 0301), y solo usa el punto si pasa el
+    candado y es el **edificio** (`ROOFTOP`). Con ese punto cotiza y crea,
+    como la guía de Chatby (§6.1): la misma coordenada va a la cotización y a
+    la creación. El log lo dice («ubicación por dirección (Google,
+    edificio)») y `lima_retry_approved` lleva `coordinate_source: google`. Si
+    Google no da el edificio, no encuentra la calle o falla, queda
+    `sin_ubicacion` con el motivo. Si contesta que se acabó el cupo del día
+    (400, compartido con Chatby), la pasada **no le pregunta más** y lo que
+    falta queda `sin_ubicacion`. El pin de un pedido nunca se reemplaza: un
+    pedido con coordenada se cotiza con la suya. **Salvo** que ese pin sea el
+    punto de Google del mismo pedido: la guía creada con la ubicación por
+    dirección guarda el punto en `shipments.latitude/longitude` y el Master lo
+    toma como pin (`geoPin`, `geo_source = courier`). Si la caché
+    `order_geocodes` tiene un punto bueno a 5 m o menos del pin del Master (y
+    no es una corrección a mano, `geo_source = manual`), el reintento
+    siguiente lo trata como Google (`googlePinnedOrderIds`): solo con el
+    interruptor encendido y la medición cumpliendo B (si no, «Sin
+    ubicación»), con la nota en el log y `coordinate_source: google`, y si el
+    pedido no lo respalda queda `sin_ubicacion`, no «No se pudo crear». Si la
+    caché no se pudo leer, «Sin ubicación» y se reintenta.
+    - **Si el pedido no respalda el punto de Google** (`pinSinCorroborar`,
+      §10): queda `sin_ubicacion` con ese motivo, para una persona. No va por
+      el camino de `kaptaBlock` (sacarlo a Repro Lima y avisar): el punto lo
+      puso Kapta, no la clienta, así que lo seguro es no crear, no avisar
+      cada día y dejarlo en la bandeja, hasta que una persona pone la
+      ubicación de la clienta en la ficha del pedido («Corregir ubicación»).
+      La excepción del pin respaldado nunca se escribe sola.
+    - **La medición de Lima** («Medir la ubicación por dirección en Lima», en
+      el panel). Lima nunca se había medido sola (84 de los 400 pedidos del
+      piloto de Kenku). Toma solo Lima, entre todas las tiendas activas de la
+      organización, con la regla del piloto: pedidos de WooCommerce de los
+      últimos 7 días con el pin de una persona, los más recientes primero,
+      **hasta 150 consultas por día de Lima** (se descuentan las
+      `apiCalls` de las mediciones guardadas hoy; sin nada que gastar, «Ya
+      se usaron las 150 consultas de hoy para medir Lima; vuelve mañana»)
+      para que el cupo del día siga alcanzando para Chatby. **No entra** un
+      pedido cuyo pin del Master es el punto de Google de ese pedido (la
+      caché `order_geocodes` con un punto bueno a 5 m o menos, sin
+      corrección a mano): lo puso una guía automática, no una persona, y
+      compararlo con Google daría 0 m y la medición se confirmaría sola. Aplica el candado y mide la distancia al pin. Guarda **solo la
+      cuenta** en `geocode_pilot_runs` (`coverage = 'lima'`): la muestra, los
+      que pasan, los ROOFTOP, la mediana, el % a 300 m o menos, el % a más de
+      1 km, el % a 300 m o menos solo con ROOFTOP, si eso cumple B y por qué no
+      pasaron los demás. Ni direcciones, ni nombres, ni celulares, ni números
+      de pedido.
+    - **Encender exige B con el edificio** (`geocodeLimaGate`): en la última
+      medición de Lima, al menos el 90 % de los puntos ROOFTOP a 300 m o menos
+      del pin real, con **al menos 30** puntos ROOFTOP. Si no, el interruptor
+      se muestra bloqueado con el motivo. Apagar se puede siempre. Si una
+      medición nueva deja de cumplir B, la pasada deja de usar Google aunque
+      el interruptor siga encendido (el panel dice «Está encendido, pero no se
+      usa»). Cada cambio queda en `automation_switch_events`.
 
 Pruebas: `test/lima-retry-chain.test.ts`, `test/lima-retry-auto.test.ts`,
-`test/lima-retry-approve.test.ts` y, para las compuertas compartidas,
+`test/lima-retry-approve.test.ts`, `test/lima-retry-geocode-actions.test.ts`,
+`test/geocode-google.test.ts` y, para las compuertas compartidas,
 `test/aliclik-duplicate-create.test.ts`.
 
 #### «Repro Lima» (fase 1, entrega 1a, 12-10-2026)
@@ -19734,9 +19816,22 @@ y en Aliclik el pin decide a dónde va el paquete.
    usa sola con dos condiciones más (`chatbyGuidePin`): que sea de esta compra
    —enviada como mucho 3 días antes del pedido; si la última es más vieja, no
    vale— y que el pedido respalde el pin, sin excepción escrita.
-3. **La de la dirección en Google, solo para la guía automática de Provincia
-   COD y solo con el edificio** (§6.1, «Confirmó por Chatby», 02-11-2026; 0301).
-   No se muestra en el panel ni pasa a ser la coordenada del pedido.
+3. **La de la dirección en Google, solo para guías automáticas y solo con el
+   edificio** (`ROOFTOP`). No se muestra en el panel de la asesora y no se
+   escribe como corrección del pedido (`order_geo_overrides`). Pero la guía que
+   se crea con ella guarda el punto en `shipments.latitude/longitude`, y desde
+   ahí el Master lo toma como pin del pedido (`geoPin`, `geo_source =
+   courier`): por eso la medición de Lima no cuenta ese pin como el de una
+   persona y el reintento siguiente lo trata como Google, no como la
+   coordenada del pedido (`googlePinnedOrderIds`, a 5 m o menos del punto de
+   `order_geocodes`). Dos usos, cada uno con su interruptor:
+   - la guía automática de Provincia COD del que confirmó por Chatby (§6.1,
+     02-11-2026; 0301), después de la ubicación de WhatsApp;
+   - el reintento Aliclik automático de Lima (§9.5, entrega 3, 05-11-2026;
+     0308), solo si la última medición de Lima cumple B con el edificio
+     (al menos el 90 % de los puntos ROOFTOP a 300 m o menos del pin, con al
+     menos 30 puntos). Sin coordenada usable, el reintento queda «Sin
+     ubicación» y espera a una persona.
 
 Pruebas: `test/order-pin-sources.test.ts`.
 - **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de
@@ -21958,6 +22053,19 @@ Vercel— y algunas no tenían interruptor.
   - **Reintentos Aliclik en Lima** (§9.5, entrega 3): la matriz de doce
     variantes con Apagado / Simulación / Activo, el tope diario, «Simular
     ahora» y lo que hizo o habría hecho hoy y ayer.
+  - **Ubicación por dirección (Google) de los reintentos** (§9.5, 05-11-2026;
+    0308): el interruptor «Usar la ubicación por dirección (Google) si el
+    pedido no tiene», el botón «Medir la ubicación por dirección en Lima» (solo
+    Lima, hasta 150 consultas a Google por día de Lima, sin los pins que
+    puso una guía con Google, guarda solo la cuenta) y la última
+    medición guardada: la fecha, la muestra, los que pasan el candado, los
+    ROOFTOP, la mediana, el % a 300 m o menos (en total y solo con el
+    edificio), el % a más de 1 km y si cumple B. Encender pide confirmación y
+    solo se puede con la clave de Google y la última medición cumpliendo B con
+    el edificio y al menos 30 puntos; si no, el interruptor queda bloqueado con
+    el motivo. Apagar se puede siempre. El botón de medir pide confirmación
+    (gasta cupo de Google) y, como todo el panel, solo funciona en producción y
+    con `automations.manage`.
   - **Con interruptor por organización:** Aliclik → Swayp automático (§11.9;
     encenderlo también cambia al agente de voz, que deja de llamar los pedidos
     que tomaría el automático) y su piloto sin historial (§11.9.1, solo con el
@@ -21989,5 +22097,6 @@ Vercel— y algunas no tenían interruptor.
 - **Historial:** cada cambio queda en `automation_switch_events` (quién, qué,
   de qué a qué, cuándo) y el panel muestra los últimos.
 
-Migración `0306_automations_panel.sql`. Pruebas: `test/automations-catalog.test.ts`,
-`test/lima-retry-auto.test.ts`.
+Migraciones `0306_automations_panel.sql` y `0308_lima_retry_geocode.sql`.
+Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
+`test/lima-retry-geocode-actions.test.ts`.

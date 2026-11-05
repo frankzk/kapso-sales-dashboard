@@ -33,8 +33,12 @@ import {
   type RetryOutcome,
 } from "@/lib/lima-retry-auto";
 import { runLimaRetryAuto } from "@/lib/lima-retry-auto-server";
+import { env } from "@/lib/env";
+import { GEOCODE_KEY_MISSING, geocodeLimaGate, type GeocodeLimaRunSummary } from "@/lib/geocode-google";
+import { latestGeocodeLimaRun, runGeocodeLimaMeasure } from "@/lib/geocode-google-server";
 import {
   RETRY_CAP_EVENT,
+  RETRY_GEOCODE_EVENT,
   detailPaths,
   isUuid,
   orgSwitchPatch,
@@ -139,6 +143,85 @@ export async function setRetryDailyCap(orgId: string, cap: number | string): Pro
   });
   revalidatePath(PANEL_PATH);
   return { notice: warn ?? `Tope guardado: ${value} ${value === 1 ? "guía" : "guías"} al día.` };
+}
+
+/**
+ * «Usar la ubicación por dirección (Google) si el pedido no tiene», de los
+ * reintentos de Lima (0308, owner 05-11-2026). Encender exige la clave y que la
+ * ÚLTIMA medición de Lima cumpla B con el edificio (`geocodeLimaGate`); apagar
+ * se puede siempre.
+ */
+export async function setRetryGeocode(orgId: string, on: boolean): Promise<AutomationActionResult> {
+  if (typeof on !== "boolean") return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const { data: current, error: readError } = await g.admin
+    .from("lima_retry_auto_settings")
+    .select("*")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (readError) return { error: "No se pudo leer el estado actual. Intenta de nuevo." };
+  const row = current as { geocode_enabled?: boolean } | null;
+  if (row && !("geocode_enabled" in row)) return { error: "Falta la migración 0308 en la base de datos." };
+  const previous = row?.geocode_enabled === true;
+  if (previous === on) return { notice: "Ya estaba así." };
+  if (on) {
+    if (!env.googleGeocodingApiKey()) return { error: `${GEOCODE_KEY_MISSING}: no se puede encender.` };
+    let latest: Awaited<ReturnType<typeof latestGeocodeLimaRun>>;
+    try {
+      latest = await latestGeocodeLimaRun(g.admin, orgId);
+    } catch {
+      return { error: "No se pudo leer la última medición de Lima. Intenta de nuevo." };
+    }
+    const verdict = geocodeLimaGate(latest?.summary ?? null);
+    if (!verdict.ok) return { error: `No se puede encender: ${verdict.reason}` };
+  }
+  const { error } = await g.admin
+    .from("lima_retry_auto_settings")
+    .upsert({ org_id: orgId, geocode_enabled: on, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) return { error: "No se pudo guardar. Intenta de nuevo." };
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: RETRY_GEOCODE_EVENT,
+    previous: switchValue(previous),
+    next: switchValue(on),
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  return { notice: warn ?? `Ubicación por dirección (Google) en los reintentos: ${on ? "encendida" : "apagada"}.` };
+}
+
+export interface LimaGeocodeMeasureResult extends AutomationActionResult {
+  summary?: GeocodeLimaRunSummary;
+}
+
+/**
+ * «Medir la ubicación por dirección en Lima»: la medición de Lima entre las
+ * tiendas activas de la organización, hasta 150 consultas a Google. Guarda
+ * solo la cuenta (`geocode_pilot_runs`) y la devuelve.
+ */
+export async function measureLimaGeocodeNow(orgId: string): Promise<LimaGeocodeMeasureResult> {
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const key = env.googleGeocodingApiKey();
+  if (!key) return { error: `${GEOCODE_KEY_MISSING}: no se puede medir.` };
+  const { data: stores, error: storesError } = await g.admin.from("stores").select("id").eq("org_id", orgId).eq("status", "active");
+  if (storesError) return { error: "No se pudieron leer las tiendas. Intenta de nuevo." };
+  const storeIds = ((stores ?? []) as { id: string }[]).map((s) => s.id);
+  if (!storeIds.length) return { error: "La organización no tiene tiendas activas." };
+  try {
+    const run = await runGeocodeLimaMeasure(g.admin, { orgId, storeIds, key, actor: g.actor });
+    if (!run.ok) return { error: run.error };
+    revalidatePath(PANEL_PATH);
+    return {
+      summary: run.summary,
+      notice: run.saveError ? "Medido, pero no se pudo guardar: el interruptor no lo verá." : undefined,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `La medición no terminó: ${message}` };
+  }
 }
 
 /** Un interruptor de la organización (Swayp automático, piloto, Swayp desde Por confirmar, Chatby). */

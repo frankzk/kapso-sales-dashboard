@@ -32,6 +32,17 @@ import "server-only";
 // transporte, pasa a Repro Lima como con «Aprobar». Si una regla de Kapta no
 // deja crear la guía (venta anulada, adelanto exigido, rechazos en la puerta,
 // salidas…), avisa una vez y lo pasa a Repro Lima: mañana diría lo mismo.
+//
+// SIN UBICACIÓN (05-11-2026). Aliclik exige la coordenada y desde WooCommerce
+// casi ningún pedido de Lima la trae. Un pedido sin coordenada queda
+// `sin_ubicacion`: se reintenta, no cuenta para el tope, no avisa ni deja hecho
+// de fallo y sigue en la bandeja. Si el owner encendió «Usar la ubicación por
+// dirección (Google)» (`lima_retry_auto_settings.geocode_enabled`), la clave
+// está y la última medición de Lima cumple B con el edificio
+// (`geocodeLimaGate`), la pasada busca la dirección en Google UNA vez por
+// pedido (`geocodeOrderAddress`, caché `order_geocodes`) y cotiza y crea con
+// ese punto, como la guía de Chatby. Si Google contesta que se acabó el cupo,
+// no se le pregunta más en esta pasada: lo que falta queda `sin_ubicacion`.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
@@ -45,6 +56,8 @@ import { escapeHtml, sendTelegramToAll } from "@/lib/telegram";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { loadReproFacts, retryChainOf, type ReproFacts } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
+import { geocodeLimaGate } from "@/lib/geocode-google";
+import { geocodeOrderAddress, googlePinnedOrderIds, latestGeocodeLimaRun } from "@/lib/geocode-google-server";
 import { unsavedAliclikIntent, type CreationIntent } from "@/lib/aliclik-intent-release";
 import type { ReproOrderRow } from "@/lib/repro-lima-program";
 import { claimView } from "@/lib/repro-lima";
@@ -58,11 +71,13 @@ import {
   retryCapLeft,
   retryModes,
   retryHeldDetail,
+  retryNoLocationDetail,
   retryKaptaBlockReason,
   retryPassOpen,
   retryRecheck,
   retryVariantLabel,
   retryVariantOf,
+  type RetryGeocodeMiss,
   type RetryMode,
   type RetryOutcome,
   type RetryVariant,
@@ -132,6 +147,8 @@ export interface LimaRetryAutoReport {
   orgs: LimaRetryAutoOrgReport[];
   /** Se agotó el tiempo antes de terminar. Lo que quedó va en la pasada siguiente. */
   stopped: "tiempo" | null;
+  /** La ubicación por dirección en esta pasada: consultas (o lecturas de caché) y si se acabó el cupo. */
+  geocode: { lookups: number; quotaHit: boolean };
   error: string | null;
 }
 
@@ -230,7 +247,7 @@ export function retryResultDetail(result: RetryApproveResult): string | null {
     case "no_seleccionable":
       return result.reason ?? `${result.transport} no se puede agendar ahora.`;
     case "creada":
-      return null;
+      return result.coordinateNote ?? null;
     default:
       // Si una regla de Kapta lo sacó de la cadena, lo agrega la pasada, y
       // solo cuando el hecho de «A Repro Lima» quedó escrito.
@@ -519,16 +536,45 @@ async function candidatesOf(
   return out.sort((a, b) => Date.parse(a.raw.failed.at) - Date.parse(b.raw.failed.at));
 }
 
+/** La coordenada de la dirección en Google con la que se cotiza y se crea. */
+type GoogleCoordinate = { value: string; source: "google" };
+
+/** Con qué coordenada se cotiza: la del pedido (`null`), la de Google, o por qué no hay. */
+type Located = { coordinate: GoogleCoordinate | null } | { miss: RetryGeocodeMiss };
+
+/**
+ * La clave de Google para esta organización, o null: con el interruptor
+ * encendido, solo si la clave está en el entorno y la ÚLTIMA medición de Lima
+ * sigue cumpliendo B con el edificio (`geocodeLimaGate`). Si una medición nueva
+ * ya no lo cumple, la pasada deja de usar Google aunque el interruptor siga
+ * encendido (el panel lo dice). Lo que no se pudo leer no enciende nada.
+ */
+async function geocodeKeyFor(admin: SupabaseClient, orgId: string, errors: string[]): Promise<string | null> {
+  const key = env.googleGeocodingApiKey();
+  if (!key) return null;
+  try {
+    const latest = await latestGeocodeLimaRun(admin, orgId);
+    return geocodeLimaGate(latest?.summary ?? null).ok ? key : null;
+  } catch (e) {
+    errors.push(`No se pudo leer la medición de Lima: la ubicación por dirección no se usa en esta pasada (${e instanceof Error ? e.message : String(e)}).`);
+    return null;
+  }
+}
+
 /**
  * Una pasada. Sin `preview`, solo de 8:00 a 13:59 de Lima: simula las variantes
  * en simulación (deja el renglón en el log) y crea las activas, con tope y
  * candado. Con `preview`, «qué pasaría hoy si todo estuviera en simulación»:
- * cotiza todas las variantes, a cualquier hora, y no escribe NADA (ni log, ni
- * hechos, ni Telegram). Es el «Simular ahora» del panel.
+ * cotiza todas las variantes, a cualquier hora, y no escribe nada del reintento
+ * (ni log, ni hechos, ni Telegram). Es el «Simular ahora» del panel. Lo único
+ * que puede guardar es la respuesta de Google en la caché `order_geocodes`, si
+ * la ubicación por dirección está encendida: así la pasada real no la pide otra
+ * vez. Con `noGeocode` (el `?dry=1` del cron) no se busca nada en Google: los
+ * pedidos sin coordenada propia salen `sin_ubicacion`.
  */
 export async function runLimaRetryAuto(
   admin: SupabaseClient,
-  opts: { now?: Date; orgId?: string; preview?: boolean } = {},
+  opts: { now?: Date; orgId?: string; preview?: boolean; noGeocode?: boolean } = {},
 ): Promise<LimaRetryAutoReport> {
   const started = Date.now();
   const now = opts.now ?? new Date();
@@ -539,7 +585,9 @@ export async function runLimaRetryAuto(
   const nowish = () => new Date(now.getTime() + (Date.now() - started));
   const today = limaTodayKey(now);
   const limaHour = Number(limaTimeHHMM(now).slice(0, 2));
-  const report: LimaRetryAutoReport = { today, limaHour, skipped: null, orgs: [], stopped: null, error: null };
+  const report: LimaRetryAutoReport = {
+    today, limaHour, skipped: null, orgs: [], stopped: null, geocode: { lookups: 0, quotaHit: false }, error: null,
+  };
   const errors: string[] = [];
 
   if (!preview && !retryPassOpen(limaHour)) {
@@ -568,15 +616,18 @@ export async function runLimaRetryAuto(
     .filter(({ orgId, modes }) => anyRetryVariantOn(modes) || (preview && orgId === opts.orgId));
   if (!orgModes.length) return report;
 
+  // `*`: sin la 0308, `geocode_enabled` no viene y se lee como apagado.
   const { data: settingsRows, error: settingsError } = await admin
     .from("lima_retry_auto_settings")
-    .select("org_id,daily_cap")
+    .select("*")
     .in("org_id", orgModes.map((o) => o.orgId));
   if (settingsError) {
     report.error = `No se pudo leer el tope diario: ${settingsError.message}`;
     return report;
   }
-  const capByOrg = new Map(((settingsRows ?? []) as { org_id: string; daily_cap: number }[]).map((s) => [s.org_id, clampCap(s.daily_cap)]));
+  const settings = (settingsRows ?? []) as { org_id: string; daily_cap: number; geocode_enabled?: boolean }[];
+  const capByOrg = new Map(settings.map((s) => [s.org_id, clampCap(s.daily_cap)]));
+  const geocodeOnByOrg = new Map(settings.map((s) => [s.org_id, s.geocode_enabled === true]));
 
   if (!preview && !writeOk && orgModes.some(({ modes }) => Object.values(modes).includes("activo"))) {
     errors.push("ALICLIK_WRITE_ENABLED está apagado: las variantes activas no crean nada (la simulación sí corre).");
@@ -595,14 +646,75 @@ export async function runLimaRetryAuto(
   };
 
   // El núcleo de «Aprobar», como sistema; sin scope de la tienda no se cotiza.
-  const runCore = async (c: Candidate, dry: boolean): Promise<RetryApproveResult> => {
+  const runCore = async (c: Candidate, dry: boolean, coordinate: GoogleCoordinate | null): Promise<RetryApproveResult> => {
     const scope = await scopeOf(c.row.store_id);
     if (typeof scope === "string") {
       return { outcome: "fallo", stage: "contexto", transport: RETRY_TRANSPORT_LABEL[c.chain.next], error: scope };
     }
     return approveLimaRetry({
       admin, row: c.row, chain: c.chain, raw: c.raw, actor: { system: true, variant: c.variant }, today, dry, scope,
+      ...(coordinate ? { coordinate } : {}),
     });
+  };
+
+  // La ubicación por dirección (Google). Una búsqueda por pedido y pasada (y
+  // una consulta a Google por pedido y dirección, por la caché de 0301). El
+  // cupo es de la cuenta de Google, así que se corta para toda la pasada.
+  //
+  // El pin del pedido se usa tal cual SALVO que sea el punto de Google de ese
+  // mismo pedido (`googlePinnedOrderIds`): una guía anterior de la cadena se
+  // creó con la ubicación por dirección, la guía guardó el punto y el Master lo
+  // tomó como pin. Ese punto lo puso Kapta, no la clienta, así que se trata
+  // como lo que es —Google— y pasa por el interruptor, la medición (B), la nota
+  // del log y el camino de `pinSinCorroborar` → `sin_ubicacion`.
+  const located = new Map<string, Located>();
+  const locate = async (c: Candidate, geocodeKey: string | null): Promise<Located> => {
+    const row = c.row;
+    const seen = located.get(row.order_id);
+    if (seen) return seen;
+    let out: Located;
+    if (row.latitude != null && row.longitude != null) {
+      let google: boolean;
+      try {
+        google = (await googlePinnedOrderIds(admin, [row])).has(row.order_id);
+      } catch {
+        // Sin saber de dónde salió el pin, no se cotiza con él: se reintenta.
+        located.set(row.order_id, { miss: "error" });
+        return { miss: "error" };
+      }
+      if (!google) {
+        located.set(row.order_id, { coordinate: null });
+        return { coordinate: null };
+      }
+    }
+    if (!geocodeKey || row.coverage !== "lima") out = { miss: "apagado" };
+    else if (report.geocode.quotaHit) out = { miss: "sin_cupo" };
+    else {
+      report.geocode.lookups += 1;
+      try {
+        const geo = await geocodeOrderAddress(admin, {
+          order_id: row.order_id,
+          store_id: row.store_id,
+          address: row.address ?? null,
+          district: row.district ?? null,
+          province: row.province ?? null,
+          region: row.region ?? null,
+        }, { key: geocodeKey });
+        if (geo.kind === "ok") out = { coordinate: { value: `${geo.lat}, ${geo.lng}`, source: "google" } };
+        else if (geo.kind === "rejected") out = { miss: "sin_edificio" };
+        else if (geo.reason === "sin_cupo") {
+          report.geocode.quotaHit = true;
+          out = { miss: "sin_cupo" };
+        } else if (geo.reason === "sin_direccion") out = { miss: "sin_direccion" };
+        else if (geo.reason === "sin_clave") out = { miss: "apagado" };
+        else out = { miss: "error" };
+      } catch {
+        out = { miss: "error" };
+      }
+    }
+    // Un error o el cupo se vuelven a probar en la pasada siguiente, no en esta.
+    located.set(row.order_id, out);
+    return out;
   };
 
   outer: for (const { orgId, modes } of orgModes) {
@@ -610,6 +722,7 @@ export async function runLimaRetryAuto(
     const org: LimaRetryAutoOrgReport = { orgId, dailyCap, capLeft: dailyCap, items: [], released: [], held: [] };
     report.orgs.push(org);
     try {
+      const geocodeKey = !opts.noGeocode && geocodeOnByOrg.get(orgId) ? await geocodeKeyFor(admin, orgId, errors) : null;
       const { data: stores, error: storesError } = await admin
         .from("stores").select("id").eq("org_id", orgId).eq("status", "active");
       if (storesError) throw new Error(`No se pudieron leer las tiendas: ${storesError.message}`);
@@ -628,7 +741,7 @@ export async function runLimaRetryAuto(
           variant, mode, outcome: "atendiendo", transport,
         };
 
-        // --- Vista previa: todo como simulación, sin escribir nada. --------
+        // --- Vista previa: todo como simulación; solo la caché de Google. ---
         if (preview) {
           org.items.push(item);
           if (c.unsaved) {
@@ -640,7 +753,13 @@ export async function runLimaRetryAuto(
             item.detail = "Caso tomado en Repro Lima.";
             continue;
           }
-          const result = await runCore(c, true);
+          const where = await locate(c, geocodeKey);
+          if ("miss" in where) {
+            item.outcome = "sin_ubicacion";
+            item.detail = retryNoLocationDetail(where.miss);
+            continue;
+          }
+          const result = await runCore(c, true, where.coordinate);
           item.outcome = result.outcome;
           item.detail = retryResultDetail(result);
           continue;
@@ -661,9 +780,15 @@ export async function runLimaRetryAuto(
           } else if (c.claimed) {
             item.detail = "Caso tomado en Repro Lima.";
           } else {
-            const result = await runCore(c, true);
-            item.outcome = result.outcome;
-            item.detail = retryResultDetail(result);
+            const where = await locate(c, geocodeKey);
+            if ("miss" in where) {
+              item.outcome = "sin_ubicacion";
+              item.detail = retryNoLocationDetail(where.miss);
+            } else {
+              const result = await runCore(c, true, where.coordinate);
+              item.outcome = result.outcome;
+              item.detail = retryResultDetail(result);
+            }
           }
           const { error } = await admin.from(LOG).upsert({
             ...base, mode: "simulacion", outcome: item.outcome, detail: item.detail ?? null,
@@ -714,6 +839,7 @@ export async function runLimaRetryAuto(
         // nada se creó todavía, y un «en curso» olvidado contaría para el tope
         // todo el día y dejaría sin revisar al resto de la organización.
         let fresh: Candidate;
+        let coordinate: GoogleCoordinate | null;
         try {
           if (c.claimed) {
             item.outcome = "atendiendo";
@@ -752,6 +878,16 @@ export async function runLimaRetryAuto(
             continue;
           }
           fresh = recheck.candidate;
+          // La ubicación, con la fila de ahora. Sin ella no se cotiza: queda
+          // `sin_ubicacion` (se reintenta y no cuenta), sin aviso ni hecho.
+          const where = await locate(fresh, geocodeKey);
+          if ("miss" in where) {
+            item.outcome = "sin_ubicacion";
+            item.detail = retryNoLocationDetail(where.miss);
+            await finish();
+            continue;
+          }
+          coordinate = where.coordinate;
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           await release(message);
@@ -761,7 +897,7 @@ export async function runLimaRetryAuto(
 
         let attempted: RetryApproveResult;
         try {
-          attempted = await runCore(fresh, false);
+          attempted = await runCore(fresh, false, coordinate);
         } catch (e) {
           // Pudo haber pasado el POST: no se suelta. Queda en duda (cuenta
           // para el tope y no se repite hoy) y avisa como «revisar».

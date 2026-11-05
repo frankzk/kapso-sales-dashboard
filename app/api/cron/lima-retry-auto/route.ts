@@ -11,12 +11,15 @@ export const maxDuration = 300;
 // Cada hora de 8:23 a 13:23 de Lima, antes del corte de Aliclik: las variantes
 // en simulación dejan su renglón en el log y las activas crean la guía como
 // «Aprobar», con tope diario. `?dry=1` es la vista previa: cotiza todas las
-// variantes como si estuvieran en simulación y no escribe nada.
+// variantes como si estuvieran en simulación y no escribe nada. Tampoco busca
+// direcciones en Google (`noGeocode`): no gasta el cupo diario que comparten
+// Chatby y los reintentos ni llena la caché `order_geocodes`, aunque corra en
+// un preview con la clave copiada. El «Simular ahora» del panel sí la usa.
 export async function GET(req: NextRequest) {
   if (!internalAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const dry = req.nextUrl.searchParams.get("dry") === "1";
   // Un preview no emite guías de producción aunque tenga las credenciales copiadas.
   if (!dry && process.env.VERCEL_ENV !== "production") return NextResponse.json({ skipped: "not_production" });
-  const report = await runLimaRetryAuto(createAdminSupabase(), { preview: dry });
+  const report = await runLimaRetryAuto(createAdminSupabase(), { preview: dry, noGeocode: dry });
   return NextResponse.json(report, { status: report.error ? 502 : 200 });
 }
