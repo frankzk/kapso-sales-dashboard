@@ -3514,6 +3514,75 @@ sin tope de antigüedad. Reglas:
           agencia.
       - **El cuadre falla cerrado.** Si no se puede leer, la pantalla lo dice en
         vez de pintar «0 por recibir».
+      - **Contador por tanda, línea de Grupo GF y tres resultados (05-11-2026).**
+        La cámara decía «Recibidas 346 de 608 · faltan 262»: solo Tanders y
+        Shalom, contra un atraso acumulado (181 de Tanders sin escanear desde
+        septiembre), así que casi no se movía; las cajas de Grupo GF —26 ese
+        día, el grueso del trabajo— nunca sumaban; y una caja escaneada dos
+        veces («KP201949-S01 ya estaba recibido en oficina…», recibida a las
+        16:45) salía en el mismo verde que una nueva, y quien escaneaba creía
+        que se había perdido.
+        - **Cada escaneo dice qué fue** (`reception.outcome` junto al aviso de
+          siempre, `lib/returns-scan-outcome.ts`): **nueva** —este escaneo
+          escribió la recepción: Tanders o Shalom recibida, Grupo GF recibida en
+          oficina, también la reemplazada a stock y la del anulado a
+          inventario—; **repetida** —ya estaba recibida: `return_received` de
+          Tanders o Shalom, con la hora de la primera recepción; en Grupo GF
+          `returned_to_office` o el `return_received` que deja la rama a stock
+          (la reemplazada, el anulado en la tienda, la que ya constaba
+          devuelta), con la hora de la ÚLTIMA recepción, porque una salida de
+          Grupo GF conserva su id de vuelta en vuelta y la que se repite es la
+          de esta vuelta—. Una caja de Grupo GF que ya constaba devuelta y se
+          escanea otra vez es repetida, no error. Dos lecturas a la vez de la
+          misma caja (dos teléfonos, un reintento): la que pierde es repetida si
+          la recepción de la otra ya está a la vista; si no, pide volver a
+          escanear (Tanders ya no escribe un segundo evento cuando su sello no
+          se escribió). **Informativa** —un aviso que no es ninguna («nunca
+          salió en Kapta»)—. Un error sigue siendo error. No cambia qué se
+          escribe.
+        - **Colores.** Nueva en verde, «KP… · recibida ✓»; repetida en ámbar,
+          «KP… · ya estaba recibida (hoy 16:45) · no suma»; informativa en
+          neutro (igual en el aviso de la página, la lista y la cámara); error
+          en rojo. Una caja que sí se recibió pero trae un aviso rojo (anulado
+          solo en Kapta) suma y se pinta en rojo; una informativa con aviso
+          rojo no recibió nada y cuenta como error. En el teléfono, la repetida
+          vibra con dos pulsos y el error con dos largos (mejor esfuerzo, una
+          vez por resultado: reabrir la cámara no vuelve a vibrar).
+        - **«Esta tanda»** cuenta lo escaneado desde que se abrió la pantalla,
+          cada lectura una vez: «Esta tanda: N recibidas · M repetidas · K con
+          error · J sin devolución» (lo que es 0 no se dice, salvo las
+          recibidas; «sin devolución» son las informativas). Es lo grande de la
+          cámara; no tiene meta, así que la cámara no se cierra sola (ni con el
+          atraso histórico): se cierra con «Listo». La página enseña la misma
+          cuenta y las últimas 30 lecturas con su color. Si la red se corta
+          después de que el servidor recibió la caja, el reintento contesta
+          «ya estaba recibida»: como esa recepción es de esta tanda, la lectura
+          cortada pasa a recibida en vez de contar un error y una repetida. Una
+          lectura de la cámara que llega mientras otra se procesa se encola, no
+          se pierde, y el cuadre se recarga en segundo plano.
+        - **Debajo, el cuadre por courier.** «Grupo GF: X recibidas hoy · Z
+          siguen en cajas (W de días anteriores)»: dos cifras y no «X de Y»,
+          porque lo que sigue en cajas no tiene fecha tope y no es la meta de
+          hoy. Z son los «No entregado» que siguen en la caja de un motorizado
+          —la misma lista que «Devoluciones» de Despacho del día—, acotados a
+          las tiendas que el usuario ve; W, los de cajas de días anteriores
+          (día Lima). X, las salidas recibidas en oficina hoy (día Lima) en
+          cualquier pantalla: los `returned_to_office` de `dispatch_events`,
+          que `gf_return_to_office` escribe SIEMPRE, también en la rama a stock
+          o inventario (que en `order_events` solo deja un `return_received`, y
+          no siempre). No cuenta «Mover» en la oficina (`reclaimed_in_office`):
+          ese paquete nunca salió con el motorizado. Y «Tanders y Shalom
+          (pendientes históricos): A de B · faltan C», el cuadre de siempre. La
+          página suma una tarjeta de Grupo GF con lo que sigue en cajas, sin
+          datos del cliente. Como el resto del cuadre, una lectura que falla lo
+          dice en vez de pintar «0».
+        - Despacho del día → «Devoluciones» pinta en ámbar la caja que ya
+          estaba recibida en oficina, con «sale de la lista»: no se recibe otra
+          vez, pero ya está en la oficina y cuenta en «Devueltos X de N».
+        - No crea estados, subetapas ni tipos de evento; `MOM_RESOLUTION_VERSION`
+          no cambia. Pruebas en `test/returns-scan-outcome.test.ts`,
+          `test/returns-reception-data.test.ts`, `test/gf-returns-scan.test.ts` y
+          `test/shalom-return-scan.test.ts`.
   - **EL MISMO COMPROBANTE NO COBRA DOS PEDIDOS.** Si el nº de operación ya
     quedó registrado en otra guía, la comprobación sale **`rechazado`** por
     `operacion_duplicada` aunque todo lo demás cuadre —buen medio, buena
@@ -15516,6 +15585,14 @@ Solo la anulación en la tienda termina la venta: un anulado que vuelve se
 recibe igual —la caja tiene que salir de la del motorizado— y, desde el
 04-11-2026, va a inventario (abajo). Aliclik y los demás siguen recibiéndose
 desde el Master. Pruebas en `test/gf-returns-scan.test.ts`.
+
+Desde el 05-11-2026 cada escaneo de esa tabla dice además qué fue
+(`gfReceptionOutcome`): recibirlo es una recepción **nueva**; «ya estaba
+recibido en oficina», los «ya se recibió» de la reemplazada y del anulado, y la
+que ya constaba devuelta escaneada otra vez son **repetidas** —en ámbar, «no
+suma», con la hora de la última recepción (`returned_to_office` o
+`return_received`)—, y «nunca salió en Kapta» es **informativa**. La pantalla
+cuenta la tanda y enseña «Grupo GF: X recibidas hoy · Z siguen en cajas» (§9.4).
 
 **Un pedido anulado en la tienda que vuelve va a inventario (04-11-2026,
 decisión del owner, 0307).** Hasta entonces la caja de Grupo GF de un pedido

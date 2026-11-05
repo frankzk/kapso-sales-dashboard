@@ -24,7 +24,9 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
   const [busy, setBusy] = useState(false);
   const receiving = useRef(false);
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [lines, setLines] = useState<{ code: string; ok: boolean; text: string }[]>([]);
+  // `repeat`: ya estaba recibida en oficina; en ámbar (05-11-2026). Sí sale de
+  // la lista —y cuenta en «Devueltos X de N»—, porque la caja ya está aquí.
+  const [lines, setLines] = useState<{ code: string; ok: boolean; text: string; repeat?: boolean }[]>([]);
   const [returned, setReturned] = useState<Set<string>>(new Set());
   // El total se fija al abrir: la lista se refresca y no debe cambiar la meta.
   const [total] = useState(pending.length);
@@ -41,7 +43,16 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
       // La caja reemplazada dice que se desarma; el resto, lo de siempre.
       const toStock = row?.replaced || /reemplazada/i.test(res.notice ?? "");
       const repeatReceipt = /ya estaban? recibid/i.test(res.notice ?? "");
-      setLines((cur) => [{ code: name, ok: !res.error, text: res.error ?? ((toStock || repeatReceipt) && res.notice ? res.notice : "Devuelto a la oficina") }, ...cur].slice(0, 50));
+      // Repetida solo si el aviso EMPIEZA por «ya estaba recibida»: este
+      // escaneo no recibió nada nuevo. La caja ya está en la oficina, así que
+      // sale de la lista (otra persona la recibió en otra pantalla).
+      const repeat = !res.error && /^\d+ salidas? ya estaban? recibidas? en oficina/i.test(res.notice ?? "");
+      setLines((cur) => [{
+        code: name,
+        ok: !res.error,
+        repeat,
+        text: res.error ?? (repeat && res.notice ? `${res.notice} · sale de la lista` : (toStock || repeatReceipt) && res.notice ? res.notice : "Devuelto a la oficina"),
+      }, ...cur].slice(0, 50));
       if (!res.error || res.receivedShipmentIds?.length) {
         // Por QR: la fila de ESA salida. Por número de pedido, solo si el
         // pedido tiene una sola caja por recibir (si tiene dos, el servidor
@@ -72,7 +83,7 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
           {lines.map((l, i) => (
             <li key={`${l.code}:${i}`} className="flex items-center gap-2 px-3 py-2">
               <span className="font-semibold text-ink-900">{l.code}</span>
-              <Badge tone={l.ok ? "ok" : "crit"} className="min-w-0">{l.text}</Badge>
+              <Badge tone={l.repeat ? "warn" : l.ok ? "ok" : "crit"} className="min-w-0">{l.text}</Badge>
             </li>
           ))}
         </ul>
@@ -123,7 +134,7 @@ export function ReturnsScanner({ orgId, pending }: { orgId: string; pending: Pen
         onScan={(value) => void run(value)}
         continuous
         progress={{ done: total - left.length, total, verb: "Devueltos" }}
-        status={last ? { ok: last.ok, text: `${last.code}: ${last.text}` } : null}
+        status={last ? { ok: last.ok, warn: last.repeat, text: `${last.code}: ${last.text}` } : null}
       />
     </div>
   );

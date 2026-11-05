@@ -455,9 +455,11 @@ export function Skeleton({ className }: { className?: string }) {
   return <div aria-hidden className={cn("animate-pulse rounded-lg bg-wash", className)} />;
 }
 
-const BANNER: Record<"ok" | "info" | "warn" | "crit", { wash: string; fg: string; icon: Icon }> = {
+const BANNER: Record<"ok" | "info" | "neutral" | "warn" | "crit", { wash: string; fg: string; icon: Icon }> = {
   ok: { wash: "bg-ok-wash", fg: "text-ok-fg", icon: IconCheckCircle },
   info: { wash: "bg-info-wash", fg: "text-info-fg", icon: IconInfo },
+  // Un aviso que no es bueno ni malo (Devoluciones: «nunca salió en Kapta»).
+  neutral: { wash: "bg-wash", fg: "text-ink-900", icon: IconInfo },
   warn: { wash: "bg-warn-wash", fg: "text-warn-fg", icon: IconAlert },
   crit: { wash: "bg-crit-wash", fg: "text-crit-fg", icon: IconAlert },
 };
