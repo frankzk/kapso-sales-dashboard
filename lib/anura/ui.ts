@@ -99,7 +99,7 @@ export function anuraEndedFollowUp(
 
 /**
  * Los pasos en el panel de Anura. Los mismos, en el mismo orden y con las
- * mismas palabras, que MOM §8.6 «Configuración (una vez)» (lo comprueba
+ * mismas palabras, que MOM §8.7 «Configuración (una vez)» (lo comprueba
  * `test/anura-mom.test.ts`). Lo que va entre comillas invertidas se muestra
  * como código.
  */

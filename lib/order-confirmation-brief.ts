@@ -41,6 +41,11 @@ export interface PriorOrderSnapshot {
   last_courier?: string | null;
   delivered_courier?: string | null;
   attempt_count?: number | null;
+  /**
+   * Cuándo salió, si salió. Separa el anulado que costó flete del que se cayó
+   * antes de salir (MOM §8.6, `lib/aliclik-route-risk.ts`).
+   */
+  dispatched_at?: string | null;
   /** Resumen legible de las líneas del pedido: «Nattokinase ×3». */
   products?: string | null;
 }

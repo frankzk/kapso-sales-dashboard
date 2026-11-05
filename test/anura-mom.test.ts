@@ -1,5 +1,5 @@
-// «Llamar con Anura» en el MOM (docs/mom/master-pedidos-v1.md §8.6, fase 1,
-// 05-11-2026): la sección sigue a §8.5, cita los textos y los números del
+// «Llamar con Anura» en el MOM (docs/mom/master-pedidos-v1.md §8.7, fase 1,
+// 05-11-2026): la sección sigue a §8.6, cita los textos y los números del
 // código tal cual (lib/anura/*), la tabla de estados es la máquina de
 // estados, la llamada es un hecho y no una gestión, la grabación se copia
 // porque el enlace de Anura vence, el aviso responde 401 solo a un token
@@ -59,7 +59,7 @@ function raw(start: string, end: string): string {
   return MOM.slice(from, to);
 }
 
-const S86_RAW = raw("### 8.6 Llamar con Anura (fase 1, 05-11-2026)", "\n## 9. Lima");
+const S86_RAW = raw("### 8.7 Llamar con Anura (fase 1, 05-11-2026)", "\n## 9. Lima");
 const s = flat(S86_RAW);
 const S85 = flat(raw("### 8.5 Llamar desde la computadora (11-10-2026)", "### 8.6 "));
 const S15 = flat(raw("## 15. Responsables actuales", "## 16. "));
@@ -67,14 +67,16 @@ const S16 = flat(raw("## 16. Permisos de alto riesgo", "### 16.1 "));
 const S21 = flat(raw("## 21. Pendientes posteriores", "## 22. "));
 
 describe("dónde va la sección", () => {
-  it("§8.6 sigue a §8.5 y va antes de §9", () => {
+  it("§8.7 sigue a §8.6 y va antes de §9", () => {
     const i85 = MOM.indexOf("### 8.5 Llamar desde la computadora");
-    const i86 = MOM.indexOf("### 8.6 Llamar con Anura");
+    const i86 = MOM.indexOf("### 8.7 Llamar con Anura");
+    const i86b = MOM.indexOf("### 8.6 ");
     const i9 = MOM.indexOf("\n## 9. Lima");
     expect(i85).toBeGreaterThan(0);
-    expect(i86).toBeGreaterThan(i85);
+    expect(i86b).toBeGreaterThan(i85);
+    expect(i86).toBeGreaterThan(i86b);
     expect(i9).toBeGreaterThan(i86);
-    expect(MOM.match(/^### 8\.6 /gm)).toHaveLength(1);
+    expect(MOM.match(/^### 8\.7 /gm)).toHaveLength(1);
   });
 
   it("tiene los apartados de §8.5 y los suyos", () => {
@@ -454,8 +456,8 @@ describe("permisos", () => {
   it("sin permiso nuevo: master.edit para llamar y stores.manage para Ajustes", () => {
     expect(s).toContain("Llamar pide «Gestionar pedidos» (`master.edit`), como §8.5.");
     expect(s).toContain("pide «Administrar tiendas» (`stores.manage`) en la organización de la tienda, lo mismo que Ajustes entero. No hay permiso nuevo.");
-    expect(S16).toContain("Telefonía Anura (05-11-2026, §8.6): **sin permiso nuevo**.");
-    expect(S15).toContain("| Anexos de Anura, URL del aviso y llamada de prueba (§8.6) | Administración (`stores.manage`) |");
+    expect(S16).toContain("Telefonía Anura (05-11-2026, §8.7): **sin permiso nuevo**.");
+    expect(S15).toContain("| Anexos de Anura, URL del aviso y llamada de prueba (§8.7) | Administración (`stores.manage`) |");
     // Lo mismo dice el servidor.
     const server = read("lib/anura/server.ts");
     expect(server).toContain('perms.can("master.edit")');
@@ -464,7 +466,7 @@ describe("permisos", () => {
 });
 
 describe("«Llamar desde Kapta» (Telnyx) se queda", () => {
-  it("§8.5 sigue igual y §8.6 lo dice", () => {
+  it("§8.5 sigue igual y §8.7 lo dice", () => {
     expect(S85).toContain("«Llamar desde Kapta», en la cabecera de la ficha");
     expect(s).toContain("La llamada por Telnyx desde la computadora (§8.5) sigue igual, al lado. Anura no la reemplaza en la fase 1.");
   });

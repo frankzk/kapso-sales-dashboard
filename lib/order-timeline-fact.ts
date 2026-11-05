@@ -76,6 +76,7 @@ const POR_KIND: Record<string, TimelineFact> = {
   anura_call: consulta("llamada"),
   confirmation_followup: consulta("programado"),
   aliclik_risk_exception: consulta("pago"),
+  aliclik_route_risk_exception: consulta("guia"),
   payment_recipient_exception: consulta("pago"),
 
   // Preparación (celeste): la guía o la salida existe.
@@ -207,7 +208,7 @@ export function timelineOriginLabel(t: Pick<TimelineEntry, "origin" | "source">)
   if (t.source === "woocommerce") return "WooCommerce";
   // La confirmación automática por Chatby (MOM §6.1, 01-11-2026).
   if (t.source === "chatby") return "Chatby";
-  // «Llamar con Anura» (MOM §8.6): el hecho lo escribe el aviso de Anura.
+  // «Llamar con Anura» (MOM §8.7): el hecho lo escribe el aviso de Anura.
   if (t.source === "anura") return "Anura";
   return t.source;
 }

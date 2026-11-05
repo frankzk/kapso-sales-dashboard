@@ -3,13 +3,27 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { cameraErrorMessage } from "@/lib/camera-error";
 import { CameraSessionError, startDispatchCamera } from "@/lib/dispatch-camera-session";
-import { scanProgressDone, scanProgressText, type ScanProgress } from "@/lib/scan-progress";
+import { scanFeedbackVibration, scanProgressDone, scanProgressText, type ScanProgress, type ScanStatusTone } from "@/lib/scan-progress";
 import { cn } from "@/components/ui";
 
 /** Un mismo QR leído dos veces seguidas en menos de esto se ignora. */
 const REPEAT_MS = 2500;
 /** Con todo confirmado, la cámara se cierra sola tras este tiempo. */
 const AUTO_CLOSE_MS = 1000;
+
+/** `status.tone` explícito (05-11-2026); sin él, el color de siempre por `ok` / `warn`. */
+const STATUS_TONE_CLASS: Record<ScanStatusTone, string> = {
+  ok: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  warn: "border-amber-200 bg-amber-50 text-amber-900",
+  neutral: "border-slate-200 bg-slate-50 text-slate-800",
+  crit: "border-red-200 bg-red-50 text-red-800",
+};
+
+const EXTRA_LINE_TONE: Record<"ok" | "warn" | "neutral", string> = {
+  ok: "text-emerald-800",
+  warn: "text-amber-900",
+  neutral: "text-slate-600",
+};
 
 export function DispatchCamera({
   open,
@@ -24,6 +38,8 @@ export function DispatchCamera({
   issues = [],
   title = "Escanear QR",
   hint,
+  extraLines,
+  feedback = null,
 }: {
   open: boolean;
   onClose: () => void;
@@ -41,7 +57,15 @@ export function DispatchCamera({
    * Última lectura: qué pasó con el código anterior, sin cerrar la cámara.
    * `warn`: se puede resolver aquí mismo con `statusAction` (ámbar).
    */
-  status?: { ok: boolean; text: string; warn?: boolean } | null;
+  status?: {
+    ok: boolean;
+    text: string;
+    warn?: boolean;
+    /** Color explícito (Devoluciones: nueva, repetida, aviso, error); manda sobre `ok` / `warn`. */
+    tone?: ScanStatusTone;
+    /** Debajo del texto, más pequeño: el aviso completo del servidor. */
+    detail?: string | null;
+  } | null;
   /**
    * Arreglo de la última lectura dentro del aviso, sin cerrar la cámara:
    * «Mover a esta caja» un paquete que está en la caja de otro (26-10-2026).
@@ -56,6 +80,17 @@ export function DispatchCamera({
   title?: string;
   /** Debajo del título; sin él, cómo apuntar. */
   hint?: string;
+  /**
+   * Líneas bajo el avance, más pequeñas (Devoluciones, 05-11-2026: «Grupo GF: …»
+   * y «Tanders y Shalom (pendientes históricos): …»). No cuentan para el cierre
+   * automático: ese solo lo decide `progress` con su total.
+   */
+  extraLines?: readonly { text: string; tone?: "ok" | "warn" | "neutral" }[];
+  /**
+   * El resultado de la última lectura para vibrar distinto (repetida, error).
+   * `key` cambia una vez por resultado: así no vuelve a vibrar en cada render.
+   */
+  feedback?: { key: string | number; tone: ScanStatusTone } | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   // Parent callbacks change after every scan; they must not reopen the camera.
@@ -67,6 +102,25 @@ export function DispatchCamera({
     const t = window.setTimeout(() => closeLatest(), AUTO_CLOSE_MS);
     return () => window.clearTimeout(t);
   }, [open, finished]);
+  // Mejor esfuerzo: sin vibración (iOS, escritorio) o si el navegador la
+  // rechaza, no pasa nada. Vibra una vez por resultado: reabrir la cámara con
+  // el mismo último resultado (o uno que llegó con la cámara cerrada) no vuelve
+  // a vibrar, porque su `key` ya se vio.
+  const feedbackKey = feedback?.key ?? null;
+  const feedbackTone = feedback?.tone ?? null;
+  const feedbackSeen = useRef(feedbackKey);
+  useEffect(() => {
+    if (feedbackKey === feedbackSeen.current) return;
+    feedbackSeen.current = feedbackKey;
+    if (!open || feedbackKey == null || !feedbackTone) return;
+    const pattern = scanFeedbackVibration(feedbackTone);
+    if (!pattern) return;
+    try {
+      if (typeof window.navigator.vibrate === "function") window.navigator.vibrate(pattern);
+    } catch {
+      // sin vibración
+    }
+  }, [open, feedbackKey, feedbackTone]);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
@@ -149,9 +203,10 @@ export function DispatchCamera({
         </div>
         <div role="status" aria-live="polite" aria-atomic="true" className={cn(
           "sticky top-0 z-10 border-b px-5 py-3 text-base font-semibold leading-snug break-words",
-          status ? (status.warn ? "border-amber-200 bg-amber-50 text-amber-900" : status.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800") : "border-slate-200 bg-slate-50 text-slate-600",
+          status ? (status.tone ? STATUS_TONE_CLASS[status.tone] : status.warn ? "border-amber-200 bg-amber-50 text-amber-900" : status.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800") : "border-slate-200 bg-slate-50 text-slate-600",
         )}>
           {status?.text ?? (pending > 0 ? "Lectura recibida" : "Apunta al QR del pedido para escanear.")}
+          {status?.detail && <p className="mt-1 text-sm font-normal">{status.detail}</p>}
           {status && statusAction && (
             <button
               type="button"
@@ -189,6 +244,11 @@ export function DispatchCamera({
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
                 <div className="h-full rounded-full bg-emerald-500 transition-[width]" style={{ width: `${progress.total ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0}%` }} />
               </div>
+            )}
+            {extraLines && extraLines.length > 0 && (
+              <ul className="mt-2 space-y-1 text-sm leading-snug break-words">
+                {extraLines.map((line) => <li key={line.text} className={EXTRA_LINE_TONE[line.tone ?? "neutral"]}>{line.text}</li>)}
+              </ul>
             )}
           </div>
         )}

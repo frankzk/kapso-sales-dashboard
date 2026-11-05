@@ -1588,6 +1588,12 @@ excepción con motivo de la escalera: no se confirma contra entrega ni sale
 ninguna guía hasta que el pago total esté validado. Para quien no está en la
 lista, la escalera sigue igual.
 
+**Y en Provincia COD, Aliclik puede quedar cerrado para el pedido (§8.6,
+owner 05-11-2026)**: si el cliente ya tuvo un despacho que no se entregó y
+ninguno entregado, o si el pedido se hizo de madrugada y va por su segundo día
+de gestión. Quedan Swayp/Fénix o la agencia con adelanto; se levanta con motivo
+escrito.
+
 ### 8.1 La ficha previa a la llamada
 
 Kapta arma esa revisión y la muestra dentro de la gestión de confirmación, sin
@@ -1868,7 +1874,67 @@ la clienta ve el número de la empresa, no el de la asesora.
   (`Permissions-Policy: microphone=(self)`) y la conexión a
   `wss://rtc.telnyx.com`.
 
-### 8.6 Llamar con Anura (fase 1, 05-11-2026)
+### 8.6 Aliclik cerrado para el pedido por riesgo de no entrega (05-11-2026)
+
+**Decisión del owner (05-11-2026).** En **Provincia COD**, dos grupos de
+pedidos ya no salen por Aliclik: les quedan **Swayp/Fénix** (contraentrega a
+domicilio, sin costo por intento fallido) o la **agencia con su adelanto**. Se
+cierra solo Aliclik, por la misma razón que el §8.2: es la única ruta que nos
+cobra el intento no entregado (~S/ 18 de ida y S/ 10 de vuelta, cotizado). La
+cobertura del pedido **no cambia**: sigue siendo Provincia COD, porque la
+cobertura dice dónde está el destino y no el riesgo del cliente.
+
+**Los dos grupos.** Kenku, Provincia COD, medido en abr–ago 2026 y contrastado
+en sep–nov 2026 (base: ~69 % entregado sobre cerrados). Se probaron 4.930
+cruces de dos y tres variables. Casi todos los que parecían bajísimos
+(departamento, producto, dirección sin número) volvían a lo normal en el
+período siguiente. Solo estos dos se sostuvieron:
+
+| Grupo | abr–ago | sep–nov |
+|---|---|---|
+| El cliente ya tuvo un pedido que **salió y no se entregó**, y **ninguno entregado** | 35/76 (46 %) | 41/76 (54 %) |
+| Pedido hecho **de madrugada** (00:00–05:59, Lima) que va por su **2.º día de gestión o más** sin guía | 3/14 (21 %) | 14/43 (33 %) |
+
+- **«Salió y no se entregó»** es `devuelto`, o `anulado` con fecha de despacho.
+  El anulado antes de salir no cuenta: no costó flete y no dice si el cliente
+  recibe. Un pedido que sigue en curso todavía no es un fallo. Se cuentan los
+  otros pedidos del mismo teléfono, los mismos de la ficha del §8.1.
+- **Los días de gestión** son los de `confirmation_day_count`, la misma cuenta
+  de la mesa. Solo valen **antes de la primera salida**: un pedido que ya salió
+  suma días de reprogramación, que no son lo medido, y la regla de madrugada no
+  lo toca.
+- **Cada señal sola no cierra nada.** De madrugada solo, o dos días de gestión
+  solos, se entrega ~55 %. La regla las exige juntas.
+- **Otro eje que el §8.2 y el §41.** El §8.2 cierra Aliclik para siempre por
+  rechazos en la puerta; la lista del §41 exige el pago total. Esta regla es
+  del **pedido**, no del cliente para siempre: el próximo pedido se vuelve a
+  evaluar.
+
+**Se levanta con motivo escrito**, como la escalera de adelanto del §8: con
+76 y 57 pedidos de evidencia, una persona puede saber algo que los datos no
+dicen. El motivo (8 caracteres o más) se escribe en el panel de Aliclik y queda
+en la línea de tiempo como `aliclik_route_risk_exception` («Aliclik pese al
+riesgo de no entrega»), con las señales del pedido en `payload.reasons`. El
+automático (guía del día programado, Chatby, reintentos) no escribe motivos por
+nadie: a él lo para siempre, y el pedido queda para una persona.
+
+**Dónde se ve.**
+
+- **Registrar intento** (mesa de confirmación). El aviso rojo «Aliclik cerrado
+  para este pedido» lleva el motivo y le dice a la asesora qué ofrecer
+  (Swayp/Fénix o agencia con adelanto) **antes** de prometer una ruta. Un
+  pedido de madrugada que todavía va en su primer día lleva una línea gris:
+  si no queda confirmado hoy, desde el segundo día se cierra Aliclik.
+- **Crear guía en Aliclik.** El mismo aviso, con el campo «Por qué sale por
+  Aliclik». Sin motivo, «Crear» se apaga y dice por qué.
+- **La creación de la guía** (`aliclikCreateGates`) lo vuelve a comprobar en el
+  servidor, después del cierre por rechazos en la puerta. Es una regla de Kapta
+  (`kaptaBlock`), no un error de lectura.
+
+Código: `lib/aliclik-route-risk.ts`. Prueba:
+`test/aliclik-route-risk.test.ts`.
+
+### 8.7 Llamar con Anura (fase 1, 05-11-2026)
 
 Pedido por el owner: la asesora llama a la clienta desde la ficha del pedido
 por la central de Anura de la empresa, y la clienta ve un número peruano. Se
@@ -2587,7 +2653,9 @@ creó la guía.
     volver a la pestaña se relee si lo leído tiene un minuto o más. Si cambió
     el día de Lima, se relee a cualquier hora, aunque la pestaña no se haya
     ido: la estación pasa la noche abierta, y el miércoles «Mañana · miércoles»
-    y «Hoy · martes» serían falsos.
+    y «Hoy · martes» serían falsos. Por lo mismo, un día de despacho se relee
+    una vez al pasar las 07:00 si lo leído es de antes: a esa hora la falta de
+    «Hoy» sin la entrega abierta cambia de texto (05-11-2026, abajo).
   - Si no carga: «No pudimos cargar «Swayp por salir».», con «Reintentar», y
     la estación de arriba sigue funcionando. Mientras llega la primera
     lectura, las dos zonas en esqueleto («Cargando «Swayp por salir»…» para
@@ -2772,7 +2840,15 @@ creó la guía.
   crítica: «Swayp pasa hacia las 07:00: ármala y entrégala en «Entregar a
   Swayp», o márcala «No sale» con su motivo.», con su renglón de dónde está la
   caja (aunque Swayp ya la haya cargado: la entrega la arma al escanearla), y la
-  cifra «Faltan» de «Hoy» en rojo. En «Próximo», la que Swayp ya tomó antes de
+  cifra «Faltan» de «Hoy» en rojo. Desde las 07:00 de Lima (la hora al leer el
+  lote, «Leído 07:05»), si nadie abrió la entrega, la falta dice «Pasó la hora
+  de Swayp (07:00) sin entrega registrada. Si el chofer aún no se fue,
+  entrégala en «Entregar a Swayp» o márcala «No sale»; si se fue sin ella,
+  avisa a Seguimiento para que cambie la fecha en Swayp o anule la guía hoy.»
+  (owner, 05-11-2026: la captura de esa mañana seguía diciendo «Swayp pasa
+  hacia las 07:00…» con Swayp ya ido y KP200244-S02 en su «Reparto» sin la
+  caja; «si, haz los dos»). Con la entrega abierta se sigue entregando: la falta
+  no cambia; con «Swayp no vino», la falta no dice nada (lo dice la nota). En «Próximo», la que Swayp ya tomó antes de
   su día sigue diciendo «No se armó y Swayp ya la tomó en su sistema: si la caja
   sigue aquí, avisa hoy a Seguimiento.».
 
@@ -3012,7 +3088,8 @@ paso de cotejo? como cuando cotejamos la caja de los motorizados en grupo gf».
   recoge hacia las 07:00. Entrega sin abrir.», «Entrega en curso: 5 de 8.», el
   resumen del cierre o «Swayp no vino». Por fila: «Entregada a Swayp 07:04 ·
   escaneó Yelitza» o «No salió: <motivo>». Las alertas van por estado, nunca
-  por hora:
+  por una hora de Swayp (la única hora que cuenta es la del reloj de Kapta para
+  la falta sin entrega abierta, arriba en «La zona «Hoy»»):
   - «No sale» y Swayp en 4, 5 o 6: «Swayp la tiene en reparto y la caja no
     salió: Seguimiento cambia la fecha o anula la guía hoy, o Swayp reportará
     que no llegó.» (en rojo);
@@ -3040,9 +3117,32 @@ guardados como 03:19:37Z, 05:49:11Z, 10:25:52Z y 17:38:01Z. Desde el
 (UTC−5), traigan o no una «Z»; respeta un desfase explícito, un día suelto es
 la medianoche de Lima, y si leída como Lima una fecha quedara en el futuro
 (Swayp habría corregido su API) se lee tal cual viene. El webhook no trae
-fechas (usa la hora de llegada) y no cambia. Lo guardado antes sigue con 5 h
-de menos: corregirlo es una escritura en la base, pendiente del owner. Los
-textos que decían «pasada la medianoche» ya se corrigieron el 04-11-2026.
+fechas (usa la hora de llegada) y no cambia. Los textos que decían «pasada la
+medianoche» ya se corrigieron el 04-11-2026.
+
+Lo guardado antes sigue con 5 h de menos, y se queda así: el owner decidió no
+corregirlo (05-11-2026). Son 902 eventos «Swayp: …» de la Actividad (139 caen
+el día anterior: los de 00:00 a 04:59 de Lima se ven entre las 19:00 y las
+23:59) y 1.115 horas de 378 salidas Swayp de 373 pedidos
+(`custody_transferred_at`, `dispatched_at`, `out_for_delivery_at` y
+`closed_at`), del 30-09 al 04-11-2026. Ante el conteo, el owner preguntó «es
+realmente necesario?» y aprobó dejarlo así («si, haz los dos»):
+
+- las duraciones entre dos horas de Swayp salen bien, porque todas llevan el
+  mismo desfase; solo se descuadran frente a una hora de Kapta (la de armado,
+  por ejemplo);
+- la etapa del Master la deciden los estados de Swayp, no sus horas. Las horas
+  solo cuentan en las ventanas de días (los 7 o 21 días para recuperar), y ahí
+  el plazo se cruza a lo más 5 h antes;
+- corregirlo era escribir unos 2.000 valores en producción y recalcular esos
+  373 pedidos.
+
+Si algún día hace falta medir a Swayp contra la operación con ese historial
+(de la caja armada a la recogida, por ejemplo), el criterio ya probado es:
+una hora es de Swayp si viene al segundo exacto (Kapta escribe milésimas) y se
+guardó al menos 5 h después de lo que dice; a esas se les suman 5 h y se
+recalcula el Master de sus pedidos. Las horas de Kapta y las que llegaron
+desde el arreglo no se tocan.
 
 **Qué no hace todavía.** No cambia el estado ni la custodia que reporta
 Swayp (E3): una caja «No sale» sigue como Swayp la tenga, y Kapta avisa. No
@@ -3680,6 +3780,75 @@ sin tope de antigüedad. Reglas:
           agencia.
       - **El cuadre falla cerrado.** Si no se puede leer, la pantalla lo dice en
         vez de pintar «0 por recibir».
+      - **Contador por tanda, línea de Grupo GF y tres resultados (05-11-2026).**
+        La cámara decía «Recibidas 346 de 608 · faltan 262»: solo Tanders y
+        Shalom, contra un atraso acumulado (181 de Tanders sin escanear desde
+        septiembre), así que casi no se movía; las cajas de Grupo GF —26 ese
+        día, el grueso del trabajo— nunca sumaban; y una caja escaneada dos
+        veces («KP201949-S01 ya estaba recibido en oficina…», recibida a las
+        16:45) salía en el mismo verde que una nueva, y quien escaneaba creía
+        que se había perdido.
+        - **Cada escaneo dice qué fue** (`reception.outcome` junto al aviso de
+          siempre, `lib/returns-scan-outcome.ts`): **nueva** —este escaneo
+          escribió la recepción: Tanders o Shalom recibida, Grupo GF recibida en
+          oficina, también la reemplazada a stock y la del anulado a
+          inventario—; **repetida** —ya estaba recibida: `return_received` de
+          Tanders o Shalom, con la hora de la primera recepción; en Grupo GF
+          `returned_to_office` o el `return_received` que deja la rama a stock
+          (la reemplazada, el anulado en la tienda, la que ya constaba
+          devuelta), con la hora de la ÚLTIMA recepción, porque una salida de
+          Grupo GF conserva su id de vuelta en vuelta y la que se repite es la
+          de esta vuelta—. Una caja de Grupo GF que ya constaba devuelta y se
+          escanea otra vez es repetida, no error. Dos lecturas a la vez de la
+          misma caja (dos teléfonos, un reintento): la que pierde es repetida si
+          la recepción de la otra ya está a la vista; si no, pide volver a
+          escanear (Tanders ya no escribe un segundo evento cuando su sello no
+          se escribió). **Informativa** —un aviso que no es ninguna («nunca
+          salió en Kapta»)—. Un error sigue siendo error. No cambia qué se
+          escribe.
+        - **Colores.** Nueva en verde, «KP… · recibida ✓»; repetida en ámbar,
+          «KP… · ya estaba recibida (hoy 16:45) · no suma»; informativa en
+          neutro (igual en el aviso de la página, la lista y la cámara); error
+          en rojo. Una caja que sí se recibió pero trae un aviso rojo (anulado
+          solo en Kapta) suma y se pinta en rojo; una informativa con aviso
+          rojo no recibió nada y cuenta como error. En el teléfono, la repetida
+          vibra con dos pulsos y el error con dos largos (mejor esfuerzo, una
+          vez por resultado: reabrir la cámara no vuelve a vibrar).
+        - **«Esta tanda»** cuenta lo escaneado desde que se abrió la pantalla,
+          cada lectura una vez: «Esta tanda: N recibidas · M repetidas · K con
+          error · J sin devolución» (lo que es 0 no se dice, salvo las
+          recibidas; «sin devolución» son las informativas). Es lo grande de la
+          cámara; no tiene meta, así que la cámara no se cierra sola (ni con el
+          atraso histórico): se cierra con «Listo». La página enseña la misma
+          cuenta y las últimas 30 lecturas con su color. Si la red se corta
+          después de que el servidor recibió la caja, el reintento contesta
+          «ya estaba recibida»: como esa recepción es de esta tanda, la lectura
+          cortada pasa a recibida en vez de contar un error y una repetida. Una
+          lectura de la cámara que llega mientras otra se procesa se encola, no
+          se pierde, y el cuadre se recarga en segundo plano.
+        - **Debajo, el cuadre por courier.** «Grupo GF: X recibidas hoy · Z
+          siguen en cajas (W de días anteriores)»: dos cifras y no «X de Y»,
+          porque lo que sigue en cajas no tiene fecha tope y no es la meta de
+          hoy. Z son los «No entregado» que siguen en la caja de un motorizado
+          —la misma lista que «Devoluciones» de Despacho del día—, acotados a
+          las tiendas que el usuario ve; W, los de cajas de días anteriores
+          (día Lima). X, las salidas recibidas en oficina hoy (día Lima) en
+          cualquier pantalla: los `returned_to_office` de `dispatch_events`,
+          que `gf_return_to_office` escribe SIEMPRE, también en la rama a stock
+          o inventario (que en `order_events` solo deja un `return_received`, y
+          no siempre). No cuenta «Mover» en la oficina (`reclaimed_in_office`):
+          ese paquete nunca salió con el motorizado. Y «Tanders y Shalom
+          (pendientes históricos): A de B · faltan C», el cuadre de siempre. La
+          página suma una tarjeta de Grupo GF con lo que sigue en cajas, sin
+          datos del cliente. Como el resto del cuadre, una lectura que falla lo
+          dice en vez de pintar «0».
+        - Despacho del día → «Devoluciones» pinta en ámbar la caja que ya
+          estaba recibida en oficina, con «sale de la lista»: no se recibe otra
+          vez, pero ya está en la oficina y cuenta en «Devueltos X de N».
+        - No crea estados, subetapas ni tipos de evento; `MOM_RESOLUTION_VERSION`
+          no cambia. Pruebas en `test/returns-scan-outcome.test.ts`,
+          `test/returns-reception-data.test.ts`, `test/gf-returns-scan.test.ts` y
+          `test/shalom-return-scan.test.ts`.
   - **EL MISMO COMPROBANTE NO COBRA DOS PEDIDOS.** Si el nº de operación ya
     quedó registrado en otra guía, la comprobación sale **`rechazado`** por
     `operacion_duplicada` aunque todo lo demás cuadre —buen medio, buena
@@ -10912,7 +11081,7 @@ mantiene observado el lote completo.
 | Reproprovincia | Operación Repro | Mariannys |
 | Shalom/Olva | Seguimiento Agencia | Gerardo |
 | Finanzas/liquidación | Responsable financiera | Yohalis |
-| Anexos de Anura, URL del aviso y llamada de prueba (§8.6) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
+| Anexos de Anura, URL del aviso y llamada de prueba (§8.7) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
 | Reembolsos/propietario | Owner | Frankz |
 
 La autorización futura se asigna al rol estable, no al nombre. El actor real se
@@ -10948,7 +11117,7 @@ registra en cada evento.
   mano». Ningún rol por función lo trae (lo fija una prueba). Las reglas que
   impiden anular (§38.15, `wooCancelBlocks`) son las mismas para todos. Sin
   migración: `user_permissions.permission` es texto libre.
-- Telefonía Anura (05-11-2026, §8.6): **sin permiso nuevo**. «Llamar con
+- Telefonía Anura (05-11-2026, §8.7): **sin permiso nuevo**. «Llamar con
   Anura» pide «Gestionar pedidos» (`master.edit`), como «Llamar desde Kapta»
   (§8.5). Asignar anexos, ver la URL del aviso, la plantilla y la bitácora de
   avisos, y hacer la llamada de prueba piden «Administrar tiendas»
@@ -12966,7 +13135,7 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
 - Agente de voz fuera de Reproprovincia: Agencia con adelanto y Por confirmar
   (§11.8, pendientes).
 - Anura, fase 2: el teléfono dentro del navegador, con las credenciales SIP de
-  cada anexo (§8.6). En la fase 1 Kapta no guarda credenciales SIP.
+  cada anexo (§8.7). En la fase 1 Kapta no guarda credenciales SIP.
 
 ## 22. Criterios de aceptación de la Fase 2
 
@@ -15691,6 +15860,14 @@ Solo la anulación en la tienda termina la venta: un anulado que vuelve se
 recibe igual —la caja tiene que salir de la del motorizado— y, desde el
 04-11-2026, va a inventario (abajo). Aliclik y los demás siguen recibiéndose
 desde el Master. Pruebas en `test/gf-returns-scan.test.ts`.
+
+Desde el 05-11-2026 cada escaneo de esa tabla dice además qué fue
+(`gfReceptionOutcome`): recibirlo es una recepción **nueva**; «ya estaba
+recibido en oficina», los «ya se recibió» de la reemplazada y del anulado, y la
+que ya constaba devuelta escaneada otra vez son **repetidas** —en ámbar, «no
+suma», con la hora de la última recepción (`returned_to_office` o
+`return_received`)—, y «nunca salió en Kapta» es **informativa**. La pantalla
+cuenta la tanda y enseña «Grupo GF: X recibidas hoy · Z siguen en cajas» (§9.4).
 
 **Un pedido anulado en la tienda que vuelve va a inventario (04-11-2026,
 decisión del owner, 0307).** Hasta entonces la caja de Grupo GF de un pedido

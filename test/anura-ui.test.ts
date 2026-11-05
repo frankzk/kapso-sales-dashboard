@@ -1,4 +1,4 @@
-// «Llamar con Anura», fase 1: la ficha y Ajustes › Telefonía Anura (MOM §8.6).
+// «Llamar con Anura», fase 1: la ficha y Ajustes › Telefonía Anura (MOM §8.7).
 // Se fija el cableado (qué llama cada pantalla y qué NO enseña) y, sobre todo,
 // la FRONTERA del bundle del cliente: un módulo server-only importado en valor
 // desde algo que entra al navegador rompe `next build` en Vercel (pasó el

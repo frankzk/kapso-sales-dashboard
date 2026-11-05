@@ -68,7 +68,7 @@ import {
   type SwaypShipmentRow,
   type WarehouseSwaypData,
 } from "@/lib/warehouse-swayp";
-import { SWAYP_HOY_FALTA_ENTREGA } from "@/lib/swayp-handover";
+import { SWAYP_HOY_FALTA_ENTREGA, SWAYP_HOY_FALTA_PASO } from "@/lib/swayp-handover";
 import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
 import { SWAYP_RETURN_STATES, mapSwaypState } from "@/lib/swayp";
 
@@ -633,7 +633,7 @@ describe("«Hoy» para cuadrar: el estado de Swayp como dato y qué hacer con la
       day: "2026-11-03", guide: "532", createdAt: "2026-11-02T15:00:00Z", emittedAt: "2026-11-02T15:00:00Z", readyAt: "2026-11-02T16:00:00Z",
       extra: { custody_state: "courier", swayp_state: 7, delivery_status: "entregado", status_category: "delivered", custody_transferred_at: "2026-11-03T05:38:27Z" },
     });
-    const hoy = buildWarehouseSwayp(input([here, taken, delivered]), lima("2026-11-03", "09:00")).hoy!;
+    const hoy = buildWarehouseSwayp(input([here, taken, delivered]), lima("2026-11-03", "06:30")).hoy!;
     expect(hoy.headline).toBe("Swayp hoy: 3 programadas · 1 armada · faltan 2");
     expect(hoy.note).toBe(SWAYP_HOY_NOTE);
     // Swayp carga su ruta hacia las 05:45 y pasa a las 07:00: que la haya
@@ -650,6 +650,18 @@ describe("«Hoy» para cuadrar: el estado de Swayp como dato y qué hacer con la
     expect(hoy.armadas[0]!.swaypLine).toBe("Swayp: Entregada");
     expect(hoy.entrega).toBeNull();
     expect(swaypHoyUrgent(hoy)).toBe(2);
+
+    // Pasadas las 07:00 y sin la entrega abierta, el chofer pudo irse sin
+    // ellas: las dos lo dicen, la tomada también (owner, 05-11-2026).
+    const late = buildWarehouseSwayp(input([here, taken, delivered]), lima("2026-11-03", "09:00")).hoy!;
+    expect(late.faltan.map((f) => [f.code, f.actionLine])).toEqual([
+      ["KP30-S01", { kind: "crit", text: SWAYP_HOY_FALTA_PASO }],
+      ["KP31-S01", { kind: "crit", text: SWAYP_HOY_FALTA_PASO }],
+    ]);
+    expect(late.note).toBe(SWAYP_HOY_NOTE);
+    expect(swaypHoyUrgent(late)).toBe(2);
+    // Sigue diciendo dónde está la caja: si el chofer aún no se fue, se entrega.
+    expect(late.faltan[0]!.where?.kind).toBe("desde_stock");
   });
 });
 

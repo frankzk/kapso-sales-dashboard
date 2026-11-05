@@ -50,7 +50,9 @@ vi.mock("@/lib/db", () => {
       return state.keyReadFails ? { data: null, error: { message: "521 origin down" } } : { data: state.hasKey ? [{ order_id: "order-1" }] : [], error: null };
     }
     if (call.table === "pickup_key_shares") return { data: state.keyShared ? [{ id: "s" }] : [], error: null };
-    if (call.table === "order_events" && has("eq:kind", "return_received")) return { data: state.received ? [{ id: "r" }] : [], error: null };
+    if (call.table === "order_events" && has("eq:kind", "return_received")) {
+      return { data: state.received ? [{ id: "r2", occurred_at: "2026-11-05T23:00:00Z" }, { id: "r", occurred_at: "2026-11-05T21:45:00Z" }] : [], error: null };
+    }
     if (call.table === "order_events" && has("in:kind")) return { data: state.keyViewed ? [{ id: "v" }] : [], error: null };
     return { data: null, error: null };
   };
@@ -98,6 +100,7 @@ describe("receiveReturnedPackage con una caja de Shalom", () => {
     expect(result.error).toBeUndefined();
     expect(result.notice).toContain("queda corregida como retorno");
     expect(result.notice).toContain("Guía de retorno 96908440 anotada");
+    expect(result.reception).toEqual({ outcome: "nueva", courier: "shalom", label: "KP128064-S01" });
 
     const [update, ...audit] = writes();
     expect(update).toMatchObject({
@@ -138,6 +141,7 @@ describe("receiveReturnedPackage con una caja de Shalom", () => {
     Object.assign(state, over);
     const result = await receiveReturnedPackage("92083386");
     expect(result.error).toContain("devolución del cliente");
+    expect(result.reception).toBeUndefined();
     expect(writes()).toEqual([]);
   });
 
@@ -174,9 +178,23 @@ describe("receiveReturnedPackage con una caja de Shalom", () => {
     expect(state.recomputed).toEqual([]);
   });
 
-  it("la misma caja dos veces se avisa sin alarma y no escribe", async () => {
+  it("dos lecturas a la vez: si al perder la escritura la otra ya la recibió, es repetida (no error) y no audita", async () => {
+    state.raceLost = true;
+    // La primera lectura no ve recepción; la relectura, tras perder la escritura, sí.
+    let reads = 0;
+    Object.defineProperty(state, "received", { configurable: true, get: () => reads++ > 0, set: () => {} });
+    const result = await receiveReturnedPackage("92083386");
+    Object.defineProperty(state, "received", { configurable: true, writable: true, value: false });
+    expect(result.error).toBeUndefined();
+    expect(result.reception).toEqual({ outcome: "repetida", courier: "shalom", label: "KP128064-S01", firstReceivedAt: "2026-11-05T21:45:00Z" });
+    expect(writes().filter((c) => c.op === "insert")).toEqual([]);
+  });
+
+  it("la misma caja dos veces se avisa sin alarma, como repetida con su primera hora, y no escribe", async () => {
     state.received = true;
-    expect((await receiveReturnedPackage("92083386")).notice).toContain("ya se había recibido");
+    const result = await receiveReturnedPackage("92083386");
+    expect(result.notice).toContain("ya se había recibido");
+    expect(result.reception).toEqual({ outcome: "repetida", courier: "shalom", label: "KP128064-S01", firstReceivedAt: "2026-11-05T21:45:00Z" });
     expect(writes()).toEqual([]);
   });
 

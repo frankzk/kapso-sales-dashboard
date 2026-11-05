@@ -56,7 +56,16 @@ import {
   type SwaypNoSaleCode,
 } from "@/lib/swayp-handover";
 import { decideReception } from "@/lib/returns-reception";
-import { gfReturnDecision } from "@/lib/gf-returns-scan";
+import { gfReceptionOutcome, gfReturnDecision } from "@/lib/gf-returns-scan";
+import {
+  courierReceptionOutcome,
+  earliestOccurredAt,
+  gfReceivedWhenRemoved,
+  latestOccurredAt,
+  type ReturnScanCourier,
+  type ReturnScanOutcome,
+  type ReturnScanReception,
+} from "@/lib/returns-scan-outcome";
 import { gfOfficeReceiptNotice, readSaleEnded } from "@/lib/gf-office-receipt";
 import { OUTPUT_REPLACED_KIND, officeReturnOutcome, replacedOutputIds } from "@/lib/gf-replaced-output";
 import { materializeWaitingAgreementsSafe, reproReceptionNotice, REPRO_LIMA_PATH } from "@/lib/repro-lima-program";
@@ -100,6 +109,22 @@ export interface DispatchActionResult {
   notice?: string;
   shipment?: DispatchShipment;
   manifestId?: string;
+  /**
+   * Solo `receiveReturnedPackage` (05-11-2026): qué fue el escaneo —recepción
+   * nueva, repetida o solo un aviso— para que Devoluciones cuente la tanda y
+   * pinte la repetida en ámbar («no suma»). `notice` / `error` no cambian.
+   */
+  reception?: ReturnScanReception;
+}
+
+/** El resultado legible por máquina de un escaneo de Devoluciones. */
+function receptionOf(
+  courier: ReturnScanCourier,
+  label: string,
+  outcome: ReturnScanOutcome,
+  firstReceivedAt: string | null = null,
+): ReturnScanReception {
+  return outcome === "repetida" ? { outcome, courier, label, firstReceivedAt } : { outcome, courier, label };
 }
 
 async function currentUser() {
@@ -381,12 +406,13 @@ export async function receiveReturnedPackage(
       .select("delivery_status,custody_state,returned_at")
       .eq("id", shipment.id)
       .maybeSingle(),
+    // Con su hora: una repetida dice cuándo se recibió (05-11-2026).
     admin
       .from("order_events")
-      .select("id")
+      .select("id,occurred_at")
       .eq("shipment_id", shipment.id)
       .eq("kind", "return_received")
-      .limit(1),
+      .limit(50),
   ]);
   if (!guide) return { error: SCAN_NOT_FOUND };
   const decision = decideReception(
@@ -395,9 +421,18 @@ export async function receiveReturnedPackage(
   );
   if (!decision.ok) {
     // «Ya recibida» no es un error de quien escanea: es la caja que pasó dos
-    // veces por el lector. Se avisa sin alarma.
-    return decision.reason === "ya_recibida"
-      ? { notice: `${dispatchScanLabel(shipment)}: ${decision.message}`, shipment }
+    // veces por el lector. Se avisa sin alarma, en ámbar y sin sumar.
+    return courierReceptionOutcome(decision) === "repetida"
+      ? {
+          notice: `${dispatchScanLabel(shipment)}: ${decision.message}`,
+          shipment,
+          reception: receptionOf(
+            "tanders",
+            dispatchScanLabel(shipment),
+            "repetida",
+            earliestOccurredAt(received as { occurred_at?: string | null }[] | null, (guide as { returned_at: string | null }).returned_at),
+          ),
+        }
       : { error: `${dispatchScanLabel(shipment)}: ${decision.message}` };
   }
 
@@ -407,7 +442,7 @@ export async function receiveReturnedPackage(
   const now = new Date().toISOString();
 
   if (decision.seal) {
-    const { error } = await admin
+    const { data: sealed, error } = await admin
       .from("shipments")
       .update({
         custody_state: "devuelto",
@@ -417,8 +452,13 @@ export async function receiveReturnedPackage(
         returned_by: user.id,
       })
       .eq("id", shipment.id)
-      .is("returned_at", null);
+      .is("returned_at", null)
+      .select("id");
     if (error) return { error: error.message };
+    // Nada escrito: otra lectura (otro teléfono, un reintento) o el courier la
+    // sellaron entre la lectura y la escritura. Sin evento de auditoría: si ya
+    // está recibida es una repetida; si no, se pide volver a escanear.
+    if (!sealed?.length) return tandersSealLost(admin, shipment);
   } else {
     // El courier ya la selló: la custodia puede seguir en `retorno` si el
     // último reporte fue RETURNING; con la caja acá, ya es nuestra.
@@ -435,7 +475,63 @@ export async function receiveReturnedPackage(
   if (shipment.order_id) await recomputeOrderMasterSafe(admin, [shipment.order_id]);
   revalidatePath(RETURNS_PATH);
   revalidatePath("/dashboard/pedidos");
-  return { notice: `${dispatchScanLabel(shipment)} recibida en almacén.`, shipment };
+  return {
+    notice: `${dispatchScanLabel(shipment)} recibida en almacén.`,
+    shipment,
+    reception: receptionOf("tanders", dispatchScanLabel(shipment), "nueva"),
+  };
+}
+
+/** Lo que en `order_events` dice que una salida de Grupo GF se recibió en oficina. */
+const GF_RECEPTION_KINDS = ["returned_to_office", "reclaimed_in_office", "return_received"];
+
+/**
+ * `gf_return_to_office` falló porque el paquete ya no está en la caja del
+ * motorizado: ¿lo recibió otra lectura? Solo si la caja lo soltó al recibirlo
+ * —una recepción registrada en la misma transacción que lo sacó de la caja
+ * (`now()` es el mismo)—; si lo sacaron por otra vía, o no se puede leer,
+ * sigue siendo el error de siempre.
+ */
+async function gfReceptionWonElsewhere(
+  admin: ReturnType<typeof createAdminSupabase>,
+  shipmentId: string,
+  itemId: string,
+  message: string,
+): Promise<{ at: string | null } | null> {
+  if (!/ya no está en la caja/i.test(message)) return null;
+  const [itemRead, eventsRead] = await Promise.all([
+    admin.from("dispatch_manifest_items").select("removed_at").eq("id", itemId).maybeSingle(),
+    admin
+      .from("order_events")
+      .select("id,occurred_at")
+      .eq("shipment_id", shipmentId)
+      .in("kind", GF_RECEPTION_KINDS)
+      .order("occurred_at", { ascending: false })
+      .limit(1),
+  ]);
+  if (itemRead.error || eventsRead.error) return null;
+  const at = latestOccurredAt(eventsRead.data as { occurred_at?: string | null }[] | null);
+  return gfReceivedWhenRemoved((itemRead.data as { removed_at?: string | null } | null)?.removed_at ?? null, at) ? { at } : null;
+}
+
+/** Tanders: el sello no se escribió porque la guía cambió mientras se escaneaba. */
+async function tandersSealLost(
+  admin: ReturnType<typeof createAdminSupabase>,
+  shipment: DispatchShipment,
+): Promise<DispatchActionResult> {
+  const label = dispatchScanLabel(shipment);
+  const { data } = await admin
+    .from("order_events")
+    .select("id,occurred_at")
+    .eq("shipment_id", shipment.id)
+    .eq("kind", "return_received")
+    .limit(50);
+  if (!data?.length) return { error: `${label}: la guía cambió mientras escaneabas. Vuelve a escanearla.` };
+  return {
+    notice: `${label}: Esta caja ya se había recibido en almacén.`,
+    shipment,
+    reception: receptionOf("tanders", label, "repetida", earliestOccurredAt(data as { occurred_at?: string | null }[])),
+  };
 }
 
 /**
@@ -457,12 +553,17 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
       .is("removed_at", null)
       .eq("dispatch_manifests.courier", "propio")
       .limit(1),
+    // Con su hora: una repetida dice cuándo se recibió (05-11-2026). También
+    // `return_received`: es lo único que deja en `order_events` la rama a stock
+    // de `gf_return_to_office` (la reemplazada, el anulado en la tienda, la que
+    // ya constaba devuelta; 0248/0307). Lo más nuevo primero.
     admin
       .from("order_events")
-      .select("id")
+      .select("id,occurred_at")
       .eq("shipment_id", shipment.id)
-      .in("kind", ["returned_to_office", "reclaimed_in_office"])
-      .limit(1),
+      .in("kind", GF_RECEPTION_KINDS)
+      .order("occurred_at", { ascending: false })
+      .limit(50),
     cancelledScanNotice(admin, shipment.order_id),
     // La caja reemplazada por otra salida (0248): vuelve a stock, no a la cola.
     admin
@@ -502,11 +603,31 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
   });
   if (decision.kind === "error") return { error: decision.message };
   // Ya recibida y a inventario: el anulado ya está resuelto, no es una alarma.
-  if (decision.kind === "aviso") return cancelled && !decision.toInventory ? { error: cancelled } : { notice: decision.message, shipment };
+  if (decision.kind === "aviso") {
+    // La ÚLTIMA recepción: la salida conserva su id de vuelta en vuelta, y la
+    // que se repite es la de esta vuelta, no la de un «No entregado» anterior.
+    const reception = receptionOf(
+      "grupo_gf",
+      label,
+      gfReceptionOutcome(decision) ?? "informativa",
+      latestOccurredAt(received as { occurred_at?: string | null }[] | null),
+    );
+    return cancelled && !decision.toInventory ? { error: cancelled, reception } : { notice: decision.message, shipment, reception };
+  }
+  // De aquí en adelante este escaneo escribe la recepción: es nueva, también
+  // si el aviso sale en rojo (anulado solo en Kapta) o la caja va a stock.
+  const receivedNow = receptionOf("grupo_gf", label, "nueva");
 
   const { user } = await currentUser();
   const { data: orderId, error } = await admin.rpc("gf_return_to_office", { p_item_id: item!.id, p_actor: user.id });
-  if (error) return { error: `${label}: ${error.message}` };
+  if (error) {
+    // Dos lecturas a la vez (dos teléfonos, o un reintento mientras la primera
+    // seguía): la otra la recibió primero. Con su recepción a la vista es una
+    // repetida, no un error.
+    const lost = await gfReceptionWonElsewhere(admin, shipment.id, item!.id, error.message);
+    if (lost) return { notice: `${label} ya se recibió en oficina en otra lectura: no se registra otra vez.`, shipment, reception: receptionOf("grupo_gf", label, "repetida", lost.at) };
+    return { error: `${label}: ${error.message}` };
+  }
   if (orderId) await recomputeOrderMasterSafe(admin, [orderId as string]);
   revalidatePath(RETURNS_PATH);
   revalidatePath("/dashboard/courier");
@@ -532,7 +653,7 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
     cancelledNotice: cancelled,
   };
   if (outcome === "a_stock_reemplazada" || outcome === "a_inventario_anulado" || outcome === "ya_devuelta") {
-    return { ...gfOfficeReceiptNotice({ ...notice, reproParts: [] }), shipment };
+    return { ...gfOfficeReceiptNotice({ ...notice, reproParts: [] }), shipment, reception: receivedNow };
   }
   // Repro Lima (§29.13): el acuerdo que esperaba esta caja se programa para su
   // día y el aviso lo dice; o dice que el cliente ya no lo quiere. Sin RPC ni
@@ -542,7 +663,7 @@ async function receiveGrupoGfReturn(shipment: DispatchShipment): Promise<Dispatc
     : null;
   const reproParts = repro ? reproReceptionNotice(repro, { single: true }) : [];
   revalidatePath(REPRO_LIMA_PATH);
-  return { ...gfOfficeReceiptNotice({ ...notice, reproParts }), shipment };
+  return { ...gfOfficeReceiptNotice({ ...notice, reproParts }), shipment, reception: receivedNow };
 }
 
 /**
@@ -566,12 +687,13 @@ async function receiveShalomReturn(
       .select("delivery_status,custody_state,returned_at,pickup_state,dispatched_at,out_for_delivery_at")
       .eq("id", shipment.id)
       .maybeSingle(),
+    // Con su hora: una repetida dice cuándo se recibió (05-11-2026).
     admin
       .from("order_events")
-      .select("id")
+      .select("id,occurred_at")
       .eq("shipment_id", shipment.id)
       .eq("kind", "return_received")
-      .limit(1),
+      .limit(50),
   ]);
   const readError = guideRead.error ?? receivedRead.error;
   if (readError) return { error: `${label}: no se pudo leer la guía (${readError.message}). Vuelve a escanearla.` };
@@ -585,8 +707,17 @@ async function receiveShalomReturn(
 
   const decision = decideShalomReception(guide, keys.facts, Boolean(receivedRead.data?.length));
   if (!decision.ok) {
-    return decision.reason === "ya_recibida"
-      ? { notice: `${label}: ${decision.message}`, shipment }
+    return courierReceptionOutcome(decision) === "repetida"
+      ? {
+          notice: `${label}: ${decision.message}`,
+          shipment,
+          reception: receptionOf(
+            "shalom",
+            label,
+            "repetida",
+            earliestOccurredAt(receivedRead.data as { occurred_at?: string | null }[] | null, guide.returned_at),
+          ),
+        }
       : { error: `${label}: ${decision.message}` };
   }
 
@@ -602,7 +733,24 @@ async function receiveShalomReturn(
   if (decision.seal) write = write.is("returned_at", null);
   const { data: written, error } = await write.select("id");
   if (error) return { error: error.message };
-  if (!written?.length) return { error: `${label}: la guía cambió mientras escaneabas. Vuelve a escanearla.` };
+  if (!written?.length) {
+    // Otra lectura (otro teléfono, un reintento) la recibió primero: con su
+    // recepción a la vista es una repetida, no un error.
+    const { data: again } = await admin
+      .from("order_events")
+      .select("id,occurred_at")
+      .eq("shipment_id", shipment.id)
+      .eq("kind", "return_received")
+      .limit(50);
+    if (again?.length) {
+      return {
+        notice: `${label}: Esta caja ya se había recibido en almacén.`,
+        shipment,
+        reception: receptionOf("shalom", label, "repetida", earliestOccurredAt(again as { occurred_at?: string | null }[])),
+      };
+    }
+    return { error: `${label}: la guía cambió mientras escaneabas. Vuelve a escanearla.` };
+  }
 
   const reference = returnGuide ? ` Guía de retorno de Shalom: ${returnGuide}.` : "";
   await auditDispatch({
@@ -629,6 +777,7 @@ async function receiveShalomReturn(
       (decision.correct ? " Shalom la había dado por recogida: queda corregida como retorno." : "") +
       (returnGuide ? ` Guía de retorno ${returnGuide} anotada.` : ""),
     shipment,
+    reception: receptionOf("shalom", label, "nueva"),
   };
 }
 

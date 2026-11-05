@@ -1,6 +1,6 @@
 "use client";
 
-// Ajustes › «Telefonía Anura» (fase 1, Click2Dial; MOM §8.6). Lo ve quien
+// Ajustes › «Telefonía Anura» (fase 1, Click2Dial; MOM §8.7). Lo ve quien
 // administra la tienda (`stores.manage`). Una sola central para la org: el
 // token de Click2Dial vive en Vercel (`ANURA_CLICK2DIAL_TOKEN`) y aquí solo se
 // dice si está, nunca su valor. La sección enseña la dirección de los avisos
@@ -268,7 +268,7 @@ function WithCode({ text }: { text: string }) {
 function StepsCard() {
   return (
     <div className={cn(CARD, "divide-y divide-line")}>
-      <CardHeader title="Pasos en el panel de Anura" description="Una vez por central, y lo del anexo por cada asesora. Son los mismos de MOM §8.6." />
+      <CardHeader title="Pasos en el panel de Anura" description="Una vez por central, y lo del anexo por cada asesora. Son los mismos de MOM §8.7." />
       <ol className={cn(ROW, "list-decimal space-y-2 pl-9 text-sm leading-5 text-ink-700 sm:pl-10 [&_strong]:font-semibold [&_strong]:text-ink-900")}>
         {ANURA_PANEL_STEPS.map((step) => (
           <li key={step.title}>
