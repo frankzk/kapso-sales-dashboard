@@ -7410,6 +7410,49 @@ de Swayp):
   la anulada) y la fecha de Swayp de Repro Lima todavía no lo dicen (§9.1,
   lagunas).
 
+#### 11.6.2 La dirección que recibe Swayp (05-11-2026)
+
+Swayp recibe la dirección y la referencia UNA vez, al crear la guía: la
+dirección en `direccionDestinatario` y la referencia pegada al final con
+« - » (`adicionalDireccion`, `lib/swayp-guide.ts`). Su API no tiene forma de
+cambiarlas después: solo crear, cancelar, consultar y resolver novedades. Por
+eso corregir el destino en Kapta (la ficha de la guía en Envíos o «Corregir
+ubicación» del pedido) no le llega a Swayp.
+
+**El caso.** KP143594-S02 (guía 50000166047) se creó el 04-11-2026 a las
+12:57:16 como «Excepción sobre guía anulada 50000157984. Motivo: NO LO
+ENTREGARON POR ERROR DE DIRECCION». La referencia («SANTA MARIA ETAPA 1 MZ S
+LT 1, PAUCARPATA…») se agregó en Kapta a las 12:58:43, un minuto y medio
+después. Swayp se quedó con «Av Los Pioneros» sola. El owner preguntó «Se puso
+más detalle en referencia, y no lo jala?».
+
+**Lo que hace Kapta desde el 05-11-2026** (`lib/swayp-address.ts`):
+
+- **Al corregir el destino de un pedido con una guía Swayp viva** (courier
+  `fenix`, sin cerrar: ni anulada, entregada o devuelta, ni Swayp en 7 a 12),
+  antes de guardar: «Swayp ya tiene la guía 50000166047 con la dirección
+  anterior: corregirla aquí no se la cambia a Swayp. Después de guardar,
+  avísale a Swayp la dirección, la referencia y la ubicación.»; y después de
+  guardar, junto al aviso de siempre: «Ojo: Swayp ya tiene la guía 50000166047
+  con la dirección anterior y este cambio no le llega. Avísale a Swayp la
+  dirección, la referencia y la ubicación; si vuelve con novedad, ponlas en el
+  comentario al resolverla.». En Envíos (`updateShipmentDeliveryAddress`) y en
+  el Master (`updateOrderGeo`).
+- **En la excepción sobre una guía anulada** (y el reenvío por Swayp de
+  Envíos), el formulario enseña lo que va a recibir Swayp, tal cual: «Swayp
+  recibirá esta dirección» con «Av Los Pioneros - SANTA MARIA…»; sin
+  referencia, «Sin referencia: Swayp solo recibirá la dirección.»; y «Swayp la
+  recibe al crear la guía y después ya no se le puede cambiar: si no está bien,
+  corrígela primero en «Modificar destino».», con el botón que abre el
+  destino. Si el motivo habla de la dirección (dirección, referencia, ubicación
+  o domicilio), pide marcar «Ya corregí la dirección y la referencia de arriba»
+  antes de crear la guía, y el servidor lo exige: «El motivo habla de la
+  dirección: corrígela en «Modificar destino» antes de crear la guía nueva y
+  marca que ya está corregida.». El agente de voz (§11.8) no pasa por esta
+  pantalla y no cambia.
+
+Pruebas en `test/swayp-address.test.ts`.
+
 ### 11.7 El motivo anterior se ve antes de llamar, y su ausencia también
 
 §11 manda revisar cómo terminó el intento anterior antes de reenviar: «si el
