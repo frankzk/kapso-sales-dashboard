@@ -297,8 +297,8 @@ export interface SwaypGuideRow {
   late: boolean;
   chips: SwaypChip[];
   /**
-   * Solo «Hoy»: «Swayp: Reparto». Sin hora mientras las horas de Swayp lleven
-   * 5 h de desfase en Kapta (MOM §9.1, «Entrega a Swayp»).
+   * Solo «Hoy»: «Swayp: Reparto». Sin hora: la que cuenta es la de la entrega,
+   * y lo guardado antes del 05-11-2026 lleva 5 h de menos (MOM §9.1).
    */
   swaypLine: string | null;
   /** Solo «Hoy»: qué dice la entrega a Swayp de esta caja (entregada, no salió, alertas). */
@@ -965,8 +965,8 @@ function guideBase(s: SwaypShipmentRow, kind: SwaypZoneKind, day: string, ctx: C
   let swaypLine: string | null = null;
   if (kind === "hoy") {
     const label = s.swayp_state != null ? SWAYP_STATES[s.swayp_state] ?? `estado ${s.swayp_state}` : SWAYP_STATE_UNKNOWN;
-    // Sin hora: las horas de Swayp llegan sin zona horaria y Kapta las guarda con
-    // 5 h de desfase (MOM §9.1, «Entrega a Swayp»).
+    // Sin hora: la que cuenta es la de la entrega a Swayp, y lo guardado antes
+    // del 05-11-2026 lleva 5 h de menos (`swaypInstant`, MOM §9.1).
     swaypLine = SWAYP_HOY_STATE_LINE(label, null);
   }
   return {

@@ -639,7 +639,7 @@ describe("«Hoy» para cuadrar: el estado de Swayp como dato y qué hacer con la
     // Swayp carga su ruta hacia las 05:45 y pasa a las 07:00: que la haya
     // «tomado» en su sistema es lo normal en «Hoy», y la entrega la arma al
     // escanearla. El estado de Swayp va sin hora (las horas de Swayp llevan 5 h
-    // de desfase en Kapta).
+    // de menos en lo guardado antes del 05-11-2026).
     expect(hoy.faltan.map((f) => [f.code, f.swaypLine, f.actionLine, f.taken])).toEqual([
       ["KP30-S01", "Swayp: Generada", { kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA }, false],
       ["KP31-S01", "Swayp: Reparto", { kind: "crit", text: SWAYP_HOY_FALTA_ENTREGA }, true],

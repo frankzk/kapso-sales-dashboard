@@ -17,6 +17,7 @@ import {
   SWAYP_RETURN_STATES,
   SWAYP_STATES,
   type SwaypClientOpts,
+  swaypInstant,
 } from "@/lib/swayp";
 import { normalizeSwaypIncoming, swaypStatePatch, type SwaypShipmentRow } from "@/lib/swayp-ingest";
 import { describeSwaypFailure, sweepSwaypStatus } from "@/lib/swayp-status-sweep";
@@ -103,14 +104,41 @@ describe("el catálogo, corregido con las 147 guías reales", () => {
   });
 });
 
+describe("las fechas de Swayp son hora de Lima (05-11-2026)", () => {
+  const NOW_05 = new Date("2026-11-05T15:00:00Z");
+  it("la guía 50000165308: lo que dice el tracking público de Swayp, como instante real", () => {
+    // Tracking: «Por recolectar 4 nov 03:19 a. m.», «Reparto 05:49 a. m.», «Novedad 10:25 a. m.», «05:38 p. m.».
+    expect(swaypInstant("2026-11-04T03:19:37", NOW_05)).toBe("2026-11-04T08:19:37.000Z");
+    expect(swaypInstant("2026-11-04 05:49:11", NOW_05)).toBe("2026-11-04T10:49:11.000Z");
+    // Con una «Z» las cifras siguen siendo de Lima.
+    expect(swaypInstant("2026-11-04T10:25:52Z", NOW_05)).toBe("2026-11-04T15:25:52.000Z");
+    expect(swaypInstant("2026-11-04T17:38:01.250Z", NOW_05)).toBe("2026-11-04T22:38:01.250Z");
+  });
+  it("un desfase explícito se respeta; un día suelto es la medianoche de Lima", () => {
+    expect(swaypInstant("2026-11-04T05:49:11-05:00", NOW_05)).toBe("2026-11-04T10:49:11.000Z");
+    expect(swaypInstant("2026-11-04T10:49:11+00:00", NOW_05)).toBe("2026-11-04T10:49:11.000Z");
+    expect(swaypInstant("2026-11-04", NOW_05)).toBe("2026-11-04T05:00:00.000Z");
+    expect(swaypInstant("2026-11-04T05:49", NOW_05)).toBe("2026-11-04T10:49:00.000Z");
+  });
+  it("si leída como Lima quedara en el futuro, Swayp corrigió su API: se lee tal cual", () => {
+    // Las 13:00 UTC de hoy, leídas como Lima, serían las 18:00 UTC: después de las 15:00 de ahora.
+    expect(swaypInstant("2026-11-05T13:00:00Z", NOW_05)).toBe("2026-11-05T13:00:00.000Z");
+    expect(swaypInstant("2026-11-05T09:00:00Z", NOW_05)).toBe("2026-11-05T14:00:00.000Z");
+  });
+  it("lo vacío o raro no inventa nada", () => {
+    for (const value of [null, undefined, "", "   ", "hola", 42, {}]) expect(swaypInstant(value, NOW_05), String(value)).toBeNull();
+  });
+});
+
 describe("leer `estado` de GET /v2/guias/{guia}", () => {
   it("#KP135009: el texto «Devolucion» es el estado 8, con sus fechas del historial", () => {
     expect(readSwaypGuide(GUIA_DEVUELTA)).toEqual({
       state: 8,
       label: "Devolucion",
-      // La primera salida con el mensajero (Asignada), no el Reparto.
-      departedAt: "2026-09-28T08:46:26.834Z",
-      changedAt: "2026-09-28T22:03:38.357Z",
+      // La primera salida con el mensajero (Asignada), no el Reparto. Las
+      // cifras de Swayp son hora de Lima: 08:46 de Lima son las 13:46 UTC.
+      departedAt: "2026-09-28T13:46:26.834Z",
+      changedAt: "2026-09-29T03:03:38.357Z",
       novelty: { id: 16, name: "Destinatario indica que ya no desea el producto" },
     });
   });
@@ -140,7 +168,7 @@ describe("leer `estado` de GET /v2/guias/{guia}", () => {
 
   it("sin historial, las fechas salen de los campos `fecha…`", () => {
     const r = readSwaypGuide({ estado: "Devolucion Confirmada", fechaReparto: "2026-09-20T10:00:00Z", fechaDevolucion: "2026-09-25T09:00:00Z" });
-    expect(r).toMatchObject({ state: 9, departedAt: "2026-09-20T10:00:00.000Z", changedAt: "2026-09-25T09:00:00.000Z" });
+    expect(r).toMatchObject({ state: 9, departedAt: "2026-09-20T15:00:00.000Z", changedAt: "2026-09-25T14:00:00.000Z" });
   });
 
   it("una respuesta vacía o rara no inventa nada", () => {
@@ -308,7 +336,7 @@ describe("el historial de la API, bajo el nombre que traiga", () => {
         { estado: "Devolucion", idEstado: 8, fecha: "2026-09-28T22:03:38.357Z" },
       ],
     });
-    expect(r).toMatchObject({ state: 8, departedAt: "2026-09-28T08:46:26.834Z", changedAt: "2026-09-28T22:03:38.357Z" });
+    expect(r).toMatchObject({ state: 8, departedAt: "2026-09-28T13:46:26.834Z", changedAt: "2026-09-29T03:03:38.357Z" });
   });
 
   it("una lista que no parece historial no se usa", () => {

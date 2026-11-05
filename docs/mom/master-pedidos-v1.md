@@ -2298,8 +2298,9 @@ creó la guía.
    a `courier`, el escáner de la estación (`markShipmentReady`) ya no acepta la
    caja: dice «Swayp ya cargó esta guía: escanéala en «Entregar a Swayp».» y se
    arma al entregarla. Hasta el 04-11-2026 este punto decía «pasada la
-   medianoche»: las horas de Swayp llegan sin zona horaria y Kapta las guarda
-   con 5 h de desfase (pendiente de corregir; ver «Entrega a Swayp · Lima»).
+   medianoche»: Swayp escribe sus horas en hora de Lima y Kapta las leía como
+   UTC, 5 h antes. Corregido el 05-11-2026 (`swaypInstant`, ver «Las horas de
+   Swayp» en «Entrega a Swayp · Lima»).
 3. **Lo que llega tarde (D3). Nada bloquea.** Una guía de Lima para el próximo
    día de despacho creada después de las 21:20 de su víspera lleva un aviso
    fuerte a la asesora, y la puerta propone el siguiente día de despacho.
@@ -2519,8 +2520,9 @@ creó la guía.
     vacía, una vez.
 - **La zona «Hoy», para cuadrar y entregar.** Cabecera «Swayp hoy: 7
   programadas · 7 armadas»; cada fila con el estado de Swayp como dato
-  («Swayp: Reparto», etiquetas de `lib/swayp-states.ts`, sin hora mientras
-  las horas de Swayp lleven 5 h de desfase) y, una vez en la zona, el estado de
+  («Swayp: Reparto», etiquetas de `lib/swayp-states.ts`, sin hora: la hora que
+  cuenta es la de la entrega, y lo guardado antes del 05-11-2026 lleva 5 h de
+  menos) y, una vez en la zona, el estado de
   la entrega a Swayp: «Swayp recoge hacia las 07:00. Entrega sin abrir.» hasta
   que se abre (fase 3, abajo). Una falta de hoy, mientras Swayp no pasa, es
   crítica: «Swayp pasa hacia las 07:00: ármala y entrégala en «Entregar a
@@ -2762,7 +2764,7 @@ paso de cotejo? como cuando cotejamos la caja de los motorizados en grupo gf».
   recoge hacia las 07:00. Entrega sin abrir.», «Entrega en curso: 5 de 8.», el
   resumen del cierre o «Swayp no vino». Por fila: «Entregada a Swayp 07:04 ·
   escaneó Yelitza» o «No salió: <motivo>». Las alertas van por estado, nunca
-  por hora (las de Swayp llevan 5 h de desfase):
+  por hora:
   - «No sale» y Swayp en 4, 5 o 6: «Swayp la tiene en reparto y la caja no
     salió: Seguimiento cambia la fecha o anula la guía hoy, o Swayp reportará
     que no llegó.» (en rojo);
@@ -2777,10 +2779,25 @@ paso de cotejo? como cuando cotejamos la caja de los motorizados en grupo gf».
   escanéala en «Entregar a Swayp».». La Mesa de Despacho no crea ni lista rutas
   de Swayp: «Swayp Lima se entrega desde Almacén › Swayp por salir.».
 
+**Las horas de Swayp (corregido el 05-11-2026).** Swayp escribe sus fechas
+en hora de Lima y Kapta las leía como UTC: todo lo que venía de Swayp
+(`custody_transferred_at`, `dispatched_at`, `out_for_delivery_at`,
+`closed_at` y la hora de los `courier_status` en la Actividad) quedaba 5 h
+antes. Lo probaron los 437 eventos de Swayp de 14 días, guardados todos entre
+300 y 330 minutos después de su hora con un barrido cada 30 minutos, y el
+tracking público de la guía 50000165308 (KP201989-S02): «Por recolectar 4 nov
+03:19 a. m.», «Reparto 05:49 a. m.», «Novedad 10:25 a. m.» y «05:38 p. m.»,
+guardados como 03:19:37Z, 05:49:11Z, 10:25:52Z y 17:38:01Z. Desde el
+05-11-2026 `swaypInstant` (`lib/swayp.ts`) lee las cifras como hora de Lima
+(UTC−5), traigan o no una «Z»; respeta un desfase explícito, un día suelto es
+la medianoche de Lima, y si leída como Lima una fecha quedara en el futuro
+(Swayp habría corregido su API) se lee tal cual viene. El webhook no trae
+fechas (usa la hora de llegada) y no cambia. Lo guardado antes sigue con 5 h
+de menos: corregirlo es una escritura en la base, pendiente del owner. Los
+textos que decían «pasada la medianoche» ya se corrigieron el 04-11-2026.
+
 **Qué no hace todavía.** No cambia el estado ni la custodia que reporta
 Swayp (E3): una caja «No sale» sigue como Swayp la tenga, y Kapta avisa. No
-corrige el desfase de 5 h de las horas de Swayp (`lib/swayp.ts`, `isoOrNull`
-lee como UTC una fecha de Lima sin zona horaria), que se arregla aparte. No
 hay firma ni escaneo del chofer. No coteja lo que vuelve de Swayp (152
 devoluciones de Lima en `retorno` sin recibir). Queda una ventana de
 milisegundos entre la última comprobación y el cierre en la que la
