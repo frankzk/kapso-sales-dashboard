@@ -1,5 +1,32 @@
 # Deployment runbook
 
+### 05-11-2026 · El rechazo de Aliclik que ya vuelve pasa a reprogramar (sin migración, mom-v1.39, MOM §9 y §11)
+
+Decisión del owner con #KP200684: «en Aliclik ya está rechazada, no hay más que
+pedir». La guía decía `REFUSED · STORE_CENTRAL` y seguía viva en Kapta hasta que
+Aliclik la anulara (unos nueve días), así que Grupo GF no podía tomar el pedido
+para mandarlo con Alexis. Ahora:
+
+- `REFUSED · TO_RETURN` y `REFUSED · STORE_CENTRAL` abren la recuperación: en
+  Lima el pedido pasa a «Por reprogramar Lima» y Grupo GF lo toma con una salida
+  nueva (Almacén la arma desde stock). La ventana no vence mientras Aliclik no
+  cierre la guía. Solo el rechazo: WhatsApp, el agente de voz y el reintento
+  automático de Lima ya lo excluyen, así que nadie llama ni crea guías solo.
+- Cualquier intento fallido con el paquete en el almacén central de Aliclik
+  (`STORE_CENTRAL`) deja de bloquear otra salida, como `TO_RETURN` desde el 04-11.
+
+**Sin migración**, sin crons ni variables nuevas. `MOM_RESOLUTION_VERSION` sube a
+`mom-v1.39`: el cron `master-reconcile` (cada 10 minutos) recalcula los pedidos
+solo. Medido el 05-11-2026: 3 pedidos de Lima y 9 de Provincia cambian de «En
+tránsito» a «Por reprogramar Lima» / «En gestión Reproprovincia».
+
+**Qué mirar después.** #KP200684 en el Master: «En curso · Por reprogramar
+Lima»; en Grupo GF Courier → Pedidos disponibles → «Con salida previa», se
+marca, se elige Alexis y «Tomar y asignar».
+
+**Marcha atrás.** Revertir el commit. No escribe nada en la base; el cron
+vuelve a poner esos pedidos «En tránsito» con la versión anterior.
+
 ### 05-11-2026 · Lista de pago adelantado (la lista negra) por celular (0309, MOM §41)
 
 Quien rechazó un pedido en la puerta o no lo recogió en la agencia paga el
