@@ -2472,6 +2472,12 @@ function MasterTable({
                     {/* Sin ubicación no hay courier ni guía: la fecha se vence
                         sola (#KP142558). Se apaga al corregir la ubicación o
                         al quitar la fecha (MOM §6.2). */}
+                    {/* El cliente paga el total por adelantado (MOM §41). */}
+                    {r.prepay_listed && (
+                      <Badge tone="crit" className="xl:mt-0.5" title="Lista de pago adelantado: este cliente paga el total por adelantado.">
+                        Pago adelantado
+                      </Badge>
+                    )}
                     {r.scheduled_no_location && (
                       <Badge
                         tone="crit"

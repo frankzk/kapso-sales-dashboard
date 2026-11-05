@@ -1,6 +1,6 @@
 // Una base falsa en memoria para las pruebas de la entrada de WooCommerce
 // (test/woocommerce-*.test.ts). Aplica de verdad los filtros de cada lectura y
-// escritura (`eq`, `in`, `is`, `match`, `gte`/`gt`/`lte`/`lt`, `limit`) y las
+// escritura (`eq`, `in`, `is`, `match`, `gte`/`gt`/`lte`/`lt`, `like`/`ilike`, `limit`) y las
 // claves únicas que usan estas rutas: `orders (store_id, shopify_order_id)`,
 // `webhook_events (store_id, webhook_id)`, `sync_state (store_id, source)` y
 // `order_events (order_id, operation_id, kind)` cuando hay `operation_id`,
@@ -34,6 +34,8 @@ const UNIQUE: Record<string, string[]> = {
   order_events: ["order_id", "operation_id", "kind"],
   // Los carritos (0013): los formularios de COD Core se guardan con upsert (MOM §38.12).
   draft_orders: ["store_id", "shopify_draft_order_id"],
+  // La «Lista de pago adelantado» (0309, MOM §41): su posición, una por organización.
+  prepay_list_settings: ["org_id"],
 };
 
 let seq = 0;
@@ -60,6 +62,15 @@ function matches(row: Row, filters: [string, string, any][]): boolean {
       // Solo el comodín final (`prefijo%`), lo único que se usa.
       const prefix = String(val).replace(/%$/, "");
       return row[col] == null ? false : !String(row[col]).startsWith(prefix);
+    }
+    if (m === "like" || m === "ilike") {
+      // `%` cualquier cosa y `_` un carácter, como en Postgres.
+      if (row[col] == null) return false;
+      const re = new RegExp(
+        `^${String(val).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".")}$`,
+        m === "ilike" ? "is" : "s",
+      );
+      return re.test(String(row[col]));
     }
     if (m === "gte" || m === "gt" || m === "lte" || m === "lt") {
       const c = compare(row[col], val);
@@ -147,6 +158,14 @@ class FakeQuery {
     return this;
   }
   or() {
+    return this;
+  }
+  like(c: string, v: string) {
+    this.filters.push(["like", c, v]);
+    return this;
+  }
+  ilike(c: string, v: string) {
+    this.filters.push(["ilike", c, v]);
     return this;
   }
   gte(c: string, v: any) {

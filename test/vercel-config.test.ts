@@ -96,7 +96,9 @@ describe("vercel.json", () => {
     //     (0297, MOM §6.1, «Confirmó por Chatby», 01-11-2026).
     // 34: reintentos Aliclik automáticos en Lima, por variante y con tope
     //     (0306, MOM §9.5 entrega 3, 04-11-2026).
-    expect(crons).toHaveLength(34);
+    // 35: la regla automática de la «Lista de pago adelantado», cada hora
+    //     (0309, MOM §41, 05-11-2026).
+    expect(crons).toHaveLength(35);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

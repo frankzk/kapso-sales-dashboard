@@ -1123,6 +1123,50 @@ describe("el mismo pedido pedido dos veces con otro request_id", () => {
   });
 });
 
+describe("la «Lista de pago adelantado» (MOM §41, 05-11-2026)", () => {
+  const ORG = "22222222-2222-4222-8222-222222222222";
+  const entry = (over: Row = {}): Row => ({
+    id: "e1",
+    org_id: ORG,
+    phone: "51988805509",
+    source: "auto",
+    reason: "Rechazó en la puerta 1 pedido (#KP1).",
+    evidence: {},
+    added_at: "2026-11-01T10:00:00Z",
+    removed_at: null,
+    ...over,
+  });
+
+  it("un celular de la lista: 422 prepay_required, sin candado, sin pedido y sin llamar a WooCommerce", async () => {
+    setup({ store: storeRow({ org_id: ORG }), extra: { prepay_list_entries: [entry()] } });
+    // El bot manda el celular sin el 51: se compara en su forma canónica.
+    const res = await call(pedido({ phone: "988 805 509" }));
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ ok: false, code: "prepay_required", retryable: false });
+    expect((res.body as { message: string }).message).toContain("asesora");
+    // Nunca el motivo ni la evidencia hacia el bot.
+    expect(JSON.stringify(res.body)).not.toContain("KP1");
+    expect(shop.calls).toHaveLength(0);
+    expect(h.db.rows("bot_order_requests")).toHaveLength(0);
+    expect(h.db.rows("orders")).toHaveLength(0);
+  });
+
+  it("quitado de la lista, o de otra organización: crea el pedido como siempre", async () => {
+    setup({
+      store: storeRow({ org_id: ORG }),
+      extra: {
+        prepay_list_entries: [
+          entry({ removed_at: "2026-11-02T10:00:00Z", removed_reason: "Era otra persona" }),
+          entry({ id: "e2", org_id: "33333333-3333-4333-8333-333333333333" }),
+        ],
+      },
+    });
+    const res = await call(pedido());
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true });
+  });
+});
+
 describe("el modo de entrega y las etiquetas del bot, como hoy en Shopify", () => {
   it("agencia: el bot no la crea (owner, 23-10-2026): 422 agency_needs_advisor, sin tienda ni candado", async () => {
     setup();

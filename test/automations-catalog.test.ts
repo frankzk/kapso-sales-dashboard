@@ -338,3 +338,37 @@ describe("el permiso y el menú", () => {
     expect(navItems(true, false, false).map((i) => i.href)).not.toContain("/dashboard/automatizaciones");
   });
 });
+
+describe("la «Lista de pago adelantado» en el panel (MOM §41, 0309)", () => {
+  const src = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+
+  it("su sección está en el índice y en el panel, con la regla y «Simular ahora»", () => {
+    const panel = src("components/automations-panel.tsx");
+    for (const id of ["prepay-regla", "prepay-simular"]) {
+      expect(panel).toContain(`{ id: "${id}"`);
+      expect(panel).toContain(`id="${id}"`);
+    }
+    expect(panel).toContain("<PrepayGroup org={org} writable={writable} />");
+    // Activo pide confirmación, como los reintentos.
+    expect(panel).toMatch(/next === "activo" &&\s*!window\.confirm\(/);
+    expect(panel).toContain("prepaySimulationHeadline(summary)");
+  });
+
+  it("la posición se escribe solo en su tabla y deja su fila en el historial", () => {
+    const actions = src("app/dashboard/automatizaciones/actions.ts");
+    const fn = actions.slice(actions.indexOf("export async function setPrepayAutoMode("));
+    expect(fn).toContain('.from("prepay_list_settings")');
+    expect(fn).toContain("automation: PREPAY_MODE_EVENT");
+    expect(fn).toContain("const g = await gate(orgId);");
+    // Y la columna existe en la migración.
+    expect(src("db/migrations/0309_prepay_list.sql")).toContain("auto_mode        text not null default 'apagado' check (auto_mode in ('apagado', 'simulacion', 'activo'))");
+  });
+
+  it("el menú lleva «Pago adelantado» detrás del Master, para todos los que ven pedidos", () => {
+    const access = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true, history: true, automations: false };
+    for (const items of [navItems(false, false, false, access), navItems(true, false, false)]) {
+      const hrefs = items.map((i) => i.href);
+      expect(hrefs[hrefs.indexOf("/dashboard/pedidos") + 1]).toBe("/dashboard/clientes/pago-adelantado");
+    }
+  });
+});

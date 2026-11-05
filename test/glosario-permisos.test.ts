@@ -59,6 +59,14 @@ describe("cada permiso tiene nombre, explicación y área", () => {
     } satisfies Partial<Record<Permission, string>>);
   });
 
+  it("«Gestionar la lista de pago adelantado» (MOM §41): en Pedidos, con su explicación, y por rol (no uno por uno)", () => {
+    expect(PERMISSION_LABEL["prepay_list.manage"]).toBe("Gestionar la lista de pago adelantado");
+    expect(PERMISSION_HELP["prepay_list.manage"]).toContain("lista negra");
+    expect(PERMISSION_AREAS.find((area) => area.key === "pedidos")!.permissions).toContain("prepay_list.manage");
+    expect(GRANTED_ONE_BY_ONE.map((entry) => entry.permission as string)).not.toContain("prepay_list.manage");
+    expect(permissionsFor(["admin"]).has("prepay_list.manage")).toBe(true);
+  });
+
   it("las casillas de «uno por uno» usan el mismo nombre que el glosario", () => {
     for (const entry of GRANTED_ONE_BY_ONE) expect(entry.label).toBe(PERMISSION_LABEL[entry.permission]);
   });

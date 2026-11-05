@@ -219,8 +219,9 @@ export type CollectMismatch = null | {
  * mínimo parece la solución elegante y es exactamente el error: convierte un
  * cobro duplicado grande en uno pequeño, y encima lo hace en silencio.
  *
- * Y hay salida: Tanders SÍ acepta cobro cero, y Shalom es agencia y no cobra en
- * la puerta. De hecho la operación ya lo resuelve así sin que nadie lo
+ * Y hay salida: Grupo GF y Swayp aceptan cobro cero, y Shalom es agencia y no
+ * cobra en la puerta (Tanders también lo aceptaba, pero no crea guías nuevas
+ * desde el 26-10-2026). De hecho la operación ya lo resuelve así sin que nadie lo
  * programara — de los pedidos pagados con guía, 364 fueron por Shalom y 3 por
  * Aliclik. Esto solo pone en el sistema lo que el equipo ya hace a mano.
  *
@@ -232,7 +233,10 @@ export function aliclikPrepaidBlocker(facts: OrderPaymentFacts): string | null {
   return (
     "Este pedido YA ESTÁ PAGADO y Aliclik es solo contraentrega: no acepta guías con cobro cero " +
     "(su mínimo ronda los S/ 24). Si se crea igual, al cliente se le cobra en la puerta algo que ya pagó. " +
-    "Mándalo por Tanders, que sí admite cobro cero, o por agencia (Shalom), donde no se cobra en la entrega."
+    // Tanders no crea guías nuevas desde el 26-10-2026 (lib/tanders/new-guides.ts):
+    // recomendarlo mandaba a buscar una salida que ya no existe (MOM §41.6).
+    "En Lima mándalo por Grupo GF (motorizado propio) o por Swayp con cobro cero; en provincia, por agencia " +
+    "(Shalom u Olva), donde no se cobra en la entrega."
   );
 }
 

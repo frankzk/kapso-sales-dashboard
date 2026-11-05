@@ -134,6 +134,8 @@ import {
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import { mergePriorOrders } from "@/lib/order-admin-url";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
+import { isPrepayRequired, orgOfStore } from "@/lib/prepay-list-server";
+import { prepayBlockMessage } from "@/lib/prepay-list";
 import {
   LEAD_VOICE_KIND,
   LEAD_VOICE_NOTE_SIGNER,
@@ -1332,6 +1334,11 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
 
   const creds = await getStoreCreds(ctx.storeId);
   if (!creds?.shopify_token) return { error: "La tienda no tiene Shopify configurado." };
+
+  // La lista de pago adelantado (MOM §41): completar el borrador crea un pedido
+  // contra entrega, así que se frena igual que «Generar pedido». Falla abierto.
+  const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId, [l.phone]);
+  if (prepayBlock) return { error: prepayBlock };
 
   // 1) Complete the draft in Shopify (COD ⇒ payment pending). Tolerate "already
   //    completed" (someone closed it in Shopify) → just mark the lead won.
@@ -2718,6 +2725,28 @@ function defaultConfirmation(o: {
 }
 
 /**
+ * ¿El celular del pedido (o el del lead) está en la «Lista de pago
+ * adelantado» (MOM §41)? El mensaje que frena «Generar pedido», o null. Falla
+ * abierto: las compuertas de confirmación y de guías lo vuelven a mirar.
+ */
+async function generateOrderPrepayBlock(
+  admin: ReturnType<typeof createAdminSupabase>,
+  storeId: string,
+  phones: (string | null | undefined)[],
+): Promise<string | null> {
+  try {
+    const orgId = await orgOfStore(admin, storeId);
+    if (!orgId) return null;
+    for (const phone of phones) {
+      if (await isPrepayRequired(admin, orgId, phone)) return prepayBlockMessage("pedido");
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
  * Generate the order from the unified form. Validates required data (≥1 product,
  * address + distrito), then: cart → updateDraftOrder + completeDraftOrder; new →
  * createDraftOrder + completeDraftOrder. Records the order (tag:kapso so it counts),
@@ -2795,6 +2824,14 @@ export async function generateOrder(
       };
     }
   }
+
+  // LA LISTA DE PAGO ADELANTADO (MOM §41). Kapta crea los pedidos siempre
+  // contra entrega (`WOO_COD_METHOD` en WooCommerce): a un celular de la lista
+  // no se le crea ninguno. Se mira el celular del pedido y el del lead. Si la
+  // lista no se pudo leer, se deja pasar: el pedido se vuelve a frenar al
+  // confirmarlo y al crear su guía.
+  const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId, [(input.phone ?? "").trim() || null, l.phone]);
+  if (prepayBlock) return { error: prepayBlock };
 
   // DÓNDE SE CREA (MOM §38.12). `stores.platform = 'woocommerce'` → el pedido
   // se crea en WooCommerce; si no, en Shopify, por el camino de siempre. Si la

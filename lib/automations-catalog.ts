@@ -605,8 +605,12 @@ export function retryVariantEventKey(variant: string): string {
   return `${RETRY_EVENT_PREFIX}${variant}`;
 }
 
+/** La regla automática de la «Lista de pago adelantado» (0309, MOM §41). */
+export const PREPAY_MODE_EVENT = "prepay_list_auto";
+
 /** El nombre de lo que cambió, para «Últimos cambios». Pura. */
 export function automationEventLabel(key: string): string {
+  if (key === PREPAY_MODE_EVENT) return "Lista de pago adelantado · regla automática";
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
   if (key.startsWith(RETRY_EVENT_PREFIX)) {
