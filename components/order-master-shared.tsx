@@ -668,6 +668,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   payment: "Pago",
   payment_recipient_exception: "Pago validado con cuenta receptora no verificada",
   aliclik_risk_exception: "Excepción al riesgo de Aliclik",
+  // MOM §8.6: Aliclik cerrado por riesgo de no entrega, levantado con motivo.
+  aliclik_route_risk_exception: "Aliclik pese al riesgo de no entrega",
   // La guía automática del día programado (MOM §6.2) que no se pudo crear.
   aliclik_auto_guide_failed: "Guía automática no creada",
   // MOM §6.1, «Confirmó por Chatby» (01-11-2026): la clienta escribió para

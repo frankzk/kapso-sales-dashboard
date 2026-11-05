@@ -50,6 +50,7 @@ import {
 } from "@/lib/orders-master-access";
 import { aliclikRiskGate } from "@/lib/order-confirmation-brief";
 import { aliclikDoorBan } from "@/lib/door-rejection";
+import { aliclikRouteRisk, aliclikRouteRiskGate, type AliclikRouteRisk } from "@/lib/aliclik-route-risk";
 import { DUPLICATE_READ_ERROR, loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import { classifyOperation } from "@/lib/order-macro-stage";
@@ -265,6 +266,13 @@ export async function activeAliclikBlocker(
   return { guide: guide ?? null };
 }
 
+/** La operación del pedido: la del master si es válida, si no la clasificada. */
+function operationOf(row: AliclikContext["row"]) {
+  const op = row.macro_operation;
+  return op === "lima" || op === "provincia_cod" || op === "agencia" || op === "desconocida"
+    ? op : classifyOperation(row);
+}
+
 async function readAliclikOutputPolicy(
   admin: SupabaseClient, ctx: AliclikContext, motivo?: string | null, origin?: AliclikGuideOrigin,
 ) {
@@ -277,9 +285,7 @@ async function readAliclikOutputPolicy(
     ok: false as const, pideMotivo: false, estorban: [], unread: true as const,
     error: `No se pudieron leer las salidas del pedido: ${error.message}`,
   };
-  const op = ctx.row.macro_operation;
-  const operation = op === "lima" || op === "provincia_cod" || op === "agencia" || op === "desconocida"
-    ? op : classifyOperation(ctx.row);
+  const operation = operationOf(ctx.row);
   return aliclikOutputPolicy({
     // `manual` es «puede justificar otra salida»: una persona, o el reintento
     // de Lima que el owner encendió (`aliclikMotiveAllowed`). El resto del
@@ -789,6 +795,12 @@ export interface CreateGuideInput {
   /** Excepción auditada a la regla de adelanto/pago del historial. */
   riskExceptionReason?: string | null;
   /**
+   * Excepción auditada al cierre de Aliclik por riesgo de no entrega (MOM §8.6,
+   * `lib/aliclik-route-risk.ts`): despacho fallido sin entregados, o pedido de
+   * madrugada con dos o más días de gestión.
+   */
+  routeRiskExceptionReason?: string | null;
+  /**
    * Excepción auditada al respaldo del pin. Se exige por escrito porque emitir
    * con un pin que el pedido contradice manda el paquete a otro departamento:
    * es lo que le pasó a #KP133769. Si el pin es correcto y quien se equivocó
@@ -912,6 +924,9 @@ export type AliclikCreateGates =
   | {
       ok: true;
       riskExceptionReason: string | null;
+      /** Motivo con el que se levantó el cierre por riesgo de no entrega (§8.6), o null. */
+      routeRiskExceptionReason: string | null;
+      routeRisk: AliclikRouteRisk;
       /** La exigencia de pago del historial: la creación la deja en el hecho de la excepción. */
       risk: NonNullable<Awaited<ReturnType<typeof getOrderConfirmationBrief>>>["risk"];
     }
@@ -932,7 +947,7 @@ export type AliclikCreateGates =
  */
 export async function aliclikCreateGates(
   ctx: AliclikContext,
-  input: Pick<CreateGuideInput, "riskExceptionReason" | "motivoSalidaAdicional">,
+  input: Pick<CreateGuideInput, "riskExceptionReason" | "routeRiskExceptionReason" | "motivoSalidaAdicional">,
   scope?: AliclikReadScope,
   origin?: AliclikGuideOrigin,
 ): Promise<AliclikCreateGates> {
@@ -986,6 +1001,24 @@ export async function aliclikCreateGates(
   const doorBan = aliclikDoorBan(confirmationBrief.doorRejections);
   if (doorBan.banned) return blocked(doorBan.message ?? "Aliclik está cerrado para este cliente.");
 
+  // EL CIERRE POR RIESGO DE NO ENTREGA (MOM §8.6). Otro eje que el de la
+  // puerta: no es el cliente que devolvió el producto dos veces, es el pedido
+  // de un grupo que se entrega la mitad o menos (despacho fallido sin
+  // entregados; madrugada con dos o más días de gestión). Se levanta con
+  // motivo escrito; el automático no escribe motivos, así que a él lo para.
+  const routeRisk = aliclikRouteRisk({
+    operation: operationOf(ctx.row),
+    orderCreatedAt: ctx.row.order_created_at,
+    confirmationDays: ctx.row.confirmation_day_count,
+    alreadyDispatched: Boolean(ctx.row.dispatched_at),
+    priors: confirmationBrief.priors,
+  });
+  const routeGate = aliclikRouteRiskGate(routeRisk, input.routeRiskExceptionReason);
+  if (!routeGate.allowed) return blocked(routeGate.message ?? "Aliclik está cerrado para este pedido.");
+  const routeRiskExceptionReason = routeGate.requiresException
+    ? input.routeRiskExceptionReason?.trim() ?? null
+    : null;
+
   const duplicateCheck = await duplicateHold(orderId, scope);
   if ("error" in duplicateCheck) return unread(duplicateCheck.error);
   if (!duplicateCheck.hold.allowed) return blocked(duplicateCheck.hold.message ?? "Resuelve el posible duplicado antes de crear otra guía.");
@@ -1008,7 +1041,7 @@ export async function aliclikCreateGates(
     const error = outputPolicy.error + (outputPolicy.pideMotivo ? " Vuelve a cotizar para ver el campo del motivo." : "");
     return "unread" in outputPolicy ? unread(error) : blocked(error);
   }
-  return { ok: true, riskExceptionReason, risk: confirmationBrief.risk };
+  return { ok: true, riskExceptionReason, risk: confirmationBrief.risk, routeRiskExceptionReason, routeRisk };
 }
 
 /** El teléfono y la dirección que Aliclik exige. Lo comparten la creación y la simulación. Pura. */
@@ -1035,6 +1068,7 @@ export async function createAliclikGuideFor(
   const gates = await aliclikCreateGates(ctx, input, scope, origin);
   if (!gates.ok) return { error: gates.error, ...(gates.kaptaBlock ? { kaptaBlock: true } : {}) };
   const riskExceptionReason = gates.riskExceptionReason;
+  const routeRiskExceptionReason = gates.routeRiskExceptionReason;
   const confirmationBrief = { risk: gates.risk };
   const pinExceptionReason = input.pinExceptionReason?.trim() || null;
 
@@ -1326,6 +1360,25 @@ export async function createAliclikGuideFor(
               payment_state: ctx.row.payment_state,
               antecedents: confirmationBrief.risk.antecedents,
             },
+          },
+        ]
+      : []),
+    // El cierre por riesgo de no entrega (§8.6) levantado con motivo: quién,
+    // por qué y qué señales tenía el pedido, para medir después si el motivo
+    // acertó.
+    ...(routeRiskExceptionReason
+      ? [
+          {
+            store_id: ctx.storeId,
+            order_id: orderId,
+            kind: "aliclik_route_risk_exception",
+            occurred_at: registeredAt,
+            actor: ctx.userId,
+            source: "manual",
+            courier: "aliclik",
+            guide_code: orderNumber,
+            reason: routeRiskExceptionReason,
+            payload: { reasons: gates.routeRisk.reasons },
           },
         ]
       : []),
