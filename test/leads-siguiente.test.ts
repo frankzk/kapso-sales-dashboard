@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CLAIM_TTL_MINUTES, MAX_OPEN_LEADS, cartLinesOf, dayTimeLabel, isClaimCapError, leadAfter, pickNextLead, usableAddress } from "@/lib/leads";
+import { CLAIM_TTL_MINUTES, MAX_OPEN_LEADS, cartLinesOf, claimCapHolders, dayTimeLabel, isClaimCapError, leadAfter, pickNextLead, usableAddress } from "@/lib/leads";
 
 /**
  * El siguiente lead de cada vendedora (14-10-2026, MOM §11).
@@ -224,5 +224,21 @@ describe("«Siguiente lead» salta al siguiente libre si se lo ganaron (owner, 2
     const cola = [lead("a"), lead("b"), lead("c", { claimed_by: "rosa", claimed_at: hace(1) }), lead("d")];
     // «b» resultó tomado al abrirlo: se busca desde «b», saltando «c» (reservado).
     expect(ids(leadAfter(cola, { openId: "b", userId: YO, now: NOW }))).toBe("d");
+  });
+});
+
+describe("claimCapHolders: las reservas del aviso del tope, para soltarlas", () => {
+  it("nombre si hay, si no el teléfono, si no «un lead»; conserva el id", () => {
+    expect(
+      claimCapHolders([
+        { id: "a", name: " Ana ", phone: "51900000001" },
+        { id: "b", name: null, phone: "51993022932" },
+        { id: "c", name: "  ", phone: null },
+      ]),
+    ).toEqual([
+      { id: "a", label: "Ana" },
+      { id: "b", label: "51993022932" },
+      { id: "c", label: "un lead" },
+    ]);
   });
 });

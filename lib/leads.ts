@@ -1053,6 +1053,21 @@ export function leadAfter<T extends Pick<NextLeadCandidate, "id" | "claimed_by" 
   return queue.slice(Math.max(from, 0)).find(free) ?? null;
 }
 
+/**
+ * Las reservas propias que ocupan el tope, con su nombre o teléfono, para que
+ * la asesora las suelte sin esperar los 10 minutos (05-11-2026, Jessica: «solo
+ * tengo un lead abierto y me figuran 2»; la otra la tenía su siguiente en otra
+ * pestaña). Pura.
+ */
+export interface ClaimCapHolder {
+  id: string;
+  label: string;
+}
+
+export function claimCapHolders(open: readonly { id: string; name: string | null; phone: string | null }[]): ClaimCapHolder[] {
+  return open.map((l) => ({ id: l.id, label: l.name?.trim() || l.phone?.trim() || "un lead" }));
+}
+
 /** ¿El aviso del servidor es el del tope (y no «X está atendiendo este lead»)? */
 export function isClaimCapError(message: string | null | undefined): boolean {
   return !!message && message.startsWith("Ya tienes ") && message.includes("leads abiertos");

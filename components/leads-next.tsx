@@ -25,6 +25,7 @@ import {
   usableAddress,
   type CartLine,
   type QueueBucket,
+  type ClaimCapHolder,
 } from "@/lib/leads";
 import { LEAD_COVERAGES, type LeadCoverage } from "@/lib/lead-coverage";
 import { leadUrgency } from "@/lib/lead-urgency";
@@ -126,7 +127,12 @@ function writeSkipped(ids: Set<string>) {
   }
 }
 
-export type NextLeadProblem = { kind: "blocked" | "error"; message: string };
+export type NextLeadProblem = {
+  kind: "blocked" | "error";
+  message: string;
+  /** Con el tope: sus reservas que lo ocupan, cada una con «Soltar». */
+  holders?: ClaimCapHolder[];
+};
 
 export interface NextLeadState {
   /** El lead reservado para ella, o null mientras se busca / si no hay. */
@@ -143,6 +149,8 @@ export interface NextLeadState {
   /** Descarta una reserva perdida solo en esta pestaña; no toca al nuevo dueño. */
   invalidate: (id: string) => void;
   retry: () => void;
+  /** Suelta una de sus reservas del aviso del tope y vuelve a buscar. */
+  releaseHolder: (id: string) => Promise<void>;
 }
 
 /**
@@ -242,7 +250,7 @@ export function useNextLead({
           return;
         }
         if (res.error) {
-          if (isClaimCapError(res.error)) setProblem({ kind: "blocked", message: res.error });
+          if (isClaimCapError(res.error)) setProblem({ kind: "blocked", message: res.error, holders: res.capHolders });
           else if (res.error.startsWith("Sin acceso")) setProblem({ kind: "error", message: res.error });
           // «X está atendiendo este lead»: la lista venía atrasada; al siguiente.
           // Si pasa muchas veces seguidas no se insiste: una racha así es la
@@ -275,7 +283,7 @@ export function useNextLead({
       const res = await claimLead(id).catch(() => null);
       if (!res || !res.error || heldRef.current !== id) return;
       hold(null);
-      if (isClaimCapError(res.error)) setProblem({ kind: "blocked", message: res.error });
+      if (isClaimCapError(res.error)) setProblem({ kind: "blocked", message: res.error, holders: res.capHolders });
       else setTaken((m) => new Map(m).set(id, Date.now()));
     };
     const timer = setInterval(() => void renew(), RENEW_MS);
@@ -328,6 +336,16 @@ export function useNextLead({
     setTaken(new Map());
   }, []);
 
+  // «Soltar» en el aviso del tope: suelta UNA reserva propia (la de otra
+  // pestaña, o una ficha que quedó abierta) y vuelve a buscar el siguiente.
+  // `releaseLead` solo suelta lo que es de ella.
+  const releaseHolder = useCallback(async (id: string) => {
+    await releaseLead(id).catch(() => undefined);
+    if (heldRef.current === id) hold(null);
+    setProblem(null);
+    setTaken(new Map());
+  }, [hold]);
+
   const invalidate = useCallback((id: string) => {
     if (heldRef.current !== id) return;
     hold(null);
@@ -344,6 +362,7 @@ export function useNextLead({
     skip,
     release,
     retry,
+    releaseHolder,
     invalidate,
   };
 }
@@ -795,6 +814,7 @@ export function NextLeadCard({
     ) : null;
 
   if (problem) {
+    const holders = problem.kind === "blocked" ? problem.holders ?? [] : [];
     return (
       <Banner tone={problem.kind === "blocked" ? "warn" : "crit"} title={problem.kind === "blocked" ? "Tu siguiente lead está en pausa" : "No se pudo reservar tu siguiente lead"}>
         <span className="flex flex-wrap items-center justify-between gap-3">
@@ -803,6 +823,16 @@ export function NextLeadCard({
             Reintentar
           </OpsButton>
         </span>
+        {holders.length > 0 && (
+          <span className="mt-2 block space-y-1.5">
+            <span className="block text-[13px] text-ink-600">
+              Si no los tienes abiertos en esta pantalla (otra pestaña, otro equipo o una ficha que se quedó abierta), suéltalos aquí:
+            </span>
+            {holders.map((h) => (
+              <ReleaseHolderRow key={h.id} label={h.label} onRelease={() => state.releaseHolder(h.id)} />
+            ))}
+          </span>
+        )}
       </Banner>
     );
   }
@@ -888,5 +918,26 @@ export function NextLeadCard({
         </div>
       </div>
     </section>
+  );
+}
+
+/** Una reserva propia del aviso del tope, con su «Soltar». */
+function ReleaseHolderRow({ label, onRelease }: { label: string; onRelease: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <span className="text-[13px] font-medium text-ink-900">{label}</span>
+      <OpsButton
+        size="sm"
+        variant="secondary"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          void onRelease().finally(() => setBusy(false));
+        }}
+      >
+        {busy ? "Soltando…" : "Soltar"}
+      </OpsButton>
+    </span>
   );
 }

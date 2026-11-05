@@ -115,7 +115,11 @@ describe("la acción del servidor", () => {
   it("el aviso nombra los leads que hay que soltar", () => {
     // «No» a secas obliga a adivinar cuál cerrar.
     expect(server).toContain("Cierra uno para tomar este.");
-    expect(server).toContain('abiertos.map((l) => l.name?.trim() || l.phone || "un lead")');
+    // El nombre o el teléfono sale de `claimCapHolders` (probado aparte), y la
+    // misma lista viaja al cliente para que cada una se pueda soltar.
+    expect(server).toContain("const capHolders = claimCapHolders(abiertos);");
+    expect(server).toContain('capHolders.map((h) => h.label).join(" y ")');
+    expect(server).toMatch(/Cierra uno para tomar este\.`,\s*capHolders,/);
   });
 
   it("el tope se comprueba ANTES de escribir la reserva", () => {
