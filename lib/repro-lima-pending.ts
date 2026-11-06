@@ -19,7 +19,7 @@ export const LIMA_QUEUE_CARDS: readonly { key: Exclude<LimaAttentionFilter, "tod
   { key: "reprogramados", label: "Reprogramados", hint: "Con una nueva fecha acordada y vigente en Repro Lima. También aparecen en Hoy, Mañana o Después según esa fecha.", empty: "No hay pedidos con una nueva fecha acordada con estos filtros." },
   { key: "programados_hoy", label: "Programados para hoy", hint: QUEUE_SEGMENT_LABEL.programados_hoy.hint, empty: "No hay pedidos programados para hoy con estos filtros." },
   { key: "programados_manana", label: "Programados para mañana", hint: QUEUE_SEGMENT_LABEL.programados_manana.hint, empty: "No hay pedidos programados para mañana con estos filtros." },
-  { key: "nunca_salieron", label: "Nunca salieron", hint: QUEUE_SEGMENT_LABEL.nunca_salieron.hint, empty: "No hay pedidos recientes sin salida registrada con estos filtros." },
+  { key: "nunca_salieron", label: "Nunca salieron", hint: `${QUEUE_SEGMENT_LABEL.nunca_salieron.hint} Del más antiguo al más reciente: arriba lo que lleva más días esperando.`, empty: "No hay pedidos recientes sin salida registrada con estos filtros." },
   { key: "ya_salieron", label: "Ya salieron", hint: "Con al menos una salida a reparto registrada y sin una nueva fecha pendiente. La situación indica si sigue con el courier o ya retornó.", empty: "No hay pedidos con una salida previa y sin nueva fecha con estos filtros." },
   { key: "mas_de_30", label: "Más de 30 días", hint: QUEUE_SEGMENT_LABEL.mas_de_30.hint, empty: "No hay pedidos de más de 30 días sin salida registrada con estos filtros." },
   { key: "programados_despues", label: "Programados para después", hint: QUEUE_SEGMENT_LABEL.programados_despues.hint, empty: "No hay pedidos programados para después de mañana con estos filtros." },
@@ -57,7 +57,10 @@ export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly
       const segment = limaQueueSegment(row, today, c);
       return { row, segment, rank: QUEUE_SEGMENTS.indexOf(segment), day: limaScheduledFor(row, c) ?? "", created: Date.parse(row.createdAt ?? "") || 0 };
     }).filter((r) => filter === "todos" || r.segment === filter)
-      .sort((a, b) => a.rank - b.rank || a.day.localeCompare(b.day) || b.created - a.created)
+      // «Nunca salieron», del más antiguo al más reciente (owner, 06-11-2026):
+      // en un pico lo armado hace días se hundía al final y nadie lo llamaba.
+      // El resto, y Despacho del día (`sortQueue`, §29.13), siguen del más reciente.
+      .sort((a, b) => a.rank - b.rank || a.day.localeCompare(b.day) || (a.segment === "nunca_salieron" ? a.created - b.created : b.created - a.created))
       .map((r) => r.row);
   }
   const byId = new Map(rows.map((row) => [row.orderId, row]));

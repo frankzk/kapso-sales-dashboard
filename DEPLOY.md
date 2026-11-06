@@ -1,5 +1,22 @@
 # Deployment runbook
 
+### 06-11-2026 · Repro Lima: «Nunca salieron» del más antiguo al más reciente (sin migración, MOM §9.5)
+
+Decisión del owner en el pico de pedidos del 06-11-2026. En Repro Lima, el
+apartado «Nunca salieron» pone arriba lo que lleva más días esperando, en su
+tarjeta y dentro de Todos. Los demás apartados no cambian. Despacho del día
+tampoco cambia: sigue del más reciente al más antiguo.
+
+**Sin migración**, sin crons ni variables nuevas. `MOM_RESOLUTION_VERSION` no
+cambia: solo cambia el orden de una lista. Medido el 06-11-2026: 38 pedidos de
+Lima con rótulo, sin tomar y de antes de ayer (el más viejo del 23/10) quedaban
+al final de esa lista.
+
+**Qué mirar después.** Repro Lima → «Nunca salieron»: la primera fila es la de
+fecha de creación más antigua; la ayuda de la tarjeta lo dice.
+
+**Marcha atrás.** Revertir el commit. Solo lee; no escribe nada en la base.
+
 ### 06-11-2026 · Almacén: el motivo de cada caja detenida y Olva con tracking fuera de la cola (sin migración, MOM §6.2)
 
 Pedido del owner al ver Almacén con 18 cajas «Detenida» y nadie actuando. Ahora:

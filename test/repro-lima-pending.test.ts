@@ -6,6 +6,7 @@ import { attentionCounts, attentionFilter, attentionRows, limaQueueSegment, lima
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
+import { sortQueue, type QueueRow } from "@/lib/dispatch-day";
 
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
 vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAliclikRetry: vi.fn(), dismissAliclikRetry: vi.fn() }));
@@ -239,6 +240,26 @@ describe("apartados operativos de la misma cola", () => {
     const r = row({ programmedFor: "2026-11-01" });
     expect(limaQueueSegment(r, "2026-10-31")).toBe("programados_manana");
     expect(limaQueueSegment(r, "2026-11-01")).toBe("programados_hoy");
+  });
+  it("Nunca salieron va del más antiguo al más reciente, en su tarjeta y en Todos (owner, 06-11-2026)", () => {
+    const pico = [
+      row({ orderId: "hoy-1", createdAt: "2026-10-28T15:00:00Z" }),
+      row({ orderId: "hace-5-dias", createdAt: "2026-10-23T15:00:00Z" }),
+      row({ orderId: "ayer", createdAt: "2026-10-27T15:00:00Z" }),
+      row({ orderId: "volvio-ayer", createdAt: "2026-10-27T15:00:00Z", hasPriorDispatch: true }),
+      row({ orderId: "volvio-antes", createdAt: "2026-10-20T15:00:00Z", hasPriorDispatch: true }),
+      row({ orderId: "prog", createdAt: "2026-10-01T15:00:00Z", programmedFor: TODAY }),
+    ];
+    expect(attentionRows(pico, [], "nunca_salieron", TODAY).map((r) => r.orderId)).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
+    // En Todos el orden de los apartados no cambia; solo el de adentro de Nunca salieron.
+    expect(attentionRows(pico, [], "todos", TODAY).map((r) => r.orderId)).toEqual(["prog", "hace-5-dias", "ayer", "hoy-1", "volvio-ayer", "volvio-antes"]);
+    // Ya salieron sigue del más reciente al más antiguo.
+    expect(attentionRows(pico, [], "ya_salieron", TODAY).map((r) => r.orderId)).toEqual(["volvio-ayer", "volvio-antes"]);
+  });
+  it("solo Repro Lima cambia: Despacho del día sigue del más reciente al más antiguo (§29.13)", () => {
+    // Solo los campos que mira el orden; el resto de la fila no participa.
+    const q = (orderId: string, createdAt: string) => ({ orderId, createdAt, programmedFor: null, hasPriorDispatch: false, assignable: true }) as unknown as QueueRow;
+    expect(sortQueue([q("viejo", "2026-10-23T15:00:00Z"), q("nuevo", "2026-10-28T15:00:00Z")], TODAY).map((r) => r.orderId)).toEqual(["nuevo", "viejo"]);
   });
   it("Más de 30 días es estricto y usa el día de creación en Lima", () => {
     expect(limaQueueSegment(row({ createdAt: "2026-09-28T04:59:59Z" }), TODAY)).toBe("mas_de_30");
