@@ -226,6 +226,10 @@ function stationData(pending: Partial<WarehouseShipment>[] = []): WarehouseStati
       operation: "lima",
       delivery_status: null,
       created_at: "2026-10-13T13:00:00.000Z",
+      reported_status: null,
+      olva_tracking: null,
+      olva_emision: null,
+      olva_status: null,
       ...p,
     })),
     blocked: [],
@@ -675,6 +679,87 @@ describe("la chapa de «Por armar»", () => {
   it("con error, ninguna fila de la cola lleva la chapa", () => {
     const html = renderStation({ ...retriesData([], [HANDOFF]), error: RETRY_ERROR }, stationData([{ order_id: "KP-950" }]));
     expect(text(html)).not.toContain(POR_ARMAR_CHIP(BOX_ACTION_LABEL.salida_nueva_rearmar));
+  });
+});
+
+describe("la detenida dice por qué (06-11-2026)", () => {
+  // `created_at` de 2026-10-13: con el reloj de hoy, todas las de stationData()
+  // llevan más de tres días y salen «Detenida».
+  const SIN_COURIER = "Sin courier: elígelo en Despacho para poder armarla.";
+
+  it("debajo de sus líneas, en ámbar, el porqué y qué hacer", () => {
+    const html = renderStation(retriesData([], []), stationData([{ order_id: "otro", courier: "por_definir" }]));
+    expect(text(html)).toContain("Detenida");
+    expect(html).toContain(`<p class="mt-0.5 text-xs text-warn-fg">${SIN_COURIER}`);
+  });
+
+  it("la salida nueva de un reintento ya dice qué hacer: su línea manda y el diagnóstico no se repite", () => {
+    const html = renderStation(retriesData([], [HANDOFF]), stationData([{ order_id: "KP-950", courier: "por_definir" }]));
+    const t = text(html);
+    expect(count(t, POR_ARMAR_CHIP(BOX_ACTION_LABEL.salida_nueva_rearmar))).toBe(1);
+    expect(t).not.toContain(SIN_COURIER);
+  });
+
+  it("mientras los reintentos no llegan, el diagnóstico espera: no se pinta para quitarlo después", () => {
+    const html = renderStation(undefined, stationData([{ order_id: "otro", courier: "por_definir" }]));
+    expect(text(html)).toContain("Detenida");
+    expect(text(html)).not.toContain(SIN_COURIER);
+  });
+
+  it("si los reintentos fallaron, el diagnóstico sí se ve", () => {
+    const html = renderStation(retriesData([], [], { error: "x" }), stationData([{ order_id: "otro", courier: "por_definir" }]));
+    expect(text(html)).toContain(SIN_COURIER);
+  });
+
+  it("una detenida de Aliclik nunca pide escanear, y no repite la nota del courier", () => {
+    // Una de Aliclik junto a una de Grupo GF: el grupo no lleva la chapa «Las
+    // cierra el courier», así que la fila podría llevar su nota.
+    const html = renderStation(
+      retriesData([], []),
+      stationData([
+        { order_id: "ali", courier: "aliclik", operation: "provincia_cod", reported_status: null },
+        { order_id: "gf", courier: "propio", operation: "provincia_cod", created_at: new Date().toISOString() },
+      ]),
+    );
+    const t = text(html);
+    expect(t).toContain("Aliclik todavía no la reporta preparada: empácala si falta y, si ya está empacada, revísalo en su portal.");
+    expect(t).not.toContain("escanéala");
+    expect(t).not.toContain("Empácala; sale de la cola cuando");
+  });
+
+  it("una de Aliclik del día (sin diagnóstico) conserva la nota del courier", () => {
+    const html = renderStation(
+      retriesData([], []),
+      stationData([
+        { order_id: "ali", courier: "aliclik", operation: "provincia_cod", created_at: new Date().toISOString() },
+        { order_id: "gf", courier: "propio", operation: "provincia_cod", created_at: new Date().toISOString() },
+      ]),
+    );
+    expect(text(html)).toContain("Empácala; sale de la cola cuando Aliclik la reporte preparada.");
+  });
+
+  it("la detenida con diagnóstico enlaza su pedido a la ficha", () => {
+    const html = renderStation(retriesData([], []), stationData([{ order_id: "otro", courier: "olva", operation: "agencia" }]));
+    expect(html).toMatch(/<a href="[^"]*ficha=otro[^"]*"[^>]*>#P0<\/a>/);
+  });
+
+  it("la de Olva con tracking sale de la cola y se lee en «No se pueden armar» con su motivo", () => {
+    const base = stationData([{ order_id: "olva", courier: "olva", operation: "agencia", olva_tracking: "2804738", olva_emision: "26" }]);
+    const [olva] = base.pending;
+    if (!olva) throw new Error("sin salida");
+    const reason = "Ya salió con Olva (tracking 2804738-26). El rastreo de Olva todavía no reconoce ese número: revísalo en la ficha del pedido, en «Salidas y guías».";
+    const html = renderStation(retriesData([], []), { ...base, pending: [], blocked: [{ shipment: olva, reason }] });
+    const t = text(html);
+    expect(t).toContain("No se pueden armar");
+    expect(t).toContain(reason);
+    // El motivo va en su propio renglón sin `truncate`: en el teléfono la
+    // instrucción del final no puede quedar cortada. Y en ámbar: no es un error.
+    const reasonTag = html.match(new RegExp(`<p class="([^"]*)">${reason.slice(0, 20).replace(/[()]/g, "\\$&")}`));
+    expect(reasonTag?.[1]).toBeDefined();
+    expect(reasonTag?.[1]).not.toContain("truncate");
+    expect(reasonTag?.[1]).toContain("text-warn-fg");
+    // Y el pedido abre su ficha, donde está «Salidas y guías».
+    expect(html).toMatch(/<a href="[^"]*ficha=olva[^"]*"/);
   });
 });
 

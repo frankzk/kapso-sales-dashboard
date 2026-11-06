@@ -1078,6 +1078,21 @@ Reglas:
   caja. Se aparta con el motivo a la vista y **no** cuenta en el pendiente. No se
   oculta: el pedido puede seguir vivo en el Master y esta es la pantalla que debe
   explicar por qué su caja ya no está en la fila.
+- **Una salida de Olva con tracking registrado también se aparta** (desde el
+  06-11-2026). Olva emite el tracking en el mostrador **después** de que la caja
+  salió con su rótulo (ver «El tracking de Olva y su rastreo»), así que una salida
+  de Olva con `olva_tracking` ya no está en el almacén y no es trabajo de armado.
+  Esas cajas casi nunca se escanean aquí —de unas 199 salidas de Olva en 60 días,
+  una sola llegó a `listo_despacho`—: se quedan en `rotulo_generado` con custodia
+  `empresa`, y el 06-11-2026 eran **7 de las 10 detenidas de agencia** (#KP141980
+  con el tracking 2804738-26, vinculado el 17/10, entre ellas). El motivo dice
+  «Ya salió con Olva (tracking 2804738-26)»; si el rastreo nunca reconoció ese
+  número (`olva_status` vacío) añade que hay que revisarlo en la ficha del
+  pedido, en **Salidas y guías**: el número de pedido de la fila abre esa ficha.
+  El motivo va entero (no se corta en el teléfono) y en ámbar, porque no es un
+  error: la caja ya salió. Como las anuladas, no cuenta en el pendiente ni en la
+  Mesa de despacho (es la misma definición, `warehouseBlocker`) y el pedido no
+  cambia de etapa en el Master: esta regla solo dice qué hay que armar.
 - La cola se agrupa por operación en la prioridad de almacén de este apartado
   —Lima, después agencia, después provincia— y dentro de cada grupo lo más
   antiguo va primero. Una lista sola ordenada por fecha entierra las cajas de
@@ -1124,6 +1139,50 @@ Reglas:
   existe.
 - Una caja pendiente de tres días o más se marca **detenida**. No es el trabajo
   del día: o el courier nunca reportó, o la caja se quedó sin dueño.
+- **Cada detenida dice por qué y qué hacer** (desde el 06-11-2026; antes solo
+  decía «Detenida» y nadie actuaba: había 18). Gana la primera razón que aplica
+  (`stallDiagnosis`, `lib/warehouse-queue.ts`):
+  1. **La salida inmediatamente anterior del mismo pedido se anuló o volvió**
+     (`anulado`, o custodia `devuelto`/`retorno`; si después de la anulada hubo
+     otra salida viva, esta razón no aplica): «Salida nueva: la anterior
+     (Tanders) volvió a la oficina. Rotula esa caja con esta salida y
+     escanéala.» Si aún viene de vuelta o solo se anuló, «Si la caja ya está en
+     oficina, rotúlala con esta salida y escanéala.» Si esta salida tiene
+     courier «por definir», lo que bloquea va primero: «… Primero elige courier
+     en Despacho; después rotula esa caja con esta salida y escanéala.»
+     (#KP140302-S02 con courier; #KP138976-S02 y #KP139613-S02 por definir).
+     Si la anterior no tenía courier, no se nombra. Si la salida nueva es de
+     Aliclik, en lugar de «escanéala» dice que sale de la cola cuando Aliclik la
+     reporte preparada.
+  2. **Courier «por definir»** (o vacío): «Sin courier: elígelo en Despacho para
+     poder armarla.»
+  3. **Aliclik no la reporta preparada**: si su último reporte sigue en
+     `TO_PREPARE`, «Aliclik no la reporta preparada (TO_PREPARE): revisa en su
+     portal si ya se empacó.» (#KP141698, #KP141945); con otro reporte o sin
+     ninguno, «Aliclik todavía no la reporta preparada: empácala si falta y, si
+     ya está empacada, revísalo en su portal.» Nunca pide escanearla, porque a
+     Aliclik la cierra su reporte y no el escaneo; por eso la nota «Empácala;
+     sale de la cola cuando Aliclik la reporte preparada» no se repite debajo.
+  4. **Olva sin tracking**: «Si ya salió, registra el tracking de Olva en la
+     ficha del pedido, en «Salidas y guías»; si no, ármala.» (#AUR177631,
+     #KP143355).
+  5. **Treinta días o más**: «30 días o más sin armar: hay que decidir si sale o
+     se cancela.» Se **suma** a la razón que haya en vez de taparla: una caja sin
+     courier desde hace tres meses (#KP127125, #KP127386, #AUR175240) sigue
+     necesitando courier, y además una decisión; sola, en #KP122204-S01 (87
+     días).
+  6. **Lo demás**: «Nadie la armó: rotúlala y escanéala, o avisa si falta stock.»
+
+  La línea va debajo de la caja, en ámbar, y el número de pedido de la fila
+  abre su ficha. Si la caja es la salida nueva de un reintento de Lima, manda su
+  línea de reintento (§9.5), que ya dice qué hacer, y el diagnóstico no se
+  repite; mientras la lista de reintentos no ha llegado, el diagnóstico espera
+  (si la lista falla, se ve). Para la primera razón la estación lee las otras
+  salidas del pedido —solo las creadas antes que esta— en una lectura por tanda
+  de 200 pedidos; la Mesa de despacho, que solo cuenta, no la hace. Si esa
+  lectura falla o llega cortada por el tope de filas, la estación no la usa (el
+  diagnóstico cae a las demás razones) y lo deja en el registro. No hay estados
+  nuevos: todo sale de lo que ya guardan la salida y sus hermanas.
 - El escaneo acepta cuatro identificadores del mismo rótulo: el QR, el código de
   salida, la guía del courier y el número de pedido en código de barras. Los tres
   primeros designan una caja; el número de pedido designa al pedido, que puede
@@ -10521,6 +10580,14 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   con su rótulo. Se aceptan las dos escrituras y el número solo con el año
   actual. **El mismo tracking no puede colgar de dos salidas**; corregirlo
   escribe un evento con el valor anterior.
+- **Con tracking, la salida sale de la cola de armado** (06-11-2026). Como la
+  caja sale con su rótulo antes de que exista el tracking, una salida de Olva
+  con tracking ya no está en el almacén: Almacén la aparta en «No se pueden armar»
+  con «Ya salió con Olva (tracking …)», y si el rastreo todavía no reconoce el
+  número, pide revisarlo aquí, en Salidas y guías de la ficha del pedido, que
+  la fila abre (reglas de Almacén, §6.2).
+  Una salida de Olva sin tracking que lleva tres días o más pide justamente
+  eso: registrarlo si ya salió.
 - **Olva no tiene API para clientes.** El rastreo se hace con la misma llamada
   que hace su página pública de seguimiento —`getTrackingInformation` con
   `details=1` en `reports.olvaexpress.pe`, con la apikey fija que la propia
