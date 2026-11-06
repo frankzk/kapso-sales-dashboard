@@ -1,5 +1,20 @@
 # Deployment runbook
 
+### 06-11-2026 · Repro Lima: la dirección completa bajo el cliente (sin migración, MOM §9.5)
+
+Pedido del owner. Debajo del cliente y su teléfono, la lista de Repro Lima
+muestra la dirección del Master con su distrito y, en otra línea, la referencia.
+Va entera, sin cortar, en la tabla y en el teléfono. Antes solo se veía el
+distrito. La lectura suma `address` y `reference` a las columnas que ya leía de
+`order_master`.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+
+**Qué mirar después.** Repro Lima → «Reintentos Aliclik»: cada fila dice «Av. …
+· distrito» y «Ref. …» bajo el teléfono.
+
+**Marcha atrás.** Revertir el commit. Solo lee; no escribe nada en la base.
+
 ### 06-11-2026 · Repro Lima: Creación, Canal, Distrito y Courier junto a Tienda (sin migración, MOM §9.5)
 
 Pedido del owner: los filtros del Master que sirven en Lima, en la barra de

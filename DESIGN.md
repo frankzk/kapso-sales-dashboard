@@ -440,7 +440,9 @@ Master: «Creación» (`DateRangePill`: los atajos como botones secundarios, el
 elegido en primario, y debajo «Desde» y «Hasta» en dos columnas), «Canal»,
 «Distrito» y «Courier» (`FacetPill`, cada opción con su cantidad). Con alguna
 puesta aparece «Quitar filtros» como botón fantasma. En el teléfono se acomodan
-en varias líneas.
+en varias líneas. Bajo el cliente y su teléfono, la dirección con su distrito
+(«Av. … · Ate») en 12 px `ink-700` y, debajo, «Ref. …» en `ink-500`, enteras y
+partidas en líneas, nunca truncadas.
 
 Una sola tabla para Todos y para los filtros de atención. «Todos · por entregar»
 es la primera tarjeta y queda activa al entrar, también desde enlaces guardados

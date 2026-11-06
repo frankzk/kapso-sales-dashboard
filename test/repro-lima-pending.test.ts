@@ -22,7 +22,7 @@ const row = (overrides: Partial<LimaPendingOrder> = {}): LimaPendingOrder => ({
   orderId: "o1", storeId: "a", storeName: "Kenku", orderName: "#KP1", customerName: "María Pérez",
   customerPhone: "51912345678", district: "Lima", orderTotal: 149, createdAt: "2026-10-27T18:00:00Z",
   macroSince: "2026-10-27T18:00:00Z", stage: "preparacion", substage: "por_armar",
-  courier: null, dispatchedAt: null, attempts: 0, hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, salesChannel: "web_formulario", ...overrides,
+  courier: null, dispatchedAt: null, attempts: 0, hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, salesChannel: "web_formulario", address: "Av. Los Olivos 123", reference: "Frente al parque", ...overrides,
 });
 const TODAY = "2026-10-28";
 
@@ -366,5 +366,20 @@ describe("filtros de la barra junto a Tienda: Creación, Canal, Distrito y Couri
     // El total de la línea sigue siendo el de la tienda.
     expect(html).toMatch(/<b[^>]*>1<\/b> de 2 pendientes de entrega/);
     nav.search = "";
+  });
+});
+
+describe("la dirección completa bajo el cliente (owner, 06-11-2026)", () => {
+  it("dirección, distrito y referencia enteros, en la tabla y en la lista del teléfono", () => {
+    const html = renderToStaticMarkup(createElement(LimaPendingList, { rows: [row({ district: "Los Olivos" })], reproRows: [], today: TODAY, renderActions: () => null }));
+    // Una vez en la tabla (desde 1280 px) y otra en la lista.
+    expect(html.match(/Av\. Los Olivos 123 · Los Olivos/g)).toHaveLength(2);
+    expect(html.match(/Ref\. Frente al parque/g)).toHaveLength(2);
+    expect(html).not.toMatch(/class="truncate[^"]*">Av\./);
+  });
+  it("sin dirección lo dice y conserva el distrito; sin referencia no deja la línea", () => {
+    const html = renderToStaticMarkup(createElement(LimaPendingList, { rows: [row({ address: null, reference: null, district: "Ate" })], reproRows: [], today: TODAY, renderActions: () => null }));
+    expect(html).toContain("Sin dirección · Ate");
+    expect(html).not.toContain("Ref.");
   });
 });

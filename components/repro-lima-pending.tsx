@@ -158,6 +158,20 @@ function PendingDate({ row }: { row: LimaPendingOrder }) {
   return label ? <p className="text-xs tabular-nums text-ink-500">Creado {label}</p> : null;
 }
 
+/**
+ * La dirección completa bajo el cliente (owner, 06-11-2026): con el distrito
+ * solo no se sabía si el pedido podía salir sin llamar. Entera, sin cortar.
+ */
+function PendingAddress({ row }: { row: LimaPendingOrder }) {
+  const district = row.district?.trim() || "Sin distrito";
+  return (
+    <div className="text-xs leading-5">
+      <p className="break-words text-ink-700">{row.address ? `${row.address} · ${district}` : `Sin dirección · ${district}`}</p>
+      {row.reference && <p className="break-words text-ink-500">Ref. {row.reference}</p>}
+    </div>
+  );
+}
+
 /** Atender siempre abre la gestión. El código abre la ficha del pedido. */
 export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText }: {
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
@@ -179,7 +193,7 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
             const repro = cases.get(row.orderId);
             return <tr key={row.orderId} className="border-b border-line align-top hover:bg-wash">
               <td className="px-4 py-3"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
-              <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<p className="truncate text-xs text-ink-500">{row.district ?? "Sin distrito"}</p></td>
+              <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PendingAddress row={row} /></td>
               <td className="px-3 py-3"><PendingContext row={row} repro={repro} today={today} /></td>
               <td className="px-3 py-3"><PendingStage row={row} repro={repro} today={today} /></td>
               <td className="px-3 py-3 text-right"><p className="font-semibold tabular-nums text-ink-900">{soles(row.orderTotal)}</p>{row.courier && <p className="text-xs text-ink-500">{reproCourierName(row.courier)}</p>}</td>
@@ -192,7 +206,7 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
         const repro = cases.get(row.orderId);
         return <li key={row.orderId} className="space-y-2 px-4 py-3">
           <div className="flex flex-wrap items-baseline justify-between gap-2"><OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><span className="text-xs text-ink-500">{row.storeName}</span></div>
-          <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {row.district ?? "Sin distrito"} · {soles(row.orderTotal)}</p>
+          <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {soles(row.orderTotal)}</p><PendingAddress row={row} />
           <PendingContext row={row} repro={repro} today={today} /><PendingStage row={row} repro={repro} today={today} />
           {repro && <ClaimBadge row={repro} />}
           <div className="flex flex-wrap gap-2 [&>*]:grow"><CallButton phone={row.customerPhone} size="md" />{action(row, false)}</div>
