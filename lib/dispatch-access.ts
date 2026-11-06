@@ -2,7 +2,7 @@ import { createServerSupabase } from "@/lib/db";
 import { limaDateKey } from "@/lib/aliclik-geo";
 import { limaDayBounds } from "@/lib/daily-summary";
 import type { DispatchManifestState, DispatchRouteKind } from "@/lib/dispatch";
-import { warehouseBlocker } from "@/lib/warehouse-queue";
+import { previousOutputsOf, warehouseBlocker, type WarehouseSiblingOutput } from "@/lib/warehouse-queue";
 import { isRiderPickupMode, type RiderPickupMode } from "@/lib/grupo-gf-courier";
 import {
   bucketReturns,
@@ -229,9 +229,32 @@ export interface WarehouseShipment extends DispatchShipment {
   delivery_status: string | null;
   /** Antigüedad de la caja: distingue el trabajo del día del atasco. */
   created_at: string | null;
+  /** Lo último que reportó el courier por API: explica la detenida de Aliclik. */
+  reported_status: string | null;
+  /** Tracking de Olva (0174): con él la caja ya salió y no se arma. */
+  olva_tracking: string | null;
+  olva_emision: string | null;
+  /** Nulo si el rastreo nunca reconoció el tracking. */
+  olva_status: string | null;
+  /**
+   * Las salidas anteriores del mismo pedido, para decir por qué una detenida
+   * sigue aquí («la anterior se anuló»). Solo la estación las carga.
+   */
+  previousOutputs?: WarehouseSiblingOutput[];
 }
 
-const WAREHOUSE_SHIPMENT_COLUMNS = `${DISPATCH_SHIPMENT_COLUMNS},delivery_status,created_at`;
+const WAREHOUSE_SHIPMENT_COLUMNS =
+  `${DISPATCH_SHIPMENT_COLUMNS},delivery_status,created_at,reported_status,olva_tracking,olva_emision,olva_status`;
+
+/** Lo mínimo de las otras salidas del pedido para explicar una detenida. */
+const WAREHOUSE_SIBLING_COLUMNS = "id,order_id,courier,delivery_status,custody_state,created_at,output_code";
+
+/**
+ * El tope de filas de PostgREST (1000 por defecto). Una tanda son 200 pedidos y
+ * el 99 % tiene una o dos salidas (el máximo visto, 9), así que llegar aquí
+ * significa que la lectura vino cortada.
+ */
+const WAREHOUSE_SIBLING_ROW_LIMIT = 1000;
 
 export interface WarehouseStationData {
   /**
@@ -267,6 +290,7 @@ const WAREHOUSE_ORDER_LIMIT = 1000;
  */
 async function loadWarehousePending(
   sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  options: { previousOutputs?: boolean } = {},
 ): Promise<{
   pending: WarehouseShipment[];
   blocked: { shipment: WarehouseShipment; reason: string }[];
@@ -293,15 +317,57 @@ async function loadWarehousePending(
       .in("preparation_state", ["rotulo_generado", "en_armado"])
       .in("order_id", orderIds.slice(start, start + 200))
       .order("created_at", { ascending: false });
-    for (const row of (data ?? []) as unknown as Omit<WarehouseShipment, "operation">[]) {
+    const rows = (data ?? []) as unknown as Omit<WarehouseShipment, "operation">[];
+    // Las otras salidas de esos pedidos, en UNA lectura por tanda: es lo que
+    // deja decir «la anterior se anuló» en una detenida. La Mesa de despacho
+    // solo cuenta, así que no la paga.
+    const siblingsByOrder = new Map<string, WarehouseSiblingOutput[]>();
+    let siblingsReliable = true;
+    const withOrder = [...new Set(rows.map((row) => row.order_id).filter((id): id is string => !!id))];
+    if (options.previousOutputs && withOrder.length) {
+      const { data: siblingRows, error: siblingError } = await sb
+        .from("shipments")
+        .select(WAREHOUSE_SIBLING_COLUMNS)
+        .in("order_id", withOrder)
+        .order("created_at", { ascending: true })
+        .limit(WAREHOUSE_SIBLING_ROW_LIMIT);
+      // Sin hermanas fiables, el diagnóstico no puede decir «la anterior se
+      // anuló»: mejor no cargarlas (cae a las demás razones) que cargarlas a
+      // medias, y dejarlo escrito en el registro en vez de callarlo.
+      if (siblingError) {
+        console.error("[almacén] no se pudieron leer las salidas anteriores", siblingError.message);
+        siblingsReliable = false;
+      } else if ((siblingRows ?? []).length >= WAREHOUSE_SIBLING_ROW_LIMIT) {
+        console.error(`[almacén] las salidas anteriores llegaron al tope de ${WAREHOUSE_SIBLING_ROW_LIMIT} filas en una tanda`);
+        siblingsReliable = false;
+      }
+      for (const sibling of (siblingsReliable ? siblingRows ?? [] : []) as unknown as (WarehouseSiblingOutput & { order_id: string | null })[]) {
+        if (!sibling.order_id) continue;
+        const list = siblingsByOrder.get(sibling.order_id) ?? [];
+        list.push({
+          id: sibling.id,
+          courier: sibling.courier,
+          delivery_status: sibling.delivery_status,
+          custody_state: sibling.custody_state,
+          created_at: sibling.created_at,
+          output_code: sibling.output_code ?? null,
+        });
+        siblingsByOrder.set(sibling.order_id, list);
+      }
+    }
+    for (const row of rows) {
       const shipment: WarehouseShipment = {
         ...row,
         operation: operationByOrder.get(row.order_id ?? "") ?? null,
       };
-      // Una guía anulada o ya en ruta no es trabajo de armado. Se aparta aquí,
-      // en la MISMA definición de la cola, para que el pendiente que cuenta la
-      // Mesa de despacho y el que ve el almacén sigan siendo el mismo número.
-      const reason = warehouseBlocker(shipment.delivery_status);
+      if (options.previousOutputs && siblingsReliable) {
+        shipment.previousOutputs = previousOutputsOf(shipment, siblingsByOrder.get(row.order_id ?? "") ?? []);
+      }
+      // Una guía anulada o ya en ruta, o una salida de Olva que ya tiene su
+      // tracking, no es trabajo de armado. Se aparta aquí, en la MISMA
+      // definición de la cola, para que el pendiente que cuenta la Mesa de
+      // despacho y el que ve el almacén sigan siendo el mismo número.
+      const reason = warehouseBlocker(shipment);
       if (reason) blocked.push({ shipment, reason });
       else pending.push(shipment);
     }
@@ -313,7 +379,7 @@ export async function getWarehouseStationData(): Promise<WarehouseStationData> {
   const sb = await createServerSupabase();
   const today = limaDayBounds(limaDateKey());
   const [{ pending, blocked, omitted }, armedRes] = await Promise.all([
-    loadWarehousePending(sb),
+    loadWarehousePending(sb, { previousOutputs: true }),
     sb
       .from("shipments")
       .select(DISPATCH_SHIPMENT_COLUMNS)

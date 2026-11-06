@@ -1,5 +1,30 @@
 # Deployment runbook
 
+### 06-11-2026 · Almacén: el motivo de cada caja detenida y Olva con tracking fuera de la cola (sin migración, MOM §6.2)
+
+Pedido del owner al ver Almacén con 18 cajas «Detenida» y nadie actuando. Ahora:
+
+- Una salida de Olva con tracking registrado ya salió de la oficina (Olva emite
+  el tracking en el mostrador). Pasa a «No se pueden armar», en ámbar, con el
+  tracking; si el rastreo de Olva no reconoce el número, dice que se revise en
+  la ficha del pedido, en «Salidas y guías». Deja de contar en el pendiente de
+  Almacén y de la Mesa de despacho (la misma regla, `warehouseBlocker`).
+- Cada detenida dice por qué y qué hacer: salida nueva tras una anterior
+  anulada o devuelta, courier por definir, Aliclik que no la reporta preparada,
+  Olva sin tracking, 30 días o más sin armar (decidir si sale o se cancela) o
+  nadie la armó. El número de pedido abre su ficha.
+
+**Sin migración**, sin crons ni variables nuevas. `MOM_RESOLUTION_VERSION` no
+cambia: el Master no cambia de etapa. Medido el 06-11-2026: las detenidas bajan
+de 18 a 11 (7 Olva con tracking pasan a «No se pueden armar») y la Mesa de
+despacho baja 7 en el pendiente.
+
+**Qué mirar después.** Almacén: #KP141980 en «No se pueden armar» con «Ya salió
+con Olva (tracking 2804738-26)»; #KP138976-S02 con «Salida nueva: la anterior
+(Tanders) volvió a la oficina…».
+
+**Marcha atrás.** Revertir el commit. Solo lee; no escribe nada en la base.
+
 ### 06-11-2026 · «Llamar con Anura»: el cron de grabaciones y el dominio no reconocido (sin migración, MOM §8.7)
 
 Cierra lo que quedó abierto de las fases 1 y 2. Todo funciona con el esquema de

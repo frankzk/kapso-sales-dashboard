@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DispatchCamera } from "@/components/dispatch-camera";
+import { OrderLink } from "@/components/order-link";
 import { cn } from "@/components/ui";
 import { Badge, Banner, OpsButton } from "@/components/ops-ui";
 import { IconCamera, IconSearch } from "@/components/icons";
@@ -14,6 +15,7 @@ import { OPERATION_LABELS } from "@/lib/dispatch-routing";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import {
   buildWarehouseQueue,
+  departedWithOlva,
   warehousePanels,
   type WarehousePanel,
   type WarehouseQueueEntry,
@@ -391,7 +393,7 @@ export function WarehouseStation({
             {queue.groups.length ? (
               <div className="space-y-5">
                 {queue.groups.map((group) => (
-                  <QueueGroup key={group.operation} group={group} storeName={storeName} handoffByOrder={handoffByOrder} />
+                  <QueueGroup key={group.operation} group={group} storeName={storeName} handoffByOrder={handoffByOrder} retriesLoaded={!!retries} />
                 ))}
               </div>
             ) : (
@@ -405,14 +407,17 @@ export function WarehouseStation({
               <div className="mt-6">
                 <div className="flex items-center gap-2">
                   <h4 className="text-sm font-semibold text-ink-900">No se pueden armar</h4>
-                  <Badge tone="crit" className="tabular-nums">{blocked.length}</Badge>
+                  {/* Solo las que ya salieron con Olva no son un error: el ámbar del motivo de bloqueo. */}
+                  <Badge tone={blocked.every(({ shipment }) => departedWithOlva(shipment)) ? "warn" : "crit"} className="tabular-nums">{blocked.length}</Badge>
                 </div>
                 <p className="mt-0.5 text-xs text-ink-500">Siguen contadas en el Master porque el pedido sigue vivo, pero esta caja concreta ya no se empaca: necesita una salida nueva o ya salió.</p>
                 <ul className="mt-2 divide-y divide-line rounded-lg ring-1 ring-line">
                   {blocked.slice(0, 12).map(({ shipment, reason }) => (
                     <li key={shipment.id} className="min-w-0 px-3 py-2">
                       <p className="truncate font-mono text-xs font-semibold text-ink-900">{packageCode(shipment)}</p>
-                      <p className="truncate text-xs text-ink-500">{shipment.order_name} · <span className="text-crit-fg">{reason}</span></p>
+                      <p className="truncate text-xs text-ink-500"><OrderName shipment={shipment} /></p>
+                      {/* El motivo no se corta: el de Olva termina en lo que hay que hacer. */}
+                      <p className={cn("mt-0.5 break-words text-xs", departedWithOlva(shipment) ? "text-warn-fg" : "text-crit-fg")}>{reason}</p>
                     </li>
                   ))}
                 </ul>
@@ -565,11 +570,14 @@ function QueueGroup({
   group,
   storeName,
   handoffByOrder,
+  retriesLoaded,
 }: {
   group: WarehouseQueueGroup<WarehouseShipment>;
   storeName: Map<string, string>;
   /** Pedidos de un reintento de Lima cuya salida nueva está aquí (solo se muestra). */
   handoffByOrder: ReadonlyMap<string, WarehouseHandoffRow>;
+  /** Ya llegó la lectura de reintentos (bien o con error). */
+  retriesLoaded: boolean;
 }) {
   const byCourier = group.waitingOnCourier === group.entries.length;
   return (
@@ -588,6 +596,7 @@ function QueueGroup({
             storeName={storeName}
             courierNote={!byCourier}
             handoff={entry.shipment.order_id ? handoffByOrder.get(entry.shipment.order_id) ?? null : null}
+            retriesLoaded={retriesLoaded}
           />
         ))}
       </ul>
@@ -600,22 +609,29 @@ function QueueGroup({
 
 /**
  * Una caja por armar: código, a quién va y qué lleva; la detenida, sobre ámbar
- * y con su chapa. Si es la salida nueva de un reintento de Lima, lleva «Reintento
- * · …» y qué hacer con la caja vieja del estante.
+ * y con su chapa y el porqué con qué hacer (`stallDiagnosis`). Si es la salida
+ * nueva de un reintento de Lima, lleva «Reintento · …» y qué hacer con la caja
+ * vieja del estante, y esa línea manda: ya dice qué hacer con la caja, así que
+ * el diagnóstico no se repite debajo. Mientras los reintentos no han llegado no
+ * se sabe cuál de las dos va, así que el diagnóstico espera: pintarlo y quitarlo
+ * al llegar movería la fila.
  */
 function PendingRow({
   entry,
   storeName,
   courierNote,
   handoff,
+  retriesLoaded,
 }: {
   entry: WarehouseQueueEntry<WarehouseShipment>;
   storeName: Map<string, string>;
   /** Si todo el grupo lo cierra el courier, la chapa del grupo ya lo dice. */
   courierNote: boolean;
   handoff: WarehouseHandoffRow | null;
+  retriesLoaded: boolean;
 }) {
   const { shipment, closer, ageDays, stalled } = entry;
+  const diagnosis = stalled && retriesLoaded && !handoff ? entry.diagnosis : null;
   return (
     <li className={cn("flex items-start gap-3 px-3 py-2.5", stalled && "bg-warn-wash")}>
       <div className="min-w-0 flex-1">
@@ -626,16 +642,30 @@ function PendingRow({
         </div>
         <p className="mt-0.5 text-sm text-ink-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</p>
         <p className="truncate text-xs text-ink-500">
-          {shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}
+          {diagnosis ? <OrderName shipment={shipment} /> : shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}
           {shipment.product && <> · {shipment.product}</>}
         </p>
         {handoff && <p className="mt-0.5 text-xs text-ink-600">{handoff.line}</p>}
-        {courierNote && closer === "courier" && (
+        {courierNote && closer === "courier" && !diagnosis && (
           <p className="mt-0.5 text-xs text-info-fg">Empácala; sale de la cola cuando {courierLabel(shipment.courier)} la reporte preparada.</p>
         )}
+        {diagnosis && <p className="mt-0.5 text-xs text-warn-fg">{diagnosis}</p>}
       </div>
       <span className={cn("shrink-0 text-xs font-medium tabular-nums", stalled ? "text-warn-fg" : "text-ink-500")}>{ageLabel(ageDays)}</span>
     </li>
+  );
+}
+
+/**
+ * El número de pedido como enlace a su ficha, donde está «Salidas y guías»: es
+ * adonde mandan el motivo de Olva y el diagnóstico de una detenida.
+ */
+function OrderName({ shipment }: { shipment: WarehouseShipment }) {
+  if (!shipment.order_id) return <>{shipment.order_name}</>;
+  return (
+    <OrderLink orderId={shipment.order_id} section="operar" className="text-brand-700 hover:underline">
+      {shipment.order_name}
+    </OrderLink>
   );
 }
 

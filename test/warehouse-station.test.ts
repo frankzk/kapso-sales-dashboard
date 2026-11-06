@@ -65,7 +65,7 @@ vi.mock("@/components/warehouse-swayp", async (importOriginal) => {
   };
 });
 
-import { getWarehouseStationData } from "@/lib/dispatch-access";
+import { getDispatchWorkspaceData, getWarehouseStationData } from "@/lib/dispatch-access";
 import { SWAYP_NOW as LOT_NOW, swaypInput, swaypLimaGuide, swaypLot } from "@/test/helpers/warehouse-swayp-fixtures";
 
 vi.stubGlobal("React", React);
@@ -83,7 +83,7 @@ interface Call {
  * filas devuelve cada consulta. Lo que se comprueba es la REGLA de la cola, no
  * la base.
  */
-function supabaseDouble(resolve: (call: Call) => unknown[]) {
+function supabaseDouble(resolve: (call: Call) => unknown[] | Error) {
   const calls: Call[] = [];
   return {
     calls,
@@ -104,10 +104,15 @@ function supabaseDouble(resolve: (call: Call) => unknown[]) {
           select: chain(),
           order: chain(),
           limit: chain(),
+          not: chain(),
+          neq: chain(),
           eq: chain((col, val) => call.eq.push([col as string, val])),
           in: chain((col, val) => call.in.push([col as string, val])),
           gte: chain((col, val) => call.gte.push([col as string, val])),
-          then: (done: (value: unknown) => unknown) => done({ data: resolve(call), error: null }),
+          then: (done: (value: unknown) => unknown) => {
+            const result = resolve(call);
+            return done(result instanceof Error ? { data: null, error: { message: result.message } } : { data: result, error: null });
+          },
         });
         return builder;
       },
@@ -171,6 +176,89 @@ describe("getWarehouseStationData", () => {
     expect(armed?.eq).toContainEqual(["preparation_state", "listo_despacho"]);
     // El corte del día de Lima es 05:00Z: sin él, "armados hoy" arrastraría ayer.
     expect(String(armed?.gte[0]?.[1])).toMatch(/T05:00:00\.000Z$/);
+  });
+
+  it("aparta la salida de Olva con tracking: ya salió del almacén (06-11-2026)", async () => {
+    const double = supabaseDouble((call) => {
+      if (call.table === "order_master") return [{ order_id: "pedido-agencia", macro_operation: "agencia" }];
+      if (call.gte.length) return [];
+      if (call.eq.length) {
+        return [
+          { ...salida("olva", "pedido-agencia"), courier: "olva", olva_tracking: "2804738", olva_emision: "26", olva_status: null },
+        ];
+      }
+      return [];
+    });
+    createServerSupabaseMock.mockResolvedValue(double.client);
+
+    const data = await getWarehouseStationData();
+
+    expect(data.pending).toEqual([]);
+    expect(data.blocked.map((b) => b.reason)).toEqual([
+      "Ya salió con Olva (tracking 2804738-26). El rastreo de Olva todavía no reconoce ese número: revísalo en la ficha del pedido, en «Salidas y guías».",
+    ]);
+  });
+
+  it("trae las salidas anteriores del pedido en una lectura por tanda, sin la propia ni las posteriores", async () => {
+    const double = supabaseDouble((call) => {
+      if (call.table === "order_master") return [{ order_id: "pedido-lima", macro_operation: "lima" }];
+      if (call.gte.length) return [];
+      // La de la cola filtra custodia; la de hermanas solo por pedido.
+      if (call.eq.length) return [{ ...salida("s02", "pedido-lima"), created_at: "2026-10-16T15:00:00Z" }];
+      return [
+        { id: "s01", order_id: "pedido-lima", courier: "tanders", delivery_status: "anulado", custody_state: "devuelto", created_at: "2026-10-10T15:00:00Z", output_code: "KP-S01" },
+        { id: "s02", order_id: "pedido-lima", courier: "por_definir", delivery_status: "pendiente", custody_state: "empresa", created_at: "2026-10-16T15:00:00Z", output_code: "KP-S02" },
+        { id: "s03", order_id: "pedido-lima", courier: "propio", delivery_status: "pendiente", custody_state: "empresa", created_at: "2026-10-20T15:00:00Z", output_code: "KP-S03" },
+      ];
+    });
+    createServerSupabaseMock.mockResolvedValue(double.client);
+
+    const data = await getWarehouseStationData();
+
+    const siblingCalls = double.calls.filter((c) => c.table === "shipments" && c.eq.length === 0 && c.gte.length === 0);
+    expect(siblingCalls).toHaveLength(1);
+    expect(siblingCalls[0]?.in).toEqual([["order_id", ["pedido-lima"]]]);
+    expect(data.pending[0]?.previousOutputs?.map((o) => o.id)).toEqual(["s01"]);
+  });
+
+  describe("si las salidas anteriores no llegan enteras, no se usan", () => {
+    const s01 = { id: "s01", order_id: "pedido-lima", courier: "tanders", delivery_status: "anulado", custody_state: "devuelto", created_at: "2026-10-10T15:00:00Z", output_code: "KP-S01" };
+    function doubleWith(siblings: () => unknown[] | Error) {
+      return supabaseDouble((call) => {
+        if (call.table === "order_master") return [{ order_id: "pedido-lima", macro_operation: "lima" }];
+        if (call.gte.length) return [];
+        if (call.eq.length) return [{ ...salida("s02", "pedido-lima"), created_at: "2026-10-16T15:00:00Z" }];
+        return siblings();
+      });
+    }
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    });
+    afterEach(() => errorSpy.mockRestore());
+
+    it("con error: la cola sigue y lo deja en el registro", async () => {
+      createServerSupabaseMock.mockResolvedValue(doubleWith(() => new Error("timeout")).client);
+      const data = await getWarehouseStationData();
+      expect(data.pending.map((s) => s.id)).toEqual(["s02"]);
+      expect(data.pending[0]?.previousOutputs).toBeUndefined();
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    it("cortada por el tope de filas: tampoco", async () => {
+      const capped = Array.from({ length: 1000 }, (_, i) => ({ ...s01, id: `x${i}` }));
+      createServerSupabaseMock.mockResolvedValue(doubleWith(() => capped).client);
+      const data = await getWarehouseStationData();
+      expect(data.pending[0]?.previousOutputs).toBeUndefined();
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    it("enteras, sí", async () => {
+      createServerSupabaseMock.mockResolvedValue(doubleWith(() => [s01]).client);
+      const data = await getWarehouseStationData();
+      expect(data.pending[0]?.previousOutputs?.map((o) => o.id)).toEqual(["s01"]);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("no busca salidas cuando ningún pedido está Por armar", async () => {
@@ -484,5 +572,32 @@ describe("«Swayp por salir»: una lectura a la vez, y la que salió antes de un
     finish(swaypLot());
     await pending;
     expect(captured.applied).toEqual([]);
+  });
+});
+
+describe("getDispatchWorkspaceData · pendiente de almacén", () => {
+  it("cuenta lo mismo que Almacén: la salida de Olva con tracking no está pendiente (06-11-2026)", async () => {
+    const double = supabaseDouble((call) => {
+      if (call.table === "order_master") return [{ order_id: "pedido-agencia", macro_operation: "agencia" }];
+      // La cola de armado es la que acota por pedido; lo demás (rutas, paquetes sin ruta) vacío.
+      if (call.table === "shipments" && call.in.some(([col]) => col === "order_id")) {
+        return [
+          { ...salida("olva-salio", "pedido-agencia"), courier: "olva", olva_tracking: "2804738", olva_emision: "26", olva_status: null },
+          { ...salida("olva-aqui", "pedido-agencia"), courier: "olva", olva_tracking: null },
+        ];
+      }
+      return [];
+    });
+    createServerSupabaseMock.mockResolvedValue(double.client);
+
+    const dispatch = await getDispatchWorkspaceData();
+    const station = await getWarehouseStationData();
+
+    expect(dispatch.warehousePending).toBe(1);
+    expect(station.pending.map((s) => s.id)).toEqual(["olva-aqui"]);
+    expect(dispatch.warehousePending).toBe(station.pending.length);
+    // La Mesa solo cuenta: no lee las salidas anteriores.
+    const siblingReads = double.calls.filter((c) => c.table === "shipments" && c.eq.length === 0 && c.gte.length === 0 && c.in.some(([col]) => col === "order_id"));
+    expect(siblingReads).toHaveLength(1);
   });
 });
