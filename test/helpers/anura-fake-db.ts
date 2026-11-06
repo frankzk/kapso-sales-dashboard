@@ -1,6 +1,6 @@
 // Una base en memoria con lo que usa «Llamar con Anura» (lib/anura/*): el
 // encadenado de supabase-js (select/insert/update/upsert/delete con eq, in,
-// lt, gte, not, order, limit, maybeSingle), los dos índices únicos de
+// lt, lte, gt, gte, like, is, not, order, limit, maybeSingle), los dos índices únicos de
 // `anura_calls`, las tablas SIP de la 0311 y Storage. Sin red.
 
 type Row = Record<string, any>;
@@ -199,6 +199,19 @@ export function createFakeDb(initial: Record<string, Row[]> = {}, opts: FakeDbOp
       },
       gte: (col: string, v: any) => {
         filters.push((r) => value(r, col) !== null && value(r, col) !== undefined && (value(r, col) as any) >= v);
+        return q;
+      },
+      lte: (col: string, v: any) => {
+        filters.push((r) => value(r, col) !== null && value(r, col) !== undefined && (value(r, col) as any) <= v);
+        return q;
+      },
+      gt: (col: string, v: any) => {
+        filters.push((r) => value(r, col) !== null && value(r, col) !== undefined && (value(r, col) as any) > v);
+        return q;
+      },
+      like: (col: string, pattern: string) => {
+        const re = new RegExp(`^${pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, ".")}$`, "s");
+        filters.push((r) => typeof value(r, col) === "string" && re.test(value(r, col) as string));
         return q;
       },
       is: (col: string, v: unknown) => {

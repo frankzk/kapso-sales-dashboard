@@ -2005,10 +2005,13 @@ nada instalado, y Kapta solo hace salidas.
 - **Grabaciones.** El enlace de la grabación que manda Anura **vence a los 30
   minutos**. Por eso Kapta la descarga a su Storage privado (bucket
   `anura-recordings`) en cuanto llega el aviso de fin, después de responderle a
-  Anura. Si la copia falla, se reintenta al abrir la ficha del pedido mientras
-  no pasen los 30 minutos, hasta 6 intentos. Queda «grabación vencida» al
-  sexto intento fallido o cuando pasan los 30 minutos (la ficha la muestra
-  vencida en cuanto pasan, aunque nadie la haya reintentado). La ficha la oye
+  Anura. Si la copia falla, se reintenta al abrir la ficha del pedido y cada
+  10 minutos desde un cron propio (`/api/cron/anura-recordings`, abajo)
+  mientras no pasen los 30 minutos, hasta 6 intentos. Queda «grabación
+  vencida» al sexto intento fallido o cuando pasan los 30 minutos (la ficha la
+  muestra vencida en cuanto pasan, aunque nadie la haya reintentado). El cron
+  cubre lo que nadie abre: las llamadas de prueba y las entrantes, que no
+  tienen ficha. La ficha la oye
   por una ruta del mismo origen, `/api/anura/recordings/<id>` (desde la fase
   2): el servidor firma por dentro un enlace de Storage que dura 5 minutos, y
   ese enlace no llega al navegador. La escucha quien hizo la llamada o quien
@@ -2120,6 +2123,36 @@ nada instalado, y Kapta solo hace salidas.
   Cada aviso queda en una bitácora (`anura_webhook_events`): aplicado,
   repetido, ignorado o error, con los teléfonos enmascarados. Guarda 30 días y
   la ve solo quien administra, en Ajustes.
+- **El cron de Anura (`/api/cron/anura-recordings`, 06-11-2026).** Corre cada
+  10 minutos (minutos 1, 11, 21, 31, 41 y 51; todos los minutos de la hora ya
+  tienen algún cron, así que comparte minuto con la foto de los pedidos para
+  boletas, que corre en todos los minutos impares, y a los :11 con la regla
+  automática de la lista de pago adelantado; el :23 queda solo para la
+  renovación de las apps propias de Shopify) y hace, en todas las
+  organizaciones, lo que la ficha solo hace al abrirse:
+  1. cierra las llamadas que Anura dejó colgadas, con las mismas reglas de
+     arriba (pedida y sin avisos a los 60 s; sonando o en curso y sin fin a
+     las 2 horas). Si la base no deja cerrarlas, la pasada lo reporta como
+     error (no como «0 cerradas»);
+  2. marca «grabación vencida» las «pendiente» cuyo enlace ya pasó los 30
+     minutos, que no tienen fecha de vencimiento del enlace o que ya usaron
+     sus 6 intentos. Al escribir vuelve a comprobar el motivo: si entretanto
+     llegó otro aviso de fin con un enlace nuevo, esa grabación sigue
+     «pendiente» y su enlace no se borra;
+  3. reintenta copiar las «pendiente» que todavía están a tiempo, de la más
+     antigua a la más nueva, hasta 20 por pasada y empezando copias solo
+     durante 25 segundos (lo que no cupo queda para la pasada siguiente). No
+     toca una grabación cuyo aviso de fin llegó hace menos de 2 minutos: esa
+     la está copiando el propio aviso;
+  4. borra de la bitácora los avisos de más de 30 días y el enlace de Anura
+     que ya no sirve: el de las grabaciones guardadas o vencidas, el de los
+     avisos que no son de una llamada de Kapta y el de cualquier aviso de hace
+     más de 35 minutos (el enlace ya venció).
+
+  Correrlo dos veces no hace nada de más: cada paso solo toca lo que sigue
+  pendiente. Su respuesta y su registro llevan solo conteos, nunca
+  teléfonos ni enlaces. Fuera de producción no hace nada (`?dry=1` solo
+  cuenta).
 - **Configuración (una vez).** En el panel de Anura (lo hace quien administra
   la cuenta de Anura; los pasos los repite Ajustes › «Telefonía Anura»):
   1. **Configuración → Cuentas:** un anexo de usuario por asesora.
@@ -2217,6 +2250,7 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   | `listo` | el anexo tiene su clave guardada y no rechazada, y la central tiene dominio | Llama con el teléfono dentro de Kapta |
   | `sin_telefono` | el anexo no tiene clave guardada | Fase 1 sin cambios, sin ningún aviso. «Este anexo no tiene teléfono en Kapta: suena tu teléfono de Anura.» solo sale si el anexo perdió su clave entre abrir la ficha y llamar, o en la llamada de prueba |
   | `clave_rechazada` | Anura rechazó la clave guardada | No llama: «Anura rechazó la clave del teléfono de Kapta; pide a quien administra que la vuelva a guardar.» |
+  | `dominio_no_reconocido` | Anura no reconoce el usuario en el dominio de la central (SIP 404) | No llama: «Anura no reconoce el usuario o el dominio del teléfono de Kapta; pide a quien administra que revise el dominio de la central en Ajustes › Telefonía Anura.» |
   | `sin_dominio` | hay clave pero falta el dominio SIP de la central | No llama: «Falta el dominio SIP de la central de Anura. Pide a quien administra que lo guarde en Ajustes › Telefonía Anura.» |
 
   Con `listo`, una tarjeta flotante como la de «Llamar desde Kapta» (§8.5):
@@ -2295,9 +2329,11 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   1: si Anura no avisa nada, se cierra sola al minuto. Pero si Kapta ya está
   en la llamada, ese cierre por plazo **no corta el audio**: la tarjeta dice
   «Kapta no recibió los avisos de Anura de esta llamada, pero sigues en ella.
-  Cuelga desde aquí al terminar.» y la asesora cuelga cuando termina. Solo un
-  fin de Anura (o la asesora) corta. «Silenciar» corta el micrófono sin
-  colgar.
+  Cuelga desde aquí al terminar.» y la asesora cuelga cuando termina. La
+  tarjeta (en la ficha y en la llamada de prueba de Ajustes) sigue diciendo
+  «En llamada» y muestra el reloj, contado desde que el teléfono de Kapta
+  contestó, porque el servidor no sabe cuándo empezó. Solo un fin de Anura (o
+  la asesora) corta. «Silenciar» corta el micrófono sin colgar.
 - **Una sola pestaña.** Solo una pestaña por navegador puede tener el
   teléfono: con dos registradas, Anura manda la llamada a la otra y
   Click2Dial falla a los ~45 s (le pasó a Rentabilify). Kapta usa
@@ -2337,7 +2373,21 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   Usa la contraseña de la terminal «<anexo>-websocket» («Obtener
   credenciales»), no la del teléfono físico, y revisa el dominio. No lo
   intentes muchas veces seguidas: varios intentos fallidos hacen que Anura
-  bloquee la conexión de la oficina.». La ayuda junto al campo: «Usa la
+  bloquee la conexión de la oficina.». Si Anura responde que no conoce ese
+  usuario en ese dominio (SIP 404), tampoco se guarda, la contraseña escrita
+  no se borra y se explica: «Anura no reconoce ese usuario en ese dominio, así
+  que no se guardó. Revisa el dominio de la central (tal como sale en
+  «Obtener credenciales») y que el usuario sea el de la terminal
+  «<anexo>-websocket». No lo intentes muchas veces seguidas: varios intentos
+  fallidos hacen que Anura bloquee la conexión de la oficina.». Con cualquiera
+  de los dos rechazos, la pantalla recuerda en memoria esa combinación
+  (dominio, usuario y una huella de la contraseña, nunca la contraseña en
+  claro) y no deja repetirla: el botón queda apagado y dice «Anura ya rechazó
+  este mismo dominio, usuario y contraseña. Cambia el dominio de la central,
+  el usuario o la contraseña antes de volver a probar: repetir la misma
+  prueba puede hacer que Anura bloquee la conexión de la oficina.» hasta que
+  algo de los tres cambie. La ayuda junto
+  al campo: «Usa la
   contraseña de la terminal «<anexo>-websocket» (Cuentas → anexo →
   Terminales → lápiz → «Obtener credenciales»), no la del teléfono físico.
   Varios intentos con una clave mala hacen que Anura bloquee la conexión de la
@@ -2352,8 +2402,8 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   tu propio anexo.»).
 - **Clave rechazada: no se reintenta.** Una clave mala con reintentos hace que
   Anura **bloquee la IP** de la oficina (le pasó a Rentabilify). Por eso,
-  ante el **primer** rechazo de la clave al registrar (SIP 401, 403, 404 o
-  407, o la causa de JsSIP «Authentication Error», «Rejected» o «Not Found»):
+  ante el **primer** rechazo de la clave al registrar (SIP 401, 403 o 407, o
+  la causa de JsSIP «Authentication Error» o «Rejected»):
   - el teléfono se detiene y no reintenta, aunque el WebSocket se reconecte;
   - el servidor marca el anexo «clave rechazada», con la fecha y el motivo
     («Anura rechazó el usuario o la clave del teléfono de Kapta (SIP 401).»),
@@ -2375,9 +2425,62 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   respondió» u otro rechazo, la pestaña espera un minuto antes de dejar
   intentar otra vez: «Espera un minuto antes de volver a intentar: varios
   intentos fallidos seguidos pueden hacer que Anura bloquee la conexión de la
-  oficina.». Un 404 cuenta como clave rechazada porque es lo más seguro contra
-  el bloqueo: con un dominio mal escrito, el primer intento de cada anexo lo
-  marca, y hay que volver a guardar la clave.
+  oficina.».
+- **Dominio no reconocido (SIP 404): tampoco se reintenta, pero se corrige el
+  dominio.** Un 404 al registrar (o 604, o la causa de JsSIP «Not Found») no
+  dice que la clave esté mal: dice que Anura no conoce ese usuario en ese
+  dominio. Casi siempre es el dominio de la central mal escrito; a veces, que
+  la terminal `<anexo>-websocket` no existe. Lo más seguro contra el bloqueo
+  es tratarlo igual que una clave rechazada —el teléfono se detiene al primer
+  404 y no reintenta—, pero con su propia marca para que Ajustes lleve a
+  corregir el dominio y no a reescribir la clave:
+  - el servidor marca el anexo «dominio no reconocido» (en la misma fecha y
+    motivo de la clave rechazada, sin columnas nuevas: el motivo empieza por
+    «Anura no reconoce el usuario SIP en el dominio de la central», por
+    ejemplo «Anura no reconoce el usuario SIP en el dominio de la central
+    (SIP 404).»), con las mismas reglas: solo el anexo propio y solo la
+    versión de la clave que se entregó. Si la pestaña probó con un dominio
+    que ya no es el de la central (alguien lo corrigió entretanto), no marca
+    nada. Una pestaña de antes de este cambio que avise un 404 como «clave»
+    también queda marcada como «dominio no reconocido», y una marca vieja
+    cuyo motivo termina en «(SIP 404).» se lee igual;
+  - mientras esté marcada, Kapta no entrega esa clave y la ficha dice «Anura
+    no reconoce el usuario o el dominio del teléfono de Kapta; pide a quien
+    administra que revise el dominio de la central en Ajustes › Telefonía
+    Anura.»;
+  - en Ajustes la chapa del anexo dice «Revisa el dominio» y, junto al campo
+    del dominio, un aviso: «Anura no reconoció un anexo con este dominio (SIP
+    404): lo más probable es que el dominio esté mal escrito. Cópialo de
+    «Obtener credenciales» de la terminal «-websocket», pulsa «Guardar
+    central» y pruébalo con «Probar y guardar» en un anexo: cuando Anura lo
+    acepte, los demás se vuelven a probar en su próxima llamada, sin volver a
+    escribir sus claves.»;
+  - **guardar un dominio distinto con «Guardar central» no libera a nadie
+    todavía**: si el dominio nuevo también estuviera mal, cada anexo gastaría
+    otro 404 desde la misma oficina. Las marcas pasan a esperar la prueba del
+    dominio nuevo (al motivo se le agrega «Se cambió el dominio: falta
+    probarlo.», otra vez sin columnas nuevas), Ajustes avisa «Se cambió el
+    dominio de la central y queda un anexo que Anura no reconocía con el
+    anterior (SIP 404). Prueba el dominio nuevo con «Probar y guardar» en un
+    anexo: cuando Anura lo acepte, los demás se vuelven a probar en su
+    próxima llamada, sin volver a escribir sus claves.» y siguen sin llamar.
+    Guardar el mismo dominio no cambia nada, y si Kapta no pudo leer el
+    dominio anterior tampoco toca las marcas;
+  - **cuando Anura acepta un «Probar y guardar»**, se guarda la clave de ese
+    anexo (lo que quita su propia marca, como cualquier clave nueva) y se
+    liberan las marcas «dominio no reconocido» hechas con un dominio
+    **anterior**: si la prueba misma cambió el dominio, todas; si el dominio
+    ya estaba guardado, solo las que esperaban la prueba. Cada anexo liberado
+    prueba **una** vez en su próxima llamada. Las marcas hechas con el mismo
+    dominio que Anura acaba de aceptar siguen: ahí lo que falla es el usuario
+    de ese anexo. Una «clave rechazada» (401/403/407) nunca se quita por el
+    dominio;
+  - la pestaña recuerda en memoria el 404 de esa clave **con ese dominio**:
+    con el dominio corregido vuelve a intentar, con el mismo no.
+
+  Lo que queda: liberar a los demás anexos exige probar el dominio nuevo con
+  la contraseña de al menos un anexo. A cambio, un dominio igual de malo
+  gasta un solo intento (el de esa prueba) y no uno por anexo.
 - **Grabaciones por el mismo origen.** La ficha oye la grabación por
   `/api/anura/recordings/<id>`, con `Range` para que el reproductor pueda
   adelantar (Safari no reproduce sin 206). La ruta comprueba quién la pide

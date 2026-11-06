@@ -10,11 +10,14 @@
 //     contraseña, con «Probar y guardar»: ESTE navegador intenta UN registro
 //     con lo escrito y, solo si Anura lo acepta, el servidor guarda la clave
 //     cifrada. Si Anura la rechaza no se guarda nada ni se reintenta (varios
-//     intentos fallidos hacen que Anura bloquee la conexión de la oficina).
+//     intentos fallidos hacen que Anura bloquee la conexión de la oficina), y
+//     la pantalla recuerda esa combinación (dominio, usuario y huella de la
+//     contraseña): no deja repetirla hasta que algo cambie.
 //     «Quitar clave» devuelve el anexo a la fase 1.
 //   · La clave nunca vuelve aquí: solo «clave guardada: sí/no», la fecha y, si
 //     Anura la rechazó al llamar, cuándo y por qué. El campo de la contraseña
-//     se vacía después de cada intento.
+//     se vacía después de cada intento, salvo con un 404 (lo que se corrige
+//     es el dominio o el usuario, no la contraseña).
 //
 // Del servidor solo se importan acciones y TIPOS (lo vigila
 // `test/anura-ui.test.ts`); JsSIP llega con import dinámico al probar.
@@ -36,13 +39,17 @@ import {
   ANURA_SIP_PASSWORD_HELP,
   ANURA_SIP_PASSWORD_MAX,
   defaultSipUser,
+  isNotFoundAwaitingTest,
   looksLikeWebsocketUser,
 } from "@/lib/anura/sip";
-import { ANURA_PHONE_TEXT, testAnuraRegistration, type AnuraTabLock } from "@/lib/anura/sip-phone";
+import { ANURA_PHONE_TEXT, isRegistrationRejection, testAnuraRegistration, type AnuraTabLock } from "@/lib/anura/sip-phone";
 import {
+  ANURA_SIP_TEST_REPEAT_TEXT,
+  anuraDomainNotFoundBanner,
   anuraSipPhoneBadge,
   anuraSipPhoneLines,
   anuraSipTestCredentials,
+  anuraSipTestKey,
   parseAnuraSipCentral,
   type AnuraSipCentralDraft,
 } from "@/lib/anura/phone-ui";
@@ -93,6 +100,8 @@ export function KaptaPhoneCard({
   const [testingId, setTestingId] = useState<string | null>(null);
   const lockRef = useRef<AnuraTabLock | null>(null);
   const lock = () => (lockRef.current ??= browserAnuraTabLock());
+  // Las combinaciones que Anura rechazó en esta pantalla (sin la contraseña en claro).
+  const rejectedTests = useRef<Set<string>>(new Set()).current;
 
   // Lo guardado manda cuando cambia en el servidor.
   const savedKey = `${data.sip.domain ?? ""}|${data.sip.wsUrl}|${data.sip.port}|${data.sip.updatedAt ?? ""}`;
@@ -116,6 +125,12 @@ export function KaptaPhoneCard({
 
   const withPhone = data.extensions.filter((e) => e.phone.hasPassword).length;
   const savedCentral = Boolean(data.sip.domain);
+  // Anura respondió 404 («no reconoce el usuario en ese dominio»): lo que se
+  // corrige es el dominio de aquí (o el usuario), no la contraseña.
+  const notFoundExts = data.extensions.filter((e) => e.phone.status === "dominio_no_reconocido");
+  const notFound = notFoundExts.length;
+  // Los marcados con un dominio anterior: esperan que Anura acepte el de ahora.
+  const awaitingTest = notFoundExts.filter((e) => isNotFoundAwaitingTest(e.phone.rejectedReason)).length;
 
   return (
     <div className={cn(CARD, "divide-y divide-line")}>
@@ -205,6 +220,11 @@ export function KaptaPhoneCard({
             </Field>
           </div>
         </details>
+        {notFound > 0 && (
+          <Banner tone="crit" role="alert">
+            <p className="break-words">{anuraDomainNotFoundBanner(notFound, awaitingTest)}</p>
+          </Banner>
+        )}
         {centralError && (
           <p role="alert" className="text-sm text-crit-fg">
             {centralError}
@@ -231,6 +251,7 @@ export function KaptaPhoneCard({
               testingId={testingId}
               setTestingId={setTestingId}
               lock={lock}
+              rejectedTests={rejectedTests}
               mutate={mutate}
               onChanged={onChanged}
             />
@@ -249,6 +270,7 @@ function SipExtensionRow({
   testingId,
   setTestingId,
   lock,
+  rejectedTests,
   mutate,
   onChanged,
 }: {
@@ -259,6 +281,7 @@ function SipExtensionRow({
   testingId: string | null;
   setTestingId: (id: string | null) => void;
   lock: () => AnuraTabLock;
+  rejectedTests: Set<string>;
   mutate: (action: () => Promise<AnuraMutationResult>) => void;
   onChanged: () => void;
 }) {
@@ -280,11 +303,19 @@ function SipExtensionRow({
   const userId = `anura-sip-user-${ext.id}`;
   const passId = `anura-sip-pass-${ext.id}`;
   const notWebsocket = sipUser.trim() !== "" && !looksLikeWebsocketUser(sipUser);
+  // ¿Lo escrito es una combinación que Anura ya rechazó en esta pantalla?
+  const draft = password ? anuraSipTestCredentials(central, ext.extension, sipUser, password) : null;
+  const repeated = Boolean(draft?.ok && rejectedTests.has(anuraSipTestKey(draft.creds)));
 
   async function testAndSave() {
     const built = anuraSipTestCredentials(central, ext.extension, sipUser, password);
     if (!built.ok) {
       setMessage({ tone: "crit", text: built.error });
+      return;
+    }
+    const key = anuraSipTestKey(built.creds);
+    if (rejectedTests.has(key)) {
+      setMessage({ tone: "crit", text: ANURA_SIP_TEST_REPEAT_TEXT });
       return;
     }
     setTestingId(ext.id);
@@ -302,8 +333,12 @@ function SipExtensionRow({
       held.release();
       held = null;
       if (!res.ok) {
+        // Anura rechazó ESTA combinación: no se deja repetir tal cual.
+        if (isRegistrationRejection(res.kind)) rejectedTests.add(key);
         if (mounted.current) {
           // Con una clave mala se vacía el campo: otro intento tiene que ser a propósito.
+          // Con «no reconoce el usuario en ese dominio» (404) la clave puede estar
+          // bien: se deja, y lo que hay que corregir es el dominio o el usuario.
           if (res.kind === "clave") setPassword("");
           setMessage({ tone: "crit", text: res.message });
         }
@@ -376,7 +411,7 @@ function SipExtensionRow({
         className="flex flex-wrap items-end gap-3"
         onSubmit={(ev) => {
           ev.preventDefault();
-          if (!busy && !pending && password) void testAndSave();
+          if (!busy && !pending && password && !repeated) void testAndSave();
         }}
       >
         <Field
@@ -414,10 +449,11 @@ function SipExtensionRow({
             className={FIELD}
           />
         </Field>
-        <OpsButton type="submit" variant="primary" disabled={pending || busy || !password} className="mb-[26px] pointer-coarse:h-11">
+        <OpsButton type="submit" variant="primary" disabled={pending || busy || !password || repeated} className="mb-[26px] pointer-coarse:h-11">
           {step === "probando" ? "Probando con Anura…" : step === "guardando" ? "Guardando…" : "Probar y guardar"}
         </OpsButton>
       </form>
+      {repeated && !busy && <p className={cn(HELP, "break-words")}>{ANURA_SIP_TEST_REPEAT_TEXT}</p>}
 
       {message && (
         <Banner tone={message.tone} role={message.tone === "ok" ? "status" : "alert"}>

@@ -23,7 +23,8 @@
 //   removeAnuraSipCredentials(storeId, extensionId) → «Quitar clave» (vuelve a la fase 1).
 //   getAnuraTestPhone(storeId, extension?)          → las credenciales del anexo PROPIO
 //                                                      para la llamada de prueba.
-//   reportAnuraTestPhoneRejected(storeId, input)    → Anura rechazó la clave guardada.
+//   reportAnuraTestPhoneRejected(storeId, input)    → Anura rechazó la clave guardada
+//                                                      (o no reconoce el dominio: 404).
 
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
@@ -99,7 +100,7 @@ export async function getAnuraTestPhone(storeId: string, extension?: string | nu
 
 export async function reportAnuraTestPhoneRejected(
   storeId: string,
-  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null },
+  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null; domain?: string | null },
 ): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
   const result = await reportAnuraPhoneRejectedFor({ storeId }, input);
   if (result.ok && result.marked) revalidatePath(`/dashboard/${storeId}/settings`);

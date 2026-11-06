@@ -279,7 +279,10 @@ describe("grabaciones", () => {
   it("reintentos, «grabación vencida» y el enlace firmado de 5 minutos", () => {
     expect(ANURA_RECORDING_MAX_ATTEMPTS).toBe(6);
     expect(ANURA_RECORDING_SIGNED_SECONDS).toBe(5 * 60);
-    expect(s).toContain("se reintenta al abrir la ficha del pedido mientras no pasen los 30 minutos, hasta 6 intentos.");
+    expect(s).toContain(
+      "se reintenta al abrir la ficha del pedido y cada 10 minutos desde un cron propio (`/api/cron/anura-recordings`, abajo) mientras no pasen los 30 minutos, hasta 6 intentos.",
+    );
+    expect(s).toContain("El cron cubre lo que nadie abre: las llamadas de prueba y las entrantes, que no tienen ficha.");
     expect(s).toContain("Queda «grabación vencida» al sexto intento fallido o cuando pasan los 30 minutos");
     expect(s).toContain("La ficha la oye por una ruta del mismo origen, `/api/anura/recordings/<id>` (desde la fase 2): el servidor firma por dentro un enlace de Storage que dura 5 minutos, y ese enlace no llega al navegador.");
     expect(s).toContain("La escucha quien hizo la llamada o quien ve la tienda del pedido.");

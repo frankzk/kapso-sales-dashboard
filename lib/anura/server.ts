@@ -48,14 +48,17 @@ import {
   type AnuraKaptaPhoneStatus,
 } from "@/lib/anura/sip";
 import {
+  ANURA_SIP_NOT_FOUND_STATUS,
   rejectionReason,
   type AnuraPhoneCredentialsResult,
   type AnuraRegistrationFailureKind,
 } from "@/lib/anura/sip-phone";
 import {
+  clearNotFoundRejections,
   deleteSipCredential,
   isMissingTable as isMissingSipTable,
   kaptaPhoneStatus,
+  markNotFoundAwaitingTest,
   markSipCredentialRejected,
   readSipCredentialMetas,
   readSipSettings,
@@ -262,7 +265,8 @@ export interface AnuraKaptaPhoneView {
   /**
    * `listo`: la llamada se hace con el teléfono dentro de Kapta.
    * `sin_telefono`: fase 1 sin cambios (suena su teléfono de Anura).
-   * `clave_rechazada` / `sin_dominio`: no se puede llamar; `message` dice por qué.
+   * `clave_rechazada` / `dominio_no_reconocido` / `sin_dominio`: no se puede
+   * llamar; `message` dice por qué.
    */
   status: AnuraKaptaPhoneStatus;
   message: string | null;
@@ -296,10 +300,11 @@ async function kaptaPhoneOf(admin: SupabaseClient, orgId: string, ext: { id: str
   if (missing || metas.missing) return NO_KAPTA_PHONE;
   const meta = metas.byExtensionId.get(ext.id) ?? null;
   const status = kaptaPhoneStatus(ext, meta, settings);
+  const rejected = status === "clave_rechazada" || status === "dominio_no_reconocido";
   return {
     status,
-    message: status === "clave_rechazada" || status === "sin_dominio" ? ANURA_KAPTA_PHONE_TEXT[status] : null,
-    rejectedAt: status === "clave_rechazada" ? meta?.rejectedAt ?? null : null,
+    message: rejected || status === "sin_dominio" ? ANURA_KAPTA_PHONE_TEXT[status] : null,
+    rejectedAt: rejected ? meta?.rejectedAt ?? null : null,
   };
 }
 
@@ -431,22 +436,33 @@ export async function anuraTestPhoneFor(storeId: string, rawExtension?: string |
 export type AnuraPhoneRejectScope = { orderId: string } | { storeId: string };
 
 /**
- * El teléfono de la asesora no pudo registrarse porque Anura rechazó la clave:
- * se marca «clave rechazada» (fecha y motivo) y Kapta no la vuelve a entregar
- * hasta que se guarde otra. Solo marca el anexo PROPIO, y solo la versión de
- * la clave que se entregó (si alguien guardó otra entretanto, no la toca).
- * Un fallo que no es de la clave no marca nada.
+ * El teléfono de la asesora no pudo registrarse porque Anura lo rechazó. Dos
+ * casos, los dos se detienen sin reintentar (varios intentos fallidos hacen
+ * que Anura bloquee la IP de la oficina):
+ *   · `clave` (SIP 401/403/407): se marca «clave rechazada» y Kapta no la
+ *     vuelve a entregar hasta que se guarde otra.
+ *   · `dominio` (SIP 404/604, «Not Found»): Anura no reconoce ese usuario en
+ *     ese dominio. Se marca «dominio no reconocido»: Kapta no vuelve a probar
+ *     esa clave con ese dominio; corregir el dominio de la central o volver a
+ *     «Probar y guardar» lo destraba. Si el navegador manda el dominio con el
+ *     que probó y la central ya tiene otro, no se marca (ya lo corrigieron).
+ * Un 404 que llegue como `clave` (pestañas de antes de este cambio) se trata
+ * como `dominio`. Solo marca el anexo PROPIO, y solo la versión de la clave
+ * que se entregó (si alguien guardó otra entretanto, no la toca). Un fallo
+ * que no es un rechazo no marca nada.
  */
 export async function reportAnuraPhoneRejectedFor(
   scope: AnuraPhoneRejectScope,
-  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null },
+  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null; domain?: string | null },
 ): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Tu sesión venció. Vuelve a entrar." };
-  if (input.kind !== "clave") return { ok: true, marked: false };
+  if (input.kind !== "clave" && input.kind !== "dominio") return { ok: true, marked: false };
   const version = typeof input.credentialVersion === "string" ? input.credentialVersion.trim() : "";
   if (!version || version.length > 64 || Number.isNaN(Date.parse(version))) return { ok: false, error: "Versión de la clave no válida." };
   const status = Number.isInteger(input.status) && (input.status as number) >= 100 && (input.status as number) < 700 ? (input.status as number) : null;
+  const kind: "clave" | "dominio" = input.kind === "dominio" || (status !== null && ANURA_SIP_NOT_FOUND_STATUS.has(status)) ? "dominio" : "clave";
+  const triedDomain = typeof input.domain === "string" && input.domain.trim() ? normalizeSipDomain(input.domain) : null;
 
   let orgId: string | null = null;
   if ("orderId" in scope) {
@@ -460,11 +476,16 @@ export async function reportAnuraPhoneRejectedFor(
   const admin = createAdminSupabase();
   const ext = await anuraExtensionRowOf(admin, orgId, user.id);
   if (!ext) return { ok: false, error: ANURA_NO_EXTENSION };
+  if (kind === "dominio" && triedDomain) {
+    // Si la central ya tiene otro dominio, el 404 era del anterior: no se marca.
+    const { settings } = await readSipSettings(admin, orgId);
+    if (settings.domain && settings.domain !== triedDomain) return { ok: true, marked: false };
+  }
   const marked = await markSipCredentialRejected(admin, {
     orgId,
     extensionId: ext.id,
     credentialVersion: version,
-    reason: rejectionReason("clave", status),
+    reason: rejectionReason(kind, status),
   });
   return { ok: true, marked };
 }
@@ -772,16 +793,38 @@ function parseSipSettings(input: AnuraSipSettingsInput | null | undefined): SipS
   return { domain, wsUrl, port };
 }
 
-/** Guarda la central SIP de la org (dominio, URL WebSocket, puerto). */
+/**
+ * Guarda la central SIP de la org (dominio, URL WebSocket, puerto). Con OTRO
+ * dominio no libera los anexos «dominio no reconocido»: los deja esperando
+ * que Anura acepte el nuevo en un «Probar y guardar» (si el nuevo también
+ * estuviera mal, cada anexo gastaría un 404 más desde la misma oficina).
+ */
 export async function saveAnuraSipSettingsFor(storeId: string, input: AnuraSipSettingsInput): Promise<AnuraMutationResult> {
   const target = await adminTarget(storeId);
   if ("error" in target) return { ok: false, error: target.error };
   const parsed = parseSipSettings(input);
   if ("error" in parsed) return { ok: false, error: parsed.error };
-  const error = await writeSipSettings(createAdminSupabase(), target.orgId, parsed, target.userId);
+  const admin = createAdminSupabase();
+  const before = await readSipSettings(admin, target.orgId);
+  const error = await writeSipSettings(admin, target.orgId, parsed, target.userId);
   if (error) return { ok: false, error: isMissingTable({ message: error }) ? "Falta aplicar la migración 0311 (teléfono de Kapta)." : `No se pudo guardar la central: ${error}` };
-  return { ok: true, notice: "Central de Anura guardada." };
+  // Si no se pudo leer lo anterior, no se sabe si el dominio cambió: no se toca ninguna marca.
+  const waiting = !before.failed && before.settings.domain !== parsed.domain ? await markNotFoundAwaitingTest(admin, target.orgId) : 0;
+  return { ok: true, notice: `Central de Anura guardada.${waiting ? ` ${ANURA_DOMAIN_RETEST_NOTICE(waiting)}` : ""}` };
 }
+
+/** Lo que se dice al guardar otro dominio si había anexos con «dominio no reconocido». */
+export const ANURA_DOMAIN_RETEST_NOTICE = (n: number) =>
+  (n === 1
+    ? "El anexo que Anura no reconocía con el dominio anterior sigue en pausa"
+    : `Los ${n} anexos que Anura no reconocía con el dominio anterior siguen en pausa`) +
+  ": prueba el dominio nuevo con «Probar y guardar» en un anexo. Cuando Anura lo acepte, se vuelven a probar en su próxima llamada, sin volver a escribir sus claves.";
+
+/** Lo que se dice cuando un «Probar y guardar» liberó otros anexos con «dominio no reconocido». */
+export const ANURA_DOMAIN_FREED_NOTICE = (n: number) =>
+  n === 1
+    ? "Anura aceptó el dominio: el otro anexo que no reconocía con el dominio anterior se probará con este en su próxima llamada."
+    : `Anura aceptó el dominio: los otros ${n} anexos que no reconocía con el dominio anterior se probarán con este en su próxima llamada.`;
 
 export interface AnuraSipCredentialsInput extends AnuraSipSettingsInput {
   /** Vacío = `<anexo>-websocket`. */
@@ -809,9 +852,10 @@ export async function saveAnuraSipCredentialsFor(storeId: string, extensionId: s
   const password = normalizeSipPassword(input?.password);
   if (!password) return { ok: false, error: "Escribe la contraseña SIP de la terminal web (hasta 128 caracteres, sin saltos de línea)." };
 
-  const { settings, missing } = await readSipSettings(admin, target.orgId);
+  const { settings, missing, failed } = await readSipSettings(admin, target.orgId);
   if (missing) return { ok: false, error: "Falta aplicar la migración 0311 (teléfono de Kapta)." };
-  if (settings.domain !== parsed.domain || settings.wsUrl !== parsed.wsUrl || settings.port !== parsed.port) {
+  const domainChanged = !failed && settings.domain !== parsed.domain;
+  if (failed || settings.domain !== parsed.domain || settings.wsUrl !== parsed.wsUrl || settings.port !== parsed.port) {
     const error = await writeSipSettings(admin, target.orgId, parsed, target.userId);
     if (error) return { ok: false, error: `No se pudo guardar la central: ${error}` };
   }
@@ -824,7 +868,16 @@ export async function saveAnuraSipCredentialsFor(storeId: string, extensionId: s
     byUserId: target.userId,
   });
   if ("error" in saved) return { ok: false, error: saved.error };
-  return { ok: true, notice: `Teléfono de Kapta listo para el anexo ${ext.extension}.` };
+  // Anura aceptó ESTE dominio: los demás anexos que no reconocía con uno
+  // anterior vuelven a probar una vez. Si la prueba misma cambió el dominio,
+  // todas las marcas 404 son de uno anterior; si ya estaba guardado, solo las
+  // que esperaban la prueba (las hechas con este dominio siguen: ahí falla el
+  // usuario). Sin lectura fiable de lo anterior, solo las que esperaban.
+  const freed = await clearNotFoundRejections(admin, target.orgId, { onlyAwaitingTest: !domainChanged });
+  return {
+    ok: true,
+    notice: `Teléfono de Kapta listo para el anexo ${ext.extension}.${freed ? ` ${ANURA_DOMAIN_FREED_NOTICE(freed)}` : ""}`,
+  };
 }
 
 /** «Quitar clave»: el anexo vuelve a la fase 1 (suena su teléfono de Anura). */

@@ -121,14 +121,53 @@ export function normalizeSipPassword(raw: unknown): string | null {
  *   · `sin_telefono`: no hay clave guardada → fase 1 sin cambios (suena el
  *     teléfono de Anura de la asesora).
  *   · `listo`: hay clave y dominio → el teléfono vive en Kapta.
- *   · `clave_rechazada`: Anura rechazó la clave guardada; Kapta no la vuelve a
- *     usar hasta que se guarde otra.
+ *   · `clave_rechazada`: Anura rechazó la clave guardada (SIP 401/403/407);
+ *     Kapta no la vuelve a usar hasta que se guarde otra.
+ *   · `dominio_no_reconocido`: Anura no reconoce ese usuario en ese dominio
+ *     (SIP 404): casi siempre el dominio de la central mal escrito. Kapta no
+ *     vuelve a probar esa clave con ese dominio; corregir el dominio (o volver
+ *     a «Probar y guardar») lo destraba.
  *   · `sin_dominio`: hay clave pero falta el dominio SIP de la central.
  */
-export type AnuraKaptaPhoneStatus = "sin_telefono" | "listo" | "clave_rechazada" | "sin_dominio";
+export type AnuraKaptaPhoneStatus = "sin_telefono" | "listo" | "clave_rechazada" | "dominio_no_reconocido" | "sin_dominio";
+
+/**
+ * El comienzo del motivo que guarda el servidor cuando Anura responde 404 al
+ * registrar (`rejectionReason("dominio", …)`). La base no tiene una columna
+ * para el tipo de rechazo (0311): se distingue por este texto.
+ */
+export const ANURA_SIP_NOT_FOUND_REASON = "Anura no reconoce el usuario SIP en el dominio de la central";
+
+/**
+ * Lo que dejaban las pestañas de antes del 06-11-2026, que marcaban el 404
+ * como clave: «Anura rechazó el usuario o la clave del teléfono de Kapta (SIP
+ * 404).». También es un dominio no reconocido.
+ */
+export const ANURA_SIP_NOT_FOUND_LEGACY_MARKS = ["(SIP 404)", "(SIP 604)"] as const;
+
+/** ¿El rechazo guardado es un «no reconoce el usuario o el dominio» (404)? */
+export function isNotFoundRejection(reason: string | null | undefined): boolean {
+  if (typeof reason !== "string") return false;
+  return reason.startsWith(ANURA_SIP_NOT_FOUND_REASON) || ANURA_SIP_NOT_FOUND_LEGACY_MARKS.some((m) => reason.includes(m));
+}
+
+/**
+ * Se agrega al final del motivo de una marca 404 cuando, después, «Guardar
+ * central» guardó OTRO dominio: la marca se hizo con el anterior y espera a
+ * que Anura acepte el nuevo en un «Probar y guardar» (sin columna nueva, como
+ * el tipo de rechazo). Recién entonces se libera.
+ */
+export const ANURA_SIP_NOT_FOUND_RETEST = " Se cambió el dominio: falta probarlo.";
+
+/** ¿Es una marca 404 hecha con un dominio anterior, a la espera de probar el nuevo? */
+export function isNotFoundAwaitingTest(reason: string | null | undefined): boolean {
+  return isNotFoundRejection(reason) && (reason as string).endsWith(ANURA_SIP_NOT_FOUND_RETEST);
+}
 
 export const ANURA_KAPTA_PHONE_TEXT = {
   clave_rechazada: "Anura rechazó la clave del teléfono de Kapta; pide a quien administra que la vuelva a guardar.",
+  dominio_no_reconocido:
+    "Anura no reconoce el usuario o el dominio del teléfono de Kapta; pide a quien administra que revise el dominio de la central en Ajustes › Telefonía Anura.",
   sin_dominio: "Falta el dominio SIP de la central de Anura. Pide a quien administra que lo guarde en Ajustes › Telefonía Anura.",
   sin_telefono: "Este anexo no tiene teléfono en Kapta: suena tu teléfono de Anura.",
 } as const;

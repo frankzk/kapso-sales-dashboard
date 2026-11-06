@@ -19,6 +19,11 @@ import {
   ANURA_DEFAULT_SIP_PORT,
   ANURA_DEFAULT_WS_URL,
   ANURA_KAPTA_PHONE_TEXT,
+  ANURA_SIP_NOT_FOUND_LEGACY_MARKS,
+  ANURA_SIP_NOT_FOUND_REASON,
+  ANURA_SIP_NOT_FOUND_RETEST,
+  isNotFoundAwaitingTest,
+  isNotFoundRejection,
   type AnuraKaptaPhoneStatus,
 } from "@/lib/anura/sip";
 import type { AnuraPhoneCredentials, AnuraPhoneCredentialsResult } from "@/lib/anura/sip-phone";
@@ -41,16 +46,19 @@ export function isMissingTable(error: { code?: string; message?: string } | null
   return error.code === "42P01" || error.code === "PGRST205" || /does not exist|could not find the table/i.test(error.message ?? "");
 }
 
-/** La central SIP de la org (o los valores por defecto). `missing`: falta la 0311. */
-export async function readSipSettings(admin: SupabaseClient, orgId: string): Promise<{ settings: AnuraSipSettings; missing: boolean }> {
+/**
+ * La central SIP de la org (o los valores por defecto). `missing`: falta la
+ * 0311. `failed`: la lectura falló, así que `settings` NO es lo guardado.
+ */
+export async function readSipSettings(admin: SupabaseClient, orgId: string): Promise<{ settings: AnuraSipSettings; missing: boolean; failed: boolean }> {
   const { data, error } = await admin
     .from(ANURA_SIP_SETTINGS_TABLE)
     .select("sip_domain,ws_url,sip_port,updated_at")
     .eq("org_id", orgId)
     .maybeSingle();
-  if (error) return { settings: { ...DEFAULT_SIP_SETTINGS }, missing: isMissingTable(error) };
+  if (error) return { settings: { ...DEFAULT_SIP_SETTINGS }, missing: isMissingTable(error), failed: true };
   const row = data as { sip_domain: string | null; ws_url: string | null; sip_port: number | null; updated_at: string | null } | null;
-  if (!row) return { settings: { ...DEFAULT_SIP_SETTINGS }, missing: false };
+  if (!row) return { settings: { ...DEFAULT_SIP_SETTINGS }, missing: false, failed: false };
   return {
     settings: {
       domain: row.sip_domain || null,
@@ -59,6 +67,7 @@ export async function readSipSettings(admin: SupabaseClient, orgId: string): Pro
       updatedAt: row.updated_at,
     },
     missing: false,
+    failed: false,
   };
 }
 
@@ -122,7 +131,7 @@ export function kaptaPhoneStatus(
   settings: Pick<AnuraSipSettings, "domain">,
 ): AnuraKaptaPhoneStatus {
   if (!ext || !meta || meta.extensionId !== ext.id || meta.extension !== ext.extension) return "sin_telefono";
-  if (meta.rejectedAt) return "clave_rechazada";
+  if (meta.rejectedAt) return isNotFoundRejection(meta.rejectedReason) ? "dominio_no_reconocido" : "clave_rechazada";
   if (!settings.domain) return "sin_dominio";
   return "listo";
 }
@@ -187,6 +196,77 @@ export async function markSipCredentialRejected(
     .is("rejected_at", null)
     .select("extension_id");
   return !error && (data ?? []).length > 0;
+}
+
+/**
+ * «Guardar central» guardó OTRO dominio: las marcas «dominio no reconocido»
+ * (404 con el dominio anterior) pasan a esperar que Anura acepte el nuevo
+ * (`ANURA_SIP_NOT_FOUND_RETEST` al final del motivo). NO se liberan todavía:
+ * si el dominio nuevo también está mal, cada anexo gastaría un 404 más desde
+ * la misma oficina. Las libera `clearNotFoundRejections` cuando un «Probar y
+ * guardar» con el dominio nuevo sale bien. Devuelve cuántas dejó esperando (0
+ * si falla: no es motivo para no guardar el dominio).
+ */
+export async function markNotFoundAwaitingTest(admin: SupabaseClient, orgId: string): Promise<number> {
+  let waiting = 0;
+  try {
+    const { data, error } = await admin
+      .from(ANURA_SIP_CREDENTIALS_TABLE)
+      .select("extension_id,rejected_reason")
+      .eq("org_id", orgId)
+      .not("rejected_at", "is", null);
+    if (error) return 0;
+    for (const row of (data ?? []) as { extension_id: string; rejected_reason: string | null }[]) {
+      const reason = row.rejected_reason;
+      if (!reason || !isNotFoundRejection(reason) || isNotFoundAwaitingTest(reason)) continue;
+      const next = `${reason.slice(0, 200 - ANURA_SIP_NOT_FOUND_RETEST.length)}${ANURA_SIP_NOT_FOUND_RETEST}`;
+      const res = await admin
+        .from(ANURA_SIP_CREDENTIALS_TABLE)
+        .update({ rejected_reason: next })
+        .eq("org_id", orgId)
+        .eq("extension_id", row.extension_id)
+        .eq("rejected_reason", reason)
+        .select("extension_id");
+      if (!res.error) waiting += (res.data ?? []).length;
+    }
+  } catch {
+    // no es motivo para no guardar el dominio
+  }
+  return waiting;
+}
+
+/**
+ * Anura ACEPTÓ un «Probar y guardar» con el dominio de la central: se liberan
+ * las marcas «dominio no reconocido» hechas con un dominio anterior, que
+ * vuelven a probar UNA vez, cada una en su próxima llamada:
+ *   · `onlyAwaitingTest` (el dominio ya estaba guardado): solo las que
+ *     esperaban la prueba (`markNotFoundAwaitingTest`); las hechas con ESTE
+ *     dominio siguen marcadas (ahí lo que está mal es el usuario);
+ *   · sin él (la prueba misma cambió el dominio): todas, porque todas se
+ *     hicieron con un dominio anterior.
+ * Un «clave rechazada» (401/403/407) NO se toca: ahí lo que está mal es la
+ * clave. Devuelve cuántas liberó (0 si falla: la clave ya se guardó).
+ */
+export async function clearNotFoundRejections(admin: SupabaseClient, orgId: string, opts: { onlyAwaitingTest?: boolean } = {}): Promise<number> {
+  let freed = 0;
+  const patterns = opts.onlyAwaitingTest
+    ? [`%${ANURA_SIP_NOT_FOUND_RETEST}`]
+    : [`${ANURA_SIP_NOT_FOUND_REASON}%`, ...ANURA_SIP_NOT_FOUND_LEGACY_MARKS.map((m) => `%${m}%`)];
+  for (const pattern of patterns) {
+    try {
+      const { data, error } = await admin
+        .from(ANURA_SIP_CREDENTIALS_TABLE)
+        .update({ rejected_at: null, rejected_reason: null })
+        .eq("org_id", orgId)
+        .not("rejected_at", "is", null)
+        .like("rejected_reason", pattern)
+        .select("extension_id");
+      if (!error) freed += (data ?? []).length;
+    } catch {
+      // la clave ya se guardó; la marca sigue y se puede liberar en otra prueba
+    }
+  }
+  return freed;
 }
 
 /**

@@ -18,8 +18,10 @@
 //                                  memoria del navegador; nunca en logs ni en
 //                                  localStorage/sessionStorage.
 //   reportAnuraPhoneRejected(orderId, input)
-//                                → Anura rechazó la clave al registrar: queda
-//                                  «clave rechazada» y no se vuelve a entregar.
+//                                → Anura rechazó el registro: con 401/403/407 queda
+//                                  «clave rechazada»; con 404, «dominio no
+//                                  reconocido» (se corrige el dominio). En los dos
+//                                  casos no se vuelve a entregar esa clave.
 
 import { after } from "next/server";
 import {
@@ -61,7 +63,7 @@ export async function getAnuraPhone(orderId: string): Promise<AnuraPhoneCredenti
 
 export async function reportAnuraPhoneRejected(
   orderId: string,
-  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null },
+  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null; domain?: string | null },
 ): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
   return reportAnuraPhoneRejectedFor({ orderId }, input);
 }

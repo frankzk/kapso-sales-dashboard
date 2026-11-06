@@ -378,10 +378,15 @@ describe("Probar y guardar, y clave rechazada sin reintento", () => {
     expect(f2).toContain("El servidor no puede comprobar que la prueba del navegador salió bien: confía en quien administra");
   });
 
-  it("401, 403, 404 y 407 (o la causa de JsSIP) son clave rechazada; red y tiempo no", () => {
-    expect(f2).toContain("(SIP 401, 403, 404 o 407, o la causa de JsSIP «Authentication Error», «Rejected» o «Not Found»)");
-    for (const status of [401, 403, 404, 407]) expect(registrationFailureKind({ response: { status_code: status } }), String(status)).toBe("clave");
-    for (const cause of ["Authentication Error", "Rejected", "Not Found"]) expect(registrationFailureKind({ cause }), cause).toBe("clave");
+  it("401, 403 y 407 (o la causa de JsSIP) son clave rechazada; 404 es dominio; red y tiempo no", () => {
+    expect(f2).toContain("(SIP 401, 403 o 407, o la causa de JsSIP «Authentication Error» o «Rejected»)");
+    for (const status of [401, 403, 407]) expect(registrationFailureKind({ response: { status_code: status } }), String(status)).toBe("clave");
+    for (const cause of ["Authentication Error", "Rejected"]) expect(registrationFailureKind({ cause }), cause).toBe("clave");
+    expect(f2).toContain("Un 404 al registrar (o 604, o la causa de JsSIP «Not Found») no dice que la clave esté mal");
+    for (const status of [404, 604]) expect(registrationFailureKind({ response: { status_code: status } }), String(status)).toBe("dominio");
+    expect(registrationFailureKind({ cause: "Not Found" })).toBe("dominio");
+    // La regla vieja («un 404 cuenta como clave rechazada») ya no está.
+    expect(f2).not.toContain("Un 404 cuenta como clave rechazada");
     expect(registrationFailureKind({ cause: "Connection Error" })).toBe("red");
     expect(registrationFailureKind({ cause: "Request Timeout" })).toBe("tiempo");
     expect(f2).toContain("Un fallo de red o de tiempo no marca nada: la asesora puede volver a intentar.");
@@ -401,6 +406,46 @@ describe("Probar y guardar, y clave rechazada sin reintento", () => {
     const store = read("lib/anura/sip-store.ts");
     expect(store).toContain('.eq("saved_at", input.credentialVersion)');
     expect(store).toContain('.is("rejected_at", null)');
+  });
+
+  it("cerrada por plazo con Kapta en la llamada: «En llamada» y el reloj desde que el teléfono contestó", async () => {
+    const { anuraTalkClock } = await import("@/lib/anura/phone-ui");
+    expect(f2).toContain(
+      "La tarjeta (en la ficha y en la llamada de prueba de Ajustes) sigue diciendo «En llamada» y muestra el reloj, contado desde que el teléfono de Kapta contestó, porque el servidor no sabe cuándo empezó.",
+    );
+    const closed = { status: "fallida" as const, active: false, answeredAt: null, closedByTimeout: true, statusLabel: "No se pudo llamar" };
+    expect(anuraPhoneStatusLabel({ phase: "en_llamada", toMasked: null }, closed)).toBe("En llamada");
+    expect(anuraTalkClock({ phase: "en_llamada", answeredAt: 1_000 }, closed, true)).toEqual({ running: true, fromMs: 1_000 });
+  });
+
+  it("dominio no reconocido: el MOM cita los textos y las reglas del código", async () => {
+    const { ANURA_SIP_NOT_FOUND_REASON } = await import("@/lib/anura/sip");
+    const { anuraDomainNotFoundBanner, anuraSipPhoneBadge, ANURA_PHONE_BLOCKED_TITLE, ANURA_SIP_TEST_REPEAT_TEXT } = await import("@/lib/anura/phone-ui");
+    const { ANURA_SIP_NOT_FOUND_RETEST } = await import("@/lib/anura/sip");
+    expect(F2_RAW).toContain(
+      `| \`dominio_no_reconocido\` | Anura no reconoce el usuario en el dominio de la central (SIP 404) | No llama: «${ANURA_KAPTA_PHONE_TEXT.dominio_no_reconocido}» |`,
+    );
+    expect(ANURA_REGISTRATION_TEXT.dominio).toBe(ANURA_KAPTA_PHONE_TEXT.dominio_no_reconocido);
+    expect(f2).toContain(`la ficha dice «${ANURA_KAPTA_PHONE_TEXT.dominio_no_reconocido}»`);
+    expect(f2).toContain(`se explica: «${ANURA_REGISTRATION_TEST_TEXT.dominio}».`);
+    expect(f2).toContain(`el motivo empieza por «${ANURA_SIP_NOT_FOUND_REASON}»`);
+    expect(f2).toContain(`por ejemplo «${rejectionReason("dominio", 404)}»`);
+    expect(f2).toContain(`un aviso: «${anuraDomainNotFoundBanner(1)}»`);
+    expect(f2).toContain(`la chapa del anexo dice «${anuraSipPhoneBadge({ status: "dominio_no_reconocido", hasPassword: true }).label}»`);
+    expect(ANURA_PHONE_BLOCKED_TITLE.dominio_no_reconocido).toMatch(/dominio/);
+    expect(f2).toContain(`Ajustes avisa «${anuraDomainNotFoundBanner(1, 1)}»`);
+    expect(f2).toContain("**guardar un dominio distinto con «Guardar central» no libera a nadie todavía**");
+    expect(f2).toContain(`al motivo se le agrega «${ANURA_SIP_NOT_FOUND_RETEST.trim()}»`);
+    expect(f2).toContain("Guardar el mismo dominio no cambia nada, y si Kapta no pudo leer el dominio anterior tampoco toca las marcas;");
+    expect(f2).toContain("**cuando Anura acepta un «Probar y guardar»**");
+    expect(f2).toContain("si la prueba misma cambió el dominio, todas; si el dominio ya estaba guardado, solo las que esperaban la prueba.");
+    expect(f2).toContain("Una «clave rechazada» (401/403/407) nunca se quita por el dominio;");
+    expect(f2).toContain("la pestaña recuerda en memoria el 404 de esa clave **con ese dominio**");
+    expect(f2).toContain(`el botón queda apagado y dice «${ANURA_SIP_TEST_REPEAT_TEXT}»`);
+    const server = read("lib/anura/server.ts");
+    expect(server).toContain("if (settings.domain && settings.domain !== triedDomain) return { ok: true, marked: false };");
+    expect(server).toContain("!before.failed && before.settings.domain !== parsed.domain ? await markNotFoundAwaitingTest(admin, target.orgId) : 0");
+    expect(server).toContain("await clearNotFoundRejections(admin, target.orgId, { onlyAwaitingTest: !domainChanged })");
   });
 
   it("ante el primer rechazo el teléfono se detiene, avisa una vez y no reintenta", async () => {

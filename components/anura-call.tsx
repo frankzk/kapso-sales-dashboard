@@ -13,7 +13,8 @@
 //     Anura marca a la clienta y la asesora habla con audífonos. Aquí sí se
 //     puede colgar y silenciar. Al colgar, Kapta se desconecta de Anura.
 //     Kapta no recibe llamadas: cualquier otro aviso se rechaza sin sonar.
-//     `clave_rechazada` / `sin_dominio`: no se llama y se dice por qué.
+//     `clave_rechazada` / `dominio_no_reconocido` / `sin_dominio`: no se llama
+//     y se dice por qué.
 //
 // En las dos, la ficha sigue el estado con el mismo sondeo corto mientras la
 // llamada está viva (lo que dice si la clienta contestó llega por ahí).
@@ -46,6 +47,7 @@ import { ANURA_KAPTA_PHONE_TEXT } from "@/lib/anura/sip";
 import {
   ANURA_PHONE_BLOCKED_TITLE,
   ANURA_RECORDING_MAX_RETRIES,
+  isAnuraPhoneBlocked,
   anuraPhoneCanMute,
   anuraPhoneEndedLine,
   anuraPhoneErrorTitle,
@@ -56,7 +58,8 @@ import {
   anuraPhoneOutlivesServer,
   anuraPhoneStatusLabel,
   anuraRecordingSrc,
-  talkSecondsSince,
+  anuraTalkClock,
+  talkSecondsFrom,
 } from "@/lib/anura/phone-ui";
 import { masterOrderHref } from "@/lib/order-drawer-href";
 import { formatTalkTime } from "@/lib/browser-call";
@@ -279,7 +282,10 @@ export function AnuraCallButton({
   }, [callId, active, phoneBusy, outlives, hangUp]);
 
   // El reloj, solo mientras se habla (con el teléfono de Kapta, hasta colgar).
-  const talking = call?.status === "en_curso" && !(viaKapta && snap?.phase === "terminada");
+  // Si el servidor la cerró por su plazo y Kapta sigue en la llamada, corre
+  // desde que el teléfono de Kapta contestó (`anuraTalkClock`).
+  const clock = anuraTalkClock(snap, call, viaKapta);
+  const talking = clock.running;
   useEffect(() => {
     if (!talking) return;
     setNow(Date.now());
@@ -320,7 +326,7 @@ export function AnuraCallButton({
     setPollTrouble(false);
     failures.current = 0;
 
-    if (way === "bloqueado" && (kaptaPhone?.status === "clave_rechazada" || kaptaPhone?.status === "sin_dominio")) {
+    if (way === "bloqueado" && kaptaPhone && isAnuraPhoneBlocked(kaptaPhone.status)) {
       // Con la «-websocket» como principal, la fase 1 haría sonar una terminal
       // sin conectar: no se intenta nada.
       setViaKapta(true);
@@ -369,7 +375,7 @@ export function AnuraCallButton({
   const live = Boolean(call?.active) || phone.busy;
   const phoneFailed = viaKapta && snap?.phase === "error";
   const tone =
-    call?.status === "en_curso" || ended?.status === "contestada"
+    call?.status === "en_curso" || ended?.status === "contestada" || outlives
       ? "text-ok-fg"
       : failed || (error && !call) || (phoneFailed && !call?.active)
         ? "text-crit-fg"
@@ -415,8 +421,8 @@ export function AnuraCallButton({
         )}
       </div>
 
-      {talking && call && (
-        <p className="mt-3 text-2xl font-semibold tabular-nums text-ink-900">{formatTalkTime(talkSecondsSince(call.answeredAt, now))}</p>
+      {talking && (
+        <p className="mt-3 text-2xl font-semibold tabular-nums text-ink-900">{formatTalkTime(talkSecondsFrom(clock.fromMs, now))}</p>
       )}
 
       {hint && <p className="mt-2 text-xs text-ink-600">{hint}</p>}

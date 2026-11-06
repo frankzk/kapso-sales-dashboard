@@ -41,8 +41,8 @@ export interface AnuraPhoneServer {
   fetchCredentials(): Promise<AnuraPhoneCredentialsResult>;
   /** Pide la llamada a Anura (Click2Dial). */
   requestCall(): Promise<AnuraStartResult>;
-  /** Anura rechazó la clave: el servidor la marca «clave rechazada». */
-  reportRejected(input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status: number | null }): Promise<unknown>;
+  /** Anura rechazó la clave (o no reconoce el dominio): el servidor lo marca. */
+  reportRejected(input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status: number | null; domain?: string }): Promise<unknown>;
 }
 
 export function useAnuraKaptaPhone(server: AnuraPhoneServer) {

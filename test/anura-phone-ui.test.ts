@@ -30,7 +30,13 @@ import {
   anuraSipTestCredentials,
   anuraTestCallWay,
   anuraTestFallsBack,
+  anuraDomainNotFoundBanner,
+  anuraSipTestKey,
+  anuraTalkClock,
+  ANURA_SIP_TEST_REPEAT_TEXT,
+  isAnuraPhoneBlocked,
   parseAnuraSipCentral,
+  talkSecondsFrom,
   talkSecondsSince,
 } from "@/lib/anura/phone-ui";
 import {
@@ -206,6 +212,50 @@ describe("lo que dice la tarjeta en cada fase", () => {
     expect(talkSecondsSince(null, Date.now())).toBe(0);
     expect(talkSecondsSince("no es fecha", Date.now())).toBe(0);
   });
+
+  describe("el reloj de la tarjeta (anuraTalkClock)", () => {
+    const T0 = Date.parse("2026-11-06T10:00:00.000Z");
+    const TALK = "2026-11-06T10:00:05.000Z";
+    const live = { status: "en_curso" as const, active: true, answeredAt: TALK, closedByTimeout: false };
+    // El servidor la cerró por su plazo: «No se pudo llamar», sin TALK.
+    const closed = { status: "fallida" as const, active: false, answeredAt: null, closedByTimeout: true };
+
+    it("en curso según Anura: desde el TALK del servidor", () => {
+      expect(anuraTalkClock({ phase: "en_llamada", answeredAt: T0 }, live, true)).toEqual({ running: true, fromMs: Date.parse(TALK) });
+      expect(anuraTalkClock(null, live, false)).toEqual({ running: true, fromMs: Date.parse(TALK) });
+      // Con el teléfono de Kapta, al colgar se para aunque el fin de Anura no haya llegado.
+      expect(anuraTalkClock({ phase: "terminada", answeredAt: T0 }, live, true).running).toBe(false);
+    });
+
+    it("cerrada por plazo del servidor con Kapta todavía en la llamada: desde que el teléfono contestó", () => {
+      const clock = anuraTalkClock({ phase: "en_llamada", answeredAt: T0 }, closed, true);
+      expect(clock).toEqual({ running: true, fromMs: T0 });
+      expect(talkSecondsFrom(clock.fromMs, T0 + 95_400)).toBe(95);
+      // Si el TALK sí llegó, pero el plazo de 2 h la cerró igual, manda el teléfono.
+      expect(anuraTalkClock({ phase: "en_llamada", answeredAt: T0 }, { ...closed, answeredAt: TALK }, true).fromMs).toBe(T0);
+      // Sin la hora del teléfono, la del servidor.
+      expect(anuraTalkClock({ phase: "en_llamada", answeredAt: null }, { ...closed, answeredAt: TALK }, true).fromMs).toBe(Date.parse(TALK));
+    });
+
+    it("sin reloj: la llamada terminó de verdad, Kapta ya colgó, o no es el teléfono de Kapta", () => {
+      expect(anuraTalkClock({ phase: "terminada", answeredAt: T0 }, closed, true).running).toBe(false);
+      expect(anuraTalkClock(null, closed, false).running).toBe(false);
+      expect(anuraTalkClock({ phase: "en_llamada", answeredAt: T0 }, { ...closed, closedByTimeout: false }, true).running).toBe(false);
+      expect(anuraTalkClock({ phase: "esperando_anura", answeredAt: null }, { ...live, status: "sonando" }, true).running).toBe(false);
+      expect(anuraTalkClock(null, null, true)).toEqual({ running: false, fromMs: null });
+      expect(talkSecondsFrom(null, T0)).toBe(0);
+    });
+
+    it("la ficha y Ajustes usan el reloj, no el estado «en_curso»", () => {
+      for (const f of ["components/anura-call.tsx", "components/anura-settings-section.tsx"]) {
+        const src = read(f);
+        expect(src, f).toContain("const clock = anuraTalkClock(snap, call, viaKapta);");
+        expect(src, f).toContain("const talking = clock.running;");
+        expect(src, f).toContain("formatTalkTime(talkSecondsFrom(clock.fromMs, now))");
+        expect(src, f).not.toContain('const talking = call?.status === "en_curso"');
+      }
+    });
+  });
 });
 
 describe("los fallos del teléfono", () => {
@@ -217,6 +267,8 @@ describe("los fallos del teléfono", () => {
     expect(anuraPhoneErrorTitle({ code: "registro", registration: "red", message: "" })).toBe("Sin conexión con Anura");
     expect(anuraPhoneErrorTitle({ code: "registro", registration: "tiempo", message: "" })).toBe("Anura no respondió");
     expect(anuraPhoneErrorTitle({ code: "credenciales", credentialsCode: "clave_rechazada", message: "" })).toMatch(/rechazó la clave/);
+    expect(anuraPhoneErrorTitle({ code: "registro", registration: "dominio", message: "" })).toBe("Anura no reconoce el usuario o el dominio");
+    expect(anuraPhoneErrorTitle({ code: "credenciales", credentialsCode: "dominio_no_reconocido", message: "" })).toBe("Anura no reconoce el usuario o el dominio");
     expect(anuraPhoneErrorTitle({ code: "credenciales", credentialsCode: "base", message: "" })).toBe("No se pudo preparar el teléfono de Kapta");
     expect(anuraPhoneErrorTitle({ code: "anura_no_llamo", message: ANURA_PHONE_TEXT.anura_no_llamo })).toMatch(/no hizo sonar/);
     expect(anuraPhoneErrorTitle({ code: "audio", message: "" })).toBe("No se pudo conectar el audio");
@@ -236,6 +288,8 @@ describe("los fallos del teléfono", () => {
   it("tras una clave rechazada (o un teléfono que ya no está) la ficha vuelve a pedir su panel", () => {
     expect(anuraPhoneNeedsPanelReload({ code: "registro", registration: "clave", message: "" })).toBe(true);
     expect(anuraPhoneNeedsPanelReload({ code: "registro", registration: "red", message: "" })).toBe(false);
+    expect(anuraPhoneNeedsPanelReload({ code: "registro", registration: "dominio", message: "" })).toBe(true);
+    expect(anuraPhoneNeedsPanelReload({ code: "credenciales", credentialsCode: "dominio_no_reconocido", message: "" })).toBe(true);
     expect(anuraPhoneNeedsPanelReload({ code: "credenciales", credentialsCode: "clave_rechazada", message: "" })).toBe(true);
     expect(anuraPhoneNeedsPanelReload({ code: "credenciales", credentialsCode: "sin_telefono", message: "" })).toBe(true);
     expect(anuraPhoneNeedsPanelReload({ code: "microfono_denegado", message: "" })).toBe(false);
@@ -262,6 +316,82 @@ describe("Ajustes: el teléfono de Kapta de cada anexo", () => {
     expect(rejected[1]).toBe(
       "Anura la rechazó el 2026-11-07: Anura rechazó el usuario o la clave del teléfono de Kapta (SIP 403). Kapta no la vuelve a usar hasta que guardes otra.",
     );
+  });
+
+  it("dominio no reconocido (404): lleva a corregir el dominio, no a reescribir la clave", () => {
+    expect(anuraSipPhoneBadge({ status: "dominio_no_reconocido", hasPassword: true })).toEqual({ label: "Revisa el dominio", tone: "crit" });
+    const lines = anuraSipPhoneLines(
+      {
+        ...base,
+        status: "dominio_no_reconocido",
+        hasPassword: true,
+        rejectedAt: "2026-11-07T09:00:00.000Z",
+        rejectedReason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404).",
+      },
+      fmt,
+    );
+    expect(lines[1]).toMatch(/^Anura no reconoció el usuario 101-websocket en el dominio de la central el 2026-11-07 \(SIP 404\)\. /);
+    expect(lines[1]).toMatch(/Dominio SIP de la central/);
+    expect(lines[1]).not.toMatch(/hasta que guardes otra/);
+    expect(anuraDomainNotFoundBanner(2)).toMatch(/^Anura no reconoció 2 anexos con este dominio \(SIP 404\)/);
+    // «Guardar central» ya no libera solo: hay que probar el dominio en un anexo.
+    expect(anuraDomainNotFoundBanner(1)).toMatch(/pulsa «Guardar central» y pruébalo con «Probar y guardar» en un anexo/);
+    expect(anuraDomainNotFoundBanner(1)).toMatch(/sin volver a escribir sus claves\.$/);
+    // Todos marcados con el dominio anterior: el aviso pide probar el nuevo.
+    expect(anuraDomainNotFoundBanner(2, 2)).toMatch(/^Se cambió el dominio de la central y quedan 2 anexos que Anura no reconocía con el anterior/);
+    expect(anuraDomainNotFoundBanner(2, 1)).toMatch(/^Anura no reconoció 2 anexos con este dominio/);
+    const waiting = anuraSipPhoneLines(
+      {
+        ...base,
+        status: "dominio_no_reconocido",
+        hasPassword: true,
+        rejectedAt: "2026-11-07T09:00:00.000Z",
+        rejectedReason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404). Se cambió el dominio: falta probarlo.",
+      },
+      fmt,
+    );
+    expect(waiting[1]).toMatch(/^Anura no reconoció el usuario 101-websocket con el dominio anterior de la central el 2026-11-07 \(SIP 404\)\. Ya se guardó otro dominio: pruébalo con «Probar y guardar»/);
+    expect(anuraPhoneModeOf({ status: "dominio_no_reconocido" })).toBe("bloqueado");
+    expect(isAnuraPhoneBlocked("dominio_no_reconocido")).toBe(true);
+    expect(isAnuraPhoneBlocked("listo")).toBe(false);
+    expect(ANURA_PHONE_BLOCKED_TITLE.dominio_no_reconocido).toBe("Anura no reconoce el usuario o el dominio");
+    // Ajustes: el aviso junto al dominio, y la contraseña no se borra con un 404.
+    const card = read("components/anura-kapta-phone-settings.tsx");
+    expect(card).toContain('e.phone.status === "dominio_no_reconocido"');
+    expect(card).toContain("{anuraDomainNotFoundBanner(notFound, awaitingTest)}");
+    expect(card).toContain('if (res.kind === "clave") setPassword("");');
+    expect(read("components/anura-call.tsx")).toContain('if (way === "bloqueado" && kaptaPhone && isAnuraPhoneBlocked(kaptaPhone.status)) {');
+  });
+
+  it("«Probar y guardar» no deja repetir una combinación que Anura ya rechazó", () => {
+    const built = anuraSipTestCredentials({ domain: "kenku-mal.anura.pe", wsUrl: "", port: "" }, "101", "", "Sup3r-clave");
+    if (!built.ok) throw new Error(built.error);
+    const key = anuraSipTestKey(built.creds);
+    // La contraseña no queda en claro en la huella.
+    expect(key).not.toContain("Sup3r-clave");
+    // Lo mismo escrito otra vez (mayúsculas en el dominio incluidas) es la misma combinación.
+    const again = anuraSipTestCredentials({ domain: "Kenku-Mal.anura.pe", wsUrl: "", port: "" }, "101", "101-websocket", "Sup3r-clave");
+    expect(again.ok && anuraSipTestKey(again.creds)).toBe(key);
+    // Cambiar el dominio, el usuario o la contraseña es otra combinación.
+    for (const [domain, user, pass] of [
+      ["kenku.anura.pe", "", "Sup3r-clave"],
+      ["kenku-mal.anura.pe", "101-web", "Sup3r-clave"],
+      ["kenku-mal.anura.pe", "", "Otra-clave"],
+    ] as const) {
+      const other = anuraSipTestCredentials({ domain, wsUrl: "", port: "" }, "101", user, pass);
+      expect(other.ok && anuraSipTestKey(other.creds)).not.toBe(key);
+    }
+    // Otro anexo con lo mismo también es otra combinación.
+    const otherExt = anuraSipTestCredentials({ domain: "kenku-mal.anura.pe", wsUrl: "", port: "" }, "102", "101-websocket", "Sup3r-clave");
+    expect(otherExt.ok && anuraSipTestKey(otherExt.creds)).not.toBe(key);
+    expect(ANURA_SIP_TEST_REPEAT_TEXT).toMatch(/^Anura ya rechazó este mismo dominio, usuario y contraseña\./);
+    // La pantalla la recuerda con cualquier rechazo (clave o dominio), apaga el botón y lo explica.
+    const card = read("components/anura-kapta-phone-settings.tsx");
+    expect(card).toContain("if (isRegistrationRejection(res.kind)) rejectedTests.add(key);");
+    expect(card).toContain("const repeated = Boolean(draft?.ok && rejectedTests.has(anuraSipTestKey(draft.creds)));");
+    expect(card).toContain("disabled={pending || busy || !password || repeated}");
+    expect(card).toContain("if (rejectedTests.has(key)) {");
+    expect(card).toContain("{ANURA_SIP_TEST_REPEAT_TEXT}");
   });
 
   it("la central: dominio obligatorio; URL WebSocket y puerto por defecto de Perú; solo anura.pe", () => {

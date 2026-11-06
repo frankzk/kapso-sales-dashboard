@@ -130,16 +130,32 @@ export function anuraCallLive(row: AnuraCallRow): AnuraCallLive {
  * Cierra como `fallida` (a) las `solicitada` sin ningún aviso a los 60 s
  * («Anura no llegó a hacer la llamada») y (b) las vivas sin END a las 2 h.
  * Se marcan `closed_by_timeout`: si el END llega después, todavía cuenta.
- * Acotado a una persona o a una llamada. Devuelve cuántas cerró.
+ * Acotado a una persona o a una llamada; `{ all: true }` (solo el cron
+ * `/api/cron/anura-recordings`) suelta las de todas las organizaciones, con
+ * las mismas reglas. Sin alcance no hace nada. Devuelve cuántas cerró.
  */
 export async function releaseStaleAnuraCalls(
   admin: SupabaseClient,
-  scope: { userId?: string; callId?: string },
+  scope: { userId?: string; callId?: string; all?: true },
   now: Date = new Date(),
 ): Promise<number> {
-  if (!scope.userId && !scope.callId) return 0;
+  return (await releaseStaleAnuraCallsReport(admin, scope, now)).closed;
+}
+
+/**
+ * Lo mismo, diciendo además si alguna de las dos pasadas falló en la base
+ * (`failed`). La ficha no lo necesita (vuelve a intentarlo al abrirse); el
+ * cron sí, para no reportar «0 liberadas» cuando en verdad no pudo escribir.
+ */
+export async function releaseStaleAnuraCallsReport(
+  admin: SupabaseClient,
+  scope: { userId?: string; callId?: string; all?: true },
+  now: Date = new Date(),
+): Promise<{ closed: number; failed: boolean }> {
+  if (!scope.userId && !scope.callId && scope.all !== true) return { closed: 0, failed: false };
   const nowIso = now.toISOString();
   let closed = 0;
+  let failed = false;
   const pass = async (statuses: AnuraCallStatus[], column: "requested_at" | "last_event_at", ms: number, reason: string) => {
     let q = admin
       .from("anura_calls")
@@ -150,11 +166,12 @@ export async function releaseStaleAnuraCalls(
     if (scope.userId) q = q.eq("user_id", scope.userId);
     if (scope.callId) q = q.eq("id", scope.callId);
     const { data, error } = await q.select("id");
-    if (!error) closed += (data ?? []).length;
+    if (error) failed = true;
+    else closed += (data ?? []).length;
   };
   await pass(["solicitada"], "requested_at", ANURA_STALE_REQUEST_MS, ANURA_STALE_REASON);
   await pass(["sonando", "en_curso"], "last_event_at", ANURA_STUCK_CALL_MS, ANURA_STUCK_REASON);
-  return closed;
+  return { closed, failed };
 }
 
 /** La llamada viva de una persona (la más reciente), o null. */

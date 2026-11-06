@@ -3,8 +3,9 @@
 // El enlace que Anura manda en el END (`recordingUrl`, `audio_play_mp3`) VENCE
 // a los 30 minutos. Kapta la copia a su Storage privado (`anura-recordings`)
 // en cuanto llega el END. Si la copia falla, se reintenta al abrir la ficha
-// del pedido (y desde `retryPendingAnuraRecordings`, listo para un cron corto)
-// mientras no pasen los 30 minutos y hasta 6 intentos; después queda
+// del pedido y cada 10 minutos desde `/api/cron/anura-recordings`
+// (lib/anura/maintenance.ts, que cubre las pruebas y las entrantes, sin
+// ficha) mientras no pasen los 30 minutos y hasta 6 intentos; después queda
 // «vencida». Solo baja de hosts de Anura (`allowedRecordingUrl`), también
 // después de una redirección, y nunca más de 40 MB.
 //
@@ -61,6 +62,9 @@ function expired(call: RecordingCallRow, now: Date): boolean {
   return !!call.recording_expires_at && new Date(call.recording_expires_at).getTime() <= now.getTime();
 }
 
+/** Lo que queda en `recording_error` cuando el enlace venció sin copiarla. */
+export const ANURA_RECORDING_EXPIRED_ERROR = "El enlace de Anura venció antes de copiar la grabación.";
+
 /** Los intentos se acabaron o el enlace venció: ya no hay nada que copiar. */
 const ANURA_RECORDING_GAVE_UP = "No se pudo copiar la grabación después de 6 intentos.";
 
@@ -95,7 +99,7 @@ async function markFailure(admin: SupabaseClient, call: RecordingCallRow, error:
 async function markExpired(admin: SupabaseClient, call: RecordingCallRow): Promise<void> {
   await admin
     .from("anura_calls")
-    .update({ recording_status: "vencida", recording_error: "El enlace de Anura venció antes de copiar la grabación." })
+    .update({ recording_status: "vencida", recording_error: ANURA_RECORDING_EXPIRED_ERROR })
     .eq("id", call.id)
     .eq("recording_status", "pendiente");
   await forgetRecordingUrl(admin, call.id);
@@ -262,9 +266,9 @@ export async function retryAnuraRecording(admin: SupabaseClient, call: Recording
 }
 
 /**
- * Las «pendiente» de los últimos 30 minutos, una por una. Para un cron corto
- * (no está programado en la fase 1: la copia se intenta al llegar el END y al
- * abrir la ficha).
+ * Las «pendiente» más antiguas, una por una (sin presupuesto de tiempo). El
+ * cron usa `runAnuraMaintenance` (lib/anura/maintenance.ts), que además corta
+ * por tiempo y no pisa la copia recién lanzada por el aviso de fin.
  */
 export async function retryPendingAnuraRecordings(
   admin: SupabaseClient,

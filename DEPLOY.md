@@ -1,5 +1,149 @@
 # Deployment runbook
 
+### 06-11-2026 · «Llamar con Anura»: el cron de grabaciones y el dominio no reconocido (sin migración, MOM §8.7)
+
+Cierra lo que quedó abierto de las fases 1 y 2. Todo funciona con el esquema de
+la 0310 y la 0311; no hay migración ni variables nuevas.
+
+- **Cron nuevo** en `vercel.json`: `/api/cron/anura-recordings`, cada 10
+  minutos (`1,11,21,31,41,51 * * * *`; todos los minutos ya tienen algún
+  cron: comparte minuto con `invoice-snapshots`, que corre en todos los
+  impares, y a los :11 con `prepay-list`; el :23 es solo de
+  `shopify-own-app-tokens`). Solo producción, `CRON_SECRET` como los demás
+  (`Authorization: Bearer`). En todas las organizaciones: suelta las llamadas
+  que Anura dejó colgadas (60 s sin avisos, 2 h sin fin), marca «vencida» lo
+  que ya no se puede copiar, reintenta copiar a `anura-recordings` las
+  grabaciones «pendiente» que siguen a tiempo (hasta 20 por pasada y 25 s
+  empezando copias; las de prueba y las entrantes no tienen ficha que lo
+  haga) y poda `anura_webhook_events` (más de 30 días, y el enlace de Anura
+  que ya no sirve). Idempotente. `?dry=1` solo cuenta, también fuera de
+  producción. La respuesta y el log (`[anura-recordings] …`) llevan solo
+  conteos: ni teléfonos ni enlaces.
+- **Dominio mal escrito (SIP 404).** Antes contaba como «clave rechazada» y
+  obligaba a volver a guardar la clave. Ahora es «dominio no reconocido»: el
+  teléfono se detiene igual al primer 404 y no reintenta (para no provocar el
+  bloqueo de IP), pero la ficha y Ajustes piden revisar el **dominio** de la
+  central y el usuario `-websocket`. Se distingue por el motivo guardado
+  (`rejected_reason` empieza por «Anura no reconoce el usuario SIP en el
+  dominio de la central»), sin columnas nuevas. Un 401/403/407 sigue siendo
+  «clave rechazada». Guardar un dominio distinto no los libera solo: esperan
+  a que Anura acepte el dominio nuevo en un «Probar y guardar» de cualquier
+  anexo, y recién entonces prueban una vez cada uno. «Probar y guardar»
+  además no deja repetir una combinación (dominio, usuario y contraseña) que
+  Anura ya rechazó.
+- **Reloj de la tarjeta.** Si el servidor cerró la llamada por su plazo y el
+  teléfono de Kapta sigue en ella, la tarjeta (ficha y llamada de prueba)
+  muestra el reloj desde que el teléfono de Kapta contestó.
+- **Guardia del lockfile**: `test/pnpm-lockfile.test.ts` falla si una
+  dependencia de `package.json` falta en `pnpm-lock.yaml` o tiene otro
+  specifier (el deploy de producción del 06-11 falló por eso: Vercel instala
+  con `pnpm install --frozen-lockfile`).
+
+1. Desplegar el código. Nada antes.
+2. Comprobar en Vercel → Crons que aparece `/api/cron/anura-recordings`, y en
+   los logs una línea `[anura-recordings] {"ok":true,…}` cada 10 minutos.
+   Para mirar sin tocar nada:
+   ```
+   curl -H "Authorization: Bearer $CRON_SECRET" "https://<Kapta>/api/cron/anura-recordings?dry=1"
+   ```
+3. Los anexos que una pestaña anterior marcó «clave rechazada» por un 404 (el
+   motivo termina en «(SIP 404).») pasan solos a «dominio no reconocido»:
+   corregir el dominio de la central y probarlo con «Probar y guardar» en un
+   anexo los libera.
+
+**Marcha atrás.** Revertir el commit: el cron desaparece de `vercel.json` y la
+ficha vuelve a reintentar solo al abrirse. Los anexos marcados «dominio no
+reconocido» quedan como «clave rechazada» para el código anterior (es la misma
+columna): se liberan con «Probar y guardar».
+
+### 06-11-2026 · «Llamar con Anura», fase 2: el teléfono dentro de Kapta, solo salidas (0311, MOM §8.7)
+
+**Aplicada en producción el 06-11-2026.** La terminal principal del anexo pasa
+a ser la `<anexo>-websocket`, o sea el navegador de la asesora en Kapta (JsSIP
+3.13.8 sobre `wss://sipwss.anura.pe`, puerto SIP 55090). Kapta se registra solo
+al pedir una llamada, contesta solo el aviso de su propio Click2Dial y se
+desregistra al colgar; no recibe llamadas. Sin crons ni variables nuevas: usa
+`ANURA_CLICK2DIAL_TOKEN` y la `ENCRYPTION_KEY` de siempre para cifrar la clave
+SIP.
+
+1. **Migración `0311_anura_kapta_phone.sql`**, a mano, ANTES del código. No
+   toca filas y es idempotente:
+   - tabla `anura_sip_settings` (por organización: dominio SIP, URL WebSocket
+     solo a subdominios de `anura.pe` y sin puerto, puerto SIP), lectura para
+     miembros de la organización;
+   - tabla `anura_sip_credentials` (por anexo: usuario SIP y contraseña
+     **cifrada** `v1:…`, con fecha y motivo de rechazo), **sin** lectura desde
+     el navegador: solo `service_role`;
+   - el disparador que borra la clave si el anexo cambia de número.
+2. Comprobar:
+   ```sql
+   select to_regclass('public.anura_sip_settings'), to_regclass('public.anura_sip_credentials');
+   select tgname from pg_trigger where tgname = 'anura_extensions_number_changed';
+   ```
+3. Desplegar el código. Si sale antes de la migración, todos los anexos llaman
+   como en la fase 1 y Ajustes dice «Sin migración».
+4. **`pnpm-lock.yaml` con `jssip`.** Vercel instala con
+   `pnpm install --frozen-lockfile`: el primer deploy de producción del 06-11
+   falló porque `package.json` tenía `jssip` y `pnpm-lock.yaml` no. Desde el
+   06-11 lo vigila `test/pnpm-lockfile.test.ts`.
+5. **En el panel de Anura** (quien administra la cuenta), por anexo: encender
+   la terminal `<anexo>-websocket` como principal **cuando** se guarde su clave
+   en Kapta, «Obtener credenciales» (usuario, contraseña y dominio), Auto
+   answer de Click 2 Dial apagado y celulares permitidos en Límites. Después,
+   en Kapta, Ajustes › «Telefonía Anura»: el dominio de la central y, por
+   anexo, «Probar y guardar».
+
+**Marcha atrás.** «Quitar clave» en cada anexo (vuelve a la fase 1; en Anura,
+dejar como principal un teléfono que la asesora contesta). Revertir el commit:
+el código anterior no lee las tablas; pueden quedarse.
+
+### 05-11-2026 · «Llamar con Anura», fase 1: Click2Dial (0310, MOM §8.7)
+
+**Aplicada en producción el 05-11-2026.** «Llamar con Anura» en la cabecera de
+la ficha: Kapta pide la llamada por Click2Dial, Anura hace sonar el teléfono de
+Anura de la asesora (la terminal principal de su anexo) y, cuando contesta,
+marca a la clienta. La llamada es un hecho del historial (`anura_call`), no la
+gestión. Anura avisa START, TALK y END a `/api/webhooks/anura` y Kapta copia la
+grabación a Storage (el enlace de Anura vence a los 30 minutos).
+
+1. **Migración `0310_anura_click2dial.sql`**, a mano, ANTES del código. No toca
+   filas y es idempotente:
+   - tabla `anura_extensions` (un anexo por persona y uno por anexo en la
+     organización), lectura para miembros;
+   - tabla `anura_calls` (una fila por llamada; una sola viva por persona, con
+     índice único), lectura para quien ve la tienda del pedido;
+   - tabla `anura_webhook_events` (la bitácora de avisos, 30 días, teléfonos
+     enmascarados), solo `service_role`;
+   - el bucket privado `anura-recordings` (si existe Storage; el código
+     también lo crea).
+2. Comprobar:
+   ```sql
+   select to_regclass('public.anura_extensions'), to_regclass('public.anura_calls'), to_regclass('public.anura_webhook_events');
+   select indexname from pg_indexes where indexname = 'anura_calls_one_active_per_user';
+   select id, public from storage.buckets where id = 'anura-recordings';
+   ```
+3. Variables en Vercel (solo servidor, sin `NEXT_PUBLIC_`):
+   - `ANURA_CLICK2DIAL_TOKEN` — **ya en Vercel.** El token de Anura →
+     Integraciones → Click 2 Dial → Generar token. Sin él no aparece nada de
+     Anura; Kapta solo dice si está configurado, nunca el valor.
+   - `ANURA_ORG_ID` — opcional. El id de la organización dueña de la central:
+     solo ella ve el botón y Ajustes. Vacío sirve a cualquier organización
+     (hoy hay una); **ponerlo antes de sumar una segunda**.
+   - `ANURA_RECORDING_HOSTS` — opcional. Hosts extra (separados por comas)
+     desde los que Kapta acepta bajar grabaciones, además de `anura.pe`,
+     `anura.com.pe` y `anura.com.ar`. Solo si la bitácora dice «Grabación
+     descartada: el enlace no es de Anura (host)».
+4. Desplegar el código. Sin la migración, la ficha no muestra el botón y
+   Ajustes › «Telefonía Anura» lo dice.
+5. **En Anura:** un anexo por asesora; en Configuración → Eventos, el evento
+   con la URL y la plantilla que da Ajustes (la URL lleva un token derivado de
+   `ENCRYPTION_KEY`: cambiar esa clave cambia la URL); en cada anexo, Eventos
+   START, TALK y END. En Kapta, Ajustes › «Telefonía Anura»: asignar los
+   anexos y hacer una «Llamada de prueba».
+
+**Marcha atrás.** Quitar `ANURA_CLICK2DIAL_TOKEN` apaga el botón al instante.
+Revertir el commit: el código anterior no lee las tablas; pueden quedarse.
+
 ### 05-11-2026 · El rechazo de Aliclik que ya vuelve pasa a reprogramar (sin migración, mom-v1.39, MOM §9 y §11)
 
 Decisión del owner con #KP200684: «en Aliclik ya está rechazada, no hay más que
@@ -332,6 +476,9 @@ roles and the `auth` schema, so it just works.
    | `CHATBY_WEBHOOK_SECRET` | Secreto del «Live Chat Webhook» de Chatby. **Lo elegís vos** (`openssl rand -hex 32`), no lo emite Chatby. Va también en Chatby → Integrations → Live Chat Support → Webhook, campo *Custom Header*: `X-Webhook-Secret: <valor>`. Sin él el receptor rechaza todo (ver 5q) |
    | `META_APP_SECRET` | *App Secret* de la app de Meta — **lo emite Meta**, es el mismo que ya usa la Marketing API. Con él se verifica la firma `X-Hub-Signature-256` de cada entrega del webhook de página/Instagram. Sin él el receptor rechaza todo (ver 5s) |
    | `META_WEBHOOK_VERIFY_TOKEN` | Token del apretón de manos del webhook de Meta. **Lo elegís vos** (`openssl rand -hex 32`) y lo tecleás en el panel de Meta al dar de alta la URL. Sin él Meta **nunca activa la suscripción** y no llega nada, sin error visible (ver 5s) |
+   | `ANURA_CLICK2DIAL_TOKEN` | El token de Click2Dial de Anura (Integraciones → Click 2 Dial → Generar token). **Lo emite Anura.** Solo servidor (sin `NEXT_PUBLIC_`). Sin él no aparece «Llamar con Anura» (MOM §8.7) |
+   | `ANURA_ORG_ID` | Opcional. El id de la organización dueña de la central de Anura: ninguna otra ve el botón ni Ajustes › «Telefonía Anura». Vacío, sirve a cualquier organización; ponerlo antes de sumar una segunda |
+   | `ANURA_RECORDING_HOSTS` | Opcional. Hosts extra, separados por comas, desde los que se bajan las grabaciones de Anura (además de `anura.pe`, `anura.com.pe` y `anura.com.ar`). Solo si la bitácora dice «Grabación descartada» |
 
    `DATABASE_URL` is only needed for migrations; you don't have to add it to
    Vercel.
@@ -404,6 +551,12 @@ roles and the `auth` schema, so it just works.
      WooCommerce si un tema de pedido no tiene uno activo que entregue a esa
      tienda (MOM §38.14). Nunca los cambia. `?dry=1` revisa sin escribir.
      **Sin migración.** Ver la entrada del 25-10-2026.
+   - `/api/cron/anura-recordings` — cada 10 min (a los :01, :11, :21, :31,
+     :41 y :51). «Llamar con Anura» (MOM §8.7): suelta las llamadas colgadas,
+     marca «vencida» lo que ya no se puede copiar, reintenta copiar a
+     `anura-recordings` las grabaciones «pendiente» y poda la bitácora de
+     avisos. `?dry=1` solo cuenta. **Sin migración** (usa la 0310 y la 0311).
+     Ver la entrada del 06-11-2026.
 
 ### Pases a mano (bajo `/api/cron`, pero SIN horario)
 

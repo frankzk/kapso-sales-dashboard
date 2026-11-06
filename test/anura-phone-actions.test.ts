@@ -6,6 +6,9 @@
 //     pedido visible, Anura encendido para la org, anexo activo propio;
 //   - «clave rechazada» corta la entrega hasta que se guarde otra, y solo marca
 //     la versión entregada del anexo propio;
+//   - un 404 es «dominio no reconocido»: corta igual; guardar un dominio
+//     distinto no lo libera solo, sino cuando Anura acepta ese dominio en un
+//     «Probar y guardar» (no el mismo dominio, y nunca una clave rechazada);
 //   - cambiar el número del anexo borra su clave;
 //   - la grabación se sirve por una ruta del mismo origen con permisos.
 // Ninguna prueba llama a Anura ni abre conexiones SIP.
@@ -307,6 +310,148 @@ describe("«clave rechazada»", () => {
     expect(await reportAnuraPhoneRejected(ORDER, { credentialVersion: version, kind: "clave" })).toEqual({ ok: true, marked: false });
     expect(db.tables.anura_sip_credentials[0]!.rejected_at).toBeNull();
     expect(await reportAnuraPhoneRejected(ORDER, { credentialVersion: "no es fecha", kind: "clave" })).toMatchObject({ ok: false });
+  });
+});
+
+describe("«dominio no reconocido» (SIP 404): se detiene igual, pero se corrige el dominio", () => {
+  const admin = () => {
+    st.orgPerms = new Map([[ORG, new Set(["stores.manage"])]]);
+  };
+
+  it("un 404 marca «dominio no reconocido», corta la entrega y la ficha pide revisar el dominio", async () => {
+    await saveAsAdmin();
+    const r = await getAnuraPhone(ORDER);
+    if (!r.ok) throw new Error(r.error);
+    expect(
+      await reportAnuraPhoneRejected(ORDER, { credentialVersion: r.phone.credentialVersion, kind: "dominio", status: 404, domain: r.phone.domain }),
+    ).toEqual({ ok: true, marked: true });
+    const row = db.tables.anura_sip_credentials[0]!;
+    expect(row.rejected_reason).toBe("Anura no reconoce el usuario SIP en el dominio de la central (SIP 404).");
+    expect(await getAnuraPhone(ORDER)).toEqual({
+      ok: false,
+      code: "dominio_no_reconocido",
+      error: "Anura no reconoce el usuario o el dominio del teléfono de Kapta; pide a quien administra que revise el dominio de la central en Ajustes › Telefonía Anura.",
+    });
+    expect((await getAnuraOrderCalls(ORDER)).kaptaPhone).toMatchObject({
+      status: "dominio_no_reconocido",
+      rejectedAt: row.rejected_at,
+      message: expect.stringMatching(/revise el dominio/),
+    });
+    admin();
+    const settings = await getAnuraSettings(STORE);
+    expect(settings.ok && settings.data.extensions.find((e) => e.id === EXT_ME)!.phone).toMatchObject({ status: "dominio_no_reconocido", hasPassword: true });
+  });
+
+  it("un 404 que llega como «clave» (pestaña vieja) también es de dominio", async () => {
+    await saveAsAdmin();
+    const version = db.tables.anura_sip_credentials[0]!.saved_at;
+    expect(await reportAnuraPhoneRejected(ORDER, { credentialVersion: version, kind: "clave", status: 404 })).toEqual({ ok: true, marked: true });
+    expect((await getAnuraPhone(ORDER)) as unknown).toMatchObject({ ok: false, code: "dominio_no_reconocido" });
+  });
+
+  it("una marca vieja «clave … (SIP 404).» se lee como dominio no reconocido", async () => {
+    await saveAsAdmin();
+    Object.assign(db.tables.anura_sip_credentials[0]!, {
+      rejected_at: "2026-11-06T09:00:00.000Z",
+      rejected_reason: "Anura rechazó el usuario o la clave del teléfono de Kapta (SIP 404).",
+    });
+    expect((await getAnuraOrderCalls(ORDER)).kaptaPhone.status).toBe("dominio_no_reconocido");
+    admin();
+    expect(await saveAnuraSipSettings(STORE, { domain: "aurela.anura.pe" })).toMatchObject({ ok: true });
+    expect(db.tables.anura_sip_credentials[0]).toMatchObject({
+      rejected_reason: "Anura rechazó el usuario o la clave del teléfono de Kapta (SIP 404). Se cambió el dominio: falta probarlo.",
+    });
+    expect((await getAnuraOrderCalls(ORDER)).kaptaPhone.status).toBe("dominio_no_reconocido");
+    await saveAsAdmin(EXT_OTHER, { domain: "aurela.anura.pe" });
+    expect(db.tables.anura_sip_credentials.find((c) => c.extension_id === EXT_ME)!.rejected_at).toBeNull();
+  });
+
+  it("si la pestaña probó con un dominio que ya no es el de la central, no marca", async () => {
+    await saveAsAdmin();
+    const version = db.tables.anura_sip_credentials[0]!.saved_at;
+    expect(await reportAnuraPhoneRejected(ORDER, { credentialVersion: version, kind: "dominio", status: 404, domain: "kenku-mal.anura.pe" })).toEqual({
+      ok: true,
+      marked: false,
+    });
+    expect(db.tables.anura_sip_credentials[0]!.rejected_at).toBeNull();
+  });
+
+  it("«Guardar central» con un dominio DISTINTO no libera los 404: esperan que Anura acepte el nuevo en «Probar y guardar»", async () => {
+    await saveAsAdmin(EXT_ME);
+    await saveAsAdmin(EXT_OTHER);
+    const [mine, other] = [EXT_ME, EXT_OTHER].map((id) => db.tables.anura_sip_credentials.find((c) => c.extension_id === id)!);
+    Object.assign(mine!, { rejected_at: "2026-11-06T09:00:00.000Z", rejected_reason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404)." });
+    Object.assign(other!, { rejected_at: "2026-11-06T09:00:00.000Z", rejected_reason: "Anura rechazó el usuario o la clave del teléfono de Kapta (SIP 401)." });
+    admin();
+    // El mismo dominio: es la misma combinación, nada cambia.
+    expect(await saveAnuraSipSettings(STORE, { domain: "kenku.anura.pe" })).toEqual({ ok: true, notice: "Central de Anura guardada." });
+    expect(mine).toMatchObject({ rejected_reason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404)." });
+    // Otro dominio: la marca queda esperando la prueba, y el anexo sigue sin llamar.
+    const res = await saveAnuraSipSettings(STORE, { domain: "kenku-pe.anura.pe" });
+    expect(res).toEqual({
+      ok: true,
+      notice:
+        "Central de Anura guardada. El anexo que Anura no reconocía con el dominio anterior sigue en pausa: prueba el dominio nuevo con «Probar y guardar» en un anexo. " +
+        "Cuando Anura lo acepte, se vuelven a probar en su próxima llamada, sin volver a escribir sus claves.",
+    });
+    expect(mine).toMatchObject({
+      rejected_at: "2026-11-06T09:00:00.000Z",
+      rejected_reason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404). Se cambió el dominio: falta probarlo.",
+    });
+    expect(await getAnuraPhone(ORDER)).toMatchObject({ ok: false, code: "dominio_no_reconocido" });
+    // Guardarlo otra vez no lo vuelve a marcar.
+    expect(await saveAnuraSipSettings(STORE, { domain: "kenku-pe2.anura.pe" })).toEqual({ ok: true, notice: "Central de Anura guardada." });
+    expect(mine!.rejected_reason).toBe("Anura no reconoce el usuario SIP en el dominio de la central (SIP 404). Se cambió el dominio: falta probarlo.");
+    // Anura aceptó el dominio guardado en un «Probar y guardar» de OTRO anexo: el 404 se libera; la clave rechazada (401) no.
+    const tested = await saveAsAdmin(EXT_OTHER, { domain: "kenku-pe2.anura.pe" });
+    expect(tested).toEqual({
+      ok: true,
+      notice:
+        "Teléfono de Kapta listo para el anexo 102. Anura aceptó el dominio: el otro anexo que no reconocía con el dominio anterior se probará con este en su próxima llamada.",
+    });
+    expect(mine).toMatchObject({ rejected_at: null, rejected_reason: null });
+    expect(await getAnuraPhone(ORDER)).toMatchObject({ ok: true, phone: { domain: "kenku-pe2.anura.pe" } });
+  });
+
+  it("un 404 hecho con el MISMO dominio que Anura acepta en otro anexo sigue marcado (ahí falla el usuario)", async () => {
+    await saveAsAdmin(EXT_ME);
+    await saveAsAdmin(EXT_OTHER);
+    const mine = db.tables.anura_sip_credentials.find((c) => c.extension_id === EXT_ME)!;
+    Object.assign(mine, { rejected_at: "2026-11-06T09:00:00.000Z", rejected_reason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404)." });
+    const res = await saveAsAdmin(EXT_OTHER);
+    expect(res).toEqual({ ok: true, notice: "Teléfono de Kapta listo para el anexo 102." });
+    expect(mine.rejected_at).not.toBeNull();
+  });
+
+  it("si no se pudo leer la central de antes, «Guardar central» no toca las marcas", async () => {
+    await saveAsAdmin(EXT_ME);
+    const mine = db.tables.anura_sip_credentials.find((c) => c.extension_id === EXT_ME)!;
+    Object.assign(mine, { rejected_at: "2026-11-06T09:00:00.000Z", rejected_reason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404)." });
+    admin();
+    const real = db.client.from;
+    db.client.from = (table: string) => {
+      const q = real(table);
+      if (table !== "anura_sip_settings") return q;
+      // La lectura (select … maybeSingle) falla; la escritura (upsert) sigue.
+      q.maybeSingle = () => ({ then: (ok: any) => Promise.resolve({ data: null, error: { code: "57014", message: "timeout" } }).then(ok) });
+      return q;
+    };
+    try {
+      expect(await saveAnuraSipSettings(STORE, { domain: "kenku.anura.pe" })).toEqual({ ok: true, notice: "Central de Anura guardada." });
+    } finally {
+      db.client.from = real;
+    }
+    expect(mine.rejected_reason).toBe("Anura no reconoce el usuario SIP en el dominio de la central (SIP 404).");
+  });
+
+  it("«Probar y guardar» con otro dominio libera todos los demás anexos con 404", async () => {
+    await saveAsAdmin(EXT_ME);
+    await saveAsAdmin(EXT_OTHER);
+    const mine = db.tables.anura_sip_credentials.find((c) => c.extension_id === EXT_ME)!;
+    Object.assign(mine, { rejected_at: "2026-11-06T09:00:00.000Z", rejected_reason: "Anura no reconoce el usuario SIP en el dominio de la central (SIP 404)." });
+    const res = await saveAsAdmin(EXT_OTHER, { domain: "kenku-pe.anura.pe" });
+    expect(res).toMatchObject({ ok: true, notice: expect.stringMatching(/^Teléfono de Kapta listo para el anexo 102\. Anura aceptó el dominio: el otro anexo/) });
+    expect(mine.rejected_at).toBeNull();
   });
 });
 

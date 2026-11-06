@@ -23,6 +23,7 @@ import {
   ANURA_PHONE_COOLDOWN_MS,
   ANURA_PHONE_REGISTER_TIMEOUT_MS,
   ANURA_PHONE_TEXT,
+  ANURA_REGISTRATION_TEST_TEXT,
   ANURA_REGISTRATION_TEXT,
   anuraJsSipConfig,
   createAnuraPhone,
@@ -181,10 +182,19 @@ describe("¿contesto este INVITE?", () => {
 });
 
 describe("los fallos de registro", () => {
-  it("la clave: 401, 403, 407, 404 o la causa de JsSIP", () => {
-    for (const status_code of [401, 403, 404, 407]) expect(registrationFailureKind({ response: { status_code } })).toBe("clave");
+  it("la clave: 401, 403, 407 o la causa de JsSIP", () => {
+    for (const status_code of [401, 403, 407]) expect(registrationFailureKind({ response: { status_code } })).toBe("clave");
     expect(registrationFailureKind({ cause: "Authentication Error", response: null })).toBe("clave");
     expect(registrationFailureKind({ cause: "Rejected" })).toBe("clave");
+  });
+  it("el dominio: 404, 604 o «Not Found» (Anura no conoce ese usuario en ese dominio)", () => {
+    for (const status_code of [404, 604]) expect(registrationFailureKind({ response: { status_code } })).toBe("dominio");
+    expect(registrationFailureKind({ cause: "Not Found", response: null })).toBe("dominio");
+    // El código manda sobre la causa.
+    expect(registrationFailureKind({ cause: "Not Found", response: { status_code: 401 } })).toBe("clave");
+    expect(registrationFailureKind({ cause: "Rejected", response: { status_code: 404 } })).toBe("dominio");
+    expect(ANURA_REGISTRATION_TEXT.dominio).toMatch(/dominio de la central/);
+    expect(ANURA_REGISTRATION_TEXT.dominio).not.toMatch(/vuelva a guardar/);
   });
   it("la red, el tiempo y lo demás", () => {
     expect(registrationFailureKind({ cause: "Connection Error", response: null })).toBe("red");
@@ -198,6 +208,8 @@ describe("los fallos de registro", () => {
   it("el motivo que se guarda no lleva datos de la persona", () => {
     expect(rejectionReason("clave", 401)).toBe("Anura rechazó el usuario o la clave del teléfono de Kapta (SIP 401).");
     expect(rejectionReason("clave", null)).not.toMatch(/SIP/);
+    expect(rejectionReason("dominio", 404)).toBe("Anura no reconoce el usuario SIP en el dominio de la central (SIP 404).");
+    expect(rejectionReason("dominio", null)).toBe("Anura no reconoce el usuario SIP en el dominio de la central.");
   });
 });
 
@@ -446,6 +458,47 @@ describe("el teléfono: la clave rechazada", () => {
     expect(h3.deps.createUa).toHaveBeenCalledTimes(1);
   });
 
+  it("un 404 se detiene igual, avisa «dominio» con el dominio probado y no reintenta", async () => {
+    const h = harness();
+    const done = h.phone.call();
+    await flush();
+    h.ua.emit("connected");
+    h.ua.emit("registrationFailed", { cause: "Not Found", response: { status_code: 404 } });
+    const snap = await done;
+    expect(snap).toMatchObject({ phase: "error", error: { code: "registro", registration: "dominio", message: ANURA_REGISTRATION_TEXT.dominio } });
+    expect(h.deps.reportRejected).toHaveBeenCalledWith({ credentialVersion: CREDS.credentialVersion, kind: "dominio", status: 404, domain: CREDS.domain });
+    expect(h.deps.requestCall).not.toHaveBeenCalled();
+    h.ua.emit("connected");
+    expect(h.ua.registers).toBe(1);
+  });
+
+  it("la pestaña recuerda el 404 de esa clave CON ese dominio: con el dominio corregido vuelve a intentar", async () => {
+    const memory = createAnuraPhoneMemory();
+    const reportRejected = vi.fn(async () => Promise.reject(new Error("red")));
+    const h = harness({ memory, reportRejected });
+    const done = h.phone.call();
+    await flush();
+    h.ua.emit("connected");
+    h.ua.emit("registrationFailed", { cause: "Not Found", response: { status_code: 404 } });
+    await done;
+    // Mismo dominio: no se registra otra vez, se vuelve a avisar al servidor.
+    const again = await h.phone.call();
+    expect(again.error).toMatchObject({ code: "registro", registration: "dominio" });
+    expect(h.deps.createUa).toHaveBeenCalledTimes(1);
+    expect(reportRejected).toHaveBeenCalledTimes(2);
+    // Con el dominio corregido (misma versión de la clave) sí.
+    const h2 = harness({ memory, fetchCredentials: vi.fn(async () => ({ ok: true as const, phone: { ...CREDS, domain: "kenku-pe.anura.pe" } })) });
+    void h2.phone.call();
+    await flush();
+    expect(h2.deps.createUa).toHaveBeenCalledTimes(1);
+    // Una clave rechazada (401) no la arregla otro dominio.
+    const memory2 = createAnuraPhoneMemory();
+    memory2.markRejected(CREDS.extension, CREDS.credentialVersion, "clave", CREDS.domain);
+    expect(memory2.rejectedKind(CREDS.extension, CREDS.credentialVersion, "otro.anura.pe")).toBe("clave");
+    expect(memory.rejectedKind(CREDS.extension, CREDS.credentialVersion, CREDS.domain)).toBe("dominio");
+    expect(memory.rejectedKind(CREDS.extension, CREDS.credentialVersion, "kenku-pe.anura.pe")).toBeNull();
+  });
+
   it("si Anura rechaza la clave ya en llamada, el audio sigue y no se manda otro REGISTER", async () => {
     const h = harness();
     await untilRegistered(h);
@@ -655,6 +708,19 @@ describe("«Probar y guardar»: UN registro, sin llamada", () => {
     ua.emit("connected");
     expect(ua.registers).toBe(1);
     expect(ua.stopped).toBe(1);
+  });
+
+  it("un 404 dice que revise el dominio, no la contraseña", async () => {
+    const ua = new FakeUa();
+    const p = testAnuraRegistration({ createUa: async () => ua }, CREDS);
+    await flush();
+    ua.emit("connected");
+    ua.emit("registrationFailed", { cause: "Not Found", response: { status_code: 404 } });
+    const r = await p;
+    expect(r).toMatchObject({ ok: false, kind: "dominio", message: ANURA_REGISTRATION_TEST_TEXT.dominio });
+    expect(r.ok ? "" : r.message).toMatch(/Revisa el dominio de la central/);
+    expect(r.ok ? "" : r.message).toMatch(/bloquee la conexión de la oficina/);
+    expect(ua.registers).toBe(1);
   });
 
   it("si Anura no responde, se abandona a los 8 s", async () => {

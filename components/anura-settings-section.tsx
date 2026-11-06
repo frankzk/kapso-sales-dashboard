@@ -52,7 +52,8 @@ import {
   anuraPhoneStatusLabel,
   anuraTestCallWay,
   anuraTestFallsBack,
-  talkSecondsSince,
+  anuraTalkClock,
+  talkSecondsFrom,
 } from "@/lib/anura/phone-ui";
 import { formatTalkTime } from "@/lib/browser-call";
 import { AnuraPhoneAudio, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
@@ -504,7 +505,10 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
     if (callId && !active && phoneBusy && !outlives) hangUp();
   }, [callId, active, phoneBusy, outlives, hangUp]);
 
-  const talking = call?.status === "en_curso" && !(viaKapta && snap?.phase === "terminada");
+  // Como en la ficha: si el servidor la cerró por su plazo y Kapta sigue en la
+  // llamada, el reloj corre desde que el teléfono de Kapta contestó.
+  const clock = anuraTalkClock(snap, call, viaKapta);
+  const talking = clock.running;
   useEffect(() => {
     if (!talking) return;
     setNow(Date.now());
@@ -636,7 +640,7 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
                   phoneLine
                 )}
               </p>
-              {talking && call && <p className="mt-1 text-xl font-semibold tabular-nums text-ink-900">{formatTalkTime(talkSecondsSince(call.answeredAt, now))}</p>}
+              {talking && <p className="mt-1 text-xl font-semibold tabular-nums text-ink-900">{formatTalkTime(talkSecondsFrom(clock.fromMs, now))}</p>}
               {hint && <p className={cn(HELP, "mt-0.5")}>{hint}</p>}
             </div>
           )}

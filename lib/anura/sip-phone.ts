@@ -10,10 +10,14 @@
 //      momento de llamar. Si la clave está rechazada, no se intenta nada.
 //   3. Micrófono. Si lo niega, mensaje claro y NO se pide la llamada.
 //   4. Registro en Anura (8 s como máximo). Ante el PRIMER rechazo de la clave
-//      (401/403/407/404) el teléfono se detiene, el servidor marca «clave
+//      (401/403/407) el teléfono se detiene, el servidor marca «clave
 //      rechazada» y no se reintenta: varios intentos hacen que Anura bloquee
-//      la IP. Esta pestaña además recuerda la versión rechazada y no vuelve a
-//      registrar con ella aunque el servidor no haya llegado a marcarla. Tras
+//      la IP. Un 404 («Not Found») es otra cosa: Anura no reconoce el usuario
+//      en ese dominio (casi siempre el dominio mal escrito). Se detiene igual y
+//      se marca «dominio no reconocido», que no vuelve a intentarse con esa
+//      misma clave y ese mismo dominio. Esta pestaña además recuerda la
+//      versión rechazada y no vuelve a registrar con ella aunque el servidor no
+//      haya llegado a marcarla. Tras
 //      un corte después del REGISTER, un «no respondió» u otro rechazo, espera
 //      un minuto antes de dejar intentar otra vez. Kapta no reintenta el
 //      registro por su cuenta; JsSIP sí mandaría REGISTER solo en cada
@@ -39,6 +43,7 @@
 // Lo prueba `test/anura-sip-phone.test.ts`.
 
 import type { AnuraStartErrorCode, AnuraStartResult } from "@/lib/anura/calls";
+import { ANURA_KAPTA_PHONE_TEXT, ANURA_SIP_NOT_FOUND_REASON } from "@/lib/anura/sip";
 
 // ---------------------------------------------------------------------------
 // Tiempos
@@ -97,6 +102,7 @@ export type AnuraPhoneCredentialsErrorCode =
   | "sin_telefono"
   | "sin_dominio"
   | "clave_rechazada"
+  | "dominio_no_reconocido"
   | "base";
 
 export type AnuraPhoneCredentialsResult =
@@ -192,21 +198,40 @@ export function shouldAnswerInvite(input: { pending: PendingKaptaCall | null; no
 
 /**
  * Por qué falló el registro:
- *   · `clave`: Anura rechazó usuario o clave (401/403/407/404, o la causa de
- *     JsSIP lo dice). Se detiene y se marca: NO se reintenta.
+ *   · `clave`: Anura rechazó usuario o clave (401/403/407, o la causa de
+ *     JsSIP «Authentication Error» / «Rejected»). Se detiene y se marca: NO se
+ *     reintenta.
+ *   · `dominio`: Anura no reconoce ese usuario en ese dominio (404/604, o la
+ *     causa «Not Found»): casi siempre el dominio de la central mal escrito o
+ *     una terminal «-websocket» que no existe. Se detiene y se marca igual (no
+ *     se reintenta con esa clave y ese dominio), pero lo que se corrige es el
+ *     dominio o el usuario, no la contraseña.
  *   · `red`: no hubo conexión con el WebSocket de Anura.
  *   · `tiempo`: Anura no respondió.
  *   · `otro`: cualquier otra respuesta.
  */
-export type AnuraRegistrationFailureKind = "clave" | "red" | "tiempo" | "otro";
+export type AnuraRegistrationFailureKind = "clave" | "dominio" | "red" | "tiempo" | "otro";
 
-const AUTH_STATUS = new Set([401, 403, 404, 407]);
-const AUTH_CAUSES = new Set(["authentication error", "rejected", "not found", "forbidden", "unauthorized"]);
+/** Los rechazos que detienen el teléfono y se marcan en el servidor. */
+export type AnuraRegistrationRejectionKind = Extract<AnuraRegistrationFailureKind, "clave" | "dominio">;
+
+export function isRegistrationRejection(kind: AnuraRegistrationFailureKind | null | undefined): kind is AnuraRegistrationRejectionKind {
+  return kind === "clave" || kind === "dominio";
+}
+
+const AUTH_STATUS = new Set([401, 403, 407]);
+const AUTH_CAUSES = new Set(["authentication error", "rejected", "forbidden", "unauthorized"]);
+/** «Not Found» / «Does Not Exist Anywhere»: Anura no conoce ese usuario en ese dominio. */
+export const ANURA_SIP_NOT_FOUND_STATUS: ReadonlySet<number> = new Set([404, 604]);
+const NOT_FOUND_CAUSES = new Set(["not found"]);
 
 export function registrationFailureKind(e: { cause?: unknown; response?: { status_code?: unknown } | null } | null | undefined): AnuraRegistrationFailureKind {
   const status = Number(e?.response?.status_code);
   const cause = typeof e?.cause === "string" ? e.cause.trim().toLowerCase() : "";
-  if (AUTH_STATUS.has(status) || AUTH_CAUSES.has(cause)) return "clave";
+  if (ANURA_SIP_NOT_FOUND_STATUS.has(status)) return "dominio";
+  if (AUTH_STATUS.has(status)) return "clave";
+  if (NOT_FOUND_CAUSES.has(cause)) return "dominio";
+  if (AUTH_CAUSES.has(cause)) return "clave";
   if (status === 408 || cause === "request timeout") return "tiempo";
   if (cause === "connection error" || cause === "internal error" || (!status && !cause)) return "red";
   return "otro";
@@ -221,6 +246,7 @@ export function registrationFailureStatus(e: { response?: { status_code?: unknow
 /** Al llamar desde la ficha. */
 export const ANURA_REGISTRATION_TEXT: Record<AnuraRegistrationFailureKind, string> = {
   clave: "Anura rechazó la clave del teléfono de Kapta; pide a quien administra que la vuelva a guardar.",
+  dominio: ANURA_KAPTA_PHONE_TEXT.dominio_no_reconocido,
   red: "No se pudo conectar con Anura (sipwss.anura.pe). Revisa tu internet e inténtalo otra vez.",
   tiempo: "Anura no respondió a tiempo al conectar el teléfono de Kapta. Espera un minuto antes de volver a intentar.",
   otro: "Anura no dejó conectar el teléfono de Kapta. Espera un minuto antes de volver a intentar; si se repite, avisa a quien administra.",
@@ -251,15 +277,26 @@ export const ANURA_REGISTRATION_TEST_TEXT: Record<AnuraRegistrationFailureKind, 
     "Anura no aceptó ese usuario y contraseña, así que no se guardó. Usa la contraseña de la terminal «<anexo>-websocket» " +
     "(«Obtener credenciales»), no la del teléfono físico, y revisa el dominio. No lo intentes muchas veces seguidas: " +
     "varios intentos fallidos hacen que Anura bloquee la conexión de la oficina.",
+  dominio:
+    "Anura no reconoce ese usuario en ese dominio, así que no se guardó. Revisa el dominio de la central (tal como sale en " +
+    "«Obtener credenciales») y que el usuario sea el de la terminal «<anexo>-websocket». No lo intentes muchas veces seguidas: " +
+    "varios intentos fallidos hacen que Anura bloquee la conexión de la oficina.",
   red: "No se pudo conectar con Anura (sipwss.anura.pe). No se guardó nada: revisa tu internet y la URL WebSocket.",
   tiempo: "Anura no respondió a tiempo. No se guardó nada: revisa el dominio y el puerto e inténtalo en un momento.",
   otro: "Anura no aceptó la conexión. No se guardó nada: revisa el dominio, el usuario y el puerto.",
 };
 
-/** El motivo que guarda el servidor al marcar «clave rechazada» (sin datos personales). */
+/**
+ * El motivo que guarda el servidor al marcar el rechazo (sin datos
+ * personales). El de `dominio` empieza siempre por
+ * `ANURA_SIP_NOT_FOUND_REASON` (lib/anura/sip.ts): así se distingue en la base
+ * sin una columna nueva.
+ */
 export function rejectionReason(kind: AnuraRegistrationFailureKind, status: number | null): string {
   const code = status ? ` (SIP ${status})` : "";
-  return kind === "clave" ? `Anura rechazó el usuario o la clave del teléfono de Kapta${code}.` : `Anura no dejó conectar el teléfono de Kapta${code}.`;
+  if (kind === "clave") return `Anura rechazó el usuario o la clave del teléfono de Kapta${code}.`;
+  if (kind === "dominio") return `${ANURA_SIP_NOT_FOUND_REASON}${code}.`;
+  return `Anura no dejó conectar el teléfono de Kapta${code}.`;
 }
 
 /** El tipo de un candidato ICE (`host`, `srflx`, `relay`…), o null. */
@@ -488,8 +525,13 @@ export const ANURA_PHONE_TEXT = {
  * con una clave mala aunque el servidor no haya llegado a marcarla.
  */
 export interface AnuraPhoneMemory {
-  isRejected(extension: string, credentialVersion: string): boolean;
-  markRejected(extension: string, credentialVersion: string): void;
+  /**
+   * Si Anura ya rechazó aquí esta clave: `clave` vale para esa versión con
+   * cualquier dominio; `dominio`, solo para esa versión con ESE dominio (con
+   * otro dominio es otra combinación y se puede probar).
+   */
+  rejectedKind(extension: string, credentialVersion: string, domain: string): AnuraRegistrationRejectionKind | null;
+  markRejected(extension: string, credentialVersion: string, kind: AnuraRegistrationRejectionKind, domain: string): void;
   cooldownLeftMs(extension: string, nowMs: number): number;
   startCooldown(extension: string, nowMs: number): void;
 }
@@ -497,11 +539,16 @@ export interface AnuraPhoneMemory {
 export function createAnuraPhoneMemory(): AnuraPhoneMemory {
   const rejected = new Set<string>();
   const cooling = new Map<string, number>();
-  const key = (extension: string, version: string) => `${extension}\u0000${version}`;
+  const key = (extension: string, version: string, domain: string | null) =>
+    domain === null ? `clave\u0000${extension}\u0000${version}` : `dominio\u0000${extension}\u0000${version}\u0000${domain.toLowerCase()}`;
   return {
-    isRejected: (extension, version) => rejected.has(key(extension, version)),
-    markRejected(extension, version) {
-      rejected.add(key(extension, version));
+    rejectedKind(extension, version, domain) {
+      if (rejected.has(key(extension, version, null))) return "clave";
+      if (rejected.has(key(extension, version, domain))) return "dominio";
+      return null;
+    },
+    markRejected(extension, version, kind, domain) {
+      rejected.add(key(extension, version, kind === "clave" ? null : domain));
     },
     cooldownLeftMs: (extension, nowMs) => Math.max(0, (cooling.get(extension) ?? 0) - nowMs),
     startCooldown(extension, nowMs) {
@@ -520,8 +567,12 @@ export interface AnuraPhoneDeps {
   fetchCredentials(): Promise<AnuraPhoneCredentialsResult>;
   /** `startAnuraCall(orderId)` (o la llamada de prueba de Ajustes). */
   requestCall(): Promise<AnuraStartResult>;
-  /** La server action que marca «clave rechazada». Nunca debe lanzar. */
-  reportRejected(input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status: number | null }): Promise<unknown>;
+  /**
+   * La server action que marca «clave rechazada» o «dominio no reconocido».
+   * Con `dominio` manda también el dominio con el que se probó, para que el
+   * servidor no marque si mientras tanto alguien lo corrigió. Nunca debe lanzar.
+   */
+  reportRejected(input: { credentialVersion: string; kind: AnuraRegistrationRejectionKind; status: number | null; domain?: string }): Promise<unknown>;
   onChange(snapshot: AnuraPhoneSnapshot): void;
   /** El audio de Anura, para un `<audio autoplay>` con `srcObject`; null al terminar. */
   onRemoteStream(stream: unknown): void;
@@ -678,11 +729,15 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     resolveCall();
   };
 
-  /** Anura rechazó esta clave: la pestaña la recuerda y se avisa al servidor. */
-  const reportClave = (phone: AnuraPhoneCredentials, status: number | null) => {
-    memory.markRejected(phone.extension, phone.credentialVersion);
+  /** Anura rechazó esta clave (o no reconoce el dominio): la pestaña la recuerda y se avisa al servidor. */
+  const reportRejection = (phone: AnuraPhoneCredentials, kind: AnuraRegistrationRejectionKind, status: number | null) => {
+    memory.markRejected(phone.extension, phone.credentialVersion, kind, phone.domain);
     try {
-      void Promise.resolve(deps.reportRejected({ credentialVersion: phone.credentialVersion, kind: "clave", status })).catch(() => {});
+      const input =
+        kind === "dominio"
+          ? { credentialVersion: phone.credentialVersion, kind, status, domain: phone.domain }
+          : { credentialVersion: phone.credentialVersion, kind, status };
+      void Promise.resolve(deps.reportRejected(input)).catch(() => {});
     } catch {
       // el aviso no debe romper el teléfono; la pestaña ya la recuerda
     }
@@ -829,11 +884,13 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         return;
       }
       const phone = creds.phone;
-      if (memory.isRejected(phone.extension, phone.credentialVersion)) {
-        // Anura ya rechazó esta clave en esta pestaña y el servidor no llegó a
-        // marcarla: no se registra otra vez (se vuelve a avisar al servidor).
-        reportClave(phone, null);
-        fail(myRun, { code: "registro", registration: "clave", message: ANURA_REGISTRATION_TEXT.clave });
+      const remembered = memory.rejectedKind(phone.extension, phone.credentialVersion, phone.domain);
+      if (remembered) {
+        // Anura ya rechazó esta clave (o este dominio) en esta pestaña y el
+        // servidor no llegó a marcarla: no se registra otra vez (se vuelve a
+        // avisar al servidor).
+        reportRejection(phone, remembered, null);
+        fail(myRun, { code: "registro", registration: remembered, message: ANURA_REGISTRATION_TEXT[remembered] });
         return;
       }
       if (memory.cooldownLeftMs(phone.extension, now()) > 0) {
@@ -884,9 +941,9 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       };
       const regFail = (kind: AnuraRegistrationFailureKind, status: number | null, afterRegister = false) => {
         if (myRun !== run) return;
-        if (kind === "clave") {
+        if (isRegistrationRejection(kind)) {
           // El PRIMER rechazo detiene todo y se marca en el servidor.
-          reportClave(phone, status);
+          reportRejection(phone, kind, status);
         } else if (kind === "tiempo" || kind === "otro" || afterRegister) {
           memory.startCooldown(phone.extension, now());
         }
@@ -914,7 +971,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         stopAutoRegister();
         if (registered && session) {
           // En llamada: el audio sigue, pero no se manda otro REGISTER.
-          if (kind === "clave") reportClave(phone, status);
+          if (isRegistrationRejection(kind)) reportRejection(phone, kind, status);
           return;
         }
         regFail(kind, status);
