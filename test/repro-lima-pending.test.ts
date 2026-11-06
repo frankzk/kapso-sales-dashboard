@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, readRowFilters, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -381,5 +383,38 @@ describe("la dirección completa bajo el cliente (owner, 06-11-2026)", () => {
     const html = renderToStaticMarkup(createElement(LimaPendingList, { rows: [row({ address: null, reference: null, district: "Ate" })], reproRows: [], today: TODAY, renderActions: () => null }));
     expect(html).toContain("Sin dirección · Ate");
     expect(html).not.toContain("Ref.");
+  });
+});
+
+describe("Reintentos Aliclik: elegir cuáles aprobar (owner, 06-11-2026)", () => {
+  const listos = [row({ orderId: "a", orderName: "#KPA" }), row({ orderId: "b", orderName: "#KPB" }), row({ orderId: "c", orderName: "#KPC" })];
+  it("con marcados aprueba esos; sin marcar, todos los listos; un marcado que ya no está listo no cuenta", () => {
+    expect(retryApprovalTargets(listos, new Set())).toEqual({ rows: listos, picked: false });
+    expect(retryApprovalTargets(listos, new Set(["c", "a"])).rows.map((r) => r.orderId)).toEqual(["a", "c"]);
+    expect(retryApprovalTargets(listos, new Set(["c", "a"])).picked).toBe(true);
+    expect(retryApprovalTargets(listos, new Set(["zz"]))).toEqual({ rows: listos, picked: false });
+  });
+  it("la lista pone casilla solo en lo que se puede aprobar, y arriba la de todos los listos", () => {
+    const rows = [...listos, row({ orderId: "d", orderName: "#KPD" })];
+    const selection = { selectable: (r: LimaPendingOrder) => r.orderId !== "d", selected: new Set(["b"]), onToggle: () => {}, onToggleAll: () => {} };
+    const html = renderToStaticMarkup(createElement(LimaPendingList, { rows, reproRows: [], today: TODAY, renderActions: () => null, selection }));
+    // Tabla y lista del teléfono: dos casillas por pedido aprobable.
+    for (const name of ["#KPA", "#KPB", "#KPC"]) expect(html.match(new RegExp(`aria-label="Elegir ${name} para aprobar"`, "g"))).toHaveLength(2);
+    expect(html).not.toContain("Elegir #KPD para aprobar");
+    expect(html).toContain('aria-label="Elegir los 3 listos para aprobar"');
+    // En el teléfono, la misma casilla de todos sobre la lista.
+    expect(html).toContain("Elegir los 3 listos</label>");
+    expect(html.match(/aria-label="Elegir #KPB para aprobar" checked=""/g)).toHaveLength(2);
+    expect(html).not.toMatch(/aria-label="Elegir #KPA para aprobar" checked=""/);
+    // Sin selección (las demás listas) no hay casillas.
+    expect(renderToStaticMarkup(createElement(LimaPendingList, { rows, reproRows: [], today: TODAY, renderActions: () => null }))).not.toContain('type="checkbox"');
+  });
+  it("el tablero solo elige en Reintentos Aliclik y el botón dice cuántos aprueba", () => {
+    const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
+    expect(board).toContain('const selection: LimaRowSelection | undefined = list === "reintentos_aliclik"');
+    expect(board).toContain("const rows = targets.rows;");
+    expect(board).toContain("`Aprobar elegidos (${targets.rows.length})`");
+    expect(board).toContain("`Aprobar todos los listos (${readyToApprove.length})`");
+    expect(board).toContain("setPicked(new Set());");
   });
 });

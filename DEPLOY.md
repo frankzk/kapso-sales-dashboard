@@ -1,5 +1,21 @@
 # Deployment runbook
 
+### 06-11-2026 · Repro Lima: elegir qué reintentos de Aliclik aprobar (sin migración, MOM §9.5)
+
+Pedido del owner. En «Reintentos Aliclik», cada fila lista tiene una casilla, y
+arriba hay otra para elegirlas o quitarlas todas: en la cabecera de la tabla y,
+en el teléfono, sobre la lista. Con alguna marcada, el botón es «Aprobar
+elegidos (N)» y aprueba solo esas; sin marcar, sigue «Aprobar todos los listos».
+Solo cambia la interfaz: aprueba con la misma acción de siempre
+(`approveAliclikRetry`, una por una).
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+
+**Qué mirar después.** Repro Lima → «Reintentos Aliclik»: marcar dos → «Aprobar
+elegidos (2)» → la confirmación dice 2 → se crean 2 guías.
+
+**Marcha atrás.** Revertir el commit.
+
 ### 06-11-2026 · Repro Lima: «Confirma fecha» con Aliclik pide la ubicación (sin migración, MOM §9.5 y §6.2)
 
 Pedido del owner, como en el Master para Provincia COD. En la hoja «Atender»,

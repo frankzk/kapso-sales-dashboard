@@ -243,6 +243,7 @@ describe("entrega 2: la bandeja «Aprobar» / «A Repro Lima»", () => {
     const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
     expect(board).toContain("caseById.get(row.orderId)?.retryChain?.ready");
     expect(actions).not.toContain("chain.inOffice");
-    expect(board).toContain("window.confirm(`Se crearán ${rows.length} guías de Aliclik. ¿Seguir?`)");
+    // Con confirmación; desde el 06-11-2026 también para «Aprobar elegidos».
+    expect(board).toContain('window.confirm(`Se crearán ${rows.length} ${rows.length === 1 ? "guía" : "guías"} de Aliclik${targets.picked ? " (las elegidas)" : ""}. ¿Seguir?`)');
   });
 });
