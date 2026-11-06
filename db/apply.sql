@@ -623,4 +623,6 @@
 \ir migrations/0309_prepay_list.sql
 \echo 'Applying 0310_anura_click2dial.sql'
 \ir migrations/0310_anura_click2dial.sql
+\echo 'Applying 0311_anura_kapta_phone.sql'
+\ir migrations/0311_anura_kapta_phone.sql
 \echo 'Done.'

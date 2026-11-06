@@ -1934,7 +1934,7 @@ nadie: a él lo para siempre, y el pedido queda para una persona.
 Código: `lib/aliclik-route-risk.ts`. Prueba:
 `test/aliclik-route-risk.test.ts`.
 
-### 8.7 Llamar con Anura (fase 1, 05-11-2026)
+### 8.7 Llamar con Anura (fase 1, 05-11-2026; fase 2, 06-11-2026)
 
 Pedido por el owner: la asesora llama a la clienta desde la ficha del pedido
 por la central de Anura de la empresa, y la clienta ve un número peruano. Se
@@ -1943,7 +1943,10 @@ Perú entre el 24 y el 26-10-2026. En la fase 1 **no hay teléfono dentro del
 navegador**: Kapta le pide la llamada a Anura por Click2Dial, Anura hace sonar
 primero el teléfono de Anura de la asesora (la terminal principal de su anexo)
 y, cuando ella contesta, marca a la clienta. La asesora habla por ese
-teléfono, no por la computadora.
+teléfono, no por la computadora. Desde la **fase 2** (06-11-2026, al final de
+esta sección) ese teléfono puede ser el propio navegador de la asesora en
+Kapta: si su anexo tiene la clave SIP guardada, habla por la computadora, sin
+nada instalado, y Kapta solo hace salidas.
 
 - **Dónde.** «Llamar con Anura», en la cabecera de la ficha, junto a «Llamar
   desde Kapta» (§8.5). Sale solo si se cumplen las cuatro cosas: Anura está
@@ -2005,10 +2008,13 @@ teléfono, no por la computadora.
   Anura. Si la copia falla, se reintenta al abrir la ficha del pedido mientras
   no pasen los 30 minutos, hasta 6 intentos. Queda «grabación vencida» al
   sexto intento fallido o cuando pasan los 30 minutos (la ficha la muestra
-  vencida en cuanto pasan, aunque nadie la haya reintentado). La ficha recibe
-  un enlace firmado que dura 5 minutos. La escucha quien ve la tienda del
-  pedido. El enlace de Anura no sale del servidor: vive solo en la bitácora de
-  avisos, y se borra de ella cuando la grabación queda guardada o vencida.
+  vencida en cuanto pasan, aunque nadie la haya reintentado). La ficha la oye
+  por una ruta del mismo origen, `/api/anura/recordings/<id>` (desde la fase
+  2): el servidor firma por dentro un enlace de Storage que dura 5 minutos, y
+  ese enlace no llega al navegador. La escucha quien hizo la llamada o quien
+  ve la tienda del pedido. El enlace de Anura no sale del servidor: vive solo
+  en la bitácora de avisos, y se borra de ella cuando la grabación queda
+  guardada o vencida.
 
   Kapta solo baja grabaciones de **hosts de Anura**: `anura.pe`,
   `anura.com.pe`, `anura.com.ar` o un subdominio suyo, por https y puerto
@@ -2121,50 +2127,281 @@ teléfono, no por la computadora.
      como `ANURA_CLICK2DIAL_TOKEN`, nunca en un chat ni en Kapta. Sin él no
      aparece nada de Anura; Kapta solo dice si está configurado, nunca el
      valor.
-  3. **En cada anexo, Terminales:** la terminal del teléfono que la asesora va
-     a contestar (la app o el softphone de Anura), marcada como principal y
-     registrada. Click2Dial hace sonar siempre la principal: una terminal
-     extra en el mismo anexo nunca suena.
-  4. **En cada anexo, Avanzado:** Auto answer apagado. Si queda encendido, el
-     teléfono contesta solo y Anura marca a la clienta sin que la asesora
-     esté.
-  5. **En cada anexo, Límites:** celulares permitidos. Si no, las llamadas a
-     celular terminan en CONGESTION («destino restringido»).
-  6. **Configuración → Eventos → Agregar:** petición `POST`, `HTTPS`, el host
-     de Kapta, puerto `443`, la ruta con el token que da Kapta (sin la barra
-     inicial), tipo JSON, sin autenticación, y como cuerpo la plantilla que da
-     Kapta.
-  7. **En cada anexo, Eventos → Agregar tres veces con esa plantilla:**
-     `START` («Se inicia una llamada»), `TALK` («La llamada es atendida») y
-     `END` («Se finaliza una llamada»), dirección Ambas.
+  3. **En cada anexo, Terminales:** encender el interruptor de la terminal
+     `<anexo>-websocket` (en el anexo 101, `101-websocket`): así queda como
+     principal y es el teléfono dentro de Kapta; con eso ya no se instala la
+     app ni un softphone de Anura. Hazlo cuando guardes la clave de ese anexo
+     en Kapta: mientras un anexo no tenga clave guardada en Kapta, su principal
+     tiene que ser un teléfono que la asesora contesta (la app de Anura o un
+     teléfono físico), porque la -websocket sin Kapta conectada no suena y
+     Click2Dial falla. Si no existe, se crea con Agregar (Nombre y Usuario: los
+     dos `<anexo>-websocket`). Click2Dial hace sonar siempre la principal: una
+     terminal extra en el mismo anexo nunca suena.
+  4. **En cada anexo, Terminales → lápiz de la -websocket → «Obtener
+     credenciales»:** el usuario SIP (`<anexo>-websocket`), la contraseña SIP y
+     el dominio de la central. Se escriben en Kapta, nunca en un chat. Sirve la
+     contraseña de la -websocket: la que tiene @ es la del teléfono físico y no
+     sirve.
+  5. **En cada anexo, Avanzado → «Click 2 Dial»:** Auto answer apagado. La
+     llamada de Click2Dial la contesta Kapta, en el navegador, y solo la que la
+     asesora acaba de pedir.
+  6. **En cada anexo, Límites:** celulares permitidos. Si no, las llamadas a
+     celular terminan en CONGESTION («destino restringido»). Qué opción de
+     Límites lo permite lo decide el dueño de la cuenta o Anura.
+  7. **Configuración → Eventos → Agregar:** un Nombre (por ejemplo «Kapta») y,
+     en sus pestañas: Petición, `POST`, `HTTPS`, el host de Kapta, puerto `443`
+     y la ruta con el token que da Kapta (sin la barra inicial); Encabezados,
+     tipo JSON y sin autenticación; Cuerpo, la plantilla que da Kapta.
+  8. **En cada anexo, Eventos → Agregar tres veces con esa plantilla:**
+     (Cuentas → anexo → Eventos) en «Ejecutar cuando», «Se inicia una llamada»
+     (`START`), «La llamada es atendida» (`TALK`) y «Se finaliza una llamada»
+     (`END`), cada uno con dirección «Entrante/Saliente».
 
-  Después, en Kapta, Ajustes › «Telefonía Anura»: el anexo de cada persona y
-  una «Llamada de prueba».
+  Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la central,
+  el anexo de cada persona con su usuario y contraseña SIP («Probar y guardar»)
+  y una «Llamada de prueba».
+
+  Mientras un anexo no tenga clave guardada en Kapta, la ficha sigue la fase 1
+  para esa persona: entonces la principal de su anexo tiene que ser un teléfono
+  que ella contesta (la app de Anura o un teléfono físico), no la `-websocket`,
+  que sin Kapta conectada no suena y hace fallar Click2Dial.
 - **Un anexo por persona.** Se asigna en Ajustes › «Telefonía Anura»: uno por
   persona y uno por anexo en la organización, de 2 a 6 dígitos. Sin anexo no
   hay botón, así que Anura queda apagado hasta que se asignen. Un anexo se
   puede desactivar sin borrarlo. Para pasarlo a otra persona, primero se le
   quita a quien lo tiene.
-- **Lo que Kapta no guarda.** Ni usuarios ni contraseñas SIP de Anura: en la
-  fase 1 no hacen falta, porque suena el teléfono de Anura de la asesora. El
-  token de Click2Dial no sale del servidor. La fase 2 es el teléfono dentro del
-  navegador (con las credenciales SIP de cada anexo); no se hace ahora.
+- **Lo que Kapta no guarda.** En la fase 1, ni usuarios ni contraseñas SIP de
+  Anura: no hacen falta, porque suena el teléfono de Anura de la asesora. La
+  fase 2 guarda la clave SIP de cada anexo, cifrada y fuera del alcance del
+  navegador (abajo). El token de Click2Dial no sale del servidor.
 - **Permisos.** Llamar pide «Gestionar pedidos» (`master.edit`), como §8.5.
   Ajustes › «Telefonía Anura» —anexos, URL del aviso, plantilla, bitácora y
   llamada de prueba— pide «Administrar tiendas» (`stores.manage`) en la
   organización de la tienda, lo mismo que Ajustes entero. No hay permiso nuevo.
+  En la fase 2 tampoco: el dominio SIP, «Probar y guardar» y «Quitar clave»
+  piden `stores.manage`, y la clave solo se entrega a la dueña del anexo, al
+  llamar.
 - **Llamada de prueba.** Desde Ajustes, quien administra llama a un celular
   peruano que escribe, con su propio anexo o con cualquier anexo activo de la
   organización. No es un intento de ningún pedido: no escribe nada en ningún
   pedido. La fila de la prueba no lleva tienda, así que nadie más lee por RLS
   el número que se escribió.
 - **«Llamar desde Kapta» se queda.** La llamada por Telnyx desde la
-  computadora (§8.5) sigue igual, al lado. Anura no la reemplaza en la fase 1.
+  computadora (§8.5) sigue igual, al lado. Anura no la reemplaza en la fase 1
+  ni en la fase 2.
 - **Por confirmar en la prueba real del owner.** Si la asesora no contesta su
   propio teléfono de Anura, el fin probablemente llega como NOANSWER y no se
   distingue de que la clienta no contestó: quedaría «no contestó» en el
   historial. Y desde qué host sirve Anura la grabación: si la bitácora dice
   «Grabación descartada», ese host va en `ANURA_RECORDING_HOSTS`.
+
+#### Fase 2: teléfono dentro de Kapta (solo salidas, 06-11-2026)
+
+Pedido por el owner (06-11-2026): «construye el teléfono dentro de Kapta. no
+quiero nada en mi celular ni computadora, todo en kapta. y el telefono es solo
+para salidas de llamadas, no quiero que kapta esté sonando que recibe llamadas
+por ahora o solo se lo canalizas a un usuario». Kapta no recibe llamadas: una
+entrante que deba llegar a alguien se canaliza en Anura (abajo). La fase 2 se
+monta **sobre la fase 1**: Click2Dial, los avisos, la tabla de estados, el
+historial y las grabaciones siguen igual. Lo nuevo es que la terminal principal
+del anexo es la `<anexo>-websocket`, o sea el propio navegador de la asesora en
+Kapta, con JsSIP 3.13.8 sobre `wss://sipwss.anura.pe` (lo que Rentabilify probó
+con Anura Perú). La asesora habla por la computadora, con sus audífonos, y no
+instala nada ni en el celular ni en la computadora. Migración 0311.
+
+- **Qué ve la asesora.** El mismo botón «Llamar con Anura». La ficha elige el
+  modo por el teléfono de Kapta del anexo de quien mira:
+
+  | Estado | Cuándo | Qué hace la ficha |
+  | --- | --- | --- |
+  | `listo` | el anexo tiene su clave guardada y no rechazada, y la central tiene dominio | Llama con el teléfono dentro de Kapta |
+  | `sin_telefono` | el anexo no tiene clave guardada | Fase 1 sin cambios, sin ningún aviso. «Este anexo no tiene teléfono en Kapta: suena tu teléfono de Anura.» solo sale si el anexo perdió su clave entre abrir la ficha y llamar, o en la llamada de prueba |
+  | `clave_rechazada` | Anura rechazó la clave guardada | No llama: «Anura rechazó la clave del teléfono de Kapta; pide a quien administra que la vuelva a guardar.» |
+  | `sin_dominio` | hay clave pero falta el dominio SIP de la central | No llama: «Falta el dominio SIP de la central de Anura. Pide a quien administra que lo guarde en Ajustes › Telefonía Anura.» |
+
+  Con `listo`, una tarjeta flotante como la de «Llamar desde Kapta» (§8.5):
+  «Conectando…», «Conectando con Anura…», «Llamando a 98••••321…» (el número
+  enmascarado, como en el historial), la llamada en curso con su
+  temporizador, **Colgar** y **Silenciar**, y al final los mismos estados de
+  la fase 1. Que la clienta contestó y cómo terminó lo siguen diciendo los
+  avisos de Anura, con el mismo sondeo de 2,5 segundos. Al cortar, la tarjeta
+  dice «Colgaste» si colgó la asesora y «Llamada terminada» si cortó Anura
+  (la clienta colgó o no contestó). Lo marca Anura por Click2Dial: Kapta no
+  manda el número al navegador, pero el número entero puede llegar en la
+  señalización SIP de Anura (el aviso de Click2Dial); Kapta no lo muestra, no
+  lo guarda y no lo escribe en la consola (el registro de JsSIP queda
+  apagado).
+
+  Con el teléfono de Kapta, los fallos de Click2Dial que en la fase 1 hablan
+  de «tu teléfono de Anura» se dicen para Kapta: sin la terminal conectada,
+  «Anura no ve conectado el teléfono de Kapta. Revisa que la terminal
+  «<anexo>-websocket» sea la principal del anexo y que no tengas Kapta abierto
+  en otro navegador, y vuelve a intentar.»; sin terminal principal, «Tu anexo
+  no tiene terminal principal en Anura. Pide que enciendan la terminal
+  «<anexo>-websocket» de tu anexo.»; con otra llamada abierta, «Ya tienes una
+  llamada de Anura abierta. Cuélgala desde Kapta, en la pestaña donde la
+  abriste; si se cortó, Kapta la libera sola en un momento.». Una llamada que
+  Kapta cerró sola por su plazo dice «No se pudo llamar: Kapta no recibió los
+  avisos de Anura de esta llamada y la cerró sola. Vuelve a intentar.».
+
+  Una llamada viva que la ficha retoma (abierta en otra pestaña, o antes de
+  recargar) se muestra con los textos del teléfono de Kapta, no con «cuelga en
+  tu teléfono de Anura»: «Esta llamada está abierta en otra pestaña de Kapta o
+  se abrió antes de recargar la ficha: cuélgala desde la pestaña donde la
+  abriste. Si se cortó, Anura la cierra sola en un momento.».
+- **Cuándo se conecta: solo al llamar.** Kapta no queda conectada a Anura
+  esperando llamadas. Al pulsar «Llamar con Anura», en este orden:
+  1. el candado entre pestañas (abajo);
+  2. la clave, que el servidor entrega en ese momento;
+  3. el micrófono: si la asesora lo niega, «Kapta necesita el micrófono para
+     llamar. Permítelo en el candado de la barra de direcciones y vuelve a
+     intentarlo.» y **no se pide la llamada**;
+  4. el registro en Anura, 8 segundos como mucho;
+  5. el pedido de llamada de la fase 1 (Click2Dial);
+  6. Anura hace sonar la terminal principal —este navegador— y Kapta contesta
+     sola ese aviso, sin timbre; luego Anura marca a la clienta y la asesora
+     oye su timbre.
+
+  Al colgar, Kapta se desregistra y suelta el micrófono y el candado. Si
+  Anura no hace sonar el teléfono de Kapta en 45 segundos, también:
+  «Anura no hizo sonar el teléfono de Kapta. Revisa en Anura que la terminal
+  «<anexo>-websocket» sea la principal del anexo.». El registro dura 60
+  segundos: si la pestaña se cierra de golpe sin desregistrar, vence solo.
+  Salir de la ficha o cerrar la pestaña (`pagehide`) cuelga y suelta todo.
+- **No suena para entrantes.** Kapta contesta un solo aviso por llamada, y
+  solo mientras esa pestaña espera el de la llamada que acaba de pedir (45
+  segundos desde que la pide). Si el aviso llega antes de que el servidor
+  confirme que Anura aceptó el Click2Dial, queda en espera sin contestar: se
+  contesta si Anura lo aceptó y se rechaza si no. Cualquier otro (sin llamada
+  pedida, fuera de tiempo, uno de más, o el que llegue durante «Probar y
+  guardar») se rechaza con **486** («ocupado»), sin timbre, sin aviso y sin
+  notificación. Nunca con 603: un 6xx corta todas las
+  ramas de la llamada en Anura, también la de otra terminal. Lo que dice
+  Ajustes: «El teléfono de Kapta solo hace salidas: se conecta a Anura al
+  pedir una llamada y se desconecta al terminar. Con la «-websocket» como
+  principal y Kapta desconectado, una llamada entrante a ese anexo NO suena en
+  Kapta; si quieres que una entrante llegue a alguien, configúralo en Anura
+  («Flujo de llamada»).». Las entrantes siguen el flujo de Anura
+  (preatendedor, buzón) y el aviso de Anura las sigue guardando como en la
+  fase 1. Lo que queda: Kapta no sabe, por lo que trae el aviso, si es el de
+  su Click2Dial. Si una entrante al anexo llega justo en esos segundos (Kapta
+  registrada y esperando su aviso), se contestaría en lugar del aviso propio,
+  y el de Click2Dial se rechazaría con 486. Por confirmar en la prueba real
+  qué trae el aviso de Click2Dial para atarlo a la llamada pedida.
+- **Colgar y Silenciar.** Ahora Kapta sí cuelga: «Colgar» termina la llamada
+  y desregistra; antes de que haya llamada, cancela y desregistra. Mientras
+  conecta, el botón dice «Cancelar»; con Kapta en la llamada, «Colgar». Si
+  Anura ya aceptó el pedido, la fila de la llamada sigue las reglas de la fase
+  1: si Anura no avisa nada, se cierra sola al minuto. Pero si Kapta ya está
+  en la llamada, ese cierre por plazo **no corta el audio**: la tarjeta dice
+  «Kapta no recibió los avisos de Anura de esta llamada, pero sigues en ella.
+  Cuelga desde aquí al terminar.» y la asesora cuelga cuando termina. Solo un
+  fin de Anura (o la asesora) corta. «Silenciar» corta el micrófono sin
+  colgar.
+- **Una sola pestaña.** Solo una pestaña por navegador puede tener el
+  teléfono: con dos registradas, Anura manda la llamada a la otra y
+  Click2Dial falla a los ~45 s (le pasó a Rentabilify). Kapta usa
+  `navigator.locks` y, si el navegador no lo tiene, BroadcastChannel. La
+  segunda pestaña dice «Tienes una llamada abierta en otra pestaña de Kapta.».
+  Dos navegadores de la misma persona no se ven entre sí: lo acotan el
+  registro solo al llamar, el 486 y la regla de una llamada viva por persona
+  de la fase 1.
+- **La clave SIP.** Es **del anexo**, no de la persona:
+  - Por organización (no es secreto, tabla `anura_sip_settings`): el dominio
+    SIP de la central, el que Anura muestra en «Obtener credenciales»; la URL
+    WebSocket, por defecto `wss://sipwss.anura.pe`; y el puerto SIP, por
+    defecto 55090. Solo se aceptan `wss://` a hosts de anura.pe y sin puerto:
+    anura.dev es Argentina y no sirve. Tiene que ser un subdominio
+    (`sipwss.anura.pe`): el dominio raíz `anura.pe` no lo cubre la CSP.
+  - Por anexo (tabla `anura_sip_credentials`, solo la lee el servidor, sin
+    acceso para las sesiones de las personas): el usuario SIP, por defecto
+    `<anexo>-websocket`, y la contraseña SIP **cifrada** con la misma
+    `ENCRYPTION_KEY` de los tokens de las tiendas. No va en `anura_extensions`
+    porque esa tabla la leen los miembros de la organización.
+  - Quitar el anexo o cambiarle el número borra su clave; apagarlo no.
+  - **Quién la recibe.** Solo la dueña del anexo, al llamar, por una acción
+    del servidor que nunca la escribe en un log: con `master.edit` en la
+    organización del pedido (no basta tenerlo en otra organización), el pedido
+    visible para ella y con celular peruano, Anura encendido para la
+    organización (token y `ANURA_ORG_ID`), su anexo activo, la clave guardada
+    y no rechazada, y el dominio configurado. El navegador la tiene solo en
+    memoria mientras dura la llamada: nunca en `localStorage` ni
+    `sessionStorage`. Ajustes solo muestra «clave guardada: sí/no», la fecha y,
+    si la hay, la fecha y el motivo del rechazo.
+- **Probar y guardar.** En Ajustes › «Telefonía Anura», quien administra
+  (`stores.manage`) escribe el dominio y, por cada anexo, el usuario y la
+  contraseña de la -websocket. «Probar y guardar» hace que **su** navegador
+  intente **un** registro con eso: solo si Anura lo acepta, el servidor guarda
+  la clave cifrada. Si Anura la rechaza, no se guarda nada, no se reintenta y
+  se explica: «Anura no aceptó ese usuario y contraseña, así que no se guardó.
+  Usa la contraseña de la terminal «<anexo>-websocket» («Obtener
+  credenciales»), no la del teléfono físico, y revisa el dominio. No lo
+  intentes muchas veces seguidas: varios intentos fallidos hacen que Anura
+  bloquee la conexión de la oficina.». La ayuda junto al campo: «Usa la
+  contraseña de la terminal «<anexo>-websocket» (Cuentas → anexo →
+  Terminales → lápiz → «Obtener credenciales»), no la del teléfono físico.
+  Varios intentos con una clave mala hacen que Anura bloquee la conexión de la
+  oficina: Kapta prueba una sola vez y no reintenta.». «Quitar clave» la
+  borra y el anexo vuelve a la fase 1. El servidor no puede comprobar que la
+  prueba del navegador salió bien: confía en quien administra, que de todos
+  modos puede escribir la clave.
+
+  La «Llamada de prueba» con el anexo propio usa el teléfono de Kapta si ese
+  anexo lo tiene. Con el anexo de otra persona Kapta no entrega la clave («La
+  clave del teléfono de Kapta solo se entrega a la dueña del anexo: prueba con
+  tu propio anexo.»).
+- **Clave rechazada: no se reintenta.** Una clave mala con reintentos hace que
+  Anura **bloquee la IP** de la oficina (le pasó a Rentabilify). Por eso,
+  ante el **primer** rechazo de la clave al registrar (SIP 401, 403, 404 o
+  407, o la causa de JsSIP «Authentication Error», «Rejected» o «Not Found»):
+  - el teléfono se detiene y no reintenta, aunque el WebSocket se reconecte;
+  - el servidor marca el anexo «clave rechazada», con la fecha y el motivo
+    («Anura rechazó el usuario o la clave del teléfono de Kapta (SIP 401).»),
+    solo en el anexo propio de quien llamaba y solo en la versión de la clave
+    que se le entregó: si alguien guardó otra entretanto, no la toca;
+  - mientras esté marcada, Kapta no la entrega y la ficha dice «Anura rechazó
+    la clave del teléfono de Kapta; pide a quien administra que la vuelva a
+    guardar.». Guardar otra clave limpia la marca.
+
+  Además, la pestaña recuerda en memoria (nunca en `localStorage`) la versión
+  de la clave que Anura rechazó: si el servidor no llegó a marcarla, el
+  siguiente «Llamar con Anura» no vuelve a registrar con ella (le vuelve a
+  avisar al servidor). Si Anura rechaza la clave durante una llamada (al
+  renovar el registro), el audio sigue pero Kapta apaga el registro
+  automático de JsSIP, que si no mandaría otro REGISTER en cada reconexión.
+
+  Un fallo de red o de tiempo no marca nada: la asesora puede volver a
+  intentar. Pero tras un corte de Anura después de mandar el registro, un «no
+  respondió» u otro rechazo, la pestaña espera un minuto antes de dejar
+  intentar otra vez: «Espera un minuto antes de volver a intentar: varios
+  intentos fallidos seguidos pueden hacer que Anura bloquee la conexión de la
+  oficina.». Un 404 cuenta como clave rechazada porque es lo más seguro contra
+  el bloqueo: con un dominio mal escrito, el primer intento de cada anexo lo
+  marca, y hay que volver a guardar la clave.
+- **Grabaciones por el mismo origen.** La ficha oye la grabación por
+  `/api/anura/recordings/<id>`, con `Range` para que el reproductor pueda
+  adelantar (Safari no reproduce sin 206). La ruta comprueba quién la pide
+  —quien hizo la llamada o quien ve la tienda del pedido, como el historial—
+  y copia los bytes del bucket privado. La regla es siempre la de la tienda
+  (RLS): quien hizo la llamada y ya no ve esa tienda no la oye. El navegador no
+  guarda el audio (`no-store`). Corrige un fallo de la fase 1: la CSP
+  no tenía `media-src`, caía en `default-src 'self'` y bloqueaba el `<audio>`
+  con el enlace firmado de Supabase. Se eligió la ruta en vez de abrir
+  `media-src` a Supabase para que el enlace firmado no llegue al navegador.
+- **CSP.** `connect-src` agrega `wss://sipwss.anura.pe` y `wss://*.anura.pe`
+  (la URL WebSocket configurable, solo de anura.pe; abre todos los
+  subdominios de Anura, no solo sipwss). `media-src 'self'` queda explícito;
+  se comporta como antes. El audio de la llamada entra por `srcObject`, que
+  `media-src` no limita.
+- **Audio e ICE.** STUN público (`stun:stun.l.google.com:19302`); no hay TURN
+  propio, así que en una red muy cerrada el audio podría fallar («No se pudo
+  conectar el audio con Anura. Vuelve a intentarlo.»). JsSIP espera a que
+  termine toda la recolección ICE, que puede tardar decenas de segundos: Kapta
+  contesta en cuanto hay un candidato público (srflx o relay) y, si no llega,
+  1,5 segundos después del primero.
+- **Por confirmar en la prueba real.** El registro va a `sip:<dominio>:55090`
+  con la dirección `sip:<usuario>@<dominio>`; no se pudo probar contra Anura.
+  Si no registra, se ajusta en `anuraJsSipConfig` (`lib/anura/sip-phone.ts`).
 
 ## 9. Lima
 
@@ -11115,6 +11352,7 @@ mantiene observado el lote completo.
 | Shalom/Olva | Seguimiento Agencia | Gerardo |
 | Finanzas/liquidación | Responsable financiera | Yohalis |
 | Anexos de Anura, URL del aviso y llamada de prueba (§8.7) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
+| Dominio SIP de la central y clave del teléfono de Kapta de cada anexo (§8.7, fase 2) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura», con «Probar y guardar» |
 | Reembolsos/propietario | Owner | Frankz |
 
 La autorización futura se asigna al rol estable, no al nombre. El actor real se
@@ -11156,6 +11394,10 @@ registra en cada evento.
   avisos, y hacer la llamada de prueba piden «Administrar tiendas»
   (`stores.manage`) en la organización de la tienda. El token de Click2Dial es
   una variable de Vercel (`ANURA_CLICK2DIAL_TOKEN`): nadie lo ve en Kapta.
+  Fase 2 (06-11-2026): tampoco hay permiso nuevo. Guardar el dominio SIP y la
+  clave del teléfono de Kapta de un anexo pide `stores.manage`; la clave
+  queda cifrada en una tabla que solo lee el servidor, Ajustes solo dice si
+  está guardada, y el navegador la recibe solo la dueña del anexo, al llamar.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
@@ -13167,8 +13409,9 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
   obligación financiera por pedido de la Mesa de cierre.
 - Agente de voz fuera de Reproprovincia: Agencia con adelanto y Por confirmar
   (§11.8, pendientes).
-- Anura, fase 2: el teléfono dentro del navegador, con las credenciales SIP de
-  cada anexo (§8.7). En la fase 1 Kapta no guarda credenciales SIP.
+- Anura, después de la fase 2 (§8.7): entrantes en Kapta (hoy solo salidas;
+  una entrante se reparte en Anura, «Flujo de llamada»), un TURN propio para
+  redes muy cerradas y la prueba real del registro con el puerto 55090.
 
 ## 22. Criterios de aceptación de la Fase 2
 

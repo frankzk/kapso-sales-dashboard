@@ -327,4 +327,7 @@ echo "  ✅ una sola alta viva por organización y celular; la baja queda como h
 echo "▶ Llamar con Anura (0310): anexo por persona y por org, estado con su rango, una llamada viva por persona, cdrid único y RLS"
 $PSQL -f "$ROOT/scripts/sql/anura_click2dial_smoke.sql"
 echo "  ✅ anexos de 2 a 6 dígitos únicos por persona y por anexo; el modo fija el pedido; la grabación guardada con ruta; anexos por org, llamadas por tienda, bitácora solo del servidor y nadie escribe"
+echo "▶ Teléfono de Anura dentro de Kapta (0311): ajustes SIP por org, clave SIP cifrada por anexo, clave rechazada y RLS"
+$PSQL -f "$ROOT/scripts/sql/anura_kapta_phone_smoke.sql"
+echo "  ✅ wss solo a anura.pe y sin puerto; la clave cifrada sigue al anexo (quitarlo o cambiarle el número la borra, apagarlo no); rechazada con fecha y motivo; los ajustes los lee la org y la clave nadie desde el navegador"
 echo "✅ DB verification passed."

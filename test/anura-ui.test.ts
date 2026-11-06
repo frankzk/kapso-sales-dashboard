@@ -89,7 +89,19 @@ function serverOnlyReachedFrom(entry: string, opts: { node?: boolean } = {}): st
 }
 
 describe("la frontera del cliente: nada server-only llega al navegador", () => {
-  const CLIENT_ENTRIES = ["components/anura-call.tsx", "components/anura-settings-section.tsx", "lib/anura/ui.ts", "lib/anura/events.ts"];
+  const CLIENT_ENTRIES = [
+    "components/anura-call.tsx",
+    "components/anura-settings-section.tsx",
+    "lib/anura/ui.ts",
+    "lib/anura/events.ts",
+    // Fase 2: el teléfono dentro de Kapta.
+    "components/anura-phone.tsx",
+    "components/anura-kapta-phone-settings.tsx",
+    "lib/anura/phone-ui.ts",
+    "lib/anura/sip-phone.ts",
+    "lib/anura/sip.ts",
+    "lib/anura/jssip-client.ts",
+  ];
 
   it.each(CLIENT_ENTRIES)("%s no alcanza ningún módulo server-only ni de Node en valor", (entry) => {
     expect(serverOnlyReachedFrom(entry)).toEqual([]);
@@ -101,7 +113,16 @@ describe("la frontera del cliente: nada server-only llega al navegador", () => {
 
   it("los componentes son de cliente y del servidor de Anura solo toman tipos", () => {
     const SERVER_MODULES = ["server", "calls", "click2dial", "recording", "token", "webhook"].map((m) => `@/lib/anura/${m}`);
-    for (const file of ["components/anura-call.tsx", "components/anura-settings-section.tsx", "lib/anura/ui.ts", "components/order-drawer.tsx", "components/store-settings.tsx"]) {
+    for (const file of [
+      "components/anura-call.tsx",
+      "components/anura-settings-section.tsx",
+      "components/anura-phone.tsx",
+      "components/anura-kapta-phone-settings.tsx",
+      "lib/anura/ui.ts",
+      "lib/anura/phone-ui.ts",
+      "components/order-drawer.tsx",
+      "components/store-settings.tsx",
+    ]) {
       const src = read(file);
       if (file.startsWith("components/")) expect(src.startsWith('"use client";')).toBe(true);
       for (const spec of valueImports(src)) expect(SERVER_MODULES).not.toContain(spec);

@@ -1,25 +1,31 @@
 "use client";
 
-// Ajustes › «Telefonía Anura» (fase 1, Click2Dial; MOM §8.7). Lo ve quien
-// administra la tienda (`stores.manage`). Una sola central para la org: el
-// token de Click2Dial vive en Vercel (`ANURA_CLICK2DIAL_TOKEN`) y aquí solo se
-// dice si está, nunca su valor. La sección enseña la dirección de los avisos
-// y la plantilla para pegar en Anura, los pasos del panel de Anura, el anexo
-// de cada persona, la «Llamada de prueba» y los últimos avisos (30 días, con
-// los teléfonos enmascarados).
+// Ajustes › «Telefonía Anura» (MOM §8.7). Lo ve quien administra la tienda
+// (`stores.manage`). Una sola central para la org: el token de Click2Dial vive
+// en Vercel (`ANURA_CLICK2DIAL_TOKEN`) y aquí solo se dice si está, nunca su
+// valor. La sección enseña la dirección de los avisos y la plantilla para
+// pegar en Anura, los pasos del panel de Anura, el anexo de cada persona, el
+// teléfono dentro de Kapta (fase 2, solo salidas: components/
+// anura-kapta-phone-settings.tsx), la «Llamada de prueba» y los últimos avisos
+// (30 días, con los teléfonos enmascarados).
+//
+// La «Llamada de prueba» usa el teléfono de Kapta si el anexo tiene clave
+// guardada (y es de quien prueba: la clave solo se entrega a su dueña); si no,
+// Anura hace sonar el teléfono de Anura del anexo, como en la fase 1.
 //
 // Carga sus datos con su acción al abrirse (no los manda la página). Del
 // servidor solo importa acciones y TIPOS: lo vigila `test/anura-ui.test.ts`.
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import { CARD, CardHeader, CodeLine, EmptyRow, Field, HELP, ROW, RowList, SettingsSection } from "@/components/settings-ui";
-import { IconCopy } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import {
   getAnuraSettings,
+  getAnuraTestPhone,
   removeAnuraExtension,
+  reportAnuraTestPhoneRejected,
   saveAnuraExtension,
   setAnuraExtensionActive,
   startAnuraTestCall,
@@ -35,6 +41,23 @@ import {
   anuraEndedLine,
   anuraStartErrorTitle,
 } from "@/lib/anura/ui";
+import {
+  anuraPhoneCanMute,
+  anuraPhoneEndedLine,
+  anuraPhoneErrorTitle,
+  anuraPhoneHangUpLabel,
+  anuraPhoneHint,
+  anuraPhoneOutlivesServer,
+  anuraPhoneNeedsPanelReload,
+  anuraPhoneStatusLabel,
+  anuraTestCallWay,
+  anuraTestFallsBack,
+  talkSecondsSince,
+} from "@/lib/anura/phone-ui";
+import { formatTalkTime } from "@/lib/browser-call";
+import { AnuraPhoneAudio, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
+import { KaptaPhoneCard } from "@/components/anura-kapta-phone-settings";
+import { IconCopy, IconMic, IconMicOff, IconPhone } from "@/components/icons";
 
 const SECTION_ID = "anura";
 const TITLE = "Telefonía Anura";
@@ -158,8 +181,12 @@ export function AnuraSettingsSection({ storeId }: { storeId: string }) {
       description={
         <>
           <p>
-            «Llamar con Anura» en la ficha del pedido: Anura hace sonar <strong>tu teléfono de Anura</strong> (la terminal
-            principal de tu anexo) y, cuando contestas, marca a la clienta. Kapta no guarda usuarios ni claves SIP.
+            «Llamar con Anura» en la ficha del pedido. Si el anexo tiene su clave guardada en «Teléfono dentro de Kapta», la
+            asesora habla <strong>desde Kapta</strong>, con audífonos, y Anura marca a la clienta. Si no, Anura hace sonar{" "}
+            <strong>su teléfono de Anura</strong> (la terminal principal del anexo) y, cuando contesta, marca a la clienta.
+          </p>
+          <p>
+            Kapta <strong>solo hace salidas</strong>: no recibe llamadas ni suena. Las entrantes siguen el flujo de Anura.
           </p>
           <p>
             Una sola central para toda la organización. El botón sale a quien puede editar el Master, tiene un anexo activo
@@ -198,7 +225,9 @@ export function AnuraSettingsSection({ storeId }: { storeId: string }) {
 
       <ExtensionsCard data={data} pending={pending} storeId={storeId} mutate={mutate} />
 
-      <TestCallCard storeId={storeId} data={data} />
+      <KaptaPhoneCard storeId={storeId} data={data} pending={pending} mutate={mutate} onChanged={() => void load()} />
+
+      <TestCallCard storeId={storeId} data={data} onChanged={() => void load()} />
 
       <EventsCard data={data} onRefresh={() => void load()} pending={pending} />
     </SettingsSection>
@@ -301,7 +330,7 @@ function ExtensionsCard({
     <div className={cn(CARD, "divide-y divide-line")}>
       <CardHeader
         title="Anexos por persona"
-        description="Un anexo por persona y una persona por anexo. Sin anexo activo, a esa persona no le sale «Llamar con Anura». Para pasar un anexo a otra persona, quítaselo primero a quien lo tiene."
+        description="Un anexo por persona y una persona por anexo. Sin anexo activo, a esa persona no le sale «Llamar con Anura». Para pasar un anexo a otra persona, quítaselo primero a quien lo tiene. Quitar un anexo o cambiarle el número borra la clave de su teléfono de Kapta; apagarlo no."
       />
       {data.extensions.length === 0 ? (
         <EmptyRow>Nadie tiene anexo todavía: «Llamar con Anura» no sale en ninguna ficha.</EmptyRow>
@@ -329,7 +358,8 @@ function ExtensionsCard({
                   size="sm"
                   disabled={pending}
                   onClick={() => {
-                    if (window.confirm(`¿Quitar el anexo ${e.extension} a ${e.name}? Dejará de ver «Llamar con Anura».`)) {
+                    const phoneNote = e.phone.hasPassword ? " También se borra la clave de su teléfono de Kapta." : "";
+                    if (window.confirm(`¿Quitar el anexo ${e.extension} a ${e.name}? Dejará de ver «Llamar con Anura».${phoneNote}`)) {
                       mutate(() => removeAnuraExtension(storeId, e.id));
                     }
                   }}
@@ -388,15 +418,45 @@ function ExtensionsCard({
   );
 }
 
-function TestCallCard({ storeId, data }: { storeId: string; data: AnuraSettingsData }) {
+function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: AnuraSettingsData; onChanged: () => void }) {
   const [phone, setPhone] = useState("");
   const [extension, setExtension] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<{ title: string; text: string } | null>(null);
   const [call, setCall] = useState<AnuraCallLive | null>(null);
   const [pollTrouble, setPollTrouble] = useState(false);
+  // Esta prueba va con el teléfono de Kapta (Colgar y Silenciar en la tarjeta).
+  const [viaKapta, setViaKapta] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const activeExtensions = data.extensions.filter((e) => e.active);
   const valid = anuraPeruCalled(phone) !== null;
+  const way = anuraTestCallWay(extension, activeExtensions, data.sipMigrationMissing);
+
+  const server = useMemo<AnuraPhoneServer>(
+    () => ({
+      fetchCredentials: () => getAnuraTestPhone(storeId, extension || null),
+      requestCall: () => startAnuraTestCall(storeId, phone, extension || null),
+      reportRejected: (input) => reportAnuraTestPhoneRejected(storeId, input),
+    }),
+    [storeId, phone, extension],
+  );
+  const kapta = useAnuraKaptaPhone(server);
+  const snap = kapta.snapshot;
+
+  // El teléfono de Kapta ya tiene la llamada del servidor: se sigue con el sondeo.
+  const phoneCallId = snap?.callId ?? null;
+  useEffect(() => {
+    if (!phoneCallId) return;
+    let stopped = false;
+    void getAnuraCallStatus(phoneCallId)
+      .then((status) => {
+        if (!stopped && status.ok) setCall((prev) => (prev?.id === phoneCallId ? prev : status.call));
+      })
+      .catch(() => undefined);
+    return () => {
+      stopped = true;
+    };
+  }, [phoneCallId]);
 
   const callId = call?.id ?? null;
   const active = call?.active ?? false;
@@ -435,24 +495,67 @@ function TestCallCard({ storeId, data }: { storeId: string; data: AnuraSettingsD
     };
   }, [callId, active]);
 
+  // Anura dio la llamada por terminada: el teléfono de Kapta cuelga y se
+  // desconecta; no si solo la cerró el plazo del servidor con Kapta en la llamada.
+  const phoneBusy = kapta.busy;
+  const { hangUp } = kapta;
+  const outlives = anuraPhoneOutlivesServer(snap, call);
+  useEffect(() => {
+    if (callId && !active && phoneBusy && !outlives) hangUp();
+  }, [callId, active, phoneBusy, outlives, hangUp]);
+
+  const talking = call?.status === "en_curso" && !(viaKapta && snap?.phase === "terminada");
+  useEffect(() => {
+    if (!talking) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [talking]);
+
+  /** Como en la fase 1: Anura hace sonar el teléfono de Anura del anexo. */
+  async function startFase1() {
+    const res = await startAnuraTestCall(storeId, phone, extension || null);
+    if (res.ok) {
+      const status = await getAnuraCallStatus(res.callId).catch(() => null);
+      if (status?.ok) setCall(status.call);
+      else setError({ title: "Llamada pedida", text: `Anura va a hacer sonar el anexo ${res.extension} y luego marcará al ${res.toMasked}.` });
+    } else {
+      setError({ title: anuraStartErrorTitle(res.code), text: res.error });
+      // Ya hay una viva, o Anura no respondió y puede que llame igual: se sigue.
+      if (res.activeCallId) {
+        const status = await getAnuraCallStatus(res.activeCallId).catch(() => null);
+        if (status?.ok) setCall(status.call);
+      }
+    }
+  }
+
   async function start() {
     setStarting(true);
     setError(null);
     setPollTrouble(false);
     setCall(null);
     try {
-      const res = await startAnuraTestCall(storeId, phone, extension || null);
-      if (res.ok) {
-        const status = await getAnuraCallStatus(res.callId).catch(() => null);
+      if (way === "fase1") {
+        setViaKapta(false);
+        await startFase1();
+        return;
+      }
+      // Con el teléfono de Kapta: micrófono → conectar → pedir → contestar el aviso propio.
+      setViaKapta(true);
+      const result = await kapta.call();
+      if (result.phase !== "error" || !result.error) return;
+      if (way === "kapta_o_fase1" && anuraTestFallsBack(result.error)) {
+        // «Mi anexo» no tiene teléfono en Kapta: como en la fase 1.
+        setViaKapta(false);
+        await startFase1();
+        return;
+      }
+      setError({ title: anuraPhoneErrorTitle(result.error), text: result.error.message });
+      if (anuraPhoneNeedsPanelReload(result.error)) onChanged();
+      const activeCallId = result.error.start?.activeCallId;
+      if (activeCallId) {
+        const status = await getAnuraCallStatus(activeCallId).catch(() => null);
         if (status?.ok) setCall(status.call);
-        else setError({ title: "Llamada pedida", text: `Anura va a hacer sonar el anexo ${res.extension} y luego marcará al ${res.toMasked}.` });
-      } else {
-        setError({ title: anuraStartErrorTitle(res.code), text: res.error });
-        // Ya hay una viva, o Anura no respondió y puede que llame igual: se sigue.
-        if (res.activeCallId) {
-          const status = await getAnuraCallStatus(res.activeCallId).catch(() => null);
-          if (status?.ok) setCall(status.call);
-        }
       }
     } catch (e) {
       setError({ title: "No se pudo llamar", text: (e as Error).message || "Vuelve a intentar." });
@@ -461,17 +564,23 @@ function TestCallCard({ storeId, data }: { storeId: string; data: AnuraSettingsD
     }
   }
 
+  const busy = starting || active || kapta.busy;
+  const statusLine = call ? (viaKapta ? anuraPhoneStatusLabel(snap, call) : call.active ? call.statusLabel : anuraEndedLine(call)) : null;
+  const endedLine = call && !call.active && !outlives ? (viaKapta ? anuraPhoneEndedLine(call) : anuraEndedLine(call)) : null;
+  const phoneLine = viaKapta && kapta.busy && !call ? anuraPhoneStatusLabel(snap, null) : null;
+  const hint = viaKapta ? anuraPhoneHint(snap, call) : call?.active ? call.hint : null;
+
   return (
     <div className={cn(CARD, "divide-y divide-line")}>
       <CardHeader
         title="Llamada de prueba"
-        description="Anura hace sonar el anexo y, al contestar, marca al celular que escribas. No cuenta como intento de ningún pedido ni queda en ningún historial."
+        description="Anura marca al celular que escribas. Si el anexo tiene teléfono en Kapta, la prueba usa ese teléfono en este navegador (pide el micrófono); si no, Anura hace sonar el teléfono de Anura del anexo y, al contestar, marca. La clave del teléfono de Kapta solo se entrega a su dueña: con el anexo de otra persona que lo tiene, no se puede probar desde aquí. No cuenta como intento de ningún pedido ni queda en ningún historial."
       />
       <form
         className={cn(ROW, "flex flex-wrap items-end gap-3")}
         onSubmit={(ev) => {
           ev.preventDefault();
-          if (valid && !starting && !active) void start();
+          if (valid && !busy) void start();
         }}
       >
         <Field label="Celular peruano" htmlFor="anura-test-phone" hint="9 dígitos, empieza por 9." className="min-w-48 flex-1">
@@ -481,31 +590,33 @@ function TestCallCard({ storeId, data }: { storeId: string; data: AnuraSettingsD
             inputMode="tel"
             autoComplete="off"
             value={phone}
+            disabled={busy}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="987654321"
             className={cn(FIELD, "tabular-nums")}
           />
         </Field>
-        <Field label="Con el anexo" htmlFor="anura-test-ext" hint="El tuyo, o el de otra persona." className="min-w-48">
-          <select id="anura-test-ext" value={extension} onChange={(e) => setExtension(e.target.value)} className={FIELD}>
+        <Field
+          label="Con el anexo"
+          htmlFor="anura-test-ext"
+          hint={way === "kapta" ? "Con teléfono en Kapta: solo su dueña puede probarlo." : "El tuyo, o el de otra persona."}
+          className="min-w-48"
+        >
+          <select id="anura-test-ext" value={extension} disabled={busy} onChange={(e) => setExtension(e.target.value)} className={FIELD}>
             <option value="">Mi anexo</option>
             {activeExtensions.map((e) => (
               <option key={e.id} value={e.extension}>
                 {e.extension} · {e.name}
+                {e.phone.hasPassword ? " · teléfono en Kapta" : ""}
               </option>
             ))}
           </select>
         </Field>
-        <OpsButton
-          type="submit"
-          variant="primary"
-          disabled={!data.configured || !valid || starting || active}
-          className="mb-[26px] pointer-coarse:h-11"
-        >
-          {starting ? "Pidiendo…" : active ? "En llamada…" : "Llamar"}
+        <OpsButton type="submit" variant="primary" disabled={!data.configured || !valid || busy} className="mb-[26px] pointer-coarse:h-11">
+          {starting && !viaKapta ? "Pidiendo…" : busy ? "En llamada…" : "Llamar"}
         </OpsButton>
       </form>
-      {(!data.configured || error || call || pollTrouble) && (
+      {(!data.configured || error || call || pollTrouble || phoneLine) && (
         <div className={cn(ROW, "space-y-2 text-sm")}>
           {!data.configured && <p className={HELP}>Sin token de Click2Dial no se puede probar.</p>}
           {error && (
@@ -514,12 +625,33 @@ function TestCallCard({ storeId, data }: { storeId: string; data: AnuraSettingsD
               <p className="mt-0.5 text-ink-700">{error.text}</p>
             </div>
           )}
-          {call && (
+          {(call || phoneLine) && (
             <div role="status" aria-live="polite">
               <p className="font-medium text-ink-900">
-                {call.toMasked} · anexo {call.extension} · {call.active ? call.statusLabel : anuraEndedLine(call)}
+                {call ? (
+                  <>
+                    {call.toMasked} · anexo {call.extension} · {endedLine ?? statusLine}
+                  </>
+                ) : (
+                  phoneLine
+                )}
               </p>
-              {call.active && call.hint && <p className={cn(HELP, "mt-0.5")}>{call.hint}</p>}
+              {talking && call && <p className="mt-1 text-xl font-semibold tabular-nums text-ink-900">{formatTalkTime(talkSecondsSince(call.answeredAt, now))}</p>}
+              {hint && <p className={cn(HELP, "mt-0.5")}>{hint}</p>}
+            </div>
+          )}
+          {viaKapta && kapta.busy && (
+            <div className="flex flex-wrap gap-2">
+              {anuraPhoneCanMute(snap) && (
+                <OpsButton size="sm" onClick={() => kapta.setMuted(!snap?.muted)} aria-pressed={Boolean(snap?.muted)}>
+                  {snap?.muted ? <IconMicOff aria-hidden className="text-ink-500" /> : <IconMic aria-hidden className="text-ink-500" />}
+                  {snap?.muted ? "Activar micrófono" : "Silenciar"}
+                </OpsButton>
+              )}
+              <OpsButton size="sm" variant="danger" onClick={() => kapta.hangUp()}>
+                <IconPhone aria-hidden />
+                {anuraPhoneHangUpLabel(snap)}
+              </OpsButton>
             </div>
           )}
           {pollTrouble && call?.active && (
@@ -529,6 +661,7 @@ function TestCallCard({ storeId, data }: { storeId: string; data: AnuraSettingsD
           )}
         </div>
       )}
+      <AnuraPhoneAudio audioRef={kapta.audioRef} />
     </div>
   );
 }

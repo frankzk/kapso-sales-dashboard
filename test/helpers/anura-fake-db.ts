@@ -1,11 +1,21 @@
 // Una base en memoria con lo que usa «Llamar con Anura» (lib/anura/*): el
 // encadenado de supabase-js (select/insert/update/upsert/delete con eq, in,
 // lt, gte, not, order, limit, maybeSingle), los dos índices únicos de
-// `anura_calls` y Storage. Sin red.
+// `anura_calls`, las tablas SIP de la 0311 y Storage. Sin red.
 
 type Row = Record<string, any>;
 
-const KNOWN = ["anura_calls", "anura_extensions", "anura_webhook_events", "order_events", "order_master", "stores", "memberships"] as const;
+const KNOWN = [
+  "anura_calls",
+  "anura_extensions",
+  "anura_webhook_events",
+  "anura_sip_settings",
+  "anura_sip_credentials",
+  "order_events",
+  "order_master",
+  "stores",
+  "memberships",
+] as const;
 export type FakeTables = { [table: string]: Row[] } & Record<(typeof KNOWN)[number], Row[]>;
 
 export interface FakeDb {
@@ -60,6 +70,8 @@ const DEFAULTS: Record<string, () => Row> = {
     requested_at: new Date().toISOString(),
   }),
   anura_extensions: () => ({ active: true }),
+  anura_sip_settings: () => ({ ws_url: "wss://sipwss.anura.pe", sip_port: 55090, sip_domain: null, updated_at: new Date().toISOString() }),
+  anura_sip_credentials: () => ({ rejected_at: null, rejected_reason: null, saved_at: new Date().toISOString() }),
 };
 
 let seq = 0;
@@ -187,6 +199,10 @@ export function createFakeDb(initial: Record<string, Row[]> = {}, opts: FakeDbOp
       },
       gte: (col: string, v: any) => {
         filters.push((r) => value(r, col) !== null && value(r, col) !== undefined && (value(r, col) as any) >= v);
+        return q;
+      },
+      is: (col: string, v: unknown) => {
+        filters.push((r) => (value(r, col) ?? null) === v);
         return q;
       },
       not: (col: string, operator: string, v: unknown) => {

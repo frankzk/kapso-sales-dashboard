@@ -93,6 +93,11 @@ export interface AnuraCallLive {
   answeredAt: string | null;
   endedAt: string | null;
   recordingStatus: AnuraRecordingStatus;
+  /**
+   * Kapta la cerró sola por su plazo (sin avisos de Anura), no Anura. Con el
+   * teléfono de Kapta ya en la llamada, la ficha no cuelga por esto.
+   */
+  closedByTimeout: boolean;
 }
 
 export function anuraCallLive(row: AnuraCallRow): AnuraCallLive {
@@ -113,6 +118,7 @@ export function anuraCallLive(row: AnuraCallRow): AnuraCallLive {
     answeredAt: row.answered_at,
     endedAt: row.ended_at,
     recordingStatus: row.recording_status,
+    closedByTimeout: Boolean(row.closed_by_timeout),
   };
 }
 

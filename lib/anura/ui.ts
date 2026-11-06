@@ -111,29 +111,33 @@ export const ANURA_PANEL_STEPS: readonly { title: string; text: string }[] = [
   },
   {
     title: "En cada anexo, Terminales:",
-    text: "la terminal del teléfono que la asesora va a contestar (la app o el softphone de Anura), marcada como principal y registrada. Click2Dial hace sonar siempre la principal: una terminal extra en el mismo anexo nunca suena.",
+    text: "encender el interruptor de la terminal `<anexo>-websocket` (en el anexo 101, `101-websocket`): así queda como principal y es el teléfono dentro de Kapta; con eso ya no se instala la app ni un softphone de Anura. Hazlo cuando guardes la clave de ese anexo en Kapta: mientras un anexo no tenga clave guardada en Kapta, su principal tiene que ser un teléfono que la asesora contesta (la app de Anura o un teléfono físico), porque la -websocket sin Kapta conectada no suena y Click2Dial falla. Si no existe, se crea con Agregar (Nombre y Usuario: los dos `<anexo>-websocket`). Click2Dial hace sonar siempre la principal: una terminal extra en el mismo anexo nunca suena.",
   },
   {
-    title: "En cada anexo, Avanzado:",
-    text: "Auto answer apagado. Si queda encendido, el teléfono contesta solo y Anura marca a la clienta sin que la asesora esté.",
+    title: "En cada anexo, Terminales → lápiz de la -websocket → «Obtener credenciales»:",
+    text: "el usuario SIP (`<anexo>-websocket`), la contraseña SIP y el dominio de la central. Se escriben en Kapta, nunca en un chat. Sirve la contraseña de la -websocket: la que tiene @ es la del teléfono físico y no sirve.",
+  },
+  {
+    title: "En cada anexo, Avanzado → «Click 2 Dial»:",
+    text: "Auto answer apagado. La llamada de Click2Dial la contesta Kapta, en el navegador, y solo la que la asesora acaba de pedir.",
   },
   {
     title: "En cada anexo, Límites:",
-    text: "celulares permitidos. Si no, las llamadas a celular terminan en CONGESTION («destino restringido»).",
+    text: "celulares permitidos. Si no, las llamadas a celular terminan en CONGESTION («destino restringido»). Qué opción de Límites lo permite lo decide el dueño de la cuenta o Anura.",
   },
   {
     title: "Configuración → Eventos → Agregar:",
-    text: "petición `POST`, `HTTPS`, el host de Kapta, puerto `443`, la ruta con el token que da Kapta (sin la barra inicial), tipo JSON, sin autenticación, y como cuerpo la plantilla que da Kapta.",
+    text: "un Nombre (por ejemplo «Kapta») y, en sus pestañas: Petición, `POST`, `HTTPS`, el host de Kapta, puerto `443` y la ruta con el token que da Kapta (sin la barra inicial); Encabezados, tipo JSON y sin autenticación; Cuerpo, la plantilla que da Kapta.",
   },
   {
     title: "En cada anexo, Eventos → Agregar tres veces con esa plantilla:",
-    text: "`START` («Se inicia una llamada»), `TALK` («La llamada es atendida») y `END` («Se finaliza una llamada»), dirección Ambas.",
+    text: "(Cuentas → anexo → Eventos) en «Ejecutar cuando», «Se inicia una llamada» (`START`), «La llamada es atendida» (`TALK`) y «Se finaliza una llamada» (`END`), cada uno con dirección «Entrante/Saliente».",
   },
 ];
 
 /** Lo que se hace en Kapta después de los pasos del panel de Anura. */
 export const ANURA_AFTER_PANEL_STEPS =
-  "Después, en Kapta, Ajustes › «Telefonía Anura»: el anexo de cada persona y una «Llamada de prueba».";
+  "Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la central, el anexo de cada persona con su usuario y contraseña SIP («Probar y guardar») y una «Llamada de prueba».";
 
 /** Sondeos seguidos que pueden fallar (red) antes de dejar de mirar una llamada. */
 export const ANURA_MAX_POLL_FAILURES = 6;
