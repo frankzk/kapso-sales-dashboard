@@ -5065,6 +5065,13 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   Un pendiente sin caso aparece en Todos, sin inventarle una llamada o decisión.
   Las cantidades de las tarjetas respetan tienda, búsqueda y exclusiones; la
   línea de la tabla indica cuántos se muestran respecto del total de la tienda.
+- **La dirección completa bajo el cliente (pedido del owner, 06-11-2026):**
+  debajo del nombre y del teléfono va la dirección del Master con su distrito
+  («Av. … · Ate») y, en otra línea, «Ref. …» si tiene referencia. Va entera, sin
+  cortar, en la tabla y en la lista del teléfono. Sin dirección dice «Sin
+  dirección · distrito». Antes solo se veía el distrito, y para saber si un
+  pedido podía salir sin llamar había que abrir la ficha. Se lee de
+  `order_master.address` y `reference`, junto con lo demás.
 - **Apartados operativos (28-10-2026, decisión del owner):** después de Todos
   aparecen Reprogramados, Programados para hoy, Programados para mañana, Nunca
   salieron, Ya salieron, Más de 30 días y Programados para después. Los seis

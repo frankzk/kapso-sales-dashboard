@@ -115,6 +115,9 @@ export interface LimaPendingOrder {
   programmedFor: string | null;
   /** Por dónde se generó (`order_master.sales_channel`, 0264); null sin calcular. */
   salesChannel: string | null;
+  /** La dirección de entrega y su referencia, tal como están en el Master. */
+  address: string | null;
+  reference: string | null;
 }
 
 // ---------------------------------------------------------------------------
