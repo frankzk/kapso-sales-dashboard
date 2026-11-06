@@ -8,6 +8,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
+import { DateRangePill, FacetPill } from "@/components/facet-pill";
 import { IconCheck, IconSearch, IconX } from "@/components/icons";
 import { OrderLink } from "@/components/order-link";
 import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
@@ -17,7 +18,7 @@ import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, pendingKey, pendingMatches, togglePendingKeys, type LimaAttentionFilter, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, readRowFilters, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
 
@@ -57,7 +58,22 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   const hiddenParam = searchParams.getAll("ocultar").join("|");
   const hidden = useMemo(() => new Set(hiddenParam ? hiddenParam.split("|") : []), [hiddenParam]);
   const pendingStore = useMemo(() => pending.filter((row) => !store || row.storeId === store), [pending, store]);
-  const scoped = useMemo(() => pendingStore.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [pendingStore, hidden, query]);
+  // Creación, Canal, Distrito y Courier (06-11-2026) recortan como Tienda: los
+  // chips, las tarjetas y la tabla. Viven en la URL, como las exclusiones.
+  // Solo sus parámetros: abrir la ficha cambia la URL y no debe rehacer la lista.
+  const rowFiltersKey = rowFiltersParam(searchParams);
+  const rowFilters = useMemo(() => readRowFilters(new URLSearchParams(rowFiltersKey)), [rowFiltersKey]);
+  const activeRowFilters = rowFiltersActive(rowFilters);
+  const narrowed = useMemo(() => activeRowFilters ? pendingStore.filter((row) => rowFiltersMatch(row, rowFilters)) : pendingStore, [pendingStore, rowFilters, activeRowFilters]);
+  // Cada píldora cuenta con las DEMÁS puestas: con «Antes de ayer o más», Canal
+  // dice cuántos de esos son de cada canal.
+  const filterOptions = useMemo(() => {
+    const without = (field: "channels" | "districts" | "couriers") => rowFilterOptions(
+      activeRowFilters ? pendingStore.filter((row) => rowFiltersMatch(row, { ...rowFilters, [field]: new Set<string>() })) : pendingStore,
+    )[field];
+    return { channels: without("channels"), districts: without("districts"), couriers: without("couriers") };
+  }, [pendingStore, rowFilters, activeRowFilters]);
+  const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
   const counts = useMemo(() => attentionCounts(scoped, data.rows, today), [scoped, data.rows, today]);
   const inQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
@@ -73,6 +89,12 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
     const params = new URLSearchParams(searchParams.toString());
     params.delete("ocultar");
     for (const key of [...next].sort()) params.append("ocultar", key);
+    replaceParams(params);
+  }
+
+  function patchRowFilters(next: Partial<LimaRowFilters>) {
+    const params = new URLSearchParams(searchParams.toString());
+    writeRowFilters(params, { ...rowFilters, ...next });
     replaceParams(params);
   }
 
@@ -250,7 +272,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
         ))}
       </div>
 
-      <LimaPendingFilters rows={pendingStore} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
+      <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
 
       {feedback && (
         <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
@@ -280,6 +302,13 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Pedido, cliente o teléfono" className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")} />
           </label>
           {data.stores.length > 1 && <FilterPill ref={storePill} label="Tienda" value={storeName} expanded={storeSheet} onClick={() => setStoreSheet((v) => !v)} onClear={() => setStore("")} />}
+          <DateRangePill label="Creación" from={rowFilters.createdFrom} to={rowFilters.createdTo} presets={createdPresets(today)} onChange={(createdFrom, createdTo) => patchRowFilters({ createdFrom, createdTo })} />
+          <FacetPill label="Canal" allLabel="Todos los canales" options={filterOptions.channels} selected={rowFilters.channels as Set<string>} onChange={(channels) => patchRowFilters({ channels })} />
+          <FacetPill label="Distrito" allLabel="Todos los distritos" options={filterOptions.districts} selected={rowFilters.districts as Set<string>} onChange={(districts) => patchRowFilters({ districts })} />
+          <FacetPill label="Courier" allLabel="Todos los couriers" options={filterOptions.couriers} selected={rowFilters.couriers as Set<string>} onChange={(couriers) => patchRowFilters({ couriers })} />
+          {activeRowFilters > 0 && (
+            <OpsButton variant="ghost" size="sm" onClick={() => patchRowFilters(emptyRowFilters())} className="pointer-coarse:h-11">Quitar filtros</OpsButton>
+          )}
           <div role="group" aria-label="Seguimiento de llamadas y cierres" className="flex flex-wrap items-center gap-1.5">
             {LIMA_FOLLOWUP_FILTERS.filter((f) => !retriesOnly && (counts[f.key] > 0 || list === f.key)).map((f) => (
               <ChoiceChip key={f.key} label={f.label} count={counts[f.key]} title={f.hint} active={list === f.key} onClick={() => chooseList(list === f.key ? "todos" : f.key)} />
@@ -306,7 +335,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             </div>
           </Sheet>
         )}
-        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} />
+        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} />
       </section>
 
       {open && sheetRow && (

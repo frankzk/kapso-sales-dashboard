@@ -3,7 +3,9 @@
 import { MACRO_SUBSTAGES_BY_STAGE, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
 import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
 import type { ReproList } from "@/lib/repro-lima";
-import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
+import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, limaDay, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
+import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
+import { courierDisplayName } from "@/lib/dispatched-with";
 
 export type LimaAttentionFilter = "todos" | "reintentos_aliclik" | "reprogramados" | QueueSegment | "llamar_despues" | "cerrados";
 type AttentionCase = {
@@ -19,7 +21,7 @@ export const LIMA_QUEUE_CARDS: readonly { key: Exclude<LimaAttentionFilter, "tod
   { key: "reprogramados", label: "Reprogramados", hint: "Con una nueva fecha acordada y vigente en Repro Lima. También aparecen en Hoy, Mañana o Después según esa fecha.", empty: "No hay pedidos con una nueva fecha acordada con estos filtros." },
   { key: "programados_hoy", label: "Programados para hoy", hint: QUEUE_SEGMENT_LABEL.programados_hoy.hint, empty: "No hay pedidos programados para hoy con estos filtros." },
   { key: "programados_manana", label: "Programados para mañana", hint: QUEUE_SEGMENT_LABEL.programados_manana.hint, empty: "No hay pedidos programados para mañana con estos filtros." },
-  { key: "nunca_salieron", label: "Nunca salieron", hint: QUEUE_SEGMENT_LABEL.nunca_salieron.hint, empty: "No hay pedidos recientes sin salida registrada con estos filtros." },
+  { key: "nunca_salieron", label: "Nunca salieron", hint: `${QUEUE_SEGMENT_LABEL.nunca_salieron.hint} Del más antiguo al más reciente: arriba lo que lleva más días esperando.`, empty: "No hay pedidos recientes sin salida registrada con estos filtros." },
   { key: "ya_salieron", label: "Ya salieron", hint: "Con al menos una salida a reparto registrada y sin una nueva fecha pendiente. La situación indica si sigue con el courier o ya retornó.", empty: "No hay pedidos con una salida previa y sin nueva fecha con estos filtros." },
   { key: "mas_de_30", label: "Más de 30 días", hint: QUEUE_SEGMENT_LABEL.mas_de_30.hint, empty: "No hay pedidos de más de 30 días sin salida registrada con estos filtros." },
   { key: "programados_despues", label: "Programados para después", hint: QUEUE_SEGMENT_LABEL.programados_despues.hint, empty: "No hay pedidos programados para después de mañana con estos filtros." },
@@ -57,7 +59,10 @@ export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly
       const segment = limaQueueSegment(row, today, c);
       return { row, segment, rank: QUEUE_SEGMENTS.indexOf(segment), day: limaScheduledFor(row, c) ?? "", created: Date.parse(row.createdAt ?? "") || 0 };
     }).filter((r) => filter === "todos" || r.segment === filter)
-      .sort((a, b) => a.rank - b.rank || a.day.localeCompare(b.day) || b.created - a.created)
+      // «Nunca salieron», del más antiguo al más reciente (owner, 06-11-2026):
+      // en un pico lo armado hace días se hundía al final y nadie lo llamaba.
+      // El resto, y Despacho del día (`sortQueue`, §29.13), siguen del más reciente.
+      .sort((a, b) => a.rank - b.rank || a.day.localeCompare(b.day) || (a.segment === "nunca_salieron" ? a.created - b.created : b.created - a.created))
       .map((r) => r.row);
   }
   const byId = new Map(rows.map((row) => [row.orderId, row]));
@@ -108,6 +113,143 @@ export interface LimaPendingOrder {
   hasPriorDispatch: boolean;
   lastDepartureAt: string | null;
   programmedFor: string | null;
+  /** Por dónde se generó (`order_master.sales_channel`, 0264); null sin calcular. */
+  salesChannel: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Los filtros de la barra, junto a Tienda (owner, 06-11-2026): los del Master
+// que sirven en Lima. Creación, Canal, Distrito y Courier. Vacíos, no filtran.
+
+export interface LimaRowFilters {
+  /** `YYYY-MM-DD` del día de creación en Lima, o vacío. */
+  createdFrom: string;
+  createdTo: string;
+  channels: ReadonlySet<string>;
+  districts: ReadonlySet<string>;
+  couriers: ReadonlySet<string>;
+}
+export type LimaFilterOption = { value: string; label: string; count: number };
+
+export const NO_COURIER = "sin_courier";
+export const NO_DISTRICT = "sin_distrito";
+const ROW_FILTER_PARAMS = { channels: "canal", districts: "distrito", couriers: "courier", createdFrom: "creado_desde", createdTo: "creado_hasta" } as const;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+export function emptyRowFilters(): LimaRowFilters {
+  return { createdFrom: "", createdTo: "", channels: new Set(), districts: new Set(), couriers: new Set() };
+}
+
+export function rowFiltersActive(f: LimaRowFilters): number {
+  return Number(Boolean(f.createdFrom || f.createdTo)) + Number(f.channels.size > 0) + Number(f.districts.size > 0) + Number(f.couriers.size > 0);
+}
+
+/** El mismo distrito escrito con o sin tilde o con otras mayúsculas es uno. */
+export function districtKey(district: string | null | undefined): string {
+  const key = (district ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  return key || NO_DISTRICT;
+}
+
+export function courierKey(courier: string | null | undefined): string {
+  return (courier ?? "").trim().toLowerCase() || NO_COURIER;
+}
+
+/** Sin canal calculado cuenta como «Sin marca», como en el Master. */
+export function channelKey(channel: string | null | undefined): string {
+  return channel || "otro";
+}
+
+export function rowFiltersMatch(row: LimaPendingOrder, f: LimaRowFilters): boolean {
+  if (f.createdFrom || f.createdTo) {
+    const day = limaDay(row.createdAt);
+    if (!day || (f.createdFrom && day < f.createdFrom) || (f.createdTo && day > f.createdTo)) return false;
+  }
+  if (f.channels.size && !f.channels.has(channelKey(row.salesChannel))) return false;
+  if (f.districts.size && !f.districts.has(districtKey(row.district))) return false;
+  if (f.couriers.size && !f.couriers.has(courierKey(row.courier))) return false;
+  return true;
+}
+
+function titleCase(value: string): string {
+  return value.toLocaleLowerCase("es").replace(/(^|[\s(/-])(\p{L})/gu, (_, sep: string, letter: string) => sep + letter.toLocaleUpperCase("es"));
+}
+
+/** Las opciones de cada píldora con su cantidad, sobre las filas que se le pasan. */
+export function rowFilterOptions(rows: readonly LimaPendingOrder[]): { channels: LimaFilterOption[]; districts: LimaFilterOption[]; couriers: LimaFilterOption[] } {
+  const channelCount = new Map<string, number>();
+  const courierCount = new Map<string, number>();
+  const district = new Map<string, { count: number; spellings: Map<string, number> }>();
+  for (const row of rows) {
+    const channel = channelKey(row.salesChannel);
+    channelCount.set(channel, (channelCount.get(channel) ?? 0) + 1);
+    const courier = courierKey(row.courier);
+    courierCount.set(courier, (courierCount.get(courier) ?? 0) + 1);
+    const key = districtKey(row.district);
+    const entry = district.get(key) ?? { count: 0, spellings: new Map<string, number>() };
+    entry.count += 1;
+    const spelled = titleCase((row.district ?? "").replace(/\s+/g, " ").trim());
+    if (spelled) entry.spellings.set(spelled, (entry.spellings.get(spelled) ?? 0) + 1);
+    district.set(key, entry);
+  }
+  // Las opciones fijas del Master, en su orden; un canal desconocido va al final.
+  const known = new Set<string>(SALES_CHANNEL_OPTIONS.map((o) => o.value));
+  const channels = [
+    ...SALES_CHANNEL_OPTIONS.map((o) => ({ value: o.value as string, label: o.label, count: channelCount.get(o.value) ?? 0 })),
+    ...[...channelCount.keys()].filter((v) => !known.has(v)).map((v) => ({ value: v, label: v, count: channelCount.get(v)! })),
+  ];
+  const districts = [...district.entries()].map(([value, { count, spellings }]) => ({
+    value,
+    // El nombre: la forma más escrita (con tilde si empata).
+    label: value === NO_DISTRICT ? "Sin distrito" : [...spellings.entries()].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0], "es"))[0]?.[0] ?? value,
+    count,
+  })).sort((a, b) => Number(a.value === NO_DISTRICT) - Number(b.value === NO_DISTRICT) || a.label.localeCompare(b.label, "es"));
+  const couriers = [...courierCount.entries()].map(([value, count]) => ({ value, label: value === NO_COURIER ? "Sin courier" : courierDisplayName(value), count }))
+    .sort((a, b) => Number(a.value === NO_COURIER) - Number(b.value === NO_COURIER) || b.count - a.count || a.label.localeCompare(b.label, "es"));
+  return { channels, districts, couriers };
+}
+
+/** De la URL: `canal`, `distrito` y `courier` se repiten; las fechas, una vez. */
+export function readRowFilters(params: Pick<URLSearchParams, "get" | "getAll">): LimaRowFilters {
+  const day = (value: string | null) => (value && ISO_DAY.test(value) ? value : "");
+  const set = (name: string) => new Set(params.getAll(name).filter(Boolean));
+  return {
+    createdFrom: day(params.get(ROW_FILTER_PARAMS.createdFrom)),
+    createdTo: day(params.get(ROW_FILTER_PARAMS.createdTo)),
+    channels: set(ROW_FILTER_PARAMS.channels),
+    districts: set(ROW_FILTER_PARAMS.districts),
+    couriers: set(ROW_FILTER_PARAMS.couriers),
+  };
+}
+
+export function writeRowFilters(params: URLSearchParams, f: LimaRowFilters): void {
+  for (const name of Object.values(ROW_FILTER_PARAMS)) params.delete(name);
+  if (f.createdFrom) params.set(ROW_FILTER_PARAMS.createdFrom, f.createdFrom);
+  if (f.createdTo) params.set(ROW_FILTER_PARAMS.createdTo, f.createdTo);
+  for (const [field, name] of [["channels", ROW_FILTER_PARAMS.channels], ["districts", ROW_FILTER_PARAMS.districts], ["couriers", ROW_FILTER_PARAMS.couriers]] as const) {
+    for (const value of [...f[field]].sort()) params.append(name, value);
+  }
+}
+
+/** Los parámetros de estos filtros, en orden estable: la clave de la lista. */
+export function rowFiltersParam(params: Pick<URLSearchParams, "get" | "getAll">): string {
+  const out = new URLSearchParams();
+  writeRowFilters(out, readRowFilters(params));
+  return out.toString();
+}
+
+function shiftIsoDay(day: string, delta: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y!, m! - 1, d! + delta)).toISOString().slice(0, 10);
+}
+
+/** Los atajos de «Creación»: lo de hoy, lo de ayer, la semana y lo que lleva días esperando. */
+export function createdPresets(today: string): { label: string; from: string; to: string }[] {
+  return [
+    { label: "Hoy", from: today, to: today },
+    { label: "Ayer", from: shiftIsoDay(today, -1), to: shiftIsoDay(today, -1) },
+    { label: "Últimos 7 días", from: shiftIsoDay(today, -6), to: today },
+    { label: "Antes de ayer o más", from: "", to: shiftIsoDay(today, -2) },
+  ];
 }
 export interface LimaPendingFilter {
   stage: LimaPendingStage;

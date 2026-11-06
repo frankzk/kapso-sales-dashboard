@@ -5033,6 +5033,24 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   conservan al abrir/cerrar la ficha; tienda y búsqueda se combinan con ellas.
   Las cantidades de los chips cuentan la tienda sin búsqueda ni exclusiones;
   las tarjetas y la tabla sí respetan las selecciones y la búsqueda.
+- **Filtros de la barra, junto a Tienda (pedido del owner, 06-11-2026):** los
+  filtros del Master que sirven en Lima, en las mismas píldoras
+  (`components/facet-pill.tsx`):
+  - **Creación**, con los atajos «Hoy», «Ayer», «Últimos 7 días» y «Antes de
+    ayer o más», y «Desde» y «Hasta». Mira el día de creación en Lima; un pedido
+    sin fecha de creación no entra en un rango.
+  - **Canal**, con las opciones fijas del Master (`sales_channel`, 0264). Un
+    pedido sin canal calculado cuenta como «Sin marca».
+  - **Distrito**. El mismo distrito con o sin tilde, o con otras mayúsculas, es
+    una sola opción, con el nombre más escrito.
+  - **Courier**, el vigente del Master, y «Sin courier».
+
+  Cada opción dice cuántos pedidos tiene con los demás filtros de la barra
+  puestos (con «Antes de ayer o más», Canal cuenta solo esos). Recortan como Tienda: los
+  chips, las tarjetas y la tabla. La línea de la tabla sigue diciendo el total
+  de la tienda. Viven en la URL (`creado_desde`, `creado_hasta`, `canal`,
+  `distrito`, `courier`) y se conservan al abrir y cerrar la ficha; «Quitar
+  filtros» los limpia. Solo leen: no cambian etapas ni casos.
 - **Contexto:** entrega fallida para la subetapa Por reprogramar Lima; antiguo
   por revisar si se creó hace más de 30 días o si Tanders sigue En tránsito
   con despacho anterior al corte del siguiente día hábil (§29.13); pendiente de primer despacho si
@@ -5069,6 +5087,18 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   porque una devolución puede limpiarlo. Si falla la lectura, se muestra el error
   y no cantidades parciales. Consultar estos apartados no programa, recibe,
   asigna ni modifica ningún pedido o salida. No requiere migraciones.
+- **«Nunca salieron», del más antiguo al más reciente (decisión del owner,
+  06-11-2026):** en Repro Lima ese apartado va al revés que en Grupo GF. Arriba
+  queda lo que lleva más días esperando; un pedido sin fecha de creación va
+  primero. En el pico del 06-11-2026 había 38 pedidos de Lima con rótulo y
+  sin tomar de antes de ayer, el más viejo del 23/10. Del más reciente al más
+  antiguo quedaban al final de la lista y nadie los llamaba. Lo antiguo se
+  gestiona aquí: se llama y, con «Confirma fecha · Grupo GF · Hoy», sube a
+  «Programados hoy» de Despacho del día. El orden vale en su tarjeta y dentro
+  de Todos; los demás apartados no cambian. **Despacho del día no cambia**
+  (§29.13): sigue del más reciente al más antiguo, porque saca lo reciente tal
+  cual y lo antiguo pasa antes por la llamada. Lo aplica `attentionRows`
+  (`lib/repro-lima-pending.ts`).
 - **Gestión (corrección del owner, 28-10-2026):** «Atender» abre siempre la
   hoja de llamada y programación/reprogramación, también desde Todos y para
   pendientes que nunca salieron. El código del pedido abre la ficha compartida.
@@ -15698,7 +15728,8 @@ lista (`sortQueue`):
    y filtra esos pedidos; al llegar su fecha pasan a «Programados hoy».
 3. **Nunca salieron** — nunca salieron a reparto (§29.2) y se crearon en los
    últimos 30 días. Es el apartado a dejar en cero, como «Sin llamar» en Por
-   confirmar; del más reciente al más antiguo.
+   confirmar; del más reciente al más antiguo. En Repro Lima va al revés
+   (§9.5, 06-11-2026): lo antiguo se llama allí antes de salir.
 4. **Ya salieron** — salieron al menos una vez y volvieron (chapa «ya salió»,
    que reemplaza a «salida previa»): reprogramaciones o recuperaciones.
 5. **+30 días** — nunca salieron y se crearon hace más de 30 días

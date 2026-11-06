@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { attentionCounts, attentionFilter, attentionRows, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, togglePendingKeys, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, readRowFilters, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
+import { sortQueue, type QueueRow } from "@/lib/dispatch-day";
 
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
 vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAliclikRetry: vi.fn(), dismissAliclikRetry: vi.fn() }));
@@ -21,7 +22,7 @@ const row = (overrides: Partial<LimaPendingOrder> = {}): LimaPendingOrder => ({
   orderId: "o1", storeId: "a", storeName: "Kenku", orderName: "#KP1", customerName: "María Pérez",
   customerPhone: "51912345678", district: "Lima", orderTotal: 149, createdAt: "2026-10-27T18:00:00Z",
   macroSince: "2026-10-27T18:00:00Z", stage: "preparacion", substage: "por_armar",
-  courier: null, dispatchedAt: null, attempts: 0, hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, ...overrides,
+  courier: null, dispatchedAt: null, attempts: 0, hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, salesChannel: "web_formulario", ...overrides,
 });
 const TODAY = "2026-10-28";
 
@@ -240,6 +241,26 @@ describe("apartados operativos de la misma cola", () => {
     expect(limaQueueSegment(r, "2026-10-31")).toBe("programados_manana");
     expect(limaQueueSegment(r, "2026-11-01")).toBe("programados_hoy");
   });
+  it("Nunca salieron va del más antiguo al más reciente, en su tarjeta y en Todos (owner, 06-11-2026)", () => {
+    const pico = [
+      row({ orderId: "hoy-1", createdAt: "2026-10-28T15:00:00Z" }),
+      row({ orderId: "hace-5-dias", createdAt: "2026-10-23T15:00:00Z" }),
+      row({ orderId: "ayer", createdAt: "2026-10-27T15:00:00Z" }),
+      row({ orderId: "volvio-ayer", createdAt: "2026-10-27T15:00:00Z", hasPriorDispatch: true }),
+      row({ orderId: "volvio-antes", createdAt: "2026-10-20T15:00:00Z", hasPriorDispatch: true }),
+      row({ orderId: "prog", createdAt: "2026-10-01T15:00:00Z", programmedFor: TODAY }),
+    ];
+    expect(attentionRows(pico, [], "nunca_salieron", TODAY).map((r) => r.orderId)).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
+    // En Todos el orden de los apartados no cambia; solo el de adentro de Nunca salieron.
+    expect(attentionRows(pico, [], "todos", TODAY).map((r) => r.orderId)).toEqual(["prog", "hace-5-dias", "ayer", "hoy-1", "volvio-ayer", "volvio-antes"]);
+    // Ya salieron sigue del más reciente al más antiguo.
+    expect(attentionRows(pico, [], "ya_salieron", TODAY).map((r) => r.orderId)).toEqual(["volvio-ayer", "volvio-antes"]);
+  });
+  it("solo Repro Lima cambia: Despacho del día sigue del más reciente al más antiguo (§29.13)", () => {
+    // Solo los campos que mira el orden; el resto de la fila no participa.
+    const q = (orderId: string, createdAt: string) => ({ orderId, createdAt, programmedFor: null, hasPriorDispatch: false, assignable: true }) as unknown as QueueRow;
+    expect(sortQueue([q("viejo", "2026-10-23T15:00:00Z"), q("nuevo", "2026-10-28T15:00:00Z")], TODAY).map((r) => r.orderId)).toEqual(["nuevo", "viejo"]);
+  });
   it("Más de 30 días es estricto y usa el día de creación en Lima", () => {
     expect(limaQueueSegment(row({ createdAt: "2026-09-28T04:59:59Z" }), TODAY)).toBe("mas_de_30");
     expect(limaQueueSegment(row({ createdAt: "2026-09-28T05:00:00Z" }), TODAY)).toBe("nunca_salieron");
@@ -262,5 +283,88 @@ describe("apartados operativos de la misma cola", () => {
     expect(attentionFilter("programados")).toBe("reprogramados");
     expect(attentionFilter("programados_manana")).toBe("programados_manana");
     expect(attentionFilter("llamar_despues")).toBe("llamar_despues");
+  });
+});
+
+describe("filtros de la barra junto a Tienda: Creación, Canal, Distrito y Courier (owner, 06-11-2026)", () => {
+  const f = (patch: Partial<ReturnType<typeof emptyRowFilters>> = {}) => ({ ...emptyRowFilters(), ...patch });
+  it("Creación usa el día de Lima y acepta solo un extremo", () => {
+    // 04:00 UTC del 28 es todavía el 27 en Lima.
+    const r = row({ createdAt: "2026-10-28T04:00:00Z" });
+    expect(rowFiltersMatch(r, f({ createdFrom: "2026-10-27", createdTo: "2026-10-27" }))).toBe(true);
+    expect(rowFiltersMatch(r, f({ createdFrom: "2026-10-28" }))).toBe(false);
+    expect(rowFiltersMatch(r, f({ createdTo: "2026-10-26" }))).toBe(false);
+    // Sin fecha de creación no entra en un rango de fechas.
+    expect(rowFiltersMatch(row({ createdAt: null }), f({ createdTo: TODAY }))).toBe(false);
+    expect(rowFiltersMatch(row({ createdAt: null }), f())).toBe(true);
+  });
+  it("los atajos de Creación: hoy, ayer, la semana y lo que lleva días", () => {
+    expect(createdPresets("2026-11-06")).toEqual([
+      { label: "Hoy", from: "2026-11-06", to: "2026-11-06" },
+      { label: "Ayer", from: "2026-11-05", to: "2026-11-05" },
+      { label: "Últimos 7 días", from: "2026-10-31", to: "2026-11-06" },
+      { label: "Antes de ayer o más", from: "", to: "2026-11-04" },
+    ]);
+    expect(createdPresets("2026-11-01")[1]).toEqual({ label: "Ayer", from: "2026-10-31", to: "2026-10-31" });
+  });
+  it("Canal sin calcular es «Sin marca»; Distrito une tildes y mayúsculas; Courier vacío es «Sin courier»", () => {
+    expect(rowFiltersMatch(row({ salesChannel: null }), f({ channels: new Set(["otro"]) }))).toBe(true);
+    expect(rowFiltersMatch(row({ salesChannel: "asesora" }), f({ channels: new Set(["web_formulario"]) }))).toBe(false);
+    expect(rowFiltersMatch(row({ district: "San Martin de Porres " }), f({ districts: new Set(["san martin de porres"]) }))).toBe(true);
+    expect(rowFiltersMatch(row({ district: "SAN MARTÍN DE PORRES" }), f({ districts: new Set(["san martin de porres"]) }))).toBe(true);
+    expect(rowFiltersMatch(row({ courier: null }), f({ couriers: new Set(["sin_courier"]) }))).toBe(true);
+    expect(rowFiltersMatch(row({ courier: "propio" }), f({ couriers: new Set(["aliclik"]) }))).toBe(false);
+  });
+  it("las opciones llevan su cantidad, con el nombre más escrito y el del courier", () => {
+    const rows = [
+      row({ orderId: "1", district: "San Martín de Porres", courier: "propio", salesChannel: "asesora" }),
+      row({ orderId: "2", district: "san martin de porres", courier: "propio" }),
+      row({ orderId: "3", district: "San Martín de Porres", courier: null }),
+      row({ orderId: "4", district: null, courier: "aliclik", salesChannel: null }),
+    ];
+    const o = rowFilterOptions(rows);
+    expect(o.districts).toEqual([
+      { value: "san martin de porres", label: "San Martín De Porres", count: 3 },
+      { value: "sin_distrito", label: "Sin distrito", count: 1 },
+    ]);
+    expect(o.couriers).toEqual([
+      { value: "propio", label: "Grupo GF", count: 2 },
+      { value: "aliclik", label: "Aliclik", count: 1 },
+      { value: "sin_courier", label: "Sin courier", count: 1 },
+    ]);
+    // Las opciones fijas del Master, en su orden, también con cero.
+    expect(o.channels.map((c) => [c.value, c.count])).toEqual([["web_formulario", 2], ["web_carrito", 0], ["asesora", 1], ["chatbot", 0], ["bot_carritos", 0], ["catalogo", 0], ["otro", 1]]);
+  });
+  it("viven en la URL; una fecha mal escrita se ignora y la ficha no cambia la clave", () => {
+    const params = new URLSearchParams("atencion=nunca_salieron&ficha=o1");
+    writeRowFilters(params, f({ createdTo: "2026-11-04", districts: new Set(["ate", "callao"]), channels: new Set(["asesora"]) }));
+    expect(params.get("atencion")).toBe("nunca_salieron");
+    const back = readRowFilters(params);
+    expect(back.createdTo).toBe("2026-11-04");
+    expect([...back.districts]).toEqual(["ate", "callao"]);
+    expect(readRowFilters(new URLSearchParams("creado_desde=ayer")).createdFrom).toBe("");
+    expect(rowFiltersParam(new URLSearchParams(`${params}&ficha=o2`))).toBe(rowFiltersParam(params));
+  });
+  it("en el tablero: las cuatro píldoras junto a Tienda y la lista recortada por la URL", () => {
+    const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }, { id: "b", name: "Aurela" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const pending = [row({ orderId: "o1", orderName: "#KP1", district: "Ate" }), row({ orderId: "o2", orderName: "#KP2", district: "Callao" })];
+    nav.search = "";
+    let html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+    const at = (label: string) => html.indexOf(`>${label}<`);
+    expect(at("Tienda")).toBeGreaterThan(0);
+    for (const label of ["Creación", "Canal", "Distrito", "Courier"]) expect(at(label)).toBeGreaterThan(at("Tienda"));
+    expect(html).not.toContain("Quitar filtros");
+    nav.search = "distrito=ate";
+    html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+    expect(html).toContain("#KP1");
+    expect(html).not.toContain("#KP2");
+    expect(html).toContain("Quitar filtros");
+    // Cada píldora cuenta con las demás puestas (la hoja se abre al tocarla;
+    // aquí se comprueba la regla con la función que usa el tablero).
+    const conDistrito = pending.filter((r) => rowFiltersMatch(r, { ...emptyRowFilters(), districts: new Set(["ate"]) }));
+    expect(rowFilterOptions(conDistrito).channels.find((c) => c.value === "web_formulario")?.count).toBe(1);
+    // El total de la línea sigue siendo el de la tienda.
+    expect(html).toMatch(/<b[^>]*>1<\/b> de 2 pendientes de entrega/);
+    nav.search = "";
   });
 });

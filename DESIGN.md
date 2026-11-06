@@ -435,7 +435,12 @@ fondo y borde azul del Master. Una macroetapa parcial lleva «−» y
 `aria-pressed="mixed"`; «Todos» restaura la selección. Los chips se acomodan
 en varias líneas en el teléfono, mantienen objetivos táctiles de 44 px y no
 provocan desplazamiento horizontal. La búsqueda y la tienda siguen en la barra
-de trabajo.
+de trabajo. Desde el 06-11-2026, a su lado y en este orden, las píldoras del
+Master: «Creación» (`DateRangePill`: los atajos como botones secundarios, el
+elegido en primario, y debajo «Desde» y «Hasta» en dos columnas), «Canal»,
+«Distrito» y «Courier» (`FacetPill`, cada opción con su cantidad). Con alguna
+puesta aparece «Quitar filtros» como botón fantasma. En el teléfono se acomodan
+en varias líneas.
 
 Una sola tabla para Todos y para los filtros de atención. «Todos · por entregar»
 es la primera tarjeta y queda activa al entrar, también desde enlaces guardados
