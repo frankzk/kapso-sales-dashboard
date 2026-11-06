@@ -51,7 +51,7 @@ import {
   type ShalomClient,
 } from "@/lib/shalom/client";
 import {
-  clearSession,
+  clearRejectedSession,
   clientFor,
   configurationBlocker,
   isConfigured,
@@ -66,6 +66,9 @@ import {
   documentError,
   generatePickupCode,
   shalomSoftBlockers,
+  shalomDraftWarnings,
+  shalomNotePaymentLine,
+  msUntilSessionStale,
   MIN_OVERRIDE_REASON,
   normalizeDocument,
   splitReceiverName,
@@ -101,6 +104,15 @@ export interface ShalomDraftView {
   configured: boolean;
   /** true → hay token `ssk_` vigente: las llamadas siguientes son rápidas. */
   sessionReady: boolean;
+  /**
+   * Cuánto le queda a ese token, en milisegundos y con el margen de
+   * `sessionIsFresh`, medido con el reloj DEL SERVIDOR; null si no hay sesión.
+   * Dura 2 h y el modal puede quedarse abierto más. Viaja como duración y no
+   * como hora (`shalom_session_expires_at`) porque el modal no puede comparar
+   * una hora del servidor con el reloj del equipo: adelantado, daba la sesión
+   * por vencida antes de tiempo, o nunca por viva (`msUntilSessionStale`).
+   */
+  sessionMsLeft: number | null;
   originTerminalId: number | null;
   originTerminalName: string | null;
   defaultProductId: number | null;
@@ -121,9 +133,9 @@ export interface ShalomDraftView {
   prefilledTerminalName: string | null;
   /**
    * La nota del pedido de Shopify, tal cual. Viaja hasta acá porque es donde
-   * hace falta: el aviso de abajo dice que el documento «el pedido no lo trae»,
-   * y en la práctica muchas veces SÍ lo trae — escrito a mano en la nota, junto
-   * con la agencia. Sin esto había que abrir el admin de Shopify en otra pestaña
+   * hace falta: cuando nadie apuntó el DNI, el aviso dice que el documento «el
+   * pedido no lo trae», y en la práctica muchas veces SÍ lo trae — escrito a
+   * mano en la nota, junto con la agencia. Sin esto había que abrir el admin de Shopify en otra pestaña
    * para leer un dato que ya estaba en la base.
    *
    * No se interpreta: ni se extrae el DNI ni se preselecciona la agencia. Lo
@@ -131,6 +143,14 @@ export interface ShalomDraftView {
    * el «casi» es emitir una guía a nombre de quien no es.
    */
   shopifyNote: string | null;
+  /**
+   * Bajo la nota, en verde: «El adelanto ya está validado (S/ …)…» cuando el
+   * cobro ya cumple lo que pide Shalom (`shalomNotePaymentLine`). La nota de
+   * COD Core «pedir el pago por adelantado» se leía como pendiente con el
+   * adelanto ya validado (#KP202968). Null si no hay nota, si el adelanto
+   * todavía falta o si hay un bloqueo duro (p. ej. la lista de pago adelantado).
+   */
+  notePaymentLine: string | null;
   /** Clave de recojo generada en el servidor. Solo viaja si el rol puede verla. */
   pickupCode: string | null;
   /** Motivos para NO crear la guía todavía. Imposibles: no se saltan. */
@@ -212,7 +232,7 @@ async function outputWasFilled(
  */
 export async function connectShalomSession(
   storeId: string,
-): Promise<{ expiresAt: string } | { error: string }> {
+): Promise<{ expiresAt: string; msLeft: number } | { error: string }> {
   const perms = await getMasterPermissions();
   if (!perms.can("shalom.create_guide")) return { error: "Tu rol no permite crear guías Shalom." };
   if (!(await authorizeStore(storeId))) return { error: "Sin acceso a esta tienda." };
@@ -225,7 +245,11 @@ export async function connectShalomSession(
 
   try {
     const res = await mintSession(admin, storeId, s);
-    return "error" in res ? { error: res.error } : { expiresAt: res.expiresAt };
+    // `msLeft` con el reloj del servidor, igual que `sessionMsLeft` del borrador:
+    // el modal la cuenta desde que la recibe y no mira la hora.
+    return "error" in res
+      ? { error: res.error }
+      : { expiresAt: res.expiresAt, msLeft: msUntilSessionStale(res.expiresAt) };
   } catch (err) {
     return { error: describeShalomError(err) };
   }
@@ -281,20 +305,16 @@ export async function loadShalomDraft(
   // Todo lo que impide la contingencia impide con más razón crear por API.
   blockers.push(...contingencyBlockers);
 
-  // Shalom identifica al destinatario por documento y el pedido no lo trae:
-  // Shopify no pide DNI. Es el único dato que el operador escribe siempre.
-  warnings.push(
-    "Shalom exige el documento del destinatario y el pedido no lo trae: pídeselo al cliente antes de crear la guía.",
-  );
+  // La lista de pago adelantado (MOM §41): la MISMA comprobación que hace
+  // `createShalomGuide`, que es de solo lectura. Sin ella el modal decía que
+  // el pago ya estaba y habilitaba el botón, y el servidor rechazaba al pulsar.
+  // No va a `contingencyBlockers`: la vinculación manual no la mira.
+  const prepayBlock = await prepayGuideBlock(admin, row as unknown as PrepayOrderRow);
+  if (prepayBlock) blockers.push(prepayBlock);
 
-  // Faltar el adelanto frena de forma blanda (ver `shalomSoftBlockers`); tenerlo
-  // cargado pero sin validar es solo un trámite pendiente y se queda en aviso.
+  // Sin el adelanto validado —sin comprobante o con uno cargado sin validar—
+  // frena de forma blanda (ver `shalomSoftBlockers`): se salta con un motivo.
   const softBlockers = shalomSoftBlockers(row.payment_state);
-  if (row.payment_state !== "sin_pago" && row.payment_state !== "pago_completo") {
-    warnings.push(
-      "El pedido todavía no tiene el pago completo validado. La guía se puede crear igual, pero la clave de recojo seguirá bloqueada hasta que se valide.",
-    );
-  }
 
   const split = splitReceiverName(row.customer_name);
 
@@ -313,12 +333,37 @@ export async function loadShalomDraft(
     destiny_terminal_name: string | null;
   } | null;
 
-  if (prefilled?.document) {
-    warnings.push(
-      // Ya no solo desde el registro del pago: en un pedido pagado por web se
-      // apuntan en «DNI y agencia Shalom» de la tarjeta de Cobro.
-      `El documento y la agencia venían apuntados en «DNI y agencia Shalom» (${prefilled.document}${prefilled.destiny_terminal_name ? ` · ${prefilled.destiny_terminal_name}` : ""}). Verifícalos antes de crear.`,
+  // Los avisos ámbar salen de una función pura y testeada. Con un bloqueo duro
+  // no sale ninguno; el de «el pedido no trae el documento» solo va si nadie lo
+  // dejó apuntado.
+  const blocked = blockers.length > 0;
+  warnings.push(
+    ...shalomDraftWarnings({
+      paymentState: row.payment_state,
+      prefilledDocument: prefilled?.document ?? null,
+      prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
+      blocked,
+    }),
+  );
+
+  // Lo validado, para la línea bajo la nota del pedido. Solo se pide cuando la
+  // línea va a salir —hay nota, el adelanto está validado y nada bloquea—: es
+  // una lectura opcional y, si falla, la línea sale sin el importe.
+  const shopifyNote = shopifyOrderNote((orderRaw as { raw?: unknown } | null)?.raw);
+  let notePaymentLine: string | null = null;
+  if (shopifyNote && !blocked && softBlockers.length === 0) {
+    const { data: paid } = await admin
+      .from("order_payments")
+      .select("amount")
+      .eq("order_id", orderId)
+      .eq("store_id", row.store_id)
+      .eq("validation_status", "validado")
+      .in("kind", ["adelanto", "diferencia", "total"]);
+    const validated = ((paid ?? []) as { amount: number | string | null }[]).reduce(
+      (sum, p) => sum + (Number(p.amount) || 0),
+      0,
     );
+    notePaymentLine = shalomNotePaymentLine(row.payment_state, validated, blocked);
   }
 
   // La clave se genera en el servidor y NO viaja al cliente salvo que el rol ya
@@ -326,15 +371,18 @@ export async function loadShalomDraft(
   // necesita conocerla — se revela desde la salida Shalom, con auditoría.
   const pickupCode = generatePickupCode();
 
+  const sessionReady = Boolean(
+    store && sessionIsFresh(store.shalom_session_expires_at) && store.shalom_session_token_enc,
+  );
+
   return {
     draft: {
       orderId,
       storeId: row.store_id,
       orderName: row.order_name,
       configured,
-      sessionReady: Boolean(
-        store && sessionIsFresh(store.shalom_session_expires_at) && store.shalom_session_token_enc,
-      ),
+      sessionReady,
+      sessionMsLeft: sessionReady ? msUntilSessionStale(store?.shalom_session_expires_at) : null,
       originTerminalId: store?.shalom_origin_terminal_id ?? null,
       originTerminalName: store?.shalom_origin_terminal_name ?? null,
       defaultProductId: store?.shalom_default_product_id ?? null,
@@ -346,7 +394,8 @@ export async function loadShalomDraft(
       receiverPhone: row.customer_phone,
       prefilledDocumentType: (prefilled?.document_type as ShalomDocumentType | null) ?? null,
       prefilledDocument: prefilled?.document ?? null,
-      shopifyNote: shopifyOrderNote((orderRaw as { raw?: unknown } | null)?.raw),
+      shopifyNote,
+      notePaymentLine,
       prefilledTerminalId: prefilled?.destiny_terminal_id ?? null,
       prefilledTerminalName: prefilled?.destiny_terminal_name ?? null,
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,
@@ -597,6 +646,8 @@ export async function createShalomGuide(
   /** Shalom no vuela entre el origen y esa agencia: el modal desmarca y bloquea
    *  la vía aérea para que el siguiente intento salga por tierra. */
   airRouteRejected?: boolean;
+  /** La sesión de Shalom no está o venció: el modal vuelve a pedir conectar. */
+  sessionExpired?: boolean;
 }> {
   const perms = await getMasterPermissions();
   if (!perms.can("shalom.create_guide")) return { error: "Tu rol no permite crear guías Shalom." };
@@ -672,6 +723,7 @@ export async function createShalomGuide(
       return {
         error:
           "No hay sesión de Shalom activa. Pulsa «Conectar con Shalom» y vuelve a intentarlo (la conexión tarda hasta 2 minutos la primera vez).",
+        sessionExpired: true,
       };
     }
     client = made.client;
@@ -717,8 +769,10 @@ export async function createShalomGuide(
     } else {
       const shalomErr = err instanceof ShalomApiError ? err : null;
       // Un token vencido no es un fallo de datos: se limpia la caché para que
-      // el siguiente intento vuelva a conectar en vez de repetir el 401.
-      if (shalomErr?.isShalomAuth) await clearSession(admin, row.store_id);
+      // el siguiente intento vuelva a conectar en vez de repetir el 401. De
+      // TODAS las tiendas que guardan ese token: si quedara en una hermana,
+      // «Conectar con Shalom» lo copiaría de vuelta (`clearRejectedSession`).
+      if (shalomErr?.isShalomAuth) await clearRejectedSession(admin, row.store_id, s);
       const described = describeShalomError(err);
       // Sin vuelo en esa ruta (MOM §12, 04-11-2026). El 400 no creó nada, así
       // que reintentar por tierra es seguro; lo decide quien despacha con un
@@ -729,7 +783,9 @@ export async function createShalomGuide(
           airRouteRejected: true,
         };
       }
-      return { error: described };
+      return shalomErr?.isShalomAuth
+        ? { error: described, sessionExpired: true }
+        : { error: described };
     }
   }
 

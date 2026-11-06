@@ -18,6 +18,10 @@ import {
   needsCustomDimensions,
   pickupCodeError,
   preferredShalomProductId,
+  sessionStaleAt as staleAtFrom,
+  sessionTimerDelay,
+  shalomSubmitMissing,
+  MIN_OVERRIDE_REASON,
   shalomAirRoute,
   defaultAirChoice,
   effectiveAirRoute,
@@ -66,8 +70,16 @@ export function ShalomGuideModal({
   const [draft, setDraft] = useState<ShalomDraftView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Sesión
-  const [sessionReady, setSessionReady] = useState(false);
+  // Sesión. Se guarda CUÁNDO vence, no un «sí/no»: dura 2 h y el modal puede
+  // seguir abierto después. Al vencer, el modal lo dice y vuelve a ofrecer
+  // «Conectar con Shalom» en vez de dejar un botón que falla al pulsarlo.
+  // El instante es del reloj del navegador, pero sale de la DURACIÓN que dio
+  // el servidor (`sessionMsLeft`/`msLeft`), contada desde que llegó: un reloj
+  // del equipo adelantado no puede dar por vencida una sesión viva.
+  const [sessionStaleAt, setSessionStaleAt] = useState<number | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [sessionCheck, setSessionCheck] = useState(0);
+  const sessionReady = sessionStaleAt != null && !sessionExpired;
   const [connecting, setConnecting] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
@@ -103,6 +115,10 @@ export function ShalomGuideModal({
 
   const [quote, setQuote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // El error rojo de abajo vino de la sesión («No hay sesión de Shalom
+  // activa…» o Shalom rechazando el token): al reconectar se borra, para que
+  // no siga diciendo que no hay sesión debajo de «✓ Conectado».
+  const errorFromSession = useRef(false);
   const [created, setCreated] = useState<{ notice: string; code: string } | null>(null);
   const [pending, start] = useTransition();
 
@@ -129,7 +145,7 @@ export function ShalomGuideModal({
       }
       const d = res.draft;
       setDraft(d);
-      setSessionReady(d.sessionReady);
+      setSessionStaleAt(d.sessionReady ? staleAtFrom(d.sessionMsLeft, Date.now()) : null);
       setAgencyQuery(d.agencyQuery);
       setName(d.receiverName);
       setLastName(d.receiverLastName);
@@ -178,6 +194,23 @@ export function ShalomGuideModal({
 
   const storeId = draft?.storeId ?? null;
 
+  // ── Vencimiento de la sesión ──────────────────────────────────────────────
+  // Un temporizador hasta el instante en que el servidor dejaría de darla por
+  // buena (con el margen de `sessionIsFresh`). Al dispararse vuelve a mirar en
+  // vez de darla por vencida a ciegas: el plazo va acotado a lo que acepta
+  // `setTimeout` (`sessionTimerDelay`). Si el equipo se durmió, llega tarde, y
+  // ahí no frena nada: el servidor decide y devuelve `sessionExpired`.
+  useEffect(() => {
+    if (sessionStaleAt == null || sessionExpired) return;
+    const delay = sessionTimerDelay(sessionStaleAt, Date.now());
+    if (delay <= 0) {
+      setSessionExpired(true);
+      return;
+    }
+    const t = setTimeout(() => setSessionCheck((n) => n + 1), delay);
+    return () => clearTimeout(t);
+  }, [sessionStaleAt, sessionExpired, sessionCheck]);
+
   // ── Búsqueda de agencias (con rebote: el rate limit son 60/min) ───────────
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -195,6 +228,7 @@ export function ShalomGuideModal({
         if (cancelled) return;
         setAgencySearching(false);
         if ("error" in res) {
+          errorFromSession.current = false;
           setError(res.error);
           return;
         }
@@ -230,7 +264,12 @@ export function ShalomGuideModal({
         setSessionError(res.error);
         return;
       }
-      setSessionReady(true);
+      setSessionStaleAt(staleAtFrom(res.msLeft, Date.now()));
+      setSessionExpired(false);
+      if (errorFromSession.current) {
+        errorFromSession.current = false;
+        setError(null);
+      }
     });
   }, [storeId]);
 
@@ -318,22 +357,35 @@ export function ShalomGuideModal({
   // Freno blando: deshabilita, pero se levanta escribiendo un motivo. El mínimo
   // existe porque "ok" o "." no explican nada a quien lea esto en un mes.
   const soft = draft?.softBlockers ?? [];
-  const softHeld = soft.length > 0 && overrideReason.trim().length < 10;
-  const canSubmit = Boolean(
-    draft &&
-      !blocked &&
-      !softHeld &&
-      sessionReady &&
-      agency &&
-      productId &&
-      documentValue.trim() &&
-      !docErr &&
-      !keyErr &&
-      name.trim() &&
-      phone.trim() &&
-      !pending &&
-      !created,
-  );
+  const softHeld = soft.length > 0 && overrideReason.trim().length < MIN_OVERRIDE_REASON;
+  // Lo que falta para poder pulsar «Crear guía», en palabras. Es LA condición
+  // del botón (shalomSubmitMissing): si se dice, es porque frena; si frena, se
+  // dice. En #KP202968 el botón estaba gris sin decir por qué y la operadora lo
+  // atribuyó al aviso del pago, que no frenaba nada.
+  // Los bultos tal como se mandan (`submit`): lo que se valida es lo que sale.
+  const quantityToSend = Number(quantity) || 1;
+  const missing = shalomSubmitMissing({
+    loaded: Boolean(draft),
+    blockers: draft?.blockers ?? [],
+    softBlockers: soft,
+    overrideReason,
+    sessionReady,
+    sessionExpired,
+    originTerminalId: draft?.originTerminalId ?? null,
+    destinyTerminalId: agency?.id ?? null,
+    productId,
+    quantity: quantityToSend,
+    documentType,
+    document: documentValue,
+    name,
+    lastName,
+    phone,
+    pickupCodeError: keyErr,
+    pending,
+    created: Boolean(created),
+  });
+  const canSubmit = missing.length === 0;
+  const showMissing = !pending && !created && missing.length > 0;
 
   function submit() {
     if (!agency || !productId) return;
@@ -352,7 +404,7 @@ export function ShalomGuideModal({
         destinyTerminalId: agency.id,
         destinyTerminalName: agency.nombre,
         productId,
-        quantity: Number(quantity) || 1,
+        quantity: quantityToSend,
         payer,
         declaracionJurada: declaracion,
         documentType,
@@ -367,6 +419,9 @@ export function ShalomGuideModal({
         ...(canSeeKey && pickupCode ? { pickupCode } : {}),
       });
       if (res.error) {
+        // La sesión la juzga el servidor; el modal solo le hace caso.
+        if (res.sessionExpired) setSessionExpired(true);
+        errorFromSession.current = Boolean(res.sessionExpired);
         if (res.airRouteRejected) {
           const rejectedId = agency.id;
           setAirRejected((prev) => new Set(prev).add(rejectedId));
@@ -375,6 +430,7 @@ export function ShalomGuideModal({
         setError(res.error);
         return;
       }
+      errorFromSession.current = false;
       setError(null);
       setCreated({ notice: res.notice ?? "", code: res.guideCode ?? "" });
       onCreated();
@@ -473,7 +529,7 @@ export function ShalomGuideModal({
                   />
                   {softHeld && (
                     <span className="mt-1 block text-xs text-red-700">
-                      Escribe al menos 10 caracteres para poder crear la guía.
+                      Escribe al menos {MIN_OVERRIDE_REASON} caracteres para poder crear la guía.
                     </span>
                   )}
                 </label>
@@ -665,6 +721,12 @@ export function ShalomGuideModal({
                     </p>
                   ) : (
                     <div className="space-y-2">
+                      {sessionExpired && (
+                        <p className="text-xs font-medium text-amber-800">
+                          La sesión de Shalom venció: vuelve a conectar. Lo que ya llenaste se
+                          conserva.
+                        </p>
+                      )}
                       <p className="text-xs text-slate-600">
                         Hay que conectar la cuenta de Shalom Pro antes de crear la guía.{" "}
                         <strong>La primera conexión tarda hasta 2 minutos</strong> porque Shalom hace
@@ -805,24 +867,36 @@ export function ShalomGuideModal({
 
                 {/* LA NOTA DEL PEDIDO, justo encima del destinatario.
                     Va ACÁ y no al principio del modal a propósito: el documento
-                    y la agencia son lo que más veces lleva escrito, y el aviso
-                    de arriba dice que «el pedido no lo trae». Muchas veces sí lo
-                    trae, y hasta ahora había que abrir el admin de Shopify en
-                    otra pestaña para leerlo.
+                    y la agencia son lo que más veces lleva escrito, justo antes
+                    de los campos donde se copian. Cuando nadie apuntó el DNI, el
+                    aviso de arriba dice que «el pedido no lo trae», y muchas
+                    veces la nota sí lo trae; antes había que abrir el admin de
+                    Shopify en otra pestaña para leerlo.
 
                     Se muestra tal cual y no se rellena nada solo: lo escribe una
                     persona distinta cada vez —«dni 42771213», «DNI: 42771213»,
                     o el documento de quien pagó, que no es el destinatario— y
                     una regla que acierte «casi siempre» aquí significa emitir
                     una guía a nombre de quien no es. Lee y decide el operador. */}
+                {/* Neutra, no ámbar: es una nota de la operación, no un motivo de
+                    bloqueo (DESIGN.md). En ámbar, «pedir el pago por adelantado»
+                    se leyó como un pendiente con el adelanto ya validado. */}
                 {draft.shopifyNote && (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3">
-                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-800">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-600">
                       Nota del pedido
                     </p>
                     <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">
                       {draft.shopifyNote}
                     </p>
+                    {/* La nota no se oculta —puede traer el DNI o la agencia—,
+                        pero si pide cobrar por adelantado y eso ya se hizo, se
+                        dice (#KP202968, shalomNotePaymentLine). */}
+                    {draft.notePaymentLine && (
+                      <p className="mt-2 rounded-md bg-emerald-50 px-2 py-1.5 text-xs text-emerald-800">
+                        ✓ {draft.notePaymentLine}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1032,6 +1106,26 @@ export function ShalomGuideModal({
                   en Shalom antes de dar nada por perdido.
                 </p>
 
+                {/* Por qué el botón está gris, justo encima de él. Las mismas
+                    razones que lo deshabilitan (shalomSubmitMissing). Es un
+                    motivo de bloqueo: aviso `warn` con título en ámbar y el
+                    cuerpo en tinta (DESIGN.md, Tono Emparejado). */}
+                {showMissing && (
+                  <div
+                    id="shalom-submit-missing"
+                    className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2"
+                  >
+                    <p className="text-xs font-semibold text-amber-800">
+                      Para poder crear la guía:
+                    </p>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-slate-800">
+                      {missing.map((m) => (
+                        <li key={m}>{m}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-1">
                   <button onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-slate-600">
                     Cancelar
@@ -1039,6 +1133,7 @@ export function ShalomGuideModal({
                   <button
                     onClick={submit}
                     disabled={!canSubmit}
+                    aria-describedby={showMissing ? "shalom-submit-missing" : undefined}
                     className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
                   >
                     {pending ? "Creando…" : "Crear guía"}
