@@ -14274,6 +14274,19 @@ entregada no cuenta como activa.
   «Preparación · Por armar»: imprimirla **es** reprogramar, por eso se hace
   después de la llamada. La ficha lo dice en «Próxima acción» y ofrece
   «Imprimir rótulo de la salida nueva».
+- **El botón también está en la tarjeta de Grupo GF de la mesa de ruta
+  (06-11-2026, owner con #KP200684: «¿por qué no estaría dentro de Grupo GF
+  Courier?»).** Grupo GF no tiene guía propia: imprimir ese rótulo **es**
+  preparar su salida, y la mesa de ruta es donde se decide con quién sale.
+  Antes la tarjeta solo ofrecía «Ver en Grupo GF», que llevaba a Despacho del
+  día, donde el pedido no aparecía todavía (sin salida nueva, un «Por
+  reprogramar Lima» espera el acuerdo de Repro Lima). Ahora, sin salida nueva,
+  su botón es «Imprimir rótulo de la salida nueva» (la misma acción, con el
+  mismo permiso de editar el pedido) y dice qué sigue: Almacén la arma desde
+  stock y en Despacho del día se asigna al motorizado. Con la «por definir» ya
+  rotulada, la tarjeta la nombra («Salida lista · KP200684-S02») con
+  «Reimprimir rótulo», y «Ver en Grupo GF» lleva a Despacho del día, donde ya
+  está. El botón sigue también en «Situación» y en «Salidas y guías».
 - Una «por definir» **anulada** conserva la custodia `empresa`, pero no se
   reimprime: pedir el rótulo otra vez crea una nueva (antes reimprimía la
   anulada). Lo mismo una entregada o `transferido` —la madre de un reenvío

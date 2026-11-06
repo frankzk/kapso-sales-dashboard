@@ -45,6 +45,7 @@ export function OrderRouteDesk({
   onSelect,
   aliclikOutlook,
   storeName,
+  groupGf,
 }: {
   plan: OrderRoutePlan;
   /**
@@ -63,6 +64,21 @@ export function OrderRouteDesk({
   /** Cuántas guías de Aliclik se entregan según los días del pedido (09-10-2026). */
   aliclikOutlook?: AliclikOutlook | null;
   storeName?: string | null;
+  /**
+   * Grupo GF en un no entregado de Lima (MOM §28, 06-11-2026, owner con
+   * #KP200684: «¿por qué no estaría dentro de Grupo GF Courier?»). Grupo GF no
+   * tiene guía propia: imprimir el rótulo de la salida nueva ES preparar su
+   * salida, así que la acción vive en su tarjeta y no solo en «Salidas y
+   * guías». Antes «Ver en Grupo GF» llevaba a Despacho del día, donde el pedido
+   * no aparecía hasta tener esa salida.
+   *
+   * `printNew`: todavía no hay salida nueva; imprimir su rótulo la crea.
+   * `ready`: la «por definir» ya rotulada, que Grupo GF toma con su mismo QR.
+   */
+  groupGf?: {
+    printNew?: { onPrint: () => void; pending: boolean } | null;
+    ready?: { outputCode: string | null; labelHref: string } | null;
+  };
 }) {
   const blockers = gate?.blockers ?? [];
   const blockedActions = new Set(gate?.blockedActions ?? []);
@@ -79,6 +95,11 @@ export function OrderRouteDesk({
     // «Sugerido» solo cuando se puede tomar: con el pedido cerrado la
     // tarjeta dice «Reabrir primero» y una recomendación ahí confunde.
     const suggested = route.recommended && enabled;
+    // Grupo GF en un no entregado de Lima: primero el rótulo de la salida
+    // nueva, que es lo que Almacén pega en la caja. Lo permite editar el
+    // pedido, no el permiso de Despacho GF, así que no depende de `enabled`.
+    const gfPrint = route.key === "propio" && !closed && route.availability !== "blocked" ? groupGf?.printNew ?? null : null;
+    const gfReady = route.key === "propio" && !gfPrint ? groupGf?.ready ?? null : null;
     return (
       <article
         key={route.key}
@@ -139,6 +160,30 @@ export function OrderRouteDesk({
         <p className={cn("mt-3 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-500" : "text-ink-700")}>
           {route.reason}
         </p>
+        {gfPrint && (
+          <p className="mt-2 text-[13px] leading-5 text-ink-600">
+            Primero el rótulo: crea la salida nueva, Almacén la arma desde stock y en Despacho del día se asigna al
+            motorizado.
+          </p>
+        )}
+        {gfReady && (
+          <div className="mt-3 rounded-md bg-wash px-3 py-2">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
+              <span className="font-semibold text-ink-700">Salida lista</span>
+              {gfReady.outputCode && (
+                <span className="rounded bg-white px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">
+                  {gfReady.outputCode}
+                </span>
+              )}
+              <a href={gfReady.labelHref} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">
+                Reimprimir rótulo
+              </a>
+            </p>
+            <p className="mt-0.5 text-xs text-ink-500">
+              Almacén la arma; en Despacho del día se asigna al motorizado con su mismo QR.
+            </p>
+          </div>
+        )}
         {/* Antes de abrir Aliclik, lo que suele pasar con un pedido de
             estos días. Solo si la tarjeta se puede tomar: en una
             bloqueada o con salida activa la pregunta no está abierta. */}
@@ -151,25 +196,37 @@ export function OrderRouteDesk({
           />
         )}
         <div className="flex-1" />
-        <OpsButton
-          size="sm"
-          variant={suggested ? "primary" : "secondary"}
-          disabled={!enabled}
-          onClick={() => onSelect(route)}
-          className="mt-4 self-start pointer-coarse:h-11"
-        >
-          {closed
-            ? "Reabrir primero"
-            : route.blockingOutput
-            ? "Ya tiene salida activa"
-            : route.availability === "blocked"
-            ? "No disponible"
-            : actionEnabled(route)
-              ? route.key === "propio"
-                ? "Ver en Grupo GF"
-                : ACTION_LABEL[route.action]
-              : "Sin permiso"}
-        </OpsButton>
+        {gfPrint ? (
+          <OpsButton
+            size="sm"
+            variant={route.recommended ? "primary" : "secondary"}
+            disabled={gfPrint.pending}
+            onClick={gfPrint.onPrint}
+            className="mt-4 self-start pointer-coarse:h-11"
+          >
+            Imprimir rótulo de la salida nueva
+          </OpsButton>
+        ) : (
+          <OpsButton
+            size="sm"
+            variant={suggested ? "primary" : "secondary"}
+            disabled={!enabled}
+            onClick={() => onSelect(route)}
+            className="mt-4 self-start pointer-coarse:h-11"
+          >
+            {closed
+              ? "Reabrir primero"
+              : route.blockingOutput
+              ? "Ya tiene salida activa"
+              : route.availability === "blocked"
+              ? "No disponible"
+              : actionEnabled(route)
+                ? route.key === "propio"
+                  ? "Ver en Grupo GF"
+                  : ACTION_LABEL[route.action]
+                : "Sin permiso"}
+          </OpsButton>
+        )}
       </article>
     );
   };
