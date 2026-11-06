@@ -1,5 +1,23 @@
 # Deployment runbook
 
+### 06-11-2026 · Repro Lima: «Confirma fecha» con Aliclik pide la ubicación (sin migración, MOM §9.5 y §6.2)
+
+Pedido del owner, como en el Master para Provincia COD. En la hoja «Atender»,
+al elegir Aliclik en un pedido sin coordenada, aparece «Ubicación» (enlace de
+Google Maps o el par) y sin ella no se guarda. El servidor la vuelve a exigir.
+La guarda en `order_geo_overrides` con `saveOrderCoordinate`, ahora compartido
+con «Programar envío» del Master (mismo comportamiento), deja el comentario en
+el historial y recalcula el Master.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+La lectura de Repro Lima suma `latitude,longitude` del Master.
+
+**Qué mirar después.** Atender un pedido sin coordenada → «Confirma fecha» →
+Aliclik: pide la ubicación. Con Grupo GF o Swayp no aparece.
+
+**Marcha atrás.** Revertir el commit. Las coordenadas guardadas se quedan en el
+pedido: son correctas.
+
 ### 06-11-2026 · Shalom: el panel dice exactamente por qué no deja crear la guía (sin migración, MOM §12)
 
 Caso #KP202968: el pedido tenía el adelanto validado y el panel de Shalom

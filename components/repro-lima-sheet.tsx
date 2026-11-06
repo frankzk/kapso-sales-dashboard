@@ -44,6 +44,7 @@ import {
 } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { limaClock, nextDay, sameDayCutoffLabel } from "@/lib/grupo-gf-courier";
 import { programDayLabel } from "@/lib/dispatch-day";
+import { dispatchCoordinateInput } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { DISCARD_REASON_MIN, validarMotivoDescarte } from "@/lib/recovery-discard";
 import { soles, telHref, whatsappHref } from "@/lib/rider-contact";
@@ -56,6 +57,7 @@ import {
   isBoxAction,
   isProblemState,
   isReproCourier,
+  reproNeedsCoordinate,
   isReproOutcome,
   limaDateTimeFromInput,
   limaDateTimeInputValue,
@@ -646,12 +648,14 @@ export function ReproLimaSheet({
   const [feedback, setFeedback] = useState<{ kind: "error" | "notice"; text: string } | null>(null);
   const [pendingExit, setPendingExit] = useState<"close" | "release" | null>(null);
   const [confirmFound, setConfirmFound] = useState(false);
+  // «Confirma fecha» con Aliclik sin coordenada: el enlace de Google Maps o el par (06-11-2026).
+  const [coordinate, setCoordinate] = useState("");
 
   // Un `operationId` por formulario. Si cambia después de un envío, se
   // estrena otro: el mismo id con otro contenido lo rechaza la RPC (E3).
   const [operationId, setOperationId] = useState(newOperationId);
   const submittedRef = useRef<string | null>(null);
-  const fingerprint = JSON.stringify([form, channel, outcome, courier, changes, agreedOn, nextCall.iso, note.trim(), closeNote.trim()]);
+  const fingerprint = JSON.stringify([form, channel, outcome, courier, changes, agreedOn, nextCall.iso, note.trim(), closeNote.trim(), coordinate.trim()]);
   useEffect(() => {
     if (submittedRef.current !== null && submittedRef.current !== fingerprint) {
       submittedRef.current = null;
@@ -712,6 +716,9 @@ export function ReproLimaSheet({
   const todayProblem = dayProblem(today);
   const tomorrowProblem = dayProblem(tomorrow);
   const swayp = courier === "fenix";
+  // Aliclik no crea la guía sin coordenada: la misma regla que el servidor (§6.2).
+  const needsCoordinate = outcome === "confirma" && reproNeedsCoordinate(courier, current.hasCoordinate);
+  const coordinateCheck = needsCoordinate ? dispatchCoordinateInput(coordinate) : null;
 
   function pickCourier(c: ReproCourier) {
     setCourier(c);
@@ -749,6 +756,7 @@ export function ReproLimaSheet({
         if (!courier) return "Elige con qué courier sale.";
         if (decided && "problem" in decided) return decided.problem;
         if (!agreedOn) return "Elige el día que acordaste con el cliente.";
+        if (coordinateCheck && !coordinateCheck.ok) return dayProblem(agreedOn) ?? coordinateCheck.error;
         return dayProblem(agreedOn);
       case "llamar_despues":
         return nextCallProblem(nextCall.iso, now);
@@ -823,6 +831,7 @@ export function ReproLimaSheet({
       input.courier = courier;
       input.changes = effectiveChanges;
       input.expectedBoxAction = action;
+      if (needsCoordinate) input.coordinate = coordinate.trim();
     }
     if (outcome === "no_quiere") input.confirmOrderName = current.orderName;
     start(async () => {
@@ -1153,6 +1162,33 @@ export function ReproLimaSheet({
                         </ul>
                       )}
                     </Section>
+
+                    {courier === "aliclik" && (
+                      <Section title="Ubicación">
+                        {current.hasCoordinate ? (
+                          <p className="text-[13px] leading-5 text-ink-600">Ya tiene coordenada: Aliclik puede crear la guía.</p>
+                        ) : (
+                          <label className="block space-y-1">
+                            <span className="text-[13px] leading-5 text-ink-600">
+                              Aliclik la exige para crear la guía. Pídele a la clienta su ubicación y pega el enlace de Google Maps o la coordenada; se guarda en el pedido.
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="url"
+                              autoComplete="off"
+                              value={coordinate}
+                              onChange={(e) => setCoordinate(e.target.value)}
+                              placeholder="Enlace de Google Maps o -12.04318, -77.02824"
+                              aria-invalid={Boolean(coordinate.trim() && coordinateCheck && !coordinateCheck.ok) || undefined}
+                              className={cn(FIELD, "max-w-md")}
+                            />
+                            {coordinate.trim() && coordinateCheck?.ok && (
+                              <span className="block text-[13px] tabular-nums text-ok-fg">Coordenada: {coordinateCheck.coordinate.lat}, {coordinateCheck.coordinate.lng}</span>
+                            )}
+                          </label>
+                        )}
+                      </Section>
+                    )}
 
                     <Section title="Fecha">
                       {swayp ? (
