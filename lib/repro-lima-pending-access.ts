@@ -10,6 +10,7 @@ interface PendingMasterRow {
   order_total: number | string | null; order_created_at: string | null; macro_since: string | null;
   macro_stage: string; macro_substage: string | null; coverage: string | null;
   current_courier: string | null; dispatched_at: string | null; attempt_count: number | null;
+  sales_channel: string | null;
 }
 interface PendingProgramRow { order_id: string; store_id: string; scheduled_for: string }
 
@@ -20,7 +21,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope): Promise<
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
     allCourierRows<PendingMasterRow>((from, to) => admin.from("order_master")
-      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count")
+      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,sales_channel")
       .in("store_id", ids).eq("coverage", "lima").in("macro_stage", [...LIMA_PENDING_STAGES])
       .order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id")
       .range(from, to) as unknown as PromiseLike<{ data: PendingMasterRow[] | null; error: { message: string } | null }>),
@@ -60,6 +61,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope): Promise<
       attempts: Number(row.attempt_count ?? 0),
       hasPriorDispatch: departures.has(row.order_id), lastDepartureAt: departures.get(row.order_id) ?? null,
       programmedFor: scheduled.get(row.order_id) ?? null,
+      salesChannel: row.sales_channel ?? null,
     };
   });
 }

@@ -5033,6 +5033,24 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   conservan al abrir/cerrar la ficha; tienda y búsqueda se combinan con ellas.
   Las cantidades de los chips cuentan la tienda sin búsqueda ni exclusiones;
   las tarjetas y la tabla sí respetan las selecciones y la búsqueda.
+- **Filtros de la barra, junto a Tienda (pedido del owner, 06-11-2026):** los
+  filtros del Master que sirven en Lima, en las mismas píldoras
+  (`components/facet-pill.tsx`):
+  - **Creación**, con los atajos «Hoy», «Ayer», «Últimos 7 días» y «Antes de
+    ayer o más», y «Desde» y «Hasta». Mira el día de creación en Lima; un pedido
+    sin fecha de creación no entra en un rango.
+  - **Canal**, con las opciones fijas del Master (`sales_channel`, 0264). Un
+    pedido sin canal calculado cuenta como «Sin marca».
+  - **Distrito**. El mismo distrito con o sin tilde, o con otras mayúsculas, es
+    una sola opción, con el nombre más escrito.
+  - **Courier**, el vigente del Master, y «Sin courier».
+
+  Cada opción dice cuántos pedidos tiene con los demás filtros de la barra
+  puestos (con «Antes de ayer o más», Canal cuenta solo esos). Recortan como Tienda: los
+  chips, las tarjetas y la tabla. La línea de la tabla sigue diciendo el total
+  de la tienda. Viven en la URL (`creado_desde`, `creado_hasta`, `canal`,
+  `distrito`, `courier`) y se conservan al abrir y cerrar la ficha; «Quitar
+  filtros» los limpia. Solo leen: no cambian etapas ni casos.
 - **Contexto:** entrega fallida para la subetapa Por reprogramar Lima; antiguo
   por revisar si se creó hace más de 30 días o si Tanders sigue En tránsito
   con despacho anterior al corte del siguiente día hábil (§29.13); pendiente de primer despacho si

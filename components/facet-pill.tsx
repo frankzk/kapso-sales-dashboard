@@ -357,3 +357,101 @@ export function DatePill({
     </>
   );
 }
+
+/**
+ * Filtro de un RANGO de días («Creación: 23 oct – 04 nov»). La hoja trae los
+ * atajos que pide cada pantalla y, debajo, «Desde» y «Hasta». Vacíos, no filtra.
+ */
+export function DateRangePill({
+  label,
+  from,
+  to,
+  onChange,
+  presets,
+}: {
+  label: string;
+  /** `YYYY-MM-DD`, o vacío. */
+  from: string;
+  to: string;
+  onChange: (from: string, to: string) => void;
+  presets: { label: string; from: string; to: string }[];
+}) {
+  const { open, setOpen, pill, sheet, close } = usePillSheet();
+  const preset = presets.find((p) => p.from === from && p.to === to);
+  const valueLabel = !from && !to
+    ? null
+    : preset?.label ??
+      (from && to ? (from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`) : from ? `desde ${shortDay(from)}` : `hasta ${shortDay(to)}`);
+  return (
+    <>
+      <FilterPill
+        ref={pill}
+        label={label}
+        value={valueLabel}
+        expanded={open}
+        onClick={() => (open ? close() : setOpen(true))}
+        onClear={() => onChange("", "")}
+      />
+      {open && (
+        <Sheet look="ops" title={label} onClose={close} anchored anchorRef={pill}>
+          <div ref={sheet} className="space-y-3">
+            <div role="group" aria-label={`${label}: atajos`} className="flex flex-wrap gap-2">
+              {presets.map((p) => (
+                <OpsButton
+                  key={p.label}
+                  size="sm"
+                  variant={p === preset ? "primary" : undefined}
+                  aria-pressed={p === preset}
+                  onClick={() => {
+                    onChange(p.from, p.to);
+                    close();
+                  }}
+                  className="pointer-coarse:h-11"
+                >
+                  {p.label}
+                </OpsButton>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+                Desde
+                <input
+                  type="date"
+                  value={from}
+                  max={to || undefined}
+                  onChange={(e) => onChange(e.target.value, to)}
+                  className={cn(FIELD_BOX, "h-9 w-full px-2.5 font-normal tabular-nums pointer-coarse:h-11")}
+                />
+              </label>
+              <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+                Hasta
+                <input
+                  type="date"
+                  value={to}
+                  min={from || undefined}
+                  onChange={(e) => onChange(from, e.target.value)}
+                  className={cn(FIELD_BOX, "h-9 w-full px-2.5 font-normal tabular-nums pointer-coarse:h-11")}
+                />
+              </label>
+            </div>
+            {(from || to) && (
+              <div className="border-t border-line pt-3">
+                <OpsButton
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    onChange("", "");
+                    close();
+                  }}
+                  className="pointer-coarse:h-11"
+                >
+                  Quitar la fecha
+                </OpsButton>
+              </div>
+            )}
+          </div>
+        </Sheet>
+      )}
+    </>
+  );
+}
