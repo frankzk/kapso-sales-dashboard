@@ -2,6 +2,7 @@
 
 import { createServerSupabase } from "@/lib/db";
 import { filterRoutedLeads, getLeadRoutingScope } from "@/lib/lead-routing-access";
+import { routingQueueSignature } from "@/lib/leads-live-refresh";
 import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
 import { leadCartDetailOf } from "@/lib/lead-cart-detail";
 import { normalizePhone } from "@/lib/phone";
@@ -763,7 +764,8 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
     const index = await loadPendingVouchers(sb, storeIds);
     const extras = filterRoutedLeads(await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index ?? new Map(), LEAD_BOARD_SELECT), routing)
       .filter(l => !(l.needs_attention && l.handoff_at && l.handoff_at >= handoffFreshCutoffIso()));
-    return { counts: { ...routing.counts, handoff: routing.counts.handoff + extras.length }, signature: `routing:${routing.signature}:cv:${extras.map(l => l.id).sort().join(",")}` };
+    const counts = { ...routing.counts, handoff: routing.counts.handoff + extras.length };
+    return { counts, signature: routingQueueSignature(routing.signature, { ...counts }, extras.map(l => l.id)) };
   }
   const sb = await createServerSupabase();
   const nowIso = new Date().toISOString();

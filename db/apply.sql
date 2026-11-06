@@ -625,4 +625,6 @@
 \ir migrations/0310_anura_click2dial.sql
 \echo 'Applying 0311_anura_kapta_phone.sql'
 \ir migrations/0311_anura_kapta_phone.sql
+\echo 'Applying 0312_lead_routing_scope_perf.sql'
+\ir migrations/0312_lead_routing_scope_perf.sql
 \echo 'Done.'

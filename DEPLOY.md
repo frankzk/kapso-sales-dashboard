@@ -1,5 +1,76 @@
 # Deployment runbook
 
+### 06-11-2026 · La base sin CPU por `lead_routing_scope`: menos llamadas y sin recorrer tablas enteras (0312, sin cambio de reglas)
+
+El 06-11-2026 ~20:00 UTC la base quedó «Unhealthy»: las páginas cargaban y los
+clics no respondían. `lead_routing_scope` llevaba 48.800 s de base desde el
+reinicio del 05-11 (cola entera de una asesora ≈ 1 s y 119.000 bloques), y a
+las 20:10 la rotación de un Yape la pedía para cada asesora en línea, en cada
+pestaña, cada 15 s. **Ninguna regla cambia** (MOM sin cambios): quién ve qué
+lead, a quién se ofrece un Yape y qué cuentan los contadores es lo mismo.
+
+**Código (sale solo, no necesita la 0312):**
+- Pop-up de Yapes (`listYapeAlerts`): sin Yapes ofrecidos no se pregunta nada;
+  con alguno, solo por esos leads, de a uno. La rotación
+  (`reconcileYapeOffers`) pregunta por la asesora que tiene la oferta y, solo
+  si hay que ofrecer de nuevo, por las candidatas, de a lead, sin repetir y
+  con tres lecturas a la vez como mucho (`lib/lead-routing-batch.ts`).
+- Firma de la cola con bloques (`routingQueueSignature`): sin el minuto que
+  cambiaba sola cada 60 s y forzaba recargar el tablero cada 2 min en cada
+  pestaña; con los contadores, para que lo que cambia con el reloj siga
+  recargando.
+- `claimLead` reutiliza el alcance que ya leyó `authorizeLead`.
+
+**Migración `0312_lead_routing_scope_perf.sql` (cuando convenga, antes o
+después del código; solo rendimiento, mismo resultado):** reescribe el filtro
+de `lead_routing_scope` en dos ramas (cola por índice, lead suelto por clave),
+con los mismos permisos de la 0299, y crea tres índices: llamadas con asesora
+(`lead_calls`), carritos por tienda (`draft_orders`) y la última parada de un
+paquete en su caja (`delivery_stops`, que lleva `return_manifest_expected` de
+~2,6 s a milisegundos por motorizado). Medido en producción con el cuerpo
+nuevo y plan genérico: 1.076 ms → 418 ms antes de los índices, y la respuesta
+idéntica a la de la 0299.
+
+1. **Los índices, a mano, `concurrently` y fuera de una transacción** (un
+   `create index` normal bloquea las escrituras de la tabla mientras se
+   construye), uno por uno:
+
+   ```sql
+   create index concurrently if not exists lead_calls_call_lead_idx
+     on public.lead_calls (lead_id, occurred_at desc, id desc)
+     include (store_id, vendedora, next_followup_at)
+     where kind = 'call' and vendedora is not null;
+   create index concurrently if not exists draft_orders_store_gid_idx
+     on public.draft_orders (store_id, draft_order_gid) include (created_at);
+   create index concurrently if not exists delivery_stops_shipment_manifest_idx
+     on public.delivery_stops (shipment_id, dispatch_manifest_id, reported_at desc nulls last)
+     include (id, status, outcome_reason);
+   ```
+
+2. **El fichero `0312` completo** (encuentra los índices hechos, reemplaza la
+   función y corre `analyze` de `delivery_stops` y `draft_orders`).
+3. **Comprobar:**
+
+   ```sql
+   select c.relname, x.indisvalid from pg_index x join pg_class c on c.oid = x.indexrelid
+    where c.relname in ('lead_calls_call_lead_idx','draft_orders_store_gid_idx','delivery_stops_shipment_manifest_idx');
+   select proacl, proconfig, prosecdef from pg_proc where proname = 'lead_routing_scope';
+   ```
+
+   Los tres `indisvalid = t` (si uno da `f`, `drop index concurrently` de ese
+   y volver a crearlo); `{postgres=X/postgres,service_role=X/postgres}`,
+   `{search_path=public, pg_temp}`, `f`.
+4. **Qué mirar después.** En `pg_stat_statements`, la media de
+   `lead_routing_scope` y de `return_manifest_expected` y las llamadas por
+   minuto de la primera; en Supabase, el CPU con varias asesoras en línea y un
+   Yape por verificar.
+
+**Marcha atrás.** Revertir el commit (vuelven las lecturas de antes; más caras,
+mismo resultado). Para la función, volver a correr
+`db/migrations/0299_lead_routing_admin_advisors.sql`. Los índices pueden
+quedarse; si se quieren quitar: `drop index concurrently if exists
+public.<nombre>;`.
+
 ### 06-11-2026 · Shalom: el panel dice exactamente por qué no deja crear la guía (sin migración, MOM §12)
 
 Caso #KP202968: el pedido tenía el adelanto validado y el panel de Shalom

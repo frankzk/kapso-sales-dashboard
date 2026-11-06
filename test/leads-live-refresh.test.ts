@@ -6,6 +6,7 @@ import {
   QUIET_REFRESH_MS,
   URGENT_COUNTS,
   decideQueueRefresh,
+  routingQueueSignature,
 } from "@/lib/leads-live-refresh";
 
 /**
@@ -78,5 +79,34 @@ describe("el tablero la usa", () => {
   it("y el panel de gráficos se recarga como mucho cada cinco minutos", () => {
     expect(src).toContain("const INSIGHTS_MIN_REFRESH_MS = 5 * 60_000;");
     expect(src).toContain("Date.now() - last.at < INSIGHTS_MIN_REFRESH_MS");
+  });
+});
+
+describe("routingQueueSignature", () => {
+  // lead_routing_scope signs `max(updated_at)|revision|md5(blocked)|minute`.
+  const counts = { por_llamar: 10, handoff: 2, yape: 0, seguimientos: 3, ganados: 5, perdidos: 7, sin_llamar: 4 };
+  const at = (minute: number, md5 = "abc", updated = "2026-11-06 20:00:00+00") => `${updated}|3|${md5}|${minute}`;
+
+  it("does not change just because a minute passed (no forced 2-minute board reload)", () => {
+    expect(routingQueueSignature(at(29_876_543), counts, [])).toBe(routingQueueSignature(at(29_876_544), counts, []));
+  });
+
+  it("still changes when blocked leads, a touched lead, a count or a pending voucher change", () => {
+    const base = routingQueueSignature(at(1), counts, ["v1"]);
+    expect(routingQueueSignature(at(1, "def"), counts, ["v1"])).not.toBe(base);
+    expect(routingQueueSignature(at(1, "abc", "2026-11-06 20:01:00+00"), counts, ["v1"])).not.toBe(base);
+    expect(routingQueueSignature(at(1), { ...counts, seguimientos: 4 }, ["v1"])).not.toBe(base);
+    expect(routingQueueSignature(at(1), counts, ["v1", "v2"])).not.toBe(base);
+  });
+
+  it("is independent of key and voucher order", () => {
+    const reordered = Object.fromEntries(Object.entries(counts).reverse());
+    expect(routingQueueSignature(at(1), reordered, ["b", "a"])).toBe(routingQueueSignature(at(1), counts, ["a", "b"]));
+  });
+
+  it("lets decideQueueRefresh skip a quiet minute", () => {
+    const prev = routingQueueSignature(at(100), counts, []);
+    const next = routingQueueSignature(at(103), counts, []);
+    expect(decideQueueRefresh({ ...base, prevSignature: prev, nextSignature: next, now: T0 + QUIET_REFRESH_MS })).toBe("skip");
   });
 });

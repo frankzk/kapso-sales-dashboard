@@ -51,3 +51,29 @@ export function decideQueueRefresh(input: {
   }
   return input.now - input.lastRefreshAt >= QUIET_REFRESH_MS ? "quiet" : "skip";
 }
+
+/**
+ * Firma de la cola cuando hay bloques de Leads (0312).
+ *
+ * `lead_routing_scope` termina su firma con el minuto actual
+ * (`…|floor(epoch/60)`), así que cambiaba cada minuto aunque no pasara nada y
+ * `decideQueueRefresh` recargaba el tablero entero cada `QUIET_REFRESH_MS` en
+ * cada pestaña. Aquí se quita ese minuto y entran los contadores: lo que se ve
+ * (quién está bloqueado, el último lead tocado, la revisión de los bloques y
+ * cada contador, también los que cambian solo con el reloj, como un
+ * seguimiento que vence) sigue moviendo la firma; el paso del reloj, no. Es la
+ * misma vara que la firma sin bloques (`lead_queue_counts`), y
+ * `FORCED_REFRESH_MS` sigue cubriendo lo demás.
+ */
+export function routingQueueSignature(
+  scopeSignature: string,
+  counts: Readonly<Record<string, number>>,
+  pendingVoucherLeadIds: readonly string[],
+): string {
+  const stable = scopeSignature.replace(/\|\d+(?:\.\d+)?$/, "");
+  const countsKey = Object.keys(counts)
+    .sort()
+    .map((k) => `${k}=${counts[k]}`)
+    .join(",");
+  return `routing:${stable}:${countsKey}:cv:${[...pendingVoucherLeadIds].sort().join(",")}`;
+}
