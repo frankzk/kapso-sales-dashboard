@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { parseMasterQuery } from "@/lib/master-query";
-import { agreementDateProblem, materializationPlan, REPRO_LISTS, type BoxLocation } from "@/lib/repro-lima";
+import { agreementDateProblem, materializationPlan, orderHasCoordinate, REPRO_LISTS, reproNeedsCoordinate, type BoxLocation } from "@/lib/repro-lima";
 import { limaOpenBreakdown, type LimaOpenCountRow, type StageAging } from "@/lib/repro-lima-todos";
 import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
 import { planText } from "@/components/repro-lima-sheet";
@@ -592,5 +592,32 @@ describe("«Todos» en pantalla (§9.5, 14-10-2026)", () => {
     expect(onlyClose).toContain('Todavía por entregar</span><span class="shrink-0 tabular-nums">0</span>');
     expect(onlyClose).toContain('data-dot="por_cerrar"');
     expect(onlyClose).not.toContain("No hay pedidos de Lima sin estado final.");
+  });
+});
+
+describe("«Confirma fecha» con Aliclik pide la ubicación (owner, 06-11-2026)", () => {
+  it("la regla: solo Aliclik y solo sin coordenada", () => {
+    expect(reproNeedsCoordinate("aliclik", false)).toBe(true);
+    expect(reproNeedsCoordinate("aliclik", true)).toBe(false);
+    for (const courier of ["propio", "fenix", "axel", null]) expect(reproNeedsCoordinate(courier, false)).toBe(false);
+    expect(orderHasCoordinate({ latitude: -12.1, longitude: -77 })).toBe(true);
+    expect(orderHasCoordinate({ latitude: "-12.1", longitude: "-77.0" })).toBe(true);
+    for (const o of [{ latitude: null, longitude: -77 }, { latitude: "", longitude: "" }, { latitude: "x", longitude: "1" }, null]) expect(orderHasCoordinate(o)).toBe(false);
+  });
+  it("la hoja pide la ubicación con Aliclik, no deja guardar sin ella y la manda al servidor", () => {
+    const sheet = read("components/repro-lima-sheet.tsx");
+    expect(sheet).toContain("reproNeedsCoordinate(courier, current.hasCoordinate)");
+    expect(between(sheet, "const blocker: string | null", "})();")).toContain("coordinateCheck.error");
+    expect(between(sheet, "function save(advance: boolean)", "\n  }\n")).toContain("if (needsCoordinate) input.coordinate = coordinate.trim();");
+    const section = between(sheet, '{courier === "aliclik" && (', "</Section>");
+    expect(section).toContain('title="Ubicación"');
+    expect(section).toContain("Ya tiene coordenada: Aliclik puede crear la guía.");
+  });
+  it("el servidor la exige antes de la RPC y la guarda donde la lee el recálculo", () => {
+    const actions = read("app/dashboard/pedidos/repro-lima/actions.ts");
+    const call = between(actions, "async function recordCall", "const recorded =");
+    expect(call.indexOf("reproNeedsCoordinate(courier, orderHasCoordinate(f.order))")).toBeGreaterThan(-1);
+    expect(call.indexOf("saveOrderCoordinate(admin")).toBeLessThan(call.indexOf('admin.rpc("lima_repro_record"'));
+    expect(call).toContain("recomputeOrderMasterSafe(admin, [c.order_id])");
   });
 });

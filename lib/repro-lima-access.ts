@@ -37,6 +37,7 @@ import {
   failureLine,
   isAgreementBoxAction,
   isReproCourier,
+  orderHasCoordinate,
   materializationPlan,
   normalizeReproChanges,
   porDecidirRank,
@@ -112,6 +113,8 @@ export interface ReproRow {
   customerName: string;
   customerPhone: string | null;
   district: string | null;
+  /** Tiene coordenada en el Master: «Confirma fecha» con Aliclik no la pide (06-11-2026). */
+  hasCoordinate: boolean;
   orderTotal: number;
   /** Desde cuándo está en la etapa (`order_master.macro_since`). */
   macroSince: string | null;
@@ -344,6 +347,7 @@ function buildRow(input: {
     customerName: order.customer_name ?? "Cliente sin nombre",
     customerPhone: order.customer_phone,
     district: order.district,
+    hasCoordinate: orderHasCoordinate(order),
     orderTotal: Number(order.order_total ?? 0),
     macroSince: order.macro_since,
     daysInStage: daysBetweenDays(limaDay(order.macro_since), today),

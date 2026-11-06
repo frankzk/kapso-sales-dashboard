@@ -1021,7 +1021,8 @@ ubicación** (la coordenada que pide Aliclik), y se guarda en el pedido.
 - **Lo ya programado sin ella** lo dice la ficha: «Sin ubicación: ese día
   Aliclik no podrá crear la guía.», con «Agregar ubicación», que abre el mismo
   formulario con la fecha que ya tiene.
-- Lima, Agencia y lo que ya tiene coordenada no cambian.
+- Lima, Agencia y lo que ya tiene coordenada no cambian. Excepción en Lima: en
+  Repro Lima, «Confirma fecha» con Aliclik la pide igual (§9.5, 06-11-2026).
 - **Y si ya la tiene, se dice (02-11-2026).** Bajo «Sale el» al confirmar y en
   «Programar envío», un Provincia COD con coordenada muestra «Ubicación: ya
   tiene coordenada · Ver en el mapa». Sin esa línea, que no se pidiera parecía
@@ -5267,6 +5268,22 @@ programa por `otro_courier`, `falta_salida`, `falta_ubicar` o
   se lo dice a la hoja. La hoja relee los hechos del pedido y recalcula «Qué
   hacer con la caja»; lo escrito se conserva, y el siguiente «Guardar» usa la
   acción nueva en vez de repetir el mismo rechazo.
+  - **Con Aliclik, la ubicación (pedido del owner, 06-11-2026).** Aliclik no
+    crea la guía sin coordenada, en Lima igual que en Provincia COD (§6.2).
+    Elegido Aliclik en un pedido sin coordenada, aparece «Ubicación». Acepta el
+    enlace de Google Maps o el par (`dispatchCoordinateInput`, la misma regla
+    que el Master), y sin ella no se puede guardar. Un enlace acortado
+    (`maps.app.goo.gl`) no sirve.
+  - **El servidor la vuelve a exigir** antes de registrar el acuerdo y no
+    guarda nada sin ella. Con ella, la guarda en el pedido
+    (`order_geo_overrides`, `saveOrderCoordinate`, el mismo guardado del
+    Master), deja en el historial «Ubicación guardada al acordar la salida con
+    Aliclik en Repro Lima» y recalcula el Master. Así, al crear la guía desde
+    la Mesa de ruta, ya la tiene.
+  - Si el pedido ya tiene coordenada, la hoja lo dice («Ya tiene coordenada:
+    Aliclik puede crear la guía.») y no la pide. Los demás couriers no la piden.
+  - Lo acordado antes con Aliclik sin coordenada no cambia: la guía la sigue
+    pidiendo al crearse.
 - **Llamar después**: día y hora de la llamada, a 60 días como máximo. Puede
   ser hoy, para la vuelta de las 15:00.
 - **No contesta**: suma un intento y propone la vuelta siguiente (hoy a las

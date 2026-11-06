@@ -127,11 +127,14 @@ export interface ReproOrderRow {
   macro_substage: string | null;
   operational_status: string | null;
   coverage?: string | null;
+  /** La coordenada del Master: Aliclik no crea la guía sin ella (§6.2). */
+  latitude?: number | string | null;
+  longitude?: number | string | null;
 }
 
 export const REPRO_ORDER_COLUMNS =
   "order_id,store_id,order_name,customer_name,customer_phone,district,region,province,order_total," +
-  "macro_since,macro_stage,macro_substage,operational_status,coverage";
+  "macro_since,macro_stage,macro_substage,operational_status,coverage,latitude,longitude";
 
 /** Una salida del pedido, con lo que deciden el episodio y la caja. */
 export interface ReproShipmentRow {

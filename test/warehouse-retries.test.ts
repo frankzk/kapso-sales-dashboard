@@ -110,6 +110,7 @@ function reproRow(over: Partial<ReproRow> = {}): ReproRow {
     customerName: "Ana",
     customerPhone: "987654321",
     district: "Surco",
+    hasCoordinate: true,
     orderTotal: 120,
     macroSince: "2026-10-10T20:00:00Z",
     daysInStage: 3,

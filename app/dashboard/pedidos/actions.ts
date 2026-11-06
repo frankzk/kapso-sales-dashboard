@@ -144,6 +144,7 @@ import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import { formatOlvaTracking, parseOlvaTracking, type OlvaTrackingId } from "@/lib/olva/tracking";
 import { olvaTrackingTakenBy } from "@/lib/olva/link";
 import { orderFullyPaid } from "@/lib/order-paid";
+import { saveOrderCoordinate } from "@/lib/order-coordinate-save";
 import { discardRecovery, validarMotivoDescarte } from "@/lib/recovery-discard";
 
 export interface MasterActionState {
@@ -2015,25 +2016,8 @@ async function ensureDispatchCoordinate(ctx: OrderContext, raw: string | null | 
   if (!parsed.ok) return parsed.error;
   const { lat, lng } = parsed.coordinate;
   const admin = createAdminSupabase();
-  const { data: existing, error: readError } = await admin
-    .from("order_geo_overrides")
-    .select("region,province,district,address,reference,note")
-    .eq("order_id", ctx.row.order_id)
-    .maybeSingle();
-  if (readError) return `No se pudo guardar la ubicación: ${readError.message}`;
-  const { error } = await admin.from("order_geo_overrides").upsert(
-    {
-      ...((existing as Record<string, string | null> | null) ?? {}),
-      order_id: ctx.row.order_id,
-      store_id: ctx.storeId,
-      latitude: lat,
-      longitude: lng,
-      updated_by: ctx.userId,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "order_id" },
-  );
-  if (error) return `No se pudo guardar la ubicación: ${error.message}`;
+  const saveError = await saveOrderCoordinate(admin, { orderId: ctx.row.order_id, storeId: ctx.storeId, userId: ctx.userId, lat, lng });
+  if (saveError) return saveError;
   const eventError = await recordEvent(admin, ctx, {
     kind: "comment",
     commentType: "ubicacion",
