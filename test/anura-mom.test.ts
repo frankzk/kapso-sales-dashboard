@@ -5,6 +5,8 @@
 // porque el enlace de Anura vence, el aviso responde 401 solo a un token
 // malo, Kapta no guarda credenciales SIP, los permisos son los de siempre y
 // «Llamar desde Kapta» (Telnyx) se queda. Sin red: nada llama a Anura.
+// La fase 2 (el teléfono dentro de Kapta, solo salidas) la prueba
+// `test/anura-mom-fase2.test.ts`.
 
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -59,7 +61,7 @@ function raw(start: string, end: string): string {
   return MOM.slice(from, to);
 }
 
-const S86_RAW = raw("### 8.7 Llamar con Anura (fase 1, 05-11-2026)", "\n## 9. Lima");
+const S86_RAW = raw("### 8.7 Llamar con Anura (fase 1, 05-11-2026; fase 2, 06-11-2026)", "\n## 9. Lima");
 const s = flat(S86_RAW);
 const S85 = flat(raw("### 8.5 Llamar desde la computadora (11-10-2026)", "### 8.6 "));
 const S15 = flat(raw("## 15. Responsables actuales", "## 16. "));
@@ -107,11 +109,12 @@ describe("fase 1: sin teléfono en el navegador", () => {
     );
   });
 
-  it("Kapta no guarda credenciales SIP; la fase 2 es el teléfono en el navegador", () => {
-    expect(s).toContain("Ni usuarios ni contraseñas SIP de Anura");
-    expect(s).toContain("La fase 2 es el teléfono dentro del navegador");
-    expect(S21).toContain("Anura, fase 2: el teléfono dentro del navegador");
-    // Ni la base ni el código tienen dónde guardarlas.
+  it("la fase 1 no guarda credenciales SIP; la fase 2 guarda la clave de cada anexo", () => {
+    expect(s).toContain("En la fase 1, ni usuarios ni contraseñas SIP de Anura: no hacen falta");
+    expect(s).toContain("La fase 2 guarda la clave SIP de cada anexo, cifrada y fuera del alcance del navegador (abajo).");
+    expect(S21).toContain("Anura, después de la fase 2 (§8.7): entrantes en Kapta (hoy solo salidas;");
+    expect(S21).not.toContain("Anura, fase 2: el teléfono dentro del navegador");
+    // La 0310 no tiene dónde guardarlas: la clave vive en la 0311.
     const migration = read("db/migrations/0310_anura_click2dial.sql");
     expect(migration).not.toMatch(/\bsip_\w+/i);
     expect(migration).not.toMatch(/password/i);
@@ -278,7 +281,9 @@ describe("grabaciones", () => {
     expect(ANURA_RECORDING_SIGNED_SECONDS).toBe(5 * 60);
     expect(s).toContain("se reintenta al abrir la ficha del pedido mientras no pasen los 30 minutos, hasta 6 intentos.");
     expect(s).toContain("Queda «grabación vencida» al sexto intento fallido o cuando pasan los 30 minutos");
-    expect(s).toContain("La ficha recibe un enlace firmado que dura 5 minutos.");
+    expect(s).toContain("La ficha la oye por una ruta del mismo origen, `/api/anura/recordings/<id>` (desde la fase 2): el servidor firma por dentro un enlace de Storage que dura 5 minutos, y ese enlace no llega al navegador.");
+    expect(s).toContain("La escucha quien hizo la llamada o quien ve la tienda del pedido.");
+    expect(s).not.toContain("La ficha recibe un enlace firmado");
     expect(s).toContain("El enlace de Anura no sale del servidor: vive solo en la bitácora de avisos, y se borra de ella cuando la grabación queda guardada o vencida.");
   });
 
@@ -419,7 +424,7 @@ describe("los avisos de Anura", () => {
 
 describe("configuración (una vez) y anexos", () => {
   it("los pasos numerados del panel de Anura son los de Ajustes, en orden y con las mismas palabras", () => {
-    expect(ANURA_PANEL_STEPS).toHaveLength(7);
+    expect(ANURA_PANEL_STEPS).toHaveLength(8);
     let at = -1;
     ANURA_PANEL_STEPS.forEach((step, i) => {
       const line = `${i + 1}. **${step.title}** ${step.text}`;
@@ -468,6 +473,6 @@ describe("permisos", () => {
 describe("«Llamar desde Kapta» (Telnyx) se queda", () => {
   it("§8.5 sigue igual y §8.7 lo dice", () => {
     expect(S85).toContain("«Llamar desde Kapta», en la cabecera de la ficha");
-    expect(s).toContain("La llamada por Telnyx desde la computadora (§8.5) sigue igual, al lado. Anura no la reemplaza en la fase 1.");
+    expect(s).toContain("La llamada por Telnyx desde la computadora (§8.5) sigue igual, al lado. Anura no la reemplaza en la fase 1 ni en la fase 2.");
   });
 });

@@ -1422,19 +1422,23 @@ export function OrderDrawer({
                       onRecorded={() => void reload()}
                     />
                   )}
-                  {/* «Llamar con Anura» (fase 1): suena el teléfono de Anura de
-                      la asesora y Anura marca a la clienta. Solo con el token,
-                      un anexo activo de quien mira y un celular peruano. */}
+                  {/* «Llamar con Anura»: con el teléfono dentro de Kapta si el
+                      anexo tiene clave guardada (fase 2, solo salidas); si no,
+                      suena el teléfono de Anura de la asesora (fase 1). Solo
+                      con el token, un anexo activo de quien mira y un celular
+                      peruano. */}
                   {anura.panel?.enabled && canEdit && (
                     <AnuraCallButton
                       key={orderId}
                       orderId={orderId}
                       extension={anura.panel.extension}
                       resume={anura.panel.activeCall}
+                      kaptaPhone={anura.panel.kaptaPhone}
                       onEnded={() => {
                         void reload();
                         void anura.reload();
                       }}
+                      onPhoneChanged={() => void anura.reload()}
                       onGoToDesk={() => jumpTo("confirmacion")}
                     />
                   )}

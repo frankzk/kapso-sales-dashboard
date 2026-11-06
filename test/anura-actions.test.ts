@@ -243,7 +243,7 @@ describe("getAnuraCallStatus y la ficha", () => {
     expect(await getAnuraCallStatus("no-es-uuid")).toEqual({ ok: false, error: "Llamada no encontrada." });
   });
 
-  it("el panel de la ficha: botón solo con anexo, llamadas del pedido con grabación firmada", async () => {
+  it("el panel de la ficha: botón solo con anexo, llamadas del pedido con la grabación por el mismo origen", async () => {
     db.tables.anura_calls.push({
       id: "22222222-2222-4222-8222-222222222222",
       org_id: ORG,
@@ -266,7 +266,12 @@ describe("getAnuraCallStatus y la ficha", () => {
     expect(panel).toMatchObject({ enabled: true, extension: "101", activeCall: null });
     expect(panel.calls).toHaveLength(1);
     expect(panel.calls[0]).toMatchObject({ status: "contestada", answered: true, talkLabel: "1 min 15 s", who: "persona-7a7a" });
-    expect(panel.calls[0]!.recordingUrl).toMatch(/^https:\/\/storage\.test\/anura-recordings\//);
+    // La CSP no deja al <audio> cargar de Supabase: la ficha recibe la ruta
+    // del mismo origen, nunca la URL firmada.
+    expect(panel.calls[0]!.recordingUrl).toBe("/api/anura/recordings/22222222-2222-4222-8222-222222222222");
+    expect(JSON.stringify(panel)).not.toContain("storage.test");
+    // Sin clave SIP guardada: fase 1 (suena su teléfono de Anura).
+    expect(panel.kaptaPhone).toEqual({ status: "sin_telefono", message: null, rejectedAt: null });
     expect(JSON.stringify(panel)).not.toContain("987654321");
 
     db.tables.anura_extensions.length = 0;
@@ -306,7 +311,18 @@ describe("Ajustes › Telefonía Anura", () => {
     expect(r.data.webhook).toMatchObject({ protocol: "HTTPS", host: "kapta.test", port: 443 });
     expect(r.data.webhook!.path.startsWith("api/webhooks/anura?org=")).toBe(true);
     expect(JSON.parse(r.data.template).custom1).toBe("{{ custom1 }}");
-    expect(r.data.extensions).toEqual([{ id: EXT_ME, userId: ME, name: "persona-7a7a", extension: "101", active: true }]);
+    expect(r.data.extensions).toEqual([
+      {
+        id: EXT_ME,
+        userId: ME,
+        name: "persona-7a7a",
+        extension: "101",
+        active: true,
+        phone: { status: "sin_telefono", sipUser: "101-websocket", hasPassword: false, savedAt: null, rejectedAt: null, rejectedReason: null },
+      },
+    ]);
+    expect(r.data.sip).toEqual({ domain: null, wsUrl: "wss://sipwss.anura.pe", port: 55090, updatedAt: null });
+    expect(r.data.sipMigrationMissing).toBe(false);
     expect(r.data.recentEvents[0]).toMatchObject({ calling: "51••••••678", called: "98••••321", extension: "101", billSeconds: 12 });
     const text = JSON.stringify(r);
     expect(text).not.toContain(TOKEN_VALUE);

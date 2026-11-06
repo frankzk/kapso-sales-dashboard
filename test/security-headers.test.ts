@@ -56,6 +56,28 @@ describe("Content-Security-Policy", () => {
   });
 });
 
+describe("Content-Security-Policy: el teléfono de Anura y sus grabaciones (MOM §8.7)", () => {
+  const directive = async (name: string) => {
+    const csp = (await siteHeaders()).get("Content-Security-Policy")!;
+    return csp.split(";").map((d) => d.trim()).find((d) => d.startsWith(`${name} `)) ?? null;
+  };
+
+  it("deja conectar el teléfono de Kapta con Anura Perú, y solo con hosts de anura.pe", async () => {
+    const connect = (await directive("connect-src"))!;
+    expect(connect.split(/\s+/)).toContain("wss://sipwss.anura.pe");
+    const anura = connect.split(/\s+/).filter((s) => /anura/.test(s));
+    expect(anura.every((s) => /^wss:\/\/(\*\.)?[a-z0-9.-]*anura\.pe$/.test(s))).toBe(true);
+    // anura.dev es Argentina y no sirve; la API de Anura solo la llama el servidor.
+    expect(connect).not.toContain("anura.dev");
+    expect(connect).not.toContain("api.anura.pe");
+  });
+
+  it("las grabaciones se oyen desde el mismo origen: media-src no abre Supabase", async () => {
+    const media = await directive("media-src");
+    expect(media).toBe("media-src 'self'");
+  });
+});
+
 describe("resto de headers de seguridad", () => {
   it("siguen presentes en todas las rutas", async () => {
     const headers = await siteHeaders();

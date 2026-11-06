@@ -37,10 +37,38 @@ import {
   type AnuraStartResult,
 } from "@/lib/anura/calls";
 import { retryAnuraRecording, signedRecordingUrl } from "@/lib/anura/recording";
+import {
+  ANURA_KAPTA_PHONE_TEXT,
+  defaultSipUser,
+  normalizeAnuraWsUrl,
+  normalizeSipDomain,
+  normalizeSipPassword,
+  normalizeSipPort,
+  normalizeSipUser,
+  type AnuraKaptaPhoneStatus,
+} from "@/lib/anura/sip";
+import {
+  rejectionReason,
+  type AnuraPhoneCredentialsResult,
+  type AnuraRegistrationFailureKind,
+} from "@/lib/anura/sip-phone";
+import {
+  deleteSipCredential,
+  isMissingTable as isMissingSipTable,
+  kaptaPhoneStatus,
+  markSipCredentialRejected,
+  readSipCredentialMetas,
+  readSipSettings,
+  sipPhoneCredentials,
+  writeSipCredential,
+  writeSipSettings,
+} from "@/lib/anura/sip-store";
 import { anuraWebhookUrl } from "@/lib/anura/token";
 import { talkTimeWords } from "@/lib/browser-call";
 
 export type { AnuraCallLive, AnuraStartResult } from "@/lib/anura/calls";
+export type { AnuraPhoneCredentialsResult } from "@/lib/anura/sip-phone";
+export type { AnuraKaptaPhoneStatus } from "@/lib/anura/sip";
 
 export type AnuraMutationResult = { ok: true; notice: string } | { ok: false; error: string };
 
@@ -77,6 +105,19 @@ export async function anuraExtensionOf(admin: SupabaseClient, orgId: string, use
     .eq("active", true)
     .maybeSingle();
   return (data as { extension?: string } | null)?.extension ?? null;
+}
+
+/** La fila del anexo activo de una persona en una org (id y número), o null. */
+export async function anuraExtensionRowOf(admin: SupabaseClient, orgId: string, userId: string): Promise<{ id: string; extension: string } | null> {
+  const { data } = await admin
+    .from("anura_extensions")
+    .select("id,extension")
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .eq("active", true)
+    .maybeSingle();
+  const row = data as { id?: string; extension?: string } | null;
+  return row?.id && row.extension ? { id: row.id, extension: row.extension } : null;
 }
 
 /** La org de una tienda que la persona ve (por RLS), o null. */
@@ -171,6 +212,33 @@ export async function anuraCallStatusFor(callId: string): Promise<AnuraCallStatu
   return { ok: true, call: anuraCallLive(row) };
 }
 
+export type AnuraRecordingAccess = { ok: true; signedUrl: string } | { ok: false; status: 401 | 404 };
+
+/**
+ * La grabación guardada de una llamada, para la ruta del mismo origen
+ * (`/api/anura/recordings/<id>`). La oye quien la pidió o quien ve la tienda
+ * del pedido (RLS de `anura_calls`, como el historial). Devuelve una URL
+ * firmada corta que solo usa el servidor para copiar los bytes: el navegador
+ * nunca la ve (la CSP no le deja cargar audio de Supabase).
+ */
+export async function anuraRecordingAccessFor(callId: string): Promise<AnuraRecordingAccess> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, status: 401 };
+  if (!isUuid(callId)) return { ok: false, status: 404 };
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("anura_calls").select("id,user_id,recording_status,recording_path").eq("id", callId).maybeSingle();
+  const row = data as { id: string; user_id: string | null; recording_status: string; recording_path: string | null } | null;
+  if (!row) return { ok: false, status: 404 };
+  if (row.user_id !== user.id) {
+    const sb = await createServerSupabase();
+    const { data: visible } = await sb.from("anura_calls").select("id").eq("id", callId).maybeSingle();
+    if (!visible) return { ok: false, status: 404 };
+  }
+  if (row.recording_status !== "guardada" || !row.recording_path) return { ok: false, status: 404 };
+  const signedUrl = await signedRecordingUrl(admin, row.recording_path);
+  return signedUrl ? { ok: true, signedUrl } : { ok: false, status: 404 };
+}
+
 /** Una llamada en la ficha del pedido (tarjeta del historial). */
 export interface AnuraOrderCall extends AnuraCallLive {
   userId: string | null;
@@ -179,8 +247,23 @@ export interface AnuraOrderCall extends AnuraCallLive {
   answered: boolean;
   /** «2 min 13 s», o null si no se habló. */
   talkLabel: string | null;
-  /** URL firmada de 5 minutos, solo si la grabación está guardada. */
+  /**
+   * La grabación por una ruta del MISMO origen (`/api/anura/recordings/<id>`),
+   * solo si está guardada. La CSP no deja al `<audio>` cargar de Supabase.
+   */
   recordingUrl: string | null;
+}
+
+/** El teléfono de Kapta del anexo de quien mira (fase 2). */
+export interface AnuraKaptaPhoneView {
+  /**
+   * `listo`: la llamada se hace con el teléfono dentro de Kapta.
+   * `sin_telefono`: fase 1 sin cambios (suena su teléfono de Anura).
+   * `clave_rechazada` / `sin_dominio`: no se puede llamar; `message` dice por qué.
+   */
+  status: AnuraKaptaPhoneStatus;
+  message: string | null;
+  rejectedAt: string | null;
 }
 
 export interface AnuraOrderPanel {
@@ -192,6 +275,29 @@ export interface AnuraOrderPanel {
   /** La llamada viva de quien mira (de este u otro pedido), para retomar el sondeo. */
   activeCall: AnuraCallLive | null;
   calls: AnuraOrderCall[];
+  /** ¿El anexo de quien mira tiene teléfono en Kapta? (fase 2). */
+  kaptaPhone: AnuraKaptaPhoneView;
+}
+
+const NO_KAPTA_PHONE: AnuraKaptaPhoneView = { status: "sin_telefono", message: null, rejectedAt: null };
+
+/** La ruta del mismo origen que sirve una grabación guardada. */
+export function anuraRecordingHref(callId: string): string {
+  return `/api/anura/recordings/${callId}`;
+}
+
+/** El estado del teléfono de Kapta de un anexo. Sin la 0311: fase 1. */
+async function kaptaPhoneOf(admin: SupabaseClient, orgId: string, ext: { id: string; extension: string } | null): Promise<AnuraKaptaPhoneView> {
+  if (!ext) return NO_KAPTA_PHONE;
+  const [{ settings, missing }, metas] = await Promise.all([readSipSettings(admin, orgId), readSipCredentialMetas(admin, orgId)]);
+  if (missing || metas.missing) return NO_KAPTA_PHONE;
+  const meta = metas.byExtensionId.get(ext.id) ?? null;
+  const status = kaptaPhoneStatus(ext, meta, settings);
+  return {
+    status,
+    message: status === "clave_rechazada" || status === "sin_dominio" ? ANURA_KAPTA_PHONE_TEXT[status] : null,
+    rejectedAt: status === "clave_rechazada" ? meta?.rejectedAt ?? null : null,
+  };
 }
 
 function recordingLinkExpired(r: AnuraCallRow, nowMs: number): boolean {
@@ -200,7 +306,7 @@ function recordingLinkExpired(r: AnuraCallRow, nowMs: number): boolean {
   return Number.isFinite(at) && at <= nowMs;
 }
 
-const EMPTY_PANEL: AnuraOrderPanel = { enabled: false, disabledReason: null, extension: null, activeCall: null, calls: [] };
+const EMPTY_PANEL: AnuraOrderPanel = { enabled: false, disabledReason: null, extension: null, activeCall: null, calls: [], kaptaPhone: NO_KAPTA_PHONE };
 
 /**
  * Lo que la ficha necesita de Anura: si sale el botón y las llamadas del
@@ -215,11 +321,12 @@ export async function loadAnuraOrderPanel(
   if ("error" in target) return { ...EMPTY_PANEL, disabledReason: target.error };
   const admin = createAdminSupabase();
   const sb = await createServerSupabase();
-  const [perms, extension, callsRes] = await Promise.all([
+  const [perms, extRow, callsRes] = await Promise.all([
     getMasterPermissions(),
-    anuraExtensionOf(admin, target.orgId, target.userId),
+    anuraExtensionRowOf(admin, target.orgId, target.userId),
     sb.from("anura_calls").select(ANURA_CALL_COLUMNS).eq("order_id", target.orderId).order("requested_at", { ascending: false }).limit(30),
   ]);
+  const extension = extRow?.extension ?? null;
   const rows = ((callsRes.data ?? []) as unknown as AnuraCallRow[]).filter((r) => r.mode === "pedido");
 
   let disabledReason: string | null = null;
@@ -228,10 +335,10 @@ export async function loadAnuraOrderPanel(
   else if (!extension) disabledReason = ANURA_NO_EXTENSION;
   else if (!anuraPeruCalled(target.phone)) disabledReason = ANURA_BAD_PHONE;
 
-  const [names, urls, active] = await Promise.all([
+  const [names, active, kaptaPhone] = await Promise.all([
     resolveAgentNames(rows.map((r) => r.user_id ?? "").filter(Boolean), admin),
-    Promise.all(rows.map((r) => (r.recording_status === "guardada" ? signedRecordingUrl(admin, r.recording_path) : Promise.resolve(null)))),
     extension ? activeAnuraCallOf(admin, target.userId) : Promise.resolve(null),
+    disabledReason === null ? kaptaPhoneOf(admin, target.orgId, extRow) : Promise.resolve(NO_KAPTA_PHONE),
   ]);
 
   const nowMs = Date.now();
@@ -249,7 +356,8 @@ export async function loadAnuraOrderPanel(
     disabledReason,
     extension,
     activeCall: active ? anuraCallLive(active) : null,
-    calls: rows.map((r, i) => {
+    kaptaPhone,
+    calls: rows.map((r) => {
       // Una «pendiente» cuyo enlace de Anura ya venció se ve «vencida» ya (el
       // reintento de arriba la deja así en la base).
       const live = { ...anuraCallLive(r), ...(recordingLinkExpired(r, nowMs) ? { recordingStatus: "vencida" as const } : {}) };
@@ -260,10 +368,100 @@ export async function loadAnuraOrderPanel(
         who: r.user_id ? names[r.user_id] ?? null : null,
         answered,
         talkLabel: answered && (r.bill_seconds ?? 0) > 0 ? talkTimeWords(r.bill_seconds ?? 0) : null,
-        recordingUrl: urls[i] ?? null,
+        recordingUrl: r.recording_status === "guardada" && r.recording_path ? anuraRecordingHref(r.id) : null,
       };
     }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// El teléfono dentro de Kapta (fase 2, solo salidas)
+// ---------------------------------------------------------------------------
+
+export const ANURA_PHONE_NOT_OWNER =
+  "La clave del teléfono de Kapta solo se entrega a la dueña del anexo: prueba con tu propio anexo.";
+
+/** Las credenciales SIP del anexo propio de `userId` en `orgId`, o por qué no. */
+async function ownPhoneCredentials(admin: SupabaseClient, orgId: string, userId: string): Promise<AnuraPhoneCredentialsResult> {
+  if (!anuraConfigured(orgId)) return { ok: false, code: "no_configurado", error: ANURA_NOT_CONFIGURED };
+  const ext = await anuraExtensionRowOf(admin, orgId, userId);
+  if (!ext) return { ok: false, code: "sin_anexo", error: ANURA_NO_EXTENSION };
+  return sipPhoneCredentials(admin, orgId, ext);
+}
+
+/**
+ * Las credenciales del teléfono de Kapta para llamar desde la ficha. SOLO a
+ * la dueña del anexo, en el momento de llamar: `master.edit`, el pedido
+ * visible por RLS, Anura encendido para la org del pedido (token y
+ * ANURA_ORG_ID), un anexo ACTIVO propio en esa org y su clave guardada y no
+ * rechazada. La contraseña no se escribe en ningún log; el navegador la
+ * guarda solo en memoria mientras dura la llamada.
+ */
+export async function anuraPhoneForOrder(orderId: string): Promise<AnuraPhoneCredentialsResult> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { ok: false, code: "permiso", error: ANURA_DENIED_CALL };
+  const target = await orderTarget(orderId);
+  if ("error" in target) return { ok: false, code: target.error.startsWith("Tu sesión") ? "sesion" : "pedido", error: target.error };
+  if (!anuraPeruCalled(target.phone)) return { ok: false, code: "pedido", error: ANURA_BAD_PHONE };
+  return ownPhoneCredentials(createAdminSupabase(), target.orgId, target.userId);
+}
+
+/**
+ * Las credenciales del teléfono de Kapta para la llamada de prueba de
+ * Ajustes: quien administra (`stores.manage`) y SOLO con su propio anexo. Con
+ * el anexo de otra persona no se entrega la clave.
+ */
+export async function anuraTestPhoneFor(storeId: string, rawExtension?: string | null): Promise<AnuraPhoneCredentialsResult> {
+  const target = await adminTarget(storeId);
+  if ("error" in target) return { ok: false, code: target.error === ANURA_DENIED_ADMIN ? "permiso" : "sesion", error: target.error };
+  const admin = createAdminSupabase();
+  if (rawExtension) {
+    const wanted = normalizeAnuraExtension(rawExtension);
+    const own = await anuraExtensionRowOf(admin, target.orgId, target.userId);
+    if (!wanted || !own || own.extension !== wanted) return { ok: false, code: "permiso", error: ANURA_PHONE_NOT_OWNER };
+  }
+  return ownPhoneCredentials(admin, target.orgId, target.userId);
+}
+
+export type AnuraPhoneRejectScope = { orderId: string } | { storeId: string };
+
+/**
+ * El teléfono de la asesora no pudo registrarse porque Anura rechazó la clave:
+ * se marca «clave rechazada» (fecha y motivo) y Kapta no la vuelve a entregar
+ * hasta que se guarde otra. Solo marca el anexo PROPIO, y solo la versión de
+ * la clave que se entregó (si alguien guardó otra entretanto, no la toca).
+ * Un fallo que no es de la clave no marca nada.
+ */
+export async function reportAnuraPhoneRejectedFor(
+  scope: AnuraPhoneRejectScope,
+  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null },
+): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Tu sesión venció. Vuelve a entrar." };
+  if (input.kind !== "clave") return { ok: true, marked: false };
+  const version = typeof input.credentialVersion === "string" ? input.credentialVersion.trim() : "";
+  if (!version || version.length > 64 || Number.isNaN(Date.parse(version))) return { ok: false, error: "Versión de la clave no válida." };
+  const status = Number.isInteger(input.status) && (input.status as number) >= 100 && (input.status as number) < 700 ? (input.status as number) : null;
+
+  let orgId: string | null = null;
+  if ("orderId" in scope) {
+    const target = await orderTarget(scope.orderId);
+    if ("error" in target) return { ok: false, error: target.error };
+    orgId = target.orgId;
+  } else {
+    orgId = await orgOfStore(await createServerSupabase(), scope.storeId);
+    if (!orgId) return { ok: false, error: "Tienda no encontrada." };
+  }
+  const admin = createAdminSupabase();
+  const ext = await anuraExtensionRowOf(admin, orgId, user.id);
+  if (!ext) return { ok: false, error: ANURA_NO_EXTENSION };
+  const marked = await markSipCredentialRejected(admin, {
+    orgId,
+    extensionId: ext.id,
+    credentialVersion: version,
+    reason: rejectionReason("clave", status),
+  });
+  return { ok: true, marked };
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +490,27 @@ export interface AnuraExtensionView {
   name: string;
   extension: string;
   active: boolean;
+  /** El teléfono de Kapta de este anexo (fase 2). Nunca la clave. */
+  phone: AnuraExtensionPhoneView;
+}
+
+export interface AnuraExtensionPhoneView {
+  status: AnuraKaptaPhoneStatus;
+  /** El usuario SIP guardado, o el sugerido (`<anexo>-websocket`) si no hay clave. */
+  sipUser: string;
+  /** «Clave guardada: sí/no». */
+  hasPassword: boolean;
+  savedAt: string | null;
+  rejectedAt: string | null;
+  rejectedReason: string | null;
+}
+
+/** La central SIP de la org (fase 2). No es secreto. */
+export interface AnuraSipSettingsView {
+  domain: string | null;
+  wsUrl: string;
+  port: number;
+  updatedAt: string | null;
 }
 
 export interface AnuraPersonView {
@@ -335,14 +554,17 @@ export interface AnuraSettingsData {
   recentEvents: AnuraEventView[];
   /** Las tablas de la 0310 todavía no existen. */
   migrationMissing: boolean;
+  /** La central SIP del teléfono de Kapta (fase 2). */
+  sip: AnuraSipSettingsView;
+  /** Las tablas de la 0311 todavía no existen: no se pueden guardar claves. */
+  sipMigrationMissing: boolean;
 }
 
 export type AnuraSettingsResult = { ok: true; data: AnuraSettingsData } | { ok: false; error: string };
 
 /** Sin `0310` la tabla no existe: la sección lo dice en vez de caerse. */
 function isMissingTable(error: { code?: string; message?: string } | null): boolean {
-  if (!error) return false;
-  return error.code === "42P01" || error.code === "PGRST205" || /does not exist|could not find the table/i.test(error.message ?? "");
+  return isMissingSipTable(error);
 }
 
 /** Todo lo de la sección «Telefonía Anura» de Ajustes. */
@@ -351,7 +573,7 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
   if ("error" in target) return { ok: false, error: target.error };
   const admin = createAdminSupabase();
   const since = new Date(Date.now() - ANURA_EVENT_RETENTION_DAYS * 86_400_000).toISOString();
-  const [extRes, memberRes, eventRes] = await Promise.all([
+  const [extRes, memberRes, eventRes, sipRes, metaRes] = await Promise.all([
     admin.from("anura_extensions").select("id,user_id,extension,active").eq("org_id", target.orgId).order("extension"),
     admin.from("memberships").select("user_id,role").eq("org_id", target.orgId),
     admin
@@ -361,6 +583,8 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
       .gte("received_at", since)
       .order("received_at", { ascending: false })
       .limit(50),
+    readSipSettings(admin, target.orgId),
+    readSipCredentialMetas(admin, target.orgId),
   ]);
   const migrationMissing = isMissingTable(extRes.error) || isMissingTable(eventRes.error);
   const exts = (extRes.data ?? []) as { id: string; user_id: string; extension: string; active: boolean }[];
@@ -395,7 +619,25 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
       configured: anuraConfigured(target.orgId),
       webhook,
       template: ANURA_EVENT_TEMPLATE,
-      extensions: exts.map((e) => ({ id: e.id, userId: e.user_id, name: names[e.user_id] ?? e.user_id.slice(0, 8), extension: e.extension, active: e.active })),
+      extensions: exts.map((e) => {
+        const meta = metaRes.byExtensionId.get(e.id) ?? null;
+        const valid = meta && meta.extension === e.extension ? meta : null;
+        return {
+          id: e.id,
+          userId: e.user_id,
+          name: names[e.user_id] ?? e.user_id.slice(0, 8),
+          extension: e.extension,
+          active: e.active,
+          phone: {
+            status: kaptaPhoneStatus({ id: e.id, extension: e.extension }, valid, sipRes.settings),
+            sipUser: valid?.sipUser ?? defaultSipUser(e.extension),
+            hasPassword: !!valid,
+            savedAt: valid?.savedAt ?? null,
+            rejectedAt: valid?.rejectedAt ?? null,
+            rejectedReason: valid?.rejectedReason ?? null,
+          },
+        };
+      }),
       people: members
         .map((m) => ({ userId: m.user_id, name: names[m.user_id] ?? m.user_id.slice(0, 8), role: m.role }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -419,6 +661,8 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
         };
       }),
       migrationMissing,
+      sip: { ...sipRes.settings },
+      sipMigrationMissing: sipRes.missing || metaRes.missing,
     },
   };
 }
@@ -444,12 +688,24 @@ export async function saveAnuraExtensionFor(storeId: string, userId: string, raw
     const names = await resolveAgentNames([takenBy], admin);
     return { ok: false, error: `El anexo ${extension} ya está asignado a ${names[takenBy] ?? "otra persona"}. Quítaselo primero.` };
   }
+  const { data: before } = await admin
+    .from("anura_extensions")
+    .select("id,extension")
+    .eq("org_id", target.orgId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  const previous = before as { id?: string; extension?: string } | null;
   const { error } = await admin
     .from("anura_extensions")
     .upsert({ org_id: target.orgId, user_id: userId, extension, active: true, created_by: target.userId }, { onConflict: "org_id,user_id" });
   if (error) {
     if (error.code === "23505") return { ok: false, error: `El anexo ${extension} ya está asignado a otra persona.` };
     return { ok: false, error: `No se pudo guardar el anexo: ${error.message}` };
+  }
+  // La clave de la «101-websocket» no sirve para la 102: cambiar el número
+  // borra la clave (la base también lo hace, 0311).
+  if (previous?.id && previous.extension && previous.extension !== extension) {
+    await deleteSipCredential(admin, target.orgId, previous.id).catch(() => null);
   }
   return { ok: true, notice: `Anexo ${extension} asignado.` };
 }
@@ -481,6 +737,101 @@ export async function removeAnuraExtensionFor(storeId: string, extensionId: stri
   if (error) return { ok: false, error: `No se pudo quitar el anexo: ${error.message}` };
   if (!(data ?? []).length) return { ok: false, error: "Anexo no encontrado." };
   return { ok: true, notice: "Anexo quitado." };
+}
+
+/** El anexo de la org por id (para las claves SIP). */
+async function orgExtensionById(admin: SupabaseClient, orgId: string, extensionId: string): Promise<{ id: string; extension: string } | null> {
+  if (!isUuid(extensionId)) return null;
+  const { data } = await admin.from("anura_extensions").select("id,extension").eq("id", extensionId).eq("org_id", orgId).maybeSingle();
+  const row = data as { id?: string; extension?: string } | null;
+  return row?.id && row.extension ? { id: row.id, extension: row.extension } : null;
+}
+
+export interface AnuraSipSettingsInput {
+  domain: string;
+  /** Vacío = wss://sipwss.anura.pe. */
+  wsUrl?: string | null;
+  /** Vacío = 55090. */
+  port?: number | string | null;
+}
+
+type SipSettingsParsed = { domain: string; wsUrl: string; port: number } | { error: string };
+
+function parseSipSettings(input: AnuraSipSettingsInput | null | undefined): SipSettingsParsed {
+  const domain = normalizeSipDomain(input?.domain);
+  if (!domain) return { error: "Escribe el dominio de la central tal como sale en «Obtener credenciales» (por ejemplo, miempresa.anura.pe)." };
+  const wsUrl = normalizeAnuraWsUrl(input?.wsUrl ?? null);
+  if (!wsUrl) return { error: "La URL WebSocket tiene que ser wss:// a un servidor de anura.pe (por defecto, wss://sipwss.anura.pe)." };
+  const port = normalizeSipPort(input?.port ?? null);
+  if (!port) return { error: "El puerto SIP es un número de 1 a 65535 (en Perú, 55090)." };
+  return { domain, wsUrl, port };
+}
+
+/** Guarda la central SIP de la org (dominio, URL WebSocket, puerto). */
+export async function saveAnuraSipSettingsFor(storeId: string, input: AnuraSipSettingsInput): Promise<AnuraMutationResult> {
+  const target = await adminTarget(storeId);
+  if ("error" in target) return { ok: false, error: target.error };
+  const parsed = parseSipSettings(input);
+  if ("error" in parsed) return { ok: false, error: parsed.error };
+  const error = await writeSipSettings(createAdminSupabase(), target.orgId, parsed, target.userId);
+  if (error) return { ok: false, error: isMissingTable({ message: error }) ? "Falta aplicar la migración 0311 (teléfono de Kapta)." : `No se pudo guardar la central: ${error}` };
+  return { ok: true, notice: "Central de Anura guardada." };
+}
+
+export interface AnuraSipCredentialsInput extends AnuraSipSettingsInput {
+  /** Vacío = `<anexo>-websocket`. */
+  sipUser?: string | null;
+  password: string;
+}
+
+/**
+ * «Probar y guardar»: el navegador de quien administra ya hizo UN registro
+ * con estos datos y Anura lo aceptó; aquí se guardan la central (si cambió) y
+ * la clave CIFRADA del anexo. Limpia «clave rechazada». El servidor no puede
+ * comprobar la prueba (la hizo el navegador): confía en quien administra,
+ * que de todos modos puede escribir la clave.
+ */
+export async function saveAnuraSipCredentialsFor(storeId: string, extensionId: string, input: AnuraSipCredentialsInput): Promise<AnuraMutationResult> {
+  const target = await adminTarget(storeId);
+  if ("error" in target) return { ok: false, error: target.error };
+  const admin = createAdminSupabase();
+  const ext = await orgExtensionById(admin, target.orgId, extensionId);
+  if (!ext) return { ok: false, error: "Anexo no encontrado." };
+  const parsed = parseSipSettings(input);
+  if ("error" in parsed) return { ok: false, error: parsed.error };
+  const sipUser = normalizeSipUser(input?.sipUser ?? null, ext.extension);
+  if (!sipUser) return { ok: false, error: "El usuario SIP solo lleva letras, números, punto, guion o guion bajo (por ejemplo, 101-websocket)." };
+  const password = normalizeSipPassword(input?.password);
+  if (!password) return { ok: false, error: "Escribe la contraseña SIP de la terminal web (hasta 128 caracteres, sin saltos de línea)." };
+
+  const { settings, missing } = await readSipSettings(admin, target.orgId);
+  if (missing) return { ok: false, error: "Falta aplicar la migración 0311 (teléfono de Kapta)." };
+  if (settings.domain !== parsed.domain || settings.wsUrl !== parsed.wsUrl || settings.port !== parsed.port) {
+    const error = await writeSipSettings(admin, target.orgId, parsed, target.userId);
+    if (error) return { ok: false, error: `No se pudo guardar la central: ${error}` };
+  }
+  const saved = await writeSipCredential(admin, {
+    orgId: target.orgId,
+    extensionId: ext.id,
+    extension: ext.extension,
+    sipUser,
+    password,
+    byUserId: target.userId,
+  });
+  if ("error" in saved) return { ok: false, error: saved.error };
+  return { ok: true, notice: `Teléfono de Kapta listo para el anexo ${ext.extension}.` };
+}
+
+/** «Quitar clave»: el anexo vuelve a la fase 1 (suena su teléfono de Anura). */
+export async function removeAnuraSipCredentialsFor(storeId: string, extensionId: string): Promise<AnuraMutationResult> {
+  const target = await adminTarget(storeId);
+  if ("error" in target) return { ok: false, error: target.error };
+  const admin = createAdminSupabase();
+  const ext = await orgExtensionById(admin, target.orgId, extensionId);
+  if (!ext) return { ok: false, error: "Anexo no encontrado." };
+  const res = await deleteSipCredential(admin, target.orgId, ext.id);
+  if ("error" in res) return { ok: false, error: res.error };
+  return { ok: true, notice: res.removed ? `Clave del anexo ${ext.extension} quitada.` : `El anexo ${ext.extension} no tenía clave guardada.` };
 }
 
 /**

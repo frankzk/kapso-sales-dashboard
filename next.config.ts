@@ -4,7 +4,8 @@ import type { NextConfig } from "next";
 // scripts/styles ('unsafe-inline') because the app relies on Next/React inline
 // runtime + Tailwind; tighten to nonces later. `frame-ancestors 'none'` blocks
 // clickjacking; `connect-src` allows the Supabase project; media is same-origin
-// (proxied), so 'self' + data:/blob: covers images.
+// (proxied), so 'self' + data:/blob: covers images and `media-src 'self'`
+// covers audio (Anura recordings go through /api/anura/recordings).
 const CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
@@ -12,8 +13,15 @@ const CSP = [
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   // wss://rtc.telnyx.com: la señalización de las llamadas desde la computadora
-  // (MOM §8.5). El audio va por WebRTC, que la CSP no gobierna.
-  "connect-src 'self' https://*.supabase.co https://*.supabase.in wss://*.supabase.co wss://rtc.telnyx.com",
+  // (MOM §8.5). wss://sipwss.anura.pe (y solo otros hosts de anura.pe, sin
+  // puerto: lo que acepta la URL WebSocket de Ajustes): el teléfono de Anura
+  // dentro de Kapta (MOM §8.7, fase 2). El audio va por WebRTC, que la CSP no
+  // gobierna.
+  "connect-src 'self' https://*.supabase.co https://*.supabase.in wss://*.supabase.co wss://rtc.telnyx.com wss://sipwss.anura.pe wss://*.anura.pe",
+  // Las grabaciones de Anura se sirven por /api/anura/recordings (mismo
+  // origen); el audio de la llamada entra por `srcObject`, que media-src no
+  // gobierna. Nada de Supabase aquí: el navegador no recibe URLs firmadas.
+  "media-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
