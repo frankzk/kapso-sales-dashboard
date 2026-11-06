@@ -78,7 +78,7 @@ import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
 import { createPrepayPaymentLink, loadOrderPrepayStatus, type OrderPrepayStatus } from "@/app/dashboard/pedidos/prepay-actions";
 import { PrepayListBanner } from "@/components/prepay-list-banner";
 import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
-import { fenixOutputIsCancelable, manualOutputIsCancelable, nombreDeCourier } from "@/lib/shipment-output";
+import { fenixOutputIsCancelable, manualOutputIsCancelable, nombreDeCourier, pickFillableRouteOutput } from "@/lib/shipment-output";
 import {
   addOrderComment,
   cancelFenixOutput,
@@ -1187,6 +1187,9 @@ export function OrderDrawer({
   const offerNewOutputLabel = Boolean(
     canEdit && reprogram && !reprogram.live && !reprogram.open && detail?.row.macro_substage === "por_reprogramar_lima",
   );
+  // La «por definir» que ya tiene rótulo: Grupo GF la toma con su mismo QR, y
+  // su tarjeta de la mesa de ruta la nombra con «Reimprimir rótulo».
+  const readyOutput = detail ? pickFillableRouteOutput(detail.guides) : null;
   const printNewOutputLabel = () =>
     run(async () => {
       const resolved = await resolveLabelsForOrders([orderId]);
@@ -1762,6 +1765,13 @@ export function OrderDrawer({
                   onSelect={selectRoute}
                   aliclikOutlook={detail.aliclikOutlook}
                   storeName={storeName(detail.row.store_id)}
+                  groupGf={{
+                    printNew: offerNewOutputLabel ? { onPrint: () => void printNewOutputLabel(), pending } : null,
+                    ready:
+                      !offerNewOutputLabel && readyOutput?.qr_token
+                        ? { outputCode: readyOutput.output_code ?? null, labelHref: `/api/pedidos/rotulos?ids=${readyOutput.id}` }
+                        : null,
+                  }}
                 />
               </div>
               <section
