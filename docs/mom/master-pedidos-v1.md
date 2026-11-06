@@ -10614,6 +10614,87 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
     rechazado («falta codigo»). Era la salida de mentira de un estado
     atestiguado (`MOM-KP123525-SHALOM-…`), que gastaba cupo en cada pasada.
 
+#### Por qué «Crear guía» no se deja pulsar (decidido el 06-11-2026)
+
+- **El caso.** #KP202968: adelanto de S/ 30 por Yape validado
+  (`adelanto_validado`), DNI y agencia «JAEN CO» ya apuntados en «DNI y agencia
+  Shalom». La operadora abrió la guía Shalom y vio tres avisos ámbar —«Shalom
+  exige el documento… y el pedido no lo trae» con el DNI ya puesto, «El pedido
+  todavía no tiene el pago completo validado…» y la nota de COD Core «Sin
+  contra entrega en su distrito: pedir el pago por adelantado antes de
+  despachar.»— y el botón «Crear guía» gris. Concluyó «ya tiene adelanto y no
+  me deja registrar». Ningún aviso frenaba: el botón tenía doce condiciones y
+  no decía cuál fallaba.
+- **El botón dice por qué está gris.** Encima de «Crear guía», mientras no se
+  pueda pulsar, el modal muestra un aviso `warn` «Para poder crear la guía:»
+  (nombrado con `aria-describedby`). Esa lista ES la condición del botón
+  (`shalomSubmitMissing`, lib/shalom/draft.ts): si una razón sale, frena; si
+  algo frena, sale.
+  - **Con un bloqueo duro** (guía activa, pedido cerrado, tienda sin
+    configurar, lista de pago adelantado) dice solo «No se puede crear por API:
+    mira el aviso rojo de arriba.»: conectar o llenar el formulario no cambia
+    nada, y repetir el párrafo rojo es ruido.
+  - **Si no**, en el orden de la pantalla: el motivo del freno blando («…en el
+    recuadro rojo de arriba»), «Falta conectar con Shalom (pulsa «Conectar con
+    Shalom»).» (o «La sesión de Shalom venció…»), y lo que exigiría el servidor
+    con los valores del formulario, con su mismo texto: «Falta elegir la agencia
+    de destino.», «El origen y el destino son la misma agencia.», el documento
+    («Falta el documento del destinatario.», «El DNI son 8 dígitos.»…), «Falta
+    el nombre del destinatario.» (o la razón social con RUC), «Falta el primer
+    apellido del destinatario (Shalom lo exige para DNI y CE).», «Falta el
+    teléfono del destinatario.» o «El teléfono no es un celular peruano de 9
+    dígitos (…).», «Falta elegir el tipo de paquete.», «La cantidad de bultos no
+    es válida.» y, al final, la clave de recojo inválida (solo para quien la
+    ve). Esa parte sale de `shalomPayloadErrors`, la MISMA función con la que
+    `buildShalomOrderPayload` valida en el servidor: no se pueden separar.
+  - El error rojo de la llamada no cambia.
+- **El modal sabe lo que el servidor aplica.** `loadShalomDraft` corre
+  `prepayGuideBlock` (solo lectura, la misma de `createShalomGuide`) y lo suma
+  a `blockers`; no a `contingencyBlockers`, porque la vinculación manual no lo
+  mira.
+- **Los avisos ámbar son solo cosas por hacer** (`shalomDraftWarnings`). Con un
+  bloqueo duro no sale ninguno. Si no:
+  - «Shalom exige el documento…» solo si **nadie apuntó el documento**; con el
+    DNI en «DNI y agencia Shalom» queda el aviso de verificarlo.
+  - Con un comprobante cargado sin validar (`adelanto_cargado`,
+    `pago_total_cargado`, `posible_duplicado`), que también trae el freno
+    blando en rojo: «Hay un comprobante cargado sin validar: valídalo en Cobro
+    o escribe el motivo en el recuadro rojo para crearla igual. La clave de
+    recojo espera al pago completo.». Ya no dice «la guía se puede crear
+    igual» al lado del recuadro que lo impide.
+  - Con el adelanto validado, sin pago (lo dice el freno blando) o pagado
+    completo: ningún aviso de pago.
+- **La nota del pedido no se oculta y va en neutro** (`wash`, no ámbar: es una
+  nota de la operación). Cuando hay nota, el cobro ya cumple lo que pide Shalom
+  (`shalomSoftBlockers` vacío) y no hay bloqueo duro, lleva debajo, en verde
+  (`ok`), la única confirmación del pago en el modal (`shalomNotePaymentLine`):
+  «El adelanto ya está validado (S/ 30): si la nota pide cobrar por adelantado,
+  eso ya se cumplió. La clave de recojo se entrega cuando el pago completo esté
+  validado.» —o «El pago completo ya está validado (S/ …): …»—. El importe es la
+  suma de `order_payments` validados (adelanto, diferencia y total), que solo
+  se lee cuando la línea va a salir; si no se puede leer, sale sin cifra.
+- **La sesión de 2 h vence con el modal abierto, medida por el servidor.** El
+  borrador trae `sessionMsLeft` y `connectShalomSession` devuelve `msLeft`:
+  lo que le queda al token con el margen de 2 min de `sessionIsFresh` (que vive
+  en `draft.ts` y `client.ts` re-exporta), calculado con el reloj DEL
+  SERVIDOR (`msUntilSessionStale`). El modal lo cuenta desde que llega
+  (`sessionStaleAt`) y nunca compara la hora del servidor con la del equipo:
+  con el reloj adelantado, la sesión se daba por vencida antes de tiempo —o
+  nunca por viva— y reconectar devolvía la misma hora de la caché sin arreglar
+  nada. El temporizador va acotado a lo que acepta `setTimeout`
+  (`sessionTimerDelay`) y vuelve a mirar al dispararse. Al vencer dice «La
+  sesión de Shalom venció: vuelve a conectar» y ofrece «Conectar con Shalom»,
+  sin perder lo llenado. Al pulsar no hay otro chequeo en el navegador: el
+  servidor decide y, si no hay sesión o Shalom rechaza el token, responde
+  `sessionExpired` y el modal hace lo mismo. Al reconectar se borra el error
+  rojo que venía de la sesión.
+- **Un token rechazado se tira de todas sus copias** (`clearRejectedSession`,
+  lib/shalom/session.ts): de la tienda y de toda tienda de la misma `org_id` y
+  cuenta que guarde ese mismo cifrado. Limpiar solo la tienda dejaba que
+  «Conectar con Shalom» copiara de vuelta el token muerto de una hermana (el
+  atajo `shared` de `mintSession`), dijera «✓ Conectado» y el siguiente intento
+  volviera a fallar.
+
 ### Olva
 
 - Regla normal: pago completo.

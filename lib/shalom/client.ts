@@ -471,12 +471,11 @@ export function findCreatedOrder(
   return hits.length === 1 ? (hits[0] as ShalomAccountOrder) : null;
 }
 
-/** ¿El token de sesión sigue vivo? Con margen, para no mandarlo justo al vencer. */
-export function sessionIsFresh(expiresAt: string | null | undefined, skewMs = 120_000): boolean {
-  if (!expiresAt) return false;
-  const ms = Date.parse(expiresAt);
-  return Number.isFinite(ms) && ms - skewMs > Date.now();
-}
+/**
+ * ¿El token de sesión sigue vivo? Vive en `draft.ts` (puro) porque el modal
+ * también lo usa para notar que la sesión de 2 h venció con el modal abierto.
+ */
+export { sessionIsFresh } from "./draft";
 
 /**
  * Por qué falló la prueba de la API key global, que es la primera mitad de

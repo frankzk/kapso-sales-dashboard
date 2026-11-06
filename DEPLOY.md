@@ -18,6 +18,30 @@ Aliclik: pide la ubicación. Con Grupo GF o Swayp no aparece.
 **Marcha atrás.** Revertir el commit. Las coordenadas guardadas se quedan en el
 pedido: son correctas.
 
+### 06-11-2026 · Shalom: el panel dice exactamente por qué no deja crear la guía (sin migración, MOM §12)
+
+Caso #KP202968: el pedido tenía el adelanto validado y el panel de Shalom
+mostraba avisos que parecían bloqueos sin decir qué faltaba. Ahora, encima de
+«Crear guía», «Para poder crear la guía:» lista cada condición que falta
+(conectar con Shalom, agencia, producto, documento, apellido, teléfono válido,
+bultos, motivo de excepción), con las mismas reglas que el servidor. El aviso
+«Shalom exige el documento…» ya no sale cuando el DNI viene apuntado. Bajo la
+nota del pedido, una línea verde dice que el adelanto ya está validado. El
+panel lista también la lista de pago adelantado como bloqueo antes de pulsar.
+La sesión de 2 h se mide con el reloj del servidor y el panel avisa cuando
+vence. Si Shalom rechaza el token, se borra de todas las tiendas de la misma
+cuenta que tengan ese mismo token, para que «Conectar con Shalom» haga un login
+de verdad.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+
+**Qué mirar después.** Abrir Shalom en #KP202968: sin avisos rojos, un solo
+aviso ámbar (DNI y agencia apuntados) y la línea verde bajo la nota. Con la
+sesión conectada la lista queda vacía y el botón activo.
+
+**Marcha atrás.** Revertir el commit. Lo único que escribe de más es borrar un
+token que Shalom ya rechazó.
+
 ### 06-11-2026 · Repro Lima: la dirección completa bajo el cliente (sin migración, MOM §9.5)
 
 Pedido del owner. Debajo del cliente y su teléfono, la lista de Repro Lima
