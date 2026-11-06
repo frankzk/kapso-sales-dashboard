@@ -15,10 +15,10 @@ import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
 import { cutoffNotice } from "@/lib/repro-lima";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
-import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
+import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
 import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, readRowFilters, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
+import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
 
@@ -217,10 +217,28 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   const readyToApprove = list === "reintentos_aliclik"
     ? inQueue.filter((row) => caseById.get(row.orderId)?.retryChain?.ready)
     : [];
+  // Elegir cuáles aprobar (owner, 06-11-2026): con alguno marcado, el botón
+  // aprueba esos; sin marcar, todos los listos, como antes.
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const targets = retryApprovalTargets(readyToApprove, picked);
+  const selection: LimaRowSelection | undefined = list === "reintentos_aliclik" ? {
+    selectable: (row) => Boolean(caseById.get(row.orderId)?.retryChain?.ready),
+    selected: picked,
+    onToggle: (orderId) => setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(orderId)) next.delete(orderId); else next.add(orderId);
+      return next;
+    }),
+    onToggleAll: (orderIds, on) => setPicked((current) => {
+      const next = new Set(current);
+      for (const id of orderIds) { if (on) next.add(id); else next.delete(id); }
+      return next;
+    }),
+  } : undefined;
   async function approveAll() {
-    const rows = readyToApprove;
+    const rows = targets.rows;
     if (!rows.length || bulk) return;
-    if (!window.confirm(`Se crearán ${rows.length} guías de Aliclik. ¿Seguir?`)) return;
+    if (!window.confirm(`Se crearán ${rows.length} ${rows.length === 1 ? "guía" : "guías"} de Aliclik${targets.picked ? " (las elegidas)" : ""}. ¿Seguir?`)) return;
     const failed: string[] = [];
     let created = 0;
     setBulk({ done: 0, total: rows.length });
@@ -235,6 +253,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
       setBulk({ done: i + 1, total: rows.length });
     }
     setBulk(null);
+    setPicked(new Set());
     setFeedback({
       kind: failed.length ? "error" : "notice",
       text: `Guías creadas: ${created} de ${rows.length}.`,
@@ -315,9 +334,19 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             ))}
           </div>
           {list === "reintentos_aliclik" && (
-            <OpsButton size="sm" variant="primary" disabled={!readyToApprove.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
-              {bulk ? `Creando ${bulk.done} de ${bulk.total}…` : `Aprobar todos los listos (${readyToApprove.length})`}
-            </OpsButton>
+            <>
+              <OpsButton size="sm" variant="primary" disabled={!targets.rows.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
+                {bulk
+                  ? `Creando ${bulk.done} de ${bulk.total}…`
+                  : targets.picked ? `Aprobar elegidos (${targets.rows.length})` : `Aprobar todos los listos (${readyToApprove.length})`}
+              </OpsButton>
+              {targets.picked && !bulk && (
+                <OpsButton size="sm" variant="ghost" onClick={() => setPicked(new Set())} className="pointer-coarse:h-11">Quitar elección</OpsButton>
+              )}
+              {!targets.picked && readyToApprove.length > 0 && !bulk && (
+                <span className="text-[13px] text-ink-500">Marca las casillas para aprobar solo algunos.</span>
+              )}
+            </>
           )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">
             <b className="font-semibold text-ink-900">{inQueue.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega
@@ -335,7 +364,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             </div>
           </Sheet>
         )}
-        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} />
+        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} selection={selection} />
       </section>
 
       {open && sheetRow && (

@@ -2,8 +2,9 @@
 
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { cn } from "@/components/ui";
 import { approveAliclikRetry, dismissAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { Badge, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
+import { Badge, CHECKBOX, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
 import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-sheet";
 import type { ReproRow } from "@/lib/repro-lima-access";
@@ -172,26 +173,69 @@ function PendingAddress({ row }: { row: LimaPendingOrder }) {
   );
 }
 
+/**
+ * Elegir qué reintentos de Aliclik aprobar (owner, 06-11-2026): una casilla en
+ * cada fila que se puede aprobar y, arriba, la de todas las listas.
+ */
+export interface LimaRowSelection {
+  selectable: (row: LimaPendingOrder) => boolean;
+  selected: ReadonlySet<string>;
+  onToggle: (orderId: string) => void;
+  onToggleAll: (orderIds: string[], on: boolean) => void;
+}
+
+function SelectBox({ row, selection }: { row: LimaPendingOrder; selection: LimaRowSelection }) {
+  if (!selection.selectable(row)) return null;
+  return (
+    <input
+      type="checkbox"
+      className={cn(CHECKBOX, "pointer-coarse:size-5")}
+      checked={selection.selected.has(row.orderId)}
+      onChange={() => selection.onToggle(row.orderId)}
+      aria-label={`Elegir ${row.orderName} para aprobar`}
+    />
+  );
+}
+
 /** Atender siempre abre la gestión. El código abre la ficha del pedido. */
-export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText }: {
+export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText, selection }: {
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
   renderActions: (row: LimaPendingOrder, compact: boolean) => ReactNode;
   emptyText?: string;
+  selection?: LimaRowSelection;
 }) {
   const [limit, setLimit] = useState(100);
   const cases = new Map(reproRows.map((r) => [r.orderId, r]));
   const visible = rows.slice(0, limit);
   const action = (row: LimaPendingOrder, compact: boolean) => renderActions(row, compact);
+  const selectableIds = selection ? rows.filter((row) => selection.selectable(row)).map((row) => row.orderId) : [];
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selection!.selected.has(id));
+  const someSelected = !allSelected && selectableIds.some((id) => selection!.selected.has(id));
   if (!rows.length) return <div className="border-t border-line px-4 py-12 text-center text-sm text-ink-500">{emptyText ?? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda."}</div>;
   return (
     <>
       <div className="hidden border-t border-line xl:block">
         <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
-          <colgroup><col className="w-[10.5rem]" /><col /><col /><col /><col className="w-[8.5rem]" /><col className="w-[10rem]" /></colgroup>
-          <thead><tr className="text-left text-xs font-semibold text-ink-600"><th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Gestión pendiente</th><th className="px-3 py-2.5">Estado y subetapa</th><th className="px-3 py-2.5 text-right">Venta</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
+          <colgroup>{selection && <col className="w-10" />}<col className="w-[10.5rem]" /><col /><col /><col /><col className="w-[8.5rem]" /><col className="w-[10rem]" /></colgroup>
+          <thead><tr className="text-left text-xs font-semibold text-ink-600">{selection && (
+            <th className="py-2.5 pl-4 pr-0">
+              {selectableIds.length > 0 && (
+                <input
+                  type="checkbox"
+                  className={CHECKBOX}
+                  checked={allSelected}
+                  ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                  onChange={() => selection.onToggleAll(selectableIds, !allSelected)}
+                  aria-label={allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos para aprobar`}
+                  title={allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos`}
+                />
+              )}
+            </th>
+          )}<th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Gestión pendiente</th><th className="px-3 py-2.5">Estado y subetapa</th><th className="px-3 py-2.5 text-right">Venta</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
           <tbody>{visible.map((row) => {
             const repro = cases.get(row.orderId);
-            return <tr key={row.orderId} className="border-b border-line align-top hover:bg-wash">
+            return <tr key={row.orderId} className={cn("border-b border-line align-top hover:bg-wash", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
+              {selection && <td className="py-3 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
               <td className="px-4 py-3"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
               <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PendingAddress row={row} /></td>
               <td className="px-3 py-3"><PendingContext row={row} repro={repro} today={today} /></td>
@@ -202,10 +246,22 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
           })}</tbody>
         </table>
       </div>
+      {selection && selectableIds.length > 0 && (
+        <label className="flex min-h-11 items-center gap-2 border-t border-line px-4 text-[13px] font-medium text-ink-700 xl:hidden">
+          <input
+            type="checkbox"
+            className={cn(CHECKBOX, "pointer-coarse:size-5")}
+            checked={allSelected}
+            ref={(el) => { if (el) el.indeterminate = someSelected; }}
+            onChange={() => selection.onToggleAll(selectableIds, !allSelected)}
+          />
+          {allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos`}
+        </label>
+      )}
       <ul className="divide-y divide-line border-t border-line xl:hidden">{visible.map((row) => {
         const repro = cases.get(row.orderId);
         return <li key={row.orderId} className="space-y-2 px-4 py-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2"><OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><span className="text-xs text-ink-500">{row.storeName}</span></div>
+          <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span><span className="text-xs text-ink-500">{row.storeName}</span></div>
           <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {soles(row.orderTotal)}</p><PendingAddress row={row} />
           <PendingContext row={row} repro={repro} today={today} /><PendingStage row={row} repro={repro} today={today} />
           {repro && <ClaimBadge row={repro} />}

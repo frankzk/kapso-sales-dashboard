@@ -4712,6 +4712,16 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
     y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
     reintento se aprueba desde mañana».
+  - **Elegir cuáles aprobar (pedido del owner, 06-11-2026).** Cada fila que ya
+    se puede aprobar lleva una casilla; las que fallaron hoy, no. Arriba hay
+    una casilla para elegir o quitar todas las listas: en la tabla, en la
+    cabecera; en el teléfono, sobre la lista. Con alguna marcada, el botón dice
+    **«Aprobar elegidos (N)»** y aprueba solo esas, por el mismo camino, con la
+    confirmación y el resumen. Al lado aparece «Quitar elección». Sin ninguna
+    marcada sigue siendo «Aprobar todos los listos (N)».
+  - Una marcada que dejó de estar lista, o que un filtro esconde, no se
+    aprueba (`retryApprovalTargets`, `lib/repro-lima-pending.ts`). Al terminar,
+    la elección se vacía. «Aprobar · ALIDRIVER» de cada fila no cambia.
 - **Entrega 3, la creación automática por variante (owner, 04-11-2026).** En
   vez de esperar dos semanas para encender todo junto, el owner enciende cada
   variante desde **Automatizaciones** (§40) cuando la ve segura. Una variante es

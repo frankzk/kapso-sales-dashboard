@@ -92,6 +92,17 @@ export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readon
   return counts;
 }
 
+/**
+ * «Reintentos Aliclik»: a quién aprueba el botón de la barra (owner,
+ * 06-11-2026). Los marcados que siguen listos y a la vista; sin ninguno
+ * marcado, todos los listos, como antes. Un marcado que dejó de estar listo o
+ * que un filtro esconde no se aprueba.
+ */
+export function retryApprovalTargets<T extends { orderId: string }>(ready: readonly T[], selected: ReadonlySet<string>): { rows: T[]; picked: boolean } {
+  const picked = ready.filter((row) => selected.has(row.orderId));
+  return picked.length ? { rows: picked, picked: true } : { rows: [...ready], picked: false };
+}
+
 export const LIMA_PENDING_STAGES = ["por_confirmar", "preparacion", "por_despachar", "en_curso"] as const;
 export type LimaPendingStage = typeof LIMA_PENDING_STAGES[number];
 export interface LimaPendingOrder {
