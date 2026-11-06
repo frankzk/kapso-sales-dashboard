@@ -267,11 +267,20 @@ function positiveInt(v: number | null | undefined): boolean {
 }
 
 /**
- * Arma el cuerpo del POST. Devuelve TODOS los errores juntos, no el primero: el
- * operador arregla la guía de una vez en vez de descubrir un campo por intento
- * — y cada intento fallido acá es un intento menos contra el rate limit.
+ * Lo que `buildShalomOrderPayload` exige, en una lista: TODOS los errores
+ * juntos, no el primero, en el orden de los campos del modal (agencia,
+ * documento, nombre, apellido, teléfono, paquete, bultos y la clave al final).
+ *
+ * Es la MISMA función para el servidor y para el modal (`shalomSubmitMissing`):
+ * así lo que el botón dice que falta es exactamente lo que el servidor
+ * rechazaría, y no pueden irse separando con el tiempo (#KP202968).
+ *
+ * `pickupCode` ausente (`undefined`) = no se revisa: el modal no conoce la
+ * clave cuando el rol no puede verla, y el servidor la genera válida.
  */
-export function buildShalomOrderPayload(input: ShalomDraftInput): ShalomDraftResult {
+export function shalomPayloadErrors(
+  input: Omit<ShalomDraftInput, "pickupCode"> & { pickupCode?: string | null },
+): string[] {
   const errors: string[] = [];
 
   if (!positiveInt(input.originTerminalId)) {
@@ -283,41 +292,58 @@ export function buildShalomOrderPayload(input: ShalomDraftInput): ShalomDraftRes
   if (input.originTerminalId && input.originTerminalId === input.destinyTerminalId) {
     errors.push("El origen y el destino son la misma agencia.");
   }
-  if (!positiveInt(input.productId)) {
-    errors.push("Falta elegir el tipo de paquete.");
-  }
 
-  const document = normalizeDocument(input.documentType, input.document);
   const docErr = documentError(input.documentType, input.document);
   if (docErr) errors.push(docErr);
 
   const isCompany = input.documentType === "RUC";
-  const name = (input.name ?? "").trim();
-  if (!name) {
+  if (!(input.name ?? "").trim()) {
     errors.push(isCompany ? "Falta la razón social del destinatario." : "Falta el nombre del destinatario.");
   }
   // Shalom solo exige los apellidos cuando la persona todavía no existe en la
   // cuenta, pero eso no se sabe desde acá — y mandarlos de más no molesta.
-  const lastName = (input.lastName ?? "").trim();
-  const surName = (input.surName ?? "").trim();
-  if (!isCompany && !lastName) {
+  if (!isCompany && !(input.lastName ?? "").trim()) {
     errors.push("Falta el primer apellido del destinatario (Shalom lo exige para DNI y CE).");
   }
 
-  const phone = shalomPhone(input.phone);
-  if (!phone) {
-    errors.push(
-      `El teléfono no es un celular peruano de 9 dígitos${input.phone ? ` (${input.phone})` : ""}.`,
-    );
+  const rawPhone = (input.phone ?? "").trim();
+  if (!rawPhone) {
+    errors.push("Falta el teléfono del destinatario.");
+  } else if (!shalomPhone(rawPhone)) {
+    errors.push(`El teléfono no es un celular peruano de 9 dígitos (${rawPhone}).`);
   }
 
-  const pickupErr = pickupCodeError(input.pickupCode);
-  if (pickupErr) errors.push(pickupErr);
+  if (!positiveInt(input.productId)) {
+    errors.push("Falta elegir el tipo de paquete.");
+  }
 
   const quantity = input.quantity ?? 1;
   if (!Number.isInteger(quantity) || quantity < 1) errors.push("La cantidad de bultos no es válida.");
 
+  if (input.pickupCode !== undefined) {
+    const pickupErr = pickupCodeError(input.pickupCode);
+    if (pickupErr) errors.push(pickupErr);
+  }
+
+  return errors;
+}
+
+/**
+ * Arma el cuerpo del POST. Devuelve TODOS los errores juntos, no el primero: el
+ * operador arregla la guía de una vez en vez de descubrir un campo por intento
+ * — y cada intento fallido acá es un intento menos contra el rate limit.
+ */
+export function buildShalomOrderPayload(input: ShalomDraftInput): ShalomDraftResult {
+  const errors = shalomPayloadErrors(input);
   if (errors.length > 0) return { ok: false, errors };
+
+  const document = normalizeDocument(input.documentType, input.document);
+  const isCompany = input.documentType === "RUC";
+  const name = (input.name ?? "").trim();
+  const lastName = (input.lastName ?? "").trim();
+  const surName = (input.surName ?? "").trim();
+  const phone = shalomPhone(input.phone);
+  const quantity = input.quantity ?? 1;
 
   const receiver: ShalomReceiver = {
     document_type: input.documentType,
@@ -534,4 +560,239 @@ export function isShalomAirRouteRejection(message: string | null | undefined): b
 /** La ruta que manda: la del directorio, salvo que Shalom ya dijera que no vuela. */
 export function effectiveAirRoute(route: AirRoute, rejectedByShalom: boolean): AirRoute {
   return rejectedByShalom && route.offered ? { offered: true, fromOrigin: "no" } : route;
+}
+
+// ---------------------------------------------------------------------------
+// Sesión, avisos y «por qué no se puede pulsar» (06-11-2026, #KP202968)
+// ---------------------------------------------------------------------------
+
+/**
+ * ¿El token de sesión sigue vivo? Con margen, para no mandarlo justo al vencer.
+ *
+ * Vive aquí —y `client.ts` lo re-exporta— porque el modal también lo necesita:
+ * la sesión dura 2 h y el modal puede quedarse abierto más que eso. `client.ts`
+ * es solo de servidor; este archivo es puro y se puede importar en el cliente.
+ */
+export function sessionIsFresh(expiresAt: string | null | undefined, skewMs = 120_000): boolean {
+  if (!expiresAt) return false;
+  const ms = Date.parse(expiresAt);
+  return Number.isFinite(ms) && ms - skewMs > Date.now();
+}
+
+/**
+ * Milisegundos hasta que `sessionIsFresh` pase a `false` (0 si ya pasó).
+ *
+ * Se calcula EN EL SERVIDOR, con su reloj, y viaja al modal como una duración
+ * (`sessionMsLeft`). El modal no compara `shalom_session_expires_at` con su
+ * propio `Date.now()`: con el reloj del equipo adelantado, la sesión se daba
+ * por vencida antes de tiempo —o nunca por viva— y «Conectar con Shalom»
+ * devolvía la misma hora de la caché sin arreglar nada.
+ */
+export function msUntilSessionStale(
+  expiresAt: string | null | undefined,
+  skewMs = 120_000,
+  now: number = Date.now(),
+): number {
+  if (!expiresAt) return 0;
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return 0;
+  return Math.max(0, ms - skewMs - now);
+}
+
+/**
+ * Cuándo vence la sesión en el reloj DEL NAVEGADOR: la duración que dio el
+ * servidor, contada desde que llegó. Un reloj desfasado no la mueve, porque
+ * solo se mide cuánto tiempo pasa en él, no qué hora marca. Null = sin sesión.
+ */
+export function sessionStaleAt(msLeft: number | null | undefined, receivedAt: number): number | null {
+  if (typeof msLeft !== "number" || !Number.isFinite(msLeft) || msLeft <= 0) return null;
+  return receivedAt + msLeft;
+}
+
+/** El máximo que acepta `setTimeout`: con más, dispara al instante. */
+export const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Cuánto esperar antes de volver a mirar si venció (0 = ya venció). Acotado a
+ * `MAX_TIMER_MS`: si el plazo es más largo, el modal espera eso y vuelve a
+ * preguntar.
+ */
+export function sessionTimerDelay(staleAt: number, now: number): number {
+  return Math.min(MAX_TIMER_MS, Math.max(0, staleAt - now));
+}
+
+/** Comprobante cargado que nadie validó todavía: lo frena el freno blando. */
+const COMPROBANTE_SIN_VALIDAR = new Set(["adelanto_cargado", "pago_total_cargado", "posible_duplicado"]);
+
+/**
+ * Los avisos ámbar del modal: lo que hay que mirar o hacer, nunca una
+ * confirmación (DESIGN.md: ámbar es para motivos de bloqueo y cosas por hacer).
+ *
+ * Con un bloqueo duro (`blocked`: guía activa, pedido cerrado, falta
+ * configuración, lista de pago adelantado) no sale ninguno: el aviso rojo es lo
+ * único que importa y cualquier otra cosa al lado se lee como «sí se puede».
+ *
+ * En #KP202968 tres avisos seguidos —uno de ellos falso, otro que decía «se
+ * puede crear igual» en el color de los bloqueos— se leyeron como «no me deja
+ * registrar».
+ */
+export function shalomDraftWarnings(input: {
+  paymentState: string | null;
+  prefilledDocument: string | null;
+  prefilledTerminalName: string | null;
+  /** Hay `blockers`: la guía no se puede crear por API. */
+  blocked: boolean;
+}): string[] {
+  if (input.blocked) return [];
+  const warnings: string[] = [];
+
+  // Shalom identifica al destinatario por documento y Shopify no pide DNI. Solo
+  // se avisa si NADIE lo dejó apuntado: con el DNI ya en «DNI y agencia Shalom»
+  // el aviso decía «el pedido no lo trae» encima de un campo ya lleno.
+  if (!input.prefilledDocument) {
+    warnings.push(
+      "Shalom exige el documento del destinatario y el pedido no lo trae: pídeselo al cliente antes de crear la guía.",
+    );
+  }
+
+  // El pago, solo cuando hay algo que HACER. Sin pago lo dice el freno blando;
+  // con el adelanto validado no hay nada que avisar (si la nota pide cobrar
+  // por adelantado, lo responde `shalomNotePaymentLine`, en verde). Con un
+  // comprobante cargado sin validar el freno blando también está, en rojo, y
+  // este aviso dice las dos salidas: decir «la guía se puede crear igual» al
+  // lado del recuadro rojo era otra nota que contradecía al botón.
+  if (COMPROBANTE_SIN_VALIDAR.has(input.paymentState ?? "")) {
+    warnings.push(
+      "Hay un comprobante cargado sin validar: valídalo en Cobro o escribe el motivo en el recuadro rojo para crearla igual. La clave de recojo espera al pago completo.",
+    );
+  }
+
+  if (input.prefilledDocument) {
+    warnings.push(
+      // Ya no solo desde el registro del pago: en un pedido pagado por web se
+      // apuntan en «DNI y agencia Shalom» de la tarjeta de Cobro.
+      `El documento y la agencia venían apuntados en «DNI y agencia Shalom» (${input.prefilledDocument}${input.prefilledTerminalName ? ` · ${input.prefilledTerminalName}` : ""}). Verifícalos antes de crear.`,
+    );
+  }
+  return warnings;
+}
+
+function solesLabel(amount: number): string {
+  return `S/ ${Number.isInteger(amount) ? amount : amount.toFixed(2)}`;
+}
+
+/**
+ * Línea en verde (`ok`) bajo «Nota del pedido» cuando el cobro ya cumple lo
+ * que pide Shalom. Es la ÚNICA confirmación del pago en el modal.
+ *
+ * La nota se muestra tal cual y no se oculta: puede traer el DNI, la agencia o
+ * cualquier otra cosa. Pero COD Core escribe «Sin contra entrega en su
+ * distrito: pedir el pago por adelantado antes de despachar.» y, con el
+ * adelanto ya validado, esa frase se leyó como un pendiente (#KP202968).
+ *
+ * Null —no se afirma nada— si falta el adelanto (freno blando) o si hay un
+ * bloqueo duro (`blocked`): con la lista de pago adelantado o una guía activa,
+ * «eso ya se cumplió» sería una promesa que el servidor no cumple.
+ */
+export function shalomNotePaymentLine(
+  paymentState: string | null,
+  validatedAmount: number | null | undefined,
+  blocked: boolean,
+): string | null {
+  if (blocked) return null;
+  if (shalomSoftBlockers(paymentState).length > 0) return null;
+  const amount =
+    typeof validatedAmount === "number" && Number.isFinite(validatedAmount) && validatedAmount > 0
+      ? ` (${solesLabel(validatedAmount)})`
+      : "";
+  if (paymentState === "pago_completo") {
+    return `El pago completo ya está validado${amount}: si la nota pide cobrar por adelantado, eso ya se cumplió.`;
+  }
+  return `El adelanto ya está validado${amount}: si la nota pide cobrar por adelantado, eso ya se cumplió. La clave de recojo se entrega cuando el pago completo esté validado.`;
+}
+
+export interface ShalomSubmitState {
+  /** El borrador del servidor ya cargó. */
+  loaded: boolean;
+  blockers: readonly string[];
+  softBlockers: readonly string[];
+  overrideReason: string;
+  /** Hay token vigente (según la duración que dio el servidor). */
+  sessionReady: boolean;
+  /** Hubo token en este modal y ya venció (o Shalom lo rechazó). */
+  sessionExpired: boolean;
+  originTerminalId: number | null;
+  /** La agencia elegida, o null. */
+  destinyTerminalId: number | null;
+  productId: number | null;
+  /** Los bultos tal como se van a mandar. */
+  quantity: number;
+  documentType: ShalomDocumentType;
+  document: string;
+  name: string;
+  lastName: string;
+  phone: string;
+  /** Error de la clave de recojo, solo si el rol la ve y la escribió. */
+  pickupCodeError: string | null;
+  pending: boolean;
+  created: boolean;
+}
+
+/** La razón única cuando hay un bloqueo duro: los detalles ya están en rojo arriba. */
+export const SUBMIT_BLOCKED_REASON = "No se puede crear por API: mira el aviso rojo de arriba.";
+
+/**
+ * Por qué «Crear guía» no se puede pulsar todavía, una razón por condición.
+ *
+ * ES la condición del botón: el modal habilita «Crear guía» si y solo si esto
+ * devuelve `[]`. Antes el botón tenía su propia lista de doce condiciones y
+ * ninguna se decía en pantalla: en #KP202968 la operadora veía el botón gris
+ * debajo de tres avisos ámbar y concluyó que el adelanto «no la dejaba».
+ *
+ * - Con un bloqueo duro, una sola razón que remite al aviso rojo: conectar o
+ *   llenar el formulario no sirve de nada, y repetir el párrafo rojo en la
+ *   lista es ruido en un teléfono.
+ * - Si no, en el orden de la pantalla, de arriba abajo: el motivo del freno
+ *   blando (el recuadro rojo de arriba), la sesión y lo que exige el servidor
+ *   (`shalomPayloadErrors`, la misma función que usa `buildShalomOrderPayload`),
+ *   y la clave de recojo al final.
+ */
+export function shalomSubmitMissing(s: ShalomSubmitState): string[] {
+  if (!s.loaded) return ["Cargando el pedido…"];
+  if (s.created) return ["La guía ya se creó."];
+  if (s.pending) return ["Creando la guía…"];
+  if (s.blockers.length > 0) return [SUBMIT_BLOCKED_REASON];
+
+  const missing: string[] = [];
+
+  if (s.softBlockers.length > 0 && s.overrideReason.trim().length < MIN_OVERRIDE_REASON) {
+    missing.push(
+      `Falta el motivo para crearla sin el adelanto validado (al menos ${MIN_OVERRIDE_REASON} caracteres, en el recuadro rojo de arriba).`,
+    );
+  }
+
+  if (!s.sessionReady) {
+    missing.push(
+      s.sessionExpired
+        ? "La sesión de Shalom venció: vuelve a conectar (pulsa «Conectar con Shalom»)."
+        : "Falta conectar con Shalom (pulsa «Conectar con Shalom»).",
+    );
+  }
+
+  missing.push(
+    ...shalomPayloadErrors({
+      originTerminalId: s.originTerminalId,
+      destinyTerminalId: s.destinyTerminalId,
+      productId: s.productId,
+      quantity: s.quantity,
+      documentType: s.documentType,
+      document: s.document,
+      name: s.name,
+      lastName: s.lastName,
+      phone: s.phone,
+    }),
+  );
+
+  if (s.pickupCodeError) missing.push(`La clave de recojo no es válida: ${s.pickupCodeError}`);
+  return missing;
 }

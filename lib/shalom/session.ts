@@ -215,7 +215,7 @@ export async function readWithFreshSession<T>(
     } catch (err) {
       if (!(err instanceof ShalomApiError) || !err.isShalomAuth) throw err;
       // Cae al camino de abajo: el token estaba muerto antes de tiempo.
-      await clearSession(admin, storeId);
+      await clearRejectedSession(admin, storeId, store);
     }
   }
 
@@ -236,4 +236,34 @@ export async function clearSession(admin: SupabaseClient, storeId: string): Prom
     .from("stores")
     .update({ shalom_session_token_enc: null, shalom_session_expires_at: null })
     .eq("id", storeId);
+}
+
+/**
+ * Shalom RECHAZÓ el token: se tira de esta tienda y de toda tienda hermana
+ * (misma `org_id` y misma cuenta) que guarde ese MISMO token.
+ *
+ * Limpiar solo esta tienda dejaba la trampa armada: «Conectar con Shalom» va
+ * por `mintSession` sin `force` y el atajo `shared` copiaba de vuelta el token
+ * de la hermana —el mismo que acababan de rechazar, con su `expires_at` en el
+ * futuro—, el modal decía «✓ Conectado» y el siguiente intento volvía a fallar
+ * (06-11-2026). Con todas las copias tiradas, la conexión hace el login de
+ * verdad.
+ *
+ * Se compara el texto cifrado tal cual: un login guarda el MISMO cifrado en
+ * todas las tiendas de la cuenta y `shared` lo copia sin tocarlo, así que
+ * coincidir es ser el mismo token. Una hermana con otro token no se toca.
+ */
+export async function clearRejectedSession(
+  admin: SupabaseClient,
+  storeId: string,
+  store: Pick<StoreShalom, "org_id" | "shalom_pro_email" | "shalom_session_token_enc">,
+): Promise<void> {
+  await clearSession(admin, storeId);
+  if (!store.shalom_session_token_enc || !store.shalom_pro_email) return;
+  await admin
+    .from("stores")
+    .update({ shalom_session_token_enc: null, shalom_session_expires_at: null })
+    .eq("org_id", store.org_id)
+    .eq("shalom_pro_email", store.shalom_pro_email)
+    .eq("shalom_session_token_enc", store.shalom_session_token_enc);
 }
