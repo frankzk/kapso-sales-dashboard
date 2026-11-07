@@ -61,6 +61,15 @@ function chooseAdvisor(
   return pool[0]?.id ?? null;
 }
 
+/** Leads needing a (new) offer: not claimed and without a fresh offer. Stable
+ *  order (by id) so distribution is deterministic. Exported so the caller only
+ *  pays for eligibility checks when this is non-empty (most polls it is not). */
+export function leadsNeedingOffer(leads: RoutingLead[], nowMs: number): RoutingLead[] {
+  return leads
+    .filter((l) => !l.claimedBy && !isFreshOffer(l, nowMs))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
 /**
  * Decide the offers to (re)assign right now. `leads` are the store's active Yapes
  * (status already filtered to yape/no-order upstream); claimed-fresh ones are
@@ -90,11 +99,7 @@ export function planYapeOffers(
     else if (isFreshOffer(l, nowMs)) bump(l.offeredTo);
   }
 
-  // Leads needing a (new) offer: not claimed and without a fresh offer. Stable
-  // order (by id) so distribution is deterministic.
-  const needing = leads
-    .filter((l) => !l.claimedBy && !isFreshOffer(l, nowMs))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  const needing = leadsNeedingOffer(leads, nowMs);
 
   const plans: OfferPlan[] = [];
   for (const l of needing) {

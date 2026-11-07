@@ -330,4 +330,10 @@ echo "  ✅ anexos de 2 a 6 dígitos únicos por persona y por anexo; el modo fi
 echo "▶ Teléfono de Anura dentro de Kapta (0311): ajustes SIP por org, clave SIP cifrada por anexo, clave rechazada y RLS"
 $PSQL -f "$ROOT/scripts/sql/anura_kapta_phone_smoke.sql"
 echo "  ✅ wss solo a anura.pe y sin puerto; la clave cifrada sigue al anexo (quitarlo o cambiarle el número la borra, apagarlo no); rechazada con fecha y motivo; los ajustes los lee la org y la clave nadie desde el navegador"
+# La 0312 solo cambia CÓMO lead_routing_scope encuentra sus filas: la prueba
+# vuelve a poner el cuerpo de la 0299 dentro de su transacción y exige la misma
+# respuesta para cada asesora, tienda y lead.
+echo "▶ lead_routing_scope sin recorrer leads entera (0312): misma respuesta que la 0299, lead suelto = cola entera, índices y permisos"
+$PSQL -f "$ROOT/scripts/sql/lead_routing_scope_perf_smoke.sql"
+echo "  ✅ 357 casos idénticos a la 0299 (actora × tiendas × cola, cada lead y uno inexistente; un lead suelto ya no cuenta ganados/perdidos); un lead suelto se bloquea igual que en la cola; índices de llamadas, carritos, paradas, conversación de Kapso y order_gid; una reconciliación de Yapes por tienda cada 10 s; solo service_role, stable, invoker"
 echo "✅ DB verification passed."
