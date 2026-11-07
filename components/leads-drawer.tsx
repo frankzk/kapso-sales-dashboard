@@ -41,7 +41,7 @@ import {
 } from "@/lib/meta-ads";
 import { waKindLabel, type WaNumber } from "@/lib/wa-numbers";
 import type { CustomerHistory } from "@/lib/leads-access";
-import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { LeadPostOrderChoices } from "@/components/lead-post-order-choices";
 import {
   LEAD_VOICE_AGENT_HANDOFF,
   LEAD_VOICE_AGENT_KIND,
@@ -1248,61 +1248,34 @@ export function LeadDrawer({
               <YapeAssign leadId={lead.id} storeId={lead.store_id} onAssigned={onRegistered} />
             )}
 
-            {/* Crear guía en Aliclik. Es EL MISMO componente que usa el Master de
-                Pedidos, con las mismas server actions: crear desde aquí o desde
-                allí escribe la misma fila de `shipments`, porque las dos cuelgan
-                del id interno del pedido. No hay una versión "de Leads".
+            {/* Cómo sale y cómo se cobra el pedido (MOM §25.2, owner
+                07-11-2026): «Guía Aliclik», «Swayp hoy» y «Agencia Shalom +
+                adelanto», cada una con EL MISMO componente y las mismas server
+                actions que la ficha del pedido —crear desde aquí o desde allí
+                escribe las mismas filas, porque todo cuelga del id interno del
+                pedido—. No hay versión "de Leads".
 
                 Va en esta columna y no en un modal a propósito: la vendedora
                 necesita seguir viendo la conversación de WhatsApp mientras crea
-                la guía —de ahí sale la ubicación cuando Shopify no la trae— y un
-                modal taparía justo lo que tiene que mirar.
+                la guía o registra el adelanto —de ahí salen la ubicación, el DNI
+                y el comprobante— y un modal taparía justo lo que tiene que mirar.
 
-                Se muestra en CUALQUIER lead con pedido y sin guía, no solo tras
-                generarlo: si entra una llamada y cierra el drawer, puede volver
-                y terminar aquí en vez de irse al Master a buscar el pedido. */}
-            {/* Guía ya creada: bloque permanente. Antes, en cuanto la guía
-                existía el panel desaparecía y con él la confirmación, así que
-                la vendedora la veía dos segundos y se quedaba sin saber qué
-                código se había generado. Los dos códigos juntos —el pedido de
-                Shopify y la guía— son los que hay que cruzar si algo se
-                tuerce, así que se enseñan siempre. */}
-            {history?.currentOrderGuide && (
-              <section aria-label="Guía de Aliclik" className={SECTION_CARD}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-sm font-semibold text-ink-900">Guía de Aliclik</h3>
-                  <Badge tone="ok">Creada</Badge>
-                </div>
-                <p className="mt-2 break-all font-mono text-sm font-semibold text-ink-900">
-                  {history.currentOrderGuide}
-                </p>
-                {history.currentOrderName && (
-                  <p className="mt-0.5 text-[13px] text-ink-500">Pedido {history.currentOrderName}</p>
-                )}
-              </section>
-            )}
+                Se muestra en CUALQUIER lead con pedido, no solo tras generarlo:
+                si entra una llamada y cierra el drawer, puede volver y terminar
+                aquí en vez de irse al Master a buscar el pedido. La guía ya
+                creada queda como bloque permanente con los dos códigos juntos
+                (lib/lead-post-order.ts, components/lead-post-order-choices.tsx).
 
-            {/* El panel trae su contenido sin marco (en la ficha lo enmarca la
-                tarjeta de su sección); aquí lleva su propia tarjeta. */}
-            {history?.currentOrderId && !history.currentOrderGuide && (
-              <div className={SECTION_CARD}>
-                <AliclikGuidePanel
-                  // `key` = candado de identidad. Sin ella, si la vendedora pulsa
-                  // "Generar nuevo pedido" con el panel abierto, React reutiliza
-                  // la instancia: cambia `orderId` pero se queda dentro la
-                  // cotización del pedido ANTERIOR. Crear entonces mandaría a
-                  // Aliclik el courier y el precio de un pedido y el id de otro.
-                  // Con la key el panel se monta de cero para cada pedido.
-                  key={history.currentOrderId}
-                  orderId={history.currentOrderId}
-                  hasCoordinate={history.currentOrderHasCoordinate}
-                  health={history.currentOrderAliclikHealth}
-                  // Sin argumento a propósito: `{refreshList:true}` toma un atajo
-                  // que NO recarga el historial, y el panel se quedaría visible
-                  // ofreciendo crear una guía que ya existe.
-                  onCreated={() => onRegistered()}
-                />
-              </div>
+                `onRegistered` sin argumento a propósito: `{refreshList:true}`
+                toma un atajo que NO recarga el historial, y el panel se quedaría
+                ofreciendo crear una guía que ya existe. */}
+            {history && (lead.has_order || history.currentOrderName || history.currentOrderId) && (
+              <LeadPostOrderChoices
+                key={lead.id}
+                leadId={lead.id}
+                history={history}
+                onChanged={() => onRegistered()}
+              />
             )}
 
             {/* Agente de voz de leads (MOM §33): si entra a su cola, llamar o
@@ -3369,9 +3342,11 @@ export function OrderFormPanel({
                       solo quedaban "Copiar" y "Ver en Shopify": el formulario se
                       quedaba abierto tapando la columna entera, y el panel para
                       crear la guía de Aliclik —que está justo debajo— era
-                      inalcanzable sin recargar la página. */}
+                      inalcanzable sin recargar la página. Debajo espera «Cómo
+                      sale el pedido»: Aliclik, Swayp hoy o agencia con adelanto
+                      (MOM §25.2). */}
                   <OpsButton variant="primary" size="sm" onClick={onClose}>
-                    Continuar · crear guía
+                    Continuar · elegir envío
                   </OpsButton>
                 </div>
               </div>

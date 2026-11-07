@@ -2,6 +2,7 @@ import type { OperationKind } from "@/lib/order-macro-stage";
 import type { PaymentRequirement } from "@/lib/order-confirmation-brief";
 import { usesPickupKeyFlow } from "@/lib/pickup-key";
 import { isWebPrepaid, type OrderPaymentFacts } from "@/lib/order-paid";
+import { PAYMENT_GATEWAY_LABEL, type PaymentGateway } from "@/lib/payment-gateway";
 
 /**
  * `prepaid` = el dinero ya entró por el checkout, así que no hay nada que
@@ -126,4 +127,96 @@ export function offersShalomDestination(input: {
     input.operation === "agencia" ||
     input.shalomCandidate
   );
+}
+
+/**
+ * Lo que la ficha del pedido decide sobre la tarjeta de Cobro, en un solo sitio:
+ * si se dibuja y en qué modo, la nota de la pasarela y si lleva «DNI y agencia
+ * Shalom» en un pedido pagado por web.
+ *
+ * Vivía escrito dentro de `order-drawer.tsx`. Desde el 07-11-2026 lo lee también
+ * el paso de después de «Generar pedido» en Leads (MOM §25.2), que enseña la
+ * MISMA tarjeta (`PickupKeyPanel`) para el pedido recién creado: con dos copias
+ * de este armado, Leads ofrecería el cobro por agencia en pedidos donde la
+ * ficha no, o al revés.
+ */
+export interface OrderPaymentPanelSource {
+  row: {
+    current_courier: string | null;
+    shipping_mode: string | null;
+    macro_substage?: string | null;
+    macro_reasons?: readonly string[] | null;
+    payment_state: string | null;
+    financial_status?: string | null;
+    total_refunded?: number | null;
+    payment_gateway?: PaymentGateway | null;
+  };
+  routePlan: { operation: OperationKind; candidates: readonly { key: string }[] };
+  /**
+   * La ficha del §8 (`loadConfirmationBrief`), o null mientras no llega o si
+   * este pedido no la pide. Solo se lee su exigencia y la retención por posible
+   * duplicado.
+   */
+  brief: {
+    risk: { requirement: PaymentRequirement };
+    duplicateHold?: { conflicts: readonly unknown[]; resolution: { decision: string } | null } | null;
+  } | null;
+  /** `shalom.create_guide`: sin él, Shalom/Olva en el plan no vuelven visible el cobro. */
+  canCreateShalomGuide: boolean;
+}
+
+export interface OrderPaymentPanelSetup {
+  presentation: OrderPaymentPanelPresentation;
+  /** Shopify dice «pagado» pero no lo cobró el checkout: por qué el panel sigue pidiendo la constancia. */
+  gatewayNote: string | null;
+  /** `offersShalomDestination`: el bloque «DNI y agencia Shalom» en un pedido pagado por web. */
+  shalomDestination: boolean;
+}
+
+/**
+ * Lo que exige la regla de riesgo para el cobro (§8). La retención por posible
+ * duplicado sin excepción aprobada pide adelanto aunque el cliente no lo pida.
+ */
+export function confirmationRiskRequirement(brief: OrderPaymentPanelSource["brief"]): PaymentRequirement | null {
+  if (!brief) return null;
+  if (brief.risk.requirement === "pago_completo") return "pago_completo";
+  if (brief.duplicateHold?.conflicts.length && brief.duplicateHold.resolution?.decision !== "exception") {
+    return "exigir_adelanto";
+  }
+  return brief.risk.requirement ?? null;
+}
+
+export function orderPaymentPanelFor(source: OrderPaymentPanelSource): OrderPaymentPanelSetup {
+  const { row, routePlan } = source;
+  const presentation = orderPaymentPanelPresentation({
+    operation: routePlan.operation,
+    currentCourier: row.current_courier,
+    shippingMode: row.shipping_mode,
+    macroSubstage: row.macro_substage,
+    macroReasons: row.macro_reasons,
+    riskRequirement: confirmationRiskRequirement(source.brief),
+    paymentState: row.payment_state,
+    paymentFacts: {
+      financialStatus: row.financial_status,
+      totalRefunded: row.total_refunded,
+      paymentGateway: row.payment_gateway,
+    },
+    hasAgencyCandidate:
+      source.canCreateShalomGuide &&
+      routePlan.candidates.some((candidate) => candidate.key === "shalom" || candidate.key === "olva"),
+  });
+  const gatewayNote =
+    (row.financial_status ?? "").toLowerCase() === "paid" &&
+    (row.payment_gateway === "manual" || row.payment_gateway === "cod")
+      ? `${PAYMENT_GATEWAY_LABEL[row.payment_gateway]}: no lo cobró el checkout. Para darlo por pagado, sube la constancia.`
+      : null;
+  // «DNI y agencia Shalom» en un pedido pagado por web (MOM §Pagos, #KP200104):
+  // se ofrece donde Shalom puede ser el destino, lo pueda crear o no este rol.
+  const shalomDestination = offersShalomDestination({
+    operation: routePlan.operation,
+    currentCourier: row.current_courier,
+    shippingMode: row.shipping_mode,
+    shalomCandidate: routePlan.candidates.some((candidate) => candidate.key === "shalom"),
+  });
+  return { presentation, gatewayNote, shalomDestination };
 }
