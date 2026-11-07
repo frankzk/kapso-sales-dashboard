@@ -63,7 +63,7 @@ import {
 } from "@/lib/anura/phone-ui";
 import { masterOrderHref } from "@/lib/order-drawer-href";
 import { formatTalkTime } from "@/lib/browser-call";
-import { AnuraPhoneAudio, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
+import { AnuraPhoneAudio, AnuraVolumeControl, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
 import { IconMic, IconMicOff, IconPhone } from "@/components/icons";
 import { OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
@@ -432,6 +432,7 @@ export function AnuraCallButton({
       {viaKapta && phone.busy && (
         <p className="mt-1 text-xs text-ink-600">Si cierras la ficha o la pestaña, la llamada se corta. Puedes ocultar este aviso.</p>
       )}
+      {viaKapta && phone.busy && <AnuraVolumeControl volume={phone.volume} onChange={phone.setVolume} />}
 
       {error && (
         <div className="mt-3 text-sm">

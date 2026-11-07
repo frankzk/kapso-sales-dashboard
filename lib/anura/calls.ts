@@ -254,9 +254,23 @@ export async function placeAnuraCall(
     }
     return { ok: false, code: "base", error: `No se pudo pedir la llamada: ${insertError.message}` };
   }
+  const startedMs = Date.now();
   const placed = await requestClick2Dial(
     { token: input.token, called: input.phone, extension: input.extension, customs: anuraCustoms(id) },
     { fetchImpl: deps.fetchImpl, timeoutMs: deps.timeoutMs },
+  );
+  // Diagnóstico de la prueba real (06-11-2026): qué respondió Anura al
+  // Click2Dial. Sin teléfono ni token; el detalle de un rechazo ya va sin token.
+  console.log(
+    `[anura-click2dial] ${JSON.stringify({
+      call: id.slice(0, 8),
+      mode: input.mode,
+      ext: input.extension,
+      ok: placed.ok,
+      kind: placed.ok ? null : placed.kind,
+      http: placed.ok ? 200 : placed.httpStatus,
+      ms: Date.now() - startedMs,
+    })}`,
   );
   if (!placed.ok && AMBIGUOUS_CLICK2DIAL.includes(placed.kind)) {
     return { ok: false, code: placed.kind, error: placed.error, activeCallId: id };

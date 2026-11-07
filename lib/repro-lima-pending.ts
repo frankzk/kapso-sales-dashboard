@@ -3,7 +3,7 @@
 import { MACRO_SUBSTAGES_BY_STAGE, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
 import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
 import type { ReproList } from "@/lib/repro-lima";
-import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, limaDay, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
+import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, limaDay, programDayLabel, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
 import { courierDisplayName } from "@/lib/dispatched-with";
 
@@ -40,9 +40,12 @@ export function attentionFilter(value: string | null): LimaAttentionFilter {
 }
 
 /** La fecha acordada vigente manda sobre un programa anterior que aún no se
- * actualizó. Sin acuerdo vigente, se usa solo una programación persistida. */
+ * actualizó. Sin acuerdo vigente, se usa una programación persistida y, sin
+ * ella, el día en que Aliclik recoge la guía que ya tiene (owner, 07-11-2026):
+ * un pedido agendado con el courier no «nunca salió» sin gestión. */
 export function limaScheduledFor(row: LimaPendingOrder, c?: AttentionCase): string | null {
-  return (c?.list === "programados" ? c.agreement?.agreedOn : null) ?? row.programmedFor ?? c?.program?.scheduledFor ?? null;
+  return (c?.list === "programados" ? c.agreement?.agreedOn : null) ?? row.programmedFor ?? c?.program?.scheduledFor ??
+    row.courierPickup?.date ?? null;
 }
 
 export function limaQueueSegment(row: LimaPendingOrder, today: string, c?: AttentionCase): QueueSegment {
@@ -118,6 +121,13 @@ export interface LimaPendingOrder {
   /** La dirección de entrega y su referencia, tal como están en el Master. */
   address: string | null;
   reference: string | null;
+  /**
+   * La guía de un courier externo que espera su recojo (§9.5, owner
+   * 07-11-2026): hoy, Aliclik con la guía viva, sin salida ni retorno. `date`
+   * es el día de recojo: el que reportó Aliclik o, sin reporte, el de su regla
+   * de corte. Sin guía esperando, null.
+   */
+  courierPickup?: { courier: "aliclik"; date: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +339,14 @@ export function pendingGroup(row: LimaPendingOrder, today: string): { label: str
   }
   const old = row.createdAt && Number.isFinite(Date.parse(row.createdAt)) &&
     Date.parse(`${today}T00:00:00-05:00`) - Date.parse(row.createdAt) > 30 * 86_400_000;
+  // Agendado con Aliclik: no falta confirmar ni programar, falta que lo recojan.
+  // Si el día pasó y sigue sin recojo, eso sí es trabajo: preguntarle a Aliclik.
+  if (row.courierPickup && row.stage !== "en_curso") {
+    const day = programDayLabel(row.courierPickup.date);
+    return row.courierPickup.date >= today
+      ? { label: "Agendado con Aliclik", detail: `Aliclik lo recoge el ${day}. No hace falta gestión salvo que el cliente cambie algo.` }
+      : { label: "Aliclik no lo recogió", detail: `Estaba para el ${day} y sigue sin recojo: revisa la guía con Aliclik.` };
+  }
   if (old) return { label: "Antiguo por revisar", detail: "Más de 30 días: confirma si la venta sigue vigente y ubica el paquete." };
   const tandersDue = row.courier === "tanders" && row.stage === "en_curso" && row.substage === "en_transito" &&
     row.dispatchedAt && Number.isFinite(Date.parse(row.dispatchedAt)) &&

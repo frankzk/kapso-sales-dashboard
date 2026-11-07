@@ -56,7 +56,7 @@ import {
   talkSecondsFrom,
 } from "@/lib/anura/phone-ui";
 import { formatTalkTime } from "@/lib/browser-call";
-import { AnuraPhoneAudio, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
+import { AnuraPhoneAudio, AnuraVolumeControl, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
 import { KaptaPhoneCard } from "@/components/anura-kapta-phone-settings";
 import { IconCopy, IconMic, IconMicOff, IconPhone } from "@/components/icons";
 
@@ -658,6 +658,7 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
               </OpsButton>
             </div>
           )}
+          {viaKapta && kapta.busy && <AnuraVolumeControl volume={kapta.volume} onChange={kapta.setVolume} />}
           {pollTrouble && call?.active && (
             <p className="text-xs text-warn-fg">
               Kapta dejó de recibir el estado de la llamada. La llamada sigue en Anura; mira «Últimos avisos de Anura» al terminar.
