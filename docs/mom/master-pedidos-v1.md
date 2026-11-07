@@ -5095,6 +5095,21 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   porque una devolución puede limpiarlo. Si falla la lectura, se muestra el error
   y no cantidades parciales. Consultar estos apartados no programa, recibe,
   asigna ni modifica ningún pedido o salida. No requiere migraciones.
+- **Agendado con Aliclik (decisión del owner, 07-11-2026):** un pedido con una
+  guía Aliclik **viva que espera su recojo** (`status_category = pending`, sin
+  `dispatched_at`, `out_for_delivery_at` ni `returned_at`, no anulada) ya no cae
+  en «Nunca salieron · Pendiente de primer despacho» como si nadie lo hubiera
+  gestionado (#KP202671, 06-11-2026: 52 pedidos de Lima así). Su **día de
+  recojo** lo programa: el que reportó Aliclik (`aliclik_reported_dispatch_date`)
+  o, sin reporte, el de su regla de corte (`aliclik_expected_dispatch_date`,
+  §10). Va en Programados hoy, mañana o después como cualquier programación, y
+  una fecha acordada vigente o un programa de Grupo GF mandan sobre ella. En
+  «Gestión pendiente» dice **«Agendado con Aliclik · Aliclik lo recoge el vie
+  07/11»**; si el día pasó y sigue sin recojo, queda en Hoy como vencido con
+  **«Aliclik no lo recogió»**: revisar la guía con Aliclik. Solo cambia la
+  lectura de Repro Lima (`loadLimaPending`, `limaScheduledFor`, `pendingGroup`);
+  **Despacho del día de Grupo GF no cambia**, ni se escribe ningún programa.
+  Prueba: `test/repro-lima-pending.test.ts`.
 - **«Nunca salieron», del más antiguo al más reciente (decisión del owner,
   06-11-2026):** en Repro Lima ese apartado va al revés que en Grupo GF. Arriba
   queda lo que lleva más días esperando; un pedido sin fecha de creación va

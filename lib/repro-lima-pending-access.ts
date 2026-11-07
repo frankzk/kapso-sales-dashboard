@@ -13,6 +13,9 @@ interface PendingMasterRow {
   sales_channel: string | null; address: string | null; reference: string | null;
 }
 interface PendingProgramRow { order_id: string; store_id: string; scheduled_for: string }
+interface PendingPickupRow {
+  order_id: string; aliclik_expected_dispatch_date: string | null; aliclik_reported_dispatch_date: string | null;
+}
 
 /** Solo lectura, después de requireReproLima. Pagina todos los pedidos, sin
  * truncarlos a 1000 y sin cargar expedientes completos por cada fila. */
@@ -49,6 +52,26 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope): Promise<
       if (orderStore.has(d.order_id) && d.last_departure_at) departures.set(d.order_id, d.last_departure_at);
     }
   }
+  // Las guías Aliclik que esperan su recojo (owner, 07-11-2026): viva, sin
+  // salida, sin reparto y sin retorno. Su día de recojo programa el pedido en
+  // Repro Lima; sin esto caía en «Nunca salieron» como si nadie lo hubiera
+  // gestionado. Mismos lotes de 500; un error se muestra, no se adivina.
+  const pickups = new Map<string, string>();
+  for (let offset = 0; offset < safeIds.length; offset += 500) {
+    const { data, error } = await admin.from("shipments")
+      .select("order_id,aliclik_expected_dispatch_date,aliclik_reported_dispatch_date")
+      .in("order_id", safeIds.slice(offset, offset + 500))
+      .eq("courier", "aliclik").eq("status_category", "pending")
+      .not("delivery_status", "in", "(anulado,transferido)")
+      .is("dispatched_at", null).is("out_for_delivery_at", null).is("returned_at", null);
+    if (error) throw new Error(`No pudimos leer las guías de Aliclik: ${error.message}`);
+    for (const g of (data ?? []) as PendingPickupRow[]) {
+      const day = (g.aliclik_reported_dispatch_date ?? g.aliclik_expected_dispatch_date ?? "").slice(0, 10);
+      if (!orderStore.has(g.order_id) || !day) continue;
+      // Dos guías vivas a la vez no deberían existir; si existen, manda la más tardía.
+      if ((pickups.get(g.order_id) ?? "") < day) pickups.set(g.order_id, day);
+    }
+  }
   return safe.map((row) => {
     // El filtro de arriba valida también la macroetapa de cada fila.
     const stage = row.macro_stage as LimaPendingOrder["stage"];
@@ -63,6 +86,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope): Promise<
       programmedFor: scheduled.get(row.order_id) ?? null,
       salesChannel: row.sales_channel ?? null,
       address: row.address?.trim() || null, reference: row.reference?.trim() || null,
+      courierPickup: pickups.has(row.order_id) ? { courier: "aliclik", date: pickups.get(row.order_id)! } : null,
     };
   });
 }
