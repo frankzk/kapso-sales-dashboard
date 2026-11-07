@@ -7564,6 +7564,36 @@ Querecotillo…) no se confirmó y sigue rechazándose con el mensaje de siempre
 Antes, «Sullana» resolvía al cercado de Piura (`200101`) marcado como no exacto
 y la guía se negaba.
 
+**Junín sale de la bodega de Huancayo (07-11-2026, owner, #KP202768).** La
+Mesa de ruta de #KP202768 («El Tambo», «Junín») decía «Swayp no tiene
+cobertura local en este destino.» aunque Swayp ya había entregado 7 pedidos en
+El Tambo (llegados por Aliclik con la ciudad «huancayo»). La dirección de
+Shopify trae el distrito y el departamento, casi nunca la provincia, así que
+«Huancayo» no aparecía y la cobertura caía a «el tambo», que no existe. El
+owner mandó la lista de destinos de Junín del panel de Swayp («Ciudad de
+Destino»): «es a todos estos donde tiene cobertura swayp». Son 19: Ahuac,
+Chilca, Chupuro, Concepción, El Tambo, Hualhuas, Huamancaca Chico, Huancán,
+Huancayo, Huayucachi, Ingenio, Jauja, Matahuasi, Orcotuna, Pilcomayo, Quilcas,
+Sapallanga, Tres de Diciembre y Viques (`SWAYP_HUANCAYO_DISTRICTS`,
+`lib/shipments.ts`).
+
+- Con el departamento Junín o su propia provincia al lado, resuelven a la
+  ciudad `huancayo` con su distrito: la tarjeta de la Mesa de ruta, el filtro
+  «Swayp» del Master, el stock (el de Huancayo), el remitente y la bodega de
+  origen (Huancayo) y el destino (el ubigeo exacto del distrito) dicen lo
+  mismo. Sin Junín al lado no se adivina: «Chilca» también es un distrito de
+  Cañete.
+- Los de otras provincias entran a la tabla de Huancayo con su código INEI,
+  como Sullana en la de Piura: Concepción (`120201`), Matahuasi (`120210`),
+  Orcotuna (`120213`), Jauja (`120401`), Ahuac (`120902`), Huamancaca Chico
+  (`120905`) y Tres de Diciembre (`120908`).
+- Cambia Jauja, que la operación había descartado el 15-08-2026: ahora está
+  en la lista de Swayp. Lo que no está en la lista sigue como estaba: Sicaya,
+  San Jerónimo de Tunán o San Agustín de Cajas no tienen cobertura, y Chupaca
+  (que no aparece en el panel) sigue como satélite de Huancayo, como estaba.
+
+Pruebas en `test/swayp-junin.test.ts`.
+
 «Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
 campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
 el padrón a veces usa el corto: «Lurigancho-Chosica» contra «Lurigancho». El

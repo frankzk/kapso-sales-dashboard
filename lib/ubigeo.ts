@@ -107,6 +107,17 @@ export const UBIGEO_BY_CITY: Record<string, Record<string, string>> = {
     "sicaya": "120134",
     "santo domingo de acobamba": "120135",
     "viques": "120136",
+    // Otras provincias de Junín que Swayp reparte desde la bodega de Huancayo
+    // (su panel las lista bajo JUNIN; owner, 07-11-2026, #KP202768). Solo los
+    // distritos de esa lista (el de Chupaca, por ejemplo, no está). Códigos
+    // INEI, como Sullana en la tabla de Piura.
+    "concepcion": "120201",
+    "matahuasi": "120210",
+    "orcotuna": "120213",
+    "jauja": "120401",
+    "ahuac": "120902",
+    "huamancaca chico": "120905",
+    "tres de diciembre": "120908",
   },
   juliaca: {
     "juliaca": "211101",
