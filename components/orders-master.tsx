@@ -227,6 +227,7 @@ export function OrdersMasterBoard({
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
+  canAttendReproLima = false,
   canDispatch,
   canWarehouse,
   closurePermissions,
@@ -302,6 +303,8 @@ export function OrdersMasterBoard({
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  /** La pestaña «Repro Lima» de la ficha (`repro_lima.manage`, MOM §9.5). */
+  canAttendReproLima?: boolean;
   canDispatch: boolean;
   canWarehouse: boolean;
   closurePermissions: {
@@ -1049,6 +1052,7 @@ export function OrdersMasterBoard({
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}
+          canAttendReproLima={canAttendReproLima}
           closurePermissions={closurePermissions}
           storeName={storeName}
           storeDomain={storeDomain}

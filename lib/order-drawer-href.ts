@@ -10,7 +10,9 @@
 //   Courier ya usa `?pedido=` para preseleccionar un pedido en su lista.
 //
 // La sección va en la URL con el nombre que la gente usa («historial»), no con
-// el nombre interno de la pestaña («actividad»).
+// el nombre interno de la pestaña («actividad»). `reprolima` abre la pestaña
+// «Repro Lima» (MOM §9.5): «Atender» del tablero la pide; la ficha solo la
+// muestra si el pedido está en Repro Lima y, si no, abre Operar.
 
 export const MASTER_PATH = "/dashboard/pedidos";
 
@@ -20,10 +22,10 @@ export const DRAWER_PARAM = "ficha";
 export const MASTER_OPEN_PARAM = "abrir";
 export const SECTION_PARAM = "seccion";
 
-export type OrderDrawerSection = "operar" | "informacion" | "historial" | "punto" | "chatby";
-export type OrderDrawerWorkspace = "operar" | "informacion" | "actividad" | "punto" | "chatby";
+export type OrderDrawerSection = "operar" | "informacion" | "historial" | "punto" | "chatby" | "reprolima";
+export type OrderDrawerWorkspace = "operar" | "informacion" | "actividad" | "punto" | "chatby" | "reprolima";
 
-const SECTIONS: readonly OrderDrawerSection[] = ["operar", "informacion", "historial", "punto", "chatby"];
+const SECTIONS: readonly OrderDrawerSection[] = ["operar", "informacion", "historial", "punto", "chatby", "reprolima"];
 
 export function isOrderDrawerSection(value: string | null | undefined): value is OrderDrawerSection {
   return SECTIONS.includes(value as OrderDrawerSection);
@@ -35,6 +37,7 @@ export function workspaceForDrawerSection(section: string | null | undefined): O
   if (section === "informacion") return "informacion";
   if (section === "punto") return "punto";
   if (section === "chatby") return "chatby";
+  if (section === "reprolima") return "reprolima";
   return "operar";
 }
 

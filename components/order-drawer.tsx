@@ -20,7 +20,7 @@
 // mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
 // parpadear a vacío.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { phoneSaleCustomer, type PhoneSaleCustomer } from "@/lib/master-phone-sale";
@@ -62,6 +62,19 @@ import {
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { OrderChatbyPanel } from "@/components/order-chatby-panel";
+import { ReproLimaPanel, type ReproNotice, type ReproSaved } from "@/components/repro-lima-panel";
+import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
+import type { ReproRow } from "@/lib/repro-lima-access";
+import { isReproLimaCandidate, reproAttendMode } from "@/lib/repro-lima-pending";
+import {
+  clearReproLimaHandoff,
+  handOffReproLima,
+  reproLimaHandoff,
+  reproLimaNext,
+  reproLimaQueueVersion,
+  subscribeReproLimaQueue,
+} from "@/lib/repro-lima-queue";
+import { orderDrawerHref } from "@/lib/order-drawer-href";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton, copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { GuideNumber } from "@/components/guide-number";
@@ -330,7 +343,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "historial",
 ];
 
-export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby";
+export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby" | "reprolima";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -711,6 +724,7 @@ export function OrderDrawer({
   initialWorkspace,
   masterHref,
   onNewOrderForCustomer,
+  canAttendReproLima = false,
 }: {
   orderId: string;
   canEdit: boolean;
@@ -756,12 +770,22 @@ export function OrderDrawer({
    */
   masterHref?: string | null;
   onNewOrderForCustomer?: (customer:PhoneSaleCustomer,workspace:DrawerWorkspaceView)=>void;
+  /**
+   * Quien llama a los clientes de Lima (`repro_lima.manage`, MOM §9.5). Solo
+   * con él la ficha pregunta si el pedido está en Repro Lima y enseña la
+   * pestaña «Repro Lima»; el servidor lo vuelve a comprobar en cada acción.
+   */
+  canAttendReproLima?: boolean;
 }) {
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<DrawerWorkspaceView>(initialWorkspace ?? "operar");
   /** Mensajes de la clienta en Chatby (de los últimos 20): la cifra de la pestaña, solo si respondió. */
   const [chatbyCustomerMessages, setChatbyCustomerMessages] = useState<number | null>(null);
+  // Cerrar la ficha (✕, fondo, Escape) pasa antes por la pestaña «Repro Lima»:
+  // con texto sin guardar, avisa en vez de cerrar (§11.5). Se define abajo.
+  const reproExitGuard = useRef<(() => boolean) | null>(null);
+  const requestCloseRef = useRef<() => void>(onClose);
   const scrollRef = useRef<HTMLElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const indexRef = useRef<HTMLDivElement>(null);
@@ -911,7 +935,7 @@ export function OrderDrawer({
   // habías perdido tu sitio en la tabla.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") requestCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
@@ -951,6 +975,135 @@ export function OrderDrawer({
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // -------------------------------------------------------------------------
+  // «Repro Lima» (MOM §9.5): la pestaña de atender, después de «Chatby».
+  //
+  // Sale SOLO si el pedido está en Repro Lima, y eso lo dice la misma lectura
+  // que usaba la hoja del tablero (`loadReproRow`: una fila, o nada si ya no
+  // está). Para no sumar lecturas a cada ficha, se pregunta una vez por
+  // pedido y solo a quien atiende (`canAttendReproLima`) y cuando puede estar:
+  // Lima y por entregar (`isReproLimaCandidate`), o cuando «Atender» pide la
+  // pestaña (`?seccion=reprolima`). Sin sondeos: la pestaña relee lo suyo al
+  // abrirse y al guardar.
+  // -------------------------------------------------------------------------
+  const [reproLookup, setReproLookup] = useState<
+    { orderId: string; status: "loading" } | { orderId: string; status: "ready"; row: ReproRow } | { orderId: string; status: "none"; message: string | null } | null
+  >(null);
+  const reproRequested = initialWorkspace === "reprolima";
+  const reproCandidate =
+    canAttendReproLima &&
+    (reproRequested || Boolean(detail && detail.row.order_id === orderId && isReproLimaCandidate(detail.row)));
+  useEffect(() => {
+    if (!reproCandidate) {
+      setReproLookup(null);
+      return;
+    }
+    let live = true;
+    setReproLookup({ orderId, status: "loading" });
+    loadReproRow(orderId)
+      .then((result) => {
+        if (!live) return;
+        if ("error" in result) setReproLookup({ orderId, status: "none", message: result.error });
+        else if (result.row) setReproLookup({ orderId, status: "ready", row: result.row });
+        else setReproLookup({ orderId, status: "none", message: null });
+      })
+      .catch(() => {
+        if (live) setReproLookup({ orderId, status: "none", message: "No pudimos abrir la gestión del pedido. Vuelve a intentarlo." });
+      });
+    return () => {
+      live = false;
+    };
+  }, [orderId, reproCandidate]);
+  const reproRow = reproLookup?.orderId === orderId && reproLookup.status === "ready" ? reproLookup.row : null;
+  const reproLoading = reproLookup?.orderId === orderId && reproLookup.status === "loading";
+  /** «Atender» pidió la pestaña y el pedido ya no está: se abre Operar con el porqué. */
+  const [reproUnavailable, setReproUnavailable] = useState<string | null>(null);
+  // El panel se monta la primera vez que se abre la pestaña y se queda
+  // montado (oculto) al ir a otra: lo escrito no se pierde, y el candado se
+  // suelta al salir y se vuelve a tomar al volver (`active`).
+  const [reproMountedFor, setReproMountedFor] = useState<string | null>(null);
+  // Cada guardado que no pasa al siguiente estrena el panel (fila y candado
+  // nuevos) en lectura, con el aviso arriba.
+  const [reproSession, setReproSession] = useState<{ orderId: string; key: number; mode: "edit" | "read" | null; notice: ReproNotice | null }>(
+    () => ({ orderId, key: 0, mode: null, notice: reproLimaHandoff(orderId) }),
+  );
+  useEffect(() => {
+    // El aviso del pedido anterior ya está en este montaje: no vuelve a salir.
+    const notice = reproLimaHandoff(orderId);
+    clearReproLimaHandoff(orderId);
+    setReproSession((current) => (current.orderId === orderId ? current : { orderId, key: 0, mode: null, notice }));
+    setReproUnavailable(null);
+  }, [orderId]);
+  // Abrir la pestaña monta el panel; si el pedido no está (o ya no) en Repro
+  // Lima, la ficha vuelve a Operar.
+  const reproSettledOut = !reproCandidate || (reproLookup?.orderId === orderId && reproLookup.status === "none");
+  useEffect(() => {
+    if (workspace !== "reprolima") return;
+    if (reproRow) {
+      setReproMountedFor(orderId);
+      return;
+    }
+    if (!reproSettledOut) return;
+    setWorkspace("operar");
+    if (reproRequested && canAttendReproLima) {
+      setReproUnavailable(
+        (reproLookup?.status === "none" ? reproLookup.message : null) ??
+          "Este pedido ya no está pendiente de entrega en Lima: no tiene la pestaña «Repro Lima». Actualiza la lista.",
+      );
+    }
+  }, [workspace, reproRow, reproSettledOut, orderId, reproRequested, canAttendReproLima, reproLookup]);
+
+  /** Cerrar la ficha: antes, la pestaña «Repro Lima» puede pedir quedarse (texto sin guardar). */
+  function requestClose() {
+    if (reproExitGuard.current?.()) {
+      setWorkspace("reprolima");
+      return;
+    }
+    onClose();
+  }
+  useEffect(() => {
+    requestCloseRef.current = requestClose;
+  });
+  const reproQueueVersion = useSyncExternalStore(subscribeReproLimaQueue, reproLimaQueueVersion, () => 0);
+  const reproHasNext = useMemo(
+    () => Boolean(reproRow && reproLimaNext(orderId)),
+    // `reproQueueVersion` cambia cuando el tablero publica su lista.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [orderId, reproRow, reproQueueVersion],
+  );
+
+  function onReproSaved(saved: ReproSaved, advance: boolean) {
+    void reload();
+    onSaved();
+    const text = saved.error ?? saved.notice ?? "Guardado.";
+    // Lo que pide algo (un error, como «no se pudo programar», o crear la
+    // salida en la Mesa de ruta) no pasa al siguiente: el aviso queda arriba de
+    // esta pestaña. Lo demás («Avisa a Almacén…») pasa al siguiente de la lista
+    // del tablero, en la misma pestaña, y va arriba de la suya.
+    const next = advance && !saved.error && !saved.mesa ? reproLimaNext(saved.orderId) : null;
+    if (next && next !== orderId) {
+      handOffReproLima(next, { orderName: saved.orderName, text });
+      window.history.pushState(
+        null,
+        "",
+        orderDrawerHref(next, "reprolima", { pathname: window.location.pathname, search: window.location.search }),
+      );
+      return;
+    }
+    setReproSession((current) => ({
+      orderId,
+      key: current.key + 1,
+      mode: "read",
+      notice: {
+        orderName: saved.orderName,
+        text,
+        tone: saved.error ? "crit" : "ok",
+        extra: saved.error ? saved.notice : null,
+        mesa: saved.mesa,
+      },
+    }));
+  }
 
   // «Llamar con Anura» (fase 1): si sale el botón y las llamadas del pedido
   // con su grabación. Se pide después de la ficha, no antes.
@@ -1252,6 +1405,9 @@ export function OrderDrawer({
         ? `${chatbyCustomerMessages === 1 ? "1 mensaje" : `${chatbyCustomerMessages} mensajes`} de la clienta en los últimos 20`
         : undefined,
     },
+    // Solo mientras el pedido está en Repro Lima (MOM §9.5); mientras se
+    // comprueba, solo si «Atender» la pidió.
+    ...(reproRow || (reproLoading && workspace === "reprolima") ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -1302,7 +1458,7 @@ export function OrderDrawer({
       : null;
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end bg-ink-900/20" onClick={onClose}>
+    <div className="fixed inset-0 z-30 flex justify-end bg-ink-900/20" onClick={requestClose}>
       <aside
         ref={scrollRef}
         tabIndex={-1}
@@ -1460,7 +1616,7 @@ export function OrderDrawer({
               )}
               <button
                 type="button"
-                onClick={onClose}
+                onClick={requestClose}
                 aria-label="Cerrar"
                 className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
               >
@@ -1472,8 +1628,16 @@ export function OrderDrawer({
           {/* Los avisos van DENTRO de la cabecera fija: un error que se pierde
               al scrollear es un error que nadie lee, y estas acciones mueven
               dinero y estados. Se quitan con su «x». */}
-          {(error || notice) && detail && (
+          {(error || notice || reproUnavailable) && detail && (
             <div className="space-y-2 px-4 pt-3 sm:px-6">
+              {reproUnavailable && (
+                <Banner tone="warn" role="alert" className="items-start">
+                  <div className="flex items-start justify-between gap-3">
+                    <p>{reproUnavailable}</p>
+                    <DismissButton label="Quitar el aviso" onClick={() => setReproUnavailable(null)} />
+                  </div>
+                </Banner>
+              )}
               {error && (
                 <Banner tone="crit" role="alert" className="items-start">
                   <div className="flex items-start justify-between gap-3">
@@ -2485,6 +2649,42 @@ export function OrderDrawer({
                 onCustomerMessages={setChatbyCustomerMessages}
               />
             </div>
+            {/* «Repro Lima» (MOM §9.5): montada desde que se abre; oculta, suelta el caso. */}
+            {reproRow && reproMountedFor === orderId && reproSession.orderId === orderId && (
+              <div
+                id="pedido-panel-reprolima"
+                role="tabpanel"
+                aria-labelledby="pedido-tab-reprolima"
+                hidden={workspace !== "reprolima"}
+                className="flex flex-col gap-4 sm:gap-6"
+              >
+                <section aria-label="Repro Lima" className={SECTION_CARD}>
+                  <ReproLimaPanel
+                    key={`${orderId}:${reproSession.key}`}
+                    row={reproRow}
+                    initialMode={reproSession.mode ?? reproAttendMode(reproRow)}
+                    active={workspace === "reprolima"}
+                    hasNext={reproHasNext}
+                    onClose={onClose}
+                    onSaved={onReproSaved}
+                    onChanged={() => {
+                      void reload();
+                      onSaved();
+                    }}
+                    onGoToMesa={() => jumpTo("rutas")}
+                    exitGuard={reproExitGuard}
+                    previous={reproSession.notice}
+                  />
+                </section>
+              </div>
+            )}
+            {workspace === "reprolima" && !reproRow && reproLoading && (
+              <div id="pedido-panel-reprolima" role="tabpanel" aria-labelledby="pedido-tab-reprolima" aria-busy="true" className={cn("space-y-3", SECTION_CARD)}>
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-28 w-full" />
+              </div>
+            )}
           </div>
         )}
       </aside>
