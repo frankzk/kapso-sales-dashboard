@@ -125,7 +125,8 @@ describe("el dato viaja de Shopify al Master y a quien decide", () => {
     for (const f of [
       "app/dashboard/pedidos/payment-actions.ts",
       "lib/aliclik-guide.ts",
-      "components/order-drawer.tsx",
+      // La ficha (y Leads, MOM §25.2) arman los hechos en `orderPaymentPanelFor`.
+      "lib/order-payment-panel.ts",
       "lib/collect-alert.ts",
       "app/api/pedidos/rotulos/route.ts",
     ]) {
@@ -133,6 +134,7 @@ describe("el dato viaja de Shopify al Master y a quien decide", () => {
       expect(src, f).toMatch(/paymentGateway: /);
     }
     expect(read("lib/orders-master-access.ts")).toContain('"payment_gateway",');
+    expect(read("components/order-drawer.tsx")).toContain("orderPaymentPanelFor({");
   });
 
   it("la migración existe y no rellena a la fuerza", () => {

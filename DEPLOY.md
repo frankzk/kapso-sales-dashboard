@@ -1,5 +1,52 @@
 # Deployment runbook
 
+### 07-11-2026 · Leads: adelanto, agencia Shalom y «Swayp hoy» después de generar el pedido (sin migración, MOM §25.2)
+
+Pedido del owner: tras «Generar pedido», el cajón de Leads solo ofrecía crear la
+guía de Aliclik; no dejaba subir el adelanto, elegir la agencia de Shalom ni
+mandar por «Swayp lo puede llevar hoy». Ahora, para cualquier lead con pedido,
+la tarjeta **«Cómo sale el pedido»** ofrece tres opciones —«Guía Aliclik»,
+«Swayp hoy» y «Agencia Shalom + adelanto»— y la elegida abre debajo el MISMO
+componente de la ficha del pedido (`AliclikGuidePanel`, la guía Swayp directa
+con `origen = por_confirmar`, y la tarjeta de Cobro `PickupKeyPanel` con
+«Registrar un pago» y «DNI y agencia Shalom»). Se ofrecen donde la ficha las
+ofrece, con las mismas funciones, ahora compartidas (`aliclikGuideOffered`,
+`swaypDesdeConfirmacionOffer`, `orderPaymentPanelFor`); lo que no se ofrece
+queda apagado con su porqué en una línea. Tras cada acción la opción dice en
+qué quedó (guía creada, Swayp programado, «Adelanto cargado · por validar»,
+agencia guardada). «Continuar · crear guía» pasa a «Continuar · elegir envío».
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia
+y no hay estados nuevos. Ninguna server action de escritura cambia. Lectura
+nueva: `loadLeadPostOrderChoices` (app/dashboard/leads/post-order-actions.ts),
+una vez al abrir el cajón de un lead con pedido y tras cada acción o recarga
+del historial: la misma `loadOrderDetail` que abre la ficha, la ficha del §8
+solo donde la ficha la pide, el borrador de Shalom y, si la columna
+`swayp_availability` aún está vacía (pedido recién nacido), una lectura de
+`fenix_stock` de la organización para evaluarla en el momento con la regla de
+la pasada horaria, sin escribirla. Guardar «DNI y agencia Shalom» ahora avisa a
+los demás paneles de pago del pedido (`announcePaymentPanelChange`), que se
+recargan una vez.
+
+**Qué mirar después.** En Leads, generar un pedido de provincia COD y pulsar
+«Continuar · elegir envío»: «Cómo sale el pedido» con el número del pedido y
+Aliclik abierto. «Swayp hoy» encendida en un pedido de una ciudad con bodega y
+stock (si no, apagada con «Swayp no lo puede llevar hoy: …»); «Enviar por
+Swayp» abre la guía Swayp y, al crearla, la opción dice «Programado» con la
+guía y el pedido aparece en Master → Por confirmar → «Swayp desde Por
+confirmar». «Agencia Shalom + adelanto»: registrar un Yape y ver «Adelanto
+cargado · por validar» en la opción y el comprobante en Validar pagos; elegir
+una agencia y ver «Agencia guardada». En un lead de Lima, el cobro por agencia
+apagado con «No aplica en Lima…». En la ficha del pedido nada cambia: la tarjeta
+de Cobro, Aliclik y «Enviar por Swayp» salen en los mismos pedidos que antes.
+En los logs, que `loadLeadPostOrderChoices` no se dispare en bucle (una por
+apertura y por acción).
+
+**Marcha atrás.** Revertir el commit: vuelven el panel de Aliclik solo y el
+botón «Continuar · crear guía». No escribe nada nuevo en la base: las guías,
+los pagos y los borradores de Shalom creados desde Leads son las mismas filas
+que los de la ficha y se quedan como están.
+
 ### 07-11-2026 · Repro Lima: «Atender» como pestaña del pedido (sin migración, MOM §9.5)
 
 Pedido del owner: «Atender» abría una hoja lateral aparte encima de la ficha y

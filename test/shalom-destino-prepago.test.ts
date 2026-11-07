@@ -73,9 +73,12 @@ describe("el bloque del pedido pagado es el mismo que el del cobro", () => {
   });
 
   it("el drawer le dice al panel cuándo Shalom puede ser el destino", () => {
+    // Lo decide `orderPaymentPanelFor`, que leen la ficha y Leads (MOM §25.2).
     const drawer = read("components/order-drawer.tsx");
-    expect(drawer).toContain("offersShalomDestination({");
+    expect(drawer).toContain("orderPaymentPanelFor({");
+    expect(read("lib/order-payment-panel.ts")).toContain("const shalomDestination = offersShalomDestination({");
     expect(drawer).toContain("shalomDestination={shalomDestination}");
+    expect(read("components/lead-post-order-choices.tsx")).toContain("shalomDestination={agencia.shalomDestination}");
   });
 
   it("«Abrir Shalom» trae puesto lo guardado", () => {
