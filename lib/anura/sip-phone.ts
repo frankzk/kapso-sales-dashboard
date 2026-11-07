@@ -153,6 +153,8 @@ export interface SipSessionLike {
   unmute(options?: { audio?: boolean }): void;
   isEnded(): boolean;
   on(event: string, listener: (e: any) => void): unknown;
+  /** El RTCPeerConnection de JsSIP (para tomar el audio y las estadísticas). */
+  connection?: unknown;
 }
 
 /** Lo que el teléfono usa de un MediaStream (el micrófono). */
@@ -835,13 +837,54 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       }
       if (iceTimer === null) iceTimer = timer(() => ready(), ANURA_ICE_MAX_WAIT_MS);
     });
+    let remoteSet = false;
     s.on("peerconnection", (ev: { peerconnection?: { addEventListener?: (t: string, cb: (x: any) => void) => void } }) => {
-      ev?.peerconnection?.addEventListener?.("track", (t: { streams?: readonly unknown[]; track?: unknown }) => {
+      ev?.peerconnection?.addEventListener?.("track", (t: { streams?: readonly unknown[]; track?: { kind?: unknown } }) => {
+        d("audio_remoto", { via: "track", streams: t?.streams?.length ?? 0, kind: typeof t?.track?.kind === "string" ? t.track.kind : null });
         if (myRun !== run) return;
         const stream = t?.streams?.[0] ?? (t?.track && deps.makeStream ? deps.makeStream([t.track]) : null);
-        if (stream) deps.onRemoteStream(stream);
+        if (stream) {
+          remoteSet = true;
+          deps.onRemoteStream(stream);
+        }
       });
     });
+    /**
+     * Al contestar: el audio de Anura sale de los receptores de la conexión
+     * (por si el evento `track` no llegó o llegó sin stream), y a los 4 y 15 s
+     * se anota cuánto audio llega y sale (diagnóstico, 07-11-2026).
+     */
+    const afterConfirmed = () => {
+      const pc = s.connection as
+        | { getReceivers?: () => { track?: { kind?: string; muted?: boolean; readyState?: string } | null }[]; getStats?: () => Promise<{ forEach(cb: (r: any) => void): void }> }
+        | undefined;
+      const tracks = (pc?.getReceivers?.() ?? []).map((r) => r.track).filter((t): t is { kind?: string; muted?: boolean; readyState?: string } => !!t && t.kind === "audio");
+      d("audio_receptores", { pistas: tracks.length, muted: tracks[0]?.muted ?? null, estado: tracks[0]?.readyState ?? null, yaHabia: remoteSet });
+      if (tracks.length && deps.makeStream) deps.onRemoteStream(deps.makeStream(tracks));
+      for (const ms of [4000, 15000]) {
+        timer(() => {
+          if (myRun !== run || !pc?.getStats) return;
+          void pc
+            .getStats()
+            .then((stats) => {
+              const out: Record<string, string | number | boolean | null> = { a_los_ms: ms };
+              stats.forEach((r: any) => {
+                if (r?.type === "inbound-rtp" && (r.kind === "audio" || r.mediaType === "audio")) {
+                  out.recibidos = Number(r.packetsReceived ?? 0);
+                  out.bytesRecibidos = Number(r.bytesReceived ?? 0);
+                  out.perdidos = Number(r.packetsLost ?? 0);
+                  out.nivel = typeof r.audioLevel === "number" ? Math.round(r.audioLevel * 1000) / 1000 : null;
+                  out.energia = typeof r.totalAudioEnergy === "number" ? Math.round(r.totalAudioEnergy * 1000) / 1000 : null;
+                }
+                if (r?.type === "outbound-rtp" && (r.kind === "audio" || r.mediaType === "audio")) out.enviados = Number(r.packetsSent ?? 0);
+                if (r?.type === "candidate-pair" && r.nominated && r.state === "succeeded") out.par = "ok";
+              });
+              d("rtp", out);
+            })
+            .catch(() => d("rtp", { a_los_ms: ms, error: true }));
+        }, ms);
+      }
+    };
     for (const step of ["setremotedescriptionfailed", "createanswerfailed", "setlocaldescriptionfailed"]) {
       s.on(`peerconnection:${step}`, (err: unknown) => {
         const e = err as { name?: unknown; message?: unknown } | null;
@@ -855,6 +898,11 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     s.on("confirmed", () => {
       d("sesion_confirmada");
       if (myRun !== run) return;
+      try {
+        afterConfirmed();
+      } catch {
+        // diagnóstico: nunca rompe la llamada
+      }
       set({ phase: "en_llamada", answeredAt: state.answeredAt ?? now() });
       resolveCall();
     });

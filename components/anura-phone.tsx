@@ -70,9 +70,27 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
       makeStream: (tracks) => new MediaStream(tracks as MediaStreamTrack[]),
       onRemoteStream: (stream) => {
         const el = audioRef.current;
-        if (!el) return;
+        if (!el) {
+          void logAnuraPhoneDiag("audio_play", { ok: false, name: "sin_elemento" }).catch(() => undefined);
+          return;
+        }
         el.srcObject = (stream as MediaStream | null) ?? null;
-        if (stream) void el.play().catch(() => undefined);
+        if (!stream) return;
+        el.muted = false;
+        el.volume = 1;
+        void el
+          .play()
+          .then(() => logAnuraPhoneDiag("audio_play", { ok: true }))
+          .catch((err: unknown) => {
+            // El navegador bloqueó el audio: se vuelve a intentar con el siguiente clic.
+            const name = (err as { name?: unknown } | null)?.name;
+            void logAnuraPhoneDiag("audio_play", { ok: false, name: typeof name === "string" ? name : null }).catch(() => undefined);
+            const retry = () => {
+              void el.play().catch(() => undefined);
+            };
+            document.addEventListener("pointerdown", retry, { once: true });
+            document.addEventListener("keydown", retry, { once: true });
+          });
       },
       onChange: (s) => {
         if (mounted.current) setSnapshot(s);
