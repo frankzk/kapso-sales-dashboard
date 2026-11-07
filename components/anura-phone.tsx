@@ -52,12 +52,19 @@ interface Amplifier {
   nodes: AudioNode[];
 }
 
-function startAmplifier(stream: MediaStream, volume: number): Amplifier | null {
+/** El AudioContext del teléfono. Se crea y se reanuda EN el clic de «Llamar»: fuera de un clic, Chrome lo deja en pausa. */
+function newAudioContext(): AudioContext | null {
   try {
     const Ctx: typeof AudioContext | undefined =
       window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return null;
-    const ctx = new Ctx();
+    return Ctx ? new Ctx() : null;
+  } catch {
+    return null;
+  }
+}
+
+function startAmplifier(ctx: AudioContext, stream: MediaStream, volume: number): Amplifier | null {
+  try {
     const source = ctx.createMediaStreamSource(stream);
     const gain = ctx.createGain();
     gain.gain.value = volume;
@@ -70,7 +77,6 @@ function startAmplifier(stream: MediaStream, volume: number): Amplifier | null {
     source.connect(gain);
     gain.connect(comp);
     comp.connect(ctx.destination);
-    void ctx.resume().catch(() => undefined);
     return { ctx, gain, nodes: [source, gain, comp] };
   } catch {
     return null;
@@ -86,7 +92,6 @@ function stopAmplifier(amp: Amplifier | null) {
       // ya desconectado
     }
   }
-  void amp.ctx.close().catch(() => undefined);
 }
 
 /** Lo que el teléfono pide al servidor (server actions). */
@@ -104,6 +109,12 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
   const phoneRef = useRef<AnuraPhone | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ampRef = useRef<Amplifier | null>(null);
+  const ctxRef = useRef<AudioContext | null>(null);
+  /** En el clic de «Llamar»: crea o reanuda el AudioContext mientras Chrome lo permite. */
+  const unlockAudio = useCallback(() => {
+    if (!ctxRef.current || ctxRef.current.state === "closed") ctxRef.current = newAudioContext();
+    void ctxRef.current?.resume().catch(() => undefined);
+  }, []);
   const [volume, setVolumeState] = useState<number>(ANURA_VOLUME_DEFAULT);
   const volumeRef = useRef(volume);
   useEffect(() => {
@@ -150,11 +161,26 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
           el.muted = false;
           return;
         }
-        const amp = startAmplifier(stream as MediaStream, volumeRef.current);
+        const ctx = ctxRef.current;
+        const amp = ctx ? startAmplifier(ctx, stream as MediaStream, volumeRef.current) : null;
         ampRef.current = amp;
-        // Con amplificador, el <audio> queda enganchado pero mudo (si no, se oiría doble).
-        el.muted = amp !== null;
+        // Con el amplificador en marcha, el <audio> queda enganchado pero mudo
+        // (si no, se oiría doble). Si Chrome lo tiene en pausa, suena el <audio>
+        // normal hasta que arranque (y entonces se silencia el <audio>).
+        const sync = () => {
+          el.muted = amp !== null && amp.ctx.state === "running";
+        };
+        sync();
         el.volume = 1;
+        if (amp) {
+          amp.ctx.onstatechange = sync;
+          if (amp.ctx.state !== "running") {
+            void amp.ctx.resume().then(sync).catch(() => undefined);
+            const wake = () => void amp.ctx.resume().then(sync).catch(() => undefined);
+            document.addEventListener("pointerdown", wake, { once: true });
+            document.addEventListener("keydown", wake, { once: true });
+          }
+        }
         void logAnuraPhoneDiag("audio_amplificador", { ok: amp !== null, estado: amp?.ctx.state ?? null, volumen: volumeRef.current }).catch(() => undefined);
         void el
           .play()
@@ -183,7 +209,11 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
     return created;
   }, []);
 
-  const call = useCallback(() => phone().call(), [phone]);
+  // `unlockAudio` va primero y sin esperas: así corre dentro del clic.
+  const call = useCallback(() => {
+    unlockAudio();
+    return phone().call();
+  }, [phone, unlockAudio]);
   const hangUp = useCallback(() => phoneRef.current?.hangUp(), []);
   const setMuted = useCallback((muted: boolean) => phoneRef.current?.setMuted(muted), []);
 
@@ -199,6 +229,8 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
       phoneRef.current = null;
       stopAmplifier(ampRef.current);
       ampRef.current = null;
+      void ctxRef.current?.close().catch(() => undefined);
+      ctxRef.current = null;
     };
   }, []);
 

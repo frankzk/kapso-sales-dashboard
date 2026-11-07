@@ -401,7 +401,7 @@ export function AnuraCallButton({
       // La ficha se cierra al tocar su fondo, y este aviso cuelga de ella en el
       // árbol de React aunque se pinte fuera: el toque no tiene que llegarle.
       onClick={(e) => e.stopPropagation()}
-      className="fixed bottom-4 right-4 z-40 w-[min(22rem,calc(100vw-2rem))] rounded-lg bg-white p-4 shadow-pop"
+      className="fixed bottom-4 right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] rounded-lg bg-white p-4 shadow-pop"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
