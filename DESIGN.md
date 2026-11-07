@@ -440,7 +440,22 @@ Master: «Creación» (`DateRangePill`: los atajos como botones secundarios, el
 elegido en primario, y debajo «Desde» y «Hasta» en dos columnas), «Canal»,
 «Distrito» y «Courier» (`FacetPill`, cada opción con su cantidad). Con alguna
 puesta aparece «Quitar filtros» como botón fantasma. En el teléfono se acomodan
-en varias líneas. Bajo el cliente y su teléfono, la dirección con su distrito
+en varias líneas. Desde el 07-11-2026, entre las tarjetas de atención y los
+chips, la tarjeta «Sale a reparto» (`components/dispatch-plan-panel.tsx`), la
+misma de Despacho del día. Su contenido:
+- el título y los dos días como chips («Hoy · vie 06/11», «Mañana · sáb 07/11»
+  o «Próximo reparto · lun 09/11»);
+- la línea «N pedidos salen el … · Faltan … », lo que falta en `warn-fg` y
+  «Todo armado y en caja.» en `ok-fg`;
+- cuatro `StatusCard` (Sin rótulo, Sin armar, Sin caja, En caja) que filtran la
+  lista;
+- una línea con una chapa por motorizado, en `warn` si tiene algo sin armar.
+
+En Despacho del día va sobre las tarjetas de la cola, con «Armar las cajas del
+…» como botón primario; en la lista, la píldora «Sale · …» se quita con su «x».
+En cada pedido de Repro Lima que sale, la chapa «Sale sáb 07/11 · sin caja»
+(`warn`) o «… · en caja · caja de Jhon» (`ok`) va bajo su etapa. Bajo el cliente
+y su teléfono, la dirección con su distrito
 («Av. … · Ate») en 12 px `ink-700` y, debajo, «Ref. …» en `ink-500`, enteras y
 partidas en líneas, nunca truncadas.
 

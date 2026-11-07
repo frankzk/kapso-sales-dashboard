@@ -1,5 +1,26 @@
 # Deployment runbook
 
+### 07-11-2026 · «Sale a reparto»: lo que sale hoy o en el próximo reparto y lo que le falta (sin migración, MOM §29.16)
+
+Pedido del owner. Una tarjeta con dos días, hoy y el próximo día de reparto
+(el domingo se salta), dice cuántos pedidos de Lima salen con Grupo GF. Los
+reparte por lo primero que les falta: sin rótulo, sin armar, sin caja, en caja
+con su motorizado. Está en Despacho del día, con todas las tiendas de Grupo GF y
+el botón «Armar las cajas del …», y en Repro Lima, con nuestras tiendas y la
+chapa en cada pedido.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+Despacho del día no hace consultas nuevas. Repro Lima suma cinco lecturas por
+carga, solo para los candidatos: el proveedor, las salidas, las solicitudes de
+Grupo GF, los ítems activos de caja y sus cajas.
+
+**Qué mirar después.** Pasadas las 12:00, Despacho del día abre «Sale a
+reparto» en mañana (o en el lunes, si es sábado). Las cifras suman el total y
+«Armar las cajas del …» deja el «Día de la caja» en ese día. En Repro Lima, la
+misma cuenta, limitada a nuestras tiendas.
+
+**Marcha atrás.** Revertir el commit. Solo lee.
+
 ### 06-11-2026 · Repro Lima: elegir qué reintentos de Aliclik aprobar (sin migración, MOM §9.5)
 
 Pedido del owner. En «Reintentos Aliclik», cada fila lista tiene una casilla, y

@@ -49,6 +49,7 @@ import {
   limaDay,
   locateOutsideList,
   PACKAGE_STAGE_LABEL,
+  planCandidateFromQueue,
   packageStage,
   programDayLabel,
   programNeedsConfirm,
@@ -86,7 +87,9 @@ import { daysBetween, failedOutputLabel, ownOutputLabel, replacedOutputLabel } f
 import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation, type TandersReview } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
-import { sameDayCutoffLabel, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { limaClock, sameDayCutoffLabel, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { nextDeliveryDay, PLAN_STEP_LABEL, planItems, planSummary, type PlanCandidate, type PlanStep } from "@/lib/dispatch-plan";
+import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
 import {
   assignGroupGfCourierRoute,
   moveManifestItem,
@@ -509,6 +512,33 @@ export function DispatchDayBoard(props: Props) {
   // Chips de etapa, subetapa y fecha pactada con su cantidad facetada (cuántas
   // quedarían al tocarlo con el resto de filtros como están). Las subetapas
   // son las de la etapa elegida; sin etapa no se muestran.
+  // «Sale a reparto» (§29.16): lo que sale hoy o en el próximo reparto y lo que
+  // le falta. Pasado el corte se abre en el próximo día: es lo que se prepara.
+  const nextRouteDay = nextDeliveryDay(day);
+  const [planDay, setPlanDay] = useState(() => (limaClock().minute > sameDayCutoffMinute(props.sameDayCutoff) ? nextRouteDay : day));
+  const plan = useMemo(() => {
+    const candidates = allRows.map(planCandidateFromQueue).filter((c): c is PlanCandidate => c !== null);
+    return planSummary(planItems(candidates, planDay));
+  }, [allRows, planDay]);
+  const planStepActive: PlanStep | null = method === "lista" && filters.plan?.day === planDay ? filters.plan.step : null;
+  /** Tocar una cifra: la lista con lo que sale ese día en ese paso (o lo quita). */
+  const tapPlanStep = (step: PlanStep) => {
+    const off = planStepActive === step;
+    setFilters((cur) => ({ ...cur, plan: off ? null : { day: planDay, step }, segment: null, stages: [], substages: [] }));
+    setLimit(100);
+    setMethod("lista");
+  };
+  /** Preparar el día: la caja en ese día y la lista con lo que sale, sin caja primero. */
+  const preparePlanDay = () => {
+    setScanDay(planDay);
+    setFilters((cur) => ({ ...cur, plan: { day: planDay, step: null }, segment: null, stages: [], substages: [] }));
+    setLimit(100);
+    setMethod("lista");
+  };
+  const choosePlanDay = (next: string) => {
+    setPlanDay(next);
+    setFilters((cur) => (cur.plan ? { ...cur, plan: { ...cur.plan, day: next } } : cur));
+  };
   const substageOptions = useMemo(() => queueSubstageOptions(allRows, filters.stages), [allRows, filters.stages]);
   const facets = useMemo(() => queueFacetCounts(allRows, filters, day), [allRows, filters, day]);
   const tracking = filters.stages.length > 0;
@@ -694,7 +724,8 @@ export function DispatchDayBoard(props: Props) {
   const cards = useMemo(() => queueFacetCounts(allRows, { ...filters, stages: [], substages: [] }, day), [allRows, filters, day]);
   /** Tocar una tarjeta: abre «Desde la lista» en ese apartado (o lo quita). */
   const tapSegment = (segment: QueueSegment) => {
-    setFilters((cur) => ({ ...cur, segment: cur.segment === segment && method === "lista" ? null : segment, stages: [], substages: [] }));
+    // Un apartado es de la cola de siempre: quita «Sale a reparto».
+    setFilters((cur) => ({ ...cur, segment: cur.segment === segment && method === "lista" ? null : segment, stages: [], substages: [], plan: null }));
     setLimit(100);
     setMethod("lista");
   };
@@ -761,11 +792,26 @@ export function DispatchDayBoard(props: Props) {
         </div>
       </div>
 
+      <DispatchPlanPanel
+        planDay={planDay}
+        options={planDayOptions(day, nextRouteDay)}
+        onPlanDay={choosePlanDay}
+        summary={plan}
+        activeStep={planStepActive}
+        onStep={tapPlanStep}
+        scopeNote="Todas las tiendas que atiende Grupo GF."
+        actions={canManageDispatch && plan.total > 0 ? (
+          <OpsButton size="sm" variant={planDay === day ? "secondary" : "primary"} onClick={preparePlanDay} className="pointer-coarse:h-11">
+            {planDay === day ? "Ver lo de hoy en la lista" : `Armar las cajas del ${programDayLabel(planDay)}`}
+          </OpsButton>
+        ) : undefined}
+      />
+
       {/* Apartados de la cola como tarjetas de estado: cada una es un filtro con
           su cantidad y la elegida lleva el borde azul. «Nunca salieron» es el
           apartado a dejar en cero, como «Sin llamar» en Por confirmar. */}
       <div role="group" aria-label="Apartados de la cola" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-7 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
-        <StatusCard label="Por asignar" value={QUEUE_SEGMENTS.reduce((sum, segment) => sum + cards.segment[segment], 0)} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null} onClick={() => tapQueueTile("por_asignar")} />
+        <StatusCard label="Por asignar" value={QUEUE_SEGMENTS.reduce((sum, segment) => sum + cards.segment[segment], 0)} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null && !filters.plan} onClick={() => tapQueueTile("por_asignar")} />
         {QUEUE_SEGMENTS.map((segment) => (
           <StatusCard key={segment} label={QUEUE_SEGMENT_LABEL[segment].label} value={cards.segment[segment]} hint={QUEUE_SEGMENT_LABEL[segment].hint} active={method === "lista" && filters.segment === segment} onClick={() => tapSegment(segment)} />
         ))}
@@ -997,11 +1043,20 @@ export function DispatchDayBoard(props: Props) {
               <FilterPill ref={pillRef.creado} label="Creado" value={pillValue.creado} expanded={openPill === "creado"} onClick={() => togglePill("creado")} onClear={() => patchFilters({ created: "todo" })} />
               <FilterPill label="Armados" count={queueTiles.armados} active={filters.armedOnly} title={QUEUE_TILE_LABEL.armados.hint} onClick={() => patchFilters({ armedOnly: !filters.armedOnly })} onClear={() => patchFilters({ armedOnly: false })} />
               <FilterPill label="Tomados sin caja" count={queueTiles.tomados_sin_caja} active={filters.takenOnly} title={QUEUE_TILE_LABEL.tomados_sin_caja.hint} onClick={() => patchFilters({ takenOnly: !filters.takenOnly })} onClear={() => patchFilters({ takenOnly: false })} />
+              {filters.plan && (
+                <FilterPill
+                  label="Sale"
+                  value={`${programDayLabel(filters.plan.day)}${filters.plan.step ? ` · ${PLAN_STEP_LABEL[filters.plan.step].label}` : ""}`}
+                  title="Solo lo que sale a reparto ese día (incluye lo que ya está en una caja de ese día)"
+                  onClick={() => document.getElementById("plan-title")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                  onClear={() => patchFilters({ plan: null })}
+                />
+              )}
               {activeFilters > 0 && (
                 <OpsButton variant="ghost" size="sm" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query, segment: filters.segment })}>Quitar filtros</OpsButton>
               )}
               <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
-                <b className="font-semibold text-ink-900">{(filtered.length - returnableCount).toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "por asignar"}
+                <b className="font-semibold text-ink-900">{(filtered.length - returnableCount).toLocaleString("es-PE")}</b> {filters.plan ? `salen el ${programDayLabel(filters.plan.day)}` : tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "por asignar"}
                 {returnableCount > 0 && <> · <b className="font-semibold text-ink-900">{returnableCount.toLocaleString("es-PE")}</b> por recibir en oficina</>}
               </p>
             </div>

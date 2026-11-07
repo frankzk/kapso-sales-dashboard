@@ -5,6 +5,7 @@ import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
 import type { ReproList } from "@/lib/repro-lima";
 import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, limaDay, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
+import type { PlanBox, PlanCandidate } from "@/lib/dispatch-plan";
 import { courierDisplayName } from "@/lib/dispatched-with";
 
 export type LimaAttentionFilter = "todos" | "reintentos_aliclik" | "reprogramados" | QueueSegment | "llamar_despues" | "cerrados";
@@ -12,7 +13,7 @@ type AttentionCase = {
   orderId: string; list: ReproList;
   /** El reintento por Aliclik que toca (lib/lima-retry-chain.ts), o null. */
   retryChain?: unknown;
-  agreement?: { agreedOn: string } | null;
+  agreement?: { agreedOn: string; courier?: string } | null;
   program?: { scheduledFor: string } | null;
 };
 
@@ -129,6 +130,35 @@ export interface LimaPendingOrder {
   /** La dirección de entrega y su referencia, tal como están en el Master. */
   address: string | null;
   reference: string | null;
+  /** Lo de Grupo GF para «Sale a reparto» (§29.16); null si no sale con Grupo GF. */
+  gf?: LimaPendingGf | null;
+}
+
+export interface LimaPendingGf {
+  /** Su caja activa de Grupo GF, si ya está en una. */
+  box: PlanBox | null;
+  /** El día de la solicitud que tomó Grupo GF, si la tomó. */
+  requestDay: string | null;
+  /** Su salida tiene QR (rótulo). */
+  labeled: boolean;
+  /** Almacén la armó (`listo_despacho`). */
+  armed: boolean;
+}
+
+/**
+ * El pedido para «Sale a reparto» (§29.16, `lib/dispatch-plan.ts`). Su día:
+ * el de la caja; si no, el acuerdo o el programa (`limaScheduledFor`), la
+ * solicitud tomada, y, sin nada de eso, el corte (`cutoffDay`, el que da
+ * `scheduledDay` ahora). Un «Por reprogramar Lima» sin acuerdo ni programa no
+ * tiene día: espera a la tienda (§29.13). Un acuerdo con otro courier no es de
+ * Grupo GF.
+ */
+export function limaPlanCandidate(row: LimaPendingOrder, c: AttentionCase | undefined, cutoffDay: string): PlanCandidate | null {
+  if (!row.gf) return null;
+  if (c?.list === "programados" && c.agreement?.courier && c.agreement.courier !== "propio") return null;
+  const retry = row.stage === "en_curso";
+  const day = limaScheduledFor(row, c) ?? row.gf.requestDay ?? (retry ? null : cutoffDay);
+  return { orderId: row.orderId, day: day?.slice(0, 10) ?? null, box: row.gf.box, labeled: row.gf.labeled, armed: row.gf.armed };
 }
 
 // ---------------------------------------------------------------------------

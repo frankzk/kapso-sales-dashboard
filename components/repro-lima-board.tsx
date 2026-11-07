@@ -6,19 +6,21 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
+import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip, opsButtonClass } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { DateRangePill, FacetPill } from "@/components/facet-pill";
 import { IconCheck, IconSearch, IconX } from "@/components/icons";
 import { OrderLink } from "@/components/order-link";
 import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
 import { cutoffNotice } from "@/lib/repro-lima";
-import { limaClock } from "@/lib/grupo-gf-courier";
+import { limaClock, sameDayCutoffMinute, scheduledDay } from "@/lib/grupo-gf-courier";
+import { nextDeliveryDay, PLAN_STEPS, planItems, planSummary, type PlanCandidate, type PlanItem, type PlanStep } from "@/lib/dispatch-plan";
+import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
 import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
 import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
+import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, limaPlanCandidate, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
 
@@ -75,8 +77,27 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   }, [pendingStore, rowFilters, activeRowFilters]);
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
   const counts = useMemo(() => attentionCounts(scoped, data.rows, today), [scoped, data.rows, today]);
-  const inQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
+  const attentionQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
+  // «Sale a reparto» (§29.16): lo de nuestras tiendas que sale con Grupo GF hoy
+  // o en el próximo reparto, y lo que le falta. El mismo cálculo que Despacho
+  // del día. Pasado el corte se abre en el próximo reparto.
+  const nextRouteDay = nextDeliveryDay(today);
+  const [planDay, setPlanDay] = useState(() => (limaClock(new Date(data.nowIso)).minute > sameDayCutoffMinute(data.cutoffLabel) ? nextDeliveryDay(limaClock(new Date(data.nowIso)).day) : limaClock(new Date(data.nowIso)).day));
+  const [planFilter, setPlanFilter] = useState<{ step: PlanStep | null } | null>(null);
+  const cutoffDay = scheduledDay(data.cutoffLabel, now);
+  const planByOrder = useMemo(() => {
+    const candidates = scoped.map((row) => limaPlanCandidate(row, caseById.get(row.orderId), cutoffDay)).filter((c): c is PlanCandidate => c !== null);
+    return new Map<string, PlanItem>(planItems(candidates, planDay).map((item) => [item.orderId, item]));
+  }, [scoped, caseById, cutoffDay, planDay]);
+  const plan = useMemo(() => planSummary([...planByOrder.values()]), [planByOrder]);
+  const inQueue = useMemo(() => {
+    if (!planFilter) return attentionQueue;
+    const order = new Map(PLAN_STEPS.map((step, i) => [step, i]));
+    return scoped
+      .filter((row) => { const item = planByOrder.get(row.orderId); return item && (!planFilter.step || item.step === planFilter.step); })
+      .sort((a, b) => order.get(planByOrder.get(a.orderId)!.step)! - order.get(planByOrder.get(b.orderId)!.step)! || (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0));
+  }, [planFilter, attentionQueue, scoped, planByOrder]);
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
 
   function replaceParams(params: URLSearchParams) {
@@ -99,6 +120,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   }
 
   function chooseList(next: LimaAttentionFilter) {
+    setPlanFilter(null);
     const params = new URLSearchParams(searchParams.toString());
     if (next === "todos") params.delete("atencion");
     else params.set("atencion", next);
@@ -291,6 +313,32 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
         ))}
       </div>
 
+      {!retriesOnly && (
+        <DispatchPlanPanel
+          planDay={planDay}
+          options={planDayOptions(today, nextRouteDay)}
+          onPlanDay={setPlanDay}
+          summary={plan}
+          activeStep={planFilter?.step ?? null}
+          onStep={(step) => {
+            const off = planFilter?.step === step;
+            if (!off && list !== "todos") chooseList("todos");
+            setPlanFilter(off ? null : { step });
+          }}
+          scopeNote="Nuestras tiendas, con Grupo GF; se asigna en Grupo GF Courier."
+          actions={(
+            <>
+              {plan.total > 0 && (
+                <OpsButton size="sm" onClick={() => { if (list !== "todos") chooseList("todos"); setPlanFilter(planFilter && !planFilter.step ? null : { step: null }); }} className="pointer-coarse:h-11">
+                  {planFilter && !planFilter.step ? "Volver a la lista" : "Ver la lista"}
+                </OpsButton>
+              )}
+              <a href="/dashboard/courier" className={opsButtonClass("ghost", "sm", "pointer-coarse:h-11")}>Abrir Despacho del día</a>
+            </>
+          )}
+        />
+      )}
+
       <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
 
       {feedback && (
@@ -364,7 +412,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             </div>
           </Sheet>
         )}
-        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} selection={selection} />
+        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={planFilter ? "Nada de eso sale ese día con estos filtros." : emptyText} selection={planFilter ? undefined : selection} plan={planByOrder} planDay={planDay} />
       </section>
 
       {open && sheetRow && (

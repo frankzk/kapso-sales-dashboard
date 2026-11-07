@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, limaPlanCandidate, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -86,7 +86,7 @@ function master(i: number, extra: DBRow = {}): DBRow {
     macro_stage: "preparacion", macro_substage: "por_armar", coverage: "lima", current_courier: null,
     dispatched_at: null, attempt_count: 0, ...extra };
 }
-function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; departures?: DBRow[]; rpcError?: string; programError?: string } = {}) {
+function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; departures?: DBRow[]; rpcError?: string; programError?: string; tables?: Record<string, DBRow[]> } = {}) {
   const pages: number[] = [];
   const ranges: Array<{ table: string; from: number }> = [];
   const from = vi.fn((table: string) => {
@@ -96,10 +96,12 @@ function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; dep
       select: () => q,
       in: (key: string, values: unknown[]) => { filters.push((r) => values.includes(r[key])); return q; },
       eq: (key: string, value: unknown) => { filters.push((r) => r[key] === value); return q; },
+      is: (key: string, value: unknown) => { filters.push((r) => (r[key] ?? null) === value); return q; },
+      maybeSingle: async () => ({ data: (opts.tables?.[table] ?? []).filter((r) => filters.every((f) => f(r)))[0] ?? null, error: null }),
       order: () => q,
       range: (a: number, b: number) => { range = [a, b]; if (table === "order_master") pages.push(a); ranges.push({ table, from: a }); return q; },
       then: (resolve: (r: unknown) => unknown, reject?: (e: unknown) => unknown) => {
-        const rows = (table === "stores" ? [{ id: "a", name: "Kenku" }] : table === "gf_dispatch_programs" ? opts.programs ?? [] : source).filter((r) => filters.every((f) => f(r)));
+        const rows = (table === "stores" ? [{ id: "a", name: "Kenku" }] : table === "gf_dispatch_programs" ? opts.programs ?? [] : table === "order_master" ? source : opts.tables?.[table] ?? []).filter((r) => filters.every((f) => f(r)));
         const error = fail && table === "order_master" ? { message: "sin conexión" } : table === "gf_dispatch_programs" && opts.programError ? { message: opts.programError } : null;
         return Promise.resolve({ data: range ? rows.slice(range[0], range[1] + 1) : rows, error }).then(resolve, reject);
       },
@@ -125,7 +127,8 @@ describe("acceso a todos los pendientes", () => {
     expect(db.pages).toEqual([0, 500, 1000]);
     expect(rows.at(-1)?.substage).toBe("en_transito");
     expect(rows[0]?.orderTotal).toBe(149);
-    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs"]));
+    // Más lo de «Sale a reparto» (§29.16): el proveedor y las salidas de los candidatos.
+    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "logistics_providers", "shipments"]));
     expect(db.rpc.mock.calls.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
   });
   it("usa salidas reales aunque Master haya vuelto a dejar dispatched_at vacío", async () => {
@@ -147,6 +150,33 @@ describe("acceso a todos los pendientes", () => {
     const scope = { userId: "u", storeIds: new Set(["a"]) };
     await expect(loadLimaPending(database([master(1)], false, { rpcError: "sin historial" }).admin, scope)).rejects.toThrow("sin historial");
     await expect(loadLimaPending(database([master(1)], false, { programError: "sin programas" }).admin, scope)).rejects.toThrow("sin programas");
+  });
+  it("«Sale a reparto»: la caja de Grupo GF, la solicitud y el armado de su salida; otra salida viva no es de Grupo GF", async () => {
+    const source = [
+      master(1, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" }),
+      master(2, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" }),
+      master(3, { macro_stage: "preparacion", macro_substage: "por_generar_rotulo" }),
+      master(4, { macro_stage: "en_curso", macro_substage: "por_reprogramar_lima" }),
+      master(5, { macro_stage: "en_curso", macro_substage: "en_transito", current_courier: "propio" }),
+    ];
+    const db = database(source, false, { tables: {
+      logistics_providers: [{ id: "gf", code: "grupo-gf-courier" }],
+      shipments: [
+        { id: "s1", order_id: "o1", courier: "propio", preparation_state: "listo_despacho", qr_token: "q1", delivery_status: "pendiente", created_at: "2026-11-06T10:00:00Z" },
+        { id: "s1old", order_id: "o1", courier: "tanders", preparation_state: "listo_despacho", qr_token: "q0", delivery_status: "anulado", created_at: "2026-11-01T10:00:00Z" },
+        { id: "s2", order_id: "o2", courier: "aliclik", preparation_state: "listo_despacho", qr_token: "q2", delivery_status: "pendiente", created_at: "2026-11-06T10:00:00Z" },
+      ],
+      logistics_requests: [{ order_id: "o1", shipment_id: "s1", scheduled_for: "2026-11-07", status: "scheduled", provider_id: "gf" }],
+      dispatch_manifest_items: [{ shipment_id: "s1", manifest_id: "m1", office_checked_at: "2026-11-06T20:00:00Z", pickup_checked_at: null, removed_at: null }],
+      dispatch_manifests: [{ id: "m1", route_date: "2026-11-07", driver_name: "Jhon", courier: "propio", kind: "reparto", state: "office_check" }],
+    } });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    const gf = Object.fromEntries(rows.map((r) => [r.orderId, r.gf]));
+    expect(gf.o1).toEqual({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: true, pickedUp: false }, requestDay: "2026-11-07", labeled: true, armed: true });
+    expect(gf.o2).toBeNull(); // sale con Aliclik
+    expect(gf.o3).toEqual({ box: null, requestDay: null, labeled: false, armed: false }); // sin salida todavía
+    expect(gf.o4).toBeNull(); // «Por reprogramar Lima» sin acuerdo ni programa: espera a la tienda
+    expect(gf.o5).toBeNull(); // ya salió
   });
   it("sin tiendas no consulta y un error no se presenta como lista vacía", async () => {
     const db = database([], true);
@@ -416,5 +446,40 @@ describe("Reintentos Aliclik: elegir cuáles aprobar (owner, 06-11-2026)", () =>
     expect(board).toContain("`Aprobar elegidos (${targets.rows.length})`");
     expect(board).toContain("`Aprobar todos los listos (${readyToApprove.length})`");
     expect(board).toContain("setPicked(new Set());");
+  });
+});
+
+describe("«Sale a reparto» en Repro Lima (owner, 07-11-2026; §29.16)", () => {
+  const gf = (over: Record<string, unknown> = {}) => ({ box: null, requestDay: null, labeled: true, armed: true, ...over });
+  it("el día: la caja, el acuerdo o programa, la solicitud y, sin nada, el corte", () => {
+    expect(limaPlanCandidate(row({ gf: gf() }), undefined, "2026-11-07")).toMatchObject({ day: "2026-11-07", box: null });
+    expect(limaPlanCandidate(row({ gf: gf(), programmedFor: "2026-11-09" }), undefined, "2026-11-07")?.day).toBe("2026-11-09");
+    expect(limaPlanCandidate(row({ gf: gf({ requestDay: "2026-11-06" }) }), undefined, "2026-11-07")?.day).toBe("2026-11-06");
+    const acuerdo = { orderId: "o1", list: "programados" as const, agreement: { agreedOn: "2026-11-10", courier: "propio" } };
+    expect(limaPlanCandidate(row({ gf: gf(), programmedFor: "2026-11-09" }), acuerdo, "2026-11-07")?.day).toBe("2026-11-10");
+    // Un acuerdo con otro courier no sale con Grupo GF; sin datos de Grupo GF, tampoco.
+    expect(limaPlanCandidate(row({ gf: gf() }), { ...acuerdo, agreement: { agreedOn: "2026-11-07", courier: "aliclik" } }, "2026-11-07")).toBeNull();
+    expect(limaPlanCandidate(row({ gf: null }), undefined, "2026-11-07")).toBeNull();
+    // Un reintento sin acuerdo ni programa no toma el día del corte.
+    expect(limaPlanCandidate(row({ stage: "en_curso", substage: "por_reprogramar_lima", gf: gf() }), undefined, "2026-11-07")?.day).toBeNull();
+  });
+  it("el tablero muestra la tarjeta y, en cada pedido que sale, el día y lo que le falta", () => {
+    const data = { today: "2026-11-06", nowIso: "2026-11-06T23:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const pending = [
+      row({ orderId: "a", orderName: "#KPA", stage: "por_despachar", substage: "listo_para_asignar", gf: gf() }),
+      row({ orderId: "b", orderName: "#KPB", gf: gf({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: false, pickedUp: false } }) }),
+      row({ orderId: "c", orderName: "#KPC", gf: gf({ labeled: false, armed: false }) }),
+      row({ orderId: "d", orderName: "#KPD", gf: null }),
+    ];
+    nav.search = "";
+    const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+    // Las 18:00 de Lima: pasó el corte, la tarjeta abre en mañana.
+    expect(html).toContain("Sale a reparto");
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Mañana · sáb 07\/11<\/button>/);
+    expect(html).toContain("Faltan 1 sin rótulo y 1 sin caja.");
+    expect(html).toContain("Sale sáb 07/11 · sin caja");
+    expect(html).toContain("Sale sáb 07/11 · en caja · caja de Jhon");
+    expect(html).toContain("Sale sáb 07/11 · sin rótulo");
+    expect(html.match(/Sale sáb 07\/11 ·/g)?.length).toBe(6); // tres pedidos, en la tabla y en la lista del teléfono
   });
 });

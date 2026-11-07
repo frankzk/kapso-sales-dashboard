@@ -3,6 +3,7 @@
 
 import { courierKey, dispatchProgress } from "@/lib/dispatch";
 import { MACRO_SUBSTAGES_BY_STAGE, ORDER_MACRO_STAGES, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
+import { inPlan, planStep, type PlanCandidate, type PlanStep } from "@/lib/dispatch-plan";
 
 export interface DayItem {
   id: string;
@@ -272,6 +273,11 @@ export interface QueueFilters {
   substages: readonly string[];
   /** Plazos de la fecha pactada encendidos (cualquiera de ellos); vacío es «todos». */
   due: readonly ScheduledBucket[];
+  /**
+   * «Sale mañana» (§29.16): solo lo que sale ese día y, si se eligió, lo que
+   * está en ese paso. Incluye lo que ya está en una caja de ese día.
+   */
+  plan: { day: string; step: PlanStep | null } | null;
 }
 
 export const EMPTY_QUEUE_FILTERS: QueueFilters = {
@@ -285,6 +291,7 @@ export const EMPTY_QUEUE_FILTERS: QueueFilters = {
   stages: [],
   substages: [],
   due: [],
+  plan: null,
 };
 
 /** Clave de la subetapa de una fila; sin dato en el Master, «sin_subetapa». */
@@ -369,9 +376,15 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
   const needle = filters.query.trim().toLocaleLowerCase("es");
   const digits = phoneDigits(needle);
   const byPhone = digits.length >= 4 && digits.length === needle.replace(/[\s+\-().]/g, "").length;
-  const onlyAssignable = !filters.stages.length && !opts.includeTracked;
+  // «Sale mañana» también lista lo que ya está en una caja de ese día.
+  const onlyAssignable = !filters.stages.length && !opts.includeTracked && !filters.plan;
   return rows.filter((q) => {
     if (onlyAssignable && !q.assignable && !isReturnable(q)) return false;
+    if (filters.plan) {
+      const candidate = planCandidateFromQueue(q);
+      if (!candidate || !inPlan(candidate, filters.plan.day)) return false;
+      if (filters.plan.step && planStep(candidate) !== filters.plan.step) return false;
+    }
     if (filters.segment && (!q.assignable || queueSegment(q, today) !== filters.segment)) return false;
     if (filters.store && q.storeName !== filters.store) return false;
     if (filters.district && q.district !== filters.district) return false;
@@ -385,6 +398,36 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
     if (byPhone && phoneDigits(q.customerPhone).includes(digits)) return true;
     return `${q.orderName} ${q.customerName} ${q.district} ${q.storeName} ${q.customerPhone ?? ""}`.toLocaleLowerCase("es").includes(needle);
   });
+}
+
+/**
+ * Una fila de Despacho del día para «Sale mañana» (§29.16, `lib/dispatch-plan.ts`).
+ * - En una caja de Grupo GF: su día es el de la caja; tiene rótulo, y armado si
+ *   Almacén la escaneó (el armado sigue aparte de la asignación).
+ * - Tomada sin caja: su día es el de la solicitud (o su programa); la salida
+ *   ya existe, armada o no.
+ * - Disponible: su día es el programa o el corte (`scheduledFor`); el rótulo y
+ *   el armado salen de la subetapa del Master. Un reintento que sale con salida
+ *   nueva no tiene rótulo; uno que sale con la suya, ya está armado.
+ * Lo que no se puede asignar y no tiene caja (seguimiento) no entra.
+ */
+export function planCandidateFromQueue(q: QueueRow): PlanCandidate | null {
+  if (q.route) {
+    return {
+      orderId: q.orderId,
+      day: null,
+      box: { day: q.route.routeDate, riderName: q.route.riderName || null, officeChecked: Boolean(q.route.officeCheckedAt), pickedUp: Boolean(q.route.pickupCheckedAt) },
+      labeled: true,
+      armed: q.armed !== false,
+    };
+  }
+  if (!q.assignable) return null;
+  const day = q.programmedFor?.slice(0, 10) ?? q.scheduledFor?.slice(0, 10) ?? null;
+  if (q.taken) return { orderId: q.orderId, day, box: null, labeled: true, armed: q.armed === true };
+  const sub = q.macroSubstage;
+  const labeled = sub !== "por_generar_rotulo" && !q.newOutputOnTake;
+  const armed = labeled && sub !== "por_armar";
+  return { orderId: q.orderId, day, box: null, labeled, armed };
 }
 
 /**
@@ -1006,7 +1049,7 @@ export function toggleQueueTile(filters: QueueFilters, tile: QueueTile): QueueFi
   if (tile === "reintentos_hoy") {
     return queueTileActive(filters, tile)
       ? { ...filters, stages: [], substages: [], segment: null }
-      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"], segment: "programados_hoy" };
+      : { ...filters, stages: ["en_curso"], substages: ["por_reprogramar_lima"], segment: "programados_hoy", plan: null };
   }
   if (tile === "tomados_sin_caja") return { ...filters, takenOnly: !filters.takenOnly };
   if (tile === "armados") return { ...filters, armedOnly: !filters.armedOnly };
@@ -1014,7 +1057,7 @@ export function toggleQueueTile(filters: QueueFilters, tile: QueueTile): QueueFi
     // Un apartado es de la cola de asignación: apaga el seguimiento por etapa.
     return queueTileActive(filters, tile)
       ? { ...filters, segment: null }
-      : { ...filters, segment: tile as QueueSegment, stages: [], substages: [] };
+      : { ...filters, segment: tile as QueueSegment, stages: [], substages: [], plan: null };
   }
   return filters;
 }
