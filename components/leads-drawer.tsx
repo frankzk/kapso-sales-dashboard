@@ -141,6 +141,15 @@ import { formatPeruMobile, peruMobileDigits, peruMobileProblem } from "@/lib/pho
 import { YapeAssign } from "@/components/yape-alerts";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
 import { cartsTone, cartsVerdict, type CustomerCarts } from "@/lib/customer-carts";
+import {
+  applyOrderFormPrefill,
+  knownAddressCopyText,
+  knownAddressPlace,
+  knownAddressSourceLine,
+  orderFormPrefill,
+  type KnownAddress,
+  type OrderFormAddressPrefill,
+} from "@/lib/lead-known-addresses";
 
 export type LeadDrawerProps = {
   lead: LeadRow;
@@ -318,6 +327,109 @@ function CustomerCartsCard({ carts, currency }: { carts: CustomerCarts; currency
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Datos de entrega conocidos (MOM §37.9, owner 07-11-2026): a dónde ya se le
+ * mandó a esta clienta, de sus pedidos de Kapta y del historial de Shopify,
+ * hasta 3 y la más reciente primero. «Usar en el pedido» abre el formulario con
+ * esa dirección escrita; nada se guarda hasta «Generar pedido». Misma anatomía
+ * que «Pedidos anteriores».
+ */
+function KnownAddressesCard({
+  addresses,
+  onUse,
+}: {
+  addresses: KnownAddress[];
+  onUse: (address: KnownAddress) => void;
+}) {
+  return (
+    <section aria-label="Datos de entrega conocidos" className={SECTION_CARD}>
+      <h3 className="text-sm font-semibold text-ink-900">
+        Datos de entrega conocidos{" "}
+        <span className="font-normal tabular-nums text-ink-500">· {addresses.length}</span>
+      </h3>
+      <p className="mt-0.5 text-[13px] leading-5 text-ink-500">
+        De sus pedidos anteriores. Confírmalos con la clienta: pudo mudarse.
+      </p>
+      <ul className="-mx-4 -mb-4 mt-3 divide-y divide-line border-t border-line sm:-mx-5 sm:-mb-5">
+        {addresses.map((a) => (
+          <KnownAddressItem key={a.key} address={a} onUse={() => onUse(a)} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function KnownAddressItem({ address: a, onUse }: { address: KnownAddress; onUse: () => void }) {
+  const { state: copied, copy } = useCopyToClipboard();
+  const { state: copiedPhone, copy: copyPhone } = useCopyToClipboard();
+  const place = knownAddressPlace(a);
+  return (
+    <li className="px-4 py-3 sm:px-5">
+      <p className="break-words text-sm font-medium text-ink-900">{a.address}</p>
+      {a.reference && <p className="mt-0.5 break-words text-[13px] leading-5 text-ink-600">Ref.: {a.reference}</p>}
+      {place && <p className="mt-0.5 break-words text-[13px] leading-5 text-ink-700">{place}</p>}
+      {(a.recipient || a.contactPhone) && (
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[13px] leading-5 text-ink-700">
+          {a.recipient && (
+            <span className="break-words">
+              <span className="text-ink-500">Recibe:</span> {a.recipient}
+            </span>
+          )}
+          {a.recipient && a.contactPhone && <span aria-hidden>·</span>}
+          {a.contactPhone && (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap">
+              <span className="text-ink-500">Cel. de contacto:</span>
+              <span className="tabular-nums">{a.contactPhone}</span>
+              <button
+                type="button"
+                onClick={() => copyPhone(a.contactPhone!)}
+                title={copyLabel(copiedPhone, "Copiar celular de contacto")}
+                aria-label="Copiar celular de contacto"
+                className="inline-flex items-center rounded px-0.5 text-ink-500 transition-colors hover:text-ink-900 pointer-coarse:min-w-11 pointer-coarse:justify-center"
+              >
+                {copiedPhone === "ok" ? (
+                  <IconCheck aria-hidden className="size-3.5 text-ok-fg" />
+                ) : copiedPhone === "fail" ? (
+                  <IconX aria-hidden className="size-3.5 text-crit-fg" />
+                ) : (
+                  <IconCopy aria-hidden className="size-3.5" />
+                )}
+              </button>
+            </span>
+          )}
+        </p>
+      )}
+      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-500">
+        <span className="tabular-nums">{knownAddressSourceLine(a)}</span>
+        {a.orders > 1 && <span className="tabular-nums">· usada en {a.orders} pedidos</span>}
+        {a.delivered && <Badge tone="ok">Entregado ahí</Badge>}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <OpsButton size="sm" onClick={onUse} className="pointer-coarse:h-11">
+          Usar en el pedido
+        </OpsButton>
+        <button
+          type="button"
+          onClick={() => copy(knownAddressCopyText(a))}
+          className="inline-flex min-h-8 items-center gap-1 rounded px-1 text-[13px] font-medium text-brand-700 hover:underline pointer-coarse:min-h-11"
+        >
+          {copied === "ok" ? (
+            <IconCheck aria-hidden className="size-3.5 text-ok-fg" />
+          ) : copied === "fail" ? (
+            <IconX aria-hidden className="size-3.5 text-crit-fg" />
+          ) : (
+            <IconCopy aria-hidden className="size-3.5" />
+          )}
+          {copyLabel(copied, "Copiar dirección")}
+        </button>
+        <span role="status" className="sr-only">
+          {copied === "idle" && copiedPhone === "idle" ? "" : copyLabel(copied !== "idle" ? copied : copiedPhone)}
+        </span>
+      </div>
+    </li>
   );
 }
 
@@ -521,6 +633,15 @@ export function LeadDrawer({
   next,
 }: LeadDrawerProps) {
   const [orderOpen, setOrderOpen] = useState(false);
+  // «Usar en el pedido» (MOM §37.9): la dirección elegida para el formulario.
+  // Atada al lead: el cajón no se vuelve a montar con «Siguiente lead», y la
+  // dirección de una clienta nunca debe aparecer en el pedido de otra.
+  const [prefillFor, setPrefillFor] = useState<{ leadId: string; prefill: OrderFormAddressPrefill } | null>(null);
+  const orderPrefill = prefillFor?.leadId === lead.id ? prefillFor.prefill : null;
+  const openOrderForm = (prefill: OrderFormAddressPrefill | null = null) => {
+    setPrefillFor(prefill ? { leadId: lead.id, prefill } : null);
+    setOrderOpen(true);
+  };
   const { state: copied, copy } = useCopyToClipboard();
   const [confirmingWon, startConfirmWon] = useTransition();
   const readyReportedRef = useRef(false);
@@ -930,6 +1051,7 @@ export function LeadDrawer({
                 currency={currency}
                 hasCart={hasCart}
                 noReutilizarBorrador={lead.has_order}
+                initialAddress={orderPrefill}
                 onRegistered={onRegistered}
                 onClose={() => setOrderOpen(false)}
               />
@@ -1097,6 +1219,16 @@ export function LeadDrawer({
                 carritos? Las asesoras lo iban a buscar a Shopify → Borradores,
                 cliente por cliente; ahora sale del espejo y del archivo de
                 Shopify en Kapta (lib/customer-carts.ts). */}
+            {/* Datos de entrega conocidos (MOM §37.9, 07-11-2026): a dónde ya
+                se le mandó, entre sus pedidos y sus carritos, para registrar la
+                venta sin volver a pedirle todo. */}
+            {history?.knownAddresses && history.knownAddresses.length > 0 && (
+              <KnownAddressesCard
+                addresses={history.knownAddresses}
+                onUse={(address) => openOrderForm(orderFormPrefill(address))}
+              />
+            )}
+
             {history?.carts && history.carts.summary.total > 0 && (
               <CustomerCartsCard carts={history.carts} currency={currency} />
             )}
@@ -1279,7 +1411,7 @@ export function LeadDrawer({
                         Pedido generado{history?.currentOrderName ? ` · ${history.currentOrderName}` : ""}
                       </span>
                     </p>
-                    <OpsButton ref={ctaRef} onClick={() => setOrderOpen(true)}>
+                    <OpsButton ref={ctaRef} onClick={() => openOrderForm()}>
                       <IconPlus aria-hidden className="text-ink-500" />
                       Generar nuevo pedido
                     </OpsButton>
@@ -1291,7 +1423,7 @@ export function LeadDrawer({
                   variant="primary"
                   size="lg"
                   className="w-full"
-                  onClick={() => setOrderOpen(true)}
+                  onClick={() => openOrderForm()}
                 >
                   {hasCart ? "Generar pedido (contraentrega)" : "Registrar pedido (contraentrega)"}
                 </OpsButton>
@@ -2701,6 +2833,7 @@ export function OrderFormPanel({
   currency,
   hasCart,
   noReutilizarBorrador,
+  initialAddress = null,
   onRegistered,
   onClose,
 }: {
@@ -2708,9 +2841,19 @@ export function OrderFormPanel({
   currency: string;
   hasCart: boolean;
   noReutilizarBorrador?: boolean; // pedido NUEVO: no reutilizar el borrador anterior
+  /**
+   * «Usar en el pedido» de «Datos de entrega conocidos» (MOM §37.9): la
+   * dirección que se escribe sobre la del borrador al cargar. Solo llena los
+   * campos; la asesora la confirma y nada se guarda hasta «Generar pedido».
+   */
+  initialAddress?: OrderFormAddressPrefill | null;
   onRegistered: () => void;
   onClose: () => void;
 }) {
+  // Se lee al terminar de cargar el borrador, sin volver a cargarlo si cambia.
+  const initialAddressRef = useRef(initialAddress);
+  initialAddressRef.current = initialAddress;
+  const [prefillNote, setPrefillNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [name, setName] = useState("");
@@ -2756,6 +2899,7 @@ export function OrderFormPanel({
     requestIdRef.current = newRequestId();
     requestIdSentRef.current = false;
     setPlatform(null);
+    setPrefillNote(null);
     loadOrderDraft(leadId).then((res) => {
       if (!alive) return;
       if ("error" in res) {
@@ -2763,15 +2907,29 @@ export function OrderFormPanel({
       } else {
         setPlatform(res.platform === "woocommerce" ? "woocommerce" : "shopify");
         setItems(res.lineItems.map((li) => ({ ...li, sku: li.sku ?? null, key: rid() })));
-        setName(res.customerName ?? "");
         // Solo la parte nacional: el campo pinta el `+51` fijo al lado, y el
         // teléfono del lead viene de WhatsApp CON el 51 delante. Sin quitarlo se
         // vería "+51 51988805509", que confunde y da un dígito de más al ojo.
         setPhone(formatPeruMobile(res.phone));
-        setAddress1(res.address1 ?? "");
-        setDistrict(res.district ?? "");
-        setProvince(matchPeruRegion(res.province));
-        setReferencia(res.referencia ?? "");
+        // La dirección elegida en «Datos de entrega conocidos» manda sobre la
+        // del borrador (la eligió la asesora); el celular sigue siendo el del lead.
+        const prefill = initialAddressRef.current;
+        const fields = applyOrderFormPrefill(
+          {
+            name: res.customerName ?? "",
+            address1: res.address1 ?? "",
+            referencia: res.referencia ?? "",
+            district: res.district ?? "",
+            province: res.province ?? "",
+          },
+          prefill,
+        );
+        setName(fields.name);
+        setAddress1(fields.address1);
+        setDistrict(fields.district);
+        setProvince(matchPeruRegion(fields.province));
+        setReferencia(fields.referencia);
+        setPrefillNote(prefill?.sourceLine ?? null);
         setWindowOpen(res.windowOpen);
         setSendConfirm(res.windowOpen);
       }
@@ -3088,6 +3246,14 @@ export function OrderFormPanel({
 
           {/* Entrega */}
           <div className={cn(CARD_ZONE, "mt-4 space-y-3 sm:mt-5")}>
+            {/* «Usar en el pedido» (MOM §37.9): de dónde salió la dirección escrita. */}
+            {prefillNote && (
+              <Banner tone="info" title="Dirección de un pedido anterior">
+                <p className="mt-0.5 text-[13px] leading-5">
+                  {prefillNote.charAt(0).toUpperCase() + prefillNote.slice(1)}. Confírmala con la clienta antes de generar.
+                </p>
+              </Banner>
+            )}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="Cliente" value={name} onChange={setName} disabled={pending} placeholder="Nombre" />
               <PeruMobileField value={phone} onChange={setPhone} disabled={pending} problem={phoneProblem} />

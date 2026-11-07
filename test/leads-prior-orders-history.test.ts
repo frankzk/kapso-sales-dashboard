@@ -105,6 +105,10 @@ describe("getCustomerHistory lee el historial de Shopify", () => {
           if (table === "shopify_history_orders") historyFilters.push([col, v]);
           return q;
         };
+        q.in = (col: string, v: unknown) => {
+          if (table === "shopify_history_orders") historyFilters.push([col, v]);
+          return q;
+        };
         q.is = (col: string, v: unknown) => {
           if (table === "shopify_history_orders") historyFilters.push([col, v]);
           return q;
@@ -135,12 +139,13 @@ describe("getCustomerHistory lee el historial de Shopify", () => {
     ]);
   });
 
-  it("busca por el celular normalizado, en la misma tienda, sin anulados y con conteo exacto", async () => {
+  it("busca por el celular en todas sus formas, en la misma tienda, sin anulados y con conteo exacto", async () => {
     mockDb([], { data: [], count: 0 });
     await getCustomerHistory("store-kenku", "999 888 777", null, null, null);
     expect(historyFilters).toEqual([
       ["store_id", "store-kenku"],
-      ["phone_norm", "51999888777"],
+      // 07-11-2026 (MOM §37.7): también «999888777», «051…» y «0051…», no solo el normalizado.
+      ["phone_norm", ["999 888 777", "51999888777", "999888777", "051999888777", "0051999888777"]],
       ["cancelled_at", null],
     ]);
     expect(historySelect!.opts).toEqual({ count: "exact" });

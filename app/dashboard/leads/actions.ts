@@ -13,6 +13,7 @@ import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import {
   getCustomerCarts,
   getCustomerHistory,
+  getCustomerKnownAddresses,
   getLeadQueueSnapshot,
   type LeadCounts,
   getLeadWithCalls,
@@ -454,7 +455,7 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
   } | null;
   if (!lead) return { error: "No encontrado." };
 
-  const [customerHistory, carts] = await Promise.all([
+  const [customerHistory, carts, knownAddresses] = await Promise.all([
     timing.time("db.history", () => getCustomerHistory(
       ctx.storeId,
       lead.phone,
@@ -465,8 +466,14 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
     // Sus carritos anteriores (MOM §11, 25-10-2026): un aviso, no un dato del
     // lead. Si falla, la ficha sale sin el bloque.
     timing.time("db.carts", () => getCustomerCarts(ctx.storeId, lead.phone, lead.draft_order_gid)).catch(() => null),
+    // Datos de entrega conocidos (MOM §37.9, 07-11-2026): a dónde ya se le
+    // mandó. Si falla, la ficha sale sin la tarjeta.
+    timing.time("db.addresses", () => getCustomerKnownAddresses(ctx.storeId, lead.phone, lead.order_id)).catch(() => null),
   ]);
-  if (customerHistory) customerHistory.carts = carts;
+  if (customerHistory) {
+    customerHistory.carts = carts;
+    customerHistory.knownAddresses = knownAddresses;
+  }
   if (customerHistory && lead.phone && creds?.shopify_token) {
     try {
       const shopOrders = await timing.time("shopify.history", () => getCustomerRecentOrders(
