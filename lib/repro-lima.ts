@@ -87,6 +87,21 @@ export function isReproCourier(value: unknown): value is ReproCourier {
   return typeof value === "string" && (REPRO_COURIERS as readonly string[]).includes(value);
 }
 
+/** ¿El pedido tiene coordenada guardada en el Master? */
+export function orderHasCoordinate(order: { latitude?: number | string | null; longitude?: number | string | null } | null | undefined): boolean {
+  const ok = (v: number | string | null | undefined) => v != null && v !== "" && Number.isFinite(Number(v));
+  return Boolean(order) && ok(order!.latitude) && ok(order!.longitude);
+}
+
+/**
+ * «Confirma fecha» con Aliclik pide la ubicación si el pedido no la tiene
+ * (owner, 06-11-2026): Aliclik no crea la guía sin coordenada, igual que en
+ * Provincia COD al programar en el Master (§6.2). Los demás couriers, no.
+ */
+export function reproNeedsCoordinate(courier: string | null | undefined, hasCoordinate: boolean): boolean {
+  return courier === "aliclik" && !hasCoordinate;
+}
+
 /** Urpi solo lleva primeros despachos (§9.1): un reprogramado no pasa a Urpi en 1a (E16). */
 export const URPI_DISABLED_REASON = "Urpi solo lleva primeros despachos (§9.1); un reprogramado no pasa a Urpi en esta fase.";
 

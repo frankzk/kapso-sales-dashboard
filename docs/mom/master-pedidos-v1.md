@@ -1021,7 +1021,8 @@ ubicación** (la coordenada que pide Aliclik), y se guarda en el pedido.
 - **Lo ya programado sin ella** lo dice la ficha: «Sin ubicación: ese día
   Aliclik no podrá crear la guía.», con «Agregar ubicación», que abre el mismo
   formulario con la fecha que ya tiene.
-- Lima, Agencia y lo que ya tiene coordenada no cambian.
+- Lima, Agencia y lo que ya tiene coordenada no cambian. Excepción en Lima: en
+  Repro Lima, «Confirma fecha» con Aliclik la pide igual (§9.5, 06-11-2026).
 - **Y si ya la tiene, se dice (02-11-2026).** Bajo «Sale el» al confirmar y en
   «Programar envío», un Provincia COD con coordenada muestra «Ubicación: ya
   tiene coordenada · Ver en el mapa». Sin esa línea, que no se pidiera parecía
@@ -5267,6 +5268,22 @@ programa por `otro_courier`, `falta_salida`, `falta_ubicar` o
   se lo dice a la hoja. La hoja relee los hechos del pedido y recalcula «Qué
   hacer con la caja»; lo escrito se conserva, y el siguiente «Guardar» usa la
   acción nueva en vez de repetir el mismo rechazo.
+  - **Con Aliclik, la ubicación (pedido del owner, 06-11-2026).** Aliclik no
+    crea la guía sin coordenada, en Lima igual que en Provincia COD (§6.2).
+    Elegido Aliclik en un pedido sin coordenada, aparece «Ubicación». Acepta el
+    enlace de Google Maps o el par (`dispatchCoordinateInput`, la misma regla
+    que el Master), y sin ella no se puede guardar. Un enlace acortado
+    (`maps.app.goo.gl`) no sirve.
+  - **El servidor la vuelve a exigir** antes de registrar el acuerdo y no
+    guarda nada sin ella. Con ella, la guarda en el pedido
+    (`order_geo_overrides`, `saveOrderCoordinate`, el mismo guardado del
+    Master), deja en el historial «Ubicación guardada al acordar la salida con
+    Aliclik en Repro Lima» y recalcula el Master. Así, al crear la guía desde
+    la Mesa de ruta, ya la tiene.
+  - Si el pedido ya tiene coordenada, la hoja lo dice («Ya tiene coordenada:
+    Aliclik puede crear la guía.») y no la pide. Los demás couriers no la piden.
+  - Lo acordado antes con Aliclik sin coordenada no cambia: la guía la sigue
+    pidiendo al crearse.
 - **Llamar después**: día y hora de la llamada, a 60 días como máximo. Puede
   ser hoy, para la vuelta de las 15:00.
 - **No contesta**: suma un intento y propone la vuelta siguiente (hoy a las
@@ -7015,6 +7032,13 @@ el carrito del propio lead no cuenta (ya está en «Lo que pidió»).
 - **WooCommerce**: sus formularios abandonados llegan a `draft_orders` desde
   el 27-10-2026, cuando COD Core los mande (§38.12, «Los formularios
   abandonados de WooCommerce»), y salen aquí sin tocar nada.
+
+**Datos de entrega conocidos (07-11-2026, pedido del owner).** Entre «Pedidos
+anteriores» y «Carritos anteriores», la ficha muestra hasta 3 direcciones a las
+que ya se le mandó a la clienta (pedidos de Kapta e historial de Shopify,
+anulados incluidos y marcados), con «Usar en el pedido», que abre el formulario
+de pedido con esa dirección escrita, sin guardar nada. La regla completa está
+en §37.9.
 
 **«Siguiente lead» en la ficha (25-10-2026, pedido del owner).** Arriba a la
 derecha de la ficha del lead, entre el QR y «Cerrar», abre el siguiente sin
@@ -20201,8 +20225,9 @@ que Kapta guarda como **archivo de consulta**.
   que se ven son los de Shopify, tal como vinieron (`financial_status`,
   `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
   Lo único que lee del archivo fuera de su pantalla es «Pedidos antes» de la
-  ficha del lead (§37.7), solo para contar y listar, y el «Último destino
-  conocido de esta clienta» del cajón del Master (§37.8), solo para sugerir.
+  ficha del lead (§37.7), solo para contar y listar, el «Último destino
+  conocido de esta clienta» del cajón del Master (§37.8) y los «Datos de
+  entrega conocidos» del cajón de Leads (§37.9), solo para sugerir.
 - La tienda sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
   una copia de lo que Shopify ya tenía, no un canal de entrada.
 
@@ -20395,9 +20420,12 @@ cuenta el historial de Shopify.
 Reglas:
 
 - **Misma clienta, misma tienda.** Se buscan en `shopify_history_orders` los
-  pedidos de la tienda del lead con el mismo celular normalizado
-  (`phone_norm` = `normalizePhone` del celular del lead). No se cruza por
-  correo ni por nombre, ni entre tiendas.
+  pedidos de la tienda del lead con el mismo celular en cualquiera de sus
+  formas (`phone_norm` en `customerPhoneVariants`: el guardado, 51 + nueve, los
+  nueve nacionales, «051…» y «0051…»; 07-11-2026). Antes se comparaba solo con
+  `normalizePhone` del lead, y un celular que el historial guardó como «051…»
+  dejaba sus pedidos fuera de la lista. No se cruza por correo ni por nombre,
+  ni entre tiendas.
 - **Sin anulados.** Como en `orders`, el anulado en Shopify
   (`cancelled_at`) no cuenta.
 - **Un pedido cuenta una vez.** Si el número (`order_name`) ya está en `orders`
@@ -20507,6 +20535,93 @@ sugerencia, con qué celulares se busca y qué direcciones se ofrecen),
 `app/dashboard/pedidos/last-destination-actions.ts` (las lecturas) y
 `LastDestinationSuggestions` en `components/order-drawer.tsx`. Pruebas:
 `test/last-known-destination.test.ts`.
+
+### 37.9 Datos de entrega conocidos en Leads (owner, 07-11-2026)
+
+**Por qué.** El owner (07-11-2026): «en Leads estamos mostrando la información
+que ya tenemos grabada en la base de datos en base al número de celular… creo
+que tenemos la dirección del cliente. ¿Podemos mostrar esa información en el
+drawer de leads para que al equipo de leads le sea más fácil registrar las
+ventas?». Caso real en Kenku: un lead cuya única compra anterior estaba en el
+historial de Shopify, **anulada**. «Pedidos anteriores» no la lista (§37.7, sin
+anulados), «Carritos anteriores» decía «Pedido #…», y la dirección —que el
+historial sí tiene— no se veía en ningún lado: la asesora se la volvía a pedir
+a la clienta.
+
+Dónde: en el cajón de Leads, la tarjeta **«Datos de entrega conocidos»**, entre
+«Pedidos anteriores» y «Carritos anteriores», con la misma anatomía. Solo sale
+si hay al menos una dirección que sirva.
+
+Qué muestra, por dirección (hasta **3**, la más reciente primero):
+
+- la dirección, la referencia (`Ref.:`), distrito · provincia · región sin
+  repetir, quién recibió («Recibe:») y el celular de contacto del envío **solo
+  si es otro** que el del lead;
+- de dónde sale: «del pedido #KP… · 14 jun 2025 · anulado · historial de
+  Shopify» (la fecha en hora de Lima; «anulado» y «historial de Shopify» solo
+  cuando corresponden), «usada en N pedidos» si varios fueron ahí y la chapa
+  «Entregado ahí» si Kapta entregó alguno en esa dirección;
+- «Usar en el pedido» y «Copiar dirección» (calle, referencia y lugar en una
+  línea; el celular de contacto tiene su propio copiar).
+
+De dónde sale (las dos fuentes juntas, no una detrás de otra como en §37.8):
+
+1. **Pedidos de Kapta**: `order_master` (la ubicación ya resuelta que usa la
+   logística: corrección manual, courier, Shopify o WooCommerce, ubigeo;
+   `customer_name` es el nombre del envío). No se vuelve a leer `orders.raw`.
+2. **Historial de Shopify** (§37, `shopify_history_orders`), **anulados
+   incluidos**: `shipping_address1` la dirección, `shipping_address2` la
+   referencia, `shipping_city` el distrito, `shipping_province` la región;
+   `shipping_name` (o `customer_name`) quién recibe y `shipping_phone` el
+   contacto. La provincia no viene.
+
+Reglas:
+
+- **Misma clienta, misma tienda.** La tienda del lead, por el celular en todas
+  sus formas (`customerPhoneVariants`, como «Pedidos antes» desde el
+  07-11-2026, §37.7). No se cruza por correo, nombre ni entre tiendas (el
+  Master sí mira la organización, §37.8: allí el pedido ya existe).
+- **Manda Kapta.** Un número que ya está en `order_master` no se toma del
+  historial. El pedido propio del lead (`leads.order_id`) no es «de antes», y su
+  copia del historial tampoco.
+- **Una dirección sirve** si trae la calle y al menos el distrito o la región
+  (la misma regla de §37.8).
+- **Sin repetir.** La misma dirección (sin tildes, mayúsculas ni signos, junto
+  con el distrito: `destinationKey`) sale una vez. De sus pedidos se muestra el
+  más reciente **no anulado**; si todos lo están, el más reciente, marcado
+  «anulado». Un anulado entra: la dirección sigue sirviendo.
+- **«Entregado» solo lo dice Kapta** (`general_status = entregado`). El
+  historial no lo sabe: «fulfilled» en Shopify es despachado, no entregado.
+- **Nunca se aplica sola.** «Usar en el pedido» abre el mismo formulario de
+  «Registrar / Generar pedido (contraentrega)» con la dirección escrita
+  encima de la del borrador: Cliente (quién recibió, si se sabe; si no, el que
+  ya traía), Dirección, Referencia (vacía si esa dirección no tenía: no se
+  mezcla con la del carrito), Distrito y Provincia / Región (la región,
+  ajustada a la lista del formulario). **El celular no se toca**: es el del
+  lead, por donde va la confirmación de WhatsApp. Arriba de la dirección, el
+  aviso «Dirección de un pedido anterior: del pedido #… Confírmala con la
+  clienta antes de generar.». Nada se guarda hasta «Generar pedido», por la
+  misma acción de siempre. El prellenado queda atado al lead: «Siguiente lead»
+  o el botón del pie abren el formulario sin él.
+- **Solo lectura.** Con la sesión de quien mira (RLS por tienda,
+  `auth_store_ids()`). No escribe en `orders`, `order_master` ni el historial
+  (§37.1). No hace falta «Descargar la base de pedidos»: son los datos de
+  entrega de la misma clienta que el lead ya enseña, no la base. No se
+  registra nada con datos de la clienta.
+- **Rendimiento.** Dos lecturas en paralelo con el historial y los carritos de
+  la ficha (la misma tanda de `loadLeadCustomerHistory`): `order_master` por
+  su índice `(store_id, customer_phone)` y el historial por
+  `(store_id, phone_norm)` (0273), cada una con límite de 25. Sin migración.
+- **Si falla**: sin `order_master`, no hay tarjeta; sin el historial, solo las
+  de Kapta. La ficha nunca se rompe por esto.
+
+Implementación: `lib/lead-known-addresses.ts` (la regla pura: celulares,
+direcciones, línea de origen y prellenado; la importa el cajón, sin nada del
+servidor), `getCustomerKnownAddresses` en `lib/leads-access.ts` (las lecturas),
+`loadLeadCustomerHistory` en `app/dashboard/leads/actions.ts` (la tanda), y
+`KnownAddressesCard` y `OrderFormPanel` (`initialAddress`) en
+`components/leads-drawer.tsx`. Pruebas: `test/lead-known-addresses.test.ts` y
+`test/leads-prior-orders-history.test.ts` (el celular del historial).
 
 ## 38. WooCommerce (23-10-2026)
 

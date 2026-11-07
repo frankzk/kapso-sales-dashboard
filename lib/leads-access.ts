@@ -4,7 +4,6 @@ import { createServerSupabase } from "@/lib/db";
 import { filterRoutedLeads, getLeadRoutingScope } from "@/lib/lead-routing-access";
 import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
 import { leadCartDetailOf } from "@/lib/lead-cart-detail";
-import { normalizePhone } from "@/lib/phone";
 import {
   combinePriorOrders,
   firstProductTitle,
@@ -22,6 +21,16 @@ import {
   type CustomerCarts,
   type MirrorDraftRow,
 } from "@/lib/customer-carts";
+import {
+  customerPhoneVariants,
+  HISTORY_ADDRESS_COLUMNS,
+  KAPTA_ADDRESS_COLUMNS,
+  KNOWN_ADDRESSES_SCAN,
+  pickKnownAddresses,
+  type HistoryAddressRow,
+  type KaptaAddressRow,
+  type KnownAddress,
+} from "@/lib/lead-known-addresses";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { LeadCallRow, LeadRow, OrderPlatform } from "@/lib/types";
@@ -530,6 +539,12 @@ export interface CustomerHistory {
    * se pudo leer o no hay celular.
    */
   carts?: CustomerCarts | null;
+  /**
+   * Las direcciones a las que ya se le mandó (MOM §37.9, 07-11-2026,
+   * `getCustomerKnownAddresses`): hasta 3, la más reciente primero. Lo rellena
+   * quien carga la ficha; null si no se pudo leer.
+   */
+  knownAddresses?: KnownAddress[] | null;
 }
 
 const PRIOR_ORDER_COLUMNS = "id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items";
@@ -670,14 +685,16 @@ async function readShopifyHistory(
   storeId: string,
   phone: string,
 ): Promise<{ rows: HistoryPriorRow[]; total: number | null }> {
-  const phoneNorm = normalizePhone(phone);
-  if (!phoneNorm) return { rows: [], total: null };
+  // El celular en todas sus formas (MOM §37.7, 07-11-2026): el historial guarda
+  // el de Shopify normalizado, que no siempre queda en 51 + nueve («051…»).
+  const phones = customerPhoneVariants(phone);
+  if (!phones.length) return { rows: [], total: null };
   try {
     const { data, error, count } = await sb
       .from("shopify_history_orders")
       .select("order_name, created_at, total, refunded_amount, line_items", { count: "exact" })
       .eq("store_id", storeId)
-      .eq("phone_norm", phoneNorm)
+      .in("phone_norm", phones)
       .is("cancelled_at", null)
       .order("created_at", { ascending: false })
       .limit(HISTORY_PRIOR_LIMIT);
@@ -740,6 +757,51 @@ export async function getCustomerCarts(
 
   const carts = mergeCustomerCarts(mirror, (archiveRes.data ?? []) as ArchiveCartRow[], excludeDraftGid);
   return { summary: summarizeCarts(carts), carts };
+}
+
+/**
+ * «Datos de entrega conocidos» de la ficha del lead (MOM §37.9, owner
+ * 07-11-2026): las direcciones a las que ya se le mandó a esta clienta en ESTA
+ * tienda, de sus pedidos de Kapta (`order_master`: la ubicación ya resuelta,
+ * con la corrección manual y lo del courier) y del historial de Shopify
+ * (`shopify_history_orders`, §37), anulados incluidos. Por su celular en todas
+ * sus formas, cada lectura por su índice de teléfono y con límite, las dos en
+ * paralelo. Con RLS (la sesión de quien mira). Solo lee: nada pasa a `orders`
+ * ni al pedido; la asesora decide en el formulario. Si una lectura falla, null
+ * y la ficha sale sin la tarjeta, nunca con la mitad.
+ */
+export async function getCustomerKnownAddresses(
+  storeId: string,
+  phone: string | null,
+  excludeOrderId?: string | null,
+): Promise<KnownAddress[] | null> {
+  const phones = customerPhoneVariants(phone);
+  if (!phones.length) return [];
+  const sb = await createServerSupabase();
+  const [kaptaRes, historyRes] = await Promise.all([
+    sb
+      .from("order_master")
+      .select(KAPTA_ADDRESS_COLUMNS)
+      .eq("store_id", storeId)
+      .in("customer_phone", phones)
+      .order("order_created_at", { ascending: false })
+      .limit(KNOWN_ADDRESSES_SCAN),
+    sb
+      .from("shopify_history_orders")
+      .select(HISTORY_ADDRESS_COLUMNS)
+      .eq("store_id", storeId)
+      .in("phone_norm", phones)
+      .order("created_at", { ascending: false })
+      .limit(KNOWN_ADDRESSES_SCAN),
+  ]);
+  if (kaptaRes.error) return null;
+  return pickKnownAddresses({
+    kapta: (kaptaRes.data ?? []) as unknown as KaptaAddressRow[],
+    // Sin la tabla del historial (o sin permiso), solo Kapta: es un archivo (§37.1).
+    history: historyRes.error ? [] : ((historyRes.data ?? []) as unknown as HistoryAddressRow[]),
+    leadPhone: phone,
+    excludeOrderId,
+  });
 }
 
 /** Valores neutros del bloque "cliente recurrente" cuando no hay compras previas. */

@@ -37,6 +37,9 @@ import { limaClock } from "@/lib/grupo-gf-courier";
 import { validarMotivoDescarte } from "@/lib/recovery-discard";
 import { orderDrawerHref } from "@/lib/order-drawer-href";
 import { limaDay, programDayLabel } from "@/lib/dispatch-day";
+import { dispatchCoordinateInput } from "@/lib/dispatch-date";
+import { saveOrderCoordinate } from "@/lib/order-coordinate-save";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { priorOutputsWith, reproBoxAction } from "@/lib/repro-box-action";
 import {
   agreementDateProblem,
@@ -44,6 +47,8 @@ import {
   isAgreementBoxAction,
   isReproChannel,
   isReproCourier,
+  orderHasCoordinate,
+  reproNeedsCoordinate,
   isReproOutcome,
   materializationPlan,
   nextCallProblem,
@@ -232,6 +237,11 @@ export interface RegisterReproCallInput {
   expectedBoxAction?: BoxAction | null;
   /** «Ya no lo quiere»: el pedido escrito en el segundo clic (§11.5). */
   confirmOrderName?: string | null;
+  /**
+   * «Confirma fecha» con Aliclik en un pedido sin coordenada: el enlace de
+   * Google Maps o el par (06-11-2026). Se guarda en el pedido.
+   */
+  coordinate?: string | null;
 }
 
 export interface RegisterReproCallResult extends ReproActionResult {
@@ -299,6 +309,7 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
     let courier: ReproCourier | null = null;
     let changes: ReproChanges = normalizeReproChanges(null);
     let boxAction: BoxAction | null = null;
+    let coordinate: { lat: number; lng: number } | null = null;
     if (input.outcome === "llamar_despues" || input.outcome === "no_contesta") nextCallAt = input.nextCallAt?.trim() || null;
     if (input.outcome === "confirma") {
       agreedOn = input.agreedOn?.trim() || null;
@@ -381,6 +392,14 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
           boxAction,
         });
         if (dateProblem) return { error: dateProblem };
+        // Aliclik no crea la guía sin coordenada: se pide aquí, como al
+        // programar un Provincia COD en el Master (§6.2), y no se guarda nada
+        // sin ella.
+        if (reproNeedsCoordinate(courier, orderHasCoordinate(f.order))) {
+          const parsed = dispatchCoordinateInput(input.coordinate);
+          if (!parsed.ok) return { error: parsed.error };
+          coordinate = parsed.coordinate;
+        }
       }
 
       if (input.outcome === "no_quiere") {
@@ -390,6 +409,23 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
           return { error: `Confirma el pedido ${f.order.order_name ?? "del caso"} para desarmar y cerrar.` };
         }
       }
+    }
+
+    if (coordinate) {
+      const saveError = await saveOrderCoordinate(admin, { orderId: c.order_id, storeId: f.order.store_id, userId: scope.userId, ...coordinate });
+      if (saveError) return { error: saveError };
+      await admin.from("order_events").insert({
+        store_id: f.order.store_id,
+        order_id: c.order_id,
+        kind: "comment",
+        occurred_at: now.toISOString(),
+        actor: scope.userId,
+        source: "manual",
+        comment_type: "ubicacion",
+        note: `Ubicación guardada al acordar la salida con Aliclik en Repro Lima. coordenadas: ${coordinate.lat}, ${coordinate.lng}`,
+        payload: {},
+      });
+      await recomputeOrderMasterSafe(admin, [c.order_id]);
     }
 
     const eventNote = reproEventNote({

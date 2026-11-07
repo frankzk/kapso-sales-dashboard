@@ -12,6 +12,7 @@ import {
   dispatchDateState,
 } from "@/lib/dispatch-date";
 import { emptyFilters, matchesDispatchDate } from "@/lib/order-master-filters";
+import { saveOrderCoordinate } from "@/lib/order-coordinate-save";
 import { buildMasterQuery, parseMasterQuery } from "@/lib/master-query";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
@@ -123,9 +124,24 @@ describe("Provincia COD: programar pide la coordenada (MOM §6.2, 02-11-2026)", 
     expect(confirm.indexOf("ensureDispatchCoordinate(ctx, input.coordinate)")).toBeLessThan(confirm.indexOf("register_confirmation_attempt_v1"));
     expect(schedule.indexOf("ensureDispatchCoordinate(ctx, input.coordinate)")).toBeGreaterThan(-1);
     expect(schedule.indexOf("ensureDispatchCoordinate(ctx, input.coordinate)")).toBeLessThan(schedule.indexOf("DISPATCH_DATE_SET"));
-    // Donde la lee el panel de Aliclik, sin borrar lo demás de la corrección.
-    const helper = actions.slice(actions.indexOf("async function ensureDispatchCoordinate"));
-    expect(helper).toContain('.from("order_geo_overrides")');
-    expect(helper).toContain('select("region,province,district,address,reference,note")');
+    // Donde la lee el panel de Aliclik, sin borrar lo demás de la corrección:
+    // el guardado vive en `saveOrderCoordinate`, compartido con Repro Lima (06-11-2026).
+    const helper = actions.slice(actions.indexOf("async function ensureDispatchCoordinate"), actions.indexOf("export async function scheduleOrderDispatch"));
+    expect(helper).toContain("saveOrderCoordinate(admin, { orderId: ctx.row.order_id, storeId: ctx.storeId, userId: ctx.userId, lat, lng })");
+    const save = read("lib/order-coordinate-save.ts");
+    expect(save).toContain('.from("order_geo_overrides")');
+    expect(save).toContain('select("region,province,district,address,reference,note")');
+  });
+  it("saveOrderCoordinate conserva lo demás de la corrección y escribe la coordenada", async () => {
+    const writes: Array<{ row: Record<string, unknown>; opts: unknown }> = [];
+    const admin = {
+      from: () => ({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { region: "Lima", district: "Ate", address: "Jr. Uno 1", reference: null, province: "Lima", note: "n" }, error: null }) }) }),
+        upsert: async (row: Record<string, unknown>, opts: unknown) => { writes.push({ row, opts }); return { error: null }; },
+      }),
+    } as unknown as Parameters<typeof saveOrderCoordinate>[0];
+    expect(await saveOrderCoordinate(admin, { orderId: "o1", storeId: "s1", userId: "u1", lat: -12.04318, lng: -77.02824 })).toBeNull();
+    expect(writes[0]?.row).toMatchObject({ order_id: "o1", store_id: "s1", latitude: -12.04318, longitude: -77.02824, district: "Ate", address: "Jr. Uno 1", updated_by: "u1" });
+    expect(writes[0]?.opts).toEqual({ onConflict: "order_id" });
   });
 });

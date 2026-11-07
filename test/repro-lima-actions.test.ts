@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Query = {
   table: string;
-  op: "select" | "update";
+  op: "select" | "update" | "upsert" | "insert";
   columns?: string;
   values?: Record<string, unknown>;
   filters: Array<[string, string, unknown]>;
@@ -32,6 +32,8 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+const recompute = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock("@/lib/order-master", () => ({ recomputeOrderMasterSafe: recompute }));
 vi.mock("@/lib/agent-names", () => ({
   resolveAgentName: async (id: string) => (id === "ana" ? "Ana" : null),
   resolveAgentNames: async () => ({}),
@@ -80,6 +82,8 @@ vi.mock("@/lib/db", () => {
     const chain: any = {};
     chain.select = (columns?: string) => { if (q.op === "select") q.columns = columns; return chain; };
     chain.update = (values: Record<string, unknown>) => { q.op = "update"; q.values = values; return chain; };
+    chain.upsert = (values: Record<string, unknown>) => { q.op = "upsert"; q.values = values; return chain; };
+    chain.insert = (values: Record<string, unknown>) => { q.op = "insert"; q.values = values; return chain; };
     for (const method of ["eq", "is", "gt", "in", "lte"]) {
       chain[method] = (key: string, value: unknown) => { q.filters.push([method, key, value]); return chain; };
     }
@@ -103,6 +107,8 @@ vi.mock("@/lib/db", () => {
 });
 
 import { claimReproCase, programReproAgreement, registerReproCall } from "@/app/dashboard/pedidos/repro-lima/actions";
+import { priorOutputsWith, reproBoxAction as realBoxAction } from "@/lib/repro-box-action";
+import { DISPATCH_NEEDS_COORDINATE_ERROR } from "@/lib/dispatch-date";
 
 const CASE_ID = "11111111-1111-4111-8111-111111111111";
 const ORDER_ID = "22222222-2222-4222-8222-222222222222";
@@ -495,5 +501,62 @@ describe("«Programar ahora» toma el candado de SU caso y nunca abre otro (F7)"
     state.materialize.mockResolvedValue({ status: "programado", day: "2026-10-15", wrote: true });
     await programReproAgreement({ caseId: CASE_ID });
     expect(state.queries.some((q) => q.op === "update" && q.values?.claimed_by === null)).toBe(false);
+  });
+});
+
+describe("«Confirma fecha» con Aliclik pide la ubicación si el pedido no la tiene (06-11-2026)", () => {
+  // La acción de caja que el servidor calcula para Aliclik con estos hechos.
+  const aliclikAction = (f: ReturnType<typeof facts>) => {
+    const r = realBoxAction({
+      outcome: "confirma", courier: "aliclik", changes: { direccion: false, telefono: false, monto: false, producto: false, caja_danada: false, no_esperar_caja: false } as never,
+      box: f.box as never, ownLiveCourier: (f.ownLive as { courier: string } | null)?.courier ?? null, lastFailedCourier: null, otherLiveCourier: null,
+      hadPropio: true, totalOutputs: (f.outputs as unknown[]).length, priorWithCourier: priorOutputsWith(f.outputs as never, "aliclik"),
+      ownReplace: null, reopened: false, retryAdmission: false,
+    });
+    return "action" in r ? r.action : null;
+  };
+  const writes = () => state.queries.filter((q) => q.op === "upsert" || q.op === "insert");
+  beforeEach(() => { recompute.mockClear(); });
+
+  it("sin coordenada y sin ubicación: no guarda nada y lo dice", async () => {
+    const f = facts();
+    state.facts = [f];
+    const result = await registerReproCall(confirmInput({ courier: "aliclik", expectedBoxAction: aliclikAction(f) }));
+    expect(result.error).toBe(DISPATCH_NEEDS_COORDINATE_ERROR);
+    expect(state.rpcs).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+  it("un enlace sin coordenada tampoco sirve", async () => {
+    const f = facts();
+    state.facts = [f];
+    const result = await registerReproCall(confirmInput({ courier: "aliclik", expectedBoxAction: aliclikAction(f), coordinate: "https://maps.app.goo.gl/abc123" }));
+    expect(result.error).toContain("acortado");
+    expect(state.rpcs).toEqual([]);
+  });
+  it("con la ubicación: la guarda en el pedido, deja el comentario, recalcula y registra el acuerdo", async () => {
+    const f = facts();
+    state.facts = [f];
+    const result = await registerReproCall(confirmInput({ courier: "aliclik", expectedBoxAction: aliclikAction(f), coordinate: "-12.04318, -77.02824" }));
+    expect(result.error).toBeUndefined();
+    const geo = state.queries.find((q) => q.table === "order_geo_overrides" && q.op === "upsert");
+    expect(geo?.values).toMatchObject({ order_id: ORDER_ID, store_id: "store", latitude: -12.04318, longitude: -77.02824, updated_by: "me" });
+    const event = state.queries.find((q) => q.table === "order_events" && q.op === "insert");
+    expect(event?.values).toMatchObject({ kind: "comment", comment_type: "ubicacion", order_id: ORDER_ID });
+    expect(String(event?.values?.note)).toContain("-12.04318, -77.02824");
+    expect(recompute).toHaveBeenCalledWith(expect.anything(), [ORDER_ID]);
+    expect(state.rpcs[0]?.params).toMatchObject({ p_courier: "aliclik", p_outcome: "confirma" });
+  });
+  it("si ya tiene coordenada no la pide; con Grupo GF tampoco", async () => {
+    const withGps = facts({ order: { ...facts().order, latitude: -12.1, longitude: -77.0 } });
+    state.facts = [withGps];
+    expect((await registerReproCall(confirmInput({ courier: "aliclik", expectedBoxAction: aliclikAction(withGps) }))).error).toBeUndefined();
+    expect(writes()).toEqual([]);
+    state.rpcs = [];
+    state.queries = [];
+    state.facts = [facts()];
+    state.factsCalls = 0;
+    expect((await registerReproCall(confirmInput())).error).toBeUndefined();
+    expect(writes()).toEqual([]);
+    expect(recompute).not.toHaveBeenCalled();
   });
 });
