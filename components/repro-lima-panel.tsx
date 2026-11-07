@@ -1,13 +1,19 @@
 "use client";
 
-// «Repro Lima» · la hoja de un pedido (fase 1, entrega 1a; MOM §9.5, §11.4-§11.7).
+// «Repro Lima» · la pestaña de la ficha del pedido (fase 1, entrega 1a; MOM
+// §9.5, §11.4-§11.7). Hasta el 07-11-2026 era una hoja lateral aparte que se
+// abría encima de la ficha; ahora es la pestaña «Repro Lima» de la ficha
+// (components/order-drawer.tsx), después de «Chatby», y solo existe mientras el
+// pedido está en Repro Lima.
 //
-// Quien llama abre la hoja y el caso queda suyo diez minutos (candado de D10,
-// el mismo de Envíos): se toma al abrir, late cada cuatro minutos, se suelta
-// al cerrar o al desmontar la hoja (atrás del navegador) y, si la pestaña se
-// cierra o se recarga, con un beacon; si la página vuelve del bfcache, se
-// vuelve a tomar. Con el candado de otra persona, o desde «Cerrados» y «Ver
-// acuerdo», la hoja es de solo lectura y no toma nada (E29).
+// Quien llama abre la pestaña y el caso queda suyo diez minutos (candado de
+// D10, el mismo de Envíos): se toma al abrirla (`active`), late cada cuatro
+// minutos, se suelta al salir de la pestaña, al cerrar la ficha o al
+// desmontarla (atrás del navegador) y, si la pestaña del navegador se cierra o
+// se recarga, con un beacon; si la página vuelve del bfcache, o la persona
+// vuelve a la pestaña, se vuelve a tomar con lo escrito intacto. Con el
+// candado de otra persona, o desde «Cerrados» y un acuerdo programado, la
+// pestaña es de solo lectura y no toma nada (E29).
 //
 // Antes de llamar se lee el fallo (motivo, nota y foto, §11.7), dónde está la
 // caja, la fecha que pidió el cliente y las llamadas anteriores. Después se
@@ -21,11 +27,10 @@
 // clic no registra dos llamadas, y si el formulario cambia después de un
 // envío, se estrena otro (E3).
 
-import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, type MutableRefObject, type ReactNode } from "react";
 import { cn } from "@/components/ui";
-import { Badge, Banner, CHECKBOX, choiceChipClass, FIELD, OpsButton, OptionTile, SidePanel, Skeleton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
+import { Badge, Banner, CHECKBOX, choiceChipClass, FIELD, OpsButton, OptionTile, Skeleton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
 import { IconPhone, IconWhatsApp } from "@/components/icons";
-import { OrderLink, useOpenOrderDrawer } from "@/components/order-link";
 import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import {
@@ -47,7 +52,7 @@ import { programDayLabel } from "@/lib/dispatch-day";
 import { dispatchCoordinateInput } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { DISCARD_REASON_MIN, validarMotivoDescarte } from "@/lib/recovery-discard";
-import { soles, telHref, whatsappHref } from "@/lib/rider-contact";
+import { telHref, whatsappHref } from "@/lib/rider-contact";
 import { MAX_OUTPUTS_PER_ORDER } from "@/lib/shipment-output";
 import { boxActionReadyLabel, reproBoxAction, type ReproBoxActionResult } from "@/lib/repro-box-action";
 import {
@@ -88,7 +93,7 @@ import {
 } from "@/lib/repro-lima";
 
 // ---------------------------------------------------------------------------
-// Piezas que comparte el tablero (components/repro-lima-board.tsx)
+// Piezas que comparte el tablero (components/repro-lima-pending.tsx)
 // ---------------------------------------------------------------------------
 
 const DAY_MS = 86_400_000;
@@ -263,10 +268,10 @@ export function CallButton({ phone, size = "md", className }: { phone: string | 
 }
 
 // ---------------------------------------------------------------------------
-// La hoja
+// La pestaña
 // ---------------------------------------------------------------------------
 
-/** Lo que el tablero recibe al guardar: el aviso y la ficha si hay que crear la salida (D7). */
+/** Lo que la ficha recibe al guardar: el aviso y si hay que crear la salida en la Mesa de ruta (D7). */
 export interface ReproSaved {
   orderId: string;
   orderName: string;
@@ -274,6 +279,19 @@ export interface ReproSaved {
   error: string | null;
   /** Otro courier: la salida se crea desde la Mesa de ruta de la ficha. */
   mesa: boolean;
+}
+
+/**
+ * El aviso de arriba de la pestaña: el del pedido anterior con «Guardar y
+ * pasar al siguiente» o el del propio pedido cuando el guardado no pasa
+ * (un error, o crear la salida en la Mesa de ruta).
+ */
+export interface ReproNotice {
+  orderName: string;
+  text: string;
+  tone?: "ok" | "crit";
+  extra?: string | null;
+  mesa?: boolean;
 }
 
 type ClaimState = "idle" | "claiming" | "mine" | "held" | "lost" | "reopen" | "error";
@@ -426,36 +444,53 @@ function NextCallPicker({ now, value, optional, onChange }: {
   );
 }
 
-export function ReproLimaSheet({
+export function ReproLimaPanel({
   row,
   initialMode,
   askReopen = false,
+  active,
   hasNext,
   onClose,
   onSaved,
   onChanged,
+  onGoToMesa,
+  exitGuard,
   previous = null,
 }: {
   row: ReproRow;
-  /** `edit`: «Atender» (toma el caso). `read`: «Ver acuerdo» y «Cerrados» (E29), sin candado. */
+  /** `edit`: «Atender» (toma el caso). `read`: un acuerdo programado y «Cerrados» (E29), sin candado. */
   initialMode: "edit" | "read";
-  /** «Volver a atender» desde «Cerrados»: el segundo clic va en la hoja (E29). */
+  /** «Volver a atender» desde «Cerrados»: el segundo clic va en la pestaña (E29). */
   askReopen?: boolean;
-  /** Hay otro pedido en la lista para «Guardar y pasar al siguiente». */
+  /**
+   * La pestaña está a la vista. Solo así se toma y se late el caso: salir de
+   * la pestaña lo suelta (lo escrito se queda) y volver lo toma otra vez.
+   */
+  active: boolean;
+  /** Hay otro pedido en la lista del tablero para «Guardar y pasar al siguiente». */
   hasNext: boolean;
+  /** Cerrar la ficha («Cerrar», «Soltar», «Descartar y cerrar»). */
   onClose: () => void;
   /** Se guardó la llamada; `advance`: abrir el siguiente. */
   onSaved: (saved: ReproSaved, advance: boolean) => void;
-  /** Algo cambió fuera del formulario («Programar ahora»): el tablero relee. */
+  /** Algo cambió fuera del formulario («Programar ahora»): la ficha y la pantalla de atrás releen. */
   onChanged: () => void;
+  /** Ir a la Mesa de ruta de la ficha (pestaña Operar): otro courier (D7). */
+  onGoToMesa: () => void;
   /**
-   * Lo que dijo el guardado del pedido anterior con «Guardar y pasar al
-   * siguiente» («Avisa a Almacén…»): va arriba de esta hoja para que no se tape.
+   * La ficha pregunta antes de cerrarse (✕, fondo, Escape): con texto sin
+   * guardar la pestaña responde `true` y muestra «Escribiste algo que todavía
+   * no se guardó» en vez de dejar cerrar (§11.5).
    */
-  previous?: { orderName: string; text: string } | null;
+  exitGuard?: MutableRefObject<(() => boolean) | null>;
+  /**
+   * El aviso de arriba (`ReproNotice`): el del pedido anterior con «Guardar y
+   * pasar al siguiente» («Avisa a Almacén…»), para que no se tape.
+   */
+  previous?: ReproNotice | null;
 }) {
   const orderId = row.orderId;
-  const openDrawer = useOpenOrderDrawer();
+  const visible = active;
   const [mode, setMode] = useState<"edit" | "read">(initialMode);
   const [showReopen, setShowReopen] = useState(askReopen);
   const [pending, start] = useTransition();
@@ -496,7 +531,8 @@ export function ReproLimaSheet({
   }, [mode, reload]);
 
   // -------------------------------------------------------------------------
-  // El candado (D10): eager al abrir, latido, beacon en `pagehide`, soltar al cerrar
+  // El candado (D10): eager al abrir la pestaña, latido, beacon en `pagehide`,
+  // soltar al salir de la pestaña o al cerrar la ficha
   // -------------------------------------------------------------------------
   const [claimState, setClaimState] = useState<ClaimState>("idle");
   const [claimMessage, setClaimMessage] = useState<string | null>(null);
@@ -512,7 +548,8 @@ export function ReproLimaSheet({
   const reopenRef = useRef(false);
 
   useEffect(() => {
-    if (mode !== "edit") return;
+    // Fuera de la pestaña no se toma nada; si se tenía, la limpieza de abajo lo suelta.
+    if (mode !== "edit" || !visible) return;
     let active = true;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
     const session = { orderId, caseId: null as string | null, shouldRelease: false };
@@ -522,7 +559,7 @@ export function ReproLimaSheet({
     setClaimMessage(null);
     setHolder(null);
 
-    // Si la pestaña se cierra o se recarga con la hoja abierta, el cierre normal
+    // Si la pestaña se cierra o se recarga con la ficha abierta, el cierre normal
     // nunca corre y el caso quedaba tomado diez minutos. `sendBeacon` sobrevive
     // a la descarga; una acción de servidor, no.
     const onPageHide = () => {
@@ -547,7 +584,7 @@ export function ReproLimaSheet({
           return;
         }
         if (!active) {
-          // La hoja se desmontó con la toma en camino: se suelta. Si el efecto
+          // La pestaña se dejó (o la ficha se cerró) con la toma en camino: se suelta. Si el efecto
           // volvió a correr, la toma nueva es otra sesión y esta no suelta nada.
           if (claimSessionRef.current === session && !("error" in result)) void releaseReproCase(result.caseId).catch(() => undefined);
           return;
@@ -607,16 +644,17 @@ export function ReproLimaSheet({
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);
       if (heartbeat) clearInterval(heartbeat);
-      // Desmontar la hoja sin «Cerrar» ni «Soltar» (atrás del navegador, un
-      // enlace de la ficha) también suelta el caso (§9.5). Si el efecto vuelve
-      // a correr («Volver a tomarlo»), se suelta antes de la toma nueva: las
-      // acciones de servidor corren de a una, en orden.
+      // Salir de la pestaña, o desmontar la ficha sin «Cerrar» ni «Soltar»
+      // (atrás del navegador, otro pedido), también suelta el caso (§9.5). Si
+      // el efecto vuelve a correr («Volver a tomarlo», volver a la pestaña),
+      // se suelta antes de la toma nueva: las acciones de servidor corren de a
+      // una, en orden.
       if (session.caseId && !session.shouldRelease) {
         session.shouldRelease = true;
         void releaseReproCase(session.caseId).catch(() => undefined);
       }
     };
-  }, [orderId, mode, claimAttempt, reload]);
+  }, [orderId, mode, claimAttempt, reload, visible]);
 
   function releaseCurrentClaim() {
     const session = claimSessionRef.current;
@@ -856,8 +894,8 @@ export function ReproLimaSheet({
     });
   }
 
-  // Salir: cerrar la hoja o soltar el caso. Con texto sin guardar, se avisa
-  // (§11.5), tenga o no el caso.
+  // Salir: cerrar la ficha o soltar el caso (y cerrarla). Con texto sin
+  // guardar, se avisa (§11.5), tenga o no el caso.
   function requestExit(kind: "close" | "release") {
     if (mode === "edit" && hasDraft) { setPendingExit(kind); return; }
     doExit();
@@ -867,20 +905,19 @@ export function ReproLimaSheet({
     onClose();
   }
 
-  // Escape cierra la hoja (no la ficha que se abra encima).
-  const bodyRef = useRef<HTMLDivElement>(null);
+  // La ficha pregunta antes de cerrarse (✕, fondo o Escape): con texto sin
+  // guardar, el mismo aviso que «Cerrar» (§11.5).
   const exitRef = useRef(requestExit);
   useEffect(() => { exitRef.current = requestExit; });
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      const dialog = bodyRef.current?.closest('[role="dialog"]');
-      if (!dialog || !(event.target instanceof Node) || !dialog.contains(event.target)) return;
+    if (!exitGuard) return;
+    exitGuard.current = () => {
+      if (!(mode === "edit" && hasDraft)) return false;
       exitRef.current("close");
+      return true;
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+    return () => { exitGuard.current = null; };
+  }, [exitGuard, mode, hasDraft]);
 
   const agreement = current.agreement;
   const showProgramNow = Boolean(agreement) && current.state.kind === "por_programar" && current.list !== "cerrados";
@@ -914,19 +951,22 @@ export function ReproLimaSheet({
   const claimDot = mine ? "bg-ok-fg" : claimState === "held" || claimState === "lost" ? "bg-warn-fg" : "bg-ink-300";
 
   return (
-    <SidePanel
-      label={`Repro Lima: ${current.orderName}`}
-      title={current.orderName}
-      badge={<Badge tone="neutral">{REPRO_LIST_LABEL[current.list]}</Badge>}
-      meta={[current.customerName, current.district ?? "sin distrito", soles(current.orderTotal), current.storeName].join(" · ")}
-      width="sm:max-w-[560px]"
-      onClose={() => requestExit("close")}
-    >
-      <div ref={bodyRef} className="space-y-5">
-        {/* El aviso del pedido anterior («Guardar y pasar al siguiente»). */}
+      <div className="space-y-5">
+        {/* En qué lista está y dónde: el pedido, el cliente y el monto ya van en la cabecera de la ficha. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold text-ink-900">Repro Lima</h3>
+          <Badge tone="neutral">{REPRO_LIST_LABEL[current.list]}</Badge>
+          <span className="text-[13px] text-ink-500">{current.district ?? "sin distrito"}</span>
+        </div>
+        {/* El aviso del pedido anterior («Guardar y pasar al siguiente») o el
+            del propio guardado cuando no pasa (un error, la Mesa de ruta). */}
         {previous && (
-          <Banner tone="ok" role="status" title={previous.orderName}>
+          <Banner tone={previous.tone ?? "ok"} role={previous.tone === "crit" ? "alert" : "status"} title={previous.orderName}>
             <p>{previous.text}</p>
+            {previous.extra && <p>{previous.extra}</p>}
+            {previous.mesa && (
+              <OpsButton size="sm" className="mt-2 pointer-coarse:h-11" onClick={onGoToMesa}>Abrir la Mesa de ruta del pedido</OpsButton>
+            )}
           </Banner>
         )}
         {/* El candado, en una línea con su punto. */}
@@ -978,7 +1018,6 @@ export function ReproLimaSheet({
               <span className="hidden sm:inline">WhatsApp</span>
             </a>
           )}
-          <OpsButton size="lg" variant="ghost" onClick={() => openDrawer(orderId)}>Ver ficha</OpsButton>
         </div>
 
         <Section title="Antes de llamar">
@@ -1058,9 +1097,9 @@ export function ReproLimaSheet({
               )}
             </dl>
             {current.state.kind === "otro_courier" && (
-              <OrderLink orderId={orderId} section="operar" className={opsButtonClass("secondary", "sm", "pointer-coarse:h-11")}>
+              <OpsButton size="sm" className="pointer-coarse:h-11" onClick={onGoToMesa}>
                 Crear la salida en la Mesa de ruta
-              </OrderLink>
+              </OpsButton>
             )}
             {(showProgramNow || showFound) && (
               <div className="flex flex-wrap items-center gap-2">
@@ -1347,7 +1386,7 @@ export function ReproLimaSheet({
         )}
 
         {/* El pie fijo: los avisos y los botones, al alcance del pulgar. */}
-        <div className="sticky bottom-0 -mx-4 -mb-5 space-y-2 border-t border-line bg-white px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:-mx-6 sm:px-6">
+        <div className="sticky bottom-0 -mx-4 -mb-4 space-y-2 rounded-b-lg border-t border-line bg-white px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:-mx-5 sm:-mb-5 sm:px-5">
           {feedback && (
             <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
               {feedback.text}
@@ -1401,7 +1440,8 @@ export function ReproLimaSheet({
                 {form === "close" ? "Volver a la llamada" : "Desarmar y cerrar sin llamada"}
               </OpsButton>
             )}
-            {mode === "read" && current.list === "programados" && current.claim.view !== "otro" && (
+            {/* Desde la lectura (un acuerdo programado, o lo recién guardado) se vuelve a atender. */}
+            {mode === "read" && current.list !== "cerrados" && current.claim.view !== "otro" && !gone && (
               <OpsButton size="sm" className="pointer-coarse:h-11" onClick={() => setMode("edit")}>
                 {agreement ? "Cambiar el acuerdo" : "Atender"}
               </OpsButton>
@@ -1409,7 +1449,6 @@ export function ReproLimaSheet({
             {mode === "read" && current.list === "cerrados" && !showReopen && (
               <OpsButton size="sm" className="pointer-coarse:h-11" onClick={() => setShowReopen(true)}>Volver a atender</OpsButton>
             )}
-            <OpsButton size="sm" variant="ghost" className="pointer-coarse:h-11" onClick={() => openDrawer(orderId)}>Ver ficha</OpsButton>
             {mine ? (
               <OpsButton size="sm" variant="ghost" className="pointer-coarse:h-11" onClick={() => requestExit("release")}>Soltar</OpsButton>
             ) : (
@@ -1418,6 +1457,5 @@ export function ReproLimaSheet({
           </div>
         </div>
       </div>
-    </SidePanel>
   );
 }

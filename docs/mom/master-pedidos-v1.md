@@ -4953,12 +4953,31 @@ owner): esa fecha ya es el acuerdo y programa la salida sola; el pedido sale en
   los trata como ausentes. Un «No entregado» nuevo después del cierre abre un
   caso nuevo.
 
+**Dónde se atiende (pedido del owner, 07-11-2026).** «Atender» abre la ficha
+del pedido en su pestaña «Repro Lima» (`?ficha=<pedido>&seccion=reprolima`,
+`components/repro-lima-panel.tsx`), la última, después de «Chatby». Hasta
+entonces abría una hoja lateral aparte y se veían los dos paneles encima, la
+ficha y la hoja; ahora es un solo lugar. La pestaña sale **solo mientras el
+pedido está en Repro Lima**: lo dice la misma lectura de la pantalla
+(`loadReproRow`: hay fila o no la hay), que la ficha hace una vez por pedido,
+solo a quien tiene `repro_lima.manage` y solo si el pedido puede estar (Lima y
+por entregar, `isReproLimaCandidate`) o si «Atender» la pidió; sin sondeos. La
+ficha la enseña igual abierta desde el Master de Pedidos o desde cualquier
+otra pantalla. Si «Atender» la pide y el pedido ya salió, la ficha abre Operar
+con «Este pedido ya no está pendiente de entrega en Lima». Dentro de la
+pestaña está todo lo de la hoja (abajo, «la hoja» es esta pestaña): «Antes de
+llamar», el resultado, el candado, la lectura, el segundo clic de «Volver a
+atender», «Programar ahora» y «Guardar y pasar al siguiente». No crea estados
+ni cambia ninguna regla de las de abajo.
+
 **El candado.** «Atender» toma el caso por 10 minutos y lo renueva cada 4
-mientras la hoja esté abierta, como Envíos (`lib/shipments.ts`). Al cerrar la
-hoja o la pestaña, se suelta; también cuando la hoja se va sin «Cerrar» ni
-«Soltar» (atrás del navegador, el gesto de volver, un enlace de la ficha). Si
-la página vuelve del bfcache después de que el beacon lo soltó, la hoja lo
-vuelve a tomar sola y conserva lo escrito. Si otra persona lo tiene, la hoja
+mientras la pestaña «Repro Lima» esté a la vista, como Envíos
+(`lib/shipments.ts`). Al salir de la pestaña (a Operar, Chatby…), al cerrar la
+ficha o la pestaña del navegador, se suelta; también cuando la ficha se va sin
+«Cerrar» ni «Soltar» (atrás del navegador, el gesto de volver, otro pedido).
+Volver a la pestaña lo vuelve a tomar y conserva lo escrito. Si la página
+vuelve del bfcache después de que el beacon lo soltó, la hoja lo vuelve a
+tomar sola y conserva lo escrito. Si otra persona lo tiene, la hoja
 se abre solo para leer: «Diana está atendiendo este pedido; se libera a las
 10:42.», con «Reintentar». Si se pierde, la hoja lo dice («Ya no tienes este
 caso», con «Volver a tomarlo») y conserva lo escrito. Lo mismo al guardar: si
@@ -4968,7 +4987,9 @@ tomarlo falla, la hoja dice «No pudimos tomar el caso. Vuelve a intentarlo.»,
 también con «Reintentar». Mientras el caso no es tuyo (se está tomando, lo
 tiene otra persona, falló o se perdió), lo escrito sigue a la vista pero sin
 poder editarse («Lo que escribiste sigue aquí. Reintenta para guardarlo.»), y
-cerrar con algo sin guardar siempre avisa (§11.5). Guardar exige el candado vivo y el mismo episodio (`lima_repro_record`).
+cerrar con algo sin guardar siempre avisa (§11.5): «Cerrar», «Soltar» y
+también la ✕, el fondo y Escape de la ficha, que antes de cerrarse vuelven a
+la pestaña con el aviso. Guardar exige el candado vivo y el mismo episodio (`lima_repro_record`).
 **Solo vale dentro de Repro Lima**:
 Grupo GF sigue tomando, programando y asignando el pedido. «Ver acuerdo» y
 «Cerrados» se abren solo para leer, sin candado.
@@ -5108,7 +5129,8 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   cual y lo antiguo pasa antes por la llamada. Lo aplica `attentionRows`
   (`lib/repro-lima-pending.ts`).
 - **Gestión (corrección del owner, 28-10-2026):** «Atender» abre siempre la
-  hoja de llamada y programación/reprogramación, también desde Todos y para
+  hoja de llamada y programación/reprogramación —desde el 07-11-2026, la
+  pestaña «Repro Lima» de la ficha—, también desde Todos y para
   pendientes que nunca salieron. El código del pedido abre la ficha compartida.
   Los pendientes sin fallo usan un contexto de atención `attention:<order_id>`:
   no se inventa un «No entregado», una parada ni un despacho. Conserva las
@@ -5301,13 +5323,17 @@ el acuerdo. «Llamar después» y «Ya no lo quiere» lo vacían; queda en el
 historial de llamadas. «No contesta» lo conserva. Un doble clic no registra dos
 llamadas.
 
-«Guardar y pasar al siguiente» abre el siguiente pedido de la misma lista que
-nadie más esté atendiendo. Si el guardado deja un error (por ejemplo «no se
-pudo programar… Usa «Programar ahora».») o pide crear la salida en la Mesa de
-ruta (otro courier), no pasa: la hoja se cierra y el aviso queda en el
-tablero. Si no, pasa, y el aviso del pedido anterior («Avisa a Almacén: la caja
-tiene que estar en el anaquel antes de las 12:30.») queda arriba de la hoja
-siguiente, con el nombre de ese pedido.
+«Guardar y pasar al siguiente» abre la ficha del siguiente pedido de la misma
+lista del tablero (con sus filtros) que nadie más esté atendiendo, en su
+pestaña «Repro Lima». Si el guardado deja un error (por ejemplo «no se pudo
+programar… Usa «Programar ahora».») o pide crear la salida en la Mesa de ruta
+(otro courier), no pasa: la pestaña queda en el mismo pedido, para leer, con el
+aviso arriba y, si toca, «Abrir la Mesa de ruta del pedido» (Operar de la misma
+ficha). Si no, pasa, y el aviso del pedido anterior («Avisa a Almacén: la caja
+tiene que estar en el anaquel antes de las 12:30.») queda arriba de la pestaña
+siguiente, con el nombre de ese pedido. Abierta fuera del tablero (Master de
+Pedidos) no hay lista: el botón dice «Guardar» y el aviso queda arriba, igual.
+Desde la lectura, «Atender» (o «Cambiar el acuerdo») vuelve a tomar el caso.
 
 **Fechas.**
 
@@ -5715,11 +5741,15 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
 Implementación: `lib/repro-lima.ts`, `lib/repro-box-action.ts`,
 `lib/repro-lima-access.ts`, `lib/repro-lima-program.ts`,
 `app/dashboard/pedidos/repro-lima/`, `components/repro-lima-board.tsx`,
-`components/repro-lima-sheet.tsx` y la migración `0251_lima_repro.sql`.
+`components/repro-lima-panel.tsx` (la pestaña «Repro Lima» de la ficha,
+`components/order-drawer.tsx`; hasta el 07-11-2026, la hoja
+`components/repro-lima-sheet.tsx`), `lib/repro-lima-queue.ts` y la migración
+`0251_lima_repro.sql`.
 Pruebas en `test/repro-lima.test.ts`, `test/repro-box-action.test.ts`,
 `test/repro-lima-program.test.ts`, `test/repro-lima-access.test.ts`,
 `test/repro-lima-actions.test.ts`, `test/repro-lima-scan.test.ts`,
-`test/repro-lima-ui.test.ts`, `test/repro-lima-source.test.ts` y
+`test/repro-lima-ui.test.ts`, `test/repro-lima-source.test.ts`,
+`test/repro-lima-drawer-tab.test.ts` y
 `scripts/sql/repro_lima_smoke.sql`.
 
 La entrega 1c: `lib/warehouse-retries.ts` (las reglas, puras),
@@ -21938,7 +21968,7 @@ Sin migración: lo ya guardado no se reescribe.
   servidor, «El pedido fue reembolsado por completo en la tienda; …» (el modal
   nombra la tienda del pedido, arriba).
 - **Repro Lima** (`app/dashboard/pedidos/repro-lima/actions.ts`,
-  `components/repro-lima-sheet.tsx`, `components/repro-lima-board.tsx`): «No
+  `components/repro-lima-panel.tsx`, `components/repro-lima-board.tsx`): «No
   anula la venta: solo la tienda la anula.», «Espera que la tienda anule la
   venta» y «… hasta que la tienda anule la venta.».
 - **Leads** (`app/dashboard/leads/actions.ts`): «Si el cliente canceló, anula

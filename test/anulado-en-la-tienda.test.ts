@@ -102,7 +102,7 @@ describe("los textos de la anulación dicen «la tienda»", () => {
     expect(urpi).toContain("Anulado solo en Kapta; en la tienda sigue vivo, así que se puede marcar.");
     expect(read("lib/notebook-import.ts")).toContain("`Anulado en la tienda: no se carga; si ${ctx.riderName} tiene el paquete");
     expect(read("app/dashboard/pedidos/repro-lima/actions.ts")).toContain("No anula la venta: solo la tienda la anula.");
-    expect(read("components/repro-lima-sheet.tsx")).toContain('text: "Espera que la tienda anule la venta"');
+    expect(read("components/repro-lima-panel.tsx")).toContain('text: "Espera que la tienda anule la venta"');
     expect(read("lib/repro-lima-pending.ts")).toContain("hasta que la tienda anule la venta.");
     expect(read("components/repro-lima-board.tsx")).toContain("title={f.hint}");
     expect(read("app/dashboard/leads/actions.ts")).toContain("Si el cliente canceló, anula el pedido en la tienda primero.");

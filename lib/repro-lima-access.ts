@@ -27,6 +27,7 @@ import { guideFailedAt } from "@/lib/reproprovincia";
 import { chainFailureText, chainReadyOn, type ChainNext } from "@/lib/lima-retry-chain";
 import type { OwnReplaceDecision } from "@/lib/gf-retry";
 import { priorOutputsWith } from "@/lib/repro-box-action";
+import { isReproLimaCandidate } from "@/lib/repro-lima-pending";
 import {
   agreementState,
   agreementStateLabel,
@@ -517,7 +518,7 @@ export async function loadReproLima(
 
   const knownCases = new Set([...openCases, ...attentionCases].map((c) => c.order_id));
   const rows = orderRows.filter((row) => scope.storeIds.has(row.store_id) &&
-    (!opts.attention || row.coverage === "lima" && ["por_confirmar", "preparacion", "por_despachar", "en_curso"].includes(row.macro_stage ?? "")) &&
+    (!opts.attention || isReproLimaCandidate(row)) &&
     (!opts.attention || onlyOrders || knownCases.has(row.order_id) || row.macro_stage === "en_curso" && row.macro_substage === "por_reprogramar_lima"));
   const inStage = new Set(rows.map((row) => row.order_id));
   // Candidatos, no cierres: la etapa se lee por páginas y un pedido que sale

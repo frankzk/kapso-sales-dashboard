@@ -3,6 +3,11 @@
 // Una cola, una tabla y «Atender» en todos los pedidos. Las tarjetas solo
 // filtran esa cola; `vista=listas|todos|resumen` ya no selecciona otra pantalla.
 // Las acciones conservan los permisos y guardas del pedido y de cada caso.
+//
+// «Atender» abre la ficha del pedido en su pestaña «Repro Lima»
+// (`?ficha=<pedido>&seccion=reprolima`, 07-11-2026): ya no hay una hoja aparte
+// encima de la ficha. El tablero publica cuál es el siguiente de esta lista
+// (lib/repro-lima-queue.ts) para «Guardar y pasar al siguiente».
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
@@ -10,27 +15,18 @@ import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } f
 import { Sheet } from "@/components/filter-sheet";
 import { DateRangePill, FacetPill } from "@/components/facet-pill";
 import { IconCheck, IconSearch, IconX } from "@/components/icons";
-import { OrderLink } from "@/components/order-link";
-import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
+import { useOpenOrderDrawer } from "@/components/order-link";
+import type { ReproLimaData } from "@/lib/repro-lima-access";
 import { cutoffNotice } from "@/lib/repro-lima";
 import { limaClock } from "@/lib/grupo-gf-courier";
-import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
-import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
+import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, readRowFilters, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
 
-type OpenSheet = {
-  row: ReproRow;
-  mode: "edit" | "read";
-  askReopen?: boolean;
-  key: number;
-  /** El aviso del pedido anterior, arriba de la hoja siguiente. */
-  previous?: { orderName: string; text: string } | null;
-};
-type Feedback = { kind: "notice" | "error"; text: string; orderId?: string; orderName?: string; mesa?: boolean; extra?: string | null };
+type Feedback = { kind: "notice" | "error"; text: string; extra?: string | null };
 
 export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   data: ReproLimaData;
@@ -47,10 +43,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   const [store, setStore] = useState("");
   const [storeSheet, setStoreSheet] = useState(false);
   const storePill = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState<OpenSheet | null>(null);
-  const [loadingOrder, setLoadingOrder] = useState<string | null>(null);
-  const opening = useRef(0);
-  useEffect(() => () => { opening.current += 1; }, []);
+  const openDrawer = useOpenOrderDrawer();
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
   const [now, setNow] = useState(() => new Date(data.nowIso));
@@ -141,10 +134,6 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
     };
   }, [router]);
 
-  // La fila viva de la hoja abierta: tras releer, la del servidor; si salió de
-  // la etapa, la última que se vio.
-  const sheetRow = open ? data.rows.find((row) => row.orderId === open.row.orderId) ?? open.row : null;
-
   /** El siguiente de la misma lista, que nadie más esté atendiendo. */
   function nextAfter(orderId: string): LimaPendingOrder | null {
     const rows = inQueue;
@@ -153,61 +142,25 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
     return after.find((row) => row.orderId !== orderId && caseById.get(row.orderId)?.claim.view !== "otro" && caseById.get(row.orderId)?.list !== "cerrados") ?? null;
   }
 
-  function openRow(row: ReproRow, mode: "edit" | "read", askReopen = false, previous: OpenSheet["previous"] = null) {
-    opening.current += 1;
-    setLoadingOrder(null);
-    setOpen({ row, mode, askReopen, key: Date.now(), previous });
-  }
+  // «Guardar y pasar al siguiente» se pulsa en la ficha (pestaña «Repro Lima»),
+  // que no ve esta lista: el tablero le dice cuál sigue, con sus filtros.
+  useEffect(() => {
+    if (retriesOnly) return;
+    const queue: ReproLimaQueue = { next: (orderId) => nextAfter(orderId)?.orderId ?? null };
+    setReproLimaQueue(queue);
+    return () => clearReproLimaQueue(queue);
+    // `nextAfter` lee `inQueue` y `caseById`: se publica de nuevo cuando cambian.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inQueue, caseById, retriesOnly]);
 
-  async function attend(row: LimaPendingOrder, previous: OpenSheet["previous"] = null) {
-    const request = ++opening.current;
-    setLoadingOrder(row.orderId);
-    setFeedback((current) => current?.kind === "error" && current.orderId === row.orderId ? null : current);
-    try {
-      const known = caseById.get(row.orderId);
-      const result = known ? { row: known } : await loadReproRow(row.orderId);
-      if (opening.current !== request) return;
-      if ("error" in result || !result.row) {
-        setFeedback({ kind: "error", text: "error" in result ? result.error : "El pedido ya no está pendiente de entrega en Lima. Actualiza la lista.", orderId: row.orderId, orderName: row.orderName });
-        return;
-      }
-      const current = result.row;
-      const read = current.list === "cerrados" || current.list === "programados" && Boolean(current.agreement);
-      openRow(current, read ? "read" : "edit", false, previous);
-    } catch {
-      if (opening.current === request) setFeedback({ kind: "error", text: "No pudimos abrir la gestión del pedido. Vuelve a intentarlo.", orderId: row.orderId, orderName: row.orderName });
-    } finally {
-      if (opening.current === request) setLoadingOrder(null);
-    }
-  }
-
-  function onSaved(saved: ReproSaved, advance: boolean) {
-    // Lo que pide algo (un error, como «no se pudo programar», o crear la
-    // salida en la Mesa de ruta) no pasa al siguiente: la hoja se cierra y el
-    // aviso queda a la vista en el tablero. Lo demás («Avisa a Almacén…») pasa
-    // al siguiente y va arriba de su hoja, que si no lo taparía.
-    const next = advance && !saved.error && !saved.mesa ? nextAfter(saved.orderId) : null;
-    const text = saved.error ?? saved.notice ?? "Guardado.";
-    setFeedback({
-      kind: saved.error ? "error" : "notice",
-      text,
-      extra: saved.error ? saved.notice : null,
-      orderId: saved.orderId,
-      orderName: saved.orderName,
-      mesa: saved.mesa,
-    });
-    refresh();
-    setOpen(null);
-    if (next) void attend(next, { orderName: saved.orderName, text });
-  }
-
-  /** Una sola entrada de atención. Las acciones específicas ya viven dentro
-   * de la hoja; abrir acuerdos o cierres no toma ni reabre el caso. */
+  /** Una sola entrada de atención: la ficha del pedido en su pestaña «Repro
+   * Lima». Las acciones específicas viven dentro de ella; un acuerdo
+   * programado o un cierre se abren para leer, sin tomar ni reabrir el caso. */
   function rowActions(row: LimaPendingOrder, stacked = false): ReactNode {
     // Sin `repro_lima.manage` no se llama ni se acuerda: la guía se crea desde la ficha.
     if (retriesOnly) return null;
     const size = stacked ? "sm" : "md";
-    return <OpsButton size={size} className="pointer-coarse:h-11" disabled={loadingOrder !== null} onClick={() => void attend(row)}>{loadingOrder === row.orderId ? "Abriendo…" : "Atender"}</OpsButton>;
+    return <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>;
   }
 
   // «Aprobar todos» (entrega 2): los de la bandeja que ya se pueden aprobar
@@ -278,14 +231,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
         <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
-              {feedback.orderName && <p className="font-semibold text-ink-900">{feedback.orderName}</p>}
               <p>{feedback.text}</p>
               {feedback.extra && <p>{feedback.extra}</p>}
-              {feedback.mesa && feedback.orderId && (
-                <OrderLink orderId={feedback.orderId} section="operar" className="inline-flex min-h-8 items-center font-medium text-brand-700 hover:underline">
-                  Abrir la Mesa de ruta del pedido
-                </OrderLink>
-              )}
             </div>
             <button type="button" onClick={() => setFeedback(null)} aria-label="Cerrar el aviso" className="grid size-8 shrink-0 place-items-center rounded-md text-ink-500 hover:bg-white/60 hover:text-ink-900">
               <IconX className="size-4" />
@@ -338,19 +285,6 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
         <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} />
       </section>
 
-      {open && sheetRow && (
-        <ReproLimaSheet
-          key={`${open.row.orderId}:${open.key}`}
-          row={sheetRow}
-          initialMode={open.mode}
-          askReopen={open.askReopen}
-          hasNext={Boolean(nextAfter(open.row.orderId))}
-          onClose={() => { setOpen(null); refresh(); }}
-          onSaved={onSaved}
-          onChanged={refresh}
-          previous={open.previous}
-        />
-      )}
     </div>
   );
 }

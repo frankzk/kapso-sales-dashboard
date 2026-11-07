@@ -381,7 +381,7 @@ describe("el MOM lo documenta (§9.5, §29.6, §29.13)", () => {
   it("cita lo que dicen la hoja, la fila y el escaneo desde la revisión", () => {
     const text = flat(mom);
     const core = read("lib/repro-lima.ts");
-    const sheet = read("components/repro-lima-sheet.tsx");
+    const sheet = read("components/repro-lima-panel.tsx");
     const pairs: Array<[mom: string, src: string, code: string]> = [
       // Un acuerdo para hoy que ya no alcanza, y las tres chapas de la regla 4.
       ["El acuerdo era para hoy (lun 12/10) y ya no alcanza: confírmalo de nuevo", core, "`El acuerdo era para hoy (${day}) y ya no alcanza: confírmalo de nuevo`"],
@@ -550,7 +550,7 @@ describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
       ["como «Sin subetapa»", pure, 'export const TODOS_SIN_SUBETAPA = "Sin subetapa";'],
       ["la ámbar «N con más de 7 días»", todos, '<Badge tone="warn">{`${fmt(s.over7)} con más de 7 días`}</Badge>'],
       ["la crítica «N con más de 30»", todos, '<Badge tone="crit">{`${fmt(s.over30)} con más de 30`}</Badge>'],
-      ["«6 d en la etapa» de la fila", read("components/repro-lima-sheet.tsx"), "`${days} d en la etapa`"],
+      ["«6 d en la etapa» de la fila", read("components/repro-lima-panel.tsx"), "`${days} d en la etapa`"],
       ["«repro-lima: conteo de Todos»", todosAccess, '"repro-lima: conteo de Todos"'],
       ["la fila abre «Por decidir»", todos, 'onOpenList("por_decidir")'],
     ];
