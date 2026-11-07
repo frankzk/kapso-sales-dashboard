@@ -2338,6 +2338,22 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   Kapta cerró sola por su plazo dice «No se pudo llamar: Kapta no recibió los
   avisos de Anura de esta llamada y la cerró sola. Vuelve a intentar.».
 
+  **Sin la clave del teléfono de Kapta (07-11-2026).** Si el anexo no tiene
+  su clave guardada (`sin_telefono`), la ficha llama por la fase 1; pero si
+  la terminal principal del anexo es la «<anexo>-websocket», Anura no la ve
+  conectada y el texto de la fase 1 («Tu teléfono de Anura no está
+  conectado») confunde: lo que falta es la clave. Por eso, con `sin_telefono`
+  (en la ficha) o con un anexo sin clave (en la llamada de prueba), esos dos
+  rechazos de Click2Dial dicen, con el número del anexo, «Falta la clave del
+  teléfono de Kapta»: sin la terminal conectada, «Tu anexo no tiene guardada
+  la clave de su teléfono de Kapta, así que Anura no ve conectada la terminal
+  «<anexo>-websocket». Guárdala en Ajustes › Telefonía Anura. Si usas un
+  teléfono de Anura, ábrelo y espera a que diga «Listo».»; sin terminal
+  principal, «Tu anexo no tiene terminal principal en Anura ni clave del
+  teléfono de Kapta. Marca la «<anexo>-websocket» como principal en Anura y
+  guarda su clave en Ajustes › Telefonía Anura.». Los demás rechazos dicen lo
+  de siempre.
+
   Una llamada viva que la ficha retoma (abierta en otra pestaña, o antes de
   recargar) se muestra con los textos del teléfono de Kapta, no con «cuelga en
   tu teléfono de Anura»: «Esta llamada está abierta en otra pestaña de Kapta o
@@ -2361,7 +2377,8 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   «Anura no hizo sonar el teléfono de Kapta. Revisa en Anura que la terminal
   «<anexo>-websocket» sea la principal del anexo.». El registro dura 60
   segundos: si la pestaña se cierra de golpe sin desregistrar, vence solo.
-  Salir de la ficha o cerrar la pestaña (`pagehide`) cuelga y suelta todo.
+  Cerrar o recargar la pestaña (`pagehide`) cuelga y suelta todo; cerrar la
+  ficha o cambiar de pantalla, no (abajo, «La llamada vive en Kapta»).
 - **No suena para entrantes.** Kapta contesta un solo aviso por llamada, y
   solo mientras esa pestaña espera el de la llamada que acaba de pedir (45
   segundos desde que la pide). Si el aviso llega antes de que el servidor
@@ -2390,10 +2407,59 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   en la llamada, ese cierre por plazo **no corta el audio**: la tarjeta dice
   «Kapta no recibió los avisos de Anura de esta llamada, pero sigues en ella.
   Cuelga desde aquí al terminar.» y la asesora cuelga cuando termina. La
-  tarjeta (en la ficha y en la llamada de prueba de Ajustes) sigue diciendo
+  tarjeta (en la ficha, en la llamada de prueba de Ajustes y la tarjeta
+  global del panel) sigue diciendo
   «En llamada» y muestra el reloj, contado desde que el teléfono de Kapta
   contestó, porque el servidor no sabe cuándo empezó. Solo un fin de Anura (o
   la asesora) corta. «Silenciar» corta el micrófono sin colgar.
+- **La llamada vive en Kapta, no en la ficha (07-11-2026).** Pedido por el
+  owner tras las pruebas reales: «Hazlo lo más lógico posible para no perder
+  conversaciones y llamadas activas en curso». Antes el teléfono de Kapta
+  vivía dentro de la ficha y cerrarla lo colgaba: en producción una llamada
+  se cortó 1 segundo después de conectar porque la asesora tocó el fondo gris
+  de la ficha. Ahora hay **un teléfono por pestaña**, con **un solo** audio de
+  Anura, montado en el panel (`AnuraPhoneProvider`, en el layout de
+  `/dashboard`), y la llamada sigue al cerrar la ficha (fondo gris, X,
+  Escape), al abrir otro pedido o al ir a otra pantalla del panel. Solo la
+  terminan **«Colgar»**, **el otro lado** (la clienta cuelga o Anura da la
+  llamada por terminada), **un fallo**, o **cerrar o recargar la pestaña**
+  (el navegador pregunta antes mientras hay llamada). Cada llamada lleva las
+  acciones del servidor de quien la pidió (la ficha de ese pedido o la
+  llamada de prueba de Ajustes) y el sondeo de 2,5 segundos también vive en
+  el panel, así que el estado y el fin se siguen aunque ninguna ficha esté
+  abierta.
+
+  - **La tarjeta global.** Mientras hay llamada y ninguna pantalla la
+    muestra, el panel enseña su tarjeta en el mismo sitio que la de la ficha
+    (abajo a la derecha, encima de los avisos de «Comprobante por validar»):
+    «Llamada con Anura desde Kapta», el número enmascarado, el pedido y la
+    tienda (o «Llamada de prueba»), el anexo, el estado y el reloj, la ayuda
+    de cada fase, **Silenciar**, **Volumen**, **Colgar** y **«Abrir el
+    pedido»**, que abre la ficha de ese pedido sobre la pantalla en la que
+    está la asesora (sin recargar: recargar cortaría la llamada). Dice «Puedes
+    cerrar la ficha o ir a otra pantalla: la llamada sigue. Se corta si
+    cuelgas, si cuelga la clienta o si cierras o recargas la pestaña.». Si la
+    llamada termina sin que ninguna pantalla la muestre, la tarjeta se queda
+    con cómo terminó (y, si dejó su hecho, «Queda en el historial del
+    pedido. El resultado se registra en su confirmación.») hasta que la
+    cierran.
+  - **Nunca dos tarjetas.** La ficha del pedido de esa llamada la muestra
+    ella (se abre con la tarjeta de la llamada, con Colgar y Silenciar) y la
+    global se esconde mientras esa ficha está abierta; lo mismo la llamada
+    de prueba en Ajustes. La ficha dice lo mismo que la global: la llamada
+    sigue aunque se cierre.
+  - **Otra llamada en marcha.** Kapta hace una llamada a la vez. Con una en
+    marcha, «Llamar con Anura» en la ficha de **otro** pedido no pide otra:
+    la tarjeta global dice «Ya tienes una llamada abierta» y, por ejemplo,
+    «Estás en la llamada del pedido #KP200108. Kapta hace una llamada a la
+    vez: cuélgala antes de llamar a otro cliente.» (o «la llamada de
+    prueba»). En Ajustes, la
+    llamada de prueba espera y lo dice igual.
+  - **Lo que no cambia.** La fase 1 (sin teléfono en Kapta) sigue igual: ahí
+    la llamada nunca dependió de la ficha. La clave SIP sigue solo en
+    memoria mientras dura la llamada, y la tarjeta global solo guarda el
+    número enmascarado, el pedido y la tienda, nunca en el almacenamiento
+    del navegador.
 - **Una sola pestaña.** Solo una pestaña por navegador puede tener el
   teléfono: con dos registradas, Anura manda la llamada a la otra y
   Click2Dial falla a los ~45 s (le pasó a Rentabilify). Kapta usa

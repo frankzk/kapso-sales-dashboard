@@ -9,7 +9,8 @@
 // anura-kapta-phone-settings.tsx), la «Llamada de prueba» y los últimos avisos
 // (30 días, con los teléfonos enmascarados).
 //
-// La «Llamada de prueba» usa el teléfono de Kapta si el anexo tiene clave
+// La «Llamada de prueba» usa el teléfono de Kapta (el del panel,
+// `AnuraPhoneProvider`: salir de Ajustes no la corta) si el anexo tiene clave
 // guardada (y es de quien prueba: la clave solo se entrega a su dueña); si no,
 // Anura hace sonar el teléfono de Anura del anexo, como en la fase 1.
 //
@@ -39,9 +40,12 @@ import {
   ANURA_MAX_POLL_FAILURES,
   ANURA_PANEL_STEPS,
   anuraEndedLine,
-  anuraStartErrorTitle,
 } from "@/lib/anura/ui";
 import {
+  ANURA_PHONE_KEEPS_GOING,
+  anuraFase1StartError,
+  anuraPhoneBusyText,
+  anuraPhoneCallIsFor,
   anuraPhoneCanMute,
   anuraPhoneEndedLine,
   anuraPhoneErrorTitle,
@@ -56,7 +60,7 @@ import {
   talkSecondsFrom,
 } from "@/lib/anura/phone-ui";
 import { formatTalkTime } from "@/lib/browser-call";
-import { AnuraPhoneAudio, AnuraVolumeControl, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
+import { AnuraVolumeControl, useAnuraKaptaPhone, useAnuraPhoneClaim, type AnuraPhoneServer } from "@/components/anura-phone";
 import { KaptaPhoneCard } from "@/components/anura-kapta-phone-settings";
 import { IconCopy, IconMic, IconMicOff, IconPhone } from "@/components/icons";
 
@@ -424,7 +428,8 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
   const [extension, setExtension] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<{ title: string; text: string } | null>(null);
-  const [call, setCall] = useState<AnuraCallLive | null>(null);
+  // La llamada que sigue esta tarjeta por su cuenta (la de la fase 1).
+  const [localCall, setLocalCall] = useState<AnuraCallLive | null>(null);
   const [pollTrouble, setPollTrouble] = useState(false);
   // Esta prueba va con el teléfono de Kapta (Colgar y Silenciar en la tarjeta).
   const [viaKapta, setViaKapta] = useState(false);
@@ -441,26 +446,30 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
     }),
     [storeId, phone, extension],
   );
-  const kapta = useAnuraKaptaPhone(server);
-  const snap = kapta.snapshot;
-
-  // El teléfono de Kapta ya tiene la llamada del servidor: se sigue con el sondeo.
-  const phoneCallId = snap?.callId ?? null;
+  // El teléfono de Kapta de la pestaña (`AnuraPhoneProvider`): salir de Ajustes
+  // no corta la prueba; la sigue la tarjeta global del panel.
+  const kapta = useAnuraKaptaPhone();
+  const owned = anuraPhoneCallIsFor(kapta.session?.meta, { origin: "prueba" }) ? kapta.session : null;
+  useAnuraPhoneClaim(owned?.seq ?? null);
+  const snap = owned ? kapta.snapshot : null;
+  const kaptaBusy = owned !== null && kapta.busy;
+  // Al volver a Ajustes con la prueba en marcha (o que terminó fuera), se muestra aquí.
+  const ownedSeq = owned?.seq ?? null;
+  const ownedShows = owned !== null && (kapta.busy || owned.endedUnseen);
   useEffect(() => {
-    if (!phoneCallId) return;
-    let stopped = false;
-    void getAnuraCallStatus(phoneCallId)
-      .then((status) => {
-        if (!stopped && status.ok) setCall((prev) => (prev?.id === phoneCallId ? prev : status.call));
-      })
-      .catch(() => undefined);
-    return () => {
-      stopped = true;
-    };
-  }, [phoneCallId]);
+    if (ownedSeq !== null && ownedShows) setViaKapta(true);
+    // Solo al tomar la llamada.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownedSeq]);
 
-  const callId = call?.id ?? null;
-  const active = call?.active ?? false;
+  // La del teléfono de Kapta la sondea el panel; esta tarjeta, solo la suya.
+  const phoneCallId = kapta.snapshot?.callId ?? null;
+  const local = localCall && localCall.id !== phoneCallId ? localCall : null;
+  const call = local ?? (viaKapta && owned && snap?.callId ? kapta.serverCall : null);
+  const setCall = setLocalCall;
+
+  const callId = local?.id ?? null;
+  const active = local?.active ?? false;
   useEffect(() => {
     if (!callId || !active) return;
     let stopped = false;
@@ -494,16 +503,11 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [callId, active]);
+  }, [callId, active, setCall]);
 
-  // Anura dio la llamada por terminada: el teléfono de Kapta cuelga y se
-  // desconecta; no si solo la cerró el plazo del servidor con Kapta en la llamada.
-  const phoneBusy = kapta.busy;
-  const { hangUp } = kapta;
+  // Si Anura da la llamada por terminada, el panel cuelga el teléfono de Kapta
+  // (no si solo la cerró el plazo del servidor con Kapta en la llamada).
   const outlives = anuraPhoneOutlivesServer(snap, call);
-  useEffect(() => {
-    if (callId && !active && phoneBusy && !outlives) hangUp();
-  }, [callId, active, phoneBusy, outlives, hangUp]);
 
   // Como en la ficha: si el servidor la cerró por su plazo y Kapta sigue en la
   // llamada, el reloj corre desde que el teléfono de Kapta contestó.
@@ -516,6 +520,10 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
     return () => window.clearInterval(id);
   }, [talking]);
 
+  // ¿Tiene el anexo la clave del teléfono de Kapta? Sin ella, la fase 1 dice qué falta.
+  const selected = activeExtensions.find((e) => e.extension === extension) ?? null;
+  const kaptaKeyMissing = !data.sipMigrationMissing && !selected?.phone.hasPassword;
+
   /** Como en la fase 1: Anura hace sonar el teléfono de Anura del anexo. */
   async function startFase1() {
     const res = await startAnuraTestCall(storeId, phone, extension || null);
@@ -524,7 +532,7 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
       if (status?.ok) setCall(status.call);
       else setError({ title: "Llamada pedida", text: `Anura va a hacer sonar el anexo ${res.extension} y luego marcará al ${res.toMasked}.` });
     } else {
-      setError({ title: anuraStartErrorTitle(res.code), text: res.error });
+      setError(anuraFase1StartError(res, { kaptaKeyMissing, extension: selected?.extension ?? null }));
       // Ya hay una viva, o Anura no respondió y puede que llame igual: se sigue.
       if (res.activeCallId) {
         const status = await getAnuraCallStatus(res.activeCallId).catch(() => null);
@@ -534,6 +542,11 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
   }
 
   async function start() {
+    // El teléfono de Kapta ya está en otra llamada (de un pedido): no se pide otra.
+    if (kapta.busy) {
+      if (!owned) kapta.notifyBusy();
+      return;
+    }
     setStarting(true);
     setError(null);
     setPollTrouble(false);
@@ -546,7 +559,7 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
       }
       // Con el teléfono de Kapta: micrófono → conectar → pedir → contestar el aviso propio.
       setViaKapta(true);
-      const result = await kapta.call();
+      const result = await kapta.call(server, { origin: "prueba", orderId: null, orderLabel: null, storeLabel: null });
       if (result.phase !== "error" || !result.error) return;
       if (way === "kapta_o_fase1" && anuraTestFallsBack(result.error)) {
         // «Mi anexo» no tiene teléfono en Kapta: como en la fase 1.
@@ -569,9 +582,12 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
   }
 
   const busy = starting || active || kapta.busy;
+  // El teléfono de Kapta está en la llamada de un pedido: la prueba espera.
+  const busyElsewhere = kapta.busy && !owned;
+  const trouble = local ? pollTrouble : call ? kapta.pollTrouble : false;
   const statusLine = call ? (viaKapta ? anuraPhoneStatusLabel(snap, call) : call.active ? call.statusLabel : anuraEndedLine(call)) : null;
   const endedLine = call && !call.active && !outlives ? (viaKapta ? anuraPhoneEndedLine(call) : anuraEndedLine(call)) : null;
-  const phoneLine = viaKapta && kapta.busy && !call ? anuraPhoneStatusLabel(snap, null) : null;
+  const phoneLine = viaKapta && kaptaBusy && !call ? anuraPhoneStatusLabel(snap, null) : null;
   const hint = viaKapta ? anuraPhoneHint(snap, call) : call?.active ? call.hint : null;
 
   return (
@@ -620,9 +636,10 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
           {starting && !viaKapta ? "Pidiendo…" : busy ? "En llamada…" : "Llamar"}
         </OpsButton>
       </form>
-      {(!data.configured || error || call || pollTrouble || phoneLine) && (
+      {(!data.configured || error || call || trouble || phoneLine || busyElsewhere) && (
         <div className={cn(ROW, "space-y-2 text-sm")}>
           {!data.configured && <p className={HELP}>Sin token de Click2Dial no se puede probar.</p>}
+          {busyElsewhere && <p className={HELP}>{anuraPhoneBusyText(kapta.session?.meta)}</p>}
           {error && (
             <div>
               <p className="font-medium text-crit-fg">{error.title}</p>
@@ -644,7 +661,8 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
               {hint && <p className={cn(HELP, "mt-0.5")}>{hint}</p>}
             </div>
           )}
-          {viaKapta && kapta.busy && (
+          {viaKapta && kaptaBusy && <p className={HELP}>{ANURA_PHONE_KEEPS_GOING}</p>}
+          {viaKapta && kaptaBusy && (
             <div className="flex flex-wrap gap-2">
               {anuraPhoneCanMute(snap) && (
                 <OpsButton size="sm" onClick={() => kapta.setMuted(!snap?.muted)} aria-pressed={Boolean(snap?.muted)}>
@@ -658,15 +676,14 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
               </OpsButton>
             </div>
           )}
-          {viaKapta && kapta.busy && <AnuraVolumeControl volume={kapta.volume} onChange={kapta.setVolume} />}
-          {pollTrouble && call?.active && (
+          {viaKapta && kaptaBusy && <AnuraVolumeControl volume={kapta.volume} onChange={kapta.setVolume} />}
+          {trouble && call?.active && (
             <p className="text-xs text-warn-fg">
               Kapta dejó de recibir el estado de la llamada. La llamada sigue en Anura; mira «Últimos avisos de Anura» al terminar.
             </p>
           )}
         </div>
       )}
-      <AnuraPhoneAudio audioRef={kapta.audioRef} />
     </div>
   );
 }

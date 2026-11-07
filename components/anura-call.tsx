@@ -16,8 +16,16 @@
 //     `clave_rechazada` / `dominio_no_reconocido` / `sin_dominio`: no se llama
 //     y se dice por qué.
 //
-// En las dos, la ficha sigue el estado con el mismo sondeo corto mientras la
-// llamada está viva (lo que dice si la clienta contestó llega por ahí).
+// En las dos, el estado llega con el mismo sondeo corto mientras la llamada
+// está viva (lo que dice si la clienta contestó llega por ahí).
+//
+// La llamada del teléfono de Kapta NO vive en la ficha (07-11-2026): el
+// teléfono es uno por pestaña, en el panel (`AnuraPhoneProvider`,
+// components/anura-phone.tsx). Cerrar la ficha, abrir otro pedido o ir a otra
+// pantalla no la corta; entonces la sigue la tarjeta global del panel. Si la
+// ficha que se abre es la del pedido de esa llamada, la muestra ella (y la
+// global se esconde). Con una llamada en marcha de otro pedido, «Llamar con
+// Anura» no pide otra: la tarjeta global lo dice.
 //
 // Como «Llamar desde Kapta» (MOM §8.5): la llamada es un HECHO. Al terminar
 // queda en el historial del pedido («Llamada con Anura»), y el resultado se
@@ -41,13 +49,16 @@ import {
   startAnuraCall,
 } from "@/app/dashboard/pedidos/anura-actions";
 import type { AnuraCallLive, AnuraKaptaPhoneView, AnuraOrderCall, AnuraOrderPanel } from "@/lib/anura/server";
-import { ANURA_POLL_INTERVAL_MS, ANURA_STATUS_HINT, ANURA_STATUS_LABEL } from "@/lib/anura/events";
-import { ANURA_MAX_POLL_FAILURES, anuraEndedFollowUp, anuraEndedLine, anuraRecordingNote, anuraStartErrorTitle } from "@/lib/anura/ui";
+import { ANURA_POLL_INTERVAL_MS, ANURA_STATUS_HINT } from "@/lib/anura/events";
+import { ANURA_MAX_POLL_FAILURES, anuraEndedFollowUp, anuraEndedLine, anuraRecordingNote } from "@/lib/anura/ui";
 import { ANURA_KAPTA_PHONE_TEXT } from "@/lib/anura/sip";
 import {
   ANURA_PHONE_BLOCKED_TITLE,
+  ANURA_PHONE_KEEPS_GOING,
   ANURA_RECORDING_MAX_RETRIES,
   isAnuraPhoneBlocked,
+  anuraFase1StartError,
+  anuraPhoneCallIsFor,
   anuraPhoneCanMute,
   anuraPhoneEndedLine,
   anuraPhoneErrorTitle,
@@ -56,14 +67,16 @@ import {
   anuraPhoneModeOf,
   anuraPhoneNeedsPanelReload,
   anuraPhoneOutlivesServer,
+  anuraPhoneStartDecision,
   anuraPhoneStatusLabel,
   anuraRecordingSrc,
+  anuraRequestedCall,
   anuraTalkClock,
   talkSecondsFrom,
 } from "@/lib/anura/phone-ui";
 import { masterOrderHref } from "@/lib/order-drawer-href";
 import { formatTalkTime } from "@/lib/browser-call";
-import { AnuraPhoneAudio, AnuraVolumeControl, useAnuraKaptaPhone, type AnuraPhoneServer } from "@/components/anura-phone";
+import { AnuraVolumeControl, useAnuraKaptaPhone, useAnuraPhoneClaim, type AnuraPhoneServer } from "@/components/anura-phone";
 import { IconMic, IconMicOff, IconPhone } from "@/components/icons";
 import { OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
@@ -116,33 +129,17 @@ interface StartError {
   text: string;
 }
 
-/** La llamada recién pedida, hasta que el primer sondeo traiga la de verdad. */
+/** La llamada recién pedida en la fase 1, hasta que el primer sondeo traiga la de verdad. */
 function requestedCall(input: { id: string; orderId: string; extension: string | null; toMasked: string | null; hint: string | null }): AnuraCallLive {
-  return {
-    id: input.id,
-    mode: "pedido",
-    orderId: input.orderId,
-    inHistory: false,
-    status: "solicitada",
-    statusLabel: ANURA_STATUS_LABEL.solicitada,
-    hint: input.hint,
-    active: true,
-    extension: input.extension,
-    toMasked: input.toMasked ?? "",
-    billSeconds: null,
-    failureReason: null,
-    requestedAt: new Date().toISOString(),
-    answeredAt: null,
-    endedAt: null,
-    recordingStatus: "sin_grabacion",
-    closedByTimeout: false,
-  };
+  return anuraRequestedCall({ ...input, mode: "pedido" });
 }
 
 const PULSING_PHASES = new Set(["credenciales", "microfono", "conectando", "pidiendo", "esperando_anura"]);
 
 export function AnuraCallButton({
   orderId,
+  orderName,
+  storeName,
   extension,
   resume,
   kaptaPhone,
@@ -151,6 +148,10 @@ export function AnuraCallButton({
   onGoToDesk,
 }: {
   orderId: string;
+  /** «#KP123456»: lo dice la tarjeta global si se cierra la ficha durante la llamada. */
+  orderName?: string | null;
+  /** La tienda del pedido, para la misma tarjeta. */
+  storeName?: string | null;
   /** El anexo de quien mira (para decirlo en el aviso). */
   extension: string | null;
   /** La llamada viva de quien mira, para retomar el sondeo al abrir la ficha. */
@@ -164,7 +165,9 @@ export function AnuraCallButton({
   /** Lleva a la mesa de confirmación (cambia de pestaña si hace falta). */
   onGoToDesk: () => void;
 }) {
-  const [call, setCall] = useState<AnuraCallLive | null>(null);
+  // La llamada que sigue ESTA ficha por su cuenta: la de la fase 1, o una viva
+  // retomada al abrir (de otra pestaña o de antes de recargar).
+  const [localCall, setLocalCall] = useState<AnuraCallLive | null>(null);
   const [open, setOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<StartError | null>(null);
@@ -197,38 +200,55 @@ export function AnuraCallButton({
     }),
     [orderId],
   );
-  const phone = useAnuraKaptaPhone(server);
-  const snap = phone.snapshot;
+  // El teléfono de Kapta es UNO por pestaña y vive en el panel
+  // (`AnuraPhoneProvider`): cerrar la ficha ya no cuelga.
+  const phone = useAnuraKaptaPhone();
+  // La llamada del teléfono es de ESTE pedido: la ficha la muestra y la
+  // tarjeta global se esconde mientras la ficha esté abierta.
+  const owned = anuraPhoneCallIsFor(phone.session?.meta, { origin: "pedido", orderId }) ? phone.session : null;
+  useAnuraPhoneClaim(owned?.seq ?? null);
+  const snap = owned ? phone.snapshot : null;
+  const phoneCallId = phone.snapshot?.callId ?? null;
+  const kaptaBusy = owned !== null && phone.busy;
+
+  // Al abrir la ficha del pedido que tiene la llamada en marcha (o que terminó
+  // con la ficha cerrada), la tarjeta de la ficha la muestra.
+  const ownedSeq = owned?.seq ?? null;
+  const ownedShows = owned !== null && (phone.busy || owned.endedUnseen);
+  useEffect(() => {
+    if (ownedSeq === null || !ownedShows) return;
+    setViaKapta(true);
+    setOpen(true);
+    // Solo al tomar la llamada: después manda lo que haga la asesora.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownedSeq]);
 
   // Al abrir la ficha con una llamada viva (de este u otro pedido), se retoma.
+  // La que tiene el teléfono de esta pestaña no: esa la muestra la ficha de su
+  // pedido o la tarjeta global.
   const resumedId = useRef<string | null>(null);
   // Con el teléfono de Kapta en el anexo, se muestra con sus textos: no hay
   // «teléfono de Anura» donde colgar (se cuelga en la pestaña que la abrió).
   useEffect(() => {
-    if (!resume?.active || resumedId.current === resume.id) return;
+    if (!resume?.active || resumedId.current === resume.id || resume.id === phoneCallId) return;
     resumedId.current = resume.id;
-    setCall((prev) => prev ?? resume);
+    setLocalCall((prev) => prev ?? resume);
     setViaKapta(way !== "fase1");
     setOpen(true);
-  }, [resume, way]);
+  }, [resume, way, phoneCallId]);
 
-  // El teléfono de Kapta ya tiene la llamada del servidor: empieza el sondeo.
-  const phoneCallId = snap?.callId ?? null;
-  const phoneToMasked = snap?.toMasked ?? null;
-  const phoneExtension = snap?.extension ?? null;
-  useEffect(() => {
-    if (!phoneCallId) return;
-    setCall((prev) =>
-      prev?.id === phoneCallId ? prev : requestedCall({ id: phoneCallId, orderId, extension: phoneExtension, toMasked: phoneToMasked, hint: null }),
-    );
-  }, [phoneCallId, phoneToMasked, phoneExtension, orderId]);
+  // Lo que muestra la tarjeta: la llamada propia de la ficha, o la del
+  // teléfono de Kapta si es de este pedido.
+  const local = localCall && localCall.id !== phoneCallId ? localCall : null;
+  const call = local ?? (viaKapta && owned && phoneCallId ? phone.serverCall : null);
 
-  const callId = call?.id ?? null;
-  const active = call?.active ?? false;
+  const callId = local?.id ?? null;
+  const active = local?.active ?? false;
 
-  // El sondeo: cada 2,5 s mientras la llamada está viva; se detiene al terminar
-  // o al cerrar la ficha. Cada sondeo también suelta en el servidor la llamada
-  // que Anura nunca avisó (60 s).
+  // El sondeo de la llamada propia: cada 2,5 s mientras está viva; se detiene
+  // al terminar o al cerrar la ficha. Cada sondeo también suelta en el servidor
+  // la llamada que Anura nunca avisó (60 s). La del teléfono de Kapta la sondea
+  // el panel (`AnuraPhoneProvider`), con la ficha abierta o no.
   useEffect(() => {
     if (!callId || !active) return;
     let stopped = false;
@@ -243,9 +263,8 @@ export function AnuraCallButton({
         }
         failures.current = 0;
         setPollTrouble(false);
-        setCall(res.call);
+        setLocalCall(res.call);
         if (!res.call.active) {
-          setHasDesk(Boolean(document.querySelector(CONFIRMATION_DESK)));
           onEndedRef.current();
           // Este efecto se limpia ahora (la llamada ya no está viva): la segunda
           // recarga depende solo de que la ficha siga abierta.
@@ -271,15 +290,27 @@ export function AnuraCallButton({
     };
   }, [callId, active]);
 
-  // Anura dio la llamada por terminada: el teléfono de Kapta cuelga y se
-  // desconecta. Si la cerró solo el plazo del servidor (no llegó ningún aviso
-  // de Anura) y Kapta ya está en la llamada, NO se corta: la asesora cuelga.
-  const phoneBusy = phone.busy;
-  const { hangUp } = phone;
-  const outlives = anuraPhoneOutlivesServer(snap, call);
+  // La llamada del teléfono de Kapta terminó con la ficha abierta: recargar el
+  // historial y la tarjeta, como con el sondeo propio.
+  const ownedCall = !local && owned && phoneCallId ? phone.serverCall : null;
+  const seenLive = useRef<string | null>(null);
   useEffect(() => {
-    if (callId && !active && phoneBusy && !outlives) hangUp();
-  }, [callId, active, phoneBusy, outlives, hangUp]);
+    if (!ownedCall) return;
+    if (ownedCall.active) {
+      seenLive.current = ownedCall.id;
+      return;
+    }
+    if (seenLive.current !== ownedCall.id) return;
+    seenLive.current = null;
+    onEndedRef.current();
+    window.setTimeout(() => {
+      if (mounted.current) onEndedRef.current();
+    }, ENDED_RELOAD_AGAIN_MS);
+  }, [ownedCall?.id, ownedCall?.active]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // El plazo del servidor sin avisos de Anura no corta a Kapta (`anuraPhoneOutlivesServer`):
+  // de eso, y de colgar cuando Anura da la llamada por terminada, se encarga el panel.
+  const outlives = anuraPhoneOutlivesServer(snap, call);
 
   // El reloj, solo mientras se habla (con el teléfono de Kapta, hasta colgar).
   // Si el servidor la cerró por su plazo y Kapta sigue en la llamada, corre
@@ -293,23 +324,30 @@ export function AnuraCallButton({
     return () => window.clearInterval(id);
   }, [talking]);
 
+  const ended = call && !call.active && !outlives ? call : null;
+  const endedId = ended?.id ?? null;
+  useEffect(() => {
+    if (endedId) setHasDesk(Boolean(document.querySelector(CONFIRMATION_DESK)));
+  }, [endedId]);
+
   /** Sigue la llamada viva que devolvió el servidor (ya había una, o Anura no respondió). */
   async function follow(activeCallId: string | undefined) {
     if (!activeCallId) {
-      setCall(null);
+      setLocalCall(null);
       return;
     }
     const status = await getAnuraCallStatus(activeCallId).catch(() => null);
     if (!mounted.current) return;
-    if (status?.ok) setCall(status.call);
-    else setCall(null);
+    if (status?.ok) setLocalCall(status.call);
+    else setLocalCall(null);
   }
 
   /** Con el teléfono de Kapta: micrófono → conectar → pedir → contestar el aviso propio. */
   async function startWithKapta() {
     setViaKapta(true);
-    setCall(null);
-    const result = await phone.call();
+    setLocalCall(null);
+    // Sin esperas antes: `phone.call` desbloquea el audio dentro del clic.
+    const result = await phone.call(server, { origin: "pedido", orderId, orderLabel: orderName ?? null, storeLabel: storeName ?? null });
     if (!mounted.current || result.phase !== "error" || !result.error) return;
     setError({ title: anuraPhoneErrorTitle(result.error), text: result.error.message });
     if (anuraPhoneNeedsPanelReload(result.error)) onPhoneChangedRef.current?.();
@@ -317,7 +355,20 @@ export function AnuraCallButton({
   }
 
   async function start() {
-    if (call?.active || phone.busy) {
+    // El teléfono de Kapta ya está en una llamada: la de este pedido se
+    // enseña; si es de otro pedido (o la prueba de Ajustes), no se pide otra
+    // y la tarjeta de esa llamada lo dice.
+    const decision = anuraPhoneStartDecision({ phoneBusy: phone.busy, isThisCall: owned !== null });
+    if (decision === "mostrar") {
+      setViaKapta(true);
+      setOpen(true);
+      return;
+    }
+    if (decision === "ocupado") {
+      phone.notifyBusy();
+      return;
+    }
+    if (local?.active) {
       setOpen(true);
       return;
     }
@@ -330,7 +381,7 @@ export function AnuraCallButton({
       // Con la «-websocket» como principal, la fase 1 haría sonar una terminal
       // sin conectar: no se intenta nada.
       setViaKapta(true);
-      setCall(null);
+      setLocalCall(null);
       setError({ title: ANURA_PHONE_BLOCKED_TITLE[kaptaPhone.status], text: kaptaPhone.message ?? ANURA_KAPTA_PHONE_TEXT[kaptaPhone.status] });
       return;
     }
@@ -344,49 +395,55 @@ export function AnuraCallButton({
     try {
       const res = await startAnuraCall(orderId);
       if (res.ok) {
-        setCall(
+        setLocalCall(
           requestedCall({ id: res.callId, orderId, extension: res.extension, toMasked: res.toMasked, hint: ANURA_STATUS_HINT.solicitada ?? null }),
         );
         return;
       }
-      setError({ title: anuraStartErrorTitle(res.code), text: res.error });
+      // Sin clave del teléfono de Kapta y con la «-websocket» como principal,
+      // «tu teléfono de Anura no está conectado» confunde: se dice qué falta.
+      setError(anuraFase1StartError(res, { kaptaKeyMissing: kaptaPhone?.status === "sin_telefono", extension }));
       // Ya hay una viva, o Anura no respondió y puede que llame igual: se sigue
       // esa en vez de dejar a la asesora a ciegas.
       if (res.activeCallId) {
         const status = await getAnuraCallStatus(res.activeCallId).catch(() => null);
-        if (status?.ok) setCall(status.call);
-        else setCall(null);
+        if (status?.ok) setLocalCall(status.call);
+        else setLocalCall(null);
       } else {
-        setCall(null);
+        setLocalCall(null);
       }
     } catch (e) {
       setError({ title: "No se pudo llamar", text: (e as Error).message || "Vuelve a intentar." });
-      setCall(null);
+      setLocalCall(null);
     } finally {
       setStarting(false);
     }
   }
 
-  const ended = call && !call.active && !outlives ? call : null;
   const failed = ended?.status === "fallida";
   // Lo que se ofrece al terminar depende de si dejó su hecho y de qué pedido es.
   const followUp = ended ? anuraEndedFollowUp(ended, orderId) : { inHistory: false, otherOrderId: null };
   const otherOrder = call?.mode === "pedido" && call.orderId && call.orderId !== orderId ? call.orderId : null;
-  const live = Boolean(call?.active) || phone.busy;
+  const live = Boolean(call?.active) || kaptaBusy;
+  // El teléfono de Kapta está en una llamada de otro pedido (o la prueba de Ajustes).
+  const busyElsewhere = phone.busy && owned === null;
   const phoneFailed = viaKapta && snap?.phase === "error";
+  // Un fallo del teléfono que pasó con la ficha cerrada también se dice al volver.
+  const shownError = error ?? (phoneFailed && snap?.error ? { title: anuraPhoneErrorTitle(snap.error), text: snap.error.message } : null);
+  const trouble = local ? pollTrouble : call ? phone.pollTrouble : false;
   const tone =
     call?.status === "en_curso" || ended?.status === "contestada" || outlives
       ? "text-ok-fg"
-      : failed || (error && !call) || (phoneFailed && !call?.active)
+      : failed || (shownError && !call) || (phoneFailed && !call?.active)
         ? "text-crit-fg"
         : "text-ink-500";
   const statusLabel = viaKapta
-    ? anuraPhoneStatusLabel(snap, call) || (error && !call ? "No se pudo llamar" : "")
+    ? anuraPhoneStatusLabel(snap, call) || (shownError && !call ? "No se pudo llamar" : "")
     : starting
       ? "Pidiendo la llamada…"
       : call
         ? call.statusLabel
-        : error
+        : shownError
           ? "No se pudo llamar"
           : "";
   const pulsing = viaKapta
@@ -429,19 +486,17 @@ export function AnuraCallButton({
       {!viaKapta && call?.active && (
         <p className="mt-1 text-xs text-ink-600">Para colgar, cuelga en tu teléfono de Anura. Puedes ocultar este aviso: la llamada sigue.</p>
       )}
-      {viaKapta && phone.busy && (
-        <p className="mt-1 text-xs text-ink-600">Si cierras la ficha o la pestaña, la llamada se corta. Puedes ocultar este aviso.</p>
-      )}
-      {viaKapta && phone.busy && <AnuraVolumeControl volume={phone.volume} onChange={phone.setVolume} />}
+      {viaKapta && kaptaBusy && <p className="mt-1 text-xs text-ink-600">{ANURA_PHONE_KEEPS_GOING}</p>}
+      {viaKapta && kaptaBusy && <AnuraVolumeControl volume={phone.volume} onChange={phone.setVolume} />}
 
-      {error && (
+      {shownError && (
         <div className="mt-3 text-sm">
-          <p className="font-medium text-crit-fg">{error.title}</p>
-          <p className="mt-0.5 text-ink-700">{error.text}</p>
+          <p className="font-medium text-crit-fg">{shownError.title}</p>
+          <p className="mt-0.5 text-ink-700">{shownError.text}</p>
         </div>
       )}
 
-      {pollTrouble && call?.active && (
+      {trouble && call?.active && (
         <p className="mt-3 text-xs text-warn-fg">
           Kapta dejó de recibir el estado de la llamada. La llamada sigue en Anura; al terminar, recarga la ficha para verla en el historial.
         </p>
@@ -466,7 +521,7 @@ export function AnuraCallButton({
       )}
 
       <div className="mt-4 flex flex-wrap justify-end gap-2">
-        {viaKapta && phone.busy && (
+        {viaKapta && kaptaBusy && (
           <>
             {anuraPhoneCanMute(snap) && (
               <OpsButton size="sm" onClick={() => phone.setMuted(!snap?.muted)} aria-pressed={Boolean(snap?.muted)}>
@@ -508,11 +563,13 @@ export function AnuraCallButton({
         title={
           live
             ? "Ver la llamada con Anura en curso"
-            : way === "kapta"
-              ? "Llamar con Anura desde Kapta: hablas con tus audífonos y Anura marca a la clienta"
-              : way === "bloqueado"
-                ? "Llamar con Anura desde Kapta: ahora no se puede; al tocar, Kapta dice por qué"
-                : "Llamar con Anura: suena tu teléfono de Anura y, al contestar, Anura marca a la clienta"
+            : busyElsewhere
+              ? "Ya tienes una llamada con Anura en curso: cuélgala antes de llamar a este cliente"
+              : way === "kapta"
+                ? "Llamar con Anura desde Kapta: hablas con tus audífonos y Anura marca a la clienta"
+                : way === "bloqueado"
+                  ? "Llamar con Anura desde Kapta: ahora no se puede; al tocar, Kapta dice por qué"
+                  : "Llamar con Anura: suena tu teléfono de Anura y, al contestar, Anura marca a la clienta"
         }
         aria-label={live ? "Ver la llamada con Anura en curso" : "Llamar al cliente con Anura"}
         className="pointer-coarse:h-11 pointer-coarse:min-w-11"
@@ -520,8 +577,7 @@ export function AnuraCallButton({
         <IconPhone aria-hidden className={live ? "text-ok-fg" : "text-ink-500"} />
         <span className="hidden sm:inline">{live ? "Llamada en curso" : "Llamar con Anura"}</span>
       </OpsButton>
-      {/* El audio de Anura (teléfono de Kapta). Fuera del aviso: existe antes de contestar. */}
-      <AnuraPhoneAudio audioRef={phone.audioRef} />
+      {/* El audio de Anura ya no va aquí: es UNO por pestaña, en AnuraPhoneProvider. */}
       {card && typeof document !== "undefined" ? createPortal(card, document.body) : null}
     </>
   );

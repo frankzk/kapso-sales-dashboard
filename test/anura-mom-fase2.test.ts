@@ -215,7 +215,9 @@ describe("solo salidas: se conecta al llamar y no suena para entrantes", () => {
     }
     expect(f2).toContain(`Si Anura no hace sonar el teléfono de Kapta en 45 segundos, también: «${ANURA_PHONE_TEXT.anura_no_llamo}».`);
     expect(f2).toContain("El registro dura 60 segundos: si la pestaña se cierra de golpe sin desregistrar, vence solo.");
-    expect(f2).toContain("Salir de la ficha o cerrar la pestaña (`pagehide`) cuelga y suelta todo.");
+    // Desde el 07-11-2026 solo cerrar o recargar la pestaña; la ficha no (test/anura-phone-provider.test.ts).
+    expect(f2).toContain("Cerrar o recargar la pestaña (`pagehide`) cuelga y suelta todo; cerrar la ficha o cambiar de pantalla, no");
+    expect(f2).not.toContain("Salir de la ficha o cerrar la pestaña (`pagehide`) cuelga y suelta todo.");
     // El UA no se registra solo: Kapta lo pide al conectar.
     expect(anuraJsSipConfig(CREDS, {})).toMatchObject({ register: false, register_expires: 60 });
   });
@@ -285,7 +287,7 @@ describe("solo salidas: se conecta al llamar y no suena para entrantes", () => {
   it("el plazo del servidor no corta el audio de una llamada en la que Kapta ya está", () => {
     const hint = anuraPhoneHint({ phase: "en_llamada" }, { status: "fallida", active: false, closedByTimeout: true });
     expect(f2).toContain(`ese cierre por plazo **no corta el audio**: la tarjeta dice «${hint}»`);
-    expect(read("components/anura-call.tsx")).toContain("if (callId && !active && phoneBusy && !outlives) hangUp();");
+    expect(read("components/anura-phone.tsx")).toContain("if (callId && !active && phoneBusy && !outlives) hangUp();");
   });
 
   it("Kapta sí cuelga; si Anura ya aceptó, la fila sigue la fase 1", () => {
@@ -411,7 +413,7 @@ describe("Probar y guardar, y clave rechazada sin reintento", () => {
   it("cerrada por plazo con Kapta en la llamada: «En llamada» y el reloj desde que el teléfono contestó", async () => {
     const { anuraTalkClock } = await import("@/lib/anura/phone-ui");
     expect(f2).toContain(
-      "La tarjeta (en la ficha y en la llamada de prueba de Ajustes) sigue diciendo «En llamada» y muestra el reloj, contado desde que el teléfono de Kapta contestó, porque el servidor no sabe cuándo empezó.",
+      "La tarjeta (en la ficha, en la llamada de prueba de Ajustes y la tarjeta global del panel) sigue diciendo «En llamada» y muestra el reloj, contado desde que el teléfono de Kapta contestó, porque el servidor no sabe cuándo empezó.",
     );
     const closed = { status: "fallida" as const, active: false, answeredAt: null, closedByTimeout: true, statusLabel: "No se pudo llamar" };
     expect(anuraPhoneStatusLabel({ phase: "en_llamada", toMasked: null }, closed)).toBe("En llamada");

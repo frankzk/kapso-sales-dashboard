@@ -1585,11 +1585,14 @@ export function OrderDrawer({
                       anexo tiene clave guardada (fase 2, solo salidas); si no,
                       suena el teléfono de Anura de la asesora (fase 1). Solo
                       con el token, un anexo activo de quien mira y un celular
-                      peruano. */}
+                      peruano. El teléfono de Kapta vive en el panel
+                      (AnuraPhoneProvider): cerrar esta ficha no corta. */}
                   {anura.panel?.enabled && canEdit && (
                     <AnuraCallButton
                       key={orderId}
                       orderId={orderId}
+                      orderName={detail.row.order_name}
+                      storeName={storeName(detail.row.store_id)}
                       extension={anura.panel.extension}
                       resume={anura.panel.activeCall}
                       kaptaPhone={anura.panel.kaptaPhone}
