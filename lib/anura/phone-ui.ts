@@ -499,3 +499,20 @@ export const ANURA_TEST_FALLBACK_CODES: readonly AnuraPhoneCredentialsErrorCode[
 export function anuraTestFallsBack(error: AnuraPhoneError | null | undefined): boolean {
   return error?.code === "credenciales" && !!error.credentialsCode && ANURA_TEST_FALLBACK_CODES.includes(error.credentialsCode);
 }
+
+// ---------------------------------------------------------------------------
+// Volumen de lo que se oye (07-11-2026: la línea llega bajita). Ganancia del
+// amplificador de Web Audio: 1 = tal cual, hasta 4×. Por defecto 2,5×.
+// ---------------------------------------------------------------------------
+
+export const ANURA_VOLUME_MIN = 1;
+export const ANURA_VOLUME_MAX = 4;
+export const ANURA_VOLUME_STEP = 0.25;
+export const ANURA_VOLUME_DEFAULT = 2.5;
+
+/** Un volumen válido (1–4, en pasos de 0,25); lo que no es número vuelve al de defecto. */
+export function clampAnuraVolume(v: number): number {
+  if (!Number.isFinite(v)) return ANURA_VOLUME_DEFAULT;
+  const stepped = Math.round(v / ANURA_VOLUME_STEP) * ANURA_VOLUME_STEP;
+  return Math.min(ANURA_VOLUME_MAX, Math.max(ANURA_VOLUME_MIN, stepped));
+}

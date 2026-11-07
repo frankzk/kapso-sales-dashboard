@@ -41,3 +41,15 @@ describe("rasgos del SDP de Anura (diagnóstico)", () => {
     expect(sdpTraits(undefined)).toEqual({ sdp: false });
   });
 });
+
+import { ANURA_VOLUME_DEFAULT, clampAnuraVolume } from "@/lib/anura/phone-ui";
+
+describe("volumen de la llamada (amplificador)", () => {
+  it("queda entre 1× y 4×, en pasos de 0,25; lo inválido vuelve a 2,5×", () => {
+    expect(ANURA_VOLUME_DEFAULT).toBe(2.5);
+    expect(clampAnuraVolume(0.2)).toBe(1);
+    expect(clampAnuraVolume(9)).toBe(4);
+    expect(clampAnuraVolume(2.1)).toBe(2);
+    expect(clampAnuraVolume(Number.NaN)).toBe(2.5);
+  });
+});

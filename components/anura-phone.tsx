@@ -35,6 +35,59 @@ import {
 } from "@/lib/anura/sip-phone";
 import { browserAnuraPhoneMemory, browserAnuraTabLock, browserMicrophone, createJsSipUa } from "@/lib/anura/jssip-client";
 import { logAnuraPhoneDiag } from "@/app/dashboard/pedidos/anura-actions";
+import { ANURA_VOLUME_DEFAULT, ANURA_VOLUME_MAX, ANURA_VOLUME_MIN, ANURA_VOLUME_STEP, clampAnuraVolume } from "@/lib/anura/phone-ui";
+import { readAnuraVolumePref, saveAnuraVolumePref } from "@/lib/anura/volume-pref";
+
+/**
+ * Amplificador del audio de Anura (07-11-2026: «se escuchó, pero muy bajito»).
+ * La línea telefónica llega a nivel de teléfono y `<audio>.volume` no pasa de
+ * 1, así que el audio va por Web Audio: ganancia + compresor (sube la voz sin
+ * reventar). Chrome solo deja salir el audio remoto de WebRTC por Web Audio si
+ * también está enganchado a un `<audio>`: ese queda silenciado. Si Web Audio
+ * no arranca, se usa el `<audio>` normal (sin amplificar).
+ */
+interface Amplifier {
+  ctx: AudioContext;
+  gain: GainNode;
+  nodes: AudioNode[];
+}
+
+function startAmplifier(stream: MediaStream, volume: number): Amplifier | null {
+  try {
+    const Ctx: typeof AudioContext | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return null;
+    const ctx = new Ctx();
+    const source = ctx.createMediaStreamSource(stream);
+    const gain = ctx.createGain();
+    gain.gain.value = volume;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -12;
+    comp.knee.value = 12;
+    comp.ratio.value = 6;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.2;
+    source.connect(gain);
+    gain.connect(comp);
+    comp.connect(ctx.destination);
+    void ctx.resume().catch(() => undefined);
+    return { ctx, gain, nodes: [source, gain, comp] };
+  } catch {
+    return null;
+  }
+}
+
+function stopAmplifier(amp: Amplifier | null) {
+  if (!amp) return;
+  for (const n of amp.nodes) {
+    try {
+      n.disconnect();
+    } catch {
+      // ya desconectado
+    }
+  }
+  void amp.ctx.close().catch(() => undefined);
+}
 
 /** Lo que el teléfono pide al servidor (server actions). */
 export interface AnuraPhoneServer {
@@ -50,6 +103,22 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
   const [snapshot, setSnapshot] = useState<AnuraPhoneSnapshot | null>(null);
   const phoneRef = useRef<AnuraPhone | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ampRef = useRef<Amplifier | null>(null);
+  const [volume, setVolumeState] = useState<number>(ANURA_VOLUME_DEFAULT);
+  const volumeRef = useRef(volume);
+  useEffect(() => {
+    const saved = readAnuraVolumePref();
+    volumeRef.current = saved;
+    setVolumeState(saved);
+  }, []);
+  const setVolume = useCallback((v: number) => {
+    const next = clampAnuraVolume(v);
+    volumeRef.current = next;
+    setVolumeState(next);
+    const amp = ampRef.current;
+    if (amp) amp.gain.gain.setTargetAtTime(next, amp.ctx.currentTime, 0.05);
+    saveAnuraVolumePref(next);
+  }, []);
   // Las acciones más recientes (el pedido puede cambiar sin rehacer el teléfono).
   const serverRef = useRef(server);
   useEffect(() => {
@@ -75,9 +144,18 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
           return;
         }
         el.srcObject = (stream as MediaStream | null) ?? null;
-        if (!stream) return;
-        el.muted = false;
+        stopAmplifier(ampRef.current);
+        ampRef.current = null;
+        if (!stream) {
+          el.muted = false;
+          return;
+        }
+        const amp = startAmplifier(stream as MediaStream, volumeRef.current);
+        ampRef.current = amp;
+        // Con amplificador, el <audio> queda enganchado pero mudo (si no, se oiría doble).
+        el.muted = amp !== null;
         el.volume = 1;
+        void logAnuraPhoneDiag("audio_amplificador", { ok: amp !== null, estado: amp?.ctx.state ?? null, volumen: volumeRef.current }).catch(() => undefined);
         void el
           .play()
           .then(() => logAnuraPhoneDiag("audio_play", { ok: true }))
@@ -87,6 +165,7 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
             void logAnuraPhoneDiag("audio_play", { ok: false, name: typeof name === "string" ? name : null }).catch(() => undefined);
             const retry = () => {
               void el.play().catch(() => undefined);
+              void ampRef.current?.ctx.resume().catch(() => undefined);
             };
             document.addEventListener("pointerdown", retry, { once: true });
             document.addEventListener("keydown", retry, { once: true });
@@ -118,6 +197,8 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
       window.removeEventListener("pagehide", onPageHide);
       phoneRef.current?.dispose();
       phoneRef.current = null;
+      stopAmplifier(ampRef.current);
+      ampRef.current = null;
     };
   }, []);
 
@@ -132,7 +213,27 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
     return () => window.removeEventListener("beforeunload", warn);
   }, [busy]);
 
-  return { snapshot, busy, call, hangUp, setMuted, audioRef };
+  return { snapshot, busy, call, hangUp, setMuted, audioRef, volume, setVolume };
+}
+
+/** Volumen de lo que se oye de la llamada (100 % a 400 %, se recuerda en este navegador). */
+export function AnuraVolumeControl({ volume, onChange }: { volume: number; onChange: (v: number) => void }) {
+  return (
+    <label className="mt-3 flex items-center gap-3 text-xs text-ink-600">
+      <span className="shrink-0 font-medium text-ink-700">Volumen</span>
+      <input
+        type="range"
+        min={ANURA_VOLUME_MIN}
+        max={ANURA_VOLUME_MAX}
+        step={ANURA_VOLUME_STEP}
+        value={volume}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label="Volumen de la llamada"
+        className="h-2 w-full cursor-pointer accent-brand-600"
+      />
+      <span className="w-11 shrink-0 text-right tabular-nums">{Math.round(volume * 100)}%</span>
+    </label>
+  );
 }
 
 /** El audio de Anura. Fuera de la tarjeta, para que exista antes de contestar. */
