@@ -643,6 +643,28 @@ function rejectBusy(s: SipSessionLike) {
  * El teléfono de Kapta. Una instancia por pestaña; cada `call()` hace un
  * recorrido completo y al final suelta todo (UA, micrófono, candado).
  */
+/**
+ * Lo técnico de la propuesta de audio de Anura (SDP del INVITE), para el
+ * diagnóstico: protocolo, rtcp-mux, DTLS, ICE, bundle y códecs. Sin IPs ni
+ * números (solo banderas y nombres de códec).
+ */
+export function sdpTraits(body: unknown): Record<string, string | number | boolean | null> {
+  if (typeof body !== "string" || !body.trim()) return { sdp: false };
+  const proto = /m=audio \d+ ([A-Z/]+)/.exec(body)?.[1] ?? null;
+  const codecs = [...body.matchAll(/a=rtpmap:\d+ ([A-Za-z0-9-]+)\//g)].map((m) => m[1]).slice(0, 8).join(",");
+  return {
+    sdp: true,
+    proto,
+    mux: /a=rtcp-mux/.test(body),
+    dtls: /a=fingerprint/.test(body),
+    crypto: /a=crypto/.test(body),
+    ice: /a=ice-ufrag/.test(body),
+    bundle: /a=group:BUNDLE/.test(body),
+    setup: /a=setup:([a-z]+)/.exec(body)?.[1] ?? null,
+    codecs: codecs || null,
+  };
+}
+
 export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
   const now = deps.now ?? (() => Date.now());
   const later = deps.setTimeout ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
@@ -763,7 +785,10 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       s.answer({
         mediaStream: mic,
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { iceServers: creds.iceServers, bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" },
+        // Valores del navegador para bundle y rtcp-mux (06-11-2026): con
+        // `max-bundle` + `rtcpMuxPolicy: require` la primera prueba real con
+        // Anura falló al contestar con «WebRTC Error».
+        pcConfig: { iceServers: creds.iceServers },
       });
     } catch {
       fail(myRun, { code: "audio", message: ANURA_PHONE_TEXT.audio });
@@ -816,6 +841,16 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         const stream = t?.streams?.[0] ?? (t?.track && deps.makeStream ? deps.makeStream([t.track]) : null);
         if (stream) deps.onRemoteStream(stream);
       });
+    });
+    for (const step of ["setremotedescriptionfailed", "createanswerfailed", "setlocaldescriptionfailed"]) {
+      s.on(`peerconnection:${step}`, (err: unknown) => {
+        const e = err as { name?: unknown; message?: unknown } | null;
+        d("webrtc_error", { paso: step, name: typeof e?.name === "string" ? e.name : null, msg: typeof e?.message === "string" ? e.message : null });
+      });
+    }
+    s.on("getusermediafailed", (err: unknown) => {
+      const e = err as { name?: unknown } | null;
+      d("webrtc_error", { paso: "getusermedia", name: typeof e?.name === "string" ? e.name : null, msg: null });
     });
     s.on("confirmed", () => {
       d("sesion_confirmada");
@@ -982,7 +1017,10 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         const message = kind === "red" && afterRegister ? ANURA_PHONE_TEXT.corte : ANURA_REGISTRATION_TEXT[kind];
         fail(myRun, { code: "registro", registration: kind, message });
       };
-      agent.on("newRTCSession", (e: { session?: SipSessionLike; originator?: string }) => onInvite(myRun, phone, e));
+      agent.on("newRTCSession", (e: { session?: SipSessionLike; originator?: string; request?: { body?: unknown } }) => {
+        d("invite_sdp", sdpTraits(e?.request?.body));
+        onInvite(myRun, phone, e);
+      });
       agent.on("connected", () => {
         d("ws_conectado");
         if (myRun !== run || askedRegister) return;

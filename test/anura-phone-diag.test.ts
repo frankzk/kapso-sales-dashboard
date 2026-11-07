@@ -16,3 +16,28 @@ describe("diagnóstico del teléfono de Kapta (sin datos personales)", () => {
     expect(cleanDiag(42, {})).toBeNull();
   });
 });
+
+import { sdpTraits } from "@/lib/anura/sip-phone";
+
+describe("rasgos del SDP de Anura (diagnóstico)", () => {
+  it("lee protocolo, rtcp-mux, DTLS, ICE y códecs sin IPs", () => {
+    const sdp = [
+      "v=0",
+      "o=- 1 2 IN IP4 10.0.0.1",
+      "c=IN IP4 10.0.0.1",
+      "m=audio 10000 UDP/TLS/RTP/SAVPF 0 8 101",
+      "a=rtpmap:0 PCMU/8000",
+      "a=rtpmap:8 PCMA/8000",
+      "a=rtpmap:101 telephone-event/8000",
+      "a=fingerprint:sha-256 AA:BB",
+      "a=setup:actpass",
+      "a=ice-ufrag:abc",
+      "a=rtcp-mux",
+    ].join("\r\n");
+    expect(sdpTraits(sdp)).toEqual({
+      sdp: true, proto: "UDP/TLS/RTP/SAVPF", mux: true, dtls: true, crypto: false, ice: true, bundle: false, setup: "actpass",
+      codecs: "PCMU,PCMA,telephone-event",
+    });
+    expect(sdpTraits(undefined)).toEqual({ sdp: false });
+  });
+});
