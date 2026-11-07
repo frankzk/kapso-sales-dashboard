@@ -459,8 +459,10 @@ export const FENIX_CITIES = [
  * que las localidades nuevas solo existen como alias.
  *
  * Para ampliarla hace falta saber qué reparte Swayp desde cada almacén; no se
- * deduce de la distancia. Confirmado con la operación (2026-08-15): Jauja,
- * Chepén y Chala NO tienen cobertura, pese a estar cerca de un almacén.
+ * deduce de la distancia. Confirmado con la operación (2026-08-15): Chepén y
+ * Chala NO tienen cobertura, pese a estar cerca de un almacén. Jauja tampoco la
+ * tenía entonces; desde el 07-11-2026 está en la lista de Swayp de Junín y entra
+ * por `SWAYP_HUANCAYO_DISTRICTS`, no como ciudad.
  */
 export const FENIX_CITY_ALIASES: Record<string, string> = {
   puno: "juliaca",
@@ -507,17 +509,69 @@ export function isFenixCity(city: string | null | undefined): boolean {
 }
 
 /**
+ * Los destinos de Junín que Swayp reparte desde la bodega de Huancayo: la lista
+ * de su panel («Ciudad de Destino», JUNIN), confirmada por el owner el
+ * 07-11-2026 con #KP202768 («es a todos estos donde tiene cobertura swayp»).
+ * Distrito → su provincia.
+ *
+ * Hace falta porque la dirección de Shopify trae el distrito («El Tambo») y el
+ * departamento («Junín»), casi nunca la provincia: «Huancayo» no aparece en
+ * ningún lado y la cobertura caía a «el tambo», que no existe, aunque Swayp ya
+ * había entregado ahí. Con la provincia sí venía bien (los de Aliclik).
+ *
+ * Resuelven a la ciudad `huancayo` con su distrito: así salen el stock, el
+ * remitente y la bodega de origen de Huancayo, y el ubigeo exacto del distrito
+ * (los de otras provincias están en la tabla de Huancayo, como Sullana en la de
+ * Piura). Solo con el departamento Junín o su propia provincia al lado: «Chilca»
+ * también es un distrito de Cañete. Lo que no está aquí (Chupaca, Sicaya, San
+ * Jerónimo de Tunán…) sigue como estaba.
+ */
+export const SWAYP_HUANCAYO_DISTRICTS: Readonly<Record<string, string>> = {
+  ahuac: "chupaca",
+  chilca: "huancayo",
+  chupuro: "huancayo",
+  concepcion: "concepcion",
+  "el tambo": "huancayo",
+  hualhuas: "huancayo",
+  "huamancaca chico": "chupaca",
+  huancan: "huancayo",
+  huancayo: "huancayo",
+  huayucachi: "huancayo",
+  ingenio: "huancayo",
+  jauja: "jauja",
+  matahuasi: "concepcion",
+  orcotuna: "concepcion",
+  pilcomayo: "huancayo",
+  quilcas: "huancayo",
+  sapallanga: "huancayo",
+  "tres de diciembre": "chupaca",
+  viques: "huancayo",
+};
+
+/** ¿Es un destino de la lista de Swayp en Junín, con el departamento o su provincia al lado? */
+function swaypHuancayoDistrict(district: string | null | undefined, province: string | null | undefined): boolean {
+  const d = normalizeDistrict(district);
+  const home = SWAYP_HUANCAYO_DISTRICTS[d];
+  if (!home) return false;
+  const p = normalizeDistrict(province);
+  return /(^|[^a-z])junin([^a-z]|$)/.test(p) || p === home;
+}
+
+/**
  * Coverage key of a destination given its raw address parts, the same rule the
  * Aliclik import and the address editor apply: scan the combined
  * distrito + provincia/departamento label for a known Swayp city token; when
  * none is present fall back to the normalized district (an uncovered key).
  * In Shopify's Peru convention `district` = shippingAddress.city and
- * `province` = shippingAddress.province (departamento). Pure.
+ * `province` = shippingAddress.province (departamento). Los destinos de Junín
+ * de la lista de Swayp van antes: resuelven a Huancayo (`SWAYP_HUANCAYO_DISTRICTS`).
+ * Pure.
  */
 export function deriveFenixCoverageCity(
   district: string | null | undefined,
   province: string | null | undefined,
 ): string {
+  if (swaypHuancayoDistrict(district, province)) return "huancayo";
   const combined = normalizeCity([district, province].filter(Boolean).join(" "));
   return isFenixCity(combined) ? combined : normalizeCity(district);
 }
