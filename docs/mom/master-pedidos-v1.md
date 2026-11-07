@@ -7630,6 +7630,36 @@ Querecotillo…) no se confirmó y sigue rechazándose con el mensaje de siempre
 Antes, «Sullana» resolvía al cercado de Piura (`200101`) marcado como no exacto
 y la guía se negaba.
 
+**Junín sale de la bodega de Huancayo (07-11-2026, owner, #KP202768).** La
+Mesa de ruta de #KP202768 («El Tambo», «Junín») decía «Swayp no tiene
+cobertura local en este destino.» aunque Swayp ya había entregado 7 pedidos en
+El Tambo (llegados por Aliclik con la ciudad «huancayo»). La dirección de
+Shopify trae el distrito y el departamento, casi nunca la provincia, así que
+«Huancayo» no aparecía y la cobertura caía a «el tambo», que no existe. El
+owner mandó la lista de destinos de Junín del panel de Swayp («Ciudad de
+Destino»): «es a todos estos donde tiene cobertura swayp». Son 19: Ahuac,
+Chilca, Chupuro, Concepción, El Tambo, Hualhuas, Huamancaca Chico, Huancán,
+Huancayo, Huayucachi, Ingenio, Jauja, Matahuasi, Orcotuna, Pilcomayo, Quilcas,
+Sapallanga, Tres de Diciembre y Viques (`SWAYP_HUANCAYO_DISTRICTS`,
+`lib/shipments.ts`).
+
+- Con el departamento Junín o su propia provincia al lado, resuelven a la
+  ciudad `huancayo` con su distrito: la tarjeta de la Mesa de ruta, el filtro
+  «Swayp» del Master, el stock (el de Huancayo), el remitente y la bodega de
+  origen (Huancayo) y el destino (el ubigeo exacto del distrito) dicen lo
+  mismo. Sin Junín al lado no se adivina: «Chilca» también es un distrito de
+  Cañete.
+- Los de otras provincias entran a la tabla de Huancayo con su código INEI,
+  como Sullana en la de Piura: Concepción (`120201`), Matahuasi (`120210`),
+  Orcotuna (`120213`), Jauja (`120401`), Ahuac (`120902`), Huamancaca Chico
+  (`120905`) y Tres de Diciembre (`120908`).
+- Cambia Jauja, que la operación había descartado el 15-08-2026: ahora está
+  en la lista de Swayp. Lo que no está en la lista sigue como estaba: Sicaya,
+  San Jerónimo de Tunán o San Agustín de Cajas no tienen cobertura, y Chupaca
+  (que no aparece en el panel) sigue como satélite de Huancayo, como estaba.
+
+Pruebas en `test/swayp-junin.test.ts`.
+
 «Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
 campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
 el padrón a veces usa el corto: «Lurigancho-Chosica» contra «Lurigancho». El
@@ -14277,6 +14307,86 @@ comparten Master y ficha), `components/order-drawer-host.tsx` (montada en
 `app/dashboard/layout.tsx`), `components/order-link.tsx` (`OrderLink`,
 `useOpenOrderDrawer`) y `lib/order-drawer-href.ts` (las URL; probado en
 `test/order-drawer-href.test.ts`).
+
+### 25.2 Después de «Generar pedido» en Leads: cómo sale y cómo se cobra (07-11-2026)
+
+**Por qué.** El owner (07-11-2026): «en el drawer de Leads, luego de generar el
+pedido me da la opción para crear guía en Aliclik pero no me da para subir si
+manda un adelanto de pago, tampoco para elegir agencia Shalom, y me gustaría
+tener el de "Swayp lo puede llevar hoy"». La ficha del pedido ya tenía las tres
+cosas; la asesora de Leads tenía que irse al Master a buscar el pedido que
+acababa de crear.
+
+Dónde: en el cajón de Leads, para cualquier lead con pedido propio
+(`leads.order_id`), la tarjeta **«Cómo sale el pedido»** con el número del
+pedido y tres tarjetas-opción: **«Guía Aliclik»**, **«Swayp hoy»** y **«Agencia
+Shalom + adelanto»**. «Continuar · elegir envío» (antes «Continuar · crear
+guía») cierra el formulario del pedido y la deja a la vista. La elegida abre
+debajo, en su propia tarjeta, **el mismo componente de la ficha del pedido con
+sus mismas server actions**; no hay versión «de Leads»:
+
+- **Guía Aliclik** → el panel de crear guía (`AliclikGuidePanel`), como hasta
+  ahora. Con la guía creada, el bloque permanente con la guía y el pedido.
+- **Swayp hoy** → «Swayp lo puede llevar hoy · Sale sin confirmar. Si Swayp no
+  lo entrega, el pedido vuelve a Por confirmar para llamarlo otra vez.» y
+  «Enviar por Swayp», que abre la guía Swayp directa con `origen =
+  por_confirmar` (§11.11: mismas validaciones, mismo hecho
+  `swayp_desde_por_confirmar`, no escribe `confirmed`).
+- **Agencia Shalom + adelanto** → la tarjeta de Cobro (`PickupKeyPanel`):
+  «Registrar un pago» con el comprobante Yape/Plin del adelanto y «DNI y agencia
+  Shalom» (`shalom_order_drafts`); en un pedido pagado por web, la constancia y
+  el bloque del DNI y la agencia (§Pagos, #KP200104).
+
+**Cuándo se ofrece cada una: lo mismo que en la ficha**, con las mismas
+funciones (no hay regla nueva ni estado nuevo):
+
+| Opción | Se ofrece si | Permiso |
+|---|---|---|
+| Guía Aliclik | el plan de rutas ofrece Aliclik y no está frenado, y el pedido no es acompañante (`aliclikGuideOffered`, §32) | `aliclik.create_guide` |
+| Swayp hoy | Por confirmar, provincia COD, «Swayp ok · con stock», no «Swayp no entregó» (`swaypDesdeConfirmacionOffer`, §11.11) | `master.edit` (quien no es solo lectura), como la mesa de confirmación |
+| Agencia Shalom + adelanto | la tarjeta de Cobro de la ficha se dibujaría (`orderPaymentPanelFor`: Agencia, salida Shalom/agencia, pago exigido o regla de riesgo del §8, cobro ya cargado, o Shalom/Olva en el plan con `shalom.create_guide`) y en su mismo modo | los de la tarjeta (`shalom.register_payment` para registrar, `master.edit` para el borrador de Shalom, `payments.validate` para validar), que vuelve a decidir el servidor |
+
+- **Lo que no se ofrece se dice.** La tarjeta-opción queda apagada con el
+  porqué en una línea («Tu rol no permite crear guías de Aliclik.», «Solo para
+  provincia COD; este pedido es Lima.», «Swayp no lo puede llevar hoy: sin stock
+  swayp.», «No aplica en Lima: el pedido no va por agencia…», el motivo del plan
+  de rutas si la ruta está frenada). Nunca desaparece en silencio.
+- **La disponibilidad Swayp de un pedido recién nacido.** La columna
+  `swayp_availability` la llena la pasada horaria (§11.10), no el recálculo, y
+  un pedido que sale de «Generar pedido» la tiene vacía. Si está vacía y el
+  pedido está en Por confirmar y es provincia COD, se evalúa **en el momento con
+  la misma regla** (`swaypAvailabilityFor` sobre `fenix_stock`), **sin escribir**
+  la columna. Si la lectura del stock falla: «Swayp todavía no evaluó el stock
+  para este pedido.». La ficha sigue leyendo la columna.
+- **Después de una acción, la opción dice en qué quedó**: «Creada» y la guía de
+  Aliclik; «Programado» y la guía Swayp viva; el cobro en su chapa
+  («Adelanto cargado · por validar» —cargado es subido y sin validar—,
+  «Diferencia pendiente», «Pago completo»); «Agencia guardada» con la agencia y
+  el documento. La tarjeta se vuelve a leer tras cada acción y con el aviso
+  entre paneles de pago (`lib/payment-panel-sync.ts`), que desde ahora también
+  se da al guardar «DNI y agencia Shalom».
+- **Qué se abre solo.** La opción que ya tiene algo hecho (guía Swayp, guía de
+  Aliclik, cobro o agencia guardada) y, si no, Aliclik cuando se ofrece —lo que
+  el cajón enseñaba antes—. Si ninguna se ofrece, ninguna.
+- **Si la lectura falla**, la tarjeta lo dice con «Intentar nuevamente» y el
+  panel de Aliclik se queda como estaba antes, para no frenar la venta.
+- **Teléfono.** Las tres opciones en una columna (tres desde 640 px), con
+  objetivos de 44 px al dedo; las tarjetas de debajo son las de la ficha.
+- **Solo lectura.** `loadLeadPostOrderChoices` lee el lead por RLS y su
+  reparto por bloques, la ficha del pedido (`loadOrderDetail`), la ficha del §8
+  donde la ficha la pide (`needsConfirmationBrief`), el borrador de Shalom y,
+  si hace falta, el stock Swayp. No escribe nada. Las acciones vuelven a
+  comprobar todo. Sin migración.
+
+Implementación: `lib/lead-post-order.ts` (qué se ofrece, el porqué y el
+resumen, puro), `app/dashboard/leads/post-order-actions.ts`
+(`loadLeadPostOrderChoices`), `components/lead-post-order-choices.tsx` (la
+tarjeta), `components/swayp-desde-confirmacion-offer.tsx` (la pieza de Swayp,
+compartida con la mesa de confirmación), y las reglas compartidas con la ficha:
+`aliclikGuideOffered` (`lib/order-route-plan.ts`), `swaypDesdeConfirmacionOffer`
+(`lib/swayp-desde-confirmacion-offer.ts`) y `orderPaymentPanelFor`
+(`lib/order-payment-panel.ts`). Pruebas: `test/lead-post-order.test.ts` y
+`test/swayp-desde-confirmacion.test.ts`.
 
 ## 26. Costo de producto (COGS)
 

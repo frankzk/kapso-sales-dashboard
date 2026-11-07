@@ -764,7 +764,10 @@ describe("las piezas están conectadas", () => {
     expect(read("app/api/pedidos/rotulos/route.ts")).toContain("companionLabelContent(");
     const drawer = read("components/order-drawer.tsx");
     expect(drawer).toContain("<OrderCompanionPanel");
-    expect(drawer).toContain("!detail?.companion.travelsIn &&");
+    // Aliclik no se ofrece a un acompañante: la regla vive en el plan de rutas
+    // (`aliclikGuideOffered`) y la leen la ficha y Leads (MOM §25.2).
+    expect(drawer).toContain("travelsInCompanion: Boolean(detail.companion.travelsIn),");
+    expect(read("lib/order-route-plan.ts")).toContain("!input.travelsInCompanion &&");
     expect(read("lib/orders-master-access.ts")).toContain("companionOf: companion.travelsIn");
   });
 

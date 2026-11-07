@@ -211,8 +211,9 @@ import {
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
-import { offersShalomDestination, orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
-import { PAYMENT_GATEWAY_LABEL } from "@/lib/payment-gateway";
+import { orderPaymentPanelFor } from "@/lib/order-payment-panel";
+import { swaypDesdeConfirmacionOffer } from "@/lib/swayp-desde-confirmacion-offer";
+import { EnviarPorSwaypDesdeConfirmacion } from "@/components/swayp-desde-confirmacion-offer";
 import {
   CONFIRMATION_CHANNELS,
   CONFIRMATION_MAX_DAYS,
@@ -270,7 +271,7 @@ import {
 } from "@/lib/order-admin-url";
 import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
 import { timelineOriginLabel } from "@/lib/order-timeline-fact";
-import type { RouteCandidate } from "@/lib/order-route-plan";
+import { aliclikGuideOffered, type RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -1219,10 +1220,11 @@ export function OrderDrawer({
   // Y no a un pedido acompañante (MOM §32): ya viaja en la guía de otro, y una
   // propia sería un segundo paquete para la misma clienta.
   const aliclikOffered = Boolean(
-    !detail?.companion.travelsIn &&
-      detail?.routePlan.candidates.some(
-        (candidate) => candidate.action === "aliclik" && candidate.availability !== "blocked",
-      ),
+    detail &&
+      aliclikGuideOffered({
+        travelsInCompanion: Boolean(detail.companion.travelsIn),
+        candidates: detail.routePlan.candidates,
+      }),
   );
 
   // La ficha del §8 se carga aparte del detalle —recorre el historial del
@@ -1268,49 +1270,18 @@ export function OrderDrawer({
       alive = false;
     };
   }, [orderId, detail]);
-  const paymentPanel = detail
-    ? orderPaymentPanelPresentation({
-        operation: detail.routePlan.operation,
-        currentCourier: detail.row.current_courier,
-        shippingMode: detail.row.shipping_mode,
-        macroSubstage: detail.row.macro_substage,
-        macroReasons: detail.row.macro_reasons,
-        riskRequirement: brief?.risk.requirement === "pago_completo" ? "pago_completo"
-          : brief?.duplicateHold?.conflicts.length && brief.duplicateHold.resolution?.decision !== "exception"
-            ? "exigir_adelanto" : brief?.risk.requirement ?? null,
-        paymentState: detail.row.payment_state,
-        paymentFacts: {
-          financialStatus: detail.row.financial_status,
-          totalRefunded: detail.row.total_refunded,
-          paymentGateway: detail.row.payment_gateway,
-        },
-        hasAgencyCandidate:
-          canCreateShalomGuide &&
-          detail.routePlan.candidates.some(
-            (candidate) => candidate.key === "shalom" || candidate.key === "olva",
-          ),
-      })
+  // La tarjeta de Cobro: si se dibuja y en qué modo, la nota de la pasarela y
+  // «DNI y agencia Shalom» en un pedido pagado por web. Se decide en
+  // `orderPaymentPanelFor`, la misma que lee el paso de después de «Generar
+  // pedido» en Leads (MOM §25.2): las dos pantallas lo ofrecen en los mismos
+  // pedidos.
+  const paymentSetup = detail
+    ? orderPaymentPanelFor({ row: detail.row, routePlan: detail.routePlan, brief, canCreateShalomGuide })
     : null;
-  // Shopify dice «pagado» pero no lo cobró el checkout: se explica por qué el
-  // panel sigue pidiendo la constancia (lib/payment-gateway.ts).
-  const gatewayNote =
-    detail &&
-    (detail.row.financial_status ?? "").toLowerCase() === "paid" &&
-    (detail.row.payment_gateway === "manual" || detail.row.payment_gateway === "cod")
-      ? `${PAYMENT_GATEWAY_LABEL[detail.row.payment_gateway]}: no lo cobró el checkout. Para darlo por pagado, sube la constancia.`
-      : null;
+  const paymentPanel = paymentSetup?.presentation ?? null;
+  const gatewayNote = paymentSetup?.gatewayNote ?? null;
   const showPaymentPanel = paymentPanel?.show ?? false;
-  // «DNI y agencia Shalom» en un pedido pagado por web (MOM §Pagos, #KP200104):
-  // se ofrece donde Shalom puede ser el destino, lo pueda crear o no este rol.
-  const shalomDestination = Boolean(
-    detail &&
-      offersShalomDestination({
-        operation: detail.routePlan.operation,
-        currentCourier: detail.row.current_courier,
-        shippingMode: detail.row.shipping_mode,
-        shalomCandidate: detail.routePlan.candidates.some((candidate) => candidate.key === "shalom"),
-      }),
-  );
+  const shalomDestination = paymentSetup?.shalomDestination ?? false;
   // La salida GF activa (o la última) para la tarjeta de acción.
   const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
   // La salida que su courier no entregó y con qué sale ahora la caja (§28).
@@ -1896,10 +1867,7 @@ export function OrderDrawer({
                   {/* MOM §11.11: provincia COD que Swayp puede llevar hoy sale sin
                       confirmar; si Swayp no entrega, vuelve aquí. No se ofrece en
                       «Swayp no entregó»: ese pedido se llama para salir por otra vía. */}
-                  {detail.row.macro_stage === "por_confirmar" &&
-                    detail.row.macro_substage !== "swayp_no_entrego" &&
-                    detail.row.coverage === "provincia_cod" &&
-                    detail.row.swayp_availability === "ok" && (
+                  {swaypDesdeConfirmacionOffer(detail.row).offered && (
                       <EnviarPorSwaypDesdeConfirmacion
                         pending={pending}
                         onOpen={() => {
@@ -4218,28 +4186,6 @@ export function OrderActions({
  * a mano en Reproprovincia; por eso pide motivo y no se esconde detrás de un
  * icono. Las otras salidas —Swayp, reprogramar Aliclik— viven en Rutas.
  */
-/**
- * «Enviar por Swayp» desde Por confirmar (MOM §11.11). Sale SIN confirmar, por
- * decisión del owner: lo dice el panel, para que nadie lo lea como una
- * confirmación. Si Swayp no entrega, el pedido vuelve a «Por confirmar · Swayp
- * no entregó».
- */
-function EnviarPorSwaypDesdeConfirmacion({ pending, onOpen }: { pending: boolean; onOpen: () => void }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-ok-wash p-4">
-      <div className="min-w-0">
-        <p className="text-sm font-semibold text-ok-fg">Swayp lo puede llevar hoy</p>
-        <p className="mt-0.5 text-[13px] leading-5 text-ink-700">
-          Sale sin confirmar. Si Swayp no lo entrega, el pedido vuelve a Por confirmar para llamarlo otra vez.
-        </p>
-      </div>
-      <OpsButton size="sm" disabled={pending} onClick={onOpen} className="pointer-coarse:h-11">
-        Enviar por Swayp
-      </OpsButton>
-    </div>
-  );
-}
-
 function DescartarRecuperacion({
   pending,
   onDiscard,
