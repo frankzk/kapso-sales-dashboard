@@ -2,7 +2,6 @@
 
 import { createServerSupabase } from "@/lib/db";
 import { filterRoutedLeads, getLeadRoutingScope } from "@/lib/lead-routing-access";
-import { routingQueueSignature } from "@/lib/leads-live-refresh";
 import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
 import { leadCartDetailOf } from "@/lib/lead-cart-detail";
 import { normalizePhone } from "@/lib/phone";
@@ -245,7 +244,9 @@ export async function getStoreLeads(
     if (pendingIndex) return withPendingVoucherLeads(sb, storeIds, limited, select, await pendingIndex);
     return view === "por_llamar" ? sortPorLlamar(limited) : limited;
   }
-  const all = await drainLeads(buildQuery);
+  // «Por llamar» ordena solo por `id`: se drena por clave (`id > último`).
+  // Las demás vistas ordenan por otra columna y siguen con rangos.
+  const all = view === "por_llamar" ? await drainLeadsById(buildQuery) : await drainLeads(buildQuery);
   let visible = filterRoutedLeads(all, routing);
   if (view === "handoff") visible = filterRoutedLeads(await withPendingVoucherLeads(sb, storeIds, visible, LEAD_BOARD_SELECT, await loadPendingVouchers(sb, storeIds)), routing);
   const sorted = view === "por_llamar" ? sortPorLlamar(visible) : visible;
@@ -302,6 +303,39 @@ export function sortPorLlamar<T extends Pick<LeadRow, "id" | "needs_attention" |
       desc(a.last_interaction_at, b.last_interaction_at) ||
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
+}
+
+/**
+ * La cola entera de «Por llamar», por clave (0312, revisión de rendimiento).
+ *
+ * Con rangos (`order by id offset N`) cada página vuelve a recorrer
+ * `leads_pkey` desde el principio y descarta lo de antes (medido el 06-11-2026:
+ * la página en 5.000 lee 43.000 bloques y descarta 36.786 filas), y la primera
+ * con `count: "exact"` además cuenta todo. Por clave cada página empieza donde
+ * acabó la anterior (`id > último`) y nada se cuenta: un solo recorrido en
+ * total. Las páginas van en serie —cada una necesita el último id de la
+ * anterior—, pero cada una lee solo lo suyo. Mismas filas y mismo orden: la
+ * vista ordena solo por `id`, y además no salta ni repite filas si la cola
+ * cambia entre página y página.
+ */
+async function drainLeadsById(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  buildQuery: (select?: string, count?: "exact") => any,
+): Promise<LeadRow[]> {
+  const rows: LeadRow[] = [];
+  let select = LEAD_BOARD_SELECT;
+  let res = await buildQuery(select).limit(LEADS_PAGE_SIZE);
+  if (res.error && select !== LEAD_BOARD_SELECT_LEGACY) {
+    select = LEAD_BOARD_SELECT_LEGACY;
+    res = await buildQuery(select).limit(LEADS_PAGE_SIZE);
+  }
+  while (!res.error) {
+    const batch = (res.data as unknown as LeadRow[] | null) ?? [];
+    rows.push(...batch);
+    if (batch.length < LEADS_PAGE_SIZE || rows.length >= LEADS_PAGE_CAP) break;
+    res = await buildQuery(select).gt("id", batch[batch.length - 1]!.id).limit(LEADS_PAGE_SIZE);
+  }
+  return rows;
 }
 
 async function drainLeads(
@@ -764,8 +798,12 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
     const index = await loadPendingVouchers(sb, storeIds);
     const extras = filterRoutedLeads(await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index ?? new Map(), LEAD_BOARD_SELECT), routing)
       .filter(l => !(l.needs_attention && l.handoff_at && l.handoff_at >= handoffFreshCutoffIso()));
-    const counts = { ...routing.counts, handoff: routing.counts.handoff + extras.length };
-    return { counts, signature: routingQueueSignature(routing.signature, { ...counts }, extras.map(l => l.id)) };
+    // La firma lleva tal cual la de `lead_routing_scope`, minuto incluido: su
+    // parte de leads solo cubre la cola por llamar (open/hot), y ese minuto es lo
+    // que hace que un cambio fuera de ella —un handoff sobre un lead ganado, un
+    // ganado editado, la tienda sin bloques— recargue en ≤ QUIET_REFRESH_MS y no
+    // a los 5 min del refresco forzado. No quitarlo (revisión de la 0312).
+    return { counts: { ...routing.counts, handoff: routing.counts.handoff + extras.length }, signature: `routing:${routing.signature}:cv:${extras.map(l => l.id).sort().join(",")}` };
   }
   const sb = await createServerSupabase();
   const nowIso = new Date().toISOString();

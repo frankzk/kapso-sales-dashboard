@@ -51,7 +51,7 @@ describe("getStoreLeads pagination", () => {
           wantsCount = opts?.count === "exact";
           return query;
         });
-        for (const method of ["eq", "in", "neq", "order"]) {
+        for (const method of ["eq", "in", "neq", "order", "not", "lte"]) {
           query[method] = vi.fn(() => query);
         }
         query.range = vi.fn(async (from: number, to: number) => {
@@ -78,7 +78,7 @@ describe("getStoreLeads pagination", () => {
     const source = Array.from({ length: 2545 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
     const { ranges, started, openGate } = mockPagedLeads(source, true);
 
-    const pending = getStoreLeads(["kenku-peru"], "por_llamar", null);
+    const pending = getStoreLeads(["kenku-peru"], "seguimientos", null);
     // Deja correr el microtask de la primera página y suelta a las siguientes.
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -101,7 +101,7 @@ describe("getStoreLeads pagination", () => {
     const { ranges, openGate } = mockPagedLeads(source, false);
     openGate(); // sin total no hay paralelo que valga: se drena en serie
 
-    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    const rows = await getStoreLeads(["kenku-peru"], "seguimientos", null);
 
     expect(rows).toHaveLength(1167);
     expect(rows.at(-1)).toEqual({ id: "lead-1166" });
@@ -116,10 +116,69 @@ describe("getStoreLeads pagination", () => {
     const { ranges, openGate } = mockPagedLeads(source, true);
     openGate();
 
-    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+    const rows = await getStoreLeads(["kenku-peru"], "seguimientos", null);
 
     expect(rows).toHaveLength(42);
     expect(ranges).toEqual([[0, 999]]);
+  });
+});
+
+describe("getStoreLeads «Por llamar» por clave (id > último)", () => {
+  beforeEach(() => {
+    createServerSupabaseMock.mockReset();
+  });
+
+  /** Sirve `source` (ordenado por id) con `gt("id")` + `limit`, sin rangos ni total. */
+  function mockKeysetLeads(source: { id: string }[]) {
+    const pages: Array<{ after: string | null; limit: number; count: boolean }> = [];
+    createServerSupabaseMock.mockResolvedValue({
+      from: () => {
+        const query: Record<string, unknown> = {};
+        let after: string | null = null;
+        let wantsCount = false;
+        query.select = vi.fn((_select: string, opts?: { count?: string }) => {
+          wantsCount = opts?.count === "exact";
+          return query;
+        });
+        for (const method of ["eq", "in", "neq", "order"]) query[method] = vi.fn(() => query);
+        query.gt = vi.fn((column: string, value: string) => {
+          expect(column).toBe("id");
+          after = value;
+          return query;
+        });
+        query.limit = vi.fn(async (n: number) => {
+          pages.push({ after, limit: n, count: wantsCount });
+          return { data: source.filter((l) => after === null || l.id > after).slice(0, n), error: null };
+        });
+        query.range = vi.fn(() => {
+          throw new Error("«Por llamar» no pagina por rangos");
+        });
+        return query;
+      },
+    });
+    return pages;
+  }
+
+  it("cada página empieza en el último id de la anterior y nada se cuenta", async () => {
+    const source = Array.from({ length: 2545 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
+    const pages = mockKeysetLeads(source);
+
+    const rows = await getStoreLeads(["kenku-peru"], "por_llamar", null);
+
+    expect(rows.map((l) => l.id)).toEqual(source.map((l) => l.id));
+    expect(pages).toEqual([
+      { after: null, limit: 1000, count: false },
+      { after: "lead-0999", limit: 1000, count: false },
+      { after: "lead-1999", limit: 1000, count: false },
+    ]);
+  });
+
+  it("una sola página cuando la primera no se llena", async () => {
+    const source = Array.from({ length: 42 }, (_, index) => ({ id: `lead-${String(index).padStart(4, "0")}` }));
+    const pages = mockKeysetLeads(source);
+
+    expect(await getStoreLeads(["kenku-peru"], "por_llamar", null)).toHaveLength(42);
+    expect(pages).toHaveLength(1);
   });
 });
 

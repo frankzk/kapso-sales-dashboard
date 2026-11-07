@@ -30891,7 +30891,8 @@ grant all on public.anura_sip_settings, public.anura_sip_credentials to service_
 -- ============================================================================
 -- 0312_lead_routing_scope_perf.sql — `lead_routing_scope` y «lo esperado» de
 -- devoluciones, sin recorrer tablas enteras. SOLO RENDIMIENTO: ninguna regla
--- de negocio cambia (MOM §16 y §30 intactos) y ningún resultado cambia.
+-- de negocio cambia (MOM §16 y §30 intactos) y ningún resultado que alguien
+-- lea cambia (el único cambio visible en el JSON está en el punto 8).
 --
 -- POR QUÉ. El 06-11-2026 ~20:00 UTC la base se quedó sin CPU («Unhealthy»):
 -- en la pestaña de cada asesora los clics no respondían. `lead_routing_scope`
@@ -30925,15 +30926,43 @@ grant all on public.anura_sip_settings, public.anura_sip_credentials to service_
 --   5. ANALYZE de `delivery_stops` y `draft_orders`: el planificador creía que
 --      `delivery_stops` tenía 238 filas (tiene ~7.900).
 --
--- NO CAMBIA el cuerpo de `return_manifest_expected` ni de ninguna otra función.
+--   6. `leads_store_kapso_conv_idx`: la sincronización de Kapso actualiza
+--      `leads` por (`store_id`, `kapso_conversation_id`) —inbound_count, carrito,
+--      origen del anuncio, ubicación web— 55.000 veces, y no había índice: cada
+--      una entraba por `leads_store_status_idx` y descartaba ~62.000 filas
+--      (medido el 07-11-2026: 30.000 bloques por búsqueda). Parcial, solo filas
+--      con conversación. No toca las actualizaciones HOT de las demás columnas.
+--   7. `draft_orders_order_gid_idx`: `fetchDraftAddresses` (Master) y la
+--      exportación de Fénix buscan `draft_orders` por `order_gid = any(…)`
+--      38.800 veces, cada una leyendo la tabla entera (6.965 bloques). Parcial,
+--      solo carritos ya convertidos en pedido.
+--   8. En `lead_routing_scope`, los contadores de ganados y perdidos se cuentan
+--      solo para la cola entera (`p_lead` nulo): con un lead suelto salen en 0.
+--      Ningún llamador de un lead suelto lee `counts` (authorizeLead, la ficha,
+--      los medios, el prepago, `claim_routed_lead`, la rotación de Yapes leen
+--      `allowed`, `enabled` o `blockedIds`); costaba ~23 ms y 5.100 bloques de
+--      cada una de esas llamadas. La cola entera devuelve lo mismo que la 0299.
+--   9. `claim_yape_reconcile_tick`: una fila por tienda con la hora de la última
+--      reconciliación de Yapes. La primera pestaña que llega se queda la vuelta
+--      y las demás no la repiten durante 10 s (lib/yape-reconcile-tick.ts). Sin
+--      ella el código reconcilia como antes.
+--  10. ANALYZE también de `lead_calls` (nunca analizada: el índice parcial y el
+--      CTE `calls` dependen de sus estadísticas) y de `leads` (11.000 filas
+--      muertas).
+--
+-- NO CAMBIA el cuerpo de `return_manifest_expected` ni de ninguna otra función,
+-- ni ninguna regla de negocio (MOM sin cambios).
 --
 -- EN PRODUCCIÓN, LOS ÍNDICES PRIMERO Y `concurrently` (DEPLOY.md): un
 -- `create index` normal bloquea las escrituras de la tabla mientras se
 -- construye. Aquí van con `if not exists` para CI y bases nuevas; corrido
 -- después de los `concurrently`, este fichero solo los encuentra hechos.
 --
--- EL CÓDIGO NO LA NECESITA PARA FUNCIONAR: sin ella todo devuelve lo mismo,
--- solo más lento. Puede aplicarse antes o después del despliegue.
+-- APLICARLA ANTES DEL DESPLIEGUE (o junto con él). El código no la necesita
+-- para funcionar —sin ella todo devuelve lo mismo y la rotación reconcilia en
+-- cada pestaña como antes—, pero casi todo el ahorro está aquí: sin la 0312 una
+-- consulta de un lead suelto sigue costando ~80 ms y 31.000 bloques (el OR
+-- recorre `leads`) y la cola entera que sondea Leads cada 30 s, ~425 ms.
 -- ============================================================================
 
 -- Aun con el índice ya creado, `if not exists` toma por un instante un bloqueo
@@ -30954,8 +30983,20 @@ create index if not exists delivery_stops_shipment_manifest_idx
   on public.delivery_stops (shipment_id, dispatch_manifest_id, reported_at desc nulls last)
   include (id, status, outcome_reason);
 
+create index if not exists leads_store_kapso_conv_idx
+  on public.leads (store_id, kapso_conversation_id)
+  where kapso_conversation_id is not null;
+
+create index if not exists draft_orders_order_gid_idx
+  on public.draft_orders (order_gid)
+  where order_gid is not null;
+
 reset lock_timeout;
 
+comment on index public.leads_store_kapso_conv_idx is
+  'Lead de una conversación de Kapso en su tienda: actualizaciones de la sincronización (0312).';
+comment on index public.draft_orders_order_gid_idx is
+  'Carrito de un pedido (order_gid): dirección del Master y exportación de Fénix (0312).';
 comment on index public.lead_calls_call_lead_idx is
   'Última llamada y cita de cada lead para lead_routing_scope (bloques de Leads, MOM §16; 0312).';
 comment on index public.draft_orders_store_gid_idx is
@@ -31037,12 +31078,39 @@ select jsonb_build_object(
     'handoff',count(*) filter(where allowed and needs_attention and handoff_at>=now()-interval '24 hours'),
     'yape',count(*) filter(where allowed and status='yape_por_verificar'),
     'seguimientos',count(*) filter(where allowed and next_followup_at<=now()),
-    'ganados',case when (select bool_or(enabled and advisor) from scope) then (select count(*) from leads l join scope s on s.id=l.store_id where l.category='won') else 0 end, 'perdidos',case when (select bool_or(enabled and advisor) from scope) then (select count(*) from leads l join scope s on s.id=l.store_id where l.category='lost') else 0 end,
+    -- 0312: solo la cola entera lee ganados/perdidos; un lead suelto no los cuenta.
+    'ganados',case when p_lead is null and (select bool_or(enabled and advisor) from scope) then (select count(*) from leads l join scope s on s.id=l.store_id where l.category='won') else 0 end, 'perdidos',case when p_lead is null and (select bool_or(enabled and advisor) from scope) then (select count(*) from leads l join scope s on s.id=l.store_id where l.category='lost') else 0 end,
     'sin_llamar',count(*) filter(where allowed and public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id,next_followup_at)))
 ) from permitted
 $$;
 revoke all on function public.lead_routing_scope(uuid,uuid[],uuid) from public,anon,authenticated;
 grant execute on function public.lead_routing_scope(uuid,uuid[],uuid) to service_role;
 
+-- Una pestaña por tienda reconcilia los Yapes en cada vuelta (punto 9).
+create table if not exists public.yape_reconcile_ticks (
+  store_id uuid primary key references public.stores(id) on delete cascade,
+  last_at timestamptz not null default now()
+);
+comment on table public.yape_reconcile_ticks is
+  'Hora de la última reconciliación de la rotación de Yapes por tienda (claim_yape_reconcile_tick, 0312). Solo service_role.';
+alter table public.yape_reconcile_ticks enable row level security;
+revoke all on public.yape_reconcile_ticks from public, anon, authenticated;
+grant select, insert, update, delete on public.yape_reconcile_ticks to service_role;
+
+create or replace function public.claim_yape_reconcile_tick(p_store uuid, p_min_seconds numeric default 10)
+returns boolean language sql volatile security invoker set search_path=public,pg_temp as $$
+  with won as (
+    insert into yape_reconcile_ticks as t (store_id, last_at) values (p_store, clock_timestamp())
+    on conflict (store_id) do update set last_at = excluded.last_at
+      where t.last_at <= excluded.last_at - make_interval(secs => greatest(coalesce(p_min_seconds, 0), 0)::double precision)
+    returning true as ok
+  )
+  select coalesce((select ok from won), false)
+$$;
+revoke all on function public.claim_yape_reconcile_tick(uuid, numeric) from public, anon, authenticated;
+grant execute on function public.claim_yape_reconcile_tick(uuid, numeric) to service_role;
+
 analyze public.delivery_stops;
 analyze public.draft_orders;
+analyze public.lead_calls;
+analyze public.leads;

@@ -7,29 +7,42 @@ clics no respondían. `lead_routing_scope` llevaba 48.800 s de base desde el
 reinicio del 05-11 (cola entera de una asesora ≈ 1 s y 119.000 bloques), y a
 las 20:10 la rotación de un Yape la pedía para cada asesora en línea, en cada
 pestaña, cada 15 s. **Ninguna regla cambia** (MOM sin cambios): quién ve qué
-lead, a quién se ofrece un Yape y qué cuentan los contadores es lo mismo.
+lead, a quién se ofrece un Yape y qué cuentan los contadores del tablero es lo
+mismo.
 
-**Código (sale solo, no necesita la 0312):**
+**Aplicar la 0312 ANTES del despliegue (o junto con él).** El código funciona
+sin ella —mismas respuestas, y la rotación reconcilia en cada pestaña como
+antes—, pero casi todo el ahorro está en la migración: con la 0299 una consulta
+de un lead suelto sigue costando ~80 ms y 31.000 bloques, y la cola entera que
+sondea Leads cada 30 s en cada pestaña, ~425 ms. Sin la 0312 el código solo
+quita las lecturas de cola entera del pop-up y de la rotación de Yapes.
+
+**Código:**
 - Pop-up de Yapes (`listYapeAlerts`): sin Yapes ofrecidos no se pregunta nada;
   con alguno, solo por esos leads, de a uno. La rotación
   (`reconcileYapeOffers`) pregunta por la asesora que tiene la oferta y, solo
   si hay que ofrecer de nuevo, por las candidatas, de a lead, sin repetir y
   con tres lecturas a la vez como mucho (`lib/lead-routing-batch.ts`).
-- Firma de la cola con bloques (`routingQueueSignature`): sin el minuto que
-  cambiaba sola cada 60 s y forzaba recargar el tablero cada 2 min en cada
-  pestaña; con los contadores, para que lo que cambia con el reloj siga
-  recargando.
+- Una sola pestaña por tienda reconcilia cada 10 s
+  (`lib/yape-reconcile-tick.ts` → `claim_yape_reconcile_tick`); las demás solo
+  leen lo ofrecido. Sin la 0312, todas reconcilian como antes.
+- «Por llamar» se drena por clave (`id > último`) en vez de rangos con
+  `offset` y `count: "exact"`: un solo recorrido de `leads_pkey` por recarga.
 - `claimLead` reutiliza el alcance que ya leyó `authorizeLead`.
+- La firma de la cola con bloques NO cambia (sigue terminando en el minuto):
+  su parte de leads solo cubre open/hot, y ese minuto es lo que recarga en
+  ≤ 2 min un handoff sobre un lead ganado.
 
-**Migración `0312_lead_routing_scope_perf.sql` (cuando convenga, antes o
-después del código; solo rendimiento, mismo resultado):** reescribe el filtro
-de `lead_routing_scope` en dos ramas (cola por índice, lead suelto por clave),
-con los mismos permisos de la 0299, y crea tres índices: llamadas con asesora
-(`lead_calls`), carritos por tienda (`draft_orders`) y la última parada de un
-paquete en su caja (`delivery_stops`, que lleva `return_manifest_expected` de
-~2,6 s a milisegundos por motorizado). Medido en producción con el cuerpo
-nuevo y plan genérico: 1.076 ms → 418 ms antes de los índices, y la respuesta
-idéntica a la de la 0299.
+**Migración `0312_lead_routing_scope_perf.sql`:** reescribe el filtro de
+`lead_routing_scope` en dos ramas (cola por índice, lead suelto por clave), con
+los mismos permisos de la 0299, y un lead suelto ya no cuenta ganados/perdidos
+(nadie los lee ahí); crea cinco índices —llamadas con asesora (`lead_calls`),
+carritos por tienda y por pedido (`draft_orders`), la última parada de un
+paquete en su caja (`delivery_stops`, `return_manifest_expected` de ~2,6 s a
+milisegundos por motorizado) y el lead de una conversación de Kapso (`leads`,
+las 55.000 actualizaciones de la sincronización)—, la tabla
+`yape_reconcile_ticks` con `claim_yape_reconcile_tick` (solo `service_role`), y
+`analyze` de `delivery_stops`, `draft_orders`, `lead_calls` y `leads`.
 
 1. **Los índices, a mano, `concurrently` y fuera de una transacción** (un
    `create index` normal bloquea las escrituras de la tabla mientras se
@@ -45,30 +58,41 @@ idéntica a la de la 0299.
    create index concurrently if not exists delivery_stops_shipment_manifest_idx
      on public.delivery_stops (shipment_id, dispatch_manifest_id, reported_at desc nulls last)
      include (id, status, outcome_reason);
+   create index concurrently if not exists leads_store_kapso_conv_idx
+     on public.leads (store_id, kapso_conversation_id)
+     where kapso_conversation_id is not null;
+   create index concurrently if not exists draft_orders_order_gid_idx
+     on public.draft_orders (order_gid)
+     where order_gid is not null;
    ```
 
 2. **El fichero `0312` completo** (encuentra los índices hechos, reemplaza la
-   función y corre `analyze` de `delivery_stops` y `draft_orders`).
+   función, crea la tabla y la función de la reconciliación y corre `analyze`).
 3. **Comprobar:**
 
    ```sql
    select c.relname, x.indisvalid from pg_index x join pg_class c on c.oid = x.indexrelid
-    where c.relname in ('lead_calls_call_lead_idx','draft_orders_store_gid_idx','delivery_stops_shipment_manifest_idx');
-   select proacl, proconfig, prosecdef from pg_proc where proname = 'lead_routing_scope';
+    where c.relname in ('lead_calls_call_lead_idx','draft_orders_store_gid_idx','delivery_stops_shipment_manifest_idx',
+                        'leads_store_kapso_conv_idx','draft_orders_order_gid_idx');
+   select proname, proacl, proconfig, prosecdef from pg_proc
+    where proname in ('lead_routing_scope','claim_yape_reconcile_tick');
    ```
 
-   Los tres `indisvalid = t` (si uno da `f`, `drop index concurrently` de ese
-   y volver a crearlo); `{postgres=X/postgres,service_role=X/postgres}`,
+   Los cinco `indisvalid = t` (si uno da `f`, `drop index concurrently` de ese
+   y volver a crearlo); en las dos funciones
+   `{postgres=X/postgres,service_role=X/postgres}`,
    `{search_path=public, pg_temp}`, `f`.
 4. **Qué mirar después.** En `pg_stat_statements`, la media de
    `lead_routing_scope` y de `return_manifest_expected` y las llamadas por
-   minuto de la primera; en Supabase, el CPU con varias asesoras en línea y un
-   Yape por verificar.
+   minuto de la primera; la media del `UPDATE leads … kapso_conversation_id`
+   y del `select … from draft_orders where order_gid = any(…)`; en Supabase, el
+   CPU con varias asesoras en línea y un Yape por verificar.
 
 **Marcha atrás.** Revertir el commit (vuelven las lecturas de antes; más caras,
 mismo resultado). Para la función, volver a correr
-`db/migrations/0299_lead_routing_admin_advisors.sql`. Los índices pueden
-quedarse; si se quieren quitar: `drop index concurrently if exists
+`db/migrations/0299_lead_routing_admin_advisors.sql`. La tabla y la función de
+la reconciliación pueden quedarse (el código anterior no las usa). Los índices
+pueden quedarse; si se quieren quitar: `drop index concurrently if exists
 public.<nombre>;`.
 
 ### 06-11-2026 · Shalom: el panel dice exactamente por qué no deja crear la guía (sin migración, MOM §12)

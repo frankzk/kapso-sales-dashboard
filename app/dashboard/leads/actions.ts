@@ -48,6 +48,7 @@ import { firstProductWithImage, type CatalogImage } from "@/lib/cart-image-test"
 import { productPhotosThatLoad } from "@/lib/product-photos";
 import { OFFER_TTL_MS, leadsNeedingOffer, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
 import { SCOPE_CONCURRENCY, createBlockedLeadChecker, mapBounded } from "@/lib/lead-routing-batch";
+import { claimYapeReconcileTick } from "@/lib/yape-reconcile-tick";
 import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
@@ -863,7 +864,9 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
   await admin.from("user_presence").upsert({ user_id: user.id, last_seen_at: new Date(nowMs).toISOString() });
   const { data: storeRows } = await sb.from("stores").select("id");
   const storeIds = ((storeRows as { id: string }[] | null) ?? []).map((s) => s.id);
-  for (const sid of storeIds) await reconcileYapeOffers(admin, sid, nowMs);
+  // One tab per store per YAPE_RECONCILE_MIN_MS advances the rotation; the
+  // others only read what it offered (0312). Falls back to always reconciling.
+  for (const sid of storeIds) if (await claimYapeReconcileTick(admin, sid)) await reconcileYapeOffers(admin, sid, nowMs);
   const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
   const claimCutoff = new Date(nowMs - CLAIM_TTL_MINUTES * 60_000).toISOString();
   const { data, error } = await admin

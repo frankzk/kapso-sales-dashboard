@@ -1,8 +1,11 @@
 -- THROWAWAY DATABASE ONLY. No production configuration or business rows.
 -- 0312 changes HOW lead_routing_scope finds its rows, never WHAT it returns:
--- every (actor, stores, lead) answer must equal the 0299 body's, the new
--- indexes must exist with the shape the queries use, and the function keeps
--- the 0299 privileges, volatility and search_path.
+-- every (actor, stores, lead) answer must equal the 0299 body's (a single-lead
+-- answer may only differ in counts.ganados/perdidos, which 0312 no longer
+-- computes there and no single-lead caller reads), the new indexes must exist
+-- with the shape the queries use, the function keeps the 0299 privileges,
+-- volatility and search_path, and claim_yape_reconcile_tick lets one caller per
+-- store through per interval.
 begin;
 insert into auth.users(id,email)
 select ('cc031200-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,'routing-perf-'||n||'@test.invalid' from generate_series(10,16)n;
@@ -104,11 +107,43 @@ begin
   where c.lead is not null and ((s.j->'blockedIds') ? c.lead::text) <> ((f.j->'blockedIds') ? c.lead::text);
  if n>0 then raise exception 'single-lead and whole-queue scope disagree in % cases',n; end if;
 
+ -- Single-lead answers do not count won/lost (nobody reads them there); the
+ -- whole queue still does, and the seed makes that count non-zero.
+ if exists(select 1 from perf_cases c join perf_new s using(case_id) where c.lead is not null
+            and ((s.j->'counts'->>'ganados')::int<>0 or (s.j->'counts'->>'perdidos')::int<>0)) then
+   raise exception 'single-lead scope still counts won/lost';
+ end if;
+ if not exists(select 1 from perf_cases c join perf_new s using(case_id) where c.lead is null and (s.j->'counts'->>'ganados')::int>0) then
+   raise exception 'seed does not exercise the whole-queue won count';
+ end if;
+
  -- Indexes, with the shape the function and return_manifest_expected read.
  select string_agg(i.relname,',') into d from pg_index x join pg_class i on i.oid=x.indexrelid
-  where i.relname in ('lead_calls_call_lead_idx','draft_orders_store_gid_idx','delivery_stops_shipment_manifest_idx') and x.indisvalid;
- if coalesce(d,'') !~ 'lead_calls_call_lead_idx' or d !~ 'draft_orders_store_gid_idx' or d !~ 'delivery_stops_shipment_manifest_idx' then
+  where i.relname in ('lead_calls_call_lead_idx','draft_orders_store_gid_idx','delivery_stops_shipment_manifest_idx',
+                      'leads_store_kapso_conv_idx','draft_orders_order_gid_idx') and x.indisvalid;
+ if coalesce(d,'') !~ 'lead_calls_call_lead_idx' or d !~ 'draft_orders_store_gid_idx' or d !~ 'delivery_stops_shipment_manifest_idx'
+    or d !~ 'leads_store_kapso_conv_idx' or d !~ 'draft_orders_order_gid_idx' then
    raise exception 'missing 0312 index: %',d;
+ end if;
+ if pg_get_indexdef('public.leads_store_kapso_conv_idx'::regclass) !~ '\(store_id, kapso_conversation_id\) WHERE \(kapso_conversation_id IS NOT NULL\)' then
+   raise exception 'leads kapso index shape changed: %',pg_get_indexdef('public.leads_store_kapso_conv_idx'::regclass);
+ end if;
+ if pg_get_indexdef('public.draft_orders_order_gid_idx'::regclass) !~ '\(order_gid\) WHERE \(order_gid IS NOT NULL\)' then
+   raise exception 'draft_orders order_gid index shape changed: %',pg_get_indexdef('public.draft_orders_order_gid_idx'::regclass);
+ end if;
+
+ -- One Yape reconcile per store per interval, whoever asks; other stores and a
+ -- zero interval are not held back. Only the service role may call it.
+ if not claim_yape_reconcile_tick('cc031200-0000-0000-0000-000000000002',10) then raise exception 'first reconcile tick refused'; end if;
+ if claim_yape_reconcile_tick('cc031200-0000-0000-0000-000000000002',10) then raise exception 'second reconcile tick within 10 s allowed'; end if;
+ if not claim_yape_reconcile_tick('cc031200-0000-0000-0000-000000000003',10) then raise exception 'another store held back by the first'; end if;
+ if not claim_yape_reconcile_tick('cc031200-0000-0000-0000-000000000002',0) then raise exception 'zero interval refused'; end if;
+ if has_function_privilege('anon','public.claim_yape_reconcile_tick(uuid,numeric)','execute')
+ or has_function_privilege('authenticated','public.claim_yape_reconcile_tick(uuid,numeric)','execute')
+ or not has_function_privilege('service_role','public.claim_yape_reconcile_tick(uuid,numeric)','execute')
+ or has_table_privilege('authenticated','public.yape_reconcile_ticks','select')
+ or has_table_privilege('anon','public.yape_reconcile_ticks','select') then
+   raise exception 'reconcile tick privileges changed';
  end if;
  if pg_get_indexdef('public.lead_calls_call_lead_idx'::regclass) !~ 'WHERE \(\(kind = ''call''::text\) AND \(vendedora IS NOT NULL\)\)' then
    raise exception 'lead_calls index predicate changed: %',pg_get_indexdef('public.lead_calls_call_lead_idx'::regclass);
@@ -147,8 +182,10 @@ do $$
 declare n int; total int;
 begin
  select count(*) into total from perf_cases;
- select count(*) into n from perf_old o join perf_new w using(case_id)
-  where (o.j-'blockedIds') is distinct from (w.j-'blockedIds')
+ select count(*) into n from perf_old o join perf_new w using(case_id) join perf_cases c using(case_id)
+  where (case when c.lead is null then o.j-'blockedIds' else (o.j-'blockedIds') #- '{counts,ganados}' #- '{counts,perdidos}' end)
+        is distinct from
+        (case when c.lead is null then w.j-'blockedIds' else (w.j-'blockedIds') #- '{counts,ganados}' #- '{counts,perdidos}' end)
      or (select coalesce(array_agg(x order by x),'{}') from jsonb_array_elements_text(o.j->'blockedIds') x)
         is distinct from (select coalesce(array_agg(x order by x),'{}') from jsonb_array_elements_text(w.j->'blockedIds') x);
  if n>0 then raise exception '0312 scope differs from 0299 in % of % cases',n,total; end if;
