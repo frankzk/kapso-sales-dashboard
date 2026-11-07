@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planYapeOffers, type RoutingAdvisor, type RoutingLead } from "@/lib/yape-routing";
+import { leadsNeedingOffer, planYapeOffers, type RoutingAdvisor, type RoutingLead } from "@/lib/yape-routing";
 
 const NOW = 1_000_000;
 const online = (id: string, agoMs = 0): RoutingAdvisor => ({ id, lastSeenMs: NOW - agoMs });
@@ -89,5 +89,25 @@ describe("planYapeOffers", () => {
 
   it("offers nothing when no advisor is online", () => {
     expect(planYapeOffers([lead("new")], [online("A", 100_000)], NOW)).toEqual([]);
+  });
+});
+
+describe("leadsNeedingOffer", () => {
+  // reconcileYapeOffers only reads candidates' work blocks when this is
+  // non-empty (0312): it must be exactly the set planYapeOffers would plan.
+  it("is the unclaimed leads without a fresh offer, by id", () => {
+    const leads = [
+      lead("z-new"),
+      lead("claimed", { claimedBy: "A" }),
+      lead("fresh", { offeredTo: "B", offeredAtMs: NOW - 1_000 }),
+      lead("expired", { offeredTo: "B", offeredAtMs: NOW - 100_000 }),
+    ];
+    expect(leadsNeedingOffer(leads, NOW).map((l) => l.id)).toEqual(["expired", "z-new"]);
+    const planned = planYapeOffers(leads, [online("A"), online("B"), online("C")], NOW).map((p) => p.leadId).sort();
+    expect(planned).toEqual(["expired", "z-new"]);
+  });
+
+  it("is empty when every Yape is claimed or freshly offered (the common poll)", () => {
+    expect(leadsNeedingOffer([lead("c", { claimedBy: "A" }), lead("f", { offeredTo: "B", offeredAtMs: NOW })], NOW)).toEqual([]);
   });
 });
