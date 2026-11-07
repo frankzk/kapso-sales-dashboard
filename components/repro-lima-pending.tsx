@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { approveAliclikRetry, dismissAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { Badge, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
-import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-sheet";
+import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-panel";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";

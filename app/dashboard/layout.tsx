@@ -89,6 +89,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         canCreateGuide={permissions.can("aliclik.create_guide")}
         canCreateTandersGuide={permissions.can("tanders.create_guide")}
         canCreateShalomGuide={permissions.can("shalom.create_guide")}
+        // La pestaña «Repro Lima» de la ficha: quien llama a los clientes de
+        // Lima (MOM §9.5). «Reintentos Aliclik» solo (`repro_lima.retries`) no atiende.
+        canAttendReproLima={permissions.can("repro_lima.manage")}
         closurePermissions={{
           canReturn: permissions.can("closure.return"),
           canInventory: permissions.can("closure.inventory"),

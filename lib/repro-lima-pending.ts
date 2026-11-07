@@ -279,6 +279,25 @@ export function isLimaPendingStage(stage: unknown): stage is LimaPendingStage {
   return LIMA_PENDING_STAGES.includes(stage as LimaPendingStage);
 }
 
+/**
+ * ¿Puede estar en Repro Lima? Cobertura Lima y todavía por entregar: el mismo
+ * filtro con el que `loadReproLima` (con `attention`) lee la etapa. La ficha lo
+ * usa para no preguntar por pedidos que no pueden estar; quien decide si el
+ * pedido está —y si sale la pestaña «Repro Lima»— es `loadReproRow`, que
+ * además mira la tienda, el permiso y que no esté anulado (MOM §9.5).
+ */
+export function isReproLimaCandidate(row: { coverage?: string | null; macro_stage?: string | null }): boolean {
+  return row.coverage === "lima" && isLimaPendingStage(row.macro_stage);
+}
+
+/**
+ * Con qué modo abre «Atender»: «Cerrados» y un acuerdo programado se leen sin
+ * tomar el caso (E29); lo demás se atiende y toma el candado.
+ */
+export function reproAttendMode(row: { list: ReproList; agreement?: unknown }): "edit" | "read" {
+  return row.list === "cerrados" || row.list === "programados" && Boolean(row.agreement) ? "read" : "edit";
+}
+
 export function pendingFilters(rows: readonly LimaPendingOrder[]): LimaPendingFilter[] {
   return LIMA_PENDING_STAGES.flatMap((stage) => {
     const matching = rows.filter((r) => r.stage === stage);

@@ -13,7 +13,7 @@ import { parseMasterQuery } from "@/lib/master-query";
 import { agreementDateProblem, materializationPlan, orderHasCoordinate, REPRO_LISTS, reproNeedsCoordinate, type BoxLocation } from "@/lib/repro-lima";
 import { limaOpenBreakdown, type LimaOpenCountRow, type StageAging } from "@/lib/repro-lima-todos";
 import { swaypDispatchDayOptions } from "@/lib/swayp-dispatch-days";
-import { planText } from "@/components/repro-lima-sheet";
+import { planText } from "@/components/repro-lima-panel";
 import { ReproLimaTodos } from "@/components/repro-lima-todos";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
@@ -42,11 +42,12 @@ const board = read("components/repro-lima-board.tsx");
 const todos = read("components/repro-lima-todos.tsx");
 const pendingUI = read("components/repro-lima-pending.tsx");
 const pendingRules = read("lib/repro-lima-pending.ts");
-const sheet = read("components/repro-lima-sheet.tsx");
+const panel = read("components/repro-lima-panel.tsx");
 const sidebar = read("components/sidebar.tsx");
 const shell = read("components/dashboard-shell.tsx");
 const layout = read("app/dashboard/layout.tsx");
 const access = read("lib/repro-lima-access.ts");
+const drawer = read("components/order-drawer.tsx");
 
 /** Lo que va entre dos marcas del mismo archivo. */
 function between(src: string, start: string, end: string): string {
@@ -90,7 +91,7 @@ describe("quién entra (D11, E32, E36)", () => {
   });
 
   it("los componentes de cliente solo importan tipos del acceso (que es de servidor)", () => {
-    for (const src of [board, sheet, todos]) {
+    for (const src of [board, panel, todos]) {
       expect(src.startsWith('"use client";')).toBe(true);
       expect(src).toContain('import type { ');
       expect(src).not.toMatch(/import \{[^}]*\} from "@\/lib\/repro-lima-access"/);
@@ -129,16 +130,17 @@ describe("la entrada del menú (§9.5, D11)", () => {
 });
 
 describe("el candado de la hoja (D10)", () => {
-  const claimEffect = between(sheet, "const onPageHide = () => {", "}, [orderId, mode, claimAttempt, reload]);");
+  const claimEffect = between(panel, "const onPageHide = () => {", "}, [orderId, mode, claimAttempt, reload, visible]);");
   const cleanup = between(claimEffect, "    return () => {\n      active = false;", "\n    };\n  }, [orderId");
-  const finish = between(sheet, "function finish(", "\n  }\n");
+  const finish = between(panel, "function finish(", "\n  }\n");
 
   it("se toma al abrir, solo al atender: «Ver acuerdo» y «Cerrados» no toman nada (E29)", () => {
-    const effect = between(sheet, "useEffect(() => {\n    if (mode !== \"edit\") return;", "}, [orderId, mode, claimAttempt, reload]);");
-    expect(effect.indexOf('if (mode !== "edit") return;')).toBeLessThan(effect.indexOf("claimReproCase(orderId"));
-    expect(board).toContain('const read = current.list === "cerrados" || current.list === "programados" && Boolean(current.agreement)');
-    expect(board).toContain('openRow(current, read ? "read" : "edit", false, previous)');
-    expect(board).toContain('await loadReproRow(row.orderId)');
+    const effect = between(panel, "useEffect(() => {\n    // Fuera de la pestaña no se toma nada", "}, [orderId, mode, claimAttempt, reload, visible]);");
+    expect(effect.indexOf('if (mode !== "edit" || !visible) return;')).toBeLessThan(effect.indexOf("claimReproCase(orderId"));
+    // El modo lo decide la ficha con la misma regla que usaba el tablero.
+    expect(pendingRules).toContain('return row.list === "cerrados" || row.list === "programados" && Boolean(row.agreement) ? "read" : "edit";');
+    expect(drawer).toContain("initialMode={reproSession.mode ?? reproAttendMode(reproRow)}");
+    expect(drawer).toContain("loadReproRow(orderId)");
     expect(pendingUI).not.toContain('title={`Atender');
   });
 
@@ -146,27 +148,27 @@ describe("el candado de la hoja (D10)", () => {
     expect(claimEffect).toContain("renewReproCase(result.caseId)");
     expect(claimEffect).toContain("}, REPRO_CLAIM_HEARTBEAT_MS);");
     expect(claimEffect).toContain('setClaimState("lost");');
-    expect(sheet).toContain("Lo que escribiste sigue aquí. Vuelve a tomarlo para guardarlo.");
+    expect(panel).toContain("Lo que escribiste sigue aquí. Vuelve a tomarlo para guardarlo.");
     // Perder el caso apaga el formulario, no lo desmonta.
-    expect(sheet).toContain('const showForm = mine || (mode === "edit" && (claimState === "lost" || hasDraft));');
-    expect(sheet).toContain('{showForm && (\n          <fieldset disabled={!mine} className="contents">');
+    expect(panel).toContain('const showForm = mine || (mode === "edit" && (claimState === "lost" || hasDraft));');
+    expect(panel).toContain('{showForm && (\n          <fieldset disabled={!mine} className="contents">');
   });
 
   it("con algo escrito, sin el caso (tomándolo, con otra persona o si falló la toma) lo escrito se ve apagado (§9.5)", () => {
     // La vuelta del bfcache o «Volver a tomarlo» pueden terminar en «held» o
     // «error»: el borrador no se esconde, solo se apaga hasta tener el caso.
-    expect(sheet).toContain('(claimState === "lost" || hasDraft)');
+    expect(panel).toContain('(claimState === "lost" || hasDraft)');
     // La silueta de «Tomando el caso…» solo cuando no hay nada que mostrar.
-    expect(sheet).toContain('{mode === "edit" && claimState === "claiming" && !showForm && (');
-    expect(sheet).not.toContain("{(mine || claimState === \"lost\") && (");
-    expect(sheet).toContain("Lo que escribiste sigue aquí. Reintenta para guardarlo.");
+    expect(panel).toContain('{mode === "edit" && claimState === "claiming" && !showForm && (');
+    expect(panel).not.toContain("{(mine || claimState === \"lost\") && (");
+    expect(panel).toContain("Lo que escribiste sigue aquí. Reintenta para guardarlo.");
   });
 
   it("la hoja calcula «Qué hacer con la caja» con lo mismo que el servidor (reabierto y reintento)", () => {
-    const call = between(sheet, "const boxInput = (c: ReproCourier): ReproBoxActionResult => reproBoxAction({", "});");
+    const call = between(panel, "const boxInput = (c: ReproCourier): ReproBoxActionResult => reproBoxAction({", "});");
     expect(call).toContain("reopened: current.reopened,");
     expect(call).toContain("retryAdmission: current.retryAdmission,");
-    expect(sheet).toContain("Kapta no la crea ${faltaSalidaWhy(boxAction)}");
+    expect(panel).toContain("Kapta no la crea ${faltaSalidaWhy(boxAction)}");
   });
 
   it("el MOM dice lo que hace la hoja si tomar el caso falla (§9.5, el candado)", () => {
@@ -176,12 +178,12 @@ describe("el candado de la hoja (D10)", () => {
   });
 
   it("si la toma falla, «Reintentar» vuelve a tomar sin cerrar la hoja", () => {
-    expect(sheet).toContain('{(claimState === "held" || claimState === "error") && (');
-    const retry = between(sheet, '{(claimState === "held" || claimState === "error") && (', "</OpsButton>");
+    expect(panel).toContain('{(claimState === "held" || claimState === "error") && (');
+    const retry = between(panel, '{(claimState === "held" || claimState === "error") && (', "</OpsButton>");
     expect(retry).toContain("onClick={() => setClaimAttempt((n) => n + 1)}>Reintentar</OpsButton>");
     // Cerrar ya no es la única salida: cerrar descartaría lo escrito.
-    expect(sheet).not.toContain("Cierra y vuelve a intentarlo");
-    expect(sheet).toContain('setClaimMessage("No pudimos tomar el caso. Vuelve a intentarlo.");');
+    expect(panel).not.toContain("Cierra y vuelve a intentarlo");
+    expect(panel).toContain('setClaimMessage("No pudimos tomar el caso. Vuelve a intentarlo.");');
   });
 
   it("cerrar o recargar la pestaña lo suelta con un beacon, solo después de tenerlo", () => {
@@ -195,12 +197,12 @@ describe("el candado de la hoja (D10)", () => {
   });
 
   it("cerrar la hoja, «Soltar» y pasar al siguiente sueltan el caso", () => {
-    const release = between(sheet, "function releaseCurrentClaim() {", "\n  }");
+    const release = between(panel, "function releaseCurrentClaim() {", "\n  }");
     expect(release).toContain("session.shouldRelease = true;");
     expect(release).toContain("releaseReproCase(session.caseId)");
-    expect(between(sheet, "function doExit() {", "\n  }")).toContain("releaseCurrentClaim();");
-    expect(between(sheet, "function finish(", "\n  }")).toContain("releaseCurrentClaim();");
-    expect(sheet).toContain('onClick={() => requestExit("release")}>Soltar</OpsButton>');
+    expect(between(panel, "function doExit() {", "\n  }")).toContain("releaseCurrentClaim();");
+    expect(between(panel, "function finish(", "\n  }")).toContain("releaseCurrentClaim();");
+    expect(panel).toContain('onClick={() => requestExit("release")}>Soltar</OpsButton>');
   });
 
   it("desmontar la hoja sin «Cerrar» ni «Soltar» (atrás del navegador) también lo suelta, una sola vez", () => {
@@ -230,7 +232,7 @@ describe("el candado de la hoja (D10)", () => {
     expect(finish.indexOf("if (result.claimLost)")).toBeLessThan(finish.indexOf('setFeedback({ kind: "error"'));
     expect(lost).not.toContain("releaseCurrentClaim");
     expect(lost).not.toContain("onSaved");
-    expect(sheet).toContain('onClick={() => setClaimAttempt((n) => n + 1)}>Volver a tomarlo</OpsButton>');
+    expect(panel).toContain('onClick={() => setClaimAttempt((n) => n + 1)}>Volver a tomarlo</OpsButton>');
   });
 
   it("«La caja cambió mientras decidías» (boxChanged) relee los hechos y conserva lo escrito (§9.5)", () => {
@@ -238,45 +240,48 @@ describe("el candado de la hoja (D10)", () => {
     expect(changed).toContain("void reload();");
     expect(changed).toContain("onChanged();");
     // Releer recalcula la acción de la caja desde los hechos frescos (`current`).
-    expect(sheet).toContain("const current = fresh ?? row;");
-    expect(sheet).toContain("const box = current.box;");
+    expect(panel).toContain("const current = fresh ?? row;");
+    expect(panel).toContain("const box = current.box;");
     // El borrador vive en el estado de la hoja: releer no lo toca.
     expect(changed).not.toMatch(/setNote|setOutcome|setAgreedOn|setChanges/);
   });
 
   it("con otra persona, solo lectura con la hora en que se libera", () => {
-    expect(sheet).toContain('está atendiendo este pedido${holder?.until ? `; se libera a las ${limaHour(holder.until)}` : ""}.');
+    expect(panel).toContain('está atendiendo este pedido${holder?.until ? `; se libera a las ${limaHour(holder.until)}` : ""}.');
   });
 
   it("con texto sin guardar, avisa antes de salir (§11.5)", () => {
-    expect(sheet).toContain("Escribiste algo que todavía no se guardó.");
-    expect(between(sheet, "function requestExit(", "\n  }")).toContain("setPendingExit(kind)");
+    expect(panel).toContain("Escribiste algo que todavía no se guardó.");
+    expect(between(panel, "function requestExit(", "\n  }")).toContain("setPendingExit(kind)");
   });
 
   it("el aviso de texto sin guardar vale en cualquier estado del candado, no solo con el caso", () => {
     // Con otra persona («held»), tomándolo o si falló la toma, «Cerrar», la X y
     // Escape también pasan por aquí: sin el aviso, la nota se perdía callada.
-    const exit = between(sheet, "function requestExit(", "\n  }");
+    const exit = between(panel, "function requestExit(", "\n  }");
     expect(exit).toContain('if (mode === "edit" && hasDraft) { setPendingExit(kind); return; }');
     expect(exit).not.toContain("mine");
     expect(exit).not.toContain("claimState");
-    expect(sheet).toContain('onClose={() => requestExit("close")}');
-    expect(sheet).toContain('exitRef.current("close");');
-    expect(sheet).toContain('onClick={() => requestExit("close")}>Cerrar</OpsButton>');
+    // La ✕, el fondo y Escape de la ficha preguntan a la pestaña antes de cerrar.
+    expect(between(panel, "exitGuard.current = () => {", "};")).toContain('exitRef.current("close");');
+    expect(between(drawer, "function requestClose() {", "\n  }")).toContain("reproExitGuard.current?.()");
+    expect(drawer).toContain('onClick={requestClose}');
+    expect(drawer).toContain('if (e.key === "Escape") requestCloseRef.current();');
+    expect(panel).toContain('onClick={() => requestExit("close")}>Cerrar</OpsButton>');
   });
 });
 
 describe("un envío, un operationId (E3)", () => {
   it("cada formulario estrena un crypto.randomUUID()", () => {
-    expect(sheet).toContain("c.randomUUID()");
-    expect(sheet).toContain("const [operationId, setOperationId] = useState(newOperationId);");
+    expect(panel).toContain("c.randomUUID()");
+    expect(panel).toContain("const [operationId, setOperationId] = useState(newOperationId);");
   });
 
   it("si el formulario cambia después de enviarlo, se estrena otro", () => {
-    const regen = between(sheet, "useEffect(() => {\n    if (submittedRef.current !== null", "}, [fingerprint]);");
+    const regen = between(panel, "useEffect(() => {\n    if (submittedRef.current !== null", "}, [fingerprint]);");
     expect(regen).toContain("submittedRef.current !== fingerprint");
     expect(regen).toContain("setOperationId(newOperationId());");
-    const save = between(sheet, "function save(advance: boolean) {", "\n  }\n");
+    const save = between(panel, "function save(advance: boolean) {", "\n  }\n");
     // Antes de cualquiera de los dos envíos: la llamada y «Desarmar y cerrar sin llamada».
     expect(save.indexOf("submittedRef.current = fingerprint;")).toBeLessThan(save.indexOf("closeReproCase("));
     expect(save.indexOf("submittedRef.current = fingerprint;")).toBeLessThan(save.indexOf("registerReproCall(input)"));
@@ -287,33 +292,33 @@ describe("un envío, un operationId (E3)", () => {
 
 describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
   it("la fecha nunca se preselecciona (D9) y el Swayp usa su selector sin domingos (E15)", () => {
-    expect(sheet).toContain('const [agreedOn, setAgreedOn] = useState("");');
-    expect(sheet).toContain("<SwaypDispatchDateSelect");
-    expect(sheet).toContain('const swayp = courier === "fenix";');
-    expect(sheet).toContain("agreementDateProblem({ day, today, nowMinute: clock.minute, cutoff: current.cutoff, courier, boxAction: action })");
+    expect(panel).toContain('const [agreedOn, setAgreedOn] = useState("");');
+    expect(panel).toContain("<SwaypDispatchDateSelect");
+    expect(panel).toContain('const swayp = courier === "fenix";');
+    expect(panel).toContain("agreementDateProblem({ day, today, nowMinute: clock.minute, cutoff: current.cutoff, courier, boxAction: action })");
   });
 
   it("la hora de la próxima llamada pasa siempre por limaDateTimeIso (E19)", () => {
-    expect(sheet).toContain("iso: limaDateTimeFromInput(e.target.value)");
-    expect(sheet).not.toMatch(/new Date\(e\.target\.value\)/);
-    expect(sheet).toContain("nextRoundAt(new Date())");
+    expect(panel).toContain("iso: limaDateTimeFromInput(e.target.value)");
+    expect(panel).not.toMatch(/new Date\(e\.target\.value\)/);
+    expect(panel).toContain("nextRoundAt(new Date())");
   });
 
   it("Urpi va apagado con su porqué (E16) y la acción de caja viaja como expectedBoxAction", () => {
-    expect(sheet).toContain('[...REPRO_COURIER_CHOICES, "urpi" as const]');
-    expect(sheet).toContain("reproCourierDisabledReason(c)");
-    expect(sheet).toContain("input.expectedBoxAction = action;");
-    expect(sheet).toContain("boxActionReadyLabel(decided.action, courier, current.cutoff)");
+    expect(panel).toContain('[...REPRO_COURIER_CHOICES, "urpi" as const]');
+    expect(panel).toContain("reproCourierDisabledReason(c)");
+    expect(panel).toContain("input.expectedBoxAction = action;");
+    expect(panel).toContain("boxActionReadyLabel(decided.action, courier, current.cutoff)");
   });
 
   it("«No esperar la caja» con la caja que no consta solo en un caso reabierto, como el servidor (E29, §9.3)", () => {
-    expect(sheet).toContain("const showNoEsperar = noEsperarCajaAplica(box, current.reopened);");
-    expect(between(sheet, "const boxInput = (c: ReproCourier)", "\n  });")).toContain("reopened: current.reopened,");
+    expect(panel).toContain("const showNoEsperar = noEsperarCajaAplica(box, current.reopened);");
+    expect(between(panel, "const boxInput = (c: ReproCourier)", "\n  });")).toContain("reopened: current.reopened,");
   });
 
   it("Swayp ofrece todas las fechas hasta los 60 días del servidor, también la que viene de otro courier", () => {
-    expect(sheet).toContain("const maxDay = shiftDay(today, RESCHEDULE_MAX_DAYS);");
-    expect(sheet).toContain("<SwaypDispatchDateSelect value={agreedOn} lastDay={maxDay}");
+    expect(panel).toContain("const maxDay = shiftDay(today, RESCHEDULE_MAX_DAYS);");
+    expect(panel).toContain("<SwaypDispatchDateSelect value={agreedOn} lastDay={maxDay}");
     const select = read("components/swayp-dispatch-date-select.tsx");
     expect(select).toContain("swaypDispatchDayOptions(limaTodayKey(), undefined, lastDay)");
   });
@@ -349,43 +354,43 @@ describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
     expect(planText({ no: "falta_salida" }, "propio", office, "desarmar_rearmar")).toContain("Kapta no la crea con la caja en oficina");
     expect(planText({ no: "falta_salida" }, "propio", office, null)).toContain("Kapta no la crea con la caja en oficina");
     // Las dos llamadas le pasan la acción de la caja: la del acuerdo guardado y la calculada.
-    expect(sheet).toContain("planText(current.plan, agreement.courier, current.box, isBoxAction(agreement.boxAction) ? agreement.boxAction : null)");
-    expect(sheet).toContain("planText(plan, courier, box, decided.action)");
-    expect(sheet.match(/planText\(/g)?.length).toBe(3);
+    expect(panel).toContain("planText(current.plan, agreement.courier, current.box, isBoxAction(agreement.boxAction) ? agreement.boxAction : null)");
+    expect(panel).toContain("planText(plan, courier, box, decided.action)");
+    expect(panel.match(/planText\(/g)?.length).toBe(3);
   });
 
   it("«Ya no lo quiere» pide un segundo clic que nombra el pedido y no anula la venta (§11.5)", () => {
-    expect(sheet).toContain("Sí, desarmar y cerrar {current.orderName}");
-    expect(sheet).toContain("No anula la venta: solo la tienda la anula.");
-    expect(sheet).not.toContain("solo Shopify la anula");
-    expect(sheet).toContain('if (outcome === "no_quiere") input.confirmOrderName = current.orderName;');
+    expect(panel).toContain("Sí, desarmar y cerrar {current.orderName}");
+    expect(panel).toContain("No anula la venta: solo la tienda la anula.");
+    expect(panel).not.toContain("solo Shopify la anula");
+    expect(panel).toContain('if (outcome === "no_quiere") input.confirmOrderName = current.orderName;');
   });
 });
 
 describe("solo lectura y reabrir (E12, E29)", () => {
   it("«Volver a atender» pide el segundo clic en la hoja y reabre con `reopen`", () => {
-    expect(sheet).toContain('onClick={() => setShowReopen(true)}>Volver a atender</OpsButton>');
-    expect(sheet).toContain("Si Almacén ya la desarmó, elige «No esperar la caja».");
-    expect(sheet).toContain('onClick={() => { setShowReopen(false); reopenRef.current = true; setMode("edit"); setClaimAttempt((n) => n + 1); }}');
-    expect(sheet).toContain("claimReproCase(orderId, reopen ? { reopen: true } : {})");
+    expect(panel).toContain('onClick={() => setShowReopen(true)}>Volver a atender</OpsButton>');
+    expect(panel).toContain("Si Almacén ya la desarmó, elige «No esperar la caja».");
+    expect(panel).toContain('onClick={() => { setShowReopen(false); reopenRef.current = true; setMode("edit"); setClaimAttempt((n) => n + 1); }}');
+    expect(panel).toContain("claimReproCase(orderId, reopen ? { reopen: true } : {})");
   });
 
   it("`reopen` vale para una sola toma: «Reintentar» y «Volver a tomarlo» no reabren", () => {
     // Un ref, no un estado en las dependencias: borrarlo no vuelve a tomar.
-    expect(sheet).toContain("const reopenRef = useRef(false);");
-    expect(sheet).not.toMatch(/useState\(false\);\s*\n.*setReopen|const \[reopen, setReopen\]/);
-    const effect = between(sheet, "useEffect(() => {\n    if (mode !== \"edit\") return;", "}, [orderId, mode, claimAttempt, reload]);");
+    expect(panel).toContain("const reopenRef = useRef(false);");
+    expect(panel).not.toMatch(/useState\(false\);\s*\n.*setReopen|const \[reopen, setReopen\]/);
+    const effect = between(panel, "useEffect(() => {\n    // Fuera de la pestaña no se toma nada", "}, [orderId, mode, claimAttempt, reload, visible]);");
     expect(effect).toContain("const reopen = reopenRef.current;");
     // Se borra al responder la toma (éxito, otra persona, error o fallo de red).
     expect(between(effect, ".then((result) => {", "if (session.shouldRelease)")).toContain("reopenRef.current = false;");
     expect(between(effect, ".catch(() => {\n        reopenRef", "});")).toContain("reopenRef.current = false;");
     // Los botones que vuelven a tomar no lo encienden.
-    expect(sheet.match(/reopenRef\.current = true/g)?.length).toBe(1);
-    expect(sheet).toContain('onClick={() => setClaimAttempt((n) => n + 1)}>Reintentar</OpsButton>');
+    expect(panel.match(/reopenRef\.current = true/g)?.length).toBe(1);
+    expect(panel).toContain('onClick={() => setClaimAttempt((n) => n + 1)}>Reintentar</OpsButton>');
   });
 
   it("«Ya la encontré: programar» pide «La caja está en la oficina» antes de programar", () => {
-    for (const src of [sheet]) {
+    for (const src of [panel]) {
       expect(src).toContain("Ya la encontré: programar");
       expect(src).toContain("La caja está en la oficina");
       expect(src).toContain("...(found ? { found: true } : {})");
@@ -395,9 +400,11 @@ describe("solo lectura y reabrir (E12, E29)", () => {
 
 describe("el tablero (E31, E33)", () => {
   it("la ficha se abre sobre Repro Lima, nunca navegando al Master", () => {
-    expect(sheet).toContain("const openDrawer = useOpenOrderDrawer();");
-    expect(board).toContain("<OrderLink");
-    for (const src of [board, sheet, todos]) expect(src).not.toContain('href="/dashboard/pedidos?');
+    expect(board).toContain("const openDrawer = useOpenOrderDrawer();");
+    // La pestaña ya está dentro de la ficha: no hay «Ver ficha» que abra otra encima.
+    expect(panel).not.toContain("useOpenOrderDrawer");
+    expect(panel).not.toContain("Ver ficha");
+    for (const src of [board, panel, todos]) expect(src).not.toContain('href="/dashboard/pedidos?');
   });
 
   it("tabla desde 1280 px y filas con líneas finas más angosto", () => {
@@ -465,17 +472,19 @@ describe("el tablero (E31, E33)", () => {
     expect(board).toContain('window.addEventListener("focus", onFocus);');
   });
 
-  it("«Guardar y pasar al siguiente» no tapa un error ni un aviso con la hoja siguiente", () => {
-    const onSaved = between(board, "function onSaved(saved: ReproSaved, advance: boolean) {", "\n  }\n");
-    // Un error o la Mesa de ruta: no pasa; la hoja se cierra y el aviso queda en el tablero.
-    expect(onSaved).toContain("const next = advance && !saved.error && !saved.mesa ? nextAfter(saved.orderId) : null;");
-    expect(onSaved).toContain("setOpen(null);");
-    // Lo demás («Avisa a Almacén…») va arriba de la hoja siguiente.
-    expect(onSaved).toContain('if (next) void attend(next, { orderName: saved.orderName, text });');
-    expect(board).toContain("previous={open.previous}");
-    expect(sheet).toContain('<Banner tone="ok" role="status" title={previous.orderName}>');
+  it("«Guardar y pasar al siguiente» no tapa un error ni un aviso con la pestaña siguiente", () => {
+    const onSaved = between(drawer, "function onReproSaved(saved: ReproSaved, advance: boolean) {", "\n  }\n");
+    // Un error o la Mesa de ruta: no pasa; el aviso queda arriba de esta pestaña.
+    expect(onSaved).toContain("const next = advance && !saved.error && !saved.mesa ? reproLimaNext(saved.orderId) : null;");
+    expect(onSaved).toContain('mode: "read",');
+    expect(onSaved).toContain('tone: saved.error ? "crit" : "ok",');
+    // Lo demás («Avisa a Almacén…») va arriba de la pestaña del siguiente, en la misma pestaña.
+    expect(onSaved).toContain("handOffReproLima(next, { orderName: saved.orderName, text });");
+    expect(onSaved).toContain('orderDrawerHref(next, "reprolima", { pathname: window.location.pathname, search: window.location.search })');
+    expect(drawer).toContain("previous={reproSession.notice}");
+    expect(panel).toContain('<Banner tone={previous.tone ?? "ok"} role={previous.tone === "crit" ? "alert" : "status"} title={previous.orderName}>');
     // Arriba de todo: antes del candado.
-    expect(sheet.indexOf("{previous && (")).toBeLessThan(sheet.indexOf("{/* El candado, en una línea con su punto. */}"));
+    expect(panel.indexOf("{previous && (")).toBeLessThan(panel.indexOf("{/* El candado, en una línea con su punto. */}"));
   });
 });
 
@@ -605,11 +614,11 @@ describe("«Confirma fecha» con Aliclik pide la ubicación (owner, 06-11-2026)"
     for (const o of [{ latitude: null, longitude: -77 }, { latitude: "", longitude: "" }, { latitude: "x", longitude: "1" }, null]) expect(orderHasCoordinate(o)).toBe(false);
   });
   it("la hoja pide la ubicación con Aliclik, no deja guardar sin ella y la manda al servidor", () => {
-    const sheet = read("components/repro-lima-sheet.tsx");
-    expect(sheet).toContain("reproNeedsCoordinate(courier, current.hasCoordinate)");
-    expect(between(sheet, "const blocker: string | null", "})();")).toContain("coordinateCheck.error");
-    expect(between(sheet, "function save(advance: boolean)", "\n  }\n")).toContain("if (needsCoordinate) input.coordinate = coordinate.trim();");
-    const section = between(sheet, '{courier === "aliclik" && (', "</Section>");
+    const panel = read("components/repro-lima-panel.tsx");
+    expect(panel).toContain("reproNeedsCoordinate(courier, current.hasCoordinate)");
+    expect(between(panel, "const blocker: string | null", "})();")).toContain("coordinateCheck.error");
+    expect(between(panel, "function save(advance: boolean)", "\n  }\n")).toContain("if (needsCoordinate) input.coordinate = coordinate.trim();");
+    const section = between(panel, '{courier === "aliclik" && (', "</Section>");
     expect(section).toContain('title="Ubicación"');
     expect(section).toContain("Ya tiene coordenada: Aliclik puede crear la guía.");
   });

@@ -43,6 +43,8 @@ export interface OrderDrawerHostProps {
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  /** «Atender» de Repro Lima en la ficha (`repro_lima.manage`, MOM §9.5): la pestaña «Repro Lima». */
+  canAttendReproLima?: boolean;
   closurePermissions: {
     canReturn: boolean;
     canInventory: boolean;
@@ -104,6 +106,7 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
       canCreateGuide={permissions.canCreateGuide}
       canCreateTandersGuide={permissions.canCreateTandersGuide}
       canCreateShalomGuide={permissions.canCreateShalomGuide}
+      canAttendReproLima={permissions.canAttendReproLima}
       closurePermissions={permissions.closurePermissions}
       storeName={storeName}
       storeDomain={storeDomain}

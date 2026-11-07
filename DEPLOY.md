@@ -1,5 +1,40 @@
 # Deployment runbook
 
+### 07-11-2026 · Repro Lima: «Atender» como pestaña del pedido (sin migración, MOM §9.5)
+
+Pedido del owner: «Atender» abría una hoja lateral aparte encima de la ficha y
+se veían los dos paneles. Ahora «Atender» abre la ficha del pedido en una
+pestaña nueva, **«Repro Lima»**, la última, después de «Chatby»
+(`?ficha=<pedido>&seccion=reprolima`). Lleva todo lo de la hoja: «Antes de
+llamar», el resultado, el candado (se toma al abrir la pestaña, late, beacon al
+cerrar la pestaña del navegador y se suelta al salir de la pestaña o cerrar la
+ficha), la lectura de acuerdos y cerrados, el segundo clic de «Volver a
+atender», «Programar ahora» y «Guardar y pasar al siguiente», que abre la
+ficha del siguiente de la lista del tablero en la misma pestaña. La hoja
+aparte se quita (`components/repro-lima-sheet.tsx` →
+`components/repro-lima-panel.tsx`). La pestaña sale solo mientras el pedido
+está en Repro Lima, también abriendo la ficha desde el Master de Pedidos.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+Las acciones de servidor son las mismas (`claimReproCase`, `registerReproCall`,
+`loadReproRow`…). Lectura nueva: la ficha llama UNA vez a `loadReproRow` por
+pedido, solo para quien tiene `repro_lima.manage` y solo si el pedido es de
+Lima y está por entregar (o si «Atender» pidió la pestaña). Sin sondeos. El
+tablero ya no relee la fila al pulsar «Atender»: lo hace la ficha.
+
+**Qué mirar después.** Repro Lima → «Atender» en un pedido: se abre la ficha
+en «Repro Lima», sin otro panel encima, y dice «Lo atiendes tú». Ir a Operar y
+volver: el candado se suelta y se vuelve a tomar, con lo escrito intacto
+(otra persona, en otro navegador, lo ve libre mientras tanto). «Guardar y
+pasar al siguiente» abre el siguiente de la misma lista con el aviso del
+anterior arriba. En el Master, la ficha de un pedido de Lima por entregar
+muestra la pestaña a una asesora; uno de Provincia o ya entregado, no. En
+`pg_stat_statements`, las lecturas de `lima_repro_cases` por pedido no deberían
+subir más que las fichas de Lima abiertas.
+
+**Marcha atrás.** Revertir el commit: vuelve la hoja aparte. No escribe nada
+nuevo en la base; los casos, llamadas y candados son los mismos.
+
 ### 06-11-2026 · La base sin CPU por `lead_routing_scope`: menos llamadas y sin recorrer tablas enteras (0312, sin cambio de reglas)
 
 El 06-11-2026 ~20:00 UTC la base quedó «Unhealthy»: las páginas cargaban y los

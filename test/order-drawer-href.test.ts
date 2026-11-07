@@ -74,4 +74,10 @@ describe("workspaceForDrawerSection", () => {
     expect(workspaceForDrawerSection("punto")).toBe("punto");
     expect(workspaceForDrawerSection(null)).toBe("operar");
   });
+
+  it("«Atender» de Repro Lima pide la pestaña «Repro Lima» (MOM §9.5)", () => {
+    expect(workspaceForDrawerSection("reprolima")).toBe("reprolima");
+    expect(orderDrawerHref("abc", "reprolima", { pathname: "/dashboard/pedidos/repro-lima" })).toBe("/dashboard/pedidos/repro-lima?ficha=abc&seccion=reprolima");
+    expect(readOrderDrawerRequest({ pathname: "/dashboard/pedidos/repro-lima", search: "ficha=abc&seccion=reprolima" })).toEqual({ orderId: "abc", section: "reprolima" });
+  });
 });
