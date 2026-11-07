@@ -34,6 +34,7 @@ import {
   type AnuraRegistrationFailureKind,
 } from "@/lib/anura/sip-phone";
 import { browserAnuraPhoneMemory, browserAnuraTabLock, browserMicrophone, createJsSipUa } from "@/lib/anura/jssip-client";
+import { logAnuraPhoneDiag } from "@/app/dashboard/pedidos/anura-actions";
 
 /** Lo que el teléfono pide al servidor (server actions). */
 export interface AnuraPhoneServer {
@@ -75,6 +76,10 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
       },
       onChange: (s) => {
         if (mounted.current) setSnapshot(s);
+      },
+      // Cada paso al log de Vercel (`[anura-phone]`), sin datos personales.
+      diag: (event, data) => {
+        void logAnuraPhoneDiag(event, data).catch(() => undefined);
       },
     });
     phoneRef.current = created;

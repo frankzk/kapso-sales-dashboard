@@ -36,6 +36,8 @@ import {
   type AnuraStartResult,
 } from "@/lib/anura/server";
 import type { AnuraRegistrationFailureKind } from "@/lib/anura/sip-phone";
+import { cleanDiag } from "@/lib/anura/phone-diag";
+import { createServerSupabase } from "@/lib/db";
 
 export async function startAnuraCall(orderId: string): Promise<AnuraStartResult> {
   return startAnuraCallForOrder(orderId);
@@ -66,4 +68,23 @@ export async function reportAnuraPhoneRejected(
   input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null; domain?: string | null },
 ): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
   return reportAnuraPhoneRejectedFor({ orderId }, input);
+}
+
+/**
+ * Un paso del teléfono de Kapta, al log de Vercel (`[anura-phone] {...}`), para
+ * diagnosticar las pruebas reales (06-11-2026). Solo con sesión; sin datos
+ * personales (lib/anura/phone-diag.ts). Nunca lanza.
+ */
+export async function logAnuraPhoneDiag(event: string, data?: Record<string, unknown>): Promise<void> {
+  try {
+    const clean = cleanDiag(event, data ?? {});
+    if (!clean) return;
+    const sb = await createServerSupabase();
+    const { data: auth } = await sb.auth.getUser();
+    const user = auth?.user?.id;
+    if (!user) return;
+    console.log(`[anura-phone] ${JSON.stringify({ u: user.slice(0, 8), e: clean.event, ...clean.data })}`);
+  } catch {
+    // diagnóstico: nunca rompe el teléfono
+  }
 }

@@ -586,6 +586,11 @@ export interface AnuraPhoneDeps {
   now?(): number;
   setTimeout?(fn: () => void, ms: number): unknown;
   clearTimeout?(handle: unknown): void;
+  /**
+   * Diagnóstico de cada paso (lib/anura/phone-diag.ts → log `[anura-phone]`).
+   * Sin datos personales; nunca debe lanzar.
+   */
+  diag?(event: string, data?: Record<string, string | number | boolean | null>): void;
 }
 
 export interface AnuraPhone {
@@ -656,7 +661,17 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
   let timers: unknown[] = [];
   let settle: ((s: AnuraPhoneSnapshot) => void) | null = null;
 
+  const d = (event: string, data?: Record<string, string | number | boolean | null>) => {
+    try {
+      deps.diag?.(event, data);
+    } catch {
+      // diagnóstico: nunca rompe el teléfono
+    }
+  };
   const set = (patch: Partial<AnuraPhoneSnapshot>) => {
+    if (patch.phase && patch.phase !== state.phase) {
+      d("fase", { fase: patch.phase, error: patch.error?.code ?? null, registro: patch.error?.registration ?? null });
+    }
     state = { ...state, ...patch };
     state.busy = isBusyPhase(state.phase);
     deps.onChange({ ...state });
@@ -769,10 +784,16 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     const s = e?.session;
     if (!s) return;
     if (myRun !== run || e.originator !== "remote") {
+      d("invite", { decision: "rechazo", why: myRun !== run ? "otra_vuelta" : "no_remoto", originator: e?.originator ?? null });
       rejectBusy(s);
       return;
     }
     const decision = shouldAnswerInvite({ pending, nowMs: now(), inCall: session !== null || held !== null });
+    d("invite", {
+      decision: decision.answer ? (pending?.accepted ? "contesta" : "espera") : "rechazo",
+      why: decision.answer ? null : decision.why,
+      edadMs: pending ? now() - pending.sinceMs : null,
+    });
     if (!decision.answer || !pending) {
       // Sin sonar: Kapta no recibe llamadas.
       rejectBusy(s);
@@ -797,12 +818,21 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       });
     });
     s.on("confirmed", () => {
+      d("sesion_confirmada");
       if (myRun !== run) return;
       set({ phase: "en_llamada", answeredAt: state.answeredAt ?? now() });
       resolveCall();
     });
-    s.on("ended", (ev: { originator?: string } | undefined) => finish(myRun, ev?.originator === "local" ? "kapta" : "anura"));
-    s.on("failed", () => {
+    s.on("ended", (ev: { originator?: string; cause?: unknown } | undefined) => {
+      d("sesion_fin", { originator: ev?.originator ?? null, cause: typeof ev?.cause === "string" ? ev.cause : null });
+      finish(myRun, ev?.originator === "local" ? "kapta" : "anura");
+    });
+    s.on("failed", (ev: { originator?: string; cause?: unknown; message?: { status_code?: unknown } | null } | undefined) => {
+      d("sesion_fallo", {
+        originator: ev?.originator ?? null,
+        cause: typeof ev?.cause === "string" ? ev.cause : null,
+        status: Number.isFinite(Number(ev?.message?.status_code)) ? Number(ev?.message?.status_code) : null,
+      });
       if (myRun !== run) return;
       if (held === s) {
         // Se cortó mientras esperaba la confirmación: el siguiente aviso de la ventana todavía vale.
@@ -828,6 +858,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     set({ phase: "pidiendo" });
     timer(() => {
       if (myRun !== run || session) return;
+      d("sin_invite", { held: held !== null, accepted: pending?.accepted ?? null });
       fail(myRun, { code: "anura_no_llamo", message: ANURA_PHONE_TEXT.anura_no_llamo });
     }, ANURA_INVITE_WINDOW_MS);
     let result: AnuraStartResult;
@@ -836,6 +867,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     } catch {
       result = { ok: false, code: "red", error: "No se pudo pedir la llamada. Revisa tu internet." };
     }
+    d("click2dial", { ok: result.ok, code: result.ok ? null : (result.code ?? null), conAviso: session !== null || held !== null });
     if (myRun !== run) return;
     if (result.ok) {
       set({ callId: result.callId, toMasked: result.toMasked, ...(session ? {} : { phase: "esperando_anura" as const }) });
@@ -952,6 +984,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       };
       agent.on("newRTCSession", (e: { session?: SipSessionLike; originator?: string }) => onInvite(myRun, phone, e));
       agent.on("connected", () => {
+        d("ws_conectado");
         if (myRun !== run || askedRegister) return;
         askedRegister = true;
         try {
@@ -961,6 +994,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         }
       });
       agent.on("disconnected", () => {
+        d("ws_desconectado", { registrado: registered });
         // Antes del REGISTER es la red; después, puede ser Anura cortando.
         if (!registered) regFail("red", null, askedRegister);
       });
@@ -968,6 +1002,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         if (myRun !== run) return;
         const kind = registrationFailureKind(e);
         const status = registrationFailureStatus(e);
+        d("registro_fallo", { kind, status, cause: typeof e?.cause === "string" ? e.cause : null });
         stopAutoRegister();
         if (registered && session) {
           // En llamada: el audio sigue, pero no se manda otro REGISTER.
@@ -977,6 +1012,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         regFail(kind, status);
       });
       agent.on("registered", () => {
+        d("registrado");
         if (myRun !== run || registered) return;
         registered = true;
         void placeCall(myRun, phone);
