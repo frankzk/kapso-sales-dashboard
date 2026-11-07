@@ -49,7 +49,13 @@ import { readAnuraVolumePref, saveAnuraVolumePref } from "@/lib/anura/volume-pre
 interface Amplifier {
   ctx: AudioContext;
   gain: GainNode;
+  /** Escucha lo que entra al amplificador (para saber si de verdad le llega audio). */
+  analyser: AnalyserNode;
+  /** Último nodo de la cadena: se conecta a los parlantes solo si llega audio. */
+  out: AudioNode;
   nodes: AudioNode[];
+  engaged: boolean;
+  timer: ReturnType<typeof setInterval> | null;
 }
 
 /** El AudioContext del teléfono. Se crea y se reanuda EN el clic de «Llamar»: fuera de un clic, Chrome lo deja en pausa. */
@@ -74,17 +80,31 @@ function startAmplifier(ctx: AudioContext, stream: MediaStream, volume: number):
     comp.ratio.value = 6;
     comp.attack.value = 0.003;
     comp.release.value = 0.2;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
     source.connect(gain);
     gain.connect(comp);
-    comp.connect(ctx.destination);
-    return { ctx, gain, nodes: [source, gain, comp] };
+    // `comp` NO va a los parlantes todavía: primero se comprueba que llegue audio.
+    return { ctx, gain, analyser, out: comp, nodes: [source, analyser, gain, comp], engaged: false, timer: null };
   } catch {
     return null;
   }
 }
 
+/** ¿Le llega sonido al amplificador ahora? (RMS de la señal que entra). */
+function hearsSignal(amp: Amplifier): boolean {
+  const buf = new Float32Array(amp.analyser.fftSize);
+  amp.analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (const x of buf) sum += x * x;
+  return Math.sqrt(sum / buf.length) > 1e-4;
+}
+
 function stopAmplifier(amp: Amplifier | null) {
   if (!amp) return;
+  if (amp.timer) clearInterval(amp.timer);
+  amp.timer = null;
   for (const n of amp.nodes) {
     try {
       n.disconnect();
@@ -161,27 +181,59 @@ export function useAnuraKaptaPhone(server: AnuraPhoneServer) {
           el.muted = false;
           return;
         }
-        const ctx = ctxRef.current;
-        const amp = ctx ? startAmplifier(ctx, stream as MediaStream, volumeRef.current) : null;
-        ampRef.current = amp;
-        // Con el amplificador en marcha, el <audio> queda enganchado pero mudo
-        // (si no, se oiría doble). Si Chrome lo tiene en pausa, suena el <audio>
-        // normal hasta que arranque (y entonces se silencia el <audio>).
-        const sync = () => {
-          el.muted = amp !== null && amp.ctx.state === "running";
-        };
-        sync();
+        // El <audio> suena SIEMPRE (nunca mudo): Chrome solo procesa el audio
+        // remoto de WebRTC si un reproductor lo está sonando, y silenciarlo dejó
+        // la llamada sin audio (prueba real 07-11 15:52 UTC). El amplificador es
+        // un extra: escucha en paralelo y, solo cuando comprueba que le llega
+        // sonido, toma la salida (el <audio> baja a volumen 0, no a mudo). Si
+        // después deja de oír por 4 s, devuelve la salida al <audio> y ya no
+        // vuelve a tomarla en esta llamada.
+        el.muted = false;
         el.volume = 1;
+        const ctx = ctxRef.current;
+        const amp = ctx && ctx.state === "running" ? startAmplifier(ctx, stream as MediaStream, volumeRef.current) : null;
+        ampRef.current = amp;
+        void logAnuraPhoneDiag("audio_amplificador", { ok: amp !== null, estado: ctx?.state ?? null, volumen: volumeRef.current }).catch(() => undefined);
         if (amp) {
-          amp.ctx.onstatechange = sync;
-          if (amp.ctx.state !== "running") {
-            void amp.ctx.resume().then(sync).catch(() => undefined);
-            const wake = () => void amp.ctx.resume().then(sync).catch(() => undefined);
-            document.addEventListener("pointerdown", wake, { once: true });
-            document.addEventListener("keydown", wake, { once: true });
-          }
+          let checks = 0;
+          let quiet = 0;
+          amp.timer = setInterval(() => {
+            if (ampRef.current !== amp) return;
+            const signal = hearsSignal(amp);
+            if (!amp.engaged) {
+              checks += 1;
+              if (signal) {
+                try {
+                  amp.out.connect(amp.ctx.destination);
+                  amp.engaged = true;
+                  el.volume = 0;
+                  void logAnuraPhoneDiag("audio_modo", { modo: "amplificado", tras_ms: checks * 250 }).catch(() => undefined);
+                } catch {
+                  // sin amplificador: sigue el <audio>
+                }
+              } else if (checks >= 40) {
+                // 10 s sin oír nada por el amplificador: se queda el <audio>.
+                if (amp.timer) clearInterval(amp.timer);
+                amp.timer = null;
+                void logAnuraPhoneDiag("audio_modo", { modo: "normal", motivo: "sin_senal" }).catch(() => undefined);
+              }
+              return;
+            }
+            quiet = signal ? 0 : quiet + 1;
+            if (quiet >= 16) {
+              try {
+                amp.out.disconnect();
+              } catch {
+                // ya desconectado
+              }
+              amp.engaged = false;
+              el.volume = 1;
+              if (amp.timer) clearInterval(amp.timer);
+              amp.timer = null;
+              void logAnuraPhoneDiag("audio_modo", { modo: "normal", motivo: "silencio_amplificado" }).catch(() => undefined);
+            }
+          }, 250);
         }
-        void logAnuraPhoneDiag("audio_amplificador", { ok: amp !== null, estado: amp?.ctx.state ?? null, volumen: volumeRef.current }).catch(() => undefined);
         void el
           .play()
           .then(() => logAnuraPhoneDiag("audio_play", { ok: true }))
