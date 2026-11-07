@@ -56,6 +56,24 @@ describe("lectura amplia y filtros de Repro Lima", () => {
     expect(pendingGroup(row({ stage: "en_curso", substage: "en_reparto" }), TODAY).label).toBe("Seguimiento de entrega");
     expect(pendingGroup(row({ stage: "en_curso", substage: "por_reprogramar_lima" }), TODAY).label).toBe("Entrega fallida");
   });
+  it("agendado con Aliclik: programado según el recojo, con su propia gestión (owner, 07-11-2026)", () => {
+    const tomorrow = row({ stage: "por_despachar", substage: "listo_para_asignar", courier: "aliclik", courierPickup: { courier: "aliclik", date: "2026-10-29" } });
+    expect(limaQueueSegment(tomorrow, TODAY)).toBe("programados_manana");
+    expect(pendingGroup(tomorrow, TODAY)).toEqual({
+      label: "Agendado con Aliclik",
+      detail: "Aliclik lo recoge el jue 29/10. No hace falta gestión salvo que el cliente cambie algo.",
+    });
+    // El día pasó sin recojo: sigue en Hoy como vencido, y eso sí es trabajo.
+    const missed = row({ courierPickup: { courier: "aliclik", date: "2026-10-27" } });
+    expect(limaQueueSegment(missed, TODAY)).toBe("programados_hoy");
+    expect(pendingGroup(missed, TODAY).label).toBe("Aliclik no lo recogió");
+    // Una programación de Grupo GF o una fecha acordada mandan sobre el recojo.
+    const programmed = row({ programmedFor: "2026-11-02", courierPickup: { courier: "aliclik", date: "2026-10-29" } });
+    expect(limaScheduledFor(programmed)).toBe("2026-11-02");
+    // Sin guía esperando, todo sigue como antes.
+    expect(limaQueueSegment(row(), TODAY)).toBe("nunca_salieron");
+    expect(pendingGroup(row({ courierPickup: null }), TODAY).label).toBe("Pendiente de primer despacho");
+  });
   it("busca código, nombre sin tildes y teléfono con espacios", () => {
     expect(pendingMatches(row(), "kp1")).toBe(true);
     expect(pendingMatches(row(), "maria perez")).toBe(true);
@@ -84,7 +102,7 @@ function master(i: number, extra: DBRow = {}): DBRow {
     macro_stage: "preparacion", macro_substage: "por_armar", coverage: "lima", current_courier: null,
     dispatched_at: null, attempt_count: 0, ...extra };
 }
-function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; departures?: DBRow[]; rpcError?: string; programError?: string } = {}) {
+function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; departures?: DBRow[]; shipments?: DBRow[]; rpcError?: string; programError?: string; shipmentError?: string } = {}) {
   const pages: number[] = [];
   const ranges: Array<{ table: string; from: number }> = [];
   const from = vi.fn((table: string) => {
@@ -94,11 +112,19 @@ function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; dep
       select: () => q,
       in: (key: string, values: unknown[]) => { filters.push((r) => values.includes(r[key])); return q; },
       eq: (key: string, value: unknown) => { filters.push((r) => r[key] === value); return q; },
+      is: (key: string, value: unknown) => { filters.push((r) => (r[key] ?? null) === value); return q; },
+      not: (key: string, op: string, value: string) => {
+        const banned = op === "in" ? value.replace(/[()]/g, "").split(",") : [value];
+        filters.push((r) => !banned.includes(String(r[key])));
+        return q;
+      },
       order: () => q,
       range: (a: number, b: number) => { range = [a, b]; if (table === "order_master") pages.push(a); ranges.push({ table, from: a }); return q; },
       then: (resolve: (r: unknown) => unknown, reject?: (e: unknown) => unknown) => {
-        const rows = (table === "stores" ? [{ id: "a", name: "Kenku" }] : table === "gf_dispatch_programs" ? opts.programs ?? [] : source).filter((r) => filters.every((f) => f(r)));
-        const error = fail && table === "order_master" ? { message: "sin conexión" } : table === "gf_dispatch_programs" && opts.programError ? { message: opts.programError } : null;
+        const rows = (table === "stores" ? [{ id: "a", name: "Kenku" }] : table === "gf_dispatch_programs" ? opts.programs ?? [] : table === "shipments" ? opts.shipments ?? [] : source).filter((r) => filters.every((f) => f(r)));
+        const error = fail && table === "order_master" ? { message: "sin conexión" }
+          : table === "gf_dispatch_programs" && opts.programError ? { message: opts.programError }
+          : table === "shipments" && opts.shipmentError ? { message: opts.shipmentError } : null;
         return Promise.resolve({ data: range ? rows.slice(range[0], range[1] + 1) : rows, error }).then(resolve, reject);
       },
     };
@@ -123,7 +149,7 @@ describe("acceso a todos los pendientes", () => {
     expect(db.pages).toEqual([0, 500, 1000]);
     expect(rows.at(-1)?.substage).toBe("en_transito");
     expect(rows[0]?.orderTotal).toBe(149);
-    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs"]));
+    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "shipments"]));
     expect(db.rpc.mock.calls.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
   });
   it("usa salidas reales aunque Master haya vuelto a dejar dispatched_at vacío", async () => {
@@ -145,6 +171,33 @@ describe("acceso a todos los pendientes", () => {
     const scope = { userId: "u", storeIds: new Set(["a"]) };
     await expect(loadLimaPending(database([master(1)], false, { rpcError: "sin historial" }).admin, scope)).rejects.toThrow("sin historial");
     await expect(loadLimaPending(database([master(1)], false, { programError: "sin programas" }).admin, scope)).rejects.toThrow("sin programas");
+  });
+  it("la guía Aliclik que espera recojo da el día; la que ya salió, volvió o se anuló, no", async () => {
+    const guide = (order_id: string, extra: DBRow = {}): DBRow => ({
+      order_id, courier: "aliclik", status_category: "pending", delivery_status: "pendiente",
+      dispatched_at: null, out_for_delivery_at: null, returned_at: null,
+      aliclik_expected_dispatch_date: "2026-11-06", aliclik_reported_dispatch_date: null, ...extra,
+    });
+    const db = database([master(1), master(2), master(3), master(4), master(5), master(6)], false, { shipments: [
+      guide("o1"),
+      guide("o2", { aliclik_reported_dispatch_date: "2026-11-08" }),
+      guide("o3", { out_for_delivery_at: "2026-11-06T15:00:00Z" }),
+      guide("o4", { delivery_status: "anulado" }),
+      guide("o5", { courier: "tanders" }),
+      guide("o6", { status_category: "closed" }),
+    ] });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    const pickup = Object.fromEntries(rows.map((r) => [r.orderId, r.courierPickup]));
+    expect(pickup).toEqual({
+      o1: { courier: "aliclik", date: "2026-11-06" },
+      // Lo que reportó Aliclik manda sobre su propia regla de corte.
+      o2: { courier: "aliclik", date: "2026-11-08" },
+      o3: null, o4: null, o5: null, o6: null,
+    });
+  });
+  it("si no se pueden leer las guías, se dice; no se manda todo a «Nunca salieron»", async () => {
+    await expect(loadLimaPending(database([master(1)], false, { shipmentError: "sin guías" }).admin, { userId: "u", storeIds: new Set(["a"]) }))
+      .rejects.toThrow("sin guías");
   });
   it("sin tiendas no consulta y un error no se presenta como lista vacía", async () => {
     const db = database([], true);
