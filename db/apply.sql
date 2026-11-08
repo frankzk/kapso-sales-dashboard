@@ -633,4 +633,6 @@
 \ir migrations/0314_agent_tokens.sql
 \echo 'Applying 0315_store_policies.sql'
 \ir migrations/0315_store_policies.sql
+\echo 'Applying 0316_chatby_approx_location.sql'
+\ir migrations/0316_chatby_approx_location.sql
 \echo 'Done.'

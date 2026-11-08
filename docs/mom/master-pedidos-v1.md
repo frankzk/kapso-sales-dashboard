@@ -800,6 +800,49 @@ se creó**.
     `?dry=1`.
   - **Si Google no da el edificio,** el pedido queda `sin_ubicacion` como antes,
     y Kapta sigue mirando el chat por si la clienta manda su ubicación.
+- **Aceptar ubicación aproximada en la calle correcta (owner, 08-11-2026; 0316).**
+  Cuando Google no da el edificio sino el número de la cuadra
+  (`RANGE_INTERPOLATED`; caso #KP204092, «Jirón José Olaya 245», Huamanga),
+  ese punto se puede probar si pasa el candado de siempre **y** la reja de la
+  calle (`geocodeApproxStreet`, lib/geocode-approx.ts): Google da la calle y
+  el número; cada palabra del nombre de la calle de Google está en la
+  dirección del pedido (el tipo de vía no cuenta: «Jr.» = «Jirón»; sin
+  tildes, la z igual a la s); el número de Google está en la dirección; y la
+  provincia de Google es la del pedido. Ante la duda, no («J. Olaya» no es
+  «José Olaya»). Es una automatización con tres posiciones por organización
+  (`chatby_auto_settings.approx_mode`), en el panel de Automatizaciones (§40):
+  - **Apagado** (nace así): lo de siempre, solo el edificio.
+  - **Simulación**: el punto que pasa la reja se guarda en `order_geocodes`
+    (`approx_kind = calle`, `approx_latitude`/`approx_longitude`,
+    `approx_mode = simulacion`): «habría confirmado con ubicación
+    aproximada» (no cotiza en Aliclik; las demás rejas antes de la coordenada
+    sí pasaron). El pedido queda para la asesora **exactamente como hoy**,
+    `sin_ubicacion`, sin guía y sin confirmar.
+  - **Activo**: la guía automática lo usa como coordenada, por el mismo
+    camino que el edificio (pin respaldado de Aliclik, cotización, tope del
+    día, el candado), y deja escrito «coordenada: dirección en Google
+    (aproximada en la calle)». La caché marca `approx_used_at`.
+  - Los motivos del rechazo de la calle se guardan sin punto (`sin_calle`,
+    `otra_calle`, `otro_numero`, `otra_provincia`). Una fila de antes con la
+    cuadra y sin ese veredicto se vuelve a consultar **una vez** (antes no se
+    guardaba la calle de Google). `ok`, `latitude` y `longitude` siguen siendo
+    solo el edificio, así que los reintentos de Lima (§9.5), que no piden el
+    punto aproximado, no cambian; y el punto aproximado cuenta como «de
+    Google» en `googlePinnedOrderIds` (§38.6).
+  - **La prueba.** Cuando Aliclik ya entregó o intentó el pedido, el panel
+    compara el punto aproximado con la coordenada de su guía de Aliclik (la
+    entregada; si no, la más reciente con intento), que es la que el Master
+    toma como «lo que el courier geolocalizó al ir a la puerta» (`geoPin`),
+    con haversine, en metros: «N pedidos medidos · M a menos de 150 m ·
+    distancia típica X m» (la mediana). Se calcula al abrir el panel, sin cron.
+    Si la guía se creó con el propio punto aproximado (Activo, hasta 15 min
+    después de `approx_used_at`) o está a 5 m o menos de él, **no mide**:
+    Aliclik devuelve en su reporte la coordenada que le mandó Kapta (de las 21
+    guías creadas con el edificio de Google, 19 la tenían a 5 m o menos y 2 a ~33 m), y
+    compararla consigo misma confirmaría la prueba sola. Por eso la medición
+    útil sale de la Simulación, donde la guía la crea una persona con su pin.
+  - No agrega estados ni subetapas: el pedido sigue en `sin_ubicacion` o pasa
+    a Preparación por la cadena de siempre.
 - **Cómo confirma, con la guía ya creada.** Por el mismo registro atómico que
   la mesa: `register_confirmation_attempt_v2`, la misma función del botón (v1)
   con `source`, que ya usa el agente de voz. Resultado «Confirmó el pedido»,
@@ -21438,7 +21481,9 @@ y en Aliclik el pin decide a dónde va el paquete.
    coordenada del pedido (`googlePinnedOrderIds`, a 5 m o menos del punto de
    `order_geocodes`). Dos usos, cada uno con su interruptor:
    - la guía automática de Provincia COD del que confirmó por Chatby (§6.1,
-     02-11-2026; 0301), después de la ubicación de WhatsApp;
+     02-11-2026; 0301), después de la ubicación de WhatsApp; con «Aceptar
+     ubicación aproximada en la calle correcta» en Activo (§6.1, 0316), también
+     el número de la cuadra de la misma calle, número y provincia;
    - el reintento Aliclik automático de Lima (§9.5, entrega 3, 05-11-2026;
      0308), solo si la última medición de Lima cumple B con el edificio
      (al menos el 90 % de los puntos ROOFTOP a 300 m o menos del pin, con al
@@ -23777,6 +23822,14 @@ Vercel— y algunas no tenían interruptor.
     son un paso, así que la confirmación **solo se enciende con la guía
     encendida**, y apagar la guía también detiene las confirmaciones (el panel
     lo dice en las dos filas).
+  - **Con tres posiciones (Apagado / Simulación / Activo), en la lista:**
+    «Aceptar ubicación aproximada en la calle correcta» de la confirmación por
+    Chatby (§6.1, 0316), junto a sus dos interruptores, con la «Prueba de
+    ubicación aproximada» debajo (cada pedido con su dirección, el punto
+    aproximado, dónde estuvo el motorizado o «aún no entregado», y la
+    distancia). No es un interruptor de encendido/apagado: no está en la lista
+    blanca y tiene su propia acción, que solo escribe esa columna. Activo pide
+    confirmación; cuenta entre las encendidas solo en Activo.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -23801,9 +23854,10 @@ Vercel— y algunas no tenían interruptor.
   cabecera lleva a los tokens con los que un agente (Grok Bot) consulta Kapta,
   con el mismo permiso `automations.manage`.
 
-Migraciones `0306_automations_panel.sql` y `0308_lima_retry_geocode.sql`.
+Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql` y
+`0316_chatby_approx_location.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
-`test/lima-retry-geocode-actions.test.ts`.
+`test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`.
 
 ## 41. Lista de pago adelantado (05-11-2026)
 

@@ -35,6 +35,7 @@ import { limaDayKey } from "@/lib/order-confirmation";
 import { PAYMENT_ROUNDING_TOLERANCE_CENTS } from "@/lib/payment-rounding";
 import { explicitRejection } from "@/lib/swayp-auto-policy";
 import { direccionConNumero, esRecojoEnAgencia } from "@/lib/swayp-por-confirmar-auto";
+import { approxModeFrom, type ApproxMode } from "@/lib/geocode-approx";
 
 /** El origen que llevan los hechos que escribe la pasada (`order_events.source`). */
 export const CHATBY_SOURCE = "chatby";
@@ -64,6 +65,8 @@ export interface ChatbyAutoSettings {
   recheck_minutes: number;
   /** La coordenada por dirección (Google, solo el edificio) para la guía (0301). */
   geocode_enabled: boolean;
+  /** «Aceptar ubicación aproximada en la calle correcta» (0316): Apagado / Simulación / Activo. */
+  approx_mode: ApproxMode;
 }
 
 export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = {
@@ -74,6 +77,7 @@ export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = 
   max_orders_per_run: 20,
   recheck_minutes: 30,
   geocode_enabled: true,
+  approx_mode: "apagado",
 };
 
 function intIn(value: unknown, min: number, max: number, fallback: number): number {
@@ -100,6 +104,8 @@ export function chatbyAutoSettingsFrom(row: Record<string, unknown>): ChatbyAuto
     recheck_minutes: intIn(row.recheck_minutes, 5, 1440, d.recheck_minutes),
     // Sin la columna (antes de la 0301) no se consulta a Google.
     geocode_enabled: row.geocode_enabled === true,
+    // Sin la columna (antes de la 0316) o con un valor raro: Apagado.
+    approx_mode: approxModeFrom(row.approx_mode),
   };
 }
 

@@ -1,5 +1,95 @@
 # Deployment runbook
 
+### 08-11-2026 · Confirmación por Chatby: prueba de ubicación aproximada (Apagado/Simulación/Activo) (0316, MOM §6.1 y §40)
+
+Cambio aprobado por el owner: «Aceptar ubicación aproximada en la calle
+correcta». La guía automática del que confirmó por Chatby solo aceptaba de
+Google el edificio (`ROOFTOP`); con el número de la cuadra
+(`RANGE_INTERPOLATED`) el pedido quedaba «sin ubicación» y el punto ni se
+guardaba (#KP204092, «Jirón José Olaya 245», Huamanga; hoy hay 5 filas así en
+`order_geocodes`). Ahora ese punto se puede probar si, además del candado de
+siempre, es la **misma calle, el mismo número y la misma provincia** del
+pedido (`geocodeApproxStreet`, `lib/geocode-approx.ts`).
+
+- **Tres posiciones por organización** en Automatizaciones → Confirmación,
+  junto a los dos interruptores de Chatby (`chatby_auto_settings.approx_mode`,
+  nace `apagado`):
+  - **Apagado**: lo de hoy.
+  - **Simulación**: guarda el punto en `order_geocodes` (`approx_kind =
+    'calle'`, `approx_latitude/longitude`, `approx_mode = 'simulacion'`) y el
+    pedido queda para la asesora exactamente como hoy (`sin_ubicacion`, sin
+    guía ni confirmación).
+  - **Activo**: la guía automática lo usa por el mismo camino que el edificio
+    y deja «coordenada: dirección en Google (aproximada en la calle)» en
+    `guide_detail`; `approx_used_at` queda marcado.
+- **«Prueba de ubicación aproximada»**, debajo de la fila: «N pedidos medidos ·
+  M a menos de 150 m · distancia típica X m» (mediana) y la tabla Pedido /
+  Dirección / Punto aproximado / Dónde estuvo el motorizado / Distancia. La
+  distancia (haversine) es contra la coordenada de la guía de Aliclik ya
+  entregada o intentada, la que el Master toma como «lo que el courier
+  geolocalizó» (`geoPin`). Se calcula **al abrir el panel**: tres lecturas
+  chicas (los puntos aproximados de la org, como mucho 200, con su índice
+  parcial; su `order_master`; sus `shipments` de Aliclik). Sin cron.
+- **Límite de la medición.** Aliclik devuelve en su reporte la coordenada que
+  le mandó Kapta (de las 21 guías creadas con el edificio de Google, 19 la
+  tienen a 5 m o menos y 2 a ~33 m, entregadas incluidas): no trae el GPS del
+  motorizado. Por eso una guía creada con el propio punto aproximado (Activo)
+  dice «Es el punto que mandó Kapta: no mide» y no entra en la cuenta. La
+  medición útil sale de la **Simulación**, donde la guía la crea la asesora
+  con su propio pin.
+- Una fila vieja con la cuadra y sin veredicto de la calle se vuelve a
+  consultar **una vez** en Simulación o Activo (hoy, como mucho esas 5): gasta
+  del cupo de 400 de Google, nada más. Los reintentos de Lima no piden el
+  punto aproximado y no cambian. Sin línea en el resumen de Telegram (es por
+  tienda y de ventas: no tenía un enganche limpio).
+
+**Migración `0316_chatby_approx_location.sql`**, a mano y ANTES del código
+(aditiva: una columna en `chatby_auto_settings` con su `check`, seis en
+`order_geocodes` con sus `check` y un índice parcial; no reescribe filas).
+Sin ella el código funciona como Apagado: la fila dice «Aún no está instalada
+en la base de datos», la acción contesta «Falta la migración 0316» y la
+caché guarda lo de siempre. Smoke: `scripts/sql/chatby_approx_location_smoke.sql`
+(en `scripts/verify-db.sh`). Sin crons ni variables nuevas.
+
+**Qué mirar después.**
+- Que la posición nazca en Apagado y el historial registre el cambio:
+  ```sql
+  select org_id, approx_mode from chatby_auto_settings;
+  select * from automation_switch_events where automation = 'chatby_auto_approx' order by occurred_at desc limit 5;
+  ```
+- Con Simulación puesta, que aparezcan puntos y que los pedidos sigan en
+  Por confirmar «sin ubicación» como antes:
+  ```sql
+  select g.approx_kind, g.approx_mode, count(*) from order_geocodes g
+  where g.approx_checked_at is not null group by 1, 2;
+  select c.outcome, c.reason, count(*) from chatby_auto_checks c
+  join order_geocodes g using (order_id) where g.approx_kind = 'calle' group by 1, 2;
+  ```
+- En los logs del cron `chatby-autoconfirm`: `[geocode-auto]` con `approx`
+  y `[chatby-aprox]` con `habria_confirmado`; en la respuesta, `approxSimulated`
+  y `approxUsed`. En Activo, `guide_detail` = «coordenada: dirección en Google
+  (aproximada en la calle)».
+- Abrir Automatizaciones en el teléfono: la tabla pasa a tarjetas y la página
+  no se desplaza de lado.
+
+**Marcha atrás.** Poner la posición en Apagado (inmediato, sin deploy): la
+pasada vuelve a aceptar solo el edificio. Revertir el commit quita la fila y la
+prueba; las columnas de la 0316 pueden quedarse (nadie más las lee). Para
+quitarlas:
+```sql
+alter table chatby_auto_settings drop constraint if exists chatby_auto_settings_approx_mode_check;
+alter table chatby_auto_settings drop column if exists approx_mode;
+drop index if exists order_geocodes_approx_idx;
+alter table order_geocodes drop constraint if exists order_geocodes_approx_point_check,
+  drop constraint if exists order_geocodes_approx_kind_check,
+  drop constraint if exists order_geocodes_approx_mode_check,
+  drop column if exists approx_kind, drop column if exists approx_latitude,
+  drop column if exists approx_longitude, drop column if exists approx_mode,
+  drop column if exists approx_checked_at, drop column if exists approx_used_at;
+```
+Las guías creadas en Activo con el punto aproximado son guías normales de
+Aliclik: no se deshacen solas (se ven por su `guide_detail`).
+
 ### 08-11-2026 · Confirmación por Chatby: direcciones con número sin «calle» y lotes cortos cuentan como completas (sin migración, MOM §6.1)
 
 Cambio aprobado por el owner. La confirmación automática por Chatby dejó 88
