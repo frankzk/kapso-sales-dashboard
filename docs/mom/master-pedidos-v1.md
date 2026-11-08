@@ -1426,10 +1426,21 @@ Reglas:
   realidad espera el `PREPARED` de Aliclik, y la pantalla acusa un atraso que no
   existe.
 - Una caja pendiente de tres días o más se marca **detenida**. No es el trabajo
-  del día: o el courier nunca reportó, o la caja se quedó sin dueño.
+  del día: o el courier nunca reportó, o la caja se quedó sin dueño. También,
+  sea del día que sea, la caja de Shalom cuya guía Shalom ya no reconoce
+  («Guía Shalom no reconocida», §12, desde el 08-11-2026): con esa guía no sale.
 - **Cada detenida dice por qué y qué hacer** (desde el 06-11-2026; antes solo
   decía «Detenida» y nadie actuaba: había 18). Gana la primera razón que aplica
   (`stallDiagnosis`, `lib/warehouse-queue.ts`):
+  0. **Shalom ya no reconoce su guía** (desde el 08-11-2026, §12 «La fila del
+     rastreo y la guía que Shalom no reconoce»): la línea del rastreo, «Guía
+     Shalom no reconocida: el rastreo no encuentra la guía 90172429 desde el
+     03-11-2026 (12 consultas seguidas). Si la caja salió con otra guía hecha en
+     Shalom Pro, regístrala en «Ya la creé en Shalom Pro» (Cotejar Shalom
+     también la busca); si no salió, Shalom la venció: genera una guía nueva
+     antes de llevarla. Kapta solo la anula al registrar la que la reemplaza.»
+     Va primero porque, sin otra guía, ninguna de las demás razones saca la
+     caja. Los 30 días se suman igual.
   1. **La salida inmediatamente anterior del mismo pedido se anuló o volvió**
      (`anulado`, o custodia `devuelto`/`retorno`; si después de la anulada hubo
      otra salida viva, esta razón no aplica): «Salida nueva: la anterior
@@ -11037,6 +11048,10 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   `shalom_pro_manual` con su QR, el relleno de la salida «por definir» y el
   `guide_created` en la línea de tiempo. Desde ahí el rastreo de cada media
   hora mueve el estado y encola los avisos, como con cualquier guía.
+- **También el pedido con una guía muerta** (08-11-2026): el que tiene una guía
+  viva de Shalom que Shalom confirmó que no conoce vuelve a ser candidato, y la
+  guía que se le encuentra la reemplaza. Ver «La guía muerta y la que se creó a
+  mano en su lugar», más abajo.
 - **Por qué tiene cron propio** (10-10-2026). Nació como un paso de
   `shalom-reconcile`, detrás del rastreo y del relleno del OSE ID, con la hora
   límite contada desde que entraba la petición. El listado es lento —Shalom
@@ -11209,6 +11224,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
     (`codigosCorregidos`), cuántas guías no están (`guiasDesconocidas`) y, por
     cuenta, cuáles (`codigos`).
 - **El rastreo pregunta primero por la que lleva más tiempo sin contestar.**
+  (Sustituido el 08-11-2026: la fila va por cuándo se **preguntó**, abajo en
+  «La fila del rastreo y la guía que Shalom no reconoce».)
   Cada pasada de media hora conseguía respuesta para las primeras ~75-120 de
   ~460 guías vivas, y la fila iba por `updated_at`, que mueve **cualquier**
   cambio de la fila: corregir el código mandó a #KP137651 al final, a ~2,5 h
@@ -11246,6 +11263,139 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - sin código ni OSE ID **no se pregunta**: el número solo siempre vuelve
     rechazado («falta codigo»). Era la salida de mentira de un estado
     atestiguado (`MOM-KP123525-SHALOM-…`), que gastaba cupo en cada pasada.
+
+#### La fila del rastreo y la guía que Shalom no reconoce (decidido el 08-11-2026)
+
+- **El caso.** La bitácora de cada pasada de media hora decía lo mismo:
+  `{"vivas":367,"sinIdentificador":5,"preguntadas":250,"reported":179,
+  "failed":71,"cortadoPor":"tiempo"}`, con los 71 rechazos `not_found: No se
+  encontró la orden de servicio.` (muestra: 90172429). La fila iba por
+  `last_report_at` —cuándo **contestó** Shalom—, y una guía que Shalom no
+  encuentra nunca contesta: no se movía nunca. Las mismas 71 encabezaban la
+  fila en cada pasada, se comían un tercio del cupo, y lo que no entraba en los
+  90 s eran justo las que más se habían movido —las en tránsito, las que
+  importan—. Entre las 71: guías de agosto a octubre y 38 guías recreadas el
+  03-11-2026 tras el corte de luz de Shalom Breña, cuyas cajas nunca se dejaron
+  en la agencia: Shalom las venció. Medido el 08-11-2026: 38 salidas de Shalom
+  armadas y sin ruta («Listo para asignar», en la Mesa de despacho) con el
+  rastreo sin respuesta desde el 03-11, y solo 4 de las 71 en Almacén.
+- **La fila va por cuándo se preguntó** (`shipments.shalom_checked_at`, 0321).
+  Se sella en **toda** guía preguntada: contestó (cambiara o no), Shalom no la
+  encontró, la rechazó por otra cosa, no volvió en la respuesta o el lote cayó
+  entero. Solo un 429 no sella, porque ese lote se repite. La nunca preguntada
+  va primero; después, la que hace más que no se pregunta. Con ~362 guías con
+  cómo preguntar y ~250 por pasada, **cada guía se pregunta al menos cada dos
+  pasadas** y ninguna más que otra.
+- **`last_report_at` no cambia de sentido**: sigue siendo cuándo contestó
+  Shalom, y solo se escribe en las que contestaron. Lo leen Cotejar Shalom
+  («el rastreo nunca contestó», arriba) y la ficha.
+- **La racha de `not_found`** (`shalom_not_found_since`,
+  `shalom_not_found_count`, 0321): cada `not_found` suma uno y guarda desde
+  cuándo; una respuesta de verdad la borra; otro rechazo («falta codigo», el
+  lote caído) no la toca, porque no dice si Shalom conoce la guía.
+- **«Guía Shalom no reconocida»** con **6 consultas `not_found` seguidas y 24 h**
+  desde la primera, las dos a la vez (`lib/shalom/check-queue.ts`): seis
+  seguidas en una tarde de caída de Shalom no bastan, y una sola pasada tras
+  días sin preguntar tampoco. Es un **motivo, no un estado**: no cambia
+  `delivery_status`, `pickup_state`, la custodia ni la macroetapa, y **Kapta no
+  anula ni recrea la guía** por su cuenta: solo la anula al registrar la guía
+  que la reemplaza (abajo, «La guía muerta y la que se creó a mano en su
+  lugar»). Se ve en tres sitios:
+  - **Almacén** (§6.2): la caja por armar se marca detenida aunque sea de hoy y
+    dice el motivo y qué hacer, antes que cualquier otra razón;
+  - **Mesa de despacho**, en «Paquetes sin ruta»: la chapa ámbar «Guía Shalom no
+    reconocida» y la misma línea debajo (es donde estaban las 38 de Breña);
+  - **la línea de tiempo del pedido**, una vez por racha: el `guide_check`
+    («Guía revisada con Shalom») que ya usa Cotejar Shalom, fuente `shalom`,
+    sin persona, con `payload.motivo = rastreo_no_reconoce`, `payload.desde` (el
+    primer `not_found` de la racha) y `payload.consultas`, y la nota «Rastreo de
+    Shalom: guía Shalom no reconocida: el rastreo no encuentra la guía … desde
+    el … (N consultas seguidas). Si la caja salió con otra guía hecha en Shalom
+    Pro, regístrala en «Ya la creé en Shalom Pro» (Cotejar Shalom también la
+    busca); si no salió, Shalom la venció: genera una guía nueva antes de
+    llevarla. Kapta solo la anula al registrar la que la reemplaza.».
+    Si Shalom vuelve a contestar y después la pierde otra vez, es otra racha y
+    avisa otra vez; la misma racha, no.
+  La línea dice lo que se sabe: que el rastreo no la encuentra.
+- **La bitácora y la respuesta** del cron dicen por qué columna va la fila
+  (`fila`: `shalom_checked_at`, o `last_report_at` si falta la 0321), cuántas
+  preguntadas ya son no reconocidas (`noReconocidas`) y cuántas se dejaron ahora
+  en la línea de tiempo (`noReconocidasAvisadas`).
+- **Sin la 0321** el código funciona como antes: la fila vuelve a
+  `last_report_at`, solo se sellan las que contestaron, y Almacén y la Mesa de
+  despacho no marcan ninguna. Los tres sellos no mueven `shipments.updated_at`
+  (como `api_report_at`, §19.1 y 0204): si no, cada guía que no contesta
+  dejaría su pedido desfasado en cada pasada y el Master lo recalcularía para
+  nada.
+
+#### La guía muerta y la que se creó a mano en su lugar (decidido el 08-11-2026)
+
+- **El caso.** #KP201035 tiene en Kapta la guía 102321353 (código HWND), creada
+  por API el 01-11-2026, y el rastreo contesta `not_found` por ella. En Shalom
+  Pro hay **otra** guía para la misma clienta (DNI 41059706): 102371814, código
+  W9NH, creada a mano el 04-11, ya «En destino». En Kapta no estaba en ningún
+  sitio: **la caja sí salió**, con una guía que Kapta no rastreaba ni avisaba.
+  Lo mismo, casi seguro, en las 38 guías recreadas tras el corte de luz de
+  Shalom Breña (#KP201550, #KP201760, #KP201298 entre ellas) y en guías que
+  vencieron antes.
+- **Por qué no se arreglaba solo.** Cotejar Shalom solo buscaba pedidos sin
+  salida viva de Shalom, y la guía muerta sigue `pendiente`. Y «Ya la creé en
+  Shalom Pro» se negaba —«El pedido ya tiene una salida activa… Anúlala antes»—,
+  y anularla pasa por Shalom, que no puede borrar lo que ya no tiene.
+- **Guía muerta.** Una guía **viva** de Shalom (`pendiente`, `en_ruta` o
+  `por_preparar`, que no sea una salida «por definir») con la racha de «Guía
+  Shalom no reconocida» de arriba: **6 consultas `not_found` seguidas y 24 h**
+  (`isConfirmedDeadShalomGuide`, `lib/shalom/dead-guide.ts`). Sin la 0321
+  ninguna guía es muerta y todo queda como antes.
+- **Cotejar Shalom la reemplaza, con las mismas reglas.** El pedido con **una**
+  guía muerta y ninguna otra salida viva vuelve a ser candidato, esté en la
+  etapa que esté salvo finalizado. Se le busca la guía en el listado con las
+  reglas de siempre (mismo DNI, o mismo celular y un nombre en común; una sola
+  guía posible; ningún otro pedido de la clienta que la discuta; una guía que
+  ya está en Kapta no se toca), con dos cambios:
+  - **la ventana** empieza un día antes de la creación de la guía muerta —la
+    que la reemplaza es posterior— y termina 45 días después de lo último
+    entre el pedido y la muerta (`guideInCandidateWindow`);
+  - si el listado trae **la propia guía muerta con otro código**, no está
+    muerta: es un código mal puesto (el caso #KP137651, arriba), y no se
+    reemplaza (`deadGuideListingConflict`). Con el mismo código, no estorba.
+  Y la guía muerta **no se espera en el listado** al medir si está entero: si
+  Shalom ya no la tiene, no es que el listado venga cortado.
+- **El reemplazo, por el camino único** (`registerExistingShalomGuide` con
+  `replaceDead`, `lib/shalom/register-guide.ts`), en este orden:
+  1. Se relee la guía muerta y se comprueba otra vez que siga viva y muerta.
+  2. **Se anula en Kapta** con la misma forma que «Anular guía Shalom», sin
+     llamar a Shalom: si se había escrito encima de una salida «por definir»
+     (las 38 de Breña), la salida vuelve a «por definir» —misma caja, mismo QR,
+     misma preparación— y además se le borran los sellos y la racha del rastreo;
+     si no, `anulado` (`closed`, sin `pickup_state`). La escritura exige el
+     número y el estado leídos.
+  3. **Se registra la guía del listado** con su código (y su clave si el
+     listado la comprobó), como cualquier guía de Cotejar Shalom: si la muerta
+     era una salida rellenada, la nueva se escribe encima de esa misma salida.
+     El rastreo la pregunta en su pasada siguiente.
+  4. En la línea de tiempo, un `guide_cancelled` («Guía anulada», fuente
+     `shalom`) con la nota «Guía Shalom 102321353 (código HWND) no existe en
+     Shalom (no encontrada en el rastreo); reemplazada por la guía 102371814
+     creada en Shalom Pro (Cotejar Shalom).» y `payload.motivo =
+     guia_no_existe_en_shalom`, y después el `guide_created` de la nueva, que
+     dice «Reemplaza a la guía 102321353, que no existe en Shalom.».
+  Si registrar la nueva falla después de anular la muerta, la muerta vuelve a
+  como estaba: **una guía muerta sin reemplazo no se toca**, solo se ve.
+  Cotejar Shalom reemplaza solo la guía que cotejó (`replaceDead.only`).
+- **El drawer no bloquea.** Con una guía muerta, «Ya la creé en Shalom Pro» se
+  deja usar y dice en ámbar «La guía Shalom … no existe en Shalom (el rastreo no
+  la encuentra). Si la caja salió con otra guía creada en Shalom Pro,
+  regístrala en «Ya la creé en Shalom Pro»: Kapta anula la que no existe y deja
+  la nueva en su lugar, en el mismo paso.». Al registrar, mismo camino y misma
+  nota sin «(Cotejar Shalom)», con el nombre de quien la registró. «Crear guía»
+  por API sigue frenado («La guía Shalom … no existe en Shalom: si la caja salió
+  con otra guía, regístrala en «Ya la creé en Shalom Pro».»): la muerta se
+  reemplaza con la que lleva la caja, no con una tercera. Con cualquier otra
+  salida viva, todo sigue como antes.
+- **La respuesta de `/api/cron/shalom-cotejo`** dice cuántos candidatos tenían
+  guía muerta (`conGuiaMuerta`) y cuántos vinculados la reemplazaron
+  (`reemplazados`); en `detalle`, `resultado: "reemplazado"` con `reemplaza`.
 
 #### Por qué «Crear guía» no se deja pulsar (decidido el 06-11-2026)
 

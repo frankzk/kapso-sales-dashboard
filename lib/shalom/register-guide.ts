@@ -21,34 +21,60 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { encrypt } from "@/lib/crypto";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { isFillableRouteOutput } from "@/lib/shipment-output";
+import { filledShipmentIds, isFillableRouteOutput, ROUTE_OUTPUT_FILLED } from "@/lib/shipment-output";
 import { blockingActiveGuide } from "@/lib/shalom/draft";
 import type { NormalizedManualShalomGuide } from "@/lib/shalom/manual";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
+import { shalomCheckColumnsMissing } from "@/lib/shalom/check-queue";
+import {
+  ACTIVE_GUIDE_STATUSES,
+  DEAD_GUIDE_COLUMNS,
+  deadGuideCancelNote,
+  deadGuideRestorePatch,
+  deadGuideRetirePatch,
+  isConfirmedDeadShalomGuide,
+  planDeadGuideReplacement,
+  type DeadGuideRow,
+} from "@/lib/shalom/dead-guide";
 
 /** Guías que ya cubren el pedido: crear otra encima duplica el despacho. */
-export const ACTIVE_GUIDE_STATUSES = new Set(["pendiente", "en_ruta", "por_preparar"]);
+export { ACTIVE_GUIDE_STATUSES };
+
+/** Una salida viva del pedido. La racha del rastreo (0321) solo si existe. */
+export interface ActiveGuide {
+  id: string;
+  courier: string;
+  guide_code: string;
+  delivery_status: string;
+  created_via: string | null;
+  custody_state: string | null;
+  custody_transferred_at: string | null;
+  shalom_not_found_since: string | null;
+  shalom_not_found_count: number | null;
+}
+
+const ACTIVE_COLUMNS = "id,courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at";
 
 /** Guías vivas del pedido, para no despachar dos veces lo mismo. */
-export async function activeGuides(
-  admin: SupabaseClient,
-  orderId: string,
-): Promise<{ courier: string; guide_code: string; delivery_status: string }[]> {
-  const { data } = await admin
+export async function activeGuides(admin: SupabaseClient, orderId: string): Promise<ActiveGuide[]> {
+  // Con la racha del rastreo (0321) para reconocer la guía que Shalom ya no
+  // tiene; sin la migración, sin ella: ninguna cuenta como muerta.
+  const first = await admin
     .from("shipments")
-    .select(
-      "courier,guide_code,delivery_status,created_via,custody_state,custody_transferred_at",
-    )
+    .select(`${ACTIVE_COLUMNS},shalom_not_found_since,shalom_not_found_count`)
     .eq("order_id", orderId);
-  const rows =
-    (data as {
-      courier: string;
-      guide_code: string;
-      delivery_status: string;
-      created_via: string | null;
-      custody_state: string | null;
-      custody_transferred_at: string | null;
-    }[]) ?? [];
+  let data: unknown[] | null = first.data;
+  if (first.error && shalomCheckColumnsMissing(first.error)) {
+    data = (await admin.from("shipments").select(ACTIVE_COLUMNS).eq("order_id", orderId)).data;
+  }
+  const rows = ((data ?? []) as Partial<ActiveGuide>[]).map(
+    (g) =>
+      ({
+        ...g,
+        shalom_not_found_since: g.shalom_not_found_since ?? null,
+        shalom_not_found_count: g.shalom_not_found_count ?? 0,
+      }) as ActiveGuide,
+  );
   // La salida «por definir» no cuenta como guía activa: es ESTA caja esperando
   // courier, y la guía nueva se escribe encima de ella. Ver lib/route-output-fill.
   return rows.filter((g) => ACTIVE_GUIDE_STATUSES.has(g.delivery_status) && !isFillableRouteOutput(g));
@@ -80,6 +106,14 @@ export interface RegisterExistingGuideOptions {
   onlyIfNew?: boolean;
   /** Presente cuando la vincula Cotejar Shalom: por qué no admite duda. */
   cotejo?: { motivo: string; payload?: Record<string, unknown> };
+  /**
+   * Retirar la guía viva de Shalom que Shalom confirmó que no conoce (MOM §12,
+   * lib/shalom/dead-guide.ts) en vez de negarse: la guía que se registra es la
+   * que de verdad lleva la caja. `only` limita a esa salida: el cron reemplaza
+   * la guía que cotejó, no otra. Sin esto, una guía muerta bloquea como
+   * cualquier salida viva.
+   */
+  replaceDead?: { only?: string | null };
 }
 
 export type RegisterExistingGuideResult =
@@ -87,6 +121,8 @@ export type RegisterExistingGuideResult =
       ok: true;
       alreadyLinked: boolean;
       shipmentId: string;
+      /** Las guías muertas que se anularon en el mismo paso (su número). */
+      replaced: string[];
       /** `KP123-S01` si se rellenó la salida «por definir» del pedido. */
       filledOutput: string | null;
       /** Lo que hay que decir de la clave de recojo (vacío si se guardó). */
@@ -139,17 +175,37 @@ export async function registerExistingShalomGuide(
   //
   // Se excluye ESTA guía: reenviar el formulario para completar identificadores
   // que faltaban es idempotente por diseño y no debe chocar consigo mismo.
-  const otherActive = blockingActiveGuide(await activeGuides(admin, row.order_id), guide.guideCode);
-  if (otherActive) {
+  //
+  // LA GUÍA MUERTA (08-11-2026, MOM §12). Una guía de Shalom viva que Shalom
+  // confirmó que no conoce no es un paquete en la calle: es un número que no
+  // existe. Si quien llama lo pide (`replaceDead`), no bloquea: se anula aquí
+  // mismo, con la forma de «Anular guía Shalom» y sin llamar a Shalom, antes de
+  // escribir la nueva —así, si era una salida «por definir» rellenada, vuelve a
+  // serlo y la guía nueva se escribe encima de la MISMA caja—. Cualquier otra
+  // salida viva bloquea como siempre.
+  const active = await activeGuides(admin, row.order_id);
+  const otherActive = blockingActiveGuide(active, guide.guideCode);
+  const plan = otherActive
+    ? planDeadGuideReplacement(active, guide.guideCode, {
+        replaceDead: Boolean(options.replaceDead),
+        only: options.replaceDead?.only ?? null,
+      })
+    : { retire: [] as ActiveGuide[], blocking: null };
+  if (plan.blocking) {
+    const g = plan.blocking;
     return {
       ok: false,
-      error:
-        `El pedido ya tiene una salida activa: ${otherActive.guide_code} (${otherActive.courier}, ${otherActive.delivery_status}). ` +
-        "Anúlala antes de vincular esta guía; si ya salió con el courier, registra primero su retorno.",
+      error: isConfirmedDeadShalomGuide(g)
+        ? `La guía Shalom ${g.guide_code} no existe en Shalom (el rastreo no la encuentra), pero no se reemplaza por este camino. Anúlala desde «Salidas y guías» y vuelve a intentarlo.`
+        : `El pedido ya tiene una salida activa: ${g.guide_code} (${g.courier}, ${g.delivery_status}). ` +
+          "Anúlala antes de vincular esta guía; si ya salió con el courier, registra primero su retorno.",
     };
   }
 
   const now = new Date().toISOString();
+  const retired = await retireDeadGuides(admin, row, plan.retire, now);
+  if ("error" in retired) return { ok: false, error: retired.error };
+  const restore = () => restoreDeadGuides(admin, retired.rows);
   let shipmentId = duplicate.data?.id ?? null;
   const alreadyLinked = Boolean(shipmentId);
   let filledOutput: string | null = null;
@@ -205,6 +261,8 @@ export async function registerExistingShalomGuide(
     });
 
     if ("error" in written) {
+      // La guía muerta vuelve a estar como estaba: sin reemplazo no se toca.
+      await restore();
       // La guía EXISTE en Shalom —la creó una persona en su panel—, así que el
       // mensaje tiene que dejarla anotada en vez de sugerir reintentar.
       if (/duplicate key|23505/i.test(written.error)) {
@@ -228,9 +286,38 @@ export async function registerExistingShalomGuide(
     if (guide.agencyBranch) patch.agency_branch = guide.agencyBranch;
     const updated = await admin.from("shipments").update(patch).eq("id", shipmentId);
     if (updated.error) {
+      await restore();
       return { ok: false, error: `La guía ya existe, pero no se pudo actualizar: ${updated.error.message}` };
     }
   }
+
+  // La muerta queda anulada en la línea de tiempo con la misma forma que «Anular
+  // guía Shalom» (`guide_cancelled`, sin `shipment_id`: la caja no se anuló, se
+  // le cambió la guía). Va antes del `guide_created` de la nueva.
+  for (const dead of retired.rows) {
+    await admin.from("order_events").insert({
+      store_id: row.store_id,
+      order_id: row.order_id,
+      kind: "guide_cancelled",
+      occurred_at: now,
+      actor,
+      source: "shalom",
+      courier: "shalom",
+      guide_code: dead.row.guide_code,
+      note: deadGuideCancelNote(dead.row, guide.guideCode, cotejo ? "cotejo" : "drawer"),
+      payload: {
+        shalom_order_id: dead.row.shalom_order_id,
+        codigo: dead.row.shalom_codigo,
+        restoredToTbd: dead.wasFilled,
+        motivo: "guia_no_existe_en_shalom",
+        reemplazada_por: guide.guideCode,
+        consultas_not_found: dead.row.shalom_not_found_count,
+        not_found_desde: dead.row.shalom_not_found_since,
+        ...(cotejo ? { registered_by: COTEJAR_SHALOM } : {}),
+      },
+    });
+  }
+  const replaced = retired.rows.map((d) => d.row.guide_code ?? "");
 
   let keyWarning = "";
   let keySaved = false;
@@ -273,6 +360,7 @@ export async function registerExistingShalomGuide(
     : cotejo
       ? `creada fuera de Kapta y registrada por Cotejar Shalom (${cotejo.motivo})`
       : "creada fuera de Kapta y vinculada manualmente";
+  const replacing = replaced.length ? ` Reemplaza a la guía ${replaced.join(", ")}, que no existe en Shalom.` : "";
   await admin.from("order_events").insert({
     store_id: row.store_id,
     order_id: row.order_id,
@@ -285,6 +373,7 @@ export async function registerExistingShalomGuide(
     shipment_id: shipmentId,
     note:
       `Guía Shalom ${what}.` +
+      replacing +
       `${guide.agencyBranch ? ` Destino: ${guide.agencyBranch}.` : ""}` +
       ` Adelanto validado: S/ ${advance.toFixed(2)}.` +
       // Si el cron no trae la clave —o no se pudo guardar—, la nota lo dice
@@ -308,11 +397,81 @@ export async function registerExistingShalomGuide(
       agency_branch: guide.agencyBranch,
       has_pickup_key: Boolean(guide.pickupCode),
       validated_advance: advance,
+      ...(replaced.length ? { reemplaza: replaced } : {}),
       ...(cotejo ? { registered_by: COTEJAR_SHALOM, ...(cotejo.payload ?? {}) } : {}),
     },
   });
 
   await recomputeOrderMasterSafe(admin, [row.order_id]);
 
-  return { ok: true, alreadyLinked, shipmentId: shipmentId as string, filledOutput, keyWarning };
+  return { ok: true, alreadyLinked, shipmentId: shipmentId as string, replaced, filledOutput, keyWarning };
+}
+
+/** Una guía muerta ya retirada, con lo que hace falta para deshacerlo. */
+interface RetiredDeadGuide {
+  row: DeadGuideRow;
+  wasFilled: boolean;
+}
+
+/**
+ * Anula en Kapta las guías muertas, ANTES de escribir la nueva. Cada una se
+ * relee completa y se comprueba otra vez que siga viva y muerta; la escritura
+ * exige el número y el estado que se leyeron, así que una guía que alguien tocó
+ * entretanto no se pisa. Si una falla, las ya retiradas vuelven atrás y no se
+ * registra nada.
+ */
+async function retireDeadGuides(
+  admin: SupabaseClient,
+  order: ExistingGuideOrder,
+  dead: readonly ActiveGuide[],
+  nowIso: string,
+): Promise<{ rows: RetiredDeadGuide[] } | { error: string }> {
+  if (!dead.length) return { rows: [] };
+  const { data, error } = await admin.from("shipments").select(DEAD_GUIDE_COLUMNS).in("id", dead.map((d) => d.id));
+  if (error) return { error: `No se pudo leer la guía que no existe en Shalom: ${error.message}` };
+  const rows = (data ?? []) as unknown as DeadGuideRow[];
+  const { data: events, error: eventsError } = await admin
+    .from("order_events")
+    .select("kind,shipment_id")
+    .eq("order_id", order.order_id)
+    .eq("kind", ROUTE_OUTPUT_FILLED);
+  // Sin saber si la caja era una salida «por definir» no se adivina: anularla
+  // como guía suelta cerraría la caja que va a llevar la guía nueva.
+  if (eventsError) return { error: `No se pudo leer el historial de la salida: ${eventsError.message}` };
+  const filled = filledShipmentIds((events ?? []) as { kind: string; shipment_id: string | null }[]);
+
+  const done: RetiredDeadGuide[] = [];
+  const changed = (code: string | null) =>
+    `La guía ${code ?? ""} cambió mientras se registraba la nueva. Actualiza el pedido y vuelve a intentarlo.`;
+  for (const d of dead) {
+    const row = rows.find((r) => r.id === d.id);
+    if (!row || row.order_id !== order.order_id || !isConfirmedDeadShalomGuide(row)) {
+      await restoreDeadGuides(admin, done);
+      return { error: changed(d.guide_code) };
+    }
+    const wasFilled = filled.has(row.id);
+    const upd = await admin
+      .from("shipments")
+      .update(deadGuideRetirePatch(row, order.order_name, wasFilled, nowIso))
+      .eq("id", row.id)
+      .eq("guide_code", row.guide_code as string)
+      .eq("delivery_status", row.delivery_status)
+      .select("id");
+    if (upd.error || !((upd.data ?? []) as unknown[]).length) {
+      await restoreDeadGuides(admin, done);
+      return {
+        error: upd.error ? `No se pudo anular la guía ${row.guide_code}: ${upd.error.message}` : changed(row.guide_code),
+      };
+    }
+    done.push({ row, wasFilled });
+  }
+  return { rows: done };
+}
+
+/** Devuelve las guías retiradas a como se leyeron. Lo que falle, a la bitácora. */
+async function restoreDeadGuides(admin: SupabaseClient, retired: readonly RetiredDeadGuide[]): Promise<void> {
+  for (const { row, wasFilled } of retired) {
+    const res = await admin.from("shipments").update(deadGuideRestorePatch(row, wasFilled)).eq("id", row.id);
+    if (res.error) console.error(`[shalom] no se pudo devolver la guía ${row.guide_code}:`, res.error.message);
+  }
 }

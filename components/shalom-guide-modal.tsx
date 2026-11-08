@@ -590,6 +590,13 @@ export function ShalomGuideModal({
                         existe— pero no el de una salida ya viva: ahí el problema
                         no es la llamada, es que el pedido acabaría con dos
                         paquetes en la calle. */}
+                    {/* La guía muerta (MOM §12): no frena; se dice qué va a pasar. */}
+                    {!contingencyBlocked &&
+                      draft?.deadGuideNotices.map((n) => (
+                        <p key={n} className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          {n}
+                        </p>
+                      ))}
                     {contingencyBlocked && (
                       <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
                         {draft?.contingencyBlockers.map((b) => (
