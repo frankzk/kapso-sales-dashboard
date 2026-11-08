@@ -18,6 +18,10 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
+import { kapsoInboxUrl, kapsoThreadMessages, type OrderKapsoConversation } from "@/lib/order-kapso";
+import { getStoreCreds } from "@/lib/ingest";
+import { normalizePhone } from "@/lib/phone";
+import { fetchConversationTranscript, listConversationsByPhone } from "@/lib/kapso";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { prepayGuideBlock, prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
@@ -311,6 +315,60 @@ export async function loadOrderChatby(
   } catch (cause) {
     if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message, inboxUrl: null };
     throw cause;
+  }
+}
+
+/**
+ * La pestaña «Kapso» de la ficha (MOM §25, 08-11-2026): la conversación de
+ * WhatsApp de la clienta con el bot de Kapso, solo para leer. Se busca en este
+ * orden: la que guardó el pedido (`orders.kapso_conversation_id`, la del bot de
+ * pedidos), la del lead de ese celular en la tienda, y si no, la más reciente
+ * de ese celular en Kapso. Con la clave de Kapso de la tienda del pedido, que
+ * nunca sale al navegador.
+ */
+export async function loadOrderKapso(orderId: string): Promise<OrderKapsoConversation> {
+  try {
+    const ctx = await authorizeOrder(orderId);
+    if (!ctx) return { status: "error", message: "Sin acceso a este pedido." };
+    const admin = createAdminSupabase();
+    const creds = await getStoreCreds(ctx.storeId, admin, { renewOwnApp: false });
+    if (!creds?.kapso_api_key) return { status: "sin_kapso" };
+    const phone = normalizePhone(ctx.row.customer_phone);
+    const [{ data: order }, lead] = await Promise.all([
+      admin.from("orders").select("kapso_conversation_id").eq("id", orderId).maybeSingle(),
+      phone
+        ? admin.from("leads").select("kapso_conversation_id").eq("store_id", ctx.storeId).eq("phone", phone).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+    const opts = { apiKey: creds.kapso_api_key };
+    let conversationId = ((order as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
+    let source: "pedido" | "lead" | "celular" = "pedido";
+    if (!conversationId) {
+      conversationId = ((lead.data as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
+      source = "lead";
+    }
+    if (!conversationId) {
+      if (!phone) return { status: "sin_celular" };
+      const conversations = await listConversationsByPhone(opts, phone);
+      const latest = [...conversations].sort((a, b) =>
+        String(b.last_active_at ?? b.kapso?.last_message_timestamp ?? "").localeCompare(String(a.last_active_at ?? a.kapso?.last_message_timestamp ?? "")),
+      )[0];
+      conversationId = latest?.id != null ? String(latest.id) : null;
+      source = "celular";
+    }
+    if (!conversationId) return { status: "sin_conversacion" };
+    const transcript = await fetchConversationTranscript(opts, conversationId, 3);
+    return {
+      status: "ok",
+      conversationId,
+      inboxUrl: kapsoInboxUrl(creds.kapso_project_id, conversationId),
+      messages: kapsoThreadMessages(transcript),
+      source,
+    };
+  } catch (cause) {
+    if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message };
+    console.error("[kapso] conversación del pedido", orderId, cause);
+    return { status: "error", message: "No se pudo leer la conversación en Kapso. Reintenta con «Actualizar»." };
   }
 }
 

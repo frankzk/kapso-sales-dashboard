@@ -52,6 +52,96 @@ lleva el enlace a Automatizaciones → «Ubicación por dirección».
 una vez, «Pedidos (N): …», y el enlace abre la sección de Automatizaciones.
 
 **Marcha atrás.** Revertir el commit.
+### 08-11-2026 · Conector de IA: conectar Grok con OAuth, sin copiar tokens (0319, MOM §42.8)
+
+**Aplicada en producción el 08-11-2026.** Grok Bot guardó el token de Kapta
+como secreto, pero no tuvo cómo mandarlo en la cabecera del conector, y pidió
+OAuth. Ahora el agente agrega el conector por su dirección (`/api/mcp`) y Kapta
+le pide permiso a una persona con `automations.manage`: tiendas, herramientas
+y «Permitir». Sin variables ni crons nuevos.
+
+1. **Migración `0319_agent_oauth.sql`**, a mano, ANTES del código (aditiva,
+   sin llaves foráneas, idempotente, sin `drop`):
+   - tabla `agent_oauth_clients` (registro dinámico: nombre y redirect_uris);
+   - tabla `agent_oauth_codes` (códigos de un solo uso, 10 minutos, su sha256
+     y el desafío PKCE);
+   - columna `agent_tokens.oauth_client_id`;
+   - las dos tablas con RLS y solo para `service_role`, sin borrar.
+2. Comprobar:
+   ```sql
+   select to_regclass('public.agent_oauth_clients'), to_regclass('public.agent_oauth_codes');
+   select column_name from information_schema.columns where table_name = 'agent_tokens' and column_name = 'oauth_client_id';
+   select has_table_privilege('authenticated', 'public.agent_oauth_codes', 'select');  -- false
+   ```
+3. Desplegar el código. **Sin la migración**, el registro y el canje
+   contestan 503 y la página de permiso lo dice; el token manual y las
+   herramientas siguen igual.
+4. Probar desde Grok Bot: «agrega el conector MCP https://<dominio>/api/mcp».
+   Grok abre Kapta; elegir tiendas y herramientas y pulsar «Permitir». La
+   conexión aparece en Automatizaciones › Conector de IA como un token más.
+
+**Marcha atrás.** Revocar la conexión en Conector de IA (el agente deja de
+entrar en el acto). Las tablas pueden quedarse: sin código que las use, nadie
+se registra ni canjea.
+### 08-11-2026 · Leads: la reserva por cita se suelta sola a las 2 h o cuando la clienta vuelve a escribir (0322, MOM «Bloques por asesora»)
+
+**Migración 0322** (`db/migrations/0322_lead_appointment_release.sql`): solo
+`create or replace` de `lead_routing_scope`, con los mismos permisos
+(`service_role`), `stable`, `security invoker` y `search_path` de la 0312. Sin
+tablas, columnas, índices ni datos nuevos; no cambia ninguna fila. **No hay
+código que desplegar**: la regla vive en la base (el espejo puro
+`lib/lead-appointment-hold.ts` no lo lee ninguna pantalla). Se aplica a mano,
+cuando el owner decida:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0322_lead_appointment_release.sql
+```
+
+Decisión del owner (opción c): la reserva de un lead a la asesora que agendó
+«volver a llamar» se suelta en **cualquiera** de dos casos: (1) pasaron **2
+horas** desde la hora de la cita, se haya llamado o no; (2) la clienta
+escribió por WhatsApp **después** de que se agendó (`leads.last_inbound_at`
+posterior al `occurred_at` de la llamada que la agendó). Suelta, el lead sigue
+el reparto normal (su bloque, el respaldo, la reserva de 10 min de quien lo
+abra). La cita queda: `lead_calls`, `next_followup_at`, intentos y Por llamar
+no cambian. Caso real: Antu Cruz agendó a las 10:00 y la reserva nunca se
+soltó.
+
+**Al aplicarla, se sueltan de golpe ~388 leads** (medido el 08-11-2026 ~16:00
+UTC, sin aplicar: 406 leads abiertos reservados por cita en 2 tiendas; 388 con
+la cita vencida hace más de 2 h —6 de las últimas 24 h, 16 de la última
+semana, 366 de antes—; 0 adicionales hoy por un mensaje de la clienta: los 66
+que escribieron después de agendar ya tenían la cita vencida). De Antu Cruz,
+12 de sus 14. Pasan a verse en la cola de la asesora de su bloque —casi todos
+en Recuperación— y dejan de mostrarse «Sin acceso» a las demás. No entran a
+Por llamar por esto: esa cola sigue con sus propias reglas (0289/0291).
+
+**Rendimiento.** Se conserva todo lo de la 0312: las dos ramas `union all`,
+los índices y el plan de `calls` (Index Only Scan de
+`lead_calls_call_lead_idx`). Lo único nuevo es un `max()` más en `calls` sobre
+las mismas filas y dos comparaciones por lead ya leído; no se lee ninguna
+tabla más, así que no hay filtro sargable ni índice que agregar. Medido en una
+base local con 60.000 leads (12.000 en cola) y 40.000 llamadas: los mismos
+85.564 bloques que la 0312 para la cola entera, y el `exists` de la asesora
+habilitada se sigue evaluando una vez por llamada (en una subconsulta con
+`offset 0`).
+
+**Qué mirar después.**
+- Citas que todavía reservan (debería quedar solo lo agendado para dentro de
+  poco o con la hora pasada hace menos de 2 h):
+  ```sql
+  select count(*) filter (where l.next_followup_at > now() - interval '2 hours') as aun_reservan,
+         count(*) filter (where l.next_followup_at <= now() - interval '2 hours') as sueltas_por_hora
+  from leads l
+  where l.category in ('open','hot') and l.next_followup_at is not null
+    and exists (select 1 from lead_calls c where c.lead_id = l.id and c.kind = 'call'
+                and c.vendedora is not null and c.next_followup_at = l.next_followup_at);
+  ```
+- Que `lead_routing_scope` siga en ~80 ms de media en Query Performance.
+
+**Marcha atrás.** Volver a aplicar el cuerpo de la 0312
+(`psql "$DATABASE_URL" -f db/migrations/0312_lead_routing_scope_perf.sql`; sus
+índices ya existen y el resto es idempotente) y revertir el commit.
 
 ### 08-11-2026 · Confirmación por Chatby: pide sola la dirección o la ubicación y vuelve a intentar la guía (0318 o sin migración, MOM §6.1)
 

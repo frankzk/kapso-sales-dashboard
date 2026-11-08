@@ -93,14 +93,15 @@ describe("la pestaña sale solo para pedidos que están en Repro Lima", () => {
 });
 
 describe("dónde va la pestaña", () => {
-  it("después de «Chatby», la última", () => {
+  it("la última, después de «Chatby» y «Kapso»", () => {
     const tabs = between(drawer, "const tabs: { id: DrawerWorkspaceView;", "\n  ];");
     const ids = [...tabs.matchAll(/id: "([a-z]+)"/g)].map((m) => m[1]);
-    expect(ids).toEqual(["operar", "informacion", "actividad", "punto", "chatby", "reprolima"]);
+    expect(ids).toEqual(["operar", "informacion", "actividad", "punto", "chatby", "kapso", "reprolima"]);
     expect(tabs).toContain('label: "Repro Lima"');
-    // Su panel, después del de Chatby.
+    // Su panel, después de los de Chatby y Kapso.
     expect(drawer.indexOf('id="pedido-panel-reprolima"')).toBeGreaterThan(drawer.indexOf('id="pedido-panel-chatby"'));
-    expect(drawer).toContain('export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby" | "reprolima";');
+    expect(drawer.indexOf('id="pedido-panel-reprolima"')).toBeGreaterThan(drawer.indexOf('id="pedido-panel-kapso"'));
+    expect(drawer).toContain('export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby" | "kapso" | "reprolima";');
   });
 
   it("`?seccion=reprolima` la pide, en el panel (`ficha`) y en el Master (`abrir`)", () => {

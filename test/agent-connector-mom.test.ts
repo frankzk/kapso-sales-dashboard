@@ -10,6 +10,7 @@ import { AGENT_RATE_PER_MINUTE, AGENT_SCOPES, AGENT_TOKEN_PREFIX } from "@/lib/a
 import { AGENT_TOOLS } from "@/lib/agent-tools";
 import { MCP_PROTOCOL_VERSIONS } from "@/lib/mcp-server";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
+import { OAUTH_CODE_TTL_MS, OAUTH_REGISTRATIONS_PER_HOUR, OAUTH_SCOPES, authorizationServerMetadata } from "@/lib/agent-oauth";
 import {
   POLICIES_FOR_AGENT_MAX,
   POLICY_BODY_MAX,
@@ -78,8 +79,8 @@ describe("§42 Conector para agentes de IA", () => {
     expect(s422).toContain("**60 llamadas por minuto** por token");
     expect(s422).toContain("**401 «No autorizado.»**");
     expect(s422).toContain("**403 `sin_tiendas`**");
-    expect(ROUTE).toContain(`'Bearer realm="kapta"'`);
-    expect(s422).toContain('`WWW-Authenticate: Bearer realm="kapta"`');
+    expect(ROUTE).toContain('`Bearer realm="kapta", resource_metadata="${protectedResourceMetadataUrl(req.nextUrl.origin)}"`');
+    expect(s422).toContain('`WWW-Authenticate: Bearer realm="kapta", resource_metadata="…"`');
   });
 
   it("el protocolo es el de la ruta", () => {
@@ -100,7 +101,9 @@ describe("§42 Conector para agentes de IA", () => {
 
   it("§40 lleva al conector y la migración está en la lista", () => {
     expect(section("## 40. Panel de automatizaciones (04-11-2026)")).toContain("**Conector de IA** (§42, 08-11-2026)");
-    expect(s42).toContain("Migraciones `0314_agent_tokens.sql` y `0315_store_policies.sql`.");
+    expect(s42).toContain("Migraciones `0314_agent_tokens.sql`, `0315_store_policies.sql` y `0319_agent_oauth.sql`.");
+    expect(read("db/apply.sql")).toContain("0319_agent_oauth.sql");
+    expect(read("scripts/verify-db.sh")).toContain("scripts/sql/agent_oauth_smoke.sql");
     expect(read("db/apply.sql")).toContain("0314_agent_tokens.sql");
     expect(read("db/apply.sql")).toContain("0315_store_policies.sql");
     expect(read("scripts/verify-db.sh")).toContain("scripts/sql/agent_tokens_smoke.sql");
@@ -182,6 +185,50 @@ describe("DEPLOY.md 0315", () => {
     expect(body).toContain("**Aplicada en producción el 08-11-2026.**");
     expect(body).toContain("**Migración `0315_store_policies.sql`**, a mano, ANTES del código");
     expect(body).toContain("select to_regclass('public.store_policies'), to_regclass('public.store_policy_versions');");
+    expect(body).toContain("**Marcha atrás.**");
+  });
+});
+
+describe("§42.8 Conectar con OAuth", () => {
+  const s428 = section("### 42.8 Conectar con OAuth, sin copiar tokens (08-11-2026; 0319)");
+  const OAUTH_MIGRATION = read("db/migrations/0319_agent_oauth.sql");
+
+  it("los números y las reglas son los del código", () => {
+    expect(OAUTH_REGISTRATIONS_PER_HOUR).toBe(30);
+    expect(s428).toContain("Tope: **30 registros nuevos por hora** entre todos.");
+    expect(OAUTH_CODE_TTL_MS).toBe(10 * 60_000);
+    expect(s428).toContain("crea un **código de un solo uso, de 10 minutos**");
+    expect(authorizationServerMetadata("https://k.example")).toMatchObject({ code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"] });
+    expect(s428).toContain("solo `code`, `authorization_code`, clientes públicos (`none`) y PKCE `S256`.");
+    expect(OAUTH_SCOPES.every((s) => !AGENT_SCOPES[s].write)).toBe(true);
+    expect(s428).toContain("Por OAuth solo se dan las herramientas de lectura");
+    expect(s428).toContain("**Registrarse no da acceso a nada.**");
+    expect(s428).toContain("**no redirigen nunca**");
+    expect(s428).toContain("**Si un código ya usado se vuelve a presentar, se revoca el token que se dio con él.**");
+  });
+
+  it("la migración guarda el hash del código, su vencimiento y de qué cliente vino cada token", () => {
+    expect(OAUTH_MIGRATION).toContain("code_hash       text primary key check (code_hash ~ '^[0-9a-f]{64}$')");
+    expect(OAUTH_MIGRATION).toContain("expires_at <= created_at + interval '15 minutes'");
+    expect(OAUTH_MIGRATION).toContain("alter table agent_tokens add column if not exists oauth_client_id text;");
+    expect(OAUTH_MIGRATION).not.toMatch(/client_secret/);
+  });
+
+  it("§42.2 y §42.5 lo citan", () => {
+    expect(section("### 42.5 Cómo se conecta Grok")).toContain("**Grok Bot, con OAuth (§42.8):**");
+  });
+});
+
+describe("DEPLOY.md 0319", () => {
+  const title = "### 08-11-2026 · Conector de IA: conectar Grok con OAuth, sin copiar tokens (0319, MOM §42.8)";
+  it("la entrada dice que la 0319 va antes del código, cómo comprobarla y la marcha atrás", () => {
+    const start = DEPLOY.indexOf(title);
+    expect(start).toBeGreaterThan(-1);
+    const next = DEPLOY.indexOf("\n### ", start + 10);
+    const body = flat(DEPLOY.slice(start, next === -1 ? undefined : next));
+    expect(body).toContain("**Aplicada en producción el 08-11-2026.**");
+    expect(body).toContain("**Migración `0319_agent_oauth.sql`**, a mano, ANTES del código");
+    expect(body).toContain("select to_regclass('public.agent_oauth_clients'), to_regclass('public.agent_oauth_codes');");
     expect(body).toContain("**Marcha atrás.**");
   });
 });

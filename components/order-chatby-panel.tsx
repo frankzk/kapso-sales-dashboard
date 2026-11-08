@@ -52,7 +52,15 @@ function speaker(message: ChatbyMessage): string | null {
   return null;
 }
 
-function Bubble({ message, current }: { message: ChatbyMessage; current: boolean }) {
+function Bubble({
+  message,
+  current,
+  speakerOf = speaker,
+}: {
+  message: ChatbyMessage;
+  current: boolean;
+  speakerOf?: (message: ChatbyMessage) => string | null;
+}) {
   const time = chatbyLimaTime(message.at);
   const stamp = time ? (
     <span className="ml-2 inline-flex translate-y-0.5 whitespace-nowrap align-baseline text-xs leading-none tabular-nums text-ink-500">
@@ -80,7 +88,7 @@ function Bubble({ message, current }: { message: ChatbyMessage; current: boolean
   }
 
   const fromCustomer = message.kind === "cliente";
-  const who = speaker(message);
+  const who = speakerOf(message);
   return (
     <div className={cn("flex", fromCustomer ? "justify-start" : "justify-end")}>
       <div
@@ -138,7 +146,19 @@ function Bubble({ message, current }: { message: ChatbyMessage; current: boolean
   );
 }
 
-function Thread({ messages, orderName }: { messages: ChatbyMessage[]; orderName: string | null }) {
+/**
+ * El hilo de WhatsApp de la ficha: lo usan «Chatby» y «Kapso» (MOM §25), con
+ * la misma anatomía. `speakerOf` dice quién habla encima de cada globo.
+ */
+export function ConversationThread({
+  messages,
+  orderName,
+  speakerOf,
+}: {
+  messages: ChatbyMessage[];
+  orderName: string | null;
+  speakerOf?: (message: ChatbyMessage) => string | null;
+}) {
   const endRef = useRef<HTMLDivElement>(null);
   // Lo último está abajo, como en WhatsApp: el hilo abre ahí.
   useEffect(() => {
@@ -160,7 +180,7 @@ function Thread({ messages, orderName }: { messages: ChatbyMessage[]; orderName:
                 </span>
               </p>
             )}
-            <Bubble message={message} current={chatbyMentionsOrder(message, orderName)} />
+            <Bubble message={message} current={chatbyMentionsOrder(message, orderName)} speakerOf={speakerOf} />
           </Fragment>
         );
       })}
@@ -497,7 +517,7 @@ export function OrderChatbyPanel({
             {result.messages.length ? (
               <div className="space-y-2">
                 {result.name && <p className="text-[13px] leading-5 text-ink-600">En Chatby: {result.name}</p>}
-                <Thread messages={result.messages} orderName={orderName} />
+                <ConversationThread messages={result.messages} orderName={orderName} />
               </div>
             ) : (
               <p className="text-sm text-ink-600">La conversación de esta clienta en Chatby está vacía.</p>
