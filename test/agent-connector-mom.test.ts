@@ -335,6 +335,7 @@ describe("DEPLOY.md 0323", () => {
     expect(start).toBeGreaterThan(-1);
     const next = DEPLOY.indexOf("\n### ", start + 10);
     const body = flat(DEPLOY.slice(start, next === -1 ? undefined : next));
+    expect(body).toContain("**Aplicada en producción el 08-11-2026.**");
     expect(body).toContain("**Migración `0323_agent_actions.sql`**, a mano, ANTES del código");
     expect(body).toContain("select to_regclass('public.agent_action_settings'), to_regclass('public.agent_actions');");
     expect(body).toContain("**Marcha atrás.**");

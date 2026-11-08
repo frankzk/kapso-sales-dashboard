@@ -117,7 +117,7 @@ de la 0204.
 
 ### 08-11-2026 · El agente de IA hace notas, WhatsApp y guías de Aliclik (0323, MOM §42.9)
 
-**Pendiente de aplicar en producción.** El agente (Grok) deja notas en el
+**Aplicada en producción el 08-11-2026.** El agente (Grok) deja notas en el
 pedido, le escribe a la clienta por WhatsApp (solo dentro de las 24 h) y crea
 la guía de Aliclik por el mismo camino que el botón. Las notas van solas; el
 WhatsApp y las guías, con un interruptor por organización Apagado / Simulación
