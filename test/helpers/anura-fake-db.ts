@@ -1,7 +1,9 @@
 // Una base en memoria con lo que usa «Llamar con Anura» (lib/anura/*): el
 // encadenado de supabase-js (select/insert/update/upsert/delete con eq, in,
-// lt, lte, gt, gte, like, is, not, order, limit, maybeSingle), los dos índices únicos de
-// `anura_calls`, las tablas SIP de la 0311 y Storage. Sin red.
+// lt, lte, gt, gte, like, is, not, order, limit, maybeSingle), los tres índices únicos de
+// `anura_calls` (cdrid; una viva por persona, 0310; una viva por anexo, 0313), las tablas
+// SIP de la 0311, las líneas compartidas y «Puede llamar con Anura» de la 0313 y Storage.
+// Sin red.
 
 type Row = Record<string, any>;
 
@@ -15,6 +17,9 @@ const KNOWN = [
   "order_master",
   "stores",
   "memberships",
+  "anura_callers",
+  "user_permissions",
+  "membership_roles",
 ] as const;
 export type FakeTables = { [table: string]: Row[] } & Record<(typeof KNOWN)[number], Row[]>;
 
@@ -33,20 +38,33 @@ function value(row: Row, col: string): unknown {
   return row[col];
 }
 
-function uniqueViolation(table: string, rows: Row[], candidate: Row, selfId?: string): boolean {
+/** El índice único que rompería la fila, o null. Con su nombre, como lo dice Postgres. */
+function uniqueViolation(table: string, rows: Row[], candidate: Row, selfId?: string): string | null {
   if (table === "anura_calls") {
     const others = rows.filter((r) => r.id !== selfId);
-    if (candidate.anura_call_id && others.some((r) => r.org_id === candidate.org_id && r.anura_call_id === candidate.anura_call_id)) return true;
-    const live = (r: Row) => (r.status_rank ?? 0) < 100 && (r.mode === "pedido" || r.mode === "prueba") && r.user_id;
-    if (live(candidate) && others.some((r) => live(r) && r.user_id === candidate.user_id)) return true;
+    if (candidate.anura_call_id && others.some((r) => r.org_id === candidate.org_id && r.anura_call_id === candidate.anura_call_id)) return "anura_calls_cdr_uniq";
+    const outLive = (r: Row) => (r.status_rank ?? 0) < 100 && (r.mode === "pedido" || r.mode === "prueba");
+    const live = (r: Row) => outLive(r) && r.user_id;
+    if (live(candidate) && others.some((r) => live(r) && r.user_id === candidate.user_id)) return "anura_calls_one_active_per_user";
+    const onLine = (r: Row) => outLive(r) && r.extension;
+    if (onLine(candidate) && others.some((r) => onLine(r) && r.org_id === candidate.org_id && r.extension === candidate.extension)) {
+      return "anura_calls_one_active_per_extension";
+    }
   }
   if (table === "anura_extensions") {
     const others = rows.filter((r) => r.id !== selfId);
-    if (others.some((r) => r.org_id === candidate.org_id && r.extension === candidate.extension)) return true;
-    if (others.some((r) => r.org_id === candidate.org_id && r.user_id === candidate.user_id)) return true;
+    if (others.some((r) => r.org_id === candidate.org_id && r.extension === candidate.extension)) return "anura_extensions_extension_uniq";
+    // Una línea compartida no tiene dueña (user_id null): los null no chocan.
+    if (candidate.user_id && others.some((r) => r.org_id === candidate.org_id && r.user_id === candidate.user_id)) return "anura_extensions_user_uniq";
   }
-  return false;
+  if (table === "anura_callers") {
+    const others = rows.filter((r) => r.id !== selfId);
+    if (others.some((r) => r.org_id === candidate.org_id && r.user_id === candidate.user_id)) return "anura_callers_user_uniq";
+  }
+  return null;
 }
+
+const duplicate = (index: string) => ({ data: null, error: { code: "23505", message: `duplicate key value violates unique constraint "${index}"` } });
 
 const DEFAULTS: Record<string, () => Row> = {
   anura_calls: () => ({
@@ -68,8 +86,11 @@ const DEFAULTS: Record<string, () => Row> = {
     bill_seconds: null,
     failure_reason: null,
     requested_at: new Date().toISOString(),
+    reserved_at: null,
+    dialed_at: null,
   }),
-  anura_extensions: () => ({ active: true }),
+  anura_extensions: () => ({ active: true, pool: false, user_id: null }),
+  anura_callers: () => ({ enabled: true }),
   anura_sip_settings: () => ({ ws_url: "wss://sipwss.anura.pe", sip_port: 55090, sip_domain: null, updated_at: new Date().toISOString() }),
   anura_sip_credentials: () => ({ rejected_at: null, rejected_reason: null, saved_at: new Date().toISOString() }),
 };
@@ -113,7 +134,8 @@ export function createFakeDb(initial: Record<string, Row[]> = {}, opts: FakeDbOp
       if (op === "insert") {
         const items = (Array.isArray(payload) ? payload : [payload]).map((p: Row) => ({ id: p.id ?? newId(), ...(DEFAULTS[table]?.() ?? {}), ...p }));
         for (const item of items) {
-          if (uniqueViolation(table, list, item)) return { data: null, error: { code: "23505", message: "duplicate key" } };
+          const clash = uniqueViolation(table, list, item);
+          if (clash) return duplicate(clash);
         }
         list.push(...items);
         return { data: wantRows ? items.map((r: Row) => ({ ...r })) : null, error: null };
@@ -123,12 +145,14 @@ export function createFakeDb(initial: Record<string, Row[]> = {}, opts: FakeDbOp
         const existing = list.find((r) => onConflict.every((c) => r[c] === p[c]));
         if (existing) {
           const next = { ...existing, ...p };
-          if (uniqueViolation(table, list, next, existing.id)) return { data: null, error: { code: "23505", message: "duplicate key" } };
+          const clash = uniqueViolation(table, list, next, existing.id);
+          if (clash) return duplicate(clash);
           Object.assign(existing, p);
           return { data: wantRows ? [{ ...existing }] : null, error: null };
         }
         const item = { id: newId(), ...(DEFAULTS[table]?.() ?? {}), ...p };
-        if (uniqueViolation(table, list, item)) return { data: null, error: { code: "23505", message: "duplicate key" } };
+        const clash = uniqueViolation(table, list, item);
+        if (clash) return duplicate(clash);
         list.push(item);
         return { data: wantRows ? [{ ...item }] : null, error: null };
       }
@@ -136,7 +160,8 @@ export function createFakeDb(initial: Record<string, Row[]> = {}, opts: FakeDbOp
         const hit = list.filter(matches);
         for (const r of hit) {
           const next = { ...r, ...payload };
-          if (uniqueViolation(table, list, next, r.id)) return { data: null, error: { code: "23505", message: "duplicate key" } };
+          const clash = uniqueViolation(table, list, next, r.id);
+          if (clash) return duplicate(clash);
         }
         for (const r of hit) Object.assign(r, payload);
         return { data: wantRows ? hit.map((r) => ({ ...r })) : null, error: null };

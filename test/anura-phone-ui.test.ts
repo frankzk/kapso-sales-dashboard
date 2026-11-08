@@ -562,7 +562,7 @@ describe("el cableado de Ajustes", () => {
   });
 
   it("la clave SIP no se guarda en el navegador ni se escribe en la consola", () => {
-    for (const f of ["components/anura-call.tsx", "components/anura-phone.tsx", "components/anura-kapta-phone-settings.tsx", "components/anura-settings-section.tsx", "lib/anura/phone-ui.ts"]) {
+    for (const f of ["components/anura-call.tsx", "components/anura-phone.tsx", "components/anura-kapta-phone-settings.tsx", "components/anura-settings-section.tsx", "components/anura-pool-settings.tsx", "lib/anura/phone-ui.ts", "lib/anura/pool.ts", "lib/anura/sip-phone.ts"]) {
       const src = read(f);
       expect(src, f).not.toMatch(/localStorage|sessionStorage|indexedDB/);
       expect(src, f).not.toMatch(/console\.(log|info|warn|error|debug)/);

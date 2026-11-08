@@ -2012,7 +2012,9 @@ nada instalado, y Kapta solo hace salidas.
   desde Kapta» (§8.5). Sale solo si se cumplen las cuatro cosas: Anura está
   configurado (`ANURA_CLICK2DIAL_TOKEN`), la persona puede editar el Master
   (`master.edit`, el mismo permiso que registra la gestión), tiene un anexo
-  activo en la organización de la tienda del pedido y el teléfono del pedido
+  activo en la organización de la tienda del pedido (o, desde el 08-11-2026,
+  «Puede llamar con Anura» y al menos una línea compartida lista: «Líneas
+  compartidas», al final de esta sección) y el teléfono del pedido
   es un **celular peruano** (9 dígitos que empiezan por 9; se acepta con +51,
   51 o 0051 delante). Un fijo o un número extranjero no se marca en la fase 1.
   El teléfono lo lee el servidor del pedido: el navegador nunca lo manda.
@@ -2025,7 +2027,9 @@ nada instalado, y Kapta solo hace salidas.
   curso, «Ya tienes una llamada de Anura en curso. Cuelga en tu teléfono de
   Anura; si Anura no avisa el final, Kapta la libera sola a las 2 horas.». Lo
   sostiene la base (un índice único), también con dos pestañas o dos clics a la
-  vez. La ficha retoma la llamada viva de quien mira aunque sea de otro pedido:
+  vez. Desde la 0313 la base sostiene además **una llamada viva por anexo**
+  («Líneas compartidas», abajo). La ficha retoma la llamada viva de quien mira
+  aunque sea de otro pedido:
   entonces lo dice y enlaza a ese pedido, y no ofrece registrar el resultado en
   la ficha abierta.
 - **Con qué número.** El de la central en Anura: el número que Anura tenga
@@ -2215,7 +2219,9 @@ nada instalado, y Kapta solo hace salidas.
   cuenta).
 - **Configuración (una vez).** En el panel de Anura (lo hace quien administra
   la cuenta de Anura; los pasos los repite Ajustes › «Telefonía Anura»):
-  1. **Configuración → Cuentas:** un anexo de usuario por asesora.
+  1. **Configuración → Cuentas:** un anexo de usuario por línea compartida
+     (por ejemplo 201, 202 y 203; el plan permite hasta 10) o, si una persona
+     usa anexo propio, uno para ella.
   2. **Integraciones → Click 2 Dial → Generar token:** el token va en Vercel
      como `ANURA_CLICK2DIAL_TOKEN`, nunca en un chat ni en Kapta. Sin él no
      aparece nada de Anura; Kapta solo dice si está configurado, nunca el
@@ -2250,9 +2256,10 @@ nada instalado, y Kapta solo hace salidas.
      (`START`), «La llamada es atendida» (`TALK`) y «Se finaliza una llamada»
      (`END`), cada uno con dirección «Entrante/Saliente».
 
-  Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la central,
-  el anexo de cada persona con su usuario y contraseña SIP («Probar y guardar»)
-  y una «Llamada de prueba».
+  Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la
+  central, cada línea compartida (o el anexo propio de cada persona) con su
+  usuario y contraseña SIP («Probar y guardar»), quién «Puede llamar con
+  Anura» y una «Llamada de prueba».
 
   Mientras un anexo no tenga clave guardada en Kapta, la ficha sigue la fase 1
   para esa persona: entonces la principal de su anexo tiene que ser un teléfono
@@ -2262,7 +2269,9 @@ nada instalado, y Kapta solo hace salidas.
   persona y uno por anexo en la organización, de 2 a 6 dígitos. Sin anexo no
   hay botón, así que Anura queda apagado hasta que se asignen. Un anexo se
   puede desactivar sin borrarlo. Para pasarlo a otra persona, primero se le
-  quita a quien lo tiene.
+  quita a quien lo tiene. Desde el 08-11-2026 la forma recomendada son las
+  líneas compartidas («Líneas compartidas», al final de esta sección): el
+  anexo propio sigue sirviendo y quien tiene uno activo llama con él.
 - **Lo que Kapta no guarda.** En la fase 1, ni usuarios ni contraseñas SIP de
   Anura: no hacen falta, porque suena el teléfono de Anura de la asesora. La
   fase 2 guarda la clave SIP de cada anexo, cifrada y fuera del alcance del
@@ -2273,7 +2282,10 @@ nada instalado, y Kapta solo hace salidas.
   organización de la tienda, lo mismo que Ajustes entero. No hay permiso nuevo.
   En la fase 2 tampoco: el dominio SIP, «Probar y guardar» y «Quitar clave»
   piden `stores.manage`, y la clave solo se entrega a la dueña del anexo, al
-  llamar.
+  llamar. Con las líneas compartidas (08-11-2026) tampoco hay permiso nuevo:
+  sumar o quitar una línea, guardar su clave y marcar «Puede llamar con
+  Anura» piden `stores.manage`; llamar sigue pidiendo `master.edit` en la
+  organización del pedido, más la casilla.
 - **Llamada de prueba.** Desde Ajustes, quien administra llama a un celular
   peruano que escribe, con su propio anexo o con cualquier anexo activo de la
   organización. No es un intento de ningún pedido: no escribe nada en ningún
@@ -2631,6 +2643,111 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
 - **Por confirmar en la prueba real.** El registro va a `sip:<dominio>:55090`
   con la dirección `sip:<usuario>@<dominio>`; no se pudo probar contra Anura.
   Si no registra, se ajusta en `anuraJsSipConfig` (`lib/anura/sip-phone.ts`).
+
+#### Líneas compartidas (08-11-2026)
+
+Decisión del owner (08-11-2026): «¿no puede ser algo dinámico… el anexo
+asignado aleatoriamente?» → sí. En vez de un anexo por persona, la
+organización tiene unas pocas **líneas compartidas** (empieza con 3; el plan de
+Anura permite hasta 10, y la regla sirve para cualquier número) y una casilla
+por persona, **«Puede llamar con Anura»** (la eligió el owner por
+flexibilidad). Quien tiene la casilla toma una línea libre al llamar. Se monta
+sobre la fase 2: una línea compartida solo llama con el teléfono dentro de
+Kapta (su principal es la `<anexo>-websocket`). Migración 0313.
+
+- **Qué es una línea compartida.** Un anexo de Anura sin dueña
+  (`anura_extensions.pool`, `user_id` vacío). Un número es una línea
+  compartida **o** el anexo propio de una persona, nunca las dos cosas. Su
+  usuario SIP es, por defecto, `<anexo>-websocket`, y su clave se guarda con
+  el mismo «Probar y guardar» de la fase 2 (un solo registro de prueba; solo
+  si Anura lo acepta se guarda cifrada). Una línea se puede apagar sin
+  borrarla; quitarla borra su clave, y no se puede quitar mientras está en una
+  llamada.
+- **Quién llama.** Sale «Llamar con Anura» a quien tiene `master.edit` en la
+  organización del pedido y, además, un anexo propio activo **o** la casilla
+  «Puede llamar con Anura» (`anura_callers`). La casilla solo se ofrece a
+  quien gestiona pedidos y no da ese permiso. Quien tiene un anexo propio
+  activo llama con él, como antes (no se le asigna una línea). Con la casilla
+  y sin ninguna línea lista (todas sin clave, con la clave rechazada, con el
+  dominio no reconocido o apagadas), no hay botón.
+- **Cuándo se elige la línea.** Al pulsar «Llamar con Anura», cuando el
+  navegador pide la clave (el paso 2 de «Cuándo se conecta»): tiene que
+  registrarse con esa línea **antes** del Click2Dial, porque Anura hace sonar
+  la principal del anexo con que se pide. El servidor **reserva** una línea
+  libre escribiendo la fila de la llamada para esa línea (`solicitada`, con
+  `reserved_at` y sin `dialed_at`), y devuelve la clave de esa línea con el id
+  de la reserva. Después, el Click2Dial se pide **solo con esa reserva**, sin
+  volver a elegir (`dialed_at` marca cuándo se pidió).
+- **La regla de asignación.** Entre las líneas activas, con su clave guardada
+  y no rechazada y sin llamada viva, primero la que lleva más tiempo sin
+  usarse y, entre las que empatan, al azar. La base no deja dos llamadas vivas
+  en
+  la misma línea (`anura_calls_one_active_per_extension`, que se suma a
+  `anura_calls_one_active_per_user`): si dos personas piden en el mismo
+  instante, la segunda fila choca y se prueba la siguiente línea. Si todas
+  están ocupadas: «Las 3 líneas de Anura están ocupadas. Intenta en un
+  momento.» (con el número de líneas que sirven; con una sola, «La línea de
+  Anura está ocupada. Intenta en un momento.»). La ficha dice en el botón
+  cuántas están libres al abrirla («2 de 3 líneas libres»).
+- **Lo que no llegó a pedirse.** Si el navegador falla antes del Click2Dial
+  (micrófono, registro, cuelga mientras conecta), suelta la reserva en el acto;
+  si no llega a hacerlo (se cerró la pestaña), la reserva se suelta sola a los
+  60 s («La llamada no llegó a pedirse.»), en la próxima reserva de la
+  organización, en el sondeo de la ficha o en el cron de Anura. Esa fila no
+  es un intento de contacto: no deja hecho en el pedido y no sale en la ficha.
+  Una reserva ya pedida sigue la regla de la fase 1, contada desde el
+  Click2Dial: sin ningún aviso de Anura en 60 s, «Anura no llegó a hacer la
+  llamada…». Si la reserva se soltó antes de pedirla, la ficha dice «La línea
+  de Anura reservada para esta llamada se liberó antes de pedirla. Vuelve a
+  intentar.».
+- **Clave rechazada.** Si Anura rechaza la clave de la línea reservada (o no
+  reconoce el dominio), se marca **esa línea** con las mismas reglas de la
+  fase 2 (solo la versión de la clave que se entregó), la reserva se suelta y
+  la siguiente llamada toma otra línea. Solo se marca la línea de la reserva
+  propia de quien avisa, nunca otra.
+- **Lo que queda por persona.** El hecho del historial, «Gestión por persona»
+  y el aviso de Anura siguen por persona y por llamada: `anura_calls.user_id`
+  es quien llamó y `extension`, por qué línea salió; el aviso se encuentra por
+  `custom1` (el id de la llamada), como siempre. Una entrante a una línea
+  compartida no la «toma una asesora» (no tiene dueña): queda «Perdida».
+- **Seguridad de la clave.** Kapta nunca lista las claves de las líneas. Con
+  la casilla, el navegador de quien llama recibe la clave SIP de la línea
+  reservada, y solo durante esa llamada: solo en memoria, nunca en el
+  almacenamiento del navegador ni en un log, y solo si la reserva viva es suya.
+  Es más de lo que daba un anexo propio (ahí la recibía solo su dueña): quien
+  tiene la casilla puede, en una llamada, tener la clave de cualquier línea que
+  le toque. Por eso la casilla la da quien administra, persona por persona.
+- **La llamada de prueba.** Con «Mi anexo» y sin anexo propio, quien tiene la
+  casilla prueba con una línea libre, como la ficha. Quien administra también
+  puede elegir una línea concreta para probarla (puede guardarle la clave de
+  todos modos). Una línea sin clave no se prueba (solo llama con el teléfono de
+  Kapta).
+- **En el panel de Anura, por cada línea** (Ajustes › «Telefonía Anura» los
+  repite en «Líneas compartidas»):
+  1. Crea el anexo en Configuración → Cuentas (por ejemplo 201, 202 y 203). No
+     es de ninguna asesora: lo usa quien llama.
+  2. En Terminales, la `<anexo>-websocket` encendida como principal (en el
+     201, `201-websocket`).
+  3. En Avanzado → «Click 2 Dial», Auto answer apagado.
+  4. En Límites, celulares permitidos.
+  5. En Eventos, los tres (`START`, `TALK` y `END`, «Entrante/Saliente») con
+     la plantilla «Kapta».
+  6. En Terminales → lápiz de la -websocket → «Obtener credenciales»: el
+     usuario y la contraseña SIP, que van en Kapta con «Probar y guardar».
+
+  Pregúntale a Anura cuántas llamadas salientes simultáneas (canales) permite
+  el plan: si son menos que las líneas, las de más fallan aunque Kapta las vea
+  libres.
+
+  Después, en Kapta, Ajustes › «Telefonía Anura»: «Líneas compartidas» (sumar
+  cada anexo y su clave con «Probar y guardar»; cada línea dice si está libre,
+  en uso por quién, con la clave rechazada o con el dominio no reconocido) y
+  «Quién puede llamar» (la casilla por persona). El dominio SIP de la central
+  es el mismo de «Teléfono dentro de Kapta».
+- **Por confirmar.** Cuántos canales salientes simultáneos permite el plan
+  (arriba). Una línea cuya llamada sonó y de la que Anura nunca manda el fin
+  queda ocupada hasta 2 horas (la regla de la fase 1): con pocas líneas, eso
+  se nota.
 
 ## 9. Lima
 
@@ -11806,6 +11923,7 @@ mantiene observado el lote completo.
 | Finanzas/liquidación | Responsable financiera | Yohalis |
 | Anexos de Anura, URL del aviso y llamada de prueba (§8.7) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
 | Dominio SIP de la central y clave del teléfono de Kapta de cada anexo (§8.7, fase 2) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura», con «Probar y guardar» |
+| Líneas compartidas de Anura y «Puede llamar con Anura» (§8.7, 08-11-2026) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
 | Reembolsos/propietario | Owner | Frankz |
 
 La autorización futura se asigna al rol estable, no al nombre. El actor real se
@@ -11851,6 +11969,10 @@ registra en cada evento.
   clave del teléfono de Kapta de un anexo pide `stores.manage`; la clave
   queda cifrada en una tabla que solo lee el servidor, Ajustes solo dice si
   está guardada, y el navegador la recibe solo la dueña del anexo, al llamar.
+  Líneas compartidas (08-11-2026): tampoco hay permiso nuevo. Sumar o quitar
+  una línea, guardar su clave y marcar «Puede llamar con Anura» piden
+  `stores.manage`. Con la casilla, el navegador de quien llama recibe la clave
+  de la línea que se le reservó, solo durante esa llamada.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
@@ -13865,6 +13987,9 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
 - Anura, después de la fase 2 (§8.7): entrantes en Kapta (hoy solo salidas;
   una entrante se reparte en Anura, «Flujo de llamada»), un TURN propio para
   redes muy cerradas y la prueba real del registro con el puerto 55090.
+- Anura, líneas compartidas (§8.7): confirmar con Anura los canales salientes
+  simultáneos del plan, y soltar antes de 2 horas una línea cuya llamada
+  sonó si Anura nunca manda el fin.
 
 ## 22. Criterios de aceptación de la Fase 2
 
