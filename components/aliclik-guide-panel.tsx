@@ -119,6 +119,7 @@ export function AliclikGuidePanel({
   onCreated: () => void;
 }) {
   const [coordinate, setCoordinate] = useState("");
+  const [coordinatePasteError, setCoordinatePasteError] = useState(false);
   const [duplicateAllowed, setDuplicateAllowed] = useState(false);
   const [preview, setPreview] = useState<AliclikPreview | null>(null);
   const [transportId, setTransportId] = useState<number | null>(null);
@@ -443,14 +444,32 @@ export function AliclikGuidePanel({
                 <input
                   id={`${uid}-coord`}
                   value={coordinate}
-                  onChange={(e) => setCoordinate(e.target.value)}
+                  onChange={(e) => {
+                    setCoordinate(e.target.value);
+                    setCoordinatePasteError(false);
+                  }}
+                  onPaste={(e) => {
+                    if (e.clipboardData.getData("text/plain").trim()) {
+                      setCoordinatePasteError(false);
+                      return;
+                    }
+                    if (Array.from(e.clipboardData.items).some((item) => item.type.startsWith("image/"))) {
+                      e.preventDefault();
+                      setCoordinatePasteError(true);
+                    }
+                  }}
                   placeholder="Enlace de Google Maps o coordenada"
-                  aria-describedby={`${uid}-coord-help`}
+                  aria-describedby={`${uid}-coord-help${coordinatePasteError ? ` ${uid}-coord-paste-error` : ""}`}
                   className={INPUT}
                 />
                 <span id={`${uid}-coord-help`} className={HELP}>
                   Pega el enlace que mandó la clienta o la coordenada, por ejemplo -12.04318, -77.02824.
                 </span>
+                {coordinatePasteError && (
+                  <span id={`${uid}-coord-paste-error`} role="status" className="text-[13px] leading-5 text-warn-fg">
+                    Lo copiado es una imagen. Copia el enlace de Google Maps o las coordenadas como texto y vuelve a pegar.
+                  </span>
+                )}
               </label>
               {whatsappPin && coordinate.trim() !== whatsappPinText && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-wash px-3 py-2 text-[13px] leading-5 text-ink-700">
@@ -465,7 +484,10 @@ export function AliclikGuidePanel({
                     : <span className="font-mono tabular-nums text-ink-900">{whatsappPinText}</span>
                   </span>
                   <span className="flex items-center gap-3">
-                    <OpsButton size="sm" onClick={() => setCoordinate(whatsappPinText)} className="pointer-coarse:h-11">
+                    <OpsButton size="sm" onClick={() => {
+                      setCoordinate(whatsappPinText);
+                      setCoordinatePasteError(false);
+                    }} className="pointer-coarse:h-11">
                       Usar esta ubicación
                     </OpsButton>
                     <a

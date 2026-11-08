@@ -44,7 +44,7 @@ describe("la ubicación que manda por WhatsApp (Chatby)", () => {
   it("el panel de Aliclik la propone con un clic y no la llena sola", () => {
     const panel = read("components/aliclik-guide-panel.tsx");
     expect(panel).toContain("chatbyCustomerLocation(res.messages)");
-    expect(panel).toContain("onClick={() => setCoordinate(whatsappPinText)}");
+    expect(panel).toMatch(/onClick=\{\(\) => \{\s*setCoordinate\(whatsappPinText\);/);
     expect(panel).toContain("if (hasCoordinate) return;");
   });
 });

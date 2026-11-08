@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, CHECKBOX, FIELD, OpsButton, SECTION_CARD } from "@/components/ops-ui";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
+import { globalPasteImage } from "@/lib/global-paste-image";
 import {
   createCollectionUpload,
   findCollectionTargets,
@@ -56,8 +57,7 @@ export function ManualCollectionUpload() {
   useEffect(() => {
     if (!target || target.blockers.length) return;
     function onPaste(e: ClipboardEvent) {
-      const img = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith("image/"));
-      const f = img?.getAsFile();
+      const f = globalPasteImage(e);
       if (f) {
         e.preventDefault();
         setFile(f);
