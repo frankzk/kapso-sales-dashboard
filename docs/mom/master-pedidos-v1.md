@@ -13811,6 +13811,79 @@ salida (`reprogramDestination`), que es el que usó el courier. Registrar a mano
 (`createFenixGuide`) no se frena: esa guía ya existe en Swayp y negarse a
 registrarla solo la dejaría sin seguimiento.
 
+### 19.0.3 Distrito por revisar: la capital de provincia como distrito (08-11-2026)
+
+> ⚠️ **Ocurrió.** #KP202409 llegó del formulario web con distrito «Arequipa» y
+> dirección «AV solo 709 campo marte paucarpata». Kapta le pasó «Arequipa» a
+> la guía de Swayp; Swayp fue a Arequipa Cercado y anuló la guía. El
+> formulario deja elegir la provincia y el distrito, y muchas clientas eligen
+> la capital. El 08-11-2026 había 28 pedidos abiertos así sin guía (se
+> corrigieron en revisión masiva, ver `DEPLOY.md`) y unos 33 más que ya
+> estaban con el courier.
+
+Decisión del owner: **es un aviso, no un estado.** No hay estado, macroetapa
+ni bloqueo de servidor nuevos; el pedido sigue donde esté.
+
+**La regla** (`districtMismatch`, `lib/district-mismatch.ts`, pura):
+
+- El pedido es de provincia: la cobertura **no** es Lima ni Agencia.
+- El distrito, normalizado (sin tildes ni mayúsculas), es igual a la
+  provincia: la capital.
+- La dirección menciona, como **palabra entera** y sin tildes ni mayúsculas,
+  **otro** distrito de la **misma provincia y departamento** según
+  `peru_districts`, de **5 letras o más** (los nombres cortos casan con
+  cualquier cosa). Si casan dos nombres y uno contiene al otro («San Jerónimo»
+  y «San Jerónimo de Tunán»), vale el largo.
+
+**Antes de crear la guía.** En la guía Swayp directa (también «Swayp lo puede
+llevar hoy» desde Por confirmar, que abre el mismo modal), en el reenvío por
+Swayp de Envíos, en el panel de la guía Aliclik y en la salida Olva, si el
+pedido cae en la regla aparece un aviso ámbar:
+«La dirección dice Paucarpata y el distrito es Arequipa.», con un botón
+«Corregir a Paucarpata» por cada
+distrito que nombra la dirección y «Crear con Arequipa igual». El botón de
+crear espera hasta que se corrija o se pulse «Crear con … igual»; crear igual
+sigue siendo posible, a sabiendas.
+
+- **Corregir** es «Corregir ubicación» de siempre (`updateOrderGeo`, con su
+  auditoría y el recálculo): solo cambia el distrito —lo demás que ya tuviera la
+  corrección del pedido se conserva— y deja la nota «Distrito corregido: la
+  dirección dice Paucarpata.». Después se recarga.
+- **Aliclik** cotiza con el distrito: corregido, la cotización se borra y se
+  vuelve a pedir.
+- **El reenvío por Swayp** sale con el destino de la salida anterior
+  (`reprogramDestination`, §19.0.2), así que el aviso mira ese distrito y esa
+  dirección (con el departamento del pedido). Corregir arregla el pedido y abre
+  «Modificar destino» con el distrito nuevo: hay que guardarlo también ahí para
+  que Swayp lo reciba.
+
+**En el Master: «Distrito por revisar».** Una píldora en la línea de
+excepciones, tras «Programado sin ubicación», cuenta los pedidos **abiertos**
+(`pendiente`, `en_proceso`) que caen en la regla. Tocarla abre la lista: el
+pedido (abre la ficha en Ubicación), «Arequipa → Paucarpata», la dirección y,
+si ya tiene guía, con qué courier salió (corregir aquí no le cambia la guía al
+courier, §11.6.2). Cada fila tiene «Corregir» (un botón por sugerencia si hay
+varias), y «Corregir seleccionados» corrige en lote las que tienen **una sola**
+sugerencia, por el mismo camino, una tras otra. Se apaga sola: corregido, el
+distrito ya no es la capital.
+
+**Coste.** Dos lecturas por carga del Master, a la par del resto y con la
+sesión de quien mira: los pedidos abiertos que no son de Lima ni de Agencia
+(columnas cortas; ~1.500 el 08-11-2026) y `peru_districts` de **solo** sus
+provincias, en una consulta. La regla corre en el servidor en una pasada; al
+navegador llega solo la lista. Sin sondeo propio (el Master ya se recarga
+cuando cambia algo). Con búsqueda no se lee. Si la lectura falla, la píldora no
+se pinta. Antes de la guía: dos lecturas pequeñas al abrirla y otra tras
+corregir.
+
+Implementación: `lib/district-mismatch.ts` (regla y textos),
+`lib/district-mismatch-access.ts` (`getDistrictReview`,
+`loadProvinceDistricts`, `loadOrderDistrictMismatch`),
+`app/dashboard/pedidos/district-mismatch-actions.ts`,
+`components/district-mismatch-warning.tsx` y
+`components/district-review-panel.tsx`. Pruebas:
+`test/district-mismatch.test.ts`.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.

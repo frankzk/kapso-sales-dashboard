@@ -155,6 +155,7 @@ import {
 } from "@/app/dashboard/envios/actions";
 import { OrderLinkPicker } from "@/components/order-link-picker";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
+import { DistrictMismatchWarning, useDistrictMismatchCheck } from "@/components/district-mismatch-warning";
 import { SwaypNoveltyModal } from "@/components/swayp-novelty-modal";
 import {
   currentFenixReason,
@@ -2824,7 +2825,22 @@ function ShipmentDrawer({
   const swaypAddressPreview = (shipment?.delivery_address ?? "").trim() || (shopifyAddress?.address1 ?? "").trim() || null;
   const swaypReferencePreview = (shipment?.delivery_reference ?? "").trim() || (shopifyAddress?.address2 ?? "").trim() || null;
   const cancelledExceptionNeedsAddressOk = swaypMotiveMentionsAddress(cancelledExceptionNote);
+  // «Distrito por revisar» (MOM §19.0.3) en el reenvío por Swayp: la guía nueva
+  // sale con el distrito y la dirección de ESTA salida (`reprogramDestination`),
+  // así que se mira ese destino, con el departamento del pedido. Solo se lee
+  // con el formulario abierto.
+  const districtCheck = useDistrictMismatchCheck(
+    showCancelledException && shipment?.order_id ? shipment.order_id : null,
+    shipment
+      ? {
+          district: shipment.district ?? null,
+          province: shipment.province ?? null,
+          address: swaypAddressPreview,
+        }
+      : null,
+  );
   const cancelledExceptionReady =
+    !districtCheck.blocking &&
     cancelledExceptionTienePedido &&
     !cancelledExceptionDateInvalid &&
     !!cancelledExceptionNote.trim() &&
@@ -3366,6 +3382,18 @@ function ShipmentDrawer({
                         Modificar destino
                       </OpsButton>
                     </div>
+                    {shipment?.order_id && (
+                      <DistrictMismatchWarning
+                        orderId={shipment.order_id}
+                        check={districtCheck}
+                        afterFixNote="Swayp recibe el destino de esta guía: guarda también el distrito en «Modificar destino», abajo."
+                        onCorrected={(district) => {
+                          setAddressDistrict(district);
+                          setShowAddressEditor(true);
+                          document.getElementById("guia-destino")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }}
+                      />
+                    )}
                     {cancelledExceptionNeedsAddressOk && (
                       <label className="flex items-start gap-2 text-[13px] font-medium leading-5 text-ink-900">
                         <input

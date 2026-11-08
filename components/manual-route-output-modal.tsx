@@ -9,6 +9,11 @@ import {
 } from "@/app/dashboard/pedidos/actions";
 import { limaTodayKey } from "@/lib/shipments";
 import type { RouteCandidate } from "@/lib/order-route-plan";
+import {
+  DISTRICT_MISMATCH_BLOCK_REASON,
+  DistrictMismatchWarning,
+  useDistrictMismatchCheck,
+} from "@/components/district-mismatch-warning";
 
 export function ManualRouteOutputModal({
   orderId,
@@ -33,6 +38,8 @@ export function ManualRouteOutputModal({
     labelUrl: string;
   } | null>(null);
   const [pending, startTransition] = useTransition();
+  // «Distrito por revisar» (MOM §19.0.3): la guía de Olva lleva el distrito.
+  const districtCheck = useDistrictMismatchCheck(route.key === "olva" ? orderId : null);
 
   function create() {
     startTransition(async () => {
@@ -97,6 +104,7 @@ export function ManualRouteOutputModal({
                 Este pedido tiene {activeOutputs} salida{activeOutputs === 1 ? "" : "s"} activa{activeOutputs === 1 ? "" : "s"}. La nueva caja tendrá otro QR; debes escribir por qué sale en paralelo.
               </div>
             )}
+            {route.key === "olva" && <DistrictMismatchWarning orderId={orderId} check={districtCheck} />}
             {route.key === "olva" && (
               <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-900">
                 Antes de crear Olva Agencia, el adelanto validado acumulado debe llegar como mínimo a {ADELANTO_MINIMO_LABEL}, salvo que el pedido ya esté pagado.
@@ -145,10 +153,13 @@ export function ManualRouteOutputModal({
               La salida quedará como <b>Rótulo generado</b> y en custodia de la empresa. No se considera despachada hasta completar el doble cotejo.
             </div>
             {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
+            {districtCheck.blocking && (
+              <p className="text-[13px] font-medium leading-5 text-warn-fg">{DISTRICT_MISMATCH_BLOCK_REASON}</p>
+            )}
             <button
               type="button"
               onClick={create}
-              disabled={pending || !dispatchDate || (activeOutputs > 0 && !note.trim())}
+              disabled={pending || !dispatchDate || (activeOutputs > 0 && !note.trim()) || districtCheck.blocking}
               className="w-full rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {pending ? "Creando salida…" : "Crear salida y QR"}

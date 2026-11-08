@@ -51,6 +51,11 @@ import {
   type AliclikRouteRisk,
 } from "@/lib/aliclik-route-risk";
 import { loadOrderChatby } from "@/app/dashboard/pedidos/actions";
+import {
+  DISTRICT_MISMATCH_BLOCK_REASON,
+  DistrictMismatchWarning,
+  useDistrictMismatchCheck,
+} from "@/components/district-mismatch-warning";
 import { chatbyCustomerLocation, chatbyLimaDay, chatbyLimaTime } from "@/lib/chatby-conversation";
 import {
   describeAliclikHealth,
@@ -160,6 +165,9 @@ export function AliclikGuidePanel({
   }, [orderId, hasCoordinate]);
   const whatsappPinText = whatsappPin ? `${whatsappPin.lat}, ${whatsappPin.lng}` : "";
 
+  // «Distrito por revisar» (MOM §19.0.3): Aliclik saca el ubigeo del distrito.
+  const districtCheck = useDistrictMismatchCheck(orderId);
+
   const shortened = isShortenedMapsLink(coordinate);
   const waiting = Boolean(preview?.notReady);
   const creating = busy === "create";
@@ -264,6 +272,8 @@ export function AliclikGuidePanel({
         ? "Escribe el motivo de la salida adicional."
         : preview.writeBlocked
           ? preview.writeBlocked
+          : districtCheck.blocking
+            ? DISTRICT_MISMATCH_BLOCK_REASON
           : !duplicateAllowed
             ? "Resuelve primero la retención por posible duplicado, arriba."
             : !routeGate.allowed
@@ -361,6 +371,18 @@ export function AliclikGuidePanel({
               </label>
             </Banner>
           )}
+
+          {/* Antes de cotizar: la cotización usa el distrito. Corregido, la
+              cotización anterior ya no vale y se vuelve a pedir. */}
+          <DistrictMismatchWarning
+            orderId={orderId}
+            check={districtCheck}
+            onCorrected={() => {
+              setPreview(null);
+              setTransportId(null);
+            }}
+            afterFixNote="Vuelve a cotizar: Aliclik calcula el destino con el distrito."
+          />
 
           <AliclikDuplicatePanel
             key={orderId}
