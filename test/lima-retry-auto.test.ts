@@ -33,7 +33,7 @@ const h = vi.hoisted(() => ({
   googlePins: [] as string[],
   /** Hace fallar la lectura de la caché de Google. */
   googlePinsError: null as null | string,
-  /** «Pedir la ubicación por WhatsApp» (0323): con qué se llamó y qué devuelve. */
+  /** «Pedir la ubicación por WhatsApp» (0324): con qué se llamó y qué devuelve. */
   asks: [] as Row[],
   askResult: (_input: Row): Row | null => ({ outcome: "pedida", detail: "Kapta le pidió su ubicación por WhatsApp." }),
 }));
@@ -191,7 +191,7 @@ describe("la salida adicional de Lima: el motivo solo para una persona o el rein
     expect(guide).toContain("readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);");
     expect(guide).toContain("const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);");
     expect(guide).toContain("manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),");
-    expect(guide).toContain('kind: "envio_programado" | "confirmado_chatby" | "reintento_lima";');
+    expect(guide).toContain('kind: "envio_programado" | "confirmado_chatby" | "reintento_lima" | "agente_ia";');
     // Una sola copia de las compuertas: la creación llama a la misma función
     // que la simulación, antes de la cotización final, el candado y el POST.
     const create = guide.slice(guide.indexOf("export async function createAliclikGuideFor"));
@@ -1000,10 +1000,10 @@ describe("la pasada sin coordenada", () => {
   });
 });
 
-describe("«Pedir la ubicación por WhatsApp» en la pasada (0323, owner 08-11-2026)", () => {
+describe("«Pedir la ubicación por WhatsApp» en la pasada (0324, owner 08-11-2026)", () => {
   const withAsk = (mode: string) => ({ lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, chatby_ask_mode: mode }] });
 
-  it("Apagado o sin la 0323: no se llama", async () => {
+  it("Apagado o sin la 0324: no se llama", async () => {
     await runLimaRetryAuto(seed("activo", [noPin("a")]).admin, { now: OPEN_HOUR });
     await runLimaRetryAuto(seed("activo", [noPin("a")], withAsk("apagado")).admin, { now: OPEN_HOUR });
     expect(h.asks).toEqual([]);

@@ -635,6 +635,8 @@
 \ir migrations/0315_store_policies.sql
 \echo 'Applying 0316_chatby_approx_location.sql'
 \ir migrations/0316_chatby_approx_location.sql
+\echo 'Applying 0317_history_guide_auto.sql'
+\ir migrations/0317_history_guide_auto.sql
 \echo 'Applying 0318_chatby_auto_ask.sql'
 \ir migrations/0318_chatby_auto_ask.sql
 \echo 'Applying 0319_agent_oauth.sql'
@@ -643,6 +645,8 @@
 \ir migrations/0321_shalom_checked_at.sql
 \echo 'Applying 0322_lead_appointment_release.sql'
 \ir migrations/0322_lead_appointment_release.sql
-\echo 'Applying 0323_lima_retry_chatby_ask.sql'
-\ir migrations/0323_lima_retry_chatby_ask.sql
+\echo 'Applying 0323_agent_actions.sql'
+\ir migrations/0323_agent_actions.sql
+\echo 'Applying 0324_lima_retry_chatby_ask.sql'
+\ir migrations/0324_lima_retry_chatby_ask.sql
 \echo 'Done.'

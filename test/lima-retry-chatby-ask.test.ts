@@ -1,5 +1,5 @@
 // «Pedir la ubicación por WhatsApp» de los reintentos Aliclik de Lima (MOM
-// §9.5; owner, 08-11-2026; 0323). La regla pura (`retryAskDecision`, el texto)
+// §9.5; owner, 08-11-2026; 0324). La regla pura (`retryAskDecision`, el texto)
 // y el servidor (`askRetryLocation`): la marca antes de mandar, una vez por
 // episodio, Simulación que no manda, y el hecho en la Actividad.
 
@@ -208,14 +208,14 @@ describe("`askRetryLocation`", () => {
     expect(h.reads).toEqual([]);
   });
 
-  it("dice por qué no: sin clave, sin conversación, ventana cerrada, sin la 0323 o la Actividad que no se pudo leer", async () => {
+  it("dice por qué no: sin clave, sin conversación, ventana cerrada, sin la 0324 o la Actividad que no se pudo leer", async () => {
     expect((await askRetryLocation(fakeAdmin().admin, { ...INPUT, apiKey: "" }))!.detail).toContain("CHATBY_API_KEY");
     h.conversation = { status: "sin_conversacion" };
     expect((await askRetryLocation(fakeAdmin().admin, INPUT))!.detail).toContain("Chatby no tiene su conversación");
     h.conversation = { status: "ok", userNs: "u1", name: "Ana", inboxUrl: "x", messages: [customer(hoursAgo(30))] };
     expect((await askRetryLocation(fakeAdmin().admin, INPUT))!.detail).toContain("la ventana de 24 h de WhatsApp está cerrada");
     h.conversation = { status: "ok", userNs: "u1", name: "Ana", inboxUrl: "x", messages: [customer(hoursAgo(2))] };
-    expect((await askRetryLocation(fakeAdmin({ insertError: { code: "42P01", message: "relation does not exist" } }).admin, INPUT))!.detail).toContain("0323");
+    expect((await askRetryLocation(fakeAdmin({ insertError: { code: "42P01", message: "relation does not exist" } }).admin, INPUT))!.detail).toContain("0324");
     expect(await askRetryLocation(fakeAdmin({ eventsError: { message: "x" } }).admin, INPUT)).toMatchObject({ outcome: "error" });
     expect(h.sends).toEqual([]);
   });

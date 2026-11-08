@@ -132,7 +132,7 @@ describe("measureLimaGeocodeNow", () => {
   });
 });
 
-describe("setRetryChatbyAsk («Pedir la ubicación por WhatsApp», 0323)", () => {
+describe("setRetryChatbyAsk («Pedir la ubicación por WhatsApp», 0324)", () => {
   it("cambia la posición y queda en «Últimos cambios»", async () => {
     h.settings = { org_id: ORG, daily_cap: 10, geocode_enabled: false, chatby_ask_mode: "apagado" };
     expect(await setRetryChatbyAsk(ORG, "simulacion")).toEqual({ notice: "Pedir la ubicación por WhatsApp en los reintentos: Simulación." });
@@ -140,9 +140,9 @@ describe("setRetryChatbyAsk («Pedir la ubicación por WhatsApp», 0323)", () =>
     expect(h.events).toEqual([{ org_id: ORG, store_id: null, automation: "lima_retry_chatby_ask", previous: "apagado", next: "simulacion", actor: "owner-1" }]);
   });
 
-  it("sin la 0323, sin la clave de Chatby o con una posición que no existe, no guarda", async () => {
+  it("sin la 0324, sin la clave de Chatby o con una posición que no existe, no guarda", async () => {
     h.settings = { org_id: ORG, daily_cap: 10, geocode_enabled: false };
-    expect((await setRetryChatbyAsk(ORG, "activo")).error).toContain("0323");
+    expect((await setRetryChatbyAsk(ORG, "activo")).error).toContain("0324");
     h.settings = { org_id: ORG, daily_cap: 10, chatby_ask_mode: "apagado" };
     h.chatbyKey = "";
     expect((await setRetryChatbyAsk(ORG, "activo")).error).toContain("CHATBY_API_KEY");

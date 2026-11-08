@@ -96,7 +96,8 @@ export type AutomationControl =
   /**
    * Apagado / Simulación / Activo de una columna de texto de la organización
    * (0316). No es un interruptor: no entra en la lista blanca de `on/off` y
-   * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`), que
+   * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`,
+   * `setChatbyHistoryMode`), que
    * solo escribe esta columna con uno de los tres valores.
    */
   | { kind: "org_mode"; table: OrgAutomationTable; column: string; requires?: never }
@@ -126,6 +127,8 @@ export interface AutomationEntry {
 export const CHATBY_APPROX_KEY = "chatby_auto_approx";
 /** «Pedir sola la dirección o la ubicación» (0318): su clave en el catálogo y en el historial. */
 export const CHATBY_ASK_KEY = "chatby_auto_ask";
+/** «Guía automática para clientas con entregas» (0317): su clave en el catálogo y en el historial. */
+export const CHATBY_HISTORY_KEY = "chatby_auto_history";
 
 const STORE_SETTINGS = (section: string, label = "Ajustes de la tienda"): AutomationLink => ({ kind: "store_settings", section, label });
 
@@ -219,6 +222,18 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     effect: "Envía WhatsApp",
     scope: "org",
     control: { kind: "org_mode", table: "chatby_auto_settings", column: "ask_mode" },
+  },
+  {
+    key: CHATBY_HISTORY_KEY,
+    group: "confirmacion",
+    name: "Guía automática para clientas con entregas",
+    // 0317, owner 08-11-2026. La regla está en lib/history-guide-auto.ts; va
+    // antes de «Pedir sola la dirección o la ubicación».
+    what:
+      "Si la clienta confirmó por Chatby y la guía no sale por la dirección, pero ya recibió en esa misma dirección sin ningún fallido, crea la guía con el GPS de esa entrega y confirma, sin escribirle. En Simulación solo dice con qué entrega la habría creado.",
+    effect: "Crea guías",
+    scope: "org",
+    control: { kind: "org_mode", table: "chatby_auto_settings", column: "history_guide_mode" },
   },
 
   // ── Llamadas de voz ────────────────────────────────────────────────────
@@ -637,7 +652,7 @@ export const RETRY_EVENT_PREFIX = "lima_retry:";
 export const RETRY_CAP_EVENT = "lima_retry_cap";
 /** «Usar la ubicación por dirección (Google)» de los reintentos de Lima (0308). */
 export const RETRY_GEOCODE_EVENT = "lima_retry_geocode";
-/** «Pedir la ubicación por WhatsApp» de los reintentos de Lima (0323). */
+/** «Pedir la ubicación por WhatsApp» de los reintentos de Lima (0324). */
 export const RETRY_CHATBY_ASK_EVENT = "lima_retry_chatby_ask";
 export function retryVariantEventKey(variant: string): string {
   return `${RETRY_EVENT_PREFIX}${variant}`;
@@ -646,8 +661,18 @@ export function retryVariantEventKey(variant: string): string {
 /** La regla automática de la «Lista de pago adelantado» (0309, MOM §41). */
 export const PREPAY_MODE_EVENT = "prepay_list_auto";
 
+/** Los interruptores y topes del agente de IA (Conector de IA, 0323, MOM §42.9). */
+export const AGENT_WHATSAPP_MODE_EVENT = "agent_whatsapp_mode";
+export const AGENT_GUIDE_MODE_EVENT = "agent_guide_mode";
+export const AGENT_WHATSAPP_CAP_EVENT = "agent_whatsapp_cap";
+export const AGENT_GUIDE_CAP_EVENT = "agent_guide_cap";
+
 /** El nombre de lo que cambió, para «Últimos cambios». Pura. */
 export function automationEventLabel(key: string): string {
+  if (key === AGENT_WHATSAPP_MODE_EVENT) return "Agente de IA · WhatsApp a la clienta";
+  if (key === AGENT_GUIDE_MODE_EVENT) return "Agente de IA · guías de Aliclik";
+  if (key === AGENT_WHATSAPP_CAP_EVENT) return "Agente de IA · tope de WhatsApp del día";
+  if (key === AGENT_GUIDE_CAP_EVENT) return "Agente de IA · tope de guías del día";
   if (key === PREPAY_MODE_EVENT) return "Lista de pago adelantado · regla automática";
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
@@ -666,6 +691,8 @@ export function automationValueLabel(key: string, value: string | null): string 
   if (value === SWITCH_OFF) return "Apagado";
   if (isRetryMode(value)) return RETRY_MODE_LABEL[value];
   if (key === RETRY_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "guía" : "guías"} al día`;
+  if (key === AGENT_GUIDE_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "guía" : "guías"} al día`;
+  if (key === AGENT_WHATSAPP_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "mensaje" : "mensajes"} al día`;
   return value;
 }
 

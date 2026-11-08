@@ -1,5 +1,5 @@
 // Kapta pide la ubicación por WhatsApp para un reintento Aliclik de Lima que no
-// tiene ninguna (MOM §9.5; owner, 08-11-2026; 0323). La parte pura: el texto,
+// tiene ninguna (MOM §9.5; owner, 08-11-2026; 0324). La parte pura: el texto,
 // si toca mandarlo y por qué no.
 //
 // POR QUÉ. Aliclik exige la coordenada. Un reintento de Lima sin pin, sin la
@@ -31,11 +31,11 @@ import { chatbyAutoAskWindowOpen } from "@/lib/chatby-auto-ask";
 import { chatbyFirstName } from "@/lib/chatby-location-ask";
 import { APPROX_MODE_LABEL, approxModeFrom, isApproxMode, type ApproxMode } from "@/lib/geocode-approx";
 
-/** Apagado / Simulación / Activo (`lima_retry_auto_settings.chatby_ask_mode`, 0323). */
+/** Apagado / Simulación / Activo (`lima_retry_auto_settings.chatby_ask_mode`, 0324). */
 export type RetryAskMode = ApproxMode;
 export const RETRY_ASK_MODE_LABEL = APPROX_MODE_LABEL;
 export const isRetryAskMode = isApproxMode;
-/** Lo que se lee de la fila: sin la columna (antes de la 0323) o con un valor raro, Apagado. */
+/** Lo que se lee de la fila: sin la columna (antes de la 0324) o con un valor raro, Apagado. */
 export function retryAskModeFrom(value: unknown): RetryAskMode {
   return approxModeFrom(value);
 }

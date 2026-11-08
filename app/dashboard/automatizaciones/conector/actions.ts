@@ -23,6 +23,20 @@ import {
   isAgentScope,
 } from "@/lib/agent-auth";
 import {
+  AGENT_ACTIONS_MIGRATION_MISSING,
+  AGENT_GUIDE_CAP_MAX,
+  AGENT_WHATSAPP_CAP_MAX,
+  isAgentActionsMigrationMissing,
+  isAgentMode,
+  parseAgentSettings,
+} from "@/lib/agent-actions";
+import {
+  AGENT_GUIDE_CAP_EVENT,
+  AGENT_GUIDE_MODE_EVENT,
+  AGENT_WHATSAPP_CAP_EVENT,
+  AGENT_WHATSAPP_MODE_EVENT,
+} from "@/lib/automations-catalog";
+import {
   POLICY_IMPORT_MAX_CHARS,
   POLICY_MIGRATION_MISSING,
   isPolicyMigrationMissing,
@@ -42,8 +56,8 @@ export interface AgentTokenFormState {
 
 const PATH = "/dashboard/automatizaciones/conector";
 
-/** Las herramientas que esta versión ofrece: las de lectura. */
-const AVAILABLE_SCOPES = Object.entries(AGENT_SCOPES).filter(([, s]) => !s.write).map(([k]) => k);
+/** Las herramientas que se pueden dar: todas (las de escritura desde la parte 3, MOM §42.9). */
+const AVAILABLE_SCOPES = Object.keys(AGENT_SCOPES);
 
 async function requireManager(orgId: string): Promise<{ userId: string } | null> {
   if (!orgId) return null;
@@ -59,7 +73,7 @@ async function requireManager(orgId: string): Promise<{ userId: string } | null>
 /**
  * «Crear token». Valida que las tiendas sean de la organización y que quien lo
  * crea las vea (el token nunca ve más que su creador), y que los permisos sean
- * de los que existen hoy (solo lectura).
+ * de los que existen.
  */
 export async function createAgentToken(_prev: AgentTokenFormState, formData: FormData): Promise<AgentTokenFormState> {
   const orgId = String(formData.get("org_id") ?? "");
@@ -118,6 +132,97 @@ export async function revokeAgentToken(_prev: AgentTokenFormState, formData: For
   console.info(`[agent-tokens] ${JSON.stringify({ org: orgId, step: "revoked", token: tokenId, by: ctx.userId })}`);
   revalidatePath(PATH);
   return { notice: "Token revocado: desde ahora Kapta lo rechaza." };
+}
+
+/**
+ * «Cambiar herramientas» de un token activo: por ejemplo, darle a la conexión
+ * de Grok las de escritura sin volver a conectarlo. Lo que el token puede hacer
+ * sigue limitado por los permisos de quien lo creó (MOM §42.9).
+ */
+export async function updateAgentTokenScopes(_prev: AgentTokenFormState, formData: FormData): Promise<AgentTokenFormState> {
+  const orgId = String(formData.get("org_id") ?? "");
+  const tokenId = String(formData.get("token_id") ?? "");
+  const ctx = await requireManager(orgId);
+  if (!ctx || !tokenId) return { error: "Sin permiso." };
+  const scopes = [...new Set(formData.getAll("scopes").map(String))];
+  if (!scopes.length) return { error: "Elige al menos una herramienta. Para que no use ninguna, revócalo." };
+  if (!scopes.every((s) => isAgentScope(s) && AVAILABLE_SCOPES.includes(s))) return { error: "Hay una herramienta que no existe." };
+  const admin = createAdminSupabase();
+  const { data, error } = await admin
+    .from("agent_tokens")
+    .update({ scopes })
+    .eq("id", tokenId)
+    .eq("org_id", orgId)
+    .is("revoked_at", null)
+    .select("id");
+  if (error) return { error: isAgentMigrationMissing(error) ? AGENT_MIGRATION_MISSING : "No se pudieron guardar las herramientas." };
+  if (!(data ?? []).length) return { error: "Ese token está revocado o no existe." };
+  console.info(`[agent-tokens] ${JSON.stringify({ org: orgId, step: "scopes", token: tokenId, by: ctx.userId, scopes })}`);
+  revalidatePath(PATH);
+  return { notice: "Herramientas guardadas: valen desde la próxima llamada del agente." };
+}
+
+// ---------------------------------------------------------------------------
+// Lo que el agente puede hacer (MOM §42.9, parte 3; 0323)
+// ---------------------------------------------------------------------------
+
+/**
+ * El interruptor de WhatsApp y el de guías (Apagado / Simulación / Activo) y sus
+ * topes del día, por organización. Cada cambio queda en «Últimos cambios» de
+ * Automatizaciones, como los demás interruptores (§40).
+ */
+export async function saveAgentActionSettings(_prev: AgentTokenFormState, formData: FormData): Promise<AgentTokenFormState> {
+  const orgId = String(formData.get("org_id") ?? "");
+  const ctx = await requireManager(orgId);
+  if (!ctx) return { error: "Sin permiso." };
+  const whatsappMode = String(formData.get("whatsapp_mode") ?? "");
+  const guideMode = String(formData.get("guide_mode") ?? "");
+  if (!isAgentMode(whatsappMode) || !isAgentMode(guideMode)) return { error: "Esa posición no existe." };
+  const whatsappCap = Number(formData.get("whatsapp_daily_cap"));
+  const guideCap = Number(formData.get("guide_daily_cap"));
+  if (!Number.isInteger(whatsappCap) || whatsappCap < 1 || whatsappCap > AGENT_WHATSAPP_CAP_MAX) {
+    return { error: `El tope de WhatsApp va de 1 a ${AGENT_WHATSAPP_CAP_MAX} por día.` };
+  }
+  if (!Number.isInteger(guideCap) || guideCap < 1 || guideCap > AGENT_GUIDE_CAP_MAX) {
+    return { error: `El tope de guías va de 1 a ${AGENT_GUIDE_CAP_MAX} por día.` };
+  }
+  const admin = createAdminSupabase();
+  const { data: current, error: readError } = await admin.from("agent_action_settings").select("*").eq("org_id", orgId).maybeSingle();
+  if (readError) return { error: isAgentActionsMigrationMissing(readError) ? AGENT_ACTIONS_MIGRATION_MISSING : "No se pudo leer la configuración." };
+  const before = parseAgentSettings(current as Record<string, unknown> | null);
+  const now = new Date().toISOString();
+  const { error } = await admin.from("agent_action_settings").upsert(
+    {
+      org_id: orgId,
+      whatsapp_mode: whatsappMode,
+      guide_mode: guideMode,
+      whatsapp_daily_cap: whatsappCap,
+      guide_daily_cap: guideCap,
+      updated_at: now,
+      updated_by: ctx.userId,
+    },
+    { onConflict: "org_id" },
+  );
+  if (error) return { error: isAgentActionsMigrationMissing(error) ? AGENT_ACTIONS_MIGRATION_MISSING : "No se pudo guardar." };
+  // Sin fila, el historial dice «Sin configurar» como valor anterior.
+  const had = Boolean(current);
+  const changes = [
+    { automation: AGENT_WHATSAPP_MODE_EVENT, previous: had ? before.whatsappMode : null, next: whatsappMode },
+    { automation: AGENT_GUIDE_MODE_EVENT, previous: had ? before.guideMode : null, next: guideMode },
+    { automation: AGENT_WHATSAPP_CAP_EVENT, previous: had ? String(before.whatsappDailyCap) : null, next: String(whatsappCap) },
+    { automation: AGENT_GUIDE_CAP_EVENT, previous: had ? String(before.guideDailyCap) : null, next: String(guideCap) },
+  ].filter((c) => c.previous !== c.next);
+  let historyNote = "";
+  if (changes.length) {
+    const { error: historyError } = await admin
+      .from("automation_switch_events")
+      .insert(changes.map((c) => ({ org_id: orgId, store_id: null, actor: ctx.userId, ...c })));
+    if (historyError) historyNote = " No quedó en «Últimos cambios».";
+  }
+  console.info(`[agent-actions] ${JSON.stringify({ org: orgId, step: "settings", by: ctx.userId, whatsappMode, guideMode, whatsappCap, guideCap })}`);
+  revalidatePath(PATH);
+  revalidatePath("/dashboard/automatizaciones");
+  return { notice: `Guardado.${historyNote}` };
 }
 
 // ---------------------------------------------------------------------------

@@ -1086,13 +1086,119 @@ se creó**.
     respondió, pero la dirección que escribió sigue incompleta…» o «La clienta
     completó la dirección por Chatby y Kapta la guardó, pero Google tampoco da
     el edificio…». El botón «Pedir ubicación por WhatsApp» sigue ahí.
+- **Guía automática para clientas con entregas** (owner, 08-11-2026; 0317;
+  `lib/history-guide-auto.ts`). La clienta confirmó por Chatby y la guía no
+  sale por la dirección, pero ya recibió en esa misma casa: la guía sale igual,
+  con el GPS de esa entrega. Caso que lo motivó: #KP204102 («Los cerezos Mz i
+  L 5 urb Arboleda», Trujillo; tres entregados por Aliclik ahí). No agrega
+  estados ni subetapas; corre en la misma pasada, con la conversación que acaba
+  de leer, y solo lee la base (el historial y las guías de esos pedidos).
+  - **Cuándo se mira.** Solo cuando la clienta **confirmó por Chatby** y la guía
+    no sale por la dirección:
+    - `direccion_incompleta`: lo único que falla es que la dirección (del
+      mensaje o del pedido) no está completa; lo demás cuadra como siempre (el
+      pedido, confirmar, pagar en casa, el monto, la dirección del mensaje es
+      la del pedido y después solo cortesía o su ubicación,
+      `historyGuideConfirmation`);
+    - `sin_ubicacion`: la guía de siempre ya se intentó y no hay coordenada
+      (sin la del pedido, sin ubicación de WhatsApp y sin el edificio ni la
+      cuadra en Google), al quedar para la asesora y en las relecturas de cada
+      30 minutos (también lo que quedó así antes de encender el interruptor) y
+      después de que la clienta responde a una pedida.
+
+    Un pedido sin mensaje de confirmación (`sin_conversacion`,
+    `sin_confirmacion`) no entra: la regla no confirma a nadie que no confirmó.
+    #KP204102 no tiene conversación en Chatby, así que **no la toma**; sigue
+    siendo de la asesora.
+  - **Va antes de pedirle la dirección o la ubicación** (0318). Para la clienta
+    que califica, Kapta crea la guía y no le escribe. Si no califica, o la guía
+    con ese GPS tampoco sale por una espera (el tope, Aliclik en rojo, el
+    candado), sigue lo de siempre (en la espera, se vuelve a leer y a mirar).
+    Si la guía con ese GPS no sale por otra cosa (el pin no se respalda,
+    Aliclik no la deja crear…), queda para la asesora con ese motivo, como
+    cualquier guía de Chatby, sin pedirle la dirección.
+  - **Quién califica** (`historyGuideCandidate`, `evaluateHistoryGuide`). Por
+    el celular, en toda la organización (también tiendas inactivas), los OTROS
+    pedidos:
+    1. **al menos un entregado** (`general_status = entregado`: Aliclik, Lima o
+       cualquier courier);
+    2. **ningún fallido**: ningún devuelto ni anulado después de salir
+       (`isFailedDispatch`, §8.6); ningún intento de entrega que no se entregó
+       (`attempt_count > 0`: lo que reportan los couriers y los «No entregado»
+       de nuestros motorizados, **también en un pedido que al final sí se
+       entregó**); ningún rechazo en la puerta (`REFUSED`,
+       `countDoorRejections`, §8.2); y ningún otro pedido que salió y sigue sin
+       entregarse. Si las guías no se pueden leer, no califica;
+    3. el adelanto de la tabla del §8 no frena Aliclik (`aliclikRiskGate`: dos
+       anulados o más lo exigen);
+    4. **la misma dirección**: la del pedido es la de un entregado del mismo
+       distrito y provincia, comparada sin mayúsculas, tildes, puntuación ni
+       ceros a la izquierda; «M», «Mz», «Mza», «Manzana» iguales; «L», «Lt»,
+       «Lote» iguales; «Jr»/«Jirón», «Av»/«Avenida», «Pje»/«Pasaje» iguales; sin
+       palabras de relleno («urb», «nro», «de», «calle»…); las mismas palabras
+       en el mismo orden. «Los cerezos Mz i L 5 urb Arboleda» es «Los cerezos
+       M i L 5 Arboleda»; «lote 3» es «lote 03»; otro lote, otra manzana u otro
+       distrito no;
+    5. **ese entregado tiene GPS**: la coordenada de su guía en el Master
+       (`latitude/longitude` con `geo_source = courier`, que sale de
+       `shipments.latitude/longitude`). Aliclik devuelve en su reporte la
+       coordenada que le mandó Kapta (ver «La prueba», arriba), así que **no es
+       el GPS del motorizado**: es el punto con el que esa guía se entregó, y la
+       entrega es la prueba de que sirve. Una corrección a mano (`manual`) o lo
+       que geocodificó Shopify no cuentan. Con varios, el entregado más
+       reciente.
+  - **La guía.** Por el camino de la ubicación de WhatsApp (`forcePin`): esa
+    coordenada, nunca la del pedido ni Google, con el pin respaldado de Aliclik
+    al cotizar y todas las rejas de `createAliclikGuideFor` (prepago, rechazos
+    en la puerta, duplicado, riesgo, salida viva, stock, cobertura, el candado),
+    la lista de pago adelantado (§41), Shalom, el envío programado, un pago, el
+    tope de 20 por día y Aliclik en rojo. Confirma con la guía creada, como
+    siempre (`register_confirmation_attempt_v2`, sin actor, `source =
+    'chatby'`).
+  - **Lo que queda escrito.** En la línea de tiempo, el hecho
+    **`chatby_history_guide`** («Guía con el GPS de una entrega anterior»,
+    firmado «Chatby»): «Guía creada con el GPS de la entrega de #KP140751.», con
+    la nota «La clienta confirmó por Chatby y la dirección está incompleta (o
+    Google no ubica la dirección y la clienta no mandó su ubicación), pero ya
+    recibió en esta misma dirección (3 entregados, ningún fallido): Kapta creó
+    la guía Aliclik con el GPS de la entrega de #KP140751.» y en `payload` el
+    pedido (`source_order_id`, `source_order_name`), los entregados y el motivo.
+    El `guide_registered` dice «Guía automática: #KP204102 confirmó por Chatby;
+    GPS de la entrega de #KP140751 (historial de entregas).» y
+    `payload.auto.gps_from`; la nota del lead (la ficha) «Guía de Aliclik
+    creada automáticamente (confirmó por Chatby · GPS de la entrega de
+    #KP140751) · …»; la nota de la confirmación agrega «La guía va con el GPS
+    de la entrega de #KP140751: la clienta ya recibió en esta dirección (3
+    entregados, ningún fallido).»; y `guide_detail` «coordenada: GPS de la
+    entrega de #KP140751 (historial de entregas)». La marca guarda
+    `evidence.history_guide` (posición, motivo, resultado `usada`,
+    `habria_usado` o `no_califica` con su motivo, el pedido del GPS y los
+    números; ni direcciones ni celulares).
+  - **El interruptor** (`chatby_auto_settings.history_guide_mode`, 0317),
+    «Guía automática para clientas con entregas» en Automatizaciones (§40,
+    grupo Confirmación, clave `chatby_auto_history`), con las tres posiciones
+    de siempre. **Apagado** (nace así, y sin la 0317): lo de hoy. **Simulación**:
+    la pasada dice «habría creado la guía con el GPS de #…» (en el resumen del
+    cron, `historySimulated`, una vez por pedido, y en la marca) y el pedido
+    sigue exactamente como hoy (para la asesora y, si está encendido, la pedida
+    de 0318). **Activo**: crea la guía y confirma (`historyUsed`). El owner lo
+    quiere en vivo; se enciende a mano después de desplegar.
+  - **Al decidirlo** (réplica de solo lectura, 08-11-2026, 72 h): de las 148
+    marcas `para_asesora` por `direccion_incompleta` (69), `sin_ubicacion_cerrado`
+    (63) o `sin_ubicacion` (16), 18 tenían algún entregado, 8 el historial
+    limpio y **una** calificaba: #AUR900480 («Calle alameda del sol mz. A lote
+    3», Veintiséis de Octubre) con el GPS de #KP201632 («… lote 03», entregado
+    por Aliclik el 05-11). Las otras siete: otra dirección (o la misma con otro
+    distrito guardado en el entregado), un entregado en agencia Shalom o un GPS
+    de Shopify o manual.
 - **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
   con otra creación en curso (el candado), no se escribe nada visible: el
   pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.
 - **Interruptores** (`chatby_auto_settings`, 0297, uno por organización):
   `enabled` (toda la pasada), `guide_enabled` (solo la guía), `daily_cap` (20),
   `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30); y
-  las dos de tres posiciones, `approx_mode` (0316) y `ask_mode` (0318). Nace
+  las tres de tres posiciones, `approx_mode` (0316), `ask_mode` (0318) y
+  `history_guide_mode` (0317). Nace
   **encendido** con 20 guías por día porque lo pidió el owner, y no para las
   organizaciones cliente de Grupo GF (§29.15.1). Sin la tabla, o con la fila
   apagada, la pasada no hace nada. Las claves de siempre: `CHATBY_API_KEY` para
@@ -1118,9 +1224,10 @@ Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
 `lib/chatby-location-ask.ts`, `lib/chatby-reask.ts`,
 `components/order-chatby-panel.tsx`; pedirla sola (0318):
 `lib/chatby-auto-ask.ts`, `lib/order-address-correction.ts`,
-`lib/chatby-auto-ask-server.ts`. Pruebas:
+`lib/chatby-auto-ask-server.ts`; la guía para clientas con entregas (0317):
+`lib/history-guide-auto.ts`. Pruebas:
 `test/chatby-autoconfirm.test.ts`, `test/chatby-location-ask.test.ts`,
-`test/chatby-auto-ask.test.ts`.
+`test/chatby-auto-ask.test.ts`, `test/history-guide-auto.test.ts`.
 
 ### 6.2 Preparación
 
@@ -5367,7 +5474,7 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     punto (como la de Google) y el reintento siguiente lo toma como pin del
     pedido.
   - **Si no mandó ninguna, Kapta se la pide por WhatsApp** (owner, 08-11-2026;
-    0323; `lib/lima-retry-chatby-ask.ts`). Interruptor «Pedir la ubicación por
+    0324; `lib/lima-retry-chatby-ask.ts`). Interruptor «Pedir la ubicación por
     WhatsApp» en Automatizaciones (`lima_retry_auto_settings.chatby_ask_mode`,
     por organización: Apagado / Simulación / Activo; nace **Apagado**). Cuando
     la pasada llega a «Sin ubicación» (ni pin del pedido, ni pin de WhatsApp,
@@ -24607,13 +24714,13 @@ Vercel— y algunas no tenían interruptor.
     el motivo. Apagar se puede siempre. El botón de medir pide confirmación
     (gasta cupo de Google) y, como todo el panel, solo funciona en producción y
     con `automations.manage`.
-  - **Ubicación por WhatsApp de los reintentos** (§9.5, 08-11-2026; 0323,
+  - **Ubicación por WhatsApp de los reintentos** (§9.5, 08-11-2026; 0324,
     `#retry-whatsapp`): dice que la pasada y «Aprobar» ya usan la ubicación que
     la clienta mandó por WhatsApp (sin interruptor) y tiene «Pedir la ubicación
     por WhatsApp» con Apagado / Simulación / Activo
     (`lima_retry_auto_settings.chatby_ask_mode`, `setRetryChatbyAsk`). Envía
     WhatsApp a clientas: Activo pide confirmación. Fuera de Apagado hace falta
-    `CHATBY_API_KEY`; sin la 0323 la fila se bloquea. El historial lo guarda
+    `CHATBY_API_KEY`; sin la 0324 la fila se bloquea. El historial lo guarda
     como `lima_retry_chatby_ask`.
   - **Lista de pago adelantado** (§41, 05-11-2026; 0309): la regla automática
     con Apagado / Simulación / Activo (confirmación antes de Activo), el
@@ -24639,7 +24746,10 @@ Vercel— y algunas no tenían interruptor.
     blanca y tiene su propia acción, que solo escribe esa columna. Activo pide
     confirmación; cuenta entre las encendidas solo en Activo. Igual, «Pedir
     sola la dirección o la ubicación» (§6.1, 0318, `ask_mode`,
-    `setChatbyAskMode`), que envía WhatsApp a clientas.
+    `setChatbyAskMode`), que envía WhatsApp a clientas, y «Guía automática para
+    clientas con entregas» (§6.1, 0317, clave `chatby_auto_history`,
+    `history_guide_mode`, `setChatbyHistoryMode`), que crea guías y confirma
+    pedidos; en la pasada va antes de la pedida de 0318.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -24665,11 +24775,12 @@ Vercel— y algunas no tenían interruptor.
   con el mismo permiso `automations.manage`.
 
 Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql`,
-`0316_chatby_approx_location.sql`, `0318_chatby_auto_ask.sql` y
-`0323_lima_retry_chatby_ask.sql`.
+`0316_chatby_approx_location.sql`, `0317_history_guide_auto.sql` y
+`0318_chatby_auto_ask.sql`; la de «Pedir la ubicación por WhatsApp» de los
+reintentos es `0324_lima_retry_chatby_ask.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`,
-`test/lima-retry-chatby-ask.test.ts`.
+`test/history-guide-auto.test.ts`, `test/lima-retry-chatby-ask.test.ts`.
 
 ## 41. Lista de pago adelantado (05-11-2026)
 
@@ -24931,9 +25042,10 @@ WhatsApp al cliente**. No cambia estados ni anula guías.
 Se entrega en tres partes. **Las partes 1 y 2 son de solo lectura para el
 agente.** La parte 1 (08-11-2026, 0314) le da los pedidos, las conversaciones
 y las políticas que Kapta calcula; la parte 2 (08-11-2026, 0315), las
-políticas que escribe cada tienda (§42.6). La parte 3 (notas, WhatsApp y guía
-de Aliclik) está pendiente (§42.7): sus permisos ya existen en la base, pero
-ninguna herramienta los usa y la pantalla los muestra como «Próximamente».
+políticas que escribe cada tienda (§42.6). La parte 3 (08-11-2026, 0323) le da
+los tres cambios permitidos —nota, WhatsApp a la clienta y guía de Aliclik—
+con un interruptor Apagado / Simulación / Activo y frenos que pone Kapta
+(§42.9).
 
 ### 42.1 El servidor
 
@@ -24973,13 +25085,13 @@ ninguna herramienta los usa y la pantalla los muestra como «Próximamente».
   `agent_tool_calls`. Pasado el tope, la herramienta contesta un error sin leer
   nada.
 
-### 42.3 Las herramientas (solo lectura)
+### 42.3 Las herramientas de lectura
 
 | Herramienta | Permiso | Qué devuelve |
 | --- | --- | --- |
 | `buscar_pedidos` | `pedidos.leer` | Hasta 20 pedidos (10 si no se dice) por número, teléfono (sus últimos 9 dígitos), nombre del cliente o guía (también la de Swayp), del último movimiento más reciente al más antiguo, con tienda, total, estado, etapa y subetapa. |
 | `obtener_pedido` | `pedidos.leer` | Productos y cantidades, importes y moneda, forma y estado de pago, entrega (modalidad, cobertura, destino y dirección), estado del Master (etapa y subetapa con su nombre de pantalla, motivos, courier, fechas de despacho, entrega y devolución), hasta 20 guías y los últimos 10 movimientos. |
-| `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. No marca nada como leído. |
+| `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. Aparte, en `chatby`, los últimos 20 mensajes con el bot de confirmación Chatby (§25), con autor cliente, bot, equipo o nota interna: ahí confirman muchas clientas, y sin ellos el agente decía «sin confirmar» de pedidos ya confirmados (08-11-2026). Si Kapso falla pero Chatby contesta, devuelve lo de Chatby. No marca nada como leído. |
 | `consultar_politicas` | `politicas.leer` | **Calculadas:** el adelanto mínimo de los envíos por agencia (S/ 20, `lib/adelanto-minimo.ts`) y, si se da el distrito, su cobertura según `order_coverage_for` el **día de Lima** (contraentrega o agencia con adelanto); si la base no contesta, «por revisar»: no afirma una cobertura que no se pudo calcular. **Escritas:** las políticas de la tienda vigentes ese día (§42.6). |
 
 Lo que vale para todas (`lib/agent-tools.ts`):
@@ -25063,12 +25175,12 @@ sistema.
 
 ### 42.7 Pendiente
 
-- **Parte 3 — los cambios que el owner permitió:** dejar una nota en el pedido
-  (`pedidos.nota`), enviar WhatsApp al cliente (`whatsapp.enviar`, con
-  idempotencia y aprobación) y crear la guía de Aliclik (`aliclik.crear_guia`,
-  con vista previa y confirmación). Cada una exige además que **el creador del
-  token** tenga hoy el permiso de Kapta equivalente (por ejemplo
-  `aliclik.create_guide` para la guía). Ninguna cambia estados ni anula guías.
+- **Pasar a Activo.** WhatsApp y guías nacen en Simulación (§42.9). Tras una
+  semana revisando «Lo que hizo el agente», el owner decide si los pasa a
+  Activo y con qué topes.
+- **El origen lo declara el agente.** Kapta no puede verificar que una persona
+  aprobó en el chat de Grok; lo mitigan la vista previa con código, los topes,
+  el registro de cada acción y la revocación en un clic (§42.9).
 
 ### 42.8 Conectar con OAuth, sin copiar tokens (08-11-2026; 0319)
 
@@ -25094,7 +25206,8 @@ aprobarás el acceso sin copiar tokens». Kapta implementa la autorización de M
 5. **Permiso**, `/oauth/authorize`: la persona entra a Kapta (si no tenía
    sesión, el login la devuelve a esta página) y ve quién pide y a qué dominio
    vuelve. Elige las tiendas (las que ve, de una sola organización) y las
-   herramientas (las de lectura, marcadas las que pidió el agente), y pulsa
+   herramientas (todas, con las de escritura marcadas «Hace cambios»; vienen
+   marcadas las que pidió el agente, o solo las de lectura si no pidió), y pulsa
    «Permitir» o «Cancelar». Hace falta `automations.manage`, como para crear
    un token a mano. Un cliente desconocido o una `redirect_uri` que no es la
    registrada **no redirigen nunca**: la página muestra el error. «Permitir»
@@ -25110,8 +25223,10 @@ aprobarás el acceso sin copiar tokens». Kapta implementa la autorización de M
    ya usado se vuelve a presentar, se revoca el token que se dio con él.**
 
 No hay refresh token: el token no vence. Si se revoca, el agente recibe 401 y
-vuelve a pedir permiso. Por OAuth solo se dan las herramientas de lectura,
-como en la pantalla, hasta que exista la parte 3.
+vuelve a pedir permiso. Desde la parte 3, por OAuth se pueden dar también las
+de escritura, como en la pantalla; a una conexión que ya existe se le cambian
+las herramientas en la lista de Conector de IA («Cambiar herramientas»), sin
+volver a conectarla.
 
 Migraciones `0314_agent_tokens.sql`, `0315_store_policies.sql` y
 `0319_agent_oauth.sql`. Código: `lib/agent-auth.ts`, `lib/agent-tools.ts`,
@@ -25124,3 +25239,119 @@ Pruebas: `test/agent-connector.test.ts`, `test/store-policies.test.ts`,
 `test/agent-oauth.test.ts`, `test/agent-connector-mom.test.ts`,
 `scripts/sql/agent_tokens_smoke.sql`, `scripts/sql/store_policies_smoke.sql` y
 `scripts/sql/agent_oauth_smoke.sql`.
+
+### 42.9 Lo que el agente puede hacer: notas, WhatsApp y guía de Aliclik (parte 3, 08-11-2026; 0323)
+
+**Lo que decidió el owner (08-11-2026, «ok, vamos así»).**
+
+- **Notas: solas desde el primer día.** Una nota equivocada se corrige con
+  otra.
+- **WhatsApp a la clienta y guías de Aliclik:** un **interruptor por
+  organización Apagado / Simulación / Activo**, como las demás automatizaciones
+  (§40). Nace en **Simulación**: una semana revisando lo que el agente habría
+  hecho y después Activo, con topes.
+- **Lo que el owner pide en el chat y aprueba ahí se hace de verdad**, aun en
+  Simulación.
+- **WhatsApp solo dentro de las 24 h** desde el último mensaje de la clienta
+  («Solo dentro de las 24 h (Recomendado)»): el agente no manda plantillas.
+- El agente **no cambia estados ni anula guías**.
+
+**Las herramientas.**
+
+| Herramienta | Permiso del token | Permiso de quien lo conectó | Qué hace |
+| --- | --- | --- | --- |
+| `agregar_nota` | `pedidos.nota` | `master.edit` | Deja una nota en la Actividad del pedido, al momento: un comentario (`kind = comment`) de tipo «Agente de IA», con `source = agente_ia` y sin persona. La misma nota dos veces en el mismo pedido no se repite. Hasta 1000 caracteres. |
+| `enviar_whatsapp` | `whatsapp.enviar` | `master.edit` | Le escribe a la clienta del pedido por Kapso (`sendWhatsappText`, el envío de Leads), desde el número de su conversación más reciente. Hasta 1000 caracteres. Queda en la Actividad como «WhatsApp del agente de IA» (`kind = agent_whatsapp`). |
+| `crear_guia_aliclik` | `aliclik.crear_guia` | `aliclik.create_guide` | Crea la guía contra entrega por **el mismo camino que el botón y el envío programado** (`previewAliclikGuideFor`, `aliclikCreateGates`, `createAliclikGuideFor`), con el courier más barato que se puede agendar (`autoTransport`), sin persona y con origen `agente_ia`: «Guía de Aliclik creada por el agente de IA». |
+
+**Dos pasos para WhatsApp y guía.**
+
+1. Con el texto (o sin él, la guía) y el `origen`: **vista previa**. No hace
+   nada. Devuelve el texto o la guía cotizada (courier, costo, cobro en la
+   puerta, avisos), la posición del interruptor, qué pasará al confirmar y un
+   **código de un solo uso, de 10 minutos** (se guarda solo su sha256).
+2. Con el mismo pedido y el `codigo`: **confirmación**. La fila se toma una sola
+   vez (prevista → en curso), así que dos confirmaciones a la vez no hacen dos
+   envíos. Se vuelve a comprobar **todo** (permiso, interruptor, topes, ventana
+   de 24 h, compuertas y cotización de Aliclik, que aborta si el monto cambió).
+   Después se hace, se simula o se rechaza.
+
+**El origen.** El agente declara si la acción es del **«chat»** (quien conversa
+con él la pidió y aprobó la vista previa) o una **«rutina»** (por su cuenta).
+Qué pasa al confirmar (`agentExecution`):
+
+| Interruptor | Origen «chat» | Origen «rutina» |
+| --- | --- | --- |
+| Apagado | No se hace (ni deja pedir la vista previa) | No se hace |
+| Simulación | **Se hace** | Se registra como **simulada**, sin hacerse |
+| Activo | Se hace | Se hace |
+
+Kapta **no puede verificar** que una persona aprobó en el chat de Grok. Los
+frenos de abajo no dependen de esa declaración.
+
+**Los frenos de Kapta, haga lo que haga el agente.**
+
+- **Los permisos de quien lo conectó**, hoy y en la organización del token
+  (`memberships`, `user_permissions` y `membership_roles` de esa
+  organización), además del permiso del token.
+- **Las mismas compuertas que el botón de la guía**: venta anulada, pago
+  adelantado, lista de pago adelantado, rechazos en la puerta, riesgo de no
+  entrega, posible duplicado, pago exigido y otras salidas. El agente no
+  escribe motivos ni excepciones: lo que pide motivo lo decide una persona.
+- **Una vez y no más:**
+  - una guía por pedido;
+  - un WhatsApp por pedido **cada 4 horas**;
+  - **nunca el mismo texto dos veces** a la misma clienta (comparado sin
+    tildes, mayúsculas ni puntuación final).
+
+  Cuenta lo que salió, lo que pudo salir (incierto) y lo que está saliendo.
+  Lo simulado no cuenta.
+- **Topes por día de Lima**, por organización, configurables: **20 WhatsApp** y
+  **10 guías** de fábrica (hasta 200 y 100).
+- **Lo incierto no se reintenta.** Si Kapso o Aliclik no confirman, la acción
+  queda **incierta** y el agente recibe «no lo vuelvas a pedir». Un WhatsApp
+  incierto queda igual en la Actividad, con «puede haber salido».
+- **Todo en la Actividad**, marcado «Agente de IA».
+- **Se revoca en un clic**: el token, o el interruptor en Apagado.
+
+**La pantalla.** En **Automatizaciones › Conector de IA**, la tarjeta «Lo que
+puede hacer el agente» muestra:
+
+- los dos interruptores y sus topes, cada cambio en «Últimos cambios» de
+  Automatizaciones (`agent_whatsapp_mode`, `agent_guide_mode`,
+  `agent_whatsapp_cap`, `agent_guide_cap`);
+- la lista **«Lo que hizo el agente»**: las últimas 60 acciones, lo simulado
+  incluido, con el texto o la guía, el origen, la posición del interruptor y el
+  pedido. Las vistas previas sin confirmar no salen.
+
+Cada token muestra sus herramientas y se le cambian con «Cambiar
+herramientas». Al crear un token, las de escritura vienen sin marcar.
+
+**La base (0323).**
+
+- `agent_action_settings`: por organización, la posición de WhatsApp y de
+  guías y sus topes. Sin fila: Simulación con 20 y 10.
+- `agent_actions`: cada acción que pidió el agente:
+  - qué, sobre qué pedido y con qué token;
+  - con los permisos de quién;
+  - desde dónde («chat» o «rutina»);
+  - el texto o la guía;
+  - qué pasó: prevista, en curso, simulada, hecha, rechazada, error o
+    incierta;
+  - la posición del interruptor al resolverse;
+  - el código de la vista previa.
+
+  Es el registro de los topes, de «una vez y no más» y de la revisión de la
+  Simulación.
+
+Solo `service_role`, sin borrar. Sin la 0323, las herramientas de escritura
+contestan que falta la migración y las de lectura siguen igual.
+
+Migración `0323_agent_actions.sql`. Código: `lib/agent-actions.ts` (reglas
+puras), `lib/agent-action-codes.ts`, `lib/agent-actions-flow.ts` (los pasos y
+los frenos), `lib/agent-actions-server.ts` (permisos, Kapso y Aliclik),
+`lib/agent-tools.ts`, `components/agent-actions-card.tsx`,
+`components/agent-connector-panel.tsx` y
+`app/dashboard/automatizaciones/conector/actions.ts`. Pruebas:
+`test/agent-actions.test.ts`, `test/agent-connector.test.ts`,
+`test/agent-connector-mom.test.ts` y `scripts/sql/agent_actions_smoke.sql`.

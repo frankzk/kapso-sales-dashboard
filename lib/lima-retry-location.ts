@@ -19,7 +19,7 @@ import "server-only";
 // la confirmación, MOM §6.1). Sin mandarle nada. Si el mismo celular tiene otro
 // pedido creado entre este y ese pin (más 3 días), el pin puede ser del otro:
 // no se usa. Salvo que Kapta le haya pedido la ubicación PARA ESTE pedido
-// (0323, «Pedir la ubicación por WhatsApp») y el pin llegó después: ese pin es
+// (0324, «Pedir la ubicación por WhatsApp») y el pin llegó después: ese pin es
 // la respuesta, el mensaje nombra el pedido.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -122,7 +122,7 @@ export async function chatbyRetryPin(admin: SupabaseClient, row: RetryLocationRo
   }
 }
 
-/** ¿Kapta le pidió la ubicación para este pedido antes de ese pin? (0323) */
+/** ¿Kapta le pidió la ubicación para este pedido antes de ese pin? (0324) */
 async function askedBefore(admin: SupabaseClient, orderId: string, pinAt: string): Promise<boolean> {
   const { data, error } = await admin.from("order_events").select("occurred_at,payload")
     .eq("order_id", orderId).eq("kind", "chatby_message").lte("occurred_at", pinAt);

@@ -617,7 +617,7 @@ describe("la coordenada de la guía automática", () => {
 describe("solo sale de Por confirmar con la guía creada (owner, 02-11-2026)", () => {
   const server = read("lib/chatby-autoconfirm-server.ts");
   it("la guía va ANTES que la confirmación", () => {
-    const guide = server.indexOf("await tryChatbyGuide(guide, master, conversation.messages)");
+    const guide = server.indexOf("await tryChatbyGuide(guide, master, conversation.messages, history ? { history } : {})");
     const confirm = server.indexOf('admin.rpc("register_confirmation_attempt_v2"');
     expect(guide).toBeGreaterThan(0);
     expect(confirm).toBeGreaterThan(guide);

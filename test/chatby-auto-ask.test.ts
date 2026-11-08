@@ -447,7 +447,9 @@ describe("el interruptor (0318)", () => {
     expect(actions).toContain('Falta la migración 0318 en la base de datos.');
     const panel = read("components/automations-panel.tsx");
     expect(panel).toContain("<AskModeRow key={entry.key} entry={entry} orgId={org.orgId} view={org.chatbyAsk} writable={writable} />");
-    expect(panel).toContain("await setChatbyAskMode(orgId, next)");
+    // La fila es la misma para la guía con historial (0317), con su acción.
+    expect(panel).toContain("save = setChatbyAskMode,");
+    expect(panel).toContain("await save(orgId, next)");
   });
 
   it("la migración: aditiva, nace apagada y solo sus tres valores; con su prueba en verify-db", () => {

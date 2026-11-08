@@ -5,7 +5,8 @@ import { AGENT_SCOPES } from "@/lib/agent-auth";
 
 // Automatizaciones › Conector de IA (MOM §42, 08-11-2026): los tokens con los que
 // un agente (Grok Bot) consulta pedidos, conversaciones y políticas de Kapta por
-// `POST /api/mcp`. Entra quien tiene `automations.manage`.
+// `POST /api/mcp`, y lo que puede hacer (notas, WhatsApp, guías; §42.9). Entra
+// quien tiene `automations.manage`.
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,7 @@ export default async function ConectorPage() {
       scopes={scopes}
       today={data.today}
       policiesMissing={data.policiesMissing}
+      actionsMissing={data.actionsMissing}
     />
   );
 }

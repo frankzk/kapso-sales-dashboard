@@ -1,5 +1,55 @@
 # Deployment runbook
 
+### 08-11-2026 · Confirmación por Chatby: guía automática para clientas con entregas (0317, MOM §6.1 y §40)
+
+**Migración 0317** (`db/migrations/0317_history_guide_auto.sql`, aditiva): una
+columna, `chatby_auto_settings.history_guide_mode` (`apagado` / `simulacion` /
+`activo`, nace `apagado`, con su `check`). Nada más: lo que decide la regla va
+en `chatby_auto_checks.evidence.history_guide` y la guía deja el hecho
+`chatby_history_guide`. Se puede desplegar **antes** de aplicarla: sin la
+columna la pasada lo trata como Apagado y el panel muestra la fila bloqueada
+(«Aún no está instalada en la base de datos»). **No se aplica sola**:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0317_history_guide_auto.sql
+```
+
+Es un `alter table` chico sobre una tabla de una fila por organización. Sin
+crons ni variables nuevas: corre en `/api/cron/chatby-autoconfirm`.
+
+El caso: la clienta confirmó por Chatby y la guía no sale por la dirección
+(`direccion_incompleta`, o `sin_ubicacion` porque Google no la ubica y no mandó
+su ubicación), pero ya recibió en esa misma casa. Con el interruptor en Activo:
+
+- **Califica** si, por el celular y en toda la organización, tiene al menos un
+  entregado y ningún fallido (devuelto, anulado después de salir, un intento
+  «No entregado» aunque luego se entregara, un rechazo en la puerta u otro
+  pedido que salió y no llegó), el adelanto del §8 no la frena, y la dirección
+  es la de un entregado del mismo distrito y provincia cuya guía tiene GPS
+  (`geo_source = courier`; para Aliclik es el punto que Kapta le mandó y con el
+  que se entregó, no el GPS del motorizado).
+- **La guía va con ese GPS** por el camino de la ubicación de WhatsApp, con
+  todas las rejas y el tope de 20 por día, y confirma con la guía creada.
+- **Va antes de la pedida automática de 0318**: a la clienta que califica no se
+  le escribe. Lo que no califica sigue exactamente como hoy.
+- **Queda escrito**: el hecho «Guía con el GPS de una entrega anterior» con el
+  pedido del GPS, el motivo de `guide_registered`, la nota del lead («…
+  automáticamente (confirmó por Chatby · GPS de la entrega de #KP140751)») y
+  la nota de la confirmación.
+
+**Después de desplegar** (y de aplicar la 0317): Automatizaciones →
+Confirmación → «Guía automática para clientas con entregas». Nace en
+**Apagado**; el owner la quiere en Activo («directo en vivo») y se pone a mano.
+Simulación sirve para ver antes cuántas habría creado (`historySimulated` en el
+resumen del cron y `evidence.history_guide.outcome = habria_usado` en
+`chatby_auto_checks`).
+
+Medido el 08-11-2026 (solo lectura, 72 h): de 148 marcas por
+`direccion_incompleta` / `sin_ubicacion(_cerrado)`, **una** habría calificado:
+#AUR900480, con el GPS de #KP201632. #KP204102, el caso que lo motivó, **no**
+entra: no tiene conversación en Chatby (`sin_conversacion`) y la regla solo
+mira lo que la clienta confirmó.
+
 ### 08-11-2026 · Rastreo de Shalom: la fila va por cuándo se preguntó, la guía que Shalom no reconoce se ve y Cotejar Shalom reemplaza la guía muerta (0321 o sin migración, MOM §12)
 
 **Migración 0321** (`db/migrations/0321_shalom_checked_at.sql`, aditiva): tres
@@ -115,7 +165,7 @@ columnas pueden quedarse (nadie más las lee). Para deshacer también el trigger
 volver a correr el `create or replace function public.shipments_touch_updated_at()`
 de la 0204.
 
-### 08-11-2026 · Reintentos Aliclik de Lima: «Pedir la ubicación por WhatsApp» (0323 o sin migración, MOM §9.5 y §40)
+### 08-11-2026 · Reintentos Aliclik de Lima: «Pedir la ubicación por WhatsApp» (0324 o sin migración, MOM §9.5 y §40)
 
 Elección del owner: «pedirla si la ventana está abierta». Cuando un reintento de
 Lima llega a «Sin ubicación» (ni pin, ni pin de WhatsApp, ni edificio en Google)
@@ -124,7 +174,7 @@ Chatby pidiéndole su ubicación. Es una vez por reintento, nunca con el caso
 tomado en Repro Lima ni si alguien del equipo ya le escribió. Con la ventana
 cerrada no manda nada (no hay plantillas).
 
-**Migración 0323** (`db/migrations/0323_lima_retry_chatby_ask.sql`, aditiva):
+**Migración 0324** (`db/migrations/0324_lima_retry_chatby_ask.sql`, aditiva):
 - la columna `lima_retry_auto_settings.chatby_ask_mode` (`apagado` |
   `simulacion` | `activo`, nace `apagado`);
 - la tabla `lima_retry_chatby_asks`, el candado de «una vez por reintento».
@@ -134,7 +184,7 @@ como Apagado y el panel muestra la fila bloqueada. Sin crons nuevos: corre en la
 pasada de los reintentos (cada hora de 8:23 a 13:23). Usa `CHATBY_API_KEY`.
 
 **Qué mirar después.**
-1. Aplicar la 0323.
+1. Aplicar la 0324.
 2. En Automatizaciones → «Ubicación por WhatsApp», poner «Pedir la ubicación por
    WhatsApp» en **Simulación**.
 3. Un día después, revisar «Hoy y ayer»: «Habría pedido su ubicación por
@@ -196,6 +246,44 @@ lleva el enlace a Automatizaciones → «Ubicación por dirección».
 una vez, «Pedidos (N): …», y el enlace abre la sección de Automatizaciones.
 
 **Marcha atrás.** Revertir el commit.
+### 08-11-2026 · El agente de IA hace notas, WhatsApp y guías de Aliclik (0323, MOM §42.9)
+
+**Aplicada en producción el 08-11-2026.** El agente (Grok) deja notas en el
+pedido, le escribe a la clienta por WhatsApp (solo dentro de las 24 h) y crea
+la guía de Aliclik por el mismo camino que el botón. Las notas van solas; el
+WhatsApp y las guías, con un interruptor por organización Apagado / Simulación
+/ Activo que **nace en Simulación**, con topes de 20 WhatsApp y 10 guías por
+día de Lima. `leer_conversacion` lee también Chatby. Sin variables ni crons
+nuevos (Chatby usa `CHATBY_API_KEY`; la guía, `ALICLIK_WRITE_ENABLED`, como el
+botón).
+
+1. **Migración `0323_agent_actions.sql`**, a mano, ANTES del código (aditiva,
+   sin llaves foráneas, idempotente, sin `drop`):
+   - tabla `agent_action_settings` (por organización: posición de WhatsApp y
+     de guías, Simulación de fábrica, y sus topes con rango);
+   - tabla `agent_actions` (cada acción del agente: qué, sobre qué pedido,
+     origen, estado, texto, código de la vista previa como sha256);
+   - las dos con RLS y solo para `service_role`, sin borrar.
+2. Comprobar:
+   ```sql
+   select to_regclass('public.agent_action_settings'), to_regclass('public.agent_actions');
+   select has_table_privilege('authenticated', 'public.agent_actions', 'select');  -- false
+   select has_table_privilege('service_role', 'public.agent_actions', 'delete');   -- false
+   ```
+3. Desplegar el código. **Sin la migración**, las herramientas de escritura
+   contestan que falta la 0323 y la tarjeta del Conector de IA lo dice; las de
+   lectura siguen igual.
+4. En Automatizaciones › Conector de IA, en el token de Grok: «Cambiar
+   herramientas» y marcar las tres que hacen cambios. Probar con Grok:
+   - una nota en un pedido de prueba (sale en su Actividad como «Agente de IA»);
+   - un WhatsApp pedido en el chat: vista previa, aprobar, confirmar;
+   - con el interruptor en Simulación, uno «por su cuenta» queda «Simulada (no
+     se hizo)» en «Lo que hizo el agente».
+
+**Marcha atrás.** Poner WhatsApp y guías en Apagado, o quitarle al token las
+herramientas que hacen cambios, o revocarlo: el agente deja de hacer en el
+acto. Las tablas pueden quedarse: sin código que las use, nadie escribe.
+
 ### 08-11-2026 · «Lima trabados» en Repro Lima (sin migración, MOM §9.6)
 
 **Sin migración.** No hay tablas, columnas, índices, crons ni variables

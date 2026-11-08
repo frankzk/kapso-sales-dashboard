@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0323_lima_retry_chatby_ask.sql — Reintentos Aliclik de Lima: «Pedir la
+-- 0324_lima_retry_chatby_ask.sql — Reintentos Aliclik de Lima: «Pedir la
 -- ubicación por WhatsApp» (MOM §9.5 y §40; owner, 08-11-2026).
 --
 -- POR QUÉ. Aliclik exige la coordenada. Un reintento de Lima sin pin, sin la
@@ -30,7 +30,7 @@ alter table public.lima_retry_auto_settings drop constraint if exists lima_retry
 alter table public.lima_retry_auto_settings add constraint lima_retry_auto_settings_chatby_ask_mode_check
   check (chatby_ask_mode in ('apagado', 'simulacion', 'activo'));
 comment on column public.lima_retry_auto_settings.chatby_ask_mode is
-  'Pedir la ubicación por WhatsApp en los reintentos de Lima sin ubicación (0323): apagado | simulacion | activo.';
+  'Pedir la ubicación por WhatsApp en los reintentos de Lima sin ubicación (0324): apagado | simulacion | activo.';
 
 create table if not exists public.lima_retry_chatby_asks (
   id          bigserial primary key,

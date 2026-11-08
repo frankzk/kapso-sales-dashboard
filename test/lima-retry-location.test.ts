@@ -153,7 +153,7 @@ describe("la ubicación que la clienta ya mandó por WhatsApp (08-11-2026)", () 
     h.chatby = pinAt("2026-11-05T16:00:00Z");
     const db = admin({ order_master: [{ order_id: "o2", customer_phone: "987654321", order_created_at: "2026-11-04T10:00:00Z" }] });
     expect((await locateRetryOrder(db, withPhone, "k", { chatby: chatbyRead })).located).toMatchObject({ coordinate: { source: "google" } });
-    // Salvo que Kapta le haya pedido la ubicación para ESTE pedido antes del pin (0323).
+    // Salvo que Kapta le haya pedido la ubicación para ESTE pedido antes del pin (0324).
     const asked = admin({
       order_master: [{ order_id: "o2", customer_phone: "987654321", order_created_at: "2026-11-04T10:00:00Z" }],
       order_events: [{ order_id: "o1", kind: "chatby_message", occurred_at: "2026-11-05T15:00:00Z", payload: { auto: true, purpose: "reintento_lima_ubicacion" } }],

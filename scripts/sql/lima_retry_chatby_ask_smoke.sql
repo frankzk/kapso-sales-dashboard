@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- 0323: «Pedir la ubicación por WhatsApp» de los reintentos de Lima (MOM §9.5
+-- 0324: «Pedir la ubicación por WhatsApp» de los reintentos de Lima (MOM §9.5
 -- y §40). La posición nace apagada (también en una fila de antes), solo acepta
 -- sus tres valores y no toca el tope ni Google; la marca es una por pedido y
 -- episodio (el candado de «una vez»), solo con sus dos estados; la org lee la

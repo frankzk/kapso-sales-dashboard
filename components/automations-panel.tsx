@@ -40,6 +40,7 @@ import {
   needsConfirmation,
   storeSettingsHref,
   CHATBY_ASK_KEY,
+  CHATBY_HISTORY_KEY,
   type AutomationEffect,
   type AutomationEntry,
   type AutomationGroup,
@@ -80,6 +81,7 @@ import {
   type PrepaySimulationResult,
   setChatbyApproxMode,
   setChatbyAskMode,
+  setChatbyHistoryMode,
   setOrgAutomation,
   setRetryChatbyAsk,
   setRetryDailyCap,
@@ -1289,7 +1291,8 @@ function groupBadge(entries: AutomationEntry[], org: AutomationsOrgView): ReactN
     e.control.kind === "org_table"
       ? org.org[e.key]?.state === "on" && org.org[e.key]?.requiresOn !== false
       : e.control.kind === "org_mode"
-        ? (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : org.chatbyApprox.mode) === "activo"
+        ? (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : e.key === CHATBY_HISTORY_KEY ? org.chatbyHistory.mode : org.chatbyApprox.mode) ===
+          "activo"
         : (org.store?.[e.key] ?? []).some((s) => s.on && s.requiresOn),
   ).length;
   return <Badge tone={lit ? "ok" : "neutral"}>{lit ? `${lit} de ${switchable.length} encendidas` : "Todas apagadas"}</Badge>;
@@ -1313,6 +1316,16 @@ function CatalogSection({
             <OrgSwitchRow key={entry.key} entry={entry} orgId={org.orgId} view={org.org[entry.key]} writable={writable} />
           ) : entry.control.kind === "store_column" ? (
             <StoreSwitchRow key={entry.key} entry={entry} views={org.store?.[entry.key] ?? null} writable={writable} />
+          ) : entry.control.kind === "org_mode" && entry.key === CHATBY_HISTORY_KEY ? (
+            <AskModeRow
+              key={entry.key}
+              entry={entry}
+              orgId={org.orgId}
+              view={org.chatbyHistory}
+              writable={writable}
+              save={setChatbyHistoryMode}
+              confirmText={HISTORY_ACTIVE_CONFIRM}
+            />
           ) : entry.control.kind === "org_mode" && entry.key === CHATBY_ASK_KEY ? (
             <AskModeRow key={entry.key} entry={entry} orgId={org.orgId} view={org.chatbyAsk} writable={writable} />
           ) : entry.control.kind === "org_mode" ? (
@@ -1500,7 +1513,7 @@ function ReadonlyRow({
   );
 }
 
-// ── Ubicación por WhatsApp de los reintentos de Lima (0323) ──────────────────
+// ── Ubicación por WhatsApp de los reintentos de Lima (0324) ──────────────────
 
 /**
  * Antes de Google, la ubicación que la clienta ya mandó por WhatsApp (sin
@@ -1516,7 +1529,7 @@ function WhatsappLocationSection({ orgId, view, writable }: { orgId: string; vie
   const [, startTransition] = useTransition();
   const canEdit = writable && view.available;
   const blocked = !view.available
-    ? "Aún no está instalada en la base de datos (0323): funciona como Apagado."
+    ? "Aún no está instalada en la base de datos (0324): funciona como Apagado."
     : !view.keyPresent
       ? "Falta la clave de Chatby en Kapta (CHATBY_API_KEY): no se lee ni se pide nada."
       : null;
@@ -1593,7 +1606,31 @@ function WhatsappLocationSection({ orgId, view, writable }: { orgId: string; vie
 // ── Pedir sola la dirección o la ubicación (Chatby, 0318) ────────────────────
 
 /** Apagado / Simulación / Activo de los mensajes que piden la dirección o la ubicación; guarda al cambiar. */
-function AskModeRow({ entry, orgId, view, writable }: { entry: AutomationEntry; orgId: string; view: ChatbyAskModeView; writable: boolean }) {
+const ASK_ACTIVE_CONFIRM =
+  "¿Poner en Activo «Pedir sola la dirección o la ubicación»? Cuando la clienta confirme por Chatby y la guía no salga por la dirección, Kapta le escribirá por WhatsApp sin que una asesora lo revise (una vez para la dirección y una para la ubicación).";
+const HISTORY_ACTIVE_CONFIRM =
+  "¿Poner en Activo «Guía automática para clientas con entregas»? Cuando la clienta confirme por Chatby y la guía no salga por la dirección, si ya recibió en esa misma dirección sin ningún fallido, Kapta creará la guía Aliclik con el GPS de esa entrega y confirmará el pedido sin que una asesora lo revise.";
+
+/**
+ * Apagado / Simulación / Activo de una columna de `chatby_auto_settings`:
+ * «Pedir sola la dirección o la ubicación» (0318) y, con su acción y su
+ * aviso, «Guía automática para clientas con entregas» (0317).
+ */
+function AskModeRow({
+  entry,
+  orgId,
+  view,
+  writable,
+  save = setChatbyAskMode,
+  confirmText = ASK_ACTIVE_CONFIRM,
+}: {
+  entry: AutomationEntry;
+  orgId: string;
+  view: ChatbyAskModeView;
+  writable: boolean;
+  save?: (orgId: string, mode: string) => Promise<AutomationActionResult>;
+  confirmText?: string;
+}) {
   const id = useId();
   const [mode, setMode] = useState<ApproxMode>(view.mode);
   useEffect(() => setMode(view.mode), [view.mode]);
@@ -1609,19 +1646,12 @@ function AskModeRow({ entry, orgId, view, writable }: { entry: AutomationEntry; 
 
   const change = (next: ApproxMode): boolean => {
     if (!canEdit || pending || next === mode) return false;
-    if (
-      next === "activo" &&
-      !window.confirm(
-        "¿Poner en Activo «Pedir sola la dirección o la ubicación»? Cuando la clienta confirme por Chatby y la guía no salga por la dirección, Kapta le escribirá por WhatsApp sin que una asesora lo revise (una vez para la dirección y una para la ubicación).",
-      )
-    ) {
-      return false;
-    }
+    if (next === "activo" && !window.confirm(confirmText)) return false;
     setPending(true);
     setStatus(null);
     startTransition(async () => {
       try {
-        const result = await setChatbyAskMode(orgId, next);
+        const result = await save(orgId, next);
         if (!result.error) setMode(next);
         setStatus(statusOf(result));
       } catch {

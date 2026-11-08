@@ -1,7 +1,7 @@
 import "server-only";
 
 // Kapta pide la ubicación por WhatsApp para un reintento Aliclik de Lima sin
-// ninguna (MOM §9.5; owner, 08-11-2026; 0323). La parte con red y base; la
+// ninguna (MOM §9.5; owner, 08-11-2026; 0324). La parte con red y base; la
 // regla está en lib/lima-retry-chatby-ask.ts. Su propio archivo: la
 // confirmación por Chatby (lib/chatby-autoconfirm-server.ts) tiene contadas sus
 // lecturas y envíos.
@@ -106,7 +106,7 @@ export async function askRetryLocation(
       .maybeSingle();
     if (markError) {
       if (markError.code === "23505") return skipped(RETRY_ASK_SKIP_LABEL.ya_pedida);
-      if (missing(markError)) return skipped("falta la migración 0323 en la base de datos");
+      if (missing(markError)) return skipped("falta la migración 0324 en la base de datos");
       return failed("no se pudo poner la marca");
     }
     const markId = (mark as { id?: number | string } | null)?.id ?? null;

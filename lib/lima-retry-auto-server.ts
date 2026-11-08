@@ -150,7 +150,7 @@ export interface LimaRetryAutoReport {
   stopped: "tiempo" | null;
   /** La ubicación por dirección en esta pasada: consultas (o lecturas de caché) y si se acabó el cupo. */
   geocode: { lookups: number; quotaHit: boolean };
-  /** «Pedir la ubicación por WhatsApp» (0323): mensajes que salieron y los que se habrían mandado. */
+  /** «Pedir la ubicación por WhatsApp» (0324): mensajes que salieron y los que se habrían mandado. */
   chatbyAsk: { sent: number; simulated: number };
   error: string | null;
 }
@@ -617,7 +617,7 @@ export async function runLimaRetryAuto(
   const settings = (settingsRows ?? []) as { org_id: string; daily_cap: number; geocode_enabled?: boolean; chatby_ask_mode?: string }[];
   const capByOrg = new Map(settings.map((s) => [s.org_id, clampCap(s.daily_cap)]));
   const geocodeOnByOrg = new Map(settings.map((s) => [s.org_id, s.geocode_enabled === true]));
-  // `*`: sin la 0323, `chatby_ask_mode` no viene y es Apagado.
+  // `*`: sin la 0324, `chatby_ask_mode` no viene y es Apagado.
   const askModeByOrg = new Map<string, RetryAskMode>(settings.map((s) => [s.org_id, retryAskModeFrom(s.chatby_ask_mode)]));
 
   if (!preview && !writeOk && orgModes.some(({ modes }) => Object.values(modes).includes("activo"))) {
@@ -678,7 +678,7 @@ export async function runLimaRetryAuto(
     return where.located;
   };
 
-  // «Pedir la ubicación por WhatsApp» (0323, owner 08-11-2026): cuando el
+  // «Pedir la ubicación por WhatsApp» (0324, owner 08-11-2026): cuando el
   // reintento llega a «Sin ubicación», Kapta le pide su ubicación a la clienta
   // si escribió en las últimas 23 h (lib/lima-retry-chatby-ask.ts). Una vez por
   // episodio; en la vista previa y en Simulación solo dice «habría pedido…». No

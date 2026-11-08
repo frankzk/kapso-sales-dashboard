@@ -27,8 +27,8 @@ export const AGENT_RATE_PER_MINUTE = 60;
 
 /**
  * Lo que un token puede hacer. Las de lectura son de la parte 1; las de
- * escritura existen en la base desde ya (0314) para no migrar dos veces, pero
- * ninguna herramienta las usa todavía.
+ * escritura, de la parte 3 (MOM §42.9, 0323): cada una con su herramienta
+ * (`agregar_nota`, `enviar_whatsapp`, `crear_guia_aliclik`) y sus frenos.
  */
 export const AGENT_SCOPES = {
   "pedidos.leer": { label: "Buscar y ver pedidos", write: false },

@@ -85,6 +85,25 @@ import {
   type ChatbyMessageEvent,
 } from "@/lib/chatby-auto-ask";
 import { saveChatbyAddressCorrection } from "@/lib/order-address-correction";
+import { countDoorRejections, type DoorRejectionShipment } from "@/lib/door-rejection";
+import {
+  HISTORY_GUIDE_EVENT,
+  HISTORY_GUIDE_POLICY,
+  HISTORY_GUIDE_SKIP_LABEL,
+  evaluateHistoryGuide,
+  historyGuideCandidate,
+  historyGuideConfirmation,
+  historyGuideConfirmationSuffix,
+  historyGuideCoordinateNote,
+  historyGuideEvidence,
+  historyGuideFactNote,
+  historyGuideFactReason,
+  historyGuideReason,
+  type HistoryGuideHoldReason,
+  type HistoryGuideMode,
+  type HistoryGuideVerdict,
+  type HistoryPrior,
+} from "@/lib/history-guide-auto";
 import type { OrderMasterRow } from "@/lib/types";
 
 /** El tiempo de una pasada (maxDuration 300 s). Lo que no entra va en la siguiente. */
@@ -121,6 +140,13 @@ export interface ChatbyAutoReport {
   asksSent: number;
   asksSimulated: number;
   addressesCorrected: number;
+  /**
+   * «Guía automática para clientas con entregas» (0317): las que en Simulación
+   * habrían salido con el GPS de una entrega anterior y las que en Activo
+   * salieron así.
+   */
+  historySimulated: number;
+  historyUsed: number;
   stopped: "tiempo" | "chatby" | null;
   items: ChatbyAutoItem[];
   error: string | null;
@@ -213,6 +239,8 @@ export async function runChatbyAutoconfirm(
     asksSent: 0,
     asksSimulated: 0,
     addressesCorrected: 0,
+    historySimulated: 0,
+    historyUsed: 0,
     stopped: null,
     items: [],
     error: null,
@@ -221,13 +249,10 @@ export async function runChatbyAutoconfirm(
   const apiKey = (opts.apiKey ?? env.chatbyApiKey()).trim();
 
   try {
-    const { data: stores, error: sErr } = await admin
-      .from("stores")
-      .select("id")
-      .eq("org_id", settings.org_id)
-      .eq("status", "active");
+    const { data: stores, error: sErr } = await admin.from("stores").select("id,status").eq("org_id", settings.org_id);
     if (sErr) throw new Error(`leer las tiendas: ${sErr.message}`);
-    const storeIds = ((stores ?? []) as { id: string }[]).map((s) => s.id);
+    const allStores = (stores ?? []) as { id: string; status: string | null }[];
+    const storeIds = allStores.filter((s) => s.status === "active").map((s) => s.id);
     if (!storeIds.length) return report;
 
     // Confirmar y crear la guía son UN paso: el pedido solo sale de Por
@@ -244,7 +269,17 @@ export async function runChatbyAutoconfirm(
         detail: "La guía automática está apagada: sin guía no se confirma nada.",
       });
     } else {
-      const ctx: PassCtx = { dry, now, started, apiKey, askMode: settings.ask_mode };
+      const ctx: PassCtx = {
+        dry,
+        now,
+        started,
+        apiKey,
+        askMode: settings.ask_mode,
+        historyMode: settings.history_guide_mode,
+        // El historial de la clienta es de toda la organización (también de una
+        // tienda que ya no está activa).
+        orgStoreIds: allStores.map((s) => s.id),
+      };
       const guide = await guideContext(admin, settings, ctx, report);
       await confirmPass(admin, settings, storeIds, ctx, guide, report);
       // Lo que esperaba la ubicación de la clienta: ¿ya la mandó?
@@ -364,7 +399,7 @@ async function confirmPass(
       continue;
     }
 
-    const verdict = evaluateChatbyConfirmation({
+    const evalInput = {
       messages: conversation.messages,
       orderName: order.name!,
       orderCreatedAt: order.created_at,
@@ -376,21 +411,40 @@ async function confirmPass(
         province: master.province,
         region: master.region,
       },
-    });
+    };
+    const verdict = evaluateChatbyConfirmation(evalInput);
 
     if (!verdict.confirm && !verdict.final) {
       if (!ctx.dry) await upsertCheck(admin, key, { outcome: "sin_confirmacion", reason: verdict.reason, reads });
       continue;
     }
 
-    if (!verdict.confirm) {
+    // (0317) La clienta confirmó y lo único que falla es la dirección
+    // incompleta: si ya recibió en esa casa, la guía va con el GPS de esa
+    // entrega. Va ANTES de pedirle la dirección (0318).
+    let confirmed: { messageId: string; at: string | null; amountCents: number } | null = verdict.confirm ? verdict : null;
+    let history: HistoryGuideUse | null = null;
+    const heldEvidence: Record<string, unknown> = { total_cents: Math.round(Number(order.total_amount) * 100) };
+    if (!verdict.confirm && verdict.reason === "direccion_incompleta" && ctx.historyMode !== "apagado") {
+      const conf = historyGuideConfirmation(evalInput);
+      if (conf) {
+        const h = await historyGuideCheck(admin, ctx, report, { master, holdReason: "direccion_incompleta", item });
+        if (h.evidence) heldEvidence.history_guide = h.evidence;
+        if (h.use) {
+          confirmed = conf;
+          history = h.use;
+        }
+      }
+    }
+
+    if (!confirmed && !verdict.confirm) {
       // Había un mensaje de confirmación y no cuadró: la asesora lo ve en la
       // línea de tiempo, con el motivo, y la pasada ya no lo vuelve a leer.
       item.outcome = "para_asesora";
-      item.detail = verdict.reason;
+      addDetail(item, verdict.reason);
       report.held++;
       if (ctx.dry) continue;
-      const evidence: Record<string, unknown> = { total_cents: Math.round(Number(order.total_amount) * 100) };
+      const evidence = heldEvidence;
       if (verdict.amountCents != null) evidence.amount_cents = verdict.amountCents;
       await holdForAdvisor(admin, key, item, { reason: verdict.reason, messageId: verdict.messageId, evidence, reads });
       // (0318) La dirección incompleta: Kapta le pide sola la dirección completa.
@@ -409,6 +463,7 @@ async function confirmPass(
       }
       continue;
     }
+    if (!confirmed) continue;
 
     // Justo antes de escribir: ¿sigue en Por confirmar? Una asesora pudo
     // confirmarlo (o anularlo) mientras se leía Chatby.
@@ -429,25 +484,36 @@ async function confirmPass(
     }
 
     // LA GUÍA PRIMERO. Solo sale de Por confirmar con la guía creada.
-    const evidence = { amount_cents: verdict.amountCents };
-    const g = await tryChatbyGuide(guide, master, conversation.messages);
+    const evidence: Record<string, unknown> = { amount_cents: confirmed.amountCents };
+    if (heldEvidence.history_guide) evidence.history_guide = heldEvidence.history_guide;
+    let g = await tryChatbyGuide(guide, master, conversation.messages, history ? { history } : {});
+    // (0317) Google no la ubica y no mandó su ubicación: si ya recibió en esa
+    // casa, la guía va con el GPS de esa entrega, ANTES de pedirle la ubicación.
+    if (!history && g.kind === "hold" && g.reason === "sin_ubicacion" && ctx.historyMode !== "apagado") {
+      const h = await historyGuideCheck(admin, ctx, report, { master, holdReason: "sin_ubicacion", item });
+      if (h.evidence) evidence.history_guide = h.evidence;
+      if (h.use) {
+        history = h.use;
+        g = await tryChatbyGuide(guide, master, conversation.messages, { history });
+      }
+    }
     if (g.kind === "wait") {
       // Aliclik en rojo, el tope del día o una creación en curso: sigue en Por
       // confirmar sin escribir nada visible y se vuelve a leer más tarde.
       item.outcome = g.outcome;
-      item.detail = g.detail ?? undefined;
-      if (!ctx.dry) await upsertCheck(admin, key, { outcome: "sin_confirmacion", reason: g.outcome, message_id: verdict.messageId, reads });
+      addDetail(item, g.detail ?? g.outcome);
+      if (!ctx.dry) await upsertCheck(admin, key, { outcome: "sin_confirmacion", reason: g.outcome, message_id: confirmed.messageId, reads });
       continue;
     }
     if (g.kind === "hold") {
       item.outcome = "para_asesora";
-      item.detail = g.detail ? `${g.reason}: ${g.detail}` : g.reason;
+      addDetail(item, g.detail ? `${g.reason}: ${g.detail}` : g.reason);
       report.held++;
       if (ctx.dry) continue;
       await holdForAdvisor(admin, key, item, {
         reason: g.reason,
         detail: g.detail,
-        messageId: verdict.messageId,
+        messageId: confirmed.messageId,
         evidence,
         reads,
         guide: { state: g.state, detail: g.detail ? `${g.reason}: ${g.detail}` : g.reason, code: g.code ?? null },
@@ -468,11 +534,11 @@ async function confirmPass(
     }
     if (ctx.dry) {
       item.outcome = "confirmaria";
-      item.detail = g.detail ?? undefined;
+      addDetail(item, g.detail ?? "guía");
       continue;
     }
 
-    await confirmWithGuide(admin, key, master, order.name!, verdict, g, reads, item, report);
+    await confirmWithGuide(admin, key, master, order.name!, confirmed, g, reads, item, report, history);
   }
 }
 
@@ -491,6 +557,8 @@ async function confirmWithGuide(
   reads: number,
   item: ChatbyAutoItem,
   report: ChatbyAutoReport,
+  /** (0317) La guía salió con el GPS de una entrega anterior de la clienta. */
+  history?: HistoryGuideUse | null,
 ): Promise<void> {
   const occurredAt = new Date().toISOString();
   const { error: rpcErr } = await admin.rpc("register_confirmation_attempt_v2", {
@@ -500,19 +568,36 @@ async function confirmWithGuide(
     p_operation_id: chatbyOperationId(key.order_id, verdict.messageId),
     p_result: "confirmado",
     p_channel: "mensaje",
-    p_note: chatbyConfirmationNote({
-      orderName,
-      at: verdict.at,
-      amountCents: verdict.amountCents,
-      location: verdict.pin,
-      addressCorrected: verdict.addressCorrected,
-    }),
+    p_note:
+      chatbyConfirmationNote({
+        orderName,
+        at: verdict.at,
+        amountCents: verdict.amountCents,
+        location: verdict.pin,
+        addressCorrected: verdict.addressCorrected,
+      }) + (history ? historyGuideConfirmationSuffix(history.verdict) : ""),
     p_next_contact_on: null,
     p_occurred_at: occurredAt,
     p_reminder_due_at: null,
     p_source: CHATBY_SOURCE,
     p_payload_extra: {
-      chatby: { policy: CHATBY_AUTO_POLICY, message_id: verdict.messageId, message_at: verdict.at, amount_cents: verdict.amountCents },
+      chatby: {
+        policy: CHATBY_AUTO_POLICY,
+        message_id: verdict.messageId,
+        message_at: verdict.at,
+        amount_cents: verdict.amountCents,
+        ...(history
+          ? {
+              history_guide: {
+                policy: HISTORY_GUIDE_POLICY,
+                hold_reason: history.holdReason,
+                delivered: history.verdict.delivered,
+                source_order_id: history.verdict.source.orderId,
+                source_order_name: history.verdict.source.orderName,
+              },
+            }
+          : {}),
+      },
     },
   });
   const guideMark = { state: g.state, detail: g.detail ?? null, code: g.code };
@@ -529,7 +614,22 @@ async function confirmWithGuide(
   await upsertCheck(admin, key, {
     outcome: "confirmado",
     message_id: verdict.messageId,
-    evidence: { amount_cents: verdict.amountCents },
+    evidence: {
+      amount_cents: verdict.amountCents,
+      ...(history
+        ? {
+            history_guide: {
+              policy: HISTORY_GUIDE_POLICY,
+              mode: "activo",
+              outcome: "usada",
+              hold_reason: history.holdReason,
+              source_order_id: history.verdict.source.orderId,
+              source_order_name: history.verdict.source.orderName,
+              delivered: history.verdict.delivered,
+            },
+          }
+        : {}),
+    },
     reads,
     confirmed_at: occurredAt,
     guide: guideMark,
@@ -596,6 +696,10 @@ interface PassCtx {
   apiKey: string;
   /** «Pedir sola la dirección o la ubicación» (0318). */
   askMode: ChatbyAskMode;
+  /** «Guía automática para clientas con entregas» (0317). */
+  historyMode: HistoryGuideMode;
+  /** Las tiendas de la organización, para leer el historial de la clienta. */
+  orgStoreIds: string[];
 }
 
 interface GuideCtx {
@@ -644,7 +748,7 @@ async function guideContext(
 }
 
 /** De dónde salió la coordenada de la guía automática (queda en `guide_detail`). */
-type GuideCoordinateSource = "pedido" | "whatsapp" | "google" | "google_aprox";
+type GuideCoordinateSource = "pedido" | "whatsapp" | "google" | "google_aprox" | "historial";
 
 function coordinateNote(source: GuideCoordinateSource): string | null {
   if (source === "google") return "coordenada: dirección en Google (edificio)";
@@ -672,7 +776,7 @@ async function tryChatbyGuide(
   g: GuideCtx,
   row: MasterRow,
   messages: readonly ChatbyMessage[],
-  opts: { forcePin?: boolean } = {},
+  opts: { forcePin?: boolean; history?: HistoryGuideUse } = {},
 ): Promise<GuideTry> {
   const { admin } = g;
   if (chatbyGuideBlock(row)) return { kind: "hold", reason: "programado", detail: null, state: "para_persona" };
@@ -709,7 +813,14 @@ async function tryChatbyGuide(
   // clienta por WhatsApp en esta compra. Sin ninguna, se la pide una persona.
   let coordinate: string | null = null;
   let source: GuideCoordinateSource = "pedido";
-  if (opts.forcePin) {
+  if (opts.history) {
+    // (0317) La clienta ya recibió en esta misma dirección, sin fallidos: la
+    // guía va con el GPS de la guía de esa entrega, por el mismo camino que la
+    // ubicación de WhatsApp (nunca la coordenada del pedido ni Google) y con
+    // las mismas puertas: el pin respaldado al cotizar y todas las rejas.
+    coordinate = opts.history.verdict.coordinate;
+    source = "historial";
+  } else if (opts.forcePin) {
     // La dirección escrita estaba incompleta y la clienta mandó su ubicación
     // (owner, 08-11-2026): la guía va con ESA ubicación, nunca con la
     // coordenada del pedido ni con Google. Las mismas condiciones del pin
@@ -796,7 +907,14 @@ async function tryChatbyGuide(
     aliclik,
     { transportId: transport.transportId, expectedCollectTotal: preview.collectTotal ?? null, note: null, coordinate },
     scope,
-    { kind: CHATBY_GUIDE_ORIGIN, scheduledOn: g.today, reason: chatbyGuideReason(row.order_name) },
+    opts.history
+      ? {
+          kind: CHATBY_GUIDE_ORIGIN,
+          scheduledOn: g.today,
+          reason: historyGuideReason(row.order_name, opts.history.verdict),
+          gpsFrom: opts.history.verdict.source.orderName,
+        }
+      : { kind: CHATBY_GUIDE_ORIGIN, scheduledOn: g.today, reason: chatbyGuideReason(row.order_name) },
   );
   if (result.locked) {
     // Otra creación tiene el candado (una persona creándola ahora): no es un fallo.
@@ -835,6 +953,11 @@ async function tryChatbyGuide(
     // La guía guarda este punto: la medición no debe compararlo consigo mismo.
     g.report.approxUsed++;
     await markApproxUsed(admin, row.order_id);
+  }
+  if (opts.history) {
+    g.report.historyUsed++;
+    await recordHistoryGuideFact(admin, row, result.orderNumber ?? null, opts.history);
+    return { kind: "ok", state: "creada", code: result.orderNumber ?? null, detail: historyGuideCoordinateNote(opts.history.verdict) };
   }
   return { kind: "ok", state: "creada", code: result.orderNumber ?? null, detail: coordinateNote(source) };
 }
@@ -1100,10 +1223,23 @@ async function watchPass(
       await holdForAdvisor(admin, key, item, { reason: watch.reason, messageId: r.message_id, evidence: {}, reads });
       continue;
     }
-    const g = await tryChatbyGuide(guide, master, conversation.messages, corrected ? { forcePin: watch.pin } : {});
+    let g = await tryChatbyGuide(guide, master, conversation.messages, corrected ? { forcePin: watch.pin } : {});
+    // (0317) Sigue sin ubicación: si la clienta ya recibió en esa casa, la guía
+    // va con el GPS de esa entrega, ANTES de que Kapta le pida la ubicación.
+    // También le llega a lo que quedó así antes de encender el interruptor.
+    let history: HistoryGuideUse | null = null;
+    let watchEvidence = r.evidence ?? {};
+    if (g.kind === "hold" && g.reason === "sin_ubicacion" && ctx.historyMode !== "apagado") {
+      const h = await historyGuideCheck(admin, ctx, report, { master, holdReason: "sin_ubicacion", item, prior: r.evidence?.history_guide });
+      if (h.evidence) watchEvidence = { ...watchEvidence, history_guide: h.evidence };
+      if (h.use) {
+        history = h.use;
+        g = await tryChatbyGuide(guide, master, conversation.messages, { history });
+      }
+    }
     if (g.kind === "wait" || (g.kind === "hold" && g.reason === "sin_ubicacion")) {
-      item.detail = g.kind === "wait" ? g.outcome : undefined;
-      await touch(r);
+      if (g.kind === "wait") addDetail(item, g.outcome);
+      await touch(r, watchEvidence === r.evidence ? {} : { evidence: watchEvidence });
       // (0318) Sigue sin ubicación: si Kapta todavía no se la pidió, se la pide
       // sola (una vez). Así también le llega a lo que quedó así antes de
       // encender el interruptor.
@@ -1114,13 +1250,14 @@ async function watchPass(
           conversation,
           item,
           kind: chatbyAutoAskKindFor({ reason: "sin_ubicacion", ask: "ubicacion", corrected }),
-          evidence: r.evidence ?? {},
+          evidence: watchEvidence,
           holdReason: "sin_ubicacion",
         });
       }
       continue;
     }
-    const evidence = { ...chatbyAutoAskCarry(r.evidence), amount_cents: watch.amountCents };
+    const evidence: Record<string, unknown> = { ...chatbyAutoAskCarry(r.evidence), amount_cents: watch.amountCents };
+    if (watchEvidence.history_guide) evidence.history_guide = watchEvidence.history_guide;
     if (g.kind === "hold") {
       item.outcome = "para_asesora";
       item.detail = g.detail ? `${g.reason}: ${g.detail}` : g.reason;
@@ -1151,6 +1288,7 @@ async function watchPass(
       reads,
       item,
       report,
+      history,
     );
   }
 }
@@ -1239,7 +1377,7 @@ async function reaskWatch(
     return;
   }
   const viaPin = verdict.pin || (corrected && g.kind === "ok" && g.detail === coordinateNote("whatsapp"));
-  await guideOutcome(admin, ctx, report, {
+  await guideOutcome(admin, ctx, guide, report, {
     ...w,
     verdict: { messageId: verdict.messageId, at: verdict.at, amountCents: verdict.amountCents, pin: viaPin, addressCorrected: corrected },
     g,
@@ -1257,6 +1395,7 @@ type OkConversation = Extract<ChatbyConversation, { status: "ok" }>;
 async function guideOutcome(
   admin: SupabaseClient,
   ctx: PassCtx,
+  guide: GuideCtx,
   report: ChatbyAutoReport,
   w: {
     r: WatchRow;
@@ -1270,9 +1409,25 @@ async function guideOutcome(
     corrected: boolean;
   },
 ): Promise<void> {
-  const { r, key, master, item, reads, conversation, verdict, g, corrected } = w;
+  const { r, key, master, item, reads, conversation, verdict, corrected } = w;
+  let g = w.g;
   if (g.kind === "wait") return;
-  const evidence = { ...chatbyAutoAskCarry(r.evidence), amount_cents: verdict.amountCents };
+  const evidence: Record<string, unknown> = { ...chatbyAutoAskCarry(r.evidence), amount_cents: verdict.amountCents };
+  // (0317) Falta la ubicación: si la clienta ya recibió en esa casa, la guía va
+  // con el GPS de esa entrega, ANTES de pedirle la ubicación.
+  let history: HistoryGuideUse | null = null;
+  if (g.kind === "hold" && g.reason === "sin_ubicacion" && ctx.historyMode !== "apagado") {
+    const h = await historyGuideCheck(admin, ctx, report, { master, holdReason: "sin_ubicacion", item, prior: r.evidence?.history_guide });
+    if (h.evidence) evidence.history_guide = h.evidence;
+    if (h.use) {
+      history = h.use;
+      g = await tryChatbyGuide(guide, master, conversation.messages, { history });
+      if (g.kind === "wait") {
+        addDetail(item, g.outcome);
+        return;
+      }
+    }
+  }
   if (g.kind === "hold") {
     // La dirección ya cuadra pero falta la ubicación (`sin_ubicacion`, que la
     // pasada de la ubicación sigue mirando) u otra puerta de la guía.
@@ -1307,7 +1462,7 @@ async function guideOutcome(
     item.detail = g.detail ?? undefined;
     return;
   }
-  await confirmWithGuide(admin, key, master, master.order_name ?? "el pedido", verdict, g, reads, item, report);
+  await confirmWithGuide(admin, key, master, master.order_name ?? "el pedido", verdict, g, reads, item, report, history);
 }
 
 /**
@@ -1384,7 +1539,7 @@ async function correctAddress(
     return;
   }
   if (saved.warning) item.detail = saved.warning;
-  await guideOutcome(admin, ctx, report, {
+  await guideOutcome(admin, ctx, guide, report, {
     ...w,
     r: { ...r, evidence },
     master: updated,
@@ -1535,4 +1690,116 @@ async function askBlockedForPerson(admin: SupabaseClient, row: MasterRow): Promi
   if (hold === "shalom") return "Shalom";
   if (hold) return "tiene un pago registrado";
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Guía automática para clientas con entregas (0317, lib/history-guide-auto.ts)
+// ---------------------------------------------------------------------------
+//
+// La clienta confirmó por Chatby y la guía no sale por la dirección
+// (`direccion_incompleta`, `sin_ubicacion`). Si ya recibió en esa misma casa sin
+// un solo fallido, la guía va con el GPS de la guía de esa entrega. Corre
+// ANTES de que Kapta le pida la dirección o la ubicación (0318): a la clienta
+// que califica no se le escribe, se le crea la guía. Lee solo la base (su
+// historial y las guías de esos pedidos), nada de Chatby.
+
+/** Con qué se crea la guía: el veredicto (el pedido y el GPS) y por qué hizo falta. */
+export interface HistoryGuideUse {
+  verdict: Extract<HistoryGuideVerdict, { ok: true }>;
+  holdReason: HistoryGuideHoldReason;
+}
+
+const HISTORY_PRIOR_COLUMNS =
+  "order_id,order_name,order_created_at,general_status,operational_status,macro_stage,order_total," +
+  "guide_code,current_courier,last_courier,delivered_courier,attempt_count,dispatched_at," +
+  "address,district,province,latitude,longitude,geo_source,delivered_at";
+
+/** El historial de la clienta (mismo celular, misma organización) y el veredicto. */
+async function historyGuideLookup(admin: SupabaseClient, ctx: PassCtx, master: MasterRow): Promise<HistoryGuideVerdict> {
+  const unread: HistoryGuideVerdict = { ok: false, reason: "historial_sin_leer", delivered: 0, failed: 0 };
+  const phone = (master.customer_phone ?? "").trim();
+  if (!phone || !ctx.orgStoreIds.length) return { ok: false, reason: "sin_entregas", delivered: 0, failed: 0 };
+  const { data, error } = await admin
+    .from("order_master")
+    .select(HISTORY_PRIOR_COLUMNS)
+    .eq("customer_phone", phone)
+    .in("store_id", ctx.orgStoreIds)
+    .neq("order_id", master.order_id)
+    .order("order_created_at", { ascending: false })
+    .limit(500);
+  if (error) return unread;
+  const priors = (data ?? []) as unknown as HistoryPrior[];
+  const input = { order: master, priors };
+  const candidate = historyGuideCandidate(input);
+  if (!candidate.ok) return candidate;
+  // Los rechazos en la puerta (§8.2) salen de las guías de sus pedidos.
+  const { data: guides, error: gErr } = await admin
+    .from("shipments")
+    .select("order_id,reported_status")
+    .in("order_id", [master.order_id, ...priors.map((p) => p.order_id)]);
+  return evaluateHistoryGuide({ ...input, doorRejections: gErr ? null : countDoorRejections((guides ?? []) as DoorRejectionShipment[]) });
+}
+
+/**
+ * La regla para un pedido cuya guía no sale por la dirección. Apagado: nada.
+ * Simulación: la evidencia («habría usado el GPS de #…») y el pedido sigue
+ * como hoy. Activo y califica: `use`, con lo que la guía se intenta. La
+ * evidencia va en la marca (`evidence.history_guide`) en todos los casos.
+ */
+async function historyGuideCheck(
+  admin: SupabaseClient,
+  ctx: PassCtx,
+  report: ChatbyAutoReport,
+  h: { master: MasterRow; holdReason: HistoryGuideHoldReason; item: ChatbyAutoItem; prior?: unknown },
+): Promise<{ evidence: Record<string, unknown> | null; use: HistoryGuideUse | null }> {
+  const mode = ctx.historyMode;
+  if (mode === "apagado") return { evidence: null, use: null };
+  const verdict = await historyGuideLookup(admin, ctx, h.master);
+  const evidence = historyGuideEvidence(mode, h.holdReason, verdict, new Date());
+  if (!verdict.ok) {
+    addDetail(h.item, `historial: ${HISTORY_GUIDE_SKIP_LABEL[verdict.reason]}`);
+    return { evidence, use: null };
+  }
+  if (mode === "simulacion") {
+    addDetail(h.item, `habría creado la guía con el GPS de ${verdict.source.orderName ?? "una entrega anterior"}`);
+    // Una vez por pedido: la relectura de cada 30 minutos no lo vuelve a contar.
+    const before = h.prior as { outcome?: unknown; mode?: unknown } | null | undefined;
+    if (!(before?.outcome === "habria_usado" && before.mode === "simulacion")) {
+      report.historySimulated++;
+      console.info(
+        `[chatby-historial] ${JSON.stringify({ order: h.master.order_id, mode, outcome: "habria_usado", source: verdict.source.orderName })}`,
+      );
+    }
+    return { evidence, use: null };
+  }
+  return { evidence, use: { verdict, holdReason: h.holdReason } };
+}
+
+/**
+ * El hecho de la línea de tiempo: la guía salió con el GPS de una entrega
+ * anterior, y de cuál. Sin actor y `source = 'chatby'`, como la confirmación.
+ * Si no se puede escribir, la guía ya existe y su `guide_registered` lo dice.
+ */
+async function recordHistoryGuideFact(admin: SupabaseClient, row: MasterRow, guideCode: string | null, use: HistoryGuideUse): Promise<void> {
+  const { verdict } = use;
+  await admin.from("order_events").insert({
+    store_id: row.store_id,
+    order_id: row.order_id,
+    kind: HISTORY_GUIDE_EVENT,
+    occurred_at: new Date().toISOString(),
+    actor: null,
+    source: CHATBY_SOURCE,
+    courier: "aliclik",
+    guide_code: guideCode,
+    reason: historyGuideFactReason(verdict),
+    note: historyGuideFactNote(use.holdReason, verdict),
+    payload: {
+      policy: HISTORY_GUIDE_POLICY,
+      hold_reason: use.holdReason,
+      delivered: verdict.delivered,
+      source_order_id: verdict.source.orderId,
+      source_order_name: verdict.source.orderName,
+      source_delivered_at: verdict.source.deliveredAt,
+    },
+  });
 }

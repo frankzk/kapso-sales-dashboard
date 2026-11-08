@@ -904,12 +904,22 @@ export interface AliclikGuideOrigin {
    * `reintento_lima`: el reintento Aliclik de la cadena de Lima (MOM §9.5,
    * entrega 3, 04-11-2026), con la variante encendida en Automatizaciones. Es
    * el único que puede justificar otra salida en Lima (`aliclikMotiveAllowed`).
+   * `agente_ia`: la que pidió el agente de IA por el conector (MOM §42.9,
+   * 08-11-2026), con los permisos de quien lo conectó y su tope diario. No
+   * puede justificar otra salida: no escribe motivos.
    */
-  kind: "envio_programado" | "confirmado_chatby" | "reintento_lima";
+  kind: "envio_programado" | "confirmado_chatby" | "reintento_lima" | "agente_ia";
   /** El día (YYYY-MM-DD) por el que se creó hoy: el programado, o el de la pasada. */
   scheduledOn: string;
   /** El motivo que queda en el hecho `guide_registered`. */
   reason: string;
+  /**
+   * La guía de Chatby que va con el GPS de una entrega anterior de la clienta
+   * («Guía automática para clientas con entregas», MOM §6.1, 0317): el pedido
+   * entregado del que salió la coordenada. Lo dice la nota del lead y queda en
+   * `payload.auto.gps_from`.
+   */
+  gpsFrom?: string | null;
 }
 
 /**
@@ -1335,7 +1345,9 @@ export async function createAliclikGuideFor(
       // creó sola y el payload, con qué día programado (MOM §6.2).
       ...(origin ? { reason: origin.reason } : {}),
       payload: {
-        ...(origin ? { auto: { kind: origin.kind, scheduled_on: origin.scheduledOn } } : {}),
+        ...(origin
+          ? { auto: { kind: origin.kind, scheduled_on: origin.scheduledOn, ...(origin.gpsFrom ? { gps_from: origin.gpsFrom } : {}) } }
+          : {}),
         transportName: courierBlock.transportName,
         deliveryCost: courierBlock.deliveryCost,
         returnCost: courierBlock.returnCost,
@@ -1442,7 +1454,7 @@ export async function createAliclikGuideFor(
         kind: "system",
         new_status: null,
         note:
-          `Guía de Aliclik creada ${guideCreatorPhrase(creator, origin?.kind ?? false)} · ${orderNumber} · ` +
+          `Guía de Aliclik creada ${guideCreatorPhrase(creator, origin?.kind ?? false, origin?.gpsFrom)} · ${orderNumber} · ` +
           `pedido ${ctx.row.order_name ?? "—"} · ` +
           `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
           `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}`,
