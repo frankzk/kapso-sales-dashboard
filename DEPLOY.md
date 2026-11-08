@@ -66,7 +66,7 @@ reconocen por su nota y por `order_events.payload->>'bulk' =
 
 ### 08-11-2026 · Políticas escritas por tienda para el agente de IA (0315, MOM §42.6)
 
-**Pendiente de aplicar en producción.** Parte 2 del conector de Grok Bot:
+**Aplicada en producción el 08-11-2026.** Parte 2 del conector de Grok Bot:
 cada tienda escribe sus políticas (cambios, devoluciones, garantías…) en
 **Automatizaciones › Conector de IA › Políticas escritas**, con su vigencia,
 y `consultar_politicas` le da al agente las vigentes ese día de Lima, junto a

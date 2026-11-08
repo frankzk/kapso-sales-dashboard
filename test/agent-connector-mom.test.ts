@@ -166,7 +166,7 @@ describe("DEPLOY.md 0315", () => {
     expect(start).toBeGreaterThan(-1);
     const next = DEPLOY.indexOf("\n### ", start + 10);
     const body = flat(DEPLOY.slice(start, next === -1 ? undefined : next));
-    expect(body).toContain("**Pendiente de aplicar en producción.**");
+    expect(body).toContain("**Aplicada en producción el 08-11-2026.**");
     expect(body).toContain("**Migración `0315_store_policies.sql`**, a mano, ANTES del código");
     expect(body).toContain("select to_regclass('public.store_policies'), to_regclass('public.store_policy_versions');");
     expect(body).toContain("**Marcha atrás.**");
