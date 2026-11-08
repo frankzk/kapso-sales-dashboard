@@ -193,6 +193,11 @@ describe("acceso a todos los pendientes", () => {
       master(7, { macro_stage: "en_curso", macro_substage: "por_reprogramar_lima" }),
       // Programado; la guía de Tanders que falló sigue `en_ruta` (vuelve).
       master(8, { macro_stage: "en_curso", macro_substage: "por_reprogramar_lima" }),
+      // Lo que la cola de Grupo GF manda a «Sin condiciones» no sale con Grupo GF:
+      master(9, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar", district: "Santa Rosa" }), // en pausa
+      master(10, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" }), // solo una salida anulada
+      master(11, { macro_stage: "preparacion", macro_substage: "por_generar_rotulo", district: "xx zz" }), // distrito inválido
+      master(12, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" }), // la misma «por definir» que o9, en Lima: entra
     ];
     const ship = (id: string, order: string, over: DBRow = {}) => ({ id, order_id: order, courier: "propio", preparation_state: "listo_despacho", qr_token: `q${id}`, delivery_status: "pendiente", created_at: "2026-11-06T10:00:00Z", ...over });
     const db = database(source, false, {
@@ -206,7 +211,16 @@ describe("acceso a todos los pendientes", () => {
           ship("s6", "o6", { delivery_status: "en_ruta" }),
           ship("s7", "o7"),
           ship("s8old", "o8", { courier: "tanders", delivery_status: "en_ruta", reported_status: "RETURNING" }),
+          ship("s9", "o9", { courier: "por_definir", qr_token: null, preparation_state: "rotulo_generado", custody_state: "empresa", created_via: "mom_manual_route" }),
+          ship("s10", "o10", { courier: "por_definir", delivery_status: "anulado" }),
+          ship("s12", "o12", { courier: "por_definir", qr_token: null, preparation_state: "rotulo_generado", custody_state: "empresa", created_via: "mom_manual_route" }),
         ],
+        logistics_service_agreements: [{ id: "ag", store_id: "a", provider_id: "gf", status: "active" }],
+        logistics_district_tariffs: ["lima", "santa rosa"].map((district_key, i) => ({
+          id: `t${i}`, provider_id: "gf", agreement_id: null, district_key, zone: null, delivery_amount: "13", rejection_amount: "13",
+          includes_igv: true, currency: "PEN", effective_from: "2026-01-01", effective_to: null, status: "active",
+        })),
+        logistics_district_availability_events: [{ id: "e1", provider_id: "gf", agreement_id: null, district_key: "santa rosa", action: "paused", reason: "playa", paused_until: null, created_by: null, created_at: "2026-11-01T10:00:00Z" }],
         logistics_requests: [
           { order_id: "o1", shipment_id: "s1", scheduled_for: "2026-11-07", status: "scheduled", provider_id: "gf" },
           // La solicitud de otra organización no es de estas tiendas.
@@ -228,13 +242,19 @@ describe("acceso a todos los pendientes", () => {
     expect(gf.o1).toEqual({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: true, pickedUp: false }, requestDay: "2026-11-07", labeled: true, armed: true });
     expect(gf.o2).toBeNull(); // sale con Aliclik
     expect(gf.o3).toEqual({ box: null, requestDay: null, labeled: false, armed: false }); // sin salida todavía
-    expect(gf.o4).toBeNull(); // «Por reprogramar Lima» sin acuerdo ni programa: espera a la tienda
+    // Todo «Por reprogramar Lima» se lee (su acuerdo vive en el caso); sin acuerdo ni programa no tiene día.
+    expect(gf.o4).toEqual({ box: null, requestDay: null, labeled: false, armed: false });
+    expect(limaPlanCandidate(rows.find((r) => r.orderId === "o4")!, undefined, "2026-11-09")?.day).toBeNull();
     expect(gf.o5).toBeNull(); // ya salió, y no está en una caja vigente
     expect(gf.o6).toEqual({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: true, pickedUp: true }, requestDay: null, labeled: true, armed: true });
     // La caja del 04/11 no es su caja: sale el día de su programa y se recibe en oficina.
-    expect(gf.o7).toEqual({ box: null, requestDay: null, labeled: true, armed: true, awaitingOffice: true });
+    expect(gf.o7).toEqual({ box: null, requestDay: null, labeled: true, armed: true, pastBox: true, awaitingOffice: true });
     // La guía de Tanders que vuelve no lo hace «de otro courier»: entra, sin salida de Grupo GF todavía.
     expect(gf.o8).toEqual({ box: null, requestDay: null, labeled: false, armed: false });
+    expect(gf.o9).toBeNull(); // Santa Rosa en pausa: «Sin condiciones» en Grupo GF
+    expect(gf.o10).toBeNull(); // sin salida que rellenar
+    expect(gf.o11).toBeNull(); // distrito que no se reconoce
+    expect(gf.o12).toEqual({ box: null, requestDay: null, labeled: false, armed: false });
   });
   it("«Sale a reparto»: un error al leer el proveedor o las cajas no se presenta como «sin solicitud»", async () => {
     const source = [master(1, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" })];
@@ -552,8 +572,15 @@ describe("«Sale a reparto» en Repro Lima (owner, 07-11-2026; §29.16)", () => 
     // Un acuerdo con otro courier no sale con Grupo GF; sin datos de Grupo GF, tampoco.
     expect(limaPlanCandidate(row({ gf: gf() }), { ...acuerdo, agreement: { agreedOn: "2026-11-07", courier: "aliclik" } }, "2026-11-07")).toBeNull();
     expect(limaPlanCandidate(row({ gf: null }), undefined, "2026-11-07")).toBeNull();
-    // Un reintento sin acuerdo ni programa no toma el día del corte.
+    // Un reintento sin acuerdo ni programa no toma el día del corte ni el de su solicitud vieja.
     expect(limaPlanCandidate(row({ stage: "en_curso", substage: "por_reprogramar_lima", gf: gf() }), undefined, "2026-11-07")?.day).toBeNull();
+    expect(limaPlanCandidate(row({ stage: "en_curso", substage: "por_reprogramar_lima", gf: gf({ requestDay: "2026-11-04" }) }), undefined, "2026-11-07")?.day).toBeNull();
+    // Con el acuerdo con Grupo GF, aunque todavía no sea programa (#KP140108), sale ese día.
+    expect(limaPlanCandidate(row({ stage: "en_curso", substage: "por_reprogramar_lima", gf: gf({ pastBox: true, awaitingOffice: true }) }), acuerdo, "2026-11-07"))
+      .toMatchObject({ day: "2026-11-10", awaitingOffice: true });
+    // Lo que sigue en una caja de un día que pasó (#KP140302, borrador del 19/10) no toma la solicitud vieja ni el corte.
+    expect(limaPlanCandidate(row({ gf: gf({ pastBox: true, requestDay: "2026-10-19", armed: false }) }), undefined, "2026-11-09")?.day).toBeNull();
+    expect(limaPlanCandidate(row({ gf: gf({ pastBox: true, requestDay: "2026-10-19" }), programmedFor: "2026-11-09" }), undefined, "2026-11-09")?.day).toBe("2026-11-09");
   });
   it("el tablero muestra la tarjeta y, en cada pedido que sale, el día y lo que le falta", () => {
     const data = { today: "2026-11-06", nowIso: "2026-11-06T23:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;

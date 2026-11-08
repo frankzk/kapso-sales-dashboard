@@ -426,8 +426,11 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
  * - Tomada sin caja: su día es el acuerdo, el programa o el de la solicitud; la
  *   salida ya existe, armada o no.
  * - Disponible: su día es el acuerdo, el programa o el corte (`scheduledFor`);
- *   el rótulo y el armado salen de la subetapa del Master. Un reintento o una
- *   guía de Tanders/Swayp en revisión salen con salida nueva: no tienen rótulo.
+ *   el rótulo y el armado salen de la subetapa del Master. Un reintento que
+ *   sale con salida nueva no tiene rótulo.
+ * - Una guía de Tanders/Swayp en revisión no entra hasta que se toma: nadie
+ *   confirmó todavía dónde está el paquete (`confirmedTandersReview`), y Repro
+ *   Lima tampoco la cuenta (revisión, 08-11-2026).
  * Lo que no se puede asignar y no tiene caja (seguimiento) no entra.
  */
 export function planCandidateFromQueue(q: QueueRow, today: string): PlanCandidate | null {
@@ -449,13 +452,13 @@ export function planCandidateFromQueue(q: QueueRow, today: string): PlanCandidat
     if (!day || !takenIsAssignable(q.macroStage)) return null;
     return { orderId: q.orderId, day, box: null, labeled: true, armed: q.armed !== false, awaitingOffice: q.route.state === "in_custody" };
   }
-  if (!q.assignable) return null;
+  if (!q.assignable || q.tandersReview) return null;
   const program = agreedDay ?? q.programmedFor?.slice(0, 10) ?? null;
   if (!program && isReprogramStage(q.macroStage, q.macroSubstage)) return null;
   const day = program ?? q.scheduledFor?.slice(0, 10) ?? null;
   if (q.taken) return { orderId: q.orderId, day, box: null, labeled: true, armed: q.armed === true };
   const sub = q.macroSubstage;
-  const labeled = sub !== "por_generar_rotulo" && !q.newOutputOnTake && !q.tandersReview;
+  const labeled = sub !== "por_generar_rotulo" && !q.newOutputOnTake;
   const armed = labeled && sub !== "por_armar";
   return { orderId: q.orderId, day, box: null, labeled, armed };
 }

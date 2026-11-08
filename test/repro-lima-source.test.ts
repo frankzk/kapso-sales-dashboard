@@ -268,7 +268,7 @@ describe("las chapas de la cola de Despacho del día (E28)", () => {
     expect(ops).toContain("const [reproFlags, reproAgreements] = await Promise.all([");
     expect(ops).toContain("loadReproAgreements(admin, planAgreementRows.map((order) => order.orderId)),");
     // Solo donde cambia algo: no las miles de solicitudes ya en una caja vigente o cerradas.
-    expect(ops).toContain("...accepted.filter((order) => takenIsAssignable(order.macroStage) && (!order.route || order.route.routeDate < planToday)),");
+    expect(ops).toContain("...accepted.filter((order) => takenIsAssignable(order.macroStage) && (!order.route || order.route.routeDate < day)),");
     expect(ops).toContain("for (const row of planAgreementRows) row.reproAgreement = reproAgreements.get(row.orderId) ?? null;");
     expect(ops).toContain("row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);");
     // Lo tomado con la caja todavía con el motorizado (su caja dice «No

@@ -17605,7 +17605,10 @@ lógica es una sola para las dos pantallas (`lib/dispatch-plan.ts`).
   Es el «No entregado» que el motorizado todavía tiene (#KP202485, programado
   para el 09-11 y en la caja del 04-11) o una caja que nunca salió (#KP140302,
   en un borrador del 19-10). Manda el acuerdo o el programa; sin ellos espera a
-  la tienda y no entra. Si el motorizado se la llevó, la tarjeta y la chapa
+  la tienda y no entra: ni la solicitud vieja ni el corte le dan día, en
+  ninguna de las dos pantallas. Despacho del día recibe ese programa del
+  servidor (`planProgramDay`) porque la cola deja `programmedFor` vacío para
+  todo lo que tiene caja. Si el motorizado se la llevó, la tarjeta y la chapa
   dicen que hay que recibirla en oficina («por recibir en oficina») antes de ir
   a una caja nueva.
 - **El primer día que se prepara** (`planOpenDay`) es hoy antes del corte; pasado
@@ -17641,8 +17644,10 @@ lógica es una sola para las dos pantallas (`lib/dispatch-plan.ts`).
   - En Despacho del día, con las filas que la pantalla ya tiene
     (`planCandidateFromQueue`):
     - disponibles: el rótulo y el armado salen de la subetapa del Master. Un
-      reintento con salida nueva, o una guía de Tanders o Swayp en revisión
-      (al tomarla nace otra salida), está «Sin rótulo»;
+      reintento con salida nueva está «Sin rótulo». Una guía de Tanders o
+      Swayp en revisión no entra hasta que se toma: nadie confirmó todavía
+      dónde está el paquete (eran 6 de septiembre y octubre el 08-11-2026), y
+      Repro Lima tampoco la cuenta;
     - tomados sin caja: del armado de su salida;
     - en caja: del día de la caja, del motorizado y del cotejo.
 
@@ -17658,16 +17663,25 @@ lógica es una sola para las dos pantallas (`lib/dispatch-plan.ts`).
     - la solicitud de Grupo GF, del proveedor de la organización de cada tienda;
     - su caja de Grupo GF de hoy o de un día que viene.
 
-    Entran Preparación, Por despachar, los «Por reprogramar Lima» con programa y
-    lo En curso que está en una caja de hoy o de un día que viene: al recibir su
+    Entran Preparación, Por despachar, todo «Por reprogramar Lima» y lo En
+    curso que está en una caja de hoy o de un día que viene: al recibir su
     caja, el motorizado deja el pedido En curso · En reparto, y sin esto «Hoy»
-    perdía todo lo recogido. Lo ya entregado pasa a Por cerrar y deja la lista de
+    perdía todo lo recogido. Un «Por reprogramar Lima» toma el día solo de su
+    acuerdo o su programa: un acuerdo con Grupo GF que todavía no es programa
+    también cuenta (#KP140108, acordado para el 09-11 con la caja del 10-10 aún
+    con el motorizado). Lo ya entregado pasa a Por cerrar y deja la lista de
     Repro Lima; en Despacho del día sigue en su caja. Un reintento sin acuerdo
     espera a la tienda (§29.13) y no toma el día del corte. Un pedido con una
     salida viva de otro courier (Aliclik, Swayp…), o con un acuerdo con otro
     courier, no es de Grupo GF. Las salidas se miran como en la cola de Grupo GF
     (`outputsBlockingRetry`): la guía que ya falló (la de Tanders que vuelve
-    sigue `en_ruta`) y la salida devuelta no cuentan.
+    sigue `en_ruta`) y la salida devuelta no cuentan. Lo que Grupo GF todavía
+    no tomó y no está en una caja vigente entra solo si la cola de Despacho del
+    día lo admitiría: el convenio de la tienda, un distrito con tarifa y sin
+    pausa (`gfDistrictBlock`, la misma regla de la cola) y una salida «por
+    definir» que Grupo GF rellene. Lo demás está en «Sin condiciones» de Grupo
+    GF y no sale con Grupo GF: el 08-11-2026 eran 13 pedidos, 8 de ellos en
+    distritos en pausa (Santa Rosa, Ancón, Santa María del Mar, Punta Hermosa).
 - **Un pedido, una vez:** si la misma orden llega en dos filas (la caja y la
   cola), cuenta la de la caja.
 - **Al abrir:** en el primer día que se prepara: hoy antes del corte, y después

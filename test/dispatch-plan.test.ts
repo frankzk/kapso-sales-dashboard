@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
+import { gfDistrictBlock } from "@/lib/gf-district-check";
 import { deliveryDayOnOrAfter, inPlan, isDeliveryDay, nextDeliveryDay, planItems, planMissingText, planOpenDay, planOverdueSince, planStep, planSummary, type PlanCandidate } from "@/lib/dispatch-plan";
 import { EMPTY_QUEUE_FILTERS, filterQueue, planCandidateFromQueue, type QueueRow } from "@/lib/dispatch-day";
 
@@ -122,8 +123,8 @@ describe("Despacho del día: cada fila de la cola", () => {
     expect(planCandidateFromQueue(row({ programmedFor: LUN }), T)?.day).toBe(LUN);
     // Un reintento que sale con salida nueva todavía no tiene rótulo.
     expect(planCandidateFromQueue(row({ macroStage: "en_curso", macroSubstage: "por_reprogramar_lima", programmedFor: SAB, newOutputOnTake: true }), T)).toMatchObject({ labeled: false });
-    // Una guía de Tanders o Swayp en revisión también: al tomarla nace otra salida.
-    expect(planCandidateFromQueue(row({ macroStage: "en_curso", macroSubstage: "en_transito", tandersReview: { kind: "tanders" } as unknown as QueueRow["tandersReview"] }), T)).toMatchObject({ labeled: false, armed: false });
+    // Una guía de Tanders o Swayp en revisión no entra hasta que se toma: nadie confirmó dónde está el paquete.
+    expect(planCandidateFromQueue(row({ macroStage: "en_curso", macroSubstage: "en_transito", tandersReview: { kind: "tanders" } as unknown as QueueRow["tandersReview"] }), T)).toBeNull();
   });
   it("tomado sin caja: el día de la solicitud y su armado; en caja de hoy en adelante: el día de la caja y su motorizado", () => {
     expect(planCandidateFromQueue(row({ taken: true, armed: false, scheduledFor: "2026-11-05" }), T)).toMatchObject({ day: "2026-11-05", labeled: true, armed: false });
@@ -201,7 +202,31 @@ describe("la tarjeta «Sale a reparto»", () => {
     expect(tap).toContain("if (!off) setScanDay(planDay);");
     const choose = board.slice(board.indexOf("const choosePlanDay = "), board.indexOf("const substageOptions = "));
     expect(choose).toContain("if (filters.plan) setScanDay(next);");
+    // La lista del plan usa el primer día que se prepara de ahora, no el del toque.
+    expect(board).toContain("const listFilters = useMemo<QueueFilters>(() => (filters.plan && filters.plan.openDay !== openDay ? { ...filters, plan: { ...filters.plan, openDay } } : filters), [filters, openDay]);");
+    expect(board).toContain("sortQueue(filterQueue(allRows, listFilters, day), day)");
+    expect(board).toContain('`${filtered.length - returnableCount === 1 ? "sale" : "salen"} el ${programDayLabel(filters.plan.day)}`');
+    // El programa de un tomado en una caja de un día que pasó lo manda el servidor.
+    expect(board).toContain("planProgramDay: o.planProgramDay ?? null,");
+    const actions = readFileSync("app/dashboard/courier/actions.ts", "utf8");
+    expect(actions).toContain("planProgramDay: manifest && manifest.route_date < day ? programByOrder.get(request.order_id)?.scheduled_for ?? null : null,");
     expect(readFileSync("app/dashboard/courier/page.tsx", "utf8")).toContain("nowIso={nowIso}");
     expect(readFileSync("components/grupo-gf-courier.tsx", "utf8")).toContain("nowIso={nowIso}");
+  });
+});
+
+describe("si Grupo GF toma el distrito (la regla de «Sin condiciones», compartida)", () => {
+  const tariff = (district_key: string) => ({ id: `t-${district_key}`, provider_id: "gf", agreement_id: null, district_key, zone: null, delivery_amount: 13, rejection_amount: 13, includes_igv: true, currency: "PEN", effective_from: "2026-01-01", effective_to: null, status: "active" as const });
+  const pause = { id: "e1", provider_id: "gf", agreement_id: null, district_key: "santa rosa", action: "paused" as const, reason: "playa", paused_until: null, created_by: null, created_at: "2026-11-01T10:00:00Z" };
+  const check = (district: string | null, agreementId: string | null = "ag") =>
+    gfDistrictBlock({ providerId: "gf", agreementId, district, day: VIE, tariffs: [tariff("ate"), tariff("santa rosa")], events: [pause] });
+  it("convenio, distrito con tarifa y sin pausa; si no, el motivo de la cola", () => {
+    expect(check("Ate")).toBeNull();
+    expect(check("Santa Rosa")).toBe("servicio_pausado");
+    expect(check("Surco")).toBe("tarifa_faltante");
+    expect(check("xx zz")).toBe("distrito_invalido");
+    expect(check("Ate", null)).toBe("distrito_invalido");
+    // La cola de Despacho del día usa la misma clave de distrito.
+    expect(readFileSync("app/dashboard/courier/actions.ts", "utf8")).toContain("return gfDistrictKey(value);");
   });
 });

@@ -432,7 +432,8 @@ export function DispatchDayBoard(props: Props) {
       },
       reproLimaChip: o.reproLimaChip ?? null,
       reproAgreement: o.reproAgreement ?? null,
-      planProgramDay: o.programmedFor,
+      // El servidor manda el programa solo si la caja es de un día que pasó.
+      planProgramDay: o.planProgramDay ?? null,
     })), [props.accepted]);
   // Lo que Grupo GF no entregó con su propia salida y sigue en una caja
   // anterior, sin solicitud (06-10-2026): se recibe en oficina como los demás
@@ -480,15 +481,21 @@ export function DispatchDayBoard(props: Props) {
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
   // Filtrada y en el orden de los apartados: programados hoy, mañana, nunca salieron,
   // ya salieron, +30 días y programados después.
-  const filtered = useMemo(() => sortQueue(filterQueue(allRows, filters, day), day), [allRows, filters, day]);
+  // El primer día que todavía se prepara («Sale a reparto», §29.16), con la hora
+  // del servidor (`nowIso`). La lista del plan lo toma de aquí, no del momento
+  // en que se tocó la cifra: un refresco que cruza el corte lo mueve en las dos.
+  const afterCutoff = limaClock(props.nowIso ? new Date(props.nowIso) : new Date()).minute > sameDayCutoffMinute(props.sameDayCutoff);
+  const openDay = planOpenDay(day, afterCutoff);
+  const listFilters = useMemo<QueueFilters>(() => (filters.plan && filters.plan.openDay !== openDay ? { ...filters, plan: { ...filters.plan, openDay } } : filters), [filters, openDay]);
+  const filtered = useMemo(() => sortQueue(filterQueue(allRows, listFilters, day), day), [allRows, listFilters, day]);
   // La búsqueda no encontró nada aquí: ¿dónde está ese pedido? (24-10-2026,
   // #KP141876 en «Sin condiciones» por Ancón). Solo con la lista vacía y con
   // lo que el tablero ya tiene; `locateOutsideList` decide el texto y el botón.
   const located = useMemo(
     () => filtered.length || !filters.query.trim()
       ? { found: [] as QueueLocation[], more: 0 }
-      : locateOutsideList(filters, { rows: allRows, blocked: props.blocked, returning: props.returning, pendingReturns: props.pendingReturns }, day, { canEditTariffs: props.canAuthorizeCash === true }),
-    [filtered.length, filters, allRows, props.blocked, props.returning, props.pendingReturns, day, props.canAuthorizeCash],
+      : locateOutsideList(listFilters, { rows: allRows, blocked: props.blocked, returning: props.returning, pendingReturns: props.pendingReturns }, day, { canEditTariffs: props.canAuthorizeCash === true }),
+    [filtered.length, filters, listFilters, allRows, props.blocked, props.returning, props.pendingReturns, day, props.canAuthorizeCash],
   );
   /** El botón del aviso: el mismo gesto que la tarjeta, la píldora o la hoja de siempre. */
   function goToLocation(action: LocateAction, orderId: string) {
@@ -530,8 +537,6 @@ export function DispatchDayBoard(props: Props) {
   // hora del servidor (`nowIso`): con el reloj del navegador la página podía
   // pintar un día en el servidor y otro en el teléfono.
   const nextRouteDay = nextDeliveryDay(day);
-  const afterCutoff = limaClock(props.nowIso ? new Date(props.nowIso) : new Date()).minute > sameDayCutoffMinute(props.sameDayCutoff);
-  const openDay = planOpenDay(day, afterCutoff);
   const planOptions = planDayOptions(day, nextRouteDay);
   const [chosenPlanDay, setPlanDay] = useState(openDay);
   // Si el día cambió con la página abierta, el elegido puede ya no estar.
@@ -564,7 +569,7 @@ export function DispatchDayBoard(props: Props) {
     setFilters((cur) => (cur.plan ? { ...cur, plan: { ...cur.plan, day: next, openDay } } : cur));
   };
   const substageOptions = useMemo(() => queueSubstageOptions(allRows, filters.stages), [allRows, filters.stages]);
-  const facets = useMemo(() => queueFacetCounts(allRows, filters, day), [allRows, filters, day]);
+  const facets = useMemo(() => queueFacetCounts(allRows, listFilters, day), [allRows, listFilters, day]);
   const tracking = filters.stages.length > 0;
   const activeFilters = activeFilterCount(filters);
   const visible = filtered.slice(0, limit);
@@ -1080,7 +1085,7 @@ export function DispatchDayBoard(props: Props) {
                 <OpsButton variant="ghost" size="sm" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query, segment: filters.segment })}>Quitar filtros</OpsButton>
               )}
               <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
-                <b className="font-semibold text-ink-900">{(filtered.length - returnableCount).toLocaleString("es-PE")}</b> {filters.plan ? `salen el ${programDayLabel(filters.plan.day)}` : tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "por asignar"}
+                <b className="font-semibold text-ink-900">{(filtered.length - returnableCount).toLocaleString("es-PE")}</b> {filters.plan ? `${filtered.length - returnableCount === 1 ? "sale" : "salen"} el ${programDayLabel(filters.plan.day)}` : tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "por asignar"}
                 {returnableCount > 0 && <> · <b className="font-semibold text-ink-900">{returnableCount.toLocaleString("es-PE")}</b> por recibir en oficina</>}
               </p>
             </div>

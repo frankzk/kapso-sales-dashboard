@@ -23,7 +23,7 @@ import {
   cashLimitVerdict,
 } from "@/lib/grupo-gf-courier";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
-import { resolveLimaDistrict } from "@/lib/order-coverage";
+import { gfDistrictKey } from "@/lib/gf-district-check";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { writeCourierGuide, type RouteOutputWriteResult } from "@/lib/route-output-fill";
 import { MAX_OUTPUTS_PER_ORDER, isCourierTbd, manualRouteGuideCode, pickFillableRouteOutput, puertaDeSalidaAdicional } from "@/lib/shipment-output";
@@ -216,6 +216,12 @@ export interface CourierReturningOutput {
 }
 
 export interface CourierAcceptedOrder extends CourierAvailableOrder {
+  /**
+   * «Sale a reparto» (§29.16): el programa del pedido cuando su caja es de un
+   * día que pasó (el «No entregado» que el motorizado todavía tiene). En una
+   * caja de hoy en adelante es null, como `programmedFor` (ahí manda la caja).
+   */
+  planProgramDay?: string | null;
   requestId: string;
   requestStatus: string;
   shipmentId: string | null;
@@ -475,10 +481,9 @@ function activeAssignedOutput(
   ) ?? null;
 }
 
+/** La misma clave que lee «Sale a reparto» en Repro Lima (`lib/gf-district-check.ts`). */
 function canonicalDistrictKey(value: string | null): string | null {
-  let key = resolveLimaDistrict(value, { searchInText: true });
-  if (key === "lurigancho chosica") key = "lurigancho";
-  return key;
+  return gfDistrictKey(value);
 }
 
 type Admin = ReturnType<typeof createAdminSupabase>;
@@ -1013,6 +1018,7 @@ async function loadCourierOperations(
       hasPriorDispatch: lastDispatchByOrder.has(request.order_id),
       lastDispatchedAt: lastDispatchByOrder.get(request.order_id) ?? null,
       programmedFor: program?.scheduled_for ?? null,
+      planProgramDay: manifest && manifest.route_date < day ? programByOrder.get(request.order_id)?.scheduled_for ?? null : null,
       programReason: program?.reason ?? null,
       macroStage: order.macro_stage ?? null,
       macroSubstage: order.macro_substage ?? null,
@@ -1075,10 +1081,9 @@ async function loadCourierOperations(
   // en cualquier fila; «caja nueva desde stock» solo donde la caja sigue con
   // el motorizado y si se acordó con Grupo GF (`loadReproQueueFlags`). Sin
   // lectura no hay chapas.
-  const planToday = limaClock().day;
   const planAgreementRows: CourierAvailableOrder[] = [
     ...available,
-    ...accepted.filter((order) => takenIsAssignable(order.macroStage) && (!order.route || order.route.routeDate < planToday)),
+    ...accepted.filter((order) => takenIsAssignable(order.macroStage) && (!order.route || order.route.routeDate < day)),
     ...returnable,
   ];
   const [reproFlags, reproAgreements] = await Promise.all([

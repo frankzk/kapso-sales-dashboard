@@ -155,21 +155,28 @@ export interface LimaPendingGf {
   armed: boolean;
   /** Sin caja vigente y todavía con el motorizado en la caja de un día que pasó. */
   awaitingOffice?: boolean;
+  /**
+   * Su única caja de Grupo GF es de un día que pasó: ni la solicitud vieja ni
+   * el corte le dan día; solo el acuerdo o el programa.
+   */
+  pastBox?: boolean;
 }
 
 /**
  * El pedido para «Sale a reparto» (§29.16, `lib/dispatch-plan.ts`). Su día:
  * el de la caja; si no, el acuerdo o el programa (`limaScheduledFor`), la
  * solicitud tomada, y, sin nada de eso, el corte (`cutoffDay`, el que da
- * `scheduledDay` ahora). Un «Por reprogramar Lima» sin acuerdo ni programa no
- * tiene día: espera a la tienda (§29.13). Un acuerdo con otro courier no es de
- * Grupo GF.
+ * `scheduledDay` ahora). Un reintento (En curso) o lo que sigue en una caja de
+ * un día que pasó solo tiene el día del acuerdo o el programa: sin ellos espera
+ * a la tienda (§29.13) y no entra, como en Despacho del día. Un acuerdo con
+ * otro courier no es de Grupo GF.
  */
 export function limaPlanCandidate(row: LimaPendingOrder, c: AttentionCase | undefined, cutoffDay: string): PlanCandidate | null {
   if (!row.gf) return null;
   if (c?.list === "programados" && c.agreement?.courier && c.agreement.courier !== "propio") return null;
-  const retry = row.stage === "en_curso";
-  const day = limaScheduledFor(row, c) ?? row.gf.requestDay ?? (retry ? null : cutoffDay);
+  const agreedOrProgrammed = limaScheduledFor(row, c);
+  const waitsForStore = row.stage === "en_curso" || Boolean(row.gf.pastBox);
+  const day = agreedOrProgrammed ?? (waitsForStore ? null : row.gf.requestDay ?? cutoffDay);
   return { orderId: row.orderId, day: day?.slice(0, 10) ?? null, box: row.gf.box, labeled: row.gf.labeled, armed: row.gf.armed, awaitingOffice: Boolean(row.gf.awaitingOffice) };
 }
 
