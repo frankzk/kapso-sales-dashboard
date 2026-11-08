@@ -694,9 +694,44 @@ se creó**.
   4. dice un monto «S/ …» —el que sigue a «pagaré», si no el primero— que
      difiere del total del pedido en **menos de S/ 1** (el redondeo de
      `lib/payment-rounding.ts`);
-  5. trae «Dirección:» con una dirección **completa** —calle, jirón, avenida,
-     pasaje, prolongación, carretera, o manzana y lote, y su número
-     (`direccionConNumero`, §11.13)— y la del pedido también lo es;
+  5. trae «Dirección:» con una dirección **completa** (`direccionCompleta`) y
+     la del pedido también lo es. Completa es cualquiera de estas, y nunca una
+     agencia (Shalom, también escrita «Shalon», Olva…):
+     - calle, jirón, avenida, pasaje, prolongación, carretera, o manzana y
+       lote, y su número (`direccionConNumero`, §11.13): la regla del
+       01-11-2026, sin cambios;
+     - **el nombre de la calle y su número aunque no diga «calle»** (owner,
+       08-11-2026): «antenor orrego 341», «Sucre 116A», «Jorge chavez #212»,
+       «Chile y Venezuela 154», «Fco de paula vigil 215diego ferre»,
+       «Pasajr los heroes 211». El número va justo después de una palabra que
+       puede ser un nombre (no «y», «con», «entre» ni un romano como «III»),
+       con hasta 5 cifras y una letra; un año suelto (1900–2099) no cuenta;
+     - **la urbanización, el AA.HH., la APV, la asociación o la calle con su
+       código corto de manzana y lote** (owner, 08-11-2026): una o dos letras
+       y su número, «Urb Quinta Tristán T 13», «Urb Canchis A- 11», «Juana
+       Blanco b6», «Viva el Perú ll 21», «Apvis Nuevo Horizonte A-20», «Ah
+       camino del solar BN 17», «Avenida Andres Avelino Caceres E13», y la
+       manzana pegada al lote («MZ alote11»). La «y», la «e», la «o» y la «u»
+       sueltas antes de un número son conjunciones, no una manzana.
+
+     En los dos casos nuevos **sigue incompleta**: un mercado o un puesto
+     («Mercado modelo Piura puesto número 12»); el cruce como dirección
+     («Entre Avenida … y Circunvalación», «intersección», «Cruce de …»;
+     «Sucre 116 entre Grau y Bolívar» sí vale); «s/n», «S N» o «sin número»
+     (salvo con manzana y lote); y un número que es de otra cosa: kilómetro
+     («Km 4.5», «Km50», «c.f.b.km 6.800»), puesto, puerta («Puerta número
+     16»), piso, interior, dpto, sector, comité, grupo, zona, paradero,
+     celular o teléfono fijo, año («del 2020»), fecha («9 de diciembre»),
+     etapa («III etapa») o cuadras («a 3 cuadras»). La calle sola («Calle
+     Cordova», «Tupac Amaru»), las señas sin número («Paradero penal de
+     bajada») y lo que no es una dirección («Whatsaap», «Juliaca Juliaca»)
+     también. **«Magisterial III y 501» queda para la asesora**: el número va
+     después de la «y», no de un nombre, y no se sabe si es la casa, el lote o
+     otra calle. Dar la dirección por completa no basta para la guía: sin
+     ubicación de WhatsApp, la coordenada sigue pidiendo el **edificio** en
+     Google (`ROOFTOP`, más abajo). Al decidirlo (08-11-2026), de los 103
+     pedidos que quedaron «direccion_incompleta» en 4 días, 42 habrían pasado
+     este punto con la dirección del pedido;
   6. esa dirección es **la del pedido**: toda la dirección del pedido está en el
      mensaje, el mensaje no dice nada más que eso, la referencia y los nombres
      del destino del pedido (departamento, provincia, distrito del Master), y
