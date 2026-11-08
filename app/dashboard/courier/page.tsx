@@ -65,7 +65,8 @@ async function CourierContent({ searchParams }: { searchParams: Promise<SP> }) {
     getPendingReturns({ storeIds }).catch(() => []),
     canReturnManifest ? listReturnManifestRiders(orgId).catch(() => []) : Promise.resolve([]),
   ]);
-  const today = limaDate(new Date().toISOString()) ?? new Date().toISOString().slice(0, 10);
-  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} ledger={ledger} pendingReturns={pendingReturns} returnManifestRiders={returnManifestRiders} />;
+  const nowIso = new Date().toISOString();
+  const today = limaDate(nowIso) ?? nowIso.slice(0, 10);
+  return <GrupoGfCourierBoard orgId={orgId} snapshot={snapshot} manifests={dispatch.manifests} today={today} nowIso={nowIso} ledger={ledger} pendingReturns={pendingReturns} returnManifestRiders={returnManifestRiders} />;
 }
 

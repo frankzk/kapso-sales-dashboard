@@ -4973,6 +4973,16 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
     y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
     reintento se aprueba desde mañana».
+  - **Elegir cuáles aprobar (pedido del owner, 06-11-2026).** Cada fila que ya
+    se puede aprobar lleva una casilla; las que fallaron hoy, no. Arriba hay
+    una casilla para elegir o quitar todas las listas: en la tabla, en la
+    cabecera; en el teléfono, sobre la lista. Con alguna marcada, el botón dice
+    **«Aprobar elegidos (N)»** y aprueba solo esas, por el mismo camino, con la
+    confirmación y el resumen. Al lado aparece «Quitar elección». Sin ninguna
+    marcada sigue siendo «Aprobar todos los listos (N)».
+  - Una marcada que dejó de estar lista, o que un filtro esconde, no se
+    aprueba (`retryApprovalTargets`, `lib/repro-lima-pending.ts`). Al terminar,
+    la elección se vacía. «Aprobar · ALIDRIVER» de cada fila no cambia.
 - **Entrega 3, la creación automática por variante (owner, 04-11-2026).** En
   vez de esperar dos semanas para encender todo junto, el owner enciende cada
   variante desde **Automatizaciones** (§40) cuando la ve segura. Una variante es
@@ -5392,6 +5402,12 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   lectura de Repro Lima (`loadLimaPending`, `limaScheduledFor`, `pendingGroup`);
   **Despacho del día de Grupo GF no cambia**, ni se escribe ningún programa.
   Prueba: `test/repro-lima-pending.test.ts`.
+- **«Sale a reparto» (07-11-2026, §29.16):** sobre las tarjetas de atención,
+  la misma tarjeta de Despacho del día, con nuestras tiendas. Dice lo que sale
+  con Grupo GF hoy o en el próximo reparto y lo que le falta (sin rótulo, sin
+  armar, sin caja, en caja con su motorizado). Cada pedido que sale lleva la
+  chapa con el día y el paso. Las cifras filtran la tabla; se asigna en Grupo GF
+  Courier.
 - **«Nunca salieron», del más antiguo al más reciente (decisión del owner,
   06-11-2026):** en Repro Lima ese apartado va al revés que en Grupo GF. Arriba
   queda lo que lleva más días esperando; un pedido sin fecha de creación va
@@ -16349,7 +16365,9 @@ lista (`sortQueue`):
    vencido»). Van primero: es la fecha que se le dio a la clienta.
 2. **Programados para mañana** (01-10-2026) — con salida programada para el
    día siguiente a hoy en Lima. Su tarjeta aparece junto a «Programados hoy»
-   y filtra esos pedidos; al llegar su fecha pasan a «Programados hoy».
+   y filtra esos pedidos; al llegar su fecha pasan a «Programados hoy». Solo
+   cuenta lo programado: todo lo que sale mañana, con lo que le falta, está en
+   «Sale a reparto» (§29.16).
 3. **Nunca salieron** — nunca salieron a reparto (§29.2) y se crearon en los
    últimos 30 días. Es el apartado a dejar en cero, como «Sin llamar» en Por
    confirmar; del más reciente al más antiguo. En Repro Lima va al revés
@@ -17638,6 +17656,158 @@ del comprador se anonimizan.** Aurela y Kenku no cambian.
 - Un webhook de privacidad con firma inválida responde 401 y no toca nada.
 - Un pedido de tienda cliente no aparece en los cruces por teléfono de los
   pedidos de Aurela o Kenku, ni al revés.
+
+### 29.16 «Sale a reparto»: lo que sale cada día y lo que le falta (07-11-2026)
+
+> ⚠️ **Por qué.** Pedido del owner en el pico del 06-11-2026: «¿cómo sabemos
+> exactamente qué pedidos de Lima tenemos que sacar a reparto mañana? La idea es
+> que todos los paquetes estén listos, ruteados y asignados antes de que lleguen
+> los motorizados».
+>
+> Medido en producción esa noche:
+> - «Programados para mañana» (Despacho del día y Repro Lima) contaba 3 o 4
+>   pedidos, porque solo mira el programa guardado. Lo que de verdad salía al día
+>   siguiente era unos 100 armados sin caja y unos 40 sin rótulo. Ninguno tenía
+>   fecha guardada: la cola la calcula al mirar con el corte de las 12:00.
+> - Ninguna caja del día siguiente existía. En 14 días, las cajas se crearon
+>   siempre la misma mañana, desde las 08:50.
+
+**Qué es.** Una tarjeta, «Sale a reparto», con dos días: hoy y el próximo día de
+reparto. Para ese día dice cuántos pedidos de Lima salen con Grupo GF y qué le
+falta a cada uno. Está en dos sitios:
+- **Grupo GF Courier → Despacho del día:** todas las tiendas que atiende Grupo
+  GF. Cuando otras tiendas manden pedidos (§29.15), solo aparecerán aquí.
+- **Repro Lima:** solo nuestras tiendas (§9.5).
+
+No inventa estados: el día y cada paso salen de lo que Kapta ya guarda. La
+lógica es una sola para las dos pantallas (`lib/dispatch-plan.ts`).
+
+- **El día de un pedido**, en este orden:
+  1. el de su caja de Grupo GF de **hoy o de un día que viene**
+     (`dispatch_manifests.route_date`, reparto, no anulada);
+  2. si no tiene esa caja, el acuerdo vigente de Repro Lima (el caso abierto con
+     su llamada de acuerdo y un día que no pasó) o su programa
+     (`gf_dispatch_programs`);
+  3. la solicitud que tomó Grupo GF (`logistics_requests.scheduled_for`);
+  4. sin nada de eso, el que da el corte del proveedor (`scheduledDay`, 12:00):
+     hoy hasta el corte y el día siguiente después. Ese día no se guarda; se
+     calcula al mirar, como en la cola.
+
+  Un día sin reparto (domingo) pasa al lunes (`deliveryDayOnOrAfter`).
+- **Una caja de un día que ya pasó no fija el día** (revisión del 07-11-2026).
+  Es el «No entregado» que el motorizado todavía tiene (#KP202485, programado
+  para el 09-11 y en la caja del 04-11) o una caja que nunca salió (#KP140302,
+  en un borrador del 19-10). Manda el acuerdo o el programa; sin ellos espera a
+  la tienda y no entra: ni la solicitud vieja ni el corte le dan día, en
+  ninguna de las dos pantallas. Despacho del día recibe ese programa del
+  servidor (`planProgramDay`) porque la cola deja `programmedFor` vacío para
+  todo lo que tiene caja. Si el motorizado se la llevó, la tarjeta y la chapa
+  dicen que hay que recibirla en oficina («por recibir en oficina») antes de ir
+  a una caja nueva.
+- **El primer día que se prepara** (`planOpenDay`) es hoy antes del corte; pasado
+  el corte, o el domingo, el próximo día de reparto. Los motorizados ya se
+  fueron.
+- **Sale el día D** si está en una caja de D, o si no tiene caja y D es el día en
+  que le toca: el suyo, o el primero que se prepara si el suyo ya pasó. Lo que
+  no salió antes sale en la próxima ruta que se prepara, no en una posterior:
+  antes del corte, lo de hoy y lo atrasado salen hoy y no cuentan en «Mañana».
+- **Atrasado** («N debían salir antes», y la chapa «debía salir vie 06/11») es lo
+  que no tiene caja y cuyo día es anterior al primer día que se prepara. Lo de
+  hoy no está atrasado antes del corte. Un domingo no es un día perdido: el
+  sábado después del corte, lo que no tiene programa (su corte cae domingo) sale
+  el lunes sin estar atrasado. Antes de esta regla, el lunes 09-11 marcaba como
+  atrasados unos 120 pedidos.
+- **El próximo día de reparto** es el siguiente; si cae domingo, el lunes.
+  Grupo GF reparte de lunes a sábado: en las 14 semanas hasta el 07-11-2026 hubo
+  cajas el domingo solo 3 veces, con 0 a 4 paquetes (`nextDeliveryDay`). Los
+  feriados no se saltan: no hay dato.
+- **Los pasos.** Cada pedido cuenta una vez, en lo primero que le falta. Son los
+  hechos del MOM: en Grupo GF «ruteado» y «asignado» son lo mismo, porque toda
+  caja tiene motorizado (§29.5).
+  1. **Sin rótulo:** no tiene salida con QR. Es «Por generar rótulo», o un
+     reintento que sale con salida nueva. Al tomarlo en Grupo GF nace su salida.
+  2. **Sin armar:** tiene rótulo, pero Almacén no la escaneó armada
+     (`listo_despacho`). Puede estar ya en la caja de un motorizado: la
+     asignación no espera el armado (§29.13), y la chapa del motorizado lo dice
+     («Jhon 32 · 2 sin armar»).
+  3. **Sin caja:** armado, pero no está en ninguna caja de ese día.
+  4. **En caja:** armado y en la caja de un motorizado de ese día. Debajo,
+     cuántos cotejó oficina y cuántos recibió el motorizado.
+- **Con qué se lee cada paso:**
+  - En Despacho del día, con las filas que la pantalla ya tiene
+    (`planCandidateFromQueue`):
+    - disponibles: el rótulo y el armado salen de la subetapa del Master. Un
+      reintento con salida nueva está «Sin rótulo». Una guía de Tanders o
+      Swayp en revisión no entra hasta que se toma: nadie confirmó todavía
+      dónde está el paquete (eran 6 de septiembre y octubre el 08-11-2026), y
+      Repro Lima tampoco la cuenta;
+    - tomados sin caja: del armado de su salida;
+    - en caja: del día de la caja, del motorizado y del cotejo.
+
+    Un «Por reprogramar Lima» sin acuerdo ni programa espera a la tienda
+    (§29.13) aunque Grupo GF lo haya tomado: no entra (eran 28 el 07-11-2026,
+    con su solicitud vieja todavía `scheduled`). La única lectura nueva es el
+    acuerdo vigente de Repro Lima de cada fila (`loadReproAgreements`): uno con
+    otro courier (#KP202484 con Aliclik para el 16-11) no sale con Grupo GF, y
+    uno con Grupo GF sale ese día. Sin esa lectura, se usa el programa o el
+    corte.
+  - En Repro Lima, el servidor lee por pedido (`loadGfPlanFacts`):
+    - sus salidas, para ver si tiene QR y si está armada;
+    - la solicitud de Grupo GF, del proveedor de la organización de cada tienda;
+    - su caja de Grupo GF de hoy o de un día que viene.
+
+    Entran Preparación, Por despachar, todo «Por reprogramar Lima» y lo En
+    curso que está en una caja de hoy o de un día que viene: al recibir su
+    caja, el motorizado deja el pedido En curso · En reparto, y sin esto «Hoy»
+    perdía todo lo recogido. Un «Por reprogramar Lima» toma el día solo de su
+    acuerdo o su programa: un acuerdo con Grupo GF que todavía no es programa
+    también cuenta (#KP140108, acordado para el 09-11 con la caja del 10-10 aún
+    con el motorizado). Lo ya entregado pasa a Por cerrar y deja la lista de
+    Repro Lima; en Despacho del día sigue en su caja. Un reintento sin acuerdo
+    espera a la tienda (§29.13) y no toma el día del corte. Un pedido con una
+    salida viva de otro courier (Aliclik, Swayp…), o con un acuerdo con otro
+    courier, no es de Grupo GF. Las salidas se miran como en la cola de Grupo GF
+    (`outputsBlockingRetry`): la guía que ya falló (la de Tanders que vuelve
+    sigue `en_ruta`) y la salida devuelta no cuentan. Lo que Grupo GF todavía
+    no tomó y no está en una caja vigente entra solo si la cola de Despacho del
+    día lo admitiría: el convenio de la tienda, un distrito con tarifa y sin
+    pausa (`gfDistrictBlock`, la misma regla de la cola) y una salida «por
+    definir» que Grupo GF rellene. Lo demás está en «Sin condiciones» de Grupo
+    GF y no sale con Grupo GF: el 08-11-2026 eran 13 pedidos, 8 de ellos en
+    distritos en pausa (Santa Rosa, Ancón, Santa María del Mar, Punta Hermosa).
+- **Un pedido, una vez:** si la misma orden llega en dos filas (la caja y la
+  cola), cuenta la de la caja.
+- **Al abrir:** en el primer día que se prepara: hoy antes del corte, y después
+  el próximo día de reparto. El domingo no se ofrece «Hoy». El corte se decide
+  con la hora del servidor (`nowIso`), no con el reloj del teléfono: la página se
+  pinta primero en el servidor.
+- **Tocar una cifra** deja la lista con lo que sale ese día en ese paso. En
+  Despacho del día la píldora «Sale · sáb 07/11 · Sin caja» lo dice y se quita
+  con su «x»; tocar otra tarjeta de la cola también la quita. Ese filtro lista
+  también lo que ya está en una caja de ese día, sin casilla.
+- **«Armar las cajas del sáb 07/11»** (Despacho del día, con permiso de
+  despacho):
+  - pone el «Día de la caja» en ese día y deja la lista con lo que sale. Tocar
+    una cifra o cambiar de día con la lista del plan abierta también lo mueve:
+    lo que la lista dice que sale el sábado se asigna a la caja del sábado;
+  - lo que se asigna desde ahí entra en la caja de ese día, con el flujo de
+    siempre (§29.13): el mismo límite de efectivo y la misma confirmación de un
+    programa de otro día;
+  - cotejar la víspera hace que el motorizado vea «Recibir mi caja» enseguida.
+- **En Repro Lima:**
+  - la misma tarjeta y, en cada pedido que sale, la chapa con el día y lo que le
+    falta: «Sale sáb 07/11 · sin caja», «… · en caja · caja de Jhon», «… ·
+    recibido · caja de Jhon», «… · por recibir en oficina» o «… · debía salir
+    vie 06/11»;
+  - las cifras filtran la tabla, y «Abrir Despacho del día» lleva a asignar.
+  - No asigna: se asigna en Grupo GF Courier.
+- **Los textos van en singular con uno:** «Falta 1 sin caja», «1 debía salir
+  antes», «1 cotejado en oficina · 1 recibido por el motorizado».
+- **Solo lee:** no escribe programas, solicitudes ni cajas. Sin migración.
+  `MOM_RESOLUTION_VERSION` no cambia.
+- **El 07-11-2026 a las 11:53** (sábado), para el lunes 09-11 salían 124
+  pedidos de Lima de nuestras tiendas: 35 sin rótulo, 3 sin armar, 86 sin caja y
+  0 en caja.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 

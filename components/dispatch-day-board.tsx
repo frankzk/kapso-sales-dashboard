@@ -49,6 +49,7 @@ import {
   limaDay,
   locateOutsideList,
   PACKAGE_STAGE_LABEL,
+  planCandidateFromQueue,
   packageStage,
   programDayLabel,
   programNeedsConfirm,
@@ -86,7 +87,9 @@ import { daysBetween, failedOutputLabel, ownOutputLabel, replacedOutputLabel } f
 import { confirmedTandersReview, type TandersConfirmations, type TandersPackageLocation, type TandersReview } from "@/lib/gf-tanders-review";
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
-import { sameDayCutoffLabel, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { limaClock, sameDayCutoffLabel, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
+import { nextDeliveryDay, PLAN_STEP_LABEL, planItems, planOpenDay, planSummary, type PlanCandidate, type PlanStep } from "@/lib/dispatch-plan";
+import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
 import {
   assignGroupGfCourierRoute,
   moveManifestItem,
@@ -131,6 +134,12 @@ interface Props {
   riderPickupMode: RiderPickupMode;
   /** Corte del mismo día del proveedor («HH:MM», MOM §29.6). */
   sameDayCutoff?: string | null;
+  /**
+   * La hora del servidor al pintar (ISO). «Sale a reparto» decide con ella si
+   * ya pasó el corte: el reloj del navegador puede ir distinto y la página se
+   * pinta primero en el servidor.
+   */
+  nowIso?: string;
   /** Umbrales de efectivo de la ruta (MOM §29.9): aviso y límite. */
   cashWarning: number;
   cashLimit: number;
@@ -349,6 +358,7 @@ export function DispatchDayBoard(props: Props) {
         assignable: true,
         route: null,
         reproLimaChip: o.reproLimaChip ?? null,
+        reproAgreement: o.reproAgreement ?? null,
       }));
     const takenIds = new Set(taken.map((t) => t.orderId));
     const free: QueueRow[] = props.available
@@ -380,6 +390,7 @@ export function DispatchDayBoard(props: Props) {
         tandersReview: o.tandersReview ?? null,
         ownOutput: o.ownOutput ?? null,
         reproLimaChip: o.reproLimaChip ?? null,
+        reproAgreement: o.reproAgreement ?? null,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
@@ -420,6 +431,9 @@ export function DispatchDayBoard(props: Props) {
         outputCode: o.outputCode,
       },
       reproLimaChip: o.reproLimaChip ?? null,
+      reproAgreement: o.reproAgreement ?? null,
+      // El servidor manda el programa solo si la caja es de un día que pasó.
+      planProgramDay: o.planProgramDay ?? null,
     })), [props.accepted]);
   // Lo que Grupo GF no entregó con su propia salida y sigue en una caja
   // anterior, sin solicitud (06-10-2026): se recibe en oficina como los demás
@@ -458,6 +472,8 @@ export function DispatchDayBoard(props: Props) {
     },
     ownOutput: o.ownOutput ?? null,
     reproLimaChip: o.reproLimaChip ?? null,
+    reproAgreement: o.reproAgreement ?? null,
+    planProgramDay: o.programmedFor,
   })), [props.returnable]);
   const allRows = useMemo(() => [...queue, ...tracked, ...ownInBox], [queue, tracked, ownInBox]);
 
@@ -465,15 +481,21 @@ export function DispatchDayBoard(props: Props) {
   const districts = useMemo(() => [...new Set(queue.map((q) => q.district))].sort((a, b) => a.localeCompare(b, "es")), [queue]);
   // Filtrada y en el orden de los apartados: programados hoy, mañana, nunca salieron,
   // ya salieron, +30 días y programados después.
-  const filtered = useMemo(() => sortQueue(filterQueue(allRows, filters, day), day), [allRows, filters, day]);
+  // El primer día que todavía se prepara («Sale a reparto», §29.16), con la hora
+  // del servidor (`nowIso`). La lista del plan lo toma de aquí, no del momento
+  // en que se tocó la cifra: un refresco que cruza el corte lo mueve en las dos.
+  const afterCutoff = limaClock(props.nowIso ? new Date(props.nowIso) : new Date()).minute > sameDayCutoffMinute(props.sameDayCutoff);
+  const openDay = planOpenDay(day, afterCutoff);
+  const listFilters = useMemo<QueueFilters>(() => (filters.plan && filters.plan.openDay !== openDay ? { ...filters, plan: { ...filters.plan, openDay } } : filters), [filters, openDay]);
+  const filtered = useMemo(() => sortQueue(filterQueue(allRows, listFilters, day), day), [allRows, listFilters, day]);
   // La búsqueda no encontró nada aquí: ¿dónde está ese pedido? (24-10-2026,
   // #KP141876 en «Sin condiciones» por Ancón). Solo con la lista vacía y con
   // lo que el tablero ya tiene; `locateOutsideList` decide el texto y el botón.
   const located = useMemo(
     () => filtered.length || !filters.query.trim()
       ? { found: [] as QueueLocation[], more: 0 }
-      : locateOutsideList(filters, { rows: allRows, blocked: props.blocked, returning: props.returning, pendingReturns: props.pendingReturns }, day, { canEditTariffs: props.canAuthorizeCash === true }),
-    [filtered.length, filters, allRows, props.blocked, props.returning, props.pendingReturns, day, props.canAuthorizeCash],
+      : locateOutsideList(listFilters, { rows: allRows, blocked: props.blocked, returning: props.returning, pendingReturns: props.pendingReturns }, day, { canEditTariffs: props.canAuthorizeCash === true }),
+    [filtered.length, filters, listFilters, allRows, props.blocked, props.returning, props.pendingReturns, day, props.canAuthorizeCash],
   );
   /** El botón del aviso: el mismo gesto que la tarjeta, la píldora o la hoja de siempre. */
   function goToLocation(action: LocateAction, orderId: string) {
@@ -509,8 +531,45 @@ export function DispatchDayBoard(props: Props) {
   // Chips de etapa, subetapa y fecha pactada con su cantidad facetada (cuántas
   // quedarían al tocarlo con el resto de filtros como están). Las subetapas
   // son las de la etapa elegida; sin etapa no se muestran.
+  // «Sale a reparto» (§29.16): lo que sale hoy o en el próximo reparto y lo que
+  // le falta. Se abre en el primer día que todavía se prepara: hoy antes del
+  // corte; después, o en domingo, el próximo reparto. El corte se decide con la
+  // hora del servidor (`nowIso`): con el reloj del navegador la página podía
+  // pintar un día en el servidor y otro en el teléfono.
+  const nextRouteDay = nextDeliveryDay(day);
+  const planOptions = planDayOptions(day, nextRouteDay);
+  const [chosenPlanDay, setPlanDay] = useState(openDay);
+  // Si el día cambió con la página abierta, el elegido puede ya no estar.
+  const planDay = planOptions.some((o) => o.day === chosenPlanDay) ? chosenPlanDay : openDay;
+  const plan = useMemo(() => {
+    const candidates = allRows.map((q) => planCandidateFromQueue(q, day)).filter((c): c is PlanCandidate => c !== null);
+    return planSummary(planItems(candidates, planDay, openDay));
+  }, [allRows, planDay, openDay, day]);
+  const planStepActive: PlanStep | null = method === "lista" && filters.plan?.day === planDay ? filters.plan.step : null;
+  // La lista del plan y «Día de la caja» van juntos: asignar desde la lista de
+  // lo que sale el sábado tiene que ir a la caja del sábado (revisión, 07-11-2026).
+  /** Tocar una cifra: la lista con lo que sale ese día en ese paso (o lo quita). */
+  const tapPlanStep = (step: PlanStep) => {
+    const off = planStepActive === step;
+    if (!off) setScanDay(planDay);
+    setFilters((cur) => ({ ...cur, plan: off ? null : { day: planDay, openDay, step }, segment: null, stages: [], substages: [] }));
+    setLimit(100);
+    setMethod("lista");
+  };
+  /** Preparar el día: la caja en ese día y la lista con lo que sale, sin caja primero. */
+  const preparePlanDay = () => {
+    setScanDay(planDay);
+    setFilters((cur) => ({ ...cur, plan: { day: planDay, openDay, step: null }, segment: null, stages: [], substages: [] }));
+    setLimit(100);
+    setMethod("lista");
+  };
+  const choosePlanDay = (next: string) => {
+    setPlanDay(next);
+    if (filters.plan) setScanDay(next);
+    setFilters((cur) => (cur.plan ? { ...cur, plan: { ...cur.plan, day: next, openDay } } : cur));
+  };
   const substageOptions = useMemo(() => queueSubstageOptions(allRows, filters.stages), [allRows, filters.stages]);
-  const facets = useMemo(() => queueFacetCounts(allRows, filters, day), [allRows, filters, day]);
+  const facets = useMemo(() => queueFacetCounts(allRows, listFilters, day), [allRows, listFilters, day]);
   const tracking = filters.stages.length > 0;
   const activeFilters = activeFilterCount(filters);
   const visible = filtered.slice(0, limit);
@@ -694,7 +753,8 @@ export function DispatchDayBoard(props: Props) {
   const cards = useMemo(() => queueFacetCounts(allRows, { ...filters, stages: [], substages: [] }, day), [allRows, filters, day]);
   /** Tocar una tarjeta: abre «Desde la lista» en ese apartado (o lo quita). */
   const tapSegment = (segment: QueueSegment) => {
-    setFilters((cur) => ({ ...cur, segment: cur.segment === segment && method === "lista" ? null : segment, stages: [], substages: [] }));
+    // Un apartado es de la cola de siempre: quita «Sale a reparto».
+    setFilters((cur) => ({ ...cur, segment: cur.segment === segment && method === "lista" ? null : segment, stages: [], substages: [], plan: null }));
     setLimit(100);
     setMethod("lista");
   };
@@ -761,11 +821,26 @@ export function DispatchDayBoard(props: Props) {
         </div>
       </div>
 
+      <DispatchPlanPanel
+        planDay={planDay}
+        options={planOptions}
+        onPlanDay={choosePlanDay}
+        summary={plan}
+        activeStep={planStepActive}
+        onStep={tapPlanStep}
+        scopeNote="Todas las tiendas que atiende Grupo GF."
+        actions={canManageDispatch && plan.total > 0 ? (
+          <OpsButton size="sm" variant={planDay === day ? "secondary" : "primary"} onClick={preparePlanDay} className="pointer-coarse:h-11">
+            {planDay === day ? "Ver lo de hoy en la lista" : `Armar las cajas del ${programDayLabel(planDay)}`}
+          </OpsButton>
+        ) : undefined}
+      />
+
       {/* Apartados de la cola como tarjetas de estado: cada una es un filtro con
           su cantidad y la elegida lleva el borde azul. «Nunca salieron» es el
           apartado a dejar en cero, como «Sin llamar» en Por confirmar. */}
       <div role="group" aria-label="Apartados de la cola" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-7 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
-        <StatusCard label="Por asignar" value={QUEUE_SEGMENTS.reduce((sum, segment) => sum + cards.segment[segment], 0)} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null} onClick={() => tapQueueTile("por_asignar")} />
+        <StatusCard label="Por asignar" value={QUEUE_SEGMENTS.reduce((sum, segment) => sum + cards.segment[segment], 0)} hint={QUEUE_TILE_LABEL.por_asignar.hint} active={method === "lista" && !tracking && filters.segment === null && !filters.plan} onClick={() => tapQueueTile("por_asignar")} />
         {QUEUE_SEGMENTS.map((segment) => (
           <StatusCard key={segment} label={QUEUE_SEGMENT_LABEL[segment].label} value={cards.segment[segment]} hint={QUEUE_SEGMENT_LABEL[segment].hint} active={method === "lista" && filters.segment === segment} onClick={() => tapSegment(segment)} />
         ))}
@@ -997,11 +1072,20 @@ export function DispatchDayBoard(props: Props) {
               <FilterPill ref={pillRef.creado} label="Creado" value={pillValue.creado} expanded={openPill === "creado"} onClick={() => togglePill("creado")} onClear={() => patchFilters({ created: "todo" })} />
               <FilterPill label="Armados" count={queueTiles.armados} active={filters.armedOnly} title={QUEUE_TILE_LABEL.armados.hint} onClick={() => patchFilters({ armedOnly: !filters.armedOnly })} onClear={() => patchFilters({ armedOnly: false })} />
               <FilterPill label="Tomados sin caja" count={queueTiles.tomados_sin_caja} active={filters.takenOnly} title={QUEUE_TILE_LABEL.tomados_sin_caja.hint} onClick={() => patchFilters({ takenOnly: !filters.takenOnly })} onClear={() => patchFilters({ takenOnly: false })} />
+              {filters.plan && (
+                <FilterPill
+                  label="Sale"
+                  value={`${programDayLabel(filters.plan.day)}${filters.plan.step ? ` · ${PLAN_STEP_LABEL[filters.plan.step].label}` : ""}`}
+                  title="Solo lo que sale a reparto ese día (incluye lo que ya está en una caja de ese día)"
+                  onClick={() => document.getElementById("plan-title")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                  onClear={() => patchFilters({ plan: null })}
+                />
+              )}
               {activeFilters > 0 && (
                 <OpsButton variant="ghost" size="sm" onClick={() => patchFilters({ ...EMPTY_QUEUE_FILTERS, query: filters.query, segment: filters.segment })}>Quitar filtros</OpsButton>
               )}
               <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto">
-                <b className="font-semibold text-ink-900">{(filtered.length - returnableCount).toLocaleString("es-PE")}</b> {tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "por asignar"}
+                <b className="font-semibold text-ink-900">{(filtered.length - returnableCount).toLocaleString("es-PE")}</b> {filters.plan ? `${filtered.length - returnableCount === 1 ? "sale" : "salen"} el ${programDayLabel(filters.plan.day)}` : tracking ? "pedidos en esa etapa" : filters.segment ? QUEUE_SEGMENT_LABEL[filters.segment].label.toLocaleLowerCase("es") : "por asignar"}
                 {returnableCount > 0 && <> · <b className="font-semibold text-ink-900">{returnableCount.toLocaleString("es-PE")}</b> por recibir en oficina</>}
               </p>
             </div>

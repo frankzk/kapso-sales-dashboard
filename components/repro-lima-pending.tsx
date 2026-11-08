@@ -2,8 +2,9 @@
 
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { cn } from "@/components/ui";
 import { approveAliclikRetry, dismissAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { Badge, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
+import { Badge, CHECKBOX, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
 import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-panel";
 import type { ReproRow } from "@/lib/repro-lima-access";
@@ -11,6 +12,7 @@ import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 import { reproCourierName } from "@/lib/repro-lima";
 import { programDayLabel } from "@/lib/dispatch-day";
+import { PLAN_STEP_LABEL, type PlanItem } from "@/lib/dispatch-plan";
 import { soles, telHref } from "@/lib/rider-contact";
 
 export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
@@ -68,10 +70,24 @@ function PendingContext({ row, repro, today }: { row: LimaPendingOrder; repro?: 
   return <><p className="font-medium text-ink-700">{group.label}</p><p className="mt-1 text-xs text-ink-500">{group.detail}</p></>;
 }
 
-function PendingStage({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
+/**
+ * «Sale a reparto» (§29.16): el día que sale con Grupo GF y lo que le falta,
+ * dicho con palabras: «Sale sáb 07/11 · En caja de Jhon», «… · Sin armar».
+ */
+function PlanBadge({ item, planDay }: { item: PlanItem; planDay: string }) {
+  const done = item.step === "en_caja";
+  const where = item.riderName ? ` · caja de ${item.riderName}` : "";
+  const status = done ? (item.pickedUp ? "recibido" : item.officeChecked ? "cotejado" : "en caja") : PLAN_STEP_LABEL[item.step].label.toLowerCase();
+  const office = item.awaitingOffice ? " · por recibir en oficina" : "";
+  const late = item.overdueSince ? ` · debía salir ${programDayLabel(item.overdueSince)}` : "";
+  return <Badge tone={done ? "ok" : "warn"} wrap title={PLAN_STEP_LABEL[item.step].hint}>{`Sale ${programDayLabel(planDay)} · ${status}${where}${office}${late}`}</Badge>;
+}
+
+function PendingStage({ row, repro, today, plan, planDay }: { row: LimaPendingOrder; repro?: ReproRow; today: string; plan?: PlanItem; planDay?: string }) {
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>
+      {plan && planDay && <div><PlanBadge item={plan} planDay={planDay} /></div>}
       {repro?.retryChain && <RetryChainNote orderId={row.orderId} chain={repro.retryChain} />}
       {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
       {!repro && row.programmedFor && <Badge tone={row.programmedFor < today ? "warn" : "info"} wrap>{`Programado ${programDayLabel(row.programmedFor)}${row.programmedFor < today ? " · vencido" : ""}`}</Badge>}
@@ -172,42 +188,100 @@ function PendingAddress({ row }: { row: LimaPendingOrder }) {
   );
 }
 
+/**
+ * Elegir qué reintentos de Aliclik aprobar (owner, 06-11-2026): una casilla en
+ * cada fila que se puede aprobar y, arriba, la de todas las listas.
+ */
+export interface LimaRowSelection {
+  selectable: (row: LimaPendingOrder) => boolean;
+  selected: ReadonlySet<string>;
+  onToggle: (orderId: string) => void;
+  onToggleAll: (orderIds: string[], on: boolean) => void;
+}
+
+function SelectBox({ row, selection }: { row: LimaPendingOrder; selection: LimaRowSelection }) {
+  if (!selection.selectable(row)) return null;
+  return (
+    <input
+      type="checkbox"
+      className={cn(CHECKBOX, "pointer-coarse:size-5")}
+      checked={selection.selected.has(row.orderId)}
+      onChange={() => selection.onToggle(row.orderId)}
+      aria-label={`Elegir ${row.orderName} para aprobar`}
+    />
+  );
+}
+
 /** Atender siempre abre la gestión. El código abre la ficha del pedido. */
-export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText }: {
+export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText, selection, plan, planDay }: {
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
   renderActions: (row: LimaPendingOrder, compact: boolean) => ReactNode;
   emptyText?: string;
+  selection?: LimaRowSelection;
+  /** «Sale a reparto»: lo que sale ese día y lo que le falta, por pedido. */
+  plan?: ReadonlyMap<string, PlanItem>;
+  planDay?: string;
 }) {
   const [limit, setLimit] = useState(100);
   const cases = new Map(reproRows.map((r) => [r.orderId, r]));
   const visible = rows.slice(0, limit);
   const action = (row: LimaPendingOrder, compact: boolean) => renderActions(row, compact);
+  const selectableIds = selection ? rows.filter((row) => selection.selectable(row)).map((row) => row.orderId) : [];
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selection!.selected.has(id));
+  const someSelected = !allSelected && selectableIds.some((id) => selection!.selected.has(id));
   if (!rows.length) return <div className="border-t border-line px-4 py-12 text-center text-sm text-ink-500">{emptyText ?? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda."}</div>;
   return (
     <>
       <div className="hidden border-t border-line xl:block">
         <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
-          <colgroup><col className="w-[10.5rem]" /><col /><col /><col /><col className="w-[8.5rem]" /><col className="w-[10rem]" /></colgroup>
-          <thead><tr className="text-left text-xs font-semibold text-ink-600"><th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Gestión pendiente</th><th className="px-3 py-2.5">Estado y subetapa</th><th className="px-3 py-2.5 text-right">Venta</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
+          <colgroup>{selection && <col className="w-10" />}<col className="w-[10.5rem]" /><col /><col /><col /><col className="w-[8.5rem]" /><col className="w-[10rem]" /></colgroup>
+          <thead><tr className="text-left text-xs font-semibold text-ink-600">{selection && (
+            <th className="py-2.5 pl-4 pr-0">
+              {selectableIds.length > 0 && (
+                <input
+                  type="checkbox"
+                  className={CHECKBOX}
+                  checked={allSelected}
+                  ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                  onChange={() => selection.onToggleAll(selectableIds, !allSelected)}
+                  aria-label={allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos para aprobar`}
+                  title={allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos`}
+                />
+              )}
+            </th>
+          )}<th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Gestión pendiente</th><th className="px-3 py-2.5">Estado y subetapa</th><th className="px-3 py-2.5 text-right">Venta</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
           <tbody>{visible.map((row) => {
             const repro = cases.get(row.orderId);
-            return <tr key={row.orderId} className="border-b border-line align-top hover:bg-wash">
+            return <tr key={row.orderId} className={cn("border-b border-line align-top hover:bg-wash", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
+              {selection && <td className="py-3 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
               <td className="px-4 py-3"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
               <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PendingAddress row={row} /></td>
               <td className="px-3 py-3"><PendingContext row={row} repro={repro} today={today} /></td>
-              <td className="px-3 py-3"><PendingStage row={row} repro={repro} today={today} /></td>
+              <td className="px-3 py-3"><PendingStage row={row} repro={repro} today={today} plan={plan?.get(row.orderId)} planDay={planDay} /></td>
               <td className="px-3 py-3 text-right"><p className="font-semibold tabular-nums text-ink-900">{soles(row.orderTotal)}</p>{row.courier && <p className="text-xs text-ink-500">{reproCourierName(row.courier)}</p>}</td>
               <td className="px-4 py-3"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
             </tr>;
           })}</tbody>
         </table>
       </div>
+      {selection && selectableIds.length > 0 && (
+        <label className="flex min-h-11 items-center gap-2 border-t border-line px-4 text-[13px] font-medium text-ink-700 xl:hidden">
+          <input
+            type="checkbox"
+            className={cn(CHECKBOX, "pointer-coarse:size-5")}
+            checked={allSelected}
+            ref={(el) => { if (el) el.indeterminate = someSelected; }}
+            onChange={() => selection.onToggleAll(selectableIds, !allSelected)}
+          />
+          {allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos`}
+        </label>
+      )}
       <ul className="divide-y divide-line border-t border-line xl:hidden">{visible.map((row) => {
         const repro = cases.get(row.orderId);
         return <li key={row.orderId} className="space-y-2 px-4 py-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2"><OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><span className="text-xs text-ink-500">{row.storeName}</span></div>
+          <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span><span className="text-xs text-ink-500">{row.storeName}</span></div>
           <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {soles(row.orderTotal)}</p><PendingAddress row={row} />
-          <PendingContext row={row} repro={repro} today={today} /><PendingStage row={row} repro={repro} today={today} />
+          <PendingContext row={row} repro={repro} today={today} /><PendingStage row={row} repro={repro} today={today} plan={plan?.get(row.orderId)} planDay={planDay} />
           {repro && <ClaimBadge row={repro} />}
           <div className="flex flex-wrap gap-2 [&>*]:grow"><CallButton phone={row.customerPhone} size="md" />{action(row, false)}</div>
         </li>;

@@ -997,6 +997,39 @@ export function reproCajaNuevaChip(day: string): string {
 }
 
 /**
+ * «Sale a reparto» (§29.16): el acuerdo vigente de Repro Lima de cada pedido
+ * (el caso abierto con su llamada de acuerdo), con su courier y su día. Con
+ * otro courier el pedido no sale con Grupo GF; con Grupo GF sale ese día. Es
+ * lo mismo que Repro Lima lee para su propia tarjeta (`agreement` del caso).
+ * Un caso abierto por pedido (`lima_repro_cases_open_uniq`, 0251). Nunca lanza: sin lectura,
+ * el plan usa el programa o el corte.
+ */
+export async function loadReproAgreements(admin: Admin, orderIds: readonly string[]): Promise<Map<string, { day: string; courier: string }>> {
+  const out = new Map<string, { day: string; courier: string }>();
+  try {
+    const ids = [...new Set(orderIds.filter(Boolean))];
+    if (!ids.length) return out;
+    type AgreementCase = Pick<ReproCaseRow, "order_id" | "opened_at" | "agreed_on" | "agreed_courier" | "agreement_call_id">;
+    const { data } = await courierRowsByIds(ids, (chunk) => admin
+      .from("lima_repro_cases")
+      .select("order_id,opened_at,agreed_on,agreed_courier,agreement_call_id")
+      .in("order_id", chunk)
+      .is("closed_at", null)
+      .not("agreed_on", "is", null));
+    const latest = new Map<string, AgreementCase>();
+    for (const row of (data ?? []) as AgreementCase[]) {
+      if (!row?.order_id || !row.agreed_on || !row.agreement_call_id) continue;
+      const seen = latest.get(row.order_id);
+      if (!seen || (row.opened_at ?? "") > (seen.opened_at ?? "")) latest.set(row.order_id, row);
+    }
+    for (const [orderId, row] of latest) out.set(orderId, { day: row.agreed_on!.slice(0, 10), courier: row.agreed_courier ?? "" });
+  } catch (error) {
+    console.error("repro-lima: acuerdos para «Sale a reparto»", error instanceof Error ? error.message : error);
+  }
+  return out;
+}
+
+/**
  * Lo que la cola de Despacho del día necesita saber de Repro Lima, en una
  * lectura por los pedidos que se le pasan:
  * - `noLoQuiere`: el último caso es «Desarmar y cerrar» del episodio vigente

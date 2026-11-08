@@ -476,6 +476,59 @@ subir más que las fichas de Lima abiertas.
 **Marcha atrás.** Revertir el commit: vuelve la hoja aparte. No escribe nada
 nuevo en la base; los casos, llamadas y candados son los mismos.
 
+### 07-11-2026 · «Sale a reparto»: lo que sale hoy o en el próximo reparto y lo que le falta (sin migración, MOM §29.16)
+
+Pedido del owner. Una tarjeta con dos días, hoy y el próximo día de reparto
+(el domingo se salta), dice cuántos pedidos de Lima salen con Grupo GF. Los
+reparte por lo primero que les falta: sin rótulo, sin armar, sin caja, en caja
+con su motorizado. Está en Despacho del día, con todas las tiendas de Grupo GF y
+el botón «Armar las cajas del …», y en Repro Lima, con nuestras tiendas y la
+chapa en cada pedido.
+
+Una revisión adversarial corrigió, antes de fusionar, lo que el cálculo
+inventaba. Lo del domingo ya no está atrasado el lunes. Antes del corte, lo de
+hoy no cuenta en «Mañana». Una caja de un día que pasó no fija el día, y lo
+acordado en Repro Lima con Aliclik no sale con Grupo GF. Un reintento tomado
+sin acuerdo no entra. Lo recogido por el motorizado sigue en el «Hoy» de Repro
+Lima. Y la lista del plan mueve el «Día de la caja» con ella.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+Despacho del día suma una lectura por carga: los casos abiertos con acuerdo de
+Repro Lima de las filas de la cola (`lima_repro_cases`, por pedido). Repro Lima
+suma, solo para los candidatos:
+- el proveedor de la organización de sus tiendas;
+- las salidas;
+- las solicitudes de Grupo GF;
+- los ítems activos de caja y sus cajas;
+- las cajas de Grupo GF de hoy en adelante, con sus ítems y salidas, para lo En
+  curso ya recogido.
+
+**Qué mirar después.** Pasadas las 12:00, Despacho del día abre «Sale a
+reparto» en mañana (o en el lunes, si es sábado); el domingo solo ofrece el
+lunes. Las cifras suman el total y «Armar las cajas del …» deja el «Día de la
+caja» en ese día. Desde la lista del plan, «Asignar» va a la caja de ese día.
+El sábado por la tarde, «debían salir antes» no debe contar lo que no tiene
+programa. En Repro Lima, la misma cuenta, limitada a nuestras tiendas; en «Hoy»
+siguen los pedidos que el motorizado ya recogió.
+
+**Marcha atrás.** Revertir el commit. Solo lee.
+
+### 06-11-2026 · Repro Lima: elegir qué reintentos de Aliclik aprobar (sin migración, MOM §9.5)
+
+Pedido del owner. En «Reintentos Aliclik», cada fila lista tiene una casilla, y
+arriba hay otra para elegirlas o quitarlas todas: en la cabecera de la tabla y,
+en el teléfono, sobre la lista. Con alguna marcada, el botón es «Aprobar
+elegidos (N)» y aprueba solo esas; sin marcar, sigue «Aprobar todos los listos».
+Solo cambia la interfaz: aprueba con la misma acción de siempre
+(`approveAliclikRetry`, una por una).
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+
+**Qué mirar después.** Repro Lima → «Reintentos Aliclik»: marcar dos → «Aprobar
+elegidos (2)» → la confirmación dice 2 → se crean 2 guías.
+
+**Marcha atrás.** Revertir el commit.
+
 ### 06-11-2026 · La base sin CPU por `lead_routing_scope`: menos llamadas y sin recorrer tablas enteras (0312, sin cambio de reglas)
 
 El 06-11-2026 ~20:00 UTC la base quedó «Unhealthy»: las páginas cargaban y los

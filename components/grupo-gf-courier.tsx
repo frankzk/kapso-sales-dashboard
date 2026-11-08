@@ -64,6 +64,7 @@ export function GrupoGfCourierBoard({
   snapshot,
   manifests = [],
   today = "",
+  nowIso,
   ledger = [],
   pendingReturns = [],
   returnManifestRiders = [],
@@ -74,6 +75,8 @@ export function GrupoGfCourierBoard({
   manifests?: DispatchManifest[];
   /** Hoy en Lima. */
   today?: string;
+  /** La hora del servidor al pintar: «Sale a reparto» decide el corte con ella. */
+  nowIso?: string;
   /** Rutas y cajas para la pestaña Rutas (MOM §29.14). */
   ledger?: CourierLedgerRow[];
   /** «No entregado» que siguen en una caja: habilitan «Recibir devoluciones». */
@@ -189,6 +192,7 @@ export function GrupoGfCourierBoard({
         <DispatchDayBoard
           orgId={orgId}
           day={today}
+          nowIso={nowIso}
           available={snapshot.operations.available}
           returnable={snapshot.operations.returnable}
           returning={snapshot.operations.returning}

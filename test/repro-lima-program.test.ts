@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emptyReproReception,
+  loadReproAgreements,
   loadReproFacts,
   loadReproQueueFlags,
   materializeAgreement,
@@ -575,6 +576,22 @@ describe("las chapas de la cola de Despacho del día (E28)", () => {
     const flags = await loadReproQueueFlags(admin, ["o2", "o3", "o4"], new Map());
     expect([...flags.cajaNueva.keys()]).toEqual(["o4"]);
     expect(flags.noLoQuiere.size).toBe(0);
+  });
+
+  it("«Sale a reparto» (§29.16): el acuerdo vigente de cada pedido, con su courier y su día", async () => {
+    const cases = [
+      agreement({ id: "c1", order_id: "o1", agreed_on: "2026-10-16", agreed_courier: "aliclik" }),
+      agreement({ id: "c2", order_id: "o2", agreed_on: "2026-10-14T00:00:00Z", agreed_courier: "propio" }),
+      // Cerrado, o sin la llamada del acuerdo: no hay acuerdo vigente.
+      agreement({ id: "c3", order_id: "o3", agreed_on: "2026-10-14", closed_at: "2026-10-13T10:00:00Z", close_reason: "fuera_de_etapa" }),
+      agreement({ id: "c4", order_id: "o4", agreed_on: "2026-10-14", agreement_call_id: null }),
+    ];
+    const { admin } = fakeDb(seed({ cases }));
+    const got = await loadReproAgreements(admin, ["o1", "o2", "o3", "o4"]);
+    expect(Object.fromEntries(got)).toEqual({ o1: { day: "2026-10-16", courier: "aliclik" }, o2: { day: "2026-10-14", courier: "propio" } });
+    // Sin lectura no hay acuerdos: el plan usa el programa o el corte, nunca lanza.
+    const failing = fakeDb(seed({ cases }), { failRead: "lima_repro_cases" });
+    expect((await loadReproAgreements(failing.admin, ["o1"])).size).toBe(0);
   });
 
   it("F2: recibir la caja (o corregir el reporte) después del cierre no esconde «no lo quiere»", async () => {

@@ -11,18 +11,20 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
+import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip, opsButtonClass } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { DateRangePill, FacetPill } from "@/components/facet-pill";
 import { IconCheck, IconSearch, IconX } from "@/components/icons";
 import { useOpenOrderDrawer } from "@/components/order-link";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
 import { cutoffNotice } from "@/lib/repro-lima";
-import { limaClock } from "@/lib/grupo-gf-courier";
-import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
+import { limaClock, sameDayCutoffMinute, scheduledDay } from "@/lib/grupo-gf-courier";
+import { nextDeliveryDay, PLAN_STEPS, planItems, planOpenDay, planSummary, type PlanCandidate, type PlanItem, type PlanStep } from "@/lib/dispatch-plan";
+import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
+import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, readRowFilters, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
+import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, limaPlanCandidate, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
 
@@ -68,8 +70,32 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   }, [pendingStore, rowFilters, activeRowFilters]);
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
   const counts = useMemo(() => attentionCounts(scoped, data.rows, today), [scoped, data.rows, today]);
-  const inQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
+  const attentionQueue = useMemo(() => attentionRows(scoped, data.rows, list, today), [scoped, data.rows, list, today]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
+  // «Sale a reparto» (§29.16): lo de nuestras tiendas que sale con Grupo GF hoy
+  // o en el próximo reparto, y lo que le falta. El mismo cálculo que Despacho
+  // del día. Se abre en el primer día que todavía se prepara (hoy antes del
+  // corte; después, o en domingo, el próximo reparto), con la hora del servidor.
+  const nextRouteDay = nextDeliveryDay(today);
+  const openDay = planOpenDay(today, limaClock(now).minute > sameDayCutoffMinute(data.cutoffLabel));
+  const planOptions = planDayOptions(today, nextRouteDay);
+  const [chosenPlanDay, setPlanDay] = useState(openDay);
+  // Si el día cambió con la página abierta, el elegido puede ya no estar.
+  const planDay = planOptions.some((o) => o.day === chosenPlanDay) ? chosenPlanDay : openDay;
+  const [planFilter, setPlanFilter] = useState<{ step: PlanStep | null } | null>(null);
+  const cutoffDay = scheduledDay(data.cutoffLabel, now);
+  const planByOrder = useMemo(() => {
+    const candidates = scoped.map((row) => limaPlanCandidate(row, caseById.get(row.orderId), cutoffDay)).filter((c): c is PlanCandidate => c !== null);
+    return new Map<string, PlanItem>(planItems(candidates, planDay, openDay).map((item) => [item.orderId, item]));
+  }, [scoped, caseById, cutoffDay, planDay, openDay]);
+  const plan = useMemo(() => planSummary([...planByOrder.values()]), [planByOrder]);
+  const inQueue = useMemo(() => {
+    if (!planFilter) return attentionQueue;
+    const order = new Map(PLAN_STEPS.map((step, i) => [step, i]));
+    return scoped
+      .filter((row) => { const item = planByOrder.get(row.orderId); return item && (!planFilter.step || item.step === planFilter.step); })
+      .sort((a, b) => order.get(planByOrder.get(a.orderId)!.step)! - order.get(planByOrder.get(b.orderId)!.step)! || (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0));
+  }, [planFilter, attentionQueue, scoped, planByOrder]);
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
 
   function replaceParams(params: URLSearchParams) {
@@ -92,6 +118,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   }
 
   function chooseList(next: LimaAttentionFilter) {
+    setPlanFilter(null);
     const params = new URLSearchParams(searchParams.toString());
     if (next === "todos") params.delete("atencion");
     else params.set("atencion", next);
@@ -170,10 +197,28 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   const readyToApprove = list === "reintentos_aliclik"
     ? inQueue.filter((row) => caseById.get(row.orderId)?.retryChain?.ready)
     : [];
+  // Elegir cuáles aprobar (owner, 06-11-2026): con alguno marcado, el botón
+  // aprueba esos; sin marcar, todos los listos, como antes.
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const targets = retryApprovalTargets(readyToApprove, picked);
+  const selection: LimaRowSelection | undefined = list === "reintentos_aliclik" ? {
+    selectable: (row) => Boolean(caseById.get(row.orderId)?.retryChain?.ready),
+    selected: picked,
+    onToggle: (orderId) => setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(orderId)) next.delete(orderId); else next.add(orderId);
+      return next;
+    }),
+    onToggleAll: (orderIds, on) => setPicked((current) => {
+      const next = new Set(current);
+      for (const id of orderIds) { if (on) next.add(id); else next.delete(id); }
+      return next;
+    }),
+  } : undefined;
   async function approveAll() {
-    const rows = readyToApprove;
+    const rows = targets.rows;
     if (!rows.length || bulk) return;
-    if (!window.confirm(`Se crearán ${rows.length} guías de Aliclik. ¿Seguir?`)) return;
+    if (!window.confirm(`Se crearán ${rows.length} ${rows.length === 1 ? "guía" : "guías"} de Aliclik${targets.picked ? " (las elegidas)" : ""}. ¿Seguir?`)) return;
     const failed: string[] = [];
     let created = 0;
     setBulk({ done: 0, total: rows.length });
@@ -188,6 +233,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
       setBulk({ done: i + 1, total: rows.length });
     }
     setBulk(null);
+    setPicked(new Set());
     setFeedback({
       kind: failed.length ? "error" : "notice",
       text: `Guías creadas: ${created} de ${rows.length}.`,
@@ -224,6 +270,32 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
           <StatusCard key={card.key} label={card.label} value={counts[card.key]} hint={card.hint} active={list === card.key} onClick={() => chooseList(list === card.key ? "todos" : card.key)} />
         ))}
       </div>
+
+      {!retriesOnly && (
+        <DispatchPlanPanel
+          planDay={planDay}
+          options={planOptions}
+          onPlanDay={setPlanDay}
+          summary={plan}
+          activeStep={planFilter?.step ?? null}
+          onStep={(step) => {
+            const off = planFilter?.step === step;
+            if (!off && list !== "todos") chooseList("todos");
+            setPlanFilter(off ? null : { step });
+          }}
+          scopeNote="Nuestras tiendas, con Grupo GF; se asigna en Grupo GF Courier."
+          actions={(
+            <>
+              {plan.total > 0 && (
+                <OpsButton size="sm" onClick={() => { if (list !== "todos") chooseList("todos"); setPlanFilter(planFilter && !planFilter.step ? null : { step: null }); }} className="pointer-coarse:h-11">
+                  {planFilter && !planFilter.step ? "Volver a la lista" : "Ver la lista"}
+                </OpsButton>
+              )}
+              <a href="/dashboard/courier" className={opsButtonClass("ghost", "sm", "pointer-coarse:h-11")}>Abrir Despacho del día</a>
+            </>
+          )}
+        />
+      )}
 
       <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
 
@@ -262,9 +334,19 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             ))}
           </div>
           {list === "reintentos_aliclik" && (
-            <OpsButton size="sm" variant="primary" disabled={!readyToApprove.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
-              {bulk ? `Creando ${bulk.done} de ${bulk.total}…` : `Aprobar todos los listos (${readyToApprove.length})`}
-            </OpsButton>
+            <>
+              <OpsButton size="sm" variant="primary" disabled={!targets.rows.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
+                {bulk
+                  ? `Creando ${bulk.done} de ${bulk.total}…`
+                  : targets.picked ? `Aprobar elegidos (${targets.rows.length})` : `Aprobar todos los listos (${readyToApprove.length})`}
+              </OpsButton>
+              {targets.picked && !bulk && (
+                <OpsButton size="sm" variant="ghost" onClick={() => setPicked(new Set())} className="pointer-coarse:h-11">Quitar elección</OpsButton>
+              )}
+              {!targets.picked && readyToApprove.length > 0 && !bulk && (
+                <span className="text-[13px] text-ink-500">Marca las casillas para aprobar solo algunos.</span>
+              )}
+            </>
           )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">
             <b className="font-semibold text-ink-900">{inQueue.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega
@@ -282,7 +364,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             </div>
           </Sheet>
         )}
-        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={emptyText} />
+        <LimaPendingList key={`${list}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`} rows={inQueue} reproRows={data.rows} today={today} renderActions={rowActions} emptyText={planFilter ? "Nada de eso sale ese día con estos filtros." : emptyText} selection={planFilter ? undefined : selection} plan={planByOrder} planDay={planDay} />
       </section>
 
     </div>
