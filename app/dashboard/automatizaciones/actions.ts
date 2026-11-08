@@ -42,6 +42,7 @@ import { APPROX_MODE_LABEL, isApproxMode } from "@/lib/geocode-approx";
 import {
   CHATBY_APPROX_KEY,
   CHATBY_ASK_KEY,
+  CHATBY_HISTORY_KEY,
   PREPAY_MODE_EVENT,
   RETRY_CAP_EVENT,
   RETRY_GEOCODE_EVENT,
@@ -496,4 +497,42 @@ export async function setChatbyAskMode(orgId: string, mode: string): Promise<Aut
   });
   revalidatePath(PANEL_PATH);
   return { notice: warn ?? `Pedir sola la dirección o la ubicación: ${APPROX_MODE_LABEL[mode]}.` };
+}
+
+// ── «Guía automática para clientas con entregas» (0317, MOM §6.1 y §40) ──
+
+/**
+ * Apagado / Simulación / Activo de la guía de Chatby con el GPS de una entrega
+ * anterior de la clienta (lib/history-guide-auto.ts). Solo escribe
+ * `chatby_auto_settings.history_guide_mode` de una fila que ya existe. Activo
+ * pide la confirmación en la página (crea guías y confirma pedidos).
+ */
+export async function setChatbyHistoryMode(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isApproxMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  // `*`: sin la 0317 la columna no viene y se dice, en vez de fallar al escribir.
+  const { data: current, error: readError } = await g.admin.from("chatby_auto_settings").select("*").eq("org_id", orgId).maybeSingle();
+  if (readError) return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  const row = current as { history_guide_mode?: string } | null;
+  if (!row) return { error: "La confirmación por Chatby no está configurada en tu organización." };
+  if (!("history_guide_mode" in row)) return { error: "Falta la migración 0317 en la base de datos." };
+  const previous = isApproxMode(row.history_guide_mode) ? row.history_guide_mode : "apagado";
+  if (previous === mode) return { notice: "Ya estaba así." };
+  const { data: updated, error } = await g.admin
+    .from("chatby_auto_settings")
+    .update({ history_guide_mode: mode, updated_by: g.actor, updated_at: new Date().toISOString() })
+    .eq("org_id", orgId)
+    .select("org_id");
+  if (error || !updated?.length) return { error: "No se pudo guardar. Intenta de nuevo." };
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: CHATBY_HISTORY_KEY,
+    previous,
+    next: mode,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  return { notice: warn ?? `Guía automática para clientas con entregas: ${APPROX_MODE_LABEL[mode]}.` };
 }

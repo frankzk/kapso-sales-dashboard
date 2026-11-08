@@ -96,7 +96,8 @@ export type AutomationControl =
   /**
    * Apagado / Simulación / Activo de una columna de texto de la organización
    * (0316). No es un interruptor: no entra en la lista blanca de `on/off` y
-   * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`), que
+   * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`,
+   * `setChatbyHistoryMode`), que
    * solo escribe esta columna con uno de los tres valores.
    */
   | { kind: "org_mode"; table: OrgAutomationTable; column: string; requires?: never }
@@ -126,6 +127,8 @@ export interface AutomationEntry {
 export const CHATBY_APPROX_KEY = "chatby_auto_approx";
 /** «Pedir sola la dirección o la ubicación» (0318): su clave en el catálogo y en el historial. */
 export const CHATBY_ASK_KEY = "chatby_auto_ask";
+/** «Guía automática para clientas con entregas» (0317): su clave en el catálogo y en el historial. */
+export const CHATBY_HISTORY_KEY = "chatby_auto_history";
 
 const STORE_SETTINGS = (section: string, label = "Ajustes de la tienda"): AutomationLink => ({ kind: "store_settings", section, label });
 
@@ -219,6 +222,18 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     effect: "Envía WhatsApp",
     scope: "org",
     control: { kind: "org_mode", table: "chatby_auto_settings", column: "ask_mode" },
+  },
+  {
+    key: CHATBY_HISTORY_KEY,
+    group: "confirmacion",
+    name: "Guía automática para clientas con entregas",
+    // 0317, owner 08-11-2026. La regla está en lib/history-guide-auto.ts; va
+    // antes de «Pedir sola la dirección o la ubicación».
+    what:
+      "Si la clienta confirmó por Chatby y la guía no sale por la dirección, pero ya recibió en esa misma dirección sin ningún fallido, crea la guía con el GPS de esa entrega y confirma, sin escribirle. En Simulación solo dice con qué entrega la habría creado.",
+    effect: "Crea guías",
+    scope: "org",
+    control: { kind: "org_mode", table: "chatby_auto_settings", column: "history_guide_mode" },
   },
 
   // ── Llamadas de voz ────────────────────────────────────────────────────

@@ -1,5 +1,55 @@
 # Deployment runbook
 
+### 08-11-2026 · Confirmación por Chatby: guía automática para clientas con entregas (0317, MOM §6.1 y §40)
+
+**Migración 0317** (`db/migrations/0317_history_guide_auto.sql`, aditiva): una
+columna, `chatby_auto_settings.history_guide_mode` (`apagado` / `simulacion` /
+`activo`, nace `apagado`, con su `check`). Nada más: lo que decide la regla va
+en `chatby_auto_checks.evidence.history_guide` y la guía deja el hecho
+`chatby_history_guide`. Se puede desplegar **antes** de aplicarla: sin la
+columna la pasada lo trata como Apagado y el panel muestra la fila bloqueada
+(«Aún no está instalada en la base de datos»). **No se aplica sola**:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0317_history_guide_auto.sql
+```
+
+Es un `alter table` chico sobre una tabla de una fila por organización. Sin
+crons ni variables nuevas: corre en `/api/cron/chatby-autoconfirm`.
+
+El caso: la clienta confirmó por Chatby y la guía no sale por la dirección
+(`direccion_incompleta`, o `sin_ubicacion` porque Google no la ubica y no mandó
+su ubicación), pero ya recibió en esa misma casa. Con el interruptor en Activo:
+
+- **Califica** si, por el celular y en toda la organización, tiene al menos un
+  entregado y ningún fallido (devuelto, anulado después de salir, un intento
+  «No entregado» aunque luego se entregara, un rechazo en la puerta u otro
+  pedido que salió y no llegó), el adelanto del §8 no la frena, y la dirección
+  es la de un entregado del mismo distrito y provincia cuya guía tiene GPS
+  (`geo_source = courier`; para Aliclik es el punto que Kapta le mandó y con el
+  que se entregó, no el GPS del motorizado).
+- **La guía va con ese GPS** por el camino de la ubicación de WhatsApp, con
+  todas las rejas y el tope de 20 por día, y confirma con la guía creada.
+- **Va antes de la pedida automática de 0318**: a la clienta que califica no se
+  le escribe. Lo que no califica sigue exactamente como hoy.
+- **Queda escrito**: el hecho «Guía con el GPS de una entrega anterior» con el
+  pedido del GPS, el motivo de `guide_registered`, la nota del lead («…
+  automáticamente (confirmó por Chatby · GPS de la entrega de #KP140751)») y
+  la nota de la confirmación.
+
+**Después de desplegar** (y de aplicar la 0317): Automatizaciones →
+Confirmación → «Guía automática para clientas con entregas». Nace en
+**Apagado**; el owner la quiere en Activo («directo en vivo») y se pone a mano.
+Simulación sirve para ver antes cuántas habría creado (`historySimulated` en el
+resumen del cron y `evidence.history_guide.outcome = habria_usado` en
+`chatby_auto_checks`).
+
+Medido el 08-11-2026 (solo lectura, 72 h): de 148 marcas por
+`direccion_incompleta` / `sin_ubicacion(_cerrado)`, **una** habría calificado:
+#AUR900480, con el GPS de #KP201632. #KP204102, el caso que lo motivó, **no**
+entra: no tiene conversación en Chatby (`sin_conversacion`) y la regla solo
+mira lo que la clienta confirmó.
+
 ### 08-11-2026 · Rastreo de Shalom: la fila va por cuándo se preguntó, la guía que Shalom no reconoce se ve y Cotejar Shalom reemplaza la guía muerta (0321 o sin migración, MOM §12)
 
 **Migración 0321** (`db/migrations/0321_shalom_checked_at.sql`, aditiva): tres
