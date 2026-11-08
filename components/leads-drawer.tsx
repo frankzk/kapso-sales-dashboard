@@ -1271,8 +1271,9 @@ export function LeadDrawer({
                 ofreciendo crear una guía que ya existe. */}
             {history && (lead.has_order || history.currentOrderName || history.currentOrderId) && (
               <LeadPostOrderChoices
-                key={lead.id}
+                key={JSON.stringify([lead.id, lead.order_id])}
                 leadId={lead.id}
+                expectedOrderId={lead.order_id}
                 history={history}
                 onChanged={() => onRegistered()}
               />

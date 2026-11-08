@@ -21,7 +21,7 @@
 // Aliclik: la vendedora sigue viendo la conversación de WhatsApp —de ahí salen
 // la ubicación, el DNI y el comprobante—.
 
-import { useCallback, useEffect, useId, useState, useTransition } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { PickupKeyPanel } from "@/components/pickup-key-panel";
@@ -38,10 +38,13 @@ import type { CustomerHistory } from "@/lib/leads-access";
 
 export function LeadPostOrderChoices({
   leadId,
+  expectedOrderId,
   history,
   onChanged,
 }: {
   leadId: string;
+  /** Pedido actual del lead: una respuesta anterior nunca puede volver a ofrecerlo. */
+  expectedOrderId: string | null;
   /**
    * El historial del lead: trae el panel de Aliclik tal como lo pinta hoy (su
    * `currentOrderId` llega en null sin `aliclik.create_guide`) y, al cambiar,
@@ -51,43 +54,57 @@ export function LeadPostOrderChoices({
   /** Lo que una acción cambió toca el lead y su historial: el cajón los recarga. */
   onChanged: () => void;
 }) {
-  const [choices, setChoices] = useState<Choices | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const targetOrderId = expectedOrderId ?? history.currentOrderId;
+  const target = JSON.stringify([leadId, targetOrderId]);
+  const [read, setRead] = useState<{
+    target: string; choices: Choices | null; error: string | null; loaded: boolean; pending: boolean; orderMismatch?: boolean;
+  } | null>(null);
+  // La identidad se comprueba DURANTE el render, antes del próximo efecto.
+  // Así no queda un panel del pedido anterior mientras llega el nuevo.
+  const current = read?.target === target ? read : null;
+  const historyOrderMismatch = Boolean(expectedOrderId && history.currentOrderId && expectedOrderId !== history.currentOrderId);
+  const choices = historyOrderMismatch ? null : (current?.choices ?? null);
+  const error = current?.error ?? (historyOrderMismatch && current?.loaded ? "Los datos del pedido se están actualizando. Vuelve a cargar la ficha para continuar." : null);
+  const loaded = current?.loaded ?? false;
+  const pending = current?.pending ?? true;
   const [tick, setTick] = useState(0);
-  // Lo que eligió la asesora, atado al pedido: «Generar nuevo pedido» empieza
-  // otra vez por la opción de ese pedido.
   const [picked, setPicked] = useState<{ orderId: string; key: LeadPostOrderChoiceKey | null } | null>(null);
-  const [swaypOpen, setSwaypOpen] = useState(false);
-  const [pending, startTransition] = useTransition();
+  const [swaypOpenFor, setSwaypOpenFor] = useState<string | null>(null);
   const headingId = useId();
   const source = useId();
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
 
   useEffect(() => {
     let alive = true;
-    startTransition(async () => {
-      try {
-        const res = await loadLeadPostOrderChoices(leadId);
-        if (!alive) return;
-        if ("error" in res) setError(res.error);
-        else {
-          setChoices(res.choices);
-          setError(null);
-        }
-      } catch {
-        if (alive) setError("No se pudieron cargar las opciones de envío. Revisa la conexión y vuelve a intentarlo.");
-      } finally {
-        if (alive) setLoaded(true);
+    setRead(previous => ({
+      target, choices: previous?.target === target ? previous.choices : null,
+      error: null, loaded: false, pending: true,
+    }));
+    // Lectura normal: el estado de carga y el resultado comparten un único
+    // contenedor. Una transición no debe conservar otro árbol de esqueletos.
+    void loadLeadPostOrderChoices(leadId).then(res => {
+      if (!alive) return;
+      if ("error" in res) {
+        setRead(previous => ({ target, choices: previous?.target === target ? previous.choices : null, error: res.error, loaded: true, pending: false }));
+      } else if (targetOrderId && res.choices && res.choices.orderId !== targetOrderId) {
+        setRead({ target, choices: null, error: "El pedido cambió. Actualizando la ficha…", loaded: true, pending: false, orderMismatch: true });
+        onChangedRef.current();
+      } else {
+        setRead({ target, choices: res.choices, error: null, loaded: true, pending: false });
       }
+    }).catch(() => {
+      if (alive) setRead(previous => ({ target, choices: previous?.target === target ? previous.choices : null, error: "No se pudieron cargar las opciones de envío. Revisa la conexión y vuelve a intentarlo.", loaded: true, pending: false }));
     });
-    return () => {
-      alive = false;
-    };
-    // `history` cambia cuando el cajón recarga lo del lead: un pedido nuevo o
-    // una guía creada cambian lo que se ofrece.
-  }, [leadId, history, tick]);
+    return () => { alive = false; };
+    // El historial cambia tras generar otro pedido, crear una guía o registrar
+    // un pago. El cleanup descarta respuestas anteriores, incluso del mismo lead.
+  }, [leadId, targetOrderId, target, history, tick]);
 
-  const reload = useCallback(() => setTick((n) => n + 1), []);
+  const reload = useCallback(() => {
+    setTick((n) => n + 1);
+    if (historyOrderMismatch) onChangedRef.current();
+  }, [historyOrderMismatch]);
   const changed = useCallback(() => {
     reload();
     onChanged();
@@ -101,128 +118,102 @@ export function LeadPostOrderChoices({
   // Sin pedido propio no hay nada que elegir.
   if (loaded && !error && !choices) return null;
 
-  // FALLÓ LA CARGA: se dice, con reintento, y Aliclik se queda como estaba
-  // antes de esta tarjeta para que la venta no se frene por una lectura.
-  if (error && !choices) {
-    return (
-      <>
-        <section aria-labelledby={headingId} className={SECTION_CARD}>
-          <SectionHead id={headingId} title="Cómo sale el pedido" />
-          <div className="mt-4 space-y-3">
-            <Banner tone="crit" role="alert">
-              {error}
-            </Banner>
-            <OpsButton size="sm" onClick={reload} disabled={pending} className="pointer-coarse:h-11">
-              Intentar nuevamente
-            </OpsButton>
-          </div>
-        </section>
-        <AliclikContent history={history} guide={history.currentOrderGuide} onCreated={changed} />
-      </>
-    );
-  }
-
-  if (!choices) {
-    return (
-      <section aria-labelledby={headingId} aria-busy="true" className={SECTION_CARD}>
-        <SectionHead id={headingId} title="Cómo sale el pedido" />
-        <div className="mt-4 grid gap-2 sm:grid-cols-3">
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
-        </div>
-      </section>
-    );
-  }
-
   const active: LeadPostOrderChoiceKey | null =
-    picked && picked.orderId === choices.orderId ? picked.key : defaultLeadPostOrderChoice(choices);
+    choices ? (picked && picked.orderId === choices.orderId ? picked.key : defaultLeadPostOrderChoice(choices)) : null;
   const choose = (key: LeadPostOrderChoiceKey) =>
-    setPicked({ orderId: choices.orderId, key: active === key ? null : key });
+    choices && setPicked({ orderId: choices.orderId, key: active === key ? null : key });
 
-  const { aliclik, swayp, agencia } = choices;
+  const { aliclik, swayp, agencia } = choices ?? { aliclik: null, swayp: null, agencia: null };
   const why = (reason: string | null) => <span className="text-warn-fg">{reason}</span>;
 
   return (
     <>
-      <section aria-labelledby={headingId} className={SECTION_CARD}>
+      <section aria-labelledby={headingId} aria-busy={pending} className={SECTION_CARD}>
         <SectionHead
           id={headingId}
           title="Cómo sale el pedido"
-          badge={choices.orderName ? <Badge>{choices.orderName}</Badge> : undefined}
-          help="Elige por dónde sale y, si la clienta manda adelanto, regístralo aquí. Son las mismas acciones de la ficha del pedido."
+          badge={choices?.orderName ? <Badge>{choices.orderName}</Badge> : undefined}
+          help={choices ? "Elige por dónde sale y, si la clienta manda adelanto, regístralo aquí. Son las mismas acciones de la ficha del pedido." : undefined}
         />
         {error && (
           <Banner tone="crit" role="alert" className="mt-4">
-            {error}
+            <p>{error}</p>
+            <OpsButton size="sm" onClick={reload} disabled={pending} className="mt-3 pointer-coarse:h-11">Intentar nuevamente</OpsButton>
           </Banner>
         )}
+        {!choices && pending && <div role="status" className="mt-4 grid gap-2 sm:grid-cols-3">
+          <span className="sr-only">Cargando opciones de envío…</span>
+          <Skeleton className="h-16" /><Skeleton className="h-16" /><Skeleton className="h-16" />
+        </div>}
         {/* Una columna en el teléfono; tres desde 640 px. */}
-        <div className="mt-4 grid gap-2 sm:grid-cols-3">
-          <OptionTile
-            label="Guía Aliclik"
-            active={active === "aliclik"}
-            disabled={!aliclik.offered && !aliclik.guide}
-            badge={aliclik.guide ? <Badge tone="ok">Creada</Badge> : undefined}
-            description={
-              aliclik.guide ? (
-                <span className="break-all font-mono">{aliclik.guide}</span>
-              ) : aliclik.offered ? (
-                "Contra entrega por Aliclik: cotiza y crea la guía."
-              ) : (
-                why(aliclik.reason)
-              )
-            }
-            onClick={() => choose("aliclik")}
-          />
-          <OptionTile
-            label="Swayp hoy"
-            active={active === "swayp"}
-            disabled={!swayp.offered && !swayp.guides.length}
-            badge={
-              swayp.guides.length ? (
-                <Badge tone="ok">Programado</Badge>
-              ) : swayp.offered ? (
-                <Badge>Sin confirmar</Badge>
-              ) : undefined
-            }
-            description={
-              swayp.guides.length ? (
-                <span className="break-all font-mono">{swayp.guides.join(", ")}</span>
-              ) : swayp.offered ? (
-                "Sale sin confirmar; si no lo entrega, vuelve a Por confirmar."
-              ) : (
-                why(swayp.reason)
-              )
-            }
-            onClick={() => choose("swayp")}
-          />
-          <OptionTile
-            label="Agencia Shalom + adelanto"
-            active={active === "agencia"}
-            disabled={!agencia.offered}
-            badge={
-              agencia.payment ? (
-                <Badge tone="info" wrap>
-                  {agencia.payment}
-                </Badge>
-              ) : agencia.shalom ? (
-                <Badge tone="ok">Agencia guardada</Badge>
-              ) : undefined
-            }
-            description={
-              agencia.offered
-                ? (agencia.shalom ?? "DNI, agencia de destino y el comprobante del adelanto.")
-                : why(agencia.reason)
-            }
-            onClick={() => choose("agencia")}
-          />
-        </div>
+        {choices && aliclik && swayp && agencia && (
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <OptionTile
+              label="Guía Aliclik"
+              active={active === "aliclik"}
+              disabled={!aliclik.offered && !aliclik.guide}
+              badge={aliclik.guide ? <Badge tone="ok">Creada</Badge> : undefined}
+              description={
+                aliclik.guide ? (
+                  <span className="break-all font-mono">{aliclik.guide}</span>
+                ) : aliclik.offered ? (
+                  "Contra entrega por Aliclik: cotiza y crea la guía."
+                ) : (
+                  why(aliclik.reason)
+                )
+              }
+              onClick={() => choose("aliclik")}
+            />
+            <OptionTile
+              label="Swayp hoy"
+              active={active === "swayp"}
+              disabled={!swayp.offered && !swayp.guides.length}
+              badge={
+                swayp.guides.length ? (
+                  <Badge tone="ok">Programado</Badge>
+                ) : swayp.offered ? (
+                  <Badge>Sin confirmar</Badge>
+                ) : undefined
+              }
+              description={
+                swayp.guides.length ? (
+                  <span className="break-all font-mono">{swayp.guides.join(", ")}</span>
+                ) : swayp.offered ? (
+                  "Sale sin confirmar; si no lo entrega, vuelve a Por confirmar."
+                ) : (
+                  why(swayp.reason)
+                )
+              }
+              onClick={() => choose("swayp")}
+            />
+            <OptionTile
+              label="Agencia Shalom + adelanto"
+              active={active === "agencia"}
+              disabled={!agencia.offered}
+              badge={
+                agencia.payment ? (
+                  <Badge tone="info" wrap>
+                    {agencia.payment}
+                  </Badge>
+                ) : agencia.shalom ? (
+                  <Badge tone="ok">Agencia guardada</Badge>
+                ) : undefined
+              }
+              description={
+                agencia.offered
+                  ? (agencia.shalom ?? "DNI, agencia de destino y el comprobante del adelanto.")
+                  : why(agencia.reason)
+              }
+              onClick={() => choose("agencia")}
+            />
+          </div>
+        )}
       </section>
 
-      {active === "aliclik" && <AliclikContent history={history} guide={aliclik.guide} onCreated={changed} />}
+      {choices && aliclik && active === "aliclik" && <AliclikContent history={history} orderId={choices.orderId} orderName={choices.orderName} guide={aliclik.guide} onCreated={changed} />}
+      {error && !choices && !historyOrderMismatch && !current?.orderMismatch && targetOrderId && history.currentOrderId === targetOrderId && <AliclikContent history={history} orderId={targetOrderId} orderName={history.currentOrderName} guide={history.currentOrderGuide} onCreated={changed} />}
 
-      {active === "swayp" && (
+      {choices && swayp && active === "swayp" && (
         <section aria-label="Swayp hoy" className={SECTION_CARD}>
           <SectionHead
             title="Swayp hoy"
@@ -236,12 +227,12 @@ export function LeadPostOrderChoices({
               </p>
             </Banner>
           ) : (
-            <EnviarPorSwaypDesdeConfirmacion className="mt-4" pending={pending} onOpen={() => setSwaypOpen(true)} />
+            <EnviarPorSwaypDesdeConfirmacion className="mt-4" pending={pending} onOpen={() => setSwaypOpenFor(choices.orderId)} />
           )}
         </section>
       )}
 
-      {active === "agencia" && agencia.offered && (
+      {choices && agencia && active === "agencia" && agencia.offered && (
         <div className={SECTION_CARD}>
           <PickupKeyPanel
             key={choices.orderId}
@@ -254,11 +245,11 @@ export function LeadPostOrderChoices({
         </div>
       )}
 
-      {swaypOpen && (
+      {choices && swaypOpenFor === choices.orderId && (
         <DirectFenixGuideModal
           initialOrderId={choices.orderId}
           origen="por_confirmar"
-          onClose={() => setSwaypOpen(false)}
+          onClose={() => setSwaypOpenFor(null)}
           onCreated={() => {
             setPicked({ orderId: choices.orderId, key: "swayp" });
             changed();
@@ -276,10 +267,14 @@ export function LeadPostOrderChoices({
  */
 function AliclikContent({
   history,
+  orderId,
+  orderName,
   guide,
   onCreated,
 }: {
   history: CustomerHistory;
+  orderId: string;
+  orderName: string | null;
   guide: string | null;
   onCreated: () => void;
 }) {
@@ -291,15 +286,15 @@ function AliclikContent({
           <Badge tone="ok">Creada</Badge>
         </div>
         <p className="mt-2 break-all font-mono text-sm font-semibold text-ink-900">{guide}</p>
-        {history.currentOrderName && (
-          <p className="mt-0.5 text-[13px] text-ink-500">Pedido {history.currentOrderName}</p>
+        {orderName && (
+          <p className="mt-0.5 text-[13px] text-ink-500">Pedido {orderName}</p>
         )}
       </section>
     );
   }
   // `currentOrderId` llega en null sin `aliclik.create_guide` (lo cierra el
   // servidor): sin él, no hay panel.
-  if (!history.currentOrderId || history.currentOrderGuide) return null;
+  if (history.currentOrderId !== orderId || history.currentOrderGuide) return null;
   return (
     // El panel trae su contenido sin marco (en la ficha lo enmarca la tarjeta
     // de su sección); aquí lleva su propia tarjeta.
@@ -310,8 +305,8 @@ function AliclikContent({
         // instancia: cambia `orderId` pero se queda dentro la cotización del
         // pedido ANTERIOR. Crear entonces mandaría a Aliclik el courier y el
         // precio de un pedido y el id de otro.
-        key={history.currentOrderId}
-        orderId={history.currentOrderId}
+        key={orderId}
+        orderId={orderId}
         hasCoordinate={history.currentOrderHasCoordinate}
         health={history.currentOrderAliclikHealth}
         onCreated={onCreated}
