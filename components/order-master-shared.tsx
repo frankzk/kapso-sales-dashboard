@@ -678,6 +678,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   // MOM §25, «Chatby» (02-11-2026): lo que una persona le escribió a la clienta
   // desde la ficha. La nota es el texto; el autor, quien lo mandó.
   chatby_message: "Mensaje por WhatsApp (Chatby)",
+  // El que mandó el agente de IA por el conector (MOM §42.9).
+  agent_whatsapp: "WhatsApp del agente de IA",
   additional_output_reason: "Motivo de la salida adicional",
   recovery_discarded: "Recuperación de provincia descartada",
   confirmation_cancellation_task_created: "Tarea de anulación creada",

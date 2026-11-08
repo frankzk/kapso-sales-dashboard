@@ -182,7 +182,7 @@ describe("la salida adicional de Lima: el motivo solo para una persona o el rein
     expect(guide).toContain("readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);");
     expect(guide).toContain("const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);");
     expect(guide).toContain("manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),");
-    expect(guide).toContain('kind: "envio_programado" | "confirmado_chatby" | "reintento_lima";');
+    expect(guide).toContain('kind: "envio_programado" | "confirmado_chatby" | "reintento_lima" | "agente_ia";');
     // Una sola copia de las compuertas: la creación llama a la misma función
     // que la simulación, antes de la cotización final, el candado y el POST.
     const create = guide.slice(guide.indexOf("export async function createAliclikGuideFor"));

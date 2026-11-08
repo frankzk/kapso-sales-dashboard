@@ -360,4 +360,7 @@ echo "  ✅ reservada dentro de las 2 h (borde inclusivo) y con mensajes anterio
 echo "▶ Fila del rastreo de Shalom (0321): sello de cuándo se preguntó, racha de not_found, sellos que no mueven updated_at e índice de la fila"
 $PSQL -f "$ROOT/scripts/sql/shalom_checked_at_smoke.sql"
 echo "  ✅ nacen sin sello y con la racha en cero, que no baja de cero; los sellos del rastreo no mueven updated_at (last_report_at y un cambio real sí); la nunca preguntada va primero"
+echo "▶ Lo que el agente de IA puede hacer (0323): interruptores en Simulación con topes, acciones y estados cerrados, código de un solo uso como sha256 y solo el servidor"
+$PSQL -f "$ROOT/scripts/sql/agent_actions_smoke.sql"
+echo "  ✅ nace en Simulación con 20 y 10, solo apagado/simulación/activo y topes con rango; solo nota, WhatsApp y guía, desde chat o rutina, con sus siete estados; el código nunca en claro ni repetido; texto con tope y error sin texto libre; el servidor cambia el estado pero no borra; el navegador no ve nada"
 echo "✅ DB verification passed."

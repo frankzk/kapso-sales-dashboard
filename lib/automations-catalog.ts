@@ -644,8 +644,18 @@ export function retryVariantEventKey(variant: string): string {
 /** La regla automática de la «Lista de pago adelantado» (0309, MOM §41). */
 export const PREPAY_MODE_EVENT = "prepay_list_auto";
 
+/** Los interruptores y topes del agente de IA (Conector de IA, 0323, MOM §42.9). */
+export const AGENT_WHATSAPP_MODE_EVENT = "agent_whatsapp_mode";
+export const AGENT_GUIDE_MODE_EVENT = "agent_guide_mode";
+export const AGENT_WHATSAPP_CAP_EVENT = "agent_whatsapp_cap";
+export const AGENT_GUIDE_CAP_EVENT = "agent_guide_cap";
+
 /** El nombre de lo que cambió, para «Últimos cambios». Pura. */
 export function automationEventLabel(key: string): string {
+  if (key === AGENT_WHATSAPP_MODE_EVENT) return "Agente de IA · WhatsApp a la clienta";
+  if (key === AGENT_GUIDE_MODE_EVENT) return "Agente de IA · guías de Aliclik";
+  if (key === AGENT_WHATSAPP_CAP_EVENT) return "Agente de IA · tope de WhatsApp del día";
+  if (key === AGENT_GUIDE_CAP_EVENT) return "Agente de IA · tope de guías del día";
   if (key === PREPAY_MODE_EVENT) return "Lista de pago adelantado · regla automática";
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
@@ -663,6 +673,8 @@ export function automationValueLabel(key: string, value: string | null): string 
   if (value === SWITCH_OFF) return "Apagado";
   if (isRetryMode(value)) return RETRY_MODE_LABEL[value];
   if (key === RETRY_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "guía" : "guías"} al día`;
+  if (key === AGENT_GUIDE_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "guía" : "guías"} al día`;
+  if (key === AGENT_WHATSAPP_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "mensaje" : "mensajes"} al día`;
   return value;
 }
 

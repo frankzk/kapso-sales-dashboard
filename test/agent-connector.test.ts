@@ -1,6 +1,7 @@
 // El conector de Kapta para agentes de IA (MOM §42): el token
-// (lib/agent-auth.ts), el protocolo MCP (lib/mcp-server.ts), las cuatro
-// herramientas de lectura (lib/agent-tools.ts) y la ruta `POST /api/mcp`. Lo que
+// (lib/agent-auth.ts), el protocolo MCP (lib/mcp-server.ts), las herramientas
+// de lectura (lib/agent-tools.ts; las de escritura, en
+// test/agent-actions.test.ts) y la ruta `POST /api/mcp`. Lo que
 // se fija:
 //   - el token ve solo las tiendas que su creador ve HOY, dentro de su
 //     organización; sin token, con otro, revocado o vencido: 401 sin decir cuál;
@@ -138,9 +139,18 @@ describe("el token", () => {
     expect(agentVisibleStoreIds({ tokenStoreIds: [KENKU.id, KENKU.id], orgStoreIds: org, creatorRole: "owner", creatorGrantedStoreIds: [] })).toEqual([KENKU.id]);
   });
 
-  it("los permisos de escritura existen, marcados, y ninguna herramienta los usa todavía", () => {
-    expect(Object.entries(AGENT_SCOPES).filter(([, s]) => s.write).map(([k]) => k)).toEqual(["pedidos.nota", "whatsapp.enviar", "aliclik.crear_guia"]);
-    expect(AGENT_TOOLS.every((t) => !AGENT_SCOPES[t.scope].write)).toBe(true);
+  it("los permisos de escritura existen, marcados, y cada uno tiene su herramienta que dice que hace cambios", () => {
+    const write = Object.entries(AGENT_SCOPES).filter(([, s]) => s.write).map(([k]) => k);
+    expect(write).toEqual(["pedidos.nota", "whatsapp.enviar", "aliclik.crear_guia"]);
+    expect(AGENT_TOOLS.filter((t) => AGENT_SCOPES[t.scope].write).map((t) => [t.name, t.scope])).toEqual([
+      ["agregar_nota", "pedidos.nota"],
+      ["enviar_whatsapp", "whatsapp.enviar"],
+      ["crear_guia_aliclik", "aliclik.crear_guia"],
+    ]);
+    for (const t of AGENT_TOOLS) {
+      expect(agentToolDescriptor(t).annotations.readOnlyHint).toBe(!AGENT_SCOPES[t.scope].write);
+      expect(agentToolDescriptor(t).annotations.destructiveHint).toBe(false);
+    }
   });
 
   it("reconoce la migración que falta solo en sus tablas", () => {
@@ -587,6 +597,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 vi.mock("@/lib/ingest", () => ({ getStoreCreds: async () => null }));
+// Las acciones de escritura cargan Aliclik; aquí no se usan.
+vi.mock("@/lib/agent-actions-server", () => ({ agentActionsFor: () => undefined }));
 
 describe("POST /api/mcp", () => {
   const token = "kagt_" + "B".repeat(43);

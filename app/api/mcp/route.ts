@@ -14,6 +14,9 @@ import { handleMcpMessage, jsonRpcError, JSONRPC, type JsonRpcResponse } from "@
 import { getStoreCreds } from "@/lib/ingest";
 import { protectedResourceMetadataUrl } from "@/lib/agent-oauth";
 import { fetchConversationTranscript, findConversationIdByPhone } from "@/lib/kapso";
+import { fetchChatbyConversation } from "@/lib/chatby-api";
+import { env } from "@/lib/env";
+import { agentActionsFor } from "@/lib/agent-actions-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -77,6 +80,9 @@ export async function POST(req: NextRequest) {
     kapsoKey: async (storeId) => (await getStoreCreds(storeId, admin))?.kapso_api_key ?? null,
     transcript: fetchConversationTranscript,
     conversationByPhone: findConversationIdByPhone,
+    chatby: (phone) => fetchChatbyConversation({ phone, apiKey: env.chatbyApiKey() }),
+    // Las de escritura (MOM §42.9): solo las usa un token con esos permisos.
+    actions: agentActionsFor(admin),
     rateLimited: () => agentRateLimited(admin, ctx.tokenId),
     record: (call) => recordAgentCall(admin, { tokenId: ctx.tokenId, ...call }),
   });

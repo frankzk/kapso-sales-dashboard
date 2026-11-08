@@ -9,6 +9,34 @@ import { env } from "@/lib/env";
 import { resolveAgentNames } from "@/lib/agent-names";
 import { limaDayOf } from "@/lib/agent-tools";
 import { isPolicyMigrationMissing, policyStatus, type PolicyStatus } from "@/lib/store-policies";
+import {
+  AGENT_ACTIONS_SHOWN,
+  isAgentActionsMigrationMissing,
+  parseAgentSettings,
+  type AgentActionKind,
+  type AgentActionSettings,
+  type AgentActionStatus,
+  type AgentOrigin,
+} from "@/lib/agent-actions";
+
+/** Una acción del agente, como la ve la pantalla (MOM §42.9). */
+export interface AgentActionView {
+  id: string;
+  action: AgentActionKind;
+  status: AgentActionStatus;
+  origin: AgentOrigin;
+  mode: string | null;
+  tokenLabel: string;
+  orderId: string;
+  orderName: string | null;
+  storeName: string;
+  body: string | null;
+  /** Lo que importa de la guía: courier, costo, cobro y número. */
+  guide: { courier: string | null; cost: number | null; collect: number | null; number: string | null } | null;
+  errorCode: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
 
 export interface AgentTokenView {
   id: string;
@@ -46,6 +74,10 @@ export interface AgentConnectorOrg {
   stores: { id: string; name: string }[];
   tokens: AgentTokenView[];
   policies: StorePolicyView[];
+  /** El interruptor y los topes del agente; los de fábrica si nunca se tocaron. */
+  actionSettings: AgentActionSettings;
+  /** Las últimas acciones del agente, de la más nueva a la más vieja. */
+  actions: AgentActionView[];
 }
 
 export interface AgentConnectorData {
@@ -53,6 +85,8 @@ export interface AgentConnectorData {
   migrationMissing: boolean;
   /** Sin la 0315: los tokens funcionan; las políticas escritas, no. */
   policiesMissing: boolean;
+  /** Sin la 0323: el agente solo lee. */
+  actionsMissing: boolean;
   /** El día de Lima con que se calculó el estado de cada política. */
   today: string;
   endpointUrl: string;
@@ -67,7 +101,7 @@ export function agentEndpointUrl(siteUrl: string): string {
 export async function loadAgentConnector(now: Date = new Date()): Promise<AgentConnectorData> {
   const endpointUrl = agentEndpointUrl(env.siteUrl());
   const today = limaDayOf(now);
-  const empty = { policiesMissing: false, today, endpointUrl, orgs: [] };
+  const empty = { policiesMissing: false, actionsMissing: false, today, endpointUrl, orgs: [] };
   const memberships = await orgsWithPermission("automations.manage");
   if (!memberships.length) return { denied: true, migrationMissing: false, ...empty };
   const orgIds = [...new Set(memberships.map((m) => m.org_id))];
@@ -123,10 +157,68 @@ export async function loadAgentConnector(now: Date = new Date()): Promise<AgentC
     }
   }
   const editors = await resolveAgentNames(policyRows.map((p) => p.retired_by ?? p.updated_by), admin);
+
+  // Lo que hizo el agente (0323). Solo de las tiendas que la persona ve.
+  let actionsMissing = false;
+  const settingsByOrg = new Map<string, AgentActionSettings>();
+  let actionRows: {
+    id: string; org_id: string; token_id: string; store_id: string; order_id: string; action: AgentActionKind; status: AgentActionStatus;
+    origin: AgentOrigin; mode: string | null; body: string | null; details: Record<string, unknown> | null; error_code: string | null;
+    created_at: string; resolved_at: string | null;
+  }[] = [];
+  const [settingsRes, actionsRes] = await Promise.all([
+    admin.from("agent_action_settings").select("*").in("org_id", orgIds),
+    stores.length
+      ? admin
+          .from("agent_actions")
+          .select("id,org_id,token_id,store_id,order_id,action,status,origin,mode,body,details,error_code,created_at,resolved_at")
+          .in("store_id", stores.map((st) => st.id))
+          // La vista previa sin confirmar no es una acción: no se lista.
+          .neq("status", "prevista")
+          .order("created_at", { ascending: false })
+          .limit(AGENT_ACTIONS_SHOWN * orgIds.length)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (settingsRes.error || actionsRes.error) {
+    if (!isAgentActionsMigrationMissing(settingsRes.error ?? actionsRes.error)) throw new Error("No se pudieron leer las acciones del agente.");
+    actionsMissing = true;
+  } else {
+    for (const row of (settingsRes.data ?? []) as Record<string, unknown>[]) settingsByOrg.set(String(row.org_id), parseAgentSettings(row));
+    actionRows = (actionsRes.data ?? []) as typeof actionRows;
+  }
+  const orderNames = new Map<string, string | null>();
+  const actionOrderIds = [...new Set(actionRows.map((a) => a.order_id))];
+  if (actionOrderIds.length) {
+    const { data } = await admin.from("order_master").select("order_id,order_name").in("order_id", actionOrderIds);
+    for (const r of (data ?? []) as { order_id: string; order_name: string | null }[]) orderNames.set(r.order_id, r.order_name);
+  }
+  const tokenLabel = new Map(tokenRows.map((t) => [t.id, t.label]));
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+  const actionView = (a: (typeof actionRows)[number]): AgentActionView => ({
+    id: a.id,
+    action: a.action,
+    status: a.status,
+    origin: a.origin,
+    mode: a.mode,
+    tokenLabel: tokenLabel.get(a.token_id) ?? "Token",
+    orderId: a.order_id,
+    orderName: orderNames.get(a.order_id) ?? null,
+    storeName: storeName.get(a.store_id) ?? "Tienda",
+    body: a.body,
+    guide:
+      a.action === "guia_aliclik"
+        ? { courier: str(a.details?.courier), cost: num(a.details?.costo_envio), collect: num(a.details?.cobrar), number: str(a.details?.guia) }
+        : null,
+    errorCode: a.error_code,
+    createdAt: a.created_at,
+    resolvedAt: a.resolved_at,
+  });
   return {
     denied: false,
     migrationMissing: false,
     policiesMissing,
+    actionsMissing,
     today,
     endpointUrl,
     orgs: ((orgRows ?? []) as { id: string; name: string }[]).map((org) => ({
@@ -163,6 +255,8 @@ export async function loadAgentConnector(now: Date = new Date()): Promise<AgentC
           editor: editors[p.retired_by ?? p.updated_by] ?? "Alguien del equipo",
           retiredAt: p.retired_at,
         })),
+      actionSettings: settingsByOrg.get(org.id) ?? parseAgentSettings(null),
+      actions: actionRows.filter((a) => a.org_id === org.id).slice(0, AGENT_ACTIONS_SHOWN).map(actionView),
     })),
   };
 }

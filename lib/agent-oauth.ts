@@ -33,8 +33,18 @@ export const OAUTH_CODE_TTL_MS = 10 * 60_000;
 export const OAUTH_REGISTRATIONS_PER_HOUR = 30;
 export const OAUTH_MIGRATION_MISSING = "Falta aplicar la migración 0319 (OAuth del conector) en la base.";
 
-/** Las herramientas que hoy se pueden dar por OAuth: las de lectura, como en la pantalla. */
-export const OAUTH_SCOPES: AgentScope[] = (Object.keys(AGENT_SCOPES) as AgentScope[]).filter((s) => !AGENT_SCOPES[s].write);
+/**
+ * Las herramientas que se pueden dar por OAuth: todas, como en la pantalla
+ * (las de escritura desde la parte 3, MOM §42.9).
+ */
+export const OAUTH_SCOPES: AgentScope[] = Object.keys(AGENT_SCOPES) as AgentScope[];
+
+/**
+ * Las que vienen marcadas si el agente no pide ninguna: solo las de lectura.
+ * Las de escritura las marca la persona en la pantalla del permiso, o el agente
+ * las pide por su nombre en `scope`.
+ */
+export const OAUTH_DEFAULT_SCOPES: AgentScope[] = OAUTH_SCOPES.filter((s) => !AGENT_SCOPES[s].write);
 
 export const MCP_PATH = "/api/mcp";
 
@@ -210,7 +220,7 @@ export function parseAuthorizeRequest(
   if (params.resource && !resourceBelongsHere(params.resource, origin)) {
     return back("invalid_target", "El recurso pedido no es este servidor.");
   }
-  let requestedScopes: AgentScope[] = [...OAUTH_SCOPES];
+  let requestedScopes: AgentScope[] = [...OAUTH_DEFAULT_SCOPES];
   if (params.scope && params.scope.trim()) {
     const asked = params.scope.trim().split(/\s+/);
     requestedScopes = OAUTH_SCOPES.filter((s) => asked.includes(s));

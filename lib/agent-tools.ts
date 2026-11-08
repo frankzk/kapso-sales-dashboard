@@ -1,8 +1,10 @@
 // Las herramientas del conector de Kapta para agentes de IA (MOM §42,
 // 08-11-2026). Cada una declara qué permiso del token necesita (`scope`), qué
 // recibe (un esquema zod, que también se publica como JSON Schema en
-// `tools/list`) y qué hace. Todas son de SOLO LECTURA en esta parte: ninguna
-// escribe en la base, marca mensajes como leídos ni llama a un courier.
+// `tools/list`) y qué hace. Las cuatro de lectura no escriben en la base, no
+// marcan mensajes como leídos ni llaman a un courier. Las tres de escritura
+// (parte 3, MOM §42.9, 0323) —nota, WhatsApp y guía de Aliclik— hacen lo suyo
+// por lib/agent-actions-flow.ts, con sus frenos; aquí solo buscan el pedido.
 //
 // LO QUE VALE PARA TODAS.
 //   · Ven solo las tiendas del token (`ctx.stores`, lib/agent-auth.ts). Un
@@ -16,7 +18,7 @@
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AgentContext, AgentScope, AgentStore } from "@/lib/agent-auth";
-import { pickAgentStore } from "@/lib/agent-auth";
+import { AGENT_SCOPES, pickAgentStore } from "@/lib/agent-auth";
 import { botLookupItems, botLookupPayment, normalizeBotOrderName } from "@/lib/bot-order-lookup";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 import { orderTotals } from "@/lib/order-totals";
@@ -27,6 +29,8 @@ import { courierLabel } from "@/lib/couriers/registry";
 import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import { coberturaParaAgente } from "@/lib/voice-leads";
 import type { ConversationMessage, KapsoClientOpts } from "@/lib/kapso";
+import type { ChatbyConversation, ChatbyMessage } from "@/lib/chatby-conversation";
+import type { AgentActions, AgentOrderRef } from "@/lib/agent-actions-flow";
 import { POLICIES_FOR_AGENT_MAX, agentWrittenPolicy, policiesInForce, type StorePolicyRow } from "@/lib/store-policies";
 
 // ---------------------------------------------------------------------------
@@ -47,6 +51,10 @@ export interface AgentToolDeps {
   transcript: (opts: KapsoClientOpts, conversationId: string, maxPages: number) => Promise<ConversationMessage[]>;
   /** La conversación más reciente de un teléfono en Kapso (`findConversationIdByPhone`). */
   conversationByPhone: (opts: KapsoClientOpts, phone: string) => Promise<string | null>;
+  /** La conversación con el bot de confirmación Chatby (`fetchChatbyConversation`). Sin ella, no se lee. */
+  chatby?: (phone: string) => Promise<ChatbyConversation>;
+  /** Las acciones de escritura (lib/agent-actions-server.ts). Sin ellas, las herramientas de escritura no responden. */
+  actions?: AgentActions;
 }
 
 export interface AgentTool<S extends z.ZodType = z.ZodType> {
@@ -412,11 +420,57 @@ const conversationInput = z.object({
   limite: z.number().int().min(1).max(100).optional().describe("Cuántos mensajes, los más recientes (1 a 100; 40 si no se dice)."),
 }).strict();
 
+const CHATBY_AUTHOR: Record<ChatbyMessage["kind"], string> = {
+  cliente: "cliente",
+  bot: "bot",
+  equipo: "equipo",
+  nota: "nota_interna",
+  otro: "otro",
+};
+
+/** Los mensajes de Chatby, como los ve el agente: en orden, sin enlaces a archivos ni coordenadas. PURA. */
+export function agentChatbyTranscript(messages: readonly ChatbyMessage[]) {
+  return [...messages]
+    .sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""))
+    .map((m) => ({
+      fecha: m.at,
+      autor: CHATBY_AUTHOR[m.kind] ?? "otro",
+      texto: m.text || null,
+      ...(m.media ? { adjunto: m.media } : {}),
+      ...(m.template ? { plantilla: m.template } : {}),
+      ...(m.button ? { boton: true } : {}),
+      ...(m.error ? { no_entregado: true } : {}),
+      // Que mandó su ubicación, sin la coordenada: la guía la usa desde Kapta.
+      ...(m.location ? { ubicacion_enviada: true } : {}),
+    }));
+}
+
+/** La parte de Chatby de la respuesta, o por qué no está. */
+async function chatbyPart(deps: AgentToolDeps, phone: string | null): Promise<{ ok: boolean; part: Record<string, unknown> }> {
+  if (!deps.chatby) return { ok: false, part: { nota: "Chatby no está disponible en este conector." } };
+  if (!phone) return { ok: false, part: { nota: "Sin celular para buscar en Chatby." } };
+  try {
+    const c = await deps.chatby(phone);
+    if (c.status === "ok") {
+      const mensajes = agentChatbyTranscript(c.messages);
+      return { ok: true, part: { mensajes, ...(mensajes.length ? {} : { nota: "La conversación de Chatby no tiene mensajes." }) } };
+    }
+    if (c.status === "sin_conversacion") return { ok: true, part: { mensajes: [], nota: "Esta clienta no tiene conversación en Chatby." } };
+    if (c.status === "sin_clave") return { ok: false, part: { nota: "Kapta no tiene la clave de Chatby." } };
+    if (c.status === "sin_celular") return { ok: false, part: { nota: "Sin celular para buscar en Chatby." } };
+    return { ok: false, part: { nota: "No se pudo leer Chatby ahora." } };
+  } catch {
+    return { ok: false, part: { nota: "No se pudo leer Chatby ahora." } };
+  }
+}
+
 const leerConversacion: AgentTool<typeof conversationInput> = {
   name: "leer_conversacion",
   title: "Leer la conversación de WhatsApp",
   description:
-    "Lee los mensajes de WhatsApp (Kapso) entre la tienda y el cliente de un pedido o de un teléfono, del más antiguo al más reciente, con fecha y autor (cliente o tienda). No marca nada como leído ni envía mensajes.",
+    "Lee los mensajes de WhatsApp entre la tienda y el cliente de un pedido o de un teléfono, del más antiguo al más reciente, con fecha y autor. " +
+    "`mensajes` son los de Kapso (bot de pedidos y asesoras); `chatby` son los del bot de confirmación Chatby (los últimos 20), donde muchas clientas " +
+    "confirman su pedido. Mira los dos antes de decir si un pedido está confirmado. No marca nada como leído ni envía mensajes.",
   scope: "conversaciones.leer",
   input: conversationInput,
   async run(ctx, args, deps) {
@@ -447,30 +501,42 @@ const leerConversacion: AgentTool<typeof conversationInput> = {
         .maybeSingle();
       conversationId = textOrNull((lead as { kapso_conversation_id?: string } | null)?.kapso_conversation_id);
     }
+    const chatbyRead = chatbyPart(deps, phone);
+
+    // Kapso: los mensajes, o por qué no hay. Si Kapso falla y Chatby tampoco
+    // contesta, es un error; si Chatby contesta, se devuelve lo de Chatby.
+    let kapso: { ok: true; mensajes: ReturnType<typeof agentTranscript>; nota?: string } | { ok: false; code: string; message: string };
     const key = await deps.kapsoKey(store.id);
-    if (!key) return fail("sin_kapso", `${store.name} no tiene Kapso configurado.`, { storeId: store.id, orderId });
-    const opts: KapsoClientOpts = { apiKey: key };
-    try {
-      if (!conversationId && phone) conversationId = await deps.conversationByPhone(opts, phone);
-      if (!conversationId) {
-        return { ok: true, storeId: store.id, orderId, data: { tienda: store.name, telefono: phone, mensajes: [], nota: "No hay conversación de WhatsApp con este cliente." } };
+    if (!key) {
+      kapso = { ok: false, code: "sin_kapso", message: `${store.name} no tiene Kapso configurado.` };
+    } else {
+      const opts: KapsoClientOpts = { apiKey: key };
+      try {
+        if (!conversationId && phone) conversationId = await deps.conversationByPhone(opts, phone);
+        if (!conversationId) {
+          kapso = { ok: true, mensajes: [], nota: "No hay conversación de WhatsApp en Kapso con este cliente." };
+        } else {
+          const mensajes = agentTranscript(await deps.transcript(opts, conversationId, 2), args.limite ?? 40);
+          kapso = { ok: true, mensajes, ...(mensajes.length ? {} : { nota: "La conversación no tiene mensajes." }) };
+        }
+      } catch {
+        kapso = { ok: false, code: "kapso_no_disponible", message: "No se pudo leer la conversación en Kapso ahora. Reintenta en unos segundos." };
       }
-      const messages = await deps.transcript(opts, conversationId, 2);
-      const mensajes = agentTranscript(messages, args.limite ?? 40);
-      return {
-        ok: true,
-        storeId: store.id,
-        orderId,
-        data: {
-          tienda: store.name,
-          telefono: phone,
-          mensajes,
-          ...(mensajes.length ? {} : { nota: "La conversación no tiene mensajes." }),
-        },
-      };
-    } catch {
-      return fail("kapso_no_disponible", "No se pudo leer la conversación en Kapso ahora. Reintenta en unos segundos.", { storeId: store.id, orderId });
     }
+    const chatby = await chatbyRead;
+    if (!kapso.ok && !chatby.ok) return fail(kapso.code, kapso.message, { storeId: store.id, orderId });
+    return {
+      ok: true,
+      storeId: store.id,
+      orderId,
+      data: {
+        tienda: store.name,
+        telefono: phone,
+        mensajes: kapso.ok ? kapso.mensajes : [],
+        ...(kapso.ok ? (kapso.nota ? { nota: kapso.nota } : {}) : { nota: kapso.message }),
+        chatby: chatby.part,
+      },
+    };
   },
 };
 
@@ -556,6 +622,112 @@ const consultarPoliticas: AgentTool<typeof policiesInput> = {
 };
 
 // ---------------------------------------------------------------------------
+// Las de escritura (MOM §42.9, parte 3; 0323)
+// ---------------------------------------------------------------------------
+
+const origenField = z
+  .enum(["chat", "rutina"])
+  .describe(
+    "«chat»: quien conversa contigo te lo pidió y aprobó lo que vas a hacer en esta conversación. «rutina»: lo decides tú por tu cuenta. " +
+      "Di la verdad: en Simulación lo de «rutina» solo se registra, y todo queda en el registro que revisa el dueño.",
+  );
+const codigoField = z.string().max(60).describe("El código de confirmación que devolvió la vista previa. Con él se hace la acción; sin él, solo se pide la vista previa.");
+
+const ACTIONS_UNAVAILABLE = fail("no_disponible", "Las acciones del agente no están disponibles en este conector.");
+
+/** El pedido para una acción: el mismo que ve `obtener_pedido`, en las tiendas del token. */
+async function actionOrder(ctx: AgentContext, deps: AgentToolDeps, raw: string): Promise<{ order?: AgentOrderRef; error?: AgentToolOutcome }> {
+  const found = await findMasterRow(ctx, deps, raw, "order_id,store_id,order_name,customer_phone");
+  if ("error" in found) return { error: found.error! };
+  const store = ctx.stores.find((s) => s.id === found.row.store_id)!;
+  return {
+    order: {
+      orderId: found.row.order_id as string,
+      storeId: store.id,
+      storeName: store.name,
+      orderName: (found.row.order_name as string | null) ?? normalizeBotOrderName(raw) ?? raw,
+      customerPhone: (found.row.customer_phone as string | null) ?? null,
+    },
+  };
+}
+
+const noteInput = z.object({
+  pedido: orderInput.shape.pedido,
+  texto: z.string().min(3).max(1000).describe("La nota, en español, para el equipo. Hechos y lo que falta hacer; sin datos que no estén en Kapta."),
+  origen: origenField,
+}).strict();
+
+const agregarNota: AgentTool<typeof noteInput> = {
+  name: "agregar_nota",
+  title: "Dejar una nota en el pedido",
+  description:
+    "Deja una nota en la Actividad del pedido, marcada como «Agente de IA», para que el equipo la lea. Se hace al momento (no tiene vista previa). " +
+    "No cambia el estado del pedido ni avisa a la clienta. La misma nota dos veces en el mismo pedido no se repite.",
+  scope: "pedidos.nota",
+  input: noteInput,
+  async run(ctx, args, deps) {
+    if (!deps.actions) return ACTIONS_UNAVAILABLE;
+    const { order, error } = await actionOrder(ctx, deps, args.pedido);
+    if (!order) return error!;
+    return deps.actions.note(ctx, order, { text: args.texto, origin: args.origen });
+  },
+};
+
+const whatsappInput = z.object({
+  pedido: orderInput.shape.pedido,
+  texto: z.string().max(1000).optional().describe("El mensaje para la clienta (solo en la vista previa)."),
+  origen: origenField.optional(),
+  codigo: codigoField.optional(),
+}).strict();
+
+const enviarWhatsapp: AgentTool<typeof whatsappInput> = {
+  name: "enviar_whatsapp",
+  title: "Enviar un WhatsApp a la clienta",
+  description:
+    "Le escribe a la clienta del pedido por WhatsApp (Kapso), en DOS pasos. 1) Con `texto` y `origen`: vista previa, no envía nada y devuelve un " +
+    "`codigo_confirmacion` de 10 minutos. 2) Con el mismo `pedido` y `codigo`: lo envía (o, en Simulación y con origen «rutina», lo registra sin enviarlo). " +
+    "Con origen «chat», enséñale la vista previa a quien te lo pidió y confirma solo si la aprueba. Solo dentro de las 24 h desde el último mensaje de la clienta; " +
+    "un mensaje por pedido cada 4 horas, nunca el mismo texto dos veces y con un tope diario. No sirve para cambiar estados ni anular guías.",
+  scope: "whatsapp.enviar",
+  input: whatsappInput,
+  async run(ctx, args, deps) {
+    if (!deps.actions) return ACTIONS_UNAVAILABLE;
+    const { order, error } = await actionOrder(ctx, deps, args.pedido);
+    if (!order) return error!;
+    if (args.codigo) return deps.actions.confirm(ctx, order, "whatsapp", args.codigo);
+    if (!args.texto || !args.origen) return fail("faltan_datos", "Para la vista previa indica `texto` y `origen`; para enviarlo, el `codigo` de la vista previa.", { storeId: order.storeId, orderId: order.orderId });
+    return deps.actions.previewWhatsapp(ctx, order, { text: args.texto, origin: args.origen });
+  },
+};
+
+const guideInput = z.object({
+  pedido: orderInput.shape.pedido,
+  origen: origenField.optional(),
+  codigo: codigoField.optional(),
+}).strict();
+
+const crearGuiaAliclik: AgentTool<typeof guideInput> = {
+  name: "crear_guia_aliclik",
+  title: "Crear la guía de Aliclik",
+  description:
+    "Crea la guía contra entrega de Aliclik del pedido, en DOS pasos y por el mismo camino que el botón de Kapta (las mismas compuertas: pago, " +
+    "rechazos, duplicados, riesgo, salidas). 1) Con `origen`: cotiza y devuelve courier, costo, lo que se cobra en la puerta y un `codigo_confirmacion` " +
+    "de 10 minutos; no crea nada. 2) Con el mismo `pedido` y `codigo`: la crea (o, en Simulación y con origen «rutina», la registra sin crearla). " +
+    "Con origen «chat», enséñale la vista previa a quien te lo pidió y confirma solo si la aprueba. Una guía por pedido y un tope diario. " +
+    "No anula guías ni cambia estados. Si dice «incierto», no la vuelvas a pedir.",
+  scope: "aliclik.crear_guia",
+  input: guideInput,
+  async run(ctx, args, deps) {
+    if (!deps.actions) return ACTIONS_UNAVAILABLE;
+    const { order, error } = await actionOrder(ctx, deps, args.pedido);
+    if (!order) return error!;
+    if (args.codigo) return deps.actions.confirm(ctx, order, "guia_aliclik", args.codigo);
+    if (!args.origen) return fail("faltan_datos", "Para la vista previa indica `origen`; para crearla, el `codigo` de la vista previa.", { storeId: order.storeId, orderId: order.orderId });
+    return deps.actions.previewGuide(ctx, order, { origin: args.origen });
+  },
+};
+
+// ---------------------------------------------------------------------------
 // El catálogo
 // ---------------------------------------------------------------------------
 
@@ -564,6 +736,9 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   obtenerPedido as unknown as AgentTool,
   leerConversacion as unknown as AgentTool,
   consultarPoliticas as unknown as AgentTool,
+  agregarNota as unknown as AgentTool,
+  enviarWhatsapp as unknown as AgentTool,
+  crearGuiaAliclik as unknown as AgentTool,
 ];
 
 /** Las herramientas que el token puede usar, en el orden del catálogo. PURA. */
@@ -580,6 +755,10 @@ export function agentToolDescriptor(tool: AgentTool) {
     title: tool.title,
     description: tool.description,
     inputSchema: schema,
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    // Las de escritura lo dicen: el cliente MCP puede pedir confirmación. Ninguna
+    // borra nada; WhatsApp y Aliclik salen de Kapta (`openWorldHint`).
+    annotations: AGENT_SCOPES[tool.scope].write
+      ? { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: tool.scope !== "pedidos.nota" }
+      : { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   };
 }

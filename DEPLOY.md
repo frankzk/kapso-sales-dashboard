@@ -115,6 +115,44 @@ columnas pueden quedarse (nadie más las lee). Para deshacer también el trigger
 volver a correr el `create or replace function public.shipments_touch_updated_at()`
 de la 0204.
 
+### 08-11-2026 · El agente de IA hace notas, WhatsApp y guías de Aliclik (0323, MOM §42.9)
+
+**Aplicada en producción el 08-11-2026.** El agente (Grok) deja notas en el
+pedido, le escribe a la clienta por WhatsApp (solo dentro de las 24 h) y crea
+la guía de Aliclik por el mismo camino que el botón. Las notas van solas; el
+WhatsApp y las guías, con un interruptor por organización Apagado / Simulación
+/ Activo que **nace en Simulación**, con topes de 20 WhatsApp y 10 guías por
+día de Lima. `leer_conversacion` lee también Chatby. Sin variables ni crons
+nuevos (Chatby usa `CHATBY_API_KEY`; la guía, `ALICLIK_WRITE_ENABLED`, como el
+botón).
+
+1. **Migración `0323_agent_actions.sql`**, a mano, ANTES del código (aditiva,
+   sin llaves foráneas, idempotente, sin `drop`):
+   - tabla `agent_action_settings` (por organización: posición de WhatsApp y
+     de guías, Simulación de fábrica, y sus topes con rango);
+   - tabla `agent_actions` (cada acción del agente: qué, sobre qué pedido,
+     origen, estado, texto, código de la vista previa como sha256);
+   - las dos con RLS y solo para `service_role`, sin borrar.
+2. Comprobar:
+   ```sql
+   select to_regclass('public.agent_action_settings'), to_regclass('public.agent_actions');
+   select has_table_privilege('authenticated', 'public.agent_actions', 'select');  -- false
+   select has_table_privilege('service_role', 'public.agent_actions', 'delete');   -- false
+   ```
+3. Desplegar el código. **Sin la migración**, las herramientas de escritura
+   contestan que falta la 0323 y la tarjeta del Conector de IA lo dice; las de
+   lectura siguen igual.
+4. En Automatizaciones › Conector de IA, en el token de Grok: «Cambiar
+   herramientas» y marcar las tres que hacen cambios. Probar con Grok:
+   - una nota en un pedido de prueba (sale en su Actividad como «Agente de IA»);
+   - un WhatsApp pedido en el chat: vista previa, aprobar, confirmar;
+   - con el interruptor en Simulación, uno «por su cuenta» queda «Simulada (no
+     se hizo)» en «Lo que hizo el agente».
+
+**Marcha atrás.** Poner WhatsApp y guías en Apagado, o quitarle al token las
+herramientas que hacen cambios, o revocarlo: el agente deja de hacer en el
+acto. Las tablas pueden quedarse: sin código que las use, nadie escribe.
+
 ### 08-11-2026 · «Lima trabados» en Repro Lima (sin migración, MOM §9.6)
 
 **Sin migración.** No hay tablas, columnas, índices, crons ni variables

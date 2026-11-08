@@ -24851,9 +24851,10 @@ WhatsApp al cliente**. No cambia estados ni anula guías.
 Se entrega en tres partes. **Las partes 1 y 2 son de solo lectura para el
 agente.** La parte 1 (08-11-2026, 0314) le da los pedidos, las conversaciones
 y las políticas que Kapta calcula; la parte 2 (08-11-2026, 0315), las
-políticas que escribe cada tienda (§42.6). La parte 3 (notas, WhatsApp y guía
-de Aliclik) está pendiente (§42.7): sus permisos ya existen en la base, pero
-ninguna herramienta los usa y la pantalla los muestra como «Próximamente».
+políticas que escribe cada tienda (§42.6). La parte 3 (08-11-2026, 0323) le da
+los tres cambios permitidos —nota, WhatsApp a la clienta y guía de Aliclik—
+con un interruptor Apagado / Simulación / Activo y frenos que pone Kapta
+(§42.9).
 
 ### 42.1 El servidor
 
@@ -24893,13 +24894,13 @@ ninguna herramienta los usa y la pantalla los muestra como «Próximamente».
   `agent_tool_calls`. Pasado el tope, la herramienta contesta un error sin leer
   nada.
 
-### 42.3 Las herramientas (solo lectura)
+### 42.3 Las herramientas de lectura
 
 | Herramienta | Permiso | Qué devuelve |
 | --- | --- | --- |
 | `buscar_pedidos` | `pedidos.leer` | Hasta 20 pedidos (10 si no se dice) por número, teléfono (sus últimos 9 dígitos), nombre del cliente o guía (también la de Swayp), del último movimiento más reciente al más antiguo, con tienda, total, estado, etapa y subetapa. |
 | `obtener_pedido` | `pedidos.leer` | Productos y cantidades, importes y moneda, forma y estado de pago, entrega (modalidad, cobertura, destino y dirección), estado del Master (etapa y subetapa con su nombre de pantalla, motivos, courier, fechas de despacho, entrega y devolución), hasta 20 guías y los últimos 10 movimientos. |
-| `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. No marca nada como leído. |
+| `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. Aparte, en `chatby`, los últimos 20 mensajes con el bot de confirmación Chatby (§25), con autor cliente, bot, equipo o nota interna: ahí confirman muchas clientas, y sin ellos el agente decía «sin confirmar» de pedidos ya confirmados (08-11-2026). Si Kapso falla pero Chatby contesta, devuelve lo de Chatby. No marca nada como leído. |
 | `consultar_politicas` | `politicas.leer` | **Calculadas:** el adelanto mínimo de los envíos por agencia (S/ 20, `lib/adelanto-minimo.ts`) y, si se da el distrito, su cobertura según `order_coverage_for` el **día de Lima** (contraentrega o agencia con adelanto); si la base no contesta, «por revisar»: no afirma una cobertura que no se pudo calcular. **Escritas:** las políticas de la tienda vigentes ese día (§42.6). |
 
 Lo que vale para todas (`lib/agent-tools.ts`):
@@ -24983,12 +24984,12 @@ sistema.
 
 ### 42.7 Pendiente
 
-- **Parte 3 — los cambios que el owner permitió:** dejar una nota en el pedido
-  (`pedidos.nota`), enviar WhatsApp al cliente (`whatsapp.enviar`, con
-  idempotencia y aprobación) y crear la guía de Aliclik (`aliclik.crear_guia`,
-  con vista previa y confirmación). Cada una exige además que **el creador del
-  token** tenga hoy el permiso de Kapta equivalente (por ejemplo
-  `aliclik.create_guide` para la guía). Ninguna cambia estados ni anula guías.
+- **Pasar a Activo.** WhatsApp y guías nacen en Simulación (§42.9). Tras una
+  semana revisando «Lo que hizo el agente», el owner decide si los pasa a
+  Activo y con qué topes.
+- **El origen lo declara el agente.** Kapta no puede verificar que una persona
+  aprobó en el chat de Grok; lo mitigan la vista previa con código, los topes,
+  el registro de cada acción y la revocación en un clic (§42.9).
 
 ### 42.8 Conectar con OAuth, sin copiar tokens (08-11-2026; 0319)
 
@@ -25014,7 +25015,8 @@ aprobarás el acceso sin copiar tokens». Kapta implementa la autorización de M
 5. **Permiso**, `/oauth/authorize`: la persona entra a Kapta (si no tenía
    sesión, el login la devuelve a esta página) y ve quién pide y a qué dominio
    vuelve. Elige las tiendas (las que ve, de una sola organización) y las
-   herramientas (las de lectura, marcadas las que pidió el agente), y pulsa
+   herramientas (todas, con las de escritura marcadas «Hace cambios»; vienen
+   marcadas las que pidió el agente, o solo las de lectura si no pidió), y pulsa
    «Permitir» o «Cancelar». Hace falta `automations.manage`, como para crear
    un token a mano. Un cliente desconocido o una `redirect_uri` que no es la
    registrada **no redirigen nunca**: la página muestra el error. «Permitir»
@@ -25030,8 +25032,10 @@ aprobarás el acceso sin copiar tokens». Kapta implementa la autorización de M
    ya usado se vuelve a presentar, se revoca el token que se dio con él.**
 
 No hay refresh token: el token no vence. Si se revoca, el agente recibe 401 y
-vuelve a pedir permiso. Por OAuth solo se dan las herramientas de lectura,
-como en la pantalla, hasta que exista la parte 3.
+vuelve a pedir permiso. Desde la parte 3, por OAuth se pueden dar también las
+de escritura, como en la pantalla; a una conexión que ya existe se le cambian
+las herramientas en la lista de Conector de IA («Cambiar herramientas»), sin
+volver a conectarla.
 
 Migraciones `0314_agent_tokens.sql`, `0315_store_policies.sql` y
 `0319_agent_oauth.sql`. Código: `lib/agent-auth.ts`, `lib/agent-tools.ts`,
@@ -25044,3 +25048,119 @@ Pruebas: `test/agent-connector.test.ts`, `test/store-policies.test.ts`,
 `test/agent-oauth.test.ts`, `test/agent-connector-mom.test.ts`,
 `scripts/sql/agent_tokens_smoke.sql`, `scripts/sql/store_policies_smoke.sql` y
 `scripts/sql/agent_oauth_smoke.sql`.
+
+### 42.9 Lo que el agente puede hacer: notas, WhatsApp y guía de Aliclik (parte 3, 08-11-2026; 0323)
+
+**Lo que decidió el owner (08-11-2026, «ok, vamos así»).**
+
+- **Notas: solas desde el primer día.** Una nota equivocada se corrige con
+  otra.
+- **WhatsApp a la clienta y guías de Aliclik:** un **interruptor por
+  organización Apagado / Simulación / Activo**, como las demás automatizaciones
+  (§40). Nace en **Simulación**: una semana revisando lo que el agente habría
+  hecho y después Activo, con topes.
+- **Lo que el owner pide en el chat y aprueba ahí se hace de verdad**, aun en
+  Simulación.
+- **WhatsApp solo dentro de las 24 h** desde el último mensaje de la clienta
+  («Solo dentro de las 24 h (Recomendado)»): el agente no manda plantillas.
+- El agente **no cambia estados ni anula guías**.
+
+**Las herramientas.**
+
+| Herramienta | Permiso del token | Permiso de quien lo conectó | Qué hace |
+| --- | --- | --- | --- |
+| `agregar_nota` | `pedidos.nota` | `master.edit` | Deja una nota en la Actividad del pedido, al momento: un comentario (`kind = comment`) de tipo «Agente de IA», con `source = agente_ia` y sin persona. La misma nota dos veces en el mismo pedido no se repite. Hasta 1000 caracteres. |
+| `enviar_whatsapp` | `whatsapp.enviar` | `master.edit` | Le escribe a la clienta del pedido por Kapso (`sendWhatsappText`, el envío de Leads), desde el número de su conversación más reciente. Hasta 1000 caracteres. Queda en la Actividad como «WhatsApp del agente de IA» (`kind = agent_whatsapp`). |
+| `crear_guia_aliclik` | `aliclik.crear_guia` | `aliclik.create_guide` | Crea la guía contra entrega por **el mismo camino que el botón y el envío programado** (`previewAliclikGuideFor`, `aliclikCreateGates`, `createAliclikGuideFor`), con el courier más barato que se puede agendar (`autoTransport`), sin persona y con origen `agente_ia`: «Guía de Aliclik creada por el agente de IA». |
+
+**Dos pasos para WhatsApp y guía.**
+
+1. Con el texto (o sin él, la guía) y el `origen`: **vista previa**. No hace
+   nada. Devuelve el texto o la guía cotizada (courier, costo, cobro en la
+   puerta, avisos), la posición del interruptor, qué pasará al confirmar y un
+   **código de un solo uso, de 10 minutos** (se guarda solo su sha256).
+2. Con el mismo pedido y el `codigo`: **confirmación**. La fila se toma una sola
+   vez (prevista → en curso), así que dos confirmaciones a la vez no hacen dos
+   envíos. Se vuelve a comprobar **todo** (permiso, interruptor, topes, ventana
+   de 24 h, compuertas y cotización de Aliclik, que aborta si el monto cambió).
+   Después se hace, se simula o se rechaza.
+
+**El origen.** El agente declara si la acción es del **«chat»** (quien conversa
+con él la pidió y aprobó la vista previa) o una **«rutina»** (por su cuenta).
+Qué pasa al confirmar (`agentExecution`):
+
+| Interruptor | Origen «chat» | Origen «rutina» |
+| --- | --- | --- |
+| Apagado | No se hace (ni deja pedir la vista previa) | No se hace |
+| Simulación | **Se hace** | Se registra como **simulada**, sin hacerse |
+| Activo | Se hace | Se hace |
+
+Kapta **no puede verificar** que una persona aprobó en el chat de Grok. Los
+frenos de abajo no dependen de esa declaración.
+
+**Los frenos de Kapta, haga lo que haga el agente.**
+
+- **Los permisos de quien lo conectó**, hoy y en la organización del token
+  (`memberships`, `user_permissions` y `membership_roles` de esa
+  organización), además del permiso del token.
+- **Las mismas compuertas que el botón de la guía**: venta anulada, pago
+  adelantado, lista de pago adelantado, rechazos en la puerta, riesgo de no
+  entrega, posible duplicado, pago exigido y otras salidas. El agente no
+  escribe motivos ni excepciones: lo que pide motivo lo decide una persona.
+- **Una vez y no más:**
+  - una guía por pedido;
+  - un WhatsApp por pedido **cada 4 horas**;
+  - **nunca el mismo texto dos veces** a la misma clienta (comparado sin
+    tildes, mayúsculas ni puntuación final).
+
+  Cuenta lo que salió, lo que pudo salir (incierto) y lo que está saliendo.
+  Lo simulado no cuenta.
+- **Topes por día de Lima**, por organización, configurables: **20 WhatsApp** y
+  **10 guías** de fábrica (hasta 200 y 100).
+- **Lo incierto no se reintenta.** Si Kapso o Aliclik no confirman, la acción
+  queda **incierta** y el agente recibe «no lo vuelvas a pedir». Un WhatsApp
+  incierto queda igual en la Actividad, con «puede haber salido».
+- **Todo en la Actividad**, marcado «Agente de IA».
+- **Se revoca en un clic**: el token, o el interruptor en Apagado.
+
+**La pantalla.** En **Automatizaciones › Conector de IA**, la tarjeta «Lo que
+puede hacer el agente» muestra:
+
+- los dos interruptores y sus topes, cada cambio en «Últimos cambios» de
+  Automatizaciones (`agent_whatsapp_mode`, `agent_guide_mode`,
+  `agent_whatsapp_cap`, `agent_guide_cap`);
+- la lista **«Lo que hizo el agente»**: las últimas 60 acciones, lo simulado
+  incluido, con el texto o la guía, el origen, la posición del interruptor y el
+  pedido. Las vistas previas sin confirmar no salen.
+
+Cada token muestra sus herramientas y se le cambian con «Cambiar
+herramientas». Al crear un token, las de escritura vienen sin marcar.
+
+**La base (0323).**
+
+- `agent_action_settings`: por organización, la posición de WhatsApp y de
+  guías y sus topes. Sin fila: Simulación con 20 y 10.
+- `agent_actions`: cada acción que pidió el agente:
+  - qué, sobre qué pedido y con qué token;
+  - con los permisos de quién;
+  - desde dónde («chat» o «rutina»);
+  - el texto o la guía;
+  - qué pasó: prevista, en curso, simulada, hecha, rechazada, error o
+    incierta;
+  - la posición del interruptor al resolverse;
+  - el código de la vista previa.
+
+  Es el registro de los topes, de «una vez y no más» y de la revisión de la
+  Simulación.
+
+Solo `service_role`, sin borrar. Sin la 0323, las herramientas de escritura
+contestan que falta la migración y las de lectura siguen igual.
+
+Migración `0323_agent_actions.sql`. Código: `lib/agent-actions.ts` (reglas
+puras), `lib/agent-action-codes.ts`, `lib/agent-actions-flow.ts` (los pasos y
+los frenos), `lib/agent-actions-server.ts` (permisos, Kapso y Aliclik),
+`lib/agent-tools.ts`, `components/agent-actions-card.tsx`,
+`components/agent-connector-panel.tsx` y
+`app/dashboard/automatizaciones/conector/actions.ts`. Pruebas:
+`test/agent-actions.test.ts`, `test/agent-connector.test.ts`,
+`test/agent-connector-mom.test.ts` y `scripts/sql/agent_actions_smoke.sql`.
