@@ -339,4 +339,7 @@ echo "  ✅ 357 casos idénticos a la 0299 (actora × tiendas × cola, cada lead
 echo "▶ Líneas compartidas de Anura (0313): línea sin dueña, número único en la org, casilla por persona, una llamada viva por línea y por persona, RLS"
 $PSQL -f "$ROOT/scripts/sql/anura_line_pool_smoke.sql"
 echo "  ✅ línea compartida sin dueña y anexo propio con dueña; un número es una sola cosa en la org; «Puede llamar con Anura» una por persona; dos llamadas vivas nunca comparten línea ni persona; terminada, la línea queda libre; las entrantes no ocupan líneas; la org lee y nadie escribe"
+echo "▶ Conector de IA (0314): token solo como sha256 y único, pista corta, tiendas y permisos con rango, registro sin texto libre y solo el servidor"
+$PSQL -f "$ROOT/scripts/sql/agent_tokens_smoke.sql"
+echo "  ✅ el hash es único y nunca el token en claro; permisos de la lista cerrada (los de escritura ya existen); el registro guarda códigos, no lo que se preguntó; revocar deja el registro; anon y authenticated ni leen ni escriben"
 echo "✅ DB verification passed."

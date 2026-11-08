@@ -23667,6 +23667,9 @@ Vercel— y algunas no tenían interruptor.
   encendido, pero no corre» con el motivo, y no lo cuenta entre los encendidos.
 - **Historial:** cada cambio queda en `automation_switch_events` (quién, qué,
   de qué a qué, cuándo) y el panel muestra los últimos.
+- **Conector de IA** (§42, 08-11-2026): el botón «Conector de IA» de la
+  cabecera lleva a los tokens con los que un agente (Grok Bot) consulta Kapta,
+  con el mismo permiso `automations.manage`.
 
 Migraciones `0306_automations_panel.sql` y `0308_lima_retry_geocode.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
@@ -23918,3 +23921,114 @@ aviso: `components/prepay-list-banner.tsx`. Pruebas: `test/prepay-list.test.ts`,
 `test/prepay-list-actions.test.ts`, `test/auto-order-trials.test.ts`,
 `scripts/sql/prepay_list_smoke.sql`, el glosario de permisos y el catálogo de
 Automatizaciones.
+
+## 42. Conector para agentes de IA (Grok Bot, 08-11-2026)
+
+**Pedido del owner (08-11-2026).** «Quiero construir un agente de Grok Bot
+para que gestione cosas en específico del sistema». Lo que decidió: el agente
+**busca y ve pedidos, lee la conversación, consulta las políticas y hace
+cambios**; entra con un **token de Kapta**; las políticas son **las dos**, las
+que Kapta calcula y las que cada tienda escribe; y los únicos cambios
+permitidos son **crear guías de Aliclik, dejar notas en el pedido y enviar
+WhatsApp al cliente**. No cambia estados ni anula guías.
+
+Se entrega en tres partes. **Esta (parte 1) es de solo lectura.** La parte 2
+(políticas escritas por tienda, con vigencia) y la parte 3 (notas, WhatsApp y
+guía de Aliclik) están pendientes (§42.6): sus permisos ya existen en la base,
+pero ninguna herramienta los usa y la pantalla los muestra como
+«Próximamente».
+
+### 42.1 El servidor
+
+- **`POST /api/mcp`** (`app/api/mcp/route.ts`; el protocolo en
+  `lib/mcp-server.ts`): MCP por «Streamable HTTP» en su forma sin estado, la
+  que xAI documenta para Grok («Remote MCP Tools»). Cada POST trae **un**
+  mensaje JSON-RPC 2.0 y la respuesta vuelve como JSON en el mismo POST; no hay
+  flujo SSE ni `Mcp-Session-Id`.
+- Métodos: `initialize` (versiones `2025-06-18`, `2025-03-26` y `2024-11-05`;
+  la que pide el cliente si se entiende, si no la más nueva), `ping`,
+  `tools/list` y `tools/call`. Una notificación se contesta **202 sin cuerpo**;
+  un lote, **400**; un cuerpo de más de 64 KB, **413**; lo que no es JSON,
+  **400** (`-32700`); un método que no existe, `-32601`. GET y DELETE: **405**.
+- Una llamada que trae `Origin` de otro sitio: **403** (una página ajena no usa
+  un token que alguien tenga guardado). Los agentes no mandan `Origin`.
+
+### 42.2 El token
+
+- **Cómo nace.** En **Automatizaciones › Conector de IA**
+  (`/dashboard/automatizaciones/conector`), quien tiene `automations.manage`
+  (§40) le pone nombre, marca las tiendas (solo las que ve) y las herramientas.
+  El token es `kagt_` + 32 bytes al azar en base64url; **se muestra una sola
+  vez** y Kapta guarda solo su sha256 (`agent_tokens.token_hash`) y su pista
+  (`kagt_` + 4 caracteres) para reconocerlo en la lista. Si se pierde, se
+  revoca y se crea otro.
+- **Qué ve.** Las tiendas del token **que su creador ve hoy**, dentro de la
+  organización del token: la misma regla que `auth_store_ids()` (las de
+  `user_store_access`, más todas las de la organización si es owner o admin).
+  Si su creador sale de la organización o deja de ver todas sus tiendas, la
+  llamada contesta **403 `sin_tiendas`** y hay que crear otro.
+- **Quién no entra.** Sin token, con otro, revocado o vencido: **401 «No
+  autorizado.»**, sin decir cuál, con `WWW-Authenticate: Bearer realm="kapta"`.
+  Sin la migración 0314: **503**, y la pantalla dice «Falta la migración 0314».
+- **Revocar** lo apaga en el acto; su registro queda.
+- **Tope:** **60 llamadas por minuto** por token, contadas en
+  `agent_tool_calls`. Pasado el tope, la herramienta contesta un error sin leer
+  nada.
+
+### 42.3 Las herramientas (solo lectura)
+
+| Herramienta | Permiso | Qué devuelve |
+| --- | --- | --- |
+| `buscar_pedidos` | `pedidos.leer` | Hasta 20 pedidos (10 si no se dice) por número, teléfono (sus últimos 9 dígitos), nombre del cliente o guía (también la de Swayp), del último movimiento más reciente al más antiguo, con tienda, total, estado, etapa y subetapa. |
+| `obtener_pedido` | `pedidos.leer` | Productos y cantidades, importes y moneda, forma y estado de pago, entrega (modalidad, cobertura, destino y dirección), estado del Master (etapa y subetapa con su nombre de pantalla, motivos, courier, fechas de despacho, entrega y devolución), hasta 20 guías y los últimos 10 movimientos. |
+| `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. No marca nada como leído. |
+| `consultar_politicas` | `politicas.leer` | El adelanto mínimo de los envíos por agencia (S/ 20, `lib/adelanto-minimo.ts`) y, si se da el distrito, su cobertura según `order_coverage_for` el **día de Lima** (contraentrega o agencia con adelanto). Si la base no contesta, «por revisar»: no afirma una cobertura que no se pudo calcular. |
+
+Lo que vale para todas (`lib/agent-tools.ts`):
+
+- Leen la base con `service_role`, que se salta RLS, así que **toda consulta va
+  filtrada por las tiendas del token**. Un pedido de otra tienda contesta lo
+  mismo que uno que no existe.
+- Lo que no se sabe vuelve como `null`, nunca inventado.
+- Lo que escribe el agente se limpia antes de ir al filtro: solo letras,
+  dígitos, espacios y `# + - . @ _`, hasta 60 caracteres.
+- `tools/list` publica solo las herramientas de los permisos del token, con su
+  JSON Schema estricto (un argumento de más es un error).
+
+### 42.4 El registro
+
+Cada llamada a una herramienta deja una fila en `agent_tool_calls`: token,
+herramienta, tienda, pedido, si salió bien, el código del fallo y cuánto
+tardó. **Sin lo que se preguntó ni lo que se contestó** (ni teléfonos ni
+nombres): la base rechaza texto libre en la herramienta y en el código. El
+token guarda su último uso (`last_used_at`, `last_tool`) y la pantalla muestra
+las llamadas de las últimas 24 horas.
+
+### 42.5 Cómo se conecta Grok
+
+- **Grok Bot:** agregar el servidor MCP por su dirección
+  (`https://<dominio>/api/mcp`) con la cabecera `Authorization: Bearer` y el
+  token guardado como secreto (la tarjeta de secreto seguro de Grok). Nunca se
+  pega en un chat.
+- **API de xAI:** en `tools`, una herramienta `{"type": "mcp"}` con
+  `server_url` = esa dirección, `server_label` = `kapta` y `authorization` =
+  el token.
+
+### 42.6 Pendiente
+
+- **Parte 2 — políticas escritas por tienda:** el texto que cada tienda escribe
+  (cambios, devoluciones, garantías…), con su vigencia y quién lo editó, junto a
+  las calculadas en `consultar_politicas`.
+- **Parte 3 — los cambios que el owner permitió:** dejar una nota en el pedido
+  (`pedidos.nota`), enviar WhatsApp al cliente (`whatsapp.enviar`, con
+  idempotencia y aprobación) y crear la guía de Aliclik (`aliclik.crear_guia`,
+  con vista previa y confirmación). Cada una exige además que **el creador del
+  token** tenga hoy el permiso de Kapta equivalente (por ejemplo
+  `aliclik.create_guide` para la guía). Ninguna cambia estados ni anula guías.
+
+Migración `0314_agent_tokens.sql`. Código: `lib/agent-auth.ts`,
+`lib/agent-tools.ts`, `lib/mcp-server.ts`, `app/api/mcp/route.ts`,
+`app/dashboard/automatizaciones/conector/`, `lib/agent-tokens-access.ts` y
+`components/agent-connector-panel.tsx`. Pruebas:
+`test/agent-connector.test.ts`, `test/agent-connector-mom.test.ts` y
+`scripts/sql/agent_tokens_smoke.sql`.
