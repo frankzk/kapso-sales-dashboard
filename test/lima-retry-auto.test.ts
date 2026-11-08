@@ -977,14 +977,15 @@ describe("la pasada sin coordenada", () => {
   });
 
   it("el motor solo pasa la coordenada de Google al núcleo cuando el pedido no trae la suya (o la suya es la de Google)", () => {
-    const server = readFileSync(resolve(process.cwd(), "lib/lima-retry-auto-server.ts"), "utf8");
+    // La regla vive en lib/lima-retry-location.ts y la comparte «Aprobar» (owner, 08-11-2026).
+    const server = readFileSync(resolve(process.cwd(), "lib/lima-retry-location.ts"), "utf8");
     expect(server).toContain("google = (await googlePinnedOrderIds(admin, [row])).has(row.order_id);");
     // El `?dry=1` del cron no busca en Google.
     const route = readFileSync(resolve(process.cwd(), "app/api/cron/lima-retry-auto/route.ts"), "utf8");
     expect(route).toContain("runLimaRetryAuto(createAdminSupabase(), { preview: dry, noGeocode: dry })");
-    // «Aprobar» (la acción manual) no manda coordenada.
+    // «Aprobar» (la acción manual) busca la ubicación con la misma regla y el mismo candado (08-11-2026).
     const manual = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/repro-lima/retry-actions.ts"), "utf8");
-    expect(manual).toContain("approveLimaRetry({ admin, row, chain, raw: facts.retryChain, actor: { userId: who.userId } })");
+    expect(manual).toContain("const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id));");
   });
 });
 

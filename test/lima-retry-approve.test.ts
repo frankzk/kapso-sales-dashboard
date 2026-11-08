@@ -16,6 +16,9 @@ const h = vi.hoisted(() => ({
   calls: { preview: [] as unknown[][], create: [] as unknown[][], context: [] as unknown[][], gates: [] as unknown[][], scope: 0 },
   chain: null as null | Record<string, unknown>,
   raw: null as null | Record<string, unknown>,
+  // Lo que `locateRetryOrder` le da a «Aprobar»: por defecto, el pin del pedido.
+  located: { coordinate: null } as Record<string, unknown>,
+  geocodeKeyStores: [] as string[],
 }));
 
 vi.mock("server-only", () => ({}));
@@ -40,6 +43,13 @@ vi.mock("@/lib/db", () => ({
     auth: { getUser: async () => ({ data: { user: { id: "ana" } } }) },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: ROW }) }) }) }),
   }),
+}));
+vi.mock("@/lib/lima-retry-location", () => ({
+  retryGeocodeKeyForStore: async (_admin: unknown, storeId: string) => {
+    h.geocodeKeyStores.push(storeId);
+    return "k";
+  },
+  locateRetryOrder: async () => ({ located: h.located, lookedUp: false, quotaHit: false }),
 }));
 vi.mock("@/lib/repro-lima-access", () => ({
   loadReproFacts: async () => new Map([["o1", { open: null, episode: { key: "e" }, retryChain: h.raw }]]),
@@ -95,6 +105,8 @@ beforeEach(() => {
   h.create = { orderNumber: "AL-1" };
   h.chain = { ...CHAIN };
   h.raw = { ...RAW };
+  h.located = { coordinate: null };
+  h.geocodeKeyStores = [];
 });
 
 const system = (extra: Record<string, unknown> = {}) => approveLimaRetry({
@@ -283,11 +295,23 @@ describe("la ubicación (05-11-2026): «Sin ubicación» y la coordenada de Goog
     expect(h.events).toEqual([]);
   });
 
-  it("«Aprobar» sin coordenada sigue diciendo lo mismo que antes", async () => {
-    h.preview = NO_COORD;
-    expect(await approveAliclikRetry("o1")).toEqual({ error: NO_COORD.error });
-    // La persona nunca manda coordenada: cotiza sin ella, como siempre.
-    expect(h.calls.preview[0]![1]).toEqual({ modality: "cod" });
+  it("«Aprobar» sin coordenada ni Google dice por qué y no cotiza (owner, 08-11-2026: «mismo candado»)", async () => {
+    h.located = { miss: "apagado" };
+    expect(await approveAliclikRetry("o1")).toEqual({
+      error: "Sin coordenada: la ubicación por dirección (Google) está apagada o Lima no está medida (Automatizaciones). Para crearla, pega el enlace de Google Maps de la clienta en la ficha del pedido («Corregir ubicación»).",
+    });
+    expect(h.geocodeKeyStores).toEqual(["s1"]);
+    expect(h.calls.preview).toEqual([]);
+  });
+
+  it("«Aprobar» con el edificio de Google cotiza y crea con él, y lo dice", async () => {
+    h.located = { coordinate: GOOGLE };
+    expect(await approveAliclikRetry("o1")).toEqual({
+      notice: "Guía con AUTOECOM creada: AL-1. Con la ubicación por dirección (Google, edificio).", done: true,
+    });
+    expect(h.calls.preview[0]![1]).toEqual({ modality: "cod", coordinate: GOOGLE.value });
+    expect(h.calls.create[0]![1]).toMatchObject({ coordinate: GOOGLE.value });
+    expect(h.events).toEqual([expect.objectContaining({ kind: "lima_retry_approved", payload: expect.objectContaining({ coordinate_source: "google" }) })]);
   });
 
   it("la coordenada de Google va a la cotización Y a la creación, y queda escrito de dónde salió", async () => {
@@ -317,10 +341,16 @@ describe("la ubicación (05-11-2026): «Sin ubicación» y la coordenada de Goog
     expect(h.events).toEqual([]);
   });
 
-  it("una persona no puede colar la coordenada de Google por el núcleo", async () => {
-    await approveLimaRetry({
+  it("«Aprobar» cotiza y crea con el punto de Google que le pasa la acción, ya con el candado (owner, 08-11-2026)", async () => {
+    const result = await approveLimaRetry({
       admin: fakeAdmin as never, row: ROW as never, chain: CHAIN, raw: RAW as never, actor: { userId: "ana" }, coordinate: GOOGLE,
     });
+    expect(result).toMatchObject({ outcome: "creada", coordinateNote: "Con la ubicación por dirección (Google, edificio)." });
+    expect(h.calls.preview[0]![1]).toEqual({ modality: "cod", coordinate: GOOGLE.value });
+    expect(h.calls.create[0]![1]).toMatchObject({ coordinate: GOOGLE.value });
+  });
+  it("«Aprobar» sin coordenada de Google cotiza con la del pedido, como siempre", async () => {
+    await approveLimaRetry({ admin: fakeAdmin as never, row: ROW as never, chain: CHAIN, raw: RAW as never, actor: { userId: "ana" } });
     expect(h.calls.preview[0]![1]).toEqual({ modality: "cod" });
     expect(h.calls.create[0]![1]).not.toHaveProperty("coordinate");
   });

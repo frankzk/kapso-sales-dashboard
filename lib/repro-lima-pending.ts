@@ -140,6 +140,12 @@ export interface LimaPendingOrder {
    * de corte. Sin guía esperando, null.
    */
   courierPickup?: { courier: "aliclik"; date: string } | null;
+  /**
+   * El detalle de su courier vigente (owner, 08-11-2026: «no me das grupo gf
+   * alexis o aliclik autoecom»): el motorizado de su última caja de Grupo GF, o
+   * el transporte de su guía Aliclik (AUTOECOM, ALIDRIVER). Null si no hay.
+   */
+  courierDetail?: string | null;
   /** Lo de Grupo GF para «Sale a reparto» (§29.16); null si no sale con Grupo GF. */
   gf?: LimaPendingGf | null;
 }
@@ -217,6 +223,21 @@ export function courierKey(courier: string | null | undefined): string {
   return (courier ?? "").trim().toLowerCase() || NO_COURIER;
 }
 
+/**
+ * La clave del detalle dentro de su courier: «propio:alexis»,
+ * «aliclik:autoecom». El mismo motorizado escrito con o sin tilde es uno.
+ */
+export function courierDetailKey(courier: string | null | undefined, detail: string | null | undefined): string | null {
+  const d = (detail ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  return d ? `${courierKey(courier)}:${d}` : null;
+}
+
+/** «Grupo GF · Alexis», «Aliclik · AUTOECOM» o solo el courier. */
+export function courierLabel(courier: string | null | undefined, detail?: string | null): string {
+  const name = courierKey(courier) === NO_COURIER ? "Sin courier" : courierDisplayName(courier);
+  return detail?.trim() ? `${name} · ${detail.trim()}` : name;
+}
+
 /** Sin canal calculado cuenta como «Sin marca», como en el Master. */
 export function channelKey(channel: string | null | undefined): string {
   return channel || "otro";
@@ -229,7 +250,11 @@ export function rowFiltersMatch(row: LimaPendingOrder, f: LimaRowFilters): boole
   }
   if (f.channels.size && !f.channels.has(channelKey(row.salesChannel))) return false;
   if (f.districts.size && !f.districts.has(districtKey(row.district))) return false;
-  if (f.couriers.size && !f.couriers.has(courierKey(row.courier))) return false;
+  if (f.couriers.size) {
+    // El courier entero («Grupo GF») o su detalle («Grupo GF · Alexis»).
+    const detail = courierDetailKey(row.courier, row.courierDetail);
+    if (!f.couriers.has(courierKey(row.courier)) && !(detail && f.couriers.has(detail))) return false;
+  }
   return true;
 }
 
@@ -241,12 +266,19 @@ function titleCase(value: string): string {
 export function rowFilterOptions(rows: readonly LimaPendingOrder[]): { channels: LimaFilterOption[]; districts: LimaFilterOption[]; couriers: LimaFilterOption[] } {
   const channelCount = new Map<string, number>();
   const courierCount = new Map<string, number>();
+  const detailCount = new Map<string, { parent: string; label: string; count: number }>();
   const district = new Map<string, { count: number; spellings: Map<string, number> }>();
   for (const row of rows) {
     const channel = channelKey(row.salesChannel);
     channelCount.set(channel, (channelCount.get(channel) ?? 0) + 1);
     const courier = courierKey(row.courier);
     courierCount.set(courier, (courierCount.get(courier) ?? 0) + 1);
+    const detail = courierDetailKey(row.courier, row.courierDetail);
+    if (detail) {
+      const entry = detailCount.get(detail) ?? { parent: courier, label: courierLabel(row.courier, row.courierDetail), count: 0 };
+      entry.count += 1;
+      detailCount.set(detail, entry);
+    }
     const key = districtKey(row.district);
     const entry = district.get(key) ?? { count: 0, spellings: new Map<string, number>() };
     entry.count += 1;
@@ -266,8 +298,15 @@ export function rowFilterOptions(rows: readonly LimaPendingOrder[]): { channels:
     label: value === NO_DISTRICT ? "Sin distrito" : [...spellings.entries()].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0], "es"))[0]?.[0] ?? value,
     count,
   })).sort((a, b) => Number(a.value === NO_DISTRICT) - Number(b.value === NO_DISTRICT) || a.label.localeCompare(b.label, "es"));
-  const couriers = [...courierCount.entries()].map(([value, count]) => ({ value, label: value === NO_COURIER ? "Sin courier" : courierDisplayName(value), count }))
+  // Cada courier y, debajo, sus detalles: «Grupo GF», «Grupo GF · Alexis»…
+  const parents = [...courierCount.entries()].map(([value, count]) => ({ value, label: value === NO_COURIER ? "Sin courier" : courierDisplayName(value), count }))
     .sort((a, b) => Number(a.value === NO_COURIER) - Number(b.value === NO_COURIER) || b.count - a.count || a.label.localeCompare(b.label, "es"));
+  const couriers = parents.flatMap((parent) => [
+    parent,
+    ...[...detailCount.entries()].filter(([, d]) => d.parent === parent.value)
+      .map(([value, d]) => ({ value, label: d.label, count: d.count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "es")),
+  ]);
   return { channels, districts, couriers };
 }
 

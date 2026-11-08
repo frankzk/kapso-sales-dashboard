@@ -322,6 +322,27 @@ export function retryNoLocationDetail(miss: RetryGeocodeMiss): string {
 }
 
 /**
+ * Lo que dice «Aprobar» de Repro Lima cuando no hay coordenada con la que
+ * cotizar (owner, 08-11-2026: «mismo candado»): por qué no sirvió Google y qué
+ * hacer. Corto: la bandeja lo muestra por pedido. Pura.
+ */
+export function retryApproveNoLocation(miss: RetryGeocodeMiss): string {
+  const paste = "pega el enlace de Google Maps de la clienta en la ficha del pedido («Corregir ubicación»)";
+  switch (miss) {
+    case "sin_edificio":
+      return `Sin coordenada: Google no dio el edificio para esta dirección. Para crearla, ${paste}.`;
+    case "sin_direccion":
+      return `Sin coordenada: la dirección no trae calle para buscarla en Google. Para crearla, ${paste}.`;
+    case "sin_cupo":
+      return `Sin coordenada: se acabó el cupo diario de Google. Vuelve a aprobar mañana, o ${paste}.`;
+    case "error":
+      return `Sin coordenada: no se pudo consultar Google. Vuelve a aprobar en un momento, o ${paste}.`;
+    default:
+      return `Sin coordenada: la ubicación por dirección (Google) está apagada o Lima no está medida (Automatizaciones). Para crearla, ${paste}.`;
+  }
+}
+
+/**
  * ¿La cotización dice que falta la ubicación? Para la pasada automática, sí
  * cuando Aliclik pide la coordenada (`needsCoordinate`), y cuando el pin que
  * dio GOOGLE no lo respalda el pedido (`pinSinCorroborar`): es un punto que

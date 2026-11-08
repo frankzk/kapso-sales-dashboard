@@ -258,7 +258,7 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
               <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PendingAddress row={row} /></td>
               <td className="px-3 py-3"><PendingContext row={row} repro={repro} today={today} /></td>
               <td className="px-3 py-3"><PendingStage row={row} repro={repro} today={today} plan={plan?.get(row.orderId)} planDay={planDay} /></td>
-              <td className="px-3 py-3 text-right"><p className="font-semibold tabular-nums text-ink-900">{soles(row.orderTotal)}</p>{row.courier && <p className="text-xs text-ink-500">{reproCourierName(row.courier)}</p>}</td>
+              <td className="px-3 py-3 text-right"><p className="font-semibold tabular-nums text-ink-900">{soles(row.orderTotal)}</p>{row.courier && <p className="text-xs text-ink-500">{`${reproCourierName(row.courier)}${row.courierDetail ? ` · ${row.courierDetail}` : ""}`}</p>}</td>
               <td className="px-4 py-3"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
             </tr>;
           })}</tbody>

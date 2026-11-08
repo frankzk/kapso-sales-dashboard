@@ -5181,7 +5181,26 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     coordenada. «Aprobar» de Repro Lima no tiene dónde pegarla: cotiza con la
     del pedido. Sale en Simulación, Activo y «Simular ahora» por igual. Un
     pedido sin coordenada ni ubicación por dirección ni siquiera se cotiza.
-    «Aprobar» no cambia: sigue diciendo «Este pedido no tiene coordenada…».
+  - **«Aprobar» con la ubicación por dirección, con el mismo candado** (owner,
+    08-11-2026: al aprobar 19 reintentos salieron 19 «Este pedido no tiene
+    coordenada…» y preguntó si no podía pasar primero por Google). «Aprobar»
+    de Repro Lima busca la coordenada con **la misma regla que la pasada**
+    (`locateRetryOrder`, `lib/lima-retry-location.ts`): el pin del pedido tal
+    cual; sin pin (o con el pin que puso Google), el **edificio** en Google
+    solo si el interruptor de la organización está encendido, la clave está y
+    la última medición de Lima cumple B (`retryGeocodeKeyForStore`). Con ese
+    punto cotiza y crea, `lima_retry_approved` lleva `coordinate_source:
+    google` y el aviso dice «Con la ubicación por dirección (Google,
+    edificio)». Sin él no cotiza y dice por qué, en corto
+    (`retryApproveNoLocation`): «Sin coordenada: la ubicación por dirección
+    (Google) está apagada o Lima no está medida (Automatizaciones). Para
+    crearla, pega el enlace de Google Maps de la clienta en la ficha del
+    pedido («Corregir ubicación»)», o que Google no dio el edificio, que la
+    dirección no trae calle, que se acabó el cupo o que no respondió. El
+    navegador nunca manda la coordenada: la busca el servidor. El 08-11-2026
+    el interruptor nunca se había encendido y Lima nunca se había medido: hay
+    que pulsar «Medir la ubicación por dirección en Lima» y, si cumple B,
+    encenderlo.
   - **La ubicación por dirección (Google), solo con el edificio** (owner,
     05-11-2026; decisiones A, B y C de `docs/kapta/geocodificacion-propuesta.md`).
     Interruptor «Usar la ubicación por dirección (Google) si el pedido no
@@ -5419,7 +5438,16 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
     pedido sin canal calculado cuenta como «Sin marca».
   - **Distrito**. El mismo distrito con o sin tilde, o con otras mayúsculas, es
     una sola opción, con el nombre más escrito.
-  - **Courier**, el vigente del Master, y «Sin courier».
+  - **Courier**, el vigente del Master, y «Sin courier». Desde el 08-11-2026
+    (owner: «no me das grupo gf alexis o aliclik autoecom») cada courier lleva
+    debajo su detalle: con **Grupo GF**, el motorizado de la última caja de su
+    última salida propia («Grupo GF · Alexis»; la caja de un día posterior
+    gana, y en el mismo día la que sigue activa); con **Aliclik**, el
+    transporte de su última guía («Aliclik · AUTOECOM», «Aliclik · ALIDRIVER»;
+    `aliclik_transport_name`). Elegir el courier entero trae todo lo suyo;
+    elegir un detalle, solo eso (`propio:alexis`, sin tildes ni mayúsculas).
+    La fila dice lo mismo bajo la venta. Se lee con la carga de Repro Lima
+    (`loadCourierDetails`), solo para Aliclik y Grupo GF.
 
   Cada opción dice cuántos pedidos tiene con los demás filtros de la barra
   puestos (con «Antes de ayer o más», Canal cuenta solo esos). Recortan como Tienda: los
