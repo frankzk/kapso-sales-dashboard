@@ -56,8 +56,7 @@ import { escapeHtml, sendTelegramToAll } from "@/lib/telegram";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { loadReproFacts, retryChainOf, type ReproFacts } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
-import { geocodeLimaGate } from "@/lib/geocode-google";
-import { geocodeOrderAddress, googlePinnedOrderIds, latestGeocodeLimaRun } from "@/lib/geocode-google-server";
+import { locateRetryOrder, retryGeocodeKey, type GoogleCoordinate, type RetryLocated } from "@/lib/lima-retry-location";
 import { unsavedAliclikIntent, type CreationIntent } from "@/lib/aliclik-intent-release";
 import type { ReproOrderRow } from "@/lib/repro-lima-program";
 import { claimView } from "@/lib/repro-lima";
@@ -77,7 +76,6 @@ import {
   retryRecheck,
   retryVariantLabel,
   retryVariantOf,
-  type RetryGeocodeMiss,
   type RetryMode,
   type RetryOutcome,
   type RetryVariant,
@@ -536,29 +534,15 @@ async function candidatesOf(
   return out.sort((a, b) => Date.parse(a.raw.failed.at) - Date.parse(b.raw.failed.at));
 }
 
-/** La coordenada de la dirección en Google con la que se cotiza y se crea. */
-type GoogleCoordinate = { value: string; source: "google" };
-
-/** Con qué coordenada se cotiza: la del pedido (`null`), la de Google, o por qué no hay. */
-type Located = { coordinate: GoogleCoordinate | null } | { miss: RetryGeocodeMiss };
-
 /**
- * La clave de Google para esta organización, o null: con el interruptor
- * encendido, solo si la clave está en el entorno y la ÚLTIMA medición de Lima
- * sigue cumpliendo B con el edificio (`geocodeLimaGate`). Si una medición nueva
- * ya no lo cumple, la pasada deja de usar Google aunque el interruptor siga
- * encendido (el panel lo dice). Lo que no se pudo leer no enciende nada.
+ * La clave de Google para esta organización, o null (`retryGeocodeKey`,
+ * lib/lima-retry-location.ts: la misma regla que «Aprobar»). Lo que no se pudo
+ * leer no enciende nada y queda en los errores de la pasada.
  */
 async function geocodeKeyFor(admin: SupabaseClient, orgId: string, errors: string[]): Promise<string | null> {
-  const key = env.googleGeocodingApiKey();
-  if (!key) return null;
-  try {
-    const latest = await latestGeocodeLimaRun(admin, orgId);
-    return geocodeLimaGate(latest?.summary ?? null).ok ? key : null;
-  } catch (e) {
-    errors.push(`No se pudo leer la medición de Lima: la ubicación por dirección no se usa en esta pasada (${e instanceof Error ? e.message : String(e)}).`);
-    return null;
-  }
+  const { key, error } = await retryGeocodeKey(admin, orgId);
+  if (error) errors.push(`No se pudo leer la medición de Lima: la ubicación por dirección no se usa en esta pasada (${error}).`);
+  return key;
 }
 
 /**
@@ -667,54 +651,18 @@ export async function runLimaRetryAuto(
   // tomó como pin. Ese punto lo puso Kapta, no la clienta, así que se trata
   // como lo que es —Google— y pasa por el interruptor, la medición (B), la nota
   // del log y el camino de `pinSinCorroborar` → `sin_ubicacion`.
-  const located = new Map<string, Located>();
-  const locate = async (c: Candidate, geocodeKey: string | null): Promise<Located> => {
-    const row = c.row;
-    const seen = located.get(row.order_id);
+  const located = new Map<string, RetryLocated>();
+  const locate = async (c: Candidate, geocodeKey: string | null): Promise<RetryLocated> => {
+    const seen = located.get(c.row.order_id);
     if (seen) return seen;
-    let out: Located;
-    if (row.latitude != null && row.longitude != null) {
-      let google: boolean;
-      try {
-        google = (await googlePinnedOrderIds(admin, [row])).has(row.order_id);
-      } catch {
-        // Sin saber de dónde salió el pin, no se cotiza con él: se reintenta.
-        located.set(row.order_id, { miss: "error" });
-        return { miss: "error" };
-      }
-      if (!google) {
-        located.set(row.order_id, { coordinate: null });
-        return { coordinate: null };
-      }
-    }
-    if (!geocodeKey || row.coverage !== "lima") out = { miss: "apagado" };
-    else if (report.geocode.quotaHit) out = { miss: "sin_cupo" };
-    else {
-      report.geocode.lookups += 1;
-      try {
-        const geo = await geocodeOrderAddress(admin, {
-          order_id: row.order_id,
-          store_id: row.store_id,
-          address: row.address ?? null,
-          district: row.district ?? null,
-          province: row.province ?? null,
-          region: row.region ?? null,
-        }, { key: geocodeKey });
-        if (geo.kind === "ok") out = { coordinate: { value: `${geo.lat}, ${geo.lng}`, source: "google" } };
-        else if (geo.kind === "rejected") out = { miss: "sin_edificio" };
-        else if (geo.reason === "sin_cupo") {
-          report.geocode.quotaHit = true;
-          out = { miss: "sin_cupo" };
-        } else if (geo.reason === "sin_direccion") out = { miss: "sin_direccion" };
-        else if (geo.reason === "sin_clave") out = { miss: "apagado" };
-        else out = { miss: "error" };
-      } catch {
-        out = { miss: "error" };
-      }
-    }
+    // La misma regla que «Aprobar» (`locateRetryOrder`): el pin del pedido, o el
+    // edificio en Google con el candado; el cupo se corta para toda la pasada.
+    const where = await locateRetryOrder(admin, c.row, geocodeKey, { quotaHit: report.geocode.quotaHit });
+    if (where.lookedUp) report.geocode.lookups += 1;
+    if (where.quotaHit) report.geocode.quotaHit = true;
     // Un error o el cupo se vuelven a probar en la pasada siguiente, no en esta.
-    located.set(row.order_id, out);
-    return out;
+    located.set(c.row.order_id, where.located);
+    return where.located;
   };
 
   outer: for (const { orgId, modes } of orgModes) {

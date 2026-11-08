@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, limaPlanCandidate, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, limaPlanCandidate, courierLabel, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -290,6 +290,31 @@ describe("acceso a todos los pendientes", () => {
     await expect(loadLimaPending(database([master(1)], false, { shipmentError: "sin guías" }).admin, { userId: "u", storeIds: new Set(["a"]) }))
       .rejects.toThrow("sin guías");
   });
+  it("el detalle del courier: el transporte de la última guía Aliclik y el motorizado de la última caja de Grupo GF", async () => {
+    const source = [
+      master(1, { macro_stage: "en_curso", macro_substage: "en_transito", current_courier: "aliclik" }),
+      master(2, { macro_stage: "en_curso", macro_substage: "por_reprogramar_lima", current_courier: "propio" }),
+      master(3, { macro_stage: "en_curso", macro_substage: "en_transito", current_courier: "tanders" }),
+    ];
+    const db = database(source, false, { tables: {
+      shipments: [
+        { id: "a1", order_id: "o1", courier: "aliclik", aliclik_transport_name: "ALIDRIVER", output_number: 1, created_at: "2026-11-01T10:00:00Z" },
+        { id: "a2", order_id: "o1", courier: "aliclik", aliclik_transport_name: "AutoEcom Logistic", output_number: 2, created_at: "2026-11-05T10:00:00Z" },
+        { id: "p1", order_id: "o2", courier: "propio", output_number: 1, created_at: "2026-11-03T10:00:00Z" },
+      ],
+      // Salió con Jhon el 04/11 y con Alexis el 05/11 (la caja de Alexis, recibida en oficina).
+      dispatch_manifest_items: [
+        { id: "i1", shipment_id: "p1", manifest_id: "m4", removed_at: "2026-11-04T20:00:00Z" },
+        { id: "i2", shipment_id: "p1", manifest_id: "m5", removed_at: "2026-11-05T20:00:00Z" },
+      ],
+      dispatch_manifests: [
+        { id: "m4", route_date: "2026-11-04", driver_name: "Jhon", courier: "propio", kind: "reparto", state: "in_custody" },
+        { id: "m5", route_date: "2026-11-05", driver_name: "Alexis", courier: "propio", kind: "reparto", state: "in_custody" },
+      ],
+    } });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) }, new Date("2026-11-08T15:00:00Z"));
+    expect(Object.fromEntries(rows.map((r) => [r.orderId, r.courierDetail]))).toEqual({ o1: "AUTOECOM", o2: "Alexis", o3: null });
+  });
   it("sin tiendas no consulta y un error no se presenta como lista vacía", async () => {
     const db = database([], true);
     await expect(loadLimaPending(db.admin, { userId: "u", storeIds: new Set() })).resolves.toEqual([]);
@@ -478,6 +503,34 @@ describe("filtros de la barra junto a Tienda: Creación, Canal, Distrito y Couri
     ]);
     // Las opciones fijas del Master, en su orden, también con cero.
     expect(o.channels.map((c) => [c.value, c.count])).toEqual([["web_formulario", 2], ["web_carrito", 0], ["asesora", 1], ["chatbot", 0], ["bot_carritos", 0], ["catalogo", 0], ["otro", 1]]);
+  });
+  it("Courier dice el exacto (owner, 08-11-2026): «Grupo GF · Alexis», «Aliclik · AUTOECOM», debajo de su courier", () => {
+    const rows = [
+      row({ orderId: "1", courier: "propio", courierDetail: "Alexis" }),
+      row({ orderId: "2", courier: "propio", courierDetail: "Alexis" }),
+      row({ orderId: "3", courier: "propio", courierDetail: "Jhon" }),
+      row({ orderId: "4", courier: "propio", courierDetail: null }),
+      row({ orderId: "5", courier: "aliclik", courierDetail: "AUTOECOM" }),
+      row({ orderId: "6", courier: "aliclik", courierDetail: "ALIDRIVER" }),
+      row({ orderId: "7", courier: "tanders" }),
+    ];
+    expect(rowFilterOptions(rows).couriers).toEqual([
+      { value: "propio", label: "Grupo GF", count: 4 },
+      { value: "propio:alexis", label: "Grupo GF · Alexis", count: 2 },
+      { value: "propio:jhon", label: "Grupo GF · Jhon", count: 1 },
+      { value: "aliclik", label: "Aliclik", count: 2 },
+      { value: "aliclik:alidriver", label: "Aliclik · ALIDRIVER", count: 1 },
+      { value: "aliclik:autoecom", label: "Aliclik · AUTOECOM", count: 1 },
+      { value: "tanders", label: "Tanders", count: 1 },
+    ]);
+    // El detalle filtra solo lo suyo; el courier entero, todo lo suyo. Con o sin tilde es el mismo.
+    const picked = (keys: string[]) => rows.filter((r) => rowFiltersMatch(r, f({ couriers: new Set(keys) }))).map((r) => r.orderId);
+    expect(picked(["propio:alexis"])).toEqual(["1", "2"]);
+    expect(picked(["propio"])).toEqual(["1", "2", "3", "4"]);
+    expect(picked(["propio:jhon", "aliclik:autoecom"])).toEqual(["3", "5"]);
+    expect(rowFiltersMatch(row({ courier: "propio", courierDetail: "Alexís" }), f({ couriers: new Set(["propio:alexis"]) }))).toBe(true);
+    expect(courierLabel("propio", "Alexis")).toBe("Grupo GF · Alexis");
+    expect(courierLabel(null)).toBe("Sin courier");
   });
   it("viven en la URL; una fecha mal escrita se ignora y la ficha no cambia la clave", () => {
     const params = new URLSearchParams("atencion=nunca_salieron&ficha=o1");

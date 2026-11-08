@@ -103,6 +103,49 @@ de mandar en la pasada siguiente; lo ya enviado queda en la Actividad y las
 direcciones corregidas siguen en «Corregir ubicación» (se quitan desde la
 ficha). La columna no estorba aunque se revierta el código.
 
+### 08-11-2026 · Repro Lima: «Aprobar» con la ubicación de Google (mismo candado) y el courier exacto en el filtro (sin migración, MOM §9.5)
+
+Dos pedidos del owner.
+
+**«Aprobar» de los reintentos Aliclik.** Al aprobar 19 reintentos salieron 19
+«Este pedido no tiene coordenada…». «Aprobar» ahora busca la coordenada con la
+misma regla que la pasada automática (`locateRetryOrder`,
+`lib/lima-retry-location.ts`): el pin del pedido o, sin pin, el **edificio** en
+Google. Lo segundo solo si:
+- el interruptor «Usar la ubicación por dirección (Google)» de Automatizaciones
+  está encendido;
+- la clave está;
+- la última medición de Lima cumple B.
+
+Si no, dice por qué en una línea corta y no cotiza. El 08-11-2026 el
+interruptor nunca se había encendido y Lima nunca se había medido (no hay filas
+en `lima_retry_auto_settings` ni en `geocode_pilot_runs`).
+
+**Filtro «Courier» de Repro Lima.** Cada courier lleva debajo su detalle: el
+motorizado de la última caja de Grupo GF («Grupo GF · Alexis») o el transporte
+de la última guía Aliclik («Aliclik · AUTOECOM»). La fila lo repite bajo la
+venta.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+«Aprobar» suma, por pedido sin coordenada, la lectura del interruptor y de la
+última medición, y una consulta a Google con la caché `order_geocodes` solo si
+el candado lo deja. Repro Lima suma tres lecturas por carga para el detalle:
+- las salidas Aliclik y propias;
+- sus ítems de caja;
+- sus cajas.
+
+**Qué mirar después.** Para que «Aprobar» use Google:
+1. En Automatizaciones, pulsar «Medir la ubicación por dirección en Lima».
+2. Si cumple B, encender el interruptor.
+3. Aprobar un reintento sin coordenada: el aviso dice «Con la ubicación por
+   dirección (Google, edificio)».
+
+Mientras el interruptor siga apagado, cada reintento sin coordenada dice «Sin
+coordenada: la ubicación por dirección (Google) está apagada o Lima no está
+medida…».
+
+**Marcha atrás.** Revertir el commit.
+
 ### 08-11-2026 · Confirmación por Chatby: pedir la ubicación desde el drawer y releer cuando la clienta la manda (sin migración, MOM §6.1)
 
 **Sin migración.** La marca de «se le pidió» va en la columna que ya existe
