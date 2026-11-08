@@ -333,6 +333,8 @@ export interface ShipmentRow {
   store_id: string;
   courier: string; // aliclik | fenix
   guide_code: string; // AUR5X… (aliclik) or Fenix tracking
+  /** Aliclik: el número del pedido allá (el ALC… provisional antes del AUR5X). */
+  external_order_number?: string | null;
   /** Identidad MOM de la salida física. Opcional durante el despliegue de 0059. */
   output_number?: number | null;
   output_code?: string | null;

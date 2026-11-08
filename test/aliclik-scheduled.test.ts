@@ -201,7 +201,9 @@ describe("pasa por la misma puerta que el botón", () => {
     const create = actions.slice(actions.indexOf("export async function createAliclikGuide("));
     expect(create.indexOf('authorize(orderId, "aliclik.create_guide")')).toBeGreaterThan(-1);
     expect(create.indexOf('authorize(orderId, "aliclik.create_guide")')).toBeLessThan(create.indexOf("createAliclikGuideFor("));
-    expect(create).toContain("createAliclikGuideFor(ctx, input);");
+    // Sin scope ni origen: la persona no firma como automática. El quinto es
+    // el origen del GPS que eligió, comprobado en el servidor (MOM §6.1).
+    expect(create).toContain("createAliclikGuideFor(ctx, input, undefined, undefined, gpsOrigin);");
   });
 
   it("lo que manda el navegador no puede decir «automática»", () => {

@@ -55,6 +55,10 @@ import { aliclikStatusLabel, mapAliclikStatus } from "@/lib/aliclik-status";
 import { canAdoptExistingGuide } from "@/lib/aliclik-orphans";
 import type { OrderMasterRow } from "@/lib/types";
 import { pickGuideToCancel } from "@/lib/aliclik-intent-release";
+import { parseCoordinateInput } from "@/lib/aliclik-geo";
+import { sameGpsPoint, type GuideGpsOrigin } from "@/lib/guide-gps";
+import type { RecurringGpsCandidate } from "@/lib/recurring-gps";
+import { loadRecurringGpsCandidates } from "@/lib/recurring-gps-access";
 import {
   aliclikContextFor,
   createAliclikGuideFor,
@@ -66,6 +70,7 @@ import {
 } from "@/lib/aliclik-guide";
 
 export type { AliclikPreview, AliclikPreviewInput, CreateGuideInput } from "@/lib/aliclik-guide";
+export type { RecurringGpsCandidate } from "@/lib/recurring-gps";
 
 const MASTER_PATH = "/dashboard/pedidos";
 
@@ -547,13 +552,43 @@ export async function previewAliclikGuide(
   return previewAliclikGuideFor(ctx, input);
 }
 
+/**
+ * «Usar este GPS» (MOM §6.1, 08-11-2026): los pedidos entregados de la clienta
+ * (mismo celular, misma organización) cuya guía Aliclik guardó coordenada, sin
+ * fallidos, el más reciente primero y hasta 3. Solo lee; quien pulsa decide.
+ */
+export async function loadAliclikGpsCandidates(
+  orderId: string,
+): Promise<{ candidates: RecurringGpsCandidate[]; error?: string }> {
+  const { ctx, error } = await authorize(orderId, "aliclik.create_guide");
+  if (!ctx) return { candidates: [], error };
+  return loadRecurringGpsCandidates(await createServerSupabase(), createAdminSupabase(), ctx.row);
+}
+
+/**
+ * El GPS que la asesora eligió de una entrega anterior, comprobado aquí: el
+ * pedido tiene que seguir siendo un candidato y la coordenada del campo, la de
+ * su guía. Si no, la guía sale igual y el GPS queda como «pegado por una
+ * persona»: el navegador no puede firmar un origen que no es.
+ */
+async function verifiedGpsOrigin(ctx: AliclikContext, input: CreateGuideInput): Promise<GuideGpsOrigin | null> {
+  const fromId = input.coordinateFromOrderId?.trim();
+  if (!fromId) return null;
+  const typed = parseCoordinateInput(input.coordinate ?? "");
+  if (!typed) return null;
+  const { candidates } = await loadRecurringGpsCandidates(await createServerSupabase(), createAdminSupabase(), ctx.row);
+  const chosen = candidates.find((c) => c.orderId === fromId && sameGpsPoint(typed, c));
+  return chosen ? { source: "historial", fromOrderId: chosen.orderId, fromOrderName: chosen.orderName } : null;
+}
+
 export async function createAliclikGuide(
   orderId: string,
   input: CreateGuideInput,
 ): Promise<AliclikActionState> {
   const { ctx, error } = await authorize(orderId, "aliclik.create_guide");
   if (!ctx) return { error };
-  const result = await createAliclikGuideFor(ctx, input);
+  const gpsOrigin = await verifiedGpsOrigin(ctx, input);
+  const result = await createAliclikGuideFor(ctx, input, undefined, undefined, gpsOrigin);
   if (result.error) return { error: result.error };
   revalidatePath(MASTER_PATH);
   revalidatePath("/dashboard/leads");
