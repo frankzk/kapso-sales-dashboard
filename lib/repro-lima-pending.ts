@@ -97,6 +97,20 @@ export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readon
 }
 
 /**
+ * Lo que no se creó al aprobar varios, una línea por motivo (owner,
+ * 08-11-2026: 21 pedidos repetían la misma frase). El motivo una vez y, al
+ * final, sus pedidos; el motivo con más pedidos primero. Con un solo pedido,
+ * «#KP1: motivo», como antes.
+ */
+export function groupApprovalFailures(failed: readonly { orderName: string; error: string }[]): string[] {
+  const byError = new Map<string, string[]>();
+  for (const f of failed) byError.set(f.error, [...(byError.get(f.error) ?? []), f.orderName]);
+  return [...byError.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([error, names]) => (names.length === 1 ? `${names[0]}: ${error}` : `${error} Pedidos (${names.length}): ${names.join(", ")}.`));
+}
+
+/**
  * «Reintentos Aliclik»: a quién aprueba el botón de la barra (owner,
  * 06-11-2026). Los marcados que siguen listos y a la vista; sin ninguno
  * marcado, todos los listos, como antes. Un marcado que dejó de estar listo o

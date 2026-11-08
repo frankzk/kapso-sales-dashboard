@@ -1,5 +1,19 @@
 # Deployment runbook
 
+### 08-11-2026 · Repro Lima: el aviso de «Aprobar elegidos» agrupa por motivo y lleva a «Ubicación por dirección» (sin migración, MOM §9.5)
+
+Pedido del owner. Al aprobar 22 reintentos, 21 repetían «Sin coordenada: la
+ubicación por dirección (Google) está apagada…». Ahora hay una línea por motivo
+con sus pedidos al final. Si Google está apagado o Lima no está medida, el aviso
+lleva el enlace a Automatizaciones → «Ubicación por dirección».
+
+**Sin migración**, sin crons ni variables. Solo cambia el aviso.
+
+**Qué mirar después.** Aprobar varios sin coordenada: el aviso dice el motivo
+una vez, «Pedidos (N): …», y el enlace abre la sección de Automatizaciones.
+
+**Marcha atrás.** Revertir el commit.
+
 ### 08-11-2026 · Confirmación por Chatby: pide sola la dirección o la ubicación y vuelve a intentar la guía (0318 o sin migración, MOM §6.1)
 
 **Migración 0318** (`db/migrations/0318_chatby_auto_ask.sql`, aditiva): una

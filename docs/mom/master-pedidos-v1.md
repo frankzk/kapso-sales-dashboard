@@ -5327,6 +5327,15 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     el interruptor nunca se había encendido y Lima nunca se había medido: hay
     que pulsar «Medir la ubicación por dirección en Lima» y, si cumple B,
     encenderlo.
+    - **El aviso de «Aprobar elegidos» agrupa por motivo** (owner, 08-11-2026:
+      al aprobar 22, 21 repetían la misma frase). Una línea por motivo, con
+      sus pedidos al final («… Pedidos (21): #KP202686, #KP202562, …»), el de
+      más pedidos primero (`groupApprovalFailures`). Si algún pedido no tuvo
+      Google porque está apagado o Lima no está medida, el aviso lleva el
+      enlace «Ir a “Ubicación por dirección” en Automatizaciones»
+      (`/dashboard/automatizaciones#retry-ubicacion`). Ese día había 108
+      pedidos de Lima de WooCommerce de los últimos 7 días con pin: la
+      medición tiene muestra; si cumple B solo se sabe midiendo.
   - **La ubicación por dirección (Google), solo con el edificio** (owner,
     05-11-2026; decisiones A, B y C de `docs/kapta/geocodificacion-propuesta.md`).
     Interruptor «Usar la ubicación por dirección (Google) si el pedido no
