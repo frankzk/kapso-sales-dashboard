@@ -41,6 +41,7 @@ import { PREPAY_LIST_PATH, PREPAY_MODE_LABEL, isPrepayMode, type PrepaySimulatio
 import { APPROX_MODE_LABEL, isApproxMode } from "@/lib/geocode-approx";
 import {
   CHATBY_APPROX_KEY,
+  CHATBY_ASK_KEY,
   PREPAY_MODE_EVENT,
   RETRY_CAP_EVENT,
   RETRY_GEOCODE_EVENT,
@@ -457,4 +458,42 @@ export async function setChatbyApproxMode(orgId: string, mode: string): Promise<
   });
   revalidatePath(PANEL_PATH);
   return { notice: warn ?? `Ubicación aproximada en la calle correcta: ${APPROX_MODE_LABEL[mode]}.` };
+}
+
+// ── «Pedir sola la dirección o la ubicación» (0318, MOM §6.1 y §40) ──
+
+/**
+ * Apagado / Simulación / Activo de los mensajes automáticos que piden la
+ * dirección completa o la ubicación cuando la guía de Chatby no sale. Solo
+ * escribe `chatby_auto_settings.ask_mode` de una fila que ya existe. Activo
+ * pide la confirmación en la página (manda WhatsApp a clientas).
+ */
+export async function setChatbyAskMode(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isApproxMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  // `*`: sin la 0318 la columna no viene y se dice, en vez de fallar al escribir.
+  const { data: current, error: readError } = await g.admin.from("chatby_auto_settings").select("*").eq("org_id", orgId).maybeSingle();
+  if (readError) return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  const row = current as { ask_mode?: string } | null;
+  if (!row) return { error: "La confirmación por Chatby no está configurada en tu organización." };
+  if (!("ask_mode" in row)) return { error: "Falta la migración 0318 en la base de datos." };
+  const previous = isApproxMode(row.ask_mode) ? row.ask_mode : "apagado";
+  if (previous === mode) return { notice: "Ya estaba así." };
+  const { data: updated, error } = await g.admin
+    .from("chatby_auto_settings")
+    .update({ ask_mode: mode, updated_by: g.actor, updated_at: new Date().toISOString() })
+    .eq("org_id", orgId)
+    .select("org_id");
+  if (error || !updated?.length) return { error: "No se pudo guardar. Intenta de nuevo." };
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: CHATBY_ASK_KEY,
+    previous,
+    next: mode,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  return { notice: warn ?? `Pedir sola la dirección o la ubicación: ${APPROX_MODE_LABEL[mode]}.` };
 }

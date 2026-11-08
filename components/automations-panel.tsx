@@ -39,12 +39,14 @@ import {
   confirmationText,
   needsConfirmation,
   storeSettingsHref,
+  CHATBY_ASK_KEY,
   type AutomationEffect,
   type AutomationEntry,
   type AutomationGroup,
 } from "@/lib/automations-catalog";
 import type { AutomationsOrgView, OrgSwitchView, RetryGeocodeView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
 import type { ApproxReportRow, ChatbyApproxView } from "@/lib/chatby-approx-server";
+import type { ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
 import {
   APPROX_MODE_LABEL,
   APPROX_NEAR_METERS,
@@ -77,6 +79,7 @@ import {
   simulatePrepayNow,
   type PrepaySimulationResult,
   setChatbyApproxMode,
+  setChatbyAskMode,
   setOrgAutomation,
   setRetryDailyCap,
   setRetryGeocode,
@@ -1282,7 +1285,7 @@ function groupBadge(entries: AutomationEntry[], org: AutomationsOrgView): ReactN
     e.control.kind === "org_table"
       ? org.org[e.key]?.state === "on" && org.org[e.key]?.requiresOn !== false
       : e.control.kind === "org_mode"
-        ? org.chatbyApprox.mode === "activo"
+        ? (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : org.chatbyApprox.mode) === "activo"
         : (org.store?.[e.key] ?? []).some((s) => s.on && s.requiresOn),
   ).length;
   return <Badge tone={lit ? "ok" : "neutral"}>{lit ? `${lit} de ${switchable.length} encendidas` : "Todas apagadas"}</Badge>;
@@ -1306,6 +1309,8 @@ function CatalogSection({
             <OrgSwitchRow key={entry.key} entry={entry} orgId={org.orgId} view={org.org[entry.key]} writable={writable} />
           ) : entry.control.kind === "store_column" ? (
             <StoreSwitchRow key={entry.key} entry={entry} views={org.store?.[entry.key] ?? null} writable={writable} />
+          ) : entry.control.kind === "org_mode" && entry.key === CHATBY_ASK_KEY ? (
+            <AskModeRow key={entry.key} entry={entry} orgId={org.orgId} view={org.chatbyAsk} writable={writable} />
           ) : entry.control.kind === "org_mode" ? (
             <ApproxModeRow key={entry.key} entry={entry} orgId={org.orgId} view={org.chatbyApprox} writable={writable} />
           ) : (
@@ -1486,6 +1491,64 @@ function ReadonlyRow({
         <Badge tone={state?.tone === "warn" ? "warn" : "neutral"} wrap className="max-w-full self-start sm:max-w-[16rem] sm:shrink-0">
           {state?.label ?? "Sin dato"}
         </Badge>
+      </div>
+    </div>
+  );
+}
+
+// ── Pedir sola la dirección o la ubicación (Chatby, 0318) ────────────────────
+
+/** Apagado / Simulación / Activo de los mensajes que piden la dirección o la ubicación; guarda al cambiar. */
+function AskModeRow({ entry, orgId, view, writable }: { entry: AutomationEntry; orgId: string; view: ChatbyAskModeView; writable: boolean }) {
+  const id = useId();
+  const [mode, setMode] = useState<ApproxMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available && view.rowExists;
+  const blocked = !view.available
+    ? "Aún no está instalada en la base de datos: funciona como Apagado."
+    : !view.rowExists
+      ? "Sin configurar en tu organización."
+      : null;
+
+  const change = (next: ApproxMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (
+      next === "activo" &&
+      !window.confirm(
+        "¿Poner en Activo «Pedir sola la dirección o la ubicación»? Cuando la clienta confirme por Chatby y la guía no salga por la dirección, Kapta le escribirá por WhatsApp sin que una asesora lo revise (una vez para la dirección y una para la ubicación).",
+      )
+    ) {
+      return false;
+    }
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setChatbyAskMode(orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  return (
+    <div className={ROW}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 sm:flex-1">
+          <EntryHead entry={entry} nameId={`${id}-name`} descId={`${id}-desc`} />
+        </div>
+        <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+      </div>
+      <div className="mt-1.5">
+        <RowStatus pending={pending} status={status} blocked={blocked} />
       </div>
     </div>
   );

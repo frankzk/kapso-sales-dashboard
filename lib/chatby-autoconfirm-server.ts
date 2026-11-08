@@ -22,7 +22,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import { prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
-import { fetchChatbyConversation } from "@/lib/chatby-api";
+import { fetchChatbyConversation, forgetChatbyConversation, sendChatbyReply } from "@/lib/chatby-api";
 import { geocodeOrderAddress, markApproxUsed } from "@/lib/geocode-google-server";
 import { APPROX_COORDINATE_NOTE, approxDecision, type ApproxMode } from "@/lib/geocode-approx";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -64,9 +64,27 @@ import {
   type ChatbyCheckState,
   type ChatbyHoldReason,
 } from "@/lib/chatby-autoconfirm";
-import type { ChatbyMessage } from "@/lib/chatby-conversation";
-import { chatbyHeldAt, chatbyHeldWatchDue, chatbyNewCustomerMessage } from "@/lib/chatby-location-ask";
-import { chatbyReaskWatch } from "@/lib/chatby-reask";
+import { CHATBY_REPLY_PAUSE_MINUTES, type ChatbyConversation, type ChatbyMessage } from "@/lib/chatby-conversation";
+import { chatbyAskedAt, chatbyHeldAt, chatbyHeldInWindow, chatbyHeldWatchDue, chatbyNewCustomerMessage } from "@/lib/chatby-location-ask";
+import { chatbyAskKindFor, chatbyCorrectedWatch, chatbyReaskWatch, type ChatbyReaskVerdict } from "@/lib/chatby-reask";
+import {
+  CHATBY_AUTO_ASK_SKIP_LABEL,
+  chatbyAddressCorrectedAt,
+  chatbyAutoAskCarry,
+  chatbyAutoAskDecision,
+  chatbyAutoAskEvidence,
+  chatbyAutoAskKindFor,
+  chatbyAutoAskLabel,
+  chatbyAutoAskMarkedSkip,
+  chatbyAutoAskMessage,
+  chatbyAutoAskPurpose,
+  chatbyAutoAskReason,
+  chatbyAutoAskSkipEvidence,
+  type ChatbyAskMode,
+  type ChatbyAutoAskKind,
+  type ChatbyMessageEvent,
+} from "@/lib/chatby-auto-ask";
+import { saveChatbyAddressCorrection } from "@/lib/order-address-correction";
 import type { OrderMasterRow } from "@/lib/types";
 
 /** El tiempo de una pasada (maxDuration 300 s). Lo que no entra va en la siguiente. */
@@ -99,6 +117,10 @@ export interface ChatbyAutoReport {
   /** «Ubicación aproximada en la calle correcta» (0316): las que en Simulación habrían seguido y las que en Activo se usaron. */
   approxSimulated: number;
   approxUsed: number;
+  /** «Pedir sola la dirección o la ubicación» (0318): los que salieron, los simulados y las direcciones guardadas. */
+  asksSent: number;
+  asksSimulated: number;
+  addressesCorrected: number;
   stopped: "tiempo" | "chatby" | null;
   items: ChatbyAutoItem[];
   error: string | null;
@@ -188,6 +210,9 @@ export async function runChatbyAutoconfirm(
     guideCapLeft: null,
     approxSimulated: 0,
     approxUsed: 0,
+    asksSent: 0,
+    asksSimulated: 0,
+    addressesCorrected: 0,
     stopped: null,
     items: [],
     error: null,
@@ -219,7 +244,7 @@ export async function runChatbyAutoconfirm(
         detail: "La guía automática está apagada: sin guía no se confirma nada.",
       });
     } else {
-      const ctx: PassCtx = { dry, now, started, apiKey };
+      const ctx: PassCtx = { dry, now, started, apiKey, askMode: settings.ask_mode };
       const guide = await guideContext(admin, settings, ctx, report);
       await confirmPass(admin, settings, storeIds, ctx, guide, report);
       // Lo que esperaba la ubicación de la clienta: ¿ya la mandó?
@@ -368,6 +393,20 @@ async function confirmPass(
       const evidence: Record<string, unknown> = { total_cents: Math.round(Number(order.total_amount) * 100) };
       if (verdict.amountCents != null) evidence.amount_cents = verdict.amountCents;
       await holdForAdvisor(admin, key, item, { reason: verdict.reason, messageId: verdict.messageId, evidence, reads });
+      // (0318) La dirección incompleta: Kapta le pide sola la dirección completa.
+      if (verdict.reason === "direccion_incompleta" && item.outcome !== "error") {
+        const message = verdict.messageId ? conversation.messages.find((m) => m.id === verdict.messageId) : undefined;
+        const ask = chatbyAskKindFor({ reason: verdict.reason, messageText: message?.text ?? null, orderAddress: master.address });
+        await autoAsk(admin, ctx, report, {
+          key,
+          master,
+          conversation,
+          item,
+          kind: chatbyAutoAskKindFor({ reason: "direccion_incompleta", ask }),
+          evidence: { policy: CHATBY_AUTO_POLICY, ...evidence },
+          holdReason: verdict.reason,
+        });
+      }
       continue;
     }
 
@@ -413,6 +452,18 @@ async function confirmPass(
         reads,
         guide: { state: g.state, detail: g.detail ? `${g.reason}: ${g.detail}` : g.reason, code: g.code ?? null },
       });
+      // (0318) Google no encuentra la dirección: Kapta le pide sola la ubicación.
+      if (g.reason === "sin_ubicacion" && item.outcome !== "error") {
+        await autoAsk(admin, ctx, report, {
+          key,
+          master,
+          conversation,
+          item,
+          kind: "ubicacion",
+          evidence: { policy: CHATBY_AUTO_POLICY, ...evidence },
+          holdReason: g.reason,
+        });
+      }
       continue;
     }
     if (ctx.dry) {
@@ -435,7 +486,7 @@ async function confirmWithGuide(
   key: { order_id: string; store_id: string; org_id: string },
   master: MasterRow,
   orderName: string,
-  verdict: { messageId: string; at: string | null; amountCents: number; pin?: boolean },
+  verdict: { messageId: string; at: string | null; amountCents: number; pin?: boolean; addressCorrected?: boolean },
   g: { state: GuideState; code: string | null; detail?: string | null },
   reads: number,
   item: ChatbyAutoItem,
@@ -449,7 +500,13 @@ async function confirmWithGuide(
     p_operation_id: chatbyOperationId(key.order_id, verdict.messageId),
     p_result: "confirmado",
     p_channel: "mensaje",
-    p_note: chatbyConfirmationNote({ orderName, at: verdict.at, amountCents: verdict.amountCents, location: verdict.pin }),
+    p_note: chatbyConfirmationNote({
+      orderName,
+      at: verdict.at,
+      amountCents: verdict.amountCents,
+      location: verdict.pin,
+      addressCorrected: verdict.addressCorrected,
+    }),
     p_next_contact_on: null,
     p_occurred_at: occurredAt,
     p_reminder_due_at: null,
@@ -537,6 +594,8 @@ interface PassCtx {
   now: Date;
   started: number;
   apiKey: string;
+  /** «Pedir sola la dirección o la ubicación» (0318). */
+  askMode: ChatbyAskMode;
 }
 
 interface GuideCtx {
@@ -832,7 +891,7 @@ async function watchPass(
   const [heldRes, confirmedRes, askedRes] = await Promise.all([
     admin
       .from("chatby_auto_checks")
-      .select("order_id,store_id,message_id,reads")
+      .select("order_id,store_id,message_id,reads,evidence")
       .eq("org_id", settings.org_id)
       .eq("outcome", "para_asesora")
       .eq("reason", "sin_ubicacion")
@@ -912,9 +971,9 @@ async function watchPass(
         : master.macro_stage === "preparacion" && master.macro_substage === "por_generar_rotulo";
     const createdMs = Date.parse(master.order_created_at ?? "");
     const inWindow = Number.isFinite(createdMs) && createdMs >= Date.parse(since);
-    if (!open || (r.kind !== "confirmado" && !inWindow)) {
+    // Ya no coincide con la búsqueda: no se vuelve a leer.
+    const stopWatching = async () => {
       item.outcome = "fuera";
-      // Ya no coincide con la búsqueda: no se vuelve a leer.
       await touch(
         r,
         r.kind === "pedida"
@@ -923,8 +982,17 @@ async function watchPass(
             ? { reason: "sin_ubicacion_cerrado" }
             : { guide_detail: "sin_ubicacion_cerrado" },
       );
+    };
+    if (!open) {
+      await stopWatching();
       continue;
     }
+    // Pasadas las 72 h del pedido, lo que quedó para la asesora por la
+    // dirección o la ubicación se sigue mirando mientras la clienta haya
+    // escrito hace menos de 24 h (la ventana de atención de WhatsApp manda,
+    // owner 08-11-2026): se lee su chat y, si no, se deja de mirar. La misma
+    // búsqueda y el mismo tope; nada de sondeo nuevo.
+    const pastOrderWindow = r.kind !== "confirmado" && !inWindow;
 
     const conversation = await fetchChatbyConversation({ phone: master.customer_phone, apiKey: ctx.apiKey });
     report.read++;
@@ -939,11 +1007,16 @@ async function watchPass(
     }
     errorsInARow = 0;
     if (conversation.status !== "ok") {
-      await touch(r);
+      if (pastOrderWindow) await stopWatching();
+      else await touch(r);
+      continue;
+    }
+    if (pastOrderWindow && !chatbyHeldInWindow({ orderCreatedAt: master.order_created_at, now, windowHours: settings.window_hours, messages: conversation.messages })) {
+      await stopWatching();
       continue;
     }
 
-    const watch = chatbyLocationWatch({
+    const watchInput = {
       messages: conversation.messages,
       orderName: master.order_name ?? "",
       orderCreatedAt: master.order_created_at ?? "",
@@ -955,7 +1028,16 @@ async function watchPass(
         province: master.province,
         region: master.region,
       },
-    });
+    };
+    // (0318) La dirección ya la corrigió la clienta: la del mensaje es la vieja
+    // y no se compara (`chatbyCorrectedWatch`).
+    const corrected = r.kind === "por_confirmar" && chatbyAddressCorrectedAt(r.evidence) !== null;
+    const located = corrected ? null : chatbyLocationWatch(watchInput);
+    const watch: ChatbyReaskVerdict = !located
+      ? chatbyCorrectedWatch(watchInput)
+      : located.kind === "confirm"
+        ? { ...located, pin: false }
+        : located;
 
     if (r.kind === "confirmado") {
       // Ya estaba confirmado: solo importa un «no lo quiero» o una anulación.
@@ -1001,12 +1083,12 @@ async function watchPass(
     }
 
     if (r.kind === "pedida") {
-      await reaskWatch(admin, ctx, guide, report, { r, key, master, item, reads, messages: conversation.messages, touch });
+      await reaskWatch(admin, ctx, guide, report, { r, key, master, item, reads, conversation, touch });
       continue;
     }
 
     // Seguía en Por confirmar esperando la ubicación.
-    if (watch.kind === "wait") {
+    if (watch.kind === "wait" || watch.kind === "correct") {
       await touch(r);
       continue;
     }
@@ -1018,13 +1100,27 @@ async function watchPass(
       await holdForAdvisor(admin, key, item, { reason: watch.reason, messageId: r.message_id, evidence: {}, reads });
       continue;
     }
-    const g = await tryChatbyGuide(guide, master, conversation.messages);
+    const g = await tryChatbyGuide(guide, master, conversation.messages, corrected ? { forcePin: watch.pin } : {});
     if (g.kind === "wait" || (g.kind === "hold" && g.reason === "sin_ubicacion")) {
       item.detail = g.kind === "wait" ? g.outcome : undefined;
       await touch(r);
+      // (0318) Sigue sin ubicación: si Kapta todavía no se la pidió, se la pide
+      // sola (una vez). Así también le llega a lo que quedó así antes de
+      // encender el interruptor.
+      if (g.kind === "hold") {
+        await autoAsk(admin, ctx, report, {
+          key,
+          master,
+          conversation,
+          item,
+          kind: chatbyAutoAskKindFor({ reason: "sin_ubicacion", ask: "ubicacion", corrected }),
+          evidence: r.evidence ?? {},
+          holdReason: "sin_ubicacion",
+        });
+      }
       continue;
     }
-    const evidence = { amount_cents: watch.amountCents };
+    const evidence = { ...chatbyAutoAskCarry(r.evidence), amount_cents: watch.amountCents };
     if (g.kind === "hold") {
       item.outcome = "para_asesora";
       item.detail = g.detail ? `${g.reason}: ${g.detail}` : g.reason;
@@ -1045,17 +1141,30 @@ async function watchPass(
       item.detail = g.detail ?? undefined;
       continue;
     }
-    await confirmWithGuide(admin, key, master, master.order_name ?? "el pedido", watch, g, reads, item, report);
+    await confirmWithGuide(
+      admin,
+      key,
+      master,
+      master.order_name ?? "el pedido",
+      { ...watch, pin: corrected && g.detail === coordinateNote("whatsapp"), addressCorrected: corrected },
+      g,
+      reads,
+      item,
+      report,
+    );
   }
 }
 
 /**
  * El que quedó para la asesora por la dirección incompleta (o se dejó de mirar
  * sin ubicación) y al que se le pidió la ubicación desde la ficha (owner,
- * 08-11-2026). Sin un mensaje NUEVO de la clienta desde que quedó para la
- * asesora no se evalúa nada. Con él, `chatbyReaskWatch`: su ubicación primero
- * (va como coordenada de la guía, con las puertas del pin), una dirección
- * escrita después (con las reglas de siempre).
+ * 08-11-2026) o Kapta sola (0318). Sin un mensaje NUEVO de la clienta desde que
+ * quedó para la asesora no se evalúa nada. Con él, `chatbyReaskWatch`: su
+ * ubicación primero (va como coordenada de la guía, con las puertas del pin),
+ * una dirección escrita después (con las reglas de siempre). Con «Pedir sola
+ * la dirección o la ubicación» encendido, una dirección COMPLETA que no es la
+ * del pedido se guarda como la dirección corregida y Google la vuelve a buscar
+ * (`correctAddress`).
  */
 async function reaskWatch(
   admin: SupabaseClient,
@@ -1068,17 +1177,18 @@ async function reaskWatch(
     master: MasterRow;
     item: ChatbyAutoItem;
     reads: number;
-    messages: readonly ChatbyMessage[];
+    conversation: OkConversation;
     touch: (r: WatchRow, patch?: Record<string, unknown>) => Promise<void>;
   },
 ): Promise<void> {
-  const { r, key, master, item, reads, messages, touch } = w;
+  const { r, key, master, item, reads, conversation, touch } = w;
+  const messages = conversation.messages;
   if (!chatbyNewCustomerMessage(messages, chatbyHeldAt({ evidence: r.evidence ?? null }))) {
     item.outcome = "sin_respuesta";
     await touch(r);
     return;
   }
-  const verdict = chatbyReaskWatch({
+  const input = {
     messages,
     orderName: master.order_name ?? "",
     orderCreatedAt: master.order_created_at ?? "",
@@ -1090,8 +1200,22 @@ async function reaskWatch(
       province: master.province,
       region: master.region,
     },
-  });
+  };
+  // (0318) Ya corregida (la pasada guardó la dirección y quedó esperando): la
+  // dirección vieja del mensaje no se compara.
+  const corrected = chatbyAddressCorrectedAt(r.evidence) !== null;
+  const correctionSince =
+    ctx.askMode !== "apagado" && r.reason === "direccion_incompleta" ? chatbyAskedAt({ evidence: r.evidence ?? null }) : null;
+  const verdict = corrected ? chatbyCorrectedWatch(input) : chatbyReaskWatch({ ...input }, { correctionSince });
   if (verdict.kind === "wait") {
+    if (verdict.reply === "incompleta") {
+      // Escribió, pero la dirección sigue incompleta: no se le pide otra vez;
+      // la asesora la mira desde la ficha.
+      item.outcome = "respuesta_incompleta";
+      const mark = r.evidence?.reply_incomplete_at ? {} : { evidence: { ...(r.evidence ?? {}), reply_incomplete_at: new Date().toISOString() } };
+      await touch(r, mark);
+      return;
+    }
     await touch(r);
     return;
   }
@@ -1103,6 +1227,10 @@ async function reaskWatch(
     await holdForAdvisor(admin, key, item, { reason: verdict.reason, messageId: r.message_id, evidence: {}, reads });
     return;
   }
+  if (verdict.kind === "correct") {
+    await correctAddress(admin, ctx, guide, report, { ...w, verdict });
+    return;
+  }
   const g = await tryChatbyGuide(guide, master, messages, { forcePin: verdict.pin });
   // Se dejó de mirar sin ubicación y sigue sin ella: queda como estaba.
   if (g.kind === "wait" || (g.kind === "hold" && g.reason === "sin_ubicacion" && r.reason === "sin_ubicacion_cerrado")) {
@@ -1110,7 +1238,41 @@ async function reaskWatch(
     await touch(r);
     return;
   }
-  const evidence = { amount_cents: verdict.amountCents };
+  const viaPin = verdict.pin || (corrected && g.kind === "ok" && g.detail === coordinateNote("whatsapp"));
+  await guideOutcome(admin, ctx, report, {
+    ...w,
+    verdict: { messageId: verdict.messageId, at: verdict.at, amountCents: verdict.amountCents, pin: viaPin, addressCorrected: corrected },
+    g,
+    corrected,
+  });
+}
+
+type OkConversation = Extract<ChatbyConversation, { status: "ok" }>;
+
+/**
+ * Después de la guía de una relectura: para la asesora (con la marca de las
+ * pedidas automáticas y, si falta la ubicación, la pedida sola de la
+ * ubicación) o confirmado con la guía creada.
+ */
+async function guideOutcome(
+  admin: SupabaseClient,
+  ctx: PassCtx,
+  report: ChatbyAutoReport,
+  w: {
+    r: WatchRow;
+    key: { order_id: string; store_id: string; org_id: string };
+    master: MasterRow;
+    item: ChatbyAutoItem;
+    reads: number;
+    conversation: OkConversation;
+    verdict: { messageId: string; at: string | null; amountCents: number; pin: boolean; addressCorrected?: boolean };
+    g: GuideTry;
+    corrected: boolean;
+  },
+): Promise<void> {
+  const { r, key, master, item, reads, conversation, verdict, g, corrected } = w;
+  if (g.kind === "wait") return;
+  const evidence = { ...chatbyAutoAskCarry(r.evidence), amount_cents: verdict.amountCents };
   if (g.kind === "hold") {
     // La dirección ya cuadra pero falta la ubicación (`sin_ubicacion`, que la
     // pasada de la ubicación sigue mirando) u otra puerta de la guía.
@@ -1126,6 +1288,18 @@ async function reaskWatch(
       reads,
       guide: { state: g.state, detail: item.detail, code: g.code ?? null },
     });
+    // (0318) Sin ubicación: Kapta se la pide sola (una vez).
+    if (g.reason === "sin_ubicacion" && item.outcome !== "error") {
+      await autoAsk(admin, ctx, report, {
+        key,
+        master,
+        conversation,
+        item,
+        kind: chatbyAutoAskKindFor({ reason: "sin_ubicacion", ask: "ubicacion", corrected }),
+        evidence: { policy: CHATBY_AUTO_POLICY, ...evidence },
+        holdReason: g.reason,
+      });
+    }
     return;
   }
   if (ctx.dry) {
@@ -1134,4 +1308,231 @@ async function reaskWatch(
     return;
   }
   await confirmWithGuide(admin, key, master, master.order_name ?? "el pedido", verdict, g, reads, item, report);
+}
+
+/**
+ * (0318) La clienta respondió a la pedida con una dirección COMPLETA: se guarda
+ * como la dirección corregida del pedido (el camino de «Corregir ubicación»,
+ * `order_geo_overrides`, con el distrito y la provincia de siempre) y la guía
+ * se vuelve a intentar con ella, Google incluido (con la regla de la ubicación
+ * aproximada). Si Google tampoco la encuentra, queda `sin_ubicacion` y Kapta le
+ * pide la ubicación. En Simulación solo se dice qué habría hecho.
+ */
+async function correctAddress(
+  admin: SupabaseClient,
+  ctx: PassCtx,
+  guide: GuideCtx,
+  report: ChatbyAutoReport,
+  w: {
+    r: WatchRow;
+    key: { order_id: string; store_id: string; org_id: string };
+    master: MasterRow;
+    item: ChatbyAutoItem;
+    reads: number;
+    conversation: OkConversation;
+    touch: (r: WatchRow, patch?: Record<string, unknown>) => Promise<void>;
+    verdict: Extract<ChatbyReaskVerdict, { kind: "correct" }>;
+  },
+): Promise<void> {
+  const { r, key, item, touch, verdict } = w;
+  if (ctx.askMode !== "activo") {
+    item.outcome = "simulado";
+    item.detail = "habría guardado la dirección que escribió la clienta y la habría vuelto a buscar en Google";
+    if (!r.evidence?.correction_simulated_at) {
+      report.asksSimulated++;
+      console.info(`[chatby-pedir] ${JSON.stringify({ order: key.order_id, mode: "simulacion", outcome: "habria_corregido" })}`);
+      await touch(r, { evidence: { ...(r.evidence ?? {}), correction_simulated_at: new Date().toISOString() } });
+    } else {
+      await touch(r);
+    }
+    return;
+  }
+  if (ctx.dry) {
+    item.outcome = "corregiria";
+    item.detail = "guardaría la dirección que escribió la clienta y la volvería a buscar en Google";
+    return;
+  }
+  // Justo antes de escribir: ¿sigue en Por confirmar?
+  const { data: fresh, error: fErr } = await admin.from("order_master").select("*").eq("order_id", key.order_id).maybeSingle();
+  const row = fresh as unknown as MasterRow | null;
+  if (fErr || !row || row.macro_stage !== "por_confirmar" || !["sin_llamar", "por_confirmar"].includes(row.macro_substage ?? "")) {
+    item.outcome = "fuera";
+    return;
+  }
+  const saved = await saveChatbyAddressCorrection(admin, {
+    orderId: key.order_id,
+    storeId: key.store_id,
+    address: verdict.address,
+    coverage: row.coverage ?? null,
+  });
+  if (saved.error) {
+    item.outcome = "error";
+    item.detail = saved.error;
+    await touch(r);
+    return;
+  }
+  report.addressesCorrected++;
+  const evidence = { ...(r.evidence ?? {}), corrected_at: new Date().toISOString() };
+  // El Master ya tiene la dirección nueva: la guía la usa (Google la vuelve a buscar).
+  const { data: after } = await admin.from("order_master").select("*").eq("order_id", key.order_id).maybeSingle();
+  const updated = (after as unknown as MasterRow | null) ?? { ...row, address: verdict.address };
+  const g = await tryChatbyGuide(guide, updated, w.conversation.messages);
+  if (g.kind === "wait") {
+    item.detail = [saved.warning, g.outcome].filter(Boolean).join(" · ");
+    // Sigue en la relectura, ya corregida: la próxima pasada lo vuelve a intentar.
+    await touch(r, { evidence });
+    return;
+  }
+  if (saved.warning) item.detail = saved.warning;
+  await guideOutcome(admin, ctx, report, {
+    ...w,
+    r: { ...r, evidence },
+    master: updated,
+    verdict: { messageId: verdict.messageId, at: verdict.at, amountCents: verdict.amountCents, pin: false, addressCorrected: true },
+    g,
+    corrected: true,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Kapta pide sola la dirección o la ubicación (0318, lib/chatby-auto-ask.ts)
+// ---------------------------------------------------------------------------
+
+function addDetail(item: ChatbyAutoItem, text: string): void {
+  item.detail = item.detail ? `${item.detail} · ${text}` : text;
+}
+
+/**
+ * El mensaje automático al quedar para la asesora por la dirección o la
+ * ubicación: por el MISMO envío que la ficha (`sendChatbyReply`, como persona
+ * del equipo, con el bot en pausa `CHATBY_REPLY_PAUSE_MINUTES`), con el mismo
+ * hecho `chatby_message` (sin actor, `payload.auto = true`) y la misma marca
+ * (`evidence.asked_at`/`held_at`, más `auto_asks`). Como mucho uno de cada
+ * clase por pedido, solo con la ventana de 24 h abierta y si nadie del equipo
+ * le escribió (`chatbyAutoAskDecision`). No lee Chatby otra vez: usa la
+ * conversación que la pasada acaba de leer.
+ */
+async function autoAsk(
+  admin: SupabaseClient,
+  ctx: PassCtx,
+  report: ChatbyAutoReport,
+  a: {
+    key: { order_id: string; store_id: string; org_id: string };
+    master: MasterRow;
+    conversation: OkConversation;
+    item: ChatbyAutoItem;
+    kind: ChatbyAutoAskKind;
+    /** La marca como quedó escrita. */
+    evidence: Record<string, unknown>;
+    holdReason: string;
+  },
+): Promise<void> {
+  const { key, master, conversation, item, kind } = a;
+  if (ctx.askMode === "apagado") return;
+  const label = chatbyAutoAskLabel(kind);
+  // Lo que se sabe con la marca, sin leer la base (la pasada de la ubicación lo
+  // mira cada 30 minutos).
+  if (chatbyAutoAskMarkedSkip(a.evidence, kind, ctx.askMode)) return;
+  if (ctx.dry) {
+    addDetail(item, `pediría ${label}`);
+    return;
+  }
+  const writeEvidence = async (evidence: Record<string, unknown>) => {
+    await admin.from("chatby_auto_checks").update({ evidence }).eq("order_id", key.order_id);
+  };
+
+  const [freshRes, eventsRes] = await Promise.all([
+    admin.from("order_master").select("macro_stage,macro_substage,coverage").eq("order_id", key.order_id).maybeSingle(),
+    admin.from("order_events").select("actor,note,payload").eq("order_id", key.order_id).eq("kind", "chatby_message"),
+  ]);
+  if (freshRes.error || eventsRes.error || !freshRes.data) {
+    addDetail(item, `no pidió ${label}: no se pudo leer el pedido`);
+    return;
+  }
+  const decision = chatbyAutoAskDecision({
+    mode: ctx.askMode,
+    kind,
+    master: freshRes.data as MasterRow,
+    messages: conversation.messages,
+    events: (eventsRes.data ?? []) as ChatbyMessageEvent[],
+    evidence: a.evidence,
+    now: new Date(),
+  });
+  if (!decision.send) {
+    addDetail(item, `no pidió ${label}: ${CHATBY_AUTO_ASK_SKIP_LABEL[decision.skip]}`);
+    if (decision.skip !== "ya_pedida") await writeEvidence(chatbyAutoAskSkipEvidence(a.evidence, decision.skip, kind, new Date()));
+    return;
+  }
+  // Lo que es de una persona antes de cualquier guía, como en `tryChatbyGuide`:
+  // a esa clienta Kapta no le escribe.
+  const personal = await askBlockedForPerson(admin, master);
+  if (personal) {
+    addDetail(item, `no pidió ${label}: ${CHATBY_AUTO_ASK_SKIP_LABEL.para_persona} (${personal})`);
+    await writeEvidence(chatbyAutoAskSkipEvidence(a.evidence, "para_persona", kind, new Date()));
+    return;
+  }
+  if (decision.simulate) {
+    report.asksSimulated++;
+    addDetail(item, `habría pedido ${label}`);
+    console.info(`[chatby-pedir] ${JSON.stringify({ order: key.order_id, mode: "simulacion", ask: kind })}`);
+    await writeEvidence(chatbyAutoAskEvidence(a.evidence, { kind, mode: "simulacion" }, new Date()));
+    return;
+  }
+
+  const text = chatbyAutoAskMessage({ kind, customerName: master.customer_name ?? conversation.name, orderName: master.order_name });
+  const sent = await sendChatbyReply({
+    userNs: conversation.userNs,
+    text,
+    apiKey: ctx.apiKey,
+    pauseMinutes: CHATBY_REPLY_PAUSE_MINUTES,
+  });
+  forgetChatbyConversation(master.customer_phone);
+  if (sent.status === "error") {
+    addDetail(item, `no pidió ${label}: ${sent.message}`);
+    await writeEvidence(chatbyAutoAskSkipEvidence(a.evidence, "envio_fallo", kind, new Date()));
+    return;
+  }
+  const now = new Date();
+  // La marca primero: si el hecho no se pudiera escribir, la marca igual dice
+  // que salió y no se repite.
+  await writeEvidence(chatbyAutoAskEvidence(a.evidence, { kind, mode: "activo" }, now));
+  const { error: eErr } = await admin.from("order_events").insert({
+    store_id: key.store_id,
+    order_id: key.order_id,
+    kind: "chatby_message",
+    occurred_at: now.toISOString(),
+    actor: null,
+    source: CHATBY_SOURCE,
+    reason: chatbyAutoAskReason(kind),
+    note: text,
+    payload: {
+      auto: true,
+      ask: kind,
+      purpose: chatbyAutoAskPurpose(kind),
+      hold_reason: a.holdReason,
+      paused_minutes: sent.paused ? CHATBY_REPLY_PAUSE_MINUTES : 0,
+      policy: CHATBY_AUTO_POLICY,
+    },
+  });
+  report.asksSent++;
+  addDetail(item, eErr ? `pidió ${label} (sin anotar en la Actividad: ${eErr.message})` : `pidió ${label}`);
+  await recomputeOrderMasterSafe(admin, [key.order_id]);
+}
+
+/**
+ * ¿Es de una persona? Las mismas rejas que `tryChatbyGuide` mira antes de la
+ * coordenada: el envío programado, la lista de pago adelantado (MOM §41),
+ * Shalom y un pago registrado. Lo que no se pudo leer también cuenta como «de
+ * una persona»: ante la duda, Kapta no escribe.
+ */
+async function askBlockedForPerson(admin: SupabaseClient, row: MasterRow): Promise<string | null> {
+  if (chatbyGuideBlock(row)) return "envío programado";
+  const prepay = await prepayOrderCheck(admin, row as unknown as PrepayOrderRow, "confirmar");
+  if (prepay.state !== "ok") return "lista de pago adelantado";
+  const { data: draft, error } = await admin.from("shalom_order_drafts").select("order_id").eq("order_id", row.order_id).limit(1);
+  if (error) return "no se pudo leer el borrador de Shalom";
+  const hold = chatbyGuideHold({ hasShalomDraft: (draft ?? []).length > 0, paymentState: row.payment_state });
+  if (hold === "shalom") return "Shalom";
+  if (hold) return "tiene un pago registrado";
+  return null;
 }

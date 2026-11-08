@@ -33,6 +33,7 @@ import {
   chatbyAskExplanation,
   chatbyAskMessage,
   chatbyAskStatus,
+  chatbyAskStatusAt,
   chatbyAskTitle,
   type ChatbyLocationHold,
 } from "@/lib/chatby-location-ask";
@@ -292,6 +293,7 @@ function LocationAskBanner({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ventana = chatbyReplyWindow(messages);
+  const statusAt = chatbyAskStatusAt(hold);
 
   const send = () => {
     setPending(true);
@@ -312,7 +314,8 @@ function LocationAskBanner({
     <Banner tone="warn" title={chatbyAskTitle(hold.reason)} role="status">
       <div className="mt-1 space-y-3">
         <p className="leading-5">{chatbyAskExplanation(hold)}</p>
-        <p className="leading-5 text-ink-600">{chatbyAskStatus(hold, hold.askedAt ? whenInLima(hold.askedAt) : null)}</p>
+        {/* (0318) Si Kapta ya se la pidió sola, lo dice con la hora: la asesora no la vuelve a pedir. */}
+        <p className="leading-5 text-ink-600">{chatbyAskStatus(hold, statusAt ? whenInLima(statusAt) : null)}</p>
         {canEdit &&
           (ventana.open ? (
             <div className="space-y-2">

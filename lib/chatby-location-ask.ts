@@ -67,12 +67,22 @@ export interface ChatbyLocationHold {
   heldAt: string | null;
   /** Cuándo se le pidió desde Kapta (ISO), o null. */
   askedAt: string | null;
-  /** ¿El pedido sigue dentro de la ventana de la pasada (72 h desde que se creó)? */
+  /** ¿Kapta sigue mirando este pedido? 72 h desde que se creó o, pasadas, si la clienta escribió hace menos de 24 h. */
   inWindow: boolean;
   /** ¿La pasada vuelve a leer este chat? (dentro de la ventana y con el motivo vigilado). */
   watching: boolean;
   customerName: string | null;
   orderName: string | null;
+  /**
+   * (0318) Lo último que Kapta le pidió SOLA por WhatsApp, si salió: la
+   * dirección completa o la ubicación, y cuándo. La ficha lo dice para que la
+   * asesora no se la vuelva a pedir.
+   */
+  autoAsk?: { what: "direccion" | "ubicacion"; at: string } | null;
+  /** (0318) La clienta completó la dirección por Chatby y Kapta la guardó. */
+  corrected?: boolean;
+  /** (0318) Respondió a la pedida de la dirección, pero lo que escribió sigue incompleto. */
+  replyIncomplete?: boolean;
 }
 
 /** El título del aviso: por qué se paró la guía automática. */
@@ -83,7 +93,10 @@ export function chatbyAskTitle(reason: ChatbyAskReason): string {
 }
 
 /** Por qué se paró, en una frase, debajo del título. */
-export function chatbyAskExplanation(hold: Pick<ChatbyLocationHold, "reason" | "ask">): string {
+export function chatbyAskExplanation(hold: Pick<ChatbyLocationHold, "reason" | "ask" | "corrected">): string {
+  if (hold.corrected && hold.reason !== "direccion_incompleta") {
+    return "La clienta completó la dirección por Chatby y Kapta la guardó, pero Google tampoco da el edificio. Aliclik exige la ubicación para crear la guía.";
+  }
   if (hold.reason === "direccion_incompleta") {
     return hold.ask === "direccion"
       ? "A la dirección le falta el número de la casa, así que Kapta no creó la guía ni confirmó el pedido."
@@ -98,7 +111,7 @@ export function chatbyAskExplanation(hold: Pick<ChatbyLocationHold, "reason" | "
  * `askedWhen` es la hora de la pedida ya escrita («Hoy 10:05»).
  */
 export function chatbyAskStatus(
-  hold: Pick<ChatbyLocationHold, "reason" | "askedAt" | "inWindow" | "watching">,
+  hold: Pick<ChatbyLocationHold, "reason" | "askedAt" | "inWindow" | "watching" | "autoAsk" | "replyIncomplete">,
   askedWhen: string | null,
 ): string {
   const after =
@@ -106,13 +119,56 @@ export function chatbyAskStatus(
       ? "si manda su ubicación, Kapta crea la guía con ella y confirma sola (una dirección escrita pasa por las reglas de siempre)."
       : "si manda su ubicación, Kapta crea la guía con ella y confirma sola.";
   if (!hold.inWindow) {
-    return "Pasaron las 72 h del pedido: Kapta ya no vuelve a leer el chat sola. Cuando llegue la ubicación, crea la guía desde el panel de Aliclik y registra la confirmación en la mesa.";
+    return "Pasaron las 72 h del pedido y la clienta no escribió en las últimas 24 h: Kapta ya no vuelve a leer el chat sola. Cuando llegue la ubicación, crea la guía desde el panel de Aliclik y registra la confirmación en la mesa.";
+  }
+  // (0318) Respondió, pero la dirección sigue incompleta: Kapta no se la pide otra vez.
+  if (hold.replyIncomplete && hold.reason === "direccion_incompleta") {
+    return "La clienta respondió, pero la dirección que escribió sigue incompleta: Kapta no se la vuelve a pedir. Revisa el chat y pídele tú la ubicación si hace falta; si la manda, Kapta crea la guía con ella.";
+  }
+  // (0318) La última pedida la mandó Kapta sola: se dice, para no pedírsela otra vez.
+  if (chatbyAutoAskIsLatest(hold)) {
+    const direccion = hold.autoAsk!.what === "direccion";
+    const next = direccion
+      ? "si manda su ubicación, crea la guía con ella; si escribe la dirección completa, la guarda en el pedido, la vuelve a buscar en Google y, si tampoco la encuentra, le pide la ubicación."
+      : "si manda su ubicación, crea la guía con ella y confirma sola.";
+    return `Kapta le pidió ${direccion ? "la dirección completa" : "la ubicación"}${askedWhen ? `: ${askedWhen}` : ""} · esperando respuesta. No hace falta volver a pedírsela: cuando responda, Kapta vuelve a leer el chat (cada 30 minutos, dentro de las 72 h del pedido) y ${next}`;
   }
   if (hold.askedAt) {
     return `Se la pediste${askedWhen ? `: ${askedWhen}` : ""}. Cuando la clienta responda, Kapta vuelve a leer el chat (cada 30 minutos, dentro de las 72 h del pedido): ${after}`;
   }
   if (hold.watching) return `Kapta vuelve a leer el chat cada 30 minutos dentro de las 72 h del pedido: ${after}`;
   return `Pídesela desde aquí: con eso, cuando la clienta responda, Kapta vuelve a leer el chat y, ${after}`;
+}
+
+/** ¿La última pedida es la automática? (una persona pudo pedirla después desde aquí) */
+export function chatbyAutoAskIsLatest(hold: Pick<ChatbyLocationHold, "askedAt" | "autoAsk">): boolean {
+  if (!hold.autoAsk) return false;
+  const auto = Date.parse(hold.autoAsk.at);
+  const asked = Date.parse(hold.askedAt ?? "");
+  return !Number.isFinite(asked) || auto >= asked;
+}
+
+/** La hora que dice el estado del aviso: la de la pedida automática, si es la última; si no, la de la persona. */
+export function chatbyAskStatusAt(hold: Pick<ChatbyLocationHold, "askedAt" | "autoAsk">): string | null {
+  return chatbyAutoAskIsLatest(hold) ? hold.autoAsk!.at : hold.askedAt;
+}
+
+/**
+ * La última pedida automática que salió (`evidence.auto_asks` con `mode =
+ * activo`, 0318). Lo de Simulación no salió: no cuenta.
+ */
+export function chatbyAutoAskSent(evidence: Record<string, unknown> | null | undefined): { what: "direccion" | "ubicacion"; at: string } | null {
+  const raw = evidence?.auto_asks;
+  if (!Array.isArray(raw)) return null;
+  let best: { what: "direccion" | "ubicacion"; at: string } | null = null;
+  for (const x of raw) {
+    const m = x as { group?: unknown; at?: unknown; mode?: unknown } | null;
+    if (!m || m.mode !== "activo" || (m.group !== "direccion" && m.group !== "ubicacion")) continue;
+    const at = isoOf(m.at);
+    if (!at) continue;
+    if (!best || Date.parse(at) >= Date.parse(best.at)) best = { what: m.group, at };
+  }
+  return best;
 }
 
 /** El primer nombre, con mayúscula («MARIA ELENA quispe» → «Maria»). Sin nombre, null. */
@@ -241,9 +297,43 @@ export function chatbyAskWatching(input: {
   orderCreatedAt: string | null | undefined;
   now: Date;
   windowHours?: number;
+  /** Los mensajes leídos: una clienta que escribió hace menos de 24 h se sigue mirando aunque el pedido pase de 72 h. */
+  messages?: readonly { kind: string; at: string | null }[];
 }): boolean {
-  if (!chatbyAskInWindow(input.orderCreatedAt, input.now, input.windowHours)) return false;
+  if (!chatbyHeldInWindow(input)) return false;
   return input.reason === "sin_ubicacion" || input.askedAt !== null;
+}
+
+/** La hora (ms) del último mensaje de la clienta, o null. */
+export function chatbyLastCustomerAt(messages: readonly { kind: string; at: string | null }[]): number | null {
+  let last: number | null = null;
+  for (const m of messages) {
+    if (m.kind !== "cliente" || !m.at) continue;
+    const at = Date.parse(m.at);
+    if (Number.isFinite(at) && (last === null || at > last)) last = at;
+  }
+  return last;
+}
+
+/** La ventana de atención de WhatsApp (Meta): 24 h desde el último mensaje de la clienta. */
+export const CHATBY_CUSTOMER_WINDOW_MS = 24 * 3_600_000;
+
+/**
+ * ¿Lo que quedó para la asesora por la dirección o la ubicación se sigue
+ * mirando? (owner, 08-11-2026) Dentro de las 72 h del pedido, como siempre, o
+ * si la clienta escribió hace menos de 24 h: lo que manda es la ventana de
+ * atención de WhatsApp, no la edad del pedido. Sin los mensajes (todavía no
+ * se leyó), solo las 72 h.
+ */
+export function chatbyHeldInWindow(input: {
+  orderCreatedAt: string | null | undefined;
+  now: Date;
+  windowHours?: number;
+  messages?: readonly { kind: string; at: string | null }[];
+}): boolean {
+  if (chatbyAskInWindow(input.orderCreatedAt, input.now, input.windowHours)) return true;
+  const last = input.messages ? chatbyLastCustomerAt(input.messages) : null;
+  return last !== null && input.now.getTime() - last < CHATBY_CUSTOMER_WINDOW_MS;
 }
 
 /** ¿El pedido sigue en la ventana de la pasada? */
@@ -259,15 +349,26 @@ export function chatbyLocationHoldFrom(input: {
   check: ChatbyHeldCheck;
   master: { order_created_at?: string | null; customer_name?: string | null; order_name?: string | null };
   now: Date;
+  /** Los mensajes leídos (la ventana de 24 h de la clienta alarga la de 72 h del pedido). */
+  messages?: readonly { kind: string; at: string | null }[];
 }): ChatbyLocationHold {
   const askedAt = chatbyAskedAt(input.check);
   return {
+    autoAsk: chatbyAutoAskSent(input.check.evidence),
+    corrected: isoOf(input.check.evidence?.corrected_at) !== null,
+    replyIncomplete: isoOf(input.check.evidence?.reply_incomplete_at) !== null,
     reason: input.reason,
     ask: input.ask,
     heldAt: chatbyHeldAt(input.check) ?? isoOf(input.check.checked_at),
     askedAt,
-    inWindow: chatbyAskInWindow(input.master.order_created_at, input.now),
-    watching: chatbyAskWatching({ reason: input.reason, askedAt, orderCreatedAt: input.master.order_created_at, now: input.now }),
+    inWindow: chatbyHeldInWindow({ orderCreatedAt: input.master.order_created_at, now: input.now, messages: input.messages }),
+    watching: chatbyAskWatching({
+      reason: input.reason,
+      askedAt,
+      orderCreatedAt: input.master.order_created_at,
+      now: input.now,
+      messages: input.messages,
+    }),
     customerName: input.master.customer_name ?? null,
     orderName: input.master.order_name ?? null,
   };
