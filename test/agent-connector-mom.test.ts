@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AGENT_RATE_PER_MINUTE, AGENT_SCOPES, AGENT_TOKEN_PREFIX } from "@/lib/agent-auth";
-import { AGENT_TOOLS } from "@/lib/agent-tools";
+import { AGENT_TOOLS, LIST_PAGE_MAX, LIST_SCAN_MAX } from "@/lib/agent-tools";
 import { MCP_PROTOCOL_VERSIONS } from "@/lib/mcp-server";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import { OAUTH_CODE_TTL_MS, OAUTH_DEFAULT_SCOPES, OAUTH_REGISTRATIONS_PER_HOUR, OAUTH_SCOPES, authorizationServerMetadata } from "@/lib/agent-oauth";
@@ -78,6 +78,7 @@ describe("§42 Conector para agentes de IA", () => {
     }
     expect(AGENT_TOOLS.map((t) => t.name)).toEqual([
       "buscar_pedidos",
+      "listar_pedidos",
       "obtener_pedido",
       "leer_conversacion",
       "consultar_politicas",
@@ -339,5 +340,21 @@ describe("DEPLOY.md 0323", () => {
     expect(body).toContain("**Migración `0323_agent_actions.sql`**, a mano, ANTES del código");
     expect(body).toContain("select to_regclass('public.agent_action_settings'), to_regclass('public.agent_actions');");
     expect(body).toContain("**Marcha atrás.**");
+  });
+});
+
+describe("§42.10 Listar una etapa y lo que dijo Chatby", () => {
+  const s4210 = section("### 42.10 Listar una etapa y lo que dijo Chatby (08-11-2026)");
+  it("los topes y los estados son los del código", () => {
+    expect(LIST_PAGE_MAX).toBe(50);
+    expect(s4210).toContain("**Páginas de hasta 50** (25 si no se dice)");
+    expect(LIST_SCAN_MAX).toBe(1500);
+    expect(s4210).toContain("hasta **1500 pedidos**");
+    for (const estado of ["confirmo_con_mensaje", "pulso_confirmar", "rechazo", "sin_respuesta", "no_leido"]) {
+      expect(s4210).toContain(`| \`${estado}\` |`);
+    }
+    expect(s4210).toContain("**sin leer Chatby otra vez**");
+    expect(s4210).toContain("No confirma, no cambia estados y no marca nada");
+    expect(section("#### Confirmó por Chatby (decisión del owner, 01-11-2026)")).toContain("**El botón «Confirmar pedido» se anota, pero no confirma** (08-11-2026).");
   });
 });
