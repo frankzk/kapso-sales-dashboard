@@ -22,7 +22,16 @@ import {
   isAgentMigrationMissing,
   isAgentScope,
 } from "@/lib/agent-auth";
-import { POLICY_MIGRATION_MISSING, isPolicyMigrationMissing, parsePolicyInput } from "@/lib/store-policies";
+import {
+  POLICY_IMPORT_MAX_CHARS,
+  POLICY_MIGRATION_MISSING,
+  isPolicyMigrationMissing,
+  parsePoliciesMarkdown,
+  parsePolicyInput,
+  samePolicyTitle,
+  type ImportStore,
+  type SkippedPolicy,
+} from "@/lib/store-policies";
 
 export interface AgentTokenFormState {
   error?: string;
@@ -229,4 +238,82 @@ export async function retireStorePolicy(_prev: PolicyFormState, formData: FormDa
   console.info(`[store-policies] ${JSON.stringify({ org: orgId, step: "retired", policy: policyId, store: storeId, by: ctx.userId })}`);
   revalidatePath(PATH);
   return { notice: "Política retirada: el agente ya no la lee." };
+}
+
+export interface PolicyImportState {
+  error?: string;
+  notice?: string;
+  /** Cuántas se crearon. */
+  created?: number;
+  /** Las que no se importaron, con su motivo (las de [CONFIRMAR], las que ya existían…). */
+  skipped?: SkippedPolicy[];
+}
+
+/**
+ * «Importar desde Markdown» (MOM §42.6): varias políticas de una vez, desde el
+ * documento exportado o un texto pegado. El servidor vuelve a leer el Markdown
+ * con el mismo `parsePoliciesMarkdown` de la vista previa, contra las tiendas
+ * que la persona ve en esta organización (por RLS). Una política con el mismo
+ * título que una que no está retirada en esa tienda no se importa: se edita.
+ * Todas se crean en un solo `insert`, con su versión 1 en el historial.
+ */
+export async function importStorePolicies(_prev: PolicyImportState, formData: FormData): Promise<PolicyImportState> {
+  const orgId = String(formData.get("org_id") ?? "");
+  const ctx = await requireManager(orgId);
+  if (!ctx) return { error: "Sin permiso." };
+  const markdown = String(formData.get("markdown") ?? "");
+  if (!markdown.trim()) return { error: "Sube el archivo .md o pega el texto." };
+  if (markdown.length > POLICY_IMPORT_MAX_CHARS) return { error: "El archivo es demasiado grande: divídelo en dos." };
+  const validFrom = String(formData.get("valid_from") ?? "");
+  const fallbackStoreId = String(formData.get("store_id") ?? "") || null;
+
+  const sb = await createServerSupabase();
+  const { data: storeRows } = await sb.from("stores").select("id, name").eq("org_id", orgId);
+  const stores = (storeRows ?? []) as ImportStore[];
+  if (!stores.length) return { error: "No ves ninguna tienda de esta organización." };
+  const { policies, skipped } = parsePoliciesMarkdown(markdown, stores, fallbackStoreId, validFrom);
+  if (!policies.length) {
+    return { error: "No hay ninguna política lista para importar.", skipped };
+  }
+
+  const admin = createAdminSupabase();
+  const { data: existing, error: readError } = await admin
+    .from("store_policies")
+    .select("store_id, title")
+    .eq("org_id", orgId)
+    .in("store_id", [...new Set(policies.map((p) => p.storeId))])
+    .is("retired_at", null);
+  if (readError) return { error: policyWriteError(readError) };
+  const current = (existing ?? []) as { store_id: string; title: string }[];
+  const fresh = policies.filter((p) => {
+    const taken = current.some((c) => c.store_id === p.storeId && samePolicyTitle(c.title, p.title));
+    if (taken) skipped.push({ storeName: p.storeName, title: p.title, reason: "Ya hay una con ese título en la tienda: edítala en la lista." });
+    return !taken;
+  });
+  if (!fresh.length) return { error: "Todas las políticas del archivo ya existen en sus tiendas.", skipped };
+
+  const { error } = await admin.from("store_policies").insert(
+    fresh.map((p) => ({
+      org_id: orgId,
+      store_id: p.storeId,
+      title: p.input.title,
+      body: p.input.body,
+      valid_from: p.input.validFrom,
+      valid_until: p.input.validUntil,
+      source: p.input.source,
+      created_by: ctx.userId,
+      updated_by: ctx.userId,
+    })),
+  );
+  if (error) return { error: policyWriteError(error), skipped };
+  console.info(
+    `[store-policies] ${JSON.stringify({ org: orgId, step: "imported", created: fresh.length, skipped: skipped.length, stores: [...new Set(fresh.map((p) => p.storeId))], by: ctx.userId })}`,
+  );
+  revalidatePath(PATH);
+  const byStore = [...new Set(fresh.map((p) => p.storeName))].map((name) => `${name}: ${fresh.filter((p) => p.storeName === name).length}`).join(", ");
+  return {
+    notice: `Se crearon ${fresh.length} política(s) (${byStore}).${skipped.length ? ` Se saltaron ${skipped.length}: abajo, cada una con su motivo.` : ""}`,
+    created: fresh.length,
+    skipped,
+  };
 }

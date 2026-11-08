@@ -138,3 +138,167 @@ export function parsePolicyInput(raw: {
   if (source.length > POLICY_SOURCE_MAX) return { ok: false, error: `La fuente pasa de ${POLICY_SOURCE_MAX} caracteres.` };
   return { ok: true, value: { title, body, validFrom, validUntil: until || null, source: source || null } };
 }
+
+// ---------------------------------------------------------------------------
+// Importar desde Markdown (08-11-2026)
+// ---------------------------------------------------------------------------
+//
+// El owner tiene sus políticas en un documento y no quiere pegarlas una por una.
+// El formato es el del documento «Políticas escritas — Kenku Peru y Aurela»:
+//
+//   ## Kenku Peru          ← la tienda (un `##` que nombra una tienda que ves)
+//   ### Cambios            ← una política: el título
+//   Texto…                 ← su texto, con sus párrafos
+//   Fuente: la web.        ← opcional: la fuente (la primera línea así)
+//
+// Un `##` que no es una tienda («Cómo usar este documento») cierra la tienda:
+// sus `###` no se importan. Si ningún `##` nombra una tienda, todas las `###`
+// van a la tienda elegida en la pantalla. Lo que todavía dice [CONFIRMAR] no se
+// importa: el agente lo diría tal cual. La negrita y el código se quitan.
+
+/** Cuántas políticas entran en una importación, como máximo. */
+export const POLICY_IMPORT_MAX = 50;
+/** El tamaño máximo del archivo o del texto pegado. */
+export const POLICY_IMPORT_MAX_CHARS = 100_000;
+
+export interface ImportStore {
+  id: string;
+  name: string;
+}
+
+export interface ImportedPolicy {
+  storeId: string;
+  storeName: string;
+  title: string;
+  body: string;
+  source: string | null;
+}
+
+export interface SkippedPolicy {
+  storeName: string | null;
+  title: string;
+  reason: string;
+}
+
+/** Sin tildes, minúsculas, sin espacios repetidos. PURA. */
+function comparable(text: string): string {
+  return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** La tienda que nombra un `##`: igual, o uno contiene al otro; ambigua o ninguna, null. PURA. */
+function storeForHeading(heading: string, stores: readonly ImportStore[]): ImportStore | null {
+  const h = comparable(heading);
+  if (h.length < 3) return null;
+  const exact = stores.filter((s) => comparable(s.name) === h);
+  if (exact.length === 1) return exact[0]!;
+  const partial = stores.filter((s) => {
+    const n = comparable(s.name);
+    return n.includes(h) || h.includes(n);
+  });
+  return partial.length === 1 ? partial[0]! : null;
+}
+
+/**
+ * El texto sin las marcas de Markdown que el agente diría tal cual: negrita,
+ * código y los escapes (`\[` → `[`), que un documento exportado pone delante de
+ * los corchetes. PURA.
+ */
+function plainInline(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\\([\\`*_{}\[\]()#+\-.!|>~])/g, "$1");
+}
+
+const HEADING_RE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+const SOURCE_RE = /^\s*(?:\*\*|__)?fuente(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(.*)$/i;
+const NEEDS_CONFIRMATION_RE = /\[\s*confirmar/i;
+
+/**
+ * Las políticas de un Markdown, listas para crear desde `validFrom`, y las que
+ * se saltan con su motivo. PURA: la usan la vista previa (navegador) y la
+ * acción (servidor), así que las dos dicen lo mismo.
+ */
+export function parsePoliciesMarkdown(
+  markdown: string,
+  stores: readonly ImportStore[],
+  fallbackStoreId: string | null,
+  validFrom: string,
+): { policies: (ImportedPolicy & { input: PolicyInput })[]; skipped: SkippedPolicy[] } {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+  const headings = lines.map((l) => HEADING_RE.exec(l));
+  const byStoreHeadings = headings.some((m) => m && m[1]!.length === 2 && storeForHeading(m[2]!, stores));
+  const fallback = stores.find((s) => s.id === fallbackStoreId) ?? null;
+
+  type Draft = { store: ImportStore | null; title: string; lines: string[] };
+  const drafts: Draft[] = [];
+  let store: ImportStore | null = byStoreHeadings ? null : fallback;
+  let current: Draft | null = null;
+  lines.forEach((line, i) => {
+    const m = headings[i];
+    if (m) {
+      const level = m[1]!.length;
+      if (level <= 2) {
+        current = null;
+        if (level === 2 && byStoreHeadings) store = storeForHeading(m[2]!, stores);
+        return;
+      }
+      if (level === 3) {
+        // Un `###` fuera de una tienda (por ejemplo, bajo «Cómo usar») no se importa.
+        current = store ? { store, title: plainInline(m[2]!).trim(), lines: [] } : null;
+        if (current) drafts.push(current);
+        return;
+      }
+    }
+    if (current) (current as Draft).lines.push(line);
+  });
+
+  const policies: (ImportedPolicy & { input: PolicyInput })[] = [];
+  const skipped: SkippedPolicy[] = [];
+  const seen = new Set<string>();
+  for (const d of drafts) {
+    const storeName = d.store?.name ?? null;
+    let source: string | null = null;
+    const bodyLines: string[] = [];
+    for (const l of d.lines) {
+      const s: RegExpExecArray | null = source === null ? SOURCE_RE.exec(l) : null;
+      if (s) source = plainInline(s[1]!).trim().replace(/\*\*|__/g, "") || null;
+      else bodyLines.push(plainInline(l));
+    }
+    const raw = { title: d.title, body: bodyLines.join("\n"), validFrom, validUntil: "", source: source ?? "" };
+    if ([raw.title, raw.body, raw.source].some((t) => NEEDS_CONFIRMATION_RE.test(t))) {
+      skipped.push({ storeName, title: d.title, reason: "Todavía dice [CONFIRMAR]: complétala y vuelve a importarla." });
+      continue;
+    }
+    const parsed = parsePolicyInput(raw);
+    if (!parsed.ok) {
+      skipped.push({ storeName, title: d.title || "(sin título)", reason: parsed.error });
+      continue;
+    }
+    const key = `${d.store!.id}\u0000${comparable(parsed.value.title)}`;
+    if (seen.has(key)) {
+      skipped.push({ storeName, title: parsed.value.title, reason: "Está dos veces en el archivo: se importa la primera." });
+      continue;
+    }
+    if (policies.length >= POLICY_IMPORT_MAX) {
+      skipped.push({ storeName, title: parsed.value.title, reason: `Pasa del tope de ${POLICY_IMPORT_MAX} por importación.` });
+      continue;
+    }
+    seen.add(key);
+    policies.push({
+      storeId: d.store!.id,
+      storeName: d.store!.name,
+      title: parsed.value.title,
+      body: parsed.value.body,
+      source: parsed.value.source,
+      input: parsed.value,
+    });
+  }
+  return { policies, skipped };
+}
+
+/** Dos títulos iguales para una persona («Garantía» y «garantia»). PURA. */
+export function samePolicyTitle(a: string, b: string): boolean {
+  return comparable(a) === comparable(b);
+}
