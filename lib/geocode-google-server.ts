@@ -61,6 +61,7 @@ import {
   type GeocodePilotSample,
   type GeocodeRequestParams,
 } from "@/lib/geocode-google";
+import { geocodeApproxStreet, type ApproxKind } from "@/lib/geocode-approx";
 
 export const GEOCODE_PILOT = {
   days: 7,
@@ -116,9 +117,20 @@ async function wooOrderIds(admin: SupabaseClient, ids: string[]): Promise<Set<st
   return out;
 }
 
+interface GooglePoints {
+  order_id: string;
+  ok?: boolean | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  approx_kind?: string | null;
+  approx_latitude?: number | null;
+  approx_longitude?: number | null;
+}
+
 /**
  * Los pedidos cuyo pin del Master es el punto que dio Google (05-11-2026): la
- * caché `order_geocodes` tiene un punto bueno (`ok`) y el Master está a
+ * caché `order_geocodes` tiene un punto bueno (`ok`, o el aproximado en la
+ * calle de la 0316, que una guía en Activo también guarda) y el Master está a
  * `GEOCODE_SAME_PIN_METERS` o menos de él (`masterPinIsGoogle`). Pasa cuando
  * una guía automática se creó con la ubicación por dirección: la guía guarda
  * el punto y el Master lo toma como pin. No lo puso una persona. Lanza si no se
@@ -139,15 +151,15 @@ export async function googlePinnedOrderIds(
   const ids = [...byId.keys()];
   for (let i = 0; i < ids.length; i += GEOCODE_PILOT.idChunk) {
     const chunk = ids.slice(i, i + GEOCODE_PILOT.idChunk);
-    const { data, error } = await admin
-      .from("order_geocodes")
-      .select("order_id,latitude,longitude")
-      .in("order_id", chunk)
-      .eq("ok", true);
+    // `*`: el punto aproximado (0316) también es de Google; sin la migración no viene.
+    const { data, error } = await admin.from("order_geocodes").select("*").in("order_id", chunk);
     if (error) throw new Error(`leer la caché de Google: ${error.message}`);
-    for (const g of (data ?? []) as { order_id: string; latitude: number | null; longitude: number | null }[]) {
+    for (const g of (data ?? []) as GooglePoints[]) {
       const master = byId.get(g.order_id);
-      if (master && masterPinIsGoogle(master, g)) out.add(g.order_id);
+      if (!master) continue;
+      const rooftop = g.ok === true ? { latitude: g.latitude, longitude: g.longitude } : null;
+      const approx = g.approx_kind === "calle" ? { latitude: g.approx_latitude, longitude: g.approx_longitude } : null;
+      if (masterPinIsGoogle(master, rooftop) || masterPinIsGoogle(master, approx)) out.add(g.order_id);
     }
   }
   return out;
@@ -597,7 +609,19 @@ export async function runGeocodeChatbyCheck(
 
 export type OrderGeocode =
   | { kind: "ok"; lat: number; lng: number; precision: GeocodePrecision; cached: boolean }
-  | { kind: "rejected"; reason: GeocodePilotReason; precision?: GeocodePrecision; cached: boolean }
+  | {
+      kind: "rejected";
+      reason: GeocodePilotReason;
+      precision?: GeocodePrecision;
+      cached: boolean;
+      /**
+       * Solo si quien llama lo pidió (`approxMode`, 0316): el punto de la
+       * cuadra (`RANGE_INTERPOLATED`) que además es de la calle, el número y la
+       * provincia del pedido (`geocodeApproxStreet`). No es el edificio: qué
+       * hacer con él lo decide la posición (`approxDecision`).
+       */
+      approx?: { lat: number; lng: number } | null;
+    }
   /** No se pudo preguntar (sin clave, sin calle, error o cupo): no se guarda. */
   | { kind: "unavailable"; reason: string };
 
@@ -612,6 +636,10 @@ interface GeocodeRow {
   latitude: number | null;
   longitude: number | null;
   reason: string | null;
+  /** 0316; sin la migración no vienen. */
+  approx_kind?: string | null;
+  approx_latitude?: number | null;
+  approx_longitude?: number | null;
 }
 
 /**
@@ -619,6 +647,12 @@ interface GeocodeRow {
  * aplicado. `rejected` también trae la precisión cuando el punto pasó el
  * candado pero no es `ROOFTOP` (lo decide quien llama: la guía automática solo
  * acepta el edificio, `geocodeUsableForAutoGuide`).
+ *
+ * `approxMode` (solo la guía automática de Chatby, 0316): además se evalúa el
+ * punto de la cuadra con la reja de la calle y se guarda en `approx_*`. Una
+ * fila de antes con la cuadra y sin ese veredicto (nadie guardó entonces la
+ * calle de Google) se vuelve a consultar UNA vez. Sin `approxMode` todo es
+ * como siempre: los reintentos de Lima no lo pasan.
  */
 export async function geocodeOrderAddress(
   admin: SupabaseClient,
@@ -630,25 +664,31 @@ export async function geocodeOrderAddress(
     province: string | null;
     region: string | null;
   },
-  opts: { key: string; fetchImpl?: typeof fetch },
+  opts: { key: string; fetchImpl?: typeof fetch; approxMode?: "simulacion" | "activo" },
 ): Promise<OrderGeocode> {
   if (!opts.key) return { kind: "unavailable", reason: "sin_clave" };
   const params = geocodeRequestParams(order);
   if (!params) return { kind: "unavailable", reason: "sin_direccion" };
   const hash = addressHash(params);
+  const approxMode = opts.approxMode ?? null;
 
-  const { data: cached, error: cErr } = await admin
-    .from("order_geocodes")
-    .select("address_hash,ok,precision,latitude,longitude,reason")
-    .eq("order_id", order.order_id)
-    .maybeSingle();
+  // `*`: con la 0316 trae también el punto aproximado; sin ella, lo de siempre.
+  const { data: cached, error: cErr } = await admin.from("order_geocodes").select("*").eq("order_id", order.order_id).maybeSingle();
   if (cErr) return { kind: "unavailable", reason: `cache: ${cErr.message}` };
   const row = cached as GeocodeRow | null;
   if (row && row.address_hash === hash) {
     if (row.ok && row.latitude != null && row.longitude != null) {
       return { kind: "ok", lat: row.latitude, lng: row.longitude, precision: row.precision as GeocodePrecision, cached: true };
     }
-    return { kind: "rejected", reason: (row.reason ?? "sin_resultado") as GeocodePilotReason, cached: true };
+    const rejected = { kind: "rejected" as const, reason: (row.reason ?? "sin_resultado") as GeocodePilotReason, cached: true };
+    const interpolated = row.precision === "RANGE_INTERPOLATED";
+    // Sin pedirlo, o sin la cuadra, o sin las columnas de la 0316: lo de siempre.
+    if (!approxMode || !interpolated || !("approx_kind" in row)) return rejected;
+    if (row.approx_kind === "calle" && row.approx_latitude != null && row.approx_longitude != null) {
+      return { ...rejected, precision: "RANGE_INTERPOLATED", approx: { lat: row.approx_latitude, lng: row.approx_longitude } };
+    }
+    if (row.approx_kind != null) return { ...rejected, precision: "RANGE_INTERPOLATED", approx: null };
+    // La cuadra sin veredicto de la calle: se vuelve a preguntar (una vez).
   }
 
   const parsed = await geocodeOnce(params, opts.key, opts.fetchImpl ?? fetch, GEOCODE_PILOT.requestTimeoutMs);
@@ -656,6 +696,7 @@ export async function geocodeOrderAddress(
   const verdict = geocodeSafeguard(parsed.kind === "ok" ? parsed.result : null, order);
   const usable = geocodeUsableForAutoGuide(verdict);
   const point = verdict.ok ? verdict : null;
+  const now = new Date().toISOString();
   const save = {
     order_id: order.order_id,
     store_id: order.store_id,
@@ -665,11 +706,55 @@ export async function geocodeOrderAddress(
     latitude: usable && point ? point.lat : null,
     longitude: usable && point ? point.lng : null,
     reason: usable ? null : verdict.ok ? "no_es_edificio" : verdict.reason,
-    checked_at: new Date().toISOString(),
+    checked_at: now,
   };
-  await admin.from("order_geocodes").upsert(save, { onConflict: "order_id" });
-  console.info(`[geocode-auto] ${JSON.stringify({ store: order.store_id, ok: usable, precision: save.precision, reason: save.reason })}`);
+  // La reja de la calle, solo si se pidió y Google dio la cuadra.
+  let approxKind: ApproxKind | null = null;
+  if (approxMode && point && point.precision === "RANGE_INTERPOLATED" && parsed.kind === "ok") {
+    const street = geocodeApproxStreet(parsed.result, order);
+    approxKind = street.ok ? "calle" : street.reason;
+  }
+  const approxSave =
+    approxKind && point
+      ? {
+          approx_kind: approxKind,
+          approx_latitude: approxKind === "calle" ? point.lat : null,
+          approx_longitude: approxKind === "calle" ? point.lng : null,
+          approx_mode: approxMode,
+          approx_checked_at: now,
+        }
+      : // Otra respuesta para la misma fila: el veredicto viejo de la calle ya no vale.
+        approxMode
+        ? { approx_kind: null, approx_latitude: null, approx_longitude: null, approx_mode: null, approx_checked_at: null }
+        : {};
+  const { error: saveError } = await admin.from("order_geocodes").upsert({ ...save, ...approxSave }, { onConflict: "order_id" });
+  // Sin las columnas de la 0316 se guarda lo de siempre, para no volver a gastar la consulta.
+  if (saveError && Object.keys(approxSave).length) await admin.from("order_geocodes").upsert(save, { onConflict: "order_id" });
+  console.info(
+    `[geocode-auto] ${JSON.stringify({ store: order.store_id, ok: usable, precision: save.precision, reason: save.reason, ...(approxKind ? { approx: approxKind } : {}) })}`,
+  );
   if (usable && point) return { kind: "ok", lat: point.lat, lng: point.lng, precision: point.precision, cached: false };
-  if (point) return { kind: "rejected", reason: "impreciso", precision: point.precision, cached: false };
+  if (point) {
+    return {
+      kind: "rejected",
+      reason: "impreciso",
+      precision: point.precision,
+      cached: false,
+      ...(approxMode ? { approx: approxKind === "calle" ? { lat: point.lat, lng: point.lng } : null } : {}),
+    };
+  }
   return { kind: "rejected", reason: verdict.ok ? "impreciso" : verdict.reason, cached: false };
+}
+
+/**
+ * Una guía automática se creó con el punto aproximado (Activo, 0316): queda
+ * dicho en la caché, para que la medición no compare ese punto consigo mismo.
+ * Sin la migración no hace nada. No lanza.
+ */
+export async function markApproxUsed(admin: SupabaseClient, orderId: string, at = new Date()): Promise<void> {
+  try {
+    await admin.from("order_geocodes").update({ approx_used_at: at.toISOString(), approx_mode: "activo" }).eq("order_id", orderId).eq("approx_kind", "calle");
+  } catch {
+    // La guía ya está creada: la marca es para la medición, no para la guía.
+  }
 }

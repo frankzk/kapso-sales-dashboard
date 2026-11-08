@@ -345,4 +345,7 @@ echo "  ✅ el hash es único y nunca el token en claro; permisos de la lista ce
 echo "▶ Políticas escritas por tienda (0315): versión de la base, historial automático, tienda y autor fijos, retirada final, rangos y solo el servidor"
 $PSQL -f "$ROOT/scripts/sql/store_policies_smoke.sql"
 echo "  ✅ nace en la versión 1 y cada cambio suma uno (aunque se mande otra); cada versión queda en el historial, también la retirada; la tienda, la organización y el autor no cambian; retirada no se edita ni se deshace; el servidor no borra ni escribe el historial; el navegador no ve nada"
+echo "▶ Confirmación por Chatby: ubicación aproximada (0316): posición que nace apagada, punto solo con «calle», el edificio intacto y RLS"
+$PSQL -f "$ROOT/scripts/sql/chatby_approx_location_smoke.sql"
+echo "  ✅ apagado / simulación / activo y nada más; una fila de la 0301 sigue igual; «calle» con sus dos coordenadas y un rechazo sin punto; ok/latitude/longitude no cambian; la org lee la posición, nadie la cambia ni lee la caché de Google desde el navegador"
 echo "✅ DB verification passed."

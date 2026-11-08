@@ -23,7 +23,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import { prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { fetchChatbyConversation } from "@/lib/chatby-api";
-import { geocodeOrderAddress } from "@/lib/geocode-google-server";
+import { geocodeOrderAddress, markApproxUsed } from "@/lib/geocode-google-server";
+import { APPROX_COORDINATE_NOTE, approxDecision, type ApproxMode } from "@/lib/geocode-approx";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { limaTodayKey } from "@/lib/shipments";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
@@ -93,6 +94,9 @@ export interface ChatbyAutoReport {
   guidesCreated: number;
   guidesFailed: number;
   guideCapLeft: number | null;
+  /** «Ubicación aproximada en la calle correcta» (0316): las que en Simulación habrían seguido y las que en Activo se usaron. */
+  approxSimulated: number;
+  approxUsed: number;
   stopped: "tiempo" | "chatby" | null;
   items: ChatbyAutoItem[];
   error: string | null;
@@ -180,6 +184,8 @@ export async function runChatbyAutoconfirm(
     guidesCreated: 0,
     guidesFailed: 0,
     guideCapLeft: null,
+    approxSimulated: 0,
+    approxUsed: 0,
     stopped: null,
     items: [],
     error: null,
@@ -542,6 +548,8 @@ interface GuideCtx {
   report: ChatbyAutoReport;
   /** La clave de Google si la coordenada por dirección está encendida (0301), o null. */
   geocodeKey: string | null;
+  /** «Aceptar ubicación aproximada en la calle correcta» (0316). */
+  approxMode: ApproxMode;
 }
 
 /** EL TOPE: las guías automáticas de hoy (día de Lima), de toda la organización. */
@@ -561,14 +569,25 @@ async function guideContext(
   const left = guideCapLeft(count ?? 0, settings.daily_cap);
   report.guideCapLeft = left;
   const geocodeKey = settings.geocode_enabled ? env.googleGeocodingApiKey() || null : null;
-  return { admin, dry: ctx.dry, today: limaTodayKey(ctx.now), left, scopes: new Map(), waiting: new Map(), report, geocodeKey };
+  return {
+    admin,
+    dry: ctx.dry,
+    today: limaTodayKey(ctx.now),
+    left,
+    scopes: new Map(),
+    waiting: new Map(),
+    report,
+    geocodeKey,
+    approxMode: settings.approx_mode,
+  };
 }
 
 /** De dónde salió la coordenada de la guía automática (queda en `guide_detail`). */
-type GuideCoordinateSource = "pedido" | "whatsapp" | "google";
+type GuideCoordinateSource = "pedido" | "whatsapp" | "google" | "google_aprox";
 
 function coordinateNote(source: GuideCoordinateSource): string | null {
   if (source === "google") return "coordenada: dirección en Google (edificio)";
+  if (source === "google_aprox") return APPROX_COORDINATE_NOTE;
   if (source === "whatsapp") return "coordenada: ubicación de WhatsApp";
   return null;
 }
@@ -633,7 +652,11 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
       // Sin ubicación de WhatsApp: la dirección escrita en Google, solo si da
       // el EDIFICIO (decisiones A y B del owner, 02-11-2026; MOM §38). Una
       // consulta por pedido y dirección (0301). El candado del pin respaldado
-      // de Aliclik se aplica igual al cotizar.
+      // de Aliclik se aplica igual al cotizar. Con «ubicación aproximada en la
+      // calle correcta» (0316) también la cuadra de la misma calle, número y
+      // provincia: en Simulación solo se guarda y queda para la asesora como
+      // siempre; en Activo se usa.
+      const approxMode = g.approxMode === "apagado" ? undefined : g.approxMode;
       const geo = await geocodeOrderAddress(
         admin,
         {
@@ -644,11 +667,19 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
           province: row.province ?? null,
           region: row.region ?? null,
         },
-        { key: g.geocodeKey },
+        { key: g.geocodeKey, approxMode },
       );
-      if (geo.kind !== "ok") return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
-      coordinate = `${geo.lat}, ${geo.lng}`;
-      source = "google";
+      const decision = approxDecision(g.approxMode, geo);
+      if (decision.use === "ninguna") {
+        // Una vez por punto: la pasada que vuelve a mirar el chat cada 30 min usa lo guardado.
+        if (decision.simulated && geo.kind === "rejected" && !geo.cached) {
+          g.report.approxSimulated++;
+          console.info(`[chatby-aprox] ${JSON.stringify({ order: row.order_id, mode: "simulacion", outcome: "habria_confirmado" })}`);
+        }
+        return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
+      }
+      coordinate = `${decision.lat}, ${decision.lng}`;
+      source = decision.use === "aproximada" ? "google_aprox" : "google";
     } else {
       return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
     }
@@ -700,6 +731,7 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
     // Aliclik pudo crearla: cuenta para el tope y NO se reintenta, que es lo
     // que crea duplicados. La asesora mira Aliclik antes de crear otra.
     g.left--;
+    if (source === "google_aprox") await markApproxUsed(admin, row.order_id);
     return {
       kind: "hold",
       reason: "guia_no_creada",
@@ -710,6 +742,7 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
   if (result.error && result.orderNumber) {
     // Se creó en Aliclik y no se pudo guardar la fila: existe y cuenta para el tope.
     g.left--;
+    if (source === "google_aprox") await markApproxUsed(admin, row.order_id);
     g.report.guidesCreated++;
     return {
       kind: "hold",
@@ -723,6 +756,11 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
   g.left--;
   g.report.guidesCreated++;
   g.report.guideCapLeft = g.left;
+  if (source === "google_aprox") {
+    // La guía guarda este punto: la medición no debe compararlo consigo mismo.
+    g.report.approxUsed++;
+    await markApproxUsed(admin, row.order_id);
+  }
   return { kind: "ok", state: "creada", code: result.orderNumber ?? null, detail: coordinateNote(source) };
 }
 
