@@ -6,6 +6,7 @@ import { isCurrentBoxDay } from "@/lib/dispatch-plan";
 import { outputsBlockingRetry } from "@/lib/gf-retry";
 import { gfDistrictBlock } from "@/lib/gf-district-check";
 import { pickFillableRouteOutput } from "@/lib/shipment-output";
+import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
 import type { DistrictAvailabilityEventRow, DistrictTariffRow } from "@/lib/grupo-gf-courier";
 import { limaClock } from "@/lib/grupo-gf-courier";
 
@@ -191,6 +192,68 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
   return out;
 }
 
+/** «AUTOECOM», «ALIDRIVER» o el nombre que dio Aliclik. */
+export function aliclikTransportLabel(name: string | null | undefined): string | null {
+  if (isAutoecom(name)) return "AUTOECOM";
+  if (isAlidriver(name)) return "ALIDRIVER";
+  return name?.trim() || null;
+}
+
+/**
+ * El detalle del courier vigente de cada pedido, para el filtro «Courier» y la
+ * fila (owner, 08-11-2026): con Aliclik, el transporte de su última guía
+ * Aliclik; con Grupo GF, el motorizado de la última caja de su última salida
+ * propia (la de un día posterior gana; en el mismo día, la que sigue activa).
+ * Solo lee esos dos couriers; un error se muestra, no se adivina.
+ */
+async function loadCourierDetails(admin: Admin, rows: PendingMasterRow[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = rows.filter((r) => r.current_courier === "aliclik" || r.current_courier === "propio").map((r) => r.order_id);
+  if (!ids.length) return out;
+  type DetailShipment = { id: string; order_id: string; courier: string | null; aliclik_transport_name: string | null; output_number: number | null; created_at: string | null };
+  const shipments = await courierRowsByIds<DetailShipment>(ids, (chunk) => admin.from("shipments")
+    .select("id,order_id,courier,aliclik_transport_name,output_number,created_at").in("order_id", chunk).in("courier", ["aliclik", "propio"]) as unknown as Read<DetailShipment>);
+  const courierOf = new Map(rows.map((r) => [r.order_id, r.current_courier]));
+  // La última salida del courier vigente: el consecutivo más alto, y si no, la más nueva.
+  const latest = new Map<string, DetailShipment>();
+  for (const s of shipments.data) {
+    if (s.courier !== courierOf.get(s.order_id)) continue;
+    const seen = latest.get(s.order_id);
+    const newer = !seen || (s.output_number ?? 0) > (seen.output_number ?? 0)
+      || ((s.output_number ?? 0) === (seen.output_number ?? 0) && (s.created_at ?? "") > (seen.created_at ?? ""));
+    if (newer) latest.set(s.order_id, s);
+  }
+  const ownIds: string[] = [];
+  for (const [orderId, s] of latest) {
+    if (s.courier === "aliclik") {
+      const label = aliclikTransportLabel(s.aliclik_transport_name);
+      if (label) out.set(orderId, label);
+    } else ownIds.push(s.id);
+  }
+  if (!ownIds.length) return out;
+  type DetailItem = { shipment_id: string; manifest_id: string; removed_at: string | null };
+  const items = await courierRowsByIds<DetailItem>(ownIds, (chunk) => admin.from("dispatch_manifest_items")
+    .select("shipment_id,manifest_id,removed_at").in("shipment_id", chunk) as unknown as Read<DetailItem>);
+  type DetailManifest = { id: string; route_date: string; driver_name: string | null; state: string | null };
+  const manifests = await courierRowsByIds<DetailManifest>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
+    .select("id,route_date,driver_name,state").in("id", chunk) as unknown as Read<DetailManifest>);
+  const manifestById = new Map(manifests.data.filter((m) => m.state !== "cancelled").map((m) => [m.id, m]));
+  const orderOfShipment = new Map([...latest.values()].map((s) => [s.id, s.order_id]));
+  const best = new Map<string, { day: string; active: boolean; rider: string }>();
+  for (const item of items.data) {
+    const m = manifestById.get(item.manifest_id);
+    const orderId = orderOfShipment.get(item.shipment_id);
+    const rider = m?.driver_name?.trim();
+    if (!m || !orderId || !rider) continue;
+    const day = m.route_date.slice(0, 10);
+    const active = !item.removed_at;
+    const seen = best.get(orderId);
+    if (!seen || day > seen.day || (day === seen.day && active && !seen.active)) best.set(orderId, { day, active, rider });
+  }
+  for (const [orderId, b] of best) out.set(orderId, b.rider);
+  return out;
+}
+
 interface PendingPickupRow {
   order_id: string; aliclik_expected_dispatch_date: string | null; aliclik_reported_dispatch_date: string | null;
 }
@@ -223,7 +286,10 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   const scheduled = new Map(programs.filter((p) => orderStore.get(p.order_id) === p.store_id).map((p) => [p.order_id, p.scheduled_for]));
   const departures = new Map<string, string>();
   const safeIds = [...orderStore.keys()];
-  const gfFacts = await loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day);
+  const [gfFacts, courierDetails] = await Promise.all([
+    loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day),
+    loadCourierDetails(admin, safe),
+  ]);
   // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
   // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
   for (let offset = 0; offset < safeIds.length; offset += 500) {
@@ -267,6 +333,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       programmedFor: scheduled.get(row.order_id) ?? null,
       salesChannel: row.sales_channel ?? null,
       address: row.address?.trim() || null, reference: row.reference?.trim() || null,
+      courierDetail: courierDetails.get(row.order_id) ?? null,
       gf: gfFacts.get(row.order_id) ?? null,
       courierPickup: pickups.has(row.order_id) ? { courier: "aliclik", date: pickups.get(row.order_id)! } : null,
     };

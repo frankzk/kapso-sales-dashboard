@@ -17,6 +17,8 @@ import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { approveLimaRetry, RETRY_TRANSPORT_LABEL } from "@/lib/lima-retry-approve";
+import { retryApproveNoLocation } from "@/lib/lima-retry-auto";
+import { locateRetryOrder, retryGeocodeKeyForStore } from "@/lib/lima-retry-location";
 import { loadReproFacts, retryChainOf } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
 import { limaTodayKey } from "@/lib/shipments";
@@ -69,6 +71,11 @@ async function readChain(orderId: string) {
  * La cotización, el transporte y la creación son los de la pasada automática
  * (`approveLimaRetry`, lib/lima-retry-approve.ts); aquí quedan el permiso, la
  * RLS y los mensajes de la bandeja.
+ *
+ * Sin coordenada en el pedido (owner, 08-11-2026: «mismo candado»): la de su
+ * dirección en Google, solo el edificio, si el interruptor de
+ * Automatizaciones está encendido y la medición de Lima cumple B, como la
+ * pasada (`locateRetryOrder`). Si no, dice por qué y no cotiza.
  */
 export async function approveAliclikRetry(orderId: string): Promise<RetryActionState> {
   const who = await gate(true);
@@ -84,7 +91,12 @@ export async function approveAliclikRetry(orderId: string): Promise<RetryActionS
     return { error: "El intento falló hoy: el reintento sale otro día. Apruébalo desde mañana." };
   }
 
-  const result = await approveLimaRetry({ admin, row, chain, raw: facts.retryChain, actor: { userId: who.userId } });
+  const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id));
+  if ("miss" in where.located) return { error: retryApproveNoLocation(where.located.miss) };
+  const coordinate = where.located.coordinate;
+  const result = await approveLimaRetry({
+    admin, row, chain, raw: facts.retryChain, actor: { userId: who.userId }, ...(coordinate ? { coordinate } : {}),
+  });
   const { transport } = result;
   switch (result.outcome) {
     case "sin_transporte":
@@ -95,7 +107,7 @@ export async function approveAliclikRetry(orderId: string): Promise<RetryActionS
       return { error: result.reason ?? `${transport} no se puede agendar ahora. Vuelve a aprobar más tarde.` };
     case "creada":
       for (const path of PATHS) revalidatePath(path);
-      return { notice: `Guía con ${transport} creada${result.guide ? `: ${result.guide}` : ""}.`, done: true };
+      return { notice: `Guía con ${transport} creada${result.guide ? `: ${result.guide}` : ""}.${result.coordinateNote ? ` ${result.coordinateNote}` : ""}`, done: true };
     case "simulada":
       // Sin `dry` no ocurre; si ocurriera, nada se creó.
       return { error: "No se creó la guía. Vuelve a aprobar." };

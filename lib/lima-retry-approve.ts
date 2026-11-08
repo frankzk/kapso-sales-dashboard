@@ -21,9 +21,12 @@ import "server-only";
 //     `reintento_lima`, el único automático al que se le acepta el motivo de la
 //     salida adicional (la caja que falló sigue viva hasta que vuelve).
 //     Además (05-11-2026), la falta de ubicación es `sin_ubicacion` y no un
-//     fallo, y puede cotizar y crear con la coordenada de la dirección en
-//     Google (el edificio) que le pasa la pasada, como la guía de Chatby.
-//     «Aprobar» no cambia: ni manda coordenada ni ve `sin_ubicacion`.
+//     fallo.
+//   * Los dos (08-11-2026, owner: «mismo candado») pueden cotizar y crear con
+//     la coordenada de la dirección en Google (el edificio) que le pasa quien
+//     llama, como la guía de Chatby. Quién la busca y con qué candado lo
+//     decide `locateRetryOrder` (lib/lima-retry-location.ts), en el servidor:
+//     el navegador nunca manda coordenada por aquí.
 //
 // `dry` cotiza, elige el transporte y pasa por las compuertas de Kapta de la
 // creación (`aliclikCreateGates`, las mismas que corre `createAliclikGuideFor`)
@@ -81,11 +84,12 @@ export interface RetryApproveInput {
   /** El scope ya resuelto de la tienda (la pasada lo guarda por tienda). Solo sistema. */
   scope?: AliclikReadScope;
   /**
-   * Solo sistema (05-11-2026): la coordenada de la dirección en Google (el
-   * edificio, `geocodeOrderAddress`) para un pedido que no la trae. Se cotiza y
-   * se crea con ella como la guía automática de Chatby (§6.1). «Aprobar» no la
-   * manda nunca: la persona pone la ubicación en la ficha del pedido
-   * («Corregir ubicación») y «Aprobar» cotiza con la del pedido.
+   * La coordenada de la dirección en Google (el edificio, `geocodeOrderAddress`)
+   * para un pedido que no la trae, ya pasada por el candado de
+   * `locateRetryOrder` (el interruptor de Automatizaciones y la medición de
+   * Lima con B). Se cotiza y se crea con ella como la guía automática de
+   * Chatby (§6.1). La pasada la usa desde el 05-11-2026; «Aprobar», desde el
+   * 08-11-2026 (owner: «mismo candado»).
    */
   coordinate?: { value: string; source: "google" } | null;
 }
@@ -209,19 +213,20 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
 
   const { ctx, error: ctxError } = await aliclikContextFor(row, system ? null : actor.userId, { blockAgencia: true });
   if (!ctx) return { outcome: "fallo", stage: "contexto", transport, error: ctxError ?? "No se pudo preparar la conexión con Aliclik." };
-  // La coordenada de Google, solo del sistema. Sin ella, la cotización usa la
-  // del pedido, como siempre (y «Aprobar» manda exactamente lo de antes).
-  const google = system && input.coordinate?.source === "google" ? input.coordinate.value : null;
-  const preview = scope
-    ? await previewAliclikGuideFor(ctx, google ? { modality: "cod", coordinate: google } : { modality: "cod" }, scope)
-    : await previewAliclikGuideFor(ctx, { modality: "cod" });
-  if (!preview.ok && system) {
+  // La coordenada de Google, ya con su candado. Sin ella, la cotización usa la
+  // del pedido, como siempre.
+  const google = input.coordinate?.source === "google" ? input.coordinate.value : null;
+  const previewInput = google ? { modality: "cod" as const, coordinate: google } : { modality: "cod" as const };
+  const preview = scope ? await previewAliclikGuideFor(ctx, previewInput, scope) : await previewAliclikGuideFor(ctx, previewInput);
+  if (!preview.ok) {
     // Falta la ubicación (o el pin de Google no lo respalda el pedido): no es
     // un fallo ni una regla, es un dato que pone una persona (05-11-2026).
     const missing = retryLocationMissing(preview, google ? "google" : "pedido");
-    if (missing) return { outcome: "sin_ubicacion", stage: "ubicacion", transport, error: missing };
+    if (missing && system) return { outcome: "sin_ubicacion", stage: "ubicacion", transport, error: missing };
+    // «Aprobar» con el punto de Google que el pedido no respalda: lo dice así.
+    if (missing && google) return { outcome: "fallo", stage: "cotizacion", transport, error: missing };
+    return { outcome: "fallo", stage: "cotizacion", transport, error: preview.error ?? "No se pudo cotizar el envío." };
   }
-  if (!preview.ok) return { outcome: "fallo", stage: "cotizacion", transport, error: preview.error ?? "No se pudo cotizar el envío." };
 
   const wanted = (name: string | null | undefined) => (chain.next === "autoecom" ? isAutoecom(name) : isAlidriver(name));
   const courier = preview.couriers?.find((c) => wanted(c.transportName)) ?? null;
