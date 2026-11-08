@@ -9,15 +9,31 @@ con su motorizado. Está en Despacho del día, con todas las tiendas de Grupo GF
 el botón «Armar las cajas del …», y en Repro Lima, con nuestras tiendas y la
 chapa en cada pedido.
 
+Una revisión adversarial corrigió, antes de fusionar, lo que el cálculo
+inventaba. Lo del domingo ya no está atrasado el lunes. Antes del corte, lo de
+hoy no cuenta en «Mañana». Una caja de un día que pasó no fija el día, y lo
+acordado en Repro Lima con Aliclik no sale con Grupo GF. Un reintento tomado
+sin acuerdo no entra. Lo recogido por el motorizado sigue en el «Hoy» de Repro
+Lima. Y la lista del plan mueve el «Día de la caja» con ella.
+
 **Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
-Despacho del día no hace consultas nuevas. Repro Lima suma cinco lecturas por
-carga, solo para los candidatos: el proveedor, las salidas, las solicitudes de
-Grupo GF, los ítems activos de caja y sus cajas.
+Despacho del día suma una lectura por carga: los casos abiertos con acuerdo de
+Repro Lima de las filas de la cola (`lima_repro_cases`, por pedido). Repro Lima
+suma, solo para los candidatos:
+- el proveedor de la organización de sus tiendas;
+- las salidas;
+- las solicitudes de Grupo GF;
+- los ítems activos de caja y sus cajas;
+- las cajas de Grupo GF de hoy en adelante, con sus ítems y salidas, para lo En
+  curso ya recogido.
 
 **Qué mirar después.** Pasadas las 12:00, Despacho del día abre «Sale a
-reparto» en mañana (o en el lunes, si es sábado). Las cifras suman el total y
-«Armar las cajas del …» deja el «Día de la caja» en ese día. En Repro Lima, la
-misma cuenta, limitada a nuestras tiendas.
+reparto» en mañana (o en el lunes, si es sábado); el domingo solo ofrece el
+lunes. Las cifras suman el total y «Armar las cajas del …» deja el «Día de la
+caja» en ese día. Desde la lista del plan, «Asignar» va a la caja de ese día.
+El sábado por la tarde, «debían salir antes» no debe contar lo que no tiene
+programa. En Repro Lima, la misma cuenta, limitada a nuestras tiendas; en «Hoy»
+siguen los pedidos que el motorizado ya recogió.
 
 **Marcha atrás.** Revertir el commit. Solo lee.
 

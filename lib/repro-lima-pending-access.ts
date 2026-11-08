@@ -2,6 +2,9 @@ import type { createAdminSupabase } from "@/lib/db";
 import type { ReproScope } from "@/lib/repro-lima-access";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { isLimaPendingStage, LIMA_PENDING_STAGES, type LimaPendingGf, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { isCurrentBoxDay } from "@/lib/dispatch-plan";
+import { outputsBlockingRetry } from "@/lib/gf-retry";
+import { limaClock } from "@/lib/grupo-gf-courier";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
 interface PendingMasterRow {
@@ -13,69 +16,128 @@ interface PendingMasterRow {
   sales_channel: string | null; address: string | null; reference: string | null;
 }
 interface PendingProgramRow { order_id: string; store_id: string; scheduled_for: string }
-interface GfShipmentRow { id: string; order_id: string; courier: string | null; preparation_state: string | null; qr_token: string | null; delivery_status: string | null; created_at: string | null }
+interface GfShipmentRow {
+  id: string; order_id: string; courier: string | null; preparation_state: string | null; qr_token: string | null;
+  delivery_status: string | null; created_at: string | null;
+  // Para decidir, como la cola de Grupo GF, qué salida ya falló o volvió.
+  reported_status: string | null; swayp_state: number | null; dispatched_at: string | null; closed_at: string | null;
+  returned_at: string | null; updated_at: string | null; custody_state: string | null; output_number: number | null;
+}
 interface GfItemRow { shipment_id: string; manifest_id: string; office_checked_at: string | null; pickup_checked_at: string | null }
 interface GfManifestRow { id: string; route_date: string; driver_name: string | null; courier: string | null; kind: string | null; state: string | null }
 interface GfRequestRow { order_id: string; shipment_id: string | null; scheduled_for: string | null; status: string }
+type Read<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null }>;
 
 /** Las salidas que son de Grupo GF: la «por definir» que rellena y la propia. */
 const GF_OUTPUT_COURIERS = new Set(["por_definir", "propio"]);
 const LIVE_OUTPUT = new Set(["pendiente", "en_ruta"]);
+const GF_SHIPMENT_COLUMNS = "id,order_id,courier,preparation_state,qr_token,delivery_status,created_at,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at,custody_state,output_number";
+
+/** Una caja de reparto de Grupo GF que no se anuló. */
+function isGfReparto(m: Pick<GfManifestRow, "courier" | "kind" | "state">): boolean {
+  return m.courier === "propio" && (m.kind ?? "reparto") === "reparto" && m.state !== "cancelled";
+}
+
+/**
+ * Los pedidos (de `orderIds`) que están en una caja de Grupo GF de hoy o de un
+ * día que viene. Al recogerla, el motorizado deja el pedido En curso · En
+ * reparto: sin esto, Repro Lima los perdía de «Hoy» y nunca contaba los
+ * recibidos (revisión, 07-11-2026). Las cajas van por fecha, no por tienda: la
+ * caja es de Grupo GF y los pedidos se cruzan con los nuestros.
+ */
+async function ordersInCurrentGfBoxes(admin: Admin, orderIds: ReadonlySet<string>, today: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!orderIds.size) return out;
+  const { data: manifests, error } = await admin.from("dispatch_manifests")
+    .select("id,courier,kind,state").eq("courier", "propio").gte("route_date", today).neq("state", "cancelled");
+  if (error) throw new Error(`No pudimos leer las cajas de Grupo GF: ${error.message}`);
+  const ids = ((manifests ?? []) as Array<Pick<GfManifestRow, "id" | "courier" | "kind" | "state">>).filter(isGfReparto).map((m) => m.id);
+  if (!ids.length) return out;
+  // Paginado: una caja por motorizado y carga, hoy y mañana, pasa de mil ítems en un pico.
+  const items = await allCourierRows<{ shipment_id: string }>((from, to) => admin.from("dispatch_manifest_items")
+    .select("shipment_id").in("manifest_id", ids).is("removed_at", null).order("id").range(from, to) as unknown as Read<{ shipment_id: string }>);
+  const shipments = await courierRowsByIds<{ order_id: string }>([...new Set(items.map((i) => i.shipment_id))], (chunk) => admin.from("shipments")
+    .select("order_id").in("id", chunk) as unknown as Read<{ order_id: string }>);
+  for (const s of shipments.data) if (orderIds.has(s.order_id)) out.add(s.order_id);
+  return out;
+}
 
 /**
  * «Sale a reparto» (§29.16): por cada pedido que puede salir con Grupo GF, su
- * caja activa de Grupo GF, la solicitud que tomó y si su salida tiene rótulo y
- * está armada. Los candidatos: Preparación y Por despachar, y un «Por
- * reprogramar Lima» con programa (sin acuerdo no sale, §29.13). Un pedido con
- * una salida viva de otro courier sale con ese courier: no es de Grupo GF.
+ * caja de Grupo GF, la solicitud que tomó y si su salida tiene rótulo y está
+ * armada. Los candidatos: Preparación y Por despachar; un «Por reprogramar
+ * Lima» con programa (sin acuerdo no sale, §29.13); y lo En curso que está en
+ * una caja de hoy o de un día que viene (ya lo recogió el motorizado).
+ * - Las salidas que cuentan son las de la cola de Grupo GF (`outputsBlockingRetry`):
+ *   ni la guía de otro courier que ya falló (la de Tanders que vuelve sigue
+ *   `en_ruta`) ni la salida devuelta. Con otra salida viva de otro courier, el
+ *   pedido sale con ese courier: no es de Grupo GF.
+ * - Solo una caja de hoy o de un día que viene es su caja. La de un día que
+ *   pasó no fija el día; si el motorizado se la llevó, se dice «por recibir en
+ *   oficina».
  */
-async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], programmed: ReadonlyMap<string, string>): Promise<Map<string, LimaPendingGf>> {
+async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], programmed: ReadonlyMap<string, string>, orgIds: readonly string[], today: string): Promise<Map<string, LimaPendingGf>> {
   const out = new Map<string, LimaPendingGf>();
-  const candidates = rows.filter((r) => r.macro_stage === "preparacion" || r.macro_stage === "por_despachar" || (r.macro_substage === "por_reprogramar_lima" && programmed.has(r.order_id)));
+  const inCurso = new Set(rows.filter((r) => r.macro_stage === "en_curso" && !(r.macro_substage === "por_reprogramar_lima" && programmed.has(r.order_id))).map((r) => r.order_id));
+  const boxed = await ordersInCurrentGfBoxes(admin, inCurso, today);
+  const candidates = rows.filter((r) => r.macro_stage === "preparacion" || r.macro_stage === "por_despachar"
+    || (r.macro_substage === "por_reprogramar_lima" && programmed.has(r.order_id)) || boxed.has(r.order_id));
   if (!candidates.length) return out;
   const orderIds = candidates.map((r) => r.order_id);
-  const [{ data: provider }, shipments] = await Promise.all([
-    admin.from("logistics_providers").select("id").eq("code", "grupo-gf-courier").maybeSingle(),
+  const [providers, shipments] = await Promise.all([
+    // El proveedor de la organización de cada tienda, como el resto de Repro Lima.
+    orgIds.length
+      ? courierRowsByIds<{ id: string }>([...orgIds], (chunk) => admin.from("logistics_providers")
+        .select("id").eq("code", "grupo-gf-courier").in("org_id", chunk) as unknown as Read<{ id: string }>)
+      : Promise.resolve({ data: [] as Array<{ id: string }> }),
     courierRowsByIds<GfShipmentRow>(orderIds, (chunk) => admin.from("shipments")
-      .select("id,order_id,courier,preparation_state,qr_token,delivery_status,created_at").in("order_id", chunk) as unknown as PromiseLike<{ data: GfShipmentRow[] | null; error: { message: string } | null }>),
+      .select(GF_SHIPMENT_COLUMNS).in("order_id", chunk) as unknown as Read<GfShipmentRow>),
   ]);
-  const providerId = (provider as { id: string } | null)?.id ?? null;
+  const providerIds = providers.data.map((p) => p.id);
   const [requests, items] = await Promise.all([
-    providerId
+    providerIds.length
       ? courierRowsByIds<GfRequestRow>(orderIds, (chunk) => admin.from("logistics_requests")
-        .select("order_id,shipment_id,scheduled_for,status").eq("provider_id", providerId).in("status", ["accepted", "scheduled"]).in("order_id", chunk) as unknown as PromiseLike<{ data: GfRequestRow[] | null; error: { message: string } | null }>)
+        .select("order_id,shipment_id,scheduled_for,status").in("provider_id", providerIds).in("status", ["accepted", "scheduled"]).in("order_id", chunk) as unknown as Read<GfRequestRow>)
       : Promise.resolve({ data: [] as GfRequestRow[] }),
     courierRowsByIds<GfItemRow>(shipments.data.map((s) => s.id), (chunk) => admin.from("dispatch_manifest_items")
-      .select("shipment_id,manifest_id,office_checked_at,pickup_checked_at").in("shipment_id", chunk).is("removed_at", null) as unknown as PromiseLike<{ data: GfItemRow[] | null; error: { message: string } | null }>),
+      .select("shipment_id,manifest_id,office_checked_at,pickup_checked_at").in("shipment_id", chunk).is("removed_at", null) as unknown as Read<GfItemRow>),
   ]);
   const manifests = await courierRowsByIds<GfManifestRow>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
-    .select("id,route_date,driver_name,courier,kind,state").in("id", chunk) as unknown as PromiseLike<{ data: GfManifestRow[] | null; error: { message: string } | null }>);
-  // La caja de reparto de Grupo GF que sigue viva (no anulada).
-  const gfManifest = new Map(manifests.data.filter((m) => m.courier === "propio" && (m.kind ?? "reparto") === "reparto" && m.state !== "cancelled").map((m) => [m.id, m]));
-  const boxByShipment = new Map<string, LimaPendingGf["box"]>();
+    .select("id,route_date,driver_name,courier,kind,state").in("id", chunk) as unknown as Read<GfManifestRow>);
+  const gfManifest = new Map(manifests.data.filter(isGfReparto).map((m) => [m.id, m]));
+  type Box = NonNullable<LimaPendingGf["box"]> & { current: boolean; withRider: boolean };
+  const boxByShipment = new Map<string, Box>();
   for (const item of items.data) {
     const m = gfManifest.get(item.manifest_id);
     if (!m) continue;
-    boxByShipment.set(item.shipment_id, { day: m.route_date.slice(0, 10), riderName: m.driver_name, officeChecked: Boolean(item.office_checked_at), pickedUp: Boolean(item.pickup_checked_at) });
+    const day = m.route_date.slice(0, 10);
+    const box: Box = { day, riderName: m.driver_name, officeChecked: Boolean(item.office_checked_at), pickedUp: Boolean(item.pickup_checked_at), current: isCurrentBoxDay(day, today), withRider: m.state === "in_custody" };
+    // Una salida en dos cajas: la de hoy o de un día que viene gana.
+    const seen = boxByShipment.get(item.shipment_id);
+    if (!seen || (!seen.current && box.current)) boxByShipment.set(item.shipment_id, box);
   }
   const requestByOrder = new Map(requests.data.map((r) => [r.order_id, r]));
   const outputsByOrder = new Map<string, GfShipmentRow[]>();
   for (const s of shipments.data) outputsByOrder.set(s.order_id, [...(outputsByOrder.get(s.order_id) ?? []), s]);
   for (const row of candidates) {
-    const outputs = outputsByOrder.get(row.order_id) ?? [];
-    const live = outputs.filter((s) => LIVE_OUTPUT.has(s.delivery_status ?? ""));
+    const outputs = (outputsByOrder.get(row.order_id) ?? [])
+      .filter((s) => LIVE_OUTPUT.has(s.delivery_status ?? "") && !s.returned_at && s.custody_state !== "devuelto")
+      .map((s) => ({ ...s, courier: s.courier ?? "", delivery_status: s.delivery_status ?? "" }));
+    const live = outputsBlockingRetry(outputs);
     // Sale con otro courier (Aliclik, Swayp…): es de su lista, no de Grupo GF.
-    if (live.some((s) => !GF_OUTPUT_COURIERS.has(s.courier ?? ""))) continue;
+    if (live.some((s) => !GF_OUTPUT_COURIERS.has(s.courier))) continue;
     const request = requestByOrder.get(row.order_id) ?? null;
-    const gfLive = live.filter((s) => GF_OUTPUT_COURIERS.has(s.courier ?? "")).sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+    const gfLive = live.filter((s) => GF_OUTPUT_COURIERS.has(s.courier)).sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
     // La salida de la solicitud manda; si no, la más nueva que sigue viva.
     const output = (request?.shipment_id ? gfLive.find((s) => s.id === request.shipment_id) : null) ?? gfLive[0] ?? null;
-    const box = gfLive.map((s) => boxByShipment.get(s.id)).find(Boolean) ?? null;
+    const boxes = (output ? [output, ...gfLive] : gfLive).map((s) => boxByShipment.get(s.id)).filter((b): b is Box => Boolean(b));
+    const current = boxes.find((b) => b.current) ?? null;
     out.set(row.order_id, {
-      box,
+      box: current && { day: current.day, riderName: current.riderName, officeChecked: current.officeChecked, pickedUp: current.pickedUp },
       requestDay: request?.scheduled_for?.slice(0, 10) ?? null,
       labeled: Boolean(output?.qr_token),
       armed: output?.preparation_state === "listo_despacho",
+      ...(!current && boxes.some((b) => b.withRider) ? { awaitingOffice: true } : {}),
     });
   }
   return out;
@@ -83,7 +145,7 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], programme
 
 /** Solo lectura, después de requireReproLima. Pagina todos los pedidos, sin
  * truncarlos a 1000 y sin cargar expedientes completos por cada fila. */
-export async function loadLimaPending(admin: Admin, scope: ReproScope): Promise<LimaPendingOrder[]> {
+export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date = new Date()): Promise<LimaPendingOrder[]> {
   const ids = [...scope.storeIds];
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
@@ -92,11 +154,13 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope): Promise<
       .in("store_id", ids).eq("coverage", "lima").in("macro_stage", [...LIMA_PENDING_STAGES])
       .order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id")
       .range(from, to) as unknown as PromiseLike<{ data: PendingMasterRow[] | null; error: { message: string } | null }>),
-    courierRowsByIds(ids, (chunk) => admin.from("stores").select("id,name").in("id", chunk)),
+    courierRowsByIds(ids, (chunk) => admin.from("stores").select("id,name,org_id").in("id", chunk)),
     allCourierRows<PendingProgramRow>((from, to) => admin.from("gf_dispatch_programs")
       .select("order_id,store_id,scheduled_for").in("store_id", ids).order("order_id").range(from, to) as unknown as PromiseLike<{ data: PendingProgramRow[] | null; error: { message: string } | null }>),
   ]);
-  const names = new Map((stores.data as Array<{ id: string; name: string }>).map((s) => [s.id, s.name]));
+  const storeRows = stores.data as Array<{ id: string; name: string; org_id?: string | null }>;
+  const names = new Map(storeRows.map((s) => [s.id, s.name]));
+  const orgIds = [...new Set(storeRows.map((s) => s.org_id).filter((id): id is string => Boolean(id)))];
   const seen = new Set<string>();
   const safe = orders.filter((row) => {
     if (!scope.storeIds.has(row.store_id) || row.coverage !== "lima" || !isLimaPendingStage(row.macro_stage) || seen.has(row.order_id)) return false;
@@ -107,7 +171,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope): Promise<
   const scheduled = new Map(programs.filter((p) => orderStore.get(p.order_id) === p.store_id).map((p) => [p.order_id, p.scheduled_for]));
   const departures = new Map<string, string>();
   const safeIds = [...orderStore.keys()];
-  const gfFacts = await loadGfPlanFacts(admin, safe, scheduled);
+  const gfFacts = await loadGfPlanFacts(admin, safe, scheduled, orgIds, limaClock(now).day);
   // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
   // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
   for (let offset = 0; offset < safeIds.length; offset += 500) {

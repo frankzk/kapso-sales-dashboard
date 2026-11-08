@@ -3,7 +3,8 @@
 
 import { courierKey, dispatchProgress } from "@/lib/dispatch";
 import { MACRO_SUBSTAGES_BY_STAGE, ORDER_MACRO_STAGES, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
-import { inPlan, planStep, type PlanCandidate, type PlanStep } from "@/lib/dispatch-plan";
+import { inPlan, isCurrentBoxDay, planStep, type PlanCandidate, type PlanStep } from "@/lib/dispatch-plan";
+import { isReprogramStage } from "@/lib/gf-retry";
 
 export interface DayItem {
   id: string;
@@ -210,6 +211,17 @@ export interface QueueRow {
    * jue 15/10». Null si no hay nada que decir.
    */
   reproLimaChip?: string | null;
+  /**
+   * «Sale a reparto» (§29.16): el acuerdo vigente de Repro Lima, con su courier
+   * y su día (`loadReproAgreements`). Con otro courier no sale con Grupo GF.
+   */
+  reproAgreement?: { day: string; courier: string } | null;
+  /**
+   * «Sale a reparto»: el programa de una fila con caja, que la lista no usa
+   * (`programmedFor` es null en el seguimiento). Si la caja es de un día que
+   * pasó, ese día manda.
+   */
+  planProgramDay?: string | null;
 }
 
 export interface QueueRoute {
@@ -277,7 +289,7 @@ export interface QueueFilters {
    * «Sale mañana» (§29.16): solo lo que sale ese día y, si se eligió, lo que
    * está en ese paso. Incluye lo que ya está en una caja de ese día.
    */
-  plan: { day: string; step: PlanStep | null } | null;
+  plan: { day: string; openDay: string; step: PlanStep | null } | null;
 }
 
 export const EMPTY_QUEUE_FILTERS: QueueFilters = {
@@ -381,8 +393,8 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
   return rows.filter((q) => {
     if (onlyAssignable && !q.assignable && !isReturnable(q)) return false;
     if (filters.plan) {
-      const candidate = planCandidateFromQueue(q);
-      if (!candidate || !inPlan(candidate, filters.plan.day)) return false;
+      const candidate = planCandidateFromQueue(q, today);
+      if (!candidate || !inPlan(candidate, filters.plan.day, filters.plan.openDay)) return false;
       if (filters.plan.step && planStep(candidate) !== filters.plan.step) return false;
     }
     if (filters.segment && (!q.assignable || queueSegment(q, today) !== filters.segment)) return false;
@@ -401,18 +413,25 @@ export function filterQueue(rows: readonly QueueRow[], filters: QueueFilters, to
 }
 
 /**
- * Una fila de Despacho del día para «Sale mañana» (§29.16, `lib/dispatch-plan.ts`).
- * - En una caja de Grupo GF: su día es el de la caja; tiene rótulo, y armado si
- *   Almacén la escaneó (el armado sigue aparte de la asignación).
- * - Tomada sin caja: su día es el de la solicitud (o su programa); la salida
- *   ya existe, armada o no.
- * - Disponible: su día es el programa o el corte (`scheduledFor`); el rótulo y
- *   el armado salen de la subetapa del Master. Un reintento que sale con salida
- *   nueva no tiene rótulo; uno que sale con la suya, ya está armado.
+ * Una fila de Despacho del día para «Sale a reparto» (§29.16, `lib/dispatch-plan.ts`).
+ * - En una caja de Grupo GF de hoy o de un día que viene: su día es el de la
+ *   caja; tiene rótulo, y armado si Almacén la escaneó (el armado sigue aparte
+ *   de la asignación).
+ * - Acordado en Repro Lima con otro courier (Aliclik…): sale con ese, no entra.
+ * - En una caja de un día que pasó («No entregado» que el motorizado tiene, o una
+ *   caja que nunca salió): manda el acuerdo o el programa; sin ellos espera a la
+ *   tienda y no entra.
+ * - Un «Por reprogramar Lima» sin acuerdo ni programa espera a la tienda
+ *   (§29.13), aunque Grupo GF lo haya tomado: no entra.
+ * - Tomada sin caja: su día es el acuerdo, el programa o el de la solicitud; la
+ *   salida ya existe, armada o no.
+ * - Disponible: su día es el acuerdo, el programa o el corte (`scheduledFor`);
+ *   el rótulo y el armado salen de la subetapa del Master. Un reintento o una
+ *   guía de Tanders/Swayp en revisión salen con salida nueva: no tienen rótulo.
  * Lo que no se puede asignar y no tiene caja (seguimiento) no entra.
  */
-export function planCandidateFromQueue(q: QueueRow): PlanCandidate | null {
-  if (q.route) {
+export function planCandidateFromQueue(q: QueueRow, today: string): PlanCandidate | null {
+  if (q.route && isCurrentBoxDay(q.route.routeDate, today)) {
     return {
       orderId: q.orderId,
       day: null,
@@ -421,11 +440,22 @@ export function planCandidateFromQueue(q: QueueRow): PlanCandidate | null {
       armed: q.armed !== false,
     };
   }
+  // Un acuerdo cuyo día ya pasó no vale: Repro Lima lo vuelve a «Por decidir».
+  const agreement = q.reproAgreement && q.reproAgreement.day.slice(0, 10) >= today ? q.reproAgreement : null;
+  if (agreement && courierKey(agreement.courier) !== "propio") return null;
+  const agreedDay = agreement?.day.slice(0, 10) ?? null;
+  if (q.route) {
+    const day = agreedDay ?? (q.planProgramDay ?? q.programmedFor)?.slice(0, 10) ?? null;
+    if (!day || !takenIsAssignable(q.macroStage)) return null;
+    return { orderId: q.orderId, day, box: null, labeled: true, armed: q.armed !== false, awaitingOffice: q.route.state === "in_custody" };
+  }
   if (!q.assignable) return null;
-  const day = q.programmedFor?.slice(0, 10) ?? q.scheduledFor?.slice(0, 10) ?? null;
+  const program = agreedDay ?? q.programmedFor?.slice(0, 10) ?? null;
+  if (!program && isReprogramStage(q.macroStage, q.macroSubstage)) return null;
+  const day = program ?? q.scheduledFor?.slice(0, 10) ?? null;
   if (q.taken) return { orderId: q.orderId, day, box: null, labeled: true, armed: q.armed === true };
   const sub = q.macroSubstage;
-  const labeled = sub !== "por_generar_rotulo" && !q.newOutputOnTake;
+  const labeled = sub !== "por_generar_rotulo" && !q.newOutputOnTake && !q.tandersReview;
   const armed = labeled && sub !== "por_armar";
   return { orderId: q.orderId, day, box: null, labeled, armed };
 }

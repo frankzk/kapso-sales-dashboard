@@ -70,6 +70,7 @@ import { clearGfDispatchPrograms, writeGfDispatchProgram } from "@/lib/gf-dispat
 import { loadActiveBoxes, type CourierRouteAssignment } from "@/lib/gf-active-boxes";
 import { findOfficeReceipts } from "@/lib/gf-office-receipts";
 import {
+  loadReproAgreements,
   loadReproQueueFlags,
   materializeWaitingAgreementsSafe,
   reproCajaNuevaChip,
@@ -176,6 +177,11 @@ export interface CourierAvailableOrder {
    * 15/10». Null si no hay nada que decir.
    */
   reproLimaChip?: string | null;
+  /**
+   * «Sale a reparto» (§29.16): el acuerdo vigente de Repro Lima, con su courier
+   * y su día (`loadReproAgreements`). Null sin acuerdo.
+   */
+  reproAgreement?: { day: string; courier: string } | null;
 }
 
 /**
@@ -1069,13 +1075,27 @@ async function loadCourierOperations(
   // en cualquier fila; «caja nueva desde stock» solo donde la caja sigue con
   // el motorizado y si se acordó con Grupo GF (`loadReproQueueFlags`). Sin
   // lectura no hay chapas.
-  const reproFlags = await loadReproQueueFlags(admin, [
-    ...((queueRows ?? []) as QueueOrderRow[])
-      .filter((order) => isReprogramStage(order.macro_stage, order.macro_substage))
-      .map((order) => order.order_id),
-    ...accepted.map((order) => order.orderId),
-    ...returning.map((output) => output.orderId),
-  ], lastDispatchByOrder);
+  const planToday = limaClock().day;
+  const planAgreementRows: CourierAvailableOrder[] = [
+    ...available,
+    ...accepted.filter((order) => takenIsAssignable(order.macroStage) && (!order.route || order.route.routeDate < planToday)),
+    ...returnable,
+  ];
+  const [reproFlags, reproAgreements] = await Promise.all([
+    loadReproQueueFlags(admin, [
+      ...((queueRows ?? []) as QueueOrderRow[])
+        .filter((order) => isReprogramStage(order.macro_stage, order.macro_substage))
+        .map((order) => order.order_id),
+      ...accepted.map((order) => order.orderId),
+      ...returning.map((output) => output.orderId),
+    ], lastDispatchByOrder),
+    // «Sale a reparto» (§29.16): lo acordado en Repro Lima con otro courier no
+    // sale con Grupo GF, y lo acordado con Grupo GF sale ese día. Solo donde
+    // cambia algo: en una caja de hoy en adelante manda la caja, y lo tomado
+    // que ya se cierra no entra (`planCandidateFromQueue`).
+    loadReproAgreements(admin, planAgreementRows.map((order) => order.orderId)),
+  ]);
+  for (const row of planAgreementRows) row.reproAgreement = reproAgreements.get(row.orderId) ?? null;
   const noLoQuiereChip = (orderId: string) => (reproFlags.noLoQuiere.has(orderId) ? REPRO_NO_LO_QUIERE_CHIP : null);
   for (const row of available) row.reproLimaChip = noLoQuiereChip(row.orderId);
   // Lo tomado con la caja todavía con el motorizado (su caja dice «No

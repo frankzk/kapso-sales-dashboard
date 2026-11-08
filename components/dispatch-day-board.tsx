@@ -88,7 +88,7 @@ import { confirmedTandersReview, type TandersConfirmations, type TandersPackageL
 import { addToTray, optimisticBox, removeFromTray, type TrayEntry } from "@/lib/dispatch-scan-tray";
 import type { DispatchManifest } from "@/lib/dispatch-access";
 import { limaClock, sameDayCutoffLabel, sameDayCutoffMinute, type RiderPickupMode } from "@/lib/grupo-gf-courier";
-import { nextDeliveryDay, PLAN_STEP_LABEL, planItems, planSummary, type PlanCandidate, type PlanStep } from "@/lib/dispatch-plan";
+import { nextDeliveryDay, PLAN_STEP_LABEL, planItems, planOpenDay, planSummary, type PlanCandidate, type PlanStep } from "@/lib/dispatch-plan";
 import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
 import {
   assignGroupGfCourierRoute,
@@ -134,6 +134,12 @@ interface Props {
   riderPickupMode: RiderPickupMode;
   /** Corte del mismo día del proveedor («HH:MM», MOM §29.6). */
   sameDayCutoff?: string | null;
+  /**
+   * La hora del servidor al pintar (ISO). «Sale a reparto» decide con ella si
+   * ya pasó el corte: el reloj del navegador puede ir distinto y la página se
+   * pinta primero en el servidor.
+   */
+  nowIso?: string;
   /** Umbrales de efectivo de la ruta (MOM §29.9): aviso y límite. */
   cashWarning: number;
   cashLimit: number;
@@ -352,6 +358,7 @@ export function DispatchDayBoard(props: Props) {
         assignable: true,
         route: null,
         reproLimaChip: o.reproLimaChip ?? null,
+        reproAgreement: o.reproAgreement ?? null,
       }));
     const takenIds = new Set(taken.map((t) => t.orderId));
     const free: QueueRow[] = props.available
@@ -383,6 +390,7 @@ export function DispatchDayBoard(props: Props) {
         tandersReview: o.tandersReview ?? null,
         ownOutput: o.ownOutput ?? null,
         reproLimaChip: o.reproLimaChip ?? null,
+        reproAgreement: o.reproAgreement ?? null,
       }));
     return [...taken, ...free];
   }, [props.accepted, props.available]);
@@ -423,6 +431,8 @@ export function DispatchDayBoard(props: Props) {
         outputCode: o.outputCode,
       },
       reproLimaChip: o.reproLimaChip ?? null,
+      reproAgreement: o.reproAgreement ?? null,
+      planProgramDay: o.programmedFor,
     })), [props.accepted]);
   // Lo que Grupo GF no entregó con su propia salida y sigue en una caja
   // anterior, sin solicitud (06-10-2026): se recibe en oficina como los demás
@@ -461,6 +471,8 @@ export function DispatchDayBoard(props: Props) {
     },
     ownOutput: o.ownOutput ?? null,
     reproLimaChip: o.reproLimaChip ?? null,
+    reproAgreement: o.reproAgreement ?? null,
+    planProgramDay: o.programmedFor,
   })), [props.returnable]);
   const allRows = useMemo(() => [...queue, ...tracked, ...ownInBox], [queue, tracked, ownInBox]);
 
@@ -513,31 +525,43 @@ export function DispatchDayBoard(props: Props) {
   // quedarían al tocarlo con el resto de filtros como están). Las subetapas
   // son las de la etapa elegida; sin etapa no se muestran.
   // «Sale a reparto» (§29.16): lo que sale hoy o en el próximo reparto y lo que
-  // le falta. Pasado el corte se abre en el próximo día: es lo que se prepara.
+  // le falta. Se abre en el primer día que todavía se prepara: hoy antes del
+  // corte; después, o en domingo, el próximo reparto. El corte se decide con la
+  // hora del servidor (`nowIso`): con el reloj del navegador la página podía
+  // pintar un día en el servidor y otro en el teléfono.
   const nextRouteDay = nextDeliveryDay(day);
-  const [planDay, setPlanDay] = useState(() => (limaClock().minute > sameDayCutoffMinute(props.sameDayCutoff) ? nextRouteDay : day));
+  const afterCutoff = limaClock(props.nowIso ? new Date(props.nowIso) : new Date()).minute > sameDayCutoffMinute(props.sameDayCutoff);
+  const openDay = planOpenDay(day, afterCutoff);
+  const planOptions = planDayOptions(day, nextRouteDay);
+  const [chosenPlanDay, setPlanDay] = useState(openDay);
+  // Si el día cambió con la página abierta, el elegido puede ya no estar.
+  const planDay = planOptions.some((o) => o.day === chosenPlanDay) ? chosenPlanDay : openDay;
   const plan = useMemo(() => {
-    const candidates = allRows.map(planCandidateFromQueue).filter((c): c is PlanCandidate => c !== null);
-    return planSummary(planItems(candidates, planDay));
-  }, [allRows, planDay]);
+    const candidates = allRows.map((q) => planCandidateFromQueue(q, day)).filter((c): c is PlanCandidate => c !== null);
+    return planSummary(planItems(candidates, planDay, openDay));
+  }, [allRows, planDay, openDay, day]);
   const planStepActive: PlanStep | null = method === "lista" && filters.plan?.day === planDay ? filters.plan.step : null;
+  // La lista del plan y «Día de la caja» van juntos: asignar desde la lista de
+  // lo que sale el sábado tiene que ir a la caja del sábado (revisión, 07-11-2026).
   /** Tocar una cifra: la lista con lo que sale ese día en ese paso (o lo quita). */
   const tapPlanStep = (step: PlanStep) => {
     const off = planStepActive === step;
-    setFilters((cur) => ({ ...cur, plan: off ? null : { day: planDay, step }, segment: null, stages: [], substages: [] }));
+    if (!off) setScanDay(planDay);
+    setFilters((cur) => ({ ...cur, plan: off ? null : { day: planDay, openDay, step }, segment: null, stages: [], substages: [] }));
     setLimit(100);
     setMethod("lista");
   };
   /** Preparar el día: la caja en ese día y la lista con lo que sale, sin caja primero. */
   const preparePlanDay = () => {
     setScanDay(planDay);
-    setFilters((cur) => ({ ...cur, plan: { day: planDay, step: null }, segment: null, stages: [], substages: [] }));
+    setFilters((cur) => ({ ...cur, plan: { day: planDay, openDay, step: null }, segment: null, stages: [], substages: [] }));
     setLimit(100);
     setMethod("lista");
   };
   const choosePlanDay = (next: string) => {
     setPlanDay(next);
-    setFilters((cur) => (cur.plan ? { ...cur, plan: { ...cur.plan, day: next } } : cur));
+    if (filters.plan) setScanDay(next);
+    setFilters((cur) => (cur.plan ? { ...cur, plan: { ...cur.plan, day: next, openDay } } : cur));
   };
   const substageOptions = useMemo(() => queueSubstageOptions(allRows, filters.stages), [allRows, filters.stages]);
   const facets = useMemo(() => queueFacetCounts(allRows, filters, day), [allRows, filters, day]);
@@ -794,7 +818,7 @@ export function DispatchDayBoard(props: Props) {
 
       <DispatchPlanPanel
         planDay={planDay}
-        options={planDayOptions(day, nextRouteDay)}
+        options={planOptions}
         onPlanDay={choosePlanDay}
         summary={plan}
         activeStep={planStepActive}

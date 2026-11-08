@@ -78,8 +78,9 @@ function PlanBadge({ item, planDay }: { item: PlanItem; planDay: string }) {
   const done = item.step === "en_caja";
   const where = item.riderName ? ` · caja de ${item.riderName}` : "";
   const status = done ? (item.pickedUp ? "recibido" : item.officeChecked ? "cotejado" : "en caja") : PLAN_STEP_LABEL[item.step].label.toLowerCase();
+  const office = item.awaitingOffice ? " · por recibir en oficina" : "";
   const late = item.overdueSince ? ` · debía salir ${programDayLabel(item.overdueSince)}` : "";
-  return <Badge tone={done ? "ok" : "warn"} wrap title={PLAN_STEP_LABEL[item.step].hint}>{`Sale ${programDayLabel(planDay)} · ${status}${where}${late}`}</Badge>;
+  return <Badge tone={done ? "ok" : "warn"} wrap title={PLAN_STEP_LABEL[item.step].hint}>{`Sale ${programDayLabel(planDay)} · ${status}${where}${office}${late}`}</Badge>;
 }
 
 function PendingStage({ row, repro, today, plan, planDay }: { row: LimaPendingOrder; repro?: ReproRow; today: string; plan?: PlanItem; planDay?: string }) {

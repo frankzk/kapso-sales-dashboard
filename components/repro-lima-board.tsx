@@ -14,7 +14,7 @@ import { OrderLink } from "@/components/order-link";
 import type { ReproLimaData, ReproRow } from "@/lib/repro-lima-access";
 import { cutoffNotice } from "@/lib/repro-lima";
 import { limaClock, sameDayCutoffMinute, scheduledDay } from "@/lib/grupo-gf-courier";
-import { nextDeliveryDay, PLAN_STEPS, planItems, planSummary, type PlanCandidate, type PlanItem, type PlanStep } from "@/lib/dispatch-plan";
+import { nextDeliveryDay, PLAN_STEPS, planItems, planOpenDay, planSummary, type PlanCandidate, type PlanItem, type PlanStep } from "@/lib/dispatch-plan";
 import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
 import { ReproLimaSheet, type ReproSaved } from "@/components/repro-lima-sheet";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
@@ -81,15 +81,20 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
   // «Sale a reparto» (§29.16): lo de nuestras tiendas que sale con Grupo GF hoy
   // o en el próximo reparto, y lo que le falta. El mismo cálculo que Despacho
-  // del día. Pasado el corte se abre en el próximo reparto.
+  // del día. Se abre en el primer día que todavía se prepara (hoy antes del
+  // corte; después, o en domingo, el próximo reparto), con la hora del servidor.
   const nextRouteDay = nextDeliveryDay(today);
-  const [planDay, setPlanDay] = useState(() => (limaClock(new Date(data.nowIso)).minute > sameDayCutoffMinute(data.cutoffLabel) ? nextDeliveryDay(limaClock(new Date(data.nowIso)).day) : limaClock(new Date(data.nowIso)).day));
+  const openDay = planOpenDay(today, limaClock(now).minute > sameDayCutoffMinute(data.cutoffLabel));
+  const planOptions = planDayOptions(today, nextRouteDay);
+  const [chosenPlanDay, setPlanDay] = useState(openDay);
+  // Si el día cambió con la página abierta, el elegido puede ya no estar.
+  const planDay = planOptions.some((o) => o.day === chosenPlanDay) ? chosenPlanDay : openDay;
   const [planFilter, setPlanFilter] = useState<{ step: PlanStep | null } | null>(null);
   const cutoffDay = scheduledDay(data.cutoffLabel, now);
   const planByOrder = useMemo(() => {
     const candidates = scoped.map((row) => limaPlanCandidate(row, caseById.get(row.orderId), cutoffDay)).filter((c): c is PlanCandidate => c !== null);
-    return new Map<string, PlanItem>(planItems(candidates, planDay).map((item) => [item.orderId, item]));
-  }, [scoped, caseById, cutoffDay, planDay]);
+    return new Map<string, PlanItem>(planItems(candidates, planDay, openDay).map((item) => [item.orderId, item]));
+  }, [scoped, caseById, cutoffDay, planDay, openDay]);
   const plan = useMemo(() => planSummary([...planByOrder.values()]), [planByOrder]);
   const inQueue = useMemo(() => {
     if (!planFilter) return attentionQueue;
@@ -316,7 +321,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
       {!retriesOnly && (
         <DispatchPlanPanel
           planDay={planDay}
-          options={planDayOptions(today, nextRouteDay)}
+          options={planOptions}
           onPlanDay={setPlanDay}
           summary={plan}
           activeStep={planFilter?.step ?? null}

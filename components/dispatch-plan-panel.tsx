@@ -6,7 +6,7 @@
 // decide qué hace tocar una cifra y qué botón lleva.
 import type { ReactNode } from "react";
 import { Badge, StatusCard, choiceChipClass } from "@/components/ops-ui";
-import { PLAN_STEPS, PLAN_STEP_LABEL, planMissingText, type PlanStep, type PlanSummary } from "@/lib/dispatch-plan";
+import { PLAN_STEPS, PLAN_STEP_LABEL, isDeliveryDay, planMissingText, type PlanStep, type PlanSummary } from "@/lib/dispatch-plan";
 import { programDayLabel } from "@/lib/dispatch-day";
 
 export interface PlanDayOption {
@@ -15,13 +15,19 @@ export interface PlanDayOption {
   label: string;
 }
 
-/** Hoy y el próximo día de reparto, con su nombre («Mañana» si es el siguiente). */
+/**
+ * Hoy y el próximo día de reparto, con su nombre («Mañana» si es el siguiente).
+ * El domingo no hay reparto: solo el lunes.
+ */
 export function planDayOptions(today: string, next: string): PlanDayOption[] {
   const tomorrow = new Date(Date.parse(`${today}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-  return [
-    { day: today, label: `Hoy · ${programDayLabel(today)}` },
-    { day: next, label: `${next === tomorrow ? "Mañana" : "Próximo reparto"} · ${programDayLabel(next)}` },
-  ];
+  const nextOption = { day: next, label: `${next === tomorrow ? "Mañana" : "Próximo reparto"} · ${programDayLabel(next)}` };
+  return isDeliveryDay(today) ? [{ day: today, label: `Hoy · ${programDayLabel(today)}` }, nextOption] : [nextOption];
+}
+
+/** «1 cotejado» / «2 cotejados»: la palabra en singular con 1. */
+function count(n: number, one: string, many: string): string {
+  return `${n.toLocaleString("es-PE")} ${n === 1 ? one : many}`;
 }
 
 export function DispatchPlanPanel({
@@ -66,7 +72,8 @@ export function DispatchPlanPanel({
         {summary.total === 1 ? "pedido sale" : "pedidos salen"} el {programDayLabel(planDay)}
         {" · "}
         <span className={pending ? "text-warn-fg" : "text-ok-fg"}>{planMissingText(summary)}</span>
-        {summary.overdue > 0 && <span className="text-ink-500"> {summary.overdue.toLocaleString("es-PE")} debían salir antes.</span>}
+        {summary.overdue > 0 && <span className="text-ink-500"> {count(summary.overdue, "debía salir antes", "debían salir antes")}.</span>}
+        {summary.awaitingOffice > 0 && <span className="text-ink-500"> {count(summary.awaitingOffice, "sigue con el motorizado en una caja anterior: recíbelo en oficina", "siguen con el motorizado en una caja anterior: recíbelos en oficina")}.</span>}
         {scopeNote && <span className="text-ink-500"> {scopeNote}</span>}
       </p>
 
@@ -93,7 +100,7 @@ export function DispatchPlanPanel({
           ))}
           {summary.steps.en_caja > 0 && (
             <span className="text-ink-500">
-              · {summary.officeChecked.toLocaleString("es-PE")} cotejados en oficina · {summary.pickedUp.toLocaleString("es-PE")} recibidos por el motorizado
+              · {count(summary.officeChecked, "cotejado", "cotejados")} en oficina · {count(summary.pickedUp, "recibido", "recibidos")} por el motorizado
             </span>
           )}
         </div>

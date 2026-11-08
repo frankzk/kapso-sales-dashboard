@@ -143,6 +143,8 @@ export interface LimaPendingGf {
   labeled: boolean;
   /** Almacén la armó (`listo_despacho`). */
   armed: boolean;
+  /** Sin caja vigente y todavía con el motorizado en la caja de un día que pasó. */
+  awaitingOffice?: boolean;
 }
 
 /**
@@ -158,7 +160,7 @@ export function limaPlanCandidate(row: LimaPendingOrder, c: AttentionCase | unde
   if (c?.list === "programados" && c.agreement?.courier && c.agreement.courier !== "propio") return null;
   const retry = row.stage === "en_curso";
   const day = limaScheduledFor(row, c) ?? row.gf.requestDay ?? (retry ? null : cutoffDay);
-  return { orderId: row.orderId, day: day?.slice(0, 10) ?? null, box: row.gf.box, labeled: row.gf.labeled, armed: row.gf.armed };
+  return { orderId: row.orderId, day: day?.slice(0, 10) ?? null, box: row.gf.box, labeled: row.gf.labeled, armed: row.gf.armed, awaitingOffice: Boolean(row.gf.awaitingOffice) };
 }
 
 // ---------------------------------------------------------------------------

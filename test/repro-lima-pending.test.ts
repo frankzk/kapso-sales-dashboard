@@ -86,7 +86,7 @@ function master(i: number, extra: DBRow = {}): DBRow {
     macro_stage: "preparacion", macro_substage: "por_armar", coverage: "lima", current_courier: null,
     dispatched_at: null, attempt_count: 0, ...extra };
 }
-function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; departures?: DBRow[]; rpcError?: string; programError?: string; tables?: Record<string, DBRow[]> } = {}) {
+function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; departures?: DBRow[]; rpcError?: string; programError?: string; tables?: Record<string, DBRow[]>; tableErrors?: Record<string, string> } = {}) {
   const pages: number[] = [];
   const ranges: Array<{ table: string; from: number }> = [];
   const from = vi.fn((table: string) => {
@@ -97,12 +97,14 @@ function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; dep
       in: (key: string, values: unknown[]) => { filters.push((r) => values.includes(r[key])); return q; },
       eq: (key: string, value: unknown) => { filters.push((r) => r[key] === value); return q; },
       is: (key: string, value: unknown) => { filters.push((r) => (r[key] ?? null) === value); return q; },
+      gte: (key: string, value: string) => { filters.push((r) => String(r[key] ?? "") >= value); return q; },
+      neq: (key: string, value: unknown) => { filters.push((r) => r[key] !== value); return q; },
       maybeSingle: async () => ({ data: (opts.tables?.[table] ?? []).filter((r) => filters.every((f) => f(r)))[0] ?? null, error: null }),
       order: () => q,
       range: (a: number, b: number) => { range = [a, b]; if (table === "order_master") pages.push(a); ranges.push({ table, from: a }); return q; },
       then: (resolve: (r: unknown) => unknown, reject?: (e: unknown) => unknown) => {
-        const rows = (table === "stores" ? [{ id: "a", name: "Kenku" }] : table === "gf_dispatch_programs" ? opts.programs ?? [] : table === "order_master" ? source : opts.tables?.[table] ?? []).filter((r) => filters.every((f) => f(r)));
-        const error = fail && table === "order_master" ? { message: "sin conexión" } : table === "gf_dispatch_programs" && opts.programError ? { message: opts.programError } : null;
+        const rows = (table === "stores" ? [{ id: "a", name: "Kenku", org_id: "org" }] : table === "gf_dispatch_programs" ? opts.programs ?? [] : table === "order_master" ? source : opts.tables?.[table] ?? []).filter((r) => filters.every((f) => f(r)));
+        const error = fail && table === "order_master" ? { message: "sin conexión" } : table === "gf_dispatch_programs" && opts.programError ? { message: opts.programError } : opts.tableErrors?.[table] ? { message: opts.tableErrors[table]! } : null;
         return Promise.resolve({ data: range ? rows.slice(range[0], range[1] + 1) : rows, error }).then(resolve, reject);
       },
     };
@@ -127,8 +129,8 @@ describe("acceso a todos los pendientes", () => {
     expect(db.pages).toEqual([0, 500, 1000]);
     expect(rows.at(-1)?.substage).toBe("en_transito");
     expect(rows[0]?.orderTotal).toBe(149);
-    // Más lo de «Sale a reparto» (§29.16): el proveedor y las salidas de los candidatos.
-    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "logistics_providers", "shipments"]));
+    // Más lo de «Sale a reparto» (§29.16): las cajas vigentes (por lo En curso), el proveedor y las salidas de los candidatos.
+    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "dispatch_manifests", "logistics_providers", "shipments"]));
     expect(db.rpc.mock.calls.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
   });
   it("usa salidas reales aunque Master haya vuelto a dejar dispatched_at vacío", async () => {
@@ -158,25 +160,61 @@ describe("acceso a todos los pendientes", () => {
       master(3, { macro_stage: "preparacion", macro_substage: "por_generar_rotulo" }),
       master(4, { macro_stage: "en_curso", macro_substage: "por_reprogramar_lima" }),
       master(5, { macro_stage: "en_curso", macro_substage: "en_transito", current_courier: "propio" }),
+      // Ya lo recogió el motorizado de la caja de hoy: sigue en «Hoy».
+      master(6, { macro_stage: "en_curso", macro_substage: "en_reparto", current_courier: "propio" }),
+      // Programado, con su «No entregado» todavía en la caja del 04/11.
+      master(7, { macro_stage: "en_curso", macro_substage: "por_reprogramar_lima" }),
+      // Programado; la guía de Tanders que falló sigue `en_ruta` (vuelve).
+      master(8, { macro_stage: "en_curso", macro_substage: "por_reprogramar_lima" }),
     ];
-    const db = database(source, false, { tables: {
-      logistics_providers: [{ id: "gf", code: "grupo-gf-courier" }],
-      shipments: [
-        { id: "s1", order_id: "o1", courier: "propio", preparation_state: "listo_despacho", qr_token: "q1", delivery_status: "pendiente", created_at: "2026-11-06T10:00:00Z" },
-        { id: "s1old", order_id: "o1", courier: "tanders", preparation_state: "listo_despacho", qr_token: "q0", delivery_status: "anulado", created_at: "2026-11-01T10:00:00Z" },
-        { id: "s2", order_id: "o2", courier: "aliclik", preparation_state: "listo_despacho", qr_token: "q2", delivery_status: "pendiente", created_at: "2026-11-06T10:00:00Z" },
-      ],
-      logistics_requests: [{ order_id: "o1", shipment_id: "s1", scheduled_for: "2026-11-07", status: "scheduled", provider_id: "gf" }],
-      dispatch_manifest_items: [{ shipment_id: "s1", manifest_id: "m1", office_checked_at: "2026-11-06T20:00:00Z", pickup_checked_at: null, removed_at: null }],
-      dispatch_manifests: [{ id: "m1", route_date: "2026-11-07", driver_name: "Jhon", courier: "propio", kind: "reparto", state: "office_check" }],
-    } });
-    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    const ship = (id: string, order: string, over: DBRow = {}) => ({ id, order_id: order, courier: "propio", preparation_state: "listo_despacho", qr_token: `q${id}`, delivery_status: "pendiente", created_at: "2026-11-06T10:00:00Z", ...over });
+    const db = database(source, false, {
+      programs: [{ order_id: "o7", store_id: "a", scheduled_for: "2026-11-09" }, { order_id: "o8", store_id: "a", scheduled_for: "2026-11-09" }],
+      tables: {
+        logistics_providers: [{ id: "gf", code: "grupo-gf-courier", org_id: "org" }, { id: "gf-otra", code: "grupo-gf-courier", org_id: "otra" }],
+        shipments: [
+          ship("s1", "o1"),
+          ship("s1old", "o1", { courier: "tanders", qr_token: "q0", delivery_status: "anulado", created_at: "2026-11-01T10:00:00Z" }),
+          ship("s2", "o2", { courier: "aliclik" }),
+          ship("s6", "o6", { delivery_status: "en_ruta" }),
+          ship("s7", "o7"),
+          ship("s8old", "o8", { courier: "tanders", delivery_status: "en_ruta", reported_status: "RETURNING" }),
+        ],
+        logistics_requests: [
+          { order_id: "o1", shipment_id: "s1", scheduled_for: "2026-11-07", status: "scheduled", provider_id: "gf" },
+          // La solicitud de otra organización no es de estas tiendas.
+          { order_id: "o3", shipment_id: null, scheduled_for: "2026-11-01", status: "accepted", provider_id: "gf-otra" },
+        ],
+        dispatch_manifest_items: [
+          { id: "i1", shipment_id: "s1", manifest_id: "m1", office_checked_at: "2026-11-06T20:00:00Z", pickup_checked_at: null, removed_at: null },
+          { id: "i6", shipment_id: "s6", manifest_id: "m1", office_checked_at: "2026-11-07T08:00:00Z", pickup_checked_at: "2026-11-07T09:00:00Z", removed_at: null },
+          { id: "i7", shipment_id: "s7", manifest_id: "m0", office_checked_at: "2026-11-04T08:00:00Z", pickup_checked_at: "2026-11-04T09:00:00Z", removed_at: null },
+        ],
+        dispatch_manifests: [
+          { id: "m1", route_date: "2026-11-07", driver_name: "Jhon", courier: "propio", kind: "reparto", state: "in_custody" },
+          { id: "m0", route_date: "2026-11-04", driver_name: "Yhoni", courier: "propio", kind: "reparto", state: "in_custody" },
+        ],
+      },
+    });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) }, new Date("2026-11-07T15:00:00Z"));
     const gf = Object.fromEntries(rows.map((r) => [r.orderId, r.gf]));
     expect(gf.o1).toEqual({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: true, pickedUp: false }, requestDay: "2026-11-07", labeled: true, armed: true });
     expect(gf.o2).toBeNull(); // sale con Aliclik
     expect(gf.o3).toEqual({ box: null, requestDay: null, labeled: false, armed: false }); // sin salida todavía
     expect(gf.o4).toBeNull(); // «Por reprogramar Lima» sin acuerdo ni programa: espera a la tienda
-    expect(gf.o5).toBeNull(); // ya salió
+    expect(gf.o5).toBeNull(); // ya salió, y no está en una caja vigente
+    expect(gf.o6).toEqual({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: true, pickedUp: true }, requestDay: null, labeled: true, armed: true });
+    // La caja del 04/11 no es su caja: sale el día de su programa y se recibe en oficina.
+    expect(gf.o7).toEqual({ box: null, requestDay: null, labeled: true, armed: true, awaitingOffice: true });
+    // La guía de Tanders que vuelve no lo hace «de otro courier»: entra, sin salida de Grupo GF todavía.
+    expect(gf.o8).toEqual({ box: null, requestDay: null, labeled: false, armed: false });
+  });
+  it("«Sale a reparto»: un error al leer el proveedor o las cajas no se presenta como «sin solicitud»", async () => {
+    const source = [master(1, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" })];
+    const failing = database(source, false, { tableErrors: { logistics_providers: "proveedor caído" } });
+    await expect(loadLimaPending(failing.admin, { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("proveedor caído");
+    const boxes = database([master(1, { macro_stage: "en_curso", macro_substage: "en_reparto" })], false, { tableErrors: { dispatch_manifests: "cajas caídas" } });
+    await expect(loadLimaPending(boxes.admin, { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("cajas caídas");
   });
   it("sin tiendas no consulta y un error no se presenta como lista vacía", async () => {
     const db = database([], true);
@@ -481,5 +519,26 @@ describe("«Sale a reparto» en Repro Lima (owner, 07-11-2026; §29.16)", () => 
     expect(html).toContain("Sale sáb 07/11 · en caja · caja de Jhon");
     expect(html).toContain("Sale sáb 07/11 · sin rótulo");
     expect(html.match(/Sale sáb 07\/11 ·/g)?.length).toBe(6); // tres pedidos, en la tabla y en la lista del teléfono
+  });
+  it("sábado después del corte: lo del domingo sale el lunes sin estar atrasado; el domingo solo se ofrece el lunes", () => {
+    const sat = { today: "2026-11-07", nowIso: "2026-11-07T20:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const pending = [
+      row({ orderId: "a", orderName: "#KPA", stage: "por_despachar", substage: "listo_para_asignar", gf: gf() }),
+      // Su solicitud era para el viernes y no salió: sí está atrasado.
+      row({ orderId: "b", orderName: "#KPB", stage: "por_despachar", substage: "listo_para_asignar", gf: gf({ requestDay: "2026-11-06" }) }),
+      // Programado para el lunes, todavía con el motorizado en la caja del 04/11.
+      row({ orderId: "c", orderName: "#KPC", stage: "en_curso", substage: "por_reprogramar_lima", programmedFor: "2026-11-09", gf: gf({ awaitingOffice: true }) }),
+    ];
+    nav.search = "";
+    const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data: sat, pending }));
+    expect(html).toMatch(/aria-pressed="true"[^>]*>Próximo reparto · lun 09\/11<\/button>/);
+    expect(html).toContain("Faltan 3 sin caja.");
+    expect(html).toContain("1 debía salir antes.");
+    expect(html).not.toContain("debía salir dom");
+    expect(html).toContain("Sale lun 09/11 · sin caja · debía salir vie 06/11");
+    expect(html).toContain("Sale lun 09/11 · sin caja · por recibir en oficina");
+    const sun = renderToStaticMarkup(createElement(ReproLimaBoard, { data: { ...sat, today: "2026-11-08", nowIso: "2026-11-08T15:00:00Z" }, pending }));
+    expect(sun).toMatch(/aria-pressed="true"[^>]*>Mañana · lun 09\/11<\/button>/);
+    expect(sun).not.toContain(">Hoy · dom 08/11<");
   });
 });
