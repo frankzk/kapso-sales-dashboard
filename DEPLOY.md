@@ -1,5 +1,37 @@
 # Deployment runbook
 
+### 08-11-2026 · Conector de IA: conectar Grok con OAuth, sin copiar tokens (0319, MOM §42.8)
+
+**Pendiente de aplicar en producción.** Grok Bot guardó el token de Kapta
+como secreto, pero no tuvo cómo mandarlo en la cabecera del conector, y pidió
+OAuth. Ahora el agente agrega el conector por su dirección (`/api/mcp`) y Kapta
+le pide permiso a una persona con `automations.manage`: tiendas, herramientas
+y «Permitir». Sin variables ni crons nuevos.
+
+1. **Migración `0319_agent_oauth.sql`**, a mano, ANTES del código (aditiva,
+   sin llaves foráneas, idempotente, sin `drop`):
+   - tabla `agent_oauth_clients` (registro dinámico: nombre y redirect_uris);
+   - tabla `agent_oauth_codes` (códigos de un solo uso, 10 minutos, su sha256
+     y el desafío PKCE);
+   - columna `agent_tokens.oauth_client_id`;
+   - las dos tablas con RLS y solo para `service_role`, sin borrar.
+2. Comprobar:
+   ```sql
+   select to_regclass('public.agent_oauth_clients'), to_regclass('public.agent_oauth_codes');
+   select column_name from information_schema.columns where table_name = 'agent_tokens' and column_name = 'oauth_client_id';
+   select has_table_privilege('authenticated', 'public.agent_oauth_codes', 'select');  -- false
+   ```
+3. Desplegar el código. **Sin la migración**, el registro y el canje
+   contestan 503 y la página de permiso lo dice; el token manual y las
+   herramientas siguen igual.
+4. Probar desde Grok Bot: «agrega el conector MCP https://<dominio>/api/mcp».
+   Grok abre Kapta; elegir tiendas y herramientas y pulsar «Permitir». La
+   conexión aparece en Automatizaciones › Conector de IA como un token más.
+
+**Marcha atrás.** Revocar la conexión en Conector de IA (el agente deja de
+entrar en el acto). Las tablas pueden quedarse: sin código que las use, nadie
+se registra ni canjea.
+
 ### 08-11-2026 · Confirmación por Chatby: pide sola la dirección o la ubicación y vuelve a intentar la guía (0318 o sin migración, MOM §6.1)
 
 **Migración 0318** (`db/migrations/0318_chatby_auto_ask.sql`, aditiva): una

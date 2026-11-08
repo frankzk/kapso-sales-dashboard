@@ -622,7 +622,8 @@ describe("POST /api/mcp", () => {
   it("sin token: 401 con WWW-Authenticate y sin leer el cuerpo", async () => {
     const res = await post(rpc("tools/list"), {});
     expect(res.status).toBe(401);
-    expect(res.headers.get("www-authenticate")).toBe('Bearer realm="kapta"');
+    // Con dónde pedir permiso por OAuth (MOM §42.8).
+    expect(res.headers.get("www-authenticate")).toBe('Bearer realm="kapta", resource_metadata="https://kapta.example/.well-known/oauth-protected-resource/api/mcp"');
     expect(await res.json()).toMatchObject({ error: { message: "No autorizado." } });
     expect(queries).toHaveLength(0);
   });

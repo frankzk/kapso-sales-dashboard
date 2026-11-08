@@ -1,6 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
+const OAUTH_AUTHORIZE_PATH = "/oauth/authorize";
+const OAUTH_RETURN_COOKIE = "kapta_oauth_return";
+
 // Refreshes the Supabase auth session on every request and guards /dashboard.
 // API routes (webhooks, cron) are excluded via the matcher below.
 // (Next 16 renamed the "middleware" file convention to "proxy".)
@@ -36,6 +39,32 @@ export async function proxy(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
 
+  // OAuth de agentes de IA (MOM §42.8): la página de permiso necesita sesión.
+  // Sin ella va al login, y la página con su query se guarda en una cookie
+  // corta para volver después de entrar por cualquier camino (Google, enlace o
+  // clave), sin tocar las URLs de vuelta del login.
+  if (path === OAUTH_AUTHORIZE_PATH && !isAuthenticated) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.search = "";
+    const redirect = NextResponse.redirect(url);
+    const back = `${path}${request.nextUrl.search}`;
+    if (back.length <= 4000) {
+      redirect.cookies.set(OAUTH_RETURN_COOKIE, back, { httpOnly: true, sameSite: "lax", secure: true, path: "/", maxAge: 900 });
+    }
+    return redirect;
+  }
+  const oauthReturn = request.cookies.get(OAUTH_RETURN_COOKIE)?.value;
+  if (isAuthenticated && oauthReturn && path === "/dashboard" && oauthReturn.startsWith(`${OAUTH_AUTHORIZE_PATH}?`)) {
+    const url = request.nextUrl.clone();
+    const [pathname, query] = [OAUTH_AUTHORIZE_PATH, oauthReturn.slice(OAUTH_AUTHORIZE_PATH.length)];
+    url.pathname = pathname;
+    url.search = query;
+    const redirect = NextResponse.redirect(url);
+    redirect.cookies.delete(OAUTH_RETURN_COOKIE);
+    return redirect;
+  }
+
   if (path.startsWith("/dashboard") && !isAuthenticated) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
@@ -67,6 +96,7 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    // `.well-known`: los metadatos OAuth del conector de IA son públicos (MOM §42.8).
+    "/((?!api|\\.well-known|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

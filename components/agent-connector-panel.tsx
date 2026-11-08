@@ -176,7 +176,7 @@ function HowToConnect({ endpointUrl }: { endpointUrl: string }) {
   const { state: copied, copy } = useCopyToClipboard();
   return (
     <div className={cn(CARD, "divide-y divide-line")}>
-      <CardHeader title="Cómo se conecta Grok" description="Servidor MCP por HTTP, sin estado, con el token en la cabecera." />
+      <CardHeader title="Cómo se conecta Grok" description="Servidor MCP por HTTP, sin estado: con OAuth (Kapta pide permiso) o con un token en la cabecera." />
       <div className={cn(ROW, "space-y-3")}>
         <div className="flex flex-wrap items-stretch gap-2">
           <CodeLine>{endpointUrl}</CodeLine>
@@ -187,12 +187,12 @@ function HowToConnect({ endpointUrl }: { endpointUrl: string }) {
         </div>
         <div className={cn(HELP, "space-y-2")}>
           <p>
-            <strong>Grok Bot:</strong> pídele a tu Bot «agrega el servidor MCP {endpointUrl} con la cabecera
-            Authorization: Bearer y mi token». Guarda el token con la tarjeta de secreto seguro cuando el Bot lo pida;
-            nunca lo pegues en el chat.
+            <strong>Grok Bot (sin copiar tokens):</strong> pídele que agregue el conector MCP con la dirección {endpointUrl}.
+            Grok te abre Kapta para que elijas tiendas y herramientas y pulses «Permitir» (OAuth). La conexión aparece abajo
+            como un token más, y se revoca igual.
           </p>
           <p>
-            <strong>API de xAI:</strong> en <code>tools</code>, una herramienta <code>{'{"type": "mcp"}'}</code> con{" "}
+            <strong>API de xAI o un cliente que acepte cabeceras:</strong> crea un token aquí abajo y, en <code>tools</code>, una herramienta <code>{'{"type": "mcp"}'}</code> con{" "}
             <code>server_url</code> = esta dirección, <code>server_label</code> = <code>kapta</code> y{" "}
             <code>authorization</code> = el token.
           </p>
