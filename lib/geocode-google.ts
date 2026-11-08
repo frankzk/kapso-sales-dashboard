@@ -485,8 +485,16 @@ export function geocodeUsableForAutoGuide(v: GeocodeSafeguard): boolean {
 // (`geocode_pilot_runs`, 0308). El interruptor de los reintentos solo se
 // enciende si la última medición de Lima cumple B con lo que usaría la guía
 // automática: los puntos con EDIFICIO (`ROOFTOP`, decisión A), al menos el 90 %
-// a 300 m o menos, y con al menos `GEOCODE_SMALL_SAMPLE` puntos (con menos, el
-// porcentaje no dice nada: 3 de 3 es «100 %»).
+// a 300 m o menos, y con al menos `GEOCODE_LIMA_MIN_ROOFTOP` puntos (con menos,
+// el porcentaje no dice nada: 3 de 3 es «100 %»).
+//
+// El mínimo era 30 (`GEOCODE_SMALL_SAMPLE`). La primera medición de Lima
+// (08-11-2026) dio 17 puntos con el edificio en 108 pedidos, los 17 a 300 m o
+// menos (mediana 33 m), y con 7 días de pedidos y 150 consultas por día no se
+// llega a 30: el owner lo bajó a 15. El 90 % sigue igual.
+
+/** Puntos con el edificio que pide la medición de Lima para decidir (owner, 08-11-2026). */
+export const GEOCODE_LIMA_MIN_ROOFTOP = 15;
 
 /** Consultas como mucho por medición de Lima: el cupo diario (400) lo comparte con Chatby. */
 export const GEOCODE_LIMA_CAP = 150;
@@ -592,16 +600,16 @@ const pct = (v: number) => `${v.toLocaleString("es-PE", { maximumFractionDigits:
 /**
  * ¿La última medición de Lima deja encender la ubicación por dirección en los
  * reintentos? Criterio B con los puntos ROOFTOP y al menos
- * `GEOCODE_SMALL_SAMPLE` de ellos. Pura.
+ * `GEOCODE_LIMA_MIN_ROOFTOP` de ellos. Pura.
  */
 export function geocodeLimaGate(summary: GeocodeLimaRunSummary | null): GeocodeLimaGate {
   if (!summary) {
     return { ok: false, reason: "Todavía no hay una medición de Lima. Pulsa «Medir la ubicación por dirección en Lima» primero." };
   }
-  if (summary.rooftop < GEOCODE_SMALL_SAMPLE) {
+  if (summary.rooftop < GEOCODE_LIMA_MIN_ROOFTOP) {
     return {
       ok: false,
-      reason: `La última medición de Lima tiene ${summary.rooftop} ${summary.rooftop === 1 ? "punto" : "puntos"} con el edificio (ROOFTOP); hacen falta al menos ${GEOCODE_SMALL_SAMPLE} para decidir.`,
+      reason: `La última medición de Lima tiene ${summary.rooftop} ${summary.rooftop === 1 ? "punto" : "puntos"} con el edificio (ROOFTOP); hacen falta al menos ${GEOCODE_LIMA_MIN_ROOFTOP} para decidir.`,
     };
   }
   const share = summary.rooftopWithin300Pct ?? 0;

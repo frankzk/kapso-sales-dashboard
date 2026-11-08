@@ -349,6 +349,23 @@ describe("la ubicación (05-11-2026): «Sin ubicación» y la coordenada de Goog
     expect(h.calls.preview[0]![1]).toEqual({ modality: "cod", coordinate: GOOGLE.value });
     expect(h.calls.create[0]![1]).toMatchObject({ coordinate: GOOGLE.value });
   });
+  it("con la ubicación que la clienta mandó por WhatsApp cotiza y crea con ella, y lo dice (08-11-2026)", async () => {
+    const WHATSAPP = { value: "-12.08, -77.04", source: "chatby" as const };
+    h.located = { coordinate: WHATSAPP };
+    expect(await approveAliclikRetry("o1")).toEqual({
+      notice: "Guía con AUTOECOM creada: AL-1. Con la ubicación que mandó la clienta por WhatsApp.", done: true,
+    });
+    expect(h.calls.preview[0]![1]).toEqual({ modality: "cod", coordinate: WHATSAPP.value });
+    expect(h.calls.create[0]![1]).toMatchObject({ coordinate: WHATSAPP.value });
+    expect(h.events).toEqual([expect.objectContaining({ kind: "lima_retry_approved", payload: expect.objectContaining({ coordinate_source: "chatby" }) })]);
+    h.events = [];
+    expect(await system({ coordinate: WHATSAPP, dry: true })).toMatchObject({ outcome: "simulada", detail: expect.stringContaining("· ubicación que mandó la clienta por WhatsApp") });
+    // Si el pedido no la respalda, «Sin ubicación» con la razón.
+    h.preview = { ok: false, pinSinCorroborar: "El pin cae en Cusco y el pedido dice Lima.", error: "El pin cae en Cusco y el pedido dice Lima." };
+    expect(await system({ coordinate: WHATSAPP })).toMatchObject({
+      outcome: "sin_ubicacion", error: expect.stringContaining("La ubicación que mandó por WhatsApp no la respalda el pedido"),
+    });
+  });
   it("«Aprobar» sin coordenada de Google cotiza con la del pedido, como siempre", async () => {
     await approveLimaRetry({ admin: fakeAdmin as never, row: ROW as never, chain: CHAIN, raw: RAW as never, actor: { userId: "ana" } });
     expect(h.calls.preview[0]![1]).toEqual({ modality: "cod" });

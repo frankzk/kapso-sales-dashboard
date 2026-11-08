@@ -12,18 +12,41 @@ import "server-only";
 // pin del pedido se usa tal cual, salvo que sea el punto de Google de ese
 // mismo pedido (`googlePinnedOrderIds`): ese lo puso Kapta, no la clienta, y
 // pasa por el mismo candado.
+//
+// Antes de Google, la ubicación que la clienta YA mandó por WhatsApp (owner,
+// 08-11-2026): su conversación de Chatby (`fetchChatbyConversation`) y su
+// último pin desde 3 días antes del pedido (`chatbyGuidePin`, la misma regla de
+// la confirmación, MOM §6.1). Sin mandarle nada. Si el mismo celular tiene otro
+// pedido creado entre este y ese pin (más 3 días), el pin puede ser del otro:
+// no se usa. Salvo que Kapta le haya pedido la ubicación PARA ESTE pedido
+// (0324, «Pedir la ubicación por WhatsApp») y el pin llegó después: ese pin es
+// la respuesta, el mensaje nombra el pedido.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import { geocodeLimaGate } from "@/lib/geocode-google";
 import { geocodeOrderAddress, googlePinnedOrderIds, latestGeocodeLimaRun } from "@/lib/geocode-google-server";
+import { fetchChatbyConversation } from "@/lib/chatby-api";
+import { CHATBY_PIN_MAX_DAYS_BEFORE_ORDER, chatbyGuidePin } from "@/lib/chatby-autoconfirm";
 import type { RetryGeocodeMiss } from "@/lib/lima-retry-auto";
+import { RETRY_ASK_PURPOSE } from "@/lib/lima-retry-chatby-ask";
 
-/** La coordenada de la dirección en Google con la que se cotiza y se crea. */
-export type GoogleCoordinate = { value: string; source: "google" };
+/**
+ * La coordenada con la que se cotiza y se crea cuando no es la del pedido: la
+ * que mandó la clienta por WhatsApp (`chatby`) o la del edificio en Google.
+ */
+export type RetryCoordinate = { value: string; source: "google" | "chatby" };
+/** @deprecated nombre anterior de `RetryCoordinate`. */
+export type GoogleCoordinate = RetryCoordinate;
 
-/** Con qué coordenada se cotiza: la del pedido (`null`), la de Google, o por qué no hay. */
-export type RetryLocated = { coordinate: GoogleCoordinate | null } | { miss: RetryGeocodeMiss };
+/** Con qué coordenada se cotiza: la del pedido (`null`), la de WhatsApp o Google, o por qué no hay. */
+export type RetryLocated = { coordinate: RetryCoordinate | null } | { miss: RetryGeocodeMiss };
+
+/** Leer la conversación de Chatby de la clienta: la clave (`CHATBY_API_KEY`). */
+export interface RetryChatbyRead {
+  apiKey: string;
+  fetchImpl?: typeof fetch;
+}
 
 /** Lo que `locateRetryOrder` necesita del pedido. */
 export interface RetryLocationRow {
@@ -33,6 +56,8 @@ export interface RetryLocationRow {
   latitude?: number | string | null;
   longitude?: number | string | null;
   geo_source?: string | null;
+  customer_phone?: string | null;
+  order_created_at?: string | null;
   address?: string | null;
   district?: string | null;
   province?: string | null;
@@ -73,16 +98,50 @@ export async function retryGeocodeKeyForStore(admin: SupabaseClient, storeId: st
 }
 
 /**
- * Con qué coordenada se cotiza el reintento de este pedido. `lookedUp` dice si
- * se le preguntó a Google (la pasada lo cuenta) y `quotaHit` si Google dijo
- * que se acabó el cupo del día (la pasada no le pregunta más). Con
- * `quotaHit` de entrada no se le pregunta.
+ * El pin que la clienta ya mandó por WhatsApp para este pedido, como «lat, lng»,
+ * o null: sin clave, sin celular, sin conversación o sin pin de esta compra, o
+ * si el mismo celular tiene otro pedido creado entre este y ese pin (más 3
+ * días). Nunca lanza: lo que falla es «sin pin» y sigue Google.
+ */
+export async function chatbyRetryPin(admin: SupabaseClient, row: RetryLocationRow, chatby: RetryChatbyRead | null | undefined): Promise<string | null> {
+  if (!chatby?.apiKey || !row.customer_phone || !row.order_created_at) return null;
+  try {
+    const conversation = await fetchChatbyConversation({ phone: row.customer_phone, apiKey: chatby.apiKey, fetchImpl: chatby.fetchImpl });
+    if (conversation.status !== "ok") return null;
+    const pin = chatbyGuidePin(conversation.messages, row.order_created_at);
+    if (!pin) return null;
+    const until = new Date(Date.parse(pin.at) + CHATBY_PIN_MAX_DAYS_BEFORE_ORDER * 86_400_000).toISOString();
+    const { data, error } = await admin.from("order_master").select("order_id")
+      .eq("customer_phone", row.customer_phone).neq("order_id", row.order_id)
+      .gt("order_created_at", row.order_created_at).lte("order_created_at", until).limit(1);
+    if (error) return null;
+    if ((data ?? []).length && !(await askedBefore(admin, row.order_id, pin.at))) return null;
+    return pin.coordinate;
+  } catch {
+    return null;
+  }
+}
+
+/** ¿Kapta le pidió la ubicación para este pedido antes de ese pin? (0324) */
+async function askedBefore(admin: SupabaseClient, orderId: string, pinAt: string): Promise<boolean> {
+  const { data, error } = await admin.from("order_events").select("occurred_at,payload")
+    .eq("order_id", orderId).eq("kind", "chatby_message").lte("occurred_at", pinAt);
+  if (error) return false;
+  return ((data ?? []) as { payload: Record<string, unknown> | null }[]).some((e) => e.payload?.auto === true && e.payload?.purpose === RETRY_ASK_PURPOSE);
+}
+
+/**
+ * Con qué coordenada se cotiza el reintento de este pedido: su pin; si no, el
+ * que la clienta mandó por WhatsApp (con `chatby`); si no, el edificio en
+ * Google con el candado. `lookedUp` dice si se le preguntó a Google (la pasada
+ * lo cuenta) y `quotaHit` si Google dijo que se acabó el cupo del día (la
+ * pasada no le pregunta más). Con `quotaHit` de entrada no se le pregunta.
  */
 export async function locateRetryOrder(
   admin: SupabaseClient,
   row: RetryLocationRow,
   geocodeKey: string | null,
-  opts: { quotaHit?: boolean } = {},
+  opts: { quotaHit?: boolean; chatby?: RetryChatbyRead | null } = {},
 ): Promise<{ located: RetryLocated; lookedUp: boolean; quotaHit: boolean }> {
   const done = (located: RetryLocated, lookedUp = false, quotaHit = false) => ({ located, lookedUp, quotaHit });
   if (row.latitude != null && row.longitude != null) {
@@ -95,6 +154,8 @@ export async function locateRetryOrder(
     }
     if (!google) return done({ coordinate: null });
   }
+  const whatsapp = await chatbyRetryPin(admin, row, opts.chatby);
+  if (whatsapp) return done({ coordinate: { value: whatsapp, source: "chatby" } });
   if (!geocodeKey || row.coverage !== "lima") return done({ miss: "apagado" });
   if (opts.quotaHit) return done({ miss: "sin_cupo" });
   try {

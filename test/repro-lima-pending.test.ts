@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, limaPlanCandidate, courierLabel, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, limaPlanCandidate, courierLabel, groupApprovalFailures, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -611,6 +611,28 @@ describe("Reintentos Aliclik: elegir cuáles aprobar (owner, 06-11-2026)", () =>
     expect(board).toContain("`Aprobar elegidos (${targets.rows.length})`");
     expect(board).toContain("`Aprobar todos los listos (${readyToApprove.length})`");
     expect(board).toContain("setPicked(new Set());");
+  });
+});
+
+describe("«Aprobar elegidos»: lo que no se creó, una línea por motivo (owner, 08-11-2026)", () => {
+  const OFF = "Sin coordenada: la ubicación por dirección (Google) está apagada o Lima no está medida (Automatizaciones). Para crearla, pega el enlace de Google Maps de la clienta en la ficha del pedido («Corregir ubicación»).";
+  it("el motivo una vez con sus pedidos; el de más pedidos primero; uno solo, como antes", () => {
+    expect(groupApprovalFailures([
+      { orderName: "#KP1", error: OFF },
+      { orderName: "#KP2", error: "Aliclik no ofrece AUTOECOM para esta dirección. El pedido pasa a Repro Lima." },
+      { orderName: "#KP3", error: OFF },
+      { orderName: "#KP4", error: OFF },
+    ])).toEqual([
+      `${OFF} Pedidos (3): #KP1, #KP3, #KP4.`,
+      "#KP2: Aliclik no ofrece AUTOECOM para esta dirección. El pedido pasa a Repro Lima.",
+    ]);
+    expect(groupApprovalFailures([])).toEqual([]);
+  });
+  it("el aviso lleva a «Ubicación por dirección» de Automatizaciones cuando Google está apagado", () => {
+    const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
+    expect(board).toContain("lines: groupApprovalFailures(failed),");
+    expect(board).toContain('googleOff: failed.some((f) => f.error === retryApproveNoLocation("apagado")),');
+    expect(board).toContain('href="/dashboard/automatizaciones#retry-ubicacion"');
   });
 });
 

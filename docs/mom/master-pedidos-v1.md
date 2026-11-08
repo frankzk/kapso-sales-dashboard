@@ -5456,6 +5456,69 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     el interruptor nunca se había encendido y Lima nunca se había medido: hay
     que pulsar «Medir la ubicación por dirección en Lima» y, si cumple B,
     encenderlo.
+    - **El aviso de «Aprobar elegidos» agrupa por motivo** (owner, 08-11-2026:
+      al aprobar 22, 21 repetían la misma frase). Una línea por motivo, con
+      sus pedidos al final («… Pedidos (21): #KP202686, #KP202562, …»), el de
+      más pedidos primero (`groupApprovalFailures`). Si algún pedido no tuvo
+      Google porque está apagado o Lima no está medida, el aviso lleva el
+      enlace «Ir a “Ubicación por dirección” en Automatizaciones»
+      (`/dashboard/automatizaciones#retry-ubicacion`). Ese día había 108
+      pedidos de Lima de WooCommerce de los últimos 7 días con pin: la
+      medición tiene muestra; si cumple B solo se sabe midiendo.
+  - **Antes de Google, la ubicación que la clienta ya mandó por WhatsApp**
+    (owner, 08-11-2026: Google da el edificio en ~1 de cada 6 pedidos de
+    Lima; de las opciones para los reintentos sin pin eligió «usar el pin que
+    ya mandó» y «pedirla si la ventana está abierta»). Entre el pin del
+    pedido y Google, la pasada y «Aprobar» leen la conversación de Chatby de
+    la clienta (`chatbyRetryPin`, `lib/lima-retry-location.ts`, con
+    `CHATBY_API_KEY`; sin clave no se lee) y toman su **último pin** desde 3
+    días antes de la compra (`chatbyGuidePin`, la misma regla de la guía de
+    Chatby, §6.1). **Sin mandarle nada.** Si el mismo celular tiene **otro
+    pedido** creado después de este y hasta 3 días después del pin, el pin
+    puede ser de esa otra compra: no se usa y sigue Google. Con el pin cotiza
+    y crea, `lima_retry_approved` lleva `coordinate_source: chatby` y el log
+    y el aviso dicen «Con la ubicación que mandó la clienta por WhatsApp». Si
+    el pedido no lo respalda (`pinSinCorroborar`, §10), queda `sin_ubicacion`
+    con «La ubicación que mandó por WhatsApp no la respalda el pedido…», como
+    el punto de Google. Chatby sin conversación, sin pin de esta compra o
+    fallando es «sin pin»: sigue Google, con su candado. La guía guarda el
+    punto (como la de Google) y el reintento siguiente lo toma como pin del
+    pedido.
+  - **Si no mandó ninguna, Kapta se la pide por WhatsApp** (owner, 08-11-2026;
+    0324; `lib/lima-retry-chatby-ask.ts`). Interruptor «Pedir la ubicación por
+    WhatsApp» en Automatizaciones (`lima_retry_auto_settings.chatby_ask_mode`,
+    por organización: Apagado / Simulación / Activo; nace **Apagado**). Cuando
+    la pasada llega a «Sin ubicación» (ni pin del pedido, ni pin de WhatsApp,
+    ni edificio en Google), le manda **un** mensaje de texto libre por Chatby
+    («Hola Ana 😊 Para volver a enviarte tu pedido #KP2041, ¿nos compartes tu
+    ubicación actual de WhatsApp? (📎 → Ubicación → Enviar tu ubicación
+    actual)») y pausa el bot 60 minutos, como la ficha. Solo si:
+    - el caso **no está tomado** en Repro Lima y no hay una creación de
+      Aliclik sin guardar (la pasada no llega a la ubicación en esos casos);
+    - es la **primera vez en este episodio**: desde el intento que falló
+      (`chain.failed.at`). Un fallo nuevo abre otro episodio. El candado es
+      `lima_retry_chatby_asks` (una fila por pedido y episodio, puesta **antes**
+      de mandar; si Chatby no deja mandarlo, se borra y se reintenta en la
+      pasada siguiente);
+    - **nadie del equipo** le escribió desde la ficha en este episodio, ni en
+      Chatby después de su último mensaje;
+    - la **ventana de 24 h** de WhatsApp está abierta: su último mensaje tiene
+      menos de 23 h (`chatbyAutoAskWindowOpen`, la de §6.1). Con la ventana
+      cerrada WhatsApp solo deja plantillas y Kapta no las manda: queda para
+      una persona (owner: plantillas no, por ahora).
+    No con un error de la ubicación (no se sabe si falta), ni en el `?dry=1`
+    del cron. «Aprobar» de Repro Lima no escribe: lo hace una persona. Corre
+    en la pasada de siempre (cada hora de 8:23 a 13:23), para los reintentos
+    cuya variante está en Simulación o Activo; la pedida es independiente de
+    esa posición (con la variante en Simulación, la guía la aprueba una
+    persona cuando llega el pin). En Simulación y en «Simular ahora» dice
+    «Habría pedido su ubicación por WhatsApp» y no manda nada. El mensaje
+    queda en la Actividad del pedido (`chatby_message`, `actor` nulo,
+    `payload.purpose = 'reintento_lima_ubicacion'`) y el log de la pasada lo
+    dice («Kapta le pidió su ubicación por WhatsApp», o por qué no). Cuando
+    ella la manda, la pasada siguiente la toma con `chatbyRetryPin`; si el
+    mismo celular tiene otro pedido más nuevo, el pin igual vale porque llegó
+    después de la pedida de **este** pedido.
   - **La ubicación por dirección (Google), solo con el edificio** (owner,
     05-11-2026; decisiones A, B y C de `docs/kapta/geocodificacion-propuesta.md`).
     Interruptor «Usar la ubicación por dirección (Google) si el pedido no
@@ -5511,14 +5574,21 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
       de pedido.
     - **Encender exige B con el edificio** (`geocodeLimaGate`): en la última
       medición de Lima, al menos el 90 % de los puntos ROOFTOP a 300 m o menos
-      del pin real, con **al menos 30** puntos ROOFTOP. Si no, el interruptor
-      se muestra bloqueado con el motivo. Apagar se puede siempre. Si una
+      del pin real, con **al menos 15** puntos ROOFTOP
+      (`GEOCODE_LIMA_MIN_ROOFTOP`). Eran 30 hasta el 08-11-2026: la primera
+      medición de Lima dio 17 con el edificio en 108 pedidos, los 17 a 300 m o
+      menos (mediana 33 m, ninguno a más de 1 km), y con 7 días de pedidos y
+      150 consultas por día no se llega a 30; el owner bajó el mínimo a 15. El
+      90 % no cambia. Google da el edificio en ~1 de cada 6 pedidos de Lima
+      (los demás: punto aproximado 39, coincidencia parcial 36, otro distrito
+      14). Si no, el interruptor se muestra bloqueado con el motivo. Apagar se puede siempre. Si una
       medición nueva deja de cumplir B, la pasada deja de usar Google aunque
       el interruptor siga encendido (el panel dice «Está encendido, pero no se
       usa»). Cada cambio queda en `automation_switch_events`.
 
 Pruebas: `test/lima-retry-chain.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-approve.test.ts`, `test/lima-retry-geocode-actions.test.ts`,
+`test/lima-retry-location.test.ts`, `test/lima-retry-chatby-ask.test.ts`,
 `test/geocode-google.test.ts` y, para las compuertas compartidas,
 `test/aliclik-duplicate-create.test.ts`.
 
@@ -24651,10 +24721,18 @@ Vercel— y algunas no tenían interruptor.
     ROOFTOP, la mediana, el % a 300 m o menos (en total y solo con el
     edificio), el % a más de 1 km y si cumple B. Encender pide confirmación y
     solo se puede con la clave de Google y la última medición cumpliendo B con
-    el edificio y al menos 30 puntos; si no, el interruptor queda bloqueado con
+    el edificio y al menos 15 puntos (eran 30 hasta el 08-11-2026); si no, el interruptor queda bloqueado con
     el motivo. Apagar se puede siempre. El botón de medir pide confirmación
     (gasta cupo de Google) y, como todo el panel, solo funciona en producción y
     con `automations.manage`.
+  - **Ubicación por WhatsApp de los reintentos** (§9.5, 08-11-2026; 0324,
+    `#retry-whatsapp`): dice que la pasada y «Aprobar» ya usan la ubicación que
+    la clienta mandó por WhatsApp (sin interruptor) y tiene «Pedir la ubicación
+    por WhatsApp» con Apagado / Simulación / Activo
+    (`lima_retry_auto_settings.chatby_ask_mode`, `setRetryChatbyAsk`). Envía
+    WhatsApp a clientas: Activo pide confirmación. Fuera de Apagado hace falta
+    `CHATBY_API_KEY`; sin la 0324 la fila se bloquea. El historial lo guarda
+    como `lima_retry_chatby_ask`.
   - **Lista de pago adelantado** (§41, 05-11-2026; 0309): la regla automática
     con Apagado / Simulación / Activo (confirmación antes de Activo), el
     resumen de la última simulación («Entrarían N clientes…», con cuentas y
@@ -24709,10 +24787,11 @@ Vercel— y algunas no tenían interruptor.
 
 Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql`,
 `0316_chatby_approx_location.sql`, `0317_history_guide_auto.sql` y
-`0318_chatby_auto_ask.sql`.
+`0318_chatby_auto_ask.sql`; la de «Pedir la ubicación por WhatsApp» de los
+reintentos es `0324_lima_retry_chatby_ask.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`,
-`test/history-guide-auto.test.ts`.
+`test/history-guide-auto.test.ts`, `test/lima-retry-chatby-ask.test.ts`.
 
 ## 41. Lista de pago adelantado (05-11-2026)
 

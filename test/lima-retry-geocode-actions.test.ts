@@ -16,13 +16,14 @@ const h = vi.hoisted(() => ({
   upserts: [] as Row[],
   events: [] as Row[],
   measured: [] as Row[],
+  chatbyKey: "ck",
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("@/lib/access", () => ({ getCurrentUser: async () => ({ id: "owner-1" }) }));
 vi.mock("@/lib/permissions-access", () => ({ hasOrgPermission: async (_org: string, perm: string) => h.allowed && perm === "automations.manage" }));
-vi.mock("@/lib/env", () => ({ env: { googleGeocodingApiKey: () => h.key } }));
+vi.mock("@/lib/env", () => ({ env: { googleGeocodingApiKey: () => h.key, chatbyApiKey: () => h.chatbyKey } }));
 vi.mock("@/lib/lima-retry-auto-server", () => ({ runLimaRetryAuto: async () => ({}) }));
 vi.mock("@/lib/geocode-google-server", () => ({
   latestGeocodeLimaRun: async () => h.latest,
@@ -52,7 +53,7 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
-import { measureLimaGeocodeNow, setRetryGeocode } from "@/app/dashboard/automatizaciones/actions";
+import { measureLimaGeocodeNow, setRetryChatbyAsk, setRetryGeocode } from "@/app/dashboard/automatizaciones/actions";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
 const MEETS_B = { at: "2026-11-05T15:00:00Z", summary: { ranAt: "x", sampled: 150, passed: 70, rooftop: 40, rooftopWithin300Pct: 92.5 } };
@@ -67,6 +68,7 @@ beforeEach(() => {
   h.upserts = [];
   h.events = [];
   h.measured = [];
+  h.chatbyKey = "ck";
 });
 afterEach(() => {
   process.env.VERCEL_ENV = previousEnv;
@@ -80,7 +82,11 @@ describe("setRetryGeocode", () => {
 
   it("con pocos puntos ROOFTOP o por debajo del 90 %, tampoco", async () => {
     h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftop: 12 } };
-    expect((await setRetryGeocode(ORG, true)).error).toContain("hacen falta al menos 30");
+    expect((await setRetryGeocode(ORG, true)).error).toContain("hacen falta al menos 15");
+    // La primera medición de Lima (08-11-2026, 17 con el edificio, 100 % a 300 m) ya deja encender.
+    h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftop: 17, rooftopWithin300Pct: 100 } };
+    expect((await setRetryGeocode(ORG, true)).error).toBeUndefined();
+    h.upserts = [];
     h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftopWithin300Pct: 84.5 } };
     expect((await setRetryGeocode(ORG, true)).error).toContain("hace falta el 90 %");
     expect(h.upserts).toEqual([]);
@@ -123,5 +129,33 @@ describe("measureLimaGeocodeNow", () => {
     h.key = "";
     expect((await measureLimaGeocodeNow(ORG)).error).toContain("GOOGLE_GEOCODING_API_KEY");
     expect(h.measured).toHaveLength(1);
+  });
+});
+
+describe("setRetryChatbyAsk («Pedir la ubicación por WhatsApp», 0324)", () => {
+  it("cambia la posición y queda en «Últimos cambios»", async () => {
+    h.settings = { org_id: ORG, daily_cap: 10, geocode_enabled: false, chatby_ask_mode: "apagado" };
+    expect(await setRetryChatbyAsk(ORG, "simulacion")).toEqual({ notice: "Pedir la ubicación por WhatsApp en los reintentos: Simulación." });
+    expect(h.upserts).toEqual([{ table: "lima_retry_auto_settings", row: expect.objectContaining({ org_id: ORG, chatby_ask_mode: "simulacion", updated_by: "owner-1" }) }]);
+    expect(h.events).toEqual([{ org_id: ORG, store_id: null, automation: "lima_retry_chatby_ask", previous: "apagado", next: "simulacion", actor: "owner-1" }]);
+  });
+
+  it("sin la 0324, sin la clave de Chatby o con una posición que no existe, no guarda", async () => {
+    h.settings = { org_id: ORG, daily_cap: 10, geocode_enabled: false };
+    expect((await setRetryChatbyAsk(ORG, "activo")).error).toContain("0324");
+    h.settings = { org_id: ORG, daily_cap: 10, chatby_ask_mode: "apagado" };
+    h.chatbyKey = "";
+    expect((await setRetryChatbyAsk(ORG, "activo")).error).toContain("CHATBY_API_KEY");
+    expect((await setRetryChatbyAsk(ORG, "encendido")).error).toBe("Esa posición no existe.");
+    expect(h.upserts).toEqual([]);
+    // Apagar se puede siempre, aunque falte la clave.
+    h.settings = { org_id: ORG, daily_cap: 10, chatby_ask_mode: "activo" };
+    expect((await setRetryChatbyAsk(ORG, "apagado")).notice).toContain("Apagado");
+  });
+
+  it("sin automations.manage, nada", async () => {
+    h.allowed = false;
+    expect((await setRetryChatbyAsk(ORG, "simulacion")).error).toContain("Tu acceso no permite");
+    expect(h.upserts).toEqual([]);
   });
 });

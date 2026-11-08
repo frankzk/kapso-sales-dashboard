@@ -50,7 +50,7 @@ import {
 import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
 import { CHAIN_EVENT_KINDS, type LimaRetryChain } from "@/lib/lima-retry-chain";
 import {
-  RETRY_GOOGLE_COORDINATE_NOTE,
+  retryCoordinateNote,
   autoRetryMotive,
   retryLocationMissing,
   type RetryVariant,
@@ -91,7 +91,7 @@ export interface RetryApproveInput {
    * Chatby (§6.1). La pasada la usa desde el 05-11-2026; «Aprobar», desde el
    * 08-11-2026 (owner: «mismo candado»).
    */
-  coordinate?: { value: string; source: "google" } | null;
+  coordinate?: { value: string; source: "google" | "chatby" } | null;
 }
 
 /**
@@ -213,17 +213,19 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
 
   const { ctx, error: ctxError } = await aliclikContextFor(row, system ? null : actor.userId, { blockAgencia: true });
   if (!ctx) return { outcome: "fallo", stage: "contexto", transport, error: ctxError ?? "No se pudo preparar la conexión con Aliclik." };
-  // La coordenada de Google, ya con su candado. Sin ella, la cotización usa la
-  // del pedido, como siempre.
-  const google = input.coordinate?.source === "google" ? input.coordinate.value : null;
+  // La coordenada que no es la del pedido: la que la clienta mandó por WhatsApp
+  // o la de Google, ya con su candado. Sin ella, la cotización usa la del
+  // pedido, como siempre.
+  const external = input.coordinate?.source === "google" || input.coordinate?.source === "chatby" ? input.coordinate : null;
+  const google = external?.value ?? null;
   const previewInput = google ? { modality: "cod" as const, coordinate: google } : { modality: "cod" as const };
   const preview = scope ? await previewAliclikGuideFor(ctx, previewInput, scope) : await previewAliclikGuideFor(ctx, previewInput);
   if (!preview.ok) {
     // Falta la ubicación (o el pin de Google no lo respalda el pedido): no es
     // un fallo ni una regla, es un dato que pone una persona (05-11-2026).
-    const missing = retryLocationMissing(preview, google ? "google" : "pedido");
+    const missing = retryLocationMissing(preview, external?.source ?? "pedido");
     if (missing && system) return { outcome: "sin_ubicacion", stage: "ubicacion", transport, error: missing };
-    // «Aprobar» con el punto de Google que el pedido no respalda: lo dice así.
+    // «Aprobar» con un punto (Google o WhatsApp) que el pedido no respalda: lo dice así.
     if (missing && google) return { outcome: "fallo", stage: "cotizacion", transport, error: missing };
     return { outcome: "fallo", stage: "cotizacion", transport, error: preview.error ?? "No se pudo cotizar el envío." };
   }
@@ -278,7 +280,7 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
     return {
       outcome: "simulada",
       transport,
-      detail: `${courier.transportName ?? transport} S/ ${courier.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}${google ? ` · ${RETRY_GOOGLE_COORDINATE_NOTE}` : ""}`,
+      detail: `${courier.transportName ?? transport} S/ ${courier.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}${external ? ` · ${retryCoordinateNote(external.source)}` : ""}`,
     };
   }
   const result = system
@@ -302,10 +304,10 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
     `Reintento Aliclik ${chain.attempt} de ${chain.of} ${system ? "automático" : "aprobado"}: guía con ${transport}${result.orderNumber ? ` (${result.orderNumber})` : ""}.`,
     {
       attempt: chain.attempt, of: chain.of, transport, guide: result.orderNumber ?? null, failed: chain.failedText,
-      ...(google ? { coordinate_source: "google" } : {}),
+      ...(external ? { coordinate_source: external.source } : {}),
     });
   return {
     outcome: "creada", transport, guide: result.orderNumber ?? null,
-    ...(google ? { coordinateNote: `Con la ${RETRY_GOOGLE_COORDINATE_NOTE}.` } : {}),
+    ...(external ? { coordinateNote: `Con la ${retryCoordinateNote(external.source)}.` } : {}),
   };
 }
