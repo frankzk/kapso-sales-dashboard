@@ -243,6 +243,7 @@ beforeEach(() => {
     ok: true,
     alreadyLinked: false,
     shipmentId: "s-nueva",
+    replaced: [],
     filledOutput: null,
     keyWarning: guide.pickupCode ? "" : " No se ingresó la clave de recojo; regístrala después.",
   }));

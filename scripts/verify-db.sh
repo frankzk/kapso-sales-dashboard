@@ -354,4 +354,7 @@ echo "  ✅ apagado / simulación / activo y nada más, nunca nulo; la ubicació
 echo "▶ OAuth del conector de IA (0319): client_id con forma, código como sha256 con PKCE S256 y vencimiento corto, permisos cerrados, token con su cliente y solo el servidor"
 $PSQL -f "$ROOT/scripts/sql/agent_oauth_smoke.sql"
 echo "  ✅ client_id kcli_ y redirect_uris con rango; el código nunca en claro, desafío de 43 y a lo sumo 15 minutos; permisos de la lista cerrada; el token dice de qué cliente vino; el servidor marca usado pero no borra; el navegador no ve nada"
+echo "▶ Fila del rastreo de Shalom (0321): sello de cuándo se preguntó, racha de not_found, sellos que no mueven updated_at e índice de la fila"
+$PSQL -f "$ROOT/scripts/sql/shalom_checked_at_smoke.sql"
+echo "  ✅ nacen sin sello y con la racha en cero, que no baja de cero; los sellos del rastreo no mueven updated_at (last_report_at y un cambio real sí); la nunca preguntada va primero"
 echo "✅ DB verification passed."

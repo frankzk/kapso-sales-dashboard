@@ -130,6 +130,12 @@ export interface WarehouseQueueInput extends WarehouseBlockerInput {
   /** Lo último que reportó el courier por API («PENDING_DELIVERY · TO_PREPARE · …»). */
   reported_status?: string | null;
   /**
+   * «Guía Shalom no reconocida: …» si el rastreo de Shalom lleva días sin
+   * reconocer la guía (0321, MOM §12; `lib/shalom/check-queue.ts`). Solo lo
+   * carga la estación de almacén.
+   */
+  shalom_unrecognized?: string | null;
+  /**
    * Las salidas ANTERIORES del mismo pedido (creadas antes que esta, sin ella).
    * Solo las carga la estación de almacén; sin ellas el diagnóstico cae a las
    * demás razones.
@@ -216,7 +222,9 @@ export function buildWarehouseQueue<T extends WarehouseQueueInput>(
     }
     const ageDays = daysBetween(shipment.created_at, now);
     const closer = warehouseCloser(shipment.courier);
-    const stalled = ageDays >= WAREHOUSE_STALE_DAYS;
+    // Una guía que Shalom ya no reconoce detiene la caja aunque sea de hoy: con
+    // esa guía no sale (MOM §12).
+    const stalled = ageDays >= WAREHOUSE_STALE_DAYS || !!shipment.shalom_unrecognized;
     const entry: WarehouseQueueEntry<T> = {
       shipment,
       closer,
@@ -290,6 +298,8 @@ const DECIDE_LINE = "30 días o más sin armar: hay que decidir si sale o se can
  * «Detenida» sola no movía a nadie: el 06-11-2026 había 18 y ninguna decía por
  * qué. Gana la primera razón que aplica:
  *
+ * 0) Shalom ya no reconoce su guía («Guía Shalom no reconocida», 0321): sin
+ *    guía nueva la caja no sale, haga lo que haga el almacén;
  * a) la salida anterior del pedido (la inmediata) se anuló o volvió: esta es la
  *    salida nueva, y la caja de la anterior es la que hay que rotular; sin
  *    courier, primero elegirlo;
@@ -311,6 +321,9 @@ export function stallDiagnosis<T extends WarehouseQueueInput>(
   const undecided = !courier || courier === "por_definir";
   const old = ageDays >= WAREHOUSE_DECIDE_DAYS;
   const withAge = (line: string) => (old ? `${line} ${DECIDE_LINE}` : line);
+
+  const unrecognized = (shipment.shalom_unrecognized ?? "").trim();
+  if (unrecognized) return withAge(unrecognized);
 
   // Solo la inmediatamente anterior explica esta: si después de una anulada hubo
   // otra salida viva, «la anterior se anuló» hablaría de la caja equivocada.
