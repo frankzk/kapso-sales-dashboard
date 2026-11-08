@@ -17,6 +17,7 @@
 // Lo prueba `test/anura-phone-ui.test.ts`.
 
 import { ANURA_STATUS_LABEL, type AnuraCallMode, type AnuraCallStatus } from "@/lib/anura/events";
+import { ANURA_LINES_BUSY_TITLE } from "@/lib/anura/pool";
 import type { AnuraCallLive, AnuraStartErrorCode } from "@/lib/anura/calls";
 import {
   ANURA_DEFAULT_ICE_SERVERS,
@@ -206,6 +207,9 @@ const CREDENTIALS_TITLE: Partial<Record<AnuraPhoneCredentialsErrorCode, string>>
   no_configurado: "Anura no está configurado",
   permiso: "No puedes usar ese teléfono",
   sesion: "Tu sesión venció",
+  lineas_ocupadas: ANURA_LINES_BUSY_TITLE,
+  sin_lineas: "No hay líneas de Anura listas",
+  ocupada: "Ya tienes una llamada abierta",
 };
 
 const REGISTRATION_TITLE = {
@@ -249,7 +253,14 @@ export function anuraPhoneNeedsPanelReload(error: AnuraPhoneError | null | undef
   if (!error) return false;
   if (error.code === "registro") return error.registration === "clave" || error.registration === "dominio";
   if (error.code === "credenciales") {
-    return isAnuraPhoneBlocked(error.credentialsCode as AnuraKaptaPhoneStatus) || error.credentialsCode === "sin_telefono" || error.credentialsCode === "sin_anexo";
+    return (
+      isAnuraPhoneBlocked(error.credentialsCode as AnuraKaptaPhoneStatus) ||
+      error.credentialsCode === "sin_telefono" ||
+      error.credentialsCode === "sin_anexo" ||
+      // Líneas compartidas: vuelve a contar las libres.
+      error.credentialsCode === "lineas_ocupadas" ||
+      error.credentialsCode === "sin_lineas"
+    );
   }
   return false;
 }

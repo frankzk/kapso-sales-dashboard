@@ -226,7 +226,9 @@ describe("un teléfono por pestaña, en el panel", () => {
     expect(body).toContain("serverRef.current = server;");
     expect(body.indexOf("if (p.snapshot().busy) return Promise.resolve(p.snapshot());")).toBeLessThan(body.indexOf("serverRef.current = server;"));
     expect(provider).toContain("fetchCredentials: () => serverRef.current.fetchCredentials(),");
-    expect(provider).toContain("requestCall: () => serverRef.current.requestCall(),");
+    // Con una línea compartida, el Click2Dial lleva la reserva que vino con la clave (0313).
+    expect(provider).toContain("requestCall: (input) => serverRef.current.requestCall(input),");
+    expect(provider).toContain("releaseReservation: (reservationId) => serverRef.current.releaseReservation?.(reservationId)");
     expect(provider).toContain("reportRejected: (input) => serverRef.current.reportRejected(input),");
     // El amplificador sigue comprobando que le llega sonido antes de tomar la salida.
     expect(provider).toContain("const signal = hearsSignal(amp);");

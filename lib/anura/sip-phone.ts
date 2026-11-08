@@ -91,6 +91,12 @@ export interface AnuraPhoneCredentials {
    * manda de vuelta, para no marcar rechazada una clave más nueva.
    */
   credentialVersion: string;
+  /**
+   * Con una línea compartida (0313): la reserva de ESTA llamada. El Click2Dial
+   * se pide con ella (`requestCall({ reservationId })`) y, si el teléfono
+   * falla antes, se suelta (`releaseReservation`).
+   */
+  reservationId?: string | null;
 }
 
 export type AnuraPhoneCredentialsErrorCode =
@@ -103,6 +109,12 @@ export type AnuraPhoneCredentialsErrorCode =
   | "sin_dominio"
   | "clave_rechazada"
   | "dominio_no_reconocido"
+  /** Líneas compartidas: todas tienen una llamada viva. */
+  | "lineas_ocupadas"
+  /** Líneas compartidas: ninguna está lista (sin clave, rechazada, apagada…). */
+  | "sin_lineas"
+  /** Quien llama ya tiene una llamada viva. */
+  | "ocupada"
   | "base";
 
 export type AnuraPhoneCredentialsResult =
@@ -567,14 +579,31 @@ export interface AnuraPhoneDeps {
   lock: AnuraTabLock;
   /** La server action que entrega las credenciales de la dueña del anexo. */
   fetchCredentials(): Promise<AnuraPhoneCredentialsResult>;
-  /** `startAnuraCall(orderId)` (o la llamada de prueba de Ajustes). */
-  requestCall(): Promise<AnuraStartResult>;
+  /**
+   * `startAnuraCall(orderId)` (o la llamada de prueba de Ajustes). Con una
+   * línea compartida lleva la reserva que vino con la clave: el servidor pide
+   * el Click2Dial con ESA línea y no elige otra.
+   */
+  requestCall(input?: { reservationId: string }): Promise<AnuraStartResult>;
+  /**
+   * La llamada no llegó a pedirse (falló el micrófono o el registro, o se
+   * colgó antes): el servidor suelta la línea compartida reservada en el acto.
+   * Si no llega, se suelta sola al minuto. Nunca debe lanzar.
+   */
+  releaseReservation?(reservationId: string): Promise<unknown>;
   /**
    * La server action que marca «clave rechazada» o «dominio no reconocido».
    * Con `dominio` manda también el dominio con el que se probó, para que el
    * servidor no marque si mientras tanto alguien lo corrigió. Nunca debe lanzar.
    */
-  reportRejected(input: { credentialVersion: string; kind: AnuraRegistrationRejectionKind; status: number | null; domain?: string }): Promise<unknown>;
+  reportRejected(input: {
+    credentialVersion: string;
+    kind: AnuraRegistrationRejectionKind;
+    status: number | null;
+    domain?: string;
+    /** Con una línea compartida: la reserva, para marcar la clave de ESA línea. */
+    reservationId?: string;
+  }): Promise<unknown>;
   onChange(snapshot: AnuraPhoneSnapshot): void;
   /** El audio de Anura, para un `<audio autoplay>` con `srcObject`; null al terminar. */
   onRemoteStream(stream: unknown): void;
@@ -684,6 +713,8 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
   let pending: PendingKaptaCall | null = null;
   let timers: unknown[] = [];
   let settle: ((s: AnuraPhoneSnapshot) => void) | null = null;
+  /** La reserva de una línea compartida de esta vuelta, mientras el Click2Dial no se pidió. */
+  let reservation: string | null = null;
 
   const d = (event: string, data?: Record<string, string | number | boolean | null>) => {
     try {
@@ -711,8 +742,21 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     return h;
   };
 
+  /** Suelta en el servidor la línea compartida reservada que no llegó a pedirse. */
+  const releaseQuietly = (reservationId: string) => {
+    try {
+      void Promise.resolve(deps.releaseReservation?.(reservationId)).catch(() => {});
+    } catch {
+      // si no llega, el servidor la suelta solo al minuto
+    }
+  };
+
   /** Suelta todo. `ua.stop()` desregistra si estaba registrado. */
   const teardown = () => {
+    // La línea compartida reservada que no llegó a pedirse vuelve a quedar libre.
+    const r = reservation;
+    reservation = null;
+    if (r) releaseQuietly(r);
     for (const h of timers) cancel(h);
     timers = [];
     pending = null;
@@ -772,10 +816,13 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
   const reportRejection = (phone: AnuraPhoneCredentials, kind: AnuraRegistrationRejectionKind, status: number | null) => {
     memory.markRejected(phone.extension, phone.credentialVersion, kind, phone.domain);
     try {
-      const input =
-        kind === "dominio"
-          ? { credentialVersion: phone.credentialVersion, kind, status, domain: phone.domain }
-          : { credentialVersion: phone.credentialVersion, kind, status };
+      const input = {
+        credentialVersion: phone.credentialVersion,
+        kind,
+        status,
+        ...(kind === "dominio" ? { domain: phone.domain } : {}),
+        ...(phone.reservationId ? { reservationId: phone.reservationId } : {}),
+      };
       void Promise.resolve(deps.reportRejected(input)).catch(() => {});
     } catch {
       // el aviso no debe romper el teléfono; la pestaña ya la recuerda
@@ -945,8 +992,11 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       fail(myRun, { code: "anura_no_llamo", message: ANURA_PHONE_TEXT.anura_no_llamo });
     }, ANURA_INVITE_WINDOW_MS);
     let result: AnuraStartResult;
+    // Desde aquí la reserva es del Click2Dial: si falla, la cierra el servidor.
+    const reserved = reservation;
+    reservation = null;
     try {
-      result = await deps.requestCall();
+      result = await (reserved ? deps.requestCall({ reservationId: reserved }) : deps.requestCall());
     } catch {
       result = { ok: false, code: "red", error: "No se pudo pedir la llamada. Revisa tu internet." };
     }
@@ -993,12 +1043,18 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       } catch {
         creds = { ok: false, code: "base", error: "No se pudo preparar el teléfono de Kapta. Revisa tu internet." };
       }
-      if (myRun !== run) return;
+      if (myRun !== run) {
+        // Colgó mientras llegaba la clave: la línea reservada vuelve a quedar libre.
+        const late = creds.ok ? creds.phone.reservationId : null;
+        if (late) releaseQuietly(late);
+        return;
+      }
       if (!creds.ok) {
         fail(myRun, { code: "credenciales", message: creds.error, credentialsCode: creds.code });
         return;
       }
       const phone = creds.phone;
+      reservation = phone.reservationId ?? null;
       const remembered = memory.rejectedKind(phone.extension, phone.credentialVersion, phone.domain);
       if (remembered) {
         // Anura ya rechazó esta clave (o este dominio) en esta pestaña y el

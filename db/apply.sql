@@ -627,4 +627,6 @@
 \ir migrations/0311_anura_kapta_phone.sql
 \echo 'Applying 0312_lead_routing_scope_perf.sql'
 \ir migrations/0312_lead_routing_scope_perf.sql
+\echo 'Applying 0313_anura_line_pool.sql'
+\ir migrations/0313_anura_line_pool.sql
 \echo 'Done.'

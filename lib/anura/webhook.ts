@@ -76,11 +76,15 @@ function bearer(header: string | null | undefined): string | null {
   return m ? m[1]!.trim() : null;
 }
 
-/** Los anexos activos de la org: anexo → persona. */
+/**
+ * Los anexos activos de la org que son de una persona: anexo → persona. Una
+ * línea compartida (0313) no tiene dueña: una entrante a ella no la «toma
+ * una asesora» (Kapta no recibe llamadas).
+ */
 async function advisorExtensions(admin: SupabaseClient, orgId: string): Promise<Map<string, string>> {
   const { data } = await admin.from("anura_extensions").select("extension,user_id").eq("org_id", orgId).eq("active", true);
   const out = new Map<string, string>();
-  for (const r of (data ?? []) as { extension: string; user_id: string }[]) out.set(r.extension, r.user_id);
+  for (const r of (data ?? []) as { extension: string; user_id: string | null }[]) if (r.user_id) out.set(r.extension, r.user_id);
   return out;
 }
 

@@ -15,6 +15,10 @@ import { talkTimeWords } from "@/lib/browser-call";
  */
 export const ANURA_START_ERROR_TITLE: Record<AnuraStartErrorCode, string> = {
   ocupada: "Ya tienes una llamada en curso",
+  linea_ocupada: "Ese anexo está en otra llamada",
+  lineas_ocupadas: "Líneas de Anura ocupadas",
+  sin_lineas: "No hay líneas de Anura listas",
+  reserva: "La línea de Anura se liberó",
   base: "No se pudo pedir la llamada",
   sin_token: "Anura no está configurado",
   token: "El token de Anura no es válido",

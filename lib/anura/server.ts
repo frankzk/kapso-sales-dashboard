@@ -68,6 +68,27 @@ import {
 } from "@/lib/anura/sip-store";
 import { anuraWebhookUrl } from "@/lib/anura/token";
 import { talkTimeWords } from "@/lib/browser-call";
+import { permissionsFor, type Permission } from "@/lib/permissions";
+import {
+  ANURA_NO_POOL_LINES,
+  ANURA_POOL_NEEDS_KAPTA_PHONE,
+  anuraPoolLineNeedsKey,
+  anuraPoolLineStatus,
+  isUndialedReservation,
+  type AnuraPoolLineStatus,
+} from "@/lib/anura/pool";
+import {
+  dialAnuraReservation,
+  isAnuraCaller,
+  isMissingColumn,
+  liveCallsByExtension,
+  poolAvailability,
+  poolLineByExtension,
+  readPoolLines,
+  releaseAnuraReservation,
+  reserveAnuraLine,
+  reservedLineOf,
+} from "@/lib/anura/pool-store";
 
 export type { AnuraCallLive, AnuraStartResult } from "@/lib/anura/calls";
 export type { AnuraPhoneCredentialsResult } from "@/lib/anura/sip-phone";
@@ -76,7 +97,8 @@ export type { AnuraKaptaPhoneStatus } from "@/lib/anura/sip";
 export type AnuraMutationResult = { ok: true; notice: string } | { ok: false; error: string };
 
 export const ANURA_NOT_CONFIGURED = "Anura no está configurado: falta el token de Click2Dial.";
-export const ANURA_NO_EXTENSION = "No tienes un anexo de Anura asignado. Pídelo a quien administra (Ajustes › Telefonía Anura).";
+export const ANURA_NO_EXTENSION =
+  "No tienes un anexo de Anura asignado ni «Puede llamar con Anura». Pídelo a quien administra (Ajustes › Telefonía Anura).";
 export const ANURA_BAD_PHONE = "El teléfono del cliente no es un celular peruano válido.";
 export const ANURA_DENIED_CALL = "Tu rol no permite llamar con Anura.";
 export const ANURA_DENIED_ADMIN = "Solo quien administra la tienda configura Anura.";
@@ -157,8 +179,16 @@ async function orderTarget(orderId: string): Promise<OrderTarget | { error: stri
 // La ficha del pedido
 // ---------------------------------------------------------------------------
 
-/** «Llamar con Anura» desde la ficha. */
-export async function startAnuraCallForOrder(orderId: string, deps: { fetchImpl?: typeof fetch } = {}): Promise<AnuraStartResult> {
+/**
+ * «Llamar con Anura» desde la ficha. Con anexo propio, como siempre. Con una
+ * línea compartida («Puede llamar con Anura»), `reservationId` es la reserva
+ * que vino con la clave (`anuraPhoneForOrder`): el Click2Dial va SOLO con esa
+ * línea, sin volver a elegir.
+ */
+export async function startAnuraCallForOrder(
+  orderId: string,
+  deps: { fetchImpl?: typeof fetch; reservationId?: string | null } = {},
+): Promise<AnuraStartResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { ok: false, error: ANURA_DENIED_CALL };
   const target = await orderTarget(orderId);
@@ -170,7 +200,28 @@ export async function startAnuraCallForOrder(orderId: string, deps: { fetchImpl?
   if (!token) return { ok: false, error: ANURA_NOT_CONFIGURED };
   const admin = createAdminSupabase();
   const extension = await anuraExtensionOf(admin, target.orgId, target.userId);
-  if (!extension) return { ok: false, error: ANURA_NO_EXTENSION };
+  const reservationId = isUuid(deps.reservationId) ? deps.reservationId : null;
+  if (!extension) {
+    // Sin anexo propio: una línea compartida, solo con la casilla y con la reserva propia.
+    const release = async () => {
+      if (reservationId) await releaseAnuraReservation(admin, { reservationId, userId: target.userId }).catch(() => false);
+    };
+    if (!(await isAnuraCaller(admin, target.orgId, target.userId))) {
+      await release();
+      return { ok: false, error: ANURA_NO_EXTENSION };
+    }
+    const phone = anuraPeruCalled(target.phone);
+    if (!phone) {
+      await release();
+      return { ok: false, error: ANURA_BAD_PHONE };
+    }
+    if (!reservationId) return { ok: false, code: "reserva", error: ANURA_POOL_NEEDS_KAPTA_PHONE };
+    return dialAnuraReservation(
+      admin,
+      { reservationId, orgId: target.orgId, userId: target.userId, mode: "pedido", orderId: target.orderId, phone, token },
+      { fetchImpl: deps.fetchImpl },
+    );
+  }
   const phone = anuraPeruCalled(target.phone);
   if (!phone) return { ok: false, error: ANURA_BAD_PHONE };
   return placeAnuraCall(
@@ -185,7 +236,7 @@ export async function startAnuraCallForOrder(orderId: string, deps: { fetchImpl?
       phone,
       token,
     },
-    deps,
+    { fetchImpl: deps.fetchImpl },
   );
 }
 
@@ -274,7 +325,11 @@ export interface AnuraKaptaPhoneView {
 }
 
 export interface AnuraOrderPanel {
-  /** Mostrar «Llamar con Anura»: token + `master.edit` + anexo + celular peruano. */
+  /**
+   * Mostrar «Llamar con Anura»: token + `master.edit` + (anexo propio, o
+   * «Puede llamar con Anura» con alguna línea compartida lista) + celular
+   * peruano.
+   */
   enabled: boolean;
   /** Por qué no sale el botón (para depurar; la ficha no tiene que decirlo). */
   disabledReason: string | null;
@@ -282,8 +337,14 @@ export interface AnuraOrderPanel {
   /** La llamada viva de quien mira (de este u otro pedido), para retomar el sondeo. */
   activeCall: AnuraCallLive | null;
   calls: AnuraOrderCall[];
-  /** ¿El anexo de quien mira tiene teléfono en Kapta? (fase 2). */
+  /** ¿El anexo de quien mira tiene teléfono en Kapta? (fase 2). Con líneas compartidas, `listo`. */
   kaptaPhone: AnuraKaptaPhoneView;
+  /**
+   * Con líneas compartidas (sin anexo propio): cuántas sirven y cuántas están
+   * libres al abrir la ficha («2 de 3 líneas libres»). La línea se elige al
+   * llamar. Null con anexo propio.
+   */
+  pool: { total: number; free: number } | null;
 }
 
 const NO_KAPTA_PHONE: AnuraKaptaPhoneView = { status: "sin_telefono", message: null, rejectedAt: null };
@@ -314,7 +375,17 @@ function recordingLinkExpired(r: AnuraCallRow, nowMs: number): boolean {
   return Number.isFinite(at) && at <= nowMs;
 }
 
-const EMPTY_PANEL: AnuraOrderPanel = { enabled: false, disabledReason: null, extension: null, activeCall: null, calls: [], kaptaPhone: NO_KAPTA_PHONE };
+const EMPTY_PANEL: AnuraOrderPanel = {
+  enabled: false,
+  disabledReason: null,
+  extension: null,
+  activeCall: null,
+  calls: [],
+  kaptaPhone: NO_KAPTA_PHONE,
+  pool: null,
+};
+
+const POOL_PHONE_READY: AnuraKaptaPhoneView = { status: "listo", message: null, rejectedAt: null };
 
 /**
  * Lo que la ficha necesita de Anura: si sale el botón y las llamadas del
@@ -329,24 +400,29 @@ export async function loadAnuraOrderPanel(
   if ("error" in target) return { ...EMPTY_PANEL, disabledReason: target.error };
   const admin = createAdminSupabase();
   const sb = await createServerSupabase();
-  const [perms, extRow, callsRes] = await Promise.all([
+  const [perms, extRow, callsRes, caller] = await Promise.all([
     getMasterPermissions(),
     anuraExtensionRowOf(admin, target.orgId, target.userId),
     sb.from("anura_calls").select(ANURA_CALL_COLUMNS).eq("order_id", target.orderId).order("requested_at", { ascending: false }).limit(30),
+    isAnuraCaller(admin, target.orgId, target.userId),
   ]);
   const extension = extRow?.extension ?? null;
-  const rows = ((callsRes.data ?? []) as unknown as AnuraCallRow[]).filter((r) => r.mode === "pedido");
+  // Una reserva de línea que no llegó a pedirse no es una llamada: no se muestra.
+  const rows = ((callsRes.data ?? []) as unknown as AnuraCallRow[]).filter((r) => r.mode === "pedido" && !isUndialedReservation(r));
+  // Sin anexo propio, las líneas compartidas (con la casilla «Puede llamar con Anura»).
+  const pool = !extension && caller ? await poolAvailability(admin, target.orgId) : null;
 
   let disabledReason: string | null = null;
   if (!anuraConfigured(target.orgId)) disabledReason = ANURA_NOT_CONFIGURED;
   else if (!perms.can("master.edit")) disabledReason = ANURA_DENIED_CALL;
-  else if (!extension) disabledReason = ANURA_NO_EXTENSION;
+  else if (!extension && !pool) disabledReason = ANURA_NO_EXTENSION;
+  else if (pool && pool.total === 0) disabledReason = ANURA_NO_POOL_LINES;
   else if (!anuraPeruCalled(target.phone)) disabledReason = ANURA_BAD_PHONE;
 
   const [names, active, kaptaPhone] = await Promise.all([
     resolveAgentNames(rows.map((r) => r.user_id ?? "").filter(Boolean), admin),
-    extension ? activeAnuraCallOf(admin, target.userId) : Promise.resolve(null),
-    disabledReason === null ? kaptaPhoneOf(admin, target.orgId, extRow) : Promise.resolve(NO_KAPTA_PHONE),
+    extension || pool ? activeAnuraCallOf(admin, target.userId) : Promise.resolve(null),
+    disabledReason !== null ? Promise.resolve(NO_KAPTA_PHONE) : pool ? Promise.resolve(POOL_PHONE_READY) : kaptaPhoneOf(admin, target.orgId, extRow),
   ]);
 
   const nowMs = Date.now();
@@ -363,8 +439,10 @@ export async function loadAnuraOrderPanel(
     enabled: disabledReason === null,
     disabledReason,
     extension,
-    activeCall: active ? anuraCallLive(active) : null,
+    // La reserva de una línea mientras el navegador se registra todavía no es una llamada.
+    activeCall: active && !isUndialedReservation(active) ? anuraCallLive(active) : null,
     kaptaPhone,
+    pool,
     calls: rows.map((r) => {
       // Una «pendiente» cuyo enlace de Anura ya venció se ve «vencida» ya (el
       // reintento de arriba la deja así en la base).
@@ -398,12 +476,15 @@ async function ownPhoneCredentials(admin: SupabaseClient, orgId: string, userId:
 }
 
 /**
- * Las credenciales del teléfono de Kapta para llamar desde la ficha. SOLO a
- * la dueña del anexo, en el momento de llamar: `master.edit`, el pedido
- * visible por RLS, Anura encendido para la org del pedido (token y
- * ANURA_ORG_ID), un anexo ACTIVO propio en esa org y su clave guardada y no
- * rechazada. La contraseña no se escribe en ningún log; el navegador la
- * guarda solo en memoria mientras dura la llamada.
+ * Las credenciales del teléfono de Kapta para llamar desde la ficha, en el
+ * momento de llamar: `master.edit`, el pedido visible por RLS, Anura
+ * encendido para la org del pedido (token y ANURA_ORG_ID) y
+ *   · con un anexo ACTIVO propio en esa org: su clave (solo a su dueña);
+ *   · si no, con «Puede llamar con Anura»: se RESERVA una línea compartida
+ *     libre y se entrega la clave de ESA línea, con el id de la reserva. Nunca
+ *     la de otra línea, ni una lista de claves.
+ * La contraseña no se escribe en ningún log; el navegador la guarda solo en
+ * memoria mientras dura la llamada.
  */
 export async function anuraPhoneForOrder(orderId: string): Promise<AnuraPhoneCredentialsResult> {
   const perms = await getMasterPermissions();
@@ -412,25 +493,70 @@ export async function anuraPhoneForOrder(orderId: string): Promise<AnuraPhoneCre
   if ("error" in target) return { ok: false, code: target.error.startsWith("Tu sesión") ? "sesion" : "pedido", error: target.error };
   // La clave solo con `master.edit` en la org DEL PEDIDO (no en otra org de la persona).
   if (!(await hasOrgPermission(target.orgId, "master.edit"))) return { ok: false, code: "permiso", error: ANURA_DENIED_CALL };
-  if (!anuraPeruCalled(target.phone)) return { ok: false, code: "pedido", error: ANURA_BAD_PHONE };
-  return ownPhoneCredentials(createAdminSupabase(), target.orgId, target.userId);
+  const phone = anuraPeruCalled(target.phone);
+  if (!phone) return { ok: false, code: "pedido", error: ANURA_BAD_PHONE };
+  const admin = createAdminSupabase();
+  if (!anuraConfigured(target.orgId)) return { ok: false, code: "no_configurado", error: ANURA_NOT_CONFIGURED };
+  const own = await anuraExtensionRowOf(admin, target.orgId, target.userId);
+  if (own) return sipPhoneCredentials(admin, target.orgId, own);
+  if (!(await isAnuraCaller(admin, target.orgId, target.userId))) return { ok: false, code: "sin_anexo", error: ANURA_NO_EXTENSION };
+  return reserveAnuraLine(admin, {
+    orgId: target.orgId,
+    userId: target.userId,
+    mode: "pedido",
+    storeId: target.storeId,
+    orderId: target.orderId,
+    phone,
+  });
+}
+
+/**
+ * El teléfono de Kapta no llegó a pedir el Click2Dial (micrófono, registro, o
+ * se colgó antes): se suelta la línea compartida que reservó quien llama.
+ * Solo la reserva PROPIA y sin pedir. Nunca deja hecho en el pedido.
+ */
+export async function releaseAnuraReservationFor(reservationId: string): Promise<{ ok: true; released: boolean } | { ok: false; error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Tu sesión venció. Vuelve a entrar." };
+  if (!isUuid(reservationId)) return { ok: true, released: false };
+  const released = await releaseAnuraReservation(createAdminSupabase(), { reservationId, userId: user.id });
+  return { ok: true, released };
 }
 
 /**
  * Las credenciales del teléfono de Kapta para la llamada de prueba de
- * Ajustes: quien administra (`stores.manage`) y SOLO con su propio anexo. Con
- * el anexo de otra persona no se entrega la clave.
+ * Ajustes (`stores.manage`):
+ *   · «Mi anexo» (sin anexo elegido): el anexo propio; sin él, con «Puede
+ *     llamar con Anura», una línea compartida libre (como en la ficha);
+ *   · un anexo propio elegido: solo si es de quien prueba (con el anexo de
+ *     otra persona no se entrega la clave);
+ *   · una línea compartida elegida: se reserva ESA línea, si está libre
+ *     (quien administra puede guardarle la clave de todos modos).
  */
-export async function anuraTestPhoneFor(storeId: string, rawExtension?: string | null): Promise<AnuraPhoneCredentialsResult> {
+export async function anuraTestPhoneFor(
+  storeId: string,
+  rawExtension?: string | null,
+  rawPhone?: string | null,
+): Promise<AnuraPhoneCredentialsResult> {
   const target = await adminTarget(storeId);
   if ("error" in target) return { ok: false, code: target.error === ANURA_DENIED_ADMIN ? "permiso" : "sesion", error: target.error };
   const admin = createAdminSupabase();
+  const phone = anuraPeruCalled(rawPhone ?? null);
+  const reserve = (onlyExtension: string | null) =>
+    reserveAnuraLine(admin, { orgId: target.orgId, userId: target.userId, mode: "prueba", storeId: null, orderId: null, phone, onlyExtension });
   if (rawExtension) {
     const wanted = normalizeAnuraExtension(rawExtension);
     const own = await anuraExtensionRowOf(admin, target.orgId, target.userId);
-    if (!wanted || !own || own.extension !== wanted) return { ok: false, code: "permiso", error: ANURA_PHONE_NOT_OWNER };
+    if (wanted && own && own.extension === wanted) return ownPhoneCredentials(admin, target.orgId, target.userId);
+    const line = wanted ? await poolLineByExtension(admin, target.orgId, wanted) : null;
+    if (!line) return { ok: false, code: "permiso", error: ANURA_PHONE_NOT_OWNER };
+    if (!anuraConfigured(target.orgId)) return { ok: false, code: "no_configurado", error: ANURA_NOT_CONFIGURED };
+    return reserve(line.extension);
   }
-  return ownPhoneCredentials(admin, target.orgId, target.userId);
+  const own = await anuraExtensionRowOf(admin, target.orgId, target.userId);
+  if (own || !(await isAnuraCaller(admin, target.orgId, target.userId))) return ownPhoneCredentials(admin, target.orgId, target.userId);
+  if (!anuraConfigured(target.orgId)) return { ok: false, code: "no_configurado", error: ANURA_NOT_CONFIGURED };
+  return reserve(null);
 }
 
 export type AnuraPhoneRejectScope = { orderId: string } | { storeId: string };
@@ -453,7 +579,14 @@ export type AnuraPhoneRejectScope = { orderId: string } | { storeId: string };
  */
 export async function reportAnuraPhoneRejectedFor(
   scope: AnuraPhoneRejectScope,
-  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null; domain?: string | null },
+  input: {
+    credentialVersion: string;
+    kind: AnuraRegistrationFailureKind;
+    status?: number | null;
+    domain?: string | null;
+    /** Con una línea compartida: la reserva propia que entregó esa clave. */
+    reservationId?: string | null;
+  },
 ): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Tu sesión venció. Vuelve a entrar." };
@@ -474,7 +607,12 @@ export async function reportAnuraPhoneRejectedFor(
     if (!orgId) return { ok: false, error: "Tienda no encontrada." };
   }
   const admin = createAdminSupabase();
-  const ext = await anuraExtensionRowOf(admin, orgId, user.id);
+  // El anexo propio; o, con una línea compartida, la línea de la reserva PROPIA (nunca otra).
+  const reservationId = isUuid(input.reservationId) ? input.reservationId : null;
+  const ext = reservationId
+    ? await reservedLineOf(admin, { reservationId, userId: user.id, orgId })
+    : await anuraExtensionRowOf(admin, orgId, user.id);
+  if (reservationId) await releaseAnuraReservation(admin, { reservationId, userId: user.id }).catch(() => false);
   if (!ext) return { ok: false, error: ANURA_NO_EXTENSION };
   if (kind === "dominio" && triedDomain) {
     // Si la central ya tiene otro dominio, el 404 era del anterior: no se marca.
@@ -545,6 +683,29 @@ export interface AnuraPersonView {
   role: string;
 }
 
+/** Una línea compartida (0313), para Ajustes. Nunca la clave. */
+export interface AnuraPoolLineView {
+  id: string;
+  extension: string;
+  active: boolean;
+  /** «Línea 201». */
+  name: string;
+  phone: AnuraExtensionPhoneView;
+  /** libre · en uso (por quién) · apagada · sin clave · clave rechazada · dominio no reconocido · falta el dominio. */
+  status: AnuraPoolLineStatus;
+  inUseBy: string | null;
+}
+
+/** Una persona que puede gestionar pedidos (`master.edit`) y su casilla «Puede llamar con Anura». */
+export interface AnuraCallerView {
+  userId: string;
+  name: string;
+  role: string;
+  enabled: boolean;
+  /** Si tiene un anexo propio activo, llama con él (la casilla no cambia eso). */
+  personalExtension: string | null;
+}
+
 export interface AnuraEventView {
   id: string;
   receivedAt: string;
@@ -584,6 +745,12 @@ export interface AnuraSettingsData {
   sip: AnuraSipSettingsView;
   /** Las tablas de la 0311 todavía no existen: no se pueden guardar claves. */
   sipMigrationMissing: boolean;
+  /** Las líneas compartidas (0313). */
+  poolLines: AnuraPoolLineView[];
+  /** Quién puede gestionar pedidos, con su casilla «Puede llamar con Anura». */
+  callers: AnuraCallerView[];
+  /** La 0313 todavía no está aplicada: no hay líneas compartidas ni casillas. */
+  poolMigrationMissing: boolean;
 }
 
 export type AnuraSettingsResult = { ok: true; data: AnuraSettingsData } | { ok: false; error: string };
@@ -593,14 +760,49 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
   return isMissingSipTable(error);
 }
 
+/** Las personas de la org que tienen `permission` (rol, roles acumulables y concesiones). */
+async function membersWithPermission(
+  admin: SupabaseClient,
+  orgId: string,
+  members: readonly { user_id: string; role: string }[],
+  permission: Permission,
+): Promise<Set<string>> {
+  const [grantsRes, functionsRes] = await Promise.all([
+    admin.from("user_permissions").select("user_id,permission,granted").eq("org_id", orgId),
+    admin.from("membership_roles").select("user_id,role").eq("org_id", orgId),
+  ]);
+  const grants = new Map<string, { permission: string; granted: boolean }[]>();
+  for (const r of (grantsRes.error ? [] : grantsRes.data ?? []) as { user_id: string; permission: string; granted: boolean | null }[]) {
+    grants.set(r.user_id, [...(grants.get(r.user_id) ?? []), { permission: r.permission, granted: r.granted ?? true }]);
+  }
+  const functions = new Map<string, string[]>();
+  for (const r of (functionsRes.error ? [] : functionsRes.data ?? []) as { user_id: string; role: string }[]) {
+    functions.set(r.user_id, [...(functions.get(r.user_id) ?? []), r.role]);
+  }
+  return new Set(
+    members.filter((m) => permissionsFor([m.role], grants.get(m.user_id) ?? [], functions.get(m.user_id) ?? []).has(permission)).map((m) => m.user_id),
+  );
+}
+
+type ExtRow = { id: string; user_id: string | null; extension: string; active: boolean; pool?: boolean | null };
+
+/** Los anexos de la org. Sin la 0313 (no hay columna `pool`), todos son propios. */
+async function readOrgExtensions(admin: SupabaseClient, orgId: string): Promise<{ rows: ExtRow[]; error: { code?: string; message?: string } | null; poolMissing: boolean }> {
+  const first = await admin.from("anura_extensions").select("id,user_id,extension,active,pool").eq("org_id", orgId).order("extension");
+  if (!first.error) return { rows: (first.data ?? []) as ExtRow[], error: null, poolMissing: false };
+  if (!isMissingColumn(first.error)) return { rows: [], error: first.error, poolMissing: false };
+  const again = await admin.from("anura_extensions").select("id,user_id,extension,active").eq("org_id", orgId).order("extension");
+  return { rows: (again.data ?? []) as ExtRow[], error: again.error, poolMissing: true };
+}
+
 /** Todo lo de la sección «Telefonía Anura» de Ajustes. */
 export async function loadAnuraSettings(storeId: string, siteUrl: string): Promise<AnuraSettingsResult> {
   const target = await adminTarget(storeId);
   if ("error" in target) return { ok: false, error: target.error };
   const admin = createAdminSupabase();
   const since = new Date(Date.now() - ANURA_EVENT_RETENTION_DAYS * 86_400_000).toISOString();
-  const [extRes, memberRes, eventRes, sipRes, metaRes] = await Promise.all([
-    admin.from("anura_extensions").select("id,user_id,extension,active").eq("org_id", target.orgId).order("extension"),
+  const [extRes, memberRes, eventRes, sipRes, metaRes, callerRes, live] = await Promise.all([
+    readOrgExtensions(admin, target.orgId),
     admin.from("memberships").select("user_id,role").eq("org_id", target.orgId),
     admin
       .from("anura_webhook_events")
@@ -611,11 +813,24 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
       .limit(50),
     readSipSettings(admin, target.orgId),
     readSipCredentialMetas(admin, target.orgId),
+    admin.from("anura_callers").select("user_id,enabled").eq("org_id", target.orgId),
+    liveCallsByExtension(admin, target.orgId),
   ]);
   const migrationMissing = isMissingTable(extRes.error) || isMissingTable(eventRes.error);
-  const exts = (extRes.data ?? []) as { id: string; user_id: string; extension: string; active: boolean }[];
+  const poolMigrationMissing = extRes.poolMissing || isMissingTable(callerRes.error);
+  const all = extRes.rows;
+  const exts = all.filter((e): e is ExtRow & { user_id: string } => !e.pool && !!e.user_id);
+  const lines = all.filter((e) => e.pool === true);
   const members = ((memberRes.data ?? []) as { user_id: string; role: string }[]).filter((m) => m.role !== "motorizado");
-  const names = await resolveAgentNames([...members.map((m) => m.user_id), ...exts.map((e) => e.user_id)], admin);
+  const liveUsers = [...live.values()].map((l) => l.userId).filter((id): id is string => !!id);
+  const [names, canCall] = await Promise.all([
+    resolveAgentNames([...members.map((m) => m.user_id), ...exts.map((e) => e.user_id), ...liveUsers], admin),
+    membersWithPermission(admin, target.orgId, members, "master.edit"),
+  ]);
+  const enabledCallers = new Set(
+    ((callerRes.error ? [] : callerRes.data ?? []) as { user_id: string; enabled: boolean }[]).filter((c) => c.enabled).map((c) => c.user_id),
+  );
+  const personalOf = new Map(exts.filter((e) => e.active).map((e) => [e.user_id, e.extension]));
 
   let webhook: AnuraSettingsData["webhook"] = null;
   try {
@@ -638,6 +853,18 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
     call_id: string | null;
   };
   const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const phoneView = (e: { id: string; extension: string }): AnuraExtensionPhoneView => {
+    const meta = metaRes.byExtensionId.get(e.id) ?? null;
+    const valid = meta && meta.extension === e.extension ? meta : null;
+    return {
+      status: kaptaPhoneStatus({ id: e.id, extension: e.extension }, valid, sipRes.settings),
+      sipUser: valid?.sipUser ?? defaultSipUser(e.extension),
+      hasPassword: !!valid,
+      savedAt: valid?.savedAt ?? null,
+      rejectedAt: valid?.rejectedAt ?? null,
+      rejectedReason: valid?.rejectedReason ?? null,
+    };
+  };
 
   return {
     ok: true,
@@ -645,25 +872,38 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
       configured: anuraConfigured(target.orgId),
       webhook,
       template: ANURA_EVENT_TEMPLATE,
-      extensions: exts.map((e) => {
-        const meta = metaRes.byExtensionId.get(e.id) ?? null;
-        const valid = meta && meta.extension === e.extension ? meta : null;
+      extensions: exts.map((e) => ({
+        id: e.id,
+        userId: e.user_id,
+        name: names[e.user_id] ?? e.user_id.slice(0, 8),
+        extension: e.extension,
+        active: e.active,
+        phone: phoneView(e),
+      })),
+      poolLines: lines.map((e) => {
+        const phone = phoneView(e);
+        const inUse = live.get(e.extension) ?? null;
+        const by = inUse?.userId ? names[inUse.userId] ?? inUse.userId.slice(0, 8) : null;
         return {
           id: e.id,
-          userId: e.user_id,
-          name: names[e.user_id] ?? e.user_id.slice(0, 8),
           extension: e.extension,
           active: e.active,
-          phone: {
-            status: kaptaPhoneStatus({ id: e.id, extension: e.extension }, valid, sipRes.settings),
-            sipUser: valid?.sipUser ?? defaultSipUser(e.extension),
-            hasPassword: !!valid,
-            savedAt: valid?.savedAt ?? null,
-            rejectedAt: valid?.rejectedAt ?? null,
-            rejectedReason: valid?.rejectedReason ?? null,
-          },
+          name: `Línea ${e.extension}`,
+          phone,
+          status: anuraPoolLineStatus({ active: e.active, phoneStatus: phone.status, live: inUse !== null }),
+          inUseBy: inUse ? by : null,
         };
       }),
+      callers: members
+        .filter((m) => canCall.has(m.user_id))
+        .map((m) => ({
+          userId: m.user_id,
+          name: names[m.user_id] ?? m.user_id.slice(0, 8),
+          role: m.role,
+          enabled: enabledCallers.has(m.user_id),
+          personalExtension: personalOf.get(m.user_id) ?? null,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
       people: members
         .map((m) => ({ userId: m.user_id, name: names[m.user_id] ?? m.user_id.slice(0, 8), role: m.role }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -689,6 +929,7 @@ export async function loadAnuraSettings(storeId: string, siteUrl: string): Promi
       migrationMissing,
       sip: { ...sipRes.settings },
       sipMigrationMissing: sipRes.missing || metaRes.missing,
+      poolMigrationMissing,
     },
   };
 }
@@ -705,11 +946,14 @@ export async function saveAnuraExtensionFor(storeId: string, userId: string, raw
   if (!member) return { ok: false, error: "Esa persona no es del equipo de esta organización." };
   const { data: taken } = await admin
     .from("anura_extensions")
-    .select("user_id")
+    .select("user_id,pool")
     .eq("org_id", target.orgId)
     .eq("extension", extension)
     .maybeSingle();
-  const takenBy = (taken as { user_id?: string } | null)?.user_id;
+  if ((taken as { pool?: boolean } | null)?.pool) {
+    return { ok: false, error: `El anexo ${extension} es una línea compartida. Quítalo de «Líneas compartidas» antes de dárselo a una persona.` };
+  }
+  const takenBy = (taken as { user_id?: string | null } | null)?.user_id;
   if (takenBy && takenBy !== userId) {
     const names = await resolveAgentNames([takenBy], admin);
     return { ok: false, error: `El anexo ${extension} ya está asignado a ${names[takenBy] ?? "otra persona"}. Quítaselo primero.` };
@@ -763,6 +1007,79 @@ export async function removeAnuraExtensionFor(storeId: string, extensionId: stri
   if (error) return { ok: false, error: `No se pudo quitar el anexo: ${error.message}` };
   if (!(data ?? []).length) return { ok: false, error: "Anexo no encontrado." };
   return { ok: true, notice: "Anexo quitado." };
+}
+
+/**
+ * Suma una línea compartida (0313): un anexo de Anura sin dueña que toma,
+ * libre, quien tiene «Puede llamar con Anura». Su usuario SIP es, por
+ * defecto, `<anexo>-websocket`; la clave se guarda con «Probar y guardar».
+ */
+export async function addAnuraPoolLineFor(storeId: string, rawExtension: string): Promise<AnuraMutationResult> {
+  const target = await adminTarget(storeId);
+  if ("error" in target) return { ok: false, error: target.error };
+  const extension = normalizeAnuraExtension(rawExtension);
+  if (!extension) return { ok: false, error: "El anexo son de 2 a 6 dígitos (por ejemplo, 201)." };
+  const admin = createAdminSupabase();
+  const { data: taken } = await admin.from("anura_extensions").select("user_id,pool").eq("org_id", target.orgId).eq("extension", extension).maybeSingle();
+  const row = taken as { user_id?: string | null; pool?: boolean } | null;
+  if (row?.pool) return { ok: false, error: `El anexo ${extension} ya es una línea compartida.` };
+  if (row?.user_id) {
+    const names = await resolveAgentNames([row.user_id], admin);
+    return { ok: false, error: `El anexo ${extension} es el anexo propio de ${names[row.user_id] ?? "otra persona"}. Quítaselo primero en «Anexos por persona».` };
+  }
+  const { error } = await admin
+    .from("anura_extensions")
+    .insert({ org_id: target.orgId, user_id: null, extension, pool: true, active: true, created_by: target.userId });
+  if (error) {
+    if (error.code === "23505") return { ok: false, error: `El anexo ${extension} ya está en uso en esta organización.` };
+    if (isMissingColumn(error)) return { ok: false, error: "Falta aplicar la migración 0313 (líneas compartidas)." };
+    return { ok: false, error: `No se pudo sumar la línea: ${error.message}` };
+  }
+  return { ok: true, notice: `Línea ${extension} sumada. Guarda su clave de la «${defaultSipUser(extension)}» con «Probar y guardar».` };
+}
+
+/** Quita una línea compartida (y su clave). No mientras tenga una llamada viva. */
+export async function removeAnuraPoolLineFor(storeId: string, extensionId: string): Promise<AnuraMutationResult> {
+  const target = await adminTarget(storeId);
+  if ("error" in target) return { ok: false, error: target.error };
+  if (!isUuid(extensionId)) return { ok: false, error: "Línea no encontrada." };
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("anura_extensions").select("id,extension").eq("id", extensionId).eq("org_id", target.orgId).eq("pool", true).maybeSingle();
+  const line = data as { id?: string; extension?: string } | null;
+  if (!line?.id || !line.extension) return { ok: false, error: "Línea no encontrada." };
+  if ((await liveCallsByExtension(admin, target.orgId)).has(line.extension)) {
+    return { ok: false, error: `La línea ${line.extension} está en una llamada. Quítala cuando termine.` };
+  }
+  const { error } = await admin.from("anura_extensions").delete().eq("id", line.id).eq("org_id", target.orgId).eq("pool", true);
+  if (error) return { ok: false, error: `No se pudo quitar la línea: ${error.message}` };
+  return { ok: true, notice: `Línea ${line.extension} quitada.` };
+}
+
+/**
+ * La casilla «Puede llamar con Anura» de una persona. Solo para quien puede
+ * gestionar pedidos (`master.edit`) en la org: la casilla no da ese permiso.
+ */
+export async function setAnuraCallerFor(storeId: string, userId: string, enabled: boolean): Promise<AnuraMutationResult> {
+  const target = await adminTarget(storeId);
+  if ("error" in target) return { ok: false, error: target.error };
+  if (!isUuid(userId)) return { ok: false, error: "Elige a una persona del equipo." };
+  const admin = createAdminSupabase();
+  const { data: member } = await admin.from("memberships").select("user_id,role").eq("org_id", target.orgId).eq("user_id", userId).maybeSingle();
+  const m = member as { user_id: string; role: string } | null;
+  if (!m) return { ok: false, error: "Esa persona no es del equipo de esta organización." };
+  if (enabled && !(await membersWithPermission(admin, target.orgId, [m], "master.edit")).has(userId)) {
+    return { ok: false, error: "Esa persona no puede gestionar pedidos (master.edit) en esta organización: dale ese permiso en Equipo primero." };
+  }
+  const { error } = await admin
+    .from("anura_callers")
+    .upsert({ org_id: target.orgId, user_id: userId, enabled, created_by: target.userId }, { onConflict: "org_id,user_id" });
+  if (error) {
+    if (isMissingTable(error)) return { ok: false, error: "Falta aplicar la migración 0313 (líneas compartidas)." };
+    return { ok: false, error: `No se pudo guardar: ${error.message}` };
+  }
+  const names = await resolveAgentNames([userId], admin);
+  const name = names[userId] ?? "Esa persona";
+  return { ok: true, notice: enabled ? `${name} puede llamar con Anura.` : `${name} ya no llama con las líneas compartidas.` };
 }
 
 /** El anexo de la org por id (para las claves SIP). */
@@ -901,38 +1218,58 @@ export async function startAnuraTestCallFor(
   storeId: string,
   rawPhone: string,
   rawExtension?: string | null,
-  deps: { fetchImpl?: typeof fetch } = {},
+  deps: { fetchImpl?: typeof fetch; reservationId?: string | null } = {},
 ): Promise<AnuraStartResult> {
   const target = await adminTarget(storeId);
   if ("error" in target) return { ok: false, error: target.error };
-  const token = anuraTokenFor(target.orgId);
-  if (!token) return { ok: false, error: ANURA_NOT_CONFIGURED };
-  const phone = anuraPeruCalled(rawPhone);
-  if (!phone) return { ok: false, error: "Escribe un celular peruano de 9 dígitos." };
   const admin = createAdminSupabase();
+  const reservationId = isUuid(deps.reservationId) ? deps.reservationId : null;
+  const token = anuraTokenFor(target.orgId);
+  const phone = anuraPeruCalled(rawPhone);
+  if (reservationId) {
+    // Con una línea compartida: el Click2Dial va con la reserva propia (`anuraTestPhoneFor`), nunca con otra.
+    if (!token || !phone) {
+      await releaseAnuraReservation(admin, { reservationId, userId: target.userId }).catch(() => false);
+      return { ok: false, error: !token ? ANURA_NOT_CONFIGURED : "Escribe un celular peruano de 9 dígitos." };
+    }
+    const wanted = rawExtension ? normalizeAnuraExtension(rawExtension) : null;
+    return dialAnuraReservation(
+      admin,
+      { reservationId, orgId: target.orgId, userId: target.userId, mode: "prueba", orderId: null, extension: wanted, phone, token },
+      { fetchImpl: deps.fetchImpl },
+    );
+  }
+  if (!token) return { ok: false, error: ANURA_NOT_CONFIGURED };
+  if (!phone) return { ok: false, error: "Escribe un celular peruano de 9 dígitos." };
   let extension: string | null;
   if (rawExtension) {
     const wanted = normalizeAnuraExtension(rawExtension);
     if (!wanted) return { ok: false, error: "Anexo no válido." };
     const { data } = await admin
       .from("anura_extensions")
-      .select("extension")
+      .select("extension,pool")
       .eq("org_id", target.orgId)
       .eq("extension", wanted)
       .eq("active", true)
       .maybeSingle();
-    extension = (data as { extension?: string } | null)?.extension ?? null;
+    const row = data as { extension?: string; pool?: boolean } | null;
+    // Una línea compartida solo llama con el teléfono de Kapta (su principal es la «-websocket»).
+    if (row?.pool && row.extension) return { ok: false, code: "reserva", error: anuraPoolLineNeedsKey(row.extension) };
+    extension = row?.extension ?? null;
     if (!extension) return { ok: false, error: `El anexo ${wanted} no está asignado ni activo en esta organización.` };
   } else {
     extension = await anuraExtensionOf(admin, target.orgId, target.userId);
-    if (!extension) return { ok: false, error: "No tienes un anexo asignado: asígnate uno o elige el anexo con el que probar." };
+    if (!extension) {
+      if (await isAnuraCaller(admin, target.orgId, target.userId)) return { ok: false, code: "reserva", error: ANURA_POOL_NEEDS_KAPTA_PHONE };
+      return { ok: false, error: "No tienes un anexo asignado: asígnate uno o elige el anexo con el que probar." };
+    }
   }
   return placeAnuraCall(
     admin,
     // Sin tienda: la prueba no es de ningún pedido, y así nadie más lee por
     // RLS el número que escribió quien administra.
     { orgId: target.orgId, storeId: null, orderId: null, userId: target.userId, mode: "prueba", extension, phone, token },
-    deps,
+    { fetchImpl: deps.fetchImpl },
   );
 }
 

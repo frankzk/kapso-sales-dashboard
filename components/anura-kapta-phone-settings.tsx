@@ -22,7 +22,7 @@
 // Del servidor solo se importan acciones y TIPOS (lo vigila
 // `test/anura-ui.test.ts`); JsSIP llega con import dinámico al probar.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import { CARD, CardHeader, EmptyRow, Field, HELP, ROW, RowList } from "@/components/settings-ui";
@@ -70,7 +70,8 @@ function when(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? "—" : WHEN.format(d);
 }
 
-function draftOf(sip: AnuraSettingsData["sip"]): AnuraSipCentralDraft {
+/** La central guardada, como la escribe el formulario (vacío = el valor de Perú). */
+export function draftOf(sip: AnuraSettingsData["sip"]): AnuraSipCentralDraft {
   return {
     domain: sip.domain ?? "",
     wsUrl: sip.wsUrl === ANURA_DEFAULT_WS_URL ? "" : sip.wsUrl,
@@ -127,7 +128,8 @@ export function KaptaPhoneCard({
   const savedCentral = Boolean(data.sip.domain);
   // Anura respondió 404 («no reconoce el usuario en ese dominio»): lo que se
   // corrige es el dominio de aquí (o el usuario), no la contraseña.
-  const notFoundExts = data.extensions.filter((e) => e.phone.status === "dominio_no_reconocido");
+  // Las líneas compartidas (0313) también cuentan: el dominio es el mismo.
+  const notFoundExts = [...data.extensions, ...data.poolLines].filter((e) => e.phone.status === "dominio_no_reconocido");
   const notFound = notFoundExts.length;
   // Los marcados con un dominio anterior: esperan que Anura acepte el de ahora.
   const awaitingTest = notFoundExts.filter((e) => isNotFoundAwaitingTest(e.phone.rejectedReason)).length;
@@ -238,7 +240,11 @@ export function KaptaPhoneCard({
       <p className={cn(ROW, HELP)}>{ANURA_SIP_PASSWORD_HELP}</p>
 
       {data.extensions.length === 0 ? (
-        <EmptyRow>Asigna primero un anexo a cada persona (arriba). La clave es de cada anexo.</EmptyRow>
+        <EmptyRow>
+          {data.poolLines.length > 0
+            ? "Nadie tiene anexo propio: las claves de las líneas compartidas se guardan en «Líneas compartidas» (arriba), con este mismo dominio."
+            : "Asigna primero un anexo a cada persona (arriba). La clave es de cada anexo."}
+        </EmptyRow>
       ) : (
         <RowList>
           {data.extensions.map((e) => (
@@ -262,9 +268,16 @@ export function KaptaPhoneCard({
   );
 }
 
-function SipExtensionRow({
+/** Lo que la fila de la clave necesita de un anexo propio o de una línea compartida. */
+export type AnuraSipRowTarget = Pick<AnuraExtensionView, "id" | "name" | "extension" | "active" | "phone">;
+
+export function SipExtensionRow({
   storeId,
   ext,
+  pool = false,
+  title,
+  badge: badgeOverride,
+  actions,
   central,
   pending,
   testingId,
@@ -275,7 +288,14 @@ function SipExtensionRow({
   onChanged,
 }: {
   storeId: string;
-  ext: AnuraExtensionView;
+  ext: AnuraSipRowTarget;
+  /** Una línea compartida (0313): sin clave no llama nadie con ella. */
+  pool?: boolean;
+  /** En vez de «nombre · anexo» (la línea compartida dice su número y su estado). */
+  title?: ReactNode;
+  badge?: { label: string; tone: "neutral" | "ok" | "warn" | "crit" };
+  /** Botones de más junto a la chapa (apagar o quitar la línea). */
+  actions?: ReactNode;
   central: AnuraSipCentralDraft;
   pending: boolean;
   testingId: string | null;
@@ -297,7 +317,7 @@ function SipExtensionRow({
     };
   }, []);
 
-  const badge = anuraSipPhoneBadge(ext.phone);
+  const badge = badgeOverride ?? anuraSipPhoneBadge(ext.phone);
   const lines = anuraSipPhoneLines(ext.phone, when);
   const busy = testingId !== null;
   const userId = `anura-sip-user-${ext.id}`;
@@ -374,7 +394,13 @@ function SipExtensionRow({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-medium text-ink-900">
-            {ext.name} · anexo <span className="tabular-nums">{ext.extension}</span>
+            {title ? (
+              title
+            ) : (
+              <>
+                {ext.name} · anexo <span className="tabular-nums">{ext.extension}</span>
+              </>
+            )}
             {!ext.active && <span className="font-normal text-ink-500"> (apagado)</span>}
           </p>
           {lines.map((line) => (
@@ -385,6 +411,7 @@ function SipExtensionRow({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={badge.tone}>{badge.label}</Badge>
+          {actions}
           {ext.phone.hasPassword && (
             <OpsButton
               size="sm"
@@ -392,8 +419,10 @@ function SipExtensionRow({
               onClick={() => {
                 if (
                   window.confirm(
-                    `¿Quitar la clave del teléfono de Kapta del anexo ${ext.extension}? Ese anexo vuelve a llamar como antes: suena su teléfono de Anura. ` +
-                      "Deja en Anura como principal la terminal que va a contestar.",
+                    pool
+                      ? `¿Quitar la clave de la línea ${ext.extension}? Sin clave, nadie llama con esa línea hasta que se guarde otra.`
+                      : `¿Quitar la clave del teléfono de Kapta del anexo ${ext.extension}? Ese anexo vuelve a llamar como antes: suena su teléfono de Anura. ` +
+                          "Deja en Anura como principal la terminal que va a contestar.",
                   )
                 ) {
                   mutate(() => removeAnuraSipCredentials(storeId, ext.id));
