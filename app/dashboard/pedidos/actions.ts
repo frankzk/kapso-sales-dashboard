@@ -426,7 +426,15 @@ async function chatbyLocationHoldFor(
   const message =
     conversation.status === "ok" && check.message_id ? conversation.messages.find((m) => m.id === check.message_id) : undefined;
   const ask = chatbyAskKindFor({ reason, messageText: message?.text ?? null, orderAddress: row.address ?? null });
-  return chatbyLocationHoldFrom({ reason, ask, check, master: row, now: new Date() });
+  return chatbyLocationHoldFrom({
+    reason,
+    ask,
+    check,
+    master: row,
+    now: new Date(),
+    // La ventana de 24 h de la clienta alarga la de 72 h del pedido (owner, 08-11-2026).
+    messages: conversation.status === "ok" ? conversation.messages : undefined,
+  });
 }
 
 /**

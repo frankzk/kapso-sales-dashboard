@@ -313,7 +313,9 @@ describe("el servidor y la ficha", () => {
     expect(server).toContain(".filter((r) => chatbyHeldWatchDue(r, now, settings))");
     // El mismo tope de la pasada de la ubicación (watchLimit), sin otra pasada.
     expect(server.match(/\.limit\(limit\)/g)?.length).toBe(3);
-    expect(server).toContain('if (!open || (r.kind !== "confirmado" && !inWindow))');
+    // Pasadas las 72 h, solo si la clienta escribió hace menos de 24 h (owner, 08-11-2026; 0318).
+    expect(server).toContain('const pastOrderWindow = r.kind !== "confirmado" && !inWindow;');
+    expect(server).toContain("if (pastOrderWindow && !chatbyHeldInWindow(");
   });
 
   it("sin mensaje nuevo de la clienta no evalúa; con su ubicación, la guía va con ESA ubicación", () => {

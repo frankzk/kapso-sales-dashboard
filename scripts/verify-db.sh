@@ -348,4 +348,7 @@ echo "  ✅ nace en la versión 1 y cada cambio suma uno (aunque se mande otra);
 echo "▶ Confirmación por Chatby: ubicación aproximada (0316): posición que nace apagada, punto solo con «calle», el edificio intacto y RLS"
 $PSQL -f "$ROOT/scripts/sql/chatby_approx_location_smoke.sql"
 echo "  ✅ apagado / simulación / activo y nada más; una fila de la 0301 sigue igual; «calle» con sus dos coordenadas y un rechazo sin punto; ok/latitude/longitude no cambian; la org lee la posición, nadie la cambia ni lee la caché de Google desde el navegador"
+echo "▶ Confirmación por Chatby: pedir sola la dirección o la ubicación (0318): posición que nace apagada, sus tres valores y RLS"
+$PSQL -f "$ROOT/scripts/sql/chatby_auto_ask_smoke.sql"
+echo "  ✅ apagado / simulación / activo y nada más, nunca nulo; la ubicación aproximada (0316) no cambia; la org lee la posición y nadie la cambia desde el navegador"
 echo "✅ DB verification passed."

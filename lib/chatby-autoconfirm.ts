@@ -67,6 +67,8 @@ export interface ChatbyAutoSettings {
   geocode_enabled: boolean;
   /** «Aceptar ubicación aproximada en la calle correcta» (0316): Apagado / Simulación / Activo. */
   approx_mode: ApproxMode;
+  /** «Pedir sola la dirección o la ubicación» (0318, lib/chatby-auto-ask.ts): Apagado / Simulación / Activo. */
+  ask_mode: ApproxMode;
 }
 
 export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = {
@@ -78,6 +80,7 @@ export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = 
   recheck_minutes: 30,
   geocode_enabled: true,
   approx_mode: "apagado",
+  ask_mode: "apagado",
 };
 
 function intIn(value: unknown, min: number, max: number, fallback: number): number {
@@ -106,6 +109,8 @@ export function chatbyAutoSettingsFrom(row: Record<string, unknown>): ChatbyAuto
     geocode_enabled: row.geocode_enabled === true,
     // Sin la columna (antes de la 0316) o con un valor raro: Apagado.
     approx_mode: approxModeFrom(row.approx_mode),
+    // Sin la columna (antes de la 0318) o con un valor raro: Apagado.
+    ask_mode: approxModeFrom(row.ask_mode),
   };
 }
 
@@ -736,12 +741,23 @@ function limaStamp(iso: string | null): string {
  * La nota del intento: qué dijo, sin copiar la dirección ni el nombre. Lo
  * demás está en Chatby, a un clic desde la ficha.
  */
-export function chatbyConfirmationNote(input: { orderName: string; at: string | null; amountCents: number; location?: boolean }): string {
+export function chatbyConfirmationNote(input: {
+  orderName: string;
+  at: string | null;
+  amountCents: number;
+  location?: boolean;
+  /** (0318) La clienta completó la dirección cuando Kapta se la pidió. */
+  addressCorrected?: boolean;
+}): string {
   // (owner, 08-11-2026) La dirección escrita estaba incompleta y la clienta
   // mandó después su ubicación de WhatsApp: la guía va con esa ubicación.
-  const where = input.location
-    ? "la dirección del pedido y su ubicación de WhatsApp (la dirección escrita estaba incompleta)"
-    : "la dirección del pedido";
+  const where = input.addressCorrected
+    ? input.location
+      ? "la dirección que completó por Chatby y su ubicación de WhatsApp"
+      : "la dirección que completó por Chatby"
+    : input.location
+      ? "la dirección del pedido y su ubicación de WhatsApp (la dirección escrita estaba incompleta)"
+      : "la dirección del pedido";
   return (
     `Confirmó por Chatby: mensaje de la clienta${limaStamp(input.at)} con el pedido ${input.orderName}, ` +
     `${soles(input.amountCents)} contra entrega y ${where}.`
