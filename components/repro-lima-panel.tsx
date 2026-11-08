@@ -3,7 +3,7 @@
 // «Repro Lima» · la pestaña de la ficha del pedido (fase 1, entrega 1a; MOM
 // §9.5, §11.4-§11.7). Hasta el 07-11-2026 era una hoja lateral aparte que se
 // abría encima de la ficha; ahora es la pestaña «Repro Lima» de la ficha
-// (components/order-drawer.tsx), después de «Chatby», y solo existe mientras el
+// (components/order-drawer.tsx), la última (después de «Chatby» y «Kapso»), y solo existe mientras el
 // pedido está en Repro Lima.
 //
 // Quien llama abre la pestaña y el caso queda suyo diez minutos (candado de
