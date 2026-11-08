@@ -23,6 +23,7 @@ import {
   type MasterMomCounts,
   type MasterView,
 } from "@/lib/orders-master-access";
+import { getDistrictReview } from "@/lib/district-mismatch-access";
 import { hasActiveFilters, masterSearchTerm } from "@/lib/order-master-filters";
 import { parseMasterQuery } from "@/lib/master-query";
 import { withPendingVouchers } from "@/lib/pending-voucher";
@@ -129,7 +130,7 @@ async function PedidosContent({
   // El ciclo de recontacto se muestra junto a los chips de «Fecha pactada», y el
   // filtro de Gestión solo se ofrece en esta vista.
   const showConfirmation = !searching && view === "por_confirmar";
-  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, productOptions, pendingVouchers, paidUnnotified, scheduledNoLocation] = await Promise.all([
+  const [momCounts, pageData, facets, agency, confirmationCounts, cycleDays, productOptions, pendingVouchers, paidUnnotified, districtReview, scheduledNoLocation] = await Promise.all([
     // Con filtros, las pestañas cuentan lo mismo que la lista (MOM §6).
     searching
       ? Promise.resolve(EMPTY_MOM_COUNTS)
@@ -151,6 +152,10 @@ async function PedidosContent({
     productOptionsPromise,
     pendingPromise,
     paidUnnotifiedPromise,
+    // «Distrito por revisar» (MOM §19.0.3): dos lecturas por carga, a la par
+    // (los pedidos abiertos de provincia y `peru_districts` de sus provincias,
+    // en una consulta). Con búsqueda la píldora no se ve: no se paga.
+    searching ? Promise.resolve(null) : getDistrictReview(storeIds),
     scheduledNoLocationPromise,
   ]);
   // «Lista de pago adelantado» (MOM §41): UNA lectura para los celulares de la
@@ -211,6 +216,8 @@ async function PedidosContent({
       paidUnnotifiedCount={paidUnnotified ? paidUnnotified.size : null}
       // «Programado sin ubicación»: null si no se pudo leer.
       scheduledNoLocationCount={scheduledNoLocation ? scheduledNoLocation.size : null}
+      // «Distrito por revisar»: null si no se pudo leer (la píldora no se pinta).
+      districtReview={districtReview}
       total={pageData.total}
       page={pageData.page}
       pageSize={pageData.pageSize || MASTER_PAGE_SIZE}
@@ -235,6 +242,8 @@ async function PedidosContent({
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
       canCreateShalomGuide={perms.can("shalom.create_guide")}
+      // La pestaña «Repro Lima» de la ficha (MOM §9.5): quien llama a los clientes de Lima.
+      canAttendReproLima={perms.can("repro_lima.manage")}
       canDispatch={perms.can("dispatch.manage") || perms.can("dispatch.pickup")}
       canWarehouse={perms.can("warehouse.prepare")}
       closurePermissions={{

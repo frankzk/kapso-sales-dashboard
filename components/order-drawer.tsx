@@ -20,7 +20,7 @@
 // mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
 // parpadear a vacío.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { phoneSaleCustomer, type PhoneSaleCustomer } from "@/lib/master-phone-sale";
@@ -62,6 +62,19 @@ import {
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { OrderChatbyPanel } from "@/components/order-chatby-panel";
+import { ReproLimaPanel, type ReproNotice, type ReproSaved } from "@/components/repro-lima-panel";
+import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
+import type { ReproRow } from "@/lib/repro-lima-access";
+import { isReproLimaCandidate, reproAttendMode } from "@/lib/repro-lima-pending";
+import {
+  clearReproLimaHandoff,
+  handOffReproLima,
+  reproLimaHandoff,
+  reproLimaNext,
+  reproLimaQueueVersion,
+  subscribeReproLimaQueue,
+} from "@/lib/repro-lima-queue";
+import { orderDrawerHref } from "@/lib/order-drawer-href";
 import { AliclikDuplicatePanel } from "@/components/aliclik-duplicate-panel";
 import { CopyButton, copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { GuideNumber } from "@/components/guide-number";
@@ -198,8 +211,9 @@ import {
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
-import { offersShalomDestination, orderPaymentPanelPresentation } from "@/lib/order-payment-panel";
-import { PAYMENT_GATEWAY_LABEL } from "@/lib/payment-gateway";
+import { orderPaymentPanelFor } from "@/lib/order-payment-panel";
+import { swaypDesdeConfirmacionOffer } from "@/lib/swayp-desde-confirmacion-offer";
+import { EnviarPorSwaypDesdeConfirmacion } from "@/components/swayp-desde-confirmacion-offer";
 import {
   CONFIRMATION_CHANNELS,
   CONFIRMATION_MAX_DAYS,
@@ -257,7 +271,7 @@ import {
 } from "@/lib/order-admin-url";
 import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
 import { timelineOriginLabel } from "@/lib/order-timeline-fact";
-import type { RouteCandidate } from "@/lib/order-route-plan";
+import { aliclikGuideOffered, type RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -330,7 +344,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "historial",
 ];
 
-export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby";
+export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby" | "reprolima";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -711,6 +725,7 @@ export function OrderDrawer({
   initialWorkspace,
   masterHref,
   onNewOrderForCustomer,
+  canAttendReproLima = false,
 }: {
   orderId: string;
   canEdit: boolean;
@@ -756,12 +771,22 @@ export function OrderDrawer({
    */
   masterHref?: string | null;
   onNewOrderForCustomer?: (customer:PhoneSaleCustomer,workspace:DrawerWorkspaceView)=>void;
+  /**
+   * Quien llama a los clientes de Lima (`repro_lima.manage`, MOM §9.5). Solo
+   * con él la ficha pregunta si el pedido está en Repro Lima y enseña la
+   * pestaña «Repro Lima»; el servidor lo vuelve a comprobar en cada acción.
+   */
+  canAttendReproLima?: boolean;
 }) {
   const [detail, setDetail] = useState<OrderMasterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<DrawerWorkspaceView>(initialWorkspace ?? "operar");
   /** Mensajes de la clienta en Chatby (de los últimos 20): la cifra de la pestaña, solo si respondió. */
   const [chatbyCustomerMessages, setChatbyCustomerMessages] = useState<number | null>(null);
+  // Cerrar la ficha (✕, fondo, Escape) pasa antes por la pestaña «Repro Lima»:
+  // con texto sin guardar, avisa en vez de cerrar (§11.5). Se define abajo.
+  const reproExitGuard = useRef<(() => boolean) | null>(null);
+  const requestCloseRef = useRef<() => void>(onClose);
   const scrollRef = useRef<HTMLElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const indexRef = useRef<HTMLDivElement>(null);
@@ -911,7 +936,7 @@ export function OrderDrawer({
   // habías perdido tu sitio en la tabla.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") requestCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     const previous = document.body.style.overflow;
@@ -951,6 +976,135 @@ export function OrderDrawer({
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // -------------------------------------------------------------------------
+  // «Repro Lima» (MOM §9.5): la pestaña de atender, después de «Chatby».
+  //
+  // Sale SOLO si el pedido está en Repro Lima, y eso lo dice la misma lectura
+  // que usaba la hoja del tablero (`loadReproRow`: una fila, o nada si ya no
+  // está). Para no sumar lecturas a cada ficha, se pregunta una vez por
+  // pedido y solo a quien atiende (`canAttendReproLima`) y cuando puede estar:
+  // Lima y por entregar (`isReproLimaCandidate`), o cuando «Atender» pide la
+  // pestaña (`?seccion=reprolima`). Sin sondeos: la pestaña relee lo suyo al
+  // abrirse y al guardar.
+  // -------------------------------------------------------------------------
+  const [reproLookup, setReproLookup] = useState<
+    { orderId: string; status: "loading" } | { orderId: string; status: "ready"; row: ReproRow } | { orderId: string; status: "none"; message: string | null } | null
+  >(null);
+  const reproRequested = initialWorkspace === "reprolima";
+  const reproCandidate =
+    canAttendReproLima &&
+    (reproRequested || Boolean(detail && detail.row.order_id === orderId && isReproLimaCandidate(detail.row)));
+  useEffect(() => {
+    if (!reproCandidate) {
+      setReproLookup(null);
+      return;
+    }
+    let live = true;
+    setReproLookup({ orderId, status: "loading" });
+    loadReproRow(orderId)
+      .then((result) => {
+        if (!live) return;
+        if ("error" in result) setReproLookup({ orderId, status: "none", message: result.error });
+        else if (result.row) setReproLookup({ orderId, status: "ready", row: result.row });
+        else setReproLookup({ orderId, status: "none", message: null });
+      })
+      .catch(() => {
+        if (live) setReproLookup({ orderId, status: "none", message: "No pudimos abrir la gestión del pedido. Vuelve a intentarlo." });
+      });
+    return () => {
+      live = false;
+    };
+  }, [orderId, reproCandidate]);
+  const reproRow = reproLookup?.orderId === orderId && reproLookup.status === "ready" ? reproLookup.row : null;
+  const reproLoading = reproLookup?.orderId === orderId && reproLookup.status === "loading";
+  /** «Atender» pidió la pestaña y el pedido ya no está: se abre Operar con el porqué. */
+  const [reproUnavailable, setReproUnavailable] = useState<string | null>(null);
+  // El panel se monta la primera vez que se abre la pestaña y se queda
+  // montado (oculto) al ir a otra: lo escrito no se pierde, y el candado se
+  // suelta al salir y se vuelve a tomar al volver (`active`).
+  const [reproMountedFor, setReproMountedFor] = useState<string | null>(null);
+  // Cada guardado que no pasa al siguiente estrena el panel (fila y candado
+  // nuevos) en lectura, con el aviso arriba.
+  const [reproSession, setReproSession] = useState<{ orderId: string; key: number; mode: "edit" | "read" | null; notice: ReproNotice | null }>(
+    () => ({ orderId, key: 0, mode: null, notice: reproLimaHandoff(orderId) }),
+  );
+  useEffect(() => {
+    // El aviso del pedido anterior ya está en este montaje: no vuelve a salir.
+    const notice = reproLimaHandoff(orderId);
+    clearReproLimaHandoff(orderId);
+    setReproSession((current) => (current.orderId === orderId ? current : { orderId, key: 0, mode: null, notice }));
+    setReproUnavailable(null);
+  }, [orderId]);
+  // Abrir la pestaña monta el panel; si el pedido no está (o ya no) en Repro
+  // Lima, la ficha vuelve a Operar.
+  const reproSettledOut = !reproCandidate || (reproLookup?.orderId === orderId && reproLookup.status === "none");
+  useEffect(() => {
+    if (workspace !== "reprolima") return;
+    if (reproRow) {
+      setReproMountedFor(orderId);
+      return;
+    }
+    if (!reproSettledOut) return;
+    setWorkspace("operar");
+    if (reproRequested && canAttendReproLima) {
+      setReproUnavailable(
+        (reproLookup?.status === "none" ? reproLookup.message : null) ??
+          "Este pedido ya no está pendiente de entrega en Lima: no tiene la pestaña «Repro Lima». Actualiza la lista.",
+      );
+    }
+  }, [workspace, reproRow, reproSettledOut, orderId, reproRequested, canAttendReproLima, reproLookup]);
+
+  /** Cerrar la ficha: antes, la pestaña «Repro Lima» puede pedir quedarse (texto sin guardar). */
+  function requestClose() {
+    if (reproExitGuard.current?.()) {
+      setWorkspace("reprolima");
+      return;
+    }
+    onClose();
+  }
+  useEffect(() => {
+    requestCloseRef.current = requestClose;
+  });
+  const reproQueueVersion = useSyncExternalStore(subscribeReproLimaQueue, reproLimaQueueVersion, () => 0);
+  const reproHasNext = useMemo(
+    () => Boolean(reproRow && reproLimaNext(orderId)),
+    // `reproQueueVersion` cambia cuando el tablero publica su lista.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [orderId, reproRow, reproQueueVersion],
+  );
+
+  function onReproSaved(saved: ReproSaved, advance: boolean) {
+    void reload();
+    onSaved();
+    const text = saved.error ?? saved.notice ?? "Guardado.";
+    // Lo que pide algo (un error, como «no se pudo programar», o crear la
+    // salida en la Mesa de ruta) no pasa al siguiente: el aviso queda arriba de
+    // esta pestaña. Lo demás («Avisa a Almacén…») pasa al siguiente de la lista
+    // del tablero, en la misma pestaña, y va arriba de la suya.
+    const next = advance && !saved.error && !saved.mesa ? reproLimaNext(saved.orderId) : null;
+    if (next && next !== orderId) {
+      handOffReproLima(next, { orderName: saved.orderName, text });
+      window.history.pushState(
+        null,
+        "",
+        orderDrawerHref(next, "reprolima", { pathname: window.location.pathname, search: window.location.search }),
+      );
+      return;
+    }
+    setReproSession((current) => ({
+      orderId,
+      key: current.key + 1,
+      mode: "read",
+      notice: {
+        orderName: saved.orderName,
+        text,
+        tone: saved.error ? "crit" : "ok",
+        extra: saved.error ? saved.notice : null,
+        mesa: saved.mesa,
+      },
+    }));
+  }
 
   // «Llamar con Anura» (fase 1): si sale el botón y las llamadas del pedido
   // con su grabación. Se pide después de la ficha, no antes.
@@ -1066,10 +1220,11 @@ export function OrderDrawer({
   // Y no a un pedido acompañante (MOM §32): ya viaja en la guía de otro, y una
   // propia sería un segundo paquete para la misma clienta.
   const aliclikOffered = Boolean(
-    !detail?.companion.travelsIn &&
-      detail?.routePlan.candidates.some(
-        (candidate) => candidate.action === "aliclik" && candidate.availability !== "blocked",
-      ),
+    detail &&
+      aliclikGuideOffered({
+        travelsInCompanion: Boolean(detail.companion.travelsIn),
+        candidates: detail.routePlan.candidates,
+      }),
   );
 
   // La ficha del §8 se carga aparte del detalle —recorre el historial del
@@ -1115,49 +1270,18 @@ export function OrderDrawer({
       alive = false;
     };
   }, [orderId, detail]);
-  const paymentPanel = detail
-    ? orderPaymentPanelPresentation({
-        operation: detail.routePlan.operation,
-        currentCourier: detail.row.current_courier,
-        shippingMode: detail.row.shipping_mode,
-        macroSubstage: detail.row.macro_substage,
-        macroReasons: detail.row.macro_reasons,
-        riskRequirement: brief?.risk.requirement === "pago_completo" ? "pago_completo"
-          : brief?.duplicateHold?.conflicts.length && brief.duplicateHold.resolution?.decision !== "exception"
-            ? "exigir_adelanto" : brief?.risk.requirement ?? null,
-        paymentState: detail.row.payment_state,
-        paymentFacts: {
-          financialStatus: detail.row.financial_status,
-          totalRefunded: detail.row.total_refunded,
-          paymentGateway: detail.row.payment_gateway,
-        },
-        hasAgencyCandidate:
-          canCreateShalomGuide &&
-          detail.routePlan.candidates.some(
-            (candidate) => candidate.key === "shalom" || candidate.key === "olva",
-          ),
-      })
+  // La tarjeta de Cobro: si se dibuja y en qué modo, la nota de la pasarela y
+  // «DNI y agencia Shalom» en un pedido pagado por web. Se decide en
+  // `orderPaymentPanelFor`, la misma que lee el paso de después de «Generar
+  // pedido» en Leads (MOM §25.2): las dos pantallas lo ofrecen en los mismos
+  // pedidos.
+  const paymentSetup = detail
+    ? orderPaymentPanelFor({ row: detail.row, routePlan: detail.routePlan, brief, canCreateShalomGuide })
     : null;
-  // Shopify dice «pagado» pero no lo cobró el checkout: se explica por qué el
-  // panel sigue pidiendo la constancia (lib/payment-gateway.ts).
-  const gatewayNote =
-    detail &&
-    (detail.row.financial_status ?? "").toLowerCase() === "paid" &&
-    (detail.row.payment_gateway === "manual" || detail.row.payment_gateway === "cod")
-      ? `${PAYMENT_GATEWAY_LABEL[detail.row.payment_gateway]}: no lo cobró el checkout. Para darlo por pagado, sube la constancia.`
-      : null;
+  const paymentPanel = paymentSetup?.presentation ?? null;
+  const gatewayNote = paymentSetup?.gatewayNote ?? null;
   const showPaymentPanel = paymentPanel?.show ?? false;
-  // «DNI y agencia Shalom» en un pedido pagado por web (MOM §Pagos, #KP200104):
-  // se ofrece donde Shalom puede ser el destino, lo pueda crear o no este rol.
-  const shalomDestination = Boolean(
-    detail &&
-      offersShalomDestination({
-        operation: detail.routePlan.operation,
-        currentCourier: detail.row.current_courier,
-        shippingMode: detail.row.shipping_mode,
-        shalomCandidate: detail.routePlan.candidates.some((candidate) => candidate.key === "shalom"),
-      }),
-  );
+  const shalomDestination = paymentSetup?.shalomDestination ?? false;
   // La salida GF activa (o la última) para la tarjeta de acción.
   const gfActive = detail?.gfDeliveries.length ? detail.gfDeliveries[detail.gfDeliveries.length - 1]! : null;
   // La salida que su courier no entregó y con qué sale ahora la caja (§28).
@@ -1252,6 +1376,9 @@ export function OrderDrawer({
         ? `${chatbyCustomerMessages === 1 ? "1 mensaje" : `${chatbyCustomerMessages} mensajes`} de la clienta en los últimos 20`
         : undefined,
     },
+    // Solo mientras el pedido está en Repro Lima (MOM §9.5); mientras se
+    // comprueba, solo si «Atender» la pidió.
+    ...(reproRow || (reproLoading && workspace === "reprolima") ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -1302,7 +1429,7 @@ export function OrderDrawer({
       : null;
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end bg-ink-900/20" onClick={onClose}>
+    <div className="fixed inset-0 z-30 flex justify-end bg-ink-900/20" onClick={requestClose}>
       <aside
         ref={scrollRef}
         tabIndex={-1}
@@ -1428,15 +1555,20 @@ export function OrderDrawer({
                   {/* «Llamar con Anura»: con el teléfono dentro de Kapta si el
                       anexo tiene clave guardada (fase 2, solo salidas); si no,
                       suena el teléfono de Anura de la asesora (fase 1). Solo
-                      con el token, un anexo activo de quien mira y un celular
-                      peruano. */}
+                      con el token, un anexo activo de quien mira (o «Puede
+                      llamar con Anura» y una línea compartida lista) y un
+                      celular peruano. El teléfono de Kapta vive en el panel
+                      (AnuraPhoneProvider): cerrar esta ficha no corta. */}
                   {anura.panel?.enabled && canEdit && (
                     <AnuraCallButton
                       key={orderId}
                       orderId={orderId}
+                      orderName={detail.row.order_name}
+                      storeName={storeName(detail.row.store_id)}
                       extension={anura.panel.extension}
                       resume={anura.panel.activeCall}
                       kaptaPhone={anura.panel.kaptaPhone}
+                      pool={anura.panel.pool}
                       onEnded={() => {
                         void reload();
                         void anura.reload();
@@ -1460,7 +1592,7 @@ export function OrderDrawer({
               )}
               <button
                 type="button"
-                onClick={onClose}
+                onClick={requestClose}
                 aria-label="Cerrar"
                 className="-mr-1.5 grid size-8 shrink-0 place-items-center rounded-md text-ink-500 transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:size-11"
               >
@@ -1472,8 +1604,16 @@ export function OrderDrawer({
           {/* Los avisos van DENTRO de la cabecera fija: un error que se pierde
               al scrollear es un error que nadie lee, y estas acciones mueven
               dinero y estados. Se quitan con su «x». */}
-          {(error || notice) && detail && (
+          {(error || notice || reproUnavailable) && detail && (
             <div className="space-y-2 px-4 pt-3 sm:px-6">
+              {reproUnavailable && (
+                <Banner tone="warn" role="alert" className="items-start">
+                  <div className="flex items-start justify-between gap-3">
+                    <p>{reproUnavailable}</p>
+                    <DismissButton label="Quitar el aviso" onClick={() => setReproUnavailable(null)} />
+                  </div>
+                </Banner>
+              )}
               {error && (
                 <Banner tone="crit" role="alert" className="items-start">
                   <div className="flex items-start justify-between gap-3">
@@ -1729,10 +1869,7 @@ export function OrderDrawer({
                   {/* MOM §11.11: provincia COD que Swayp puede llevar hoy sale sin
                       confirmar; si Swayp no entrega, vuelve aquí. No se ofrece en
                       «Swayp no entregó»: ese pedido se llama para salir por otra vía. */}
-                  {detail.row.macro_stage === "por_confirmar" &&
-                    detail.row.macro_substage !== "swayp_no_entrego" &&
-                    detail.row.coverage === "provincia_cod" &&
-                    detail.row.swayp_availability === "ok" && (
+                  {swaypDesdeConfirmacionOffer(detail.row).offered && (
                       <EnviarPorSwaypDesdeConfirmacion
                         pending={pending}
                         onOpen={() => {
@@ -2485,6 +2622,42 @@ export function OrderDrawer({
                 onCustomerMessages={setChatbyCustomerMessages}
               />
             </div>
+            {/* «Repro Lima» (MOM §9.5): montada desde que se abre; oculta, suelta el caso. */}
+            {reproRow && reproMountedFor === orderId && reproSession.orderId === orderId && (
+              <div
+                id="pedido-panel-reprolima"
+                role="tabpanel"
+                aria-labelledby="pedido-tab-reprolima"
+                hidden={workspace !== "reprolima"}
+                className="flex flex-col gap-4 sm:gap-6"
+              >
+                <section aria-label="Repro Lima" className={SECTION_CARD}>
+                  <ReproLimaPanel
+                    key={`${orderId}:${reproSession.key}`}
+                    row={reproRow}
+                    initialMode={reproSession.mode ?? reproAttendMode(reproRow)}
+                    active={workspace === "reprolima"}
+                    hasNext={reproHasNext}
+                    onClose={onClose}
+                    onSaved={onReproSaved}
+                    onChanged={() => {
+                      void reload();
+                      onSaved();
+                    }}
+                    onGoToMesa={() => jumpTo("rutas")}
+                    exitGuard={reproExitGuard}
+                    previous={reproSession.notice}
+                  />
+                </section>
+              </div>
+            )}
+            {workspace === "reprolima" && !reproRow && reproLoading && (
+              <div id="pedido-panel-reprolima" role="tabpanel" aria-labelledby="pedido-tab-reprolima" aria-busy="true" className={cn("space-y-3", SECTION_CARD)}>
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-28 w-full" />
+              </div>
+            )}
           </div>
         )}
       </aside>
@@ -4015,28 +4188,6 @@ export function OrderActions({
  * a mano en Reproprovincia; por eso pide motivo y no se esconde detrás de un
  * icono. Las otras salidas —Swayp, reprogramar Aliclik— viven en Rutas.
  */
-/**
- * «Enviar por Swayp» desde Por confirmar (MOM §11.11). Sale SIN confirmar, por
- * decisión del owner: lo dice el panel, para que nadie lo lea como una
- * confirmación. Si Swayp no entrega, el pedido vuelve a «Por confirmar · Swayp
- * no entregó».
- */
-function EnviarPorSwaypDesdeConfirmacion({ pending, onOpen }: { pending: boolean; onOpen: () => void }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-ok-wash p-4">
-      <div className="min-w-0">
-        <p className="text-sm font-semibold text-ok-fg">Swayp lo puede llevar hoy</p>
-        <p className="mt-0.5 text-[13px] leading-5 text-ink-700">
-          Sale sin confirmar. Si Swayp no lo entrega, el pedido vuelve a Por confirmar para llamarlo otra vez.
-        </p>
-      </div>
-      <OpsButton size="sm" disabled={pending} onClick={onOpen} className="pointer-coarse:h-11">
-        Enviar por Swayp
-      </OpsButton>
-    </div>
-  );
-}
-
 function DescartarRecuperacion({
   pending,
   onDiscard,

@@ -19,6 +19,11 @@ import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select
 import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 import { orderPlatformName } from "@/lib/order-admin-url";
 import { swaypLotNotice, swaypSuggestedDispatchDay, type SwaypLotNotice } from "@/lib/warehouse-swayp";
+import {
+  DISTRICT_MISMATCH_BLOCK_REASON,
+  DistrictMismatchWarning,
+  useDistrictMismatchCheck,
+} from "@/components/district-mismatch-warning";
 
 /** El despacho más pronto es mañana (Lima): el Excel del día ya suele estar
  *  enviado, así que una guía de hoy nunca llegaría a Fenix. */
@@ -200,6 +205,11 @@ export function DirectFenixGuideModal({
     });
   }
 
+  // «Distrito por revisar» (MOM §19.0.3): el distrito es la capital y la
+  // dirección nombra otro de la provincia. Avisa antes de crear; corregir
+  // vuelve a cargar el pedido para que el destino de arriba diga el nuevo.
+  const districtCheck = useDistrictMismatchCheck(preview?.orderId ?? null);
+
   function create() {
     if (!preview) return;
     start(async () => {
@@ -258,6 +268,7 @@ export function DirectFenixGuideModal({
   const canCreate =
     !numeroNoEsDeSwayp &&
     !!preview &&
+    !districtCheck.blocking &&
     !blockedByGuide &&
     !faltaMotivo &&
     !blockedByOrder &&
@@ -493,6 +504,12 @@ export function DirectFenixGuideModal({
                 </dd>
               </div>
             </dl>
+            {/* Lo que va a leer Swayp como distrito, antes que nada más. */}
+            <DistrictMismatchWarning
+              orderId={preview.orderId}
+              check={districtCheck}
+              onCorrected={() => loadPreview({ orderId: preview.orderId })}
+            />
             {preview.schedule && (
               <p className="text-[13px] leading-5 text-ink-600">
                 <span className="font-semibold text-ink-900">Horario Swayp: {preview.schedule.hours}</span>
@@ -718,6 +735,9 @@ export function DirectFenixGuideModal({
               <Banner tone="crit" role="alert">
                 {msg}
               </Banner>
+            )}
+            {districtCheck.blocking && (
+              <p className="text-right text-[13px] font-medium leading-5 text-warn-fg">{DISTRICT_MISMATCH_BLOCK_REASON}</p>
             )}
             <div className="flex justify-end gap-2">
               <OpsButton onClick={onClose} className="pointer-coarse:h-11">

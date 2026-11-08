@@ -13,6 +13,7 @@ import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
 import {
   getCustomerCarts,
   getCustomerHistory,
+  getCustomerKnownAddresses,
   getLeadQueueSnapshot,
   type LeadCounts,
   getLeadWithCalls,
@@ -46,7 +47,9 @@ import { limaTodayKey, normalizeDistrict } from "@/lib/shipments";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { firstProductWithImage, type CatalogImage } from "@/lib/cart-image-test";
 import { productPhotosThatLoad } from "@/lib/product-photos";
-import { OFFER_TTL_MS, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
+import { OFFER_TTL_MS, leadsNeedingOffer, planYapeOffers, type RoutingLead } from "@/lib/yape-routing";
+import { SCOPE_CONCURRENCY, createBlockedLeadChecker, mapBounded } from "@/lib/lead-routing-batch";
+import { claimYapeReconcileTick } from "@/lib/yape-reconcile-tick";
 import { onlineVendedorasForStore } from "@/lib/presence";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadCallRow, LeadRow } from "@/lib/types";
@@ -454,7 +457,7 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
   } | null;
   if (!lead) return { error: "No encontrado." };
 
-  const [customerHistory, carts] = await Promise.all([
+  const [customerHistory, carts, knownAddresses] = await Promise.all([
     timing.time("db.history", () => getCustomerHistory(
       ctx.storeId,
       lead.phone,
@@ -465,8 +468,14 @@ async function loadLeadCustomerHistoryTimed(leadId: string, timing: LeadReadTimi
     // Sus carritos anteriores (MOM §11, 25-10-2026): un aviso, no un dato del
     // lead. Si falla, la ficha sale sin el bloque.
     timing.time("db.carts", () => getCustomerCarts(ctx.storeId, lead.phone, lead.draft_order_gid)).catch(() => null),
+    // Datos de entrega conocidos (MOM §37.9, 07-11-2026): a dónde ya se le
+    // mandó. Si falla, la ficha sale sin la tarjeta.
+    timing.time("db.addresses", () => getCustomerKnownAddresses(ctx.storeId, lead.phone, lead.order_id)).catch(() => null),
   ]);
-  if (customerHistory) customerHistory.carts = carts;
+  if (customerHistory) {
+    customerHistory.carts = carts;
+    customerHistory.knownAddresses = knownAddresses;
+  }
   if (customerHistory && lead.phone && creds?.shopify_token) {
     try {
       const shopOrders = await timing.time("shopify.history", () => getCustomerRecentOrders(
@@ -605,6 +614,9 @@ type AuthorizedLeadContext = {
   phone: string | null;
   kapsoConversationId: string | null;
   waPhoneNumberId: string | null;
+  /** Lead routing (blocks) is on for this caller in the lead's store: the same
+   *  single-lead scope read that authorized the lead, reused by claimLead. */
+  routingEnabled: boolean;
 };
 
 /** Authorize: the caller must be able to SEE the lead under RLS. Returns the
@@ -624,13 +636,15 @@ async function authorizeLead(leadId: string): Promise<AuthorizedLeadContext | nu
     .eq("id", leadId)
     .maybeSingle();
   if (!data) return null;
-  if (!(await getLeadRoutingScope([data.store_id as string], leadId)).allowed) return null;
+  const routing = await getLeadRoutingScope([data.store_id as string], leadId);
+  if (!routing.allowed) return null;
   return {
     userId,
     storeId: data.store_id as string,
     phone: (data.phone as string | null) ?? null,
     kapsoConversationId: (data.kapso_conversation_id as string | null) ?? null,
     waPhoneNumberId: (data.wa_phone_number_id as string | null) ?? null,
+    routingEnabled: routing.enabled,
   };
 }
 
@@ -682,8 +696,10 @@ export async function claimLead(leadId: string): Promise<LeadActionState> {
   // claimLead, so it must never depend on the Yape-routing columns (a lead that
   // gets claimed leaves the rotation anyway — listYapeAlerts/reconcile exclude
   // claimed leads). This keeps the drawer working even if migration 0020 lags.
-  const routing = await getLeadRoutingScope([ctx.storeId], leadId);
-  const { data, error } = routing.enabled
+  // `authorizeLead` already read this lead's scope (same actor, store and lead):
+  // React `cache()` does not dedupe inside a Server Action, so reading it again
+  // here cost a second `lead_routing_scope` per claim (0312).
+  const { data, error } = ctx.routingEnabled
     ? await admin.rpc("claim_routed_lead", { p_actor: ctx.userId, p_lead: leadId }).maybeSingle()
     : await admin
     .from("leads")
@@ -795,16 +811,36 @@ async function reconcileYapeOffers(admin: SupabaseClient, storeId: string, nowMs
     passed: Array.isArray(r.yape_passed) ? (r.yape_passed as string[]) : [],
   }));
   const advisors = await onlineVendedorasForStore(admin, storeId, nowMs);
-  const scopes = new Map(await Promise.all(advisors.map(async a => [a.id, await readRoutingForActor(a.id, [storeId])] as const)));
+  // Work blocks are read lazily and only for the leads that need them (0312):
+  // reading every online advisor's whole queue on every poll of every tab was
+  // the N+1 that saturated the database on 06-11-2026. Same answers: a single
+  // lead is blocked exactly when the whole queue blocks it.
+  const blockedFor = createBlockedLeadChecker(readRoutingForActor, [storeId]);
+  const onlineIds = new Set(advisors.map((a) => a.id));
+  const offeredBy = new Map<string, string[]>();
+  for (const l of leads) {
+    if (l.offeredTo && onlineIds.has(l.offeredTo)) offeredBy.set(l.offeredTo, [...(offeredBy.get(l.offeredTo) ?? []), l.id]);
+  }
+  const offeredBlocked = new Map(
+    await mapBounded([...offeredBy], SCOPE_CONCURRENCY, async ([advisorId, ids]) => [advisorId, await blockedFor(advisorId, ids)] as const),
+  );
   // Never offer a payment lead to somebody whose blocks exclude it. Expire an
   // old offer after a settings change so the eligible team need not wait 90 s.
   for (const l of leads) {
-    if (l.offeredTo && scopes.get(l.offeredTo)?.blockedIds.includes(l.id)) {
+    if (l.offeredTo && offeredBlocked.get(l.offeredTo)?.has(l.id)) {
       await admin.from("leads").update({ yape_offered_at: null }).eq("id", l.id).eq("yape_offered_to", l.offeredTo);
       l.offeredTo = null; l.offeredAtMs = null;
     }
   }
-  const plans = planYapeOffers(leads, advisors, nowMs, (leadId, advisorId) => !scopes.get(advisorId)?.blockedIds.includes(leadId));
+  // Most polls every Yape is claimed or holds a fresh offer: nothing to plan,
+  // so no candidate's blocks are read at all.
+  const needing = leadsNeedingOffer(leads, nowMs);
+  if (!needing.length || !advisors.length) return;
+  const needingIds = needing.map((l) => l.id);
+  const candidateBlocked = new Map(
+    await mapBounded(advisors, SCOPE_CONCURRENCY, async (a) => [a.id, await blockedFor(a.id, needingIds)] as const),
+  );
+  const plans = planYapeOffers(leads, advisors, nowMs, (leadId, advisorId) => !candidateBlocked.get(advisorId)?.has(leadId));
   if (!plans.length) return;
   const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
   const nowIso = new Date(nowMs).toISOString();
@@ -835,7 +871,9 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
   await admin.from("user_presence").upsert({ user_id: user.id, last_seen_at: new Date(nowMs).toISOString() });
   const { data: storeRows } = await sb.from("stores").select("id");
   const storeIds = ((storeRows as { id: string }[] | null) ?? []).map((s) => s.id);
-  for (const sid of storeIds) await reconcileYapeOffers(admin, sid, nowMs);
+  // One tab per store per YAPE_RECONCILE_MIN_MS advances the rotation; the
+  // others only read what it offered (0312). Falls back to always reconciling.
+  for (const sid of storeIds) if (await claimYapeReconcileTick(admin, sid)) await reconcileYapeOffers(admin, sid, nowMs);
   const offerCutoff = new Date(nowMs - OFFER_TTL_MS).toISOString();
   const claimCutoff = new Date(nowMs - CLAIM_TTL_MINUTES * 60_000).toISOString();
   const { data, error } = await admin
@@ -850,7 +888,14 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
     .order("yape_offered_at", { ascending: true })
     .limit(20);
   if (error || !data) return [];
-  const visible = filterRoutedLeads(data as Array<Record<string, unknown> & { id: string }>, await getLeadRoutingScope(storeIds));
+  // Almost always empty: nothing to filter, so no `lead_routing_scope` (0312).
+  if (!data.length) return [];
+  const rows = data as Array<Record<string, unknown> & { id: string }>;
+  // Only the offered rows (usually one) are checked, one by one, instead of the
+  // advisor's whole queue on every 15 s poll. Same rows survive as filtering
+  // by the whole-queue `blockedIds`.
+  const blocked = await createBlockedLeadChecker(readRoutingForActor, storeIds)(user.id, rows.map((l) => l.id));
+  const visible = rows.filter((l) => !!l.id && !blocked.has(l.id));
   return visible.map((l) => ({
     id: l.id as string,
     storeId: l.store_id as string,

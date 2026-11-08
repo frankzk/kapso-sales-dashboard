@@ -15,6 +15,10 @@ import { talkTimeWords } from "@/lib/browser-call";
  */
 export const ANURA_START_ERROR_TITLE: Record<AnuraStartErrorCode, string> = {
   ocupada: "Ya tienes una llamada en curso",
+  linea_ocupada: "Ese anexo está en otra llamada",
+  lineas_ocupadas: "Líneas de Anura ocupadas",
+  sin_lineas: "No hay líneas de Anura listas",
+  reserva: "La línea de Anura se liberó",
   base: "No se pudo pedir la llamada",
   sin_token: "Anura no está configurado",
   token: "El token de Anura no es válido",
@@ -104,7 +108,10 @@ export function anuraEndedFollowUp(
  * como código.
  */
 export const ANURA_PANEL_STEPS: readonly { title: string; text: string }[] = [
-  { title: "Configuración → Cuentas:", text: "un anexo de usuario por asesora." },
+  {
+    title: "Configuración → Cuentas:",
+    text: "un anexo de usuario por línea compartida (por ejemplo 201, 202 y 203; el plan permite hasta 10) o, si una persona usa anexo propio, uno para ella.",
+  },
   {
     title: "Integraciones → Click 2 Dial → Generar token:",
     text: "el token va en Vercel como `ANURA_CLICK2DIAL_TOKEN`, nunca en un chat ni en Kapta. Sin él no aparece nada de Anura; Kapta solo dice si está configurado, nunca el valor.",
@@ -137,7 +144,7 @@ export const ANURA_PANEL_STEPS: readonly { title: string; text: string }[] = [
 
 /** Lo que se hace en Kapta después de los pasos del panel de Anura. */
 export const ANURA_AFTER_PANEL_STEPS =
-  "Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la central, el anexo de cada persona con su usuario y contraseña SIP («Probar y guardar») y una «Llamada de prueba».";
+  "Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la central, cada línea compartida (o el anexo propio de cada persona) con su usuario y contraseña SIP («Probar y guardar»), quién «Puede llamar con Anura» y una «Llamada de prueba».";
 
 /** Sondeos seguidos que pueden fallar (red) antes de dejar de mirar una llamada. */
 export const ANURA_MAX_POLL_FAILURES = 6;

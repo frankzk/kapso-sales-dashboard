@@ -84,6 +84,9 @@ import type { ShalomAgency, ShalomDocumentType } from "@/lib/shalom/types";
 
 const VOUCHER_BUCKET = "yape-vouchers";
 
+/** Quién avisa cuando se guarda «DNI y agencia Shalom» (lib/payment-panel-sync.ts). */
+const SHALOM_DRAFT_SOURCE = "shalom-draft";
+
 const STATUS_LABEL: Record<string, string> = {
   pendiente_revision: "Pendiente de revisión",
   validado: "Validado",
@@ -1610,6 +1613,9 @@ function useShalomDestinationDraft(orderId: string, storeId: string) {
       return;
     }
     setShalomSaved({ document, terminalId });
+    // Quien enseña en qué quedó el pedido —la opción «Agencia Shalom + adelanto»
+    // de Leads (MOM §25.2)— se entera de que la agencia ya está guardada.
+    announcePaymentPanelChange(orderId, SHALOM_DRAFT_SOURCE);
   }
 
   function changeDocument(value: string) {

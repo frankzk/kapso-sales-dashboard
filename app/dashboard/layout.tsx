@@ -3,6 +3,7 @@ import { getAccessibleStores, getCurrentUser, getUserRoleSummary } from "@/lib/a
 import { signOut } from "./actions";
 import { DashboardShell } from "@/components/dashboard-shell";
 import { OrderDrawerHost } from "@/components/order-drawer-host";
+import { AnuraPhoneProvider } from "@/components/anura-phone";
 import { canValidatePaymentsAnywhere } from "@/lib/payment-review-access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { createAdminSupabase } from "@/lib/db";
@@ -56,50 +57,59 @@ export default async function DashboardLayout({ children }: { children: React.Re
       ? "Administrador"
       : "Equipo";
 
+  // El teléfono de Kapta de «Llamar con Anura» (MOM §8.7) vive AQUÍ, una vez
+  // por pestaña, y no en la ficha: cerrar la ficha o cambiar de pantalla no
+  // corta la llamada. Lo usan la ficha del pedido (Master y ficha global) y la
+  // «Llamada de prueba» de Ajustes, que están todas bajo este layout.
   return (
-    <DashboardShell
-      isVendedoraOnly={isVendedoraOnly}
-      signOut={signOut}
-      userEmail={user?.email ?? null}
-      roleLabel={roleLabel}
-      yapeAlertsEnabled={roles.includes("vendedora")}
-      canValidatePayments={canValidatePayments}
-      canManageLogistics={canManageLogistics}
-      canReproLima={canReproLima}
-      navAccess={navAccess}
-      badges={olvaPending > 0 ? { "/dashboard/olva": olvaPending } : undefined}
-    >
-      {children}
-      {/* La ficha del pedido para todo el panel (MOM §25): se abre con
-          `?ficha=<pedido>` desde despacho, rutas, courier, pagos o
-          Liquidaciones 2, con los MISMOS permisos que en el Master
-          (app/dashboard/pedidos/page.tsx). En el Master no actúa. */}
-      <OrderDrawerHost
-        stores={stores.map((s) => ({
-          id: s.id,
-          name: s.name,
-          shopify_domain: s.shopify_domain ?? null,
-          woo_site_url: s.woo_site_url ?? null,
-        }))}
-        canEdit={!permissions.readOnly}
-        canOverride={permissions.can("master.override_status")}
-        canSetStatus={permissions.can("master.set_status")}
-        canCancelWoo={permissions.can("orders.cancel_woo")}
-        canEditCustomerName={permissions.can("orders.create")}
-        canCreateGuide={permissions.can("aliclik.create_guide")}
-        canCreateTandersGuide={permissions.can("tanders.create_guide")}
-        canCreateShalomGuide={permissions.can("shalom.create_guide")}
-        closurePermissions={{
-          canReturn: permissions.can("closure.return"),
-          canInventory: permissions.can("closure.inventory"),
-          canFinance: permissions.can("closure.finance"),
-          canFinalize: permissions.can("closure.finalize"),
-          canRefund: permissions.can("closure.refund"),
-          canReopen: permissions.can("master.override_status") && permissions.can("closure.finalize"),
-          canManageCosts: permissions.can("costs.manage"),
-          canManageLogistics: permissions.can("logistics.manage"),
-        }}
-      />
-    </DashboardShell>
+    <AnuraPhoneProvider>
+      <DashboardShell
+        isVendedoraOnly={isVendedoraOnly}
+        signOut={signOut}
+        userEmail={user?.email ?? null}
+        roleLabel={roleLabel}
+        yapeAlertsEnabled={roles.includes("vendedora")}
+        canValidatePayments={canValidatePayments}
+        canManageLogistics={canManageLogistics}
+        canReproLima={canReproLima}
+        navAccess={navAccess}
+        badges={olvaPending > 0 ? { "/dashboard/olva": olvaPending } : undefined}
+      >
+        {children}
+        {/* La ficha del pedido para todo el panel (MOM §25): se abre con
+            `?ficha=<pedido>` desde despacho, rutas, courier, pagos o
+            Liquidaciones 2, con los MISMOS permisos que en el Master
+            (app/dashboard/pedidos/page.tsx). En el Master no actúa. */}
+        <OrderDrawerHost
+          stores={stores.map((s) => ({
+            id: s.id,
+            name: s.name,
+            shopify_domain: s.shopify_domain ?? null,
+            woo_site_url: s.woo_site_url ?? null,
+          }))}
+          canEdit={!permissions.readOnly}
+          canOverride={permissions.can("master.override_status")}
+          canSetStatus={permissions.can("master.set_status")}
+          canCancelWoo={permissions.can("orders.cancel_woo")}
+          canEditCustomerName={permissions.can("orders.create")}
+          canCreateGuide={permissions.can("aliclik.create_guide")}
+          canCreateTandersGuide={permissions.can("tanders.create_guide")}
+          canCreateShalomGuide={permissions.can("shalom.create_guide")}
+          // La pestaña «Repro Lima» de la ficha: quien llama a los clientes de
+          // Lima (MOM §9.5). «Reintentos Aliclik» solo (`repro_lima.retries`) no atiende.
+          canAttendReproLima={permissions.can("repro_lima.manage")}
+          closurePermissions={{
+            canReturn: permissions.can("closure.return"),
+            canInventory: permissions.can("closure.inventory"),
+            canFinance: permissions.can("closure.finance"),
+            canFinalize: permissions.can("closure.finalize"),
+            canRefund: permissions.can("closure.refund"),
+            canReopen: permissions.can("master.override_status") && permissions.can("closure.finalize"),
+            canManageCosts: permissions.can("costs.manage"),
+            canManageLogistics: permissions.can("logistics.manage"),
+          }}
+        />
+      </DashboardShell>
+    </AnuraPhoneProvider>
   );
 }

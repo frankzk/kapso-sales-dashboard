@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveOrderState, type GuideSnapshot, type OrderSnapshot } from "@/lib/order-status";
+import { SWAYP_OFFER_REASON, swaypDesdeConfirmacionOffer } from "@/lib/swayp-desde-confirmacion-offer";
 import {
   MACRO_SUBSTAGES_BY_STAGE,
   MACRO_SUBSTAGE_LABEL,
@@ -268,10 +269,42 @@ describe("el botón", () => {
   });
 
   it("se ofrece solo en Por confirmar, provincia COD, Swayp ok, y no en «Swayp no entregó»", () => {
-    const src = read("components/order-drawer.tsx");
-    expect(src).toContain('detail.row.macro_substage !== "swayp_no_entrego" &&');
-    expect(src).toContain('detail.row.coverage === "provincia_cod" &&');
-    expect(src).toContain('detail.row.swayp_availability === "ok" && (');
+    const ok = {
+      macro_stage: "por_confirmar",
+      macro_substage: "por_contactar",
+      coverage: "provincia_cod",
+      swayp_availability: "ok",
+    } as const;
+    expect(swaypDesdeConfirmacionOffer(ok)).toEqual({ offered: true });
+    expect(swaypDesdeConfirmacionOffer({ ...ok, macro_stage: "preparacion" })).toEqual({
+      offered: false,
+      reason: SWAYP_OFFER_REASON.notPorConfirmar,
+    });
+    expect(swaypDesdeConfirmacionOffer({ ...ok, macro_substage: "swayp_no_entrego" })).toEqual({
+      offered: false,
+      reason: SWAYP_OFFER_REASON.swaypNoEntrego,
+    });
+    expect(swaypDesdeConfirmacionOffer({ ...ok, coverage: "lima" })).toEqual({
+      offered: false,
+      reason: "Solo para provincia COD; este pedido es Lima.",
+    });
+    expect(swaypDesdeConfirmacionOffer({ ...ok, swayp_availability: "sin_stock" })).toEqual({
+      offered: false,
+      reason: "Swayp no lo puede llevar hoy: sin stock swayp.",
+    });
+    expect(swaypDesdeConfirmacionOffer({ ...ok, swayp_availability: "sin_cobertura" })).toEqual({
+      offered: false,
+      reason: "Swayp no lo puede llevar hoy: fuera de cobertura.",
+    });
+    expect(swaypDesdeConfirmacionOffer({ ...ok, swayp_availability: null })).toEqual({
+      offered: false,
+      reason: SWAYP_OFFER_REASON.notEvaluated,
+    });
+    // La ficha y Leads (MOM §25.2) preguntan a la misma función, con la misma pieza.
+    const drawer = read("components/order-drawer.tsx");
+    expect(drawer).toContain("{swaypDesdeConfirmacionOffer(detail.row).offered && (");
+    expect(drawer).toContain('import { EnviarPorSwaypDesdeConfirmacion } from "@/components/swayp-desde-confirmacion-offer";');
+    expect(drawer).not.toContain("function EnviarPorSwaypDesdeConfirmacion(");
   });
 
   it("la versión sube y el MOM lo documenta", () => {

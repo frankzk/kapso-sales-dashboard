@@ -1,5 +1,177 @@
 # Deployment runbook
 
+### 08-11-2026 · Distrito por revisar: aviso antes de la guía y lista en el Master (sin migración, MOM §19.0.3)
+
+Pedido del owner tras #KP202409: llegó del formulario web con distrito
+«Arequipa» y dirección «AV solo 709 campo marte paucarpata»; Kapta le pasó
+«Arequipa» a Swayp, que fue a Arequipa Cercado y anuló la guía. La regla
+(`districtMismatch`, `lib/district-mismatch.ts`): pedido de provincia (cobertura
+que no es Lima ni Agencia), distrito igual a la provincia y una dirección que
+nombra —palabra entera, sin tildes ni mayúsculas— otro distrito de la misma
+provincia y departamento de `peru_districts`, de 5 letras o más. Es un **aviso**:
+no hay estados nuevos.
+
+- **Antes de la guía** (Swayp directa y «Swayp lo puede llevar hoy», reenvío
+  por Swayp en Envíos, panel de Aliclik y salida Olva): aviso ámbar «La
+  dirección dice Paucarpata y el distrito es Arequipa.» con «Corregir a
+  Paucarpata» (uno por sugerencia) y «Crear con Arequipa igual». El botón de
+  crear espera a una de las dos. Corregir es `updateOrderGeo` con solo el
+  distrito (lo demás de la corrección se conserva) y la nota «Distrito
+  corregido: la dirección dice Paucarpata.», y recarga. En Aliclik borra la
+  cotización (hay que recotizar); en el reenvío abre «Modificar destino» con el
+  distrito nuevo, porque la guía nueva sale con el destino de la salida.
+- **En el Master**, píldora «Distrito por revisar» tras «Programado sin
+  ubicación» con los pedidos abiertos que caen en la regla; abre la lista
+  (actual → sugerido, «Corregir», «Corregir seleccionados» para los de una
+  sola sugerencia). Los que ya tienen guía lo dicen: corregir no le cambia la
+  guía al courier.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+Ninguna server action de escritura cambia: se reutilizan `updateOrderGeo` y
+`loadOrderGeo`. Lecturas nuevas, con la sesión de quien mira: en cada carga del
+Master (salvo con búsqueda), a la par, una de `order_master` (abiertos, sin Lima
+ni Agencia: ~1.500 filas de columnas cortas el 08-11-2026) y una de
+`peru_districts` con solo sus provincias (`getDistrictReview`); al abrir una
+guía, `loadDistrictMismatchForGuide` (dos lecturas pequeñas), y otra tras
+corregir. Sin sondeo propio.
+
+**Ya corregidos hoy.** Los 28 pedidos abiertos sin guía que caían en la regla
+se corrigieron a mano en revisión masiva antes de este cambio: fila en
+`order_geo_overrides` con solo el distrito y la nota «Distrito corregido
+(revisión masiva 08-11-2026): la dirección dice …», y su evento en
+`order_events` con `payload.bulk = district_review_20261108`
+(bulk=district_review_20261108). Quedan unos 33 abiertos que ya estaban con el
+courier: salen en la lista con su guía.
+
+**Qué mirar después.** En el Master, la píldora «Distrito por revisar» con unos
+33 (los que ya tienen guía, cada uno con «Ya con <courier> · <guía>») y ninguno
+de los 28 de hoy. «Corregir» en uno: la fila sale de la lista tras recargar, la
+ficha dice el distrito nuevo y la provincia de siempre, y el historial tiene
+«Ubicación corregida manualmente. distrito: …» con la nota. En un pedido nuevo
+con la capital como distrito y otro distrito en la dirección: abrir «Enviar por
+Swayp» o la guía Aliclik y ver el aviso con el botón de crear esperando;
+«Crear con Arequipa igual» lo libera. En los logs, que
+`loadDistrictMismatchForGuide` no se dispare en bucle (una por apertura y por
+corrección) y que la carga del Master no se haya vuelto más lenta.
+
+**Marcha atrás.** Revertir el commit: desaparecen el aviso y la píldora. No
+escribe nada nuevo en la base. Las correcciones hechas con «Corregir» son
+filas normales de `order_geo_overrides`: se deshacen, una a una, volviendo a
+poner el distrito en «Corregir ubicación» de la ficha («Quitar corrección y
+volver al origen», `clearOrderGeo`, borra la corrección entera, también lo que
+tuviera antes). Las 28 de la revisión masiva se
+reconocen por su nota y por `order_events.payload->>'bulk' =
+'district_review_20261108'`; quitarlas devuelve esos pedidos al distrito
+«capital» y, con él, a la guía mal dirigida, así que no se deshacen sin el owner.
+
+### 08-11-2026 · «Llamar con Anura»: líneas compartidas y «Puede llamar con Anura» (0313, MOM §8.7)
+
+**Aplicada en producción el 08-11-2026.** Un pool de anexos («líneas
+compartidas») que Kapta reparte al llamar: cada llamada toma una línea libre y
+la suelta al colgar, y la base garantiza que dos llamadas vivas nunca usen el
+mismo anexo. Quién llama lo decide la casilla «Puede llamar con Anura» de
+Ajustes (además de `master.edit`). El anexo propio sigue funcionando. Sin
+variables ni crons nuevos.
+
+1. **Migración `0313_anura_line_pool.sql`**, a mano, ANTES del código
+   (aditiva, no reescribe filas):
+   - `anura_extensions.pool` y `user_id` admite null (línea compartida sin
+     dueña; chequeo `anura_extensions_pool_owner_ck`);
+   - tabla `anura_callers` (la casilla), lectura para la organización;
+   - `anura_calls.reserved_at` y `dialed_at`;
+   - índice `anura_calls_one_active_per_extension` (una llamada viva por anexo).
+2. Comprobar:
+   ```sql
+   select to_regclass('public.anura_callers');
+   select indexname from pg_indexes where indexname = 'anura_calls_one_active_per_extension';
+   select column_name from information_schema.columns
+    where table_name = 'anura_calls' and column_name in ('reserved_at', 'dialed_at');
+   ```
+3. Desplegar el código. **Sin la migración, «Llamar con Anura» deja de
+   funcionar entera** (el código escribe `reserved_at` y `dialed_at`).
+
+### 07-11-2026 · Leads: adelanto, agencia Shalom y «Swayp hoy» después de generar el pedido (sin migración, MOM §25.2)
+
+Pedido del owner: tras «Generar pedido», el cajón de Leads solo ofrecía crear la
+guía de Aliclik; no dejaba subir el adelanto, elegir la agencia de Shalom ni
+mandar por «Swayp lo puede llevar hoy». Ahora, para cualquier lead con pedido,
+la tarjeta **«Cómo sale el pedido»** ofrece tres opciones —«Guía Aliclik»,
+«Swayp hoy» y «Agencia Shalom + adelanto»— y la elegida abre debajo el MISMO
+componente de la ficha del pedido (`AliclikGuidePanel`, la guía Swayp directa
+con `origen = por_confirmar`, y la tarjeta de Cobro `PickupKeyPanel` con
+«Registrar un pago» y «DNI y agencia Shalom»). Se ofrecen donde la ficha las
+ofrece, con las mismas funciones, ahora compartidas (`aliclikGuideOffered`,
+`swaypDesdeConfirmacionOffer`, `orderPaymentPanelFor`); lo que no se ofrece
+queda apagado con su porqué en una línea. Tras cada acción la opción dice en
+qué quedó (guía creada, Swayp programado, «Adelanto cargado · por validar»,
+agencia guardada). «Continuar · crear guía» pasa a «Continuar · elegir envío».
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia
+y no hay estados nuevos. Ninguna server action de escritura cambia. Lectura
+nueva: `loadLeadPostOrderChoices` (app/dashboard/leads/post-order-actions.ts),
+una vez al abrir el cajón de un lead con pedido y tras cada acción o recarga
+del historial: la misma `loadOrderDetail` que abre la ficha, la ficha del §8
+solo donde la ficha la pide, el borrador de Shalom y, si la columna
+`swayp_availability` aún está vacía (pedido recién nacido), una lectura de
+`fenix_stock` de la organización para evaluarla en el momento con la regla de
+la pasada horaria, sin escribirla. Guardar «DNI y agencia Shalom» ahora avisa a
+los demás paneles de pago del pedido (`announcePaymentPanelChange`), que se
+recargan una vez.
+
+**Qué mirar después.** En Leads, generar un pedido de provincia COD y pulsar
+«Continuar · elegir envío»: «Cómo sale el pedido» con el número del pedido y
+Aliclik abierto. «Swayp hoy» encendida en un pedido de una ciudad con bodega y
+stock (si no, apagada con «Swayp no lo puede llevar hoy: …»); «Enviar por
+Swayp» abre la guía Swayp y, al crearla, la opción dice «Programado» con la
+guía y el pedido aparece en Master → Por confirmar → «Swayp desde Por
+confirmar». «Agencia Shalom + adelanto»: registrar un Yape y ver «Adelanto
+cargado · por validar» en la opción y el comprobante en Validar pagos; elegir
+una agencia y ver «Agencia guardada». En un lead de Lima, el cobro por agencia
+apagado con «No aplica en Lima…». En la ficha del pedido nada cambia: la tarjeta
+de Cobro, Aliclik y «Enviar por Swayp» salen en los mismos pedidos que antes.
+En los logs, que `loadLeadPostOrderChoices` no se dispare en bucle (una por
+apertura y por acción).
+
+**Marcha atrás.** Revertir el commit: vuelven el panel de Aliclik solo y el
+botón «Continuar · crear guía». No escribe nada nuevo en la base: las guías,
+los pagos y los borradores de Shalom creados desde Leads son las mismas filas
+que los de la ficha y se quedan como están.
+
+### 07-11-2026 · Repro Lima: «Atender» como pestaña del pedido (sin migración, MOM §9.5)
+
+Pedido del owner: «Atender» abría una hoja lateral aparte encima de la ficha y
+se veían los dos paneles. Ahora «Atender» abre la ficha del pedido en una
+pestaña nueva, **«Repro Lima»**, la última, después de «Chatby»
+(`?ficha=<pedido>&seccion=reprolima`). Lleva todo lo de la hoja: «Antes de
+llamar», el resultado, el candado (se toma al abrir la pestaña, late, beacon al
+cerrar la pestaña del navegador y se suelta al salir de la pestaña o cerrar la
+ficha), la lectura de acuerdos y cerrados, el segundo clic de «Volver a
+atender», «Programar ahora» y «Guardar y pasar al siguiente», que abre la
+ficha del siguiente de la lista del tablero en la misma pestaña. La hoja
+aparte se quita (`components/repro-lima-sheet.tsx` →
+`components/repro-lima-panel.tsx`). La pestaña sale solo mientras el pedido
+está en Repro Lima, también abriendo la ficha desde el Master de Pedidos.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+Las acciones de servidor son las mismas (`claimReproCase`, `registerReproCall`,
+`loadReproRow`…). Lectura nueva: la ficha llama UNA vez a `loadReproRow` por
+pedido, solo para quien tiene `repro_lima.manage` y solo si el pedido es de
+Lima y está por entregar (o si «Atender» pidió la pestaña). Sin sondeos. El
+tablero ya no relee la fila al pulsar «Atender»: lo hace la ficha.
+
+**Qué mirar después.** Repro Lima → «Atender» en un pedido: se abre la ficha
+en «Repro Lima», sin otro panel encima, y dice «Lo atiendes tú». Ir a Operar y
+volver: el candado se suelta y se vuelve a tomar, con lo escrito intacto
+(otra persona, en otro navegador, lo ve libre mientras tanto). «Guardar y
+pasar al siguiente» abre el siguiente de la misma lista con el aviso del
+anterior arriba. En el Master, la ficha de un pedido de Lima por entregar
+muestra la pestaña a una asesora; uno de Provincia o ya entregado, no. En
+`pg_stat_statements`, las lecturas de `lima_repro_cases` por pedido no deberían
+subir más que las fichas de Lima abiertas.
+
+**Marcha atrás.** Revertir el commit: vuelve la hoja aparte. No escribe nada
+nuevo en la base; los casos, llamadas y candados son los mismos.
+
 ### 07-11-2026 · «Sale a reparto»: lo que sale hoy o en el próximo reparto y lo que le falta (sin migración, MOM §29.16)
 
 Pedido del owner. Una tarjeta con dos días, hoy y el próximo día de reparto
@@ -52,6 +224,101 @@ Solo cambia la interfaz: aprueba con la misma acción de siempre
 elegidos (2)» → la confirmación dice 2 → se crean 2 guías.
 
 **Marcha atrás.** Revertir el commit.
+
+### 06-11-2026 · La base sin CPU por `lead_routing_scope`: menos llamadas y sin recorrer tablas enteras (0312, sin cambio de reglas)
+
+El 06-11-2026 ~20:00 UTC la base quedó «Unhealthy»: las páginas cargaban y los
+clics no respondían. `lead_routing_scope` llevaba 48.800 s de base desde el
+reinicio del 05-11 (cola entera de una asesora ≈ 1 s y 119.000 bloques), y a
+las 20:10 la rotación de un Yape la pedía para cada asesora en línea, en cada
+pestaña, cada 15 s. **Ninguna regla cambia** (MOM sin cambios): quién ve qué
+lead, a quién se ofrece un Yape y qué cuentan los contadores del tablero es lo
+mismo.
+
+**Aplicar la 0312 ANTES del despliegue (o junto con él).** El código funciona
+sin ella —mismas respuestas, y la rotación reconcilia en cada pestaña como
+antes—, pero casi todo el ahorro está en la migración: con la 0299 una consulta
+de un lead suelto sigue costando ~80 ms y 31.000 bloques, y la cola entera que
+sondea Leads cada 30 s en cada pestaña, ~425 ms. Sin la 0312 el código solo
+quita las lecturas de cola entera del pop-up y de la rotación de Yapes.
+
+**Código:**
+- Pop-up de Yapes (`listYapeAlerts`): sin Yapes ofrecidos no se pregunta nada;
+  con alguno, solo por esos leads, de a uno. La rotación
+  (`reconcileYapeOffers`) pregunta por la asesora que tiene la oferta y, solo
+  si hay que ofrecer de nuevo, por las candidatas, de a lead, sin repetir y
+  con tres lecturas a la vez como mucho (`lib/lead-routing-batch.ts`).
+- Una sola pestaña por tienda reconcilia cada 10 s
+  (`lib/yape-reconcile-tick.ts` → `claim_yape_reconcile_tick`); las demás solo
+  leen lo ofrecido. Sin la 0312, todas reconcilian como antes.
+- «Por llamar» se drena por clave (`id > último`) en vez de rangos con
+  `offset` y `count: "exact"`: un solo recorrido de `leads_pkey` por recarga.
+- `claimLead` reutiliza el alcance que ya leyó `authorizeLead`.
+- La firma de la cola con bloques NO cambia (sigue terminando en el minuto):
+  su parte de leads solo cubre open/hot, y ese minuto es lo que recarga en
+  ≤ 2 min un handoff sobre un lead ganado.
+
+**Migración `0312_lead_routing_scope_perf.sql`:** reescribe el filtro de
+`lead_routing_scope` en dos ramas (cola por índice, lead suelto por clave), con
+los mismos permisos de la 0299, y un lead suelto ya no cuenta ganados/perdidos
+(nadie los lee ahí); crea cinco índices —llamadas con asesora (`lead_calls`),
+carritos por tienda y por pedido (`draft_orders`), la última parada de un
+paquete en su caja (`delivery_stops`, `return_manifest_expected` de ~2,6 s a
+milisegundos por motorizado) y el lead de una conversación de Kapso (`leads`,
+las 55.000 actualizaciones de la sincronización)—, la tabla
+`yape_reconcile_ticks` con `claim_yape_reconcile_tick` (solo `service_role`), y
+`analyze` de `delivery_stops`, `draft_orders`, `lead_calls` y `leads`.
+
+1. **Los índices, a mano, `concurrently` y fuera de una transacción** (un
+   `create index` normal bloquea las escrituras de la tabla mientras se
+   construye), uno por uno:
+
+   ```sql
+   create index concurrently if not exists lead_calls_call_lead_idx
+     on public.lead_calls (lead_id, occurred_at desc, id desc)
+     include (store_id, vendedora, next_followup_at)
+     where kind = 'call' and vendedora is not null;
+   create index concurrently if not exists draft_orders_store_gid_idx
+     on public.draft_orders (store_id, draft_order_gid) include (created_at);
+   create index concurrently if not exists delivery_stops_shipment_manifest_idx
+     on public.delivery_stops (shipment_id, dispatch_manifest_id, reported_at desc nulls last)
+     include (id, status, outcome_reason);
+   create index concurrently if not exists leads_store_kapso_conv_idx
+     on public.leads (store_id, kapso_conversation_id)
+     where kapso_conversation_id is not null;
+   create index concurrently if not exists draft_orders_order_gid_idx
+     on public.draft_orders (order_gid)
+     where order_gid is not null;
+   ```
+
+2. **El fichero `0312` completo** (encuentra los índices hechos, reemplaza la
+   función, crea la tabla y la función de la reconciliación y corre `analyze`).
+3. **Comprobar:**
+
+   ```sql
+   select c.relname, x.indisvalid from pg_index x join pg_class c on c.oid = x.indexrelid
+    where c.relname in ('lead_calls_call_lead_idx','draft_orders_store_gid_idx','delivery_stops_shipment_manifest_idx',
+                        'leads_store_kapso_conv_idx','draft_orders_order_gid_idx');
+   select proname, proacl, proconfig, prosecdef from pg_proc
+    where proname in ('lead_routing_scope','claim_yape_reconcile_tick');
+   ```
+
+   Los cinco `indisvalid = t` (si uno da `f`, `drop index concurrently` de ese
+   y volver a crearlo); en las dos funciones
+   `{postgres=X/postgres,service_role=X/postgres}`,
+   `{search_path=public, pg_temp}`, `f`.
+4. **Qué mirar después.** En `pg_stat_statements`, la media de
+   `lead_routing_scope` y de `return_manifest_expected` y las llamadas por
+   minuto de la primera; la media del `UPDATE leads … kapso_conversation_id`
+   y del `select … from draft_orders where order_gid = any(…)`; en Supabase, el
+   CPU con varias asesoras en línea y un Yape por verificar.
+
+**Marcha atrás.** Revertir el commit (vuelven las lecturas de antes; más caras,
+mismo resultado). Para la función, volver a correr
+`db/migrations/0299_lead_routing_admin_advisors.sql`. La tabla y la función de
+la reconciliación pueden quedarse (el código anterior no las usa). Los índices
+pueden quedarse; si se quieren quitar: `drop index concurrently if exists
+public.<nombre>;`.
 
 ### 06-11-2026 · Repro Lima: «Confirma fecha» con Aliclik pide la ubicación (sin migración, MOM §9.5 y §6.2)
 

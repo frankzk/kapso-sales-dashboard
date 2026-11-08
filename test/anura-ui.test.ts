@@ -101,6 +101,9 @@ describe("la frontera del cliente: nada server-only llega al navegador", () => {
     "lib/anura/sip-phone.ts",
     "lib/anura/sip.ts",
     "lib/anura/jssip-client.ts",
+    // Las líneas compartidas (0313).
+    "components/anura-pool-settings.tsx",
+    "lib/anura/pool.ts",
   ];
 
   it.each(CLIENT_ENTRIES)("%s no alcanza ningún módulo server-only ni de Node en valor", (entry) => {
@@ -118,8 +121,10 @@ describe("la frontera del cliente: nada server-only llega al navegador", () => {
       "components/anura-settings-section.tsx",
       "components/anura-phone.tsx",
       "components/anura-kapta-phone-settings.tsx",
+      "components/anura-pool-settings.tsx",
       "lib/anura/ui.ts",
       "lib/anura/phone-ui.ts",
+      "lib/anura/pool.ts",
       "components/order-drawer.tsx",
       "components/store-settings.tsx",
     ]) {

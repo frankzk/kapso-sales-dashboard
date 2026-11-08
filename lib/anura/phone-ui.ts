@@ -16,7 +16,9 @@
 //
 // Lo prueba `test/anura-phone-ui.test.ts`.
 
-import type { AnuraCallStatus } from "@/lib/anura/events";
+import { ANURA_STATUS_LABEL, type AnuraCallMode, type AnuraCallStatus } from "@/lib/anura/events";
+import { ANURA_LINES_BUSY_TITLE } from "@/lib/anura/pool";
+import type { AnuraCallLive, AnuraStartErrorCode } from "@/lib/anura/calls";
 import {
   ANURA_DEFAULT_ICE_SERVERS,
   isNotFoundAwaitingTest,
@@ -205,6 +207,9 @@ const CREDENTIALS_TITLE: Partial<Record<AnuraPhoneCredentialsErrorCode, string>>
   no_configurado: "Anura no está configurado",
   permiso: "No puedes usar ese teléfono",
   sesion: "Tu sesión venció",
+  lineas_ocupadas: ANURA_LINES_BUSY_TITLE,
+  sin_lineas: "No hay líneas de Anura listas",
+  ocupada: "Ya tienes una llamada abierta",
 };
 
 const REGISTRATION_TITLE = {
@@ -248,7 +253,14 @@ export function anuraPhoneNeedsPanelReload(error: AnuraPhoneError | null | undef
   if (!error) return false;
   if (error.code === "registro") return error.registration === "clave" || error.registration === "dominio";
   if (error.code === "credenciales") {
-    return isAnuraPhoneBlocked(error.credentialsCode as AnuraKaptaPhoneStatus) || error.credentialsCode === "sin_telefono" || error.credentialsCode === "sin_anexo";
+    return (
+      isAnuraPhoneBlocked(error.credentialsCode as AnuraKaptaPhoneStatus) ||
+      error.credentialsCode === "sin_telefono" ||
+      error.credentialsCode === "sin_anexo" ||
+      // Líneas compartidas: vuelve a contar las libres.
+      error.credentialsCode === "lineas_ocupadas" ||
+      error.credentialsCode === "sin_lineas"
+    );
   }
   return false;
 }
@@ -289,6 +301,163 @@ export function anuraTalkClock(
 /** Los segundos del reloj de la tarjeta (`anuraTalkClock`). */
 export function talkSecondsFrom(fromMs: number | null | undefined, now: number): number {
   return typeof fromMs === "number" && Number.isFinite(fromMs) ? Math.max(0, Math.round((now - fromMs) / 1000)) : 0;
+}
+
+// ---------------------------------------------------------------------------
+// La llamada vive en Kapta, no en la ficha (07-11-2026)
+// ---------------------------------------------------------------------------
+//
+// El teléfono de Kapta es UNO por pestaña y vive en el panel
+// (`AnuraPhoneProvider`, components/anura-phone.tsx, montado en
+// app/dashboard/layout.tsx). Cerrar la ficha, abrir otro pedido o ir a otra
+// pantalla NO corta la llamada; solo «Colgar», el otro lado, un fallo o
+// cerrar/recargar la pestaña. Estas funciones deciden quién la muestra.
+
+/** Desde dónde se pidió la llamada que tiene el teléfono de Kapta. */
+export type AnuraPhoneOrigin = "pedido" | "prueba";
+
+/** Lo que el panel sabe de la llamada del teléfono de Kapta (sin el número entero). */
+export interface AnuraPhoneCallMeta {
+  origin: AnuraPhoneOrigin;
+  /** El pedido (null en la llamada de prueba de Ajustes). */
+  orderId: string | null;
+  /** «#KP123456», si quien llamó lo tenía a mano. */
+  orderLabel: string | null;
+  /** El nombre de la tienda del pedido, si se sabe. */
+  storeLabel: string | null;
+}
+
+/** ¿Es esta la llamada de esa pantalla? (la ficha de ese pedido, o la prueba de Ajustes). */
+export function anuraPhoneCallIsFor(
+  meta: Pick<AnuraPhoneCallMeta, "origin" | "orderId"> | null | undefined,
+  who: { origin: AnuraPhoneOrigin; orderId?: string | null },
+): boolean {
+  if (!meta || meta.origin !== who.origin) return false;
+  if (meta.origin === "prueba") return true;
+  return Boolean(meta.orderId) && meta.orderId === who.orderId;
+}
+
+/**
+ * Qué hace «Llamar con Anura» en una ficha según el teléfono de Kapta:
+ *   · `mostrar`: la llamada en marcha es de este pedido → se enseña.
+ *   · `ocupado`: hay una llamada en marcha de OTRO pedido (o la prueba de
+ *     Ajustes) → no se pide otra; la tarjeta de esa llamada lo dice.
+ *   · `llamar`: el teléfono está libre.
+ */
+export function anuraPhoneStartDecision(input: { phoneBusy: boolean; isThisCall: boolean }): "mostrar" | "ocupado" | "llamar" {
+  if (!input.phoneBusy) return "llamar";
+  return input.isThisCall ? "mostrar" : "ocupado";
+}
+
+/** El aviso cuando ya hay una llamada en marcha y se intenta otra. */
+export const ANURA_PHONE_BUSY_TITLE = ANURA_KAPTA_START_TITLE.ocupada ?? "Ya tienes una llamada abierta";
+
+export function anuraPhoneBusyText(meta: Pick<AnuraPhoneCallMeta, "origin" | "orderLabel"> | null | undefined): string {
+  const which =
+    meta?.origin === "prueba" ? "la llamada de prueba" : meta?.orderLabel ? `la llamada del pedido ${meta.orderLabel}` : "una llamada con Anura";
+  return `Estás en ${which}. Kapta hace una llamada a la vez: cuélgala antes de llamar a otro cliente.`;
+}
+
+/** La segunda línea de la tarjeta global: de qué es la llamada. */
+export function anuraPhoneCallContextLine(meta: AnuraPhoneCallMeta | null | undefined): string | null {
+  if (!meta) return null;
+  if (meta.origin === "prueba") return "Llamada de prueba (Ajustes › Telefonía Anura)";
+  const parts = [meta.orderLabel ? `Pedido ${meta.orderLabel}` : "Pedido", meta.storeLabel].filter(Boolean);
+  return parts.join(" · ");
+}
+
+/** Lo que dicen las dos tarjetas mientras el teléfono de Kapta está en la llamada. */
+export const ANURA_PHONE_KEEPS_GOING =
+  "Puedes cerrar la ficha o ir a otra pantalla: la llamada sigue. Se corta si cuelgas, si cuelga la clienta o si cierras o recargas la pestaña.";
+
+/**
+ * ¿Se pinta la tarjeta global? Solo si hay una llamada en marcha (o una que
+ * terminó sin que ninguna pantalla la mostrara), y ninguna pantalla la está
+ * mostrando ya (la ficha de ese pedido o la prueba de Ajustes): nunca dos
+ * tarjetas de la misma llamada. El aviso de «ya tienes una llamada» la saca
+ * aunque otra pantalla la muestre.
+ */
+export function anuraGlobalCardVisible(input: {
+  hasSession: boolean;
+  busy: boolean;
+  endedUnseen: boolean;
+  shownElsewhere: boolean;
+  busyNotice: boolean;
+}): boolean {
+  if (!input.hasSession || !(input.busy || input.endedUnseen)) return false;
+  return !input.shownElsewhere || input.busyNotice;
+}
+
+/**
+ * La llamada recién pedida, hasta que el primer sondeo traiga la de verdad.
+ * El número llega ya enmascarado del servidor.
+ */
+export function anuraRequestedCall(input: {
+  id: string;
+  mode: AnuraCallMode;
+  orderId: string | null;
+  extension: string | null;
+  toMasked: string | null;
+  hint: string | null;
+  nowIso?: string;
+}): AnuraCallLive {
+  return {
+    id: input.id,
+    mode: input.mode,
+    orderId: input.orderId,
+    inHistory: false,
+    status: "solicitada",
+    statusLabel: ANURA_STATUS_LABEL.solicitada,
+    hint: input.hint,
+    active: true,
+    extension: input.extension,
+    toMasked: input.toMasked ?? "",
+    billSeconds: null,
+    failureReason: null,
+    requestedAt: input.nowIso ?? new Date().toISOString(),
+    answeredAt: null,
+    endedAt: null,
+    recordingStatus: "sin_grabacion",
+    closedByTimeout: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fase 1 sin clave del teléfono de Kapta (07-11-2026)
+// ---------------------------------------------------------------------------
+
+/**
+ * Con la «<anexo>-websocket» como terminal principal y SIN la clave guardada
+ * en Kapta, la fase 1 pide la llamada, Anura no ve esa terminal conectada y
+ * el texto de siempre («Tu teléfono de Anura no está conectado») confunde:
+ * lo que falta es la clave del teléfono de Kapta.
+ */
+export const ANURA_KAPTA_KEY_MISSING_TITLE = "Falta la clave del teléfono de Kapta";
+
+const KEY_MISSING_CODES: readonly AnuraStartErrorCode[] = ["terminal_no_registrada", "sin_terminal"];
+
+export function anuraKaptaKeyMissingText(code: "terminal_no_registrada" | "sin_terminal", extension: string | null | undefined): string {
+  const ext = extension?.trim() || null;
+  const anexo = ext ? `El anexo ${ext}` : "Tu anexo";
+  const terminal = `«${ext ?? "<anexo>"}-websocket»`;
+  if (code === "sin_terminal") {
+    return `${anexo} no tiene terminal principal en Anura ni clave del teléfono de Kapta. Marca la ${terminal} como principal en Anura y guarda su clave en Ajustes › Telefonía Anura.`;
+  }
+  return `${anexo} no tiene guardada la clave de su teléfono de Kapta, así que Anura no ve conectada la terminal ${terminal}. Guárdala en Ajustes › Telefonía Anura. Si usas un teléfono de Anura, ábrelo y espera a que diga «Listo».`;
+}
+
+/**
+ * El aviso de un Click2Dial fallido en la fase 1. `kaptaKeyMissing`: el anexo
+ * no tiene la clave del teléfono de Kapta guardada (`sin_telefono`).
+ */
+export function anuraFase1StartError(
+  res: { code?: AnuraStartErrorCode; error: string },
+  input: { kaptaKeyMissing: boolean; extension: string | null | undefined },
+): { title: string; text: string } {
+  if (input.kaptaKeyMissing && res.code && KEY_MISSING_CODES.includes(res.code)) {
+    return { title: ANURA_KAPTA_KEY_MISSING_TITLE, text: anuraKaptaKeyMissingText(res.code as "terminal_no_registrada" | "sin_terminal", input.extension) };
+  }
+  return { title: anuraStartErrorTitle(res.code), text: res.error };
 }
 
 // ---------------------------------------------------------------------------
@@ -498,4 +667,21 @@ export const ANURA_TEST_FALLBACK_CODES: readonly AnuraPhoneCredentialsErrorCode[
 
 export function anuraTestFallsBack(error: AnuraPhoneError | null | undefined): boolean {
   return error?.code === "credenciales" && !!error.credentialsCode && ANURA_TEST_FALLBACK_CODES.includes(error.credentialsCode);
+}
+
+// ---------------------------------------------------------------------------
+// Volumen de lo que se oye (07-11-2026: la línea llega bajita). Ganancia del
+// amplificador de Web Audio: 1 = tal cual, hasta 4×. Por defecto 2,5×.
+// ---------------------------------------------------------------------------
+
+export const ANURA_VOLUME_MIN = 1;
+export const ANURA_VOLUME_MAX = 4;
+export const ANURA_VOLUME_STEP = 0.25;
+export const ANURA_VOLUME_DEFAULT = 2.5;
+
+/** Un volumen válido (1–4, en pasos de 0,25); lo que no es número vuelve al de defecto. */
+export function clampAnuraVolume(v: number): number {
+  if (!Number.isFinite(v)) return ANURA_VOLUME_DEFAULT;
+  const stepped = Math.round(v / ANURA_VOLUME_STEP) * ANURA_VOLUME_STEP;
+  return Math.min(ANURA_VOLUME_MAX, Math.max(ANURA_VOLUME_MIN, stepped));
 }

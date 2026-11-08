@@ -2012,7 +2012,9 @@ nada instalado, y Kapta solo hace salidas.
   desde Kapta» (§8.5). Sale solo si se cumplen las cuatro cosas: Anura está
   configurado (`ANURA_CLICK2DIAL_TOKEN`), la persona puede editar el Master
   (`master.edit`, el mismo permiso que registra la gestión), tiene un anexo
-  activo en la organización de la tienda del pedido y el teléfono del pedido
+  activo en la organización de la tienda del pedido (o, desde el 08-11-2026,
+  «Puede llamar con Anura» y al menos una línea compartida lista: «Líneas
+  compartidas», al final de esta sección) y el teléfono del pedido
   es un **celular peruano** (9 dígitos que empiezan por 9; se acepta con +51,
   51 o 0051 delante). Un fijo o un número extranjero no se marca en la fase 1.
   El teléfono lo lee el servidor del pedido: el navegador nunca lo manda.
@@ -2025,7 +2027,9 @@ nada instalado, y Kapta solo hace salidas.
   curso, «Ya tienes una llamada de Anura en curso. Cuelga en tu teléfono de
   Anura; si Anura no avisa el final, Kapta la libera sola a las 2 horas.». Lo
   sostiene la base (un índice único), también con dos pestañas o dos clics a la
-  vez. La ficha retoma la llamada viva de quien mira aunque sea de otro pedido:
+  vez. Desde la 0313 la base sostiene además **una llamada viva por anexo**
+  («Líneas compartidas», abajo). La ficha retoma la llamada viva de quien mira
+  aunque sea de otro pedido:
   entonces lo dice y enlaza a ese pedido, y no ofrece registrar el resultado en
   la ficha abierta.
 - **Con qué número.** El de la central en Anura: el número que Anura tenga
@@ -2215,7 +2219,9 @@ nada instalado, y Kapta solo hace salidas.
   cuenta).
 - **Configuración (una vez).** En el panel de Anura (lo hace quien administra
   la cuenta de Anura; los pasos los repite Ajustes › «Telefonía Anura»):
-  1. **Configuración → Cuentas:** un anexo de usuario por asesora.
+  1. **Configuración → Cuentas:** un anexo de usuario por línea compartida
+     (por ejemplo 201, 202 y 203; el plan permite hasta 10) o, si una persona
+     usa anexo propio, uno para ella.
   2. **Integraciones → Click 2 Dial → Generar token:** el token va en Vercel
      como `ANURA_CLICK2DIAL_TOKEN`, nunca en un chat ni en Kapta. Sin él no
      aparece nada de Anura; Kapta solo dice si está configurado, nunca el
@@ -2250,9 +2256,10 @@ nada instalado, y Kapta solo hace salidas.
      (`START`), «La llamada es atendida» (`TALK`) y «Se finaliza una llamada»
      (`END`), cada uno con dirección «Entrante/Saliente».
 
-  Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la central,
-  el anexo de cada persona con su usuario y contraseña SIP («Probar y guardar»)
-  y una «Llamada de prueba».
+  Después, en Kapta, Ajustes › «Telefonía Anura»: el dominio SIP de la
+  central, cada línea compartida (o el anexo propio de cada persona) con su
+  usuario y contraseña SIP («Probar y guardar»), quién «Puede llamar con
+  Anura» y una «Llamada de prueba».
 
   Mientras un anexo no tenga clave guardada en Kapta, la ficha sigue la fase 1
   para esa persona: entonces la principal de su anexo tiene que ser un teléfono
@@ -2262,7 +2269,9 @@ nada instalado, y Kapta solo hace salidas.
   persona y uno por anexo en la organización, de 2 a 6 dígitos. Sin anexo no
   hay botón, así que Anura queda apagado hasta que se asignen. Un anexo se
   puede desactivar sin borrarlo. Para pasarlo a otra persona, primero se le
-  quita a quien lo tiene.
+  quita a quien lo tiene. Desde el 08-11-2026 la forma recomendada son las
+  líneas compartidas («Líneas compartidas», al final de esta sección): el
+  anexo propio sigue sirviendo y quien tiene uno activo llama con él.
 - **Lo que Kapta no guarda.** En la fase 1, ni usuarios ni contraseñas SIP de
   Anura: no hacen falta, porque suena el teléfono de Anura de la asesora. La
   fase 2 guarda la clave SIP de cada anexo, cifrada y fuera del alcance del
@@ -2273,7 +2282,10 @@ nada instalado, y Kapta solo hace salidas.
   organización de la tienda, lo mismo que Ajustes entero. No hay permiso nuevo.
   En la fase 2 tampoco: el dominio SIP, «Probar y guardar» y «Quitar clave»
   piden `stores.manage`, y la clave solo se entrega a la dueña del anexo, al
-  llamar.
+  llamar. Con las líneas compartidas (08-11-2026) tampoco hay permiso nuevo:
+  sumar o quitar una línea, guardar su clave y marcar «Puede llamar con
+  Anura» piden `stores.manage`; llamar sigue pidiendo `master.edit` en la
+  organización del pedido, más la casilla.
 - **Llamada de prueba.** Desde Ajustes, quien administra llama a un celular
   peruano que escribe, con su propio anexo o con cualquier anexo activo de la
   organización. No es un intento de ningún pedido: no escribe nada en ningún
@@ -2338,6 +2350,22 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   Kapta cerró sola por su plazo dice «No se pudo llamar: Kapta no recibió los
   avisos de Anura de esta llamada y la cerró sola. Vuelve a intentar.».
 
+  **Sin la clave del teléfono de Kapta (07-11-2026).** Si el anexo no tiene
+  su clave guardada (`sin_telefono`), la ficha llama por la fase 1; pero si
+  la terminal principal del anexo es la «<anexo>-websocket», Anura no la ve
+  conectada y el texto de la fase 1 («Tu teléfono de Anura no está
+  conectado») confunde: lo que falta es la clave. Por eso, con `sin_telefono`
+  (en la ficha) o con un anexo sin clave (en la llamada de prueba), esos dos
+  rechazos de Click2Dial dicen, con el número del anexo, «Falta la clave del
+  teléfono de Kapta»: sin la terminal conectada, «Tu anexo no tiene guardada
+  la clave de su teléfono de Kapta, así que Anura no ve conectada la terminal
+  «<anexo>-websocket». Guárdala en Ajustes › Telefonía Anura. Si usas un
+  teléfono de Anura, ábrelo y espera a que diga «Listo».»; sin terminal
+  principal, «Tu anexo no tiene terminal principal en Anura ni clave del
+  teléfono de Kapta. Marca la «<anexo>-websocket» como principal en Anura y
+  guarda su clave en Ajustes › Telefonía Anura.». Los demás rechazos dicen lo
+  de siempre.
+
   Una llamada viva que la ficha retoma (abierta en otra pestaña, o antes de
   recargar) se muestra con los textos del teléfono de Kapta, no con «cuelga en
   tu teléfono de Anura»: «Esta llamada está abierta en otra pestaña de Kapta o
@@ -2361,7 +2389,8 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   «Anura no hizo sonar el teléfono de Kapta. Revisa en Anura que la terminal
   «<anexo>-websocket» sea la principal del anexo.». El registro dura 60
   segundos: si la pestaña se cierra de golpe sin desregistrar, vence solo.
-  Salir de la ficha o cerrar la pestaña (`pagehide`) cuelga y suelta todo.
+  Cerrar o recargar la pestaña (`pagehide`) cuelga y suelta todo; cerrar la
+  ficha o cambiar de pantalla, no (abajo, «La llamada vive en Kapta»).
 - **No suena para entrantes.** Kapta contesta un solo aviso por llamada, y
   solo mientras esa pestaña espera el de la llamada que acaba de pedir (45
   segundos desde que la pide). Si el aviso llega antes de que el servidor
@@ -2390,10 +2419,59 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
   en la llamada, ese cierre por plazo **no corta el audio**: la tarjeta dice
   «Kapta no recibió los avisos de Anura de esta llamada, pero sigues en ella.
   Cuelga desde aquí al terminar.» y la asesora cuelga cuando termina. La
-  tarjeta (en la ficha y en la llamada de prueba de Ajustes) sigue diciendo
+  tarjeta (en la ficha, en la llamada de prueba de Ajustes y la tarjeta
+  global del panel) sigue diciendo
   «En llamada» y muestra el reloj, contado desde que el teléfono de Kapta
   contestó, porque el servidor no sabe cuándo empezó. Solo un fin de Anura (o
   la asesora) corta. «Silenciar» corta el micrófono sin colgar.
+- **La llamada vive en Kapta, no en la ficha (07-11-2026).** Pedido por el
+  owner tras las pruebas reales: «Hazlo lo más lógico posible para no perder
+  conversaciones y llamadas activas en curso». Antes el teléfono de Kapta
+  vivía dentro de la ficha y cerrarla lo colgaba: en producción una llamada
+  se cortó 1 segundo después de conectar porque la asesora tocó el fondo gris
+  de la ficha. Ahora hay **un teléfono por pestaña**, con **un solo** audio de
+  Anura, montado en el panel (`AnuraPhoneProvider`, en el layout de
+  `/dashboard`), y la llamada sigue al cerrar la ficha (fondo gris, X,
+  Escape), al abrir otro pedido o al ir a otra pantalla del panel. Solo la
+  terminan **«Colgar»**, **el otro lado** (la clienta cuelga o Anura da la
+  llamada por terminada), **un fallo**, o **cerrar o recargar la pestaña**
+  (el navegador pregunta antes mientras hay llamada). Cada llamada lleva las
+  acciones del servidor de quien la pidió (la ficha de ese pedido o la
+  llamada de prueba de Ajustes) y el sondeo de 2,5 segundos también vive en
+  el panel, así que el estado y el fin se siguen aunque ninguna ficha esté
+  abierta.
+
+  - **La tarjeta global.** Mientras hay llamada y ninguna pantalla la
+    muestra, el panel enseña su tarjeta en el mismo sitio que la de la ficha
+    (abajo a la derecha, encima de los avisos de «Comprobante por validar»):
+    «Llamada con Anura desde Kapta», el número enmascarado, el pedido y la
+    tienda (o «Llamada de prueba»), el anexo, el estado y el reloj, la ayuda
+    de cada fase, **Silenciar**, **Volumen**, **Colgar** y **«Abrir el
+    pedido»**, que abre la ficha de ese pedido sobre la pantalla en la que
+    está la asesora (sin recargar: recargar cortaría la llamada). Dice «Puedes
+    cerrar la ficha o ir a otra pantalla: la llamada sigue. Se corta si
+    cuelgas, si cuelga la clienta o si cierras o recargas la pestaña.». Si la
+    llamada termina sin que ninguna pantalla la muestre, la tarjeta se queda
+    con cómo terminó (y, si dejó su hecho, «Queda en el historial del
+    pedido. El resultado se registra en su confirmación.») hasta que la
+    cierran.
+  - **Nunca dos tarjetas.** La ficha del pedido de esa llamada la muestra
+    ella (se abre con la tarjeta de la llamada, con Colgar y Silenciar) y la
+    global se esconde mientras esa ficha está abierta; lo mismo la llamada
+    de prueba en Ajustes. La ficha dice lo mismo que la global: la llamada
+    sigue aunque se cierre.
+  - **Otra llamada en marcha.** Kapta hace una llamada a la vez. Con una en
+    marcha, «Llamar con Anura» en la ficha de **otro** pedido no pide otra:
+    la tarjeta global dice «Ya tienes una llamada abierta» y, por ejemplo,
+    «Estás en la llamada del pedido #KP200108. Kapta hace una llamada a la
+    vez: cuélgala antes de llamar a otro cliente.» (o «la llamada de
+    prueba»). En Ajustes, la
+    llamada de prueba espera y lo dice igual.
+  - **Lo que no cambia.** La fase 1 (sin teléfono en Kapta) sigue igual: ahí
+    la llamada nunca dependió de la ficha. La clave SIP sigue solo en
+    memoria mientras dura la llamada, y la tarjeta global solo guarda el
+    número enmascarado, el pedido y la tienda, nunca en el almacenamiento
+    del navegador.
 - **Una sola pestaña.** Solo una pestaña por navegador puede tener el
   teléfono: con dos registradas, Anura manda la llamada a la otra y
   Click2Dial falla a los ~45 s (le pasó a Rentabilify). Kapta usa
@@ -2565,6 +2643,111 @@ instala nada ni en el celular ni en la computadora. Migración 0311.
 - **Por confirmar en la prueba real.** El registro va a `sip:<dominio>:55090`
   con la dirección `sip:<usuario>@<dominio>`; no se pudo probar contra Anura.
   Si no registra, se ajusta en `anuraJsSipConfig` (`lib/anura/sip-phone.ts`).
+
+#### Líneas compartidas (08-11-2026)
+
+Decisión del owner (08-11-2026): «¿no puede ser algo dinámico… el anexo
+asignado aleatoriamente?» → sí. En vez de un anexo por persona, la
+organización tiene unas pocas **líneas compartidas** (empieza con 3; el plan de
+Anura permite hasta 10, y la regla sirve para cualquier número) y una casilla
+por persona, **«Puede llamar con Anura»** (la eligió el owner por
+flexibilidad). Quien tiene la casilla toma una línea libre al llamar. Se monta
+sobre la fase 2: una línea compartida solo llama con el teléfono dentro de
+Kapta (su principal es la `<anexo>-websocket`). Migración 0313.
+
+- **Qué es una línea compartida.** Un anexo de Anura sin dueña
+  (`anura_extensions.pool`, `user_id` vacío). Un número es una línea
+  compartida **o** el anexo propio de una persona, nunca las dos cosas. Su
+  usuario SIP es, por defecto, `<anexo>-websocket`, y su clave se guarda con
+  el mismo «Probar y guardar» de la fase 2 (un solo registro de prueba; solo
+  si Anura lo acepta se guarda cifrada). Una línea se puede apagar sin
+  borrarla; quitarla borra su clave, y no se puede quitar mientras está en una
+  llamada.
+- **Quién llama.** Sale «Llamar con Anura» a quien tiene `master.edit` en la
+  organización del pedido y, además, un anexo propio activo **o** la casilla
+  «Puede llamar con Anura» (`anura_callers`). La casilla solo se ofrece a
+  quien gestiona pedidos y no da ese permiso. Quien tiene un anexo propio
+  activo llama con él, como antes (no se le asigna una línea). Con la casilla
+  y sin ninguna línea lista (todas sin clave, con la clave rechazada, con el
+  dominio no reconocido o apagadas), no hay botón.
+- **Cuándo se elige la línea.** Al pulsar «Llamar con Anura», cuando el
+  navegador pide la clave (el paso 2 de «Cuándo se conecta»): tiene que
+  registrarse con esa línea **antes** del Click2Dial, porque Anura hace sonar
+  la principal del anexo con que se pide. El servidor **reserva** una línea
+  libre escribiendo la fila de la llamada para esa línea (`solicitada`, con
+  `reserved_at` y sin `dialed_at`), y devuelve la clave de esa línea con el id
+  de la reserva. Después, el Click2Dial se pide **solo con esa reserva**, sin
+  volver a elegir (`dialed_at` marca cuándo se pidió).
+- **La regla de asignación.** Entre las líneas activas, con su clave guardada
+  y no rechazada y sin llamada viva, primero la que lleva más tiempo sin
+  usarse y, entre las que empatan, al azar. La base no deja dos llamadas vivas
+  en
+  la misma línea (`anura_calls_one_active_per_extension`, que se suma a
+  `anura_calls_one_active_per_user`): si dos personas piden en el mismo
+  instante, la segunda fila choca y se prueba la siguiente línea. Si todas
+  están ocupadas: «Las 3 líneas de Anura están ocupadas. Intenta en un
+  momento.» (con el número de líneas que sirven; con una sola, «La línea de
+  Anura está ocupada. Intenta en un momento.»). La ficha dice en el botón
+  cuántas están libres al abrirla («2 de 3 líneas libres»).
+- **Lo que no llegó a pedirse.** Si el navegador falla antes del Click2Dial
+  (micrófono, registro, cuelga mientras conecta), suelta la reserva en el acto;
+  si no llega a hacerlo (se cerró la pestaña), la reserva se suelta sola a los
+  60 s («La llamada no llegó a pedirse.»), en la próxima reserva de la
+  organización, en el sondeo de la ficha o en el cron de Anura. Esa fila no
+  es un intento de contacto: no deja hecho en el pedido y no sale en la ficha.
+  Una reserva ya pedida sigue la regla de la fase 1, contada desde el
+  Click2Dial: sin ningún aviso de Anura en 60 s, «Anura no llegó a hacer la
+  llamada…». Si la reserva se soltó antes de pedirla, la ficha dice «La línea
+  de Anura reservada para esta llamada se liberó antes de pedirla. Vuelve a
+  intentar.».
+- **Clave rechazada.** Si Anura rechaza la clave de la línea reservada (o no
+  reconoce el dominio), se marca **esa línea** con las mismas reglas de la
+  fase 2 (solo la versión de la clave que se entregó), la reserva se suelta y
+  la siguiente llamada toma otra línea. Solo se marca la línea de la reserva
+  propia de quien avisa, nunca otra.
+- **Lo que queda por persona.** El hecho del historial, «Gestión por persona»
+  y el aviso de Anura siguen por persona y por llamada: `anura_calls.user_id`
+  es quien llamó y `extension`, por qué línea salió; el aviso se encuentra por
+  `custom1` (el id de la llamada), como siempre. Una entrante a una línea
+  compartida no la «toma una asesora» (no tiene dueña): queda «Perdida».
+- **Seguridad de la clave.** Kapta nunca lista las claves de las líneas. Con
+  la casilla, el navegador de quien llama recibe la clave SIP de la línea
+  reservada, y solo durante esa llamada: solo en memoria, nunca en el
+  almacenamiento del navegador ni en un log, y solo si la reserva viva es suya.
+  Es más de lo que daba un anexo propio (ahí la recibía solo su dueña): quien
+  tiene la casilla puede, en una llamada, tener la clave de cualquier línea que
+  le toque. Por eso la casilla la da quien administra, persona por persona.
+- **La llamada de prueba.** Con «Mi anexo» y sin anexo propio, quien tiene la
+  casilla prueba con una línea libre, como la ficha. Quien administra también
+  puede elegir una línea concreta para probarla (puede guardarle la clave de
+  todos modos). Una línea sin clave no se prueba (solo llama con el teléfono de
+  Kapta).
+- **En el panel de Anura, por cada línea** (Ajustes › «Telefonía Anura» los
+  repite en «Líneas compartidas»):
+  1. Crea el anexo en Configuración → Cuentas (por ejemplo 201, 202 y 203). No
+     es de ninguna asesora: lo usa quien llama.
+  2. En Terminales, la `<anexo>-websocket` encendida como principal (en el
+     201, `201-websocket`).
+  3. En Avanzado → «Click 2 Dial», Auto answer apagado.
+  4. En Límites, celulares permitidos.
+  5. En Eventos, los tres (`START`, `TALK` y `END`, «Entrante/Saliente») con
+     la plantilla «Kapta».
+  6. En Terminales → lápiz de la -websocket → «Obtener credenciales»: el
+     usuario y la contraseña SIP, que van en Kapta con «Probar y guardar».
+
+  Pregúntale a Anura cuántas llamadas salientes simultáneas (canales) permite
+  el plan: si son menos que las líneas, las de más fallan aunque Kapta las vea
+  libres.
+
+  Después, en Kapta, Ajustes › «Telefonía Anura»: «Líneas compartidas» (sumar
+  cada anexo y su clave con «Probar y guardar»; cada línea dice si está libre,
+  en uso por quién, con la clave rechazada o con el dominio no reconocido) y
+  «Quién puede llamar» (la casilla por persona). El dominio SIP de la central
+  es el mismo de «Teléfono dentro de Kapta».
+- **Por confirmar.** Cuántos canales salientes simultáneos permite el plan
+  (arriba). Una línea cuya llamada sonó y de la que Anura nunca manda el fin
+  queda ocupada hasta 2 horas (la regla de la fase 1): con pocas líneas, eso
+  se nota.
 
 ## 9. Lima
 
@@ -4963,12 +5146,31 @@ owner): esa fecha ya es el acuerdo y programa la salida sola; el pedido sale en
   los trata como ausentes. Un «No entregado» nuevo después del cierre abre un
   caso nuevo.
 
+**Dónde se atiende (pedido del owner, 07-11-2026).** «Atender» abre la ficha
+del pedido en su pestaña «Repro Lima» (`?ficha=<pedido>&seccion=reprolima`,
+`components/repro-lima-panel.tsx`), la última, después de «Chatby». Hasta
+entonces abría una hoja lateral aparte y se veían los dos paneles encima, la
+ficha y la hoja; ahora es un solo lugar. La pestaña sale **solo mientras el
+pedido está en Repro Lima**: lo dice la misma lectura de la pantalla
+(`loadReproRow`: hay fila o no la hay), que la ficha hace una vez por pedido,
+solo a quien tiene `repro_lima.manage` y solo si el pedido puede estar (Lima y
+por entregar, `isReproLimaCandidate`) o si «Atender» la pidió; sin sondeos. La
+ficha la enseña igual abierta desde el Master de Pedidos o desde cualquier
+otra pantalla. Si «Atender» la pide y el pedido ya salió, la ficha abre Operar
+con «Este pedido ya no está pendiente de entrega en Lima». Dentro de la
+pestaña está todo lo de la hoja (abajo, «la hoja» es esta pestaña): «Antes de
+llamar», el resultado, el candado, la lectura, el segundo clic de «Volver a
+atender», «Programar ahora» y «Guardar y pasar al siguiente». No crea estados
+ni cambia ninguna regla de las de abajo.
+
 **El candado.** «Atender» toma el caso por 10 minutos y lo renueva cada 4
-mientras la hoja esté abierta, como Envíos (`lib/shipments.ts`). Al cerrar la
-hoja o la pestaña, se suelta; también cuando la hoja se va sin «Cerrar» ni
-«Soltar» (atrás del navegador, el gesto de volver, un enlace de la ficha). Si
-la página vuelve del bfcache después de que el beacon lo soltó, la hoja lo
-vuelve a tomar sola y conserva lo escrito. Si otra persona lo tiene, la hoja
+mientras la pestaña «Repro Lima» esté a la vista, como Envíos
+(`lib/shipments.ts`). Al salir de la pestaña (a Operar, Chatby…), al cerrar la
+ficha o la pestaña del navegador, se suelta; también cuando la ficha se va sin
+«Cerrar» ni «Soltar» (atrás del navegador, el gesto de volver, otro pedido).
+Volver a la pestaña lo vuelve a tomar y conserva lo escrito. Si la página
+vuelve del bfcache después de que el beacon lo soltó, la hoja lo vuelve a
+tomar sola y conserva lo escrito. Si otra persona lo tiene, la hoja
 se abre solo para leer: «Diana está atendiendo este pedido; se libera a las
 10:42.», con «Reintentar». Si se pierde, la hoja lo dice («Ya no tienes este
 caso», con «Volver a tomarlo») y conserva lo escrito. Lo mismo al guardar: si
@@ -4978,7 +5180,9 @@ tomarlo falla, la hoja dice «No pudimos tomar el caso. Vuelve a intentarlo.»,
 también con «Reintentar». Mientras el caso no es tuyo (se está tomando, lo
 tiene otra persona, falló o se perdió), lo escrito sigue a la vista pero sin
 poder editarse («Lo que escribiste sigue aquí. Reintenta para guardarlo.»), y
-cerrar con algo sin guardar siempre avisa (§11.5). Guardar exige el candado vivo y el mismo episodio (`lima_repro_record`).
+cerrar con algo sin guardar siempre avisa (§11.5): «Cerrar», «Soltar» y
+también la ✕, el fondo y Escape de la ficha, que antes de cerrarse vuelven a
+la pestaña con el aviso. Guardar exige el candado vivo y el mismo episodio (`lima_repro_record`).
 **Solo vale dentro de Repro Lima**:
 Grupo GF sigue tomando, programando y asignando el pedido. «Ver acuerdo» y
 «Cerrados» se abren solo para leer, sin candado.
@@ -5105,6 +5309,21 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   porque una devolución puede limpiarlo. Si falla la lectura, se muestra el error
   y no cantidades parciales. Consultar estos apartados no programa, recibe,
   asigna ni modifica ningún pedido o salida. No requiere migraciones.
+- **Agendado con Aliclik (decisión del owner, 07-11-2026):** un pedido con una
+  guía Aliclik **viva que espera su recojo** (`status_category = pending`, sin
+  `dispatched_at`, `out_for_delivery_at` ni `returned_at`, no anulada) ya no cae
+  en «Nunca salieron · Pendiente de primer despacho» como si nadie lo hubiera
+  gestionado (#KP202671, 06-11-2026: 52 pedidos de Lima así). Su **día de
+  recojo** lo programa: el que reportó Aliclik (`aliclik_reported_dispatch_date`)
+  o, sin reporte, el de su regla de corte (`aliclik_expected_dispatch_date`,
+  §10). Va en Programados hoy, mañana o después como cualquier programación, y
+  una fecha acordada vigente o un programa de Grupo GF mandan sobre ella. En
+  «Gestión pendiente» dice **«Agendado con Aliclik · Aliclik lo recoge el vie
+  07/11»**; si el día pasó y sigue sin recojo, queda en Hoy como vencido con
+  **«Aliclik no lo recogió»**: revisar la guía con Aliclik. Solo cambia la
+  lectura de Repro Lima (`loadLimaPending`, `limaScheduledFor`, `pendingGroup`);
+  **Despacho del día de Grupo GF no cambia**, ni se escribe ningún programa.
+  Prueba: `test/repro-lima-pending.test.ts`.
 - **«Sale a reparto» (07-11-2026, §29.16):** sobre las tarjetas de atención,
   la misma tarjeta de Despacho del día, con nuestras tiendas. Dice lo que sale
   con Grupo GF hoy o en el próximo reparto y lo que le falta (sin rótulo, sin
@@ -5124,7 +5343,8 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   cual y lo antiguo pasa antes por la llamada. Lo aplica `attentionRows`
   (`lib/repro-lima-pending.ts`).
 - **Gestión (corrección del owner, 28-10-2026):** «Atender» abre siempre la
-  hoja de llamada y programación/reprogramación, también desde Todos y para
+  hoja de llamada y programación/reprogramación —desde el 07-11-2026, la
+  pestaña «Repro Lima» de la ficha—, también desde Todos y para
   pendientes que nunca salieron. El código del pedido abre la ficha compartida.
   Los pendientes sin fallo usan un contexto de atención `attention:<order_id>`:
   no se inventa un «No entregado», una parada ni un despacho. Conserva las
@@ -5317,13 +5537,17 @@ el acuerdo. «Llamar después» y «Ya no lo quiere» lo vacían; queda en el
 historial de llamadas. «No contesta» lo conserva. Un doble clic no registra dos
 llamadas.
 
-«Guardar y pasar al siguiente» abre el siguiente pedido de la misma lista que
-nadie más esté atendiendo. Si el guardado deja un error (por ejemplo «no se
-pudo programar… Usa «Programar ahora».») o pide crear la salida en la Mesa de
-ruta (otro courier), no pasa: la hoja se cierra y el aviso queda en el
-tablero. Si no, pasa, y el aviso del pedido anterior («Avisa a Almacén: la caja
-tiene que estar en el anaquel antes de las 12:30.») queda arriba de la hoja
-siguiente, con el nombre de ese pedido.
+«Guardar y pasar al siguiente» abre la ficha del siguiente pedido de la misma
+lista del tablero (con sus filtros) que nadie más esté atendiendo, en su
+pestaña «Repro Lima». Si el guardado deja un error (por ejemplo «no se pudo
+programar… Usa «Programar ahora».») o pide crear la salida en la Mesa de ruta
+(otro courier), no pasa: la pestaña queda en el mismo pedido, para leer, con el
+aviso arriba y, si toca, «Abrir la Mesa de ruta del pedido» (Operar de la misma
+ficha). Si no, pasa, y el aviso del pedido anterior («Avisa a Almacén: la caja
+tiene que estar en el anaquel antes de las 12:30.») queda arriba de la pestaña
+siguiente, con el nombre de ese pedido. Abierta fuera del tablero (Master de
+Pedidos) no hay lista: el botón dice «Guardar» y el aviso queda arriba, igual.
+Desde la lectura, «Atender» (o «Cambiar el acuerdo») vuelve a tomar el caso.
 
 **Fechas.**
 
@@ -5731,11 +5955,15 @@ Decisiones del owner sobre el diseño de la entrega 1c (13-10-2026):
 Implementación: `lib/repro-lima.ts`, `lib/repro-box-action.ts`,
 `lib/repro-lima-access.ts`, `lib/repro-lima-program.ts`,
 `app/dashboard/pedidos/repro-lima/`, `components/repro-lima-board.tsx`,
-`components/repro-lima-sheet.tsx` y la migración `0251_lima_repro.sql`.
+`components/repro-lima-panel.tsx` (la pestaña «Repro Lima» de la ficha,
+`components/order-drawer.tsx`; hasta el 07-11-2026, la hoja
+`components/repro-lima-sheet.tsx`), `lib/repro-lima-queue.ts` y la migración
+`0251_lima_repro.sql`.
 Pruebas en `test/repro-lima.test.ts`, `test/repro-box-action.test.ts`,
 `test/repro-lima-program.test.ts`, `test/repro-lima-access.test.ts`,
 `test/repro-lima-actions.test.ts`, `test/repro-lima-scan.test.ts`,
-`test/repro-lima-ui.test.ts`, `test/repro-lima-source.test.ts` y
+`test/repro-lima-ui.test.ts`, `test/repro-lima-source.test.ts`,
+`test/repro-lima-drawer-tab.test.ts` y
 `scripts/sql/repro_lima_smoke.sql`.
 
 La entrega 1c: `lib/warehouse-retries.ts` (las reglas, puras),
@@ -7049,6 +7277,13 @@ el carrito del propio lead no cuenta (ya está en «Lo que pidió»).
   el 27-10-2026, cuando COD Core los mande (§38.12, «Los formularios
   abandonados de WooCommerce»), y salen aquí sin tocar nada.
 
+**Datos de entrega conocidos (07-11-2026, pedido del owner).** Entre «Pedidos
+anteriores» y «Carritos anteriores», la ficha muestra hasta 3 direcciones a las
+que ya se le mandó a la clienta (pedidos de Kapta e historial de Shopify,
+anulados incluidos y marcados), con «Usar en el pedido», que abre el formulario
+de pedido con esa dirección escrita, sin guardar nada. La regla completa está
+en §37.9.
+
 **«Siguiente lead» en la ficha (25-10-2026, pedido del owner).** Arriba a la
 derecha de la ficha del lead, entre el QR y «Cerrar», abre el siguiente sin
 cerrar la ficha (`leadAfter`, `lib/leads.ts`). Es el de **debajo** del abierto
@@ -7527,6 +7762,36 @@ Sullana** (`200601`); el resto de esa provincia (Bellavista, Marcavelica,
 Querecotillo…) no se confirmó y sigue rechazándose con el mensaje de siempre.
 Antes, «Sullana» resolvía al cercado de Piura (`200101`) marcado como no exacto
 y la guía se negaba.
+
+**Junín sale de la bodega de Huancayo (07-11-2026, owner, #KP202768).** La
+Mesa de ruta de #KP202768 («El Tambo», «Junín») decía «Swayp no tiene
+cobertura local en este destino.» aunque Swayp ya había entregado 7 pedidos en
+El Tambo (llegados por Aliclik con la ciudad «huancayo»). La dirección de
+Shopify trae el distrito y el departamento, casi nunca la provincia, así que
+«Huancayo» no aparecía y la cobertura caía a «el tambo», que no existe. El
+owner mandó la lista de destinos de Junín del panel de Swayp («Ciudad de
+Destino»): «es a todos estos donde tiene cobertura swayp». Son 19: Ahuac,
+Chilca, Chupuro, Concepción, El Tambo, Hualhuas, Huamancaca Chico, Huancán,
+Huancayo, Huayucachi, Ingenio, Jauja, Matahuasi, Orcotuna, Pilcomayo, Quilcas,
+Sapallanga, Tres de Diciembre y Viques (`SWAYP_HUANCAYO_DISTRICTS`,
+`lib/shipments.ts`).
+
+- Con el departamento Junín o su propia provincia al lado, resuelven a la
+  ciudad `huancayo` con su distrito: la tarjeta de la Mesa de ruta, el filtro
+  «Swayp» del Master, el stock (el de Huancayo), el remitente y la bodega de
+  origen (Huancayo) y el destino (el ubigeo exacto del distrito) dicen lo
+  mismo. Sin Junín al lado no se adivina: «Chilca» también es un distrito de
+  Cañete.
+- Los de otras provincias entran a la tabla de Huancayo con su código INEI,
+  como Sullana en la de Piura: Concepción (`120201`), Matahuasi (`120210`),
+  Orcotuna (`120213`), Jauja (`120401`), Ahuac (`120902`), Huamancaca Chico
+  (`120905`) y Tres de Diciembre (`120908`).
+- Cambia Jauja, que la operación había descartado el 15-08-2026: ahora está
+  en la lista de Swayp. Lo que no está en la lista sigue como estaba: Sicaya,
+  San Jerónimo de Tunán o San Agustín de Cajas no tienen cobertura, y Chupaca
+  (que no aparece en el panel) sigue como satélite de Huancayo, como estaba.
+
+Pruebas en `test/swayp-junin.test.ts`.
 
 «Exacto» es sobre el DISTRITO, no sobre cómo se escribe. El nombre llega del
 campo *city* de la dirección de Shopify, que usa el nombre oficial completo, y
@@ -11674,6 +11939,7 @@ mantiene observado el lote completo.
 | Finanzas/liquidación | Responsable financiera | Yohalis |
 | Anexos de Anura, URL del aviso y llamada de prueba (§8.7) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
 | Dominio SIP de la central y clave del teléfono de Kapta de cada anexo (§8.7, fase 2) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura», con «Probar y guardar» |
+| Líneas compartidas de Anura y «Puede llamar con Anura» (§8.7, 08-11-2026) | Administración (`stores.manage`) | Quien administra la tienda, en Ajustes › «Telefonía Anura» |
 | Reembolsos/propietario | Owner | Frankz |
 
 La autorización futura se asigna al rol estable, no al nombre. El actor real se
@@ -11719,6 +11985,10 @@ registra en cada evento.
   clave del teléfono de Kapta de un anexo pide `stores.manage`; la clave
   queda cifrada en una tabla que solo lee el servidor, Ajustes solo dice si
   está guardada, y el navegador la recibe solo la dueña del anexo, al llamar.
+  Líneas compartidas (08-11-2026): tampoco hay permiso nuevo. Sumar o quitar
+  una línea, guardar su clave y marcar «Puede llamar con Anura» piden
+  `stores.manage`. Con la casilla, el navegador de quien llama recibe la clave
+  de la línea que se le reservó, solo durante esa llamada.
 - Excepción COD por riesgo: justificación obligatoria.
 - Continuar con discrepancia geográfica: justificación obligatoria.
 - Retirar del manifiesto: motivo obligatorio.
@@ -13557,6 +13827,79 @@ salida (`reprogramDestination`), que es el que usó el courier. Registrar a mano
 (`createFenixGuide`) no se frena: esa guía ya existe en Swayp y negarse a
 registrarla solo la dejaría sin seguimiento.
 
+### 19.0.3 Distrito por revisar: la capital de provincia como distrito (08-11-2026)
+
+> ⚠️ **Ocurrió.** #KP202409 llegó del formulario web con distrito «Arequipa» y
+> dirección «AV solo 709 campo marte paucarpata». Kapta le pasó «Arequipa» a
+> la guía de Swayp; Swayp fue a Arequipa Cercado y anuló la guía. El
+> formulario deja elegir la provincia y el distrito, y muchas clientas eligen
+> la capital. El 08-11-2026 había 28 pedidos abiertos así sin guía (se
+> corrigieron en revisión masiva, ver `DEPLOY.md`) y unos 33 más que ya
+> estaban con el courier.
+
+Decisión del owner: **es un aviso, no un estado.** No hay estado, macroetapa
+ni bloqueo de servidor nuevos; el pedido sigue donde esté.
+
+**La regla** (`districtMismatch`, `lib/district-mismatch.ts`, pura):
+
+- El pedido es de provincia: la cobertura **no** es Lima ni Agencia.
+- El distrito, normalizado (sin tildes ni mayúsculas), es igual a la
+  provincia: la capital.
+- La dirección menciona, como **palabra entera** y sin tildes ni mayúsculas,
+  **otro** distrito de la **misma provincia y departamento** según
+  `peru_districts`, de **5 letras o más** (los nombres cortos casan con
+  cualquier cosa). Si casan dos nombres y uno contiene al otro («San Jerónimo»
+  y «San Jerónimo de Tunán»), vale el largo.
+
+**Antes de crear la guía.** En la guía Swayp directa (también «Swayp lo puede
+llevar hoy» desde Por confirmar, que abre el mismo modal), en el reenvío por
+Swayp de Envíos, en el panel de la guía Aliclik y en la salida Olva, si el
+pedido cae en la regla aparece un aviso ámbar:
+«La dirección dice Paucarpata y el distrito es Arequipa.», con un botón
+«Corregir a Paucarpata» por cada
+distrito que nombra la dirección y «Crear con Arequipa igual». El botón de
+crear espera hasta que se corrija o se pulse «Crear con … igual»; crear igual
+sigue siendo posible, a sabiendas.
+
+- **Corregir** es «Corregir ubicación» de siempre (`updateOrderGeo`, con su
+  auditoría y el recálculo): solo cambia el distrito —lo demás que ya tuviera la
+  corrección del pedido se conserva— y deja la nota «Distrito corregido: la
+  dirección dice Paucarpata.». Después se recarga.
+- **Aliclik** cotiza con el distrito: corregido, la cotización se borra y se
+  vuelve a pedir.
+- **El reenvío por Swayp** sale con el destino de la salida anterior
+  (`reprogramDestination`, §19.0.2), así que el aviso mira ese distrito y esa
+  dirección (con el departamento del pedido). Corregir arregla el pedido y abre
+  «Modificar destino» con el distrito nuevo: hay que guardarlo también ahí para
+  que Swayp lo reciba.
+
+**En el Master: «Distrito por revisar».** Una píldora en la línea de
+excepciones, tras «Programado sin ubicación», cuenta los pedidos **abiertos**
+(`pendiente`, `en_proceso`) que caen en la regla. Tocarla abre la lista: el
+pedido (abre la ficha en Ubicación), «Arequipa → Paucarpata», la dirección y,
+si ya tiene guía, con qué courier salió (corregir aquí no le cambia la guía al
+courier, §11.6.2). Cada fila tiene «Corregir» (un botón por sugerencia si hay
+varias), y «Corregir seleccionados» corrige en lote las que tienen **una sola**
+sugerencia, por el mismo camino, una tras otra. Se apaga sola: corregido, el
+distrito ya no es la capital.
+
+**Coste.** Dos lecturas por carga del Master, a la par del resto y con la
+sesión de quien mira: los pedidos abiertos que no son de Lima ni de Agencia
+(columnas cortas; ~1.500 el 08-11-2026) y `peru_districts` de **solo** sus
+provincias, en una consulta. La regla corre en el servidor en una pasada; al
+navegador llega solo la lista. Sin sondeo propio (el Master ya se recarga
+cuando cambia algo). Con búsqueda no se lee. Si la lectura falla, la píldora no
+se pinta. Antes de la guía: dos lecturas pequeñas al abrirla y otra tras
+corregir.
+
+Implementación: `lib/district-mismatch.ts` (regla y textos),
+`lib/district-mismatch-access.ts` (`getDistrictReview`,
+`loadProvinceDistricts`, `loadOrderDistrictMismatch`),
+`app/dashboard/pedidos/district-mismatch-actions.ts`,
+`components/district-mismatch-warning.tsx` y
+`components/district-review-panel.tsx`. Pruebas:
+`test/district-mismatch.test.ts`.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.
@@ -13733,6 +14076,9 @@ viven en `scripts/sql/master_liviano_smoke.sql`.
 - Anura, después de la fase 2 (§8.7): entrantes en Kapta (hoy solo salidas;
   una entrante se reparte en Anura, «Flujo de llamada»), un TURN propio para
   redes muy cerradas y la prueba real del registro con el puerto 55090.
+- Anura, líneas compartidas (§8.7): confirmar con Anura los canales salientes
+  simultáneos del plan, y soltar antes de 2 horas una línea cuya llamada
+  sonó si Anura nunca manda el fin.
 
 ## 22. Criterios de aceptación de la Fase 2
 
@@ -14175,6 +14521,86 @@ comparten Master y ficha), `components/order-drawer-host.tsx` (montada en
 `app/dashboard/layout.tsx`), `components/order-link.tsx` (`OrderLink`,
 `useOpenOrderDrawer`) y `lib/order-drawer-href.ts` (las URL; probado en
 `test/order-drawer-href.test.ts`).
+
+### 25.2 Después de «Generar pedido» en Leads: cómo sale y cómo se cobra (07-11-2026)
+
+**Por qué.** El owner (07-11-2026): «en el drawer de Leads, luego de generar el
+pedido me da la opción para crear guía en Aliclik pero no me da para subir si
+manda un adelanto de pago, tampoco para elegir agencia Shalom, y me gustaría
+tener el de "Swayp lo puede llevar hoy"». La ficha del pedido ya tenía las tres
+cosas; la asesora de Leads tenía que irse al Master a buscar el pedido que
+acababa de crear.
+
+Dónde: en el cajón de Leads, para cualquier lead con pedido propio
+(`leads.order_id`), la tarjeta **«Cómo sale el pedido»** con el número del
+pedido y tres tarjetas-opción: **«Guía Aliclik»**, **«Swayp hoy»** y **«Agencia
+Shalom + adelanto»**. «Continuar · elegir envío» (antes «Continuar · crear
+guía») cierra el formulario del pedido y la deja a la vista. La elegida abre
+debajo, en su propia tarjeta, **el mismo componente de la ficha del pedido con
+sus mismas server actions**; no hay versión «de Leads»:
+
+- **Guía Aliclik** → el panel de crear guía (`AliclikGuidePanel`), como hasta
+  ahora. Con la guía creada, el bloque permanente con la guía y el pedido.
+- **Swayp hoy** → «Swayp lo puede llevar hoy · Sale sin confirmar. Si Swayp no
+  lo entrega, el pedido vuelve a Por confirmar para llamarlo otra vez.» y
+  «Enviar por Swayp», que abre la guía Swayp directa con `origen =
+  por_confirmar` (§11.11: mismas validaciones, mismo hecho
+  `swayp_desde_por_confirmar`, no escribe `confirmed`).
+- **Agencia Shalom + adelanto** → la tarjeta de Cobro (`PickupKeyPanel`):
+  «Registrar un pago» con el comprobante Yape/Plin del adelanto y «DNI y agencia
+  Shalom» (`shalom_order_drafts`); en un pedido pagado por web, la constancia y
+  el bloque del DNI y la agencia (§Pagos, #KP200104).
+
+**Cuándo se ofrece cada una: lo mismo que en la ficha**, con las mismas
+funciones (no hay regla nueva ni estado nuevo):
+
+| Opción | Se ofrece si | Permiso |
+|---|---|---|
+| Guía Aliclik | el plan de rutas ofrece Aliclik y no está frenado, y el pedido no es acompañante (`aliclikGuideOffered`, §32) | `aliclik.create_guide` |
+| Swayp hoy | Por confirmar, provincia COD, «Swayp ok · con stock», no «Swayp no entregó» (`swaypDesdeConfirmacionOffer`, §11.11) | `master.edit` (quien no es solo lectura), como la mesa de confirmación |
+| Agencia Shalom + adelanto | la tarjeta de Cobro de la ficha se dibujaría (`orderPaymentPanelFor`: Agencia, salida Shalom/agencia, pago exigido o regla de riesgo del §8, cobro ya cargado, o Shalom/Olva en el plan con `shalom.create_guide`) y en su mismo modo | los de la tarjeta (`shalom.register_payment` para registrar, `master.edit` para el borrador de Shalom, `payments.validate` para validar), que vuelve a decidir el servidor |
+
+- **Lo que no se ofrece se dice.** La tarjeta-opción queda apagada con el
+  porqué en una línea («Tu rol no permite crear guías de Aliclik.», «Solo para
+  provincia COD; este pedido es Lima.», «Swayp no lo puede llevar hoy: sin stock
+  swayp.», «No aplica en Lima: el pedido no va por agencia…», el motivo del plan
+  de rutas si la ruta está frenada). Nunca desaparece en silencio.
+- **La disponibilidad Swayp de un pedido recién nacido.** La columna
+  `swayp_availability` la llena la pasada horaria (§11.10), no el recálculo, y
+  un pedido que sale de «Generar pedido» la tiene vacía. Si está vacía y el
+  pedido está en Por confirmar y es provincia COD, se evalúa **en el momento con
+  la misma regla** (`swaypAvailabilityFor` sobre `fenix_stock`), **sin escribir**
+  la columna. Si la lectura del stock falla: «Swayp todavía no evaluó el stock
+  para este pedido.». La ficha sigue leyendo la columna.
+- **Después de una acción, la opción dice en qué quedó**: «Creada» y la guía de
+  Aliclik; «Programado» y la guía Swayp viva; el cobro en su chapa
+  («Adelanto cargado · por validar» —cargado es subido y sin validar—,
+  «Diferencia pendiente», «Pago completo»); «Agencia guardada» con la agencia y
+  el documento. La tarjeta se vuelve a leer tras cada acción y con el aviso
+  entre paneles de pago (`lib/payment-panel-sync.ts`), que desde ahora también
+  se da al guardar «DNI y agencia Shalom».
+- **Qué se abre solo.** La opción que ya tiene algo hecho (guía Swayp, guía de
+  Aliclik, cobro o agencia guardada) y, si no, Aliclik cuando se ofrece —lo que
+  el cajón enseñaba antes—. Si ninguna se ofrece, ninguna.
+- **Si la lectura falla**, la tarjeta lo dice con «Intentar nuevamente» y el
+  panel de Aliclik se queda como estaba antes, para no frenar la venta.
+- **Teléfono.** Las tres opciones en una columna (tres desde 640 px), con
+  objetivos de 44 px al dedo; las tarjetas de debajo son las de la ficha.
+- **Solo lectura.** `loadLeadPostOrderChoices` lee el lead por RLS y su
+  reparto por bloques, la ficha del pedido (`loadOrderDetail`), la ficha del §8
+  donde la ficha la pide (`needsConfirmationBrief`), el borrador de Shalom y,
+  si hace falta, el stock Swayp. No escribe nada. Las acciones vuelven a
+  comprobar todo. Sin migración.
+
+Implementación: `lib/lead-post-order.ts` (qué se ofrece, el porqué y el
+resumen, puro), `app/dashboard/leads/post-order-actions.ts`
+(`loadLeadPostOrderChoices`), `components/lead-post-order-choices.tsx` (la
+tarjeta), `components/swayp-desde-confirmacion-offer.tsx` (la pieza de Swayp,
+compartida con la mesa de confirmación), y las reglas compartidas con la ficha:
+`aliclikGuideOffered` (`lib/order-route-plan.ts`), `swaypDesdeConfirmacionOffer`
+(`lib/swayp-desde-confirmacion-offer.ts`) y `orderPaymentPanelFor`
+(`lib/order-payment-panel.ts`). Pruebas: `test/lead-post-order.test.ts` y
+`test/swayp-desde-confirmacion.test.ts`.
 
 ## 26. Costo de producto (COGS)
 
@@ -20374,8 +20800,9 @@ que Kapta guarda como **archivo de consulta**.
   que se ven son los de Shopify, tal como vinieron (`financial_status`,
   `fulfillment_status`, `cancelled_at`): no se traducen a estados del Master.
   Lo único que lee del archivo fuera de su pantalla es «Pedidos antes» de la
-  ficha del lead (§37.7), solo para contar y listar, y el «Último destino
-  conocido de esta clienta» del cajón del Master (§37.8), solo para sugerir.
+  ficha del lead (§37.7), solo para contar y listar, el «Último destino
+  conocido de esta clienta» del cajón del Master (§37.8) y los «Datos de
+  entrega conocidos» del cajón de Leads (§37.9), solo para sugerir.
 - La tienda sigue siendo la única fuente de pedidos (AGENTS.md, regla 4): esto es
   una copia de lo que Shopify ya tenía, no un canal de entrada.
 
@@ -20568,9 +20995,12 @@ cuenta el historial de Shopify.
 Reglas:
 
 - **Misma clienta, misma tienda.** Se buscan en `shopify_history_orders` los
-  pedidos de la tienda del lead con el mismo celular normalizado
-  (`phone_norm` = `normalizePhone` del celular del lead). No se cruza por
-  correo ni por nombre, ni entre tiendas.
+  pedidos de la tienda del lead con el mismo celular en cualquiera de sus
+  formas (`phone_norm` en `customerPhoneVariants`: el guardado, 51 + nueve, los
+  nueve nacionales, «051…» y «0051…»; 07-11-2026). Antes se comparaba solo con
+  `normalizePhone` del lead, y un celular que el historial guardó como «051…»
+  dejaba sus pedidos fuera de la lista. No se cruza por correo ni por nombre,
+  ni entre tiendas.
 - **Sin anulados.** Como en `orders`, el anulado en Shopify
   (`cancelled_at`) no cuenta.
 - **Un pedido cuenta una vez.** Si el número (`order_name`) ya está en `orders`
@@ -20680,6 +21110,93 @@ sugerencia, con qué celulares se busca y qué direcciones se ofrecen),
 `app/dashboard/pedidos/last-destination-actions.ts` (las lecturas) y
 `LastDestinationSuggestions` en `components/order-drawer.tsx`. Pruebas:
 `test/last-known-destination.test.ts`.
+
+### 37.9 Datos de entrega conocidos en Leads (owner, 07-11-2026)
+
+**Por qué.** El owner (07-11-2026): «en Leads estamos mostrando la información
+que ya tenemos grabada en la base de datos en base al número de celular… creo
+que tenemos la dirección del cliente. ¿Podemos mostrar esa información en el
+drawer de leads para que al equipo de leads le sea más fácil registrar las
+ventas?». Caso real en Kenku: un lead cuya única compra anterior estaba en el
+historial de Shopify, **anulada**. «Pedidos anteriores» no la lista (§37.7, sin
+anulados), «Carritos anteriores» decía «Pedido #…», y la dirección —que el
+historial sí tiene— no se veía en ningún lado: la asesora se la volvía a pedir
+a la clienta.
+
+Dónde: en el cajón de Leads, la tarjeta **«Datos de entrega conocidos»**, entre
+«Pedidos anteriores» y «Carritos anteriores», con la misma anatomía. Solo sale
+si hay al menos una dirección que sirva.
+
+Qué muestra, por dirección (hasta **3**, la más reciente primero):
+
+- la dirección, la referencia (`Ref.:`), distrito · provincia · región sin
+  repetir, quién recibió («Recibe:») y el celular de contacto del envío **solo
+  si es otro** que el del lead;
+- de dónde sale: «del pedido #KP… · 14 jun 2025 · anulado · historial de
+  Shopify» (la fecha en hora de Lima; «anulado» y «historial de Shopify» solo
+  cuando corresponden), «usada en N pedidos» si varios fueron ahí y la chapa
+  «Entregado ahí» si Kapta entregó alguno en esa dirección;
+- «Usar en el pedido» y «Copiar dirección» (calle, referencia y lugar en una
+  línea; el celular de contacto tiene su propio copiar).
+
+De dónde sale (las dos fuentes juntas, no una detrás de otra como en §37.8):
+
+1. **Pedidos de Kapta**: `order_master` (la ubicación ya resuelta que usa la
+   logística: corrección manual, courier, Shopify o WooCommerce, ubigeo;
+   `customer_name` es el nombre del envío). No se vuelve a leer `orders.raw`.
+2. **Historial de Shopify** (§37, `shopify_history_orders`), **anulados
+   incluidos**: `shipping_address1` la dirección, `shipping_address2` la
+   referencia, `shipping_city` el distrito, `shipping_province` la región;
+   `shipping_name` (o `customer_name`) quién recibe y `shipping_phone` el
+   contacto. La provincia no viene.
+
+Reglas:
+
+- **Misma clienta, misma tienda.** La tienda del lead, por el celular en todas
+  sus formas (`customerPhoneVariants`, como «Pedidos antes» desde el
+  07-11-2026, §37.7). No se cruza por correo, nombre ni entre tiendas (el
+  Master sí mira la organización, §37.8: allí el pedido ya existe).
+- **Manda Kapta.** Un número que ya está en `order_master` no se toma del
+  historial. El pedido propio del lead (`leads.order_id`) no es «de antes», y su
+  copia del historial tampoco.
+- **Una dirección sirve** si trae la calle y al menos el distrito o la región
+  (la misma regla de §37.8).
+- **Sin repetir.** La misma dirección (sin tildes, mayúsculas ni signos, junto
+  con el distrito: `destinationKey`) sale una vez. De sus pedidos se muestra el
+  más reciente **no anulado**; si todos lo están, el más reciente, marcado
+  «anulado». Un anulado entra: la dirección sigue sirviendo.
+- **«Entregado» solo lo dice Kapta** (`general_status = entregado`). El
+  historial no lo sabe: «fulfilled» en Shopify es despachado, no entregado.
+- **Nunca se aplica sola.** «Usar en el pedido» abre el mismo formulario de
+  «Registrar / Generar pedido (contraentrega)» con la dirección escrita
+  encima de la del borrador: Cliente (quién recibió, si se sabe; si no, el que
+  ya traía), Dirección, Referencia (vacía si esa dirección no tenía: no se
+  mezcla con la del carrito), Distrito y Provincia / Región (la región,
+  ajustada a la lista del formulario). **El celular no se toca**: es el del
+  lead, por donde va la confirmación de WhatsApp. Arriba de la dirección, el
+  aviso «Dirección de un pedido anterior: del pedido #… Confírmala con la
+  clienta antes de generar.». Nada se guarda hasta «Generar pedido», por la
+  misma acción de siempre. El prellenado queda atado al lead: «Siguiente lead»
+  o el botón del pie abren el formulario sin él.
+- **Solo lectura.** Con la sesión de quien mira (RLS por tienda,
+  `auth_store_ids()`). No escribe en `orders`, `order_master` ni el historial
+  (§37.1). No hace falta «Descargar la base de pedidos»: son los datos de
+  entrega de la misma clienta que el lead ya enseña, no la base. No se
+  registra nada con datos de la clienta.
+- **Rendimiento.** Dos lecturas en paralelo con el historial y los carritos de
+  la ficha (la misma tanda de `loadLeadCustomerHistory`): `order_master` por
+  su índice `(store_id, customer_phone)` y el historial por
+  `(store_id, phone_norm)` (0273), cada una con límite de 25. Sin migración.
+- **Si falla**: sin `order_master`, no hay tarjeta; sin el historial, solo las
+  de Kapta. La ficha nunca se rompe por esto.
+
+Implementación: `lib/lead-known-addresses.ts` (la regla pura: celulares,
+direcciones, línea de origen y prellenado; la importa el cajón, sin nada del
+servidor), `getCustomerKnownAddresses` en `lib/leads-access.ts` (las lecturas),
+`loadLeadCustomerHistory` en `app/dashboard/leads/actions.ts` (la tanda), y
+`KnownAddressesCard` y `OrderFormPanel` (`initialAddress`) en
+`components/leads-drawer.tsx`. Pruebas: `test/lead-known-addresses.test.ts` y
+`test/leads-prior-orders-history.test.ts` (el celular del historial).
 
 ## 38. WooCommerce (23-10-2026)
 
@@ -21996,7 +22513,7 @@ Sin migración: lo ya guardado no se reescribe.
   servidor, «El pedido fue reembolsado por completo en la tienda; …» (el modal
   nombra la tienda del pedido, arriba).
 - **Repro Lima** (`app/dashboard/pedidos/repro-lima/actions.ts`,
-  `components/repro-lima-sheet.tsx`, `components/repro-lima-board.tsx`): «No
+  `components/repro-lima-panel.tsx`, `components/repro-lima-board.tsx`): «No
   anula la venta: solo la tienda la anula.», «Espera que la tienda anule la
   venta» y «… hasta que la tienda anule la venta.».
 - **Leads** (`app/dashboard/leads/actions.ts`): «Si el cliente canceló, anula

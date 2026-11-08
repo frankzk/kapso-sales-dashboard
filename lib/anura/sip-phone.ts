@@ -91,6 +91,12 @@ export interface AnuraPhoneCredentials {
    * manda de vuelta, para no marcar rechazada una clave más nueva.
    */
   credentialVersion: string;
+  /**
+   * Con una línea compartida (0313): la reserva de ESTA llamada. El Click2Dial
+   * se pide con ella (`requestCall({ reservationId })`) y, si el teléfono
+   * falla antes, se suelta (`releaseReservation`).
+   */
+  reservationId?: string | null;
 }
 
 export type AnuraPhoneCredentialsErrorCode =
@@ -103,6 +109,12 @@ export type AnuraPhoneCredentialsErrorCode =
   | "sin_dominio"
   | "clave_rechazada"
   | "dominio_no_reconocido"
+  /** Líneas compartidas: todas tienen una llamada viva. */
+  | "lineas_ocupadas"
+  /** Líneas compartidas: ninguna está lista (sin clave, rechazada, apagada…). */
+  | "sin_lineas"
+  /** Quien llama ya tiene una llamada viva. */
+  | "ocupada"
   | "base";
 
 export type AnuraPhoneCredentialsResult =
@@ -153,6 +165,8 @@ export interface SipSessionLike {
   unmute(options?: { audio?: boolean }): void;
   isEnded(): boolean;
   on(event: string, listener: (e: any) => void): unknown;
+  /** El RTCPeerConnection de JsSIP (para tomar el audio y las estadísticas). */
+  connection?: unknown;
 }
 
 /** Lo que el teléfono usa de un MediaStream (el micrófono). */
@@ -565,14 +579,31 @@ export interface AnuraPhoneDeps {
   lock: AnuraTabLock;
   /** La server action que entrega las credenciales de la dueña del anexo. */
   fetchCredentials(): Promise<AnuraPhoneCredentialsResult>;
-  /** `startAnuraCall(orderId)` (o la llamada de prueba de Ajustes). */
-  requestCall(): Promise<AnuraStartResult>;
+  /**
+   * `startAnuraCall(orderId)` (o la llamada de prueba de Ajustes). Con una
+   * línea compartida lleva la reserva que vino con la clave: el servidor pide
+   * el Click2Dial con ESA línea y no elige otra.
+   */
+  requestCall(input?: { reservationId: string }): Promise<AnuraStartResult>;
+  /**
+   * La llamada no llegó a pedirse (falló el micrófono o el registro, o se
+   * colgó antes): el servidor suelta la línea compartida reservada en el acto.
+   * Si no llega, se suelta sola al minuto. Nunca debe lanzar.
+   */
+  releaseReservation?(reservationId: string): Promise<unknown>;
   /**
    * La server action que marca «clave rechazada» o «dominio no reconocido».
    * Con `dominio` manda también el dominio con el que se probó, para que el
    * servidor no marque si mientras tanto alguien lo corrigió. Nunca debe lanzar.
    */
-  reportRejected(input: { credentialVersion: string; kind: AnuraRegistrationRejectionKind; status: number | null; domain?: string }): Promise<unknown>;
+  reportRejected(input: {
+    credentialVersion: string;
+    kind: AnuraRegistrationRejectionKind;
+    status: number | null;
+    domain?: string;
+    /** Con una línea compartida: la reserva, para marcar la clave de ESA línea. */
+    reservationId?: string;
+  }): Promise<unknown>;
   onChange(snapshot: AnuraPhoneSnapshot): void;
   /** El audio de Anura, para un `<audio autoplay>` con `srcObject`; null al terminar. */
   onRemoteStream(stream: unknown): void;
@@ -586,6 +617,11 @@ export interface AnuraPhoneDeps {
   now?(): number;
   setTimeout?(fn: () => void, ms: number): unknown;
   clearTimeout?(handle: unknown): void;
+  /**
+   * Diagnóstico de cada paso (lib/anura/phone-diag.ts → log `[anura-phone]`).
+   * Sin datos personales; nunca debe lanzar.
+   */
+  diag?(event: string, data?: Record<string, string | number | boolean | null>): void;
 }
 
 export interface AnuraPhone {
@@ -638,6 +674,28 @@ function rejectBusy(s: SipSessionLike) {
  * El teléfono de Kapta. Una instancia por pestaña; cada `call()` hace un
  * recorrido completo y al final suelta todo (UA, micrófono, candado).
  */
+/**
+ * Lo técnico de la propuesta de audio de Anura (SDP del INVITE), para el
+ * diagnóstico: protocolo, rtcp-mux, DTLS, ICE, bundle y códecs. Sin IPs ni
+ * números (solo banderas y nombres de códec).
+ */
+export function sdpTraits(body: unknown): Record<string, string | number | boolean | null> {
+  if (typeof body !== "string" || !body.trim()) return { sdp: false };
+  const proto = /m=audio \d+ ([A-Z/]+)/.exec(body)?.[1] ?? null;
+  const codecs = [...body.matchAll(/a=rtpmap:\d+ ([A-Za-z0-9-]+)\//g)].map((m) => m[1]).slice(0, 8).join(",");
+  return {
+    sdp: true,
+    proto,
+    mux: /a=rtcp-mux/.test(body),
+    dtls: /a=fingerprint/.test(body),
+    crypto: /a=crypto/.test(body),
+    ice: /a=ice-ufrag/.test(body),
+    bundle: /a=group:BUNDLE/.test(body),
+    setup: /a=setup:([a-z]+)/.exec(body)?.[1] ?? null,
+    codecs: codecs || null,
+  };
+}
+
 export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
   const now = deps.now ?? (() => Date.now());
   const later = deps.setTimeout ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
@@ -655,8 +713,20 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
   let pending: PendingKaptaCall | null = null;
   let timers: unknown[] = [];
   let settle: ((s: AnuraPhoneSnapshot) => void) | null = null;
+  /** La reserva de una línea compartida de esta vuelta, mientras el Click2Dial no se pidió. */
+  let reservation: string | null = null;
 
+  const d = (event: string, data?: Record<string, string | number | boolean | null>) => {
+    try {
+      deps.diag?.(event, data);
+    } catch {
+      // diagnóstico: nunca rompe el teléfono
+    }
+  };
   const set = (patch: Partial<AnuraPhoneSnapshot>) => {
+    if (patch.phase && patch.phase !== state.phase) {
+      d("fase", { fase: patch.phase, error: patch.error?.code ?? null, registro: patch.error?.registration ?? null });
+    }
     state = { ...state, ...patch };
     state.busy = isBusyPhase(state.phase);
     deps.onChange({ ...state });
@@ -672,8 +742,21 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     return h;
   };
 
+  /** Suelta en el servidor la línea compartida reservada que no llegó a pedirse. */
+  const releaseQuietly = (reservationId: string) => {
+    try {
+      void Promise.resolve(deps.releaseReservation?.(reservationId)).catch(() => {});
+    } catch {
+      // si no llega, el servidor la suelta solo al minuto
+    }
+  };
+
   /** Suelta todo. `ua.stop()` desregistra si estaba registrado. */
   const teardown = () => {
+    // La línea compartida reservada que no llegó a pedirse vuelve a quedar libre.
+    const r = reservation;
+    reservation = null;
+    if (r) releaseQuietly(r);
     for (const h of timers) cancel(h);
     timers = [];
     pending = null;
@@ -733,10 +816,13 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
   const reportRejection = (phone: AnuraPhoneCredentials, kind: AnuraRegistrationRejectionKind, status: number | null) => {
     memory.markRejected(phone.extension, phone.credentialVersion, kind, phone.domain);
     try {
-      const input =
-        kind === "dominio"
-          ? { credentialVersion: phone.credentialVersion, kind, status, domain: phone.domain }
-          : { credentialVersion: phone.credentialVersion, kind, status };
+      const input = {
+        credentialVersion: phone.credentialVersion,
+        kind,
+        status,
+        ...(kind === "dominio" ? { domain: phone.domain } : {}),
+        ...(phone.reservationId ? { reservationId: phone.reservationId } : {}),
+      };
       void Promise.resolve(deps.reportRejected(input)).catch(() => {});
     } catch {
       // el aviso no debe romper el teléfono; la pestaña ya la recuerda
@@ -748,7 +834,10 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       s.answer({
         mediaStream: mic,
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { iceServers: creds.iceServers, bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" },
+        // Valores del navegador para bundle y rtcp-mux (06-11-2026): con
+        // `max-bundle` + `rtcpMuxPolicy: require` la primera prueba real con
+        // Anura falló al contestar con «WebRTC Error».
+        pcConfig: { iceServers: creds.iceServers },
       });
     } catch {
       fail(myRun, { code: "audio", message: ANURA_PHONE_TEXT.audio });
@@ -769,10 +858,16 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     const s = e?.session;
     if (!s) return;
     if (myRun !== run || e.originator !== "remote") {
+      d("invite", { decision: "rechazo", why: myRun !== run ? "otra_vuelta" : "no_remoto", originator: e?.originator ?? null });
       rejectBusy(s);
       return;
     }
     const decision = shouldAnswerInvite({ pending, nowMs: now(), inCall: session !== null || held !== null });
+    d("invite", {
+      decision: decision.answer ? (pending?.accepted ? "contesta" : "espera") : "rechazo",
+      why: decision.answer ? null : decision.why,
+      edadMs: pending ? now() - pending.sinceMs : null,
+    });
     if (!decision.answer || !pending) {
       // Sin sonar: Kapta no recibe llamadas.
       rejectBusy(s);
@@ -789,20 +884,85 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       }
       if (iceTimer === null) iceTimer = timer(() => ready(), ANURA_ICE_MAX_WAIT_MS);
     });
+    let remoteSet = false;
     s.on("peerconnection", (ev: { peerconnection?: { addEventListener?: (t: string, cb: (x: any) => void) => void } }) => {
-      ev?.peerconnection?.addEventListener?.("track", (t: { streams?: readonly unknown[]; track?: unknown }) => {
+      ev?.peerconnection?.addEventListener?.("track", (t: { streams?: readonly unknown[]; track?: { kind?: unknown } }) => {
+        d("audio_remoto", { via: "track", streams: t?.streams?.length ?? 0, kind: typeof t?.track?.kind === "string" ? t.track.kind : null });
         if (myRun !== run) return;
         const stream = t?.streams?.[0] ?? (t?.track && deps.makeStream ? deps.makeStream([t.track]) : null);
-        if (stream) deps.onRemoteStream(stream);
+        if (stream) {
+          remoteSet = true;
+          deps.onRemoteStream(stream);
+        }
       });
     });
+    /**
+     * Al contestar: el audio de Anura sale de los receptores de la conexión
+     * (por si el evento `track` no llegó o llegó sin stream), y a los 4 y 15 s
+     * se anota cuánto audio llega y sale (diagnóstico, 07-11-2026).
+     */
+    const afterConfirmed = () => {
+      const pc = s.connection as
+        | { getReceivers?: () => { track?: { kind?: string; muted?: boolean; readyState?: string } | null }[]; getStats?: () => Promise<{ forEach(cb: (r: any) => void): void }> }
+        | undefined;
+      const tracks = (pc?.getReceivers?.() ?? []).map((r) => r.track).filter((t): t is { kind?: string; muted?: boolean; readyState?: string } => !!t && t.kind === "audio");
+      d("audio_receptores", { pistas: tracks.length, muted: tracks[0]?.muted ?? null, estado: tracks[0]?.readyState ?? null, yaHabia: remoteSet });
+      if (tracks.length && deps.makeStream) deps.onRemoteStream(deps.makeStream(tracks));
+      for (const ms of [4000, 15000]) {
+        timer(() => {
+          if (myRun !== run || !pc?.getStats) return;
+          void pc
+            .getStats()
+            .then((stats) => {
+              const out: Record<string, string | number | boolean | null> = { a_los_ms: ms };
+              stats.forEach((r: any) => {
+                if (r?.type === "inbound-rtp" && (r.kind === "audio" || r.mediaType === "audio")) {
+                  out.recibidos = Number(r.packetsReceived ?? 0);
+                  out.bytesRecibidos = Number(r.bytesReceived ?? 0);
+                  out.perdidos = Number(r.packetsLost ?? 0);
+                  out.nivel = typeof r.audioLevel === "number" ? Math.round(r.audioLevel * 1000) / 1000 : null;
+                  out.energia = typeof r.totalAudioEnergy === "number" ? Math.round(r.totalAudioEnergy * 1000) / 1000 : null;
+                }
+                if (r?.type === "outbound-rtp" && (r.kind === "audio" || r.mediaType === "audio")) out.enviados = Number(r.packetsSent ?? 0);
+                if (r?.type === "candidate-pair" && r.nominated && r.state === "succeeded") out.par = "ok";
+              });
+              d("rtp", out);
+            })
+            .catch(() => d("rtp", { a_los_ms: ms, error: true }));
+        }, ms);
+      }
+    };
+    for (const step of ["setremotedescriptionfailed", "createanswerfailed", "setlocaldescriptionfailed"]) {
+      s.on(`peerconnection:${step}`, (err: unknown) => {
+        const e = err as { name?: unknown; message?: unknown } | null;
+        d("webrtc_error", { paso: step, name: typeof e?.name === "string" ? e.name : null, msg: typeof e?.message === "string" ? e.message : null });
+      });
+    }
+    s.on("getusermediafailed", (err: unknown) => {
+      const e = err as { name?: unknown } | null;
+      d("webrtc_error", { paso: "getusermedia", name: typeof e?.name === "string" ? e.name : null, msg: null });
+    });
     s.on("confirmed", () => {
+      d("sesion_confirmada");
       if (myRun !== run) return;
+      try {
+        afterConfirmed();
+      } catch {
+        // diagnóstico: nunca rompe la llamada
+      }
       set({ phase: "en_llamada", answeredAt: state.answeredAt ?? now() });
       resolveCall();
     });
-    s.on("ended", (ev: { originator?: string } | undefined) => finish(myRun, ev?.originator === "local" ? "kapta" : "anura"));
-    s.on("failed", () => {
+    s.on("ended", (ev: { originator?: string; cause?: unknown } | undefined) => {
+      d("sesion_fin", { originator: ev?.originator ?? null, cause: typeof ev?.cause === "string" ? ev.cause : null });
+      finish(myRun, ev?.originator === "local" ? "kapta" : "anura");
+    });
+    s.on("failed", (ev: { originator?: string; cause?: unknown; message?: { status_code?: unknown } | null } | undefined) => {
+      d("sesion_fallo", {
+        originator: ev?.originator ?? null,
+        cause: typeof ev?.cause === "string" ? ev.cause : null,
+        status: Number.isFinite(Number(ev?.message?.status_code)) ? Number(ev?.message?.status_code) : null,
+      });
       if (myRun !== run) return;
       if (held === s) {
         // Se cortó mientras esperaba la confirmación: el siguiente aviso de la ventana todavía vale.
@@ -828,14 +988,19 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
     set({ phase: "pidiendo" });
     timer(() => {
       if (myRun !== run || session) return;
+      d("sin_invite", { held: held !== null, accepted: pending?.accepted ?? null });
       fail(myRun, { code: "anura_no_llamo", message: ANURA_PHONE_TEXT.anura_no_llamo });
     }, ANURA_INVITE_WINDOW_MS);
     let result: AnuraStartResult;
+    // Desde aquí la reserva es del Click2Dial: si falla, la cierra el servidor.
+    const reserved = reservation;
+    reservation = null;
     try {
-      result = await deps.requestCall();
+      result = await (reserved ? deps.requestCall({ reservationId: reserved }) : deps.requestCall());
     } catch {
       result = { ok: false, code: "red", error: "No se pudo pedir la llamada. Revisa tu internet." };
     }
+    d("click2dial", { ok: result.ok, code: result.ok ? null : (result.code ?? null), conAviso: session !== null || held !== null });
     if (myRun !== run) return;
     if (result.ok) {
       set({ callId: result.callId, toMasked: result.toMasked, ...(session ? {} : { phase: "esperando_anura" as const }) });
@@ -878,12 +1043,18 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
       } catch {
         creds = { ok: false, code: "base", error: "No se pudo preparar el teléfono de Kapta. Revisa tu internet." };
       }
-      if (myRun !== run) return;
+      if (myRun !== run) {
+        // Colgó mientras llegaba la clave: la línea reservada vuelve a quedar libre.
+        const late = creds.ok ? creds.phone.reservationId : null;
+        if (late) releaseQuietly(late);
+        return;
+      }
       if (!creds.ok) {
         fail(myRun, { code: "credenciales", message: creds.error, credentialsCode: creds.code });
         return;
       }
       const phone = creds.phone;
+      reservation = phone.reservationId ?? null;
       const remembered = memory.rejectedKind(phone.extension, phone.credentialVersion, phone.domain);
       if (remembered) {
         // Anura ya rechazó esta clave (o este dominio) en esta pestaña y el
@@ -950,8 +1121,12 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         const message = kind === "red" && afterRegister ? ANURA_PHONE_TEXT.corte : ANURA_REGISTRATION_TEXT[kind];
         fail(myRun, { code: "registro", registration: kind, message });
       };
-      agent.on("newRTCSession", (e: { session?: SipSessionLike; originator?: string }) => onInvite(myRun, phone, e));
+      agent.on("newRTCSession", (e: { session?: SipSessionLike; originator?: string; request?: { body?: unknown } }) => {
+        d("invite_sdp", sdpTraits(e?.request?.body));
+        onInvite(myRun, phone, e);
+      });
       agent.on("connected", () => {
+        d("ws_conectado");
         if (myRun !== run || askedRegister) return;
         askedRegister = true;
         try {
@@ -961,6 +1136,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         }
       });
       agent.on("disconnected", () => {
+        d("ws_desconectado", { registrado: registered });
         // Antes del REGISTER es la red; después, puede ser Anura cortando.
         if (!registered) regFail("red", null, askedRegister);
       });
@@ -968,6 +1144,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         if (myRun !== run) return;
         const kind = registrationFailureKind(e);
         const status = registrationFailureStatus(e);
+        d("registro_fallo", { kind, status, cause: typeof e?.cause === "string" ? e.cause : null });
         stopAutoRegister();
         if (registered && session) {
           // En llamada: el audio sigue, pero no se manda otro REGISTER.
@@ -977,6 +1154,7 @@ export function createAnuraPhone(deps: AnuraPhoneDeps): AnuraPhone {
         regFail(kind, status);
       });
       agent.on("registered", () => {
+        d("registrado");
         if (myRun !== run || registered) return;
         registered = true;
         void placeCall(myRun, phone);

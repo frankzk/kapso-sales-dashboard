@@ -475,24 +475,31 @@ describe("el cableado de la ficha", () => {
 
   it("el teléfono usa las acciones de la ficha: credenciales, Click2Dial y clave rechazada", () => {
     expect(button).toContain("fetchCredentials: () => getAnuraPhone(orderId)");
-    expect(button).toContain("requestCall: () => startAnuraCall(orderId)");
+    expect(button).toContain("requestCall: (input) => startAnuraCall(orderId, input?.reservationId ?? null)");
+    expect(button).toContain("releaseReservation: (reservationId) => releaseAnuraReservation(reservationId)");
     expect(button).toContain("reportRejected: (input) => reportAnuraPhoneRejected(orderId, input)");
     // Lo que dice si la clienta contestó sigue llegando por el sondeo.
     expect(button).toContain("await getAnuraCallStatus(callId)");
     // Si Anura da la llamada por terminada, el teléfono cuelga y se desconecta;
-    // no si solo la cerró el plazo del servidor con Kapta en la llamada.
+    // no si solo la cerró el plazo del servidor con Kapta en la llamada. Desde
+    // el 07-11-2026 lo hace el panel (AnuraPhoneProvider), con la ficha abierta o no.
     expect(button).toContain("const outlives = anuraPhoneOutlivesServer(snap, call);");
-    expect(button).toContain("if (callId && !active && phoneBusy && !outlives) hangUp();");
+    expect(hook).toContain("const outlives = anuraPhoneOutlivesServer(snapshot, serverCall);");
+    expect(hook).toContain("if (callId && !active && phoneBusy && !outlives) hangUp();");
+    expect(button).not.toContain("hangUp();\n  }, [callId");
     // Una llamada retomada con teléfono en Kapta usa sus textos (no «cuelga en tu teléfono de Anura»).
     expect(button).toContain('setViaKapta(way !== "fase1");');
     expect(button).toContain("viaKapta ? anuraPhoneEndedLine(ended) : anuraEndedLine(ended)");
-    // Colgar y Silenciar solo con el teléfono de Kapta.
-    expect(button).toContain("{viaKapta && phone.busy && (");
+    // Colgar y Silenciar solo con el teléfono de Kapta, y solo si la llamada es de este pedido.
+    expect(button).toContain("const kaptaBusy = owned !== null && phone.busy;");
+    expect(button).toContain("{viaKapta && kaptaBusy && (");
     expect(button).toContain("phone.setMuted(!snap?.muted)");
-    expect(button).toContain("<AnuraPhoneAudio audioRef={phone.audioRef} />");
+    // El audio ya no está en la ficha: es UNO por pestaña, en el panel.
+    expect(button).not.toContain("<AnuraPhoneAudio");
+    expect(hook).toContain("<AnuraPhoneAudio audioRef={audioRef} />");
   });
 
-  it("el hook: JsSIP con import dinámico, micrófono, candado; suelta todo al cerrar", () => {
+  it("el teléfono del panel: JsSIP con import dinámico, micrófono, candado; suelta todo al cerrar la pestaña", () => {
     expect(hook.startsWith('"use client";')).toBe(true);
     expect(hook).toContain("createUa: createJsSipUa");
     expect(hook).toContain("getMicrophone: browserMicrophone");
@@ -544,15 +551,18 @@ describe("el cableado de Ajustes", () => {
   });
 
   it("la llamada de prueba usa el teléfono de Kapta con las acciones de Ajustes", () => {
-    expect(section).toContain("fetchCredentials: () => getAnuraTestPhone(storeId, extension || null)");
-    expect(section).toContain("requestCall: () => startAnuraTestCall(storeId, phone, extension || null)");
+    expect(section).toContain("fetchCredentials: () => getAnuraTestPhone(storeId, extension || null, phone)");
+    expect(section).toContain("requestCall: (input) => startAnuraTestCall(storeId, phone, extension || null, input?.reservationId ?? null)");
+    expect(section).toContain("releaseReservation: (reservationId) => releaseAnuraReservation(reservationId)");
     expect(section).toContain("reportRejected: (input) => reportAnuraTestPhoneRejected(storeId, input)");
     expect(section).toContain('if (way === "kapta_o_fase1" && anuraTestFallsBack(result.error)) {');
-    expect(section).toContain("<AnuraPhoneAudio audioRef={kapta.audioRef} />");
+    // El teléfono y el audio son los del panel: Ajustes no monta otro.
+    expect(section).toContain('const result = await kapta.call(server, { origin: "prueba", orderId: null, orderLabel: null, storeLabel: null });');
+    expect(section).not.toContain("<AnuraPhoneAudio");
   });
 
   it("la clave SIP no se guarda en el navegador ni se escribe en la consola", () => {
-    for (const f of ["components/anura-call.tsx", "components/anura-phone.tsx", "components/anura-kapta-phone-settings.tsx", "components/anura-settings-section.tsx", "lib/anura/phone-ui.ts"]) {
+    for (const f of ["components/anura-call.tsx", "components/anura-phone.tsx", "components/anura-kapta-phone-settings.tsx", "components/anura-settings-section.tsx", "components/anura-pool-settings.tsx", "lib/anura/phone-ui.ts", "lib/anura/pool.ts", "lib/anura/sip-phone.ts"]) {
       const src = read(f);
       expect(src, f).not.toMatch(/localStorage|sessionStorage|indexedDB/);
       expect(src, f).not.toMatch(/console\.(log|info|warn|error|debug)/);

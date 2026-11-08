@@ -658,3 +658,24 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
     candidates: routes,
   };
 }
+
+/**
+ * ¿Se ofrece CREAR la guía de Aliclik a este pedido? Lo decide el plan de
+ * rutas, no una regla aparte: una segunda regla equivalente es una regla que
+ * tarde o temprano deja de coincidir con la primera. `blocked` también cuenta:
+ * si la ruta está frenada (por ejemplo, tope de salidas), crear la guía por el
+ * panel sería saltarse el mismo límite por la puerta de atrás. Y no a un pedido
+ * acompañante (MOM §32): ya viaja en la guía de otro.
+ *
+ * La usan la ficha del pedido y el paso de después de «Generar pedido» en Leads
+ * (MOM §25.2), para que los dos ofrezcan Aliclik en los mismos pedidos.
+ */
+export function aliclikGuideOffered(input: {
+  travelsInCompanion: boolean;
+  candidates: readonly Pick<RouteCandidate, "action" | "availability">[];
+}): boolean {
+  return (
+    !input.travelsInCompanion &&
+    input.candidates.some((candidate) => candidate.action === "aliclik" && candidate.availability !== "blocked")
+  );
+}

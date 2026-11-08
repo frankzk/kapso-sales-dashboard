@@ -4,7 +4,6 @@ import { createServerSupabase } from "@/lib/db";
 import { filterRoutedLeads, getLeadRoutingScope } from "@/lib/lead-routing-access";
 import { CALL_QUEUE_FILTER } from "@/lib/lead-call-queue";
 import { leadCartDetailOf } from "@/lib/lead-cart-detail";
-import { normalizePhone } from "@/lib/phone";
 import {
   combinePriorOrders,
   firstProductTitle,
@@ -22,6 +21,16 @@ import {
   type CustomerCarts,
   type MirrorDraftRow,
 } from "@/lib/customer-carts";
+import {
+  customerPhoneVariants,
+  HISTORY_ADDRESS_COLUMNS,
+  KAPTA_ADDRESS_COLUMNS,
+  KNOWN_ADDRESSES_SCAN,
+  pickKnownAddresses,
+  type HistoryAddressRow,
+  type KaptaAddressRow,
+  type KnownAddress,
+} from "@/lib/lead-known-addresses";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
 import type { LeadCallRow, LeadRow, OrderPlatform } from "@/lib/types";
@@ -244,7 +253,9 @@ export async function getStoreLeads(
     if (pendingIndex) return withPendingVoucherLeads(sb, storeIds, limited, select, await pendingIndex);
     return view === "por_llamar" ? sortPorLlamar(limited) : limited;
   }
-  const all = await drainLeads(buildQuery);
+  // «Por llamar» ordena solo por `id`: se drena por clave (`id > último`).
+  // Las demás vistas ordenan por otra columna y siguen con rangos.
+  const all = view === "por_llamar" ? await drainLeadsById(buildQuery) : await drainLeads(buildQuery);
   let visible = filterRoutedLeads(all, routing);
   if (view === "handoff") visible = filterRoutedLeads(await withPendingVoucherLeads(sb, storeIds, visible, LEAD_BOARD_SELECT, await loadPendingVouchers(sb, storeIds)), routing);
   const sorted = view === "por_llamar" ? sortPorLlamar(visible) : visible;
@@ -301,6 +312,39 @@ export function sortPorLlamar<T extends Pick<LeadRow, "id" | "needs_attention" |
       desc(a.last_interaction_at, b.last_interaction_at) ||
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
+}
+
+/**
+ * La cola entera de «Por llamar», por clave (0312, revisión de rendimiento).
+ *
+ * Con rangos (`order by id offset N`) cada página vuelve a recorrer
+ * `leads_pkey` desde el principio y descarta lo de antes (medido el 06-11-2026:
+ * la página en 5.000 lee 43.000 bloques y descarta 36.786 filas), y la primera
+ * con `count: "exact"` además cuenta todo. Por clave cada página empieza donde
+ * acabó la anterior (`id > último`) y nada se cuenta: un solo recorrido en
+ * total. Las páginas van en serie —cada una necesita el último id de la
+ * anterior—, pero cada una lee solo lo suyo. Mismas filas y mismo orden: la
+ * vista ordena solo por `id`, y además no salta ni repite filas si la cola
+ * cambia entre página y página.
+ */
+async function drainLeadsById(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  buildQuery: (select?: string, count?: "exact") => any,
+): Promise<LeadRow[]> {
+  const rows: LeadRow[] = [];
+  let select = LEAD_BOARD_SELECT;
+  let res = await buildQuery(select).limit(LEADS_PAGE_SIZE);
+  if (res.error && select !== LEAD_BOARD_SELECT_LEGACY) {
+    select = LEAD_BOARD_SELECT_LEGACY;
+    res = await buildQuery(select).limit(LEADS_PAGE_SIZE);
+  }
+  while (!res.error) {
+    const batch = (res.data as unknown as LeadRow[] | null) ?? [];
+    rows.push(...batch);
+    if (batch.length < LEADS_PAGE_SIZE || rows.length >= LEADS_PAGE_CAP) break;
+    res = await buildQuery(select).gt("id", batch[batch.length - 1]!.id).limit(LEADS_PAGE_SIZE);
+  }
+  return rows;
 }
 
 async function drainLeads(
@@ -495,6 +539,12 @@ export interface CustomerHistory {
    * se pudo leer o no hay celular.
    */
   carts?: CustomerCarts | null;
+  /**
+   * Las direcciones a las que ya se le mandó (MOM §37.9, 07-11-2026,
+   * `getCustomerKnownAddresses`): hasta 3, la más reciente primero. Lo rellena
+   * quien carga la ficha; null si no se pudo leer.
+   */
+  knownAddresses?: KnownAddress[] | null;
 }
 
 const PRIOR_ORDER_COLUMNS = "id, shopify_order_id, name, created_at, total_amount, total_refunded, line_items";
@@ -635,14 +685,16 @@ async function readShopifyHistory(
   storeId: string,
   phone: string,
 ): Promise<{ rows: HistoryPriorRow[]; total: number | null }> {
-  const phoneNorm = normalizePhone(phone);
-  if (!phoneNorm) return { rows: [], total: null };
+  // El celular en todas sus formas (MOM §37.7, 07-11-2026): el historial guarda
+  // el de Shopify normalizado, que no siempre queda en 51 + nueve («051…»).
+  const phones = customerPhoneVariants(phone);
+  if (!phones.length) return { rows: [], total: null };
   try {
     const { data, error, count } = await sb
       .from("shopify_history_orders")
       .select("order_name, created_at, total, refunded_amount, line_items", { count: "exact" })
       .eq("store_id", storeId)
-      .eq("phone_norm", phoneNorm)
+      .in("phone_norm", phones)
       .is("cancelled_at", null)
       .order("created_at", { ascending: false })
       .limit(HISTORY_PRIOR_LIMIT);
@@ -707,6 +759,51 @@ export async function getCustomerCarts(
   return { summary: summarizeCarts(carts), carts };
 }
 
+/**
+ * «Datos de entrega conocidos» de la ficha del lead (MOM §37.9, owner
+ * 07-11-2026): las direcciones a las que ya se le mandó a esta clienta en ESTA
+ * tienda, de sus pedidos de Kapta (`order_master`: la ubicación ya resuelta,
+ * con la corrección manual y lo del courier) y del historial de Shopify
+ * (`shopify_history_orders`, §37), anulados incluidos. Por su celular en todas
+ * sus formas, cada lectura por su índice de teléfono y con límite, las dos en
+ * paralelo. Con RLS (la sesión de quien mira). Solo lee: nada pasa a `orders`
+ * ni al pedido; la asesora decide en el formulario. Si una lectura falla, null
+ * y la ficha sale sin la tarjeta, nunca con la mitad.
+ */
+export async function getCustomerKnownAddresses(
+  storeId: string,
+  phone: string | null,
+  excludeOrderId?: string | null,
+): Promise<KnownAddress[] | null> {
+  const phones = customerPhoneVariants(phone);
+  if (!phones.length) return [];
+  const sb = await createServerSupabase();
+  const [kaptaRes, historyRes] = await Promise.all([
+    sb
+      .from("order_master")
+      .select(KAPTA_ADDRESS_COLUMNS)
+      .eq("store_id", storeId)
+      .in("customer_phone", phones)
+      .order("order_created_at", { ascending: false })
+      .limit(KNOWN_ADDRESSES_SCAN),
+    sb
+      .from("shopify_history_orders")
+      .select(HISTORY_ADDRESS_COLUMNS)
+      .eq("store_id", storeId)
+      .in("phone_norm", phones)
+      .order("created_at", { ascending: false })
+      .limit(KNOWN_ADDRESSES_SCAN),
+  ]);
+  if (kaptaRes.error) return null;
+  return pickKnownAddresses({
+    kapta: (kaptaRes.data ?? []) as unknown as KaptaAddressRow[],
+    // Sin la tabla del historial (o sin permiso), solo Kapta: es un archivo (§37.1).
+    history: historyRes.error ? [] : ((historyRes.data ?? []) as unknown as HistoryAddressRow[]),
+    leadPhone: phone,
+    excludeOrderId,
+  });
+}
+
 /** Valores neutros del bloque "cliente recurrente" cuando no hay compras previas. */
 const emptyPrior = {
   orderCount: 0,
@@ -763,6 +860,11 @@ export async function getLeadQueueSnapshot(storeIds: StoreScope): Promise<LeadQu
     const index = await loadPendingVouchers(sb, storeIds);
     const extras = filterRoutedLeads(await loadPendingVoucherLeads<LeadRow>(sb, storeIds, index ?? new Map(), LEAD_BOARD_SELECT), routing)
       .filter(l => !(l.needs_attention && l.handoff_at && l.handoff_at >= handoffFreshCutoffIso()));
+    // La firma lleva tal cual la de `lead_routing_scope`, minuto incluido: su
+    // parte de leads solo cubre la cola por llamar (open/hot), y ese minuto es lo
+    // que hace que un cambio fuera de ella —un handoff sobre un lead ganado, un
+    // ganado editado, la tienda sin bloques— recargue en ≤ QUIET_REFRESH_MS y no
+    // a los 5 min del refresco forzado. No quitarlo (revisión de la 0312).
     return { counts: { ...routing.counts, handoff: routing.counts.handoff + extras.length }, signature: `routing:${routing.signature}:cv:${extras.map(l => l.id).sort().join(",")}` };
   }
   const sb = await createServerSupabase();

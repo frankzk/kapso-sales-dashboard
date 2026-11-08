@@ -56,6 +56,9 @@ import { CopyButton } from "@/components/copy-button";
 import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
+import { DistrictReviewPanel } from "@/components/district-review-panel";
+import { DISTRICT_REVIEW_LABEL } from "@/lib/district-mismatch";
+import type { DistrictReviewItem } from "@/lib/district-mismatch-access";
 import { OrderClosureDesk } from "@/components/order-closure-desk";
 import { OrderRouteDesk } from "@/components/order-route-desk";
 import { PickupKeyPanel, ShalomPickupKeyPanel } from "@/components/pickup-key-panel";
@@ -218,6 +221,7 @@ export function OrdersMasterBoard({
   pendingVoucherCount = null,
   paidUnnotifiedCount = null,
   scheduledNoLocationCount = null,
+  districtReview = null,
   canEdit,
   canCreateOrder = false,
   canExport = false,
@@ -227,6 +231,7 @@ export function OrdersMasterBoard({
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
+  canAttendReproLima = false,
   canDispatch,
   canWarehouse,
   closurePermissions,
@@ -291,6 +296,12 @@ export function OrdersMasterBoard({
    * «Por revisar» sin región, distrito o dirección. `null` = no se pudo leer.
    */
   scheduledNoLocationCount?: number | null;
+  /**
+   * «Distrito por revisar» (MOM §19.0.3): pedidos abiertos de provincia con la
+   * capital como distrito y otro distrito en la dirección. `null` = no se pudo
+   * leer: la píldora no se pinta.
+   */
+  districtReview?: DistrictReviewItem[] | null;
   canEdit: boolean;
   /** Descargar el Excel (`data.export`, 08-10-2026): owner, admin o concedido en Equipo. */
   canExport?: boolean;
@@ -302,6 +313,8 @@ export function OrdersMasterBoard({
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  /** La pestaña «Repro Lima» de la ficha (`repro_lima.manage`, MOM §9.5). */
+  canAttendReproLima?: boolean;
   canDispatch: boolean;
   canWarehouse: boolean;
   closurePermissions: {
@@ -331,6 +344,8 @@ export function OrdersMasterBoard({
   // píldoras en cuatro renglones empujaban el primer pedido dos pantallas abajo.
   const [phoneFilters, setPhoneFilters] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // «Distrito por revisar» (MOM §19.0.3): la lista se abre desde su píldora.
+  const [districtReviewOpen, setDistrictReviewOpen] = useState(false);
   const searchParams = useSearchParams();
   // ABRIR UN PEDIDO DESDE FUERA. La cola de cobranza avisa de un comprobante
   // que espera y tiene que llevar a donde SE HACE ese trabajo: el drawer del
@@ -714,9 +729,20 @@ export function OrdersMasterBoard({
             pendingVoucherCount={pendingVoucherCount}
             paidUnnotifiedCount={paidUnnotifiedCount}
             scheduledNoLocationCount={scheduledNoLocationCount}
+            districtReviewCount={districtReview ? districtReview.length : null}
+            districtReviewOpen={districtReviewOpen}
+            onDistrictReview={() => setDistrictReviewOpen((open) => !open)}
             filters={filters}
             onFilter={(next) => patch(next)}
           />
+          {districtReviewOpen && districtReview && (
+            <DistrictReviewPanel
+              items={districtReview}
+              canEdit={canEdit}
+              onOpen={(orderId) => openOrder(orderId, "ubicacion")}
+              onClose={() => setDistrictReviewOpen(false)}
+            />
+          )}
 
           {/* Las macroetapas son la navegación: siete cifras que filtran, con
               el tono del MOM (§25) en un cuadro que sirve de leyenda de las
@@ -1049,6 +1075,7 @@ export function OrdersMasterBoard({
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
           canCreateShalomGuide={canCreateShalomGuide}
+          canAttendReproLima={canAttendReproLima}
           closurePermissions={closurePermissions}
           storeName={storeName}
           storeDomain={storeDomain}
@@ -1209,6 +1236,9 @@ function AttentionLine({
   pendingVoucherCount,
   paidUnnotifiedCount,
   scheduledNoLocationCount,
+  districtReviewCount = null,
+  districtReviewOpen = false,
+  onDistrictReview,
   filters,
   onFilter,
 }: {
@@ -1218,6 +1248,9 @@ function AttentionLine({
   pendingVoucherCount: number | null;
   paidUnnotifiedCount: number | null;
   scheduledNoLocationCount: number | null;
+  districtReviewCount?: number | null;
+  districtReviewOpen?: boolean;
+  onDistrictReview?: () => void;
   filters: MasterFilters;
   onFilter: (next: Partial<MasterFilters>) => void;
 }) {
@@ -1271,6 +1304,25 @@ function AttentionLine({
               active={filters.scheduledNoLocation}
               hint="Tienen envío programado (hoy, vencido o a futuro) pero les falta la región, el distrito o la dirección: así no pueden salir. Toca para listarlos: cada uno se abre en Ubicación para corregirla."
               onClick={() => onFilter({ scheduledNoLocation: !filters.scheduledNoLocation })}
+            />
+          </div>
+          </>
+        )}
+        {/* «Distrito por revisar» (MOM §19.0.3, #KP202409): la capital como
+            distrito y otro distrito de la provincia en la dirección; el
+            courier iría al cercado. Abre la lista con «Corregir». Sin lectura
+            no se pinta. */}
+        {districtReviewCount !== null && onDistrictReview && (
+          <>
+          <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-line-strong" />
+          <div role="group" aria-label="Distrito" className="flex items-center">
+            <AttentionPill
+              icon={IconMapPin}
+              label={DISTRICT_REVIEW_LABEL}
+              count={districtReviewCount}
+              active={districtReviewOpen}
+              hint="El distrito es la capital de la provincia y la dirección nombra otro distrito de ella: el courier iría al cercado. Toca para ver la lista y corregirlos."
+              onClick={onDistrictReview}
             />
           </div>
           </>
