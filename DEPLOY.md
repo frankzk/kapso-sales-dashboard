@@ -1,5 +1,64 @@
 # Deployment runbook
 
+### 08-11-2026 · «Lima trabados» en Repro Lima (sin migración, MOM §9.6)
+
+**Sin migración.** No hay tablas, columnas, índices, crons ni variables
+nuevos: la 0320 queda libre. La bandeja es una lectura de lo que Repro Lima ya
+trae: `order_master` con una columna más en el `select`
+(`dispatch_scheduled_on`, de la 0267) y la misma lectura de `shipments` de
+«Sale a reparto» (por `order_id`, en lotes, con `shipments_order_idx`)
+ampliada a lo En curso que no estaba en una caja vigente, con sus ítems de caja
+(`dispatch_item_active_shipment_uniq`) y cajas por `id`. Ninguna subconsulta
+por fila.
+
+Pedido del owner: los pedidos de Lima quietos en Preparación, Por despachar o
+En curso más de lo que deberían (Por despachar y En curso, los que más
+importan), sin liquidación ni cierre.
+
+- **Dónde:** Repro Lima, bajo «Sale a reparto». Una tarjeta por motivo con su
+  cifra; tocarla (o «Ver la lista») abre la lista: pedido, cliente, courier,
+  estado, días trabado, motivo y siguiente paso con su responsable (Almacén,
+  Operaciones o Asesora). La fila abre la ficha en Operar. El motivo va en la
+  URL (`?trabado=armado_sin_caja`, `?trabado=todos`).
+- **Las reglas** (`lib/lima-stuck.ts`, umbrales en días de reparto completos,
+  lunes a sábado): Por despachar sin caja, tomado por Grupo GF sin caja, en una
+  caja vieja, sin condiciones de Grupo GF o sin recojo del courier (1 día);
+  En curso con Grupo GF sin resultado del motorizado (2), courier externo sin
+  resultado (3; Tanders 1), «entregado» del courier sin cerrar (1), novedad con
+  la clienta (1, asesora), retorno sin llegar (3); Preparación sin rótulo, sin
+  armar o con incidencia (1) y sin rótulo de más de 30 días (asesora). Fuera:
+  Por reprogramar Lima, Agencia, Swayp programada, Por cerrar y Finalizado.
+
+**Qué mirar después.**
+- Que la página de Repro Lima no se haga más lenta: la lectura de `shipments`
+  sube de ~1.000 a ~1.350 pedidos (en lotes por `order_id`). En los logs de
+  Supabase, las consultas a `shipments` con `order_id=in.(…)` no deben
+  aparecer entre las lentas:
+  ```sql
+  select calls, round(mean_exec_time::numeric, 1) as ms, left(query, 120)
+  from pg_stat_statements where query ilike '%from "public"."shipments"%order_id%'
+  order by mean_exec_time desc limit 10;
+  ```
+- Que las cifras cuadren con la base. Los de Por despachar armados que no están
+  en ninguna caja (≈ «Armado sin caja» + «Grupo GF no lo puede llevar» +
+  «Grupo GF lo tomó…»):
+  ```sql
+  select count(*) from order_master m
+  where m.coverage = 'lima' and m.macro_stage = 'por_despachar'
+    and m.macro_since < now() - interval '2 days'
+    and not exists (select 1 from shipments s join dispatch_manifest_items i on i.shipment_id = s.id and i.removed_at is null
+                    where s.order_id = m.order_id);
+  ```
+  Y los «entregado» de Tanders sin cerrar:
+  ```sql
+  select m.order_name, m.macro_since::date from order_master m join shipments s using (order_id)
+  where m.coverage = 'lima' and m.macro_stage = 'en_curso' and s.courier = 'tanders'
+    and s.delivery_status = 'en_ruta' and s.reported_status = 'DELIVERED' order by 2;
+  ```
+
+**Marcha atrás.** Revertir el commit. No escribe nada, así que no hay datos que
+limpiar.
+
 ### 08-11-2026 · Conector de IA: conectar Grok con OAuth, sin copiar tokens (0319, MOM §42.8)
 
 **Aplicada en producción el 08-11-2026.** Grok Bot guardó el token de Kapta

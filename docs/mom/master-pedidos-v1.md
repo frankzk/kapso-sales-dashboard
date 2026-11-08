@@ -6290,6 +6290,111 @@ y `components/warehouse-station.tsx`. Pruebas en
 `test/warehouse-retries-ui.test.ts`, `test/warehouse-retries-source.test.ts` y
 `test/repro-lima-access.test.ts`.
 
+### 9.6 «Lima trabados»: lo que se quedó quieto en el flujo (08-11-2026)
+
+**Pedido del owner (08-11-2026).** Una bandeja con los pedidos de Lima que
+llevan en **Preparación, Por despachar o En curso** más tiempo del que
+deberían; «Por despachar» y «En curso» son los que más importan. **Fuera, a
+propósito:** la liquidación y el cierre (Por cerrar → Finalizado), y dentro de
+En curso lo que ya tiene su cola: **Por reprogramar Lima** (es Repro Lima,
+§9.5, con sus tarjetas), **Disponible para recojo** y **Pendiente de pago de
+diferencia** (Agencia, §12), **Gestión Reproprovincia** y **Salida Swayp
+programada**. Tampoco Por confirmar (Lima entra directo a Preparación, §9) ni
+el pedido acompañante (`en_caja_de_otro_pedido`, depende del principal, §32).
+
+**Dónde.** En Repro Lima, entre «Sale a reparto» y los macroestados, para
+quien entra con `repro_lima.manage` (no en «Reintentos Aliclik» solo). Recorta
+con los mismos filtros de la pantalla (tienda, búsqueda, creación, canal,
+distrito, courier y los macroestados que se muestran). Una tarjeta por
+motivo, con su cifra; tocarla abre la lista de ese motivo y «Ver la lista» la
+de todos. El motivo elegido viaja por `trabado` en la URL. Cada fila dice
+pedido, cliente, courier, estado (macroetapa y subetapa), días trabado, motivo
+con el dato que lo explica y el siguiente paso con su responsable; tocarla
+abre la ficha en Operar. Solo lee: no cambia etapas, no escribe hechos, no
+inventa estados.
+
+**El reloj: días de reparto completos.** Grupo GF reparte de lunes a sábado
+(`isDeliveryDay`, §29.16); el domingo no cuenta. Se cuentan los días de
+reparto que pasaron **enteros** entre el día en que el pedido entró a su
+subetapa (`order_master.macro_since`, en hora de Lima) y hoy, sin contar
+ninguno de los dos. Armado el viernes, el sábado debía salir: el domingo ya
+lleva uno. Armado el sábado, sale el lunes: recién el martes lleva uno. Antes
+de salir, si el pedido tenía un día (programa de Grupo GF, «Programar envío»,
+solicitud de Grupo GF o recojo de Aliclik):
+- **a futuro**, o en una caja de Grupo GF de hoy o de un día que viene: no está
+  trabado, está planeado;
+- **que ya pasó** y es posterior a su subetapa: el reloj corre desde ese día
+  («Debía salir el jue 05/11»).
+
+«Días trabado» en la fila son días de calendario desde ese mismo día.
+
+**Las reglas** (`LIMA_STUCK_RULES`, `lib/lima-stuck.ts`; umbral en días de
+reparto completos):
+
+| Etapa | Motivo | Cuándo | Umbral | Responsable | Siguiente paso |
+| --- | --- | --- | --- | --- | --- |
+| Por despachar | Armado sin caja de reparto | Grupo GF, sin solicitud ni caja | 1 | Operaciones | Ponerlo en la caja del próximo reparto en Despacho del día |
+| Por despachar | Grupo GF lo tomó y no lo puso en caja | Solicitud aceptada para un día que pasó, sin caja | 1 | Operaciones | Pedir a Grupo GF que lo asigne o libere la solicitud |
+| Por despachar | En una caja de un día que pasó | Asignado, en cotejo o listo para recojo, o su última caja es de un día que pasó | 1 | Operaciones | Retirarlo de la caja vieja y asignarlo al próximo reparto |
+| Por despachar | Grupo GF no lo puede llevar | Sin «Sale a reparto» (distrito sin convenio, tarifa o en pausa, «Sin condiciones» de §29.16) y sin otra guía viva | 1 | Operaciones | Elegir otro courier (Aliclik) desde la ficha |
+| Por despachar | Guía creada y el courier no lo recogió | Guía viva de otro courier (Aliclik con su día de recojo pasado, Swayp…) | 1 | Operaciones | Coordinar el recojo o crear la guía con otro |
+| En curso | En reparto sin resultado del motorizado | Salida de Grupo GF (propia o «por definir») recibida, en tránsito o en reparto, sin reporte de la parada | 2 | Operaciones | Pedir al motorizado el resultado o recibir el paquete en oficina |
+| En curso | El courier dice entregado y Kapta no cerró | Guía `entregado`, o viva con `DELIVERED` (Tanders la deja `en_ruta` hasta validar la constancia, §9.4) | 1 | Operaciones | Validar el cobro (Tanders: cargar la constancia en Validar pagos) |
+| En curso | El courier reporta una novedad con la clienta | Último estado: no contesta, ausente, ya no lo quiere, rechazo o dirección (no «Reprogramado») | 1 | Asesora | Llamar a la clienta y acordar la entrega o la devolución |
+| En curso | Sin resultado del courier | Courier externo sin entrega ni fallo; Tanders con umbral 1 (su paquete queda libre el día hábil siguiente, `tandersReleaseCutoff`) | 3 | Operaciones | Pedir al courier el estado de la guía y dónde está el paquete |
+| En curso | Retorno sin llegar al almacén | En retorno o retorno solicitado | 3 | Almacén | Recibir en Almacén → Devoluciones o reclamarla al courier |
+| Preparación | Sin rótulo | Por generar rótulo, sin envío programado a futuro | 1 | Operaciones | Elegir la ruta y generar el rótulo en la ficha |
+| Preparación | Rótulo o guía creada y caja sin escanear | Por armar | 1 | Almacén | Armar la caja y escanearla en Almacén |
+| Preparación | Incidencia de preparación sin resolver | Incidencia de preparación | 1 | Almacén | Resolver la incidencia en Almacén |
+| Preparación | Sin rótulo hace más de 30 días | Por generar rótulo, más de 30 días desde la compra (como «Antiguo por revisar», §9.5) | 1 | Asesora | Confirmar si la venta sigue; si no, anularla en la tienda |
+
+Las tarjetas van en ese orden; dentro de cada motivo, lo que más días de
+reparto lleva primero. «Operaciones» es Seguimiento Lima y Despacho GF (§15);
+«Almacén», Yelitza y Matías; «Asesora», quien atiende Repro Lima.
+
+**Por qué esos umbrales (medido en producción el 08-11-2026, domingo; Lima,
+sin Por reprogramar).**
+- **Preparación:** Por generar rótulo, 170 pedidos con p50 0,5 días y p90 0,8;
+  Por armar, 35 con p90 0,9. Casi todo sale el mismo día o al siguiente: un
+  día de reparto entero ya es anormal. Los 7 que pasaban de un día tenían
+  entre 106 y 135 días (junio y julio, sin gestión): por eso el corte de 30
+  días los manda a la asesora.
+- **Por despachar:** 74 pedidos, todos «Listo para asignar» de Grupo GF, con
+  p50 2,2 días, p75 3,9 y p90 6,3, **ninguno en una caja** y solo 6 con
+  solicitud de Grupo GF. Lo armado hoy entra en la caja del día siguiente: un
+  día de reparto entero sin caja es que se quedó.
+- **En curso con Grupo GF:** 248 «En reparto», todas en una caja `in_custody`
+  de un día que pasó. De lo que el motorizado recogió entre el 09 y el
+  29-10-2026 (592 paradas), el 30 % se reportó en 48 h, el 62 % en 72 h y
+  luego casi nada (66 % en 96 h, 67 % en 7 días; 15 % nunca): pasadas ~72 h el
+  reporte ya no llega solo. Dos días de reparto enteros después del día de la
+  caja ≈ 72 h.
+- **En curso con courier externo:** de dispatched a entregado en los últimos 60
+  días, Aliclik p50 1,1 · p90 2,2 · p95 3,9 días; Urpi p90 2,0 · p95 2,6;
+  Swayp p90 2,0 · p95 5,2. Tres días de reparto enteros dejan fuera lo normal
+  (≈ p95). Tanders no sirve de muestra (su «entregado» llega con la
+  constancia, p50 36 días) y desde el 26-10-2026 no crea guías (§9): manda su
+  regla de liberación al día hábil siguiente.
+- **«Entregado» sin cerrar:** 24 guías de Tanders `en_ruta` con
+  `reported_status = DELIVERED` y el pedido En curso, de 7 a 59 días.
+
+**Cómo lee, sin cargar la base (08-11-2026).** No hay consultas nuevas por
+fila ni migración. Todo sale de lo que Repro Lima ya lee
+(`loadLimaPending`, `lib/repro-lima-pending-access.ts`): `order_master` por
+tienda, cobertura y macroetapa (`order_master_store_coverage_idx`) con una
+columna más (`dispatch_scheduled_on`); y la lectura de `shipments` de «Sale a
+reparto» (por `order_id` en lotes, `shipments_order_idx`) ampliada a lo En
+curso que no estaba en una caja vigente (≈ 340 pedidos más el 08-11-2026), con
+sus ítems de caja (`dispatch_item_active_shipment_uniq`) y cajas por `id`. De
+ahí, por pedido (`LimaPendingOps`): los couriers de sus salidas vivas, el
+último `reported_status`, si alguna ya la da por entregada y su última caja de
+Grupo GF. La regla es pura: `limaStuck`, `limaStuckItems`, `limaStuckCounts`.
+
+Implementación: `lib/lima-stuck.ts`, `lib/repro-lima-pending.ts`
+(`LimaPendingOps`, `scheduledOn`), `lib/repro-lima-pending-access.ts`,
+`components/lima-stuck-tray.tsx` y `components/repro-lima-board.tsx`. Pruebas
+en `test/lima-stuck.test.ts`.
+
 ## 10. Provincia COD y Aliclik
 
 - Aliclik es la primera recomendación.
