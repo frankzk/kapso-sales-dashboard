@@ -27,6 +27,15 @@
 //     clienta con dos pedidos no se adivina.
 //   - Una guía que ya está en una salida de Kapta no se toca: es de ese pedido.
 //
+// LA GUÍA MUERTA (08-11-2026). Un pedido cuya guía viva de Shalom el rastreo
+// confirmó que Shalom no conoce (lib/shalom/dead-guide.ts) vuelve a ser
+// candidato: se le busca la guía que de verdad lleva la caja, con las MISMAS
+// reglas. Solo cambian dos cosas: la ventana empieza en la creación de la guía
+// muerta (la que la reemplaza es posterior; un día de margen por la zona
+// horaria) y termina 45 días después de lo último entre el pedido y la muerta;
+// y si el listado trae la propia guía muerta con OTRO código, no está muerta:
+// es un código mal puesto, y no se reemplaza.
+//
 // Lo demás queda para una persona, con el motivo.
 
 import { phoneKey } from "@/lib/olva/email-label";
@@ -79,6 +88,18 @@ export interface CotejoShalomOrder {
    * guía. false → otro pedido de la misma clienta, que solo puede estorbar.
    */
   candidate: boolean;
+  /**
+   * La guía muerta del pedido, si se le busca la que la reemplaza (candidato
+   * con una guía viva que Shalom confirmó que no conoce).
+   */
+  replacing?: DeadGuideRef | null;
+}
+
+/** La guía muerta que se quiere reemplazar. */
+export interface DeadGuideRef {
+  guideCode: string;
+  codigo: string | null;
+  createdAt: string | null;
 }
 
 export type ShalomCotejoVia = "dni" | "telefono";
@@ -160,6 +181,47 @@ export function guideInOrderWindow(order: Pick<CotejoShalomOrder, "createdAt">, 
   return g >= o - WINDOW_BEFORE_DAYS * DAY_MS && g <= o + WINDOW_AFTER_DAYS * DAY_MS;
 }
 
+/**
+ * La ventana del pedido para ESTA búsqueda. Sin guía muerta, la de siempre. Con
+ * ella, desde un día antes de la guía muerta hasta 45 días después de lo último
+ * entre el pedido y la muerta: la guía que la reemplaza se creó después.
+ */
+export function guideInCandidateWindow(
+  order: Pick<CotejoShalomOrder, "createdAt" | "replacing">,
+  guide: Pick<ShalomListingGuide, "createdAt">,
+): boolean {
+  if (!order.replacing) return guideInOrderWindow(order, guide);
+  const g = ms(guide.createdAt);
+  const o = ms(order.createdAt);
+  const d = ms(order.replacing.createdAt);
+  if (g === null) return true;
+  const start = d ?? o;
+  if (start === null) return true;
+  const end = Math.max(o ?? start, d ?? start);
+  return g >= start - WINDOW_BEFORE_DAYS * DAY_MS && g <= end + WINDOW_AFTER_DAYS * DAY_MS;
+}
+
+/**
+ * Si el listado trae la propia guía muerta con OTRO código, no está muerta: el
+ * rastreo la rechaza porque se le pregunta con el código equivocado (el caso
+ * #KP137651 de §12). Entonces no se reemplaza. El motivo, o null.
+ */
+export function deadGuideListingConflict(
+  dead: DeadGuideRef,
+  guides: readonly Pick<ShalomListingGuide, "guia" | "codigo">[],
+): string | null {
+  const key = guideCodeKey(dead.guideCode);
+  const own = codigoKey(dead.codigo);
+  for (const g of guides) {
+    if (g.guia !== key) continue;
+    const listed = codigoKey(g.codigo);
+    if (listed && own && listed !== own) {
+      return `La guía ${key} sí está en el listado de Shalom con el código ${listed} (Kapta tiene ${own}): es un código mal puesto, no una guía que no existe.`;
+    }
+  }
+  return null;
+}
+
 /** Mismo DNI o mismo celular: podría ser su guía, aunque falte confirmarlo. */
 function couldBeTheirs(order: CotejoShalomOrder, guide: ShalomListingGuide): boolean {
   if (order.document && guide.document && order.document === guide.document) return true;
@@ -234,8 +296,12 @@ export function matchShalomListing(
     .filter((o) => o.candidate)
     .map((order): ShalomCotejoOutcome => {
       if (!order.createdAt || (!order.document && !order.phone)) return { kind: "sin_pareja", order };
+      if (order.replacing) {
+        const conflict = deadGuideListingConflict(order.replacing, guides);
+        if (conflict) return { kind: "ambiguo", order, reason: conflict, guias: [guideCodeKey(order.replacing.guideCode)] };
+      }
 
-      const possible = free.filter((g) => couldBeTheirs(order, g) && guideInOrderWindow(order, g));
+      const possible = free.filter((g) => couldBeTheirs(order, g) && guideInCandidateWindow(order, g));
       if (!possible.length) return { kind: "sin_pareja", order };
       const guias = possible.map((g) => g.guia);
       if (possible.length > 1) {
@@ -257,7 +323,7 @@ export function matchShalomListing(
       }
 
       const rivals = orders.filter(
-        (o) => o.orderId !== order.orderId && couldBeTheirs(o, guide) && guideInOrderWindow(o, guide),
+        (o) => o.orderId !== order.orderId && couldBeTheirs(o, guide) && guideInCandidateWindow(o, guide),
       );
       if (rivals.length) {
         return {

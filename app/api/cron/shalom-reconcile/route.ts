@@ -12,6 +12,18 @@ import { enqueueDueReminders } from "@/lib/shalom/pickup-reminder";
 import { backfillManualOseIds } from "@/lib/shalom/ose-backfill";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
 import { shalomTrackItem, TrackQuota, trackRetryAfterMs, type TrackItem } from "@/lib/shalom/track-pace";
+import { GUIDE_CHECK_EVENT } from "@/lib/shalom/account-cotejo";
+import {
+  groupShalomCheckWrites,
+  nextShalomCheck,
+  shalomCheckAnswer,
+  shalomCheckColumnsMissing,
+  shalomUnrecognized,
+  shalomUnrecognizedNote,
+  SHALOM_UNRECOGNIZED_MOTIVO,
+  type ShalomCheckAnswer,
+  type ShalomNotFoundState,
+} from "@/lib/shalom/check-queue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,6 +90,171 @@ interface LiveGuide extends ShalomLiveGuide {
   shalom_codigo: string | null;
   shalom_ose_id: number | null;
   created_via: string | null;
+  /** La racha de `not_found` (0321). Sin la migración no viene. */
+  shalom_not_found_since?: string | null;
+  shalom_not_found_count?: number | null;
+}
+
+const LIVE_COLUMNS = "id,store_id,order_id,guide_code,shalom_codigo,shalom_ose_id,created_via,delivery_status,pickup_state";
+
+/**
+ * Las guías vivas, en el orden de la fila. Con la 0321, por cuándo se preguntó
+ * (`shalom_checked_at`); sin ella, por cuándo contestó (`last_report_at`).
+ */
+function liveGuides(admin: ReturnType<typeof createAdminSupabase>, withCheckColumns: boolean) {
+  const query = admin
+    .from("shipments")
+    .select(withCheckColumns ? `${LIVE_COLUMNS},shalom_not_found_since,shalom_not_found_count` : LIVE_COLUMNS)
+    .eq("courier", "shalom")
+    .not("guide_code", "is", null)
+    .not("delivery_status", "in", "(entregado,anulado,transferido)");
+  return (
+    withCheckColumns
+      ? query.order("shalom_checked_at", { ascending: true, nullsFirst: true })
+      : query.order("last_report_at", { ascending: true, nullsFirst: true })
+  )
+    .order("created_at", { ascending: true })
+    .limit(MAX_PER_RUN);
+}
+
+/** Las guías preguntadas en un lote, con lo que contestó Shalom por cada una. */
+type AskedGuide = { guide: LiveGuide; answer: ShalomCheckAnswer };
+
+/** Lo que dejó el sello de un lote. */
+interface CheckStamp {
+  /** Las que contestaron y quedaron selladas. */
+  reported: number;
+  /** Las que ya son «Guía Shalom no reconocida» tras esta pregunta. */
+  unrecognized: { guide: LiveGuide; state: ShalomNotFoundState }[];
+}
+
+/**
+ * Sella el lote: cuándo se preguntó en TODAS (0321), cuándo contestó en las que
+ * contestaron y la racha de `not_found`. Un update por grupo de escrituras
+ * iguales, no uno por guía. Sin la 0321, solo `last_report_at` de las que
+ * contestaron, como antes.
+ */
+async function stampChecks(
+  admin: ReturnType<typeof createAdminSupabase>,
+  asked: readonly AskedGuide[],
+  checkColumns: boolean,
+  errors: string[],
+): Promise<CheckStamp> {
+  const nowIso = new Date().toISOString();
+  const now = Date.parse(nowIso);
+  const answered = asked.filter((a) => a.answer === "contesto");
+  if (!checkColumns) {
+    if (!answered.length) return { reported: 0, unrecognized: [] };
+    const stamp = await admin
+      .from("shipments")
+      .update({ last_report_at: nowIso })
+      .in("id", answered.map((a) => a.guide.id));
+    if (stamp.error) {
+      errors.push(`sello de rastreo: ${stamp.error.message}`);
+      return { reported: 0, unrecognized: [] };
+    }
+    return { reported: answered.length, unrecognized: [] };
+  }
+
+  const rows = asked.map(({ guide, answer }) => {
+    const prev: ShalomNotFoundState = {
+      shalom_not_found_since: guide.shalom_not_found_since ?? null,
+      shalom_not_found_count: guide.shalom_not_found_count ?? 0,
+    };
+    const check = nextShalomCheck(prev, answer, nowIso);
+    return {
+      id: guide.id,
+      guide,
+      answer,
+      check,
+      patch: answer === "contesto" ? { ...check, last_report_at: nowIso } : check,
+    };
+  });
+  const failedIds = new Set<string>();
+  for (const group of groupShalomCheckWrites(rows)) {
+    const stamp = await admin.from("shipments").update(group.patch).in("id", group.ids);
+    if (stamp.error) {
+      errors.push(`sello de rastreo: ${stamp.error.message}`);
+      for (const id of group.ids) failedIds.add(id);
+    }
+  }
+  const unrecognized: CheckStamp["unrecognized"] = [];
+  for (const row of rows) {
+    if (row.answer !== "no_encontrada" || failedIds.has(row.id)) continue;
+    const state: ShalomNotFoundState = {
+      shalom_not_found_since: row.check.shalom_not_found_since ?? null,
+      shalom_not_found_count: row.check.shalom_not_found_count ?? null,
+    };
+    if (shalomUnrecognized(state, now)) unrecognized.push({ guide: row.guide, state });
+  }
+  return {
+    reported: rows.filter((r) => r.answer === "contesto" && !failedIds.has(r.id)).length,
+    unrecognized,
+  };
+}
+
+/**
+ * Deja «Guía Shalom no reconocida» en la línea de tiempo del pedido, una vez
+ * por racha: el `guide_check` («Guía revisada con Shalom») que ya usa Cotejar
+ * Shalom, con `payload.motivo = rastreo_no_reconoce` y `payload.desde` = el
+ * primer `not_found` de la racha. Una racha nueva (contestó entre medio) avisa
+ * otra vez; la misma, no. No anula ni cambia nada de la guía. Devuelve cuántas
+ * se avisaron ahora.
+ */
+async function flagUnrecognized(
+  admin: ReturnType<typeof createAdminSupabase>,
+  items: CheckStamp["unrecognized"],
+  errors: string[],
+): Promise<number> {
+  const withOrder = items.filter((i) => i.guide.order_id);
+  if (!withOrder.length) return 0;
+  const { data, error } = await admin
+    .from("order_events")
+    .select("shipment_id,payload")
+    .eq("kind", GUIDE_CHECK_EVENT)
+    .eq("payload->>motivo", SHALOM_UNRECOGNIZED_MOTIVO)
+    .in("shipment_id", withOrder.map((i) => i.guide.id));
+  if (error) {
+    // Sin saber si ya se avisó, no se avisa: repetirlo en cada pasada es ruido.
+    errors.push(`avisos de guías no reconocidas: ${error.message}`);
+    return 0;
+  }
+  // La racha se reconoce por su primer `not_found`, como instante: la base lo
+  // devuelve con `+00:00` y el navegador lo escribe con `Z`.
+  const instant = (iso: string | null | undefined) => {
+    const at = iso ? Date.parse(iso) : Number.NaN;
+    return Number.isNaN(at) ? "" : new Date(at).toISOString();
+  };
+  const seen = new Set(
+    ((data ?? []) as { shipment_id: string | null; payload: { desde?: string | null } | null }[]).map(
+      (r) => `${r.shipment_id}|${instant(r.payload?.desde)}`,
+    ),
+  );
+  let flagged = 0;
+  for (const { guide, state } of withOrder) {
+    if (seen.has(`${guide.id}|${instant(state.shalom_not_found_since)}`)) continue;
+    const ins = await admin.from("order_events").insert({
+      store_id: guide.store_id,
+      order_id: guide.order_id,
+      kind: GUIDE_CHECK_EVENT,
+      occurred_at: new Date().toISOString(),
+      actor: null,
+      source: "shalom",
+      courier: "shalom",
+      guide_code: guide.guide_code,
+      shipment_id: guide.id,
+      note: shalomUnrecognizedNote(state, guide.guide_code),
+      payload: {
+        registered_by: "rastreo_shalom",
+        motivo: SHALOM_UNRECOGNIZED_MOTIVO,
+        desde: instant(state.shalom_not_found_since) || null,
+        consultas: state.shalom_not_found_count,
+      },
+    });
+    if (ins.error) errors.push(`aviso de guía no reconocida ${guide.guide_code}: ${ins.error.message}`);
+    else flagged += 1;
+  }
+  return flagged;
 }
 
 export async function GET(req: NextRequest) {
@@ -102,18 +279,23 @@ export async function GET(req: NextRequest) {
   // con el paquete ya en la agencia— quedaba a ~2,5 h de su primera respuesta.
   // `last_report_at` es cuándo contestó Shalom por última vez: la que nunca
   // contestó va primero, y después la que lleva más tiempo sin hacerlo.
-  const { data, error } = await admin
-    .from("shipments")
-    .select("id,store_id,order_id,guide_code,shalom_codigo,shalom_ose_id,created_via,delivery_status,pickup_state")
-    .eq("courier", "shalom")
-    .not("guide_code", "is", null)
-    .not("delivery_status", "in", "(entregado,anulado,transferido)")
-    .order("last_report_at", { ascending: true, nullsFirst: true })
-    .order("created_at", { ascending: true })
-    .limit(MAX_PER_RUN);
+  //
+  // CUÁNDO PREGUNTAMOS, NO CUÁNDO CONTESTÓ (08-11-2026, 0321). Una guía que
+  // Shalom rechaza con `not_found` nunca contesta, así que con `last_report_at`
+  // nunca se movía: 71 de 367 encabezaban la fila en cada pasada y gastaban un
+  // tercio del cupo, y la cola de la fila —las que acababan de cambiar— no
+  // entraba. `shalom_checked_at` se sella en TODA guía preguntada, contestara o
+  // no, y la fila va por él (lib/shalom/check-queue.ts). Sin la 0321 la fila
+  // vuelve a ir por `last_report_at`, como antes.
+  let checkColumns = true;
+  let { data, error } = await liveGuides(admin, true);
+  if (error && shalomCheckColumnsMissing(error)) {
+    checkColumns = false;
+    ({ data, error } = await liveGuides(admin, false));
+  }
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
-  const live = ((data as LiveGuide[]) ?? []).filter((g) => shalomNeedsTracking(g.delivery_status));
+  const live = ((data as LiveGuide[] | null) ?? []).filter((g) => shalomNeedsTracking(g.delivery_status));
   if (!live.length) return NextResponse.json({ ok: true, scanned: 0, applied: 0 });
 
   const startedAt = Date.now();
@@ -148,6 +330,10 @@ export async function GET(req: NextRequest) {
   /** Por qué no se preguntó por todas: el tiempo de la pasada, o Shalom sin cupo. */
   let cortadoPor: "tiempo" | "cupo" | null = null;
   let preguntadas = 0;
+  /** Preguntadas que ya son «Guía Shalom no reconocida» (0321, MOM §12). */
+  let noReconocidas = 0;
+  /** De esas, las que se dejaron ahora en la línea de tiempo (una vez por racha). */
+  let noReconocidasAvisadas = 0;
 
   // Sin código ni OSE ID no hay cómo preguntar: no se gasta cupo en ella.
   const trackable: TrackItem[] = [];
@@ -164,7 +350,8 @@ export async function GET(req: NextRequest) {
   // cada lote espera lo que le falta al cupo, y un 429 espera lo que Shalom
   // dice y repite el MISMO lote. Hasta `TRACK_BUDGET_MS`: lo que queda del
   // tiempo de la función es para los avisos. Lo que no entra va primero en la
-  // pasada siguiente, porque la fila va por quién contestó hace más tiempo.
+  // pasada siguiente, porque la fila va por la que hace más que no se preguntó
+  // (`shalom_checked_at`, 0321; sin ella, por quién contestó hace más tiempo).
   const quota = new TrackQuota();
   const trackDeadline = startedAt + TRACK_BUDGET_MS;
   let seguidos429 = 0;
@@ -211,6 +398,17 @@ export async function GET(req: NextRequest) {
       seguidos429 = 0;
       i += slice.length;
       preguntadas += slice.length;
+      // Se preguntó por ellas: vuelven al final de la fila, sin tocar su racha.
+      // Un lote que cae siempre no puede quedarse siempre primero.
+      await stampChecks(
+        admin,
+        slice.flatMap((item) => {
+          const guide = byId.get(item.custom_id);
+          return guide ? [{ guide, answer: "otro" as const }] : [];
+        }),
+        checkColumns,
+        errors,
+      );
       continue;
     }
     seguidos429 = 0;
@@ -226,9 +424,15 @@ export async function GET(req: NextRequest) {
     };
     lotes.push(lote);
 
-    // Guías por las que Shalom SÍ contestó, hayan cambiado o no. Se sella abajo
-    // el `last_report_at` de todas juntas — ver el porqué antes del update.
-    const answered: string[] = [];
+    // Qué contestó Shalom por cada guía del lote. Se sellan abajo TODAS juntas
+    // —contestaran, no las encontrara o no volvieran en la respuesta—; ver el
+    // porqué antes del sello.
+    const replies = new Map<string, (typeof results)[number]>();
+    for (const r of results) if (r.custom_id) replies.set(r.custom_id, r);
+    const asked: AskedGuide[] = slice.flatMap((item) => {
+      const guide = byId.get(item.custom_id);
+      return guide ? [{ guide, answer: shalomCheckAnswer(replies.get(item.custom_id)) }] : [];
+    });
 
     for (const r of results) {
       const guide = r.custom_id ? byId.get(r.custom_id) : undefined;
@@ -251,7 +455,6 @@ export async function GET(req: NextRequest) {
         else rejected.set(why, { count: 1, ejemplo: guide.guide_code });
         continue;
       }
-      answered.push(guide.id);
       lote.ok += 1;
 
       // Leer el hito, decidir si un «entregado» fue el recojo o el retorno, y
@@ -305,16 +508,18 @@ export async function GET(req: NextRequest) {
     // el mismo dato y piden acciones opuestas (revisar Vercel, o no tocar nada).
     // Pasó de verdad: dimos por muerto un cron que no teníamos cómo ver vivo.
     //
-    // Va en un solo update por lote y no uno por guía: son 50 filas por llamada
-    // y esto corre cada media hora.
-    if (answered.length) {
-      const stamp = await admin
-        .from("shipments")
-        .update({ last_report_at: new Date().toISOString() })
-        .in("id", answered);
-      if (stamp.error) errors.push(`sello de rastreo: ${stamp.error.message}`);
-      else reported += answered.length;
-    }
+    // Va en un update por grupo de escrituras iguales y no uno por guía: son 50
+    // filas por llamada y esto corre cada media hora.
+    //
+    // Y SE SELLA TAMBIÉN LA QUE NO CONTESTÓ (08-11-2026, 0321). `last_report_at`
+    // sigue siendo solo de las que contestaron; `shalom_checked_at`, de todas,
+    // y es por lo que va la fila. La `not_found` suma uno a su racha; pasadas
+    // las dos marcas es «Guía Shalom no reconocida» (lib/shalom/check-queue.ts)
+    // y queda una vez en la línea de tiempo del pedido. Nada se anula solo.
+    const stamp = await stampChecks(admin, asked, checkColumns, errors);
+    reported += stamp.reported;
+    noReconocidas += stamp.unrecognized.length;
+    noReconocidasAvisadas += await flagUnrecognized(admin, stamp.unrecognized, errors);
   }
 
   if (touchedOrders.size) await recomputeOrderMasterSafe(admin, [...touchedOrders]);
@@ -360,6 +565,9 @@ export async function GET(req: NextRequest) {
       applied,
       failed,
       cortadoPor,
+      fila: checkColumns ? "shalom_checked_at" : "last_report_at",
+      noReconocidas,
+      noReconocidasAvisadas,
       lotes,
       rechazos: topRechazos,
       encolados: queued,
@@ -376,6 +584,12 @@ export async function GET(req: NextRequest) {
     preguntadas,
     // Si se cortó antes de preguntar por todas, por qué («tiempo» o «cupo»).
     cortadoPor,
+    // Por qué columna va la fila: `last_report_at` es que falta la 0321.
+    fila: checkColumns ? "shalom_checked_at" : "last_report_at",
+    // Preguntadas que ya son «Guía Shalom no reconocida» (MOM §12), y cuántas
+    // se dejaron ahora en la línea de tiempo (una vez por racha).
+    noReconocidas,
+    noReconocidasAvisadas,
     lotes,
     // Avisos de tránsito: cuántos entraron a la cola en esta pasada y cómo
     // quedó la cola tras drenarla.

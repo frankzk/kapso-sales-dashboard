@@ -47,6 +47,7 @@ import {
 import { routeKindForCourier } from "@/lib/dispatch-routing";
 import type { StoreSummary } from "@/lib/types";
 import { nextDispatchMode } from "@/lib/courier-flow";
+import { SHALOM_UNRECOGNIZED_REASON } from "@/lib/shalom/check-queue";
 
 /**
  * Los tres momentos de una RUTA, en orden (MOM Fase 2).
@@ -804,9 +805,14 @@ function BuildRoute({
                       <span className="font-mono text-xs font-semibold text-ink-900">{packageCode(shipment)}</span>
                       <Badge>{isCourierTbd(shipment.courier) ? "Por definir" : courierLabelFor(shipment.courier)}</Badge>
                       <Badge tone={isArmed(shipment) ? "ok" : "warn"}>{isArmed(shipment) ? "Armado en almacén" : "Almacén aún no lo escaneó"}</Badge>
+                      {shipment.shalom_unrecognized && <Badge tone="warn">{SHALOM_UNRECOGNIZED_REASON}</Badge>}
                     </span>
                     <span className="mt-0.5 block truncate text-sm text-ink-700">{shipment.customer_name ?? "Cliente"} · {shipment.district ?? shipment.province ?? "Sin distrito"}</span>
                     <span className="block truncate text-xs tabular-nums text-ink-500">{shipment.order_name} · {storeName.get(shipment.store_id) ?? "Tienda"}</span>
+                    {/* La guía que Shalom ya no reconoce (MOM §12, 0321): sin guía
+                        nueva la caja no sale, aunque esté armada. Kapta solo la anula al
+                        registrar la que la reemplaza. */}
+                    {shipment.shalom_unrecognized && <span className="mt-0.5 block text-xs text-warn-fg">{shipment.shalom_unrecognized}</span>}
                   </span>
                 </label>
               </li>

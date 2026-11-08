@@ -357,4 +357,7 @@ echo "  ✅ client_id kcli_ y redirect_uris con rango; el código nunca en claro
 echo "▶ La reserva por cita se suelta sola (0322): 2 h después de la cita o cuando la clienta vuelve a escribir; después, reparto normal"
 $PSQL -f "$ROOT/scripts/sql/lead_appointment_release_smoke.sql"
 echo "  ✅ reservada dentro de las 2 h (borde inclusivo) y con mensajes anteriores, futuros o un handoff del agente; suelta a las 2 h o con un entrante posterior (una llamada sin fecha nueva ya consume la cita, 0289); suelta la toma otra asesora habilitada; la cita queda igual; frente a la 0312 solo cambian las citas sueltas"
+echo "▶ Fila del rastreo de Shalom (0321): sello de cuándo se preguntó, racha de not_found, sellos que no mueven updated_at e índice de la fila"
+$PSQL -f "$ROOT/scripts/sql/shalom_checked_at_smoke.sql"
+echo "  ✅ nacen sin sello y con la racha en cero, que no baja de cero; los sellos del rastreo no mueven updated_at (last_report_at y un cambio real sí); la nunca preguntada va primero"
 echo "✅ DB verification passed."
