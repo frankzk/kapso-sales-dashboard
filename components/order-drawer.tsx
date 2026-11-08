@@ -1555,8 +1555,9 @@ export function OrderDrawer({
                   {/* «Llamar con Anura»: con el teléfono dentro de Kapta si el
                       anexo tiene clave guardada (fase 2, solo salidas); si no,
                       suena el teléfono de Anura de la asesora (fase 1). Solo
-                      con el token, un anexo activo de quien mira y un celular
-                      peruano. El teléfono de Kapta vive en el panel
+                      con el token, un anexo activo de quien mira (o «Puede
+                      llamar con Anura» y una línea compartida lista) y un
+                      celular peruano. El teléfono de Kapta vive en el panel
                       (AnuraPhoneProvider): cerrar esta ficha no corta. */}
                   {anura.panel?.enabled && canEdit && (
                     <AnuraCallButton
@@ -1567,6 +1568,7 @@ export function OrderDrawer({
                       extension={anura.panel.extension}
                       resume={anura.panel.activeCall}
                       kaptaPhone={anura.panel.kaptaPhone}
+                      pool={anura.panel.pool}
                       onEnded={() => {
                         void reload();
                         void anura.reload();

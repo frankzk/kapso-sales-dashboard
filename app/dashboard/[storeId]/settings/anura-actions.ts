@@ -25,13 +25,25 @@
 //                                                      para la llamada de prueba.
 //   reportAnuraTestPhoneRejected(storeId, input)    → Anura rechazó la clave guardada
 //                                                      (o no reconoce el dominio: 404).
+//
+// Líneas compartidas (0313):
+//   addAnuraPoolLine(storeId, extension)            → suma una línea sin dueña.
+//   removeAnuraPoolLine(storeId, id)                → la quita (no si está en una llamada).
+//   setAnuraCaller(storeId, userId, enabled)        → «Puede llamar con Anura».
+//   getAnuraTestPhone(storeId, extension?, phone?)  → sin anexo propio (o con una línea
+//                                                      elegida), reserva una línea libre.
+//   startAnuraTestCall(storeId, phone, extension?, reservationId?)
+//                                                   → el Click2Dial con esa reserva.
 
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { env } from "@/lib/env";
 import {
+  addAnuraPoolLineFor,
   anuraTestPhoneFor,
   loadAnuraSettings,
+  removeAnuraPoolLineFor,
+  setAnuraCallerFor,
   removeAnuraExtensionFor,
   removeAnuraSipCredentialsFor,
   reportAnuraPhoneRejectedFor,
@@ -78,8 +90,25 @@ export async function removeAnuraExtension(storeId: string, extensionId: string)
   return refresh(storeId, await removeAnuraExtensionFor(storeId, extensionId));
 }
 
-export async function startAnuraTestCall(storeId: string, phone: string, extension?: string | null): Promise<AnuraStartResult> {
-  return startAnuraTestCallFor(storeId, phone, extension ?? null);
+export async function startAnuraTestCall(
+  storeId: string,
+  phone: string,
+  extension?: string | null,
+  reservationId?: string | null,
+): Promise<AnuraStartResult> {
+  return startAnuraTestCallFor(storeId, phone, extension ?? null, { reservationId: reservationId ?? null });
+}
+
+export async function addAnuraPoolLine(storeId: string, extension: string): Promise<AnuraMutationResult> {
+  return refresh(storeId, await addAnuraPoolLineFor(storeId, extension));
+}
+
+export async function removeAnuraPoolLine(storeId: string, extensionId: string): Promise<AnuraMutationResult> {
+  return refresh(storeId, await removeAnuraPoolLineFor(storeId, extensionId));
+}
+
+export async function setAnuraCaller(storeId: string, userId: string, enabled: boolean): Promise<AnuraMutationResult> {
+  return refresh(storeId, await setAnuraCallerFor(storeId, userId, enabled));
 }
 
 export async function saveAnuraSipSettings(storeId: string, input: AnuraSipSettingsInput): Promise<AnuraMutationResult> {
@@ -94,13 +123,19 @@ export async function removeAnuraSipCredentials(storeId: string, extensionId: st
   return refresh(storeId, await removeAnuraSipCredentialsFor(storeId, extensionId));
 }
 
-export async function getAnuraTestPhone(storeId: string, extension?: string | null): Promise<AnuraPhoneCredentialsResult> {
-  return anuraTestPhoneFor(storeId, extension ?? null);
+export async function getAnuraTestPhone(storeId: string, extension?: string | null, phone?: string | null): Promise<AnuraPhoneCredentialsResult> {
+  return anuraTestPhoneFor(storeId, extension ?? null, phone ?? null);
 }
 
 export async function reportAnuraTestPhoneRejected(
   storeId: string,
-  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null; domain?: string | null },
+  input: {
+    credentialVersion: string;
+    kind: AnuraRegistrationFailureKind;
+    status?: number | null;
+    domain?: string | null;
+    reservationId?: string | null;
+  },
 ): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
   const result = await reportAnuraPhoneRejectedFor({ storeId }, input);
   if (result.ok && result.marked) revalidatePath(`/dashboard/${storeId}/settings`);

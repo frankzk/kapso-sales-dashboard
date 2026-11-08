@@ -4,10 +4,12 @@
 // (`stores.manage`). Una sola central para la org: el token de Click2Dial vive
 // en Vercel (`ANURA_CLICK2DIAL_TOKEN`) y aquí solo se dice si está, nunca su
 // valor. La sección enseña la dirección de los avisos y la plantilla para
-// pegar en Anura, los pasos del panel de Anura, el anexo de cada persona, el
-// teléfono dentro de Kapta (fase 2, solo salidas: components/
-// anura-kapta-phone-settings.tsx), la «Llamada de prueba» y los últimos avisos
-// (30 días, con los teléfonos enmascarados).
+// pegar en Anura, los pasos del panel de Anura, las líneas compartidas y quién
+// puede llamar (0313, la forma recomendada: components/anura-pool-settings.tsx),
+// el anexo propio de cada persona (la otra forma), el teléfono dentro de Kapta
+// (fase 2, solo salidas: components/anura-kapta-phone-settings.tsx), la
+// «Llamada de prueba» y los últimos avisos (30 días, con los teléfonos
+// enmascarados).
 //
 // La «Llamada de prueba» usa el teléfono de Kapta (el del panel,
 // `AnuraPhoneProvider`: salir de Ajustes no la corta) si el anexo tiene clave
@@ -31,7 +33,7 @@ import {
   setAnuraExtensionActive,
   startAnuraTestCall,
 } from "@/app/dashboard/[storeId]/settings/anura-actions";
-import { getAnuraCallStatus } from "@/app/dashboard/pedidos/anura-actions";
+import { getAnuraCallStatus, releaseAnuraReservation } from "@/app/dashboard/pedidos/anura-actions";
 import type { AnuraCallLive, AnuraMutationResult, AnuraSettingsData } from "@/lib/anura/server";
 import { ANURA_EVENT_RETENTION_DAYS, ANURA_POLL_INTERVAL_MS, anuraPeruCalled } from "@/lib/anura/events";
 import {
@@ -62,6 +64,7 @@ import {
 import { formatTalkTime } from "@/lib/browser-call";
 import { AnuraVolumeControl, useAnuraKaptaPhone, useAnuraPhoneClaim, type AnuraPhoneServer } from "@/components/anura-phone";
 import { KaptaPhoneCard } from "@/components/anura-kapta-phone-settings";
+import { AnuraCallersCard, AnuraPoolLinesCard } from "@/components/anura-pool-settings";
 import { IconCopy, IconMic, IconMicOff, IconPhone } from "@/components/icons";
 
 const SECTION_ID = "anura";
@@ -168,13 +171,16 @@ export function AnuraSettingsSection({ storeId }: { storeId: string }) {
   }
 
   const activeExtensions = data.extensions.filter((e) => e.active);
+  const activeLines = data.poolLines.filter((l) => l.active);
   const badge = !data.configured ? (
     <Badge tone="neutral">Sin token</Badge>
-  ) : activeExtensions.length === 0 ? (
+  ) : activeExtensions.length === 0 && activeLines.length === 0 ? (
     <Badge tone="warn">Sin anexos</Badge>
   ) : (
     <Badge tone="ok">
-      Activo · {activeExtensions.length} anexo{activeExtensions.length === 1 ? "" : "s"}
+      Activo
+      {activeLines.length > 0 ? ` · ${activeLines.length} línea${activeLines.length === 1 ? "" : "s"} compartida${activeLines.length === 1 ? "" : "s"}` : ""}
+      {activeExtensions.length > 0 ? ` · ${activeExtensions.length} anexo${activeExtensions.length === 1 ? "" : "s"} propio${activeExtensions.length === 1 ? "" : "s"}` : ""}
     </Badge>
   );
 
@@ -194,9 +200,10 @@ export function AnuraSettingsSection({ storeId }: { storeId: string }) {
             Kapta <strong>solo hace salidas</strong>: no recibe llamadas ni suena. Las entrantes siguen el flujo de Anura.
           </p>
           <p>
-            Una sola central para toda la organización. El botón sale a quien puede editar el Master, tiene un anexo activo
-            aquí abajo y el pedido tiene un celular peruano. Como «Llamar desde Kapta», la llamada queda en el historial del
-            pedido y el resultado se sigue registrando en la confirmación.
+            Una sola central para toda la organización. El botón sale a quien puede editar el Master y tiene «Puede llamar con
+            Anura» (toma una línea compartida libre al llamar) o un anexo propio activo, si el pedido tiene un celular peruano.
+            Como «Llamar desde Kapta», la llamada queda en el historial del pedido y el resultado se sigue registrando en la
+            confirmación.
           </p>
         </>
       }
@@ -227,6 +234,10 @@ export function AnuraSettingsSection({ storeId }: { storeId: string }) {
       <WebhookCard data={data} />
 
       <StepsCard />
+
+      <AnuraPoolLinesCard storeId={storeId} data={data} pending={pending} mutate={mutate} onChanged={() => void load()} />
+
+      <AnuraCallersCard storeId={storeId} data={data} pending={pending} mutate={mutate} />
 
       <ExtensionsCard data={data} pending={pending} storeId={storeId} mutate={mutate} />
 
@@ -334,11 +345,15 @@ function ExtensionsCard({
   return (
     <div className={cn(CARD, "divide-y divide-line")}>
       <CardHeader
-        title="Anexos por persona"
-        description="Un anexo por persona y una persona por anexo. Sin anexo activo, a esa persona no le sale «Llamar con Anura». Para pasar un anexo a otra persona, quítaselo primero a quien lo tiene. Quitar un anexo o cambiarle el número borra la clave de su teléfono de Kapta; apagarlo no."
+        title="Anexos por persona (la otra forma)"
+        description="Lo de antes de las líneas compartidas, y sigue sirviendo: un anexo propio por persona y una persona por anexo. Quien tiene un anexo propio activo llama con él, tenga o no «Puede llamar con Anura». Para pasar un anexo a otra persona, quítaselo primero a quien lo tiene. Quitar un anexo o cambiarle el número borra la clave de su teléfono de Kapta; apagarlo no."
       />
       {data.extensions.length === 0 ? (
-        <EmptyRow>Nadie tiene anexo todavía: «Llamar con Anura» no sale en ninguna ficha.</EmptyRow>
+        <EmptyRow>
+          {data.poolLines.length > 0
+            ? "Nadie tiene anexo propio: se llama con las líneas compartidas."
+            : "Nadie tiene anexo todavía: «Llamar con Anura» no sale en ninguna ficha."}
+        </EmptyRow>
       ) : (
         <RowList>
           {data.extensions.map((e) => (
@@ -435,14 +450,17 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
   const [viaKapta, setViaKapta] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const activeExtensions = data.extensions.filter((e) => e.active);
+  // Las líneas compartidas también se prueban una por una (solo con el teléfono de Kapta).
+  const activeLines = data.poolLines.filter((l) => l.active);
   const valid = anuraPeruCalled(phone) !== null;
-  const way = anuraTestCallWay(extension, activeExtensions, data.sipMigrationMissing);
+  const way = anuraTestCallWay(extension, [...activeExtensions, ...activeLines], data.sipMigrationMissing);
 
   const server = useMemo<AnuraPhoneServer>(
     () => ({
-      fetchCredentials: () => getAnuraTestPhone(storeId, extension || null),
-      requestCall: () => startAnuraTestCall(storeId, phone, extension || null),
+      fetchCredentials: () => getAnuraTestPhone(storeId, extension || null, phone),
+      requestCall: (input) => startAnuraTestCall(storeId, phone, extension || null, input?.reservationId ?? null),
       reportRejected: (input) => reportAnuraTestPhoneRejected(storeId, input),
+      releaseReservation: (reservationId) => releaseAnuraReservation(reservationId),
     }),
     [storeId, phone, extension],
   );
@@ -521,7 +539,7 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
   }, [talking]);
 
   // ¿Tiene el anexo la clave del teléfono de Kapta? Sin ella, la fase 1 dice qué falta.
-  const selected = activeExtensions.find((e) => e.extension === extension) ?? null;
+  const selected = [...activeExtensions, ...activeLines].find((e) => e.extension === extension) ?? null;
   const kaptaKeyMissing = !data.sipMigrationMissing && !selected?.phone.hasPassword;
 
   /** Como en la fase 1: Anura hace sonar el teléfono de Anura del anexo. */
@@ -594,7 +612,7 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
     <div className={cn(CARD, "divide-y divide-line")}>
       <CardHeader
         title="Llamada de prueba"
-        description="Anura marca al celular que escribas. Si el anexo tiene teléfono en Kapta, la prueba usa ese teléfono en este navegador (pide el micrófono); si no, Anura hace sonar el teléfono de Anura del anexo y, al contestar, marca. La clave del teléfono de Kapta solo se entrega a su dueña: con el anexo de otra persona que lo tiene, no se puede probar desde aquí. No cuenta como intento de ningún pedido ni queda en ningún historial."
+        description="Anura marca al celular que escribas. Si el anexo tiene teléfono en Kapta, la prueba usa ese teléfono en este navegador (pide el micrófono); si no, Anura hace sonar el teléfono de Anura del anexo y, al contestar, marca. Con «Mi anexo» y sin anexo propio, si tienes «Puede llamar con Anura», la prueba toma una línea compartida libre, como la ficha; también puedes elegir una línea concreta para probarla. La clave del anexo propio de otra persona no se entrega: con él no se puede probar el teléfono de Kapta desde aquí. No cuenta como intento de ningún pedido ni queda en ningún historial."
       />
       <form
         className={cn(ROW, "flex flex-wrap items-end gap-3")}
@@ -623,7 +641,12 @@ function TestCallCard({ storeId, data, onChanged }: { storeId: string; data: Anu
           className="min-w-48"
         >
           <select id="anura-test-ext" value={extension} disabled={busy} onChange={(e) => setExtension(e.target.value)} className={FIELD}>
-            <option value="">Mi anexo</option>
+            <option value="">Mi anexo (o una línea compartida libre)</option>
+            {activeLines.map((l) => (
+              <option key={l.id} value={l.extension}>
+                {l.extension} · línea compartida{l.phone.hasPassword ? "" : " · sin clave"}
+              </option>
+            ))}
             {activeExtensions.map((e) => (
               <option key={e.id} value={e.extension}>
                 {e.extension} · {e.name}

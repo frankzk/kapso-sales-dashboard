@@ -27,6 +27,7 @@ import {
   type AnuraDirection,
   type AnuraRecordingStatus,
 } from "@/lib/anura/events";
+import { ANURA_UNDIALED_REASON, ANURA_UNDIALED_RESERVATION_MS } from "@/lib/anura/pool";
 
 /** Lo que se lee de `anura_calls`. */
 export interface AnuraCallRow {
@@ -57,12 +58,16 @@ export interface AnuraCallRow {
   answered_at: string | null;
   ended_at: string | null;
   last_event_at: string | null;
+  /** Kapta reservó una línea compartida (0313). Null: anexo propio o de antes. */
+  reserved_at?: string | null;
+  /** Kapta pidió el Click2Dial (0313). */
+  dialed_at?: string | null;
 }
 
 export const ANURA_CALL_COLUMNS =
   "id,org_id,store_id,order_id,user_id,mode,direction,extension,phone,status,status_rank,anura_call_id,anura_status," +
   "bill_seconds,answer_extension,was_recorded,failure_reason,closed_by_timeout,recording_status,recording_path," +
-  "recording_expires_at,recording_attempts,requested_at,started_at,answered_at,ended_at,last_event_at";
+  "recording_expires_at,recording_attempts,requested_at,started_at,answered_at,ended_at,last_event_at,reserved_at,dialed_at";
 
 // ---------------------------------------------------------------------------
 // Lo que recibe la ficha
@@ -127,49 +132,65 @@ export function anuraCallLive(row: AnuraCallRow): AnuraCallLive {
 // ---------------------------------------------------------------------------
 
 /**
- * Cierra como `fallida` (a) las `solicitada` sin ningún aviso a los 60 s
- * («Anura no llegó a hacer la llamada») y (b) las vivas sin END a las 2 h.
- * Se marcan `closed_by_timeout`: si el END llega después, todavía cuenta.
- * Acotado a una persona o a una llamada; `{ all: true }` (solo el cron
- * `/api/cron/anura-recordings`) suelta las de todas las organizaciones, con
- * las mismas reglas. Sin alcance no hace nada. Devuelve cuántas cerró.
+ * Cierra como `fallida` (a) las `solicitada` sin ningún aviso a los 60 s de
+ * pedir el Click2Dial («Anura no llegó a hacer la llamada»), (b) las reservas
+ * de una línea compartida que no llegaron a pedirlo en 60 s («La llamada no
+ * llegó a pedirse»: el navegador falló antes; no es un intento de contacto) y
+ * (c) las vivas sin END a las 2 h. Se marcan `closed_by_timeout`: si el END
+ * llega después, todavía cuenta (una reserva sin pedir no tiene END).
+ * Acotado a una persona, a una llamada o a una org; `{ all: true }` (solo el
+ * cron `/api/cron/anura-recordings`) suelta las de todas las organizaciones,
+ * con las mismas reglas. Sin alcance no hace nada. Devuelve cuántas cerró.
  */
 export async function releaseStaleAnuraCalls(
   admin: SupabaseClient,
-  scope: { userId?: string; callId?: string; all?: true },
+  scope: StaleScope,
   now: Date = new Date(),
 ): Promise<number> {
   return (await releaseStaleAnuraCallsReport(admin, scope, now)).closed;
 }
 
+export type StaleScope = { userId?: string; callId?: string; orgId?: string; all?: true };
+
 /**
- * Lo mismo, diciendo además si alguna de las dos pasadas falló en la base
+ * Lo mismo, diciendo además si alguna de las pasadas falló en la base
  * (`failed`). La ficha no lo necesita (vuelve a intentarlo al abrirse); el
  * cron sí, para no reportar «0 liberadas» cuando en verdad no pudo escribir.
  */
 export async function releaseStaleAnuraCallsReport(
   admin: SupabaseClient,
-  scope: { userId?: string; callId?: string; all?: true },
+  scope: StaleScope,
   now: Date = new Date(),
 ): Promise<{ closed: number; failed: boolean }> {
-  if (!scope.userId && !scope.callId && scope.all !== true) return { closed: 0, failed: false };
+  if (!scope.userId && !scope.callId && !scope.orgId && scope.all !== true) return { closed: 0, failed: false };
   const nowIso = now.toISOString();
   let closed = 0;
   let failed = false;
-  const pass = async (statuses: AnuraCallStatus[], column: "requested_at" | "last_event_at", ms: number, reason: string) => {
+  /** `propio`: sin reserva (anexo propio o de antes) · `pedida`/`sin_pedir`: reserva de una línea compartida. */
+  type Kind = "propio" | "pedida" | "sin_pedir" | null;
+  const pass = async (statuses: AnuraCallStatus[], column: "requested_at" | "last_event_at" | "reserved_at" | "dialed_at", ms: number, reason: string, kind: Kind = null) => {
     let q = admin
       .from("anura_calls")
       .update({ status: "fallida", status_rank: 100, failure_reason: reason, closed_by_timeout: true, ended_at: nowIso })
       .in("status", statuses)
       .in("mode", ["pedido", "prueba"])
       .lt(column, new Date(now.getTime() - ms).toISOString());
+    if (kind === "propio") q = q.is("reserved_at", null);
+    if (kind === "pedida") q = q.not("reserved_at", "is", null);
+    if (kind === "sin_pedir") q = q.is("dialed_at", null);
     if (scope.userId) q = q.eq("user_id", scope.userId);
     if (scope.callId) q = q.eq("id", scope.callId);
+    if (scope.orgId) q = q.eq("org_id", scope.orgId);
     const { data, error } = await q.select("id");
     if (error) failed = true;
     else closed += (data ?? []).length;
   };
-  await pass(["solicitada"], "requested_at", ANURA_STALE_REQUEST_MS, ANURA_STALE_REASON);
+  // Con anexo propio (y las de antes de la 0313): desde que se pidió.
+  await pass(["solicitada"], "requested_at", ANURA_STALE_REQUEST_MS, ANURA_STALE_REASON, "propio");
+  // Línea compartida ya pedida: desde que se pidió el Click2Dial.
+  await pass(["solicitada"], "dialed_at", ANURA_STALE_REQUEST_MS, ANURA_STALE_REASON, "pedida");
+  // Línea compartida reservada que nunca llegó a pedirse: se suelta la línea.
+  await pass(["solicitada"], "reserved_at", ANURA_UNDIALED_RESERVATION_MS, ANURA_UNDIALED_REASON, "sin_pedir");
   await pass(["sonando", "en_curso"], "last_event_at", ANURA_STUCK_CALL_MS, ANURA_STUCK_REASON);
   return { closed, failed };
 }
@@ -191,7 +212,14 @@ export async function activeAnuraCallOf(admin: SupabaseClient, userId: string): 
 // Pedir la llamada
 // ---------------------------------------------------------------------------
 
-export type AnuraStartErrorCode = "ocupada" | "base" | Click2DialErrorKind;
+/**
+ * `ocupada`: quien llama ya tiene una viva · `linea_ocupada`: ese anexo ya
+ * tiene una viva (de otra persona) · `lineas_ocupadas`: todas las líneas
+ * compartidas tienen una · `sin_lineas`: no hay ninguna línea compartida
+ * lista · `reserva`: la línea reservada se soltó antes de pedir la llamada (o
+ * no hay reserva) · `base` · lo que respondió Click2Dial.
+ */
+export type AnuraStartErrorCode = "ocupada" | "linea_ocupada" | "lineas_ocupadas" | "sin_lineas" | "reserva" | "base" | Click2DialErrorKind;
 
 export type AnuraStartResult =
   | { ok: true; callId: string; extension: string; toMasked: string }
@@ -205,6 +233,11 @@ export type AnuraStartResult =
  */
 const AMBIGUOUS_CLICK2DIAL: readonly Click2DialErrorKind[] = ["tiempo", "red"];
 
+/** El anexo ya tiene una llamada viva de otra persona (el índice por anexo de la 0313). */
+export function anuraLineBusyError(extension: string): string {
+  return `El anexo ${extension} ya tiene una llamada de Anura en curso. Intenta en un momento.`;
+}
+
 export interface PlaceAnuraCallInput {
   orgId: string;
   storeId: string | null;
@@ -217,19 +250,22 @@ export interface PlaceAnuraCallInput {
   token: string;
 }
 
+export interface DialDeps {
+  fetchImpl?: typeof fetch;
+  now?: Date;
+  timeoutMs?: number;
+}
+
 /**
- * Escribe la fila `solicitada` y pide el Click2Dial. Una sola llamada viva
- * por persona: la base lo sostiene con un índice único, y antes se sueltan
- * las que Anura nunca avisó. Si Anura rechaza, la fila queda `fallida` con el
- * motivo (no es un intento de contacto: no entra al historial del pedido).
- * Si Anura no respondió o se cortó la red, no se sabe si llamó: la fila sigue
- * `solicitada` y se devuelve su id para seguirla.
+ * Escribe la fila `solicitada` y pide el Click2Dial (anexo propio). Una sola
+ * llamada viva por persona y una por anexo: la base lo sostiene con dos
+ * índices únicos, y antes se sueltan las que Anura nunca avisó. Si Anura
+ * rechaza, la fila queda `fallida` con el motivo (no es un intento de
+ * contacto: no entra al historial del pedido). Si Anura no respondió o se
+ * cortó la red, no se sabe si llamó: la fila sigue `solicitada` y se devuelve
+ * su id para seguirla.
  */
-export async function placeAnuraCall(
-  admin: SupabaseClient,
-  input: PlaceAnuraCallInput,
-  deps: { fetchImpl?: typeof fetch; now?: Date; timeoutMs?: number } = {},
-): Promise<AnuraStartResult> {
+export async function placeAnuraCall(admin: SupabaseClient, input: PlaceAnuraCallInput, deps: DialDeps = {}): Promise<AnuraStartResult> {
   const now = deps.now ?? new Date();
   await releaseStaleAnuraCalls(admin, { userId: input.userId }, now);
   const id = randomUUID();
@@ -246,26 +282,43 @@ export async function placeAnuraCall(
     status: "solicitada",
     status_rank: 0,
     requested_at: now.toISOString(),
+    // Con anexo propio se pide en el acto: no hay reserva.
+    dialed_at: now.toISOString(),
   });
   if (insertError) {
     if (insertError.code === "23505") {
       const active = await activeAnuraCallOf(admin, input.userId);
-      return { ok: false, code: "ocupada", error: anuraBusyError(active?.status), ...(active ? { activeCallId: active.id } : {}) };
+      if (active) return { ok: false, code: "ocupada", error: anuraBusyError(active.status), activeCallId: active.id };
+      // No es de quien llama: el anexo ya tiene una viva de otra persona.
+      return { ok: false, code: "linea_ocupada", error: anuraLineBusyError(input.extension) };
     }
     return { ok: false, code: "base", error: `No se pudo pedir la llamada: ${insertError.message}` };
   }
+  return dialAnuraCall(admin, { id, mode: input.mode, extension: input.extension, phone: input.phone, token: input.token }, deps);
+}
+
+/**
+ * Pide el Click2Dial de una fila `solicitada` ya escrita (la de un anexo
+ * propio o la reserva de una línea compartida) y aplica lo que responde
+ * Anura. Nunca vuelve a elegir anexo.
+ */
+export async function dialAnuraCall(
+  admin: SupabaseClient,
+  call: { id: string; mode: "pedido" | "prueba"; extension: string; phone: string; token: string },
+  deps: DialDeps = {},
+): Promise<AnuraStartResult> {
   const startedMs = Date.now();
   const placed = await requestClick2Dial(
-    { token: input.token, called: input.phone, extension: input.extension, customs: anuraCustoms(id) },
+    { token: call.token, called: call.phone, extension: call.extension, customs: anuraCustoms(call.id) },
     { fetchImpl: deps.fetchImpl, timeoutMs: deps.timeoutMs },
   );
   // Diagnóstico de la prueba real (06-11-2026): qué respondió Anura al
   // Click2Dial. Sin teléfono ni token; el detalle de un rechazo ya va sin token.
   console.log(
     `[anura-click2dial] ${JSON.stringify({
-      call: id.slice(0, 8),
-      mode: input.mode,
-      ext: input.extension,
+      call: call.id.slice(0, 8),
+      mode: call.mode,
+      ext: call.extension,
       ok: placed.ok,
       kind: placed.ok ? null : placed.kind,
       http: placed.ok ? 200 : placed.httpStatus,
@@ -273,17 +326,17 @@ export async function placeAnuraCall(
     })}`,
   );
   if (!placed.ok && AMBIGUOUS_CLICK2DIAL.includes(placed.kind)) {
-    return { ok: false, code: placed.kind, error: placed.error, activeCallId: id };
+    return { ok: false, code: placed.kind, error: placed.error, activeCallId: call.id };
   }
   if (!placed.ok) {
     await admin
       .from("anura_calls")
       .update({ status: "fallida", status_rank: 100, failure_reason: placed.error, ended_at: new Date().toISOString() })
-      .eq("id", id)
+      .eq("id", call.id)
       .eq("status", "solicitada");
     return { ok: false, code: placed.kind, error: placed.error };
   }
-  return { ok: true, callId: id, extension: input.extension, toMasked: maskPhone(input.phone) };
+  return { ok: true, callId: call.id, extension: call.extension, toMasked: maskPhone(call.phone) };
 }
 
 // ---------------------------------------------------------------------------

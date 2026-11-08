@@ -22,12 +22,21 @@
 //                                  «clave rechazada»; con 404, «dominio no
 //                                  reconocido» (se corrige el dominio). En los dos
 //                                  casos no se vuelve a entregar esa clave.
+//
+// Líneas compartidas (0313, «Puede llamar con Anura»):
+//   getAnuraPhone(orderId)       → sin anexo propio, RESERVA una línea libre y da
+//                                  la clave de ESA línea con el id de la reserva.
+//   startAnuraCall(orderId, reservationId)
+//                                → el Click2Dial SOLO con esa reserva.
+//   releaseAnuraReservation(id)  → el teléfono falló antes del Click2Dial: la línea
+//                                  queda libre (si no llega, sola al minuto).
 
 import { after } from "next/server";
 import {
   anuraCallStatusFor,
   anuraPhoneForOrder,
   loadAnuraOrderPanel,
+  releaseAnuraReservationFor,
   reportAnuraPhoneRejectedFor,
   startAnuraCallForOrder,
   type AnuraCallStatusResult,
@@ -39,8 +48,12 @@ import type { AnuraRegistrationFailureKind } from "@/lib/anura/sip-phone";
 import { cleanDiag } from "@/lib/anura/phone-diag";
 import { createServerSupabase } from "@/lib/db";
 
-export async function startAnuraCall(orderId: string): Promise<AnuraStartResult> {
-  return startAnuraCallForOrder(orderId);
+export async function startAnuraCall(orderId: string, reservationId?: string | null): Promise<AnuraStartResult> {
+  return startAnuraCallForOrder(orderId, { reservationId: reservationId ?? null });
+}
+
+export async function releaseAnuraReservation(reservationId: string): Promise<{ ok: true; released: boolean } | { ok: false; error: string }> {
+  return releaseAnuraReservationFor(reservationId);
 }
 
 export async function getAnuraCallStatus(callId: string): Promise<AnuraCallStatusResult> {
@@ -65,7 +78,13 @@ export async function getAnuraPhone(orderId: string): Promise<AnuraPhoneCredenti
 
 export async function reportAnuraPhoneRejected(
   orderId: string,
-  input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status?: number | null; domain?: string | null },
+  input: {
+    credentialVersion: string;
+    kind: AnuraRegistrationFailureKind;
+    status?: number | null;
+    domain?: string | null;
+    reservationId?: string | null;
+  },
 ): Promise<{ ok: true; marked: boolean } | { ok: false; error: string }> {
   return reportAnuraPhoneRejectedFor({ orderId }, input);
 }

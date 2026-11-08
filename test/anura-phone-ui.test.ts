@@ -475,7 +475,8 @@ describe("el cableado de la ficha", () => {
 
   it("el teléfono usa las acciones de la ficha: credenciales, Click2Dial y clave rechazada", () => {
     expect(button).toContain("fetchCredentials: () => getAnuraPhone(orderId)");
-    expect(button).toContain("requestCall: () => startAnuraCall(orderId)");
+    expect(button).toContain("requestCall: (input) => startAnuraCall(orderId, input?.reservationId ?? null)");
+    expect(button).toContain("releaseReservation: (reservationId) => releaseAnuraReservation(reservationId)");
     expect(button).toContain("reportRejected: (input) => reportAnuraPhoneRejected(orderId, input)");
     // Lo que dice si la clienta contestó sigue llegando por el sondeo.
     expect(button).toContain("await getAnuraCallStatus(callId)");
@@ -550,8 +551,9 @@ describe("el cableado de Ajustes", () => {
   });
 
   it("la llamada de prueba usa el teléfono de Kapta con las acciones de Ajustes", () => {
-    expect(section).toContain("fetchCredentials: () => getAnuraTestPhone(storeId, extension || null)");
-    expect(section).toContain("requestCall: () => startAnuraTestCall(storeId, phone, extension || null)");
+    expect(section).toContain("fetchCredentials: () => getAnuraTestPhone(storeId, extension || null, phone)");
+    expect(section).toContain("requestCall: (input) => startAnuraTestCall(storeId, phone, extension || null, input?.reservationId ?? null)");
+    expect(section).toContain("releaseReservation: (reservationId) => releaseAnuraReservation(reservationId)");
     expect(section).toContain("reportRejected: (input) => reportAnuraTestPhoneRejected(storeId, input)");
     expect(section).toContain('if (way === "kapta_o_fase1" && anuraTestFallsBack(result.error)) {');
     // El teléfono y el audio son los del panel: Ajustes no monta otro.
@@ -560,7 +562,7 @@ describe("el cableado de Ajustes", () => {
   });
 
   it("la clave SIP no se guarda en el navegador ni se escribe en la consola", () => {
-    for (const f of ["components/anura-call.tsx", "components/anura-phone.tsx", "components/anura-kapta-phone-settings.tsx", "components/anura-settings-section.tsx", "lib/anura/phone-ui.ts"]) {
+    for (const f of ["components/anura-call.tsx", "components/anura-phone.tsx", "components/anura-kapta-phone-settings.tsx", "components/anura-settings-section.tsx", "components/anura-pool-settings.tsx", "lib/anura/phone-ui.ts", "lib/anura/pool.ts", "lib/anura/sip-phone.ts"]) {
       const src = read(f);
       expect(src, f).not.toMatch(/localStorage|sessionStorage|indexedDB/);
       expect(src, f).not.toMatch(/console\.(log|info|warn|error|debug)/);

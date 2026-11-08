@@ -174,12 +174,24 @@ function stopAmplifier(amp: Amplifier | null) {
 
 /** Lo que el teléfono pide al servidor (server actions) en UNA llamada. */
 export interface AnuraPhoneServer {
-  /** Las credenciales del anexo PROPIO, en el momento de llamar. */
+  /**
+   * Las credenciales en el momento de llamar: las del anexo PROPIO o, con
+   * «Puede llamar con Anura», las de la línea compartida que el servidor
+   * acaba de reservar para esta llamada (con su `reservationId`).
+   */
   fetchCredentials(): Promise<AnuraPhoneCredentialsResult>;
-  /** Pide la llamada a Anura (Click2Dial). */
-  requestCall(): Promise<AnuraStartResult>;
+  /** Pide la llamada a Anura (Click2Dial). Con una línea compartida, con su reserva. */
+  requestCall(input?: { reservationId: string }): Promise<AnuraStartResult>;
   /** Anura rechazó la clave (o no reconoce el dominio): el servidor lo marca. */
-  reportRejected(input: { credentialVersion: string; kind: AnuraRegistrationFailureKind; status: number | null; domain?: string }): Promise<unknown>;
+  reportRejected(input: {
+    credentialVersion: string;
+    kind: AnuraRegistrationFailureKind;
+    status: number | null;
+    domain?: string;
+    reservationId?: string;
+  }): Promise<unknown>;
+  /** La llamada no llegó a pedirse: se suelta la línea compartida reservada. */
+  releaseReservation?(reservationId: string): Promise<unknown>;
 }
 
 /** Sin acciones (no debería pasar: cada `call` trae las suyas). */
@@ -293,8 +305,9 @@ export function AnuraPhoneProvider({ children }: { children: ReactNode }) {
       lock: browserAnuraTabLock(),
       memory: browserAnuraPhoneMemory(),
       fetchCredentials: () => serverRef.current.fetchCredentials(),
-      requestCall: () => serverRef.current.requestCall(),
+      requestCall: (input) => serverRef.current.requestCall(input),
       reportRejected: (input) => serverRef.current.reportRejected(input),
+      releaseReservation: (reservationId) => serverRef.current.releaseReservation?.(reservationId) ?? Promise.resolve(null),
       makeStream: (tracks) => new MediaStream(tracks as MediaStreamTrack[]),
       onRemoteStream: (stream) => {
         const el = audioRef.current;

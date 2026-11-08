@@ -45,6 +45,7 @@ import {
   getAnuraCallStatus,
   getAnuraOrderCalls,
   getAnuraPhone,
+  releaseAnuraReservation,
   reportAnuraPhoneRejected,
   startAnuraCall,
 } from "@/app/dashboard/pedidos/anura-actions";
@@ -52,6 +53,7 @@ import type { AnuraCallLive, AnuraKaptaPhoneView, AnuraOrderCall, AnuraOrderPane
 import { ANURA_POLL_INTERVAL_MS, ANURA_STATUS_HINT } from "@/lib/anura/events";
 import { ANURA_MAX_POLL_FAILURES, anuraEndedFollowUp, anuraEndedLine, anuraRecordingNote } from "@/lib/anura/ui";
 import { ANURA_KAPTA_PHONE_TEXT } from "@/lib/anura/sip";
+import { anuraFreeLinesLabel } from "@/lib/anura/pool";
 import {
   ANURA_PHONE_BLOCKED_TITLE,
   ANURA_PHONE_KEEPS_GOING,
@@ -143,6 +145,7 @@ export function AnuraCallButton({
   extension,
   resume,
   kaptaPhone,
+  pool,
   onEnded,
   onPhoneChanged,
   onGoToDesk,
@@ -158,6 +161,11 @@ export function AnuraCallButton({
   resume: AnuraCallLive | null;
   /** ¿El anexo de quien mira tiene teléfono en Kapta? Sin esto, fase 1. */
   kaptaPhone?: AnuraKaptaPhoneView | null;
+  /**
+   * Sin anexo propio, con «Puede llamar con Anura»: las líneas compartidas
+   * («2 de 3 líneas libres» al abrir la ficha). La línea se elige al llamar.
+   */
+  pool?: { total: number; free: number } | null;
   /** Al terminar una llamada, para recargar el historial y la tarjeta. */
   onEnded: () => void;
   /** El teléfono del anexo cambió (p. ej. Anura rechazó la clave): recargar el panel. */
@@ -195,8 +203,9 @@ export function AnuraCallButton({
   const server = useMemo<AnuraPhoneServer>(
     () => ({
       fetchCredentials: () => getAnuraPhone(orderId),
-      requestCall: () => startAnuraCall(orderId),
+      requestCall: (input) => startAnuraCall(orderId, input?.reservationId ?? null),
       reportRejected: (input) => reportAnuraPhoneRejected(orderId, input),
+      releaseReservation: (reservationId) => releaseAnuraReservation(reservationId),
     }),
     [orderId],
   );
@@ -565,7 +574,9 @@ export function AnuraCallButton({
             ? "Ver la llamada con Anura en curso"
             : busyElsewhere
               ? "Ya tienes una llamada con Anura en curso: cuélgala antes de llamar a este cliente"
-              : way === "kapta"
+              : way === "kapta" && pool
+                ? `Llamar con Anura desde Kapta con una línea compartida (${anuraFreeLinesLabel(pool.free, pool.total)}): hablas con tus audífonos y Anura marca a la clienta`
+                : way === "kapta"
                 ? "Llamar con Anura desde Kapta: hablas con tus audífonos y Anura marca a la clienta"
                 : way === "bloqueado"
                   ? "Llamar con Anura desde Kapta: ahora no se puede; al tocar, Kapta dice por qué"
