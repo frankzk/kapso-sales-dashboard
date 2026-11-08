@@ -1086,13 +1086,119 @@ se creó**.
     respondió, pero la dirección que escribió sigue incompleta…» o «La clienta
     completó la dirección por Chatby y Kapta la guardó, pero Google tampoco da
     el edificio…». El botón «Pedir ubicación por WhatsApp» sigue ahí.
+- **Guía automática para clientas con entregas** (owner, 08-11-2026; 0317;
+  `lib/history-guide-auto.ts`). La clienta confirmó por Chatby y la guía no
+  sale por la dirección, pero ya recibió en esa misma casa: la guía sale igual,
+  con el GPS de esa entrega. Caso que lo motivó: #KP204102 («Los cerezos Mz i
+  L 5 urb Arboleda», Trujillo; tres entregados por Aliclik ahí). No agrega
+  estados ni subetapas; corre en la misma pasada, con la conversación que acaba
+  de leer, y solo lee la base (el historial y las guías de esos pedidos).
+  - **Cuándo se mira.** Solo cuando la clienta **confirmó por Chatby** y la guía
+    no sale por la dirección:
+    - `direccion_incompleta`: lo único que falla es que la dirección (del
+      mensaje o del pedido) no está completa; lo demás cuadra como siempre (el
+      pedido, confirmar, pagar en casa, el monto, la dirección del mensaje es
+      la del pedido y después solo cortesía o su ubicación,
+      `historyGuideConfirmation`);
+    - `sin_ubicacion`: la guía de siempre ya se intentó y no hay coordenada
+      (sin la del pedido, sin ubicación de WhatsApp y sin el edificio ni la
+      cuadra en Google), al quedar para la asesora y en las relecturas de cada
+      30 minutos (también lo que quedó así antes de encender el interruptor) y
+      después de que la clienta responde a una pedida.
+
+    Un pedido sin mensaje de confirmación (`sin_conversacion`,
+    `sin_confirmacion`) no entra: la regla no confirma a nadie que no confirmó.
+    #KP204102 no tiene conversación en Chatby, así que **no la toma**; sigue
+    siendo de la asesora.
+  - **Va antes de pedirle la dirección o la ubicación** (0318). Para la clienta
+    que califica, Kapta crea la guía y no le escribe. Si no califica, o la guía
+    con ese GPS tampoco sale por una espera (el tope, Aliclik en rojo, el
+    candado), sigue lo de siempre (en la espera, se vuelve a leer y a mirar).
+    Si la guía con ese GPS no sale por otra cosa (el pin no se respalda,
+    Aliclik no la deja crear…), queda para la asesora con ese motivo, como
+    cualquier guía de Chatby, sin pedirle la dirección.
+  - **Quién califica** (`historyGuideCandidate`, `evaluateHistoryGuide`). Por
+    el celular, en toda la organización (también tiendas inactivas), los OTROS
+    pedidos:
+    1. **al menos un entregado** (`general_status = entregado`: Aliclik, Lima o
+       cualquier courier);
+    2. **ningún fallido**: ningún devuelto ni anulado después de salir
+       (`isFailedDispatch`, §8.6); ningún intento de entrega que no se entregó
+       (`attempt_count > 0`: lo que reportan los couriers y los «No entregado»
+       de nuestros motorizados, **también en un pedido que al final sí se
+       entregó**); ningún rechazo en la puerta (`REFUSED`,
+       `countDoorRejections`, §8.2); y ningún otro pedido que salió y sigue sin
+       entregarse. Si las guías no se pueden leer, no califica;
+    3. el adelanto de la tabla del §8 no frena Aliclik (`aliclikRiskGate`: dos
+       anulados o más lo exigen);
+    4. **la misma dirección**: la del pedido es la de un entregado del mismo
+       distrito y provincia, comparada sin mayúsculas, tildes, puntuación ni
+       ceros a la izquierda; «M», «Mz», «Mza», «Manzana» iguales; «L», «Lt»,
+       «Lote» iguales; «Jr»/«Jirón», «Av»/«Avenida», «Pje»/«Pasaje» iguales; sin
+       palabras de relleno («urb», «nro», «de», «calle»…); las mismas palabras
+       en el mismo orden. «Los cerezos Mz i L 5 urb Arboleda» es «Los cerezos
+       M i L 5 Arboleda»; «lote 3» es «lote 03»; otro lote, otra manzana u otro
+       distrito no;
+    5. **ese entregado tiene GPS**: la coordenada de su guía en el Master
+       (`latitude/longitude` con `geo_source = courier`, que sale de
+       `shipments.latitude/longitude`). Aliclik devuelve en su reporte la
+       coordenada que le mandó Kapta (ver «La prueba», arriba), así que **no es
+       el GPS del motorizado**: es el punto con el que esa guía se entregó, y la
+       entrega es la prueba de que sirve. Una corrección a mano (`manual`) o lo
+       que geocodificó Shopify no cuentan. Con varios, el entregado más
+       reciente.
+  - **La guía.** Por el camino de la ubicación de WhatsApp (`forcePin`): esa
+    coordenada, nunca la del pedido ni Google, con el pin respaldado de Aliclik
+    al cotizar y todas las rejas de `createAliclikGuideFor` (prepago, rechazos
+    en la puerta, duplicado, riesgo, salida viva, stock, cobertura, el candado),
+    la lista de pago adelantado (§41), Shalom, el envío programado, un pago, el
+    tope de 20 por día y Aliclik en rojo. Confirma con la guía creada, como
+    siempre (`register_confirmation_attempt_v2`, sin actor, `source =
+    'chatby'`).
+  - **Lo que queda escrito.** En la línea de tiempo, el hecho
+    **`chatby_history_guide`** («Guía con el GPS de una entrega anterior»,
+    firmado «Chatby»): «Guía creada con el GPS de la entrega de #KP140751.», con
+    la nota «La clienta confirmó por Chatby y la dirección está incompleta (o
+    Google no ubica la dirección y la clienta no mandó su ubicación), pero ya
+    recibió en esta misma dirección (3 entregados, ningún fallido): Kapta creó
+    la guía Aliclik con el GPS de la entrega de #KP140751.» y en `payload` el
+    pedido (`source_order_id`, `source_order_name`), los entregados y el motivo.
+    El `guide_registered` dice «Guía automática: #KP204102 confirmó por Chatby;
+    GPS de la entrega de #KP140751 (historial de entregas).» y
+    `payload.auto.gps_from`; la nota del lead (la ficha) «Guía de Aliclik
+    creada automáticamente (confirmó por Chatby · GPS de la entrega de
+    #KP140751) · …»; la nota de la confirmación agrega «La guía va con el GPS
+    de la entrega de #KP140751: la clienta ya recibió en esta dirección (3
+    entregados, ningún fallido).»; y `guide_detail` «coordenada: GPS de la
+    entrega de #KP140751 (historial de entregas)». La marca guarda
+    `evidence.history_guide` (posición, motivo, resultado `usada`,
+    `habria_usado` o `no_califica` con su motivo, el pedido del GPS y los
+    números; ni direcciones ni celulares).
+  - **El interruptor** (`chatby_auto_settings.history_guide_mode`, 0317),
+    «Guía automática para clientas con entregas» en Automatizaciones (§40,
+    grupo Confirmación, clave `chatby_auto_history`), con las tres posiciones
+    de siempre. **Apagado** (nace así, y sin la 0317): lo de hoy. **Simulación**:
+    la pasada dice «habría creado la guía con el GPS de #…» (en el resumen del
+    cron, `historySimulated`, una vez por pedido, y en la marca) y el pedido
+    sigue exactamente como hoy (para la asesora y, si está encendido, la pedida
+    de 0318). **Activo**: crea la guía y confirma (`historyUsed`). El owner lo
+    quiere en vivo; se enciende a mano después de desplegar.
+  - **Al decidirlo** (réplica de solo lectura, 08-11-2026, 72 h): de las 148
+    marcas `para_asesora` por `direccion_incompleta` (69), `sin_ubicacion_cerrado`
+    (63) o `sin_ubicacion` (16), 18 tenían algún entregado, 8 el historial
+    limpio y **una** calificaba: #AUR900480 («Calle alameda del sol mz. A lote
+    3», Veintiséis de Octubre) con el GPS de #KP201632 («… lote 03», entregado
+    por Aliclik el 05-11). Las otras siete: otra dirección (o la misma con otro
+    distrito guardado en el entregado), un entregado en agencia Shalom o un GPS
+    de Shopify o manual.
 - **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
   con otra creación en curso (el candado), no se escribe nada visible: el
   pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.
 - **Interruptores** (`chatby_auto_settings`, 0297, uno por organización):
   `enabled` (toda la pasada), `guide_enabled` (solo la guía), `daily_cap` (20),
   `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30); y
-  las dos de tres posiciones, `approx_mode` (0316) y `ask_mode` (0318). Nace
+  las tres de tres posiciones, `approx_mode` (0316), `ask_mode` (0318) y
+  `history_guide_mode` (0317). Nace
   **encendido** con 20 guías por día porque lo pidió el owner, y no para las
   organizaciones cliente de Grupo GF (§29.15.1). Sin la tabla, o con la fila
   apagada, la pasada no hace nada. Las claves de siempre: `CHATBY_API_KEY` para
@@ -1118,9 +1224,10 @@ Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
 `lib/chatby-location-ask.ts`, `lib/chatby-reask.ts`,
 `components/order-chatby-panel.tsx`; pedirla sola (0318):
 `lib/chatby-auto-ask.ts`, `lib/order-address-correction.ts`,
-`lib/chatby-auto-ask-server.ts`. Pruebas:
+`lib/chatby-auto-ask-server.ts`; la guía para clientas con entregas (0317):
+`lib/history-guide-auto.ts`. Pruebas:
 `test/chatby-autoconfirm.test.ts`, `test/chatby-location-ask.test.ts`,
-`test/chatby-auto-ask.test.ts`.
+`test/chatby-auto-ask.test.ts`, `test/history-guide-auto.test.ts`.
 
 ### 6.2 Preparación
 
@@ -24561,7 +24668,10 @@ Vercel— y algunas no tenían interruptor.
     blanca y tiene su propia acción, que solo escribe esa columna. Activo pide
     confirmación; cuenta entre las encendidas solo en Activo. Igual, «Pedir
     sola la dirección o la ubicación» (§6.1, 0318, `ask_mode`,
-    `setChatbyAskMode`), que envía WhatsApp a clientas.
+    `setChatbyAskMode`), que envía WhatsApp a clientas, y «Guía automática para
+    clientas con entregas» (§6.1, 0317, clave `chatby_auto_history`,
+    `history_guide_mode`, `setChatbyHistoryMode`), que crea guías y confirma
+    pedidos; en la pasada va antes de la pedida de 0318.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -24587,9 +24697,11 @@ Vercel— y algunas no tenían interruptor.
   con el mismo permiso `automations.manage`.
 
 Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql`,
-`0316_chatby_approx_location.sql` y `0318_chatby_auto_ask.sql`.
+`0316_chatby_approx_location.sql`, `0317_history_guide_auto.sql` y
+`0318_chatby_auto_ask.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
-`test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`.
+`test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`,
+`test/history-guide-auto.test.ts`.
 
 ## 41. Lista de pago adelantado (05-11-2026)
 

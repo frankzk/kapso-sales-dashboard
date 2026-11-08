@@ -69,6 +69,11 @@ export interface ChatbyAutoSettings {
   approx_mode: ApproxMode;
   /** «Pedir sola la dirección o la ubicación» (0318, lib/chatby-auto-ask.ts): Apagado / Simulación / Activo. */
   ask_mode: ApproxMode;
+  /**
+   * «Guía automática para clientas con entregas» (0317, lib/history-guide-auto.ts):
+   * Apagado / Simulación / Activo.
+   */
+  history_guide_mode: ApproxMode;
 }
 
 export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = {
@@ -81,6 +86,7 @@ export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = 
   geocode_enabled: true,
   approx_mode: "apagado",
   ask_mode: "apagado",
+  history_guide_mode: "apagado",
 };
 
 function intIn(value: unknown, min: number, max: number, fallback: number): number {
@@ -111,6 +117,8 @@ export function chatbyAutoSettingsFrom(row: Record<string, unknown>): ChatbyAuto
     approx_mode: approxModeFrom(row.approx_mode),
     // Sin la columna (antes de la 0318) o con un valor raro: Apagado.
     ask_mode: approxModeFrom(row.ask_mode),
+    // Sin la columna (antes de la 0317) o con un valor raro: Apagado.
+    history_guide_mode: approxModeFrom(row.history_guide_mode),
   };
 }
 
