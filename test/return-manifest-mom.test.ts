@@ -98,7 +98,7 @@ describe("§9.4 el manifiesto de devolución", () => {
   it("cita el pedido del owner y no crea estados ni sube la versión del resolver", () => {
     expect(s).toContain("«si llegan las devoluciones de alexis o de urpi que llegan de varios días juntos, se pueda hacer un manifiesto con todo lo que llegó para llevar un registro con lo que reporta alexis»");
     expect(s).toContain("el manifiesto **no cambia estados de pedido por su cuenta** y no agrega estados de pedido, subetapas, veredictos del Master ni tipos de `order_events` o `dispatch_events`.");
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.39");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.40");
     expect(s).toContain("`MOM_RESOLUTION_VERSION` no cambia (`mom-v1.38`).");
   });
 

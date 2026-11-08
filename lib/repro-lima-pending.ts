@@ -5,6 +5,7 @@ import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
 import type { ReproList } from "@/lib/repro-lima";
 import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, limaDay, programDayLabel, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
+import type { PlanBox, PlanCandidate } from "@/lib/dispatch-plan";
 import { courierDisplayName } from "@/lib/dispatched-with";
 
 export type LimaAttentionFilter = "todos" | "reintentos_aliclik" | "reprogramados" | QueueSegment | "llamar_despues" | "cerrados";
@@ -12,7 +13,7 @@ type AttentionCase = {
   orderId: string; list: ReproList;
   /** El reintento por Aliclik que toca (lib/lima-retry-chain.ts), o null. */
   retryChain?: unknown;
-  agreement?: { agreedOn: string } | null;
+  agreement?: { agreedOn: string; courier?: string } | null;
   program?: { scheduledFor: string } | null;
 };
 
@@ -95,6 +96,17 @@ export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readon
   return counts;
 }
 
+/**
+ * «Reintentos Aliclik»: a quién aprueba el botón de la barra (owner,
+ * 06-11-2026). Los marcados que siguen listos y a la vista; sin ninguno
+ * marcado, todos los listos, como antes. Un marcado que dejó de estar listo o
+ * que un filtro esconde no se aprueba.
+ */
+export function retryApprovalTargets<T extends { orderId: string }>(ready: readonly T[], selected: ReadonlySet<string>): { rows: T[]; picked: boolean } {
+  const picked = ready.filter((row) => selected.has(row.orderId));
+  return picked.length ? { rows: picked, picked: true } : { rows: [...ready], picked: false };
+}
+
 export const LIMA_PENDING_STAGES = ["por_confirmar", "preparacion", "por_despachar", "en_curso"] as const;
 export type LimaPendingStage = typeof LIMA_PENDING_STAGES[number];
 export interface LimaPendingOrder {
@@ -128,6 +140,44 @@ export interface LimaPendingOrder {
    * de corte. Sin guía esperando, null.
    */
   courierPickup?: { courier: "aliclik"; date: string } | null;
+  /** Lo de Grupo GF para «Sale a reparto» (§29.16); null si no sale con Grupo GF. */
+  gf?: LimaPendingGf | null;
+}
+
+export interface LimaPendingGf {
+  /** Su caja activa de Grupo GF, si ya está en una. */
+  box: PlanBox | null;
+  /** El día de la solicitud que tomó Grupo GF, si la tomó. */
+  requestDay: string | null;
+  /** Su salida tiene QR (rótulo). */
+  labeled: boolean;
+  /** Almacén la armó (`listo_despacho`). */
+  armed: boolean;
+  /** Sin caja vigente y todavía con el motorizado en la caja de un día que pasó. */
+  awaitingOffice?: boolean;
+  /**
+   * Su única caja de Grupo GF es de un día que pasó: ni la solicitud vieja ni
+   * el corte le dan día; solo el acuerdo o el programa.
+   */
+  pastBox?: boolean;
+}
+
+/**
+ * El pedido para «Sale a reparto» (§29.16, `lib/dispatch-plan.ts`). Su día:
+ * el de la caja; si no, el acuerdo o el programa (`limaScheduledFor`), la
+ * solicitud tomada, y, sin nada de eso, el corte (`cutoffDay`, el que da
+ * `scheduledDay` ahora). Un reintento (En curso) o lo que sigue en una caja de
+ * un día que pasó solo tiene el día del acuerdo o el programa: sin ellos espera
+ * a la tienda (§29.13) y no entra, como en Despacho del día. Un acuerdo con
+ * otro courier no es de Grupo GF.
+ */
+export function limaPlanCandidate(row: LimaPendingOrder, c: AttentionCase | undefined, cutoffDay: string): PlanCandidate | null {
+  if (!row.gf) return null;
+  if (c?.list === "programados" && c.agreement?.courier && c.agreement.courier !== "propio") return null;
+  const agreedOrProgrammed = limaScheduledFor(row, c);
+  const waitsForStore = row.stage === "en_curso" || Boolean(row.gf.pastBox);
+  const day = agreedOrProgrammed ?? (waitsForStore ? null : row.gf.requestDay ?? cutoffDay);
+  return { orderId: row.orderId, day: day?.slice(0, 10) ?? null, box: row.gf.box, labeled: row.gf.labeled, armed: row.gf.armed, awaitingOffice: Boolean(row.gf.awaitingOffice) };
 }
 
 // ---------------------------------------------------------------------------

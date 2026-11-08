@@ -12,7 +12,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton, SECTION_CARD, SectionHead, Skeleton, opsButtonClass } from "@/components/ops-ui";
-import { IconAlert, IconArrowUpRight, IconChat, IconCheck, IconCopy, IconImage, IconRepeat } from "@/components/icons";
+import { IconAlert, IconArrowUpRight, IconChat, IconCheck, IconCopy, IconImage, IconMapPin, IconRepeat } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { loadOrderChatby, sendOrderChatbyReply } from "@/app/dashboard/pedidos/actions";
 import {
@@ -28,6 +28,15 @@ import {
   type ChatbyConversation,
   type ChatbyMessage,
 } from "@/lib/chatby-conversation";
+import {
+  CHATBY_ASK_PURPOSE,
+  chatbyAskExplanation,
+  chatbyAskMessage,
+  chatbyAskStatus,
+  chatbyAskStatusAt,
+  chatbyAskTitle,
+  type ChatbyLocationHold,
+} from "@/lib/chatby-location-ask";
 
 const MEDIA_LABEL: Record<NonNullable<ChatbyMessage["media"]>, string> = {
   imagen: "Imagen",
@@ -160,7 +169,8 @@ function Thread({ messages, orderName }: { messages: ChatbyMessage[]; orderName:
   );
 }
 
-type LoadState = { status: "cargando" } | { status: "listo"; result: ChatbyConversation };
+type LoadResult = ChatbyConversation & { hold?: ChatbyLocationHold | null };
+type LoadState = { status: "cargando" } | { status: "listo"; result: LoadResult };
 
 const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
 
@@ -253,6 +263,96 @@ function ReplyBox({
         </Banner>
       )}
     </div>
+  );
+}
+
+/**
+ * Por qué se paró la guía automática y, con un clic, pedirle la ubicación a la
+ * clienta (MOM §6.1, owner 08-11-2026). El mensaje viene escrito y se puede
+ * editar; sale por el mismo envío que «Responder por WhatsApp» (las 24 h de
+ * WhatsApp y la pausa del bot, que el servidor vuelve a comprobar).
+ */
+function LocationAskBanner({
+  orderId,
+  hold,
+  messages,
+  inboxUrl,
+  canEdit,
+  onSent,
+}: {
+  orderId: string;
+  hold: ChatbyLocationHold;
+  messages: ChatbyMessage[];
+  inboxUrl: string;
+  canEdit: boolean;
+  onSent: (notice: string) => void;
+}) {
+  const [text, setText] = useState(() =>
+    chatbyAskMessage({ ask: hold.ask, customerName: hold.customerName, orderName: hold.orderName }),
+  );
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ventana = chatbyReplyWindow(messages);
+  const statusAt = chatbyAskStatusAt(hold);
+
+  const send = () => {
+    setPending(true);
+    setError(null);
+    sendOrderChatbyReply(orderId, text, { purpose: CHATBY_ASK_PURPOSE })
+      .then((result) => {
+        if (result.error) {
+          setError(result.error);
+          return;
+        }
+        onSent(result.notice ?? "Mensaje enviado.");
+      })
+      .catch(() => setError("No hubo respuesta de Kapta. El mensaje puede no haber salido: revísalo con «Actualizar»."))
+      .finally(() => setPending(false));
+  };
+
+  return (
+    <Banner tone="warn" title={chatbyAskTitle(hold.reason)} role="status">
+      <div className="mt-1 space-y-3">
+        <p className="leading-5">{chatbyAskExplanation(hold)}</p>
+        {/* (0318) Si Kapta ya se la pidió sola, lo dice con la hora: la asesora no la vuelve a pedir. */}
+        <p className="leading-5 text-ink-600">{chatbyAskStatus(hold, statusAt ? whenInLima(statusAt) : null)}</p>
+        {canEdit &&
+          (ventana.open ? (
+            <div className="space-y-2">
+              <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
+                Mensaje para la clienta (puedes editarlo)
+                <textarea
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  rows={3}
+                  maxLength={CHATBY_REPLY_MAX}
+                  className={TEXTAREA}
+                />
+              </label>
+              <OpsButton variant="primary" disabled={pending || !text.trim()} onClick={send} className="pointer-coarse:h-11">
+                <IconMapPin aria-hidden />
+                {pending ? "Enviando…" : "Pedir ubicación por WhatsApp"}
+              </OpsButton>
+            </div>
+          ) : (
+            <p className="leading-5">
+              {ventana.lastCustomerAt
+                ? `La clienta escribió por última vez: ${whenInLima(ventana.lastCustomerAt)}. Pasaron más de 24 horas y WhatsApp no deja mandarle texto libre.`
+                : "La clienta no escribió en estos mensajes: WhatsApp solo deja mandarle texto libre hasta 24 horas después de su último mensaje."}{" "}
+              Pídesela con una plantilla desde{" "}
+              <a href={inboxUrl} target="_blank" rel="noreferrer noopener" className="font-medium text-brand-700 hover:underline">
+                Chatby
+              </a>
+              .
+            </p>
+          ))}
+        {error && (
+          <p role="alert" className="font-medium text-crit-fg">
+            {error}
+          </p>
+        )}
+      </div>
+    </Banner>
   );
 }
 
@@ -383,6 +483,17 @@ export function OrderChatbyPanel({
           </div>
         ) : result?.status === "ok" ? (
           <div className="space-y-3">
+            {result.hold && (
+              <LocationAskBanner
+                key={`${orderId}:${result.hold.reason}:${result.hold.ask}`}
+                orderId={orderId}
+                hold={result.hold}
+                messages={result.messages}
+                inboxUrl={result.inboxUrl}
+                canEdit={canEdit}
+                onSent={onSent}
+              />
+            )}
             {result.messages.length ? (
               <div className="space-y-2">
                 {result.name && <p className="text-[13px] leading-5 text-ink-600">En Chatby: {result.name}</p>}

@@ -18,7 +18,7 @@ import { useEffect, useId, useRef, useState, useTransition, type KeyboardEvent, 
 import { EmptyState, cn } from "@/components/ui";
 import { Badge, Banner, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { opsButtonClass } from "@/components/ops-styles";
-import { CARD, HELP, NUMBER_NARROW, ROW, SettingsGroup, SettingsIndex, SettingsSection, type IndexGroup } from "@/components/settings-ui";
+import { CARD, CardHeader, HELP, NUMBER_NARROW, ROW, SettingsGroup, SettingsIndex, SettingsSection, type IndexGroup } from "@/components/settings-ui";
 import { CHAIN_REASONS, type ChainReason } from "@/lib/lima-retry-chain";
 import {
   RETRY_DAILY_CAP_MAX,
@@ -39,11 +39,22 @@ import {
   confirmationText,
   needsConfirmation,
   storeSettingsHref,
+  CHATBY_ASK_KEY,
   type AutomationEffect,
   type AutomationEntry,
   type AutomationGroup,
 } from "@/lib/automations-catalog";
 import type { AutomationsOrgView, OrgSwitchView, RetryGeocodeView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
+import type { ApproxReportRow, ChatbyApproxView } from "@/lib/chatby-approx-server";
+import type { ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
+import {
+  APPROX_MODE_LABEL,
+  APPROX_NEAR_METERS,
+  approxSummaryLine,
+  mapsHref,
+  type ApproxMode,
+  type ApproxReference,
+} from "@/lib/geocode-approx";
 import {
   GEOCODE_CRITERION_B,
   GEOCODE_LIMA_CAP,
@@ -67,6 +78,8 @@ import {
   setPrepayAutoMode,
   simulatePrepayNow,
   type PrepaySimulationResult,
+  setChatbyApproxMode,
+  setChatbyAskMode,
   setOrgAutomation,
   setRetryDailyCap,
   setRetryGeocode,
@@ -120,6 +133,7 @@ const OUTCOME_TONE: Partial<Record<RetryOutcome, BadgeTone>> = {
 };
 
 const groupId = (key: AutomationGroup) => `grupo-${key}`;
+const APPROX_TEST_ID = "prueba-ubicacion-aproximada";
 
 const INDEX: IndexGroup[] = [
   {
@@ -139,7 +153,14 @@ const INDEX: IndexGroup[] = [
       { id: "prepay-simular", label: "Simular ahora" },
     ],
   },
-  { title: "Interruptores", items: AUTOMATION_GROUPS.map((g) => ({ id: groupId(g.key), label: g.title })) },
+  {
+    title: "Interruptores",
+    items: AUTOMATION_GROUPS.flatMap((g) => [
+      { id: groupId(g.key), label: g.title },
+      // La prueba de la ubicación aproximada va con la Confirmación (0316).
+      ...(g.key === "confirmacion" ? [{ id: APPROX_TEST_ID, label: "Prueba de ubicación aproximada" }] : []),
+    ]),
+  },
   { title: "Historial", items: [{ id: "ultimos-cambios", label: "Últimos cambios" }] },
 ];
 
@@ -1258,11 +1279,14 @@ function RetryLog({ rows }: { rows: RetryLogView[] }) {
 function groupBadge(entries: AutomationEntry[], org: AutomationsOrgView): ReactNode {
   const switchable = entries.filter((e) => e.control.kind !== "readonly");
   if (switchable.length === 0) return undefined;
-  // Cuenta lo que de verdad corre: encendido y con su requisito encendido.
+  // Cuenta lo que de verdad corre: encendido y con su requisito encendido. Una
+  // de tres posiciones cuenta en Activo (en Simulación no cambia nada afuera).
   const lit = switchable.filter((e) =>
     e.control.kind === "org_table"
       ? org.org[e.key]?.state === "on" && org.org[e.key]?.requiresOn !== false
-      : (org.store?.[e.key] ?? []).some((s) => s.on && s.requiresOn),
+      : e.control.kind === "org_mode"
+        ? (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : org.chatbyApprox.mode) === "activo"
+        : (org.store?.[e.key] ?? []).some((s) => s.on && s.requiresOn),
   ).length;
   return <Badge tone={lit ? "ok" : "neutral"}>{lit ? `${lit} de ${switchable.length} encendidas` : "Todas apagadas"}</Badge>;
 }
@@ -1285,11 +1309,16 @@ function CatalogSection({
             <OrgSwitchRow key={entry.key} entry={entry} orgId={org.orgId} view={org.org[entry.key]} writable={writable} />
           ) : entry.control.kind === "store_column" ? (
             <StoreSwitchRow key={entry.key} entry={entry} views={org.store?.[entry.key] ?? null} writable={writable} />
+          ) : entry.control.kind === "org_mode" && entry.key === CHATBY_ASK_KEY ? (
+            <AskModeRow key={entry.key} entry={entry} orgId={org.orgId} view={org.chatbyAsk} writable={writable} />
+          ) : entry.control.kind === "org_mode" ? (
+            <ApproxModeRow key={entry.key} entry={entry} orgId={org.orgId} view={org.chatbyApprox} writable={writable} />
           ) : (
             <ReadonlyRow key={entry.key} entry={entry} state={org.readonly[entry.key]} stores={org.stores} />
           ),
         )}
       </div>
+      {group.key === "confirmacion" && <ApproxTestCard view={org.chatbyApprox} />}
     </SettingsSection>
   );
 }
@@ -1463,6 +1492,269 @@ function ReadonlyRow({
           {state?.label ?? "Sin dato"}
         </Badge>
       </div>
+    </div>
+  );
+}
+
+// ── Pedir sola la dirección o la ubicación (Chatby, 0318) ────────────────────
+
+/** Apagado / Simulación / Activo de los mensajes que piden la dirección o la ubicación; guarda al cambiar. */
+function AskModeRow({ entry, orgId, view, writable }: { entry: AutomationEntry; orgId: string; view: ChatbyAskModeView; writable: boolean }) {
+  const id = useId();
+  const [mode, setMode] = useState<ApproxMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available && view.rowExists;
+  const blocked = !view.available
+    ? "Aún no está instalada en la base de datos: funciona como Apagado."
+    : !view.rowExists
+      ? "Sin configurar en tu organización."
+      : null;
+
+  const change = (next: ApproxMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (
+      next === "activo" &&
+      !window.confirm(
+        "¿Poner en Activo «Pedir sola la dirección o la ubicación»? Cuando la clienta confirme por Chatby y la guía no salga por la dirección, Kapta le escribirá por WhatsApp sin que una asesora lo revise (una vez para la dirección y una para la ubicación).",
+      )
+    ) {
+      return false;
+    }
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setChatbyAskMode(orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  return (
+    <div className={ROW}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 sm:flex-1">
+          <EntryHead entry={entry} nameId={`${id}-name`} descId={`${id}-desc`} />
+        </div>
+        <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+      </div>
+      <div className="mt-1.5">
+        <RowStatus pending={pending} status={status} blocked={blocked} />
+      </div>
+    </div>
+  );
+}
+
+// ── Ubicación aproximada en la calle correcta (Chatby, 0316) ─────────────────
+
+/** La fila del catálogo con Apagado / Simulación / Activo, que guarda al cambiar. */
+function ApproxModeRow({ entry, orgId, view, writable }: { entry: AutomationEntry; orgId: string; view: ChatbyApproxView; writable: boolean }) {
+  const id = useId();
+  const [mode, setMode] = useState<ApproxMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available && view.rowExists;
+  const blocked = !view.available
+    ? "Aún no está instalada en la base de datos: funciona como Apagado."
+    : !view.rowExists
+      ? "Sin configurar en tu organización."
+      : null;
+
+  const change = (next: ApproxMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (
+      next === "activo" &&
+      !window.confirm(
+        "¿Poner en Activo la ubicación aproximada? Cuando Google dé el número de la cuadra de la misma calle, número y provincia, Kapta creará la guía de Aliclik con ese punto y confirmará el pedido, sin que una asesora lo revise.",
+      )
+    ) {
+      return false;
+    }
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setChatbyApproxMode(orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  return (
+    <div className={ROW}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 sm:flex-1">
+          <EntryHead entry={entry} nameId={`${id}-name`} descId={`${id}-desc`} />
+          <p className="mt-1.5 text-[13px]">
+            <a href={`#${APPROX_TEST_ID}`} className={LINK}>
+              Ver la prueba
+            </a>
+          </p>
+        </div>
+        <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+      </div>
+      <div className="mt-1.5">
+        <RowStatus pending={pending} status={status} blocked={blocked} />
+      </div>
+    </div>
+  );
+}
+
+const fmtMeters = (m: number) => `${Math.round(m).toLocaleString("es-PE")} m`;
+
+/** Dónde estuvo el motorizado, en palabras o como enlace al mapa. */
+function ReferenceCell({ reference }: { reference: ApproxReference }) {
+  if (reference.state === "sin_entregar") return <span className="text-ink-500">Aún no entregado</span>;
+  if (reference.state === "sin_punto") return <span className="text-ink-500">Entregado, sin punto en la guía</span>;
+  return (
+    <span className="block">
+      <a href={mapsHref(reference.point)} target="_blank" rel="noreferrer" className={LINK}>
+        Ver en el mapa
+      </a>
+      {reference.state === "mismo_punto" && <span className="block text-xs text-ink-500">Es el punto que mandó Kapta: no mide</span>}
+    </span>
+  );
+}
+
+function DistanceCell({ reference }: { reference: ApproxReference }) {
+  if (reference.state !== "medido") return <span className="text-ink-500">—</span>;
+  const near = reference.distanceM < APPROX_NEAR_METERS;
+  return <span className={cn("font-medium tabular-nums", near ? "text-ok-fg" : "text-warn-fg")}>{fmtMeters(reference.distanceM)}</span>;
+}
+
+function ApproxModeBadge({ mode }: { mode: ApproxReportRow["mode"] }) {
+  return mode === "activo" ? <Badge tone="brand">Activo</Badge> : <Badge tone="info">Simulación</Badge>;
+}
+
+/**
+ * «Prueba de ubicación aproximada»: cada pedido con punto aproximado, dónde
+ * estuvo después el motorizado y la distancia. Se calcula al abrir el panel.
+ */
+function ApproxTestCard({ view }: { view: ChatbyApproxView }) {
+  const rows = view.rows;
+  const summary = view.summary;
+  const order = (r: ApproxReportRow) => (
+    <Link href={`/dashboard/pedidos?abrir=${r.orderId}`} className={cn(LINK, "font-semibold")}>
+      {r.orderName}
+    </Link>
+  );
+  const approxLink = (r: ApproxReportRow) => (
+    <a href={mapsHref(r.approx)} target="_blank" rel="noreferrer" className={LINK}>
+      Ver en el mapa
+    </a>
+  );
+  return (
+    <div id={APPROX_TEST_ID} className={cn(CARD, "scroll-mt-20 xl:scroll-mt-6")}>
+      <CardHeader
+        title="Prueba de ubicación aproximada"
+        description={
+          <>
+            <p>
+              Los pedidos donde Google dio el número de la cuadra de la calle correcta, y a qué distancia quedó ese punto del que trae la guía de
+              Aliclik cuando ya se entregó o se intentó. La distancia típica es la mediana.
+            </p>
+            {view.available && view.mode === "apagado" && rows.length === 0 && (
+              <p className="mt-1">Pon la posición en Simulación para juntar pedidos sin cambiar nada de lo que hace Chatby.</p>
+            )}
+          </>
+        }
+        aside={<Badge tone="neutral">{`Posición: ${APPROX_MODE_LABEL[view.mode]}`}</Badge>}
+      />
+      <div className={cn(ROW, "border-t border-line py-3")}>
+        <p className="text-sm font-medium text-ink-900">{approxSummaryLine(summary)}</p>
+        {summary.total > 0 && (
+          <p className={cn(HELP, "mt-0.5")}>
+            {summary.total.toLocaleString("es-PE")} {summary.total === 1 ? "pedido en la prueba" : "pedidos en la prueba"} ·{" "}
+            {summary.pending.toLocaleString("es-PE")} aún sin entregar
+            {summary.nearPct != null
+              ? ` · ${summary.nearPct.toLocaleString("es-PE", { maximumFractionDigits: 0 })} % a menos de ${APPROX_NEAR_METERS} m`
+              : ""}
+          </p>
+        )}
+      </div>
+      {!view.available ? (
+        <p className={cn(ROW, "border-t border-line text-sm text-ink-500")}>La prueba aún no está instalada en la base de datos.</p>
+      ) : rows.length === 0 ? (
+        <p className={cn(ROW, "border-t border-line text-sm text-ink-500")}>Todavía no hay pedidos con ubicación aproximada.</p>
+      ) : (
+        <>
+          {/* Desde `md`, tabla con cabecera pegajosa y su propio desplazamiento. */}
+          <div className="hidden max-h-[60vh] overflow-y-auto border-t border-line md:block">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Pedidos de la prueba de ubicación aproximada</caption>
+              <thead className="sticky top-0 z-10 bg-white shadow-[inset_0_-1px_0_var(--color-line)]">
+                <tr className="text-left text-xs font-semibold text-ink-600">
+                  <th scope="col" className="px-5 py-3">Pedido</th>
+                  <th scope="col" className="px-3 py-3">Dirección</th>
+                  <th scope="col" className="px-3 py-3">Punto aproximado</th>
+                  <th scope="col" className="px-3 py-3">Dónde estuvo el motorizado</th>
+                  <th scope="col" className="px-5 py-3 text-right">Distancia</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {rows.map((r) => (
+                  <tr key={r.orderId} className="align-top">
+                    <td className="px-5 py-3">
+                      {order(r)}
+                      <span className="mt-1 block">
+                        <ApproxModeBadge mode={r.mode} />
+                      </span>
+                    </td>
+                    <td className="max-w-[28ch] px-3 py-3 text-[13px] text-ink-700">{r.address ?? "—"}</td>
+                    <td className="px-3 py-3 text-[13px]">{approxLink(r)}</td>
+                    <td className="px-3 py-3 text-[13px]">
+                      <ReferenceCell reference={r.reference} />
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-right text-[13px]">
+                      <DistanceCell reference={r.reference} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* En el teléfono, cada pedido como tarjeta de lista. */}
+          <ul className="divide-y divide-line border-t border-line md:hidden">
+            {rows.map((r) => (
+              <li key={r.orderId} className={cn(ROW, "py-3")}>
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    {order(r)}
+                    <ApproxModeBadge mode={r.mode} />
+                  </span>
+                  <DistanceCell reference={r.reference} />
+                </div>
+                {r.address && <p className={cn(HELP, "mt-0.5 break-words")}>{r.address}</p>}
+                <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[13px]">
+                  <dt className="text-ink-500">Punto aproximado</dt>
+                  <dd>{approxLink(r)}</dd>
+                  <dt className="text-ink-500">Motorizado</dt>
+                  <dd>
+                    <ReferenceCell reference={r.reference} />
+                  </dd>
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

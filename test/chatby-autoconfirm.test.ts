@@ -177,11 +177,159 @@ describe("la dirección", () => {
     expect(direccionCompleta("Av. Los Incas N° 1203")).toBe(true);
     expect(direccionCompleta("Psje. Las Flores 12")).toBe(true);
     expect(direccionCompleta("AA.HH. Villa Sol Mz B Lt 3")).toBe(true);
-    expect(direccionCompleta("Huallaga 765")).toBe(false);
     expect(direccionCompleta("Av. Las Torres")).toBe(false);
     expect(direccionCompleta("Av. 31 de Octubre")).toBe(false);
     expect(direccionCompleta("Agencia Shalom Av. Grau 120")).toBe(false);
     expect(direccionCompleta("")).toBe(false);
+  });
+
+  // Owner, 08-11-2026: 88 pedidos quedaron «direccion_incompleta» en 3 días con
+  // direcciones que el courier encuentra. Estas son las de esos pedidos.
+  it("completa sin «calle»: el nombre de la calle y su número (grupo A)", () => {
+    for (const a of [
+      "antenor orrego 341",
+      "Sucre 116A",
+      "Jorge chavez #212",
+      "Chile y Venezuela 154",
+      "San Martin 265",
+      "Fco de paula vigil 215diego ferre",
+      "R Pedro Gálvez 1305",
+      "Mercedes ayarza de morales #1291",
+      "Mercedes ayarza de morales #1291 Urb San Fernando",
+      "Cabo reyes 133",
+      "Pedro villa apaga 113",
+      "Francisco cabrera 1542",
+      "Begonias 490 Urb. California",
+      "Santa rosa 400 esquina con rio chirinos urb las delicias restaurante la negra concha",
+      "Pasajr los heroes 211",
+      "José Gálvez 415",
+      "Huallaga 765",
+      "Huallaga N° 765",
+      "Sucre 116 entre Grau y Bolívar",
+    ]) {
+      expect([a, direccionCompleta(a)]).toEqual([a, true]);
+    }
+  });
+
+  it("completa: urbanización, AA.HH., APV o asociación con su lote corto (grupo B)", () => {
+    for (const a of [
+      "Urb Quinta Tristán T 13",
+      "Urb Canchis A- 11",
+      "Urb. Colinas victoria F.10",
+      "Juana Blanco b6",
+      "Sta Rita De Casia b53",
+      "La victoria h7",
+      "Viva el Perú ll 21",
+      "Viva el Perú ll 21comite comité 5",
+      "A A HH tincoc D 15",
+      "A A HH tincoc D 15 huancaro",
+      "Psj.imperial B2",
+      "Urbanización casuarinas r6",
+      "Los profetas T 7",
+      "Parque 78 1B",
+      "COVIDUC C 1",
+      "Agrupamiento Justo Arias Araguez G 302",
+      "Urb. Solar de challapampa B8",
+      "Apvis Nuevo Horizonte A-20",
+      "Ah camino del solar BN 17",
+      "Ah camino del solar BN 17 IV etapa Miraflores country club",
+      "Via de evitamiento norte g21",
+      "Asentamiento humano chavidehuatar MZ alote11",
+      "Avenida Andres Avelino Caceres E13",
+      "Calle capitan nohova B2",
+      "Urbanización Las Begonias J6",
+      "Urb las casuarinas d.5",
+    ]) {
+      expect([a, direccionCompleta(a)]).toEqual([a, true]);
+    }
+  });
+
+  it("sigue incompleta: mercado, cruce, kilómetro, paradero o señas (grupo C)", () => {
+    for (const a of [
+      "Mercado modelo Piura puesto número 12",
+      "Mercado modelo Piura puesto número 12 sección fruta",
+      "mercado bolognesi interior puesto 8",
+      "Mercado mayorista puesto 64 C Trujillo",
+      "Mercado atusparias",
+      "Entre Avenida Maria Miranda y Circunvalacion",
+      "Entre Avenida Maria Miranda y.Circunvalacion Chupaca",
+      "Entre la Av Dolores y la Av Venezuela Hostal Alexsbder",
+      "Parque Miraflore - intersección JR. Los claveles con pje 9 de diciembre",
+      "Cruse de huachac chupaca",
+      "Km 4.5 salida a puno",
+      "Km 4.5 Aproximadamente salida a puno",
+      "Km50 Chulucanas",
+      "Km6 carretera cusco",
+      "C.f.b.km 6.800",
+      "Planta de Petroperú - Juliaca, Kilómetro 2.5 salida a Puno",
+      "Esquina paradero Entrada a Ccollana San Jerónimo Cusco",
+      "Paradero penal de bajada",
+      "Puerta número 16 cercado la tinguiña",
+      "Apipa sector 3",
+    ]) {
+      expect([a, direccionCompleta(a)]).toEqual([a, false]);
+    }
+  });
+
+  it("sigue incompleta: la calle sin número, s/n, basura y agencias (grupo D)", () => {
+    for (const a of [
+      "Calle Cordova",
+      "Av floral",
+      "Tupac Amaru",
+      "Arias araguez",
+      "Calle Lambayeque sin número",
+      "Barrio canto grande s/n corani",
+      "Los Pinos s/n",
+      "Avenida Alberto laveau S N urbanización Guardia civil III etapa",
+      "Los Pinos S N",
+      "Whatsaap",
+      "En dirección que ustedes tienen",
+      "Juliaca Juliaca",
+      "Llamar llamar",
+      "Empresa Shalon PAITA",
+      "Shalon av ucayali",
+      "Agencia Shalom Av. Grau 120",
+      "Olva Courier Sucre 116",
+    ]) {
+      expect([a, direccionCompleta(a)]).toEqual([a, false]);
+    }
+  });
+
+  it("un número que no es el de la casa no cuenta: km, puesto, puerta, celular, año, fecha, etapa, cuadras", () => {
+    for (const a of [
+      "Los Pinos km 12",
+      "Los Pinos kilómetro 3",
+      "Los Pinos puesto 12",
+      "Los Pinos puerta 16",
+      "Los Pinos piso 3",
+      "Los Pinos 987654321",
+      "Los Pinos 987 654 321",
+      "Los Pinos +51 987654321",
+      "Los Pinos 054-123456",
+      "Los Pinos 2020",
+      "Villa del 2020",
+      "Los Pinos 28 de julio",
+      "Los Pinos III etapa",
+      "Los Pinos 2da etapa",
+      "Los Pinos a 3 cuadras del parque",
+      "Los Pinos 1ro",
+      "Magisterial III y 501",
+      "Magisterial III 501",
+    ]) {
+      expect([a, direccionCompleta(a)]).toEqual([a, false]);
+    }
+    // Con el número de la casa al lado, ese otro número no estorba.
+    expect(direccionCompleta("Los Pinos 340 piso 3")).toBe(true);
+    expect(direccionCompleta("Los Pinos 340 cel 987654321")).toBe(true);
+    expect(direccionCompleta("Barra 6 Dpto 107 Res.huaranguillo")).toBe(true);
+  });
+
+  it("la regla de antes no cambia: con tipo de vía y número, o manzana y lote", () => {
+    // Lo que ya se daba por bueno sigue igual, aunque diga «s/n» o un cruce.
+    expect(direccionCompleta("Jr Los Pinos s/n Mz A Lt 5")).toBe(true);
+    expect(direccionCompleta("Av. Pedro de Osma 428 Barranco Lima")).toBe(true);
+    expect(direccionCompleta("Av. 31 de Octubre")).toBe(false);
+    expect(direccionCompleta("Calle grau")).toBe(false);
   });
 
   it("la del pedido, con su distrito o provincia", () => {
@@ -204,7 +352,11 @@ describe("la dirección", () => {
 
   it("en el veredicto: la dirección distinta o incompleta queda para la asesora", () => {
     expect(evaluate([msg({ text: CONFIRMA.replace("765", "766") })])).toMatchObject({ final: true, reason: "direccion_distinta" });
-    expect(evaluate([msg({ text: CONFIRMA })], { order: { address: "Huallaga 765" } })).toMatchObject({ reason: "direccion_incompleta" });
+    expect(evaluate([msg({ text: CONFIRMA })], { order: { address: "Huallaga" } })).toMatchObject({ reason: "direccion_incompleta" });
+    expect(evaluate([msg({ text: CONFIRMA })], { order: { address: "Jr huallaga s/n barrio huayco" } })).toMatchObject({ reason: "direccion_incompleta" });
+    // Sin «Jr.» la dirección ya está completa (owner, 08-11-2026): lo que la
+    // deja para la asesora es que no es la del mensaje.
+    expect(evaluate([msg({ text: CONFIRMA })], { order: { address: "Huallaga 765" } })).toMatchObject({ reason: "direccion_distinta" });
     expect(evaluate([msg({ text: CONFIRMA.split("\nDirección")[0]! })])).toMatchObject({ reason: "sin_direccion" });
     expect(evaluate([msg({ text: CONFIRMA })], { order: { district: "Morales" } })).toMatchObject({ final: true });
   });
@@ -560,10 +712,16 @@ describe("el servidor, el cron y la migración", () => {
     expect(server).toContain("kind: CHATBY_GUIDE_ORIGIN");
   });
 
-  it("Chatby solo se lee: la misma función de la ficha, nada de POST", () => {
+  it("Chatby se lee con la función de la ficha; solo escribe la pedida automática (0318), por el envío de la ficha", () => {
     expect(server).toContain("fetchChatbyConversation(");
     expect(server).not.toMatch(/method:\s*"POST"/);
-    expect(server).not.toContain("sendChatbyReply");
+    // (owner, 08-11-2026; 0318) La única escritura: el mensaje que pide la
+    // dirección o la ubicación, una sola llamada, dentro de `autoAsk`, que
+    // corta en Apagado antes de nada.
+    expect(server.match(/sendChatbyReply\(/g)?.length).toBe(1);
+    const autoAsk = server.slice(server.indexOf("async function autoAsk("));
+    expect(autoAsk).toContain("sendChatbyReply(");
+    expect(autoAsk.indexOf('if (ctx.askMode === "apagado") return;')).toBeLessThan(autoAsk.indexOf("sendChatbyReply("));
     // lib/chatby-api.ts solo escribe para que una persona responda desde la
     // ficha (MOM §25, «Chatby», 02-11-2026): las dos llamadas de sendChatbyReply.
     const api = read("lib/chatby-api.ts");
@@ -597,5 +755,21 @@ describe("el servidor, el cron y la migración", () => {
     expect(mom).toContain("#### Confirmó por Chatby (decisión del owner, 01-11-2026)");
     expect(mom).toContain("`/api/cron/chatby-autoconfirm`");
     expect(mom).toContain("`chatby_auto_settings`");
+  });
+
+  it("el MOM cuenta la dirección completa del 08-11-2026, sin estados nuevos", () => {
+    const mom = read("docs/mom/master-pedidos-v1.md").replace(/\s+/g, " ");
+    expect(mom).toContain("**el nombre de la calle y su número aunque no diga «calle»** (owner, 08-11-2026)");
+    expect(mom).toContain("**la urbanización, el AA.HH., la APV, la asociación o la calle con su código corto de manzana y lote** (owner, 08-11-2026)");
+    expect(mom).toContain("**«Magisterial III y 501» queda para la asesora**");
+    expect(mom).toContain("la coordenada sigue pidiendo el **edificio** en Google (`ROOFTOP`, más abajo)");
+    const deploy = read("DEPLOY.md");
+    const title =
+      "### 08-11-2026 · Confirmación por Chatby: direcciones con número sin «calle» y lotes cortos cuentan como completas (sin migración, MOM §6.1)";
+    expect(deploy).toContain(title);
+    const body = deploy.slice(deploy.indexOf(title), deploy.indexOf("\n### ", deploy.indexOf(title) + 10));
+    expect(body).toContain("**Sin migración**");
+    expect(body).toContain("**Qué mirar después.**");
+    expect(body).toContain("**Marcha atrás.**");
   });
 });

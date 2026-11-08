@@ -222,6 +222,6 @@ describe("el tablero lo pinta en los dos vacíos de «Desde la lista»", () => {
   const board = readFileSync(resolve(process.cwd(), "components/dispatch-day-board.tsx"), "utf8");
   it("tabla y teléfono", () => {
     expect(board.match(/<LocatedNotice /g)).toHaveLength(2);
-    expect(board).toContain("locateOutsideList(filters, { rows: allRows, blocked: props.blocked");
+    expect(board).toContain("locateOutsideList(listFilters, { rows: allRows, blocked: props.blocked");
   });
 });

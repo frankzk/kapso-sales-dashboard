@@ -351,8 +351,8 @@ describe("la lista «Distrito por revisar» del Master", () => {
     expect(mom).toContain("### 19.0.3 Distrito por revisar");
     expect(mom).toContain("La dirección dice Paucarpata y el distrito es Arequipa.");
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("### ");
-    expect(deploy.slice(first, first + 200)).toContain("Distrito por revisar");
+    // Ya no es la primera entrada (la del ubigeo del formulario, del mismo día, va encima).
+    expect(deploy).toContain("### 08-11-2026 · Distrito por revisar: aviso antes de la guía y lista en el Master");
     expect(deploy).toContain("bulk=district_review_20261108");
   });
 });

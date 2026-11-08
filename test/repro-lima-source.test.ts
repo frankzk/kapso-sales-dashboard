@@ -263,7 +263,13 @@ describe("«Recibir en oficina» programa el acuerdo que esperaba la caja (§29.
 describe("las chapas de la cola de Despacho del día (E28)", () => {
   it("una lectura por los pedidos de la cola, sin tocar la forma de la respuesta", () => {
     const ops = courier.slice(courier.indexOf("async function loadCourierOperations("), courier.indexOf("\nexport async function loadCourierConfig("));
-    expect(ops).toContain("await loadReproQueueFlags(admin, [");
+    expect(ops).toContain("loadReproQueueFlags(admin, [");
+    // «Sale a reparto» (§29.16): el acuerdo vigente de cada fila, en la misma espera.
+    expect(ops).toContain("const [reproFlags, reproAgreements] = await Promise.all([");
+    expect(ops).toContain("loadReproAgreements(admin, planAgreementRows.map((order) => order.orderId)),");
+    // Solo donde cambia algo: no las miles de solicitudes ya en una caja vigente o cerradas.
+    expect(ops).toContain("...accepted.filter((order) => takenIsAssignable(order.macroStage) && (!order.route || order.route.routeDate < day)),");
+    expect(ops).toContain("for (const row of planAgreementRows) row.reproAgreement = reproAgreements.get(row.orderId) ?? null;");
     expect(ops).toContain("row.reproLimaChip = nueva?.open ? reproCajaNuevaChip(nueva.day) : noLoQuiereChip(row.orderId);");
     // Lo tomado con la caja todavía con el motorizado (su caja dice «No
     // entregado») también lleva «caja nueva desde stock»: es donde se ofrece
@@ -305,7 +311,7 @@ describe("el historial: kinds propios que no gastan el cupo de confirmación (D3
   it("el Master no lee nada de esto: Repro Lima no subió la versión (D2; de la v1.27 a la v1.30 son por los intentos y «Salió con»)", () => {
     const macro = read("lib/order-macro-stage.ts");
     expect(macro).not.toMatch(/lima_repro|requested_date/);
-    expect(macro).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.39" as const;');
+    expect(macro).toContain('export const MOM_RESOLUTION_VERSION = "mom-v1.40" as const;');
   });
 });
 

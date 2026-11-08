@@ -16,6 +16,7 @@ import { returnManifestEntriesForShipments } from "@/lib/return-manifest-access"
 import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { prepayGuideBlock, prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
@@ -122,6 +123,15 @@ import {
   chatbyReplyWindow,
   type ChatbyConversation,
 } from "@/lib/chatby-conversation";
+import {
+  CHATBY_ASK_PURPOSE,
+  chatbyAskBannerReason,
+  chatbyAskEvidence,
+  chatbyLocationHoldFrom,
+  type ChatbyHeldCheck,
+  type ChatbyLocationHold,
+} from "@/lib/chatby-location-ask";
+import { chatbyAskKindFor } from "@/lib/chatby-reask";
 import {
   decideLabelAction,
   labelCreatesOutput,
@@ -283,11 +293,21 @@ export async function loadOrderDetail(
  * para leer. Solo quien ya puede leer el pedido (RLS, como la ficha); la clave
  * de Chatby no sale del servidor y la conversación no se guarda en Kapta.
  */
-export async function loadOrderChatby(orderId: string): Promise<ChatbyConversation> {
+export async function loadOrderChatby(
+  orderId: string,
+): Promise<ChatbyConversation & { hold?: ChatbyLocationHold | null }> {
   try {
     const ctx = await authorizeOrder(orderId);
     if (!ctx) return { status: "error", message: "Sin acceso a este pedido.", inboxUrl: null };
-    return await fetchChatbyConversation({ phone: ctx.row.customer_phone, apiKey: env.chatbyApiKey() });
+    const conversation = await fetchChatbyConversation({ phone: ctx.row.customer_phone, apiKey: env.chatbyApiKey() });
+    // El aviso «la clienta confirmó, pero…» (MOM §6.1, owner 08-11-2026). Solo
+    // se lee la marca de la confirmación por Chatby si el pedido podría
+    // tenerlo: Provincia COD en Por confirmar.
+    const hold = await chatbyLocationHoldFor(await createServerSupabase(), ctx.row, conversation).catch((cause) => {
+      console.error("[chatby] aviso de ubicación", orderId, cause);
+      return null;
+    });
+    return { ...conversation, hold };
   } catch (cause) {
     if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message, inboxUrl: null };
     throw cause;
@@ -302,7 +322,11 @@ export async function loadOrderChatby(orderId: string): Promise<ChatbyConversati
  * texto queda en la Actividad del pedido con quién lo mandó (Chatby no sabe
  * quién es en Kapta).
  */
-export async function sendOrderChatbyReply(orderId: string, rawText: string): Promise<MasterActionState> {
+export async function sendOrderChatbyReply(
+  orderId: string,
+  rawText: string,
+  opts: { purpose?: typeof CHATBY_ASK_PURPOSE } = {},
+): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
   const reply = chatbyReplyText(rawText);
@@ -342,11 +366,23 @@ export async function sendOrderChatbyReply(orderId: string, rawText: string): Pr
   if (sent.status === "error") return { error: sent.message };
 
   const admin = createAdminSupabase();
+  // Si el pedido quedó para la asesora por la dirección o la ubicación, este
+  // mensaje se lo pide: la pasada vuelve a leer el chat cuando ella responda
+  // (MOM §6.1, owner 08-11-2026). Con cualquiera de las dos cajas.
+  const askedFor = await markChatbyLocationAsked(admin, ctx.row).catch((cause) => {
+    console.error("[chatby] marcar la ubicación pedida", orderId, cause);
+    return null;
+  });
   const eventError = await recordEvent(admin, ctx, {
     kind: "chatby_message",
     source: "chatby",
+    reason: opts.purpose === CHATBY_ASK_PURPOSE ? "Pidió la ubicación a la clienta por WhatsApp." : null,
     note: reply.text,
-    payload: { paused_minutes: sent.paused ? CHATBY_REPLY_PAUSE_MINUTES : 0 },
+    payload: {
+      paused_minutes: sent.paused ? CHATBY_REPLY_PAUSE_MINUTES : 0,
+      ...(opts.purpose === CHATBY_ASK_PURPOSE ? { purpose: CHATBY_ASK_PURPOSE } : {}),
+      ...(askedFor ? { hold_reason: askedFor } : {}),
+    },
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
@@ -356,6 +392,67 @@ export async function sendOrderChatbyReply(orderId: string, rawText: string): Pr
   return eventError
     ? { notice: `Mensaje enviado. ${pause} No se pudo anotar en la Actividad: ${eventError}` }
     : { notice: `Mensaje enviado. ${pause}` };
+}
+
+type ChatbyCheckRow = ChatbyHeldCheck & { message_id: string | null };
+
+/** La marca de la confirmación por Chatby, si el pedido puede llevar el aviso (Provincia COD en Por confirmar). */
+async function chatbyAskCheckFor(
+  sb: SupabaseClient,
+  row: OrderMasterRow,
+): Promise<{ check: ChatbyCheckRow; reason: NonNullable<ReturnType<typeof chatbyAskBannerReason>> } | null> {
+  // Sin leer la base cuando el pedido ni siquiera podría tenerlo.
+  if (!chatbyAskBannerReason({ check: { outcome: "para_asesora", reason: "sin_ubicacion" }, master: row })) return null;
+  const { data, error } = await sb
+    .from("chatby_auto_checks")
+    .select("outcome,reason,checked_at,evidence,message_id")
+    .eq("order_id", row.order_id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const check = data as ChatbyCheckRow | null;
+  const reason = chatbyAskBannerReason({ check, master: row });
+  return check && reason ? { check, reason } : null;
+}
+
+/** El aviso «la clienta confirmó, pero…» de la pestaña Chatby (MOM §6.1, owner 08-11-2026). */
+async function chatbyLocationHoldFor(
+  sb: SupabaseClient,
+  row: OrderMasterRow,
+  conversation: ChatbyConversation,
+): Promise<ChatbyLocationHold | null> {
+  const found = await chatbyAskCheckFor(sb, row);
+  if (!found) return null;
+  const { check, reason } = found;
+  const message =
+    conversation.status === "ok" && check.message_id ? conversation.messages.find((m) => m.id === check.message_id) : undefined;
+  const ask = chatbyAskKindFor({ reason, messageText: message?.text ?? null, orderAddress: row.address ?? null });
+  return chatbyLocationHoldFrom({
+    reason,
+    ask,
+    check,
+    master: row,
+    now: new Date(),
+    // La ventana de 24 h de la clienta alarga la de 72 h del pedido (owner, 08-11-2026).
+    messages: conversation.status === "ok" ? conversation.messages : undefined,
+  });
+}
+
+/**
+ * Deja escrito en la marca que se le pidió la ubicación (`evidence.asked_at` y
+ * `held_at`). Así la pasada de la ubicación relee el chat del que quedó por la
+ * dirección incompleta. Devuelve el motivo, o null si no había nada que marcar.
+ */
+async function markChatbyLocationAsked(admin: SupabaseClient, row: OrderMasterRow): Promise<string | null> {
+  const found = await chatbyAskCheckFor(admin, row);
+  if (!found) return null;
+  const { error } = await admin
+    .from("chatby_auto_checks")
+    .update({ evidence: chatbyAskEvidence(found.check, new Date()) })
+    .eq("order_id", row.order_id)
+    .eq("outcome", "para_asesora")
+    .eq("reason", found.reason);
+  if (error) throw new Error(error.message);
+  return found.reason;
 }
 
 /** Búsqueda global, para encontrar un pedido fuera de la pestaña activa. */
@@ -2781,6 +2878,14 @@ export async function updateOrderGeo(
   // departamento que no se reconoce, una provincia que no es de él ni un
   // distrito que ya está en OTRO departamento (`districtLearnVerdict`); la
   // corrección de ESTE pedido vale igual.
+  //
+  // SOLO DISTRITOS NUEVOS (08-11-2026, MOM §19.0.1). Desde la ficha no se
+  // cambia la provincia de un distrito que `peru_districts` ya tiene: se
+  // INSERTA, nunca se actualiza. «ayacucho → CORACORA» y «puno → San Roman»
+  // salieron de reescribir una fila buena con la corrección de un solo pedido.
+  // La guarda pura lo dice con su porqué y el `insert` lo sostiene en la base:
+  // si otra persona guardó el mismo distrito entre la lectura y la escritura,
+  // choca con la clave y no pisa nada.
   let learned = false;
   let notLearned: string | null = null;
   if (input.rememberDistrict && patch.district && patch.province) {
@@ -2794,18 +2899,18 @@ export async function updateOrderGeo(
     );
     if (!verdict.ok) notLearned = verdict.reason;
     if (key && verdict.ok) {
-      const { error: geoError } = await admin.from("peru_districts").upsert(
-        {
-          district_key: key,
-          district: patch.district,
-          province: patch.province,
-          department: patch.region,
-          source: "manual",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "district_key" },
-      );
+      const { error: geoError } = await admin.from("peru_districts").insert({
+        district_key: key,
+        district: patch.district,
+        province: patch.province,
+        department: patch.region,
+        source: "manual",
+        updated_at: new Date().toISOString(),
+      });
       learned = !geoError;
+      if (geoError?.code === "23505") {
+        notLearned = `No se recordó para ${patch.district}: ya estaba guardado. La corrección vale solo para este pedido.`;
+      }
     }
   }
 

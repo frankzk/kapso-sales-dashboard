@@ -289,7 +289,8 @@ describe("la pantalla", () => {
   const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8");
 
   it("ordena por apartado y muestra la fila de apartados", () => {
-    expect(board).toContain("sortQueue(filterQueue(allRows, filters, day), day)");
+    // `listFilters`: los filtros de la lista, con el primer día que se prepara de ahora («Sale a reparto», §29.16).
+    expect(board).toContain("sortQueue(filterQueue(allRows, listFilters, day), day)");
     expect(board).toContain('aria-label="Apartados de la cola"');
   });
 

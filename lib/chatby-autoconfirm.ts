@@ -35,6 +35,7 @@ import { limaDayKey } from "@/lib/order-confirmation";
 import { PAYMENT_ROUNDING_TOLERANCE_CENTS } from "@/lib/payment-rounding";
 import { explicitRejection } from "@/lib/swayp-auto-policy";
 import { direccionConNumero, esRecojoEnAgencia } from "@/lib/swayp-por-confirmar-auto";
+import { approxModeFrom, type ApproxMode } from "@/lib/geocode-approx";
 
 /** El origen que llevan los hechos que escribe la pasada (`order_events.source`). */
 export const CHATBY_SOURCE = "chatby";
@@ -64,6 +65,10 @@ export interface ChatbyAutoSettings {
   recheck_minutes: number;
   /** La coordenada por dirección (Google, solo el edificio) para la guía (0301). */
   geocode_enabled: boolean;
+  /** «Aceptar ubicación aproximada en la calle correcta» (0316): Apagado / Simulación / Activo. */
+  approx_mode: ApproxMode;
+  /** «Pedir sola la dirección o la ubicación» (0318, lib/chatby-auto-ask.ts): Apagado / Simulación / Activo. */
+  ask_mode: ApproxMode;
 }
 
 export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = {
@@ -74,6 +79,8 @@ export const DEFAULT_CHATBY_AUTO_SETTINGS: Omit<ChatbyAutoSettings, "org_id"> = 
   max_orders_per_run: 20,
   recheck_minutes: 30,
   geocode_enabled: true,
+  approx_mode: "apagado",
+  ask_mode: "apagado",
 };
 
 function intIn(value: unknown, min: number, max: number, fallback: number): number {
@@ -100,6 +107,10 @@ export function chatbyAutoSettingsFrom(row: Record<string, unknown>): ChatbyAuto
     recheck_minutes: intIn(row.recheck_minutes, 5, 1440, d.recheck_minutes),
     // Sin la columna (antes de la 0301) no se consulta a Google.
     geocode_enabled: row.geocode_enabled === true,
+    // Sin la columna (antes de la 0316) o con un valor raro: Apagado.
+    approx_mode: approxModeFrom(row.approx_mode),
+    // Sin la columna (antes de la 0318) o con un valor raro: Apagado.
+    ask_mode: approxModeFrom(row.ask_mode),
   };
 }
 
@@ -201,7 +212,9 @@ export interface ChatbyCheckState {
 /**
  * - `confirmado`: lo confirmó la pasada.
  * - `para_asesora`: había un mensaje de confirmación y no cuadró. Queda para la
- *   asesora con su motivo y no se vuelve a leer.
+ *   asesora con su motivo y no se vuelve a leer (salvo lo que espera la
+ *   ubicación: `sin_ubicacion`, y la dirección incompleta a la que se le pidió
+ *   desde la ficha, `chatbyHeldWatchDue` en lib/chatby-location-ask.ts).
  * - `sin_confirmacion` / `sin_conversacion`: todavía no escribió. Se vuelve a
  *   leer cada `recheck_minutes` mientras siga en la ventana.
  * - `error`: Chatby no respondió o falló la escritura. Se reintenta igual.
@@ -319,16 +332,162 @@ export function messageAddress(text: string): string | null {
 /** Tipos de vía y señas que dicen DÓNDE: calle, jirón, avenida, pasaje, manzana y lote… */
 const VIA = /\b(?:calle|cl|clle|ca|jr|jiron|av|avd|avda|avenida|psj|psje|pje|pasaje|prolongacion|prol|carretera|carr|ctra|malecon|alameda|ovalo|mz|mza|manzana|lt|lte|lote)\b/;
 
+const MESES = "enero|febrero|marzo|abril|mayo|junio|julio|agosto|setiembre|septiembre|octubre|noviembre|diciembre";
+
+/** Una agencia escrita con la «n» de la voz («Empresa Shalon PAITA»): tampoco es un domicilio. */
+const AGENCIA_MAL_ESCRITA = /\bshal[oa]n\b/;
+
+/** «s/n», «S N», «sin número»: la clienta dice que la casa no tiene número. */
+const SIN_NUMERO = /\bs\s*\/\s*n\b|(?:^|\s)s\.?\s+n\.?(?=\s|$)|\bsn\b|\bsin\s+(?:numero|nro|num|n°|nº)/;
+
+/** Un mercado o un puesto («Mercado modelo … puesto número 12»): no es una casa. */
+const MERCADO = /^\s*mercado\b|\bpuestos?\b|\bstand\b/;
+
 /**
- * ¿La dirección está completa? Un tipo de vía (calle, Jr., Av., Psje., Mz/Lt…)
- * y su número, o manzana y lote (`direccionConNumero`, §11.13). «Huallaga 765»
- * sin «Jr.» o «Av. Las Torres» sin número quedan para la asesora. Y nunca una
- * agencia: eso no es un domicilio.
+ * Un cruce de calles («Entre Avenida … y Circunvalación», «intersección», «Cruce
+ * de …»): no es una puerta. Solo cuando la dirección ES el cruce; «Sucre 116
+ * entre Grau y Bolívar» tiene su número y vale.
+ */
+const CRUCE = /\binterseccion\b|^\s*(?:entre|cru[cs]e)\b/;
+
+/**
+ * Los números que NO son el de la casa, fuera antes de buscarlo: celulares,
+ * teléfonos fijos, fechas («9 de diciembre»), años («del 2020»), etapas («III etapa»),
+ * kilómetros («Km 4.5», «Km50», «c.f.b.km 6.800»), distancias («a 3 cuadras»)
+ * y los que van con su etiqueta: puerta, puesto, piso, interior, dpto, sector,
+ * comité, grupo, zona, paradero, tienda, local.
+ */
+function sinNumerosQueNoSonDeCasa(t: string): string {
+  return ` ${t} `
+    .replace(/(?:\+?51[\s-]?)?\b9\d{2}[\s.-]?\d{3}[\s.-]?\d{3}\b/g, " ")
+    .replace(/\(?\b0\d{1,2}\)?[\s-]?\d{6,7}\b/g, " ")
+    .replace(new RegExp(`\\b\\d{1,2}\\s+de\\s+(?:${MESES})\\b`, "g"), " ")
+    .replace(/\b(?:ano|anos|del|desde|en|promocion)\s+(?:19|20)\d{2}\b/g, " ")
+    .replace(/\b(?:\d+|[ivx]+)\s*(?:ra|da|ta|era|ro|do|to|va|vo|ma|mo)?\s*etapa\b|\betapa\s+(?:\d+|[ivx]+)\b/g, " ")
+    .replace(/(?:\bkms?|\bkilometros?)\s*\.?\s*\d+(?:[.,]\d+)?/g, " ")
+    .replace(/\b(?:a\s+)?\d+\s*(?:c\w{0,2}dras?|cdas?|metros?|mts?|pasos|minutos|min)\b/g, " ")
+    .replace(
+      /\b(?:puerta|puesto|stand|piso|interior|int|dpto|depto|departamento|dep|oficina|of|sector|comite|grupo|zona|paradero|tienda|local)\b\.?\s*(?:n(?:ro|umero|um)?\b\.?|[°º#])?\s*\d+[a-z]?\b/g,
+      " ",
+    );
+}
+
+/** Manzana y lote pegados o cortos: «MZ alote11», «Mz B lt3», «mz. c-lote 4». */
+const MANZANA_LOTE_CORTO = /\b(?:mz|mza|mzn|manzana)\b\.?\s*[a-z]{1,2}\d{0,2}\s*[-.]?\s*(?:lt|lte|lot|lote)\.?\s*\d{1,4}/;
+
+/** Palabras que no son el nombre de una calle aunque vayan antes de un número. */
+const NO_ES_NOMBRE = new Set([
+  "con", "del", "las", "los", "entre", "frente", "cerca", "altura", "costado", "espalda", "espaldas",
+  "esquina", "numero", "nro", "num", "kms", "telefono", "celular", "cel", "ano", "anos", "sin",
+]);
+const ROMANO = /^[ivx]+$/;
+
+/** ¿La palabra puede ser el nombre de la calle? Tres letras o más, no un relleno ni un romano («III»). */
+function esNombre(word: string | undefined): boolean {
+  return !!word && word.length >= 3 && !NO_ES_NOMBRE.has(word) && !ROMANO.test(word);
+}
+
+/** La última palabra antes de `index`, saltando «N°», «nro.», «#» y la puntuación. */
+function palabraAntes(t: string, index: number): string | undefined {
+  const before = t.slice(0, index).replace(/(?:[\s#°º.,:;-]|\b(?:n|nro|no|num|numero)\b)*$/, "");
+  return /([a-z]+)$/.exec(before)?.[1];
+}
+
+/**
+ * El código corto de manzana y lote (owner, 08-11-2026): una o dos letras y su
+ * número, «T 13», «A- 11», «F.10», «b6», «ll 21», «BN 17», «E13», después del
+ * nombre de la urbanización, el AA.HH., la asociación o la calle («Urb Quinta
+ * Tristán T 13», «Juana Blanco b6»). La «y», la «e», la «o» y la «u» sueltas
+ * son conjunciones («Magisterial III y 501»), no una manzana; «km» y «s n»
+ * tampoco.
+ */
+const BLOQUE = /(?:^|[^a-z0-9])([a-z]{1,2})(\s*[-.]?\s*)(\d{1,3})(?=[a-z]?(?:[^a-z0-9]|$)|[a-z]{3,})/g;
+const NO_ES_BLOQUE = new Set(["km", "n", "no", "nr", "s", "sn", "de", "la", "el", "en", "al", "lo", "mi", "su", "tu", "ok"]);
+const CONJUNCION = new Set(["y", "e", "o", "u"]);
+
+function conBloque(t: string): boolean {
+  for (const m of t.matchAll(BLOQUE)) {
+    const [whole, letras, sep] = [m[0], m[1]!, m[2]!];
+    if (NO_ES_BLOQUE.has(letras)) continue;
+    if (CONJUNCION.has(letras) && /^\s+$/.test(sep)) continue;
+    const start = m.index! + whole.indexOf(letras);
+    if (esNombre(palabraAntes(t, start))) return true;
+  }
+  return false;
+}
+
+/**
+ * El nombre de la calle y su número sin la palabra «calle» (owner, 08-11-2026):
+ * «antenor orrego 341», «Sucre 116A», «Jorge chavez #212», «Chile y Venezuela
+ * 154», «Fco de paula vigil 215diego ferre». El número va justo después de una
+ * palabra que puede ser un nombre (no «y», no un romano), tiene hasta 5 cifras
+ * y una letra («116A»), y un año suelto (1900–2099) no cuenta: sin «calle» no
+ * se distingue del de una asociación.
+ */
+const NUMERO = /(?:^|[\s#°º.,-])(\d{1,5})(?=[a-z]?(?:[^a-z0-9]|$)|[a-z]{3,})/g;
+
+function conNombreYNumero(t: string): boolean {
+  for (const m of t.matchAll(NUMERO)) {
+    const n = m[1]!;
+    if (/^(?:19|20)\d{2}$/.test(n)) continue;
+    const start = m.index! + m[0].indexOf(n);
+    if (esNombre(palabraAntes(t, start))) return true;
+  }
+  return false;
+}
+
+/**
+ * ¿La dirección está completa? Sirve cualquiera de estas, y nunca una agencia
+ * (eso no es un domicilio):
+ *
+ * 1. Un tipo de vía (calle, Jr., Av., Psje., Mz/Lt…) y su número, o manzana y
+ *    lote (`direccionConNumero`, §11.13): la regla desde el 01-11-2026, igual.
+ * 2. (owner, 08-11-2026) El nombre de la calle y su número aunque no diga
+ *    «calle» («antenor orrego 341», «Pasajr los heroes 211»), o el nombre de la
+ *    urbanización, AA.HH., APV, asociación o calle con su código corto de
+ *    manzana y lote («Urb Quinta Tristán T 13», «Juana Blanco b6», «MZ
+ *    alote11»). Aquí no vale: un mercado o un puesto, un cruce («Entre … y …»,
+ *    «intersección»),
+ *    «s/n», ni un número que es de otra cosa (km, puesto, puerta, piso, sector,
+ *    celular, año, fecha, etapa, cuadras). «Magisterial III y 501» queda para la
+ *    asesora: el número va después de la «y», no de un nombre.
+ *
+ * La coordenada sigue pidiendo el edificio en Google (`ROOFTOP`) para crear la
+ * guía: esto solo decide si la dirección se puede dar por buena.
  */
 export function direccionCompleta(address: string | null | undefined): boolean {
   const t = sinTildes(address ?? "");
   if (!t.trim()) return false;
-  return VIA.test(t) && direccionConNumero(address) && !esRecojoEnAgencia(address);
+  if (esRecojoEnAgencia(address) || AGENCIA_MAL_ESCRITA.test(t)) return false;
+  if (VIA.test(t) && direccionConNumero(address)) return true;
+  if (MERCADO.test(t) || CRUCE.test(t)) return false;
+  const u = sinNumerosQueNoSonDeCasa(t);
+  if (MANZANA_LOTE_CORTO.test(u)) return true;
+  if (SIN_NUMERO.test(t)) return false;
+  return conBloque(u) || conNombreYNumero(u);
+}
+
+/** Una seña en vez de la puerta: «frente al colegio», «cerca del grifo», «al costado de…». */
+const SENA = /\b(?:frente|cerca|costado|espalda|espaldas|altura|junto|paradero)\b|\bal\s+lado\b/;
+
+/**
+ * ¿A la dirección incompleta le falta SOLO el número de la casa? (owner,
+ * 08-11-2026): la calle sin número («Calle Cordova», «Tupac Amaru»), «s/n» o
+ * «sin número». Entonces a la clienta se le pide la calle, el número y una
+ * referencia. Si está incompleta por otra cosa —un mercado o un puesto, un
+ * cruce, un kilómetro, una seña sin calle («Frente al grifo»), un número que no
+ * se sabe de qué es («Magisterial III y 501»)—, no: se le pide solo su
+ * ubicación actual de WhatsApp. Una agencia, tampoco (no es un domicilio).
+ */
+export function direccionSinNumeroDeCasa(address: string | null | undefined): boolean {
+  const t = sinTildes(address ?? "");
+  if (!t.trim()) return false;
+  if (esRecojoEnAgencia(address) || AGENCIA_MAL_ESCRITA.test(t)) return false;
+  if (MERCADO.test(t) || CRUCE.test(t)) return false;
+  if (/(?:\bkms?|\bkilometros?)\s*\.?\s*\d/.test(t)) return false;
+  if (SIN_NUMERO.test(t)) return true;
+  if (!VIA.test(t) && SENA.test(t)) return false;
+  return !/\d/.test(sinNumerosQueNoSonDeCasa(t));
 }
 
 /** Palabras que no dicen nada del lugar: no cuentan al comparar. */
@@ -440,7 +599,7 @@ export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   sin_monto: "El mensaje no dice el monto que va a pagar.",
   monto_distinto: "El monto del mensaje no coincide con el total del pedido.",
   sin_direccion: "El mensaje no trae la dirección.",
-  direccion_incompleta: "La dirección no tiene calle, jirón, avenida, pasaje o manzana y lote con su número.",
+  direccion_incompleta: "La dirección no tiene el nombre de la calle con su número, ni manzana y lote (o su código corto, «B8»).",
   direccion_distinta: "La dirección del mensaje no es la del pedido.",
   destino_distinto: "El distrito o la provincia del mensaje no son los del pedido.",
   mensaje_posterior: "La clienta escribió algo más después de confirmar.",
@@ -582,10 +741,26 @@ function limaStamp(iso: string | null): string {
  * La nota del intento: qué dijo, sin copiar la dirección ni el nombre. Lo
  * demás está en Chatby, a un clic desde la ficha.
  */
-export function chatbyConfirmationNote(input: { orderName: string; at: string | null; amountCents: number }): string {
+export function chatbyConfirmationNote(input: {
+  orderName: string;
+  at: string | null;
+  amountCents: number;
+  location?: boolean;
+  /** (0318) La clienta completó la dirección cuando Kapta se la pidió. */
+  addressCorrected?: boolean;
+}): string {
+  // (owner, 08-11-2026) La dirección escrita estaba incompleta y la clienta
+  // mandó después su ubicación de WhatsApp: la guía va con esa ubicación.
+  const where = input.addressCorrected
+    ? input.location
+      ? "la dirección que completó por Chatby y su ubicación de WhatsApp"
+      : "la dirección que completó por Chatby"
+    : input.location
+      ? "la dirección del pedido y su ubicación de WhatsApp (la dirección escrita estaba incompleta)"
+      : "la dirección del pedido";
   return (
     `Confirmó por Chatby: mensaje de la clienta${limaStamp(input.at)} con el pedido ${input.orderName}, ` +
-    `${soles(input.amountCents)} contra entrega y la dirección del pedido.`
+    `${soles(input.amountCents)} contra entrega y ${where}.`
   );
 }
 

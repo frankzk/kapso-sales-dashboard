@@ -93,6 +93,13 @@ export const ORG_TABLE_SHAPE: Record<OrgAutomationTable, { columns: readonly str
 export type AutomationControl =
   | { kind: "org_table"; table: OrgAutomationTable; column: string; requires?: string }
   | { kind: "store_column"; column: string; requires?: string }
+  /**
+   * Apagado / Simulación / Activo de una columna de texto de la organización
+   * (0316). No es un interruptor: no entra en la lista blanca de `on/off` y
+   * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`), que
+   * solo escribe esta columna con uno de los tres valores.
+   */
+  | { kind: "org_mode"; table: OrgAutomationTable; column: string; requires?: never }
   | { kind: "readonly"; how: string };
 
 /**
@@ -114,6 +121,11 @@ export interface AutomationEntry {
   requiresReason?: string;
   link?: AutomationLink;
 }
+
+/** «Aceptar ubicación aproximada en la calle correcta» (0316): su clave en el catálogo y en el historial. */
+export const CHATBY_APPROX_KEY = "chatby_auto_approx";
+/** «Pedir sola la dirección o la ubicación» (0318): su clave en el catálogo y en el historial. */
+export const CHATBY_ASK_KEY = "chatby_auto_ask";
 
 const STORE_SETTINGS = (section: string, label = "Ajustes de la tienda"): AutomationLink => ({ kind: "store_settings", section, label });
 
@@ -184,6 +196,29 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     effect: "Crea guías",
     scope: "org",
     control: { kind: "org_table", table: "chatby_auto_settings", column: "guide_enabled" },
+  },
+  {
+    key: CHATBY_APPROX_KEY,
+    group: "confirmacion",
+    name: "Aceptar ubicación aproximada en la calle correcta",
+    // 0316, owner 08-11-2026. La reja de la calle y las tres posiciones están
+    // en lib/geocode-approx.ts; la prueba se ve debajo, en el mismo grupo.
+    what:
+      "Cuando Google da el número de la cuadra y no la casa, pero es la misma calle, número y provincia del pedido. En Simulación guarda ese punto y el pedido sigue para la asesora como hoy; en Activo la guía de Chatby lo usa.",
+    effect: "Crea guías",
+    scope: "org",
+    control: { kind: "org_mode", table: "chatby_auto_settings", column: "approx_mode" },
+  },
+  {
+    key: CHATBY_ASK_KEY,
+    group: "confirmacion",
+    name: "Pedir sola la dirección o la ubicación",
+    // 0318, owner 08-11-2026. La máquina está en lib/chatby-auto-ask.ts.
+    what:
+      "Si la clienta confirmó por Chatby y la guía no sale por la dirección, Kapta le pide por WhatsApp la dirección completa o su ubicación (una vez cada una) y vuelve a intentar la guía. En Simulación solo dice qué habría pedido.",
+    effect: "Envía WhatsApp",
+    scope: "org",
+    control: { kind: "org_mode", table: "chatby_auto_settings", column: "ask_mode" },
   },
 
   // ── Llamadas de voz ────────────────────────────────────────────────────
@@ -475,10 +510,11 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
   },
 ];
 
-export type SwitchableEntry = AutomationEntry & { control: Exclude<AutomationControl, { kind: "readonly" }> };
+export type SwitchableEntry = AutomationEntry & { control: Extract<AutomationControl, { kind: "org_table" | "store_column" }> };
 
+/** Un interruptor de encendido/apagado (no las tres posiciones de `org_mode`, ni lo de solo lectura). */
 export function isSwitchable(entry: AutomationEntry): entry is SwitchableEntry {
-  return entry.control.kind !== "readonly";
+  return entry.control.kind === "org_table" || entry.control.kind === "store_column";
 }
 
 export function automationEntry(key: unknown): AutomationEntry | null {

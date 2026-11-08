@@ -677,8 +677,10 @@ se creó**.
   o de las gestiones. Ni Lima (no pasa por confirmación) ni Agencia (confirma con
   el pago validado).
 - **Cuánto se lee.** Lo mismo que la ficha: los dos GET de `lib/chatby-api.ts`
-  (`fetchChatbyConversation`, solo lectura: la confirmación automática nunca
-  manda nada por Chatby; lo único que escribe es una persona desde la ficha, §25).
+  (`fetchChatbyConversation`, solo lectura: la confirmación automática no
+  manda nada por Chatby, salvo el mensaje que pide la dirección o la
+  ubicación de «Kapta pide sola…», más abajo, 0318; lo demás lo escribe una
+  persona desde la ficha, §25).
   Hasta **20 pedidos por pasada** (40 GET); primero los que nunca se leyeron, el
   más nuevo primero, y después el que se leyó hace más. Un pedido que todavía no
   escribió se vuelve a leer cada **30 minutos** mientras siga en la ventana. Dos
@@ -694,9 +696,44 @@ se creó**.
   4. dice un monto «S/ …» —el que sigue a «pagaré», si no el primero— que
      difiere del total del pedido en **menos de S/ 1** (el redondeo de
      `lib/payment-rounding.ts`);
-  5. trae «Dirección:» con una dirección **completa** —calle, jirón, avenida,
-     pasaje, prolongación, carretera, o manzana y lote, y su número
-     (`direccionConNumero`, §11.13)— y la del pedido también lo es;
+  5. trae «Dirección:» con una dirección **completa** (`direccionCompleta`) y
+     la del pedido también lo es. Completa es cualquiera de estas, y nunca una
+     agencia (Shalom, también escrita «Shalon», Olva…):
+     - calle, jirón, avenida, pasaje, prolongación, carretera, o manzana y
+       lote, y su número (`direccionConNumero`, §11.13): la regla del
+       01-11-2026, sin cambios;
+     - **el nombre de la calle y su número aunque no diga «calle»** (owner,
+       08-11-2026): «antenor orrego 341», «Sucre 116A», «Jorge chavez #212»,
+       «Chile y Venezuela 154», «Fco de paula vigil 215diego ferre»,
+       «Pasajr los heroes 211». El número va justo después de una palabra que
+       puede ser un nombre (no «y», «con», «entre» ni un romano como «III»),
+       con hasta 5 cifras y una letra; un año suelto (1900–2099) no cuenta;
+     - **la urbanización, el AA.HH., la APV, la asociación o la calle con su
+       código corto de manzana y lote** (owner, 08-11-2026): una o dos letras
+       y su número, «Urb Quinta Tristán T 13», «Urb Canchis A- 11», «Juana
+       Blanco b6», «Viva el Perú ll 21», «Apvis Nuevo Horizonte A-20», «Ah
+       camino del solar BN 17», «Avenida Andres Avelino Caceres E13», y la
+       manzana pegada al lote («MZ alote11»). La «y», la «e», la «o» y la «u»
+       sueltas antes de un número son conjunciones, no una manzana.
+
+     En los dos casos nuevos **sigue incompleta**: un mercado o un puesto
+     («Mercado modelo Piura puesto número 12»); el cruce como dirección
+     («Entre Avenida … y Circunvalación», «intersección», «Cruce de …»;
+     «Sucre 116 entre Grau y Bolívar» sí vale); «s/n», «S N» o «sin número»
+     (salvo con manzana y lote); y un número que es de otra cosa: kilómetro
+     («Km 4.5», «Km50», «c.f.b.km 6.800»), puesto, puerta («Puerta número
+     16»), piso, interior, dpto, sector, comité, grupo, zona, paradero,
+     celular o teléfono fijo, año («del 2020»), fecha («9 de diciembre»),
+     etapa («III etapa») o cuadras («a 3 cuadras»). La calle sola («Calle
+     Cordova», «Tupac Amaru»), las señas sin número («Paradero penal de
+     bajada») y lo que no es una dirección («Whatsaap», «Juliaca Juliaca»)
+     también. **«Magisterial III y 501» queda para la asesora**: el número va
+     después de la «y», no de un nombre, y no se sabe si es la casa, el lote o
+     otra calle. Dar la dirección por completa no basta para la guía: sin
+     ubicación de WhatsApp, la coordenada sigue pidiendo el **edificio** en
+     Google (`ROOFTOP`, más abajo). Al decidirlo (08-11-2026), de los 103
+     pedidos que quedaron «direccion_incompleta» en 4 días, 42 habrían pasado
+     este punto con la dirección del pedido;
   6. esa dirección es **la del pedido**: toda la dirección del pedido está en el
      mensaje, el mensaje no dice nada más que eso, la referencia y los nombres
      del destino del pedido (departamento, provincia, distrito del Master), y
@@ -712,8 +749,10 @@ se creó**.
   asesora») en la línea de tiempo, sin actor, con el motivo —el monto no
   coincide, la dirección no es la del pedido, el distrito no es el del pedido,
   escribió algo después…— y sin copiar la dirección. **Una sola vez**: ese pedido
-  ya no se vuelve a leer, la asesora lo confirma desde la mesa. Sin un mensaje
-  de confirmación (todavía no escribió) no se escribe nada.
+  ya no se vuelve a leer, la asesora lo confirma desde la mesa (salvo
+  `sin_ubicacion`, y `direccion_incompleta` cuando se le pide la ubicación
+  desde la ficha: más abajo). Sin un mensaje de confirmación (todavía no
+  escribió) no se escribe nada.
 - **Solo sale de Por confirmar con la guía creada** (owner, 02-11-2026). Al
   principio la pasada confirmaba y creaba la guía después; las 14 primeras
   confirmaciones (01-11) salieron a Preparación y ninguna guía se pudo crear
@@ -765,6 +804,49 @@ se creó**.
     `?dry=1`.
   - **Si Google no da el edificio,** el pedido queda `sin_ubicacion` como antes,
     y Kapta sigue mirando el chat por si la clienta manda su ubicación.
+- **Aceptar ubicación aproximada en la calle correcta (owner, 08-11-2026; 0316).**
+  Cuando Google no da el edificio sino el número de la cuadra
+  (`RANGE_INTERPOLATED`; caso #KP204092, «Jirón José Olaya 245», Huamanga),
+  ese punto se puede probar si pasa el candado de siempre **y** la reja de la
+  calle (`geocodeApproxStreet`, lib/geocode-approx.ts): Google da la calle y
+  el número; cada palabra del nombre de la calle de Google está en la
+  dirección del pedido (el tipo de vía no cuenta: «Jr.» = «Jirón»; sin
+  tildes, la z igual a la s); el número de Google está en la dirección; y la
+  provincia de Google es la del pedido. Ante la duda, no («J. Olaya» no es
+  «José Olaya»). Es una automatización con tres posiciones por organización
+  (`chatby_auto_settings.approx_mode`), en el panel de Automatizaciones (§40):
+  - **Apagado** (nace así): lo de siempre, solo el edificio.
+  - **Simulación**: el punto que pasa la reja se guarda en `order_geocodes`
+    (`approx_kind = calle`, `approx_latitude`/`approx_longitude`,
+    `approx_mode = simulacion`): «habría confirmado con ubicación
+    aproximada» (no cotiza en Aliclik; las demás rejas antes de la coordenada
+    sí pasaron). El pedido queda para la asesora **exactamente como hoy**,
+    `sin_ubicacion`, sin guía y sin confirmar.
+  - **Activo**: la guía automática lo usa como coordenada, por el mismo
+    camino que el edificio (pin respaldado de Aliclik, cotización, tope del
+    día, el candado), y deja escrito «coordenada: dirección en Google
+    (aproximada en la calle)». La caché marca `approx_used_at`.
+  - Los motivos del rechazo de la calle se guardan sin punto (`sin_calle`,
+    `otra_calle`, `otro_numero`, `otra_provincia`). Una fila de antes con la
+    cuadra y sin ese veredicto se vuelve a consultar **una vez** (antes no se
+    guardaba la calle de Google). `ok`, `latitude` y `longitude` siguen siendo
+    solo el edificio, así que los reintentos de Lima (§9.5), que no piden el
+    punto aproximado, no cambian; y el punto aproximado cuenta como «de
+    Google» en `googlePinnedOrderIds` (§38.6).
+  - **La prueba.** Cuando Aliclik ya entregó o intentó el pedido, el panel
+    compara el punto aproximado con la coordenada de su guía de Aliclik (la
+    entregada; si no, la más reciente con intento), que es la que el Master
+    toma como «lo que el courier geolocalizó al ir a la puerta» (`geoPin`),
+    con haversine, en metros: «N pedidos medidos · M a menos de 150 m ·
+    distancia típica X m» (la mediana). Se calcula al abrir el panel, sin cron.
+    Si la guía se creó con el propio punto aproximado (Activo, hasta 15 min
+    después de `approx_used_at`) o está a 5 m o menos de él, **no mide**:
+    Aliclik devuelve en su reporte la coordenada que le mandó Kapta (de las 21
+    guías creadas con el edificio de Google, 19 la tenían a 5 m o menos y 2 a ~33 m), y
+    compararla consigo misma confirmaría la prueba sola. Por eso la medición
+    útil sale de la Simulación, donde la guía la crea una persona con su pin.
+  - No agrega estados ni subetapas: el pedido sigue en `sin_ubicacion` o pasa
+    a Preparación por la cadena de siempre.
 - **Cómo confirma, con la guía ya creada.** Por el mismo registro atómico que
   la mesa: `register_confirmation_attempt_v2`, la misma función del botón (v1)
   con `source`, que ya usa el agente de voz. Resultado «Confirmó el pedido»,
@@ -805,12 +887,212 @@ se creó**.
   clienta manda su ubicación, Kapta les crea la guía (`guide_detail =
   sin_ubicacion` → `creada`). Si la guía no sale, queda el hecho «Guía
   automática no creada» como antes.
+- **Pedir la ubicación desde la ficha, y releer cuando la clienta la manda**
+  (owner, 08-11-2026). Antes la asesora salía de Kapta para pedírsela, y el
+  pedido que quedó por `direccion_incompleta` no se volvía a leer aunque la
+  clienta la mandara.
+  - **El aviso.** En la pestaña «Chatby» de la ficha, si la última marca del
+    pedido es `para_asesora` por `direccion_incompleta`, `sin_ubicacion` o
+    `sin_ubicacion_cerrado`, y el pedido sigue en Por confirmar («Sin llamar» o
+    «Por confirmar») de Provincia COD, sale un aviso (tono `warn`): «La clienta
+    confirmó, pero la dirección está incompleta» o «… pero Google no encuentra
+    la dirección», por qué Kapta no creó la guía y qué pasa después (si Kapta
+    relee el chat, si hace falta pedírsela para que lo haga, o si ya pasaron
+    las 72 h y la guía va a mano). La marca se lee solo para esos pedidos, al
+    abrir la ficha, con la conversación (`loadOrderChatby`).
+  - **Qué se le pide** (`chatbyAskKindFor`, `chatbyAskMessage`). Con
+    `sin_ubicacion` / `sin_ubicacion_cerrado` (la dirección parece completa,
+    Google no la ubica), **solo su ubicación actual de WhatsApp**, sin pedir
+    calle, número ni referencia: «Hola Rosa 😊 Para enviar tu pedido
+    #AUR900226, ¿nos compartes tu ubicación actual de WhatsApp? (📎 → Ubicación
+    → Enviar tu ubicación actual)». Con `direccion_incompleta`, **la calle, el
+    número y una referencia** (y la ubicación como alternativa) **solo si a la
+    dirección le falta el número de la casa** (`direccionSinNumeroDeCasa`: la
+    calle sin número, «s/n», «sin número»); si está incompleta por otra cosa
+    —un mercado o un puesto, un cruce, un kilómetro, una seña sin calle
+    («Frente al grifo»), un número que no se sabe de qué es («Magisterial III y
+    501»)—, también solo la ubicación. Se mira la dirección que quedó
+    incompleta: la del mensaje de confirmación o, si esa está completa, la del
+    pedido.
+  - **Cómo sale.** El mensaje viene escrito y la asesora lo puede editar; el
+    botón «Pedir ubicación por WhatsApp» lo manda por **el mismo envío** que
+    «Responder por WhatsApp» (§25: `master.edit`, texto como persona del
+    equipo, solo dentro de las 24 h de WhatsApp —el servidor lo vuelve a
+    comprobar—, el bot en pausa 60 minutos). Con la ventana cerrada, el aviso
+    lo dice y manda a las plantillas de Chatby, como la caja de responder. Queda
+    el hecho de siempre, `chatby_message` («Mensaje por WhatsApp (Chatby)»),
+    con el texto, el motivo «Pidió la ubicación a la clienta por WhatsApp.» y
+    `payload.purpose = pedir_ubicacion`.
+  - **La marca.** Al mandar cualquier mensaje desde la ficha (con el botón o
+    con la caja de responder) a un pedido con ese aviso, la marca guarda
+    `evidence.asked_at` (cuándo se le pidió) y `evidence.held_at` (cuándo quedó
+    para la asesora). No hay columna ni estado nuevo.
+  - **La relectura** (`chatbyHeldWatchDue`, `chatbyReaskWatch`,
+    `lib/chatby-location-ask.ts` y `lib/chatby-reask.ts`). Lo que quedó por
+    `direccion_incompleta` o `sin_ubicacion_cerrado` deja de ser final **solo
+    después de que se le pidió** desde Kapta: la misma pasada que mira el chat
+    de los que esperan la ubicación lo relee cada `recheck_minutes`, dentro de
+    las 72 h del pedido (o, pasadas, mientras la clienta haya escrito hace
+    menos de 24 h: 0318, más abajo) y con su mismo tope (hasta 10 por pasada para cada
+    búsqueda, como las otras dos). No hay otra pasada ni otro sondeo. Si la
+    clienta **no escribió nada nuevo** desde que quedó para la asesora, no se
+    evalúa nada (solo se anota la lectura). Si escribió:
+    1. **lo que manda es su ubicación**: si lo ÚLTIMO que mandó es su
+       ubicación de WhatsApp de esta compra (`chatbyGuidePin`: de la clienta,
+       en el Perú, como mucho 3 días antes del pedido; también un enlace de
+       Maps con la coordenada), la confirmación vale **aunque la dirección
+       escrita esté incompleta**, siempre que lo demás cuadre como hoy (el
+       pedido, el monto, pagar en casa y que la dirección del mensaje sea la
+       del pedido). La guía va **con esa ubicación** —no con la coordenada del
+       pedido ni con Google— y pasa por las mismas puertas: el pin respaldado
+       de Aliclik al cotizar y todas las rejas de la guía. La nota de la
+       confirmación dice «… y la dirección del pedido y su ubicación de
+       WhatsApp (la dirección escrita estaba incompleta).»;
+    2. **una dirección escrita** es lo segundo: el último texto de la clienta
+       (sin contar cortesías) tiene que ser una dirección completa
+       (`direccionCompleta`), la del pedido también, y ser la del pedido
+       (`addressMatchesOrder`), como hoy. Entonces la guía sigue la regla de
+       siempre (la coordenada del pedido, la ubicación o Google con el
+       edificio) y, si no hay coordenada, el pedido pasa a `sin_ubicacion`, que
+       se sigue mirando;
+    3. si nada de eso alcanza, se espera a la pasada siguiente sin escribir
+       nada visible; un «no lo quiero» o una nota de anulación lo deja para la
+       asesora con su motivo (y una dirección del mensaje que no es la del
+       pedido, `direccion_distinta`).
+
+    Con la dirección completa (`sin_ubicacion_cerrado`) la evaluación es la de
+    la pasada de la ubicación de arriba. Si una persona lo confirma, lo anula o
+    lo mueve, o pasan las 72 h, se deja de mirar (se borra `asked_at`).
+    `sin_ubicacion` se sigue mirando como desde el 02-11-2026, se le haya
+    pedido o no. Al decidirlo (08-11-2026) quedaban en 7 días 139 marcas
+    `direccion_incompleta`; por eso no se relee ninguna sin que una persona se
+    la haya pedido.
+- **Kapta pide sola la dirección o la ubicación, y vuelve a intentar la guía**
+  (owner, 08-11-2026; 0318; `lib/chatby-auto-ask.ts`). «Si se tiene la
+  confirmación del cliente por Chatby y la generación de la guía falla porque
+  Google Maps no encuentra la ubicación, va a pedir ubicación en automático…
+  si falla porque la dirección está incompleta, va a pedir la dirección
+  completa, y con eso Google Maps se va a volver a ejecutar». Lo hace la misma
+  pasada de cada 10 minutos, con la conversación que acaba de leer: **ni otra
+  pasada, ni otro sondeo, ni lecturas de Chatby de más** (las mismas tres
+  búsquedas de la relectura, con su tope). No agrega estados ni subetapas: el
+  pedido sigue en Por confirmar hasta que la guía sale y confirma por la cadena
+  de siempre.
+  - **A. Google no la encuentra** (`sin_ubicacion`, después de la regla de la
+    ubicación aproximada). Al quedar para la asesora (y, en la relectura de
+    cada 30 minutos, lo que ya estaba así y todavía no se le pidió), Kapta le
+    pide **su ubicación actual de WhatsApp**, con el mismo texto del botón de
+    la ficha: «Hola Rosa 😊 Para enviar tu pedido #AUR900226, ¿nos compartes
+    tu ubicación actual de WhatsApp? (📎 → Ubicación → Enviar tu ubicación
+    actual)». Cuando la manda, la relectura de siempre crea la guía **con esa
+    ubicación** (`chatbyGuidePin`; sin Google), por el pin respaldado y todas
+    las rejas, y confirma.
+  - **B. La dirección está incompleta** (`direccion_incompleta`). Al quedar
+    para la asesora, Kapta le pide **la dirección completa**. Si le falta el
+    número de la casa (`direccionSinNumeroDeCasa`), con el texto del botón:
+    «Hola Rosa 😊 Para enviar tu pedido #AUR900226 nos falta el número de tu
+    casa. ¿Nos escribes la calle, el número y una referencia? Si prefieres,
+    compártenos tu ubicación actual de WhatsApp (📎 → Ubicación → Enviar tu
+    ubicación actual).» Si está incompleta por otra cosa (un mercado o un
+    puesto, un cruce, un kilómetro, una seña), donde a menudo no hay calle con
+    número que dar, **un solo mensaje con la ubicación primero**: «Hola Rosa
+    😊 Para enviar tu pedido #AUR900226 necesitamos ubicar bien tu dirección.
+    ¿Nos compartes tu ubicación actual de WhatsApp? (📎 → Ubicación → Enviar tu
+    ubicación actual) Si no puedes, escríbenos la calle y el número de tu
+    casa, con una referencia.» La marca guarda `asked_at`, como cuando la pide
+    una persona, y la relectura lo vuelve a leer. Lo que responde
+    (`chatbyReaskWatch` con `correctionSince`):
+    - **su ubicación** (lo último que mandó): la guía va con esa ubicación,
+      como en A;
+    - **un texto**: lo que escribió **después de la pedida** (sin botones,
+      archivos, cortesías ni preguntas: el último mensaje y, si no alcanza,
+      todos juntos en orden, `chatbyAddressCandidate`) es la dirección nueva.
+      Si pasa `direccionCompleta`, se guarda como **la dirección corregida del
+      pedido** por el camino de «Corregir ubicación» (`order_geo_overrides`,
+      solo la dirección: el distrito, la provincia, la referencia y la
+      coordenada que tuviera se conservan; nota «Dirección completada por la
+      clienta en Chatby»; el hecho `comment` · `ubicacion` sin actor; el
+      recálculo y el `coverage_changed` si la cobertura se moviera;
+      `lib/order-address-correction.ts`), la marca guarda `corrected_at` y la
+      guía se vuelve a intentar con ella: **Google otra vez** (la consulta de
+      siempre, con la ubicación aproximada si está en Activo; la dirección
+      nueva es otra huella, así que sí se consulta). **La encuentra → guía y
+      confirma** («… con el pedido #AUR900226, S/ 178.00 contra entrega y la
+      dirección que completó por Chatby.»). **No la encuentra →
+      `sin_ubicacion`** y Kapta le pide la ubicación (A), diciéndole por qué:
+      «Gracias, Rosa 😊 No logramos ubicar esa dirección en el mapa. Para
+      enviar tu pedido #AUR900226, ¿nos compartes tu ubicación actual de
+      WhatsApp? (📎 → Ubicación → Enviar tu ubicación actual)». Desde ahí la
+      dirección vieja del mensaje de confirmación ya no se compara
+      (`chatbyCorrectedWatch`): el pedido, confirmar, pagar en casa y el monto
+      siguen haciendo falta;
+    - **un texto que sigue incompleto**: queda para la asesora (la marca
+      guarda `reply_incomplete_at` y la ficha lo dice). **No se le pide la
+      dirección otra vez**; si después manda su ubicación, la guía sale con
+      ella.
+
+    Lo que quedó `direccion_incompleta` antes de encender el interruptor no
+    se pide solo (esas marcas no se releen sin una pedida, como desde el
+    08-11-2026): lo sigue pidiendo una persona desde la ficha.
+  - **C. Los límites.** Como mucho **un mensaje automático de cada clase por
+    pedido**: la dirección una vez y la ubicación una vez (cuentan los hechos
+    `chatby_message` con `payload.auto = true` y la marca `auto_asks`).
+    Solo en Por confirmar («Sin llamar» o «Por confirmar») de Provincia COD
+    (se relee justo antes de mandar). **El límite que manda es la ventana de
+    atención de 24 h de Meta** (corrección del owner, 08-11-2026): el bot solo
+    puede mandar texto libre hasta 24 h después del **último mensaje de la
+    clienta**, no según la edad del pedido. Kapta solo manda si ese último
+    mensaje tiene **menos de 23 h** (1 h de margen, `chatbyAutoAskWindowOpen`,
+    con los mensajes recién leídos; la clienta acaba de confirmar o de
+    responder, así que casi siempre lo está). Cerrada, no se manda, queda para
+    la asesora y la marca lo dice (`evidence.auto_ask_skip`: «La ventana de 24
+    h de WhatsApp está cerrada…»). Por lo mismo, **lo que quedó para la asesora
+    por la dirección o la ubicación no se deja de mirar a las 72 h si la
+    clienta escribió hace menos de 24 h** (`chatbyHeldInWindow`): pasadas las
+    72 h, la relectura de siempre (las mismas tres búsquedas, con su tope) lee
+    su chat y, si escribió en las últimas 24 h, sigue (la pedida, la respuesta,
+    la guía y la confirmación); si no, se deja de mirar como antes. La ficha
+    dice lo mismo. Las confirmaciones nuevas se siguen buscando solo en las
+    72 h del pedido. Tampoco si **una persona del equipo
+    ya le escribió** desde la ficha (cualquier `chatby_message` con actor, o
+    `asked_at` sin pedida automática) o en Chatby después del último mensaje
+    de la clienta (hay alguien atendiendo), ni si el pedido es de una persona
+    antes de cualquier guía (envío programado, lista de pago adelantado §41,
+    Shalom, un pago registrado). Nunca con un rechazo, una nota de anulación,
+    otro monto ni un mensaje posterior que no sea la ubicación: esos ya quedan
+    para la asesora antes de llegar aquí, y un «no lo quiero» en la respuesta
+    sigue el rechazo de siempre. El tope de guías del día, Aliclik en rojo y el
+    candado siguen igual.
+  - **Cómo sale.** Por **el mismo envío que la ficha** (`sendChatbyReply`: como
+    persona del equipo, con el bot de esa clienta en pausa 60 minutos), con el
+    hecho de siempre, `chatby_message`, **sin actor** y `source = 'chatby'`
+    (la línea de tiempo lo firma «Chatby»), el motivo «Kapta (automático) le
+    pidió la ubicación a la clienta por WhatsApp.» (o «… la dirección
+    completa …»), el texto y `payload` `{auto: true, ask, purpose:
+    pedir_ubicacion | pedir_direccion, hold_reason}`. La marca guarda
+    `asked_at`, `held_at` y `auto_asks` (clase, hora y posición); cuando el
+    pedido vuelve a quedar para la asesora, se conservan.
+  - **El interruptor** (`chatby_auto_settings.ask_mode`, 0318), «Pedir sola la
+    dirección o la ubicación» en Automatizaciones (§40, grupo Confirmación),
+    con las tres posiciones de siempre. **Apagado** (nace así, y sin la 0318):
+    lo de hasta hoy, la pide una persona desde la ficha. **Simulación**: la
+    pasada dice «habría pedido la ubicación / la dirección completa» (en el
+    resumen del cron, `asksSimulated`, y en la marca, `auto_asks` con `mode =
+    simulacion`), una vez por clase, y no manda nada; tampoco guarda una
+    dirección. **Activo**: manda, guarda y vuelve a intentar.
+  - **La ficha.** El aviso de la pestaña Chatby dice lo que Kapta ya hizo:
+    «Kapta le pidió la ubicación: Hoy 10:05 · esperando respuesta. No hace
+    falta volver a pedírsela…» (o «la dirección completa»), «La clienta
+    respondió, pero la dirección que escribió sigue incompleta…» o «La clienta
+    completó la dirección por Chatby y Kapta la guardó, pero Google tampoco da
+    el edificio…». El botón «Pedir ubicación por WhatsApp» sigue ahí.
 - **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
   con otra creación en curso (el candado), no se escribe nada visible: el
   pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.
 - **Interruptores** (`chatby_auto_settings`, 0297, uno por organización):
   `enabled` (toda la pasada), `guide_enabled` (solo la guía), `daily_cap` (20),
-  `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30). Nace
+  `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30); y
+  las dos de tres posiciones, `approx_mode` (0316) y `ask_mode` (0318). Nace
   **encendido** con 20 guías por día porque lo pidió el owner, y no para las
   organizaciones cliente de Grupo GF (§29.15.1). Sin la tabla, o con la fila
   apagada, la pasada no hace nada. Las claves de siempre: `CHATBY_API_KEY` para
@@ -832,8 +1114,13 @@ tope de 20 guías es cerca de un tercio de lo confirmado en un día.
 
 Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
 `lib/chatby-autoconfirm-server.ts` (carga, lectura y escritura),
-`app/api/cron/chatby-autoconfirm/route.ts`. Pruebas:
-`test/chatby-autoconfirm.test.ts`.
+`app/api/cron/chatby-autoconfirm/route.ts`; pedir la ubicación desde la ficha:
+`lib/chatby-location-ask.ts`, `lib/chatby-reask.ts`,
+`components/order-chatby-panel.tsx`; pedirla sola (0318):
+`lib/chatby-auto-ask.ts`, `lib/order-address-correction.ts`,
+`lib/chatby-auto-ask-server.ts`. Pruebas:
+`test/chatby-autoconfirm.test.ts`, `test/chatby-location-ask.test.ts`,
+`test/chatby-auto-ask.test.ts`.
 
 ### 6.2 Preparación
 
@@ -4895,6 +5182,16 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
     aprobar (fallaron un día anterior), uno por uno, con una confirmación antes
     y el resumen al final. El mismo día del fallo la fila dice «Falló hoy: el
     reintento se aprueba desde mañana».
+  - **Elegir cuáles aprobar (pedido del owner, 06-11-2026).** Cada fila que ya
+    se puede aprobar lleva una casilla; las que fallaron hoy, no. Arriba hay
+    una casilla para elegir o quitar todas las listas: en la tabla, en la
+    cabecera; en el teléfono, sobre la lista. Con alguna marcada, el botón dice
+    **«Aprobar elegidos (N)»** y aprueba solo esas, por el mismo camino, con la
+    confirmación y el resumen. Al lado aparece «Quitar elección». Sin ninguna
+    marcada sigue siendo «Aprobar todos los listos (N)».
+  - Una marcada que dejó de estar lista, o que un filtro esconde, no se
+    aprueba (`retryApprovalTargets`, `lib/repro-lima-pending.ts`). Al terminar,
+    la elección se vacía. «Aprobar · ALIDRIVER» de cada fila no cambia.
 - **Entrega 3, la creación automática por variante (owner, 04-11-2026).** En
   vez de esperar dos semanas para encender todo junto, el owner enciende cada
   variante desde **Automatizaciones** (§40) cuando la ve segura. Una variante es
@@ -5314,6 +5611,12 @@ presentación inicial de «Todos» como solo un resumen, descrita a continuació
   lectura de Repro Lima (`loadLimaPending`, `limaScheduledFor`, `pendingGroup`);
   **Despacho del día de Grupo GF no cambia**, ni se escribe ningún programa.
   Prueba: `test/repro-lima-pending.test.ts`.
+- **«Sale a reparto» (07-11-2026, §29.16):** sobre las tarjetas de atención,
+  la misma tarjeta de Despacho del día, con nuestras tiendas. Dice lo que sale
+  con Grupo GF hoy o en el próximo reparto y lo que le falta (sin rótulo, sin
+  armar, sin caja, en caja con su motorizado). Cada pedido que sale lleva la
+  chapa con el día y el paso. Las cifras filtran la tabla; se asigna en Grupo GF
+  Courier.
 - **«Nunca salieron», del más antiguo al más reciente (decisión del owner,
   06-11-2026):** en Repro Lima ese apartado va al revés que en Grupo GF. Arriba
   queda lo que lleva más días esperando; un pedido sin fecha de creación va
@@ -13651,6 +13954,21 @@ pedidos de Lima con una provincia imposible («arequipa», «HUARAZ», «lince»
   departamento que no se reconoce, una provincia que no es de ese departamento
   (en Lima, solo sus diez provincias y el Callao) ni un distrito que ya está
   guardado en **otro** departamento. La corrección del pedido vale igual.
+- **Solo distritos nuevos (08-11-2026).** Desde la ficha solo se **añade** un
+  distrito que `peru_districts` todavía no tiene; nunca se cambia la provincia
+  de uno que ya está, sea del INEI, de los reportes o aprendido a mano antes.
+  Se cambiaban: la corrección de un solo pedido reescribió «ayacucho» con
+  CORACORA (15-10) y «puno» con San Roman (24-08), y los pedidos de esos
+  distritos salieron semanas con la provincia de otro sitio (las dos filas y 43
+  pedidos abiertos se corrigieron a mano el 08-11-2026). Si el distrito ya está,
+  el aviso lo dice —«ya está guardado con la provincia «Huamanga»… La corrección
+  vale solo para este pedido.», o «ya estaba recordado» si es la misma— y la
+  corrección del pedido vale igual. La acción **inserta** la fila (`insert`,
+  nunca `upsert`): si otra persona guardó el mismo distrito entre medias, la
+  clave choca y no se pisa nada. Una fila mala se corrige en la tabla, a
+  propósito y con el owner. Además, la provincia de un pedido de la web ya no
+  depende de esta tabla: sale del ubigeo que eligió la clienta (§38.6, «La
+  provincia que eligió la clienta en la web»).
 - **Lo aprendido no manda sobre el departamento del pedido**
   (`learnedDistrictFits`): para un distrito de Lima Metropolitana o el Callao,
   una fila de otro departamento no se usa, y una provincia que no es de Lima se
@@ -14307,7 +14625,9 @@ estables:
      `GET /subscriber/chat-messages?user_ns=…&limit=20&include_bot=1&include_note=1`
      (sin `include_bot` no salen las plantillas). Para leer, solo esos dos
      GET. Chatby no tiene claves de solo lectura: Kapta solo escribe cuando una
-     persona responde desde la ficha (abajo).
+     persona responde desde la ficha (abajo) y, con «Pedir sola la dirección o
+     la ubicación» en Activo (§6.1, 0318), el único mensaje automático: pedir
+     la dirección completa o la ubicación, por el mismo envío.
    - **Lo que no sale de la lectura:** la clave (`CHATBY_API_KEY`, la clave
      «KAPTA» del bot, creada en `app.chatby.io/settings#/api` → «Create API Token»
      con solo el permiso «Manage Flow», aparte de la de Make para
@@ -16256,7 +16576,9 @@ lista (`sortQueue`):
    vencido»). Van primero: es la fecha que se le dio a la clienta.
 2. **Programados para mañana** (01-10-2026) — con salida programada para el
    día siguiente a hoy en Lima. Su tarjeta aparece junto a «Programados hoy»
-   y filtra esos pedidos; al llegar su fecha pasan a «Programados hoy».
+   y filtra esos pedidos; al llegar su fecha pasan a «Programados hoy». Solo
+   cuenta lo programado: todo lo que sale mañana, con lo que le falta, está en
+   «Sale a reparto» (§29.16).
 3. **Nunca salieron** — nunca salieron a reparto (§29.2) y se crearon en los
    últimos 30 días. Es el apartado a dejar en cero, como «Sin llamar» en Por
    confirmar; del más reciente al más antiguo. En Repro Lima va al revés
@@ -17545,6 +17867,158 @@ del comprador se anonimizan.** Aurela y Kenku no cambian.
 - Un webhook de privacidad con firma inválida responde 401 y no toca nada.
 - Un pedido de tienda cliente no aparece en los cruces por teléfono de los
   pedidos de Aurela o Kenku, ni al revés.
+
+### 29.16 «Sale a reparto»: lo que sale cada día y lo que le falta (07-11-2026)
+
+> ⚠️ **Por qué.** Pedido del owner en el pico del 06-11-2026: «¿cómo sabemos
+> exactamente qué pedidos de Lima tenemos que sacar a reparto mañana? La idea es
+> que todos los paquetes estén listos, ruteados y asignados antes de que lleguen
+> los motorizados».
+>
+> Medido en producción esa noche:
+> - «Programados para mañana» (Despacho del día y Repro Lima) contaba 3 o 4
+>   pedidos, porque solo mira el programa guardado. Lo que de verdad salía al día
+>   siguiente era unos 100 armados sin caja y unos 40 sin rótulo. Ninguno tenía
+>   fecha guardada: la cola la calcula al mirar con el corte de las 12:00.
+> - Ninguna caja del día siguiente existía. En 14 días, las cajas se crearon
+>   siempre la misma mañana, desde las 08:50.
+
+**Qué es.** Una tarjeta, «Sale a reparto», con dos días: hoy y el próximo día de
+reparto. Para ese día dice cuántos pedidos de Lima salen con Grupo GF y qué le
+falta a cada uno. Está en dos sitios:
+- **Grupo GF Courier → Despacho del día:** todas las tiendas que atiende Grupo
+  GF. Cuando otras tiendas manden pedidos (§29.15), solo aparecerán aquí.
+- **Repro Lima:** solo nuestras tiendas (§9.5).
+
+No inventa estados: el día y cada paso salen de lo que Kapta ya guarda. La
+lógica es una sola para las dos pantallas (`lib/dispatch-plan.ts`).
+
+- **El día de un pedido**, en este orden:
+  1. el de su caja de Grupo GF de **hoy o de un día que viene**
+     (`dispatch_manifests.route_date`, reparto, no anulada);
+  2. si no tiene esa caja, el acuerdo vigente de Repro Lima (el caso abierto con
+     su llamada de acuerdo y un día que no pasó) o su programa
+     (`gf_dispatch_programs`);
+  3. la solicitud que tomó Grupo GF (`logistics_requests.scheduled_for`);
+  4. sin nada de eso, el que da el corte del proveedor (`scheduledDay`, 12:00):
+     hoy hasta el corte y el día siguiente después. Ese día no se guarda; se
+     calcula al mirar, como en la cola.
+
+  Un día sin reparto (domingo) pasa al lunes (`deliveryDayOnOrAfter`).
+- **Una caja de un día que ya pasó no fija el día** (revisión del 07-11-2026).
+  Es el «No entregado» que el motorizado todavía tiene (#KP202485, programado
+  para el 09-11 y en la caja del 04-11) o una caja que nunca salió (#KP140302,
+  en un borrador del 19-10). Manda el acuerdo o el programa; sin ellos espera a
+  la tienda y no entra: ni la solicitud vieja ni el corte le dan día, en
+  ninguna de las dos pantallas. Despacho del día recibe ese programa del
+  servidor (`planProgramDay`) porque la cola deja `programmedFor` vacío para
+  todo lo que tiene caja. Si el motorizado se la llevó, la tarjeta y la chapa
+  dicen que hay que recibirla en oficina («por recibir en oficina») antes de ir
+  a una caja nueva.
+- **El primer día que se prepara** (`planOpenDay`) es hoy antes del corte; pasado
+  el corte, o el domingo, el próximo día de reparto. Los motorizados ya se
+  fueron.
+- **Sale el día D** si está en una caja de D, o si no tiene caja y D es el día en
+  que le toca: el suyo, o el primero que se prepara si el suyo ya pasó. Lo que
+  no salió antes sale en la próxima ruta que se prepara, no en una posterior:
+  antes del corte, lo de hoy y lo atrasado salen hoy y no cuentan en «Mañana».
+- **Atrasado** («N debían salir antes», y la chapa «debía salir vie 06/11») es lo
+  que no tiene caja y cuyo día es anterior al primer día que se prepara. Lo de
+  hoy no está atrasado antes del corte. Un domingo no es un día perdido: el
+  sábado después del corte, lo que no tiene programa (su corte cae domingo) sale
+  el lunes sin estar atrasado. Antes de esta regla, el lunes 09-11 marcaba como
+  atrasados unos 120 pedidos.
+- **El próximo día de reparto** es el siguiente; si cae domingo, el lunes.
+  Grupo GF reparte de lunes a sábado: en las 14 semanas hasta el 07-11-2026 hubo
+  cajas el domingo solo 3 veces, con 0 a 4 paquetes (`nextDeliveryDay`). Los
+  feriados no se saltan: no hay dato.
+- **Los pasos.** Cada pedido cuenta una vez, en lo primero que le falta. Son los
+  hechos del MOM: en Grupo GF «ruteado» y «asignado» son lo mismo, porque toda
+  caja tiene motorizado (§29.5).
+  1. **Sin rótulo:** no tiene salida con QR. Es «Por generar rótulo», o un
+     reintento que sale con salida nueva. Al tomarlo en Grupo GF nace su salida.
+  2. **Sin armar:** tiene rótulo, pero Almacén no la escaneó armada
+     (`listo_despacho`). Puede estar ya en la caja de un motorizado: la
+     asignación no espera el armado (§29.13), y la chapa del motorizado lo dice
+     («Jhon 32 · 2 sin armar»).
+  3. **Sin caja:** armado, pero no está en ninguna caja de ese día.
+  4. **En caja:** armado y en la caja de un motorizado de ese día. Debajo,
+     cuántos cotejó oficina y cuántos recibió el motorizado.
+- **Con qué se lee cada paso:**
+  - En Despacho del día, con las filas que la pantalla ya tiene
+    (`planCandidateFromQueue`):
+    - disponibles: el rótulo y el armado salen de la subetapa del Master. Un
+      reintento con salida nueva está «Sin rótulo». Una guía de Tanders o
+      Swayp en revisión no entra hasta que se toma: nadie confirmó todavía
+      dónde está el paquete (eran 6 de septiembre y octubre el 08-11-2026), y
+      Repro Lima tampoco la cuenta;
+    - tomados sin caja: del armado de su salida;
+    - en caja: del día de la caja, del motorizado y del cotejo.
+
+    Un «Por reprogramar Lima» sin acuerdo ni programa espera a la tienda
+    (§29.13) aunque Grupo GF lo haya tomado: no entra (eran 28 el 07-11-2026,
+    con su solicitud vieja todavía `scheduled`). La única lectura nueva es el
+    acuerdo vigente de Repro Lima de cada fila (`loadReproAgreements`): uno con
+    otro courier (#KP202484 con Aliclik para el 16-11) no sale con Grupo GF, y
+    uno con Grupo GF sale ese día. Sin esa lectura, se usa el programa o el
+    corte.
+  - En Repro Lima, el servidor lee por pedido (`loadGfPlanFacts`):
+    - sus salidas, para ver si tiene QR y si está armada;
+    - la solicitud de Grupo GF, del proveedor de la organización de cada tienda;
+    - su caja de Grupo GF de hoy o de un día que viene.
+
+    Entran Preparación, Por despachar, todo «Por reprogramar Lima» y lo En
+    curso que está en una caja de hoy o de un día que viene: al recibir su
+    caja, el motorizado deja el pedido En curso · En reparto, y sin esto «Hoy»
+    perdía todo lo recogido. Un «Por reprogramar Lima» toma el día solo de su
+    acuerdo o su programa: un acuerdo con Grupo GF que todavía no es programa
+    también cuenta (#KP140108, acordado para el 09-11 con la caja del 10-10 aún
+    con el motorizado). Lo ya entregado pasa a Por cerrar y deja la lista de
+    Repro Lima; en Despacho del día sigue en su caja. Un reintento sin acuerdo
+    espera a la tienda (§29.13) y no toma el día del corte. Un pedido con una
+    salida viva de otro courier (Aliclik, Swayp…), o con un acuerdo con otro
+    courier, no es de Grupo GF. Las salidas se miran como en la cola de Grupo GF
+    (`outputsBlockingRetry`): la guía que ya falló (la de Tanders que vuelve
+    sigue `en_ruta`) y la salida devuelta no cuentan. Lo que Grupo GF todavía
+    no tomó y no está en una caja vigente entra solo si la cola de Despacho del
+    día lo admitiría: el convenio de la tienda, un distrito con tarifa y sin
+    pausa (`gfDistrictBlock`, la misma regla de la cola) y una salida «por
+    definir» que Grupo GF rellene. Lo demás está en «Sin condiciones» de Grupo
+    GF y no sale con Grupo GF: el 08-11-2026 eran 13 pedidos, 8 de ellos en
+    distritos en pausa (Santa Rosa, Ancón, Santa María del Mar, Punta Hermosa).
+- **Un pedido, una vez:** si la misma orden llega en dos filas (la caja y la
+  cola), cuenta la de la caja.
+- **Al abrir:** en el primer día que se prepara: hoy antes del corte, y después
+  el próximo día de reparto. El domingo no se ofrece «Hoy». El corte se decide
+  con la hora del servidor (`nowIso`), no con el reloj del teléfono: la página se
+  pinta primero en el servidor.
+- **Tocar una cifra** deja la lista con lo que sale ese día en ese paso. En
+  Despacho del día la píldora «Sale · sáb 07/11 · Sin caja» lo dice y se quita
+  con su «x»; tocar otra tarjeta de la cola también la quita. Ese filtro lista
+  también lo que ya está en una caja de ese día, sin casilla.
+- **«Armar las cajas del sáb 07/11»** (Despacho del día, con permiso de
+  despacho):
+  - pone el «Día de la caja» en ese día y deja la lista con lo que sale. Tocar
+    una cifra o cambiar de día con la lista del plan abierta también lo mueve:
+    lo que la lista dice que sale el sábado se asigna a la caja del sábado;
+  - lo que se asigna desde ahí entra en la caja de ese día, con el flujo de
+    siempre (§29.13): el mismo límite de efectivo y la misma confirmación de un
+    programa de otro día;
+  - cotejar la víspera hace que el motorizado vea «Recibir mi caja» enseguida.
+- **En Repro Lima:**
+  - la misma tarjeta y, en cada pedido que sale, la chapa con el día y lo que le
+    falta: «Sale sáb 07/11 · sin caja», «… · en caja · caja de Jhon», «… ·
+    recibido · caja de Jhon», «… · por recibir en oficina» o «… · debía salir
+    vie 06/11»;
+  - las cifras filtran la tabla, y «Abrir Despacho del día» lleva a asignar.
+  - No asigna: se asigna en Grupo GF Courier.
+- **Los textos van en singular con uno:** «Falta 1 sin caja», «1 debía salir
+  antes», «1 cotejado en oficina · 1 recibido por el motorizado».
+- **Solo lee:** no escribe programas, solicitudes ni cajas. Sin migración.
+  `MOM_RESOLUTION_VERSION` no cambia.
+- **El 07-11-2026 a las 11:53** (sábado), para el lunes 09-11 salían 124
+  pedidos de Lima de nuestras tiendas: 35 sin rótulo, 3 sin armar, 86 sin caja y
+  0 en caja.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
@@ -21388,7 +21862,9 @@ y en Aliclik el pin decide a dónde va el paquete.
    coordenada del pedido (`googlePinnedOrderIds`, a 5 m o menos del punto de
    `order_geocodes`). Dos usos, cada uno con su interruptor:
    - la guía automática de Provincia COD del que confirmó por Chatby (§6.1,
-     02-11-2026; 0301), después de la ubicación de WhatsApp;
+     02-11-2026; 0301), después de la ubicación de WhatsApp; con «Aceptar
+     ubicación aproximada en la calle correcta» en Activo (§6.1, 0316), también
+     el número de la cuadra de la misma calle, número y provincia;
    - el reintento Aliclik automático de Lima (§9.5, entrega 3, 05-11-2026;
      0308), solo si la última medición de Lima cumple B con el edificio
      (al menos el 90 % de los puntos ROOFTOP a 300 m o menos del pin, con al
@@ -21398,6 +21874,86 @@ y en Aliclik el pin decide a dónde va el paquete.
 Pruebas: `test/order-pin-sources.test.ts`.
 - **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de
   envío, se usa la de facturación.
+
+#### La provincia que eligió la clienta en la web (08-11-2026, `mom-v1.40`)
+
+**Qué pasaba.** El formulario contra entrega de la web (COD Core) no deja
+escribir la ubicación: la clienta elige departamento, provincia y distrito de
+tres listas encadenadas, y el formulario guarda el resultado en `meta_data` con
+la clave `_cod_territorio`: `{codigo, region, provincia, distrito}`, con el
+ubigeo del INEI («050101», Ayacucho / Huamanga / Ayacucho). La dirección con
+forma de Shopify que arma Kapta (§38.7) solo lleva el distrito (`city`) y el
+departamento (`state`), así que la provincia se perdía y el Master la deducía
+del **nombre** del distrito en `peru_districts` (§19.0.1). Ahí había dos filas
+aprendidas a mano que estaban mal —«ayacucho → CORACORA» desde el 15-10 y
+«puno → San Roman» desde el 24-08— y los pedidos de la web de esos distritos
+salían con la provincia de otro sitio aunque la clienta la hubiera elegido
+bien. Medido el 08-11-2026: 2.579 pedidos con `_cod_territorio`; las dos filas
+y 43 pedidos abiertos se corrigieron a mano ese día (`order_events.payload.bulk
+= province_learned_fix_20261108`) y quedaban 214 pedidos (116 abiertos) con
+otra provincia en el Master.
+
+**La regla** (owner, 08-11-2026). La ubicación de un pedido, nivel a nivel
+(departamento, provincia y distrito), sale de, en este orden:
+
+1. **La corrección manual del equipo** (`order_geo_overrides`, «Corregir
+   ubicación»). Manda siempre.
+2. **El ubigeo que eligió la clienta en la web** (`_cod_territorio`). Es una
+   elección de una lista cerrada, con código del INEI: no hay nombre que
+   adivinar.
+3. **Lo de siempre**: la provincia del reporte del courier (`guideProvinceFits`),
+   lo aprendido por nombre de distrito en `peru_districts`
+   (`learnedDistrictFits`), el ubigeo de la primera guía de Aliclik, el carrito
+   (draft order) y el historial del cliente, con sus guardas de §19.0.1. Un
+   pedido sin `_cod_territorio` —los de Shopify, o uno de la web anterior al
+   formulario— se resuelve exactamente como antes.
+
+**Cuándo vale el ubigeo del formulario** (`lib/woo-territorio.ts`, puras):
+
+- **Se lee con desconfianza** (`wooTerritorio`): de `orders.raw.woo.meta_data`,
+  como objeto o como texto JSON; si la clave viene dos veces, la última. Solo
+  completo y coherente: con departamento, provincia y distrito, un departamento
+  que se reconoce, una provincia que cabe en él (`provinceFitsDepartment`, la
+  guarda del 25-10-2026) y, si vino el código, un código de ese mismo
+  departamento (los dos primeros dígitos del INEI). Lo que falta, viene raro o
+  se contradice se ignora y el pedido sigue por el punto 3.
+- **Tiene que seguir siendo el del pedido** (`territorioForOrder`): **la guarda
+  del departamento**, la de siempre —si la corrección del equipo o el
+  desplegable de la dirección dicen otro departamento (`departmentsConflict`),
+  no se usa— y **el mismo distrito**: si el equipo corrigió el distrito
+  («Corregir ubicación», «Distrito por revisar» §19.0.3, que guarda solo el
+  distrito) o la dirección se cambió en WooCommerce, la provincia del ubigeo es
+  la de un lugar que ya no es el del pedido y tampoco se usa.
+- **El departamento se guarda como siempre** (§38.6, `territorioRegion`): las
+  dos Limas se separan —«Lima (provincia)» para Lima Metropolitana (código
+  `1501…`, o provincia Lima), «Lima (departamento)» para Huaral, Cañete,
+  Barranca…—, y el Callao es «Callao». La provincia de Lima Metropolitana queda
+  «Lima», la convención de §19.0.1.
+- **El código del INEI no se guarda en el Master**: no hay columna para él y no
+  se crea una por esto. Se usa para comprobar el departamento y separar las dos
+  Limas, y sigue en `orders.raw`.
+- **`geo_source`** dice `shopify` —«según WooCommerce» en la ficha, la dirección
+  del pedido en su tienda (§38.12)— cuando la ubicación sale del formulario y no
+  hay un punto del courier ni del pedido; no hay valor nuevo.
+
+**Coberturas.** Con el departamento del pedido conocido, la provincia solo
+entra a `order_coverage_for` por Cañete (§19.0.1): unos pocos pedidos de
+«Lima (departamento)» que no tenían provincia o tenían otra pueden pasar a la
+regla de Cañete. Lo demás no cambia de cobertura.
+
+**Cómo se recalcula lo ya guardado: una subida de versión ACOTADA**
+(`NARROW_VERSION_BUMP`, `lib/order-master.ts`). La versión sube a `mom-v1.40`,
+pero la regla solo cambia pedidos de WooCommerce, así que la puerta de versión
+del barrido (§19.1) recalcula las filas que no están en `mom-v1.40` ni en
+`mom-v1.39` y, de las de `mom-v1.39`, solo las de WooCommerce
+(`shopify_order_id` `wc-…`, §38.2): ~4.000 filas en vez de las ~37.500 del
+histórico, con el mismo tope de siempre (250 por tienda y pasada, cada 10
+minutos, dentro del reloj del cron). Una fila de Shopify en `mom-v1.39` sigue
+siendo la vigente. **Se apaga sola**: con la próxima subida (`mom-v1.41`) vuelve
+la regla de siempre —todo lo que no esté en la versión vigente está viejo—, sin
+que nadie tenga que quitar nada.
+
+Pruebas: `test/woo-territorio.test.ts` y `test/district-learning.test.ts`.
 
 ### 38.7 Lo que se guarda en `raw`
 
@@ -23647,6 +24203,16 @@ Vercel— y algunas no tenían interruptor.
     son un paso, así que la confirmación **solo se enciende con la guía
     encendida**, y apagar la guía también detiene las confirmaciones (el panel
     lo dice en las dos filas).
+  - **Con tres posiciones (Apagado / Simulación / Activo), en la lista:**
+    «Aceptar ubicación aproximada en la calle correcta» de la confirmación por
+    Chatby (§6.1, 0316), junto a sus dos interruptores, con la «Prueba de
+    ubicación aproximada» debajo (cada pedido con su dirección, el punto
+    aproximado, dónde estuvo el motorizado o «aún no entregado», y la
+    distancia). No es un interruptor de encendido/apagado: no está en la lista
+    blanca y tiene su propia acción, que solo escribe esa columna. Activo pide
+    confirmación; cuenta entre las encendidas solo en Activo. Igual, «Pedir
+    sola la dirección o la ubicación» (§6.1, 0318, `ask_mode`,
+    `setChatbyAskMode`), que envía WhatsApp a clientas.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -23671,9 +24237,10 @@ Vercel— y algunas no tenían interruptor.
   cabecera lleva a los tokens con los que un agente (Grok Bot) consulta Kapta,
   con el mismo permiso `automations.manage`.
 
-Migraciones `0306_automations_panel.sql` y `0308_lima_retry_geocode.sql`.
+Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql`,
+`0316_chatby_approx_location.sql` y `0318_chatby_auto_ask.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
-`test/lima-retry-geocode-actions.test.ts`.
+`test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`.
 
 ## 41. Lista de pago adelantado (05-11-2026)
 

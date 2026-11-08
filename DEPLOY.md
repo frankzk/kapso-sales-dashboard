@@ -1,5 +1,421 @@
 # Deployment runbook
 
+### 08-11-2026 · Confirmación por Chatby: pide sola la dirección o la ubicación y vuelve a intentar la guía (0318 o sin migración, MOM §6.1)
+
+**Migración 0318** (`db/migrations/0318_chatby_auto_ask.sql`, aditiva): una
+columna, `chatby_auto_settings.ask_mode` (`apagado` | `simulacion` |
+`activo`, nace `apagado`). Se puede desplegar **antes** de aplicarla: sin la
+columna la pasada lo trata como Apagado y el panel muestra la fila bloqueada
+(«Aún no está instalada en la base de datos»). Lo demás va en lo que ya
+existe: la marca en `chatby_auto_checks.evidence` (`asked_at`, `held_at`,
+`auto_asks`, `corrected_at`, `auto_ask_skip`, `reply_incomplete_at`), el
+mensaje en `order_events` (`chatby_message`, `payload.auto = true`) y la
+dirección corregida en `order_geo_overrides`. Sin crons ni variables nuevas.
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0318_chatby_auto_ask.sql
+```
+
+Pedido del owner: «si se tiene la confirmación del cliente por Chatby y la
+generación de la guía falla porque Google Maps no encuentra la ubicación, va a
+pedir ubicación en automático… si falla porque la dirección está incompleta, va
+a pedir la dirección completa, y con eso Google Maps se va a volver a ejecutar».
+
+- **A. Google no la encuentra** (`sin_ubicacion`): la pasada de cada 10 min le
+  pide su ubicación actual (el texto del botón de la ficha). Cuando la manda,
+  la guía sale con esa ubicación (sin Google) y confirma. También a lo que ya
+  estaba `sin_ubicacion` en la ventana y nadie le pidió.
+- **B. Dirección incompleta** (`direccion_incompleta`): le pide la dirección
+  completa (sin número de casa: «la calle, el número y una referencia»; un
+  mercado, cruce, km o seña: la ubicación primero o la calle y el número). Si
+  responde con su ubicación → guía con ella. Si escribe una dirección completa
+  → se guarda como dirección corregida (`order_geo_overrides`, solo la
+  dirección, nota «Dirección completada por la clienta en Chatby»), Google la
+  vuelve a buscar: la encuentra → guía y confirma; no → `sin_ubicacion` y le
+  pide la ubicación («No logramos ubicar esa dirección en el mapa…»). Si sigue
+  incompleta → para la asesora, sin otra pedida.
+- **Límites:** un mensaje de dirección y uno de ubicación por pedido, como
+  mucho. **Lo que manda es la ventana de 24 h de Meta desde el último mensaje
+  de la clienta** (corrección del owner), no la edad del pedido: solo se manda
+  si ese mensaje tiene menos de **23 h** (1 h de margen); cerrada, no se manda
+  y la marca dice `ventana_cerrada` («La ventana de 24 h de WhatsApp está
+  cerrada…»). Lo que quedó para la asesora por la dirección o la ubicación se
+  sigue mirando pasadas las 72 h del pedido mientras la clienta haya escrito
+  hace menos de 24 h (misma búsqueda y mismo tope; si no escribió, se deja de
+  mirar como antes). Nunca si una persona del equipo ya le escribió (ficha o
+  Chatby), ni con envío programado, lista de pago adelantado, Shalom o un
+  pago; solo en Por confirmar de Provincia COD. Mismo envío que la ficha (bot
+  en pausa 60 min). Sin lecturas de Chatby de más: la misma pasada y su tope.
+- **La ficha:** «Kapta le pidió la ubicación: Hoy 10:05 · esperando
+  respuesta…»; el botón manual sigue.
+
+**Después de desplegar (y aplicar la 0318):** el interruptor nace en Apagado.
+Ponerlo en Simulación o Activo en Automatizaciones → Confirmación → «Pedir sola
+la dirección o la ubicación» (Activo pide confirmación).
+
+**Qué mirar después.**
+- Lo que Kapta pidió sola, por clase, y lo que dejó de pedir y por qué:
+  ```sql
+  select payload->>'ask' as ask, payload->>'purpose' as purpose, count(*), max(occurred_at)
+  from order_events
+  where kind = 'chatby_message' and payload->>'auto' = 'true'
+    and occurred_at > now() - interval '2 days'
+  group by 1, 2;
+  select reason, evidence->'auto_ask_skip'->>'reason' as no_pidio, count(*)
+  from chatby_auto_checks
+  where outcome = 'para_asesora' and evidence ? 'auto_ask_skip'
+  group by 1, 2 order by 3 desc;
+  ```
+- Ningún pedido con dos mensajes automáticos de la misma clase (tiene que
+  devolver cero filas):
+  ```sql
+  select order_id, payload->>'purpose' as purpose, count(*)
+  from order_events
+  where kind = 'chatby_message' and payload->>'auto' = 'true'
+  group by 1, 2 having count(*) > 1;
+  ```
+- En Simulación, lo que habría pedido (`auto_asks` con `mode = simulacion`), y
+  en la respuesta del cron `asksSimulated` / `asksSent` / `addressesCorrected`:
+  ```sql
+  select reason, count(*) from chatby_auto_checks
+  where evidence->'auto_asks' @> '[{"mode":"simulacion"}]' group by 1;
+  ```
+- Las direcciones que completó la clienta y cómo terminaron (confirmado con
+  guía, o `sin_ubicacion` con la ubicación pedida):
+  ```sql
+  select c.order_id, c.outcome, c.reason, c.guide_state, c.evidence->>'corrected_at' as corregida
+  from chatby_auto_checks c where c.evidence ? 'corrected_at' order by c.checked_at desc limit 30;
+  select order_id, note from order_events where kind = 'confirmation_contact' and source = 'chatby'
+    and note like '%la dirección que completó por Chatby%' order by occurred_at desc limit 20;
+  ```
+- Que las lecturas de Chatby por pasada no suban de 20 + 10 + 10 + 10, y los
+  pedidos de más de 72 h que se siguen mirando por la ventana de la clienta:
+  ```sql
+  select c.reason, count(*) from chatby_auto_checks c join order_master m using (order_id)
+  where c.outcome = 'para_asesora' and c.reason in ('sin_ubicacion', 'direccion_incompleta')
+    and m.order_created_at < now() - interval '72 hours' and c.checked_at > now() - interval '1 hour'
+  group by 1;
+  ```
+
+**Marcha atrás.** Automatizaciones → «Pedir sola la dirección o la ubicación»
+→ **Apagado** (o `update chatby_auto_settings set ask_mode = 'apagado';`). Deja
+de mandar en la pasada siguiente; lo ya enviado queda en la Actividad y las
+direcciones corregidas siguen en «Corregir ubicación» (se quitan desde la
+ficha). La columna no estorba aunque se revierta el código.
+
+### 08-11-2026 · Confirmación por Chatby: pedir la ubicación desde el drawer y releer cuando la clienta la manda (sin migración, MOM §6.1)
+
+**Sin migración.** La marca de «se le pidió» va en la columna que ya existe
+(`chatby_auto_checks.evidence`: `asked_at` y `held_at`); no hay columnas,
+estados, crons ni variables nuevas. La 0318 queda libre.
+
+Pedido del owner: que la ficha le pida la ubicación a la clienta cuando
+confirmó por Chatby pero la dirección está incompleta o Google no la encuentra,
+y que Kapta la lea cuando llegue.
+
+- **El aviso** en la pestaña «Chatby» del drawer (tono `warn`), solo si la
+  marca del pedido es `para_asesora` por `direccion_incompleta`,
+  `sin_ubicacion` o `sin_ubicacion_cerrado` y sigue en Por confirmar («Sin
+  llamar» / «Por confirmar») de Provincia COD: «La clienta confirmó, pero la
+  dirección está incompleta» / «… pero Google no encuentra la dirección», por
+  qué y qué pasa después. La marca se lee al cargar la conversación y solo para
+  esos pedidos (una lectura chica por la llave primaria).
+- **«Pedir ubicación por WhatsApp»**: el mensaje viene escrito y se puede
+  editar; sale por el mismo envío que «Responder por WhatsApp» (24 h de
+  WhatsApp, el bot en pausa 60 min, `master.edit`). Con `sin_ubicacion…` pide
+  **solo la ubicación actual de WhatsApp**; con `direccion_incompleta`, la
+  calle, el número y una referencia **solo si falta el número de la casa**
+  (calle sin número, «s/n», «sin número»); si es un mercado, un cruce, un
+  kilómetro o una seña, también solo la ubicación. Queda el hecho
+  `chatby_message` con `payload.purpose = pedir_ubicacion`. Cualquier mensaje
+  desde la ficha a un pedido con el aviso guarda `evidence.asked_at`.
+- **La relectura**, dentro de la pasada que ya mira la ubicación (cada 10 min,
+  `recheck_minutes`, 72 h, hasta 10 por pasada en esta búsqueda): lo que quedó
+  por `direccion_incompleta` / `sin_ubicacion_cerrado` y **se le pidió** vuelve
+  a leerse; sin un mensaje nuevo de la clienta desde que quedó para la asesora
+  no se evalúa nada. Si lo último que mandó es su **ubicación** (las reglas del
+  pin de siempre: de la clienta, en el Perú, de esta compra), la confirmación
+  vale aunque la dirección escrita esté incompleta y la guía va con esa
+  ubicación, por el pin respaldado de Aliclik y todas las rejas. Una
+  **dirección escrita** pasa por `direccionCompleta` y `addressMatchesOrder`
+  como hoy. `sin_ubicacion` se sigue mirando como antes.
+
+**Qué mirar después.**
+- Que las pedidas queden marcadas y se relean:
+  ```sql
+  select reason, count(*) filter (where evidence->>'asked_at' is not null) as pedidas, count(*)
+  from chatby_auto_checks where outcome = 'para_asesora'
+    and reason in ('direccion_incompleta', 'sin_ubicacion', 'sin_ubicacion_cerrado')
+  group by 1;
+  select order_id, occurred_at, payload from order_events
+  where kind = 'chatby_message' and payload->>'purpose' = 'pedir_ubicacion' order by occurred_at desc limit 20;
+  ```
+- En la respuesta del cron `chatby-autoconfirm`, ítems `step = "ubicacion"` con
+  `outcome = "sin_respuesta"` (se leyó, la clienta no escribió) o `confirmado`;
+  las confirmaciones con pin dicen en la nota «… y su ubicación de WhatsApp (la
+  dirección escrita estaba incompleta).»:
+  ```sql
+  select order_id, note from order_events where kind = 'confirmation_contact' and source = 'chatby'
+    and note like '%su ubicación de WhatsApp%' order by occurred_at desc limit 20;
+  ```
+- Que las lecturas de Chatby por pasada no suban de 20 + 10 + 10 + 10 (la
+  confirmación y las tres búsquedas de la pasada de la ubicación).
+- Abrir un pedido con el aviso en el teléfono: el aviso y el botón caben sin
+  desplazar de lado; con la ventana de 24 h cerrada, dice «Pídesela con una
+  plantilla desde Chatby».
+
+**Marcha atrás.** Revertir el commit: el aviso desaparece y las marcas con
+`direccion_incompleta` vuelven a ser finales (la pasada ignora `asked_at`). No
+hay nada que deshacer en la base; para limpiar la marca, si se quiere:
+```sql
+update chatby_auto_checks set evidence = evidence - 'asked_at' - 'held_at' where evidence ? 'asked_at';
+```
+Los pedidos confirmados con la ubicación de la clienta son confirmaciones y
+guías normales: quedan como están.
+
+### 08-11-2026 · Confirmación por Chatby: prueba de ubicación aproximada (Apagado/Simulación/Activo) (0316, MOM §6.1 y §40)
+
+Cambio aprobado por el owner: «Aceptar ubicación aproximada en la calle
+correcta». La guía automática del que confirmó por Chatby solo aceptaba de
+Google el edificio (`ROOFTOP`); con el número de la cuadra
+(`RANGE_INTERPOLATED`) el pedido quedaba «sin ubicación» y el punto ni se
+guardaba (#KP204092, «Jirón José Olaya 245», Huamanga; hoy hay 5 filas así en
+`order_geocodes`). Ahora ese punto se puede probar si, además del candado de
+siempre, es la **misma calle, el mismo número y la misma provincia** del
+pedido (`geocodeApproxStreet`, `lib/geocode-approx.ts`).
+
+- **Tres posiciones por organización** en Automatizaciones → Confirmación,
+  junto a los dos interruptores de Chatby (`chatby_auto_settings.approx_mode`,
+  nace `apagado`):
+  - **Apagado**: lo de hoy.
+  - **Simulación**: guarda el punto en `order_geocodes` (`approx_kind =
+    'calle'`, `approx_latitude/longitude`, `approx_mode = 'simulacion'`) y el
+    pedido queda para la asesora exactamente como hoy (`sin_ubicacion`, sin
+    guía ni confirmación).
+  - **Activo**: la guía automática lo usa por el mismo camino que el edificio
+    y deja «coordenada: dirección en Google (aproximada en la calle)» en
+    `guide_detail`; `approx_used_at` queda marcado.
+- **«Prueba de ubicación aproximada»**, debajo de la fila: «N pedidos medidos ·
+  M a menos de 150 m · distancia típica X m» (mediana) y la tabla Pedido /
+  Dirección / Punto aproximado / Dónde estuvo el motorizado / Distancia. La
+  distancia (haversine) es contra la coordenada de la guía de Aliclik ya
+  entregada o intentada, la que el Master toma como «lo que el courier
+  geolocalizó» (`geoPin`). Se calcula **al abrir el panel**: tres lecturas
+  chicas (los puntos aproximados de la org, como mucho 200, con su índice
+  parcial; su `order_master`; sus `shipments` de Aliclik). Sin cron.
+- **Límite de la medición.** Aliclik devuelve en su reporte la coordenada que
+  le mandó Kapta (de las 21 guías creadas con el edificio de Google, 19 la
+  tienen a 5 m o menos y 2 a ~33 m, entregadas incluidas): no trae el GPS del
+  motorizado. Por eso una guía creada con el propio punto aproximado (Activo)
+  dice «Es el punto que mandó Kapta: no mide» y no entra en la cuenta. La
+  medición útil sale de la **Simulación**, donde la guía la crea la asesora
+  con su propio pin.
+- Una fila vieja con la cuadra y sin veredicto de la calle se vuelve a
+  consultar **una vez** en Simulación o Activo (hoy, como mucho esas 5): gasta
+  del cupo de 400 de Google, nada más. Los reintentos de Lima no piden el
+  punto aproximado y no cambian. Sin línea en el resumen de Telegram (es por
+  tienda y de ventas: no tenía un enganche limpio).
+
+**Migración `0316_chatby_approx_location.sql`**, a mano y ANTES del código
+(aditiva: una columna en `chatby_auto_settings` con su `check`, seis en
+`order_geocodes` con sus `check` y un índice parcial; no reescribe filas).
+Sin ella el código funciona como Apagado: la fila dice «Aún no está instalada
+en la base de datos», la acción contesta «Falta la migración 0316» y la
+caché guarda lo de siempre. Smoke: `scripts/sql/chatby_approx_location_smoke.sql`
+(en `scripts/verify-db.sh`). Sin crons ni variables nuevas.
+
+**Qué mirar después.**
+- Que la posición nazca en Apagado y el historial registre el cambio:
+  ```sql
+  select org_id, approx_mode from chatby_auto_settings;
+  select * from automation_switch_events where automation = 'chatby_auto_approx' order by occurred_at desc limit 5;
+  ```
+- Con Simulación puesta, que aparezcan puntos y que los pedidos sigan en
+  Por confirmar «sin ubicación» como antes:
+  ```sql
+  select g.approx_kind, g.approx_mode, count(*) from order_geocodes g
+  where g.approx_checked_at is not null group by 1, 2;
+  select c.outcome, c.reason, count(*) from chatby_auto_checks c
+  join order_geocodes g using (order_id) where g.approx_kind = 'calle' group by 1, 2;
+  ```
+- En los logs del cron `chatby-autoconfirm`: `[geocode-auto]` con `approx`
+  y `[chatby-aprox]` con `habria_confirmado`; en la respuesta, `approxSimulated`
+  y `approxUsed`. En Activo, `guide_detail` = «coordenada: dirección en Google
+  (aproximada en la calle)».
+- Abrir Automatizaciones en el teléfono: la tabla pasa a tarjetas y la página
+  no se desplaza de lado.
+
+**Marcha atrás.** Poner la posición en Apagado (inmediato, sin deploy): la
+pasada vuelve a aceptar solo el edificio. Revertir el commit quita la fila y la
+prueba; las columnas de la 0316 pueden quedarse (nadie más las lee). Para
+quitarlas:
+```sql
+alter table chatby_auto_settings drop constraint if exists chatby_auto_settings_approx_mode_check;
+alter table chatby_auto_settings drop column if exists approx_mode;
+drop index if exists order_geocodes_approx_idx;
+alter table order_geocodes drop constraint if exists order_geocodes_approx_point_check,
+  drop constraint if exists order_geocodes_approx_kind_check,
+  drop constraint if exists order_geocodes_approx_mode_check,
+  drop column if exists approx_kind, drop column if exists approx_latitude,
+  drop column if exists approx_longitude, drop column if exists approx_mode,
+  drop column if exists approx_checked_at, drop column if exists approx_used_at;
+```
+Las guías creadas en Activo con el punto aproximado son guías normales de
+Aliclik: no se deshacen solas (se ven por su `guide_detail`).
+
+### 08-11-2026 · Confirmación por Chatby: direcciones con número sin «calle» y lotes cortos cuentan como completas (sin migración, MOM §6.1)
+
+Cambio aprobado por el owner. La confirmación automática por Chatby dejó 88
+pedidos «direccion_incompleta» en 3 días (103 en los últimos 4 al cerrar el
+cambio) porque `direccionCompleta` pedía la palabra de la vía («calle», «Jr.»,
+«Av.», «Mz/Lt»…) **y** el número: «antenor orrego 341» o «Urb Quinta Tristán
+T 13» quedaban para la asesora aunque el courier las encuentra.
+
+- **Ahora también es completa** (`direccionCompleta`, `lib/chatby-autoconfirm.ts`,
+  pura): el nombre de la calle y su número sin «calle» («Sucre 116A», «Jorge
+  chavez #212», «Chile y Venezuela 154», «Pasajr los heroes 211»), y la
+  urbanización, AA.HH., APV, asociación o calle con su código corto de manzana
+  y lote («Juana Blanco b6», «Apvis Nuevo Horizonte A-20», «Ah camino del solar
+  BN 17», «MZ alote11»). La regla de antes (vía + número, o manzana y lote) no
+  cambia: nada que hoy se confirmaba deja de confirmarse.
+- **Sigue incompleta**: mercados y puestos, el cruce como dirección («Entre …
+  y …», «intersección»), «s/n» / «S N» / «sin número», la calle sola, las señas
+  sin número, lo que no es una dirección, las agencias (también «Shalon») y los
+  números que son de otra cosa: km, puesto, puerta, piso, sector, celular,
+  año, fecha, etapa, cuadras. «Magisterial III y 501» queda para la asesora.
+- **La guía no cambia**: sin ubicación de WhatsApp, la coordenada sigue
+  pidiendo el edificio en Google (`ROOFTOP`) y todas las rejas de Aliclik. Lo
+  que pase este punto y no tenga edificio queda `sin_ubicacion`, como hoy.
+- **Repaso sobre los 103** (solo lectura, la función nueva sobre
+  `order_master.address`): **42 habrían pasado** el punto de la dirección
+  (#AUR900439, #KP202490, #KP202589, #KP202598, #KP202620, #KP202669,
+  #KP202700, #KP202770, #KP202890, #KP202899, #KP202956, #KP202973, #KP202983,
+  #KP203031, #KP203043, #KP203068, #KP203083, #KP203084, #KP203087, #KP203181,
+  #KP203296, #KP203333, #KP203365, #KP203400, #KP203457, #KP203458, #KP203535,
+  #KP203575, #KP203583, #KP203619, #KP203639, #KP203644, #KP203649, #KP203656,
+  #KP203664, #KP203676, #KP203686, #KP203784, #KP203978, #KP204000, #KP204029,
+  #KP204059); 60 siguen incompletos, entre ellos todos los mercados, cruces,
+  km, «s/n», calles sin número y agencias. El #KP203824 («Av. Pedro de Osma 428
+  …») ya era completo con la regla de antes: lo detuvo la dirección del
+  mensaje. **Esos pedidos no se vuelven a leer** (`para_asesora` es final): la
+  regla vale para lo que entre desde el despliegue.
+
+**Sin migración**, sin crons ni variables. No es macro resolución:
+`MOM_RESOLUTION_VERSION` no sube y no se recalcula ninguna fila. Carga: la
+misma pasada de siempre, cada 10 minutos; solo cambia una función pura sobre
+un texto.
+
+**Qué mirar después.**
+- Los motivos de la pasada desde el despliegue: «direccion_incompleta» debería
+  bajar a cerca de la mitad, y crecer `confirmado` o `sin_ubicacion` (la guía
+  sin edificio):
+  ```sql
+  select outcome, reason, count(*) from chatby_auto_checks
+  where checked_at > now() - interval '3 days'
+  group by 1, 2 order by 3 desc;
+  ```
+- Las direcciones que quedan incompletas, para ver si alguna debió pasar o si
+  pasó alguna de mercado, km o agencia:
+  ```sql
+  select m.order_name, m.address, c.reason, c.outcome, c.checked_at
+  from chatby_auto_checks c join order_master m using (order_id)
+  where c.checked_at > now() - interval '3 days'
+    and (c.reason = 'direccion_incompleta'
+         or (c.outcome = 'confirmado' and m.address !~* '\m(calle|jr|av|avenida|psje?|pasaje|mz|lote?)\M'))
+  order by c.checked_at desc;
+  ```
+- En la guía de los confirmados nuevos, `guide_detail` dice «coordenada:
+  dirección en Google (edificio)» o «… ubicación de WhatsApp».
+
+**Marcha atrás.** Revertir el commit. `direccionCompleta` vuelve a pedir la
+vía y el número; lo ya confirmado se queda confirmado con su guía (son hechos
+escritos) y lo que entre después vuelve a quedar «direccion_incompleta». No
+escribe nada en la base.
+
+### 08-11-2026 · Ubicación: la provincia de la web (ubigeo del formulario) manda y Kapta ya no aprende provincias equivocadas (sin migración, MOM §38.6 y §19.0.1)
+
+Cambio aprobado por el owner. El formulario de la web (WooCommerce, COD Core)
+guarda en `orders.raw.woo.meta_data` (`_cod_territorio`) el ubigeo exacto que
+eligió la clienta —`{"codigo":"050101","region":"Ayacucho","provincia":"Huamanga","distrito":"Ayacucho"}`,
+2.579 pedidos—, y Kapta lo ignoraba: la provincia salía del nombre del distrito
+en `peru_districts`, donde había dos filas aprendidas a mano que estaban mal
+(«ayacucho → CORACORA» desde el 15-10 y «puno → San Roman» desde el 24-08).
+**Hoy se corrigieron a mano esas dos filas del catálogo y 43 pedidos abiertos**
+(`order_events.payload->>'bulk' = 'province_learned_fix_20261108'`). Quedaban
+214 pedidos (116 abiertos) con otra provincia que la del formulario, y 41 con
+otro distrito (estos, todos con corrección manual del equipo, que manda).
+
+- **La provincia de la web manda** (`lib/woo-territorio.ts`, `lib/order-master.ts`).
+  Prioridad, nivel a nivel: corrección manual (`order_geo_overrides`) >
+  `_cod_territorio` > lo de siempre (provincia de la guía, lo aprendido en
+  `peru_districts`, ubigeo de Aliclik, carrito, historial). El ubigeo se lee con
+  desconfianza (objeto o texto JSON, completo y coherente: departamento
+  reconocido, provincia que cabe en él, código del mismo departamento) y solo
+  vale si sigue siendo el del pedido: misma guarda del departamento que hasta
+  hoy y el mismo distrito (si el equipo corrigió el distrito, no se usa). Las
+  dos Limas se guardan como siempre («Lima (provincia)» / «Lima
+  (departamento)»). El código del INEI no se guarda en el Master (no hay
+  columna); `geo_source` queda `shopify` («según WooCommerce»), sin valor nuevo.
+- **Kapta ya no aprende provincias equivocadas** (`districtLearnVerdict`,
+  `updateOrderGeo`). «Recordar esta provincia» solo **añade** un distrito que
+  `peru_districts` no tiene: nunca cambia la provincia de uno que ya está (la
+  acción hace `insert`, no `upsert`; si la fila ya existe lo dice y la
+  corrección vale solo para ese pedido).
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` sube a
+`mom-v1.40`, pero **acotada** (`NARROW_VERSION_BUMP`): la puerta de versión
+del cron `master-reconcile` solo recalcula las filas de WooCommerce
+(`shopify_order_id` `wc-…`, ~4.016: Kenku 3.583, Aurela 433); las ~33.500 de
+Shopify en `mom-v1.39` siguen vigentes. **Carga**: la misma consulta de la
+puerta de versión que ya corre en cada pasada (mismo plan, índice por tienda +
+filtro) y el tope de siempre, 250 filas por tienda y pasada cada 10 minutos
+dentro del reloj del cron (240 s repartidos entre tiendas): Aurela en ~2
+pasadas (~20 min), Kenku en ~15 (~2,5 h), sin picos. Subir la versión entera
+habría sido ~37.500 filas, ~21 h de barrido de Kenku. Con la próxima subida
+(`mom-v1.41`) la acotación se apaga sola. Cobertura: solo puede moverse en unos
+pocos pedidos de «Lima (departamento)» que ganan la provincia Cañete (hoy 4 con
+`_cod_territorio` de Cañete sin esa provincia en el Master).
+
+**Qué mirar después.**
+- El avance del recálculo (baja a 0 en ~2,5 h):
+  ```sql
+  select store_id, count(*) from order_master
+  where shopify_order_id like 'wc-%' and macro_version <> 'mom-v1.40' group by 1;
+  ```
+- Que la provincia distinta de la del formulario baje hacia 0 fuera de las
+  correcciones manuales (las que queden con corrección son del equipo, a
+  propósito; las que queden sin ella tienen la dirección de otro departamento o
+  de otro distrito que el formulario):
+  ```sql
+  with t as (
+    select o.id, (select m->'value' from jsonb_array_elements(o.raw->'woo'->'meta_data') m
+                  where m->>'key' = '_cod_territorio' limit 1) v
+    from orders o where o.platform = 'woocommerce'
+  )
+  select count(*) filter (where g.order_id is null) as sin_correccion,
+         count(*) filter (where g.order_id is not null) as con_correccion
+  from t join order_master om on om.order_id = t.id
+  left join order_geo_overrides g on g.order_id = t.id
+  where t.v is not null
+    and lower(translate(coalesce(om.province, ''), 'áéíóúÁÉÍÓÚñÑ', 'aeiouAEIOUnN'))
+     <> lower(translate(t.v->>'provincia', 'áéíóúÁÉÍÓÚñÑ', 'aeiouAEIOUnN'));
+  ```
+- Un pedido de la web de Ayacucho o de Puno (cercado) en el Master: provincia
+  Huamanga / Puno, y la ficha dice «según WooCommerce».
+- «Corregir ubicación» con «Recordar» en un distrito que ya está en
+  `peru_districts`: «ya está guardado con la provincia «…»… La corrección vale
+  solo para este pedido.», y la fila de la tabla no cambia
+  (`select district_key, province, source, updated_at from peru_districts where district_key in ('ayacucho','puno');`
+  sigue con las de hoy).
+- En el informe del cron, `failed` en 0 y `deferred` bajando en cada pasada.
+
+**Marcha atrás.** Revertir el commit. La versión vuelve a `mom-v1.39`, así que
+el cron recalcula con la regla anterior las filas que ya llevan `mom-v1.40`
+(las ~4.000 de WooCommerce y lo recalculado en el día), al mismo ritmo; con las
+dos filas del catálogo ya corregidas, casi todas vuelven con la misma
+provincia. «Recordar» vuelve a poder reescribir filas existentes. No escribe
+nada nuevo en la base; las correcciones de hoy se quedan como están.
+
 ### 08-11-2026 · Distrito por revisar: aviso antes de la guía y lista en el Master (sin migración, MOM §19.0.3)
 
 Pedido del owner tras #KP202409: llegó del formulario web con distrito
@@ -232,6 +648,59 @@ subir más que las fichas de Lima abiertas.
 
 **Marcha atrás.** Revertir el commit: vuelve la hoja aparte. No escribe nada
 nuevo en la base; los casos, llamadas y candados son los mismos.
+
+### 07-11-2026 · «Sale a reparto»: lo que sale hoy o en el próximo reparto y lo que le falta (sin migración, MOM §29.16)
+
+Pedido del owner. Una tarjeta con dos días, hoy y el próximo día de reparto
+(el domingo se salta), dice cuántos pedidos de Lima salen con Grupo GF. Los
+reparte por lo primero que les falta: sin rótulo, sin armar, sin caja, en caja
+con su motorizado. Está en Despacho del día, con todas las tiendas de Grupo GF y
+el botón «Armar las cajas del …», y en Repro Lima, con nuestras tiendas y la
+chapa en cada pedido.
+
+Una revisión adversarial corrigió, antes de fusionar, lo que el cálculo
+inventaba. Lo del domingo ya no está atrasado el lunes. Antes del corte, lo de
+hoy no cuenta en «Mañana». Una caja de un día que pasó no fija el día, y lo
+acordado en Repro Lima con Aliclik no sale con Grupo GF. Un reintento tomado
+sin acuerdo no entra. Lo recogido por el motorizado sigue en el «Hoy» de Repro
+Lima. Y la lista del plan mueve el «Día de la caja» con ella.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+Despacho del día suma una lectura por carga: los casos abiertos con acuerdo de
+Repro Lima de las filas de la cola (`lima_repro_cases`, por pedido). Repro Lima
+suma, solo para los candidatos:
+- el proveedor de la organización de sus tiendas;
+- las salidas;
+- las solicitudes de Grupo GF;
+- los ítems activos de caja y sus cajas;
+- las cajas de Grupo GF de hoy en adelante, con sus ítems y salidas, para lo En
+  curso ya recogido.
+
+**Qué mirar después.** Pasadas las 12:00, Despacho del día abre «Sale a
+reparto» en mañana (o en el lunes, si es sábado); el domingo solo ofrece el
+lunes. Las cifras suman el total y «Armar las cajas del …» deja el «Día de la
+caja» en ese día. Desde la lista del plan, «Asignar» va a la caja de ese día.
+El sábado por la tarde, «debían salir antes» no debe contar lo que no tiene
+programa. En Repro Lima, la misma cuenta, limitada a nuestras tiendas; en «Hoy»
+siguen los pedidos que el motorizado ya recogió.
+
+**Marcha atrás.** Revertir el commit. Solo lee.
+
+### 06-11-2026 · Repro Lima: elegir qué reintentos de Aliclik aprobar (sin migración, MOM §9.5)
+
+Pedido del owner. En «Reintentos Aliclik», cada fila lista tiene una casilla, y
+arriba hay otra para elegirlas o quitarlas todas: en la cabecera de la tabla y,
+en el teléfono, sobre la lista. Con alguna marcada, el botón es «Aprobar
+elegidos (N)» y aprueba solo esas; sin marcar, sigue «Aprobar todos los listos».
+Solo cambia la interfaz: aprueba con la misma acción de siempre
+(`approveAliclikRetry`, una por una).
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+
+**Qué mirar después.** Repro Lima → «Reintentos Aliclik»: marcar dos → «Aprobar
+elegidos (2)» → la confirmación dice 2 → se crean 2 guías.
+
+**Marcha atrás.** Revertir el commit.
 
 ### 06-11-2026 · La base sin CPU por `lead_routing_scope`: menos llamadas y sin recorrer tablas enteras (0312, sin cambio de reglas)
 
