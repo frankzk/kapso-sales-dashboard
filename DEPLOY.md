@@ -1,5 +1,65 @@
 # Deployment runbook
 
+### 08-11-2026 · Leads: la reserva por cita se suelta sola a las 2 h o cuando la clienta vuelve a escribir (0319, MOM «Bloques por asesora»)
+
+**Migración 0319** (`db/migrations/0319_lead_appointment_release.sql`): solo
+`create or replace` de `lead_routing_scope`, con los mismos permisos
+(`service_role`), `stable`, `security invoker` y `search_path` de la 0312. Sin
+tablas, columnas, índices ni datos nuevos; no cambia ninguna fila. **No hay
+código que desplegar**: la regla vive en la base (el espejo puro
+`lib/lead-appointment-hold.ts` no lo lee ninguna pantalla). Se aplica a mano,
+cuando el owner decida:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0319_lead_appointment_release.sql
+```
+
+Decisión del owner (opción c): la reserva de un lead a la asesora que agendó
+«volver a llamar» se suelta en **cualquiera** de dos casos: (1) pasaron **2
+horas** desde la hora de la cita, se haya llamado o no; (2) la clienta
+escribió por WhatsApp **después** de que se agendó (`leads.last_inbound_at`
+posterior al `occurred_at` de la llamada que la agendó). Suelta, el lead sigue
+el reparto normal (su bloque, el respaldo, la reserva de 10 min de quien lo
+abra). La cita queda: `lead_calls`, `next_followup_at`, intentos y Por llamar
+no cambian. Caso real: Antu Cruz agendó a las 10:00 y la reserva nunca se
+soltó.
+
+**Al aplicarla, se sueltan de golpe ~388 leads** (medido el 08-11-2026 ~16:00
+UTC, sin aplicar: 406 leads abiertos reservados por cita en 2 tiendas; 388 con
+la cita vencida hace más de 2 h —6 de las últimas 24 h, 16 de la última
+semana, 366 de antes—; 0 adicionales hoy por un mensaje de la clienta: los 66
+que escribieron después de agendar ya tenían la cita vencida). De Antu Cruz,
+12 de sus 14. Pasan a verse en la cola de la asesora de su bloque —casi todos
+en Recuperación— y dejan de mostrarse «Sin acceso» a las demás. No entran a
+Por llamar por esto: esa cola sigue con sus propias reglas (0289/0291).
+
+**Rendimiento.** Se conserva todo lo de la 0312: las dos ramas `union all`,
+los índices y el plan de `calls` (Index Only Scan de
+`lead_calls_call_lead_idx`). Lo único nuevo es un `max()` más en `calls` sobre
+las mismas filas y dos comparaciones por lead ya leído; no se lee ninguna
+tabla más, así que no hay filtro sargable ni índice que agregar. Medido en una
+base local con 60.000 leads (12.000 en cola) y 40.000 llamadas: los mismos
+85.564 bloques que la 0312 para la cola entera, y el `exists` de la asesora
+habilitada se sigue evaluando una vez por llamada (en una subconsulta con
+`offset 0`).
+
+**Qué mirar después.**
+- Citas que todavía reservan (debería quedar solo lo agendado para dentro de
+  poco o con la hora pasada hace menos de 2 h):
+  ```sql
+  select count(*) filter (where l.next_followup_at > now() - interval '2 hours') as aun_reservan,
+         count(*) filter (where l.next_followup_at <= now() - interval '2 hours') as sueltas_por_hora
+  from leads l
+  where l.category in ('open','hot') and l.next_followup_at is not null
+    and exists (select 1 from lead_calls c where c.lead_id = l.id and c.kind = 'call'
+                and c.vendedora is not null and c.next_followup_at = l.next_followup_at);
+  ```
+- Que `lead_routing_scope` siga en ~80 ms de media en Query Performance.
+
+**Marcha atrás.** Volver a aplicar el cuerpo de la 0312
+(`psql "$DATABASE_URL" -f db/migrations/0312_lead_routing_scope_perf.sql`; sus
+índices ya existen y el resto es idempotente) y revertir el commit.
+
 ### 08-11-2026 · Confirmación por Chatby: pide sola la dirección o la ubicación y vuelve a intentar la guía (0318 o sin migración, MOM §6.1)
 
 **Migración 0318** (`db/migrations/0318_chatby_auto_ask.sql`, aditiva): una

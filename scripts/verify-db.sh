@@ -351,4 +351,7 @@ echo "  ✅ apagado / simulación / activo y nada más; una fila de la 0301 sigu
 echo "▶ Confirmación por Chatby: pedir sola la dirección o la ubicación (0318): posición que nace apagada, sus tres valores y RLS"
 $PSQL -f "$ROOT/scripts/sql/chatby_auto_ask_smoke.sql"
 echo "  ✅ apagado / simulación / activo y nada más, nunca nulo; la ubicación aproximada (0316) no cambia; la org lee la posición y nadie la cambia desde el navegador"
+echo "▶ La reserva por cita se suelta sola (0319): 2 h después de la cita o cuando la clienta vuelve a escribir; después, reparto normal"
+$PSQL -f "$ROOT/scripts/sql/lead_appointment_release_smoke.sql"
+echo "  ✅ reservada dentro de las 2 h (borde inclusivo) y con mensajes anteriores, futuros o un handoff del agente; suelta a las 2 h o con un entrante posterior (una llamada sin fecha nueva ya consume la cita, 0289); suelta la toma otra asesora habilitada; la cita queda igual; frente a la 0312 solo cambian las citas sueltas"
 echo "✅ DB verification passed."
