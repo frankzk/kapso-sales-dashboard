@@ -57,7 +57,11 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: cotejo.errores.length === 0,
     candidatos: cotejo.candidatos,
+    // De los candidatos, los que tienen una guía que Shalom no conoce (MOM §12).
+    conGuiaMuerta: cotejo.conGuiaMuerta,
     vinculados: cotejo.vinculados,
+    // De los vinculados, los que reemplazaron esa guía (anulada en el mismo paso).
+    reemplazados: cotejo.reemplazados,
     ambiguos: cotejo.ambiguos,
     sinPareja: cotejo.sinPareja,
     porTope: cotejo.porTope,

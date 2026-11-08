@@ -23,6 +23,8 @@ import { nextDeliveryDay, PLAN_STEPS, planItems, planOpenDay, planSummary, type 
 import { DispatchPlanPanel, planDayOptions } from "@/components/dispatch-plan-panel";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
+import { LimaStuckTray, type LimaStuckSelection } from "@/components/lima-stuck-tray";
+import { stuckFilter } from "@/lib/lima-stuck";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { retryApproveNoLocation } from "@/lib/lima-retry-auto";
 import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pendingMatches, limaPlanCandidate, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
@@ -106,6 +108,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
       .sort((a, b) => order.get(planByOrder.get(a.orderId)!.step)! - order.get(planByOrder.get(b.orderId)!.step)! || (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0));
   }, [planFilter, attentionQueue, scoped, planByOrder]);
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
+  // «Lima trabados» (§9.6): el motivo elegido viaja por `trabado`; sin él, la lista está cerrada.
+  const stuck = stuckFilter(searchParams.get("trabado"));
 
   function replaceParams(params: URLSearchParams) {
     params.delete("vista");
@@ -123,6 +127,13 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   function patchRowFilters(next: Partial<LimaRowFilters>) {
     const params = new URLSearchParams(searchParams.toString());
     writeRowFilters(params, { ...rowFilters, ...next });
+    replaceParams(params);
+  }
+
+  function chooseStuck(next: LimaStuckSelection) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next) params.set("trabado", next);
+    else params.delete("trabado");
     replaceParams(params);
   }
 
@@ -306,6 +317,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
           )}
         />
       )}
+
+      {!retriesOnly && <LimaStuckTray rows={scoped} today={today} selected={stuck} onSelect={chooseStuck} />}
 
       <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
 

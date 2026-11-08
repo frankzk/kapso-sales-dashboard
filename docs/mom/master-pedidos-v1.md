@@ -1426,10 +1426,21 @@ Reglas:
   realidad espera el `PREPARED` de Aliclik, y la pantalla acusa un atraso que no
   existe.
 - Una caja pendiente de tres días o más se marca **detenida**. No es el trabajo
-  del día: o el courier nunca reportó, o la caja se quedó sin dueño.
+  del día: o el courier nunca reportó, o la caja se quedó sin dueño. También,
+  sea del día que sea, la caja de Shalom cuya guía Shalom ya no reconoce
+  («Guía Shalom no reconocida», §12, desde el 08-11-2026): con esa guía no sale.
 - **Cada detenida dice por qué y qué hacer** (desde el 06-11-2026; antes solo
   decía «Detenida» y nadie actuaba: había 18). Gana la primera razón que aplica
   (`stallDiagnosis`, `lib/warehouse-queue.ts`):
+  0. **Shalom ya no reconoce su guía** (desde el 08-11-2026, §12 «La fila del
+     rastreo y la guía que Shalom no reconoce»): la línea del rastreo, «Guía
+     Shalom no reconocida: el rastreo no encuentra la guía 90172429 desde el
+     03-11-2026 (12 consultas seguidas). Si la caja salió con otra guía hecha en
+     Shalom Pro, regístrala en «Ya la creé en Shalom Pro» (Cotejar Shalom
+     también la busca); si no salió, Shalom la venció: genera una guía nueva
+     antes de llevarla. Kapta solo la anula al registrar la que la reemplaza.»
+     Va primero porque, sin otra guía, ninguna de las demás razones saca la
+     caja. Los 30 días se suman igual.
   1. **La salida inmediatamente anterior del mismo pedido se anuló o volvió**
      (`anulado`, o custodia `devuelto`/`retorno`; si después de la anulada hubo
      otra salida viva, esta razón no aplica): «Salida nueva: la anterior
@@ -6360,6 +6371,111 @@ y `components/warehouse-station.tsx`. Pruebas en
 `test/warehouse-retries-ui.test.ts`, `test/warehouse-retries-source.test.ts` y
 `test/repro-lima-access.test.ts`.
 
+### 9.6 «Lima trabados»: lo que se quedó quieto en el flujo (08-11-2026)
+
+**Pedido del owner (08-11-2026).** Una bandeja con los pedidos de Lima que
+llevan en **Preparación, Por despachar o En curso** más tiempo del que
+deberían; «Por despachar» y «En curso» son los que más importan. **Fuera, a
+propósito:** la liquidación y el cierre (Por cerrar → Finalizado), y dentro de
+En curso lo que ya tiene su cola: **Por reprogramar Lima** (es Repro Lima,
+§9.5, con sus tarjetas), **Disponible para recojo** y **Pendiente de pago de
+diferencia** (Agencia, §12), **Gestión Reproprovincia** y **Salida Swayp
+programada**. Tampoco Por confirmar (Lima entra directo a Preparación, §9) ni
+el pedido acompañante (`en_caja_de_otro_pedido`, depende del principal, §32).
+
+**Dónde.** En Repro Lima, entre «Sale a reparto» y los macroestados, para
+quien entra con `repro_lima.manage` (no en «Reintentos Aliclik» solo). Recorta
+con los mismos filtros de la pantalla (tienda, búsqueda, creación, canal,
+distrito, courier y los macroestados que se muestran). Una tarjeta por
+motivo, con su cifra; tocarla abre la lista de ese motivo y «Ver la lista» la
+de todos. El motivo elegido viaja por `trabado` en la URL. Cada fila dice
+pedido, cliente, courier, estado (macroetapa y subetapa), días trabado, motivo
+con el dato que lo explica y el siguiente paso con su responsable; tocarla
+abre la ficha en Operar. Solo lee: no cambia etapas, no escribe hechos, no
+inventa estados.
+
+**El reloj: días de reparto completos.** Grupo GF reparte de lunes a sábado
+(`isDeliveryDay`, §29.16); el domingo no cuenta. Se cuentan los días de
+reparto que pasaron **enteros** entre el día en que el pedido entró a su
+subetapa (`order_master.macro_since`, en hora de Lima) y hoy, sin contar
+ninguno de los dos. Armado el viernes, el sábado debía salir: el domingo ya
+lleva uno. Armado el sábado, sale el lunes: recién el martes lleva uno. Antes
+de salir, si el pedido tenía un día (programa de Grupo GF, «Programar envío»,
+solicitud de Grupo GF o recojo de Aliclik):
+- **a futuro**, o en una caja de Grupo GF de hoy o de un día que viene: no está
+  trabado, está planeado;
+- **que ya pasó** y es posterior a su subetapa: el reloj corre desde ese día
+  («Debía salir el jue 05/11»).
+
+«Días trabado» en la fila son días de calendario desde ese mismo día.
+
+**Las reglas** (`LIMA_STUCK_RULES`, `lib/lima-stuck.ts`; umbral en días de
+reparto completos):
+
+| Etapa | Motivo | Cuándo | Umbral | Responsable | Siguiente paso |
+| --- | --- | --- | --- | --- | --- |
+| Por despachar | Armado sin caja de reparto | Grupo GF, sin solicitud ni caja | 1 | Operaciones | Ponerlo en la caja del próximo reparto en Despacho del día |
+| Por despachar | Grupo GF lo tomó y no lo puso en caja | Solicitud aceptada para un día que pasó, sin caja | 1 | Operaciones | Pedir a Grupo GF que lo asigne o libere la solicitud |
+| Por despachar | En una caja de un día que pasó | Asignado, en cotejo o listo para recojo, o su última caja es de un día que pasó | 1 | Operaciones | Retirarlo de la caja vieja y asignarlo al próximo reparto |
+| Por despachar | Grupo GF no lo puede llevar | Sin «Sale a reparto» (distrito sin convenio, tarifa o en pausa, «Sin condiciones» de §29.16) y sin otra guía viva | 1 | Operaciones | Elegir otro courier (Aliclik) desde la ficha |
+| Por despachar | Guía creada y el courier no lo recogió | Guía viva de otro courier (Aliclik con su día de recojo pasado, Swayp…) | 1 | Operaciones | Coordinar el recojo o crear la guía con otro |
+| En curso | En reparto sin resultado del motorizado | Salida de Grupo GF (propia o «por definir») recibida, en tránsito o en reparto, sin reporte de la parada | 2 | Operaciones | Pedir al motorizado el resultado o recibir el paquete en oficina |
+| En curso | El courier dice entregado y Kapta no cerró | Guía `entregado`, o viva con `DELIVERED` (Tanders la deja `en_ruta` hasta validar la constancia, §9.4) | 1 | Operaciones | Validar el cobro (Tanders: cargar la constancia en Validar pagos) |
+| En curso | El courier reporta una novedad con la clienta | Último estado: no contesta, ausente, ya no lo quiere, rechazo o dirección (no «Reprogramado») | 1 | Asesora | Llamar a la clienta y acordar la entrega o la devolución |
+| En curso | Sin resultado del courier | Courier externo sin entrega ni fallo; Tanders con umbral 1 (su paquete queda libre el día hábil siguiente, `tandersReleaseCutoff`) | 3 | Operaciones | Pedir al courier el estado de la guía y dónde está el paquete |
+| En curso | Retorno sin llegar al almacén | En retorno o retorno solicitado | 3 | Almacén | Recibir en Almacén → Devoluciones o reclamarla al courier |
+| Preparación | Sin rótulo | Por generar rótulo, sin envío programado a futuro | 1 | Operaciones | Elegir la ruta y generar el rótulo en la ficha |
+| Preparación | Rótulo o guía creada y caja sin escanear | Por armar | 1 | Almacén | Armar la caja y escanearla en Almacén |
+| Preparación | Incidencia de preparación sin resolver | Incidencia de preparación | 1 | Almacén | Resolver la incidencia en Almacén |
+| Preparación | Sin rótulo hace más de 30 días | Por generar rótulo, más de 30 días desde la compra (como «Antiguo por revisar», §9.5) | 1 | Asesora | Confirmar si la venta sigue; si no, anularla en la tienda |
+
+Las tarjetas van en ese orden; dentro de cada motivo, lo que más días de
+reparto lleva primero. «Operaciones» es Seguimiento Lima y Despacho GF (§15);
+«Almacén», Yelitza y Matías; «Asesora», quien atiende Repro Lima.
+
+**Por qué esos umbrales (medido en producción el 08-11-2026, domingo; Lima,
+sin Por reprogramar).**
+- **Preparación:** Por generar rótulo, 170 pedidos con p50 0,5 días y p90 0,8;
+  Por armar, 35 con p90 0,9. Casi todo sale el mismo día o al siguiente: un
+  día de reparto entero ya es anormal. Los 7 que pasaban de un día tenían
+  entre 106 y 135 días (junio y julio, sin gestión): por eso el corte de 30
+  días los manda a la asesora.
+- **Por despachar:** 74 pedidos, todos «Listo para asignar» de Grupo GF, con
+  p50 2,2 días, p75 3,9 y p90 6,3, **ninguno en una caja** y solo 6 con
+  solicitud de Grupo GF. Lo armado hoy entra en la caja del día siguiente: un
+  día de reparto entero sin caja es que se quedó.
+- **En curso con Grupo GF:** 248 «En reparto», todas en una caja `in_custody`
+  de un día que pasó. De lo que el motorizado recogió entre el 09 y el
+  29-10-2026 (592 paradas), el 30 % se reportó en 48 h, el 62 % en 72 h y
+  luego casi nada (66 % en 96 h, 67 % en 7 días; 15 % nunca): pasadas ~72 h el
+  reporte ya no llega solo. Dos días de reparto enteros después del día de la
+  caja ≈ 72 h.
+- **En curso con courier externo:** de dispatched a entregado en los últimos 60
+  días, Aliclik p50 1,1 · p90 2,2 · p95 3,9 días; Urpi p90 2,0 · p95 2,6;
+  Swayp p90 2,0 · p95 5,2. Tres días de reparto enteros dejan fuera lo normal
+  (≈ p95). Tanders no sirve de muestra (su «entregado» llega con la
+  constancia, p50 36 días) y desde el 26-10-2026 no crea guías (§9): manda su
+  regla de liberación al día hábil siguiente.
+- **«Entregado» sin cerrar:** 24 guías de Tanders `en_ruta` con
+  `reported_status = DELIVERED` y el pedido En curso, de 7 a 59 días.
+
+**Cómo lee, sin cargar la base (08-11-2026).** No hay consultas nuevas por
+fila ni migración. Todo sale de lo que Repro Lima ya lee
+(`loadLimaPending`, `lib/repro-lima-pending-access.ts`): `order_master` por
+tienda, cobertura y macroetapa (`order_master_store_coverage_idx`) con una
+columna más (`dispatch_scheduled_on`); y la lectura de `shipments` de «Sale a
+reparto» (por `order_id` en lotes, `shipments_order_idx`) ampliada a lo En
+curso que no estaba en una caja vigente (≈ 340 pedidos más el 08-11-2026), con
+sus ítems de caja (`dispatch_item_active_shipment_uniq`) y cajas por `id`. De
+ahí, por pedido (`LimaPendingOps`): los couriers de sus salidas vivas, el
+último `reported_status`, si alguna ya la da por entregada y su última caja de
+Grupo GF. La regla es pura: `limaStuck`, `limaStuckItems`, `limaStuckCounts`.
+
+Implementación: `lib/lima-stuck.ts`, `lib/repro-lima-pending.ts`
+(`LimaPendingOps`, `scheduledOn`), `lib/repro-lima-pending-access.ts`,
+`components/lima-stuck-tray.tsx` y `components/repro-lima-board.tsx`. Pruebas
+en `test/lima-stuck.test.ts`.
+
 ## 10. Provincia COD y Aliclik
 
 - Aliclik es la primera recomendación.
@@ -11107,6 +11223,10 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   `shalom_pro_manual` con su QR, el relleno de la salida «por definir» y el
   `guide_created` en la línea de tiempo. Desde ahí el rastreo de cada media
   hora mueve el estado y encola los avisos, como con cualquier guía.
+- **También el pedido con una guía muerta** (08-11-2026): el que tiene una guía
+  viva de Shalom que Shalom confirmó que no conoce vuelve a ser candidato, y la
+  guía que se le encuentra la reemplaza. Ver «La guía muerta y la que se creó a
+  mano en su lugar», más abajo.
 - **Por qué tiene cron propio** (10-10-2026). Nació como un paso de
   `shalom-reconcile`, detrás del rastreo y del relleno del OSE ID, con la hora
   límite contada desde que entraba la petición. El listado es lento —Shalom
@@ -11279,6 +11399,8 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
     (`codigosCorregidos`), cuántas guías no están (`guiasDesconocidas`) y, por
     cuenta, cuáles (`codigos`).
 - **El rastreo pregunta primero por la que lleva más tiempo sin contestar.**
+  (Sustituido el 08-11-2026: la fila va por cuándo se **preguntó**, abajo en
+  «La fila del rastreo y la guía que Shalom no reconoce».)
   Cada pasada de media hora conseguía respuesta para las primeras ~75-120 de
   ~460 guías vivas, y la fila iba por `updated_at`, que mueve **cualquier**
   cambio de la fila: corregir el código mandó a #KP137651 al final, a ~2,5 h
@@ -11316,6 +11438,139 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   - sin código ni OSE ID **no se pregunta**: el número solo siempre vuelve
     rechazado («falta codigo»). Era la salida de mentira de un estado
     atestiguado (`MOM-KP123525-SHALOM-…`), que gastaba cupo en cada pasada.
+
+#### La fila del rastreo y la guía que Shalom no reconoce (decidido el 08-11-2026)
+
+- **El caso.** La bitácora de cada pasada de media hora decía lo mismo:
+  `{"vivas":367,"sinIdentificador":5,"preguntadas":250,"reported":179,
+  "failed":71,"cortadoPor":"tiempo"}`, con los 71 rechazos `not_found: No se
+  encontró la orden de servicio.` (muestra: 90172429). La fila iba por
+  `last_report_at` —cuándo **contestó** Shalom—, y una guía que Shalom no
+  encuentra nunca contesta: no se movía nunca. Las mismas 71 encabezaban la
+  fila en cada pasada, se comían un tercio del cupo, y lo que no entraba en los
+  90 s eran justo las que más se habían movido —las en tránsito, las que
+  importan—. Entre las 71: guías de agosto a octubre y 38 guías recreadas el
+  03-11-2026 tras el corte de luz de Shalom Breña, cuyas cajas nunca se dejaron
+  en la agencia: Shalom las venció. Medido el 08-11-2026: 38 salidas de Shalom
+  armadas y sin ruta («Listo para asignar», en la Mesa de despacho) con el
+  rastreo sin respuesta desde el 03-11, y solo 4 de las 71 en Almacén.
+- **La fila va por cuándo se preguntó** (`shipments.shalom_checked_at`, 0321).
+  Se sella en **toda** guía preguntada: contestó (cambiara o no), Shalom no la
+  encontró, la rechazó por otra cosa, no volvió en la respuesta o el lote cayó
+  entero. Solo un 429 no sella, porque ese lote se repite. La nunca preguntada
+  va primero; después, la que hace más que no se pregunta. Con ~362 guías con
+  cómo preguntar y ~250 por pasada, **cada guía se pregunta al menos cada dos
+  pasadas** y ninguna más que otra.
+- **`last_report_at` no cambia de sentido**: sigue siendo cuándo contestó
+  Shalom, y solo se escribe en las que contestaron. Lo leen Cotejar Shalom
+  («el rastreo nunca contestó», arriba) y la ficha.
+- **La racha de `not_found`** (`shalom_not_found_since`,
+  `shalom_not_found_count`, 0321): cada `not_found` suma uno y guarda desde
+  cuándo; una respuesta de verdad la borra; otro rechazo («falta codigo», el
+  lote caído) no la toca, porque no dice si Shalom conoce la guía.
+- **«Guía Shalom no reconocida»** con **6 consultas `not_found` seguidas y 24 h**
+  desde la primera, las dos a la vez (`lib/shalom/check-queue.ts`): seis
+  seguidas en una tarde de caída de Shalom no bastan, y una sola pasada tras
+  días sin preguntar tampoco. Es un **motivo, no un estado**: no cambia
+  `delivery_status`, `pickup_state`, la custodia ni la macroetapa, y **Kapta no
+  anula ni recrea la guía** por su cuenta: solo la anula al registrar la guía
+  que la reemplaza (abajo, «La guía muerta y la que se creó a mano en su
+  lugar»). Se ve en tres sitios:
+  - **Almacén** (§6.2): la caja por armar se marca detenida aunque sea de hoy y
+    dice el motivo y qué hacer, antes que cualquier otra razón;
+  - **Mesa de despacho**, en «Paquetes sin ruta»: la chapa ámbar «Guía Shalom no
+    reconocida» y la misma línea debajo (es donde estaban las 38 de Breña);
+  - **la línea de tiempo del pedido**, una vez por racha: el `guide_check`
+    («Guía revisada con Shalom») que ya usa Cotejar Shalom, fuente `shalom`,
+    sin persona, con `payload.motivo = rastreo_no_reconoce`, `payload.desde` (el
+    primer `not_found` de la racha) y `payload.consultas`, y la nota «Rastreo de
+    Shalom: guía Shalom no reconocida: el rastreo no encuentra la guía … desde
+    el … (N consultas seguidas). Si la caja salió con otra guía hecha en Shalom
+    Pro, regístrala en «Ya la creé en Shalom Pro» (Cotejar Shalom también la
+    busca); si no salió, Shalom la venció: genera una guía nueva antes de
+    llevarla. Kapta solo la anula al registrar la que la reemplaza.».
+    Si Shalom vuelve a contestar y después la pierde otra vez, es otra racha y
+    avisa otra vez; la misma racha, no.
+  La línea dice lo que se sabe: que el rastreo no la encuentra.
+- **La bitácora y la respuesta** del cron dicen por qué columna va la fila
+  (`fila`: `shalom_checked_at`, o `last_report_at` si falta la 0321), cuántas
+  preguntadas ya son no reconocidas (`noReconocidas`) y cuántas se dejaron ahora
+  en la línea de tiempo (`noReconocidasAvisadas`).
+- **Sin la 0321** el código funciona como antes: la fila vuelve a
+  `last_report_at`, solo se sellan las que contestaron, y Almacén y la Mesa de
+  despacho no marcan ninguna. Los tres sellos no mueven `shipments.updated_at`
+  (como `api_report_at`, §19.1 y 0204): si no, cada guía que no contesta
+  dejaría su pedido desfasado en cada pasada y el Master lo recalcularía para
+  nada.
+
+#### La guía muerta y la que se creó a mano en su lugar (decidido el 08-11-2026)
+
+- **El caso.** #KP201035 tiene en Kapta la guía 102321353 (código HWND), creada
+  por API el 01-11-2026, y el rastreo contesta `not_found` por ella. En Shalom
+  Pro hay **otra** guía para la misma clienta (DNI 41059706): 102371814, código
+  W9NH, creada a mano el 04-11, ya «En destino». En Kapta no estaba en ningún
+  sitio: **la caja sí salió**, con una guía que Kapta no rastreaba ni avisaba.
+  Lo mismo, casi seguro, en las 38 guías recreadas tras el corte de luz de
+  Shalom Breña (#KP201550, #KP201760, #KP201298 entre ellas) y en guías que
+  vencieron antes.
+- **Por qué no se arreglaba solo.** Cotejar Shalom solo buscaba pedidos sin
+  salida viva de Shalom, y la guía muerta sigue `pendiente`. Y «Ya la creé en
+  Shalom Pro» se negaba —«El pedido ya tiene una salida activa… Anúlala antes»—,
+  y anularla pasa por Shalom, que no puede borrar lo que ya no tiene.
+- **Guía muerta.** Una guía **viva** de Shalom (`pendiente`, `en_ruta` o
+  `por_preparar`, que no sea una salida «por definir») con la racha de «Guía
+  Shalom no reconocida» de arriba: **6 consultas `not_found` seguidas y 24 h**
+  (`isConfirmedDeadShalomGuide`, `lib/shalom/dead-guide.ts`). Sin la 0321
+  ninguna guía es muerta y todo queda como antes.
+- **Cotejar Shalom la reemplaza, con las mismas reglas.** El pedido con **una**
+  guía muerta y ninguna otra salida viva vuelve a ser candidato, esté en la
+  etapa que esté salvo finalizado. Se le busca la guía en el listado con las
+  reglas de siempre (mismo DNI, o mismo celular y un nombre en común; una sola
+  guía posible; ningún otro pedido de la clienta que la discuta; una guía que
+  ya está en Kapta no se toca), con dos cambios:
+  - **la ventana** empieza un día antes de la creación de la guía muerta —la
+    que la reemplaza es posterior— y termina 45 días después de lo último
+    entre el pedido y la muerta (`guideInCandidateWindow`);
+  - si el listado trae **la propia guía muerta con otro código**, no está
+    muerta: es un código mal puesto (el caso #KP137651, arriba), y no se
+    reemplaza (`deadGuideListingConflict`). Con el mismo código, no estorba.
+  Y la guía muerta **no se espera en el listado** al medir si está entero: si
+  Shalom ya no la tiene, no es que el listado venga cortado.
+- **El reemplazo, por el camino único** (`registerExistingShalomGuide` con
+  `replaceDead`, `lib/shalom/register-guide.ts`), en este orden:
+  1. Se relee la guía muerta y se comprueba otra vez que siga viva y muerta.
+  2. **Se anula en Kapta** con la misma forma que «Anular guía Shalom», sin
+     llamar a Shalom: si se había escrito encima de una salida «por definir»
+     (las 38 de Breña), la salida vuelve a «por definir» —misma caja, mismo QR,
+     misma preparación— y además se le borran los sellos y la racha del rastreo;
+     si no, `anulado` (`closed`, sin `pickup_state`). La escritura exige el
+     número y el estado leídos.
+  3. **Se registra la guía del listado** con su código (y su clave si el
+     listado la comprobó), como cualquier guía de Cotejar Shalom: si la muerta
+     era una salida rellenada, la nueva se escribe encima de esa misma salida.
+     El rastreo la pregunta en su pasada siguiente.
+  4. En la línea de tiempo, un `guide_cancelled` («Guía anulada», fuente
+     `shalom`) con la nota «Guía Shalom 102321353 (código HWND) no existe en
+     Shalom (no encontrada en el rastreo); reemplazada por la guía 102371814
+     creada en Shalom Pro (Cotejar Shalom).» y `payload.motivo =
+     guia_no_existe_en_shalom`, y después el `guide_created` de la nueva, que
+     dice «Reemplaza a la guía 102321353, que no existe en Shalom.».
+  Si registrar la nueva falla después de anular la muerta, la muerta vuelve a
+  como estaba: **una guía muerta sin reemplazo no se toca**, solo se ve.
+  Cotejar Shalom reemplaza solo la guía que cotejó (`replaceDead.only`).
+- **El drawer no bloquea.** Con una guía muerta, «Ya la creé en Shalom Pro» se
+  deja usar y dice en ámbar «La guía Shalom … no existe en Shalom (el rastreo no
+  la encuentra). Si la caja salió con otra guía creada en Shalom Pro,
+  regístrala en «Ya la creé en Shalom Pro»: Kapta anula la que no existe y deja
+  la nueva en su lugar, en el mismo paso.». Al registrar, mismo camino y misma
+  nota sin «(Cotejar Shalom)», con el nombre de quien la registró. «Crear guía»
+  por API sigue frenado («La guía Shalom … no existe en Shalom: si la caja salió
+  con otra guía, regístrala en «Ya la creé en Shalom Pro».»): la muerta se
+  reemplaza con la que lleva la caja, no con una tercera. Con cualquier otra
+  salida viva, todo sigue como antes.
+- **La respuesta de `/api/cron/shalom-cotejo`** dice cuántos candidatos tenían
+  guía muerta (`conGuiaMuerta`) y cuántos vinculados la reemplazaron
+  (`reemplazados`); en `detalle`, `resultado: "reemplazado"` con `reemplaza`.
 
 #### Por qué «Crear guía» no se deja pulsar (decidido el 06-11-2026)
 

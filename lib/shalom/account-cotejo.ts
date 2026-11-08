@@ -23,6 +23,15 @@
 // las manuales que el rastreo nunca contestó (paso 3c); a la que el listado ni
 // siquiera trae le deja un aviso en la línea de tiempo, una sola vez.
 //
+// LA GUÍA MUERTA (08-11-2026). Un pedido cuya guía viva de Shalom el rastreo
+// confirmó que Shalom no conoce («Guía Shalom no reconocida», 0321) vuelve a
+// ser candidato aunque tenga esa salida viva: se le busca en el listado la guía
+// que de verdad lleva la caja, con las mismas reglas (lib/shalom/account-match.ts).
+// Si aparece sin duda, se registra por el camino del drawer, que anula la
+// muerta en el mismo paso (`replaceDead`, lib/shalom/register-guide.ts). Si no,
+// la muerta no se toca: solo se ve. Y una guía muerta no se espera en el
+// listado al medir si está entero (paso 2).
+//
 // SERVER-ONLY: usa el cliente admin, la sesión de Shalom Pro de la tienda y la
 // clave de cifrado.
 
@@ -68,6 +77,9 @@ import {
   registerExistingShalomGuide,
   type ExistingGuideOrder,
 } from "@/lib/shalom/register-guide";
+import { SHALOM_UNRECOGNIZED_PASSES, shalomCheckColumnsMissing } from "@/lib/shalom/check-queue";
+import { isConfirmedDeadShalomGuide, type DeadGuideCandidate } from "@/lib/shalom/dead-guide";
+import type { DeadGuideRef } from "@/lib/shalom/account-match";
 import { readWithFreshSession, SHALOM_STORE_COLUMNS, type StoreShalom } from "@/lib/shalom/session";
 
 const DAY_MS = 86_400_000;
@@ -95,7 +107,9 @@ const DETAIL_MAX = 40;
 
 export interface CotejoDetail {
   pedido: string;
-  resultado: "vinculado" | "ambiguo" | "sin_pareja" | "por_tope" | "error";
+  resultado: "vinculado" | "reemplazado" | "ambiguo" | "sin_pareja" | "por_tope" | "error";
+  /** La guía muerta que la vinculada reemplazó. */
+  reemplaza?: string;
   guia?: string;
   via?: ShalomCotejoVia;
   /** Vinculada con su clave de recojo guardada. Solo el sí o el no. */
@@ -173,7 +187,11 @@ export interface CotejoAccountReport {
 
 export interface ShalomCotejoReport {
   candidatos: number;
+  /** De los candidatos, los que tienen una guía muerta que reemplazar. */
+  conGuiaMuerta: number;
   vinculados: number;
+  /** De los vinculados, los que reemplazaron una guía muerta (anulada en el mismo paso). */
+  reemplazados: number;
   ambiguos: number;
   sinPareja: number;
   /** Parejas seguras que esperan a la pasada siguiente por el tope. */
@@ -194,6 +212,8 @@ export interface ShalomCotejoReport {
 interface CandidateRow extends ExistingGuideOrder {
   order_created_at: string | null;
   payment_state: string | null;
+  /** La guía muerta que se le busca reemplazar, con su salida. */
+  replacing?: (DeadGuideRef & { shipmentId: string }) | null;
 }
 
 const ORDER_COLUMNS =
@@ -258,6 +278,93 @@ async function loadCandidates(admin: SupabaseClient, errores: string[]): Promise
     }
   }
   return rows.filter((r) => !blocked.has(r.order_id));
+}
+
+/** Las guías muertas vivas y los pedidos que se pueden cotejar por ellas. */
+interface DeadCandidates {
+  candidates: CandidateRow[];
+  /** Todas las guías muertas vivas: el listado no tiene por qué traerlas. */
+  deadCodes: Set<string>;
+}
+
+/**
+ * Los pedidos con una guía viva de Shalom que el rastreo confirmó que Shalom no
+ * conoce (lib/shalom/dead-guide.ts). Uno por pedido y solo con UNA muerta y
+ * ninguna otra salida viva: con dos no se sabe cuál reemplaza la del listado.
+ * El pedido no tiene que estar en «Por generar rótulo» —la caja suele estar ya
+ * armada o lista—, pero no si está finalizado. Sin la 0321, ninguno.
+ */
+async function loadDeadCandidates(admin: SupabaseClient, errores: string[]): Promise<DeadCandidates> {
+  const empty: DeadCandidates = { candidates: [], deadCodes: new Set() };
+  const { data, error } = await admin
+    .from("shipments")
+    .select(
+      "id,order_id,store_id,courier,guide_code,shalom_codigo,delivery_status,created_via,custody_state," +
+        "custody_transferred_at,created_at,shalom_not_found_since,shalom_not_found_count",
+    )
+    .eq("courier", "shalom")
+    .in("delivery_status", [...ACTIVE_GUIDE_STATUSES])
+    .not("order_id", "is", null)
+    .not("guide_code", "is", null)
+    .gte("shalom_not_found_count", SHALOM_UNRECOGNIZED_PASSES)
+    .limit(1000);
+  if (error) {
+    if (!shalomCheckColumnsMissing(error)) errores.push(`guías que no existen en Shalom: ${error.message}`);
+    return empty;
+  }
+  const dead = ((data ?? []) as unknown as (DeadGuideCandidate & {
+    order_id: string;
+    store_id: string;
+    guide_code: string;
+    shalom_codigo: string | null;
+    created_at: string | null;
+  })[]).filter((g) => isConfirmedDeadShalomGuide(g));
+  if (!dead.length) return empty;
+  const deadCodes = new Set(dead.map((g) => guideCodeKey(g.guide_code)));
+
+  const byOrder = new Map<string, typeof dead>();
+  for (const g of dead) byOrder.set(g.order_id, [...(byOrder.get(g.order_id) ?? []), g]);
+  const single = [...byOrder.entries()].filter(([, gs]) => gs.length === 1).map(([id, gs]) => [id, gs[0]!] as const);
+  const deadByOrder = new Map(single);
+
+  const out: CandidateRow[] = [];
+  for (const part of chunks([...deadByOrder.keys()])) {
+    const [{ data: orders, error: orderErr }, { data: ships, error: shipErr }] = await Promise.all([
+      admin.from("order_master").select(`${ORDER_COLUMNS},macro_stage`).in("order_id", part),
+      admin
+        .from("shipments")
+        .select("id,order_id,courier,delivery_status,created_via,custody_state,custody_transferred_at")
+        .in("order_id", part),
+    ]);
+    if (orderErr || shipErr) {
+      // Sin saber qué salidas tienen, ninguno de este tramo es candidato.
+      errores.push(`pedidos con guía que no existe en Shalom: ${(orderErr ?? shipErr)!.message}`);
+      continue;
+    }
+    const otherLive = new Set<string>();
+    for (const s of (ships ?? []) as {
+      id: string;
+      order_id: string;
+      courier: string;
+      delivery_status: string;
+      created_via: string | null;
+      custody_state: string | null;
+      custody_transferred_at: string | null;
+    }[]) {
+      if (s.id === deadByOrder.get(s.order_id)?.id) continue;
+      if (ACTIVE_GUIDE_STATUSES.has(s.delivery_status) && !isFillableRouteOutput(s)) otherLive.add(s.order_id);
+    }
+    for (const o of (orders ?? []) as (CandidateRow & { macro_stage: string | null })[]) {
+      const g = deadByOrder.get(o.order_id);
+      if (!g || otherLive.has(o.order_id) || o.macro_stage === "finalizado") continue;
+      const { macro_stage: _stage, ...row } = o;
+      out.push({
+        ...row,
+        replacing: { shipmentId: g.id, guideCode: g.guide_code, codigo: g.shalom_codigo, createdAt: g.created_at },
+      });
+    }
+  }
+  return { candidates: out, deadCodes };
 }
 
 /** Una guía manual viva de Kapta, con lo que hace falta para darle su clave. */
@@ -711,6 +818,7 @@ function toCotejoOrder(
     phone: phoneKey(o.customer_phone),
     document: docs.get(o.order_id) ?? null,
     candidate,
+    replacing: candidate && o.replacing ? o.replacing : null,
   };
 }
 
@@ -732,7 +840,9 @@ export async function cotejarShalom(
 ): Promise<ShalomCotejoReport> {
   const report: ShalomCotejoReport = {
     candidatos: 0,
+    conGuiaMuerta: 0,
     vinculados: 0,
+    reemplazados: 0,
     ambiguos: 0,
     sinPareja: 0,
     porTope: 0,
@@ -744,8 +854,11 @@ export async function cotejarShalom(
     detalle: [],
     errores: [],
   };
-  const candidates = await loadCandidates(admin, report.errores);
+  const waiting = await loadCandidates(admin, report.errores);
+  const dead = await loadDeadCandidates(admin, report.errores);
+  const candidates = [...waiting, ...dead.candidates];
   report.candidatos = candidates.length;
+  report.conGuiaMuerta = dead.candidates.length;
   const manual = await loadManualGuides(admin, report.errores);
   const keyless = (m: ManualGuideRow) => !m.hasKey;
   // Una guía recién registrada todavía no tuvo pasada del rastreo: se le da el
@@ -822,10 +935,12 @@ export async function cotejarShalom(
       const fromIso = `${desde}T00:00:00Z`;
       const known = await loadKnownApiGuides(admin, group.storeIds, fromIso);
       const lagLimit = Date.now() - COVERAGE_LAG_MS;
+      // Una guía que el rastreo confirmó que Shalom no conoce no tiene por qué
+      // estar en el listado: no cuenta como «falta» (08-11-2026).
       const expected = known
         .filter((k) => {
           const t = Date.parse(k.created_at);
-          return t >= Date.parse(fromIso) + DAY_MS && t <= lagLimit;
+          return t >= Date.parse(fromIso) + DAY_MS && t <= lagLimit && !dead.deadCodes.has(guideCodeKey(k.guide_code));
         })
         .map((k) => k.guide_code);
       account.cobertura = listingCoverage(guides, expected);
@@ -965,6 +1080,8 @@ export async function cotejarShalom(
         const res = await registerExistingShalomGuide(admin, row, normalized.value, {
           actor: null,
           onlyIfNew: true,
+          // La guía muerta que se cotejó, y solo esa, se anula en el mismo paso.
+          ...(row.replacing ? { replaceDead: { only: row.replacing.shipmentId } } : {}),
           cotejo: {
             motivo: via === "dni" ? "mismo DNI" : "mismo celular y nombre",
             payload: {
@@ -972,6 +1089,7 @@ export async function cotejarShalom(
               listado_id: guide.listingId,
               guia_creada_en_shalom: guide.createdAt,
               clave_del_listado: Boolean(pickupCode),
+              ...(row.replacing ? { reemplaza: row.replacing.guideCode } : {}),
             },
           },
         });
@@ -984,7 +1102,12 @@ export async function cotejarShalom(
         const clave = Boolean(pickupCode) && !res.keyWarning;
         if (pickupCode && res.keyWarning) report.errores.push(`${pedido}: la clave del listado no se pudo guardar`);
         report.vinculados += 1;
-        pushDetail(report, { pedido, resultado: "vinculado", guia: guide.guia, via, clave });
+        if (res.replaced.length) {
+          report.reemplazados += 1;
+          pushDetail(report, { pedido, resultado: "reemplazado", guia: guide.guia, via, clave, reemplaza: res.replaced.join(", ") });
+        } else {
+          pushDetail(report, { pedido, resultado: "vinculado", guia: guide.guia, via, clave });
+        }
       }
     } catch (e) {
       skip(describeShalomError(e));
