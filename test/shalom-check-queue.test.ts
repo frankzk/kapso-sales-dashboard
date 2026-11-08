@@ -277,10 +277,11 @@ describe("la 0321, el MOM y DEPLOY", () => {
     expect(mom).toContain("Kapta no anula ni recrea la guía");
   });
 
-  it("DEPLOY: la entrada de la 0321 va primero y la migración no se aplica sola", () => {
+  it("DEPLOY: la entrada de la 0321 está y la migración no se aplica sola", () => {
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("\n### ");
-    expect(deploy.slice(first, first + 200)).toContain("Rastreo de Shalom: la fila va por cuándo se preguntó");
+    // Ya no es la primera: las entradas nuevas van arriba (0317 la siguió).
+    const first = deploy.indexOf("\n### 08-11-2026 · Rastreo de Shalom: la fila va por cuándo se preguntó");
+    expect(first).toBeGreaterThan(0);
     const body = flat(deploy.slice(first, deploy.indexOf("\n### ", first + 10)));
     expect(body).toContain("psql \"$DATABASE_URL\" -f db/migrations/0321_shalom_checked_at.sql");
     expect(body).toContain("Se puede desplegar **antes** de aplicarla");

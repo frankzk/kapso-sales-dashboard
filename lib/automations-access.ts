@@ -43,7 +43,7 @@ import {
 } from "@/lib/automations-catalog";
 import { loadPrepaySettings } from "@/lib/prepay-list-server";
 import { loadChatbyApproxView, type ChatbyApproxView } from "@/lib/chatby-approx-server";
-import { loadChatbyAskModeView, type ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
+import { loadChatbyAskModeView, loadChatbyHistoryModeView, type ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
 import { parsePrepaySimulationSummary, type PrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import {
   GEOCODE_KEY_MISSING,
@@ -153,6 +153,8 @@ export interface AutomationsOrgView {
   chatbyApprox: ChatbyApproxView;
   /** «Pedir sola la dirección o la ubicación» de Chatby (0318). */
   chatbyAsk: ChatbyAskModeView;
+  /** «Guía automática para clientas con entregas» de Chatby (0317). */
+  chatbyHistory: ChatbyAskModeView;
   org: Record<string, OrgSwitchView>;
   /** Interruptores de tienda; `null` si no se pudieron leer las tiendas. */
   store: Record<string, StoreSwitchView[]> | null;
@@ -205,7 +207,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
   const storeColumns = ["id", "name", "status", ...STORE_AUTOMATION_COLUMNS, "aliclik_enabled", "telegram_chat_id"];
   const storesQuery = admin.from("stores").select(storeColumns.join(",")).eq("org_id", orgId).order("name");
 
-  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes, prepay, chatbyApprox, chatbyAsk] = await Promise.all([
+  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes, prepay, chatbyApprox, chatbyAsk, chatbyHistory] = await Promise.all([
     storesQuery,
     loadRetry(admin, orgId, today, yesterday),
     loadOrgSwitches(admin, orgId),
@@ -221,6 +223,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     loadPrepayAuto(admin, orgId),
     loadChatbyApproxView(admin, orgId),
     loadChatbyAskModeView(admin, orgId),
+    loadChatbyHistoryModeView(admin, orgId),
   ]);
 
   const allStores = storesRes.error ? [] : ((storesRes.data ?? []) as unknown as StoreRow[]);
@@ -330,6 +333,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
   if (prepay.error) errors.push(prepay.error);
   if (chatbyApprox.error) errors.push(chatbyApprox.error);
   if (chatbyAsk.error) errors.push(chatbyAsk.error);
+  if (chatbyHistory.error) errors.push(chatbyHistory.error);
   errors.push(...orgSwitches.errors);
 
   // El nombre de la tienda en el registro de los reintentos.
@@ -343,6 +347,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     prepay,
     chatbyApprox,
     chatbyAsk,
+    chatbyHistory,
     org: orgSwitches.view,
     store,
     readonly,
