@@ -712,6 +712,46 @@ export function evaluateChatbyConfirmation(input: {
   return { confirm: true, messageId: message.id, at: message.at, amountCents };
 }
 
+/**
+ * ¿La clienta pulsó el botón «Confirmar pedido» de ESTE pedido? Devuelve la hora
+ * del último botón así, o null (owner, 08-11-2026; MOM §6.1 y §42.10).
+ *
+ * NO CONFIRMA NADA: el botón solo no dice el monto, que paga al recibir ni la
+ * dirección, y por eso `evaluateChatbyConfirmation` no lo cuenta (01-11-2026).
+ * Se anota en `chatby_auto_checks.evidence.boton_confirmar_at` para que el
+ * equipo (y el agente de IA) encuentre a las clientas que dijeron que sí con el
+ * botón y todavía no mandaron su mensaje: una llamada corta las confirma.
+ *
+ * Es de este pedido si es de después de crearse (con el mismo margen de media
+ * hora), el botón no nombra otro pedido y el último mensaje del bot o del equipo
+ * antes del botón tampoco: con dos pedidos en el mismo chat, el botón de la
+ * plantilla del otro no cuenta. PURA.
+ */
+export function chatbyConfirmButtonAt(messages: readonly ChatbyMessage[], orderName: string, orderCreatedAt: string): string | null {
+  const since = Date.parse(orderCreatedAt) - BEFORE_ORDER_MARGIN_MS;
+  if (!Number.isFinite(since)) return null;
+  const timed = messages
+    .map((m) => ({ m, at: m.at ? Date.parse(m.at) : NaN }))
+    .filter((x) => Number.isFinite(x.at))
+    .sort((a, b) => a.at - b.at);
+  let found: string | null = null;
+  for (let i = 0; i < timed.length; i++) {
+    const { m, at } = timed[i]!;
+    if (at < since || m.kind !== "cliente" || !m.button || !saysConfirm(m.text) || namesAnotherOrder(m.text, orderName)) continue;
+    let prompt: ChatbyMessage | null = null;
+    for (let j = i - 1; j >= 0; j--) {
+      const p = timed[j]!.m;
+      if (p.kind === "bot" || p.kind === "equipo") {
+        prompt = p;
+        break;
+      }
+    }
+    if (prompt && namesAnotherOrder(prompt.text, orderName)) continue;
+    found = m.at;
+  }
+  return found;
+}
+
 // ---------------------------------------------------------------------------
 // Lo que se escribe
 // ---------------------------------------------------------------------------

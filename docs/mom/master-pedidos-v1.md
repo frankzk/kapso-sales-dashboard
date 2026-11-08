@@ -753,6 +753,17 @@ se creó**.
   `sin_ubicacion`, y `direccion_incompleta` cuando se le pide la ubicación
   desde la ficha: más abajo). Sin un mensaje de confirmación (todavía no
   escribió) no se escribe nada.
+- **El botón «Confirmar pedido» se anota, pero no confirma** (08-11-2026). Si
+  la clienta solo pulsó el botón de la plantilla y no mandó su mensaje, el
+  pedido sigue como «sin confirmación» (la regla de arriba no cambia: el botón
+  no dice el monto, que paga al recibir ni la dirección). La pasada anota la
+  hora del último botón de **este** pedido en
+  `chatby_auto_checks.evidence.boton_confirmar_at` (`chatbyConfirmButtonAt`):
+  de después de creado el pedido, que no nombra otro pedido, y cuya plantilla
+  (el último mensaje del bot o del equipo antes del botón) tampoco. Sirve para
+  encontrar a esas clientas y cerrarlas con una llamada corta: el agente de IA
+  las lista con `listar_pedidos` (§42.10). Si el botón sale de los últimos 20
+  mensajes que trae Chatby, la marca se pierde en la lectura siguiente.
 - **Solo sale de Por confirmar con la guía creada** (owner, 02-11-2026). Al
   principio la pasada confirmaba y creaba la guía después; las 14 primeras
   confirmaciones (01-11) salieron a Preparación y ninguna guía se pudo crear
@@ -25090,6 +25101,7 @@ con un interruptor Apagado / Simulación / Activo y frenos que pone Kapta
 | Herramienta | Permiso | Qué devuelve |
 | --- | --- | --- |
 | `buscar_pedidos` | `pedidos.leer` | Hasta 20 pedidos (10 si no se dice) por número, teléfono (sus últimos 9 dígitos), nombre del cliente o guía (también la de Swayp), del último movimiento más reciente al más antiguo, con tienda, total, estado, etapa y subetapa. |
+| `listar_pedidos` | `pedidos.leer` | Los pedidos de una etapa del Master, por páginas de hasta 50 con el total, filtrados por subetapa, cobertura, tienda y lo que dijo la clienta en Chatby (§42.10). |
 | `obtener_pedido` | `pedidos.leer` | Productos y cantidades, importes y moneda, forma y estado de pago, entrega (modalidad, cobertura, destino y dirección), estado del Master (etapa y subetapa con su nombre de pantalla, motivos, courier, fechas de despacho, entrega y devolución), hasta 20 guías y los últimos 10 movimientos. |
 | `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. Aparte, en `chatby`, los últimos 20 mensajes con el bot de confirmación Chatby (§25), con autor cliente, bot, equipo o nota interna: ahí confirman muchas clientas, y sin ellos el agente decía «sin confirmar» de pedidos ya confirmados (08-11-2026). Si Kapso falla pero Chatby contesta, devuelve lo de Chatby. No marca nada como leído. |
 | `consultar_politicas` | `politicas.leer` | **Calculadas:** el adelanto mínimo de los envíos por agencia (S/ 20, `lib/adelanto-minimo.ts`) y, si se da el distrito, su cobertura según `order_coverage_for` el **día de Lima** (contraentrega o agencia con adelanto); si la base no contesta, «por revisar»: no afirma una cobertura que no se pudo calcular. **Escritas:** las políticas de la tienda vigentes ese día (§42.6). |
@@ -25355,3 +25367,45 @@ los frenos), `lib/agent-actions-server.ts` (permisos, Kapso y Aliclik),
 `app/dashboard/automatizaciones/conector/actions.ts`. Pruebas:
 `test/agent-actions.test.ts`, `test/agent-connector.test.ts`,
 `test/agent-connector-mom.test.ts` y `scripts/sql/agent_actions_smoke.sql`.
+
+### 42.10 Listar una etapa y lo que dijo Chatby (08-11-2026)
+
+**Por qué.** El owner le pidió a Grok: «tengo 257 pedidos en "Por confirmar",
+dame el listado de 50 pedidos con confirmación expresa para procesarlos de una
+vez». `buscar_pedidos` solo busca por texto y de a 20, así que Grok encontró 2 y
+pidió una búsqueda paginada por etapa y cobertura, con lo que la clienta hizo en
+Chatby.
+
+**`listar_pedidos`** (`pedidos.leer`, solo lectura):
+
+- **Qué lista.** Los pedidos de **una etapa** del Master (obligatoria), del más
+  reciente al más antiguo. Se puede acotar por subetapa (una de esa etapa),
+  cobertura (Lima, Provincia contra entrega o Agencia) y tienda.
+- **Páginas de hasta 50** (25 si no se dice), con el total y cuántas páginas
+  hay.
+- **Qué trae cada pedido:** tienda, fecha, cliente, celular, destino, total,
+  etapa, subetapa, cobertura, guía, último movimiento y lo que dijo en Chatby.
+
+**Lo que dijo en Chatby** sale de la última lectura de la confirmación
+automática (`chatby_auto_checks`, §6.1), **sin leer Chatby otra vez**:
+
+| Estado | Qué quiere decir |
+| --- | --- |
+| `confirmo_con_mensaje` | Mandó el mensaje completo de §6.1 (pedido, monto, pago en casa y dirección). O Kapta lo confirmó solo, o quedó para una persona y trae el motivo (dirección incompleta, sin ubicación, escribió algo después…). Es la «confirmación expresa». |
+| `pulso_confirmar` | Solo pulsó el botón «Confirmar pedido» y no mandó su mensaje: **no confirma**. Una llamada corta lo cierra. |
+| `rechazo` | Escribió que no lo quiere, o el equipo dejó una nota de anulación. |
+| `sin_respuesta` | No mandó su confirmación, o no tiene conversación en Chatby. |
+| `no_leido` | Kapta no lee su Chatby: Lima, Agencia o fuera de las 72 h de la confirmación automática. |
+
+Con filtro de Chatby, la etapa se mira entera y se filtra en Kapta, hasta
+**1500 pedidos**. Si hay más, el agente tiene que acotar con subetapa,
+cobertura o tienda.
+
+**Lo que no hace.** No confirma, no cambia estados y no marca nada: el agente
+entrega la lista y el equipo procesa. El estado de Chatby es el de la última
+lectura: lo que la clienta escribió después todavía no está en la lista.
+
+Código: `lib/agent-tools.ts` (`listar_pedidos`, `agentChatbyState`) y
+`lib/chatby-autoconfirm.ts` (`chatbyConfirmButtonAt`). Pruebas:
+`test/agent-list-orders.test.ts`, `test/agent-connector.test.ts` y
+`test/agent-connector-mom.test.ts`.

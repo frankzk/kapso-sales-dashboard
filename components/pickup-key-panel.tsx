@@ -14,6 +14,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { hasPositivePaymentAmount, MISSING_PAYMENT_AMOUNT } from "@/lib/payment-amount";
+import { globalPasteImage } from "@/lib/global-paste-image";
 import { cn } from "@/components/ui";
 import { GuideNumber } from "@/components/guide-number";
 import {
@@ -1072,9 +1073,7 @@ function VoucherPicker({
   // la zona de subida" antes de Ctrl+V es pedirle que sepa algo que no se ve.
   useEffect(() => {
     function onPaste(e: ClipboardEvent) {
-      const img = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith("image/"));
-      if (!img) return;
-      const f = img.getAsFile();
+      const f = globalPasteImage(e);
       if (f) {
         e.preventDefault();
         onPick(f);

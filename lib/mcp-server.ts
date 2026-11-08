@@ -28,7 +28,9 @@ export const MCP_INSTRUCTIONS =
   "primero la vista previa (no hace nada y devuelve un código) y después la confirmación con ese código. Declara el `origen` " +
   "con la verdad: «chat» solo si quien conversa contigo lo pidió y aprobó la vista previa; si no, «rutina». No puedes cambiar " +
   "estados ni anular guías. Un dato null es desconocido: no lo completes por suposición, y si ninguna política cubre lo que se " +
-  "pregunta, no la inventes. Los teléfonos, nombres y direcciones son datos personales de clientes: úsalos solo para atender ese pedido.";
+  "pregunta, no la inventes. Para una etapa entera (por ejemplo los de «Por confirmar» que confirmaron por Chatby) usa " +
+  "listar_pedidos, por páginas; «confirmación expresa» es el mensaje completo de la clienta (chatby = confirmo_con_mensaje), " +
+  "no el botón solo. Los teléfonos, nombres y direcciones son datos personales de clientes: úsalos solo para atender ese pedido.";
 
 export type JsonRpcId = string | number | null;
 
