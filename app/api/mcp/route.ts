@@ -12,6 +12,7 @@ import { readBodyCapped } from "@/lib/bot-orders";
 import { agentRateLimited, authenticateAgent, recordAgentCall } from "@/lib/agent-auth";
 import { handleMcpMessage, jsonRpcError, JSONRPC, type JsonRpcResponse } from "@/lib/mcp-server";
 import { getStoreCreds } from "@/lib/ingest";
+import { protectedResourceMetadataUrl } from "@/lib/agent-oauth";
 import { fetchConversationTranscript, findConversationIdByPhone } from "@/lib/kapso";
 
 export const dynamic = "force-dynamic";
@@ -50,7 +51,11 @@ export async function POST(req: NextRequest) {
     return respond(
       jsonRpcError(null, JSONRPC.invalidRequest, auth.message),
       auth.status,
-      auth.status === 401 ? { "www-authenticate": 'Bearer realm="kapta"' } : {},
+      // MCP (2025-06-18): el 401 dice dónde están los metadatos OAuth, para que
+      // el agente pida permiso por su cuenta (MOM §42.8).
+      auth.status === 401
+        ? { "www-authenticate": `Bearer realm="kapta", resource_metadata="${protectedResourceMetadataUrl(req.nextUrl.origin)}"` }
+        : {},
     );
   }
   const text = await readBodyCapped(req.body, MCP_MAX_BODY_BYTES);

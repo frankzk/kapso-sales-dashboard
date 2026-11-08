@@ -24564,7 +24564,8 @@ ninguna herramienta los usa y la pantalla los muestra como «Próximamente».
   Si su creador sale de la organización o deja de ver todas sus tiendas, la
   llamada contesta **403 `sin_tiendas`** y hay que crear otro.
 - **Quién no entra.** Sin token, con otro, revocado o vencido: **401 «No
-  autorizado.»**, sin decir cuál, con `WWW-Authenticate: Bearer realm="kapta"`.
+  autorizado.»**, sin decir cuál, con `WWW-Authenticate: Bearer realm="kapta", resource_metadata="…"`
+  (dónde pedir permiso por OAuth, §42.8).
   Sin la migración 0314: **503**, y la pantalla dice «Falta la migración 0314».
 - **Revocar** lo apaga en el acto; su registro queda.
 - **Tope:** **60 llamadas por minuto** por token, contadas en
@@ -24602,10 +24603,11 @@ las llamadas de las últimas 24 horas.
 
 ### 42.5 Cómo se conecta Grok
 
-- **Grok Bot:** agregar el servidor MCP por su dirección
-  (`https://<dominio>/api/mcp`) con la cabecera `Authorization: Bearer` y el
-  token guardado como secreto (la tarjeta de secreto seguro de Grok). Nunca se
-  pega en un chat.
+- **Grok Bot, con OAuth (§42.8):** agregar el conector MCP por su dirección
+  (`https://<dominio>/api/mcp`). Grok abre Kapta, la persona elige tiendas y
+  herramientas y pulsa «Permitir»; nadie copia un token. Así quedó desde el
+  08-11-2026, cuando Grok Bot guardó el token como secreto pero no tuvo cómo
+  mandarlo en la cabecera del conector.
 - **API de xAI:** en `tools`, una herramienta `{"type": "mcp"}` con
   `server_url` = esa dirección, `server_label` = `kapta` y `authorization` =
   el token.
@@ -24667,11 +24669,57 @@ sistema.
   token** tenga hoy el permiso de Kapta equivalente (por ejemplo
   `aliclik.create_guide` para la guía). Ninguna cambia estados ni anula guías.
 
-Migraciones `0314_agent_tokens.sql` y `0315_store_policies.sql`. Código:
-`lib/agent-auth.ts`, `lib/agent-tools.ts`, `lib/mcp-server.ts`,
-`lib/store-policies.ts`, `app/api/mcp/route.ts`,
-`app/dashboard/automatizaciones/conector/`, `lib/agent-tokens-access.ts`,
-`components/agent-connector-panel.tsx` y `components/store-policies-card.tsx`.
+### 42.8 Conectar con OAuth, sin copiar tokens (08-11-2026; 0319)
+
+**Por qué.** Grok Bot guardó el token de Kapta en su tarjeta de secreto, pero
+no tuvo una forma segura de ponerlo en la cabecera del conector, y le pidió al
+owner que el conector tenga OAuth: «así podré añadirlo por su dirección y tú
+aprobarás el acceso sin copiar tokens». Kapta implementa la autorización de MCP
+(especificación 2025-06-18), la que usan los clientes MCP.
+
+1. `/api/mcp` sin token contesta 401 con `WWW-Authenticate: Bearer
+   realm="kapta", resource_metadata="<origen>/.well-known/oauth-protected-resource/api/mcp"`.
+2. **Metadatos del recurso** (RFC 9728), en
+   `/.well-known/oauth-protected-resource` (y con `/api/mcp` al final): el
+   recurso es `<origen>/api/mcp` y quien autoriza es el mismo sitio.
+3. **Metadatos del servidor de autorización** (RFC 8414), en
+   `/.well-known/oauth-authorization-server`: registro, autorización y canje;
+   solo `code`, `authorization_code`, clientes públicos (`none`) y PKCE `S256`.
+   El origen es el de la petición, así que sirve con cualquier dominio de Kapta.
+4. **Registro dinámico** (RFC 7591), `POST /api/oauth/register`: el agente da
+   su nombre y sus `redirect_uris` (https, o http solo a localhost; sin
+   fragmento) y recibe un `client_id` `kcli_…` sin secreto. **Registrarse no da
+   acceso a nada.** Tope: **30 registros nuevos por hora** entre todos.
+5. **Permiso**, `/oauth/authorize`: la persona entra a Kapta (si no tenía
+   sesión, el login la devuelve a esta página) y ve quién pide y a qué dominio
+   vuelve. Elige las tiendas (las que ve, de una sola organización) y las
+   herramientas (las de lectura, marcadas las que pidió el agente), y pulsa
+   «Permitir» o «Cancelar». Hace falta `automations.manage`, como para crear
+   un token a mano. Un cliente desconocido o una `redirect_uri` que no es la
+   registrada **no redirigen nunca**: la página muestra el error. «Permitir»
+   crea un **código de un solo uso, de 10 minutos**, atado al cliente, a la
+   `redirect_uri` y al desafío PKCE, y guarda solo su sha256.
+6. **Canje**, `POST /api/oauth/token`: el código + el verificador PKCE + el
+   mismo `client_id` (y la misma `redirect_uri`) dan un **token de
+   `agent_tokens`**, igual al que se crea a mano. Ve las tiendas y usa las
+   herramientas aprobadas mientras quien aprobó las siga viendo, se registra
+   igual y aparece en la lista de Conector de IA con el nombre de la conexión,
+   donde se revoca. El código se marca usado **antes** de comprobar el resto:
+   un código robado sin su verificador se quema sin dar nada. **Si un código
+   ya usado se vuelve a presentar, se revoca el token que se dio con él.**
+
+No hay refresh token: el token no vence. Si se revoca, el agente recibe 401 y
+vuelve a pedir permiso. Por OAuth solo se dan las herramientas de lectura,
+como en la pantalla, hasta que exista la parte 3.
+
+Migraciones `0314_agent_tokens.sql`, `0315_store_policies.sql` y
+`0319_agent_oauth.sql`. Código: `lib/agent-auth.ts`, `lib/agent-tools.ts`,
+`lib/mcp-server.ts`, `lib/store-policies.ts`, `lib/agent-oauth.ts`,
+`app/api/mcp/route.ts`, `app/api/oauth/`, `app/.well-known/`,
+`app/oauth/authorize/`, `app/dashboard/automatizaciones/conector/`,
+`lib/agent-tokens-access.ts`, `components/agent-connector-panel.tsx`,
+`components/store-policies-card.tsx` y `components/oauth-consent-form.tsx`.
 Pruebas: `test/agent-connector.test.ts`, `test/store-policies.test.ts`,
-`test/agent-connector-mom.test.ts`, `scripts/sql/agent_tokens_smoke.sql` y
-`scripts/sql/store_policies_smoke.sql`.
+`test/agent-oauth.test.ts`, `test/agent-connector-mom.test.ts`,
+`scripts/sql/agent_tokens_smoke.sql`, `scripts/sql/store_policies_smoke.sql` y
+`scripts/sql/agent_oauth_smoke.sql`.

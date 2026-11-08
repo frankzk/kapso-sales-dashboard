@@ -351,4 +351,7 @@ echo "  ✅ apagado / simulación / activo y nada más; una fila de la 0301 sigu
 echo "▶ Confirmación por Chatby: pedir sola la dirección o la ubicación (0318): posición que nace apagada, sus tres valores y RLS"
 $PSQL -f "$ROOT/scripts/sql/chatby_auto_ask_smoke.sql"
 echo "  ✅ apagado / simulación / activo y nada más, nunca nulo; la ubicación aproximada (0316) no cambia; la org lee la posición y nadie la cambia desde el navegador"
+echo "▶ OAuth del conector de IA (0319): client_id con forma, código como sha256 con PKCE S256 y vencimiento corto, permisos cerrados, token con su cliente y solo el servidor"
+$PSQL -f "$ROOT/scripts/sql/agent_oauth_smoke.sql"
+echo "  ✅ client_id kcli_ y redirect_uris con rango; el código nunca en claro, desafío de 43 y a lo sumo 15 minutos; permisos de la lista cerrada; el token dice de qué cliente vino; el servidor marca usado pero no borra; el navegador no ve nada"
 echo "✅ DB verification passed."
