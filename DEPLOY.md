@@ -1,5 +1,74 @@
 # Deployment runbook
 
+### 08-11-2026 · Confirmación por Chatby: direcciones con número sin «calle» y lotes cortos cuentan como completas (sin migración, MOM §6.1)
+
+Cambio aprobado por el owner. La confirmación automática por Chatby dejó 88
+pedidos «direccion_incompleta» en 3 días (103 en los últimos 4 al cerrar el
+cambio) porque `direccionCompleta` pedía la palabra de la vía («calle», «Jr.»,
+«Av.», «Mz/Lt»…) **y** el número: «antenor orrego 341» o «Urb Quinta Tristán
+T 13» quedaban para la asesora aunque el courier las encuentra.
+
+- **Ahora también es completa** (`direccionCompleta`, `lib/chatby-autoconfirm.ts`,
+  pura): el nombre de la calle y su número sin «calle» («Sucre 116A», «Jorge
+  chavez #212», «Chile y Venezuela 154», «Pasajr los heroes 211»), y la
+  urbanización, AA.HH., APV, asociación o calle con su código corto de manzana
+  y lote («Juana Blanco b6», «Apvis Nuevo Horizonte A-20», «Ah camino del solar
+  BN 17», «MZ alote11»). La regla de antes (vía + número, o manzana y lote) no
+  cambia: nada que hoy se confirmaba deja de confirmarse.
+- **Sigue incompleta**: mercados y puestos, el cruce como dirección («Entre …
+  y …», «intersección»), «s/n» / «S N» / «sin número», la calle sola, las señas
+  sin número, lo que no es una dirección, las agencias (también «Shalon») y los
+  números que son de otra cosa: km, puesto, puerta, piso, sector, celular,
+  año, fecha, etapa, cuadras. «Magisterial III y 501» queda para la asesora.
+- **La guía no cambia**: sin ubicación de WhatsApp, la coordenada sigue
+  pidiendo el edificio en Google (`ROOFTOP`) y todas las rejas de Aliclik. Lo
+  que pase este punto y no tenga edificio queda `sin_ubicacion`, como hoy.
+- **Repaso sobre los 103** (solo lectura, la función nueva sobre
+  `order_master.address`): **42 habrían pasado** el punto de la dirección
+  (#AUR900439, #KP202490, #KP202589, #KP202598, #KP202620, #KP202669,
+  #KP202700, #KP202770, #KP202890, #KP202899, #KP202956, #KP202973, #KP202983,
+  #KP203031, #KP203043, #KP203068, #KP203083, #KP203084, #KP203087, #KP203181,
+  #KP203296, #KP203333, #KP203365, #KP203400, #KP203457, #KP203458, #KP203535,
+  #KP203575, #KP203583, #KP203619, #KP203639, #KP203644, #KP203649, #KP203656,
+  #KP203664, #KP203676, #KP203686, #KP203784, #KP203978, #KP204000, #KP204029,
+  #KP204059); 60 siguen incompletos, entre ellos todos los mercados, cruces,
+  km, «s/n», calles sin número y agencias. El #KP203824 («Av. Pedro de Osma 428
+  …») ya era completo con la regla de antes: lo detuvo la dirección del
+  mensaje. **Esos pedidos no se vuelven a leer** (`para_asesora` es final): la
+  regla vale para lo que entre desde el despliegue.
+
+**Sin migración**, sin crons ni variables. No es macro resolución:
+`MOM_RESOLUTION_VERSION` no sube y no se recalcula ninguna fila. Carga: la
+misma pasada de siempre, cada 10 minutos; solo cambia una función pura sobre
+un texto.
+
+**Qué mirar después.**
+- Los motivos de la pasada desde el despliegue: «direccion_incompleta» debería
+  bajar a cerca de la mitad, y crecer `confirmado` o `sin_ubicacion` (la guía
+  sin edificio):
+  ```sql
+  select outcome, reason, count(*) from chatby_auto_checks
+  where checked_at > now() - interval '3 days'
+  group by 1, 2 order by 3 desc;
+  ```
+- Las direcciones que quedan incompletas, para ver si alguna debió pasar o si
+  pasó alguna de mercado, km o agencia:
+  ```sql
+  select m.order_name, m.address, c.reason, c.outcome, c.checked_at
+  from chatby_auto_checks c join order_master m using (order_id)
+  where c.checked_at > now() - interval '3 days'
+    and (c.reason = 'direccion_incompleta'
+         or (c.outcome = 'confirmado' and m.address !~* '\m(calle|jr|av|avenida|psje?|pasaje|mz|lote?)\M'))
+  order by c.checked_at desc;
+  ```
+- En la guía de los confirmados nuevos, `guide_detail` dice «coordenada:
+  dirección en Google (edificio)» o «… ubicación de WhatsApp».
+
+**Marcha atrás.** Revertir el commit. `direccionCompleta` vuelve a pedir la
+vía y el número; lo ya confirmado se queda confirmado con su guía (son hechos
+escritos) y lo que entre después vuelve a quedar «direccion_incompleta». No
+escribe nada en la base.
+
 ### 08-11-2026 · Ubicación: la provincia de la web (ubigeo del formulario) manda y Kapta ya no aprende provincias equivocadas (sin migración, MOM §38.6 y §19.0.1)
 
 Cambio aprobado por el owner. El formulario de la web (WooCommerce, COD Core)
