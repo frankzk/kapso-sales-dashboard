@@ -59,7 +59,7 @@ import {
   GEOCODE_CRITERION_B,
   GEOCODE_LIMA_CAP,
   GEOCODE_REASON_LABEL,
-  GEOCODE_SMALL_SAMPLE,
+  GEOCODE_LIMA_MIN_ROOFTOP,
   geocodeLimaGate,
   type GeocodeLimaRunSummary,
   type GeocodePilotReason,
@@ -1032,7 +1032,7 @@ function LimaRunCard({ title, summary }: { title: string; summary: GeocodeLimaRu
       <div className={cn(ROW, "space-y-1 border-t border-line py-3")}>
         <p className={HELP}>
           Para encender hace falta que al menos el {GEOCODE_CRITERION_B.minShare * 100} % de los puntos con el edificio quede a{" "}
-          {GEOCODE_CRITERION_B.withinMeters} m o menos del pin que puso una persona, con al menos {GEOCODE_SMALL_SAMPLE} puntos.
+          {GEOCODE_CRITERION_B.withinMeters} m o menos del pin que puso una persona, con al menos {GEOCODE_LIMA_MIN_ROOFTOP} puntos.
         </p>
         {!gate.ok && <p className="text-[13px] text-warn-fg">{gate.reason}</p>}
         {summary.truncated && <p className={HELP}>Se cortó por tiempo antes de consultar toda la muestra.</p>}

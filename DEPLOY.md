@@ -1,5 +1,23 @@
 # Deployment runbook
 
+### 08-11-2026 · Ubicación por dirección en Lima: el mínimo de puntos «edificio» baja de 30 a 15 (sin migración, MOM §9.5)
+
+Decisión del owner con la primera medición de Lima:
+- 108 pedidos medidos; 17 con el edificio (ROOFTOP).
+- Los 17 a 300 m o menos del pin real, con una mediana de 33 m y ninguno a más de 1 km.
+- Con 7 días de pedidos y 150 consultas por día no se llega a 30.
+
+El 90 % a 300 m o menos no cambia (`GEOCODE_LIMA_MIN_ROOFTOP`). El aviso de
+muestra chica del piloto de Chatby (`GEOCODE_SMALL_SAMPLE`, 30) tampoco.
+
+**Qué mirar después.** En Automatizaciones → «Ubicación por dirección», la
+medición de hoy ya cumple B y el interruptor se puede encender. Encendido,
+«Aprobar» y la pasada usan el edificio en Google para los reintentos sin pin.
+Será cerca de 1 de cada 6.
+
+**Marcha atrás.** Revertir el commit (el interruptor encendido vuelve a quedar
+sin uso hasta que una medición tenga 30 puntos).
+
 ### 08-11-2026 · Repro Lima: el aviso de «Aprobar elegidos» agrupa por motivo y lleva a «Ubicación por dirección» (sin migración, MOM §9.5)
 
 Pedido del owner. Al aprobar 22 reintentos, 21 repetían «Sin coordenada: la

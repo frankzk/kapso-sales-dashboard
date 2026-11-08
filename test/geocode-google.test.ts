@@ -691,13 +691,16 @@ describe("la coordenada por dirección para la guía automática (0301)", () => 
 
 describe("la medición de Lima: el criterio B con el edificio", () => {
   it("sin medición, con pocos puntos ROOFTOP o por debajo del 90 %: no deja encender", async () => {
-    const { geocodeLimaGate, GEOCODE_SMALL_SAMPLE } = await import("@/lib/geocode-google");
+    const { geocodeLimaGate, GEOCODE_LIMA_MIN_ROOFTOP } = await import("@/lib/geocode-google");
     const base = { ranAt: "2026-11-05T15:00:00Z", rooftop: 40, rooftopWithin300Pct: 92 } as never as import("@/lib/geocode-google").GeocodeLimaRunSummary;
     expect(geocodeLimaGate(null)).toMatchObject({ ok: false, reason: expect.stringContaining("Todavía no hay una medición de Lima") });
-    expect(geocodeLimaGate({ ...base, rooftop: GEOCODE_SMALL_SAMPLE - 1 })).toMatchObject({ ok: false, reason: expect.stringContaining("hacen falta al menos 30") });
+    expect(GEOCODE_LIMA_MIN_ROOFTOP).toBe(15);
+    expect(geocodeLimaGate({ ...base, rooftop: GEOCODE_LIMA_MIN_ROOFTOP - 1 })).toMatchObject({ ok: false, reason: expect.stringContaining("hacen falta al menos 15") });
     expect(geocodeLimaGate({ ...base, rooftopWithin300Pct: 89.9 })).toMatchObject({ ok: false, reason: expect.stringContaining("hace falta el 90 %") });
     expect(geocodeLimaGate({ ...base, rooftopWithin300Pct: null })).toMatchObject({ ok: false });
-    expect(geocodeLimaGate({ ...base, rooftop: GEOCODE_SMALL_SAMPLE, rooftopWithin300Pct: 90 })).toEqual({ ok: true });
+    expect(geocodeLimaGate({ ...base, rooftop: GEOCODE_LIMA_MIN_ROOFTOP, rooftopWithin300Pct: 90 })).toEqual({ ok: true });
+    // La primera medición de Lima (08-11-2026): 17 con el edificio, los 17 a 300 m o menos.
+    expect(geocodeLimaGate({ ...base, rooftop: 17, rooftopWithin300Pct: 100 })).toEqual({ ok: true });
   });
 
   it("la cuenta guardada se lee con cuidado: lo roto no enciende nada", async () => {

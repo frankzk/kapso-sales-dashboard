@@ -80,7 +80,11 @@ describe("setRetryGeocode", () => {
 
   it("con pocos puntos ROOFTOP o por debajo del 90 %, tampoco", async () => {
     h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftop: 12 } };
-    expect((await setRetryGeocode(ORG, true)).error).toContain("hacen falta al menos 30");
+    expect((await setRetryGeocode(ORG, true)).error).toContain("hacen falta al menos 15");
+    // La primera medición de Lima (08-11-2026, 17 con el edificio, 100 % a 300 m) ya deja encender.
+    h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftop: 17, rooftopWithin300Pct: 100 } };
+    expect((await setRetryGeocode(ORG, true)).error).toBeUndefined();
+    h.upserts = [];
     h.latest = { ...MEETS_B, summary: { ...MEETS_B.summary, rooftopWithin300Pct: 84.5 } };
     expect((await setRetryGeocode(ORG, true)).error).toContain("hace falta el 90 %");
     expect(h.upserts).toEqual([]);

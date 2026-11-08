@@ -5391,8 +5391,14 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
       de pedido.
     - **Encender exige B con el edificio** (`geocodeLimaGate`): en la última
       medición de Lima, al menos el 90 % de los puntos ROOFTOP a 300 m o menos
-      del pin real, con **al menos 30** puntos ROOFTOP. Si no, el interruptor
-      se muestra bloqueado con el motivo. Apagar se puede siempre. Si una
+      del pin real, con **al menos 15** puntos ROOFTOP
+      (`GEOCODE_LIMA_MIN_ROOFTOP`). Eran 30 hasta el 08-11-2026: la primera
+      medición de Lima dio 17 con el edificio en 108 pedidos, los 17 a 300 m o
+      menos (mediana 33 m, ninguno a más de 1 km), y con 7 días de pedidos y
+      150 consultas por día no se llega a 30; el owner bajó el mínimo a 15. El
+      90 % no cambia. Google da el edificio en ~1 de cada 6 pedidos de Lima
+      (los demás: punto aproximado 39, coincidencia parcial 36, otro distrito
+      14). Si no, el interruptor se muestra bloqueado con el motivo. Apagar se puede siempre. Si una
       medición nueva deja de cumplir B, la pasada deja de usar Google aunque
       el interruptor siga encendido (el panel dice «Está encendido, pero no se
       usa»). Cada cambio queda en `automation_switch_events`.
@@ -24221,7 +24227,7 @@ Vercel— y algunas no tenían interruptor.
     ROOFTOP, la mediana, el % a 300 m o menos (en total y solo con el
     edificio), el % a más de 1 km y si cumple B. Encender pide confirmación y
     solo se puede con la clave de Google y la última medición cumpliendo B con
-    el edificio y al menos 30 puntos; si no, el interruptor queda bloqueado con
+    el edificio y al menos 15 puntos (eran 30 hasta el 08-11-2026); si no, el interruptor queda bloqueado con
     el motivo. Apagar se puede siempre. El botón de medir pide confirmación
     (gasta cupo de Google) y, como todo el panel, solo funciona en producción y
     con `automations.manage`.
