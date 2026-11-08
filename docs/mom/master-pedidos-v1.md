@@ -23932,11 +23932,12 @@ que Kapta calcula y las que cada tienda escribe; y los únicos cambios
 permitidos son **crear guías de Aliclik, dejar notas en el pedido y enviar
 WhatsApp al cliente**. No cambia estados ni anula guías.
 
-Se entrega en tres partes. **Esta (parte 1) es de solo lectura.** La parte 2
-(políticas escritas por tienda, con vigencia) y la parte 3 (notas, WhatsApp y
-guía de Aliclik) están pendientes (§42.6): sus permisos ya existen en la base,
-pero ninguna herramienta los usa y la pantalla los muestra como
-«Próximamente».
+Se entrega en tres partes. **Las partes 1 y 2 son de solo lectura para el
+agente.** La parte 1 (08-11-2026, 0314) le da los pedidos, las conversaciones
+y las políticas que Kapta calcula; la parte 2 (08-11-2026, 0315), las
+políticas que escribe cada tienda (§42.6). La parte 3 (notas, WhatsApp y guía
+de Aliclik) está pendiente (§42.7): sus permisos ya existen en la base, pero
+ninguna herramienta los usa y la pantalla los muestra como «Próximamente».
 
 ### 42.1 El servidor
 
@@ -23982,7 +23983,7 @@ pero ninguna herramienta los usa y la pantalla los muestra como
 | `buscar_pedidos` | `pedidos.leer` | Hasta 20 pedidos (10 si no se dice) por número, teléfono (sus últimos 9 dígitos), nombre del cliente o guía (también la de Swayp), del último movimiento más reciente al más antiguo, con tienda, total, estado, etapa y subetapa. |
 | `obtener_pedido` | `pedidos.leer` | Productos y cantidades, importes y moneda, forma y estado de pago, entrega (modalidad, cobertura, destino y dirección), estado del Master (etapa y subetapa con su nombre de pantalla, motivos, courier, fechas de despacho, entrega y devolución), hasta 20 guías y los últimos 10 movimientos. |
 | `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. No marca nada como leído. |
-| `consultar_politicas` | `politicas.leer` | El adelanto mínimo de los envíos por agencia (S/ 20, `lib/adelanto-minimo.ts`) y, si se da el distrito, su cobertura según `order_coverage_for` el **día de Lima** (contraentrega o agencia con adelanto). Si la base no contesta, «por revisar»: no afirma una cobertura que no se pudo calcular. |
+| `consultar_politicas` | `politicas.leer` | **Calculadas:** el adelanto mínimo de los envíos por agencia (S/ 20, `lib/adelanto-minimo.ts`) y, si se da el distrito, su cobertura según `order_coverage_for` el **día de Lima** (contraentrega o agencia con adelanto); si la base no contesta, «por revisar»: no afirma una cobertura que no se pudo calcular. **Escritas:** las políticas de la tienda vigentes ese día (§42.6). |
 
 Lo que vale para todas (`lib/agent-tools.ts`):
 
@@ -24014,11 +24015,43 @@ las llamadas de las últimas 24 horas.
   `server_url` = esa dirección, `server_label` = `kapta` y `authorization` =
   el token.
 
-### 42.6 Pendiente
+### 42.6 Políticas escritas por tienda (parte 2, 08-11-2026; 0315)
 
-- **Parte 2 — políticas escritas por tienda:** el texto que cada tienda escribe
-  (cambios, devoluciones, garantías…), con su vigencia y quién lo editó, junto a
-  las calculadas en `consultar_politicas`.
+Lo que cada tienda escribe para que el agente lo diga tal cual: cambios,
+devoluciones, garantías, horarios… Hasta hoy no vivía en ningún sitio del
+sistema.
+
+- **Dónde.** En la misma pantalla, tarjeta **«Políticas escritas»**, por
+  tienda, con `automations.manage` y solo en las tiendas que la persona ve.
+  Cada política tiene **título** (de 2 a 80 caracteres), **texto** (hasta
+  4000, con sus párrafos), **vale desde** (un día de Lima, hoy por omisión),
+  **hasta** (opcional; ese día todavía vale) y **fuente** (opcional, hasta
+  200: de dónde sale).
+- **Estados** (`lib/store-policies.ts`, calculados en el día de Lima):
+  **Vigente** entre su primer y su último día, **Programada** antes de
+  empezar, **Vencida** después de su último día y **Retirada**, que gana a
+  todo. No son estados del pedido: son de la política.
+- **Editar** guarda una versión nueva. La versión la pone la base (1 al
+  nacer, +1 en cada cambio), y guardar sin cambios no crea una. La tienda, la
+  organización y el autor no cambian nunca.
+- **Retirar** es final: el agente deja de leerla en el acto y ya no se edita
+  ni se deshace. Para volver a usarla se crea otra. No se borra ninguna.
+- **Historial.** Cada versión guardada (al crear, editar o retirar) queda en
+  `store_policy_versions`, con quién y cuándo. La escribe la base sola
+  (disparador) y nadie la edita ni la borra, ni el servidor: es lo que
+  responde «¿qué decía la política el día que el agente se lo dijo a la
+  clienta?».
+- **Lo que lee el agente.** `consultar_politicas` devuelve, junto a las
+  calculadas, `escritas`: las **vigentes ese día de Lima** de la tienda que
+  pidió, por título, hasta 20, con título, texto, vigencia, fuente, versión y
+  cuándo se actualizó (sin quién la escribió). Sin ninguna, una nota le dice
+  que no invente una. Si no se pudieron leer (la base caída o sin la 0315),
+  `escritas` es `null` con su nota, que no es lo mismo que «ninguna», y las
+  calculadas siguen.
+- Las dos tablas son **solo del servidor**, como la 0314.
+
+### 42.7 Pendiente
+
 - **Parte 3 — los cambios que el owner permitió:** dejar una nota en el pedido
   (`pedidos.nota`), enviar WhatsApp al cliente (`whatsapp.enviar`, con
   idempotencia y aprobación) y crear la guía de Aliclik (`aliclik.crear_guia`,
@@ -24026,9 +24059,11 @@ las llamadas de las últimas 24 horas.
   token** tenga hoy el permiso de Kapta equivalente (por ejemplo
   `aliclik.create_guide` para la guía). Ninguna cambia estados ni anula guías.
 
-Migración `0314_agent_tokens.sql`. Código: `lib/agent-auth.ts`,
-`lib/agent-tools.ts`, `lib/mcp-server.ts`, `app/api/mcp/route.ts`,
-`app/dashboard/automatizaciones/conector/`, `lib/agent-tokens-access.ts` y
-`components/agent-connector-panel.tsx`. Pruebas:
-`test/agent-connector.test.ts`, `test/agent-connector-mom.test.ts` y
-`scripts/sql/agent_tokens_smoke.sql`.
+Migraciones `0314_agent_tokens.sql` y `0315_store_policies.sql`. Código:
+`lib/agent-auth.ts`, `lib/agent-tools.ts`, `lib/mcp-server.ts`,
+`lib/store-policies.ts`, `app/api/mcp/route.ts`,
+`app/dashboard/automatizaciones/conector/`, `lib/agent-tokens-access.ts`,
+`components/agent-connector-panel.tsx` y `components/store-policies-card.tsx`.
+Pruebas: `test/agent-connector.test.ts`, `test/store-policies.test.ts`,
+`test/agent-connector-mom.test.ts`, `scripts/sql/agent_tokens_smoke.sql` y
+`scripts/sql/store_policies_smoke.sql`.

@@ -342,4 +342,7 @@ echo "  ✅ línea compartida sin dueña y anexo propio con dueña; un número e
 echo "▶ Conector de IA (0314): token solo como sha256 y único, pista corta, tiendas y permisos con rango, registro sin texto libre y solo el servidor"
 $PSQL -f "$ROOT/scripts/sql/agent_tokens_smoke.sql"
 echo "  ✅ el hash es único y nunca el token en claro; permisos de la lista cerrada (los de escritura ya existen); el registro guarda códigos, no lo que se preguntó; revocar deja el registro; anon y authenticated ni leen ni escriben"
+echo "▶ Políticas escritas por tienda (0315): versión de la base, historial automático, tienda y autor fijos, retirada final, rangos y solo el servidor"
+$PSQL -f "$ROOT/scripts/sql/store_policies_smoke.sql"
+echo "  ✅ nace en la versión 1 y cada cambio suma uno (aunque se mande otra); cada versión queda en el historial, también la retirada; la tienda, la organización y el autor no cambian; retirada no se edita ni se deshace; el servidor no borra ni escribe el historial; el navegador no ve nada"
 echo "✅ DB verification passed."

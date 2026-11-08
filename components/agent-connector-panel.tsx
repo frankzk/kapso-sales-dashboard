@@ -19,6 +19,7 @@ import {
   type AgentTokenFormState,
 } from "@/app/dashboard/automatizaciones/conector/actions";
 import type { AgentConnectorOrg, AgentTokenView } from "@/lib/agent-tokens-access";
+import { StorePoliciesCard } from "@/components/store-policies-card";
 
 const initial: AgentTokenFormState = {};
 
@@ -197,7 +198,8 @@ function HowToConnect({ endpointUrl }: { endpointUrl: string }) {
           </p>
           <p>
             Herramientas: <code>buscar_pedidos</code>, <code>obtener_pedido</code>, <code>leer_conversacion</code> y{" "}
-            <code>consultar_politicas</code>. Todas son de solo lectura y quedan registradas (sin datos de clientes).
+            <code>consultar_politicas</code> (las que Kapta calcula y las políticas escritas de abajo). Todas son de solo
+            lectura y quedan registradas (sin datos de clientes).
           </p>
         </div>
       </div>
@@ -209,10 +211,14 @@ export function AgentConnectorPanel({
   endpointUrl,
   orgs,
   scopes,
+  today,
+  policiesMissing,
 }: {
   endpointUrl: string;
   orgs: AgentConnectorOrg[];
   scopes: ScopeOption[];
+  today: string;
+  policiesMissing: boolean;
 }) {
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-4 sm:p-6">
@@ -226,7 +232,7 @@ export function AgentConnectorPanel({
         <h1 className="text-xl font-semibold text-ink-900">Conector de IA</h1>
         <p className={HELP}>
           Un agente de IA (por ejemplo Grok Bot) consulta pedidos, conversaciones y políticas de Kapta con un token. El token
-          ve solo lo que ve quien lo creó, y se revoca en un clic.
+          ve solo lo que ve quien lo creó, y se revoca en un clic. Abajo, las políticas que escribe cada tienda.
         </p>
       </header>
       <HowToConnect endpointUrl={endpointUrl} />
@@ -246,6 +252,7 @@ export function AgentConnectorPanel({
               <p className={cn(ROW, HELP)}>Todavía no hay tokens.</p>
             )}
           </div>
+          <StorePoliciesCard org={org} today={today} missing={policiesMissing} />
         </section>
       ))}
     </div>

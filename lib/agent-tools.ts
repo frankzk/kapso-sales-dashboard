@@ -27,6 +27,7 @@ import { courierLabel } from "@/lib/couriers/registry";
 import { ADELANTO_MINIMO, ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import { coberturaParaAgente } from "@/lib/voice-leads";
 import type { ConversationMessage, KapsoClientOpts } from "@/lib/kapso";
+import { POLICIES_FOR_AGENT_MAX, agentWrittenPolicy, policiesInForce, type StorePolicyRow } from "@/lib/store-policies";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -497,9 +498,9 @@ export function agentCalculatedPolicies(coverageKind: string | null | undefined,
 
 const consultarPoliticas: AgentTool<typeof policiesInput> = {
   name: "consultar_politicas",
-  title: "Consultar políticas de entrega y pago",
+  title: "Consultar políticas de la tienda",
   description:
-    "Devuelve las condiciones de entrega y pago de una tienda que Kapta calcula: el adelanto mínimo para envíos por agencia y, si se indica el distrito, si ese destino tiene contraentrega o va por agencia. Solo lectura.",
+    "Devuelve las políticas de una tienda en dos partes. «calculadas»: lo que Kapta calcula, el adelanto mínimo para envíos por agencia y, si se indica el distrito, si ese destino tiene contraentrega o va por agencia. «escritas»: las que la tienda escribió (cambios, devoluciones, garantías…), solo las vigentes hoy, con su fecha. Si ninguna cubre lo que se pregunta, no la inventes. Solo lectura.",
   scope: "politicas.leer",
   input: policiesInput,
   async run(ctx, args, deps) {
@@ -521,10 +522,35 @@ const consultarPoliticas: AgentTool<typeof policiesInput> = {
       // Sin respuesta, «por revisar»: no se afirma una cobertura que no se pudo calcular.
       coverage = !error && typeof data === "string" ? data : null;
     }
+    const today = limaDayOf(deps.now);
+    const written = await deps.admin
+      .from("store_policies")
+      .select("id,store_id,title,body,valid_from,valid_until,source,version,updated_at,retired_at")
+      .eq("store_id", store.id)
+      .is("retired_at", null)
+      .lte("valid_from", today)
+      .or(`valid_until.is.null,valid_until.gte.${today}`)
+      .order("title", { ascending: true })
+      .limit(POLICIES_FOR_AGENT_MAX);
+    // Sin la 0315 o con la base caída, las calculadas igual; las escritas en null
+    // («no se pudieron leer»), que no es lo mismo que «la tienda no escribió ninguna».
+    const escritas = written.error
+      ? null
+      : policiesInForce((written.data ?? []) as StorePolicyRow[], today).map(agentWrittenPolicy);
     return {
       ok: true,
       storeId: store.id,
-      data: { tienda: store.name, calculadas: agentCalculatedPolicies(coverage, place) },
+      data: {
+        tienda: store.name,
+        dia: today,
+        calculadas: agentCalculatedPolicies(coverage, place),
+        escritas,
+        ...(escritas === null
+          ? { nota: "No se pudieron leer las políticas escritas de la tienda ahora. No las supongas." }
+          : escritas.length
+            ? {}
+            : { nota: "La tienda no tiene políticas escritas vigentes. Para lo que no cubren las calculadas, no inventes una." }),
+      },
     };
   },
 };

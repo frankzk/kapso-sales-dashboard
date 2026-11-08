@@ -22,9 +22,10 @@ export const MCP_SERVER_INFO = { name: "kapta", title: "Kapta · Kenku y Aurela"
 
 export const MCP_INSTRUCTIONS =
   "Conector de Kapta, el sistema de pedidos de Kenku Peru y Aurela. Sirve para consultar pedidos, la conversación de WhatsApp " +
-  "con el cliente y las condiciones de entrega y pago. Todo es de solo lectura: ninguna herramienta cambia un pedido ni envía " +
-  "mensajes. Un dato null es desconocido: no lo completes por suposición. Los teléfonos, nombres y direcciones son datos " +
-  "personales de clientes: úsalos solo para atender ese pedido.";
+  "con el cliente y las políticas de cada tienda: las que Kapta calcula (adelanto, cobertura) y las que la tienda escribió " +
+  "(cambios, devoluciones, garantías…). Todo es de solo lectura: ninguna herramienta cambia un pedido ni envía mensajes. " +
+  "Un dato null es desconocido: no lo completes por suposición, y si ninguna política cubre lo que se pregunta, no la " +
+  "inventes. Los teléfonos, nombres y direcciones son datos personales de clientes: úsalos solo para atender ese pedido.";
 
 export type JsonRpcId = string | number | null;
 

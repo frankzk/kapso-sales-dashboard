@@ -10,6 +10,14 @@ import { AGENT_RATE_PER_MINUTE, AGENT_SCOPES, AGENT_TOKEN_PREFIX } from "@/lib/a
 import { AGENT_TOOLS } from "@/lib/agent-tools";
 import { MCP_PROTOCOL_VERSIONS } from "@/lib/mcp-server";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
+import {
+  POLICIES_FOR_AGENT_MAX,
+  POLICY_BODY_MAX,
+  POLICY_SOURCE_MAX,
+  POLICY_STATUS_LABEL,
+  POLICY_TITLE_MAX,
+  policyStatus,
+} from "@/lib/store-policies";
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 const flat = (text: string) => text.replace(/\s+/g, " ");
@@ -17,6 +25,7 @@ const MOM = read("docs/mom/master-pedidos-v1.md");
 const DEPLOY = read("DEPLOY.md");
 const MIGRATION = read("db/migrations/0314_agent_tokens.sql");
 const ROUTE = read("app/api/mcp/route.ts");
+const POLICIES_MIGRATION = read("db/migrations/0315_store_policies.sql");
 
 function section(title: string): string {
   const start = MOM.indexOf(title);
@@ -34,7 +43,7 @@ describe("§42 Conector para agentes de IA", () => {
     expect(s42).toContain("«Quiero construir un agente de Grok Bot para que gestione cosas en específico del sistema»");
     expect(s42).toContain("crear guías de Aliclik, dejar notas en el pedido y enviar WhatsApp al cliente");
     expect(s42).toContain("No cambia estados ni anula guías.");
-    expect(s42).toContain("**Esta (parte 1) es de solo lectura.**");
+    expect(s42).toContain("**Las partes 1 y 2 son de solo lectura para el agente.**");
     // Ninguna herramienta escribe todavía.
     expect(AGENT_TOOLS.every((t) => !AGENT_SCOPES[t.scope].write)).toBe(true);
   });
@@ -53,9 +62,9 @@ describe("§42 Conector para agentes de IA", () => {
     const scopes = Object.keys(AGENT_SCOPES);
     const inMigration = MIGRATION.match(/scopes <@ array\[([^\]]+)\]/)![1]!.match(/'([^']+)'/g)!.map((s) => s.slice(1, -1));
     expect(inMigration).toEqual(scopes);
-    const s426 = section("### 42.6 Pendiente");
+    const s427 = section("### 42.7 Pendiente");
     for (const [key, s] of Object.entries(AGENT_SCOPES)) {
-      if (s.write) expect(s426).toContain(`\`${key}\``);
+      if (s.write) expect(s427).toContain(`\`${key}\``);
     }
   });
 
@@ -89,9 +98,11 @@ describe("§42 Conector para agentes de IA", () => {
 
   it("§40 lleva al conector y la migración está en la lista", () => {
     expect(section("## 40. Panel de automatizaciones (04-11-2026)")).toContain("**Conector de IA** (§42, 08-11-2026)");
-    expect(s42).toContain("Migración `0314_agent_tokens.sql`.");
+    expect(s42).toContain("Migraciones `0314_agent_tokens.sql` y `0315_store_policies.sql`.");
     expect(read("db/apply.sql")).toContain("0314_agent_tokens.sql");
+    expect(read("db/apply.sql")).toContain("0315_store_policies.sql");
     expect(read("scripts/verify-db.sh")).toContain("scripts/sql/agent_tokens_smoke.sql");
+    expect(read("scripts/verify-db.sh")).toContain("scripts/sql/store_policies_smoke.sql");
   });
 });
 
@@ -106,6 +117,58 @@ describe("DEPLOY.md", () => {
     expect(body).toContain("**Migración `0314_agent_tokens.sql`**, a mano, ANTES del código");
     expect(body).toContain("select to_regclass('public.agent_tokens'), to_regclass('public.agent_tool_calls');");
     expect(body).toContain("**Sin la migración**, `/api/mcp` contesta 503");
+    expect(body).toContain("**Marcha atrás.**");
+  });
+});
+
+describe("§42.6 Políticas escritas por tienda", () => {
+  const s426 = section("### 42.6 Políticas escritas por tienda (parte 2, 08-11-2026; 0315)");
+
+  it("los topes del formulario son los del código y los de la base", () => {
+    expect([POLICY_TITLE_MAX, POLICY_BODY_MAX, POLICY_SOURCE_MAX]).toEqual([80, 4000, 200]);
+    expect(s426).toContain("**título** (de 2 a 80 caracteres), **texto** (hasta 4000, con sus párrafos)");
+    expect(s426).toContain("**fuente** (opcional, hasta 200: de dónde sale)");
+    expect(POLICIES_MIGRATION).toContain("check (length(btrim(title)) between 2 and 80)");
+    expect(POLICIES_MIGRATION).toContain("check (length(btrim(body)) between 2 and 4000)");
+    expect(POLICIES_MIGRATION).toContain("length(btrim(source)) between 1 and 200");
+  });
+
+  it("los estados son los del código, con el último día incluido", () => {
+    expect(Object.values(POLICY_STATUS_LABEL)).toEqual(["Vigente", "Programada", "Vencida", "Retirada"]);
+    for (const label of Object.values(POLICY_STATUS_LABEL)) expect(s426).toContain(`**${label}**`);
+    expect(policyStatus({ valid_from: "2026-11-01", valid_until: "2026-11-08", retired_at: null }, "2026-11-08")).toBe("vigente");
+    expect(s426).toContain("**hasta** (opcional; ese día todavía vale)");
+    expect(s426).toContain("No son estados del pedido: son de la política.");
+  });
+
+  it("versión, historial y retirada son de la base", () => {
+    expect(s426).toContain("La versión la pone la base (1 al nacer, +1 en cada cambio), y guardar sin cambios no crea una.");
+    expect(POLICIES_MIGRATION).toContain("new.version := old.version + 1;");
+    expect(s426).toContain("**Retirar** es final");
+    expect(POLICIES_MIGRATION).toContain("una política retirada no se edita");
+    expect(s426).toContain("La escribe la base sola (disparador) y nadie la edita ni la borra, ni el servidor");
+    expect(POLICIES_MIGRATION).toContain("grant select on store_policy_versions to service_role;");
+    expect(POLICIES_MIGRATION).toContain("grant select, insert, update on store_policies to service_role;");
+    expect(POLICIES_MIGRATION).not.toMatch(/grant[^;]*delete[^;]*store_polic/i);
+  });
+
+  it("lo que lee el agente", () => {
+    expect(POLICIES_FOR_AGENT_MAX).toBe(20);
+    expect(s426).toContain("las **vigentes ese día de Lima** de la tienda que pidió, por título, hasta 20");
+    expect(s426).toContain("`escritas` es `null` con su nota, que no es lo mismo que «ninguna», y las calculadas siguen.");
+  });
+});
+
+describe("DEPLOY.md 0315", () => {
+  const title = "### 08-11-2026 · Políticas escritas por tienda para el agente de IA (0315, MOM §42.6)";
+  it("la entrada dice que la 0315 va antes del código, cómo comprobarla y la marcha atrás", () => {
+    const start = DEPLOY.indexOf(title);
+    expect(start).toBeGreaterThan(-1);
+    const next = DEPLOY.indexOf("\n### ", start + 10);
+    const body = flat(DEPLOY.slice(start, next === -1 ? undefined : next));
+    expect(body).toContain("**Pendiente de aplicar en producción.**");
+    expect(body).toContain("**Migración `0315_store_policies.sql`**, a mano, ANTES del código");
+    expect(body).toContain("select to_regclass('public.store_policies'), to_regclass('public.store_policy_versions');");
     expect(body).toContain("**Marcha atrás.**");
   });
 });

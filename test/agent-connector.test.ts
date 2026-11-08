@@ -69,7 +69,7 @@ function fakeAdmin(reply: (q: Query) => Reply = () => ({ data: [] })) {
       return { data, error: r.error ?? null, count: r.count ?? null };
     };
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in", "or", "order", "limit", "not", "gte", "is", "insert", "update"]) {
+    for (const m of ["select", "eq", "in", "or", "order", "limit", "not", "gte", "lte", "is", "insert", "update"]) {
       builder[m] = (...args: unknown[]) => {
         q.ops.push([m, ...args]);
         return builder;

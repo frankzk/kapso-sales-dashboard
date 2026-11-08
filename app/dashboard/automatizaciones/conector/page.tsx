@@ -32,5 +32,13 @@ export default async function ConectorPage() {
     );
   }
   const scopes = Object.entries(AGENT_SCOPES).map(([key, s]) => ({ key, label: s.label, write: s.write }));
-  return <AgentConnectorPanel endpointUrl={data.endpointUrl} orgs={data.orgs} scopes={scopes} />;
+  return (
+    <AgentConnectorPanel
+      endpointUrl={data.endpointUrl}
+      orgs={data.orgs}
+      scopes={scopes}
+      today={data.today}
+      policiesMissing={data.policiesMissing}
+    />
+  );
 }

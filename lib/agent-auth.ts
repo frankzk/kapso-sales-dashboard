@@ -33,7 +33,7 @@ export const AGENT_RATE_PER_MINUTE = 60;
 export const AGENT_SCOPES = {
   "pedidos.leer": { label: "Buscar y ver pedidos", write: false },
   "conversaciones.leer": { label: "Leer la conversación de WhatsApp", write: false },
-  "politicas.leer": { label: "Consultar políticas de entrega y pago", write: false },
+  "politicas.leer": { label: "Consultar políticas de la tienda (calculadas y escritas)", write: false },
   "pedidos.nota": { label: "Dejar notas en el pedido", write: true },
   "whatsapp.enviar": { label: "Enviar WhatsApp al cliente", write: true },
   "aliclik.crear_guia": { label: "Crear guías de Aliclik", write: true },

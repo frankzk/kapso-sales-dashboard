@@ -6,6 +6,9 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { orgsWithPermission } from "@/lib/permissions-access";
 import { isAgentMigrationMissing } from "@/lib/agent-auth";
 import { env } from "@/lib/env";
+import { resolveAgentNames } from "@/lib/agent-names";
+import { limaDayOf } from "@/lib/agent-tools";
+import { isPolicyMigrationMissing, policyStatus, type PolicyStatus } from "@/lib/store-policies";
 
 export interface AgentTokenView {
   id: string;
@@ -20,16 +23,38 @@ export interface AgentTokenView {
   callsToday: number;
 }
 
+/** Una política escrita, como la ve la pantalla (MOM §42.6). */
+export interface StorePolicyView {
+  id: string;
+  storeId: string;
+  title: string;
+  body: string;
+  validFrom: string;
+  validUntil: string | null;
+  source: string | null;
+  version: number;
+  status: PolicyStatus;
+  updatedAt: string;
+  /** Quién la guardó por última vez (o la retiró). */
+  editor: string;
+  retiredAt: string | null;
+}
+
 export interface AgentConnectorOrg {
   id: string;
   name: string;
   stores: { id: string; name: string }[];
   tokens: AgentTokenView[];
+  policies: StorePolicyView[];
 }
 
 export interface AgentConnectorData {
   denied: boolean;
   migrationMissing: boolean;
+  /** Sin la 0315: los tokens funcionan; las políticas escritas, no. */
+  policiesMissing: boolean;
+  /** El día de Lima con que se calculó el estado de cada política. */
+  today: string;
   endpointUrl: string;
   orgs: AgentConnectorOrg[];
 }
@@ -41,8 +66,10 @@ export function agentEndpointUrl(siteUrl: string): string {
 
 export async function loadAgentConnector(now: Date = new Date()): Promise<AgentConnectorData> {
   const endpointUrl = agentEndpointUrl(env.siteUrl());
+  const today = limaDayOf(now);
+  const empty = { policiesMissing: false, today, endpointUrl, orgs: [] };
   const memberships = await orgsWithPermission("automations.manage");
-  if (!memberships.length) return { denied: true, migrationMissing: false, endpointUrl, orgs: [] };
+  if (!memberships.length) return { denied: true, migrationMissing: false, ...empty };
   const orgIds = [...new Set(memberships.map((m) => m.org_id))];
   const sb = await createServerSupabase();
   const admin = createAdminSupabase();
@@ -58,7 +85,7 @@ export async function loadAgentConnector(now: Date = new Date()): Promise<AgentC
       .order("created_at", { ascending: false }),
   ]);
   if (tokens.error) {
-    if (isAgentMigrationMissing(tokens.error)) return { denied: false, migrationMissing: true, endpointUrl, orgs: [] };
+    if (isAgentMigrationMissing(tokens.error)) return { denied: false, migrationMissing: true, ...empty };
     throw new Error("No se pudieron leer los tokens del conector.");
   }
   const tokenRows = (tokens.data ?? []) as {
@@ -73,9 +100,34 @@ export async function loadAgentConnector(now: Date = new Date()): Promise<AgentC
   }
   const stores = (storeRows ?? []) as { id: string; name: string; org_id: string }[];
   const storeName = new Map(stores.map((s) => [s.id, s.name]));
+
+  // Las políticas de las tiendas que la persona ve (solo esas: se leen con
+  // service_role, así que el filtro es este).
+  let policiesMissing = false;
+  let policyRows: {
+    id: string; org_id: string; store_id: string; title: string; body: string; valid_from: string; valid_until: string | null;
+    source: string | null; version: number; updated_at: string; updated_by: string; retired_at: string | null; retired_by: string | null;
+  }[] = [];
+  if (stores.length) {
+    const { data, error } = await admin
+      .from("store_policies")
+      .select("id, org_id, store_id, title, body, valid_from, valid_until, source, version, updated_at, updated_by, retired_at, retired_by")
+      .in("store_id", stores.map((st) => st.id))
+      .order("valid_from", { ascending: false })
+      .limit(500);
+    if (error) {
+      if (!isPolicyMigrationMissing(error)) throw new Error("No se pudieron leer las políticas escritas.");
+      policiesMissing = true;
+    } else {
+      policyRows = (data ?? []) as typeof policyRows;
+    }
+  }
+  const editors = await resolveAgentNames(policyRows.map((p) => p.retired_by ?? p.updated_by), admin);
   return {
     denied: false,
     migrationMissing: false,
+    policiesMissing,
+    today,
     endpointUrl,
     orgs: ((orgRows ?? []) as { id: string; name: string }[]).map((org) => ({
       id: org.id,
@@ -94,6 +146,22 @@ export async function loadAgentConnector(now: Date = new Date()): Promise<AgentC
           lastUsedAt: t.last_used_at,
           lastTool: t.last_tool,
           callsToday: counts.get(t.id) ?? 0,
+        })),
+      policies: policyRows
+        .filter((p) => p.org_id === org.id)
+        .map((p) => ({
+          id: p.id,
+          storeId: p.store_id,
+          title: p.title,
+          body: p.body,
+          validFrom: p.valid_from,
+          validUntil: p.valid_until,
+          source: p.source,
+          version: p.version,
+          status: policyStatus(p, today),
+          updatedAt: p.retired_at ?? p.updated_at,
+          editor: editors[p.retired_by ?? p.updated_by] ?? "Alguien del equipo",
+          retiredAt: p.retired_at,
         })),
     })),
   };

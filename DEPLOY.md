@@ -64,6 +64,36 @@ reconocen por su nota y por `order_events.payload->>'bulk' =
 'district_review_20261108'`; quitarlas devuelve esos pedidos al distrito
 «capital» y, con él, a la guía mal dirigida, así que no se deshacen sin el owner.
 
+### 08-11-2026 · Políticas escritas por tienda para el agente de IA (0315, MOM §42.6)
+
+**Pendiente de aplicar en producción.** Parte 2 del conector de Grok Bot:
+cada tienda escribe sus políticas (cambios, devoluciones, garantías…) en
+**Automatizaciones › Conector de IA › Políticas escritas**, con su vigencia,
+y `consultar_politicas` le da al agente las vigentes ese día de Lima, junto a
+las que Kapta calcula. Sin variables ni crons nuevos.
+
+1. **Migración `0315_store_policies.sql`**, a mano, ANTES del código
+   (aditiva, sin llaves foráneas, idempotente, sin `drop`):
+   - tabla `store_policies` (título, texto, vigencia, fuente, autor, versión,
+     retirada);
+   - tabla `store_policy_versions` (cada versión, la escribe un disparador);
+   - disparadores `store_policies_guard` y `store_policies_snapshot`;
+   - las dos con RLS y solo para `service_role`, que no puede borrar
+     políticas ni escribir el historial.
+2. Comprobar:
+   ```sql
+   select to_regclass('public.store_policies'), to_regclass('public.store_policy_versions');
+   select has_table_privilege('service_role', 'public.store_policies', 'delete');           -- false
+   select has_table_privilege('service_role', 'public.store_policy_versions', 'insert');    -- false
+   select tgname from pg_trigger where tgrelid = 'public.store_policies'::regclass and not tgisinternal;
+   ```
+3. Desplegar el código. **Sin la migración**, la tarjeta dice «Falta la
+   migración 0315» y `consultar_politicas` devuelve solo las calculadas
+   (`escritas: null`); los tokens y las demás herramientas siguen igual.
+
+**Marcha atrás.** Retirar las políticas en la pantalla (el agente deja de
+leerlas en el acto). Las tablas pueden quedarse: nada más las lee.
+
 ### 08-11-2026 · Conector de IA para Grok Bot: `/api/mcp` y sus tokens (0314, MOM §42)
 
 **Aplicada en producción el 08-11-2026.** Un servidor MCP en `POST /api/mcp`

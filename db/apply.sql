@@ -631,4 +631,6 @@
 \ir migrations/0313_anura_line_pool.sql
 \echo 'Applying 0314_agent_tokens.sql'
 \ir migrations/0314_agent_tokens.sql
+\echo 'Applying 0315_store_policies.sql'
+\ir migrations/0315_store_policies.sql
 \echo 'Done.'
