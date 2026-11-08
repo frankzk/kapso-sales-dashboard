@@ -7430,7 +7430,8 @@ historial; la migración no activa ni reasigna por sí misma.
 - La reserva propia vigente y la cita de una llamada firmada conservan su
   asesora aunque cambien sus bloques, mientras siga en el equipo y con acceso
   a la tienda. Una cita sin asesora habilitada vuelve al bloque correspondiente.
-  Nadie toma una reserva ajena. El máximo
+  La reserva por cita no es eterna: se suelta a las 2 horas de la cita o cuando
+  la clienta vuelve a escribir (0322, abajo). Nadie toma una reserva ajena. El máximo
   sigue siendo dos abiertas por asesora.
 - Respaldo optativo: recibe otros bloques prioritarios de su tienda cuando
   ninguna asesora explícitamente asignada esté en línea (presencia menor a
@@ -7447,6 +7448,42 @@ historial; la migración no activa ni reasigna por sí misma.
 - Cada guardado comprueba revisión y deja actor, antes y después en
   `lead_routing_audit`. Configuración y RPCs solo de servicio; no se confía en
   actor, bloque o ids autorizados enviados por el navegador.
+
+**La reserva por cita se suelta sola (08-11-2026, decisión del owner, opción c; 0322).**
+Con el reparto activo, la asesora que agenda «volver a llamar» se queda el lead
+(`appointment_owner` en `lead_routing_scope`) y las demás lo ven «Sin acceso».
+Hasta la 0322 eso duraba mientras el lead tuviera esa cita, aunque hubiera
+pasado: Antu Cruz agendó una llamada a las 10:00 y la reserva no se soltó ni
+pasada la hora ni cuando la clienta volvió a escribir sola. Medido el
+08-11-2026 ~16:00 UTC: 406 leads abiertos reservados por cita, 388 con la cita
+vencida hace más de 2 horas (366 de hace más de 7 días).
+
+- La reserva se suelta en **cualquiera** de estos dos casos:
+  1. Pasaron **2 horas** después de la hora de la cita (`next_followup_at`), se
+     haya llamado o no. Si la asesora ya llamó después de la hora de la cita,
+     se suelta igual (una llamada guardada sin fecha nueva ya consume la cita
+     vencida, `lead_record_call_attempt` de la 0289, y con ella la reserva).
+  2. La clienta volvió sola: escribió por WhatsApp **después** de que se agendó
+     la cita (`leads.last_inbound_at` posterior al `occurred_at` de la llamada de
+     la asesora que la pactó). Una fecha futura no cuenta.
+- Suelta, el lead sigue el reparto normal: su bloque (que ya considera la señal
+  nueva posterior a la última llamada), el respaldo y la reserva de 10 minutos
+  de quien lo abra. La dueña de la cita no conserva un acceso especial.
+- La cita no se borra: la llamada en `lead_calls`, `next_followup_at`, el
+  contador de intentos, la cola Por llamar y la agenda quedan como estaban. Solo
+  deja de reservar. Una cita nueva (otra fecha guardada en una llamada) vuelve a
+  reservar con sus propias 2 horas.
+- Qué **no** cuenta como volver sola: lo que manda una asesora (toca
+  `last_interaction_at`, no `last_inbound_at`) y `handoff_at`, que también
+  escribe el agente de voz al derivar. Las llamadas **entrantes** tampoco, por
+  ahora: ninguna tabla las ata a un lead (`anura_calls` guarda las entrantes
+  con el número enmascarado, sin tienda ni lead; las demás tablas de llamadas
+  son salientes). Cuando se puedan atar, se suman a este caso.
+- La regla pura vive en `lib/lead-appointment-hold.ts` (espejo; decide la base)
+  y su prueba en `test/lead-appointment-hold.test.ts`; en la base,
+  `scripts/sql/lead_appointment_release_smoke.sql`. La 0322 conserva todo lo
+  que la 0312 hizo por el rendimiento: mismas ramas, mismos índices y ninguna
+  tabla nueva leída; solo dos comparaciones por lead ya leído.
 
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
