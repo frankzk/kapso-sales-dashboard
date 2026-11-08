@@ -353,9 +353,9 @@ describe("handleMcpMessage", () => {
   it("tools/list: solo las herramientas de los permisos del token, con su JSON Schema estricto", async () => {
     const deps = mcpDeps(fakeAdmin().client);
     const out = (await handleMcpMessage(ctxWith(["pedidos.leer"]), rpc("tools/list"), deps)) as { result: { tools: Record<string, unknown>[] } };
-    expect(out.result.tools.map((t) => t.name)).toEqual(["buscar_pedidos", "obtener_pedido"]);
+    expect(out.result.tools.map((t) => t.name)).toEqual(["buscar_pedidos", "listar_pedidos", "obtener_pedido"]);
     const all = (await handleMcpMessage(ctxWith(ALL_READ), rpc("tools/list"), deps)) as { result: { tools: Record<string, unknown>[] } };
-    expect(all.result.tools.map((t) => t.name)).toEqual(["buscar_pedidos", "obtener_pedido", "leer_conversacion", "consultar_politicas"]);
+    expect(all.result.tools.map((t) => t.name)).toEqual(["buscar_pedidos", "listar_pedidos", "obtener_pedido", "leer_conversacion", "consultar_politicas"]);
     for (const t of all.result.tools) {
       const schema = t.inputSchema as Record<string, unknown>;
       expect(schema.type).toBe("object");
@@ -651,7 +651,7 @@ describe("POST /api/mcp", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = await res.json();
-    expect(body.result.tools.map((t: { name: string }) => t.name)).toEqual(["buscar_pedidos", "obtener_pedido"]);
+    expect(body.result.tools.map((t: { name: string }) => t.name)).toEqual(["buscar_pedidos", "listar_pedidos", "obtener_pedido"]);
   });
 
   it("una notificación: 202 sin cuerpo; un lote o algo que no es JSON: 400", async () => {

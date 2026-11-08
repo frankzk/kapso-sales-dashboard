@@ -1,7 +1,7 @@
 // Las herramientas del conector de Kapta para agentes de IA (MOM §42,
 // 08-11-2026). Cada una declara qué permiso del token necesita (`scope`), qué
 // recibe (un esquema zod, que también se publica como JSON Schema en
-// `tools/list`) y qué hace. Las cuatro de lectura no escriben en la base, no
+// `tools/list`) y qué hace. Las cinco de lectura no escriben en la base, no
 // marcan mensajes como leídos ni llaman a un courier. Las tres de escritura
 // (parte 3, MOM §42.9, 0323) —nota, WhatsApp y guía de Aliclik— hacen lo suyo
 // por lib/agent-actions-flow.ts, con sus frenos; aquí solo buscan el pedido.
@@ -20,7 +20,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AgentContext, AgentScope, AgentStore } from "@/lib/agent-auth";
 import { AGENT_SCOPES, pickAgentStore } from "@/lib/agent-auth";
 import { botLookupItems, botLookupPayment, normalizeBotOrderName } from "@/lib/bot-order-lookup";
-import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
+import { MACRO_SUBSTAGES_BY_STAGE, ORDER_MACRO_STAGES, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
+import { CHATBY_HOLD_REASONS, type ChatbyHoldReason } from "@/lib/chatby-autoconfirm";
 import { orderTotals } from "@/lib/order-totals";
 import { shopifyShippingAddress } from "@/lib/shopify-address";
 import { normalizePhone } from "@/lib/phone";
@@ -234,6 +235,231 @@ const buscarPedidos: AgentTool<typeof searchInput> = {
         resultados,
         cantidad: resultados.length,
         ...(resultados.length ? {} : { nota: "Ningún pedido coincide en las tiendas que ve este conector." }),
+      },
+    };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// listar_pedidos (MOM §42.10, 08-11-2026)
+// ---------------------------------------------------------------------------
+//
+// El owner le pidió a Grok «dame el listado de 50 pedidos con confirmación
+// expresa» de los 257 de Por confirmar, y `buscar_pedidos` solo busca por
+// texto, de a 20. Esta herramienta lista una etapa entera, por páginas, con lo
+// que la confirmación automática por Chatby (§6.1) ya leyó de cada pedido
+// (`chatby_auto_checks`): sin leer Chatby otra vez.
+
+export const LIST_PAGE_MAX = 50;
+/** Con filtro de Chatby se mira la etapa entera en memoria: hasta este tope. */
+export const LIST_SCAN_MAX = 1500;
+
+const LIST_COLUMNS =
+  "order_id,store_id,order_name,order_created_at,customer_name,customer_phone,district,province,region,order_total," +
+  "macro_stage,macro_substage,macro_operation,guide_code,last_movement_at";
+
+const OPERATION_LABEL: Record<string, string> = {
+  lima: "Lima",
+  provincia_cod: "Provincia contra entrega",
+  agencia: "Agencia (con adelanto)",
+  desconocida: "Por revisar",
+};
+
+export type AgentChatbyState = "confirmo_con_mensaje" | "pulso_confirmar" | "rechazo" | "sin_respuesta" | "no_leido";
+
+export interface AgentChatbyCheck {
+  outcome: string | null;
+  reason: string | null;
+  evidence: Record<string, unknown> | null;
+  checked_at: string | null;
+}
+
+/** Motivos que guarda la pasada y no son de `evaluateChatbyConfirmation`. */
+const EXTRA_HOLD_LABEL: Record<string, string> = {
+  sin_ubicacion_cerrado: "Confirmó, pero no mandó su ubicación a tiempo y Kapta dejó de mirar el chat: la guía la decide una persona.",
+};
+
+function holdLabel(reason: string | null): string | null {
+  if (!reason) return null;
+  return CHATBY_HOLD_REASONS[reason as ChatbyHoldReason] ?? EXTRA_HOLD_LABEL[reason] ?? reason.replace(/_/g, " ");
+}
+
+/**
+ * Lo que dijo Chatby de un pedido, según la última lectura de la confirmación
+ * automática. «Confirmó con mensaje» es el mensaje completo de §6.1 (pedido,
+ * monto, pago en casa y dirección); «pulsó Confirmar» es solo el botón, que no
+ * confirma. PURA.
+ */
+export function agentChatbyState(check: AgentChatbyCheck | null) {
+  if (!check) {
+    return {
+      estado: "no_leido" as AgentChatbyState,
+      que_dijo: "Kapta no lee el Chatby de este pedido (Lima, Agencia o fuera de las 72 h de la confirmación automática). Para verlo, leer_conversacion.",
+      motivo: null,
+      pulso_confirmar: null,
+      leido: null,
+    };
+  }
+  const button = typeof check.evidence?.boton_confirmar_at === "string" ? (check.evidence.boton_confirmar_at as string) : null;
+  const base = { motivo: null as string | null, pulso_confirmar: button, leido: check.checked_at };
+  const rejected = check.reason === "rechazo" || check.reason === "anulado_en_chat";
+  switch (check.outcome) {
+    case "confirmado":
+      return { ...base, estado: "confirmo_con_mensaje" as AgentChatbyState, que_dijo: "Mandó su mensaje de confirmación y Kapta lo confirmó solo." };
+    case "para_asesora":
+      return rejected
+        ? { ...base, estado: "rechazo" as AgentChatbyState, motivo: check.reason, que_dijo: holdLabel(check.reason)! }
+        : {
+            ...base,
+            estado: "confirmo_con_mensaje" as AgentChatbyState,
+            motivo: check.reason,
+            que_dijo: `Mandó su mensaje de confirmación, pero quedó para una persona: ${holdLabel(check.reason) ?? "sin motivo guardado"}`,
+          };
+    case "sin_confirmacion":
+      return button
+        ? {
+            ...base,
+            estado: "pulso_confirmar" as AgentChatbyState,
+            que_dijo: "Pulsó «Confirmar pedido», pero no mandó su mensaje con el monto y la dirección: el botón solo no confirma. Una llamada corta lo cierra.",
+          }
+        : { ...base, estado: "sin_respuesta" as AgentChatbyState, que_dijo: "Todavía no mandó su confirmación por Chatby." };
+    case "sin_conversacion":
+      return { ...base, estado: "sin_respuesta" as AgentChatbyState, que_dijo: "No tiene conversación en Chatby." };
+    default:
+      return { ...base, estado: "no_leido" as AgentChatbyState, que_dijo: "La última lectura de Chatby falló; para verlo, leer_conversacion." };
+  }
+}
+
+interface ListRow extends SearchRow {
+  province: string | null;
+  region: string | null;
+  macro_operation: string | null;
+}
+
+/** Una fila de la lista, como la ve el agente. PURA. */
+export function agentListResult(row: ListRow, check: AgentChatbyCheck | null, stores: readonly AgentStore[]) {
+  const destino = [row.district, row.province, row.region].map(textOrNull).filter((v, i, all) => v && all.indexOf(v) === i).join(", ");
+  return {
+    pedido: row.order_name,
+    tienda: storeName(stores, row.store_id),
+    fecha: row.order_created_at,
+    cliente: textOrNull(row.customer_name),
+    telefono: textOrNull(row.customer_phone),
+    destino: destino || null,
+    total: numOrNull(row.order_total),
+    etapa: row.macro_stage ? macroStageLabel(row.macro_stage) : null,
+    subetapa: row.macro_substage ? macroSubstageLabel(row.macro_substage) : null,
+    cobertura: row.macro_operation ? OPERATION_LABEL[row.macro_operation] ?? row.macro_operation : null,
+    guia: row.guide_code,
+    ultimo_movimiento: row.last_movement_at,
+    chatby: agentChatbyState(check),
+  };
+}
+
+const STAGE_CODES = ORDER_MACRO_STAGES.map((st) => st.code) as [OrderMacroStage, ...OrderMacroStage[]];
+
+const listInput = z.object({
+  etapa: z.enum(STAGE_CODES).describe(`Etapa del Master: ${ORDER_MACRO_STAGES.map((st) => `${st.code} («${st.label}»)`).join(", ")}.`),
+  subetapa: z.string().max(40).optional().describe("Código de la subetapa (por ejemplo «sin_llamar» o «por_confirmar»). Sin ella, todas las de la etapa."),
+  cobertura: z.enum(["lima", "provincia_cod", "agencia"]).optional().describe("Lima, Provincia contra entrega o Agencia (con adelanto)."),
+  tienda: z.string().max(60).optional().describe("Nombre de la tienda. Sin ella, todas las del token."),
+  chatby: z
+    .enum(["confirmo_con_mensaje", "pulso_confirmar", "rechazo", "sin_respuesta", "no_leido"])
+    .optional()
+    .describe(
+      "Lo que dijo la clienta en Chatby: «confirmo_con_mensaje» (su mensaje con pedido, monto, pago en casa y dirección), «pulso_confirmar» " +
+        "(solo el botón, que no confirma), «rechazo», «sin_respuesta» o «no_leido» (Kapta no lee su Chatby).",
+    ),
+  pagina: z.number().int().min(1).max(100).optional().describe("Página (1 si no se dice)."),
+  por_pagina: z.number().int().min(1).max(LIST_PAGE_MAX).optional().describe(`Pedidos por página (1 a ${LIST_PAGE_MAX}; 25 si no se dice).`),
+}).strict();
+
+/** Los registros de la confirmación automática de esos pedidos, de a 150 por consulta. */
+async function chatbyChecksFor(deps: AgentToolDeps, orderIds: readonly string[]): Promise<Map<string, AgentChatbyCheck> | null> {
+  const out = new Map<string, AgentChatbyCheck>();
+  for (let i = 0; i < orderIds.length; i += 150) {
+    const { data, error } = await deps.admin
+      .from("chatby_auto_checks")
+      .select("order_id,outcome,reason,evidence,checked_at")
+      .in("order_id", orderIds.slice(i, i + 150));
+    if (error) return null;
+    for (const r of (data ?? []) as (AgentChatbyCheck & { order_id: string })[]) out.set(r.order_id, r);
+  }
+  return out;
+}
+
+const listarPedidos: AgentTool<typeof listInput> = {
+  name: "listar_pedidos",
+  title: "Listar los pedidos de una etapa",
+  description:
+    "Lista los pedidos de una etapa del Master (por ejemplo «por_confirmar»), por páginas de hasta 50, con el total, del más reciente al más antiguo. " +
+    "Filtra por subetapa, cobertura, tienda y por lo que dijo la clienta en Chatby según la última lectura de la confirmación automática " +
+    "(«confirmo_con_mensaje», «pulso_confirmar», «rechazo», «sin_respuesta», «no_leido»). Cada pedido trae lo que dijo en Chatby y, si quedó " +
+    "para una persona, el motivo. Para leer la conversación completa de uno, leer_conversacion. Solo lectura.",
+  scope: "pedidos.leer",
+  input: listInput,
+  async run(ctx, args, deps) {
+    let stores = ctx.stores;
+    if (args.tienda) {
+      const pick = pickAgentStore(ctx.stores, args.tienda);
+      if (!pick.ok) return fail("tienda_desconocida", pick.message);
+      stores = [pick.store];
+    }
+    const valid = MACRO_SUBSTAGES_BY_STAGE[args.etapa] as readonly string[];
+    if (args.subetapa && !valid.includes(args.subetapa)) {
+      return fail("subetapa_invalida", `«${args.subetapa}» no es una subetapa de ${macroStageLabel(args.etapa)}. Son: ${valid.join(", ")}.`);
+    }
+    const page = args.pagina ?? 1;
+    const size = args.por_pagina ?? 25;
+    const from = (page - 1) * size;
+    const query = (select: string, count: boolean) => {
+      let q = deps.admin
+        .from("order_master")
+        .select(select, count ? { count: "exact" } : undefined)
+        .in("store_id", stores.map((st) => st.id))
+        .eq("macro_stage", args.etapa);
+      if (args.subetapa) q = q.eq("macro_substage", args.subetapa);
+      if (args.cobertura) q = q.eq("macro_operation", args.cobertura);
+      return q.order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id", { ascending: true });
+    };
+    const storeId = stores.length === 1 ? stores[0]!.id : null;
+    const unavailable = fail("base_no_disponible", "No se pudo leer la lista ahora. Reintenta en unos segundos.", { storeId });
+
+    let rows: ListRow[];
+    let total: number;
+    let checks: Map<string, AgentChatbyCheck> | null;
+    if (!args.chatby) {
+      const { data, error, count } = await query(LIST_COLUMNS, true).range(from, from + size - 1);
+      if (error) return unavailable;
+      rows = (data ?? []) as unknown as ListRow[];
+      total = count ?? rows.length;
+      checks = await chatbyChecksFor(deps, rows.map((r) => r.order_id));
+      if (!checks) return unavailable;
+    } else {
+      // Lo de Chatby está en otra tabla: se mira la etapa entera y se filtra aquí.
+      const { data, error } = await query(LIST_COLUMNS, false).limit(LIST_SCAN_MAX + 1);
+      if (error) return unavailable;
+      const all = (data ?? []) as unknown as ListRow[];
+      if (all.length > LIST_SCAN_MAX) {
+        return fail("lista_muy_grande", `Hay más de ${LIST_SCAN_MAX} pedidos en ${macroStageLabel(args.etapa)}: acota con subetapa, cobertura o tienda para filtrar por Chatby.`, { storeId });
+      }
+      checks = await chatbyChecksFor(deps, all.map((r) => r.order_id));
+      if (!checks) return unavailable;
+      const matching = all.filter((r) => agentChatbyState(checks!.get(r.order_id) ?? null).estado === args.chatby);
+      total = matching.length;
+      rows = matching.slice(from, from + size);
+    }
+    const pedidos = rows.map((r) => agentListResult(r, checks!.get(r.order_id) ?? null, ctx.stores));
+    return {
+      ok: true,
+      storeId,
+      data: {
+        total,
+        pagina: page,
+        por_pagina: size,
+        paginas: Math.max(1, Math.ceil(total / size)),
+        pedidos,
+        ...(pedidos.length ? {} : { nota: total ? "Esa página está vacía: hay menos páginas." : "Ningún pedido cumple esos filtros en las tiendas que ve este conector." }),
       },
     };
   },
@@ -733,6 +959,7 @@ const crearGuiaAliclik: AgentTool<typeof guideInput> = {
 
 export const AGENT_TOOLS: readonly AgentTool[] = [
   buscarPedidos as unknown as AgentTool,
+  listarPedidos as unknown as AgentTool,
   obtenerPedido as unknown as AgentTool,
   leerConversacion as unknown as AgentTool,
   consultarPoliticas as unknown as AgentTool,
