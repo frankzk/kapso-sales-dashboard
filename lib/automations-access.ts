@@ -44,6 +44,7 @@ import {
 import { loadPrepaySettings } from "@/lib/prepay-list-server";
 import { loadChatbyApproxView, type ChatbyApproxView } from "@/lib/chatby-approx-server";
 import { loadChatbyAskModeView, type ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
+import { retryAskModeFrom, type RetryAskMode } from "@/lib/lima-retry-chatby-ask";
 import { parsePrepaySimulationSummary, type PrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import {
   GEOCODE_KEY_MISSING,
@@ -81,6 +82,16 @@ export interface RetryView {
   countedToday: number;
   log: RetryLogView[];
   geocode: RetryGeocodeView;
+  chatbyAsk: RetryChatbyAskView;
+}
+
+/** «Pedir la ubicación por WhatsApp» de los reintentos (0323, owner 08-11-2026). */
+export interface RetryChatbyAskView {
+  /** Falso si la 0323 aún no está: el control se bloquea y todo es Apagado. */
+  available: boolean;
+  mode: RetryAskMode;
+  /** `CHATBY_API_KEY` está en el entorno. */
+  keyPresent: boolean;
 }
 
 /**
@@ -371,6 +382,7 @@ async function loadRetry(admin: SupabaseClient, orgId: string, today: string, ye
     countedToday: 0,
     log: [],
     geocode: noGeocode(null),
+    chatbyAsk: { available: false, mode: "apagado", keyPresent: !!env.chatbyApiKey() },
   };
   const [variantsRes, settingsRes, logRes, runRes] = await Promise.all([
     admin.from("lima_retry_auto_variants").select("variant,mode").eq("org_id", orgId),
@@ -435,7 +447,7 @@ async function loadRetry(admin: SupabaseClient, orgId: string, today: string, ye
   const countedToday = log.filter((r) => r.day === "hoy" && r.mode === "activo" && r.outcome && RETRY_OUTCOMES_COUNTED.includes(r.outcome)).length;
 
   // La ubicación por dirección: el interruptor y la última medición de Lima.
-  const settings = settingsRes.data as { daily_cap?: number; geocode_enabled?: boolean } | null;
+  const settings = settingsRes.data as { daily_cap?: number; geocode_enabled?: boolean; chatby_ask_mode?: string } | null;
   let geocode: RetryGeocodeView;
   const installed = (settings ? "geocode_enabled" in settings : true) && !isMissingTable(runRes.error);
   if (!installed) geocode = noGeocode(null);
@@ -469,6 +481,12 @@ async function loadRetry(admin: SupabaseClient, orgId: string, today: string, ye
     countedToday,
     log,
     geocode,
+    // Sin fila no se sabe si la 0323 está: se deja cambiar y la escritura lo dice.
+    chatbyAsk: {
+      available: settings ? "chatby_ask_mode" in settings : true,
+      mode: retryAskModeFrom(settings?.chatby_ask_mode),
+      keyPresent: !!env.chatbyApiKey(),
+    },
   };
 }
 

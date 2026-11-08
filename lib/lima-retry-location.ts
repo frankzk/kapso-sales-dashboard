@@ -18,7 +18,9 @@ import "server-only";
 // último pin desde 3 días antes del pedido (`chatbyGuidePin`, la misma regla de
 // la confirmación, MOM §6.1). Sin mandarle nada. Si el mismo celular tiene otro
 // pedido creado entre este y ese pin (más 3 días), el pin puede ser del otro:
-// no se usa.
+// no se usa. Salvo que Kapta le haya pedido la ubicación PARA ESTE pedido
+// (0323, «Pedir la ubicación por WhatsApp») y el pin llegó después: ese pin es
+// la respuesta, el mensaje nombra el pedido.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
@@ -27,6 +29,7 @@ import { geocodeOrderAddress, googlePinnedOrderIds, latestGeocodeLimaRun } from 
 import { fetchChatbyConversation } from "@/lib/chatby-api";
 import { CHATBY_PIN_MAX_DAYS_BEFORE_ORDER, chatbyGuidePin } from "@/lib/chatby-autoconfirm";
 import type { RetryGeocodeMiss } from "@/lib/lima-retry-auto";
+import { RETRY_ASK_PURPOSE } from "@/lib/lima-retry-chatby-ask";
 
 /**
  * La coordenada con la que se cotiza y se crea cuando no es la del pedido: la
@@ -111,11 +114,20 @@ export async function chatbyRetryPin(admin: SupabaseClient, row: RetryLocationRo
     const { data, error } = await admin.from("order_master").select("order_id")
       .eq("customer_phone", row.customer_phone).neq("order_id", row.order_id)
       .gt("order_created_at", row.order_created_at).lte("order_created_at", until).limit(1);
-    if (error || (data ?? []).length) return null;
+    if (error) return null;
+    if ((data ?? []).length && !(await askedBefore(admin, row.order_id, pin.at))) return null;
     return pin.coordinate;
   } catch {
     return null;
   }
+}
+
+/** ¿Kapta le pidió la ubicación para este pedido antes de ese pin? (0323) */
+async function askedBefore(admin: SupabaseClient, orderId: string, pinAt: string): Promise<boolean> {
+  const { data, error } = await admin.from("order_events").select("occurred_at,payload")
+    .eq("order_id", orderId).eq("kind", "chatby_message").lte("occurred_at", pinAt);
+  if (error) return false;
+  return ((data ?? []) as { payload: Record<string, unknown> | null }[]).some((e) => e.payload?.auto === true && e.payload?.purpose === RETRY_ASK_PURPOSE);
 }
 
 /**

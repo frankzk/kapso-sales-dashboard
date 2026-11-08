@@ -641,4 +641,6 @@
 \ir migrations/0319_agent_oauth.sql
 \echo 'Applying 0322_lead_appointment_release.sql'
 \ir migrations/0322_lead_appointment_release.sql
+\echo 'Applying 0323_lima_retry_chatby_ask.sql'
+\ir migrations/0323_lima_retry_chatby_ask.sql
 \echo 'Done.'

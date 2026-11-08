@@ -357,4 +357,7 @@ echo "  ✅ client_id kcli_ y redirect_uris con rango; el código nunca en claro
 echo "▶ La reserva por cita se suelta sola (0322): 2 h después de la cita o cuando la clienta vuelve a escribir; después, reparto normal"
 $PSQL -f "$ROOT/scripts/sql/lead_appointment_release_smoke.sql"
 echo "  ✅ reservada dentro de las 2 h (borde inclusivo) y con mensajes anteriores, futuros o un handoff del agente; suelta a las 2 h o con un entrante posterior (una llamada sin fecha nueva ya consume la cita, 0289); suelta la toma otra asesora habilitada; la cita queda igual; frente a la 0312 solo cambian las citas sueltas"
+echo "▶ Reintentos de Lima: pedir la ubicación por WhatsApp (0323): posición que nace apagada, una marca por pedido y episodio, y RLS"
+$PSQL -f "$ROOT/scripts/sql/lima_retry_chatby_ask_smoke.sql"
+echo "  ✅ apagado / simulación / activo y nada más, nunca nulo; el tope y Google no cambian; una sola marca por pedido y episodio, con sus dos estados; la org lee la posición y sus marcas, y nadie las cambia desde el navegador"
 echo "✅ DB verification passed."

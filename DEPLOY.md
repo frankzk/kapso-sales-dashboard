@@ -1,5 +1,34 @@
 # Deployment runbook
 
+### 08-11-2026 · Reintentos Aliclik de Lima: «Pedir la ubicación por WhatsApp» (0323 o sin migración, MOM §9.5 y §40)
+
+Elección del owner: «pedirla si la ventana está abierta». Cuando un reintento de
+Lima llega a «Sin ubicación» (ni pin, ni pin de WhatsApp, ni edificio en Google)
+y la clienta escribió en las últimas 23 h, Kapta le manda **un** mensaje por
+Chatby pidiéndole su ubicación. Es una vez por reintento, nunca con el caso
+tomado en Repro Lima ni si alguien del equipo ya le escribió. Con la ventana
+cerrada no manda nada (no hay plantillas).
+
+**Migración 0323** (`db/migrations/0323_lima_retry_chatby_ask.sql`, aditiva):
+- la columna `lima_retry_auto_settings.chatby_ask_mode` (`apagado` |
+  `simulacion` | `activo`, nace `apagado`);
+- la tabla `lima_retry_chatby_asks`, el candado de «una vez por reintento».
+
+Se puede desplegar **antes** de aplicarla: sin la columna la pasada lo trata
+como Apagado y el panel muestra la fila bloqueada. Sin crons nuevos: corre en la
+pasada de los reintentos (cada hora de 8:23 a 13:23). Usa `CHATBY_API_KEY`.
+
+**Qué mirar después.**
+1. Aplicar la 0323.
+2. En Automatizaciones → «Ubicación por WhatsApp», poner «Pedir la ubicación por
+   WhatsApp» en **Simulación**.
+3. Un día después, revisar «Hoy y ayer»: «Habría pedido su ubicación por
+   WhatsApp» o por qué no (ventana cerrada, equipo atendiendo…).
+4. Si se ve bien, pasar a Activo. Cada mensaje queda en la Actividad del pedido.
+
+**Marcha atrás.** Ponerlo en Apagado (inmediato). Revertir el commit también
+basta; la columna y la tabla pueden quedarse.
+
 ### 08-11-2026 · Reintentos Aliclik de Lima: antes de Google, la ubicación que la clienta ya mandó por WhatsApp (sin migración, MOM §9.5)
 
 Elección del owner para los reintentos sin pin: Google da el edificio en ~1 de

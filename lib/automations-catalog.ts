@@ -637,6 +637,8 @@ export const RETRY_EVENT_PREFIX = "lima_retry:";
 export const RETRY_CAP_EVENT = "lima_retry_cap";
 /** «Usar la ubicación por dirección (Google)» de los reintentos de Lima (0308). */
 export const RETRY_GEOCODE_EVENT = "lima_retry_geocode";
+/** «Pedir la ubicación por WhatsApp» de los reintentos de Lima (0323). */
+export const RETRY_CHATBY_ASK_EVENT = "lima_retry_chatby_ask";
 export function retryVariantEventKey(variant: string): string {
   return `${RETRY_EVENT_PREFIX}${variant}`;
 }
@@ -649,6 +651,7 @@ export function automationEventLabel(key: string): string {
   if (key === PREPAY_MODE_EVENT) return "Lista de pago adelantado · regla automática";
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
+  if (key === RETRY_CHATBY_ASK_EVENT) return "Reintentos Aliclik · pedir la ubicación por WhatsApp";
   if (key.startsWith(RETRY_EVENT_PREFIX)) {
     const variant = key.slice(RETRY_EVENT_PREFIX.length);
     return isRetryVariant(variant) ? `Reintentos Aliclik · ${retryVariantLabel(variant)}` : "Reintentos Aliclik";

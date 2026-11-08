@@ -44,7 +44,7 @@ import {
   type AutomationEntry,
   type AutomationGroup,
 } from "@/lib/automations-catalog";
-import type { AutomationsOrgView, OrgSwitchView, RetryGeocodeView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
+import type { AutomationsOrgView, OrgSwitchView, RetryChatbyAskView, RetryGeocodeView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
 import type { ApproxReportRow, ChatbyApproxView } from "@/lib/chatby-approx-server";
 import type { ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
 import {
@@ -81,6 +81,7 @@ import {
   setChatbyApproxMode,
   setChatbyAskMode,
   setOrgAutomation,
+  setRetryChatbyAsk,
   setRetryDailyCap,
   setRetryGeocode,
   setRetryVariantMode,
@@ -142,6 +143,7 @@ const INDEX: IndexGroup[] = [
       { id: "retry-variantes", label: "Posición de cada reintento" },
       { id: "retry-tope", label: "Tope del día" },
       { id: "retry-ubicacion", label: "Ubicación por dirección" },
+      { id: "retry-whatsapp", label: "Ubicación por WhatsApp" },
       { id: "retry-simular", label: "Simular ahora" },
       { id: "retry-registro", label: "Hoy y ayer" },
     ],
@@ -427,6 +429,8 @@ function RetryGroup({ org, writable }: { org: AutomationsOrgView; writable: bool
       </SettingsSection>
 
       <GeocodeSection orgId={org.orgId} view={retry.geocode} writable={writable && retry.available} />
+
+      <WhatsappLocationSection orgId={org.orgId} view={retry.chatbyAsk} writable={writable && retry.available} />
 
       <SimulateSection orgId={org.orgId} canEdit={canEdit} />
 
@@ -1493,6 +1497,96 @@ function ReadonlyRow({
         </Badge>
       </div>
     </div>
+  );
+}
+
+// ── Ubicación por WhatsApp de los reintentos de Lima (0323) ──────────────────
+
+/**
+ * Antes de Google, la ubicación que la clienta ya mandó por WhatsApp (sin
+ * interruptor), y «Pedir la ubicación por WhatsApp»: Apagado / Simulación /
+ * Activo, que guarda al cambiar.
+ */
+function WhatsappLocationSection({ orgId, view, writable }: { orgId: string; view: RetryChatbyAskView; writable: boolean }) {
+  const id = useId();
+  const [mode, setMode] = useState<ApproxMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available;
+  const blocked = !view.available
+    ? "Aún no está instalada en la base de datos (0323): funciona como Apagado."
+    : !view.keyPresent
+      ? "Falta la clave de Chatby en Kapta (CHATBY_API_KEY): no se lee ni se pide nada."
+      : null;
+
+  const change = (next: ApproxMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (
+      next === "activo" &&
+      !window.confirm(
+        "¿Poner en Activo «Pedir la ubicación por WhatsApp»? Cuando un reintento de Lima no tenga ubicación y la clienta haya escrito en las últimas 23 h, Kapta le escribirá por WhatsApp sin que una persona lo revise (una vez por reintento).",
+      )
+    ) {
+      return false;
+    }
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setRetryChatbyAsk(orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  return (
+    <SettingsSection
+      id="retry-whatsapp"
+      title="Ubicación por WhatsApp"
+      badge={!view.available ? <Badge tone="warn">No instalado</Badge> : <Badge>{APPROX_MODE_LABEL[mode]}</Badge>}
+      description={
+        <>
+          <p>
+            Antes de buscar en Google, la pasada y «Aprobar» usan la ubicación que la clienta ya mandó por WhatsApp para esta compra. No hay que
+            encender nada.
+          </p>
+          <p>
+            Si no mandó ninguna y Google tampoco da el edificio, esta fila decide si Kapta se la pide. WhatsApp solo deja mandarle texto si ella
+            escribió en las últimas 24 h; si no, queda para una persona.
+          </p>
+        </>
+      }
+    >
+      <div className={CARD}>
+        <div className={ROW}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <div className="min-w-0 sm:flex-1">
+              <p id={`${id}-name`} className="text-sm font-semibold leading-5 text-ink-900">
+                Pedir la ubicación por WhatsApp
+              </p>
+              <p id={`${id}-desc`} className={cn(HELP, "mt-0.5 max-w-[68ch]")}>
+                Una vez por reintento, solo si la clienta escribió en las últimas 23 h, nadie del equipo le escribió y el caso no está tomado en Repro
+                Lima. En Simulación, «Hoy y ayer» dice «Habría pedido su ubicación por WhatsApp» y no sale nada. Corre para los reintentos en
+                Simulación o Activo de arriba: cuando la manda, la pasada siguiente cotiza con ella (con el reintento en Simulación, lo aprueba una
+                persona).
+              </p>
+            </div>
+            <ModeControl value={mode} label="Pedir la ubicación por WhatsApp" disabled={!canEdit} pending={pending} onChange={change} />
+          </div>
+          <div className="mt-1.5">
+            <RowStatus pending={pending} status={status} blocked={blocked} />
+          </div>
+        </div>
+      </div>
+    </SettingsSection>
   );
 }
 

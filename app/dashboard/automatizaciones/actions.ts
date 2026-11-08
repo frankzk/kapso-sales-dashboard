@@ -44,6 +44,7 @@ import {
   CHATBY_ASK_KEY,
   PREPAY_MODE_EVENT,
   RETRY_CAP_EVENT,
+  RETRY_CHATBY_ASK_EVENT,
   RETRY_GEOCODE_EVENT,
   detailPaths,
   isUuid,
@@ -196,6 +197,45 @@ export async function setRetryGeocode(orgId: string, on: boolean): Promise<Autom
   });
   revalidatePath(PANEL_PATH);
   return { notice: warn ?? `Ubicación por dirección (Google) en los reintentos: ${on ? "encendida" : "apagada"}.` };
+}
+
+/**
+ * «Pedir la ubicación por WhatsApp» de los reintentos de Lima (0323, owner
+ * 08-11-2026): Apagado / Simulación / Activo, por organización. Fuera de
+ * Apagado hace falta `CHATBY_API_KEY` (también Simulación lee la conversación).
+ * Cada cambio queda en «Últimos cambios».
+ */
+export async function setRetryChatbyAsk(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isApproxMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  // `*`: sin la 0323 la columna no viene y se dice, en vez de fallar al escribir.
+  const { data: current, error: readError } = await g.admin.from("lima_retry_auto_settings").select("*").eq("org_id", orgId).maybeSingle();
+  if (readError) return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  const row = current as { chatby_ask_mode?: string } | null;
+  if (row && !("chatby_ask_mode" in row)) return { error: "Falta la migración 0323 en la base de datos." };
+  const previous = isApproxMode(row?.chatby_ask_mode) ? row!.chatby_ask_mode : "apagado";
+  if (previous === mode) return { notice: "Ya estaba así." };
+  if (mode !== "apagado" && !env.chatbyApiKey()) {
+    return { error: "Falta la clave de Chatby en Kapta (CHATBY_API_KEY): no se puede leer la conversación de la clienta." };
+  }
+  const { error } = await g.admin
+    .from("lima_retry_auto_settings")
+    .upsert({ org_id: orgId, chatby_ask_mode: mode, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) {
+    if (/chatby_ask_mode/.test(error.message ?? "")) return { error: "Falta la migración 0323 en la base de datos." };
+    return { error: "No se pudo guardar. Intenta de nuevo." };
+  }
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: RETRY_CHATBY_ASK_EVENT,
+    previous,
+    next: mode,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  return { notice: warn ?? `Pedir la ubicación por WhatsApp en los reintentos: ${APPROX_MODE_LABEL[mode]}.` };
 }
 
 export interface LimaGeocodeMeasureResult extends AutomationActionResult {
