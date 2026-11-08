@@ -2,7 +2,7 @@
 
 ### 08-11-2026 · Conector de IA: conectar Grok con OAuth, sin copiar tokens (0319, MOM §42.8)
 
-**Pendiente de aplicar en producción.** Grok Bot guardó el token de Kapta
+**Aplicada en producción el 08-11-2026.** Grok Bot guardó el token de Kapta
 como secreto, pero no tuvo cómo mandarlo en la cabecera del conector, y pidió
 OAuth. Ahora el agente agrega el conector por su dirección (`/api/mcp`) y Kapta
 le pide permiso a una persona con `automations.manage`: tiendas, herramientas
