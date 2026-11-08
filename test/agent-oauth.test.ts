@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   OAUTH_REGISTRATIONS_PER_HOUR,
+  OAUTH_DEFAULT_SCOPES,
   OAUTH_SCOPES,
   authorizationServerMetadata,
   clientRedirect,
@@ -103,6 +104,8 @@ vi.mock("next/navigation", () => ({
   },
 }));
 vi.mock("@/lib/ingest", () => ({ getStoreCreds: async () => null }));
+// Las acciones de escritura cargan Aliclik; aquí no se usan.
+vi.mock("@/lib/agent-actions-server", () => ({ agentActionsFor: () => undefined }));
 
 const ORIGIN = "https://kapta.example";
 const ORG = "00000000-0000-4000-8000-0000000000aa";
@@ -137,8 +140,9 @@ describe("metadatos", () => {
       code_challenge_methods_supported: ["S256"],
     });
   });
-  it("por OAuth solo se dan las herramientas de lectura", () => {
-    expect(OAUTH_SCOPES).toEqual(["pedidos.leer", "conversaciones.leer", "politicas.leer"]);
+  it("por OAuth se dan todas; si el agente no pide ninguna, vienen marcadas solo las de lectura", () => {
+    expect(OAUTH_SCOPES).toEqual(["pedidos.leer", "conversaciones.leer", "politicas.leer", "pedidos.nota", "whatsapp.enviar", "aliclik.crear_guia"]);
+    expect(OAUTH_DEFAULT_SCOPES).toEqual(["pedidos.leer", "conversaciones.leer", "politicas.leer"]);
   });
 });
 
@@ -192,8 +196,9 @@ describe("PKCE y autorización", () => {
   });
 
   it("las herramientas pedidas, o todas las de lectura", () => {
-    expect(parseAuthorizeRequest(good, [REDIRECT], ORIGIN)).toMatchObject({ ok: true, request: { requestedScopes: OAUTH_SCOPES, state: "abc" } });
-    expect(parseAuthorizeRequest({ ...good, scope: "pedidos.leer whatsapp.enviar" }, [REDIRECT], ORIGIN)).toMatchObject({ ok: true, request: { requestedScopes: ["pedidos.leer"] } });
+    expect(parseAuthorizeRequest(good, [REDIRECT], ORIGIN)).toMatchObject({ ok: true, request: { requestedScopes: OAUTH_DEFAULT_SCOPES, state: "abc" } });
+    expect(parseAuthorizeRequest({ ...good, scope: "pedidos.leer whatsapp.enviar" }, [REDIRECT], ORIGIN)).toMatchObject({ ok: true, request: { requestedScopes: ["pedidos.leer", "whatsapp.enviar"] } });
+    expect(parseAuthorizeRequest({ ...good, scope: "pedidos.leer inventada" }, [REDIRECT], ORIGIN)).toMatchObject({ ok: true, request: { requestedScopes: ["pedidos.leer"] } });
     expect(parseAuthorizeRequest({ ...good, resource: `${ORIGIN}/api/mcp` }, [REDIRECT], ORIGIN)).toMatchObject({ ok: true });
   });
 
@@ -466,14 +471,14 @@ describe("approveAgentAuthorization y denyAgentAuthorization", () => {
     expect(JSON.stringify(codeInsert)).not.toContain(code);
   });
 
-  it("sin automations.manage, con una tienda que no ve o de dos organizaciones, o con herramientas de escritura: no hay código", async () => {
+  it("sin automations.manage, con una tienda que no ve o de dos organizaciones, o con una herramienta que no existe: no hay código", async () => {
     const { approveAgentAuthorization } = await import("@/app/oauth/authorize/actions");
     h.allowed = false;
     expect(await approveAgentAuthorization({}, consent())).toMatchObject({ error: expect.stringContaining("dueño") });
     h.allowed = true;
     expect(await approveAgentAuthorization({}, consent({ store_ids: [KENKU, "no-la-veo"] }))).toEqual({ error: "Elegiste una tienda que no ves." });
     expect(await approveAgentAuthorization({}, consent({ store_ids: [KENKU, OTHER_ORG_STORE] }))).toEqual({ error: "Elige tiendas de una sola organización." });
-    expect(await approveAgentAuthorization({}, consent({ scopes: ["pedidos.leer", "whatsapp.enviar"] }))).toEqual({ error: "Hay una herramienta que no existe." });
+    expect(await approveAgentAuthorization({}, consent({ scopes: ["pedidos.leer", "pedidos.borrar"] }))).toEqual({ error: "Hay una herramienta que no existe." });
     expect(await approveAgentAuthorization({}, consent({ store_ids: [] }))).toEqual({ error: "Elige al menos una tienda." });
     expect(codeInsert).toBeNull();
   });

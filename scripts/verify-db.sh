@@ -357,4 +357,7 @@ echo "  ✅ client_id kcli_ y redirect_uris con rango; el código nunca en claro
 echo "▶ La reserva por cita se suelta sola (0322): 2 h después de la cita o cuando la clienta vuelve a escribir; después, reparto normal"
 $PSQL -f "$ROOT/scripts/sql/lead_appointment_release_smoke.sql"
 echo "  ✅ reservada dentro de las 2 h (borde inclusivo) y con mensajes anteriores, futuros o un handoff del agente; suelta a las 2 h o con un entrante posterior (una llamada sin fecha nueva ya consume la cita, 0289); suelta la toma otra asesora habilitada; la cita queda igual; frente a la 0312 solo cambian las citas sueltas"
+echo "▶ Lo que el agente de IA puede hacer (0323): interruptores en Simulación con topes, acciones y estados cerrados, código de un solo uso como sha256 y solo el servidor"
+$PSQL -f "$ROOT/scripts/sql/agent_actions_smoke.sql"
+echo "  ✅ nace en Simulación con 20 y 10, solo apagado/simulación/activo y topes con rango; solo nota, WhatsApp y guía, desde chat o rutina, con sus siete estados; el código nunca en claro ni repetido; texto con tope y error sin texto libre; el servidor cambia el estado pero no borra; el navegador no ve nada"
 echo "✅ DB verification passed."

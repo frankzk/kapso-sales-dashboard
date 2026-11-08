@@ -108,7 +108,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
           }).filter(([, v]) => v),
         )}
         stores={stores}
-        scopes={OAUTH_SCOPES.map((key) => ({ key, label: AGENT_SCOPES[key].label, checked: request.requestedScopes.includes(key) }))}
+        scopes={OAUTH_SCOPES.map((key) => ({ key, label: AGENT_SCOPES[key].label, write: AGENT_SCOPES[key].write, checked: request.requestedScopes.includes(key) }))}
         defaultLabel={`${client!.client_name} (OAuth)`.slice(0, 80)}
       />
     </Shell>

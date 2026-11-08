@@ -5,7 +5,7 @@
 // crea un código de un solo uso y vuelve al agente; «Cancelar» vuelve sin nada.
 
 import { useActionState } from "react";
-import { Banner, FIELD, OpsButton } from "@/components/ops-ui";
+import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
 import { HELP } from "@/components/settings-ui";
 import {
@@ -32,7 +32,7 @@ export function OAuthConsentForm({
   redirectHost: string;
   params: Record<string, string>;
   stores: ConsentStore[];
-  scopes: { key: string; label: string; checked: boolean }[];
+  scopes: { key: string; label: string; write: boolean; checked: boolean }[];
   defaultLabel: string;
 }) {
   const [approveState, approve, approving] = useActionState(approveAgentAuthorization, {} as ConsentState);
@@ -69,15 +69,22 @@ export function OAuthConsentForm({
         </div>
       </fieldset>
       <fieldset>
-        <legend className="text-[13px] font-medium text-ink-700">Herramientas (solo lectura)</legend>
+        <legend className="text-[13px] font-medium text-ink-700">Herramientas</legend>
         <div className="mt-1.5 space-y-1.5">
           {scopes.map((s) => (
-            <label key={s.key} className="flex items-center gap-2 text-sm text-ink-700">
+            <label key={s.key} className="flex flex-wrap items-center gap-2 text-sm text-ink-700">
               <input type="checkbox" name="scopes" value={s.key} defaultChecked={s.checked} />
               {s.label}
+              {s.write && <Badge tone="warn">Hace cambios</Badge>}
             </label>
           ))}
         </div>
+        {scopes.some((s) => s.write) && (
+          <p className={cn(HELP, "mt-2")}>
+            Las que hacen cambios siguen el interruptor de Automatizaciones › Conector de IA (Apagado, Simulación o Activo), sus
+            topes diarios y tus permisos. No puede cambiar estados ni anular guías.
+          </p>
+        )}
       </fieldset>
       {error && (
         <Banner tone="crit" role="alert">

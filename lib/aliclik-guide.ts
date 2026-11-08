@@ -904,8 +904,11 @@ export interface AliclikGuideOrigin {
    * `reintento_lima`: el reintento Aliclik de la cadena de Lima (MOM §9.5,
    * entrega 3, 04-11-2026), con la variante encendida en Automatizaciones. Es
    * el único que puede justificar otra salida en Lima (`aliclikMotiveAllowed`).
+   * `agente_ia`: la que pidió el agente de IA por el conector (MOM §42.9,
+   * 08-11-2026), con los permisos de quien lo conectó y su tope diario. No
+   * puede justificar otra salida: no escribe motivos.
    */
-  kind: "envio_programado" | "confirmado_chatby" | "reintento_lima";
+  kind: "envio_programado" | "confirmado_chatby" | "reintento_lima" | "agente_ia";
   /** El día (YYYY-MM-DD) por el que se creó hoy: el programado, o el de la pasada. */
   scheduledOn: string;
   /** El motivo que queda en el hecho `guide_registered`. */

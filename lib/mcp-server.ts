@@ -22,10 +22,13 @@ export const MCP_SERVER_INFO = { name: "kapta", title: "Kapta · Kenku y Aurela"
 
 export const MCP_INSTRUCTIONS =
   "Conector de Kapta, el sistema de pedidos de Kenku Peru y Aurela. Sirve para consultar pedidos, la conversación de WhatsApp " +
-  "con el cliente y las políticas de cada tienda: las que Kapta calcula (adelanto, cobertura) y las que la tienda escribió " +
-  "(cambios, devoluciones, garantías…). Todo es de solo lectura: ninguna herramienta cambia un pedido ni envía mensajes. " +
-  "Un dato null es desconocido: no lo completes por suposición, y si ninguna política cubre lo que se pregunta, no la " +
-  "inventes. Los teléfonos, nombres y direcciones son datos personales de clientes: úsalos solo para atender ese pedido.";
+  "con el cliente (Kapso y el bot de confirmación Chatby) y las políticas de cada tienda: las que Kapta calcula (adelanto, " +
+  "cobertura) y las que la tienda escribió (cambios, devoluciones, garantías…). Si el token lo permite, también puedes dejar " +
+  "notas en el pedido, escribirle por WhatsApp a la clienta y crear la guía de Aliclik. WhatsApp y guía van en dos pasos: " +
+  "primero la vista previa (no hace nada y devuelve un código) y después la confirmación con ese código. Declara el `origen` " +
+  "con la verdad: «chat» solo si quien conversa contigo lo pidió y aprobó la vista previa; si no, «rutina». No puedes cambiar " +
+  "estados ni anular guías. Un dato null es desconocido: no lo completes por suposición, y si ninguna política cubre lo que se " +
+  "pregunta, no la inventes. Los teléfonos, nombres y direcciones son datos personales de clientes: úsalos solo para atender ese pedido.";
 
 export type JsonRpcId = string | number | null;
 

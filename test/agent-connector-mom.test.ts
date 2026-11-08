@@ -10,7 +10,25 @@ import { AGENT_RATE_PER_MINUTE, AGENT_SCOPES, AGENT_TOKEN_PREFIX } from "@/lib/a
 import { AGENT_TOOLS } from "@/lib/agent-tools";
 import { MCP_PROTOCOL_VERSIONS } from "@/lib/mcp-server";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
-import { OAUTH_CODE_TTL_MS, OAUTH_REGISTRATIONS_PER_HOUR, OAUTH_SCOPES, authorizationServerMetadata } from "@/lib/agent-oauth";
+import { OAUTH_CODE_TTL_MS, OAUTH_DEFAULT_SCOPES, OAUTH_REGISTRATIONS_PER_HOUR, OAUTH_SCOPES, authorizationServerMetadata } from "@/lib/agent-oauth";
+import {
+  AGENT_ACTIONS_SHOWN,
+  AGENT_ACTION_LABEL,
+  AGENT_CODE_TTL_MS,
+  AGENT_COMMENT_TYPE,
+  AGENT_EVENT_SOURCE,
+  AGENT_GUIDE_CAP_MAX,
+  AGENT_GUIDE_ORIGIN_KIND,
+  AGENT_NOTE_MAX,
+  AGENT_STATUS_LABEL,
+  AGENT_WHATSAPP_CAP_MAX,
+  AGENT_WHATSAPP_EVENT,
+  AGENT_WHATSAPP_MAX,
+  DEFAULT_AGENT_SETTINGS,
+  WHATSAPP_ORDER_GAP_MS,
+  WHATSAPP_WINDOW_MS,
+  agentExecution,
+} from "@/lib/agent-actions";
 import {
   POLICIES_FOR_AGENT_MAX,
   POLICY_BODY_MAX,
@@ -42,33 +60,43 @@ function section(title: string): string {
 describe("§42 Conector para agentes de IA", () => {
   const s42 = section("## 42. Conector para agentes de IA (Grok Bot, 08-11-2026)");
 
-  it("registra lo que decidió el owner y que esta parte solo lee", () => {
+  it("registra lo que decidió el owner: dos partes de lectura y la tercera con los cambios permitidos", () => {
     expect(s42).toContain("«Quiero construir un agente de Grok Bot para que gestione cosas en específico del sistema»");
     expect(s42).toContain("crear guías de Aliclik, dejar notas en el pedido y enviar WhatsApp al cliente");
     expect(s42).toContain("No cambia estados ni anula guías.");
     expect(s42).toContain("**Las partes 1 y 2 son de solo lectura para el agente.**");
-    // Ninguna herramienta escribe todavía.
-    expect(AGENT_TOOLS.every((t) => !AGENT_SCOPES[t.scope].write)).toBe(true);
+    expect(s42).toContain("La parte 3 (08-11-2026, 0323) le da los tres cambios permitidos");
+    // Las de escritura son justo esas tres.
+    expect(AGENT_TOOLS.filter((t) => AGENT_SCOPES[t.scope].write).map((t) => t.name)).toEqual(["agregar_nota", "enviar_whatsapp", "crear_guia_aliclik"]);
   });
 
   it("las herramientas y sus permisos son los del código", () => {
-    const s423 = section("### 42.3 Las herramientas (solo lectura)");
+    const s423 = section("### 42.3 Las herramientas de lectura");
+    const s429 = section("### 42.9 Lo que el agente puede hacer: notas, WhatsApp y guía de Aliclik (parte 3, 08-11-2026; 0323)");
     for (const tool of AGENT_TOOLS) {
-      expect(s423).toContain(`| \`${tool.name}\` | \`${tool.scope}\` |`);
+      expect(AGENT_SCOPES[tool.scope].write ? s429 : s423).toContain(`| \`${tool.name}\` | \`${tool.scope}\` |`);
     }
-    expect(AGENT_TOOLS.map((t) => t.name)).toEqual(["buscar_pedidos", "obtener_pedido", "leer_conversacion", "consultar_politicas"]);
+    expect(AGENT_TOOLS.map((t) => t.name)).toEqual([
+      "buscar_pedidos",
+      "obtener_pedido",
+      "leer_conversacion",
+      "consultar_politicas",
+      "agregar_nota",
+      "enviar_whatsapp",
+      "crear_guia_aliclik",
+    ]);
+    expect(s423).toContain("Aparte, en `chatby`, los últimos 20 mensajes con el bot de confirmación Chatby");
     expect(s423).toContain(`(${ADELANTO_MINIMO_LABEL}, \`lib/adelanto-minimo.ts\`)`);
     expect(s423).toContain("**toda consulta va filtrada por las tiendas del token**");
   });
 
-  it("los permisos de la base son los del código, y los de escritura esperan la parte 3", () => {
+  it("los permisos de la base son los del código", () => {
     const scopes = Object.keys(AGENT_SCOPES);
     const inMigration = MIGRATION.match(/scopes <@ array\[([^\]]+)\]/)![1]!.match(/'([^']+)'/g)!.map((s) => s.slice(1, -1));
     expect(inMigration).toEqual(scopes);
     const s427 = section("### 42.7 Pendiente");
-    for (const [key, s] of Object.entries(AGENT_SCOPES)) {
-      if (s.write) expect(s427).toContain(`\`${key}\``);
-    }
+    expect(s427).toContain("**Pasar a Activo.**");
+    expect(s427).toContain("**El origen lo declara el agente.**");
   });
 
   it("el token, el tope y las respuestas de la puerta son los del código", () => {
@@ -200,8 +228,10 @@ describe("§42.8 Conectar con OAuth", () => {
     expect(s428).toContain("crea un **código de un solo uso, de 10 minutos**");
     expect(authorizationServerMetadata("https://k.example")).toMatchObject({ code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"] });
     expect(s428).toContain("solo `code`, `authorization_code`, clientes públicos (`none`) y PKCE `S256`.");
-    expect(OAUTH_SCOPES.every((s) => !AGENT_SCOPES[s].write)).toBe(true);
-    expect(s428).toContain("Por OAuth solo se dan las herramientas de lectura");
+    expect(OAUTH_SCOPES).toEqual(Object.keys(AGENT_SCOPES));
+    expect(OAUTH_DEFAULT_SCOPES.every((s) => !AGENT_SCOPES[s].write)).toBe(true);
+    expect(s428).toContain("Desde la parte 3, por OAuth se pueden dar también las de escritura");
+    expect(s428).toContain("o solo las de lectura si no pidió");
     expect(s428).toContain("**Registrarse no da acceso a nada.**");
     expect(s428).toContain("**no redirigen nunca**");
     expect(s428).toContain("**Si un código ya usado se vuelve a presentar, se revoca el token que se dio con él.**");
@@ -229,6 +259,84 @@ describe("DEPLOY.md 0319", () => {
     expect(body).toContain("**Aplicada en producción el 08-11-2026.**");
     expect(body).toContain("**Migración `0319_agent_oauth.sql`**, a mano, ANTES del código");
     expect(body).toContain("select to_regclass('public.agent_oauth_clients'), to_regclass('public.agent_oauth_codes');");
+    expect(body).toContain("**Marcha atrás.**");
+  });
+});
+
+describe("§42.9 Lo que el agente puede hacer", () => {
+  const s429 = section("### 42.9 Lo que el agente puede hacer: notas, WhatsApp y guía de Aliclik (parte 3, 08-11-2026; 0323)");
+  const ACTIONS_MIGRATION = read("db/migrations/0323_agent_actions.sql");
+
+  it("lo que decidió el owner", () => {
+    expect(s429).toContain("**Notas: solas desde el primer día.**");
+    expect(s429).toContain("**interruptor por organización Apagado / Simulación / Activo**");
+    expect(s429).toContain("Nace en **Simulación**");
+    expect(s429).toContain("**Lo que el owner pide en el chat y aprueba ahí se hace de verdad**, aun en Simulación.");
+    expect(s429).toContain("**WhatsApp solo dentro de las 24 h**");
+    expect(s429).toContain("El agente **no cambia estados ni anula guías**.");
+  });
+
+  it("la tabla del origen es `agentExecution`", () => {
+    expect(s429).toContain("| Apagado | No se hace (ni deja pedir la vista previa) | No se hace |");
+    expect(s429).toContain("| Simulación | **Se hace** | Se registra como **simulada**, sin hacerse |");
+    expect(s429).toContain("| Activo | Se hace | Se hace |");
+    expect([agentExecution("apagado", "chat"), agentExecution("apagado", "rutina")]).toEqual(["rechazar", "rechazar"]);
+    expect([agentExecution("simulacion", "chat"), agentExecution("simulacion", "rutina")]).toEqual(["ejecutar", "simular"]);
+    expect([agentExecution("activo", "chat"), agentExecution("activo", "rutina")]).toEqual(["ejecutar", "ejecutar"]);
+    expect(s429).toContain("Kapta **no puede verificar** que una persona aprobó en el chat de Grok.");
+  });
+
+  it("los números son los del código y los de la base", () => {
+    expect(AGENT_CODE_TTL_MS).toBe(10 * 60_000);
+    expect(s429).toContain("**código de un solo uso, de 10 minutos**");
+    expect(WHATSAPP_ORDER_GAP_MS).toBe(4 * 3600_000);
+    expect(s429).toContain("un WhatsApp por pedido **cada 4 horas**");
+    expect(WHATSAPP_WINDOW_MS).toBe(24 * 3600_000);
+    expect(DEFAULT_AGENT_SETTINGS).toEqual({ whatsappMode: "simulacion", guideMode: "simulacion", whatsappDailyCap: 20, guideDailyCap: 10 });
+    expect(s429).toContain("**20 WhatsApp** y **10 guías** de fábrica (hasta 200 y 100)");
+    expect([AGENT_WHATSAPP_CAP_MAX, AGENT_GUIDE_CAP_MAX]).toEqual([200, 100]);
+    expect(ACTIONS_MIGRATION).toContain("whatsapp_daily_cap  integer not null default 20 check (whatsapp_daily_cap between 1 and 200)");
+    expect(ACTIONS_MIGRATION).toContain("guide_daily_cap     integer not null default 10 check (guide_daily_cap between 1 and 100)");
+    expect(ACTIONS_MIGRATION).toContain("whatsapp_mode       text not null default 'simulacion'");
+    expect(ACTIONS_MIGRATION).toContain("guide_mode          text not null default 'simulacion'");
+    expect([AGENT_NOTE_MAX, AGENT_WHATSAPP_MAX]).toEqual([1000, 1000]);
+    expect(s429).toContain("Hasta 1000 caracteres.");
+    expect(AGENT_ACTIONS_SHOWN).toBe(60);
+    expect(s429).toContain("las últimas 60 acciones");
+  });
+
+  it("los estados, acciones y marcas de la Actividad son los del código y los de la base", () => {
+    for (const status of Object.keys(AGENT_STATUS_LABEL)) expect(ACTIONS_MIGRATION).toContain(`'${status}'`);
+    expect(s429).toContain("prevista, en curso, simulada, hecha, rechazada, error o incierta");
+    for (const action of Object.keys(AGENT_ACTION_LABEL)) expect(ACTIONS_MIGRATION).toContain(`'${action}'`);
+    expect(AGENT_COMMENT_TYPE).toBe("Agente de IA");
+    expect(AGENT_EVENT_SOURCE).toBe("agente_ia");
+    expect(AGENT_WHATSAPP_EVENT).toBe("agent_whatsapp");
+    expect(AGENT_GUIDE_ORIGIN_KIND).toBe("agente_ia");
+    expect(s429).toContain("de tipo «Agente de IA», con `source = agente_ia` y sin persona");
+    expect(s429).toContain("(`kind = agent_whatsapp`)");
+    expect(s429).toContain("con origen `agente_ia`");
+  });
+
+  it("solo el servidor, sin borrar, y en la lista de migraciones", () => {
+    expect(ACTIONS_MIGRATION).toContain("revoke all on agent_actions from anon, authenticated, service_role;");
+    expect(ACTIONS_MIGRATION).toContain("grant select, insert, update on agent_actions to service_role;");
+    expect(ACTIONS_MIGRATION).not.toMatch(/grant[^;]*delete[^;]*agent_action/i);
+    expect(s429).toContain("Solo `service_role`, sin borrar.");
+    expect(read("db/apply.sql")).toContain("0323_agent_actions.sql");
+    expect(read("scripts/verify-db.sh")).toContain("scripts/sql/agent_actions_smoke.sql");
+  });
+});
+
+describe("DEPLOY.md 0323", () => {
+  const title = "### 08-11-2026 · El agente de IA hace notas, WhatsApp y guías de Aliclik (0323, MOM §42.9)";
+  it("la entrada dice que la 0323 va antes del código, cómo comprobarla y la marcha atrás", () => {
+    const start = DEPLOY.indexOf(title);
+    expect(start).toBeGreaterThan(-1);
+    const next = DEPLOY.indexOf("\n### ", start + 10);
+    const body = flat(DEPLOY.slice(start, next === -1 ? undefined : next));
+    expect(body).toContain("**Migración `0323_agent_actions.sql`**, a mano, ANTES del código");
+    expect(body).toContain("select to_regclass('public.agent_action_settings'), to_regclass('public.agent_actions');");
     expect(body).toContain("**Marcha atrás.**");
   });
 });
