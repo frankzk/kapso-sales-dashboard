@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useEffect, useId, useRef, useState, useTransition, type KeyboardEvent, type ReactNode } from "react";
 import { EmptyState, cn } from "@/components/ui";
 import { Badge, Banner, OpsButton, type BadgeTone } from "@/components/ops-ui";
+import { opsButtonClass } from "@/components/ops-styles";
 import { CARD, HELP, NUMBER_NARROW, ROW, SettingsGroup, SettingsIndex, SettingsSection, type IndexGroup } from "@/components/settings-ui";
 import { CHAIN_REASONS, type ChainReason } from "@/lib/lima-retry-chain";
 import {
@@ -156,6 +157,10 @@ export function AutomationsPanel({ orgs, writable }: { orgs: AutomationsOrgView[
             Un solo lugar para encender y apagar cada automatización. Todo lo que crea guías, llama o envía mensajes por su cuenta está aquí.
           </p>
         </div>
+        {/* MOM §42: los tokens con los que un agente de IA (Grok Bot) consulta Kapta. */}
+        <Link href="/dashboard/automatizaciones/conector" className={opsButtonClass("secondary", "md", "pointer-coarse:h-11")}>
+          Conector de IA
+        </Link>
         {orgs.length > 1 && (
           <label className="flex items-center gap-2 text-[13px] font-medium text-ink-600">
             Organización

@@ -23762,6 +23762,9 @@ Vercel— y algunas no tenían interruptor.
   encendido, pero no corre» con el motivo, y no lo cuenta entre los encendidos.
 - **Historial:** cada cambio queda en `automation_switch_events` (quién, qué,
   de qué a qué, cuándo) y el panel muestra los últimos.
+- **Conector de IA** (§42, 08-11-2026): el botón «Conector de IA» de la
+  cabecera lleva a los tokens con los que un agente (Grok Bot) consulta Kapta,
+  con el mismo permiso `automations.manage`.
 
 Migraciones `0306_automations_panel.sql` y `0308_lima_retry_geocode.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
@@ -24013,3 +24016,149 @@ aviso: `components/prepay-list-banner.tsx`. Pruebas: `test/prepay-list.test.ts`,
 `test/prepay-list-actions.test.ts`, `test/auto-order-trials.test.ts`,
 `scripts/sql/prepay_list_smoke.sql`, el glosario de permisos y el catálogo de
 Automatizaciones.
+
+## 42. Conector para agentes de IA (Grok Bot, 08-11-2026)
+
+**Pedido del owner (08-11-2026).** «Quiero construir un agente de Grok Bot
+para que gestione cosas en específico del sistema». Lo que decidió: el agente
+**busca y ve pedidos, lee la conversación, consulta las políticas y hace
+cambios**; entra con un **token de Kapta**; las políticas son **las dos**, las
+que Kapta calcula y las que cada tienda escribe; y los únicos cambios
+permitidos son **crear guías de Aliclik, dejar notas en el pedido y enviar
+WhatsApp al cliente**. No cambia estados ni anula guías.
+
+Se entrega en tres partes. **Las partes 1 y 2 son de solo lectura para el
+agente.** La parte 1 (08-11-2026, 0314) le da los pedidos, las conversaciones
+y las políticas que Kapta calcula; la parte 2 (08-11-2026, 0315), las
+políticas que escribe cada tienda (§42.6). La parte 3 (notas, WhatsApp y guía
+de Aliclik) está pendiente (§42.7): sus permisos ya existen en la base, pero
+ninguna herramienta los usa y la pantalla los muestra como «Próximamente».
+
+### 42.1 El servidor
+
+- **`POST /api/mcp`** (`app/api/mcp/route.ts`; el protocolo en
+  `lib/mcp-server.ts`): MCP por «Streamable HTTP» en su forma sin estado, la
+  que xAI documenta para Grok («Remote MCP Tools»). Cada POST trae **un**
+  mensaje JSON-RPC 2.0 y la respuesta vuelve como JSON en el mismo POST; no hay
+  flujo SSE ni `Mcp-Session-Id`.
+- Métodos: `initialize` (versiones `2025-06-18`, `2025-03-26` y `2024-11-05`;
+  la que pide el cliente si se entiende, si no la más nueva), `ping`,
+  `tools/list` y `tools/call`. Una notificación se contesta **202 sin cuerpo**;
+  un lote, **400**; un cuerpo de más de 64 KB, **413**; lo que no es JSON,
+  **400** (`-32700`); un método que no existe, `-32601`. GET y DELETE: **405**.
+- Una llamada que trae `Origin` de otro sitio: **403** (una página ajena no usa
+  un token que alguien tenga guardado). Los agentes no mandan `Origin`.
+
+### 42.2 El token
+
+- **Cómo nace.** En **Automatizaciones › Conector de IA**
+  (`/dashboard/automatizaciones/conector`), quien tiene `automations.manage`
+  (§40) le pone nombre, marca las tiendas (solo las que ve) y las herramientas.
+  El token es `kagt_` + 32 bytes al azar en base64url; **se muestra una sola
+  vez** y Kapta guarda solo su sha256 (`agent_tokens.token_hash`) y su pista
+  (`kagt_` + 4 caracteres) para reconocerlo en la lista. Si se pierde, se
+  revoca y se crea otro.
+- **Qué ve.** Las tiendas del token **que su creador ve hoy**, dentro de la
+  organización del token: la misma regla que `auth_store_ids()` (las de
+  `user_store_access`, más todas las de la organización si es owner o admin).
+  Si su creador sale de la organización o deja de ver todas sus tiendas, la
+  llamada contesta **403 `sin_tiendas`** y hay que crear otro.
+- **Quién no entra.** Sin token, con otro, revocado o vencido: **401 «No
+  autorizado.»**, sin decir cuál, con `WWW-Authenticate: Bearer realm="kapta"`.
+  Sin la migración 0314: **503**, y la pantalla dice «Falta la migración 0314».
+- **Revocar** lo apaga en el acto; su registro queda.
+- **Tope:** **60 llamadas por minuto** por token, contadas en
+  `agent_tool_calls`. Pasado el tope, la herramienta contesta un error sin leer
+  nada.
+
+### 42.3 Las herramientas (solo lectura)
+
+| Herramienta | Permiso | Qué devuelve |
+| --- | --- | --- |
+| `buscar_pedidos` | `pedidos.leer` | Hasta 20 pedidos (10 si no se dice) por número, teléfono (sus últimos 9 dígitos), nombre del cliente o guía (también la de Swayp), del último movimiento más reciente al más antiguo, con tienda, total, estado, etapa y subetapa. |
+| `obtener_pedido` | `pedidos.leer` | Productos y cantidades, importes y moneda, forma y estado de pago, entrega (modalidad, cobertura, destino y dirección), estado del Master (etapa y subetapa con su nombre de pantalla, motivos, courier, fechas de despacho, entrega y devolución), hasta 20 guías y los últimos 10 movimientos. |
+| `leer_conversacion` | `conversaciones.leer` | La conversación de WhatsApp (Kapso) de un pedido o de un teléfono: la guardada en el pedido, o la del lead de ese teléfono en la tienda, o la más reciente de ese teléfono en Kapso. Hasta 100 mensajes (40 si no se dice), del más antiguo al más nuevo, con fecha y autor (cliente o tienda); un adjunto solo dice su tipo, **sin enlace**. No marca nada como leído. |
+| `consultar_politicas` | `politicas.leer` | **Calculadas:** el adelanto mínimo de los envíos por agencia (S/ 20, `lib/adelanto-minimo.ts`) y, si se da el distrito, su cobertura según `order_coverage_for` el **día de Lima** (contraentrega o agencia con adelanto); si la base no contesta, «por revisar»: no afirma una cobertura que no se pudo calcular. **Escritas:** las políticas de la tienda vigentes ese día (§42.6). |
+
+Lo que vale para todas (`lib/agent-tools.ts`):
+
+- Leen la base con `service_role`, que se salta RLS, así que **toda consulta va
+  filtrada por las tiendas del token**. Un pedido de otra tienda contesta lo
+  mismo que uno que no existe.
+- Lo que no se sabe vuelve como `null`, nunca inventado.
+- Lo que escribe el agente se limpia antes de ir al filtro: solo letras,
+  dígitos, espacios y `# + - . @ _`, hasta 60 caracteres.
+- `tools/list` publica solo las herramientas de los permisos del token, con su
+  JSON Schema estricto (un argumento de más es un error).
+
+### 42.4 El registro
+
+Cada llamada a una herramienta deja una fila en `agent_tool_calls`: token,
+herramienta, tienda, pedido, si salió bien, el código del fallo y cuánto
+tardó. **Sin lo que se preguntó ni lo que se contestó** (ni teléfonos ni
+nombres): la base rechaza texto libre en la herramienta y en el código. El
+token guarda su último uso (`last_used_at`, `last_tool`) y la pantalla muestra
+las llamadas de las últimas 24 horas.
+
+### 42.5 Cómo se conecta Grok
+
+- **Grok Bot:** agregar el servidor MCP por su dirección
+  (`https://<dominio>/api/mcp`) con la cabecera `Authorization: Bearer` y el
+  token guardado como secreto (la tarjeta de secreto seguro de Grok). Nunca se
+  pega en un chat.
+- **API de xAI:** en `tools`, una herramienta `{"type": "mcp"}` con
+  `server_url` = esa dirección, `server_label` = `kapta` y `authorization` =
+  el token.
+
+### 42.6 Políticas escritas por tienda (parte 2, 08-11-2026; 0315)
+
+Lo que cada tienda escribe para que el agente lo diga tal cual: cambios,
+devoluciones, garantías, horarios… Hasta hoy no vivía en ningún sitio del
+sistema.
+
+- **Dónde.** En la misma pantalla, tarjeta **«Políticas escritas»**, por
+  tienda, con `automations.manage` y solo en las tiendas que la persona ve.
+  Cada política tiene **título** (de 2 a 80 caracteres), **texto** (hasta
+  4000, con sus párrafos), **vale desde** (un día de Lima, hoy por omisión),
+  **hasta** (opcional; ese día todavía vale) y **fuente** (opcional, hasta
+  200: de dónde sale).
+- **Estados** (`lib/store-policies.ts`, calculados en el día de Lima):
+  **Vigente** entre su primer y su último día, **Programada** antes de
+  empezar, **Vencida** después de su último día y **Retirada**, que gana a
+  todo. No son estados del pedido: son de la política.
+- **Editar** guarda una versión nueva. La versión la pone la base (1 al
+  nacer, +1 en cada cambio), y guardar sin cambios no crea una. La tienda, la
+  organización y el autor no cambian nunca.
+- **Retirar** es final: el agente deja de leerla en el acto y ya no se edita
+  ni se deshace. Para volver a usarla se crea otra. No se borra ninguna.
+- **Historial.** Cada versión guardada (al crear, editar o retirar) queda en
+  `store_policy_versions`, con quién y cuándo. La escribe la base sola
+  (disparador) y nadie la edita ni la borra, ni el servidor: es lo que
+  responde «¿qué decía la política el día que el agente se lo dijo a la
+  clienta?».
+- **Lo que lee el agente.** `consultar_politicas` devuelve, junto a las
+  calculadas, `escritas`: las **vigentes ese día de Lima** de la tienda que
+  pidió, por título, hasta 20, con título, texto, vigencia, fuente, versión y
+  cuándo se actualizó (sin quién la escribió). Sin ninguna, una nota le dice
+  que no invente una. Si no se pudieron leer (la base caída o sin la 0315),
+  `escritas` es `null` con su nota, que no es lo mismo que «ninguna», y las
+  calculadas siguen.
+- Las dos tablas son **solo del servidor**, como la 0314.
+
+### 42.7 Pendiente
+
+- **Parte 3 — los cambios que el owner permitió:** dejar una nota en el pedido
+  (`pedidos.nota`), enviar WhatsApp al cliente (`whatsapp.enviar`, con
+  idempotencia y aprobación) y crear la guía de Aliclik (`aliclik.crear_guia`,
+  con vista previa y confirmación). Cada una exige además que **el creador del
+  token** tenga hoy el permiso de Kapta equivalente (por ejemplo
+  `aliclik.create_guide` para la guía). Ninguna cambia estados ni anula guías.
+
+Migraciones `0314_agent_tokens.sql` y `0315_store_policies.sql`. Código:
+`lib/agent-auth.ts`, `lib/agent-tools.ts`, `lib/mcp-server.ts`,
+`lib/store-policies.ts`, `app/api/mcp/route.ts`,
+`app/dashboard/automatizaciones/conector/`, `lib/agent-tokens-access.ts`,
+`components/agent-connector-panel.tsx` y `components/store-policies-card.tsx`.
+Pruebas: `test/agent-connector.test.ts`, `test/store-policies.test.ts`,
+`test/agent-connector-mom.test.ts`, `scripts/sql/agent_tokens_smoke.sql` y
+`scripts/sql/store_policies_smoke.sql`.

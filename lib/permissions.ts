@@ -892,6 +892,16 @@ export function isReadOnly(
   return !hasPermission(roles, "master.edit", grants, functionalRoles);
 }
 
+/**
+ * ¿Este rol de acceso ve todas las tiendas de su organización? Es la regla de
+ * `auth_store_ids()` en la base (supabase/policies.sql): owner y admin, todas;
+ * los demás, solo las de `user_store_access`. La usa el servidor que lee con
+ * service_role en nombre de una persona (el conector de IA, MOM §42.2). PURA.
+ */
+export function roleSeesAllStores(role: string | null | undefined): boolean {
+  return role === "owner" || role === "admin";
+}
+
 /** Etiqueta legible del rol, para la cabecera del panel. */
 export function roleLabel(roles: readonly string[]): string {
   if (roles.includes("owner") || roles.includes("admin")) return "Administrador";
