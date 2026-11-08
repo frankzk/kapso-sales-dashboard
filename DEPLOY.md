@@ -1,5 +1,34 @@
 # Deployment runbook
 
+### 08-11-2026 · El GPS de la guía Aliclik en la ficha y «Usar este GPS» para clientas con entregas (sin migración, MOM §6.1 y §25)
+
+**Sin migración, sin crons ni variables nuevas.** Se despliega y ya está.
+
+El caso (owner): «solo aparece la anotación de que la guía fue generada, pero no
+expone el GPS… estaría bueno mostrarlo para estos clientes recurrentes y usar la
+misma GPS».
+
+- **Actividad y «Salidas y guías».** Cada guía Aliclik dice «GPS enviado a
+  Aliclik: -13.53382, -71.92565 · Ver en Maps» y, si se sabe, de dónde salió
+  (pegado por una persona, WhatsApp, Google, aproximada, «GPS de la entrega de
+  #X», la coordenada del pedido o el portal de Aliclik). Es el punto que Kapta
+  le mandó a Aliclik, no el GPS del motorizado. Se lee al pintar, del hecho o de
+  la guía del pedido (que la ficha ya leía en una sola consulta): **sale en los
+  pedidos viejos sin rellenar nada** (#KP131756 incluido). Desde este despliegue
+  `guide_registered` guarda además `payload.gps` (punto y origen).
+- **«Usar este GPS»** en «Crear guía en Aliclik»: hasta tres pedidos entregados
+  de la clienta (mismo celular, organización) con GPS de Aliclik y sin fallidos
+  (intento no entregado, devuelta, rechazo en la puerta), el más reciente
+  primero, con aviso ámbar si la dirección o el distrito no coinciden. Un clic
+  llena «Ubicación»; la asesora cotiza y crea con todas las rejas de siempre. El
+  servidor comprueba la entrega antes de dejar «GPS de la entrega de #X» en el
+  hecho. La regla automática de la 0317 no cambia.
+
+Medido el 08-11-2026 (solo lectura): 11.008 de 12.371 guías Aliclik tienen
+coordenada guardada (1.363 sin ella, casi todas entradas por el reporte); de
+321 pedidos en Por confirmar, 17 son de clientas con un GPS de entrega
+reutilizable (8 de los 55 creados hoy).
+
 ### 08-11-2026 · Confirmación por Chatby: guía automática para clientas con entregas (0317, MOM §6.1 y §40)
 
 **Migración 0317** (`db/migrations/0317_history_guide_auto.sql`, aditiva): una

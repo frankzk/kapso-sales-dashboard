@@ -38,11 +38,14 @@ import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import {
   createAliclikGuide,
   linkExistingAliclikGuide,
+  loadAliclikGpsCandidates,
   previewAliclikGuide,
   type ExistingAliclikGuidePreview,
   type AliclikPreview,
+  type RecurringGpsCandidate,
 } from "@/app/dashboard/pedidos/aliclik-actions";
-import { isShortenedMapsLink } from "@/lib/aliclik-geo";
+import { isShortenedMapsLink, parseCoordinateInput } from "@/lib/aliclik-geo";
+import { formatGpsCoordinate, gpsMapsUrl, sameGpsPoint } from "@/lib/guide-gps";
 import {
   aliclikRouteRiskGate,
   routeRiskReasonText,
@@ -165,6 +168,29 @@ export function AliclikGuidePanel({
   }, [orderId, hasCoordinate]);
   const whatsappPinText = whatsappPin ? `${whatsappPin.lat}, ${whatsappPin.lng}` : "";
 
+  /**
+   * «Usar este GPS» (MOM §6.1, 08-11-2026): el GPS de la guía Aliclik de una
+   * entrega anterior de la clienta (mismo celular, en la organización), sin
+   * fallidos, hasta 3. Un clic llena «Ubicación»; la asesora cotiza y confirma
+   * como siempre. Si después cambia el campo, la guía ya no lo firma.
+   */
+  const [gpsCandidates, setGpsCandidates] = useState<RecurringGpsCandidate[]>([]);
+  useEffect(() => {
+    let alive = true;
+    loadAliclikGpsCandidates(orderId)
+      .then((res) => {
+        if (alive) setGpsCandidates(res.candidates ?? []);
+      })
+      .catch(() => {
+        /* sin la lista, el campo se llena a mano como siempre */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orderId]);
+  const typedPoint = parseCoordinateInput(coordinate);
+  const chosenCandidate = gpsCandidates.find((c) => sameGpsPoint(typedPoint, c)) ?? null;
+
   // «Distrito por revisar» (MOM §19.0.3): Aliclik saca el ubigeo del distrito.
   const districtCheck = useDistrictMismatchCheck(orderId);
 
@@ -217,6 +243,10 @@ export function AliclikGuidePanel({
       const res = await createAliclikGuide(orderId, {
         transportId,
         coordinate: coordinate || null,
+        // De dónde salió lo que hay en «Ubicación»: queda en el hecho de la
+        // guía (el servidor comprueba la entrega antes de firmarla).
+        coordinateFromOrderId: chosenCandidate?.orderId ?? null,
+        coordinateFromWhatsapp: Boolean(whatsappPin) && coordinate.trim() === whatsappPinText,
         note: note || null,
         // Se devuelve el monto que se acaba de ENSEÑAR: el servidor lo recalcula
         // y aborta si cambió entre cotizar y pulsar.
@@ -477,6 +507,66 @@ export function AliclikGuidePanel({
                       Ver en el mapa
                     </a>
                   </span>
+                </div>
+              )}
+              {gpsCandidates.length > 0 && (
+                <div className="rounded-lg bg-wash px-3 py-2 text-[13px] leading-5 text-ink-700">
+                  <p className="font-medium text-ink-900">GPS de sus entregas anteriores</p>
+                  <p className="text-ink-500">
+                    El punto que Kapta mandó a Aliclik en un pedido que se entregó. Revisa que sea la misma casa.
+                  </p>
+                  <ul className="mt-1.5 divide-y divide-line">
+                    {gpsCandidates.map((c) => {
+                      const chosen = chosenCandidate?.orderId === c.orderId;
+                      const where = [c.address, c.district].filter(Boolean).join(", ");
+                      return (
+                        <li key={c.orderId} className="space-y-1 py-2 first:pt-1 last:pb-0.5">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                            <span className="min-w-0 flex-1">
+                              <span className="font-mono font-medium text-ink-900">{c.orderName ?? "Pedido"}</span>
+                              {c.deliveredLabel ? <span className="tabular-nums"> · entregado {c.deliveredLabel}</span> : " · entregado"}
+                              {where ? ` · ${where}` : ""}
+                              <span className="block font-mono tabular-nums text-ink-500">
+                                {formatGpsCoordinate(c.lat, c.lng)}
+                              </span>
+                            </span>
+                            <span className="flex items-center gap-3">
+                              {chosen ? (
+                                <Badge tone="ok">En uso</Badge>
+                              ) : (
+                                <OpsButton
+                                  size="sm"
+                                  onClick={() => {
+                                    setCoordinate(c.coordinate);
+                                    // Otra coordenada: la cotización anterior ya no vale.
+                                    setPreview(null);
+                                    setTransportId(null);
+                                  }}
+                                  className="pointer-coarse:h-11"
+                                >
+                                  Usar este GPS
+                                </OpsButton>
+                              )}
+                              <a
+                                href={gpsMapsUrl(c.lat, c.lng)}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                className="font-medium text-brand-700 hover:underline"
+                              >
+                                Ver en Maps
+                              </a>
+                            </span>
+                          </div>
+                          {c.warning && (
+                            <p className="flex items-start gap-1.5 text-warn-fg">
+                              <IconAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+                              {c.warning}
+                            </p>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </div>
               )}
               {shortened && (
