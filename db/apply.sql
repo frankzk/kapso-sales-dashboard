@@ -639,4 +639,6 @@
 \ir migrations/0318_chatby_auto_ask.sql
 \echo 'Applying 0319_agent_oauth.sql'
 \ir migrations/0319_agent_oauth.sql
+\echo 'Applying 0322_lead_appointment_release.sql'
+\ir migrations/0322_lead_appointment_release.sql
 \echo 'Done.'
