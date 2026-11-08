@@ -1,5 +1,31 @@
 # Deployment runbook
 
+### 08-11-2026 · «Llamar con Anura»: líneas compartidas y «Puede llamar con Anura» (0313, MOM §8.7)
+
+**Aplicada en producción el 08-11-2026.** Un pool de anexos («líneas
+compartidas») que Kapta reparte al llamar: cada llamada toma una línea libre y
+la suelta al colgar, y la base garantiza que dos llamadas vivas nunca usen el
+mismo anexo. Quién llama lo decide la casilla «Puede llamar con Anura» de
+Ajustes (además de `master.edit`). El anexo propio sigue funcionando. Sin
+variables ni crons nuevos.
+
+1. **Migración `0313_anura_line_pool.sql`**, a mano, ANTES del código
+   (aditiva, no reescribe filas):
+   - `anura_extensions.pool` y `user_id` admite null (línea compartida sin
+     dueña; chequeo `anura_extensions_pool_owner_ck`);
+   - tabla `anura_callers` (la casilla), lectura para la organización;
+   - `anura_calls.reserved_at` y `dialed_at`;
+   - índice `anura_calls_one_active_per_extension` (una llamada viva por anexo).
+2. Comprobar:
+   ```sql
+   select to_regclass('public.anura_callers');
+   select indexname from pg_indexes where indexname = 'anura_calls_one_active_per_extension';
+   select column_name from information_schema.columns
+    where table_name = 'anura_calls' and column_name in ('reserved_at', 'dialed_at');
+   ```
+3. Desplegar el código. **Sin la migración, «Llamar con Anura» deja de
+   funcionar entera** (el código escribe `reserved_at` y `dialed_at`).
+
 ### 08-11-2026 · Distrito por revisar: aviso antes de la guía y lista en el Master (sin migración, MOM §19.0.3)
 
 Pedido del owner tras #KP202409: llegó del formulario web con distrito
