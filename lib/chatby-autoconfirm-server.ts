@@ -44,6 +44,7 @@ import {
   CHATBY_HOLD_REASONS,
   CHATBY_SOURCE,
   chatbyAutoSettingsFrom,
+  chatbyConfirmButtonAt,
   chatbyCheckDue,
   chatbyConfirmationNote,
   chatbyGuideBlock,
@@ -415,7 +416,17 @@ async function confirmPass(
     const verdict = evaluateChatbyConfirmation(evalInput);
 
     if (!verdict.confirm && !verdict.final) {
-      if (!ctx.dry) await upsertCheck(admin, key, { outcome: "sin_confirmacion", reason: verdict.reason, reads });
+      // El botón «Confirmar pedido» no confirma (falta su mensaje), pero se
+      // anota para encontrarla con una llamada corta (MOM §6.1, 08-11-2026).
+      const buttonAt = chatbyConfirmButtonAt(conversation.messages, order.name!, order.created_at);
+      if (!ctx.dry) {
+        await upsertCheck(admin, key, {
+          outcome: "sin_confirmacion",
+          reason: verdict.reason,
+          reads,
+          ...(buttonAt ? { evidence: { boton_confirmar_at: buttonAt } } : {}),
+        });
+      }
       continue;
     }
 
