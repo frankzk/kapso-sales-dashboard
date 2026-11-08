@@ -677,8 +677,10 @@ se creó**.
   o de las gestiones. Ni Lima (no pasa por confirmación) ni Agencia (confirma con
   el pago validado).
 - **Cuánto se lee.** Lo mismo que la ficha: los dos GET de `lib/chatby-api.ts`
-  (`fetchChatbyConversation`, solo lectura: la confirmación automática nunca
-  manda nada por Chatby; lo único que escribe es una persona desde la ficha, §25).
+  (`fetchChatbyConversation`, solo lectura: la confirmación automática no
+  manda nada por Chatby, salvo el mensaje que pide la dirección o la
+  ubicación de «Kapta pide sola…», más abajo, 0318; lo demás lo escribe una
+  persona desde la ficha, §25).
   Hasta **20 pedidos por pasada** (40 GET); primero los que nunca se leyeron, el
   más nuevo primero, y después el que se leyó hace más. Un pedido que todavía no
   escribió se vuelve a leer cada **30 minutos** mientras siga en la ventana. Dos
@@ -930,7 +932,8 @@ se creó**.
     `direccion_incompleta` o `sin_ubicacion_cerrado` deja de ser final **solo
     después de que se le pidió** desde Kapta: la misma pasada que mira el chat
     de los que esperan la ubicación lo relee cada `recheck_minutes`, dentro de
-    las 72 h del pedido y con su mismo tope (hasta 10 por pasada para cada
+    las 72 h del pedido (o, pasadas, mientras la clienta haya escrito hace
+    menos de 24 h: 0318, más abajo) y con su mismo tope (hasta 10 por pasada para cada
     búsqueda, como las otras dos). No hay otra pasada ni otro sondeo. Si la
     clienta **no escribió nada nuevo** desde que quedó para la asesora, no se
     evalúa nada (solo se anota la lectura). Si escribió:
@@ -964,12 +967,132 @@ se creó**.
     pedido o no. Al decidirlo (08-11-2026) quedaban en 7 días 139 marcas
     `direccion_incompleta`; por eso no se relee ninguna sin que una persona se
     la haya pedido.
+- **Kapta pide sola la dirección o la ubicación, y vuelve a intentar la guía**
+  (owner, 08-11-2026; 0318; `lib/chatby-auto-ask.ts`). «Si se tiene la
+  confirmación del cliente por Chatby y la generación de la guía falla porque
+  Google Maps no encuentra la ubicación, va a pedir ubicación en automático…
+  si falla porque la dirección está incompleta, va a pedir la dirección
+  completa, y con eso Google Maps se va a volver a ejecutar». Lo hace la misma
+  pasada de cada 10 minutos, con la conversación que acaba de leer: **ni otra
+  pasada, ni otro sondeo, ni lecturas de Chatby de más** (las mismas tres
+  búsquedas de la relectura, con su tope). No agrega estados ni subetapas: el
+  pedido sigue en Por confirmar hasta que la guía sale y confirma por la cadena
+  de siempre.
+  - **A. Google no la encuentra** (`sin_ubicacion`, después de la regla de la
+    ubicación aproximada). Al quedar para la asesora (y, en la relectura de
+    cada 30 minutos, lo que ya estaba así y todavía no se le pidió), Kapta le
+    pide **su ubicación actual de WhatsApp**, con el mismo texto del botón de
+    la ficha: «Hola Rosa 😊 Para enviar tu pedido #AUR900226, ¿nos compartes
+    tu ubicación actual de WhatsApp? (📎 → Ubicación → Enviar tu ubicación
+    actual)». Cuando la manda, la relectura de siempre crea la guía **con esa
+    ubicación** (`chatbyGuidePin`; sin Google), por el pin respaldado y todas
+    las rejas, y confirma.
+  - **B. La dirección está incompleta** (`direccion_incompleta`). Al quedar
+    para la asesora, Kapta le pide **la dirección completa**. Si le falta el
+    número de la casa (`direccionSinNumeroDeCasa`), con el texto del botón:
+    «Hola Rosa 😊 Para enviar tu pedido #AUR900226 nos falta el número de tu
+    casa. ¿Nos escribes la calle, el número y una referencia? Si prefieres,
+    compártenos tu ubicación actual de WhatsApp (📎 → Ubicación → Enviar tu
+    ubicación actual).» Si está incompleta por otra cosa (un mercado o un
+    puesto, un cruce, un kilómetro, una seña), donde a menudo no hay calle con
+    número que dar, **un solo mensaje con la ubicación primero**: «Hola Rosa
+    😊 Para enviar tu pedido #AUR900226 necesitamos ubicar bien tu dirección.
+    ¿Nos compartes tu ubicación actual de WhatsApp? (📎 → Ubicación → Enviar tu
+    ubicación actual) Si no puedes, escríbenos la calle y el número de tu
+    casa, con una referencia.» La marca guarda `asked_at`, como cuando la pide
+    una persona, y la relectura lo vuelve a leer. Lo que responde
+    (`chatbyReaskWatch` con `correctionSince`):
+    - **su ubicación** (lo último que mandó): la guía va con esa ubicación,
+      como en A;
+    - **un texto**: lo que escribió **después de la pedida** (sin botones,
+      archivos, cortesías ni preguntas: el último mensaje y, si no alcanza,
+      todos juntos en orden, `chatbyAddressCandidate`) es la dirección nueva.
+      Si pasa `direccionCompleta`, se guarda como **la dirección corregida del
+      pedido** por el camino de «Corregir ubicación» (`order_geo_overrides`,
+      solo la dirección: el distrito, la provincia, la referencia y la
+      coordenada que tuviera se conservan; nota «Dirección completada por la
+      clienta en Chatby»; el hecho `comment` · `ubicacion` sin actor; el
+      recálculo y el `coverage_changed` si la cobertura se moviera;
+      `lib/order-address-correction.ts`), la marca guarda `corrected_at` y la
+      guía se vuelve a intentar con ella: **Google otra vez** (la consulta de
+      siempre, con la ubicación aproximada si está en Activo; la dirección
+      nueva es otra huella, así que sí se consulta). **La encuentra → guía y
+      confirma** («… con el pedido #AUR900226, S/ 178.00 contra entrega y la
+      dirección que completó por Chatby.»). **No la encuentra →
+      `sin_ubicacion`** y Kapta le pide la ubicación (A), diciéndole por qué:
+      «Gracias, Rosa 😊 No logramos ubicar esa dirección en el mapa. Para
+      enviar tu pedido #AUR900226, ¿nos compartes tu ubicación actual de
+      WhatsApp? (📎 → Ubicación → Enviar tu ubicación actual)». Desde ahí la
+      dirección vieja del mensaje de confirmación ya no se compara
+      (`chatbyCorrectedWatch`): el pedido, confirmar, pagar en casa y el monto
+      siguen haciendo falta;
+    - **un texto que sigue incompleto**: queda para la asesora (la marca
+      guarda `reply_incomplete_at` y la ficha lo dice). **No se le pide la
+      dirección otra vez**; si después manda su ubicación, la guía sale con
+      ella.
+
+    Lo que quedó `direccion_incompleta` antes de encender el interruptor no
+    se pide solo (esas marcas no se releen sin una pedida, como desde el
+    08-11-2026): lo sigue pidiendo una persona desde la ficha.
+  - **C. Los límites.** Como mucho **un mensaje automático de cada clase por
+    pedido**: la dirección una vez y la ubicación una vez (cuentan los hechos
+    `chatby_message` con `payload.auto = true` y la marca `auto_asks`).
+    Solo en Por confirmar («Sin llamar» o «Por confirmar») de Provincia COD
+    (se relee justo antes de mandar). **El límite que manda es la ventana de
+    atención de 24 h de Meta** (corrección del owner, 08-11-2026): el bot solo
+    puede mandar texto libre hasta 24 h después del **último mensaje de la
+    clienta**, no según la edad del pedido. Kapta solo manda si ese último
+    mensaje tiene **menos de 23 h** (1 h de margen, `chatbyAutoAskWindowOpen`,
+    con los mensajes recién leídos; la clienta acaba de confirmar o de
+    responder, así que casi siempre lo está). Cerrada, no se manda, queda para
+    la asesora y la marca lo dice (`evidence.auto_ask_skip`: «La ventana de 24
+    h de WhatsApp está cerrada…»). Por lo mismo, **lo que quedó para la asesora
+    por la dirección o la ubicación no se deja de mirar a las 72 h si la
+    clienta escribió hace menos de 24 h** (`chatbyHeldInWindow`): pasadas las
+    72 h, la relectura de siempre (las mismas tres búsquedas, con su tope) lee
+    su chat y, si escribió en las últimas 24 h, sigue (la pedida, la respuesta,
+    la guía y la confirmación); si no, se deja de mirar como antes. La ficha
+    dice lo mismo. Las confirmaciones nuevas se siguen buscando solo en las
+    72 h del pedido. Tampoco si **una persona del equipo
+    ya le escribió** desde la ficha (cualquier `chatby_message` con actor, o
+    `asked_at` sin pedida automática) o en Chatby después del último mensaje
+    de la clienta (hay alguien atendiendo), ni si el pedido es de una persona
+    antes de cualquier guía (envío programado, lista de pago adelantado §41,
+    Shalom, un pago registrado). Nunca con un rechazo, una nota de anulación,
+    otro monto ni un mensaje posterior que no sea la ubicación: esos ya quedan
+    para la asesora antes de llegar aquí, y un «no lo quiero» en la respuesta
+    sigue el rechazo de siempre. El tope de guías del día, Aliclik en rojo y el
+    candado siguen igual.
+  - **Cómo sale.** Por **el mismo envío que la ficha** (`sendChatbyReply`: como
+    persona del equipo, con el bot de esa clienta en pausa 60 minutos), con el
+    hecho de siempre, `chatby_message`, **sin actor** y `source = 'chatby'`
+    (la línea de tiempo lo firma «Chatby»), el motivo «Kapta (automático) le
+    pidió la ubicación a la clienta por WhatsApp.» (o «… la dirección
+    completa …»), el texto y `payload` `{auto: true, ask, purpose:
+    pedir_ubicacion | pedir_direccion, hold_reason}`. La marca guarda
+    `asked_at`, `held_at` y `auto_asks` (clase, hora y posición); cuando el
+    pedido vuelve a quedar para la asesora, se conservan.
+  - **El interruptor** (`chatby_auto_settings.ask_mode`, 0318), «Pedir sola la
+    dirección o la ubicación» en Automatizaciones (§40, grupo Confirmación),
+    con las tres posiciones de siempre. **Apagado** (nace así, y sin la 0318):
+    lo de hasta hoy, la pide una persona desde la ficha. **Simulación**: la
+    pasada dice «habría pedido la ubicación / la dirección completa» (en el
+    resumen del cron, `asksSimulated`, y en la marca, `auto_asks` con `mode =
+    simulacion`), una vez por clase, y no manda nada; tampoco guarda una
+    dirección. **Activo**: manda, guarda y vuelve a intentar.
+  - **La ficha.** El aviso de la pestaña Chatby dice lo que Kapta ya hizo:
+    «Kapta le pidió la ubicación: Hoy 10:05 · esperando respuesta. No hace
+    falta volver a pedírsela…» (o «la dirección completa»), «La clienta
+    respondió, pero la dirección que escribió sigue incompleta…» o «La clienta
+    completó la dirección por Chatby y Kapta la guardó, pero Google tampoco da
+    el edificio…». El botón «Pedir ubicación por WhatsApp» sigue ahí.
 - **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
   con otra creación en curso (el candado), no se escribe nada visible: el
   pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.
 - **Interruptores** (`chatby_auto_settings`, 0297, uno por organización):
   `enabled` (toda la pasada), `guide_enabled` (solo la guía), `daily_cap` (20),
-  `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30). Nace
+  `window_hours` (72), `max_orders_per_run` (20) y `recheck_minutes` (30); y
+  las dos de tres posiciones, `approx_mode` (0316) y `ask_mode` (0318). Nace
   **encendido** con 20 guías por día porque lo pidió el owner, y no para las
   organizaciones cliente de Grupo GF (§29.15.1). Sin la tabla, o con la fila
   apagada, la pasada no hace nada. Las claves de siempre: `CHATBY_API_KEY` para
@@ -993,8 +1116,11 @@ Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
 `lib/chatby-autoconfirm-server.ts` (carga, lectura y escritura),
 `app/api/cron/chatby-autoconfirm/route.ts`; pedir la ubicación desde la ficha:
 `lib/chatby-location-ask.ts`, `lib/chatby-reask.ts`,
-`components/order-chatby-panel.tsx`. Pruebas:
-`test/chatby-autoconfirm.test.ts`, `test/chatby-location-ask.test.ts`.
+`components/order-chatby-panel.tsx`; pedirla sola (0318):
+`lib/chatby-auto-ask.ts`, `lib/order-address-correction.ts`,
+`lib/chatby-auto-ask-server.ts`. Pruebas:
+`test/chatby-autoconfirm.test.ts`, `test/chatby-location-ask.test.ts`,
+`test/chatby-auto-ask.test.ts`.
 
 ### 6.2 Preparación
 
@@ -14527,7 +14653,9 @@ estables:
      `GET /subscriber/chat-messages?user_ns=…&limit=20&include_bot=1&include_note=1`
      (sin `include_bot` no salen las plantillas). Para leer, solo esos dos
      GET. Chatby no tiene claves de solo lectura: Kapta solo escribe cuando una
-     persona responde desde la ficha (abajo).
+     persona responde desde la ficha (abajo) y, con «Pedir sola la dirección o
+     la ubicación» en Activo (§6.1, 0318), el único mensaje automático: pedir
+     la dirección completa o la ubicación, por el mismo envío.
    - **Lo que no sale de la lectura:** la clave (`CHATBY_API_KEY`, la clave
      «KAPTA» del bot, creada en `app.chatby.io/settings#/api` → «Create API Token»
      con solo el permiso «Manage Flow», aparte de la de Make para
@@ -24110,7 +24238,9 @@ Vercel— y algunas no tenían interruptor.
     aproximado, dónde estuvo el motorizado o «aún no entregado», y la
     distancia). No es un interruptor de encendido/apagado: no está en la lista
     blanca y tiene su propia acción, que solo escribe esa columna. Activo pide
-    confirmación; cuenta entre las encendidas solo en Activo.
+    confirmación; cuenta entre las encendidas solo en Activo. Igual, «Pedir
+    sola la dirección o la ubicación» (§6.1, 0318, `ask_mode`,
+    `setChatbyAskMode`), que envía WhatsApp a clientas.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -24135,8 +24265,8 @@ Vercel— y algunas no tenían interruptor.
   cabecera lleva a los tokens con los que un agente (Grok Bot) consulta Kapta,
   con el mismo permiso `automations.manage`.
 
-Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql` y
-`0316_chatby_approx_location.sql`.
+Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql`,
+`0316_chatby_approx_location.sql` y `0318_chatby_auto_ask.sql`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`.
 

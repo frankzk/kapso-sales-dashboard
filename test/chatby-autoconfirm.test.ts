@@ -712,10 +712,16 @@ describe("el servidor, el cron y la migración", () => {
     expect(server).toContain("kind: CHATBY_GUIDE_ORIGIN");
   });
 
-  it("Chatby solo se lee: la misma función de la ficha, nada de POST", () => {
+  it("Chatby se lee con la función de la ficha; solo escribe la pedida automática (0318), por el envío de la ficha", () => {
     expect(server).toContain("fetchChatbyConversation(");
     expect(server).not.toMatch(/method:\s*"POST"/);
-    expect(server).not.toContain("sendChatbyReply");
+    // (owner, 08-11-2026; 0318) La única escritura: el mensaje que pide la
+    // dirección o la ubicación, una sola llamada, dentro de `autoAsk`, que
+    // corta en Apagado antes de nada.
+    expect(server.match(/sendChatbyReply\(/g)?.length).toBe(1);
+    const autoAsk = server.slice(server.indexOf("async function autoAsk("));
+    expect(autoAsk).toContain("sendChatbyReply(");
+    expect(autoAsk.indexOf('if (ctx.askMode === "apagado") return;')).toBeLessThan(autoAsk.indexOf("sendChatbyReply("));
     // lib/chatby-api.ts solo escribe para que una persona responda desde la
     // ficha (MOM §25, «Chatby», 02-11-2026): las dos llamadas de sendChatbyReply.
     const api = read("lib/chatby-api.ts");

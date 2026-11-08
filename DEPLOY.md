@@ -1,5 +1,108 @@
 # Deployment runbook
 
+### 08-11-2026 · Confirmación por Chatby: pide sola la dirección o la ubicación y vuelve a intentar la guía (0318 o sin migración, MOM §6.1)
+
+**Migración 0318** (`db/migrations/0318_chatby_auto_ask.sql`, aditiva): una
+columna, `chatby_auto_settings.ask_mode` (`apagado` | `simulacion` |
+`activo`, nace `apagado`). Se puede desplegar **antes** de aplicarla: sin la
+columna la pasada lo trata como Apagado y el panel muestra la fila bloqueada
+(«Aún no está instalada en la base de datos»). Lo demás va en lo que ya
+existe: la marca en `chatby_auto_checks.evidence` (`asked_at`, `held_at`,
+`auto_asks`, `corrected_at`, `auto_ask_skip`, `reply_incomplete_at`), el
+mensaje en `order_events` (`chatby_message`, `payload.auto = true`) y la
+dirección corregida en `order_geo_overrides`. Sin crons ni variables nuevas.
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0318_chatby_auto_ask.sql
+```
+
+Pedido del owner: «si se tiene la confirmación del cliente por Chatby y la
+generación de la guía falla porque Google Maps no encuentra la ubicación, va a
+pedir ubicación en automático… si falla porque la dirección está incompleta, va
+a pedir la dirección completa, y con eso Google Maps se va a volver a ejecutar».
+
+- **A. Google no la encuentra** (`sin_ubicacion`): la pasada de cada 10 min le
+  pide su ubicación actual (el texto del botón de la ficha). Cuando la manda,
+  la guía sale con esa ubicación (sin Google) y confirma. También a lo que ya
+  estaba `sin_ubicacion` en la ventana y nadie le pidió.
+- **B. Dirección incompleta** (`direccion_incompleta`): le pide la dirección
+  completa (sin número de casa: «la calle, el número y una referencia»; un
+  mercado, cruce, km o seña: la ubicación primero o la calle y el número). Si
+  responde con su ubicación → guía con ella. Si escribe una dirección completa
+  → se guarda como dirección corregida (`order_geo_overrides`, solo la
+  dirección, nota «Dirección completada por la clienta en Chatby»), Google la
+  vuelve a buscar: la encuentra → guía y confirma; no → `sin_ubicacion` y le
+  pide la ubicación («No logramos ubicar esa dirección en el mapa…»). Si sigue
+  incompleta → para la asesora, sin otra pedida.
+- **Límites:** un mensaje de dirección y uno de ubicación por pedido, como
+  mucho. **Lo que manda es la ventana de 24 h de Meta desde el último mensaje
+  de la clienta** (corrección del owner), no la edad del pedido: solo se manda
+  si ese mensaje tiene menos de **23 h** (1 h de margen); cerrada, no se manda
+  y la marca dice `ventana_cerrada` («La ventana de 24 h de WhatsApp está
+  cerrada…»). Lo que quedó para la asesora por la dirección o la ubicación se
+  sigue mirando pasadas las 72 h del pedido mientras la clienta haya escrito
+  hace menos de 24 h (misma búsqueda y mismo tope; si no escribió, se deja de
+  mirar como antes). Nunca si una persona del equipo ya le escribió (ficha o
+  Chatby), ni con envío programado, lista de pago adelantado, Shalom o un
+  pago; solo en Por confirmar de Provincia COD. Mismo envío que la ficha (bot
+  en pausa 60 min). Sin lecturas de Chatby de más: la misma pasada y su tope.
+- **La ficha:** «Kapta le pidió la ubicación: Hoy 10:05 · esperando
+  respuesta…»; el botón manual sigue.
+
+**Después de desplegar (y aplicar la 0318):** el interruptor nace en Apagado.
+Ponerlo en Simulación o Activo en Automatizaciones → Confirmación → «Pedir sola
+la dirección o la ubicación» (Activo pide confirmación).
+
+**Qué mirar después.**
+- Lo que Kapta pidió sola, por clase, y lo que dejó de pedir y por qué:
+  ```sql
+  select payload->>'ask' as ask, payload->>'purpose' as purpose, count(*), max(occurred_at)
+  from order_events
+  where kind = 'chatby_message' and payload->>'auto' = 'true'
+    and occurred_at > now() - interval '2 days'
+  group by 1, 2;
+  select reason, evidence->'auto_ask_skip'->>'reason' as no_pidio, count(*)
+  from chatby_auto_checks
+  where outcome = 'para_asesora' and evidence ? 'auto_ask_skip'
+  group by 1, 2 order by 3 desc;
+  ```
+- Ningún pedido con dos mensajes automáticos de la misma clase (tiene que
+  devolver cero filas):
+  ```sql
+  select order_id, payload->>'purpose' as purpose, count(*)
+  from order_events
+  where kind = 'chatby_message' and payload->>'auto' = 'true'
+  group by 1, 2 having count(*) > 1;
+  ```
+- En Simulación, lo que habría pedido (`auto_asks` con `mode = simulacion`), y
+  en la respuesta del cron `asksSimulated` / `asksSent` / `addressesCorrected`:
+  ```sql
+  select reason, count(*) from chatby_auto_checks
+  where evidence->'auto_asks' @> '[{"mode":"simulacion"}]' group by 1;
+  ```
+- Las direcciones que completó la clienta y cómo terminaron (confirmado con
+  guía, o `sin_ubicacion` con la ubicación pedida):
+  ```sql
+  select c.order_id, c.outcome, c.reason, c.guide_state, c.evidence->>'corrected_at' as corregida
+  from chatby_auto_checks c where c.evidence ? 'corrected_at' order by c.checked_at desc limit 30;
+  select order_id, note from order_events where kind = 'confirmation_contact' and source = 'chatby'
+    and note like '%la dirección que completó por Chatby%' order by occurred_at desc limit 20;
+  ```
+- Que las lecturas de Chatby por pasada no suban de 20 + 10 + 10 + 10, y los
+  pedidos de más de 72 h que se siguen mirando por la ventana de la clienta:
+  ```sql
+  select c.reason, count(*) from chatby_auto_checks c join order_master m using (order_id)
+  where c.outcome = 'para_asesora' and c.reason in ('sin_ubicacion', 'direccion_incompleta')
+    and m.order_created_at < now() - interval '72 hours' and c.checked_at > now() - interval '1 hour'
+  group by 1;
+  ```
+
+**Marcha atrás.** Automatizaciones → «Pedir sola la dirección o la ubicación»
+→ **Apagado** (o `update chatby_auto_settings set ask_mode = 'apagado';`). Deja
+de mandar en la pasada siguiente; lo ya enviado queda en la Actividad y las
+direcciones corregidas siguen en «Corregir ubicación» (se quitan desde la
+ficha). La columna no estorba aunque se revierta el código.
+
 ### 08-11-2026 · Repro Lima: «Aprobar» con la ubicación de Google (mismo candado) y el courier exacto en el filtro (sin migración, MOM §9.5)
 
 Dos pedidos del owner.

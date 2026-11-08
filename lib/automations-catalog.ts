@@ -96,8 +96,8 @@ export type AutomationControl =
   /**
    * Apagado / Simulación / Activo de una columna de texto de la organización
    * (0316). No es un interruptor: no entra en la lista blanca de `on/off` y
-   * tiene su propia acción (`setChatbyApproxMode`), que solo escribe esta
-   * columna con uno de los tres valores.
+   * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`), que
+   * solo escribe esta columna con uno de los tres valores.
    */
   | { kind: "org_mode"; table: OrgAutomationTable; column: string; requires?: never }
   | { kind: "readonly"; how: string };
@@ -124,6 +124,8 @@ export interface AutomationEntry {
 
 /** «Aceptar ubicación aproximada en la calle correcta» (0316): su clave en el catálogo y en el historial. */
 export const CHATBY_APPROX_KEY = "chatby_auto_approx";
+/** «Pedir sola la dirección o la ubicación» (0318): su clave en el catálogo y en el historial. */
+export const CHATBY_ASK_KEY = "chatby_auto_ask";
 
 const STORE_SETTINGS = (section: string, label = "Ajustes de la tienda"): AutomationLink => ({ kind: "store_settings", section, label });
 
@@ -206,6 +208,17 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     effect: "Crea guías",
     scope: "org",
     control: { kind: "org_mode", table: "chatby_auto_settings", column: "approx_mode" },
+  },
+  {
+    key: CHATBY_ASK_KEY,
+    group: "confirmacion",
+    name: "Pedir sola la dirección o la ubicación",
+    // 0318, owner 08-11-2026. La máquina está en lib/chatby-auto-ask.ts.
+    what:
+      "Si la clienta confirmó por Chatby y la guía no sale por la dirección, Kapta le pide por WhatsApp la dirección completa o su ubicación (una vez cada una) y vuelve a intentar la guía. En Simulación solo dice qué habría pedido.",
+    effect: "Envía WhatsApp",
+    scope: "org",
+    control: { kind: "org_mode", table: "chatby_auto_settings", column: "ask_mode" },
   },
 
   // ── Llamadas de voz ────────────────────────────────────────────────────
