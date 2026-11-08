@@ -5454,7 +5454,7 @@ owner): esa fecha ya es el acuerdo y programa la salida sola; el pedido sale en
 
 **Dónde se atiende (pedido del owner, 07-11-2026).** «Atender» abre la ficha
 del pedido en su pestaña «Repro Lima» (`?ficha=<pedido>&seccion=reprolima`,
-`components/repro-lima-panel.tsx`), la última, después de «Chatby». Hasta
+`components/repro-lima-panel.tsx`), la última, después de «Chatby» y «Kapso» (§25). Hasta
 entonces abría una hoja lateral aparte y se veían los dos paneles encima, la
 ficha y la hoja; ahora es un solo lugar. La pestaña sale **solo mientras el
 pedido está en Repro Lima**: lo dice la misma lectura de la pantalla
@@ -14710,6 +14710,35 @@ estables:
      `app/dashboard/pedidos/actions.ts`, `sendChatbyReply` y
      `forgetChatbyConversation` en `lib/chatby-api.ts`, `ReplyBox` en
      `components/order-chatby-panel.tsx`. Pruebas: `test/chatby-reply.test.ts`.
+6. **Kapso (08-11-2026, pedido del owner):** la conversación de WhatsApp de la
+   clienta con el **bot de Kapso** de la tienda, **solo para leer**, junto a
+   «Chatby». El owner la pidió con #KP204280: seguía «Pendiente» en Kapta
+   aunque la clienta lo había confirmado con el bot de Kapso («Confirmar
+   pedido» → «Tu pedido quedó registrado con éxito»), y en la ficha el equipo
+   solo veía Chatby. Con esta pestaña el equipo termina de validar sin salir
+   de Kapta; **no cambia el estado del pedido**: confirmarlo sigue como hasta
+   hoy (Por confirmar, §6).
+   - **Qué conversación:** la que guardó el pedido
+     (`orders.kapso_conversation_id`, la del bot de pedidos, §38.13); si no, la
+     del lead de ese celular en la tienda; si no, la más reciente de ese
+     celular en Kapso. La pestaña dice cuál es.
+   - **Qué muestra:** los últimos 100 mensajes, con la misma anatomía que
+     Chatby (la clienta a la izquierda, la tienda a la derecha, por día y hora
+     de Lima, y «Este pedido» en el mensaje que nombra su número). Kapso no
+     dice si escribió el bot o una persona: el lado de la tienda dice
+     «Tienda» (con la plantilla, si fue una). Un envío que WhatsApp no
+     entregó sale en rojo. Los adjuntos dicen solo su tipo («Imagen»,
+     «Audio»…); se abren con «Abrir en Kapso» (la bandeja del proyecto de la
+     tienda, si la tienda lo tiene). La cifra de la pestaña es cuántos
+     mensajes escribió la clienta.
+   - **Cuándo se lee:** al abrir la ficha de ese pedido, con la clave de Kapso
+     de su tienda (en el servidor) y «Actualizar»; nunca en segundo plano. No
+     se guarda nada en Kapta. La ve quien ya puede ver el pedido (RLS). Para
+     escribirle a la clienta, Leads o Kapso: desde aquí no se manda nada.
+   - Implementación: `lib/order-kapso.ts` (reglas puras), `loadOrderKapso` en
+     `app/dashboard/pedidos/actions.ts`, `components/order-kapso-panel.tsx`
+     (con el hilo de `order-chatby-panel.tsx`); `?seccion=kapso` abre la
+     pestaña. Pruebas: `test/order-kapso.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta

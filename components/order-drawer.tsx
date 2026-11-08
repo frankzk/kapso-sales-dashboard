@@ -62,6 +62,7 @@ import {
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { OrderChatbyPanel } from "@/components/order-chatby-panel";
+import { OrderKapsoPanel } from "@/components/order-kapso-panel";
 import { ReproLimaPanel, type ReproNotice, type ReproSaved } from "@/components/repro-lima-panel";
 import { loadReproRow } from "@/app/dashboard/pedidos/repro-lima/actions";
 import type { ReproRow } from "@/lib/repro-lima-access";
@@ -344,7 +345,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "historial",
 ];
 
-export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby" | "reprolima";
+export type DrawerWorkspaceView = "operar" | "informacion" | "actividad" | "punto" | "chatby" | "kapso" | "reprolima";
 
 interface DrawerNextAction {
   eyebrow: string;
@@ -783,6 +784,8 @@ export function OrderDrawer({
   const [workspace, setWorkspace] = useState<DrawerWorkspaceView>(initialWorkspace ?? "operar");
   /** Mensajes de la clienta en Chatby (de los últimos 20): la cifra de la pestaña, solo si respondió. */
   const [chatbyCustomerMessages, setChatbyCustomerMessages] = useState<number | null>(null);
+  /** Mensajes de la clienta en la conversación de Kapso (MOM §25, 08-11-2026): la cifra de su pestaña. */
+  const [kapsoCustomerMessages, setKapsoCustomerMessages] = useState<number | null>(null);
   // Cerrar la ficha (✕, fondo, Escape) pasa antes por la pestaña «Repro Lima»:
   // con texto sin guardar, avisa en vez de cerrar (§11.5). Se define abajo.
   const reproExitGuard = useRef<(() => boolean) | null>(null);
@@ -978,7 +981,7 @@ export function OrderDrawer({
   }, [reload]);
 
   // -------------------------------------------------------------------------
-  // «Repro Lima» (MOM §9.5): la pestaña de atender, después de «Chatby».
+  // «Repro Lima» (MOM §9.5): la pestaña de atender, la última, después de «Chatby» y «Kapso».
   //
   // Sale SOLO si el pedido está en Repro Lima, y eso lo dice la misma lectura
   // que usaba la hoja del tablero (`loadReproRow`: una fila, o nada si ya no
@@ -1123,6 +1126,7 @@ export function OrderDrawer({
   useEffect(() => {
     setWorkspace(initialWorkspace ?? "operar");
     setChatbyCustomerMessages(null);
+    setKapsoCustomerMessages(null);
     scrollRef.current?.scrollTo({ top: 0 });
   }, [orderId, initialWorkspace]);
 
@@ -1374,6 +1378,14 @@ export function OrderDrawer({
       count: chatbyCustomerMessages || undefined,
       countHint: chatbyCustomerMessages
         ? `${chatbyCustomerMessages === 1 ? "1 mensaje" : `${chatbyCustomerMessages} mensajes`} de la clienta en los últimos 20`
+        : undefined,
+    },
+    {
+      id: "kapso",
+      label: "Kapso",
+      count: kapsoCustomerMessages || undefined,
+      countHint: kapsoCustomerMessages
+        ? `${kapsoCustomerMessages === 1 ? "1 mensaje" : `${kapsoCustomerMessages} mensajes`} de la clienta con el bot de Kapso`
         : undefined,
     },
     // Solo mientras el pedido está en Repro Lima (MOM §9.5); mientras se
@@ -2621,6 +2633,15 @@ export function OrderDrawer({
                 canEdit={canEdit}
                 onCustomerMessages={setChatbyCustomerMessages}
               />
+            </div>
+            <div
+              id="pedido-panel-kapso"
+              role="tabpanel"
+              aria-labelledby="pedido-tab-kapso"
+              hidden={workspace !== "kapso"}
+              className="flex flex-col gap-4 sm:gap-6"
+            >
+              <OrderKapsoPanel orderId={orderId} orderName={detail.row.order_name} onCustomerMessages={setKapsoCustomerMessages} />
             </div>
             {/* «Repro Lima» (MOM §9.5): montada desde que se abre; oculta, suelta el caso. */}
             {reproRow && reproMountedFor === orderId && reproSession.orderId === orderId && (
