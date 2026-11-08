@@ -1,5 +1,69 @@
 # Deployment runbook
 
+### 08-11-2026 · Distrito por revisar: aviso antes de la guía y lista en el Master (sin migración, MOM §19.0.3)
+
+Pedido del owner tras #KP202409: llegó del formulario web con distrito
+«Arequipa» y dirección «AV solo 709 campo marte paucarpata»; Kapta le pasó
+«Arequipa» a Swayp, que fue a Arequipa Cercado y anuló la guía. La regla
+(`districtMismatch`, `lib/district-mismatch.ts`): pedido de provincia (cobertura
+que no es Lima ni Agencia), distrito igual a la provincia y una dirección que
+nombra —palabra entera, sin tildes ni mayúsculas— otro distrito de la misma
+provincia y departamento de `peru_districts`, de 5 letras o más. Es un **aviso**:
+no hay estados nuevos.
+
+- **Antes de la guía** (Swayp directa y «Swayp lo puede llevar hoy», reenvío
+  por Swayp en Envíos, panel de Aliclik y salida Olva): aviso ámbar «La
+  dirección dice Paucarpata y el distrito es Arequipa.» con «Corregir a
+  Paucarpata» (uno por sugerencia) y «Crear con Arequipa igual». El botón de
+  crear espera a una de las dos. Corregir es `updateOrderGeo` con solo el
+  distrito (lo demás de la corrección se conserva) y la nota «Distrito
+  corregido: la dirección dice Paucarpata.», y recarga. En Aliclik borra la
+  cotización (hay que recotizar); en el reenvío abre «Modificar destino» con el
+  distrito nuevo, porque la guía nueva sale con el destino de la salida.
+- **En el Master**, píldora «Distrito por revisar» tras «Programado sin
+  ubicación» con los pedidos abiertos que caen en la regla; abre la lista
+  (actual → sugerido, «Corregir», «Corregir seleccionados» para los de una
+  sola sugerencia). Los que ya tienen guía lo dicen: corregir no le cambia la
+  guía al courier.
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` no cambia.
+Ninguna server action de escritura cambia: se reutilizan `updateOrderGeo` y
+`loadOrderGeo`. Lecturas nuevas, con la sesión de quien mira: en cada carga del
+Master (salvo con búsqueda), a la par, una de `order_master` (abiertos, sin Lima
+ni Agencia: ~1.500 filas de columnas cortas el 08-11-2026) y una de
+`peru_districts` con solo sus provincias (`getDistrictReview`); al abrir una
+guía, `loadDistrictMismatchForGuide` (dos lecturas pequeñas), y otra tras
+corregir. Sin sondeo propio.
+
+**Ya corregidos hoy.** Los 28 pedidos abiertos sin guía que caían en la regla
+se corrigieron a mano en revisión masiva antes de este cambio: fila en
+`order_geo_overrides` con solo el distrito y la nota «Distrito corregido
+(revisión masiva 08-11-2026): la dirección dice …», y su evento en
+`order_events` con `payload.bulk = district_review_20261108`
+(bulk=district_review_20261108). Quedan unos 33 abiertos que ya estaban con el
+courier: salen en la lista con su guía.
+
+**Qué mirar después.** En el Master, la píldora «Distrito por revisar» con unos
+33 (los que ya tienen guía, cada uno con «Ya con <courier> · <guía>») y ninguno
+de los 28 de hoy. «Corregir» en uno: la fila sale de la lista tras recargar, la
+ficha dice el distrito nuevo y la provincia de siempre, y el historial tiene
+«Ubicación corregida manualmente. distrito: …» con la nota. En un pedido nuevo
+con la capital como distrito y otro distrito en la dirección: abrir «Enviar por
+Swayp» o la guía Aliclik y ver el aviso con el botón de crear esperando;
+«Crear con Arequipa igual» lo libera. En los logs, que
+`loadDistrictMismatchForGuide` no se dispare en bucle (una por apertura y por
+corrección) y que la carga del Master no se haya vuelto más lenta.
+
+**Marcha atrás.** Revertir el commit: desaparecen el aviso y la píldora. No
+escribe nada nuevo en la base. Las correcciones hechas con «Corregir» son
+filas normales de `order_geo_overrides`: se deshacen, una a una, volviendo a
+poner el distrito en «Corregir ubicación» de la ficha («Quitar corrección y
+volver al origen», `clearOrderGeo`, borra la corrección entera, también lo que
+tuviera antes). Las 28 de la revisión masiva se
+reconocen por su nota y por `order_events.payload->>'bulk' =
+'district_review_20261108'`; quitarlas devuelve esos pedidos al distrito
+«capital» y, con él, a la guía mal dirigida, así que no se deshacen sin el owner.
+
 ### 07-11-2026 · Leads: adelanto, agencia Shalom y «Swayp hoy» después de generar el pedido (sin migración, MOM §25.2)
 
 Pedido del owner: tras «Generar pedido», el cajón de Leads solo ofrecía crear la
