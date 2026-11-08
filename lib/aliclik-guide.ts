@@ -913,6 +913,13 @@ export interface AliclikGuideOrigin {
   scheduledOn: string;
   /** El motivo que queda en el hecho `guide_registered`. */
   reason: string;
+  /**
+   * La guía de Chatby que va con el GPS de una entrega anterior de la clienta
+   * («Guía automática para clientas con entregas», MOM §6.1, 0317): el pedido
+   * entregado del que salió la coordenada. Lo dice la nota del lead y queda en
+   * `payload.auto.gps_from`.
+   */
+  gpsFrom?: string | null;
 }
 
 /**
@@ -1338,7 +1345,9 @@ export async function createAliclikGuideFor(
       // creó sola y el payload, con qué día programado (MOM §6.2).
       ...(origin ? { reason: origin.reason } : {}),
       payload: {
-        ...(origin ? { auto: { kind: origin.kind, scheduled_on: origin.scheduledOn } } : {}),
+        ...(origin
+          ? { auto: { kind: origin.kind, scheduled_on: origin.scheduledOn, ...(origin.gpsFrom ? { gps_from: origin.gpsFrom } : {}) } }
+          : {}),
         transportName: courierBlock.transportName,
         deliveryCost: courierBlock.deliveryCost,
         returnCost: courierBlock.returnCost,
@@ -1445,7 +1454,7 @@ export async function createAliclikGuideFor(
         kind: "system",
         new_status: null,
         note:
-          `Guía de Aliclik creada ${guideCreatorPhrase(creator, origin?.kind ?? false)} · ${orderNumber} · ` +
+          `Guía de Aliclik creada ${guideCreatorPhrase(creator, origin?.kind ?? false, origin?.gpsFrom)} · ${orderNumber} · ` +
           `pedido ${ctx.row.order_name ?? "—"} · ` +
           `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
           `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}`,

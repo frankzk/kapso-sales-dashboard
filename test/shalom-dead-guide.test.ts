@@ -284,7 +284,9 @@ describe("el camino único, el drawer y Cotejar Shalom", () => {
     expect(mom).toContain("#### La guía muerta y la que se creó a mano en su lugar (decidido el 08-11-2026)");
     expect(mom).toContain("no existe en Shalom (no encontrada en el rastreo); reemplazada por la guía");
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("\n### ");
+    // La entrada de la 0321 (ya no la primera: las nuevas van arriba).
+    const first = deploy.indexOf("\n### 08-11-2026 · Rastreo de Shalom");
+    expect(first).toBeGreaterThan(0);
     expect(flat(deploy.slice(first, deploy.indexOf("\n### ", first + 10)))).toContain("Cotejar Shalom reemplaza la guía muerta");
   });
 });

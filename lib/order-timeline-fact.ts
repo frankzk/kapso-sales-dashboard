@@ -103,6 +103,9 @@ const POR_KIND: Record<string, TimelineFact> = {
   dispatch_date_cleared: consulta("programado"),
   aliclik_auto_guide_failed: consulta("guia"),
   chatby_confirmation_held: consulta("mensaje"),
+  // MOM §6.1, «Guía automática para clientas con entregas» (0317): la guía de
+  // Chatby salió con el GPS de una entrega anterior; el motivo nombra el pedido.
+  chatby_history_guide: consulta("ubicacion"),
   // MOM §25, «Chatby» (02-11-2026): una persona le escribió a la clienta desde la ficha.
   chatby_message: consulta("mensaje"),
   // El WhatsApp que mandó el agente de IA por el conector (MOM §42.9).
