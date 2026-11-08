@@ -27,6 +27,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("global voucher paste respects text editors and local handlers", () => {
   it.each([
     "-12.04318, -77.02824",
+    "-6.7648934, -79.8503941",
     "https://www.google.com/maps?q=-12.04318,-77.02824",
     "Av. Lima 123",
     "149.00",
