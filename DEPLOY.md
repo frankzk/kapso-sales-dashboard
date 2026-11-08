@@ -1,5 +1,120 @@
 # Deployment runbook
 
+### 08-11-2026 · Rastreo de Shalom: la fila va por cuándo se preguntó, la guía que Shalom no reconoce se ve y Cotejar Shalom reemplaza la guía muerta (0321 o sin migración, MOM §12)
+
+**Migración 0321** (`db/migrations/0321_shalom_checked_at.sql`, aditiva): tres
+columnas en `shipments` —`shalom_checked_at`, `shalom_not_found_since`,
+`shalom_not_found_count` (nace 0)—, el índice de la fila
+(`shipments_shalom_check_queue_idx`), el trigger de `updated_at` de la 0204 con
+los tres sellos en su lista (no mueven `updated_at`, como `api_report_at`) y el
+sello inicial `shalom_checked_at = last_report_at` en las guías Shalom vivas.
+Se puede desplegar **antes** de aplicarla: sin las columnas el rastreo vuelve a
+ordenar por `last_report_at` y sella solo las que contestaron (lo de hoy), y
+Almacén y la Mesa de despacho no marcan ninguna guía, y ninguna guía cuenta
+como muerta (Cotejar Shalom y el drawer, como hoy). **No se aplica sola**:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0321_shalom_checked_at.sql
+```
+
+Toma un bloqueo corto sobre `shipments` (el `create or replace` del trigger y
+el índice): mejor fuera de horario. Sin crons ni variables nuevas.
+
+El caso: cada pasada de `/api/cron/shalom-reconcile` preguntaba por 250 de 367
+guías (`cortadoPor: tiempo`) en el orden de `last_report_at`, y las 71 que
+Shalom rechaza con `not_found` nunca contestan, así que nunca se movían:
+encabezaban la fila en cada pasada y lo último de la fila —lo que más se movió—
+no entraba.
+
+- **Toda guía preguntada vuelve al final** (`shalom_checked_at`): contestara,
+  no la encontrara, la rechazara por otra cosa o cayera el lote. Un 429 no sella
+  (ese lote se repite). `last_report_at` sigue siendo solo cuándo contestó.
+- **La racha de `not_found`**: suma uno por consulta; una respuesta la borra.
+  Con **6 seguidas y 24 h** desde la primera es «Guía Shalom no reconocida»:
+  en Almacén (la caja se detiene y dice qué hacer), en la Mesa de despacho
+  («Paquetes sin ruta», chapa ámbar y la línea) y una vez por racha en la línea
+  de tiempo (`guide_check`, `payload.motivo = rastreo_no_reconoce`). El motivo
+  solo no anula ni cambia la guía, ni el estado del pedido.
+- **Cotejar Shalom reemplaza la guía muerta** (las cajas sí salieron, con otra
+  guía hecha a mano: #KP201035 tiene la 102321353 muerta y en Shalom Pro está
+  la 102371814, «En destino»). Una guía viva «no reconocida» cuenta como
+  muerta: su pedido (una sola muerta, ninguna otra salida viva, no finalizado)
+  vuelve a ser candidato del cotejo, con las mismas reglas (mismo DNI, o
+  celular y nombre; una sola guía posible; sin rivales) y la ventana desde la
+  creación de la muerta. Si el listado la trae con **otro** código, no se
+  reemplaza (es un código mal puesto). Con pareja segura, por el camino único
+  de `register-guide.ts`: se anula la muerta en Kapta (sin llamar a Shalom; si
+  era una salida «por definir» rellenada, vuelve a serlo y la nueva se escribe
+  en la misma caja), se registra la del listado con su código y quedan un
+  `guide_cancelled` («…no existe en Shalom (no encontrada en el rastreo);
+  reemplazada por la guía … creada en Shalom Pro (Cotejar Shalom).») y el
+  `guide_created`. Si registrar falla, la muerta vuelve a como estaba. Sin
+  pareja, la muerta no se toca. Las guías muertas tampoco cuentan como
+  «faltantes» al medir si el listado está entero.
+- **El drawer no bloquea**: con una guía muerta, «Ya la creé en Shalom Pro» se
+  deja usar, avisa en ámbar y anula la muerta en el mismo paso. «Crear guía»
+  por API sigue frenado.
+
+Medido el 08-11-2026 (solo lectura, sin la 0321 todavía): **69 pedidos no
+finalizados** tienen una guía Shalom viva sin respuesta del rastreo desde antes
+del 06-11 —la señal más cercana a «no reconocida» antes de la migración—; 38 de
+ellos son las cajas de Breña («Listo para asignar», salida rellenada, todas con
+DNI apuntado). Cuántos se arreglan depende del listado de Shalom Pro, que desde
+aquí no se puede leer: los que tengan una guía hecha a mano para el mismo DNI.
+La racha arranca al aplicar la 0321, así que las guías cuentan como muertas a
+partir de **24 h y 6 consultas** después, y el cotejo las toma en su pasada
+siguiente (8, 12, 16 o 20 h de Lima).
+
+**Qué mirar después (con la 0321).**
+- La bitácora `[shalom-reconcile]` dice `"fila":"shalom_checked_at"`. En dos
+  pasadas todas las guías con identificador se preguntaron:
+  ```sql
+  select count(*) filter (where shalom_checked_at > now() - interval '70 minutes') as preguntadas_1h,
+         count(*) as vivas
+  from shipments
+  where courier = 'shalom' and guide_code is not null
+    and delivery_status not in ('entregado','anulado','transferido');
+  ```
+- Las rachas de `not_found` y las que ya son no reconocidas (pasado un día
+  aparecen; las 38 de Breña tienen que estar):
+  ```sql
+  select guide_code, order_name, shalom_not_found_count, shalom_not_found_since, preparation_state
+  from shipments
+  where courier = 'shalom' and shalom_not_found_count > 0
+  order by shalom_not_found_count desc;
+  select count(*) from order_events
+  where kind = 'guide_check' and payload->>'motivo' = 'rastreo_no_reconoce';
+  ```
+- Ningún pedido con dos avisos de la misma racha (cero filas):
+  ```sql
+  select shipment_id, payload->>'desde', count(*) from order_events
+  where kind = 'guide_check' and payload->>'motivo' = 'rastreo_no_reconoce'
+  group by 1, 2 having count(*) > 1;
+  ```
+
+- Los reemplazos de Cotejar Shalom (respuesta de `/api/cron/shalom-cotejo`:
+  `conGuiaMuerta`, `reemplazados`, `detalle` con `resultado: "reemplazado"`):
+  ```sql
+  select o.order_name, e.guide_code as muerta, e.payload->>'reemplazada_por' as nueva, e.occurred_at, e.actor
+  from order_events e join order_master o on o.order_id = e.order_id
+  where e.kind = 'guide_cancelled' and e.payload->>'motivo' = 'guia_no_existe_en_shalom'
+  order by e.occurred_at desc;
+  ```
+  Ningún pedido con dos salidas vivas de Shalom después de un reemplazo (cero
+  filas):
+  ```sql
+  select order_id, count(*) from shipments
+  where courier = 'shalom' and delivery_status in ('pendiente','en_ruta','por_preparar')
+  group by 1 having count(*) > 1;
+  ```
+
+**Marcha atrás.** Revertir el commit: la fila vuelve a `last_report_at` y nada
+más se reemplaza. Lo ya reemplazado queda como hecho (`guide_cancelled` y
+`guide_created` en la línea de tiempo): se corrige a mano en la ficha. Las
+columnas pueden quedarse (nadie más las lee). Para deshacer también el trigger,
+volver a correr el `create or replace function public.shipments_touch_updated_at()`
+de la 0204.
+
 ### 08-11-2026 · El agente de IA hace notas, WhatsApp y guías de Aliclik (0323, MOM §42.9)
 
 **Pendiente de aplicar en producción.** El agente (Grok) deja notas en el
@@ -37,6 +152,65 @@ botón).
 **Marcha atrás.** Poner WhatsApp y guías en Apagado, o quitarle al token las
 herramientas que hacen cambios, o revocarlo: el agente deja de hacer en el
 acto. Las tablas pueden quedarse: sin código que las use, nadie escribe.
+
+### 08-11-2026 · «Lima trabados» en Repro Lima (sin migración, MOM §9.6)
+
+**Sin migración.** No hay tablas, columnas, índices, crons ni variables
+nuevos: la 0320 queda libre. La bandeja es una lectura de lo que Repro Lima ya
+trae: `order_master` con una columna más en el `select`
+(`dispatch_scheduled_on`, de la 0267) y la misma lectura de `shipments` de
+«Sale a reparto» (por `order_id`, en lotes, con `shipments_order_idx`)
+ampliada a lo En curso que no estaba en una caja vigente, con sus ítems de caja
+(`dispatch_item_active_shipment_uniq`) y cajas por `id`. Ninguna subconsulta
+por fila.
+
+Pedido del owner: los pedidos de Lima quietos en Preparación, Por despachar o
+En curso más de lo que deberían (Por despachar y En curso, los que más
+importan), sin liquidación ni cierre.
+
+- **Dónde:** Repro Lima, bajo «Sale a reparto». Una tarjeta por motivo con su
+  cifra; tocarla (o «Ver la lista») abre la lista: pedido, cliente, courier,
+  estado, días trabado, motivo y siguiente paso con su responsable (Almacén,
+  Operaciones o Asesora). La fila abre la ficha en Operar. El motivo va en la
+  URL (`?trabado=armado_sin_caja`, `?trabado=todos`).
+- **Las reglas** (`lib/lima-stuck.ts`, umbrales en días de reparto completos,
+  lunes a sábado): Por despachar sin caja, tomado por Grupo GF sin caja, en una
+  caja vieja, sin condiciones de Grupo GF o sin recojo del courier (1 día);
+  En curso con Grupo GF sin resultado del motorizado (2), courier externo sin
+  resultado (3; Tanders 1), «entregado» del courier sin cerrar (1), novedad con
+  la clienta (1, asesora), retorno sin llegar (3); Preparación sin rótulo, sin
+  armar o con incidencia (1) y sin rótulo de más de 30 días (asesora). Fuera:
+  Por reprogramar Lima, Agencia, Swayp programada, Por cerrar y Finalizado.
+
+**Qué mirar después.**
+- Que la página de Repro Lima no se haga más lenta: la lectura de `shipments`
+  sube de ~1.000 a ~1.350 pedidos (en lotes por `order_id`). En los logs de
+  Supabase, las consultas a `shipments` con `order_id=in.(…)` no deben
+  aparecer entre las lentas:
+  ```sql
+  select calls, round(mean_exec_time::numeric, 1) as ms, left(query, 120)
+  from pg_stat_statements where query ilike '%from "public"."shipments"%order_id%'
+  order by mean_exec_time desc limit 10;
+  ```
+- Que las cifras cuadren con la base. Los de Por despachar armados que no están
+  en ninguna caja (≈ «Armado sin caja» + «Grupo GF no lo puede llevar» +
+  «Grupo GF lo tomó…»):
+  ```sql
+  select count(*) from order_master m
+  where m.coverage = 'lima' and m.macro_stage = 'por_despachar'
+    and m.macro_since < now() - interval '2 days'
+    and not exists (select 1 from shipments s join dispatch_manifest_items i on i.shipment_id = s.id and i.removed_at is null
+                    where s.order_id = m.order_id);
+  ```
+  Y los «entregado» de Tanders sin cerrar:
+  ```sql
+  select m.order_name, m.macro_since::date from order_master m join shipments s using (order_id)
+  where m.coverage = 'lima' and m.macro_stage = 'en_curso' and s.courier = 'tanders'
+    and s.delivery_status = 'en_ruta' and s.reported_status = 'DELIVERED' order by 2;
+  ```
+
+**Marcha atrás.** Revertir el commit. No escribe nada, así que no hay datos que
+limpiar.
 
 ### 08-11-2026 · Conector de IA: conectar Grok con OAuth, sin copiar tokens (0319, MOM §42.8)
 

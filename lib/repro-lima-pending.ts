@@ -148,6 +148,30 @@ export interface LimaPendingOrder {
   courierDetail?: string | null;
   /** Lo de Grupo GF para «Sale a reparto» (§29.16); null si no sale con Grupo GF. */
   gf?: LimaPendingGf | null;
+  /** «Programar envío» (§6.2, `order_master.dispatch_scheduled_on`): solo en Por generar rótulo. */
+  scheduledOn?: string | null;
+  /** Lo que dicen sus salidas, para «Lima trabados» (§9.6); null en Por confirmar o sin salidas. */
+  ops?: LimaPendingOps | null;
+}
+
+/**
+ * Las salidas del pedido vistas para «Lima trabados» (§9.6), leídas de la
+ * misma lectura de `shipments` que «Sale a reparto». Solo hechos: el motivo lo
+ * decide `limaStuck` (lib/lima-stuck.ts).
+ */
+export interface LimaPendingOps {
+  /** Los couriers de sus salidas vivas (`pendiente`/`en_ruta`, sin retorno ni devolución), la más nueva primero. */
+  liveCouriers: string[];
+  /** Lo último que reportó el courier de la salida viva más nueva (`shipments.reported_status`). */
+  reportedStatus: string | null;
+  /**
+   * Una salida que el courier da por entregada con el pedido todavía abierto:
+   * guía `entregado`, o viva con `DELIVERED` (Tanders lo deja `en_ruta` hasta
+   * validar la constancia, §9.4). null si no hay.
+   */
+  courierDelivered: { courier: string } | null;
+  /** La caja de Grupo GF más reciente de su salida viva (de cualquier día), o null. */
+  lastGfBox: { day: string; riderName: string | null } | null;
 }
 
 export interface LimaPendingGf {

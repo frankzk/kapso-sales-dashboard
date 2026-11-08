@@ -13,6 +13,7 @@ import {
 } from "@/lib/returns-reception";
 import { getPendingReturns } from "@/lib/courier-route-ledger";
 import { bucketShalomReturns, type ShalomReturnBuckets, type ShalomReturnRow } from "@/lib/shalom/returns";
+import { loadShalomUnrecognized } from "@/lib/shalom/check-queue";
 
 export interface DispatchShipment {
   id: string;
@@ -32,6 +33,13 @@ export interface DispatchShipment {
   district: string | null;
   province: string | null;
   product: string | null;
+  /**
+   * «Guía Shalom no reconocida: …» cuando el rastreo de Shalom lleva días sin
+   * reconocer la guía (0321, MOM §12). No es una columna: lo añaden Almacén y la
+   * Mesa de despacho después de leer (`loadShalomUnrecognized`). Sin la 0321,
+   * nunca viene.
+   */
+  shalom_unrecognized?: string | null;
 }
 
 export interface DispatchManifestItem {
@@ -209,14 +217,23 @@ export async function getDispatchWorkspaceData(requestedId?: string | null): Pro
       pickupModeByOrg[row.org_id] = isRiderPickupMode(row.rider_pickup_mode) ? row.rider_pickup_mode : "exigir";
     }
   }
+  const assignable = ((readyRes.data ?? []) as unknown as DispatchShipment[]).filter(
+    (shipment) => !activeShipmentIds.has(shipment.id),
+  );
+  // Las cajas de Shalom cuya guía Shalom ya no reconoce (MOM §12, 0321): sin
+  // guía nueva no salen. Sin la 0321 no marca ninguna.
+  const unrecognized = await loadShalomUnrecognized(
+    sb,
+    assignable.filter((shipment) => shipment.courier === "shalom").map((shipment) => shipment.id),
+  );
   return {
     pickupModeByOrg,
     manifests: rawManifests.map((manifest) => ({
       ...manifest,
       items: itemsByManifest.get(manifest.id) ?? [],
     })),
-    assignableShipments: ((readyRes.data ?? []) as unknown as DispatchShipment[]).filter(
-      (shipment) => !activeShipmentIds.has(shipment.id),
+    assignableShipments: assignable.map((shipment) =>
+      unrecognized.has(shipment.id) ? { ...shipment, shalom_unrecognized: unrecognized.get(shipment.id) } : shipment,
     ),
     warehousePending: warehouse.pending.length,
   };
@@ -389,6 +406,17 @@ export async function getWarehouseStationData(): Promise<WarehouseStationData> {
       .order("ready_at", { ascending: false })
       .limit(200),
   ]);
+
+  // La guía que Shalom ya no reconoce detiene la caja y dice qué hacer (MOM
+  // §12, 0321). Solo la estación lo lee; la Mesa de despacho cuenta igual.
+  const unrecognized = await loadShalomUnrecognized(
+    sb,
+    pending.filter((shipment) => shipment.courier === "shalom").map((shipment) => shipment.id),
+  );
+  for (const shipment of pending) {
+    const line = unrecognized.get(shipment.id);
+    if (line) shipment.shalom_unrecognized = line;
+  }
 
   return {
     pending,

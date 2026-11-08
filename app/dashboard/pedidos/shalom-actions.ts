@@ -83,6 +83,7 @@ import {
   type ManualShalomGuideInput,
 } from "@/lib/shalom/manual";
 import { activeGuides, registerExistingShalomGuide } from "@/lib/shalom/register-guide";
+import { deadGuideDrawerWarning, isConfirmedDeadShalomGuide } from "@/lib/shalom/dead-guide";
 import {
   ShalomApiError,
   ShalomTimeoutError,
@@ -165,6 +166,12 @@ export interface ShalomDraftView {
    * sino que el pedido acabaría con dos paquetes en la calle.
    */
   contingencyBlockers: string[];
+  /**
+   * La guía viva de Shalom que Shalom confirmó que no conoce (MOM §12): no frena
+   * «Ya la creé en Shalom Pro», y esta línea dice que registrar ahí la guía real
+   * la anula en el mismo paso.
+   */
+  deadGuideNotices: string[];
   /**
    * Frenos que SÍ se pueden saltar, dejando un motivo escrito que queda en la
    * línea de tiempo con el nombre de quien lo escribió.
@@ -287,11 +294,24 @@ export async function loadShalomDraft(
   const blockers: string[] = [];
   const contingencyBlockers: string[] = [];
   const warnings: string[] = [];
+  const deadGuideNotices: string[] = [];
 
   const configBlocker = configurationBlocker(store);
   if (configBlocker) blockers.push(configBlocker);
 
   for (const g of await activeGuides(admin, orderId)) {
+    // LA GUÍA MUERTA (08-11-2026, MOM §12): una guía de Shalom que Shalom
+    // confirmó que no conoce no frena «Ya la creé en Shalom Pro». Registrar ahí
+    // la guía real la anula en el mismo paso (lib/shalom/dead-guide.ts). Crear
+    // otra por API sí sigue frenado: la muerta hay que reemplazarla con la que
+    // lleva la caja, no con una tercera.
+    if (isConfirmedDeadShalomGuide(g)) {
+      blockers.push(
+        `La guía Shalom ${g.guide_code} no existe en Shalom: si la caja salió con otra guía, regístrala en «Ya la creé en Shalom Pro».`,
+      );
+      deadGuideNotices.push(deadGuideDrawerWarning(g));
+      continue;
+    }
     contingencyBlockers.push(
       `El pedido ya tiene una guía activa: ${g.guide_code} (${g.courier}, ${g.delivery_status}). Anúlala antes de crear otra.`,
     );
@@ -401,6 +421,7 @@ export async function loadShalomDraft(
       pickupCode: perms.can("shalom.view_pickup_key") ? pickupCode : null,
       blockers,
       contingencyBlockers,
+      deadGuideNotices,
       softBlockers,
       warnings,
     },
@@ -616,7 +637,10 @@ export async function registerManualShalomGuide(
   // «por definir», evento en la línea de tiempo— viven en UN sitio, porque
   // Cotejar Shalom registra guías existentes por el mismo camino desde el
   // cron. Ver lib/shalom/register-guide.ts.
-  const res = await registerExistingShalomGuide(admin, row, guide, { actor: userId });
+  // Con `replaceDead`: si la guía viva del pedido es una que Shalom confirmó que
+  // no conoce, se anula en este mismo paso en vez de pedir anularla antes
+  // (MOM §12, «La guía muerta y la que se creó a mano en su lugar»).
+  const res = await registerExistingShalomGuide(admin, row, guide, { actor: userId, replaceDead: {} });
   if (!res.ok) return { error: res.error };
 
   revalidatePath(MASTER_PATH);
@@ -627,6 +651,9 @@ export async function registerManualShalomGuide(
       // Se dice cuando REUSA la salida existente: el operador venía a vincular
       // una guía y podría esperar una fila nueva. Saber que la caja rotulada
       // como `KP123-S01` es esta evita que busque un segundo bulto.
+      (res.replaced.length
+        ? ` Se anuló la guía ${res.replaced.join(", ")}, que no existe en Shalom: esta la reemplaza.`
+        : "") +
       (res.filledOutput ? ` Se usó la salida ${res.filledOutput}, que ya estaba armada y rotulada.` : "") +
       " El tracking público se hará automáticamente por este número cuando Shalom responda." +
       res.keyWarning,
