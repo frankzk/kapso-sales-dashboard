@@ -79,6 +79,7 @@ import {
   ubigeoProvinceFor,
 } from "@/lib/district-learning";
 import { isLimaOrCallaoProvince } from "@/lib/peru-departamentos";
+import { territorioForOrder, territorioRegion, wooTerritorio, type WooTerritorio } from "@/lib/woo-territorio";
 import { dispatchedWith, type RiderStop } from "@/lib/dispatched-with";
 import { orderProductTitles } from "@/lib/order-product-titles";
 import { costCourier } from "@/lib/delivery-courier";
@@ -139,6 +140,44 @@ const PAGE = 1000;
 const ID_BATCH = 200;
 /** Límite del backfill de versión por tienda y cron para no competir con la operación. */
 const VERSION_RECONCILE_PAGE = 250;
+
+/**
+ * UNA SUBIDA DE VERSIÓN ACOTADA (08-11-2026, `mom-v1.40`).
+ *
+ * Subir `MOM_RESOLUTION_VERSION` es como el cron se entera de que una regla
+ * cambió: recalcula, 250 filas por tienda y pasada, todo lo que no lleve la
+ * versión nueva. Eso es el histórico ENTERO (~37.500 filas el 08-11-2026: un día
+ * de barrido) aunque la regla solo cambie una parte. La `mom-v1.40` solo cambia
+ * los pedidos de WooCommerce (la provincia del ubigeo del formulario, MOM §38.6),
+ * así que una fila de Shopify en `mom-v1.39` sigue siendo la vigente: la puerta
+ * de versión recalcula las `wc-…` (~4.000) y deja las demás.
+ *
+ * SE APAGA SOLA. Solo vale mientras `MOM_RESOLUTION_VERSION` sea `version`: la
+ * próxima subida (`mom-v1.41`) vuelve a la regla de siempre —todo lo que no
+ * lleve la versión vigente está viejo, `mom-v1.39` incluida— sin que nadie
+ * tenga que acordarse de quitar esto.
+ */
+export const NARROW_VERSION_BUMP = Object.freeze({
+  version: "mom-v1.40",
+  previous: "mom-v1.39",
+  /** El prefijo de `order_master.shopify_order_id` de los pedidos de WooCommerce (`wc-<sitio>-<id>`, MOM §38.2). */
+  idPrefix: "wc-",
+});
+
+/**
+ * El filtro `or` de PostgREST para la puerta de versión cuando la subida es
+ * acotada, o null si no lo es (entonces vale `macro_version <> vigente`). Pura.
+ */
+export function narrowVersionFilter(
+  current: string,
+  bump: { version: string; previous: string; idPrefix: string } = NARROW_VERSION_BUMP,
+): string | null {
+  if (current !== bump.version || !bump.previous || bump.previous === current) return null;
+  return (
+    `macro_version.not.in.("${current}","${bump.previous}"),` +
+    `and(macro_version.eq."${bump.previous}",shopify_order_id.like.${bump.idPrefix}%)`
+  );
+}
 /**
  * Cuánto reloj le toca a la tienda que viene ahora.
  *
@@ -1090,15 +1129,32 @@ export async function recomputeOrderMaster(
 
   // Resolver provincia necesita un ida y vuelta más, así que primero se junta
   // el distrito de cada pedido y luego se consulta el ubigeo de una sola vez.
+  //
+  // EL UBIGEO DEL FORMULARIO DE LA WEB (08-11-2026, MOM §38.6). Un pedido de
+  // WooCommerce trae en `_cod_territorio` el departamento, la provincia y el
+  // distrito que la clienta eligió de una lista; la dirección con forma de
+  // Shopify solo trae distrito y departamento. Cuando sigue siendo el del pedido
+  // (`territorioForOrder`: mismo departamento y mismo distrito que la corrección
+  // del equipo o la dirección), manda sobre todo salvo la corrección manual:
+  // la provincia ya no se deduce del nombre del distrito, que es por donde
+  // entraron «Ayacucho → CORACORA» y «Puno → San Roman».
   const districtByOrder = new Map<string, string | null>();
+  const territorioByOrder = new Map<string, WooTerritorio>();
   for (const order of orders) {
     const address = shopifyShippingAddress(order.raw);
     const guides = shipmentsByOrder.get(order.id) ?? [];
     const draft = drafts.get(order.id);
     const historical = historicalGeoSuggestion(order, historicalGeo);
+    const override = geoOverrides.get(order.id);
+    const territorio = territorioForOrder(wooTerritorio(order.raw), {
+      region: override?.region ?? text(address?.province),
+      district: override?.district ?? text(address?.city),
+    });
+    if (territorio) territorioByOrder.set(order.id, territorio);
     districtByOrder.set(
       order.id,
-      geoOverrides.get(order.id)?.district ??
+      override?.district ??
+        territorio?.district ??
         text(address?.city) ??
         guides.find((g) => g.district)?.district ??
         draft?.district ??
@@ -1124,6 +1180,8 @@ export async function recomputeOrderMaster(
 
     const geoOverride = geoOverrides.get(order.id) ?? null;
     const district = districtByOrder.get(order.id) ?? null;
+    const territorio = territorioByOrder.get(order.id) ?? null;
+    const territorioDepartment = territorio ? territorioRegion(territorio) : null;
     // EL DEPARTAMENTO DEL PROPIO PEDIDO manda sobre lo aprendido por nombre de
     // distrito (25-10-2026). `peru_districts` va por nombre y los nombres se
     // repiten: con «miraflores → arequipa» aprendido de un pedido de Arequipa,
@@ -1132,7 +1190,12 @@ export async function recomputeOrderMaster(
     // provincia de una guía —que la copió de esta misma fila—, solo valen si
     // caben en el departamento del pedido (lib/district-learning.ts).
     const ownRegion =
-      geoOverride?.region ?? text(address?.province) ?? guides.find((g) => g.region)?.region ?? draft?.region ?? null;
+      geoOverride?.region ??
+      territorioDepartment ??
+      text(address?.province) ??
+      guides.find((g) => g.region)?.region ??
+      draft?.region ??
+      null;
 
     // El punto del mapa, de más fiable a menos:
     //
@@ -1175,12 +1238,17 @@ export async function recomputeOrderMaster(
 
     // Prioridad de la ubicación, de mayor a menor:
     //   1. corrección manual del equipo (0051),
-    //   2. lo que reportó el courier (conoce la zona mejor que el formulario),
-    //   3. Shopify / el ubigeo / el draft order.
+    //   2. el ubigeo que la clienta eligió en el formulario de la web
+    //      (`_cod_territorio`, 08-11-2026): es una elección de una lista
+    //      cerrada, con código del INEI, no un nombre que adivinar,
+    //   3. lo que reportó el courier (conoce la zona mejor que el formulario
+    //      escrito a mano),
+    //   4. Shopify / lo aprendido por distrito / el draft order / el historial.
     // Sin Lima para el homónimo, la provincia que Aliclik sacó del pin va
     // después de lo aprendido: es la que casa con la evidencia.
     const province =
       geoOverride?.province ??
+      territorio?.province ??
       guides.find((g) => guideProvinceFits(g.province, ownRegion, district) && fitsLimaEvidence(g.province))?.province ??
       geoHit?.province ??
       (limaTrusted ? null : ubigeoProvinceFor(ubigeo, ownRegion)) ??
@@ -1190,6 +1258,7 @@ export async function recomputeOrderMaster(
     // Shopify llama `province` al DEPARTAMENTO (Perú no tiene un tercer nivel).
     const region =
       geoOverride?.region ??
+      territorioDepartment ??
       text(address?.province) ??
       guides.find((g) => g.region)?.region ??
       geoHit?.department ??
@@ -1211,7 +1280,12 @@ export async function recomputeOrderMaster(
         ? "courier"
         : address?.latitude != null
           ? "shopify"
-          : guides.some((g) => g.province || g.district)
+          : // El ubigeo del formulario es «la dirección del pedido en su
+            // tienda»: el valor de siempre, que la ficha dice con la
+            // plataforma («según WooCommerce», `geoSourceLabel`).
+            territorio
+            ? "shopify"
+            : guides.some((g) => g.province || g.district)
             ? "courier"
             : geoHit
               ? "ubigeo"
@@ -2072,12 +2146,14 @@ export async function reconcileOrderMaster(
   if (remaining > 0) {
     const staleIds: string[] = [];
     {
-      const { data: oldVersion } = await admin
-        .from("order_master")
-        .select("order_id")
-        .in("store_id", storeIds as string[])
-        .neq("macro_version", MOM_RESOLUTION_VERSION)
-        .limit(remaining);
+      // Con una subida acotada (`NARROW_VERSION_BUMP`), una sola consulta igual
+      // que la de siempre: la misma tabla, el mismo recorrido, otro filtro.
+      const narrow = narrowVersionFilter(MOM_RESOLUTION_VERSION);
+      const base = admin.from("order_master").select("order_id").in("store_id", storeIds as string[]);
+      const { data: oldVersion } = await (narrow
+        ? base.or(narrow)
+        : base.neq("macro_version", MOM_RESOLUTION_VERSION)
+      ).limit(remaining);
       staleIds.push(...((oldVersion ?? []) as { order_id: string }[]).map((row) => row.order_id));
     }
     const seen = new Set(pending);

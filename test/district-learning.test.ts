@@ -65,12 +65,51 @@ describe("districtLearnVerdict: qué se puede recordar", () => {
     expect(districtLearnVerdict({ district: "Manchay", province: "CHOSICA", department: "CHOSICA" }, null).ok).toBe(false);
   });
 
-  it("lo correcto se recuerda, también sobre una fila sin departamento reconocible", () => {
-    expect(districtLearnVerdict({ district: "Miraflores", province: "lima", department: "Lima" }, LIMA).ok).toBe(true);
+  it("un distrito nuevo y correcto se recuerda", () => {
     expect(districtLearnVerdict({ district: "Jacobo Hunter", province: "Arequipa", department: "Arequipa" }, null).ok).toBe(true);
+    expect(districtLearnVerdict({ district: "Chilca", province: "Cañete", department: "Lima (departamento)" }, null).ok).toBe(true);
+  });
+});
+
+describe("districtLearnVerdict: desde la ficha solo se añaden distritos nuevos (08-11-2026)", () => {
+  // Los dos casos que se corrigieron a mano el 08-11-2026: una corrección de un
+  // solo pedido reescribió la provincia de un distrito que la tabla ya tenía.
+  it("«ayacucho → CORACORA» ya no pisa «ayacucho → Huamanga»", () => {
+    const v = districtLearnVerdict(
+      { district: "Ayacucho", province: "CORACORA", department: "Ayacucho" },
+      { province: "Huamanga", department: "Ayacucho" },
+    );
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.reason).toContain("ya está guardado con la provincia «Huamanga»");
+      expect(v.reason).toContain("La corrección vale solo para este pedido.");
+    }
+  });
+
+  it("«puno → San Roman» tampoco, ni sobre una fila aprendida a mano", () => {
+    expect(
+      districtLearnVerdict({ district: "Puno", province: "San Roman", department: "Puno" }, { province: "Puno", department: "Puno" }).ok,
+    ).toBe(false);
+  });
+
+  it("una fila sin departamento reconocible tampoco se reescribe", () => {
     expect(
       districtLearnVerdict({ district: "Chilca", province: "Cañete", department: "Lima (departamento)" }, { province: "Chilca", department: "Chilca" }).ok,
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("la misma provincia que ya está: no se escribe y se dice sin alarma", () => {
+    const v = districtLearnVerdict({ district: "Miraflores", province: "Lima", department: "Lima" }, LIMA);
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe("Miraflores ya estaba recordado con la provincia lima.");
+  });
+
+  it("la acción inserta, nunca actualiza, la fila de `peru_districts`", () => {
+    const actions = readFileSync(resolve(__dirname, "../app/dashboard/pedidos/actions.ts"), "utf8");
+    const learn = actions.slice(actions.indexOf("SOLO DISTRITOS NUEVOS"), actions.indexOf("const detail = ["));
+    expect(learn).toContain('admin.from("peru_districts").insert(');
+    expect(learn).not.toContain(".upsert(");
+    expect(learn).toContain('geoError?.code === "23505"');
   });
 });
 
@@ -142,7 +181,8 @@ describe("MOM y versión", () => {
   it("el MOM lo cuenta y la versión sube para que el cron recalcule", () => {
     const mom = readFileSync(resolve(__dirname, "../docs/mom/master-pedidos-v1.md"), "utf8");
     expect(mom).toContain("**Recordar la provincia de un distrito, con guarda (25-10-2026, `mom-v1.32`).**");
+    expect(mom).toContain("**Solo distritos nuevos (08-11-2026).**");
     expect(mom).toContain("`learnedDistrictFits`");
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.39");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.40");
   });
 });

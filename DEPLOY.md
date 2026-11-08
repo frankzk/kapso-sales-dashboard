@@ -1,5 +1,89 @@
 # Deployment runbook
 
+### 08-11-2026 · Ubicación: la provincia de la web (ubigeo del formulario) manda y Kapta ya no aprende provincias equivocadas (sin migración, MOM §38.6 y §19.0.1)
+
+Cambio aprobado por el owner. El formulario de la web (WooCommerce, COD Core)
+guarda en `orders.raw.woo.meta_data` (`_cod_territorio`) el ubigeo exacto que
+eligió la clienta —`{"codigo":"050101","region":"Ayacucho","provincia":"Huamanga","distrito":"Ayacucho"}`,
+2.579 pedidos—, y Kapta lo ignoraba: la provincia salía del nombre del distrito
+en `peru_districts`, donde había dos filas aprendidas a mano que estaban mal
+(«ayacucho → CORACORA» desde el 15-10 y «puno → San Roman» desde el 24-08).
+**Hoy se corrigieron a mano esas dos filas del catálogo y 43 pedidos abiertos**
+(`order_events.payload->>'bulk' = 'province_learned_fix_20261108'`). Quedaban
+214 pedidos (116 abiertos) con otra provincia que la del formulario, y 41 con
+otro distrito (estos, todos con corrección manual del equipo, que manda).
+
+- **La provincia de la web manda** (`lib/woo-territorio.ts`, `lib/order-master.ts`).
+  Prioridad, nivel a nivel: corrección manual (`order_geo_overrides`) >
+  `_cod_territorio` > lo de siempre (provincia de la guía, lo aprendido en
+  `peru_districts`, ubigeo de Aliclik, carrito, historial). El ubigeo se lee con
+  desconfianza (objeto o texto JSON, completo y coherente: departamento
+  reconocido, provincia que cabe en él, código del mismo departamento) y solo
+  vale si sigue siendo el del pedido: misma guarda del departamento que hasta
+  hoy y el mismo distrito (si el equipo corrigió el distrito, no se usa). Las
+  dos Limas se guardan como siempre («Lima (provincia)» / «Lima
+  (departamento)»). El código del INEI no se guarda en el Master (no hay
+  columna); `geo_source` queda `shopify` («según WooCommerce»), sin valor nuevo.
+- **Kapta ya no aprende provincias equivocadas** (`districtLearnVerdict`,
+  `updateOrderGeo`). «Recordar esta provincia» solo **añade** un distrito que
+  `peru_districts` no tiene: nunca cambia la provincia de uno que ya está (la
+  acción hace `insert`, no `upsert`; si la fila ya existe lo dice y la
+  corrección vale solo para ese pedido).
+
+**Sin migración**, sin crons ni variables. `MOM_RESOLUTION_VERSION` sube a
+`mom-v1.40`, pero **acotada** (`NARROW_VERSION_BUMP`): la puerta de versión
+del cron `master-reconcile` solo recalcula las filas de WooCommerce
+(`shopify_order_id` `wc-…`, ~4.016: Kenku 3.583, Aurela 433); las ~33.500 de
+Shopify en `mom-v1.39` siguen vigentes. **Carga**: la misma consulta de la
+puerta de versión que ya corre en cada pasada (mismo plan, índice por tienda +
+filtro) y el tope de siempre, 250 filas por tienda y pasada cada 10 minutos
+dentro del reloj del cron (240 s repartidos entre tiendas): Aurela en ~2
+pasadas (~20 min), Kenku en ~15 (~2,5 h), sin picos. Subir la versión entera
+habría sido ~37.500 filas, ~21 h de barrido de Kenku. Con la próxima subida
+(`mom-v1.41`) la acotación se apaga sola. Cobertura: solo puede moverse en unos
+pocos pedidos de «Lima (departamento)» que ganan la provincia Cañete (hoy 4 con
+`_cod_territorio` de Cañete sin esa provincia en el Master).
+
+**Qué mirar después.**
+- El avance del recálculo (baja a 0 en ~2,5 h):
+  ```sql
+  select store_id, count(*) from order_master
+  where shopify_order_id like 'wc-%' and macro_version <> 'mom-v1.40' group by 1;
+  ```
+- Que la provincia distinta de la del formulario baje hacia 0 fuera de las
+  correcciones manuales (las que queden con corrección son del equipo, a
+  propósito; las que queden sin ella tienen la dirección de otro departamento o
+  de otro distrito que el formulario):
+  ```sql
+  with t as (
+    select o.id, (select m->'value' from jsonb_array_elements(o.raw->'woo'->'meta_data') m
+                  where m->>'key' = '_cod_territorio' limit 1) v
+    from orders o where o.platform = 'woocommerce'
+  )
+  select count(*) filter (where g.order_id is null) as sin_correccion,
+         count(*) filter (where g.order_id is not null) as con_correccion
+  from t join order_master om on om.order_id = t.id
+  left join order_geo_overrides g on g.order_id = t.id
+  where t.v is not null
+    and lower(translate(coalesce(om.province, ''), 'áéíóúÁÉÍÓÚñÑ', 'aeiouAEIOUnN'))
+     <> lower(translate(t.v->>'provincia', 'áéíóúÁÉÍÓÚñÑ', 'aeiouAEIOUnN'));
+  ```
+- Un pedido de la web de Ayacucho o de Puno (cercado) en el Master: provincia
+  Huamanga / Puno, y la ficha dice «según WooCommerce».
+- «Corregir ubicación» con «Recordar» en un distrito que ya está en
+  `peru_districts`: «ya está guardado con la provincia «…»… La corrección vale
+  solo para este pedido.», y la fila de la tabla no cambia
+  (`select district_key, province, source, updated_at from peru_districts where district_key in ('ayacucho','puno');`
+  sigue con las de hoy).
+- En el informe del cron, `failed` en 0 y `deferred` bajando en cada pasada.
+
+**Marcha atrás.** Revertir el commit. La versión vuelve a `mom-v1.39`, así que
+el cron recalcula con la regla anterior las filas que ya llevan `mom-v1.40`
+(las ~4.000 de WooCommerce y lo recalculado en el día), al mismo ritmo; con las
+dos filas del catálogo ya corregidas, casi todas vuelven con la misma
+provincia. «Recordar» vuelve a poder reescribir filas existentes. No escribe
+nada nuevo en la base; las correcciones de hoy se quedan como están.
+
 ### 08-11-2026 · Distrito por revisar: aviso antes de la guía y lista en el Master (sin migración, MOM §19.0.3)
 
 Pedido del owner tras #KP202409: llegó del formulario web con distrito

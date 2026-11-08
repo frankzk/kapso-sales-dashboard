@@ -30,6 +30,15 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.40 (08-11-2026, owner): la provincia de un pedido de WooCommerce sale del
+// ubigeo que la clienta eligió en el formulario de la web (`_cod_territorio`,
+// lib/woo-territorio.ts, MOM §38.6), después de la corrección manual y antes
+// que la guía, lo aprendido por distrito y el resto. Medido el 08-11-2026: 214
+// pedidos de la web (116 abiertos) con otra provincia en el Master. SOLO cambia
+// pedidos de WooCommerce, así que la subida es ACOTADA (`NARROW_VERSION_BUMP`,
+// lib/order-master.ts): el cron recalcula los ~4.000 pedidos `wc-…`, no los
+// ~33.500 de Shopify, cuya fila en `mom-v1.39` sigue siendo la vigente.
+//
 // v1.39 (05-11-2026, owner, #KP200684): el rechazo en la puerta de Aliclik con
 // el paquete de vuelta (`REFUSED · TO_RETURN` o `REFUSED · STORE_CENTRAL`) abre
 // la recuperación sin esperar a que Aliclik anule la guía
@@ -258,7 +267,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.39" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.40" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

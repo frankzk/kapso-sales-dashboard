@@ -2781,6 +2781,14 @@ export async function updateOrderGeo(
   // departamento que no se reconoce, una provincia que no es de él ni un
   // distrito que ya está en OTRO departamento (`districtLearnVerdict`); la
   // corrección de ESTE pedido vale igual.
+  //
+  // SOLO DISTRITOS NUEVOS (08-11-2026, MOM §19.0.1). Desde la ficha no se
+  // cambia la provincia de un distrito que `peru_districts` ya tiene: se
+  // INSERTA, nunca se actualiza. «ayacucho → CORACORA» y «puno → San Roman»
+  // salieron de reescribir una fila buena con la corrección de un solo pedido.
+  // La guarda pura lo dice con su porqué y el `insert` lo sostiene en la base:
+  // si otra persona guardó el mismo distrito entre la lectura y la escritura,
+  // choca con la clave y no pisa nada.
   let learned = false;
   let notLearned: string | null = null;
   if (input.rememberDistrict && patch.district && patch.province) {
@@ -2794,18 +2802,18 @@ export async function updateOrderGeo(
     );
     if (!verdict.ok) notLearned = verdict.reason;
     if (key && verdict.ok) {
-      const { error: geoError } = await admin.from("peru_districts").upsert(
-        {
-          district_key: key,
-          district: patch.district,
-          province: patch.province,
-          department: patch.region,
-          source: "manual",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "district_key" },
-      );
+      const { error: geoError } = await admin.from("peru_districts").insert({
+        district_key: key,
+        district: patch.district,
+        province: patch.province,
+        department: patch.region,
+        source: "manual",
+        updated_at: new Date().toISOString(),
+      });
       learned = !geoError;
+      if (geoError?.code === "23505") {
+        notLearned = `No se recordó para ${patch.district}: ya estaba guardado. La corrección vale solo para este pedido.`;
+      }
     }
   }
 

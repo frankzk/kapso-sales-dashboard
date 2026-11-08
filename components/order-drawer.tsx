@@ -3110,7 +3110,7 @@ function GeoSection({
               onChange={(e) => setRemember(e.target.checked)}
               className={CHECKBOX}
             />
-            Recordar esta provincia para los próximos pedidos del mismo distrito (de todos los pedidos, no solo este)
+            Recordar esta provincia para los próximos pedidos del mismo distrito, si Kapta aún no lo tiene guardado (de todos los pedidos, no solo este)
           </label>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <OpsButton type="submit" variant="primary" disabled={pending} className="pointer-coarse:h-11">
