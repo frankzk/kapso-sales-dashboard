@@ -13,9 +13,11 @@ import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 import {
   POLICIES_FOR_AGENT_MAX,
   POLICY_BODY_MAX,
+  POLICY_IMPORT_MAX,
   POLICY_SOURCE_MAX,
   POLICY_STATUS_LABEL,
   POLICY_TITLE_MAX,
+  parsePoliciesMarkdown,
   policyStatus,
 } from "@/lib/store-policies";
 
@@ -150,6 +152,17 @@ describe("§42.6 Políticas escritas por tienda", () => {
     expect(POLICIES_MIGRATION).toContain("grant select on store_policy_versions to service_role;");
     expect(POLICIES_MIGRATION).toContain("grant select, insert, update on store_policies to service_role;");
     expect(POLICIES_MIGRATION).not.toMatch(/grant[^;]*delete[^;]*store_polic/i);
+  });
+
+  it("importar desde Markdown", () => {
+    expect(POLICY_IMPORT_MAX).toBe(50);
+    expect(s426).toContain("**Importar desde Markdown** (08-11-2026, pedido del owner: «¿no puedo subir el md?»)");
+    expect(s426).toContain("**No se importa** lo que todavía dice `[CONFIRMAR`");
+    expect(s426).toContain("Hasta 50 por importación, todas desde el mismo día y en un solo `insert`.");
+    const md = "## Kenku Peru\n### Cambios\nSiete días.\n## Cómo usar\n### Nota\nNo entra.\n## Aurela\n### Garantía\n[CONFIRMAR: plazo]";
+    const out = parsePoliciesMarkdown(md, [{ id: "k", name: "Kenku Peru" }, { id: "a", name: "Aurela" }], null, "2026-11-08");
+    expect(out.policies.map((p) => p.title)).toEqual(["Cambios"]);
+    expect(out.skipped.map((p) => p.title)).toEqual(["Garantía"]);
   });
 
   it("lo que lee el agente", () => {

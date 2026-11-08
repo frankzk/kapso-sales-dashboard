@@ -17,6 +17,7 @@ import {
   POLICIES_FOR_AGENT_MAX,
   agentWrittenPolicy,
   isPolicyMigrationMissing,
+  parsePoliciesMarkdown,
   parsePolicyInput,
   policiesInForce,
   policyStatus,
@@ -319,5 +320,141 @@ describe("saveStorePolicy y retireStorePolicy", () => {
     const { saveStorePolicy } = await import("@/app/dashboard/automatizaciones/conector/actions");
     h.admin = fakeDb(() => ({ error: { code: "PGRST205", message: "Could not find the table 'public.store_policies'" } })) as unknown as typeof h.admin;
     expect(await saveStorePolicy({}, form(NEW))).toEqual({ error: "Falta aplicar la migración 0315 (políticas escritas) en la base." });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Importar desde Markdown
+// ---------------------------------------------------------------------------
+
+describe("parsePoliciesMarkdown", () => {
+  const STORES = [{ id: KENKU, name: "Kenku Peru" }, { id: AURELA, name: "Aurela" }];
+
+  it("el documento exportado tal cual: por tienda, sin lo que dice [CONFIRMAR] ni las secciones que no son tiendas", async () => {
+    const { readFileSync } = await import("node:fs");
+    const md = readFileSync("test/fixtures/politicas-escritas-export.md", "utf8");
+    const { policies, skipped } = parsePoliciesMarkdown(md, STORES, KENKU, "2026-11-08");
+    expect(policies.map((p) => `${p.storeName} · ${p.title}`)).toEqual([
+      "Kenku Peru · Pago contraentrega",
+      "Kenku Peru · Envío por Olva Courier",
+      "Aurela · Pago contraentrega",
+      "Aurela · Envío por Olva Courier",
+    ]);
+    expect(policies[0]).toMatchObject({ storeId: KENKU, source: "bot de Kapso de Kenku (check-coverage)." });
+    expect(policies[2]!.body).toBe("En Lima y en las zonas con contraentrega, el pedido llega a la dirección y se paga al recibir, sin adelanto, en efectivo o por Yape.");
+    // Doce con [CONFIRMAR] (seis por tienda), cada una con su tienda y su motivo.
+    expect(skipped).toHaveLength(12);
+    expect(skipped.every((s) => s.reason.includes("[CONFIRMAR]"))).toBe(true);
+    expect(skipped.filter((s) => s.storeName === "Aurela")).toHaveLength(6);
+    // Nada de «Cómo usar» ni de «Lo que tiene que decidir el dueño».
+    expect(JSON.stringify({ policies, skipped })).not.toMatch(/Campo en Kapta|Hay siete puntos/);
+  });
+
+  it("sin títulos de tienda, todo va a la tienda elegida; la negrita, el código y los escapes se quitan", () => {
+    const md = "# Mis políticas\n\n### **Garantía**\n\nSeis meses por defecto de fábrica \\(no por golpes\\).\n\n- Con `boleta`.\n\n**Fuente:** acuerdo con el proveedor\n";
+    const { policies, skipped } = parsePoliciesMarkdown(md, STORES, AURELA, "2026-11-08");
+    expect(skipped).toEqual([]);
+    expect(policies).toEqual([
+      expect.objectContaining({
+        storeId: AURELA,
+        title: "Garantía",
+        body: "Seis meses por defecto de fábrica (no por golpes).\n\n- Con boleta.",
+        source: "acuerdo con el proveedor",
+      }),
+    ]);
+  });
+
+  it("una tienda que no se ve, repetidas, inválidas y sin tienda elegida", () => {
+    const md = [
+      "## Biru",
+      "### De otra tienda",
+      "No se importa.",
+      "## Kenku",
+      "### Cambios",
+      "Siete días.",
+      "### cambios",
+      "Repetida con otras mayúsculas.",
+      "### X",
+      "Título demasiado corto.",
+      "### Sin texto",
+    ].join("\n");
+    const { policies, skipped } = parsePoliciesMarkdown(md, STORES, null, "2026-11-08");
+    expect(policies.map((p) => [p.storeName, p.title])).toEqual([["Kenku Peru", "Cambios"]]);
+    expect(skipped.map((s) => s.reason)).toEqual([
+      "Está dos veces en el archivo: se importa la primera.",
+      expect.stringContaining("título de 2 a 80"),
+      "Escribe el texto de la política.",
+    ]);
+    // Sin `##` de tienda y sin tienda elegida: nada.
+    expect(parsePoliciesMarkdown("### Cambios\n\nSiete días.", STORES, null, "2026-11-08").policies).toEqual([]);
+  });
+
+  it("la fecha «desde» se valida como en el formulario", () => {
+    const out = parsePoliciesMarkdown("### Cambios\n\nSiete días.", STORES, KENKU, "2026-02-30");
+    expect(out.policies).toEqual([]);
+    expect(out.skipped[0]!.reason).toBe("Indica desde qué día vale.");
+  });
+});
+
+describe("importStorePolicies", () => {
+  let existing: { store_id: string; title: string }[];
+  let inserted: unknown;
+  beforeEach(() => {
+    h.allowed = true;
+    h.user = { id: USER };
+    h.revalidated = [];
+    existing = [];
+    inserted = null;
+    h.server = fakeDb((q) => (q.table === "stores" ? { data: [{ id: KENKU, name: "Kenku Peru" }, { id: AURELA, name: "Aurela" }] } : { data: [] })) as unknown as typeof h.server;
+    h.admin = fakeDb((q) => {
+      const ins = op(q, "insert");
+      if (ins) {
+        inserted = ins[1];
+        return { data: null };
+      }
+      return { data: existing };
+    }) as unknown as typeof h.admin;
+    vi.spyOn(console, "info").mockImplementation(() => {});
+  });
+
+  const MD = "## Kenku Peru\n\n### Cambios\n\nSiete días.\n\nFuente: la web.\n\n### Garantía\n\n[CONFIRMAR: plazo]\n\n## Aurela\n\n### Cambios\n\nQuince días.\n";
+
+  it("crea todas en un solo insert, con su autor, y dice cuáles se saltaron", async () => {
+    const { importStorePolicies } = await import("@/app/dashboard/automatizaciones/conector/actions");
+    const out = await importStorePolicies({}, form({ org_id: ORG, store_id: KENKU, valid_from: "2026-11-08", markdown: MD }));
+    expect(out).toMatchObject({ created: 2, notice: "Se crearon 2 política(s) (Kenku Peru: 1, Aurela: 1). Se saltaron 1: abajo, cada una con su motivo." });
+    expect(out.skipped).toEqual([{ storeName: "Kenku Peru", title: "Garantía", reason: "Todavía dice [CONFIRMAR]: complétala y vuelve a importarla." }]);
+    expect(inserted).toEqual([
+      { org_id: ORG, store_id: KENKU, title: "Cambios", body: "Siete días.", valid_from: "2026-11-08", valid_until: null, source: "la web.", created_by: USER, updated_by: USER },
+      { org_id: ORG, store_id: AURELA, title: "Cambios", body: "Quince días.", valid_from: "2026-11-08", valid_until: null, source: null, created_by: USER, updated_by: USER },
+    ]);
+    expect(h.revalidated).toEqual(["/dashboard/automatizaciones/conector"]);
+    // El registro no lleva los textos.
+    const logged = vi.mocked(console.info).mock.calls.map((c) => String(c[0])).find((l) => l.includes('"step":"imported"'));
+    expect(logged).toBeDefined();
+    expect(logged).not.toMatch(/Siete|Quince/);
+  });
+
+  it("una con el mismo título que una vigente en su tienda no se importa: se edita", async () => {
+    const { importStorePolicies } = await import("@/app/dashboard/automatizaciones/conector/actions");
+    existing = [{ store_id: KENKU, title: "CAMBIOS" }];
+    const out = await importStorePolicies({}, form({ org_id: ORG, store_id: KENKU, valid_from: "2026-11-08", markdown: MD }));
+    expect(out.created).toBe(1);
+    expect((inserted as { store_id: string }[]).map((r) => r.store_id)).toEqual([AURELA]);
+    expect(out.skipped).toContainEqual({ storeName: "Kenku Peru", title: "Cambios", reason: "Ya hay una con ese título en la tienda: edítala en la lista." });
+    const existingQuery = h.admin.queries.find((q) => (q as Query).table === "store_policies" && op(q as Query, "select")) as Query;
+    expect(has(existingQuery, "eq", "org_id", ORG)).toBe(true);
+    expect(has(existingQuery, "is", "retired_at", null)).toBe(true);
+  });
+
+  it("sin permiso, vacío o sin nada listo: no escribe", async () => {
+    const { importStorePolicies } = await import("@/app/dashboard/automatizaciones/conector/actions");
+    h.allowed = false;
+    expect(await importStorePolicies({}, form({ org_id: ORG, markdown: MD, valid_from: "2026-11-08" }))).toEqual({ error: "Sin permiso." });
+    h.allowed = true;
+    expect(await importStorePolicies({}, form({ org_id: ORG, markdown: "  ", valid_from: "2026-11-08" }))).toEqual({ error: "Sube el archivo .md o pega el texto." });
+    const onlyPending = await importStorePolicies({}, form({ org_id: ORG, markdown: "## Kenku\n### Garantía\n[CONFIRMAR]", valid_from: "2026-11-08" }));
+    expect(onlyPending).toMatchObject({ error: "No hay ninguna política lista para importar.", skipped: [expect.objectContaining({ title: "Garantía" })] });
+    expect(inserted).toBeNull();
   });
 });

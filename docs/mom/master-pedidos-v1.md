@@ -24598,6 +24598,19 @@ sistema.
   **Vigente** entre su primer y su último día, **Programada** antes de
   empezar, **Vencida** después de su último día y **Retirada**, que gana a
   todo. No son estados del pedido: son de la política.
+- **Importar desde Markdown** (08-11-2026, pedido del owner: «¿no puedo subir
+  el md?»). Varias políticas de una vez, desde el documento exportado o un
+  texto pegado: cada `### Título` es una política, con su texto debajo y una
+  línea `Fuente: …` opcional. Los `## <tienda>` reparten por tienda (las que la
+  persona ve); un `##` que no es una tienda cierra la tienda y sus `###` no
+  entran, y sin ningún `##` de tienda todo va a la tienda elegida en la
+  pantalla. **No se importa** lo que todavía dice `[CONFIRMAR`, lo que no
+  pasa la validación del formulario, un título repetido en el archivo ni uno
+  igual (sin tildes ni mayúsculas) al de una política no retirada de esa
+  tienda: esa se edita. Hasta 50 por importación, todas desde el mismo día y
+  en un solo `insert`. La vista previa y el servidor leen el archivo con la
+  misma función (`parsePoliciesMarkdown`); la pantalla dice cuáles se
+  saltaron y por qué.
 - **Editar** guarda una versión nueva. La versión la pone la base (1 al
   nacer, +1 en cada cambio), y guardar sin cambios no crea una. La tienda, la
   organización y el autor no cambian nunca.

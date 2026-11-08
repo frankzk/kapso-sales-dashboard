@@ -12,17 +12,22 @@ import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton, type BadgeTone } from "@/components/ops-ui";
 import { CARD, CardHeader, HELP, ROW, TEXTAREA } from "@/components/settings-ui";
 import {
+  importStorePolicies,
   retireStorePolicy,
   saveStorePolicy,
   type PolicyFormState,
+  type PolicyImportState,
 } from "@/app/dashboard/automatizaciones/conector/actions";
 import type { AgentConnectorOrg, StorePolicyView } from "@/lib/agent-tokens-access";
 import {
   POLICY_BODY_MAX,
+  POLICY_IMPORT_MAX_CHARS,
   POLICY_SOURCE_MAX,
   POLICY_STATUS_LABEL,
   POLICY_TITLE_MAX,
+  parsePoliciesMarkdown,
   type PolicyStatus,
+  type SkippedPolicy,
 } from "@/lib/store-policies";
 
 const initial: PolicyFormState = {};
@@ -203,9 +208,144 @@ function PolicyRow({
   );
 }
 
+function SkippedList({ skipped }: { skipped: SkippedPolicy[] }) {
+  return (
+    <ul className="list-disc space-y-0.5 pl-5 text-[13px] leading-5 text-ink-600">
+      {skipped.map((s, i) => (
+        <li key={`${s.storeName}-${s.title}-${i}`}>
+          {s.storeName ? `${s.storeName} · ` : ""}
+          <strong className="font-medium text-ink-800">{s.title}</strong>: {s.reason}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * «Importar desde Markdown»: el documento exportado (o un texto pegado) con
+ * `## Tienda` y `### Título` por política. La vista previa usa el mismo
+ * `parsePoliciesMarkdown` que el servidor, así que lo que dice es lo que pasa;
+ * solo «ya existe en la tienda» lo sabe el servidor.
+ */
+function ImportForm({
+  org,
+  storeId,
+  today,
+  onDone,
+}: {
+  org: AgentConnectorOrg;
+  storeId: string;
+  today: string;
+  onDone: () => void;
+}) {
+  const router = useRouter();
+  const [state, action, pending] = useActionState(importStorePolicies, {} as PolicyImportState);
+  const [text, setText] = useState("");
+  const [validFrom, setValidFrom] = useState(today);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const preview = useMemo(
+    () => (text.trim() ? parsePoliciesMarkdown(text, org.stores, storeId, validFrom) : null),
+    [text, org.stores, storeId, validFrom],
+  );
+  useEffect(() => {
+    if (state.created) {
+      setText("");
+      router.refresh();
+    }
+  }, [state, router]);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    setFileError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const content = await file.text();
+    if (content.length > POLICY_IMPORT_MAX_CHARS) {
+      setFileError("El archivo es demasiado grande: divídelo en dos.");
+      return;
+    }
+    setText(content);
+  }
+
+  const storeName = org.stores.find((s) => s.id === storeId)?.name ?? "la tienda elegida";
+  const ready = preview?.policies.length ?? 0;
+  return (
+    <form action={action} className={cn(ROW, "space-y-3 bg-wash")}>
+      <input type="hidden" name="org_id" value={org.id} />
+      <input type="hidden" name="store_id" value={storeId} />
+      <p className={HELP}>
+        Sube el documento exportado como <strong>.md</strong> o pega su texto. Cada política empieza con{" "}
+        <code>### Título</code>; debajo va su texto y, si quieres, una línea <code>Fuente: …</code>. Los títulos{" "}
+        <code>## Kenku Peru</code> y <code>## Aurela</code> reparten las políticas por tienda; sin ellos, van a {storeName}.
+        Lo que todavía dice [CONFIRMAR] no se importa.
+      </p>
+      <label className="block text-[13px] font-medium text-ink-700">
+        Archivo
+        <input type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" onChange={onFile} className="mt-1.5 block text-sm" />
+      </label>
+      {fileError && (
+        <Banner tone="crit" role="alert">
+          {fileError}
+        </Banner>
+      )}
+      <label className="block text-[13px] font-medium text-ink-700">
+        Texto
+        <textarea
+          name="markdown"
+          rows={8}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={"## Kenku Peru\n\n### Cambios y devoluciones\n\nAceptamos cambios dentro de los 7 días…\n\nFuente: la web."}
+          className={cn(TEXTAREA, "mt-1.5 font-mono text-[13px]")}
+        />
+      </label>
+      <label className="block max-w-xs text-[13px] font-medium text-ink-700">
+        Valen desde
+        <input type="date" name="valid_from" required value={validFrom} onChange={(e) => setValidFrom(e.target.value)} className={cn(FIELD, "mt-1.5")} />
+      </label>
+      {preview && (
+        <div className="space-y-2">
+          <p className="text-[13px] font-medium text-ink-800">
+            {ready ? `Se crearán ${ready}:` : "No hay ninguna política lista para importar."}
+          </p>
+          {ready > 0 && (
+            <ul className="list-disc space-y-0.5 pl-5 text-[13px] leading-5 text-ink-700">
+              {preview.policies.map((p) => (
+                <li key={`${p.storeId}-${p.title}`}>
+                  {p.storeName} · <strong className="font-medium text-ink-900">{p.title}</strong>
+                  {p.source ? ` (fuente: ${p.source})` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {preview.skipped.length > 0 && (
+            <>
+              <p className="text-[13px] font-medium text-ink-800">Se saltan {preview.skipped.length}:</p>
+              <SkippedList skipped={preview.skipped} />
+            </>
+          )}
+        </div>
+      )}
+      {(state.error || state.notice) && (
+        <Banner tone={state.error ? "crit" : "ok"} role={state.error ? "alert" : "status"}>
+          <p className="break-words">{state.error ?? state.notice}</p>
+        </Banner>
+      )}
+      {state.skipped && state.skipped.length > 0 && !preview && <SkippedList skipped={state.skipped} />}
+      <div className="flex flex-wrap gap-2">
+        <OpsButton type="submit" variant="primary" disabled={pending || !ready}>
+          {pending ? "Importando…" : ready ? `Crear ${ready} política${ready === 1 ? "" : "s"}` : "Crear políticas"}
+        </OpsButton>
+        <OpsButton type="button" onClick={onDone} disabled={pending}>
+          Cerrar
+        </OpsButton>
+      </div>
+    </form>
+  );
+}
+
 export function StorePoliciesCard({ org, today, missing }: { org: AgentConnectorOrg; today: string; missing: boolean }) {
   const [storeId, setStoreId] = useState(org.stores[0]?.id ?? "");
-  // «new» abre el formulario vacío; un id, la edición de esa política.
+  // «new» abre el formulario vacío; «import», la importación; un id, la edición de esa política.
   const [editing, setEditing] = useState<string | null>(null);
   const [showRetired, setShowRetired] = useState(false);
   const all = useMemo(
@@ -259,8 +399,14 @@ export function StorePoliciesCard({ org, today, missing }: { org: AgentConnector
                 Nueva política
               </OpsButton>
             )}
+            {editing !== "import" && storeId && (
+              <OpsButton type="button" size="sm" onClick={() => setEditing("import")}>
+                Importar desde Markdown
+              </OpsButton>
+            )}
           </div>
           {editing === "new" && <PolicyForm orgId={org.id} storeId={storeId} policy={null} today={today} onDone={done} />}
+          {editing === "import" && <ImportForm org={org} storeId={storeId} today={today} onDone={done} />}
           {shown.length ? (
             <ul className="divide-y divide-line">
               {shown.map((p) => (
@@ -268,7 +414,7 @@ export function StorePoliciesCard({ org, today, missing }: { org: AgentConnector
               ))}
             </ul>
           ) : (
-            editing !== "new" && <p className={cn(ROW, HELP)}>Esta tienda todavía no tiene políticas escritas.</p>
+            editing !== "new" && editing !== "import" && <p className={cn(ROW, HELP)}>Esta tienda todavía no tiene políticas escritas.</p>
           )}
           {retiredCount > 0 && (
             <div className={ROW}>
