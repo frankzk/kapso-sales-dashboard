@@ -66,7 +66,7 @@ reconocen por su nota y por `order_events.payload->>'bulk' =
 
 ### 08-11-2026 · Conector de IA para Grok Bot: `/api/mcp` y sus tokens (0314, MOM §42)
 
-**Pendiente de aplicar en producción.** Un servidor MCP en `POST /api/mcp`
+**Aplicada en producción el 08-11-2026.** Un servidor MCP en `POST /api/mcp`
 para que un agente de IA (Grok Bot de xAI) busque pedidos, lea el detalle, lea
 la conversación de WhatsApp y consulte las condiciones de entrega y pago de
 Kenku y Aurela. Solo lectura. El token se crea en **Automatizaciones › Conector

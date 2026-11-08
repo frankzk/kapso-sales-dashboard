@@ -102,7 +102,7 @@ describe("DEPLOY.md", () => {
     expect(start).toBeGreaterThan(-1);
     const next = DEPLOY.indexOf("\n### ", start + 10);
     const body = flat(DEPLOY.slice(start, next === -1 ? undefined : next));
-    expect(body).toContain("**Pendiente de aplicar en producción.**");
+    expect(body).toContain("**Aplicada en producción el 08-11-2026.**");
     expect(body).toContain("**Migración `0314_agent_tokens.sql`**, a mano, ANTES del código");
     expect(body).toContain("select to_regclass('public.agent_tokens'), to_regclass('public.agent_tool_calls');");
     expect(body).toContain("**Sin la migración**, `/api/mcp` contesta 503");
