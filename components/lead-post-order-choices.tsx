@@ -34,7 +34,15 @@ import {
   type LeadPostOrderChoices as Choices,
 } from "@/lib/lead-post-order";
 import { subscribePaymentPanelChange } from "@/lib/payment-panel-sync";
+import { cn } from "@/components/ui";
 import type { CustomerHistory } from "@/lib/leads-access";
+
+/**
+ * La rejilla de las tres tarjetas-opción, por contenedor (`@2xl` = 672 px de
+ * tarjeta): en el cajón de Leads y en el teléfono, una columna; en tres solo
+ * cuando cada una tiene sitio para su título, su chapa y su porqué.
+ */
+export const OPTION_GRID = "grid gap-2 @2xl:grid-cols-3";
 
 export function LeadPostOrderChoices({
   leadId,
@@ -56,6 +64,13 @@ export function LeadPostOrderChoices({
 }) {
   const targetOrderId = expectedOrderId ?? history.currentOrderId;
   const target = JSON.stringify([leadId, targetOrderId]);
+  // LO QUE DEL HISTORIAL CAMBIA LAS OPCIONES: el pedido y su guía. El cajón
+  // recarga el historial a menudo —el sondeo de 12 s, volver a la pestaña tras
+  // copiar la ubicación en WhatsApp, cualquier acción— y cada recarga trae un
+  // objeto nuevo con lo mismo. Releer por identidad encolaba una lectura pesada
+  // por recarga delante de «Crear guía» y, mientras duraba, el panel de Aliclik
+  // se desmontaba: la asesora volvía y lo encontraba vacío (08-11-2026).
+  const historyKey = JSON.stringify([history.currentOrderId, history.currentOrderGuide, history.currentOrderName]);
   const [read, setRead] = useState<{
     target: string; choices: Choices | null; error: string | null; loaded: boolean; pending: boolean; orderMismatch?: boolean;
   } | null>(null);
@@ -74,22 +89,28 @@ export function LeadPostOrderChoices({
   const source = useId();
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
+  /** El pedido por el que ya se pidió recargar la ficha: una vez, no en bucle. */
+  const mismatchAskedRef = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    setRead(previous => ({
-      target, choices: previous?.target === target ? previous.choices : null,
-      error: null, loaded: false, pending: true,
-    }));
-    // Lectura normal: el estado de carga y el resultado comparten un único
-    // contenedor. Una transición no debe conservar otro árbol de esqueletos.
+    // Releer el MISMO pedido no borra lo que se ve: las opciones (o el aviso de
+    // que la lectura falló, con el panel de Aliclik debajo) se quedan hasta que
+    // llega la respuesta. Antes se vaciaba el aviso al empezar y el panel que
+    // colgaba de él se desmontaba con la coordenada y la cotización dentro.
+    setRead(previous => previous?.target === target
+      ? { ...previous, pending: true }
+      : { target, choices: null, error: null, loaded: false, pending: true });
     void loadLeadPostOrderChoices(leadId).then(res => {
       if (!alive) return;
       if ("error" in res) {
         setRead(previous => ({ target, choices: previous?.target === target ? previous.choices : null, error: res.error, loaded: true, pending: false }));
       } else if (targetOrderId && res.choices && res.choices.orderId !== targetOrderId) {
         setRead({ target, choices: null, error: "El pedido cambió. Actualizando la ficha…", loaded: true, pending: false, orderMismatch: true });
-        onChangedRef.current();
+        if (mismatchAskedRef.current !== target) {
+          mismatchAskedRef.current = target;
+          onChangedRef.current();
+        }
       } else {
         setRead({ target, choices: res.choices, error: null, loaded: true, pending: false });
       }
@@ -97,9 +118,10 @@ export function LeadPostOrderChoices({
       if (alive) setRead(previous => ({ target, choices: previous?.target === target ? previous.choices : null, error: "No se pudieron cargar las opciones de envío. Revisa la conexión y vuelve a intentarlo.", loaded: true, pending: false }));
     });
     return () => { alive = false; };
-    // El historial cambia tras generar otro pedido, crear una guía o registrar
-    // un pago. El cleanup descarta respuestas anteriores, incluso del mismo lead.
-  }, [leadId, targetOrderId, target, history, tick]);
+    // Se relee al cambiar el pedido o su guía en el historial, tras cada acción
+    // (`tick`) y con el aviso entre paneles de pago. El cleanup descarta
+    // respuestas anteriores, incluso del mismo lead.
+  }, [leadId, targetOrderId, target, historyKey, tick]);
 
   const reload = useCallback(() => {
     setTick((n) => n + 1);
@@ -126,9 +148,28 @@ export function LeadPostOrderChoices({
   const { aliclik, swayp, agencia } = choices ?? { aliclik: null, swayp: null, agencia: null };
   const why = (reason: string | null) => <span className="text-warn-fg">{reason}</span>;
 
+  // UN SOLO SITIO PARA EL PANEL DE ALICLIK. Con las opciones leídas sale de
+  // ellas; si la lectura falló, del historial (MOM §25.2: el panel se queda
+  // como estaba para no frenar la venta). Eran dos elementos en dos posiciones
+  // y pasar de uno a otro —la lectura falla justo después de generar el pedido,
+  // porque aún no está en el Master, y a los segundos ya responde— era otro
+  // panel: React desmontaba el que tenía la coordenada, la cotización y la nota
+  // y montaba uno vacío.
+  const aliclikSlot: { orderId: string; orderName: string | null; guide: string | null } | null =
+    choices && aliclik
+      ? active === "aliclik"
+        ? { orderId: choices.orderId, orderName: choices.orderName, guide: aliclik.guide }
+        : null
+      : error && !historyOrderMismatch && !current?.orderMismatch && targetOrderId && history.currentOrderId === targetOrderId
+        ? { orderId: targetOrderId, orderName: history.currentOrderName, guide: history.currentOrderGuide }
+        : null;
+
   return (
     <>
-      <section aria-labelledby={headingId} aria-busy={pending} className={SECTION_CARD}>
+      {/* `@container`: las tarjetas-opción miran el ancho de ESTA tarjeta, no el
+          de la ventana. En la media columna del cajón (~450 px) tres en fila
+          quedaban de ~130 px y se leían como tres copias del mismo bloque. */}
+      <section aria-labelledby={headingId} aria-busy={pending} className={cn(SECTION_CARD, "@container")}>
         <SectionHead
           id={headingId}
           title="Cómo sale el pedido"
@@ -141,13 +182,14 @@ export function LeadPostOrderChoices({
             <OpsButton size="sm" onClick={reload} disabled={pending} className="mt-3 pointer-coarse:h-11">Intentar nuevamente</OpsButton>
           </Banner>
         )}
-        {!choices && pending && <div role="status" className="mt-4 grid gap-2 sm:grid-cols-3">
+        {!choices && !error && pending && <div role="status" className={cn("mt-4", OPTION_GRID)}>
           <span className="sr-only">Cargando opciones de envío…</span>
           <Skeleton className="h-16" /><Skeleton className="h-16" /><Skeleton className="h-16" />
         </div>}
-        {/* Una columna en el teléfono; tres desde 640 px. */}
+        {/* Una debajo de otra hasta que la tarjeta mide 672 px; tres en fila
+            desde ahí. */}
         {choices && aliclik && swayp && agencia && (
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          <div role="group" aria-label="Por dónde sale el pedido" className={cn("mt-4", OPTION_GRID)}>
             <OptionTile
               label="Guía Aliclik"
               active={active === "aliclik"}
@@ -210,8 +252,15 @@ export function LeadPostOrderChoices({
         )}
       </section>
 
-      {choices && aliclik && active === "aliclik" && <AliclikContent history={history} orderId={choices.orderId} orderName={choices.orderName} guide={aliclik.guide} onCreated={changed} />}
-      {error && !choices && !historyOrderMismatch && !current?.orderMismatch && targetOrderId && history.currentOrderId === targetOrderId && <AliclikContent history={history} orderId={targetOrderId} orderName={history.currentOrderName} guide={history.currentOrderGuide} onCreated={changed} />}
+      {aliclikSlot && (
+        <AliclikContent
+          history={history}
+          orderId={aliclikSlot.orderId}
+          orderName={aliclikSlot.orderName}
+          guide={aliclikSlot.guide}
+          onCreated={changed}
+        />
+      )}
 
       {choices && swayp && active === "swayp" && (
         <section aria-label="Swayp hoy" className={SECTION_CARD}>
@@ -278,6 +327,9 @@ function AliclikContent({
   guide: string | null;
   onCreated: () => void;
 }) {
+  // Recién creada, el historial la trae antes que la relectura de las opciones:
+  // se enseña ya, en vez de un hueco entre el panel y el bloque de la guía.
+  if (!guide && history.currentOrderId === orderId) guide = history.currentOrderGuide;
   if (guide) {
     return (
       <section aria-label="Guía de Aliclik" className={SECTION_CARD}>

@@ -282,11 +282,15 @@ describe("el cajón reutiliza las piezas de la ficha", () => {
     expect(hook).toContain("announcePaymentPanelChange(orderId, SHALOM_DRAFT_SOURCE);");
   });
 
-  it("el cajón la monta para cualquier lead con pedido, en una columna en el teléfono", () => {
+  it("el cajón la monta para cualquier lead con pedido; las opciones, en columna salvo en una tarjeta ancha", () => {
     expect(drawer).toContain("<LeadPostOrderChoices");
     expect(drawer).toContain("onChanged={() => onRegistered()}");
     expect(drawer).not.toContain("<AliclikGuidePanel");
-    expect(panel).toContain('className="mt-4 grid gap-2 sm:grid-cols-3"');
+    // Por contenedor, no por ventana: en la media columna del cajón (pantalla
+    // ≥ 640 px, tarjeta ~450 px) tres en fila se leían como tres copias.
+    expect(panel).toContain('export const OPTION_GRID = "grid gap-2 @2xl:grid-cols-3"');
+    expect(panel).toContain('cn(SECTION_CARD, "@container")');
+    expect(panel).not.toContain("sm:grid-cols-3");
   });
 
   it("el MOM y DEPLOY lo documentan", () => {

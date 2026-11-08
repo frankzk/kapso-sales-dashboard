@@ -15349,14 +15349,29 @@ funciones (no hay regla nueva ni estado nuevo):
   «Diferencia pendiente», «Pago completo»); «Agencia guardada» con la agencia y
   el documento. La tarjeta se vuelve a leer tras cada acción y con el aviso
   entre paneles de pago (`lib/payment-panel-sync.ts`), que desde ahora también
-  se da al guardar «DNI y agencia Shalom».
+  se da al guardar «DNI y agencia Shalom». También cuando el historial del lead
+  trae **otro pedido u otra guía**; no cuando el cajón solo lo recarga con lo
+  mismo (el sondeo de 12 s, volver a la pestaña): esa recarga no relee nada ni
+  toca lo que la asesora está escribiendo (08-11-2026).
 - **Qué se abre solo.** La opción que ya tiene algo hecho (guía Swayp, guía de
   Aliclik, cobro o agencia guardada) y, si no, Aliclik cuando se ofrece —lo que
   el cajón enseñaba antes—. Si ninguna se ofrece, ninguna.
 - **Si la lectura falla**, la tarjeta lo dice con «Intentar nuevamente» y el
-  panel de Aliclik se queda como estaba antes, para no frenar la venta.
-- **Teléfono.** Las tres opciones en una columna (tres desde 640 px), con
-  objetivos de 44 px al dedo; las tarjetas de debajo son las de la ficha.
+  panel de Aliclik se queda como estaba antes, para no frenar la venta. Es el
+  **mismo panel** que cuando la lectura responde: lo escrito (la coordenada, la
+  cotización, la transportadora, la nota) no se pierde al volver la lectura ni
+  con ninguna recarga del cajón. Solo un pedido distinto (otro `leads.order_id`,
+  «Generar nuevo pedido») empieza un panel en blanco. Si la lectura trae un
+  pedido distinto del que enseña el cajón, se pide recargar la ficha **una
+  vez**, no en cada relectura (owner 08-11-2026: el bloque «se repetía», el
+  panel volvía vacío y la guía no se creaba).
+- **Ancho.** Las tres opciones van una debajo de otra mientras la tarjeta mida
+  menos de 672 px —la media columna del cajón y el teléfono— y en tres
+  columnas desde ahí. Lo que manda es el ancho de la tarjeta (consulta de
+  contenedor), no el de la ventana: con la ventana ≥ 640 px y la tarjeta de
+  ~450 px, tres en fila quedaban de ~130 px y se leían como tres copias del
+  mismo bloque (08-11-2026). Objetivos de 44 px al dedo; las tarjetas de debajo
+  son las de la ficha.
 - **Solo lectura.** `loadLeadPostOrderChoices` lee el lead por RLS y su
   reparto por bloques, la ficha del pedido (`loadOrderDetail`), la ficha del §8
   donde la ficha la pide (`needsConfirmationBrief`), el borrador de Shalom y,
@@ -15370,8 +15385,10 @@ tarjeta), `components/swayp-desde-confirmacion-offer.tsx` (la pieza de Swayp,
 compartida con la mesa de confirmación), y las reglas compartidas con la ficha:
 `aliclikGuideOffered` (`lib/order-route-plan.ts`), `swaypDesdeConfirmacionOffer`
 (`lib/swayp-desde-confirmacion-offer.ts`) y `orderPaymentPanelFor`
-(`lib/order-payment-panel.ts`). Pruebas: `test/lead-post-order.test.ts` y
-`test/swayp-desde-confirmacion.test.ts`.
+(`lib/order-payment-panel.ts`). Pruebas: `test/lead-post-order.test.ts`,
+`test/lead-post-order-drawer.test.ts` (el cajón montado con React: un solo
+bloque, el panel de Aliclik intacto tras las recargas y tras una lectura
+fallida, «Crear guía» una vez) y `test/swayp-desde-confirmacion.test.ts`.
 
 ## 26. Costo de producto (COGS)
 

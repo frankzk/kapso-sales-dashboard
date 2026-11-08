@@ -50,6 +50,39 @@ Medido el 08-11-2026 (solo lectura, 72 h): de 148 marcas por
 entra: no tiene conversación en Chatby (`sin_conversacion`) y la regla solo
 mira lo que la clienta confirmó.
 
+### 08-11-2026 · Leads: «Cómo sale el pedido» no se repite ni vacía el panel de Aliclik (sin migración, MOM §25.2)
+
+Reporte del owner: tras generar el pedido, el bloque «Cómo sale el pedido» se
+veía repetido, el panel de Aliclik volvía vacío (sin coordenada, sin
+cotización) al pulsar «Crear guía en Aliclik» y la guía no se creaba. La
+tarjeta releía las opciones cada vez que el cajón recargaba el historial del
+lead (sondeo de 12 s, volver a la pestaña, cualquier acción), aunque trajera lo
+mismo; y cuando la primera lectura había fallado —el pedido recién generado aún
+no está en el Master— el panel de Aliclik colgaba de otra posición del árbol,
+así que al volver la lectura React montaba un panel nuevo y vacío. Ahora:
+
+- Se relee solo si cambia el pedido o su guía, tras una acción o con el aviso
+  de los paneles de pago; la relectura no borra lo que se ve mientras llega.
+- El panel de Aliclik es uno solo, venga de las opciones o del historial: lo
+  escrito sobrevive a las recargas. Un pedido distinto sí empieza en blanco.
+- Si la lectura trae otro pedido, pide recargar la ficha una vez (antes, un
+  bucle de recargas).
+- Las tres opciones van en columna salvo en una tarjeta de ≥ 672 px (consulta
+  de contenedor); en la media columna del cajón, tres en fila se leían como
+  tres copias.
+
+**Sin migración**, sin variables ni crons. Ninguna server action cambia. Nueva
+devDependency `happy-dom` 20.14.6 (solo pruebas: `test/lead-post-order-drawer.test.ts`
+monta el cajón con React); `pnpm-lock.yaml` y `package-lock.json` al día.
+
+**Qué mirar después.** En Leads, generar un pedido, pegar la coordenada,
+cotizar y escribir la nota; cambiar a WhatsApp y volver: todo sigue ahí y hay un
+solo «Cómo sale el pedido». «Crear guía en Aliclik» deja «Guía de Aliclik ·
+Creada» con el código. En los logs, `loadLeadPostOrderChoices` una vez por
+apertura y por acción, no por cada recarga del cajón.
+
+**Marcha atrás.** Revertir el commit; no escribe nada nuevo en la base.
+
 ### 08-11-2026 · Rastreo de Shalom: la fila va por cuándo se preguntó, la guía que Shalom no reconoce se ve y Cotejar Shalom reemplaza la guía muerta (0321 o sin migración, MOM §12)
 
 **Migración 0321** (`db/migrations/0321_shalom_checked_at.sql`, aditiva): tres
