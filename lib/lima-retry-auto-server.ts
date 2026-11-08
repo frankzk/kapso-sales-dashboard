@@ -56,7 +56,9 @@ import { escapeHtml, sendTelegramToAll } from "@/lib/telegram";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { loadReproFacts, retryChainOf, type ReproFacts } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
-import { locateRetryOrder, retryGeocodeKey, type GoogleCoordinate, type RetryLocated } from "@/lib/lima-retry-location";
+import { askRetryLocation } from "@/lib/lima-retry-chatby-ask-server";
+import { retryAskModeFrom, type RetryAskMode } from "@/lib/lima-retry-chatby-ask";
+import { locateRetryOrder, retryGeocodeKey, type RetryCoordinate, type RetryLocated } from "@/lib/lima-retry-location";
 import { unsavedAliclikIntent, type CreationIntent } from "@/lib/aliclik-intent-release";
 import type { ReproOrderRow } from "@/lib/repro-lima-program";
 import { claimView } from "@/lib/repro-lima";
@@ -76,6 +78,7 @@ import {
   retryRecheck,
   retryVariantLabel,
   retryVariantOf,
+  type RetryGeocodeMiss,
   type RetryMode,
   type RetryOutcome,
   type RetryVariant,
@@ -147,6 +150,8 @@ export interface LimaRetryAutoReport {
   stopped: "tiempo" | null;
   /** La ubicación por dirección en esta pasada: consultas (o lecturas de caché) y si se acabó el cupo. */
   geocode: { lookups: number; quotaHit: boolean };
+  /** «Pedir la ubicación por WhatsApp» (0324): mensajes que salieron y los que se habrían mandado. */
+  chatbyAsk: { sent: number; simulated: number };
   error: string | null;
 }
 
@@ -570,7 +575,7 @@ export async function runLimaRetryAuto(
   const today = limaTodayKey(now);
   const limaHour = Number(limaTimeHHMM(now).slice(0, 2));
   const report: LimaRetryAutoReport = {
-    today, limaHour, skipped: null, orgs: [], stopped: null, geocode: { lookups: 0, quotaHit: false }, error: null,
+    today, limaHour, skipped: null, orgs: [], stopped: null, geocode: { lookups: 0, quotaHit: false }, chatbyAsk: { sent: 0, simulated: 0 }, error: null,
   };
   const errors: string[] = [];
 
@@ -609,9 +614,11 @@ export async function runLimaRetryAuto(
     report.error = `No se pudo leer el tope diario: ${settingsError.message}`;
     return report;
   }
-  const settings = (settingsRows ?? []) as { org_id: string; daily_cap: number; geocode_enabled?: boolean }[];
+  const settings = (settingsRows ?? []) as { org_id: string; daily_cap: number; geocode_enabled?: boolean; chatby_ask_mode?: string }[];
   const capByOrg = new Map(settings.map((s) => [s.org_id, clampCap(s.daily_cap)]));
   const geocodeOnByOrg = new Map(settings.map((s) => [s.org_id, s.geocode_enabled === true]));
+  // `*`: sin la 0324, `chatby_ask_mode` no viene y es Apagado.
+  const askModeByOrg = new Map<string, RetryAskMode>(settings.map((s) => [s.org_id, retryAskModeFrom(s.chatby_ask_mode)]));
 
   if (!preview && !writeOk && orgModes.some(({ modes }) => Object.values(modes).includes("activo"))) {
     errors.push("ALICLIK_WRITE_ENABLED está apagado: las variantes activas no crean nada (la simulación sí corre).");
@@ -630,7 +637,7 @@ export async function runLimaRetryAuto(
   };
 
   // El núcleo de «Aprobar», como sistema; sin scope de la tienda no se cotiza.
-  const runCore = async (c: Candidate, dry: boolean, coordinate: GoogleCoordinate | null): Promise<RetryApproveResult> => {
+  const runCore = async (c: Candidate, dry: boolean, coordinate: RetryCoordinate | null): Promise<RetryApproveResult> => {
     const scope = await scopeOf(c.row.store_id);
     if (typeof scope === "string") {
       return { outcome: "fallo", stage: "contexto", transport: RETRY_TRANSPORT_LABEL[c.chain.next], error: scope };
@@ -652,18 +659,49 @@ export async function runLimaRetryAuto(
   // como lo que es —Google— y pasa por el interruptor, la medición (B), la nota
   // del log y el camino de `pinSinCorroborar` → `sin_ubicacion`.
   const located = new Map<string, RetryLocated>();
+  // La ubicación que la clienta ya mandó por WhatsApp (08-11-2026): se lee su
+  // conversación de Chatby, sin mandarle nada. Sin clave, se sigue con Google.
+  const chatbyApiKey = opts.noGeocode ? "" : env.chatbyApiKey();
+  const chatbyRead = chatbyApiKey ? { apiKey: chatbyApiKey } : null;
   const locate = async (c: Candidate, geocodeKey: string | null): Promise<RetryLocated> => {
     const seen = located.get(c.row.order_id);
     if (seen) return seen;
-    // La misma regla que «Aprobar» (`locateRetryOrder`): el pin del pedido, o el
-    // edificio en Google con el candado; el cupo se corta para toda la pasada.
-    const where = await locateRetryOrder(admin, c.row, geocodeKey, { quotaHit: report.geocode.quotaHit });
+    // La misma regla que «Aprobar» (`locateRetryOrder`): el pin del pedido, el
+    // que mandó por WhatsApp o el edificio en Google con el candado; el cupo se
+    // corta para toda la pasada. El tope de tiempo de arriba también corta las
+    // lecturas de Chatby (5 s como mucho cada una).
+    const where = await locateRetryOrder(admin, c.row, geocodeKey, { quotaHit: report.geocode.quotaHit, chatby: chatbyRead });
     if (where.lookedUp) report.geocode.lookups += 1;
     if (where.quotaHit) report.geocode.quotaHit = true;
     // Un error o el cupo se vuelven a probar en la pasada siguiente, no en esta.
     located.set(c.row.order_id, where.located);
     return where.located;
   };
+
+  // «Pedir la ubicación por WhatsApp» (0324, owner 08-11-2026): cuando el
+  // reintento llega a «Sin ubicación», Kapta le pide su ubicación a la clienta
+  // si escribió en las últimas 23 h (lib/lima-retry-chatby-ask.ts). Una vez por
+  // episodio; en la vista previa y en Simulación solo dice «habría pedido…». No
+  // con un error de la ubicación (no se sabe si falta) ni en el `?dry=1` del cron.
+  const askFor = async (c: Candidate, orgId: string, miss: RetryGeocodeMiss): Promise<string | null> => {
+    const mode = askModeByOrg.get(orgId) ?? "apagado";
+    if (mode === "apagado" || miss === "error" || opts.noGeocode) return null;
+    const result = await askRetryLocation(admin, {
+      orgId,
+      row: c.row,
+      episodeAt: c.raw.failed.at,
+      attempt: c.chain.attempt,
+      of: c.chain.of,
+      mode,
+      apiKey: chatbyApiKey,
+      dry: preview,
+    });
+    if (!result) return null;
+    if (result.outcome === "pedida") report.chatbyAsk.sent += 1;
+    if (result.outcome === "simulada") report.chatbyAsk.simulated += 1;
+    return result.detail;
+  };
+  const withAsk = (detail: string, ask: string | null) => (ask ? `${detail} ${ask}` : detail);
 
   outer: for (const { orgId, modes } of orgModes) {
     const dailyCap = capByOrg.get(orgId) ?? RETRY_DAILY_CAP_DEFAULT;
@@ -704,7 +742,7 @@ export async function runLimaRetryAuto(
           const where = await locate(c, geocodeKey);
           if ("miss" in where) {
             item.outcome = "sin_ubicacion";
-            item.detail = retryNoLocationDetail(where.miss);
+            item.detail = withAsk(retryNoLocationDetail(where.miss), await askFor(c, orgId, where.miss));
             continue;
           }
           const result = await runCore(c, true, where.coordinate);
@@ -731,7 +769,7 @@ export async function runLimaRetryAuto(
             const where = await locate(c, geocodeKey);
             if ("miss" in where) {
               item.outcome = "sin_ubicacion";
-              item.detail = retryNoLocationDetail(where.miss);
+              item.detail = withAsk(retryNoLocationDetail(where.miss), await askFor(c, orgId, where.miss));
             } else {
               const result = await runCore(c, true, where.coordinate);
               item.outcome = result.outcome;
@@ -787,7 +825,7 @@ export async function runLimaRetryAuto(
         // nada se creó todavía, y un «en curso» olvidado contaría para el tope
         // todo el día y dejaría sin revisar al resto de la organización.
         let fresh: Candidate;
-        let coordinate: GoogleCoordinate | null;
+        let coordinate: RetryCoordinate | null;
         try {
           if (c.claimed) {
             item.outcome = "atendiendo";
@@ -831,7 +869,7 @@ export async function runLimaRetryAuto(
           const where = await locate(fresh, geocodeKey);
           if ("miss" in where) {
             item.outcome = "sin_ubicacion";
-            item.detail = retryNoLocationDetail(where.miss);
+            item.detail = withAsk(retryNoLocationDetail(where.miss), await askFor(fresh, orgId, where.miss));
             await finish();
             continue;
           }

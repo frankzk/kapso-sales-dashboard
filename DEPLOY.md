@@ -198,6 +198,87 @@ columnas pueden quedarse (nadie más las lee). Para deshacer también el trigger
 volver a correr el `create or replace function public.shipments_touch_updated_at()`
 de la 0204.
 
+### 08-11-2026 · Reintentos Aliclik de Lima: «Pedir la ubicación por WhatsApp» (0324 o sin migración, MOM §9.5 y §40)
+
+Elección del owner: «pedirla si la ventana está abierta». Cuando un reintento de
+Lima llega a «Sin ubicación» (ni pin, ni pin de WhatsApp, ni edificio en Google)
+y la clienta escribió en las últimas 23 h, Kapta le manda **un** mensaje por
+Chatby pidiéndole su ubicación. Es una vez por reintento, nunca con el caso
+tomado en Repro Lima ni si alguien del equipo ya le escribió. Con la ventana
+cerrada no manda nada (no hay plantillas).
+
+**Migración 0324** (`db/migrations/0324_lima_retry_chatby_ask.sql`, aditiva):
+- la columna `lima_retry_auto_settings.chatby_ask_mode` (`apagado` |
+  `simulacion` | `activo`, nace `apagado`);
+- la tabla `lima_retry_chatby_asks`, el candado de «una vez por reintento».
+
+Se puede desplegar **antes** de aplicarla: sin la columna la pasada lo trata
+como Apagado y el panel muestra la fila bloqueada. Sin crons nuevos: corre en la
+pasada de los reintentos (cada hora de 8:23 a 13:23). Usa `CHATBY_API_KEY`.
+
+**Qué mirar después.**
+1. Aplicar la 0324.
+2. En Automatizaciones → «Ubicación por WhatsApp», poner «Pedir la ubicación por
+   WhatsApp» en **Simulación**.
+3. Un día después, revisar «Hoy y ayer»: «Habría pedido su ubicación por
+   WhatsApp» o por qué no (ventana cerrada, equipo atendiendo…).
+4. Si se ve bien, pasar a Activo. Cada mensaje queda en la Actividad del pedido.
+
+**Marcha atrás.** Ponerlo en Apagado (inmediato). Revertir el commit también
+basta; la columna y la tabla pueden quedarse.
+
+### 08-11-2026 · Reintentos Aliclik de Lima: antes de Google, la ubicación que la clienta ya mandó por WhatsApp (sin migración, MOM §9.5)
+
+Elección del owner para los reintentos sin pin: Google da el edificio en ~1 de
+cada 6 pedidos de Lima. La pasada y «Aprobar» de Repro Lima leen la
+conversación de Chatby de la clienta y usan su último pin de esta compra (la
+misma regla de la guía de Chatby, §6.1). No le mandan nada. Si el mismo celular
+tiene otro pedido creado entre este y el pin, no se usa. Orden: pin del pedido →
+pin de WhatsApp → edificio en Google (con su candado).
+
+**Sin migración** ni crons. Usa `CHATBY_API_KEY`, que ya está: sin ella no se lee
+Chatby y todo sigue como antes. Una lectura de Chatby por pedido sin pin (caché
+de 1 minuto).
+
+**Qué mirar después.** En Repro Lima → Reintentos Aliclik, aprobar uno sin pin
+cuya clienta mandó su ubicación por WhatsApp: el aviso dice «Con la ubicación que
+mandó la clienta por WhatsApp» y el evento `lima_retry_approved` lleva
+`coordinate_source: chatby`.
+
+**Marcha atrás.** Revertir el commit (sin pin del pedido, vuelve a ir directo a
+Google).
+
+### 08-11-2026 · Ubicación por dirección en Lima: el mínimo de puntos «edificio» baja de 30 a 15 (sin migración, MOM §9.5)
+
+Decisión del owner con la primera medición de Lima:
+- 108 pedidos medidos; 17 con el edificio (ROOFTOP).
+- Los 17 a 300 m o menos del pin real, con una mediana de 33 m y ninguno a más de 1 km.
+- Con 7 días de pedidos y 150 consultas por día no se llega a 30.
+
+El 90 % a 300 m o menos no cambia (`GEOCODE_LIMA_MIN_ROOFTOP`). El aviso de
+muestra chica del piloto de Chatby (`GEOCODE_SMALL_SAMPLE`, 30) tampoco.
+
+**Qué mirar después.** En Automatizaciones → «Ubicación por dirección», la
+medición de hoy ya cumple B y el interruptor se puede encender. Encendido,
+«Aprobar» y la pasada usan el edificio en Google para los reintentos sin pin.
+Será cerca de 1 de cada 6.
+
+**Marcha atrás.** Revertir el commit (el interruptor encendido vuelve a quedar
+sin uso hasta que una medición tenga 30 puntos).
+
+### 08-11-2026 · Repro Lima: el aviso de «Aprobar elegidos» agrupa por motivo y lleva a «Ubicación por dirección» (sin migración, MOM §9.5)
+
+Pedido del owner. Al aprobar 22 reintentos, 21 repetían «Sin coordenada: la
+ubicación por dirección (Google) está apagada…». Ahora hay una línea por motivo
+con sus pedidos al final. Si Google está apagado o Lima no está medida, el aviso
+lleva el enlace a Automatizaciones → «Ubicación por dirección».
+
+**Sin migración**, sin crons ni variables. Solo cambia el aviso.
+
+**Qué mirar después.** Aprobar varios sin coordenada: el aviso dice el motivo
+una vez, «Pedidos (N): …», y el enlace abre la sección de Automatizaciones.
+
+**Marcha atrás.** Revertir el commit.
 ### 08-11-2026 · El agente de IA hace notas, WhatsApp y guías de Aliclik (0323, MOM §42.9)
 
 **Aplicada en producción el 08-11-2026.** El agente (Grok) deja notas en el

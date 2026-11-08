@@ -26,11 +26,20 @@ import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/l
 import { LimaStuckTray, type LimaStuckSelection } from "@/components/lima-stuck-tray";
 import { stuckFilter } from "@/lib/lima-stuck";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
-import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, pendingKey, pendingMatches, limaPlanCandidate, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
+import { retryApproveNoLocation } from "@/lib/lima-retry-auto";
+import { LIMA_QUEUE_CARDS, LIMA_FOLLOWUP_FILTERS, attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pendingMatches, limaPlanCandidate, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaAttentionFilter, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
 
-type Feedback = { kind: "notice" | "error"; text: string; extra?: string | null };
+type Feedback = {
+  kind: "notice" | "error";
+  text: string;
+  extra?: string | null;
+  /** Una línea por motivo (`groupApprovalFailures`). */
+  lines?: string[];
+  /** Algún pedido no tuvo Google porque está apagado o Lima no está medida. */
+  googleOff?: boolean;
+};
 
 export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
   data: ReproLimaData;
@@ -230,16 +239,16 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
     const rows = targets.rows;
     if (!rows.length || bulk) return;
     if (!window.confirm(`Se crearán ${rows.length} ${rows.length === 1 ? "guía" : "guías"} de Aliclik${targets.picked ? " (las elegidas)" : ""}. ¿Seguir?`)) return;
-    const failed: string[] = [];
+    const failed: Array<{ orderName: string; error: string }> = [];
     let created = 0;
     setBulk({ done: 0, total: rows.length });
     for (const [i, row] of rows.entries()) {
       try {
         const result = await approveAliclikRetry(row.orderId);
-        if (result.error) failed.push(`${row.orderName}: ${result.error}`);
+        if (result.error) failed.push({ orderName: row.orderName, error: result.error });
         else created += 1;
       } catch {
-        failed.push(`${row.orderName}: no se pudo crear (error de conexión).`);
+        failed.push({ orderName: row.orderName, error: "No se pudo crear (error de conexión)." });
       }
       setBulk({ done: i + 1, total: rows.length });
     }
@@ -248,7 +257,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
     setFeedback({
       kind: failed.length ? "error" : "notice",
       text: `Guías creadas: ${created} de ${rows.length}.`,
-      extra: failed.length ? failed.join(" · ") : null,
+      lines: groupApprovalFailures(failed),
+      googleOff: failed.some((f) => f.error === retryApproveNoLocation("apagado")),
     });
     refresh();
   }
@@ -318,6 +328,10 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false }: {
             <div className="min-w-0 space-y-1">
               <p>{feedback.text}</p>
               {feedback.extra && <p>{feedback.extra}</p>}
+              {feedback.lines?.map((line) => <p key={line}>{line}</p>)}
+              {feedback.googleOff && (
+                <p><a href="/dashboard/automatizaciones#retry-ubicacion" className="font-medium underline underline-offset-2">Ir a «Ubicación por dirección» en Automatizaciones</a> para medir Lima y encenderla.</p>
+              )}
             </div>
             <button type="button" onClick={() => setFeedback(null)} aria-label="Cerrar el aviso" className="grid size-8 shrink-0 place-items-center rounded-md text-ink-500 hover:bg-white/60 hover:text-ink-900">
               <IconX className="size-4" />

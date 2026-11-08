@@ -33,11 +33,14 @@ const h = vi.hoisted(() => ({
   googlePins: [] as string[],
   /** Hace fallar la lectura de la caché de Google. */
   googlePinsError: null as null | string,
+  /** «Pedir la ubicación por WhatsApp» (0324): con qué se llamó y qué devuelve. */
+  asks: [] as Row[],
+  askResult: (_input: Row): Row | null => ({ outcome: "pedida", detail: "Kapta le pidió su ubicación por WhatsApp." }),
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/env", () => ({
-  env: { aliclikWriteEnabled: () => h.write, siteUrl: () => "https://kapta.test", googleGeocodingApiKey: () => h.key },
+  env: { aliclikWriteEnabled: () => h.write, siteUrl: () => "https://kapta.test", googleGeocodingApiKey: () => h.key, chatbyApiKey: () => "" },
 }));
 vi.mock("@/lib/geocode-google-server", () => ({
   geocodeOrderAddress: async (_admin: unknown, order: Row, opts: Row) => {
@@ -79,6 +82,12 @@ vi.mock("@/lib/repro-lima-access", () => ({
   retryChainOf: (f: Row) => (f.retryChain.state === "siguiente" && !f.open?.agreed_on
     ? { attempt: f.retryChain.attempt, of: f.retryChain.of, next: f.retryChain.next, failedText: "falló", inOffice: false, ready: f.ready !== false }
     : null),
+}));
+vi.mock("@/lib/lima-retry-chatby-ask-server", () => ({
+  askRetryLocation: async (_admin: unknown, input: Row) => {
+    h.asks.push(input);
+    return h.askResult(input);
+  },
 }));
 vi.mock("@/lib/lima-retry-approve", () => ({
   RETRY_TRANSPORT_LABEL: { autoecom: "AUTOECOM", alidriver: "ALIDRIVER" },
@@ -328,6 +337,8 @@ beforeEach(() => {
   h.latest = null;
   h.googlePins = [];
   h.googlePinsError = null;
+  h.asks = [];
+  h.askResult = () => ({ outcome: "pedida", detail: "Kapta le pidió su ubicación por WhatsApp." });
 });
 
 describe("la pasada", () => {
@@ -985,7 +996,68 @@ describe("la pasada sin coordenada", () => {
     expect(route).toContain("runLimaRetryAuto(createAdminSupabase(), { preview: dry, noGeocode: dry })");
     // «Aprobar» (la acción manual) busca la ubicación con la misma regla y el mismo candado (08-11-2026).
     const manual = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/repro-lima/retry-actions.ts"), "utf8");
-    expect(manual).toContain("const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id));");
+    expect(manual).toContain("const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id), {");
+  });
+});
+
+describe("«Pedir la ubicación por WhatsApp» en la pasada (0324, owner 08-11-2026)", () => {
+  const withAsk = (mode: string) => ({ lima_retry_auto_settings: [{ org_id: ORG, daily_cap: 5, chatby_ask_mode: mode }] });
+
+  it("Apagado o sin la 0324: no se llama", async () => {
+    await runLimaRetryAuto(seed("activo", [noPin("a")]).admin, { now: OPEN_HOUR });
+    await runLimaRetryAuto(seed("activo", [noPin("a")], withAsk("apagado")).admin, { now: OPEN_HOUR });
+    expect(h.asks).toEqual([]);
+  });
+
+  it("al llegar a «Sin ubicación» la pide, con el episodio del intento que falló, y el log lo dice; no cuenta para el tope", async () => {
+    const { admin, db } = seed("activo", [noPin("a")], withAsk("activo"));
+    const report = await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(h.asks).toEqual([expect.objectContaining({
+      orgId: ORG, episodeAt: "2026-11-02T17:00:00Z", attempt: 2, of: 3, mode: "activo", dry: false,
+      row: expect.objectContaining({ order_id: "a" }),
+    })]);
+    expect(db.lima_retry_auto_log).toEqual([expect.objectContaining({
+      outcome: "sin_ubicacion", detail: expect.stringMatching(/«Corregir ubicación».*Kapta le pidió su ubicación por WhatsApp\.$/),
+    })]);
+    expect(report.chatbyAsk).toEqual({ sent: 1, simulated: 0 });
+    expect(report.orgs[0]!.capLeft).toBe(5);
+    expect(h.core).toEqual([]);
+  });
+
+  it("en la variante en Simulación también, y en «Simular ahora» nunca manda (dry)", async () => {
+    h.askResult = (input) => (input.dry ? { outcome: "simulada", detail: "Habría pedido su ubicación por WhatsApp." } : { outcome: "pedida", detail: "Kapta le pidió su ubicación por WhatsApp." });
+    const sim = seed("simulacion", [noPin("a")], withAsk("activo"));
+    await runLimaRetryAuto(sim.admin, { now: OPEN_HOUR });
+    expect(h.asks[0]).toMatchObject({ dry: false });
+    h.asks = [];
+    const prev = seed("apagado", [noPin("a")], withAsk("activo"));
+    const report = await runLimaRetryAuto(prev.admin, { now: LATE, orgId: ORG, preview: true });
+    expect(h.asks).toEqual([expect.objectContaining({ dry: true })]);
+    expect(report.chatbyAsk).toEqual({ sent: 0, simulated: 1 });
+    expect(report.orgs[0]!.items[0]!.detail).toContain("Habría pedido su ubicación por WhatsApp.");
+  });
+
+  it("no con el pin del pedido, ni con el caso tomado, ni con un error de la ubicación, ni en el `?dry=1` del cron", async () => {
+    await runLimaRetryAuto(seed("activo", [order("a")], withAsk("activo")).admin, { now: OPEN_HOUR });
+    h.facts.clear();
+    h.googlePinsError = "caída";
+    const pinned = order("b", undefined, "alexis", { row: { latitude: -12.1, longitude: -77.0, geo_source: "courier" } });
+    await runLimaRetryAuto(seed("activo", [pinned], withAsk("activo")).admin, { now: OPEN_HOUR });
+    h.googlePinsError = null;
+    await runLimaRetryAuto(seed("apagado", [noPin("c")], withAsk("activo")).admin, { now: LATE, orgId: ORG, preview: true, noGeocode: true });
+    // El caso tomado en Repro Lima: en Activo y en Simulación.
+    const open = { episode_key: "ep", claimed_by: "ana", claimed_until: "2026-11-04T15:20:00Z", agreed_on: null };
+    const claimed = () => order("d", undefined, "alexis", { open, row: { latitude: null, longitude: null } });
+    await runLimaRetryAuto(seed("activo", [claimed()], withAsk("activo")).admin, { now: OPEN_HOUR });
+    await runLimaRetryAuto(seed("simulacion", [claimed()], withAsk("activo")).admin, { now: OPEN_HOUR });
+    expect(h.asks).toEqual([]);
+  });
+
+  it("si la pedida no devuelve nada (Apagado adentro), el log queda como antes", async () => {
+    h.askResult = () => null;
+    const { admin, db } = seed("activo", [noPin("a")], withAsk("simulacion"));
+    await runLimaRetryAuto(admin, { now: OPEN_HOUR });
+    expect(db.lima_retry_auto_log![0]!.detail).toBe(retryNoLocationDetail("apagado"));
   });
 });
 

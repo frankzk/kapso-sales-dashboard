@@ -19,6 +19,7 @@ import { getMasterPermissions } from "@/lib/permissions-access";
 import { approveLimaRetry, RETRY_TRANSPORT_LABEL } from "@/lib/lima-retry-approve";
 import { retryApproveNoLocation } from "@/lib/lima-retry-auto";
 import { locateRetryOrder, retryGeocodeKeyForStore } from "@/lib/lima-retry-location";
+import { env } from "@/lib/env";
 import { loadReproFacts, retryChainOf } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
 import { limaTodayKey } from "@/lib/shipments";
@@ -72,10 +73,12 @@ async function readChain(orderId: string) {
  * (`approveLimaRetry`, lib/lima-retry-approve.ts); aquí quedan el permiso, la
  * RLS y los mensajes de la bandeja.
  *
- * Sin coordenada en el pedido (owner, 08-11-2026: «mismo candado»): la de su
- * dirección en Google, solo el edificio, si el interruptor de
- * Automatizaciones está encendido y la medición de Lima cumple B, como la
- * pasada (`locateRetryOrder`). Si no, dice por qué y no cotiza.
+ * Sin coordenada en el pedido (owner, 08-11-2026): la que la clienta ya mandó
+ * por WhatsApp (su conversación de Chatby, sin mandarle nada) y, si no, la de
+ * su dirección en Google, solo el edificio, si el interruptor de
+ * Automatizaciones está encendido y la medición de Lima cumple B («mismo
+ * candado»), como la pasada (`locateRetryOrder`). Si no, dice por qué y no
+ * cotiza.
  */
 export async function approveAliclikRetry(orderId: string): Promise<RetryActionState> {
   const who = await gate(true);
@@ -91,7 +94,10 @@ export async function approveAliclikRetry(orderId: string): Promise<RetryActionS
     return { error: "El intento falló hoy: el reintento sale otro día. Apruébalo desde mañana." };
   }
 
-  const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id));
+  const chatbyApiKey = env.chatbyApiKey();
+  const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id), {
+    chatby: chatbyApiKey ? { apiKey: chatbyApiKey } : null,
+  });
   if ("miss" in where.located) return { error: retryApproveNoLocation(where.located.miss) };
   const coordinate = where.located.coordinate;
   const result = await approveLimaRetry({

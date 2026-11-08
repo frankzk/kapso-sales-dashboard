@@ -366,4 +366,7 @@ echo "  ✅ nacen sin sello y con la racha en cero, que no baja de cero; los sel
 echo "▶ Lo que el agente de IA puede hacer (0323): interruptores en Simulación con topes, acciones y estados cerrados, código de un solo uso como sha256 y solo el servidor"
 $PSQL -f "$ROOT/scripts/sql/agent_actions_smoke.sql"
 echo "  ✅ nace en Simulación con 20 y 10, solo apagado/simulación/activo y topes con rango; solo nota, WhatsApp y guía, desde chat o rutina, con sus siete estados; el código nunca en claro ni repetido; texto con tope y error sin texto libre; el servidor cambia el estado pero no borra; el navegador no ve nada"
+echo "▶ Reintentos de Lima: pedir la ubicación por WhatsApp (0324): posición que nace apagada, una marca por pedido y episodio, y RLS"
+$PSQL -f "$ROOT/scripts/sql/lima_retry_chatby_ask_smoke.sql"
+echo "  ✅ apagado / simulación / activo y nada más, nunca nulo; el tope y Google no cambian; una sola marca por pedido y episodio, con sus dos estados; la org lee la posición y sus marcas, y nadie las cambia desde el navegador"
 echo "✅ DB verification passed."

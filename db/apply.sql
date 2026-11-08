@@ -647,4 +647,6 @@
 \ir migrations/0322_lead_appointment_release.sql
 \echo 'Applying 0323_agent_actions.sql'
 \ir migrations/0323_agent_actions.sql
+\echo 'Applying 0324_lima_retry_chatby_ask.sql'
+\ir migrations/0324_lima_retry_chatby_ask.sql
 \echo 'Done.'
