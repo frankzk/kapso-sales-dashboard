@@ -137,6 +137,7 @@ import type { WooCancelFacts } from "@/lib/woo-cancel";
 import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { AnuraCallButton, AnuraCallHistoryDetail, useAnuraOrderPanel } from "@/components/anura-call";
+import { GuideGpsLine } from "@/components/guide-gps-line";
 import { anuraCallForEntry } from "@/lib/anura/ui";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
@@ -1994,6 +1995,12 @@ export function OrderDrawer({
                             <span className="ml-auto text-[13px] text-ink-500">Guía actual</span>
                           )}
                         </div>
+                        {/* El GPS con el que se generó la guía Aliclik, con su
+                            origen (MOM §25): sirve para la próxima guía de la
+                            misma clienta. */}
+                        {g.courier === "aliclik" && detail.guideGps?.[g.id] && (
+                          <GuideGpsLine gps={detail.guideGps[g.id]!} />
+                        )}
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                           {notDelivered && (
                             <>
@@ -2575,6 +2582,9 @@ export function OrderDrawer({
                             {eventNoteLabel(t.kind, t.note ?? t.reason, detail.platform)}
                           </p>
                         )}
+                        {/* El GPS que se mandó a Aliclik con la guía (MOM §25):
+                            el punto de Kapta, no el del motorizado. */}
+                        {t.gps && <GuideGpsLine gps={t.gps} className="mt-0.5 max-w-[68ch]" />}
                         {t.kind === "anura_call" && (
                           <AnuraCallHistoryDetail
                             call={anuraCallForEntry(t.occurredAt, anura.panel?.calls ?? [])}

@@ -106,6 +106,7 @@ import {
   type HistoryPrior,
 } from "@/lib/history-guide-auto";
 import type { OrderMasterRow } from "@/lib/types";
+import type { GuideGpsOrigin } from "@/lib/guide-gps";
 
 /** El tiempo de una pasada (maxDuration 300 s). Lo que no entra va en la siguiente. */
 const TIME_BUDGET_MS = 230_000;
@@ -768,6 +769,18 @@ function coordinateNote(source: GuideCoordinateSource): string | null {
   return null;
 }
 
+/** El origen del GPS que queda en `payload.gps` (lib/guide-gps.ts). null: la coordenada del pedido. */
+function chatbyGpsOrigin(
+  source: GuideCoordinateSource,
+  from: { orderId: string; orderName: string | null } | null,
+): GuideGpsOrigin | null {
+  if (source === "historial") return { source: "historial", fromOrderId: from?.orderId ?? null, fromOrderName: from?.orderName ?? null };
+  if (source === "whatsapp") return { source: "whatsapp" };
+  if (source === "google") return { source: "google" };
+  if (source === "google_aprox") return { source: "aproximada" };
+  return null;
+}
+
 type GuideTry =
   /** La guía existe (creada ahora o ya la tenía): se puede confirmar. */
   | { kind: "ok"; state: "creada" | "ya_tenia"; code: string | null; detail?: string | null }
@@ -926,6 +939,9 @@ async function tryChatbyGuide(
           gpsFrom: opts.history.verdict.source.orderName,
         }
       : { kind: CHATBY_GUIDE_ORIGIN, scheduledOn: g.today, reason: chatbyGuideReason(row.order_name) },
+    // De dónde salió el GPS, para el hecho `guide_registered` (`payload.gps`).
+    // La del pedido la rotula la creación según `geo_source`.
+    chatbyGpsOrigin(source, opts.history?.verdict.source ?? null),
   );
   if (result.locked) {
     // Otra creación tiene el candado (una persona creándola ahora): no es un fallo.

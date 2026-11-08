@@ -283,9 +283,12 @@ export async function approveLimaRetry(input: RetryApproveInput): Promise<RetryA
       detail: `${courier.transportName ?? transport} S/ ${courier.deliveryCost} · cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)}${external ? ` · ${retryCoordinateNote(external.source)}` : ""}`,
     };
   }
-  const result = system
-    ? await createAliclikGuideFor(ctx, createInput, scope, origin)
-    : await createAliclikGuideFor(ctx, createInput);
+  // La coordenada de Google queda rotulada en el hecho (`payload.gps`, lib/guide-gps.ts).
+  const result = google
+    ? await createAliclikGuideFor(ctx, createInput, system ? scope : undefined, system ? origin : undefined, { source: "google" })
+    : system
+      ? await createAliclikGuideFor(ctx, createInput, scope, origin)
+      : await createAliclikGuideFor(ctx, createInput);
   if (result.error) {
     // El candado lo tiene otra creación (una persona ahora, o un timeout que el
     // barrido resuelve); el timeout pudo haberla creado; con número, Aliclik

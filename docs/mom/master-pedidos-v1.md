@@ -1240,6 +1240,50 @@ Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
 `test/chatby-autoconfirm.test.ts`, `test/chatby-location-ask.test.ts`,
 `test/chatby-auto-ask.test.ts`, `test/history-guide-auto.test.ts`.
 
+#### «Usar este GPS»: la entrega anterior, a mano (08-11-2026, pedido del owner)
+
+Lo mismo que hace sola la regla de arriba, pero lo **decide la asesora**, en el
+paso «Ubicación y cotización» de «Crear guía en Aliclik» (ficha y Leads).
+Cuando la clienta (por el celular, en toda la organización) tiene pedidos
+**entregados** cuya guía Aliclik guardó coordenada, debajo del campo
+«Ubicación» sale «GPS de sus entregas anteriores», el más reciente primero y
+hasta tres:
+
+> #KP131756 · entregado 02-09 · Jr. geranios A 1, San Sebastián · Usar este GPS · Ver en Maps
+
+- **Qué cuenta.** Solo pedidos con `general_status = entregado` y con una guía
+  Aliclik entregada con coordenada (`shipments.latitude/longitude`: el punto que
+  Kapta le mandó y con el que se entregó). **Nunca** un pedido con un fallido,
+  con la misma idea de «fallido» que la regla 0317 aplicada a ese pedido: un
+  intento que no se entregó (`attempt_count > 0`, también si al final se
+  entregó), una guía devuelta (`returned_at` o `devuelto`), un anulado después
+  de salir (`isFailedDispatch`) o un rechazo en la puerta
+  (`etiquetaDiceRechazoEnPuerta`). A diferencia de la regla automática, no
+  exige el historial entero limpio ni la misma dirección: solo propone.
+- **Aviso ámbar** cuando la dirección (`sameAddress`) o el distrito y la
+  provincia (`sameDestination`) de ese pedido no son los de este: «La dirección
+  no es la de este pedido: confirma con la clienta que recibe ahí.», «Otro
+  distrito (Wanchaq): …» o «Otra dirección y otro distrito (…): …». No bloquea.
+- **Un clic llena el campo** con «lat, lng» y borra la cotización anterior. La
+  asesora cotiza y crea como siempre: el pin respaldado, el riesgo, el
+  duplicado, las salidas y todas las rejas siguen igual. Elegir un GPS no
+  levanta ninguna.
+- **Queda escrito.** La guía guarda `payload.gps.source = historial` con el
+  pedido (`from_order_id`, `from_order_name`), y la Actividad dice «GPS de la
+  entrega de #KP131756». El servidor lo comprueba antes de firmarlo
+  (`createAliclikGuide`): el pedido tiene que seguir siendo candidato y el campo
+  tener exactamente su coordenada; si la asesora la cambió, la guía sale igual y
+  el GPS queda como «pegado por una persona». «Usar esta ubicación» (WhatsApp)
+  deja `whatsapp`.
+- **No es un estado nuevo ni toca la regla automática** (`historyGuideCandidate`
+  sigue igual). Lee con la sesión de quien crea la guía, acotado a las tiendas
+  de la organización.
+
+Implementación: `lib/recurring-gps.ts` (candidatos y aviso, puro),
+`lib/recurring-gps-access.ts` (dos consultas), `loadAliclikGpsCandidates` y
+`createAliclikGuide` (app/dashboard/pedidos/aliclik-actions.ts),
+`components/aliclik-guide-panel.tsx`. Pruebas: `test/recurring-gps.test.ts`.
+
 ### 6.2 Preparación
 
 Responsable principal: Yelitza.
@@ -15260,6 +15304,50 @@ anulación de un pedido de Shopify sigue sin hecho propio. Implementación:
 `orderEventsToTimeline` (lib/orders-master-access.ts), `timelineOriginLabel` y
 `timelineFact` (lib/order-timeline-fact.ts) y `TIMELINE_LABEL`
 (components/order-master-shared.tsx).
+
+**El GPS de la guía Aliclik se ve (08-11-2026, pedido del owner).** «Solo
+aparece la anotación de que la guía fue generada, pero no expone el GPS… estaría
+bueno mostrarlo para estos clientes recurrentes y usar la misma GPS.» Cada hecho
+de guía Aliclik de la Actividad (`guide_registered`, `guide_created`) y cada
+guía Aliclik de «Salidas y guías» llevan una línea:
+
+> GPS enviado a Aliclik: -13.53382, -71.92565 · Ver en Maps · pegado por una persona
+
+- **Qué es.** La coordenada que Kapta le **mandó** a Aliclik con la guía (o la
+  que se cargó en su portal), guardada en `shipments.latitude/longitude`.
+  Aliclik la devuelve tal cual en su reporte (§6.1, «La prueba»), así que **no
+  es el GPS del motorizado** y nunca se rotula «ubicación de la entrega». Cinco
+  decimales (~1 m); «Ver en Maps» abre `https://www.google.com/maps?q=lat,lng`
+  con la coordenada entera.
+- **De dónde salió**, cuando se sabe: «pegado por una persona» (lo escrito en
+  «Ubicación»), «ubicación de WhatsApp», «dirección ubicada en Google»,
+  «ubicación aproximada (Google)» (0316), «GPS de la entrega de #KP131756» (la
+  regla 0317 o «Usar este GPS», §6.1), «coordenada del pedido de la tienda»,
+  «ubicación corregida a mano en el pedido», «coordenada de una guía anterior
+  del pedido» (según `geo_source` del pedido) o «cargado en el portal de
+  Aliclik» (guías vinculadas o que entraron por su reporte). Una guía creada
+  por Kapta antes del 08-11-2026 no lo dejó escrito y la línea sale sin origen
+  (salvo las de la regla 0317, que ya guardaban `payload.auto.gps_from`).
+- **Sin rellenar datos.** La coordenada se lee al pintar: del hecho si la trae
+  y si no, de la guía del mismo pedido, por `shipment_id` o por el código
+  (también el ALC… provisional, que queda en `external_order_number` cuando el
+  reporte lo promueve al AUR5X). La ficha ya lee las guías del pedido en una
+  sola consulta; no hay una consulta por hecho. Así sale en todos los pedidos,
+  también #KP131756 (AUR5X134876314687, -13.5338163, -71.9256485, creada por
+  una asesora el 01-09).
+- **Desde el 08-11-2026 el hecho se explica solo.** Al crear la guía,
+  `guide_registered` guarda `payload.gps` = `{lat, lng, source,
+  from_order_id, from_order_name}` (`source`: `persona`, `whatsapp`, `google`,
+  `aproximada`, `historial`, `pedido_tienda`, `pedido_manual`, `pedido_guia`;
+  sin origen conocido, `null`). La coordenada del hecho manda sobre la de la
+  guía: es la que se mandó. En «Salidas y guías», si la guía cambió de punto
+  después, se enseña el punto de hoy sin origen.
+
+Implementación: `lib/guide-gps.ts` (formato, origen y cruce, puro),
+`guideGpsByEvent` / `guideGpsByShipment` en `getOrderMasterDetail`
+(lib/orders-master-access.ts), `components/guide-gps-line.tsx` y
+`guideGpsForCreation` en `createAliclikGuideFor` (lib/aliclik-guide.ts). Pruebas:
+`test/guide-gps.test.ts`.
 
 Dentro de `Operar`, el orden de decisión es:
 

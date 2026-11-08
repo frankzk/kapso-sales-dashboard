@@ -100,6 +100,7 @@ import { pgTextArrayLiteral, type ProductOptionRow } from "@/lib/order-product-t
 import { isHistoricalShopifyOrder, legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
 import { loadPendingVouchers } from "@/lib/pending-voucher-access";
+import { guideGpsByEvent, guideGpsByShipment, type GuideGps } from "@/lib/guide-gps";
 import { AGENCY_DEADLINE_ALERT_MS, paidUnnotifiedFilterIds } from "@/lib/agency-pickup-alert";
 import { loadPaidUnnotified } from "@/lib/agency-pickup-alert-access";
 import {
@@ -444,6 +445,11 @@ export interface TimelineEntry {
    * Actividad reconoce «Pedido generado» sin comparar etiquetas traducidas.
    */
   leadStatus?: string | null;
+  /**
+   * El GPS que se mandó a Aliclik con la guía (MOM §25, 08-11-2026): solo en
+   * los hechos de guía Aliclik que tienen coordenada (`guideGpsByEvent`).
+   */
+  gps?: GuideGps | null;
 }
 
 /** Lo que hace falta de `lead_calls` para la línea de tiempo del pedido. */
@@ -526,6 +532,11 @@ export interface OrderMasterDetail {
   customerName?: CustomerNameSnapshot;
   row: OrderMasterRow;
   guides: ShipmentRow[];
+  /**
+   * El GPS que se mandó a Aliclik con cada guía Aliclik, por id de la guía
+   * (`guideGpsByShipment`): «Salidas y guías» lo enseña con su origen.
+   */
+  guideGps?: Record<string, GuideGps>;
   timeline: TimelineEntry[];
   /** Evidencia GF para terminar una venta que volvió a oficina para reprogramar. */
   wooSaleDispatchEvents?: Pick<OrderEventRow, "kind" | "shipment_id" | "source" | "actor">[];
@@ -754,7 +765,9 @@ export interface OrderTaskSummary {
 }
 
 const GUIDE_COLUMNS =
-  "id,store_id,courier,guide_code,delivery_status,status_category,order_id,matched," +
+  // `external_order_number`: el ALC… provisional de la guía Aliclik, con el que
+  // quedó su hecho `guide_registered` si después se promovió al AUR5X (lib/guide-gps.ts).
+  "id,store_id,courier,guide_code,external_order_number,delivery_status,status_category,order_id,matched," +
   "match_method,order_name,customer_name,customer_phone,product,district,province,city,region," +
   "delivery_address,delivery_reference,latitude,longitude,address_override,address_updated_at," +
   "address_updated_by,fenix_eligible,fenix_shipment_id,created_via,delivered_source," +
@@ -1152,7 +1165,14 @@ export async function getOrderMasterDetail(
   const names = await resolveEmails(actorIds);
   const guideById = new Map(guides.map((g) => [g.id, g]));
 
-  const fromEvents = orderEventsToTimeline(events, names);
+  // El GPS de cada guía Aliclik, de su hecho o de la guía: las guías ya están
+  // leídas arriba, así que no cuesta ninguna consulta más (lib/guide-gps.ts).
+  const gpsByEvent = guideGpsByEvent(events, guides);
+  const fromEvents = orderEventsToTimeline(events, names).map((t) => {
+    const gps = gpsByEvent.get(t.id.replace(/^event:/, ""));
+    return gps ? { ...t, gps } : t;
+  });
+  const guideGps = Object.fromEntries(guideGpsByShipment(events, guides));
 
   const fromLeads = leadCallsToTimeline(leadCalls, names);
 
@@ -1246,6 +1266,7 @@ export async function getOrderMasterDetail(
   return {
     row,
     guides,
+    guideGps,
     timeline,
     lineItems,
     totals: orderTotals(orderRow?.raw, row.order_total),

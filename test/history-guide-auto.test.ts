@@ -300,9 +300,10 @@ describe("el interruptor: Apagado / Simulación / Activo", () => {
     expect(read("scripts/verify-db.sh")).toContain("scripts/sql/history_guide_auto_smoke.sql");
   });
 
-  it("DEPLOY: la entrada va primero, la migración no se aplica sola y nace Apagado", () => {
+  it("DEPLOY: tiene su entrada, la migración no se aplica sola y nace Apagado", () => {
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("\n### ");
+    // Ya no es la primera: las entradas nuevas van encima.
+    const first = deploy.indexOf("\n### 08-11-2026 · Confirmación por Chatby: guía automática para clientas con entregas");
     const body = deploy.slice(first, deploy.indexOf("\n### ", first + 10));
     expect(body).toContain("guía automática para clientas con entregas (0317");
     expect(body).toContain('psql "$DATABASE_URL" -f db/migrations/0317_history_guide_auto.sql');

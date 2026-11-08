@@ -88,6 +88,7 @@ import {
   toAliclikCoord,
 } from "@/lib/aliclik-geo";
 import type { OrderMasterRow } from "@/lib/types";
+import { guideGpsForCreation, guideGpsPayload, type GuideGpsOrigin } from "@/lib/guide-gps";
 
 // ---------------------------------------------------------------------------
 // Contexto
@@ -807,6 +808,18 @@ export interface CreateGuideInput {
    * fue el desplegable del checkout, aquí se deja dicho.
    */
   pinExceptionReason?: string | null;
+  /**
+   * La asesora llenó «Ubicación» con «Usar esta ubicación» (la que mandó la
+   * clienta por WhatsApp). Solo rotula de dónde salió el GPS en el hecho
+   * (`payload.gps.source`); no levanta ninguna reja.
+   */
+  coordinateFromWhatsapp?: boolean;
+  /**
+   * La asesora llenó «Ubicación» con «Usar este GPS» de este pedido entregado
+   * de la clienta (`lib/recurring-gps.ts`). La acción lo vuelve a comprobar en
+   * el servidor antes de dejarlo escrito; aquí no se confía en él.
+   */
+  coordinateFromOrderId?: string | null;
 }
 
 /**
@@ -1066,6 +1079,8 @@ export async function createAliclikGuideFor(
   input: CreateGuideInput,
   scope?: AliclikReadScope,
   origin?: AliclikGuideOrigin,
+  /** De dónde salió el GPS, si lo sabe quien llama (`GuideGpsOrigin`). */
+  gpsOrigin?: GuideGpsOrigin | null,
 ): Promise<AliclikCreateResult> {
   if (!env.aliclikWriteEnabled()) {
     return { error: "La escritura hacia Aliclik está desactivada en este entorno (ALICLIK_WRITE_ENABLED)." };
@@ -1353,6 +1368,18 @@ export async function createAliclikGuideFor(
         returnCost: courierBlock.returnCost,
         warehouseId: preview.warehouseId,
         ubigeo: preview.aliclikUbigeo,
+        // El GPS que se mandó y de dónde salió: la Actividad lo enseña sin
+        // tener que ir a buscar la guía (MOM §25, 08-11-2026).
+        gps: guideGpsPayload(
+          guideGpsForCreation({
+            coordinate: preview.coordinate,
+            typed: Boolean(input.coordinate && parseCoordinateInput(input.coordinate)),
+            fromWhatsapp: input.coordinateFromWhatsapp === true,
+            automatic: Boolean(origin),
+            geoSource: ctx.row.geo_source,
+            known: gpsOrigin ?? (origin?.gpsFrom ? { source: "historial", fromOrderName: origin.gpsFrom } : null),
+          }),
+        ),
       },
     },
     ...(riskExceptionReason
