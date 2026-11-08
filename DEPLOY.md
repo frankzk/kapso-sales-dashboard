@@ -1,5 +1,75 @@
 # Deployment runbook
 
+### 08-11-2026 · Confirmación por Chatby: pedir la ubicación desde el drawer y releer cuando la clienta la manda (sin migración, MOM §6.1)
+
+**Sin migración.** La marca de «se le pidió» va en la columna que ya existe
+(`chatby_auto_checks.evidence`: `asked_at` y `held_at`); no hay columnas,
+estados, crons ni variables nuevas. La 0318 queda libre.
+
+Pedido del owner: que la ficha le pida la ubicación a la clienta cuando
+confirmó por Chatby pero la dirección está incompleta o Google no la encuentra,
+y que Kapta la lea cuando llegue.
+
+- **El aviso** en la pestaña «Chatby» del drawer (tono `warn`), solo si la
+  marca del pedido es `para_asesora` por `direccion_incompleta`,
+  `sin_ubicacion` o `sin_ubicacion_cerrado` y sigue en Por confirmar («Sin
+  llamar» / «Por confirmar») de Provincia COD: «La clienta confirmó, pero la
+  dirección está incompleta» / «… pero Google no encuentra la dirección», por
+  qué y qué pasa después. La marca se lee al cargar la conversación y solo para
+  esos pedidos (una lectura chica por la llave primaria).
+- **«Pedir ubicación por WhatsApp»**: el mensaje viene escrito y se puede
+  editar; sale por el mismo envío que «Responder por WhatsApp» (24 h de
+  WhatsApp, el bot en pausa 60 min, `master.edit`). Con `sin_ubicacion…` pide
+  **solo la ubicación actual de WhatsApp**; con `direccion_incompleta`, la
+  calle, el número y una referencia **solo si falta el número de la casa**
+  (calle sin número, «s/n», «sin número»); si es un mercado, un cruce, un
+  kilómetro o una seña, también solo la ubicación. Queda el hecho
+  `chatby_message` con `payload.purpose = pedir_ubicacion`. Cualquier mensaje
+  desde la ficha a un pedido con el aviso guarda `evidence.asked_at`.
+- **La relectura**, dentro de la pasada que ya mira la ubicación (cada 10 min,
+  `recheck_minutes`, 72 h, hasta 10 por pasada en esta búsqueda): lo que quedó
+  por `direccion_incompleta` / `sin_ubicacion_cerrado` y **se le pidió** vuelve
+  a leerse; sin un mensaje nuevo de la clienta desde que quedó para la asesora
+  no se evalúa nada. Si lo último que mandó es su **ubicación** (las reglas del
+  pin de siempre: de la clienta, en el Perú, de esta compra), la confirmación
+  vale aunque la dirección escrita esté incompleta y la guía va con esa
+  ubicación, por el pin respaldado de Aliclik y todas las rejas. Una
+  **dirección escrita** pasa por `direccionCompleta` y `addressMatchesOrder`
+  como hoy. `sin_ubicacion` se sigue mirando como antes.
+
+**Qué mirar después.**
+- Que las pedidas queden marcadas y se relean:
+  ```sql
+  select reason, count(*) filter (where evidence->>'asked_at' is not null) as pedidas, count(*)
+  from chatby_auto_checks where outcome = 'para_asesora'
+    and reason in ('direccion_incompleta', 'sin_ubicacion', 'sin_ubicacion_cerrado')
+  group by 1;
+  select order_id, occurred_at, payload from order_events
+  where kind = 'chatby_message' and payload->>'purpose' = 'pedir_ubicacion' order by occurred_at desc limit 20;
+  ```
+- En la respuesta del cron `chatby-autoconfirm`, ítems `step = "ubicacion"` con
+  `outcome = "sin_respuesta"` (se leyó, la clienta no escribió) o `confirmado`;
+  las confirmaciones con pin dicen en la nota «… y su ubicación de WhatsApp (la
+  dirección escrita estaba incompleta).»:
+  ```sql
+  select order_id, note from order_events where kind = 'confirmation_contact' and source = 'chatby'
+    and note like '%su ubicación de WhatsApp%' order by occurred_at desc limit 20;
+  ```
+- Que las lecturas de Chatby por pasada no suban de 20 + 10 + 10 + 10 (la
+  confirmación y las tres búsquedas de la pasada de la ubicación).
+- Abrir un pedido con el aviso en el teléfono: el aviso y el botón caben sin
+  desplazar de lado; con la ventana de 24 h cerrada, dice «Pídesela con una
+  plantilla desde Chatby».
+
+**Marcha atrás.** Revertir el commit: el aviso desaparece y las marcas con
+`direccion_incompleta` vuelven a ser finales (la pasada ignora `asked_at`). No
+hay nada que deshacer en la base; para limpiar la marca, si se quiere:
+```sql
+update chatby_auto_checks set evidence = evidence - 'asked_at' - 'held_at' where evidence ? 'asked_at';
+```
+Los pedidos confirmados con la ubicación de la clienta son confirmaciones y
+guías normales: quedan como están.
+
 ### 08-11-2026 · Confirmación por Chatby: prueba de ubicación aproximada (Apagado/Simulación/Activo) (0316, MOM §6.1 y §40)
 
 Cambio aprobado por el owner: «Aceptar ubicación aproximada en la calle

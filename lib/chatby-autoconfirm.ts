@@ -207,7 +207,9 @@ export interface ChatbyCheckState {
 /**
  * - `confirmado`: lo confirmó la pasada.
  * - `para_asesora`: había un mensaje de confirmación y no cuadró. Queda para la
- *   asesora con su motivo y no se vuelve a leer.
+ *   asesora con su motivo y no se vuelve a leer (salvo lo que espera la
+ *   ubicación: `sin_ubicacion`, y la dirección incompleta a la que se le pidió
+ *   desde la ficha, `chatbyHeldWatchDue` en lib/chatby-location-ask.ts).
  * - `sin_confirmacion` / `sin_conversacion`: todavía no escribió. Se vuelve a
  *   leer cada `recheck_minutes` mientras siga en la ventana.
  * - `error`: Chatby no respondió o falló la escritura. Se reintenta igual.
@@ -458,6 +460,29 @@ export function direccionCompleta(address: string | null | undefined): boolean {
   if (MANZANA_LOTE_CORTO.test(u)) return true;
   if (SIN_NUMERO.test(t)) return false;
   return conBloque(u) || conNombreYNumero(u);
+}
+
+/** Una seña en vez de la puerta: «frente al colegio», «cerca del grifo», «al costado de…». */
+const SENA = /\b(?:frente|cerca|costado|espalda|espaldas|altura|junto|paradero)\b|\bal\s+lado\b/;
+
+/**
+ * ¿A la dirección incompleta le falta SOLO el número de la casa? (owner,
+ * 08-11-2026): la calle sin número («Calle Cordova», «Tupac Amaru»), «s/n» o
+ * «sin número». Entonces a la clienta se le pide la calle, el número y una
+ * referencia. Si está incompleta por otra cosa —un mercado o un puesto, un
+ * cruce, un kilómetro, una seña sin calle («Frente al grifo»), un número que no
+ * se sabe de qué es («Magisterial III y 501»)—, no: se le pide solo su
+ * ubicación actual de WhatsApp. Una agencia, tampoco (no es un domicilio).
+ */
+export function direccionSinNumeroDeCasa(address: string | null | undefined): boolean {
+  const t = sinTildes(address ?? "");
+  if (!t.trim()) return false;
+  if (esRecojoEnAgencia(address) || AGENCIA_MAL_ESCRITA.test(t)) return false;
+  if (MERCADO.test(t) || CRUCE.test(t)) return false;
+  if (/(?:\bkms?|\bkilometros?)\s*\.?\s*\d/.test(t)) return false;
+  if (SIN_NUMERO.test(t)) return true;
+  if (!VIA.test(t) && SENA.test(t)) return false;
+  return !/\d/.test(sinNumerosQueNoSonDeCasa(t));
 }
 
 /** Palabras que no dicen nada del lugar: no cuentan al comparar. */
@@ -711,10 +736,15 @@ function limaStamp(iso: string | null): string {
  * La nota del intento: qué dijo, sin copiar la dirección ni el nombre. Lo
  * demás está en Chatby, a un clic desde la ficha.
  */
-export function chatbyConfirmationNote(input: { orderName: string; at: string | null; amountCents: number }): string {
+export function chatbyConfirmationNote(input: { orderName: string; at: string | null; amountCents: number; location?: boolean }): string {
+  // (owner, 08-11-2026) La dirección escrita estaba incompleta y la clienta
+  // mandó después su ubicación de WhatsApp: la guía va con esa ubicación.
+  const where = input.location
+    ? "la dirección del pedido y su ubicación de WhatsApp (la dirección escrita estaba incompleta)"
+    : "la dirección del pedido";
   return (
     `Confirmó por Chatby: mensaje de la clienta${limaStamp(input.at)} con el pedido ${input.orderName}, ` +
-    `${soles(input.amountCents)} contra entrega y la dirección del pedido.`
+    `${soles(input.amountCents)} contra entrega y ${where}.`
   );
 }
 

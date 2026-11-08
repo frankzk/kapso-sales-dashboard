@@ -747,8 +747,10 @@ se creó**.
   asesora») en la línea de tiempo, sin actor, con el motivo —el monto no
   coincide, la dirección no es la del pedido, el distrito no es el del pedido,
   escribió algo después…— y sin copiar la dirección. **Una sola vez**: ese pedido
-  ya no se vuelve a leer, la asesora lo confirma desde la mesa. Sin un mensaje
-  de confirmación (todavía no escribió) no se escribe nada.
+  ya no se vuelve a leer, la asesora lo confirma desde la mesa (salvo
+  `sin_ubicacion`, y `direccion_incompleta` cuando se le pide la ubicación
+  desde la ficha: más abajo). Sin un mensaje de confirmación (todavía no
+  escribió) no se escribe nada.
 - **Solo sale de Por confirmar con la guía creada** (owner, 02-11-2026). Al
   principio la pasada confirmaba y creaba la guía después; las 14 primeras
   confirmaciones (01-11) salieron a Preparación y ninguna guía se pudo crear
@@ -883,6 +885,85 @@ se creó**.
   clienta manda su ubicación, Kapta les crea la guía (`guide_detail =
   sin_ubicacion` → `creada`). Si la guía no sale, queda el hecho «Guía
   automática no creada» como antes.
+- **Pedir la ubicación desde la ficha, y releer cuando la clienta la manda**
+  (owner, 08-11-2026). Antes la asesora salía de Kapta para pedírsela, y el
+  pedido que quedó por `direccion_incompleta` no se volvía a leer aunque la
+  clienta la mandara.
+  - **El aviso.** En la pestaña «Chatby» de la ficha, si la última marca del
+    pedido es `para_asesora` por `direccion_incompleta`, `sin_ubicacion` o
+    `sin_ubicacion_cerrado`, y el pedido sigue en Por confirmar («Sin llamar» o
+    «Por confirmar») de Provincia COD, sale un aviso (tono `warn`): «La clienta
+    confirmó, pero la dirección está incompleta» o «… pero Google no encuentra
+    la dirección», por qué Kapta no creó la guía y qué pasa después (si Kapta
+    relee el chat, si hace falta pedírsela para que lo haga, o si ya pasaron
+    las 72 h y la guía va a mano). La marca se lee solo para esos pedidos, al
+    abrir la ficha, con la conversación (`loadOrderChatby`).
+  - **Qué se le pide** (`chatbyAskKindFor`, `chatbyAskMessage`). Con
+    `sin_ubicacion` / `sin_ubicacion_cerrado` (la dirección parece completa,
+    Google no la ubica), **solo su ubicación actual de WhatsApp**, sin pedir
+    calle, número ni referencia: «Hola Rosa 😊 Para enviar tu pedido
+    #AUR900226, ¿nos compartes tu ubicación actual de WhatsApp? (📎 → Ubicación
+    → Enviar tu ubicación actual)». Con `direccion_incompleta`, **la calle, el
+    número y una referencia** (y la ubicación como alternativa) **solo si a la
+    dirección le falta el número de la casa** (`direccionSinNumeroDeCasa`: la
+    calle sin número, «s/n», «sin número»); si está incompleta por otra cosa
+    —un mercado o un puesto, un cruce, un kilómetro, una seña sin calle
+    («Frente al grifo»), un número que no se sabe de qué es («Magisterial III y
+    501»)—, también solo la ubicación. Se mira la dirección que quedó
+    incompleta: la del mensaje de confirmación o, si esa está completa, la del
+    pedido.
+  - **Cómo sale.** El mensaje viene escrito y la asesora lo puede editar; el
+    botón «Pedir ubicación por WhatsApp» lo manda por **el mismo envío** que
+    «Responder por WhatsApp» (§25: `master.edit`, texto como persona del
+    equipo, solo dentro de las 24 h de WhatsApp —el servidor lo vuelve a
+    comprobar—, el bot en pausa 60 minutos). Con la ventana cerrada, el aviso
+    lo dice y manda a las plantillas de Chatby, como la caja de responder. Queda
+    el hecho de siempre, `chatby_message` («Mensaje por WhatsApp (Chatby)»),
+    con el texto, el motivo «Pidió la ubicación a la clienta por WhatsApp.» y
+    `payload.purpose = pedir_ubicacion`.
+  - **La marca.** Al mandar cualquier mensaje desde la ficha (con el botón o
+    con la caja de responder) a un pedido con ese aviso, la marca guarda
+    `evidence.asked_at` (cuándo se le pidió) y `evidence.held_at` (cuándo quedó
+    para la asesora). No hay columna ni estado nuevo.
+  - **La relectura** (`chatbyHeldWatchDue`, `chatbyReaskWatch`,
+    `lib/chatby-location-ask.ts` y `lib/chatby-reask.ts`). Lo que quedó por
+    `direccion_incompleta` o `sin_ubicacion_cerrado` deja de ser final **solo
+    después de que se le pidió** desde Kapta: la misma pasada que mira el chat
+    de los que esperan la ubicación lo relee cada `recheck_minutes`, dentro de
+    las 72 h del pedido y con su mismo tope (hasta 10 por pasada para cada
+    búsqueda, como las otras dos). No hay otra pasada ni otro sondeo. Si la
+    clienta **no escribió nada nuevo** desde que quedó para la asesora, no se
+    evalúa nada (solo se anota la lectura). Si escribió:
+    1. **lo que manda es su ubicación**: si lo ÚLTIMO que mandó es su
+       ubicación de WhatsApp de esta compra (`chatbyGuidePin`: de la clienta,
+       en el Perú, como mucho 3 días antes del pedido; también un enlace de
+       Maps con la coordenada), la confirmación vale **aunque la dirección
+       escrita esté incompleta**, siempre que lo demás cuadre como hoy (el
+       pedido, el monto, pagar en casa y que la dirección del mensaje sea la
+       del pedido). La guía va **con esa ubicación** —no con la coordenada del
+       pedido ni con Google— y pasa por las mismas puertas: el pin respaldado
+       de Aliclik al cotizar y todas las rejas de la guía. La nota de la
+       confirmación dice «… y la dirección del pedido y su ubicación de
+       WhatsApp (la dirección escrita estaba incompleta).»;
+    2. **una dirección escrita** es lo segundo: el último texto de la clienta
+       (sin contar cortesías) tiene que ser una dirección completa
+       (`direccionCompleta`), la del pedido también, y ser la del pedido
+       (`addressMatchesOrder`), como hoy. Entonces la guía sigue la regla de
+       siempre (la coordenada del pedido, la ubicación o Google con el
+       edificio) y, si no hay coordenada, el pedido pasa a `sin_ubicacion`, que
+       se sigue mirando;
+    3. si nada de eso alcanza, se espera a la pasada siguiente sin escribir
+       nada visible; un «no lo quiero» o una nota de anulación lo deja para la
+       asesora con su motivo (y una dirección del mensaje que no es la del
+       pedido, `direccion_distinta`).
+
+    Con la dirección completa (`sin_ubicacion_cerrado`) la evaluación es la de
+    la pasada de la ubicación de arriba. Si una persona lo confirma, lo anula o
+    lo mueve, o pasan las 72 h, se deja de mirar (se borra `asked_at`).
+    `sin_ubicacion` se sigue mirando como desde el 02-11-2026, se le haya
+    pedido o no. Al decidirlo (08-11-2026) quedaban en 7 días 139 marcas
+    `direccion_incompleta`; por eso no se relee ninguna sin que una persona se
+    la haya pedido.
 - **Lo que solo espera.** Con Aliclik en rojo, con el tope del día gastado o
   con otra creación en curso (el candado), no se escribe nada visible: el
   pedido sigue en Por confirmar y se vuelve a leer a los 30 minutos.
@@ -910,8 +991,10 @@ tope de 20 guías es cerca de un tercio de lo confirmado en un día.
 
 Implementación: `lib/chatby-autoconfirm.ts` (reglas puras),
 `lib/chatby-autoconfirm-server.ts` (carga, lectura y escritura),
-`app/api/cron/chatby-autoconfirm/route.ts`. Pruebas:
-`test/chatby-autoconfirm.test.ts`.
+`app/api/cron/chatby-autoconfirm/route.ts`; pedir la ubicación desde la ficha:
+`lib/chatby-location-ask.ts`, `lib/chatby-reask.ts`,
+`components/order-chatby-panel.tsx`. Pruebas:
+`test/chatby-autoconfirm.test.ts`, `test/chatby-location-ask.test.ts`.
 
 ### 6.2 Preparación
 

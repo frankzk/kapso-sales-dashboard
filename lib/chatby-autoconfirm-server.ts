@@ -65,6 +65,8 @@ import {
   type ChatbyHoldReason,
 } from "@/lib/chatby-autoconfirm";
 import type { ChatbyMessage } from "@/lib/chatby-conversation";
+import { chatbyHeldAt, chatbyHeldWatchDue, chatbyNewCustomerMessage } from "@/lib/chatby-location-ask";
+import { chatbyReaskWatch } from "@/lib/chatby-reask";
 import type { OrderMasterRow } from "@/lib/types";
 
 /** El tiempo de una pasada (maxDuration 300 s). Lo que no entra va en la siguiente. */
@@ -433,7 +435,7 @@ async function confirmWithGuide(
   key: { order_id: string; store_id: string; org_id: string },
   master: MasterRow,
   orderName: string,
-  verdict: { messageId: string; at: string | null; amountCents: number },
+  verdict: { messageId: string; at: string | null; amountCents: number; pin?: boolean },
   g: { state: GuideState; code: string | null; detail?: string | null },
   reads: number,
   item: ChatbyAutoItem,
@@ -447,7 +449,7 @@ async function confirmWithGuide(
     p_operation_id: chatbyOperationId(key.order_id, verdict.messageId),
     p_result: "confirmado",
     p_channel: "mensaje",
-    p_note: chatbyConfirmationNote({ orderName, at: verdict.at, amountCents: verdict.amountCents }),
+    p_note: chatbyConfirmationNote({ orderName, at: verdict.at, amountCents: verdict.amountCents, location: verdict.pin }),
     p_next_contact_on: null,
     p_occurred_at: occurredAt,
     p_reminder_due_at: null,
@@ -607,7 +609,12 @@ type GuideTry =
  * pedido o, si no trae (WooCommerce), la ubicación que mandó la clienta por
  * WhatsApp en esta compra (`chatbyGuidePin`). En `dry` solo cotiza.
  */
-async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly ChatbyMessage[]): Promise<GuideTry> {
+async function tryChatbyGuide(
+  g: GuideCtx,
+  row: MasterRow,
+  messages: readonly ChatbyMessage[],
+  opts: { forcePin?: boolean } = {},
+): Promise<GuideTry> {
   const { admin } = g;
   if (chatbyGuideBlock(row)) return { kind: "hold", reason: "programado", detail: null, state: "para_persona" };
   // La lista de pago adelantado (MOM §41): Chatby no confirma contra entrega a
@@ -643,7 +650,16 @@ async function tryChatbyGuide(g: GuideCtx, row: MasterRow, messages: readonly Ch
   // clienta por WhatsApp en esta compra. Sin ninguna, se la pide una persona.
   let coordinate: string | null = null;
   let source: GuideCoordinateSource = "pedido";
-  if (row.latitude == null || row.longitude == null) {
+  if (opts.forcePin) {
+    // La dirección escrita estaba incompleta y la clienta mandó su ubicación
+    // (owner, 08-11-2026): la guía va con ESA ubicación, nunca con la
+    // coordenada del pedido ni con Google. Las mismas condiciones del pin
+    // (`chatbyGuidePin`) y, al cotizar, el pin respaldado.
+    const pin = chatbyGuidePin(messages, row.order_created_at);
+    if (!pin) return { kind: "hold", reason: "sin_ubicacion", detail: null, state: "para_persona" };
+    coordinate = pin.coordinate;
+    source = "whatsapp";
+  } else if (row.latitude == null || row.longitude == null) {
     const pin = chatbyGuidePin(messages, row.order_created_at);
     if (pin) {
       coordinate = pin.coordinate;
@@ -783,8 +799,15 @@ interface WatchRow {
   store_id: string;
   message_id: string | null;
   reads: number | null;
-  /** «por_confirmar»: quedó en Por confirmar sin ubicación; «confirmado»: ya confirmado, sin guía. */
-  kind: "por_confirmar" | "confirmado";
+  /**
+   * «por_confirmar»: quedó en Por confirmar sin ubicación; «confirmado»: ya
+   * confirmado, sin guía; «pedida»: quedó para la asesora por la dirección
+   * incompleta (o se dejó de mirar sin ubicación) y se le pidió la ubicación
+   * desde la ficha (owner, 08-11-2026; `chatbyHeldWatchDue`).
+   */
+  kind: "por_confirmar" | "confirmado" | "pedida";
+  reason?: string | null;
+  evidence?: Record<string, unknown> | null;
 }
 
 /**
@@ -806,7 +829,7 @@ async function watchPass(
   const recheckBefore = new Date(now.getTime() - settings.recheck_minutes * 60_000).toISOString();
   const since = new Date(now.getTime() - settings.window_hours * 3_600_000).toISOString();
   const limit = watchLimit(settings);
-  const [heldRes, confirmedRes] = await Promise.all([
+  const [heldRes, confirmedRes, askedRes] = await Promise.all([
     admin
       .from("chatby_auto_checks")
       .select("order_id,store_id,message_id,reads")
@@ -827,12 +850,27 @@ async function watchPass(
       .lte("guide_at", recheckBefore)
       .order("guide_at", { ascending: true })
       .limit(limit),
+    // A los que se les pidió la ubicación desde la ficha (`chatbyHeldWatchDue`).
+    admin
+      .from("chatby_auto_checks")
+      .select("order_id,store_id,message_id,reads,outcome,reason,checked_at,evidence")
+      .eq("org_id", settings.org_id)
+      .eq("outcome", "para_asesora")
+      .in("reason", ["direccion_incompleta", "sin_ubicacion_cerrado"])
+      .not("evidence->>asked_at", "is", null)
+      .lte("checked_at", recheckBefore)
+      .order("checked_at", { ascending: true })
+      .limit(limit),
   ]);
   if (heldRes.error) throw new Error(`leer los que esperan ubicación: ${heldRes.error.message}`);
   if (confirmedRes.error) throw new Error(`leer los confirmados sin ubicación: ${confirmedRes.error.message}`);
+  if (askedRes.error) throw new Error(`leer a los que se les pidió la ubicación: ${askedRes.error.message}`);
   const rows: WatchRow[] = [
     ...((heldRes.data ?? []) as Omit<WatchRow, "kind">[]).map((r) => ({ ...r, kind: "por_confirmar" as const })),
     ...((confirmedRes.data ?? []) as Omit<WatchRow, "kind">[]).map((r) => ({ ...r, kind: "confirmado" as const })),
+    ...((askedRes.data ?? []) as (Omit<WatchRow, "kind"> & { outcome: string; reason: string | null; checked_at: string })[])
+      .filter((r) => chatbyHeldWatchDue(r, now, settings))
+      .map(({ outcome: _o, checked_at: _c, ...r }) => ({ ...r, kind: "pedida" as const })),
   ];
   if (!rows.length) return;
 
@@ -847,7 +885,7 @@ async function watchPass(
   const touch = async (r: WatchRow, patch: Record<string, unknown> = {}) => {
     if (ctx.dry) return;
     const at = new Date().toISOString();
-    const base = r.kind === "por_confirmar" ? { checked_at: at } : { guide_at: at };
+    const base = r.kind === "confirmado" ? { guide_at: at } : { checked_at: at };
     await admin
       .from("chatby_auto_checks")
       .update({ ...base, reads: (Number(r.reads) || 0) + 1, ...patch })
@@ -869,15 +907,22 @@ async function watchPass(
 
     // ¿Sigue donde lo dejamos? Si una persona ya lo movió, se deja de mirar.
     const open =
-      r.kind === "por_confirmar"
+      r.kind !== "confirmado"
         ? master.macro_stage === "por_confirmar" && ["sin_llamar", "por_confirmar"].includes(master.macro_substage ?? "")
         : master.macro_stage === "preparacion" && master.macro_substage === "por_generar_rotulo";
     const createdMs = Date.parse(master.order_created_at ?? "");
     const inWindow = Number.isFinite(createdMs) && createdMs >= Date.parse(since);
-    if (!open || (r.kind === "por_confirmar" && !inWindow)) {
+    if (!open || (r.kind !== "confirmado" && !inWindow)) {
       item.outcome = "fuera";
       // Ya no coincide con la búsqueda: no se vuelve a leer.
-      await touch(r, r.kind === "por_confirmar" ? { reason: "sin_ubicacion_cerrado" } : { guide_detail: "sin_ubicacion_cerrado" });
+      await touch(
+        r,
+        r.kind === "pedida"
+          ? { evidence: { ...(r.evidence ?? {}), asked_at: null } }
+          : r.kind === "por_confirmar"
+            ? { reason: "sin_ubicacion_cerrado" }
+            : { guide_detail: "sin_ubicacion_cerrado" },
+      );
       continue;
     }
 
@@ -955,6 +1000,11 @@ async function watchPass(
       continue;
     }
 
+    if (r.kind === "pedida") {
+      await reaskWatch(admin, ctx, guide, report, { r, key, master, item, reads, messages: conversation.messages, touch });
+      continue;
+    }
+
     // Seguía en Por confirmar esperando la ubicación.
     if (watch.kind === "wait") {
       await touch(r);
@@ -997,4 +1047,91 @@ async function watchPass(
     }
     await confirmWithGuide(admin, key, master, master.order_name ?? "el pedido", watch, g, reads, item, report);
   }
+}
+
+/**
+ * El que quedó para la asesora por la dirección incompleta (o se dejó de mirar
+ * sin ubicación) y al que se le pidió la ubicación desde la ficha (owner,
+ * 08-11-2026). Sin un mensaje NUEVO de la clienta desde que quedó para la
+ * asesora no se evalúa nada. Con él, `chatbyReaskWatch`: su ubicación primero
+ * (va como coordenada de la guía, con las puertas del pin), una dirección
+ * escrita después (con las reglas de siempre).
+ */
+async function reaskWatch(
+  admin: SupabaseClient,
+  ctx: PassCtx,
+  guide: GuideCtx,
+  report: ChatbyAutoReport,
+  w: {
+    r: WatchRow;
+    key: { order_id: string; store_id: string; org_id: string };
+    master: MasterRow;
+    item: ChatbyAutoItem;
+    reads: number;
+    messages: readonly ChatbyMessage[];
+    touch: (r: WatchRow, patch?: Record<string, unknown>) => Promise<void>;
+  },
+): Promise<void> {
+  const { r, key, master, item, reads, messages, touch } = w;
+  if (!chatbyNewCustomerMessage(messages, chatbyHeldAt({ evidence: r.evidence ?? null }))) {
+    item.outcome = "sin_respuesta";
+    await touch(r);
+    return;
+  }
+  const verdict = chatbyReaskWatch({
+    messages,
+    orderName: master.order_name ?? "",
+    orderCreatedAt: master.order_created_at ?? "",
+    totalAmount: master.order_total,
+    order: {
+      address: master.address,
+      reference: master.reference,
+      district: master.district,
+      province: master.province,
+      region: master.region,
+    },
+  });
+  if (verdict.kind === "wait") {
+    await touch(r);
+    return;
+  }
+  if (verdict.kind === "hold") {
+    item.outcome = "para_asesora";
+    item.detail = verdict.reason;
+    report.held++;
+    if (ctx.dry) return;
+    await holdForAdvisor(admin, key, item, { reason: verdict.reason, messageId: r.message_id, evidence: {}, reads });
+    return;
+  }
+  const g = await tryChatbyGuide(guide, master, messages, { forcePin: verdict.pin });
+  // Se dejó de mirar sin ubicación y sigue sin ella: queda como estaba.
+  if (g.kind === "wait" || (g.kind === "hold" && g.reason === "sin_ubicacion" && r.reason === "sin_ubicacion_cerrado")) {
+    item.detail = g.kind === "wait" ? g.outcome : undefined;
+    await touch(r);
+    return;
+  }
+  const evidence = { amount_cents: verdict.amountCents };
+  if (g.kind === "hold") {
+    // La dirección ya cuadra pero falta la ubicación (`sin_ubicacion`, que la
+    // pasada de la ubicación sigue mirando) u otra puerta de la guía.
+    item.outcome = "para_asesora";
+    item.detail = g.detail ? `${g.reason}: ${g.detail}` : g.reason;
+    report.held++;
+    if (ctx.dry) return;
+    await holdForAdvisor(admin, key, item, {
+      reason: g.reason,
+      detail: g.detail,
+      messageId: verdict.messageId,
+      evidence,
+      reads,
+      guide: { state: g.state, detail: item.detail, code: g.code ?? null },
+    });
+    return;
+  }
+  if (ctx.dry) {
+    item.outcome = "confirmaria";
+    item.detail = g.detail ?? undefined;
+    return;
+  }
+  await confirmWithGuide(admin, key, master, master.order_name ?? "el pedido", verdict, g, reads, item, report);
 }
