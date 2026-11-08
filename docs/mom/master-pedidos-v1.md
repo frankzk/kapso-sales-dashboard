@@ -5336,6 +5336,25 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
       (`/dashboard/automatizaciones#retry-ubicacion`). Ese día había 108
       pedidos de Lima de WooCommerce de los últimos 7 días con pin: la
       medición tiene muestra; si cumple B solo se sabe midiendo.
+  - **Antes de Google, la ubicación que la clienta ya mandó por WhatsApp**
+    (owner, 08-11-2026: Google da el edificio en ~1 de cada 6 pedidos de
+    Lima; de las opciones para los reintentos sin pin eligió «usar el pin que
+    ya mandó» y «pedirla si la ventana está abierta»). Entre el pin del
+    pedido y Google, la pasada y «Aprobar» leen la conversación de Chatby de
+    la clienta (`chatbyRetryPin`, `lib/lima-retry-location.ts`, con
+    `CHATBY_API_KEY`; sin clave no se lee) y toman su **último pin** desde 3
+    días antes de la compra (`chatbyGuidePin`, la misma regla de la guía de
+    Chatby, §6.1). **Sin mandarle nada.** Si el mismo celular tiene **otro
+    pedido** creado después de este y hasta 3 días después del pin, el pin
+    puede ser de esa otra compra: no se usa y sigue Google. Con el pin cotiza
+    y crea, `lima_retry_approved` lleva `coordinate_source: chatby` y el log
+    y el aviso dicen «Con la ubicación que mandó la clienta por WhatsApp». Si
+    el pedido no lo respalda (`pinSinCorroborar`, §10), queda `sin_ubicacion`
+    con «La ubicación que mandó por WhatsApp no la respalda el pedido…», como
+    el punto de Google. Chatby sin conversación, sin pin de esta compra o
+    fallando es «sin pin»: sigue Google, con su candado. La guía guarda el
+    punto (como la de Google) y el reintento siguiente lo toma como pin del
+    pedido.
   - **La ubicación por dirección (Google), solo con el edificio** (owner,
     05-11-2026; decisiones A, B y C de `docs/kapta/geocodificacion-propuesta.md`).
     Interruptor «Usar la ubicación por dirección (Google) si el pedido no

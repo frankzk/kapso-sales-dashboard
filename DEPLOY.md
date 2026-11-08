@@ -1,5 +1,26 @@
 # Deployment runbook
 
+### 08-11-2026 · Reintentos Aliclik de Lima: antes de Google, la ubicación que la clienta ya mandó por WhatsApp (sin migración, MOM §9.5)
+
+Elección del owner para los reintentos sin pin: Google da el edificio en ~1 de
+cada 6 pedidos de Lima. La pasada y «Aprobar» de Repro Lima leen la
+conversación de Chatby de la clienta y usan su último pin de esta compra (la
+misma regla de la guía de Chatby, §6.1). No le mandan nada. Si el mismo celular
+tiene otro pedido creado entre este y el pin, no se usa. Orden: pin del pedido →
+pin de WhatsApp → edificio en Google (con su candado).
+
+**Sin migración** ni crons. Usa `CHATBY_API_KEY`, que ya está: sin ella no se lee
+Chatby y todo sigue como antes. Una lectura de Chatby por pedido sin pin (caché
+de 1 minuto).
+
+**Qué mirar después.** En Repro Lima → Reintentos Aliclik, aprobar uno sin pin
+cuya clienta mandó su ubicación por WhatsApp: el aviso dice «Con la ubicación que
+mandó la clienta por WhatsApp» y el evento `lima_retry_approved` lleva
+`coordinate_source: chatby`.
+
+**Marcha atrás.** Revertir el commit (sin pin del pedido, vuelve a ir directo a
+Google).
+
 ### 08-11-2026 · Ubicación por dirección en Lima: el mínimo de puntos «edificio» baja de 30 a 15 (sin migración, MOM §9.5)
 
 Decisión del owner con la primera medición de Lima:

@@ -37,7 +37,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/env", () => ({
-  env: { aliclikWriteEnabled: () => h.write, siteUrl: () => "https://kapta.test", googleGeocodingApiKey: () => h.key },
+  env: { aliclikWriteEnabled: () => h.write, siteUrl: () => "https://kapta.test", googleGeocodingApiKey: () => h.key, chatbyApiKey: () => "" },
 }));
 vi.mock("@/lib/geocode-google-server", () => ({
   geocodeOrderAddress: async (_admin: unknown, order: Row, opts: Row) => {
@@ -985,7 +985,7 @@ describe("la pasada sin coordenada", () => {
     expect(route).toContain("runLimaRetryAuto(createAdminSupabase(), { preview: dry, noGeocode: dry })");
     // «Aprobar» (la acción manual) busca la ubicación con la misma regla y el mismo candado (08-11-2026).
     const manual = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/repro-lima/retry-actions.ts"), "utf8");
-    expect(manual).toContain("const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id));");
+    expect(manual).toContain("const where = await locateRetryOrder(admin, row, await retryGeocodeKeyForStore(admin, row.store_id), {");
   });
 });
 

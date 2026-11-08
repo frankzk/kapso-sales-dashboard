@@ -56,7 +56,7 @@ import { escapeHtml, sendTelegramToAll } from "@/lib/telegram";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { loadReproFacts, retryChainOf, type ReproFacts } from "@/lib/repro-lima-access";
 import { CHAIN_EVENT_KINDS } from "@/lib/lima-retry-chain";
-import { locateRetryOrder, retryGeocodeKey, type GoogleCoordinate, type RetryLocated } from "@/lib/lima-retry-location";
+import { locateRetryOrder, retryGeocodeKey, type RetryCoordinate, type RetryLocated } from "@/lib/lima-retry-location";
 import { unsavedAliclikIntent, type CreationIntent } from "@/lib/aliclik-intent-release";
 import type { ReproOrderRow } from "@/lib/repro-lima-program";
 import { claimView } from "@/lib/repro-lima";
@@ -630,7 +630,7 @@ export async function runLimaRetryAuto(
   };
 
   // El núcleo de «Aprobar», como sistema; sin scope de la tienda no se cotiza.
-  const runCore = async (c: Candidate, dry: boolean, coordinate: GoogleCoordinate | null): Promise<RetryApproveResult> => {
+  const runCore = async (c: Candidate, dry: boolean, coordinate: RetryCoordinate | null): Promise<RetryApproveResult> => {
     const scope = await scopeOf(c.row.store_id);
     if (typeof scope === "string") {
       return { outcome: "fallo", stage: "contexto", transport: RETRY_TRANSPORT_LABEL[c.chain.next], error: scope };
@@ -652,12 +652,18 @@ export async function runLimaRetryAuto(
   // como lo que es —Google— y pasa por el interruptor, la medición (B), la nota
   // del log y el camino de `pinSinCorroborar` → `sin_ubicacion`.
   const located = new Map<string, RetryLocated>();
+  // La ubicación que la clienta ya mandó por WhatsApp (08-11-2026): se lee su
+  // conversación de Chatby, sin mandarle nada. Sin clave, se sigue con Google.
+  const chatbyApiKey = opts.noGeocode ? "" : env.chatbyApiKey();
+  const chatbyRead = chatbyApiKey ? { apiKey: chatbyApiKey } : null;
   const locate = async (c: Candidate, geocodeKey: string | null): Promise<RetryLocated> => {
     const seen = located.get(c.row.order_id);
     if (seen) return seen;
-    // La misma regla que «Aprobar» (`locateRetryOrder`): el pin del pedido, o el
-    // edificio en Google con el candado; el cupo se corta para toda la pasada.
-    const where = await locateRetryOrder(admin, c.row, geocodeKey, { quotaHit: report.geocode.quotaHit });
+    // La misma regla que «Aprobar» (`locateRetryOrder`): el pin del pedido, el
+    // que mandó por WhatsApp o el edificio en Google con el candado; el cupo se
+    // corta para toda la pasada. El tope de tiempo de arriba también corta las
+    // lecturas de Chatby (5 s como mucho cada una).
+    const where = await locateRetryOrder(admin, c.row, geocodeKey, { quotaHit: report.geocode.quotaHit, chatby: chatbyRead });
     if (where.lookedUp) report.geocode.lookups += 1;
     if (where.quotaHit) report.geocode.quotaHit = true;
     // Un error o el cupo se vuelven a probar en la pasada siguiente, no en esta.
@@ -787,7 +793,7 @@ export async function runLimaRetryAuto(
         // nada se creó todavía, y un «en curso» olvidado contaría para el tope
         // todo el día y dejaría sin revisar al resto de la organización.
         let fresh: Candidate;
-        let coordinate: GoogleCoordinate | null;
+        let coordinate: RetryCoordinate | null;
         try {
           if (c.claimed) {
             item.outcome = "atendiendo";

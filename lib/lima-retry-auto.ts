@@ -283,10 +283,18 @@ export function autoRetryMotive(chain: Extract<LimaRetryChain, { state: "siguien
 // deja `lima_retry_auto_failed` y no saca el pedido de la cadena.
 
 /** De dónde salió la coordenada con la que se cotiza el reintento. */
-export type RetryCoordinateSource = "pedido" | "google";
+export type RetryCoordinateSource = "pedido" | "google" | "chatby";
 
 /** Lo que queda en el detalle del log cuando la coordenada vino de Google (como Chatby). */
 export const RETRY_GOOGLE_COORDINATE_NOTE = "ubicación por dirección (Google, edificio)";
+
+/** Lo mismo cuando es la ubicación que la clienta ya mandó por WhatsApp (08-11-2026). */
+export const RETRY_CHATBY_COORDINATE_NOTE = "ubicación que mandó la clienta por WhatsApp";
+
+/** La nota de la coordenada que no es la del pedido. */
+export function retryCoordinateNote(source: "google" | "chatby"): string {
+  return source === "chatby" ? RETRY_CHATBY_COORDINATE_NOTE : RETRY_GOOGLE_COORDINATE_NOTE;
+}
 
 /** Por qué no se buscó o no sirvió la ubicación por dirección. */
 export type RetryGeocodeMiss =
@@ -356,9 +364,10 @@ export function retryLocationMissing(
 ): string | null {
   if (preview.ok) return null;
   if (preview.needsCoordinate) return retryNoLocationDetail("apagado");
-  if (preview.pinSinCorroborar && source === "google") {
+  if (preview.pinSinCorroborar && source !== "pedido") {
     const why = preview.pinSinCorroborar.trim().replace(/\.$/, "");
-    return `La ubicación por dirección (Google) no la respalda el pedido: ${why}. Pon la ubicación de la clienta en la ficha del pedido («Corregir ubicación») y apruébalo en Repro Lima.`;
+    const what = source === "chatby" ? "La ubicación que mandó por WhatsApp" : "La ubicación por dirección (Google)";
+    return `${what} no la respalda el pedido: ${why}. Pon la ubicación de la clienta en la ficha del pedido («Corregir ubicación») y apruébalo en Repro Lima.`;
   }
   return null;
 }
