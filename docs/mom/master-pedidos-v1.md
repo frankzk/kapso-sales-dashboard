@@ -13529,6 +13529,21 @@ pedidos de Lima con una provincia imposible («arequipa», «HUARAZ», «lince»
   departamento que no se reconoce, una provincia que no es de ese departamento
   (en Lima, solo sus diez provincias y el Callao) ni un distrito que ya está
   guardado en **otro** departamento. La corrección del pedido vale igual.
+- **Solo distritos nuevos (08-11-2026).** Desde la ficha solo se **añade** un
+  distrito que `peru_districts` todavía no tiene; nunca se cambia la provincia
+  de uno que ya está, sea del INEI, de los reportes o aprendido a mano antes.
+  Se cambiaban: la corrección de un solo pedido reescribió «ayacucho» con
+  CORACORA (15-10) y «puno» con San Roman (24-08), y los pedidos de esos
+  distritos salieron semanas con la provincia de otro sitio (las dos filas y 43
+  pedidos abiertos se corrigieron a mano el 08-11-2026). Si el distrito ya está,
+  el aviso lo dice —«ya está guardado con la provincia «Huamanga»… La corrección
+  vale solo para este pedido.», o «ya estaba recordado» si es la misma— y la
+  corrección del pedido vale igual. La acción **inserta** la fila (`insert`,
+  nunca `upsert`): si otra persona guardó el mismo distrito entre medias, la
+  clave choca y no se pisa nada. Una fila mala se corrige en la tabla, a
+  propósito y con el owner. Además, la provincia de un pedido de la web ya no
+  depende de esta tabla: sale del ubigeo que eligió la clienta (§38.6, «La
+  provincia que eligió la clienta en la web»).
 - **Lo aprendido no manda sobre el departamento del pedido**
   (`learnedDistrictFits`): para un distrito de Lima Metropolitana o el Callao,
   una fila de otro departamento no se usa, y una provincia que no es de Lima se
@@ -21273,6 +21288,86 @@ y en Aliclik el pin decide a dónde va el paquete.
 Pruebas: `test/order-pin-sources.test.ts`.
 - **Teléfono:** el de facturación y, si falta, el de envío. Sin dirección de
   envío, se usa la de facturación.
+
+#### La provincia que eligió la clienta en la web (08-11-2026, `mom-v1.40`)
+
+**Qué pasaba.** El formulario contra entrega de la web (COD Core) no deja
+escribir la ubicación: la clienta elige departamento, provincia y distrito de
+tres listas encadenadas, y el formulario guarda el resultado en `meta_data` con
+la clave `_cod_territorio`: `{codigo, region, provincia, distrito}`, con el
+ubigeo del INEI («050101», Ayacucho / Huamanga / Ayacucho). La dirección con
+forma de Shopify que arma Kapta (§38.7) solo lleva el distrito (`city`) y el
+departamento (`state`), así que la provincia se perdía y el Master la deducía
+del **nombre** del distrito en `peru_districts` (§19.0.1). Ahí había dos filas
+aprendidas a mano que estaban mal —«ayacucho → CORACORA» desde el 15-10 y
+«puno → San Roman» desde el 24-08— y los pedidos de la web de esos distritos
+salían con la provincia de otro sitio aunque la clienta la hubiera elegido
+bien. Medido el 08-11-2026: 2.579 pedidos con `_cod_territorio`; las dos filas
+y 43 pedidos abiertos se corrigieron a mano ese día (`order_events.payload.bulk
+= province_learned_fix_20261108`) y quedaban 214 pedidos (116 abiertos) con
+otra provincia en el Master.
+
+**La regla** (owner, 08-11-2026). La ubicación de un pedido, nivel a nivel
+(departamento, provincia y distrito), sale de, en este orden:
+
+1. **La corrección manual del equipo** (`order_geo_overrides`, «Corregir
+   ubicación»). Manda siempre.
+2. **El ubigeo que eligió la clienta en la web** (`_cod_territorio`). Es una
+   elección de una lista cerrada, con código del INEI: no hay nombre que
+   adivinar.
+3. **Lo de siempre**: la provincia del reporte del courier (`guideProvinceFits`),
+   lo aprendido por nombre de distrito en `peru_districts`
+   (`learnedDistrictFits`), el ubigeo de la primera guía de Aliclik, el carrito
+   (draft order) y el historial del cliente, con sus guardas de §19.0.1. Un
+   pedido sin `_cod_territorio` —los de Shopify, o uno de la web anterior al
+   formulario— se resuelve exactamente como antes.
+
+**Cuándo vale el ubigeo del formulario** (`lib/woo-territorio.ts`, puras):
+
+- **Se lee con desconfianza** (`wooTerritorio`): de `orders.raw.woo.meta_data`,
+  como objeto o como texto JSON; si la clave viene dos veces, la última. Solo
+  completo y coherente: con departamento, provincia y distrito, un departamento
+  que se reconoce, una provincia que cabe en él (`provinceFitsDepartment`, la
+  guarda del 25-10-2026) y, si vino el código, un código de ese mismo
+  departamento (los dos primeros dígitos del INEI). Lo que falta, viene raro o
+  se contradice se ignora y el pedido sigue por el punto 3.
+- **Tiene que seguir siendo el del pedido** (`territorioForOrder`): **la guarda
+  del departamento**, la de siempre —si la corrección del equipo o el
+  desplegable de la dirección dicen otro departamento (`departmentsConflict`),
+  no se usa— y **el mismo distrito**: si el equipo corrigió el distrito
+  («Corregir ubicación», «Distrito por revisar» §19.0.3, que guarda solo el
+  distrito) o la dirección se cambió en WooCommerce, la provincia del ubigeo es
+  la de un lugar que ya no es el del pedido y tampoco se usa.
+- **El departamento se guarda como siempre** (§38.6, `territorioRegion`): las
+  dos Limas se separan —«Lima (provincia)» para Lima Metropolitana (código
+  `1501…`, o provincia Lima), «Lima (departamento)» para Huaral, Cañete,
+  Barranca…—, y el Callao es «Callao». La provincia de Lima Metropolitana queda
+  «Lima», la convención de §19.0.1.
+- **El código del INEI no se guarda en el Master**: no hay columna para él y no
+  se crea una por esto. Se usa para comprobar el departamento y separar las dos
+  Limas, y sigue en `orders.raw`.
+- **`geo_source`** dice `shopify` —«según WooCommerce» en la ficha, la dirección
+  del pedido en su tienda (§38.12)— cuando la ubicación sale del formulario y no
+  hay un punto del courier ni del pedido; no hay valor nuevo.
+
+**Coberturas.** Con el departamento del pedido conocido, la provincia solo
+entra a `order_coverage_for` por Cañete (§19.0.1): unos pocos pedidos de
+«Lima (departamento)» que no tenían provincia o tenían otra pueden pasar a la
+regla de Cañete. Lo demás no cambia de cobertura.
+
+**Cómo se recalcula lo ya guardado: una subida de versión ACOTADA**
+(`NARROW_VERSION_BUMP`, `lib/order-master.ts`). La versión sube a `mom-v1.40`,
+pero la regla solo cambia pedidos de WooCommerce, así que la puerta de versión
+del barrido (§19.1) recalcula las filas que no están en `mom-v1.40` ni en
+`mom-v1.39` y, de las de `mom-v1.39`, solo las de WooCommerce
+(`shopify_order_id` `wc-…`, §38.2): ~4.000 filas en vez de las ~37.500 del
+histórico, con el mismo tope de siempre (250 por tienda y pasada, cada 10
+minutos, dentro del reloj del cron). Una fila de Shopify en `mom-v1.39` sigue
+siendo la vigente. **Se apaga sola**: con la próxima subida (`mom-v1.41`) vuelve
+la regla de siempre —todo lo que no esté en la versión vigente está viejo—, sin
+que nadie tenga que quitar nada.
+
+Pruebas: `test/woo-territorio.test.ts` y `test/district-learning.test.ts`.
 
 ### 38.7 Lo que se guarda en `raw`
 

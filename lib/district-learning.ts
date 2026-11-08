@@ -11,8 +11,13 @@
 //
 // Dos guardas, puras:
 //   · `districtLearnVerdict`: qué se puede recordar. Nunca un departamento que
-//     no se reconoce, nunca una provincia que no es de ese departamento y nunca
-//     un distrito que ya está guardado en OTRO departamento (el homónimo).
+//     no se reconoce, nunca una provincia que no es de ese departamento y,
+//     desde el 08-11-2026, nunca un distrito que YA está guardado: desde la
+//     ficha solo se añade un distrito nuevo, no se cambia la provincia de uno
+//     que la tabla ya conoce. Se cambiaban: una corrección de un solo pedido
+//     dejó «ayacucho → CORACORA» (15-10) y «puno → San Roman» (24-08), y
+//     todos los pedidos de esos distritos salieron semanas con la provincia
+//     de otro sitio. Se corrigieron a mano el 08-11-2026.
 //   · `learnedDistrictFits`: lo ya aprendido solo vale para un pedido si no
 //     contradice su propio departamento. Así una fila mala no se reparte.
 
@@ -62,7 +67,33 @@ export function districtLearnVerdict(
         `y hay distritos con el mismo nombre en otros departamentos. La corrección vale solo para este pedido.`,
     };
   }
+  // SOLO DISTRITOS NUEVOS (08-11-2026). Una fila que ya existe no se toca desde
+  // la ficha, sea del INEI, de los reportes o aprendida a mano: lo que vale para
+  // un pedido no se reparte sobre todos los de ese nombre. Si la fila está mal,
+  // se corrige en la tabla, a propósito y con el owner.
+  if (existing) {
+    const same = sameText(existing.province, next.province);
+    return {
+      ok: false,
+      reason: same
+        ? `${where} ya estaba recordado con la provincia ${existing.province}.`
+        : `No se recordó para ${where}: ya está guardado con la provincia «${existing.province ?? ""}», ` +
+          `y Kapta no cambia desde aquí una provincia ya guardada. La corrección vale solo para este pedido.`,
+    };
+  }
   return { ok: true };
+}
+
+/** ¿Dicen lo mismo, sin tildes ni mayúsculas? */
+function sameText(a: string | null | undefined, b: string | null | undefined): boolean {
+  const k = (v: string | null | undefined) =>
+    (v ?? "")
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  return k(a) !== "" && k(a) === k(b);
 }
 
 /**
