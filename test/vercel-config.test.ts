@@ -100,7 +100,10 @@ describe("vercel.json", () => {
     //     (0309, MOM §41, 05-11-2026).
     // 36: el mantenimiento de «Llamar con Anura»: grabaciones pendientes,
     //     llamadas colgadas y bitácora, cada 10 minutos (MOM §8.7, 06-11-2026).
-    expect(crons).toHaveLength(36);
+    // 37: «Pago solo online (lista automática)», cada minuto de las 05:00 de
+    //     Lima: el cálculo diario, el envío a las tiendas y sus reintentos
+    //     (0326, MOM §41.11, 09-11-2026).
+    expect(crons).toHaveLength(37);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

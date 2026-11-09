@@ -16,7 +16,17 @@ import { FlowClient } from "@/lib/flow/client";
 import { ensureFlowPaymentLink } from "@/lib/flow/link";
 import { orgOfStore, paymentFactsOf, prepayEntryView, prepayLookup, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { prepayLinkPlan, prepayRequirementMet, type PrepayEvidence, type PrepayPaymentRow } from "@/lib/prepay-list";
-import { formatLimaDateTime } from "@/lib/automations-catalog";
+import { formatLimaDateTime, isUuid, PAGO_ONLINE_EXCEPTION_EVENT } from "@/lib/automations-catalog";
+import { getCurrentUser } from "@/lib/access";
+import { hasOrgPermission } from "@/lib/permissions-access";
+import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
+import { addPagoOnlineException } from "@/lib/pago-online-server";
+import {
+  PAGO_ONLINE_REQUIREMENT_LABEL,
+  pagoOnlineReasonProblem,
+  pagoOnlineRequirementMet,
+  type PagoOnlineRequirement,
+} from "@/lib/pago-online";
 
 export interface OrderPrepayStatus {
   listed: boolean;
@@ -33,7 +43,28 @@ export interface OrderPrepayStatus {
   due?: { kind: "total" | "diferencia"; amount: number; alreadyPaid: number } | null;
   /** Por qué no hay nada que cobrar todavía (un comprobante por validar…). */
   dueProblem?: string | null;
+  /**
+   * «Pago solo online (lista automática)», MOM §41.11: solo cuando el celular
+   * NO está en la lista de pago adelantado (que pide más). Cuentas del propio
+   * cliente, nunca datos de otros.
+   */
+  pagoOnline?: OrderPagoOnlineStatus | null;
   error?: string;
+}
+
+export interface OrderPagoOnlineStatus {
+  /** Por qué entra: `devuelto` (A) o `anulador` (B). */
+  reason: "devuelto" | "anulador";
+  /** Los devueltos, o los anulados del anulador. */
+  failed: number | null;
+  /** Sus pedidos contra entrega que cuentan (para «anuló N de M»). */
+  orders: number | null;
+  requirement: PagoOnlineRequirement;
+  requirementLabel: string;
+  /** Ya tiene lo que se pide (el adelanto validado o el pago completo): sigue. */
+  met: boolean;
+  /** Quien mira puede exceptuarlo (`prepay_list.manage`). */
+  canExcept: boolean;
 }
 
 type OrderRow = PrepayOrderRow & { order_name: string | null; order_total: number | null };
@@ -66,7 +97,23 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
     if (!orgId) return { listed: false };
     const lookup = await prepayLookup(admin, orgId, order.customer_phone);
     if (lookup.state === "unread") return { listed: false, error: "No se pudo comprobar la lista de pago adelantado." };
-    if (lookup.state === "not_listed") return { listed: false };
+    if (lookup.state === "not_listed") {
+      const auto = await pagoOnlineLookup(admin, orgId, order.customer_phone);
+      if (auto.state === "unread") return { listed: false, error: "No se pudo comprobar la lista «Pago solo online»." };
+      if (auto.state === "not_listed") return { listed: false };
+      return {
+        listed: false,
+        pagoOnline: {
+          reason: auto.who.reason,
+          failed: auto.who.failed,
+          orders: auto.who.orders,
+          requirement: auto.requirement,
+          requirementLabel: PAGO_ONLINE_REQUIREMENT_LABEL[auto.requirement],
+          met: pagoOnlineRequirementMet(auto.requirement, paymentFactsOf(order)),
+          canExcept: await hasOrgPermission(orgId, "prepay_list.manage").catch(() => false),
+        },
+      };
+    }
     const view = prepayEntryView(lookup.entry);
     const fullyPaid = prepayRequirementMet(paymentFactsOf(order));
     const creds = await getStoreCreds(order.store_id, admin).catch(() => null);
@@ -181,4 +228,38 @@ export async function createPrepayPaymentLink(orderId: string): Promise<PrepayLi
   );
   if (!res.ok) return { error: `Flow no creó el link (${res.reason}). Pide el ${kind === "total" ? "pago total" : "saldo"} por Yape.` };
   return { link: res.link, reused: res.reused, amount, kind, expiresAt: res.expiresAt };
+}
+
+/**
+ * «Exceptuar» desde la ficha (MOM §41.11): el cliente de este pedido sale de la
+ * lista automática «Pago solo online» en Kapta desde ya, y en las tiendas
+ * desde el próximo envío. Con motivo (8+ caracteres), `prepay_list.manage` en
+ * la organización del pedido y solo en producción, como la lista de pago
+ * adelantado. El celular sale del pedido, no del navegador.
+ */
+export async function exceptPagoOnlineCustomer(orderId: string, reason: string): Promise<{ error?: string; notice?: string }> {
+  if (!isUuid(orderId)) return { error: "Pedido inválido." };
+  const problem = pagoOnlineReasonProblem(reason);
+  if (problem) return { error: problem };
+  const order = await readOrder(orderId);
+  if (!order) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  const orgId = await orgOfStore(admin, order.store_id).catch(() => null);
+  if (!orgId) return { error: "No se pudo leer la organización del pedido." };
+  if (!(await hasOrgPermission(orgId, "prepay_list.manage"))) return { error: "Tu acceso no permite exceptuar clientes de la lista." };
+  if (process.env.VERCEL_ENV !== "production") return { error: "Disponible solo en producción." };
+  const user = await getCurrentUser();
+  const res = await addPagoOnlineException(admin, {
+    orgId,
+    phone: order.customer_phone ?? "",
+    reason,
+    actor: user?.id ?? null,
+    orderId,
+    orderName: order.order_name,
+  });
+  if (!res.ok) return { error: res.error };
+  await admin
+    .from("automation_switch_events")
+    .insert({ org_id: orgId, store_id: order.store_id, automation: PAGO_ONLINE_EXCEPTION_EVENT, previous: null, next: "exceptuado", actor: user?.id ?? null });
+  return { notice: "Exceptuado: Kapta ya no lo frena por esta lista, y sale de la lista de las tiendas en el próximo envío." };
 }

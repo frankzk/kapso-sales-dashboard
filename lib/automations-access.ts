@@ -42,6 +42,7 @@ import {
   type OrgAutomationTable,
 } from "@/lib/automations-catalog";
 import { loadPrepaySettings } from "@/lib/prepay-list-server";
+import { loadPagoOnlinePanel, type PagoOnlineView } from "@/lib/pago-online-view";
 import { loadChatbyApproxView, type ChatbyApproxView } from "@/lib/chatby-approx-server";
 import { loadChatbyAskModeView, loadChatbyHistoryModeView, type ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
 import { retryAskModeFrom, type RetryAskMode } from "@/lib/lima-retry-chatby-ask";
@@ -160,6 +161,8 @@ export interface AutomationsOrgView {
   stores: { id: string; name: string }[];
   retry: RetryView;
   prepay: PrepayAutoView;
+  /** «Pago solo online (lista automática)» (0326, MOM §41.11). */
+  pagoOnline: PagoOnlineView;
   /** «Aceptar ubicación aproximada en la calle correcta» de Chatby y su prueba (0316). */
   chatbyApprox: ChatbyApproxView;
   /** «Pedir sola la dirección o la ubicación» de Chatby (0318). */
@@ -218,7 +221,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
   const storeColumns = ["id", "name", "status", ...STORE_AUTOMATION_COLUMNS, "aliclik_enabled", "telegram_chat_id"];
   const storesQuery = admin.from("stores").select(storeColumns.join(",")).eq("org_id", orgId).order("name");
 
-  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes, prepay, chatbyApprox, chatbyAsk, chatbyHistory] = await Promise.all([
+  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes, prepay, chatbyApprox, chatbyAsk, chatbyHistory, pagoOnline] = await Promise.all([
     storesQuery,
     loadRetry(admin, orgId, today, yesterday),
     loadOrgSwitches(admin, orgId),
@@ -235,6 +238,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     loadChatbyApproxView(admin, orgId),
     loadChatbyAskModeView(admin, orgId),
     loadChatbyHistoryModeView(admin, orgId),
+    loadPagoOnlinePanel(admin, orgId),
   ]);
 
   const allStores = storesRes.error ? [] : ((storesRes.data ?? []) as unknown as StoreRow[]);
@@ -342,6 +346,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
 
   if (retry.error) errors.push(retry.error);
   if (prepay.error) errors.push(prepay.error);
+  if (pagoOnline.error) errors.push(pagoOnline.error);
   if (chatbyApprox.error) errors.push(chatbyApprox.error);
   if (chatbyAsk.error) errors.push(chatbyAsk.error);
   if (chatbyHistory.error) errors.push(chatbyHistory.error);
@@ -356,6 +361,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     stores: active.map((s) => ({ id: s.id, name: s.name ?? "Tienda" })),
     retry,
     prepay,
+    pagoOnline,
     chatbyApprox,
     chatbyAsk,
     chatbyHistory,

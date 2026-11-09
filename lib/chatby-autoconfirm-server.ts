@@ -808,6 +808,11 @@ async function tryChatbyGuide(
   // un cliente de la lista. Lo deja a una persona, que cobra el total por
   // adelantado. Va antes de cotizar: también en la simulación.
   const prepay = await prepayOrderCheck(admin, row as unknown as PrepayOrderRow, "confirmar");
+  // «Pago solo online (lista automática)», §41.11: tampoco crea la guía contra
+  // entrega; la deja a la asesora con el motivo y no le escribe a la clienta.
+  if (prepay.state === "blocked" && prepay.source === "pago_online") {
+    return { kind: "hold", reason: "pago_online", detail: prepay.message, state: "para_persona" };
+  }
   if (prepay.state !== "ok") return { kind: "hold", reason: "guia_no_creada", detail: prepay.message, state: "para_persona" };
   // Sin saber si va por Shalom no se crea nada: es la diferencia entre esperar
   // diez minutos y mandar un paquete por el courier equivocado (§6.2).
@@ -1710,6 +1715,7 @@ async function autoAsk(
 async function askBlockedForPerson(admin: SupabaseClient, row: MasterRow): Promise<string | null> {
   if (chatbyGuideBlock(row)) return "envío programado";
   const prepay = await prepayOrderCheck(admin, row as unknown as PrepayOrderRow, "confirmar");
+  if (prepay.state === "blocked" && prepay.source === "pago_online") return "pago solo online (lista automática)";
   if (prepay.state !== "ok") return "lista de pago adelantado";
   const { data: draft, error } = await admin.from("shalom_order_drafts").select("order_id").eq("order_id", row.order_id).limit(1);
   if (error) return "no se pudo leer el borrador de Shalom";

@@ -139,6 +139,8 @@ import { mergePriorOrders } from "@/lib/order-admin-url";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
 import { isPrepayRequired, orgOfStore } from "@/lib/prepay-list-server";
 import { prepayBlockMessage } from "@/lib/prepay-list";
+import { pagoOnlineOrderMessage } from "@/lib/pago-online";
+import { pagoOnlineLookupAny } from "@/lib/pago-online-lookup";
 import {
   LEAD_VOICE_KIND,
   LEAD_VOICE_NOTE_SIGNER,
@@ -2785,10 +2787,36 @@ async function generateOrderPrepayBlock(
     for (const phone of phones) {
       if (await isPrepayRequired(admin, orgId, phone)) return prepayBlockMessage("pedido");
     }
+    // «Pago solo online (lista automática)», MOM §41.11: con «Pago completo»
+    // tampoco se crea (la venta va por la web, como la lista de arriba). Con
+    // «Adelanto (regla §8)» SÍ se crea: el adelanto se registra en el pedido
+    // («Cómo sale el pedido», §25.2), y la confirmación y las guías lo esperan.
+    const auto = await pagoOnlineLookupAny(admin, orgId, phones);
+    if (auto.state === "listed" && auto.requirement === "pago_completo") return pagoOnlineOrderMessage("pedido", auto.requirement, auto.who);
   } catch {
     return null;
   }
   return null;
+}
+
+/**
+ * El aviso que acompaña a un pedido recién creado para un celular de «Pago
+ * solo online» con «Adelanto (regla §8)» (MOM §41.11): no se confirma ni sale
+ * sin el adelanto validado. Vacío si no aplica o no se pudo leer.
+ */
+async function generatedOrderPagoOnlineNote(
+  admin: ReturnType<typeof createAdminSupabase>,
+  storeId: string,
+  phones: (string | null | undefined)[],
+): Promise<string> {
+  try {
+    const orgId = await orgOfStore(admin, storeId);
+    if (!orgId) return "";
+    const auto = await pagoOnlineLookupAny(admin, orgId, phones);
+    return auto.state === "listed" ? ` · ${pagoOnlineOrderMessage("pedido_aviso", auto.requirement, auto.who)}` : "";
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -3330,7 +3358,10 @@ async function registrarVentaGenerada(v: {
     }
   }
 
-  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}`;
+  // «Pago solo online» con adelanto (MOM §41.11): el pedido nace, y el aviso
+  // dice que no se confirma ni sale sin el adelanto de S/ 20 validado.
+  const pagoOnlineNote = await generatedOrderPagoOnlineNote(admin, ctx.storeId, [phone, l.phone]);
+  const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}${pagoOnlineNote}`;
   const confirmationSent = confirmNote.toLowerCase().includes("enviada");
 
   revalidatePath("/dashboard/leads");

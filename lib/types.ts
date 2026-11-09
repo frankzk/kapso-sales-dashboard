@@ -667,6 +667,11 @@ export interface OrderMasterRow {
    * (`withPrepayListed`); null o ausente = no se sabe.
    */
   prepay_listed?: boolean | null;
+  /**
+   * El celular está en la lista automática «Pago solo online» vigente (MOM
+   * §41.11). Lo marca el servidor en lote (`withPagoOnlineListed`).
+   */
+  pago_online_listed?: boolean | null;
 }
 
 /** Un movimiento de la línea de tiempo (`order_events`, append-only). */

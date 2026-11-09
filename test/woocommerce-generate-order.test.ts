@@ -221,6 +221,44 @@ describe("stores.platform = 'shopify': el camino de siempre, sin WooCommerce", (
     expect(h.db.rows("order_sales")).toHaveLength(1);
   });
 
+  // «Pago solo online (lista automática)», MOM §41.11: con «Pago completo» no
+  // se crea; con «Adelanto (regla §8)» se crea y avisa del adelanto.
+  const pagoOnline = (requirement: string) => {
+    h.db.rows("stores")[0]!.org_id = "22222222-2222-4222-8222-222222222222";
+    h.db.rpc = (async (name: string, args: Record<string, unknown>) => {
+      h.db.rpcCalls.push({ name, args });
+      if (name === "pago_online_lookup") {
+        return { data: [{ listed: args.p_phone === "988805509", failed: 1, reason: "devuelto", orders: 1, requirement }], error: null };
+      }
+      return { data: null, error: null };
+    }) as typeof h.db.rpc;
+  };
+  const shopifyVenta = () =>
+    venta({ lineItems: [{ variantId: "gid://shopify/ProductVariant/1", title: "EggMixer", quantity: 1, unitPrice: 89, sku: "EGG-1" }] });
+
+  it("«Pago solo online» con «Pago completo»: no crea el pedido contra entrega", async () => {
+    setup("shopify");
+    pagoOnline("pago_completo");
+    const res = await generateOrder(LEAD, shopifyVenta());
+    expect(res.error).toContain("Cliente con entrega devuelta y ninguna recibida: solo pago online");
+    expect(res.error).toContain("Kapta no crea pedidos contra entrega para este celular");
+    expect(h.shopify.createDraftOrder).not.toHaveBeenCalled();
+    expect(h.db.rows("orders")).toHaveLength(0);
+  });
+
+  it("«Pago solo online» con «Adelanto (regla §8)»: crea el pedido y avisa del adelanto de S/ 20", async () => {
+    setup("shopify");
+    pagoOnline("adelanto");
+    h.shopify.createDraftOrder.mockResolvedValue({ gid: "gid://shopify/DraftOrder/5", name: "#D5", priceMismatches: [] });
+    h.shopify.completeDraftOrder.mockResolvedValue({ orderGid: "gid://shopify/Order/777", orderName: "#KP143999", status: "completed" });
+    const res = await generateOrder(LEAD, shopifyVenta());
+    expect(res.error).toBeUndefined();
+    expect(res.notice).toContain("Pedido generado ✓");
+    expect(res.notice).toContain("Ojo: Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
+    expect(res.notice).toContain("adelanto de S/ 20 validado");
+    expect(h.db.rows("orders")).toHaveLength(1);
+  });
+
   it("un producto del catálogo de WooCommerce (`woo:`) nunca viaja a Shopify", async () => {
     setup("shopify");
     const res = await generateOrder(LEAD, venta());

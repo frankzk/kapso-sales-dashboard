@@ -36,7 +36,16 @@ const UNIQUE: Record<string, string[]> = {
   draft_orders: ["store_id", "shopify_draft_order_id"],
   // La «Lista de pago adelantado» (0309, MOM §41): su posición, una por organización.
   prepay_list_settings: ["org_id"],
+  // «Pago solo online» (0326, MOM §41.11): el candado del día y el de cada intento.
+  pago_online_settings: ["org_id"],
+  pago_online_runs: ["org_id", "daily_key"],
+  pago_online_sends: ["run_id", "store_id", "attempt"],
 };
+
+// Las tablas cuyo `insert(...).select()` devuelve la fila insertada (con su
+// `id`), como PostgREST. Solo las que lo necesitan, para no cambiar lo que las
+// demás pruebas ya esperan.
+const RETURNING_INSERT = new Set(["pago_online_runs", "pago_online_sends", "pago_online_exceptions"]);
 
 let seq = 0;
 
@@ -216,6 +225,7 @@ class FakeQuery {
     if (this.op === "insert" || this.op === "upsert") {
       const list = Array.isArray(this.payload) ? this.payload : [this.payload];
       const keys = UNIQUE[this.table];
+      const inserted: Row[] = [];
       for (const p of list) {
         // Una clave con algún valor null no choca (índice parcial `where … is not null`).
         const hit =
@@ -227,8 +237,13 @@ class FakeQuery {
           // ON CONFLICT DO NOTHING (`insertOrderIfAbsent`): la fila que ya estaba no se toca.
           if (!this.ignoreDuplicates) Object.assign(hit, p);
         } else {
-          rows.push({ id: p.id ?? `${this.table}-${++seq}`, ...p });
+          const row = { id: p.id ?? `${this.table}-${++seq}`, ...p };
+          rows.push(row);
+          inserted.push(row);
         }
+      }
+      if (this.returning && this.op === "insert" && RETURNING_INSERT.has(this.table)) {
+        return { data: this.isSingle ? ({ ...inserted[0] } as Row) : inserted.map((r) => ({ ...r })), error: null };
       }
       return { data: null, error: null };
     }
