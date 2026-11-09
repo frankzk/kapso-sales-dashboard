@@ -42,6 +42,8 @@ export const PAGO_ONLINE_REQUIREMENT_KEY = "pago_solo_online_cobro";
 /** La ruta de COD Core en cada tienda (docs/kapta/pago-solo-online.md §4). */
 export const COD_CORE_API_PREFIX = "/wp-json/cod-core/v1";
 export const PAGO_ONLINE_ENDPOINT_PATH = "/pago-solo-online";
+/** La versión de COD Core que trae el endpoint (§8 del pedido). */
+export const PAGO_ONLINE_COD_CORE_VERSION = "0.10.45";
 
 /** Los topes de la tienda (§4.2): más de esto responde 413. */
 export const PAGO_ONLINE_MAX_PHONES = 50_000;
