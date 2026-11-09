@@ -136,6 +136,7 @@ import {
   type ChatbyLocationHold,
 } from "@/lib/chatby-location-ask";
 import { chatbyAskKindFor } from "@/lib/chatby-reask";
+import { orderGeocodeFinding } from "@/lib/geocode-google-server";
 import {
   decideLabelAction,
   labelCreatesOutput,
@@ -484,7 +485,24 @@ async function chatbyLocationHoldFor(
   const message =
     conversation.status === "ok" && check.message_id ? conversation.messages.find((m) => m.id === check.message_id) : undefined;
   const ask = chatbyAskKindFor({ reason, messageText: message?.text ?? null, orderAddress: row.address ?? null });
+  // (0325) Qué encontró Google para la dirección actual y por qué no se usó.
+  // `order_geocodes` no tiene políticas: la lee el servidor, ya autorizado el
+  // pedido (`authorizeOrder`). Si falla, el aviso sale como antes.
+  const google =
+    reason === "direccion_incompleta"
+      ? null
+      : await orderGeocodeFinding(createAdminSupabase(), {
+          order_id: row.order_id,
+          address: row.address ?? null,
+          district: row.district ?? null,
+          province: row.province ?? null,
+          region: row.region ?? null,
+        }).catch((cause) => {
+          console.error("[chatby] lo que encontró Google", row.order_id, cause);
+          return null;
+        });
   return chatbyLocationHoldFrom({
+    google,
     reason,
     ask,
     check,

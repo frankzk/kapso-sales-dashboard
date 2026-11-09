@@ -649,4 +649,6 @@
 \ir migrations/0323_agent_actions.sql
 \echo 'Applying 0324_lima_retry_chatby_ask.sql'
 \ir migrations/0324_lima_retry_chatby_ask.sql
+\echo 'Applying 0325_order_geocodes_google_said.sql'
+\ir migrations/0325_order_geocodes_google_said.sql
 \echo 'Done.'
