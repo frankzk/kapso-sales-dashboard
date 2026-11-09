@@ -75,6 +75,15 @@ quedan con la última lista; para vaciarla en una tienda, «Vaciar la lista de l
 tienda» en el panel, que manda `{"celulares": [], "correos": []}`). Revertir el código
 basta; las tablas sobran y no molestan.
 
+### 09-11-2026 · Cobertura del Master: Huaral y las demás provincias de Lima fuera de la capital quedan en «Agencia» también en el filtro (0327, MOM §19.0.4)
+
+- Aplicar `db/migrations/0327_order_master_lima_provinces_agencia.sql`: crea
+  `is_non_metro_lima_location`, la usa en el trigger `order_master_set_coverage`
+  y recalcula las filas viejas (107 el 09-11-2026). `order_coverage_for` no cambia.
+- Verificar: `select count(*) from order_master where coverage <> 'agencia' and
+  is_non_metro_lima_location(province, district)` → 0; #KP204248 en «agencia».
+- Smoke: `scripts/sql/order_master_lima_provinces_smoke.sql`.
+
 ### 09-11-2026 · Ubicación aproximada: la calle sin el nombre de pila, lo que dijo Google en la caché y la ficha que lo explica (0325, MOM §6.1 y §38)
 
 **Migración 0325** (`db/migrations/0325_order_geocodes_google_said.sql`,

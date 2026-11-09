@@ -375,4 +375,7 @@ echo "  ✅ las filas de la 0316 nacen sin lo de Google y siguen valiendo; la co
 echo "▶ Pago solo online (0326): la regla por los últimos 9 dígitos y las tiendas juntas (devuelto o anulador, sin la migración), correos de un solo celular, excepción de Kapta, Activo guarda y Simulación no, freno solo con la corrida vigente, Por confirmar y RLS"
 $PSQL -f "$ROOT/scripts/sql/pago_solo_online_smoke.sql"
 echo "  ✅ 0 recibidas y 1+ devuelto o 5+ pedidos con el 75 % anulados, solo contra entrega y sin los pedidos de la migración; un anulado después de salir solo no basta; el correo compartido no va; la excepción manda sobre la corrida; nace apagada y en adelanto; un intento por corrida, tienda y número; el navegador lee cuentas y nunca los celulares ni las funciones"
+echo "▶ Provincias de Lima fuera de la capital (0327): agencia en la cobertura guardada del Master, salvo el Callao"
+$PSQL -f "$ROOT/scripts/sql/order_master_lima_provinces_smoke.sql"
+echo "  ✅ Huaral, Barranca, Huarochirí, Cañete y Oyón van por agencia; Curva canta Callao, Miraflores y Arequipa no; el trigger usa la regla"
 echo "✅ DB verification passed."

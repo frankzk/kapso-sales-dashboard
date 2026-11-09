@@ -653,4 +653,6 @@
 \ir migrations/0325_order_geocodes_google_said.sql
 \echo 'Applying 0326_pago_solo_online.sql'
 \ir migrations/0326_pago_solo_online.sql
+\echo 'Applying 0327_order_master_lima_provinces_agencia.sql'
+\ir migrations/0327_order_master_lima_provinces_agencia.sql
 \echo 'Done.'

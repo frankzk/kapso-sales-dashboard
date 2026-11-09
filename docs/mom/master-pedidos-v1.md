@@ -14823,8 +14823,12 @@ que lo guardado, la etiqueta, el filtro y los conteos dicen lo mismo. Una
 palabra suelta del distrito no basta cuando la dirección es del Callao
 («Curva canta Callao» es Callao, no Canta). Los pedidos ya guardados con la
 cobertura vieja (107 el 09-11-2026: 58 «lima» y 49 «provincia_cod») se corrigen
-con una actualización de datos aparte, con el OK del dueño. Prueba:
-`test/order-coverage.test.ts`.
+con el OK del dueño. **Quien manda es la base**: el trigger
+`order_master_set_coverage` recalcula la cobertura en cada guardado, así que la
+regla vive también ahí (migración 0327, `is_non_metro_lima_location`, espejo de
+`isNonMetroLimaLocation`); la misma migración recalcula las filas viejas.
+`order_coverage_for` (leads, Aliclik) no cambia. Prueba:
+`test/order-coverage.test.ts` y `scripts/sql/order_master_lima_provinces_smoke.sql`.
 
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 

@@ -438,4 +438,12 @@ describe("cobertura guardada: provincias de Lima fuera de la capital = Agencia (
     const mom = readFileSync("docs/mom/master-pedidos-v1.md", "utf8");
     expect(mom).toContain("### 19.0.4 Provincias de Lima fuera de la capital: Agencia también en lo guardado (09-11-2026)");
   });
+
+  it("la base guarda lo mismo: el trigger del Master usa la regla (0327) con las mismas nueve provincias y el Callao", () => {
+    const sql = readFileSync("db/migrations/0327_order_master_lima_provinces_agencia.sql", "utf8");
+    expect(sql).toContain("is_non_metro_lima_location(new.province, new.district)");
+    expect(sql).toContain("array['barranca', 'cajatambo', 'canete', 'canta', 'huaral', 'huarochiri', 'huaura', 'oyon', 'yauyos']");
+    expect(sql).toContain("'callao' = any (v_words)");
+    expect(readFileSync("scripts/verify-db.sh", "utf8")).toContain("order_master_lima_provinces_smoke.sql");
+  });
 });
