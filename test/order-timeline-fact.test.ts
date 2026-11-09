@@ -95,6 +95,21 @@ describe("timelineFact: los hitos de la Actividad (13-10-2026)", () => {
   });
 });
 
+describe("lo que hizo el agente de IA (MOM §42.9, 09-11-2026)", () => {
+  it("su nota y su WhatsApp llevan su marcador, nunca un hito", () => {
+    expect(timelineFact(e("comment", { source: "agente_ia" }))).toEqual({ icon: "agente_ia", stage: null });
+    expect(timelineFact(e("agent_whatsapp", { source: "agente_ia" }))).toEqual({ icon: "agente_ia", stage: null });
+    // El comentario de una persona sigue igual.
+    expect(timelineFact(e("comment", { source: "manual" }))).not.toMatchObject({ icon: "agente_ia" });
+  });
+
+  it("la ficha lo pinta naranja y cuadrado, con sus ojos", () => {
+    const shared = readFileSync(resolve(process.cwd(), "components/order-master-shared.tsx"), "utf8");
+    expect(shared).toContain("agente_ia: IconAgentEyes,");
+    expect(shared).toContain('? "rounded-[9px] bg-orange-500 text-white"');
+  });
+});
+
 describe("la ficha pinta el marcador y las etiquetas", () => {
   const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
