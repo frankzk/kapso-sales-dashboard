@@ -114,7 +114,11 @@ export function isNonMetroLimaLocation(
   if (isCaneteLocation(location)) return true;
   const district = normalizeCoverageLabel(location.district);
   if (NON_METRO_LIMA_PROVINCES.has(district)) return true;
-  return district.split(/\s+/).some((word) => NON_METRO_LIMA_PROVINCES.has(word));
+  // Una palabra suelta del distrito no basta si la dirección es del Callao:
+  // «Curva canta Callao» es Callao, no la provincia de Canta (09-11-2026).
+  const words = district.split(/\s+/);
+  if (province === "callao" || words.includes("callao")) return false;
+  return words.some((word) => NON_METRO_LIMA_PROVINCES.has(word));
 }
 
 /**

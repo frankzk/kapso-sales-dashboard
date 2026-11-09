@@ -427,6 +427,11 @@ describe("cobertura guardada: provincias de Lima fuera de la capital = Agencia (
     expect(storedOrderCoverage({ province: "Arequipa", district: "Paucarpata" }, "provincia_cod")).toBe("provincia_cod");
   });
 
+  it("una palabra suelta no saca al Callao: «Curva canta Callao» no es Canta", () => {
+    expect(storedOrderCoverage({ province: "Callao", district: "Curva canta Callao" }, "lima")).toBe("lima");
+    expect(storedOrderCoverage({ province: "Lima", district: "Canta" }, "provincia_cod")).toBe("agencia");
+  });
+
   it("el Master guarda con esa regla y el MOM lo dice", () => {
     const sync = readFileSync("lib/order-master.ts", "utf8");
     expect(sync).toContain("storedOrderCoverage(");

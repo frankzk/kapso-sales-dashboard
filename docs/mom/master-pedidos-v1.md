@@ -14809,9 +14809,12 @@ corría al **mostrar** la fila (`withRuntimeCoverage`): un pedido de Huaral dec�
 (`order_master.coverage`), que la base había dejado en «lima» (owner,
 09-11-2026, #KP204248). Desde ahora la sincronización del Master guarda
 «agencia» para esos destinos (`storedOrderCoverage`, lib/order-coverage.ts), así
-que lo guardado, la etiqueta, el filtro y los conteos dicen lo mismo. Se
-corrigieron los 108 pedidos que ya estaban guardados como «lima» (59) o
-«provincia_cod» (49). Prueba: `test/order-coverage.test.ts`.
+que lo guardado, la etiqueta, el filtro y los conteos dicen lo mismo. Una
+palabra suelta del distrito no basta cuando la dirección es del Callao
+(«Curva canta Callao» es Callao, no Canta). Los pedidos ya guardados con la
+cobertura vieja (107 el 09-11-2026: 58 «lima» y 49 «provincia_cod») se corrigen
+con una actualización de datos aparte, con el OK del dueño. Prueba:
+`test/order-coverage.test.ts`.
 
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
