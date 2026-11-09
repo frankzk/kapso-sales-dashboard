@@ -23,9 +23,10 @@ cada tienda (Ajustes → WooCommerce) y el Telegram de alertas de cada tienda.
 
 Qué hace (detalle en el MOM §41.11 y el pedido en `docs/kapta/pago-solo-online.md`):
 - **Regla del owner:** últimos 9 dígitos del celular, Kenku y Aurela juntas,
-  todo el historial, solo contra entrega; 1+ entrega fallida (`devuelto`, o
-  `anulado` con `dispatched_at`) y 0 `entregado`. Hoy son **3.885 clientes**
-  (el pedido estimaba ~500), ~128 con correo.
+  todo el historial, solo contra entrega, sin los pedidos de la migración de
+  plataforma; 0 `entregado` y (A) 1+ `devuelto`, o (B) 5+ pedidos con el 75 % o
+  más `anulado`. Hoy son **~3.149 clientes** (3.141 + 6; el pedido estimaba
+  ~500), 80 con correo.
 - **Activo:** la lista entera, cada día, a cada tienda por separado
   (`POST /wp-json/cod-core/v1/pago-solo-online`, Basic auth) y un GET de
   verificación. Freno de cambio brusco (más del doble / menos de la mitad: no se
@@ -36,15 +37,19 @@ Qué hace (detalle en el MOM §41.11 y el pedido en `docs/kapta/pago-solo-online
   adelantado): confirmar, Chatby (queda para asesora, sin escribirle a la
   clienta) y todas las guías contra entrega piden **el adelanto validado** (S/ 20,
   decisión del owner del 09-11-2026; ajuste «Adelanto (regla §8)» / «Pago
-  completo»). La ficha dice «Cliente con entrega fallida y ninguna recibida:
-  solo pago online o adelanto» con sus cuentas. **Hoy frenaría 20 de los 317
-  pedidos en Por confirmar.**
+  completo»). La ficha dice «Cliente con entrega devuelta y ninguna recibida» o
+  «Cliente que anuló N de M pedidos y nunca recibió», con sus cuentas. **Hoy
+  frenaría 25 de los 364 pedidos en Por confirmar.**
+- **El bot** (`POST /api/internal/orders`) contesta 422 `prepay_required` con
+  el adelanto de S/ 20 (o el pago completo, según el ajuste); **«Generar
+  pedido»** de Leads no crea con «Pago completo» y con «Adelanto» crea y avisa;
+  el Master muestra la chapa «Pago solo online».
 - **Simulación:** solo cuentas, sin envío ni freno.
 
 **Cómo probarlo** (la prueba del §6 del pedido la hace el equipo del owner con
 un celular del equipo):
 1. Aplicar la 0326 y desplegar. En Automatizaciones → «Pago solo online»,
-   ponerla en **Simulación** y pulsar «Calcular ahora»: debe decir ~3.885
+   ponerla en **Simulación** y pulsar «Calcular ahora»: debe decir ~3.149
    celulares y cuántos pedidos de Por confirmar frenaría. Nada sale de Kapta.
 2. Cuando las tiendas avisen que cod-core 0.10.45 está en producción: en
    «Enviar prueba», elegir Kenku, escribir el celular del equipo y mandar. Debe
@@ -66,8 +71,8 @@ verify->>'celulares' from pago_online_sends order by started_at desc limit 10;`
 (ninguna de las dos tiene celulares).
 
 Marcha atrás: Apagado en el panel (deja de mandar y de frenar; las tiendas se
-quedan con la última lista; para vaciarla en una tienda, se le manda
-`{"celulares": [], "correos": []}`, que hoy no tiene botón). Revertir el código
+quedan con la última lista; para vaciarla en una tienda, «Vaciar la lista de la
+tienda» en el panel, que manda `{"celulares": [], "correos": []}`). Revertir el código
 basta; las tablas sobran y no molestan.
 
 ### 09-11-2026 · Ubicación aproximada: la calle sin el nombre de pila, lo que dijo Google en la caché y la ficha que lo explica (0325, MOM §6.1 y §38)

@@ -2530,6 +2530,16 @@ function MasterTable({
                         Pago adelantado
                       </Badge>
                     )}
+                    {/* «Pago solo online» (MOM §41.11), si no está ya en la lista de arriba. */}
+                    {!r.prepay_listed && r.pago_online_listed && (
+                      <Badge
+                        tone="warn"
+                        className="xl:mt-0.5"
+                        title="Pago solo online: devolvió un pedido (o anula casi todos) y nunca recibió. Sin lo que pide el ajuste (adelanto o pago completo) no se confirma ni sale contra entrega."
+                      >
+                        Pago solo online
+                      </Badge>
+                    )}
                     {r.scheduled_no_location && (
                       <Badge
                         tone="crit"

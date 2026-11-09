@@ -37,13 +37,15 @@ vi.mock("@/lib/woocommerce-intake", () => ({
   }),
 }));
 
-const { runPagoOnlineForOrg, runPagoOnlineDaily, processPagoOnlineRetries, sendPagoOnlineTest } = await import("@/lib/pago-online-server");
+const { runPagoOnlineForOrg, runPagoOnlineDaily, processPagoOnlineRetries, sendPagoOnlineTest, emptyPagoOnlineStore } = await import("@/lib/pago-online-server");
+const { pagoOnlineListedAmong } = await import("@/lib/pago-online-lookup");
+const { withPagoOnlineListed } = await import("@/lib/pago-online");
 const { prepayOrderCheck } = await import("@/lib/prepay-list-server");
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const LIST = [
-  { p: "987654321", f: 2, e: ["a@x.pe"] },
-  { p: "912345678", f: 1, e: [] },
+  { p: "987654321", f: 2, r: "devuelto", o: 3, e: ["a@x.pe"] },
+  { p: "912345678", f: 4, r: "anulador", o: 5, e: [] as string[] },
 ];
 
 class PagoDb extends FakeDb {
@@ -52,12 +54,13 @@ class PagoDb extends FakeDb {
   async rpc(name: string, args: any): Promise<any> {
     this.rpcCalls.push({ name, args });
     if (name === "pago_online_build") {
-      if (args.p_run) for (const r of this.list) this.rows("pago_online_phones").push({ run_id: args.p_run, org_id: args.p_org, phone: r.p, failed: r.f, emails: r.e });
+      if (args.p_run) for (const r of this.list) this.rows("pago_online_phones").push({ run_id: args.p_run, org_id: args.p_org, phone: r.p, failed: r.f, reason: r.r, orders: r.o, emails: r.e });
       return {
         data: {
           phones: this.list.length,
           emails: this.list.reduce((n, r) => n + r.e.length, 0),
-          two_or_more: this.list.filter((r) => r.f >= 2).length,
+          two_or_more: this.list.filter((r) => r.r === "devuelto" && r.f >= 2).length,
+          anuladores: this.list.filter((r) => r.r === "anulador").length,
           excepted: 0,
           por_confirmar_listed: 3,
           por_confirmar_braked: 2,
@@ -69,7 +72,10 @@ class PagoDb extends FakeDb {
       const s = this.rows("pago_online_settings").find((r) => r.org_id === args.p_org && r.mode === "activo");
       if (!s) return { data: [], error: null };
       const hit = this.rows("pago_online_phones").find((r) => r.run_id === s.current_run_id && r.phone === args.p_phone);
-      return { data: [{ listed: !!hit, failed: hit?.failed ?? null, requirement: s.requirement ?? "adelanto" }], error: null };
+      return {
+        data: [{ listed: !!hit, failed: hit?.failed ?? null, reason: hit?.reason ?? null, orders: hit?.orders ?? null, requirement: s.requirement ?? "adelanto" }],
+        error: null,
+      };
     }
     return { data: null, error: null };
   }
@@ -147,7 +153,7 @@ describe("la corrida", () => {
     expect(posts[0]!.body).toEqual({
       celulares: ["912345678", "987654321"],
       correos: ["a@x.pe"],
-      regla: "1+ entrega fallida y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
+      regla: "1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
     });
     expect(store.calls.filter((c) => c.method === "GET")).toHaveLength(2);
     const sends = db.rows("pago_online_sends");
@@ -292,6 +298,64 @@ describe("«Enviar prueba»", () => {
   });
 });
 
+describe("«Vaciar la lista de la tienda»", () => {
+  it("manda {celulares: [], correos: []} a UNA tienda, lo registra como manual con 0, en cualquier posición", async () => {
+    const db = seed("apagado");
+    const store = fakeStore((c) => (c.method === "POST" ? { status: 200, body: { descartados: 0, celulares: 0, correos: 0, actualizado: "x" } } : { status: 200, body: { celulares: 0, correos: 0 } }));
+    const prev = globalThis.fetch;
+    globalThis.fetch = store.fetchImpl;
+    try {
+      const r = await emptyPagoOnlineStore(db.client(), { orgId: ORG, storeId: "s-aur", actor: null });
+      expect("status" in r && r.status).toBe("enviado");
+    } finally {
+      globalThis.fetch = prev;
+    }
+    const posts = store.calls.filter((c) => c.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.url).toBe("https://aurela.pe/wp-json/cod-core/v1/pago-solo-online");
+    expect(posts[0]!.body).toEqual({ celulares: [], correos: [] });
+    expect(db.rows("pago_online_sends")[0]).toMatchObject({ kind: "manual", run_id: null, phones_sent: 0, emails_sent: 0, status: "enviado" });
+    expect(await emptyPagoOnlineStore(db.client(), { orgId: ORG, storeId: "s-shop", actor: null })).toEqual({
+      error: "Esa tienda no es una tienda WooCommerce activa de la organización.",
+    });
+  });
+
+  it("después de vaciar, el envío diario no lo toma como cambio brusco", async () => {
+    const db = seed("activo", {
+      pago_online_sends: [
+        { id: "v1", org_id: ORG, store_id: "s-ken", run_id: null, kind: "manual", attempt: 1, status: "enviado", phones_sent: 0, started_at: "2026-11-09T20:00:00Z" },
+      ],
+    });
+    const store = fakeStore(ok);
+    await runPagoOnlineForOrg(db.client(), { orgId: ORG, trigger: "cron", now: NOW, fetchImpl: store.fetchImpl });
+    expect(db.rows("pago_online_sends").filter((s) => s.run_id).map((s) => s.status)).toEqual(["enviado", "enviado"]);
+  });
+});
+
+describe("la chapa del Master", () => {
+  it("marca solo los celulares de la lista vigente, por organización y sin las excepciones", async () => {
+    const db = seed("activo");
+    await runPagoOnlineForOrg(db.client(), { orgId: ORG, trigger: "cron", now: NOW, fetchImpl: fakeStore(ok).fetchImpl });
+    db.rows("pago_online_exceptions").push({ id: "x", org_id: ORG, phone: "912345678", reason: "Conocida", removed_at: null });
+    const set = await pagoOnlineListedAmong(db.client(), [ORG], ["+51 987 654 321", "912345678", "999888777", null]);
+    expect([...set]).toEqual([`${ORG}|987654321`]);
+    const rows = withPagoOnlineListed(
+      [
+        { customer_phone: "51987654321", store_id: "s-ken" },
+        { customer_phone: "51987654321", store_id: "otra" },
+        { customer_phone: "912345678", store_id: "s-ken" },
+      ],
+      set,
+      new Map([["s-ken", ORG]]),
+    );
+    expect(rows.map((r) => r.pago_online_listed)).toEqual([true, false, false]);
+    expect(withPagoOnlineListed([{ customer_phone: "1", store_id: "s-ken" }], null, new Map())).toEqual([{ customer_phone: "1", store_id: "s-ken" }]);
+    // En Simulación, nada.
+    db.rows("pago_online_settings")[0]!.mode = "simulacion";
+    expect((await pagoOnlineListedAmong(db.client(), [ORG], ["987654321"])).size).toBe(0);
+  });
+});
+
 describe("el freno de Kapta: la lista automática como otra fuente de `prepayOrderCheck`", () => {
   const order = (over: Row = {}): Row => ({
     order_id: "o1",
@@ -315,8 +379,11 @@ describe("el freno de Kapta: la lista automática como otra fuente de `prepayOrd
     const c = await prepayOrderCheck(db.client(), order() as any, "confirmar");
     expect(c.state).toBe("blocked");
     expect(c.state === "blocked" && c.source).toBe("pago_online");
-    expect(c.state === "blocked" && c.message).toContain("Cliente con entrega fallida y ninguna recibida");
-    expect(c.state === "blocked" && c.message).toContain("2 entregas fallidas");
+    expect(c.state === "blocked" && c.message).toContain("Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
+    expect(c.state === "blocked" && c.message).toContain("(2 devueltos, 0 recibidas)");
+    // El anulador dice cuántos anuló de cuántos.
+    const anul = await prepayOrderCheck(db.client(), order({ customer_phone: "912345678" }) as any, "guia");
+    expect(anul.state === "blocked" && anul.message).toContain("Cliente que anuló 4 de 5 pedidos y nunca recibió");
     expect((await prepayOrderCheck(db.client(), order({ payment_state: "adelanto_cargado" }) as any, "guia")).state).toBe("blocked");
   });
 

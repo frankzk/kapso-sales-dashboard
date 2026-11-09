@@ -2154,9 +2154,9 @@ ninguna guía hasta que el pago total esté validado. Para quien no está en la
 lista, la escalera sigue igual.
 
 **Y la lista automática «Pago solo online» (§41.11, owner 09-11-2026).** Un
-celular (últimos 9 dígitos, Kenku y Aurela juntas, solo contra entrega) con al
-menos una entrega fallida —`devuelto`, o `anulado` después de salir— y ninguna
-recibida no compra contra entrega en la web de las tiendas, y en los pedidos de
+celular (últimos 9 dígitos, Kenku y Aurela juntas, solo contra entrega, sin los
+pedidos de la migración de plataforma) sin ninguna entrega recibida y con un
+`devuelto`, o con 5 o más pedidos y el 75 % o más anulados, no compra contra entrega en la web de las tiendas, y en los pedidos de
 Kapta paga **el adelanto de esta escalera (S/ 20) validado** antes de confirmar
 o de sacar la guía contra entrega, o el pago online completo. El adelanto es la
 decisión del owner y un ajuste de Automatizaciones («Adelanto (regla §8)» o
@@ -24910,7 +24910,8 @@ Vercel— y algunas no tenían interruptor.
     la última simulación (cuentas y el freno de cambio brusco, nunca
     celulares), por tienda el último envío bueno, el último error y el freno,
     «Calcular ahora», «Aceptar la lista de hoy», «Enviar prueba» (un celular
-    del equipo a una tienda) y las excepciones de Kapta. Manda la lista a las
+    del equipo a una tienda), «Vaciar la lista de la tienda» (con
+    confirmación; `pago_solo_online_vaciar`) y las excepciones de Kapta. Manda la lista a las
     tiendas: Activo pide confirmación.
   - **Con interruptor por organización:** Aliclik → Swayp automático (§11.9;
     encenderlo también cambia al agente de voz, que deja de llamar los pedidos
@@ -25222,8 +25223,8 @@ Automatizaciones.
 ### 41.11 «Pago solo online (lista automática)» (09-11-2026)
 
 **Pedido de las tiendas y decisión del owner (09-11-2026).** Kenku Perú y Aurela
-dejan de ofrecer contra entrega en su web a quien **ya tuvo una entrega fallida y
-nunca recibió un pedido**: solo paga online (Flow). La tienda ya sabe aplicarlo
+dejan de ofrecer contra entrega en su web a quien **nunca recibió un pedido y ya
+devolvió uno, o anula casi todo lo que pide**: solo paga online (Flow). La tienda ya sabe aplicarlo
 (COD Core 0.10.45); Kapta construye tres piezas: el cálculo diario de la lista,
 el envío a cada tienda y el freno en los pedidos que crea Kapta (asesoras,
 Chatby, el bot). El pedido entero, con su contrato, está en
@@ -25239,11 +25240,26 @@ reemplaza entera en cada envío.
   cliente.
 - **Kenku y Aurela juntas** (la organización), **todo el historial** de Kapta y
   **solo contra entrega**: `coverage` = `lima` o `provincia_cod`. La agencia y
-  los pagados no cuentan como fallas.
-- Entra si tiene **al menos una entrega fallida** —`devuelto`, o `anulado` con
-  `dispatched_at` (salió)— y **ninguna recibida** (`entregado`, también solo
-  contra entrega, como la consulta de referencia del pedido). Un anulado antes
-  de salir no es una falla: es un cliente que canceló al confirmar.
+  los pagados no cuentan.
+- **Los pedidos de la migración de plataforma no cuentan para nada** (ni como
+  falla ni como entrega): los que tienen un hecho `cancelled_woocommerce`,
+  `legacy_shopify_sale_cancelled` o `woo_sale_ended_pending_return` en
+  `order_events` (§38). Son artefactos del cambio de Shopify a WooCommerce, no
+  clientes que no recibieron (`PAGO_ONLINE_MIGRATION_EVENT_KINDS`).
+- Con **cero `entregado`**, entra si:
+  - **(A) devolvió:** tiene al menos un `devuelto` («Cliente con entrega
+    devuelta y ninguna recibida»); o
+  - **(B) el «anulador»:** tiene **5 o más** pedidos (el owner: «más de 4») y
+    **el 75 % o más** están `anulado`, antes o después de salir («Cliente que
+    anuló N de M pedidos y nunca recibió»). Los umbrales son
+    `PAGO_ONLINE_ANULADOR_MIN_ORDERS` y `PAGO_ONLINE_ANULADOR_RATIO`
+    (lib/pago-online.ts), con los mismos números en la 0326.
+- **Un anulado después de salir, solo, ya no basta** (cambio del owner del
+  09-11-2026 sobre la consulta de referencia del pedido de las tiendas, que
+  contaba `anulado` con `dispatched_at` como falla). La lista de Kapta manda.
+- Cada celular guarda por qué entra (`pago_online_phones.reason`: `devuelto` o
+  `anulador`), la cuenta que lo hizo entrar (`failed`: sus devueltos, o sus
+  anulados) y sus pedidos que cuentan (`orders`), para que la ficha lo diga.
 - Sale en cuanto recibe un pedido: cada envío reemplaza la lista entera.
 - Es `pago_online_candidates` (0326) en SQL y `pagoOnlineListOf`
   (lib/pago-online.ts) en TypeScript, con las mismas pruebas.
@@ -25252,14 +25268,16 @@ reemplaza entera en cada envío.
   celular** en los pedidos de la organización (un correo compartido bloquearía a
   otra persona). En minúsculas y válidos.
 
-**El tamaño medido** (Supabase, solo lectura, 09-11-2026): **3.885 clientes**,
-no los ~500 que estimaba el pedido de las tiendas (su 539 son *pedidos* de esos
-clientes en 180 días, no clientes): 3.140 tienen un `devuelto` y 745 solo un
-anulado después de salir; 113 tienen dos o más fallas. Con correo, ~128. Toda la
-historia de Kapta empieza en mayo de 2026. Contar como «recibida» también una
-entrega por agencia sacaría solo a 5. Ninguno está hoy en la lista de pago
-adelantado (que está vacía). De los 317 pedidos en Por confirmar, **20** son de
-clientes de esta lista (18 contra entrega, 2 de agencia) y los 20 se frenarían
+**El tamaño medido** (Supabase, solo lectura, 09-11-2026, con la regla de
+arriba): **~3.149 clientes** —3.141 por (A) y 6 más por (B); con 4 o más
+pedidos serían 16, con 3 o más, 64—, no los ~500 que estimaba el pedido de las
+tiendas (su 539 son *pedidos* de esos clientes en 180 días, no clientes). 82
+tienen dos o más devueltos. Con correo, 80. Con la primera regla (cualquier
+anulado después de salir) eran 3.885: 745 entraban solo por un anulado después
+de salir, y 89 de ellos solo por los anulados de la migración. Toda la historia
+de Kapta empieza en mayo de 2026. Ninguno está hoy en la lista de pago
+adelantado (que está vacía). De los 364 pedidos en Por confirmar, **25** son de
+clientes de esta lista (23 contra entrega, 2 de agencia) y los 25 se frenarían
 con cualquiera de los dos cobros (ninguno tiene el adelanto validado).
 
 **Lo que se cobra en los pedidos de Kapta (decisión del owner del 09-11-2026).**
@@ -25327,9 +25345,10 @@ freno paralelo: `prepayOrderCheck` (lib/prepay-list-server.ts), que ya usan
 todos los puntos del §41.5, mira primero la lista de pago adelantado (pide el
 total y manda) y, si no está ahí, `pago_online_lookup` (0326): el celular está
 en la lista vigente, la organización está en **Activo** y Kapta no lo
-exceptuó. Sin lo que pide el ajuste, frena con «Cliente con entrega fallida y
-ninguna recibida: solo pago online o adelanto (N entregas fallidas, 0
-recibidas)». Así frena, igual que la otra lista:
+exceptuó. Sin lo que pide el ajuste, frena con «Cliente con entrega devuelta y
+ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)» o
+«Cliente que anuló N de M pedidos y nunca recibió: solo pago online o adelanto»
+(«solo pago online» con «Pago completo»). Así frena, igual que la otra lista:
 
 - **Confirmar** en la mesa («Confirmó el pedido» se rechaza con el mensaje) y la
   confirmación expresa de agencia (no se escribe sola).
@@ -25343,16 +25362,30 @@ recibidas)». Así frena, igual que la otra lista:
   lista de pago adelantado), Swayp/Fénix en su última puerta, Grupo GF, las
   salidas manuales, «Sacar con salida nueva» de Repro Lima y Shalom. «No se pudo
   leer» frena una guía; sin la 0326, nada se frena.
-- **La ficha del pedido:** el aviso «Cliente con entrega fallida y ninguna
-  recibida: solo pago online o adelanto», con las cuentas del propio cliente
-  (sus fallidas, 0 recibidas), lo que se cobra y si ya lo tiene. Ningún dato de
-  otros clientes. Solo si no está en la lista de pago adelantado (que pide más).
-- **Lo que no frena todavía:** la entrada del bot de Kapso
-  (`POST /api/internal/orders` sigue creando el pedido, que se frena al
-  confirmar y en la guía), «Generar pedido» de Leads y la chapa del Master
-  (`isPrepayRequired` y `listedPhonesAmong` siguen mirando solo la lista de pago
-  adelantado: el 422 `prepay_required` del bot dice «cobra el total», que aquí
-  no es lo que se pide). Pendiente de decidir.
+- **La ficha del pedido:** el aviso con su porqué —«Cliente con entrega devuelta
+  y ninguna recibida» o «Cliente que anuló N de M pedidos y nunca recibió»—,
+  sus cuentas (sus devueltos, o cuántos anuló de cuántos), lo que se cobra y si
+  ya lo tiene. Ningún dato de otros clientes. Solo si no está en la lista de
+  pago adelantado (que pide más).
+- **El bot de Kapso** (`POST /api/internal/orders`, owner 09-11-2026): no crea
+  el pedido contra entrega; contesta el mismo **422 `prepay_required`** (deriva
+  a una asesora) con el mensaje de ESTA lista: con «Adelanto (regla §8)», que
+  la asesora cobre **el adelanto de S/ 20** (`ADELANTO_MINIMO`) o el pago online
+  completo; con «Pago completo», el pago completo. Si la lista no se pudo leer,
+  sigue (falla abierto, como la otra lista). El mensaje de la lista de pago
+  adelantado no cambia y va primero.
+- **«Generar pedido» de Leads** (owner 09-11-2026): con «Pago completo» no lo
+  crea (como la lista de pago adelantado: la venta va por la web, online); con
+  «Adelanto (regla §8)» **sí lo crea**, porque el adelanto se registra en el
+  pedido («Cómo sale el pedido», §25.2), y el aviso de «Pedido generado» dice
+  que no se confirma ni sale sin el adelanto de S/ 20 validado. «Recuperar
+  carrito» sigue la misma regla. La confirmación y las guías lo vuelven a
+  frenar igual.
+- **La lista del Master:** la chapa «Pago solo online» en la fila (si no tiene
+  ya la de «Pago adelantado»), con una lectura por página
+  (`pagoOnlineListedAmong`, con el cliente de servicio porque los celulares de
+  la lista no se leen desde el navegador; solo devuelve sí o no de los
+  celulares que la página ya muestra), por organización y sin excepciones.
 
 **Excepciones de Kapta** (`pago_online_exceptions`): «Exceptuar a este
 cliente» en el aviso de la ficha, con motivo (8+ caracteres) y
@@ -25378,7 +25411,17 @@ la posición y el cobro; la lista vigente (cuántos y desde cuándo); la última
 corrida y la última simulación con sus cuentas y el freno; por tienda, el último
 envío bueno (fecha, cuántos y lo que dice el GET), el último error, el freno de
 cambio brusco y la última prueba; «Calcular ahora»; «Aceptar la lista de hoy»;
-«Enviar prueba»; y las excepciones.
+«Enviar prueba»; «Vaciar la lista de la tienda»; y las excepciones.
+
+**«Vaciar la lista de la tienda»** (por tienda, `automations.manage`, en
+cualquier posición): manda `{"celulares": [], "correos": []}` (§4.2 del pedido)
+a esa tienda, lo registra en `pago_online_sends` (`kind = manual`, 0 celulares)
+y en `automation_switch_events` (`pago_solo_online_vaciar`). Pide confirmación:
+la tienda deja de frenar el contra entrega de **todos** los de la lista
+automática hasta el próximo envío, y el envío diario la vuelve a llenar salvo en
+Apagado. Como es el último envío bueno de la tienda, el freno de cambio brusco
+del siguiente lo toma como «primera» y no lo frena. La lista manual de la tienda
+no cambia.
 
 **Implementación.** Migración `0326_pago_solo_online.sql`
 (`pago_online_settings`, `pago_online_runs`, `pago_online_phones` sin acceso

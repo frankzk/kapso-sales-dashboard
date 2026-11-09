@@ -53,7 +53,12 @@ export interface OrderPrepayStatus {
 }
 
 export interface OrderPagoOnlineStatus {
+  /** Por qué entra: `devuelto` (A) o `anulador` (B). */
+  reason: "devuelto" | "anulador";
+  /** Los devueltos, o los anulados del anulador. */
   failed: number | null;
+  /** Sus pedidos contra entrega que cuentan (para «anuló N de M»). */
+  orders: number | null;
   requirement: PagoOnlineRequirement;
   requirementLabel: string;
   /** Ya tiene lo que se pide (el adelanto validado o el pago completo): sigue. */
@@ -99,7 +104,9 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
       return {
         listed: false,
         pagoOnline: {
-          failed: auto.failed,
+          reason: auto.who.reason,
+          failed: auto.who.failed,
+          orders: auto.who.orders,
           requirement: auto.requirement,
           requirementLabel: PAGO_ONLINE_REQUIREMENT_LABEL[auto.requirement],
           met: pagoOnlineRequirementMet(auto.requirement, paymentFactsOf(order)),

@@ -31,6 +31,8 @@ export interface PagoOnlineRunView {
   phones: number;
   emails: number;
   twoOrMore: number;
+  /** Los que entran por la regla B (anula casi todo lo que pide). */
+  anuladores: number;
   excepted: number;
   porConfirmarListed: number;
   porConfirmarBraked: number;
@@ -91,6 +93,7 @@ type RunRow = {
   phones: number;
   emails: number;
   two_or_more: number;
+  anuladores: number;
   excepted: number;
   por_confirmar_listed: number;
   por_confirmar_braked: number;
@@ -117,7 +120,7 @@ type SendRow = {
 };
 
 const RUN_COLUMNS =
-  "id,run_date,mode,trigger,status,requirement,phones,emails,two_or_more,excepted,por_confirmar_listed,por_confirmar_braked,baseline_phones,guard,guard_reason,accepted_by,error,started_at";
+  "id,run_date,mode,trigger,status,requirement,phones,emails,two_or_more,anuladores,excepted,por_confirmar_listed,por_confirmar_braked,baseline_phones,guard,guard_reason,accepted_by,error,started_at";
 
 const BAD: readonly PagoOnlineSendStatus[] = ["fallido", "credenciales", "demasiado_grande", "sin_claves", "sin_endpoint", "reintento"];
 
@@ -179,6 +182,7 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
     phones: r.phones,
     emails: r.emails,
     twoOrMore: r.two_or_more,
+    anuladores: r.anuladores ?? 0,
     excepted: r.excepted,
     porConfirmarListed: r.por_confirmar_listed,
     porConfirmarBraked: r.por_confirmar_braked,

@@ -41,6 +41,7 @@ import { PREPAY_LIST_PATH, PREPAY_MODE_LABEL, isPrepayMode, type PrepaySimulatio
 import { APPROX_MODE_LABEL, isApproxMode } from "@/lib/geocode-approx";
 import {
   acceptPagoOnlineRun,
+  emptyPagoOnlineStore,
   loadPagoOnlineSettings,
   removePagoOnlineException,
   runPagoOnlineForOrg,
@@ -63,6 +64,7 @@ import {
   CHATBY_HISTORY_KEY,
   PREPAY_MODE_EVENT,
   PAGO_ONLINE_ACCEPT_EVENT,
+  PAGO_ONLINE_EMPTY_EVENT,
   PAGO_ONLINE_EXCEPTION_EVENT,
   PAGO_ONLINE_MODE_EVENT,
   PAGO_ONLINE_REQUIREMENT_EVENT,
@@ -619,6 +621,29 @@ export async function sendPagoOnlineTestList(orgId: string, storeId: string, pho
   const v = sent.verify;
   return {
     notice: `${names.get(storeId) ?? "Tienda"}: prueba enviada. La tienda guardó ${sent.totals?.celulares ?? "?"} y el GET dice ${v?.celulares ?? "?"}${v?.actualizado ? ` (${v.actualizado})` : ""}. Sigue con el formulario de la tienda (§6 del pedido) y después manda la lista real con «Calcular ahora».`,
+  };
+}
+
+/**
+ * «Vaciar la lista de la tienda»: `{"celulares": [], "correos": []}` a UNA
+ * tienda, solo el dueño (`automations.manage`), en cualquier posición. La
+ * página pide confirmación: la tienda deja de frenar el contra entrega de
+ * todos los de la lista automática hasta el próximo envío, y el envío diario
+ * la vuelve a llenar salvo en Apagado.
+ */
+export async function emptyPagoOnlineStoreList(orgId: string, storeId: string): Promise<AutomationActionResult> {
+  if (!isUuid(storeId)) return { error: "Esa tienda no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const res = await emptyPagoOnlineStore(g.admin, { orgId, storeId, actor: g.actor });
+  if ("error" in res && !("status" in res)) return { error: res.error ?? "No se pudo vaciar la lista." };
+  const sent = res as SendAttemptResult;
+  await recordSwitch(g.admin, { org_id: orgId, store_id: storeId, automation: PAGO_ONLINE_EMPTY_EVENT, previous: null, next: sent.status, actor: g.actor });
+  revalidatePath(PANEL_PATH);
+  const names = await storeNames(g.admin, orgId);
+  if (sent.status !== "enviado") return { error: `${sendsNotice([sent], names)}${sent.error ? `: ${sent.error}` : ""}` };
+  return {
+    notice: `${names.get(storeId) ?? "Tienda"}: lista vaciada (la tienda dice ${sent.verify?.celulares ?? sent.totals?.celulares ?? "?"}). Hasta el próximo envío, la tienda no frena el contra entrega de nadie de la lista automática.`,
   };
 }
 

@@ -9,11 +9,13 @@
 import { useState, useTransition } from "react";
 import { Banner, OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
-import { PAGO_ONLINE_HEADLINE, PAGO_ONLINE_REASON_MIN } from "@/lib/pago-online";
+import { PAGO_ONLINE_REASON_MIN, pagoOnlineHeadline } from "@/lib/pago-online";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 
 export interface PagoOnlineBannerStatus {
+  reason: "devuelto" | "anulador";
   failed: number | null;
+  orders: number | null;
   requirement: "adelanto" | "pago_completo";
   requirementLabel: string;
   met: boolean;
@@ -36,13 +38,20 @@ export function PagoOnlineBanner({
   const [result, setResult] = useState<{ error?: string; notice?: string } | null>(null);
   const [pending, startTransition] = useTransition();
   if (!status) return null;
-  const counts = status.failed ? `${status.failed} ${status.failed === 1 ? "entrega fallida" : "entregas fallidas"} y 0 recibidas` : "0 recibidas";
+  // Las cuentas del propio cliente, y nada de otros.
+  const counts =
+    status.reason === "anulador"
+      ? `Anuló ${status.failed ?? "?"} de ${status.orders ?? "?"} pedidos contra entrega y no recibió ninguno`
+      : status.failed
+        ? `${status.failed} ${status.failed === 1 ? "pedido devuelto" : "pedidos devueltos"} y 0 recibidos`
+        : "0 recibidos";
+  const title = pagoOnlineHeadline({ reason: status.reason, failed: status.failed, orders: status.orders }, status.requirement);
   const what = status.requirement === "adelanto" ? `el adelanto de ${ADELANTO_MINIMO_LABEL} validado (o el pago online completo)` : "el pago completo validado";
 
   return (
-    <Banner tone={status.met ? "info" : "crit"} role={status.met ? "status" : "alert"} className={className} title={PAGO_ONLINE_HEADLINE}>
+    <Banner tone={status.met ? "info" : "crit"} role={status.met ? "status" : "alert"} className={className} title={title}>
       <p className="mt-0.5 text-[13px] leading-5">
-        {counts} en los pedidos contra entrega de las tiendas. <span className="text-ink-500">Lista automática · se cobra: {status.requirementLabel}</span>
+        {counts}, en los pedidos contra entrega de las tiendas. <span className="text-ink-500">Lista automática · se cobra: {status.requirementLabel}</span>
       </p>
       <p className="mt-1.5 text-[13px] leading-5">
         {status.met
