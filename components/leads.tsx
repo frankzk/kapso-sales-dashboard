@@ -1,6 +1,7 @@
 "use client";
 
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
+import { ListaNegraBadge } from "@/components/lista-negra-badge";
 import { CALL_RETRY_SIGNAL_DAYS, prioritizeDueAppointments } from "@/lib/lead-call-queue";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
@@ -2235,6 +2236,8 @@ export function LeadsBoard({
                     <span className="shrink-0 text-xs font-medium text-ink-500">{storeNameById.get(lead.store_id) ?? "—"}</span>
                   )}
                   <SegmentBadge lead={lead} />
+                  {/* La Lista negra (MOM §25.3): la misma chapa negra del Master. */}
+                  {lead.lista_negra && <ListaNegraBadge mark={lead.lista_negra} />}
                   <LeadAttemptBadge lead={lead} />
                   <YapeKindBadge lead={lead} />
                   {/* Ya pagó y espera (MOM §16.1): es el motivo de la fila, así

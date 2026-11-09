@@ -12,6 +12,10 @@
 //   * Sin la migración 0309 la lista está vacía: nada se bloquea hasta que
 //     exista (`isMissingPrepayTable`), para que desplegar el código antes de la
 //     migración no frene todas las guías.
+//   * Sin la 0329 no hay `requirement`: cada lectura lo vuelve a pedir sin esa
+//     columna (`withRequirementColumn`) y el alta pide el pago total, como
+//     antes (`prepayEntryRequirementOf`). Una columna que falta NO es una tabla
+//     que falta: si se confundieran, la lista entera dejaría de frenar.
 //
 // Sin `import "server-only"` a propósito: lo importan módulos que también
 // corren en las pruebas (la entrada del bot, Swayp), y todo recibe el cliente
@@ -26,12 +30,16 @@ import {
   PREPAY_SIMULATION_SAMPLES,
   parsePrepayEvidence,
   prepayAutoDecision,
-  prepayBlockMessage,
+  prepayEntryBlockMessage,
+  prepayEntryMotivo,
+  prepayEntryRequirementMet,
+  prepayEntryRequirementOf,
   prepayPhoneKey,
   prepayReasonProblem,
   prepayRequirementMet,
   prepayTriggersOfOrder,
   type PrepayEntryFact,
+  type PrepayEntryRequirement,
   type PrepayEvidence,
   type PrepayMode,
   type PrepayOrderFact,
@@ -44,15 +52,23 @@ import {
 } from "@/lib/prepay-list";
 import type { OrderPaymentFacts } from "@/lib/order-paid";
 import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
-import { pagoOnlineBrakeDecision, type PagoOnlineRequirement } from "@/lib/pago-online";
+import { pagoOnlineBrakeDecision, pagoOnlineMotivo, type PagoOnlineRequirement } from "@/lib/pago-online";
+import { lnUnreadMessage } from "@/lib/lista-negra-copy";
 
 type DbError = { code?: string; message?: string } | null | undefined;
 type Page<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null }>;
 
-/** La tabla aún no existe (0309 sin aplicar): PostgREST o Postgres. */
+/** La tabla aún no existe (0309 sin aplicar): PostgREST o Postgres. Una COLUMNA que falta no lo es. */
 export function isMissingPrepayTable(error: DbError): boolean {
   if (!error) return false;
+  if (isMissingPrepayColumn(error)) return false;
   return error.code === "42P01" || error.code === "PGRST205" || /does not exist|could not find the table/i.test(error.message ?? "");
+}
+
+/** Falta una columna (la `requirement` de la 0329 sin aplicar): Postgres 42703 o PostgREST PGRST204. */
+export function isMissingPrepayColumn(error: DbError): boolean {
+  if (!error) return false;
+  return error.code === "42703" || error.code === "PGRST204" || /column .* does not exist|could not find the '.*' column/i.test(error.message ?? "");
 }
 
 /** Una fila de `prepay_list_entries`. */
@@ -70,9 +86,24 @@ export interface PrepayEntryRow {
   removed_reason: string | null;
   /** Los pedidos que ya disparaban el alta cuando se quitó (0309, §41.3). */
   removed_known_order_ids?: unknown;
+  /** Lo que pide (0329): «adelanto» o «pago_completo». Sin la columna, `undefined` = el total. */
+  requirement?: unknown;
 }
 
 export const PREPAY_ENTRY_COLUMNS = "id,org_id,phone,source,reason,evidence,added_by,added_at,removed_at,removed_by,removed_reason,removed_known_order_ids";
+/** Con lo que pide cada alta (0329). */
+export const PREPAY_ENTRY_COLUMNS_REQ = `${PREPAY_ENTRY_COLUMNS},requirement`;
+
+/**
+ * Una lectura de `prepay_list_entries` con `requirement` y, si la base todavía
+ * no tiene la columna (0329 sin aplicar), la misma sin ella: las filas salen
+ * sin `requirement` y piden el total, como antes.
+ */
+export async function withRequirementColumn<R extends { error: DbError }>(read: (columns: string) => PromiseLike<R>): Promise<R> {
+  const first = await read(PREPAY_ENTRY_COLUMNS_REQ);
+  if (first.error && isMissingPrepayColumn(first.error)) return read(PREPAY_ENTRY_COLUMNS);
+  return first;
+}
 
 export type PrepayLookup =
   | { state: "listed"; entry: PrepayEntryRow }
@@ -90,19 +121,33 @@ export async function orgOfStore(admin: SupabaseClient, storeId: string): Promis
 export async function prepayLookup(admin: SupabaseClient, orgId: string, rawPhone: string | null | undefined): Promise<PrepayLookup> {
   const phone = prepayPhoneKey(rawPhone);
   if (!phone || !orgId) return { state: "not_listed" };
-  const { data, error } = await admin
-    .from("prepay_list_entries")
-    .select(PREPAY_ENTRY_COLUMNS)
-    .eq("org_id", orgId)
-    .eq("phone", phone)
-    .is("removed_at", null)
-    .limit(1);
+  const { data, error } = await withRequirementColumn((columns) =>
+    admin.from("prepay_list_entries").select(columns).eq("org_id", orgId).eq("phone", phone).is("removed_at", null).limit(1),
+  );
   if (error) {
     if (isMissingPrepayTable(error)) return { state: "not_listed" };
     return { state: "unread", error: error.message ?? "error de la base" };
   }
-  const entry = ((data ?? []) as PrepayEntryRow[])[0];
+  const entry = ((data ?? []) as unknown as PrepayEntryRow[])[0];
   return entry ? { state: "listed", entry } : { state: "not_listed" };
+}
+
+/**
+ * Lo que pide el alta viva de este celular, o null si no tiene (o no se pudo
+ * leer: quien la usa, el bot y «Generar pedido», falla abierto y Kapta lo
+ * vuelve a frenar al confirmar y al crear la guía).
+ */
+export async function prepayEntryRequirementFor(
+  admin: SupabaseClient,
+  orgId: string,
+  rawPhone: string | null | undefined,
+): Promise<{ requirement: PrepayEntryRequirement; reason: string } | null> {
+  try {
+    const lookup = await prepayLookup(admin, orgId, rawPhone);
+    return lookup.state === "listed" ? { requirement: prepayEntryRequirementOf(lookup.entry.requirement), reason: lookup.entry.reason } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -168,12 +213,13 @@ export type PrepayOrderCheck =
    * no mandar a cobrar el total a quien ya pagó—. Sin pedido leído, false.
    */
   | { state: "ok"; listed: boolean; fullyPaid: boolean }
-  | { state: "blocked"; source: "lista"; message: string; entry: PrepayEntryRow }
+  /** Un alta a mano, con lo que pide (0329; sin la columna, el total). */
+  | { state: "blocked"; source: "lista"; message: string; motivo: string; entry: PrepayEntryRow; requirement: PrepayEntryRequirement }
   /**
    * La lista automática «Pago solo online» (0326, MOM §41.11): el mismo freno,
    * con lo que el owner decidió cobrar (adelanto o pago completo).
    */
-  | { state: "blocked"; source: "pago_online"; message: string; entry: null; failed: number | null; requirement: PagoOnlineRequirement }
+  | { state: "blocked"; source: "pago_online"; message: string; motivo: string; entry: null; failed: number | null; requirement: PagoOnlineRequirement }
   | { state: "unread"; message: string };
 
 export function paymentFactsOf(row: Pick<PrepayOrderRow, "financial_status" | "total_refunded" | "payment_state" | "payment_gateway">): OrderPaymentFacts {
@@ -198,7 +244,7 @@ export async function prepayOrderCheck(
 ): Promise<PrepayOrderCheck> {
   const unread = (detail: string): PrepayOrderCheck => ({
     state: "unread",
-    message: `No se pudo comprobar la lista de pago adelantado (${detail}). Vuelve a intentarlo.`,
+    message: lnUnreadMessage(detail),
   });
   try {
     let row: PrepayOrderRow | null = typeof order === "string" ? null : order;
@@ -212,20 +258,34 @@ export async function prepayOrderCheck(
     const fullyPaid = prepayRequirementMet(facts);
     const orgId = await orgOfStore(admin, row.store_id);
     if (!orgId) return { state: "ok", listed: false, fullyPaid };
-    // La lista de pago adelantado primero: pide el total, más que la automática.
+    // El alta a mano primero, con lo que pide (0329): «Pago total» manda sobre
+    // todo; con «Adelanto» cumplido se mira igual la automática, por si su
+    // ajuste pide el pago completo (gana el más exigente).
+    let listedByHand = false;
     if (prepayPhoneKey(row.customer_phone)) {
       const lookup = await prepayLookup(admin, orgId, row.customer_phone);
       if (lookup.state === "unread") return unread(lookup.error);
       if (lookup.state === "listed") {
-        if (fullyPaid) return { state: "ok", listed: true, fullyPaid };
-        return { state: "blocked", source: "lista", message: prepayBlockMessage(point), entry: lookup.entry };
+        const requirement = prepayEntryRequirementOf(lookup.entry.requirement);
+        if (!prepayEntryRequirementMet(requirement, facts)) {
+          return {
+            state: "blocked",
+            source: "lista",
+            message: prepayEntryBlockMessage(point, requirement, lookup.entry.reason),
+            motivo: prepayEntryMotivo(lookup.entry.reason),
+            entry: lookup.entry,
+            requirement,
+          };
+        }
+        if (requirement === "pago_completo") return { state: "ok", listed: true, fullyPaid };
+        listedByHand = true;
       }
     }
     // «Pago solo online (lista automática)»: solo en Activo, con la lista
     // vigente y sin la excepción de Kapta (`pago_online_lookup`, 0326).
     const auto = await pagoOnlineLookup(admin, orgId, row.customer_phone);
     if (auto.state === "unread") return unread(auto.error);
-    if (auto.state === "not_listed") return { state: "ok", listed: false, fullyPaid };
+    if (auto.state === "not_listed") return { state: "ok", listed: listedByHand, fullyPaid };
     const brake = pagoOnlineBrakeDecision({
       listed: true,
       who: auto.who,
@@ -234,7 +294,7 @@ export async function prepayOrderCheck(
       point: point === "confirmar" ? "confirmar" : "guia",
     });
     if (brake.state === "ok") return { state: "ok", listed: true, fullyPaid };
-    return { state: "blocked", source: "pago_online", message: brake.message, entry: null, failed: auto.failed, requirement: auto.requirement };
+    return { state: "blocked", source: "pago_online", message: brake.message, motivo: pagoOnlineMotivo(auto.who), entry: null, failed: auto.failed, requirement: auto.requirement };
   } catch (e) {
     return unread(e instanceof Error ? e.message : String(e));
   }
@@ -258,12 +318,18 @@ export async function listPrepayEntries(
   opts: { phone?: string | null } = {},
 ): Promise<PrepayEntryRow[]> {
   if (!orgIds.length) return [];
-  const rows = await allCourierRows<PrepayEntryRow>((from, to) => {
-    let q = admin.from("prepay_list_entries").select(PREPAY_ENTRY_COLUMNS).in("org_id", [...orgIds]);
-    if (opts.phone) q = q.eq("phone", opts.phone);
-    return q.order("added_at", { ascending: false }).order("id").range(from, to) as unknown as Page<PrepayEntryRow>;
-  });
-  return rows;
+  const read = (columns: string) =>
+    allCourierRows<PrepayEntryRow>((from, to) => {
+      let q = admin.from("prepay_list_entries").select(columns).in("org_id", [...orgIds]);
+      if (opts.phone) q = q.eq("phone", opts.phone);
+      return q.order("added_at", { ascending: false }).order("id").range(from, to) as unknown as Page<PrepayEntryRow>;
+    });
+  try {
+    return await read(PREPAY_ENTRY_COLUMNS_REQ);
+  } catch (e) {
+    if (!isMissingPrepayColumn({ message: e instanceof Error ? e.message : String(e) })) throw e;
+    return read(PREPAY_ENTRY_COLUMNS);
+  }
 }
 
 export type PrepayWriteResult = { ok: true; entry: PrepayEntryRow } | { ok: false; error: string };
@@ -271,7 +337,16 @@ export type PrepayWriteResult = { ok: true; entry: PrepayEntryRow } | { ok: fals
 /** Agregar a mano. Si el celular ya está en la lista, lo dice y no crea otra. */
 export async function addPrepayEntry(
   admin: SupabaseClient,
-  input: { orgId: string; phone: string; reason: string; actor: string | null; orderName?: string | null; now?: Date },
+  input: {
+    orgId: string;
+    phone: string;
+    reason: string;
+    actor: string | null;
+    orderName?: string | null;
+    /** Lo que pide (0329). Sin decirlo, el total, como siempre. */
+    requirement?: PrepayEntryRequirement;
+    now?: Date;
+  },
 ): Promise<PrepayWriteResult> {
   const phone = prepayPhoneKey(input.phone);
   if (!phone) return { ok: false, error: "Escribe un celular peruano de 9 dígitos que empiece por 9." };
@@ -281,25 +356,35 @@ export async function addPrepayEntry(
   if (existing.state === "unread") return { ok: false, error: "No se pudo leer la lista. Intenta de nuevo." };
   if (existing.state === "listed") return { ok: false, error: "Ese celular ya está en la lista." };
   const evidence: PrepayEvidence = { kind: "manual", order_name: input.orderName ?? null };
-  const { data, error } = await admin
+  const requirement = prepayEntryRequirementOf(input.requirement);
+  const row = {
+    org_id: input.orgId,
+    phone,
+    source: "manual",
+    reason: input.reason.trim(),
+    evidence,
+    added_by: input.actor,
+    added_at: (input.now ?? new Date()).toISOString(),
+  };
+  let { data, error } = await admin
     .from("prepay_list_entries")
-    .insert({
-      org_id: input.orgId,
-      phone,
-      source: "manual",
-      reason: input.reason.trim(),
-      evidence,
-      added_by: input.actor,
-      added_at: (input.now ?? new Date()).toISOString(),
-    })
-    .select(PREPAY_ENTRY_COLUMNS)
+    .insert({ ...row, requirement })
+    .select(PREPAY_ENTRY_COLUMNS_REQ)
     .maybeSingle();
+  // Sin la 0329: el total se puede guardar igual (es lo que pide una fila sin
+  // la columna); el adelanto no, y se dice.
+  if (error && isMissingPrepayColumn(error)) {
+    if (requirement !== "pago_completo") {
+      return { ok: false, error: "Falta la migración 0329 en la base de datos para pedir solo el adelanto: por ahora agrégalo con «Pago total»." };
+    }
+    ({ data, error } = await admin.from("prepay_list_entries").insert(row).select(PREPAY_ENTRY_COLUMNS).maybeSingle());
+  }
   if (error) {
     if (error.code === "23505") return { ok: false, error: "Ese celular ya está en la lista." };
     if (isMissingPrepayTable(error)) return { ok: false, error: "Falta la migración 0309 en la base de datos." };
     return { ok: false, error: "No se pudo agregar. Intenta de nuevo." };
   }
-  return { ok: true, entry: data as PrepayEntryRow };
+  return { ok: true, entry: data as unknown as PrepayEntryRow };
 }
 
 /**
@@ -344,6 +429,7 @@ export async function removePrepayEntry(
     .eq("id", input.entryId)
     .eq("org_id", input.orgId)
     .is("removed_at", null)
+    // Sin `requirement`: así la baja no depende de la 0329.
     .select(PREPAY_ENTRY_COLUMNS);
   if (error) {
     if (isMissingPrepayTable(error)) return { ok: false, error: "Falta la migración 0309 en la base de datos." };
@@ -651,7 +737,7 @@ export async function runPrepayAutoRule(
   let targets: { orgId: string; mode: PrepayMode }[];
   if (opts.orgId) {
     const { settings, missing, error } = await loadPrepaySettings(admin, opts.orgId);
-    if (missing) return { orgs: [], error: "La lista de pago adelantado aún no está instalada en la base de datos (0309)." };
+    if (missing) return { orgs: [], error: "La Lista negra a mano aún no está instalada en la base de datos (0309)." };
     if (error) return { orgs: [], error: `leer la posición de la regla: ${error}` };
     targets = [{ orgId: opts.orgId, mode: opts.mode ?? settings.auto_mode }];
   } else {
@@ -704,7 +790,41 @@ export function prepayEntryView(entry: PrepayEntryRow): {
   reason: string;
   addedAt: string;
   evidence: PrepayEvidence;
+  requirement: PrepayEntryRequirement;
 } {
-  return { id: entry.id, source: entry.source, reason: entry.reason, addedAt: entry.added_at, evidence: parsePrepayEvidence(entry.evidence) };
+  return {
+    id: entry.id,
+    source: entry.source,
+    reason: entry.reason,
+    addedAt: entry.added_at,
+    evidence: parsePrepayEvidence(entry.evidence),
+    requirement: prepayEntryRequirementOf(entry.requirement),
+  };
+}
+
+/**
+ * Los celulares (canónicos, `51…`) de las altas vivas a mano de una
+ * organización: los que el envío diario de la automática suma a su lista (MOM
+ * §41.11). Por páginas. Sin la 0309, ninguno; lanza si la base falla (el envío
+ * entonces falla y se reintenta: mejor que mandar la lista sin ellos).
+ */
+export async function livePrepayPhones(admin: SupabaseClient, orgId: string): Promise<string[]> {
+  const out: string[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await admin
+      .from("prepay_list_entries")
+      .select("phone")
+      .eq("org_id", orgId)
+      .is("removed_at", null)
+      .order("phone")
+      .range(from, from + 999);
+    if (error) {
+      if (isMissingPrepayTable(error)) return out;
+      throw new Error(`leer las altas a mano: ${error.message ?? "error de la base"}`);
+    }
+    const rows = (data ?? []) as { phone: string }[];
+    for (const r of rows) out.push(r.phone);
+    if (rows.length < 1000) return out;
+  }
 }
 

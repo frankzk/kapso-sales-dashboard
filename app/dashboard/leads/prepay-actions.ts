@@ -1,22 +1,23 @@
 "use server";
 
-// La «Lista de pago adelantado» en la ficha del lead (MOM §41): si su celular
-// está en la lista, la asesora lo sabe ANTES de ofrecer contra entrega. Solo
-// lectura: «Generar pedido» lo vuelve a comprobar en el servidor.
+// La «Lista negra» en la ficha del lead (MOM §25.3 y §41): si su celular está
+// en la lista —un alta a mano o la automática vigente—, la asesora lo sabe
+// ANTES de ofrecer contra entrega, con el motivo (las cuentas del propio
+// cliente) y lo que se le pide. Solo lectura: «Generar pedido» lo vuelve a
+// comprobar en el servidor.
 
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getLeadRoutingScope } from "@/lib/lead-routing-access";
-import { formatLimaDateTime } from "@/lib/automations-catalog";
-import { orgOfStore, prepayEntryView, prepayLookup } from "@/lib/prepay-list-server";
-import type { PrepayEvidence } from "@/lib/prepay-list";
+import { orgOfStore, prepayLookup } from "@/lib/prepay-list-server";
+import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
+import { listaNegraAutoMark, listaNegraManualMark, listaNegraMergeMarks, type ListaNegraMark } from "@/lib/lista-negra";
+import { lnUnreadMessage } from "@/lib/lista-negra-copy";
 
 export interface LeadPrepayStatus {
   listed: boolean;
-  source?: "auto" | "manual";
-  reason?: string;
-  addedAt?: string;
-  evidence?: PrepayEvidence;
+  /** Por qué está y qué se le pide (la que pide más, si está en las dos). */
+  mark?: ListaNegraMark;
   error?: string;
 }
 
@@ -33,11 +34,15 @@ export async function loadLeadPrepayStatus(leadId: string): Promise<LeadPrepaySt
   try {
     const orgId = await orgOfStore(admin, lead.store_id);
     if (!orgId) return { listed: false };
-    const lookup = await prepayLookup(admin, orgId, lead.phone);
-    if (lookup.state !== "listed") return { listed: false };
-    const view = prepayEntryView(lookup.entry);
-    return { listed: true, source: view.source, reason: view.reason, addedAt: formatLimaDateTime(view.addedAt), evidence: view.evidence };
+    const [manual, auto] = await Promise.all([prepayLookup(admin, orgId, lead.phone), pagoOnlineLookup(admin, orgId, lead.phone)]);
+    const mark = listaNegraMergeMarks(
+      manual.state === "listed" ? listaNegraManualMark(manual.entry) : null,
+      auto.state === "listed" ? listaNegraAutoMark(auto.who, auto.requirement) : null,
+    );
+    if (mark) return { listed: true, mark };
+    if (manual.state === "unread" || auto.state === "unread") return { listed: false, error: lnUnreadMessage() };
+    return { listed: false };
   } catch {
-    return { listed: false, error: "No se pudo comprobar la lista de pago adelantado." };
+    return { listed: false, error: lnUnreadMessage() };
   }
 }

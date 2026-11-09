@@ -74,7 +74,7 @@ export interface PagoOnlineView {
   mode: PagoOnlineMode;
   requirement: PagoOnlineRequirement;
   /** La lista que lee el freno de Kapta hoy: cuántos y desde cuándo. */
-  current: { runId: string; at: string; phones: number; emails: number } | null;
+  current: { runId: string; at: string; phones: number; emails: number; anuladores: number } | null;
   lastRun: PagoOnlineRunView | null;
   /** La última simulación, si la última corrida no lo es. */
   lastSimulation: PagoOnlineRunView | null;
@@ -158,7 +158,7 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
       .order("added_at", { ascending: false })
       .limit(200),
     settings.current_run_id
-      ? admin.from("pago_online_runs").select("id,phones,emails,started_at").eq("id", settings.current_run_id).maybeSingle()
+      ? admin.from("pago_online_runs").select("id,phones,emails,anuladores,started_at").eq("id", settings.current_run_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
   ]);
   const problems: string[] = [];
@@ -231,12 +231,12 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
     };
   });
 
-  const cur = currentRes.data as { id: string; phones: number; emails: number; started_at: string } | null;
+  const cur = currentRes.data as { id: string; phones: number; emails: number; anuladores?: number | null; started_at: string } | null;
   return {
     available: true,
     mode: settings.mode,
     requirement: settings.requirement,
-    current: cur ? { runId: cur.id, at: formatLimaDateTime(cur.started_at), phones: cur.phones, emails: cur.emails } : null,
+    current: cur ? { runId: cur.id, at: formatLimaDateTime(cur.started_at), phones: cur.phones, emails: cur.emails, anuladores: cur.anuladores ?? 0 } : null,
     lastRun,
     lastSimulation,
     stores: storeViews,

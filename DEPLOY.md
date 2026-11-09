@@ -1,5 +1,41 @@
 # Deployment runbook
 
+### 09-11-2026 · «Lista negra» unificada: una página, lo que pide cada alta a mano, la chapa en Leads y la copia estándar (0329, MOM §41, §41.11 y §25.3)
+
+**Migración 0329** (`db/migrations/0329_lista_negra_requisito.sql`), a mano y
+**antes** del código si se puede (el código la tolera ausente: sin ella todo
+alta a mano pide el pago total y la búsqueda no tiene tope):
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0329_lista_negra_requisito.sql
+```
+
+- `prepay_list_entries.requirement` (`adelanto` | `pago_completo`, por defecto
+  y en las filas de antes `pago_completo`: hoy no cambia nada) y el trigger de
+  la 0309, que ya no deja reescribirlo.
+- `lista_negra_searches`: el tope de la búsqueda de la página (30 cada 10
+  minutos por persona), sin celulares y sin acceso del navegador.
+
+**Lo que cambia al desplegar:**
+
+- La página **«Lista negra»** (`/dashboard/clientes/lista-negra`; la de
+  `/dashboard/clientes/pago-adelantado` redirige) y el menú «Lista negra».
+- **El envío diario a Kenku y Aurela lleva también las altas vivas a mano**
+  (hoy no hay ninguna: el envío no cambia hasta que alguien agregue una). El
+  freno de cambio brusco de cada tienda cuenta la unión.
+- La chapa negra «Lista negra» en la lista de Leads y el aviso en la ficha del
+  lead; una sola chapa en el Master para las dos listas.
+- Todos los textos de la Lista negra salen de `lib/lista-negra-copy.ts` (§41.11
+  «Cómo se dice»): cambian los mensajes del freno, Chatby, el bot (422),
+  «Generar pedido», los avisos de la ficha, el panel y el historial.
+- La regla automática de la lista a mano queda **retirada**: sin controles en
+  Automatizaciones; `setPrepayAutoMode` solo deja apagarla. El cron
+  `/api/cron/prepay-list` sigue y no hace nada.
+- La consulta `/prepago` (§41.7) queda retirada como canal: no instalar el
+  mu-plugin ni pasar el contrato de COD Core.
+
+Sin variables ni crons nuevos.
+
 ### 09-11-2026 · «Lista negra»: el nombre en pantalla de la lista automática (sin migración, MOM §41.11)
 
 Solo textos. La lista automática («Pago solo online», 0326) se llama «Lista

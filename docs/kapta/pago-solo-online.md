@@ -1,5 +1,10 @@
 # Pedido para Kapta: lista automática de «pago solo online»
 
+> **Nota de Kapta (09-11-2026): la lista que se manda es la «Lista negra» entera.** Además de los clientes que calcula la
+> regla, `celulares` lleva los que el equipo de Kapta agrega a mano en su página «Lista negra» (un fraude, una clienta
+> que avisó que no va a recibir), sin repetidos; `regla` lo dice («… · más N agregados a mano en Kapta»). El contrato
+> no cambia. La lista manual del panel de la tienda sigue siendo de la tienda.
+
 **Para:** equipo de Kapta · **De:** Kenku Perú y Aurela · **Fecha:** 09-11-2026
 
 ## 1. Qué queremos

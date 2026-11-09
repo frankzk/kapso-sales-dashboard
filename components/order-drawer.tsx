@@ -1797,18 +1797,16 @@ export function OrderDrawer({
 
                 <DrawerJourneyRail current={detail.row.macro_stage} />
               </section>
-              {/* El cliente paga el total por adelantado (MOM §41): arriba, antes
-                  de llamar y antes de cualquier guía. */}
+              {/* La Lista negra agregada a mano (MOM §41): arriba, antes de
+                  llamar y antes de cualquier guía. */}
               <PrepayListBanner
                 status={prepay}
-                context="order"
                 canCreateLink={canEdit}
                 onCreateLink={() => createPrepayPaymentLink(orderId)}
                 className="order-2"
               />
-              {/* «Pago solo online (lista automática)», MOM §41.11: entrega
-                  fallida y ninguna recibida. Solo si no está en la lista de
-                  arriba, que pide más. */}
+              {/* La Lista negra automática (MOM §41.11). Solo si no tiene un
+                  alta a mano (que manda). */}
               <PagoOnlineBanner
                 status={prepay?.pagoOnline}
                 canEdit={canEdit}

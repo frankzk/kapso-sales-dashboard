@@ -1003,12 +1003,12 @@ export async function aliclikCreateGates(
   // (`kaptaBlock`): el reintento de Lima lo pasa a Repro Lima en vez de fallar
   // cada día. «No se pudo leer» no autoriza.
   const prepay = await prepayOrderCheck(admin, ctx.row as unknown as PrepayOrderRow, "guia");
-  // La lista automática «Pago solo online» (§41.11) pide, por defecto, el
-  // adelanto: con él validado Aliclik sí sale (cobra el saldo). Solo la lista
-  // de pago adelantado pide el total, y entonces Aliclik ya no sale.
+  // La Lista negra con «Adelanto de S/ 20» (la automática por defecto, o un
+  // alta a mano que lo pide): con él validado Aliclik sí sale (cobra el
+  // saldo). Con «Pago total», Aliclik ya no sale.
   if (prepay.state === "blocked") {
     return blocked(
-      prepay.source === "pago_online"
+      prepay.requirement === "adelanto"
         ? prepay.message
         : `${prepay.message} Aliclik es solo contraentrega: con el pago completo sale por Grupo GF o Swayp con cobro cero en Lima, o por agencia en provincia.`,
     );

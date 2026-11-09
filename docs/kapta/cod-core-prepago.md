@@ -1,5 +1,9 @@
 # No ofrecer «Pago contra entrega» a la lista de pago adelantado
 
+> **Retirado (owner, 09-11-2026, MOM §41.7). No hace falta construir esto.** Las altas que el equipo agrega a mano en la
+> «Lista negra» de Kapta van ahora dentro del envío diario de la lista automática (`docs/kapta/pago-solo-online.md`,
+> COD Core 0.10.45): un solo canal. Kapta sigue contestando `/prepago` por compatibilidad, pero no es el camino.
+
 05-11-2026 · pedido de Kapta al equipo de COD Core (Aurela y Kenku) · MOM §41
 
 Kapta tiene una **«Lista de pago adelantado»** (la lista negra): celulares que ya rechazaron un pedido en la puerta o no lo recogieron en la agencia, más los que el equipo agrega a mano. Decisión del owner: **esos clientes pagan el total por adelantado; no se les ofrece contra entrega.**

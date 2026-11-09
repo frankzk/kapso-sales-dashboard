@@ -378,4 +378,7 @@ echo "  ✅ 0 recibidas y 1+ devuelto o 5+ pedidos con el 75 % anulados, solo co
 echo "▶ Provincias de Lima fuera de la capital (0327): agencia en la cobertura guardada del Master, salvo el Callao"
 $PSQL -f "$ROOT/scripts/sql/order_master_lima_provinces_smoke.sql"
 echo "  ✅ Huaral, Barranca, Huarochirí, Cañete y Oyón van por agencia; Curva canta Callao, Miraflores y Arequipa no; el trigger usa la regla"
+echo "▶ Lista negra unificada (0329): lo que pide cada alta a mano y el tope de la búsqueda"
+$PSQL -f "$ROOT/scripts/sql/lista_negra_smoke.sql"
+echo "  ✅ las altas piden el total por defecto o el adelanto, nada más, y no se reescribe; la búsqueda guarda quién y cuándo, nunca el celular, y el navegador no la ve"
 echo "✅ DB verification passed."

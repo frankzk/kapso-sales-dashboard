@@ -30,10 +30,10 @@
 // de Kapta: los mensajes de alerta y los resúmenes llevan solo cuentas.
 
 import { orderFullyPaid, type OrderPaymentFacts } from "@/lib/order-paid";
-import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
+import { LN_NAME, LN_REQUIREMENT_LABEL, lnBotMessage, lnBrakeMessage, lnGenerateRefused, LN_GENERATE_NOTICE, lnMotivo } from "@/lib/lista-negra-copy";
 
-/** Cómo se llama en pantalla. */
-export const PAGO_ONLINE_LABEL = "Lista negra (automática)";
+/** Cómo se llama en pantalla: «Lista negra» (lib/lista-negra-copy.ts, la única fuente de lo que se dice). */
+export const PAGO_ONLINE_LABEL = LN_NAME;
 /** La clave del catálogo y del historial (`automation_switch_events.automation`). */
 export const PAGO_ONLINE_KEY = "pago_solo_online";
 /** La clave del historial del ajuste «qué se cobra». */
@@ -210,27 +210,12 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
 }
 
 /**
- * El titular de la ficha y de los mensajes, con las cuentas del propio
- * cliente y nada de otros:
- *   * «Cliente con entrega devuelta y ninguna recibida»;
- *   * «Cliente que anuló 5 de 6 pedidos y nunca recibió».
- * Pura.
+ * El motivo de un cliente de la automática, con sus propias cuentas y nada de
+ * otros (lib/lista-negra-copy.ts): «Devolvió 2 pedidos y nunca recibió» o
+ * «Anuló 6 de 7 pedidos y nunca recibió». Pura.
  */
-export function pagoOnlineWhoText(who: PagoOnlineWho): string {
-  if (who.reason === "anulador" && who.failed && who.orders) return `Cliente que anuló ${who.failed} de ${who.orders} pedidos y nunca recibió`;
-  if (who.reason === "anulador") return "Cliente que anula casi todos sus pedidos y nunca recibió";
-  return "Cliente con entrega devuelta y ninguna recibida";
-}
-
-/** El titular con lo que le queda: «… : solo pago online o adelanto» (o «solo pago online» con pago completo). Pura. */
-export function pagoOnlineHeadline(who: PagoOnlineWho, requirement: PagoOnlineRequirement = PAGO_ONLINE_DEFAULT_REQUIREMENT): string {
-  return `Lista negra · ${pagoOnlineWhoText(who)}: ${requirement === "adelanto" ? "solo pago online o adelanto" : "solo pago online"}`;
-}
-
-/** Las cuentas entre paréntesis para un `devuelto` («(2 devueltos, 0 recibidas)»); el anulador ya las dice. Pura. */
-function whoCounts(who: PagoOnlineWho): string {
-  if (who.reason !== "devuelto" || !who.failed) return "";
-  return ` (${who.failed} ${who.failed === 1 ? "devuelto" : "devueltos"}, 0 recibidas)`;
+export function pagoOnlineMotivo(who: Pick<PagoOnlineWho, "reason" | "failed" | "orders">): string {
+  return who.reason === "anulador" ? lnMotivo({ kind: "anulador", n: who.failed, m: who.orders }) : lnMotivo({ kind: "devuelto", n: who.failed });
 }
 
 /** Un correo que se puede mandar: en minúsculas, con arroba y dominio. Null si no sirve. Pura. */
@@ -442,10 +427,8 @@ export const PAGO_ONLINE_REQUIREMENTS = ["adelanto", "pago_completo"] as const;
 export type PagoOnlineRequirement = (typeof PAGO_ONLINE_REQUIREMENTS)[number];
 /** Decisión del owner del 09-11-2026: adelanto. */
 export const PAGO_ONLINE_DEFAULT_REQUIREMENT: PagoOnlineRequirement = "adelanto";
-export const PAGO_ONLINE_REQUIREMENT_LABEL: Record<PagoOnlineRequirement, string> = {
-  adelanto: "Adelanto (regla §8)",
-  pago_completo: "Pago completo",
-};
+/** «Adelanto de S/ 20» / «Pago total» (lib/lista-negra-copy.ts). */
+export const PAGO_ONLINE_REQUIREMENT_LABEL: Record<PagoOnlineRequirement, string> = LN_REQUIREMENT_LABEL;
 
 export function isPagoOnlineRequirement(value: unknown): value is PagoOnlineRequirement {
   return typeof value === "string" && (PAGO_ONLINE_REQUIREMENTS as readonly string[]).includes(value);
@@ -474,12 +457,12 @@ export type PagoOnlineBrake =
 
 export type PagoOnlinePoint = "confirmar" | "guia";
 
-/** El mensaje del freno, sin ningún dato de otros clientes. Pura. */
-export function pagoOnlineBlockMessage(point: PagoOnlinePoint, requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
-  const head = `${pagoOnlineHeadline(who, requirement)}${whoCounts(who)}.`;
-  const what = requirement === "adelanto" ? `el adelanto de ${ADELANTO_MINIMO_LABEL} validado (o el pago online completo)` : "el pago completo validado (online o Yape)";
-  if (point === "confirmar") return `${head} No se confirma contra entrega sin ${what}.`;
-  return `${head} La guía no sale sin ${what}.`;
+/**
+ * El mensaje del freno, sin ningún dato de otros clientes: el mismo al
+ * confirmar y al crear la guía (lib/lista-negra-copy.ts, `lnBrakeMessage`). Pura.
+ */
+export function pagoOnlineBlockMessage(_point: PagoOnlinePoint, requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
+  return lnBrakeMessage(pagoOnlineMotivo(who), requirement);
 }
 
 /**
@@ -495,18 +478,10 @@ export function pagoOnlineBlockMessage(point: PagoOnlinePoint, requirement: Pago
  *     dice que no se confirma ni sale sin el adelanto validado.
  */
 export function pagoOnlineOrderMessage(point: "bot" | "pedido" | "pedido_aviso", requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
-  const head = `${pagoOnlineHeadline(who, requirement)}${whoCounts(who)}.`;
-  if (point === "bot") {
-    return requirement === "adelanto"
-      ? `${head} El bot no crea pedidos contra entrega para este celular: deriva la conversación a una asesora, que cobra el adelanto de ${ADELANTO_MINIMO_LABEL} (o el pago online completo) antes de confirmar el pedido.`
-      : `${head} El bot no crea pedidos contra entrega para este celular: deriva la conversación a una asesora, que cobra el pago completo (o que pague online en la web).`;
-  }
-  if (point === "pedido") {
-    return requirement === "adelanto"
-      ? `${head} El pedido no se confirma ni sale sin el adelanto de ${ADELANTO_MINIMO_LABEL} validado.`
-      : `${head} Kapta no crea pedidos contra entrega para este celular: que pague online en la web, o cobra el pago completo por adelantado (link de pago o Yape) antes de generarlo.`;
-  }
-  return `Ojo: ${head} No se confirma ni sale sin el adelanto de ${ADELANTO_MINIMO_LABEL} validado: regístralo en «Cómo sale el pedido».`;
+  const motivo = pagoOnlineMotivo(who);
+  if (point === "bot") return lnBotMessage(motivo, requirement);
+  if (point === "pedido" && requirement === "pago_completo") return lnGenerateRefused(motivo);
+  return LN_GENERATE_NOTICE;
 }
 
 /** La llave de un celular de la lista vigente para marcar filas: organización + 9 dígitos. Pura. */

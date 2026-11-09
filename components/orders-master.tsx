@@ -194,6 +194,7 @@ import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 // ---------------------------------------------------------------------------
 
 import { fmtDate, fmtDateTime, fmtAge, CoverageBadge, MacroStageBadge, MacroStageDot } from "@/components/order-master-shared";
+import { ListaNegraBadge } from "@/components/lista-negra-badge";
 import { DRAWER_SECTION_IDS, OrderDrawer, type DrawerSectionId, type DrawerWorkspaceView } from "@/components/order-drawer";
 import { workspaceForDrawerSection } from "@/lib/order-drawer-href";
 import { hasCombinedGuide, type CombinedGuideCourier } from "@/lib/labels/guia-combinada-select";
@@ -2524,22 +2525,9 @@ function MasterTable({
                     {/* Sin ubicación no hay courier ni guía: la fecha se vence
                         sola (#KP142558). Se apaga al corregir la ubicación o
                         al quitar la fecha (MOM §6.2). */}
-                    {/* El cliente paga el total por adelantado (MOM §41). */}
-                    {r.prepay_listed && (
-                      <Badge tone="crit" className="xl:mt-0.5" title="Lista de pago adelantado: este cliente paga el total por adelantado.">
-                        Pago adelantado
-                      </Badge>
-                    )}
-                    {/* «Pago solo online» (MOM §41.11), si no está ya en la lista de arriba. */}
-                    {!r.prepay_listed && r.pago_online_listed && (
-                      <Badge
-                        tone="blacklist"
-                        className="xl:mt-0.5"
-                        title="Lista negra: devolvió un pedido (o anula casi todos) y nunca recibió. Sin el adelanto de S/ 20 validado (o el pago completo, según el ajuste) no se confirma ni sale contra entrega."
-                      >
-                        Lista negra
-                      </Badge>
-                    )}
+                    {/* La Lista negra (MOM §41 y §41.11): una sola chapa negra
+                        para las dos listas; «· pago total» si es lo que pide. */}
+                    {r.lista_negra && <ListaNegraBadge mark={r.lista_negra} className="xl:mt-0.5" />}
                     {r.scheduled_no_location && (
                       <Badge
                         tone="crit"
