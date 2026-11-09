@@ -13,6 +13,10 @@
 //     defecto, y la lista de pago adelantado sigue mandando (pide el total).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Las corridas pasan por la base falsa y varias tiendas: en un runner de CI
+// lento pasan de 5 s (09-11-2026). Más margen, mismo comportamiento.
+vi.setConfig({ testTimeout: 30_000 });
 import { FakeDb, type Row } from "./woocommerce-fake-db";
 
 vi.mock("server-only", () => ({}));
