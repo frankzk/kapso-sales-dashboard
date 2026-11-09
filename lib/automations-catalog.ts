@@ -674,6 +674,7 @@ export const PAGO_ONLINE_TEST_EVENT = "pago_solo_online_prueba";
 export const PAGO_ONLINE_ACCEPT_EVENT = "pago_solo_online_aceptada";
 export const PAGO_ONLINE_RUN_EVENT = "pago_solo_online_correr";
 export const PAGO_ONLINE_EXCEPTION_EVENT = "pago_solo_online_excepcion";
+export const PAGO_ONLINE_EMPTY_EVENT = "pago_solo_online_vaciar";
 
 /** Los interruptores y topes del agente de IA (Conector de IA, 0323, MOM §42.9). */
 export const AGENT_WHATSAPP_MODE_EVENT = "agent_whatsapp_mode";
@@ -694,6 +695,7 @@ export function automationEventLabel(key: string): string {
   if (key === PAGO_ONLINE_ACCEPT_EVENT) return "Pago solo online · lista aceptada pese al cambio brusco";
   if (key === PAGO_ONLINE_RUN_EVENT) return "Pago solo online · corrida a mano";
   if (key === PAGO_ONLINE_EXCEPTION_EVENT) return "Pago solo online · excepción de Kapta";
+  if (key === PAGO_ONLINE_EMPTY_EVENT) return "Pago solo online · lista de la tienda vaciada";
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
   if (key === RETRY_CHATBY_ASK_EVENT) return "Reintentos Aliclik · pedir la ubicación por WhatsApp";

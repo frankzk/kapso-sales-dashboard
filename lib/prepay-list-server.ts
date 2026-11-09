@@ -228,7 +228,7 @@ export async function prepayOrderCheck(
     if (auto.state === "not_listed") return { state: "ok", listed: false, fullyPaid };
     const brake = pagoOnlineBrakeDecision({
       listed: true,
-      failed: auto.failed,
+      who: auto.who,
       requirement: auto.requirement,
       facts,
       point: point === "confirmar" ? "confirmar" : "guia",

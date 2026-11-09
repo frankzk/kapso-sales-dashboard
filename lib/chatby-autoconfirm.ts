@@ -599,8 +599,8 @@ export type ChatbyHoldReason =
   | "shalom"
   | "programado"
   | "guia_no_creada"
-  // «Pago solo online (lista automática)», MOM §41.11: entrega fallida y
-  // ninguna recibida. Va a la asesora; Kapta no le escribe a la clienta.
+  // «Pago solo online (lista automática)», MOM §41.11: devolvió (o anula casi
+  // todo) y nunca recibió. Va a la asesora; Kapta no le escribe a la clienta.
   | "pago_online";
 
 export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
@@ -621,7 +621,7 @@ export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   programado: "Tiene envío programado: la guía es la del día programado.",
   guia_no_creada: "Aliclik no dejó crear la guía.",
   pago_online:
-    "Cliente con entrega fallida y ninguna recibida: solo pago online o adelanto. Kapta no crea la guía contra entrega ni le escribe: cobra lo que pide «Pago solo online» y confirma tú.",
+    "Cliente de «Pago solo online» (entrega devuelta, o anula casi todos sus pedidos, y nunca recibió): solo pago online o adelanto. Kapta no crea la guía contra entrega ni le escribe: cobra lo que pide «Pago solo online» y confirma tú.",
 };
 
 /** ¿El motivo es de la guía (la confirmación sí cuadró)? */

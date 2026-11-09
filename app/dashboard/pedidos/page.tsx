@@ -31,7 +31,9 @@ import { withPaidUnnotified } from "@/lib/agency-pickup-alert";
 import { withScheduledNoLocation } from "@/lib/dispatch-date";
 import { withPrepayListed } from "@/lib/prepay-list";
 import { listedPhonesAmong } from "@/lib/prepay-list-server";
-import { createServerSupabase } from "@/lib/db";
+import { withPagoOnlineListed } from "@/lib/pago-online";
+import { pagoOnlineListedAmong } from "@/lib/pago-online-lookup";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { MACRO_SUBSTAGES_BY_STAGE, type MacroSubstage } from "@/lib/order-macro-stage";
 import { EmptyState } from "@/components/ui";
 import { OrdersMasterBoard } from "@/components/orders-master";
@@ -171,6 +173,21 @@ async function PedidosContent({
       return null;
     }
   })();
+  // «Pago solo online» (MOM §41.11): otra lectura para la misma página, con el
+  // cliente de servicio (los celulares de la lista no se leen desde el
+  // navegador): solo dice SÍ/NO de los celulares que la página ya muestra, de
+  // las organizaciones de las tiendas que quien mira ve. Sin lectura, nada.
+  const pagoOnlineListed = await (async () => {
+    try {
+      return await pagoOnlineListedAmong(
+        createAdminSupabase(),
+        [...new Set(stores.map((s) => s.org_id))],
+        pageData.rows.map((r) => r.customer_phone),
+      );
+    } catch {
+      return null;
+    }
+  })();
   const confirmationDueCounts = showConfirmationDue
     ? confirmationCounts.due
     : emptyConfirmationQueueCounts().due;
@@ -201,12 +218,16 @@ async function PedidosContent({
       confirmationDueCounts={confirmationDueCounts}
       managementDayCounts={managementDayCounts}
       confirmationCycles={confirmationCycles}
-      rows={withPrepayListed(
-        withScheduledNoLocation(
-          withPaidUnnotified(withPendingVouchers(pageData.rows, pendingVouchers), paidUnnotified),
-          scheduledNoLocation,
+      rows={withPagoOnlineListed(
+        withPrepayListed(
+          withScheduledNoLocation(
+            withPaidUnnotified(withPendingVouchers(pageData.rows, pendingVouchers), paidUnnotified),
+            scheduledNoLocation,
+          ),
+          prepayListed,
+          new Map(stores.map((s) => [s.id, s.org_id])),
         ),
-        prepayListed,
+        pagoOnlineListed,
         new Map(stores.map((s) => [s.id, s.org_id])),
       )}
       // Pedidos con comprobante por validar en las tiendas que ve; null si no

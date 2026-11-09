@@ -46,6 +46,7 @@ import {
   nextRetryAt,
   pagoOnlineAlertText,
   pagoOnlineGuard,
+  pagoOnlineEmptyPayload,
   pagoOnlinePayload,
   pagoOnlinePhoneKey,
   pagoOnlineRegla,
@@ -366,6 +367,7 @@ export interface PagoOnlineBuildCounts {
   phones: number;
   emails: number;
   two_or_more: number;
+  anuladores: number;
   excepted: number;
   por_confirmar_listed: number;
   por_confirmar_braked: number;
@@ -390,6 +392,7 @@ function parseCounts(raw: unknown): PagoOnlineBuildCounts {
     phones: n(r.phones),
     emails: n(r.emails),
     two_or_more: n(r.two_or_more),
+    anuladores: n(r.anuladores),
     excepted: n(r.excepted),
     por_confirmar_listed: n(r.por_confirmar_listed),
     por_confirmar_braked: n(r.por_confirmar_braked),
@@ -483,6 +486,7 @@ export async function runPagoOnlineForOrg(
       phones: counts.phones,
       emails: counts.emails,
       two_or_more: counts.two_or_more,
+      anuladores: counts.anuladores,
       excepted: counts.excepted,
       por_confirmar_listed: counts.por_confirmar_listed,
       por_confirmar_braked: counts.por_confirmar_braked,
@@ -809,6 +813,39 @@ export async function sendPagoOnlineTest(
     kind: "prueba",
     attempt: 1,
     payload: pagoOnlinePayload([phone], [], "prueba"),
+    baseline: null,
+    actor: input.actor,
+    allowRetry: false,
+  });
+}
+
+/**
+ * «Vaciar la lista de la tienda»: manda `{"celulares": [], "correos": []}` a
+ * UNA tienda (§4.2) y lo registra (`kind = manual`, 0 celulares). La tienda
+ * deja de frenar el contra entrega de todos los de la lista automática hasta
+ * el próximo envío; el envío diario la vuelve a llenar salvo en Apagado. Como
+ * es el último envío bueno, el freno de cambio brusco del siguiente lo toma
+ * como «primera» y no lo frena. En cualquier posición; no se reintenta.
+ */
+export async function emptyPagoOnlineStore(
+  admin: Admin,
+  input: { orgId: string; storeId: string; actor: string | null },
+): Promise<SendAttemptResult | { error: string }> {
+  let stores: PagoOnlineStore[];
+  try {
+    stores = await pagoOnlineStores(admin, input.orgId);
+  } catch {
+    return { error: "No se pudieron leer las tiendas." };
+  }
+  const store = stores.find((s) => s.id === input.storeId);
+  if (!store) return { error: "Esa tienda no es una tienda WooCommerce activa de la organización." };
+  return sendAttempt(admin, {
+    orgId: input.orgId,
+    store,
+    runId: null,
+    kind: "manual",
+    attempt: 1,
+    payload: pagoOnlineEmptyPayload(),
     baseline: null,
     actor: input.actor,
     allowRetry: false,

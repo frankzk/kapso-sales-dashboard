@@ -60,6 +60,8 @@ import { debeGuardarTelefono } from "@/lib/lead-sin-numero";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
 import { isPrepayRequired, orgOfStore } from "@/lib/prepay-list-server";
 import { prepayBlockMessage } from "@/lib/prepay-list";
+import { pagoOnlineOrderMessage } from "@/lib/pago-online";
+import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
 import { priceMismatchRejection, resolveOrderDiscount, type OrderDiscountInput } from "@/lib/shopify";
 import { TAGS } from "@/lib/types";
 import { mapWooOrder, toWooPeruState, type WooClientOpts, type WooOrder } from "@/lib/woocommerce";
@@ -934,13 +936,29 @@ export async function handleBotOrder(req: BotOrderRequest, deps: BotOrderDeps): 
     // Si no se pudo leer, se sigue (falla abierto): el pedido se vuelve a
     // frenar al confirmarlo y al crear su guía.
     let prepayRequired = false;
+    let prepayOrgId: string | null = null;
     try {
       const orgId = await step("prepay_org", orgOfStore(admin, storeId));
+      prepayOrgId = orgId;
       prepayRequired = !!orgId && (await step("prepay", isPrepayRequired(admin, orgId, input.phone)));
     } catch {
       events.push("prepay.unread");
     }
     if (prepayRequired) return finish(fail("prepay_required", prepayBlockMessage("bot")));
+    // «Pago solo online (lista automática)», MOM §41.11: tampoco se le crea un
+    // pedido contra entrega. Mismo código (`prepay_required`, 422, deriva a una
+    // asesora), con lo que se cobra en ESTA lista: el adelanto de S/ 20 o el
+    // pago completo, según el ajuste. Falla abierto, como la otra lista.
+    if (prepayOrgId) {
+      let auto: Awaited<ReturnType<typeof pagoOnlineLookup>>;
+      try {
+        auto = await step("pago_online", pagoOnlineLookup(admin, prepayOrgId, input.phone));
+      } catch {
+        auto = { state: "unread", error: "timeout" };
+      }
+      if (auto.state === "unread") events.push("pago_online.unread");
+      if (auto.state === "listed") return finish(fail("prepay_required", pagoOnlineOrderMessage("bot", auto.requirement, auto.who)));
+    }
 
     // Los montos, con las reglas de «Generar pedido»: contraentrega, el total
     // tiene que ser mayor que 0 (un pedido solo de regalos no se cobra).

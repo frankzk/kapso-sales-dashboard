@@ -1167,6 +1167,71 @@ describe("la «Lista de pago adelantado» (MOM §41, 05-11-2026)", () => {
   });
 });
 
+describe("«Pago solo online (lista automática)» (MOM §41.11, 09-11-2026)", () => {
+  const ORG = "22222222-2222-4222-8222-222222222222";
+  const listed = (requirement: string, reason = "devuelto", failed = 1, orders = 1) => {
+    // La lista vigente la responde `pago_online_lookup` (0326).
+    h.db.rpc = (async (name: string, args: Record<string, unknown>) => {
+      h.db.rpcCalls.push({ name, args });
+      if (name === "pago_online_lookup") return { data: [{ listed: args.p_phone === "988805509", failed, reason, orders, requirement }], error: null };
+      return { data: null, error: null };
+    }) as typeof h.db.rpc;
+  };
+
+  it("con «Adelanto (regla §8)»: 422 prepay_required que pide el adelanto de S/ 20, sin candado ni pedido", async () => {
+    setup({ store: storeRow({ org_id: ORG }) });
+    listed("adelanto");
+    const res = await call(pedido({ phone: "+51 988 805 509" }));
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ ok: false, code: "prepay_required", retryable: false });
+    const message = (res.body as { message: string }).message;
+    expect(message).toContain("Cliente con entrega devuelta y ninguna recibida");
+    expect(message).toContain("adelanto de S/ 20");
+    expect(message).not.toContain("total");
+    expect(h.db.rpcCalls.find((c) => c.name === "pago_online_lookup")?.args).toEqual({ p_org: ORG, p_phone: "988805509" });
+    expect(shop.calls).toHaveLength(0);
+    expect(h.db.rows("bot_order_requests")).toHaveLength(0);
+    expect(h.db.rows("orders")).toHaveLength(0);
+  });
+
+  it("con «Pago completo»: pide el pago completo; el anulador dice cuántos anuló", async () => {
+    setup({ store: storeRow({ org_id: ORG }) });
+    listed("pago_completo", "anulador", 5, 6);
+    const res = await call(pedido());
+    expect(res.status).toBe(422);
+    const message = (res.body as { message: string }).message;
+    expect(message).toContain("Cliente que anuló 5 de 6 pedidos y nunca recibió");
+    expect(message).toContain("cobra el pago completo");
+    expect(message).not.toContain("S/ 20");
+  });
+
+  it("la lista de pago adelantado manda, con su mensaje de siempre", async () => {
+    setup({
+      store: storeRow({ org_id: ORG }),
+      extra: {
+        prepay_list_entries: [
+          { id: "e1", org_id: ORG, phone: "51988805509", source: "manual", reason: "Rechazó en la puerta", evidence: {}, added_at: "2026-11-01T10:00:00Z", removed_at: null },
+        ],
+      },
+    });
+    listed("adelanto");
+    const res = await call(pedido());
+    expect((res.body as { message: string }).message).toContain("cobra el total por adelantado");
+    expect(h.db.rpcCalls.some((c) => c.name === "pago_online_lookup")).toBe(false);
+  });
+
+  it("fuera de la lista, o si no se pudo leer (falla abierto): crea el pedido", async () => {
+    setup({ store: storeRow({ org_id: ORG }) });
+    h.db.rpc = (async (name: string, args: Record<string, unknown>) => {
+      h.db.rpcCalls.push({ name, args });
+      if (name === "pago_online_lookup") return { data: null, error: { message: "timeout" } };
+      return { data: null, error: null };
+    }) as typeof h.db.rpc;
+    const res = await call(pedido());
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("el modo de entrega y las etiquetas del bot, como hoy en Shopify", () => {
   it("agencia: el bot no la crea (owner, 23-10-2026): 422 agency_needs_advisor, sin tienda ni candado", async () => {
     setup();

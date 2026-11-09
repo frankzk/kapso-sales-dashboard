@@ -84,6 +84,7 @@ import {
 import type { PagoOnlineRunView } from "@/lib/pago-online-view";
 import {
   acceptPagoOnlineList,
+  emptyPagoOnlineStoreList,
   removePagoOnlineExceptionAction,
   runPagoOnlineNow,
   sendPagoOnlineTestList,
@@ -1057,7 +1058,8 @@ function PagoOnlineRunCard({ title, run }: { title: string; run: PagoOnlineRunVi
           <>
             <p className="text-sm text-ink-700">
               {run.mode === "activo" ? "La lista tiene" : "La lista tendría"} <strong>{fmtInt(run.phones)}</strong> celulares
-              {run.emails ? ` y ${fmtInt(run.emails)} correos` : ""}: {fmtInt(run.twoOrMore)} con 2 o más entregas fallidas
+              {run.emails ? ` y ${fmtInt(run.emails)} correos` : ""}: {fmtInt(run.phones - run.anuladores)} con un pedido devuelto (
+              {fmtInt(run.twoOrMore)} con 2 o más) y {fmtInt(run.anuladores)} que anularon el 75 % o más de 5 o más pedidos
               {run.excepted ? ` · ${fmtInt(run.excepted)} exceptuados por Kapta (no van)` : ""}.
             </p>
             <p className={HELP}>
@@ -1127,7 +1129,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
   return (
     <SettingsGroup
       title={PAGO_ONLINE_LABEL}
-      description="Los clientes con una entrega fallida y ninguna recibida (contra entrega, Kenku y Aurela juntas, todo el historial): las tiendas no les ofrecen contra entrega y Kapta frena sus pedidos contra entrega. Nunca se muestran los celulares."
+      description="Los clientes que nunca recibieron un pedido contra entrega y tienen uno devuelto, o que anularon el 75 % o más de 5 o más pedidos (Kenku y Aurela juntas, todo el historial, sin los artefactos de la migración de plataforma): las tiendas no les ofrecen contra entrega y Kapta frena sus pedidos contra entrega. Nunca se muestran los celulares."
     >
       <SettingsSection
         id="pago-online-posicion"
@@ -1289,6 +1291,35 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
                     {s.lastTest.verifyPhones != null ? ` · la tienda dice ${fmtInt(s.lastTest.verifyPhones)}` : ""}
                   </p>
                 )}
+                <div className="pt-1">
+                  <OpsButton
+                    size="sm"
+                    variant="danger"
+                    disabled={!canEdit || runPending}
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          `¿Vaciar la lista automática de ${s.name}? La tienda dejará de frenar el contra entrega de TODOS los clientes de la lista automática hasta el próximo envío.${
+                            mode === "apagado" ? " Con la automatización en Apagado, no se vuelve a llenar sola." : " El envío diario de las 05:00 de Lima la vuelve a llenar, salvo que pongas la automatización en Apagado."
+                          } La lista manual de la tienda no cambia.`,
+                        )
+                      )
+                        return;
+                      setRunStatus(null);
+                      startRun(async () => {
+                        try {
+                          const r = await emptyPagoOnlineStoreList(org.orgId, s.id);
+                          setRunStatus(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: r.notice ?? "Vaciada" });
+                        } catch {
+                          setRunStatus({ kind: "error", text: NETWORK_ERROR });
+                        }
+                      });
+                    }}
+                    className="pointer-coarse:h-11"
+                  >
+                    Vaciar la lista de la tienda
+                  </OpsButton>
+                </div>
               </div>
             ))}
           </div>

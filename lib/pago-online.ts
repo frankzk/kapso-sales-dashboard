@@ -5,9 +5,14 @@
 //   * Un cliente es su celular: los ÚLTIMOS 9 DÍGITOS, con el historial de
 //     Kenku y Aurela juntos (la organización), TODO el historial y solo los
 //     pedidos contra entrega (`coverage` = `lima` o `provincia_cod`).
-//   * Entra a la lista si tiene al menos UNA entrega fallida —`devuelto`, o
-//     `anulado` después de salir (`dispatched_at` con fecha)— y NINGUNA
-//     recibida (`entregado`). Un anulado antes de salir no es una falla.
+//   * Cuentan solo los pedidos contra entrega SIN un hecho de la migración de
+//     plataforma (`cancelled_woocommerce`, `legacy_shopify_sale_cancelled`,
+//     `woo_sale_ended_pending_return`). Con CERO `entregado`, entra:
+//     (A) quien tiene al menos un `devuelto`; o
+//     (B) el «anulador»: 5 o más pedidos con el 75 % o más `anulado`
+//         (cualquier anulado, antes o después de salir).
+//     Un anulado después de salir, solo, ya no basta (cambio del owner del
+//     09-11-2026 sobre la consulta de referencia de las tiendas).
 //   * Kapta calcula la lista una vez al día (05:00 de Lima), la manda entera a
 //     cada tienda (cada envío la reemplaza) y la usa como freno en sus propios
 //     pedidos (Kapta, Chatby, el bot, las asesoras).
@@ -15,7 +20,7 @@
 //     (decisión del owner del 09-11-2026, «Adelanto (regla §8)»), con la
 //     opción de cambiarlo a «Pago completo» en Automatizaciones.
 //
-// La consulta SQL de la 0326 (`pago_online_compute`) es la que corre de
+// La consulta SQL de la 0326 (`pago_online_candidates`) es la que corre de
 // verdad; `pagoOnlineListOf` es la misma regla en TypeScript, para las pruebas
 // y para que la definición se lea en un solo sitio.
 //
@@ -31,9 +36,6 @@ export const PAGO_ONLINE_LABEL = "Pago solo online (lista automática)";
 export const PAGO_ONLINE_KEY = "pago_solo_online";
 /** La clave del historial del ajuste «qué se cobra». */
 export const PAGO_ONLINE_REQUIREMENT_KEY = "pago_solo_online_cobro";
-
-/** Lo que dice la ficha del pedido (pedido de la coordinación, 09-11-2026). */
-export const PAGO_ONLINE_HEADLINE = "Cliente con entrega fallida y ninguna recibida: solo pago online o adelanto";
 
 /** La ruta de COD Core en cada tienda (docs/kapta/pago-solo-online.md §4). */
 export const COD_CORE_API_PREFIX = "/wp-json/cod-core/v1";
@@ -83,61 +85,144 @@ export function pagoOnlineMaskedPhone(phone9: string | null | undefined): string
 /** Las coberturas contra entrega: las únicas que cuentan (§2). */
 export const PAGO_ONLINE_COD_COVERAGES: readonly string[] = ["lima", "provincia_cod"];
 
+/**
+ * El «anulador» (regla B, owner 09-11-2026): con CERO entregados, entra quien
+ * tiene al menos `PAGO_ONLINE_ANULADOR_MIN_ORDERS` pedidos contra entrega (el
+ * owner: «más de 4») y el `PAGO_ONLINE_ANULADOR_RATIO` o más de ellos
+ * `anulado` (cualquier anulado, antes o después de salir). Los MISMOS números
+ * están en `pago_online_candidates` (0326): si cambian, cambian en los dos.
+ */
+export const PAGO_ONLINE_ANULADOR_MIN_ORDERS = 5;
+export const PAGO_ONLINE_ANULADOR_RATIO = 0.75;
+
+/**
+ * Los hechos de la línea de tiempo (`order_events.kind`) que marcan un pedido
+ * como artefacto de la migración de Shopify a WooCommerce (MOM §38): la
+ * cancelación que llegó de WooCommerce, la venta vieja de Shopify cancelada y
+ * la venta de Woo terminada con devolución pendiente. Un pedido con uno de
+ * estos NO cuenta para la regla, ni como falla ni como entrega (owner,
+ * 09-11-2026).
+ */
+export const PAGO_ONLINE_MIGRATION_EVENT_KINDS: readonly string[] = [
+  "cancelled_woocommerce",
+  "legacy_shopify_sale_cancelled",
+  "woo_sale_ended_pending_return",
+];
+
 /** Lo que la regla mira de cada pedido (`order_master`). */
 export interface PagoOnlineOrderFact {
   customer_phone: string | null;
   coverage: string | null;
   general_status: string | null;
-  dispatched_at: string | null;
+  dispatched_at?: string | null;
+  /** Los `order_events.kind` del pedido; solo importan los de la migración. */
+  event_kinds?: readonly string[] | null;
 }
 
-/** ¿El pedido cuenta para la regla? Solo contra entrega. Pura. */
-export function isCodOrder(o: Pick<PagoOnlineOrderFact, "coverage">): boolean {
-  return PAGO_ONLINE_COD_COVERAGES.includes((o.coverage ?? "").trim());
+/** ¿El pedido tiene un hecho de la migración de plataforma? Pura. */
+export function hasMigrationCancel(o: Pick<PagoOnlineOrderFact, "event_kinds">): boolean {
+  return (o.event_kinds ?? []).some((k) => PAGO_ONLINE_MIGRATION_EVENT_KINDS.includes(k));
 }
 
-/** ¿Es una entrega fallida? `devuelto`, o `anulado` con fecha de salida. Pura. */
-export function isFailedDelivery(o: Pick<PagoOnlineOrderFact, "general_status" | "dispatched_at">): boolean {
-  const s = (o.general_status ?? "").trim();
-  if (s === "devuelto") return true;
-  return s === "anulado" && !!o.dispatched_at;
+/** ¿El pedido cuenta para la regla? Contra entrega y sin hecho de la migración. Pura. */
+export function isCodOrder(o: Pick<PagoOnlineOrderFact, "coverage" | "event_kinds">): boolean {
+  return PAGO_ONLINE_COD_COVERAGES.includes((o.coverage ?? "").trim()) && !hasMigrationCancel(o);
 }
 
-/** ¿Es una entrega recibida? Pura. */
-export function isReceivedDelivery(o: Pick<PagoOnlineOrderFact, "general_status">): boolean {
-  return (o.general_status ?? "").trim() === "entregado";
+/** Por qué entra un cliente: (A) devolvió, o (B) anula casi todo lo que pide. */
+export type PagoOnlineReason = "devuelto" | "anulador";
+export const PAGO_ONLINE_REASONS: readonly PagoOnlineReason[] = ["devuelto", "anulador"];
+
+export function isPagoOnlineReason(value: unknown): value is PagoOnlineReason {
+  return value === "devuelto" || value === "anulador";
 }
 
-/** La regla sobre las cuentas de un cliente: 1+ fallida y 0 recibidas. Pura. */
-export function pagoOnlineListed(counts: { failed: number; received: number }): boolean {
-  return counts.failed >= 1 && counts.received === 0;
+/** Las cuentas de un cliente: sus pedidos que cuentan y cuántos de cada estado. */
+export interface PagoOnlineCounts {
+  orders: number;
+  devueltos: number;
+  anulados: number;
+  received: number;
 }
 
-export interface PagoOnlineListItem {
+/**
+ * La regla sobre las cuentas de un cliente: con CERO entregados, `devuelto`
+ * si tiene uno o más devueltos; si no, `anulador` si tiene 5+ pedidos con el
+ * 75 % o más anulados. Null: no entra. Pura.
+ */
+export function pagoOnlineReasonOf(c: PagoOnlineCounts): PagoOnlineReason | null {
+  if (c.received > 0) return null;
+  if (c.devueltos >= 1) return "devuelto";
+  if (c.orders >= PAGO_ONLINE_ANULADOR_MIN_ORDERS && c.anulados >= PAGO_ONLINE_ANULADOR_RATIO * c.orders) return "anulador";
+  return null;
+}
+
+/** Quién es, para los mensajes: por qué entra, la cuenta que lo hizo entrar y sus pedidos. */
+export interface PagoOnlineWho {
+  reason: PagoOnlineReason;
+  /** Los devueltos (`devuelto`) o los anulados (`anulador`). */
+  failed: number | null;
+  /** Sus pedidos contra entrega que cuentan. */
+  orders: number | null;
+}
+
+export interface PagoOnlineListItem extends PagoOnlineWho {
   phone: string;
   failed: number;
+  orders: number;
 }
 
 /**
  * La lista de una organización, desde sus pedidos: los celulares (9 dígitos)
  * que cumplen la regla, sin los exceptuados por Kapta, ordenados. Es la misma
- * regla de `pago_online_compute` (0326). Pura.
+ * regla de `pago_online_candidates` (0326). Pura.
  */
 export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], exceptions: ReadonlySet<string> = new Set()): PagoOnlineListItem[] {
-  const byPhone = new Map<string, { failed: number; received: number }>();
+  const byPhone = new Map<string, PagoOnlineCounts>();
   for (const o of orders) {
     if (!isCodOrder(o)) continue;
     const phone = pagoOnlinePhoneKey(o.customer_phone);
     if (!phone) continue;
-    const c = byPhone.get(phone) ?? { failed: 0, received: 0 };
-    if (isFailedDelivery(o)) c.failed++;
-    if (isReceivedDelivery(o)) c.received++;
+    const c = byPhone.get(phone) ?? { orders: 0, devueltos: 0, anulados: 0, received: 0 };
+    const s = (o.general_status ?? "").trim();
+    c.orders++;
+    if (s === "devuelto") c.devueltos++;
+    if (s === "anulado") c.anulados++;
+    if (s === "entregado") c.received++;
     byPhone.set(phone, c);
   }
-  return [...byPhone]
-    .filter(([phone, c]) => pagoOnlineListed(c) && !exceptions.has(phone))
-    .map(([phone, c]) => ({ phone, failed: c.failed }))
-    .sort((a, b) => a.phone.localeCompare(b.phone));
+  const out: PagoOnlineListItem[] = [];
+  for (const [phone, c] of byPhone) {
+    if (exceptions.has(phone)) continue;
+    const reason = pagoOnlineReasonOf(c);
+    if (!reason) continue;
+    out.push({ phone, reason, failed: reason === "devuelto" ? c.devueltos : c.anulados, orders: c.orders });
+  }
+  return out.sort((a, b) => a.phone.localeCompare(b.phone));
+}
+
+/**
+ * El titular de la ficha y de los mensajes, con las cuentas del propio
+ * cliente y nada de otros:
+ *   * «Cliente con entrega devuelta y ninguna recibida»;
+ *   * «Cliente que anuló 5 de 6 pedidos y nunca recibió».
+ * Pura.
+ */
+export function pagoOnlineWhoText(who: PagoOnlineWho): string {
+  if (who.reason === "anulador" && who.failed && who.orders) return `Cliente que anuló ${who.failed} de ${who.orders} pedidos y nunca recibió`;
+  if (who.reason === "anulador") return "Cliente que anula casi todos sus pedidos y nunca recibió";
+  return "Cliente con entrega devuelta y ninguna recibida";
+}
+
+/** El titular con lo que le queda: «… : solo pago online o adelanto» (o «solo pago online» con pago completo). Pura. */
+export function pagoOnlineHeadline(who: PagoOnlineWho, requirement: PagoOnlineRequirement = PAGO_ONLINE_DEFAULT_REQUIREMENT): string {
+  return `${pagoOnlineWhoText(who)}: ${requirement === "adelanto" ? "solo pago online o adelanto" : "solo pago online"}`;
+}
+
+/** Las cuentas entre paréntesis para un `devuelto` («(2 devueltos, 0 recibidas)»); el anulador ya las dice. Pura. */
+function whoCounts(who: PagoOnlineWho): string {
+  if (who.reason !== "devuelto" || !who.failed) return "";
+  return ` (${who.failed} ${who.failed === 1 ? "devuelto" : "devueltos"}, 0 recibidas)`;
 }
 
 /** Un correo que se puede mandar: en minúsculas, con arroba y dominio. Null si no sirve. Pura. */
@@ -171,17 +256,27 @@ export function pagoOnlineEmailsOf(
 
 // ── El envío ────────────────────────────────────────────────────────────────
 
-/** «1+ entrega fallida y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00» (§4.2). Pura. */
+/**
+ * «1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y
+ * Aurela, calculada 2026-11-10 05:00» (§4.2: texto libre que la tienda
+ * muestra en su panel). Pura.
+ */
 export function pagoOnlineRegla(storeNames: readonly string[], computedAt: Date): string {
   const lima = new Date(computedAt.getTime() - 5 * 3_600_000).toISOString();
   const names = storeNames.length <= 1 ? (storeNames[0] ?? "") : `${storeNames.slice(0, -1).join(", ")} y ${storeNames[storeNames.length - 1]}`;
-  return `1+ entrega fallida y 0 recibidas, ${names}, calculada ${lima.slice(0, 10)} ${lima.slice(11, 16)}`;
+  return `1+ devuelto, o ${PAGO_ONLINE_ANULADOR_MIN_ORDERS}+ pedidos con ${Math.round(PAGO_ONLINE_ANULADOR_RATIO * 100)} % anulados, y 0 recibidas, ${names}, calculada ${lima.slice(0, 10)} ${lima.slice(11, 16)}`;
 }
 
 export interface PagoOnlinePayload {
   celulares: string[];
   correos: string[];
-  regla: string;
+  /** Sin `regla` al vaciar: el cuerpo es `{"celulares": [], "correos": []}` (§4.2). */
+  regla?: string;
+}
+
+/** El cuerpo para vaciar la lista automática de una tienda (§4.2), tal cual. Pura. */
+export function pagoOnlineEmptyPayload(): PagoOnlinePayload {
+  return { celulares: [], correos: [] };
 }
 
 /** El cuerpo del POST (§4.2): la lista ENTERA, sin repetidos. Pura. */
@@ -372,12 +467,61 @@ export type PagoOnlineBrake =
 export type PagoOnlinePoint = "confirmar" | "guia";
 
 /** El mensaje del freno, sin ningún dato de otros clientes. Pura. */
-export function pagoOnlineBlockMessage(point: PagoOnlinePoint, requirement: PagoOnlineRequirement, failed: number | null): string {
-  const counts = failed && failed > 0 ? ` (${failed} ${failed === 1 ? "entrega fallida" : "entregas fallidas"}, 0 recibidas)` : "";
-  const head = `${PAGO_ONLINE_HEADLINE}${counts}.`;
+export function pagoOnlineBlockMessage(point: PagoOnlinePoint, requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
+  const head = `${pagoOnlineHeadline(who, requirement)}${whoCounts(who)}.`;
   const what = requirement === "adelanto" ? `el adelanto de ${ADELANTO_MINIMO_LABEL} validado (o el pago online completo)` : "el pago completo validado (online o Yape)";
   if (point === "confirmar") return `${head} No se confirma contra entrega sin ${what}.`;
   return `${head} La guía no sale sin ${what}.`;
+}
+
+/**
+ * Lo que se dice al CREAR un pedido para un celular de la lista (el bot de
+ * Kapso y «Generar pedido» de Leads), sin datos de otros clientes. Pura.
+ *   * `bot`: el bot no crea pedidos contra entrega para este celular, en las
+ *     dos posiciones: no sabe cobrar. Deriva a una asesora, que cobra el
+ *     adelanto de S/ 20 (`adelanto`) o el pago completo (`pago_completo`).
+ *   * `pedido`, con `pago_completo`: «Generar pedido» no lo crea (la venta va
+ *     por la web, con el pago online, como la lista de pago adelantado).
+ *   * `pedido_aviso`, con `adelanto`: «Generar pedido» SÍ lo crea —es donde
+ *     se registra el adelanto, en «Cómo sale el pedido» (§25.2)— y el aviso
+ *     dice que no se confirma ni sale sin el adelanto validado.
+ */
+export function pagoOnlineOrderMessage(point: "bot" | "pedido" | "pedido_aviso", requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
+  const head = `${pagoOnlineHeadline(who, requirement)}${whoCounts(who)}.`;
+  if (point === "bot") {
+    return requirement === "adelanto"
+      ? `${head} El bot no crea pedidos contra entrega para este celular: deriva la conversación a una asesora, que cobra el adelanto de ${ADELANTO_MINIMO_LABEL} (o el pago online completo) antes de confirmar el pedido.`
+      : `${head} El bot no crea pedidos contra entrega para este celular: deriva la conversación a una asesora, que cobra el pago completo (o que pague online en la web).`;
+  }
+  if (point === "pedido") {
+    return requirement === "adelanto"
+      ? `${head} El pedido no se confirma ni sale sin el adelanto de ${ADELANTO_MINIMO_LABEL} validado.`
+      : `${head} Kapta no crea pedidos contra entrega para este celular: que pague online en la web, o cobra el pago completo por adelantado (link de pago o Yape) antes de generarlo.`;
+  }
+  return `Ojo: ${head} No se confirma ni sale sin el adelanto de ${ADELANTO_MINIMO_LABEL} validado: regístralo en «Cómo sale el pedido».`;
+}
+
+/** La llave de un celular de la lista vigente para marcar filas: organización + 9 dígitos. Pura. */
+export function pagoOnlineListedKey(orgId: string, phone9: string): string {
+  return `${orgId}|${phone9}`;
+}
+
+/**
+ * Marca las filas de una página del Master con `pago_online_listed`, desde UNA
+ * lectura del servidor (llaves `pagoOnlineListedKey`). Cada fila con la
+ * organización de SU tienda. Sin lectura (`null`), no afirma nada. Pura.
+ */
+export function withPagoOnlineListed<T extends { customer_phone?: string | null; store_id?: string | null }>(
+  rows: T[],
+  listed: ReadonlySet<string> | null,
+  storeOrg: ReadonlyMap<string, string>,
+): (T & { pago_online_listed?: boolean })[] {
+  if (!listed) return rows;
+  return rows.map((r) => {
+    const key = pagoOnlinePhoneKey(r.customer_phone ?? null);
+    const org = r.store_id ? storeOrg.get(r.store_id) : undefined;
+    return { ...r, pago_online_listed: !!key && !!org && listed.has(pagoOnlineListedKey(org, key)) };
+  });
 }
 
 /**
@@ -387,14 +531,15 @@ export function pagoOnlineBlockMessage(point: PagoOnlinePoint, requirement: Pago
  */
 export function pagoOnlineBrakeDecision(input: {
   listed: boolean;
-  failed?: number | null;
+  who?: PagoOnlineWho | null;
   requirement: PagoOnlineRequirement;
   facts: OrderPaymentFacts;
   point: PagoOnlinePoint;
 }): PagoOnlineBrake {
   if (!input.listed) return { state: "ok", listed: false };
   if (pagoOnlineRequirementMet(input.requirement, input.facts)) return { state: "ok", listed: true, met: true };
-  return { state: "blocked", listed: true, met: false, message: pagoOnlineBlockMessage(input.point, input.requirement, input.failed ?? null) };
+  const who = input.who ?? { reason: "devuelto", failed: null, orders: null };
+  return { state: "blocked", listed: true, met: false, message: pagoOnlineBlockMessage(input.point, input.requirement, who) };
 }
 
 // ── Posición, alertas y validaciones ────────────────────────────────────────

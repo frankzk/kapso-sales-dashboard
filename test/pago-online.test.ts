@@ -13,13 +13,15 @@
 import { describe, expect, it } from "vitest";
 import {
   PAGO_ONLINE_DEFAULT_REQUIREMENT,
-  PAGO_ONLINE_HEADLINE,
+  PAGO_ONLINE_MIGRATION_EVENT_KINDS,
+  hasMigrationCancel,
+  PAGO_ONLINE_ANULADOR_MIN_ORDERS,
+  PAGO_ONLINE_ANULADOR_RATIO,
   PAGO_ONLINE_MAX_ATTEMPTS,
   PAGO_ONLINE_REQUIREMENT_LABEL,
   PAGO_ONLINE_RETRY_DELAYS_MIN,
   classifyCodCoreAttempt,
   isFailedDay,
-  isFailedDelivery,
   limaDateOf,
   nextRetryAt,
   pagoOnlineAlertText,
@@ -28,6 +30,11 @@ import {
   pagoOnlineEmailKey,
   pagoOnlineEmailsOf,
   pagoOnlineGuard,
+  pagoOnlineHeadline,
+  pagoOnlineOrderMessage,
+  pagoOnlineReasonOf,
+  pagoOnlineWhoText,
+  pagoOnlineEmptyPayload,
   pagoOnlineListOf,
   pagoOnlineMaskedPhone,
   pagoOnlinePayload,
@@ -71,33 +78,85 @@ describe("el celular", () => {
   });
 });
 
-describe("la regla", () => {
-  it("entrega fallida: devuelto, o anulado después de salir; el anulado antes de salir no", () => {
-    expect(isFailedDelivery({ general_status: "devuelto", dispatched_at: null })).toBe(true);
-    expect(isFailedDelivery({ general_status: "anulado", dispatched_at: OUT })).toBe(true);
-    expect(isFailedDelivery({ general_status: "anulado", dispatched_at: null })).toBe(false);
-    expect(isFailedDelivery({ general_status: "en_proceso", dispatched_at: OUT })).toBe(false);
-    expect(isFailedDelivery({ general_status: "entregado", dispatched_at: OUT })).toBe(false);
-  });
-
-  it("1+ fallida y 0 recibidas, las tiendas juntas, por los últimos 9 dígitos", () => {
+describe("la regla (owner, 09-11-2026)", () => {
+  it("(A) 1+ devuelto y 0 recibidas, las tiendas juntas, por los últimos 9 dígitos", () => {
     const list = pagoOnlineListOf([
       o("+51 987 654 321", "lima", "devuelto", OUT),
-      o("987654321", "provincia_cod", "anulado", OUT),
+      o("987654321", "provincia_cod", "devuelto", OUT),
+      o("987654321", "lima", "pendiente"),
       o("912345678", "lima", "devuelto", OUT),
       o("51912345678", "lima", "entregado", OUT),
-      o("913000000", "lima", "anulado", null),
     ]);
-    expect(list).toEqual([{ phone: "987654321", failed: 2 }]);
+    expect(list).toEqual([{ phone: "987654321", reason: "devuelto", failed: 2, orders: 3 }]);
+  });
+
+  it("un anulado después de salir, solo, ya no basta", () => {
+    expect(pagoOnlineListOf([o("913000000", "lima", "anulado", OUT)])).toEqual([]);
+    expect(pagoOnlineListOf([o("913000000", "lima", "anulado", OUT), o("913000000", "lima", "anulado", null)])).toEqual([]);
+  });
+
+  it("(B) el anulador: 5 o más pedidos con el 75 % o más anulados, antes o después de salir", () => {
+    expect(PAGO_ONLINE_ANULADOR_MIN_ORDERS).toBe(5);
+    expect(PAGO_ONLINE_ANULADOR_RATIO).toBe(0.75);
+    const rows = (phone: string, anulados: number, otros: number, otro = "pendiente") => [
+      ...Array.from({ length: anulados }, (_, i) => o(phone, "lima", "anulado", i % 2 ? OUT : null)),
+      ...Array.from({ length: otros }, () => o(phone, "lima", otro)),
+    ];
+    expect(pagoOnlineListOf(rows("921000000", 4, 1))).toEqual([{ phone: "921000000", reason: "anulador", failed: 4, orders: 5 }]);
+    // 75 % justo entra; menos de 5 pedidos o menos del 75 %, no; con una entrega, tampoco.
+    expect(pagoOnlineListOf(rows("926000000", 6, 2))).toEqual([{ phone: "926000000", reason: "anulador", failed: 6, orders: 8 }]);
+    expect(pagoOnlineListOf(rows("922000000", 4, 0))).toEqual([]);
+    expect(pagoOnlineListOf(rows("923000000", 3, 2))).toEqual([]);
+    expect(pagoOnlineListOf(rows("924000000", 5, 1, "entregado"))).toEqual([]);
+  });
+
+  it("con un devuelto manda (A) aunque también anule casi todo", () => {
+    const list = pagoOnlineListOf([
+      o("927000000", "lima", "devuelto", OUT),
+      ...Array.from({ length: 5 }, () => o("927000000", "lima", "anulado")),
+    ]);
+    expect(list).toEqual([{ phone: "927000000", reason: "devuelto", failed: 1, orders: 6 }]);
+  });
+
+  it("la regla sobre las cuentas", () => {
+    expect(pagoOnlineReasonOf({ orders: 1, devueltos: 1, anulados: 0, received: 0 })).toBe("devuelto");
+    expect(pagoOnlineReasonOf({ orders: 2, devueltos: 1, anulados: 0, received: 1 })).toBeNull();
+    expect(pagoOnlineReasonOf({ orders: 5, devueltos: 0, anulados: 4, received: 0 })).toBe("anulador");
+    expect(pagoOnlineReasonOf({ orders: 5, devueltos: 0, anulados: 3, received: 0 })).toBeNull();
+    expect(pagoOnlineReasonOf({ orders: 4, devueltos: 0, anulados: 4, received: 0 })).toBeNull();
   });
 
   it("solo cuentan los pedidos contra entrega (lima, provincia_cod)", () => {
     expect(pagoOnlineListOf([o("914000000", "agencia", "devuelto", OUT)])).toEqual([]);
     expect(pagoOnlineListOf([o("914000000", null, "devuelto", OUT)])).toEqual([]);
-    // Una entrega por agencia tampoco lo saca: la consulta de referencia solo mira contra entrega.
+    // Una entrega por agencia tampoco lo saca: solo cuenta contra entrega.
     expect(pagoOnlineListOf([o("915000000", "lima", "devuelto", OUT), o("915000000", "agencia", "entregado", OUT)])).toEqual([
-      { phone: "915000000", failed: 1 },
+      { phone: "915000000", reason: "devuelto", failed: 1, orders: 1 },
     ]);
+  });
+
+  it("los pedidos de la migración de plataforma no cuentan para nada", () => {
+    expect(PAGO_ONLINE_MIGRATION_EVENT_KINDS).toEqual(["cancelled_woocommerce", "legacy_shopify_sale_cancelled", "woo_sale_ended_pending_return"]);
+    for (const kind of PAGO_ONLINE_MIGRATION_EVENT_KINDS) {
+      const devuelto = { ...o("918000000", "lima", "devuelto", OUT), event_kinds: ["comment", kind] };
+      expect(hasMigrationCancel(devuelto), kind).toBe(true);
+      expect(pagoOnlineListOf([devuelto]), kind).toEqual([]);
+    }
+    // Otros hechos no lo cambian.
+    expect(pagoOnlineListOf([{ ...o("918000000", "lima", "devuelto", OUT), event_kinds: ["comment", "cancelled_shopify"] }])).toHaveLength(1);
+    // Tampoco cuentan como entrega, ni para el anulador.
+    expect(
+      pagoOnlineListOf([
+        { ...o("919000000", "lima", "entregado", OUT), event_kinds: ["legacy_shopify_sale_cancelled"] },
+        o("919000000", "lima", "devuelto", OUT),
+      ]),
+    ).toEqual([{ phone: "919000000", reason: "devuelto", failed: 1, orders: 1 }]);
+    expect(
+      pagoOnlineListOf([
+        { ...o("925000000", "lima", "anulado"), event_kinds: ["cancelled_woocommerce"] },
+        ...Array.from({ length: 4 }, () => o("925000000", "lima", "anulado")),
+      ]),
+    ).toEqual([]);
   });
 
   it("sale de la lista en cuanto recibe un pedido", () => {
@@ -114,6 +173,15 @@ describe("la regla", () => {
   it("va ordenada, como la manda Kapta", () => {
     const list = pagoOnlineListOf([o("999000000", "lima", "devuelto", OUT), o("911000000", "lima", "devuelto", OUT)]);
     expect(list.map((x) => x.phone)).toEqual(["911000000", "999000000"]);
+  });
+
+  it("el titular dice por qué, con sus cuentas", () => {
+    expect(pagoOnlineWhoText({ reason: "devuelto", failed: 1, orders: 1 })).toBe("Cliente con entrega devuelta y ninguna recibida");
+    expect(pagoOnlineWhoText({ reason: "anulador", failed: 5, orders: 6 })).toBe("Cliente que anuló 5 de 6 pedidos y nunca recibió");
+    expect(pagoOnlineHeadline({ reason: "devuelto", failed: 1, orders: 1 }, "adelanto")).toBe(
+      "Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto",
+    );
+    expect(pagoOnlineHeadline({ reason: "anulador", failed: 5, orders: 6 }, "pago_completo")).toBe("Cliente que anuló 5 de 6 pedidos y nunca recibió: solo pago online");
   });
 });
 
@@ -146,7 +214,7 @@ describe("el envío", () => {
 
   it("la regla dice las tiendas y la hora de Lima del cálculo", () => {
     expect(pagoOnlineRegla(["Kenku Peru", "Aurela"], new Date("2026-11-10T10:00:00Z"))).toBe(
-      "1+ entrega fallida y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
+      "1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
     );
     expect(limaDateOf(new Date("2026-11-10T04:59:00Z"))).toBe("2026-11-09");
   });
@@ -275,12 +343,43 @@ describe("lo que se cobra y el freno de un pedido", () => {
       listed: true,
       met: true,
     });
-    const b = pagoOnlineBrakeDecision({ listed: true, failed: 2, requirement: "adelanto", facts: facts("adelanto_cargado"), point: "confirmar" });
+    const who = { reason: "devuelto" as const, failed: 2, orders: 3 };
+    const b = pagoOnlineBrakeDecision({ listed: true, who, requirement: "adelanto", facts: facts("adelanto_cargado"), point: "confirmar" });
     expect(b.state).toBe("blocked");
-    expect(b.state === "blocked" && b.message).toContain(PAGO_ONLINE_HEADLINE);
-    expect(b.state === "blocked" && b.message).toContain("2 entregas fallidas, 0 recibidas");
+    expect(b.state === "blocked" && b.message).toContain("Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
+    expect(b.state === "blocked" && b.message).toContain("(2 devueltos, 0 recibidas)");
     expect(b.state === "blocked" && b.message).toContain("No se confirma contra entrega");
-    expect(pagoOnlineBlockMessage("guia", "pago_completo", 1)).toContain("1 entrega fallida");
-    expect(pagoOnlineBlockMessage("guia", "pago_completo", 1)).toContain("pago completo");
+    const anul = pagoOnlineBlockMessage("guia", "pago_completo", { reason: "anulador", failed: 5, orders: 6 });
+    expect(anul).toContain("Cliente que anuló 5 de 6 pedidos y nunca recibió: solo pago online.");
+    expect(anul).toContain("pago completo");
+  });
+});
+
+describe("crear un pedido para un celular de la lista (el bot y «Generar pedido»)", () => {
+  const who = { reason: "devuelto" as const, failed: 1, orders: 1 };
+
+  it("el bot pide el adelanto de S/ 20 con «Adelanto (regla §8)», no el total", () => {
+    const m = pagoOnlineOrderMessage("bot", "adelanto", who);
+    expect(m).toContain("adelanto de S/ 20");
+    expect(m).toContain("deriva la conversación a una asesora");
+    expect(m).not.toContain("total");
+  });
+
+  it("con «Pago completo», el bot pide el pago completo", () => {
+    const m = pagoOnlineOrderMessage("bot", "pago_completo", { reason: "anulador", failed: 4, orders: 5 });
+    expect(m).toContain("Cliente que anuló 4 de 5 pedidos y nunca recibió");
+    expect(m).toContain("cobra el pago completo");
+    expect(m).not.toContain("S/ 20");
+  });
+
+  it("«Generar pedido»: con pago completo frena; con adelanto, avisa", () => {
+    expect(pagoOnlineOrderMessage("pedido", "pago_completo", who)).toContain("Kapta no crea pedidos contra entrega para este celular");
+    const aviso = pagoOnlineOrderMessage("pedido_aviso", "adelanto", who);
+    expect(aviso).toContain("adelanto de S/ 20 validado");
+    expect(aviso).toContain("«Cómo sale el pedido»");
+  });
+
+  it("vaciar la lista de una tienda es el cuerpo del §4.2, tal cual", () => {
+    expect(pagoOnlineEmptyPayload()).toEqual({ celulares: [], correos: [] });
   });
 });

@@ -42,6 +42,20 @@ Detalles:
   reemplaza la lista completa, basta con que deje de cumplir la regla.
 - **Cliente = celular.** Se identifica por los **últimos 9 dígitos** del celular. El correo es opcional (sección 3.2).
 
+> **Nota de Kapta (09-11-2026): la regla final del owner cambió, y la lista de Kapta manda.** Lo de arriba y la
+> consulta de referencia de la sección 3.1 eran la propuesta de las tiendas. La regla que Kapta aplica y manda es:
+>
+> - Mismo cliente (últimos 9 dígitos), Kenku y Aurela juntas, todo el historial, solo contra entrega.
+> - **No cuentan para nada** (ni como falla ni como entrega) los pedidos con un hecho de la **migración de
+>   plataforma** en Kapta (`cancelled_woocommerce`, `legacy_shopify_sale_cancelled`, `woo_sale_ended_pending_return`):
+>   son artefactos del cambio de Shopify a WooCommerce, no clientes que no recibieron.
+> - Con **cero `entregado`**, entra si **(A)** tiene al menos un `devuelto`, o **(B)** tiene **5 o más** pedidos y el
+>   **75 % o más** están `anulado` (antes o después de salir: el «anulador»).
+> - Un `anulado` después de salir, **solo, ya no basta**.
+>
+> Así, la consulta de la sección 3.1 ya no reproduce la lista. No importa: las tiendas no la calculan, reciben la de
+> Kapta cada día. Medido el 09-11-2026: ~3.149 clientes (3.141 por devuelto y 6 «anuladores»).
+
 ## 3. Pieza 1: cálculo diario de la lista
 
 ### 3.1 Celulares
@@ -209,7 +223,7 @@ pedidos que crea él mismo.
    **Respuesta de Kapta (09-11-2026):** sí, en una parte de los pedidos (el `billing.email` de los de WooCommerce y el
    `email` de los de Shopify). Kapta manda el correo de un cliente de la lista **solo si ese correo aparece con un único
    celular** en los pedidos de Kenku y Aurela: un correo compartido (la familia, el de una asesora) bloquearía a alguien
-   que no está en la lista. Medido hoy: ~128 de los ~3.885 clientes de la lista tienen correo. El celular sigue siendo
+   que no está en la lista. Medido hoy: 80 de los ~3.149 clientes de la lista tienen correo. El celular sigue siendo
    lo principal.
 
 2. ¿A qué hora les conviene correr el cálculo? (Sugerido: 05:00 de Lima.)
