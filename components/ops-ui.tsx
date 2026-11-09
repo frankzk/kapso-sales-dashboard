@@ -43,7 +43,8 @@ export const OpsButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTML
  *  van rellenas y sin anillo. */
 export type CategoryTone = "slate" | "sky" | "indigo" | "teal" | "orange" | "emerald";
 
-export type BadgeTone = "neutral" | "info" | "ok" | "warn" | "crit" | "urgent" | "brand" | CategoryTone;
+/** `blacklist`: la chapa «Lista negra» (MOM §41.11), negra con letras blancas (owner 09-11-2026). */
+export type BadgeTone = "neutral" | "info" | "ok" | "warn" | "crit" | "urgent" | "brand" | "blacklist" | CategoryTone;
 
 const BADGE_TONE: Record<BadgeTone, string> = {
   neutral: "bg-line text-ink-600",
@@ -53,6 +54,7 @@ const BADGE_TONE: Record<BadgeTone, string> = {
   crit: "bg-crit-bg text-crit-fg",
   urgent: "bg-urgent text-white",
   brand: "bg-brand-50 text-brand-700",
+  blacklist: "bg-ink-900 text-white",
   slate: "bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200",
   sky: "bg-sky-50 text-sky-800 ring-1 ring-inset ring-sky-200",
   indigo: "bg-indigo-50 text-indigo-800 ring-1 ring-inset ring-indigo-200",
