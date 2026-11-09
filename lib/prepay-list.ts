@@ -39,9 +39,9 @@ import { guideDoorRejection } from "@/lib/reproprovincia";
 import { orderFullyPaid, type OrderPaymentFacts } from "@/lib/order-paid";
 import { remainingCents } from "@/lib/payment-rounding";
 
-/** Cómo se llama en pantalla. «Lista negra» es su sinónimo en el habla del equipo. */
+/** Cómo se llama en pantalla. Desde el 09-11-2026 «Lista negra» es la lista automática (MOM §41.11); esta es la «lista de pago completo», a mano. */
 export const PREPAY_LIST_LABEL = "Lista de pago adelantado";
-export const PREPAY_LIST_SYNONYM = "lista negra";
+export const PREPAY_LIST_SYNONYM = "lista de pago completo";
 export const PREPAY_LIST_PATH = "/dashboard/clientes/pago-adelantado";
 
 /** Lo que se le exige al cliente de la lista. */

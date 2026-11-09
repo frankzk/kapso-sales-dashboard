@@ -621,7 +621,7 @@ export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   programado: "Tiene envío programado: la guía es la del día programado.",
   guia_no_creada: "Aliclik no dejó crear la guía.",
   pago_online:
-    "Cliente de «Pago solo online» (entrega devuelta, o anula casi todos sus pedidos, y nunca recibió): solo pago online o adelanto. Kapta no crea la guía contra entrega ni le escribe: cobra lo que pide «Pago solo online» y confirma tú.",
+    "Cliente de la «Lista negra» (entrega devuelta, o anula casi todos sus pedidos, y nunca recibió): solo pago online o adelanto. Kapta no crea la guía contra entrega ni le escribe: cobra el adelanto y confirma tú.",
 };
 
 /** ¿El motivo es de la guía (la confirmación sí cuadró)? */

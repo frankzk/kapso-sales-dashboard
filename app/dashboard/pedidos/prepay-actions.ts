@@ -99,7 +99,7 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
     if (lookup.state === "unread") return { listed: false, error: "No se pudo comprobar la lista de pago adelantado." };
     if (lookup.state === "not_listed") {
       const auto = await pagoOnlineLookup(admin, orgId, order.customer_phone);
-      if (auto.state === "unread") return { listed: false, error: "No se pudo comprobar la lista «Pago solo online»." };
+      if (auto.state === "unread") return { listed: false, error: "No se pudo comprobar la «Lista negra»." };
       if (auto.state === "not_listed") return { listed: false };
       return {
         listed: false,
