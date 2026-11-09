@@ -37,6 +37,7 @@ vi.mock("@/app/dashboard/pedidos/aliclik-actions", () => ({
   previewAliclikGuide: (...args: unknown[]) => mocks.preview(...args),
   createAliclikGuide: (...args: unknown[]) => mocks.create(...args),
   linkExistingAliclikGuide: vi.fn(async () => ({ error: "no" })),
+  loadAliclikGpsCandidates: vi.fn(async () => ({ candidates: [] })),
 }));
 vi.mock("@/app/dashboard/pedidos/actions", () => ({
   loadOrderChatby: async () => ({ status: "sin_chatby" }),
