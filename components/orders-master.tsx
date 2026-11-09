@@ -2533,7 +2533,7 @@ function MasterTable({
                     {/* «Pago solo online» (MOM §41.11), si no está ya en la lista de arriba. */}
                     {!r.prepay_listed && r.pago_online_listed && (
                       <Badge
-                        tone="warn"
+                        tone="blacklist"
                         className="xl:mt-0.5"
                         title="Lista negra: devolvió un pedido (o anula casi todos) y nunca recibió. Sin el adelanto de S/ 20 validado (o el pago completo, según el ajuste) no se confirma ni sale contra entrega."
                       >
