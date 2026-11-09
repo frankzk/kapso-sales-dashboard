@@ -25477,7 +25477,10 @@ frenos de abajo no dependen de esa declaración.
 - **Lo incierto no se reintenta.** Si Kapso o Aliclik no confirman, la acción
   queda **incierta** y el agente recibe «no lo vuelvas a pedir». Un WhatsApp
   incierto queda igual en la Actividad, con «puede haber salido».
-- **Todo en la Actividad**, marcado «Agente de IA».
+- **Todo en la Actividad**, marcado «Agente de IA», con su propio marcador: un
+  cuadro naranja con dos ojos (owner, 09-11-2026), en vez del icono gris del
+  comentario o del mensaje, para distinguirlo de un vistazo de lo que hizo una
+  persona. Es un dibujo propio, no el logo de una marca.
 - **Se revoca en un clic**: el token, o el interruptor en Apagado.
 
 **La pantalla.** En **Automatizaciones › Conector de IA**, la tarjeta «Lo que

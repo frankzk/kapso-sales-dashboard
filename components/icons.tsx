@@ -140,6 +140,19 @@ export function IconBot(props: IconProps) {
   );
 }
 
+/**
+ * El agente de IA (MOM §42.9): dos ojos. Un dibujo propio, no el logo de
+ * ninguna marca. Relleno, para leerse blanco sobre el naranja del marcador.
+ */
+export function IconAgentEyes(props: IconProps) {
+  return (
+    <svg {...base(props)} fill="currentColor" stroke="none">
+      <rect x="4.6" y="4.5" width="5.6" height="13" rx="2.8" transform="rotate(-10 7.4 11)" />
+      <rect x="13.8" y="4.5" width="5.6" height="13" rx="2.8" transform="rotate(10 16.6 11)" />
+    </svg>
+  );
+}
+
 export function IconHeadset(props: IconProps) {
   return (
     <svg {...base(props)}>

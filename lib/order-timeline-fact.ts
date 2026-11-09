@@ -44,7 +44,9 @@ export type TimelineIcon =
   | "clave"
   | "automatico"
   | "ubicacion"
-  | "estado";
+  | "estado"
+  // Lo que dejó el agente de IA por el conector (MOM §42.9): su propio marcador.
+  | "agente_ia";
 
 /** Las macroetapas del MOM cuyo matiz toma un hito. */
 export type TimelineStage = "por_confirmar" | "preparacion" | "por_despachar" | "en_curso" | "por_cerrar" | "finalizado";
@@ -58,6 +60,8 @@ export interface TimelineFact {
 
 export type TimelineFactInput = Pick<TimelineEntry, "kind" | "newStatus" | "origin"> & {
   leadStatus?: string | null;
+  /** `agente_ia`: lo dejó el agente de IA (nota o WhatsApp) y lleva su marcador. */
+  source?: string | null;
 };
 
 const hito = (icon: TimelineIcon, stage: TimelineStage): TimelineFact => ({ icon, stage });
@@ -222,6 +226,9 @@ export function timelineOriginLabel(t: Pick<TimelineEntry, "origin" | "source">)
 }
 
 export function timelineFact(t: TimelineFactInput): TimelineFact {
+  // Lo que hizo el agente de IA se reconoce de un vistazo (owner, 09-11-2026):
+  // su nota o su WhatsApp, nunca un hito.
+  if (t.source === "agente_ia") return consulta("agente_ia");
   // De Leads: el lead pasó a «Pedido generado». Es el nacimiento del pedido
   // aunque lo escriba el automático o una llamada.
   if (t.origin === "leads" && t.leadStatus === "pedido_generado") return hito("pedido", "por_confirmar");
