@@ -141,14 +141,19 @@ export function IconBot(props: IconProps) {
 }
 
 /**
- * El agente de IA (MOM §42.9): dos ojos. Un dibujo propio, no el logo de
- * ninguna marca. Relleno, para leerse blanco sobre el naranja del marcador.
+ * El agente de IA (MOM §42.9): un hexágono de puntas redondeadas con dos ojos
+ * (owner, 09-11-2026). Un dibujo propio, no el logo de ninguna marca. Es el
+ * marcador entero de 28 px: el hexágono toma el color del texto (naranja en la
+ * ficha) y lleva su halo blanco, que corta el riel como el `ring` de los demás.
  */
-export function IconAgentEyes(props: IconProps) {
+export function IconAgentBadge(props: IconProps) {
+  const hex = "M14 3.5 L23.1 8.75 L23.1 19.25 L14 24.5 L4.9 19.25 L4.9 8.75 Z";
   return (
-    <svg {...base(props)} fill="currentColor" stroke="none">
-      <rect x="4.6" y="4.5" width="5.6" height="13" rx="2.8" transform="rotate(-10 7.4 11)" />
-      <rect x="13.8" y="4.5" width="5.6" height="13" rx="2.8" transform="rotate(10 16.6 11)" />
+    <svg width={28} height={28} viewBox="0 0 28 28" {...props}>
+      <path d={hex} fill="#fff" stroke="#fff" strokeWidth={6} strokeLinejoin="round" />
+      <path d={hex} fill="currentColor" stroke="currentColor" strokeWidth={3.5} strokeLinejoin="round" />
+      <rect x="9.3" y="9.6" width="3.6" height="8.4" rx="1.8" fill="#fff" transform="rotate(-10 11.1 13.8)" />
+      <rect x="15.1" y="9.6" width="3.6" height="8.4" rx="1.8" fill="#fff" transform="rotate(10 16.9 13.8)" />
     </svg>
   );
 }
