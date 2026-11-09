@@ -438,13 +438,17 @@ export async function simulateRetriesNow(orgId: string): Promise<RetrySimulation
 // ── La «Lista de pago adelantado» (0309, MOM §41) ───────────────────────────
 
 /**
- * Apagado / Simulación / Activo de la regla automática de la lista. En
- * Activo agrega a la lista, en cada pasada, a quien rechazó en la puerta o no
- * recogió en la agencia (respetando las bajas a mano). Apagarla no quita a
- * nadie de la lista.
+ * Apagado / Simulación / Activo de la regla automática de la lista a mano
+ * («rechazó en la puerta / no recogió en la agencia», MOM §41.2). RETIRADA por
+ * el owner el 09-11-2026: la lista automática ya cubre a esos clientes (sus
+ * pedidos terminan `devuelto`). Ya no tiene controles en pantalla, y aquí solo
+ * se deja apagarla; el código de la regla queda dormido.
  */
 export async function setPrepayAutoMode(orgId: string, mode: string): Promise<AutomationActionResult> {
   if (!isPrepayMode(mode)) return { error: "Esa posición no existe." };
+  if (mode !== "apagado") {
+    return { error: "La regla automática de la lista a mano está retirada (owner, 09-11-2026): la Lista negra automática ya cubre a esos clientes." };
+  }
   const g = await gate(orgId);
   if ("error" in g) return { error: g.error };
   const current = await loadPrepaySettings(g.admin, orgId);
@@ -466,14 +470,14 @@ export async function setPrepayAutoMode(orgId: string, mode: string): Promise<Au
   });
   revalidatePath(PANEL_PATH);
   revalidatePath(PREPAY_LIST_PATH);
-  return { notice: warn ?? `Lista de pago adelantado: regla en ${PREPAY_MODE_LABEL[mode]}.` };
+  return { notice: warn ?? `Lista negra: regla a mano en ${PREPAY_MODE_LABEL[mode]}.` };
 }
 
 export interface PrepaySimulationResult extends AutomationActionResult {
   summary?: PrepaySimulationSummary;
 }
 
-/** «Simular ahora»: quién entraría a la lista hoy, sin agregar a nadie. Guarda el resumen. */
+/** «Simular ahora» de la regla retirada (sin botón desde el 09-11-2026): quién entraría hoy, sin agregar a nadie. */
 export async function simulatePrepayNow(orgId: string): Promise<PrepaySimulationResult> {
   const g = await gate(orgId);
   if ("error" in g) return { error: g.error };

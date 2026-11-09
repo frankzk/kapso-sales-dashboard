@@ -205,7 +205,7 @@ describe("loadShalomDraft: en la lista de pago adelantado con el adelanto valida
     if (!("draft" in res)) throw new Error(res.error);
     const d = res.draft;
     expect(d.blockers).toHaveLength(1);
-    expect(d.blockers[0]).toContain("este cliente paga el total por adelantado");
+    expect(d.blockers[0]).toContain("Lista negra (agregada a mano: Rechazó dos veces): falta el pago total validado.");
     // Ni «ya se cumplió» bajo la nota ni avisos al lado del rojo.
     expect(d.notePaymentLine).toBeNull();
     expect(d.warnings).toEqual([]);

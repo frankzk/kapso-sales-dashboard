@@ -1,16 +1,16 @@
 "use client";
 
-// El aviso de «Pago solo online (lista automática)» en la ficha del pedido
-// (MOM §41.11): por qué este pedido no sale contra entrega, con las cuentas
-// del propio cliente (entregas fallidas y 0 recibidas), lo que se cobra
-// («Adelanto (regla §8)» o «Pago completo») y, para quien tiene
-// `prepay_list.manage`, «Exceptuar» con motivo. Ningún dato de otros clientes.
+// La «Lista negra» automática en la ficha del pedido (MOM §41.11): el aviso de
+// siempre (`ListaNegraBanner`, textos de lib/lista-negra-copy.ts) con las
+// cuentas del propio cliente y, para quien tiene `prepay_list.manage`,
+// «Exceptuar de la Lista negra» con motivo. Ningún dato de otros clientes.
 
-import { useState, useTransition } from "react";
-import { Banner, OpsButton } from "@/components/ops-ui";
+import { useId, useState, useTransition } from "react";
+import { OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
-import { PAGO_ONLINE_REASON_MIN, pagoOnlineHeadline } from "@/lib/pago-online";
-import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
+import { ListaNegraBanner } from "@/components/lista-negra-banner";
+import { PAGO_ONLINE_REASON_MIN, pagoOnlineMotivo } from "@/lib/pago-online";
+import { LN_EXCEPT_BUTTON, LN_EXCEPT_REASON_LABEL, LN_EXCEPT_REASON_PLACEHOLDER } from "@/lib/lista-negra-copy";
 
 export interface PagoOnlineBannerStatus {
   reason: "devuelto" | "anulador";
@@ -33,72 +33,77 @@ export function PagoOnlineBanner({
   canEdit?: boolean;
   className?: string;
 }) {
+  if (!status) return null;
+  return (
+    <ListaNegraBanner
+      motivo={pagoOnlineMotivo({ reason: status.reason, failed: status.failed, orders: status.orders })}
+      requirement={status.requirement}
+      context="order"
+      met={status.met}
+      className={className}
+    >
+      {status.canExcept && <ExceptControl onExcept={onExcept} canEdit={canEdit} />}
+    </ListaNegraBanner>
+  );
+}
+
+/** «Exceptuar de la Lista negra», con motivo. Lo usan la ficha del pedido y la búsqueda de la página. */
+export function ExceptControl({
+  onExcept,
+  canEdit,
+}: {
+  onExcept?: (reason: string) => Promise<{ error?: string; notice?: string }>;
+  canEdit: boolean;
+}) {
+  const id = useId();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [result, setResult] = useState<{ error?: string; notice?: string } | null>(null);
   const [pending, startTransition] = useTransition();
-  if (!status) return null;
-  // Las cuentas del propio cliente, y nada de otros.
-  const counts =
-    status.reason === "anulador"
-      ? `Anuló ${status.failed ?? "?"} de ${status.orders ?? "?"} pedidos contra entrega y no recibió ninguno`
-      : status.failed
-        ? `${status.failed} ${status.failed === 1 ? "pedido devuelto" : "pedidos devueltos"} y 0 recibidos`
-        : "0 recibidos";
-  const title = pagoOnlineHeadline({ reason: status.reason, failed: status.failed, orders: status.orders }, status.requirement);
-  const what = status.requirement === "adelanto" ? `el adelanto de ${ADELANTO_MINIMO_LABEL} validado (o el pago online completo)` : "el pago completo validado";
-
   return (
-    <Banner tone={status.met ? "info" : "crit"} role={status.met ? "status" : "alert"} className={className} title={title}>
-      <p className="mt-0.5 text-[13px] leading-5">
-        {counts}, en los pedidos contra entrega de las tiendas. <span className="text-ink-500">Lista automática · se cobra: {status.requirementLabel}</span>
-      </p>
-      <p className="mt-1.5 text-[13px] leading-5">
-        {status.met
-          ? "Este pedido ya tiene lo que se pide: sigue."
-          : `No se confirma contra entrega ni sale ninguna guía sin ${what}. Kapta no le escribe a la clienta sobre la lista.`}
-      </p>
-      {status.canExcept && !result?.notice && (
-        <div className="mt-2 space-y-2">
-          {!open ? (
-            <OpsButton size="sm" disabled={!canEdit} onClick={() => setOpen(true)} className="pointer-coarse:h-11">
-              Exceptuar a este cliente
+    <div className="mt-2 space-y-2">
+      {result?.notice ? null : !open ? (
+        <OpsButton size="sm" disabled={!canEdit} onClick={() => setOpen(true)} className="pointer-coarse:h-11">
+          {LN_EXCEPT_BUTTON}
+        </OpsButton>
+      ) : (
+        <div className="space-y-1">
+          <label htmlFor={id} className="text-[13px] font-medium text-ink-700">
+            {LN_EXCEPT_REASON_LABEL}
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id={id}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={LN_EXCEPT_REASON_PLACEHOLDER}
+              className={cn("h-8 min-w-0 flex-1 rounded-md bg-white px-2 text-[13px] text-ink-900 ring-1 ring-inset ring-line-strong pointer-coarse:h-11")}
+            />
+            <OpsButton
+              size="sm"
+              disabled={!onExcept || pending || reason.trim().length < PAGO_ONLINE_REASON_MIN}
+              onClick={() => {
+                if (!onExcept) return;
+                setResult(null);
+                startTransition(async () => {
+                  try {
+                    setResult(await onExcept(reason));
+                  } catch {
+                    setResult({ error: "No se pudo guardar. Revisa la conexión y vuelve a intentar." });
+                  }
+                });
+              }}
+              className="pointer-coarse:h-11"
+            >
+              {pending ? "Guardando…" : LN_EXCEPT_BUTTON}
             </OpsButton>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Motivo (por qué sí puede pagar contra entrega)"
-                aria-label="Motivo de la excepción"
-                className={cn("h-8 min-w-0 flex-1 rounded-md bg-white px-2 text-[13px] text-ink-900 ring-1 ring-inset ring-line-strong")}
-              />
-              <OpsButton
-                size="sm"
-                disabled={!onExcept || pending || reason.trim().length < PAGO_ONLINE_REASON_MIN}
-                onClick={() => {
-                  if (!onExcept) return;
-                  setResult(null);
-                  startTransition(async () => {
-                    try {
-                      setResult(await onExcept(reason));
-                    } catch {
-                      setResult({ error: "No se pudo guardar. Revisa la conexión y vuelve a intentar." });
-                    }
-                  });
-                }}
-                className="pointer-coarse:h-11"
-              >
-                {pending ? "Guardando…" : "Exceptuar"}
-              </OpsButton>
-            </div>
-          )}
+          </div>
         </div>
       )}
       <div aria-live="polite" className="empty:hidden">
-        {result?.error && <p className="mt-1 text-[13px] text-crit-fg">{result.error}</p>}
-        {result?.notice && <p className="mt-1 text-[13px] text-ok-fg">{result.notice}</p>}
+        {result?.error && <p className="text-[13px] text-crit-fg">{result.error}</p>}
+        {result?.notice && <p className="text-[13px] text-ok-fg">{result.notice}</p>}
       </div>
-    </Banner>
+    </div>
   );
 }

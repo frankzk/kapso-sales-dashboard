@@ -185,7 +185,7 @@ export const CHATBY_AUTO_ASK_SKIP_LABEL: Record<ChatbyAutoAskSkip, string> = {
     "La ventana de 24 h de WhatsApp está cerrada (el último mensaje de la clienta tiene más de 23 h): WhatsApp no deja mandarle texto libre. Queda para la asesora (plantilla desde Chatby).",
   fuera: "El pedido ya no está en Por confirmar de Provincia COD.",
   envio_fallo: "Chatby no dejó mandar el mensaje: queda para la asesora.",
-  para_persona: "Es de una persona (lista de pago adelantado, envío programado, Shalom o un pago): Kapta no le escribe.",
+  para_persona: "Es de una persona (Lista negra, envío programado, Shalom o un pago): Kapta no le escribe.",
 };
 
 /**

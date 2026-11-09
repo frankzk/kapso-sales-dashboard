@@ -30,10 +30,9 @@ import {
   pagoOnlineEmailKey,
   pagoOnlineEmailsOf,
   pagoOnlineGuard,
-  pagoOnlineHeadline,
+  pagoOnlineMotivo,
   pagoOnlineOrderMessage,
   pagoOnlineReasonOf,
-  pagoOnlineWhoText,
   pagoOnlineEmptyPayload,
   pagoOnlineListOf,
   pagoOnlineMaskedPhone,
@@ -185,13 +184,10 @@ describe("la regla (owner, 09-11-2026)", () => {
     expect(list.map((x) => x.phone)).toEqual(["911000000", "999000000"]);
   });
 
-  it("el titular dice por qué, con sus cuentas", () => {
-    expect(pagoOnlineWhoText({ reason: "devuelto", failed: 1, orders: 1 })).toBe("Cliente con entrega devuelta y ninguna recibida");
-    expect(pagoOnlineWhoText({ reason: "anulador", failed: 5, orders: 6 })).toBe("Cliente que anuló 5 de 6 pedidos y nunca recibió");
-    expect(pagoOnlineHeadline({ reason: "devuelto", failed: 1, orders: 1 }, "adelanto")).toBe(
-      "Lista negra · Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto",
-    );
-    expect(pagoOnlineHeadline({ reason: "anulador", failed: 5, orders: 6 }, "pago_completo")).toBe("Lista negra · Cliente que anuló 5 de 6 pedidos y nunca recibió: solo pago online");
+  it("el motivo dice por qué, con sus cuentas (lib/lista-negra-copy.ts)", () => {
+    expect(pagoOnlineMotivo({ reason: "devuelto", failed: 1, orders: 1 })).toBe("Devolvió 1 pedido y nunca recibió");
+    expect(pagoOnlineMotivo({ reason: "devuelto", failed: 2, orders: 3 })).toBe("Devolvió 2 pedidos y nunca recibió");
+    expect(pagoOnlineMotivo({ reason: "anulador", failed: 5, orders: 6 })).toBe("Anuló 5 de 6 pedidos y nunca recibió");
   });
 });
 
@@ -330,7 +326,7 @@ describe("lo que se cobra y el freno de un pedido", () => {
 
   it("por defecto, el adelanto de la escalera del §8 (decisión del owner del 09-11-2026)", () => {
     expect(PAGO_ONLINE_DEFAULT_REQUIREMENT).toBe("adelanto");
-    expect(PAGO_ONLINE_REQUIREMENT_LABEL).toEqual({ adelanto: "Adelanto (regla §8)", pago_completo: "Pago completo" });
+    expect(PAGO_ONLINE_REQUIREMENT_LABEL).toEqual({ adelanto: "Adelanto de S/ 20", pago_completo: "Pago total" });
   });
 
   it("adelanto: lo cumple el adelanto validado o el pago completo; uno cargado sin validar, no", () => {
@@ -356,37 +352,32 @@ describe("lo que se cobra y el freno de un pedido", () => {
     const who = { reason: "devuelto" as const, failed: 2, orders: 3 };
     const b = pagoOnlineBrakeDecision({ listed: true, who, requirement: "adelanto", facts: facts("adelanto_cargado"), point: "confirmar" });
     expect(b.state).toBe("blocked");
-    expect(b.state === "blocked" && b.message).toContain("Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
-    expect(b.state === "blocked" && b.message).toContain("(2 devueltos, 0 recibidas)");
-    expect(b.state === "blocked" && b.message).toContain("No se confirma contra entrega");
+    expect(b.state === "blocked" && b.message).toBe("Lista negra (devolvió 2 pedidos y nunca recibió): falta el adelanto de S/ 20 validado.");
     const anul = pagoOnlineBlockMessage("guia", "pago_completo", { reason: "anulador", failed: 5, orders: 6 });
-    expect(anul).toContain("Cliente que anuló 5 de 6 pedidos y nunca recibió: solo pago online.");
-    expect(anul).toContain("pago completo");
+    expect(anul).toBe("Lista negra (anuló 5 de 6 pedidos y nunca recibió): falta el pago total validado.");
   });
 });
 
 describe("crear un pedido para un celular de la lista (el bot y «Generar pedido»)", () => {
   const who = { reason: "devuelto" as const, failed: 1, orders: 1 };
 
-  it("el bot pide el adelanto de S/ 20 con «Adelanto (regla §8)», no el total", () => {
-    const m = pagoOnlineOrderMessage("bot", "adelanto", who);
-    expect(m).toContain("adelanto de S/ 20");
-    expect(m).toContain("deriva la conversación a una asesora");
-    expect(m).not.toContain("total");
+  it("el bot pide el adelanto de S/ 20 con «Adelanto de S/ 20», no el total", () => {
+    expect(pagoOnlineOrderMessage("bot", "adelanto", who)).toBe(
+      "Cliente en Lista negra (devolvió 1 pedido y nunca recibió). El bot no crea pedidos contra entrega: deriva a una asesora para cobrar el adelanto de S/ 20 o el pago online completo.",
+    );
   });
 
-  it("con «Pago completo», el bot pide el pago completo", () => {
-    const m = pagoOnlineOrderMessage("bot", "pago_completo", { reason: "anulador", failed: 4, orders: 5 });
-    expect(m).toContain("Cliente que anuló 4 de 5 pedidos y nunca recibió");
-    expect(m).toContain("cobra el pago completo");
-    expect(m).not.toContain("S/ 20");
+  it("con «Pago total», el bot pide el pago total", () => {
+    expect(pagoOnlineOrderMessage("bot", "pago_completo", { reason: "anulador", failed: 4, orders: 5 })).toBe(
+      "Cliente en Lista negra (anuló 4 de 5 pedidos y nunca recibió). El bot no crea pedidos contra entrega: deriva a una asesora para cobrar el pago total.",
+    );
   });
 
-  it("«Generar pedido»: con pago completo frena; con adelanto, avisa", () => {
-    expect(pagoOnlineOrderMessage("pedido", "pago_completo", who)).toContain("Kapta no crea pedidos contra entrega para este celular");
-    const aviso = pagoOnlineOrderMessage("pedido_aviso", "adelanto", who);
-    expect(aviso).toContain("adelanto de S/ 20 validado");
-    expect(aviso).toContain("«Cómo sale el pedido»");
+  it("«Generar pedido»: con pago total frena; con adelanto, avisa", () => {
+    expect(pagoOnlineOrderMessage("pedido", "pago_completo", who)).toBe(
+      "Lista negra (devolvió 1 pedido y nunca recibió): solo con pago total por adelantado; no se genera contra entrega.",
+    );
+    expect(pagoOnlineOrderMessage("pedido_aviso", "adelanto", who)).toBe("· Lista negra: no sale sin el adelanto de S/ 20 validado.");
   });
 
   it("vaciar la lista de una tienda es el cuerpo del §4.2, tal cual", () => {

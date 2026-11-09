@@ -141,8 +141,8 @@ describe("el menú", () => {
       "/dashboard/leads",
       "/dashboard/pedidos",
       "/dashboard/pagos",
-      // La «Lista de pago adelantado» (MOM §41): la ve todo el que ve pedidos.
-      "/dashboard/clientes/pago-adelantado",
+      // La «Lista negra» (MOM §41): la ve todo el que ve pedidos.
+      "/dashboard/clientes/lista-negra",
       "/dashboard/envios",
       "/dashboard/envios/recuperacion",
       "/dashboard/envios/aliclik",
@@ -166,7 +166,7 @@ describe("el menú", () => {
       "/dashboard",
       "/dashboard/leads",
       "/dashboard/pedidos",
-      "/dashboard/clientes/pago-adelantado",
+      "/dashboard/clientes/lista-negra",
       "/dashboard/envios",
       "/dashboard/envios/recuperacion",
       "/dashboard/productividad",
@@ -178,7 +178,7 @@ describe("el menú", () => {
     expect(hrefs(navItems(true, false, false))).toEqual([
       "/dashboard/leads",
       "/dashboard/pedidos",
-      "/dashboard/clientes/pago-adelantado",
+      "/dashboard/clientes/lista-negra",
       "/dashboard/envios",
       "/dashboard/envios/recuperacion",
       "/dashboard/productividad",

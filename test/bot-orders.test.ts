@@ -1167,7 +1167,7 @@ describe("la «Lista de pago adelantado» (MOM §41, 05-11-2026)", () => {
   });
 });
 
-describe("«Pago solo online (lista automática)» (MOM §41.11, 09-11-2026)", () => {
+describe("la Lista negra automática (MOM §41.11, 09-11-2026)", () => {
   const ORG = "22222222-2222-4222-8222-222222222222";
   const listed = (requirement: string, reason = "devuelto", failed = 1, orders = 1) => {
     // La lista vigente la responde `pago_online_lookup` (0326).
@@ -1185,8 +1185,9 @@ describe("«Pago solo online (lista automática)» (MOM §41.11, 09-11-2026)", (
     expect(res.status).toBe(422);
     expect(res.body).toMatchObject({ ok: false, code: "prepay_required", retryable: false });
     const message = (res.body as { message: string }).message;
-    expect(message).toContain("Cliente con entrega devuelta y ninguna recibida");
-    expect(message).toContain("adelanto de S/ 20");
+    expect(message).toBe(
+      "Cliente en Lista negra (devolvió 1 pedido y nunca recibió). El bot no crea pedidos contra entrega: deriva a una asesora para cobrar el adelanto de S/ 20 o el pago online completo.",
+    );
     expect(message).not.toContain("total");
     expect(h.db.rpcCalls.find((c) => c.name === "pago_online_lookup")?.args).toEqual({ p_org: ORG, p_phone: "988805509" });
     expect(shop.calls).toHaveLength(0);
@@ -1200,8 +1201,8 @@ describe("«Pago solo online (lista automática)» (MOM §41.11, 09-11-2026)", (
     const res = await call(pedido());
     expect(res.status).toBe(422);
     const message = (res.body as { message: string }).message;
-    expect(message).toContain("Cliente que anuló 5 de 6 pedidos y nunca recibió");
-    expect(message).toContain("cobra el pago completo");
+    expect(message).toContain("Cliente en Lista negra (anuló 5 de 6 pedidos y nunca recibió)");
+    expect(message).toContain("para cobrar el pago total.");
     expect(message).not.toContain("S/ 20");
   });
 
@@ -1216,7 +1217,10 @@ describe("«Pago solo online (lista automática)» (MOM §41.11, 09-11-2026)", (
     });
     listed("adelanto");
     const res = await call(pedido());
-    expect((res.body as { message: string }).message).toContain("cobra el total por adelantado");
+    // El alta a mano manda (pide el total), y el bot no recibe el motivo escrito.
+    expect((res.body as { message: string }).message).toBe(
+      "Cliente en Lista negra (agregada a mano). El bot no crea pedidos contra entrega: deriva a una asesora para cobrar el pago total.",
+    );
     expect(h.db.rpcCalls.some((c) => c.name === "pago_online_lookup")).toBe(false);
   });
 

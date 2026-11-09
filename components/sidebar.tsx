@@ -1,5 +1,6 @@
 "use client";
 
+import { LN_NAME, LN_PATH } from "@/lib/lista-negra-copy";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -45,11 +46,11 @@ interface NavItem {
  */
 const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };
 /**
- * «Pago adelantado» (MOM §41): la lista negra de celulares que pagan el total
- * por adelantado. La ve todo el equipo que ve pedidos; cambiarla pide
+ * «Lista negra» (MOM §41 y §41.11): las dos listas que frenan el contra
+ * entrega, en una página. La ve todo el equipo que ve pedidos; cambiarla pide
  * `prepay_list.manage`, que la página y sus acciones vuelven a mirar.
  */
-const PREPAY_LIST_ITEM: NavItem = { href: "/dashboard/clientes/pago-adelantado", label: "Pago adelantado", icon: IconMoney };
+const PREPAY_LIST_ITEM: NavItem = { href: LN_PATH, label: LN_NAME, icon: IconMoney };
 
 /**
  * Qué entradas de administración ve la persona, por permiso (MOM §16,

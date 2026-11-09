@@ -57,7 +57,7 @@ describe("la compuerta de un pedido (`prepayOrderCheck`)", () => {
     }
     const check = await prepayOrderCheck(db([listed()]).client(), "o1", "confirmar");
     expect(check.state === "blocked" && check.message).toContain(PREPAY_LIST_LABEL);
-    expect(await prepayGuideBlock(db([listed()]).client(), "o1")).toContain("cobro cero");
+    expect(await prepayGuideBlock(db([listed()]).client(), "o1")).toContain("falta el pago total validado.");
   });
 
   it("pagado completo pasa (comprobantes o checkout): sale con cobro cero", async () => {
@@ -329,7 +329,11 @@ describe("dónde está la compuerta (una por camino, ninguno sin ella)", () => {
 
   it("la ficha del pedido y la del lead muestran el aviso; el link de Flow es por el total y no se manda solo", () => {
     expect(read("components/order-drawer.tsx")).toContain("<PrepayListBanner");
-    expect(read("components/leads-drawer.tsx")).toContain('<PrepayListBanner status={prepayStatus} context="lead" />');
+    // El lead, con el mismo aviso de las dos listas, arriba de «Cómo sale el pedido».
+    const drawer = read("components/leads-drawer.tsx");
+    const banner = drawer.indexOf('{prepayStatus?.mark && <ListaNegraBanner motivo={prepayStatus.mark.motivo} requirement={prepayStatus.mark.requirement} context="lead" />}');
+    expect(banner).toBeGreaterThan(0);
+    expect(banner).toBeLessThan(drawer.indexOf("<LeadPostOrderChoices"));
     const link = read("app/dashboard/pedidos/prepay-actions.ts");
     // El cobro lo decide `prepayLinkPlan` (el total, o la diferencia si ya hay adelanto).
     expect(link).toContain("const plan = prepayLinkPlan(payments, order.order_total);");

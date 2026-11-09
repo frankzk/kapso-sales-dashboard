@@ -24,7 +24,7 @@ vi.mock("@/lib/geocode-google-server", () => ({ latestGeocodeLimaRun: async () =
 vi.mock("@/lib/db", () => ({ createAdminSupabase: () => h.db.client() }));
 
 import { FakeDb } from "./woocommerce-fake-db";
-import { addToPrepayList, removeFromPrepayList } from "@/app/dashboard/clientes/pago-adelantado/actions";
+import { addToPrepayList, removeFromPrepayList } from "@/app/dashboard/clientes/lista-negra/actions";
 import { setPrepayAutoMode, simulatePrepayNow } from "@/app/dashboard/automatizaciones/actions";
 import { GRANTED_ONE_BY_ONE, PERMISSIONS, PERMISSION_AREAS, PERMISSION_LABEL, permissionsFor } from "@/lib/permissions";
 import { PREPAY_MODE_EVENT, automationEventLabel, automationValueLabel } from "@/lib/automations-catalog";
@@ -64,8 +64,7 @@ describe("agregar y quitar a mano", () => {
     h.db.rows("prepay_list_entries").push({ id: "33333333-3333-4333-8333-333333333333", org_id: ORG, phone: "51987654321", source: "auto", removed_at: null });
     const res = await removeFromPrepayList(ORG, "33333333-3333-4333-8333-333333333333", "Era otra persona con el mismo número");
     expect(res.error).toBeUndefined();
-    expect(res.notice).toContain("987 654 321 quitado de la lista");
-    expect(res.notice).toMatch(/pedido nuevo/);
+    expect(res.notice).toBe("987 654 321 sacada de la Lista negra a mano. Si está en la automática, sigue ahí.");
     expect(h.db.rows("prepay_list_entries")[0]).toMatchObject({
       removed_by: "owner-1",
       removed_reason: "Era otra persona con el mismo número",
@@ -114,22 +113,22 @@ describe("agregar y quitar a mano", () => {
   });
 });
 
-describe("la regla automática en Automatizaciones", () => {
-  it("cambia la posición y deja «Últimos cambios»", async () => {
-    const res = await setPrepayAutoMode(ORG, "simulacion");
-    expect(res.error).toBeUndefined();
-    expect(h.db.rows("prepay_list_settings")[0]).toMatchObject({ org_id: ORG, auto_mode: "simulacion", updated_by: "owner-1" });
-    expect(h.db.rows("automation_switch_events")[0]).toMatchObject({ automation: PREPAY_MODE_EVENT, previous: "apagado", next: "simulacion", actor: "owner-1" });
-    expect((await setPrepayAutoMode(ORG, "simulacion")).notice).toBe("Ya estaba así.");
+describe("la regla automática de la lista a mano, retirada (owner, 09-11-2026)", () => {
+  it("no se puede encender: solo apagar; nada se escribe", async () => {
+    for (const mode of ["simulacion", "activo"]) {
+      expect((await setPrepayAutoMode(ORG, mode)).error).toMatch(/retirada/);
+    }
+    expect(h.db.rows("prepay_list_settings")).toHaveLength(0);
+    expect((await setPrepayAutoMode(ORG, "apagado")).notice).toBe("Ya estaba así.");
     expect((await setPrepayAutoMode(ORG, "encendido")).error).toBe("Esa posición no existe.");
   });
 
-  it("pide `automations.manage` (no basta `prepay_list.manage`) y producción", async () => {
+  it("apagarla pide `automations.manage` (no basta `prepay_list.manage`) y producción", async () => {
     h.perms = new Set(["prepay_list.manage"]);
-    expect((await setPrepayAutoMode(ORG, "activo")).error).toMatch(/no permite/);
+    expect((await setPrepayAutoMode(ORG, "apagado")).error).toMatch(/no permite/);
     h.perms = new Set(["automations.manage"]);
     process.env.VERCEL_ENV = "preview";
-    expect((await setPrepayAutoMode(ORG, "activo")).error).toBe("Disponible solo en producción.");
+    expect((await setPrepayAutoMode(ORG, "apagado")).error).toBe("Disponible solo en producción.");
     expect(h.db.rows("prepay_list_settings")).toHaveLength(0);
   });
 
@@ -142,16 +141,16 @@ describe("la regla automática en Automatizaciones", () => {
   });
 
   it("el historial lo nombra en palabras", () => {
-    expect(automationEventLabel(PREPAY_MODE_EVENT)).toBe("Lista de pago adelantado · regla automática");
+    expect(automationEventLabel(PREPAY_MODE_EVENT)).toBe("Lista negra · regla automática de la lista a mano (retirada)");
     expect(automationValueLabel(PREPAY_MODE_EVENT, "activo")).toBe("Activo");
     expect(automationValueLabel(PREPAY_MODE_EVENT, "simulacion")).toBe("Simulación");
   });
 });
 
-describe("el permiso «Gestionar la lista de pago adelantado»", () => {
+describe("el permiso «Gestionar la Lista negra»", () => {
   it("existe, en Pedidos, y viene con dueño y admin; la vendedora no; no se da uno por uno", () => {
     expect(PERMISSIONS).toContain("prepay_list.manage");
-    expect(PERMISSION_LABEL["prepay_list.manage"]).toBe("Gestionar la lista de pago adelantado");
+    expect(PERMISSION_LABEL["prepay_list.manage"]).toBe("Gestionar la Lista negra");
     expect(PERMISSION_AREAS.find((a) => a.key === "pedidos")!.permissions).toContain("prepay_list.manage");
     expect(permissionsFor(["owner"]).has("prepay_list.manage")).toBe(true);
     expect(permissionsFor(["admin"]).has("prepay_list.manage")).toBe(true);

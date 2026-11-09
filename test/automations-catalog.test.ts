@@ -339,19 +339,17 @@ describe("el permiso y el menú", () => {
   });
 });
 
-describe("la «Lista de pago adelantado» en el panel (MOM §41, 0309)", () => {
+describe("la regla de la lista a mano, retirada (MOM §41.2, owner 09-11-2026)", () => {
   const src = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
-  it("su sección está en el índice y en el panel, con la regla y «Simular ahora»", () => {
+  it("ya no tiene controles en el panel: ni la regla ni «Simular ahora»", () => {
     const panel = src("components/automations-panel.tsx");
     for (const id of ["prepay-regla", "prepay-simular"]) {
-      expect(panel).toContain(`{ id: "${id}"`);
-      expect(panel).toContain(`id="${id}"`);
+      expect(panel).not.toContain(`{ id: "${id}"`);
+      expect(panel).not.toContain(`id="${id}"`);
     }
-    expect(panel).toContain("<PrepayGroup org={org} writable={writable} />");
-    // Activo pide confirmación, como los reintentos.
-    expect(panel).toMatch(/next === "activo" &&\s*!window\.confirm\(/);
-    expect(panel).toContain("prepaySimulationHeadline(summary)");
+    expect(panel).not.toContain("PrepayGroup");
+    expect(panel).not.toContain("setPrepayAutoMode");
   });
 
   it("la posición se escribe solo en su tabla y deja su fila en el historial", () => {
@@ -364,11 +362,12 @@ describe("la «Lista de pago adelantado» en el panel (MOM §41, 0309)", () => {
     expect(src("db/migrations/0309_prepay_list.sql")).toContain("auto_mode        text not null default 'apagado' check (auto_mode in ('apagado', 'simulacion', 'activo'))");
   });
 
-  it("el menú lleva «Pago adelantado» detrás del Master, para todos los que ven pedidos", () => {
+  it("el menú lleva «Lista negra» detrás del Master, para todos los que ven pedidos", () => {
     const access = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true, history: true, automations: false };
     for (const items of [navItems(false, false, false, access), navItems(true, false, false)]) {
       const hrefs = items.map((i) => i.href);
-      expect(hrefs[hrefs.indexOf("/dashboard/pedidos") + 1]).toBe("/dashboard/clientes/pago-adelantado");
+      expect(hrefs[hrefs.indexOf("/dashboard/pedidos") + 1]).toBe("/dashboard/clientes/lista-negra");
+      expect(items[hrefs.indexOf("/dashboard/pedidos") + 1]!.label).toBe("Lista negra");
     }
   });
 });

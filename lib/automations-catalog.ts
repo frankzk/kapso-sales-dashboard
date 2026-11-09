@@ -17,7 +17,8 @@
 // Puro: sin base ni red.
 
 import { RETRY_DAILY_CAP_MAX, RETRY_DAILY_CAP_MIN, RETRY_MODE_LABEL, isRetryMode, isRetryVariant, retryVariantLabel } from "@/lib/lima-retry-auto";
-import { PAGO_ONLINE_KEY, PAGO_ONLINE_LABEL, PAGO_ONLINE_REQUIREMENT_KEY, PAGO_ONLINE_REQUIREMENT_LABEL, isPagoOnlineRequirement } from "@/lib/pago-online";
+import { PAGO_ONLINE_KEY, PAGO_ONLINE_REQUIREMENT_KEY, PAGO_ONLINE_REQUIREMENT_LABEL, isPagoOnlineRequirement } from "@/lib/pago-online";
+import { lnHistoryLabel } from "@/lib/lista-negra-copy";
 
 /** Los grupos del panel, en su orden. */
 export const AUTOMATION_GROUPS = [
@@ -659,13 +660,13 @@ export function retryVariantEventKey(variant: string): string {
   return `${RETRY_EVENT_PREFIX}${variant}`;
 }
 
-/** La regla automática de la «Lista de pago adelantado» (0309, MOM §41). */
+/** La regla automática de la Lista negra a mano (0309, MOM §41.2): retirada por el owner el 09-11-2026. */
 export const PREPAY_MODE_EVENT = "prepay_list_auto";
 
 /**
- * «Pago solo online (lista automática)» (0326, MOM §41.11): la posición
- * (Apagado / Simulación / Activo), lo que se cobra («Adelanto (regla §8)» o
- * «Pago completo»), el envío de prueba, la lista aceptada pese al freno y las
+ * La Lista negra automática (0326, MOM §41.11; llaves internas
+ * `pago_solo_online*`): la posición (Apagado / Simulación / Activo), lo que se
+ * cobra («Adelanto de S/ 20» o «Pago total»), el envío de prueba, la lista aceptada pese al freno y las
  * excepciones de Kapta, en el historial.
  */
 export const PAGO_ONLINE_MODE_EVENT = PAGO_ONLINE_KEY;
@@ -688,14 +689,14 @@ export function automationEventLabel(key: string): string {
   if (key === AGENT_GUIDE_MODE_EVENT) return "Agente de IA · guías de Aliclik";
   if (key === AGENT_WHATSAPP_CAP_EVENT) return "Agente de IA · tope de WhatsApp del día";
   if (key === AGENT_GUIDE_CAP_EVENT) return "Agente de IA · tope de guías del día";
-  if (key === PREPAY_MODE_EVENT) return "Lista de pago adelantado · regla automática";
-  if (key === PAGO_ONLINE_MODE_EVENT) return PAGO_ONLINE_LABEL;
-  if (key === PAGO_ONLINE_REQUIREMENT_EVENT) return "Lista negra · lo que se cobra";
-  if (key === PAGO_ONLINE_TEST_EVENT) return "Lista negra · envío de prueba";
-  if (key === PAGO_ONLINE_ACCEPT_EVENT) return "Lista negra · lista aceptada pese al cambio brusco";
-  if (key === PAGO_ONLINE_RUN_EVENT) return "Lista negra · corrida a mano";
-  if (key === PAGO_ONLINE_EXCEPTION_EVENT) return "Lista negra · excepción de Kapta";
-  if (key === PAGO_ONLINE_EMPTY_EVENT) return "Lista negra · lista de la tienda vaciada";
+  if (key === PREPAY_MODE_EVENT) return lnHistoryLabel("regla automática de la lista a mano (retirada)");
+  if (key === PAGO_ONLINE_MODE_EVENT) return lnHistoryLabel("posición");
+  if (key === PAGO_ONLINE_REQUIREMENT_EVENT) return lnHistoryLabel("lo que se cobra");
+  if (key === PAGO_ONLINE_TEST_EVENT) return lnHistoryLabel("envío de prueba");
+  if (key === PAGO_ONLINE_ACCEPT_EVENT) return lnHistoryLabel("lista aceptada pese al cambio brusco");
+  if (key === PAGO_ONLINE_RUN_EVENT) return lnHistoryLabel("corrida a mano");
+  if (key === PAGO_ONLINE_EXCEPTION_EVENT) return lnHistoryLabel("excepción de Kapta");
+  if (key === PAGO_ONLINE_EMPTY_EVENT) return lnHistoryLabel("lista de la tienda vaciada");
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
   if (key === RETRY_CHATBY_ASK_EVENT) return "Reintentos Aliclik · pedir la ubicación por WhatsApp";

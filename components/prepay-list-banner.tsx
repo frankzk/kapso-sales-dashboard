@@ -1,27 +1,25 @@
 "use client";
 
-// El aviso de la «Lista de pago adelantado» (MOM §41) en la ficha del pedido
-// y en la del lead: el cliente paga el total por adelantado, con el motivo, el
-// origen (automático o manual) y los pedidos que lo dispararon. En la ficha
-// del pedido, «Enviar link de pago» crea el link de Flow por lo que falta (el
-// total, o el saldo si ya hay un adelanto) y lo muestra para copiar: Kapta no
-// lo manda por WhatsApp. Sin nada que cobrar todavía no ofrece el botón.
+// La «Lista negra» agregada a mano en la ficha del pedido (MOM §41): el aviso
+// de siempre (`ListaNegraBanner`, textos de lib/lista-negra-copy.ts), igual
+// que la automática salvo el motivo y «pago total», y «Enviar link de pago»,
+// que crea el link de Flow por lo que falta del total (el total, o el saldo si
+// ya hay un adelanto) y lo muestra para copiar: Kapta no lo manda por
+// WhatsApp. Sin nada que cobrar todavía no ofrece el botón.
 
 import { useState, useTransition } from "react";
-import { Banner, OpsButton } from "@/components/ops-ui";
+import { OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
-import {
-  PREPAY_LIST_LABEL,
-  PREPAY_LIST_SYNONYM,
-  PREPAY_TRIGGER_LABEL,
-  prepaySourceLabel,
-  type PrepayEvidence,
-} from "@/lib/prepay-list";
+import { ListaNegraBanner } from "@/components/lista-negra-banner";
+import { prepayEntryMotivo, prepayEntryRequirementOf, type PrepayEntryRequirement, type PrepayEvidence } from "@/lib/prepay-list";
 
 export interface PrepayBannerStatus {
   listed: boolean;
   fullyPaid?: boolean;
+  /** Ya tiene lo que pide el alta (el adelanto validado, o el pago total). */
+  met?: boolean;
+  requirement?: PrepayEntryRequirement;
   source?: "auto" | "manual";
   reason?: string;
   addedAt?: string;
@@ -44,14 +42,12 @@ const money = (n: number) => `S/ ${n.toLocaleString("es-PE", { minimumFractionDi
 
 export function PrepayListBanner({
   status,
-  context,
   onCreateLink,
   canCreateLink = false,
   className,
 }: {
   status: PrepayBannerStatus | null;
-  context: "order" | "lead";
-  /** Solo en la ficha del pedido: crea el link de Flow por lo que falta. */
+  /** Crea el link de Flow por lo que falta. */
   onCreateLink?: () => Promise<PrepayLinkOutcome>;
   canCreateLink?: boolean;
   className?: string;
@@ -60,43 +56,13 @@ export function PrepayListBanner({
   const { state: copyState, copy, reset: resetCopy } = useCopyToClipboard();
   const [pending, startTransition] = useTransition();
   if (!status?.listed) return null;
-  const evidence = status.evidence?.kind === "auto" ? status.evidence.orders : [];
+  const requirement = prepayEntryRequirementOf(status.requirement);
+  const met = status.met ?? !!status.fullyPaid;
   const due = status.due ?? null;
 
   return (
-    <Banner
-      tone={status.fullyPaid ? "info" : "crit"}
-      role={status.fullyPaid ? "status" : "alert"}
-      className={className}
-      title={`${PREPAY_LIST_LABEL}: este cliente paga el total por adelantado`}
-    >
-      <p className="mt-0.5 text-[13px] leading-5">
-        {status.reason}
-        <span className="text-ink-500">
-          {" "}
-          · {prepaySourceLabel(status.source ?? "manual")}
-          {status.addedAt ? ` · desde el ${status.addedAt}` : ""}
-        </span>
-      </p>
-      {evidence.length > 0 && (
-        <ul className="mt-1 space-y-0.5 text-[13px] leading-5 text-ink-600">
-          {evidence.slice(0, 5).map((o) => (
-            <li key={`${o.order_id}:${o.kind}`}>
-              {o.order_name ?? "Pedido"} · {PREPAY_TRIGGER_LABEL[o.kind]}
-              {o.detail ? ` (${o.detail})` : ""}
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="mt-1.5 text-[13px] leading-5">
-        {status.fullyPaid
-          ? "Este pedido ya está pagado completo: sigue, y su guía sale con cobro cero."
-          : context === "order"
-            ? "No se confirma contra entrega ni sale ninguna guía hasta que el total esté pagado y validado."
-            : `Kapta no genera pedidos contra entrega para este celular (${PREPAY_LIST_SYNONYM}). Que pague el total en la web con «Tarjeta o Yape» (Flow).`}
-      </p>
-
-      {context === "order" && !status.fullyPaid && (
+    <ListaNegraBanner motivo={prepayEntryMotivo(status.reason)} requirement={requirement} context="order" met={met} className={className}>
+      {!met && (
         <div className="mt-2 space-y-2">
           {!due ? (
             <p className="text-[13px] leading-5 text-ink-600">{status.dueProblem ?? "No hay un importe que cobrar por link."}</p>
@@ -158,6 +124,6 @@ export function PrepayListBanner({
           </div>
         </div>
       )}
-    </Banner>
+    </ListaNegraBanner>
   );
 }

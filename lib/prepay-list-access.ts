@@ -1,4 +1,8 @@
-// La página «Lista de pago adelantado» (MOM §41): qué ve cada quien.
+// La página «Lista negra» (MOM §41 y §41.11, owner 09-11-2026): qué ve cada
+// quien. Arriba la automática —cuántos, desde cuándo, el último envío a cada
+// tienda y las excepciones de Kapta (con el celular enmascarado)—, que se lee
+// con `loadPagoOnlinePanel` (solo cuentas, nunca la lista); abajo las altas a
+// mano.
 //
 //   * VER la lista: cualquiera que vea pedidos de la organización (todo
 //     miembro que no sea motorizado). La lectura va con su sesión: la RLS de
@@ -15,8 +19,9 @@ import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { resolveAgentNames } from "@/lib/agent-names";
 import { formatLimaDateTime } from "@/lib/automations-catalog";
-import { PREPAY_ENTRY_COLUMNS, isMissingPrepayTable, type PrepayEntryRow } from "@/lib/prepay-list-server";
-import { parsePrepayEvidence, prepayPhoneLabel, type PrepayEvidence } from "@/lib/prepay-list";
+import { PREPAY_ENTRY_COLUMNS, PREPAY_ENTRY_COLUMNS_REQ, isMissingPrepayColumn, isMissingPrepayTable, type PrepayEntryRow } from "@/lib/prepay-list-server";
+import { parsePrepayEvidence, prepayEntryRequirementOf, prepayPhoneLabel, type PrepayEntryRequirement, type PrepayEvidence } from "@/lib/prepay-list";
+import { loadPagoOnlinePanel, type PagoOnlineView } from "@/lib/pago-online-view";
 
 export interface PrepayEntryView {
   id: string;
@@ -25,6 +30,8 @@ export interface PrepayEntryView {
   source: "auto" | "manual";
   reason: string;
   evidence: PrepayEvidence;
+  /** Lo que pide (0329; sin la columna, el total). */
+  requirement: PrepayEntryRequirement;
   /** El pedido más reciente de ese celular que quien mira puede ver. */
   lastOrderName: string | null;
   lastOrderId: string | null;
@@ -39,6 +46,8 @@ export interface PrepayOrgView {
   orgId: string;
   orgName: string;
   canManage: boolean;
+  /** La automática: cuentas, envíos y excepciones (enmascaradas). Nunca la lista. */
+  automatic: PagoOnlineView;
   active: PrepayEntryView[];
   removed: PrepayEntryView[];
   error: string | null;
@@ -92,17 +101,27 @@ export async function loadPrepayListPage(): Promise<PrepayPageData> {
   ]);
   const names = new Map(((orgRows ?? []) as { id: string; name: string | null }[]).map((o) => [o.id, o.name ?? "Organización"]));
 
-  let rows: PrepayEntryRow[] = [];
-  try {
-    rows = await allRows<PrepayEntryRow>((from, to) =>
+  const automaticPromise = Promise.all(orgIds.map((orgId) => loadPagoOnlinePanel(admin, orgId)));
+  const readEntries = (columns: string) =>
+    allRows<PrepayEntryRow>((from, to) =>
       sb
         .from("prepay_list_entries")
-        .select(PREPAY_ENTRY_COLUMNS)
+        .select(columns)
         .in("org_id", orgIds)
         .order("added_at", { ascending: false })
         .order("id")
         .range(from, to) as unknown as Page<PrepayEntryRow>,
     );
+  let rows: PrepayEntryRow[] = [];
+  const automatic = await automaticPromise;
+  try {
+    try {
+      rows = await readEntries(PREPAY_ENTRY_COLUMNS_REQ);
+    } catch (e) {
+      // Sin la 0329: las mismas filas, sin lo que piden (= el total).
+      if (!isMissingPrepayColumn(e as { code?: string; message?: string })) throw e;
+      rows = await readEntries(PREPAY_ENTRY_COLUMNS);
+    }
   } catch (e) {
     if (isMissingPrepayTable(e as { code?: string; message?: string })) return { denied: false, installed: false, orgs: [] };
     return {
@@ -112,6 +131,7 @@ export async function loadPrepayListPage(): Promise<PrepayPageData> {
         orgId,
         orgName: names.get(orgId) ?? "Organización",
         canManage: manage[i] === true,
+        automatic: automatic[i]!,
         active: [],
         removed: [],
         error: "No se pudo leer la lista. Recarga la página.",
@@ -133,6 +153,7 @@ export async function loadPrepayListPage(): Promise<PrepayPageData> {
     source: r.source,
     reason: r.reason,
     evidence: parsePrepayEvidence(r.evidence),
+    requirement: prepayEntryRequirementOf(r.requirement),
     lastOrderName: latest.get(r.phone)?.name ?? null,
     lastOrderId: latest.get(r.phone)?.id ?? null,
     addedAt: formatLimaDateTime(r.added_at),
@@ -148,6 +169,7 @@ export async function loadPrepayListPage(): Promise<PrepayPageData> {
       orgId,
       orgName: names.get(orgId) ?? "Organización",
       canManage: manage[i] === true,
+      automatic: automatic[i]!,
       active: mine.filter((r) => !r.removed_at).map(view),
       removed: mine.filter((r) => !!r.removed_at).map(view),
       error: null,
