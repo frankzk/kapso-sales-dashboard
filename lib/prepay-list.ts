@@ -1,5 +1,17 @@
-// «Lista de pago adelantado» (la lista negra) — la regla, pura (MOM §41,
-// decisión del owner del 05-11-2026).
+// La «Lista negra» agregada a mano (antes «Lista de pago adelantado») — la
+// regla, pura (MOM §41, decisión del owner del 05-11-2026; unificada con la
+// lista automática en una sola página «Lista negra» el 09-11-2026).
+//
+// DESDE EL 09-11-2026 (owner): las dos listas que frenan el contra entrega se
+// ven en UNA página, «Lista negra». La automática (§41.11, lib/pago-online.ts)
+// la calcula Kapta cada día; esta es la que el equipo agrega A MANO, para lo
+// que la regla no ve (un fraude, una clienta que avisó que no va a recibir).
+// Cada alta elige lo que pide (`requirement`, 0329): «Adelanto (S/ 20)» o
+// «Pago total» (por defecto, y lo que tienen las altas de antes). La regla
+// automática de abajo («rechazó en la puerta / no recogió en la agencia») la
+// RETIRÓ el owner (09-11-2026): nunca se encendió y la lista automática ya
+// cubre a esos clientes (sus pedidos terminan `devuelto`). Su código queda
+// dormido, sin controles en pantalla.
 //
 // QUÉ DECIDIÓ EL OWNER.
 //   * Entra a la lista, por celular y por ORGANIZACIÓN (Kenku y Aurela
@@ -38,14 +50,54 @@ import { normalizePhone } from "@/lib/phone";
 import { guideDoorRejection } from "@/lib/reproprovincia";
 import { orderFullyPaid, type OrderPaymentFacts } from "@/lib/order-paid";
 import { remainingCents } from "@/lib/payment-rounding";
+import { LN_GENERATE_NOTICE, LN_NAME, LN_PATH, LN_REQUIREMENT_LABEL, lnBotMessage, lnBrakeMessage, lnGenerateRefused, lnMotivo } from "@/lib/lista-negra-copy";
+import { pagoOnlineRequirementMet, type PagoOnlineRequirement } from "@/lib/pago-online";
 
-/** Cómo se llama en pantalla. Desde el 09-11-2026 «Lista negra» es la lista automática (MOM §41.11); esta es la «lista de pago completo», a mano. */
-export const PREPAY_LIST_LABEL = "Lista de pago adelantado";
-export const PREPAY_LIST_SYNONYM = "lista de pago completo";
-export const PREPAY_LIST_PATH = "/dashboard/clientes/pago-adelantado";
+/**
+ * Cómo se llama en pantalla: «Lista negra», como la automática (owner,
+ * 09-11-2026). Lo que la distingue es que se agregó a mano.
+ */
+export const PREPAY_LIST_LABEL = LN_NAME;
+export const PREPAY_LIST_SYNONYM = "agregada a mano";
+/** La página única de las dos listas (MOM §41). */
+export const PREPAY_LIST_PATH = LN_PATH;
+/** La ruta de antes: redirige a la nueva (enlaces guardados). */
+export const PREPAY_LIST_LEGACY_PATH = "/dashboard/clientes/pago-adelantado";
 
-/** Lo que se le exige al cliente de la lista. */
+/** Lo que se le exige al cliente de la lista con «Pago total». */
 export const PREPAY_REQUIREMENT_LABEL = "Pago completo por adelantado";
+
+// ── Lo que pide cada alta (0329) ────────────────────────────────────────────
+
+/**
+ * Lo que pide un alta a mano: el adelanto de la escalera del §8, validado (el
+ * mismo de la lista automática, `pagoOnlineRequirementMet`), o el pago total.
+ * Mismos valores que `pago_online_settings.requirement`.
+ */
+export type PrepayEntryRequirement = PagoOnlineRequirement;
+export const PREPAY_ENTRY_REQUIREMENTS: readonly PrepayEntryRequirement[] = ["adelanto", "pago_completo"];
+/** Las altas de antes de la 0329, y una base sin la columna, piden el total: nada cambia. */
+export const PREPAY_ENTRY_DEFAULT_REQUIREMENT: PrepayEntryRequirement = "pago_completo";
+/** «Adelanto de S/ 20» / «Pago total» (lib/lista-negra-copy.ts). */
+export const PREPAY_ENTRY_REQUIREMENT_LABEL: Record<PrepayEntryRequirement, string> = LN_REQUIREMENT_LABEL;
+
+export function isPrepayEntryRequirement(value: unknown): value is PrepayEntryRequirement {
+  return value === "adelanto" || value === "pago_completo";
+}
+
+/** Lo que pide una fila tal como vino de la base: sin la columna (0329 sin aplicar) o con otra cosa, el total. Pura. */
+export function prepayEntryRequirementOf(raw: unknown): PrepayEntryRequirement {
+  return isPrepayEntryRequirement(raw) ? raw : PREPAY_ENTRY_DEFAULT_REQUIREMENT;
+}
+
+/**
+ * ¿El pedido cumple lo que pide el alta? «Pago total»: `orderFullyPaid`, como
+ * siempre. «Adelanto»: el adelanto validado (`payment_state` de
+ * `aliclikRiskGate`, §8) o el pago completo. Pura.
+ */
+export function prepayEntryRequirementMet(requirement: PrepayEntryRequirement, facts: OrderPaymentFacts): boolean {
+  return pagoOnlineRequirementMet(requirement, facts);
+}
 
 /** Cuánta historia mira la regla automática: seis meses (el tamaño medido, §41.2). */
 export const PREPAY_LOOKBACK_DAYS = 183;
@@ -443,19 +495,33 @@ export function prepayLinkPlan(payments: readonly PrepayPaymentRow[], orderTotal
 export const PREPAY_POINTS = ["confirmar", "guia", "pedido", "bot"] as const;
 export type PrepayPoint = (typeof PREPAY_POINTS)[number];
 
-/** Lo que se le dice a quien intenta lo que la lista no deja. Pura. */
-export function prepayBlockMessage(point: PrepayPoint): string {
-  const head = `${PREPAY_LIST_LABEL}: este cliente paga el total por adelantado.`;
-  switch (point) {
-    case "confirmar":
-      return `${head} No se confirma contra entrega: envíale el link de pago del total (o que pague el total por Yape) y confirma cuando el pago esté validado.`;
-    case "guia":
-      return `${head} La guía sale solo con el pedido pagado completo, con cobro cero. Valida el pago total antes de crearla.`;
-    case "pedido":
-      return `${head} Kapta no crea pedidos contra entrega para este celular: cobra el total por adelantado (link de pago o Yape) antes de generarlo.`;
-    case "bot":
-      return `${head} El bot no crea pedidos contra entrega para este celular: deriva la conversación a una asesora, que cobra el total por adelantado.`;
-  }
+/**
+ * El motivo de un alta a mano para los mensajes (lib/lista-negra-copy.ts):
+ * «Agregada a mano: <lo que escribió el equipo>». Un alta de la regla
+ * retirada (nunca hubo) dice lo mismo, con su motivo guardado. Pura.
+ */
+export function prepayEntryMotivo(reason: string | null | undefined): string {
+  return lnMotivo({ kind: "manual", reason });
+}
+
+/**
+ * Lo que se le dice a quien intenta lo que un alta a mano no deja, según lo
+ * que pide (lib/lista-negra-copy.ts): el mismo freno al confirmar y al crear la
+ * guía, el 422 del bot y el «no se genera» de «Generar pedido». Igual que la
+ * automática; solo cambian el motivo y «pago total». Pura.
+ */
+export function prepayEntryBlockMessage(point: PrepayPoint, requirement: PrepayEntryRequirement, reason?: string | null): string {
+  // Al bot NUNCA el motivo escrito por el equipo (puede llegar a la clienta):
+  // solo «Agregada a mano».
+  if (point === "bot") return lnBotMessage(prepayEntryMotivo(null), requirement);
+  const motivo = prepayEntryMotivo(reason);
+  if (point === "pedido") return requirement === "pago_completo" ? lnGenerateRefused(motivo) : LN_GENERATE_NOTICE;
+  return lnBrakeMessage(motivo, requirement);
+}
+
+/** El de un alta que pide el pago total (lo de siempre), sin motivo. Pura. */
+export function prepayBlockMessage(point: PrepayPoint, reason?: string | null): string {
+  return prepayEntryBlockMessage(point, "pago_completo", reason);
 }
 
 // ── Etiquetas y validaciones ────────────────────────────────────────────────

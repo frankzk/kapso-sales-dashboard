@@ -2146,12 +2146,12 @@ por separado.
 Una excepción COD es posible con justificación corta, actor y fecha. Las
 promesas de pago incumplidas aumentan el riesgo futuro.
 
-**Antes que esta escalera va la «Lista de pago adelantado» (§41, owner
-05-11-2026).** Un celular con un pedido rechazado en la puerta o no recogido en
-la agencia (o agregado a mano) paga el **total** por adelantado, sin la
-excepción con motivo de la escalera: no se confirma contra entrega ni sale
-ninguna guía hasta que el pago total esté validado. Para quien no está en la
-lista, la escalera sigue igual.
+**Antes que esta escalera va la «Lista negra» agregada a mano (§41, owner
+05-11-2026; unificada el 09-11-2026).** Un celular que el equipo agregó a mano
+paga lo que dice su alta —el **pago total** (lo de siempre) o el **adelanto de
+S/ 20** validado—, sin la excepción con motivo de la escalera: no se confirma
+contra entrega ni sale ninguna guía hasta tenerlo validado. Para quien no está
+en la lista, la escalera sigue igual.
 
 **Y la lista automática «Pago solo online» (§41.11, owner 09-11-2026).** Un
 celular (últimos 9 dígitos, Kenku y Aurela juntas, solo contra entrega, sin los
@@ -15634,6 +15634,39 @@ compartida con la mesa de confirmación), y las reglas compartidas con la ficha:
 bloque, el panel de Aliclik intacto tras las recargas y tras una lectura
 fallida, «Crear guía» una vez) y `test/swayp-desde-confirmacion.test.ts`.
 
+### 25.3 La Lista negra en Leads (09-11-2026)
+
+**Decisión del owner (09-11-2026).** La asesora tiene que saber que una clienta
+está en la Lista negra (§41, las dos listas) **antes** de ofrecerle contra
+entrega: en la lista de Leads y en la ficha del lead.
+
+- **La fila de la lista:** la chapa negra «Lista negra» (o «Lista negra · pago
+  total»), la misma del Master, con el tooltip «{motivo}. {requisito}» (§41.11
+  «Cómo se dice»). Sale si el celular del lead está en la automática vigente
+  (Activo, sin la excepción de Kapta) o tiene un alta viva a mano, en la
+  organización de la tienda del lead. **UNA lectura por página**
+  (`listaNegraMarksAmong` en `app/dashboard/leads/page.tsx`, con el cliente de
+  servicio, por trozos a la par; usa los índices de `pago_online_phones`,
+  `pago_online_exceptions` y `prepay_list_entries`), nunca una consulta por
+  fila. Contesta solo de los celulares que la página ya muestra. Sin lectura,
+  la fila no dice nada. El estado de lead `lista_negra` (§41.8) es otra cosa:
+  es de la fila del lead y no frena pedidos.
+- **La ficha del lead:** arriba de la columna de trabajo, antes de «Cómo sale
+  el pedido» (§25.2), el aviso «Lista negra» (warn): el motivo con las cuentas
+  de la propia clienta (o «Agregada a mano: …»), el requisito y qué hacer —«Antes
+  de ofrecer contra entrega, pídele el adelanto de S/ 20.» o «No le ofrezcas
+  contra entrega: solo pago total por adelantado.»— y la nota «Kapta no le
+  escribe a la clienta sobre la Lista negra.» (`loadLeadPrepayStatus`, que mira
+  las dos listas; con las dos, la que pide más).
+- **«Generar pedido»** sigue igual: con «Pago total» no lo crea; con «Adelanto
+  de S/ 20» lo crea y el aviso de «Pedido generado» lo recuerda (§41.11).
+
+Implementación: `lib/lista-negra.ts` (`withListaNegra`, `listaNegraMergeMarks`),
+`lib/lista-negra-server.ts` (`listaNegraMarksAmong`),
+`components/lista-negra-badge.tsx`, `components/lista-negra-banner.tsx` y
+`app/dashboard/leads/prepay-actions.ts`. Pruebas: `test/lista-negra.test.ts` y
+`test/prepay-gates.test.ts`.
+
 ## 26. Costo de producto (COGS)
 
 El módulo de Costos tiene tres ámbitos: costo logístico (§14), costo de producto
@@ -22479,8 +22512,9 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 - **Reembolsos:** `total_refunded` es la suma de los reembolsos del pedido. Un
   pedido pagado con un reembolso parcial queda `partially_refunded`; uno
   contraentrega sigue `pending`. El total del pedido no baja.
-- **Lista de pago adelantado (§41, 05-11-2026):** el checkout le pregunta a
-  Kapta por el celular (`POST /api/webhooks/woocommerce/<id>/prepago`, firmado
+- **Lista negra a mano (§41, 05-11-2026; canal retirado el 09-11-2026, §41.7:
+  las altas a mano viajan ahora en el envío diario de la automática):** el
+  checkout le pregunta a Kapta por el celular (`POST /api/webhooks/woocommerce/<id>/prepago`, firmado
   como los formularios abandonados) y le esconde `cod` a quien está en la lista
   (mu-plugin `docs/kapta/wordpress/kapta-prepago.php`; contrato de COD Core en
   `docs/kapta/cod-core-prepago.md`). Falla abierto: Kapta lo frena igual al
@@ -24928,11 +24962,10 @@ Vercel— y algunas no tenían interruptor.
     WhatsApp a clientas: Activo pide confirmación. Fuera de Apagado hace falta
     `CHATBY_API_KEY`; sin la 0324 la fila se bloquea. El historial lo guarda
     como `lima_retry_chatby_ask`.
-  - **Lista de pago adelantado** (§41, 05-11-2026; 0309): la regla automática
-    con Apagado / Simulación / Activo (confirmación antes de Activo), el
-    resumen de la última simulación («Entrarían N clientes…», con cuentas y
-    números de pedido, nunca celulares) y de la última pasada activa, y
-    «Simular ahora». La lista se ve y se cambia a mano en «Pago adelantado».
+  - **La regla de la lista a mano** (§41.2, 0309): **retirada** por el owner el
+    09-11-2026. Ya no tiene controles en el panel (ni la posición ni «Simular
+    ahora»); su código queda dormido y `setPrepayAutoMode` solo deja apagarla.
+    La Lista negra se ve, se busca y se completa a mano en su página (§41.3).
   - **Pago solo online (lista automática)** (§41.11, 09-11-2026; 0326,
     `#pago-online-posicion`, clave `pago_solo_online`): Apagado / Simulación /
     Activo (confirmación antes de Activo), «Lo que se cobra en los pedidos de
@@ -25000,15 +25033,38 @@ Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`,
 `test/history-guide-auto.test.ts`, `test/lima-retry-chatby-ask.test.ts`.
 
-## 41. Lista de pago adelantado (05-11-2026)
+## 41. Lista negra (antes «Lista de pago adelantado», 05-11-2026; unificada el 09-11-2026)
+
+**Una sola «Lista negra» (owner, 09-11-2026).** Las dos listas que frenan el
+contra entrega —la **automática** del §41.11 (internamente «pago solo online»)
+y la **agregada a mano** de este capítulo— se ven en UNA página, **«Lista
+negra»** (`/dashboard/clientes/lista-negra`; la ruta vieja
+`/dashboard/clientes/pago-adelantado` redirige), y se dicen igual en todo Kapta
+(§41.11 «Cómo se dice»). Lo que cambia respecto de lo de abajo:
+
+- **Cada alta a mano elige lo que pide** (`prepay_list_entries.requirement`,
+  0329): **«Adelanto de S/ 20»** (`adelanto`: el adelanto de la escalera del §8
+  validado, el mismo de la automática y de `aliclikRiskGate`, o el pago
+  completo) o **«Pago total»** (`pago_completo`). Las altas de antes y el valor
+  por defecto son el pago total: hoy nada cambia. Sin la 0329 el código lee sin
+  la columna y todo pide el total. Lo que pide no se reescribe (como el
+  motivo): se saca y se agrega de nuevo.
+- **La regla automática de esta lista (§41.2) queda retirada** por el owner:
+  nunca se encendió, y la automática del §41.11 ya cubre a esos clientes (sus
+  pedidos terminan `devuelto`). Sin controles en pantalla; código dormido.
+- **Las altas a mano llegan a las tiendas** en el envío diario de la
+  automática (§41.11), unidas a ella. La consulta `/prepago` del §41.7 queda
+  retirada como canal (§41.7).
+- **Es para lo que la regla no ve:** un fraude, una clienta que avisó que no va
+  a recibir.
 
 **Decisión del owner (05-11-2026).** Un cliente que **rechazó un pedido en la
 puerta o no lo recogió en la agencia** ya no compra contra entrega: **paga el
 total por adelantado, en línea**. Basta **un** pedido. La lista es por
 **celular** y por **organización** (Kenku y Aurela comparten la suya), se llena
 sola con la regla de abajo y también se agrega y se quita a mano, con motivo,
-persona y fecha. En pantalla se llama **«Lista de pago adelantado»**; en el
-habla del equipo, **lista negra** (el mismo concepto). Para WordPress y COD
+persona y fecha. En pantalla se llama **«Lista negra»** desde el 09-11-2026
+(antes «Lista de pago adelantado»). Para WordPress y COD
 Core, Kapta construye su lado, un mu-plugin y un contrato, y el owner se los
 entrega a sus equipos.
 
@@ -25021,7 +25077,15 @@ ni se busca en ella: para él la lista siempre dice «no». No se cruzan DNI,
 dirección ni correo: el teléfono sigue siendo la identidad del cliente (§8.1),
 con sus límites conocidos (otro número, un número compartido).
 
-### 41.2 Quién entra solo: la regla automática
+### 41.2 Quién entra solo: la regla automática (RETIRADA, owner 09-11-2026)
+
+> **Retirada.** El owner la retiró el 09-11-2026 sin haberla encendido nunca: la
+> Lista negra automática (§41.11) ya cubre a quien rechaza en la puerta o no
+> recoge (esos pedidos terminan `devuelto`). Sus controles salieron de
+> Automatizaciones y de la página; `setPrepayAutoMode` solo deja apagarla; el
+> cron `/api/cron/prepay-list` sigue corriendo y no hace nada (todas las
+> organizaciones están en Apagado). Lo de abajo queda como documentación del
+> código dormido.
 
 Un pedido **de los últimos seis meses** dispara el alta de su celular si tiene
 cualquiera de estos hechos. Es UNA definición (`prepayTriggersOfOrder`,
@@ -25074,11 +25138,12 @@ anterior como si fuera de hoy.
 
 ### 41.3 Altas y bajas a mano, y por qué una baja se respeta
 
-En **Clientes → «Pago adelantado»** (`/dashboard/clientes/pago-adelantado`):
-los activos con su último pedido, si los agregó la regla («Automático») o una
-persona («Manual»), el motivo, cuándo y quién; la búsqueda por celular;
-**«Agregar»** (celular + motivo) y **«Quitar»** (motivo); y los quitados, que no
-se borran. El motivo pide al menos 8 caracteres. **Ver** la lista puede
+En la página **«Lista negra»** (`/dashboard/clientes/lista-negra`, sección
+«Agregados a mano»; la ruta vieja redirige): los activos con su chapa (§41.11
+«Cómo se dice»), su último pedido, el motivo, lo que piden, cuándo y quién;
+**«Agregar a la Lista negra»** (celular, «Qué se le pide» y motivo) y **«Sacar
+de la Lista negra»** (motivo); y los sacados, que no se borran. La búsqueda por
+celular de la página contesta por las dos listas (§41.11). El motivo pide al menos 8 caracteres. **Ver** la lista puede
 cualquiera que vea pedidos de la organización (la RLS de la 0309 la deja leer a
 sus miembros); **cambiarla** pide el permiso nuevo **`prepay_list.manage`**
 («Gestionar la lista de pago adelantado»), que dueño y admin traen por su rol y
@@ -25106,7 +25171,14 @@ pedido; la creación de la guía como último recurso), nunca de `last_report_at
 ni de `status_since`. Una baja sin lo sabido (no debería haber) cae a la fecha:
 solo cuenta un hecho fechado después de esa baja.
 
-### 41.4 Lo que se exige: el pago completo
+### 41.4 Lo que se exige: lo que diga el alta (desde el 09-11-2026)
+
+**Desde la 0329, cada alta dice lo que pide** (§41, arriba): con «Pago total»
+vale lo de este apartado; con «Adelanto de S/ 20», el adelanto validado de la
+escalera del §8 o el pago completo (`prepayEntryRequirementMet`, el mismo
+`pagoOnlineRequirementMet` de la automática). Si el celular está también en la
+automática y su ajuste pide más (el pago completo), gana el que pide más
+(`prepayOrderCheck` mira las dos).
 
 Para un celular de la lista, el pedido sigue solo **pagado completo** —el
 prepago del checkout o los comprobantes que cubren el total y están validados:
@@ -25124,12 +25196,17 @@ quien no deba estar, se quita de la lista.
 | **«Generar pedido»** (Leads) | No crea un pedido contra entrega para ese celular (ni el del pedido ni el del lead). Tampoco **«Recuperar carrito»** (completa el borrador de Shopify contra entrega) ni la **prueba de auto-recompra** (`auto_order_trials`), que deja la fila `omitido` con el motivo `lista_pago_adelantado` antes de completar el borrador. Si la lista no se pudo leer, deja pasar: se frena al confirmar y al crear la guía. |
 | **Bot de Kapso** (`POST /api/internal/orders`, §38.13) | **422 `prepay_required`**, no reintentable, antes del candado: «deriva la conversación a una asesora, que cobra el total por adelantado». Igual que `agency_needs_advisor`. |
 | **Ficha del pedido** | Aviso crítico «Lista de pago adelantado: este cliente paga el total por adelantado», en cualquier etapa, con el motivo, el origen y los pedidos que lo dispararon, y **«Enviar link de pago»** por **lo que falta** (`prepayLinkPlan`), con el importe en el botón: sin comprobantes, el **total** (`kind: 'total'`); con un adelanto validado (y quizá diferencias), el **saldo** (`kind: 'diferencia'`, total menos lo validado), porque un segundo primer pago no cabe en el plan de cobro (0092: un solo adelanto o total vivo) y el pago de Flow entraría sin registrarse. Con un comprobante por validar no crea nada («valídalo antes»), y sin nada que cobrar no ofrece el botón. Crea (o reusa) el link de Flow (lib/flow/link.ts) si la tienda tiene Flow configurado y lo muestra para copiar; **Kapta no lo manda por WhatsApp**. Sin Flow, dice que se pida por Yape y se suba como «Pago total» o, si ya hay adelanto, como «Diferencia». Al pagarse, el webhook de Flow lo deja validado. |
-| **Ficha del lead** | El mismo aviso, antes de ofrecer contra entrega. |
-| **Lista del Master** | La chapa «Pago adelantado» en la fila, con una sola lectura por página. Se compara por **organización y celular**: quien ve dos organizaciones no ve la chapa en el pedido de una por un alta de la otra. |
+| **Ficha del lead** | El aviso «Lista negra» (§25.3), antes de ofrecer contra entrega. |
+| **Lista del Master y de Leads** | La chapa negra «Lista negra» (o «Lista negra · pago total») en la fila, la misma de la automática, con una sola lectura por página para las dos listas (`listaNegraMarksAmong`). Se compara por **organización y celular**: quien ve dos organizaciones no ve la chapa en el pedido de una por un alta de la otra. |
 
 La misma compuerta (`prepayOrderCheck`) frena también por la lista automática
-«Pago solo online» (§41.11), con lo que el owner decidió cobrar ahí (el
-adelanto, por defecto).
+(§41.11), con lo que el owner decidió cobrar ahí (el adelanto, por defecto).
+**Desde el 09-11-2026 todos los mensajes de esta tabla son los de la Lista
+negra** (§41.11 «Cómo se dice», `lib/lista-negra-copy.ts`): el mismo freno al
+confirmar y en las guías, el mismo motivo de Chatby (`pago_online`), el mismo
+422 del bot (al bot nunca el motivo escrito por el equipo: «Agregada a mano»),
+y en «Generar pedido» «no se genera» con «Pago total» o el aviso del adelanto
+con «Adelanto de S/ 20». Los textos de arriba son los de antes.
 
 **Lo que NO se frena, a propósito:** **vincular** una guía que ya existe (la
 Aliclik del portal, la Shalom hecha a mano en pro.shalom.pe, un número de Swayp
@@ -25151,6 +25228,22 @@ cada camino (§41.5). El texto de
 `aliclikPrepaidBlocker` recomendaba Tanders y ya no (05-11-2026).
 
 ### 41.7 La tienda: WordPress y COD Core
+
+> **El canal elegido (owner, 09-11-2026): el envío diario de la automática.**
+> Lo que se encontró: lo de abajo —la consulta firmada `POST
+> /api/webhooks/woocommerce/<id>/prepago`, el mu-plugin
+> `docs/kapta/wordpress/kapta-prepago.php` y el contrato de COD Core
+> `docs/kapta/cod-core-prepago.md`— se construyó el 05-11-2026 para que el
+> owner lo entregara; en el repo no hay constancia de que alguna tienda lo
+> instalara, y COD Core implementó en cambio el endpoint de la lista automática (`/wp-json/cod-core/v1/pago-solo-online`,
+> cod-core 0.10.45, §41.11), que recibe la lista entera cada día. Para no tener
+> dos canales que compitan, **las altas vivas a mano viajan en ese mismo envío
+> diario**, unidas a la automática (§41.11). La consulta `/prepago` queda
+> **retirada como canal**: sigue respondiendo (solo con las altas a mano, como
+> siempre) por si alguien la instaló, pero no se entrega ni se instala; el
+> mu-plugin y el contrato llevan la nota. Una alta a mano frena en Kapta desde
+> ya y llega a las tiendas en el envío de las 05:00 del día siguiente (con la
+> automática en Activo).
 
 Kapta expone **`POST /api/webhooks/woocommerce/<id de la tienda>/prepago`**:
 
@@ -25223,7 +25316,7 @@ crear la guía.
 
 ### 41.9 Lo que falta
 
-- La chapa en la **lista de Leads** (la de la ficha sí está).
+- ~~La chapa en la **lista de Leads**~~: hecha el 09-11-2026 (§25.3).
 - Las funciones `check-coverage` del bot de Kapso (`docs/kapso-functions/`)
   todavía ofrecen contra entrega sin preguntar a la lista; además piden «S/30»
   de adelanto cuando `ADELANTO_MINIMO` es S/20.
@@ -25237,6 +25330,18 @@ crear la guía.
   lista se hace en la web, con Flow.
 
 ### 41.10 Implementación
+
+**Lista negra unificada (09-11-2026).** Migración `0329_lista_negra_requisito.sql`
+(`prepay_list_entries.requirement`, `pago_completo` por defecto y en las filas
+de antes, que el trigger de la 0309 ya no deja reescribir; `lista_negra_searches`,
+el tope de la búsqueda por persona, sin celulares y sin acceso del navegador).
+Lo que se dice: `lib/lista-negra-copy.ts` (la única fuente); la unión, las
+marcas y la búsqueda, puras: `lib/lista-negra.ts`; lo que lee el servidor:
+`lib/lista-negra-server.ts` (`listaNegraMarksAmong`, `searchListaNegra`); la
+página: `app/dashboard/clientes/lista-negra/` y `components/prepay-list-page.tsx`;
+la chapa y el aviso: `components/lista-negra-badge.tsx` y
+`components/lista-negra-banner.tsx`. Pruebas: `test/lista-negra.test.ts` y
+`scripts/sql/lista_negra_smoke.sql`.
 
 Migración `0309_prepay_list.sql` (`prepay_list_entries` con
 `removed_known_order_ids`, `prepay_list_settings`; lectura para miembros de la
@@ -25252,6 +25357,72 @@ aviso: `components/prepay-list-banner.tsx`. Pruebas: `test/prepay-list.test.ts`,
 Automatizaciones.
 
 ### 41.11 «Pago solo online (lista automática)» (09-11-2026)
+
+**Cómo se dice (owner, 09-11-2026; `lib/lista-negra-copy.ts`, la única fuente).**
+Siempre **«Lista negra»** (L mayúscula, n minúscula); en una frase, «la Lista
+negra». Nunca «pago solo online», «lista de pago adelantado» ni «lista de pago
+completo» en pantalla: son llaves internas. La automática y la agregada a mano
+se leen igual; solo cambian el motivo y «pago total» cuando es lo que se pide.
+
+- **La chapa** (`tone="blacklist"`, negra con letras blancas; Master, Leads y la
+  página): «Lista negra», o «Lista negra · pago total»; tooltip «{motivo}.
+  {requisito}».
+- **El motivo:** «Devolvió N pedido(s) y nunca recibió», «Anuló N de M pedidos
+  y nunca recibió», «Agregada a mano: {motivo escrito}» (o «Agregada a mano»).
+- **El requisito:** «Para contra entrega: adelanto de S/ 20 validado o pago
+  online completo.» o «Solo con pago total por adelantado.»
+- **Los avisos** (ficha del pedido y del lead, la misma estructura): título
+  «Lista negra», el motivo, el requisito, qué hacer —en el pedido sin cumplir
+  (crit) «No se confirma ni sale guía hasta validar el adelanto. Regístralo en
+  «Cómo sale el pedido».» o «…hasta validar el pago total.»; cumplido (info)
+  «Adelanto validado: el pedido puede seguir.» o «Pago total validado: el
+  pedido puede seguir.»; en el lead (warn) «Antes de ofrecer contra entrega,
+  pídele el adelanto de S/ 20.» o «No le ofrezcas contra entrega: solo pago
+  total por adelantado.»— y la nota «Kapta no le escribe a la clienta sobre la
+  Lista negra.»
+- **Los mensajes cortos:** el freno «Lista negra ({motivo}): falta el adelanto
+  de S/ 20 validado.» (o «…: falta el pago total validado.»); Chatby «Lista
+  negra ({motivo}): Kapta no crea la guía ni le escribe. Cobra el adelanto y
+  confirma tú.»; el bot «Cliente en Lista negra ({motivo}). El bot no crea
+  pedidos contra entrega: deriva a una asesora para cobrar el adelanto de S/ 20
+  o el pago online completo.» (o «…para cobrar el pago total.»; al bot nunca el
+  motivo escrito de un alta a mano); «Generar pedido» «· Lista negra: no sale
+  sin el adelanto de S/ 20 validado.» o, si no lo crea, «Lista negra ({motivo}):
+  solo con pago total por adelantado; no se genera contra entrega.»
+- **Acciones:** «Exceptuar de la Lista negra» (motivo, 8+), «Quitar
+  excepción», «Agregar a la Lista negra» («Qué se le pide»: «Adelanto de S/ 20»
+  o «Pago total»), «Sacar de la Lista negra».
+- **Automatizaciones:** la sección «Lista negra», el ajuste «Qué se pide en los
+  pedidos de Kapta» («Adelanto de S/ 20» o «Pago total») y el historial
+  «Lista negra · …».
+
+**Lo que va a las tiendas es la Lista negra entera (owner, 09-11-2026).** El
+envío diario (y «Aceptar la lista de hoy», «Calcular ahora» y los reintentos)
+manda la corrida vigente **más las altas vivas a mano**
+(`livePrepayPhones`), en 9 dígitos y sin repetidos (`listaNegraSendPhones`); la
+`regla` lo dice («… · más N agregados a mano en Kapta»). Las excepciones de
+Kapta sacan a alguien solo de la automática: un alta a mano va igual. El freno
+de cambio brusco **de cada tienda** cuenta esa unión (es lo que recibe; su piso
+es su último envío bueno); el de la corrida sigue contando la automática sola
+(es la que frena en Kapta). Si no se pueden leer las altas a mano, el envío
+falla y se reintenta (la tienda se queda con la anterior). Es el único canal
+por el que una alta a mano llega a las tiendas (§41.7).
+
+**La página «Lista negra»** (`/dashboard/clientes/lista-negra`): arriba,
+«Automática» —la posición, cuántos hay en la vigente (devolvieron / anulan casi
+todo), cuándo se calculó, lo que se pide, el último envío bueno a cada tienda
+(`loadPagoOnlinePanel`, solo cuentas), la búsqueda y las excepciones de Kapta
+con los tres últimos dígitos y «Quitar excepción»—; abajo, «Agregados a mano»
+(§41.3). **La búsqueda** («Buscar un celular») es una server action que
+contesta SOLO por ese celular (`searchListaNegra`): si está y por qué («Está en
+la Lista negra · {motivo}» / «No está en la Lista negra»), si Kapta lo exceptuó
+(«Exceptuada · {motivo}»), su alta a mano y sus pedidos recientes (con la RLS
+de quien busca). La página nunca recibe la lista. La ve cualquier miembro que
+no sea motorizado; tiene un tope de **30 búsquedas cada 10 minutos por
+persona** (`lista_negra_searches`, 0329, sin el celular; sin la 0329, sin
+tope). «Exceptuar de la Lista negra» desde el resultado (solo si está en la
+vigente) y «Quitar excepción» piden `prepay_list.manage` y producción, y dejan
+su fila en `automation_switch_events` (`pago_solo_online_excepcion`).
 
 **En pantalla se llama «Lista negra» (owner, 09-11-2026).** En Kapta —la chapa
 del Master, el aviso de la ficha, los mensajes de Chatby, el bot y «Generar
@@ -25332,8 +25503,9 @@ El cliente de la lista paga un **adelanto**: el de la escalera del §8, S/ 20
 (`ADELANTO_MINIMO`), **validado** (`payment_state` en `adelanto_validado`,
 `diferencia_cargada` o `pago_completo`, el mismo que lee `aliclikRiskGate`), o
 el pago online completo (`orderFullyPaid`). Es un ajuste
-(`pago_online_settings.requirement`): **«Adelanto (regla §8)»** (`adelanto`, por
-defecto) o **«Pago completo»** (`pago_completo`). No hay un estado de pago
+(`pago_online_settings.requirement`): **«Adelanto de S/ 20»** (`adelanto`, por
+defecto; antes «Adelanto (regla §8)») o **«Pago total»** (`pago_completo`;
+antes «Pago completo»). No hay un estado de pago
 nuevo. La escalera del §8 sigue igual encima: con 3 o más antecedentes, Aliclik
 pide el total por su lado. En la web de la tienda no cambia nada: ahí solo paga
 online.
@@ -25392,10 +25564,10 @@ freno paralelo: `prepayOrderCheck` (lib/prepay-list-server.ts), que ya usan
 todos los puntos del §41.5, mira primero la lista de pago adelantado (pide el
 total y manda) y, si no está ahí, `pago_online_lookup` (0326): el celular está
 en la lista vigente, la organización está en **Activo** y Kapta no lo
-exceptuó. Sin lo que pide el ajuste, frena con «Cliente con entrega devuelta y
-ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)» o
-«Cliente que anuló N de M pedidos y nunca recibió: solo pago online o adelanto»
-(«solo pago online» con «Pago completo»). Así frena, igual que la otra lista:
+exceptuó. Sin lo que pide el ajuste, frena con «Lista negra (devolvió N
+pedidos y nunca recibió): falta el adelanto de S/ 20 validado.» o «Lista negra
+(anuló N de M pedidos y nunca recibió): …» («…: falta el pago total validado.»
+con «Pago total»; arriba, «Cómo se dice»). Así frena, igual que la otra lista:
 
 - **Confirmar** en la mesa («Confirmó el pedido» se rechaza con el mensaje) y la
   confirmación expresa de agencia (no se escribe sola).
@@ -25409,9 +25581,9 @@ ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)» o
   lista de pago adelantado), Swayp/Fénix en su última puerta, Grupo GF, las
   salidas manuales, «Sacar con salida nueva» de Repro Lima y Shalom. «No se pudo
   leer» frena una guía; sin la 0326, nada se frena.
-- **La ficha del pedido:** el aviso con su porqué —«Cliente con entrega devuelta
-  y ninguna recibida» o «Cliente que anuló N de M pedidos y nunca recibió»—,
-  sus cuentas (sus devueltos, o cuántos anuló de cuántos), lo que se cobra y si
+- **La ficha del pedido:** el aviso «Lista negra» con su porqué —«Devolvió N
+  pedidos y nunca recibió» o «Anuló N de M pedidos y nunca recibió»—, sus
+  cuentas (sus devueltos, o cuántos anuló de cuántos), lo que se cobra y si
   ya lo tiene. Ningún dato de otros clientes. Solo si no está en la lista de
   pago adelantado (que pide más).
 - **El bot de Kapso** (`POST /api/internal/orders`, owner 09-11-2026): no crea
@@ -25428,14 +25600,14 @@ ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)» o
   que no se confirma ni sale sin el adelanto de S/ 20 validado. «Recuperar
   carrito» sigue la misma regla. La confirmación y las guías lo vuelven a
   frenar igual.
-- **La lista del Master:** la chapa «Pago solo online» en la fila (si no tiene
-  ya la de «Pago adelantado»), con una lectura por página
-  (`pagoOnlineListedAmong`, con el cliente de servicio porque los celulares de
-  la lista no se leen desde el navegador; solo devuelve sí o no de los
+- **La lista del Master (y la de Leads, §25.3):** UNA chapa negra «Lista
+  negra» (o «· pago total») para las dos listas, con UNA lectura por página
+  (`listaNegraMarksAmong`, con el cliente de servicio porque los celulares de
+  la lista no se leen desde el navegador; solo contesta, con su motivo, de los
   celulares que la página ya muestra), por organización y sin excepciones.
 
-**Excepciones de Kapta** (`pago_online_exceptions`): «Exceptuar a este
-cliente» en el aviso de la ficha, con motivo (8+ caracteres) y
+**Excepciones de Kapta** (`pago_online_exceptions`): «Exceptuar de la Lista
+negra» en el aviso de la ficha o en la búsqueda de la página, con motivo (8+ caracteres) y
 `prepay_list.manage` (dueño y admin). Kapta deja de frenarlo **al momento**
 (`pago_online_lookup` mira la excepción) y el celular **no va en el próximo
 envío** a las tiendas. Se quita en el panel, con motivo; la fila queda. El

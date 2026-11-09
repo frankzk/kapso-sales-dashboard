@@ -320,7 +320,9 @@ describe("antes de creerse el listado", () => {
 
   it("el listado está entero si trae las guías de la API del periodo", () => {
     const codes = listado.map((g) => g.guia);
-    expect(listingCoverage(listado, codes)).toEqual({ esperadas: 20, encontradas: 20, completo: true });
+    expect(listingCoverage(listado, codes)).toEqual({ esperadas: 20, encontradas: 20, completo: true, faltantes: [] });
+    // Las que faltan van a la bitácora (hasta 15), para ver qué frena el cotejo.
+    expect(listingCoverage(listado.slice(0, 15), codes).faltantes).toEqual(codes.slice(15));
     expect(listingCoverage(listado.slice(0, 15), codes).completo).toBe(false);
     // Sin ninguna guía con la que medir, no se da por entero.
     expect(listingCoverage(listado, []).completo).toBe(false);

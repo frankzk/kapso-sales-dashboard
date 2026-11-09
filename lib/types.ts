@@ -222,9 +222,23 @@ export interface StoreSummary {
   status: string;
 }
 
+/** Lo que una fila sabe de la «Lista negra» (`ListaNegraMark`, lib/lista-negra.ts). Sin celulares. */
+export interface ListaNegraRowMark {
+  source: "manual" | "auto";
+  motivo: string;
+  requirement: "adelanto" | "pago_completo";
+}
+
 export interface LeadRow {
   id: string;
   store_id: string;
+  /**
+   * La «Lista negra» (MOM §41 y §41.11): por qué está —el motivo, con las
+   * cuentas del propio cliente— y qué se le pide. Lo marca el servidor en
+   * lote para la página (`withListaNegra`, una lectura de las dos listas);
+   * null o ausente = no está o no se sabe.
+   */
+  lista_negra?: ListaNegraRowMark | null;
   /** NULLABLE desde la 0105. Un cliente que adoptó un username de WhatsApp llega
    *  sin número: su identidad es el `bsuid`. Se tipa nullable a propósito para
    *  que el compilador marque cada sitio que asumía un teléfono — llamar, wa.me,
@@ -671,7 +685,13 @@ export interface OrderMasterRow {
    * El celular está en la lista automática «Pago solo online» vigente (MOM
    * §41.11). Lo marca el servidor en lote (`withPagoOnlineListed`).
    */
-  pago_online_listed?: boolean | null;
+  pago_online_listed?: boolean | null;  /**
+   * La «Lista negra» (MOM §41 y §41.11): por qué está —el motivo, con las
+   * cuentas del propio cliente— y qué se le pide. Lo marca el servidor en
+   * lote para la página (`withListaNegra`, una lectura de las dos listas);
+   * null o ausente = no está o no se sabe.
+   */
+  lista_negra?: ListaNegraRowMark | null;
 }
 
 /** Un movimiento de la línea de tiempo (`order_events`, append-only). */

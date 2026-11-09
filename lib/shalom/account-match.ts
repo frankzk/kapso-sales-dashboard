@@ -666,6 +666,11 @@ export interface ListingCoverage {
   esperadas: number;
   encontradas: number;
   completo: boolean;
+  /**
+   * Hasta 15 guías de la API que el listado no trajo (09-11-2026): solo para
+   * la bitácora, para ver QUÉ falta cuando la cobertura frena el cotejo.
+   */
+  faltantes?: string[];
 }
 
 /** De las guías de la API que deberían estar, cuántas tienen que aparecer. */
@@ -685,6 +690,7 @@ export function listingCoverage(guides: readonly ShalomListingGuide[], expected:
     esperadas: wanted.length,
     encontradas,
     completo: wanted.length > 0 && encontradas / wanted.length >= COVERAGE_MIN,
+    faltantes: wanted.filter((g) => !have.has(g)).slice(0, 15),
   };
 }
 

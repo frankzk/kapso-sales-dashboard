@@ -539,7 +539,7 @@ async function loadPrepayAuto(admin: SupabaseClient, orgId: string): Promise<Pre
   const { settings, missing, error } = await loadPrepaySettings(admin, orgId);
   const empty: PrepayAutoView = { available: false, mode: "apagado", activeCount: null, lastSimulation: null, lastRun: null, error: null };
   if (missing) return empty;
-  if (error) return { ...empty, error: "No se pudo leer la regla de la lista de pago adelantado: no se puede cambiar ahora." };
+  if (error) return { ...empty, error: "No se pudo leer la regla retirada de la Lista negra a mano." };
   const { count } = await admin
     .from("prepay_list_entries")
     .select("id", { count: "exact", head: true })

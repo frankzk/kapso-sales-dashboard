@@ -26,11 +26,14 @@ describe("los documentos", () => {
     expect(s4111).toContain("**El bot de Kapso** (`POST /api/internal/orders`, owner 09-11-2026)");
     expect(s4111).toContain("**«Generar pedido» de Leads** (owner 09-11-2026)");
     expect(s4111).toContain("**«Vaciar la lista de la tienda»**");
-    expect(s4111).toContain("**«Adelanto (regla §8)»** (`adelanto`, por defecto)");
-    expect(s4111).toContain("**«Pago completo»** (`pago_completo`)");
+    expect(s4111).toContain("**«Adelanto de S/ 20»** (`adelanto`, por defecto; antes «Adelanto (regla §8)»)");
+    expect(s4111).toContain("**«Pago total»** (`pago_completo`; antes «Pago completo»)");
     expect(s4111).toContain("`prepayOrderCheck`");
-    expect(s4111).toContain("«Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)»");
-    expect(s4111).toContain("«Cliente que anuló N de M pedidos y nunca recibió: solo pago online o adelanto»");
+    expect(s4111).toContain("«Lista negra (devolvió N pedidos y nunca recibió): falta el adelanto de S/ 20 validado.»");
+    // Cómo se dice (lib/lista-negra-copy.ts) y la fórmula larga de antes, fuera.
+    expect(s4111).toContain("**Cómo se dice (owner, 09-11-2026; `lib/lista-negra-copy.ts`, la única fuente).**");
+    expect(s4111).toContain("**Lo que va a las tiendas es la Lista negra entera (owner, 09-11-2026).**");
+    expect(s4111).not.toContain("solo pago online o adelanto");
     expect(s4111).toContain("**404** es «la tienda todavía no tiene el endpoint»");
     expect(s4111).toContain("0326_pago_solo_online.sql");
     // §8 y §40 apuntan aquí.
@@ -68,9 +71,9 @@ describe("las piezas conectadas", () => {
     expect(PAGO_ONLINE_MODE_EVENT).toBe(PAGO_ONLINE_KEY);
     expect(PAGO_ONLINE_KEY).toBe("pago_solo_online");
     expect(automationEventLabel("pago_solo_online_vaciar")).toBe("Lista negra · lista de la tienda vaciada");
-    expect(automationEventLabel(PAGO_ONLINE_MODE_EVENT)).toBe("Lista negra (automática)");
-    expect(automationValueLabel(PAGO_ONLINE_REQUIREMENT_EVENT, "adelanto")).toBe("Adelanto (regla §8)");
-    expect(automationValueLabel(PAGO_ONLINE_REQUIREMENT_EVENT, "pago_completo")).toBe("Pago completo");
+    expect(automationEventLabel(PAGO_ONLINE_MODE_EVENT)).toBe("Lista negra · posición");
+    expect(automationValueLabel(PAGO_ONLINE_REQUIREMENT_EVENT, "adelanto")).toBe("Adelanto de S/ 20");
+    expect(automationValueLabel(PAGO_ONLINE_REQUIREMENT_EVENT, "pago_completo")).toBe("Pago total");
   });
 
   it("el freno vive dentro de `prepayOrderCheck`, después de la lista de pago adelantado", () => {
@@ -82,8 +85,9 @@ describe("las piezas conectadas", () => {
 
   it("Chatby lo deja para la asesora sin escribirle a la clienta", () => {
     const src = read("lib/chatby-autoconfirm-server.ts");
-    expect(src).toContain('return { kind: "hold", reason: "pago_online", detail: prepay.message, state: "para_persona" };');
-    expect(src).toContain('if (prepay.state === "blocked" && prepay.source === "pago_online") return "lista negra (automática)";');
+    // Las dos listas por igual, con el texto de lib/lista-negra-copy.ts.
+    expect(src).toContain('return { kind: "hold", reason: "pago_online", detail: lnChatbyHold(prepay.motivo, prepay.requirement), state: "para_persona" };');
+    expect(src).toContain('if (prepay.state === "blocked") return LN_IN_PROSE;');
   });
 
   it("los umbrales del anulador y los hechos de la migración son los mismos en la 0326", () => {
@@ -99,10 +103,11 @@ describe("las piezas conectadas", () => {
   it("el bot y «Generar pedido» miran la lista automática", () => {
     expect(read("lib/bot-orders.ts")).toContain('pagoOnlineOrderMessage("bot", auto.requirement, auto.who)');
     const leads = read("app/dashboard/leads/actions.ts");
-    expect(leads).toContain('if (auto.state === "listed" && auto.requirement === "pago_completo") return pagoOnlineOrderMessage("pedido", auto.requirement, auto.who);');
+    expect(leads).toContain('return mark?.requirement === "pago_completo" ? lnGenerateRefused(mark.motivo) : null;');
     expect(leads).toContain("const pagoOnlineNote = await generatedOrderPagoOnlineNote(admin, ctx.storeId, [phone, l.phone]);");
-    expect(read("app/dashboard/pedidos/page.tsx")).toContain("rows={withPagoOnlineListed(");
-    expect(read("components/orders-master.tsx")).toContain("{!r.prepay_listed && r.pago_online_listed && (");
+    // El Master marca las dos listas con UNA lectura y una sola chapa.
+    expect(read("app/dashboard/pedidos/page.tsx")).toContain("rows={withListaNegra(");
+    expect(read("components/orders-master.tsx")).toContain('{r.lista_negra && <ListaNegraBadge mark={r.lista_negra} className="xl:mt-0.5" />}');
   });
 
   it("los celulares de la lista no tienen acceso del navegador", () => {

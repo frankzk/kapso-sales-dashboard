@@ -137,9 +137,9 @@ import {
 import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import { mergePriorOrders } from "@/lib/order-admin-url";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
-import { isPrepayRequired, orgOfStore } from "@/lib/prepay-list-server";
-import { prepayBlockMessage } from "@/lib/prepay-list";
-import { pagoOnlineOrderMessage } from "@/lib/pago-online";
+import { orgOfStore, prepayEntryRequirementFor } from "@/lib/prepay-list-server";
+import { listaNegraAutoMark, listaNegraManualMark, listaNegraMergeMarks, type ListaNegraMark } from "@/lib/lista-negra";
+import { LN_GENERATE_NOTICE, lnGenerateRefused } from "@/lib/lista-negra-copy";
 import { pagoOnlineLookupAny } from "@/lib/pago-online-lookup";
 import {
   LEAD_VOICE_KIND,
@@ -2772,51 +2772,61 @@ function defaultConfirmation(o: {
 }
 
 /**
- * ¿El celular del pedido (o el del lead) está en la «Lista de pago
- * adelantado» (MOM §41)? El mensaje que frena «Generar pedido», o null. Falla
- * abierto: las compuertas de confirmación y de guías lo vuelven a mirar.
+ * Lo que pide la Lista negra (MOM §41 y §41.11) para el celular del pedido o el
+ * del lead: el alta a mano (la que pide más, si está en las dos) o la
+ * automática vigente. Null si no está o no se pudo leer (falla abierto: las
+ * compuertas de confirmación y de guías lo vuelven a mirar).
+ */
+async function generateOrderListaNegra(
+  admin: ReturnType<typeof createAdminSupabase>,
+  storeId: string,
+  phones: (string | null | undefined)[],
+): Promise<ListaNegraMark | null> {
+  try {
+    const orgId = await orgOfStore(admin, storeId);
+    if (!orgId) return null;
+    let manual: ListaNegraMark | null = null;
+    for (const phone of phones) {
+      const entry = await prepayEntryRequirementFor(admin, orgId, phone);
+      if (entry) {
+        manual = listaNegraManualMark({ reason: entry.reason, requirement: entry.requirement });
+        break;
+      }
+    }
+    const auto = await pagoOnlineLookupAny(admin, orgId, phones);
+    return listaNegraMergeMarks(manual, auto.state === "listed" ? listaNegraAutoMark(auto.who, auto.requirement) : null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * El mensaje que frena «Generar pedido» (y «Recuperar carrito»), o null: con
+ * «Pago total» no se crea —la venta va por la web, online— (lib/lista-negra-copy.ts,
+ * `lnGenerateRefused`). Con «Adelanto de S/ 20» SÍ se crea: el adelanto se
+ * registra en el pedido («Cómo sale el pedido», §25.2).
  */
 async function generateOrderPrepayBlock(
   admin: ReturnType<typeof createAdminSupabase>,
   storeId: string,
   phones: (string | null | undefined)[],
 ): Promise<string | null> {
-  try {
-    const orgId = await orgOfStore(admin, storeId);
-    if (!orgId) return null;
-    for (const phone of phones) {
-      if (await isPrepayRequired(admin, orgId, phone)) return prepayBlockMessage("pedido");
-    }
-    // «Pago solo online (lista automática)», MOM §41.11: con «Pago completo»
-    // tampoco se crea (la venta va por la web, como la lista de arriba). Con
-    // «Adelanto (regla §8)» SÍ se crea: el adelanto se registra en el pedido
-    // («Cómo sale el pedido», §25.2), y la confirmación y las guías lo esperan.
-    const auto = await pagoOnlineLookupAny(admin, orgId, phones);
-    if (auto.state === "listed" && auto.requirement === "pago_completo") return pagoOnlineOrderMessage("pedido", auto.requirement, auto.who);
-  } catch {
-    return null;
-  }
-  return null;
+  const mark = await generateOrderListaNegra(admin, storeId, phones);
+  return mark?.requirement === "pago_completo" ? lnGenerateRefused(mark.motivo) : null;
 }
 
 /**
- * El aviso que acompaña a un pedido recién creado para un celular de «Pago
- * solo online» con «Adelanto (regla §8)» (MOM §41.11): no se confirma ni sale
- * sin el adelanto validado. Vacío si no aplica o no se pudo leer.
+ * Lo que se añade a «Pedido generado» para un celular de la Lista negra con
+ * «Adelanto de S/ 20»: «· Lista negra: no sale sin el adelanto de S/ 20
+ * validado.» Vacío si no aplica o no se pudo leer.
  */
 async function generatedOrderPagoOnlineNote(
   admin: ReturnType<typeof createAdminSupabase>,
   storeId: string,
   phones: (string | null | undefined)[],
 ): Promise<string> {
-  try {
-    const orgId = await orgOfStore(admin, storeId);
-    if (!orgId) return "";
-    const auto = await pagoOnlineLookupAny(admin, orgId, phones);
-    return auto.state === "listed" ? ` · ${pagoOnlineOrderMessage("pedido_aviso", auto.requirement, auto.who)}` : "";
-  } catch {
-    return "";
-  }
+  const mark = await generateOrderListaNegra(admin, storeId, phones);
+  return mark?.requirement === "adelanto" ? ` ${LN_GENERATE_NOTICE}` : "";
 }
 
 /**
@@ -3358,8 +3368,8 @@ async function registrarVentaGenerada(v: {
     }
   }
 
-  // «Pago solo online» con adelanto (MOM §41.11): el pedido nace, y el aviso
-  // dice que no se confirma ni sale sin el adelanto de S/ 20 validado.
+  // La Lista negra con adelanto (MOM §41.11): el pedido nace, y el aviso dice
+  // que no sale sin el adelanto validado.
   const pagoOnlineNote = await generatedOrderPagoOnlineNote(admin, ctx.storeId, [phone, l.phone]);
   const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}${pagoOnlineNote}`;
   const confirmationSent = confirmNote.toLowerCase().includes("enviada");
