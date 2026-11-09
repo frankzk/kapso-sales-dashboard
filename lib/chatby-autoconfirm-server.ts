@@ -1715,7 +1715,7 @@ async function autoAsk(
 async function askBlockedForPerson(admin: SupabaseClient, row: MasterRow): Promise<string | null> {
   if (chatbyGuideBlock(row)) return "envío programado";
   const prepay = await prepayOrderCheck(admin, row as unknown as PrepayOrderRow, "confirmar");
-  if (prepay.state === "blocked" && prepay.source === "pago_online") return "pago solo online (lista automática)";
+  if (prepay.state === "blocked" && prepay.source === "pago_online") return "lista negra (automática)";
   if (prepay.state !== "ok") return "lista de pago adelantado";
   const { data: draft, error } = await admin.from("shalom_order_drafts").select("order_id").eq("order_id", row.order_id).limit(1);
   if (error) return "no se pudo leer el borrador de Shalom";

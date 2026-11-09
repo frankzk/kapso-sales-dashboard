@@ -306,7 +306,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "riders.manage": "Crear la ficha del motorizado y darle acceso a su ruta en el celular.",
   "leads.map_ads": "Decir qué producto vende cada anuncio de Meta, para ordenar la cola de leads.",
   "orders.create": "Crear un pedido desde Kapta. Se crea de verdad en la tienda de Shopify.",
-  "prepay_list.manage": "Agregar o quitar, con motivo, clientes de la lista de pago adelantado (lista negra). Verla puede todo el equipo.",
+  "prepay_list.manage": "Agregar o quitar, con motivo, clientes de la lista de pago adelantado (pago completo, a mano). Verla puede todo el equipo.",
   "data.export": "Descargar en Excel o CSV el Master de Pedidos, con nombres y teléfonos de las clientas.",
   "team.manage": "Invitar y quitar vendedoras, darles tiendas y fijar sus horarios.",
   "stores.manage": "Conectar Shopify, los ajustes de cada tienda y su ciclo de confirmación.",

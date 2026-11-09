@@ -254,7 +254,7 @@ describe("stores.platform = 'shopify': el camino de siempre, sin WooCommerce", (
     const res = await generateOrder(LEAD, shopifyVenta());
     expect(res.error).toBeUndefined();
     expect(res.notice).toContain("Pedido generado ✓");
-    expect(res.notice).toContain("Ojo: Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
+    expect(res.notice).toContain("Ojo: Lista negra · Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
     expect(res.notice).toContain("adelanto de S/ 20 validado");
     expect(h.db.rows("orders")).toHaveLength(1);
   });

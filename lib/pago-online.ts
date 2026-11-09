@@ -33,7 +33,7 @@ import { orderFullyPaid, type OrderPaymentFacts } from "@/lib/order-paid";
 import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
 
 /** Cómo se llama en pantalla. */
-export const PAGO_ONLINE_LABEL = "Pago solo online (lista automática)";
+export const PAGO_ONLINE_LABEL = "Lista negra (automática)";
 /** La clave del catálogo y del historial (`automation_switch_events.automation`). */
 export const PAGO_ONLINE_KEY = "pago_solo_online";
 /** La clave del historial del ajuste «qué se cobra». */
@@ -224,7 +224,7 @@ export function pagoOnlineWhoText(who: PagoOnlineWho): string {
 
 /** El titular con lo que le queda: «… : solo pago online o adelanto» (o «solo pago online» con pago completo). Pura. */
 export function pagoOnlineHeadline(who: PagoOnlineWho, requirement: PagoOnlineRequirement = PAGO_ONLINE_DEFAULT_REQUIREMENT): string {
-  return `${pagoOnlineWhoText(who)}: ${requirement === "adelanto" ? "solo pago online o adelanto" : "solo pago online"}`;
+  return `Lista negra · ${pagoOnlineWhoText(who)}: ${requirement === "adelanto" ? "solo pago online o adelanto" : "solo pago online"}`;
 }
 
 /** Las cuentas entre paréntesis para un `devuelto` («(2 devueltos, 0 recibidas)»); el anulador ya las dice. Pura. */

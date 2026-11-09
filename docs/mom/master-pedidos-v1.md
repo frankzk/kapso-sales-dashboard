@@ -25253,6 +25253,16 @@ Automatizaciones.
 
 ### 41.11 «Pago solo online (lista automática)» (09-11-2026)
 
+**En pantalla se llama «Lista negra» (owner, 09-11-2026).** En Kapta —la chapa
+del Master, el aviso de la ficha, los mensajes de Chatby, el bot y «Generar
+pedido», y el panel de Automatizaciones— esta lista automática se llama
+**«Lista negra»** (`PAGO_ONLINE_LABEL` = «Lista negra (automática)»; el titular
+empieza con «Lista negra ·»). Las llaves internas (`pago_online_*`,
+`pago_solo_online`) y el contrato con las tiendas («pago solo online», COD
+Core) no cambian. La lista de pago adelantado de arriba (§41.1–§41.10), que se
+llena a mano y pide el total, deja de llamarse «lista negra»: su sinónimo en
+pantalla pasa a ser «lista de pago completo» (`PREPAY_LIST_SYNONYM`).
+
 **Pedido de las tiendas y decisión del owner (09-11-2026).** Kenku Perú y Aurela
 dejan de ofrecer contra entrega en su web a quien **nunca recibió un pedido y ya
 devolvió uno, o anula casi todo lo que pide**: solo paga online (Flow). La tienda ya sabe aplicarlo

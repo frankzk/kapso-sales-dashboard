@@ -138,7 +138,7 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
   };
   const { settings, missing, error } = await loadPagoOnlineSettings(admin, orgId);
   if (missing) return empty;
-  if (error) return { ...empty, error: "No se pudo leer «Pago solo online»: no se puede cambiar ahora." };
+  if (error) return { ...empty, error: "No se pudo leer la «Lista negra»: no se puede cambiar ahora." };
 
   const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
   const [runsRes, sendsRes, excRes, currentRes] = await Promise.all([
@@ -248,7 +248,7 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
       addedAt: formatLimaDateTime(e.added_at),
       addedBy: e.added_by ? (people[e.added_by] ?? "Alguien del equipo") : "Kapta",
     })),
-    error: problems.length ? `No se pudieron leer ${problems.join(", ")} de «Pago solo online».` : null,
+    error: problems.length ? `No se pudieron leer ${problems.join(", ")} de la «Lista negra».` : null,
   };
 }
 
@@ -267,7 +267,7 @@ export async function loadPagoOnlinePanel(admin: SupabaseClient, orgId: string):
       lastSimulation: null,
       stores: [],
       exceptions: [],
-      error: `No se pudo leer «Pago solo online»: ${e instanceof Error ? e.message : String(e)}`,
+      error: `No se pudo leer la «Lista negra»: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }

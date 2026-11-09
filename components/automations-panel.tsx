@@ -175,7 +175,7 @@ const INDEX: IndexGroup[] = [
     ],
   },
   {
-    title: "Pago solo online",
+    title: "Lista negra",
     items: [
       { id: "pago-online-posicion", label: "Posición y cobro" },
       { id: "pago-online-tiendas", label: "Envío a las tiendas" },

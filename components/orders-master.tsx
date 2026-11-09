@@ -2535,9 +2535,9 @@ function MasterTable({
                       <Badge
                         tone="warn"
                         className="xl:mt-0.5"
-                        title="Pago solo online: devolvió un pedido (o anula casi todos) y nunca recibió. Sin lo que pide el ajuste (adelanto o pago completo) no se confirma ni sale contra entrega."
+                        title="Lista negra: devolvió un pedido (o anula casi todos) y nunca recibió. Sin el adelanto de S/ 20 validado (o el pago completo, según el ajuste) no se confirma ni sale contra entrega."
                       >
-                        Pago solo online
+                        Lista negra
                       </Badge>
                     )}
                     {r.scheduled_no_location && (

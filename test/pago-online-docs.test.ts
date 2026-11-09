@@ -67,8 +67,8 @@ describe("las piezas conectadas", () => {
   it("el historial del panel nombra la posición y el cobro", () => {
     expect(PAGO_ONLINE_MODE_EVENT).toBe(PAGO_ONLINE_KEY);
     expect(PAGO_ONLINE_KEY).toBe("pago_solo_online");
-    expect(automationEventLabel("pago_solo_online_vaciar")).toBe("Pago solo online · lista de la tienda vaciada");
-    expect(automationEventLabel(PAGO_ONLINE_MODE_EVENT)).toBe("Pago solo online (lista automática)");
+    expect(automationEventLabel("pago_solo_online_vaciar")).toBe("Lista negra · lista de la tienda vaciada");
+    expect(automationEventLabel(PAGO_ONLINE_MODE_EVENT)).toBe("Lista negra (automática)");
     expect(automationValueLabel(PAGO_ONLINE_REQUIREMENT_EVENT, "adelanto")).toBe("Adelanto (regla §8)");
     expect(automationValueLabel(PAGO_ONLINE_REQUIREMENT_EVENT, "pago_completo")).toBe("Pago completo");
   });
@@ -83,7 +83,7 @@ describe("las piezas conectadas", () => {
   it("Chatby lo deja para la asesora sin escribirle a la clienta", () => {
     const src = read("lib/chatby-autoconfirm-server.ts");
     expect(src).toContain('return { kind: "hold", reason: "pago_online", detail: prepay.message, state: "para_persona" };');
-    expect(src).toContain('if (prepay.state === "blocked" && prepay.source === "pago_online") return "pago solo online (lista automática)";');
+    expect(src).toContain('if (prepay.state === "blocked" && prepay.source === "pago_online") return "lista negra (automática)";');
   });
 
   it("los umbrales del anulador y los hechos de la migración son los mismos en la 0326", () => {

@@ -564,7 +564,7 @@ export async function setPagoOnlineRequirement(orgId: string, requirement: strin
     actor: g.actor,
   });
   revalidatePath(PANEL_PATH);
-  return { notice: warn ?? `Pago solo online: se cobra ${PAGO_ONLINE_REQUIREMENT_LABEL[requirement]}.` };
+  return { notice: warn ?? `Lista negra: se cobra ${PAGO_ONLINE_REQUIREMENT_LABEL[requirement]}.` };
 }
 
 /**

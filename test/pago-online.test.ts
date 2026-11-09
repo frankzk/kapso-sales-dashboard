@@ -189,9 +189,9 @@ describe("la regla (owner, 09-11-2026)", () => {
     expect(pagoOnlineWhoText({ reason: "devuelto", failed: 1, orders: 1 })).toBe("Cliente con entrega devuelta y ninguna recibida");
     expect(pagoOnlineWhoText({ reason: "anulador", failed: 5, orders: 6 })).toBe("Cliente que anuló 5 de 6 pedidos y nunca recibió");
     expect(pagoOnlineHeadline({ reason: "devuelto", failed: 1, orders: 1 }, "adelanto")).toBe(
-      "Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto",
+      "Lista negra · Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto",
     );
-    expect(pagoOnlineHeadline({ reason: "anulador", failed: 5, orders: 6 }, "pago_completo")).toBe("Cliente que anuló 5 de 6 pedidos y nunca recibió: solo pago online");
+    expect(pagoOnlineHeadline({ reason: "anulador", failed: 5, orders: 6 }, "pago_completo")).toBe("Lista negra · Cliente que anuló 5 de 6 pedidos y nunca recibió: solo pago online");
   });
 });
 

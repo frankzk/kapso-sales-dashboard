@@ -690,12 +690,12 @@ export function automationEventLabel(key: string): string {
   if (key === AGENT_GUIDE_CAP_EVENT) return "Agente de IA · tope de guías del día";
   if (key === PREPAY_MODE_EVENT) return "Lista de pago adelantado · regla automática";
   if (key === PAGO_ONLINE_MODE_EVENT) return PAGO_ONLINE_LABEL;
-  if (key === PAGO_ONLINE_REQUIREMENT_EVENT) return "Pago solo online · lo que se cobra";
-  if (key === PAGO_ONLINE_TEST_EVENT) return "Pago solo online · envío de prueba";
-  if (key === PAGO_ONLINE_ACCEPT_EVENT) return "Pago solo online · lista aceptada pese al cambio brusco";
-  if (key === PAGO_ONLINE_RUN_EVENT) return "Pago solo online · corrida a mano";
-  if (key === PAGO_ONLINE_EXCEPTION_EVENT) return "Pago solo online · excepción de Kapta";
-  if (key === PAGO_ONLINE_EMPTY_EVENT) return "Pago solo online · lista de la tienda vaciada";
+  if (key === PAGO_ONLINE_REQUIREMENT_EVENT) return "Lista negra · lo que se cobra";
+  if (key === PAGO_ONLINE_TEST_EVENT) return "Lista negra · envío de prueba";
+  if (key === PAGO_ONLINE_ACCEPT_EVENT) return "Lista negra · lista aceptada pese al cambio brusco";
+  if (key === PAGO_ONLINE_RUN_EVENT) return "Lista negra · corrida a mano";
+  if (key === PAGO_ONLINE_EXCEPTION_EVENT) return "Lista negra · excepción de Kapta";
+  if (key === PAGO_ONLINE_EMPTY_EVENT) return "Lista negra · lista de la tienda vaciada";
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
   if (key === RETRY_CHATBY_ASK_EVENT) return "Reintentos Aliclik · pedir la ubicación por WhatsApp";

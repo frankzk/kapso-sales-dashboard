@@ -1,5 +1,14 @@
 # Deployment runbook
 
+### 09-11-2026 · «Lista negra»: el nombre en pantalla de la lista automática (sin migración, MOM §41.11)
+
+Solo textos. La lista automática («Pago solo online», 0326) se llama «Lista
+negra» en la chapa del Master, el aviso de la ficha, los mensajes (Chatby, bot,
+«Generar pedido»), el historial y el panel de Automatizaciones. La lista de pago
+adelantado manual deja de llamarse «lista negra» («lista de pago completo»).
+Llaves internas, base y contrato con las tiendas sin cambios. Sin migración,
+cron ni variables.
+
 ### 09-11-2026 · «Pago solo online»: cualquier pedido entregado saca de la lista (0328, MOM §41.11)
 
 **Migración 0328** (`db/migrations/0328_pago_online_recibio_cualquiera.sql`):
