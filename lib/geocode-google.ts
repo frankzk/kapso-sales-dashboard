@@ -146,6 +146,11 @@ export interface GeocodeResult {
   locationType: string;
   partialMatch: boolean;
   components: GeocodeAddressComponent[];
+  /**
+   * `formatted_address`: cómo escribe Google lo que encontró (0325). Se guarda
+   * para que la ficha diga qué encontró y por qué no se usó; no decide nada.
+   */
+  formattedAddress?: string;
 }
 
 /**
@@ -191,7 +196,14 @@ export function parseGeocodeResponse(json: unknown): GeocodeParsed {
     }));
   return {
     kind: "ok",
-    result: { lat, lng, locationType: str(geometry.location_type), partialMatch: first.partial_match === true, components },
+    result: {
+      lat,
+      lng,
+      locationType: str(geometry.location_type),
+      partialMatch: first.partial_match === true,
+      components,
+      formattedAddress: str(first.formatted_address),
+    },
   };
 }
 

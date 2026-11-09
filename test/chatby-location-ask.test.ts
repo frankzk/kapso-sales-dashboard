@@ -332,7 +332,7 @@ describe("el servidor y la ficha", () => {
   it("la ficha manda por el mismo envío, marca la pedida y deja el hecho chatby_message", () => {
     expect(panel).toContain("sendOrderChatbyReply(orderId, text, { purpose: CHATBY_ASK_PURPOSE })");
     expect(panel).toContain("Pedir ubicación por WhatsApp");
-    expect(panel).toContain('<Banner tone="warn" title={chatbyAskTitle(hold.reason)}');
+    expect(panel).toContain('<Banner tone="warn" title={chatbyAskTitle(hold.reason, hold.google)}');
     expect(actions).toContain("const askedFor = await markChatbyLocationAsked(admin, ctx.row)");
     expect(actions).toContain('kind: "chatby_message"');
     expect(actions).toContain("purpose: CHATBY_ASK_PURPOSE");

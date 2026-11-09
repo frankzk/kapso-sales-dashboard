@@ -101,6 +101,71 @@ function streetCore(name: string | null | undefined): string[] {
   return words(name).filter((w) => !STREET_TYPES.has(w) && !FILLER.has(w) && !/^\d+$/.test(w));
 }
 
+/**
+ * El nombre de la calle tal como lo escribió la clienta (0325): el primer
+ * tramo de la dirección (hasta la primera coma), sin el tipo de vía ni los
+ * rellenos del principio, y hasta el primer número («Av. quiñones N° 546,
+ * Lambayeque» → «quinones»). Lo que viene detrás del número (el piso, la
+ * urbanización, el distrito) no nombra la calle. Si la dirección empieza por
+ * el número o por algo que no es la calle, queda vacío o no calza, y entonces
+ * no aplica el sufijo. Pura.
+ */
+export function orderStreetCore(address: string | null | undefined): string[] {
+  const first = (address ?? "").split(/[,;]/)[0] ?? "";
+  const out: string[] = [];
+  for (const w of words(first)) {
+    if (/\d/.test(w)) break;
+    if (STREET_TYPES.has(w) || FILLER.has(w)) continue;
+    out.push(w);
+  }
+  return out;
+}
+
+/** Cómo calzó el nombre de la calle de Google con la dirección del pedido. */
+export type ApproxStreetMatch = "todas" | "sufijo";
+
+/**
+ * Versión de la reja de la calle (0325). 1: cada palabra de Google en la
+ * dirección (0316). 2: además, el sufijo (la clienta no escribió el nombre de
+ * pila: «Av. Quiñones» por «Avenida José Quiñones»). Un veredicto `otra_calle`
+ * guardado con una versión anterior se vuelve a consultar una vez.
+ */
+export const APPROX_STREET_RULE = 2;
+
+/** Una palabra del nombre de la calle tiene que tener al menos esto para que el sufijo valga. */
+const SUFFIX_MIN_WORD = 4;
+
+/**
+ * ¿El nombre de la calle de Google es el de la dirección del pedido? Dos
+ * maneras (MOM §6.1):
+ *   · `todas`: cada palabra del nombre de Google está en la dirección (0316);
+ *   · `sufijo` (0325): lo que la clienta escribió como calle es el FINAL del
+ *     nombre de Google, palabra por palabra, y alguna de esas palabras tiene 4
+ *     letras o más. Es la clienta que no escribe el nombre de pila ni la
+ *     inicial: «Av. Quiñones» = «Avenida José Quiñones», «Av. Leguía» =
+ *     «Avenida Augusto B. Leguía». «Av. Perú» no es «Avenida Perú Libre»
+ *     (no es el final) ni «Calle Lima» es «Jirón Lima Norte».
+ * Se prueba el nombre largo de Google y, si no, el corto. Null: otra calle. Pura.
+ */
+export function approxStreetNameMatch(
+  route: { long_name: string; short_name: string } | null | undefined,
+  orderAddress: string | null | undefined,
+): ApproxStreetMatch | null {
+  if (!route) return null;
+  const address = new Set(words(orderAddress));
+  const ours = orderStreetCore(orderAddress);
+  const all = (names: string[]) => names.length > 0 && names.some((w) => w.length >= 3) && names.every((w) => address.has(w));
+  const suffix = (names: string[]) => {
+    if (!ours.length || ours.length > names.length) return false;
+    const tail = names.slice(names.length - ours.length);
+    return tail.every((w, i) => w === ours[i]) && ours.some((w) => w.length >= SUFFIX_MIN_WORD);
+  };
+  const cores = [streetCore(route.long_name), streetCore(route.short_name)];
+  if (cores.some(all)) return "todas";
+  if (cores.some(suffix)) return "sufijo";
+  return null;
+}
+
 /** La provincia como clave: sin «(provincia)» ni «Provincia de», con la z igualada a la s. */
 function provinceKey(value: string | null | undefined): string {
   return normalizeCoverageLabel((value ?? "").replace(/\(.*?\)/g, " "))
@@ -118,9 +183,11 @@ export type ApproxStreetCheck = { ok: true } | { ok: false; reason: ApproxReject
 /**
  * ¿El punto de la cuadra es de la calle del pedido? Las tres a la vez:
  *   1. Google da la calle (`route`) y el número (`street_number`);
- *   2. cada palabra del nombre de la calle de Google está en la dirección del
- *      pedido (sin el tipo de vía: «Jr.» = «Jirón») y el número de Google
- *      está en la dirección;
+ *   2. el nombre de la calle de Google es el del pedido
+ *      (`approxStreetNameMatch`: cada palabra de Google está en la dirección
+ *      —sin el tipo de vía: «Jr.» = «Jirón»— o, desde la 0325, lo que la
+ *      clienta escribió es el final del nombre de Google) y el número de
+ *      Google está en la dirección;
  *   3. la provincia de Google (`administrative_area_level_2`) es la del pedido.
  * Ante la duda, no: una abreviatura que no se reconoce («J. Olaya») rechaza.
  * Va DESPUÉS del candado (`geocodeSafeguard`), que ya exige el departamento,
@@ -137,9 +204,7 @@ export function geocodeApproxStreet(
   if (!route || !longCore.length || !numberWords.length) return { ok: false, reason: "sin_calle" };
 
   const address = new Set(words(order.address));
-  // El nombre largo de Google, palabra por palabra; el corto solo si el largo no está.
-  const nameMatches = (names: string[]) => names.length > 0 && names.some((w) => w.length >= 3) && names.every((w) => address.has(w));
-  if (!nameMatches(longCore) && !nameMatches(streetCore(route.short_name))) return { ok: false, reason: "otra_calle" };
+  if (!approxStreetNameMatch(route, order.address)) return { ok: false, reason: "otra_calle" };
   if (!numberWords.every((w) => address.has(w))) return { ok: false, reason: "otro_numero" };
 
   const ours = provinceKey(order.province);

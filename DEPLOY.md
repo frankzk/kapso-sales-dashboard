@@ -1,5 +1,53 @@
 # Deployment runbook
 
+### 09-11-2026 · Ubicación aproximada: la calle sin el nombre de pila, lo que dijo Google en la caché y la ficha que lo explica (0325, MOM §6.1 y §38)
+
+**Migración 0325** (`db/migrations/0325_order_geocodes_google_said.sql`,
+aditiva): cuatro columnas nullable en `order_geocodes` —`google_label`,
+`google_route`, `google_number` y `approx_rule`— con sus `check` de rango. No
+reescribe filas. **Aplicarla ANTES de desplegar** (no se aplica sola):
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0325_order_geocodes_google_said.sql
+```
+
+Se puede desplegar sin ella: el código guarda lo de la 0316 (reintenta el
+upsert sin las columnas nuevas, sin volver a consultar a Google), la ficha usa
+el texto sin la etiqueta de Google y el `otra_calle` viejo **no** se vuelve a
+consultar hasta que la columna exista. Sin crons ni variables nuevas.
+
+El caso (#KP204099, Kenku, Chiclayo): «Av. quiñones N° 546» contra «Av. José
+Quiñones 546, Chiclayo» de Google (número de la cuadra). La reja de la calle
+pedía cada palabra de Google y la clienta no escribió «José»: `otra_calle`, y
+la ficha decía «Google no da el edificio de esa dirección».
+
+- **La reja acepta el sufijo** (`approxStreetNameMatch`,
+  lib/geocode-approx.ts): lo que la clienta escribió como calle (hasta la
+  primera coma o el primer número, sin el tipo de vía) es el final del nombre
+  de Google y tiene una palabra de 4 letras o más. Número y provincia,
+  exactos como antes. «Av. Perú» sigue sin ser «Avenida Perú Libre». El
+  edificio (`ROOFTOP`) nunca tuvo reja de la calle: no cambia.
+- **Lo que dijo Google se guarda** en cada consulta, para la ficha y para
+  repetir la cuenta sin consultar.
+- **La ficha** (pestaña Chatby): «Google encontró: Av. José Quiñones 546,
+  Chiclayo (punto de la cuadra). No se usó porque …», con cada motivo en
+  palabras.
+- **Se vuelve a mirar una vez.** Un `otra_calle` con la reja vieja
+  (`approx_rule` null o 1) se vuelve a consultar UNA vez cuando la guía
+  automática de Chatby vuelve a mirar el pedido (la pasada de la ubicación,
+  cada 30 min, dentro de la ventana, con su tope). **Costo:** una consulta por
+  cada fila así; el 09-11-2026 había **una** en toda la caché (#KP204099,
+  todavía en Por confirmar · Sin llamar y dentro de las 72 h). El cupo de 400
+  por día de Google Cloud y los topes de la pasada no cambian.
+
+Qué mirar después: `select order_id, approx_kind, approx_rule, google_label
+from order_geocodes where approx_rule is not null order by checked_at desc;`.
+#KP204099 debería quedar `calle` (en Activo, con su guía si Aliclik la deja).
+
+Marcha atrás: revertir el código basta (las columnas sobran y no molestan). Si
+hace falta quitarlas: `alter table order_geocodes drop column google_label,
+drop column google_route, drop column google_number, drop column approx_rule;`.
+
 ### 08-11-2026 · El GPS de la guía Aliclik en la ficha y «Usar este GPS» para clientas con entregas (sin migración, MOM §6.1 y §25)
 
 **Sin migración, sin crons ni variables nuevas.** Se despliega y ya está.
