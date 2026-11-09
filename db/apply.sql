@@ -655,4 +655,6 @@
 \ir migrations/0326_pago_solo_online.sql
 \echo 'Applying 0327_order_master_lima_provinces_agencia.sql'
 \ir migrations/0327_order_master_lima_provinces_agencia.sql
+\echo 'Applying 0328_pago_online_recibio_cualquiera.sql'
+\ir migrations/0328_pago_online_recibio_cualquiera.sql
 \echo 'Done.'

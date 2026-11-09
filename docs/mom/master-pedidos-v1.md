@@ -25262,12 +25262,18 @@ reemplaza entera en cada envío.
 - **Kenku y Aurela juntas** (la organización), **todo el historial** de Kapta y
   **solo contra entrega**: `coverage` = `lima` o `provincia_cod`. La agencia y
   los pagados no cuentan.
-- **Los pedidos de la migración de plataforma no cuentan para nada** (ni como
-  falla ni como entrega): los que tienen un hecho `cancelled_woocommerce`,
+- **Los pedidos de la migración de plataforma no cuentan como pedido ni como
+  falla**: los que tienen un hecho `cancelled_woocommerce`,
   `legacy_shopify_sale_cancelled` o `woo_sale_ended_pending_return` en
   `order_events` (§38). Son artefactos del cambio de Shopify a WooCommerce, no
   clientes que no recibieron (`PAGO_ONLINE_MIGRATION_EVENT_KINDS`).
-- Con **cero `entregado`**, entra si:
+- **«Recibió» es CUALQUIER pedido `entregado`** del celular en la organización:
+  contra entrega, agencia (Shalom) o uno de la migración (owner 09-11-2026,
+  0328: «si ya pagó y recibió una vez, no es cliente de riesgo»). Con eso
+  salieron 5 clientes que la 0326 dejaba dentro (4 recibieron por agencia y 1
+  con un entregado de la migración). Las fallas y el total de pedidos siguen
+  contándose solo en contra entrega sin la migración.
+- Con **cero `entregado`** (en cualquier pedido), entra si:
   - **(A) devolvió:** tiene al menos un `devuelto` («Cliente con entrega
     devuelta y ninguna recibida»); o
   - **(B) el «anulador»:** tiene **5 o más** pedidos (el owner: «más de 4») y

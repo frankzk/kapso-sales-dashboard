@@ -20,7 +20,8 @@ describe("los documentos", () => {
     expect(s4111).toContain("**(A) devolvió:** tiene al menos un `devuelto`");
     expect(s4111).toContain("**(B) el «anulador»:** tiene **5 o más** pedidos");
     expect(s4111).toContain("**el 75 % o más** están `anulado`");
-    expect(s4111).toContain("**Los pedidos de la migración de plataforma no cuentan para nada**");
+    expect(s4111).toContain("**Los pedidos de la migración de plataforma no cuentan como pedido ni como");
+    expect(s4111).toContain("**«Recibió» es CUALQUIER pedido `entregado`**");
     expect(s4111).toContain("**Un anulado después de salir, solo, ya no basta**");
     expect(s4111).toContain("**El bot de Kapso** (`POST /api/internal/orders`, owner 09-11-2026)");
     expect(s4111).toContain("**«Generar pedido» de Leads** (owner 09-11-2026)");
@@ -47,7 +48,9 @@ describe("los documentos", () => {
 
   it("DEPLOY la pone arriba, con la migración y la prueba", () => {
     const deploy = read("DEPLOY.md");
-    const top = deploy.indexOf("### ");
+    // La entrada se busca por su título: otras entradas (0328…) van encima.
+    const top = deploy.indexOf("### 09-11-2026 · «Pago solo online (lista automática)»");
+    expect(top).toBeGreaterThan(0);
     expect(deploy.slice(top, top + 200)).toContain("0326");
     expect(deploy).toContain("psql \"$DATABASE_URL\" -f db/migrations/0326_pago_solo_online.sql");
     expect(deploy).toContain("«Enviar prueba»");

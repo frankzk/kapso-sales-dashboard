@@ -34,8 +34,8 @@ insert into stores(id,org_id,name,shopify_domain) values
 -- 12 | K | 987654321            | lima          | pendiente  | no    |             → Por confirmar, sin pago: se frena
 -- 13 | A | 915000000            | lima          | pendiente  | no    |             → Por confirmar, adelanto validado
 -- 14 | K | 918000000            | lima          | devuelto   | sí    |             → cancelled_woocommerce: artefacto de la migración, no cuenta
--- 15 | A | 919000000            | lima          | entregado  | sí    |             → legacy_shopify_sale_cancelled: no cuenta (ni como entrega)…
--- 16 | A | 919000000            | lima          | devuelto   | sí    |             → …y su devuelto sí: entra con 1 de 1 pedido
+-- 15 | A | 919000000            | lima          | entregado  | sí    |             → legacy_shopify_sale_cancelled: no cuenta como pedido, PERO desde la 0328 su entrega sí cuenta…
+-- 16 | A | 919000000            | lima          | devuelto   | sí    |             → …así que, aunque tenga un devuelto, no entra (0328: cualquier entregado saca)
 -- 17 | K | 920000000            | provincia_cod | devuelto   | sí    |             → woo_sale_ended_pending_return: no entra
 -- El «anulador» (B), pedidos #PA<celular>-<n>, todos contra entrega:
 --   921000000: 5 pedidos, 4 anulados (antes y después de salir)  → entra: anuló 4 de 5
@@ -127,7 +127,7 @@ declare
 begin
   -- La regla.
   if (select string_agg(phone || ':' || reason || ':' || failed || '/' || orders || ':' || excepted, ',' order by phone) from pago_online_candidates(org))
-     is distinct from '915000000:devuelto:1/2:false,917000000:devuelto:1/1:true,919000000:devuelto:1/1:false,'
+     is distinct from '915000000:devuelto:1/2:false,917000000:devuelto:1/1:true,'
        || '921000000:anulador:4/5:false,926000000:anulador:6/8:false,987654321:devuelto:2/3:false' then
     raise exception 'FAIL candidates: %',
       (select string_agg(phone || ':' || reason || ':' || failed || '/' || orders || ':' || excepted, ',' order by phone) from pago_online_candidates(org));
@@ -158,7 +158,7 @@ begin
 
   -- Simulación: cuenta y no guarda celulares.
   sim := pago_online_build(org, null, 'adelanto');
-  if (sim->>'phones')::int <> 5 or (sim->>'emails')::int <> 1 or (sim->>'two_or_more')::int <> 1
+  if (sim->>'phones')::int <> 4 or (sim->>'emails')::int <> 1 or (sim->>'two_or_more')::int <> 1
      or (sim->>'anuladores')::int <> 2 or (sim->>'excepted')::int <> 1 then
     raise exception 'FAIL simulation counts %', sim;
   end if;
@@ -181,7 +181,7 @@ begin
   exception when unique_violation then null; end;
   act := pago_online_build(org, run, 'adelanto');
   act := pago_online_build(org, run, 'adelanto');
-  if (select count(*) from pago_online_phones where run_id = run) <> 5 then raise exception 'FAIL stored phones'; end if;
+  if (select count(*) from pago_online_phones where run_id = run) <> 4 then raise exception 'FAIL stored phones'; end if;
   if (select reason || ':' || failed || '/' || orders from pago_online_phones where run_id = run and phone = '921000000') <> 'anulador:4/5' then
     raise exception 'FAIL stored anulador';
   end if;

@@ -110,6 +110,18 @@ describe("la regla (owner, 09-11-2026)", () => {
     expect(pagoOnlineListOf(rows("924000000", 5, 1, "entregado"))).toEqual([]);
   });
 
+  it("0328: cualquier entregado saca de la lista, también por agencia o de la migración", () => {
+    expect(
+      pagoOnlineListOf([o("928000000", "lima", "devuelto", OUT), o("928000000", "agencia", "entregado", OUT)]),
+    ).toEqual([]);
+    expect(
+      pagoOnlineListOf([
+        o("929000000", "lima", "devuelto", OUT),
+        { ...o("929000000", "lima", "entregado", OUT), event_kinds: ["legacy_shopify_sale_cancelled"] },
+      ]),
+    ).toEqual([]);
+  });
+
   it("con un devuelto manda (A) aunque también anule casi todo", () => {
     const list = pagoOnlineListOf([
       o("927000000", "lima", "devuelto", OUT),
@@ -129,10 +141,8 @@ describe("la regla (owner, 09-11-2026)", () => {
   it("solo cuentan los pedidos contra entrega (lima, provincia_cod)", () => {
     expect(pagoOnlineListOf([o("914000000", "agencia", "devuelto", OUT)])).toEqual([]);
     expect(pagoOnlineListOf([o("914000000", null, "devuelto", OUT)])).toEqual([]);
-    // Una entrega por agencia tampoco lo saca: solo cuenta contra entrega.
-    expect(pagoOnlineListOf([o("915000000", "lima", "devuelto", OUT), o("915000000", "agencia", "entregado", OUT)])).toEqual([
-      { phone: "915000000", reason: "devuelto", failed: 1, orders: 1 },
-    ]);
+    // 0328: una entrega por agencia SÍ lo saca (cualquier entregado cuenta).
+    expect(pagoOnlineListOf([o("915000000", "lima", "devuelto", OUT), o("915000000", "agencia", "entregado", OUT)])).toEqual([]);
   });
 
   it("los pedidos de la migración de plataforma no cuentan para nada", () => {
@@ -144,13 +154,13 @@ describe("la regla (owner, 09-11-2026)", () => {
     }
     // Otros hechos no lo cambian.
     expect(pagoOnlineListOf([{ ...o("918000000", "lima", "devuelto", OUT), event_kinds: ["comment", "cancelled_shopify"] }])).toHaveLength(1);
-    // Tampoco cuentan como entrega, ni para el anulador.
+    // 0328: su entrega SÍ cuenta (cualquier entregado saca); para el anulador no cuentan.
     expect(
       pagoOnlineListOf([
         { ...o("919000000", "lima", "entregado", OUT), event_kinds: ["legacy_shopify_sale_cancelled"] },
         o("919000000", "lima", "devuelto", OUT),
       ]),
-    ).toEqual([{ phone: "919000000", reason: "devuelto", failed: 1, orders: 1 }]);
+    ).toEqual([]);
     expect(
       pagoOnlineListOf([
         { ...o("925000000", "lima", "anulado"), event_kinds: ["cancelled_woocommerce"] },
