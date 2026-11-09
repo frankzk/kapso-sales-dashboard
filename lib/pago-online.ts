@@ -7,7 +7,9 @@
 //     pedidos contra entrega (`coverage` = `lima` o `provincia_cod`).
 //   * Cuentan solo los pedidos contra entrega SIN un hecho de la migración de
 //     plataforma (`cancelled_woocommerce`, `legacy_shopify_sale_cancelled`,
-//     `woo_sale_ended_pending_return`). Con CERO `entregado`, entra:
+//     `woo_sale_ended_pending_return`). Con CERO `entregado` —en CUALQUIER
+//     pedido: contra entrega, agencia o de la migración (owner 09-11-2026,
+//     0328)—, entra:
 //     (A) quien tiene al menos un `devuelto`; o
 //     (B) el «anulador»: 5 o más pedidos con el 75 % o más `anulado`
 //         (cualquier anulado, antes o después de salir).
@@ -40,6 +42,8 @@ export const PAGO_ONLINE_REQUIREMENT_KEY = "pago_solo_online_cobro";
 /** La ruta de COD Core en cada tienda (docs/kapta/pago-solo-online.md §4). */
 export const COD_CORE_API_PREFIX = "/wp-json/cod-core/v1";
 export const PAGO_ONLINE_ENDPOINT_PATH = "/pago-solo-online";
+/** La versión de COD Core que trae el endpoint (§8 del pedido). */
+export const PAGO_ONLINE_COD_CORE_VERSION = "0.10.45";
 
 /** Los topes de la tienda (§4.2): más de esto responde 413. */
 export const PAGO_ONLINE_MAX_PHONES = 50_000;
@@ -180,15 +184,19 @@ export interface PagoOnlineListItem extends PagoOnlineWho {
 export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], exceptions: ReadonlySet<string> = new Set()): PagoOnlineListItem[] {
   const byPhone = new Map<string, PagoOnlineCounts>();
   for (const o of orders) {
-    if (!isCodOrder(o)) continue;
     const phone = pagoOnlinePhoneKey(o.customer_phone);
     if (!phone) continue;
     const c = byPhone.get(phone) ?? { orders: 0, devueltos: 0, anulados: 0, received: 0 };
     const s = (o.general_status ?? "").trim();
-    c.orders++;
-    if (s === "devuelto") c.devueltos++;
-    if (s === "anulado") c.anulados++;
+    // «Recibió» es CUALQUIER pedido entregado: contra entrega, agencia o uno de
+    // la migración (owner 09-11-2026, 0328). Las fallas, solo contra entrega
+    // sin hecho de la migración.
     if (s === "entregado") c.received++;
+    if (isCodOrder(o)) {
+      c.orders++;
+      if (s === "devuelto") c.devueltos++;
+      if (s === "anulado") c.anulados++;
+    }
     byPhone.set(phone, c);
   }
   const out: PagoOnlineListItem[] = [];

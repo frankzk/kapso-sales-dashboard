@@ -29,6 +29,8 @@ Un cliente entra a la lista si cumple **las dos condiciones**:
 1. Tiene **al menos una entrega fallida**: un pedido contra entrega `devuelto`, o `anulado` **después de salir**
    (`dispatched_at` con fecha).
 2. **No tiene ninguna entrega recibida**: ningún pedido `entregado`.
+   *(Kapta, 09-11-2026: cuenta CUALQUIER pedido entregado del celular, también por agencia o de la
+   migración de plataforma. Si ya recibió una vez, sale de la lista.)*
 
 Detalles:
 

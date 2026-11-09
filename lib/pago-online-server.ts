@@ -35,6 +35,7 @@ import { isMissingPagoOnline } from "@/lib/pago-online-lookup";
 import {
   COD_CORE_API_PREFIX,
   PAGO_ONLINE_DEFAULT_REQUIREMENT,
+  PAGO_ONLINE_COD_CORE_VERSION,
   PAGO_ONLINE_ENDPOINT_PATH,
   PAGO_ONLINE_KEEP_DAYS,
   PAGO_ONLINE_MAX_EMAILS,
@@ -159,7 +160,15 @@ export async function codCoreCall(
     );
     return { status: res.status, kind: null, totals: parseCodCoreTotals(res.data), error: null };
   } catch (e) {
-    if (e instanceof WooError) return { status: e.status, kind: e.kind, totals: null, error: e.message.slice(0, 480) };
+    if (e instanceof WooError) {
+      // 404 aquí no es «la API de WooCommerce no existe» (el texto genérico de
+      // wooRequest habla de wc/v3): es la tienda sin cod-core 0.10.45.
+      const error =
+        e.status === 404
+          ? `La tienda todavía no tiene cod-core ${PAGO_ONLINE_COD_CORE_VERSION} (${COD_CORE_API_PREFIX}${PAGO_ONLINE_ENDPOINT_PATH} responde 404). Cuando la suban, vuelve a probar.`
+          : e.message.slice(0, 480);
+      return { status: e.status, kind: e.kind, totals: null, error };
+    }
     return { status: null, kind: "red", totals: null, error: "No se pudo conectar con la tienda." };
   }
 }

@@ -1,5 +1,21 @@
 # Deployment runbook
 
+### 09-11-2026 · «Pago solo online»: cualquier pedido entregado saca de la lista (0328, MOM §41.11)
+
+**Migración 0328** (`db/migrations/0328_pago_online_recibio_cualquiera.sql`):
+solo reemplaza `pago_online_candidates` (misma firma). «Recibió» pasa a contar
+CUALQUIER `entregado` del celular en la organización —contra entrega, agencia o
+un pedido de la migración—; las fallas siguen contándose solo en contra entrega
+sin la migración. No cambia datos; correrla dos veces no cambia nada. Ya
+aplicada en producción el 09-11-2026. La lista pasa de 3.149 a 3.144 clientes.
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0328_pago_online_recibio_cualquiera.sql
+```
+
+Sin cron, variables ni pantallas nuevas. Marcha atrás: volver a correr la
+función de la 0326.
+
 ### 09-11-2026 · «Pago solo online (lista automática)»: la lista diaria a Kenku y Aurela y el freno en los pedidos de Kapta (0326, MOM §8 y §41.11)
 
 **Migración 0326** (`db/migrations/0326_pago_solo_online.sql`, aditiva): cinco
