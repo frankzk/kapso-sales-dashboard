@@ -103,10 +103,11 @@ describe("lo que hizo el agente de IA (MOM §42.9, 09-11-2026)", () => {
     expect(timelineFact(e("comment", { source: "manual" }))).not.toMatchObject({ icon: "agente_ia" });
   });
 
-  it("la ficha lo pinta naranja y cuadrado, con sus ojos", () => {
+  it("la ficha lo pinta como un hexágono naranja con sus ojos", () => {
     const shared = readFileSync(resolve(process.cwd(), "components/order-master-shared.tsx"), "utf8");
-    expect(shared).toContain("agente_ia: IconAgentEyes,");
-    expect(shared).toContain('? "rounded-[9px] bg-orange-500 text-white"');
+    expect(shared).toContain("agente_ia: IconAgentBadge,");
+    expect(shared).toContain('className="absolute -left-10 -top-1 grid size-7 place-items-center text-orange-500"');
+    expect(shared).toContain('<IconAgentBadge className="size-7" />');
   });
 });
 

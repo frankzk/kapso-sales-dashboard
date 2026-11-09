@@ -22,7 +22,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import {
   IconActivity,
-  IconAgentEyes,
+  IconAgentBadge,
   IconAlert,
   IconBot,
   IconCalendar,
@@ -549,7 +549,7 @@ const TIMELINE_ICON: Record<TimelineIcon, (props: { className?: string; strokeWi
   automatico: IconBot,
   ubicacion: IconMapPin,
   estado: IconActivity,
-  agente_ia: IconAgentEyes,
+  agente_ia: IconAgentBadge,
 };
 
 /**
@@ -560,6 +560,20 @@ const TIMELINE_ICON: Record<TimelineIcon, (props: { className?: string; strokeWi
  */
 export function TimelineMarker({ entry }: { entry: TimelineFactInput }) {
   const fact = timelineFact(entry);
+  // El agente de IA: su hexágono naranja con ojos es el marcador entero, con su
+  // propio halo, para distinguirlo de una persona (owner, 09-11-2026).
+  if (fact.icon === "agente_ia") {
+    return (
+      <span
+        aria-hidden
+        data-timeline-fact="agente_ia"
+        data-timeline-stage="consulta"
+        className="absolute -left-10 -top-1 grid size-7 place-items-center text-orange-500"
+      >
+        <IconAgentBadge className="size-7" />
+      </span>
+    );
+  }
   const Icon = fact.icon ? TIMELINE_ICON[fact.icon] : null;
   return (
     <span
@@ -567,14 +581,11 @@ export function TimelineMarker({ entry }: { entry: TimelineFactInput }) {
       data-timeline-fact={fact.icon ?? "otro"}
       data-timeline-stage={fact.stage ?? "consulta"}
       className={cn(
-        "absolute -left-10 -top-1 grid size-7 place-items-center ring-[3px] ring-white",
-        // El agente de IA: un cuadro naranja con sus ojos, para distinguirlo de una persona.
-        fact.icon === "agente_ia"
-          ? "rounded-[9px] bg-orange-500 text-white"
-          : cn("rounded-full", fact.stage ? MACRO_STAGE_TONE[fact.stage] : "bg-wash text-ink-500"),
+        "absolute -left-10 -top-1 grid size-7 place-items-center rounded-full ring-[3px] ring-white",
+        fact.stage ? MACRO_STAGE_TONE[fact.stage] : "bg-wash text-ink-500",
       )}
     >
-      {Icon ? <Icon className={fact.icon === "agente_ia" ? "size-[18px]" : "size-4"} /> : <span className="size-1.5 rounded-full bg-ink-300" />}
+      {Icon ? <Icon className="size-4" /> : <span className="size-1.5 rounded-full bg-ink-300" />}
     </span>
   );
 }
