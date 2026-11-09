@@ -138,7 +138,8 @@ describe("leer la respuesta de Google", () => {
           address_components: [{ long_name: "Yanahuara", short_name: "Yanahuara", types: ["administrative_area_level_3"] }],
           geometry: { location: { lat: -16.39, lng: -71.54 }, location_type: "RANGE_INTERPOLATED" },
           partial_match: true,
-          formatted_address: "no se guarda",
+          // (0325) Se guarda en la caché para que la ficha diga qué encontró Google; el piloto no lo devuelve.
+          formatted_address: "Av. Ejército 101, Yanahuara 04017, Perú",
         },
         { geometry: { location: { lat: 0, lng: 0 }, location_type: "ROOFTOP" } },
       ],
@@ -151,6 +152,7 @@ describe("leer la respuesta de Google", () => {
         locationType: "RANGE_INTERPOLATED",
         partialMatch: true,
         components: [{ long_name: "Yanahuara", short_name: "Yanahuara", types: ["administrative_area_level_3"] }],
+        formattedAddress: "Av. Ejército 101, Yanahuara 04017, Perú",
       },
     });
   });

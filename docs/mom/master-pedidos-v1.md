@@ -844,6 +844,51 @@ se creó**.
     solo el edificio, así que los reintentos de Lima (§9.5), que no piden el
     punto aproximado, no cambian; y el punto aproximado cuenta como «de
     Google» en `googlePinnedOrderIds` (§38.6).
+  - **El sufijo (owner, 09-11-2026; 0325).** Caso #KP204099 (Kenku,
+    Chiclayo): la clienta escribió «Av. quiñones N° 546» y Google dio «Av. José
+    Quiñones 546, Chiclayo» con el número de la cuadra; como la clienta no
+    escribió «José», la reja lo rechazó como `otra_calle`. Desde la 0325 el
+    nombre de la calle también calza si lo que escribió la clienta es el
+    **final** del nombre de Google, palabra por palabra
+    (`approxStreetNameMatch`): «Av. Quiñones» = «Avenida José Quiñones»,
+    «Av. Balta» = «Avenida José Balta», «Av. Grau» = «Avenida Miguel Grau»,
+    «Av. Leguía» = «Avenida Augusto B. Leguía». Lo que escribió la clienta
+    como calle es el primer tramo de la dirección (hasta la primera coma),
+    sin el tipo de vía ni los rellenos, hasta el primer número
+    (`orderStreetCore`). Tiene que no estar vacío, ser exactamente las
+    últimas palabras del nombre de Google y tener al menos una palabra de 4
+    letras o más. El número y la provincia se siguen pidiendo exactos, y
+    sigue siendo «ante la duda, no»: «Av. Perú» no es «Avenida Perú Libre»,
+    «Calle Lima» no es «Jirón Lima Norte», «J. Olaya» no es «José Olaya» y
+    «Av. Paz» (3 letras) no es «Avenida José Paz». El edificio (`ROOFTOP`) no
+    tiene reja de la calle: el candado (`geocodeSafeguard`) nunca miró el
+    nombre, así que no cambia.
+  - **Lo que dijo Google (0325).** Cada consulta que se guarda en
+    `order_geocodes` lleva también `google_label`, `google_route`, `google_number`
+    (el `formatted_address` del primer resultado, y el `long_name` de `route`
+    y de `street_number`) y `approx_rule`, la versión de la reja de la calle
+    con que se decidió `approx_kind` (`APPROX_STREET_RULE`: 1 o null = cada
+    palabra, 0316; 2 = también el sufijo). Un `otra_calle` guardado con una
+    versión anterior se vuelve a consultar **una vez**, solo cuando la guía
+    automática de Chatby vuelve a mirar el pedido (Provincia COD, sin
+    coordenada ni ubicación de WhatsApp, dentro de su ventana: la pasada de
+    la ubicación cada 30 minutos con su tope por pasada). Nada más se vuelve
+    a consultar: ni los reintentos de Lima, ni los demás motivos, ni los
+    pedidos fuera de la ventana. Sin la 0325 se guarda lo de la 0316 y no se
+    vuelve a consultar. Al decidirlo había **una** fila `otra_calle` en toda
+    la caché (#KP204099): una consulta, dentro del cupo de 400 por día.
+  - **La ficha lo explica (0325).** En la pestaña «Chatby», el aviso de
+    `sin_ubicacion` dice qué encontró Google para la dirección actual del
+    pedido y por qué no se usó (`chatbyGoogleFindingText`, leída de la caché
+    por el servidor, sin consultar a Google): «La clienta confirmó, pero no
+    se pudo usar lo que encontró Google» y «Google encontró: Av. José Quiñones
+    546, Chiclayo (punto de la cuadra). No se usó porque …». Los motivos en
+    palabras: `impreciso` (solo el centro de la calle o de la zona, no la
+    puerta), `coincidencia_parcial` (no reconoce la dirección completa:
+    encontró una parecida), `distrito_distinto` (otro distrito),
+    `no_es_edificio` con su `approx_kind` (apagada; en Simulación; otra calle,
+    con el nombre de Google; otro número; otra provincia; sin calle). Sin fila
+    o sin resultado, el aviso de siempre («Google no encuentra la dirección»).
   - **La prueba.** Cuando Aliclik ya entregó o intentó el pedido, el panel
     compara el punto aproximado con la coordenada de su guía de Aliclik (la
     entregada; si no, la más reciente con intento), que es la que el Master
@@ -22506,7 +22551,11 @@ y en Aliclik el pin decide a dónde va el paquete.
    - la guía automática de Provincia COD del que confirmó por Chatby (§6.1,
      02-11-2026; 0301), después de la ubicación de WhatsApp; con «Aceptar
      ubicación aproximada en la calle correcta» en Activo (§6.1, 0316), también
-     el número de la cuadra de la misma calle, número y provincia;
+     el número de la cuadra de la misma calle, número y provincia (desde la
+     0325, también cuando la clienta escribió solo el final del nombre de la
+     calle: «Av. Quiñones» = «Avenida José Quiñones»). La caché guarda además
+     lo que dijo Google (`google_label`, `google_route`, `google_number`) para
+     que la ficha explique por qué no se usó;
    - el reintento Aliclik automático de Lima (§9.5, entrega 3, 05-11-2026;
      0308), solo si la última medición de Lima cumple B con el edificio
      (al menos el 90 % de los puntos ROOFTOP a 300 m o menos del pin, con al

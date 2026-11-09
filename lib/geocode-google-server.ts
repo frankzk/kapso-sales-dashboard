@@ -60,8 +60,10 @@ import {
   type GeocodePrecision,
   type GeocodePilotSample,
   type GeocodeRequestParams,
+  type GeocodeResult,
 } from "@/lib/geocode-google";
-import { geocodeApproxStreet, type ApproxKind } from "@/lib/geocode-approx";
+import type { ChatbyGoogleFinding } from "@/lib/chatby-location-ask";
+import { APPROX_STREET_RULE, geocodeApproxStreet, type ApproxKind } from "@/lib/geocode-approx";
 
 export const GEOCODE_PILOT = {
   days: 7,
@@ -640,6 +642,44 @@ interface GeocodeRow {
   approx_kind?: string | null;
   approx_latitude?: number | null;
   approx_longitude?: number | null;
+  /** 0325; sin la migración no vienen. */
+  approx_rule?: number | null;
+  google_label?: string | null;
+  google_route?: string | null;
+  google_number?: string | null;
+}
+
+/** Lo que Google dijo del primer resultado (0325), para la ficha y para repetir la cuenta. */
+function googleSaid(result: GeocodeResult | null): { google_label: string | null; google_route: string | null; google_number: string | null } {
+  // Con el tope de la 0325 (500 / 200 / 50): es una dirección, no un documento.
+  const cut = (v: string | null | undefined, max: number) => (v ? v.slice(0, max) : null);
+  const pick = (type: string) => result?.components.find((c) => c.types.includes(type))?.long_name;
+  return {
+    google_label: cut(result?.formattedAddress, 500),
+    google_route: cut(pick("route"), 200),
+    google_number: cut(pick("street_number"), 50),
+  };
+}
+
+/**
+ * Guarda la fila de la caché, de lo más nuevo a lo de siempre: con las
+ * columnas de la 0325 y de la 0316; si la base no las tiene, sin las de la
+ * 0325; y si tampoco, solo lo de la 0301. Así nunca se vuelve a gastar la
+ * consulta por una migración que falta.
+ */
+async function saveOrderGeocode(
+  admin: SupabaseClient,
+  base: Record<string, unknown>,
+  approx: Record<string, unknown>,
+  google: Record<string, unknown>,
+): Promise<void> {
+  const tries = [{ ...base, ...approx, ...google }, { ...base, ...approx }, base].filter(
+    (row, i, all) => i === 0 || Object.keys(row).length < Object.keys(all[i - 1]!).length,
+  );
+  for (const row of tries) {
+    const { error } = await admin.from("order_geocodes").upsert(row, { onConflict: "order_id" });
+    if (!error) return;
+  }
 }
 
 /**
@@ -653,6 +693,14 @@ interface GeocodeRow {
  * fila de antes con la cuadra y sin ese veredicto (nadie guardó entonces la
  * calle de Google) se vuelve a consultar UNA vez. Sin `approxMode` todo es
  * como siempre: los reintentos de Lima no lo pasan.
+ *
+ * (0325) Cada escritura guarda también lo que dijo Google (`google_label`,
+ * `google_route`, `google_number`) y la versión de la reja de la calle
+ * (`approx_rule`). Un `otra_calle` guardado con una versión anterior
+ * (`APPROX_STREET_RULE`) se vuelve a consultar UNA vez: solo lo hace quien
+ * pide `approxMode` (la guía automática de Chatby, que solo mira los pedidos
+ * dentro de su ventana) y solo con la columna ya creada, para no consultar en
+ * cada pasada si la 0325 falta.
  */
 export async function geocodeOrderAddress(
   admin: SupabaseClient,
@@ -687,8 +735,10 @@ export async function geocodeOrderAddress(
     if (row.approx_kind === "calle" && row.approx_latitude != null && row.approx_longitude != null) {
       return { ...rejected, precision: "RANGE_INTERPOLATED", approx: { lat: row.approx_latitude, lng: row.approx_longitude } };
     }
-    if (row.approx_kind != null) return { ...rejected, precision: "RANGE_INTERPOLATED", approx: null };
-    // La cuadra sin veredicto de la calle: se vuelve a preguntar (una vez).
+    // (0325) «Otra calle» con la reja de antes del sufijo: se vuelve a preguntar (una vez).
+    const staleStreet = row.approx_kind === "otra_calle" && "approx_rule" in row && (Number(row.approx_rule) || 1) < APPROX_STREET_RULE;
+    if (row.approx_kind != null && !staleStreet) return { ...rejected, precision: "RANGE_INTERPOLATED", approx: null };
+    // La cuadra sin veredicto de la calle (o con el de la reja vieja): se vuelve a preguntar (una vez).
   }
 
   const parsed = await geocodeOnce(params, opts.key, opts.fetchImpl ?? fetch, GEOCODE_PILOT.requestTimeoutMs);
@@ -727,9 +777,12 @@ export async function geocodeOrderAddress(
         approxMode
         ? { approx_kind: null, approx_latitude: null, approx_longitude: null, approx_mode: null, approx_checked_at: null }
         : {};
-  const { error: saveError } = await admin.from("order_geocodes").upsert({ ...save, ...approxSave }, { onConflict: "order_id" });
-  // Sin las columnas de la 0316 se guarda lo de siempre, para no volver a gastar la consulta.
-  if (saveError && Object.keys(approxSave).length) await admin.from("order_geocodes").upsert(save, { onConflict: "order_id" });
+  // (0325) Lo que dijo Google, siempre; la versión de la reja, con el veredicto de la calle.
+  const googleSave = {
+    ...googleSaid(parsed.kind === "ok" ? parsed.result : null),
+    ...(approxKind ? { approx_rule: APPROX_STREET_RULE } : approxMode ? { approx_rule: null } : {}),
+  };
+  await saveOrderGeocode(admin, save, approxSave, googleSave);
   console.info(
     `[geocode-auto] ${JSON.stringify({ store: order.store_id, ok: usable, precision: save.precision, reason: save.reason, ...(approxKind ? { approx: approxKind } : {}) })}`,
   );
@@ -757,4 +810,33 @@ export async function markApproxUsed(admin: SupabaseClient, orderId: string, at 
   } catch {
     // La guía ya está creada: la marca es para la medición, no para la guía.
   }
+}
+
+/**
+ * Lo que Google encontró para la dirección ACTUAL del pedido y por qué no se
+ * usó, para el aviso de la pestaña Chatby de la ficha (0325). Solo lee la
+ * caché: no consulta a Google. Si la fila es de otra dirección (la huella no
+ * coincide) o no hay fila, null. `label`, `route` y `number` vienen null en
+ * las filas de antes de la 0325. Lanza si la base falla.
+ */
+export async function orderGeocodeFinding(
+  admin: SupabaseClient,
+  order: { order_id: string; address: string | null; district: string | null; province: string | null; region: string | null },
+): Promise<ChatbyGoogleFinding | null> {
+  const params = geocodeRequestParams(order);
+  if (!params) return null;
+  const { data, error } = await admin.from("order_geocodes").select("*").eq("order_id", order.order_id).maybeSingle();
+  if (error) throw new Error(error.message);
+  const row = data as (GeocodeRow & { approx_mode?: string | null }) | null;
+  if (!row || row.address_hash !== addressHash(params)) return null;
+  return {
+    ok: row.ok,
+    precision: row.precision,
+    reason: row.reason,
+    approxKind: row.approx_kind ?? null,
+    approxMode: row.approx_mode ?? null,
+    label: row.google_label ?? null,
+    route: row.google_route ?? null,
+    number: row.google_number ?? null,
+  };
 }

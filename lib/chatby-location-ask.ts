@@ -83,17 +83,131 @@ export interface ChatbyLocationHold {
   corrected?: boolean;
   /** (0318) Respondió a la pedida de la dirección, pero lo que escribió sigue incompleto. */
   replyIncomplete?: boolean;
+  /**
+   * (0325) Lo que Google encontró para la dirección actual y por qué no se usó
+   * (la caché `order_geocodes`). Null: no se buscó, o se buscó otra dirección.
+   */
+  google?: ChatbyGoogleFinding | null;
 }
 
-/** El título del aviso: por qué se paró la guía automática. */
-export function chatbyAskTitle(reason: ChatbyAskReason): string {
-  return reason === "direccion_incompleta"
-    ? "La clienta confirmó, pero la dirección está incompleta"
+/** Lo que la caché de Google guarda de la dirección del pedido (`order_geocodes`, 0301/0316/0325). */
+export interface ChatbyGoogleFinding {
+  /** ¿Pasó como edificio (lo que usa la guía automática)? */
+  ok: boolean;
+  /** ROOFTOP / RANGE_INTERPOLATED cuando pasó el candado; null si no. */
+  precision: string | null;
+  /** Por qué no se usó: los del candado (`impreciso`, `coincidencia_parcial`, `distrito_distinto`…) o `no_es_edificio`. */
+  reason: string | null;
+  /** (0316) El veredicto de la calle para el punto de la cuadra. */
+  approxKind: string | null;
+  approxMode: string | null;
+  /** (0325) `formatted_address`, la calle (`route`) y el número de Google. Null en las filas de antes. */
+  label: string | null;
+  route: string | null;
+  number: string | null;
+}
+
+/** «Av. José Quiñones 546, Chiclayo 14001, Perú» → «Av. José Quiñones 546, Chiclayo». */
+export function googleLabelShort(label: string | null | undefined): string {
+  return (label ?? "")
+    .replace(/,\s*Per[uú]\s*$/i, "")
+    .replace(/\s+\d{5}(?=\s*(,|$))/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Qué tan cerca dio Google, entre paréntesis después de lo que encontró. */
+function googlePrecisionLabel(f: ChatbyGoogleFinding): string | null {
+  if (f.precision === "ROOFTOP") return "el edificio";
+  if (f.precision === "RANGE_INTERPOLATED") return "punto de la cuadra";
+  if (f.reason === "impreciso") return "solo el centro de la calle o de la zona";
+  return null;
+}
+
+/** Por qué no se usó, en palabras de la asesora: lo que sigue a «No se usó porque…». Null si sí se podía usar. */
+export function googleRejectionText(f: ChatbyGoogleFinding): string | null {
+  if (f.ok) return null;
+  const route = f.route ? ` («${f.route}»)` : "";
+  switch (f.reason) {
+    case "impreciso":
+      return "Google solo la ubica en el centro de la calle o de la zona, no en la puerta de la casa";
+    case "coincidencia_parcial":
+      return "Google no reconoce la dirección completa: encontró una parecida, no exactamente esa";
+    case "distrito_distinto":
+      return "lo que encontró está en otro distrito, no en el del pedido";
+    case "departamento_distinto":
+      return "lo que encontró está en otro departamento, no en el del pedido";
+    case "fuera_del_peru":
+      return "lo que encontró está fuera del Perú";
+    case "pedido_sin_destino":
+      return "el pedido no trae distrito o departamento para comprobarlo";
+    case "no_es_edificio":
+      switch (f.approxKind) {
+        case "calle":
+          return f.approxMode === "activo"
+            ? "aunque es la misma calle, el mismo número y la misma provincia, la guía no salió con ese punto"
+            : "es el punto de la cuadra, no el edificio, y la «ubicación aproximada en la calle correcta» está en Simulación: el punto se guardó, pero la guía automática todavía no lo usa";
+        case "otra_calle":
+          return `es el punto de la cuadra y el nombre de la calle de Google${route} no es el de la dirección del pedido`;
+        case "otro_numero":
+          return `es el punto de la cuadra de otro número${f.number ? ` (${f.number})` : ""}, no el de la dirección del pedido`;
+        case "otra_provincia":
+          return "es el punto de la cuadra, pero en otra provincia";
+        case "sin_calle":
+          return "es el punto de la cuadra, pero Google no dio la calle y el número para comprobar que es la del pedido";
+        default:
+          return "es el punto de la cuadra, no el edificio, y la guía automática solo usa el edificio (la «ubicación aproximada en la calle correcta» está apagada)";
+      }
+    default:
+      return null;
+  }
+}
+
+/** ¿Google encontró algo para esa dirección? (sin resultado, no) */
+function googleFoundSomething(f: ChatbyGoogleFinding | null | undefined): f is ChatbyGoogleFinding {
+  return !!f && f.reason !== "sin_resultado" && (f.ok || !!f.label || !!f.precision || googleRejectionText(f) !== null);
+}
+
+/**
+ * «Google encontró: Av. José Quiñones 546, Chiclayo (punto de la cuadra). No
+ * se usó porque …» (0325). Sin lo que encontró Google, null. Pura.
+ */
+export function chatbyGoogleFindingText(f: ChatbyGoogleFinding | null | undefined): string | null {
+  if (!googleFoundSomething(f)) return null;
+  const label = googleLabelShort(f.label);
+  const precision = googlePrecisionLabel(f);
+  const why = googleRejectionText(f);
+  const found = label
+    ? `Google encontró: ${label}${precision ? ` (${precision})` : ""}.`
+    : f.precision === "RANGE_INTERPOLATED"
+      ? `Google encontró el punto de la cuadra${f.route ? ` de «${f.route}${f.number ? ` ${f.number}` : ""}»` : ""}.`
+      : f.ok
+        ? "Google encontró el edificio."
+        : null;
+  if (!found) return why ? `No se usó lo que encontró Google porque ${why}.` : null;
+  return why ? `${found} No se usó porque ${why}.` : found;
+}
+
+/**
+ * El título del aviso: por qué se paró la guía automática. (0325) Si Google
+ * sí encontró algo, no dice que no la encuentra.
+ */
+export function chatbyAskTitle(reason: ChatbyAskReason, google?: ChatbyGoogleFinding | null): string {
+  if (reason === "direccion_incompleta") return "La clienta confirmó, pero la dirección está incompleta";
+  return googleFoundSomething(google)
+    ? "La clienta confirmó, pero no se pudo usar lo que encontró Google"
     : "La clienta confirmó, pero Google no encuentra la dirección";
 }
 
 /** Por qué se paró, en una frase, debajo del título. */
-export function chatbyAskExplanation(hold: Pick<ChatbyLocationHold, "reason" | "ask" | "corrected">): string {
+export function chatbyAskExplanation(hold: Pick<ChatbyLocationHold, "reason" | "ask" | "corrected" | "google">): string {
+  // (0325) Qué encontró Google y por qué no se usó, en vez de «no da el edificio».
+  const found = hold.reason !== "direccion_incompleta" ? chatbyGoogleFindingText(hold.google) : null;
+  if (found) {
+    return hold.corrected
+      ? `La clienta completó la dirección por Chatby y Kapta la guardó. ${found} Aliclik exige la ubicación para crear la guía.`
+      : `${found} La clienta no mandó su ubicación de WhatsApp en esta compra y Aliclik la exige para crear la guía.`;
+  }
   if (hold.corrected && hold.reason !== "direccion_incompleta") {
     return "La clienta completó la dirección por Chatby y Kapta la guardó, pero Google tampoco da el edificio. Aliclik exige la ubicación para crear la guía.";
   }
@@ -351,6 +465,8 @@ export function chatbyLocationHoldFrom(input: {
   now: Date;
   /** Los mensajes leídos (la ventana de 24 h de la clienta alarga la de 72 h del pedido). */
   messages?: readonly { kind: string; at: string | null }[];
+  /** (0325) Lo que Google encontró para la dirección actual, si se buscó. */
+  google?: ChatbyGoogleFinding | null;
 }): ChatbyLocationHold {
   const askedAt = chatbyAskedAt(input.check);
   return {
@@ -371,5 +487,6 @@ export function chatbyLocationHoldFrom(input: {
     }),
     customerName: input.master.customer_name ?? null,
     orderName: input.master.order_name ?? null,
+    google: input.google ?? null,
   };
 }

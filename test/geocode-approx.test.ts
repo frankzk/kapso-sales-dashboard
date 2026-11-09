@@ -231,7 +231,8 @@ describe("geocodeOrderAddress con la ubicación aproximada (0316)", () => {
     const { client, state } = cacheAdmin(null, { failApproxSave: true });
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify(googleResponse(olaya())), { status: 200 }));
     await geocodeOrderAddress(client, AYACUCHO, { key: "k", fetchImpl: fetchImpl as never, approxMode: "simulacion" });
-    expect(state.upserts).toHaveLength(2);
+    // Con lo de la 0325, con lo de la 0316 y, al final, lo de siempre (test/geocode-calle-sufijo.test.ts).
+    expect(state.upserts).toHaveLength(3);
     expect(state.row).toMatchObject({ reason: "no_es_edificio" });
     expect(Object.keys(state.row!).some((k) => k.startsWith("approx_"))).toBe(false);
   });

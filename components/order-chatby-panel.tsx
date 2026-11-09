@@ -331,7 +331,7 @@ function LocationAskBanner({
   };
 
   return (
-    <Banner tone="warn" title={chatbyAskTitle(hold.reason)} role="status">
+    <Banner tone="warn" title={chatbyAskTitle(hold.reason, hold.google)} role="status">
       <div className="mt-1 space-y-3">
         <p className="leading-5">{chatbyAskExplanation(hold)}</p>
         {/* (0318) Si Kapta ya se la pidió sola, lo dice con la hora: la asesora no la vuelve a pedir. */}

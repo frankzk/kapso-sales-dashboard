@@ -369,4 +369,7 @@ echo "  ✅ nace en Simulación con 20 y 10, solo apagado/simulación/activo y t
 echo "▶ Reintentos de Lima: pedir la ubicación por WhatsApp (0324): posición que nace apagada, una marca por pedido y episodio, y RLS"
 $PSQL -f "$ROOT/scripts/sql/lima_retry_chatby_ask_smoke.sql"
 echo "  ✅ apagado / simulación / activo y nada más, nunca nulo; el tope y Google no cambian; una sola marca por pedido y episodio, con sus dos estados; la org lee la posición y sus marcas, y nadie las cambia desde el navegador"
+echo "▶ Lo que dijo Google en la caché (0325): etiqueta, calle y número de Google, versión de la reja de la calle, filas de antes intactas y RLS"
+$PSQL -f "$ROOT/scripts/sql/order_geocodes_google_said_smoke.sql"
+echo "  ✅ las filas de la 0316 nacen sin lo de Google y siguen valiendo; la consulta guarda la etiqueta, la calle, el número y la versión con rango; el edificio y la reja de la 0316 no cambian; nadie lee la caché desde el navegador"
 echo "✅ DB verification passed."
