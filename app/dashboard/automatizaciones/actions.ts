@@ -40,10 +40,34 @@ import { loadPrepaySettings, runPrepayAutoRule } from "@/lib/prepay-list-server"
 import { PREPAY_LIST_PATH, PREPAY_MODE_LABEL, isPrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import { APPROX_MODE_LABEL, isApproxMode } from "@/lib/geocode-approx";
 import {
+  acceptPagoOnlineRun,
+  loadPagoOnlineSettings,
+  removePagoOnlineException,
+  runPagoOnlineForOrg,
+  sendPagoOnlineTest,
+  type SendAttemptResult,
+} from "@/lib/pago-online-server";
+import {
+  PAGO_ONLINE_LABEL,
+  PAGO_ONLINE_MODE_LABEL,
+  PAGO_ONLINE_REQUIREMENT_LABEL,
+  PAGO_ONLINE_SEND_STATUS_LABEL,
+  isPagoOnlineMode,
+  isPagoOnlineRequirement,
+  pagoOnlinePhoneKey,
+  pagoOnlineReasonProblem,
+} from "@/lib/pago-online";
+import {
   CHATBY_APPROX_KEY,
   CHATBY_ASK_KEY,
   CHATBY_HISTORY_KEY,
   PREPAY_MODE_EVENT,
+  PAGO_ONLINE_ACCEPT_EVENT,
+  PAGO_ONLINE_EXCEPTION_EVENT,
+  PAGO_ONLINE_MODE_EVENT,
+  PAGO_ONLINE_REQUIREMENT_EVENT,
+  PAGO_ONLINE_RUN_EVENT,
+  PAGO_ONLINE_TEST_EVENT,
   RETRY_CAP_EVENT,
   RETRY_CHATBY_ASK_EVENT,
   RETRY_GEOCODE_EVENT,
@@ -461,6 +485,155 @@ export async function simulatePrepayNow(orgId: string): Promise<PrepaySimulation
     const message = error instanceof Error ? error.message : String(error);
     return { error: `La simulación no terminó: ${message}` };
   }
+}
+
+// ── «Pago solo online (lista automática)» (0326, MOM §41.11) ───────────────
+
+const MISSING_0326 = "Falta la migración 0326 en la base de datos.";
+
+/** «Kenku Peru: Enviada (la tienda dice 512) · Aurela: La tienda todavía no tiene el endpoint (404)». */
+function sendsNotice(sends: readonly SendAttemptResult[], names: Map<string, string>): string {
+  if (!sends.length) return "No hay tiendas WooCommerce activas a las que mandar la lista.";
+  return sends
+    .map((r) => {
+      const name = names.get(r.storeId) ?? "Tienda";
+      if (r.status === "ocupado") return `${name}: otra pasada la está mandando`;
+      const label = PAGO_ONLINE_SEND_STATUS_LABEL[r.status] ?? r.status;
+      const verified = r.status === "enviado" && r.verify?.celulares != null ? ` (la tienda dice ${r.verify.celulares.toLocaleString("es-PE")})` : "";
+      return `${name}: ${label}${verified}`;
+    })
+    .join(" · ");
+}
+
+async function storeNames(admin: ReturnType<typeof createAdminSupabase>, orgId: string): Promise<Map<string, string>> {
+  const { data } = await admin.from("stores").select("id,name").eq("org_id", orgId);
+  return new Map(((data ?? []) as { id: string; name: string | null }[]).map((s) => [s.id, s.name ?? "Tienda"]));
+}
+
+/**
+ * Apagado / Simulación / Activo. Simulación calcula la lista cada día a las
+ * 05:00 de Lima y solo guarda cuentas; Activo además la manda a cada tienda y
+ * frena los pedidos de Kapta. Activo pide confirmación en la página.
+ */
+export async function setPagoOnlineMode(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isPagoOnlineMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const current = await loadPagoOnlineSettings(g.admin, orgId);
+  if (current.missing) return { error: MISSING_0326 };
+  if (current.error) return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  const previous = current.settings.mode;
+  if (previous === mode) return { notice: "Ya estaba así." };
+  const { error } = await g.admin
+    .from("pago_online_settings")
+    .upsert({ org_id: orgId, mode, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) return { error: "No se pudo guardar. Intenta de nuevo." };
+  const warn = await recordSwitch(g.admin, { org_id: orgId, store_id: null, automation: PAGO_ONLINE_MODE_EVENT, previous, next: mode, actor: g.actor });
+  revalidatePath(PANEL_PATH);
+  const tail =
+    mode === "activo"
+      ? " La próxima lista sale a las 05:00 de Lima, o ahora con «Calcular ahora»."
+      : mode === "apagado"
+        ? " Kapta deja de frenar por esta lista; las tiendas siguen con la última que recibieron."
+        : "";
+  return { notice: warn ?? `${PAGO_ONLINE_LABEL}: ${PAGO_ONLINE_MODE_LABEL[mode]}.${tail}` };
+}
+
+/** Lo que se le cobra al cliente de la lista en los pedidos de Kapta: «Adelanto (regla §8)» o «Pago completo». */
+export async function setPagoOnlineRequirement(orgId: string, requirement: string): Promise<AutomationActionResult> {
+  if (!isPagoOnlineRequirement(requirement)) return { error: "Esa opción no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const current = await loadPagoOnlineSettings(g.admin, orgId);
+  if (current.missing) return { error: MISSING_0326 };
+  if (current.error) return { error: "No se pudo leer el ajuste actual. Intenta de nuevo." };
+  const previous = current.settings.requirement;
+  if (previous === requirement) return { notice: "Ya estaba así." };
+  const { error } = await g.admin
+    .from("pago_online_settings")
+    .upsert({ org_id: orgId, requirement, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) return { error: "No se pudo guardar. Intenta de nuevo." };
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: PAGO_ONLINE_REQUIREMENT_EVENT,
+    previous,
+    next: requirement,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  return { notice: warn ?? `Pago solo online: se cobra ${PAGO_ONLINE_REQUIREMENT_LABEL[requirement]}.` };
+}
+
+/**
+ * «Calcular ahora»: la corrida de hoy en la posición actual. En Simulación
+ * solo cuenta; en Activo, si pasa el freno de cambio brusco, la manda a cada
+ * tienda (un intento: los reintentos son del envío diario).
+ */
+export async function runPagoOnlineNow(orgId: string): Promise<AutomationActionResult> {
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const report = await runPagoOnlineForOrg(g.admin, { orgId, trigger: "manual", actor: g.actor });
+  if (report.error) return { error: `No terminó: ${report.error}` };
+  if (report.skipped === "apagado") return { error: "Está apagada: ponla en Simulación o en Activo antes de calcular." };
+  await recordSwitch(g.admin, { org_id: orgId, store_id: null, automation: PAGO_ONLINE_RUN_EVENT, previous: null, next: report.mode, actor: g.actor });
+  revalidatePath(PANEL_PATH);
+  const phones = (report.counts?.phones ?? 0).toLocaleString("es-PE");
+  if (report.mode === "simulacion") return { notice: `Simulación: la lista tendría ${phones} celulares. No se mandó nada ni se frena nada.` };
+  if (report.guard === "bloqueado") {
+    return { error: `No se mandó: ${report.guardReason ?? "cambio brusco"} Revísalo y, si está bien, «Aceptar la lista de hoy».` };
+  }
+  return { notice: `Lista de ${phones} celulares. ${sendsNotice(report.sends, await storeNames(g.admin, orgId))}` };
+}
+
+/** «Aceptar la lista de hoy»: la que frenó el cambio brusco pasa a ser la vigente y se manda. */
+export async function acceptPagoOnlineList(orgId: string, runId: string): Promise<AutomationActionResult> {
+  if (!isUuid(runId)) return { error: "Esa lista no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const res = await acceptPagoOnlineRun(g.admin, { orgId, runId, actor: g.actor });
+  if (!res.ok) return { error: res.error };
+  await recordSwitch(g.admin, { org_id: orgId, store_id: null, automation: PAGO_ONLINE_ACCEPT_EVENT, previous: "bloqueado", next: "aceptado", actor: g.actor });
+  revalidatePath(PANEL_PATH);
+  return { notice: `Aceptada. ${sendsNotice(res.sends, await storeNames(g.admin, orgId))}` };
+}
+
+/**
+ * «Enviar prueba» (§6 del pedido de las tiendas): una lista de UN celular del
+ * equipo a una tienda, con `regla: "prueba"`, y el GET de verificación. La
+ * tienda reemplaza su lista automática por ese celular hasta el próximo envío
+ * real: la página lo dice antes de mandarla. El celular no se guarda.
+ */
+export async function sendPagoOnlineTestList(orgId: string, storeId: string, phone: string): Promise<AutomationActionResult> {
+  if (!isUuid(storeId)) return { error: "Esa tienda no existe." };
+  if (!pagoOnlinePhoneKey(phone)) return { error: "Escribe un celular de 9 dígitos." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const res = await sendPagoOnlineTest(g.admin, { orgId, storeId, phone, actor: g.actor });
+  if ("error" in res && !("status" in res)) return { error: res.error ?? "No se pudo mandar la prueba." };
+  const sent = res as SendAttemptResult;
+  await recordSwitch(g.admin, { org_id: orgId, store_id: storeId, automation: PAGO_ONLINE_TEST_EVENT, previous: null, next: sent.status, actor: g.actor });
+  revalidatePath(PANEL_PATH);
+  const names = await storeNames(g.admin, orgId);
+  if (sent.status !== "enviado") return { error: `${sendsNotice([sent], names)}${sent.error ? `: ${sent.error}` : ""}` };
+  const v = sent.verify;
+  return {
+    notice: `${names.get(storeId) ?? "Tienda"}: prueba enviada. La tienda guardó ${sent.totals?.celulares ?? "?"} y el GET dice ${v?.celulares ?? "?"}${v?.actualizado ? ` (${v.actualizado})` : ""}. Sigue con el formulario de la tienda (§6 del pedido) y después manda la lista real con «Calcular ahora».`,
+  };
+}
+
+/** Quitar una excepción de Kapta, con motivo: el cliente vuelve a frenar con la lista vigente si cumple la regla. */
+export async function removePagoOnlineExceptionAction(orgId: string, id: string, reason: string): Promise<AutomationActionResult> {
+  if (!isUuid(id)) return { error: "Esa excepción no existe." };
+  const problem = pagoOnlineReasonProblem(reason);
+  if (problem) return { error: problem };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const res = await removePagoOnlineException(g.admin, { orgId, id, reason, actor: g.actor });
+  if (!res.ok) return { error: res.error };
+  await recordSwitch(g.admin, { org_id: orgId, store_id: null, automation: PAGO_ONLINE_EXCEPTION_EVENT, previous: "exceptuado", next: "quitada", actor: g.actor });
+  revalidatePath(PANEL_PATH);
+  return { notice: "Excepción quitada: si sigue cumpliendo la regla, vuelve a frenar con la lista vigente y entra en el próximo envío." };
 }
 
 // ── «Aceptar ubicación aproximada en la calle correcta» (0316, MOM §6.1 y §40) ──

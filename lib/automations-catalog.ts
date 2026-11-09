@@ -17,6 +17,7 @@
 // Puro: sin base ni red.
 
 import { RETRY_DAILY_CAP_MAX, RETRY_DAILY_CAP_MIN, RETRY_MODE_LABEL, isRetryMode, isRetryVariant, retryVariantLabel } from "@/lib/lima-retry-auto";
+import { PAGO_ONLINE_KEY, PAGO_ONLINE_LABEL, PAGO_ONLINE_REQUIREMENT_KEY, PAGO_ONLINE_REQUIREMENT_LABEL, isPagoOnlineRequirement } from "@/lib/pago-online";
 
 /** Los grupos del panel, en su orden. */
 export const AUTOMATION_GROUPS = [
@@ -661,6 +662,19 @@ export function retryVariantEventKey(variant: string): string {
 /** La regla automática de la «Lista de pago adelantado» (0309, MOM §41). */
 export const PREPAY_MODE_EVENT = "prepay_list_auto";
 
+/**
+ * «Pago solo online (lista automática)» (0326, MOM §41.11): la posición
+ * (Apagado / Simulación / Activo), lo que se cobra («Adelanto (regla §8)» o
+ * «Pago completo»), el envío de prueba, la lista aceptada pese al freno y las
+ * excepciones de Kapta, en el historial.
+ */
+export const PAGO_ONLINE_MODE_EVENT = PAGO_ONLINE_KEY;
+export const PAGO_ONLINE_REQUIREMENT_EVENT = PAGO_ONLINE_REQUIREMENT_KEY;
+export const PAGO_ONLINE_TEST_EVENT = "pago_solo_online_prueba";
+export const PAGO_ONLINE_ACCEPT_EVENT = "pago_solo_online_aceptada";
+export const PAGO_ONLINE_RUN_EVENT = "pago_solo_online_correr";
+export const PAGO_ONLINE_EXCEPTION_EVENT = "pago_solo_online_excepcion";
+
 /** Los interruptores y topes del agente de IA (Conector de IA, 0323, MOM §42.9). */
 export const AGENT_WHATSAPP_MODE_EVENT = "agent_whatsapp_mode";
 export const AGENT_GUIDE_MODE_EVENT = "agent_guide_mode";
@@ -674,6 +688,12 @@ export function automationEventLabel(key: string): string {
   if (key === AGENT_WHATSAPP_CAP_EVENT) return "Agente de IA · tope de WhatsApp del día";
   if (key === AGENT_GUIDE_CAP_EVENT) return "Agente de IA · tope de guías del día";
   if (key === PREPAY_MODE_EVENT) return "Lista de pago adelantado · regla automática";
+  if (key === PAGO_ONLINE_MODE_EVENT) return PAGO_ONLINE_LABEL;
+  if (key === PAGO_ONLINE_REQUIREMENT_EVENT) return "Pago solo online · lo que se cobra";
+  if (key === PAGO_ONLINE_TEST_EVENT) return "Pago solo online · envío de prueba";
+  if (key === PAGO_ONLINE_ACCEPT_EVENT) return "Pago solo online · lista aceptada pese al cambio brusco";
+  if (key === PAGO_ONLINE_RUN_EVENT) return "Pago solo online · corrida a mano";
+  if (key === PAGO_ONLINE_EXCEPTION_EVENT) return "Pago solo online · excepción de Kapta";
   if (key === RETRY_CAP_EVENT) return "Reintentos Aliclik · tope del día";
   if (key === RETRY_GEOCODE_EVENT) return "Reintentos Aliclik · ubicación por dirección (Google)";
   if (key === RETRY_CHATBY_ASK_EVENT) return "Reintentos Aliclik · pedir la ubicación por WhatsApp";
@@ -690,6 +710,7 @@ export function automationValueLabel(key: string, value: string | null): string 
   if (value === SWITCH_ON) return "Encendido";
   if (value === SWITCH_OFF) return "Apagado";
   if (isRetryMode(value)) return RETRY_MODE_LABEL[value];
+  if (key === PAGO_ONLINE_REQUIREMENT_EVENT && isPagoOnlineRequirement(value)) return PAGO_ONLINE_REQUIREMENT_LABEL[value];
   if (key === RETRY_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "guía" : "guías"} al día`;
   if (key === AGENT_GUIDE_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "guía" : "guías"} al día`;
   if (key === AGENT_WHATSAPP_CAP_EVENT && /^\d+$/.test(value)) return `${value} ${value === "1" ? "mensaje" : "mensajes"} al día`;

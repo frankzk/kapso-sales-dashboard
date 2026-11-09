@@ -872,6 +872,13 @@ export interface WooClientOpts {
   auth?: WooAuthMode;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * El prefijo de la API dentro de `wp-json`. Por defecto `WOO_API_PREFIX`
+   * (`/wp-json/wc/v3`). COD Core expone lo suyo en `/wp-json/cod-core/v1`, con
+   * las mismas claves de la API REST de WooCommerce (lib/pago-online-server.ts,
+   * MOM §41.11): solo se acepta un prefijo `/wp-json/<espacio>/v<n>`.
+   */
+  apiPrefix?: string;
 }
 
 export type WooErrorKind =
@@ -1035,6 +1042,8 @@ export async function wooRequest<T = unknown>(opts: WooClientOpts, req: WooReque
   }
   const auth: WooAuthMode = opts.auth ?? "basic";
   const timeoutMs = opts.timeoutMs ?? WOO_TIMEOUT_MS;
+  const apiPrefix = opts.apiPrefix ?? WOO_API_PREFIX;
+  if (!/^\/wp-json\/[a-z0-9-]+\/v\d+$/.test(apiPrefix)) throw new WooError("config", "Prefijo de la API de WordPress inválido.");
 
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(req.query ?? {})) {
@@ -1055,7 +1064,7 @@ export async function wooRequest<T = unknown>(opts: WooClientOpts, req: WooReque
     payload = JSON.stringify(req.body);
   }
   const qs = params.toString();
-  const url = `${site}${WOO_API_PREFIX}${req.path}${qs ? `?${qs}` : ""}`;
+  const url = `${site}${apiPrefix}${req.path}${qs ? `?${qs}` : ""}`;
 
   const doFetch = opts.fetchImpl ?? fetch;
   let res: Response;

@@ -43,6 +43,8 @@ import {
   isPrepayMode,
 } from "@/lib/prepay-list";
 import type { OrderPaymentFacts } from "@/lib/order-paid";
+import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
+import { pagoOnlineBrakeDecision, type PagoOnlineRequirement } from "@/lib/pago-online";
 
 type DbError = { code?: string; message?: string } | null | undefined;
 type Page<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null }>;
@@ -166,7 +168,12 @@ export type PrepayOrderCheck =
    * no mandar a cobrar el total a quien ya pagó—. Sin pedido leído, false.
    */
   | { state: "ok"; listed: boolean; fullyPaid: boolean }
-  | { state: "blocked"; message: string; entry: PrepayEntryRow }
+  | { state: "blocked"; source: "lista"; message: string; entry: PrepayEntryRow }
+  /**
+   * La lista automática «Pago solo online» (0326, MOM §41.11): el mismo freno,
+   * con lo que el owner decidió cobrar (adelanto o pago completo).
+   */
+  | { state: "blocked"; source: "pago_online"; message: string; entry: null; failed: number | null; requirement: PagoOnlineRequirement }
   | { state: "unread"; message: string };
 
 export function paymentFactsOf(row: Pick<PrepayOrderRow, "financial_status" | "total_refunded" | "payment_state" | "payment_gateway">): OrderPaymentFacts {
@@ -201,15 +208,33 @@ export async function prepayOrderCheck(
       row = (data as PrepayOrderRow | null) ?? null;
       if (!row) return { state: "ok", listed: false, fullyPaid: false };
     }
-    const fullyPaid = prepayRequirementMet(paymentFactsOf(row));
-    if (!prepayPhoneKey(row.customer_phone)) return { state: "ok", listed: false, fullyPaid };
+    const facts = paymentFactsOf(row);
+    const fullyPaid = prepayRequirementMet(facts);
     const orgId = await orgOfStore(admin, row.store_id);
     if (!orgId) return { state: "ok", listed: false, fullyPaid };
-    const lookup = await prepayLookup(admin, orgId, row.customer_phone);
-    if (lookup.state === "unread") return unread(lookup.error);
-    if (lookup.state === "not_listed") return { state: "ok", listed: false, fullyPaid };
-    if (fullyPaid) return { state: "ok", listed: true, fullyPaid };
-    return { state: "blocked", message: prepayBlockMessage(point), entry: lookup.entry };
+    // La lista de pago adelantado primero: pide el total, más que la automática.
+    if (prepayPhoneKey(row.customer_phone)) {
+      const lookup = await prepayLookup(admin, orgId, row.customer_phone);
+      if (lookup.state === "unread") return unread(lookup.error);
+      if (lookup.state === "listed") {
+        if (fullyPaid) return { state: "ok", listed: true, fullyPaid };
+        return { state: "blocked", source: "lista", message: prepayBlockMessage(point), entry: lookup.entry };
+      }
+    }
+    // «Pago solo online (lista automática)»: solo en Activo, con la lista
+    // vigente y sin la excepción de Kapta (`pago_online_lookup`, 0326).
+    const auto = await pagoOnlineLookup(admin, orgId, row.customer_phone);
+    if (auto.state === "unread") return unread(auto.error);
+    if (auto.state === "not_listed") return { state: "ok", listed: false, fullyPaid };
+    const brake = pagoOnlineBrakeDecision({
+      listed: true,
+      failed: auto.failed,
+      requirement: auto.requirement,
+      facts,
+      point: point === "confirmar" ? "confirmar" : "guia",
+    });
+    if (brake.state === "ok") return { state: "ok", listed: true, fullyPaid };
+    return { state: "blocked", source: "pago_online", message: brake.message, entry: null, failed: auto.failed, requirement: auto.requirement };
   } catch (e) {
     return unread(e instanceof Error ? e.message : String(e));
   }

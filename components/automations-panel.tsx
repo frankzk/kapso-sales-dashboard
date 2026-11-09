@@ -75,6 +75,22 @@ import {
   type PrepaySimulationSummary,
 } from "@/lib/prepay-list";
 import {
+  PAGO_ONLINE_LABEL,
+  PAGO_ONLINE_REQUIREMENT_LABEL,
+  PAGO_ONLINE_REQUIREMENTS,
+  type PagoOnlineMode,
+  type PagoOnlineRequirement,
+} from "@/lib/pago-online";
+import type { PagoOnlineRunView } from "@/lib/pago-online-view";
+import {
+  acceptPagoOnlineList,
+  removePagoOnlineExceptionAction,
+  runPagoOnlineNow,
+  sendPagoOnlineTestList,
+  setPagoOnlineMode,
+  setPagoOnlineRequirement,
+} from "@/app/dashboard/automatizaciones/actions";
+import {
   measureLimaGeocodeNow,
   setPrepayAutoMode,
   simulatePrepayNow,
@@ -158,6 +174,15 @@ const INDEX: IndexGroup[] = [
     ],
   },
   {
+    title: "Pago solo online",
+    items: [
+      { id: "pago-online-posicion", label: "Posición y cobro" },
+      { id: "pago-online-tiendas", label: "Envío a las tiendas" },
+      { id: "pago-online-prueba", label: "Enviar prueba" },
+      { id: "pago-online-excepciones", label: "Excepciones" },
+    ],
+  },
+  {
     title: "Interruptores",
     items: AUTOMATION_GROUPS.flatMap((g) => [
       { id: groupId(g.key), label: g.title },
@@ -224,6 +249,7 @@ export function AutomationsPanel({ orgs, writable }: { orgs: AutomationsOrgView[
         <SettingsIndex groups={INDEX} key={org.orgId}>
           <RetryGroup org={org} writable={writable} />
           <PrepayGroup org={org} writable={writable} />
+          <PagoOnlineGroup org={org} writable={writable} />
           <SettingsGroup title="Interruptores" description="Cada uno guarda al moverlo. Los que salen de Kapta piden confirmación antes de encenderse.">
             {AUTOMATION_GROUPS.map((group) => (
               <CatalogSection key={group.key} group={group} org={org} writable={writable} />
@@ -999,6 +1025,381 @@ function PrepayGroup({ org, writable }: { org: AutomationsOrgView; writable: boo
             !sim?.error && <p className={cn(CARD, ROW, "text-sm text-ink-500")}>Todavía no hay ninguna simulación.</p>
           )}
         </div>
+      </SettingsSection>
+    </SettingsGroup>
+  );
+}
+
+// ── «Pago solo online (lista automática)» (0326, MOM §41.11) ───────────────
+
+function pagoOnlineBadge(mode: PagoOnlineMode, available: boolean): ReactNode {
+  if (!available) return <Badge tone="warn">No instalado</Badge>;
+  if (mode === "activo") return <Badge tone="ok">Activo</Badge>;
+  if (mode === "simulacion") return <Badge tone="info">En simulación</Badge>;
+  return <Badge>Apagado</Badge>;
+}
+
+const GUARD_LABEL: Record<string, string> = {
+  primera: "Primera lista: sin comparación",
+  ok: "Pasó el freno de cambio brusco",
+  bloqueado: "Frenada por cambio brusco",
+  aceptado: "Aceptada a mano pese al cambio brusco",
+};
+
+function PagoOnlineRunCard({ title, run }: { title: string; run: PagoOnlineRunView }) {
+  return (
+    <div className={CARD}>
+      <div className={cn(ROW, "space-y-1.5")}>
+        <p className="text-sm font-semibold text-ink-900">{title}</p>
+        {run.status === "error" ? (
+          <p className="text-[13px] text-crit-fg">{run.error ?? "El cálculo falló."}</p>
+        ) : (
+          <>
+            <p className="text-sm text-ink-700">
+              {run.mode === "activo" ? "La lista tiene" : "La lista tendría"} <strong>{fmtInt(run.phones)}</strong> celulares
+              {run.emails ? ` y ${fmtInt(run.emails)} correos` : ""}: {fmtInt(run.twoOrMore)} con 2 o más entregas fallidas
+              {run.excepted ? ` · ${fmtInt(run.excepted)} exceptuados por Kapta (no van)` : ""}.
+            </p>
+            <p className={HELP}>
+              En Por confirmar hay {fmtInt(run.porConfirmarListed)} pedidos de estos clientes; con «{PAGO_ONLINE_REQUIREMENT_LABEL[run.requirement]}», hoy
+              {run.mode === "activo" ? " se frenan " : " se frenarían "}
+              {fmtInt(run.porConfirmarBraked)}.{" "}
+              {run.guard ? `${GUARD_LABEL[run.guard] ?? run.guard}${run.baseline != null ? ` (la anterior tenía ${fmtInt(run.baseline)})` : ""}.` : ""}
+              {run.acceptedBy ? ` Aceptada por ${run.acceptedBy}.` : ""}
+            </p>
+            {run.guardReason && <p className="text-[13px] text-warn-fg">{run.guardReason}</p>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable: boolean }) {
+  const view = org.pagoOnline;
+  const [mode, setMode] = useState<PagoOnlineMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [requirement, setRequirement] = useState<PagoOnlineRequirement>(view.requirement);
+  useEffect(() => setRequirement(view.requirement), [view.requirement]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [runStatus, setRunStatus] = useState<Status>(null);
+  const [runPending, startRun] = useTransition();
+  const [testStore, setTestStore] = useState(view.stores[0]?.id ?? "");
+  const [testPhone, setTestPhone] = useState("");
+  const [testStatus, setTestStatus] = useState<Status>(null);
+  const [testPending, startTest] = useTransition();
+  const [excStatus, setExcStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available;
+
+  const save = (fn: () => Promise<AutomationActionResult>, onOk: () => void) => {
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await fn();
+        if (!result.error) onOk();
+        setStatus(result.error ? { kind: "error", text: result.error } : { kind: "ok", text: result.notice ?? "Guardado" });
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+  };
+
+  const changeMode = (next: RetryMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (
+      next === "activo" &&
+      !window.confirm(
+        `¿Poner en Activo «${PAGO_ONLINE_LABEL}»? Cada día a las 05:00 de Lima Kapta manda la lista a cada tienda (que deja de ofrecerles contra entrega) y frena en Kapta la confirmación y las guías contra entrega de esos clientes hasta tener ${PAGO_ONLINE_REQUIREMENT_LABEL[requirement].toLowerCase()}.`,
+      )
+    ) {
+      return false;
+    }
+    save(() => setPagoOnlineMode(org.orgId, next), () => setMode(next as PagoOnlineMode));
+    return true;
+  };
+
+  const run = view.lastRun;
+  return (
+    <SettingsGroup
+      title={PAGO_ONLINE_LABEL}
+      description="Los clientes con una entrega fallida y ninguna recibida (contra entrega, Kenku y Aurela juntas, todo el historial): las tiendas no les ofrecen contra entrega y Kapta frena sus pedidos contra entrega. Nunca se muestran los celulares."
+    >
+      <SettingsSection
+        id="pago-online-posicion"
+        title="Posición y cobro"
+        badge={pagoOnlineBadge(mode, view.available)}
+        description={
+          <>
+            <p>
+              <strong>Apagado:</strong> no calcula, no manda y no frena. <strong>Simulación:</strong> cada día a las 05:00 de Lima calcula la lista y
+              dice cuántos serían y cuántos pedidos frenaría, sin mandar nada ni frenar nada. <strong>Activo:</strong> además la manda entera a cada
+              tienda (reemplaza la anterior) y frena en Kapta.
+            </p>
+            <p>
+              En los pedidos de Kapta (asesoras, Chatby, el bot) el cliente de la lista paga <strong>{PAGO_ONLINE_REQUIREMENT_LABEL.adelanto}</strong>{" "}
+              —el adelanto validado de la escalera del §8— o <strong>{PAGO_ONLINE_REQUIREMENT_LABEL.pago_completo}</strong>. El owner eligió el adelanto
+              (09-11-2026).
+            </p>
+          </>
+        }
+      >
+        {view.error && (
+          <Banner tone="warn" role="status">
+            {view.error}
+          </Banner>
+        )}
+        <div className={CARD}>
+          <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-3")}>
+            <span className="text-sm font-medium text-ink-900">Posición</span>
+            <ModeControl value={mode as RetryMode} label={PAGO_ONLINE_LABEL} disabled={!canEdit} pending={pending} onChange={changeMode} />
+          </div>
+          <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-3 border-t border-line")}>
+            <label htmlFor="pago-online-cobro" className="text-sm font-medium text-ink-900">
+              Lo que se cobra en los pedidos de Kapta
+            </label>
+            <select
+              id="pago-online-cobro"
+              value={requirement}
+              disabled={!canEdit || pending}
+              onChange={(e) => {
+                const next = e.target.value as PagoOnlineRequirement;
+                if (next === requirement) return;
+                save(() => setPagoOnlineRequirement(org.orgId, next), () => setRequirement(next));
+              }}
+              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-60 pointer-coarse:h-11"
+            >
+              {PAGO_ONLINE_REQUIREMENTS.map((r) => (
+                <option key={r} value={r}>
+                  {PAGO_ONLINE_REQUIREMENT_LABEL[r]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className={cn(ROW, "border-t border-line text-[13px] text-ink-600")}>
+            {view.current
+              ? `La lista que frena hoy en Kapta: ${fmtInt(view.current.phones)} celulares, calculada el ${view.current.at}.`
+              : "Todavía no hay una lista vigente: Kapta no frena por esta regla."}
+          </div>
+          {(pending || status) && (
+            <div className={cn(ROW, "border-t border-line py-3")}>
+              <RowStatus pending={pending} status={status} />
+            </div>
+          )}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        id="pago-online-tiendas"
+        title="Envío a las tiendas"
+        description="Por tienda: el último envío bueno (con lo que dice el GET de la tienda), el último error y el freno de cambio brusco (más del doble o menos de la mitad que la anterior: no se manda y se avisa por Telegram). Reintenta a los 1, 5 y 15 minutos si la tienda no responde; nunca con claves rechazadas. Un 404 es que la tienda aún no tiene cod-core 0.10.45."
+        actions={
+          <OpsButton
+            size="sm"
+            disabled={!canEdit || runPending || mode === "apagado"}
+            onClick={() => {
+              if (mode === "activo" && !window.confirm("¿Calcular la lista ahora y mandarla a cada tienda? Reemplaza la lista automática de cada una.")) return;
+              setRunStatus(null);
+              startRun(async () => {
+                try {
+                  const r = await runPagoOnlineNow(org.orgId);
+                  setRunStatus(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: r.notice ?? "Listo" });
+                } catch {
+                  setRunStatus({ kind: "error", text: "No respondió: se cortó o se perdió la conexión. Vuelve a intentar." });
+                }
+              });
+            }}
+            className="pointer-coarse:h-11"
+          >
+            {runPending ? "Calculando…" : "Calcular ahora"}
+          </OpsButton>
+        }
+      >
+        <div aria-live="polite" className="empty:hidden">
+          {runStatus && (
+            <Banner tone={runStatus.kind === "ok" ? "info" : "crit"} role={runStatus.kind === "ok" ? "status" : "alert"}>
+              {runStatus.text}
+            </Banner>
+          )}
+        </div>
+        {run ? (
+          <PagoOnlineRunCard title={`Última corrida · ${run.at} · ${run.mode === "activo" ? "Activo" : "Simulación"}${run.trigger === "manual" ? " · a mano" : ""}`} run={run} />
+        ) : (
+          <p className={cn(CARD, ROW, "text-sm text-ink-500")}>Todavía no hay ninguna corrida.</p>
+        )}
+        {run?.canAccept && (
+          <div className={cn(CARD, ROW, "flex flex-wrap items-center justify-between gap-3")}>
+            <p className="text-[13px] text-ink-700">Si el cambio es correcto (por ejemplo, cambió la regla), acéptala: pasa a frenar en Kapta y se manda a cada tienda.</p>
+            <OpsButton
+              size="sm"
+              disabled={!canEdit || runPending}
+              onClick={() => {
+                if (!window.confirm("¿Aceptar la lista de hoy pese al cambio brusco y mandarla a cada tienda?")) return;
+                setRunStatus(null);
+                startRun(async () => {
+                  try {
+                    const r = await acceptPagoOnlineList(org.orgId, run.id);
+                    setRunStatus(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: r.notice ?? "Aceptada" });
+                  } catch {
+                    setRunStatus({ kind: "error", text: NETWORK_ERROR });
+                  }
+                });
+              }}
+              className="pointer-coarse:h-11"
+            >
+              Aceptar la lista de hoy
+            </OpsButton>
+          </div>
+        )}
+        {view.lastSimulation && <PagoOnlineRunCard title={`Última simulación · ${view.lastSimulation.at}`} run={view.lastSimulation} />}
+        {view.stores.length === 0 ? (
+          <p className={cn(CARD, ROW, "text-sm text-ink-500")}>No hay tiendas WooCommerce activas en esta organización.</p>
+        ) : (
+          <div className={CARD}>
+            {view.stores.map((s, i) => (
+              <div key={s.id} className={cn(ROW, "space-y-1", i > 0 && "border-t border-line")}>
+                <p className="text-sm font-semibold text-ink-900">{s.name}</p>
+                <p className="text-[13px] text-ink-700">
+                  {s.lastOk
+                    ? `Último envío bueno: ${s.lastOk.at} · ${fmtInt(s.lastOk.phones)} celulares${s.lastOk.emails ? ` y ${fmtInt(s.lastOk.emails)} correos` : ""}${
+                        s.lastOk.verifyPhones != null ? ` · la tienda dice ${fmtInt(s.lastOk.verifyPhones)}${s.lastOk.verifyUpdatedAt ? ` (${s.lastOk.verifyUpdatedAt})` : ""}` : ""
+                      }${s.lastOk.verifyError ? ` · el GET falló: ${s.lastOk.verifyError}` : ""}`
+                    : "Todavía no recibió ninguna lista."}
+                </p>
+                {s.lastError && (
+                  <p className="text-[13px] text-crit-fg">
+                    Último error: {s.lastError.at} · {s.lastError.status}
+                    {s.lastError.httpStatus ? ` (HTTP ${s.lastError.httpStatus})` : ""}
+                    {s.lastError.error ? ` · ${s.lastError.error}` : ""}
+                  </p>
+                )}
+                {s.guard && (
+                  <p className="text-[13px] text-warn-fg">
+                    Freno de cambio brusco: {s.guard.at}
+                    {s.guard.reason ? ` · ${s.guard.reason}` : ""}
+                  </p>
+                )}
+                {s.lastTest && (
+                  <p className={HELP}>
+                    Última prueba: {s.lastTest.at} · {s.lastTest.status}
+                    {s.lastTest.verifyPhones != null ? ` · la tienda dice ${fmtInt(s.lastTest.verifyPhones)}` : ""}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </SettingsSection>
+
+      <SettingsSection
+        id="pago-online-prueba"
+        title="Enviar prueba"
+        description="La prueba del §6 del pedido de las tiendas: manda a UNA tienda una lista con un solo celular del equipo («regla: prueba») y la verifica con el GET. Ojo: la tienda reemplaza su lista automática por ese celular hasta el próximo envío real. El celular no se guarda. Funciona en cualquier posición."
+      >
+        <div className={CARD}>
+          <div className={cn(ROW, "flex flex-wrap items-center gap-2")}>
+            <select
+              value={testStore}
+              onChange={(e) => setTestStore(e.target.value)}
+              aria-label="Tienda de la prueba"
+              disabled={!canEdit || testPending}
+              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong disabled:opacity-60 pointer-coarse:h-11"
+            >
+              {view.stores.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <input
+              value={testPhone}
+              onChange={(e) => setTestPhone(e.target.value)}
+              inputMode="tel"
+              autoComplete="off"
+              placeholder="Celular del equipo"
+              aria-label="Celular del equipo"
+              disabled={!canEdit || testPending}
+              className="h-9 w-44 rounded-md bg-white px-3 text-sm text-ink-900 ring-1 ring-inset ring-line-strong disabled:opacity-60 pointer-coarse:h-11"
+            />
+            <OpsButton
+              size="sm"
+              disabled={!canEdit || testPending || !testStore || testPhone.replace(/\D/g, "").length < 9}
+              onClick={() => {
+                const name = view.stores.find((s) => s.id === testStore)?.name ?? "la tienda";
+                if (!window.confirm(`¿Mandar la prueba a ${name}? Su lista automática queda con ese único celular hasta el próximo envío real.`)) return;
+                setTestStatus(null);
+                startTest(async () => {
+                  try {
+                    const r = await sendPagoOnlineTestList(org.orgId, testStore, testPhone);
+                    setTestStatus(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: r.notice ?? "Enviada" });
+                    if (!r.error) setTestPhone("");
+                  } catch {
+                    setTestStatus({ kind: "error", text: NETWORK_ERROR });
+                  }
+                });
+              }}
+              className="pointer-coarse:h-11"
+            >
+              {testPending ? "Enviando…" : "Enviar prueba"}
+            </OpsButton>
+          </div>
+          {testStatus && (
+            <div className={cn(ROW, "border-t border-line py-3")}>
+              <RowStatus pending={false} status={testStatus} />
+            </div>
+          )}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        id="pago-online-excepciones"
+        title="Excepciones de Kapta"
+        description="Clientes que no entran a la lista aunque cumplan la regla. Se agregan desde la ficha del pedido («Exceptuar a este cliente», con motivo). Kapta deja de frenarlos al momento; las tiendas, desde el próximo envío. Las tiendas tienen además las suyas («-987654321» en su panel)."
+      >
+        {excStatus && <RowStatus pending={false} status={excStatus} />}
+        {view.exceptions.length === 0 ? (
+          <p className={cn(CARD, ROW, "text-sm text-ink-500")}>No hay excepciones.</p>
+        ) : (
+          <div className={CARD}>
+            {view.exceptions.map((e, i) => (
+              <div key={e.id} className={cn(ROW, "flex flex-wrap items-center justify-between gap-3", i > 0 && "border-t border-line")}>
+                <div className="min-w-0">
+                  <p className="text-sm text-ink-900">
+                    <span className="tabular-nums">{e.phoneMasked}</span>
+                    {e.orderName ? ` · ${e.orderName}` : ""}
+                  </p>
+                  <p className={HELP}>
+                    {e.reason} · {e.addedBy} · {e.addedAt}
+                  </p>
+                </div>
+                <OpsButton
+                  size="sm"
+                  disabled={!canEdit}
+                  onClick={() => {
+                    const reason = window.prompt("¿Por qué se quita la excepción? (al menos 8 caracteres)") ?? "";
+                    if (!reason.trim()) return;
+                    setExcStatus(null);
+                    startTransition(async () => {
+                      try {
+                        const r = await removePagoOnlineExceptionAction(org.orgId, e.id, reason);
+                        setExcStatus(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: r.notice ?? "Quitada" });
+                      } catch {
+                        setExcStatus({ kind: "error", text: NETWORK_ERROR });
+                      }
+                    });
+                  }}
+                  className="pointer-coarse:h-11"
+                >
+                  Quitar
+                </OpsButton>
+              </div>
+            ))}
+          </div>
+        )}
       </SettingsSection>
     </SettingsGroup>
   );

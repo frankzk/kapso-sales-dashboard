@@ -1,5 +1,75 @@
 # Deployment runbook
 
+### 09-11-2026 · «Pago solo online (lista automática)»: la lista diaria a Kenku y Aurela y el freno en los pedidos de Kapta (0326, MOM §8 y §41.11)
+
+**Migración 0326** (`db/migrations/0326_pago_solo_online.sql`, aditiva): cinco
+tablas nuevas (`pago_online_settings`, `pago_online_runs`, `pago_online_phones`,
+`pago_online_sends`, `pago_online_exceptions`) y cuatro funciones solo de
+`service_role` (`pago_online_candidates`, `pago_online_build`,
+`pago_online_por_confirmar`, `pago_online_lookup`). No cambia datos; correrla
+dos veces no cambia nada. **Nace Apagada.** Aplicarla ANTES de desplegar (no se
+aplica sola):
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0326_pago_solo_online.sql
+```
+
+Se puede desplegar sin ella: el freno ve la lista vacía (`isMissingPagoOnline`),
+el cron no hace nada y el panel dice «No instalado». **Cron nuevo:**
+`/api/cron/pago-solo-online`, `* 10 * * *` (cada minuto de 05:00 a 05:59 de
+Lima: el cálculo y los reintentos de 1, 5 y 15 min), con `CRON_SECRET`. Sin
+variables nuevas: usa las claves de la API REST de WooCommerce que ya tiene
+cada tienda (Ajustes → WooCommerce) y el Telegram de alertas de cada tienda.
+
+Qué hace (detalle en el MOM §41.11 y el pedido en `docs/kapta/pago-solo-online.md`):
+- **Regla del owner:** últimos 9 dígitos del celular, Kenku y Aurela juntas,
+  todo el historial, solo contra entrega; 1+ entrega fallida (`devuelto`, o
+  `anulado` con `dispatched_at`) y 0 `entregado`. Hoy son **3.885 clientes**
+  (el pedido estimaba ~500), ~128 con correo.
+- **Activo:** la lista entera, cada día, a cada tienda por separado
+  (`POST /wp-json/cod-core/v1/pago-solo-online`, Basic auth) y un GET de
+  verificación. Freno de cambio brusco (más del doble / menos de la mitad: no se
+  manda y se avisa), 404 = la tienda aún no tiene cod-core 0.10.45 (se registra,
+  sin reintentos), 401/403 sin reintentos, 413 y dos días seguidos fallidos
+  avisan por Telegram, sin celulares.
+- **Freno en Kapta** (`prepayOrderCheck`, la misma compuerta de la lista de pago
+  adelantado): confirmar, Chatby (queda para asesora, sin escribirle a la
+  clienta) y todas las guías contra entrega piden **el adelanto validado** (S/ 20,
+  decisión del owner del 09-11-2026; ajuste «Adelanto (regla §8)» / «Pago
+  completo»). La ficha dice «Cliente con entrega fallida y ninguna recibida:
+  solo pago online o adelanto» con sus cuentas. **Hoy frenaría 20 de los 317
+  pedidos en Por confirmar.**
+- **Simulación:** solo cuentas, sin envío ni freno.
+
+**Cómo probarlo** (la prueba del §6 del pedido la hace el equipo del owner con
+un celular del equipo):
+1. Aplicar la 0326 y desplegar. En Automatizaciones → «Pago solo online»,
+   ponerla en **Simulación** y pulsar «Calcular ahora»: debe decir ~3.885
+   celulares y cuántos pedidos de Por confirmar frenaría. Nada sale de Kapta.
+2. Cuando las tiendas avisen que cod-core 0.10.45 está en producción: en
+   «Enviar prueba», elegir Kenku, escribir el celular del equipo y mandar. Debe
+   decir «prueba enviada. La tienda guardó 1 y el GET dice 1». (Antes de
+   0.10.45 dice «La tienda todavía no tiene el endpoint (404)».) La tienda queda
+   con ese único celular en su lista automática hasta el próximo envío real.
+3. En kenku.pe, el formulario con ese celular y «contra entrega» → «Para este
+   pedido solo podemos recibir el pago online», sin crear el pedido. Con otro
+   celular, contra entrega normal. No terminar el pago online.
+4. Repetir 2 y 3 con Aurela.
+5. Poner **Activo** (confirma) y «Calcular ahora»: manda la lista real a las
+   dos tiendas; el panel muestra por tienda la fecha, el total y lo que dice el
+   GET. Desde el día siguiente sale sola a las 05:00.
+
+Qué mirar después: `select run_date, mode, status, phones, emails, guard,
+por_confirmar_braked from pago_online_runs order by started_at desc limit 5;` y
+`select store_id, kind, attempt, status, http_status, phones_sent,
+verify->>'celulares' from pago_online_sends order by started_at desc limit 10;`
+(ninguna de las dos tiene celulares).
+
+Marcha atrás: Apagado en el panel (deja de mandar y de frenar; las tiendas se
+quedan con la última lista; para vaciarla en una tienda, se le manda
+`{"celulares": [], "correos": []}`, que hoy no tiene botón). Revertir el código
+basta; las tablas sobran y no molestan.
+
 ### 09-11-2026 · Ubicación aproximada: la calle sin el nombre de pila, lo que dijo Google en la caché y la ficha que lo explica (0325, MOM §6.1 y §38)
 
 **Migración 0325** (`db/migrations/0325_order_geocodes_google_said.sql`,
