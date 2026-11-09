@@ -412,3 +412,25 @@ describe("codCouriersFor — qué courier cubre COD, no solo si alguno cubre", (
     }
   });
 });
+
+import { storedOrderCoverage } from "@/lib/order-coverage";
+
+describe("cobertura guardada: provincias de Lima fuera de la capital = Agencia (09-11-2026)", () => {
+  it("Huaral, Barranca, Cañete… se guardan como agencia aunque la base diga lima o provincia_cod", () => {
+    expect(storedOrderCoverage({ province: "huaral", district: "Huaral" }, "lima")).toBe("agencia");
+    expect(storedOrderCoverage({ province: "Lima (provincia)", district: "Barranca" }, "lima")).toBe("agencia");
+    expect(storedOrderCoverage({ province: "Cañete", district: "San Vicente de Cañete" }, "provincia_cod")).toBe("agencia");
+  });
+
+  it("Lima Metropolitana y el resto del país no cambian", () => {
+    expect(storedOrderCoverage({ province: "Lima", district: "Miraflores" }, "lima")).toBe("lima");
+    expect(storedOrderCoverage({ province: "Arequipa", district: "Paucarpata" }, "provincia_cod")).toBe("provincia_cod");
+  });
+
+  it("el Master guarda con esa regla y el MOM lo dice", () => {
+    const sync = readFileSync("lib/order-master.ts", "utf8");
+    expect(sync).toContain("storedOrderCoverage(");
+    const mom = readFileSync("docs/mom/master-pedidos-v1.md", "utf8");
+    expect(mom).toContain("### 19.0.4 Provincias de Lima fuera de la capital: Agencia también en lo guardado (09-11-2026)");
+  });
+});

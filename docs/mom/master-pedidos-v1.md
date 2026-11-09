@@ -14799,6 +14799,20 @@ Implementación: `lib/district-mismatch.ts` (regla y textos),
 `components/district-review-panel.tsx`. Pruebas:
 `test/district-mismatch.test.ts`.
 
+### 19.0.4 Provincias de Lima fuera de la capital: Agencia también en lo guardado (09-11-2026)
+
+Las nueve provincias del departamento de Lima que no son la metropolitana
+—Barranca, Cajatambo, Cañete, Canta, Huaral, Huarochirí, Huaura, Oyón y Yauyos,
+mirando provincia y distrito— van por **Agencia**. Hasta hoy esa regla solo
+corría al **mostrar** la fila (`withRuntimeCoverage`): un pedido de Huaral decía
+«Agencia» pero el filtro «Cobertura · Lima» y los conteos leen el campo guardado
+(`order_master.coverage`), que la base había dejado en «lima» (owner,
+09-11-2026, #KP204248). Desde ahora la sincronización del Master guarda
+«agencia» para esos destinos (`storedOrderCoverage`, lib/order-coverage.ts), así
+que lo guardado, la etiqueta, el filtro y los conteos dicen lo mismo. Se
+corrigieron los 108 pedidos que ya estaban guardados como «lima» (59) o
+«provincia_cod» (49). Prueba: `test/order-coverage.test.ts`.
+
 ### 19.1 La etapa es una foto, y alguien tiene que revelarla
 
 `order_master` no calcula en vivo: guarda el resultado del resolver y lo sirve.

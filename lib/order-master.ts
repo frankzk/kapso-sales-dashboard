@@ -44,7 +44,7 @@ import {
   confirmationCycleDueOn,
   confirmationDayCount,
 } from "@/lib/order-confirmation";
-import { classifyOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
+import { classifyOrderCoverage, storedOrderCoverage, type OrderCoverage } from "@/lib/order-coverage";
 import { RECOVERY_DEFAULT_MAX_DAYS } from "@/lib/return-recovery";
 import { LIMA_RECOVERY_DAYS, recoveryWindowDaysForOperation, TANDERS_RECOVERY_DAYS } from "@/lib/reproprovincia";
 import { derivedGuideDates } from "@/lib/guide-dates";
@@ -1398,19 +1398,24 @@ export async function recomputeOrderMaster(
     // `classifyOrderCoverage` queda como reserva para el caso en que la 0104 no
     // esté aplicada todavía: resuelve solo por nombre, así que da el mismo
     // resultado que la base salvo en los destinos que dependen del mapa COD.
-    const resolvedCoverage =
+    // Las nueve provincias de Lima que no son la metropolitana van por Agencia
+    // también en lo GUARDADO (`storedOrderCoverage`), no solo al leer: así el
+    // filtro «Cobertura» y los conteos coinciden con la etiqueta (09-11-2026).
+    const resolvedCoverage = storedOrderCoverage(
+      { province, district },
       coverageByOrder.get(order.id) ??
-      classifyOrderCoverage(
-        {
-          storeId: order.store_id,
-          orgId: orgByStore.get(order.store_id) ?? null,
-          region,
-          province,
-          district,
-        },
-        tariffs,
-        now.slice(0, 10),
-      );
+        classifyOrderCoverage(
+          {
+            storeId: order.store_id,
+            orgId: orgByStore.get(order.store_id) ?? null,
+            region,
+            province,
+            district,
+          },
+          tariffs,
+          now.slice(0, 10),
+        ),
+    );
     // La ventana de recuperación es por operación (owner, 03-11-2026): Lima tiene
     // la suya (`LIMA_RECOVERY_DAYS`); Provincia y Agencia, la de la tienda. El
     // estado y la macroetapa usan la misma, con la operación que ve el resolvedor.

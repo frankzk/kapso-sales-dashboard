@@ -118,6 +118,23 @@ export function isNonMetroLimaLocation(
 }
 
 /**
+ * La cobertura que se GUARDA en el Master (`order_master.coverage`): la de la
+ * base (`order_coverage_batch`) o la de nombres, salvo las nueve provincias del
+ * departamento de Lima que no son la metropolitana, que van por Agencia.
+ *
+ * Antes esa regla solo corría al LEER (`withRuntimeCoverage`): la fila decía
+ * «Agencia» pero el filtro «Cobertura · Lima» y los conteos leían el campo
+ * guardado, así que un pedido de Huaral salía en Lima (owner, 09-11-2026). Ahora
+ * lo guardado y lo que se ve dicen lo mismo.
+ */
+export function storedOrderCoverage(
+  location: Pick<CoverageLocation, "province" | "district">,
+  resolved: OrderCoverage,
+): OrderCoverage {
+  return isNonMetroLimaLocation(location) ? "agencia" : resolved;
+}
+
+/**
  * Distritos de Lima Metropolitana / Callao cuyo NOMBRE se repite en otro
  * departamento (Independencia está en Lima, en Huaraz y en Pisco; La Victoria
  * también es Chiclayo; Miraflores también es Arequipa…).
