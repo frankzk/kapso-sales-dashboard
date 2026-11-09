@@ -2,7 +2,7 @@
 // El QR usa un token opaco de base de datos; este código es la etiqueta legible
 // que permite al equipo hablar de "la salida 2" sin confundirla con el pedido.
 
-import { etiquetaDiceVuelveSinEntregar } from "@/lib/aliclik-status";
+import { etiquetaDiceRechazoEnPuerta, etiquetaDiceVuelveSinEntregar } from "@/lib/aliclik-status";
 
 export const MAX_OUTPUTS_PER_ORDER = 5;
 
@@ -439,7 +439,9 @@ const ESTADOS_VIVOS = new Set(["pendiente", "en_ruta", "por_preparar"]);
  */
 export function aliclikVuelveSinEntregar(o: Pick<SalidaExistente, "courier" | "reported_status">): boolean {
   if ((o.courier ?? "").trim().toLowerCase() !== "aliclik") return false;
-  return etiquetaDiceVuelveSinEntregar(o.reported_status);
+  // (09-11-2026, owner) Un REFUSED ya no se entrega: tampoco estorba con el
+  // paquete todavía en manos del motorizado (`REFUSED · PICKED`).
+  return etiquetaDiceVuelveSinEntregar(o.reported_status) || etiquetaDiceRechazoEnPuerta(o.reported_status);
 }
 
 /**

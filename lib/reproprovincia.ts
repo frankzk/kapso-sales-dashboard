@@ -211,6 +211,10 @@ export function apiGuideReceivedBack(guide: RecoveryGuideLike): boolean {
  * pedidos rechazados que llegaron a su almacén central, ninguno se entregó
  * después; de 123 con `TO_RETURN`, 2.
  *
+ * Desde el 09-11-2026 (owner, #AUR900519) basta el `REFUSED`, aunque Aliclik
+ * todavía diga `PICKED` (el paquete sigue con su motorizado): el rechazo es
+ * definitivo y el pedido queda libre para otro motorizado o courier.
+ *
  * Solo el RECHAZO: los dos canales automáticos de la recuperación (WhatsApp y
  * el agente de voz) y el reintento automático de Lima lo excluyen, así que abrir
  * la ventana antes no hace que nadie llame ni cree una guía sola. «No contestó»
@@ -220,7 +224,12 @@ export function apiGuideReceivedBack(guide: RecoveryGuideLike): boolean {
 export function aliclikRefusedReturning(guide: RecoveryGuideLike): boolean {
   if ((guide.courier ?? "").trim().toLowerCase() !== "aliclik") return false;
   if (guide.delivery_status !== "pendiente" && guide.delivery_status !== "en_ruta") return false;
-  return etiquetaDiceRechazoEnPuerta(guide.reported_status) && etiquetaDiceVuelveSinEntregar(guide.reported_status);
+  // (09-11-2026, owner) Cualquier REFUSED, también con el paquete todavía en
+  // manos del motorizado (`REFUSED · PICKED`): «REFUSED significa que ya no lo
+  // va a entregar, entonces debe quedar liberado para que lo tome otro
+  // motorizado o courier» (#AUR900519). Antes hacía falta `TO_RETURN` o
+  // `STORE_CENTRAL` (`etiquetaDiceVuelveSinEntregar`).
+  return etiquetaDiceRechazoEnPuerta(guide.reported_status);
 }
 
 /**

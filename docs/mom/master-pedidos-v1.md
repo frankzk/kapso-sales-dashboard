@@ -3613,10 +3613,15 @@ Aliclik se suma para la creación manual en Lima (owner, 27-10-2026,
   **Desde el 05-11-2026 también `STORE_CENTRAL`** (el paquete ya en el almacén
   central de Aliclik) tras ese intento fallido: medido en 120 días, de 1.744
   pedidos que llegaron así ninguno se entregó después (de 1.862 con `TO_RETURN`,
-  4). #KP200684 lo pedía: `REFUSED · STORE_CENTRAL`. Un fallo todavía con el
-  motorizado (`REFUSED · PICKED`) sigue bloqueando: 3 de las 5 entregas tras un
-  rechazo salieron de ahí, en la misma ruta. El vocabulario vive en
+  4). #KP200684 lo pedía: `REFUSED · STORE_CENTRAL`. El vocabulario vive en
   `etiquetaDiceVuelveSinEntregar` (`lib/aliclik-status.ts`).
+  **Desde el 09-11-2026 (owner, #AUR900519) cualquier `REFUSED` deja de
+  estorbar, también `REFUSED · PICKED`** (el paquete todavía con el motorizado
+  de Aliclik): «REFUSED significa que ya no lo va a entregar, entonces debe
+  quedar liberado para que lo tome otro motorizado o courier». Antes seguía
+  bloqueando porque 3 de 5 entregas tras un rechazo salieron de ahí; el owner
+  decide que el rechazo es definitivo. `NOT_RESPOND · PICKED` sigue bloqueando:
+  el motorizado puede volver a intentarlo.
 - **Lima se decide con `order_master.macro_operation`**, la misma fuente que la
   mesa manual.
 - **El aviso nombra al courier de verdad.** El de Swayp directa elegía entre dos
@@ -7460,6 +7465,11 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   central ninguno se entregó después, y de 123 con `TO_RETURN`, 2. En Lima el
   pedido pasa a **«Por reprogramar Lima»** y Grupo GF lo toma con una salida
   nueva, que Almacén arma desde el stock porque la caja sigue en Aliclik.
+  - **Desde el 09-11-2026 basta el `REFUSED`, aunque Aliclik todavía diga
+    `PICKED`** (owner, #AUR900519: «REFUSED significa que ya no lo va a
+    entregar, entonces debe quedar liberado para que lo tome otro motorizado o
+    courier»). Ese día eran 6 pedidos (1 de Lima, 5 de Provincia); se
+    recalcularon tocando su guía, sin subir la versión del MOM.
   - **Solo el rechazo.** La recuperación por WhatsApp, el agente de voz y el
     reintento automático de Lima ya excluyen el rechazo en la puerta, así que
     abrir la ventana antes no hace que nadie llame ni cree una guía sola. «No

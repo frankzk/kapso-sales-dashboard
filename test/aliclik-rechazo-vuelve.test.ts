@@ -133,7 +133,9 @@ describe("el rechazo que vuelve abre la recuperación", () => {
     expect(aliclikRefusedReturning(aliclik({ reported_status: "REFUSED · TO_RETURN · CONFIRMED" }))).toBe(true);
     // «No contestó» que vuelve espera a que Aliclik anule: el agente de voz sí lo llamaría antes.
     expect(aliclikRefusedReturning(aliclik({ reported_status: "NOT_RESPOND · STORE_CENTRAL · CONFIRMED" }))).toBe(false);
-    expect(aliclikRefusedReturning(aliclik({ reported_status: "REFUSED · PICKED · CONFIRMED" }))).toBe(false);
+    // 09-11-2026 (owner, #AUR900519): el REFUSED con el paquete todavía en manos
+    // del motorizado también libera el pedido.
+    expect(aliclikRefusedReturning(aliclik({ reported_status: "REFUSED · PICKED · CONFIRMED" }))).toBe(true);
     // Anulada ya la cubre la regla de siempre.
     expect(aliclikRefusedReturning(aliclik({ delivery_status: "anulado", closed_at: hace(0) }))).toBe(false);
     expect(aliclikRefusedReturning(aliclik({ courier: "tanders" }))).toBe(false);
@@ -155,6 +157,21 @@ describe("el rechazo que vuelve abre la recuperación", () => {
     expect(lastFailedOutput([guide])?.courier).toBe("aliclik");
     // Es un rechazo en la puerta: el agente de voz y WhatsApp no lo llaman.
     expect(recoveryWindow([guide], [], NOW, 21)?.doorRejection).toBe(true);
+  });
+
+  it("#AUR900519 (09-11-2026): REFUSED · PICKED también pasa a Por reprogramar Lima y Grupo GF lo puede tomar", () => {
+    const guide = aliclik({ reported_status: "REFUSED · PICKED · CONFIRMED" });
+    const { legacy, macro } = resolverTodo([guide]);
+    expect(macro.stage).toBe("en_curso");
+    expect(macro.substage).toBe("por_reprogramar_lima");
+    expect(isRetryAdmission(macro.stage, macro.substage, legacy.operational)).toBe(true);
+    expect(outputsBlockingRetry([guide])).toEqual([]);
+    // Sigue siendo un rechazo en la puerta: ni WhatsApp ni el agente de voz lo llaman solos.
+    expect(recoveryWindow([guide], [], NOW, 21)?.doorRejection).toBe(true);
+    // Y una guía nueva de otro courier tampoco la tiene por viva.
+    expect(aliclikVuelveSinEntregar(guide)).toBe(true);
+    // «No contestó» con el motorizado sigue viva: puede volver a intentarlo.
+    expect(aliclikVuelveSinEntregar(aliclik({ reported_status: "NOT_RESPOND · PICKED · CONFIRMED" }))).toBe(false);
   });
 
   it("«no contestó» que vuelve sigue En tránsito hasta que Aliclik anule", () => {
