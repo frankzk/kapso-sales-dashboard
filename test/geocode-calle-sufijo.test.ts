@@ -398,7 +398,10 @@ describe("la migración 0325, el MOM y DEPLOY", () => {
     expect(mom).toContain("«Av. Quiñones» = «Avenida José Quiñones»");
     expect(mom).toContain("`google_label`, `google_route`, `google_number`");
     const deploy = read("DEPLOY.md");
-    const top = deploy.indexOf("### ");
-    expect(deploy.slice(top, top + 200)).toContain("0325");
+    // Arriba de lo anterior (después pueden venir entradas más nuevas encima).
+    const mine = deploy.indexOf("### 09-11-2026 · Ubicación aproximada");
+    expect(mine).toBeGreaterThan(0);
+    expect(deploy.slice(mine, mine + 200)).toContain("0325");
+    expect(mine).toBeLessThan(deploy.indexOf("### 08-11-2026"));
   });
 });

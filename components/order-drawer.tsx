@@ -89,8 +89,9 @@ import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
 import { ShalomGuideModal } from "@/components/shalom-guide-modal";
 import { cancelShalomGuide } from "@/app/dashboard/pedidos/shalom-actions";
-import { createPrepayPaymentLink, loadOrderPrepayStatus, type OrderPrepayStatus } from "@/app/dashboard/pedidos/prepay-actions";
+import { createPrepayPaymentLink, exceptPagoOnlineCustomer, loadOrderPrepayStatus, type OrderPrepayStatus } from "@/app/dashboard/pedidos/prepay-actions";
 import { PrepayListBanner } from "@/components/prepay-list-banner";
+import { PagoOnlineBanner } from "@/components/pago-online-banner";
 import { shalomGuideIsCancelable } from "@/lib/shalom/draft";
 import { fenixOutputIsCancelable, manualOutputIsCancelable, nombreDeCourier, pickFillableRouteOutput } from "@/lib/shipment-output";
 import {
@@ -1803,6 +1804,15 @@ export function OrderDrawer({
                 context="order"
                 canCreateLink={canEdit}
                 onCreateLink={() => createPrepayPaymentLink(orderId)}
+                className="order-2"
+              />
+              {/* «Pago solo online (lista automática)», MOM §41.11: entrega
+                  fallida y ninguna recibida. Solo si no está en la lista de
+                  arriba, que pide más. */}
+              <PagoOnlineBanner
+                status={prepay?.pagoOnline}
+                canEdit={canEdit}
+                onExcept={(reason) => exceptPagoOnlineCustomer(orderId, reason)}
                 className="order-2"
               />
               {nextAction && workspace === "operar" && (
