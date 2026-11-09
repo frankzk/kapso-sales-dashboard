@@ -598,7 +598,10 @@ export type ChatbyHoldReason =
   | "pin_sin_respaldo"
   | "shalom"
   | "programado"
-  | "guia_no_creada";
+  | "guia_no_creada"
+  // «Pago solo online (lista automática)», MOM §41.11: entrega fallida y
+  // ninguna recibida. Va a la asesora; Kapta no le escribe a la clienta.
+  | "pago_online";
 
 export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   rechazo: "La clienta escribió que no quiere el pedido.",
@@ -617,13 +620,15 @@ export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   shalom: "Tiene «DNI y agencia Shalom» guardado: la salida la decide una persona.",
   programado: "Tiene envío programado: la guía es la del día programado.",
   guia_no_creada: "Aliclik no dejó crear la guía.",
+  pago_online:
+    "Cliente con entrega fallida y ninguna recibida: solo pago online o adelanto. Kapta no crea la guía contra entrega ni le escribe: cobra lo que pide «Pago solo online» y confirma tú.",
 };
 
 /** ¿El motivo es de la guía (la confirmación sí cuadró)? */
 export function isGuideHoldReason(reason: ChatbyHoldReason): boolean {
   return GUIDE_HOLD_REASONS.has(reason);
 }
-const GUIDE_HOLD_REASONS = new Set<ChatbyHoldReason>(["sin_ubicacion", "pin_sin_respaldo", "shalom", "programado", "guia_no_creada"]);
+const GUIDE_HOLD_REASONS = new Set<ChatbyHoldReason>(["sin_ubicacion", "pin_sin_respaldo", "shalom", "programado", "guia_no_creada", "pago_online"]);
 
 export type ChatbyVerdict =
   | { confirm: true; messageId: string; at: string | null; amountCents: number }

@@ -651,4 +651,6 @@
 \ir migrations/0324_lima_retry_chatby_ask.sql
 \echo 'Applying 0325_order_geocodes_google_said.sql'
 \ir migrations/0325_order_geocodes_google_said.sql
+\echo 'Applying 0326_pago_solo_online.sql'
+\ir migrations/0326_pago_solo_online.sql
 \echo 'Done.'
