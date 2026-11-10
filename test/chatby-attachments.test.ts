@@ -6,6 +6,7 @@ import {
   chatbyAttachmentNote,
   chatbyAttachmentSizeProblem,
   chatbyAttachmentTypeOfPath,
+  chatbyTakesPagePaste,
   isChatbyAttachmentPath,
   shalomTicketShipment,
 } from "@/lib/chatby-attachments";
@@ -93,5 +94,23 @@ describe("archivos por Chatby desde la ficha (MOM §25, 10-11-2026)", () => {
     expect(actions).toMatch(/const attachment = opts\.attachment \? await resolveChatbyAttachment/);
     const mom = readFileSync("docs/mom/master-pedidos-v1.md", "utf8");
     expect(mom).toContain("Archivos y el ticket Shalom en PDF (10-11-2026");
+  });
+
+  it("Ctrl+V fuera de la caja: solo con la pestaña a la vista y sin otro campo en uso (owner 10-11-2026)", () => {
+    const base = { handled: false, boxVisible: true, insideBox: false, editableElsewhere: false };
+    expect(chatbyTakesPagePaste(base)).toBe(true);
+    expect(chatbyTakesPagePaste({ ...base, boxVisible: false })).toBe(false); // pestaña Chatby escondida
+    expect(chatbyTakesPagePaste({ ...base, editableElsewhere: true })).toBe(false); // se escribía en otro campo
+    expect(chatbyTakesPagePaste({ ...base, insideBox: true })).toBe(false); // lo maneja la caja
+    expect(chatbyTakesPagePaste({ ...base, handled: true })).toBe(false); // otro ya lo usó
+  });
+
+  it("la pestaña escucha el pegado de toda la página y lo suelta al cerrarse", () => {
+    const panel = readFileSync("components/order-chatby-panel.tsx", "utf8");
+    expect(panel).toContain('document.addEventListener("paste", onPaste)');
+    expect(panel).toContain('document.removeEventListener("paste", onPaste)');
+    expect(panel).toContain("box.getClientRects().length > 0");
+    expect(panel).toContain("chatbyTakesPagePaste({");
+    expect(panel).toContain("ref={boxRef}");
   });
 });

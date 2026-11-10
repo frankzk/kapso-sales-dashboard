@@ -1,5 +1,12 @@
 # Deployment runbook
 
+### 10-11-2026 · Chatby desde la ficha: Ctrl+V adjunta en cualquier parte de la pestaña (MOM §25 «Chatby»)
+
+**Sin migración.** En la pestaña Chatby de la ficha, una foto, captura o PDF
+pegado con Ctrl+V se adjunta aunque el cursor no esté en la caja de
+«Responder por WhatsApp» (antes había que hacer clic en la caja). Con la
+pestaña escondida detrás de otra, o escribiendo en otro campo, no se toca.
+
 ### 10-11-2026 · Cotejar Shalom: el borde viejo del listado se mide con lo que Shalom trae (MOM §12)
 
 **Sin migración.** Desde la siguiente pasada del cron `shalom-cotejo`, la
