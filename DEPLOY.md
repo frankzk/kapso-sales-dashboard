@@ -4,6 +4,8 @@
 
 **Sin migración.**
 
+- «Pago de diferencia»: solo Shalom u Olva, y la pestaña «Todos» que suma
+  los tres grupos.
 - En la ficha, «Comentario» es su propia tarjeta, entre «Salidas y guías» y
   «Gestión manual», con su entrada en el índice.
 - Cotejar Shalom: el borde viejo que Shalom entrega a medias se mide día por

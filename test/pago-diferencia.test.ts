@@ -193,6 +193,12 @@ describe("Pago de diferencia (MOM §44)", () => {
     expect(isPagoDiferenciaGestion({ kind: "comment", actor: "u", comment_type: "Pago de diferencia" })).toBe(true);
   });
 
+  it("la pestaña «Todos» suma los tres grupos (owner, 10-11-2026)", () => {
+    const tray = readFileSync("components/pago-diferencia-tray.tsx", "utf8");
+    expect(tray).toContain('const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos"];');
+    expect(tray).toContain('group === "todos" ? rows : rows.filter((r) => r.group === group)');
+  });
+
   it("el menú la lleva y el MOM la documenta", () => {
     expect(readFileSync("components/sidebar.tsx", "utf8")).toContain('href: "/dashboard/pedidos/pago-diferencia"');
     const mom = readFileSync("docs/mom/master-pedidos-v1.md", "utf8");

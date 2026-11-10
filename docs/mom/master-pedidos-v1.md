@@ -26157,6 +26157,9 @@ que deben más 76 ya pagados que solo esperan el recojo):
 - **Recogidos sin pago**: `recogido_sin_pago_completo` (Por cerrar), la
   clienta ya lo recogió y falta cobrar. Medido: 122.
 
+Y una cuarta pestaña, **«Todos»**, que suma los tres grupos (owner,
+10-11-2026); cada fila dice de qué grupo es.
+
 Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
 Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en
 una sucursal. Un pedido de Agencia que salió por Fenix desde Repro Provincia
