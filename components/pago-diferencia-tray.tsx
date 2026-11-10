@@ -5,7 +5,7 @@
 // equipo. Primero lo que nadie gestionó hoy. Un clic abre la ficha en Operar,
 // donde se registra la gestión (comentario con foto §43, WhatsApp, llamada).
 
-import { useMemo, useState, type MouseEvent } from "react";
+import { useMemo, useRef, useState, type MouseEvent } from "react";
 import { Badge, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-ui";
 import { OrderLink, useOpenOrderDrawer } from "@/components/order-link";
 import {
@@ -79,6 +79,12 @@ function fromControl(e: MouseEvent): boolean {
 
 export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaRow[]; storeNames: Record<string, string> }) {
   const [group, setGroup] = useState<GroupTab>("todos");
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const pickGroup = (g: GroupTab) => {
+    setGroup(g);
+    setFilter("por_gestionar");
+    setLimit(PAGE);
+  };
   const [filter, setFilter] = useState<PagoDiferenciaFilter>("por_gestionar");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -112,35 +118,48 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
 
   return (
     <div className="space-y-4">
-      <header className="space-y-1">
-        <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Pago de diferencia</h1>
-        <p className="max-w-[72ch] text-sm leading-6 text-ink-600">
-          Pedidos de Agencia a los que les falta pagar la diferencia. Abre el pedido y registra cada gestión en
-          «Comentario», con la captura como constancia: aquí se ve quién la hizo y cuándo.
-        </p>
-      </header>
-
-      <div role="tablist" aria-label="Grupo" className="flex flex-wrap gap-1 border-b border-line">
-        {TABS.map((g) => (
-          <button
-            key={g}
-            type="button"
-            role="tab"
-            aria-selected={group === g}
-            onClick={() => {
-              setGroup(g);
-              setFilter("por_gestionar");
-              setLimit(PAGE);
-            }}
-            className={cn(
-              "-mb-px flex min-h-10 items-center gap-2 border-b-2 px-3 text-sm font-medium transition-colors pointer-coarse:min-h-11",
-              group === g ? "border-brand-600 text-brand-700" : "border-transparent text-ink-600 hover:text-ink-900",
-            )}
-          >
-            {TAB_LABEL[g]}
-            <Badge tone={group === g ? "brand" : "neutral"}>{groupCounts[g].toLocaleString("es-PE")}</Badge>
-          </button>
-        ))}
+      {/* Los grupos en control segmentado (DESIGN.md): las pestañas
+          subrayadas de arriba son las vistas de la página. Las flechas
+          mueven y eligen. */}
+      <div
+        role="tablist"
+        aria-label="Grupo de pedidos"
+        className="grid grid-cols-2 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line sm:inline-grid sm:grid-flow-col sm:grid-cols-none"
+      >
+        {TABS.map((g, i) => {
+          const on = group === g;
+          return (
+            <button
+              key={g}
+              ref={(el) => {
+                tabRefs.current[i] = el;
+              }}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              tabIndex={on ? 0 : -1}
+              onClick={() => pickGroup(g)}
+              onKeyDown={(e) => {
+                const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+                if (!step) return;
+                e.preventDefault();
+                const next = (i + step + TABS.length) % TABS.length;
+                tabRefs.current[next]?.focus();
+                pickGroup(TABS[next]!);
+              }}
+              className={cn(
+                "flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-semibold outline-none transition-[background-color,color,box-shadow] duration-150 pointer-coarse:h-11",
+                "focus-visible:ring-2 focus-visible:ring-brand-600",
+                on ? "bg-white text-ink-900 shadow-control ring-1 ring-line" : "text-ink-500 hover:text-ink-900",
+              )}
+            >
+              {TAB_LABEL[g]}
+              <span className={cn("tabular-nums", on ? "text-brand-700" : "text-ink-500")}>
+                {groupCounts[g].toLocaleString("es-PE")}
+              </span>
+            </button>
+          );
+        })}
       </div>
       <p className="text-sm text-ink-700">
         {GROUP_HINT[group]}{" "}
@@ -198,7 +217,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
                   <col className="w-[10rem]" />
                   <col className="w-[13rem]" />
                   <col className="w-[9rem]" />
-                  <col className="w-[8.5rem]" />
+                  <col className="w-[10.5rem]" />
                   <col />
                 </colgroup>
                 <thead>

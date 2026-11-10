@@ -19,7 +19,8 @@ import {
   type CotejoRunResult,
 } from "@/lib/olva/portal-sync";
 
-const PATH = "/dashboard/olva";
+// «Cotejar Olva» vive en «Pago de diferencia» (MOM §44, 10-11-2026).
+const PATH = "/dashboard/pedidos/pago-diferencia";
 
 export interface CotejoActionState {
   ok: boolean;

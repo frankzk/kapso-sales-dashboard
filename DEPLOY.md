@@ -1,5 +1,16 @@
 # Deployment runbook
 
+### 10-11-2026 · «Cotejar Olva» se muda a «Pago de diferencia» (MOM §12 y §44)
+
+**Sin migración.**
+
+- «Pago de diferencia» tiene tres vistas: «Bandeja», «Cotejar Olva» y
+  «Correos de Olva». «Cotejar Olva» sale del menú; `/dashboard/olva` redirige.
+- El número de envíos de Olva por vincular va en la entrada «Pago de
+  diferencia» del menú, para todo el que ve pedidos. Vincular sigue con
+  `master.edit`.
+- Los grupos de la bandeja pasan a control segmentado.
+
 ### 10-11-2026 · «Pago de diferencia» abre en «Todos» (MOM §44)
 
 **Sin migración.** Solo cambia la pestaña con que abre la bandeja.
