@@ -100,6 +100,7 @@ import { pgTextArrayLiteral, type ProductOptionRow } from "@/lib/order-product-t
 import { isHistoricalShopifyOrder, legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
 import { loadPendingVouchers } from "@/lib/pending-voucher-access";
+import { orderCommentPhotosFromPayload } from "@/lib/order-comment-photos";
 import { guideGpsByEvent, guideGpsByShipment, type GuideGps } from "@/lib/guide-gps";
 import { AGENCY_DEADLINE_ALERT_MS, paidUnnotifiedFilterIds } from "@/lib/agency-pickup-alert";
 import { loadPaidUnnotified } from "@/lib/agency-pickup-alert-access";
@@ -450,6 +451,16 @@ export interface TimelineEntry {
    * los hechos de guía Aliclik que tienen coordenada (`guideGpsByEvent`).
    */
   gps?: GuideGps | null;
+  /**
+   * El tipo que se le puso a un comentario («Llamada», «WhatsApp», «Pago de
+   * diferencia»…), solo en los comentarios que lo tienen.
+   */
+  commentType?: string | null;
+  /**
+   * Las fotos de constancia de un comentario (rutas del bucket privado,
+   * lib/order-comment-photos.ts). Vacío o ausente: no tiene.
+   */
+  photos?: string[];
 }
 
 /** Lo que hace falta de `lead_calls` para la línea de tiempo del pedido. */
@@ -525,6 +536,9 @@ export function orderEventsToTimeline(
     origin: "master",
     statusLabel: null,
     confirmation: confirmationAttemptDetail(e.payload),
+    ...(e.kind === "comment"
+      ? { commentType: e.comment_type?.trim() || null, photos: orderCommentPhotosFromPayload(e.payload) }
+      : {}),
   }));
 }
 

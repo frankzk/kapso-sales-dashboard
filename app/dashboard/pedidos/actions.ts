@@ -16,6 +16,13 @@ import { returnManifestEntriesForShipments } from "@/lib/return-manifest-access"
 import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import {
+  ORDER_COMMENT_PHOTO_BUCKET,
+  ORDER_COMMENT_PHOTO_MAX_BYTES,
+  orderCommentPhotoExt,
+  orderCommentPhotoFolder,
+  validateOrderCommentPhotos,
+} from "@/lib/order-comment-photos";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { kapsoInboxUrl, kapsoThreadMessages, type OrderKapsoConversation } from "@/lib/order-kapso";
@@ -2265,7 +2272,7 @@ export async function clearOrderDispatchDate(orderId: string, reason: string): P
 /** Comentario interno del equipo (§12). Complementa al estado, no lo sustituye. */
 export async function addOrderComment(
   orderId: string,
-  input: { text: string; type?: string | null },
+  input: { text: string; type?: string | null; photoPaths?: string[] | null },
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
@@ -2278,17 +2285,64 @@ export async function addOrderComment(
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
+  // Las fotos de constancia (lib/order-comment-photos.ts): solo rutas de ESTE
+  // pedido, y que de verdad se hayan subido. Una foto que no llegó no se
+  // promete en la Actividad.
+  const photos = validateOrderCommentPhotos(input.photoPaths, ctx.storeId, orderId);
+  if ("error" in photos) return { error: photos.error };
   const admin = createAdminSupabase();
+  if (photos.paths.length) {
+    const { data: stored, error: listError } = await admin.storage
+      .from(ORDER_COMMENT_PHOTO_BUCKET)
+      .list(orderCommentPhotoFolder(ctx.storeId, orderId), { limit: 1000 });
+    if (listError) return { error: `No se pudieron revisar las fotos: ${listError.message}` };
+    const names = new Set((stored ?? []).map((o) => `${orderCommentPhotoFolder(ctx.storeId, orderId)}/${o.name}`));
+    if (photos.paths.some((p) => !names.has(p))) {
+      return { error: "Una de las fotos no terminó de subirse. Vuelve a adjuntarla." };
+    }
+  }
+
   const eventError = await recordEvent(admin, ctx, {
     kind: "comment",
     note: text,
     commentType: input.type?.trim() || null,
+    payload: photos.paths.length ? { photos: photos.paths } : undefined,
   });
   if (eventError) return { error: eventError };
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
-  return { notice: "Comentario registrado." };
+  return {
+    notice: photos.paths.length
+      ? `Comentario registrado con ${photos.paths.length} foto${photos.paths.length === 1 ? "" : "s"}.`
+      : "Comentario registrado.",
+  };
+}
+
+/**
+ * Prepara la subida de UNA foto de comentario: el navegador la sube directo a
+ * Storage con esta URL firmada y luego manda la ruta en `addOrderComment`.
+ */
+export async function createOrderCommentPhotoUpload(
+  orderId: string,
+  contentType: string,
+  size: number,
+): Promise<{ path: string; token: string } | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite registrar comentarios." };
+  const ext = orderCommentPhotoExt(contentType);
+  if (!ext) return { error: "La foto debe ser JPG, PNG, WEBP o GIF." };
+  if (!(size > 0)) return { error: "La imagen está vacía." };
+  if (size > ORDER_COMMENT_PHOTO_MAX_BYTES) return { error: "La foto pesa más de 15 MB." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  const admin = createAdminSupabase();
+  await admin.storage.createBucket(ORDER_COMMENT_PHOTO_BUCKET, { public: false }).catch(() => {});
+  const path = `${orderCommentPhotoFolder(ctx.storeId, orderId)}/comment-${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`;
+  const { data, error } = await admin.storage.from(ORDER_COMMENT_PHOTO_BUCKET).createSignedUploadUrl(path);
+  if (error || !data) return { error: error?.message ?? "No se pudo preparar la subida." };
+  return { path: data.path, token: data.token };
 }
 
 /**

@@ -1,5 +1,19 @@
 # Deployment runbook
 
+### 10-11-2026 · Fotos de constancia en el comentario del pedido (MOM §43)
+
+**Sin migración.** El bucket privado `order-comment-photos` se crea solo en la
+primera subida.
+
+**Lo que cambia al desplegar:**
+
+- En la ficha, Operar → «Comentario»: «Adjuntar foto», pegar con Ctrl+V o
+  arrastrar, hasta 4 fotos por comentario. Sugerencias de tipo («Llamada»,
+  «WhatsApp», «Pago de diferencia»…).
+- En Actividad, el tipo del comentario como chapa y las miniaturas de las
+  fotos (`/api/pedidos/<pedido>/comentario-foto`).
+- Los comentarios de antes no cambian.
+
 ### 09-11-2026 · «Lista negra» unificada: una página, lo que pide cada alta a mano, la chapa en Leads y la copia estándar (0329, MOM §41, §41.11 y §25.3)
 
 **Migración 0329** (`db/migrations/0329_lista_negra_requisito.sql`), a mano y

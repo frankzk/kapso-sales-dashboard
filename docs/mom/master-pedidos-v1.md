@@ -26027,3 +26027,57 @@ Código: `lib/agent-tools.ts` (`listar_pedidos`, `agentChatbyState`) y
 `lib/chatby-autoconfirm.ts` (`chatbyConfirmButtonAt`). Pruebas:
 `test/agent-list-orders.test.ts`, `test/agent-connector.test.ts` y
 `test/agent-connector-mom.test.ts`.
+
+## 43. Fotos de constancia en el comentario del pedido (10-11-2026)
+
+Decisión del owner (10-11-2026): «En comentarios, dame la opción de subir una
+foto. Quiero subir constancias o sustentos de los comentarios: intenté
+contactar y le dejé WhatsApp, subo captura». Y: que quede registro de la
+gestión del equipo —por ejemplo, la de los pedidos en «Pendiente de pago de
+diferencia» (§6.4)— con quién lo hizo.
+
+**Cómo se adjunta.** En la ficha, Operar → «Comentario»:
+
+- Se **pega con Ctrl+V** dentro de la tarjeta (en el cuadro de texto o en
+  cualquier parte de ella), se **arrastra** o se elige con «Adjuntar foto»,
+  como el comprobante del Yape en «Registrar un pago».
+- Pegar se escucha en la tarjeta, no en toda la ventana: «Registrar un pago»
+  sí escucha la ventana, y una captura pegada en el comentario no termina
+  como comprobante. Si el portapapeles trae texto e imagen y se pega en el
+  cuadro de texto, gana el texto.
+- Hasta **4 fotos** por comentario: JPG, PNG, WEBP o GIF, de hasta 15 MB. Una
+  foto de más de 1,5 MB se achica en el navegador (lado mayor 2000 px) antes
+  de subir; una captura va tal cual.
+- El texto sigue siendo obligatorio: la foto es la constancia de lo que se
+  escribe, no lo reemplaza.
+- El **tipo** sigue siendo libre, con sugerencias: «Llamada», «WhatsApp»,
+  «Pago de diferencia», «Dirección», «Reprogramación», «Agencia».
+
+**Cómo se guarda.**
+
+- El navegador sube cada foto directo a Storage con una URL firmada del
+  servidor (`createOrderCommentPhotoUpload`, permiso `master.edit` y lectura
+  del pedido por RLS). Bucket privado `order-comment-photos`, ruta
+  `<tienda>/<pedido>/comment-<hora>-<azar>.<ext>`. El bucket se crea en la
+  primera subida: **sin migración**.
+- `addOrderComment` acepta solo rutas de ESE pedido, sin repetir y como
+  máximo 4, y comprueba que estén en Storage. Si una no llegó, el comentario
+  **no** se registra y se dice cuál falta.
+- Las rutas quedan en `order_events.payload.photos` del comentario
+  (`kind = comment`). El hecho es append-only (0045): la foto no se quita ni
+  se cambia, como el texto.
+
+**Cómo se ve.** En Actividad, debajo del comentario: el tipo como chapa y las
+miniaturas, que abren la foto entera. Las sirve
+`/api/pedidos/<pedido>/comentario-foto`, solo a quien puede leer el pedido y
+solo rutas de ese pedido.
+
+**Lo que no cambia.** Un comentario, con o sin foto, **no** es un intento de
+confirmación (§6.1, «Los comentarios … no son registro de gestión»): no gasta
+día ni cupo, ni mueve la etapa. Es la bitácora con constancia del equipo.
+
+Código: `lib/order-comment-photos.ts`, `components/order-comment-photos.tsx`,
+`addOrderComment` y `createOrderCommentPhotoUpload` en
+`app/dashboard/pedidos/actions.ts`, y
+`app/api/pedidos/[orderId]/comentario-foto/route.ts`. Pruebas:
+`test/order-comment-photos.test.ts`.
