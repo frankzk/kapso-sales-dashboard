@@ -230,7 +230,7 @@ export function OrderRouteDesk({
                 : "Sin permiso"}
           </OpsButton>
         )}
-        {route.action === "shalom" && route.blockingOutput && onRegisterShalom && (
+        {route.action === "shalom" && route.canRegisterShalomReplacement && onRegisterShalom && (
           <OpsButton
             size="sm"
             variant="ghost"

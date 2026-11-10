@@ -2,17 +2,17 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { OrderRouteDesk } from "@/components/order-route-desk";
-import { buildOrderRoutePlan, type RouteDeskGate } from "@/lib/order-route-plan";
+import { buildOrderRoutePlan, type OrderRoutePlan, type RouteDeskGate } from "@/lib/order-route-plan";
 
 const plan = buildOrderRoutePlan({
   operation: "agencia",
   paymentState: "adelanto_validado",
-  outputs: [{ id: "old-guide", courier: "shalom", deliveryStatus: "pendiente", guideCode: "102321353", shortCode: "HWND" }],
+  outputs: [{ id: "old-guide", courier: "shalom", deliveryStatus: "pendiente", guideCode: "102321353", shortCode: "HWND", shalomUnrecognized: true }],
 });
 
-function render({ allowed = true, gate, registration = true }: { allowed?: boolean; gate?: RouteDeskGate; registration?: boolean } = {}) {
+function render({ allowed = true, gate, registration = true, routePlan = plan }: { allowed?: boolean; gate?: RouteDeskGate; registration?: boolean; routePlan?: OrderRoutePlan } = {}) {
   return renderToStaticMarkup(createElement(OrderRouteDesk, {
-    plan,
+    plan: routePlan,
     gate,
     actionEnabled: () => allowed,
     onSelect: () => {},
@@ -25,6 +25,34 @@ function button(html: string, label: string) {
 }
 
 describe("existing Shalom guides remain reachable when creation is blocked", () => {
+  it.each([
+    ["pendiente", undefined],
+    ["en_transito", false],
+    ["en_destino", false],
+    ["disponible_para_recojo", false],
+    ["en_retorno", false],
+  ])("hides replacement for a normal or unconfirmed guide: %s", (pickupState, shalomUnrecognized) => {
+    const routePlan = buildOrderRoutePlan({
+      operation: "agencia", paymentState: "adelanto_validado",
+      outputs: [{ id: "healthy-guide", courier: "shalom", deliveryStatus: "pendiente", guideCode: "103120594", shortCode: "D39C", pickupState, shalomUnrecognized }],
+    });
+    const html = render({ routePlan });
+    expect(button(html, "Ya la creé en Shalom Pro")).toBeUndefined();
+    expect(button(html, "Ya tiene salida activa")).toMatch(/\sdisabled(?:=|\s|>)/);
+    expect(routePlan.candidates.find((route) => route.key === "shalom")?.reason).not.toContain("Ya la creé");
+  });
+
+  it.each(["olva", "shalom"])("another live %s output prevents replacement", (courier) => {
+    const routePlan = buildOrderRoutePlan({
+      operation: "agencia", paymentState: "adelanto_validado",
+      outputs: [
+        { id: "dead", courier: "shalom", deliveryStatus: "pendiente", guideCode: "102321353", shalomUnrecognized: true },
+        { id: "live", courier, deliveryStatus: "en_ruta", guideCode: "12345" },
+      ],
+    });
+    expect(button(render({ routePlan }), "Ya la creé en Shalom Pro")).toBeUndefined();
+  });
+
   it("KP201035 can open manual registration while creating another guide remains disabled", () => {
     const html = render();
     expect(button(html, "Ya tiene salida activa")).toMatch(/\sdisabled(?:=|\s|>)/);
