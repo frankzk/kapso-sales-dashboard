@@ -139,6 +139,14 @@ import { OrderInvoicePanel } from "@/components/order-invoice-panel";
 import { BrowserCallButton } from "@/components/browser-call";
 import { AnuraCallButton, AnuraCallHistoryDetail, useAnuraOrderPanel } from "@/components/anura-call";
 import { GuideGpsLine } from "@/components/guide-gps-line";
+import {
+  addCommentPhotos,
+  CommentPhotoPicker,
+  CommentPhotoStrip,
+  commentPastedImages,
+  uploadOrderCommentPhotos,
+} from "@/components/order-comment-photos";
+import { imageFilesFrom, ORDER_COMMENT_TYPE_SUGGESTIONS } from "@/lib/order-comment-photos";
 import { anuraCallForEntry } from "@/lib/anura/ui";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
@@ -2374,7 +2382,20 @@ export function OrderDrawer({
                     onStatus={(general, operational, reason, agencyCourier) =>
                       run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
                     }
-                    onComment={(text, type) => run(() => addOrderComment(orderId, { text, type }))}
+                    onComment={async (text, type, photos) => {
+                      // Las fotos suben primero, directo a Storage; el comentario
+                      // solo se registra si llegaron todas (lib/order-comment-photos.ts).
+                      if (photos.length) {
+                        const uploaded = await uploadOrderCommentPhotos(orderId, photos);
+                        if ("error" in uploaded) {
+                          setError(uploaded.error);
+                          setNotice(null);
+                          return false;
+                        }
+                        return run(() => addOrderComment(orderId, { text, type, photoPaths: uploaded.paths }));
+                      }
+                      return run(() => addOrderComment(orderId, { text, type }));
+                    }}
                     onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
                     onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
                     canCancelWoo={canCancelWoo}
@@ -2589,6 +2610,14 @@ export function OrderDrawer({
                           <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">
                             {eventNoteLabel(t.kind, t.note ?? t.reason, detail.platform)}
                           </p>
+                        )}
+                        {t.commentType && (
+                          <p className="mt-1">
+                            <Badge>{t.commentType}</Badge>
+                          </p>
+                        )}
+                        {t.photos && t.photos.length > 0 && (
+                          <CommentPhotoStrip orderId={orderId} photos={t.photos} className="mt-2" />
                         )}
                         {/* El GPS que se mandó a Aliclik con la guía (MOM §25):
                             el punto de Kapta, no el del motorizado. */}
@@ -3947,7 +3976,8 @@ export function OrderActions({
    *  llega a la sucursal con CERO salidas es el que hay que preguntar. */
   outputCount: number;
   onStatus: (general: string, operational: string, reason: string, agencyCourier?: string) => void;
-  onComment: (text: string, type: string) => void;
+  /** Registra el comentario con sus fotos de constancia; true si quedó. */
+  onComment: (text: string, type: string, photos: File[]) => Promise<boolean>;
   onReturn: (reason: string, guideCode: string) => void;
   onRelink: (guideCode: string) => void;
   /**
@@ -3963,6 +3993,9 @@ export function OrderActions({
   const [reason, setReason] = useState("");
   const [comment, setComment] = useState("");
   const [commentType, setCommentType] = useState("");
+  const [commentPhotos, setCommentPhotos] = useState<File[]>([]);
+  const [commentDragOver, setCommentDragOver] = useState(false);
+  const [commentSaving, setCommentSaving] = useState(false);
   const [returnReason, setReturnReason] = useState("");
   const [returnGuide, setReturnGuide] = useState(row.guide_code ?? "");
   const [relinkCode, setRelinkCode] = useState("");
@@ -4112,34 +4145,80 @@ export function OrderActions({
         />
       )}
 
-      <div className={cn(CARD_ZONE, "space-y-3")}>
+      {/* La gestión del equipo con su constancia (owner, 10-11-2026): «lo
+          llamé, le dejé WhatsApp» + la captura. Queda en Actividad con el
+          nombre de quien la registró. Pegar y soltar se escuchan en la
+          tarjeta entera (components/order-comment-photos.tsx). */}
+      <div
+        className={cn(
+          CARD_ZONE,
+          "space-y-3 transition-colors",
+          commentDragOver && "bg-brand-50 ring-2 ring-inset ring-brand-500",
+        )}
+        onPaste={(e) => {
+          const images = commentPastedImages(e);
+          if (!images.length) return;
+          e.preventDefault();
+          setCommentPhotos((current) => addCommentPhotos(current, images).files);
+        }}
+        onDragOver={(e) => {
+          if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+          e.preventDefault();
+          setCommentDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setCommentDragOver(false);
+        }}
+        onDrop={(e) => {
+          const images = imageFilesFrom(e.dataTransfer.files);
+          setCommentDragOver(false);
+          if (!images.length) return;
+          e.preventDefault();
+          setCommentPhotos((current) => addCommentPhotos(current, images).files);
+        }}
+      >
         <h4 className="text-sm font-semibold text-ink-900">Comentario</h4>
         <textarea
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           rows={2}
           aria-label="Comentario"
-          placeholder="Cliente no responde, dirección incorrecta, pendiente de reasignación…"
+          placeholder="Lo llamé y no contestó, le dejé WhatsApp pidiendo la diferencia…"
           className={TEXTAREA}
         />
+        <CommentPhotoPicker files={commentPhotos} onChange={setCommentPhotos} disabled={commentSaving} />
         <div className="flex flex-wrap gap-2">
           <input
             value={commentType}
             onChange={(e) => setCommentType(e.target.value)}
             aria-label="Tipo de comentario"
             placeholder="Tipo (opcional)"
-            className={cn(FIELD_BOX, "h-9 w-44 px-3 pointer-coarse:h-11")}
+            list="order-comment-types"
+            className={cn(FIELD_BOX, "h-9 w-52 px-3 pointer-coarse:h-11")}
           />
+          <datalist id="order-comment-types">
+            {ORDER_COMMENT_TYPE_SUGGESTIONS.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
           <OpsButton
-            disabled={pending || !comment.trim()}
-            onClick={() => {
-              onComment(comment, commentType);
-              setComment("");
-              setCommentType("");
+            disabled={pending || commentSaving || !comment.trim()}
+            onClick={async () => {
+              setCommentSaving(true);
+              try {
+                const saved = await onComment(comment, commentType, commentPhotos);
+                if (saved) {
+                  setComment("");
+                  setCommentType("");
+                  setCommentPhotos([]);
+                }
+              } finally {
+                setCommentSaving(false);
+              }
             }}
             className="pointer-coarse:h-11"
           >
-            Añadir comentario
+            {commentSaving && commentPhotos.length ? "Subiendo fotos…" : "Añadir comentario"}
           </OpsButton>
         </div>
       </div>
