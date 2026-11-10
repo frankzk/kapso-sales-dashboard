@@ -677,6 +677,8 @@ export interface ListingCoverage {
    */
   listadoDesde?: string | null;
   bordeRecortado?: boolean;
+  /** Cuántos días del borde viejo se dejaron de exigir. */
+  bordeDias?: number;
 }
 
 /** De las guías de la API que deberían estar, cuántas tienen que aparecer. */
@@ -684,38 +686,53 @@ export const COVERAGE_MIN = 0.97;
 
 /**
  * Cuánto puede quedar el borde viejo del listado por detrás de lo pedido. Shalom
- * recorta a ~45 días y el corte se corre: el 10-11-2026 las 99 guías que
- * «faltaban» eran las de la API del 28 al 30-09, el borde que Shalom ya no
- * entregaba aunque se le pidió desde el 27-09. Más de una semana no es el
- * recorte de Shalom: algo no cuadra y se sigue exigiendo desde lo pedido.
+ * no entrega todo lo pedido: el listado trae ~1.366 filas y el borde viejo
+ * viene a medias (10-11-2026: pedido desde el 27-09, traía alguna guía del 28 y
+ * le faltaban casi todas las del 29 y 30-09, todas entregadas hace semanas).
+ * Más de una semana de borde a medias no es eso: algo no cuadra y se sigue
+ * exigiendo desde lo pedido.
  */
 export const LISTING_EDGE_MAX_SHIFT_DAYS = 7;
 
 /**
- * Desde cuándo se le exige al listado que traiga las guías de la API: el día
- * después de lo pedido o, si Shalom recortó su borde viejo, el día después de
- * la guía más vieja que de verdad trajo. La cobertura del 97 % sigue mandando
- * en todo lo de después; solo se deja de esperar lo que Shalom ya no entrega.
- * Si el borde se corrió más de `LISTING_EDGE_MAX_SHIFT_DAYS`, no se corre.
+ * Desde cuándo se le exige al listado que traiga las guías de la API.
+ *
+ * Día por día en la primera semana después de lo pedido: el borde termina el
+ * último día de esa semana en que el listado trae MENOS del 97 % de las guías
+ * de la API de ese día; se exige desde el día siguiente. Lo de después sigue
+ * midiéndose entero con el 97 % (`listingCoverage`), y quien llama no empareja
+ * con guías del listado anteriores al borde: esa zona vino a medias.
  */
 export function listingCoverageFloor(
-  guides: readonly Pick<ShalomListingGuide, "createdAt">[],
+  guides: readonly Pick<ShalomListingGuide, "guia" | "createdAt">[],
+  expected: readonly { guideCode: string; createdAt: string }[],
   fromIso: string,
-): { floorMs: number; listingOldest: string | null; shifted: boolean } {
+): { floorMs: number; listingOldest: string | null; shifted: boolean; bordeDias: number } {
   const day = 86_400_000;
   const requested = Date.parse(fromIso) + day;
   const oldest = guides
     .map((g) => Date.parse((g.createdAt ?? "").replace(" ", "T")))
     .filter(Number.isFinite)
     .reduce((min, t) => Math.min(min, t), Number.POSITIVE_INFINITY);
-  if (!Number.isFinite(oldest)) return { floorMs: requested, listingOldest: null, shifted: false };
-  const listingOldest = new Date(oldest).toISOString();
-  // El día entero después de la guía más vieja: el recorte de Shalom no cae en
-  // medianoche y ese día puede venir a medias.
-  const edge = Date.UTC(new Date(oldest).getUTCFullYear(), new Date(oldest).getUTCMonth(), new Date(oldest).getUTCDate()) + day;
-  if (edge <= requested) return { floorMs: requested, listingOldest, shifted: false };
-  if (edge - requested > LISTING_EDGE_MAX_SHIFT_DAYS * day) return { floorMs: requested, listingOldest, shifted: false };
-  return { floorMs: edge, listingOldest, shifted: true };
+  const listingOldest = Number.isFinite(oldest) ? new Date(oldest).toISOString() : null;
+  const have = new Set(guides.map((g) => g.guia));
+  // Las guías de la API de cada día de la primera semana, y cuántas trae.
+  const perDay = new Map<number, { wanted: number; found: number }>();
+  for (const e of expected) {
+    const t = Date.parse(e.createdAt);
+    const code = guideCodeKey(e.guideCode);
+    if (!Number.isFinite(t) || !code || t < requested || t >= requested + LISTING_EDGE_MAX_SHIFT_DAYS * day) continue;
+    const d = requested + Math.floor((t - requested) / day) * day;
+    const cell = perDay.get(d) ?? { wanted: 0, found: 0 };
+    cell.wanted += 1;
+    if (have.has(code)) cell.found += 1;
+    perDay.set(d, cell);
+  }
+  let floorMs = requested;
+  for (const [d, cell] of perDay) {
+    if (cell.wanted > 0 && cell.found / cell.wanted < COVERAGE_MIN) floorMs = Math.max(floorMs, d + day);
+  }
+  return { floorMs, listingOldest, shifted: floorMs > requested, bordeDias: Math.round((floorMs - requested) / day) };
 }
 
 /**

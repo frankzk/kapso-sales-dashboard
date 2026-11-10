@@ -22,7 +22,13 @@ import { cn } from "@/components/ui";
 const PAGE = 50;
 const FILTERS: PagoDiferenciaFilter[] = ["por_gestionar", "gestionados_hoy", "sin_gestion", "todos"];
 
-const GROUP_HINT: Record<PagoDiferenciaGroup, string> = {
+/** Las pestañas: los tres grupos y «Todos», que los suma (owner, 10-11-2026). */
+type GroupTab = PagoDiferenciaGroup | "todos";
+const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos"];
+const TAB_LABEL: Record<GroupTab, string> = { ...PAGO_DIFERENCIA_GROUP_LABEL, todos: "Todos" };
+
+const GROUP_HINT: Record<GroupTab, string> = {
+  todos: "Los tres grupos juntos: en agencia, en camino y recogidos sin pago.",
   en_agencia: "El paquete ya está en la sucursal: la clave de recojo no se libera hasta validar el pago.",
   en_camino: "Todavía viaja o recién llegó a la agencia: se puede pedir la diferencia antes de que esté disponible.",
   recogido_sin_pago: "La clienta ya lo recogió y falta parte del pago: queda por cobrar.",
@@ -72,7 +78,7 @@ function fromControl(e: MouseEvent): boolean {
 }
 
 export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaRow[]; storeNames: Record<string, string> }) {
-  const [group, setGroup] = useState<PagoDiferenciaGroup>("en_agencia");
+  const [group, setGroup] = useState<GroupTab>("en_agencia");
   const [filter, setFilter] = useState<PagoDiferenciaFilter>("por_gestionar");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -80,10 +86,11 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
   const open = (orderId: string) => openDrawer(orderId, "operar");
 
   const groupCounts = useMemo(
-    () => Object.fromEntries(PAGO_DIFERENCIA_GROUPS.map((g) => [g, rows.filter((r) => r.group === g).length])) as Record<PagoDiferenciaGroup, number>,
+    () =>
+      Object.fromEntries(TABS.map((g) => [g, g === "todos" ? rows.length : rows.filter((r) => r.group === g).length])) as Record<GroupTab, number>,
     [rows],
   );
-  const inGroup = useMemo(() => rows.filter((r) => r.group === group), [rows, group]);
+  const inGroup = useMemo(() => (group === "todos" ? rows : rows.filter((r) => r.group === group)), [rows, group]);
   const counts = useMemo(
     () => Object.fromEntries(FILTERS.map((f) => [f, filterPagoDiferencia(inGroup, f).length])) as Record<PagoDiferenciaFilter, number>,
     [inGroup],
@@ -114,7 +121,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
       </header>
 
       <div role="tablist" aria-label="Grupo" className="flex flex-wrap gap-1 border-b border-line">
-        {PAGO_DIFERENCIA_GROUPS.map((g) => (
+        {TABS.map((g) => (
           <button
             key={g}
             type="button"
@@ -130,7 +137,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
               group === g ? "border-brand-600 text-brand-700" : "border-transparent text-ink-600 hover:text-ink-900",
             )}
           >
-            {PAGO_DIFERENCIA_GROUP_LABEL[g]}
+            {TAB_LABEL[g]}
             <Badge tone={group === g ? "brand" : "neutral"}>{groupCounts[g].toLocaleString("es-PE")}</Badge>
           </button>
         ))}
@@ -178,7 +185,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
         {listed.length === 0 ? (
           <p className="border-t border-line px-4 py-8 text-center text-sm text-ink-500">
             {inGroup.length === 0
-              ? `No hay pedidos en «${PAGO_DIFERENCIA_GROUP_LABEL[group]}».`
+              ? `No hay pedidos en «${TAB_LABEL[group]}».`
               : filter === "por_gestionar" && !query
                 ? "Todos los pedidos ya tienen una gestión registrada hoy."
                 : "Ningún pedido coincide con este filtro."}
@@ -199,7 +206,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
                     <th className="px-4 py-2.5">Pedido</th>
                     <th className="px-3 py-2.5">Cliente</th>
                     <th className="px-3 py-2.5 text-right">Falta pagar</th>
-                    <th className="px-3 py-2.5">{group === "en_agencia" ? "En agencia" : group === "en_camino" ? "Envío" : "Recogido"}</th>
+                    <th className="px-3 py-2.5">{group === "en_agencia" ? "En agencia" : group === "en_camino" ? "Envío" : group === "recogido_sin_pago" ? "Recogido" : "Dónde está"}</th>
                     <th className="px-4 py-2.5">Última gestión</th>
                   </tr>
                 </thead>
@@ -226,7 +233,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
                         <Amount row={r} />
                       </td>
                       <td className="px-3 py-3">
-                        <Agency row={r} />
+                        <Agency row={r} showGroup={group === "todos"} />
                       </td>
                       <td className="px-4 py-3">
                         <LastGestion row={r} />
@@ -256,7 +263,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
                     </div>
                     <Amount row={r} />
                   </div>
-                  <Agency row={r} />
+                  <Agency row={r} showGroup={group === "todos"} />
                   <LastGestion row={r} />
                 </li>
               ))}
@@ -296,10 +303,12 @@ function Amount({ row }: { row: PagoDiferenciaRow }) {
   );
 }
 
-function Agency({ row }: { row: PagoDiferenciaRow }) {
+function Agency({ row, showGroup = false }: { row: PagoDiferenciaRow; showGroup?: boolean }) {
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-1">
+        {/* En «Todos» se dice de qué grupo es cada pedido. */}
+        {showGroup && !row.substage && <Badge tone="info">{PAGO_DIFERENCIA_GROUP_LABEL[row.group]}</Badge>}
         {row.substage && <Badge tone="info">{row.substage}</Badge>}
         <Badge tone={row.group === "en_agencia" ? waitTone(row.waitingDays) : "neutral"}>
           {row.group === "recogido_sin_pago" ? `hace ${days(row.waitingDays)}` : days(row.waitingDays)}

@@ -1,5 +1,22 @@
 # Deployment runbook
 
+### 10-11-2026 · «Comentario» sale de «Gestión manual» (MOM §43) y Cotejar Shalom mide el borde día por día (MOM §12)
+
+**Sin migración.**
+
+- «Pago de diferencia»: solo Shalom u Olva, y la pestaña «Todos» que suma
+  los tres grupos.
+- En la ficha, «Comentario» es su propia tarjeta, entre «Salidas y guías» y
+  «Gestión manual», con su entrada en el índice.
+- Cotejar Shalom: el borde viejo que Shalom entrega a medias se mide día por
+  día en la primera semana; no se empareja con guías anteriores al borde.
+
+### 10-11-2026 · «Pago de diferencia»: solo pedidos de Shalom u Olva (MOM §44)
+
+**Sin migración.** Las tres pestañas filtran por `current_courier` en Shalom u
+Olva: salen un Fenix de Repro Provincia en «En camino» y 47 «Recogidos sin
+pago» de agosto sin guía de agencia.
+
 ### 10-11-2026 · Chatby desde la ficha: Ctrl+V adjunta en cualquier parte de la pestaña (MOM §25 «Chatby»)
 
 **Sin migración.** En la pestaña Chatby de la ficha, una foto, captura o PDF
