@@ -11473,6 +11473,18 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   días antes del pedido más viejo **pero nunca más de 44 días atrás**, y la
   cobertura se mide dentro de esa ventana. Un pedido cuya guía se creó antes
   de la ventana no se puede cotejar: queda sin pareja, para una persona.
+- **El borde viejo se mide con lo que Shalom de verdad trae** (10-11-2026).
+  El recorte de ~45 días se corre: pedido desde el 27-09, el listado ya no
+  traía las guías del 28 al 30-09, y esas 99 guías de la API (todas
+  entregadas, del borde) dejaban la cobertura en 1.241 de 1.340 y frenaban el
+  cotejo entero desde el 08-11 —con las 41 guías muertas de Breña sin
+  reemplazar—. Ahora la cobertura se exige desde el día siguiente a la guía
+  **más vieja que trajo el listado** cuando es posterior a lo pedido
+  (`listingCoverageFloor`). El 97 % sigue mandando en todo lo de después: un
+  listado cortado en el medio o en lo nuevo sigue sin vincular nada. Si el
+  borde se corrió **más de 7 días**, no es el recorte de Shalom y se sigue
+  exigiendo desde lo pedido. La línea `[shalom-cotejo]` dice
+  `cobertura.listadoDesde` y `cobertura.bordeRecortado`.
 - **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
   generar rótulo», con el pago que Agencia exige para pasar a Preparación
   (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago

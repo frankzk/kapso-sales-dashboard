@@ -1,5 +1,12 @@
 # Deployment runbook
 
+### 10-11-2026 · Cotejar Shalom: el borde viejo del listado se mide con lo que Shalom trae (MOM §12)
+
+**Sin migración.** Desde la siguiente pasada del cron `shalom-cotejo`, la
+cobertura del 97 % se exige desde el día siguiente a la guía más vieja del
+listado (si Shalom recortó su borde, hasta 7 días). Destraba el cotejo, que no
+vinculaba nada desde el 08-11, y con él el reemplazo de las guías muertas.
+
 ### 10-11-2026 · Chatby desde la ficha: el ticket Shalom en PDF y adjuntar fotos o PDF (MOM §25 «Chatby»)
 
 **Sin migración.** El bucket privado `chatby-attachments` se crea solo en la
