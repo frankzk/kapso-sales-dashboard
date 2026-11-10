@@ -26131,12 +26131,25 @@ sobre los pedidos que esperan el pago de la diferencia —«ahí Gerardo, que
 tiene el usuario Gero, que quede registro de que lo llamó, intentó hacer
 contacto con el cliente»— y se vea a quién le toca contactar hoy.
 
-**Qué entra.** Los pedidos en la subetapa `pendiente_pago_diferencia` (§6.4):
+**Qué entra en «En agencia».** Los pedidos en la subetapa `pendiente_pago_diferencia` (§6.4):
 Agencia, con el paquete en la sucursal (`disponible_para_recojo`,
 `cliente_notificado`, `pendiente_de_recojo`, `proximo_a_vencer`) y sin pago
 completo validado. No se inventa ningún estado: es la misma subetapa del
 Master, en las tiendas de la persona. Medido el 10-11-2026: 178 pedidos (173
 Shalom, 5 Olva).
+
+**Tres grupos, cada uno su pestaña** (owner, 10-11-2026, al ver 177 en la
+bandeja y 253 en «Disponibles para recojo» del Master: esos 253 son los 177
+que deben más 76 ya pagados que solo esperan el recojo):
+
+- **En agencia** (el foco, abre aquí): `pendiente_pago_diferencia`.
+- **En camino**: Agencia (`macro_operation = agencia`) en `en_transito` o
+  `en_destino` y sin `pago_completo`, para pedir la diferencia antes de que
+  llegue. Contra entrega y Lima no entran. Medido: 87.
+- **Recogidos sin pago**: `recogido_sin_pago_completo` (Por cerrar), la
+  clienta ya lo recogió y falta cobrar. Medido: 122.
+
+Los ya pagados que esperan recojo no entran: no deben nada.
 
 **Qué dice cada fila.**
 
@@ -26155,7 +26168,9 @@ Shalom, 5 Olva).
 
 **Qué cuenta como gestión.** Solo los hechos de una PERSONA (`actor` no nulo)
 de esos tipos: `comment`, `chatby_message`, `confirmation_contact`,
-`browser_call` y `anura_call`. Lo automático y el agente de IA no cuentan.
+`browser_call` y `anura_call`. Lo automático y el agente de IA no cuentan, ni
+la nota que deja corregir la dirección (comentario de tipo `ubicacion`): es un
+arreglo del pedido, no un contacto con la clienta.
 «Hoy» es el día calendario de Lima.
 
 **Filtros.** «Por gestionar hoy» (nadie registró nada hoy; es la vista con

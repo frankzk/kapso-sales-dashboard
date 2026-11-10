@@ -7,6 +7,13 @@ pegado con Ctrl+V se adjunta aunque el cursor no esté en la caja de
 «Responder por WhatsApp» (antes había que hacer clic en la caja). Con la
 pestaña escondida detrás de otra, o escribiendo en otro campo, no se toca.
 
+### 10-11-2026 · «Pago de diferencia»: pestañas En agencia, En camino y Recogidos sin pago (MOM §44)
+
+**Sin migración.** La bandeja suma «En camino» (Agencia en tránsito o en
+destino sin pago completo) y «Recogidos sin pago»
+(`recogido_sin_pago_completo`). «En agencia» sigue siendo la vista con que
+abre. La nota de corregir la dirección deja de contar como gestión.
+
 ### 10-11-2026 · Cotejar Shalom: el borde viejo del listado se mide con lo que Shalom trae (MOM §12)
 
 **Sin migración.** Desde la siguiente pasada del cron `shalom-cotejo`, la

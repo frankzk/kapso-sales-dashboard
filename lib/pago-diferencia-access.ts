@@ -10,6 +10,7 @@ import { resolveAgentNames } from "@/lib/agent-names";
 import {
   PAGO_DIFERENCIA_GESTION_KINDS,
   buildPagoDiferenciaRows,
+  pagoDiferenciaGroup,
   type PagoDiferenciaEventInput,
   type PagoDiferenciaOrderInput,
   type PagoDiferenciaPaymentInput,
@@ -24,18 +25,23 @@ export async function loadPagoDiferencia(
   now: Date = new Date(),
 ): Promise<PagoDiferenciaRow[]> {
   if (!storeIds.length) return [];
-  const { rows: orders, error } = await readAllPages<PagoDiferenciaOrderInput>((from, to) =>
+  const { rows: rawOrders, error } = await readAllPages<PagoDiferenciaOrderInput>((from, to) =>
     admin
       .from("order_master")
       .select(
-        "order_id,store_id,order_name,customer_name,customer_phone,order_total,current_courier,guide_code,agency_branch,agency_arrived_at,agency_expires_at,macro_since,province,district",
+        "order_id,macro_substage,macro_operation,payment_state,store_id,order_name,customer_name,customer_phone,order_total,current_courier,guide_code,agency_branch,agency_arrived_at,agency_expires_at,macro_since,province,district",
       )
       .in("store_id", [...storeIds])
-      .eq("macro_substage", "pendiente_pago_diferencia")
+      // Los tres grupos (lib/pago-diferencia.ts, `pagoDiferenciaGroup`, que
+      // vuelve a decidir fila por fila).
+      .in("macro_substage", ["pendiente_pago_diferencia", "recogido_sin_pago_completo", "en_transito", "en_destino"])
       .order("order_id")
       .range(from, to),
   );
   if (error) throw new Error(`No se pudieron leer los pedidos: ${error.message}`);
+  // Lima y contra entrega en tránsito no son de la bandeja: fuera antes de
+  // leer sus pagos y su gestión.
+  const orders = rawOrders.filter((o) => pagoDiferenciaGroup(o) !== null);
   if (!orders.length) return [];
 
   const payments: PagoDiferenciaPaymentInput[] = [];
