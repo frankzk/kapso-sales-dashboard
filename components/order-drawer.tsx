@@ -318,6 +318,7 @@ export type DrawerSectionId =
   | "aliclik"
   | "guias"
   | "cierre"
+  | "comentario"
   | "acciones"
   | "historial";
 
@@ -334,6 +335,7 @@ const INDEX_LABEL: Record<string, string> = {
   aliclik: "Aliclik",
   guias: "Salidas y guías",
   cierre: "Cierre",
+  comentario: "Comentario",
   acciones: "Gestión manual",
   cliente: "Pedido y cliente",
   ubicacion: "Ubicación",
@@ -352,6 +354,7 @@ export const DRAWER_SECTION_IDS: readonly DrawerSectionId[] = [
   "aliclik",
   "guias",
   "cierre",
+  "comentario",
   "acciones",
   "historial",
 ];
@@ -2372,17 +2375,10 @@ export function OrderDrawer({
                     </Banner>
                   </div>
                 )}
-              {canEdit ? (
-                <div data-drawer-section="acciones" className={cn("order-8", SECTION)}>
-                  <OrderActions
-                    row={detail.row}
-                    canOverride={canOverride}
-                    canSetStatus={canSetStatus}
+              {canEdit && (
+                <section data-drawer-section="comentario" className={cn("order-8", SECTION)}>
+                  <OrderCommentCard
                     pending={pending}
-                    outputCount={detail.routePlan.outputCount}
-                    onStatus={(general, operational, reason, agencyCourier) =>
-                      run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
-                    }
                     onComment={async (text, type, photos) => {
                       // Las fotos suben primero, directo a Storage; el comentario
                       // solo se registra si llegaron todas (lib/order-comment-photos.ts).
@@ -2397,6 +2393,20 @@ export function OrderDrawer({
                       }
                       return run(() => addOrderComment(orderId, { text, type }));
                     }}
+                  />
+                </section>
+              )}
+              {canEdit ? (
+                <div data-drawer-section="acciones" className={cn("order-8", SECTION)}>
+                  <OrderActions
+                    row={detail.row}
+                    canOverride={canOverride}
+                    canSetStatus={canSetStatus}
+                    pending={pending}
+                    outputCount={detail.routePlan.outputCount}
+                    onStatus={(general, operational, reason, agencyCourier) =>
+                      run(() => setOrderStatus(orderId, { general, operational, reason, agencyCourier }))
+                    }
                     onReturn={(reason, guideCode) => run(() => registerReturn(orderId, { reason, guideCode }))}
                     onRelink={(guideCode) => run(() => relinkGuide(guideCode, orderId))}
                     canCancelWoo={canCancelWoo}
@@ -3955,7 +3965,6 @@ export function OrderActions({
   pending,
   outputCount,
   onStatus,
-  onComment,
   onReturn,
   onRelink,
   wooCancel = null,
@@ -3981,8 +3990,6 @@ export function OrderActions({
    *  llega a la sucursal con CERO salidas es el que hay que preguntar. */
   outputCount: number;
   onStatus: (general: string, operational: string, reason: string, agencyCourier?: string) => void;
-  /** Registra el comentario con sus fotos de constancia; true si quedó. */
-  onComment: (text: string, type: string, photos: File[]) => Promise<boolean>;
   onReturn: (reason: string, guideCode: string) => void;
   onRelink: (guideCode: string) => void;
   /**
@@ -3996,11 +4003,6 @@ export function OrderActions({
   );
   const [operational, setOperational] = useState(row.operational_status);
   const [reason, setReason] = useState("");
-  const [comment, setComment] = useState("");
-  const [commentType, setCommentType] = useState("");
-  const [commentPhotos, setCommentPhotos] = useState<File[]>([]);
-  const [commentDragOver, setCommentDragOver] = useState(false);
-  const [commentSaving, setCommentSaving] = useState(false);
   const [returnReason, setReturnReason] = useState("");
   const [returnGuide, setReturnGuide] = useState(row.guide_code ?? "");
   const [relinkCode, setRelinkCode] = useState("");
@@ -4149,84 +4151,6 @@ export function OrderActions({
           onCancel={wooCancel.onCancel}
         />
       )}
-
-      {/* La gestión del equipo con su constancia (owner, 10-11-2026): «lo
-          llamé, le dejé WhatsApp» + la captura. Queda en Actividad con el
-          nombre de quien la registró. Pegar y soltar se escuchan en la
-          tarjeta entera (components/order-comment-photos.tsx). */}
-      <div
-        className={cn(
-          CARD_ZONE,
-          "space-y-3 transition-colors",
-          commentDragOver && "bg-brand-50 ring-2 ring-inset ring-brand-500",
-        )}
-        onPaste={(e) => {
-          const images = commentPastedImages(e);
-          if (!images.length) return;
-          e.preventDefault();
-          setCommentPhotos((current) => addCommentPhotos(current, images).files);
-        }}
-        onDragOver={(e) => {
-          if (!Array.from(e.dataTransfer.types).includes("Files")) return;
-          e.preventDefault();
-          setCommentDragOver(true);
-        }}
-        onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setCommentDragOver(false);
-        }}
-        onDrop={(e) => {
-          const images = imageFilesFrom(e.dataTransfer.files);
-          setCommentDragOver(false);
-          if (!images.length) return;
-          e.preventDefault();
-          setCommentPhotos((current) => addCommentPhotos(current, images).files);
-        }}
-      >
-        <h4 className="text-sm font-semibold text-ink-900">Comentario</h4>
-        <textarea
-          value={comment}
-          onChange={(e) => setComment(e.target.value)}
-          rows={2}
-          aria-label="Comentario"
-          placeholder="Lo llamé y no contestó, le dejé WhatsApp pidiendo la diferencia…"
-          className={TEXTAREA}
-        />
-        <CommentPhotoPicker files={commentPhotos} onChange={setCommentPhotos} disabled={commentSaving} />
-        <div className="flex flex-wrap gap-2">
-          <input
-            value={commentType}
-            onChange={(e) => setCommentType(e.target.value)}
-            aria-label="Tipo de comentario"
-            placeholder="Tipo (opcional)"
-            list="order-comment-types"
-            className={cn(FIELD_BOX, "h-9 w-52 px-3 pointer-coarse:h-11")}
-          />
-          <datalist id="order-comment-types">
-            {ORDER_COMMENT_TYPE_SUGGESTIONS.map((t) => (
-              <option key={t} value={t} />
-            ))}
-          </datalist>
-          <OpsButton
-            disabled={pending || commentSaving || !comment.trim()}
-            onClick={async () => {
-              setCommentSaving(true);
-              try {
-                const saved = await onComment(comment, commentType, commentPhotos);
-                if (saved) {
-                  setComment("");
-                  setCommentType("");
-                  setCommentPhotos([]);
-                }
-              } finally {
-                setCommentSaving(false);
-              }
-            }}
-            className="pointer-coarse:h-11"
-          >
-            {commentSaving && commentPhotos.length ? "Subiendo fotos…" : "Añadir comentario"}
-          </OpsButton>
-        </div>
-      </div>
 
       {/* La última franja de la tarjeta, de borde a borde y hasta el pie: es lo
           excepcional, así que espera plegado bajo lo de todos los días. */}
@@ -4544,5 +4468,105 @@ function OlvaTrackingField({
       </span>
       {error && <span role="alert" className="w-full text-[13px] text-crit-fg">{error}</span>}
     </form>
+  );
+}
+
+/**
+ * «Comentario» (owner, 10-11-2026): su propia tarjeta en Operar, debajo de
+ * «Salidas y guías» y encima de «Gestión manual», para que no se confunda con
+ * «Registrar estado». Es la gestión del equipo con su constancia (MOM §43):
+ * texto, tipo y hasta 4 fotos (pegar con Ctrl+V, arrastrar o elegir).
+ */
+export function OrderCommentCard({
+  pending,
+  onComment,
+}: {
+  pending: boolean;
+  /** Registra el comentario con sus fotos de constancia; true si quedó. */
+  onComment: (text: string, type: string, photos: File[]) => Promise<boolean>;
+}) {
+  const [comment, setComment] = useState("");
+  const [commentType, setCommentType] = useState("");
+  const [commentPhotos, setCommentPhotos] = useState<File[]>([]);
+  const [commentDragOver, setCommentDragOver] = useState(false);
+  const [commentSaving, setCommentSaving] = useState(false);
+  // Pegar y soltar se escuchan en la tarjeta entera
+  // (components/order-comment-photos.tsx).
+  return (
+      <div
+        className={cn(
+          "space-y-3 rounded-lg transition-colors",
+          commentDragOver && "bg-brand-50 ring-2 ring-inset ring-brand-500",
+        )}
+        onPaste={(e) => {
+          const images = commentPastedImages(e);
+          if (!images.length) return;
+          e.preventDefault();
+          setCommentPhotos((current) => addCommentPhotos(current, images).files);
+        }}
+        onDragOver={(e) => {
+          if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+          e.preventDefault();
+          setCommentDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setCommentDragOver(false);
+        }}
+        onDrop={(e) => {
+          const images = imageFilesFrom(e.dataTransfer.files);
+          setCommentDragOver(false);
+          if (!images.length) return;
+          e.preventDefault();
+          setCommentPhotos((current) => addCommentPhotos(current, images).files);
+        }}
+      >
+        <SectionHead
+          title="Comentario"
+          help="Lo que hiciste con la clienta o el pedido, con la captura como constancia. Queda en Actividad con tu nombre. No cambia el estado."
+        />
+        <textarea
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          rows={2}
+          aria-label="Comentario"
+          placeholder="Lo llamé y no contestó, le dejé WhatsApp pidiendo la diferencia…"
+          className={TEXTAREA}
+        />
+        <CommentPhotoPicker files={commentPhotos} onChange={setCommentPhotos} disabled={commentSaving} />
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={commentType}
+            onChange={(e) => setCommentType(e.target.value)}
+            aria-label="Tipo de comentario"
+            placeholder="Tipo (opcional)"
+            list="order-comment-types"
+            className={cn(FIELD_BOX, "h-9 w-52 px-3 pointer-coarse:h-11")}
+          />
+          <datalist id="order-comment-types">
+            {ORDER_COMMENT_TYPE_SUGGESTIONS.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
+          <OpsButton
+            disabled={pending || commentSaving || !comment.trim()}
+            onClick={async () => {
+              setCommentSaving(true);
+              try {
+                const saved = await onComment(comment, commentType, commentPhotos);
+                if (saved) {
+                  setComment("");
+                  setCommentType("");
+                  setCommentPhotos([]);
+                }
+              } finally {
+                setCommentSaving(false);
+              }
+            }}
+            className="pointer-coarse:h-11"
+          >
+            {commentSaving && commentPhotos.length ? "Subiendo fotos…" : "Añadir comentario"}
+          </OpsButton>
+        </div>
+      </div>
   );
 }

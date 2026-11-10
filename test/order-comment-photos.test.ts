@@ -103,6 +103,20 @@ describe("fotos de constancia del comentario (MOM §43)", () => {
     expect(drawer).toMatch(/onPaste=\{\(e\) => \{\s*const images = commentPastedImages\(e\)/);
   });
 
+  it("«Comentario» es su propia tarjeta, entre Salidas y guías y Gestión manual (owner, 10-11-2026)", () => {
+    const drawer = readFileSync("components/order-drawer.tsx", "utf8");
+    const comentario = drawer.indexOf('data-drawer-section="comentario"');
+    const acciones = drawer.indexOf('data-drawer-section="acciones"');
+    const guias = drawer.indexOf('data-drawer-section="guias"');
+    expect(guias).toBeGreaterThan(0);
+    expect(comentario).toBeGreaterThan(guias);
+    expect(acciones).toBeGreaterThan(comentario);
+    expect(drawer).toContain('comentario: "Comentario",');
+    // «Gestión manual» ya no lleva el comentario: no se confunde con «Registrar estado».
+    const actions = drawer.slice(drawer.indexOf("export function OrderActions("), drawer.indexOf("export function OrderCommentCard("));
+    expect(actions).not.toContain("Añadir comentario");
+  });
+
   it("el MOM documenta la regla", () => {
     const mom = readFileSync("docs/mom/master-pedidos-v1.md", "utf8");
     expect(mom).toContain("## 43. Fotos de constancia en el comentario del pedido");

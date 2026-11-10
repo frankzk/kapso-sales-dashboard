@@ -43,7 +43,6 @@ function actions(canSetStatus: boolean): string {
       pending: false,
       outputCount: 1,
       onStatus: noop,
-      onComment: async () => true,
       onReturn: noop,
       onRelink: noop,
     }),
@@ -82,10 +81,11 @@ describe("«Gestión manual» en la ficha", () => {
     expect(html).toContain(SET_STATUS_ADMIN_NOTE);
   });
 
-  it("y el resto de «Gestión manual» sigue: comentar, devolver, corregir vínculos", () => {
+  it("y el resto de «Gestión manual» sigue: devolver, corregir vínculos (el comentario va en su propia tarjeta)", () => {
     const html = actions(false);
     expect(html).toContain("Gestión manual");
-    expect(html).toContain("Añadir comentario");
+    // Owner, 10-11-2026: «Comentario» sale de aquí para no confundirse con «Registrar estado».
+    expect(html).not.toContain("Añadir comentario");
     expect(html).toContain("Registrar devolución");
     expect(html).toContain("Corregir vínculo de guía");
   });
@@ -154,7 +154,6 @@ describe("«Anular pedido» en «Gestión manual» va con su propio permiso", ()
         pending: false,
         outputCount: 1,
         onStatus: noop,
-        onComment: async () => true,
         onReturn: noop,
         onRelink: noop,
         wooCancel,

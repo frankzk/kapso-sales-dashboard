@@ -10,6 +10,7 @@
 //     `en_destino` sin pago completo: se pide la diferencia antes de que llegue.
 //   - «Recogidos sin pago»: `recogido_sin_pago_completo` (Por cerrar): ya lo
 //     recogió y falta cobrar.
+// Los tres, solo con Shalom u Olva (`PAGO_DIFERENCIA_COURIERS`).
 //
 // Es una LECTURA: no escribe nada ni cambia etapas. La gestión se registra en
 // la ficha del pedido (comentario con foto de constancia §43, mensaje por
@@ -43,11 +44,20 @@ export const PAGO_DIFERENCIA_GROUP_LABEL: Record<PagoDiferenciaGroup, string> = 
 };
 
 /** A qué grupo va un pedido del Master; null si no es de la bandeja. */
+/**
+ * Los couriers de agencia: solo Shalom y Olva dejan el paquete en una sucursal
+ * a la espera de la diferencia (owner, 10-11-2026). Un Fenix de Repro
+ * Provincia o un pedido sin guía en Kapta no son de la bandeja.
+ */
+export const PAGO_DIFERENCIA_COURIERS: readonly string[] = ["shalom", "olva"];
+
 export function pagoDiferenciaGroup(o: {
   macro_substage: string | null;
   macro_operation: string | null;
   payment_state: string | null;
+  current_courier: string | null;
 }): PagoDiferenciaGroup | null {
+  if (!PAGO_DIFERENCIA_COURIERS.includes((o.current_courier ?? "").trim().toLowerCase())) return null;
   if (o.macro_substage === "pendiente_pago_diferencia") return "en_agencia";
   if (o.macro_substage === "recogido_sin_pago_completo") return "recogido_sin_pago";
   if (

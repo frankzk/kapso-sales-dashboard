@@ -146,8 +146,8 @@ describe("Pago de diferencia (MOM §44)", () => {
   });
 
   it("tres grupos: en agencia, en camino (Agencia sin pago completo) y recogidos sin pago", () => {
-    const g = (macro_substage: string, macro_operation = "agencia", payment_state = "adelanto_validado") =>
-      pagoDiferenciaGroup({ macro_substage, macro_operation, payment_state });
+    const g = (macro_substage: string, macro_operation = "agencia", payment_state = "adelanto_validado", current_courier: string | null = "shalom") =>
+      pagoDiferenciaGroup({ macro_substage, macro_operation, payment_state, current_courier });
     expect(g("pendiente_pago_diferencia", "agencia")).toBe("en_agencia");
     expect(g("en_transito")).toBe("en_camino");
     expect(g("en_destino", "agencia", "adelanto_cargado")).toBe("en_camino");
@@ -157,6 +157,12 @@ describe("Pago de diferencia (MOM §44)", () => {
     expect(g("en_destino", "agencia", "pago_completo")).toBeNull();
     expect(g("recogido_sin_pago_completo", "agencia", "sin_pago")).toBe("recogido_sin_pago");
     expect(g("disponible_para_recojo", "agencia", "pago_completo")).toBeNull();
+    // Solo Shalom u Olva (owner, 10-11-2026: #KP130282 iba por Fenix).
+    expect(g("en_transito", "agencia", "adelanto_validado", "olva")).toBe("en_camino");
+    expect(g("en_transito", "agencia", null as unknown as string, "fenix")).toBeNull();
+    expect(g("recogido_sin_pago_completo", "agencia", "sin_pago", null)).toBeNull();
+    expect(g("recogido_sin_pago_completo", "agencia", "sin_pago", "aliclik")).toBeNull();
+    expect(g("pendiente_pago_diferencia", "agencia", "adelanto_validado", "urpi")).toBeNull();
 
     const rows = buildPagoDiferenciaRows({
       orders: [

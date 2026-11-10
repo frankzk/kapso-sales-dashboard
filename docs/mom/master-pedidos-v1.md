@@ -11473,18 +11473,20 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   días antes del pedido más viejo **pero nunca más de 44 días atrás**, y la
   cobertura se mide dentro de esa ventana. Un pedido cuya guía se creó antes
   de la ventana no se puede cotejar: queda sin pareja, para una persona.
-- **El borde viejo se mide con lo que Shalom de verdad trae** (10-11-2026).
-  El recorte de ~45 días se corre: pedido desde el 27-09, el listado ya no
-  traía las guías del 28 al 30-09, y esas 99 guías de la API (todas
-  entregadas, del borde) dejaban la cobertura en 1.241 de 1.340 y frenaban el
-  cotejo entero desde el 08-11 —con las 41 guías muertas de Breña sin
-  reemplazar—. Ahora la cobertura se exige desde el día siguiente a la guía
-  **más vieja que trajo el listado** cuando es posterior a lo pedido
-  (`listingCoverageFloor`). El 97 % sigue mandando en todo lo de después: un
-  listado cortado en el medio o en lo nuevo sigue sin vincular nada. Si el
-  borde se corrió **más de 7 días**, no es el recorte de Shalom y se sigue
-  exigiendo desde lo pedido. La línea `[shalom-cotejo]` dice
-  `cobertura.listadoDesde` y `cobertura.bordeRecortado`.
+- **El borde viejo que Shalom entrega a medias se mide día por día**
+  (10-11-2026). El listado trae ~1.366 filas y su borde viejo no es una fecha
+  limpia: pedido desde el 27-09, traía alguna guía del 28 y le faltaban casi
+  todas las del 29 y 30-09 (todas de la API, entregadas hace semanas). Esas
+  guías dejaban la cobertura bajo el 97 % y frenaban el cotejo entero desde el
+  08-11, con las guías muertas de Breña sin reemplazar. Ahora, en la **primera
+  semana** después de lo pedido, se mide la cobertura de cada día; el borde
+  termina el último día de esa semana con menos del 97 %, y desde el día
+  siguiente se exige el 97 % de siempre (`listingCoverageFloor`). Dos
+  resguardos: un listado cortado en el medio o en lo nuevo sigue sin vincular
+  nada, y **no se empareja con guías del listado anteriores al borde**, porque
+  ahí podría faltar la guía que discutiría la pareja. La línea
+  `[shalom-cotejo]` dice `cobertura.listadoDesde`, `cobertura.bordeRecortado`
+  y `cobertura.bordeDias`.
 - **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
   generar rótulo», con el pago que Agencia exige para pasar a Preparación
   (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago
@@ -26078,6 +26080,12 @@ contactar y le dejé WhatsApp, subo captura». Y: que quede registro de la
 gestión del equipo —por ejemplo, la de los pedidos en «Pendiente de pago de
 diferencia» (§6.4)— con quién lo hizo.
 
+**Dónde está.** «Comentario» es su propia tarjeta en Operar, **debajo de
+«Salidas y guías» y encima de «Gestión manual»**, con su entrada en el índice
+(owner, 10-11-2026: «no quiero que se vaya a confundir con el bloque de
+Registrar estado, que sería medio peligroso»). Antes vivía dentro de
+«Gestión manual», justo después de «Registrar estado».
+
 **Cómo se adjunta.** En la ficha, Operar → «Comentario»:
 
 - Se **pega con Ctrl+V** dentro de la tarjeta (en el cuadro de texto o en
@@ -26149,7 +26157,12 @@ que deben más 76 ya pagados que solo esperan el recojo):
 - **Recogidos sin pago**: `recogido_sin_pago_completo` (Por cerrar), la
   clienta ya lo recogió y falta cobrar. Medido: 122.
 
-Los ya pagados que esperan recojo no entran: no deben nada.
+Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
+Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en
+una sucursal. Un pedido de Agencia que salió por Fenix desde Repro Provincia
+(#KP130282) o uno sin guía en Kapta (44 «recogidos sin pago» de agosto) no
+entra. Medido con el filtro: En agencia 176, En camino 85, Recogidos sin pago
+75.
 
 **Qué dice cada fila.**
 
