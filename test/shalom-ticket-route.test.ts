@@ -45,8 +45,8 @@ describe("private Shalom ticket HTTP route", () => {
     expect(res.status).toBe(200); expect(res.headers.get("content-type")).toBe("application/pdf");
     expect(res.headers.get("cache-control")).toContain("private");
     expect(res.headers.get("content-disposition")).toContain("ticket-shalom-202.pdf");
-    expect(state.resolve.mock.calls[0][1]).toEqual(GUIDE);
-    expect(state.pdf.mock.calls[0].slice(1)).toEqual(["kenku", { shalom_pro_email: "operator@example.test" }, 202]);
+    expect(state.resolve).toHaveBeenCalledWith({}, GUIDE, { shalom_pro_email: "operator@example.test" });
+    expect(state.pdf).toHaveBeenCalledWith({}, "kenku", { shalom_pro_email: "operator@example.test" }, 202);
     expect(await res.text()).toContain("%PDF-");
   });
 

@@ -47,7 +47,7 @@ describe("ticket requested for one already-linked Shalom guide", () => {
     const { admin, writes } = fakeAdmin();
     expect(await resolveRequestedShalomTicket(admin, GUIDE, STORE)).toBe(202);
     expect(writes).toEqual([{ patch: { shalom_ose_id: 202 }, filters: [["id", "requested"], ["store_id", "kenku"], ["courier", "shalom"], ["guide_code", "102371814"], ["shalom_ose_id", null]] }]);
-    expect(remote.read.mock.calls[0][1]).toBe("kenku");
+    expect(remote.read).toHaveBeenCalledWith(admin, "kenku", STORE, expect.any(Function));
   });
 
   it("reuses a known document ID without consulting the account or writing", async () => {
