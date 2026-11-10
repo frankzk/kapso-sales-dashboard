@@ -48,6 +48,7 @@ import {
   documentKey,
   guideCodeKey,
   listingCoverage,
+  listingCoverageFloor,
   listingFromDate,
   listingPickupCodes,
   matchShalomListing,
@@ -935,15 +936,22 @@ export async function cotejarShalom(
       const fromIso = `${desde}T00:00:00Z`;
       const known = await loadKnownApiGuides(admin, group.storeIds, fromIso);
       const lagLimit = Date.now() - COVERAGE_LAG_MS;
+      // El borde viejo: lo pedido o, si Shalom recortó su listado, lo que de
+      // verdad trajo (10-11-2026, `listingCoverageFloor`).
+      const floor = listingCoverageFloor(guides, fromIso);
       // Una guía que el rastreo confirmó que Shalom no conoce no tiene por qué
       // estar en el listado: no cuenta como «falta» (08-11-2026).
       const expected = known
         .filter((k) => {
           const t = Date.parse(k.created_at);
-          return t >= Date.parse(fromIso) + DAY_MS && t <= lagLimit && !dead.deadCodes.has(guideCodeKey(k.guide_code));
+          return t >= floor.floorMs && t <= lagLimit && !dead.deadCodes.has(guideCodeKey(k.guide_code));
         })
         .map((k) => k.guide_code);
-      account.cobertura = listingCoverage(guides, expected);
+      account.cobertura = {
+        ...listingCoverage(guides, expected),
+        listadoDesde: floor.listingOldest,
+        bordeRecortado: floor.shifted,
+      };
       if (!account.cobertura.completo) {
         skip(
           `al listado le faltan guías creadas por API (${account.cobertura.encontradas} de ${account.cobertura.esperadas}): no se vincula nada`,

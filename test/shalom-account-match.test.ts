@@ -12,6 +12,8 @@ import {
   COTEJO_HORAS_LIMA,
   COVERAGE_MIN,
   listingCoverage,
+  listingCoverageFloor,
+  LISTING_EDGE_MAX_SHIFT_DAYS,
   listingCodes,
   listingPickupCodes,
   matchShalomListing,
@@ -326,6 +328,27 @@ describe("antes de creerse el listado", () => {
     expect(listingCoverage(listado.slice(0, 15), codes).completo).toBe(false);
     // Sin ninguna guía con la que medir, no se da por entero.
     expect(listingCoverage(listado, []).completo).toBe(false);
+  });
+
+  it("si Shalom recortó el borde viejo, se deja de esperar ese borde (10-11-2026)", () => {
+    const from = "2026-09-27T00:00:00Z";
+    const day = 86_400_000;
+    // Lo de siempre: el listado llega hasta lo pedido → el día después de lo pedido.
+    expect(listingCoverageFloor([{ createdAt: "2026-09-27 09:00:00" }, { createdAt: "2026-10-05 10:00:00" }], from)).toEqual({
+      floorMs: Date.parse("2026-09-28T00:00:00Z"),
+      listingOldest: "2026-09-27T09:00:00.000Z",
+      shifted: false,
+    });
+    // El caso del 10-11: pedido desde el 27-09, la más vieja del listado es del
+    // 30-09 → se espera desde el 01-10 (las del 28 al 30-09 ya no las entrega).
+    const cut = listingCoverageFloor([{ createdAt: "2026-09-30 16:20:00" }, { createdAt: "2026-11-09 08:00:00" }], from);
+    expect(cut).toMatchObject({ floorMs: Date.parse("2026-10-01T00:00:00Z"), shifted: true });
+    // Más de una semana de corrimiento no es el recorte de Shalom: se exige desde lo pedido.
+    const far = listingCoverageFloor([{ createdAt: "2026-10-20 10:00:00" }], from);
+    expect(far).toMatchObject({ floorMs: Date.parse(from) + day, shifted: false });
+    expect(LISTING_EDGE_MAX_SHIFT_DAYS).toBe(7);
+    // Sin fechas en el listado, como antes.
+    expect(listingCoverageFloor([{ createdAt: null }], from)).toEqual({ floorMs: Date.parse(from) + day, listingOldest: null, shifted: false });
   });
 });
 
