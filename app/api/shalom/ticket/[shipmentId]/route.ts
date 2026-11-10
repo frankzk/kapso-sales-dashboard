@@ -3,6 +3,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { describeShalomError } from "@/lib/shalom/client";
 import { loadStoreShalom, type StoreShalom } from "@/lib/shalom/session";
 import { shalomVoucherPdf } from "@/lib/shalom/label-cache";
+import { resolveRequestedShalomTicket, type RequestedShalomTicket } from "@/lib/shalom/requested-ticket";
 
 // El «Ticket Shalom»: el recibo vertical de tira que hasta hoy había que bajar
 // a mano desde pro.shalom.pe, envío por envío, con el botón «Descargar Ticket
@@ -20,6 +21,7 @@ import { shalomVoucherPdf } from "@/lib/shalom/label-cache";
 // Necesita descifrar credenciales (service role) → Node.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 // Un techo generoso pero finito evita que una respuesta anómala se coma la
 // memoria de la función.
@@ -38,25 +40,15 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
 
   const { data: shipment } = await sb
     .from("shipments")
-    .select("store_id,courier,shalom_ose_id")
+    .select("id,store_id,courier,guide_code,shalom_ose_id,created_at")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipment) return new NextResponse("forbidden", { status: 403 });
 
-  const row = shipment as { store_id: string; courier: string; shalom_ose_id: number | null };
+  const row = shipment as RequestedShalomTicket;
   if (row.courier !== "shalom") {
     return new NextResponse("esta guía no es de Shalom", { status: 400 });
   }
-  // Las guías que entraron por el reporte Excel no tienen `ose_id`: nacieron en
-  // el panel de Shalom y sus papeles se bajan de ahí. Solo las creadas por API
-  // lo tienen, y solo esas pueden servirse acá.
-  if (!row.shalom_ose_id) {
-    return new NextResponse(
-      "Esta guía no se creó por API (llegó por el reporte), así que su ticket hay que bajarlo de pro.shalom.pe.",
-      { status: 404 },
-    );
-  }
-
   const admin = createAdminSupabase();
   const store = await loadStoreShalom(admin, row.store_id);
   if (!store?.shalom_pro_email) {
@@ -64,12 +56,14 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
   }
 
   let pdf: Uint8Array;
+  let oseId: number;
   try {
+    oseId = await resolveRequestedShalomTicket(admin, row, store as StoreShalom);
     pdf = await shalomVoucherPdf(
       admin,
       row.store_id,
       store as StoreShalom,
-      row.shalom_ose_id as number,
+      oseId,
     );
   } catch (err) {
     return new NextResponse(describeShalomError(err), { status: 502 });
@@ -77,6 +71,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
 
   if (pdf.byteLength > MAX_BYTES) {
     return new NextResponse("el ticket llegó con un tamaño inesperado", { status: 502 });
+  }
+  if (new TextDecoder().decode(pdf.subarray(0, 5)) !== "%PDF-") {
+    return new NextResponse("Shalom no devolvió un ticket PDF válido.", { status: 502 });
   }
 
   return new NextResponse(pdf as unknown as BodyInit, {
@@ -86,7 +83,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ shipmentId
       "x-content-type-options": "nosniff",
       // `inline` para que se abra en el visor y se imprima de una; el nombre
       // sale con el nº de orden para que el PDF descargado sea identificable.
-      "content-disposition": `inline; filename="ticket-shalom-${row.shalom_ose_id}.pdf"`,
+      "content-disposition": `inline; filename="ticket-shalom-${oseId}.pdf"`,
       // Privado: es un documento de un pedido concreto, no cachear en compartido.
       "cache-control": "private, max-age=300",
     },

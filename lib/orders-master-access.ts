@@ -25,6 +25,7 @@ import { orderPuntoSource, puntoCollect, type OrderPuntoSource, type PuntoCollec
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
+import { loadShalomUnrecognized } from "@/lib/shalom/check-queue";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { loadAliclikOutlook } from "@/lib/aliclik-outlook-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
@@ -1241,7 +1242,7 @@ export async function getOrderMasterDetail(
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments, shalomUnrecognized] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1275,6 +1276,7 @@ export async function getOrderMasterDetail(
       },
       () => null,
     ),
+    loadShalomUnrecognized(sb, guides.filter((guide) => guide.courier === "shalom").map((guide) => guide.id)),
   ]);
   const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
   return {
@@ -1361,6 +1363,7 @@ export async function getOrderMasterDetail(
         // limitarse a decir que hay una.
         guideCode: guide.guide_code,
         shortCode: guide.shalom_codigo ?? null,
+        shalomUnrecognized: shalomUnrecognized.has(guide.id),
         pickupState: guide.pickup_state,
         swaypState: guide.swayp_state ?? null,
         reportedStatus: guide.reported_status ?? null,

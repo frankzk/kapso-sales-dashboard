@@ -2111,14 +2111,14 @@ export function OrderDrawer({
                               <a href={`/api/shalom/label/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
                                 Solo Shalom
                               </a>
-                              {/* El «Ticket Shalom», el recibo de tira del
-                                  mostrador. No es el rótulo: es el otro papel, el
-                                  que hasta ahora había que bajar a mano de
-                                  pro.shalom.pe envío por envío. */}
-                              <a href={`/api/shalom/ticket/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
-                                Ticket
-                              </a>
                             </>
+                          )}
+                          {/* A linked manual guide may still need its OSE ID.
+                              The authenticated ticket route resolves only this guide. */}
+                          {g.courier === "shalom" && g.guide_code && (
+                            <a href={`/api/shalom/ticket/${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK_QUIET}>
+                              Ticket
+                            </a>
                           )}
                           {g.qr_token && !notDelivered && (
                             <a href={`/api/pedidos/rotulos?ids=${g.id}`} target="_blank" rel="noreferrer" className={DOC_LINK}>

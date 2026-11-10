@@ -11431,6 +11431,18 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    fallar. La ventana era de 30 días y bajó a **7** el 10-10-2026: el ticket
    sirve a los avisos de la primera semana, y una sola guía vieja que el
    listado nunca resuelve hacía releer diez días de listado cada media hora.
+
+   **Ticket a pedido de una guía concreta (10-11-2026).** #KP201035 reutilizó
+   la salida del 01-11 al vincular 102371814 / W9NH el 10-11. Su rastreo ya
+   contestó «Disponible para recojo», pero el relleno automático del OSE ID
+   la deja fuera por la fecha original de la salida. «Ticket» se ofrece
+   también sin OSE ID: su ruta exige sesión y RLS antes de leer la cuenta de
+   Shalom, busca la guía solicitada y verifica su identificador con las guías
+   conocidas de esa misma tienda. Solo completa esa fila, condicionada al
+   número de guía aún vigente y a que no tenga OSE ID. No amplía la cola de
+   siete días, no cambia estados ni pagos y no manda mensajes. Un listado
+   incompleto, un identificador ambiguo o una guía cambiada se rechazan; el
+   documento se sirve como PDF privado mediante la caché de siempre.
 8. **Si nadie la registra, la registra Cotejar Shalom** (10-10-2026). Ver abajo.
 
 #### Cotejar Shalom: la guía hecha a mano que nadie registró (decidido el 10-10-2026)
@@ -11816,8 +11828,12 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
 **Acceso desde Mesa de ruta (10-11-2026).** En #KP201035 el modal ya permitía
 reemplazar la guía no reconocida, pero su tarjeta bloqueaba «Abrir Shalom» por
 la salida activa y no se podía llegar al formulario. La tarjeta de Shalom
-muestra además **«Ya la creé en Shalom Pro»** cuando hay una guía activa,
-que abre directamente el registro
+muestra además **«Ya la creé en Shalom Pro»** solo cuando la guía activa está
+confirmada como no reconocida (6 respuestas `not_found` y al menos 24 h) y no
+hay otra salida viva que impida reemplazarla. Una guía con seguimiento normal,
+como #KP204484 «En tránsito», no muestra ese botón ni invita a reemplazarla:
+remite a «Salidas y guías». Sin confirmación o si falla su lectura, el atajo no
+se ofrece. Cuando corresponde, abre directamente el registro
 manual aunque crear otra guía esté bloqueado. Respeta el permiso de guías
 Shalom y el cierre del pedido; el servidor mantiene las comprobaciones de
 guía única, otras salidas vivas y guía no reconocida. Abrirlo no crea, anula ni
