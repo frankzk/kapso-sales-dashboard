@@ -12107,7 +12107,17 @@ vincula nada: se hace al confirmar «Vincular guía externa», por el mismo cami
   Olva lo tuvo**. El portal de clientes de Olva (atc.olvaexpress.pe →
   Reportes → Seguimiento de envíos) sí lista todos los envíos de la cuenta de
   la empresa, con destinatario, distrito, dirección y fecha de registro.
-- **Qué hace.** «Cotejar Olva» (menú lateral, con permiso de logística) entra
+- **Dónde está (10-11-2026).** **«Cotejar Olva» vive dentro de «Pago de
+  diferencia»** (§44): pestañas «Bandeja», «Cotejar Olva» y «Correos de Olva»
+  en `/dashboard/pedidos/pago-diferencia` (`?vista=olva`, `?vista=correos`).
+  Ya no tiene entrada propia en el menú; `/dashboard/olva` lleva allí con su
+  vista. El número de envíos por vincular va en la pestaña y en la entrada
+  «Pago de diferencia» del menú, para todo el que ve pedidos. Vincular sigue
+  pidiendo «Gestionar pedidos» (`master.edit`): quien cobra la diferencia
+  también vincula (owner, 10-11-2026). Por qué juntos: sin tracking, Kapta no
+  sabe cuándo el paquete de Olva llega a la agencia y el pedido no entra a la
+  bandeja.
+- **Qué hace.** «Cotejar Olva» (antes en el menú lateral, con permiso de logística) entra
   al portal con la cuenta de la empresa, trae los envíos de los **últimos 7
   días** y pone el tracking en las salidas de Olva **sin tracking** de todas
   las tiendas de la organización. Corre **solo cada dos horas, de 7 a 19 h de
@@ -26169,7 +26179,9 @@ que deben más 76 ya pagados que solo esperan el recojo):
   clienta ya lo recogió y falta cobrar. Medido: 122.
 
 Y una cuarta pestaña, **«Todos»**, que suma los tres grupos y es **la que
-abre por defecto** (owner, 10-11-2026); cada fila dice de qué grupo es.
+abre por defecto** (owner, 10-11-2026); cada fila dice de qué grupo es. Los
+grupos van en control segmentado, bajo las vistas de la página: «Bandeja»,
+«Cotejar Olva» y «Correos de Olva» (§12, «Dónde está»).
 
 Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
 Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en

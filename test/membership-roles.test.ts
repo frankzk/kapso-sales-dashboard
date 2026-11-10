@@ -154,7 +154,6 @@ describe("el menú", () => {
       "/dashboard/costos",
       "/dashboard/courier",
       "/dashboard/urpi",
-      "/dashboard/olva",
       "/dashboard/team",
       "/dashboard/automatizaciones",
       "/dashboard/stores/new",

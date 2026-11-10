@@ -53,7 +53,8 @@ const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label:
 const PREPAY_LIST_ITEM: NavItem = { href: LN_PATH, label: LN_NAME, icon: IconMoney };
 /**
  * «Pago de diferencia» (MOM §44): los pedidos de Agencia que esperan el pago
- * de lo que falta, con la última gestión del equipo. La ve todo el que ve
+ * de lo que falta, con la última gestión del equipo, y desde el 10-11-2026
+ * «Cotejar Olva» adentro (ya no tiene entrada propia). La ve todo el que ve
  * pedidos, en sus tiendas. Gana al Master por el prefijo más largo.
  */
 const PAGO_DIFERENCIA_ITEM: NavItem = { href: "/dashboard/pedidos/pago-diferencia", label: "Pago de diferencia", icon: IconMoney };
@@ -107,7 +108,6 @@ export function navItems(
     if (canManageLogistics) {
       items.push({ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck });
       items.push({ href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck });
-      items.push({ href: "/dashboard/olva", label: "Cotejar Olva", icon: IconTruck });
     }
     return items;
   }
@@ -142,8 +142,6 @@ export function navItems(
       ? [
         { href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck },
         { href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck },
-        // Pega el tracking de Olva a las salidas que no lo tienen (MOM §12).
-        { href: "/dashboard/olva", label: "Cotejar Olva", icon: IconTruck },
       ]
       : []),
     ...(access.team ? [{ href: "/dashboard/team", label: "Equipo", icon: IconUsers }] : []),
