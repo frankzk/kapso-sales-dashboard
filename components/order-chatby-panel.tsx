@@ -14,7 +14,10 @@ import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton, SECTION_CARD, SectionHead, Skeleton, opsButtonClass } from "@/components/ops-ui";
 import { IconAlert, IconArrowUpRight, IconChat, IconCheck, IconCopy, IconImage, IconMapPin, IconRepeat } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
-import { loadOrderChatby, sendOrderChatbyReply } from "@/app/dashboard/pedidos/actions";
+import { createOrderChatbyUpload, loadOrderChatby, sendOrderChatbyReply } from "@/app/dashboard/pedidos/actions";
+import { createBrowserSupabase } from "@/lib/supabase-browser";
+import { fitWithin } from "@/lib/photo-resize";
+import { CHATBY_ATTACHMENT_BUCKET, type ChatbyAttachmentRequest } from "@/lib/chatby-attachments";
 import {
   CHATBY_MESSAGES_LIMIT,
   CHATBY_REPLY_MAX,
@@ -194,6 +197,66 @@ type LoadState = { status: "cargando" } | { status: "listo"; result: LoadResult 
 
 const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
 
+/** Una foto (que se pueda pasar a JPG) o un PDF. */
+function acceptedChatbyFile(f: File): boolean {
+  return f.type === "application/pdf" || /\.pdf$/i.test(f.name) || ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(f.type);
+}
+
+/**
+ * WhatsApp solo recibe fotos JPG o PNG de hasta 5 MB: un WEBP (así guarda
+ * Chrome muchas capturas) o una foto pesada se pasa a JPG en el navegador.
+ */
+async function chatbyReadyFile(file: File): Promise<File> {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  if (isPdf) return file.type === "application/pdf" ? file : new File([file], file.name, { type: "application/pdf" });
+  const okAsIs = (file.type === "image/jpeg" || file.type === "image/png") && file.size <= 4.5 * 1024 * 1024;
+  if (okAsIs) return file;
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return file;
+  try {
+    const { width, height } = fitWithin(bitmap.width, bitmap.height, 2000);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const g = canvas.getContext("2d", { alpha: false });
+    if (!g) return file;
+    g.fillStyle = "#fff";
+    g.fillRect(0, 0, width, height);
+    g.drawImage(bitmap, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    return blob ? new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
+  } finally {
+    bitmap.close();
+  }
+}
+
+/** Sube el adjunto directo a Storage con la URL firmada del servidor. */
+async function uploadChatbyAttachment(orderId: string, original: File): Promise<{ path: string } | { error: string }> {
+  const file = await chatbyReadyFile(original);
+  const prep = await createOrderChatbyUpload(orderId, file.type, file.size);
+  if ("error" in prep) return { error: prep.error };
+  const { error } = await createBrowserSupabase()
+    .storage.from(CHATBY_ATTACHMENT_BUCKET)
+    .uploadToSignedUrl(prep.path, prep.token, file, { contentType: file.type });
+  if (error) return { error: `No se pudo subir el archivo: ${error.message}` };
+  return { path: prep.path };
+}
+
+/** La URL local de la foto elegida, para enseñarla antes de mandarla. */
+function useObjectUrl(file: File | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file) {
+      setUrl(null);
+      return;
+    }
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+  return url;
+}
+
 /** «Hoy 18:20», «Ayer 09:12» o «03-11-2026 10:05», en Lima. */
 function whenInLima(iso: string): string {
   const day = chatbyLimaDay(iso);
@@ -211,16 +274,24 @@ function ReplyBox({
   messages,
   inboxUrl,
   onSent,
+  shalomTicket = null,
 }: {
   orderId: string;
   messages: ChatbyMessage[];
   inboxUrl: string;
   /** Salió: el panel vuelve a leer la conversación y muestra el aviso. */
   onSent: (notice: string) => void;
+  shalomTicket?: { guideCode: string | null } | null;
 }) {
   const [text, setText] = useState("");
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<null | "texto" | "ticket">(null);
   const [error, setError] = useState<string | null>(null);
+  // El adjunto (owner 10-11-2026): una foto o un PDF, elegido, arrastrado o
+  // pegado con Ctrl+V dentro de la caja (lib/chatby-attachments.ts).
+  const [file, setFile] = useState<File | null>(null);
+  const [over, setOver] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const preview = useObjectUrl(file && file.type.startsWith("image/") ? file : null);
   const ventana = chatbyReplyWindow(messages);
 
   if (!ventana.open) {
@@ -238,24 +309,73 @@ function ReplyBox({
     );
   }
 
-  const send = () => {
-    setPending(true);
+  const pick = (incoming: File | null | undefined) => {
+    if (!incoming) return;
+    if (!acceptedChatbyFile(incoming)) {
+      setError("Solo se pueden mandar fotos o PDF.");
+      return;
+    }
     setError(null);
-    sendOrderChatbyReply(orderId, text)
-      .then((result) => {
-        if (result.error) {
-          setError(result.error);
+    setFile(incoming);
+  };
+
+  const send = async (mode: "texto" | "ticket") => {
+    setPending(mode);
+    setError(null);
+    try {
+      let attachment: ChatbyAttachmentRequest | null = null;
+      if (mode === "ticket") {
+        attachment = { kind: "shalom_ticket" };
+      } else if (file) {
+        const uploaded = await uploadChatbyAttachment(orderId, file);
+        if ("error" in uploaded) {
+          setError(uploaded.error);
           return;
         }
-        setText("");
-        onSent(result.notice ?? "Mensaje enviado.");
-      })
-      .catch(() => setError("No hubo respuesta de Kapta. El mensaje puede no haber salido: revísalo con «Actualizar»."))
-      .finally(() => setPending(false));
+        attachment = { kind: "upload", path: uploaded.path, filename: file.name };
+      }
+      const result = await sendOrderChatbyReply(orderId, text, { attachment });
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setText("");
+      if (mode === "texto") setFile(null);
+      onSent(result.notice ?? "Mensaje enviado.");
+    } catch {
+      setError("No hubo respuesta de Kapta. El mensaje puede no haber salido: revísalo con «Actualizar».");
+    } finally {
+      setPending(null);
+    }
   };
 
   return (
-    <div className="space-y-2">
+    <div
+      className={cn("space-y-2 rounded-lg transition-colors", over && "bg-brand-50 ring-2 ring-brand-500 ring-offset-4")}
+      onPaste={(e) => {
+        const pasted = Array.from(e.clipboardData?.files ?? []).find(acceptedChatbyFile);
+        if (!pasted) return;
+        // Con texto e imagen en el portapapeles, en el cuadro de texto gana el texto.
+        if (e.target instanceof HTMLTextAreaElement && e.clipboardData.getData("text/plain").trim()) return;
+        e.preventDefault();
+        pick(pasted);
+      }}
+      onDragOver={(e) => {
+        if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={(e) => {
+        setOver(false);
+        const dropped = Array.from(e.dataTransfer.files).find(acceptedChatbyFile);
+        if (!dropped) return;
+        e.preventDefault();
+        pick(dropped);
+      }}
+    >
       <label className="grid gap-1.5 text-[13px] font-medium text-ink-700">
         Responder por WhatsApp
         <textarea
@@ -263,18 +383,65 @@ function ReplyBox({
           onChange={(e) => setText(e.target.value)}
           rows={3}
           maxLength={CHATBY_REPLY_MAX}
-          placeholder="Escribe tu mensaje para la clienta…"
+          placeholder={file ? "Mensaje que acompaña al archivo (opcional)…" : "Escribe tu mensaje para la clienta…"}
           className={TEXTAREA}
         />
       </label>
-      <div className="flex flex-wrap items-center gap-3">
-        <OpsButton variant="primary" disabled={pending || !text.trim()} onClick={send} className="pointer-coarse:h-11">
+      {file ? (
+        <div className="flex items-center gap-3 rounded-md bg-wash p-2 ring-1 ring-line">
+          {preview ? (
+            <img src={preview} alt="Foto adjunta" className="size-14 rounded object-cover ring-1 ring-line" />
+          ) : (
+            <span className="grid size-14 place-items-center rounded bg-white text-xs font-semibold text-ink-600 ring-1 ring-line">PDF</span>
+          )}
+          <p className="min-w-0 flex-1 truncate text-[13px] text-ink-700" title={file.name}>
+            <span className="font-medium text-ink-900">{file.name}</span> · {Math.max(1, Math.round(file.size / 1024))} KB
+          </p>
+          <OpsButton size="sm" variant="ghost" disabled={pending !== null} onClick={() => setFile(null)} className="pointer-coarse:h-11">
+            Quitar
+          </OpsButton>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <OpsButton
+          variant="primary"
+          disabled={pending !== null || (!text.trim() && !file)}
+          onClick={() => void send("texto")}
+          className="pointer-coarse:h-11"
+        >
           <IconChat aria-hidden />
-          {pending ? "Enviando…" : "Enviar por WhatsApp"}
+          {pending === "texto" ? (file ? "Subiendo y enviando…" : "Enviando…") : "Enviar por WhatsApp"}
         </OpsButton>
+        <OpsButton size="sm" disabled={pending !== null} onClick={() => fileRef.current?.click()} className="pointer-coarse:h-11">
+          <IconImage aria-hidden className="text-ink-500" />
+          {file ? "Cambiar archivo" : "Adjuntar foto o PDF"}
+        </OpsButton>
+        {shalomTicket && (
+          <OpsButton
+            size="sm"
+            disabled={pending !== null}
+            onClick={() => void send("ticket")}
+            className="pointer-coarse:h-11"
+            title="El ticket de la guía Shalom, el que la clienta muestra en la agencia para recoger. Si escribiste un mensaje, va como pie."
+          >
+            {pending === "ticket" ? "Enviando ticket…" : `Enviar ticket Shalom (PDF)${shalomTicket.guideCode ? ` · ${shalomTicket.guideCode}` : ""}`}
+          </OpsButton>
+        )}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,application/pdf,.pdf,.webp"
+          className="hidden"
+          onChange={(e) => {
+            pick(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
         <p className="text-xs leading-4 text-ink-500">
           Sale como persona del equipo. El bot de esta clienta queda en pausa {CHATBY_REPLY_PAUSE_MINUTES} minutos. Se puede
-          escribir hasta: {whenInLima(ventana.closesAt)}.
+          escribir hasta: {whenInLima(ventana.closesAt)}. Una captura se pega aquí con Ctrl+V.
         </p>
       </div>
       {error && (
@@ -411,9 +578,15 @@ export function OrderChatbyPanel({
   phone = null,
   canEdit = false,
   onCustomerMessages,
+  shalomTicket = null,
 }: {
   orderId: string;
   orderName: string | null;
+  /**
+   * La guía Shalom creada por API (no anulada) cuyo ticket se puede mandar en
+   * PDF desde «Responder por WhatsApp»; null si no hay (lib/chatby-attachments.ts).
+   */
+  shalomTicket?: { guideCode: string | null } | null;
   /** El celular de la clienta, en grande y con «Copiar celular» arriba de la conversación. */
   phone?: string | null;
   /** Quien puede editar el pedido también puede responderle a la clienta (`master.edit`). */
@@ -522,7 +695,15 @@ export function OrderChatbyPanel({
             ) : (
               <p className="text-sm text-ink-600">La conversación de esta clienta en Chatby está vacía.</p>
             )}
-            {canEdit && <ReplyBox orderId={orderId} messages={result.messages} inboxUrl={result.inboxUrl} onSent={onSent} />}
+            {canEdit && (
+              <ReplyBox
+                orderId={orderId}
+                messages={result.messages}
+                inboxUrl={result.inboxUrl}
+                onSent={onSent}
+                shalomTicket={shalomTicket}
+              />
+            )}
           </div>
         ) : result?.status === "sin_conversacion" ? (
           <p className="text-sm text-ink-600">Esta clienta no tiene conversación en Chatby.</p>

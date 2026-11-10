@@ -15320,6 +15320,33 @@ estables:
      `app/dashboard/pedidos/actions.ts`, `sendChatbyReply` y
      `forgetChatbyConversation` en `lib/chatby-api.ts`, `ReplyBox` en
      `components/order-chatby-panel.tsx`. Pruebas: `test/chatby-reply.test.ts`.
+   - **Archivos y el ticket Shalom en PDF (10-11-2026, pedido del equipo vía
+     el owner: «actívame para poder enviar desde ahí la guía en PDF al
+     responder por Chatby»).** Dentro de las mismas 24 h y con la misma pausa
+     del bot:
+     - **«Enviar ticket Shalom (PDF)»**, solo si el pedido tiene una guía
+       Shalom creada por API (`shipments.shalom_ose_id`) y no anulada; la más
+       nueva. Es el ticket que la clienta muestra en la agencia para recoger
+       («envíame el baucher para recogerlo»), no el rótulo de la caja. Sale
+       del caché de tickets (`shalomVoucherPdf`, se baja de Shalom la primera
+       vez) con una URL firmada de 7 días. Una guía que llegó por el reporte
+       no tiene ticket en Kapta: el aviso manda a pro.shalom.pe.
+     - **«Adjuntar foto o PDF»**: se elige, se arrastra o se **pega con
+       Ctrl+V** dentro de la caja. Fotos JPG o PNG de hasta 5 MB (un WEBP o
+       una foto pesada se pasa a JPG en el navegador) y PDF de hasta 16 MB. El
+       navegador lo sube directo a Storage (bucket privado
+       `chatby-attachments`, `<tienda>/<pedido>/chatby-…`, se crea solo: sin
+       migración) y el servidor solo acepta rutas de ese pedido que existan.
+     - **Cómo sale:** el archivo como un mensaje más de `send-content`
+       (`{type: "image" | "file", url}`), antes del texto; con un archivo el
+       texto es opcional y va como pie.
+     - **Queda en la Actividad** como «Mensaje por WhatsApp (Chatby)»: el
+       texto, o «Envió el ticket Shalom en PDF (guía …)» / «Envió un archivo:
+       …» si no hubo texto, con `payload.attachment` (qué se mandó).
+     Implementación: `lib/chatby-attachments.ts`, `resolveChatbyAttachment` y
+     `createOrderChatbyUpload` en `app/dashboard/pedidos/actions.ts`,
+     `chatbyReplyMessages` en `lib/chatby-api.ts`. Pruebas:
+     `test/chatby-attachments.test.ts`.
 6. **Kapso (08-11-2026, pedido del owner):** la conversación de WhatsApp de la
    clienta con el **bot de Kapso** de la tienda, **solo para leer**, junto a
    «Chatby». El owner la pidió con #KP204280: seguía «Pendiente» en Kapta
