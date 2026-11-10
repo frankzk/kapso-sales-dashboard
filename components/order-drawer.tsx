@@ -966,6 +966,7 @@ export function OrderDrawer({
   const [notice, setNotice] = useState<string | null>(null);
   const [tandersOpen, setTandersOpen] = useState(false);
   const [shalomOpen, setShalomOpen] = useState(false);
+  const [shalomInitialMode, setShalomInitialMode] = useState<"api" | "manual">("api");
   const [swaypOpen, setSwaypOpen] = useState(false);
   /** `por_confirmar` cuando lo abre el botón de la mesa de confirmación (§11.11). */
   const [swaypOrigen, setSwaypOrigen] = useState<"por_confirmar" | undefined>(undefined);
@@ -1198,6 +1199,7 @@ export function OrderDrawer({
       return;
     }
     if (route.action === "shalom") {
+      setShalomInitialMode("api");
       setShalomOpen(true);
       return;
     }
@@ -1933,6 +1935,10 @@ export function OrderDrawer({
                   onJump={jumpTo}
                   actionEnabled={routeEnabled}
                   onSelect={selectRoute}
+                  onRegisterShalom={() => {
+                    setShalomInitialMode("manual");
+                    setShalomOpen(true);
+                  }}
                   aliclikOutlook={detail.aliclikOutlook}
                   storeName={storeName(detail.row.store_id)}
                   groupGf={{
@@ -2759,6 +2765,7 @@ export function OrderDrawer({
       {shalomOpen && (
         <ShalomGuideModal
           orderId={orderId}
+          initialMode={shalomInitialMode}
           onClose={() => setShalomOpen(false)}
           onCreated={() => {
             void reload();

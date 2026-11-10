@@ -43,6 +43,7 @@ export function OrderRouteDesk({
   onJump,
   actionEnabled,
   onSelect,
+  onRegisterShalom,
   aliclikOutlook,
   storeName,
   groupGf,
@@ -61,6 +62,8 @@ export function OrderRouteDesk({
   onJump?: (target: RouteDeskBlocker["target"]) => void;
   actionEnabled: (route: RouteCandidate) => boolean;
   onSelect: (route: RouteCandidate) => void;
+  /** Opens registration of an existing guide, independently of creation. */
+  onRegisterShalom?: () => void;
   /** Cuántas guías de Aliclik se entregan según los días del pedido (09-10-2026). */
   aliclikOutlook?: AliclikOutlook | null;
   storeName?: string | null;
@@ -225,6 +228,17 @@ export function OrderRouteDesk({
                   ? "Ver en Grupo GF"
                   : ACTION_LABEL[route.action]
                 : "Sin permiso"}
+          </OpsButton>
+        )}
+        {route.action === "shalom" && route.blockingOutput && onRegisterShalom && (
+          <OpsButton
+            size="sm"
+            variant="ghost"
+            disabled={closed || !actionEnabled(route)}
+            onClick={onRegisterShalom}
+            className="mt-2 self-start pointer-coarse:h-11"
+          >
+            Ya la creé en Shalom Pro
           </OpsButton>
         )}
       </article>

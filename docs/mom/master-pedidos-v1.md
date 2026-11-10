@@ -11813,6 +11813,17 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   guía muerta (`conGuiaMuerta`) y cuántos vinculados la reemplazaron
   (`reemplazados`); en `detalle`, `resultado: "reemplazado"` con `reemplaza`.
 
+**Acceso desde Mesa de ruta (10-11-2026).** En #KP201035 el modal ya permitía
+reemplazar la guía no reconocida, pero su tarjeta bloqueaba «Abrir Shalom» por
+la salida activa y no se podía llegar al formulario. La tarjeta de Shalom
+muestra además **«Ya la creé en Shalom Pro»** cuando hay una guía activa,
+que abre directamente el registro
+manual aunque crear otra guía esté bloqueado. Respeta el permiso de guías
+Shalom y el cierre del pedido; el servidor mantiene las comprobaciones de
+guía única, otras salidas vivas y guía no reconocida. Abrirlo no crea, anula ni
+vincula nada: se hace al confirmar «Vincular guía externa», por el mismo camino
+único descrito arriba. «Abrir Shalom» conserva la entrada a creación por API.
+
 #### Por qué «Crear guía» no se deja pulsar (decidido el 06-11-2026)
 
 - **El caso.** #KP202968: adelanto de S/ 30 por Yape validado
