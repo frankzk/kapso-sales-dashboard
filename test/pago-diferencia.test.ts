@@ -197,6 +197,8 @@ describe("Pago de diferencia (MOM §44)", () => {
     const tray = readFileSync("components/pago-diferencia-tray.tsx", "utf8");
     expect(tray).toContain('const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos"];');
     expect(tray).toContain('group === "todos" ? rows : rows.filter((r) => r.group === group)');
+    // Abre en «Todos» (owner, 10-11-2026).
+    expect(tray).toContain('useState<GroupTab>("todos")');
   });
 
   it("el menú la lleva y el MOM la documenta", () => {

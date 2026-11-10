@@ -1,5 +1,9 @@
 # Deployment runbook
 
+### 10-11-2026 · «Pago de diferencia» abre en «Todos» (MOM §44)
+
+**Sin migración.** Solo cambia la pestaña con que abre la bandeja.
+
 ### 10-11-2026 · «Comentario» sale de «Gestión manual» (MOM §43) y Cotejar Shalom mide el borde día por día (MOM §12)
 
 **Sin migración.**
