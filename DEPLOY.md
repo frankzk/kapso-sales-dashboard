@@ -1,5 +1,12 @@
 # Deployment runbook
 
+### 10-11-2026 · «Pago de diferencia»: pestañas En agencia, En camino y Recogidos sin pago (MOM §44)
+
+**Sin migración.** La bandeja suma «En camino» (Agencia en tránsito o en
+destino sin pago completo) y «Recogidos sin pago»
+(`recogido_sin_pago_completo`). «En agencia» sigue siendo la vista con que
+abre. La nota de corregir la dirección deja de contar como gestión.
+
 ### 10-11-2026 · Cotejar Shalom: el borde viejo del listado se mide con lo que Shalom trae (MOM §12)
 
 **Sin migración.** Desde la siguiente pasada del cron `shalom-cotejo`, la
