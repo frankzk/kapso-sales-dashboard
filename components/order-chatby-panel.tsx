@@ -17,7 +17,7 @@ import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { createOrderChatbyUpload, loadOrderChatby, sendOrderChatbyReply } from "@/app/dashboard/pedidos/actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { fitWithin } from "@/lib/photo-resize";
-import { CHATBY_ATTACHMENT_BUCKET, type ChatbyAttachmentRequest } from "@/lib/chatby-attachments";
+import { CHATBY_ATTACHMENT_BUCKET, chatbyTakesPagePaste, type ChatbyAttachmentRequest } from "@/lib/chatby-attachments";
 import {
   CHATBY_MESSAGES_LIMIT,
   CHATBY_REPLY_MAX,
@@ -197,6 +197,15 @@ type LoadState = { status: "cargando" } | { status: "listo"; result: LoadResult 
 
 const TEXTAREA = cn(FIELD, "h-auto py-2 leading-5");
 
+/** Un campo donde se escribe (ahí, lo pegado es de ese campo y no un adjunto). */
+function isTypingField(target: EventTarget | null): boolean {
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target instanceof HTMLInputElement) {
+    return !["checkbox", "radio", "button", "submit", "reset", "file", "range", "color", "image"].includes(target.type);
+  }
+  return target instanceof HTMLElement && target.isContentEditable;
+}
+
 /** Una foto (que se pueda pasar a JPG) o un PDF. */
 function acceptedChatbyFile(f: File): boolean {
   return f.type === "application/pdf" || /\.pdf$/i.test(f.name) || ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(f.type);
@@ -287,12 +296,42 @@ function ReplyBox({
   const [pending, setPending] = useState<null | "texto" | "ticket">(null);
   const [error, setError] = useState<string | null>(null);
   // El adjunto (owner 10-11-2026): una foto o un PDF, elegido, arrastrado o
-  // pegado con Ctrl+V dentro de la caja (lib/chatby-attachments.ts).
+  // pegado con Ctrl+V, en la caja o en cualquier parte de la pestaña Chatby
+  // (lib/chatby-attachments.ts).
   const [file, setFile] = useState<File | null>(null);
   const [over, setOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const preview = useObjectUrl(file && file.type.startsWith("image/") ? file : null);
   const ventana = chatbyReplyWindow(messages);
+  const ventanaAbierta = ventana.open;
+
+  // Ctrl+V sin hacer clic antes en la caja (owner 10-11-2026): con la pestaña
+  // Chatby a la vista, una foto, captura o PDF pegado en la página se adjunta.
+  // Lo que cae dentro de la caja lo maneja su onPaste; en otro campo, el
+  // pegado es de ese campo.
+  useEffect(() => {
+    if (!ventanaAbierta) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const box = boxRef.current;
+      if (!box) return;
+      const target = e.target instanceof Node ? e.target : null;
+      const takes = chatbyTakesPagePaste({
+        handled: e.defaultPrevented,
+        boxVisible: box.getClientRects().length > 0,
+        insideBox: target !== null && box.contains(target),
+        editableElsewhere: isTypingField(e.target),
+      });
+      if (!takes) return;
+      const pasted = Array.from(e.clipboardData?.files ?? []).find(acceptedChatbyFile);
+      if (!pasted) return;
+      e.preventDefault();
+      setError(null);
+      setFile(pasted);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [ventanaAbierta]);
 
   if (!ventana.open) {
     return (
@@ -351,6 +390,7 @@ function ReplyBox({
 
   return (
     <div
+      ref={boxRef}
       className={cn("space-y-2 rounded-lg transition-colors", over && "bg-brand-50 ring-2 ring-brand-500 ring-offset-4")}
       onPaste={(e) => {
         const pasted = Array.from(e.clipboardData?.files ?? []).find(acceptedChatbyFile);
@@ -412,7 +452,13 @@ function ReplyBox({
           <IconChat aria-hidden />
           {pending === "texto" ? (file ? "Subiendo y enviando…" : "Enviando…") : "Enviar por WhatsApp"}
         </OpsButton>
-        <OpsButton size="sm" disabled={pending !== null} onClick={() => fileRef.current?.click()} className="pointer-coarse:h-11">
+        <OpsButton
+          size="sm"
+          disabled={pending !== null}
+          onClick={() => fileRef.current?.click()}
+          className="pointer-coarse:h-11"
+          title="Elegir una foto o un PDF. También se puede pegar con Ctrl+V en cualquier parte de esta pestaña o arrastrarlo aquí."
+        >
           <IconImage aria-hidden className="text-ink-500" />
           {file ? "Cambiar archivo" : "Adjuntar foto o PDF"}
         </OpsButton>
@@ -441,7 +487,7 @@ function ReplyBox({
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-xs leading-4 text-ink-500">
           Sale como persona del equipo. El bot de esta clienta queda en pausa {CHATBY_REPLY_PAUSE_MINUTES} minutos. Se puede
-          escribir hasta: {whenInLima(ventana.closesAt)}. Una captura se pega aquí con Ctrl+V.
+          escribir hasta: {whenInLima(ventana.closesAt)}. Una foto, captura o PDF se adjunta con Ctrl+V en cualquier parte de esta pestaña, sin hacer clic antes.
         </p>
       </div>
       {error && (

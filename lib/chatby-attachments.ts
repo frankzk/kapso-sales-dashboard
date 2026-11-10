@@ -70,6 +70,23 @@ export function chatbyAttachmentDisplayName(name: string | null | undefined, fal
   return (base || fallback).slice(0, 80);
 }
 
+/**
+ * ¿Se queda la pestaña Chatby con un Ctrl+V que no cayó dentro de su caja?
+ * (owner 10-11-2026: «lo de adjuntar foto que también sea con Control + V»,
+ * sin tener que hacer clic antes en la caja). Sí, si la caja está a la vista
+ * (la pestaña Chatby abierta, no escondida detrás de otra), nadie más usó el
+ * pegado y no se estaba escribiendo en otro campo: ahí, lo pegado es de ese
+ * campo. Lo que cae dentro de la caja lo maneja la caja misma.
+ */
+export function chatbyTakesPagePaste(input: {
+  handled: boolean;
+  boxVisible: boolean;
+  insideBox: boolean;
+  editableElsewhere: boolean;
+}): boolean {
+  return !input.handled && input.boxVisible && !input.insideBox && !input.editableElsewhere;
+}
+
 /** Lo que pide la ficha: el ticket Shalom o un adjunto ya subido. */
 export type ChatbyAttachmentRequest =
   | { kind: "shalom_ticket" }

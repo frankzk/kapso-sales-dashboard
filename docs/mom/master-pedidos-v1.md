@@ -15344,7 +15344,10 @@ estables:
        vez) con una URL firmada de 7 días. Una guía que llegó por el reporte
        no tiene ticket en Kapta: el aviso manda a pro.shalom.pe.
      - **«Adjuntar foto o PDF»**: se elige, se arrastra o se **pega con
-       Ctrl+V** dentro de la caja. Fotos JPG o PNG de hasta 5 MB (un WEBP o
+       Ctrl+V** dentro de la caja o en cualquier parte de la pestaña Chatby, sin
+       hacer clic antes (owner 10-11-2026). Fuera de la caja solo cuenta con la
+       pestaña Chatby a la vista y si no se estaba escribiendo en otro campo
+       (ahí, lo pegado es de ese campo). Fotos JPG o PNG de hasta 5 MB (un WEBP o
        una foto pesada se pasa a JPG en el navegador) y PDF de hasta 16 MB. El
        navegador lo sube directo a Storage (bucket privado
        `chatby-attachments`, `<tienda>/<pedido>/chatby-…`, se crea solo: sin
