@@ -436,6 +436,8 @@ function applyOutputPolicy(
         // consecutivo y obligaba a armar otra caja para el mismo paquete.
         : route.key === "propio"
         ? `${route.label} ya tiene una salida activa en este pedido${blocking.outputCode ? ` (${blocking.outputCode})` : ""}. Si no se entregó, se reprograma con esa misma salida desde Despacho del día («Desde la lista»).`
+        : route.key === "shalom"
+        ? "Shalom ya tiene una salida activa en este pedido. Si la caja salió con otra guía, usa «Ya la creé en Shalom Pro». Kapta comprueba si puede reemplazar la anterior."
         : `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
       blockingOutput: {
         id: blocking.id,

@@ -60,10 +60,12 @@ import {
  */
 export function ShalomGuideModal({
   orderId,
+  initialMode = "api",
   onClose,
   onCreated,
 }: {
   orderId: string;
+  initialMode?: "api" | "manual";
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -124,7 +126,7 @@ export function ShalomGuideModal({
 
   // Contingencia: la guía ya fue creada en pro.shalom.pe y solo se vincula.
   // Este modo no usa sesión ni llama al API de creación.
-  const [mode, setMode] = useState<"api" | "manual">("api");
+  const [mode, setMode] = useState<"api" | "manual">(initialMode);
   const [manualGuideCode, setManualGuideCode] = useState("");
   const [manualCodigo, setManualCodigo] = useState("");
   const [manualPickupCode, setManualPickupCode] = useState("");
