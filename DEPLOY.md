@@ -1,5 +1,16 @@
 # Deployment runbook
 
+### 10-11-2026 · Bandeja «Pago de diferencia» con la última gestión del equipo (MOM §44)
+
+**Sin migración.** Solo lectura.
+
+**Lo que cambia al desplegar:**
+
+- Menú «Pago de diferencia» (`/dashboard/pedidos/pago-diferencia`), debajo de
+  «Lista negra»: los pedidos en `pendiente_pago_diferencia` con lo que falta
+  pagar, los días en agencia y la última gestión (quién, cuándo, por dónde,
+  nota y fotos). Abre en «Por gestionar hoy».
+
 ### 10-11-2026 · Fotos de constancia en el comentario del pedido (MOM §43)
 
 **Sin migración.** El bucket privado `order-comment-photos` se crea solo en la
