@@ -51,6 +51,12 @@ const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label:
  * `prepay_list.manage`, que la página y sus acciones vuelven a mirar.
  */
 const PREPAY_LIST_ITEM: NavItem = { href: LN_PATH, label: LN_NAME, icon: IconMoney };
+/**
+ * «Pago de diferencia» (MOM §44): los pedidos de Agencia que esperan el pago
+ * de lo que falta, con la última gestión del equipo. La ve todo el que ve
+ * pedidos, en sus tiendas. Gana al Master por el prefijo más largo.
+ */
+const PAGO_DIFERENCIA_ITEM: NavItem = { href: "/dashboard/pedidos/pago-diferencia", label: "Pago de diferencia", icon: IconMoney };
 
 /**
  * Qué entradas de administración ve la persona, por permiso (MOM §16,
@@ -85,6 +91,7 @@ export function navItems(
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       PREPAY_LIST_ITEM,
+      PAGO_DIFERENCIA_ITEM,
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
       ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
       { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
@@ -109,6 +116,7 @@ export function navItems(
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     PREPAY_LIST_ITEM,
+    PAGO_DIFERENCIA_ITEM,
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
     ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
     // Primer contacto con la clienta cuya guía volvió (MOM §11.1). Va acá y no

@@ -143,6 +143,7 @@ describe("el menú", () => {
       "/dashboard/pagos",
       // La «Lista negra» (MOM §41): la ve todo el que ve pedidos.
       "/dashboard/clientes/lista-negra",
+      "/dashboard/pedidos/pago-diferencia",
       "/dashboard/envios",
       "/dashboard/envios/recuperacion",
       "/dashboard/envios/aliclik",
@@ -167,6 +168,7 @@ describe("el menú", () => {
       "/dashboard/leads",
       "/dashboard/pedidos",
       "/dashboard/clientes/lista-negra",
+      "/dashboard/pedidos/pago-diferencia",
       "/dashboard/envios",
       "/dashboard/envios/recuperacion",
       "/dashboard/productividad",
@@ -179,6 +181,7 @@ describe("el menú", () => {
       "/dashboard/leads",
       "/dashboard/pedidos",
       "/dashboard/clientes/lista-negra",
+      "/dashboard/pedidos/pago-diferencia",
       "/dashboard/envios",
       "/dashboard/envios/recuperacion",
       "/dashboard/productividad",

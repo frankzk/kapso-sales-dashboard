@@ -26081,3 +26081,55 @@ Código: `lib/order-comment-photos.ts`, `components/order-comment-photos.tsx`,
 `app/dashboard/pedidos/actions.ts`, y
 `app/api/pedidos/[orderId]/comentario-foto/route.ts`. Pruebas:
 `test/order-comment-photos.test.ts`.
+
+## 44. Bandeja «Pago de diferencia» (10-11-2026)
+
+Decisión del owner (10-11-2026): un lugar donde quede la gestión del equipo
+sobre los pedidos que esperan el pago de la diferencia —«ahí Gerardo, que
+tiene el usuario Gero, que quede registro de que lo llamó, intentó hacer
+contacto con el cliente»— y se vea a quién le toca contactar hoy.
+
+**Qué entra.** Los pedidos en la subetapa `pendiente_pago_diferencia` (§6.4):
+Agencia, con el paquete en la sucursal (`disponible_para_recojo`,
+`cliente_notificado`, `pendiente_de_recojo`, `proximo_a_vencer`) y sin pago
+completo validado. No se inventa ningún estado: es la misma subetapa del
+Master, en las tiendas de la persona. Medido el 10-11-2026: 178 pedidos (173
+Shalom, 5 Olva).
+
+**Qué dice cada fila.**
+
+- Pedido, tienda, cliente y celular.
+- **Falta pagar:** el total menos lo VALIDADO, sin los comprobantes
+  rechazados. Menos de S/ 1 es redondeo y no es saldo (§6.5). «Pago por
+  validar» cuando hay un comprobante cargado que nadie validó.
+- **En agencia:** días calendario de Lima desde la llegada a la sucursal (o,
+  sin ella, desde el ingreso a la subetapa), el courier, la sucursal y la
+  guía. «Plazo vencido» si la agencia informó un vencimiento que ya pasó
+  (Olva; Shalom no lo informa).
+- **Última gestión:** cuándo, quién (el nombre corto de siempre, «gero»), por
+  dónde (comentario, WhatsApp por Chatby, contacto, llamada desde Kapta o con
+  Anura), el tipo del comentario («Pago de diferencia»), la nota y cuántas
+  fotos de constancia tiene (§43). Y cuántas gestiones van.
+
+**Qué cuenta como gestión.** Solo los hechos de una PERSONA (`actor` no nulo)
+de esos tipos: `comment`, `chatby_message`, `confirmation_contact`,
+`browser_call` y `anura_call`. Lo automático y el agente de IA no cuentan.
+«Hoy» es el día calendario de Lima.
+
+**Filtros.** «Por gestionar hoy» (nadie registró nada hoy; es la vista con
+que abre), «Gestionados hoy», «Nunca gestionados» y «Todos», y un buscador
+por pedido, cliente, celular o guía. Orden: primero lo que nadie gestionó hoy;
+dentro, lo vencido o por vencer y luego lo que más espera.
+
+**Cómo se gestiona.** Un clic abre la ficha en Operar. La gestión se registra
+ahí: «Comentario» con su foto (§43), el mensaje por Chatby o la llamada. Al
+guardar, la bandeja se recarga y el pedido pasa a «Gestionados hoy».
+
+**Lo que no hace.** No escribe nada, no cambia la etapa ni libera la clave
+(eso sigue siendo validar el pago, §12) y no cuenta como intento de
+confirmación (§6.1).
+
+Código: `lib/pago-diferencia.ts` (reglas, puro), `lib/pago-diferencia-access.ts`
+(lectura), `components/pago-diferencia-tray.tsx` y
+`app/dashboard/pedidos/pago-diferencia/page.tsx`; menú «Pago de diferencia»
+debajo de «Lista negra». Pruebas: `test/pago-diferencia.test.ts`.
