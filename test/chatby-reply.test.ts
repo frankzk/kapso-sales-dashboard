@@ -174,7 +174,7 @@ describe("la ficha: quién responde y qué queda", () => {
 
   it("la caja solo sale para quien puede editar, y el drawer le pasa ese permiso", () => {
     const panel = read("components/order-chatby-panel.tsx");
-    expect(panel).toContain("{canEdit && <ReplyBox");
+    expect(panel).toMatch(/\{canEdit && \(?\s*<ReplyBox/);
     expect(panel).toContain("badge={canEdit ? undefined : <Badge>Solo lectura</Badge>}");
     expect(read("components/order-drawer.tsx")).toMatch(/<OrderChatbyPanel[\s\S]*?canEdit=\{canEdit\}/);
   });

@@ -16,6 +16,22 @@ import { returnManifestEntriesForShipments } from "@/lib/return-manifest-access"
 import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import { describeShalomError } from "@/lib/shalom/client";
+import { shalomVoucherPdf, signedDocUrl } from "@/lib/shalom/label-cache";
+import { loadStoreShalom } from "@/lib/shalom/session";
+import {
+  CHATBY_ATTACHMENT_BUCKET,
+  CHATBY_ATTACHMENT_URL_SECONDS,
+  chatbyAttachmentDisplayName,
+  chatbyAttachmentFolder,
+  chatbyAttachmentKind,
+  chatbyAttachmentNote,
+  chatbyAttachmentSizeProblem,
+  chatbyAttachmentTypeOfPath,
+  isChatbyAttachmentPath,
+  shalomTicketShipment,
+  type ChatbyAttachmentRequest,
+} from "@/lib/chatby-attachments";
 import {
   ORDER_COMMENT_PHOTO_BUCKET,
   ORDER_COMMENT_PHOTO_MAX_BYTES,
@@ -391,15 +407,21 @@ export async function loadOrderKapso(orderId: string): Promise<OrderKapsoConvers
 export async function sendOrderChatbyReply(
   orderId: string,
   rawText: string,
-  opts: { purpose?: typeof CHATBY_ASK_PURPOSE } = {},
+  opts: { purpose?: typeof CHATBY_ASK_PURPOSE; attachment?: ChatbyAttachmentRequest | null } = {},
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
-  const reply = chatbyReplyText(rawText);
+  // Con un adjunto el texto es opcional: es el pie del archivo (MOM §25).
+  const reply = opts.attachment && !rawText.trim() ? { text: "" } : chatbyReplyText(rawText);
   if ("error" in reply) return { error: reply.error };
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  // El archivo, antes de mirar la conversación: si no se puede firmar, no se
+  // manda nada (lib/chatby-attachments.ts).
+  const attachment = opts.attachment ? await resolveChatbyAttachment(ctx, orderId, opts.attachment) : null;
+  if (attachment && "error" in attachment) return { error: attachment.error };
 
   // La conversación al día (no la del minuto de caché): a quién se le escribe
   // y si la ventana de 24 h sigue abierta.
@@ -425,6 +447,7 @@ export async function sendOrderChatbyReply(
   const sent = await sendChatbyReply({
     userNs: conversation.userNs,
     text: reply.text,
+    attachment: attachment ? { type: attachment.type, url: attachment.url } : null,
     apiKey: env.chatbyApiKey(),
     pauseMinutes: CHATBY_REPLY_PAUSE_MINUTES,
   });
@@ -442,10 +465,16 @@ export async function sendOrderChatbyReply(
   const eventError = await recordEvent(admin, ctx, {
     kind: "chatby_message",
     source: "chatby",
-    reason: opts.purpose === CHATBY_ASK_PURPOSE ? "Pidió la ubicación a la clienta por WhatsApp." : null,
-    note: reply.text,
+    reason:
+      opts.purpose === CHATBY_ASK_PURPOSE
+        ? "Pidió la ubicación a la clienta por WhatsApp."
+        : attachment && reply.text
+          ? attachment.note
+          : null,
+    note: reply.text || attachment?.note || null,
     payload: {
       paused_minutes: sent.paused ? CHATBY_REPLY_PAUSE_MINUTES : 0,
+      ...(attachment ? { attachment: attachment.record } : {}),
       ...(opts.purpose === CHATBY_ASK_PURPOSE ? { purpose: CHATBY_ASK_PURPOSE } : {}),
       ...(askedFor ? { hold_reason: askedFor } : {}),
     },
@@ -455,9 +484,97 @@ export async function sendOrderChatbyReply(
   const pause = sent.paused
     ? `El bot queda en pausa ${CHATBY_REPLY_PAUSE_MINUTES} minutos para esta clienta.`
     : "Chatby no confirmó la pausa del bot: puede seguir con sus mensajes.";
+  const sentWhat = attachment ? (attachment.record.kind === "shalom_ticket" ? "Ticket Shalom enviado." : "Archivo enviado.") : "Mensaje enviado.";
   return eventError
-    ? { notice: `Mensaje enviado. ${pause} No se pudo anotar en la Actividad: ${eventError}` }
-    : { notice: `Mensaje enviado. ${pause}` };
+    ? { notice: `${sentWhat} ${pause} No se pudo anotar en la Actividad: ${eventError}` }
+    : { notice: `${sentWhat} ${pause}` };
+}
+
+/**
+ * El archivo que va por Chatby, firmado para que Chatby lo baje (7 días): el
+ * ticket de la guía Shalom del pedido o un adjunto ya subido de ESTE pedido.
+ */
+async function resolveChatbyAttachment(
+  ctx: OrderContext,
+  orderId: string,
+  request: ChatbyAttachmentRequest,
+): Promise<
+  | { type: "image" | "file"; url: string; note: string; record: Record<string, unknown> & { kind: string } }
+  | { error: string }
+> {
+  const admin = createAdminSupabase();
+  if (request.kind === "shalom_ticket") {
+    const { data, error } = await admin
+      .from("shipments")
+      .select("id,courier,shalom_ose_id,delivery_status,created_at,guide_code")
+      .eq("order_id", orderId)
+      .eq("courier", "shalom");
+    if (error) return { error: `No se pudo leer la guía Shalom: ${error.message}` };
+    const guide = shalomTicketShipment(
+      (data ?? []) as { id: string; courier: string; shalom_ose_id: number | null; delivery_status: string | null; created_at: string | null; guide_code: string | null }[],
+    );
+    if (!guide?.shalom_ose_id) {
+      return { error: "Este pedido no tiene una guía Shalom creada por API: su ticket se baja de pro.shalom.pe." };
+    }
+    const store = await loadStoreShalom(admin, ctx.storeId);
+    if (!store?.shalom_pro_email) return { error: "La tienda no tiene Shalom Pro conectado en Kapta." };
+    try {
+      await shalomVoucherPdf(admin, ctx.storeId, store, guide.shalom_ose_id);
+    } catch (cause) {
+      return { error: `Shalom no entregó el ticket: ${describeShalomError(cause)}` };
+    }
+    const url = await signedDocUrl(admin, guide.shalom_ose_id, "voucher", CHATBY_ATTACHMENT_URL_SECONDS);
+    if (!url) return { error: "No se pudo preparar el enlace del ticket. Reintenta." };
+    return {
+      type: "file",
+      url,
+      note: chatbyAttachmentNote({ kind: "shalom_ticket", guideCode: guide.guide_code }),
+      record: { kind: "shalom_ticket", shipment_id: guide.id, guide_code: guide.guide_code },
+    };
+  }
+
+  if (!isChatbyAttachmentPath(request.path, ctx.storeId, orderId)) {
+    return { error: "El archivo no pertenece a este pedido." };
+  }
+  const folder = chatbyAttachmentFolder(ctx.storeId, orderId);
+  const { data: stored, error: listError } = await admin.storage.from(CHATBY_ATTACHMENT_BUCKET).list(folder, { limit: 1000 });
+  if (listError) return { error: `No se pudo revisar el archivo: ${listError.message}` };
+  if (!(stored ?? []).some((o) => `${folder}/${o.name}` === request.path)) {
+    return { error: "El archivo no terminó de subirse. Vuelve a adjuntarlo." };
+  }
+  const { data: signed, error: signError } = await admin.storage
+    .from(CHATBY_ATTACHMENT_BUCKET)
+    .createSignedUrl(request.path, CHATBY_ATTACHMENT_URL_SECONDS);
+  if (signError || !signed?.signedUrl) return { error: "No se pudo preparar el enlace del archivo. Reintenta." };
+  const type = chatbyAttachmentTypeOfPath(request.path);
+  const filename = chatbyAttachmentDisplayName(request.filename, type === "file" ? "documento.pdf" : "foto");
+  return {
+    type,
+    url: signed.signedUrl,
+    note: chatbyAttachmentNote({ kind: "upload", filename }),
+    record: { kind: "upload", path: request.path, filename, type },
+  };
+}
+
+/** Prepara la subida de UN adjunto para Chatby (URL firmada de Storage). */
+export async function createOrderChatbyUpload(
+  orderId: string,
+  contentType: string,
+  size: number,
+): Promise<{ path: string; token: string } | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
+  const problem = chatbyAttachmentSizeProblem(contentType, size);
+  if (problem) return { error: problem };
+  const kind = chatbyAttachmentKind(contentType)!;
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  await admin.storage.createBucket(CHATBY_ATTACHMENT_BUCKET, { public: false }).catch(() => {});
+  const path = `${chatbyAttachmentFolder(ctx.storeId, orderId)}/chatby-${Date.now()}-${randomUUID().slice(0, 8)}.${kind.ext}`;
+  const { data, error } = await admin.storage.from(CHATBY_ATTACHMENT_BUCKET).createSignedUploadUrl(path);
+  if (error || !data) return { error: error?.message ?? "No se pudo preparar la subida." };
+  return { path: data.path, token: data.token };
 }
 
 type ChatbyCheckRow = ChatbyHeldCheck & { message_id: string | null };

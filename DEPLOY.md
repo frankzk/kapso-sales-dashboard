@@ -1,5 +1,20 @@
 # Deployment runbook
 
+### 10-11-2026 · Chatby desde la ficha: el ticket Shalom en PDF y adjuntar fotos o PDF (MOM §25 «Chatby»)
+
+**Sin migración.** El bucket privado `chatby-attachments` se crea solo en la
+primera subida.
+
+**Lo que cambia al desplegar:**
+
+- En la pestaña Chatby de la ficha, «Responder por WhatsApp» suma
+  «Enviar ticket Shalom (PDF)» (si el pedido tiene guía Shalom creada por
+  API) y «Adjuntar foto o PDF» (también pegar con Ctrl+V o arrastrar). Con
+  archivo, el texto es opcional.
+- El archivo va a Chatby como `{type: "image" | "file", url}` en
+  `send-content`. **Primera vez:** probar con un pedido propio; si Chatby
+  rechaza ese formato, sale su motivo y no se anota nada.
+
 ### 10-11-2026 · Bandeja «Pago de diferencia» con la última gestión del equipo (MOM §44)
 
 **Sin migración.** Solo lectura.

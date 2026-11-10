@@ -147,6 +147,7 @@ import {
   uploadOrderCommentPhotos,
 } from "@/components/order-comment-photos";
 import { imageFilesFrom, ORDER_COMMENT_TYPE_SUGGESTIONS } from "@/lib/order-comment-photos";
+import { shalomTicketShipment } from "@/lib/chatby-attachments";
 import { anuraCallForEntry } from "@/lib/anura/ui";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
@@ -2679,6 +2680,10 @@ export function OrderDrawer({
                 phone={detail.row.customer_phone ?? null}
                 canEdit={canEdit}
                 onCustomerMessages={setChatbyCustomerMessages}
+                shalomTicket={(() => {
+                  const g = shalomTicketShipment(detail.guides);
+                  return g ? { guideCode: g.guide_code ?? null } : null;
+                })()}
               />
             </div>
             <div
