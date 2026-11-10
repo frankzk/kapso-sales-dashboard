@@ -78,7 +78,7 @@ function fromControl(e: MouseEvent): boolean {
 }
 
 export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaRow[]; storeNames: Record<string, string> }) {
-  const [group, setGroup] = useState<GroupTab>("en_agencia");
+  const [group, setGroup] = useState<GroupTab>("todos");
   const [filter, setFilter] = useState<PagoDiferenciaFilter>("por_gestionar");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);

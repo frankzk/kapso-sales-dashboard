@@ -26150,15 +26150,15 @@ Shalom, 5 Olva).
 bandeja y 253 en «Disponibles para recojo» del Master: esos 253 son los 177
 que deben más 76 ya pagados que solo esperan el recojo):
 
-- **En agencia** (el foco, abre aquí): `pendiente_pago_diferencia`.
+- **En agencia**: `pendiente_pago_diferencia`.
 - **En camino**: Agencia (`macro_operation = agencia`) en `en_transito` o
   `en_destino` y sin `pago_completo`, para pedir la diferencia antes de que
   llegue. Contra entrega y Lima no entran. Medido: 87.
 - **Recogidos sin pago**: `recogido_sin_pago_completo` (Por cerrar), la
   clienta ya lo recogió y falta cobrar. Medido: 122.
 
-Y una cuarta pestaña, **«Todos»**, que suma los tres grupos (owner,
-10-11-2026); cada fila dice de qué grupo es.
+Y una cuarta pestaña, **«Todos»**, que suma los tres grupos y es **la que
+abre por defecto** (owner, 10-11-2026); cada fila dice de qué grupo es.
 
 Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
 Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en
