@@ -10,13 +10,23 @@ import { Badge, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-u
 import { OrderLink, useOpenOrderDrawer } from "@/components/order-link";
 import {
   PAGO_DIFERENCIA_FILTER_LABEL,
+  PAGO_DIFERENCIA_GROUPS,
+  PAGO_DIFERENCIA_GROUP_LABEL,
   filterPagoDiferencia,
   type PagoDiferenciaFilter,
+  type PagoDiferenciaGroup,
   type PagoDiferenciaRow,
 } from "@/lib/pago-diferencia";
+import { cn } from "@/components/ui";
 
 const PAGE = 50;
 const FILTERS: PagoDiferenciaFilter[] = ["por_gestionar", "gestionados_hoy", "sin_gestion", "todos"];
+
+const GROUP_HINT: Record<PagoDiferenciaGroup, string> = {
+  en_agencia: "El paquete ya está en la sucursal: la clave de recojo no se libera hasta validar el pago.",
+  en_camino: "Todavía viaja o recién llegó a la agencia: se puede pedir la diferencia antes de que esté disponible.",
+  recogido_sin_pago: "La clienta ya lo recogió y falta parte del pago: queda por cobrar.",
+};
 
 const FILTER_HINT: Record<PagoDiferenciaFilter, string> = {
   por_gestionar: "Nadie registró una gestión hoy: comentario, WhatsApp por Chatby o llamada.",
@@ -62,20 +72,26 @@ function fromControl(e: MouseEvent): boolean {
 }
 
 export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaRow[]; storeNames: Record<string, string> }) {
+  const [group, setGroup] = useState<PagoDiferenciaGroup>("en_agencia");
   const [filter, setFilter] = useState<PagoDiferenciaFilter>("por_gestionar");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const openDrawer = useOpenOrderDrawer();
   const open = (orderId: string) => openDrawer(orderId, "operar");
 
-  const counts = useMemo(
-    () => Object.fromEntries(FILTERS.map((f) => [f, filterPagoDiferencia(rows, f).length])) as Record<PagoDiferenciaFilter, number>,
+  const groupCounts = useMemo(
+    () => Object.fromEntries(PAGO_DIFERENCIA_GROUPS.map((g) => [g, rows.filter((r) => r.group === g).length])) as Record<PagoDiferenciaGroup, number>,
     [rows],
+  );
+  const inGroup = useMemo(() => rows.filter((r) => r.group === group), [rows, group]);
+  const counts = useMemo(
+    () => Object.fromEntries(FILTERS.map((f) => [f, filterPagoDiferencia(inGroup, f).length])) as Record<PagoDiferenciaFilter, number>,
+    [inGroup],
   );
   const listed = useMemo(() => {
     const q = query.trim().toLowerCase();
     const digits = q.replace(/\D/g, "");
-    return filterPagoDiferencia(rows, filter).filter(
+    return filterPagoDiferencia(inGroup, filter).filter(
       (r) =>
         !q ||
         r.orderName.toLowerCase().includes(q) ||
@@ -83,23 +99,48 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
         (digits.length >= 4 && (r.customerPhone ?? "").replace(/\D/g, "").includes(digits)) ||
         (r.guideCode ?? "").toLowerCase().includes(q),
     );
-  }, [rows, filter, query]);
+  }, [inGroup, filter, query]);
   const visible = listed.slice(0, limit);
-  const totalRemaining = rows.reduce((s, r) => s + (r.remaining ?? 0), 0);
+  const totalRemaining = inGroup.reduce((s, r) => s + (r.remaining ?? 0), 0);
 
   return (
     <div className="space-y-4">
       <header className="space-y-1">
         <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Pago de diferencia</h1>
         <p className="max-w-[72ch] text-sm leading-6 text-ink-600">
-          Pedidos de Agencia que ya están en la sucursal y esperan que la clienta pague lo que falta. La clave de recojo no
-          se libera hasta validar el pago. Abre el pedido y registra cada gestión en «Comentario», con la captura como
-          constancia: aquí se ve quién la hizo y cuándo.
-        </p>
-        <p className="text-sm tabular-nums text-ink-700">
-          {rows.length.toLocaleString("es-PE")} pedido{rows.length === 1 ? "" : "s"} · {money(totalRemaining)} por cobrar
+          Pedidos de Agencia a los que les falta pagar la diferencia. Abre el pedido y registra cada gestión en
+          «Comentario», con la captura como constancia: aquí se ve quién la hizo y cuándo.
         </p>
       </header>
+
+      <div role="tablist" aria-label="Grupo" className="flex flex-wrap gap-1 border-b border-line">
+        {PAGO_DIFERENCIA_GROUPS.map((g) => (
+          <button
+            key={g}
+            type="button"
+            role="tab"
+            aria-selected={group === g}
+            onClick={() => {
+              setGroup(g);
+              setFilter("por_gestionar");
+              setLimit(PAGE);
+            }}
+            className={cn(
+              "-mb-px flex min-h-10 items-center gap-2 border-b-2 px-3 text-sm font-medium transition-colors pointer-coarse:min-h-11",
+              group === g ? "border-brand-600 text-brand-700" : "border-transparent text-ink-600 hover:text-ink-900",
+            )}
+          >
+            {PAGO_DIFERENCIA_GROUP_LABEL[g]}
+            <Badge tone={group === g ? "brand" : "neutral"}>{groupCounts[g].toLocaleString("es-PE")}</Badge>
+          </button>
+        ))}
+      </div>
+      <p className="text-sm text-ink-700">
+        {GROUP_HINT[group]}{" "}
+        <span className="tabular-nums text-ink-500">
+          {inGroup.length.toLocaleString("es-PE")} pedido{inGroup.length === 1 ? "" : "s"} · {money(totalRemaining)} por cobrar
+        </span>
+      </p>
 
       <div role="group" aria-label="Filtrar pedidos" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {FILTERS.map((f) => (
@@ -136,8 +177,8 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
 
         {listed.length === 0 ? (
           <p className="border-t border-line px-4 py-8 text-center text-sm text-ink-500">
-            {rows.length === 0
-              ? "No hay pedidos esperando el pago de la diferencia."
+            {inGroup.length === 0
+              ? `No hay pedidos en «${PAGO_DIFERENCIA_GROUP_LABEL[group]}».`
               : filter === "por_gestionar" && !query
                 ? "Todos los pedidos ya tienen una gestión registrada hoy."
                 : "Ningún pedido coincide con este filtro."}
@@ -158,7 +199,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
                     <th className="px-4 py-2.5">Pedido</th>
                     <th className="px-3 py-2.5">Cliente</th>
                     <th className="px-3 py-2.5 text-right">Falta pagar</th>
-                    <th className="px-3 py-2.5">En agencia</th>
+                    <th className="px-3 py-2.5">{group === "en_agencia" ? "En agencia" : group === "en_camino" ? "Envío" : "Recogido"}</th>
                     <th className="px-4 py-2.5">Última gestión</th>
                   </tr>
                 </thead>
@@ -259,7 +300,10 @@ function Agency({ row }: { row: PagoDiferenciaRow }) {
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-1">
-        <Badge tone={waitTone(row.waitingDays)}>{days(row.waitingDays)}</Badge>
+        {row.substage && <Badge tone="info">{row.substage}</Badge>}
+        <Badge tone={row.group === "en_agencia" ? waitTone(row.waitingDays) : "neutral"}>
+          {row.group === "recogido_sin_pago" ? `hace ${days(row.waitingDays)}` : days(row.waitingDays)}
+        </Badge>
         {row.expired && <Badge tone="crit">Plazo vencido</Badge>}
       </div>
       <p className="truncate text-xs text-ink-500" title={row.destination ?? undefined}>

@@ -4,6 +4,13 @@
 // falta, desde cuándo espera y cuál fue la ÚLTIMA GESTIÓN del equipo —quién,
 // cuándo, por dónde y qué dijo—, para que quien llama sepa a quién le toca hoy.
 //
+// Tres grupos (owner, 10-11-2026), cada uno su pestaña:
+//   - «En agencia»: `pendiente_pago_diferencia` (§6.4), el foco.
+//   - «En camino»: Agencia (`macro_operation = agencia`) en `en_transito` o
+//     `en_destino` sin pago completo: se pide la diferencia antes de que llegue.
+//   - «Recogidos sin pago»: `recogido_sin_pago_completo` (Por cerrar): ya lo
+//     recogió y falta cobrar.
+//
 // Es una LECTURA: no escribe nada ni cambia etapas. La gestión se registra en
 // la ficha del pedido (comentario con foto de constancia §43, mensaje por
 // Chatby, llamada), y de ahí sale aquí. Pura y probada.
@@ -25,8 +32,39 @@ const GESTION_LABEL: Record<string, string> = {
   anura_call: "Llamada con Anura",
 };
 
+export type PagoDiferenciaGroup = "en_agencia" | "en_camino" | "recogido_sin_pago";
+
+export const PAGO_DIFERENCIA_GROUPS: readonly PagoDiferenciaGroup[] = ["en_agencia", "en_camino", "recogido_sin_pago"];
+
+export const PAGO_DIFERENCIA_GROUP_LABEL: Record<PagoDiferenciaGroup, string> = {
+  en_agencia: "En agencia",
+  en_camino: "En camino",
+  recogido_sin_pago: "Recogidos sin pago",
+};
+
+/** A qué grupo va un pedido del Master; null si no es de la bandeja. */
+export function pagoDiferenciaGroup(o: {
+  macro_substage: string | null;
+  macro_operation: string | null;
+  payment_state: string | null;
+}): PagoDiferenciaGroup | null {
+  if (o.macro_substage === "pendiente_pago_diferencia") return "en_agencia";
+  if (o.macro_substage === "recogido_sin_pago_completo") return "recogido_sin_pago";
+  if (
+    o.macro_operation === "agencia" &&
+    (o.macro_substage === "en_transito" || o.macro_substage === "en_destino") &&
+    o.payment_state !== "pago_completo"
+  ) {
+    return "en_camino";
+  }
+  return null;
+}
+
 export interface PagoDiferenciaOrderInput {
   order_id: string;
+  macro_substage: string | null;
+  macro_operation: string | null;
+  payment_state: string | null;
   store_id: string;
   order_name: string | null;
   customer_name: string | null;
@@ -73,6 +111,9 @@ export interface PagoDiferenciaGestion {
 
 export interface PagoDiferenciaRow {
   orderId: string;
+  group: PagoDiferenciaGroup;
+  /** «En tránsito», «En destino»… para En camino; null en los otros. */
+  substage: string | null;
   storeId: string;
   orderName: string;
   customerName: string | null;
@@ -126,8 +167,11 @@ function photoCount(payload: Record<string, unknown> | null | undefined): number
 }
 
 /** ¿Es este hecho una gestión de una persona? */
-export function isPagoDiferenciaGestion(e: Pick<PagoDiferenciaEventInput, "kind" | "actor">): boolean {
-  return Boolean(e.actor) && (PAGO_DIFERENCIA_GESTION_KINDS as readonly string[]).includes(e.kind);
+export function isPagoDiferenciaGestion(e: Pick<PagoDiferenciaEventInput, "kind" | "actor"> & { comment_type?: string | null }): boolean {
+  if (!e.actor || !(PAGO_DIFERENCIA_GESTION_KINDS as readonly string[]).includes(e.kind)) return false;
+  // La nota que deja corregir la dirección (`comment_type = 'ubicacion'`,
+  // lib/order-address-correction.ts) es un arreglo del pedido, no un contacto.
+  return !(e.kind === "comment" && e.comment_type?.trim().toLowerCase() === "ubicacion");
 }
 
 /**
@@ -150,7 +194,9 @@ export function buildPagoDiferenciaRows(input: {
     gestionesBy.set(e.order_id, [...(gestionesBy.get(e.order_id) ?? []), e]);
   }
 
-  const rows = input.orders.map((o): PagoDiferenciaRow => {
+  const rows = input.orders.flatMap((o): PagoDiferenciaRow[] => {
+    const group = pagoDiferenciaGroup(o);
+    if (!group) return [];
     const live = (paymentsBy.get(o.order_id) ?? []).filter((p) => p.validation_status !== "rechazado");
     const validatedCents = live.filter((p) => p.validation_status === "validado").reduce((s, p) => s + cents(p.amount), 0);
     const totalCents = cents(o.order_total);
@@ -160,9 +206,13 @@ export function buildPagoDiferenciaRows(input: {
 
     const gestiones = (gestionesBy.get(o.order_id) ?? []).slice().sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1));
     const last = gestiones[0] ?? null;
-    const waitingSince = o.agency_arrived_at ?? o.macro_since;
-    return {
+    // En agencia: desde la llegada a la sucursal; en los otros, desde que
+    // entró a su subetapa.
+    const waitingSince = group === "en_agencia" ? (o.agency_arrived_at ?? o.macro_since) : o.macro_since;
+    return [{
       orderId: o.order_id,
+      group,
+      substage: group === "en_camino" ? (o.macro_substage === "en_destino" ? "En destino" : "En tránsito") : null,
       storeId: o.store_id,
       orderName: o.order_name ?? o.order_id,
       customerName: o.customer_name,
@@ -177,7 +227,7 @@ export function buildPagoDiferenciaRows(input: {
       waitingSince,
       waitingDays: waitingSince ? daysBetween(limaDayOf(waitingSince), today) : null,
       expiresAt: o.agency_expires_at,
-      expired: Boolean(o.agency_expires_at && Date.parse(o.agency_expires_at) < input.now.getTime()),
+      expired: group === "en_agencia" && Boolean(o.agency_expires_at && Date.parse(o.agency_expires_at) < input.now.getTime()),
       lastGestion: last
         ? {
             at: last.occurred_at,
@@ -190,7 +240,7 @@ export function buildPagoDiferenciaRows(input: {
         : null,
       gestionCount: gestiones.length,
       gestionadoHoy: Boolean(last && limaDayOf(last.occurred_at) === today),
-    };
+    }];
   });
 
   const expiry = (r: PagoDiferenciaRow) => (r.expiresAt ? Date.parse(r.expiresAt) : Number.POSITIVE_INFINITY);

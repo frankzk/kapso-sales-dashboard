@@ -5,6 +5,7 @@ import {
   filterPagoDiferencia,
   isPagoDiferenciaGestion,
   limaDayOf,
+  pagoDiferenciaGroup,
   type PagoDiferenciaEventInput,
   type PagoDiferenciaOrderInput,
 } from "@/lib/pago-diferencia";
@@ -14,6 +15,9 @@ const NOW = new Date("2026-11-10T20:00:00Z"); // 15:00 en Lima
 function order(id: string, over: Partial<PagoDiferenciaOrderInput> = {}): PagoDiferenciaOrderInput {
   return {
     order_id: id,
+    macro_substage: "pendiente_pago_diferencia",
+    macro_operation: "agencia",
+    payment_state: "adelanto_validado",
     store_id: "s1",
     order_name: `#KP${id}`,
     customer_name: `Cliente ${id}`,
@@ -139,6 +143,48 @@ describe("Pago de diferencia (MOM §44)", () => {
     expect(filterPagoDiferencia(rows, "gestionados_hoy").map((r) => r.orderId)).toEqual(["hoy"]);
     expect(filterPagoDiferencia(rows, "sin_gestion")).toHaveLength(3);
     expect(filterPagoDiferencia(rows, "todos")).toHaveLength(4);
+  });
+
+  it("tres grupos: en agencia, en camino (Agencia sin pago completo) y recogidos sin pago", () => {
+    const g = (macro_substage: string, macro_operation = "agencia", payment_state = "adelanto_validado") =>
+      pagoDiferenciaGroup({ macro_substage, macro_operation, payment_state });
+    expect(g("pendiente_pago_diferencia", "agencia")).toBe("en_agencia");
+    expect(g("en_transito")).toBe("en_camino");
+    expect(g("en_destino", "agencia", "adelanto_cargado")).toBe("en_camino");
+    // Contra entrega o ya pagado: no se le pide diferencia.
+    expect(g("en_transito", "provincia_cod")).toBeNull();
+    expect(g("en_transito", "lima")).toBeNull();
+    expect(g("en_destino", "agencia", "pago_completo")).toBeNull();
+    expect(g("recogido_sin_pago_completo", "agencia", "sin_pago")).toBe("recogido_sin_pago");
+    expect(g("disponible_para_recojo", "agencia", "pago_completo")).toBeNull();
+
+    const rows = buildPagoDiferenciaRows({
+      orders: [
+        order("a"),
+        order("b", { macro_substage: "en_destino", agency_expires_at: "2026-11-01T00:00:00Z" }),
+        order("c", { macro_substage: "recogido_sin_pago_completo" }),
+        order("d", { macro_substage: "en_transito", macro_operation: "provincia_cod" }),
+      ],
+      payments: [],
+      events: [],
+      names: new Map(),
+      now: NOW,
+    });
+    expect(rows.map((r) => [r.orderId, r.group, r.substage])).toEqual(
+      expect.arrayContaining([
+        ["a", "en_agencia", null],
+        ["b", "en_camino", "En destino"],
+        ["c", "recogido_sin_pago", null],
+      ]),
+    );
+    expect(rows).toHaveLength(3);
+    // El plazo de la agencia solo cuenta con el paquete en la sucursal.
+    expect(rows.find((r) => r.orderId === "b")!.expired).toBe(false);
+  });
+
+  it("corregir la dirección no es una gestión con la clienta", () => {
+    expect(isPagoDiferenciaGestion({ kind: "comment", actor: "u", comment_type: "ubicacion" })).toBe(false);
+    expect(isPagoDiferenciaGestion({ kind: "comment", actor: "u", comment_type: "Pago de diferencia" })).toBe(true);
   });
 
   it("el menú la lleva y el MOM la documenta", () => {
