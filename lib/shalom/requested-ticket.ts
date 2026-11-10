@@ -26,10 +26,13 @@ export async function resolveRequestedShalomTicket(
   const created = Date.parse(guide.created_at);
   if (!Number.isFinite(created)) throw new Error("No consta la fecha de esta salida para buscar su ticket.");
   const from = new Date(created - 86_400_000).toISOString().slice(0, 10);
+  // Login plus listing share one budget; leave 45 s for the PDF within the
+  // route's 300 s limit. Several slow pages may not fit the cron's 90 s budget.
+  const deadlineMs = Date.now() + 240_000;
   const listing = await readWithFreshSession(admin, guide.store_id, store, (client) =>
     collectListingPages(
       (page, left) => client.ordersSince(from, 200, { page, timeoutMs: Math.min(SLOW_TIMEOUT_MS, left) }),
-      { perPage: 200, maxPages: 15, concurrency: 3, deadlineMs: Date.now() + 90_000 },
+      { perPage: 200, maxPages: 15, concurrency: 3, deadlineMs },
     ),
   );
   if (!listing.completo) throw new Error("El listado de Shalom no terminó de cargar. Vuelve a abrir el ticket para reintentar.");

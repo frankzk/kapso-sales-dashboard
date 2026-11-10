@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { StoreShalom } from "@/lib/shalom/session";
 import { resolveRequestedShalomTicket, type RequestedShalomTicket } from "@/lib/shalom/requested-ticket";
@@ -41,6 +41,7 @@ beforeEach(() => {
   remote.listing.mockResolvedValue({ orders, completo: true });
   remote.read.mockImplementation((_admin, _storeId, _store, run) => run({ ordersSince: vi.fn() }));
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe("ticket requested for one already-linked Shalom guide", () => {
   it("resolves a reused output older than seven days and writes only the requested identity", async () => {
@@ -55,6 +56,16 @@ describe("ticket requested for one already-linked Shalom guide", () => {
     expect(await resolveRequestedShalomTicket(admin, { ...GUIDE, shalom_ose_id: 303 }, STORE)).toBe(303);
     expect(remote.read).not.toHaveBeenCalled();
     expect(from).not.toHaveBeenCalled();
+  });
+
+  it("counts login time against the shared lookup budget and leaves time for the PDF", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    remote.read.mockImplementation((_admin, _storeId, _store, run) => {
+      clock.mockReturnValue(91_000);
+      return run({ ordersSince: vi.fn() });
+    });
+    await resolveRequestedShalomTicket(fakeAdmin().admin, GUIDE, STORE);
+    expect(remote.listing).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ deadlineMs: 241_000, concurrency: 3 }));
   });
 
   it.each(["incomplete", "no anchor", "contradictory anchor", "duplicate target", "missing target"])("refuses an unsafe listing: %s", async (reason) => {
