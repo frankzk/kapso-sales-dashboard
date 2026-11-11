@@ -1,3 +1,15 @@
+### 11-11-2026 · Siete nombres cortos y reparación de su cohorte
+
+Sin migración. Se añaden aliases de HeatLessCurls, RestPro, Bolso Charlotte,
+UROCONTROL, Cayenne, Prozenix y Turkesterone. Verificar ambigüedades, rechazos
+y que el nombre personal Charlotte no identifica un bolso.
+El POST interno de revisión acepta `mode=repair`: usa exclusivamente los IDs
+de la cohorte fijada en `sync_state` y las RPC privadas 0331. No lanza el sync
+general ni cambia estados o interés posterior. Ejecutar una vez por tienda con
+acceso temporal acotado, verificar `unresolved=0` y las asociaciones esperadas;
+una repetición conserva entradas ya identificadas. `mode=counts` añade los
+conteos de «Sin producto» por estado y base. Retirar el acceso al terminar.
+
 ### 11-11-2026 · Barrido de aliases de producto (0331)
 
 Aplicar 0331_lead_product_alias_review.sql antes del código nuevo. Añade dos

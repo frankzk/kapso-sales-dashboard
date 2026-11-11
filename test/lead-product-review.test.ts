@@ -1,15 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import { summarizeLeadProducts, type ProductReviewLead } from "@/lib/lead-product-review";
-const mocks = vi.hoisted(() => ({ admin: vi.fn(), catalogue: vi.fn(), backfill: vi.fn(), project: vi.fn() }));
+const mocks = vi.hoisted(() => ({ admin: vi.fn(), catalogue: vi.fn(), backfill: vi.fn(), project: vi.fn(), repair: vi.fn() }));
 vi.mock("@/lib/db", () => ({ createAdminSupabase: mocks.admin }));
-vi.mock("@/lib/lead-products-server", () => ({ loadLeadProductCatalog: mocks.catalogue, backfillLeadProducts: mocks.backfill, withProductOpeners: mocks.project }));
+vi.mock("@/lib/lead-products-server", () => ({ loadLeadProductCatalog: mocks.catalogue, backfillLeadProducts: mocks.backfill, withProductOpeners: mocks.project, repairSevenProductNames: mocks.repair }));
 import { POST } from "@/app/api/internal/leads/product-review/route";
 
 const storeId = "dcab8bf5-23ec-49f5-8e20-f75a8f978297";
 const signal = (handle: string) => ({ handle, title: handle, at: "2026-11-11T12:00:00Z", evidence: "Private customer text", message_id: null, source: "customer_text" as const });
 const row = (patch: Partial<ProductReviewLead> = {}): ProductReviewLead => ({ id: "l", store_id: storeId, first_seen_at: "2026-11-11", status: "nuevo", category: "open", ...patch });
 describe("aggregate product counts", () => {
+  it("counts the unclassified facet using the same entry/current and queue resolvers", () => {
+    const result = summarizeLeadProducts([row(), row({ entry_product: signal("shampoo-biru"), interest_product: { ...signal(""), handle: null, source: "ambiguous" }, status: "volver_a_llamar", next_followup_at: "2099-01-01" })], []);
+    expect(result.without_product.entry).toEqual({ por_llamar: 1, en_seguimiento: 0 });
+    expect(result.without_product.current).toEqual({ por_llamar: 1, en_seguimiento: 1 });
+  });
   it("does not count unrelated magical products or magnesium ingredients as the requested products", () => {
     const result = summarizeLeadProducts([
       row({ entry_product: signal("cepillo-magico-para-limpieza-de-ventanas") }),
@@ -59,6 +64,13 @@ describe("private server-side review", () => {
   it("rejects invalid store or mode without scanning data", async () => {
     expect((await POST(request("&mode=anything"))).status).toBe(400);
     expect(mocks.admin).not.toHaveBeenCalled();
+  });
+  it("repairs only the server-frozen cohort and returns aggregate output", async () => {
+    mocks.repair.mockResolvedValueOnce({ targeted: 283, repaired: 283, unresolved: 0, complete: true });
+    const body = await (await POST(request("&mode=repair"))).json();
+    expect(body).toEqual({ ok: true, targeted: 283, repaired: 283, unresolved: 0, complete: true });
+    expect(mocks.repair).toHaveBeenCalledWith(mocks.admin.mock.results[0]!.value, storeId, expect.any(Array));
+    expect(mocks.backfill).not.toHaveBeenCalled();
   });
   it("denies expired access and stores outside the maintenance scope", async () => {
     vi.stubEnv("LEAD_PRODUCT_REVIEW_ACCESS", JSON.stringify({ token: "test-review-secret", expiresAt: "2000-01-01", storeIds: [storeId] }));

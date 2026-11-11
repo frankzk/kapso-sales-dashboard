@@ -19,15 +19,17 @@ export function summarizeLeadProducts(rows: readonly ProductReviewLead[], declar
   const leads = rows.filter(l => (l.category === "open" || l.category === "hot") && l.status !== "yape_por_verificar");
   const ads = mapaAnuncioProducto(declarations);
   const result = {} as Record<"entry" | "current", Record<Family, Counts>>;
+  const withoutProduct = {} as Record<"entry" | "current", Counts>;
   for (const basis of ["entry", "current"] as const) {
     const counts = Object.fromEntries(FAMILIES.map(f => [f, { por_llamar: 0, en_seguimiento: 0 }])) as Record<Family, Counts>;
     const handles = leads.map(l => attributedProductHandle(l, basis, leadProductHandle(l.first_inbound_text),
       l.ad_id ? handleDeAnuncioPara(ads.get(claveAnuncio(l.store_id, l.ad_id)), l.first_seen_at) : null));
     const canonical = canonicalProductHandles(handles.filter((h): h is string => !!h));
+    const missing: Counts = { por_llamar: 0, en_seguimiento: 0 };
     leads.forEach((l, i) => {
-      const raw = handles[i]; if (!raw) return;
-      const h = canonical.get(raw) ?? raw;
       const state = isInCallQueue(l) ? "por_llamar" : "en_seguimiento";
+      const raw = handles[i]; if (!raw) { missing[state]++; return; }
+      const h = canonical.get(raw) ?? raw;
       const families: Family[] = [];
       if (/biru/i.test(h)) families.push("biru");
       if (/^aceite-(?:corporal-)?magic(?:-|$)/i.test(h)) families.push("magic");
@@ -38,6 +40,7 @@ export function summarizeLeadProducts(rows: readonly ProductReviewLead[], declar
       for (const f of families) counts[f][state]++;
     });
     result[basis] = counts;
+    withoutProduct[basis] = missing;
   }
-  return { queue_size: leads.length, ...result };
+  return { queue_size: leads.length, without_product: withoutProduct, ...result };
 }

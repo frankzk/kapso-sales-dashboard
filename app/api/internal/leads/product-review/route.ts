@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
-import { backfillLeadProducts, loadLeadProductCatalog, withProductOpeners } from "@/lib/lead-products-server";
+import { backfillLeadProducts, loadLeadProductCatalog, withProductOpeners, repairSevenProductNames } from "@/lib/lead-products-server";
 import { PRODUCT_REVIEW_SOURCE, summarizeLeadProducts, type ProductReviewLead } from "@/lib/lead-product-review";
 import type { AdDeclaration } from "@/lib/ad-products";
 
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   if (!expected || a.length !== b.length || !timingSafeEqual(a, b) || !(Date.parse(access.expiresAt ?? "") > Date.now())) return new NextResponse("unauthorized", { status: 401 });
   const storeId = req.nextUrl.searchParams.get("storeId") ?? "";
   const mode = req.nextUrl.searchParams.get("mode") ?? "review";
-  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(storeId) || !["review", "counts"].includes(mode)) {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(storeId) || !["review", "counts", "repair"].includes(mode)) {
     return NextResponse.json({ ok: false, error: "Invalid review request" }, { status: 400 });
   }
   if (!Array.isArray(access.storeIds) || !access.storeIds.includes(storeId)) return new NextResponse("forbidden", { status: 403 });
@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
   try {
     const catalogue = await loadLeadProductCatalog(admin, storeId);
     if (!catalogue.length) throw new Error("Catalogue unavailable");
+    if (mode === "repair") return NextResponse.json({ ok: true, ...await repairSevenProductNames(admin, storeId, catalogue) });
     if (mode === "review") {
       const started = Date.now();
       let checked = 0, identified = 0, complete = false;
