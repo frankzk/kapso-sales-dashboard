@@ -369,7 +369,8 @@ const HOOK_DISPLAY: Record<LeadHookKind, { prefix: string; title: string }> = {
 };
 
 function LeadHookLine({ lead }: { lead: LeadRow }) {
-  const signal = lead.interest_product ?? lead.entry_product;
+  const currentHandle = attributedProductHandle(lead, "current", null, null);
+  const signal = [lead.interest_product, lead.entry_product].find((s) => s && s.handle === currentHandle);
   if (signal) return (
     <p title={`${signal.source === "ambiguous" ? "Consulta ambigua" : "Consulta del cliente"} · ${new Date(signal.at).toLocaleString("es-PE", { timeZone: "America/Lima" })}: ${signal.evidence}`}
       className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">
