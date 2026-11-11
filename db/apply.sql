@@ -659,4 +659,6 @@
 \ir migrations/0328_pago_online_recibio_cualquiera.sql
 \echo 'Applying 0329_lista_negra_requisito.sql'
 \ir migrations/0329_lista_negra_requisito.sql
+\echo 'Applying 0330_lead_product_attribution.sql'
+\ir migrations/0330_lead_product_attribution.sql
 \echo 'Done.'

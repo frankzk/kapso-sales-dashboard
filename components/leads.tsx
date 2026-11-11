@@ -1,4 +1,5 @@
 "use client";
+import { attributedProductHandle } from "@/lib/lead-products";
 
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import { ListaNegraBadge } from "@/components/lista-negra-badge";
@@ -368,6 +369,13 @@ const HOOK_DISPLAY: Record<LeadHookKind, { prefix: string; title: string }> = {
 };
 
 function LeadHookLine({ lead }: { lead: LeadRow }) {
+  const signal = lead.interest_product ?? lead.entry_product;
+  if (signal) return (
+    <p title={`${signal.source === "ambiguous" ? "Consulta ambigua" : "Consulta del cliente"} · ${new Date(signal.at).toLocaleString("es-PE", { timeZone: "America/Lima" })}: ${signal.evidence}`}
+      className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">
+      <span className="text-ink-500">Interés:</span> {signal.title ?? "Varios productos; por confirmar"}
+    </p>
+  );
   const hook = leadHook(lead);
   if (!hook) return null;
   const d = HOOK_DISPLAY[hook.kind];
@@ -608,6 +616,7 @@ export function LeadsBoard({
   // cola por producto —la misma pregunta, el mismo argumentario, una tanda de
   // llamadas— en vez de saltar de un producto a otro fila por fila.
   const [prodFilter, setProdFilter] = useState<Set<string>>(new Set());
+  const [productBasis, setProductBasis] = useState<"current" | "entry">("current");
   const [interactionDateFilter, setInteractionDateFilter] = useState<LeadInteractionDateFilter | null>(
     initialInteractionDate ?? null,
   );
@@ -1116,40 +1125,29 @@ export function LeadsBoard({
   // ser sobre la cola entera y no lead a lead: plegar los links cortados a media
   // palabra exige ver todos los handles para saber cuál es el completo.
   const handleOf = useMemo(() => {
+    const resolve = (l: LeadRow) => attributedProductHandle(l, productBasis, leadProductHandle(l.first_inbound_text),
+      l.ad_id ? handleDeAnuncioPara(adDeclarations?.[claveAnuncio(l.store_id, l.ad_id)], l.first_seen_at) : null);
     const crudo = new Map<string, string>();
     for (const l of leads) {
-      // 1) Lo ÚLTIMO que enlazó, que es lo que está consultando ahora (0140).
-      //    Cubre a quien vuelve por otro producto y a quien abrió con un «hola»
-      //    y mandó la ficha después.
-      // 2) El carrito o lo que estaba mirando (0143).
-      // 3) El link del primer mensaje —lead antiguo, sin resincronizar—, que es
-      //    de donde salía todo antes.
-      // 4) Y si tampoco, lo que su anuncio vendía EL DÍA QUE ESTE LEAD ENTRÓ.
-      //    No lo que vende hoy: un creativo reutilizado cambia de producto, y
-      //    tomar la declaración nueva reescribiría el pasado de los viejos.
-      //    Nunca una conjetura: sin declaración vigente el lead se queda en
-      //    «Sin producto», que es la verdad.
-      const h =
-        (l.last_product_handle ?? "").trim() ||
-        // 2) Lo que tiene en el carrito, o lo que estaba mirando. Va antes que
-        //    el primer mensaje porque es más reciente que la apertura, y llega
-        //    ya como handle desde Shopify — no como título, que no se puede
-        //    emparejar con el del link sin adivinar.
-        (l.cart_product_handle ?? "").trim() ||
-        leadProductHandle(l.first_inbound_text) ||
-        (l.ad_id
-          ? handleDeAnuncioPara(
-              adDeclarations?.[claveAnuncio(l.store_id, l.ad_id)],
-              l.first_seen_at,
-            )
-          : null);
+      const h = resolve(l);
       if (h) crudo.set(l.id, h);
     }
     const canon = canonicalProductHandles(crudo.values());
     const porLead = new Map<string, string>();
     for (const [id, h] of crudo) porLead.set(id, canon.get(h) ?? h);
-    return (l: LeadRow) => porLead.get(l.id) ?? null;
-  }, [leads, adDeclarations]);
+    return (l: LeadRow) => {
+      if (porLead.has(l.id)) return porLead.get(l.id)!;
+      const handle = resolve(l);
+      return handle ? canon.get(handle) ?? handle : null;
+    };
+  }, [leads, adDeclarations, productBasis]);
+  const productTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    for (const lead of leads) for (const signal of [lead.entry_product, lead.interest_product]) {
+      if (signal?.handle && signal.title) titles.set(signal.handle, signal.title);
+    }
+    return titles;
+  }, [leads]);
 
   // La cobertura de cada lead, resuelta UNA vez por cola: el predicado del
   // filtro y sus contadores la piden varias veces por lead y por render. Las
@@ -1301,7 +1299,7 @@ export function LeadsBoard({
     }
     const prodOptionsAcc = [...prodCountsAcc.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([handle, count]) => ({ key: handle, label: productLabel(handle), count }));
+      .map(([handle, count]) => ({ key: handle, label: productTitles.get(handle) ?? productLabel(handle), count }));
 
     const gestCountsAcc = countGestiones(gestBase);
     const waCountsAcc = new Map<string, number>();
@@ -1360,6 +1358,7 @@ export function LeadsBoard({
     srcFilter,
     numFilter,
     prodFilter,
+    productTitles,
     inQueue,
     queueState,
     segFilter,
@@ -1957,8 +1956,17 @@ export function LeadsBoard({
                 />
               </SheetSection>
             )}
-            {(prodOptions.length > 0 || prodFilter.size > 0) && (
+            {(prodOptions.length > 0 || prodSin > 0 || prodFilter.size > 0) && (
               <SheetSection title="Producto">
+                <label className="mb-3 block text-xs text-ink-600">
+                  Filtrar por
+                  <select aria-label="Tipo de atribución del producto" className="mt-1 w-full rounded-md border border-ink-200 bg-white px-2 py-2 text-sm"
+                    value={productBasis} onChange={(e) => { setProductBasis(e.target.value as "current" | "entry"); setProdFilter(new Set()); }}>
+                    <option value="current">Interés actual</option>
+                    <option value="entry">Producto de entrada</option>
+                  </select>
+                </label>
+                <p className="mb-2 text-xs text-ink-500">{productBasis === "entry" ? "La consulta inicial o el producto declarado del anuncio al ingresar." : "Lo último que consultó el cliente; también reconoce nombres sin enlace."}</p>
                 <CheckList
                   label="Producto"
                   searchable={prodOptions.length > 8}

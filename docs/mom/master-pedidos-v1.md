@@ -7618,6 +7618,35 @@ guías así sobre 842 pedidos; 456 con 15 días o menos, y 254 de la última sem
 todavía de camino de vuelta — el momento en que llamar sirve más, porque el
 paquete sigue cerca de la clienta.
 
+**Producto consultado en WhatsApp (owner, 10-11-2026; 0330).** El filtro
+«Producto» de Más filtros reconoce enlaces y nombres inequívocos del catálogo
+de ESA tienda en mensajes entrantes del cliente, también sin URL. Normaliza
+mayúsculas y tildes; nombres compartidos o varios productos quedan «Sin
+producto» para confirmar. No se infiere por síntomas, beneficios, recomendaciones
+salientes del bot, compras anteriores ni títulos de anuncios.
+
+El filtro permite «Interés actual» (predeterminado) y «Producto de entrada».
+Entrada conserva la primera consulta guardada; si no identifica producto, se
+mantiene la declaración humana del anuncio vigente al ingresar. El interés se
+actualiza por fecha del mensaje, nunca por orden de llegada del enriquecimiento.
+Las consultas ambiguas más recientes no reutilizan un producto anterior. Los
+carritos, enlaces y declaraciones anteriores siguen como respaldo sin cambiar
+la fuente de adquisición. Lista y contadores usan el mismo resolver y catálogo.
+
+Se guardan entrada e interés por separado en leads, con fuente, fecha, mensaje
+y extracto de evidencia, y señales deduplicadas en lead_product_signals. Solo
+la ingesta de servidor escribe esa evidencia; el navegador recibe únicamente
+las proyecciones del lead que ya puede ver. El texto inicial histórico se
+procesa en lotes reanudables de 500 por tienda y pasada. La lista lo resuelve
+en lectura mientras avanza ese relleno. Las conversaciones abiertas se revisan
+por antigüedad de revisión, hasta el límite de enriquecimiento existente; usa
+la página de hasta 100 mensajes recibida de Kapso para interés actual, sin
+pretender que el inicio de esa página sea el inicio real de la conversación.
+Para el texto inicial guardado se usa first_seen_at como fecha de entrada;
+para mensajes consultados por API, la fecha real del mensaje. Un fallo de
+catálogo no marca progreso ni borra datos. No cambia historial de llamadas,
+estados, reservas, elegibilidad ni el segmento exclusivo de la cola.
+
 **Segmentos de la cola de leads.** Un lead cae en UN solo balde, primera
 coincidencia gana: `carrito` → `interes` → `converso` → `frio`.
 

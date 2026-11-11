@@ -1,3 +1,13 @@
+### 10-11-2026 · Producto consultado en Leads (0330)
+
+Aplicar db/migrations/0330_lead_product_attribution.sql antes de desplegar.
+Añade evidencia privada de producto, entrada/interés separados y dos marcas
+de progreso. No modifica importes, pedidos ni elegibilidad de llamadas.
+El sync existente procesa los textos históricos en lotes de 500 por tienda;
+la lista resuelve los primeros mensajes en lectura mientras termina el relleno.
+Comprobar Más filtros → Producto → Interés actual / Producto de entrada,
+consultas por nombre y Sin producto para los casos ambiguos.
+
 # Deployment runbook
 
 ### 10-11-2026 · «Cotejar Olva» se muda a «Pago de diferencia» (MOM §12 y §44)

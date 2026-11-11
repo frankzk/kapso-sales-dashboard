@@ -1,4 +1,5 @@
 "use server";
+import { withProductOpeners } from "@/lib/lead-products-server";
 
 import { measureLeadRead, type LeadReadTiming } from "@/lib/leads-read-timing";
 import { randomUUID } from "node:crypto";
@@ -578,7 +579,7 @@ export async function loadLeadsForAudience(
   // vuelve a comprobar acá, porque una acción de servidor es una API pública.
   const scope = await allowedScope(storeIds);
   if (scope.length !== 1) return [];
-  return getStoreLeads(scope, view, null);
+  return withProductOpeners(createAdminSupabase(), await getStoreLeads(scope, view, null));
 }
 
 export async function searchLeads(storeIds: StoreScope, query: string): Promise<LeadRow[]> {
