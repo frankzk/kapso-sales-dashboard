@@ -3,7 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 vi.mock("@/lib/woocommerce-orders", () => ({ loadStoreOrderPlatform: vi.fn(async () => ({ ok: true, platform: "shopify" })), wooSaleClient: vi.fn() }));
 vi.mock("@/lib/woocommerce", () => ({ wooGetPage: vi.fn() }));
 vi.mock("@/lib/woocommerce-intake", () => ({ withWooAuthFallback: vi.fn() }));
-import { backfillLeadProducts, saveCustomerProducts, withProductOpeners } from "@/lib/lead-products-server";
+import { backfillLeadProducts, saveCustomerProducts, withProductOpeners, markProductConversationAttempt } from "@/lib/lead-products-server";
+import { readFileSync } from "node:fs";
 
 const products = [{ handle: "astaxantina", title: "Astaxantina – Antioxidante" }];
 function client(data: Record<string, unknown[]>, error: string | null = null) {
@@ -11,7 +12,7 @@ function client(data: Record<string, unknown[]>, error: string | null = null) {
   const rpc = vi.fn(async () => ({ error: null }));
   return { rpc, calls, admin: { rpc, from(table: string) {
     const call = { table, filters: [] as unknown[] }; calls.push(call);
-    const builder = { select: () => builder, eq: (...args: unknown[]) => { call.filters.push(args); return builder; },
+    const builder = { select: () => builder, update: (patch: unknown) => { call.filters.push({ patch }); return builder; }, eq: (...args: unknown[]) => { call.filters.push(args); return builder; },
       is: (...args: unknown[]) => { call.filters.push(args); return builder; }, order: () => builder, limit: () => builder, range: () => builder,
       maybeSingle: async () => ({ data: data[table]?.[0] ?? null, error }),
       then(resolve: (value: unknown) => unknown) { return Promise.resolve({ data: data[table] ?? [], error }).then(resolve); } };
@@ -19,6 +20,24 @@ function client(data: Record<string, unknown[]>, error: string | null = null) {
   } } as unknown as SupabaseClient };
 }
 describe("persistencia e historial de producto", () => {
+  it("los intentos sin producto ceden el turno sin escribir evidencia ni tocar otras tiendas", async () => {
+    const c = client({});
+    await markProductConversationAttempt(c.admin, "store-A", "empty-conversation");
+    expect(c.calls).toEqual([{ table: "leads", filters: [
+      { patch: { product_conversation_checked_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) } },
+      ["store_id", "store-A"], ["kapso_conversation_id", "empty-conversation"],
+    ] }]);
+    expect(c.rpc).not.toHaveBeenCalled();
+    await expect(markProductConversationAttempt(client({}, "offline").admin, "store-A", "empty-conversation")).rejects.toThrow();
+  });
+  it("el bucle registra el intento antes de saltarse una conversación vacía o ilegible", () => {
+    const source = readFileSync("lib/leads-ingest.ts", "utf8");
+    const start = source.indexOf("stats.candidates += 1;", source.indexOf("async function enrichLeadsFromConversations"));
+    const block = source.slice(start, source.indexOf("stats.fetched += 1;", start));
+    expect(block.indexOf("markProductConversationAttempt(admin, storeId, convId)")).toBeGreaterThan(-1);
+    expect(block.indexOf("markProductConversationAttempt(admin, storeId, convId)")).toBeLessThan(block.indexOf("if (!sig) continue;"));
+    expect(block).not.toContain("sig.product_messages");
+  });
   it("rellena solo entrada histórica; no reemplaza interés actual con un opener antiguo", async () => {
     const c = client({ leads: [{ id: "lead", first_inbound_text: "Quiero astaxantina", first_seen_at: "2026-01-01" }] });
     expect(await backfillLeadProducts(c.admin, "store", products, 500)).toEqual({ checked: 1, identified: 1 });

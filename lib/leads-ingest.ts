@@ -2,7 +2,7 @@
 // Shopify orders, and apply bot handoffs (Yape/hot). Service-role only.
 
 import { createHash } from "node:crypto";
-import { loadLeadProductCatalog, saveCustomerProducts, backfillLeadProducts } from "./lead-products-server";
+import { loadLeadProductCatalog, saveCustomerProducts, backfillLeadProducts, markProductConversationAttempt } from "./lead-products-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   conversationToLeadSeed,
@@ -708,6 +708,10 @@ async function enrichLeadsFromConversations(
     if (n++ >= LEAD_ENRICH_CAP) break;
     stats.candidates += 1;
     const sig = await fetchConversationSignals(k, convId);
+    // Empty/API-unavailable conversations also yield the slot. Otherwise the
+    // same 80 zero-inbound chats permanently occupy the historical backlog.
+    if (catalogue.length) await markProductConversationAttempt(admin, storeId, convId).catch(() =>
+      noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_review_clock_failed" }));
     if (!sig) continue;
     stats.fetched += 1;
     if (catalogue.length && sig.product_messages?.length) {

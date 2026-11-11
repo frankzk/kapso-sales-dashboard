@@ -1,3 +1,10 @@
+### 11-11-2026 · La revisión de productos rota también chats vacíos
+
+Sin migración. El reloj de rotación se registra en cada intento de lectura,
+aunque Kapso no entregue mensajes entrantes o falle temporalmente. No modifica
+productos ni borra evidencia: evita que los mismos chats vacíos ocupen siempre
+los 80 lugares del relleno de conversaciones.
+
 ### 10-11-2026 · Producto consultado en Leads (0330)
 
 Aplicar db/migrations/0330_lead_product_attribution.sql antes de desplegar.
