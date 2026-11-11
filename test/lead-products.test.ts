@@ -76,6 +76,26 @@ describe("faceta de producto", () => {
 });
 
 describe("barrido de catálogo: nombres de campañas y migración de tienda", () => {
+  const seven = [
+    { query: "HeatLessCurls", handle: "rizador-de-cabello-sin-calor-con-accesorios", title: "HeatLessCurls – Pack de 2 Rizadores de Cabello sin Calor con Accesorios" },
+    { query: "RestPro", handle: "restpro-almohada-de-traccion-inversa", title: "RestPro: Almohada de Tracción Inversa Ergonómica para un Descanso Óptimo" },
+    { query: "Bolso Charlotte", handle: "bolso-de-hombro-charlotte-con-diseno-moderno-a-cuadros-con-gran-capacidad", title: "Bolso de Hombro Charlotte con Diseño Moderno a Cuadros con Gran Capacidad" },
+    { query: "UROCONTROL", handle: "urocontrol-control-de-vejiga-y-urgencia-urinaria-60-capsulas", title: "UROCONTROL – Control de Vejiga y Urgencia Urinaria (60 cápsulas)" },
+    { query: "Cayenne", handle: "sovexa-cayenne-pepper-suplemento-botanico-para-circulacion-saludable-60-capsulas", title: "Cayenne Pepper – Suplemento Botánico para Circulación Saludable" },
+    { query: "Prozenix", handle: "prozenith-pro-capsules-capsulas-metabolicas-para-control-de-antojos-y-bienestar-metabolico-60-capsulas-superhuman", title: "Prozenix Pro Lipozem Capsules – Cápsulas Metabólicas para Control de Antojos" },
+    { query: "Turkesterone", handle: "turkesterone-capsulas-de-ajuga-turkestanica-con-tongkat-ali-para-resistencia-fuerza-y-vitalidad-masculina-120-capsulas-superhuman", title: "Turkesterone – Cápsulas de Ajuga Turkestanica con Tongkat Ali" },
+  ];
+  it.each(seven)("reconoce el nombre corto de $handle sin exigir el subtítulo", p => {
+    expect(buildProductMatcher(seven)(msg(`Hola, quiero información de ${p.query}`))?.handle).toBe(p.handle);
+  });
+  it("respeta rechazos, nombres personales y ambigüedades entre los siete productos", () => {
+    const resolve = buildProductMatcher(seven);
+    expect(resolve(msg("Hola, soy Charlotte"))).toBeNull();
+    expect(resolve(msg("Quiero una almohada o un bolso"))).toBeNull();
+    expect(resolve(msg("No quiero RestPro, quiero HeatLessCurls"))?.handle).toBe(seven[0]!.handle);
+    expect(resolve(msg("RestPro y HeatLessCurls"))?.source).toBe("ambiguous");
+    expect(buildProductMatcher([...seven, { ...seven[0]!, handle: "heatless-otro" }])(msg("HeatLessCurls"))?.source).toBe("ambiguous");
+  });
   const magic = { handle: "aceite-corporal-magic-100-ml", title: "Aceite Corporal Magic™ &#8211; 100 ml: Rellena, Tensa, Reafirma e Hidrata tu Piel" };
   const biru = { handle: "shampoo-biru-anticaspa-ideaslabco", title: "Shampoo Biru™ Anticaspa con Menta y Té Verde – Purifica y Refresca el Cuero Cabelludo &#8211; IdeasLabCo™" };
   const magnesium = { handle: "magnesio-puro", title: "Magnesio Puro – Spray Corporal de Magnesio de Grado Terapéutico (237 ml)" };

@@ -7653,6 +7653,18 @@ distintas siguen ambiguas. «Magnesio Puro» y «Magnesio 12 en 1» siguen separ
 mayúsculas. No se deduce un producto del nombre de la campaña ni se trasladan
 leads entre estados para hacer coincidir los resultados de Meta con la cola.
 
+Desde la corrección de siete nombres del 11-11-2026 se reconocen también
+HeatLessCurls, RestPro, Bolso Charlotte, UROCONTROL, Cayenne, Prozenix y
+Turkesterone por aliases contrastados con el catálogo. «Charlotte» a secas no
+identifica el bolso, pues puede ser el nombre de una persona. Los rechazos y
+las consultas de varios productos conservan las reglas de ambigüedad.
+`mode=repair` del mantenimiento de productos solo lee los IDs fijados en
+`sync_state.source=lead_product_seven_alias_targets_20261111` y escribe las
+asociaciones de esas siete familias mediante 0331. No reescribe entradas ya
+identificadas, estados, reservas, llamadas ni interés posterior. Devuelve solo
+cantidades; las consultas de conteo incluyen el facet «Sin producto» para
+ambas bases y estados, sin filtros particulares de asesora.
+
 La 0331 permite aclarar una asociación ambigua conservando su señal anterior:
 misma evidencia y fecha, y mismo mensaje para interés actual. Una entrada ya
 identificada no cambia; una consulta posterior no se reemplaza por otra antigua.
