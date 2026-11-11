@@ -44,7 +44,13 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { kapsoInboxUrl, kapsoThreadMessages, type OrderKapsoConversation } from "@/lib/order-kapso";
 import { getStoreCreds } from "@/lib/ingest";
 import { normalizePhone } from "@/lib/phone";
-import { fetchConversationTranscript, listConversationsByPhone } from "@/lib/kapso";
+import {
+  fetchConversationTranscript,
+  listConversationsByPhone,
+  sendWhatsappDocument,
+  sendWhatsappImage,
+  sendWhatsappText,
+} from "@/lib/kapso";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { prepayGuideBlock, prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
@@ -350,50 +356,182 @@ export async function loadOrderChatby(
  * de ese celular en Kapso. Con la clave de Kapso de la tienda del pedido, que
  * nunca sale al navegador.
  */
+/**
+ * La conversación de Kapso de la clienta del pedido: la guardada en el pedido,
+ * la de su lead o la última de ese celular. La comparten la pestaña y el envío.
+ */
+async function resolveOrderKapsoConversation(
+  ctx: OrderContext,
+  orderId: string,
+  admin: ReturnType<typeof createAdminSupabase>,
+): Promise<
+  | {
+      status: "ok";
+      opts: { apiKey: string };
+      creds: NonNullable<Awaited<ReturnType<typeof getStoreCreds>>>;
+      phone: string | null;
+      conversationId: string;
+      source: "pedido" | "lead" | "celular";
+    }
+  | { status: "sin_kapso" | "sin_celular" | "sin_conversacion" }
+> {
+  const creds = await getStoreCreds(ctx.storeId, admin, { renewOwnApp: false });
+  if (!creds?.kapso_api_key) return { status: "sin_kapso" };
+  const phone = normalizePhone(ctx.row.customer_phone);
+  const [{ data: order }, lead] = await Promise.all([
+    admin.from("orders").select("kapso_conversation_id").eq("id", orderId).maybeSingle(),
+    phone
+      ? admin.from("leads").select("kapso_conversation_id").eq("store_id", ctx.storeId).eq("phone", phone).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const opts = { apiKey: creds.kapso_api_key };
+  let conversationId = ((order as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
+  let source: "pedido" | "lead" | "celular" = "pedido";
+  if (!conversationId) {
+    conversationId = ((lead.data as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
+    source = "lead";
+  }
+  if (!conversationId) {
+    if (!phone) return { status: "sin_celular" };
+    const conversations = await listConversationsByPhone(opts, phone);
+    const latest = [...conversations].sort((a, b) =>
+      String(b.last_active_at ?? b.kapso?.last_message_timestamp ?? "").localeCompare(String(a.last_active_at ?? a.kapso?.last_message_timestamp ?? "")),
+    )[0];
+    conversationId = latest?.id != null ? String(latest.id) : null;
+    source = "celular";
+  }
+  if (!conversationId) return { status: "sin_conversacion" };
+  return { status: "ok", opts, creds, phone, conversationId, source };
+}
+
 export async function loadOrderKapso(orderId: string): Promise<OrderKapsoConversation> {
   try {
     const ctx = await authorizeOrder(orderId);
     if (!ctx) return { status: "error", message: "Sin acceso a este pedido." };
     const admin = createAdminSupabase();
-    const creds = await getStoreCreds(ctx.storeId, admin, { renewOwnApp: false });
-    if (!creds?.kapso_api_key) return { status: "sin_kapso" };
-    const phone = normalizePhone(ctx.row.customer_phone);
-    const [{ data: order }, lead] = await Promise.all([
-      admin.from("orders").select("kapso_conversation_id").eq("id", orderId).maybeSingle(),
-      phone
-        ? admin.from("leads").select("kapso_conversation_id").eq("store_id", ctx.storeId).eq("phone", phone).maybeSingle()
-        : Promise.resolve({ data: null }),
-    ]);
-    const opts = { apiKey: creds.kapso_api_key };
-    let conversationId = ((order as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
-    let source: "pedido" | "lead" | "celular" = "pedido";
-    if (!conversationId) {
-      conversationId = ((lead.data as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
-      source = "lead";
-    }
-    if (!conversationId) {
-      if (!phone) return { status: "sin_celular" };
-      const conversations = await listConversationsByPhone(opts, phone);
-      const latest = [...conversations].sort((a, b) =>
-        String(b.last_active_at ?? b.kapso?.last_message_timestamp ?? "").localeCompare(String(a.last_active_at ?? a.kapso?.last_message_timestamp ?? "")),
-      )[0];
-      conversationId = latest?.id != null ? String(latest.id) : null;
-      source = "celular";
-    }
-    if (!conversationId) return { status: "sin_conversacion" };
-    const transcript = await fetchConversationTranscript(opts, conversationId, 3);
+    const found = await resolveOrderKapsoConversation(ctx, orderId, admin);
+    if (found.status !== "ok") return { status: found.status };
+    const transcript = await fetchConversationTranscript(found.opts, found.conversationId, 3);
     return {
       status: "ok",
-      conversationId,
-      inboxUrl: kapsoInboxUrl(creds.kapso_project_id, conversationId),
+      conversationId: found.conversationId,
+      inboxUrl: kapsoInboxUrl(found.creds.kapso_project_id, found.conversationId),
       messages: kapsoThreadMessages(transcript),
-      source,
+      source: found.source,
     };
   } catch (cause) {
     if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message };
     console.error("[kapso] conversación del pedido", orderId, cause);
     return { status: "error", message: "No se pudo leer la conversación en Kapso. Reintenta con «Actualizar»." };
   }
+}
+
+/**
+ * Responder a la clienta por Kapso desde la pestaña de la ficha (MOM §25,
+ * «Kapso», owner 11-11-2026: «permíteme responder el Kapso desde el drawer»).
+ * Mismas reglas que Chatby y que Leads: quien puede editar el pedido, dentro
+ * de las 24 h de WhatsApp desde el último mensaje de la clienta (lo vuelve a
+ * mirar con la conversación al día), desde el número de la tienda con que
+ * ella escribió. Texto, o una foto o un PDF con el texto como pie (el adjunto
+ * y el ticket Shalom salen igual que en Chatby, lib/chatby-attachments.ts).
+ * Queda en la Actividad con quién lo mandó.
+ */
+export async function sendOrderKapsoReply(
+  orderId: string,
+  rawText: string,
+  opts: { attachment?: ChatbyAttachmentRequest | null } = {},
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
+  const reply = opts.attachment && !rawText.trim() ? { text: "" } : chatbyReplyText(rawText);
+  if ("error" in reply) return { error: reply.error };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+
+  const found = await resolveOrderKapsoConversation(ctx, orderId, admin);
+  if (found.status !== "ok") {
+    return {
+      error:
+        found.status === "sin_kapso"
+          ? "La tienda no tiene Kapso conectado."
+          : found.status === "sin_celular"
+            ? "El pedido no trae un celular al que escribir."
+            : "Esta clienta no tiene conversación en Kapso.",
+    };
+  }
+  if (!found.phone) return { error: "El pedido no trae un celular al que escribir." };
+
+  // La ventana de 24 h, con la conversación al día (no la que se ve en pantalla).
+  const transcript = await fetchConversationTranscript(found.opts, found.conversationId, 3);
+  if (!chatbyReplyWindow(kapsoThreadMessages(transcript)).open) {
+    return {
+      error:
+        "La clienta no escribió en las últimas 24 horas: WhatsApp no deja mandarle texto libre. Para escribirle, una plantilla desde Kapso o desde Leads.",
+    };
+  }
+
+  // Desde el número de la tienda con que escribió la clienta.
+  const conversations = await listConversationsByPhone(found.opts, found.phone);
+  const pnId =
+    conversations.find((c) => String(c.id) === found.conversationId)?.phone_number_id?.trim() ||
+    found.creds.whatsapp_phone_number_id ||
+    null;
+  if (!pnId) return { error: "La tienda no tiene un número de WhatsApp configurado en Kapso." };
+
+  const attachment = opts.attachment ? await resolveChatbyAttachment(ctx, orderId, opts.attachment) : null;
+  if (attachment && "error" in attachment) return { error: attachment.error };
+
+  const caption = reply.text || undefined;
+  const sent = attachment
+    ? attachment.type === "image"
+      ? await sendWhatsappImage(found.opts, { phoneNumberId: pnId, to: found.phone, imageUrl: attachment.url, caption })
+      : await sendWhatsappDocument(found.opts, {
+          phoneNumberId: pnId,
+          to: found.phone,
+          documentUrl: attachment.url,
+          filename: kapsoDocumentFilename(attachment.record),
+          caption,
+        })
+    : await sendWhatsappText(found.opts, { phoneNumberId: pnId, to: found.phone, body: reply.text });
+  if (!sent.ok) {
+    const closed = sent.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(sent.error);
+    return {
+      error: closed
+        ? "Se cerró la ventana de 24 h: la clienta tiene que volver a escribir para poder responderle."
+        : sent.ambiguous
+          ? "No pudimos confirmar si salió. No lo reenvíes todavía: revisa con «Actualizar»."
+          : `Kapso no lo mandó: ${sent.error}`,
+    };
+  }
+
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "kapso_message",
+    source: "kapso",
+    reason: attachment && reply.text ? attachment.note : null,
+    note: reply.text || attachment?.note || null,
+    payload: {
+      conversation_id: found.conversationId,
+      phone_number_id: pnId,
+      message_id: sent.id ?? null,
+      ...(attachment ? { attachment: attachment.record } : {}),
+    },
+  });
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  const sentWhat = attachment ? (attachment.record.kind === "shalom_ticket" ? "Ticket Shalom enviado por Kapso." : "Archivo enviado por Kapso.") : "Mensaje enviado por Kapso.";
+  return eventError ? { notice: `${sentWhat} No se pudo anotar en la Actividad: ${eventError}` } : { notice: sentWhat };
+}
+
+/** El nombre del PDF que ve la clienta en WhatsApp. */
+function kapsoDocumentFilename(record: Record<string, unknown>): string {
+  if (record.kind === "shalom_ticket") {
+    const guide = typeof record.guide_code === "string" ? record.guide_code : "";
+    return guide ? `Ticket Shalom ${guide}.pdf` : "Ticket Shalom.pdf";
+  }
+  const name = typeof record.filename === "string" ? record.filename : "documento.pdf";
+  return /\.pdf$/i.test(name) ? name : `${name}.pdf`;
 }
 
 /**
