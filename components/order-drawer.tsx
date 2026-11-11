@@ -2709,7 +2709,15 @@ export function OrderDrawer({
               hidden={workspace !== "kapso"}
               className="flex flex-col gap-4 sm:gap-6"
             >
-              <OrderKapsoPanel orderId={orderId} orderName={detail.row.order_name} onCustomerMessages={setKapsoCustomerMessages} />
+              <OrderKapsoPanel
+                orderId={orderId}
+                orderName={detail.row.order_name}
+                onCustomerMessages={setKapsoCustomerMessages}
+                canEdit={canEdit}
+                shalomTicket={(() => {
+                  const g = shalomTicketShipment(detail.guides);
+                  return g ? { guideCode: g.guide_code ?? null } : null;
+                })()} />
             </div>
             {/* «Repro Lima» (MOM §9.5): montada desde que se abre; oculta, suelta el caso. */}
             {reproRow && reproMountedFor === orderId && reproSession.orderId === orderId && (

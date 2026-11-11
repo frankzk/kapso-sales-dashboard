@@ -35,6 +35,13 @@ consultas por nombre y Sin producto para los casos ambiguos.
 
 # Deployment runbook
 
+### 11-11-2026 · Responder por Kapso desde la ficha del pedido (MOM §25 «Kapso»)
+
+**Sin migración.** En la pestaña «Kapso» de la ficha, quien puede editar el
+pedido responde a la clienta (texto, foto, PDF o ticket Shalom) dentro de las
+24 h, desde el número de la tienda con que ella escribió. Queda en Actividad
+como `kapso_message` y cuenta como gestión en «Pago de diferencia».
+
 ### 10-11-2026 · «Cotejar Olva» se muda a «Pago de diferencia» (MOM §12 y §44)
 
 **Sin migración.**

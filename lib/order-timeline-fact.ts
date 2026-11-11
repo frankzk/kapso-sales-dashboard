@@ -112,6 +112,8 @@ const POR_KIND: Record<string, TimelineFact> = {
   chatby_history_guide: consulta("ubicacion"),
   // MOM §25, «Chatby» (02-11-2026): una persona le escribió a la clienta desde la ficha.
   chatby_message: consulta("mensaje"),
+  // MOM §25, «Kapso» (11-11-2026): una persona le escribió a la clienta desde la ficha.
+  kapso_message: consulta("mensaje"),
   // El WhatsApp que mandó el agente de IA por el conector (MOM §42.9).
   agent_whatsapp: consulta("mensaje"),
 

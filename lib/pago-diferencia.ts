@@ -20,6 +20,7 @@
 export const PAGO_DIFERENCIA_GESTION_KINDS = [
   "comment",
   "chatby_message",
+  "kapso_message",
   "confirmation_contact",
   "browser_call",
   "anura_call",
@@ -28,6 +29,7 @@ export const PAGO_DIFERENCIA_GESTION_KINDS = [
 const GESTION_LABEL: Record<string, string> = {
   comment: "Comentario",
   chatby_message: "WhatsApp (Chatby)",
+  kapso_message: "WhatsApp (Kapso)",
   confirmation_contact: "Contacto",
   browser_call: "Llamada desde Kapta",
   anura_call: "Llamada con Anura",

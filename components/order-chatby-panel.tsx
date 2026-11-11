@@ -14,7 +14,7 @@ import { cn } from "@/components/ui";
 import { Badge, Banner, FIELD, OpsButton, SECTION_CARD, SectionHead, Skeleton, opsButtonClass } from "@/components/ops-ui";
 import { IconAlert, IconArrowUpRight, IconChat, IconCheck, IconCopy, IconImage, IconMapPin, IconRepeat } from "@/components/icons";
 import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
-import { createOrderChatbyUpload, loadOrderChatby, sendOrderChatbyReply } from "@/app/dashboard/pedidos/actions";
+import { createOrderChatbyUpload, loadOrderChatby, sendOrderChatbyReply, sendOrderKapsoReply } from "@/app/dashboard/pedidos/actions";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { fitWithin } from "@/lib/photo-resize";
 import { CHATBY_ATTACHMENT_BUCKET, chatbyTakesPagePaste, type ChatbyAttachmentRequest } from "@/lib/chatby-attachments";
@@ -272,26 +272,34 @@ function whenInLima(iso: string): string {
   return `${day ? chatbyDayLabel(day) : ""} ${chatbyLimaTime(iso)}`.trim();
 }
 
+/** Por dónde sale la respuesta: el bot de Chatby o el número de Kapso de la tienda. */
+export type ReplyChannel = "chatby" | "kapso";
+
+const CHANNEL_NAME: Record<ReplyChannel, string> = { chatby: "Chatby", kapso: "Kapso" };
+
 /**
- * La caja para responder (MOM §25, «Chatby», 02-11-2026). Solo con la ventana
- * de 24 h de WhatsApp abierta; si está cerrada, dice por qué y manda a Chatby
- * (allí están las plantillas). El servidor vuelve a comprobar todo antes de
- * mandar.
+ * La caja para responder (MOM §25, «Chatby», 02-11-2026; «Kapso», 11-11-2026).
+ * Solo con la ventana de 24 h de WhatsApp abierta; si está cerrada, dice por
+ * qué y manda a Chatby o a Kapso (allí están las plantillas). El servidor
+ * vuelve a comprobar todo antes de mandar.
  */
-function ReplyBox({
+export function ReplyBox({
   orderId,
   messages,
   inboxUrl,
   onSent,
   shalomTicket = null,
+  channel = "chatby",
 }: {
   orderId: string;
   messages: ChatbyMessage[];
-  inboxUrl: string;
+  inboxUrl: string | null;
   /** Salió: el panel vuelve a leer la conversación y muestra el aviso. */
   onSent: (notice: string) => void;
   shalomTicket?: { guideCode: string | null } | null;
+  channel?: ReplyChannel;
 }) {
+  const channelName = CHANNEL_NAME[channel];
   const [text, setText] = useState("");
   const [pending, setPending] = useState<null | "texto" | "ticket">(null);
   const [error, setError] = useState<string | null>(null);
@@ -340,10 +348,14 @@ function ReplyBox({
           ? `La clienta escribió por última vez: ${whenInLima(ventana.lastCustomerAt)}. Pasaron más de 24 horas y WhatsApp no deja mandarle texto libre.`
           : "La clienta no escribió en estos mensajes: WhatsApp solo deja mandarle texto libre hasta 24 horas después de su último mensaje."}{" "}
         Para escribirle hay que usar una plantilla desde{" "}
-        <a href={inboxUrl} target="_blank" rel="noreferrer noopener" className="font-medium text-brand-700 hover:underline">
-          Chatby
-        </a>
-        .
+        {inboxUrl ? (
+          <a href={inboxUrl} target="_blank" rel="noreferrer noopener" className="font-medium text-brand-700 hover:underline">
+            {channelName}
+          </a>
+        ) : (
+          channelName
+        )}
+        {channel === "kapso" ? " o desde Leads" : ""}.
       </Banner>
     );
   }
@@ -373,7 +385,10 @@ function ReplyBox({
         }
         attachment = { kind: "upload", path: uploaded.path, filename: file.name };
       }
-      const result = await sendOrderChatbyReply(orderId, text, { attachment });
+      const result =
+        channel === "kapso"
+          ? await sendOrderKapsoReply(orderId, text, { attachment })
+          : await sendOrderChatbyReply(orderId, text, { attachment });
       if (result.error) {
         setError(result.error);
         return;
@@ -486,8 +501,10 @@ function ReplyBox({
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-xs leading-4 text-ink-500">
-          Sale como persona del equipo. El bot de esta clienta queda en pausa {CHATBY_REPLY_PAUSE_MINUTES} minutos. Se puede
-          escribir hasta: {whenInLima(ventana.closesAt)}. Una foto, captura o PDF se adjunta con Ctrl+V en cualquier parte de esta pestaña, sin hacer clic antes.
+          {channel === "kapso"
+            ? "Sale del número de WhatsApp de la tienda con que escribió la clienta y queda en Actividad con tu nombre."
+            : `Sale como persona del equipo. El bot de esta clienta queda en pausa ${CHATBY_REPLY_PAUSE_MINUTES} minutos.`}{" "}
+          Se puede escribir hasta: {whenInLima(ventana.closesAt)}. Una foto, captura o PDF se adjunta con Ctrl+V en cualquier parte de esta pestaña, sin hacer clic antes.
         </p>
       </div>
       {error && (

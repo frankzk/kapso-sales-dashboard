@@ -15485,12 +15485,35 @@ estables:
      mensajes escribió la clienta.
    - **Cuándo se lee:** al abrir la ficha de ese pedido, con la clave de Kapso
      de su tienda (en el servidor) y «Actualizar»; nunca en segundo plano. No
-     se guarda nada en Kapta. La ve quien ya puede ver el pedido (RLS). Para
-     escribirle a la clienta, Leads o Kapso: desde aquí no se manda nada.
-   - Implementación: `lib/order-kapso.ts` (reglas puras), `loadOrderKapso` en
-     `app/dashboard/pedidos/actions.ts`, `components/order-kapso-panel.tsx`
-     (con el hilo de `order-chatby-panel.tsx`); `?seccion=kapso` abre la
-     pestaña. Pruebas: `test/order-kapso.test.ts`.
+     se guarda nada en Kapta. La ve quien ya puede ver el pedido (RLS).
+   - **Responder desde la ficha (11-11-2026, owner: «permíteme responder el
+     Kapso desde el drawer»).** Debajo de la conversación, la misma caja
+     «Responder por WhatsApp» que Chatby (`ReplyBox`), para quien puede
+     editar el pedido (`master.edit`; sin ese permiso la pestaña sigue «Solo
+     lectura»):
+     - **Ventana de 24 h:** solo hasta 24 h después del último mensaje de la
+       clienta; el servidor lo vuelve a mirar con la conversación al día.
+       Pasado eso, un aviso manda a una plantilla desde Kapso o Leads. Si
+       WhatsApp rechaza por la ventana (131047), se dice así.
+     - **Desde qué número:** el de la tienda con que escribió la clienta en
+       esa conversación (`phone_number_id`); si Kapso no lo dice, el número de
+       WhatsApp de la tienda.
+     - **Qué se manda:** texto, o una foto o un PDF (pegar con Ctrl+V,
+       arrastrar o «Adjuntar foto o PDF») o «Enviar ticket Shalom (PDF)», con
+       el texto como pie: los mismos adjuntos y reglas que Chatby
+       (`lib/chatby-attachments.ts`), por el envío de WhatsApp de Kapso que
+       usa Leads (`sendWhatsappText`, `sendWhatsappImage`,
+       `sendWhatsappDocument`).
+     - **Queda en la Actividad** como «Mensaje por WhatsApp (Kapso)» (`kind =
+       kapso_message`, `source = 'kapso'`), con quien lo mandó, el texto o lo
+       enviado y en `payload` la conversación, el número y el id del mensaje.
+       Cuenta como gestión en «Pago de diferencia» (§44). No pausa ningún bot
+       (Kapso no tiene esa pausa) y no cambia el estado del pedido.
+   - Implementación: `lib/order-kapso.ts` (reglas puras), `loadOrderKapso` y
+     `sendOrderKapsoReply` en `app/dashboard/pedidos/actions.ts`,
+     `components/order-kapso-panel.tsx` (con el hilo y la caja de
+     `order-chatby-panel.tsx`); `?seccion=kapso` abre la pestaña. Pruebas:
+     `test/order-kapso.test.ts` y `test/order-kapso-reply.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
@@ -26283,7 +26306,7 @@ entra. Medido con el filtro: En agencia 176, En camino 85, Recogidos sin pago
   fotos de constancia tiene (§43). Y cuántas gestiones van.
 
 **Qué cuenta como gestión.** Solo los hechos de una PERSONA (`actor` no nulo)
-de esos tipos: `comment`, `chatby_message`, `confirmation_contact`,
+de esos tipos: `comment`, `chatby_message`, `kapso_message`, `confirmation_contact`,
 `browser_call` y `anura_call`. Lo automático y el agente de IA no cuentan, ni
 la nota que deja corregir la dirección (comentario de tipo `ubicacion`): es un
 arreglo del pedido, no un contacto con la clienta.

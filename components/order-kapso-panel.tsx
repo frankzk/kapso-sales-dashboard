@@ -1,7 +1,10 @@
 "use client";
 
 // La pestaña «Kapso» de la ficha del pedido (MOM §25, 08-11-2026): la
-// conversación de WhatsApp de la clienta con el bot de Kapso, solo para leer.
+// conversación de WhatsApp de la clienta con el bot de Kapso. Desde el
+// 11-11-2026 (owner: «permíteme responder el Kapso desde el drawer») quien
+// puede editar el pedido le responde aquí, con la misma caja que Chatby
+// (`ReplyBox`): texto, foto, PDF o el ticket Shalom, dentro de las 24 h.
 // El owner la pidió al ver que #KP204280 seguía «Pendiente» en Kapta aunque la
 // clienta lo había confirmado con el bot de Kapso: el equipo valida leyendo
 // aquí, sin salir de la ficha. Misma anatomía que «Chatby» (la clienta a la
@@ -13,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/components/ui";
 import { Badge, Banner, OpsButton, SECTION_CARD, SectionHead, Skeleton, opsButtonClass } from "@/components/ops-ui";
 import { IconArrowUpRight, IconRepeat } from "@/components/icons";
-import { ConversationThread } from "@/components/order-chatby-panel";
+import { ConversationThread, ReplyBox } from "@/components/order-chatby-panel";
 import { loadOrderKapso } from "@/app/dashboard/pedidos/actions";
 import { KAPSO_THREAD_LIMIT, type OrderKapsoConversation } from "@/lib/order-kapso";
 import { chatbyCustomerCount, type ChatbyMessage } from "@/lib/chatby-conversation";
@@ -36,13 +39,20 @@ export function OrderKapsoPanel({
   orderId,
   orderName,
   onCustomerMessages,
+  canEdit = false,
+  shalomTicket = null,
 }: {
   orderId: string;
   orderName: string | null;
   /** Cuántos de los mensajes traídos son de la clienta, para la cifra de la pestaña; null mientras no se sabe. */
   onCustomerMessages?: (count: number | null) => void;
+  /** Quien puede editar el pedido también le responde a la clienta (`master.edit`). */
+  canEdit?: boolean;
+  /** La guía Shalom cuyo ticket se puede mandar en PDF (lib/chatby-attachments.ts). */
+  shalomTicket?: { guideCode: string | null } | null;
 }) {
   const [state, setState] = useState<LoadState | null>(null);
+  const [sentNotice, setSentNotice] = useState<string | null>(null);
   const loadedFor = useRef<string | null>(null);
 
   const load = useCallback(() => {
@@ -73,8 +83,12 @@ export function OrderKapsoPanel({
       <SectionHead
         id="pedido-kapso-title"
         title="Conversación en Kapso"
-        badge={<Badge>Solo lectura</Badge>}
-        help={`Los últimos ${KAPSO_THREAD_LIMIT} mensajes de la clienta con el bot de Kapso de la tienda, en hora de Lima. Sirve para validar lo que la clienta confirmó con el bot; para escribirle, en Leads o en Kapso.`}
+        badge={canEdit ? undefined : <Badge>Solo lectura</Badge>}
+        help={
+          canEdit
+            ? `Los últimos ${KAPSO_THREAD_LIMIT} mensajes de la clienta con el bot de Kapso de la tienda, en hora de Lima. Para validar lo que confirmó con el bot y para responderle aquí, dentro de las 24 h de WhatsApp.`
+            : `Los últimos ${KAPSO_THREAD_LIMIT} mensajes de la clienta con el bot de Kapso de la tienda, en hora de Lima. Sirve para validar lo que la clienta confirmó con el bot; para escribirle, en Leads o en Kapso.`
+        }
         aside={
           <>
             <OpsButton onClick={load} disabled={loading} className="pointer-coarse:h-11">
@@ -91,6 +105,11 @@ export function OrderKapsoPanel({
         }
       />
 
+      {sentNotice && (
+        <Banner tone="ok" role="status">
+          {sentNotice}
+        </Banner>
+      )}
       <div aria-live="polite" aria-busy={loading}>
         {loading || !state ? (
           <div className="space-y-2">
@@ -103,6 +122,19 @@ export function OrderKapsoPanel({
             <div className="space-y-2">
               <p className="text-[13px] leading-5 text-ink-600">{SOURCE_LABEL[result.source]}</p>
               <ConversationThread messages={result.messages} orderName={orderName} speakerOf={kapsoSpeaker} />
+              {canEdit && (
+                <ReplyBox
+                  channel="kapso"
+                  orderId={orderId}
+                  messages={result.messages}
+                  inboxUrl={result.inboxUrl}
+                  shalomTicket={shalomTicket}
+                  onSent={(notice) => {
+                    setSentNotice(notice);
+                    load();
+                  }}
+                />
+              )}
             </div>
           ) : (
             <p className="text-sm text-ink-600">La conversación de esta clienta en Kapso está vacía.</p>
