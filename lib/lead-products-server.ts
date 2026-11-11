@@ -68,6 +68,15 @@ export async function saveCustomerProducts(admin: SupabaseClient, storeId: strin
   if (error) throw new Error("No se pudo guardar la atribución del producto.");
 }
 
+/** Rotation clock is an attempt, not proof of product evidence. Empty/unreadable
+ * chats must yield their place as well, and are retried on the next rotation. */
+export async function markProductConversationAttempt(admin: SupabaseClient, storeId: string, conversationId: string) {
+  const { error } = await admin.from("leads")
+    .update({ product_conversation_checked_at: new Date().toISOString() })
+    .eq("store_id", storeId).eq("kapso_conversation_id", conversationId);
+  if (error) throw new Error("No se pudo registrar el intento de revisión de productos.");
+}
+
 /** Bounded, resumable pass over stored first customer messages, including old
  * leads. No Kapso mass fetch, no calls/messages, never changes queue eligibility. */
 export async function backfillLeadProducts(admin: SupabaseClient, storeId: string, catalogue: readonly LeadCatalogProduct[], limit = 500) {

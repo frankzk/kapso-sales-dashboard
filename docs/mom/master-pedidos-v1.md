@@ -7639,7 +7639,10 @@ la ingesta de servidor escribe esa evidencia; el navegador recibe únicamente
 las proyecciones del lead que ya puede ver. El texto inicial histórico se
 procesa en lotes reanudables de 500 por tienda y pasada. La lista lo resuelve
 en lectura mientras avanza ese relleno. Las conversaciones abiertas se revisan
-por antigüedad de revisión, hasta el límite de enriquecimiento existente; usa
+por antigüedad del último intento, hasta el límite de enriquecimiento existente.
+Los chats sin mensajes entrantes o cuya lectura falla también ceden el turno
+y vuelven a intentarse en la siguiente rotación; esa marca no afirma que se
+haya identificado un producto ni cambia evidencia anterior (11-11-2026). Usa
 la página de hasta 100 mensajes recibida de Kapso para interés actual, sin
 pretender que el inicio de esa página sea el inicio real de la conversación.
 Para el texto inicial guardado se usa first_seen_at como fecha de entrada;
