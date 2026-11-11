@@ -25508,6 +25508,23 @@ la chapa y el aviso: `components/lista-negra-badge.tsx` y
 `components/lista-negra-banner.tsx`. Pruebas: `test/lista-negra.test.ts` y
 `scripts/sql/lista_negra_smoke.sql`.
 
+**La lista en memoria del servidor (11-11-2026).** La «una lectura por página»
+de las marcas resultó cara: Leads se refresca sola cada ~30 s en la pantalla de
+cada asesora y cada refresco preguntaba por todos los celulares de la cola, tres
+lecturas por cada 200 celulares. Eran ~7 500 lecturas por hora a cada una de
+`pago_online_phones`, `pago_online_exceptions` y `prepay_list_entries`, las
+que más ocupaban la puerta de la base (PostgREST). Ese día la base dejó de
+responder de 10:31 a 10:34 de Lima y se reinició. Desde entonces
+`listaNegraMarksAmong` contesta desde un **índice en memoria por
+organización**: la lista entera —la automática vigente sin las excepciones y
+las altas vivas a mano, ~3 100 celulares— se lee como mucho **cada dos
+minutos** por instancia del servidor (`LISTA_NEGRA_INDEX_TTL_MS`,
+`lib/lista-negra-cache.ts`). Dar de alta, quitar, exceptuar o correr una lista
+nueva lo olvida en la instancia que lo hizo; en las demás se ve en hasta dos
+minutos. La lista sigue sin salir del servidor y las marcas no cambian. La
+búsqueda por un celular y los frenos del pedido siguen leyendo la base al
+momento. Prueba: `test/lista-negra-index.test.ts`.
+
 Migración `0309_prepay_list.sql` (`prepay_list_entries` con
 `removed_known_order_ids`, `prepay_list_settings`; lectura para miembros de la
 organización y todo para `service_role`; no cambia datos). La regla, pura:

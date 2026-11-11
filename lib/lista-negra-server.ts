@@ -10,6 +10,7 @@ import "server-only";
 // persona: `lista_negra_searches`, 0329).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { forgetListaNegraIndex, LISTA_NEGRA_INDEX_TTL_MS, listaNegraIndexCache } from "@/lib/lista-negra-cache";
 import { resolveAgentNames } from "@/lib/agent-names";
 import { formatLimaDateTime } from "@/lib/automations-catalog";
 import { isMissingPagoOnline } from "@/lib/pago-online-lookup";
@@ -37,14 +38,114 @@ import {
 } from "@/lib/lista-negra";
 
 /**
+ * Cuánto vive en memoria el índice de la Lista negra de una organización
+ * (11-11-2026). Leads se refresca sola cada ~30 s en la pantalla de cada
+ * asesora y cada refresco preguntaba por TODOS los celulares de la cola: tres
+ * lecturas por cada 200 celulares, unas 22 000 por hora a la base (la puerta de
+ * PostgREST se saturó y la base se reinició a las 10:31 de Lima). Ahora cada
+ * instancia del servidor lee la lista ENTERA de la organización —~3 100
+ * celulares, unos cientos de KB— como mucho cada dos minutos y contesta en
+ * memoria. Un alta, una baja o una excepción se ven en otra instancia hasta dos
+ * minutos después; en la que la hizo, al instante (`forgetListaNegraIndex`,
+ * lib/lista-negra-cache.ts).
+ */
+interface ListaNegraOrgIndex {
+  /** La automática vigente sin las excepciones: celular (9 dígitos) → marca. */
+  auto: Map<string, ListaNegraMark>;
+  /** Las altas vivas a mano: celular (9 dígitos) → marca. */
+  manual: Map<string, ListaNegraMark>;
+}
+
+const indexCache = listaNegraIndexCache as Map<string, { at: number; index: Promise<ListaNegraOrgIndex> }>;
+export { forgetListaNegraIndex, LISTA_NEGRA_INDEX_TTL_MS };
+
+const PAGE = 1000;
+
+/** Lee la lista entera de la organización. Lanza si la base falla. */
+async function loadListaNegraOrgIndex(admin: SupabaseClient, orgId: string): Promise<ListaNegraOrgIndex> {
+  const auto = new Map<string, ListaNegraMark>();
+  const manual = new Map<string, ListaNegraMark>();
+
+  const { data: settingsRow, error: sErr } = await admin
+    .from("pago_online_settings")
+    .select("org_id,current_run_id,requirement")
+    .eq("org_id", orgId)
+    .eq("mode", "activo")
+    .maybeSingle();
+  if (sErr && !isMissingPagoOnline(sErr)) throw new Error(sErr.message);
+  const run = settingsRow as { current_run_id: string | null; requirement?: string } | null;
+
+  const [phones, exceptions, entries] = await Promise.all([
+    (async () => {
+      const rows: { phone: string; reason: string; failed: number | null; orders: number | null }[] = [];
+      if (!run?.current_run_id) return rows;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await admin
+          .from("pago_online_phones")
+          .select("phone,reason,failed,orders")
+          .eq("run_id", run.current_run_id)
+          .order("phone")
+          .range(from, from + PAGE - 1);
+        if (error) throw new Error(error.message);
+        const page = (data ?? []) as typeof rows;
+        rows.push(...page);
+        if (page.length < PAGE) return rows;
+      }
+    })(),
+    run?.current_run_id
+      ? admin.from("pago_online_exceptions").select("phone").eq("org_id", orgId).is("removed_at", null)
+      : Promise.resolve({ data: [], error: null }),
+    withRequirementColumn((columns) =>
+      admin
+        .from("prepay_list_entries")
+        .select(columns.endsWith(",requirement") ? "phone,reason,requirement" : "phone,reason")
+        .eq("org_id", orgId)
+        .is("removed_at", null),
+    ),
+  ]);
+  if (exceptions.error) throw new Error(exceptions.error.message);
+  if (entries.error && !isMissingPrepayTable(entries.error)) throw new Error(entries.error.message ?? "error de la base");
+
+  const excepted = new Set(((exceptions.data ?? []) as { phone: string }[]).map((e) => pagoOnlinePhoneKey(e.phone)).filter(Boolean));
+  const requirement = isPagoOnlineRequirement(run?.requirement) ? run!.requirement! : PAGO_ONLINE_DEFAULT_REQUIREMENT;
+  for (const h of phones) {
+    const phone = pagoOnlinePhoneKey(h.phone);
+    if (!phone || excepted.has(phone)) continue;
+    auto.set(
+      phone,
+      listaNegraAutoMark(
+        { reason: isPagoOnlineReason(h.reason) ? h.reason : "devuelto", failed: h.failed, orders: h.orders },
+        requirement as Parameters<typeof listaNegraAutoMark>[1],
+      ),
+    );
+  }
+  for (const e of (entries.error ? [] : (entries.data ?? [])) as unknown as { phone: string; reason: string; requirement?: unknown }[]) {
+    const phone = pagoOnlinePhoneKey(e.phone);
+    if (phone) manual.set(phone, listaNegraManualMark(e));
+  }
+  return { auto, manual };
+}
+
+/** El índice de la organización, de memoria si tiene menos de dos minutos. */
+function listaNegraOrgIndex(admin: SupabaseClient, orgId: string, now = Date.now()): Promise<ListaNegraOrgIndex> {
+  const hit = indexCache.get(orgId);
+  if (hit && now - hit.at < LISTA_NEGRA_INDEX_TTL_MS) return hit.index;
+  const index = loadListaNegraOrgIndex(admin, orgId);
+  indexCache.set(orgId, { at: now, index });
+  // Si la lectura falla, no se guarda: la próxima vuelve a intentar.
+  index.catch(() => {
+    if (indexCache.get(orgId)?.index === index) indexCache.delete(orgId);
+  });
+  return index;
+}
+
+/**
  * Los celulares de una página que están en la Lista negra —la automática
  * vigente (Activo, sin las excepciones de Kapta) o un alta viva a mano—, como
  * llaves `listaNegraKey(org, celular)` → su marca (motivo y requisito, con las
- * cuentas del propio cliente). UNA lectura por página, como la chapa del
- * Master: las dos listas a la par y los trozos de celulares también. Con el
- * cliente de servicio: los celulares de la automática no se leen desde el
- * navegador, y aquí solo se contesta de los que la página ya muestra. Lanza si
- * la base falla; sin la 0326 o la 0309, esa lista no marca nada.
+ * cuentas del propio cliente). Contesta desde el índice en memoria de cada
+ * organización (`LISTA_NEGRA_INDEX_TTL_MS`); la lista no sale del servidor.
+ * Lanza si la base falla; sin la 0326 o la 0309, esa lista no marca nada.
  */
 export async function listaNegraMarksAmong(
   admin: SupabaseClient,
@@ -55,70 +156,14 @@ export async function listaNegraMarksAmong(
   const orgs = [...new Set(orgIds.filter(Boolean))];
   const phones9 = [...new Set(rawPhones.map(pagoOnlinePhoneKey).filter((p): p is string => !!p))];
   if (!orgs.length || !phones9.length) return out;
-  const chunks: string[][] = [];
-  for (let i = 0; i < phones9.length; i += 200) chunks.push(phones9.slice(i, i + 200));
-
-  const { data: settingsRows, error: sErr } = await admin
-    .from("pago_online_settings")
-    .select("org_id,current_run_id,requirement")
-    .in("org_id", orgs)
-    .eq("mode", "activo");
-  if (sErr && !isMissingPagoOnline(sErr)) throw new Error(sErr.message);
-  const runs = ((settingsRows ?? []) as { org_id: string; current_run_id: string | null; requirement?: string }[]).filter((r) => r.current_run_id);
-  const runOrg = new Map(runs.map((r) => [r.current_run_id!, r]));
-
-  const auto = new Map<string, ListaNegraMark>();
-  const manual = new Map<string, ListaNegraMark>();
-  await Promise.all(
-    chunks.map(async (chunk) => {
-      const canonical = chunk.map((p) => `51${p}`);
-      const [hits, exc, entries] = await Promise.all([
-        runOrg.size
-          ? admin.from("pago_online_phones").select("run_id,phone,reason,failed,orders").in("run_id", [...runOrg.keys()]).in("phone", chunk)
-          : Promise.resolve({ data: [], error: null }),
-        runOrg.size
-          ? admin
-              .from("pago_online_exceptions")
-              .select("org_id,phone")
-              .in("org_id", [...new Set(runs.map((r) => r.org_id))])
-              .in("phone", chunk)
-              .is("removed_at", null)
-          : Promise.resolve({ data: [], error: null }),
-        withRequirementColumn((columns) =>
-          admin
-            .from("prepay_list_entries")
-            .select(columns.endsWith(",requirement") ? "org_id,phone,reason,requirement" : "org_id,phone,reason")
-            .in("org_id", orgs)
-            .in("phone", canonical)
-            .is("removed_at", null),
-        ),
-      ]);
-      if (hits.error) throw new Error(hits.error.message);
-      if (exc.error) throw new Error(exc.error.message);
-      if (entries.error && !isMissingPrepayTable(entries.error)) throw new Error(entries.error.message ?? "error de la base");
-      const excepted = new Set(((exc.data ?? []) as { org_id: string; phone: string }[]).map((e) => pagoOnlineListedKey(e.org_id, e.phone)));
-      for (const h of (hits.data ?? []) as { run_id: string; phone: string; reason: string; failed: number | null; orders: number | null }[]) {
-        const run = runOrg.get(h.run_id);
-        if (!run) continue;
-        const key = pagoOnlineListedKey(run.org_id, h.phone);
-        if (excepted.has(key)) continue;
-        auto.set(
-          key,
-          listaNegraAutoMark(
-            { reason: isPagoOnlineReason(h.reason) ? h.reason : "devuelto", failed: h.failed, orders: h.orders },
-            isPagoOnlineRequirement(run.requirement) ? run.requirement : PAGO_ONLINE_DEFAULT_REQUIREMENT,
-          ),
-        );
-      }
-      for (const e of (entries.error ? [] : (entries.data ?? [])) as unknown as { org_id: string; phone: string; reason: string; requirement?: unknown }[]) {
-        manual.set(pagoOnlineListedKey(e.org_id, e.phone.slice(-9)), listaNegraManualMark(e));
-      }
-    }),
-  );
-  for (const key of new Set([...auto.keys(), ...manual.keys()])) {
-    const mark = listaNegraMergeMarks(manual.get(key), auto.get(key));
-    if (mark) out.set(key, mark);
-  }
+  const indexes = await Promise.all(orgs.map((org) => listaNegraOrgIndex(admin, org)));
+  orgs.forEach((org, i) => {
+    const index = indexes[i]!;
+    for (const phone of phones9) {
+      const mark = listaNegraMergeMarks(index.manual.get(phone), index.auto.get(phone));
+      if (mark) out.set(pagoOnlineListedKey(org, phone), mark);
+    }
+  });
   return out;
 }
 
