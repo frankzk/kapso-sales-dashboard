@@ -7663,6 +7663,14 @@ El barrido v2 recorre todos los leads por cursor propio en sync_state, hasta
 el cursor si falla una escritura; al terminar atiende los nuevos sin revisar.
 El filtro interpreta los mensajes iniciales guardados mientras avanza el barrido.
 No se extraen conversaciones de clientes al entorno local para esta revisión.
+Para completar una revisión manual, `/api/internal/leads/product-review` ejecuta
+los mismos lotes dentro del servidor con cursor `lead_product_full_audit_20261111`.
+No se agenda ni ejecuta la sincronización general: no llama ni escribe al cliente.
+Solo acepta POST y una credencial de mantenimiento con caducidad y tiendas
+explícitas (`LEAD_PRODUCT_REVIEW_ACCESS`); no usa ni revela el secreto general
+del cron. Devuelve progreso y conteos agregados, nunca mensajes ni identidades.
+Los conteos usan los resolvers compartidos de producto y cola, sin filtros de
+asesora: producto de entrada e interés actual, Por llamar y En seguimiento.
 
 Se guardan entrada e interés por separado en leads, con fuente, fecha, mensaje
 y extracto de evidencia, y señales deduplicadas en lead_product_signals. Solo

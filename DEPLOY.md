@@ -7793,3 +7793,12 @@ no es obligatorio. «Hielo» sin nombre no identifica un producto; se conservan
 las ambigüedades de dos referencias distintas. Sin migración. El barrido completo
 usa las RPC privadas de 0331 y conserva estados, reservas e historial.
 
+Para terminar el barrido manual sin exportar conversaciones, configurar solo
+en producción `LEAD_PRODUCT_REVIEW_ACCESS` como secreto JSON con `token`
+aleatorio, `expiresAt` ISO y `storeIds` explícitos. POST a
+`/api/internal/leads/product-review?storeId=...` con bearer; repetir mientras
+`complete=false`. Cada petición procesa hasta 20 lotes de 1000 y reanuda su
+cursor independiente. `&mode=counts` devuelve los conteos agregados usando
+los mismos resolvers que la lista, para ambos modos de producto y estados.
+No programa crons ni envía mensajes. Retirar el acceso al terminar; aunque
+quede una versión desplegada, el token deja de funcionar al caducar.
