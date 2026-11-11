@@ -35,6 +35,16 @@ consultas por nombre y Sin producto para los casos ambiguos.
 
 # Deployment runbook
 
+### 11-11-2026 · Lista negra en memoria: ~22 000 lecturas por hora menos a la base (MOM §41)
+
+**Sin migración.** `listaNegraMarksAmong` (las chapas de Leads y del Master)
+contesta desde un índice en memoria por organización, releído cada dos
+minutos (`lib/lista-negra-cache.ts`). Contexto: la base dejó de responder el
+11-11 de 10:31 a 10:34 (Lima) y se reinició; esas lecturas eran lo que más
+ocupaba la puerta de PostgREST. Después de desplegar, comprobar en los logs de
+Supabase que `/rest/v1/pago_online_phones`, `/pago_online_exceptions` y
+`/prepay_list_entries` bajan de miles por hora a decenas.
+
 ### 11-11-2026 · Responder por Kapso desde la ficha del pedido (MOM §25 «Kapso»)
 
 **Sin migración.** En la pestaña «Kapso» de la ficha, quien puede editar el

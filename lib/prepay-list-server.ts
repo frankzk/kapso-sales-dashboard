@@ -21,6 +21,7 @@
 // corren en las pruebas (la entrada del bot, Swayp), y todo recibe el cliente
 // de la base como argumento; nada de aquí lee un secreto.
 
+import { forgetListaNegraIndex } from "@/lib/lista-negra-cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import {
@@ -348,6 +349,8 @@ export async function addPrepayEntry(
     now?: Date;
   },
 ): Promise<PrepayWriteResult> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const phone = prepayPhoneKey(input.phone);
   if (!phone) return { ok: false, error: "Escribe un celular peruano de 9 dígitos que empiece por 9." };
   const problem = prepayReasonProblem(input.reason);
@@ -401,6 +404,8 @@ export async function removePrepayEntry(
   admin: SupabaseClient,
   input: { orgId: string; entryId: string; reason: string; actor: string | null; now?: Date },
 ): Promise<PrepayWriteResult> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const problem = prepayReasonProblem(input.reason);
   if (problem) return { ok: false, error: problem };
   const now = input.now ?? new Date();
@@ -730,6 +735,8 @@ export async function runPrepayAutoRule(
   admin: SupabaseClient,
   opts: { orgId?: string; mode?: PrepayMode; now?: Date } = {},
 ): Promise<PrepayRunReport> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const now = opts.now ?? new Date();
   const nowIso = now.toISOString();
   const report: PrepayRunReport = { orgs: [], error: null };
