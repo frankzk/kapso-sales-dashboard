@@ -10,6 +10,17 @@ const storeId = "dcab8bf5-23ec-49f5-8e20-f75a8f978297";
 const signal = (handle: string) => ({ handle, title: handle, at: "2026-11-11T12:00:00Z", evidence: "Private customer text", message_id: null, source: "customer_text" as const });
 const row = (patch: Partial<ProductReviewLead> = {}): ProductReviewLead => ({ id: "l", store_id: storeId, first_seen_at: "2026-11-11", status: "nuevo", category: "open", ...patch });
 describe("aggregate product counts", () => {
+  it("does not count unrelated magical products or magnesium ingredients as the requested products", () => {
+    const result = summarizeLeadProducts([
+      row({ entry_product: signal("cepillo-magico-para-limpieza-de-ventanas") }),
+      row({ entry_product: signal("magic-hair-crayon") }),
+      row({ entry_product: signal("happy-kids-roll-on-calmante-con-magnesio-natural") }),
+      row({ entry_product: signal("aceite-corporal-magic-100-ml") }),
+      row({ entry_product: signal("magnesio-12-en-1") }),
+    ], []);
+    expect(result.entry.magic.por_llamar).toBe(1);
+    expect(result.entry.magnesio.por_llamar).toBe(1);
+  });
   it("uses entry/current separately and retains the retry/followup queue rules", () => {
     const leads = [row({ entry_product: signal("shampoo-biru"), interest_product: signal("aceite-magic") }),
       row({ entry_product: signal("magnesio-puro"), status: "volver_a_llamar", next_followup_at: "2026-11-12" }),

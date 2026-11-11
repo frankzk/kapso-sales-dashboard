@@ -30,8 +30,8 @@ export function summarizeLeadProducts(rows: readonly ProductReviewLead[], declar
       const state = isInCallQueue(l) ? "por_llamar" : "en_seguimiento";
       const families: Family[] = [];
       if (/biru/i.test(h)) families.push("biru");
-      if (/magic/i.test(h)) families.push("magic");
-      if (/magnesio/i.test(h)) families.push("magnesio");
+      if (/^aceite-(?:corporal-)?magic(?:-|$)/i.test(h)) families.push("magic");
+      if (/^magnesio(?:-|$)/i.test(h)) families.push("magnesio");
       if (/magnesio-puro/i.test(h)) families.push("magnesio_puro");
       if (/magnesio.*12.*en.*1/i.test(h)) families.push("magnesio_12_en_1");
       if (/icefit/i.test(h)) families.push("icefit");
