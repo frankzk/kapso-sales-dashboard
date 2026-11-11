@@ -13,7 +13,7 @@ function client(data: Record<string, unknown[]>, error: string | null = null) {
   return { rpc, calls, admin: { rpc, from(table: string) {
     const call = { table, filters: [] as unknown[] }; calls.push(call);
     const builder = { select: () => builder, update: (patch: unknown) => { call.filters.push({ patch }); return builder; }, eq: (...args: unknown[]) => { call.filters.push(args); return builder; },
-      is: (...args: unknown[]) => { call.filters.push(args); return builder; }, order: () => builder, limit: () => builder, range: () => builder,
+      is: (...args: unknown[]) => { call.filters.push(args); return builder; }, gt: (...args: unknown[]) => { call.filters.push(args); return builder; }, upsert: (value: unknown) => { call.filters.push({ upsert: value }); return builder; }, order: () => builder, limit: () => builder, range: () => builder,
       maybeSingle: async () => ({ data: data[table]?.[0] ?? null, error }),
       then(resolve: (value: unknown) => unknown) { return Promise.resolve({ data: data[table] ?? [], error }).then(resolve); } };
     return builder;
@@ -41,7 +41,7 @@ describe("persistencia e historial de producto", () => {
   it("rellena solo entrada histórica; no reemplaza interés actual con un opener antiguo", async () => {
     const c = client({ leads: [{ id: "lead", first_inbound_text: "Quiero astaxantina", first_seen_at: "2026-01-01" }] });
     expect(await backfillLeadProducts(c.admin, "store", products, 500)).toEqual({ checked: 1, identified: 1 });
-    expect(c.rpc).toHaveBeenCalledWith("record_lead_products", expect.objectContaining({ p_store_id: "store", p_lead_id: "lead", p_signals: [], p_entry: expect.objectContaining({ handle: "astaxantina" }) }));
+    expect(c.rpc).toHaveBeenCalledWith("record_lead_product_openers_v2", { p_store_id: "store", p_rows: [{ id: "lead", entry: expect.objectContaining({ handle: "astaxantina" }), signals: [] }] });
     expect(c.calls[0]!.filters).toContainEqual(["store_id", "store"]);
   });
   it("sin catálogo no marca progreso; un error de lectura no se da por terminado", async () => {
@@ -56,7 +56,7 @@ describe("persistencia e historial de producto", () => {
       { text: "Quiero astaxantina", at: "2026-11-10", id: "msg", direction: "inbound" },
       { text: "Te recomiendo otro", at: "2026-11-11", direction: "outbound" },
     ]);
-    expect(c.rpc).toHaveBeenCalledWith("record_lead_products", expect.objectContaining({ p_store_id: "store", p_conversation_id: "conv", p_entry: null, p_signals: [expect.objectContaining({ message_id: "msg", source: "customer_text" })] }));
+    expect(c.rpc).toHaveBeenCalledWith("record_lead_products_v2", expect.objectContaining({ p_store_id: "store", p_conversation_id: "conv", p_entry: null, p_signals: [expect.objectContaining({ message_id: "msg", source: "customer_text" })] }));
   });
   it("proyección de lectura no escribe ni pierde campos del lead", async () => {
     const c = client({ shopify_history_products: products });
@@ -65,5 +65,16 @@ describe("persistencia e historial de producto", () => {
     expect(result[0]).toMatchObject({ ...lead, entry_product: { handle: "astaxantina" } });
     expect(c.rpc).not.toHaveBeenCalled();
     expect(lead).not.toHaveProperty("entry_product");
+  });
+  it("reprocesa un histórico con cursor propio y no avanza tras un lote fallido", async () => {
+    const row = { id: "next", first_inbound_text: "Astaxantina", first_seen_at: "2026-01-01" };
+    const c = client({ sync_state: [{ cursor: "last" }], leads: [row] });
+    await backfillLeadProducts(c.admin, "store", products, 1);
+    expect(c.calls.find((call) => call.table === "leads")!.filters).toContainEqual(["id", "last"]);
+    expect(c.calls.some((call) => call.filters.some((filter) => JSON.stringify(filter).includes('"cursor":"next"')))).toBe(true);
+    const fail = client({ sync_state: [{ cursor: "last" }], leads: [row] });
+    fail.rpc.mockResolvedValueOnce({ error: { message: "offline" } } as never);
+    await expect(backfillLeadProducts(fail.admin, "store", products)).rejects.toThrow();
+    expect(fail.calls.some((call) => call.filters.some((filter) => JSON.stringify(filter).includes('"upsert"')))).toBe(false);
   });
 });

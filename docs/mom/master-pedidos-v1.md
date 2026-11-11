@@ -7625,7 +7625,11 @@ mayúsculas y tildes; nombres compartidos o varios productos quedan «Sin
 producto» para confirmar. No se infiere por síntomas, beneficios, recomendaciones
 salientes del bot, compras anteriores ni títulos de anuncios.
 
-El filtro permite «Interés actual» (predeterminado) y «Producto de entrada».
+El filtro presenta dos pestañas visibles, «Interés actual» (predeterminada) y
+«Producto de entrada» (11-11-2026). Debajo comparten el buscador y la lista
+de productos con sus contadores, sin desplazamiento horizontal. Cambiar de
+pestaña limpia la búsqueda y selección de producto anteriores; volver a tocar
+la pestaña ya activa conserva la selección.
 Entrada conserva la primera consulta guardada; si no identifica producto, se
 mantiene la declaración humana del anuncio vigente al ingresar. El interés se
 actualiza por fecha del mensaje, nunca por orden de llegada del enriquecimiento.
@@ -7633,11 +7637,36 @@ Las consultas ambiguas más recientes no reutilizan un producto anterior. Los
 carritos, enlaces y declaraciones anteriores siguen como respaldo sin cambiar
 la fuente de adquisición. Lista y contadores usan el mismo resolver y catálogo.
 
+**Barrido de nombres y referencias (11-11-2026; 0331).** Antes de resolver se
+decodifican entidades HTML y se unifica un producto histórico con uno actual
+solo si su slug normalizado o título completo identifican un único producto
+actual. Se conservan los slugs anteriores como aliases de enlace; dos productos
+actuales distintos de nombre idéntico siguen ambiguos. Las lecturas de la cola
+y de la audiencia aplican la misma identidad canónica sin reescribir el origen.
+
+Se reconocen nombres cortos de tipo y marca (por ejemplo, «Shampoo Biru») y
+aliases inequívocos contrastados contra el catálogo («Aceite Magic» corresponde
+a «Aceite Corporal Magic»). «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
+«magnesio» solo no elige una presentación. El buscador no distingue tildes ni
+mayúsculas. No se deduce un producto del nombre de la campaña ni se trasladan
+leads entre estados para hacer coincidir los resultados de Meta con la cola.
+
+La 0331 permite aclarar una asociación ambigua conservando su señal anterior:
+misma evidencia y fecha, y mismo mensaje para interés actual. Una entrada ya
+identificada no cambia; una consulta posterior no se reemplaza por otra antigua.
+La evidencia guardada se puede volver a interpretar solo si tiene menos de 400
+caracteres (texto completo); un recorte espera la lectura de la conversación.
+El barrido v2 recorre todos los leads por cursor propio en sync_state, hasta
+1000 por tienda y pasada, con escrituras atómicas de hasta 100 filas. No avanza
+el cursor si falla una escritura; al terminar atiende los nuevos sin revisar.
+El filtro interpreta los mensajes iniciales guardados mientras avanza el barrido.
+No se extraen conversaciones de clientes al entorno local para esta revisión.
+
 Se guardan entrada e interés por separado en leads, con fuente, fecha, mensaje
 y extracto de evidencia, y señales deduplicadas en lead_product_signals. Solo
 la ingesta de servidor escribe esa evidencia; el navegador recibe únicamente
 las proyecciones del lead que ya puede ver. El texto inicial histórico se
-procesa en lotes reanudables de 500 por tienda y pasada. La lista lo resuelve
+procesa en lotes reanudables (1000 por tienda desde la 0331). La lista lo resuelve
 en lectura mientras avanza ese relleno. Las conversaciones abiertas se revisan
 por antigüedad del último intento, hasta el límite de enriquecimiento existente.
 Los chats sin mensajes entrantes o cuya lectura falla también ceden el turno
