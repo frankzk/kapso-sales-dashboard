@@ -1254,6 +1254,8 @@ function ultimoProductoEnlazado(
 }
 
 export interface ConversationSignals extends OrderSignals {
+  /** Customer-only evidence for product attribution, before text truncation. */
+  product_messages?: { text: string; at: string; id: string | null; direction: string }[];
   inbound_count: number;
   first_response_seconds: number | null;
   /** What the customer actually wrote first (text or media caption), trimmed.
@@ -1340,6 +1342,9 @@ export async function fetchConversationSignals(
   return {
     inbound_count,
     first_response_seconds,
+    product_messages: msgs.filter((m) => m.dir === "inbound").map((m) => ({
+      text: m.text, at: new Date(m.t).toISOString(), id: m.id, direction: m.dir,
+    })),
     first_inbound_text: (firstInbound?.text ?? "").trim().slice(0, FIRST_INBOUND_TEXT_MAX) || null,
     last_product_handle: ultimoProductoEnlazado(msgs),
     yape: detectYapePayment(msgs),

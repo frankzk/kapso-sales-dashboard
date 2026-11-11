@@ -301,6 +301,8 @@ export interface LeadRow {
   first_inbound_text?: string | null;
   /** Handle del ULTIMO producto enlazado (0140): que consulta AHORA. */
   last_product_handle?: string | null;
+  entry_product?: import("./lead-products").LeadProductSignal | null;
+  interest_product?: import("./lead-products").LeadProductSignal | null;
   /** Handle del producto del carrito o de la navegacion abandonada (0143). */
   cart_product_handle?: string | null;
   /** Carritos de la clienta en las 48 h que terminan en el ultimo (0207). */

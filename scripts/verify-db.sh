@@ -381,4 +381,6 @@ echo "  ✅ Huaral, Barranca, Huarochirí, Cañete y Oyón van por agencia; Curv
 echo "▶ Lista negra unificada (0329): lo que pide cada alta a mano y el tope de la búsqueda"
 $PSQL -f "$ROOT/scripts/sql/lista_negra_smoke.sql"
 echo "  ✅ las altas piden el total por defecto o el adelanto, nada más, y no se reescribe; la búsqueda guarda quién y cuándo, nunca el celular, y el navegador no la ve"
+echo "▶ Atribución de productos (0330): entrada, interés, evidencia, orden temporal e ingesta privada"
+$PSQL -f "$ROOT/scripts/sql/lead_product_attribution_smoke.sql"
 echo "✅ DB verification passed."

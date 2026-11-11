@@ -110,6 +110,8 @@ const LEAD_BOARD_SELECT = [
   "inbound_count",
   "first_inbound_text",
   "last_product_handle",
+  "entry_product",
+  "interest_product",
   "cart_product_handle",
   "cart_count_48h",
   "source",
@@ -129,6 +131,8 @@ const LEAD_BOARD_SELECT = [
 // mientras la migración no corra, la cola tiene que seguir dibujándose sin el
 // filtro de producto en vez de quedarse en blanco.
 const COLUMNAS_CON_MIGRACION_PENDIENTE = new Set([
+  "entry_product",
+  "interest_product",
   "call_queue_ready",
   "call_attempt_count",
   "first_inbound_text",

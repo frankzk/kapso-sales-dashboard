@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { withProductOpeners } from "@/lib/lead-products-server";
 import { getAccessibleStores, getAdNames, getCurrentUser, getUserRoleSummary, getWaNumbers } from "@/lib/access";
 import {
   ALL_STORES,
@@ -144,7 +145,8 @@ async function LeadsContent({
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
-  const leadsPromise = getStoreLeads(scope, view, leadsViewLimit(view));
+  const leadsPromise = getStoreLeads(scope, view, leadsViewLimit(view))
+    .then((rows) => withProductOpeners(createAdminSupabase(), rows));
   const userPromise = getCurrentUser();
   // El siguiente lead (MOM §11) se reserva solo a quien vende: quien solo
   // supervisa la cola no retiene leads por mirarla.

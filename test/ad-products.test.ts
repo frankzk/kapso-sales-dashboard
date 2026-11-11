@@ -288,9 +288,11 @@ describe("las piezas que sostienen la regla en el código", () => {
     // Invertirlo dejaría a quien vuelve por otro producto etiquetado con el de
     // la primera vez, que es el fallo que esto vino a arreglar.
     const source = read("components/leads.tsx");
-    expect(source).toMatch(
-      /\(l\.last_product_handle \?\? ""\)\.trim\(\) \|\|[\s\S]{0,400}?\(l\.cart_product_handle \?\? ""\)\.trim\(\) \|\|\s*leadProductHandle\(l\.first_inbound_text\) \|\|\s*\(l\.ad_id\s*\?\s*handleDeAnuncioPara\(/,
-    );
+    expect(source).toContain('attributedProductHandle(l, productBasis, leadProductHandle(l.first_inbound_text)');
+    expect(source).toContain('handleDeAnuncioPara(adDeclarations?.[claveAnuncio(l.store_id, l.ad_id)], l.first_seen_at)');
+    const resolver = read('lib/lead-products.ts');
+    expect(resolver).toContain('lead.last_product_handle || lead.cart_product_handle');
+
   });
 
   it("el último producto se escribe SIN el candado de escritura única", () => {

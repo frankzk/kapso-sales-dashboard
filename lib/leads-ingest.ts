@@ -2,6 +2,7 @@
 // Shopify orders, and apply bot handoffs (Yape/hot). Service-role only.
 
 import { createHash } from "node:crypto";
+import { loadLeadProductCatalog, saveCustomerProducts, backfillLeadProducts } from "./lead-products-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   conversationToLeadSeed,
@@ -664,6 +665,13 @@ async function enrichLeadsFromConversations(
   vision: { anthropicApiKey?: string | null; anthropicModel?: string | null } = {},
 ): Promise<LeadEnrichStats> {
   const stats: LeadEnrichStats = { ...ZERO_ENRICH };
+  const catalogue = await loadLeadProductCatalog(admin, storeId).catch(async () => {
+    await noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_catalog_failed" });
+    return [];
+  });
+  // Resume old openers in small batches; failed catalogues never stamp progress.
+  if (catalogue.length) await backfillLeadProducts(admin, storeId, catalogue).catch(() =>
+    noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_backfill_failed" }));
   const convIds = new Set<string>();
   for (const s of seeds.values()) if (s?.kapso_conversation_id) convIds.add(s.kapso_conversation_id);
 
@@ -675,6 +683,7 @@ async function enrichLeadsFromConversations(
     .eq("store_id", storeId)
     .in("category", ["open", "hot"])
     .not("kapso_conversation_id", "is", null)
+    .order("product_conversation_checked_at", { ascending: true, nullsFirst: true })
     .order("inbound_count", { ascending: true, nullsFirst: true })
     .limit(LEAD_ENRICH_CAP);
   for (const l of (backlog as { kapso_conversation_id: string }[]) ?? []) {
@@ -701,6 +710,10 @@ async function enrichLeadsFromConversations(
     const sig = await fetchConversationSignals(k, convId);
     if (!sig) continue;
     stats.fetched += 1;
+    if (catalogue.length && sig.product_messages?.length) {
+      await saveCustomerProducts(admin, storeId, convId, catalogue, sig.product_messages).catch(() =>
+        noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_evidence_failed", sample: { conversationId: convId } }));
+    }
     if ((sig.inbound_count ?? 0) >= 2) stats.inbound += 1;
     if ((sig.cart_item_count ?? 0) > 0) stats.cart += 1;
     if ((sig.district ?? "").trim()) stats.district += 1;
