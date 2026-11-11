@@ -7646,7 +7646,9 @@ y de la audiencia aplican la misma identidad canónica sin reescribir el origen.
 
 Se reconocen nombres cortos de tipo y marca (por ejemplo, «Shampoo Biru») y
 aliases inequívocos contrastados contra el catálogo («Aceite Magic» corresponde
-a «Aceite Corporal Magic»). «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
+a «Aceite Corporal Magic»; «Icefit» y «Ice fit», al molde de hielo IceFit).
+No se asigna IceFit por la palabra genérica «hielo»; dos referencias IceFit
+distintas siguen ambiguas. «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
 «magnesio» solo no elige una presentación. El buscador no distingue tildes ni
 mayúsculas. No se deduce un producto del nombre de la campaña ni se trasladan
 leads entre estados para hacer coincidir los resultados de Meta con la cola.

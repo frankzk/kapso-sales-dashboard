@@ -7786,3 +7786,10 @@ Urpi con la caja de Grupo GF abierta). Sin crons ni variables nuevas.
 cajas. Las salidas que ya pasaron a Urpi se quedan como están; la función puede
 quedarse (nadie más la llama) o borrarse con
 `drop function public.urpi_take_gf_output(uuid, date, text);`.
+### 11-11-2026 · Reconocer Icefit en las consultas de Leads
+
+Alias de catálogo para «Icefit» / «Ice fit»: el subtítulo del molde de hielo
+no es obligatorio. «Hielo» sin nombre no identifica un producto; se conservan
+las ambigüedades de dos referencias distintas. Sin migración. El barrido completo
+usa las RPC privadas de 0331 y conserva estados, reservas e historial.
+

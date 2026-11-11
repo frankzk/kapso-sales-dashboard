@@ -32,6 +32,7 @@ const GENERIC = new Set(["suplemento", "capsulas", "producto", "super human", "s
 const contains = (text: string, phrase: string) => (` ${text} `).includes(` ${phrase} `);
 
 const NAMED_ALIASES = [
+  { name: "icefit molde de hielo", aliases: ["icefit", "ice fit"] },
   { name: "aceite corporal magic", aliases: ["aceite magic", "magic oil"] },
   { name: "shampoo biru", aliases: ["shampoo biru", "champu biru", "biru"] },
   { name: "shampoo de cebolla rebrota", aliases: ["shampoo rebrota", "shampoo de cebolla", "rebrota"] },

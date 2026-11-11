@@ -81,6 +81,15 @@ describe("barrido de catálogo: nombres de campañas y migración de tienda", ()
   const magnesium = { handle: "magnesio-puro", title: "Magnesio Puro – Spray Corporal de Magnesio de Grado Terapéutico (237 ml)" };
   const twelve = { handle: "magnesio-12-en-1", title: "Magnesio 12 en 1 Complex – Cápsulas para Energía, Relajación Muscular y Bienestar Integral" };
   const resolved = buildProductMatcher([magic, biru, magnesium, twelve]);
+  it("reconoce Icefit sin exigir el subtítulo del catálogo y conserva ambigüedades", () => {
+    const ice = { handle: "icefit-molde-de-hielo", title: "IceFit &#8211; Molde de Hielo Compatible con Termo y Tomatodo Stanley" };
+    const resolve = buildProductMatcher([ice, biru]);
+    expect(resolve(msg("Hola, quiero información del IceFit"))?.handle).toBe(ice.handle);
+    expect(resolve(msg("¿Precio de Ice fit?"))?.handle).toBe(ice.handle);
+    expect(resolve(msg("Icefit y Shampoo Biru"))?.source).toBe("ambiguous");
+    expect(resolve(msg("Necesito hielo"))).toBeNull();
+    expect(buildProductMatcher([ice, { ...ice, handle: "icefit-otro" }])(msg("Icefit"))?.source).toBe("ambiguous");
+  });
   it.each([
     ["Hola, quiero información del Aceite Magic", magic.handle],
     ["Quiero más información sobre el Shampoo Biru", biru.handle],
