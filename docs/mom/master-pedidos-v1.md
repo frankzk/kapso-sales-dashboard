@@ -7646,7 +7646,9 @@ y de la audiencia aplican la misma identidad canónica sin reescribir el origen.
 
 Se reconocen nombres cortos de tipo y marca (por ejemplo, «Shampoo Biru») y
 aliases inequívocos contrastados contra el catálogo («Aceite Magic» corresponde
-a «Aceite Corporal Magic»). «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
+a «Aceite Corporal Magic»; «Icefit» y «Ice fit», al molde de hielo IceFit).
+No se asigna IceFit por la palabra genérica «hielo»; dos referencias IceFit
+distintas siguen ambiguas. «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
 «magnesio» solo no elige una presentación. El buscador no distingue tildes ni
 mayúsculas. No se deduce un producto del nombre de la campaña ni se trasladan
 leads entre estados para hacer coincidir los resultados de Meta con la cola.
@@ -7661,6 +7663,14 @@ El barrido v2 recorre todos los leads por cursor propio en sync_state, hasta
 el cursor si falla una escritura; al terminar atiende los nuevos sin revisar.
 El filtro interpreta los mensajes iniciales guardados mientras avanza el barrido.
 No se extraen conversaciones de clientes al entorno local para esta revisión.
+Para completar una revisión manual, `/api/internal/leads/product-review` ejecuta
+los mismos lotes dentro del servidor con cursor `lead_product_full_audit_20261111`.
+No se agenda ni ejecuta la sincronización general: no llama ni escribe al cliente.
+Solo acepta POST y una credencial de mantenimiento con caducidad y tiendas
+explícitas (`LEAD_PRODUCT_REVIEW_ACCESS`); no usa ni revela el secreto general
+del cron. Devuelve progreso y conteos agregados, nunca mensajes ni identidades.
+Los conteos usan los resolvers compartidos de producto y cola, sin filtros de
+asesora: producto de entrada e interés actual, Por llamar y En seguimiento.
 
 Se guardan entrada e interés por separado en leads, con fuente, fecha, mensaje
 y extracto de evidencia, y señales deduplicadas en lead_product_signals. Solo
@@ -15485,12 +15495,35 @@ estables:
      mensajes escribió la clienta.
    - **Cuándo se lee:** al abrir la ficha de ese pedido, con la clave de Kapso
      de su tienda (en el servidor) y «Actualizar»; nunca en segundo plano. No
-     se guarda nada en Kapta. La ve quien ya puede ver el pedido (RLS). Para
-     escribirle a la clienta, Leads o Kapso: desde aquí no se manda nada.
-   - Implementación: `lib/order-kapso.ts` (reglas puras), `loadOrderKapso` en
-     `app/dashboard/pedidos/actions.ts`, `components/order-kapso-panel.tsx`
-     (con el hilo de `order-chatby-panel.tsx`); `?seccion=kapso` abre la
-     pestaña. Pruebas: `test/order-kapso.test.ts`.
+     se guarda nada en Kapta. La ve quien ya puede ver el pedido (RLS).
+   - **Responder desde la ficha (11-11-2026, owner: «permíteme responder el
+     Kapso desde el drawer»).** Debajo de la conversación, la misma caja
+     «Responder por WhatsApp» que Chatby (`ReplyBox`), para quien puede
+     editar el pedido (`master.edit`; sin ese permiso la pestaña sigue «Solo
+     lectura»):
+     - **Ventana de 24 h:** solo hasta 24 h después del último mensaje de la
+       clienta; el servidor lo vuelve a mirar con la conversación al día.
+       Pasado eso, un aviso manda a una plantilla desde Kapso o Leads. Si
+       WhatsApp rechaza por la ventana (131047), se dice así.
+     - **Desde qué número:** el de la tienda con que escribió la clienta en
+       esa conversación (`phone_number_id`); si Kapso no lo dice, el número de
+       WhatsApp de la tienda.
+     - **Qué se manda:** texto, o una foto o un PDF (pegar con Ctrl+V,
+       arrastrar o «Adjuntar foto o PDF») o «Enviar ticket Shalom (PDF)», con
+       el texto como pie: los mismos adjuntos y reglas que Chatby
+       (`lib/chatby-attachments.ts`), por el envío de WhatsApp de Kapso que
+       usa Leads (`sendWhatsappText`, `sendWhatsappImage`,
+       `sendWhatsappDocument`).
+     - **Queda en la Actividad** como «Mensaje por WhatsApp (Kapso)» (`kind =
+       kapso_message`, `source = 'kapso'`), con quien lo mandó, el texto o lo
+       enviado y en `payload` la conversación, el número y el id del mensaje.
+       Cuenta como gestión en «Pago de diferencia» (§44). No pausa ningún bot
+       (Kapso no tiene esa pausa) y no cambia el estado del pedido.
+   - Implementación: `lib/order-kapso.ts` (reglas puras), `loadOrderKapso` y
+     `sendOrderKapsoReply` en `app/dashboard/pedidos/actions.ts`,
+     `components/order-kapso-panel.tsx` (con el hilo y la caja de
+     `order-chatby-panel.tsx`); `?seccion=kapso` abre la pestaña. Pruebas:
+     `test/order-kapso.test.ts` y `test/order-kapso-reply.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
@@ -25485,6 +25518,23 @@ la chapa y el aviso: `components/lista-negra-badge.tsx` y
 `components/lista-negra-banner.tsx`. Pruebas: `test/lista-negra.test.ts` y
 `scripts/sql/lista_negra_smoke.sql`.
 
+**La lista en memoria del servidor (11-11-2026).** La «una lectura por página»
+de las marcas resultó cara: Leads se refresca sola cada ~30 s en la pantalla de
+cada asesora y cada refresco preguntaba por todos los celulares de la cola, tres
+lecturas por cada 200 celulares. Eran ~7 500 lecturas por hora a cada una de
+`pago_online_phones`, `pago_online_exceptions` y `prepay_list_entries`, las
+que más ocupaban la puerta de la base (PostgREST). Ese día la base dejó de
+responder de 10:31 a 10:34 de Lima y se reinició. Desde entonces
+`listaNegraMarksAmong` contesta desde un **índice en memoria por
+organización**: la lista entera —la automática vigente sin las excepciones y
+las altas vivas a mano, ~3 100 celulares— se lee como mucho **cada dos
+minutos** por instancia del servidor (`LISTA_NEGRA_INDEX_TTL_MS`,
+`lib/lista-negra-cache.ts`). Dar de alta, quitar, exceptuar o correr una lista
+nueva lo olvida en la instancia que lo hizo; en las demás se ve en hasta dos
+minutos. La lista sigue sin salir del servidor y las marcas no cambian. La
+búsqueda por un celular y los frenos del pedido siguen leyendo la base al
+momento. Prueba: `test/lista-negra-index.test.ts`.
+
 Migración `0309_prepay_list.sql` (`prepay_list_entries` con
 `removed_known_order_ids`, `prepay_list_settings`; lectura para miembros de la
 organización y todo para `service_role`; no cambia datos). La regla, pura:
@@ -26283,7 +26333,7 @@ entra. Medido con el filtro: En agencia 176, En camino 85, Recogidos sin pago
   fotos de constancia tiene (§43). Y cuántas gestiones van.
 
 **Qué cuenta como gestión.** Solo los hechos de una PERSONA (`actor` no nulo)
-de esos tipos: `comment`, `chatby_message`, `confirmation_contact`,
+de esos tipos: `comment`, `chatby_message`, `kapso_message`, `confirmation_contact`,
 `browser_call` y `anura_call`. Lo automático y el agente de IA no cuentan, ni
 la nota que deja corregir la dirección (comentario de tipo `ubicacion`): es un
 arreglo del pedido, no un contacto con la clienta.

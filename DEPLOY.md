@@ -35,6 +35,23 @@ consultas por nombre y Sin producto para los casos ambiguos.
 
 # Deployment runbook
 
+### 11-11-2026 · Lista negra en memoria: ~22 000 lecturas por hora menos a la base (MOM §41)
+
+**Sin migración.** `listaNegraMarksAmong` (las chapas de Leads y del Master)
+contesta desde un índice en memoria por organización, releído cada dos
+minutos (`lib/lista-negra-cache.ts`). Contexto: la base dejó de responder el
+11-11 de 10:31 a 10:34 (Lima) y se reinició; esas lecturas eran lo que más
+ocupaba la puerta de PostgREST. Después de desplegar, comprobar en los logs de
+Supabase que `/rest/v1/pago_online_phones`, `/pago_online_exceptions` y
+`/prepay_list_entries` bajan de miles por hora a decenas.
+
+### 11-11-2026 · Responder por Kapso desde la ficha del pedido (MOM §25 «Kapso»)
+
+**Sin migración.** En la pestaña «Kapso» de la ficha, quien puede editar el
+pedido responde a la clienta (texto, foto, PDF o ticket Shalom) dentro de las
+24 h, desde el número de la tienda con que ella escribió. Queda en Actividad
+como `kapso_message` y cuenta como gestión en «Pago de diferencia».
+
 ### 10-11-2026 · «Cotejar Olva» se muda a «Pago de diferencia» (MOM §12 y §44)
 
 **Sin migración.**
@@ -7779,3 +7796,19 @@ Urpi con la caja de Grupo GF abierta). Sin crons ni variables nuevas.
 cajas. Las salidas que ya pasaron a Urpi se quedan como están; la función puede
 quedarse (nadie más la llama) o borrarse con
 `drop function public.urpi_take_gf_output(uuid, date, text);`.
+### 11-11-2026 · Reconocer Icefit en las consultas de Leads
+
+Alias de catálogo para «Icefit» / «Ice fit»: el subtítulo del molde de hielo
+no es obligatorio. «Hielo» sin nombre no identifica un producto; se conservan
+las ambigüedades de dos referencias distintas. Sin migración. El barrido completo
+usa las RPC privadas de 0331 y conserva estados, reservas e historial.
+
+Para terminar el barrido manual sin exportar conversaciones, configurar solo
+en producción `LEAD_PRODUCT_REVIEW_ACCESS` como secreto JSON con `token`
+aleatorio, `expiresAt` ISO y `storeIds` explícitos. POST a
+`/api/internal/leads/product-review?storeId=...` con bearer; repetir mientras
+`complete=false`. Cada petición procesa hasta 20 lotes de 1000 y reanuda su
+cursor independiente. `&mode=counts` devuelve los conteos agregados usando
+los mismos resolvers que la lista, para ambos modos de producto y estados.
+No programa crons ni envía mensajes. Retirar el acceso al terminar; aunque
+quede una versión desplegada, el token deja de funcionar al caducar.

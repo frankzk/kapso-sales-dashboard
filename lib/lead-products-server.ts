@@ -109,9 +109,9 @@ export async function markProductConversationAttempt(admin: SupabaseClient, stor
 
 /** Bounded, resumable pass over stored first customer messages, including old
  * leads. No Kapso mass fetch, no calls/messages, never changes queue eligibility. */
-export async function backfillLeadProducts(admin: SupabaseClient, storeId: string, catalogue: readonly LeadCatalogProduct[], limit = 1000) {
+export async function backfillLeadProducts(admin: SupabaseClient, storeId: string, catalogue: readonly LeadCatalogProduct[], limit = 1000,
+  source: "lead_product_openers_v2" | "lead_product_full_audit_20261111" = "lead_product_openers_v2") {
   if (!catalogue.length) return { checked: 0, identified: 0 };
-  const source = "lead_product_openers_v2";
   const cursorRead = await admin.from("sync_state").select("cursor").eq("store_id", storeId).eq("source", source).maybeSingle();
   if (cursorRead.error) throw new Error("No se pudo leer el progreso histórico de productos.");
   const cursor: string | null = cursorRead.data?.cursor ?? null;

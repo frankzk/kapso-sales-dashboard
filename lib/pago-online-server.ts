@@ -35,6 +35,7 @@ import "server-only";
 //
 // Nada de aquí escribe un celular en un log, una respuesta o un error.
 
+import { forgetListaNegraIndex } from "@/lib/lista-negra-cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { WooError, wooRequest } from "@/lib/woocommerce";
 import { loadWooStoreCreds } from "@/lib/woocommerce-intake";
@@ -434,6 +435,8 @@ export async function runPagoOnlineForOrg(
   admin: Admin,
   input: { orgId: string; trigger: "cron" | "manual"; actor?: string | null; now?: Date; fetchImpl?: typeof fetch },
 ): Promise<PagoOnlineOrgReport> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const now = input.now ?? new Date();
   const runDate = limaDateOf(now);
   const report: PagoOnlineOrgReport = { orgId: input.orgId, mode: "apagado", runId: null, counts: null, guard: null, guardReason: null, sends: [], error: null };
@@ -768,6 +771,8 @@ export async function acceptPagoOnlineRun(
   admin: Admin,
   input: { orgId: string; runId: string; actor: string | null },
 ): Promise<{ ok: true; sends: SendAttemptResult[] } | { ok: false; error: string }> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const { settings, missing, error } = await loadPagoOnlineSettings(admin, input.orgId);
   if (missing) return { ok: false, error: "Falta la migración 0326 en la base de datos." };
   if (error) return { ok: false, error: "No se pudo leer la posición. Intenta de nuevo." };
@@ -886,6 +891,8 @@ export async function addPagoOnlineException(
   admin: Admin,
   input: { orgId: string; phone: string; reason: string; actor: string | null; orderId?: string | null; orderName?: string | null },
 ): Promise<PagoOnlineExceptionResult> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const phone = pagoOnlinePhoneKey(input.phone);
   if (!phone) return { ok: false, error: "El pedido no tiene un celular de 9 dígitos." };
   const { data, error } = await admin
@@ -913,6 +920,8 @@ export async function removePagoOnlineException(
   admin: Admin,
   input: { orgId: string; id: string; reason: string; actor: string | null },
 ): Promise<PagoOnlineExceptionResult> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const { data, error } = await admin
     .from("pago_online_exceptions")
     .update({ removed_at: new Date().toISOString(), removed_by: input.actor, removed_reason: input.reason.trim() })
