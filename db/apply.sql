@@ -661,4 +661,6 @@
 \ir migrations/0329_lista_negra_requisito.sql
 \echo 'Applying 0330_lead_product_attribution.sql'
 \ir migrations/0330_lead_product_attribution.sql
+\echo 'Applying 0331_lead_product_alias_review.sql'
+\ir migrations/0331_lead_product_alias_review.sql
 \echo 'Done.'

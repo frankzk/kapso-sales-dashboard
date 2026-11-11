@@ -1,3 +1,21 @@
+### 11-11-2026 · Barrido de aliases de producto (0331)
+
+Aplicar 0331_lead_product_alias_review.sql antes del código nuevo. Añade dos
+RPC privadas: aclarar la misma evidencia ambigua y registrar históricos en
+lotes atómicos de 100. No modifica pedidos, pagos, estados ni reservas.
+El sync reanuda el barrido completo con source lead_product_openers_v2 en
+sync_state; las lecturas muestran la interpretación nueva sin esperar al lote.
+Verificar Biru, Aceite Magic, Magnesio Puro y 12 en 1, ambos tabs, buscador
+sin tildes y contadores visibles en celular. Las campañas sin consulta clara
+siguen necesitando una declaración de anuncio vigente.
+
+### 11-11-2026 · Producto en Leads: pestañas visibles
+
+Sin migración. «Interés actual» y «Producto de entrada» pasan a pestañas
+con buscador y lista compartida. Nombres largos se ajustan al ancho sin
+ocultar contadores. Verificar selección, cambio de pestaña y teclado en móvil
+y escritorio; los resolvers y datos de producto no cambian.
+
 ### 11-11-2026 · La revisión de productos rota también chats vacíos
 
 Sin migración. El reloj de rotación se registra en cada intento de lectura,

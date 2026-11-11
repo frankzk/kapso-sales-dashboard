@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attributedProductHandle, buildProductMatcher, customerProductSignals, type ProductMessage } from "@/lib/lead-products";
+import { attributedProductHandle, buildProductMatcher, customerProductSignals, mergeLeadProductCatalog, productTitleText, clarifyAmbiguousProduct, type ProductMessage } from "@/lib/lead-products";
 
 const catalogue = [
   { handle: "aceite-negro", title: "SUPER HUMAN Ethiopian Black Seed Oil – Aceite de Semilla Negra Etíope Alta Potencia (60 Cápsulas)" },
@@ -72,5 +72,53 @@ describe("faceta de producto", () => {
     for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
     expect([...counts.values()].reduce((a, b) => a + b, 0)).toBe(rows.length);
     for (const [key, count] of counts) expect(keys.filter((k) => k === key)).toHaveLength(count);
+  });
+});
+
+describe("barrido de catálogo: nombres de campañas y migración de tienda", () => {
+  const magic = { handle: "aceite-corporal-magic-100-ml", title: "Aceite Corporal Magic™ &#8211; 100 ml: Rellena, Tensa, Reafirma e Hidrata tu Piel" };
+  const biru = { handle: "shampoo-biru-anticaspa-ideaslabco", title: "Shampoo Biru™ Anticaspa con Menta y Té Verde – Purifica y Refresca el Cuero Cabelludo &#8211; IdeasLabCo™" };
+  const magnesium = { handle: "magnesio-puro", title: "Magnesio Puro – Spray Corporal de Magnesio de Grado Terapéutico (237 ml)" };
+  const twelve = { handle: "magnesio-12-en-1", title: "Magnesio 12 en 1 Complex – Cápsulas para Energía, Relajación Muscular y Bienestar Integral" };
+  const resolved = buildProductMatcher([magic, biru, magnesium, twelve]);
+  it.each([
+    ["Hola, quiero información del Aceite Magic", magic.handle],
+    ["Quiero más información sobre el Shampoo Biru", biru.handle],
+    ["¿Cuánto está Biru?", biru.handle],
+    ["Hola información de Magnesio Puro", magnesium.handle],
+    ["Quiero magnesio en spray", magnesium.handle],
+    ["Quiero Magnesio 12 en 1", twelve.handle],
+    ["Quiero magnesio", null],
+  ])("reconoce %s sin inventar una presentación", (text, handle) => expect(resolved(msg(text))?.handle ?? null).toBe(handle));
+  it("une el slug histórico con ™ y el actual sin duplicar el producto", () => {
+    const products = mergeLeadProductCatalog([{ ...magic, handle: "aceite-corporal-magic™-100-ml", title: productTitleText(magic.title) }], [magic]);
+    expect(products).toHaveLength(1);
+    const m = buildProductMatcher(products);
+    expect(m(msg("Aceite Magic"))?.handle).toBe(magic.handle);
+    expect(m(msg("https://kenku.pe/products/aceite-corporal-magic%E2%84%A2-100-ml"))?.handle).toBe(magic.handle);
+  });
+  it("decodifica entidades HTML antes de comparar identidades y nombres", () => {
+    expect(productTitleText("Biru&trade; &#8211; Menta &amp; T&eacute;" )).toContain("Biru™ – Menta &");
+    expect(mergeLeadProductCatalog([{ ...biru, title: productTitleText(biru.title) }], [biru])).toHaveLength(1);
+  });
+  it("dos productos actuales distintos de nombre idéntico siguen ambiguos", () => {
+    const products = mergeLeadProductCatalog([biru], [biru, { ...biru, handle: "other-biru" }]);
+    expect(products).toHaveLength(2);
+    expect(buildProductMatcher(products)(msg("Shampoo Biru"))?.source).toBe("ambiguous");
+  });
+  it("un enlace concreto desambigua el nombre compartido de dos presentaciones", () => {
+    const variants = [biru, { handle: "biru-30", title: "Shampoo Biru – 30 ml" }];
+    expect(buildProductMatcher(variants)(msg(`Quiero shampoo biru https://kenku.pe/products/${biru.handle}`))?.handle).toBe(biru.handle);
+  });
+  it("solo aclara evidencia ambigua cuando conserva el texto completo", () => {
+    const old = { ...resolved(msg("Shampoo Biru"))!, source: "ambiguous" as const, handle: null, title: null };
+    expect(clarifyAmbiguousProduct(old, resolved)?.handle).toBe(biru.handle);
+    expect(clarifyAmbiguousProduct({ ...old, evidence: "Shampoo Biru".padEnd(400, " ") }, resolved)?.handle).toBeNull();
+    expect(clarifyAmbiguousProduct({ ...old, evidence: "Shampoo Biru y Aceite Magic" }, resolved)?.handle).toBeNull();
+  });
+  it("no une tamaños diferentes ni archivos de una misma plataforma por título", () => {
+    const sizes = [{ handle: "biru-100", title: "Shampoo Biru – 100 ml" }, { handle: "biru-200", title: "Shampoo Biru – 200 ml" }];
+    expect(mergeLeadProductCatalog(sizes, sizes)).toHaveLength(2);
+    expect(mergeLeadProductCatalog([biru, { ...biru, handle: "other" }], [])).toHaveLength(2);
   });
 });

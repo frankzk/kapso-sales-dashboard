@@ -1,5 +1,6 @@
 "use client";
-import { attributedProductHandle } from "@/lib/lead-products";
+import { attributedProductHandle, productTextKey } from "@/lib/lead-products";
+import { LeadProductTabs } from "@/components/lead-product-tabs";
 
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import { ListaNegraBadge } from "@/components/lista-negra-badge";
@@ -300,7 +301,7 @@ function ChipGroup({ label, children }: { label: string; children: ReactNode }) 
 }
 
 const SHEET_ROW =
-  "flex min-h-9 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11";
+  "flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11";
 
 /** Lista de casillas con contador para la hoja de «Más filtros» (Fuente, Producto, Número). */
 function CheckList({
@@ -309,18 +310,20 @@ function CheckList({
   selected,
   onToggle,
   searchable = false,
+  wrapLabels = false,
 }: {
   label: string;
   options: { key: string; label: string; count?: number }[];
   selected: Set<string>;
   onToggle: (key: string) => void;
   searchable?: boolean;
+  wrapLabels?: boolean;
 }) {
   const [term, setTerm] = useState("");
-  const t = term.trim().toLocaleLowerCase("es");
-  const shown = t ? options.filter((o) => o.label.toLocaleLowerCase("es").includes(t)) : options;
+  const t = productTextKey(term);
+  const shown = t ? options.filter((o) => productTextKey(o.label).includes(t)) : options;
   return (
-    <div>
+    <div className="min-w-0">
       {searchable && (
         <label className="relative mb-1.5 block">
           <span className="sr-only">Buscar en {label.toLocaleLowerCase("es")}</span>
@@ -333,12 +336,12 @@ function CheckList({
           />
         </label>
       )}
-      <ul className="-mx-1 grid max-h-56 gap-0.5 overflow-y-auto">
+      <ul className="-mx-1 grid min-w-0 grid-cols-1 max-h-56 gap-0.5 overflow-x-hidden overflow-y-auto">
         {shown.map((o) => (
-          <li key={o.key}>
-            <label className={SHEET_ROW}>
+          <li key={o.key} className="min-w-0">
+            <label className={cn(SHEET_ROW, wrapLabels && "items-start py-2")}>
               <input type="checkbox" className={CHECKBOX} checked={selected.has(o.key)} onChange={() => onToggle(o.key)} />
-              <span className="min-w-0 flex-1 truncate">{o.label}</span>
+              <span title={o.label} className={cn("min-w-0 flex-1", wrapLabels ? "break-words whitespace-normal leading-5" : "truncate")}>{o.label}</span>
               {o.count != null && <span className="shrink-0 text-xs tabular-nums text-ink-500">{o.count.toLocaleString("es-PE")}</span>}
             </label>
           </li>
@@ -1959,30 +1962,26 @@ export function LeadsBoard({
             )}
             {(prodOptions.length > 0 || prodSin > 0 || prodFilter.size > 0) && (
               <SheetSection title="Producto">
-                <label className="mb-3 block text-xs text-ink-600">
-                  Filtrar por
-                  <select aria-label="Tipo de atribución del producto" className="mt-1 w-full rounded-md border border-ink-200 bg-white px-2 py-2 text-sm"
-                    value={productBasis} onChange={(e) => { setProductBasis(e.target.value as "current" | "entry"); setProdFilter(new Set()); }}>
-                    <option value="current">Interés actual</option>
-                    <option value="entry">Producto de entrada</option>
-                  </select>
-                </label>
-                <p className="mb-2 text-xs text-ink-500">{productBasis === "entry" ? "La consulta inicial o el producto declarado del anuncio al ingresar." : "Lo último que consultó el cliente; también reconoce nombres sin enlace."}</p>
-                <CheckList
-                  label="Producto"
-                  searchable={prodOptions.length > 8}
-                  selected={prodFilter}
-                  onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
-                  options={[
-                    ...prodOptions,
-                    // «Sin producto» son los que no llegaron desde una ficha: no
-                    // es un producto más, es el resto, y tiene que estar para que
-                    // la suma cuadre.
-                    ...(prodSin > 0 || prodFilter.has("__none__")
-                      ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
-                      : []),
-                  ]}
-                />
+                <LeadProductTabs value={productBasis} onChange={(basis) => { setProductBasis(basis); setProdFilter(new Set()); }}>
+                  <p className="mb-3 text-xs leading-5 text-ink-500">{productBasis === "entry" ? "El producto por el que llegó el lead." : "Lo último que consultó el cliente."} Marca uno o varios productos para filtrar.</p>
+                  <CheckList
+                    key={productBasis}
+                    label="Producto"
+                    searchable
+                    wrapLabels
+                    selected={prodFilter}
+                    onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
+                    options={[
+                      ...prodOptions,
+                      // «Sin producto» reúne lo no identificado o ambiguo: no
+                      // es un producto más, es el resto, y tiene que estar para que
+                      // la suma cuadre.
+                      ...(prodSin > 0 || prodFilter.has("__none__")
+                        ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
+                        : []),
+                    ]}
+                  />
+                </LeadProductTabs>
               </SheetSection>
             )}
             {hasMultiNumbers && (

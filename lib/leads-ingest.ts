@@ -714,10 +714,7 @@ async function enrichLeadsFromConversations(
       noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_review_clock_failed" }));
     if (!sig) continue;
     stats.fetched += 1;
-    if (catalogue.length && sig.product_messages?.length) {
-      await saveCustomerProducts(admin, storeId, convId, catalogue, sig.product_messages).catch(() =>
-        noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_evidence_failed", sample: { conversationId: convId } }));
-    }
+
     if ((sig.inbound_count ?? 0) >= 2) stats.inbound += 1;
     if ((sig.cart_item_count ?? 0) > 0) stats.cart += 1;
     if ((sig.district ?? "").trim()) stats.district += 1;
@@ -772,6 +769,11 @@ async function enrichLeadsFromConversations(
         .eq("store_id", storeId)
         .eq("kapso_conversation_id", convId)
         .is("first_inbound_text", null);
+    }
+
+    if (catalogue.length && sig.product_messages?.length) {
+      await saveCustomerProducts(admin, storeId, convId, catalogue, sig.product_messages).catch(() =>
+        noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_evidence_failed", sample: { conversationId: convId } }));
     }
 
     // Qué producto está consultando AHORA. Al revés que el gancho de arriba,
