@@ -75,4 +75,22 @@ describe("private server-side review", () => {
     expect(JSON.stringify(await response.json())).not.toContain("Private customer text");
     expect(mocks.backfill).toHaveBeenCalledTimes(1);
   });
+  it("counts on the server without returning the rows or their private evidence", async () => {
+    const rows = [row({ id: "private-lead-id", entry_product: signal("icefit-molde-de-hielo") })];
+    mocks.project.mockResolvedValueOnce(rows);
+    mocks.admin.mockReturnValue({ from(table: string) {
+      const builder = { select: () => builder, eq: () => builder, in: () => builder, neq: () => builder,
+        order: () => builder, limit: () => builder, gt: () => builder, range: () => builder,
+        maybeSingle: async () => ({ data: { id: storeId }, error: null }),
+        then(resolve: (result: unknown) => unknown) { return Promise.resolve({ data: table === "leads" ? rows : [], error: null }).then(resolve); } };
+      return builder;
+    } });
+    const response = await POST(request("&mode=counts"));
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.entry.icefit.por_llamar).toBe(1);
+    expect(body.current.icefit.por_llamar).toBe(1);
+    expect(JSON.stringify(body)).not.toMatch(/private-lead-id|Private customer text|first_inbound_text|evidence/);
+    expect(mocks.backfill).not.toHaveBeenCalled();
+  });
 });
