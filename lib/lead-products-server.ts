@@ -3,8 +3,42 @@ import { buildProductMatcher, customerProductSignals, mergeLeadProductCatalog, c
 import { loadStoreOrderPlatform, wooSaleClient } from "./woocommerce-orders";
 import { wooGetPage } from "./woocommerce";
 import { withWooAuthFallback } from "./woocommerce-intake";
+import { SEVEN_PRODUCT_REPAIR_QUERIES } from "./lead-products";
 
 const cache = new Map<string, { at: number; promise: Promise<LeadCatalogProduct[]> }>();
+
+/** Explicit review cohort stored by the operator in sync_state. Texts stay on
+ * the server. Only the seven uniquely catalogue-backed products may be written. */
+export async function repairSevenProductNames(admin: SupabaseClient, storeId: string, catalogue: readonly LeadCatalogProduct[]) {
+  const cohort = await admin.from("sync_state").select("cursor").eq("store_id", storeId)
+    .eq("source", "lead_product_seven_alias_targets_20261111").maybeSingle();
+  if (cohort.error || !cohort.data?.cursor) throw new Error("Repair cohort unavailable");
+  const frozen: { ids: string[] } = JSON.parse(cohort.data.cursor);
+  if (!Array.isArray(frozen.ids) || frozen.ids.length > 2000 || frozen.ids.some(id => !/^[0-9a-f-]{36}$/i.test(id))) throw new Error("Invalid repair cohort");
+  const match = buildProductMatcher(catalogue);
+  const allowed = new Set(SEVEN_PRODUCT_REPAIR_QUERIES.map(text => match({ text, direction: "inbound", at: "2026-11-11T00:00:00Z" })?.handle).filter(Boolean));
+  let repaired = 0, alreadyIdentified = 0, unresolved = 0;
+  const byProduct: Record<string, number> = {};
+  for (let offset = 0; offset < frozen.ids.length; offset += 100) {
+    const ids = frozen.ids.slice(offset, offset + 100);
+    const { data, error } = await admin.from("leads").select("id,first_inbound_text,first_seen_at,entry_product")
+      .eq("store_id", storeId).in("id", ids);
+    if (error || data?.length !== ids.length) throw new Error("Repair cohort read failed");
+    const entries: { id: string; entry: LeadProductSignal; signals: never[] }[] = [];
+    for (const lead of data) {
+      if (lead.entry_product?.handle) { alreadyIdentified++; continue; }
+      const entry = match({ text: lead.first_inbound_text ?? "", at: lead.first_seen_at, id: `opener:${lead.id}`, direction: "inbound" });
+      if (!entry?.handle || !allowed.has(entry.handle)) { unresolved++; continue; }
+      entries.push({ id: lead.id, entry, signals: [] });
+    }
+    if (!entries.length) continue;
+    const saved = await admin.rpc("record_lead_product_openers_v2", { p_store_id: storeId, p_rows: entries });
+    if (saved.error) throw new Error("Repair batch failed");
+    repaired += entries.length;
+    for (const entry of entries) byProduct[entry.entry.handle!] = (byProduct[entry.entry.handle!] ?? 0) + 1;
+  }
+  return { targeted: frozen.ids.length, repaired, already_identified: alreadyIdentified, unresolved, by_product: byProduct, complete: unresolved === 0 };
+}
 
 /** Read-only projection for the whole visible queue while the persisted backfill
  * catches up. Catalogue reads are scoped to stores of already authorized rows. */
@@ -109,9 +143,9 @@ export async function markProductConversationAttempt(admin: SupabaseClient, stor
 
 /** Bounded, resumable pass over stored first customer messages, including old
  * leads. No Kapso mass fetch, no calls/messages, never changes queue eligibility. */
-export async function backfillLeadProducts(admin: SupabaseClient, storeId: string, catalogue: readonly LeadCatalogProduct[], limit = 1000) {
+export async function backfillLeadProducts(admin: SupabaseClient, storeId: string, catalogue: readonly LeadCatalogProduct[], limit = 1000,
+  source: "lead_product_openers_v2" | "lead_product_full_audit_20261111" = "lead_product_openers_v2") {
   if (!catalogue.length) return { checked: 0, identified: 0 };
-  const source = "lead_product_openers_v2";
   const cursorRead = await admin.from("sync_state").select("cursor").eq("store_id", storeId).eq("source", source).maybeSingle();
   if (cursorRead.error) throw new Error("No se pudo leer el progreso histórico de productos.");
   const cursor: string | null = cursorRead.data?.cursor ?? null;

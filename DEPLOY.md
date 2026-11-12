@@ -5,6 +5,17 @@ Sin migración. Al crear la salida «por definir» de un pedido de Lima con
 programada de Grupo GF y a la «Salida prevista». Un programa de Grupo GF que
 ya exista no se toca. Verificar en Repro Lima que un pedido programado y
 rotulado diga «Sale <su día>» y no el siguiente reparto.
+### 11-11-2026 · Siete nombres cortos y reparación de su cohorte
+
+Sin migración. Se añaden aliases de HeatLessCurls, RestPro, Bolso Charlotte,
+UROCONTROL, Cayenne, Prozenix y Turkesterone. Verificar ambigüedades, rechazos
+y que el nombre personal Charlotte no identifica un bolso.
+El POST interno de revisión acepta `mode=repair`: usa exclusivamente los IDs
+de la cohorte fijada en `sync_state` y las RPC privadas 0331. No lanza el sync
+general ni cambia estados o interés posterior. Ejecutar una vez por tienda con
+acceso temporal acotado, verificar `unresolved=0` y las asociaciones esperadas;
+una repetición conserva entradas ya identificadas. `mode=counts` añade los
+conteos de «Sin producto» por estado y base. Retirar el acceso al terminar.
 
 ### 11-11-2026 · Barrido de aliases de producto (0331)
 
@@ -7804,3 +7815,19 @@ Urpi con la caja de Grupo GF abierta). Sin crons ni variables nuevas.
 cajas. Las salidas que ya pasaron a Urpi se quedan como están; la función puede
 quedarse (nadie más la llama) o borrarse con
 `drop function public.urpi_take_gf_output(uuid, date, text);`.
+### 11-11-2026 · Reconocer Icefit en las consultas de Leads
+
+Alias de catálogo para «Icefit» / «Ice fit»: el subtítulo del molde de hielo
+no es obligatorio. «Hielo» sin nombre no identifica un producto; se conservan
+las ambigüedades de dos referencias distintas. Sin migración. El barrido completo
+usa las RPC privadas de 0331 y conserva estados, reservas e historial.
+
+Para terminar el barrido manual sin exportar conversaciones, configurar solo
+en producción `LEAD_PRODUCT_REVIEW_ACCESS` como secreto JSON con `token`
+aleatorio, `expiresAt` ISO y `storeIds` explícitos. POST a
+`/api/internal/leads/product-review?storeId=...` con bearer; repetir mientras
+`complete=false`. Cada petición procesa hasta 20 lotes de 1000 y reanuda su
+cursor independiente. `&mode=counts` devuelve los conteos agregados usando
+los mismos resolvers que la lista, para ambos modos de producto y estados.
+No programa crons ni envía mensajes. Retirar el acceso al terminar; aunque
+quede una versión desplegada, el token deja de funcionar al caducar.

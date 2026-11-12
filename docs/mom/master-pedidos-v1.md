@@ -7661,10 +7661,24 @@ y de la audiencia aplican la misma identidad canónica sin reescribir el origen.
 
 Se reconocen nombres cortos de tipo y marca (por ejemplo, «Shampoo Biru») y
 aliases inequívocos contrastados contra el catálogo («Aceite Magic» corresponde
-a «Aceite Corporal Magic»). «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
+a «Aceite Corporal Magic»; «Icefit» y «Ice fit», al molde de hielo IceFit).
+No se asigna IceFit por la palabra genérica «hielo»; dos referencias IceFit
+distintas siguen ambiguas. «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
 «magnesio» solo no elige una presentación. El buscador no distingue tildes ni
 mayúsculas. No se deduce un producto del nombre de la campaña ni se trasladan
 leads entre estados para hacer coincidir los resultados de Meta con la cola.
+
+Desde la corrección de siete nombres del 11-11-2026 se reconocen también
+HeatLessCurls, RestPro, Bolso Charlotte, UROCONTROL, Cayenne, Prozenix y
+Turkesterone por aliases contrastados con el catálogo. «Charlotte» a secas no
+identifica el bolso, pues puede ser el nombre de una persona. Los rechazos y
+las consultas de varios productos conservan las reglas de ambigüedad.
+`mode=repair` del mantenimiento de productos solo lee los IDs fijados en
+`sync_state.source=lead_product_seven_alias_targets_20261111` y escribe las
+asociaciones de esas siete familias mediante 0331. No reescribe entradas ya
+identificadas, estados, reservas, llamadas ni interés posterior. Devuelve solo
+cantidades; las consultas de conteo incluyen el facet «Sin producto» para
+ambas bases y estados, sin filtros particulares de asesora.
 
 La 0331 permite aclarar una asociación ambigua conservando su señal anterior:
 misma evidencia y fecha, y mismo mensaje para interés actual. Una entrada ya
@@ -7676,6 +7690,14 @@ El barrido v2 recorre todos los leads por cursor propio en sync_state, hasta
 el cursor si falla una escritura; al terminar atiende los nuevos sin revisar.
 El filtro interpreta los mensajes iniciales guardados mientras avanza el barrido.
 No se extraen conversaciones de clientes al entorno local para esta revisión.
+Para completar una revisión manual, `/api/internal/leads/product-review` ejecuta
+los mismos lotes dentro del servidor con cursor `lead_product_full_audit_20261111`.
+No se agenda ni ejecuta la sincronización general: no llama ni escribe al cliente.
+Solo acepta POST y una credencial de mantenimiento con caducidad y tiendas
+explícitas (`LEAD_PRODUCT_REVIEW_ACCESS`); no usa ni revela el secreto general
+del cron. Devuelve progreso y conteos agregados, nunca mensajes ni identidades.
+Los conteos usan los resolvers compartidos de producto y cola, sin filtros de
+asesora: producto de entrada e interés actual, Por llamar y En seguimiento.
 
 Se guardan entrada e interés por separado en leads, con fuente, fecha, mensaje
 y extracto de evidencia, y señales deduplicadas en lead_product_signals. Solo

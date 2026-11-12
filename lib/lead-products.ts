@@ -32,11 +32,21 @@ const GENERIC = new Set(["suplemento", "capsulas", "producto", "super human", "s
 const contains = (text: string, phrase: string) => (` ${text} `).includes(` ${phrase} `);
 
 const NAMED_ALIASES = [
+  { name: "heatlesscurls", aliases: ["heatlesscurls", "heatless curls"] },
+  { name: "restpro almohada", aliases: ["restpro", "rest pro"] },
+  { name: "bolso de hombro charlotte", aliases: ["bolso charlotte"] },
+  { name: "urocontrol", aliases: ["urocontrol"] },
+  { name: "cayenne pepper", aliases: ["cayenne"] },
+  { name: "prozenix pro lipozem", aliases: ["prozenix"] },
+  { name: "turkesterone", aliases: ["turkesterone"] },
+  { name: "icefit molde de hielo", aliases: ["icefit", "ice fit"] },
   { name: "aceite corporal magic", aliases: ["aceite magic", "magic oil"] },
   { name: "shampoo biru", aliases: ["shampoo biru", "champu biru", "biru"] },
   { name: "shampoo de cebolla rebrota", aliases: ["shampoo rebrota", "shampoo de cebolla", "rebrota"] },
   { name: "magnesio puro", aliases: ["magnesio puro", "spray de magnesio", "magnesio en spray"] },
 ];
+
+export const SEVEN_PRODUCT_REPAIR_QUERIES = ["HeatLessCurls", "RestPro", "Bolso Charlotte", "UROCONTROL", "Cayenne", "Prozenix", "Turkesterone"] as const;
 
 /** Only reconcile an archived product to a UNIQUE live slug/title. Two live
  * products with the same title remain distinct and therefore ambiguous. */

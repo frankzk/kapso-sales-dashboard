@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 vi.mock("@/lib/woocommerce-orders", () => ({ loadStoreOrderPlatform: vi.fn(async () => ({ ok: true, platform: "shopify" })), wooSaleClient: vi.fn() }));
 vi.mock("@/lib/woocommerce", () => ({ wooGetPage: vi.fn() }));
 vi.mock("@/lib/woocommerce-intake", () => ({ withWooAuthFallback: vi.fn() }));
-import { backfillLeadProducts, saveCustomerProducts, withProductOpeners, markProductConversationAttempt } from "@/lib/lead-products-server";
+import { backfillLeadProducts, saveCustomerProducts, withProductOpeners, markProductConversationAttempt, repairSevenProductNames } from "@/lib/lead-products-server";
 import { readFileSync } from "node:fs";
 
 const products = [{ handle: "astaxantina", title: "Astaxantina – Antioxidante" }];
@@ -12,7 +12,7 @@ function client(data: Record<string, unknown[]>, error: string | null = null) {
   const rpc = vi.fn(async () => ({ error: null }));
   return { rpc, calls, admin: { rpc, from(table: string) {
     const call = { table, filters: [] as unknown[] }; calls.push(call);
-    const builder = { select: () => builder, update: (patch: unknown) => { call.filters.push({ patch }); return builder; }, eq: (...args: unknown[]) => { call.filters.push(args); return builder; },
+    const builder = { select: () => builder, in: (...args: unknown[]) => { call.filters.push(args); return builder; }, update: (patch: unknown) => { call.filters.push({ patch }); return builder; }, eq: (...args: unknown[]) => { call.filters.push(args); return builder; },
       is: (...args: unknown[]) => { call.filters.push(args); return builder; }, gt: (...args: unknown[]) => { call.filters.push(args); return builder; }, upsert: (value: unknown) => { call.filters.push({ upsert: value }); return builder; }, order: () => builder, limit: () => builder, range: () => builder,
       maybeSingle: async () => ({ data: data[table]?.[0] ?? null, error }),
       then(resolve: (value: unknown) => unknown) { return Promise.resolve({ data: data[table] ?? [], error }).then(resolve); } };
@@ -20,6 +20,29 @@ function client(data: Record<string, unknown[]>, error: string | null = null) {
   } } as unknown as SupabaseClient };
 }
 describe("persistencia e historial de producto", () => {
+  it("repara únicamente los IDs de la cohorte, sin cambiar estado ni interés posterior", async () => {
+    const ids = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"];
+    const cat = [{ handle: "restpro", title: "RestPro: Almohada de Tracción Inversa" }];
+    const rows = [
+      { id: ids[0], first_seen_at: "2026-01-01", first_inbound_text: "Quiero RestPro", category: "lost" },
+      { id: ids[1], entry_product: { handle: "already-known" } },
+      { id: ids[2], first_seen_at: "2026-01-01", first_inbound_text: "Hola" },
+    ];
+    const c = client({ sync_state: [{ cursor: JSON.stringify({ ids }) }], leads: rows });
+    expect(await repairSevenProductNames(c.admin, "store", cat)).toMatchObject({ targeted: 3, repaired: 1, already_identified: 1, unresolved: 1, complete: false });
+    expect(c.rpc).toHaveBeenCalledWith("record_lead_product_openers_v2", { p_store_id: "store", p_rows: [{ id: ids[0], entry: expect.objectContaining({ handle: "restpro" }), signals: [] }] });
+    expect(c.calls.find(x => x.table === "leads")!.filters).toEqual([["store_id", "store"], ["id", ids]]);
+    expect(c.calls.flatMap(x => x.filters).some(x => !!x && typeof x === "object" && "patch" in x)).toBe(false);
+    c.rpc.mockClear();
+    c.rpc.mockResolvedValueOnce({ error: { message: "offline" } } as never);
+    await expect(repairSevenProductNames(c.admin, "store", cat)).rejects.toThrow("Repair batch failed");
+  });
+  it("sin cohorte de reparación no escanea ni modifica leads", async () => {
+    const c = client({});
+    await expect(repairSevenProductNames(c.admin, "store", products)).rejects.toThrow("Repair cohort unavailable");
+    expect(c.calls.some(x => x.table === "leads")).toBe(false);
+    expect(c.rpc).not.toHaveBeenCalled();
+  });
   it("los intentos sin producto ceden el turno sin escribir evidencia ni tocar otras tiendas", async () => {
     const c = client({});
     await markProductConversationAttempt(c.admin, "store-A", "empty-conversation");
