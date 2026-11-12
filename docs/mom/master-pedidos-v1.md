@@ -8015,6 +8015,32 @@ historial; la migración no activa ni reasigna por sí misma.
   `lead_routing_audit`. Configuración y RPCs solo de servicio; no se confía en
   actor, bloque o ids autorizados enviados por el navegador.
 
+**Preferencia de tienda por asesora (12-11-2026, decisión del owner; 0335).**
+Equipo → Leads permite «Por prioridad» (valor inicial para todas) o porcentajes
+enteros por tienda, total 100, solo entre tiendas a las que la persona tiene
+acceso. Antu (antucruznu1512) usará 80 % Aurela / 20 % Kenku y tendrá
+Carritos recientes además de sus bloques actuales. Las demás siguen por
+prioridad, conservando sus bloques, respaldo y toma puntual.
+
+El objetivo orienta la tarjeta automática y «Guardar y siguiente» en Por llamar.
+No divide la base, no cambia permisos ni oculta resultados manuales. Conserva
+los filtros elegidos; con una sola tienda solo puede entregar esa tienda.
+Las citas vencidas elegibles van primero y una reserva propia vigente no cambia
+bajo la mano. Dentro de cada tienda conserva el orden de prioridad existente.
+Selecciona la tienda más por debajo de su objetivo según los leads distintos
+con gestión humana (lead_calls de tipo call) de esa asesora en el día local de
+cada tienda. Dos gestiones del mismo cliente/lead en el mismo día cuentan una;
+abrir, saltar, reservar, notas y eventos automáticos no consumen proporción.
+Consulta la configuración y los conteos del servidor antes de cada nueva reserva
+automática y antes de avanzar desde la ficha, incluso tras guardar la gestión.
+
+Es un objetivo flexible, no una cuota garantizada: si no quedan candidatos
+libres en una tienda preferida, continúa por otra tienda accesible. Un 0 % no
+revoca acceso ni impide ese respaldo por falta de candidatos. El reparto por
+bloques debe estar activo; desactivado conserva prioridad. Los porcentajes se
+guardan con revisión y auditoría antes/después; omitirlos desde clientes antiguos
+conserva el valor guardado. Instalación sin cambios de asignaciones ni leads.
+
 **La reserva por cita se suelta sola (08-11-2026, decisión del owner, opción c; 0322).**
 Con el reparto activo, la asesora que agenda «volver a llamar» se queda el lead
 (`appointment_owner` en `lead_routing_scope`) y las demás lo ven «Sin acceso».

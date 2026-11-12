@@ -390,4 +390,7 @@ $PSQL -f "$ROOT/scripts/sql/lead_manual_take_smoke.sql"
 echo "▶ Productividad por sección (0333): autor, fecha, alcance, resultados, sin duplicados técnicos ni atribución por etapa actual"
 $PSQL -f "$ROOT/scripts/sql/operations_productivity_smoke.sql"
 
+echo "▶ Distribución por tienda (0335): porcentajes, permisos, revisión, auditoría y conteo humano del día"
+$PSQL -f "$ROOT/scripts/sql/lead_store_distribution_smoke.sql"
+
 echo "✅ DB verification passed."

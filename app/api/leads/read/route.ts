@@ -8,6 +8,7 @@ const uuid = z.string().uuid();
 const scope = z.array(uuid).max(100);
 const lead = z.tuple([uuid]);
 const schemas = {
+  loadLeadStoreDistribution: z.tuple([scope]),
   loadLeadCustomerHistory: lead,
   loadLeadDetail: lead,
   loadNextLeadCart: lead,
