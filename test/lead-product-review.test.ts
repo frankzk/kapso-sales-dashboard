@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import { summarizeLeadProducts, type ProductReviewLead } from "@/lib/lead-product-review";
-const mocks = vi.hoisted(() => ({ admin: vi.fn(), catalogue: vi.fn(), backfill: vi.fn(), project: vi.fn(), repair: vi.fn() }));
+const mocks = vi.hoisted(() => ({ admin: vi.fn(), catalogue: vi.fn(), backfill: vi.fn(), project: vi.fn(), repair: vi.fn(), references: vi.fn() }));
 vi.mock("@/lib/db", () => ({ createAdminSupabase: mocks.admin }));
-vi.mock("@/lib/lead-products-server", () => ({ loadLeadProductCatalog: mocks.catalogue, backfillLeadProducts: mocks.backfill, withProductOpeners: mocks.project, repairSevenProductNames: mocks.repair }));
+vi.mock("@/lib/lead-products-server", () => ({ loadLeadProductCatalog: mocks.catalogue, backfillLeadProducts: mocks.backfill, withProductOpeners: mocks.project, repairSevenProductNames: mocks.repair, repairLeadProductReferences: mocks.references }));
 import { POST } from "@/app/api/internal/leads/product-review/route";
 
 const storeId = "dcab8bf5-23ec-49f5-8e20-f75a8f978297";
@@ -70,6 +70,11 @@ describe("private server-side review", () => {
     const body = await (await POST(request("&mode=repair"))).json();
     expect(body).toEqual({ ok: true, targeted: 283, repaired: 283, unresolved: 0, complete: true });
     expect(mocks.repair).toHaveBeenCalledWith(mocks.admin.mock.results[0]!.value, storeId, expect.any(Array));
+    expect(mocks.backfill).not.toHaveBeenCalled();
+  });
+  it("repairs exact references without returning cart lines or customer data", async () => {
+    mocks.references.mockResolvedValueOnce({ checked: 1000, carts: 20, ads: 3, complete: false }).mockResolvedValueOnce({ checked: 2, carts: 1, ads: 0, complete: true });
+    expect(await (await POST(request("&mode=references"))).json()).toEqual({ ok: true, checked: 1002, carts: 21, ads: 3, complete: true });
     expect(mocks.backfill).not.toHaveBeenCalled();
   });
   it("denies expired access and stores outside the maintenance scope", async () => {

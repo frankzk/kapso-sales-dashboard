@@ -4,8 +4,85 @@ import { loadStoreOrderPlatform, wooSaleClient } from "./woocommerce-orders";
 import { wooGetPage } from "./woocommerce";
 import { withWooAuthFallback } from "./woocommerce-intake";
 import { SEVEN_PRODUCT_REPAIR_QUERIES } from "./lead-products";
+import { productReferenceResolver } from "./lead-product-references";
 
 const cache = new Map<string, { at: number; promise: Promise<LeadCatalogProduct[]> }>();
+
+const MANUAL_AD_IMPORT = "Importación de producto asignado manualmente en Consolidado; SKU exacto; vigente desde su guardado.";
+
+/** Reuse an existing HUMAN decision, never a title or purchase suggestion.
+ * Legacy mappings have no actor ID: do not fabricate a signature. */
+export async function syncManualAdProductReferences(admin: SupabaseClient, storeId: string,
+  catalogue: readonly LeadCatalogProduct[], adIds: readonly string[]) {
+  const resolve = productReferenceResolver(catalogue);
+  let imported = 0;
+  const ids = [...new Set(adIds.filter(Boolean))];
+  for (let offset = 0; offset < ids.length; offset += 200) {
+    const batch = ids.slice(offset, offset + 200);
+    const [meta, existing] = await Promise.all([
+      admin.from("meta_ads").select("ad_id,promoted_skus,promoted_product_name,promoted_product_updated_at").in("ad_id", batch),
+      admin.from("ad_product_declarations").select("ad_id,valid_from,note").eq("store_id", storeId).in("ad_id", batch),
+    ]);
+    if (meta.error || existing.error) throw new Error("Manual product references unavailable");
+    const rows = (meta.data ?? []).flatMap(ad => {
+      const at = ad.promoted_product_updated_at;
+      const handle = ad.promoted_product_name && resolve.promoted(ad.promoted_skus ?? []);
+      if (!handle || !Number.isFinite(Date.parse(at ?? ""))) return [];
+      const declarations = (existing.data ?? []).filter(d => d.ad_id === ad.ad_id);
+      // An explicit Leads declaration wins. Imported facts retain old periods.
+      if (declarations.some(d => d.note !== MANUAL_AD_IMPORT || Date.parse(d.valid_from) >= Date.parse(at))) return [];
+      return [{ store_id: storeId, ad_id: ad.ad_id, product_handle: handle, valid_from: at,
+        note: MANUAL_AD_IMPORT, declared_by: null, declared_at: at }];
+    });
+    if (!rows.length) continue;
+    const saved = await admin.from("ad_product_declarations").upsert(rows, { onConflict: "store_id,ad_id,valid_from", ignoreDuplicates: true });
+    if (saved.error) throw new Error("Manual product references could not be saved");
+    imported += rows.length;
+  }
+  return imported;
+}
+
+/** Resumable exact-reference repair. Reads private cart lines on the server;
+ * returns only counts. Does not touch customer evidence or operational fields. */
+export async function repairLeadProductReferences(admin: SupabaseClient, storeId: string, catalogue: readonly LeadCatalogProduct[]) {
+  const source = "lead_product_exact_references_20261112";
+  const progress = await admin.from("sync_state").select("cursor").eq("store_id", storeId).eq("source", source).maybeSingle();
+  if (progress.error) throw new Error("Reference progress unavailable");
+  if (progress.data?.cursor === "done") return { checked: 0, carts: 0, ads: 0, complete: true };
+  let query = admin.from("leads").select("id,ad_id,draft_order_gid,cart_product_handle,call_queue_ready,next_followup_at,call_attempt_count,category,contact_opt_out_at,has_order,order_id,status").eq("store_id", storeId).order("id").limit(1000);
+  if (progress.data?.cursor) query = query.gt("id", progress.data.cursor);
+  const page = await query;
+  if (page.error) throw new Error("Reference cohort unavailable");
+  const rows = page.data ?? [];
+  const ads = await syncManualAdProductReferences(admin, storeId, catalogue, rows.map(l => l.ad_id).filter((id): id is string => !!id));
+  const resolve = productReferenceResolver(catalogue);
+  let carts = 0;
+  const candidates = rows.filter(l => !l.cart_product_handle && l.draft_order_gid && (!l.call_queue_ready || (
+    !(Date.parse(l.next_followup_at ?? "") > Date.now()) && !(l.call_attempt_count >= 3)
+    && ["open", "hot"].includes(l.category) && !l.contact_opt_out_at && !l.has_order && !l.order_id
+    && ["nuevo", "no_responde", "buzon", "cuelga", "casi_cierra", "volver_a_llamar", "contactado_dejo_wsp", "otros_productos"].includes(l.status)
+  )));
+  for (let offset = 0; offset < candidates.length; offset += 100) {
+    const batch = candidates.slice(offset, offset + 100);
+    const drafts = await admin.from("draft_orders").select("draft_order_gid,line_items,platform")
+      .eq("store_id", storeId).in("draft_order_gid", batch.map(l => l.draft_order_gid));
+    if (drafts.error) throw new Error("Cart references unavailable");
+    for (const lead of batch) {
+      const draft = drafts.data?.find(d => d.draft_order_gid === lead.draft_order_gid);
+      const handle = draft && resolve.cart(draft.line_items ?? [], draft.platform);
+      if (!handle) continue;
+      const saved = await admin.from("leads").update({ cart_product_handle: handle }).eq("store_id", storeId)
+        .eq("id", lead.id).eq("draft_order_gid", lead.draft_order_gid).is("cart_product_handle", null).select("id");
+      if (saved.error) throw new Error("Cart reference could not be saved");
+      carts += saved.data?.length ?? 0;
+    }
+  }
+  const complete = rows.length < 1000;
+  const saved = await admin.from("sync_state").upsert({ store_id: storeId, source, cursor: complete ? "done" : rows[rows.length - 1]!.id,
+    status: "ok", last_run_at: new Date().toISOString(), error: null }, { onConflict: "store_id,source" });
+  if (saved.error) throw new Error("Reference progress could not be saved");
+  return { checked: rows.length, carts, ads, complete };
+}
 
 /** Explicit review cohort stored by the operator in sync_state. Texts stay on
  * the server. Only the seven uniquely catalogue-backed products may be written. */
@@ -89,10 +166,13 @@ export async function loadLeadProductCatalog(admin: SupabaseClient, storeId: str
   const promise = (async () => {
     const products = new Map<string, LeadCatalogProduct>();
     for (let page = 0; page < 30; page++) {
-      const { data, error } = await admin.from("shopify_history_products").select("handle,title")
+      const { data, error } = await admin.from("shopify_history_products").select("handle,title,variants")
         .eq("store_id", storeId).eq("status", "active").order("handle").range(page * 1000, page * 1000 + 999);
       if (error) throw new Error("No se pudo leer el catálogo de atribución.");
-      for (const p of data ?? []) if (p.handle && p.title) products.set(p.handle, p);
+      for (const p of data ?? []) if (p.handle && p.title) products.set(p.handle, {
+        handle: p.handle, title: p.title,
+        skus: Array.isArray(p.variants) ? p.variants.map((v: { sku?: string }) => v.sku?.trim().toUpperCase() ?? "").filter(Boolean) : [],
+      });
       if ((data ?? []).length < 1000) break;
       if (page === 29) throw new Error("El archivo de productos está incompleto.");
     }
@@ -102,10 +182,10 @@ export async function loadLeadProductCatalog(admin: SupabaseClient, storeId: str
     if (platform.platform === "woocommerce") {
       const client = wooSaleClient(platform.creds, { timeoutMs: 10_000 });
       for (let page = 1; page <= 30; page++) {
-        const result = await withWooAuthFallback(client, (opts) => wooGetPage<{ slug: string; name: string }>(opts,
-          "/products", { status: "publish", per_page: 100, page, _fields: "slug,name", orderby: "id", order: "asc" }));
+        const result = await withWooAuthFallback(client, (opts) => wooGetPage<{ id: number; slug: string; name: string; sku: string }>(opts,
+          "/products", { status: "publish", per_page: 100, page, _fields: "id,slug,name,sku", orderby: "id", order: "asc" }));
         for (const p of result.value.items) if (p.slug && p.name) {
-          live.push({ handle: p.slug, title: p.name });
+          live.push({ handle: p.slug, title: p.name, wooProductIds: [String(p.id)], skus: p.sku ? [p.sku.trim().toUpperCase()] : [] });
         }
         if (result.value.items.length < 100 || (result.value.totalPages != null && page >= result.value.totalPages)) break;
         if (page === 30) throw new Error("El catálogo de atribución está incompleto.");
@@ -149,11 +229,13 @@ export async function backfillLeadProducts(admin: SupabaseClient, storeId: strin
   const cursorRead = await admin.from("sync_state").select("cursor").eq("store_id", storeId).eq("source", source).maybeSingle();
   if (cursorRead.error) throw new Error("No se pudo leer el progreso histórico de productos.");
   const cursor: string | null = cursorRead.data?.cursor ?? null;
-  let query = admin.from("leads").select("id,first_inbound_text,first_seen_at,interest_product").eq("store_id", storeId).order("id").limit(limit);
+  let query = admin.from("leads").select("id,ad_id,first_inbound_text,first_seen_at,interest_product").eq("store_id", storeId).order("id").limit(limit);
   if (cursor === "done") query = query.is("product_attribution_checked_at", null);
   else if (cursor) query = query.gt("id", cursor);
   const { data, error } = await query;
   if (error) throw new Error("No se pudo leer el lote histórico de productos.");
+  const adIds = (data ?? []).map(l => l.ad_id).filter((id): id is string => !!id);
+  if (adIds.length) await syncManualAdProductReferences(admin, storeId, catalogue, adIds);
   const match = buildProductMatcher(catalogue);
   const entries = (data ?? []).map((l) => ({ id: l.id, entry: match({
     text: l.first_inbound_text ?? "", at: l.first_seen_at, id: `opener:${l.id}`, direction: "inbound",

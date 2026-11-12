@@ -7637,6 +7637,33 @@ Las consultas ambiguas más recientes no reutilizan un producto anterior. Los
 carritos, enlaces y declaraciones anteriores siguen como respaldo sin cambiar
 la fuente de adquisición. Lista y contadores usan el mismo resolver y catálogo.
 
+**Referencias exactas de carritos y anuncios (12-11-2026).** Los carritos de
+WooCommerce pueden llegar sin slug. Se resuelven por ID de producto de esa
+plataforma y tienda, o por SKU único en el catálogo de la tienda. Un ID Shopify
+no se interpreta como ID WooCommerce. Se conservan SKUs históricos al unificar
+una identidad de catálogo. Todas las líneas deben resolverse al mismo producto;
+una línea desconocida, referencias contradictorias o productos distintos dejan
+el carrito sin atribución única. Nunca se escoge un producto por el resumen.
+
+Las asignaciones humanas ya guardadas en `meta_ads.promoted_*` se incorporan a
+`ad_product_declarations` solo con SKU exacto y único, desde la fecha original
+de guardado. No se retrotraen a leads anteriores ni sustituyen declaraciones
+explícitas de Leads. Las importaciones conservan su procedencia en la nota y
+no inventan un usuario firmante. No se convierten títulos de campaña ni
+sugerencias basadas en compras en evidencia. La ingesta y el guardado manual
+mantienen estas referencias para los nuevos leads. `mode=references` recorre
+el histórico con cursor independiente y devuelve solo conteos; corrige únicamente
+`cart_product_handle` y declaraciones, sin cambiar evidencia del cliente,
+gestiones, reservas ni estados.
+
+`mode=conversations` revisa una cohorte congelada de pendientes sin producto:
+40 leads por petición y hasta cuatro lecturas simultáneas, una página de hasta
+100 mensajes por conversación. Solo los mensajes entrantes pasan por el matcher
+y el RPC de evidencia existente. El servidor descifra únicamente la credencial
+Kapso de la tienda autorizada; no descarga imágenes ni envía mensajes. Devuelve
+conteos y lecturas ilegibles, sin chats ni identidades. El cursor solo avanza tras
+guardar todo el lote; una lectura vacía no se presenta como producto identificado.
+
 **Barrido de nombres y referencias (11-11-2026; 0331).** Antes de resolver se
 decodifican entidades HTML y se unifica un producto histórico con uno actual
 solo si su slug normalizado o título completo identifican un único producto

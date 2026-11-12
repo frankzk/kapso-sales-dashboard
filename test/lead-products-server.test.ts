@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 vi.mock("@/lib/woocommerce-orders", () => ({ loadStoreOrderPlatform: vi.fn(async () => ({ ok: true, platform: "shopify" })), wooSaleClient: vi.fn() }));
 vi.mock("@/lib/woocommerce", () => ({ wooGetPage: vi.fn() }));
 vi.mock("@/lib/woocommerce-intake", () => ({ withWooAuthFallback: vi.fn() }));
-import { backfillLeadProducts, saveCustomerProducts, withProductOpeners, markProductConversationAttempt, repairSevenProductNames } from "@/lib/lead-products-server";
+import { backfillLeadProducts, saveCustomerProducts, withProductOpeners, markProductConversationAttempt, repairSevenProductNames, syncManualAdProductReferences, repairLeadProductReferences } from "@/lib/lead-products-server";
 import { readFileSync } from "node:fs";
 
 const products = [{ handle: "astaxantina", title: "Astaxantina – Antioxidante" }];
@@ -20,6 +20,28 @@ function client(data: Record<string, unknown[]>, error: string | null = null) {
   } } as unknown as SupabaseClient };
 }
 describe("persistencia e historial de producto", () => {
+  it("imports a real manual ad assignment with its original validity date and no invented actor", async () => {
+    const c = client({ meta_ads: [{ ad_id: "ad", promoted_skus: ["SKU"], promoted_product_name: "Human choice", promoted_product_updated_at: "2026-11-01T00:00:00Z" }] });
+    expect(await syncManualAdProductReferences(c.admin, "store-A", [{ handle: "product", title: "Product", skus: ["SKU"] }], ["ad"])).toBe(1);
+    const write = c.calls.filter(x => x.table === "ad_product_declarations").flatMap(x => x.filters).find((x: any) => x.upsert) as any;
+    expect(write.upsert[0]).toMatchObject({ store_id: "store-A", ad_id: "ad", product_handle: "product", valid_from: "2026-11-01T00:00:00Z", declared_by: null });
+    expect(c.calls.some(x => x.table === "leads")).toBe(false);
+  });
+  it("does not turn an ad title or purchase suggestion into a declaration or overwrite an explicit period", async () => {
+    const rows = [{ ad_id: "ad", promoted_skus: ["SKU"], promoted_product_name: "Human choice", promoted_product_updated_at: "2026-11-01T00:00:00Z" }];
+    const c = client({ meta_ads: rows, ad_product_declarations: [{ ad_id: "ad", note: "Owner signed", valid_from: "2026-01-01" }] });
+    expect(await syncManualAdProductReferences(c.admin, "store", [{ handle: "product", title: "Product", skus: ["SKU"] }], ["ad"])).toBe(0);
+    const unconfirmed = client({ meta_ads: [{ ad_id: "ad", ad_name: "Product", suggested_label: "Product", promoted_skus: ["SKU"] }] });
+    expect(await syncManualAdProductReferences(unconfirmed.admin, "store", products, ["ad"])).toBe(0);
+    expect(c.calls.flatMap(x => x.filters).some((x: any) => x.upsert)).toBe(false);
+  });
+  it("repairs only the derived cart reference and guards against a changed cart", async () => {
+    const c = client({ leads: [{ id: "l", draft_order_gid: "draft", cart_product_handle: null }], draft_orders: [{ draft_order_gid: "draft", platform: "woocommerce", line_items: [{ product_id: "12" }] }] });
+    expect(await repairLeadProductReferences(c.admin, "store", [{ handle: "product", title: "Product", wooProductIds: ["12"] }])).toMatchObject({ checked: 1, carts: 1, complete: true });
+    expect(c.calls.filter(x => x.table === "leads")[1]!.filters).toEqual([
+      { patch: { cart_product_handle: "product" } }, ["store_id", "store"], ["id", "l"], ["draft_order_gid", "draft"], ["cart_product_handle", null],
+    ]);
+  });
   it("repara únicamente los IDs de la cohorte, sin cambiar estado ni interés posterior", async () => {
     const ids = ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"];
     const cat = [{ handle: "restpro", title: "RestPro: Almohada de Tracción Inversa" }];

@@ -1,5 +1,5 @@
 /** Catalogue-backed attribution. Only customer messages are evidence. */
-export interface LeadCatalogProduct { handle: string; title: string; aliases?: string[]; handles?: string[] }
+export interface LeadCatalogProduct { handle: string; title: string; aliases?: string[]; handles?: string[]; skus?: string[]; wooProductIds?: string[] }
 export interface LeadProductSignal {
   handle: string | null;
   title: string | null;
@@ -61,6 +61,7 @@ export function mergeLeadProductCatalog(archive: readonly LeadCatalogProduct[], 
       const target = candidates[0]!;
       target.aliases.push(productTitleText(old.title), ...old.aliases ?? []);
       target.handles.push(old.handle, ...old.handles ?? []);
+      target.skus = [...new Set([...target.skus ?? [], ...old.skus ?? []])];
     } else result.push({ ...old, title: productTitleText(old.title), aliases: [...old.aliases ?? []], handles: [...old.handles ?? []] });
   }
   return result;
