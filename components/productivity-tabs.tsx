@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useRef } from "react";
 import { cn } from "./ui";
 import {
   PRODUCTIVITY_SECTIONS,
@@ -19,8 +22,21 @@ export function ProductivityTabs({
   month?: string | null;
   source?: string | null;
 }) {
+  const navigation = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const nav = navigation.current;
+    const active = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !active || nav.scrollWidth <= nav.clientWidth) return;
+    nav.scrollLeft = Math.max(
+      0,
+      active.offsetLeft -
+        nav.offsetLeft -
+        (nav.clientWidth - active.offsetWidth) / 2,
+    );
+  }, [section]);
   return (
     <nav
+      ref={navigation}
       aria-label="Secciones de productividad"
       className="-mb-px flex shrink-0 gap-5 overflow-x-auto border-b border-line"
     >
