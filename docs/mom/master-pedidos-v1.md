@@ -7659,6 +7659,9 @@ no se interpreta como ID WooCommerce. Se conservan SKUs históricos al unificar
 una identidad de catálogo. Todas las líneas deben resolverse al mismo producto;
 una línea desconocida, referencias contradictorias o productos distintos dejan
 el carrito sin atribución única. Nunca se escoge un producto por el resumen.
+Si falla el catálogo de un carrito WooCommerce, se aborta su vinculación antes
+de escribir y se reintenta en la siguiente conciliación: el fallo no borra una
+referencia verificada ni se interpreta como un carrito sin producto.
 
 Las asignaciones humanas ya guardadas en `meta_ads.promoted_*` se incorporan a
 `ad_product_declarations` solo con SKU exacto y único, desde la fecha original
