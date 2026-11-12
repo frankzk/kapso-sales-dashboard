@@ -159,7 +159,7 @@ import {
 } from "@/lib/voice-leads-server";
 import { loadDoNotCallPhones } from "@/lib/voice-recovery-server";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
-import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor } from "@/lib/lead-routing-access";
+import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor, getLeadManualTakeStores, filterManualSearchLeads } from "@/lib/lead-routing-access";
 
 export interface LeadActionState {
   error?: string;
@@ -606,7 +606,8 @@ export async function searchLeads(storeIds: StoreScope, query: string): Promise<
   for (const { data } of settled) {
     for (const r of (data as LeadRow[] | null) ?? []) byId.set(r.id!, r);
   }
-  return filterRoutedLeads([...byId.values()], await getLeadRoutingScope(scope))
+  const [routing, manualStores] = await Promise.all([getLeadRoutingScope(scope), getLeadManualTakeStores(scope)]);
+  return filterManualSearchLeads([...byId.values()], routing, manualStores)
     .sort((a, b) => (b.last_interaction_at ?? "").localeCompare(a.last_interaction_at ?? ""))
     .slice(0, 40);
 }

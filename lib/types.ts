@@ -230,6 +230,8 @@ export interface ListaNegraRowMark {
 }
 
 export interface LeadRow {
+  /** Explicit search only; a manual claim is required before opening. */
+  manual_take_required?: boolean;
   id: string;
   store_id: string;
   /**

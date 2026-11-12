@@ -66,7 +66,7 @@ describe("mientras trabaja, lo dice", () => {
   it("el botón cambia de texto y se apaga", () => {
     const source = venta();
     expect(source).toContain("Abriendo la ficha…");
-    expect(source).toContain("disabled={abriendo || !phone.trim() || !storeId}");
+    expect(source).toContain("disabled={abriendo || consultando || !!res?.takeError || !phone.trim() || !storeId}");
     expect(source).toContain("aria-busy={abriendo}");
   });
 

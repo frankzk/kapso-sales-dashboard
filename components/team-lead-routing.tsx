@@ -33,7 +33,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
   const router = useRouter();
   const [enabled, setEnabled] = useState(initial.enabled);
   const [hours, setHours] = useState(initial.freshHours);
-  const [assignments, setAssignments] = useState<LeadBlockAssignment[]>(() => advisors.map(m => initial.assignments.find(a => a.userId === m.userId) ?? { userId: m.userId, blocks: [], backup: false }));
+  const [assignments, setAssignments] = useState<LeadBlockAssignment[]>(() => advisors.map(m => initial.assignments.find(a => a.userId === m.userId) ?? { userId: m.userId, blocks: [], backup: false, manualTake: false }));
   const [search, setSearch] = useState("");
   const [message, setMessage] = useState<{ error?: string; notice?: string }>({});
   const [pending, start] = useTransition();
@@ -43,7 +43,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
   const visible = advisors.filter(m => normalizeSearch(`${m.name} ${m.account}`).includes(normalizeSearch(search.trim())));
   const dirty = enabled !== initial.enabled || hours !== initial.freshHours || assignments.some(a => {
     const before = initial.assignments.find(row => row.userId === a.userId);
-    return !sameBlocks(a.blocks, before?.blocks ?? []) || a.backup !== (before?.backup ?? false);
+    return !sameBlocks(a.blocks, before?.blocks ?? []) || a.backup !== (before?.backup ?? false) || !!a.manualTake !== !!before?.manualTake;
   });
   const patch = (userId: string, change: Partial<LeadBlockAssignment>) => setAssignments(rows => rows.map(a => a.userId === userId ? { ...a, ...change } : a));
   const toggle = (userId: string, block: LeadWorkBlock) => {
@@ -80,7 +80,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
             <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 font-medium text-brand-700">Qué incluye cada bloque<IconChevronDown className="size-4 group-open:rotate-180" /></summary>
             <div className="mt-3 max-w-[72ch] rounded-md border border-line bg-wash p-4 text-ink-600">
               <dl className="space-y-3">{LEAD_WORK_BLOCKS.map(block => <div key={block.key}><dt className="font-medium text-ink-900">{block.label}</dt><dd className="mt-0.5">{block.detail}</dd></div>)}<div><dt className="font-medium text-ink-900">Respaldo</dt><dd className="mt-0.5">Recibe otros prioritarios solo si no hay asesora asignada disponible en esa tienda.</dd></div></dl>
-              <p className="mt-4 border-t border-line pt-3">El plazo cuenta desde el ingreso, respuesta o carrito más reciente. Notas y llamadas fallidas no lo reinician.</p>
+              <p className="mt-3">Toma puntual: permite atender un cliente fuera de sus bloques desde la búsqueda o Venta por teléfono. No amplía su cola automática ni toma reservas o citas ajenas.</p><p className="mt-4 border-t border-line pt-3">El plazo cuenta desde el ingreso, respuesta o carrito más reciente. Notas y llamadas fallidas no lo reinician.</p>
             </div>
           </details>
         </div>
@@ -89,13 +89,13 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
           <p className="text-xs text-ink-500"><span className="font-medium tabular-nums text-ink-900">{assignedCount}</span> de {advisors.length} personas con bloques asignados</p>
         </div>
         <div className="relative hidden max-h-[min(52vh,600px)] overflow-auto rounded-b-lg lg:block">
-          <table className="w-full min-w-[1060px] table-fixed text-[13px]">
-            <caption className="sr-only">Bloques de leads y respaldo por persona</caption>
-            <colgroup><col className="w-60" /><col className="w-[152px]" />{LEAD_WORK_BLOCKS.map(b => <col key={b.key} className="w-24" />)}<col className="w-[84px]" /></colgroup>
+          <table className="w-full min-w-[1152px] table-fixed text-[13px]">
+            <caption className="sr-only">Bloques de leads, respaldo y toma puntual por persona</caption>
+            <colgroup><col className="w-60" /><col className="w-[152px]" />{LEAD_WORK_BLOCKS.map(b => <col key={b.key} className="w-24" />)}<col className="w-[84px]" /><col className="w-[100px]" /></colgroup>
             <thead className="sticky top-0 z-10 bg-wash text-xs text-ink-600"><tr>
               <th scope="col" className="sticky left-0 z-20 bg-wash px-4 py-3 text-left font-medium">Persona</th><th scope="col" className="px-3 py-3 text-left font-medium">Configuración</th>
               {LEAD_WORK_BLOCKS.map((b, i) => <th scope="col" key={b.key} title={b.label} className="px-2 py-3 text-center font-medium"><span className="block text-ink-900">{COLUMN_LABELS[i]![0]}</span><span className="block font-normal">{COLUMN_LABELS[i]![1]}</span></th>)}
-              <th scope="col" className="border-l border-line px-2 py-3 text-center font-medium">Respaldo</th>
+              <th scope="col" className="border-l border-line px-2 py-3 text-center font-medium">Respaldo</th><th scope="col" title="Puede tomar leads fuera de sus bloques desde búsqueda o venta por teléfono. Respeta reservas y citas." className="px-2 py-3 text-center font-medium">Toma puntual</th>
             </tr></thead>
             <tbody className="divide-y divide-line">{visible.map(member => {
               const a = assignments.find(row => row.userId === member.userId)!;
@@ -104,6 +104,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
                 <td className="px-3 py-2"><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /></td>
                 {LEAD_WORK_BLOCKS.map(block => <td key={block.key} className="p-0 text-center"><label className="relative flex min-h-14 cursor-pointer items-center justify-center"><input className={CHECKBOX} type="checkbox" checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span className="sr-only">{block.label} para {member.name}</span></label></td>)}
                 <td className="border-l border-line p-0 text-center"><label className="relative flex min-h-14 cursor-pointer items-center justify-center"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span className="sr-only">Respaldo para {member.name}</span></label></td>
+                <td className="p-0 text-center"><label className="flex min-h-14 cursor-pointer items-center justify-center"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span className="sr-only">Puede tomar leads fuera de sus bloques para {member.name}</span></label></td>
               </tr>;
             })}</tbody>
           </table>
@@ -112,7 +113,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
           const a = assignments.find(row => row.userId === member.userId)!;
           return <details key={member.userId} className="group">
             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3"><span className="min-w-0"><span className="block truncate text-sm font-medium text-ink-900">{member.name}</span><span className="mt-0.5 block text-xs text-ink-500">{routingLabel(a.blocks)}</span></span><IconChevronDown className="size-4 shrink-0 text-ink-500 group-open:rotate-180" /></summary>
-            <div className="space-y-3 px-4 pb-4"><p className="break-words text-xs text-ink-500">{member.account} · {storeNames(member)}</p><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /><div>{LEAD_WORK_BLOCKS.map(block => <label key={block.key} className="relative flex min-h-11 cursor-pointer items-center gap-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span>{block.label}<span className="sr-only"> para {member.name}</span></span></label>)}</div><label className="relative flex min-h-11 cursor-pointer items-center gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span>Respaldo<span className="sr-only"> para {member.name}</span></span></label></div>
+            <div className="space-y-3 px-4 pb-4"><p className="break-words text-xs text-ink-500">{member.account} · {storeNames(member)}</p><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /><div>{LEAD_WORK_BLOCKS.map(block => <label key={block.key} className="relative flex min-h-11 cursor-pointer items-center gap-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span>{block.label}<span className="sr-only"> para {member.name}</span></span></label>)}</div><label className="relative flex min-h-11 cursor-pointer items-center gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span>Respaldo<span className="sr-only"> para {member.name}</span></span></label><label className="relative flex min-h-11 cursor-pointer items-start gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span>Puede tomar leads fuera de sus bloques<span className="sr-only"> para {member.name}</span><span className="mt-1 block text-xs text-ink-500">Solo desde búsqueda o venta por teléfono. Respeta reservas y citas.</span></span></label></div>
           </details>;
         })}</div>
         {!visible.length && <div className="px-4 py-10 text-center"><p className="text-sm text-ink-600">No se encontraron personas.</p><OpsButton className="mt-3" size="sm" onClick={() => setSearch("")}>Mostrar equipo</OpsButton></div>}
