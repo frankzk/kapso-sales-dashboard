@@ -33033,164 +33033,140 @@ begin
 end $$;
 
 -- ---- 0333 ----
--- ============================================================================
--- 0333_lista_negra_rechazo.sql — Lista negra automática: quien rechazó en la
--- puerta y nunca recibió (MOM §41.11; owner 12-11-2026).
---
--- POR QUÉ. En Lima un rechazo en la puerta termina `anulado` (solo la
--- anulación en Shopify termina la venta, v1.23), y la regla solo tomaba «1+
--- devuelto» o «5+ pedidos con 75 % anulados». El 12-11-2026 había 135
--- clientes de Lima que rechazaron el pedido en la puerta —121 sin haber
--- recibido nunca nada— y solo 1 estaba en la lista. El owner: «Sí, desde 1
--- rechazo».
---
--- QUÉ CAMBIA.
---   * (C) `rechazo`: con CERO entregados, entra quien rechazó al menos un
---     pedido contra entrega (sin hecho de la migración) en la puerta: el
---     motorizado de Grupo GF lo reportó «Rechazó el pedido»
---     (`stop_reported`, `outcome_reason = 'rechazado'`) o la guía del courier
---     dice `REFUSED` (Aliclik, `etiquetaDiceRechazoEnPuerta`). Cuenta aunque el
---     pedido siga en reprogramación: el rechazo es el hecho.
---   * Prioridad del motivo: devuelto, rechazo, anulador. `failed` es la
---     cuenta de lo que lo hizo entrar (pedidos rechazados, para `rechazo`).
---   * `pago_online_phones.reason` acepta `rechazo`; `pago_online_runs` guarda
---     `rechazos` (cuántos entraron por esta regla) y `pago_online_build` lo
---     devuelve.
--- Es `pagoOnlineListOf` en lib/pago-online.ts.
---
--- No cambia datos. Correrla otra vez no cambia nada. La lista nueva aparece
--- con la corrida siguiente (05:00 de Lima, o «Calcular ahora»).
--- ============================================================================
-
-alter table public.pago_online_phones drop constraint if exists pago_online_phones_reason_check;
-alter table public.pago_online_phones
-  add constraint pago_online_phones_reason_check check (reason in ('devuelto', 'anulador', 'rechazo'));
-
-alter table public.pago_online_runs add column if not exists rechazos integer not null default 0;
-
-create or replace function public.pago_online_candidates(p_org uuid)
-returns table(phone text, failed integer, reason text, orders integer, emails text[], excepted boolean)
-language sql stable
-set search_path = public
-as $$
-  with st as materialized (select s.id from public.stores s where s.org_id = p_org),
-  mig as materialized (
-    select distinct ev.order_id from public.order_events ev join st on st.id = ev.store_id
-    where ev.kind in ('cancelled_woocommerce', 'legacy_shopify_sale_cancelled', 'woo_sale_ended_pending_return')
-  ),
-  -- 0333: los pedidos rechazados en la puerta.
-  rej as materialized (
-    select ev.order_id from public.order_events ev join st on st.id = ev.store_id
-    where ev.kind = 'stop_reported' and ev.payload->>'outcome_reason' = 'rechazado'
-    union
-    select sh.order_id from public.shipments sh join st on st.id = sh.store_id
-    where sh.order_id is not null
-      and upper(btrim(split_part(coalesce(sh.reported_status, ''), ' · ', 1))) = 'REFUSED'
-  ),
-  h as materialized (
-    select right(regexp_replace(coalesce(om.customer_phone, ''), '\D', '', 'g'), 9) as phone,
-      count(*)::int as orders,
-      count(*) filter (where om.general_status = 'devuelto')::int as devueltos,
-      count(*) filter (where om.general_status = 'anulado')::int as anulados,
-      count(*) filter (where exists (select 1 from rej where rej.order_id = om.order_id))::int as rechazos
-    from public.order_master om join st on st.id = om.store_id
-    where om.coverage in ('lima', 'provincia_cod')
-      and not exists (select 1 from mig where mig.order_id = om.order_id)
-    group by 1
-  ),
-  -- 0328: «recibió» es cualquier pedido entregado del celular, sea cual sea su
-  -- cobertura y aunque tenga un hecho de la migración.
-  rcv as materialized (
-    select distinct right(regexp_replace(coalesce(om.customer_phone, ''), '\D', '', 'g'), 9) as phone
-    from public.order_master om join st on st.id = om.store_id
-    where om.general_status = 'entregado'
-  ),
-  l as materialized (
-    select h.phone,
-      case when h.devueltos >= 1 then h.devueltos
-           when h.rechazos >= 1 then h.rechazos
-           else h.anulados end as failed,
-      case when h.devueltos >= 1 then 'devuelto'
-           when h.rechazos >= 1 then 'rechazo'
-           else 'anulador' end as reason,
-      h.orders
-    from h
-    where length(h.phone) = 9
-      and not exists (select 1 from rcv where rcv.phone = h.phone)
-      and (h.devueltos >= 1
-           -- (C) 0333: rechazó en la puerta al menos una vez.
-           or h.rechazos >= 1
-           -- (B) el anulador: 5 y 0,75, los mismos de lib/pago-online.ts.
-           or (h.orders >= 5 and h.anulados::numeric >= 0.75 * h.orders))
-  ),
-  e as materialized (
-    select right(regexp_replace(coalesce(o.customer_phone, ''), '\D', '', 'g'), 9) as phone,
-      lower(btrim(coalesce(o.raw->'woo'->'billing'->>'email', o.raw->'billing'->>'email', o.raw->>'email'))) as email
-    from public.orders o join st on st.id = o.store_id
-    where coalesce(o.raw->'woo'->'billing'->>'email', o.raw->'billing'->>'email', o.raw->>'email') like '%@%'
-  ),
-  ev as materialized (
-    select e.email, min(e.phone) as phone from e
-    where e.email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' and length(e.email) <= 254 and length(e.phone) = 9
-    group by e.email having count(distinct e.phone) = 1
-  ),
-  em as materialized (select ev.phone, array_agg(ev.email order by ev.email) as emails from ev group by ev.phone)
-  select l.phone, l.failed, l.reason, l.orders, coalesce(em.emails, '{}'::text[]),
-    exists (select 1 from public.pago_online_exceptions x where x.org_id = p_org and x.phone = l.phone and x.removed_at is null)
-  from l left join em on em.phone = l.phone
-  order by l.phone;
-$$;
-
-revoke all on function public.pago_online_candidates(uuid) from public, anon, authenticated;
-grant execute on function public.pago_online_candidates(uuid) to service_role;
-
-create or replace function public.pago_online_build(p_org uuid, p_run uuid, p_requirement text)
-returns jsonb
-language plpgsql
-set search_path = public
-as $$
-declare
-  v_rows jsonb;
-  v_phones text[];
-  v_emails integer;
-  v_two integer;
-  v_anul integer;
-  v_rech integer;
-  v_exc integer;
-  v_pc jsonb;
+-- Productividad operativa. Read-only reporting, no operational transitions.
+-- A snapshot on NEW human contacts prevents later stages reattributing old work.
+create index order_payments_registered_productivity_idx on public.order_payments(store_id,registered_at) where registered_by is not null;
+create index order_payments_validated_productivity_idx on public.order_payments(store_id,validated_at) where validated_by is not null;
+create function public.capture_productivity_context()
+returns trigger language plpgsql security invoker set search_path=public,pg_temp as $$
+declare context jsonb;
 begin
-  select coalesce(jsonb_agg(jsonb_build_object('p', c.phone, 'f', c.failed, 'r', c.reason, 'o', c.orders, 'e', to_jsonb(c.emails))
-                  order by c.phone) filter (where not c.excepted), '[]'::jsonb),
-         coalesce(array_agg(c.phone order by c.phone) filter (where not c.excepted), '{}'::text[]),
-         coalesce(sum(cardinality(c.emails)) filter (where not c.excepted), 0)::int,
-         -- «2 o más»: dos o más devueltos (los anuladores no entran en esta cuenta).
-         count(*) filter (where not c.excepted and c.reason = 'devuelto' and c.failed >= 2)::int,
-         count(*) filter (where not c.excepted and c.reason = 'anulador')::int,
-         count(*) filter (where not c.excepted and c.reason = 'rechazo')::int,
-         count(*) filter (where c.excepted)::int
-    into v_rows, v_phones, v_emails, v_two, v_anul, v_rech, v_exc
-    from public.pago_online_candidates(p_org) c;
-
-  if p_run is not null then
-    insert into public.pago_online_phones (run_id, org_id, phone, failed, reason, orders, emails)
-    select p_run, p_org, r->>'p', (r->>'f')::int, r->>'r', (r->>'o')::int, array(select jsonb_array_elements_text(r->'e'))
-    from jsonb_array_elements(v_rows) r
-    on conflict (run_id, phone) do nothing;
+  if new.actor is not null and new.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call') then
+    select jsonb_build_object('stage',m.macro_stage,'substage',m.macro_substage,
+      'operation',m.macro_operation,'courier',m.current_courier,'payment_state',m.payment_state) into context
+      from order_master m where m.order_id=new.order_id and m.store_id=new.store_id;
+    new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object('productivity_context',coalesce(context,'{}'::jsonb));
   end if;
+  return new;
+end $$;
+revoke all on function public.capture_productivity_context() from public,anon,authenticated;
+create trigger capture_productivity_context before insert on public.order_events
+for each row execute function public.capture_productivity_context();
 
-  v_pc := public.pago_online_por_confirmar(p_org, v_phones, p_requirement);
-  return jsonb_build_object(
-    'phones', cardinality(v_phones),
-    'emails', v_emails,
-    'two_or_more', v_two,
-    'anuladores', v_anul,
-    'rechazos', v_rech,
-    'excepted', v_exc,
-    'por_confirmar_listed', coalesce((v_pc->>'listed')::int, 0),
-    'por_confirmar_braked', coalesce((v_pc->>'braked')::int, 0)
-  );
-end;
-$$;
-
-revoke all on function public.pago_online_build(uuid, uuid, text) from public, anon, authenticated;
-grant execute on function public.pago_online_build(uuid, uuid, text) to service_role;
+create function public.operations_productivity(p_stores uuid[],p_start timestamptz,p_end timestamptz,
+  p_section text default 'resumen',p_actor uuid default null,p_tz text default 'America/Lima')
+returns jsonb language plpgsql stable security invoker set search_path=public,pg_temp as $$
+declare result jsonb;
+begin
+  if p_start is null or p_end is null or p_end<p_start or p_end-p_start>interval '366 days'
+    or p_section is null or p_section not in ('resumen','leads','master','repro_provincia','repro_lima','diferencia','pagos','almacen','despacho')
+    or not exists(select 1 from pg_timezone_names where name=p_tz) then raise exception 'Periodo o sección inválidos.'; end if;
+  with order_facts as (
+    select 'event:'||e.id as id,e.actor,e.store_id,e.order_id,null::uuid as lead_id,e.occurred_at as at,
+      case when e.kind='status_override' and lower(e.source)='liquidacion' then 'despacho'
+        when e.kind in ('package_ready','package_removed','return_received','returned_to_office') then 'almacen'
+        when e.kind in ('office_checked','pickup_checked','custody_transferred','dispatch_route_assigned','dispatch_route_reassigned','stop_reported','liquidation_closed') then 'despacho'
+        when e.kind in ('key_shared','key_registered') then 'diferencia'
+        when e.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call')
+          and lower(e.payload->'productivity_context'->>'courier') in ('shalom','olva')
+          and (e.payload->'productivity_context'->>'substage' in ('pendiente_pago_diferencia','recogido_sin_pago_completo')
+            or (e.payload->'productivity_context'->>'operation'='agencia'
+              and e.payload->'productivity_context'->>'substage' in ('en_transito','en_destino')
+              and coalesce(e.payload->'productivity_context'->>'payment_state','')<>'pago_completo')) then 'diferencia'
+        else 'master' end as area,
+      case when e.kind='confirmation_contact' and e.payload->>'result'='confirmado' then 'confirmed'
+        when e.kind='status_override' and lower(e.source)='liquidacion' then 'liquidation_status_registered'
+        else e.kind end as action,0::numeric as amount,
+      e.payload->>'result' as outcome,
+      e.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call') and not(coalesce(e.payload,'{}'::jsonb) ? 'productivity_context') as historical
+    from order_events e where e.store_id=any(p_stores) and e.occurred_at between p_start and p_end
+      and e.actor is not null and (p_actor is null or e.actor=p_actor)
+      and lower(coalesce(e.source,'')) not in ('system','automatico','automatic','sync','webhook','chatby_auto','voice_agent')
+      and e.kind in ('confirmation_contact','confirmed','comment','chatby_message','kapso_message','browser_call','anura_call',
+        'status_override','dispatch_date_set','guide_created','guide_registered','cancelled_woocommerce','legacy_shopify_sale_cancelled',
+        'woo_sale_ended_pending_return','customer_name_updated','coverage_changed','key_shared','key_registered',
+        'package_ready','package_removed','return_received','returned_to_office','office_checked','pickup_checked',
+        'custody_transferred','dispatch_route_assigned','dispatch_route_reassigned','stop_reported','liquidation_closed')
+      and not(e.kind='comment' and lower(coalesce(e.comment_type,''))='ubicacion')
+      -- The confirmation RPC writes a contact + its technical confirmed event.
+      -- Count that single gesture once, preserving its result and actor.
+      and not(e.kind='confirmed' and e.operation_id is not null and exists(
+        select 1 from order_events contact where contact.store_id=e.store_id and contact.order_id=e.order_id
+          and contact.actor=e.actor and contact.operation_id=e.operation_id and contact.kind='confirmation_contact'
+          and contact.payload->>'result'='confirmado'))
+  ), facts as (
+    select * from order_facts
+    union all
+    select 'shipment:'||c.id,c.agent,c.store_id,s.order_id,null::uuid,c.occurred_at,'repro_provincia',
+      case when c.next_followup_at is not null and ((c.kind='reroute' and coalesce(c.new_status,'en_ruta')='en_ruta')
+        or (c.kind='call' and c.new_status='en_ruta')) then 'province_rescheduled'
+        when c.kind='call' then 'province_call' else 'province_management' end,
+      0::numeric,c.new_status,false
+    from shipment_calls c join shipments s on s.id=c.shipment_id and s.store_id=c.store_id
+    where c.store_id=any(p_stores) and c.occurred_at between p_start and p_end and c.agent is not null
+      and (p_actor is null or c.agent=p_actor) and c.kind in ('call','reroute','address_change')
+    union all
+    select 'lima:'||c.id,c.actor,c.store_id,c.order_id,null::uuid,c.occurred_at,'repro_lima',
+      case when c.outcome='confirma' and c.agreed_on is not null then 'lima_scheduled' else 'lima_management' end,
+      0::numeric,c.outcome,false from lima_repro_calls c where c.store_id=any(p_stores)
+      and c.occurred_at between p_start and p_end and c.actor is not null and (p_actor is null or c.actor=p_actor)
+    union all
+    select 'payment-register:'||p.id,p.registered_by,p.store_id,p.order_id,null::uuid,p.registered_at,
+      case when p.kind='diferencia' then 'diferencia' else 'pagos' end,'payment_registered',greatest(coalesce(p.amount,0),0),p.kind,false
+    from order_payments p where p.store_id=any(p_stores) and p.registered_at between p_start and p_end
+      and p.registered_by is not null and (p_actor is null or p.registered_by=p_actor)
+    union all
+    select 'payment-validate:'||p.id,p.validated_by,p.store_id,p.order_id,null::uuid,p.validated_at,
+      case when p.kind='diferencia' then 'diferencia' else 'pagos' end,'payment_validated',p.amount,p.kind,false
+    from order_payments p where p.store_id=any(p_stores) and p.validated_at between p_start and p_end
+      and p.validated_by is not null and (p_actor is null or p.validated_by=p_actor)
+      and p.validation_status='validado' and p.amount>0
+    union all
+    select 'lead:'||c.id,c.vendedora,c.store_id,null::uuid,c.lead_id,c.occurred_at,'leads',
+      case when c.kind='call' then 'lead_call' else 'lead_management' end,0::numeric,null::text,false
+    from lead_calls c where c.store_id=any(p_stores) and c.occurred_at between p_start and p_end
+      and c.vendedora is not null and (p_actor is null or c.vendedora=p_actor) and c.kind not in ('system','voice_agent')
+    union all
+    select 'sale:'||s.order_id,s.vendedora,s.store_id,s.order_id,s.lead_id,s.occurred_at,'leads','sale_closed',
+      greatest(coalesce(o.total_amount,0)-coalesce(o.total_refunded,0),0),null::text,false
+    from order_sales s left join orders o on o.id=s.order_id and o.store_id=s.store_id
+    where s.store_id=any(p_stores) and s.occurred_at between p_start and p_end and s.vendedora is not null
+      and (p_actor is null or s.vendedora=p_actor)
+  ), selected as materialized (
+    select f.*,coalesce('order:'||f.order_id,'lead:'||f.lead_id,f.id) as ref,
+      (f.at at time zone p_tz)::date as local_day,extract(hour from f.at at time zone p_tz)::int as local_hour
+    from facts f where p_section='resumen' or f.area=p_section
+      or (p_section='pagos' and f.action in ('payment_registered','payment_validated'))
+  ), prior as (
+    select actor,at,local_day,lag(at) over(partition by actor,local_day order by at,id) as previous_at from selected
+  ), hours as (
+    select actor,coalesce(sum(case when at-previous_at<=interval '45 minutes' then extract(epoch from at-previous_at)/3600 else 0 end),0) as n
+    from prior group by actor
+  ), action_counts as (
+    select actor,action,count(*) as n,count(distinct order_id) as orders,coalesce(sum(amount),0) as amount from selected group by actor,action
+  ), area_counts as (
+    select actor,area,count(*) as n,count(distinct order_id) as orders from selected group by actor,area
+  ), heat as (
+    select actor,local_hour,count(*) as n from selected group by actor,local_hour
+  ), recent_ranked as (
+    select s.*,row_number() over(partition by actor order by at desc,id desc) as position from selected s
+  ), people as (
+    select s.actor as "userId",count(*) as actions,count(distinct s.ref) as objects,count(distinct s.order_id) as orders,
+      count(distinct s.lead_id) as leads,max(s.at) as "lastAt",max(h.n) as hours,count(*) filter(where s.historical) as "unclassifiedContacts",
+      (select jsonb_object_agg(a.action,jsonb_build_object('count',a.n,'orders',a.orders,'amount',a.amount)) from action_counts a where a.actor=s.actor) as counts,
+      (select jsonb_object_agg(a.area,jsonb_build_object('count',a.n,'orders',a.orders)) from area_counts a where a.actor=s.actor) as areas,
+      (select jsonb_object_agg(t.local_hour::text,t.n) from heat t where t.actor=s.actor) as heat,
+      (select jsonb_agg(jsonb_build_object('id',r.id,'at',r.at,'area',r.area,'action',r.action,'orderId',r.order_id,
+        'leadId',r.lead_id,'orderName',o.name,'amount',r.amount,'outcome',r.outcome) order by r.at desc,r.id desc)
+        from recent_ranked r left join orders o on o.id=r.order_id and o.store_id=r.store_id
+        where r.actor=s.actor and r.position<=50) as recent
+    from selected s join hours h on h.actor=s.actor group by s.actor
+  )
+  select jsonb_build_object('people',coalesce((select jsonb_agg(to_jsonb(p) order by p.actions desc,p."userId") from people p),'[]'::jsonb),
+    'totals',jsonb_build_object('actions',count(*),'orders',count(distinct order_id),'leads',count(distinct lead_id),
+      'people',count(distinct actor),'unclassifiedContacts',count(*) filter(where historical)),
+    'asOf',statement_timestamp()) into result from selected;
+  return result;
+end $$;
+revoke all on function public.operations_productivity(uuid[],timestamptz,timestamptz,text,uuid,text) from public,anon,authenticated;
+grant execute on function public.operations_productivity(uuid[],timestamptz,timestamptz,text,uuid,text) to service_role;

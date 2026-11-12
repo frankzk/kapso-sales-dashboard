@@ -31,10 +31,13 @@ import {
 import { ProductivityBoard, type ProductivityMonth, type ProductivityPeriod, type ProductivityWeek } from "@/components/productivity";
 import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import { OperationsProductivityBoard } from "@/components/operations-productivity";
+import { productivitySection } from "@/lib/operations-productivity";
+import { getOperationsProductivity } from "@/lib/operations-productivity-access";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { from?: string; to?: string; store?: string; src?: string; mes?: string };
+type SearchParams = { from?: string; to?: string; store?: string; src?: string; mes?: string; area?: string };
 
 export default function ProductividadPage({
   searchParams,
@@ -93,6 +96,12 @@ async function ProductividadContent({
     return month ? monthView(month, tz) : null;
   })();
   const range = view?.range ?? productivityInitialRange(sp, tz);
+  const section = productivitySection(sp.area);
+  if (section !== "leads") {
+    const operations = await getOperationsProductivity({ range, section, store: storeId, tz });
+    return <OperationsProductivityBoard data={operations.data} section={section} range={range} month={view}
+      stores={stores} storeId={storeId} tz={tz} currency={currency} solo={operations.solo}/>;
+  }
   // La semana en curso, siempre entera y de todas las tiendas: las horas son
   // de la persona, no del periodo ni de la tienda que se mira.
   const win = weekWindow(tz);

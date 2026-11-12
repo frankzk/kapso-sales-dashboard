@@ -26389,6 +26389,51 @@ Código: `lib/order-comment-photos.ts`, `components/order-comment-photos.tsx`,
 `app/api/pedidos/[orderId]/comentario-foto/route.ts`. Pruebas:
 `test/order-comment-photos.test.ts`.
 
+## Productividad operativa por sección (12-11-2026)
+
+Decisión del owner: Productividad reúne el trabajo de todo el circuito en
+pestañas: Resumen, Leads (su tablero comercial existente), Master de Pedidos,
+Repro Provincia, Repro Lima, Pago de diferencia, Validación de pagos, Almacén y
+Despacho y liquidación. Comparten periodo y tienda. Abre en Resumen.
+
+- **El autor del hecho conserva el crédito.** No se usa la responsable actual
+  del pedido. Solo hechos con persona y fecha; no reservas, aperturas,
+  sincronizaciones, notas de máquina ni confirmaciones automáticas.
+- Master cuenta contactos y confirmaciones humanas. El contacto confirmado y
+  su evento técnico `confirmed`, de la misma operación, cuentan una sola acción.
+  «Confirmados» es por pedido y persona; incluye confirmación verbal de agencia
+  que aún puede necesitar pago. No equivale a despacho ni a venta cobrada.
+- Repro Provincia lee `shipment_calls`: una nueva entrega requiere fecha y
+  resultado de reprogramación, no basta la fecha de una próxima llamada.
+  Repro Lima lee `lima_repro_calls`, sin volver a sumar sus eventos espejo.
+- Diferencias y pagos distinguen registrar de validar. El registro se atribuye
+  a `registered_by`; la última validación positiva que sigue vigente, a
+  `validated_by`. Validación de pagos incluye también las diferencias: no se
+  suman las pestañas entre sí. Los eventos espejo `payment` no se duplican.
+- Almacén y Despacho leen sus hechos de `order_events`, con actor. Las cifras
+  representan hechos por paquete/pedido, no clics ni llamadas comprobadas.
+- **No se inventa el contexto histórico.** La migración 0333 captura en los
+  contactos nuevos la macroetapa, subetapa, operación y courier en
+  `payload.productivity_context`, antes de insertar el hecho. Un contacto de
+  cobranza de Shalom/Olva en camino, en agencia o recogido sin pago va a Pago
+  de diferencia. Un contacto antiguo sin contexto queda en actividad general
+  de Master y se informa la limitación; cambiar la etapa hoy no lo reatribuye.
+- La franja es el total de acciones por hora local del periodo. Las horas
+  entre acciones cortan pausas de más de 45 minutos y cambios de día; son una
+  estimación del registro, no asistencia ni tiempo conectado.
+- Cada nombre despliega los últimos 50 hechos del periodo, con tipo, resultado,
+  hora y enlace al historial del pedido; los totales incluyen todos los hechos,
+  también más de 1,000. La lectura se agrega en PostgreSQL y no exporta notas,
+  conversaciones, teléfonos ni comprobantes al navegador.
+- El alcance se deriva de las tiendas y sesión del servidor. Una asesora sin
+  reportes ve solo sus propios hechos y cifras, también en estas pestañas.
+  Ser administradora en otra organización no habilita ver su equipo.
+  La RPC es `SECURITY INVOKER` y solo la ejecuta el servidor.
+
+Código: `lib/operations-productivity*`, `components/operations-productivity*`,
+`components/productivity-tabs.tsx`, migración 0333 y
+`scripts/sql/operations_productivity_smoke.sql`.
+
 ## 44. Bandeja «Pago de diferencia» (10-11-2026)
 
 Decisión del owner (10-11-2026): un lugar donde quede la gestión del equipo
