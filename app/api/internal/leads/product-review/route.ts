@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminSupabase } from "@/lib/db";
-import { backfillLeadProducts, loadLeadProductCatalog, withProductOpeners, repairSevenProductNames } from "@/lib/lead-products-server";
+import { backfillLeadProducts, loadLeadProductCatalog, withProductOpeners, repairSevenProductNames, repairLeadProductReferences } from "@/lib/lead-products-server";
 import { PRODUCT_REVIEW_SOURCE, summarizeLeadProducts, type ProductReviewLead } from "@/lib/lead-product-review";
 import type { AdDeclaration } from "@/lib/ad-products";
+import { reviewUnknownProductConversations } from "@/lib/lead-product-deep-review";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
   if (!expected || a.length !== b.length || !timingSafeEqual(a, b) || !(Date.parse(access.expiresAt ?? "") > Date.now())) return new NextResponse("unauthorized", { status: 401 });
   const storeId = req.nextUrl.searchParams.get("storeId") ?? "";
   const mode = req.nextUrl.searchParams.get("mode") ?? "review";
-  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(storeId) || !["review", "counts", "repair"].includes(mode)) {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(storeId) || !["review", "counts", "repair", "references", "conversations"].includes(mode)) {
     return NextResponse.json({ ok: false, error: "Invalid review request" }, { status: 400 });
   }
   if (!Array.isArray(access.storeIds) || !access.storeIds.includes(storeId)) return new NextResponse("forbidden", { status: 403 });
@@ -34,6 +35,17 @@ export async function POST(req: NextRequest) {
   try {
     const catalogue = await loadLeadProductCatalog(admin, storeId);
     if (!catalogue.length) throw new Error("Catalogue unavailable");
+    if (mode === "conversations") return NextResponse.json({ ok: true, ...await reviewUnknownProductConversations(admin, storeId, catalogue) });
+    if (mode === "references") {
+      const started = Date.now();
+      let checked = 0, carts = 0, ads = 0, complete = false;
+      for (let n = 0; n < 20 && Date.now() - started < 220_000; n++) {
+        const batch = await repairLeadProductReferences(admin, storeId, catalogue);
+        checked += batch.checked; carts += batch.carts; ads += batch.ads;
+        if (batch.complete) { complete = true; break; }
+      }
+      return NextResponse.json({ ok: true, checked, carts, ads, complete });
+    }
     if (mode === "repair") return NextResponse.json({ ok: true, ...await repairSevenProductNames(admin, storeId, catalogue) });
     if (mode === "review") {
       const started = Date.now();

@@ -3,6 +3,7 @@
 
 import { createHash } from "node:crypto";
 import { loadLeadProductCatalog, saveCustomerProducts, backfillLeadProducts, markProductConversationAttempt } from "./lead-products-server";
+import { productReferenceResolver } from "./lead-product-references";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   conversationToLeadSeed,
@@ -1437,6 +1438,7 @@ export async function closeCartLeadsWithOrders(
  * respuesta única donde no la hay.
  */
 export function cartProductHandle(items: readonly OrderLineItem[]): string | null {
+  if (!items.length || items.some(it => !it.product_handle?.trim())) return null;
   const handles = new Set(
     items
       .map((it) => (it.product_handle ?? "").trim().toLowerCase())
@@ -2350,6 +2352,16 @@ export async function linkDraftOrdersToLeads(
 ): Promise<string[]> {
   const eligible = drafts.filter((d) => d.customer_phone && isCodFormDraft(d));
   if (!eligible.length) return [];
+  // Woo drafts have an ID/SKU, often no slug. Resolve using this store only.
+  // On catalogue failure retain the original rows; ingestion remains usable.
+  try {
+    const resolve = productReferenceResolver(await loadLeadProductCatalog(admin, storeId));
+    for (const draft of eligible) {
+      const handle = resolve.cart(draft.line_items, draft.platform);
+      if (handle) draft.line_items = draft.line_items.map(item => ({ ...item, product_handle: handle }));
+      else if (draft.platform === "woocommerce") draft.line_items = draft.line_items.map(item => ({ ...item, product_handle: null }));
+    }
+  } catch { /* no inferred product on failed catalogue reads */ }
 
   // Which phones already have a lead (with its category, to detect a won lead a
   // repeat cart should reopen).
