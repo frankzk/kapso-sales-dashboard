@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0333_lista_negra_rechazo.sql — Lista negra automática: quien rechazó en la
+-- 0334_lista_negra_rechazo.sql — Lista negra automática: quien rechazó en la
 -- puerta y nunca recibió (MOM §41.11; owner 12-11-2026).
 --
 -- POR QUÉ. En Lima un rechazo en la puerta termina `anulado` (solo la
@@ -43,7 +43,7 @@ as $$
     select distinct ev.order_id from public.order_events ev join st on st.id = ev.store_id
     where ev.kind in ('cancelled_woocommerce', 'legacy_shopify_sale_cancelled', 'woo_sale_ended_pending_return')
   ),
-  -- 0333: los pedidos rechazados en la puerta.
+  -- 0334: los pedidos rechazados en la puerta.
   rej as materialized (
     select ev.order_id from public.order_events ev join st on st.id = ev.store_id
     where ev.kind = 'stop_reported' and ev.payload->>'outcome_reason' = 'rechazado'
@@ -83,7 +83,7 @@ as $$
     where length(h.phone) = 9
       and not exists (select 1 from rcv where rcv.phone = h.phone)
       and (h.devueltos >= 1
-           -- (C) 0333: rechazó en la puerta al menos una vez.
+           -- (C) 0334: rechazó en la puerta al menos una vez.
            or h.rechazos >= 1
            -- (B) el anulador: 5 y 0,75, los mismos de lib/pago-online.ts.
            or (h.orders >= 5 and h.anulados::numeric >= 0.75 * h.orders))

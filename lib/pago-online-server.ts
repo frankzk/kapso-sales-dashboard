@@ -394,7 +394,7 @@ export interface PagoOnlineBuildCounts {
   emails: number;
   two_or_more: number;
   anuladores: number;
-  /** Los que entraron por rechazo en la puerta (0333). */
+  /** Los que entraron por rechazo en la puerta (0334). */
   rechazos: number;
   excepted: number;
   por_confirmar_listed: number;

@@ -1,5 +1,5 @@
 // Lista negra automática (C): rechazó en la puerta y nunca recibió (owner
-// 12-11-2026, 0333). En Lima un rechazo termina «anulado» y no entraba: había
+// 12-11-2026, 0334). En Lima un rechazo termina «anulado» y no entraba: había
 // 135 clientes de Lima que rechazaron y solo 1 estaba en la lista.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -31,8 +31,8 @@ describe("rechazó en la puerta y nunca recibió", () => {
     expect(lnMotivo({ kind: "rechazo", n: 2 })).toBe("Rechazó 2 pedidos en la puerta y nunca recibió");
   });
 
-  it("la 0333 cuenta los dos hechos de rechazo y guarda el motivo y la cuenta", () => {
-    const sql = read("db/migrations/0333_lista_negra_rechazo.sql");
+  it("la 0334 cuenta los dos hechos de rechazo y guarda el motivo y la cuenta", () => {
+    const sql = read("db/migrations/0334_lista_negra_rechazo.sql");
     expect(sql).toContain("ev.kind = 'stop_reported' and ev.payload->>'outcome_reason' = 'rechazado'");
     expect(sql).toContain("upper(btrim(split_part(coalesce(sh.reported_status, ''), ' · ', 1))) = 'REFUSED'");
     expect(sql).toContain("check (reason in ('devuelto', 'anulador', 'rechazo'))");

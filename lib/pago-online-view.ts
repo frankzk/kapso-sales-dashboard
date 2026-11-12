@@ -33,7 +33,7 @@ export interface PagoOnlineRunView {
   twoOrMore: number;
   /** Los que entran por la regla B (anula casi todo lo que pide). */
   anuladores: number;
-  /** Los que entran por la regla C (rechazó en la puerta, 0333). */
+  /** Los que entran por la regla C (rechazó en la puerta, 0334). */
   rechazos: number;
   excepted: number;
   porConfirmarListed: number;

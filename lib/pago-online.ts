@@ -14,7 +14,7 @@
 //     (B) el «anulador»: 5 o más pedidos con el 75 % o más `anulado`
 //         (cualquier anulado, antes o después de salir); o
 //     (C) quien rechazó al menos un pedido en la puerta (owner 12-11-2026,
-//         0333): «Rechazó el pedido» del motorizado de Grupo GF o `REFUSED`
+//         0334): «Rechazó el pedido» del motorizado de Grupo GF o `REFUSED`
 //         del courier. En Lima el rechazo termina `anulado` y no entraba.
 //     El motivo, en ese orden de prioridad: devuelto, rechazo, anulador.
 //     Un anulado después de salir, solo, ya no basta (cambio del owner del

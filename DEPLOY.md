@@ -1,6 +1,6 @@
-### 12-11-2026 · Lista negra: rechazó en la puerta (0333)
+### 12-11-2026 · Lista negra: rechazó en la puerta (0334)
 
-0333 ya aplicada en producción antes del código. Regla (C) de la Lista negra
+0334 ya aplicada en producción antes del código. Regla (C) de la Lista negra
 automática: con cero entregados, entra quien rechazó un pedido contra entrega
 en la puerta (motorizado «Rechazó el pedido» o `REFUSED`). Motivo «Rechazó N
 pedido(s) en la puerta y nunca recibió». Entran 141; la lista nueva aparece

@@ -25768,7 +25768,7 @@ reemplaza entera en cada envío.
     > anulación en Shopify termina la venta), así que no era «devuelto» ni
     > llegaba al anulador. El 12-11-2026 había 135 clientes de Lima que
     > rechazaron —121 sin haber recibido nunca nada— y solo 1 estaba en la
-    > lista. El owner: «Sí, desde 1 rechazo». Con la 0333 entran 141 clientes
+    > lista. El owner: «Sí, desde 1 rechazo». Con la 0334 entran 141 clientes
     > por esta regla (la lista pasa de ~3.243 a ~3.384).
 - **Prioridad del motivo** cuando cumple varias: devuelto, rechazo, anulador.
 - **Un anulado después de salir, solo, ya no basta** (cambio del owner del
@@ -25778,7 +25778,7 @@ reemplaza entera en cada envío.
   `rechazo` o `anulador`), la cuenta que lo hizo entrar (`failed`: sus
   devueltos, sus rechazados o sus anulados) y sus pedidos que cuentan
   (`orders`), para que la ficha lo diga. Cada corrida guarda cuántos entraron
-  por rechazo (`pago_online_runs.rechazos`, 0333).
+  por rechazo (`pago_online_runs.rechazos`, 0334).
 - Sale en cuanto recibe un pedido: cada envío reemplaza la lista entera.
 - Es `pago_online_candidates` (0326) en SQL y `pagoOnlineListOf`
   (lib/pago-online.ts) en TypeScript, con las mismas pruebas.
