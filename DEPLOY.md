@@ -5,6 +5,7 @@ Sin migración. Al crear la salida «por definir» de un pedido de Lima con
 programada de Grupo GF y a la «Salida prevista». Un programa de Grupo GF que
 ya exista no se toca. Verificar en Repro Lima que un pedido programado y
 rotulado diga «Sale <su día>» y no el siguiente reparto.
+
 ### 11-11-2026 · Siete nombres cortos y reparación de su cohorte
 
 Sin migración. Se añaden aliases de HeatLessCurls, RestPro, Bolso Charlotte,
