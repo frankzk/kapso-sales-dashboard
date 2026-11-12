@@ -33,6 +33,7 @@ pnpm-debug.log*
 
 # vercel
 .vercel
+*.private.json
 
 # estado local de la CLI de Supabase
 /supabase/.temp/

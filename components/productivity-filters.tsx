@@ -24,6 +24,7 @@ export function ProductivityFilters({
   store,
   sources,
   source,
+  showSource = true,
 }: {
   periods: PeriodLink[];
   /** El mes en curso y el anterior, los que se miran a diario. */
@@ -37,6 +38,7 @@ export function ProductivityFilters({
   store: { value: string; allHref: string };
   sources: { value: string; label: string; href: string }[];
   source: { value: string; allHref: string };
+  showSource?: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -104,14 +106,14 @@ export function ProductivityFilters({
             onChange={(next) => go(next ? (stores.find((s) => s.value === next)?.href ?? store.allHref) : store.allHref)}
           />
         )}
-        <ChoicePill
+        {showSource && <ChoicePill
           label="Fuente"
           allLabel="Todas las fuentes"
           allValue=""
           options={sources.map(({ value, label }) => ({ value, label }))}
           value={source.value}
           onChange={(next) => go(next ? (sources.find((s) => s.value === next)?.href ?? source.allHref) : source.allHref)}
-        />
+        />}
       </div>
     </div>
   );
