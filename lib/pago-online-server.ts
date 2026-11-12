@@ -394,6 +394,8 @@ export interface PagoOnlineBuildCounts {
   emails: number;
   two_or_more: number;
   anuladores: number;
+  /** Los que entraron por rechazo en la puerta (0334). */
+  rechazos: number;
   excepted: number;
   por_confirmar_listed: number;
   por_confirmar_braked: number;
@@ -419,6 +421,7 @@ function parseCounts(raw: unknown): PagoOnlineBuildCounts {
     emails: n(r.emails),
     two_or_more: n(r.two_or_more),
     anuladores: n(r.anuladores),
+    rechazos: n(r.rechazos),
     excepted: n(r.excepted),
     por_confirmar_listed: n(r.por_confirmar_listed),
     por_confirmar_braked: n(r.por_confirmar_braked),
@@ -515,6 +518,7 @@ export async function runPagoOnlineForOrg(
       emails: counts.emails,
       two_or_more: counts.two_or_more,
       anuladores: counts.anuladores,
+      rechazos: counts.rechazos,
       excepted: counts.excepted,
       por_confirmar_listed: counts.por_confirmar_listed,
       por_confirmar_braked: counts.por_confirmar_braked,

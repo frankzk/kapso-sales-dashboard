@@ -157,7 +157,7 @@ describe("la corrida", () => {
     expect(posts[0]!.body).toEqual({
       celulares: ["912345678", "987654321"],
       correos: ["a@x.pe"],
-      regla: "1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
+      regla: "1+ devuelto, 1+ rechazado en la puerta o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
     });
     expect(store.calls.filter((c) => c.method === "GET")).toHaveLength(2);
     const sends = db.rows("pago_online_sends");

@@ -12,7 +12,11 @@
 //     0328)—, entra:
 //     (A) quien tiene al menos un `devuelto`; o
 //     (B) el «anulador»: 5 o más pedidos con el 75 % o más `anulado`
-//         (cualquier anulado, antes o después de salir).
+//         (cualquier anulado, antes o después de salir); o
+//     (C) quien rechazó al menos un pedido en la puerta (owner 12-11-2026,
+//         0334): «Rechazó el pedido» del motorizado de Grupo GF o `REFUSED`
+//         del courier. En Lima el rechazo termina `anulado` y no entraba.
+//     El motivo, en ese orden de prioridad: devuelto, rechazo, anulador.
 //     Un anulado después de salir, solo, ya no basta (cambio del owner del
 //     09-11-2026 sobre la consulta de referencia de las tiendas).
 //   * Kapta calcula la lista una vez al día (05:00 de Lima), la manda entera a
@@ -121,6 +125,8 @@ export interface PagoOnlineOrderFact {
   dispatched_at?: string | null;
   /** Los `order_events.kind` del pedido; solo importan los de la migración. */
   event_kinds?: readonly string[] | null;
+  /** Lo rechazaron en la puerta (motorizado «Rechazó el pedido» o `REFUSED`). */
+  door_rejected?: boolean | null;
 }
 
 /** ¿El pedido tiene un hecho de la migración de plataforma? Pura. */
@@ -133,12 +139,12 @@ export function isCodOrder(o: Pick<PagoOnlineOrderFact, "coverage" | "event_kind
   return PAGO_ONLINE_COD_COVERAGES.includes((o.coverage ?? "").trim()) && !hasMigrationCancel(o);
 }
 
-/** Por qué entra un cliente: (A) devolvió, o (B) anula casi todo lo que pide. */
-export type PagoOnlineReason = "devuelto" | "anulador";
-export const PAGO_ONLINE_REASONS: readonly PagoOnlineReason[] = ["devuelto", "anulador"];
+/** Por qué entra un cliente: (A) devolvió, (B) anula casi todo lo que pide o (C) rechazó en la puerta. */
+export type PagoOnlineReason = "devuelto" | "anulador" | "rechazo";
+export const PAGO_ONLINE_REASONS: readonly PagoOnlineReason[] = ["devuelto", "anulador", "rechazo"];
 
 export function isPagoOnlineReason(value: unknown): value is PagoOnlineReason {
-  return value === "devuelto" || value === "anulador";
+  return value === "devuelto" || value === "anulador" || value === "rechazo";
 }
 
 /** Las cuentas de un cliente: sus pedidos que cuentan y cuántos de cada estado. */
@@ -147,6 +153,8 @@ export interface PagoOnlineCounts {
   devueltos: number;
   anulados: number;
   received: number;
+  /** Pedidos rechazados en la puerta (C). */
+  rechazos?: number;
 }
 
 /**
@@ -157,6 +165,7 @@ export interface PagoOnlineCounts {
 export function pagoOnlineReasonOf(c: PagoOnlineCounts): PagoOnlineReason | null {
   if (c.received > 0) return null;
   if (c.devueltos >= 1) return "devuelto";
+  if ((c.rechazos ?? 0) >= 1) return "rechazo";
   if (c.orders >= PAGO_ONLINE_ANULADOR_MIN_ORDERS && c.anulados >= PAGO_ONLINE_ANULADOR_RATIO * c.orders) return "anulador";
   return null;
 }
@@ -186,7 +195,7 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
   for (const o of orders) {
     const phone = pagoOnlinePhoneKey(o.customer_phone);
     if (!phone) continue;
-    const c = byPhone.get(phone) ?? { orders: 0, devueltos: 0, anulados: 0, received: 0 };
+    const c = byPhone.get(phone) ?? { orders: 0, devueltos: 0, anulados: 0, received: 0, rechazos: 0 };
     const s = (o.general_status ?? "").trim();
     // «Recibió» es CUALQUIER pedido entregado: contra entrega, agencia o uno de
     // la migración (owner 09-11-2026, 0328). Las fallas, solo contra entrega
@@ -196,6 +205,7 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
       c.orders++;
       if (s === "devuelto") c.devueltos++;
       if (s === "anulado") c.anulados++;
+      if (o.door_rejected) c.rechazos = (c.rechazos ?? 0) + 1;
     }
     byPhone.set(phone, c);
   }
@@ -204,7 +214,8 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
     if (exceptions.has(phone)) continue;
     const reason = pagoOnlineReasonOf(c);
     if (!reason) continue;
-    out.push({ phone, reason, failed: reason === "devuelto" ? c.devueltos : c.anulados, orders: c.orders });
+    const failed = reason === "devuelto" ? c.devueltos : reason === "rechazo" ? (c.rechazos ?? 0) : c.anulados;
+    out.push({ phone, reason, failed, orders: c.orders });
   }
   return out.sort((a, b) => a.phone.localeCompare(b.phone));
 }
@@ -215,7 +226,9 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
  * «Anuló 6 de 7 pedidos y nunca recibió». Pura.
  */
 export function pagoOnlineMotivo(who: Pick<PagoOnlineWho, "reason" | "failed" | "orders">): string {
-  return who.reason === "anulador" ? lnMotivo({ kind: "anulador", n: who.failed, m: who.orders }) : lnMotivo({ kind: "devuelto", n: who.failed });
+  if (who.reason === "anulador") return lnMotivo({ kind: "anulador", n: who.failed, m: who.orders });
+  if (who.reason === "rechazo") return lnMotivo({ kind: "rechazo", n: who.failed });
+  return lnMotivo({ kind: "devuelto", n: who.failed });
 }
 
 /** Un correo que se puede mandar: en minúsculas, con arroba y dominio. Null si no sirve. Pura. */
@@ -250,14 +263,14 @@ export function pagoOnlineEmailsOf(
 // ── El envío ────────────────────────────────────────────────────────────────
 
 /**
- * «1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y
+ * «1+ devuelto, 1+ rechazado en la puerta o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y
  * Aurela, calculada 2026-11-10 05:00» (§4.2: texto libre que la tienda
  * muestra en su panel). Pura.
  */
 export function pagoOnlineRegla(storeNames: readonly string[], computedAt: Date): string {
   const lima = new Date(computedAt.getTime() - 5 * 3_600_000).toISOString();
   const names = storeNames.length <= 1 ? (storeNames[0] ?? "") : `${storeNames.slice(0, -1).join(", ")} y ${storeNames[storeNames.length - 1]}`;
-  return `1+ devuelto, o ${PAGO_ONLINE_ANULADOR_MIN_ORDERS}+ pedidos con ${Math.round(PAGO_ONLINE_ANULADOR_RATIO * 100)} % anulados, y 0 recibidas, ${names}, calculada ${lima.slice(0, 10)} ${lima.slice(11, 16)}`;
+  return `1+ devuelto, 1+ rechazado en la puerta o ${PAGO_ONLINE_ANULADOR_MIN_ORDERS}+ pedidos con ${Math.round(PAGO_ONLINE_ANULADOR_RATIO * 100)} % anulados, y 0 recibidas, ${names}, calculada ${lima.slice(0, 10)} ${lima.slice(11, 16)}`;
 }
 
 export interface PagoOnlinePayload {

@@ -124,7 +124,7 @@ export function ListaNegraPage({ orgs, writable }: { orgs: PrepayOrgView[]; writ
 
 function AutomaticSection({ org, canEdit }: { org: PrepayOrgView; canEdit: boolean }) {
   const a = org.automatic;
-  const devueltos = a.current ? Math.max(0, a.current.phones - a.current.anuladores) : 0;
+  const devueltos = a.current ? Math.max(0, a.current.phones - a.current.anuladores - a.current.rechazos) : 0;
   return (
     <section aria-labelledby="ln-auto" className="space-y-4">
       <div>
@@ -146,7 +146,7 @@ function AutomaticSection({ org, canEdit }: { org: PrepayOrgView; canEdit: boole
           <p className="text-[20px] font-semibold tabular-nums leading-7 text-ink-900">{a.current ? fmtInt(a.current.phones) : "—"}</p>
           {a.current && (
             <p className={HELP}>
-              {fmtInt(devueltos)} devolvieron · {fmtInt(a.current.anuladores)} anulan casi todo
+              {fmtInt(devueltos)} devolvieron · {fmtInt(a.current.rechazos)} rechazaron en la puerta · {fmtInt(a.current.anuladores)} anulan casi todo
             </p>
           )}
         </div>

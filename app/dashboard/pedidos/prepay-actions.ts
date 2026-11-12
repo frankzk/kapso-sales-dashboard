@@ -33,6 +33,7 @@ import {
   PAGO_ONLINE_REQUIREMENT_LABEL,
   pagoOnlineReasonProblem,
   pagoOnlineRequirementMet,
+  type PagoOnlineReason,
   type PagoOnlineRequirement,
 } from "@/lib/pago-online";
 
@@ -64,9 +65,9 @@ export interface OrderPrepayStatus {
 }
 
 export interface OrderPagoOnlineStatus {
-  /** Por qué entra: `devuelto` (A) o `anulador` (B). */
-  reason: "devuelto" | "anulador";
-  /** Los devueltos, o los anulados del anulador. */
+  /** Por qué entra: `devuelto` (A), `anulador` (B) o `rechazo` (C). */
+  reason: PagoOnlineReason;
+  /** Los devueltos, los anulados del anulador o los rechazados en la puerta. */
   failed: number | null;
   /** Sus pedidos contra entrega que cuentan (para «anuló N de M»). */
   orders: number | null;

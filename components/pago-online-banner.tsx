@@ -9,11 +9,11 @@ import { useId, useState, useTransition } from "react";
 import { OpsButton } from "@/components/ops-ui";
 import { cn } from "@/components/ui";
 import { ListaNegraBanner } from "@/components/lista-negra-banner";
-import { PAGO_ONLINE_REASON_MIN, pagoOnlineMotivo } from "@/lib/pago-online";
+import { PAGO_ONLINE_REASON_MIN, pagoOnlineMotivo, type PagoOnlineReason } from "@/lib/pago-online";
 import { LN_EXCEPT_BUTTON, LN_EXCEPT_REASON_LABEL, LN_EXCEPT_REASON_PLACEHOLDER } from "@/lib/lista-negra-copy";
 
 export interface PagoOnlineBannerStatus {
-  reason: "devuelto" | "anulador";
+  reason: PagoOnlineReason;
   failed: number | null;
   orders: number | null;
   requirement: "adelanto" | "pago_completo";
