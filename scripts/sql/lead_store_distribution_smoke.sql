@@ -22,9 +22,10 @@ begin
  cfg:=jsonb_build_array(jsonb_build_object('userId',a,'blocks',array['carrito_reciente','interes_reciente','nuevo_sin_intencion','pendiente_con_interes','recuperacion'],'backup',false,'manualTake',true),jsonb_build_object('userId',b,'blocks',array['recuperacion'],'backup',false));
  perform save_lead_routing(o,boss,0,true,24,cfg);
  if (lead_store_distribution(a,array[sa,sb])->'weights')<>'null'::jsonb then raise exception 'default must preserve priority'; end if;
- select jsonb_agg(to_jsonb(l)) into before_leads from leads l where store_id in(sa,sb);
+ select jsonb_agg(to_jsonb(l) order by l.id) into before_leads from leads l where store_id in(sa,sb);
  cfg:=jsonb_set(cfg,'{0,storeWeights}',jsonb_build_object(sa,80,sb,20));
  perform save_lead_routing(o,boss,1,true,24,cfg);
+ if before_leads<>(select jsonb_agg(to_jsonb(l) order by l.id) from leads l where store_id in(sa,sb)) then raise exception 'configuration modified leads'; end if;
  if (lead_store_distribution(a,array[sa,sb])->'weights')<>jsonb_build_object(sa,80,sb,20) then raise exception 'target missing'; end if;
  if (lead_store_distribution(b,array[sa])->'weights')<>'null'::jsonb then raise exception 'other advisor target changed'; end if;
  -- Same lead managed twice counts once; notes/system, other actors, yesterday and future do not count.
@@ -36,9 +37,12 @@ begin
  ('cc033500-0000-0000-0000-000000000104',sa,b,'call',statement_timestamp()),
  ('cc033500-0000-0000-0000-000000000102',sa,a,'call',day_start-interval '1 second'),
  ('cc033500-0000-0000-0000-000000000103',sa,a,'call',statement_timestamp()+interval '1 day');
+ -- Call-attempt triggers legitimately update leads. Snapshot after those writes
+ -- to test that this new distribution read itself changes nothing.
+ select jsonb_agg(to_jsonb(l) order by l.id) into before_leads from leads l where store_id in(sa,sb);
  result:=lead_store_distribution(a,array[sa,sb]);
  if (result->'completed'->>sa::text)::integer<>1 then raise exception 'management counts not actor/day/distinct'; end if;
- if exists(select 1 from leads l where store_id in(sa,sb)) and before_leads<>(select jsonb_agg(to_jsonb(l)) from leads l where store_id in(sa,sb)) then raise exception 'distribution modified leads'; end if;
+ if before_leads<>(select jsonb_agg(to_jsonb(l) order by l.id) from leads l where store_id in(sa,sb)) then raise exception 'distribution modified leads'; end if;
  -- Legacy clients preserve a custom target and manual permission.
  perform save_lead_routing(o,boss,2,true,24,cfg#-'{0,storeWeights}'#-'{0,manualTake}');
  if (lead_store_distribution(a,array[sa])->'weights')<>jsonb_build_object(sa,80,sb,20) or not (select manual_take from lead_routing_assignments where org_id=o and user_id=a) then raise exception 'legacy save erased config'; end if;
