@@ -667,4 +667,6 @@
 \ir migrations/0332_manual_lead_take.sql
 \echo 'Applying 0333_operations_productivity.sql'
 \ir migrations/0333_operations_productivity.sql
+\echo 'Applying 0334_lista_negra_rechazo.sql'
+\ir migrations/0334_lista_negra_rechazo.sql
 \echo 'Done.'

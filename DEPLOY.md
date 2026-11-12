@@ -1,3 +1,12 @@
+### 12-11-2026 · Lista negra: rechazó en la puerta (0334)
+
+0334 ya aplicada en producción antes del código. Regla (C) de la Lista negra
+automática: con cero entregados, entra quien rechazó un pedido contra entrega
+en la puerta (motorizado «Rechazó el pedido» o `REFUSED`). Motivo «Rechazó N
+pedido(s) en la puerta y nunca recibió». Entran 141; la lista nueva aparece
+con la corrida de las 05:00 o «Calcular ahora». Verificar el conteo
+«rechazaron en la puerta» en Lista negra y Automatizaciones.
+
 ### 12-11-2026 · Anular guía Shalom pendiente de envío
 
 Sin migración. «Anular» aparece en las guías Shalom de la cuenta (API o

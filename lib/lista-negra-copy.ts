@@ -33,12 +33,14 @@ export type LnRequirement = "adelanto" | "pago_completo";
 export type LnMotivoSource =
   | { kind: "devuelto"; n: number | null | undefined }
   | { kind: "anulador"; n: number | null | undefined; m: number | null | undefined }
+  | { kind: "rechazo"; n: number | null | undefined }
   | { kind: "manual"; reason?: string | null };
 
 /**
  * El motivo, con las cuentas del propio cliente y nada de otros:
  *   * «Devolvió 1 pedido y nunca recibió» / «Devolvió 2 pedidos y nunca recibió»;
  *   * «Anuló 6 de 7 pedidos y nunca recibió»;
+ *   * «Rechazó 1 pedido en la puerta y nunca recibió» (12-11-2026);
  *   * «Agregada a mano: <lo que escribió el equipo>» (o «Agregada a mano»).
  * Pura.
  */
@@ -52,6 +54,7 @@ export function lnMotivo(src: LnMotivoSource): string {
     return "Anuló casi todos sus pedidos y nunca recibió";
   }
   const n = src.n && src.n > 0 ? src.n : 1;
+  if (src.kind === "rechazo") return `Rechazó ${n} ${n === 1 ? "pedido" : "pedidos"} en la puerta y nunca recibió`;
   return `Devolvió ${n} ${n === 1 ? "pedido" : "pedidos"} y nunca recibió`;
 }
 
@@ -164,7 +167,7 @@ export const LN_PAGE_SUBTITLE =
   "Clientes que solo pueden comprar contra entrega con adelanto (o pagando todo online). Kapta la calcula cada día a las 05:00 y la manda a Kenku y Aurela.";
 export const LN_SECTION_AUTO = "Automática";
 export const LN_SECTION_AUTO_HELP =
-  "Entra quien devolvió un pedido, o anuló 5 o más con 75 % o más anulados, y nunca recibió. Sale sola cuando recibe un pedido.";
+  "Entra quien devolvió un pedido, rechazó uno en la puerta o anuló 5 o más con 75 % o más anulados, y nunca recibió. Sale sola cuando recibe un pedido.";
 export const LN_SECTION_MANUAL = "Agregados a mano";
 export const LN_SECTION_MANUAL_HELP = "Para lo que la regla no ve: fraude, una clienta que avisó que no va a recibir.";
 export const LN_SEARCH_LABEL = "Buscar un celular";

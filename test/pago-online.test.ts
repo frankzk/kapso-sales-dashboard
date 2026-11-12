@@ -220,7 +220,7 @@ describe("el envío", () => {
 
   it("la regla dice las tiendas y la hora de Lima del cálculo", () => {
     expect(pagoOnlineRegla(["Kenku Peru", "Aurela"], new Date("2026-11-10T10:00:00Z"))).toBe(
-      "1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
+      "1+ devuelto, 1+ rechazado en la puerta o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
     );
     expect(limaDateOf(new Date("2026-11-10T04:59:00Z"))).toBe("2026-11-09");
   });
