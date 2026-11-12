@@ -33063,7 +33063,8 @@ begin
     or not exists(select 1 from pg_timezone_names where name=p_tz) then raise exception 'Periodo o sección inválidos.'; end if;
   with order_facts as (
     select 'event:'||e.id as id,e.actor,e.store_id,e.order_id,null::uuid as lead_id,e.occurred_at as at,
-      case when e.kind in ('package_ready','package_removed','return_received','returned_to_office') then 'almacen'
+      case when e.kind='status_override' and lower(e.source)='liquidacion' then 'despacho'
+        when e.kind in ('package_ready','package_removed','return_received','returned_to_office') then 'almacen'
         when e.kind in ('office_checked','pickup_checked','custody_transferred','dispatch_route_assigned','dispatch_route_reassigned','stop_reported','liquidation_closed') then 'despacho'
         when e.kind in ('key_shared','key_registered') then 'diferencia'
         when e.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call')
@@ -33073,7 +33074,9 @@ begin
               and e.payload->'productivity_context'->>'substage' in ('en_transito','en_destino')
               and coalesce(e.payload->'productivity_context'->>'payment_state','')<>'pago_completo')) then 'diferencia'
         else 'master' end as area,
-      case when e.kind='confirmation_contact' and e.payload->>'result'='confirmado' then 'confirmed' else e.kind end as action,0::numeric as amount,
+      case when e.kind='confirmation_contact' and e.payload->>'result'='confirmado' then 'confirmed'
+        when e.kind='status_override' and lower(e.source)='liquidacion' then 'liquidation_status_registered'
+        else e.kind end as action,0::numeric as amount,
       e.payload->>'result' as outcome,
       e.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call') and not(coalesce(e.payload,'{}'::jsonb) ? 'productivity_context') as historical
     from order_events e where e.store_id=any(p_stores) and e.occurred_at between p_start and p_end

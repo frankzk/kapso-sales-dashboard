@@ -105,6 +105,7 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   dispatch_route_reassigned: "Reasignado de ruta",
   stop_reported: "Parada reportada",
   liquidation_closed: "Liquidación cerrada",
+  liquidation_status_registered: "Resultado registrado por Liquidaciones",
   province_rescheduled: "Entrega reprogramada",
   province_call: "Gestión de llamada",
   province_management: "Gestión de envío",
@@ -270,7 +271,11 @@ export const SECTION_METRICS: Record<
       label: "Cotejos",
       actions: ["office_checked", "pickup_checked"],
     },
-    { key: "reported", label: "Reportes", actions: ["stop_reported"] },
+    {
+      key: "reported",
+      label: "Reportes",
+      actions: ["stop_reported", "liquidation_status_registered"],
+    },
     { key: "closed", label: "Cierres", actions: ["liquidation_closed"] },
   ],
 };

@@ -8,6 +8,7 @@ const m = vi.hoisted(() => ({
   names: vi.fn(),
   roster: vi.fn(),
   member: vi.fn(),
+  functional: vi.fn(),
 }));
 vi.mock("@/lib/access", () => ({
   getAccessibleStores: m.stores,
@@ -15,7 +16,10 @@ vi.mock("@/lib/access", () => ({
 }));
 vi.mock("@/lib/permissions-access", () => ({ hasOrgPermission: m.permission }));
 vi.mock("@/lib/db", () => ({
-  createAdminSupabase: () => ({ rpc: m.rpc }),
+  createAdminSupabase: () => ({
+    rpc: m.rpc,
+    from: () => ({ select: () => ({ in: m.functional }) }),
+  }),
   createServerSupabase: async () => ({
     from: () => ({
       select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: m.member }) }) }),
@@ -63,6 +67,7 @@ beforeEach(() => {
   });
   m.roster.mockResolvedValue(["idle"]);
   m.member.mockResolvedValue({ data: { role: "vendedora" } });
+  m.functional.mockResolvedValue({ data: [] });
 });
 describe("operations report authorization", () => {
   it("derives accessible stores and shows idle staff only to report managers", async () => {
@@ -89,7 +94,19 @@ describe("operations report authorization", () => {
       }),
     );
     expect(m.roster).not.toHaveBeenCalled();
+    expect(m.functional).not.toHaveBeenCalled();
     expect(result.data.people.map((p) => p.userId)).toEqual(["verified-user"]);
+  });
+  it("includes inactive functional advisors even when their primary access is admin", async () => {
+    m.functional.mockResolvedValue({
+      data: [{ user_id: "functional-advisor" }, { user_id: "idle" }],
+    });
+    const result = await getOperationsProductivity(input);
+    expect(result.data.people.map((p) => p.userId)).toEqual([
+      "idle",
+      "functional-advisor",
+    ]);
+    expect(result.data.people[1]?.actions).toBe(0);
   });
   it("does not use a report role in one organization to expose another organization", async () => {
     m.permission.mockImplementation(async (org: string) => org === "o1");

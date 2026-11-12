@@ -78,5 +78,9 @@ begin
  if (r->'totals'->>'actions')::int<>1217 then raise exception 'Aggregation truncated at one REST page'; end if;
  select p into a from jsonb_array_elements(r->'people')p where p->>'userId'='cc033300-0000-0000-0000-000000000010';
  if jsonb_array_length(a->'recent')<>50 then raise exception 'Unbounded browser detail payload'; end if;
+ insert into order_events(store_id,order_id,actor,kind,source,occurred_at) values
+  (s[1],'cc033300-0000-0000-0000-000000000100','cc033300-0000-0000-0000-000000000010','status_override','liquidacion','2026-11-12T19:30Z');
+ r:=operations_productivity(s,'2026-11-12T05:00Z','2026-11-13T04:59:59.999Z','despacho');
+ if (r->'totals'->>'actions')::int<>1 then raise exception 'Legacy settlement work attributed to general Master'; end if;
 end $$;
 rollback;

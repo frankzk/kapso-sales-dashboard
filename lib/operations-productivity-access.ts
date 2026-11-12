@@ -62,7 +62,23 @@ export async function getOperationsProductivity(input: {
       "No se pudo leer la actividad operativa. Intenta nuevamente.",
     );
   const board = data as OperationsData;
-  const roster = solo ? [user.id] : await getOrgVendedoraIds(admin, orgs);
+  let roster = [user.id];
+  if (!solo) {
+    const [legacy, functional] = await Promise.all([
+      getOrgVendedoraIds(admin, orgs),
+      admin.from("membership_roles").select("user_id").in("org_id", orgs),
+    ]);
+    if (functional.error)
+      throw new Error("No se pudo leer el equipo de estas tiendas.");
+    // An advisor may have admin access plus the Asesora functional role.
+    // Do not lose her zero-activity row merely because she is not vendedora.
+    roster = [
+      ...new Set([
+        ...legacy,
+        ...(functional.data ?? []).map((row) => row.user_id as string),
+      ]),
+    ];
+  }
   const seen = new Set(board.people.map((p) => p.userId));
   for (const id of roster)
     if (!seen.has(id))
