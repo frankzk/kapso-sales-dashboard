@@ -1,3 +1,10 @@
+### 12-11-2026 · Anular guía Shalom pendiente de envío
+
+Sin migración. «Anular» aparece en las guías Shalom de la cuenta (API o
+vinculadas, con OSE ID) que siguen «Pendiente de envío», aunque no tengan
+`shalom_order_id`: el id de borrar se busca por número en el listado de
+Shalom al anular (~40 s). Verificar con #KP204326 (guía 103118676).
+
 ### 12-11-2026 · El rótulo de Lima conserva la fecha programada
 
 Sin migración. Al crear la salida «por definir» de un pedido de Lima con

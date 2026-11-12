@@ -398,13 +398,39 @@ export function shalomGuideIsCancelable(guide: {
   delivery_status: string;
   pickup_state?: string | null;
   shalom_order_id?: number | null;
+  shalom_ose_id?: number | null;
+  guide_code?: string | null;
 }): boolean {
   if (guide.courier !== "shalom") return false;
-  // Sin `shalom_order_id` no hay nada que borrar por API: la guía llegó por el
-  // reporte Excel y su vida la gobierna el panel de Shalom.
-  if (!guide.shalom_order_id) return false;
+  // Se borra con el `id` del listado de la cuenta (`GET /v1/orders`), que el
+  // POST no devuelve (12-11-2026): ninguna guía creada por API lo tenía y el
+  // botón no salía nunca. Sin él, basta que la guía sea de la cuenta —creada
+  // por API o vinculada de Shalom Pro, con OSE ID— y tenga número: el id se
+  // busca en el listado al anular (`listingDeleteId`). Una guía que llegó solo
+  // por el reporte Excel sigue gobernándose en el panel de Shalom.
+  if (!guide.shalom_order_id && !(guide.shalom_ose_id && (guide.guide_code ?? "").trim())) return false;
   if (guide.delivery_status !== "pendiente") return false;
   return guide.pickup_state == null || CANCELABLE_PICKUP_STATES.has(guide.pickup_state);
+}
+
+/**
+ * El `id` con que Shalom borra la guía, buscado por número en el listado de la
+ * cuenta: el único si aparece una sola vez, null si no aparece o es ambiguo
+ * (nunca se borra una orden por adivinanza). Pura.
+ */
+export function listingDeleteId(
+  orders: readonly { id?: unknown; guia?: unknown }[],
+  guideCode: string,
+): number | null {
+  const want = String(guideCode).trim().replace(/\s+/g, "").toUpperCase();
+  if (!want) return null;
+  const ids = new Set<number>();
+  for (const o of orders) {
+    const guia = String(o.guia ?? "").trim().replace(/\s+/g, "").toUpperCase();
+    if (guia !== want) continue;
+    if (typeof o.id === "number" && Number.isSafeInteger(o.id) && o.id > 0) ids.add(o.id);
+  }
+  return ids.size === 1 ? ([...ids][0] ?? null) : null;
 }
 
 /**
