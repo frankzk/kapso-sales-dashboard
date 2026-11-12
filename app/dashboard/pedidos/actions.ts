@@ -115,6 +115,8 @@ import {
   DISPATCH_DATE_CLEARED,
   DISPATCH_DATE_SET,
   DISPATCH_NEEDS_LOCATION_ERROR,
+  carriedDispatchDay,
+  currentDispatchDate,
   dispatchCoordinateInput,
   dispatchCoordinateMissing,
   dispatchDateError,
@@ -122,6 +124,7 @@ import {
   dispatchLocationMissing,
 } from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
+import { writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
   CONFIRMATION_CYCLE_MAX_DAYS,
@@ -945,6 +948,54 @@ function routeOperation(row: OrderMasterRow, couriers: string[]): OperationKind 
 }
 
 /**
+ * El día de «Programar envío» que sigue vigente antes de crear la salida, si es
+ * hoy o uno que viene (`carriedDispatchDay`). Sin lectura, null: la salida se
+ * crea igual.
+ */
+async function programmedDayForOutput(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  outputCreatedAt: readonly (string | null | undefined)[],
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("order_events")
+    .select("kind,occurred_at,reason,payload")
+    .eq("order_id", orderId)
+    .in("kind", [DISPATCH_DATE_SET, DISPATCH_DATE_CLEARED]);
+  if (error) return null;
+  const events = (data ?? []) as { kind: string; occurred_at: string; reason?: string | null; payload?: unknown }[];
+  return carriedDispatchDay(currentDispatchDate(events, outputCreatedAt)?.date ?? null, limaTodayKey());
+}
+
+/**
+ * Deja la fecha programada como salida programada de Grupo GF (`gf_dispatch_programs`),
+ * que es lo que leen Repro Lima, Despacho del día y el plan de reparto. Un
+ * programa que ya existe (Repro Lima, Despacho del día) manda y no se toca.
+ */
+async function carryDispatchDateToGfProgram(
+  admin: ReturnType<typeof createAdminSupabase>,
+  ctx: OrderContext,
+  day: string,
+): Promise<void> {
+  const { data: existing, error } = await admin
+    .from("gf_dispatch_programs")
+    .select("order_id")
+    .eq("order_id", ctx.row.order_id)
+    .maybeSingle();
+  if (error || existing) return;
+  const write = await writeGfDispatchProgram(admin, {
+    orderId: ctx.row.order_id,
+    storeId: ctx.storeId,
+    day,
+    reason: "envío programado antes del rótulo",
+    actor: ctx.userId,
+    request: null,
+    from: null,
+  });
+  if (write.error) console.error("carryDispatchDateToGfProgram", write.error);
+}
+
+/**
  * Registra una salida que no tiene API propia. La caja nace en custodia de la
  * empresa y con rótulo generado; recién la mesa de despacho puede marcarla
  * lista, cotejarla y transferirla al motorizado.
@@ -977,7 +1028,7 @@ export async function createManualRouteOutput(
   // cerrado merece otro intento hay que preguntarle a su guía POR QUÉ se cerró.
   const { data: existing, error: existingError } = await admin
     .from("shipments")
-    .select("id,courier,delivery_status,custody_state,reported_status")
+    .select("id,courier,delivery_status,custody_state,reported_status,created_at")
     .eq("order_id", orderId)
     .order("created_at", { ascending: true });
   if (existingError) return { error: existingError.message };
@@ -1005,6 +1056,7 @@ export async function createManualRouteOutput(
     courier: string;
     delivery_status: string;
     custody_state: string | null;
+    created_at?: string | null;
   }[];
   const active = outputs.filter(
     (output) =>
@@ -1124,6 +1176,15 @@ export async function createManualRouteOutput(
     .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
     .join(" | ") || null;
 
+  // La fecha de «Programar envío» no se pierde al generar el rótulo de Lima
+  // (12-11-2026, MOM §6.2): #KP204348 se programó para el lun 16/11 y, al
+  // imprimir su rótulo «por definir», la lista lo puso a salir el jue 12/11.
+  // La fecha vigente pasa a ser la salida programada de Grupo GF.
+  const carriedDay = tbd && operation === "lima"
+    ? await programmedDayForOutput(admin, orderId, outputs.map((output) => output.created_at))
+    : null;
+  const plannedDate = carriedDay && dispatchDate === limaTodayKey() ? carriedDay : dispatchDate;
+
   const shipmentId = crypto.randomUUID();
   // El mismo generador que usa la restauración al deshacer un relleno: si las
   // dos fórmulas divergieran, devolver una salida a «por definir» le pondría un
@@ -1158,7 +1219,7 @@ export async function createManualRouteOutput(
       latitude: ctx.row.latitude,
       longitude: ctx.row.longitude,
       assigned_at: assignedAt,
-      next_followup_at: `${dispatchDate}T12:00:00-05:00`,
+      next_followup_at: `${plannedDate}T12:00:00-05:00`,
       preparation_state: "rotulo_generado",
       custody_state: "empresa",
       created_via: MANUAL_ROUTE_CREATED_VIA,
@@ -1181,18 +1242,20 @@ export async function createManualRouteOutput(
     shipmentId,
     reason: note || null,
     note: tbd
-      ? `${outputCode} creada sin courier definido; se fijará al entrar a una ruta. Salida prevista ${dispatchDate}.`
-      : `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.${
+      ? `${outputCode} creada sin courier definido; se fijará al entrar a una ruta. Salida prevista ${plannedDate}${carriedDay ? " (envío programado)" : ""}.`
+      : `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${plannedDate}.${
           olvaId ? ` Tracking Olva ${formatOlvaTracking(olvaId)}.` : ""
         }`,
     payload: {
       outputCode,
-      dispatchDate,
+      dispatchDate: plannedDate,
       activeOutputsAtCreation: active.map((output) => output.id),
       labelUrl,
       ...(olvaId ? { olvaTracking: formatOlvaTracking(olvaId) } : {}),
     },
   });
+
+  if (carriedDay) await carryDispatchDateToGfProgram(admin, ctx, carriedDay);
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);

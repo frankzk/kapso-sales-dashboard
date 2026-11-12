@@ -2353,15 +2353,21 @@ export async function linkDraftOrdersToLeads(
   const eligible = drafts.filter((d) => d.customer_phone && isCodFormDraft(d));
   if (!eligible.length) return [];
   // Woo drafts have an ID/SKU, often no slug. Resolve using this store only.
-  // On catalogue failure retain the original rows; ingestion remains usable.
+  // A Woo catalogue failure must not erase a previously verified reference.
+  // Abort before any writes; the existing reconciliation retries the cart.
   try {
-    const resolve = productReferenceResolver(await loadLeadProductCatalog(admin, storeId));
+    const catalogue = await loadLeadProductCatalog(admin, storeId);
+    if (!catalogue.length && eligible.some(d => d.platform === "woocommerce")) throw new Error("Empty cart catalogue");
+    const resolve = productReferenceResolver(catalogue);
     for (const draft of eligible) {
       const handle = resolve.cart(draft.line_items, draft.platform);
       if (handle) draft.line_items = draft.line_items.map(item => ({ ...item, product_handle: handle }));
       else if (draft.platform === "woocommerce") draft.line_items = draft.line_items.map(item => ({ ...item, product_handle: null }));
     }
-  } catch { /* no inferred product on failed catalogue reads */ }
+  } catch {
+    if (eligible.some(d => d.platform === "woocommerce")) throw new Error("No se pudo verificar el catálogo del carrito; se conserva la atribución y se reintentará.");
+    // Shopify can still provide its authoritative handles without a lookup.
+  }
 
   // Which phones already have a lead (with its category, to detect a won lead a
   // repeat cart should reopen).
