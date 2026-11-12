@@ -1368,6 +1368,21 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
   0267, solo se llena en esa subetapa). Si esa guía después se anula, el pedido
   no hereda la fecha vieja: una salida creada después de programar la deja sin
   efecto.
+- **En Lima, el rótulo la hereda (12-11-2026).** Al crear la salida «por
+  definir» de un pedido de Lima (rótulo de la ficha o de la tanda de Almacén),
+  si tiene una fecha de «Programar envío» vigente de hoy o de un día que viene,
+  esa fecha pasa a su **salida programada de Grupo GF** (`gf_dispatch_programs`,
+  hecho `dispatch_programmed` con el motivo «envío programado antes del
+  rótulo») y a la «Salida prevista» de la salida. Así Repro Lima, Despacho del
+  día y «Sale a reparto» la siguen viendo. Un programa de Grupo GF que ya exista
+  manda y no se toca; una fecha que ya pasó no se arrastra.
+
+  > ⚠️ **Ocurrió.** #KP204348 (Kenku) se programó el 08-11 para el lun 16/11;
+  > una hora después se imprimió su rótulo «por definir» y la fecha se perdió:
+  > Repro Lima decía «Sale jue 12/11 · sin caja». Igual #KP204803 (14/11) y
+  > #KP204321 (18/11), que el 11-11 recibieron guía Aliclik antes de su día.
+  > `carriedDispatchDay` (`lib/dispatch-date.ts`) y `createManualRouteOutput`.
+  > Pruebas: `test/dispatch-date-carry.test.ts`.
 - **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
   (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
   anterior a la guía.

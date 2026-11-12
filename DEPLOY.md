@@ -1,3 +1,11 @@
+### 12-11-2026 · El rótulo de Lima conserva la fecha programada
+
+Sin migración. Al crear la salida «por definir» de un pedido de Lima con
+«Programar envío» vigente (hoy o adelante), la fecha pasa a su salida
+programada de Grupo GF y a la «Salida prevista». Un programa de Grupo GF que
+ya exista no se toca. Verificar en Repro Lima que un pedido programado y
+rotulado diga «Sale <su día>» y no el siguiente reparto.
+
 ### 11-11-2026 · Barrido de aliases de producto (0331)
 
 Aplicar 0331_lead_product_alias_review.sql antes del código nuevo. Añade dos
