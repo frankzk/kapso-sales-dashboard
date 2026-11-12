@@ -284,7 +284,7 @@ export function ShalomCancelButton({
     <span className="flex w-full flex-wrap items-center gap-2 rounded-lg bg-crit-wash px-3 py-2">
       <span className="text-[13px] leading-5 text-ink-700">
         ¿Anular la guía <strong className="font-semibold text-ink-900">{guideCode ?? "—"}</strong>
-        {codigo ? ` (${codigo})` : ""} en Shalom? No se puede deshacer.
+        {codigo ? ` (${codigo})` : ""} en Shalom? No se puede deshacer. Puede tardar un minuto.
       </span>
       <button
         type="button"
@@ -296,12 +296,14 @@ export function ShalomCancelButton({
           if ("error" in res) setError(res.error);
           else onDone(res.notice);
         }}
-        className="inline-flex h-8 items-center rounded-md bg-white px-2.5 text-[13px] font-semibold text-crit-fg shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-crit-wash pointer-coarse:h-11"
+        disabled={busy}
+        className="inline-flex h-8 items-center rounded-md bg-white px-2.5 text-[13px] font-semibold text-crit-fg shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-crit-wash disabled:opacity-60 pointer-coarse:h-11"
       >
-        Sí, anular
+        {busy ? "Anulando…" : "Sí, anular"}
       </button>
       <button
         type="button"
+        disabled={busy}
         onClick={() => setConfirming(false)}
         className="inline-flex h-8 items-center rounded-md px-2.5 text-[13px] font-semibold text-ink-600 transition-colors hover:bg-white/70 hover:text-ink-900 pointer-coarse:h-11"
       >
