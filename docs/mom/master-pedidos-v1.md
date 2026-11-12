@@ -10871,6 +10871,18 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
   el tipo de paquete únicamente cuando el envío real lo requiera.
 - La API de creación no exige una fecha de despacho y Kapta no debe pedirla. La
   fecha operativa nace del escaneo o transferencia real de custodia.
+- **Anular la guía mientras sigue «Pendiente de envío» (12-11-2026).** En
+  «Salidas y guías», «Anular» borra la orden en Shalom y la cierra en Kapta,
+  solo mientras el paquete no llegó a la agencia (`shalomGuideIsCancelable`).
+  Shalom la borra con el `id` de su listado de cuenta (`GET /v1/orders`), que
+  la creación por API no devuelve: ninguna de las ~860 guías del último mes lo
+  tenía y el botón no aparecía nunca (#KP204326, guía 103118676 sin
+  movimiento). Ahora basta que la guía sea de la cuenta —creada por API o
+  vinculada desde Shalom Pro, con OSE ID— y tenga número: al anular, Kapta lee
+  el listado desde el día anterior a su creación (~40 s por página), toma el
+  único `id` con ese número (`listingDeleteId`; si no aparece o hay dos, no
+  borra nada y lo dice) y lo guarda en `shalom_order_id`. Las guías que solo
+  llegaron por el reporte Excel se siguen anulando en pro.shalom.pe.
 - Se permiten varios pagos; se libera la clave cuando la suma validada alcanza
   el total exigido.
 - Sin pago completo no se entrega la clave.

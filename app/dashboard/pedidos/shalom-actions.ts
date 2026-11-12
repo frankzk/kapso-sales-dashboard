@@ -44,7 +44,9 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { terminalOrderBlocker } from "@/lib/order-status";
 import { registrarConfirmacionExpresaDeAgencia } from "@/lib/confirmacion-agencia-access";
 import { SHALOM_ORIGIN } from "@/lib/shalom/origin";
+import { collectListingPages } from "@/lib/shalom/account-match";
 import {
+  SLOW_TIMEOUT_MS,
   describeShalomError,
   findCreatedOrder,
   sessionIsFresh,
@@ -74,6 +76,7 @@ import {
   splitReceiverName,
   suggestedAgencyQuery,
   shalomGuideIsCancelable,
+  listingDeleteId,
   isShalomAirRouteRejection,
   DEFAULT_DECLARACION,
   DEFAULT_PAYER,
@@ -984,7 +987,7 @@ export async function cancelShalomGuide(
   const admin = createAdminSupabase();
   const { data: shipmentRow } = await admin
     .from("shipments")
-    .select("id,store_id,order_id,order_name,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_codigo")
+    .select("id,store_id,order_id,order_name,courier,guide_code,delivery_status,pickup_state,shalom_order_id,shalom_ose_id,shalom_codigo,created_at")
     .eq("id", shipmentId)
     .maybeSingle();
   if (!shipmentRow) return { error: "No se encontró la guía." };
@@ -999,12 +1002,14 @@ export async function cancelShalomGuide(
     delivery_status: string;
     pickup_state: string | null;
     shalom_order_id: number | null;
+    shalom_ose_id: number | null;
     shalom_codigo: string | null;
+    created_at: string | null;
   };
   if (!(await authorizeStore(guide.store_id))) return { error: "Sin acceso a esta tienda." };
 
   if (guide.courier !== "shalom") return { error: "Esta guía no es de Shalom." };
-  if (!guide.shalom_order_id) {
+  if (!guide.shalom_order_id && !(guide.shalom_ose_id && guide.guide_code)) {
     return {
       error:
         "Esta guía no se creó por API (llegó por el reporte), así que anularla hay que hacerlo en pro.shalom.pe.",
@@ -1021,16 +1026,38 @@ export async function cancelShalomGuide(
   const blocker = configurationBlocker(store);
   if (blocker) return { error: blocker };
 
+  let deleteId = guide.shalom_order_id;
   try {
     // Anular SÍ puede renovar sesión y reintentar, a diferencia de crear: borrar
     // es idempotente —borrar dos veces deja el mismo estado— mientras que un
     // segundo POST /v1/orders sería una segunda guía cobrable.
-    await readWithFreshSession(admin, guide.store_id, store as StoreShalom, (client) =>
-      client.deleteOrder(guide.shalom_order_id as number),
-    );
+    deleteId = await readWithFreshSession(admin, guide.store_id, store as StoreShalom, async (client) => {
+      // El POST no devuelve el `id` con que se borra (12-11-2026): se busca la
+      // guía por número en el listado de la cuenta desde el día anterior a su
+      // creación. Shalom tarda ~40 s por página.
+      let id = guide.shalom_order_id;
+      if (!id) {
+        const from = new Date(Date.parse(guide.created_at ?? new Date().toISOString()) - 86_400_000).toISOString().slice(0, 10);
+        const deadlineMs = Date.now() + 200_000;
+        const listing = await collectListingPages(
+          (page, left) => client.ordersSince(from, 200, { page, timeoutMs: Math.min(SLOW_TIMEOUT_MS, left) }),
+          { perPage: 200, maxPages: 9, deadlineMs, concurrency: 3 },
+        );
+        id = listingDeleteId(listing.orders, guide.guide_code as string);
+      }
+      if (!id) return null;
+      await client.deleteOrder(id);
+      return id;
+    });
   } catch (err) {
     return { error: `Shalom no anuló la guía: ${describeShalomError(err)}` };
   }
+  if (!deleteId) {
+    return {
+      error: `No encontré la guía ${guide.guide_code} en el listado de Shalom, así que no se anuló nada. Anúlala en pro.shalom.pe y avísame para cerrarla aquí.`,
+    };
+  }
+  guide.shalom_order_id = deleteId;
 
   // ¿Esta fila fue antes una salida «por definir»? Si la guía se escribió encima
   // de una caja que ya existía, anularla no puede borrar la caja: sigue armada,
@@ -1061,6 +1088,7 @@ export async function cancelShalomGuide(
             delivery_status: "anulado",
             status_category: "closed",
             pickup_state: null,
+            shalom_order_id: deleteId,
             updated_at: new Date().toISOString(),
           },
     )

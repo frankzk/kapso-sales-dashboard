@@ -16,6 +16,7 @@ import {
   blockingActiveGuide,
   shalomDraftDocumentToSave,
   shalomGuideIsCancelable,
+  listingDeleteId,
   shalomSoftBlockers,
   shalomAirRoute,
   defaultAirChoice,
@@ -755,10 +756,32 @@ describe("shalomGuideIsCancelable", () => {
   // de Shalom y su vida la gobierna ese panel, no nosotros.
   it("bloquea las guías que no se crearon por API", () => {
     expect(shalomGuideIsCancelable({ ...base, shalom_order_id: null })).toBe(false);
+    expect(shalomGuideIsCancelable({ ...base, shalom_order_id: null, guide_code: "103118676" })).toBe(false);
+  });
+
+  // El POST no devuelve el `id` de borrar (12-11-2026, #KP204326): una guía de
+  // la cuenta con OSE ID y número se anula buscando el id en el listado.
+  it("deja anular la guía creada por API sin id de borrar guardado", () => {
+    expect(shalomGuideIsCancelable({ ...base, shalom_order_id: null, shalom_ose_id: 106590300, guide_code: "103118676" })).toBe(true);
+    expect(shalomGuideIsCancelable({ ...base, shalom_order_id: null, shalom_ose_id: 106590300, guide_code: null })).toBe(false);
   });
 
   it("no toca guías de otro courier", () => {
     expect(shalomGuideIsCancelable({ ...base, courier: "aliclik" })).toBe(false);
+  });
+});
+
+describe("listingDeleteId — el id de borrar sale del listado de la cuenta", () => {
+  it("el único id con ese número de guía", () => {
+    const orders = [{ id: 106590300, guia: "103118676" }, { id: 1, guia: "103118677" }];
+    expect(listingDeleteId(orders, "103118676")).toBe(106590300);
+    expect(listingDeleteId(orders, " 103118676 ")).toBe(106590300);
+  });
+  it("no adivina: sin la guía o con dos ids distintos, null", () => {
+    expect(listingDeleteId([{ id: 1, guia: "9" }], "103118676")).toBeNull();
+    expect(listingDeleteId([{ id: 1, guia: "103118676" }, { id: 2, guia: "103118676" }], "103118676")).toBeNull();
+    expect(listingDeleteId([{ id: 1, guia: "103118676" }, { id: 1, guia: "103118676" }], "103118676")).toBe(1);
+    expect(listingDeleteId([{ id: "1", guia: "103118676" }], "103118676")).toBeNull();
   });
 });
 
