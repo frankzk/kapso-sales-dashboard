@@ -19,6 +19,8 @@ insert into shipments(store_id,order_id,courier,guide_code,created_at)
  select store_id,id,'shalom',name,case when name='#AG7' then '2026-10-30T05:00:00Z'::timestamptz
    when name='#AG8' then '2026-10-01T04:59:59Z'::timestamptz else '2026-10-01T05:00:00Z'::timestamptz end
  from orders where shopify_order_id like 'agency-%';
+-- Master payment state is authoritative, including checkout.
+update order_master set payment_state='pago_completo' where order_name='#AG3';
 -- Two guides must not duplicate an order in the queue or its counts.
 insert into shipments(store_id,order_id,courier,guide_code,created_at)
  select store_id,id,'olva','second-guide','2026-10-02T15:00:00Z' from orders where name='#AG1';
@@ -27,6 +29,8 @@ insert into order_payments(store_id,order_id,kind,amount,validation_status)
    case when name='#AG6' then 'pendiente_revision' else 'validado' end
  from orders where name in ('#AG1','#AG2','#AG6') and shopify_order_id like 'agency-%';
 
+-- These fixtures model the current Master resolver snapshot.
+update order_master set payment_state=case order_name when '#AG1' then 'adelanto_validado' when '#AG2' then 'pago_completo' when '#AG6' then 'pago_total_cargado' else payment_state end where shopify_order_id like 'agency-%';
 set local role authenticated;
 set local request.test_uid = '29000000-0000-0000-0000-000000000004';
 set local request.jwt.claims = '{"sub":"29000000-0000-0000-0000-000000000004","role":"authenticated"}';
@@ -35,7 +39,7 @@ declare n integer; names text[];
 begin
  select count(*),array_agg(order_name order by order_name) into n,names from order_master_agency_unpaid(
    array['29000000-0000-0000-0000-000000000002'::uuid,'29000000-0000-0000-0000-000000000003'::uuid], '2026-10-01','2026-10-30');
- if n<>4 or names<>array['#AG1','#AG4','#AG5','#AG6'] then raise exception 'FAIL cohort, checkout, partial, validation, boundaries, dedup or RLS: %',names; end if;
+ if n<>2 or names<>array['#AG1','#AG5'] then raise exception 'FAIL cohort, checkout, partial, validation, boundaries, dedup or RLS: %',names; end if;
  if exists(select 1 from order_master_agency_unpaid(array['29000000-0000-0000-0000-000000000003'::uuid],'2026-10-01','2026-10-30'))
    then raise exception 'FAIL cross-store access'; end if;
  if exists(select 1 from order_master_agency_unpaid(array['29000000-0000-0000-0000-000000000002'::uuid],'2026-10-30','2026-10-01'))
@@ -46,9 +50,10 @@ begin
    then raise exception 'FAIL function bypasses RLS'; end if;
 end $$;
 reset role;
--- A newly validated balance removes the order without any Master update.
+-- The operational resolver refreshes the Master state after validation.
 insert into order_payments(store_id,order_id,kind,amount,validation_status)
  select store_id,id,'diferencia',80,'validado' from orders where name='#AG1' and shopify_order_id='agency-1';
+update order_master set payment_state='pago_completo' where order_name='#AG1' and shopify_order_id='agency-1';
 do $$ begin
  if exists(select 1 from order_master_agency_unpaid(array['29000000-0000-0000-0000-000000000002'::uuid],'2026-10-01','2026-10-30') where order_name='#AG1')
    then raise exception 'FAIL validated balance still pending'; end if;

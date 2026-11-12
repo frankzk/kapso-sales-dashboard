@@ -393,4 +393,7 @@ $PSQL -f "$ROOT/scripts/sql/operations_productivity_smoke.sql"
 echo "▶ Distribución por tienda (0335): porcentajes, permisos, revisión, auditoría y conteo humano del día"
 $PSQL -f "$ROOT/scripts/sql/lead_store_distribution_smoke.sql"
 
+echo "▶ Agencia: estado de pago y conciliación histórica (0336): paridad, cohortes y RLS"
+$PSQL -f "$ROOT/scripts/sql/agency_payment_reconciliation_smoke.sql"
+
 echo "✅ DB verification passed."

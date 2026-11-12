@@ -664,13 +664,13 @@ export function OrdersMasterBoard({
         </div>
       </header>
 
-      {!searchActive && filters.agencyUnpaid && (
+      {!searchActive && (filters.agencyUnpaid || filters.historicalPaid) && (
         <section aria-label="Pendientes de pago de Agencia" className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-info-wash px-4 py-3 ring-1 ring-line">
           <div className="text-sm text-ink-700">
-            <p className="font-semibold text-ink-900">Agencia · sin pago completo</p>
-            <p>Guías Shalom u Olva del {agencyPaymentWindowLabel(filters.agencyUnpaid)}. Incluye pagos parciales y comprobantes por validar; excluye los pedidos ya pagados por checkout.</p>
+            <p className="font-semibold text-ink-900">{filters.historicalPaid ? "Históricos pagados · por conciliar" : filters.agencyPaymentView === "validate" ? "Agencia · pago pendiente de validar" : filters.agencyPaymentView === "all" ? "Agencia · Estado de pago" : filters.agencyPaymentView === "complete" ? "Agencia · pago completo" : "Agencia · por cobrar"}</p>
+            <p>{filters.agencyUnpaid && <>Guías Shalom u Olva del {agencyPaymentWindowLabel(filters.agencyUnpaid)}. </>}{filters.historicalPaid ? "Shopify los marca pagados, pero falta conciliar el registro en Kapta. No se cuentan como pendientes por cobrar." : filters.agencyPaymentView === "all" ? "Mismos estados de pago del Master. Los históricos pagados por conciliar y las ventas anuladas o devueltas sin pago completo se revisan aparte." : filters.agencyPaymentView === "validate" ? "Comprobantes cargados pendientes de revisión. No volver a solicitar el pago antes de validarlos." : "Excluye Pago completo, comprobantes por validar, históricos pagados en Shopify y ventas anuladas o devueltas."}</p>
           </div>
-          <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: { agencyUnpaid: null } })}>
+          <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: { agencyUnpaid: null, historicalPaid: false, agencyPaymentView: "collect" } })}>
             Quitar este filtro
           </OpsButton>
         </section>
@@ -851,6 +851,7 @@ export function OrdersMasterBoard({
                 selected={filters.paymentStates}
                 onChange={(paymentStates) => patch({ paymentStates })}
               />
+              <ChoiceChip label="Históricos pagados · por conciliar" active={!!filters.historicalPaid} onClick={() => patch({ historicalPaid: !filters.historicalPaid })} />
               {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
                   poder pedirse aunque hoy no haya ninguno, que es justo cuando
                   interesa comprobar que no hay ninguno. */}
@@ -1163,6 +1164,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.couriers,
     f.paymentChecks,
     f.paymentStates,
+    ...(f.historicalPaid ? [new Set(["historical"])] : []),
     f.regions,
     f.provinces,
     f.districts,
@@ -1195,6 +1197,7 @@ const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
 
 /** Lo que quita la píldora «Filtros» del teléfono: las píldoras y «Más filtros». */
 const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
+  historicalPaid: false,
   stores: new Set(),
   operationalStatuses: new Set(),
   couriers: new Set(),

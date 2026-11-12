@@ -1961,7 +1961,7 @@ export async function getOrderMasterPage(
   ]);
 
   if (rowsRes.error || countRes.error) {
-    if (effectiveFilters.agencyUnpaid) throw new Error("No se pudieron verificar los pendientes de pago de Agencia. Reintenta la consulta.");
+    if (effectiveFilters.agencyUnpaid || effectiveFilters.historicalPaid) throw new Error("No se pudieron verificar los pendientes de pago de Agencia. Reintenta la consulta.");
     return empty;
   }
   return {

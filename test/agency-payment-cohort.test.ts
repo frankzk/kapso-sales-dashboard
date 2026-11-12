@@ -41,19 +41,19 @@ describe("Agencia: del indicador a su cohorte pendiente", () => {
     masterCohortQuery(sb as any, ["allowed-store"], filters, "order_id");
     masterCohortQuery(sb as any, ["allowed-store"], filters, "id", { count: "exact", head: true });
     expect(sb.rpc.mock.calls).toEqual([
-      ["order_master_agency_unpaid", { p_store_ids: ["allowed-store"], p_from: "2026-10-01", p_to: "2026-10-30" }, undefined],
-      ["order_master_agency_unpaid", { p_store_ids: ["allowed-store"], p_from: "2026-10-01", p_to: "2026-10-30" }, { count: "exact", head: true }],
+      ["order_master_agency_payments", { p_store_ids: ["allowed-store"], p_from: "2026-10-01", p_to: "2026-10-30", p_bucket: "collect" }, undefined],
+      ["order_master_agency_payments", { p_store_ids: ["allowed-store"], p_from: "2026-10-01", p_to: "2026-10-30", p_bucket: "collect" }, { count: "exact", head: true }],
     ]);
     expect(sb.from).not.toHaveBeenCalled();
     masterCohortQuery(sb as any, ["allowed-store"], emptyFilters(), "id");
     expect(sb.from).toHaveBeenCalledWith("order_master");
   });
 
-  it("el KPI reconoce checkout y céntimos sin duplicar pedidos con varias guías", () => {
+  it("el KPI usa Estado de pago, incluido checkout, sin duplicar pedidos con varias guías", () => {
     const result = buildMomOwnerSummary({ today: "2026-10-29", manifests: [], events: [],
       orders: [
-        { orderId: "web", orderTotal: 100, webPrepaid: true },
-        { orderId: "cents", orderTotal: 0.3 }, { orderId: "partial", orderTotal: 100 },
+        { orderId: "web", orderTotal: 100, paymentState: "pago_completo" },
+        { orderId: "cents", orderTotal: 0.3, paymentState: "pago_completo" }, { orderId: "partial", orderTotal: 100 },
       ].map((o) => ({ createdAt: null, coverage: "agencia", stage: null, substage: null, reasons: [], paymentState: null,
         deliveredAt: null, deliveredCourier: null, lastMovementAt: null, ...o })),
       shipments: ["web", "web", "cents", "partial"].map((id, i) => ({ id: String(i), orderId: id, courier: "shalom",
@@ -67,12 +67,13 @@ describe("Agencia: del indicador a su cohorte pendiente", () => {
   it("renderiza el acceso al Master con el periodo visible y el número pendiente", () => {
     const summary = buildMomOwnerSummary({ today: "2026-10-29", orders: [], shipments: [], payments: [], events: [], manifests: [] });
     const month = summary.periods.find((p) => p.key === "month")!;
+    month.agencyPayments = { complete: 837, collect: 87, validate: 2, historical: 225, excluded: 11, review: 0 };
     month.kpis.agency_full_payment = { numerator: 837, denominator: 1338, rate: 837 / 1338 };
     const html = renderToStaticMarkup(createElement(MomIndicators, { periods: [month], rows: [
       { key: "agency_full_payment", label: "Pago completo de Agencia", detail: "Pedidos pagados por completo" },
     ] }));
-    expect(html).toContain('href="/dashboard/pedidos?agency_unpaid=1&amp;apf=2026-10-01&amp;apt=2026-10-30"');
-    expect(html).toContain("Ver pendientes (501)");
-    expect(html).toContain("Ver pedidos de Agencia sin pago completo: Mes actual");
+    expect(html).toContain('href="/dashboard/pedidos?agency_unpaid=1&amp;apf=2026-10-01&amp;apt=2026-10-30&amp;ps=pago_parcial%2Csin_pago"');
+    expect(html).toContain("Por cobrar (87)");
+    expect(html).toContain("Ver Pago completo de Agencia: Mes actual");
   });
 });

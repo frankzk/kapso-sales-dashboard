@@ -11,8 +11,13 @@ export function agencyPaymentWindow(from: string | null, to: string | null): Age
   return { from, to };
 }
 
-export function agencyUnpaidHref(period: { startIso: string; endIso: string }): string {
+export function agencyUnpaidHref(period: { startIso: string; endIso: string }, bucket: "all" | "complete" | "collect" | "validate" | "historical" | "review" = "collect"): string {
   const qs = new URLSearchParams({ agency_unpaid: "1", apf: period.startIso.slice(0, 10), apt: period.endIso.slice(0, 10) });
+  if (bucket === "historical") qs.set("historical_paid", "1");
+  else if (bucket !== "collect") qs.set("apv", bucket);
+  if (bucket === "complete") qs.set("ps", "pago_completo");
+  if (bucket === "validate") qs.set("ps", "pendiente_validacion");
+  if (bucket === "collect") qs.set("ps", "pago_parcial,sin_pago");
   return `${MASTER_PATH}?${qs}`;
 }
 

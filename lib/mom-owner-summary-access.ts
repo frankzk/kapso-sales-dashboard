@@ -1,5 +1,4 @@
 import { createServerSupabase } from "@/lib/db";
-import { isWebPrepaid } from "@/lib/order-paid";
 import {
   buildMomOwnerSummary,
   momOwnerPeriodsWith,
@@ -332,17 +331,16 @@ export async function getMomOwnerSummary(
     state: row.state,
   }));
 
-  // The KPI and the pending list agree on both payment routes. A checkout
-  // payment must not appear as debt just because it has no uploaded voucher.
-  const prepaid = new Set<string>();
+  // Source-paid Shopify history stays separate; payment_state is authoritative.
+  const paymentMetadata = new Map<string, { platform: string; financialStatus: string | null; totalRefunded: number | null }>();
   const agencyIds = unique(shipmentRows.filter((row) => /shalom|olva/i.test(row.courier ?? ""))
     .map((row) => row.order_id).filter((id): id is string => Boolean(id)));
   for (let start = 0; start < agencyIds.length; start += 200) {
-    const { data, error } = await sb.from("orders").select("id,financial_status,payment_gateway,total_refunded")
+    const { data, error } = await sb.from("orders").select("id,platform,financial_status,total_refunded")
       .in("store_id", storeIds).in("id", agencyIds.slice(start, start + 200));
-    if (error || !data) throw new Error("No se pudieron verificar los pagos de checkout de Agencia.");
+    if (error || !data) throw new Error("No se pudo comprobar la conciliación histórica de Agencia.");
     for (const order of data) {
-      if (isWebPrepaid({ financialStatus: order.financial_status, paymentGateway: order.payment_gateway, totalRefunded: asNumber(order.total_refunded) })) prepaid.add(order.id);
+      paymentMetadata.set(order.id, { platform: order.platform, financialStatus: order.financial_status, totalRefunded: asNumber(order.total_refunded) });
     }
   }
 
@@ -350,7 +348,7 @@ export async function getMomOwnerSummary(
     today,
     month: chosen ? options.month : null,
     nowIso: now.toISOString(),
-    orders: [...rawOrders.values()].map((row) => ({ ...orderFact(row), webPrepaid: prepaid.has(row.order_id) })),
+    orders: [...rawOrders.values()].map((row) => ({ ...orderFact(row), ...paymentMetadata.get(row.order_id) })),
     shipments,
     payments,
     events,
