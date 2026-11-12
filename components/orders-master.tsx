@@ -849,7 +849,7 @@ export function OrdersMasterBoard({
                 allLabel="Todos los estados de pago"
                 options={PAYMENT_STATUS_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
                 selected={filters.paymentStates}
-                onChange={(paymentStates) => patch({ paymentStates })}
+                onChange={(paymentStates) => patch({ paymentStates, ...(filters.agencyUnpaid ? { agencyPaymentView: "all" } : {}) })}
               />
               <ChoiceChip label="Históricos pagados · por conciliar" active={!!filters.historicalPaid} onClick={() => patch({ historicalPaid: !filters.historicalPaid })} />
               {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
