@@ -7939,6 +7939,31 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
+**Toma puntual fuera de bloques (12-11-2026, decisión del owner; 0332).**
+Equipo → Leads incorpora «Puede tomar leads fuera de sus bloques», separado de
+Respaldo y de los cinco bloques. Nace desmarcado para todas las personas y no
+se activa al elegir el atajo Principal, Recuperación o Todos. Guardarlo usa la
+misma revisión y auditoría de configuración; un cliente anterior que no envía
+el campo conserva el permiso existente.
+
+Solo amplía los resultados de una búsqueda explícita en tiendas autorizadas,
+con «Tomar este lead», y la entrada de Venta por teléfono del Master/Leads. No
+amplía la cola automática, sus contadores, la exportación de audiencia ni el
+reparto Yape. Antes de abrir el drawer, la toma vuelve a comprobar sesión,
+tienda, permiso, reserva ajena, cita vigente según 0322 y el límite de dos
+reservas bajo bloqueos de base de datos. Una toma válida concede la reserva
+habitual de diez minutos; desde ella se usan las acciones existentes. Vencida,
+el permiso no deja acceso permanente al bloque. Revocarlo impide nuevas tomas;
+no arrebata una reserva propia todavía activa.
+
+La toma fuera del bloque deja origen (búsqueda o venta telefónica), persona y
+fecha en `lead_manual_takes`, privado de servicio, y un hecho `system` en el
+historial del lead. No es una llamada, no cambia su estado, cita, intentos ni
+fuente. Una reapertura de la misma reserva no duplica ese hecho. Este cambio
+no implementa reparto equitativo: deja el hecho disponible para contabilizarlo
+si se habilita ese modelo posteriormente. Una reserva o cita ajena se informa
+con la asesora que la tiene; el permiso no la transfiere automáticamente.
+
 **Bloques por asesora (31-10-2026, decisión del owner; migración 0295).**
 En Equipo → Leads, quien gestiona el equipo marca varios bloques por persona.
 Los atajos Principal (cuatro primeros) y Recuperación (quinto) solo rellenan

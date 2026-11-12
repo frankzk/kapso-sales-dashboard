@@ -385,4 +385,6 @@ echo "▶ Atribución de productos (0330): entrada, interés, evidencia, orden t
 $PSQL -f "$ROOT/scripts/sql/lead_product_attribution_smoke.sql"
 echo "▶ Aliases de producto (0331): aclarar la misma evidencia sin cambiar origen, cronología ni permisos"
 $PSQL -f "$ROOT/scripts/sql/lead_product_alias_review_smoke.sql"
+echo "▶ Toma puntual de leads (0332): permiso individual, reservas, citas, capacidad y auditoría"
+$PSQL -f "$ROOT/scripts/sql/lead_manual_take_smoke.sql"
 echo "✅ DB verification passed."

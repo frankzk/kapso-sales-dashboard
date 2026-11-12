@@ -102,6 +102,7 @@ import {
   resolveHandoff,
 } from "@/app/dashboard/leads/actions";
 import { claveAnuncio, handleDeAnuncioPara, type AdDeclaration } from "@/lib/ad-products";
+import { takeLeadManually } from "@/app/dashboard/leads/manual-take-actions";
 import { cn } from "@/components/ui";
 import {
   AttentionPill,
@@ -907,8 +908,15 @@ export function LeadsBoard({
     setCalls(null);
     setHistory(null);
     setOpeningId(leadId); // disable only this row's button while the claim loads
-    const historyPromise = loadLeadCustomerHistory(leadId).catch(() => null);
     try {
+      if (previa?.manual_take_required) {
+        const taken = await takeLeadManually(leadId, "busqueda");
+        if (taken.error) {
+          setBanner(taken.error); setSelected(null); activeLeadIdRef.current = null;
+          return false;
+        }
+      }
+      const historyPromise = loadLeadCustomerHistory(leadId).catch(() => null);
       const d = await openLeadDrawer(leadId);
       if (activeLeadIdRef.current !== leadId) return false;
       if ("error" in d) {
@@ -2338,8 +2346,10 @@ export function LeadsBoard({
 
               {/* Acciones rápidas: al pasar el puntero en escritorio; en el
                   teléfono se abre la ficha tocando la fila. */}
-              <div className="ml-auto hidden items-center justify-end gap-1 md:flex">
-                {locked ? (
+              <div className={cn("ml-auto items-center justify-end gap-1", lead.manual_take_required ? "flex" : "hidden md:flex")}>
+                {lead.manual_take_required && !locked ? (
+                  <OpsButton size="sm" onKeyDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); openLead(lead); }}>Tomar este lead</OpsButton>
+                ) : locked ? (
                   <span className="whitespace-nowrap text-xs text-ink-500">en curso</span>
                 ) : (
                   <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">

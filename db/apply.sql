@@ -663,4 +663,6 @@
 \ir migrations/0330_lead_product_attribution.sql
 \echo 'Applying 0331_lead_product_alias_review.sql'
 \ir migrations/0331_lead_product_alias_review.sql
+\echo 'Applying 0332_manual_lead_take.sql'
+\ir migrations/0332_manual_lead_take.sql
 \echo 'Done.'

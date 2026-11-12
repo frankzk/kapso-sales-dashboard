@@ -5,6 +5,12 @@ const otherId = "00000000-0000-0000-0000-000000000002";
 const principal = { userId, blocks: [...PRINCIPAL_BLOCKS], backup: false };
 const recovery = { userId: otherId, blocks: ["recuperacion" as const], backup: false };
 describe("team work allocation", () => {
+  it("keeps manual takes independent of blocks and backup, and rejects forged values", () => {
+    const input = { enabled: true, freshHours: 24, assignments: [{ ...recovery, manualTake: true }] };
+    expect(parseLeadRouting(input)?.assignments[0]).toEqual({ ...recovery, manualTake: true });
+    expect(routingCoverage(input.assignments, [{ userId: otherId, stores: ["a"] }], ["a"])).toHaveLength(4);
+    expect(parseLeadRouting({ ...input, assignments: [{ ...recovery, manualTake: "true" }] })).toBeNull();
+  });
   it("accepts multi-block assignment and keeps backup separate", () => {
     expect(parseLeadRouting({ enabled: true, freshHours: 24, assignments: [principal, recovery] })?.assignments).toEqual([principal, recovery]);
     expect(routingLabel(principal.blocks)).toBe("Principal");
