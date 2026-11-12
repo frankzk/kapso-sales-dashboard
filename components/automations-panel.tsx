@@ -879,8 +879,8 @@ function PagoOnlineRunCard({ title, run }: { title: string; run: PagoOnlineRunVi
           <>
             <p className="text-sm text-ink-700">
               {run.mode === "activo" ? "La lista tiene" : "La lista tendría"} <strong>{fmtInt(run.phones)}</strong> celulares
-              {run.emails ? ` y ${fmtInt(run.emails)} correos` : ""}: {fmtInt(run.phones - run.anuladores)} con un pedido devuelto (
-              {fmtInt(run.twoOrMore)} con 2 o más) y {fmtInt(run.anuladores)} que anularon el 75 % o más de 5 o más pedidos
+              {run.emails ? ` y ${fmtInt(run.emails)} correos` : ""}: {fmtInt(Math.max(0, run.phones - run.anuladores - run.rechazos))} con un pedido devuelto (
+              {fmtInt(run.twoOrMore)} con 2 o más), {fmtInt(run.rechazos)} que rechazaron un pedido en la puerta y {fmtInt(run.anuladores)} que anularon el 75 % o más de 5 o más pedidos
               {run.excepted ? ` · ${fmtInt(run.excepted)} exceptuados por Kapta (no van)` : ""}.
             </p>
             <p className={HELP}>
@@ -950,7 +950,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
   return (
     <SettingsGroup
       title={LN_PANEL_TITLE}
-      description="Los clientes que nunca recibieron un pedido contra entrega y tienen uno devuelto, o que anularon el 75 % o más de 5 o más pedidos (Kenku y Aurela juntas, todo el historial, sin los artefactos de la migración de plataforma): las tiendas no les ofrecen contra entrega y Kapta frena sus pedidos contra entrega. Nunca se muestran los celulares."
+      description="Los clientes que nunca recibieron un pedido contra entrega y tienen uno devuelto, rechazaron uno en la puerta o anularon el 75 % o más de 5 o más pedidos (Kenku y Aurela juntas, todo el historial, sin los artefactos de la migración de plataforma): las tiendas no les ofrecen contra entrega y Kapta frena sus pedidos contra entrega. Nunca se muestran los celulares."
     >
       <SettingsSection
         id="pago-online-posicion"

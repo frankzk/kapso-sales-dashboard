@@ -33,6 +33,8 @@ export interface PagoOnlineRunView {
   twoOrMore: number;
   /** Los que entran por la regla B (anula casi todo lo que pide). */
   anuladores: number;
+  /** Los que entran por la regla C (rechazó en la puerta, 0333). */
+  rechazos: number;
   excepted: number;
   porConfirmarListed: number;
   porConfirmarBraked: number;
@@ -74,7 +76,7 @@ export interface PagoOnlineView {
   mode: PagoOnlineMode;
   requirement: PagoOnlineRequirement;
   /** La lista que lee el freno de Kapta hoy: cuántos y desde cuándo. */
-  current: { runId: string; at: string; phones: number; emails: number; anuladores: number } | null;
+  current: { runId: string; at: string; phones: number; emails: number; anuladores: number; rechazos: number } | null;
   lastRun: PagoOnlineRunView | null;
   /** La última simulación, si la última corrida no lo es. */
   lastSimulation: PagoOnlineRunView | null;
@@ -94,6 +96,7 @@ type RunRow = {
   emails: number;
   two_or_more: number;
   anuladores: number;
+  rechazos?: number | null;
   excepted: number;
   por_confirmar_listed: number;
   por_confirmar_braked: number;
@@ -120,7 +123,7 @@ type SendRow = {
 };
 
 const RUN_COLUMNS =
-  "id,run_date,mode,trigger,status,requirement,phones,emails,two_or_more,anuladores,excepted,por_confirmar_listed,por_confirmar_braked,baseline_phones,guard,guard_reason,accepted_by,error,started_at";
+  "id,run_date,mode,trigger,status,requirement,phones,emails,two_or_more,anuladores,rechazos,excepted,por_confirmar_listed,por_confirmar_braked,baseline_phones,guard,guard_reason,accepted_by,error,started_at";
 
 const BAD: readonly PagoOnlineSendStatus[] = ["fallido", "credenciales", "demasiado_grande", "sin_claves", "sin_endpoint", "reintento"];
 
@@ -158,7 +161,7 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
       .order("added_at", { ascending: false })
       .limit(200),
     settings.current_run_id
-      ? admin.from("pago_online_runs").select("id,phones,emails,anuladores,started_at").eq("id", settings.current_run_id).maybeSingle()
+      ? admin.from("pago_online_runs").select("id,phones,emails,anuladores,rechazos,started_at").eq("id", settings.current_run_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
   ]);
   const problems: string[] = [];
@@ -183,6 +186,7 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
     emails: r.emails,
     twoOrMore: r.two_or_more,
     anuladores: r.anuladores ?? 0,
+    rechazos: r.rechazos ?? 0,
     excepted: r.excepted,
     porConfirmarListed: r.por_confirmar_listed,
     porConfirmarBraked: r.por_confirmar_braked,
@@ -231,12 +235,12 @@ export async function loadPagoOnlineView(admin: SupabaseClient, orgId: string, s
     };
   });
 
-  const cur = currentRes.data as { id: string; phones: number; emails: number; anuladores?: number | null; started_at: string } | null;
+  const cur = currentRes.data as { id: string; phones: number; emails: number; anuladores?: number | null; rechazos?: number | null; started_at: string } | null;
   return {
     available: true,
     mode: settings.mode,
     requirement: settings.requirement,
-    current: cur ? { runId: cur.id, at: formatLimaDateTime(cur.started_at), phones: cur.phones, emails: cur.emails, anuladores: cur.anuladores ?? 0 } : null,
+    current: cur ? { runId: cur.id, at: formatLimaDateTime(cur.started_at), phones: cur.phones, emails: cur.emails, anuladores: cur.anuladores ?? 0, rechazos: cur.rechazos ?? 0 } : null,
     lastRun,
     lastSimulation,
     stores: storeViews,

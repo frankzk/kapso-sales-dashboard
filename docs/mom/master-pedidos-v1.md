@@ -25758,12 +25758,27 @@ reemplaza entera en cada envío.
     anuló N de M pedidos y nunca recibió»). Los umbrales son
     `PAGO_ONLINE_ANULADOR_MIN_ORDERS` y `PAGO_ONLINE_ANULADOR_RATIO`
     (lib/pago-online.ts), con los mismos números en la 0326.
+  - **(C) Rechazó en la puerta (12-11-2026).** Rechazó al menos **un**
+    pedido contra entrega en la puerta: el motorizado de Grupo GF lo reportó
+    «Rechazó el pedido» (`stop_reported` con `outcome_reason = 'rechazado'`) o
+    la guía del courier dice `REFUSED` (Aliclik). Cuenta aunque el pedido siga
+    en reprogramación: el rechazo es el hecho. Motivo: «Rechazó N pedido(s) en
+    la puerta y nunca recibió».
+    > ⚠️ **Por qué.** En Lima un rechazo termina `anulado` (v1.23: solo la
+    > anulación en Shopify termina la venta), así que no era «devuelto» ni
+    > llegaba al anulador. El 12-11-2026 había 135 clientes de Lima que
+    > rechazaron —121 sin haber recibido nunca nada— y solo 1 estaba en la
+    > lista. El owner: «Sí, desde 1 rechazo». Con la 0333 entran 141 clientes
+    > por esta regla (la lista pasa de ~3.243 a ~3.384).
+- **Prioridad del motivo** cuando cumple varias: devuelto, rechazo, anulador.
 - **Un anulado después de salir, solo, ya no basta** (cambio del owner del
   09-11-2026 sobre la consulta de referencia del pedido de las tiendas, que
   contaba `anulado` con `dispatched_at` como falla). La lista de Kapta manda.
-- Cada celular guarda por qué entra (`pago_online_phones.reason`: `devuelto` o
-  `anulador`), la cuenta que lo hizo entrar (`failed`: sus devueltos, o sus
-  anulados) y sus pedidos que cuentan (`orders`), para que la ficha lo diga.
+- Cada celular guarda por qué entra (`pago_online_phones.reason`: `devuelto`,
+  `rechazo` o `anulador`), la cuenta que lo hizo entrar (`failed`: sus
+  devueltos, sus rechazados o sus anulados) y sus pedidos que cuentan
+  (`orders`), para que la ficha lo diga. Cada corrida guarda cuántos entraron
+  por rechazo (`pago_online_runs.rechazos`, 0333).
 - Sale en cuanto recibe un pedido: cada envío reemplaza la lista entera.
 - Es `pago_online_candidates` (0326) en SQL y `pagoOnlineListOf`
   (lib/pago-online.ts) en TypeScript, con las mismas pruebas.

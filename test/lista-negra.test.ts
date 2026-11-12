@@ -123,7 +123,7 @@ describe("la copia (lib/lista-negra-copy.ts)", () => {
       "Clientes que solo pueden comprar contra entrega con adelanto (o pagando todo online). Kapta la calcula cada día a las 05:00 y la manda a Kenku y Aurela.",
     );
     expect(LN_SECTION_AUTO).toBe("Automática");
-    expect(LN_SECTION_AUTO_HELP).toBe("Entra quien devolvió un pedido, o anuló 5 o más con 75 % o más anulados, y nunca recibió. Sale sola cuando recibe un pedido.");
+    expect(LN_SECTION_AUTO_HELP).toBe("Entra quien devolvió un pedido, rechazó uno en la puerta o anuló 5 o más con 75 % o más anulados, y nunca recibió. Sale sola cuando recibe un pedido.");
     expect(LN_SECTION_MANUAL).toBe("Agregados a mano");
     expect(LN_SECTION_MANUAL_HELP).toBe("Para lo que la regla no ve: fraude, una clienta que avisó que no va a recibir.");
     expect(LN_SEARCH_LABEL).toBe("Buscar un celular");

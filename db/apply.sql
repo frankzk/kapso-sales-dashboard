@@ -665,4 +665,6 @@
 \ir migrations/0331_lead_product_alias_review.sql
 \echo 'Applying 0332_manual_lead_take.sql'
 \ir migrations/0332_manual_lead_take.sql
+\echo 'Applying 0333_lista_negra_rechazo.sql'
+\ir migrations/0333_lista_negra_rechazo.sql
 \echo 'Done.'
