@@ -55,6 +55,15 @@ export function currentDispatchDate(
   return { date, note: latest.reason?.trim() || null, at: latest.occurred_at };
 }
 
+/**
+ * La fecha que el rótulo de Lima hereda (12-11-2026): la de «Programar envío»
+ * vigente, si es hoy o un día que viene. Una que ya pasó no se arrastra; esa la
+ * decide una persona. Pura.
+ */
+export function carriedDispatchDay(programmed: string | null | undefined, todayLima: string): string | null {
+  return programmed && ISO_DAY.test(programmed) && programmed >= todayLima ? programmed : null;
+}
+
 export type DispatchDateState = "programado" | "hoy" | "vencido";
 
 /** Programado a futuro, sale hoy, o su día pasó sin guía. */
