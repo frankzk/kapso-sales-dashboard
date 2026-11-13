@@ -8,6 +8,7 @@ import { canValidatePaymentsAnywhere } from "@/lib/payment-review-access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { createAdminSupabase } from "@/lib/db";
 import { countOlvaCotejoPending } from "@/lib/olva/cotejo-pending";
+import { countPorRetornar } from "@/lib/pago-diferencia-access";
 
 export const dynamic = "force-dynamic";
 
@@ -37,9 +38,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // de diferencia» (MOM §44) y la ve todo el que ve pedidos: el número va en
   // esa entrada del menú. Un fallo aquí no puede tumbar el panel entero: sin
   // número, el menú sigue funcionando.
-  const olvaPending = stores.length
-    ? await countOlvaCotejoPending(createAdminSupabase(), [...new Set(stores.map((s) => s.org_id))]).catch(() => 0)
-    : 0;
+  // Y los urgentes por llamar, «Por retornar» (owner, 13-11-2026: «que te
+  // lance los urgentes por llamar cuando se acercan al plazo»): la agencia
+  // está por devolverlos. El número del menú suma los dos.
+  const [olvaPending, porRetornarCount] = stores.length
+    ? await Promise.all([
+        countOlvaCotejoPending(createAdminSupabase(), [...new Set(stores.map((s) => s.org_id))]).catch(() => 0),
+        countPorRetornar(createAdminSupabase(), stores.map((s) => s.id)).catch(() => 0),
+      ])
+    : [0, 0];
+  const pagoDiferenciaBadge = olvaPending + porRetornarCount;
   // El menú por permisos (MOM §16): owner y admin los tienen todos. Quien solo
   // mira (viewer) conserva el Consolidado que siempre vio.
   const viewerOnly = roles.length > 0 && roles.every((r) => r === "viewer");
@@ -75,7 +83,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         canManageLogistics={canManageLogistics}
         canReproLima={canReproLima}
         navAccess={navAccess}
-        badges={olvaPending > 0 ? { "/dashboard/pedidos/pago-diferencia": olvaPending } : undefined}
+        badges={pagoDiferenciaBadge > 0 ? { "/dashboard/pedidos/pago-diferencia": pagoDiferenciaBadge } : undefined}
       >
         {children}
         {/* La ficha del pedido para todo el panel (MOM §25): se abre con

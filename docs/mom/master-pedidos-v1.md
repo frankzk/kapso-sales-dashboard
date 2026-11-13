@@ -26525,9 +26525,10 @@ abre por defecto** (owner, 10-11-2026); cada fila dice de qué grupo es. Los
 grupos van en control segmentado, bajo las vistas de la página: «Bandeja»,
 «Cotejar Olva» y «Correos de Olva» (§12, «Dónde está»).
 
-**«Retornando» (13-11-2026).** El owner: «¿cómo saber cuáles están retornando
-de la provincia a Lima porque el cliente nunca pagó la diferencia?». Una quinta
-pestaña, **fuera de «Todos»** y del número de «Bandeja» (ya no se cobra, se
+**«Retornados» (13-11-2026).** El owner: «¿cómo saber cuáles están retornando
+de la provincia a Lima porque el cliente nunca pagó la diferencia?», y después
+«una columna de pedidos retornados y otra de pedidos por retornar». Una
+pestaña **fuera de «Todos»** y del número de «Bandeja» (ya no se cobra, se
 recibe): Shalom u Olva en `devolucion_fisica_pendiente` (Por cerrar). Son los
 que la agencia sacó sin recojo ni pago —el «entregado» que es el retorno de
 Shalom (§12), con la guía `retorno_iniciado` y custodia `retorno`— y vienen de
@@ -26536,7 +26537,28 @@ hace N días» desde que salió de la agencia (`macro_since`): ámbar desde 7 y,
 desde **15** (`RETORNO_OVERDUE_DAYS`), rojo con «Ya debería estar en Lima»:
 buscarlo en el almacén o reclamarlo al courier. Abre con el filtro «Todos».
 Medido el 13-11-2026: 126 pedidos (123 Shalom y 3 Olva); 64 llevaban 15 días o
-más.
+más, y ninguno de los 114 retornos de Shalom figuraba recibido en el almacén.
+
+**«Por retornar»: los urgentes por llamar (13-11-2026).** El owner: «que te
+lance los urgentes por llamar cuando se acercan al plazo». Una pestaña antes de
+«Retornados» con los de **En agencia** que la agencia está por devolver
+(`porRetornar`): Shalom con **20 días o más** en la agencia
+(`PAGO_DIFERENCIA_RETURN_WARN_DAYS`) u Olva **vencida o por vencer en 3 días**
+(`PAGO_DIFERENCIA_OLVA_WARN_DAYS`). Shalom no informa el plazo: medido sobre 115
+retornos, los saca a los **38 días** de mediana, el 10 % antes de 29 y el 5 %
+antes de 19. Cada fila lleva «Por retornar», o «Se devuelve pronto» desde 30
+días. Su número va en rojo en la pestaña y **se suma al globo del menú**
+«Pago de diferencia» junto con lo de Cotejar Olva (`countPorRetornar`, dos
+conteos sin filas). Siguen contando en «En agencia» y en «Todos». Medido el
+13-11-2026: 48 (21 con 30 días o más).
+
+**«Copiar mensaje» (13-11-2026).** El owner: «que el mensaje se vea en este
+formato para copiar, pegar y no digitar». Cada pedido En agencia lleva el
+botón; copia el aviso «Tu pedido YA LLEGÓ a la agencia y te está esperando»
+con la guía, el código Shalom (de su salida), los productos
+(`order_master.product_titles`), el total, el adelanto recibido (lo VALIDADO),
+el saldo pendiente y el Yape a nombre del GRUPO GF SAC (930 555 309)
+(`agencyArrivalMessage`). Sin código, ese renglón queda vacío.
 
 Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
 Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en

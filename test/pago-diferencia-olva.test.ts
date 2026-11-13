@@ -45,7 +45,8 @@ describe("«Cotejar Olva» dentro de «Pago de diferencia»", () => {
     const hrefs = [...navItems(false, true, true), ...navItems(true, true, true)].map((i) => i.href);
     expect(hrefs).not.toContain("/dashboard/olva");
     expect(hrefs).toContain("/dashboard/pedidos/pago-diferencia");
-    expect(read("app/dashboard/layout.tsx")).toContain('{ "/dashboard/pedidos/pago-diferencia": olvaPending }');
+    expect(read("app/dashboard/layout.tsx")).toContain('{ "/dashboard/pedidos/pago-diferencia": pagoDiferenciaBadge }');
+    expect(read("app/dashboard/layout.tsx")).toContain("const pagoDiferenciaBadge = olvaPending + porRetornarCount;");
   });
 
   it("la ruta vieja lleva a la nueva, con su vista", () => {
