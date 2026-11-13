@@ -404,14 +404,6 @@ function workspaceForSection(section: DrawerSectionId): DrawerWorkspaceView {
   return "operar";
 }
 
-/** La chapa de la próxima acción: azul por defecto, ámbar cuando algo la frena. */
-const NEXT_ACTION_BADGE: Record<DrawerNextAction["tone"], BadgeTone> = {
-  indigo: "brand",
-  amber: "warn",
-  emerald: "brand",
-  slate: "neutral",
-};
-
 /**
  * La acción dominante del drawer sigue el MOM, no el orden accidental de los
  * formularios. Debe responder una sola pregunta: «¿qué hago ahora con este
@@ -693,33 +685,36 @@ function DrawerNextActionCard({
     </OpsButton>
   ) : null;
 
+  // La franja de abajo de «Situación» (13-11-2026, owner eligió «S2»): la
+  // etapa y el recorrido arriba; aquí, lo que toca AHORA, con su contexto
+  // («Ahora · Preparación») y un solo botón. Azul claro; ámbar si algo la frena.
+  // Lo que la acompaña (Programar envío, el motorizado de Grupo GF, el rótulo
+  // de la salida nueva) va debajo, en la misma franja y sin otro separador.
+  const amber = action.tone === "amber";
   return (
-    // La única tarjeta con el anillo azul de 2 px: entre todas las de la ficha,
-    // es la que dice qué toca ahora. Si algo la frena, pasa al ámbar de aviso.
-    <section
+    <div
+      role="region"
       aria-label="Próxima acción"
       className={cn(
-        "rounded-lg p-4 shadow-control",
-        action.tone === "amber" ? "bg-warn-wash ring-1 ring-warn-bg" : "bg-white ring-2 ring-brand-600",
+        "-mx-4 -mb-4 rounded-b-lg border-t px-4 py-3 sm:-mx-5 sm:-mb-5 sm:px-5 sm:py-4",
+        amber ? "border-warn-bg bg-warn-wash" : "border-line bg-brand-50/60",
       )}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-            <h3 className="text-base font-semibold leading-6 text-ink-900">
-              <span className="sr-only">Próxima acción: </span>
-              {action.title}
-            </h3>
-            <Badge tone={NEXT_ACTION_BADGE[action.tone]}>{action.eyebrow}</Badge>
-          </div>
-          <p className="mt-1 max-w-[62ch] text-sm leading-5 text-ink-600">{action.description}</p>
+          <p className={cn("text-xs font-semibold leading-4", amber ? "text-warn-fg" : "text-brand-700")}>
+            Ahora · {action.eyebrow}
+          </p>
+          <h3 className="mt-0.5 text-base font-semibold leading-6 text-ink-900">
+            <span className="sr-only">Próxima acción: </span>
+            {action.title}
+          </h3>
+          <p className="mt-0.5 max-w-[62ch] text-sm leading-5 text-ink-600">{action.description}</p>
         </div>
         {cta}
       </div>
-      {/* La zona de lo que acompaña, con la misma hairline y la mitad de aire
-          (13-11-2026): «Programar envío» es una línea, no un bloque. */}
-      {children && <div className="-mx-4 mt-3 border-t border-line px-4 pt-3">{children}</div>}
-    </section>
+      {children && <div className="mt-3 space-y-2">{children}</div>}
+    </div>
   );
 }
 
@@ -1778,6 +1773,23 @@ export function OrderDrawer({
               hidden={workspace !== "operar"}
               className="flex flex-col gap-4 sm:gap-6"
             >
+              {/* La Lista negra agregada a mano (MOM §41): arriba, antes de
+                  llamar y antes de cualquier guía. Desde el 13-11-2026 va ANTES
+                  de «Situación», que ahora lleva dentro la próxima acción. */}
+              <PrepayListBanner
+                status={prepay}
+                canCreateLink={canEdit}
+                onCreateLink={() => createPrepayPaymentLink(orderId)}
+                className="order-1"
+              />
+              {/* La Lista negra automática (MOM §41.11). Solo si no tiene un
+                  alta a mano (que manda). */}
+              <PagoOnlineBanner
+                status={prepay?.pagoOnline}
+                canEdit={canEdit}
+                onExcept={(reason) => exceptPagoOnlineCustomer(orderId, reason)}
+                className="order-1"
+              />
               <section
                 data-drawer-section="resumen"
                 className={cn("order-1 space-y-3", SECTION)}
@@ -1819,25 +1831,10 @@ export function OrderDrawer({
                 />
 
                 <DrawerJourneyRail current={detail.row.macro_stage} />
-              </section>
-              {/* La Lista negra agregada a mano (MOM §41): arriba, antes de
-                  llamar y antes de cualquier guía. */}
-              <PrepayListBanner
-                status={prepay}
-                canCreateLink={canEdit}
-                onCreateLink={() => createPrepayPaymentLink(orderId)}
-                className="order-2"
-              />
-              {/* La Lista negra automática (MOM §41.11). Solo si no tiene un
-                  alta a mano (que manda). */}
-              <PagoOnlineBanner
-                status={prepay?.pagoOnline}
-                canEdit={canEdit}
-                onExcept={(reason) => exceptPagoOnlineCustomer(orderId, reason)}
-                className="order-2"
-              />
-              {nextAction && workspace === "operar" && (
-                <div className="order-2">
+                {/* La próxima acción, en la franja de abajo de la misma tarjeta
+                    (13-11-2026, owner eligió «S2»): dónde está y qué toca, juntos. */}
+                {nextAction && workspace === "operar" && (
+                  <>
                   {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
                       cualquier etapa (también Por cerrar), sin bajar hasta
                       «Salidas y guías». Va DENTRO de la tarjeta de la acción, en
@@ -1880,8 +1877,9 @@ export function OrderDrawer({
                       </div>
                     )}
                   </DrawerNextActionCard>
-                </div>
-              )}
+                  </>
+                )}
+              </section>
               {/* La gestión de confirmación va arriba porque en Por confirmar ES
                   el trabajo. Se muestra antes que el panel de pago para que el
                   empate de `order-3` lo resuelva el orden del DOM: en Agencia el
