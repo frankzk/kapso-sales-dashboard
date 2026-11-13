@@ -403,6 +403,29 @@ const NEXT_ACTION_BADGE: Record<DrawerNextAction["tone"], BadgeTone> = {
 };
 
 /**
+ * La tarjeta de Cobro, plegada en Lima sin pagos (owner, 13-11-2026: «para
+ * Lima puede quedar como plegado»): «Cobro anticipado · Opcional», que se abre
+ * para subir la constancia de quien pagó antes. Si no, tal cual.
+ */
+function CollapsibleCobro({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  if (!collapsed) return <>{children}</>;
+  return (
+    <details className="group">
+      <summary className="flex min-h-11 cursor-pointer list-none items-start justify-between gap-3 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold text-ink-900">Cobro anticipado</span>
+          <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">
+            Opcional. Si pagó antes, sube la constancia y valídala: el rótulo sale «PAGADO - NO COBRAR».
+          </span>
+        </span>
+        <IconChevronDown aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none" />
+      </summary>
+      <div className="mt-4 space-y-4">{children}</div>
+    </details>
+  );
+}
+
+/**
  * La acción dominante del drawer sigue el MOM, no el orden accidental de los
  * formularios. Debe responder una sola pregunta: «¿qué hago ahora con este
  * pedido?». Las herramientas secundarias quedan más abajo como evidencia o
@@ -2288,45 +2311,19 @@ export function OrderDrawer({
                   data-drawer-section="pagos"
                   className={cn(SECTION, paymentPanel.mode === "required" ? "order-3" : "order-5")}
                 >
-                  {paymentPanel.collapsed ? (
-                    // Lima sin pagos: plegada (owner, 13-11-2026). Se abre para
-                    // subir la constancia de quien pagó antes.
-                    <details className="group">
-                      <summary className="flex min-h-11 cursor-pointer list-none items-start justify-between gap-3 [&::-webkit-details-marker]:hidden">
-                        <span className="min-w-0">
-                          <span className="block text-sm font-semibold text-ink-900">Cobro anticipado</span>
-                          <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">
-                            Opcional. Si pagó antes, sube la constancia y valídala: el rótulo sale «PAGADO - NO COBRAR».
-                          </span>
-                        </span>
-                        <IconChevronDown aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none" />
-                      </summary>
-                      <div className="mt-4 space-y-4">
-                        <PickupKeyPanel
-                          orderId={orderId}
-                          mode={paymentPanel.mode}
-                          gatewayNote={gatewayNote}
-                          shalomDestination={shalomDestination}
-                          onChanged={onSaved}
-                        />
-                        <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
-                      </div>
-                    </details>
-                  ) : (
-                    <>
-                      <PickupKeyPanel
-                        orderId={orderId}
-                        mode={paymentPanel.mode}
-                        gatewayNote={gatewayNote}
-                        shalomDestination={shalomDestination}
-                        onChanged={onSaved}
-                      />
-                      {/* MOM §35: la boleta sale del dinero que ya entró, así que
-                          vive bajo el cobro. Se dibuja solo si la organización
-                          tiene algún RUC o comprobante. */}
-                      <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
-                    </>
-                  )}
+                  <CollapsibleCobro collapsed={paymentPanel.collapsed ?? false}>
+                    <PickupKeyPanel
+                      orderId={orderId}
+                      mode={paymentPanel.mode}
+                      gatewayNote={gatewayNote}
+                      shalomDestination={shalomDestination}
+                      onChanged={onSaved}
+                    />
+                    {/* MOM §35: la boleta sale del dinero que ya entró, así que
+                        vive bajo el cobro. Se dibuja solo si la organización
+                        tiene algún RUC o comprobante. */}
+                    <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
+                  </CollapsibleCobro>
                 </div>
               )}
               {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene

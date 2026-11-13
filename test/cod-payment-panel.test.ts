@@ -32,7 +32,7 @@ describe("Cobro opcional en contra entrega", () => {
   it("solo la ficha: Leads sigue con orderPaymentPanelFor", () => {
     const drawer = readFileSync("components/order-drawer.tsx", "utf8");
     expect(drawer).toContain("codPaymentPanel(paymentSetup.presentation, detail?.row ?? null)");
-    expect(drawer).toContain("{paymentPanel.collapsed ? (");
+    expect(drawer).toContain("<CollapsibleCobro collapsed={paymentPanel.collapsed ?? false}>");
     expect(drawer).toContain('<span className="block text-sm font-semibold text-ink-900">Cobro anticipado</span>');
     expect(readFileSync("docs/mom/master-pedidos-v1.md", "utf8")).toContain("**Contra entrega pagado por adelantado: la tarjeta de Cobro en la ficha");
   });
