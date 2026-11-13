@@ -59,11 +59,17 @@ describe("cada permiso tiene nombre, explicación y área", () => {
     } satisfies Partial<Record<Permission, string>>);
   });
 
-  it("«Gestionar la Lista negra» (MOM §41): en Pedidos, con su explicación, y por rol (no uno por uno)", () => {
+  it("«Gestionar la Lista negra» (MOM §41): en Pedidos, con su explicación; dueño y admin, y casilla uno por uno (13-11-2026)", () => {
     expect(PERMISSION_LABEL["prepay_list.manage"]).toBe("Gestionar la Lista negra");
     expect(PERMISSION_HELP["prepay_list.manage"]).toContain("exceptuarlos de la automática");
     expect(PERMISSION_AREAS.find((area) => area.key === "pedidos")!.permissions).toContain("prepay_list.manage");
-    expect(GRANTED_ONE_BY_ONE.map((entry) => entry.permission as string)).not.toContain("prepay_list.manage");
+    const entry = GRANTED_ONE_BY_ONE.find((g) => g.permission === "prepay_list.manage");
+    expect(entry).toBeDefined();
+    expect(entry!.ownerOnly).toBe(true);
+    expect(entry!.withAdminRole).toBe(true);
+    // Ningún rol por función la trae: a una asesora se le da con la casilla.
+    expect(permissionsFor(["vendedora"]).has("prepay_list.manage")).toBe(false);
+    expect(permissionsFor(["vendedora"], [{ permission: "prepay_list.manage", granted: true }]).has("prepay_list.manage")).toBe(true);
     expect(permissionsFor(["admin"]).has("prepay_list.manage")).toBe(true);
   });
 

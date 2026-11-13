@@ -539,6 +539,20 @@ export const GRANTED_ONE_BY_ONE = [
     ownerOnly: true,
   },
   {
+    permission: "prepay_list.manage",
+    label: PERMISSION_LABEL["prepay_list.manage"],
+    description: `${PERMISSION_HELP["prepay_list.manage"]} Viene con dueño y admin.`,
+    // Sin nadie con la casilla, dueño y admin siguen cambiando la lista.
+    lastOneMatters: false,
+    // Dueño y admin ya la cambiaban: nadie pierde la capacidad. La casilla es
+    // para dársela a una persona concreta sin subirla a admin (owner,
+    // 13-11-2026: «¿cómo habilito para agregar celulares a la lista negra a
+    // Diana?»; eligió la casilla, MOM §41.3).
+    withAdminRole: true,
+    // Frenar a una clienta en las dos tiendas: lo concede el dueño.
+    ownerOnly: true,
+  },
+  {
     permission: "automations.manage",
     label: PERMISSION_LABEL["automations.manage"],
     description: PERMISSION_HELP["automations.manage"],
