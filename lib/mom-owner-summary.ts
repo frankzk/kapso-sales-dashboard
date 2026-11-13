@@ -1,3 +1,4 @@
+import { agencyPaymentBucket, type AgencyPaymentBucket } from "@/lib/agency-payment-state";
 import { CONFIRMATION_SIGNAL_KINDS } from "@/lib/order-confirmation";
 import { ADELANTO_MINIMO } from "@/lib/adelanto-minimo";
 import { deliveryCourier } from "@/lib/delivery-courier";
@@ -26,8 +27,9 @@ export interface MomOwnerPeriod {
 }
 
 export interface MomOwnerOrderFact {
-  /** Checkout payment confirmed by the shop, with no refund (isWebPrepaid). */
-  webPrepaid?: boolean;
+  platform?: string | null;
+  financialStatus?: string | null;
+  totalRefunded?: number | null;
   orderId: string;
   createdAt: string | null;
   coverage: string | null;
@@ -118,6 +120,7 @@ export interface MomOwnerKpiValue {
 }
 
 export interface MomOwnerPeriodSummary extends MomOwnerPeriod {
+  agencyPayments?: Record<AgencyPaymentBucket, number>;
   kpis: Record<MomOwnerKpiKey, MomOwnerKpiValue>;
 }
 
@@ -445,32 +448,23 @@ export function buildMomOwnerSummary(input: BuildMomOwnerSummaryInput): MomOwner
       isCourier(shipment.courier, ["shalom", "olva"]),
     );
     const dispatchedAgencyOrders = uniqueOrderIds(agencyShipments);
-    // La COHORTE es por fecha de despacho; el COBRO cuenta cuando llegue. Igual
-    // que el resto del tablero, «los resultados tardíos actualizan la cohorte de
-    // la fecha original». Antes el pago tenía que caer dentro de la misma
-    // ventana y eso enterraba 134 pedidos de agosto (ver summedPaymentsByOrder).
-    //
-    // Efecto secundario buscado: la fila deja de contradecir a la de arriba.
-    // «Adelanto de Agencia» ya contaba todos los pagos validados sin mirar la
-    // fecha; puestas una debajo de otra, dos reglas distintas se leen como
-    // comparables y no lo eran.
-    let fullyPaidAgencyOrders = 0;
+    const agencyPayments: Record<AgencyPaymentBucket, number> = { complete: 0, collect: 0, validate: 0, historical: 0, excluded: 0, review: 0 };
     for (const orderId of dispatchedAgencyOrders) {
       const order = orderById.get(orderId);
-      const total = order?.orderTotal;
-      if (order?.webPrepaid || (total != null && total > 0 && Math.round((currentPayments.get(orderId) ?? 0) * 100) >= Math.round(total * 100))) {
-        fullyPaidAgencyOrders += 1;
-      }
+      if (!order) continue;
+      agencyPayments[agencyPaymentBucket(order)]++;
     }
+    const eligibleAgencyOrders = agencyPayments.complete + agencyPayments.collect + agencyPayments.validate + agencyPayments.review;
 
     return {
       ...period,
+      agencyPayments,
       kpis: {
         province_confirmation: ratio(confirmedProvince, provinceOrders.length),
         agency_advance: ratio(agencyWithAdvance, agencyOrders.length),
         aliclik_delivery: ratio(deliveredAliclik, aliclikShipments.length),
         lima_delivery: ratio(deliveredLimaOrders.size, limaOrders.size),
-        agency_full_payment: ratio(fullyPaidAgencyOrders, dispatchedAgencyOrders.size),
+        agency_full_payment: ratio(agencyPayments.complete, eligibleAgencyOrders),
       },
     };
   });

@@ -1,3 +1,13 @@
+### 12-11-2026 · Agencia: Estado de pago y conciliación histórica (0336)
+
+Aplicar db/migrations/0336_agency_payment_reconciliation.sql antes del código.
+RPCs de lectura con la sesión/RLS; no actualizan importes ni estados. El
+indicador usa payment_state del Master. Por cobrar, comprobantes por validar e
+históricos Shopify pagados por conciliar abren listas separadas. Verificar el
+mismo periodo y tiendas en indicador, total del Master y Excel. En el Master,
+Históricos pagados · por conciliar también funciona sin periodo y combinado con
+Estado de pago. Instalación sin cambios de datos operativos.
+
 ### 12-11-2026 · Lista negra: rechazó en la puerta (0334)
 
 0334 ya aplicada en producción antes del código. Regla (C) de la Lista negra

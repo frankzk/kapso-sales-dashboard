@@ -13676,6 +13676,31 @@ vale para el mes en curso mientras esté empezando — el 09-09-2026, 120 de los
 honesta es contra el mismo día del mes anterior, no contra el mes anterior
 cerrado.
 
+**Corrección del indicador y conciliación histórica (12-11-2026, decisión del owner; 0336).**
+El indicador y su desglose usan el payment_state actual del Master, sin recalcular
+un pago completo mediante otra suma: conserva prepago web, redondeos y flete que
+el resolver ya reconoce. El numerador es Pago completo; el denominador reúne
+Pago completo, Pago pendiente de validar, Pago parcial y Sin pago registrado
+de la cohorte de guías Shalom/Olva del periodo. Un estado desconocido va a
+Revisar registro y conserva su enlace, nunca se oculta ni se afirma deuda.
+
+Por cobrar incluye solo Pago parcial o Sin pago registrado de ventas no anuladas
+ni devueltas, excluyendo también los históricos pagados. Pago pendiente de
+validar abre sus comprobantes aparte: no se pide nuevamente el dinero sin
+revisarlos. El enlace del título abre Pago completo de esa cohorte.
+
+Históricos pagados · por conciliar es un filtro independiente de Estado de pago:
+orders.platform=shopify, financial_status=paid, sin reembolso y payment_state
+que aún no es pago_completo. No se infiere cobro por estar entregado/finalizado.
+Estos casos quedan fuera tanto de Por cobrar como del denominador del indicador;
+no se dan por pagos validados en Kapta. El filtro puede abrirse sobre todas las
+fechas en el Master o desde el periodo del Consolidado y combinarse con Estado
+de pago, tienda, courier y demás filtros. Se deduplica por pedido. Lista, totales,
+macroetapas, paginación y Excel comparten la RPC bajo RLS. Ninguna lectura
+modifica pagos, pedidos, guías, stock o historial. Este acuerdo sustituye el
+complemento único y la comparación alternativa en céntimos de 0290 descritos
+arriba; la ventana de despacho en Lima no cambia.
+
 Alertas del primer tablero:
 
 - `Recogido sin pago completo`: razón crítica abierta en el Master.

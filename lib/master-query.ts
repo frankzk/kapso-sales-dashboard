@@ -93,6 +93,9 @@ export function parseMasterQuery(params: URLSearchParams | Record<string, string
   };
 
   const f = emptyFilters();
+  f.historicalPaid = get("historical_paid") === "1";
+  const agencyView = get("apv");
+  f.agencyPaymentView = ["all", "complete", "collect", "validate", "review"].includes(agencyView ?? "") ? agencyView as NonNullable<MasterFilters["agencyPaymentView"]> : "collect";
   if (get("agency_unpaid") === "1") f.agencyUnpaid = agencyPaymentWindow(get("apf"), get("apt"));
 
   for (const { param, field } of SET_KEYS) {
@@ -161,10 +164,12 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
   const f = q.filters;
   if (f.agencyUnpaid) {
     out.set("agency_unpaid", "1");
+    if (f.agencyPaymentView && f.agencyPaymentView !== "collect") out.set("apv", f.agencyPaymentView);
     out.set("apf", f.agencyUnpaid.from);
     out.set("apt", f.agencyUnpaid.to);
   }
 
+  if (f.historicalPaid) out.set("historical_paid", "1");
   for (const { param, field } of SET_KEYS) {
     const set = f[field] as Set<string>;
     if (set?.size) out.set(param, [...set].join(","));
@@ -193,7 +198,7 @@ export function buildMasterQuery(q: MasterQuery): URLSearchParams {
 /** ¿Hay algo puesto? Sirve para ofrecer "limpiar filtros" solo cuando toca. */
 export function hasQueryFilters(f: MasterFilters): boolean {
   return (
-    Boolean(f.agencyUnpaid) ||
+    Boolean(f.agencyUnpaid) || !!f.historicalPaid ||
     SET_KEYS.some(({ field }) => (f[field] as Set<string>)?.size > 0) ||
     (f.products?.size ?? 0) > 0 ||
     DATE_KEYS.some(({ field }) => Boolean(f[field] as string)) ||
