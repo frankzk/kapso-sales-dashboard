@@ -2194,6 +2194,16 @@ que nadie tenga que resumirla a mano:
 - **Qué llevaba cada pedido.** Cuando el historial repite el mismo producto y la
   misma cantidad, se marca: eso no es un historial de compras variado, es el
   mismo pedido una y otra vez.
+- **También en «Información», en cualquier etapa (13-11-2026, owner: «en qué
+  parte del drawer me puedes colocar el historial de pedidos del cliente»).**
+  La ficha del pedido muestra la sección **«Historial del cliente»** bajo
+  «Pedido y cliente»: cuántos pedidos más tiene ese teléfono («Primer pedido» si
+  no tiene), el desglose por desenlace y la lista (los 5 más recientes a la
+  vista, el resto bajo «Ver los … más antiguos», hasta 50), con las mismas filas
+  de esta ficha. El número de cada pedido abre su ficha. Solo informa: no cambia
+  la regla de riesgo ni ningún estado. Se lee la primera vez que se abre la
+  pestaña (`loadCustomerHistory`) y, si «Antes de llamar» ya lo trajo, se reusa.
+  Sin teléfono no hay historial que buscar, y se dice así en vez de «sin pedidos».
 - **Excepción: el cliente sin teléfono.** Desde el 29-jul-2026 Meta empezó a
   entregar conversaciones sin número — el cliente adoptó un *username* de
   WhatsApp y su identidad pasó a ser el **BSUID**. Fueron 0 durante 23 días y

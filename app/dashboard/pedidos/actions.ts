@@ -1973,6 +1973,30 @@ export async function loadConfirmationBrief(
   return { brief: { ...brief, duplicateHold } };
 }
 
+/**
+ * «Historial del cliente» en la pestaña Información (owner, 13-11-2026: «en
+ * qué parte del drawer me puedes colocar el historial de pedidos del
+ * cliente»). Los mismos pedidos del teléfono que «Antes de llamar», en
+ * cualquier etapa y sin la consulta de duplicados de Aliclik. Solo lee; la
+ * RLS decide qué tiendas se ven.
+ */
+export async function loadCustomerHistory(orderId: string): Promise<
+  | { history: Pick<OrderConfirmationBrief, "priors" | "counts" | "orderCreatedAt" | "products"> & { hasPhone: boolean } }
+  | { error: string }
+> {
+  const brief = await getOrderConfirmationBrief(orderId);
+  if (!brief) return { error: "Sin acceso a este pedido." };
+  return {
+    history: {
+      priors: brief.priors,
+      counts: brief.counts,
+      orderCreatedAt: brief.orderCreatedAt,
+      products: brief.products,
+      hasPhone: brief.hasPhone !== false,
+    },
+  };
+}
+
 
 /**
  * Descartar la recuperación de provincia, con motivo.

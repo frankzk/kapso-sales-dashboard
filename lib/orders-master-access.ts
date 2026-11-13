@@ -2188,6 +2188,8 @@ export interface OrderConfirmationBrief {
   orderCreatedAt: string | null;
   /** Qué lleva este pedido, para poder verlo repetido en el historial. */
   products: string | null;
+  /** Sin teléfono no hay historial que buscar: «sin pedidos» no sería cierto. */
+  hasPhone?: boolean;
 }
 
 /**
@@ -2328,5 +2330,6 @@ export async function getOrderConfirmationBrief(
     coverage: row.coverage,
     orderCreatedAt: row.order_created_at,
     products: products.get(row.order_id) ?? null,
+    hasPhone: Boolean(phone),
   };
 }

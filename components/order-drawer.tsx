@@ -107,6 +107,7 @@ import {
   loadOrderGeo,
   applyOrderStatusBulk,
   loadConfirmationBrief,
+  loadCustomerHistory,
   registerConfirmationAttempt,
   descartarRecuperacion,
   registerReturn,
@@ -276,6 +277,7 @@ import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
 import { timelineOriginLabel } from "@/lib/order-timeline-fact";
 import { aliclikGuideOffered, type RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
+import { OrderLink } from "@/components/order-link";
 
 // ---------------------------------------------------------------------------
 // Formato
@@ -2514,6 +2516,13 @@ export function OrderDrawer({
                   </Banner>
                 )}
               </section>
+              <CustomerHistorySection
+                key={`historial-${orderId}`}
+                orderId={orderId}
+                visible={workspace === "informacion"}
+                preloaded={brief}
+                className={cn("order-2", SECTION)}
+              />
               <div data-drawer-section="ubicacion" className={cn("order-2", SECTION)}>
                 <GeoSection
                   orderId={orderId}
@@ -3351,9 +3360,15 @@ function PriorOrderRow({
   return (
     <li className="px-4 py-2.5 sm:px-5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono text-xs font-semibold text-ink-900">
+        {/* Abre la ficha de ese pedido en la misma pantalla: ahí está el porqué
+            de su resultado (la parada, la guía, la devolución). */}
+        <OrderLink
+          orderId={row.order_id}
+          className="rounded-sm font-mono text-xs font-semibold text-brand-700 underline decoration-brand-100 underline-offset-2 hover:decoration-brand-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+          title={`Abrir ${row.order_name ?? "el pedido"}`}
+        >
           {row.order_name ?? row.order_id}
-        </span>
+        </OrderLink>
         <span className="text-xs tabular-nums text-ink-500">
           {fmtDate(row.order_created_at)} · {fmtAge(row.order_created_at)}
         </span>
@@ -3398,6 +3413,141 @@ function PriorOrderRow({
         {row.order_total != null ? ` · ${fmtMoney(row.order_total)}` : ""}
       </p>
     </li>
+  );
+}
+
+type CustomerHistory = Pick<OrderConfirmationBrief, "priors" | "counts" | "orderCreatedAt" | "products"> & { hasPhone: boolean };
+
+/** Las filas que se ven sin abrir nada; el resto, bajo «Ver los demás». */
+const HISTORY_VISIBLE = 5;
+
+/**
+ * «Historial del cliente» en Información (owner, 13-11-2026). Responde de un
+ * vistazo lo que la asesora iba a buscar a Shopify: si el teléfono ya compró,
+ * cuántas veces y en qué terminó cada pedido. Se lee la primera vez que se abre
+ * la pestaña (no en cada ficha); si «Antes de llamar» ya lo trajo, se reusa.
+ */
+function CustomerHistorySection({ orderId, visible, preloaded, className }: {
+  orderId: string;
+  visible: boolean;
+  preloaded: OrderConfirmationBrief | null;
+  className?: string;
+}) {
+  const [asked, setAsked] = useState(visible);
+  useEffect(() => {
+    if (visible) setAsked(true);
+  }, [visible]);
+  const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ok"; history: CustomerHistory }>({ status: "loading" });
+  const fromBrief: CustomerHistory | null = preloaded
+    ? { priors: preloaded.priors, counts: preloaded.counts, orderCreatedAt: preloaded.orderCreatedAt, products: preloaded.products, hasPhone: preloaded.hasPhone !== false }
+    : null;
+  useEffect(() => {
+    if (!asked || fromBrief) return;
+    let alive = true;
+    setState({ status: "loading" });
+    loadCustomerHistory(orderId)
+      .then((res) => {
+        if (alive) setState("history" in res ? { status: "ok", history: res.history } : { status: "error" });
+      })
+      .catch(() => {
+        if (alive) setState({ status: "error" });
+      });
+    return () => {
+      alive = false;
+    };
+    // `fromBrief` solo importa como «ya está»: es un objeto nuevo en cada render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, orderId, Boolean(fromBrief)]);
+
+  const history = fromBrief ?? (state.status === "ok" ? state.history : null);
+  const known = history?.priors.length ?? 0;
+  const later = history ? countLaterOrders(history.priors, history.orderCreatedAt) : 0;
+  const outcomes = history
+    ? (Object.keys(PRIOR_OUTCOME_LABEL) as PriorOutcome[]).filter((key) => history.counts[key] > 0)
+    : [];
+  const headId = `historial-cliente-${orderId}`;
+
+  const badge = !history
+    ? null
+    : !history.hasPhone
+      ? <Badge>Sin teléfono</Badge>
+      : known === 0
+        ? <Badge tone="info">Primer pedido</Badge>
+        : <Badge className="tabular-nums">{known} {known === 1 ? "pedido más" : "pedidos más"}</Badge>;
+
+  return (
+    <section aria-labelledby={headId} className={cn("space-y-4", className)}>
+      <SectionHead
+        id={headId}
+        title="Historial del cliente"
+        badge={badge}
+        help="Otros pedidos con este mismo teléfono, en las tiendas que puedes ver."
+      />
+
+      {!history && state.status === "error" && (
+        <p className="text-sm text-ink-600">No se pudo leer el historial. Cierra y vuelve a abrir el pedido.</p>
+      )}
+      {!history && state.status !== "error" && (
+        <div aria-busy="true" aria-label="Cargando el historial" className="space-y-2">
+          <div className="h-4 w-48 animate-pulse rounded-sm bg-wash motion-reduce:animate-none" />
+          <div className="h-4 w-full animate-pulse rounded-sm bg-wash motion-reduce:animate-none" />
+        </div>
+      )}
+
+      {history && !history.hasPhone && (
+        <p className="text-sm text-ink-600">El pedido no tiene teléfono, así que no hay con qué buscar sus otros pedidos.</p>
+      )}
+      {history?.hasPhone && known === 0 && (
+        <p className="text-sm text-ink-600">Es el primer pedido con este teléfono.</p>
+      )}
+
+      {history && known > 0 && (
+        <>
+          {/* Cuántos y en qué terminaron, antes de la lista: es lo que se mira
+              primero. Los entregados van en verde y primero; devueltos y
+              anulados, en rojo. La palabra lo dice igual que el color. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {outcomes.map((key) => (
+              <Badge
+                key={key}
+                className="tabular-nums"
+                tone={key === "entregado" ? "ok" : key === "anulado" || key === "devuelto" ? "crit" : "neutral"}
+              >
+                {PRIOR_OUTCOME_LABEL[key]}: {history.counts[key]}
+              </Badge>
+            ))}
+            {later > 0 && (
+              <span className="text-[13px] text-ink-500">
+                · {later} {later === 1 ? "es posterior" : "son posteriores"} a este
+              </span>
+            )}
+          </div>
+
+          <ul className="-mx-4 divide-y divide-line border-y border-line sm:-mx-5">
+            {history.priors.slice(0, HISTORY_VISIBLE).map((row) => (
+              <PriorOrderRow key={row.order_id} row={row} referenceCreatedAt={history.orderCreatedAt} currentProducts={history.products} />
+            ))}
+          </ul>
+          {known > HISTORY_VISIBLE && (
+            <details className="group">
+              <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 text-[13px] font-medium text-ink-700 hover:text-ink-900 pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
+                <IconChevronRight aria-hidden className="size-4 text-ink-500 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" />
+                <span className="group-open:hidden">Ver los {known - HISTORY_VISIBLE} más antiguos</span>
+                <span className="hidden group-open:inline">Ocultar los más antiguos</span>
+              </summary>
+              <ul className="-mx-4 mt-2 divide-y divide-line border-y border-line sm:-mx-5">
+                {history.priors.slice(HISTORY_VISIBLE).map((row) => (
+                  <PriorOrderRow key={row.order_id} row={row} referenceCreatedAt={history.orderCreatedAt} currentProducts={history.products} />
+                ))}
+              </ul>
+              {known >= 50 && (
+                <p className="mt-1.5 text-xs text-ink-500">Se muestran los 50 más recientes.</p>
+              )}
+            </details>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
