@@ -5,6 +5,8 @@ export type StoreWeights = Record<string, number>;
 export interface LeadStoreDistribution {
   weights: StoreWeights | null;
   completed: Record<string, number>;
+  /** «Leads por día» (0338): con valor, «Por llamar» muestra solo su lista del día (lib/lead-daily-list.ts). */
+  capacity?: number | null;
 }
 export const PRIORITY_DISTRIBUTION: LeadStoreDistribution = { weights: null, completed: {} };
 export function validStoreWeights(value: unknown): value is StoreWeights {
