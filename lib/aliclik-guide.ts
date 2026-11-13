@@ -41,6 +41,8 @@ import { env } from "@/lib/env";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { ownBoxStillWithRider, replacedByGuideNotice } from "@/lib/gf-replaced-output";
+import { replaceOwnBoxWithAliclikGuide } from "@/lib/gf-replaced-by-guide";
 import { resolveEmails } from "@/lib/productivity";
 import { guideCreatorPhrase } from "@/lib/guide-note";
 import {
@@ -1498,12 +1500,25 @@ export async function createAliclikGuideFor(
     /* el historial es una comodidad; la guía ya existe y no se toca */
   }
 
+  // La caja de Grupo GF que el motorizado todavía tiene «No entregado» queda en
+  // devolución, como con «Sacar con salida nueva» (owner, 12-11-2026; 0329,
+  // MOM §9.5): el pedido sigue a esta guía y sale de «Por reprogramar Lima» y
+  // de «Reintentos Aliclik»; su solicitud de Grupo GF se cierra y, al
+  // recibirla en oficina, vuelve a stock. Antes del recálculo, que ya lo ve.
+  // Best-effort: la guía ya existe en Aliclik.
+  const gfReplaced = ownBoxStillWithRider(finalOutputPolicy.estorban)
+    ? await replaceOwnBoxWithAliclikGuide(admin, written.shipmentId, ctx.userId)
+    : null;
+  if (gfReplaced?.error) console.warn(`[aliclik-guide] ${ctx.row.order_name ?? orderId}: la caja de Grupo GF no quedó en devolución: ${gfReplaced.error}`);
+  const gfNotice = replacedByGuideNotice(gfReplaced?.replaced ?? []);
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   return {
     orderNumber,
     notice:
       `Guía creada en Aliclik para ${ctx.row.order_name ?? "el pedido"}: ${orderNumber} · ` +
       `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
-      `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.`,
+      `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.` +
+      (gfNotice ? ` ${gfNotice}` : ""),
   };
 }

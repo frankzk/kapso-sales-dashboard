@@ -31,7 +31,11 @@ export function aliclikMotiveAllowed(userId: string | null | undefined, originKi
   return (MOTIVE_ORIGIN_KINDS as readonly string[]).includes(originKind ?? "");
 }
 
-/** Otra caja de Grupo GF en Lima pide motivo; no implica anularla ni recibirla. */
+/**
+ * Otra caja de Grupo GF en Lima pide motivo; no implica anularla ni recibirla.
+ * Si sigue con el motorizado «No entregado», al guardar la guía queda en
+ * devolución y vuelve a stock cuando la traiga (0329, `createAliclikGuideFor`).
+ */
 export function aliclikOutputPolicy(input: {
   outputs: readonly AliclikExistingOutput[];
   operation: "lima" | "provincia_cod" | "agencia" | "desconocida";

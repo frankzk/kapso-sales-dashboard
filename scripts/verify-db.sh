@@ -378,4 +378,7 @@ echo "  ✅ 0 recibidas y 1+ devuelto o 5+ pedidos con el 75 % anulados, solo co
 echo "▶ Provincias de Lima fuera de la capital (0327): agencia en la cobertura guardada del Master, salvo el Callao"
 $PSQL -f "$ROOT/scripts/sql/order_master_lima_provinces_smoke.sql"
 echo "  ✅ Huaral, Barranca, Huarochirí, Cañete y Oyón van por agencia; Curva canta Callao, Miraflores y Arequipa no; el trigger usa la regla"
+echo "▶ La guía de Aliclik deja en devolución la caja de Grupo GF «No entregado» (0329): retorno con output_replaced, solicitud cerrada, parada intacta, a stock al recibirla, barrido idempotente y solo el servidor"
+$PSQL -f "$ROOT/scripts/sql/gf_replaced_by_aliclik_smoke.sql"
+echo "  ✅ la S01 pasa a retorno sin salir de la caja ni perder dispatched_at; su solicitud de Grupo GF se cierra y no pasa a Aliclik; la parada fallida no cambia ni se entrega; Recibir en oficina la deja devuelta a stock; provincia, guía anulada, parada sin reporte o «No entregado» posterior a la guía no se tocan; el barrido arregla lo que ya estaba y no repite; sin security definer"
 echo "✅ DB verification passed."

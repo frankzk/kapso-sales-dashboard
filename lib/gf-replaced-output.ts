@@ -79,3 +79,64 @@ export function officeReturnOutcome(custodyAfter: string | null | undefined, rep
   if (replaced) return "a_stock_reemplazada";
   return saleEnded ? "a_inventario_anulado" : "ya_devuelta";
 }
+
+// ---------------------------------------------------------------------------
+// La guía de Aliclik también reemplaza la caja (owner, 12-11-2026; 0329)
+// ---------------------------------------------------------------------------
+//
+// #KP203491: Alexis reportó la S01 «No entregado · no contesta» y todavía la
+// tenía cuando una asesora creó la guía del reintento por Aliclik (S02). El
+// pedido seguía en «Por reprogramar Lima» y en «Reintentos Aliclik»: el «No
+// entregado» de la S01 solo dejaba de mandar con un movimiento de ESA salida.
+// Ahora, al guardar la guía, `gf_replace_output_with_aliclik` deja la S01 en
+// devolución como «Sacar con salida nueva» —custodia `retorno` y
+// `output_replaced`, con `replaced_by_courier = aliclik`— y CIERRA su
+// solicitud de Grupo GF (no la pasa a la guía, que no es de Grupo GF). La
+// parada fallida del motorizado queda en su ruta. MOM §9.5.
+
+/** La función de la base (0329), solo de `service_role`. */
+export const GF_REPLACE_WITH_ALICLIK_RPC = "gf_replace_output_with_aliclik";
+
+/**
+ * ¿Hay que preguntarle a la base? Solo si entre las salidas vivas que la guía
+ * de Aliclik deja atrás (`estorban` de la regla de salidas) hay una caja de
+ * Grupo GF todavía con el motorizado (custodia `courier`). La base decide el
+ * resto: Lima, «No entregado» antes de la guía, sin recibir ni reemplazar.
+ */
+export function ownBoxStillWithRider(outputs: readonly ReturningOutputLike[]): boolean {
+  return outputs.some((output) =>
+    (output.courier ?? "").trim().toLowerCase() === "propio" &&
+    output.delivery_status === "pendiente" &&
+    output.custody_state === "courier" &&
+    !output.returned_at);
+}
+
+/** Una caja que la guía de Aliclik dejó en devolución, como la devuelve la base. */
+export interface ReplacedByGuide {
+  shipmentId: string;
+  oldCode: string | null;
+  riderName: string | null;
+}
+
+/** Lee la respuesta de `gf_replace_output_with_aliclik`; lo que no se entiende no cuenta. */
+export function replacedByGuideFrom(result: unknown): ReplacedByGuide[] {
+  const list = (result as { replaced?: unknown } | null)?.replaced;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((entry) => {
+    const row = entry as { shipment_id?: unknown; old_code?: unknown; rider?: unknown } | null;
+    if (typeof row?.shipment_id !== "string" || !row.shipment_id) return [];
+    return [{
+      shipmentId: row.shipment_id,
+      oldCode: typeof row.old_code === "string" ? row.old_code : null,
+      riderName: typeof row.rider === "string" ? row.rider : null,
+    }];
+  });
+}
+
+/** Lo que se le dice a quien creó la guía: qué caja quedó en devolución y qué pasa al recibirla. */
+export function replacedByGuideNotice(replaced: readonly ReplacedByGuide[]): string | null {
+  if (!replaced.length) return null;
+  const boxes = replaced.map((row) => `${row.oldCode ?? "La caja anterior"} sigue con ${row.riderName ?? "el motorizado"}`);
+  const one = replaced.length === 1;
+  return `${boxes.join(" y ")}: ${one ? "queda" : "quedan"} en devolución y ${one ? "su solicitud" : "sus solicitudes"} de Grupo GF ${one ? "se cerró" : "se cerraron"}. Al recibirla en oficina se desarma y vuelve a stock.`;
+}
