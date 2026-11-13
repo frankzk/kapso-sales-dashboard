@@ -677,4 +677,6 @@
 \ir migrations/0337_gf_replaced_by_aliclik.sql
 \echo 'Applying 0338_lead_daily_list.sql'
 \ir migrations/0338_lead_daily_list.sql
+\echo 'Applying 0339_repro_box_con_courier.sql'
+\ir migrations/0339_repro_box_con_courier.sql
 \echo 'Done.'

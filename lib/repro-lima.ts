@@ -19,10 +19,10 @@ import { limaClock, nextDay, sameDayCutoffLabel, sameDayCutoffMinute, scheduledD
 import { rescheduleDateProblem, RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { guideDoorRejection, guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
-import { ownRetryDecision, type OwnRetryBlock } from "@/lib/gf-retry";
+import { outputsBlockingRetry, ownRetryDecision, type OwnRetryBlock } from "@/lib/gf-retry";
 import { courierDetail, motivoDelCourier } from "@/lib/aliclik-status";
 import { NON_DELIVERY_REASONS } from "@/lib/routes";
-import { nombreDeCourier, sameCourier } from "@/lib/shipment-output";
+import { isCourierTbd, nombreDeCourier, sameCourier } from "@/lib/shipment-output";
 import { firstSwaypDispatchDay, isSwaypDispatchDay, SWAYP_SUNDAY_ERROR } from "@/lib/swayp-dispatch-days";
 
 // ---------------------------------------------------------------------------
@@ -517,14 +517,59 @@ export function reproEpisodeKey(input: Parameters<typeof reproEpisode>[0]): stri
  *   «tomar», E11), o la de otro courier ya volvió. `courier`: de quién es la
  *   caja (`propio` o el courier que la devolvió).
  * - `volviendo_courier`: la de otro courier todavía vuelve.
+ * - `con_courier` (13-11-2026, owner: «cablea todas las conexiones»): el
+ *   pedido tiene una salida viva de otro courier (Swayp, Aliclik, Tanders…)
+ *   que no es la que falló: la trabaja ese courier. `enOficina`: todavía en la
+ *   empresa, sin entregar al courier.
  * - `desconocida`: no consta. `own`: es la salida propia (fuera de la oficina
  *   o en otra solicitud: `block`).
  */
 export type BoxLocation =
   | { kind: "con_motorizado"; riderName: string; since: string | null; sinReporte?: boolean }
-  | { kind: "en_oficina"; since: string | null; courier?: string | null }
+  | { kind: "en_oficina"; since: string | null; courier?: string | null; nuncaSalio?: boolean }
   | { kind: "volviendo_courier"; courier: string }
+  | { kind: "con_courier"; courier: string; enOficina: boolean }
   | { kind: "desconocida"; own?: boolean; block?: Exclude<OwnRetryBlock, "caja_sin_reporte"> };
+
+/** Lo de una salida que hace falta para saber si sigue viva y dónde está. */
+export interface LiveOutputFacts {
+  id: string;
+  courier: string;
+  delivery_status: string;
+  custody_state?: string | null;
+  custody_transferred_at?: string | null;
+  returned_at?: string | null;
+  output_number?: number | null;
+  status_category?: string | null;
+  reported_status?: string | null;
+  swayp_state?: number | null;
+  dispatched_at?: string | null;
+  updated_at?: string | null;
+}
+
+/**
+ * Las salidas vivas que se están trabajando (13-11-2026): ni devueltas, ni la
+ * que falló, ni la propia reemplazada (`outputsBlockingRetry`). De ellas:
+ * - `other`: la de otro courier (no Grupo GF ni «por definir»), la de
+ *   consecutivo más alto: el pedido ya tiene su salida con ese courier
+ *   (creada o rellenada desde la Mesa de ruta, o la guía que registró el
+ *   courier), aunque el acuerdo diga otra cosa;
+ * - `tbdInOffice`: una «por definir» o de Grupo GF sin transferir, en la
+ *   empresa: la caja está en oficina aunque el pedido nunca haya fallado.
+ * PURA.
+ */
+export function liveOutputsOf<T extends LiveOutputFacts>(
+  outputs: readonly T[],
+  replaced: ReadonlySet<string>,
+): { other: T | null; tbdInOffice: T | null } {
+  const live = outputsBlockingRetry(outputs as never[], replaced).map((o) => o as unknown as T).filter((o) =>
+    (o.delivery_status === "pendiente" || o.delivery_status === "en_ruta") && !o.returned_at && o.custody_state !== "devuelto");
+  const ours = (o: T) => sameCourier(o.courier, "propio") || isCourierTbd(o.courier);
+  const byNumber = (a: T, b: T) => (b.output_number ?? 0) - (a.output_number ?? 0);
+  const other = live.filter((o) => !ours(o)).sort(byNumber)[0] ?? null;
+  const tbdInOffice = live.filter((o) => ours(o) && o.custody_state === "empresa" && !o.custody_transferred_at).sort(byNumber)[0] ?? null;
+  return { other, tbdInOffice };
+}
 
 export function boxLocation(input: {
   /** La salida propia que se reusa (`ownRetryOutput`), o null. */
@@ -537,6 +582,13 @@ export function boxLocation(input: {
   lastFailed: { courier: string; returned: boolean; returnedAt?: string | null } | null;
   /** Cuándo se recibió en oficina (`returned_to_office` / `return_received`). */
   receivedAt: string | null;
+  /** La salida viva de otro courier (`liveOutputsOf().other`), o null. */
+  liveOther?: { courier: string; custody_state?: string | null; custody_transferred_at?: string | null } | null;
+  /**
+   * La salida propia o «por definir» viva en la empresa (`liveOutputsOf().tbdInOffice`).
+   * Sin `dispatched_at` nunca salió: no hay recepción que esperar.
+   */
+  liveInOffice?: { dispatched_at?: string | null } | null;
 }): BoxLocation {
   if (input.box) {
     return {
@@ -552,10 +604,22 @@ export function boxLocation(input: {
     const block = decision.action === "bloquear" && decision.reason !== "caja_sin_reporte" ? decision.reason : undefined;
     return { kind: "desconocida", own: true, ...(block ? { block } : {}) };
   }
+  // La salida viva de otro courier manda: la caja es la suya (13-11-2026).
+  if (input.liveOther) {
+    return {
+      kind: "con_courier",
+      courier: input.liveOther.courier,
+      enOficina: input.liveOther.custody_state === "empresa" && !input.liveOther.custody_transferred_at,
+    };
+  }
   if (input.lastFailed && !sameCourier(input.lastFailed.courier, "propio")) {
     return input.lastFailed.returned
       ? { kind: "en_oficina", since: input.lastFailed.returnedAt ?? input.receivedAt, courier: input.lastFailed.courier }
       : { kind: "volviendo_courier", courier: input.lastFailed.courier };
+  }
+  // Un pendiente que nunca falló, con su caja armada en la empresa: consta.
+  if (input.liveInOffice) {
+    return { kind: "en_oficina", since: input.receivedAt, courier: null, ...(input.liveInOffice.dispatched_at ? {} : { nuncaSalio: true }) };
   }
   return { kind: "desconocida" };
 }
@@ -563,7 +627,8 @@ export function boxLocation(input: {
 /** ¿La caja es la salida propia de Grupo GF? (con el motorizado, en oficina o perdida). */
 export function isOwnBox(box: BoxLocation): boolean {
   if (box.kind === "con_motorizado") return true;
-  if (box.kind === "en_oficina") return sameCourier(box.courier, "propio");
+  // Sin courier es la «por definir» o la propia que nunca salió: es nuestra.
+  if (box.kind === "en_oficina") return box.courier == null || sameCourier(box.courier, "propio");
   if (box.kind === "desconocida") return Boolean(box.own);
   return false;
 }
@@ -591,6 +656,10 @@ export function boxLocationLabel(box: BoxLocation): string {
     }
     case "volviendo_courier":
       return `Vuelve con ${reproCourierName(box.courier)}`;
+    case "con_courier":
+      return box.enOficina
+        ? `Salida de ${reproCourierName(box.courier)} en oficina · la recoge ${reproCourierName(box.courier)}`
+        : `La lleva ${reproCourierName(box.courier)}`;
     case "desconocida":
       return "No consta dónde está la caja";
   }
@@ -656,6 +725,9 @@ export function materializationPlan(input: {
   retryAdmission: boolean;
 }): MaterializationPlan {
   if (input.courier !== "propio") return { no: "otro_courier" };
+  // Ya la trabaja otro courier: Grupo GF no la programa (el estado lo dice:
+  // `salida_distinta`).
+  if (input.box.kind === "con_courier") return { no: "otro_courier" };
   if (input.boxAction === "caja_nueva_stock") {
     const box = input.box;
     if (box.kind === "con_motorizado") return "ahora";
@@ -718,11 +790,14 @@ export type AgreementStateKind =
   | "deriva_movido"
   | "falta_sacar"
   | "programado_vencido"
-  | "programado";
+  | "programado"
+  | "salida_creada"
+  | "salida_distinta";
 
 export type AgreementState =
-  | { kind: Exclude<AgreementStateKind, "deriva_movido"> }
-  | { kind: "deriva_movido"; gfDay: string; reason: string | null };
+  | { kind: Exclude<AgreementStateKind, "deriva_movido" | "salida_distinta"> }
+  | { kind: "deriva_movido"; gfDay: string; reason: string | null }
+  | { kind: "salida_distinta"; courier: string };
 
 /**
  * Los estados que piden a alguien: van primero en «Programados». Las derivas,
@@ -739,6 +814,7 @@ export const PROBLEM_STATES: ReadonlySet<AgreementStateKind> = new Set<Agreement
   "falta_sacar",
   "por_programar",
   "acuerdo_vencido",
+  "salida_distinta",
 ]);
 
 export function isProblemState(kind: AgreementStateKind): boolean {
@@ -786,6 +862,10 @@ function missedToday(
  *    si Grupo GF lo quitó (§9.5, regla 4: su día pasó); si no, `deriva_quitado`
  *    si Grupo GF lo quitó o lo reemplazó después; sin evento, falló la
  *    escritura → `por_programar` (E9), o `acuerdo_vencido` si ya no alcanza hoy.
+ * 1b. (13-11-2026, owner) Con una salida viva de otro courier (`box` es
+ *    `con_courier`): si es el courier acordado → `salida_creada` (ya está, no
+ *    pide nada); si es otro → `salida_distinta` (revisar cuál sale). Va antes
+ *    que todo lo demás: la salida es un hecho, el acuerdo solo una intención.
  * 4. Materializado con programa: `deriva_movido` (otro día), `falta_sacar`
  *    (caja nueva desde stock con la caja todavía con el motorizado),
  *    `programado_vencido` (su día pasó) o `programado`. Lo que diga el plan ya
@@ -808,6 +888,11 @@ export function agreementState(input: {
 }): AgreementState {
   const c = input.c;
   if (!c?.agreed_on) return { kind: "sin_acuerdo" };
+  if (input.box.kind === "con_courier") {
+    return sameCourier(input.box.courier, c.agreed_courier)
+      ? { kind: "salida_creada" }
+      : { kind: "salida_distinta", courier: input.box.courier };
+  }
   const agreedOn = c.agreed_on.slice(0, 10);
   const missed = agreedOn === input.today && missedToday(c, input.plan, input.today, input.nowMinute, input.cutoff);
   if (!c.materialized_at) {
@@ -872,6 +957,10 @@ export function agreementStateLabel(
       return `Programado para el ${day} y no salió`;
     case "programado":
       return `Programado · sale ${day} con ${courier}`;
+    case "salida_creada":
+      return `Salida creada · sale ${day} con ${courier}`;
+    case "salida_distinta":
+      return `Ya tiene salida con ${reproCourierName(state.courier)} (se acordó ${courier}): revisa cuál sale`;
   }
 }
 

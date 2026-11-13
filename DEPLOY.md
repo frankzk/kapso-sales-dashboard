@@ -1,3 +1,13 @@
+### 13-11-2026 · Repro Lima reconoce la salida de cualquier courier y la caja en oficina
+
+Migración 0339_repro_box_con_courier (ya aplicada en producción: solo amplía el
+CHECK de `lima_repro_cases.box_location`). Un acuerdo con Swayp, Aliclik,
+Tanders o Axel cuya salida ya existe dice «Salida creada · sale … con …» y deja
+de pedir crearla; si la salida es de otro courier, «revisa cuál sale». La caja
+de otro courier dice dónde está y la propia o «por definir» armada en la
+empresa dice «En oficina» en vez de «No consta». Verificar #KP205892 y
+#KP205878 en «Programados para mañana».
+
 ### 13-11-2026 · Venta anulada con la caja afuera: «Devolución física pendiente» · sonido al escanear
 
 Sin migración y sin subir la versión del Master: los pedidos ya guardados

@@ -6192,12 +6192,36 @@ Master: se calculan al leer, y el caso nunca se reescribe.
 | `falta_sacar` | Caja nueva desde stock, con la caja anterior todavía con el motorizado | «Falta: Sacar con salida nueva» |
 | `programado_vencido` | Su día pasó y no salió | «Programado para el jue 15/10 y no salió» |
 | `programado` | Programado para el día acordado | «Programado · sale jue 15/10 con Grupo GF» |
+| `salida_creada` | (13-11-2026) El pedido ya tiene una salida viva con el courier acordado (Swayp, Aliclik, Tanders, Axel), creada o rellenada desde la Mesa de ruta o registrada por el courier. No pide nada | «Salida creada · sale sáb 14/11 con Swayp» |
+| `salida_distinta` | (13-11-2026) El pedido tiene una salida viva con otro courier que el acordado (también si se acordó Grupo GF). Es problema: va primero y deja la fila «Con aviso» en Almacén | «Ya tiene salida con Swayp (se acordó Aliclik): revisa cuál sale» |
 
 Dónde está la caja (`boxLocation`), para la fila y para la acción de la caja:
 `con_motorizado` («Con Roy desde sáb 10/10», también si su parada todavía no
 tiene reporte), `en_oficina` (recibida: Grupo GF puede tomarla, o la devolvió
 su courier), `volviendo_courier` («Vuelve con Tanders») o `desconocida` («No
 consta dónde está la caja»).
+
+**Repro Lima lee todas las salidas vivas (13-11-2026, owner: «cablea todas
+las conexiones para que no vuelva a suceder»).** Medido ese día: los acuerdos
+«Sale sáb 14/11 con Swayp» seguían diciendo «crea la salida en la Mesa de ruta»
+con la salida de Swayp ya creada (#KP205892, #KP205878), y todo pendiente que
+nunca había fallado salía «No consta dónde está la caja» aunque su caja
+estuviera armada en oficina. Desde entonces (`liveOutputsOf`, lib/repro-lima.ts),
+de las salidas vivas que se trabajan —ni devueltas, ni la que falló, ni la
+propia reemplazada—:
+
+- la de otro courier manda sobre todo lo demás: la caja es `con_courier`
+  («Salida de Swayp en oficina · la recoge Swayp» o «La lleva Aliclik») y el
+  acuerdo pasa a `salida_creada` o `salida_distinta` (arriba), sea cual sea el
+  camino por el que nació la salida. Grupo GF no programa esa caja; Almacén la
+  pone en «Todavía fuera» cuando ya la tiene el courier;
+- una propia o «por definir» en la empresa, sin transferir, es `en_oficina`
+  («En oficina»). Si nunca salió (`nuncaSalio`), Almacén no avisa «nadie
+  registró su recepción»: no hay recepción que esperar.
+
+`lima_repro_cases.box_location` admite `con_courier` (0339). Guardar un acuerdo
+con un courier cuya salida ya existe dice «la salida de Swayp ya existe» en vez
+de pedir crearla. Pruebas: `test/repro-lima-live-outputs.test.ts`.
 
 - La salida propia que está en la solicitud vigente de Grupo GF del mismo
   pedido —la que `gf_return_to_office` devuelve a `accepted` al recibirla— no
