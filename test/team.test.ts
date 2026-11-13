@@ -144,6 +144,8 @@ describe("team guards", () => {
           "logistics.manage",
           "orders.cancel_woo",
           "payments.validate",
+          // Lista negra a una persona concreta (MOM §41.3, 13-11-2026).
+          "prepay_list.manage",
           "shalom.override_payment_validation",
         ].sort(),
       );
