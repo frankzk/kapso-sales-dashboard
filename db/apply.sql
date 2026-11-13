@@ -675,4 +675,6 @@
 \ir migrations/0336_agency_payment_reconciliation.sql
 \echo 'Applying 0337_gf_replaced_by_aliclik.sql'
 \ir migrations/0337_gf_replaced_by_aliclik.sql
+\echo 'Applying 0338_lead_daily_list.sql'
+\ir migrations/0338_lead_daily_list.sql
 \echo 'Done.'

@@ -8119,6 +8119,29 @@ bloques debe estar activo; desactivado conserva prioridad. Los porcentajes se
 guardan con revisión y auditoría antes/después; omitirlos desde clientes antiguos
 conserva el valor guardado. Instalación sin cambios de asignaciones ni leads.
 
+**La lista del día: «Leads por día» (13-11-2026, decisión del owner; 0338).**
+«Una persona puede atender unos 250 leads al día; que se le asignen 250, 90 %
+Aurela y 10 % Kenku, dando prioridad a los más prioritarios», porque a Daphne
+«Por llamar» le mostraba más de 1.000 pendientes. Equipo → Leads tiene, junto a
+los porcentajes, «Leads por día» (entero 1–1000; vacío = toda la cola). Solo
+aplica a quien la tiene puesta y con el reparto por bloques activo.
+
+Con capacidad N, su «Por llamar» muestra solo N leads: de la cola ya ordenada por
+prioridad (citas vencidas primero y el puntaje de siempre) se toman los primeros
+de cada tienda según sus porcentajes (250 con 90/10 → 225 Aurela y 25 Kenku;
+cupos por parte entera y resto mayor). Si una tienda no llega a su cupo, se
+completa con los siguientes más prioritarios de las otras tiendas («completar
+con Kenku»). Sin porcentajes, los N más prioritarios. Una cabecera dice «Tu
+lista del día: N · X Aurela · Y Kenku Peru».
+
+Es una vista compartida, no una reserva: otra asesora puede tomar el mismo lead.
+Se recalcula sola: lo gestionado sale de «Por llamar» y entra el siguiente; un
+lead nuevo más prioritario entra arriba. «Siguiente» y «Guardar y siguiente»
+eligen dentro de la lista. «En seguimiento», búsqueda y los demás filtros no se
+recortan. `save_lead_routing` guarda `dailyCapacity` con revisión y auditoría
+(ausente conserva la de antes); `lead_store_distribution` la devuelve como
+`capacity`. Instalación sin cambios de asignaciones, reservas ni leads.
+
 **La reserva por cita se suelta sola (08-11-2026, decisión del owner, opción c; 0322).**
 Con el reparto activo, la asesora que agenda «volver a llamar» se queda el lead
 (`appointment_owner` en `lead_routing_scope`) y las demás lo ven «Sin acceso».
