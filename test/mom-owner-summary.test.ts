@@ -164,7 +164,7 @@ describe("indicadores operativos del owner", () => {
       order("agency-open", { coverage: "agencia" }),
       order("lima-delivered", { coverage: "lima" }),
       order("lima-open", { coverage: "lima" }),
-      order("agency-paid", { coverage: "agencia", orderTotal: 100 }),
+      order("agency-paid", { coverage: "agencia", orderTotal: 100, paymentState: "pago_completo" }),
       order("agency-partial", { coverage: "agencia", orderTotal: 80 }),
     ];
     const summary = build({
@@ -251,7 +251,7 @@ describe("indicadores operativos del owner", () => {
   // —el denominador va por fecha de despacho— sino nunca.
   it("el pago cuenta aunque llegue después de la ventana del despacho", () => {
     const summary = build({
-      orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
+      orders: [order("agency", { coverage: "agencia", orderTotal: 100, paymentState: "pago_completo" })],
       shipments: [
         guide("guide", "agency", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
       ],
@@ -268,7 +268,7 @@ describe("indicadores operativos del owner", () => {
   // validado es dinero cobrado, con fecha legible o sin ella.
   it("un pago validado sin fecha sigue siendo dinero cobrado", () => {
     const summary = build({
-      orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
+      orders: [order("agency", { coverage: "agencia", orderTotal: 100, paymentState: "pago_completo" })],
       shipments: [
         guide("guide", "agency", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
       ],
@@ -283,7 +283,7 @@ describe("indicadores operativos del owner", () => {
   // entero.
   it("la cohorte sigue siendo la del despacho", () => {
     const summary = build({
-      orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
+      orders: [order("agency", { coverage: "agencia", orderTotal: 100, paymentState: "pago_completo" })],
       shipments: [
         guide("guide", "agency", {
           courier: "Shalom",
@@ -300,7 +300,7 @@ describe("indicadores operativos del owner", () => {
   // Y un pago que no llega al total sigue sin contar, venga cuando venga.
   it("un pago parcial no cuenta por mucho que sea antiguo", () => {
     const summary = build({
-      orders: [order("agency", { coverage: "agencia", orderTotal: 100 })],
+      orders: [order("agency", { coverage: "agencia", orderTotal: 100, paymentState: "adelanto_validado" })],
       shipments: [
         guide("guide", "agency", { courier: "Shalom", dispatchedAt: YESTERDAY, deliveryStatus: "en_ruta" }),
       ],
@@ -373,7 +373,7 @@ describe("cuándo se despachó una salida depende del courier", () => {
   it("«Pago completo de Agencia» ve las guías Shalom por su fecha de creación", () => {
     const summary = build({
       orders: [
-        order("pagado", { coverage: "agencia", orderTotal: 100 }),
+        order("pagado", { coverage: "agencia", orderTotal: 100, paymentState: "pago_completo" }),
         order("adelanto", { coverage: "agencia", orderTotal: 100 }),
       ],
       shipments: [

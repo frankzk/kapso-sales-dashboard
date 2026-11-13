@@ -36,7 +36,7 @@ const KPI_ROWS: Array<{ key: MomOwnerKpiKey; label: string; detail: string }> = 
   {
     key: "agency_full_payment",
     label: "Pago completo de Agencia",
-    detail: "Pedidos Shalom u Olva pagados por completo",
+    detail: "Pago completo según Estado de pago del Master. Históricos pagados por conciliar y ventas sin cobro exigible se revisan aparte.",
   },
 ];
 

@@ -1,4 +1,6 @@
 "use client";
+import { loadLeadStoreDistribution } from "@/lib/leads-read-client";
+import { pickDistributedLead, type LeadStoreDistribution } from "@/lib/lead-store-distribution";
 import { attributedProductHandle, productTextKey } from "@/lib/lead-products";
 import { LeadProductTabs } from "@/components/lead-product-tabs";
 
@@ -1536,6 +1538,7 @@ export function LeadsBoard({
   const nextLead = useNextLead({
     enabled: nextEnabled,
     queue: displayLeads,
+    scope,
     userId: currentUserId,
     drawerLeadId: selected?.id ?? null,
   });
@@ -1587,11 +1590,27 @@ export function LeadsBoard({
         setOpeningId((current) => (current === next.id ? null : current));
         return;
       }
-      jumpingToRef.current = null;
       // Si otra asesora lo tomó después de pintarse la lista, se salta al
       // siguiente libre de la misma lista (hasta 5 intentos), sin cerrar la
       // ficha ni mostrar el aviso de «X está atendiendo este lead».
-      let candidate: LeadRow | null = next;
+      let distribution: LeadStoreDistribution | null = null;
+      if (nextEnabled) {
+        try { distribution = await loadLeadStoreDistribution(scope); }
+        catch {
+          jumpingToRef.current = null;
+          setOpeningId(null);
+          setBanner("No se pudo comprobar tu distribución por tienda. Reintenta.");
+          return;
+        }
+        if (jumpingToRef.current !== next.id) return;
+      }
+      if (jumpingToRef.current !== next.id) return;
+      jumpingToRef.current = null;
+      const skipped = new Set<string>(leaving ? [leaving] : []);
+      const choose = () => distribution?.weights
+        ? pickDistributedLead(queue, { userId: currentUserId, skipped }, distribution)
+        : null;
+      let candidate: LeadRow | null = distribution?.weights ? choose() : next;
       let lastTaken: string | null = null;
       for (let attempt = 0; candidate && attempt < NEXT_LEAD_MAX_SKIPS; attempt++) {
         let taken = false;
@@ -1603,7 +1622,9 @@ export function LeadsBoard({
           },
         });
         if (opened || !taken) return;
-        candidate = leadAfter(queue, { openId: candidate.id, userId: currentUserId });
+        skipped.add(candidate.id);
+        if (distribution?.weights) candidate = choose();
+        else candidate = leadAfter(queue, { openId: candidate.id, userId: currentUserId });
       }
       setSelected(null);
       setBanner(
@@ -2077,6 +2098,7 @@ export function LeadsBoard({
           verdad". v2 entrega el tratamiento por Telegram, como trabajo normal,
           sin decir que hay una prueba (lib/coverage-push.ts). */}
 
+      {nextEnabled && nextLead.distribution?.weights && <p className="text-xs text-ink-600">Objetivo por tienda: {Object.entries(nextLead.distribution.weights).map(([id, weight]) => `${storeNameById.get(id) ?? "Tienda"} ${weight} %`).join(" · ")}. Citas primero; sujeto a disponibilidad.</p>}
       {nextEnabled && (
         <NextLeadCard
           state={nextLead}

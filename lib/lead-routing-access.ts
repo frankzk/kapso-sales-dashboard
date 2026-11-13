@@ -45,13 +45,13 @@ export async function getTeamLeadRouting(orgId: string): Promise<{ settings: Lea
   const admin = createAdminSupabase();
   const [{ data: settings, error }, { data: assignments, error: rowsError }] = await Promise.all([
     admin.from("lead_routing_settings").select("enabled,fresh_hours,revision").eq("org_id", orgId).maybeSingle(),
-    admin.from("lead_routing_assignments").select("user_id,blocks,backup,manual_take").eq("org_id", orgId),
+    admin.from("lead_routing_assignments").select("user_id,blocks,backup,manual_take,store_weights").eq("org_id", orgId),
   ]);
   if (error?.code === "42P01" || error?.code === "PGRST205") return { settings: EMPTY_LEAD_ROUTING, installed: false };
   if (error || rowsError) throw new Error("No se pudo cargar la configuración de Leads.");
   return { installed: true, settings: {
     enabled: settings?.enabled ?? false, freshHours: settings?.fresh_hours ?? 24, revision: settings?.revision ?? 0,
-    assignments: (assignments ?? []).map(a => ({ userId: a.user_id, blocks: a.blocks as LeadWorkBlock[], backup: a.backup, manualTake: a.manual_take ?? false })),
+    assignments: (assignments ?? []).map(a => ({ userId: a.user_id, blocks: a.blocks as LeadWorkBlock[], backup: a.backup, manualTake: a.manual_take ?? false, storeWeights: a.store_weights ?? null })),
   } };
 }
 

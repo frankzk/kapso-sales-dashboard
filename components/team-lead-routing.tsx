@@ -1,5 +1,7 @@
 "use client";
 
+import { LeadStoreMixEditor } from "@/components/lead-store-mix-editor";
+import { validStoreWeights } from "@/lib/lead-store-distribution";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { LEAD_WORK_BLOCKS, PRINCIPAL_BLOCKS, routingCoverage, routingLabel, type LeadBlockAssignment, type LeadRoutingSettings, type LeadWorkBlock } from "@/lib/lead-routing";
@@ -39,11 +41,12 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
   const [pending, start] = useTransition();
   const missing = routingCoverage(assignments, advisors, stores.map(s => s.id));
   const missingBlocks = new Set(missing.map(m => m.block)).size;
+  const invalidWeights = assignments.some(a => a.storeWeights != null && !validStoreWeights(a.storeWeights));
   const assignedCount = assignments.filter(a => a.blocks.length).length;
   const visible = advisors.filter(m => normalizeSearch(`${m.name} ${m.account}`).includes(normalizeSearch(search.trim())));
   const dirty = enabled !== initial.enabled || hours !== initial.freshHours || assignments.some(a => {
     const before = initial.assignments.find(row => row.userId === a.userId);
-    return !sameBlocks(a.blocks, before?.blocks ?? []) || a.backup !== (before?.backup ?? false) || !!a.manualTake !== !!before?.manualTake;
+    return !sameBlocks(a.blocks, before?.blocks ?? []) || a.backup !== (before?.backup ?? false) || !!a.manualTake !== !!before?.manualTake || JSON.stringify(a.storeWeights ?? null) !== JSON.stringify(before?.storeWeights ?? null);
   });
   const patch = (userId: string, change: Partial<LeadBlockAssignment>) => setAssignments(rows => rows.map(a => a.userId === userId ? { ...a, ...change } : a));
   const toggle = (userId: string, block: LeadWorkBlock) => {
@@ -84,16 +87,17 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
             </div>
           </details>
         </div>
+        <p className="border-b border-line bg-wash px-4 py-3 text-xs leading-relaxed text-ink-600">Por prioridad conserva el orden actual. Los porcentajes orientan el siguiente lead según los clientes gestionados hoy. Citas primero; si falta una tienda, continúa con otra disponible. Respeta los filtros, bloques y reservas.</p>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
           <div className="relative w-full sm:w-72"><IconSearch className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-ink-500" /><input type="search" aria-label="Buscar persona" placeholder="Buscar por nombre o cuenta" value={search} onChange={e => setSearch(e.target.value)} className={`${FIELD_BOX} h-9 w-full pl-9 pr-3`} /></div>
           <p className="text-xs text-ink-500"><span className="font-medium tabular-nums text-ink-900">{assignedCount}</span> de {advisors.length} personas con bloques asignados</p>
         </div>
         <div className="relative hidden max-h-[min(52vh,600px)] overflow-auto rounded-b-lg lg:block">
-          <table className="w-full min-w-[1152px] table-fixed text-[13px]">
-            <caption className="sr-only">Bloques de leads, respaldo y toma puntual por persona</caption>
-            <colgroup><col className="w-60" /><col className="w-[152px]" />{LEAD_WORK_BLOCKS.map(b => <col key={b.key} className="w-24" />)}<col className="w-[84px]" /><col className="w-[100px]" /></colgroup>
+          <table className="w-full min-w-[1360px] table-fixed text-[13px]">
+            <caption className="sr-only">Bloques de leads, respaldo, distribución por tienda y toma puntual por persona</caption>
+            <colgroup><col className="w-60" /><col className="w-[152px]" /><col className="w-[256px]" />{LEAD_WORK_BLOCKS.map(b => <col key={b.key} className="w-24" />)}<col className="w-[84px]" /><col className="w-[100px]" /></colgroup>
             <thead className="sticky top-0 z-10 bg-wash text-xs text-ink-600"><tr>
-              <th scope="col" className="sticky left-0 z-20 bg-wash px-4 py-3 text-left font-medium">Persona</th><th scope="col" className="px-3 py-3 text-left font-medium">Configuración</th>
+              <th scope="col" className="sticky left-0 z-20 bg-wash px-4 py-3 text-left font-medium">Persona</th><th scope="col" className="px-3 py-3 text-left font-medium">Bloques</th><th scope="col" className="px-3 py-3 text-left font-medium">Distribución por tienda</th>
               {LEAD_WORK_BLOCKS.map((b, i) => <th scope="col" key={b.key} title={b.label} className="px-2 py-3 text-center font-medium"><span className="block text-ink-900">{COLUMN_LABELS[i]![0]}</span><span className="block font-normal">{COLUMN_LABELS[i]![1]}</span></th>)}
               <th scope="col" className="border-l border-line px-2 py-3 text-center font-medium">Respaldo</th><th scope="col" title="Puede tomar leads fuera de sus bloques desde búsqueda o venta por teléfono. Respeta reservas y citas." className="px-2 py-3 text-center font-medium">Toma puntual</th>
             </tr></thead>
@@ -102,6 +106,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
               return <tr key={member.userId} className="group hover:bg-wash">
                 <th scope="row" className="sticky left-0 bg-white px-4 py-3 text-left font-normal group-hover:bg-wash"><span title={member.name} className="block truncate font-medium text-ink-900">{member.name}</span><span title={`${member.account} · ${storeNames(member)}`} className="mt-0.5 block truncate text-xs text-ink-500">{member.account} · {member.stores.length ? `${member.stores.length} ${member.stores.length === 1 ? "tienda" : "tiendas"}` : "Sin tiendas"}</span></th>
                 <td className="px-3 py-2"><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /></td>
+                <td className="px-3 py-3"><LeadStoreMixEditor name={member.name} stores={stores.filter(s => member.stores.includes(s.id))} value={a.storeWeights} onChange={storeWeights => patch(member.userId, { storeWeights })} /></td>
                 {LEAD_WORK_BLOCKS.map(block => <td key={block.key} className="p-0 text-center"><label className="relative flex min-h-14 cursor-pointer items-center justify-center"><input className={CHECKBOX} type="checkbox" checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span className="sr-only">{block.label} para {member.name}</span></label></td>)}
                 <td className="border-l border-line p-0 text-center"><label className="relative flex min-h-14 cursor-pointer items-center justify-center"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span className="sr-only">Respaldo para {member.name}</span></label></td>
                 <td className="p-0 text-center"><label className="flex min-h-14 cursor-pointer items-center justify-center"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span className="sr-only">Puede tomar leads fuera de sus bloques para {member.name}</span></label></td>
@@ -113,7 +118,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
           const a = assignments.find(row => row.userId === member.userId)!;
           return <details key={member.userId} className="group">
             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3"><span className="min-w-0"><span className="block truncate text-sm font-medium text-ink-900">{member.name}</span><span className="mt-0.5 block text-xs text-ink-500">{routingLabel(a.blocks)}</span></span><IconChevronDown className="size-4 shrink-0 text-ink-500 group-open:rotate-180" /></summary>
-            <div className="space-y-3 px-4 pb-4"><p className="break-words text-xs text-ink-500">{member.account} · {storeNames(member)}</p><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /><div>{LEAD_WORK_BLOCKS.map(block => <label key={block.key} className="relative flex min-h-11 cursor-pointer items-center gap-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span>{block.label}<span className="sr-only"> para {member.name}</span></span></label>)}</div><label className="relative flex min-h-11 cursor-pointer items-center gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span>Respaldo<span className="sr-only"> para {member.name}</span></span></label><label className="relative flex min-h-11 cursor-pointer items-start gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span>Puede tomar leads fuera de sus bloques<span className="sr-only"> para {member.name}</span><span className="mt-1 block text-xs text-ink-500">Solo desde búsqueda o venta por teléfono. Respeta reservas y citas.</span></span></label></div>
+            <div className="space-y-3 px-4 pb-4"><p className="break-words text-xs text-ink-500">{member.account} · {storeNames(member)}</p><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /><div className="border-y border-line py-3"><p className="mb-2 text-xs font-medium text-ink-900">Distribución por tienda</p><LeadStoreMixEditor name={member.name} stores={stores.filter(s => member.stores.includes(s.id))} value={a.storeWeights} onChange={storeWeights => patch(member.userId, { storeWeights })} /></div><div>{LEAD_WORK_BLOCKS.map(block => <label key={block.key} className="relative flex min-h-11 cursor-pointer items-center gap-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span>{block.label}<span className="sr-only"> para {member.name}</span></span></label>)}</div><label className="relative flex min-h-11 cursor-pointer items-center gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span>Respaldo<span className="sr-only"> para {member.name}</span></span></label><label className="relative flex min-h-11 cursor-pointer items-start gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span>Puede tomar leads fuera de sus bloques<span className="sr-only"> para {member.name}</span><span className="mt-1 block text-xs text-ink-500">Solo desde búsqueda o venta por teléfono. Respeta reservas y citas.</span></span></label></div>
           </details>;
         })}</div>
         {!visible.length && <div className="px-4 py-10 text-center"><p className="text-sm text-ink-600">No se encontraron personas.</p><OpsButton className="mt-3" size="sm" onClick={() => setSearch("")}>Mostrar equipo</OpsButton></div>}
@@ -124,7 +129,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
           <p className="mt-1">{enabled && missing.length ? "Completa la cobertura antes de activar." : "Se aplica al guardar. Conserva reservas y citas vigentes."}</p>
           {message.error && <p role="alert" className="mt-2 text-crit-fg">{message.error}</p>}{message.notice && <p role="status" className="mt-2 text-ok-fg">{message.notice}</p>}
         </div>
-        <OpsButton variant="primary" className="w-full sm:w-auto" disabled={!dirty || pending || !installed || (enabled && missing.length > 0) || !Number.isInteger(hours) || hours < 1 || hours > 168} onClick={save}>{pending ? "Guardando…" : "Guardar cambios"}</OpsButton>
+        <OpsButton variant="primary" className="w-full sm:w-auto" disabled={!dirty || pending || !installed || invalidWeights || (enabled && missing.length > 0) || !Number.isInteger(hours) || hours < 1 || hours > 168} onClick={save}>{pending ? "Guardando…" : "Guardar cambios"}</OpsButton>
       </div>
     </div>
     {!enabled && <p className="text-xs text-ink-500">El reparto está desactivado. Puedes preparar los bloques; la cola conserva el acceso actual hasta que lo actives y guardes.</p>}

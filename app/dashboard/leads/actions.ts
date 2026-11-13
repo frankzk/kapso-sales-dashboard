@@ -1,4 +1,8 @@
 "use server";
+import { getLeadStoreDistribution } from "@/lib/lead-store-distribution-access";
+export async function loadLeadStoreDistribution(scope: string[]) {
+  return getLeadStoreDistribution(scope);
+}
 import { withProductOpeners } from "@/lib/lead-products-server";
 
 import { measureLeadRead, type LeadReadTiming } from "@/lib/leads-read-timing";

@@ -25,7 +25,7 @@ describe("«Cierre y entregas»: Otro mes… (02-11-2026)", () => {
     const html = renderToStaticMarkup(createElement(MomIndicators, { periods: summary.periods, rows: ROWS, otherMonths: MONTHS }));
     expect(html).toContain('<option value="2026-09" selected="">Septiembre 2026</option>');
     expect(html).toContain("Enero 2025");
-    expect(html).toContain("Ver pedidos de Agencia sin pago completo: Septiembre 2026");
+    expect(html).toContain("Ver Pago completo de Agencia: Septiembre 2026");
     expect(html).toContain("apf=2026-09-01&amp;apt=2026-10-01");
   });
 
@@ -34,6 +34,6 @@ describe("«Cierre y entregas»: Otro mes… (02-11-2026)", () => {
     const html = renderToStaticMarkup(createElement(MomIndicators, { periods: summary.periods, rows: ROWS, otherMonths: MONTHS }));
     expect(html).toContain("Otro mes…");
     expect(html).not.toContain("selected=\"\">Septiembre");
-    expect(html).toContain("Ver pedidos de Agencia sin pago completo: Últimos 7 días");
+    expect(html).toContain("Ver Pago completo de Agencia: Últimos 7 días");
   });
 });

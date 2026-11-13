@@ -669,4 +669,8 @@
 \ir migrations/0333_operations_productivity.sql
 \echo 'Applying 0334_lista_negra_rechazo.sql'
 \ir migrations/0334_lista_negra_rechazo.sql
+\echo 'Applying 0335_lead_store_distribution.sql'
+\ir migrations/0335_lead_store_distribution.sql
+\echo 'Applying 0336_agency_payment_reconciliation.sql'
+\ir migrations/0336_agency_payment_reconciliation.sql
 \echo 'Done.'
