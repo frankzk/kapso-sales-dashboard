@@ -220,3 +220,20 @@ export function orderPaymentPanelFor(source: OrderPaymentPanelSource): OrderPaym
   });
   return { presentation, gatewayNote, shalomDestination };
 }
+
+/**
+ * La tarjeta de Cobro en un pedido contra entrega abierto (Lima o Provincia
+ * COD), opcional, aunque nada la exija (13-11-2026): para subir la constancia
+ * de un cliente que pagó por adelantado. Con lo validado cubriendo el total,
+ * el rótulo dice «PAGADO - NO COBRAR» (`orderFullyPaid`) y la ruta del
+ * motorizado «Pagado». Lo que ya se dibujaba, se dibuja igual.
+ */
+export function codPaymentPanel(
+  presentation: OrderPaymentPanelPresentation,
+  row: { macro_operation?: string | null; general_status?: string | null } | null,
+): OrderPaymentPanelPresentation {
+  if (presentation.show || !row) return presentation;
+  const cod = row.macro_operation === "lima" || row.macro_operation === "provincia_cod";
+  const open = !["entregado", "anulado", "devuelto"].includes((row.general_status ?? "").trim());
+  return cod && open ? { show: true, mode: "optional" } : presentation;
+}
