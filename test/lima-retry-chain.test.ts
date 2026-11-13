@@ -135,7 +135,7 @@ describe("limaRetryChain", () => {
 
 describe("la fila de Repro Lima", () => {
   const chain = limaRetryChain([a("alexis", "otro", "2026-11-02T17:00:00Z")], NOW);
-  const base = { retryChain: chain, cancelled: false, inStage: true, box: { kind: "en_oficina" as const, since: "2026-11-02T22:00:00Z" } };
+  const base = { retryChain: chain, cancelled: false, inStage: true, otherLiveCourier: null, box: { kind: "en_oficina" as const, since: "2026-11-02T22:00:00Z" } };
 
   it("propone el reintento y se aprueba desde el día siguiente, sin esperar la devolución", () => {
     expect(retryChainOf(base, null, "2026-11-03")).toEqual({ attempt: 2, of: 3, next: "autoecom", failedText: "Falló con Alexis (Grupo GF) el 02/11: otro motivo", inOffice: true, ready: true });
@@ -157,6 +157,13 @@ describe("la fila de Repro Lima", () => {
     expect(retryChainOf({ ...base, cancelled: true }, null, "2026-11-03")).toBeNull();
     expect(retryChainOf({ ...base, inStage: false }, null, "2026-11-03")).toBeNull();
     expect(retryChainOf(base, { agreed_on: "2026-11-04" }, "2026-11-03")).toBeNull();
+  });
+
+  it("con la guía del reintento ya creada, sale de la bandeja (#KP203491, 11-11-2026)", () => {
+    // Kiara creó la guía de AUTOECOM desde la ficha: el reintento está en
+    // marcha y «Aprobar» pediría una segunda guía para el mismo paquete.
+    expect(retryChainOf({ ...base, otherLiveCourier: "aliclik" }, null, "2026-11-03")).toBeNull();
+    expect(retryChainOf({ ...base, otherLiveCourier: null }, null, "2026-11-03")).not.toBeNull();
   });
 
   it("la tarjeta «Reintentos Aliclik» va primera y cuenta solo esos", () => {

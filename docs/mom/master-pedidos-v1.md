@@ -5464,6 +5464,15 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
   - **Lo que ya estaba así** (#KP203491 y los demás) lo arregla el barrido de la
     0337 al aplicarla, con la misma función y la guía más antigua primero; el
     Master de esos pedidos lo recalcula `master-reconcile`.
+- **Y la bandeja no ofrece «Aprobar» con el reintento ya en marcha
+  (13-11-2026).** Con una salida viva de otro courier (`otherLiveCourier`: la
+  guía de Aliclik sin entregar ni volver), `retryChainOf`
+  (`lib/repro-lima-access.ts`) corta la cadena aunque el pedido siga en «Por
+  reprogramar Lima»: es la segunda red para los casos que la devolución de
+  arriba no toca (caja ya recibida, en una caja que no es la de su parada,
+  revisión a mano). «Aprobar» ahí pediría una segunda guía para el mismo
+  paquete. Vale igual para la bandeja, «Aprobar», «Aprobar todos los listos» y
+  el automático; si esa guía falla, el fallo nuevo vuelve a abrir la cadena.
 - **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
   con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
   el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los

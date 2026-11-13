@@ -136,8 +136,8 @@ describe("#KP203491: la guía de Aliclik saca el pedido de «Por reprogramar Lim
     const box = { kind: "con_motorizado" as const, riderName: "Alexis", since: "2026-11-07" };
     const before = lima([s01(), s02()], [failed, guideRegistered]);
     const after = lima([s01({ custody_state: "retorno" }), s02()], [failed, guideRegistered, replacedByAliclik]);
-    expect(retryChainOf({ retryChain: chain, cancelled: false, inStage: isReproLima(before), box }, null, "2026-11-11")).not.toBeNull();
-    expect(retryChainOf({ retryChain: chain, cancelled: false, inStage: isReproLima(after), box }, null, "2026-11-11")).toBeNull();
+    expect(retryChainOf({ retryChain: chain, cancelled: false, inStage: isReproLima(before), box, otherLiveCourier: null }, null, "2026-11-11")).not.toBeNull();
+    expect(retryChainOf({ retryChain: chain, cancelled: false, inStage: isReproLima(after), box, otherLiveCourier: null }, null, "2026-11-11")).toBeNull();
   });
 
   it("la parada fallida de Alexis sigue contando: si AUTOECOM también falla, toca ALIDRIVER (3 de 3)", () => {
