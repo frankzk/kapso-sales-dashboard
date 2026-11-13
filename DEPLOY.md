@@ -1,3 +1,9 @@
+### 13-11-2026 · Armar manda a Devoluciones la caja del motorizado de Grupo GF
+
+Sin migración. Escanear en Armar una caja de Grupo GF que sigue con el
+motorizado ya no dice «no figura en custodia»: dice que se reciba en
+Devoluciones (con su reporte «No entregado»). Verificar con #KP201841 en Armar.
+
 ### 13-11-2026 · Leads: «Leads por día» (la lista del día)
 
 Migración 0338_lead_daily_list (ya aplicada en producción). En Equipo → Leads,

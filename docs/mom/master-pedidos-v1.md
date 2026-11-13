@@ -5212,6 +5212,12 @@ GF (276 de Alexis), y 346 eran de pedidos anulados en la tienda.
   (`gfReturnDecision`, extendida en `classifyManifestScan`). **Nunca por número
   de pedido si el pedido tiene dos salidas:** pide el QR (§29.13). Un escaneo
   repetido actualiza su línea; no agrega otra.
+- **Escaneada en «Armar» por error (13-11-2026, #KP201841).** Una caja de
+  Grupo GF que sigue con el motorizado (custodia `courier`) no se arma: Armar
+  responde «{salida} está con el motorizado de Grupo GF. Si volvió, recíbelo en
+  Devoluciones (necesita su reporte «No entregado»)» (`gfReadyScanHint`), en vez
+  de «Ese paquete ya no figura en custodia de la empresa». Si la caja tiene una
+  salida hermana, sigue mandando el aviso del rótulo viejo.
 
   | La caja escaneada | Qué hace | Línea |
   | --- | --- | --- |
