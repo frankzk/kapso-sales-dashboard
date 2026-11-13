@@ -1,3 +1,13 @@
+### 13-11-2026 · Venta anulada con la caja afuera: «Devolución física pendiente» · sonido al escanear
+
+Sin migración y sin subir la versión del Master: los pedidos ya guardados
+cambian cuando se vuelven a recalcular (al tocarse su salida). Un pedido con la
+venta anulada en Kapta y la caja todavía con el courier o el motorizado pasa de
+«Salida adicional activa» a «Devolución física pendiente»; con la caja en la
+empresa sigue igual. Las cámaras de escaneo pitan al leer y, en Devoluciones,
+suenan distinto según el resultado. Verificar #KP141229 tras su próximo
+recálculo y escanear una caja en Devoluciones con el volumen multimedia arriba.
+
 ### 13-11-2026 · Armar manda a Devoluciones la caja del motorizado de Grupo GF
 
 Sin migración. Escanear en Armar una caja de Grupo GF que sigue con el

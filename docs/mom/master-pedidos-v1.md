@@ -2064,6 +2064,8 @@ Ejemplos:
 | Entregado (no Agencia) sin ninguna salida ni motorizado, pagado completo a la tienda (v1.25, §6.5) | Finalizado | Entregado y cerrado |
 | Entregado (no Agencia) sin ninguna salida, sin pago completo validado | Por cerrar | Pendiente de liquidación |
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
+| Venta anulada en Kapta (`legacy_shopify_sale_cancelled`) con su caja todavía afuera, con el courier o el motorizado (13-11-2026, owner, #KP141229) | Por cerrar | Devolución física pendiente |
+| Venta anulada en Kapta con una caja preparada que sigue en la empresa | Por cerrar | Salida adicional activa |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
 | Pedido acompañante con la caja del principal aún en la empresa (§32) | Preparación | Viaja en la caja de otro pedido |
 | Pedido acompañante con la caja del principal entregada, sin liquidar (§32) | Por cerrar | Pendiente de liquidación |
@@ -4960,6 +4962,11 @@ sin tope de antigüedad. Reglas:
           rojo no recibió nada y cuenta como error. En el teléfono, la repetida
           vibra con dos pulsos y el error con dos largos (mejor esfuerzo, una
           vez por resultado: reabrir la cámara no vuelve a vibrar).
+        - **Sonido (13-11-2026, owner).** Toda cámara de escaneo da un pitido
+          corto al leer un QR. En Devoluciones, además, un tono por resultado:
+          nueva, dos notas que suben; repetida, dos pitidos medios; error, un
+          zumbido grave; la informativa no suena (`lib/scan-sound.ts`, Web
+          Audio, volumen multimedia; mejor esfuerzo, como la vibración).
         - **«Esta tanda»** cuenta lo escaneado desde que se abrió la pantalla,
           cada lectura una vez: «Esta tanda: N recibidas · M repetidas · K con
           error · J sin devolución» (lo que es 0 no se dice, salvo las
