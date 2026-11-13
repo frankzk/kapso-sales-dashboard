@@ -26464,6 +26464,19 @@ abre por defecto** (owner, 10-11-2026); cada fila dice de qué grupo es. Los
 grupos van en control segmentado, bajo las vistas de la página: «Bandeja»,
 «Cotejar Olva» y «Correos de Olva» (§12, «Dónde está»).
 
+**«Retornando» (13-11-2026).** El owner: «¿cómo saber cuáles están retornando
+de la provincia a Lima porque el cliente nunca pagó la diferencia?». Una quinta
+pestaña, **fuera de «Todos»** y del número de «Bandeja» (ya no se cobra, se
+recibe): Shalom u Olva en `devolucion_fisica_pendiente` (Por cerrar). Son los
+que la agencia sacó sin recojo ni pago —el «entregado» que es el retorno de
+Shalom (§12), con la guía `retorno_iniciado` y custodia `retorno`— y vienen de
+vuelta; se reciben en Almacén → Devoluciones (§9.4). Cada fila dice «en retorno
+hace N días» desde que salió de la agencia (`macro_since`): ámbar desde 7 y,
+desde **15** (`RETORNO_OVERDUE_DAYS`), rojo con «Ya debería estar en Lima»:
+buscarlo en el almacén o reclamarlo al courier. Abre con el filtro «Todos».
+Medido el 13-11-2026: 126 pedidos (123 Shalom y 3 Olva); 64 llevaban 15 días o
+más.
+
 Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
 Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en
 una sucursal. Un pedido de Agencia que salió por Fenix desde Repro Provincia

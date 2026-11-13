@@ -7,7 +7,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { getAccessibleStores } from "@/lib/access";
 import { loadPagoDiferencia } from "@/lib/pago-diferencia-access";
 import { countOlvaCotejoPending } from "@/lib/olva/cotejo-pending";
-import type { PagoDiferenciaRow } from "@/lib/pago-diferencia";
+import { isPagoDiferenciaCobro, type PagoDiferenciaRow } from "@/lib/pago-diferencia";
 import Loading from "./loading";
 
 // «Pago de diferencia» (MOM §44): los pedidos de Agencia a los que les falta
@@ -66,7 +66,8 @@ async function PagoDiferenciaContent({ searchParams }: { searchParams: Promise<{
     );
   }
   const storeNames = Object.fromEntries(stores.map((s) => [s.id, s.name]));
-  const counts: Partial<Record<PagoDiferenciaView, number>> = { bandeja: rows.length, olva: olvaPending };
+  // La bandeja cuenta lo que se cobra; «Retornando» tiene su pestaña aparte.
+  const counts: Partial<Record<PagoDiferenciaView, number>> = { bandeja: rows.filter((r) => isPagoDiferenciaCobro(r.group)).length, olva: olvaPending };
   return (
     <PagoDiferenciaPage active={view} description={BANDEJA_DESCRIPTION} counts={counts}>
       <PagoDiferenciaTray rows={rows} storeNames={storeNames} />
