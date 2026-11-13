@@ -9,6 +9,8 @@ import { readAllPages } from "@/lib/postgrest-pages";
 import { resolveAgentNames } from "@/lib/agent-names";
 import {
   PAGO_DIFERENCIA_GESTION_KINDS,
+  PAGO_DIFERENCIA_OLVA_WARN_DAYS,
+  PAGO_DIFERENCIA_RETURN_WARN_DAYS,
   buildPagoDiferenciaRows,
   pagoDiferenciaGroup,
   type PagoDiferenciaEventInput,
@@ -29,7 +31,7 @@ export async function loadPagoDiferencia(
     admin
       .from("order_master")
       .select(
-        "order_id,macro_substage,macro_operation,payment_state,store_id,order_name,customer_name,customer_phone,order_total,current_courier,guide_code,agency_branch,agency_arrived_at,agency_expires_at,macro_since,province,district",
+        "order_id,macro_substage,macro_operation,payment_state,store_id,order_name,customer_name,customer_phone,order_total,current_courier,guide_code,agency_branch,agency_arrived_at,agency_expires_at,macro_since,province,district,product_titles",
       )
       .in("store_id", [...storeIds])
       // Los grupos (lib/pago-diferencia.ts, `pagoDiferenciaGroup`, que
@@ -46,8 +48,10 @@ export async function loadPagoDiferencia(
 
   const payments: PagoDiferenciaPaymentInput[] = [];
   const events: PagoDiferenciaEventInput[] = [];
+  // El código de la guía Shalom, para el mensaje «YA LLEGÓ» (13-11-2026).
+  const codigos = new Map<string, string>();
   for (const ids of chunk(orders.map((o) => o.order_id), ID_BATCH)) {
-    const [pay, ev] = await Promise.all([
+    const [pay, ev, ship] = await Promise.all([
       readAllPages<PagoDiferenciaPaymentInput>((from, to) =>
         admin.from("order_payments").select("order_id,kind,amount,validation_status").in("order_id", ids).order("id").range(from, to),
       ),
@@ -61,7 +65,19 @@ export async function loadPagoDiferencia(
           .order("id")
           .range(from, to),
       ),
+      readAllPages<{ order_id: string; guide_code: string | null; shalom_codigo: string | null }>((from, to) =>
+        admin
+          .from("shipments")
+          .select("order_id,guide_code,shalom_codigo")
+          .in("order_id", ids)
+          .eq("courier", "shalom")
+          .not("shalom_codigo", "is", null)
+          .order("id")
+          .range(from, to),
+      ),
     ]);
+    // Sin el código, el mensaje sale igual con ese renglón vacío.
+    if (!ship.error) for (const s of ship.rows) if (s.shalom_codigo && s.guide_code) codigos.set(`${s.order_id}|${s.guide_code}`, s.shalom_codigo);
     if (pay.error) throw new Error(`No se pudieron leer los pagos: ${pay.error.message}`);
     if (ev.error) throw new Error(`No se pudo leer la gestión: ${ev.error.message}`);
     payments.push(...pay.rows);
@@ -72,5 +88,29 @@ export async function loadPagoDiferencia(
   // El nombre corto de siempre (la parte local del correo: «gero»), como Leads
   // y Envíos (lib/agent-names.ts).
   const names = new Map(Object.entries(actorIds.length ? await resolveAgentNames(actorIds, admin) : {}));
-  return buildPagoDiferenciaRows({ orders, payments, events, names, now });
+  const withCodigo = orders.map((o) => ({ ...o, shalom_codigo: o.guide_code ? (codigos.get(`${o.order_id}|${o.guide_code}`) ?? null) : null }));
+  return buildPagoDiferenciaRows({ orders: withCodigo, payments, events, names, now });
+}
+
+/**
+ * Cuántos están «por retornar» (lib/pago-diferencia.ts, `porRetornar`): en
+ * agencia con Shalom hace `PAGO_DIFERENCIA_RETURN_WARN_DAYS` días o más, u Olva
+ * vencida o por vencer. Es el número del menú (owner, 13-11-2026: «que te
+ * lance los urgentes por llamar»). Dos conteos sin filas; un fallo da 0.
+ */
+export async function countPorRetornar(admin: SupabaseClient, storeIds: readonly string[], now: Date = new Date()): Promise<number> {
+  if (!storeIds.length) return 0;
+  const cutoff = new Date(now.getTime() - PAGO_DIFERENCIA_RETURN_WARN_DAYS * 86_400_000).toISOString();
+  const olvaLimit = new Date(now.getTime() + PAGO_DIFERENCIA_OLVA_WARN_DAYS * 86_400_000).toISOString();
+  const base = () =>
+    admin
+      .from("order_master")
+      .select("order_id", { count: "exact", head: true })
+      .in("store_id", [...storeIds])
+      .eq("macro_substage", "pendiente_pago_diferencia");
+  const [shalom, olva] = await Promise.all([
+    base().eq("current_courier", "shalom").or(`agency_arrived_at.lte.${cutoff},and(agency_arrived_at.is.null,macro_since.lte.${cutoff})`),
+    base().eq("current_courier", "olva").or(`agency_expires_at.lte.${olvaLimit},and(agency_expires_at.is.null,agency_arrived_at.lte.${cutoff}),and(agency_expires_at.is.null,agency_arrived_at.is.null,macro_since.lte.${cutoff})`),
+  ]);
+  return (shalom.error ? 0 : shalom.count ?? 0) + (olva.error ? 0 : olva.count ?? 0);
 }

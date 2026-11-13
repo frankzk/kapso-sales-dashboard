@@ -12,7 +12,11 @@ import {
   PAGO_DIFERENCIA_FILTER_LABEL,
   PAGO_DIFERENCIA_GROUPS,
   PAGO_DIFERENCIA_GROUP_LABEL,
+  PAGO_DIFERENCIA_OLVA_WARN_DAYS,
+  PAGO_DIFERENCIA_RETURN_CRIT_DAYS,
+  PAGO_DIFERENCIA_RETURN_WARN_DAYS,
   RETORNO_OVERDUE_DAYS,
+  agencyArrivalMessage,
   filterPagoDiferencia,
   isPagoDiferenciaCobro,
   type PagoDiferenciaFilter,
@@ -20,23 +24,34 @@ import {
   type PagoDiferenciaRow,
 } from "@/lib/pago-diferencia";
 import { cn } from "@/components/ui";
+import { useCopyToClipboard } from "@/components/copy-button";
 
 const PAGE = 50;
 const FILTERS: PagoDiferenciaFilter[] = ["por_gestionar", "gestionados_hoy", "sin_gestion", "todos"];
 
 /**
  * Las pestañas: los tres grupos por cobrar, «Todos», que los suma (owner,
- * 10-11-2026), y aparte «Retornando» (13-11-2026): ya no se cobra, se recibe.
+ * 10-11-2026), y aparte (13-11-2026) «Por retornar» —los de En agencia que la
+ * agencia está por devolver: los urgentes por llamar— y «Retornados» —ya los
+ * devolvió: no se cobran, se reciben—.
  */
-type GroupTab = PagoDiferenciaGroup | "todos";
-const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos", "retornando"];
-const TAB_LABEL: Record<GroupTab, string> = { ...PAGO_DIFERENCIA_GROUP_LABEL, todos: "Todos" };
+type GroupTab = PagoDiferenciaGroup | "todos" | "por_retornar";
+const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos", "por_retornar", "retornando"];
+const TAB_LABEL: Record<GroupTab, string> = { ...PAGO_DIFERENCIA_GROUP_LABEL, todos: "Todos", por_retornar: "Por retornar" };
+
+/** ¿La fila va en esa pestaña? */
+function inTab(r: PagoDiferenciaRow, tab: GroupTab): boolean {
+  if (tab === "todos") return isPagoDiferenciaCobro(r.group);
+  if (tab === "por_retornar") return r.porRetornar;
+  return r.group === tab;
+}
 
 const GROUP_HINT: Record<GroupTab, string> = {
   todos: "Los tres grupos juntos: en agencia, en camino y recogidos sin pago.",
   en_agencia: "El paquete ya está en la sucursal: la clave de recojo no se libera hasta validar el pago.",
   en_camino: "Todavía viaja o recién llegó a la agencia: se puede pedir la diferencia antes de que esté disponible.",
   recogido_sin_pago: "La clienta ya lo recogió y falta parte del pago: queda por cobrar.",
+  por_retornar: `Urgentes por llamar: en la agencia hace ${PAGO_DIFERENCIA_RETURN_WARN_DAYS} días o más (Shalom los devuelve a los ~38 días; algunos antes de los 20) u Olva vence en ${PAGO_DIFERENCIA_OLVA_WARN_DAYS} días o menos. Copia el mensaje, mándalo y llama hoy.`,
   retornando: `Nadie lo recogió ni pagó la diferencia y la agencia lo devolvió: viene de vuelta a Lima. Se recibe en Almacén → Devoluciones; con ${RETORNO_OVERDUE_DAYS} días o más ya debería haber llegado: búscalo o reclámalo al courier.`,
 };
 
@@ -109,14 +124,11 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
   const groupCounts = useMemo(
     () =>
       Object.fromEntries(
-        TABS.map((g) => [g, rows.filter((r) => (g === "todos" ? isPagoDiferenciaCobro(r.group) : r.group === g)).length]),
+        TABS.map((g) => [g, rows.filter((r) => inTab(r, g)).length]),
       ) as Record<GroupTab, number>,
     [rows],
   );
-  const inGroup = useMemo(
-    () => rows.filter((r) => (group === "todos" ? isPagoDiferenciaCobro(r.group) : r.group === group)),
-    [rows, group],
-  );
+  const inGroup = useMemo(() => rows.filter((r) => inTab(r, group)), [rows, group]);
   const counts = useMemo(
     () => Object.fromEntries(FILTERS.map((f) => [f, filterPagoDiferencia(inGroup, f).length])) as Record<PagoDiferenciaFilter, number>,
     [inGroup],
@@ -174,7 +186,12 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
               )}
             >
               {TAB_LABEL[g]}
-              <span className={cn("tabular-nums", on ? "text-brand-700" : "text-ink-500")}>
+              <span
+                className={cn(
+                  "tabular-nums",
+                  on ? "text-brand-700" : g === "por_retornar" && groupCounts[g] > 0 ? "font-bold text-crit-fg" : "text-ink-500",
+                )}
+              >
                 {groupCounts[g].toLocaleString("es-PE")}
               </span>
             </button>
@@ -246,7 +263,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
                     <th className="px-4 py-2.5">Pedido</th>
                     <th className="px-3 py-2.5">Cliente</th>
                     <th className="px-3 py-2.5 text-right">Falta pagar</th>
-                    <th className="px-3 py-2.5">{group === "en_agencia" ? "En agencia" : group === "en_camino" ? "Envío" : group === "recogido_sin_pago" ? "Recogido" : group === "retornando" ? "Retorno" : "Dónde está"}</th>
+                    <th className="px-3 py-2.5">{group === "en_agencia" || group === "por_retornar" ? "En agencia" : group === "en_camino" ? "Envío" : group === "recogido_sin_pago" ? "Recogido" : group === "retornando" ? "Retorno" : "Dónde está"}</th>
                     <th className="px-4 py-2.5">Última gestión</th>
                   </tr>
                 </thead>
@@ -361,13 +378,34 @@ function Agency({ row, showGroup = false }: { row: PagoDiferenciaRow; showGroup?
         {row.group === "retornando" && (row.waitingDays ?? 0) >= RETORNO_OVERDUE_DAYS && (
           <Badge tone="crit">Ya debería estar en Lima</Badge>
         )}
+        {row.porRetornar && (
+          <Badge tone="crit">{(row.waitingDays ?? 0) >= PAGO_DIFERENCIA_RETURN_CRIT_DAYS ? "Se devuelve pronto" : "Por retornar"}</Badge>
+        )}
       </div>
       <p className="truncate text-xs text-ink-500" title={row.destination ?? undefined}>
         {courierName(row.courier)}
         {row.destination ? ` · ${row.destination}` : ""}
       </p>
       {row.guideCode && <p className="truncate font-mono text-xs text-ink-500">{row.guideCode}</p>}
+      {row.group === "en_agencia" && <CopyMessageButton row={row} />}
     </div>
+  );
+}
+
+/**
+ * «Copiar mensaje» (owner, 13-11-2026): el aviso «YA LLEGÓ a la agencia» con
+ * la guía, el código, el producto y lo que falta, listo para pegar en WhatsApp.
+ */
+function CopyMessageButton({ row }: { row: PagoDiferenciaRow }) {
+  const { state, copy } = useCopyToClipboard(2000);
+  return (
+    <button
+      type="button"
+      onClick={() => copy(agencyArrivalMessage(row))}
+      className="inline-flex h-8 items-center rounded-md bg-white px-2.5 text-[13px] font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:h-11"
+    >
+      <span aria-live="polite">{state === "ok" ? "Copiado ✓" : state === "fail" ? "No se pudo copiar" : "Copiar mensaje"}</span>
+    </button>
   );
 }
 
