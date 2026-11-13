@@ -12062,6 +12062,21 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
      listado la comprobó), como cualquier guía de Cotejar Shalom: si la muerta
      era una salida rellenada, la nueva se escribe encima de esa misma salida.
      El rastreo la pregunta en su pasada siguiente.
+     **Sin la clave de la nueva, la de la muerta se quita (13-11-2026).**
+     Cada guía de Shalom tiene su clave de recojo: la guardada era la de la
+     guía muerta y ya no sirve. #KP201792: Cotejar le vinculó la guía
+     102373533 el 10-11 sin clave, quedó la de la muerta (2912), se le dio a la
+     clienta y en la agencia le dijeron «no es la clave»; como ya había pagado
+     todo, el aviso de llegada no salió y tampoco supo la guía nueva. Medido el
+     13-11: de 39 reemplazos, ninguno trajo la clave nueva y 21 conservaban la
+     de la muerta (5 en agencia esperando la diferencia). Ahora el reemplazo
+     **borra la fila de `shalom_pickup_keys`** —nadie la muestra ni se manda
+     sola al validar— y la nota del `guide_created` lo dice; si la clienta ya
+     la tenía (`key_view`, `key_shared` o `pickup_key_shares`), agrega «La
+     clienta ya la tenía: avísale la guía y la clave nuevas.». Cotejar Shalom
+     pone la del listado en su pasada siguiente si la comprobó, o una persona
+     la registra desde Shalom Pro (`payload.clave_vieja_quitada`). Vale igual
+     para «Ya la creé en Shalom Pro» sin clave.
   4. En la línea de tiempo, un `guide_cancelled` («Guía anulada», fuente
      `shalom`) con la nota «Guía Shalom 102321353 (código HWND) no existe en
      Shalom (no encontrada en el rastreo); reemplazada por la guía 102371814

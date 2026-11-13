@@ -1,3 +1,10 @@
+### 13-11-2026 · Shalom: el reemplazo de una guía muerta quita la clave vieja
+
+Sin migración. Al vincular la guía que reemplaza a una muerta sin su clave, se
+borra la clave guardada (era de la muerta) y la nota pide registrar la nueva y,
+si la clienta ya la tenía, avisarle. Verificar en el próximo reemplazo de
+Cotejar Shalom.
+
 ### 13-11-2026 · Pago de diferencia: Por retornar, Retornados y Copiar mensaje
 
 Sin migración. «Retornando» pasa a «Retornados». Nueva pestaña «Por retornar»
