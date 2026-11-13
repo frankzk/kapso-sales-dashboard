@@ -440,15 +440,18 @@ function buildRow(input: {
 /**
  * La cadena de reintentos de la fila. Solo un pedido en la etapa, no anulado y
  * sin acuerdo de la tienda en este episodio: si alguien ya llamó y acordó,
- * eso manda y la cadena se corta. Pura.
+ * eso manda y la cadena se corta. Tampoco con una salida viva de otro courier
+ * (`otherLiveCourier`): el reintento ya está en marcha —la guía se creó desde
+ * la ficha o con «Aprobar»— y ofrecer «Aprobar» otra vez sería pedir una
+ * segunda guía para el mismo paquete (#KP203491, 11-11-2026). Pura.
  */
 export function retryChainOf(
-  f: Pick<ReproFacts, "retryChain" | "cancelled" | "inStage" | "box">,
+  f: Pick<ReproFacts, "retryChain" | "cancelled" | "inStage" | "box" | "otherLiveCourier">,
   open: { agreed_on: string | null } | null,
   today: string,
 ): ReproRow["retryChain"] {
   const chain = f.retryChain;
-  if (chain.state !== "siguiente" || f.cancelled || !f.inStage || open?.agreed_on) return null;
+  if (chain.state !== "siguiente" || f.cancelled || !f.inStage || open?.agreed_on || f.otherLiveCourier) return null;
   return {
     attempt: chain.attempt,
     of: chain.of,

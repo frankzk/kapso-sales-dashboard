@@ -5405,6 +5405,17 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
   pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un
   acuerdo en Repro Lima para ese episodio (lo acordado manda).
+- **Sale de la bandeja en cuanto el reintento está en marcha (13-11-2026):**
+  con una salida viva de otro courier (`otherLiveCourier`: la guía de Aliclik
+  creada desde la ficha o con «Aprobar», todavía sin entregar ni volver), el
+  pedido ya no aparece en «Reintentos Aliclik» ni lleva la chapa con
+  «Aprobar». Antes seguía ahí hasta que Aliclik entregaba (#KP203491: Kiara
+  creó la guía de AUTOECOM el 11-11 a la 1:14 p. m. y siguió pidiendo
+  «Aprobar · AUTOECOM»), y «Aprobar» habría pedido una segunda guía para el
+  mismo paquete. Si esa guía falla, el fallo nuevo vuelve a abrir la cadena con
+  el siguiente transporte. Lo aplica `retryChainOf` (`lib/repro-lima-access.ts`),
+  así que vale igual para la bandeja, «Aprobar», «Aprobar todos los listos» y
+  el automático.
 - **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
   con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
   el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los
