@@ -13626,6 +13626,20 @@ solo «casi».
 - **Dos imposibles se descartan**: un movimiento **posterior** a la carga del
   comprobante —nadie sube la constancia de un pago que aún no hizo— y uno que
   ya concilió otro comprobante.
+- **El recruce con los movimientos ya guardados (13-11-2026, owner: «si,
+  prepáralo»).** El cruce corría solo al llegar un reporte y con los
+  comprobantes que ya estaban cargados; uno cargado **después** de que llegó el
+  reporte de su hora no volvía a cruzarse y quedaba esperando a una persona
+  aunque el dinero estuviera en el reporte (#KP204474, adelanto de S/ 30 del
+  08-11). Ahora, cada media hora (`/api/cron/yape-rematch`, minutos 17 y 47),
+  los comprobantes «Pendiente de revisión» de los últimos 10 días se cruzan con
+  los ingresos ya guardados (`yape_statement_movements`), cuenta por cuenta,
+  con la **misma función** que la importación (`crossAndValidate`,
+  `lib/yape-statement/rematch.ts`): las mismas rejas de esta lista y el mismo
+  camino de validación, firmado por el estado de cuenta. Lo ya conciliado no se
+  vuelve a usar. Sin nada que validar no deja rastro; si valida o falla, queda
+  en el registro de «Validación de pagos» como un reporte más, con el asunto
+  «Recruce: comprobantes cargados después de su reporte».
 - **La hora leída 12 h antes.** Hasta el 04-10-2026 el lector perdía el
   «p. m.» de Yape (§12, Pagos). Al comprobante con hora de mañana se le prueba
   también la misma hora por la tarde; sigue exigiendo minuto, monto, la

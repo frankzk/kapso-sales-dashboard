@@ -25,6 +25,16 @@ Sin migración. «Retornando» pasa a «Retornados». Nueva pestaña «Por retor
 globo del menú. Cada pedido En agencia tiene «Copiar mensaje» con el aviso
 «YA LLEGÓ a la agencia». Verificar ~48 por retornar y el texto copiado.
 
+### 13-11-2026 · Yape: el recruce con los movimientos ya guardados (sin migración, MOM §16.2)
+
+- Nuevo cron `/api/cron/yape-rematch` (`17,47 * * * *`, en vercel.json): cruza
+  los comprobantes «Pendiente de revisión» de los últimos 10 días con los
+  ingresos de Yape ya guardados, con la misma función que la importación del
+  reporte (`crossAndValidate`). Arregla el comprobante cargado después de que
+  llegó el reporte de su hora (#KP204474).
+- Verificar: `GET /api/cron/yape-rematch?dry=1` (con el secreto del cron)
+  responde los comprobantes que validaría sin escribir nada.
+
 ### 13-11-2026 · Pago de diferencia: pestaña «Retornando»
 
 Sin migración. La bandeja suma una pestaña «Retornando», fuera de «Todos» y
