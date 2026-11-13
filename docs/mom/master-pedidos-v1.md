@@ -2219,6 +2219,14 @@ que nadie tenga que resumirla a mano:
   la regla de riesgo ni ningún estado. Se lee la primera vez que se abre la
   pestaña (`loadCustomerHistory`) y, si «Antes de llamar» ya lo trajo, se reusa.
   Sin teléfono no hay historial que buscar, y se dice así en vez de «sin pedidos».
+- **Y una etiqueta en el panel de Repro Lima (13-11-2026, owner: «agrega
+  también la etiqueta en el panel»).** Bajo el cliente de cada fila: **«Primer
+  pedido»** o **«3 pedidos más · 2 recibidos»** (verde si recibió alguna vez;
+  rojo, «ninguno recibido», si solo tiene devueltos o anulados). Mismo teléfono
+  (últimos 9 dígitos) y mismas tiendas de quien mira. Se pide solo para las
+  filas visibles, después de dibujar la tabla (`loadPriorOrderCounts`), para no
+  hacer lenta la página; un fallo deja la fila sin etiqueta, nunca un «Primer
+  pedido» inventado. Solo informa.
 - **Excepción: el cliente sin teléfono.** Desde el 29-jul-2026 Meta empezó a
   entregar conversaciones sin número — el cliente adoptó un *username* de
   WhatsApp y su identidad pasó a ser el **BSUID**. Fueron 0 durante 23 días y
