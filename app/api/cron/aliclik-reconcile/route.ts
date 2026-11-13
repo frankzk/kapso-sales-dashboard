@@ -8,6 +8,8 @@ import { normalizePhone } from "@/lib/phone";
 import { readOrderMarker } from "@/lib/aliclik-reconcile";
 import { planSweep, readSweepCursor, recordSweep } from "@/lib/aliclik-sweep-state";
 import { categoryOf } from "@/lib/shipments";
+import { replaceOwnBoxWithAliclikGuide } from "@/lib/gf-replaced-by-guide";
+import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -235,7 +237,7 @@ async function rescueOrphanGuide(
   const req = orphan.request;
   const lat = Number(req.shipping?.lat);
   const lng = Number(req.shipping?.lng);
-  const { error: insErr } = await admin.from("shipments").insert({
+  const { data: inserted, error: insErr } = await admin.from("shipments").insert({
     store_id: report.storeId,
     courier: "aliclik",
     guide_code: orderNumber,
@@ -253,7 +255,7 @@ async function rescueOrphanGuide(
     latitude: Number.isFinite(lat) ? lat : null,
     longitude: Number.isFinite(lng) ? lng : null,
     created_via: "aliclik_api",
-  });
+  }).select("id").single();
   if (insErr) {
     report.errors.push(`huérfana ${orderNumber}: ${insErr.message}`);
     return false;
@@ -263,6 +265,18 @@ async function rescueOrphanGuide(
   // Ya existe la fila: el snapshot que acabamos de recibir se aplica sobre ella
   // y arrastra estado, custodia y recálculo del Master.
   await applyAliclikSnapshot(order, admin);
+
+  // La guía rescatada es la salida nueva del pedido, como si se hubiera
+  // guardado al crearla: la caja de Grupo GF que el motorizado todavía tiene
+  // «No entregado» queda en devolución (0337, MOM §9.5). Después del snapshot:
+  // una guía que Aliclik ya anuló no saca el pedido. La base decide si aplica;
+  // un fallo no deshace el rescate.
+  const insertedId = (inserted as { id?: string } | null)?.id;
+  if (insertedId) {
+    const gf = await replaceOwnBoxWithAliclikGuide(admin, insertedId, null);
+    if (gf.error) report.errors.push(`huérfana ${orderNumber}: la caja de Grupo GF no quedó en devolución: ${gf.error}`);
+    if (gf.replaced.length) await recomputeOrderMasterSafe(admin, [orphan.orderId]);
+  }
   return true;
 }
 

@@ -396,4 +396,7 @@ $PSQL -f "$ROOT/scripts/sql/lead_store_distribution_smoke.sql"
 echo "▶ Agencia: estado de pago y conciliación histórica (0336): paridad, cohortes y RLS"
 $PSQL -f "$ROOT/scripts/sql/agency_payment_reconciliation_smoke.sql"
 
+echo "▶ La guía de Aliclik deja en devolución la caja de Grupo GF «No entregado» (0337): retorno con output_replaced, solicitud cerrada, parada intacta, a stock al recibirla, barrido idempotente y solo el servidor"
+$PSQL -f "$ROOT/scripts/sql/gf_replaced_by_aliclik_smoke.sql"
+echo "  ✅ la S01 pasa a retorno sin salir de la caja ni perder dispatched_at; su solicitud de Grupo GF se cierra y no pasa a Aliclik; la parada fallida no cambia ni se entrega; Recibir en oficina la deja devuelta a stock; provincia, guía anulada, parada sin reporte o «No entregado» posterior a la guía no se tocan; el barrido arregla lo que ya estaba y no repite; sin security definer"
 echo "✅ DB verification passed."

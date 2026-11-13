@@ -2219,6 +2219,14 @@ que nadie tenga que resumirla a mano:
   la regla de riesgo ni ningún estado. Se lee la primera vez que se abre la
   pestaña (`loadCustomerHistory`) y, si «Antes de llamar» ya lo trajo, se reusa.
   Sin teléfono no hay historial que buscar, y se dice así en vez de «sin pedidos».
+- **Y una etiqueta en el panel de Repro Lima (13-11-2026, owner: «agrega
+  también la etiqueta en el panel»).** Bajo el cliente de cada fila: **«Primer
+  pedido»** o **«3 pedidos más · 2 recibidos»** (verde si recibió alguna vez;
+  rojo, «ninguno recibido», si solo tiene devueltos o anulados). Mismo teléfono
+  (últimos 9 dígitos) y mismas tiendas de quien mira. Se pide solo para las
+  filas visibles, después de dibujar la tabla (`loadPriorOrderCounts`), para no
+  hacer lenta la página; un fallo deja la fila sin etiqueta, nunca un «Primer
+  pedido» inventado. Solo informa.
 - **Excepción: el cliente sin teléfono.** Desde el 29-jul-2026 Meta empezó a
   entregar conversaciones sin número — el cliente adoptó un *username* de
   WhatsApp y su identidad pasó a ser el **BSUID**. Fueron 0 durante 23 días y
@@ -4377,7 +4385,10 @@ entonces:
   devolución a su nombre (custodia `retorno`, evento `output_replaced`) y, al
   recibirla en oficina, se desarma y vuelve a stock: no se reutiliza ni vuelve a
   la cola. Cuenta dentro de las cinco salidas; el motivo de salida adicional lo
-  escribe el sistema.
+  escribe el sistema. **Lo mismo pasa cuando la salida nueva es una guía de
+  Aliclik** (12-11-2026, §9.5 «La guía de Aliclik deja en devolución la caja de
+  Grupo GF»): la caja anterior queda en devolución y su solicitud de Grupo GF
+  se cierra.
 - La nueva salida no debe borrar ni cerrar automáticamente la devolución física
   de la salida anterior.
 - El equipo revisa el courier anterior y el motivo antes de elegir el siguiente.
@@ -5405,17 +5416,63 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
   pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un
   acuerdo en Repro Lima para ese episodio (lo acordado manda).
-- **Sale de la bandeja en cuanto el reintento está en marcha (13-11-2026):**
-  con una salida viva de otro courier (`otherLiveCourier`: la guía de Aliclik
-  creada desde la ficha o con «Aprobar», todavía sin entregar ni volver), el
-  pedido ya no aparece en «Reintentos Aliclik» ni lleva la chapa con
-  «Aprobar». Antes seguía ahí hasta que Aliclik entregaba (#KP203491: Kiara
-  creó la guía de AUTOECOM el 11-11 a la 1:14 p. m. y siguió pidiendo
-  «Aprobar · AUTOECOM»), y «Aprobar» habría pedido una segunda guía para el
-  mismo paquete. Si esa guía falla, el fallo nuevo vuelve a abrir la cadena con
-  el siguiente transporte. Lo aplica `retryChainOf` (`lib/repro-lima-access.ts`),
-  así que vale igual para la bandeja, «Aprobar», «Aprobar todos los listos» y
-  el automático.
+- **La guía de Aliclik deja en devolución la caja de Grupo GF (12-11-2026,
+  decisión del owner: «de acuerdo»).** #KP203491: Alexis reportó KP203491-S01
+  «No entregado · no contesta» el 07-11 y todavía la tenía (custodia
+  `courier`, sin recibir en oficina) cuando el 11-11 una asesora creó desde la
+  ficha la guía del reintento, KP203491-S02 de Aliclik, armada desde stock. El
+  pedido seguía en «Por reprogramar Lima», en «Reintentos Aliclik» y en Repro
+  Lima: el «No entregado» de la S01 solo dejaba de mandar con un movimiento de
+  ESA salida, y una guía de otro courier no lo es. Desde ahora:
+  - **Al guardar la guía de Aliclik** (`createAliclikGuideFor`: el botón de la
+    ficha, «Aprobar», la pasada automática, Chatby, el día programado y el
+    agente; y el rescate de la huérfana en `/api/cron/aliclik-reconcile`),
+    `gf_replace_output_with_aliclik` (0337) busca en el mismo pedido de Lima
+    las cajas de Grupo GF que siguen con el motorizado (`propio · pendiente`,
+    custodia `courier`, sin recibir ni reemplazar) cuya última parada dice «No
+    entregado» desde antes de la guía, con cualquier motorizado y motivo. A
+    cada una, como «Sacar con salida nueva» (§29.13): custodia `retorno` y el
+    evento `output_replaced` sobre ella (con `replaced_by`/`replaced_by_code`
+    de la guía y `replaced_by_courier = aliclik`; también en `dispatch_events`
+    si está en una caja). Conserva su parada, su lugar en la caja y
+    `dispatched_at`.
+  - **Su solicitud viva de Grupo GF se cierra** (`cancelled`, con el hecho
+    `output_replaced` en la solicitud): a diferencia de «Sacar con salida
+    nueva», no pasa a la salida nueva, que no es de Grupo GF.
+  - **La parada fallida del motorizado no se toca**: sigue en su ruta y en su
+    paga, y sigue siendo el intento 1 de la cadena (si AUTOECOM también falla,
+    toca ALIDRIVER, 3 de 3). Desde ese momento no cambia de estado
+    (`delivery_stops_guard_replaced`, 0248).
+  - **El pedido sigue a la guía de Aliclik** (Preparación → Por despachar → En
+    curso) y sale de «Por reprogramar Lima», de «Reintentos Aliclik» y de Repro
+    Lima. El aviso de la guía lo dice: «KP203491-S01 sigue con Alexis: queda en
+    devolución y su solicitud de Grupo GF se cerró. Al recibirla en oficina se
+    desarma y vuelve a stock.»
+  - **Cuando el motorizado la trae**, «Recibir en oficina» (y Devoluciones, «Por
+    QR», el manifiesto de devolución) la deja `devuelto` a stock
+    (`a_stock_reemplazada`): no vuelve a «por asignar» y se registra su
+    reingreso a stock (§13).
+  - No se toca si el pedido no es de Lima, si la guía está anulada o ya
+    devuelta, si la parada no dice «No entregado» o es posterior a la guía, si
+    la caja ya se recibió o ya se reemplazó, o si la salida está en una caja
+    que no es la de su parada: eso se revisa a mano. Es idempotente; un fallo
+    no deshace la guía, que ya existe en Aliclik.
+  - **También con la guía de Aliclik ya ENTREGADA** (13-11-2026): #KP203491 lo
+    entregó Aliclik con la caja de stock mientras la S01 seguía con Alexis, y el
+    pedido quedaba en «Por cerrar · salida adicional activa». Con la S01 en
+    devolución, al recibirla va a stock y el pedido se cierra.
+  - **Lo que ya estaba así** (#KP203491 y los demás) lo arregla el barrido de la
+    0337 al aplicarla, con la misma función y la guía más antigua primero; el
+    Master de esos pedidos lo recalcula `master-reconcile`.
+- **Y la bandeja no ofrece «Aprobar» con el reintento ya en marcha
+  (13-11-2026).** Con una salida viva de otro courier (`otherLiveCourier`: la
+  guía de Aliclik sin entregar ni volver), `retryChainOf`
+  (`lib/repro-lima-access.ts`) corta la cadena aunque el pedido siga en «Por
+  reprogramar Lima»: es la segunda red para los casos que la devolución de
+  arriba no toca (caja ya recibida, en una caja que no es la de su parada,
+  revisión a mano). «Aprobar» ahí pediría una segunda guía para el mismo
+  paquete. Vale igual para la bandeja, «Aprobar», «Aprobar todos los listos» y
+  el automático; si esa guía falla, el fallo nuevo vuelve a abrir la cadena.
 - **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
   con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
   el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los
@@ -18108,6 +18165,15 @@ sin devolver y otra saliendo (principio 7, §7).
     salidas. Dos clics o dos pestañas no crean dos: el segundo dice «ya salió
     con otra salida». Si la base rechaza el reemplazo, la salida nueva se borra
     y la solicitud abierta para ella también.
+- **Con una guía de Aliclik en vez de una salida de Grupo GF** (12-11-2026,
+  #KP203491; §9.5 «La guía de Aliclik deja en devolución la caja de Grupo
+  GF»): al guardar la guía, `gf_replace_output_with_aliclik` (0337) deja la
+  caja «No entregado» que el motorizado todavía tiene en devolución con la
+  misma marca (custodia `retorno` y `output_replaced`, `replaced_by_courier =
+  aliclik`), sin pasar por Despacho del día. Todo lo de abajo —la píldora «En
+  devolución», recibirla a stock, la parada que no cambia, el cuaderno que no
+  se la lleva— vale igual. Lo único distinto: su solicitud de Grupo GF **se
+  cierra** en vez de pasar a la salida nueva.
 - **La caja que vuelve** sale en la píldora **«En devolución»** de Despacho del
   día («S01 vuelve con Alexis · 3 d · sale con S02»), con su propio «Recibir en
   oficina». También la recibe «Devoluciones» (con la chapa «reemplazada · a
