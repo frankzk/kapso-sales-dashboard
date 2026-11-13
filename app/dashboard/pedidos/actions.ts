@@ -16,12 +16,41 @@ import { returnManifestEntriesForShipments } from "@/lib/return-manifest-access"
 import { loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import { describeShalomError } from "@/lib/shalom/client";
+import { shalomVoucherPdf, signedDocUrl } from "@/lib/shalom/label-cache";
+import { loadStoreShalom } from "@/lib/shalom/session";
+import {
+  CHATBY_ATTACHMENT_BUCKET,
+  CHATBY_ATTACHMENT_URL_SECONDS,
+  chatbyAttachmentDisplayName,
+  chatbyAttachmentFolder,
+  chatbyAttachmentKind,
+  chatbyAttachmentNote,
+  chatbyAttachmentSizeProblem,
+  chatbyAttachmentTypeOfPath,
+  isChatbyAttachmentPath,
+  shalomTicketShipment,
+  type ChatbyAttachmentRequest,
+} from "@/lib/chatby-attachments";
+import {
+  ORDER_COMMENT_PHOTO_BUCKET,
+  ORDER_COMMENT_PHOTO_MAX_BYTES,
+  orderCommentPhotoExt,
+  orderCommentPhotoFolder,
+  validateOrderCommentPhotos,
+} from "@/lib/order-comment-photos";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { kapsoInboxUrl, kapsoThreadMessages, type OrderKapsoConversation } from "@/lib/order-kapso";
 import { getStoreCreds } from "@/lib/ingest";
 import { normalizePhone } from "@/lib/phone";
-import { fetchConversationTranscript, listConversationsByPhone } from "@/lib/kapso";
+import {
+  fetchConversationTranscript,
+  listConversationsByPhone,
+  sendWhatsappDocument,
+  sendWhatsappImage,
+  sendWhatsappText,
+} from "@/lib/kapso";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { prepayGuideBlock, prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
@@ -86,6 +115,8 @@ import {
   DISPATCH_DATE_CLEARED,
   DISPATCH_DATE_SET,
   DISPATCH_NEEDS_LOCATION_ERROR,
+  carriedDispatchDay,
+  currentDispatchDate,
   dispatchCoordinateInput,
   dispatchCoordinateMissing,
   dispatchDateError,
@@ -93,6 +124,7 @@ import {
   dispatchLocationMissing,
 } from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
+import { writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
 import {
   CONFIRMATION_CYCLE_MAX_DAYS,
@@ -327,50 +359,182 @@ export async function loadOrderChatby(
  * de ese celular en Kapso. Con la clave de Kapso de la tienda del pedido, que
  * nunca sale al navegador.
  */
+/**
+ * La conversación de Kapso de la clienta del pedido: la guardada en el pedido,
+ * la de su lead o la última de ese celular. La comparten la pestaña y el envío.
+ */
+async function resolveOrderKapsoConversation(
+  ctx: OrderContext,
+  orderId: string,
+  admin: ReturnType<typeof createAdminSupabase>,
+): Promise<
+  | {
+      status: "ok";
+      opts: { apiKey: string };
+      creds: NonNullable<Awaited<ReturnType<typeof getStoreCreds>>>;
+      phone: string | null;
+      conversationId: string;
+      source: "pedido" | "lead" | "celular";
+    }
+  | { status: "sin_kapso" | "sin_celular" | "sin_conversacion" }
+> {
+  const creds = await getStoreCreds(ctx.storeId, admin, { renewOwnApp: false });
+  if (!creds?.kapso_api_key) return { status: "sin_kapso" };
+  const phone = normalizePhone(ctx.row.customer_phone);
+  const [{ data: order }, lead] = await Promise.all([
+    admin.from("orders").select("kapso_conversation_id").eq("id", orderId).maybeSingle(),
+    phone
+      ? admin.from("leads").select("kapso_conversation_id").eq("store_id", ctx.storeId).eq("phone", phone).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const opts = { apiKey: creds.kapso_api_key };
+  let conversationId = ((order as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
+  let source: "pedido" | "lead" | "celular" = "pedido";
+  if (!conversationId) {
+    conversationId = ((lead.data as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
+    source = "lead";
+  }
+  if (!conversationId) {
+    if (!phone) return { status: "sin_celular" };
+    const conversations = await listConversationsByPhone(opts, phone);
+    const latest = [...conversations].sort((a, b) =>
+      String(b.last_active_at ?? b.kapso?.last_message_timestamp ?? "").localeCompare(String(a.last_active_at ?? a.kapso?.last_message_timestamp ?? "")),
+    )[0];
+    conversationId = latest?.id != null ? String(latest.id) : null;
+    source = "celular";
+  }
+  if (!conversationId) return { status: "sin_conversacion" };
+  return { status: "ok", opts, creds, phone, conversationId, source };
+}
+
 export async function loadOrderKapso(orderId: string): Promise<OrderKapsoConversation> {
   try {
     const ctx = await authorizeOrder(orderId);
     if (!ctx) return { status: "error", message: "Sin acceso a este pedido." };
     const admin = createAdminSupabase();
-    const creds = await getStoreCreds(ctx.storeId, admin, { renewOwnApp: false });
-    if (!creds?.kapso_api_key) return { status: "sin_kapso" };
-    const phone = normalizePhone(ctx.row.customer_phone);
-    const [{ data: order }, lead] = await Promise.all([
-      admin.from("orders").select("kapso_conversation_id").eq("id", orderId).maybeSingle(),
-      phone
-        ? admin.from("leads").select("kapso_conversation_id").eq("store_id", ctx.storeId).eq("phone", phone).maybeSingle()
-        : Promise.resolve({ data: null }),
-    ]);
-    const opts = { apiKey: creds.kapso_api_key };
-    let conversationId = ((order as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
-    let source: "pedido" | "lead" | "celular" = "pedido";
-    if (!conversationId) {
-      conversationId = ((lead.data as { kapso_conversation_id?: string | null } | null)?.kapso_conversation_id ?? "").trim() || null;
-      source = "lead";
-    }
-    if (!conversationId) {
-      if (!phone) return { status: "sin_celular" };
-      const conversations = await listConversationsByPhone(opts, phone);
-      const latest = [...conversations].sort((a, b) =>
-        String(b.last_active_at ?? b.kapso?.last_message_timestamp ?? "").localeCompare(String(a.last_active_at ?? a.kapso?.last_message_timestamp ?? "")),
-      )[0];
-      conversationId = latest?.id != null ? String(latest.id) : null;
-      source = "celular";
-    }
-    if (!conversationId) return { status: "sin_conversacion" };
-    const transcript = await fetchConversationTranscript(opts, conversationId, 3);
+    const found = await resolveOrderKapsoConversation(ctx, orderId, admin);
+    if (found.status !== "ok") return { status: found.status };
+    const transcript = await fetchConversationTranscript(found.opts, found.conversationId, 3);
     return {
       status: "ok",
-      conversationId,
-      inboxUrl: kapsoInboxUrl(creds.kapso_project_id, conversationId),
+      conversationId: found.conversationId,
+      inboxUrl: kapsoInboxUrl(found.creds.kapso_project_id, found.conversationId),
       messages: kapsoThreadMessages(transcript),
-      source,
+      source: found.source,
     };
   } catch (cause) {
     if (cause instanceof OrderMasterReadError) return { status: "error", message: cause.message };
     console.error("[kapso] conversación del pedido", orderId, cause);
     return { status: "error", message: "No se pudo leer la conversación en Kapso. Reintenta con «Actualizar»." };
   }
+}
+
+/**
+ * Responder a la clienta por Kapso desde la pestaña de la ficha (MOM §25,
+ * «Kapso», owner 11-11-2026: «permíteme responder el Kapso desde el drawer»).
+ * Mismas reglas que Chatby y que Leads: quien puede editar el pedido, dentro
+ * de las 24 h de WhatsApp desde el último mensaje de la clienta (lo vuelve a
+ * mirar con la conversación al día), desde el número de la tienda con que
+ * ella escribió. Texto, o una foto o un PDF con el texto como pie (el adjunto
+ * y el ticket Shalom salen igual que en Chatby, lib/chatby-attachments.ts).
+ * Queda en la Actividad con quién lo mandó.
+ */
+export async function sendOrderKapsoReply(
+  orderId: string,
+  rawText: string,
+  opts: { attachment?: ChatbyAttachmentRequest | null } = {},
+): Promise<MasterActionState> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
+  const reply = opts.attachment && !rawText.trim() ? { text: "" } : chatbyReplyText(rawText);
+  if ("error" in reply) return { error: reply.error };
+
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+
+  const found = await resolveOrderKapsoConversation(ctx, orderId, admin);
+  if (found.status !== "ok") {
+    return {
+      error:
+        found.status === "sin_kapso"
+          ? "La tienda no tiene Kapso conectado."
+          : found.status === "sin_celular"
+            ? "El pedido no trae un celular al que escribir."
+            : "Esta clienta no tiene conversación en Kapso.",
+    };
+  }
+  if (!found.phone) return { error: "El pedido no trae un celular al que escribir." };
+
+  // La ventana de 24 h, con la conversación al día (no la que se ve en pantalla).
+  const transcript = await fetchConversationTranscript(found.opts, found.conversationId, 3);
+  if (!chatbyReplyWindow(kapsoThreadMessages(transcript)).open) {
+    return {
+      error:
+        "La clienta no escribió en las últimas 24 horas: WhatsApp no deja mandarle texto libre. Para escribirle, una plantilla desde Kapso o desde Leads.",
+    };
+  }
+
+  // Desde el número de la tienda con que escribió la clienta.
+  const conversations = await listConversationsByPhone(found.opts, found.phone);
+  const pnId =
+    conversations.find((c) => String(c.id) === found.conversationId)?.phone_number_id?.trim() ||
+    found.creds.whatsapp_phone_number_id ||
+    null;
+  if (!pnId) return { error: "La tienda no tiene un número de WhatsApp configurado en Kapso." };
+
+  const attachment = opts.attachment ? await resolveChatbyAttachment(ctx, orderId, opts.attachment) : null;
+  if (attachment && "error" in attachment) return { error: attachment.error };
+
+  const caption = reply.text || undefined;
+  const sent = attachment
+    ? attachment.type === "image"
+      ? await sendWhatsappImage(found.opts, { phoneNumberId: pnId, to: found.phone, imageUrl: attachment.url, caption })
+      : await sendWhatsappDocument(found.opts, {
+          phoneNumberId: pnId,
+          to: found.phone,
+          documentUrl: attachment.url,
+          filename: kapsoDocumentFilename(attachment.record),
+          caption,
+        })
+    : await sendWhatsappText(found.opts, { phoneNumberId: pnId, to: found.phone, body: reply.text });
+  if (!sent.ok) {
+    const closed = sent.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(sent.error);
+    return {
+      error: closed
+        ? "Se cerró la ventana de 24 h: la clienta tiene que volver a escribir para poder responderle."
+        : sent.ambiguous
+          ? "No pudimos confirmar si salió. No lo reenvíes todavía: revisa con «Actualizar»."
+          : `Kapso no lo mandó: ${sent.error}`,
+    };
+  }
+
+  const eventError = await recordEvent(admin, ctx, {
+    kind: "kapso_message",
+    source: "kapso",
+    reason: attachment && reply.text ? attachment.note : null,
+    note: reply.text || attachment?.note || null,
+    payload: {
+      conversation_id: found.conversationId,
+      phone_number_id: pnId,
+      message_id: sent.id ?? null,
+      ...(attachment ? { attachment: attachment.record } : {}),
+    },
+  });
+  await recomputeOrderMasterSafe(admin, [orderId]);
+  revalidatePath(MASTER_PATH);
+  const sentWhat = attachment ? (attachment.record.kind === "shalom_ticket" ? "Ticket Shalom enviado por Kapso." : "Archivo enviado por Kapso.") : "Mensaje enviado por Kapso.";
+  return eventError ? { notice: `${sentWhat} No se pudo anotar en la Actividad: ${eventError}` } : { notice: sentWhat };
+}
+
+/** El nombre del PDF que ve la clienta en WhatsApp. */
+function kapsoDocumentFilename(record: Record<string, unknown>): string {
+  if (record.kind === "shalom_ticket") {
+    const guide = typeof record.guide_code === "string" ? record.guide_code : "";
+    return guide ? `Ticket Shalom ${guide}.pdf` : "Ticket Shalom.pdf";
+  }
+  const name = typeof record.filename === "string" ? record.filename : "documento.pdf";
+  return /\.pdf$/i.test(name) ? name : `${name}.pdf`;
 }
 
 /**
@@ -384,15 +548,21 @@ export async function loadOrderKapso(orderId: string): Promise<OrderKapsoConvers
 export async function sendOrderChatbyReply(
   orderId: string,
   rawText: string,
-  opts: { purpose?: typeof CHATBY_ASK_PURPOSE } = {},
+  opts: { purpose?: typeof CHATBY_ASK_PURPOSE; attachment?: ChatbyAttachmentRequest | null } = {},
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
-  const reply = chatbyReplyText(rawText);
+  // Con un adjunto el texto es opcional: es el pie del archivo (MOM §25).
+  const reply = opts.attachment && !rawText.trim() ? { text: "" } : chatbyReplyText(rawText);
   if ("error" in reply) return { error: reply.error };
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  // El archivo, antes de mirar la conversación: si no se puede firmar, no se
+  // manda nada (lib/chatby-attachments.ts).
+  const attachment = opts.attachment ? await resolveChatbyAttachment(ctx, orderId, opts.attachment) : null;
+  if (attachment && "error" in attachment) return { error: attachment.error };
 
   // La conversación al día (no la del minuto de caché): a quién se le escribe
   // y si la ventana de 24 h sigue abierta.
@@ -418,6 +588,7 @@ export async function sendOrderChatbyReply(
   const sent = await sendChatbyReply({
     userNs: conversation.userNs,
     text: reply.text,
+    attachment: attachment ? { type: attachment.type, url: attachment.url } : null,
     apiKey: env.chatbyApiKey(),
     pauseMinutes: CHATBY_REPLY_PAUSE_MINUTES,
   });
@@ -435,10 +606,16 @@ export async function sendOrderChatbyReply(
   const eventError = await recordEvent(admin, ctx, {
     kind: "chatby_message",
     source: "chatby",
-    reason: opts.purpose === CHATBY_ASK_PURPOSE ? "Pidió la ubicación a la clienta por WhatsApp." : null,
-    note: reply.text,
+    reason:
+      opts.purpose === CHATBY_ASK_PURPOSE
+        ? "Pidió la ubicación a la clienta por WhatsApp."
+        : attachment && reply.text
+          ? attachment.note
+          : null,
+    note: reply.text || attachment?.note || null,
     payload: {
       paused_minutes: sent.paused ? CHATBY_REPLY_PAUSE_MINUTES : 0,
+      ...(attachment ? { attachment: attachment.record } : {}),
       ...(opts.purpose === CHATBY_ASK_PURPOSE ? { purpose: CHATBY_ASK_PURPOSE } : {}),
       ...(askedFor ? { hold_reason: askedFor } : {}),
     },
@@ -448,9 +625,97 @@ export async function sendOrderChatbyReply(
   const pause = sent.paused
     ? `El bot queda en pausa ${CHATBY_REPLY_PAUSE_MINUTES} minutos para esta clienta.`
     : "Chatby no confirmó la pausa del bot: puede seguir con sus mensajes.";
+  const sentWhat = attachment ? (attachment.record.kind === "shalom_ticket" ? "Ticket Shalom enviado." : "Archivo enviado.") : "Mensaje enviado.";
   return eventError
-    ? { notice: `Mensaje enviado. ${pause} No se pudo anotar en la Actividad: ${eventError}` }
-    : { notice: `Mensaje enviado. ${pause}` };
+    ? { notice: `${sentWhat} ${pause} No se pudo anotar en la Actividad: ${eventError}` }
+    : { notice: `${sentWhat} ${pause}` };
+}
+
+/**
+ * El archivo que va por Chatby, firmado para que Chatby lo baje (7 días): el
+ * ticket de la guía Shalom del pedido o un adjunto ya subido de ESTE pedido.
+ */
+async function resolveChatbyAttachment(
+  ctx: OrderContext,
+  orderId: string,
+  request: ChatbyAttachmentRequest,
+): Promise<
+  | { type: "image" | "file"; url: string; note: string; record: Record<string, unknown> & { kind: string } }
+  | { error: string }
+> {
+  const admin = createAdminSupabase();
+  if (request.kind === "shalom_ticket") {
+    const { data, error } = await admin
+      .from("shipments")
+      .select("id,courier,shalom_ose_id,delivery_status,created_at,guide_code")
+      .eq("order_id", orderId)
+      .eq("courier", "shalom");
+    if (error) return { error: `No se pudo leer la guía Shalom: ${error.message}` };
+    const guide = shalomTicketShipment(
+      (data ?? []) as { id: string; courier: string; shalom_ose_id: number | null; delivery_status: string | null; created_at: string | null; guide_code: string | null }[],
+    );
+    if (!guide?.shalom_ose_id) {
+      return { error: "Este pedido no tiene una guía Shalom creada por API: su ticket se baja de pro.shalom.pe." };
+    }
+    const store = await loadStoreShalom(admin, ctx.storeId);
+    if (!store?.shalom_pro_email) return { error: "La tienda no tiene Shalom Pro conectado en Kapta." };
+    try {
+      await shalomVoucherPdf(admin, ctx.storeId, store, guide.shalom_ose_id);
+    } catch (cause) {
+      return { error: `Shalom no entregó el ticket: ${describeShalomError(cause)}` };
+    }
+    const url = await signedDocUrl(admin, guide.shalom_ose_id, "voucher", CHATBY_ATTACHMENT_URL_SECONDS);
+    if (!url) return { error: "No se pudo preparar el enlace del ticket. Reintenta." };
+    return {
+      type: "file",
+      url,
+      note: chatbyAttachmentNote({ kind: "shalom_ticket", guideCode: guide.guide_code }),
+      record: { kind: "shalom_ticket", shipment_id: guide.id, guide_code: guide.guide_code },
+    };
+  }
+
+  if (!isChatbyAttachmentPath(request.path, ctx.storeId, orderId)) {
+    return { error: "El archivo no pertenece a este pedido." };
+  }
+  const folder = chatbyAttachmentFolder(ctx.storeId, orderId);
+  const { data: stored, error: listError } = await admin.storage.from(CHATBY_ATTACHMENT_BUCKET).list(folder, { limit: 1000 });
+  if (listError) return { error: `No se pudo revisar el archivo: ${listError.message}` };
+  if (!(stored ?? []).some((o) => `${folder}/${o.name}` === request.path)) {
+    return { error: "El archivo no terminó de subirse. Vuelve a adjuntarlo." };
+  }
+  const { data: signed, error: signError } = await admin.storage
+    .from(CHATBY_ATTACHMENT_BUCKET)
+    .createSignedUrl(request.path, CHATBY_ATTACHMENT_URL_SECONDS);
+  if (signError || !signed?.signedUrl) return { error: "No se pudo preparar el enlace del archivo. Reintenta." };
+  const type = chatbyAttachmentTypeOfPath(request.path);
+  const filename = chatbyAttachmentDisplayName(request.filename, type === "file" ? "documento.pdf" : "foto");
+  return {
+    type,
+    url: signed.signedUrl,
+    note: chatbyAttachmentNote({ kind: "upload", filename }),
+    record: { kind: "upload", path: request.path, filename, type },
+  };
+}
+
+/** Prepara la subida de UN adjunto para Chatby (URL firmada de Storage). */
+export async function createOrderChatbyUpload(
+  orderId: string,
+  contentType: string,
+  size: number,
+): Promise<{ path: string; token: string } | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite escribir a la clienta." };
+  const problem = chatbyAttachmentSizeProblem(contentType, size);
+  if (problem) return { error: problem };
+  const kind = chatbyAttachmentKind(contentType)!;
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+  const admin = createAdminSupabase();
+  await admin.storage.createBucket(CHATBY_ATTACHMENT_BUCKET, { public: false }).catch(() => {});
+  const path = `${chatbyAttachmentFolder(ctx.storeId, orderId)}/chatby-${Date.now()}-${randomUUID().slice(0, 8)}.${kind.ext}`;
+  const { data, error } = await admin.storage.from(CHATBY_ATTACHMENT_BUCKET).createSignedUploadUrl(path);
+  if (error || !data) return { error: error?.message ?? "No se pudo preparar la subida." };
+  return { path: data.path, token: data.token };
 }
 
 type ChatbyCheckRow = ChatbyHeldCheck & { message_id: string | null };
@@ -683,6 +948,54 @@ function routeOperation(row: OrderMasterRow, couriers: string[]): OperationKind 
 }
 
 /**
+ * El día de «Programar envío» que sigue vigente antes de crear la salida, si es
+ * hoy o uno que viene (`carriedDispatchDay`). Sin lectura, null: la salida se
+ * crea igual.
+ */
+async function programmedDayForOutput(
+  admin: ReturnType<typeof createAdminSupabase>,
+  orderId: string,
+  outputCreatedAt: readonly (string | null | undefined)[],
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("order_events")
+    .select("kind,occurred_at,reason,payload")
+    .eq("order_id", orderId)
+    .in("kind", [DISPATCH_DATE_SET, DISPATCH_DATE_CLEARED]);
+  if (error) return null;
+  const events = (data ?? []) as { kind: string; occurred_at: string; reason?: string | null; payload?: unknown }[];
+  return carriedDispatchDay(currentDispatchDate(events, outputCreatedAt)?.date ?? null, limaTodayKey());
+}
+
+/**
+ * Deja la fecha programada como salida programada de Grupo GF (`gf_dispatch_programs`),
+ * que es lo que leen Repro Lima, Despacho del día y el plan de reparto. Un
+ * programa que ya existe (Repro Lima, Despacho del día) manda y no se toca.
+ */
+async function carryDispatchDateToGfProgram(
+  admin: ReturnType<typeof createAdminSupabase>,
+  ctx: OrderContext,
+  day: string,
+): Promise<void> {
+  const { data: existing, error } = await admin
+    .from("gf_dispatch_programs")
+    .select("order_id")
+    .eq("order_id", ctx.row.order_id)
+    .maybeSingle();
+  if (error || existing) return;
+  const write = await writeGfDispatchProgram(admin, {
+    orderId: ctx.row.order_id,
+    storeId: ctx.storeId,
+    day,
+    reason: "envío programado antes del rótulo",
+    actor: ctx.userId,
+    request: null,
+    from: null,
+  });
+  if (write.error) console.error("carryDispatchDateToGfProgram", write.error);
+}
+
+/**
  * Registra una salida que no tiene API propia. La caja nace en custodia de la
  * empresa y con rótulo generado; recién la mesa de despacho puede marcarla
  * lista, cotejarla y transferirla al motorizado.
@@ -715,7 +1028,7 @@ export async function createManualRouteOutput(
   // cerrado merece otro intento hay que preguntarle a su guía POR QUÉ se cerró.
   const { data: existing, error: existingError } = await admin
     .from("shipments")
-    .select("id,courier,delivery_status,custody_state,reported_status")
+    .select("id,courier,delivery_status,custody_state,reported_status,created_at")
     .eq("order_id", orderId)
     .order("created_at", { ascending: true });
   if (existingError) return { error: existingError.message };
@@ -743,6 +1056,7 @@ export async function createManualRouteOutput(
     courier: string;
     delivery_status: string;
     custody_state: string | null;
+    created_at?: string | null;
   }[];
   const active = outputs.filter(
     (output) =>
@@ -862,6 +1176,15 @@ export async function createManualRouteOutput(
     .map((item) => `${item.title ?? "Producto"}${(item.quantity ?? 1) > 1 ? ` ×${item.quantity}` : ""}`)
     .join(" | ") || null;
 
+  // La fecha de «Programar envío» no se pierde al generar el rótulo de Lima
+  // (12-11-2026, MOM §6.2): #KP204348 se programó para el lun 16/11 y, al
+  // imprimir su rótulo «por definir», la lista lo puso a salir el jue 12/11.
+  // La fecha vigente pasa a ser la salida programada de Grupo GF.
+  const carriedDay = tbd && operation === "lima"
+    ? await programmedDayForOutput(admin, orderId, outputs.map((output) => output.created_at))
+    : null;
+  const plannedDate = carriedDay && dispatchDate === limaTodayKey() ? carriedDay : dispatchDate;
+
   const shipmentId = crypto.randomUUID();
   // El mismo generador que usa la restauración al deshacer un relleno: si las
   // dos fórmulas divergieran, devolver una salida a «por definir» le pondría un
@@ -896,7 +1219,7 @@ export async function createManualRouteOutput(
       latitude: ctx.row.latitude,
       longitude: ctx.row.longitude,
       assigned_at: assignedAt,
-      next_followup_at: `${dispatchDate}T12:00:00-05:00`,
+      next_followup_at: `${plannedDate}T12:00:00-05:00`,
       preparation_state: "rotulo_generado",
       custody_state: "empresa",
       created_via: MANUAL_ROUTE_CREATED_VIA,
@@ -919,18 +1242,20 @@ export async function createManualRouteOutput(
     shipmentId,
     reason: note || null,
     note: tbd
-      ? `${outputCode} creada sin courier definido; se fijará al entrar a una ruta. Salida prevista ${dispatchDate}.`
-      : `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${dispatchDate}.${
+      ? `${outputCode} creada sin courier definido; se fijará al entrar a una ruta. Salida prevista ${plannedDate}${carriedDay ? " (envío programado)" : ""}.`
+      : `${outputCode} creada para ${MANUAL_COURIER_LABEL[input.courier]}; salida prevista ${plannedDate}.${
           olvaId ? ` Tracking Olva ${formatOlvaTracking(olvaId)}.` : ""
         }`,
     payload: {
       outputCode,
-      dispatchDate,
+      dispatchDate: plannedDate,
       activeOutputsAtCreation: active.map((output) => output.id),
       labelUrl,
       ...(olvaId ? { olvaTracking: formatOlvaTracking(olvaId) } : {}),
     },
   });
+
+  if (carriedDay) await carryDispatchDateToGfProgram(admin, ctx, carriedDay);
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
@@ -2289,7 +2614,7 @@ export async function clearOrderDispatchDate(orderId: string, reason: string): P
 /** Comentario interno del equipo (§12). Complementa al estado, no lo sustituye. */
 export async function addOrderComment(
   orderId: string,
-  input: { text: string; type?: string | null },
+  input: { text: string; type?: string | null; photoPaths?: string[] | null },
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) {
@@ -2302,17 +2627,64 @@ export async function addOrderComment(
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
 
+  // Las fotos de constancia (lib/order-comment-photos.ts): solo rutas de ESTE
+  // pedido, y que de verdad se hayan subido. Una foto que no llegó no se
+  // promete en la Actividad.
+  const photos = validateOrderCommentPhotos(input.photoPaths, ctx.storeId, orderId);
+  if ("error" in photos) return { error: photos.error };
   const admin = createAdminSupabase();
+  if (photos.paths.length) {
+    const { data: stored, error: listError } = await admin.storage
+      .from(ORDER_COMMENT_PHOTO_BUCKET)
+      .list(orderCommentPhotoFolder(ctx.storeId, orderId), { limit: 1000 });
+    if (listError) return { error: `No se pudieron revisar las fotos: ${listError.message}` };
+    const names = new Set((stored ?? []).map((o) => `${orderCommentPhotoFolder(ctx.storeId, orderId)}/${o.name}`));
+    if (photos.paths.some((p) => !names.has(p))) {
+      return { error: "Una de las fotos no terminó de subirse. Vuelve a adjuntarla." };
+    }
+  }
+
   const eventError = await recordEvent(admin, ctx, {
     kind: "comment",
     note: text,
     commentType: input.type?.trim() || null,
+    payload: photos.paths.length ? { photos: photos.paths } : undefined,
   });
   if (eventError) return { error: eventError };
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
-  return { notice: "Comentario registrado." };
+  return {
+    notice: photos.paths.length
+      ? `Comentario registrado con ${photos.paths.length} foto${photos.paths.length === 1 ? "" : "s"}.`
+      : "Comentario registrado.",
+  };
+}
+
+/**
+ * Prepara la subida de UNA foto de comentario: el navegador la sube directo a
+ * Storage con esta URL firmada y luego manda la ruta en `addOrderComment`.
+ */
+export async function createOrderCommentPhotoUpload(
+  orderId: string,
+  contentType: string,
+  size: number,
+): Promise<{ path: string; token: string } | { error: string }> {
+  const perms = await getMasterPermissions();
+  if (!perms.can("master.edit")) return { error: "Tu rol no permite registrar comentarios." };
+  const ext = orderCommentPhotoExt(contentType);
+  if (!ext) return { error: "La foto debe ser JPG, PNG, WEBP o GIF." };
+  if (!(size > 0)) return { error: "La imagen está vacía." };
+  if (size > ORDER_COMMENT_PHOTO_MAX_BYTES) return { error: "La foto pesa más de 15 MB." };
+  const ctx = await authorizeOrder(orderId);
+  if (!ctx) return { error: "Sin acceso a este pedido." };
+
+  const admin = createAdminSupabase();
+  await admin.storage.createBucket(ORDER_COMMENT_PHOTO_BUCKET, { public: false }).catch(() => {});
+  const path = `${orderCommentPhotoFolder(ctx.storeId, orderId)}/comment-${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`;
+  const { data, error } = await admin.storage.from(ORDER_COMMENT_PHOTO_BUCKET).createSignedUploadUrl(path);
+  if (error || !data) return { error: error?.message ?? "No se pudo preparar la subida." };
+  return { path: data.path, token: data.token };
 }
 
 /**

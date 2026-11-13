@@ -1,9 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const { rpc, getClaims } = vi.hoisted(() => ({ rpc: vi.fn(), getClaims: vi.fn() }));
 vi.mock("@/lib/db", () => ({ createServerSupabase: async () => ({ auth: { getClaims } }), createAdminSupabase: () => ({ rpc }) }));
-import { filterRoutedLeads, getLeadRoutingScope } from "@/lib/lead-routing-access";
-const scope = { enabled: true, blockedIds: ["excluded"], blocks: ["recuperacion"], allowed: false, signature: "v1" };
+import { filterRoutedLeads, getLeadRoutingScope, filterManualSearchLeads, getLeadManualTakeStores, type LeadRoutingScope } from "@/lib/lead-routing-access";
+const scope: LeadRoutingScope = { enabled: true, blockedIds: ["excluded"], blocks: ["recuperacion"], allowed: false, signature: "v1" };
 describe("server-enforced routing", () => {
+  it("expands only explicit manual search in granted stores, retaining the original automatic queue", async () => {
+    const rows = [{ id: "excluded", store_id: "a" }, { id: "permitted", store_id: "a" }];
+    expect(filterManualSearchLeads(rows, scope, ["a"])).toEqual([{ ...rows[0], manual_take_required: true }, rows[1]]);
+    expect(filterManualSearchLeads(rows, scope, ["different-store"])).toEqual([rows[1]]);
+    expect(filterRoutedLeads(rows, scope)).toEqual([rows[1]]);
+    rpc.mockResolvedValueOnce({ data: ["a"] });
+    expect(await getLeadManualTakeStores(["a"])).toEqual(["a"]);
+    expect(rpc).toHaveBeenCalledWith("lead_manual_take_stores", { p_actor: "session-user", p_stores: ["a"] });
+  });
   beforeEach(() => { rpc.mockReset(); getClaims.mockReset(); getClaims.mockResolvedValue({ data: { claims: { sub: "session-user" } } }); });
   it("takes identity from verified claims, not from the browser scope", async () => {
     rpc.mockResolvedValue({ data: scope });

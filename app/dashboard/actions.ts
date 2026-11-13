@@ -15,6 +15,7 @@ import { getStoreCreds, runStoreSync } from "@/lib/ingest";
 import { loadStoreOrderPlatform, searchWooCatalog, wooSaleClient } from "@/lib/woocommerce-orders";
 import { filtroCampanaEnUtm } from "@/lib/cod-cart-attribution";
 import { env } from "@/lib/env";
+import { loadLeadProductCatalog, syncManualAdProductReferences } from "@/lib/lead-products-server";
 
 export interface ActionState {
   error?: string;
@@ -111,7 +112,25 @@ export async function saveAdPromotedProduct(input: {
   }
 
   const heredados = await heredarAlConjunto(admin, adId, productName, skus, now);
+  // Preserve the original validity date in Leads, with an exact store SKU.
+  // Updating a marketing title alone is never customer evidence.
+  const origin = await admin.from("meta_ads").select("adset_id").eq("ad_id", adId).maybeSingle();
+  const siblings = origin.data?.adset_id
+    ? await admin.from("meta_ads").select("ad_id").eq("adset_id", origin.data.adset_id)
+    : { data: [{ ad_id: adId }], error: null };
+  if (!siblings.error) {
+    const ids = (siblings.data ?? []).map(ad => ad.ad_id);
+    const visible = await sb.from("leads").select("store_id").in("ad_id", ids).limit(10000);
+    const storeIds = [...new Set((visible.data ?? []).map(l => l.store_id))];
+    for (const storeId of storeIds) {
+      const linked = await admin.from("leads").select("ad_id").eq("store_id", storeId).in("ad_id", ids).limit(10000);
+      if (!linked.error && linked.data?.length && linked.data.length < 10000) {
+        await syncManualAdProductReferences(admin, storeId, await loadLeadProductCatalog(admin, storeId), linked.data.map(l => l.ad_id!));
+      }
+    }
+  }
   revalidatePath("/dashboard");
+  revalidatePath("/dashboard/leads");
   return { ok: true, heredados };
 }
 

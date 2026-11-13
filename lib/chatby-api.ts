@@ -202,6 +202,17 @@ export async function fetchChatbyConversation(input: {
   }
 }
 
+/** Los mensajes de `send-content`: el adjunto primero y el texto, si hay, después. */
+export function chatbyReplyMessages(
+  text: string,
+  attachment: { type: "image" | "file"; url: string } | null,
+): Array<Record<string, string>> {
+  const out: Array<Record<string, string>> = [];
+  if (attachment) out.push({ type: attachment.type, url: attachment.url });
+  if (text.trim()) out.push({ type: "text", text });
+  return out;
+}
+
 export type ChatbyReplyResult =
   /** Se mandó. `paused` dice si además quedó el bot en pausa. */
   | { status: "ok"; paused: boolean }
@@ -215,7 +226,13 @@ export type ChatbyReplyResult =
  */
 export async function sendChatbyReply(input: {
   userNs: string;
+  /** Vacío solo si va un adjunto. */
   text: string;
+  /**
+   * Un archivo para la clienta (lib/chatby-attachments.ts): una imagen o un
+   * PDF que Chatby baja de esta URL. Sale antes del texto, que hace de pie.
+   */
+  attachment?: { type: "image" | "file"; url: string } | null;
   apiKey: string;
   pauseMinutes: number;
   fetchImpl?: typeof fetch;
@@ -239,7 +256,7 @@ export async function sendChatbyReply(input: {
       {
         user_ns: input.userNs,
         send_as_agent: 1,
-        data: { version: "v1", content: { messages: [{ type: "text", text: input.text }] } },
+        data: { version: "v1", content: { messages: chatbyReplyMessages(input.text, input.attachment ?? null) } },
       },
       fetchImpl,
     );

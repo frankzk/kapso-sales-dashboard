@@ -13,6 +13,10 @@
 //     defecto, y la lista de pago adelantado sigue mandando (pide el total).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Las corridas pasan por la base falsa y varias tiendas: en un runner de CI
+// lento pasan de 5 s (09-11-2026). Más margen, mismo comportamiento.
+vi.setConfig({ testTimeout: 30_000 });
 import { FakeDb, type Row } from "./woocommerce-fake-db";
 
 vi.mock("server-only", () => ({}));
@@ -153,7 +157,7 @@ describe("la corrida", () => {
     expect(posts[0]!.body).toEqual({
       celulares: ["912345678", "987654321"],
       correos: ["a@x.pe"],
-      regla: "1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
+      regla: "1+ devuelto, 1+ rechazado en la puerta o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y Aurela, calculada 2026-11-10 05:00",
     });
     expect(store.calls.filter((c) => c.method === "GET")).toHaveLength(2);
     const sends = db.rows("pago_online_sends");
@@ -379,11 +383,11 @@ describe("el freno de Kapta: la lista automática como otra fuente de `prepayOrd
     const c = await prepayOrderCheck(db.client(), order() as any, "confirmar");
     expect(c.state).toBe("blocked");
     expect(c.state === "blocked" && c.source).toBe("pago_online");
-    expect(c.state === "blocked" && c.message).toContain("Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
-    expect(c.state === "blocked" && c.message).toContain("(2 devueltos, 0 recibidas)");
+    expect(c.state === "blocked" && c.message).toBe("Lista negra (devolvió 2 pedidos y nunca recibió): falta el adelanto de S/ 20 validado.");
+    expect(c.state === "blocked" && c.motivo).toBe("Devolvió 2 pedidos y nunca recibió");
     // El anulador dice cuántos anuló de cuántos.
     const anul = await prepayOrderCheck(db.client(), order({ customer_phone: "912345678" }) as any, "guia");
-    expect(anul.state === "blocked" && anul.message).toContain("Cliente que anuló 4 de 5 pedidos y nunca recibió");
+    expect(anul.state === "blocked" && anul.message).toBe("Lista negra (anuló 4 de 5 pedidos y nunca recibió): falta el adelanto de S/ 20 validado.");
     expect((await prepayOrderCheck(db.client(), order({ payment_state: "adelanto_cargado" }) as any, "guia")).state).toBe("blocked");
   });
 
@@ -402,12 +406,50 @@ describe("el freno de Kapta: la lista automática como otra fuente de `prepayOrd
     expect((await prepayOrderCheck(db.client(), order() as any, "guia")).state).toBe("ok");
   });
 
-  it("la lista de pago adelantado manda: pide el total", async () => {
+  it("el alta a mano manda: sin decir qué pide (o sin la 0329), el total", async () => {
     const db = await listedDb("adelanto", [
       { id: "e1", org_id: ORG, phone: "51987654321", source: "manual", reason: "Rechazó en la puerta", evidence: { kind: "manual" }, added_at: "2026-11-01T00:00:00Z", removed_at: null },
     ]);
     const c = await prepayOrderCheck(db.client(), order({ payment_state: "adelanto_validado" }) as any, "guia");
     expect(c.state === "blocked" && c.source).toBe("lista");
+    expect(c.state === "blocked" && c.message).toBe("Lista negra (agregada a mano: Rechazó en la puerta): falta el pago total validado.");
+  });
+
+  it("un alta a mano con «Adelanto»: el adelanto validado basta, salvo que la automática pida el total", async () => {
+    const entry = { id: "e1", org_id: ORG, phone: "51987654321", source: "manual", reason: "Avisó que no va a recibir", requirement: "adelanto", evidence: { kind: "manual" }, added_at: "2026-11-01T00:00:00Z", removed_at: null };
+    const db = await listedDb("adelanto", [entry]);
+    const blocked = await prepayOrderCheck(db.client(), order({ payment_state: "adelanto_cargado" }) as any, "confirmar");
+    expect(blocked.state === "blocked" && blocked.source).toBe("lista");
+    expect(blocked.state === "blocked" && blocked.message).toBe("Lista negra (agregada a mano: Avisó que no va a recibir): falta el adelanto de S/ 20 validado.");
+    expect(await prepayOrderCheck(db.client(), order({ payment_state: "adelanto_validado" }) as any, "guia")).toEqual({ state: "ok", listed: true, fullyPaid: false });
+    // La automática del mismo celular pide el pago total: gana la que pide más.
+    const full = await listedDb("pago_completo", [entry]);
+    const c = await prepayOrderCheck(full.client(), order({ payment_state: "adelanto_validado" }) as any, "guia");
+    expect(c.state === "blocked" && c.source).toBe("pago_online");
+  });
+
+  it("el envío diario lleva la Lista negra entera: la automática más las altas vivas a mano, sin repetidos", async () => {
+    const db = seed("activo", {
+      prepay_list_entries: [
+        // Ya está en la automática: no se repite.
+        { id: "m1", org_id: ORG, phone: "51987654321", source: "manual", reason: "Fraude con otra cuenta", evidence: {}, added_at: "2026-11-01T00:00:00Z", removed_at: null },
+        // Solo a mano: va.
+        { id: "m2", org_id: ORG, phone: "51955555555", source: "manual", reason: "Avisó que no va a recibir", evidence: {}, added_at: "2026-11-01T00:00:00Z", removed_at: null },
+        // Sacada: no va.
+        { id: "m3", org_id: ORG, phone: "51966666666", source: "manual", reason: "Ya no aplica", evidence: {}, added_at: "2026-11-01T00:00:00Z", removed_at: "2026-11-02T00:00:00Z" },
+      ],
+    });
+    const store = fakeStore(ok);
+    await runPagoOnlineForOrg(db.client(), { orgId: ORG, trigger: "cron", now: NOW, fetchImpl: store.fetchImpl });
+    const posts = store.calls.filter((c) => c.method === "POST");
+    expect(posts.length).toBeGreaterThan(0);
+    const body = posts[0]!.body as { celulares: string[]; regla: string };
+    expect(body.celulares).toEqual(["912345678", "955555555", "987654321"]);
+    expect(body.regla).toContain("más 1 agregado a mano en Kapta");
+    // El registro cuenta la unión (lo que recibe la tienda), y sigue sin celulares.
+    const sends = db.rows("pago_online_sends").filter((r) => r.status === "enviado");
+    expect(sends[0]!.phones_sent).toBe(3);
+    expect(JSON.stringify(sends)).not.toContain("955555555");
   });
 
   it("«no se pudo leer» la lista automática no autoriza una guía", async () => {

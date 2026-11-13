@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { withProductOpeners } from "@/lib/lead-products-server";
 import { getAccessibleStores, getAdNames, getCurrentUser, getUserRoleSummary, getWaNumbers } from "@/lib/access";
 import {
   ALL_STORES,
@@ -30,6 +31,9 @@ import { LeadsBoard } from "@/components/leads";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { getLeadRoutingScope } from "@/lib/lead-routing-access";
 import { routingLabel } from "@/lib/lead-routing";
+import { createAdminSupabase } from "@/lib/db";
+import { listaNegraMarksAmong } from "@/lib/lista-negra-server";
+import { withListaNegra } from "@/lib/lista-negra";
 
 export const dynamic = "force-dynamic";
 
@@ -141,7 +145,8 @@ async function LeadsContent({
   // "Por llamar" se filtra/cuenta en cliente (jerarquía de facetas), así que la
   // cola se pagina completa (`null`) para que los conteos y drill-downs usen el
   // mismo universo que el gráfico; las demás vistas mantienen el tope estándar.
-  const leadsPromise = getStoreLeads(scope, view, leadsViewLimit(view));
+  const leadsPromise = getStoreLeads(scope, view, leadsViewLimit(view))
+    .then((rows) => withProductOpeners(createAdminSupabase(), rows));
   const userPromise = getCurrentUser();
   // El siguiente lead (MOM §11) se reserva solo a quien vende: quien solo
   // supervisa la cola no retiene leads por mirarla.
@@ -161,6 +166,21 @@ async function LeadsContent({
   // «Tomado» sola obligaba a abrir el lead para descubrir a quién preguntarle.
   // Solo se resuelven las reservas vivas: una decena de asesoras, no la cola.
   const agentNamesPromise = leadsPromise.then((rows) => resolveAgentNames(activeClaimHolders(rows)));
+  // La «Lista negra» (MOM §25.3): UNA lectura para los celulares de la página,
+  // de las dos listas, con el cliente de servicio (los celulares de la
+  // automática no se leen desde el navegador): solo dice sí o no —con su
+  // motivo— de los celulares que la lista ya muestra. Sin lectura, nada.
+  const listaNegraPromise = leadsPromise.then(async (rows) => {
+    try {
+      return await listaNegraMarksAmong(
+        createAdminSupabase(),
+        [...new Set(stores.map((s) => s.org_id))],
+        rows.map((l) => l.phone),
+      );
+    } catch {
+      return null;
+    }
+  });
   // El filtro de cobertura (Lima / Provincia) solo existe en «Por llamar». Sus
   // lecturas son independientes de la lista y no la esperan.
   const inQueue = view === "por_llamar";
@@ -196,6 +216,9 @@ async function LeadsContent({
     rolesPromise,
     routingPromise,
   ]);
+  const listaNegra = await listaNegraPromise;
+  const storeOrg = new Map(stores.map((s) => [s.id, s.org_id]));
+  const markedLeads = withListaNegra(leads, listaNegra, storeOrg, (l) => l.phone);
 
   return (
     <LeadsBoard
@@ -208,7 +231,7 @@ async function LeadsContent({
       counts={snapshot.counts}
       queueSignature={snapshot.signature}
       routingLabel={routing.enabled ? routingLabel(routing.blocks) : undefined}
-      leads={leads}
+      leads={markedLeads}
       adNames={adNames}
       waNumbers={waNumbers}
       agentNames={agentNames}

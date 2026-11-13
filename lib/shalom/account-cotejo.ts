@@ -48,6 +48,7 @@ import {
   documentKey,
   guideCodeKey,
   listingCoverage,
+  listingCoverageFloor,
   listingFromDate,
   listingPickupCodes,
   matchShalomListing,
@@ -937,13 +938,21 @@ export async function cotejarShalom(
       const lagLimit = Date.now() - COVERAGE_LAG_MS;
       // Una guía que el rastreo confirmó que Shalom no conoce no tiene por qué
       // estar en el listado: no cuenta como «falta» (08-11-2026).
-      const expected = known
-        .filter((k) => {
-          const t = Date.parse(k.created_at);
-          return t >= Date.parse(fromIso) + DAY_MS && t <= lagLimit && !dead.deadCodes.has(guideCodeKey(k.guide_code));
-        })
-        .map((k) => k.guide_code);
-      account.cobertura = listingCoverage(guides, expected);
+      const measurable = known.filter((k) => Date.parse(k.created_at) <= lagLimit && !dead.deadCodes.has(guideCodeKey(k.guide_code)));
+      // El borde viejo que Shalom entrega a medias, día por día (10-11-2026,
+      // `listingCoverageFloor`): desde ahí se exige el 97 %.
+      const floor = listingCoverageFloor(
+        guides,
+        measurable.map((k) => ({ guideCode: k.guide_code, createdAt: k.created_at })),
+        fromIso,
+      );
+      const expected = measurable.filter((k) => Date.parse(k.created_at) >= floor.floorMs).map((k) => k.guide_code);
+      account.cobertura = {
+        ...listingCoverage(guides, expected),
+        listadoDesde: floor.listingOldest,
+        bordeRecortado: floor.shifted,
+        bordeDias: floor.bordeDias,
+      };
       if (!account.cobertura.completo) {
         skip(
           `al listado le faltan guías creadas por API (${account.cobertura.encontradas} de ${account.cobertura.esperadas}): no se vincula nada`,
@@ -1016,7 +1025,13 @@ export async function cotejarShalom(
       const candidateOrders = group.candidates.map((c) => toCotejoOrder(c, candDocs, true));
       const docs = new Set(candidateOrders.map((o) => o.document).filter((d): d is string => Boolean(d)));
       const phones = new Set(candidateOrders.map((o) => o.phone).filter((p): p is string => Boolean(p)));
-      const relevant = guides.filter((g) => (g.document && docs.has(g.document)) || (g.phone && phones.has(g.phone)));
+      // No se empareja con guías del borde que Shalom entregó a medias: ahí
+      // puede faltar la guía que discutiría la pareja (`listingCoverageFloor`).
+      const matchable = guides.filter((g) => {
+        const t = Date.parse((g.createdAt ?? "").replace(" ", "T"));
+        return !Number.isFinite(t) || t >= floor.floorMs;
+      });
+      const relevant = matchable.filter((g) => (g.document && docs.has(g.document)) || (g.phone && phones.has(g.phone)));
       for (const g of relevant) {
         if (g.document) docs.add(g.document);
         if (g.phone) phones.add(g.phone);

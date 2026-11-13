@@ -58,8 +58,8 @@ import { applyWooOrderEffects } from "@/lib/ingest";
 import { insertOrderIfAbsent } from "@/lib/order-sale";
 import { debeGuardarTelefono } from "@/lib/lead-sin-numero";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
-import { isPrepayRequired, orgOfStore } from "@/lib/prepay-list-server";
-import { prepayBlockMessage } from "@/lib/prepay-list";
+import { orgOfStore, prepayEntryRequirementFor } from "@/lib/prepay-list-server";
+import { prepayEntryBlockMessage } from "@/lib/prepay-list";
 import { pagoOnlineOrderMessage } from "@/lib/pago-online";
 import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
 import { priceMismatchRejection, resolveOrderDiscount, type OrderDiscountInput } from "@/lib/shopify";
@@ -935,16 +935,18 @@ export async function handleBotOrder(req: BotOrderRequest, deps: BotOrderDeps): 
     // le crea un pedido contra entrega. Antes del candado: no se toca nada.
     // Si no se pudo leer, se sigue (falla abierto): el pedido se vuelve a
     // frenar al confirmarlo y al crear su guía.
-    let prepayRequired = false;
+    let prepayEntry: Awaited<ReturnType<typeof prepayEntryRequirementFor>> = null;
     let prepayOrgId: string | null = null;
     try {
       const orgId = await step("prepay_org", orgOfStore(admin, storeId));
       prepayOrgId = orgId;
-      prepayRequired = !!orgId && (await step("prepay", isPrepayRequired(admin, orgId, input.phone)));
+      prepayEntry = orgId ? await step("prepay", prepayEntryRequirementFor(admin, orgId, input.phone)) : null;
     } catch {
       events.push("prepay.unread");
     }
-    if (prepayRequired) return finish(fail("prepay_required", prepayBlockMessage("bot")));
+    // Lo que pide su alta a mano (0329): el mensaje es el mismo de la
+    // automática, con su motivo y «pago total» si es lo que pide.
+    if (prepayEntry) return finish(fail("prepay_required", prepayEntryBlockMessage("bot", prepayEntry.requirement, prepayEntry.reason)));
     // «Pago solo online (lista automática)», MOM §41.11: tampoco se le crea un
     // pedido contra entrega. Mismo código (`prepay_required`, 422, deriva a una
     // asesora), con lo que se cobra en ESTA lista: el adelanto de S/ 20 o el

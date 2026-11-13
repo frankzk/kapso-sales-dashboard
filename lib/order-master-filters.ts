@@ -14,6 +14,8 @@ import { scheduledWithoutLocation } from "@/lib/dispatch-date";
 export interface MasterFilters {
   /** Pending balance in the Shalom/Olva shipment cohort selected in Consolidado. */
   agencyUnpaid?: AgencyPaymentWindow | null;
+  agencyPaymentView?: "all" | "complete" | "collect" | "validate" | "review";
+  historicalPaid?: boolean;
   stores: Set<string>;
   generalStatuses: Set<string>;
   operationalStatuses: Set<string>;
@@ -193,6 +195,8 @@ export function emptyFilters(): MasterFilters {
     paidUnnotified: false,
     scheduledNoLocation: false,
     agencyUnpaid: null,
+    agencyPaymentView: "collect",
+    historicalPaid: false,
     search: "",
     confirmationDue: "",
     managementDays: new Set(),
@@ -225,7 +229,7 @@ export function matchesAttempts(count: number, filter: number | null): boolean {
 /** ¿Hay algún filtro activo? Para poder ofrecer "limpiar filtros". */
 export function hasActiveFilters(f: MasterFilters): boolean {
   return (
-    Boolean(f.agencyUnpaid) ||
+    Boolean(f.agencyUnpaid) || !!f.historicalPaid ||
     f.stores.size > 0 ||
     f.generalStatuses.size > 0 ||
     f.operationalStatuses.size > 0 ||

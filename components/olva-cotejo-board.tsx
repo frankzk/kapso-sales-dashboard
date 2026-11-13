@@ -51,7 +51,7 @@ export function OlvaCotejoBoard({
   liveLinked: Record<string, string | null>;
   labelHints?: LabelHints;
 }) {
-  // El título, la explicación y las pestañas los pone la página (OlvaPage).
+  // El título, la explicación y las pestañas los pone la página («Pago de diferencia», MOM §44).
   return (
     <div className="space-y-6">
       {orgs.map((org) => (

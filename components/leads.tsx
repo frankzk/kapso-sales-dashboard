@@ -1,6 +1,11 @@
 "use client";
+import { loadLeadStoreDistribution } from "@/lib/leads-read-client";
+import { pickDistributedLead, type LeadStoreDistribution } from "@/lib/lead-store-distribution";
+import { attributedProductHandle, productTextKey } from "@/lib/lead-products";
+import { LeadProductTabs } from "@/components/lead-product-tabs";
 
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
+import { ListaNegraBadge } from "@/components/lista-negra-badge";
 import { CALL_RETRY_SIGNAL_DAYS, prioritizeDueAppointments } from "@/lib/lead-call-queue";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
@@ -99,6 +104,7 @@ import {
   resolveHandoff,
 } from "@/app/dashboard/leads/actions";
 import { claveAnuncio, handleDeAnuncioPara, type AdDeclaration } from "@/lib/ad-products";
+import { takeLeadManually } from "@/app/dashboard/leads/manual-take-actions";
 import { cn } from "@/components/ui";
 import {
   AttentionPill,
@@ -298,7 +304,7 @@ function ChipGroup({ label, children }: { label: string; children: ReactNode }) 
 }
 
 const SHEET_ROW =
-  "flex min-h-9 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11";
+  "flex min-h-9 w-full min-w-0 cursor-pointer items-center gap-2.5 rounded-md px-2 text-sm text-ink-700 hover:bg-wash pointer-coarse:min-h-11";
 
 /** Lista de casillas con contador para la hoja de «Más filtros» (Fuente, Producto, Número). */
 function CheckList({
@@ -307,18 +313,20 @@ function CheckList({
   selected,
   onToggle,
   searchable = false,
+  wrapLabels = false,
 }: {
   label: string;
   options: { key: string; label: string; count?: number }[];
   selected: Set<string>;
   onToggle: (key: string) => void;
   searchable?: boolean;
+  wrapLabels?: boolean;
 }) {
   const [term, setTerm] = useState("");
-  const t = term.trim().toLocaleLowerCase("es");
-  const shown = t ? options.filter((o) => o.label.toLocaleLowerCase("es").includes(t)) : options;
+  const t = productTextKey(term);
+  const shown = t ? options.filter((o) => productTextKey(o.label).includes(t)) : options;
   return (
-    <div>
+    <div className="min-w-0">
       {searchable && (
         <label className="relative mb-1.5 block">
           <span className="sr-only">Buscar en {label.toLocaleLowerCase("es")}</span>
@@ -331,12 +339,12 @@ function CheckList({
           />
         </label>
       )}
-      <ul className="-mx-1 grid max-h-56 gap-0.5 overflow-y-auto">
+      <ul className="-mx-1 grid min-w-0 grid-cols-1 max-h-56 gap-0.5 overflow-x-hidden overflow-y-auto">
         {shown.map((o) => (
-          <li key={o.key}>
-            <label className={SHEET_ROW}>
+          <li key={o.key} className="min-w-0">
+            <label className={cn(SHEET_ROW, wrapLabels && "items-start py-2")}>
               <input type="checkbox" className={CHECKBOX} checked={selected.has(o.key)} onChange={() => onToggle(o.key)} />
-              <span className="min-w-0 flex-1 truncate">{o.label}</span>
+              <span title={o.label} className={cn("min-w-0 flex-1", wrapLabels ? "break-words whitespace-normal leading-5" : "truncate")}>{o.label}</span>
               {o.count != null && <span className="shrink-0 text-xs tabular-nums text-ink-500">{o.count.toLocaleString("es-PE")}</span>}
             </label>
           </li>
@@ -367,6 +375,14 @@ const HOOK_DISPLAY: Record<LeadHookKind, { prefix: string; title: string }> = {
 };
 
 function LeadHookLine({ lead }: { lead: LeadRow }) {
+  const currentHandle = attributedProductHandle(lead, "current", null, null);
+  const signal = [lead.interest_product, lead.entry_product].find((s) => s && s.handle === currentHandle);
+  if (signal) return (
+    <p title={`${signal.source === "ambiguous" ? "Consulta ambigua" : "Consulta del cliente"} · ${new Date(signal.at).toLocaleString("es-PE", { timeZone: "America/Lima" })}: ${signal.evidence}`}
+      className="mt-0.5 truncate text-[13px] leading-5 text-ink-600">
+      <span className="text-ink-500">Interés:</span> {signal.title ?? "Varios productos; por confirmar"}
+    </p>
+  );
   const hook = leadHook(lead);
   if (!hook) return null;
   const d = HOOK_DISPLAY[hook.kind];
@@ -607,6 +623,7 @@ export function LeadsBoard({
   // cola por producto —la misma pregunta, el mismo argumentario, una tanda de
   // llamadas— en vez de saltar de un producto a otro fila por fila.
   const [prodFilter, setProdFilter] = useState<Set<string>>(new Set());
+  const [productBasis, setProductBasis] = useState<"current" | "entry">("current");
   const [interactionDateFilter, setInteractionDateFilter] = useState<LeadInteractionDateFilter | null>(
     initialInteractionDate ?? null,
   );
@@ -893,8 +910,15 @@ export function LeadsBoard({
     setCalls(null);
     setHistory(null);
     setOpeningId(leadId); // disable only this row's button while the claim loads
-    const historyPromise = loadLeadCustomerHistory(leadId).catch(() => null);
     try {
+      if (previa?.manual_take_required) {
+        const taken = await takeLeadManually(leadId, "busqueda");
+        if (taken.error) {
+          setBanner(taken.error); setSelected(null); activeLeadIdRef.current = null;
+          return false;
+        }
+      }
+      const historyPromise = loadLeadCustomerHistory(leadId).catch(() => null);
       const d = await openLeadDrawer(leadId);
       if (activeLeadIdRef.current !== leadId) return false;
       if ("error" in d) {
@@ -1115,40 +1139,29 @@ export function LeadsBoard({
   // ser sobre la cola entera y no lead a lead: plegar los links cortados a media
   // palabra exige ver todos los handles para saber cuál es el completo.
   const handleOf = useMemo(() => {
+    const resolve = (l: LeadRow) => attributedProductHandle(l, productBasis, leadProductHandle(l.first_inbound_text),
+      l.ad_id ? handleDeAnuncioPara(adDeclarations?.[claveAnuncio(l.store_id, l.ad_id)], l.first_seen_at) : null);
     const crudo = new Map<string, string>();
     for (const l of leads) {
-      // 1) Lo ÚLTIMO que enlazó, que es lo que está consultando ahora (0140).
-      //    Cubre a quien vuelve por otro producto y a quien abrió con un «hola»
-      //    y mandó la ficha después.
-      // 2) El carrito o lo que estaba mirando (0143).
-      // 3) El link del primer mensaje —lead antiguo, sin resincronizar—, que es
-      //    de donde salía todo antes.
-      // 4) Y si tampoco, lo que su anuncio vendía EL DÍA QUE ESTE LEAD ENTRÓ.
-      //    No lo que vende hoy: un creativo reutilizado cambia de producto, y
-      //    tomar la declaración nueva reescribiría el pasado de los viejos.
-      //    Nunca una conjetura: sin declaración vigente el lead se queda en
-      //    «Sin producto», que es la verdad.
-      const h =
-        (l.last_product_handle ?? "").trim() ||
-        // 2) Lo que tiene en el carrito, o lo que estaba mirando. Va antes que
-        //    el primer mensaje porque es más reciente que la apertura, y llega
-        //    ya como handle desde Shopify — no como título, que no se puede
-        //    emparejar con el del link sin adivinar.
-        (l.cart_product_handle ?? "").trim() ||
-        leadProductHandle(l.first_inbound_text) ||
-        (l.ad_id
-          ? handleDeAnuncioPara(
-              adDeclarations?.[claveAnuncio(l.store_id, l.ad_id)],
-              l.first_seen_at,
-            )
-          : null);
+      const h = resolve(l);
       if (h) crudo.set(l.id, h);
     }
     const canon = canonicalProductHandles(crudo.values());
     const porLead = new Map<string, string>();
     for (const [id, h] of crudo) porLead.set(id, canon.get(h) ?? h);
-    return (l: LeadRow) => porLead.get(l.id) ?? null;
-  }, [leads, adDeclarations]);
+    return (l: LeadRow) => {
+      if (porLead.has(l.id)) return porLead.get(l.id)!;
+      const handle = resolve(l);
+      return handle ? canon.get(handle) ?? handle : null;
+    };
+  }, [leads, adDeclarations, productBasis]);
+  const productTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    for (const lead of leads) for (const signal of [lead.entry_product, lead.interest_product]) {
+      if (signal?.handle && signal.title) titles.set(signal.handle, signal.title);
+    }
+    return titles;
+  }, [leads]);
 
   // La cobertura de cada lead, resuelta UNA vez por cola: el predicado del
   // filtro y sus contadores la piden varias veces por lead y por render. Las
@@ -1300,7 +1313,7 @@ export function LeadsBoard({
     }
     const prodOptionsAcc = [...prodCountsAcc.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([handle, count]) => ({ key: handle, label: productLabel(handle), count }));
+      .map(([handle, count]) => ({ key: handle, label: productTitles.get(handle) ?? productLabel(handle), count }));
 
     const gestCountsAcc = countGestiones(gestBase);
     const waCountsAcc = new Map<string, number>();
@@ -1359,6 +1372,7 @@ export function LeadsBoard({
     srcFilter,
     numFilter,
     prodFilter,
+    productTitles,
     inQueue,
     queueState,
     segFilter,
@@ -1524,6 +1538,7 @@ export function LeadsBoard({
   const nextLead = useNextLead({
     enabled: nextEnabled,
     queue: displayLeads,
+    scope,
     userId: currentUserId,
     drawerLeadId: selected?.id ?? null,
   });
@@ -1575,11 +1590,27 @@ export function LeadsBoard({
         setOpeningId((current) => (current === next.id ? null : current));
         return;
       }
-      jumpingToRef.current = null;
       // Si otra asesora lo tomó después de pintarse la lista, se salta al
       // siguiente libre de la misma lista (hasta 5 intentos), sin cerrar la
       // ficha ni mostrar el aviso de «X está atendiendo este lead».
-      let candidate: LeadRow | null = next;
+      let distribution: LeadStoreDistribution | null = null;
+      if (nextEnabled) {
+        try { distribution = await loadLeadStoreDistribution(scope); }
+        catch {
+          jumpingToRef.current = null;
+          setOpeningId(null);
+          setBanner("No se pudo comprobar tu distribución por tienda. Reintenta.");
+          return;
+        }
+        if (jumpingToRef.current !== next.id) return;
+      }
+      if (jumpingToRef.current !== next.id) return;
+      jumpingToRef.current = null;
+      const skipped = new Set<string>(leaving ? [leaving] : []);
+      const choose = () => distribution?.weights
+        ? pickDistributedLead(queue, { userId: currentUserId, skipped }, distribution)
+        : null;
+      let candidate: LeadRow | null = distribution?.weights ? choose() : next;
       let lastTaken: string | null = null;
       for (let attempt = 0; candidate && attempt < NEXT_LEAD_MAX_SKIPS; attempt++) {
         let taken = false;
@@ -1591,7 +1622,9 @@ export function LeadsBoard({
           },
         });
         if (opened || !taken) return;
-        candidate = leadAfter(queue, { openId: candidate.id, userId: currentUserId });
+        skipped.add(candidate.id);
+        if (distribution?.weights) candidate = choose();
+        else candidate = leadAfter(queue, { openId: candidate.id, userId: currentUserId });
       }
       setSelected(null);
       setBanner(
@@ -1956,23 +1989,28 @@ export function LeadsBoard({
                 />
               </SheetSection>
             )}
-            {(prodOptions.length > 0 || prodFilter.size > 0) && (
+            {(prodOptions.length > 0 || prodSin > 0 || prodFilter.size > 0) && (
               <SheetSection title="Producto">
-                <CheckList
-                  label="Producto"
-                  searchable={prodOptions.length > 8}
-                  selected={prodFilter}
-                  onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
-                  options={[
-                    ...prodOptions,
-                    // «Sin producto» son los que no llegaron desde una ficha: no
-                    // es un producto más, es el resto, y tiene que estar para que
-                    // la suma cuadre.
-                    ...(prodSin > 0 || prodFilter.has("__none__")
-                      ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
-                      : []),
-                  ]}
-                />
+                <LeadProductTabs value={productBasis} onChange={(basis) => { setProductBasis(basis); setProdFilter(new Set()); }}>
+                  <p className="mb-3 text-xs leading-5 text-ink-500">{productBasis === "entry" ? "El producto por el que llegó el lead." : "Lo último que consultó el cliente."} Marca uno o varios productos para filtrar.</p>
+                  <CheckList
+                    key={productBasis}
+                    label="Producto"
+                    searchable
+                    wrapLabels
+                    selected={prodFilter}
+                    onToggle={(key) => setProdFilter((s) => withToggled(s, key))}
+                    options={[
+                      ...prodOptions,
+                      // «Sin producto» reúne lo no identificado o ambiguo: no
+                      // es un producto más, es el resto, y tiene que estar para que
+                      // la suma cuadre.
+                      ...(prodSin > 0 || prodFilter.has("__none__")
+                        ? [{ key: "__none__", label: "Sin producto", count: prodSin }]
+                        : []),
+                    ]}
+                  />
+                </LeadProductTabs>
               </SheetSection>
             )}
             {hasMultiNumbers && (
@@ -2060,6 +2098,7 @@ export function LeadsBoard({
           verdad". v2 entrega el tratamiento por Telegram, como trabajo normal,
           sin decir que hay una prueba (lib/coverage-push.ts). */}
 
+      {nextEnabled && nextLead.distribution?.weights && <p className="text-xs text-ink-600">Objetivo por tienda: {Object.entries(nextLead.distribution.weights).map(([id, weight]) => `${storeNameById.get(id) ?? "Tienda"} ${weight} %`).join(" · ")}. Citas primero; sujeto a disponibilidad.</p>}
       {nextEnabled && (
         <NextLeadCard
           state={nextLead}
@@ -2235,6 +2274,8 @@ export function LeadsBoard({
                     <span className="shrink-0 text-xs font-medium text-ink-500">{storeNameById.get(lead.store_id) ?? "—"}</span>
                   )}
                   <SegmentBadge lead={lead} />
+                  {/* La Lista negra (MOM §25.3): la misma chapa negra del Master. */}
+                  {lead.lista_negra && <ListaNegraBadge mark={lead.lista_negra} />}
                   <LeadAttemptBadge lead={lead} />
                   <YapeKindBadge lead={lead} />
                   {/* Ya pagó y espera (MOM §16.1): es el motivo de la fila, así
@@ -2327,8 +2368,10 @@ export function LeadsBoard({
 
               {/* Acciones rápidas: al pasar el puntero en escritorio; en el
                   teléfono se abre la ficha tocando la fila. */}
-              <div className="ml-auto hidden items-center justify-end gap-1 md:flex">
-                {locked ? (
+              <div className={cn("ml-auto items-center justify-end gap-1", lead.manual_take_required ? "flex" : "hidden md:flex")}>
+                {lead.manual_take_required && !locked ? (
+                  <OpsButton size="sm" onKeyDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); openLead(lead); }}>Tomar este lead</OpsButton>
+                ) : locked ? (
                   <span className="whitespace-nowrap text-xs text-ink-500">en curso</span>
                 ) : (
                   <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">

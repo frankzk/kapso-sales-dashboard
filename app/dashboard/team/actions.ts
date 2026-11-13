@@ -24,7 +24,7 @@ export async function saveTeamLeadRouting(orgId: string, revision: number, input
   const actor = await requireOrgAdmin(orgId);
   if (!actor) return { error: "Sin permiso para configurar el equipo." };
   const parsed = parseLeadRouting(input);
-  if (!parsed || !Number.isInteger(revision) || revision < 0) return { error: "Revisa los bloques y las horas de prioridad." };
+  if (!parsed || !Number.isInteger(revision) || revision < 0) return { error: "Revisa los bloques, las horas y los porcentajes por tienda (100 % en total)." };
   const { error } = await createAdminSupabase().rpc("save_lead_routing", {
     p_org: orgId, p_actor: actor.userId, p_revision: revision, p_enabled: parsed.enabled,
     p_hours: parsed.freshHours, p_assignments: parsed.assignments,

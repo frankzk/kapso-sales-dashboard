@@ -40,6 +40,7 @@ import {
 import { cuandoLabel, RIESGO_TITULO, type AvisoDuplicado } from "@/lib/pedido-duplicado";
 import { etiquetaCandidato, ordenarCandidatos } from "@/lib/lead-sin-numero";
 import type { PhoneSaleRequest } from "@/lib/master-phone-sale";
+import { takeLeadManually } from "@/app/dashboard/leads/manual-take-actions";
 
 // El tono de cada aviso: un duplicado frena, un pedido abierto pide mirar, una
 // recompra solo informa.
@@ -273,9 +274,9 @@ export function VentaTelefonica({
               />
             </label>
 
-            {(res?.error || openingError) && (
+            {(res?.error || res?.takeError || openingError) && (
               <Banner tone="crit" role="alert">
-                {res?.error || openingError}
+                {res?.error || res?.takeError || openingError}
               </Banner>
             )}
             {res?.ok && res.existia && (
@@ -309,7 +310,11 @@ export function VentaTelefonica({
                           void (async () => {
                             if(abriendoRef.current)return;
                             abriendoRef.current=true;setAbriendo(true);
-                            try { if (await onAbrir(c.id)) cerrar(); }
+                            try {
+                              const taken = await takeLeadManually(c.id, "venta_telefonica");
+                              if (taken.error) { setRes({ ...res, error: taken.error }); return; }
+                              if (await onAbrir(c.id)) cerrar();
+                            }
                             catch {setRes({ok:false,error:"No se pudo abrir la conversación. Intenta nuevamente."});}
                             finally {abriendoRef.current=false;setAbriendo(false);}
                           })();
@@ -338,13 +343,15 @@ export function VentaTelefonica({
                 variant="primary"
                 size="lg"
                 className="w-full"
-                disabled={abriendo || !phone.trim() || !storeId}
+                disabled={abriendo || consultando || !!res?.takeError || !phone.trim() || !storeId}
                 aria-busy={abriendo}
                 onClick={() => void abrir()}
               >
                 {abriendo && <Spinner />}
                 {abriendo
                   ? "Abriendo la ficha…"
+                  : res?.manualTakeRequired
+                    ? "Tomar este lead y abrir su ficha"
                   : candidatos.length > 0
                     ? "No es ninguna: crear y abrir la ficha"
                     : res?.aviso?.riesgo === "duplicado"

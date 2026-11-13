@@ -6,8 +6,9 @@ export function masterCohortQuery(
   sb: SupabaseClient, storeIds: string[], filters: MasterFilters,
   columns: string, options?: { count: "exact"; head: true },
 ) {
-  if (!filters.agencyUnpaid) return sb.from("order_master").select(columns, options);
-  return sb.rpc("order_master_agency_unpaid", {
-    p_store_ids: storeIds, p_from: filters.agencyUnpaid.from, p_to: filters.agencyUnpaid.to,
+  if (!filters.agencyUnpaid && !filters.historicalPaid) return sb.from("order_master").select(columns, options);
+  return sb.rpc("order_master_agency_payments", {
+    p_store_ids: storeIds, p_from: filters.agencyUnpaid?.from ?? null, p_to: filters.agencyUnpaid?.to ?? null,
+    p_bucket: filters.historicalPaid ? "historical" : filters.agencyPaymentView ?? "collect",
   }, options).select(columns);
 }

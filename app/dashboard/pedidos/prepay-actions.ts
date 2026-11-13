@@ -15,7 +15,15 @@ import { env } from "@/lib/env";
 import { FlowClient } from "@/lib/flow/client";
 import { ensureFlowPaymentLink } from "@/lib/flow/link";
 import { orgOfStore, paymentFactsOf, prepayEntryView, prepayLookup, type PrepayOrderRow } from "@/lib/prepay-list-server";
-import { prepayLinkPlan, prepayRequirementMet, type PrepayEvidence, type PrepayPaymentRow } from "@/lib/prepay-list";
+import {
+  prepayEntryRequirementMet,
+  prepayLinkPlan,
+  prepayRequirementMet,
+  type PrepayEntryRequirement,
+  type PrepayEvidence,
+  type PrepayPaymentRow,
+} from "@/lib/prepay-list";
+import { LN_EXCEPT_DONE, lnUnreadMessage } from "@/lib/lista-negra-copy";
 import { formatLimaDateTime, isUuid, PAGO_ONLINE_EXCEPTION_EVENT } from "@/lib/automations-catalog";
 import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
@@ -25,6 +33,7 @@ import {
   PAGO_ONLINE_REQUIREMENT_LABEL,
   pagoOnlineReasonProblem,
   pagoOnlineRequirementMet,
+  type PagoOnlineReason,
   type PagoOnlineRequirement,
 } from "@/lib/pago-online";
 
@@ -32,6 +41,9 @@ export interface OrderPrepayStatus {
   listed: boolean;
   /** Ya está pagado completo: el pedido sigue, con cobro cero. */
   fullyPaid?: boolean;
+  /** Lo que pide el alta a mano (0329; sin la columna, el total) y si ya lo tiene. */
+  requirement?: PrepayEntryRequirement;
+  met?: boolean;
   source?: "auto" | "manual";
   reason?: string;
   addedAt?: string;
@@ -53,9 +65,9 @@ export interface OrderPrepayStatus {
 }
 
 export interface OrderPagoOnlineStatus {
-  /** Por qué entra: `devuelto` (A) o `anulador` (B). */
-  reason: "devuelto" | "anulador";
-  /** Los devueltos, o los anulados del anulador. */
+  /** Por qué entra: `devuelto` (A), `anulador` (B) o `rechazo` (C). */
+  reason: PagoOnlineReason;
+  /** Los devueltos, los anulados del anulador o los rechazados en la puerta. */
   failed: number | null;
   /** Sus pedidos contra entrega que cuentan (para «anuló N de M»). */
   orders: number | null;
@@ -96,10 +108,10 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
     const orgId = await orgOfStore(admin, order.store_id);
     if (!orgId) return { listed: false };
     const lookup = await prepayLookup(admin, orgId, order.customer_phone);
-    if (lookup.state === "unread") return { listed: false, error: "No se pudo comprobar la lista de pago adelantado." };
+    if (lookup.state === "unread") return { listed: false, error: lnUnreadMessage() };
     if (lookup.state === "not_listed") {
       const auto = await pagoOnlineLookup(admin, orgId, order.customer_phone);
-      if (auto.state === "unread") return { listed: false, error: "No se pudo comprobar la lista «Pago solo online»." };
+      if (auto.state === "unread") return { listed: false, error: lnUnreadMessage() };
       if (auto.state === "not_listed") return { listed: false };
       return {
         listed: false,
@@ -116,6 +128,7 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
     }
     const view = prepayEntryView(lookup.entry);
     const fullyPaid = prepayRequirementMet(paymentFactsOf(order));
+    const met = prepayEntryRequirementMet(view.requirement, paymentFactsOf(order));
     const creds = await getStoreCreds(order.store_id, admin).catch(() => null);
     const plan = fullyPaid
       ? null
@@ -126,6 +139,8 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
     return {
       listed: true,
       fullyPaid,
+      requirement: view.requirement,
+      met,
       due: plan?.ok ? { kind: plan.kind, amount: plan.amount, alreadyPaid: plan.alreadyPaid } : null,
       dueProblem: plan && !plan.ok ? plan.error : null,
       source: view.source,
@@ -136,7 +151,7 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
       total: order.order_total,
     };
   } catch {
-    return { listed: false, error: "No se pudo comprobar la lista de pago adelantado." };
+    return { listed: false, error: lnUnreadMessage() };
   }
 }
 
@@ -261,5 +276,5 @@ export async function exceptPagoOnlineCustomer(orderId: string, reason: string):
   await admin
     .from("automation_switch_events")
     .insert({ org_id: orgId, store_id: order.store_id, automation: PAGO_ONLINE_EXCEPTION_EVENT, previous: null, next: "exceptuado", actor: user?.id ?? null });
-  return { notice: "Exceptuado: Kapta ya no lo frena por esta lista, y sale de la lista de las tiendas en el próximo envío." };
+  return { notice: LN_EXCEPT_DONE };
 }

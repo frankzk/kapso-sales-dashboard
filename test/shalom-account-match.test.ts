@@ -12,6 +12,8 @@ import {
   COTEJO_HORAS_LIMA,
   COVERAGE_MIN,
   listingCoverage,
+  listingCoverageFloor,
+  LISTING_EDGE_MAX_SHIFT_DAYS,
   listingCodes,
   listingPickupCodes,
   matchShalomListing,
@@ -320,10 +322,42 @@ describe("antes de creerse el listado", () => {
 
   it("el listado está entero si trae las guías de la API del periodo", () => {
     const codes = listado.map((g) => g.guia);
-    expect(listingCoverage(listado, codes)).toEqual({ esperadas: 20, encontradas: 20, completo: true });
+    expect(listingCoverage(listado, codes)).toEqual({ esperadas: 20, encontradas: 20, completo: true, faltantes: [] });
+    // Las que faltan van a la bitácora (hasta 15), para ver qué frena el cotejo.
+    expect(listingCoverage(listado.slice(0, 15), codes).faltantes).toEqual(codes.slice(15));
     expect(listingCoverage(listado.slice(0, 15), codes).completo).toBe(false);
     // Sin ninguna guía con la que medir, no se da por entero.
     expect(listingCoverage(listado, []).completo).toBe(false);
+  });
+
+  it("el borde viejo que Shalom entrega a medias se mide día por día (10-11-2026)", () => {
+    const from = "2026-09-27T00:00:00Z";
+    const day = 86_400_000;
+    const exp = (code: string, createdAt: string) => ({ guideCode: code, createdAt });
+    const expected = [
+      exp("100", "2026-09-28T10:00:00Z"), exp("101", "2026-09-28T11:00:00Z"),
+      exp("200", "2026-09-29T13:00:00Z"), exp("201", "2026-09-29T14:00:00Z"),
+      exp("300", "2026-09-30T13:00:00Z"), exp("301", "2026-09-30T14:00:00Z"),
+      exp("400", "2026-10-01T13:00:00Z"),
+    ];
+    const g = (guia: string, createdAt = "2026-10-05 10:00:00") => ({ guia, createdAt });
+    // Entero: se exige desde el día después de lo pedido.
+    const full = listingCoverageFloor(expected.map((e) => g(e.guideCode)), expected, from);
+    expect(full).toMatchObject({ floorMs: Date.parse("2026-09-28T00:00:00Z"), shifted: false, bordeDias: 0 });
+    // El caso del 10-11: trae una del 28 y casi nada del 29: el borde termina el 29.
+    const cut = listingCoverageFloor([g("100", "2026-09-28 15:04:16"), g("300"), g("301"), g("400")], expected, from);
+    expect(cut).toMatchObject({
+      floorMs: Date.parse("2026-09-30T00:00:00Z"),
+      listingOldest: "2026-09-28T15:04:16.000Z",
+      shifted: true,
+      bordeDias: 2,
+    });
+    // Un hueco después de la primera semana no corre el borde: lo frena el 97 % de siempre.
+    const late = [...expected, exp("900", "2026-10-20T10:00:00Z")];
+    expect(listingCoverageFloor(expected.map((e) => g(e.guideCode)), late, from).floorMs).toBe(Date.parse(from) + day);
+    expect(LISTING_EDGE_MAX_SHIFT_DAYS).toBe(7);
+    // Sin guías de la API con que medir, como antes.
+    expect(listingCoverageFloor([], [], from)).toEqual({ floorMs: Date.parse(from) + day, listingOldest: null, shifted: false, bordeDias: 0 });
   });
 });
 

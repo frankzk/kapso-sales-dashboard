@@ -22,6 +22,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
 import { prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
+import { LN_IN_PROSE, lnChatbyHold } from "@/lib/lista-negra-copy";
 import { fetchChatbyConversation, forgetChatbyConversation, sendChatbyReply } from "@/lib/chatby-api";
 import { geocodeOrderAddress, markApproxUsed } from "@/lib/geocode-google-server";
 import { APPROX_COORDINATE_NOTE, approxDecision, type ApproxMode } from "@/lib/geocode-approx";
@@ -804,14 +805,13 @@ async function tryChatbyGuide(
 ): Promise<GuideTry> {
   const { admin } = g;
   if (chatbyGuideBlock(row)) return { kind: "hold", reason: "programado", detail: null, state: "para_persona" };
-  // La lista de pago adelantado (MOM §41): Chatby no confirma contra entrega a
-  // un cliente de la lista. Lo deja a una persona, que cobra el total por
-  // adelantado. Va antes de cotizar: también en la simulación.
+  // La Lista negra (MOM §41 y §41.11), las dos listas por igual: Chatby no
+  // confirma ni crea la guía contra entrega sin lo que pide; la deja a la
+  // asesora con el motivo (lib/lista-negra-copy.ts) y no le escribe a la
+  // clienta. Va antes de cotizar: también en la simulación.
   const prepay = await prepayOrderCheck(admin, row as unknown as PrepayOrderRow, "confirmar");
-  // «Pago solo online (lista automática)», §41.11: tampoco crea la guía contra
-  // entrega; la deja a la asesora con el motivo y no le escribe a la clienta.
-  if (prepay.state === "blocked" && prepay.source === "pago_online") {
-    return { kind: "hold", reason: "pago_online", detail: prepay.message, state: "para_persona" };
+  if (prepay.state === "blocked") {
+    return { kind: "hold", reason: "pago_online", detail: lnChatbyHold(prepay.motivo, prepay.requirement), state: "para_persona" };
   }
   if (prepay.state !== "ok") return { kind: "hold", reason: "guia_no_creada", detail: prepay.message, state: "para_persona" };
   // Sin saber si va por Shalom no se crea nada: es la diferencia entre esperar
@@ -1715,8 +1715,8 @@ async function autoAsk(
 async function askBlockedForPerson(admin: SupabaseClient, row: MasterRow): Promise<string | null> {
   if (chatbyGuideBlock(row)) return "envío programado";
   const prepay = await prepayOrderCheck(admin, row as unknown as PrepayOrderRow, "confirmar");
-  if (prepay.state === "blocked" && prepay.source === "pago_online") return "pago solo online (lista automática)";
-  if (prepay.state !== "ok") return "lista de pago adelantado";
+  if (prepay.state === "blocked") return LN_IN_PROSE;
+  if (prepay.state !== "ok") return "no se pudo comprobar la Lista negra";
   const { data: draft, error } = await admin.from("shalom_order_drafts").select("order_id").eq("order_id", row.order_id).limit(1);
   if (error) return "no se pudo leer el borrador de Shalom";
   const hold = chatbyGuideHold({ hasShalomDraft: (draft ?? []).length > 0, paymentState: row.payment_state });

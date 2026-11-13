@@ -236,17 +236,16 @@ describe("stores.platform = 'shopify': el camino de siempre, sin WooCommerce", (
   const shopifyVenta = () =>
     venta({ lineItems: [{ variantId: "gid://shopify/ProductVariant/1", title: "EggMixer", quantity: 1, unitPrice: 89, sku: "EGG-1" }] });
 
-  it("«Pago solo online» con «Pago completo»: no crea el pedido contra entrega", async () => {
+  it("Lista negra con «Pago total»: no crea el pedido contra entrega", async () => {
     setup("shopify");
     pagoOnline("pago_completo");
     const res = await generateOrder(LEAD, shopifyVenta());
-    expect(res.error).toContain("Cliente con entrega devuelta y ninguna recibida: solo pago online");
-    expect(res.error).toContain("Kapta no crea pedidos contra entrega para este celular");
+    expect(res.error).toBe("Lista negra (devolvió 1 pedido y nunca recibió): solo con pago total por adelantado; no se genera contra entrega.");
     expect(h.shopify.createDraftOrder).not.toHaveBeenCalled();
     expect(h.db.rows("orders")).toHaveLength(0);
   });
 
-  it("«Pago solo online» con «Adelanto (regla §8)»: crea el pedido y avisa del adelanto de S/ 20", async () => {
+  it("Lista negra con «Adelanto de S/ 20»: crea el pedido y avisa del adelanto", async () => {
     setup("shopify");
     pagoOnline("adelanto");
     h.shopify.createDraftOrder.mockResolvedValue({ gid: "gid://shopify/DraftOrder/5", name: "#D5", priceMismatches: [] });
@@ -254,8 +253,7 @@ describe("stores.platform = 'shopify': el camino de siempre, sin WooCommerce", (
     const res = await generateOrder(LEAD, shopifyVenta());
     expect(res.error).toBeUndefined();
     expect(res.notice).toContain("Pedido generado ✓");
-    expect(res.notice).toContain("Ojo: Cliente con entrega devuelta y ninguna recibida: solo pago online o adelanto");
-    expect(res.notice).toContain("adelanto de S/ 20 validado");
+    expect(res.notice).toContain(" · Lista negra: no sale sin el adelanto de S/ 20 validado.");
     expect(h.db.rows("orders")).toHaveLength(1);
   });
 

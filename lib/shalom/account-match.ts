@@ -666,10 +666,74 @@ export interface ListingCoverage {
   esperadas: number;
   encontradas: number;
   completo: boolean;
+  /**
+   * Hasta 15 guías de la API que el listado no trajo (09-11-2026): solo para
+   * la bitácora, para ver QUÉ falta cuando la cobertura frena el cotejo.
+   */
+  faltantes?: string[];
+  /**
+   * La guía más vieja que trajo el listado y si por eso se dejó de esperar el
+   * borde que Shalom ya recortó (`listingCoverageFloor`, 10-11-2026).
+   */
+  listadoDesde?: string | null;
+  bordeRecortado?: boolean;
+  /** Cuántos días del borde viejo se dejaron de exigir. */
+  bordeDias?: number;
 }
 
 /** De las guías de la API que deberían estar, cuántas tienen que aparecer. */
 export const COVERAGE_MIN = 0.97;
+
+/**
+ * Cuánto puede quedar el borde viejo del listado por detrás de lo pedido. Shalom
+ * no entrega todo lo pedido: el listado trae ~1.366 filas y el borde viejo
+ * viene a medias (10-11-2026: pedido desde el 27-09, traía alguna guía del 28 y
+ * le faltaban casi todas las del 29 y 30-09, todas entregadas hace semanas).
+ * Más de una semana de borde a medias no es eso: algo no cuadra y se sigue
+ * exigiendo desde lo pedido.
+ */
+export const LISTING_EDGE_MAX_SHIFT_DAYS = 7;
+
+/**
+ * Desde cuándo se le exige al listado que traiga las guías de la API.
+ *
+ * Día por día en la primera semana después de lo pedido: el borde termina el
+ * último día de esa semana en que el listado trae MENOS del 97 % de las guías
+ * de la API de ese día; se exige desde el día siguiente. Lo de después sigue
+ * midiéndose entero con el 97 % (`listingCoverage`), y quien llama no empareja
+ * con guías del listado anteriores al borde: esa zona vino a medias.
+ */
+export function listingCoverageFloor(
+  guides: readonly Pick<ShalomListingGuide, "guia" | "createdAt">[],
+  expected: readonly { guideCode: string; createdAt: string }[],
+  fromIso: string,
+): { floorMs: number; listingOldest: string | null; shifted: boolean; bordeDias: number } {
+  const day = 86_400_000;
+  const requested = Date.parse(fromIso) + day;
+  const oldest = guides
+    .map((g) => Date.parse((g.createdAt ?? "").replace(" ", "T")))
+    .filter(Number.isFinite)
+    .reduce((min, t) => Math.min(min, t), Number.POSITIVE_INFINITY);
+  const listingOldest = Number.isFinite(oldest) ? new Date(oldest).toISOString() : null;
+  const have = new Set(guides.map((g) => g.guia));
+  // Las guías de la API de cada día de la primera semana, y cuántas trae.
+  const perDay = new Map<number, { wanted: number; found: number }>();
+  for (const e of expected) {
+    const t = Date.parse(e.createdAt);
+    const code = guideCodeKey(e.guideCode);
+    if (!Number.isFinite(t) || !code || t < requested || t >= requested + LISTING_EDGE_MAX_SHIFT_DAYS * day) continue;
+    const d = requested + Math.floor((t - requested) / day) * day;
+    const cell = perDay.get(d) ?? { wanted: 0, found: 0 };
+    cell.wanted += 1;
+    if (have.has(code)) cell.found += 1;
+    perDay.set(d, cell);
+  }
+  let floorMs = requested;
+  for (const [d, cell] of perDay) {
+    if (cell.wanted > 0 && cell.found / cell.wanted < COVERAGE_MIN) floorMs = Math.max(floorMs, d + day);
+  }
+  return { floorMs, listingOldest, shifted: floorMs > requested, bordeDias: Math.round((floorMs - requested) / day) };
+}
 
 /**
  * ¿El listado está ENTERO? Se mide con las guías creadas por API en el
@@ -685,6 +749,7 @@ export function listingCoverage(guides: readonly ShalomListingGuide[], expected:
     esperadas: wanted.length,
     encontradas,
     completo: wanted.length > 0 && encontradas / wanted.length >= COVERAGE_MIN,
+    faltantes: wanted.filter((g) => !have.has(g)).slice(0, 15),
   };
 }
 

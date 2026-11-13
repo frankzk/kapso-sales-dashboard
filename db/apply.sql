@@ -657,4 +657,20 @@
 \ir migrations/0327_order_master_lima_provinces_agencia.sql
 \echo 'Applying 0328_pago_online_recibio_cualquiera.sql'
 \ir migrations/0328_pago_online_recibio_cualquiera.sql
+\echo 'Applying 0329_lista_negra_requisito.sql'
+\ir migrations/0329_lista_negra_requisito.sql
+\echo 'Applying 0330_lead_product_attribution.sql'
+\ir migrations/0330_lead_product_attribution.sql
+\echo 'Applying 0331_lead_product_alias_review.sql'
+\ir migrations/0331_lead_product_alias_review.sql
+\echo 'Applying 0332_manual_lead_take.sql'
+\ir migrations/0332_manual_lead_take.sql
+\echo 'Applying 0333_operations_productivity.sql'
+\ir migrations/0333_operations_productivity.sql
+\echo 'Applying 0334_lista_negra_rechazo.sql'
+\ir migrations/0334_lista_negra_rechazo.sql
+\echo 'Applying 0335_lead_store_distribution.sql'
+\ir migrations/0335_lead_store_distribution.sql
+\echo 'Applying 0336_agency_payment_reconciliation.sql'
+\ir migrations/0336_agency_payment_reconciliation.sql
 \echo 'Done.'

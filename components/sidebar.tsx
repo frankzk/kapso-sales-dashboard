@@ -1,5 +1,6 @@
 "use client";
 
+import { LN_NAME, LN_PATH } from "@/lib/lista-negra-copy";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -45,11 +46,18 @@ interface NavItem {
  */
 const REPRO_LIMA_ITEM: NavItem = { href: "/dashboard/pedidos/repro-lima", label: "Repro Lima", icon: IconTruck };
 /**
- * «Pago adelantado» (MOM §41): la lista negra de celulares que pagan el total
- * por adelantado. La ve todo el equipo que ve pedidos; cambiarla pide
+ * «Lista negra» (MOM §41 y §41.11): las dos listas que frenan el contra
+ * entrega, en una página. La ve todo el equipo que ve pedidos; cambiarla pide
  * `prepay_list.manage`, que la página y sus acciones vuelven a mirar.
  */
-const PREPAY_LIST_ITEM: NavItem = { href: "/dashboard/clientes/pago-adelantado", label: "Pago adelantado", icon: IconMoney };
+const PREPAY_LIST_ITEM: NavItem = { href: LN_PATH, label: LN_NAME, icon: IconMoney };
+/**
+ * «Pago de diferencia» (MOM §44): los pedidos de Agencia que esperan el pago
+ * de lo que falta, con la última gestión del equipo, y desde el 10-11-2026
+ * «Cotejar Olva» adentro (ya no tiene entrada propia). La ve todo el que ve
+ * pedidos, en sus tiendas. Gana al Master por el prefijo más largo.
+ */
+const PAGO_DIFERENCIA_ITEM: NavItem = { href: "/dashboard/pedidos/pago-diferencia", label: "Pago de diferencia", icon: IconMoney };
 
 /**
  * Qué entradas de administración ve la persona, por permiso (MOM §16,
@@ -84,6 +92,7 @@ export function navItems(
       { href: "/dashboard/leads", label: "Leads", icon: IconChat },
       { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
       PREPAY_LIST_ITEM,
+      PAGO_DIFERENCIA_ITEM,
       { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
       ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
       { href: "/dashboard/envios/recuperacion", label: "Recuperar devueltos", icon: IconChat },
@@ -99,7 +108,6 @@ export function navItems(
     if (canManageLogistics) {
       items.push({ href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck });
       items.push({ href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck });
-      items.push({ href: "/dashboard/olva", label: "Cotejar Olva", icon: IconTruck });
     }
     return items;
   }
@@ -108,6 +116,7 @@ export function navItems(
     { href: "/dashboard/leads", label: "Leads", icon: IconChat },
     { href: "/dashboard/pedidos", label: "Master de Pedidos", icon: IconClipboard },
     PREPAY_LIST_ITEM,
+    PAGO_DIFERENCIA_ITEM,
     { href: "/dashboard/envios", label: "Repro Provincia", icon: IconTruck },
     ...(canReproLima ? [REPRO_LIMA_ITEM] : []),
     // Primer contacto con la clienta cuya guía volvió (MOM §11.1). Va acá y no
@@ -133,8 +142,6 @@ export function navItems(
       ? [
         { href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck },
         { href: "/dashboard/urpi", label: "Programaciones Urpi", icon: IconTruck },
-        // Pega el tracking de Olva a las salidas que no lo tienen (MOM §12).
-        { href: "/dashboard/olva", label: "Cotejar Olva", icon: IconTruck },
       ]
       : []),
     ...(access.team ? [{ href: "/dashboard/team", label: "Equipo", icon: IconUsers }] : []),

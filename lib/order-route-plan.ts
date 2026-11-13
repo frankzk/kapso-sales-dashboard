@@ -32,6 +32,8 @@ export interface RouteOutputSnapshot {
   guideCode?: string | null;
   /** Código corto que Shalom imprime junto al número, del estilo `MCMH`. */
   shortCode?: string | null;
+  /** El rastreo confirmó que Shalom no conoce la guía (6 rechazos y 24 h). */
+  shalomUnrecognized?: boolean;
   /** Estado del flujo de agencia, que es lo que el courier reporta. */
   pickupState?: string | null;
   /** Lo que el courier dice HOY: decide si el paquete vuelve (`shipmentIsReturning`). */
@@ -106,6 +108,8 @@ export interface RouteCandidate {
    * y dos campos para el mismo hecho terminan discrepando.
    */
   blockingOutput?: RouteBlockingOutput | null;
+  /** Solo el reemplazo de guías Shalom confirmadas como no reconocidas. */
+  canRegisterShalomReplacement?: boolean;
   /**
    * Casi no se usa (09-10-2026): la mesa la pliega en «Otros couriers» y nunca
    * la sugiere. En Lima, en 60 días: Grupo GF 1.864 salidas, Tanders 881,
@@ -417,6 +421,13 @@ function applyOutputPolicy(
     // del courier, que es para lo que se enseña.
     const reversed = [...activeWithCourier].reverse();
     const blocking = reversed.find((output) => output.guideCode) ?? reversed[0]!;
+    // Registrar otra guía solo tiene sentido si TODAS las salidas que la
+    // bloquearían son guías Shalom no reconocidas. El servidor lo revalida.
+    const canRegisterShalomReplacement =
+      route.key === "shalom" && !isFillableSnapshot(blocking) && blocking.shalomUnrecognized === true &&
+      input.outputs
+        .filter((output) => isActive(output) && !isFillableSnapshot(output))
+        .every((output) => courierKey(output.courier) === "shalom" && output.shalomUnrecognized === true);
     // Una guía que el courier ya está devolviendo no se «anula»: no entregó y
     // el paquete viene de regreso. Decirle a la operadora que la anule la manda
     // a cancelar en el panel del courier una devolución en curso.
@@ -436,6 +447,10 @@ function applyOutputPolicy(
         // consecutivo y obligaba a armar otra caja para el mismo paquete.
         : route.key === "propio"
         ? `${route.label} ya tiene una salida activa en este pedido${blocking.outputCode ? ` (${blocking.outputCode})` : ""}. Si no se entregó, se reprograma con esa misma salida desde Despacho del día («Desde la lista»).`
+        : route.key === "shalom"
+        ? canRegisterShalomReplacement
+          ? "Shalom no reconoce la guía activa. Si la caja salió con otra guía, usa «Ya la creé en Shalom Pro» para registrar la que la reemplaza."
+          : "Shalom ya tiene una salida activa en este pedido. Continúa su seguimiento en «Salidas y guías»."
         : `${route.label} ya tiene una salida activa en este pedido. Anúlala o ciérrala antes de crear otra.`,
       blockingOutput: {
         id: blocking.id,
@@ -448,6 +463,7 @@ function applyOutputPolicy(
         swaypState: blocking.swaypState ?? null,
         reportedStatus: blocking.reportedStatus ?? null,
       },
+      canRegisterShalomReplacement,
     };
   }
 

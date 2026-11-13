@@ -21,6 +21,10 @@ import {
   prepayAutoDecision,
   prepayAutoReason,
   prepayBlockMessage,
+  prepayEntryBlockMessage,
+  prepayEntryRequirementMet,
+  prepayEntryRequirementOf,
+  PREPAY_ENTRY_REQUIREMENT_LABEL,
   prepayEvidenceOf,
   prepayEvidenceOrderIds,
   prepayPhoneInput,
@@ -324,13 +328,33 @@ describe("lo que se exige: el pago completo", () => {
     expect(prepayRequirementMet({ financialStatus: "paid", totalRefunded: 50, paymentGateway: "checkout" })).toBe(false);
   });
 
-  it("cada punto lo dice en castellano y nombra la lista", () => {
-    for (const point of ["confirmar", "guia", "pedido", "bot"] as const) {
-      const m = prepayBlockMessage(point);
-      expect(m.startsWith(`${PREPAY_LIST_LABEL}: este cliente paga el total por adelantado.`), point).toBe(true);
-    }
-    expect(prepayBlockMessage("guia")).toContain("cobro cero");
-    expect(prepayBlockMessage("bot")).toContain("asesora");
+  it("cada punto lo dice como la automática (lib/lista-negra-copy.ts): solo cambian el motivo y «pago total»", () => {
+    expect(PREPAY_LIST_LABEL).toBe("Lista negra");
+    const reason = "Fraude con otra cuenta.";
+    expect(prepayBlockMessage("confirmar", reason)).toBe("Lista negra (agregada a mano: Fraude con otra cuenta): falta el pago total validado.");
+    expect(prepayBlockMessage("guia", reason)).toBe("Lista negra (agregada a mano: Fraude con otra cuenta): falta el pago total validado.");
+    expect(prepayBlockMessage("pedido", reason)).toBe(
+      "Lista negra (agregada a mano: Fraude con otra cuenta): solo con pago total por adelantado; no se genera contra entrega.",
+    );
+    // Al bot nunca el motivo escrito.
+    expect(prepayBlockMessage("bot", reason)).toBe(
+      "Cliente en Lista negra (agregada a mano). El bot no crea pedidos contra entrega: deriva a una asesora para cobrar el pago total.",
+    );
+    expect(prepayEntryBlockMessage("confirmar", "adelanto", reason)).toBe("Lista negra (agregada a mano: Fraude con otra cuenta): falta el adelanto de S/ 20 validado.");
+    expect(prepayEntryBlockMessage("pedido", "adelanto", reason)).toBe("· Lista negra: no sale sin el adelanto de S/ 20 validado.");
+    expect(prepayEntryBlockMessage("bot", "adelanto", reason)).toContain("para cobrar el adelanto de S/ 20 o el pago online completo.");
+  });
+
+  it("lo que pide cada alta (0329): sin la columna, el total; el adelanto se cumple con el adelanto validado", () => {
+    expect(prepayEntryRequirementOf(undefined)).toBe("pago_completo");
+    expect(prepayEntryRequirementOf(null)).toBe("pago_completo");
+    expect(prepayEntryRequirementOf("gratis")).toBe("pago_completo");
+    expect(prepayEntryRequirementOf("adelanto")).toBe("adelanto");
+    expect(PREPAY_ENTRY_REQUIREMENT_LABEL).toEqual({ adelanto: "Adelanto de S/ 20", pago_completo: "Pago total" });
+    expect(prepayEntryRequirementMet("adelanto", { paymentState: "adelanto_validado" })).toBe(true);
+    expect(prepayEntryRequirementMet("adelanto", { paymentState: "adelanto_cargado" })).toBe(false);
+    expect(prepayEntryRequirementMet("pago_completo", { paymentState: "adelanto_validado" })).toBe(false);
+    expect(prepayEntryRequirementMet("pago_completo", { paymentState: "pago_completo" })).toBe(true);
   });
 });
 

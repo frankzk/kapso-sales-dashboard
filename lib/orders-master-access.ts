@@ -25,6 +25,7 @@ import { orderPuntoSource, puntoCollect, type OrderPuntoSource, type PuntoCollec
 import { productImagesFor } from "@/lib/shopify-product-images";
 import type { AliclikHealthState } from "@/lib/aliclik-health";
 import { loadAliclikHealthState } from "@/lib/aliclik-health-access";
+import { loadShalomUnrecognized } from "@/lib/shalom/check-queue";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { loadAliclikOutlook } from "@/lib/aliclik-outlook-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
@@ -100,6 +101,7 @@ import { pgTextArrayLiteral, type ProductOptionRow } from "@/lib/order-product-t
 import { isHistoricalShopifyOrder, legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { pendingVoucherFilterIds, type PendingVoucherSummary } from "@/lib/pending-voucher";
 import { loadPendingVouchers } from "@/lib/pending-voucher-access";
+import { orderCommentPhotosFromPayload } from "@/lib/order-comment-photos";
 import { guideGpsByEvent, guideGpsByShipment, type GuideGps } from "@/lib/guide-gps";
 import { AGENCY_DEADLINE_ALERT_MS, paidUnnotifiedFilterIds } from "@/lib/agency-pickup-alert";
 import { loadPaidUnnotified } from "@/lib/agency-pickup-alert-access";
@@ -450,6 +452,16 @@ export interface TimelineEntry {
    * los hechos de guía Aliclik que tienen coordenada (`guideGpsByEvent`).
    */
   gps?: GuideGps | null;
+  /**
+   * El tipo que se le puso a un comentario («Llamada», «WhatsApp», «Pago de
+   * diferencia»…), solo en los comentarios que lo tienen.
+   */
+  commentType?: string | null;
+  /**
+   * Las fotos de constancia de un comentario (rutas del bucket privado,
+   * lib/order-comment-photos.ts). Vacío o ausente: no tiene.
+   */
+  photos?: string[];
 }
 
 /** Lo que hace falta de `lead_calls` para la línea de tiempo del pedido. */
@@ -525,6 +537,9 @@ export function orderEventsToTimeline(
     origin: "master",
     statusLabel: null,
     confirmation: confirmationAttemptDetail(e.payload),
+    ...(e.kind === "comment"
+      ? { commentType: e.comment_type?.trim() || null, photos: orderCommentPhotosFromPayload(e.payload) }
+      : {}),
   }));
 }
 
@@ -1227,7 +1242,7 @@ export async function getOrderMasterDetail(
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments, shalomUnrecognized] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1261,6 +1276,7 @@ export async function getOrderMasterDetail(
       },
       () => null,
     ),
+    loadShalomUnrecognized(sb, guides.filter((guide) => guide.courier === "shalom").map((guide) => guide.id)),
   ]);
   const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
   return {
@@ -1347,6 +1363,7 @@ export async function getOrderMasterDetail(
         // limitarse a decir que hay una.
         guideCode: guide.guide_code,
         shortCode: guide.shalom_codigo ?? null,
+        shalomUnrecognized: shalomUnrecognized.has(guide.id),
         pickupState: guide.pickup_state,
         swaypState: guide.swayp_state ?? null,
         reportedStatus: guide.reported_status ?? null,
@@ -1944,7 +1961,7 @@ export async function getOrderMasterPage(
   ]);
 
   if (rowsRes.error || countRes.error) {
-    if (effectiveFilters.agencyUnpaid) throw new Error("No se pudieron verificar los pendientes de pago de Agencia. Reintenta la consulta.");
+    if (effectiveFilters.agencyUnpaid || effectiveFilters.historicalPaid) throw new Error("No se pudieron verificar los pendientes de pago de Agencia. Reintenta la consulta.");
     return empty;
   }
   return {

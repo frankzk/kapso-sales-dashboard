@@ -12,7 +12,11 @@
 //     0328)—, entra:
 //     (A) quien tiene al menos un `devuelto`; o
 //     (B) el «anulador»: 5 o más pedidos con el 75 % o más `anulado`
-//         (cualquier anulado, antes o después de salir).
+//         (cualquier anulado, antes o después de salir); o
+//     (C) quien rechazó al menos un pedido en la puerta (owner 12-11-2026,
+//         0334): «Rechazó el pedido» del motorizado de Grupo GF o `REFUSED`
+//         del courier. En Lima el rechazo termina `anulado` y no entraba.
+//     El motivo, en ese orden de prioridad: devuelto, rechazo, anulador.
 //     Un anulado después de salir, solo, ya no basta (cambio del owner del
 //     09-11-2026 sobre la consulta de referencia de las tiendas).
 //   * Kapta calcula la lista una vez al día (05:00 de Lima), la manda entera a
@@ -30,10 +34,10 @@
 // de Kapta: los mensajes de alerta y los resúmenes llevan solo cuentas.
 
 import { orderFullyPaid, type OrderPaymentFacts } from "@/lib/order-paid";
-import { ADELANTO_MINIMO_LABEL } from "@/lib/adelanto-minimo";
+import { LN_NAME, LN_REQUIREMENT_LABEL, lnBotMessage, lnBrakeMessage, lnGenerateRefused, LN_GENERATE_NOTICE, lnMotivo } from "@/lib/lista-negra-copy";
 
-/** Cómo se llama en pantalla. */
-export const PAGO_ONLINE_LABEL = "Pago solo online (lista automática)";
+/** Cómo se llama en pantalla: «Lista negra» (lib/lista-negra-copy.ts, la única fuente de lo que se dice). */
+export const PAGO_ONLINE_LABEL = LN_NAME;
 /** La clave del catálogo y del historial (`automation_switch_events.automation`). */
 export const PAGO_ONLINE_KEY = "pago_solo_online";
 /** La clave del historial del ajuste «qué se cobra». */
@@ -121,6 +125,8 @@ export interface PagoOnlineOrderFact {
   dispatched_at?: string | null;
   /** Los `order_events.kind` del pedido; solo importan los de la migración. */
   event_kinds?: readonly string[] | null;
+  /** Lo rechazaron en la puerta (motorizado «Rechazó el pedido» o `REFUSED`). */
+  door_rejected?: boolean | null;
 }
 
 /** ¿El pedido tiene un hecho de la migración de plataforma? Pura. */
@@ -133,12 +139,12 @@ export function isCodOrder(o: Pick<PagoOnlineOrderFact, "coverage" | "event_kind
   return PAGO_ONLINE_COD_COVERAGES.includes((o.coverage ?? "").trim()) && !hasMigrationCancel(o);
 }
 
-/** Por qué entra un cliente: (A) devolvió, o (B) anula casi todo lo que pide. */
-export type PagoOnlineReason = "devuelto" | "anulador";
-export const PAGO_ONLINE_REASONS: readonly PagoOnlineReason[] = ["devuelto", "anulador"];
+/** Por qué entra un cliente: (A) devolvió, (B) anula casi todo lo que pide o (C) rechazó en la puerta. */
+export type PagoOnlineReason = "devuelto" | "anulador" | "rechazo";
+export const PAGO_ONLINE_REASONS: readonly PagoOnlineReason[] = ["devuelto", "anulador", "rechazo"];
 
 export function isPagoOnlineReason(value: unknown): value is PagoOnlineReason {
-  return value === "devuelto" || value === "anulador";
+  return value === "devuelto" || value === "anulador" || value === "rechazo";
 }
 
 /** Las cuentas de un cliente: sus pedidos que cuentan y cuántos de cada estado. */
@@ -147,6 +153,8 @@ export interface PagoOnlineCounts {
   devueltos: number;
   anulados: number;
   received: number;
+  /** Pedidos rechazados en la puerta (C). */
+  rechazos?: number;
 }
 
 /**
@@ -157,6 +165,7 @@ export interface PagoOnlineCounts {
 export function pagoOnlineReasonOf(c: PagoOnlineCounts): PagoOnlineReason | null {
   if (c.received > 0) return null;
   if (c.devueltos >= 1) return "devuelto";
+  if ((c.rechazos ?? 0) >= 1) return "rechazo";
   if (c.orders >= PAGO_ONLINE_ANULADOR_MIN_ORDERS && c.anulados >= PAGO_ONLINE_ANULADOR_RATIO * c.orders) return "anulador";
   return null;
 }
@@ -186,7 +195,7 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
   for (const o of orders) {
     const phone = pagoOnlinePhoneKey(o.customer_phone);
     if (!phone) continue;
-    const c = byPhone.get(phone) ?? { orders: 0, devueltos: 0, anulados: 0, received: 0 };
+    const c = byPhone.get(phone) ?? { orders: 0, devueltos: 0, anulados: 0, received: 0, rechazos: 0 };
     const s = (o.general_status ?? "").trim();
     // «Recibió» es CUALQUIER pedido entregado: contra entrega, agencia o uno de
     // la migración (owner 09-11-2026, 0328). Las fallas, solo contra entrega
@@ -196,6 +205,7 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
       c.orders++;
       if (s === "devuelto") c.devueltos++;
       if (s === "anulado") c.anulados++;
+      if (o.door_rejected) c.rechazos = (c.rechazos ?? 0) + 1;
     }
     byPhone.set(phone, c);
   }
@@ -204,33 +214,21 @@ export function pagoOnlineListOf(orders: readonly PagoOnlineOrderFact[], excepti
     if (exceptions.has(phone)) continue;
     const reason = pagoOnlineReasonOf(c);
     if (!reason) continue;
-    out.push({ phone, reason, failed: reason === "devuelto" ? c.devueltos : c.anulados, orders: c.orders });
+    const failed = reason === "devuelto" ? c.devueltos : reason === "rechazo" ? (c.rechazos ?? 0) : c.anulados;
+    out.push({ phone, reason, failed, orders: c.orders });
   }
   return out.sort((a, b) => a.phone.localeCompare(b.phone));
 }
 
 /**
- * El titular de la ficha y de los mensajes, con las cuentas del propio
- * cliente y nada de otros:
- *   * «Cliente con entrega devuelta y ninguna recibida»;
- *   * «Cliente que anuló 5 de 6 pedidos y nunca recibió».
- * Pura.
+ * El motivo de un cliente de la automática, con sus propias cuentas y nada de
+ * otros (lib/lista-negra-copy.ts): «Devolvió 2 pedidos y nunca recibió» o
+ * «Anuló 6 de 7 pedidos y nunca recibió». Pura.
  */
-export function pagoOnlineWhoText(who: PagoOnlineWho): string {
-  if (who.reason === "anulador" && who.failed && who.orders) return `Cliente que anuló ${who.failed} de ${who.orders} pedidos y nunca recibió`;
-  if (who.reason === "anulador") return "Cliente que anula casi todos sus pedidos y nunca recibió";
-  return "Cliente con entrega devuelta y ninguna recibida";
-}
-
-/** El titular con lo que le queda: «… : solo pago online o adelanto» (o «solo pago online» con pago completo). Pura. */
-export function pagoOnlineHeadline(who: PagoOnlineWho, requirement: PagoOnlineRequirement = PAGO_ONLINE_DEFAULT_REQUIREMENT): string {
-  return `${pagoOnlineWhoText(who)}: ${requirement === "adelanto" ? "solo pago online o adelanto" : "solo pago online"}`;
-}
-
-/** Las cuentas entre paréntesis para un `devuelto` («(2 devueltos, 0 recibidas)»); el anulador ya las dice. Pura. */
-function whoCounts(who: PagoOnlineWho): string {
-  if (who.reason !== "devuelto" || !who.failed) return "";
-  return ` (${who.failed} ${who.failed === 1 ? "devuelto" : "devueltos"}, 0 recibidas)`;
+export function pagoOnlineMotivo(who: Pick<PagoOnlineWho, "reason" | "failed" | "orders">): string {
+  if (who.reason === "anulador") return lnMotivo({ kind: "anulador", n: who.failed, m: who.orders });
+  if (who.reason === "rechazo") return lnMotivo({ kind: "rechazo", n: who.failed });
+  return lnMotivo({ kind: "devuelto", n: who.failed });
 }
 
 /** Un correo que se puede mandar: en minúsculas, con arroba y dominio. Null si no sirve. Pura. */
@@ -265,14 +263,14 @@ export function pagoOnlineEmailsOf(
 // ── El envío ────────────────────────────────────────────────────────────────
 
 /**
- * «1+ devuelto, o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y
+ * «1+ devuelto, 1+ rechazado en la puerta o 5+ pedidos con 75 % anulados, y 0 recibidas, Kenku Peru y
  * Aurela, calculada 2026-11-10 05:00» (§4.2: texto libre que la tienda
  * muestra en su panel). Pura.
  */
 export function pagoOnlineRegla(storeNames: readonly string[], computedAt: Date): string {
   const lima = new Date(computedAt.getTime() - 5 * 3_600_000).toISOString();
   const names = storeNames.length <= 1 ? (storeNames[0] ?? "") : `${storeNames.slice(0, -1).join(", ")} y ${storeNames[storeNames.length - 1]}`;
-  return `1+ devuelto, o ${PAGO_ONLINE_ANULADOR_MIN_ORDERS}+ pedidos con ${Math.round(PAGO_ONLINE_ANULADOR_RATIO * 100)} % anulados, y 0 recibidas, ${names}, calculada ${lima.slice(0, 10)} ${lima.slice(11, 16)}`;
+  return `1+ devuelto, 1+ rechazado en la puerta o ${PAGO_ONLINE_ANULADOR_MIN_ORDERS}+ pedidos con ${Math.round(PAGO_ONLINE_ANULADOR_RATIO * 100)} % anulados, y 0 recibidas, ${names}, calculada ${lima.slice(0, 10)} ${lima.slice(11, 16)}`;
 }
 
 export interface PagoOnlinePayload {
@@ -442,10 +440,8 @@ export const PAGO_ONLINE_REQUIREMENTS = ["adelanto", "pago_completo"] as const;
 export type PagoOnlineRequirement = (typeof PAGO_ONLINE_REQUIREMENTS)[number];
 /** Decisión del owner del 09-11-2026: adelanto. */
 export const PAGO_ONLINE_DEFAULT_REQUIREMENT: PagoOnlineRequirement = "adelanto";
-export const PAGO_ONLINE_REQUIREMENT_LABEL: Record<PagoOnlineRequirement, string> = {
-  adelanto: "Adelanto (regla §8)",
-  pago_completo: "Pago completo",
-};
+/** «Adelanto de S/ 20» / «Pago total» (lib/lista-negra-copy.ts). */
+export const PAGO_ONLINE_REQUIREMENT_LABEL: Record<PagoOnlineRequirement, string> = LN_REQUIREMENT_LABEL;
 
 export function isPagoOnlineRequirement(value: unknown): value is PagoOnlineRequirement {
   return typeof value === "string" && (PAGO_ONLINE_REQUIREMENTS as readonly string[]).includes(value);
@@ -474,12 +470,12 @@ export type PagoOnlineBrake =
 
 export type PagoOnlinePoint = "confirmar" | "guia";
 
-/** El mensaje del freno, sin ningún dato de otros clientes. Pura. */
-export function pagoOnlineBlockMessage(point: PagoOnlinePoint, requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
-  const head = `${pagoOnlineHeadline(who, requirement)}${whoCounts(who)}.`;
-  const what = requirement === "adelanto" ? `el adelanto de ${ADELANTO_MINIMO_LABEL} validado (o el pago online completo)` : "el pago completo validado (online o Yape)";
-  if (point === "confirmar") return `${head} No se confirma contra entrega sin ${what}.`;
-  return `${head} La guía no sale sin ${what}.`;
+/**
+ * El mensaje del freno, sin ningún dato de otros clientes: el mismo al
+ * confirmar y al crear la guía (lib/lista-negra-copy.ts, `lnBrakeMessage`). Pura.
+ */
+export function pagoOnlineBlockMessage(_point: PagoOnlinePoint, requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
+  return lnBrakeMessage(pagoOnlineMotivo(who), requirement);
 }
 
 /**
@@ -495,18 +491,10 @@ export function pagoOnlineBlockMessage(point: PagoOnlinePoint, requirement: Pago
  *     dice que no se confirma ni sale sin el adelanto validado.
  */
 export function pagoOnlineOrderMessage(point: "bot" | "pedido" | "pedido_aviso", requirement: PagoOnlineRequirement, who: PagoOnlineWho): string {
-  const head = `${pagoOnlineHeadline(who, requirement)}${whoCounts(who)}.`;
-  if (point === "bot") {
-    return requirement === "adelanto"
-      ? `${head} El bot no crea pedidos contra entrega para este celular: deriva la conversación a una asesora, que cobra el adelanto de ${ADELANTO_MINIMO_LABEL} (o el pago online completo) antes de confirmar el pedido.`
-      : `${head} El bot no crea pedidos contra entrega para este celular: deriva la conversación a una asesora, que cobra el pago completo (o que pague online en la web).`;
-  }
-  if (point === "pedido") {
-    return requirement === "adelanto"
-      ? `${head} El pedido no se confirma ni sale sin el adelanto de ${ADELANTO_MINIMO_LABEL} validado.`
-      : `${head} Kapta no crea pedidos contra entrega para este celular: que pague online en la web, o cobra el pago completo por adelantado (link de pago o Yape) antes de generarlo.`;
-  }
-  return `Ojo: ${head} No se confirma ni sale sin el adelanto de ${ADELANTO_MINIMO_LABEL} validado: regístralo en «Cómo sale el pedido».`;
+  const motivo = pagoOnlineMotivo(who);
+  if (point === "bot") return lnBotMessage(motivo, requirement);
+  if (point === "pedido" && requirement === "pago_completo") return lnGenerateRefused(motivo);
+  return LN_GENERATE_NOTICE;
 }
 
 /** La llave de un celular de la lista vigente para marcar filas: organización + 9 dígitos. Pura. */

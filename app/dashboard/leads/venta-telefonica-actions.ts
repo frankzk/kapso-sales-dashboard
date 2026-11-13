@@ -20,6 +20,7 @@ import { getAccessibleStores } from "@/lib/access";
 import { normalizePhone } from "@/lib/phone";
 import { getPedidosRecientesPorTelefono } from "@/lib/leads-access";
 import { avisoDuplicado, type AvisoDuplicado } from "@/lib/pedido-duplicado";
+import { takeLeadManually } from "./manual-take-actions";
 import {
   VENTANA_CANDIDATOS_MS,
   ordenarCandidatos,
@@ -37,6 +38,8 @@ export interface ClienteParaVenta {
   /** Conversaciones abiertas sin teléfono, cuando el número tecleado no existe.
    *  Vacío cuando el cliente sí apareció: ahí no hay nada que desambiguar. */
   candidatos?: CandidatoSinNumero[];
+  takeError?: string;
+  manualTakeRequired?: boolean;
 }
 
 /**
@@ -81,6 +84,7 @@ export async function consultarClientePorTelefono(
   // (ver lib/lead-sin-numero.ts). Antes de dejar que eso pase, se le enseñan a
   // la asesora las conversaciones abiertas sin número para que reconozca la suya.
   const candidatos = l ? [] : await conversacionesSinNumero(storeId, nombre);
+  const access = l ? await takeLeadManually(l.id, "venta_telefonica", true) : null;
 
   return {
     ok: true,
@@ -89,6 +93,8 @@ export async function consultarClientePorTelefono(
     nombre: l?.name ?? null,
     aviso,
     candidatos,
+    takeError: access?.error,
+    manualTakeRequired: access?.manualException,
   };
 }
 
@@ -148,7 +154,10 @@ export async function abrirClienteParaVenta(input: {
 }): Promise<ClienteParaVenta> {
   const previo = await consultarClientePorTelefono(input.storeId, input.phone);
   if (!previo.ok) return previo;
-  if (previo.leadId) return previo;
+  if (previo.leadId) {
+    const taken = await takeLeadManually(previo.leadId, "venta_telefonica");
+    return taken.error ? { ...previo, ok: false, error: taken.error } : { ...previo, takeError: undefined };
+  }
 
   const tel = normalizePhone(input.phone)!;
   const admin = createAdminSupabase();
@@ -183,8 +192,11 @@ export async function abrirClienteParaVenta(input: {
       .maybeSingle();
     const e = existente as { id: string; name: string | null } | null;
     if (!e) return { ok: false, error: error.message };
-    return { ...previo, leadId: e.id, existia: true, nombre: e.name };
+    const taken = await takeLeadManually(e.id, "venta_telefonica");
+    return taken.error ? { ...previo, ok: false, error: taken.error } : { ...previo, leadId: e.id, existia: true, nombre: e.name };
   }
 
-  return { ...previo, leadId: (data as { id: string }).id, existia: false };
+  const id = (data as { id: string }).id;
+  const taken = await takeLeadManually(id, "venta_telefonica");
+  return taken.error ? { ...previo, ok: false, error: taken.error } : { ...previo, leadId: id, existia: false };
 }

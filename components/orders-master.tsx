@@ -194,6 +194,7 @@ import type { OrderMasterRow, StoreSummary } from "@/lib/types";
 // ---------------------------------------------------------------------------
 
 import { fmtDate, fmtDateTime, fmtAge, CoverageBadge, MacroStageBadge, MacroStageDot } from "@/components/order-master-shared";
+import { ListaNegraBadge } from "@/components/lista-negra-badge";
 import { DRAWER_SECTION_IDS, OrderDrawer, type DrawerSectionId, type DrawerWorkspaceView } from "@/components/order-drawer";
 import { workspaceForDrawerSection } from "@/lib/order-drawer-href";
 import { hasCombinedGuide, type CombinedGuideCourier } from "@/lib/labels/guia-combinada-select";
@@ -663,13 +664,13 @@ export function OrdersMasterBoard({
         </div>
       </header>
 
-      {!searchActive && filters.agencyUnpaid && (
-        <section aria-label="Pendientes de pago de Agencia" className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-info-wash px-4 py-3 ring-1 ring-line">
+      {!searchActive && (filters.agencyUnpaid || filters.historicalPaid) && (
+        <section aria-label={filters.historicalPaid ? "Históricos pagados por conciliar" : "Estado de pago de Agencia"} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-info-wash px-4 py-3 ring-1 ring-line">
           <div className="text-sm text-ink-700">
-            <p className="font-semibold text-ink-900">Agencia · sin pago completo</p>
-            <p>Guías Shalom u Olva del {agencyPaymentWindowLabel(filters.agencyUnpaid)}. Incluye pagos parciales y comprobantes por validar; excluye los pedidos ya pagados por checkout.</p>
+            <p className="font-semibold text-ink-900">{filters.historicalPaid ? "Históricos pagados · por conciliar" : filters.agencyPaymentView === "validate" ? "Agencia · pago pendiente de validar" : filters.agencyPaymentView === "all" ? "Agencia · Estado de pago" : filters.agencyPaymentView === "complete" ? "Agencia · pago completo" : filters.agencyPaymentView === "review" ? "Agencia · revisar registro" : "Agencia · por cobrar"}</p>
+            <p>{filters.agencyUnpaid && <>Guías Shalom u Olva del {agencyPaymentWindowLabel(filters.agencyUnpaid)}. </>}{filters.historicalPaid ? "Shopify los marca pagados, pero falta conciliar el registro en Kapta. No se cuentan como pendientes por cobrar." : filters.agencyPaymentView === "all" ? "Mismos estados de pago del Master. Los históricos pagados por conciliar y las ventas anuladas o devueltas sin pago completo se revisan aparte." : filters.agencyPaymentView === "validate" ? "Comprobantes cargados pendientes de revisión. No volver a solicitar el pago antes de validarlos." : filters.agencyPaymentView === "complete" ? "Pedidos con Pago completo según el mismo Estado de pago del Master." : filters.agencyPaymentView === "review" ? "El registro tiene un estado de pago no reconocido. Revisarlo antes de pedir un cobro." : "Excluye Pago completo, comprobantes por validar, históricos pagados en Shopify y ventas anuladas o devueltas."}</p>
           </div>
-          <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: { agencyUnpaid: null } })}>
+          <OpsButton variant="ghost" size="sm" onClick={() => navigate({ filters: { agencyUnpaid: null, historicalPaid: false, agencyPaymentView: "collect" } })}>
             Quitar este filtro
           </OpsButton>
         </section>
@@ -848,8 +849,9 @@ export function OrdersMasterBoard({
                 allLabel="Todos los estados de pago"
                 options={PAYMENT_STATUS_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
                 selected={filters.paymentStates}
-                onChange={(paymentStates) => patch({ paymentStates })}
+                onChange={(paymentStates) => patch({ paymentStates, ...(filters.agencyUnpaid ? { agencyPaymentView: "all" } : {}) })}
               />
+              <ChoiceChip label="Históricos pagados · por conciliar" active={!!filters.historicalPaid} onClick={() => patch({ historicalPaid: !filters.historicalPaid })} />
               {/* Las opciones son fijas, no una faceta: «rechazado» tiene que
                   poder pedirse aunque hoy no haya ninguno, que es justo cuando
                   interesa comprobar que no hay ninguno. */}
@@ -1162,6 +1164,7 @@ function pillFilterCount(f: MasterFilters, withManagement: boolean): number {
     f.couriers,
     f.paymentChecks,
     f.paymentStates,
+    ...(f.historicalPaid ? [new Set(["historical"])] : []),
     f.regions,
     f.provinces,
     f.districts,
@@ -1194,6 +1197,7 @@ const CLEARED_MORE_FILTERS: Partial<MasterFilters> = {
 
 /** Lo que quita la píldora «Filtros» del teléfono: las píldoras y «Más filtros». */
 const CLEARED_PILL_FILTERS: Partial<MasterFilters> = {
+  historicalPaid: false,
   stores: new Set(),
   operationalStatuses: new Set(),
   couriers: new Set(),
@@ -2524,22 +2528,9 @@ function MasterTable({
                     {/* Sin ubicación no hay courier ni guía: la fecha se vence
                         sola (#KP142558). Se apaga al corregir la ubicación o
                         al quitar la fecha (MOM §6.2). */}
-                    {/* El cliente paga el total por adelantado (MOM §41). */}
-                    {r.prepay_listed && (
-                      <Badge tone="crit" className="xl:mt-0.5" title="Lista de pago adelantado: este cliente paga el total por adelantado.">
-                        Pago adelantado
-                      </Badge>
-                    )}
-                    {/* «Pago solo online» (MOM §41.11), si no está ya en la lista de arriba. */}
-                    {!r.prepay_listed && r.pago_online_listed && (
-                      <Badge
-                        tone="warn"
-                        className="xl:mt-0.5"
-                        title="Pago solo online: devolvió un pedido (o anula casi todos) y nunca recibió. Sin lo que pide el ajuste (adelanto o pago completo) no se confirma ni sale contra entrega."
-                      >
-                        Pago solo online
-                      </Badge>
-                    )}
+                    {/* La Lista negra (MOM §41 y §41.11): una sola chapa negra
+                        para las dos listas; «· pago total» si es lo que pide. */}
+                    {r.lista_negra && <ListaNegraBadge mark={r.lista_negra} className="xl:mt-0.5" />}
                     {r.scheduled_no_location && (
                       <Badge
                         tone="crit"

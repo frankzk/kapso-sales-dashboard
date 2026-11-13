@@ -2,6 +2,8 @@
 // Shopify orders, and apply bot handoffs (Yape/hot). Service-role only.
 
 import { createHash } from "node:crypto";
+import { loadLeadProductCatalog, saveCustomerProducts, backfillLeadProducts, markProductConversationAttempt } from "./lead-products-server";
+import { productReferenceResolver } from "./lead-product-references";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   conversationToLeadSeed,
@@ -664,6 +666,13 @@ async function enrichLeadsFromConversations(
   vision: { anthropicApiKey?: string | null; anthropicModel?: string | null } = {},
 ): Promise<LeadEnrichStats> {
   const stats: LeadEnrichStats = { ...ZERO_ENRICH };
+  const catalogue = await loadLeadProductCatalog(admin, storeId).catch(async () => {
+    await noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_catalog_failed" });
+    return [];
+  });
+  // Resume old openers in small batches; failed catalogues never stamp progress.
+  if (catalogue.length) await backfillLeadProducts(admin, storeId, catalogue).catch(() =>
+    noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_backfill_failed" }));
   const convIds = new Set<string>();
   for (const s of seeds.values()) if (s?.kapso_conversation_id) convIds.add(s.kapso_conversation_id);
 
@@ -675,6 +684,7 @@ async function enrichLeadsFromConversations(
     .eq("store_id", storeId)
     .in("category", ["open", "hot"])
     .not("kapso_conversation_id", "is", null)
+    .order("product_conversation_checked_at", { ascending: true, nullsFirst: true })
     .order("inbound_count", { ascending: true, nullsFirst: true })
     .limit(LEAD_ENRICH_CAP);
   for (const l of (backlog as { kapso_conversation_id: string }[]) ?? []) {
@@ -699,8 +709,13 @@ async function enrichLeadsFromConversations(
     if (n++ >= LEAD_ENRICH_CAP) break;
     stats.candidates += 1;
     const sig = await fetchConversationSignals(k, convId);
+    // Empty/API-unavailable conversations also yield the slot. Otherwise the
+    // same 80 zero-inbound chats permanently occupy the historical backlog.
+    if (catalogue.length) await markProductConversationAttempt(admin, storeId, convId).catch(() =>
+      noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_review_clock_failed" }));
     if (!sig) continue;
     stats.fetched += 1;
+
     if ((sig.inbound_count ?? 0) >= 2) stats.inbound += 1;
     if ((sig.cart_item_count ?? 0) > 0) stats.cart += 1;
     if ((sig.district ?? "").trim()) stats.district += 1;
@@ -755,6 +770,11 @@ async function enrichLeadsFromConversations(
         .eq("store_id", storeId)
         .eq("kapso_conversation_id", convId)
         .is("first_inbound_text", null);
+    }
+
+    if (catalogue.length && sig.product_messages?.length) {
+      await saveCustomerProducts(admin, storeId, convId, catalogue, sig.product_messages).catch(() =>
+        noteAnomaly(admin, { storeId, source: "lead_enrich", reason: "product_evidence_failed", sample: { conversationId: convId } }));
     }
 
     // Qué producto está consultando AHORA. Al revés que el gancho de arriba,
@@ -1418,6 +1438,7 @@ export async function closeCartLeadsWithOrders(
  * respuesta única donde no la hay.
  */
 export function cartProductHandle(items: readonly OrderLineItem[]): string | null {
+  if (!items.length || items.some(it => !it.product_handle?.trim())) return null;
   const handles = new Set(
     items
       .map((it) => (it.product_handle ?? "").trim().toLowerCase())
@@ -2331,6 +2352,22 @@ export async function linkDraftOrdersToLeads(
 ): Promise<string[]> {
   const eligible = drafts.filter((d) => d.customer_phone && isCodFormDraft(d));
   if (!eligible.length) return [];
+  // Woo drafts have an ID/SKU, often no slug. Resolve using this store only.
+  // A Woo catalogue failure must not erase a previously verified reference.
+  // Abort before any writes; the existing reconciliation retries the cart.
+  try {
+    const catalogue = await loadLeadProductCatalog(admin, storeId);
+    if (!catalogue.length && eligible.some(d => d.platform === "woocommerce")) throw new Error("Empty cart catalogue");
+    const resolve = productReferenceResolver(catalogue);
+    for (const draft of eligible) {
+      const handle = resolve.cart(draft.line_items, draft.platform);
+      if (handle) draft.line_items = draft.line_items.map(item => ({ ...item, product_handle: handle }));
+      else if (draft.platform === "woocommerce") draft.line_items = draft.line_items.map(item => ({ ...item, product_handle: null }));
+    }
+  } catch {
+    if (eligible.some(d => d.platform === "woocommerce")) throw new Error("No se pudo verificar el catálogo del carrito; se conserva la atribución y se reintentará.");
+    // Shopify can still provide its authoritative handles without a lookup.
+  }
 
   // Which phones already have a lead (with its category, to detect a won lead a
   // repeat cart should reopen).

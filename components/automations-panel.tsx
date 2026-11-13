@@ -66,14 +66,9 @@ import {
   type GeocodePilotReason,
 } from "@/lib/geocode-google";
 import {
-  PREPAY_LIST_LABEL,
   PREPAY_LIST_PATH,
-  PREPAY_LIST_SYNONYM,
-  PREPAY_MODE_LABEL,
-  prepaySimulationHeadline,
-  type PrepayMode,
-  type PrepaySimulationSummary,
 } from "@/lib/prepay-list";
+import { LN_EMPTY_EXCEPTIONS, LN_EXCEPTION_REMOVE, LN_NAME, LN_PANEL_REQUIREMENT_LABEL, LN_PANEL_TITLE, lnMotivoInline } from "@/lib/lista-negra-copy";
 import {
   PAGO_ONLINE_LABEL,
   PAGO_ONLINE_REQUIREMENT_LABEL,
@@ -93,9 +88,6 @@ import {
 } from "@/app/dashboard/automatizaciones/actions";
 import {
   measureLimaGeocodeNow,
-  setPrepayAutoMode,
-  simulatePrepayNow,
-  type PrepaySimulationResult,
   setChatbyApproxMode,
   setChatbyAskMode,
   setChatbyHistoryMode,
@@ -168,14 +160,7 @@ const INDEX: IndexGroup[] = [
     ],
   },
   {
-    title: "Lista de pago adelantado",
-    items: [
-      { id: "prepay-regla", label: "Regla automática" },
-      { id: "prepay-simular", label: "Simular ahora" },
-    ],
-  },
-  {
-    title: "Pago solo online",
+    title: LN_PANEL_TITLE,
     items: [
       { id: "pago-online-posicion", label: "Posición y cobro" },
       { id: "pago-online-tiendas", label: "Envío a las tiendas" },
@@ -249,7 +234,6 @@ export function AutomationsPanel({ orgs, writable }: { orgs: AutomationsOrgView[
         {/* La clave remonta el panel al cambiar de organización: nada de un estado local de otra. */}
         <SettingsIndex groups={INDEX} key={org.orgId}>
           <RetryGroup org={org} writable={writable} />
-          <PrepayGroup org={org} writable={writable} />
           <PagoOnlineGroup org={org} writable={writable} />
           <SettingsGroup title="Interruptores" description="Cada uno guarda al moverlo. Los que salen de Kapta piden confirmación antes de encenderse.">
             {AUTOMATION_GROUPS.map((group) => (
@@ -868,170 +852,7 @@ function SimulateSection({ orgId, canEdit }: { orgId: string; canEdit: boolean }
   );
 }
 
-// ── La «Lista de pago adelantado» (0309, MOM §41) ───────────────────────────
-
-function prepayBadge(mode: PrepayMode, available: boolean): ReactNode {
-  if (!available) return <Badge tone="warn">No instalado</Badge>;
-  if (mode === "activo") return <Badge tone="ok">Activo</Badge>;
-  if (mode === "simulacion") return <Badge tone="info">En simulación</Badge>;
-  return <Badge>Apagado</Badge>;
-}
-
-function PrepaySummaryCard({ title, summary }: { title: string; summary: PrepaySimulationSummary }) {
-  return (
-    <div className={CARD}>
-      <div className={cn(ROW, "space-y-1.5")}>
-        <p className="text-sm font-semibold text-ink-900">{title}</p>
-        <p className="text-sm text-ink-700">{prepaySimulationHeadline(summary)}</p>
-        <p className={HELP}>
-          {fmtInt(summary.phonesWithFacts)} celulares con un rechazo en la puerta o un no recogido en los últimos seis meses ·{" "}
-          {fmtInt(summary.alreadyListed)} ya estaban en la lista · {fmtInt(summary.respectedRemovals)} quitados a mano sin hecho nuevo (se respetan)
-          {summary.withoutPhone ? ` · ${fmtInt(summary.withoutPhone)} pedidos sin celular válido` : ""}
-          {summary.inserted != null ? ` · ${fmtInt(summary.inserted)} agregados de verdad` : ""}.
-        </p>
-        {summary.samples.length > 0 && (
-          <details className="text-[13px] text-ink-600">
-            <summary className="cursor-pointer font-medium text-ink-700">Pedidos que lo disparan ({fmtInt(summary.samples.length)})</summary>
-            <p className="mt-1 leading-5">{summary.samples.join(", ")}</p>
-          </details>
-        )}
-        {summary.error && <p className="text-[13px] text-crit-fg">{summary.error}</p>}
-      </div>
-    </div>
-  );
-}
-
-function PrepayGroup({ org, writable }: { org: AutomationsOrgView; writable: boolean }) {
-  const view = org.prepay;
-  const [mode, setMode] = useState<PrepayMode>(view.mode);
-  useEffect(() => setMode(view.mode), [view.mode]);
-  const [pending, setPending] = useState(false);
-  const [status, setStatus] = useState<Status>(null);
-  const [sim, setSim] = useState<PrepaySimulationResult | null>(null);
-  const [simPending, startSim] = useTransition();
-  const [, startTransition] = useTransition();
-  const canEdit = writable && view.available;
-
-  const change = (next: PrepayMode): boolean => {
-    if (!canEdit || pending || next === mode) return false;
-    if (
-      next === "activo" &&
-      !window.confirm(
-        `¿Poner en Activo la regla de la «${PREPAY_LIST_LABEL}»? Kapta agregará sola a la lista a quien rechazó un pedido en la puerta o no lo recogió en la agencia: desde entonces paga el total por adelantado y la tienda le esconde el contra entrega.`,
-      )
-    ) {
-      return false;
-    }
-    setPending(true);
-    setStatus(null);
-    startTransition(async () => {
-      try {
-        const result = await setPrepayAutoMode(org.orgId, next);
-        if (!result.error) setMode(next);
-        setStatus(statusOf(result));
-      } catch {
-        setStatus({ kind: "error", text: NETWORK_ERROR });
-      } finally {
-        setPending(false);
-      }
-    });
-    return true;
-  };
-
-  const latestSim = sim?.summary ?? view.lastSimulation?.summary ?? null;
-
-  return (
-    <SettingsGroup
-      title={PREPAY_LIST_LABEL}
-      description={`La ${PREPAY_LIST_SYNONYM}: los celulares que pagan el total por adelantado. La lista se ve y se cambia a mano en «Pago adelantado».`}
-    >
-      <SettingsSection
-        id="prepay-regla"
-        title="Regla automática"
-        badge={prepayBadge(mode, view.available)}
-        description={
-          <>
-            <p>
-              Agrega a la lista a quien tenga al menos un pedido <strong>rechazado en la puerta</strong> (Aliclik, Swayp o el motorizado propio) o{" "}
-              <strong>no recogido en la agencia</strong>, en los últimos seis meses. A quien se quitó a mano solo lo vuelve a agregar un pedido
-              que no tenía ya al quitarlo.
-            </p>
-            <p>
-              <strong>Apagado:</strong> no agrega a nadie (la lista y sus frenos siguen). <strong>Simulación:</strong> cada hora dice quién
-              entraría, sin agregarlo. <strong>Activo:</strong> los agrega.
-            </p>
-          </>
-        }
-        actions={
-          <Link href={PREPAY_LIST_PATH} className={cn(LINK, "text-[13px]")}>
-            Ver la lista{view.activeCount != null ? ` (${fmtInt(view.activeCount)})` : ""}
-          </Link>
-        }
-      >
-        {view.error && (
-          <Banner tone="warn" role="status">
-            {view.error}
-          </Banner>
-        )}
-        <div className={CARD}>
-          <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-3")}>
-            <span className="text-sm font-medium text-ink-900">Posición de la regla</span>
-            <ModeControl value={mode} label="Regla automática de la lista de pago adelantado" disabled={!canEdit} pending={pending} onChange={change} />
-          </div>
-          {(pending || status) && (
-            <div className={cn(ROW, "border-t border-line py-3")}>
-              <RowStatus pending={pending} status={status} />
-            </div>
-          )}
-        </div>
-        {view.lastRun && <PrepaySummaryCard title={`Última pasada en Activo · ${view.lastRun.at}`} summary={view.lastRun.summary} />}
-      </SettingsSection>
-
-      <SettingsSection
-        id="prepay-simular"
-        title="Simular ahora"
-        description="Revisa ahora los últimos seis meses y dice quién entraría a la lista, sin agregar a nadie. Guarda el resumen (cuentas y números de pedido, nunca celulares)."
-        actions={
-          <OpsButton
-            size="sm"
-            disabled={!canEdit || simPending}
-            onClick={() => {
-              setSim(null);
-              startSim(async () => {
-                try {
-                  setSim(await simulatePrepayNow(org.orgId));
-                } catch {
-                  setSim({ error: "La simulación no respondió: se cortó o se perdió la conexión. Vuelve a intentar." });
-                }
-              });
-            }}
-            className="pointer-coarse:h-11"
-          >
-            {simPending ? "Simulando…" : "Simular ahora"}
-          </OpsButton>
-        }
-      >
-        <div aria-live="polite" className="space-y-3">
-          {sim?.error && (
-            <Banner tone="crit" role="alert">
-              {sim.error}
-            </Banner>
-          )}
-          {latestSim ? (
-            <PrepaySummaryCard
-              title={sim?.summary ? "Simulación de ahora" : `Última simulación · ${view.lastSimulation?.at ?? ""}`}
-              summary={latestSim}
-            />
-          ) : (
-            !sim?.error && <p className={cn(CARD, ROW, "text-sm text-ink-500")}>Todavía no hay ninguna simulación.</p>
-          )}
-        </div>
-      </SettingsSection>
-    </SettingsGroup>
-  );
-}
-
-// ── «Pago solo online (lista automática)» (0326, MOM §41.11) ───────────────
+// ── La «Lista negra» automática (0326, MOM §41.11; textos de lib/lista-negra-copy.ts) ───────────────
 
 function pagoOnlineBadge(mode: PagoOnlineMode, available: boolean): ReactNode {
   if (!available) return <Badge tone="warn">No instalado</Badge>;
@@ -1058,8 +879,8 @@ function PagoOnlineRunCard({ title, run }: { title: string; run: PagoOnlineRunVi
           <>
             <p className="text-sm text-ink-700">
               {run.mode === "activo" ? "La lista tiene" : "La lista tendría"} <strong>{fmtInt(run.phones)}</strong> celulares
-              {run.emails ? ` y ${fmtInt(run.emails)} correos` : ""}: {fmtInt(run.phones - run.anuladores)} con un pedido devuelto (
-              {fmtInt(run.twoOrMore)} con 2 o más) y {fmtInt(run.anuladores)} que anularon el 75 % o más de 5 o más pedidos
+              {run.emails ? ` y ${fmtInt(run.emails)} correos` : ""}: {fmtInt(Math.max(0, run.phones - run.anuladores - run.rechazos))} con un pedido devuelto (
+              {fmtInt(run.twoOrMore)} con 2 o más), {fmtInt(run.rechazos)} que rechazaron un pedido en la puerta y {fmtInt(run.anuladores)} que anularon el 75 % o más de 5 o más pedidos
               {run.excepted ? ` · ${fmtInt(run.excepted)} exceptuados por Kapta (no van)` : ""}.
             </p>
             <p className={HELP}>
@@ -1116,7 +937,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
     if (
       next === "activo" &&
       !window.confirm(
-        `¿Poner en Activo «${PAGO_ONLINE_LABEL}»? Cada día a las 05:00 de Lima Kapta manda la lista a cada tienda (que deja de ofrecerles contra entrega) y frena en Kapta la confirmación y las guías contra entrega de esos clientes hasta tener ${PAGO_ONLINE_REQUIREMENT_LABEL[requirement].toLowerCase()}.`,
+        `¿Poner en Activo «${PAGO_ONLINE_LABEL}»? Cada día a las 05:00 de Lima Kapta manda la lista a cada tienda (que deja de ofrecerles contra entrega) y frena en Kapta la confirmación y las guías contra entrega de esos clientes hasta tener ${lnMotivoInline(PAGO_ONLINE_REQUIREMENT_LABEL[requirement])} validado.`,
       )
     ) {
       return false;
@@ -1128,8 +949,8 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
   const run = view.lastRun;
   return (
     <SettingsGroup
-      title={PAGO_ONLINE_LABEL}
-      description="Los clientes que nunca recibieron un pedido contra entrega y tienen uno devuelto, o que anularon el 75 % o más de 5 o más pedidos (Kenku y Aurela juntas, todo el historial, sin los artefactos de la migración de plataforma): las tiendas no les ofrecen contra entrega y Kapta frena sus pedidos contra entrega. Nunca se muestran los celulares."
+      title={LN_PANEL_TITLE}
+      description="Los clientes que nunca recibieron un pedido contra entrega y tienen uno devuelto, rechazaron uno en la puerta o anularon el 75 % o más de 5 o más pedidos (Kenku y Aurela juntas, todo el historial, sin los artefactos de la migración de plataforma): las tiendas no les ofrecen contra entrega y Kapta frena sus pedidos contra entrega. Nunca se muestran los celulares."
     >
       <SettingsSection
         id="pago-online-posicion"
@@ -1147,6 +968,13 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
               —el adelanto validado de la escalera del §8— o <strong>{PAGO_ONLINE_REQUIREMENT_LABEL.pago_completo}</strong>. El owner eligió el adelanto
               (09-11-2026).
             </p>
+            <p>
+              La lista se ve, se busca por celular y se completa a mano en{" "}
+              <Link href={PREPAY_LIST_PATH} className={cn(LINK, "text-[13px]")}>
+                {LN_NAME}
+              </Link>
+              . El envío diario a las tiendas lleva también las altas a mano.
+            </p>
           </>
         }
       >
@@ -1162,7 +990,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
           </div>
           <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-3 border-t border-line")}>
             <label htmlFor="pago-online-cobro" className="text-sm font-medium text-ink-900">
-              Lo que se cobra en los pedidos de Kapta
+              {LN_PANEL_REQUIREMENT_LABEL}
             </label>
             <select
               id="pago-online-cobro"
@@ -1389,11 +1217,11 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
       <SettingsSection
         id="pago-online-excepciones"
         title="Excepciones de Kapta"
-        description="Clientes que no entran a la lista aunque cumplan la regla. Se agregan desde la ficha del pedido («Exceptuar a este cliente», con motivo). Kapta deja de frenarlos al momento; las tiendas, desde el próximo envío. Las tiendas tienen además las suyas («-987654321» en su panel)."
+        description="Clientes que no entran a la lista aunque cumplan la regla. Se agregan desde la ficha del pedido o la página «Lista negra» («Exceptuar de la Lista negra», con motivo). Kapta deja de frenarlos al momento; las tiendas, desde el próximo envío. Las tiendas tienen además las suyas («-987654321» en su panel)."
       >
         {excStatus && <RowStatus pending={false} status={excStatus} />}
         {view.exceptions.length === 0 ? (
-          <p className={cn(CARD, ROW, "text-sm text-ink-500")}>No hay excepciones.</p>
+          <p className={cn(CARD, ROW, "text-sm text-ink-500")}>{LN_EMPTY_EXCEPTIONS}</p>
         ) : (
           <div className={CARD}>
             {view.exceptions.map((e, i) => (
@@ -1425,7 +1253,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
                   }}
                   className="pointer-coarse:h-11"
                 >
-                  Quitar
+                  {LN_EXCEPTION_REMOVE}
                 </OpsButton>
               </div>
             ))}

@@ -7,6 +7,7 @@
 // dos vendedoras: aparecer aquí es tomarlo con la reserva de siempre
 // (claimLead, 10 minutos), que cuenta como una de sus dos.
 
+import { pickDistributedLead, PRIORITY_DISTRIBUTION, type LeadStoreDistribution } from "@/lib/lead-store-distribution";
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -33,7 +34,7 @@ import type { CustomerHistory } from "@/lib/leads-access";
 import { claimLead, releaseLead, type NextLeadCart } from "@/app/dashboard/leads/actions";
 // Las lecturas van por /api/leads/read, como las de la ficha: fuera de la cola
 // de Server Actions, que pondría la foto detrás de un guardado.
-import { loadLeadCustomerHistory, loadLeadDeliveryCoverage, loadLeadDetail, loadNextLeadCart } from "@/lib/leads-read-client";
+import { loadLeadStoreDistribution, loadLeadCustomerHistory, loadLeadDeliveryCoverage, loadLeadDetail, loadNextLeadCart } from "@/lib/leads-read-client";
 import type { LeadDrawerUpdate } from "@/components/leads-drawer";
 import { useCopyToClipboard } from "@/components/copy-button";
 import { Badge, Banner, OpsButton, Skeleton, type BadgeTone } from "@/components/ops-ui";
@@ -135,6 +136,7 @@ export type NextLeadProblem = {
 };
 
 export interface NextLeadState {
+  distribution?: LeadStoreDistribution;
   /** El lead reservado para ella, o null mientras se busca / si no hay. */
   lead: LeadRow | null;
   /** Buscando y reservando el siguiente. */
@@ -163,12 +165,15 @@ export function useNextLead({
   queue,
   userId,
   drawerLeadId,
+  scope,
 }: {
   enabled: boolean;
   queue: LeadRow[];
   userId: string;
   drawerLeadId: string | null;
+  scope?: string[];
 }): NextLeadState {
+  const [distribution, setDistribution] = useState<LeadStoreDistribution>(PRIORITY_DISTRIBUTION);
   const [heldId, setHeldId] = useState<string | null>(null);
   const heldRef = useRef<string | null>(null);
   const [problem, setProblem] = useState<NextLeadProblem | null>(null);
@@ -222,6 +227,9 @@ export function useNextLead({
     if (!drawerLeadId) setProblem((p) => (p?.kind === "blocked" ? null : p));
   }, [drawerLeadId]);
 
+  const selectionRef = useRef({ queue, enabled, drawerLeadId });
+  selectionRef.current = { queue, enabled, drawerLeadId };
+
   // Reservar el siguiente.
   useEffect(() => {
     if (!enabled || drawerLeadId || problem || inFlight.current) return;
@@ -231,7 +239,7 @@ export function useNextLead({
       return;
     }
     if (candidate.id === heldRef.current) return;
-    const target = candidate.id;
+    let target = candidate.id;
     inFlight.current = true;
     void (async () => {
       try {
@@ -239,6 +247,14 @@ export function useNextLead({
         if (previous) {
           hold(null);
           await releaseLead(previous).catch(() => undefined);
+        }
+        if (scope) {
+          const fresh = await loadLeadStoreDistribution(scope);
+          if (!mounted.current || selectionRef.current.queue !== queue || !selectionRef.current.enabled || selectionRef.current.drawerLeadId) return;
+          setDistribution(fresh);
+          const next = pickDistributedLead(queue, { userId, skipped: excluded }, fresh);
+          if (!next) return;
+          target = next.id;
         }
         const res = await claimLead(target).catch(() => null);
         if (!mounted.current) {
@@ -265,12 +281,14 @@ export function useNextLead({
           return;
         }
         hold(target);
+      } catch {
+        if (mounted.current) setProblem({ kind: "error", message: "No se pudo comprobar tu distribución por tienda. Reintenta." });
       } finally {
         inFlight.current = false;
         setTick((t) => t + 1);
       }
     })();
-  }, [enabled, drawerLeadId, problem, candidate, hold, release, tick, taken]);
+  }, [enabled, drawerLeadId, problem, candidate, hold, release, tick, taken, scope, queue, userId, excluded]);
 
   // Renovar mientras la pestaña se ve; al volver a ella, al instante. Si en el
   // rato oculta otra se la llevó (pasaron los 10 minutos), pasa al siguiente.
@@ -355,6 +373,7 @@ export function useNextLead({
   const lead = candidate && candidate.id === heldId ? candidate : null;
   return {
     lead,
+    distribution,
     searching: enabled && !lead && !!candidate && !problem && !drawerLeadId,
     empty: enabled && !candidate && !problem,
     problem,

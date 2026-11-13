@@ -1,5 +1,10 @@
 <?php
 /**
+ * RETIRADO (owner, 09-11-2026, MOM §41.7): no instalar. Las altas a mano de la
+ * «Lista negra» de Kapta llegan a la tienda en el envío diario de la lista
+ * automática (COD Core 0.10.45, `/wp-json/cod-core/v1/pago-solo-online`). Se
+ * deja como referencia del contrato `/prepago`, que Kapta sigue contestando.
+ *
  * Plugin Name: Kapta · Lista de pago adelantado
  * Description: Esconde «Pago contra entrega» en el checkout a los celulares que Kapta tiene en su «Lista de pago adelantado» (lista negra). MOM §41.
  * Version: 1.1.0

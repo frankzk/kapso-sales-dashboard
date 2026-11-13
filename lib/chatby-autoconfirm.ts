@@ -28,6 +28,7 @@
 // Este archivo es PURO. El servidor (lib/chatby-autoconfirm-server.ts) carga
 // los datos, lee Chatby, escribe y llama a los caminos existentes.
 
+import { lnChatbyHold } from "@/lib/lista-negra-copy";
 import { createHash } from "node:crypto";
 import { chatbyMentionsOrder, type ChatbyMessage } from "@/lib/chatby-conversation";
 import { classifyOperation } from "@/lib/order-macro-stage";
@@ -599,8 +600,8 @@ export type ChatbyHoldReason =
   | "shalom"
   | "programado"
   | "guia_no_creada"
-  // «Pago solo online (lista automática)», MOM §41.11: devolvió (o anula casi
-  // todo) y nunca recibió. Va a la asesora; Kapta no le escribe a la clienta.
+  // La Lista negra (MOM §41 y §41.11), automática o a mano. Va a la asesora;
+  // Kapta no le escribe a la clienta.
   | "pago_online";
 
 export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
@@ -620,8 +621,7 @@ export const CHATBY_HOLD_REASONS: Record<ChatbyHoldReason, string> = {
   shalom: "Tiene «DNI y agencia Shalom» guardado: la salida la decide una persona.",
   programado: "Tiene envío programado: la guía es la del día programado.",
   guia_no_creada: "Aliclik no dejó crear la guía.",
-  pago_online:
-    "Cliente de «Pago solo online» (entrega devuelta, o anula casi todos sus pedidos, y nunca recibió): solo pago online o adelanto. Kapta no crea la guía contra entrega ni le escribe: cobra lo que pide «Pago solo online» y confirma tú.",
+  pago_online: lnChatbyHold(null),
 };
 
 /** ¿El motivo es de la guía (la confirmación sí cuadró)? */

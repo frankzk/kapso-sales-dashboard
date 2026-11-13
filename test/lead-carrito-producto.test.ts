@@ -121,9 +121,8 @@ describe("las piezas en el código", () => {
     // Después del link porque ese es más reciente; antes del primer mensaje
     // porque el carrito es posterior a la apertura de la conversación.
     const source = read("components/leads.tsx");
-    expect(source).toMatch(
-      /\(l\.last_product_handle \?\? ""\)\.trim\(\) \|\|[\s\S]{0,400}?\(l\.cart_product_handle \?\? ""\)\.trim\(\) \|\|[\s\S]{0,300}?leadProductHandle\(l\.first_inbound_text\)/,
-    );
+    expect(source).toContain('attributedProductHandle(l, productBasis, leadProductHandle(l.first_inbound_text)');
+    expect(read('lib/lead-products.ts')).toContain('lead.last_product_handle || lead.cart_product_handle');
   });
 
   it("y la columna sobrevive a que la migración no haya corrido", () => {

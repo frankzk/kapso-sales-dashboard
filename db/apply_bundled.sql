@@ -32706,3 +32706,760 @@ $$;
 
 revoke all on function public.pago_online_candidates(uuid) from public, anon, authenticated;
 grant execute on function public.pago_online_candidates(uuid) to service_role;
+
+-- ---- 0329 ----
+-- ============================================================================
+-- 0329_lista_negra_requisito.sql — «Lista negra» unificada: cada alta a mano
+-- elige lo que pide, y la búsqueda por celular tiene tope (MOM §41 y §41.11;
+-- owner 09-11-2026).
+--
+-- POR QUÉ. Las dos listas que frenan el contra entrega —la automática
+-- (`pago_online_*`, 0326) y la agregada a mano (`prepay_list_entries`,
+-- 0309)— pasan a ser UNA «Lista negra» en pantalla. La automática pide el
+-- adelanto de la escalera del §8 (o el pago completo, según su ajuste); la a
+-- mano pedía siempre el total. Desde ahora cada alta a mano dice qué pide:
+-- «Adelanto» (`adelanto`) o «Pago total» (`pago_completo`).
+--
+-- QUÉ CAMBIA.
+--   * `prepay_list_entries.requirement`: `adelanto` o `pago_completo`. Las filas
+--     de antes y el valor por defecto son `pago_completo`: hoy no cambia nada.
+--     Como el motivo, no se reescribe (el trigger de la 0309 lo suma): para
+--     pedir otra cosa, se saca y se agrega de nuevo.
+--   * `lista_negra_searches`: una fila por búsqueda de la página (organización,
+--     persona y cuándo; NUNCA el celular), para el tope por persona. Solo el
+--     servidor la lee y la escribe.
+--
+-- El código tolera que esta migración falte: lee sin `requirement` (= el
+-- total) y la búsqueda no tiene tope (el permiso sigue mandando). No cambia
+-- datos. Correrla otra vez no cambia nada.
+-- ============================================================================
+
+alter table public.prepay_list_entries
+  add column if not exists requirement text not null default 'pago_completo';
+
+do $$ begin
+  alter table public.prepay_list_entries
+    add constraint prepay_list_entries_requirement_ck check (requirement in ('adelanto', 'pago_completo'));
+exception when duplicate_object then null; end $$;
+
+-- Lo escrito no se reescribe (0309), y lo que pide tampoco.
+create or replace function public.prepay_list_entries_guard() returns trigger
+language plpgsql as $$
+begin
+  if new.id is distinct from old.id
+     or new.org_id is distinct from old.org_id
+     or new.phone is distinct from old.phone
+     or new.source is distinct from old.source
+     or new.reason is distinct from old.reason
+     or new.evidence is distinct from old.evidence
+     or new.added_by is distinct from old.added_by
+     or new.added_at is distinct from old.added_at
+     or new.requirement is distinct from old.requirement then
+    raise exception 'prepay_list_entries: una alta no se reescribe; quítala y agrega otra';
+  end if;
+  if old.removed_at is not null then
+    raise exception 'prepay_list_entries: una alta quitada no se cambia ni se reabre';
+  end if;
+  -- `removed_known_order_ids` solo se escribe en la baja misma.
+  if new.removed_known_order_ids is distinct from old.removed_known_order_ids and new.removed_at is null then
+    raise exception 'prepay_list_entries: lo sabido al quitar se escribe solo al quitar';
+  end if;
+  return new;
+end;
+$$;
+
+create table if not exists public.lista_negra_searches (
+  id          bigint generated always as identity primary key,
+  org_id      uuid not null references public.organizations(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+create index if not exists lista_negra_searches_user_idx on public.lista_negra_searches (user_id, created_at desc);
+
+alter table public.lista_negra_searches enable row level security;
+-- Sin política: el navegador no la lee ni la escribe.
+revoke all on public.lista_negra_searches from anon, authenticated;
+grant all on public.lista_negra_searches to service_role;
+grant usage, select on sequence public.lista_negra_searches_id_seq to service_role;
+
+-- ---- 0330 ----
+-- Customer evidence is separate from first-touch acquisition and funnel stage.
+alter table public.leads add column if not exists entry_product jsonb;
+alter table public.leads add column if not exists interest_product jsonb;
+alter table public.leads add column if not exists product_attribution_checked_at timestamptz;
+alter table public.leads add column if not exists product_conversation_checked_at timestamptz;
+create index if not exists leads_product_backfill_idx on public.leads(store_id,id)
+  where product_attribution_checked_at is null;
+create index if not exists leads_product_conversation_idx on public.leads(store_id,product_conversation_checked_at)
+  where category in ('open','hot') and kapso_conversation_id is not null;
+
+create table if not exists public.lead_product_signals (
+  lead_id uuid not null references public.leads(id) on delete cascade,
+  fingerprint text not null,
+  signal jsonb not null,
+  recorded_at timestamptz not null default now(),
+  primary key (lead_id,fingerprint)
+);
+alter table public.lead_product_signals enable row level security;
+revoke all on public.lead_product_signals from anon,authenticated;
+revoke all on public.lead_product_signals from service_role;
+grant select,insert on public.lead_product_signals to service_role;
+
+-- Invoker + explicit grants: ingestion only, never an authenticated browser RPC.
+create or replace function public.record_lead_products(
+  p_store_id uuid, p_conversation_id text, p_lead_id uuid,
+  p_entry jsonb, p_signals jsonb
+) returns void language plpgsql security invoker set search_path = '' as $$
+declare
+  l public.leads%rowtype;
+  s jsonb;
+  latest jsonb;
+begin
+  if (p_conversation_id is null) = (p_lead_id is null) then
+    raise exception 'Provide one lead identity';
+  end if;
+  select * into l from public.leads where store_id = p_store_id
+    and (case when p_lead_id is not null then id = p_lead_id
+      else kapso_conversation_id = p_conversation_id end) for update;
+  if not found then return; end if;
+  latest := l.interest_product;
+  for s in select value from jsonb_array_elements(coalesce(p_signals,'[]'::jsonb)) loop
+    if s->>'source' not in ('customer_url','customer_text','ambiguous')
+      or s->>'at' is null or s->>'evidence' is null then raise exception 'Invalid product evidence'; end if;
+    insert into public.lead_product_signals(lead_id,fingerprint,signal)
+      values(l.id,md5(s::text),s) on conflict do nothing;
+    if latest is null or (s->>'at')::timestamptz > (latest->>'at')::timestamptz
+      or ((s->>'at')::timestamptz = (latest->>'at')::timestamptz
+        and coalesce(s->>'message_id','') > coalesce(latest->>'message_id','')) then latest := s; end if;
+  end loop;
+  if p_entry is not null then
+    if p_entry->>'source' not in ('customer_url','customer_text','ambiguous')
+      or p_entry->>'at' is null or p_entry->>'evidence' is null then raise exception 'Invalid entry product evidence'; end if;
+    insert into public.lead_product_signals(lead_id,fingerprint,signal)
+      values(l.id,md5(p_entry::text),p_entry) on conflict do nothing;
+  end if;
+  update public.leads set entry_product = coalesce(l.entry_product,p_entry),
+    interest_product = latest,
+    product_attribution_checked_at = now(),
+    product_conversation_checked_at = case when p_conversation_id is not null then now() else l.product_conversation_checked_at end
+    where id = l.id;
+end $$;
+revoke all on function public.record_lead_products(uuid,text,uuid,jsonb,jsonb) from public,anon,authenticated;
+grant execute on function public.record_lead_products(uuid,text,uuid,jsonb,jsonb) to service_role;
+
+create or replace function public.guard_lead_product_evidence()
+returns trigger language plpgsql security invoker set search_path = '' as $$
+begin
+  if current_user not in ('postgres','service_role','supabase_admin') and
+    (case when tg_op = 'INSERT' then new.entry_product is not null or new.interest_product is not null
+      or new.product_attribution_checked_at is not null or new.product_conversation_checked_at is not null
+     else new.entry_product is distinct from old.entry_product or new.interest_product is distinct from old.interest_product
+      or new.product_attribution_checked_at is distinct from old.product_attribution_checked_at
+      or new.product_conversation_checked_at is distinct from old.product_conversation_checked_at end) then
+    raise exception 'Product evidence is ingestion-owned' using errcode='42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_lead_product_evidence on public.leads;
+create trigger guard_lead_product_evidence before insert or update on public.leads
+  for each row execute function public.guard_lead_product_evidence();
+
+-- ---- 0331 ----
+-- V2 resolves catalogue aliases. Positive first-touch facts remain immutable;
+-- an ambiguous result can be clarified only with the SAME customer evidence.
+create or replace function public.record_lead_products_v2(
+  p_store_id uuid, p_conversation_id text, p_lead_id uuid, p_entry jsonb, p_signals jsonb
+) returns void language plpgsql security invoker set search_path = '' as $$
+declare l public.leads%rowtype; s jsonb;
+begin
+  perform public.record_lead_products(p_store_id,p_conversation_id,p_lead_id,p_entry,p_signals);
+  select * into l from public.leads where store_id=p_store_id
+    and (case when p_lead_id is not null then id=p_lead_id else kapso_conversation_id=p_conversation_id end) for update;
+  if not found then return; end if;
+  if l.entry_product->>'source'='ambiguous' and p_entry->>'handle' is not null
+    and l.entry_product->>'evidence'=p_entry->>'evidence'
+    and (l.entry_product->>'at')::timestamptz=(p_entry->>'at')::timestamptz then
+    update public.leads set entry_product=p_entry where id=l.id;
+  end if;
+  for s in select value from jsonb_array_elements(coalesce(p_signals,'[]'::jsonb)) loop
+    if l.interest_product->>'source'='ambiguous' and s->>'handle' is not null
+      and l.interest_product->>'evidence'=s->>'evidence'
+      and l.interest_product->>'message_id' is not distinct from s->>'message_id'
+      and (l.interest_product->>'at')::timestamptz=(s->>'at')::timestamptz then
+      update public.leads set interest_product=s where id=l.id;
+    end if;
+  end loop;
+end $$;
+revoke all on function public.record_lead_products_v2(uuid,text,uuid,jsonb,jsonb) from public,anon,authenticated;
+grant execute on function public.record_lead_products_v2(uuid,text,uuid,jsonb,jsonb) to service_role;
+
+-- Bounded batches avoid one HTTP round trip per historical lead. Each chunk is
+-- atomic: a failed chunk cannot advance the application's resumable cursor.
+create or replace function public.record_lead_product_openers_v2(p_store_id uuid,p_rows jsonb)
+returns void language plpgsql security invoker set search_path = '' as $$
+declare r jsonb;
+begin
+  if jsonb_typeof(p_rows)<>'array' or jsonb_array_length(p_rows)>100 then raise exception 'Invalid product batch'; end if;
+  for r in select value from jsonb_array_elements(p_rows) loop
+    perform public.record_lead_products_v2(p_store_id,null,(r->>'id')::uuid,nullif(r->'entry','null'::jsonb),coalesce(r->'signals','[]'::jsonb));
+  end loop;
+end $$;
+revoke all on function public.record_lead_product_openers_v2(uuid,jsonb) from public,anon,authenticated;
+grant execute on function public.record_lead_product_openers_v2(uuid,jsonb) to service_role;
+
+-- ---- 0332 ----
+-- Explicit, per-person manual takes. Installation grants nobody this permission.
+alter table public.lead_routing_assignments add column manual_take boolean not null default false;
+
+create table public.lead_manual_takes (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organizations(id),
+  store_id uuid not null references public.stores(id),
+  lead_id uuid not null references public.leads(id),
+  actor uuid not null references auth.users(id),
+  origin text not null check(origin in ('busqueda','venta_telefonica')),
+  occurred_at timestamptz not null default clock_timestamp()
+);
+create index lead_manual_takes_actor_time_idx on public.lead_manual_takes(actor,occurred_at desc);
+alter table public.lead_manual_takes enable row level security;
+revoke all on public.lead_manual_takes from public,anon,authenticated,service_role;
+grant select,insert on public.lead_manual_takes to service_role;
+
+create function public.lead_manual_take_stores(p_actor uuid,p_stores uuid[])
+returns uuid[] language sql stable security invoker set search_path=public,pg_temp as $$
+  select coalesce(array_agg(s.id),'{}'::uuid[]) from stores s
+  join memberships m on m.org_id=s.org_id and m.user_id=p_actor
+  join lead_routing_assignments a on a.org_id=s.org_id and a.user_id=p_actor and a.manual_take
+  where s.id=any(p_stores)
+    and (m.role in ('owner','admin','vendedora') or exists(select 1 from membership_roles r where r.org_id=m.org_id and r.user_id=m.user_id and r.role='asesora'))
+    and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=p_actor and sa.store_id=s.id))
+$$;
+
+create function public.lead_manual_take_check(p_actor uuid,p_lead uuid)
+returns jsonb language plpgsql stable security invoker set search_path=public,pg_temp as $$
+declare l leads%rowtype; o uuid; routed boolean; appointment record;
+begin
+  select * into l from leads where id=p_lead;
+  if not found then return jsonb_build_object('ok',false,'reason','store'); end if;
+  select s.org_id into o from stores s join memberships m on m.org_id=s.org_id and m.user_id=p_actor
+    where s.id=l.store_id
+    and (m.role in ('owner','admin','vendedora') or exists(select 1 from membership_roles r where r.org_id=m.org_id and r.user_id=m.user_id and r.role='asesora'))
+    and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=p_actor and sa.store_id=s.id));
+  if o is null then return jsonb_build_object('ok',false,'reason','store'); end if;
+  if l.claimed_by is not null and l.claimed_by<>p_actor and l.claimed_at>now()-interval '10 minutes' then
+    return jsonb_build_object('ok',false,'reason','claimed','holder',l.claimed_by);
+  end if;
+  -- Same appointment ownership/release rule as 0322. A manual permission
+  -- cannot take a different advisor's still-valid appointment.
+  select c.vendedora,c.occurred_at into appointment from lead_calls c
+    join memberships m on m.user_id=c.vendedora and m.org_id=o
+    where c.lead_id=l.id and c.store_id=l.store_id and c.kind='call'
+      and l.category in ('open','hot') and l.next_followup_at is not null and c.next_followup_at=l.next_followup_at
+      and c.occurred_at<=now()
+      and (m.role in ('owner','admin','vendedora') or exists(select 1 from membership_roles r where r.org_id=o and r.user_id=c.vendedora and r.role='asesora'))
+      and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=c.vendedora and sa.store_id=l.store_id))
+    order by c.occurred_at desc,c.id desc limit 1;
+  if appointment.vendedora is not null and appointment.vendedora<>p_actor
+    and l.next_followup_at>now()-interval '2 hours'
+    and not coalesce(l.last_inbound_at<=now() and l.last_inbound_at>appointment.occurred_at,false) then
+    return jsonb_build_object('ok',false,'reason','appointment','holder',appointment.vendedora);
+  end if;
+  routed:=coalesce((lead_routing_scope(p_actor,array[l.store_id],l.id)->>'allowed')::boolean,false);
+  if not routed and not(l.store_id=any(lead_manual_take_stores(p_actor,array[l.store_id]))) then
+    return jsonb_build_object('ok',false,'reason','permission');
+  end if;
+  if (select count(*) from leads held where held.claimed_by=p_actor and held.claimed_at>now()-interval '10 minutes'
+    and held.id<>l.id and held.category not in ('won','lost'))>=2 then
+    return jsonb_build_object('ok',false,'reason','capacity');
+  end if;
+  return jsonb_build_object('ok',true,'manualException',not routed);
+end $$;
+
+create function public.claim_manual_lead(p_actor uuid,p_lead uuid,p_origin text)
+returns jsonb language plpgsql security invoker set search_path=public,pg_temp as $$
+declare l leads%rowtype; o uuid; result jsonb;
+begin
+  if p_origin is null or p_origin not in ('busqueda','venta_telefonica') then raise exception 'Origen inválido.'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('lead-claim:'||p_actor::text,0));
+  select s.org_id into o from stores s join leads target on target.store_id=s.id where target.id=p_lead;
+  perform 1 from lead_routing_settings where org_id=o for share;
+  perform 1 from lead_routing_assignments where org_id=o and user_id=p_actor for share;
+  select * into l from leads where id=p_lead for update;
+  result:=lead_manual_take_check(p_actor,p_lead);
+  if not coalesce((result->>'ok')::boolean,false) then return result; end if;
+  update leads set claimed_by=p_actor,claimed_at=clock_timestamp() where id=p_lead;
+  if (result->>'manualException')::boolean then
+    insert into lead_manual_takes(org_id,store_id,lead_id,actor,origin) values(o,l.store_id,l.id,p_actor,p_origin);
+    insert into lead_calls(lead_id,store_id,vendedora,kind,note)
+      values(l.id,l.store_id,p_actor,'system','Toma puntual fuera de bloques · '||case when p_origin='busqueda' then 'Búsqueda' else 'Venta por teléfono' end);
+  end if;
+  return result||jsonb_build_object('id',p_lead);
+end $$;
+
+revoke all on function public.lead_manual_take_stores(uuid,uuid[]),public.lead_manual_take_check(uuid,uuid),public.claim_manual_lead(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.lead_manual_take_stores(uuid,uuid[]),public.lead_manual_take_check(uuid,uuid),public.claim_manual_lead(uuid,uuid,text) to service_role;
+
+create or replace function public.save_lead_routing(p_org uuid,p_actor uuid,p_revision integer,p_enabled boolean,p_hours integer,p_assignments jsonb)
+returns integer language plpgsql security invoker set search_path=public,pg_temp as $$
+declare v_revision integer; v_before jsonb; v_after jsonb; v_assignment jsonb;
+begin
+  if not exists(select 1 from memberships m where m.org_id=p_org and m.user_id=p_actor and
+    (m.role in ('owner','admin') or exists(select 1 from membership_roles mr where mr.org_id=p_org and mr.user_id=p_actor and mr.role='administracion')
+     or exists(select 1 from user_permissions up where up.org_id=p_org and up.user_id=p_actor and up.permission='team.manage' and up.granted))) then
+    raise exception 'Sin permiso para configurar el equipo.';
+  end if;
+  if p_hours is null or p_hours not between 1 and 168 or p_enabled is null or jsonb_typeof(p_assignments) is distinct from 'array' or jsonb_array_length(p_assignments)>200 then
+    raise exception 'Configuración inválida.'; end if;
+  perform 1 from organizations where id=p_org for update;
+  insert into lead_routing_settings(org_id) values(p_org) on conflict do nothing;
+  select revision into v_revision from lead_routing_settings where org_id=p_org for update;
+  if v_revision<>p_revision then raise exception 'La configuración cambió. Recarga Equipo antes de guardar.'; end if;
+  select jsonb_build_object('settings',to_jsonb(s),'assignments',coalesce((select jsonb_agg(to_jsonb(a) order by a.user_id) from lead_routing_assignments a where a.org_id=p_org),'[]'::jsonb))
+    into v_before from lead_routing_settings s where s.org_id=p_org;
+  if (select count(*) from jsonb_array_elements(p_assignments))<>(select count(distinct a->>'userId') from jsonb_array_elements(p_assignments)a) then raise exception 'Persona repetida.'; end if;
+  delete from lead_routing_assignments where org_id=p_org;
+  for v_assignment in select * from jsonb_array_elements(p_assignments) loop
+    if not exists(select 1 from memberships m where m.org_id=p_org and m.user_id=(v_assignment->>'userId')::uuid and (m.role='vendedora' or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora')))
+      or jsonb_typeof(v_assignment->'blocks') is distinct from 'array' or jsonb_typeof(v_assignment->'backup') is distinct from 'boolean' or (v_assignment ? 'manualTake' and jsonb_typeof(v_assignment->'manualTake') is distinct from 'boolean') then raise exception 'Asesora o bloques inválidos.'; end if;
+    insert into lead_routing_assignments(org_id,user_id,blocks,backup,manual_take)
+    values(p_org,(v_assignment->>'userId')::uuid,array(select jsonb_array_elements_text(v_assignment->'blocks')),(v_assignment->>'backup')::boolean,coalesce((v_assignment->>'manualTake')::boolean,(select (a->>'manual_take')::boolean from jsonb_array_elements(v_before->'assignments') a where a->>'user_id'=v_assignment->>'userId'),false));
+  end loop;
+  update lead_routing_settings set enabled=p_enabled,fresh_hours=p_hours,revision=revision+1,updated_at=clock_timestamp(),updated_by=p_actor where org_id=p_org;
+  perform public.lead_routing_coverage(p_org);
+  select jsonb_build_object('settings',to_jsonb(s),'assignments',coalesce((select jsonb_agg(to_jsonb(a) order by a.user_id) from lead_routing_assignments a where a.org_id=p_org),'[]'::jsonb))
+    into v_after from lead_routing_settings s where s.org_id=p_org;
+  insert into lead_routing_audit(org_id,actor,before_config,after_config) values(p_org,p_actor,v_before,v_after);
+  return v_revision+1;
+end $$;
+
+-- ---- 0333 ----
+-- Productividad operativa. Read-only reporting, no operational transitions.
+-- A snapshot on NEW human contacts prevents later stages reattributing old work.
+create index order_payments_registered_productivity_idx on public.order_payments(store_id,registered_at) where registered_by is not null;
+create index order_payments_validated_productivity_idx on public.order_payments(store_id,validated_at) where validated_by is not null;
+create function public.capture_productivity_context()
+returns trigger language plpgsql security invoker set search_path=public,pg_temp as $$
+declare context jsonb;
+begin
+  if new.actor is not null and new.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call') then
+    select jsonb_build_object('stage',m.macro_stage,'substage',m.macro_substage,
+      'operation',m.macro_operation,'courier',m.current_courier,'payment_state',m.payment_state) into context
+      from order_master m where m.order_id=new.order_id and m.store_id=new.store_id;
+    new.payload:=coalesce(new.payload,'{}'::jsonb)||jsonb_build_object('productivity_context',coalesce(context,'{}'::jsonb));
+  end if;
+  return new;
+end $$;
+revoke all on function public.capture_productivity_context() from public,anon,authenticated;
+create trigger capture_productivity_context before insert on public.order_events
+for each row execute function public.capture_productivity_context();
+
+create function public.operations_productivity(p_stores uuid[],p_start timestamptz,p_end timestamptz,
+  p_section text default 'resumen',p_actor uuid default null,p_tz text default 'America/Lima')
+returns jsonb language plpgsql stable security invoker set search_path=public,pg_temp as $$
+declare result jsonb;
+begin
+  if p_start is null or p_end is null or p_end<p_start or p_end-p_start>interval '366 days'
+    or p_section is null or p_section not in ('resumen','leads','master','repro_provincia','repro_lima','diferencia','pagos','almacen','despacho')
+    or not exists(select 1 from pg_timezone_names where name=p_tz) then raise exception 'Periodo o sección inválidos.'; end if;
+  with order_facts as (
+    select 'event:'||e.id as id,e.actor,e.store_id,e.order_id,null::uuid as lead_id,e.occurred_at as at,
+      case when e.kind='status_override' and lower(e.source)='liquidacion' then 'despacho'
+        when e.kind in ('package_ready','package_removed','return_received','returned_to_office') then 'almacen'
+        when e.kind in ('office_checked','pickup_checked','custody_transferred','dispatch_route_assigned','dispatch_route_reassigned','stop_reported','liquidation_closed') then 'despacho'
+        when e.kind in ('key_shared','key_registered') then 'diferencia'
+        when e.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call')
+          and lower(e.payload->'productivity_context'->>'courier') in ('shalom','olva')
+          and (e.payload->'productivity_context'->>'substage' in ('pendiente_pago_diferencia','recogido_sin_pago_completo')
+            or (e.payload->'productivity_context'->>'operation'='agencia'
+              and e.payload->'productivity_context'->>'substage' in ('en_transito','en_destino')
+              and coalesce(e.payload->'productivity_context'->>'payment_state','')<>'pago_completo')) then 'diferencia'
+        else 'master' end as area,
+      case when e.kind='confirmation_contact' and e.payload->>'result'='confirmado' then 'confirmed'
+        when e.kind='status_override' and lower(e.source)='liquidacion' then 'liquidation_status_registered'
+        else e.kind end as action,0::numeric as amount,
+      e.payload->>'result' as outcome,
+      e.kind in ('comment','chatby_message','kapso_message','browser_call','anura_call') and not(coalesce(e.payload,'{}'::jsonb) ? 'productivity_context') as historical
+    from order_events e where e.store_id=any(p_stores) and e.occurred_at between p_start and p_end
+      and e.actor is not null and (p_actor is null or e.actor=p_actor)
+      and lower(coalesce(e.source,'')) not in ('system','automatico','automatic','sync','webhook','chatby_auto','voice_agent')
+      and e.kind in ('confirmation_contact','confirmed','comment','chatby_message','kapso_message','browser_call','anura_call',
+        'status_override','dispatch_date_set','guide_created','guide_registered','cancelled_woocommerce','legacy_shopify_sale_cancelled',
+        'woo_sale_ended_pending_return','customer_name_updated','coverage_changed','key_shared','key_registered',
+        'package_ready','package_removed','return_received','returned_to_office','office_checked','pickup_checked',
+        'custody_transferred','dispatch_route_assigned','dispatch_route_reassigned','stop_reported','liquidation_closed')
+      and not(e.kind='comment' and lower(coalesce(e.comment_type,''))='ubicacion')
+      -- The confirmation RPC writes a contact + its technical confirmed event.
+      -- Count that single gesture once, preserving its result and actor.
+      and not(e.kind='confirmed' and e.operation_id is not null and exists(
+        select 1 from order_events contact where contact.store_id=e.store_id and contact.order_id=e.order_id
+          and contact.actor=e.actor and contact.operation_id=e.operation_id and contact.kind='confirmation_contact'
+          and contact.payload->>'result'='confirmado'))
+  ), facts as (
+    select * from order_facts
+    union all
+    select 'shipment:'||c.id,c.agent,c.store_id,s.order_id,null::uuid,c.occurred_at,'repro_provincia',
+      case when c.next_followup_at is not null and ((c.kind='reroute' and coalesce(c.new_status,'en_ruta')='en_ruta')
+        or (c.kind='call' and c.new_status='en_ruta')) then 'province_rescheduled'
+        when c.kind='call' then 'province_call' else 'province_management' end,
+      0::numeric,c.new_status,false
+    from shipment_calls c join shipments s on s.id=c.shipment_id and s.store_id=c.store_id
+    where c.store_id=any(p_stores) and c.occurred_at between p_start and p_end and c.agent is not null
+      and (p_actor is null or c.agent=p_actor) and c.kind in ('call','reroute','address_change')
+    union all
+    select 'lima:'||c.id,c.actor,c.store_id,c.order_id,null::uuid,c.occurred_at,'repro_lima',
+      case when c.outcome='confirma' and c.agreed_on is not null then 'lima_scheduled' else 'lima_management' end,
+      0::numeric,c.outcome,false from lima_repro_calls c where c.store_id=any(p_stores)
+      and c.occurred_at between p_start and p_end and c.actor is not null and (p_actor is null or c.actor=p_actor)
+    union all
+    select 'payment-register:'||p.id,p.registered_by,p.store_id,p.order_id,null::uuid,p.registered_at,
+      case when p.kind='diferencia' then 'diferencia' else 'pagos' end,'payment_registered',greatest(coalesce(p.amount,0),0),p.kind,false
+    from order_payments p where p.store_id=any(p_stores) and p.registered_at between p_start and p_end
+      and p.registered_by is not null and (p_actor is null or p.registered_by=p_actor)
+    union all
+    select 'payment-validate:'||p.id,p.validated_by,p.store_id,p.order_id,null::uuid,p.validated_at,
+      case when p.kind='diferencia' then 'diferencia' else 'pagos' end,'payment_validated',p.amount,p.kind,false
+    from order_payments p where p.store_id=any(p_stores) and p.validated_at between p_start and p_end
+      and p.validated_by is not null and (p_actor is null or p.validated_by=p_actor)
+      and p.validation_status='validado' and p.amount>0
+    union all
+    select 'lead:'||c.id,c.vendedora,c.store_id,null::uuid,c.lead_id,c.occurred_at,'leads',
+      case when c.kind='call' then 'lead_call' else 'lead_management' end,0::numeric,null::text,false
+    from lead_calls c where c.store_id=any(p_stores) and c.occurred_at between p_start and p_end
+      and c.vendedora is not null and (p_actor is null or c.vendedora=p_actor) and c.kind not in ('system','voice_agent')
+    union all
+    select 'sale:'||s.order_id,s.vendedora,s.store_id,s.order_id,s.lead_id,s.occurred_at,'leads','sale_closed',
+      greatest(coalesce(o.total_amount,0)-coalesce(o.total_refunded,0),0),null::text,false
+    from order_sales s left join orders o on o.id=s.order_id and o.store_id=s.store_id
+    where s.store_id=any(p_stores) and s.occurred_at between p_start and p_end and s.vendedora is not null
+      and (p_actor is null or s.vendedora=p_actor)
+  ), selected as materialized (
+    select f.*,coalesce('order:'||f.order_id,'lead:'||f.lead_id,f.id) as ref,
+      (f.at at time zone p_tz)::date as local_day,extract(hour from f.at at time zone p_tz)::int as local_hour
+    from facts f where p_section='resumen' or f.area=p_section
+      or (p_section='pagos' and f.action in ('payment_registered','payment_validated'))
+  ), prior as (
+    select actor,at,local_day,lag(at) over(partition by actor,local_day order by at,id) as previous_at from selected
+  ), hours as (
+    select actor,coalesce(sum(case when at-previous_at<=interval '45 minutes' then extract(epoch from at-previous_at)/3600 else 0 end),0) as n
+    from prior group by actor
+  ), action_counts as (
+    select actor,action,count(*) as n,count(distinct order_id) as orders,coalesce(sum(amount),0) as amount from selected group by actor,action
+  ), area_counts as (
+    select actor,area,count(*) as n,count(distinct order_id) as orders from selected group by actor,area
+  ), heat as (
+    select actor,local_hour,count(*) as n from selected group by actor,local_hour
+  ), recent_ranked as (
+    select s.*,row_number() over(partition by actor order by at desc,id desc) as position from selected s
+  ), people as (
+    select s.actor as "userId",count(*) as actions,count(distinct s.ref) as objects,count(distinct s.order_id) as orders,
+      count(distinct s.lead_id) as leads,max(s.at) as "lastAt",max(h.n) as hours,count(*) filter(where s.historical) as "unclassifiedContacts",
+      (select jsonb_object_agg(a.action,jsonb_build_object('count',a.n,'orders',a.orders,'amount',a.amount)) from action_counts a where a.actor=s.actor) as counts,
+      (select jsonb_object_agg(a.area,jsonb_build_object('count',a.n,'orders',a.orders)) from area_counts a where a.actor=s.actor) as areas,
+      (select jsonb_object_agg(t.local_hour::text,t.n) from heat t where t.actor=s.actor) as heat,
+      (select jsonb_agg(jsonb_build_object('id',r.id,'at',r.at,'area',r.area,'action',r.action,'orderId',r.order_id,
+        'leadId',r.lead_id,'orderName',o.name,'amount',r.amount,'outcome',r.outcome) order by r.at desc,r.id desc)
+        from recent_ranked r left join orders o on o.id=r.order_id and o.store_id=r.store_id
+        where r.actor=s.actor and r.position<=50) as recent
+    from selected s join hours h on h.actor=s.actor group by s.actor
+  )
+  select jsonb_build_object('people',coalesce((select jsonb_agg(to_jsonb(p) order by p.actions desc,p."userId") from people p),'[]'::jsonb),
+    'totals',jsonb_build_object('actions',count(*),'orders',count(distinct order_id),'leads',count(distinct lead_id),
+      'people',count(distinct actor),'unclassifiedContacts',count(*) filter(where historical)),
+    'asOf',statement_timestamp()) into result from selected;
+  return result;
+end $$;
+revoke all on function public.operations_productivity(uuid[],timestamptz,timestamptz,text,uuid,text) from public,anon,authenticated;
+grant execute on function public.operations_productivity(uuid[],timestamptz,timestamptz,text,uuid,text) to service_role;
+
+-- ---- 0334 ----
+-- ============================================================================
+-- 0334_lista_negra_rechazo.sql — Lista negra automática: quien rechazó en la
+-- puerta y nunca recibió (MOM §41.11; owner 12-11-2026).
+--
+-- POR QUÉ. En Lima un rechazo en la puerta termina `anulado` (solo la
+-- anulación en Shopify termina la venta, v1.23), y la regla solo tomaba «1+
+-- devuelto» o «5+ pedidos con 75 % anulados». El 12-11-2026 había 135
+-- clientes de Lima que rechazaron el pedido en la puerta —121 sin haber
+-- recibido nunca nada— y solo 1 estaba en la lista. El owner: «Sí, desde 1
+-- rechazo».
+--
+-- QUÉ CAMBIA.
+--   * (C) `rechazo`: con CERO entregados, entra quien rechazó al menos un
+--     pedido contra entrega (sin hecho de la migración) en la puerta: el
+--     motorizado de Grupo GF lo reportó «Rechazó el pedido»
+--     (`stop_reported`, `outcome_reason = 'rechazado'`) o la guía del courier
+--     dice `REFUSED` (Aliclik, `etiquetaDiceRechazoEnPuerta`). Cuenta aunque el
+--     pedido siga en reprogramación: el rechazo es el hecho.
+--   * Prioridad del motivo: devuelto, rechazo, anulador. `failed` es la
+--     cuenta de lo que lo hizo entrar (pedidos rechazados, para `rechazo`).
+--   * `pago_online_phones.reason` acepta `rechazo`; `pago_online_runs` guarda
+--     `rechazos` (cuántos entraron por esta regla) y `pago_online_build` lo
+--     devuelve.
+-- Es `pagoOnlineListOf` en lib/pago-online.ts.
+--
+-- No cambia datos. Correrla otra vez no cambia nada. La lista nueva aparece
+-- con la corrida siguiente (05:00 de Lima, o «Calcular ahora»).
+-- ============================================================================
+
+alter table public.pago_online_phones drop constraint if exists pago_online_phones_reason_check;
+alter table public.pago_online_phones
+  add constraint pago_online_phones_reason_check check (reason in ('devuelto', 'anulador', 'rechazo'));
+
+alter table public.pago_online_runs add column if not exists rechazos integer not null default 0;
+
+create or replace function public.pago_online_candidates(p_org uuid)
+returns table(phone text, failed integer, reason text, orders integer, emails text[], excepted boolean)
+language sql stable
+set search_path = public
+as $$
+  with st as materialized (select s.id from public.stores s where s.org_id = p_org),
+  mig as materialized (
+    select distinct ev.order_id from public.order_events ev join st on st.id = ev.store_id
+    where ev.kind in ('cancelled_woocommerce', 'legacy_shopify_sale_cancelled', 'woo_sale_ended_pending_return')
+  ),
+  -- 0334: los pedidos rechazados en la puerta.
+  rej as materialized (
+    select ev.order_id from public.order_events ev join st on st.id = ev.store_id
+    where ev.kind = 'stop_reported' and ev.payload->>'outcome_reason' = 'rechazado'
+    union
+    select sh.order_id from public.shipments sh join st on st.id = sh.store_id
+    where sh.order_id is not null
+      and upper(btrim(split_part(coalesce(sh.reported_status, ''), ' · ', 1))) = 'REFUSED'
+  ),
+  h as materialized (
+    select right(regexp_replace(coalesce(om.customer_phone, ''), '\D', '', 'g'), 9) as phone,
+      count(*)::int as orders,
+      count(*) filter (where om.general_status = 'devuelto')::int as devueltos,
+      count(*) filter (where om.general_status = 'anulado')::int as anulados,
+      count(*) filter (where exists (select 1 from rej where rej.order_id = om.order_id))::int as rechazos
+    from public.order_master om join st on st.id = om.store_id
+    where om.coverage in ('lima', 'provincia_cod')
+      and not exists (select 1 from mig where mig.order_id = om.order_id)
+    group by 1
+  ),
+  -- 0328: «recibió» es cualquier pedido entregado del celular, sea cual sea su
+  -- cobertura y aunque tenga un hecho de la migración.
+  rcv as materialized (
+    select distinct right(regexp_replace(coalesce(om.customer_phone, ''), '\D', '', 'g'), 9) as phone
+    from public.order_master om join st on st.id = om.store_id
+    where om.general_status = 'entregado'
+  ),
+  l as materialized (
+    select h.phone,
+      case when h.devueltos >= 1 then h.devueltos
+           when h.rechazos >= 1 then h.rechazos
+           else h.anulados end as failed,
+      case when h.devueltos >= 1 then 'devuelto'
+           when h.rechazos >= 1 then 'rechazo'
+           else 'anulador' end as reason,
+      h.orders
+    from h
+    where length(h.phone) = 9
+      and not exists (select 1 from rcv where rcv.phone = h.phone)
+      and (h.devueltos >= 1
+           -- (C) 0334: rechazó en la puerta al menos una vez.
+           or h.rechazos >= 1
+           -- (B) el anulador: 5 y 0,75, los mismos de lib/pago-online.ts.
+           or (h.orders >= 5 and h.anulados::numeric >= 0.75 * h.orders))
+  ),
+  e as materialized (
+    select right(regexp_replace(coalesce(o.customer_phone, ''), '\D', '', 'g'), 9) as phone,
+      lower(btrim(coalesce(o.raw->'woo'->'billing'->>'email', o.raw->'billing'->>'email', o.raw->>'email'))) as email
+    from public.orders o join st on st.id = o.store_id
+    where coalesce(o.raw->'woo'->'billing'->>'email', o.raw->'billing'->>'email', o.raw->>'email') like '%@%'
+  ),
+  ev as materialized (
+    select e.email, min(e.phone) as phone from e
+    where e.email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' and length(e.email) <= 254 and length(e.phone) = 9
+    group by e.email having count(distinct e.phone) = 1
+  ),
+  em as materialized (select ev.phone, array_agg(ev.email order by ev.email) as emails from ev group by ev.phone)
+  select l.phone, l.failed, l.reason, l.orders, coalesce(em.emails, '{}'::text[]),
+    exists (select 1 from public.pago_online_exceptions x where x.org_id = p_org and x.phone = l.phone and x.removed_at is null)
+  from l left join em on em.phone = l.phone
+  order by l.phone;
+$$;
+
+revoke all on function public.pago_online_candidates(uuid) from public, anon, authenticated;
+grant execute on function public.pago_online_candidates(uuid) to service_role;
+
+create or replace function public.pago_online_build(p_org uuid, p_run uuid, p_requirement text)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_rows jsonb;
+  v_phones text[];
+  v_emails integer;
+  v_two integer;
+  v_anul integer;
+  v_rech integer;
+  v_exc integer;
+  v_pc jsonb;
+begin
+  select coalesce(jsonb_agg(jsonb_build_object('p', c.phone, 'f', c.failed, 'r', c.reason, 'o', c.orders, 'e', to_jsonb(c.emails))
+                  order by c.phone) filter (where not c.excepted), '[]'::jsonb),
+         coalesce(array_agg(c.phone order by c.phone) filter (where not c.excepted), '{}'::text[]),
+         coalesce(sum(cardinality(c.emails)) filter (where not c.excepted), 0)::int,
+         -- «2 o más»: dos o más devueltos (los anuladores no entran en esta cuenta).
+         count(*) filter (where not c.excepted and c.reason = 'devuelto' and c.failed >= 2)::int,
+         count(*) filter (where not c.excepted and c.reason = 'anulador')::int,
+         count(*) filter (where not c.excepted and c.reason = 'rechazo')::int,
+         count(*) filter (where c.excepted)::int
+    into v_rows, v_phones, v_emails, v_two, v_anul, v_rech, v_exc
+    from public.pago_online_candidates(p_org) c;
+
+  if p_run is not null then
+    insert into public.pago_online_phones (run_id, org_id, phone, failed, reason, orders, emails)
+    select p_run, p_org, r->>'p', (r->>'f')::int, r->>'r', (r->>'o')::int, array(select jsonb_array_elements_text(r->'e'))
+    from jsonb_array_elements(v_rows) r
+    on conflict (run_id, phone) do nothing;
+  end if;
+
+  v_pc := public.pago_online_por_confirmar(p_org, v_phones, p_requirement);
+  return jsonb_build_object(
+    'phones', cardinality(v_phones),
+    'emails', v_emails,
+    'two_or_more', v_two,
+    'anuladores', v_anul,
+    'rechazos', v_rech,
+    'excepted', v_exc,
+    'por_confirmar_listed', coalesce((v_pc->>'listed')::int, 0),
+    'por_confirmar_braked', coalesce((v_pc->>'braked')::int, 0)
+  );
+end;
+$$;
+
+revoke all on function public.pago_online_build(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.pago_online_build(uuid, uuid, text) to service_role;
+
+-- ---- 0335 ----
+-- Store distribution is an optional preference, independent of block/store authorization.
+-- No advisor, block, reservation or lead is reassigned by installation.
+alter table public.lead_routing_assignments add column store_weights jsonb
+  check(store_weights is null or jsonb_typeof(store_weights)='object');
+comment on column public.lead_routing_assignments.store_weights is 'NULL: existing priority. Otherwise target integer percentages by authorized store, sum 100; audited by save_lead_routing.';
+
+create or replace function public.save_lead_routing(p_org uuid,p_actor uuid,p_revision integer,p_enabled boolean,p_hours integer,p_assignments jsonb)
+returns integer language plpgsql security invoker set search_path=public,pg_temp as $$
+declare v_revision integer; v_before jsonb; v_after jsonb; v_assignment jsonb; v_weights jsonb; v_user uuid;
+begin
+  if not exists(select 1 from memberships m where m.org_id=p_org and m.user_id=p_actor and
+    (m.role in ('owner','admin') or exists(select 1 from membership_roles mr where mr.org_id=p_org and mr.user_id=p_actor and mr.role='administracion')
+     or exists(select 1 from user_permissions up where up.org_id=p_org and up.user_id=p_actor and up.permission='team.manage' and up.granted))) then
+    raise exception 'Sin permiso para configurar el equipo.';
+  end if;
+  if p_hours is null or p_hours not between 1 and 168 or p_enabled is null or jsonb_typeof(p_assignments) is distinct from 'array' or jsonb_array_length(p_assignments)>200 then
+    raise exception 'Configuración inválida.'; end if;
+  perform 1 from organizations where id=p_org for update;
+  insert into lead_routing_settings(org_id) values(p_org) on conflict do nothing;
+  select revision into v_revision from lead_routing_settings where org_id=p_org for update;
+  if v_revision<>p_revision then raise exception 'La configuración cambió. Recarga Equipo antes de guardar.'; end if;
+  select jsonb_build_object('settings',to_jsonb(s),'assignments',coalesce((select jsonb_agg(to_jsonb(a) order by a.user_id) from lead_routing_assignments a where a.org_id=p_org),'[]'::jsonb))
+    into v_before from lead_routing_settings s where s.org_id=p_org;
+  if (select count(*) from jsonb_array_elements(p_assignments))<>(select count(distinct a->>'userId') from jsonb_array_elements(p_assignments)a) then raise exception 'Persona repetida.'; end if;
+  delete from lead_routing_assignments where org_id=p_org;
+  for v_assignment in select * from jsonb_array_elements(p_assignments) loop
+    if not exists(select 1 from memberships m where m.org_id=p_org and m.user_id=(v_assignment->>'userId')::uuid and (m.role='vendedora' or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora')))
+      or jsonb_typeof(v_assignment->'blocks') is distinct from 'array' or jsonb_typeof(v_assignment->'backup') is distinct from 'boolean' or (v_assignment ? 'manualTake' and jsonb_typeof(v_assignment->'manualTake') is distinct from 'boolean') then raise exception 'Asesora o bloques inválidos.'; end if;
+    v_user:=(v_assignment->>'userId')::uuid;
+    v_weights:=case when v_assignment ? 'storeWeights' then nullif(v_assignment->'storeWeights','null'::jsonb)
+      else (select nullif(a->'store_weights','null'::jsonb) from jsonb_array_elements(v_before->'assignments') a where a->>'user_id'=v_assignment->>'userId') end;
+    if v_weights is not null then
+      if jsonb_typeof(v_weights)<>'object' then raise exception 'Porcentajes inválidos.'; end if;
+      if not exists(select 1 from jsonb_each(v_weights)) or (select count(*) from jsonb_each(v_weights))>100 then raise exception 'Indica las tiendas y sus porcentajes.'; end if;
+      if exists(select 1 from jsonb_each(v_weights) e where e.key !~* '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' or jsonb_typeof(e.value)<>'number' or e.value::text !~ '^[0-9]{1,3}$') then raise exception 'Los porcentajes deben ser enteros entre 0 y 100.'; end if;
+      if exists(select 1 from jsonb_each_text(v_weights) e where e.value::integer>100 or not exists(
+        select 1 from stores s join memberships m on m.org_id=s.org_id and m.user_id=v_user
+        where s.id=e.key::uuid and s.org_id=p_org and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=v_user and sa.store_id=s.id))))
+        or (select sum(value::integer) from jsonb_each_text(v_weights))<>100 then raise exception 'Usa tiendas de la asesora y porcentajes que sumen 100 %%.'; end if;
+    end if;
+    insert into lead_routing_assignments(org_id,user_id,blocks,backup,manual_take,store_weights)
+    values(p_org,(v_assignment->>'userId')::uuid,array(select jsonb_array_elements_text(v_assignment->'blocks')),(v_assignment->>'backup')::boolean,coalesce((v_assignment->>'manualTake')::boolean,(select (a->>'manual_take')::boolean from jsonb_array_elements(v_before->'assignments') a where a->>'user_id'=v_assignment->>'userId'),false),v_weights);
+  end loop;
+  update lead_routing_settings set enabled=p_enabled,fresh_hours=p_hours,revision=revision+1,updated_at=clock_timestamp(),updated_by=p_actor where org_id=p_org;
+  perform public.lead_routing_coverage(p_org);
+  select jsonb_build_object('settings',to_jsonb(s),'assignments',coalesce((select jsonb_agg(to_jsonb(a) order by a.user_id) from lead_routing_assignments a where a.org_id=p_org),'[]'::jsonb))
+    into v_after from lead_routing_settings s where s.org_id=p_org;
+  insert into lead_routing_audit(org_id,actor,before_config,after_config) values(p_org,p_actor,v_before,v_after);
+  return v_revision+1;
+end $$;
+
+
+-- Server-only: p_actor always comes from verified session, never a browser parameter.
+create function public.lead_store_distribution(p_actor uuid,p_stores uuid[]) returns jsonb
+language plpgsql security invoker set search_path=public,pg_temp as $$
+declare v_weights jsonb; v_completed jsonb;
+begin
+  if p_actor is null or p_stores is null or cardinality(p_stores) not between 1 and 100 or exists(
+    select 1 from unnest(p_stores) requested(store_id) where not exists(select 1 from stores s join memberships m on m.org_id=s.org_id and m.user_id=p_actor
+      where s.id=requested.store_id and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=p_actor and sa.store_id=s.id)))) then
+    raise exception 'Sin acceso a estas tiendas.';
+  end if;
+  select jsonb_object_agg(e.key,e.value) into v_weights
+  from lead_routing_assignments a join lead_routing_settings cfg on cfg.org_id=a.org_id and cfg.enabled
+  cross join lateral jsonb_each(a.store_weights) e
+  join stores s on s.id=e.key::uuid and s.org_id=a.org_id
+  join memberships m on m.user_id=a.user_id and m.org_id=a.org_id
+  where a.user_id=p_actor and (m.role='vendedora' or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora'))
+    and exists(select 1 from stores requested where requested.id=any(p_stores) and requested.org_id=a.org_id)
+    and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=p_actor and sa.store_id=s.id));
+  if v_weights is null then return jsonb_build_object('weights',null,'completed','{}'::jsonb); end if;
+  select coalesce(jsonb_object_agg(store_id,n),'{}'::jsonb) into v_completed from (
+    select s.id as store_id,count(distinct c.lead_id) as n
+    from stores s join jsonb_object_keys(v_weights) key on key::uuid=s.id
+    join lead_calls c on c.store_id=s.id and c.vendedora=p_actor and c.kind='call'
+      and c.occurred_at >= (date_trunc('day',statement_timestamp() at time zone coalesce(nullif(s.timezone,''),'America/Lima')) at time zone coalesce(nullif(s.timezone,''),'America/Lima'))
+      and c.occurred_at <= statement_timestamp()
+    group by s.id
+  ) t;
+  return jsonb_build_object('weights',v_weights,'completed',v_completed);
+end $$;
+revoke all on function public.lead_store_distribution(uuid,uuid[]) from public,anon,authenticated;
+grant execute on function public.lead_store_distribution(uuid,uuid[]) to service_role;
+-- Uses the same actor/day range as productivity; notes/system events never count.
+create index if not exists lead_calls_store_mix_day_idx on public.lead_calls(vendedora,store_id,occurred_at) include(lead_id) where kind='call';
+
+-- ---- 0336 ----
+-- Read-only queues matching Master payment_state. No financial or operational writes.
+create function public.agency_payment_bucket(p_state text,p_platform text,p_financial text,p_refunded numeric,p_status text,p_substage text)
+returns text language sql immutable security invoker set search_path=public as $$
+ select case
+   when p_state='pago_completo' then 'complete'
+   when p_platform='shopify' and lower(trim(p_financial))='paid' and coalesce(p_refunded,0)<=0 then 'historical'
+   when p_status in ('anulado','devuelto') or p_substage in ('anulado_cerrado','devuelto_conciliado') then 'excluded'
+   when p_state in ('adelanto_cargado','diferencia_cargada','pago_total_cargado','posible_duplicado') then 'validate'
+   when p_state is null or p_state in ('sin_pago','adelanto_validado') then 'collect'
+   else 'review' end
+$$;
+revoke all on function public.agency_payment_bucket(text,text,text,numeric,text,text) from public,anon;
+grant execute on function public.agency_payment_bucket(text,text,text,numeric,text,text) to authenticated,service_role;
+
+-- NULL dates are allowed only for the separate, global historical-paid filter.
+create function public.order_master_agency_payments(p_store_ids uuid[],p_from date,p_to date,p_bucket text)
+returns setof public.order_master language sql stable security invoker set search_path=public as $$
+ select m.* from public.order_master m
+ join public.orders o on o.id=m.order_id and o.store_id=m.store_id
+ where m.store_id=any(p_store_ids)
+   and p_bucket in ('all','complete','collect','validate','historical','review')
+   and ((p_from is null and p_to is null and p_bucket='historical') or (
+     p_to-p_from between 1 and 32 and exists(
+       select 1 from public.shipments s where s.order_id=m.order_id and s.store_id=m.store_id
+         and (lower(s.courier) like '%shalom%' or lower(s.courier) like '%olva%')
+         and coalesce(s.dispatched_at,s.created_at)>=(p_from::timestamp at time zone 'America/Lima')
+         and coalesce(s.dispatched_at,s.created_at)<(p_to::timestamp at time zone 'America/Lima')
+     )))
+   and case when p_bucket='all' then
+     public.agency_payment_bucket(m.payment_state,o.platform,o.financial_status,o.total_refunded,m.general_status,m.macro_substage) in ('complete','collect','validate','review')
+     else public.agency_payment_bucket(m.payment_state,o.platform,o.financial_status,o.total_refunded,m.general_status,m.macro_substage)=p_bucket end
+$$;
+revoke all on function public.order_master_agency_payments(uuid[],date,date,text) from public,anon;
+grant execute on function public.order_master_agency_payments(uuid[],date,date,text) to authenticated,service_role;
+
+-- Old bookmarks/callers now mean actual collection, not every unreconciled record.
+create or replace function public.order_master_agency_unpaid(p_store_ids uuid[],p_from date,p_to date)
+returns setof public.order_master language sql stable security invoker set search_path=public as $$
+ select * from public.order_master_agency_payments(p_store_ids,p_from,p_to,'collect')
+$$;
+notify pgrst, 'reload schema';

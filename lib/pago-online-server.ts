@@ -18,6 +18,15 @@ import "server-only";
 //     que Kapta ya guarda (Basic auth). Después de un envío bueno, un GET de
 //     verificación guarda los totales y la fecha que dice la tienda.
 //
+// LO QUE SE MANDA ES LA «LISTA NEGRA» ENTERA (owner, 09-11-2026): los
+// celulares de la corrida vigente MÁS las altas vivas a mano
+// (`prepay_list_entries`, MOM §41), sin repetidos (`listaNegraSendPhones`).
+// Las excepciones de Kapta sacan a alguien solo de la automática: un alta a
+// mano va igual. El freno de cambio brusco de cada tienda cuenta esa unión
+// (es lo que la tienda recibe); el de la corrida, la automática sola (es lo
+// que frena en Kapta). Es el ÚNICO camino por el que una alta a mano llega a
+// las tiendas: la consulta `/prepago` del §41.7 queda retirada.
+//
 // REINTENTOS: 1, 5 y 15 minutos después de cada intento que falla por 5xx,
 // tiempo agotado, red o 429; nunca con 401/403. 404 es «la tienda todavía no
 // tiene el endpoint» (cod-core 0.10.45): se registra y no se reintenta. 413
@@ -26,12 +35,15 @@ import "server-only";
 //
 // Nada de aquí escribe un celular en un log, una respuesta o un error.
 
+import { forgetListaNegraIndex } from "@/lib/lista-negra-cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { WooError, wooRequest } from "@/lib/woocommerce";
 import { loadWooStoreCreds } from "@/lib/woocommerce-intake";
 import { telegramTarget } from "@/lib/aliclik-scheduled-server";
 import { escapeHtml, sendTelegramToAll } from "@/lib/telegram";
 import { isMissingPagoOnline } from "@/lib/pago-online-lookup";
+import { livePrepayPhones } from "@/lib/prepay-list-server";
+import { listaNegraRegla, listaNegraSendPhones } from "@/lib/lista-negra";
 import {
   COD_CORE_API_PREFIX,
   PAGO_ONLINE_DEFAULT_REQUIREMENT,
@@ -333,8 +345,12 @@ async function maybeAlertTwoDays(admin: Admin, store: PagoOnlineStore, now: Date
 
 // ── La lista de una corrida ─────────────────────────────────────────────────
 
-/** Los celulares y correos guardados de una corrida, por páginas. Lanza si la base falla. */
-async function runPayload(admin: Admin, runId: string, regla: string): Promise<PagoOnlinePayload> {
+/**
+ * Lo que se manda: los celulares y correos guardados de una corrida, por
+ * páginas, MÁS los celulares de las altas vivas a mano de la organización
+ * (sin repetidos; ellas no traen correo). Lanza si la base falla.
+ */
+async function runPayload(admin: Admin, orgId: string, runId: string, regla: string): Promise<PagoOnlinePayload> {
   const phones: string[] = [];
   const emails: string[] = [];
   for (let from = 0; ; from += 1000) {
@@ -352,7 +368,8 @@ async function runPayload(admin: Admin, runId: string, regla: string): Promise<P
     }
     if (rows.length < 1000) break;
   }
-  return pagoOnlinePayload(phones.slice(0, PAGO_ONLINE_MAX_PHONES), emails.slice(0, PAGO_ONLINE_MAX_EMAILS), regla);
+  const union = listaNegraSendPhones(phones, await livePrepayPhones(admin, orgId));
+  return pagoOnlinePayload(union.phones.slice(0, PAGO_ONLINE_MAX_PHONES), emails.slice(0, PAGO_ONLINE_MAX_EMAILS), listaNegraRegla(regla, union.manualOnly));
 }
 
 /** El último envío bueno (diario o manual, nunca una prueba) de la tienda: el piso del freno de cambio brusco. */
@@ -377,6 +394,8 @@ export interface PagoOnlineBuildCounts {
   emails: number;
   two_or_more: number;
   anuladores: number;
+  /** Los que entraron por rechazo en la puerta (0334). */
+  rechazos: number;
   excepted: number;
   por_confirmar_listed: number;
   por_confirmar_braked: number;
@@ -402,6 +421,7 @@ function parseCounts(raw: unknown): PagoOnlineBuildCounts {
     emails: n(r.emails),
     two_or_more: n(r.two_or_more),
     anuladores: n(r.anuladores),
+    rechazos: n(r.rechazos),
     excepted: n(r.excepted),
     por_confirmar_listed: n(r.por_confirmar_listed),
     por_confirmar_braked: n(r.por_confirmar_braked),
@@ -418,6 +438,8 @@ export async function runPagoOnlineForOrg(
   admin: Admin,
   input: { orgId: string; trigger: "cron" | "manual"; actor?: string | null; now?: Date; fetchImpl?: typeof fetch },
 ): Promise<PagoOnlineOrgReport> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const now = input.now ?? new Date();
   const runDate = limaDateOf(now);
   const report: PagoOnlineOrgReport = { orgId: input.orgId, mode: "apagado", runId: null, counts: null, guard: null, guardReason: null, sends: [], error: null };
@@ -496,6 +518,7 @@ export async function runPagoOnlineForOrg(
       emails: counts.emails,
       two_or_more: counts.two_or_more,
       anuladores: counts.anuladores,
+      rechazos: counts.rechazos,
       excepted: counts.excepted,
       por_confirmar_listed: counts.por_confirmar_listed,
       por_confirmar_braked: counts.por_confirmar_braked,
@@ -576,7 +599,7 @@ async function sendRunToStores(
   const out: SendAttemptResult[] = [];
   let payload: PagoOnlinePayload;
   try {
-    payload = await runPayload(admin, input.runId, input.regla);
+    payload = await runPayload(admin, input.orgId, input.runId, input.regla);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return input.stores.map((s) => ({ storeId: s.id, sendId: null, status: "fallido", httpStatus: null, error: message, totals: null, verify: null, nextAttemptAt: null }));
@@ -693,7 +716,7 @@ export async function processPagoOnlineRetries(admin: Admin, opts: { now?: Date;
     ]);
     let payload: PagoOnlinePayload;
     try {
-      payload = await runPayload(admin, row.run_id, (run as { regla?: string | null } | null)?.regla ?? "");
+      payload = await runPayload(admin, row.org_id, row.run_id, (run as { regla?: string | null } | null)?.regla ?? "");
     } catch (e) {
       await admin.from("pago_online_sends").update({ status: "fallido", error: (e instanceof Error ? e.message : String(e)).slice(0, 480) }).eq("id", row.id);
       continue;
@@ -752,6 +775,8 @@ export async function acceptPagoOnlineRun(
   admin: Admin,
   input: { orgId: string; runId: string; actor: string | null },
 ): Promise<{ ok: true; sends: SendAttemptResult[] } | { ok: false; error: string }> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const { settings, missing, error } = await loadPagoOnlineSettings(admin, input.orgId);
   if (missing) return { ok: false, error: "Falta la migración 0326 en la base de datos." };
   if (error) return { ok: false, error: "No se pudo leer la posición. Intenta de nuevo." };
@@ -870,6 +895,8 @@ export async function addPagoOnlineException(
   admin: Admin,
   input: { orgId: string; phone: string; reason: string; actor: string | null; orderId?: string | null; orderName?: string | null },
 ): Promise<PagoOnlineExceptionResult> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const phone = pagoOnlinePhoneKey(input.phone);
   if (!phone) return { ok: false, error: "El pedido no tiene un celular de 9 dígitos." };
   const { data, error } = await admin
@@ -897,6 +924,8 @@ export async function removePagoOnlineException(
   admin: Admin,
   input: { orgId: string; id: string; reason: string; actor: string | null },
 ): Promise<PagoOnlineExceptionResult> {
+  // La Lista negra en memoria se vuelve a leer (lib/lista-negra-cache.ts).
+  forgetListaNegraIndex();
   const { data, error } = await admin
     .from("pago_online_exceptions")
     .update({ removed_at: new Date().toISOString(), removed_by: input.actor, removed_reason: input.reason.trim() })

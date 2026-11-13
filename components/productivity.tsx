@@ -10,6 +10,7 @@ import type { DateRange } from "@/lib/access";
 import type { MonthPace, MonthView } from "@/lib/productivity-month";
 import type { StoreSummary } from "@/lib/types";
 import { SOURCE_LABEL } from "@/lib/productivity-labels";
+import { ProductivityTabs } from "./productivity-tabs";
 import {
   FIRST_TOUCH_FAST_MIN,
   HEAT_START,
@@ -49,7 +50,7 @@ function pctDelta(cur: number, prev: number): number | null {
 
 /** Un rango de días (`from`/`to`) o un mes (`mes`); el mes manda si viene. */
 function buildHref(opts: { from: string; to: string; store: string | null; src: string | null; mes?: string | null }): string {
-  const qs = new URLSearchParams(opts.mes ? { mes: opts.mes } : { from: opts.from, to: opts.to });
+  const qs = new URLSearchParams({ area: "leads", ...opts.mes ? { mes: opts.mes } : { from: opts.from, to: opts.to } });
   if (opts.store) qs.set("store", opts.store);
   if (opts.src) qs.set("src", opts.src);
   return `/dashboard/productividad?${qs.toString()}`;
@@ -244,6 +245,7 @@ export function ProductivityBoard({
           </h1>
           <p className="mt-0.5 text-sm text-ink-500 first-letter:uppercase">{context}</p>
         </div>
+        <ProductivityTabs section="leads" range={range} store={storeId} month={mes} source={source}/>
         <ProductivityFilters
           periods={periods}
           months={monthChips}

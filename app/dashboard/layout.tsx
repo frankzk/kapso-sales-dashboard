@@ -33,9 +33,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // (`repro_lima.manage`, MOM §9.5). La página y cada acción lo vuelven a pedir.
   // Despacho entra a ver «Reintentos Aliclik» (`repro_lima.retries`, 03-11-2026).
   const canReproLima = permissions.can("repro_lima.manage") || permissions.can("repro_lima.retries");
-  // Lo que espera a una persona en «Cotejar Olva» (MOM §12). Un fallo aquí no
-  // puede tumbar el panel entero: sin número, el menú sigue funcionando.
-  const olvaPending = canManageLogistics
+  // Lo que espera a una persona en «Cotejar Olva» (MOM §12), que vive en «Pago
+  // de diferencia» (MOM §44) y la ve todo el que ve pedidos: el número va en
+  // esa entrada del menú. Un fallo aquí no puede tumbar el panel entero: sin
+  // número, el menú sigue funcionando.
+  const olvaPending = stores.length
     ? await countOlvaCotejoPending(createAdminSupabase(), [...new Set(stores.map((s) => s.org_id))]).catch(() => 0)
     : 0;
   // El menú por permisos (MOM §16): owner y admin los tienen todos. Quien solo
@@ -73,7 +75,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         canManageLogistics={canManageLogistics}
         canReproLima={canReproLima}
         navAccess={navAccess}
-        badges={olvaPending > 0 ? { "/dashboard/olva": olvaPending } : undefined}
+        badges={olvaPending > 0 ? { "/dashboard/pedidos/pago-diferencia": olvaPending } : undefined}
       >
         {children}
         {/* La ficha del pedido para todo el panel (MOM §25): se abre con

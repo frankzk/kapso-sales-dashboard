@@ -1,4 +1,248 @@
+### 13-11-2026 · Pago de diferencia: pestaña «Retornando»
+
+Sin migración. La bandeja suma una pestaña «Retornando», fuera de «Todos» y
+del número de «Bandeja»: Shalom u Olva en Por cerrar · Devolución física
+pendiente (la agencia lo sacó sin recojo ni pago), con los días en retorno y
+«Ya debería estar en Lima» desde 15. Verificar el conteo (~126) y que «Todos»
+no cambie.
+
+### 12-11-2026 · Agencia: Estado de pago y conciliación histórica (0336)
+
+Aplicar db/migrations/0336_agency_payment_reconciliation.sql antes del código.
+RPCs de lectura con la sesión/RLS; no actualizan importes ni estados. El
+indicador usa payment_state del Master. Por cobrar, comprobantes por validar e
+históricos Shopify pagados por conciliar abren listas separadas. Verificar el
+mismo periodo y tiendas en indicador, total del Master y Excel. En el Master,
+Históricos pagados · por conciliar también funciona sin periodo y combinado con
+Estado de pago. Instalación sin cambios de datos operativos.
+
+### 12-11-2026 · Lista negra: rechazó en la puerta (0334)
+
+0334 ya aplicada en producción antes del código. Regla (C) de la Lista negra
+automática: con cero entregados, entra quien rechazó un pedido contra entrega
+en la puerta (motorizado «Rechazó el pedido» o `REFUSED`). Motivo «Rechazó N
+pedido(s) en la puerta y nunca recibió». Entran 141; la lista nueva aparece
+con la corrida de las 05:00 o «Calcular ahora». Verificar el conteo
+«rechazaron en la puerta» en Lista negra y Automatizaciones.
+
+### 12-11-2026 · Anular guía Shalom pendiente de envío
+
+Sin migración. «Anular» aparece en las guías Shalom de la cuenta (API o
+vinculadas, con OSE ID) que siguen «Pendiente de envío», aunque no tengan
+`shalom_order_id`: el id de borrar se busca por número en el listado de
+Shalom al anular (~40 s). Verificar con #KP204326 (guía 103118676).
+
+### 12-11-2026 · El rótulo de Lima conserva la fecha programada
+
+Sin migración. Al crear la salida «por definir» de un pedido de Lima con
+«Programar envío» vigente (hoy o adelante), la fecha pasa a su salida
+programada de Grupo GF y a la «Salida prevista». Un programa de Grupo GF que
+ya exista no se toca. Verificar en Repro Lima que un pedido programado y
+rotulado diga «Sale <su día>» y no el siguiente reparto.
+
+### 11-11-2026 · Siete nombres cortos y reparación de su cohorte
+
+Sin migración. Se añaden aliases de HeatLessCurls, RestPro, Bolso Charlotte,
+UROCONTROL, Cayenne, Prozenix y Turkesterone. Verificar ambigüedades, rechazos
+y que el nombre personal Charlotte no identifica un bolso.
+El POST interno de revisión acepta `mode=repair`: usa exclusivamente los IDs
+de la cohorte fijada en `sync_state` y las RPC privadas 0331. No lanza el sync
+general ni cambia estados o interés posterior. Ejecutar una vez por tienda con
+acceso temporal acotado, verificar `unresolved=0` y las asociaciones esperadas;
+una repetición conserva entradas ya identificadas. `mode=counts` añade los
+conteos de «Sin producto» por estado y base. Retirar el acceso al terminar.
+
+### 11-11-2026 · Barrido de aliases de producto (0331)
+
+Aplicar 0331_lead_product_alias_review.sql antes del código nuevo. Añade dos
+RPC privadas: aclarar la misma evidencia ambigua y registrar históricos en
+lotes atómicos de 100. No modifica pedidos, pagos, estados ni reservas.
+El sync reanuda el barrido completo con source lead_product_openers_v2 en
+sync_state; las lecturas muestran la interpretación nueva sin esperar al lote.
+Verificar Biru, Aceite Magic, Magnesio Puro y 12 en 1, ambos tabs, buscador
+sin tildes y contadores visibles en celular. Las campañas sin consulta clara
+siguen necesitando una declaración de anuncio vigente.
+
+### 11-11-2026 · Producto en Leads: pestañas visibles
+
+Sin migración. «Interés actual» y «Producto de entrada» pasan a pestañas
+con buscador y lista compartida. Nombres largos se ajustan al ancho sin
+ocultar contadores. Verificar selección, cambio de pestaña y teclado en móvil
+y escritorio; los resolvers y datos de producto no cambian.
+
+### 11-11-2026 · La revisión de productos rota también chats vacíos
+
+Sin migración. El reloj de rotación se registra en cada intento de lectura,
+aunque Kapso no entregue mensajes entrantes o falle temporalmente. No modifica
+productos ni borra evidencia: evita que los mismos chats vacíos ocupen siempre
+los 80 lugares del relleno de conversaciones.
+
+### 10-11-2026 · Producto consultado en Leads (0330)
+
+Aplicar db/migrations/0330_lead_product_attribution.sql antes de desplegar.
+Añade evidencia privada de producto, entrada/interés separados y dos marcas
+de progreso. No modifica importes, pedidos ni elegibilidad de llamadas.
+El sync existente procesa los textos históricos en lotes de 500 por tienda;
+la lista resuelve los primeros mensajes en lectura mientras termina el relleno.
+Comprobar Más filtros → Producto → Interés actual / Producto de entrada,
+consultas por nombre y Sin producto para los casos ambiguos.
+
 # Deployment runbook
+
+### 11-11-2026 · Lista negra en memoria: ~22 000 lecturas por hora menos a la base (MOM §41)
+
+**Sin migración.** `listaNegraMarksAmong` (las chapas de Leads y del Master)
+contesta desde un índice en memoria por organización, releído cada dos
+minutos (`lib/lista-negra-cache.ts`). Contexto: la base dejó de responder el
+11-11 de 10:31 a 10:34 (Lima) y se reinició; esas lecturas eran lo que más
+ocupaba la puerta de PostgREST. Después de desplegar, comprobar en los logs de
+Supabase que `/rest/v1/pago_online_phones`, `/pago_online_exceptions` y
+`/prepay_list_entries` bajan de miles por hora a decenas.
+
+### 11-11-2026 · Responder por Kapso desde la ficha del pedido (MOM §25 «Kapso»)
+
+**Sin migración.** En la pestaña «Kapso» de la ficha, quien puede editar el
+pedido responde a la clienta (texto, foto, PDF o ticket Shalom) dentro de las
+24 h, desde el número de la tienda con que ella escribió. Queda en Actividad
+como `kapso_message` y cuenta como gestión en «Pago de diferencia».
+
+### 10-11-2026 · «Cotejar Olva» se muda a «Pago de diferencia» (MOM §12 y §44)
+
+**Sin migración.**
+
+- «Pago de diferencia» tiene tres vistas: «Bandeja», «Cotejar Olva» y
+  «Correos de Olva». «Cotejar Olva» sale del menú; `/dashboard/olva` redirige.
+- El número de envíos de Olva por vincular va en la entrada «Pago de
+  diferencia» del menú, para todo el que ve pedidos. Vincular sigue con
+  `master.edit`.
+- Los grupos de la bandeja pasan a control segmentado.
+
+### 10-11-2026 · «Pago de diferencia» abre en «Todos» (MOM §44)
+
+**Sin migración.** Solo cambia la pestaña con que abre la bandeja.
+
+### 10-11-2026 · «Comentario» sale de «Gestión manual» (MOM §43) y Cotejar Shalom mide el borde día por día (MOM §12)
+
+**Sin migración.**
+
+- «Pago de diferencia»: solo Shalom u Olva, y la pestaña «Todos» que suma
+  los tres grupos.
+- En la ficha, «Comentario» es su propia tarjeta, entre «Salidas y guías» y
+  «Gestión manual», con su entrada en el índice.
+- Cotejar Shalom: el borde viejo que Shalom entrega a medias se mide día por
+  día en la primera semana; no se empareja con guías anteriores al borde.
+
+### 10-11-2026 · «Pago de diferencia»: solo pedidos de Shalom u Olva (MOM §44)
+
+**Sin migración.** Las tres pestañas filtran por `current_courier` en Shalom u
+Olva: salen un Fenix de Repro Provincia en «En camino» y 47 «Recogidos sin
+pago» de agosto sin guía de agencia.
+
+### 10-11-2026 · Chatby desde la ficha: Ctrl+V adjunta en cualquier parte de la pestaña (MOM §25 «Chatby»)
+
+**Sin migración.** En la pestaña Chatby de la ficha, una foto, captura o PDF
+pegado con Ctrl+V se adjunta aunque el cursor no esté en la caja de
+«Responder por WhatsApp» (antes había que hacer clic en la caja). Con la
+pestaña escondida detrás de otra, o escribiendo en otro campo, no se toca.
+
+### 10-11-2026 · «Pago de diferencia»: pestañas En agencia, En camino y Recogidos sin pago (MOM §44)
+
+**Sin migración.** La bandeja suma «En camino» (Agencia en tránsito o en
+destino sin pago completo) y «Recogidos sin pago»
+(`recogido_sin_pago_completo`). «En agencia» sigue siendo la vista con que
+abre. La nota de corregir la dirección deja de contar como gestión.
+
+### 10-11-2026 · Cotejar Shalom: el borde viejo del listado se mide con lo que Shalom trae (MOM §12)
+
+**Sin migración.** Desde la siguiente pasada del cron `shalom-cotejo`, la
+cobertura del 97 % se exige desde el día siguiente a la guía más vieja del
+listado (si Shalom recortó su borde, hasta 7 días). Destraba el cotejo, que no
+vinculaba nada desde el 08-11, y con él el reemplazo de las guías muertas.
+
+### 10-11-2026 · Chatby desde la ficha: el ticket Shalom en PDF y adjuntar fotos o PDF (MOM §25 «Chatby»)
+
+**Sin migración.** El bucket privado `chatby-attachments` se crea solo en la
+primera subida.
+
+**Lo que cambia al desplegar:**
+
+- En la pestaña Chatby de la ficha, «Responder por WhatsApp» suma
+  «Enviar ticket Shalom (PDF)» (si el pedido tiene guía Shalom creada por
+  API) y «Adjuntar foto o PDF» (también pegar con Ctrl+V o arrastrar). Con
+  archivo, el texto es opcional.
+- El archivo va a Chatby como `{type: "image" | "file", url}` en
+  `send-content`. **Primera vez:** probar con un pedido propio; si Chatby
+  rechaza ese formato, sale su motivo y no se anota nada.
+
+### 10-11-2026 · Bandeja «Pago de diferencia» con la última gestión del equipo (MOM §44)
+
+**Sin migración.** Solo lectura.
+
+**Lo que cambia al desplegar:**
+
+- Menú «Pago de diferencia» (`/dashboard/pedidos/pago-diferencia`), debajo de
+  «Lista negra»: los pedidos en `pendiente_pago_diferencia` con lo que falta
+  pagar, los días en agencia y la última gestión (quién, cuándo, por dónde,
+  nota y fotos). Abre en «Por gestionar hoy».
+
+### 10-11-2026 · Fotos de constancia en el comentario del pedido (MOM §43)
+
+**Sin migración.** El bucket privado `order-comment-photos` se crea solo en la
+primera subida.
+
+**Lo que cambia al desplegar:**
+
+- En la ficha, Operar → «Comentario»: «Adjuntar foto», pegar con Ctrl+V o
+  arrastrar, hasta 4 fotos por comentario. Sugerencias de tipo («Llamada»,
+  «WhatsApp», «Pago de diferencia»…).
+- En Actividad, el tipo del comentario como chapa y las miniaturas de las
+  fotos (`/api/pedidos/<pedido>/comentario-foto`).
+- Los comentarios de antes no cambian.
+
+### 09-11-2026 · «Lista negra» unificada: una página, lo que pide cada alta a mano, la chapa en Leads y la copia estándar (0329, MOM §41, §41.11 y §25.3)
+
+**Migración 0329** (`db/migrations/0329_lista_negra_requisito.sql`), a mano y
+**antes** del código si se puede (el código la tolera ausente: sin ella todo
+alta a mano pide el pago total y la búsqueda no tiene tope):
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/0329_lista_negra_requisito.sql
+```
+
+- `prepay_list_entries.requirement` (`adelanto` | `pago_completo`, por defecto
+  y en las filas de antes `pago_completo`: hoy no cambia nada) y el trigger de
+  la 0309, que ya no deja reescribirlo.
+- `lista_negra_searches`: el tope de la búsqueda de la página (30 cada 10
+  minutos por persona), sin celulares y sin acceso del navegador.
+
+**Lo que cambia al desplegar:**
+
+- La página **«Lista negra»** (`/dashboard/clientes/lista-negra`; la de
+  `/dashboard/clientes/pago-adelantado` redirige) y el menú «Lista negra».
+- **El envío diario a Kenku y Aurela lleva también las altas vivas a mano**
+  (hoy no hay ninguna: el envío no cambia hasta que alguien agregue una). El
+  freno de cambio brusco de cada tienda cuenta la unión.
+- La chapa negra «Lista negra» en la lista de Leads y el aviso en la ficha del
+  lead; una sola chapa en el Master para las dos listas.
+- Todos los textos de la Lista negra salen de `lib/lista-negra-copy.ts` (§41.11
+  «Cómo se dice»): cambian los mensajes del freno, Chatby, el bot (422),
+  «Generar pedido», los avisos de la ficha, el panel y el historial.
+- La regla automática de la lista a mano queda **retirada**: sin controles en
+  Automatizaciones; `setPrepayAutoMode` solo deja apagarla. El cron
+  `/api/cron/prepay-list` sigue y no hace nada.
+- La consulta `/prepago` (§41.7) queda retirada como canal: no instalar el
+  mu-plugin ni pasar el contrato de COD Core.
+
+Sin variables ni crons nuevos.
+
+### 09-11-2026 · «Lista negra»: el nombre en pantalla de la lista automática (sin migración, MOM §41.11)
+
+Solo textos. La lista automática («Pago solo online», 0326) se llama «Lista
+negra» en la chapa del Master, el aviso de la ficha, los mensajes (Chatby, bot,
+«Generar pedido»), el historial y el panel de Automatizaciones. La lista de pago
+adelantado manual deja de llamarse «lista negra» («lista de pago completo»).
+Llaves internas, base y contrato con las tiendas sin cambios. Sin migración,
+cron ni variables.
 
 ### 09-11-2026 · «Pago solo online»: cualquier pedido entregado saca de la lista (0328, MOM §41.11)
 
@@ -7606,3 +7850,19 @@ Urpi con la caja de Grupo GF abierta). Sin crons ni variables nuevas.
 cajas. Las salidas que ya pasaron a Urpi se quedan como están; la función puede
 quedarse (nadie más la llama) o borrarse con
 `drop function public.urpi_take_gf_output(uuid, date, text);`.
+### 11-11-2026 · Reconocer Icefit en las consultas de Leads
+
+Alias de catálogo para «Icefit» / «Ice fit»: el subtítulo del molde de hielo
+no es obligatorio. «Hielo» sin nombre no identifica un producto; se conservan
+las ambigüedades de dos referencias distintas. Sin migración. El barrido completo
+usa las RPC privadas de 0331 y conserva estados, reservas e historial.
+
+Para terminar el barrido manual sin exportar conversaciones, configurar solo
+en producción `LEAD_PRODUCT_REVIEW_ACCESS` como secreto JSON con `token`
+aleatorio, `expiresAt` ISO y `storeIds` explícitos. POST a
+`/api/internal/leads/product-review?storeId=...` con bearer; repetir mientras
+`complete=false`. Cada petición procesa hasta 20 lotes de 1000 y reanuda su
+cursor independiente. `&mode=counts` devuelve los conteos agregados usando
+los mismos resolvers que la lista, para ambos modos de producto y estados.
+No programa crons ni envía mensajes. Retirar el acceso al terminar; aunque
+quede una versión desplegada, el token deja de funcionar al caducar.

@@ -1368,6 +1368,21 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
   0267, solo se llena en esa subetapa). Si esa guía después se anula, el pedido
   no hereda la fecha vieja: una salida creada después de programar la deja sin
   efecto.
+- **En Lima, el rótulo la hereda (12-11-2026).** Al crear la salida «por
+  definir» de un pedido de Lima (rótulo de la ficha o de la tanda de Almacén),
+  si tiene una fecha de «Programar envío» vigente de hoy o de un día que viene,
+  esa fecha pasa a su **salida programada de Grupo GF** (`gf_dispatch_programs`,
+  hecho `dispatch_programmed` con el motivo «envío programado antes del
+  rótulo») y a la «Salida prevista» de la salida. Así Repro Lima, Despacho del
+  día y «Sale a reparto» la siguen viendo. Un programa de Grupo GF que ya exista
+  manda y no se toca; una fecha que ya pasó no se arrastra.
+
+  > ⚠️ **Ocurrió.** #KP204348 (Kenku) se programó el 08-11 para el lun 16/11;
+  > una hora después se imprimió su rótulo «por definir» y la fecha se perdió:
+  > Repro Lima decía «Sale jue 12/11 · sin caja». Igual #KP204803 (14/11) y
+  > #KP204321 (18/11), que el 11-11 recibieron guía Aliclik antes de su día.
+  > `carriedDispatchDay` (`lib/dispatch-date.ts`) y `createManualRouteOutput`.
+  > Pruebas: `test/dispatch-date-carry.test.ts`.
 - **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
   (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
   anterior a la guía.
@@ -2146,12 +2161,12 @@ por separado.
 Una excepción COD es posible con justificación corta, actor y fecha. Las
 promesas de pago incumplidas aumentan el riesgo futuro.
 
-**Antes que esta escalera va la «Lista de pago adelantado» (§41, owner
-05-11-2026).** Un celular con un pedido rechazado en la puerta o no recogido en
-la agencia (o agregado a mano) paga el **total** por adelantado, sin la
-excepción con motivo de la escalera: no se confirma contra entrega ni sale
-ninguna guía hasta que el pago total esté validado. Para quien no está en la
-lista, la escalera sigue igual.
+**Antes que esta escalera va la «Lista negra» agregada a mano (§41, owner
+05-11-2026; unificada el 09-11-2026).** Un celular que el equipo agregó a mano
+paga lo que dice su alta —el **pago total** (lo de siempre) o el **adelanto de
+S/ 20** validado—, sin la excepción con motivo de la escalera: no se confirma
+contra entrega ni sale ninguna guía hasta tenerlo validado. Para quien no está
+en la lista, la escalera sigue igual.
 
 **Y la lista automática «Pago solo online» (§41.11, owner 09-11-2026).** Un
 celular (últimos 9 dígitos, Kenku y Aurela juntas, solo contra entrega, sin los
@@ -7628,6 +7643,119 @@ guías así sobre 842 pedidos; 456 con 15 días o menos, y 254 de la última sem
 todavía de camino de vuelta — el momento en que llamar sirve más, porque el
 paquete sigue cerca de la clienta.
 
+**Producto consultado en WhatsApp (owner, 10-11-2026; 0330).** El filtro
+«Producto» de Más filtros reconoce enlaces y nombres inequívocos del catálogo
+de ESA tienda en mensajes entrantes del cliente, también sin URL. Normaliza
+mayúsculas y tildes; nombres compartidos o varios productos quedan «Sin
+producto» para confirmar. No se infiere por síntomas, beneficios, recomendaciones
+salientes del bot, compras anteriores ni títulos de anuncios.
+
+El filtro presenta dos pestañas visibles, «Interés actual» (predeterminada) y
+«Producto de entrada» (11-11-2026). Debajo comparten el buscador y la lista
+de productos con sus contadores, sin desplazamiento horizontal. Cambiar de
+pestaña limpia la búsqueda y selección de producto anteriores; volver a tocar
+la pestaña ya activa conserva la selección.
+Entrada conserva la primera consulta guardada; si no identifica producto, se
+mantiene la declaración humana del anuncio vigente al ingresar. El interés se
+actualiza por fecha del mensaje, nunca por orden de llegada del enriquecimiento.
+Las consultas ambiguas más recientes no reutilizan un producto anterior. Los
+carritos, enlaces y declaraciones anteriores siguen como respaldo sin cambiar
+la fuente de adquisición. Lista y contadores usan el mismo resolver y catálogo.
+
+**Referencias exactas de carritos y anuncios (12-11-2026).** Los carritos de
+WooCommerce pueden llegar sin slug. Se resuelven por ID de producto de esa
+plataforma y tienda, o por SKU único en el catálogo de la tienda. Un ID Shopify
+no se interpreta como ID WooCommerce. Se conservan SKUs históricos al unificar
+una identidad de catálogo. Todas las líneas deben resolverse al mismo producto;
+una línea desconocida, referencias contradictorias o productos distintos dejan
+el carrito sin atribución única. Nunca se escoge un producto por el resumen.
+Si falla el catálogo de un carrito WooCommerce, se aborta su vinculación antes
+de escribir y se reintenta en la siguiente conciliación: el fallo no borra una
+referencia verificada ni se interpreta como un carrito sin producto.
+
+Las asignaciones humanas ya guardadas en `meta_ads.promoted_*` se incorporan a
+`ad_product_declarations` solo con SKU exacto y único, desde la fecha original
+de guardado. No se retrotraen a leads anteriores ni sustituyen declaraciones
+explícitas de Leads. Las importaciones conservan su procedencia en la nota y
+no inventan un usuario firmante. No se convierten títulos de campaña ni
+sugerencias basadas en compras en evidencia. La ingesta y el guardado manual
+mantienen estas referencias para los nuevos leads. `mode=references` recorre
+el histórico con cursor independiente y devuelve solo conteos; corrige únicamente
+`cart_product_handle` y declaraciones, sin cambiar evidencia del cliente,
+gestiones, reservas ni estados.
+
+`mode=conversations` revisa una cohorte congelada de pendientes sin producto:
+40 leads por petición y hasta cuatro lecturas simultáneas, una página de hasta
+100 mensajes por conversación. Solo los mensajes entrantes pasan por el matcher
+y el RPC de evidencia existente. El servidor descifra únicamente la credencial
+Kapso de la tienda autorizada; no descarga imágenes ni envía mensajes. Devuelve
+conteos y lecturas ilegibles, sin chats ni identidades. El cursor solo avanza tras
+guardar todo el lote; una lectura vacía no se presenta como producto identificado.
+
+**Barrido de nombres y referencias (11-11-2026; 0331).** Antes de resolver se
+decodifican entidades HTML y se unifica un producto histórico con uno actual
+solo si su slug normalizado o título completo identifican un único producto
+actual. Se conservan los slugs anteriores como aliases de enlace; dos productos
+actuales distintos de nombre idéntico siguen ambiguos. Las lecturas de la cola
+y de la audiencia aplican la misma identidad canónica sin reescribir el origen.
+
+Se reconocen nombres cortos de tipo y marca (por ejemplo, «Shampoo Biru») y
+aliases inequívocos contrastados contra el catálogo («Aceite Magic» corresponde
+a «Aceite Corporal Magic»; «Icefit» y «Ice fit», al molde de hielo IceFit).
+No se asigna IceFit por la palabra genérica «hielo»; dos referencias IceFit
+distintas siguen ambiguas. «Magnesio Puro» y «Magnesio 12 en 1» siguen separados;
+«magnesio» solo no elige una presentación. El buscador no distingue tildes ni
+mayúsculas. No se deduce un producto del nombre de la campaña ni se trasladan
+leads entre estados para hacer coincidir los resultados de Meta con la cola.
+
+Desde la corrección de siete nombres del 11-11-2026 se reconocen también
+HeatLessCurls, RestPro, Bolso Charlotte, UROCONTROL, Cayenne, Prozenix y
+Turkesterone por aliases contrastados con el catálogo. «Charlotte» a secas no
+identifica el bolso, pues puede ser el nombre de una persona. Los rechazos y
+las consultas de varios productos conservan las reglas de ambigüedad.
+`mode=repair` del mantenimiento de productos solo lee los IDs fijados en
+`sync_state.source=lead_product_seven_alias_targets_20261111` y escribe las
+asociaciones de esas siete familias mediante 0331. No reescribe entradas ya
+identificadas, estados, reservas, llamadas ni interés posterior. Devuelve solo
+cantidades; las consultas de conteo incluyen el facet «Sin producto» para
+ambas bases y estados, sin filtros particulares de asesora.
+
+La 0331 permite aclarar una asociación ambigua conservando su señal anterior:
+misma evidencia y fecha, y mismo mensaje para interés actual. Una entrada ya
+identificada no cambia; una consulta posterior no se reemplaza por otra antigua.
+La evidencia guardada se puede volver a interpretar solo si tiene menos de 400
+caracteres (texto completo); un recorte espera la lectura de la conversación.
+El barrido v2 recorre todos los leads por cursor propio en sync_state, hasta
+1000 por tienda y pasada, con escrituras atómicas de hasta 100 filas. No avanza
+el cursor si falla una escritura; al terminar atiende los nuevos sin revisar.
+El filtro interpreta los mensajes iniciales guardados mientras avanza el barrido.
+No se extraen conversaciones de clientes al entorno local para esta revisión.
+Para completar una revisión manual, `/api/internal/leads/product-review` ejecuta
+los mismos lotes dentro del servidor con cursor `lead_product_full_audit_20261111`.
+No se agenda ni ejecuta la sincronización general: no llama ni escribe al cliente.
+Solo acepta POST y una credencial de mantenimiento con caducidad y tiendas
+explícitas (`LEAD_PRODUCT_REVIEW_ACCESS`); no usa ni revela el secreto general
+del cron. Devuelve progreso y conteos agregados, nunca mensajes ni identidades.
+Los conteos usan los resolvers compartidos de producto y cola, sin filtros de
+asesora: producto de entrada e interés actual, Por llamar y En seguimiento.
+
+Se guardan entrada e interés por separado en leads, con fuente, fecha, mensaje
+y extracto de evidencia, y señales deduplicadas en lead_product_signals. Solo
+la ingesta de servidor escribe esa evidencia; el navegador recibe únicamente
+las proyecciones del lead que ya puede ver. El texto inicial histórico se
+procesa en lotes reanudables (1000 por tienda desde la 0331). La lista lo resuelve
+en lectura mientras avanza ese relleno. Las conversaciones abiertas se revisan
+por antigüedad del último intento, hasta el límite de enriquecimiento existente.
+Los chats sin mensajes entrantes o cuya lectura falla también ceden el turno
+y vuelven a intentarse en la siguiente rotación; esa marca no afirma que se
+haya identificado un producto ni cambia evidencia anterior (11-11-2026). Usa
+la página de hasta 100 mensajes recibida de Kapso para interés actual, sin
+pretender que el inicio de esa página sea el inicio real de la conversación.
+Para el texto inicial guardado se usa first_seen_at como fecha de entrada;
+para mensajes consultados por API, la fecha real del mensaje. Un fallo de
+catálogo no marca progreso ni borra datos. No cambia historial de llamadas,
+estados, reservas, elegibilidad ni el segmento exclusivo de la cola.
+
 **Segmentos de la cola de leads.** Un lead cae en UN solo balde, primera
 coincidencia gana: `carrito` → `interes` → `converso` → `frio`.
 
@@ -7821,6 +7949,31 @@ Esto ordena la llamada, no la reemplaza. Se descartó crear el pedido de forma
 automática para esta señal: incluso aquí, 6 de cada 10 carritos que siguen
 abiertos a las dos horas no terminan en pedido.
 
+**Toma puntual fuera de bloques (12-11-2026, decisión del owner; 0332).**
+Equipo → Leads incorpora «Puede tomar leads fuera de sus bloques», separado de
+Respaldo y de los cinco bloques. Nace desmarcado para todas las personas y no
+se activa al elegir el atajo Principal, Recuperación o Todos. Guardarlo usa la
+misma revisión y auditoría de configuración; un cliente anterior que no envía
+el campo conserva el permiso existente.
+
+Solo amplía los resultados de una búsqueda explícita en tiendas autorizadas,
+con «Tomar este lead», y la entrada de Venta por teléfono del Master/Leads. No
+amplía la cola automática, sus contadores, la exportación de audiencia ni el
+reparto Yape. Antes de abrir el drawer, la toma vuelve a comprobar sesión,
+tienda, permiso, reserva ajena, cita vigente según 0322 y el límite de dos
+reservas bajo bloqueos de base de datos. Una toma válida concede la reserva
+habitual de diez minutos; desde ella se usan las acciones existentes. Vencida,
+el permiso no deja acceso permanente al bloque. Revocarlo impide nuevas tomas;
+no arrebata una reserva propia todavía activa.
+
+La toma fuera del bloque deja origen (búsqueda o venta telefónica), persona y
+fecha en `lead_manual_takes`, privado de servicio, y un hecho `system` en el
+historial del lead. No es una llamada, no cambia su estado, cita, intentos ni
+fuente. Una reapertura de la misma reserva no duplica ese hecho. Este cambio
+no implementa reparto equitativo: deja el hecho disponible para contabilizarlo
+si se habilita ese modelo posteriormente. Una reserva o cita ajena se informa
+con la asesora que la tiene; el permiso no la transfiere automáticamente.
+
 **Bloques por asesora (31-10-2026, decisión del owner; migración 0295).**
 En Equipo → Leads, quien gestiona el equipo marca varios bloques por persona.
 Los atajos Principal (cuatro primeros) y Recuperación (quinto) solo rellenan
@@ -7871,6 +8024,32 @@ historial; la migración no activa ni reasigna por sí misma.
 - Cada guardado comprueba revisión y deja actor, antes y después en
   `lead_routing_audit`. Configuración y RPCs solo de servicio; no se confía en
   actor, bloque o ids autorizados enviados por el navegador.
+
+**Preferencia de tienda por asesora (12-11-2026, decisión del owner; 0335).**
+Equipo → Leads permite «Por prioridad» (valor inicial para todas) o porcentajes
+enteros por tienda, total 100, solo entre tiendas a las que la persona tiene
+acceso. Antu (antucruznu1512) usará 80 % Aurela / 20 % Kenku y tendrá
+Carritos recientes además de sus bloques actuales. Las demás siguen por
+prioridad, conservando sus bloques, respaldo y toma puntual.
+
+El objetivo orienta la tarjeta automática y «Guardar y siguiente» en Por llamar.
+No divide la base, no cambia permisos ni oculta resultados manuales. Conserva
+los filtros elegidos; con una sola tienda solo puede entregar esa tienda.
+Las citas vencidas elegibles van primero y una reserva propia vigente no cambia
+bajo la mano. Dentro de cada tienda conserva el orden de prioridad existente.
+Selecciona la tienda más por debajo de su objetivo según los leads distintos
+con gestión humana (lead_calls de tipo call) de esa asesora en el día local de
+cada tienda. Dos gestiones del mismo cliente/lead en el mismo día cuentan una;
+abrir, saltar, reservar, notas y eventos automáticos no consumen proporción.
+Consulta la configuración y los conteos del servidor antes de cada nueva reserva
+automática y antes de avanzar desde la ficha, incluso tras guardar la gestión.
+
+Es un objetivo flexible, no una cuota garantizada: si no quedan candidatos
+libres en una tienda preferida, continúa por otra tienda accesible. Un 0 % no
+revoca acceso ni impide ese respaldo por falta de candidatos. El reparto por
+bloques debe estar activo; desactivado conserva prioridad. Los porcentajes se
+guardan con revisión y auditoría antes/después; omitirlos desde clientes antiguos
+conserva el valor guardado. Instalación sin cambios de asignaciones ni leads.
 
 **La reserva por cita se suelta sola (08-11-2026, decisión del owner, opción c; 0322).**
 Con el reparto activo, la asesora que agenda «volver a llamar» se queda el lead
@@ -10783,6 +10962,18 @@ sin entrega). La simulación muestra qué saldría hoy sin enviar nada.
   el tipo de paquete únicamente cuando el envío real lo requiera.
 - La API de creación no exige una fecha de despacho y Kapta no debe pedirla. La
   fecha operativa nace del escaneo o transferencia real de custodia.
+- **Anular la guía mientras sigue «Pendiente de envío» (12-11-2026).** En
+  «Salidas y guías», «Anular» borra la orden en Shalom y la cierra en Kapta,
+  solo mientras el paquete no llegó a la agencia (`shalomGuideIsCancelable`).
+  Shalom la borra con el `id` de su listado de cuenta (`GET /v1/orders`), que
+  la creación por API no devuelve: ninguna de las ~860 guías del último mes lo
+  tenía y el botón no aparecía nunca (#KP204326, guía 103118676 sin
+  movimiento). Ahora basta que la guía sea de la cuenta —creada por API o
+  vinculada desde Shalom Pro, con OSE ID— y tenga número: al anular, Kapta lee
+  el listado desde el día anterior a su creación (~40 s por página), toma el
+  único `id` con ese número (`listingDeleteId`; si no aparece o hay dos, no
+  borra nada y lo dice) y lo guarda en `shalom_order_id`. Las guías que solo
+  llegaron por el reporte Excel se siguen anulando en pro.shalom.pe.
 - Se permiten varios pagos; se libera la clave cuando la suma validada alcanza
   el total exigido.
 - Sin pago completo no se entrega la clave.
@@ -11441,6 +11632,18 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
    fallar. La ventana era de 30 días y bajó a **7** el 10-10-2026: el ticket
    sirve a los avisos de la primera semana, y una sola guía vieja que el
    listado nunca resuelve hacía releer diez días de listado cada media hora.
+
+   **Ticket a pedido de una guía concreta (10-11-2026).** #KP201035 reutilizó
+   la salida del 01-11 al vincular 102371814 / W9NH el 10-11. Su rastreo ya
+   contestó «Disponible para recojo», pero el relleno automático del OSE ID
+   la deja fuera por la fecha original de la salida. «Ticket» se ofrece
+   también sin OSE ID: su ruta exige sesión y RLS antes de leer la cuenta de
+   Shalom, busca la guía solicitada y verifica su identificador con las guías
+   conocidas de esa misma tienda. Solo completa esa fila, condicionada al
+   número de guía aún vigente y a que no tenga OSE ID. No amplía la cola de
+   siete días, no cambia estados ni pagos y no manda mensajes. Un listado
+   incompleto, un identificador ambiguo o una guía cambiada se rechazan; el
+   documento se sirve como PDF privado mediante la caché de siempre.
 8. **Si nadie la registra, la registra Cotejar Shalom** (10-10-2026). Ver abajo.
 
 #### Cotejar Shalom: la guía hecha a mano que nadie registró (decidido el 10-10-2026)
@@ -11483,6 +11686,20 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   días antes del pedido más viejo **pero nunca más de 44 días atrás**, y la
   cobertura se mide dentro de esa ventana. Un pedido cuya guía se creó antes
   de la ventana no se puede cotejar: queda sin pareja, para una persona.
+- **El borde viejo que Shalom entrega a medias se mide día por día**
+  (10-11-2026). El listado trae ~1.366 filas y su borde viejo no es una fecha
+  limpia: pedido desde el 27-09, traía alguna guía del 28 y le faltaban casi
+  todas las del 29 y 30-09 (todas de la API, entregadas hace semanas). Esas
+  guías dejaban la cobertura bajo el 97 % y frenaban el cotejo entero desde el
+  08-11, con las guías muertas de Breña sin reemplazar. Ahora, en la **primera
+  semana** después de lo pedido, se mide la cobertura de cada día; el borde
+  termina el último día de esa semana con menos del 97 %, y desde el día
+  siguiente se exige el 97 % de siempre (`listingCoverageFloor`). Dos
+  resguardos: un listado cortado en el medio o en lo nuevo sigue sin vincular
+  nada, y **no se empareja con guías del listado anteriores al borde**, porque
+  ahí podría faltar la guía que discutiría la pareja. La línea
+  `[shalom-cotejo]` dice `cobertura.listadoDesde`, `cobertura.bordeRecortado`
+  y `cobertura.bordeDias`.
 - **Quién es candidato.** Pedido de los últimos 90 días en «Preparación · Por
   generar rótulo», con el pago que Agencia exige para pasar a Preparación
   (`agencyPaymentReady`: adelanto validado, diferencia cargada o pago
@@ -11809,6 +12026,21 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   guía muerta (`conGuiaMuerta`) y cuántos vinculados la reemplazaron
   (`reemplazados`); en `detalle`, `resultado: "reemplazado"` con `reemplaza`.
 
+**Acceso desde Mesa de ruta (10-11-2026).** En #KP201035 el modal ya permitía
+reemplazar la guía no reconocida, pero su tarjeta bloqueaba «Abrir Shalom» por
+la salida activa y no se podía llegar al formulario. La tarjeta de Shalom
+muestra además **«Ya la creé en Shalom Pro»** solo cuando la guía activa está
+confirmada como no reconocida (6 respuestas `not_found` y al menos 24 h) y no
+hay otra salida viva que impida reemplazarla. Una guía con seguimiento normal,
+como #KP204484 «En tránsito», no muestra ese botón ni invita a reemplazarla:
+remite a «Salidas y guías». Sin confirmación o si falla su lectura, el atajo no
+se ofrece. Cuando corresponde, abre directamente el registro
+manual aunque crear otra guía esté bloqueado. Respeta el permiso de guías
+Shalom y el cierre del pedido; el servidor mantiene las comprobaciones de
+guía única, otras salidas vivas y guía no reconocida. Abrirlo no crea, anula ni
+vincula nada: se hace al confirmar «Vincular guía externa», por el mismo camino
+único descrito arriba. «Abrir Shalom» conserva la entrada a creación por API.
+
 #### Por qué «Crear guía» no se deja pulsar (decidido el 06-11-2026)
 
 - **El caso.** #KP202968: adelanto de S/ 30 por Yape validado
@@ -12092,7 +12324,17 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
   Olva lo tuvo**. El portal de clientes de Olva (atc.olvaexpress.pe →
   Reportes → Seguimiento de envíos) sí lista todos los envíos de la cuenta de
   la empresa, con destinatario, distrito, dirección y fecha de registro.
-- **Qué hace.** «Cotejar Olva» (menú lateral, con permiso de logística) entra
+- **Dónde está (10-11-2026).** **«Cotejar Olva» vive dentro de «Pago de
+  diferencia»** (§44): pestañas «Bandeja», «Cotejar Olva» y «Correos de Olva»
+  en `/dashboard/pedidos/pago-diferencia` (`?vista=olva`, `?vista=correos`).
+  Ya no tiene entrada propia en el menú; `/dashboard/olva` lleva allí con su
+  vista. El número de envíos por vincular va en la pestaña y en la entrada
+  «Pago de diferencia» del menú, para todo el que ve pedidos. Vincular sigue
+  pidiendo «Gestionar pedidos» (`master.edit`): quien cobra la diferencia
+  también vincula (owner, 10-11-2026). Por qué juntos: sin tracking, Kapta no
+  sabe cuándo el paquete de Olva llega a la agencia y el pedido no entra a la
+  bandeja.
+- **Qué hace.** «Cotejar Olva» (antes en el menú lateral, con permiso de logística) entra
   al portal con la cuenta de la empresa, trae los envíos de los **últimos 7
   días** y pone el tracking en las salidas de Olva **sin tracking** de todas
   las tiendas de la organización. Corre **solo cada dos horas, de 7 a 19 h de
@@ -13443,6 +13685,31 @@ vale para el mes en curso mientras esté empezando — el 09-09-2026, 120 de los
 218 despachos del mes (el 55 %) llevaban menos de tres días. La comparación
 honesta es contra el mismo día del mes anterior, no contra el mes anterior
 cerrado.
+
+**Corrección del indicador y conciliación histórica (12-11-2026, decisión del owner; 0336).**
+El indicador y su desglose usan el payment_state actual del Master, sin recalcular
+un pago completo mediante otra suma: conserva prepago web, redondeos y flete que
+el resolver ya reconoce. El numerador es Pago completo; el denominador reúne
+Pago completo, Pago pendiente de validar, Pago parcial y Sin pago registrado
+de la cohorte de guías Shalom/Olva del periodo. Un estado desconocido va a
+Revisar registro y conserva su enlace, nunca se oculta ni se afirma deuda.
+
+Por cobrar incluye solo Pago parcial o Sin pago registrado de ventas no anuladas
+ni devueltas, excluyendo también los históricos pagados. Pago pendiente de
+validar abre sus comprobantes aparte: no se pide nuevamente el dinero sin
+revisarlos. El enlace del título abre Pago completo de esa cohorte.
+
+Históricos pagados · por conciliar es un filtro independiente de Estado de pago:
+orders.platform=shopify, financial_status=paid, sin reembolso y payment_state
+que aún no es pago_completo. No se infiere cobro por estar entregado/finalizado.
+Estos casos quedan fuera tanto de Por cobrar como del denominador del indicador;
+no se dan por pagos validados en Kapta. El filtro puede abrirse sobre todas las
+fechas en el Master o desde el periodo del Consolidado y combinarse con Estado
+de pago, tienda, courier y demás filtros. Se deduplica por pedido. Lista, totales,
+macroetapas, paginación y Excel comparten la RPC bajo RLS. Ninguna lectura
+modifica pagos, pedidos, guías, stock o historial. Este acuerdo sustituye el
+complemento único y la comparación alternativa en céntimos de 0290 descritos
+arriba; la ventana de despacho en Lima no cambia.
 
 Alertas del primer tablero:
 
@@ -15330,6 +15597,36 @@ estables:
      `app/dashboard/pedidos/actions.ts`, `sendChatbyReply` y
      `forgetChatbyConversation` en `lib/chatby-api.ts`, `ReplyBox` en
      `components/order-chatby-panel.tsx`. Pruebas: `test/chatby-reply.test.ts`.
+   - **Archivos y el ticket Shalom en PDF (10-11-2026, pedido del equipo vía
+     el owner: «actívame para poder enviar desde ahí la guía en PDF al
+     responder por Chatby»).** Dentro de las mismas 24 h y con la misma pausa
+     del bot:
+     - **«Enviar ticket Shalom (PDF)»**, solo si el pedido tiene una guía
+       Shalom creada por API (`shipments.shalom_ose_id`) y no anulada; la más
+       nueva. Es el ticket que la clienta muestra en la agencia para recoger
+       («envíame el baucher para recogerlo»), no el rótulo de la caja. Sale
+       del caché de tickets (`shalomVoucherPdf`, se baja de Shalom la primera
+       vez) con una URL firmada de 7 días. Una guía que llegó por el reporte
+       no tiene ticket en Kapta: el aviso manda a pro.shalom.pe.
+     - **«Adjuntar foto o PDF»**: se elige, se arrastra o se **pega con
+       Ctrl+V** dentro de la caja o en cualquier parte de la pestaña Chatby, sin
+       hacer clic antes (owner 10-11-2026). Fuera de la caja solo cuenta con la
+       pestaña Chatby a la vista y si no se estaba escribiendo en otro campo
+       (ahí, lo pegado es de ese campo). Fotos JPG o PNG de hasta 5 MB (un WEBP o
+       una foto pesada se pasa a JPG en el navegador) y PDF de hasta 16 MB. El
+       navegador lo sube directo a Storage (bucket privado
+       `chatby-attachments`, `<tienda>/<pedido>/chatby-…`, se crea solo: sin
+       migración) y el servidor solo acepta rutas de ese pedido que existan.
+     - **Cómo sale:** el archivo como un mensaje más de `send-content`
+       (`{type: "image" | "file", url}`), antes del texto; con un archivo el
+       texto es opcional y va como pie.
+     - **Queda en la Actividad** como «Mensaje por WhatsApp (Chatby)»: el
+       texto, o «Envió el ticket Shalom en PDF (guía …)» / «Envió un archivo:
+       …» si no hubo texto, con `payload.attachment` (qué se mandó).
+     Implementación: `lib/chatby-attachments.ts`, `resolveChatbyAttachment` y
+     `createOrderChatbyUpload` en `app/dashboard/pedidos/actions.ts`,
+     `chatbyReplyMessages` en `lib/chatby-api.ts`. Pruebas:
+     `test/chatby-attachments.test.ts`.
 6. **Kapso (08-11-2026, pedido del owner):** la conversación de WhatsApp de la
    clienta con el **bot de Kapso** de la tienda, **solo para leer**, junto a
    «Chatby». El owner la pidió con #KP204280: seguía «Pendiente» en Kapta
@@ -15353,12 +15650,35 @@ estables:
      mensajes escribió la clienta.
    - **Cuándo se lee:** al abrir la ficha de ese pedido, con la clave de Kapso
      de su tienda (en el servidor) y «Actualizar»; nunca en segundo plano. No
-     se guarda nada en Kapta. La ve quien ya puede ver el pedido (RLS). Para
-     escribirle a la clienta, Leads o Kapso: desde aquí no se manda nada.
-   - Implementación: `lib/order-kapso.ts` (reglas puras), `loadOrderKapso` en
-     `app/dashboard/pedidos/actions.ts`, `components/order-kapso-panel.tsx`
-     (con el hilo de `order-chatby-panel.tsx`); `?seccion=kapso` abre la
-     pestaña. Pruebas: `test/order-kapso.test.ts`.
+     se guarda nada en Kapta. La ve quien ya puede ver el pedido (RLS).
+   - **Responder desde la ficha (11-11-2026, owner: «permíteme responder el
+     Kapso desde el drawer»).** Debajo de la conversación, la misma caja
+     «Responder por WhatsApp» que Chatby (`ReplyBox`), para quien puede
+     editar el pedido (`master.edit`; sin ese permiso la pestaña sigue «Solo
+     lectura»):
+     - **Ventana de 24 h:** solo hasta 24 h después del último mensaje de la
+       clienta; el servidor lo vuelve a mirar con la conversación al día.
+       Pasado eso, un aviso manda a una plantilla desde Kapso o Leads. Si
+       WhatsApp rechaza por la ventana (131047), se dice así.
+     - **Desde qué número:** el de la tienda con que escribió la clienta en
+       esa conversación (`phone_number_id`); si Kapso no lo dice, el número de
+       WhatsApp de la tienda.
+     - **Qué se manda:** texto, o una foto o un PDF (pegar con Ctrl+V,
+       arrastrar o «Adjuntar foto o PDF») o «Enviar ticket Shalom (PDF)», con
+       el texto como pie: los mismos adjuntos y reglas que Chatby
+       (`lib/chatby-attachments.ts`), por el envío de WhatsApp de Kapso que
+       usa Leads (`sendWhatsappText`, `sendWhatsappImage`,
+       `sendWhatsappDocument`).
+     - **Queda en la Actividad** como «Mensaje por WhatsApp (Kapso)» (`kind =
+       kapso_message`, `source = 'kapso'`), con quien lo mandó, el texto o lo
+       enviado y en `payload` la conversación, el número y el id del mensaje.
+       Cuenta como gestión en «Pago de diferencia» (§44). No pausa ningún bot
+       (Kapso no tiene esa pausa) y no cambia el estado del pedido.
+   - Implementación: `lib/order-kapso.ts` (reglas puras), `loadOrderKapso` y
+     `sendOrderKapsoReply` en `app/dashboard/pedidos/actions.ts`,
+     `components/order-kapso-panel.tsx` (con el hilo y la caja de
+     `order-chatby-panel.tsx`); `?seccion=kapso` abre la pestaña. Pruebas:
+     `test/order-kapso.test.ts` y `test/order-kapso-reply.test.ts`.
 
 **El historial del lead se reparte entre los pedidos del cliente (16-10-2026).**
 La Actividad trae también las gestiones de Leads (llamadas, mensajes, la venta
@@ -15643,6 +15963,39 @@ compartida con la mesa de confirmación), y las reglas compartidas con la ficha:
 `test/lead-post-order-drawer.test.ts` (el cajón montado con React: un solo
 bloque, el panel de Aliclik intacto tras las recargas y tras una lectura
 fallida, «Crear guía» una vez) y `test/swayp-desde-confirmacion.test.ts`.
+
+### 25.3 La Lista negra en Leads (09-11-2026)
+
+**Decisión del owner (09-11-2026).** La asesora tiene que saber que una clienta
+está en la Lista negra (§41, las dos listas) **antes** de ofrecerle contra
+entrega: en la lista de Leads y en la ficha del lead.
+
+- **La fila de la lista:** la chapa negra «Lista negra» (o «Lista negra · pago
+  total»), la misma del Master, con el tooltip «{motivo}. {requisito}» (§41.11
+  «Cómo se dice»). Sale si el celular del lead está en la automática vigente
+  (Activo, sin la excepción de Kapta) o tiene un alta viva a mano, en la
+  organización de la tienda del lead. **UNA lectura por página**
+  (`listaNegraMarksAmong` en `app/dashboard/leads/page.tsx`, con el cliente de
+  servicio, por trozos a la par; usa los índices de `pago_online_phones`,
+  `pago_online_exceptions` y `prepay_list_entries`), nunca una consulta por
+  fila. Contesta solo de los celulares que la página ya muestra. Sin lectura,
+  la fila no dice nada. El estado de lead `lista_negra` (§41.8) es otra cosa:
+  es de la fila del lead y no frena pedidos.
+- **La ficha del lead:** arriba de la columna de trabajo, antes de «Cómo sale
+  el pedido» (§25.2), el aviso «Lista negra» (warn): el motivo con las cuentas
+  de la propia clienta (o «Agregada a mano: …»), el requisito y qué hacer —«Antes
+  de ofrecer contra entrega, pídele el adelanto de S/ 20.» o «No le ofrezcas
+  contra entrega: solo pago total por adelantado.»— y la nota «Kapta no le
+  escribe a la clienta sobre la Lista negra.» (`loadLeadPrepayStatus`, que mira
+  las dos listas; con las dos, la que pide más).
+- **«Generar pedido»** sigue igual: con «Pago total» no lo crea; con «Adelanto
+  de S/ 20» lo crea y el aviso de «Pedido generado» lo recuerda (§41.11).
+
+Implementación: `lib/lista-negra.ts` (`withListaNegra`, `listaNegraMergeMarks`),
+`lib/lista-negra-server.ts` (`listaNegraMarksAmong`),
+`components/lista-negra-badge.tsx`, `components/lista-negra-banner.tsx` y
+`app/dashboard/leads/prepay-actions.ts`. Pruebas: `test/lista-negra.test.ts` y
+`test/prepay-gates.test.ts`.
 
 ## 26. Costo de producto (COGS)
 
@@ -22489,8 +22842,9 @@ WooCommerce viven en esa fila de `stores` y cada pedido lleva su plataforma.
 - **Reembolsos:** `total_refunded` es la suma de los reembolsos del pedido. Un
   pedido pagado con un reembolso parcial queda `partially_refunded`; uno
   contraentrega sigue `pending`. El total del pedido no baja.
-- **Lista de pago adelantado (§41, 05-11-2026):** el checkout le pregunta a
-  Kapta por el celular (`POST /api/webhooks/woocommerce/<id>/prepago`, firmado
+- **Lista negra a mano (§41, 05-11-2026; canal retirado el 09-11-2026, §41.7:
+  las altas a mano viajan ahora en el envío diario de la automática):** el
+  checkout le pregunta a Kapta por el celular (`POST /api/webhooks/woocommerce/<id>/prepago`, firmado
   como los formularios abandonados) y le esconde `cod` a quien está en la lista
   (mu-plugin `docs/kapta/wordpress/kapta-prepago.php`; contrato de COD Core en
   `docs/kapta/cod-core-prepago.md`). Falla abierto: Kapta lo frena igual al
@@ -24938,11 +25292,10 @@ Vercel— y algunas no tenían interruptor.
     WhatsApp a clientas: Activo pide confirmación. Fuera de Apagado hace falta
     `CHATBY_API_KEY`; sin la 0324 la fila se bloquea. El historial lo guarda
     como `lima_retry_chatby_ask`.
-  - **Lista de pago adelantado** (§41, 05-11-2026; 0309): la regla automática
-    con Apagado / Simulación / Activo (confirmación antes de Activo), el
-    resumen de la última simulación («Entrarían N clientes…», con cuentas y
-    números de pedido, nunca celulares) y de la última pasada activa, y
-    «Simular ahora». La lista se ve y se cambia a mano en «Pago adelantado».
+  - **La regla de la lista a mano** (§41.2, 0309): **retirada** por el owner el
+    09-11-2026. Ya no tiene controles en el panel (ni la posición ni «Simular
+    ahora»); su código queda dormido y `setPrepayAutoMode` solo deja apagarla.
+    La Lista negra se ve, se busca y se completa a mano en su página (§41.3).
   - **Pago solo online (lista automática)** (§41.11, 09-11-2026; 0326,
     `#pago-online-posicion`, clave `pago_solo_online`): Apagado / Simulación /
     Activo (confirmación antes de Activo), «Lo que se cobra en los pedidos de
@@ -25010,15 +25363,38 @@ Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`,
 `test/history-guide-auto.test.ts`, `test/lima-retry-chatby-ask.test.ts`.
 
-## 41. Lista de pago adelantado (05-11-2026)
+## 41. Lista negra (antes «Lista de pago adelantado», 05-11-2026; unificada el 09-11-2026)
+
+**Una sola «Lista negra» (owner, 09-11-2026).** Las dos listas que frenan el
+contra entrega —la **automática** del §41.11 (internamente «pago solo online»)
+y la **agregada a mano** de este capítulo— se ven en UNA página, **«Lista
+negra»** (`/dashboard/clientes/lista-negra`; la ruta vieja
+`/dashboard/clientes/pago-adelantado` redirige), y se dicen igual en todo Kapta
+(§41.11 «Cómo se dice»). Lo que cambia respecto de lo de abajo:
+
+- **Cada alta a mano elige lo que pide** (`prepay_list_entries.requirement`,
+  0329): **«Adelanto de S/ 20»** (`adelanto`: el adelanto de la escalera del §8
+  validado, el mismo de la automática y de `aliclikRiskGate`, o el pago
+  completo) o **«Pago total»** (`pago_completo`). Las altas de antes y el valor
+  por defecto son el pago total: hoy nada cambia. Sin la 0329 el código lee sin
+  la columna y todo pide el total. Lo que pide no se reescribe (como el
+  motivo): se saca y se agrega de nuevo.
+- **La regla automática de esta lista (§41.2) queda retirada** por el owner:
+  nunca se encendió, y la automática del §41.11 ya cubre a esos clientes (sus
+  pedidos terminan `devuelto`). Sin controles en pantalla; código dormido.
+- **Las altas a mano llegan a las tiendas** en el envío diario de la
+  automática (§41.11), unidas a ella. La consulta `/prepago` del §41.7 queda
+  retirada como canal (§41.7).
+- **Es para lo que la regla no ve:** un fraude, una clienta que avisó que no va
+  a recibir.
 
 **Decisión del owner (05-11-2026).** Un cliente que **rechazó un pedido en la
 puerta o no lo recogió en la agencia** ya no compra contra entrega: **paga el
 total por adelantado, en línea**. Basta **un** pedido. La lista es por
 **celular** y por **organización** (Kenku y Aurela comparten la suya), se llena
 sola con la regla de abajo y también se agrega y se quita a mano, con motivo,
-persona y fecha. En pantalla se llama **«Lista de pago adelantado»**; en el
-habla del equipo, **lista negra** (el mismo concepto). Para WordPress y COD
+persona y fecha. En pantalla se llama **«Lista negra»** desde el 09-11-2026
+(antes «Lista de pago adelantado»). Para WordPress y COD
 Core, Kapta construye su lado, un mu-plugin y un contrato, y el owner se los
 entrega a sus equipos.
 
@@ -25031,7 +25407,15 @@ ni se busca en ella: para él la lista siempre dice «no». No se cruzan DNI,
 dirección ni correo: el teléfono sigue siendo la identidad del cliente (§8.1),
 con sus límites conocidos (otro número, un número compartido).
 
-### 41.2 Quién entra solo: la regla automática
+### 41.2 Quién entra solo: la regla automática (RETIRADA, owner 09-11-2026)
+
+> **Retirada.** El owner la retiró el 09-11-2026 sin haberla encendido nunca: la
+> Lista negra automática (§41.11) ya cubre a quien rechaza en la puerta o no
+> recoge (esos pedidos terminan `devuelto`). Sus controles salieron de
+> Automatizaciones y de la página; `setPrepayAutoMode` solo deja apagarla; el
+> cron `/api/cron/prepay-list` sigue corriendo y no hace nada (todas las
+> organizaciones están en Apagado). Lo de abajo queda como documentación del
+> código dormido.
 
 Un pedido **de los últimos seis meses** dispara el alta de su celular si tiene
 cualquiera de estos hechos. Es UNA definición (`prepayTriggersOfOrder`,
@@ -25084,11 +25468,12 @@ anterior como si fuera de hoy.
 
 ### 41.3 Altas y bajas a mano, y por qué una baja se respeta
 
-En **Clientes → «Pago adelantado»** (`/dashboard/clientes/pago-adelantado`):
-los activos con su último pedido, si los agregó la regla («Automático») o una
-persona («Manual»), el motivo, cuándo y quién; la búsqueda por celular;
-**«Agregar»** (celular + motivo) y **«Quitar»** (motivo); y los quitados, que no
-se borran. El motivo pide al menos 8 caracteres. **Ver** la lista puede
+En la página **«Lista negra»** (`/dashboard/clientes/lista-negra`, sección
+«Agregados a mano»; la ruta vieja redirige): los activos con su chapa (§41.11
+«Cómo se dice»), su último pedido, el motivo, lo que piden, cuándo y quién;
+**«Agregar a la Lista negra»** (celular, «Qué se le pide» y motivo) y **«Sacar
+de la Lista negra»** (motivo); y los sacados, que no se borran. La búsqueda por
+celular de la página contesta por las dos listas (§41.11). El motivo pide al menos 8 caracteres. **Ver** la lista puede
 cualquiera que vea pedidos de la organización (la RLS de la 0309 la deja leer a
 sus miembros); **cambiarla** pide el permiso nuevo **`prepay_list.manage`**
 («Gestionar la lista de pago adelantado»), que dueño y admin traen por su rol y
@@ -25116,7 +25501,14 @@ pedido; la creación de la guía como último recurso), nunca de `last_report_at
 ni de `status_since`. Una baja sin lo sabido (no debería haber) cae a la fecha:
 solo cuenta un hecho fechado después de esa baja.
 
-### 41.4 Lo que se exige: el pago completo
+### 41.4 Lo que se exige: lo que diga el alta (desde el 09-11-2026)
+
+**Desde la 0329, cada alta dice lo que pide** (§41, arriba): con «Pago total»
+vale lo de este apartado; con «Adelanto de S/ 20», el adelanto validado de la
+escalera del §8 o el pago completo (`prepayEntryRequirementMet`, el mismo
+`pagoOnlineRequirementMet` de la automática). Si el celular está también en la
+automática y su ajuste pide más (el pago completo), gana el que pide más
+(`prepayOrderCheck` mira las dos).
 
 Para un celular de la lista, el pedido sigue solo **pagado completo** —el
 prepago del checkout o los comprobantes que cubren el total y están validados:
@@ -25134,12 +25526,17 @@ quien no deba estar, se quita de la lista.
 | **«Generar pedido»** (Leads) | No crea un pedido contra entrega para ese celular (ni el del pedido ni el del lead). Tampoco **«Recuperar carrito»** (completa el borrador de Shopify contra entrega) ni la **prueba de auto-recompra** (`auto_order_trials`), que deja la fila `omitido` con el motivo `lista_pago_adelantado` antes de completar el borrador. Si la lista no se pudo leer, deja pasar: se frena al confirmar y al crear la guía. |
 | **Bot de Kapso** (`POST /api/internal/orders`, §38.13) | **422 `prepay_required`**, no reintentable, antes del candado: «deriva la conversación a una asesora, que cobra el total por adelantado». Igual que `agency_needs_advisor`. |
 | **Ficha del pedido** | Aviso crítico «Lista de pago adelantado: este cliente paga el total por adelantado», en cualquier etapa, con el motivo, el origen y los pedidos que lo dispararon, y **«Enviar link de pago»** por **lo que falta** (`prepayLinkPlan`), con el importe en el botón: sin comprobantes, el **total** (`kind: 'total'`); con un adelanto validado (y quizá diferencias), el **saldo** (`kind: 'diferencia'`, total menos lo validado), porque un segundo primer pago no cabe en el plan de cobro (0092: un solo adelanto o total vivo) y el pago de Flow entraría sin registrarse. Con un comprobante por validar no crea nada («valídalo antes»), y sin nada que cobrar no ofrece el botón. Crea (o reusa) el link de Flow (lib/flow/link.ts) si la tienda tiene Flow configurado y lo muestra para copiar; **Kapta no lo manda por WhatsApp**. Sin Flow, dice que se pida por Yape y se suba como «Pago total» o, si ya hay adelanto, como «Diferencia». Al pagarse, el webhook de Flow lo deja validado. |
-| **Ficha del lead** | El mismo aviso, antes de ofrecer contra entrega. |
-| **Lista del Master** | La chapa «Pago adelantado» en la fila, con una sola lectura por página. Se compara por **organización y celular**: quien ve dos organizaciones no ve la chapa en el pedido de una por un alta de la otra. |
+| **Ficha del lead** | El aviso «Lista negra» (§25.3), antes de ofrecer contra entrega. |
+| **Lista del Master y de Leads** | La chapa negra «Lista negra» (o «Lista negra · pago total») en la fila, la misma de la automática, con una sola lectura por página para las dos listas (`listaNegraMarksAmong`). Se compara por **organización y celular**: quien ve dos organizaciones no ve la chapa en el pedido de una por un alta de la otra. |
 
 La misma compuerta (`prepayOrderCheck`) frena también por la lista automática
-«Pago solo online» (§41.11), con lo que el owner decidió cobrar ahí (el
-adelanto, por defecto).
+(§41.11), con lo que el owner decidió cobrar ahí (el adelanto, por defecto).
+**Desde el 09-11-2026 todos los mensajes de esta tabla son los de la Lista
+negra** (§41.11 «Cómo se dice», `lib/lista-negra-copy.ts`): el mismo freno al
+confirmar y en las guías, el mismo motivo de Chatby (`pago_online`), el mismo
+422 del bot (al bot nunca el motivo escrito por el equipo: «Agregada a mano»),
+y en «Generar pedido» «no se genera» con «Pago total» o el aviso del adelanto
+con «Adelanto de S/ 20». Los textos de arriba son los de antes.
 
 **Lo que NO se frena, a propósito:** **vincular** una guía que ya existe (la
 Aliclik del portal, la Shalom hecha a mano en pro.shalom.pe, un número de Swayp
@@ -25161,6 +25558,22 @@ cada camino (§41.5). El texto de
 `aliclikPrepaidBlocker` recomendaba Tanders y ya no (05-11-2026).
 
 ### 41.7 La tienda: WordPress y COD Core
+
+> **El canal elegido (owner, 09-11-2026): el envío diario de la automática.**
+> Lo que se encontró: lo de abajo —la consulta firmada `POST
+> /api/webhooks/woocommerce/<id>/prepago`, el mu-plugin
+> `docs/kapta/wordpress/kapta-prepago.php` y el contrato de COD Core
+> `docs/kapta/cod-core-prepago.md`— se construyó el 05-11-2026 para que el
+> owner lo entregara; en el repo no hay constancia de que alguna tienda lo
+> instalara, y COD Core implementó en cambio el endpoint de la lista automática (`/wp-json/cod-core/v1/pago-solo-online`,
+> cod-core 0.10.45, §41.11), que recibe la lista entera cada día. Para no tener
+> dos canales que compitan, **las altas vivas a mano viajan en ese mismo envío
+> diario**, unidas a la automática (§41.11). La consulta `/prepago` queda
+> **retirada como canal**: sigue respondiendo (solo con las altas a mano, como
+> siempre) por si alguien la instaló, pero no se entrega ni se instala; el
+> mu-plugin y el contrato llevan la nota. Una alta a mano frena en Kapta desde
+> ya y llega a las tiendas en el envío de las 05:00 del día siguiente (con la
+> automática en Activo).
 
 Kapta expone **`POST /api/webhooks/woocommerce/<id de la tienda>/prepago`**:
 
@@ -25233,7 +25646,7 @@ crear la guía.
 
 ### 41.9 Lo que falta
 
-- La chapa en la **lista de Leads** (la de la ficha sí está).
+- ~~La chapa en la **lista de Leads**~~: hecha el 09-11-2026 (§25.3).
 - Las funciones `check-coverage` del bot de Kapso (`docs/kapso-functions/`)
   todavía ofrecen contra entrega sin preguntar a la lista; además piden «S/30»
   de adelanto cuando `ADELANTO_MINIMO` es S/20.
@@ -25247,6 +25660,35 @@ crear la guía.
   lista se hace en la web, con Flow.
 
 ### 41.10 Implementación
+
+**Lista negra unificada (09-11-2026).** Migración `0329_lista_negra_requisito.sql`
+(`prepay_list_entries.requirement`, `pago_completo` por defecto y en las filas
+de antes, que el trigger de la 0309 ya no deja reescribir; `lista_negra_searches`,
+el tope de la búsqueda por persona, sin celulares y sin acceso del navegador).
+Lo que se dice: `lib/lista-negra-copy.ts` (la única fuente); la unión, las
+marcas y la búsqueda, puras: `lib/lista-negra.ts`; lo que lee el servidor:
+`lib/lista-negra-server.ts` (`listaNegraMarksAmong`, `searchListaNegra`); la
+página: `app/dashboard/clientes/lista-negra/` y `components/prepay-list-page.tsx`;
+la chapa y el aviso: `components/lista-negra-badge.tsx` y
+`components/lista-negra-banner.tsx`. Pruebas: `test/lista-negra.test.ts` y
+`scripts/sql/lista_negra_smoke.sql`.
+
+**La lista en memoria del servidor (11-11-2026).** La «una lectura por página»
+de las marcas resultó cara: Leads se refresca sola cada ~30 s en la pantalla de
+cada asesora y cada refresco preguntaba por todos los celulares de la cola, tres
+lecturas por cada 200 celulares. Eran ~7 500 lecturas por hora a cada una de
+`pago_online_phones`, `pago_online_exceptions` y `prepay_list_entries`, las
+que más ocupaban la puerta de la base (PostgREST). Ese día la base dejó de
+responder de 10:31 a 10:34 de Lima y se reinició. Desde entonces
+`listaNegraMarksAmong` contesta desde un **índice en memoria por
+organización**: la lista entera —la automática vigente sin las excepciones y
+las altas vivas a mano, ~3 100 celulares— se lee como mucho **cada dos
+minutos** por instancia del servidor (`LISTA_NEGRA_INDEX_TTL_MS`,
+`lib/lista-negra-cache.ts`). Dar de alta, quitar, exceptuar o correr una lista
+nueva lo olvida en la instancia que lo hizo; en las demás se ve en hasta dos
+minutos. La lista sigue sin salir del servidor y las marcas no cambian. La
+búsqueda por un celular y los frenos del pedido siguen leyendo la base al
+momento. Prueba: `test/lista-negra-index.test.ts`.
 
 Migración `0309_prepay_list.sql` (`prepay_list_entries` con
 `removed_known_order_ids`, `prepay_list_settings`; lectura para miembros de la
@@ -25262,6 +25704,82 @@ aviso: `components/prepay-list-banner.tsx`. Pruebas: `test/prepay-list.test.ts`,
 Automatizaciones.
 
 ### 41.11 «Pago solo online (lista automática)» (09-11-2026)
+
+**Cómo se dice (owner, 09-11-2026; `lib/lista-negra-copy.ts`, la única fuente).**
+Siempre **«Lista negra»** (L mayúscula, n minúscula); en una frase, «la Lista
+negra». Nunca «pago solo online», «lista de pago adelantado» ni «lista de pago
+completo» en pantalla: son llaves internas. La automática y la agregada a mano
+se leen igual; solo cambian el motivo y «pago total» cuando es lo que se pide.
+
+- **La chapa** (`tone="blacklist"`, negra con letras blancas; Master, Leads y la
+  página): «Lista negra», o «Lista negra · pago total»; tooltip «{motivo}.
+  {requisito}».
+- **El motivo:** «Devolvió N pedido(s) y nunca recibió», «Anuló N de M pedidos
+  y nunca recibió», «Agregada a mano: {motivo escrito}» (o «Agregada a mano»).
+- **El requisito:** «Para contra entrega: adelanto de S/ 20 validado o pago
+  online completo.» o «Solo con pago total por adelantado.»
+- **Los avisos** (ficha del pedido y del lead, la misma estructura): título
+  «Lista negra», el motivo, el requisito, qué hacer —en el pedido sin cumplir
+  (crit) «No se confirma ni sale guía hasta validar el adelanto. Regístralo en
+  «Cómo sale el pedido».» o «…hasta validar el pago total.»; cumplido (info)
+  «Adelanto validado: el pedido puede seguir.» o «Pago total validado: el
+  pedido puede seguir.»; en el lead (warn) «Antes de ofrecer contra entrega,
+  pídele el adelanto de S/ 20.» o «No le ofrezcas contra entrega: solo pago
+  total por adelantado.»— y la nota «Kapta no le escribe a la clienta sobre la
+  Lista negra.»
+- **Los mensajes cortos:** el freno «Lista negra ({motivo}): falta el adelanto
+  de S/ 20 validado.» (o «…: falta el pago total validado.»); Chatby «Lista
+  negra ({motivo}): Kapta no crea la guía ni le escribe. Cobra el adelanto y
+  confirma tú.»; el bot «Cliente en Lista negra ({motivo}). El bot no crea
+  pedidos contra entrega: deriva a una asesora para cobrar el adelanto de S/ 20
+  o el pago online completo.» (o «…para cobrar el pago total.»; al bot nunca el
+  motivo escrito de un alta a mano); «Generar pedido» «· Lista negra: no sale
+  sin el adelanto de S/ 20 validado.» o, si no lo crea, «Lista negra ({motivo}):
+  solo con pago total por adelantado; no se genera contra entrega.»
+- **Acciones:** «Exceptuar de la Lista negra» (motivo, 8+), «Quitar
+  excepción», «Agregar a la Lista negra» («Qué se le pide»: «Adelanto de S/ 20»
+  o «Pago total»), «Sacar de la Lista negra».
+- **Automatizaciones:** la sección «Lista negra», el ajuste «Qué se pide en los
+  pedidos de Kapta» («Adelanto de S/ 20» o «Pago total») y el historial
+  «Lista negra · …».
+
+**Lo que va a las tiendas es la Lista negra entera (owner, 09-11-2026).** El
+envío diario (y «Aceptar la lista de hoy», «Calcular ahora» y los reintentos)
+manda la corrida vigente **más las altas vivas a mano**
+(`livePrepayPhones`), en 9 dígitos y sin repetidos (`listaNegraSendPhones`); la
+`regla` lo dice («… · más N agregados a mano en Kapta»). Las excepciones de
+Kapta sacan a alguien solo de la automática: un alta a mano va igual. El freno
+de cambio brusco **de cada tienda** cuenta esa unión (es lo que recibe; su piso
+es su último envío bueno); el de la corrida sigue contando la automática sola
+(es la que frena en Kapta). Si no se pueden leer las altas a mano, el envío
+falla y se reintenta (la tienda se queda con la anterior). Es el único canal
+por el que una alta a mano llega a las tiendas (§41.7).
+
+**La página «Lista negra»** (`/dashboard/clientes/lista-negra`): arriba,
+«Automática» —la posición, cuántos hay en la vigente (devolvieron / anulan casi
+todo), cuándo se calculó, lo que se pide, el último envío bueno a cada tienda
+(`loadPagoOnlinePanel`, solo cuentas), la búsqueda y las excepciones de Kapta
+con los tres últimos dígitos y «Quitar excepción»—; abajo, «Agregados a mano»
+(§41.3). **La búsqueda** («Buscar un celular») es una server action que
+contesta SOLO por ese celular (`searchListaNegra`): si está y por qué («Está en
+la Lista negra · {motivo}» / «No está en la Lista negra»), si Kapta lo exceptuó
+(«Exceptuada · {motivo}»), su alta a mano y sus pedidos recientes (con la RLS
+de quien busca). La página nunca recibe la lista. La ve cualquier miembro que
+no sea motorizado; tiene un tope de **30 búsquedas cada 10 minutos por
+persona** (`lista_negra_searches`, 0329, sin el celular; sin la 0329, sin
+tope). «Exceptuar de la Lista negra» desde el resultado (solo si está en la
+vigente) y «Quitar excepción» piden `prepay_list.manage` y producción, y dejan
+su fila en `automation_switch_events` (`pago_solo_online_excepcion`).
+
+**En pantalla se llama «Lista negra» (owner, 09-11-2026).** En Kapta —la chapa
+del Master, el aviso de la ficha, los mensajes de Chatby, el bot y «Generar
+pedido», y el panel de Automatizaciones— esta lista automática se llama
+**«Lista negra»** (`PAGO_ONLINE_LABEL` = «Lista negra (automática)»; el titular
+empieza con «Lista negra ·»). Las llaves internas (`pago_online_*`,
+`pago_solo_online`) y el contrato con las tiendas («pago solo online», COD
+Core) no cambian. La lista de pago adelantado de arriba (§41.1–§41.10), que se
+llena a mano y pide el total, deja de llamarse «lista negra»: su sinónimo en
+pantalla pasa a ser «lista de pago completo» (`PREPAY_LIST_SYNONYM`).
 
 **Pedido de las tiendas y decisión del owner (09-11-2026).** Kenku Perú y Aurela
 dejan de ofrecer contra entrega en su web a quien **nunca recibió un pedido y ya
@@ -25301,12 +25819,27 @@ reemplaza entera en cada envío.
     anuló N de M pedidos y nunca recibió»). Los umbrales son
     `PAGO_ONLINE_ANULADOR_MIN_ORDERS` y `PAGO_ONLINE_ANULADOR_RATIO`
     (lib/pago-online.ts), con los mismos números en la 0326.
+  - **(C) Rechazó en la puerta (12-11-2026).** Rechazó al menos **un**
+    pedido contra entrega en la puerta: el motorizado de Grupo GF lo reportó
+    «Rechazó el pedido» (`stop_reported` con `outcome_reason = 'rechazado'`) o
+    la guía del courier dice `REFUSED` (Aliclik). Cuenta aunque el pedido siga
+    en reprogramación: el rechazo es el hecho. Motivo: «Rechazó N pedido(s) en
+    la puerta y nunca recibió».
+    > ⚠️ **Por qué.** En Lima un rechazo termina `anulado` (v1.23: solo la
+    > anulación en Shopify termina la venta), así que no era «devuelto» ni
+    > llegaba al anulador. El 12-11-2026 había 135 clientes de Lima que
+    > rechazaron —121 sin haber recibido nunca nada— y solo 1 estaba en la
+    > lista. El owner: «Sí, desde 1 rechazo». Con la 0334 entran 141 clientes
+    > por esta regla (la lista pasa de ~3.243 a ~3.384).
+- **Prioridad del motivo** cuando cumple varias: devuelto, rechazo, anulador.
 - **Un anulado después de salir, solo, ya no basta** (cambio del owner del
   09-11-2026 sobre la consulta de referencia del pedido de las tiendas, que
   contaba `anulado` con `dispatched_at` como falla). La lista de Kapta manda.
-- Cada celular guarda por qué entra (`pago_online_phones.reason`: `devuelto` o
-  `anulador`), la cuenta que lo hizo entrar (`failed`: sus devueltos, o sus
-  anulados) y sus pedidos que cuentan (`orders`), para que la ficha lo diga.
+- Cada celular guarda por qué entra (`pago_online_phones.reason`: `devuelto`,
+  `rechazo` o `anulador`), la cuenta que lo hizo entrar (`failed`: sus
+  devueltos, sus rechazados o sus anulados) y sus pedidos que cuentan
+  (`orders`), para que la ficha lo diga. Cada corrida guarda cuántos entraron
+  por rechazo (`pago_online_runs.rechazos`, 0334).
 - Sale en cuanto recibe un pedido: cada envío reemplaza la lista entera.
 - Es `pago_online_candidates` (0326) en SQL y `pagoOnlineListOf`
   (lib/pago-online.ts) en TypeScript, con las mismas pruebas.
@@ -25332,8 +25865,9 @@ El cliente de la lista paga un **adelanto**: el de la escalera del §8, S/ 20
 (`ADELANTO_MINIMO`), **validado** (`payment_state` en `adelanto_validado`,
 `diferencia_cargada` o `pago_completo`, el mismo que lee `aliclikRiskGate`), o
 el pago online completo (`orderFullyPaid`). Es un ajuste
-(`pago_online_settings.requirement`): **«Adelanto (regla §8)»** (`adelanto`, por
-defecto) o **«Pago completo»** (`pago_completo`). No hay un estado de pago
+(`pago_online_settings.requirement`): **«Adelanto de S/ 20»** (`adelanto`, por
+defecto; antes «Adelanto (regla §8)») o **«Pago total»** (`pago_completo`;
+antes «Pago completo»). No hay un estado de pago
 nuevo. La escalera del §8 sigue igual encima: con 3 o más antecedentes, Aliclik
 pide el total por su lado. En la web de la tienda no cambia nada: ahí solo paga
 online.
@@ -25392,10 +25926,10 @@ freno paralelo: `prepayOrderCheck` (lib/prepay-list-server.ts), que ya usan
 todos los puntos del §41.5, mira primero la lista de pago adelantado (pide el
 total y manda) y, si no está ahí, `pago_online_lookup` (0326): el celular está
 en la lista vigente, la organización está en **Activo** y Kapta no lo
-exceptuó. Sin lo que pide el ajuste, frena con «Cliente con entrega devuelta y
-ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)» o
-«Cliente que anuló N de M pedidos y nunca recibió: solo pago online o adelanto»
-(«solo pago online» con «Pago completo»). Así frena, igual que la otra lista:
+exceptuó. Sin lo que pide el ajuste, frena con «Lista negra (devolvió N
+pedidos y nunca recibió): falta el adelanto de S/ 20 validado.» o «Lista negra
+(anuló N de M pedidos y nunca recibió): …» («…: falta el pago total validado.»
+con «Pago total»; arriba, «Cómo se dice»). Así frena, igual que la otra lista:
 
 - **Confirmar** en la mesa («Confirmó el pedido» se rechaza con el mensaje) y la
   confirmación expresa de agencia (no se escribe sola).
@@ -25409,9 +25943,9 @@ ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)» o
   lista de pago adelantado), Swayp/Fénix en su última puerta, Grupo GF, las
   salidas manuales, «Sacar con salida nueva» de Repro Lima y Shalom. «No se pudo
   leer» frena una guía; sin la 0326, nada se frena.
-- **La ficha del pedido:** el aviso con su porqué —«Cliente con entrega devuelta
-  y ninguna recibida» o «Cliente que anuló N de M pedidos y nunca recibió»—,
-  sus cuentas (sus devueltos, o cuántos anuló de cuántos), lo que se cobra y si
+- **La ficha del pedido:** el aviso «Lista negra» con su porqué —«Devolvió N
+  pedidos y nunca recibió» o «Anuló N de M pedidos y nunca recibió»—, sus
+  cuentas (sus devueltos, o cuántos anuló de cuántos), lo que se cobra y si
   ya lo tiene. Ningún dato de otros clientes. Solo si no está en la lista de
   pago adelantado (que pide más).
 - **El bot de Kapso** (`POST /api/internal/orders`, owner 09-11-2026): no crea
@@ -25428,14 +25962,14 @@ ninguna recibida: solo pago online o adelanto (N devueltos, 0 recibidas)» o
   que no se confirma ni sale sin el adelanto de S/ 20 validado. «Recuperar
   carrito» sigue la misma regla. La confirmación y las guías lo vuelven a
   frenar igual.
-- **La lista del Master:** la chapa «Pago solo online» en la fila (si no tiene
-  ya la de «Pago adelantado»), con una lectura por página
-  (`pagoOnlineListedAmong`, con el cliente de servicio porque los celulares de
-  la lista no se leen desde el navegador; solo devuelve sí o no de los
+- **La lista del Master (y la de Leads, §25.3):** UNA chapa negra «Lista
+  negra» (o «· pago total») para las dos listas, con UNA lectura por página
+  (`listaNegraMarksAmong`, con el cliente de servicio porque los celulares de
+  la lista no se leen desde el navegador; solo contesta, con su motivo, de los
   celulares que la página ya muestra), por organización y sin excepciones.
 
-**Excepciones de Kapta** (`pago_online_exceptions`): «Exceptuar a este
-cliente» en el aviso de la ficha, con motivo (8+ caracteres) y
+**Excepciones de Kapta** (`pago_online_exceptions`): «Exceptuar de la Lista
+negra» en el aviso de la ficha o en la búsqueda de la página, con motivo (8+ caracteres) y
 `prepay_list.manage` (dueño y admin). Kapta deja de frenarlo **al momento**
 (`pago_online_lookup` mira la excepción) y el celular **no va en el próximo
 envío** a las tiendas. Se quita en el panel, con motivo; la fila queda. El
@@ -25855,3 +26389,198 @@ Código: `lib/agent-tools.ts` (`listar_pedidos`, `agentChatbyState`) y
 `lib/chatby-autoconfirm.ts` (`chatbyConfirmButtonAt`). Pruebas:
 `test/agent-list-orders.test.ts`, `test/agent-connector.test.ts` y
 `test/agent-connector-mom.test.ts`.
+
+## 43. Fotos de constancia en el comentario del pedido (10-11-2026)
+
+Decisión del owner (10-11-2026): «En comentarios, dame la opción de subir una
+foto. Quiero subir constancias o sustentos de los comentarios: intenté
+contactar y le dejé WhatsApp, subo captura». Y: que quede registro de la
+gestión del equipo —por ejemplo, la de los pedidos en «Pendiente de pago de
+diferencia» (§6.4)— con quién lo hizo.
+
+**Dónde está.** «Comentario» es su propia tarjeta en Operar, **debajo de
+«Salidas y guías» y encima de «Gestión manual»**, con su entrada en el índice
+(owner, 10-11-2026: «no quiero que se vaya a confundir con el bloque de
+Registrar estado, que sería medio peligroso»). Antes vivía dentro de
+«Gestión manual», justo después de «Registrar estado».
+
+**Cómo se adjunta.** En la ficha, Operar → «Comentario»:
+
+- Se **pega con Ctrl+V** dentro de la tarjeta (en el cuadro de texto o en
+  cualquier parte de ella), se **arrastra** o se elige con «Adjuntar foto»,
+  como el comprobante del Yape en «Registrar un pago».
+- Pegar se escucha en la tarjeta, no en toda la ventana: «Registrar un pago»
+  sí escucha la ventana, y una captura pegada en el comentario no termina
+  como comprobante. Si el portapapeles trae texto e imagen y se pega en el
+  cuadro de texto, gana el texto.
+- Hasta **4 fotos** por comentario: JPG, PNG, WEBP o GIF, de hasta 15 MB. Una
+  foto de más de 1,5 MB se achica en el navegador (lado mayor 2000 px) antes
+  de subir; una captura va tal cual.
+- El texto sigue siendo obligatorio: la foto es la constancia de lo que se
+  escribe, no lo reemplaza.
+- El **tipo** sigue siendo libre, con sugerencias: «Llamada», «WhatsApp»,
+  «Pago de diferencia», «Dirección», «Reprogramación», «Agencia».
+
+**Cómo se guarda.**
+
+- El navegador sube cada foto directo a Storage con una URL firmada del
+  servidor (`createOrderCommentPhotoUpload`, permiso `master.edit` y lectura
+  del pedido por RLS). Bucket privado `order-comment-photos`, ruta
+  `<tienda>/<pedido>/comment-<hora>-<azar>.<ext>`. El bucket se crea en la
+  primera subida: **sin migración**.
+- `addOrderComment` acepta solo rutas de ESE pedido, sin repetir y como
+  máximo 4, y comprueba que estén en Storage. Si una no llegó, el comentario
+  **no** se registra y se dice cuál falta.
+- Las rutas quedan en `order_events.payload.photos` del comentario
+  (`kind = comment`). El hecho es append-only (0045): la foto no se quita ni
+  se cambia, como el texto.
+
+**Cómo se ve.** En Actividad, debajo del comentario: el tipo como chapa y las
+miniaturas, que abren la foto entera. Las sirve
+`/api/pedidos/<pedido>/comentario-foto`, solo a quien puede leer el pedido y
+solo rutas de ese pedido.
+
+**Lo que no cambia.** Un comentario, con o sin foto, **no** es un intento de
+confirmación (§6.1, «Los comentarios … no son registro de gestión»): no gasta
+día ni cupo, ni mueve la etapa. Es la bitácora con constancia del equipo.
+
+Código: `lib/order-comment-photos.ts`, `components/order-comment-photos.tsx`,
+`addOrderComment` y `createOrderCommentPhotoUpload` en
+`app/dashboard/pedidos/actions.ts`, y
+`app/api/pedidos/[orderId]/comentario-foto/route.ts`. Pruebas:
+`test/order-comment-photos.test.ts`.
+
+## Productividad operativa por sección (12-11-2026)
+
+Decisión del owner: Productividad reúne el trabajo de todo el circuito en
+pestañas: Resumen, Leads (su tablero comercial existente), Master de Pedidos,
+Repro Provincia, Repro Lima, Pago de diferencia, Validación de pagos, Almacén y
+Despacho y liquidación. Comparten periodo y tienda. Abre en Resumen.
+
+- **El autor del hecho conserva el crédito.** No se usa la responsable actual
+  del pedido. Solo hechos con persona y fecha; no reservas, aperturas,
+  sincronizaciones, notas de máquina ni confirmaciones automáticas.
+- Master cuenta contactos y confirmaciones humanas. El contacto confirmado y
+  su evento técnico `confirmed`, de la misma operación, cuentan una sola acción.
+  «Confirmados» es por pedido y persona; incluye confirmación verbal de agencia
+  que aún puede necesitar pago. No equivale a despacho ni a venta cobrada.
+- Repro Provincia lee `shipment_calls`: una nueva entrega requiere fecha y
+  resultado de reprogramación, no basta la fecha de una próxima llamada.
+  Repro Lima lee `lima_repro_calls`, sin volver a sumar sus eventos espejo.
+- Diferencias y pagos distinguen registrar de validar. El registro se atribuye
+  a `registered_by`; la última validación positiva que sigue vigente, a
+  `validated_by`. Validación de pagos incluye también las diferencias: no se
+  suman las pestañas entre sí. Los eventos espejo `payment` no se duplican.
+- Almacén y Despacho leen sus hechos de `order_events`, con actor. Las cifras
+  representan hechos por paquete/pedido, no clics ni llamadas comprobadas.
+- **No se inventa el contexto histórico.** La migración 0333 captura en los
+  contactos nuevos la macroetapa, subetapa, operación y courier en
+  `payload.productivity_context`, antes de insertar el hecho. Un contacto de
+  cobranza de Shalom/Olva en camino, en agencia o recogido sin pago va a Pago
+  de diferencia. Un contacto antiguo sin contexto queda en actividad general
+  de Master y se informa la limitación; cambiar la etapa hoy no lo reatribuye.
+- La franja es el total de acciones por hora local del periodo. Las horas
+  entre acciones cortan pausas de más de 45 minutos y cambios de día; son una
+  estimación del registro, no asistencia ni tiempo conectado.
+- Cada nombre despliega los últimos 50 hechos del periodo, con tipo, resultado,
+  hora y enlace al historial del pedido; los totales incluyen todos los hechos,
+  también más de 1,000. La lectura se agrega en PostgreSQL y no exporta notas,
+  conversaciones, teléfonos ni comprobantes al navegador.
+- El alcance se deriva de las tiendas y sesión del servidor. Una asesora sin
+  reportes ve solo sus propios hechos y cifras, también en estas pestañas.
+  Ser administradora en otra organización no habilita ver su equipo.
+  La RPC es `SECURITY INVOKER` y solo la ejecuta el servidor.
+
+Código: `lib/operations-productivity*`, `components/operations-productivity*`,
+`components/productivity-tabs.tsx`, migración 0333 y
+`scripts/sql/operations_productivity_smoke.sql`.
+
+## 44. Bandeja «Pago de diferencia» (10-11-2026)
+
+Decisión del owner (10-11-2026): un lugar donde quede la gestión del equipo
+sobre los pedidos que esperan el pago de la diferencia —«ahí Gerardo, que
+tiene el usuario Gero, que quede registro de que lo llamó, intentó hacer
+contacto con el cliente»— y se vea a quién le toca contactar hoy.
+
+**Qué entra en «En agencia».** Los pedidos en la subetapa `pendiente_pago_diferencia` (§6.4):
+Agencia, con el paquete en la sucursal (`disponible_para_recojo`,
+`cliente_notificado`, `pendiente_de_recojo`, `proximo_a_vencer`) y sin pago
+completo validado. No se inventa ningún estado: es la misma subetapa del
+Master, en las tiendas de la persona. Medido el 10-11-2026: 178 pedidos (173
+Shalom, 5 Olva).
+
+**Tres grupos, cada uno su pestaña** (owner, 10-11-2026, al ver 177 en la
+bandeja y 253 en «Disponibles para recojo» del Master: esos 253 son los 177
+que deben más 76 ya pagados que solo esperan el recojo):
+
+- **En agencia**: `pendiente_pago_diferencia`.
+- **En camino**: Agencia (`macro_operation = agencia`) en `en_transito` o
+  `en_destino` y sin `pago_completo`, para pedir la diferencia antes de que
+  llegue. Contra entrega y Lima no entran. Medido: 87.
+- **Recogidos sin pago**: `recogido_sin_pago_completo` (Por cerrar), la
+  clienta ya lo recogió y falta cobrar. Medido: 122.
+
+Y una cuarta pestaña, **«Todos»**, que suma los tres grupos y es **la que
+abre por defecto** (owner, 10-11-2026); cada fila dice de qué grupo es. Los
+grupos van en control segmentado, bajo las vistas de la página: «Bandeja»,
+«Cotejar Olva» y «Correos de Olva» (§12, «Dónde está»).
+
+**«Retornando» (13-11-2026).** El owner: «¿cómo saber cuáles están retornando
+de la provincia a Lima porque el cliente nunca pagó la diferencia?». Una quinta
+pestaña, **fuera de «Todos»** y del número de «Bandeja» (ya no se cobra, se
+recibe): Shalom u Olva en `devolucion_fisica_pendiente` (Por cerrar). Son los
+que la agencia sacó sin recojo ni pago —el «entregado» que es el retorno de
+Shalom (§12), con la guía `retorno_iniciado` y custodia `retorno`— y vienen de
+vuelta; se reciben en Almacén → Devoluciones (§9.4). Cada fila dice «en retorno
+hace N días» desde que salió de la agencia (`macro_since`): ámbar desde 7 y,
+desde **15** (`RETORNO_OVERDUE_DAYS`), rojo con «Ya debería estar en Lima»:
+buscarlo en el almacén o reclamarlo al courier. Abre con el filtro «Todos».
+Medido el 13-11-2026: 126 pedidos (123 Shalom y 3 Olva); 64 llevaban 15 días o
+más.
+
+Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
+Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en
+una sucursal. Un pedido de Agencia que salió por Fenix desde Repro Provincia
+(#KP130282) o uno sin guía en Kapta (44 «recogidos sin pago» de agosto) no
+entra. Medido con el filtro: En agencia 176, En camino 85, Recogidos sin pago
+75.
+
+**Qué dice cada fila.**
+
+- Pedido, tienda, cliente y celular.
+- **Falta pagar:** el total menos lo VALIDADO, sin los comprobantes
+  rechazados. Menos de S/ 1 es redondeo y no es saldo (§6.5). «Pago por
+  validar» cuando hay un comprobante cargado que nadie validó.
+- **En agencia:** días calendario de Lima desde la llegada a la sucursal (o,
+  sin ella, desde el ingreso a la subetapa), el courier, la sucursal y la
+  guía. «Plazo vencido» si la agencia informó un vencimiento que ya pasó
+  (Olva; Shalom no lo informa).
+- **Última gestión:** cuándo, quién (el nombre corto de siempre, «gero»), por
+  dónde (comentario, WhatsApp por Chatby, contacto, llamada desde Kapta o con
+  Anura), el tipo del comentario («Pago de diferencia»), la nota y cuántas
+  fotos de constancia tiene (§43). Y cuántas gestiones van.
+
+**Qué cuenta como gestión.** Solo los hechos de una PERSONA (`actor` no nulo)
+de esos tipos: `comment`, `chatby_message`, `kapso_message`, `confirmation_contact`,
+`browser_call` y `anura_call`. Lo automático y el agente de IA no cuentan, ni
+la nota que deja corregir la dirección (comentario de tipo `ubicacion`): es un
+arreglo del pedido, no un contacto con la clienta.
+«Hoy» es el día calendario de Lima.
+
+**Filtros.** «Por gestionar hoy» (nadie registró nada hoy; es la vista con
+que abre), «Gestionados hoy», «Nunca gestionados» y «Todos», y un buscador
+por pedido, cliente, celular o guía. Orden: primero lo que nadie gestionó hoy;
+dentro, lo vencido o por vencer y luego lo que más espera.
+
+**Cómo se gestiona.** Un clic abre la ficha en Operar. La gestión se registra
+ahí: «Comentario» con su foto (§43), el mensaje por Chatby o la llamada. Al
+guardar, la bandeja se recarga y el pedido pasa a «Gestionados hoy».
+
+**Lo que no hace.** No escribe nada, no cambia la etapa ni libera la clave
+(eso sigue siendo validar el pago, §12) y no cuenta como intento de
+confirmación (§6.1).
+
+Código: `lib/pago-diferencia.ts` (reglas, puro), `lib/pago-diferencia-access.ts`
+(lectura), `components/pago-diferencia-tray.tsx` y
+`app/dashboard/pedidos/pago-diferencia/page.tsx`; menú «Pago de diferencia»
+debajo de «Lista negra». Pruebas: `test/pago-diferencia.test.ts`.
