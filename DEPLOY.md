@@ -260,6 +260,61 @@ psql "$DATABASE_URL" -f db/migrations/0328_pago_online_recibio_cualquiera.sql
 Sin cron, variables ni pantallas nuevas. Marcha atrás: volver a correr la
 función de la 0326.
 
+### 12-11-2026 · La guía de Aliclik deja en devolución la caja de Grupo GF «No entregado» que el motorizado todavía tiene (0337, MOM §9.5)
+
+Decisión del owner tras #KP203491 («de acuerdo», 12-11-2026): Alexis reportó
+KP203491-S01 «No entregado · no contesta» el 07-11 y todavía la tiene; el 11-11
+salió la guía del reintento por Aliclik (S02) y el pedido seguía en «Por
+reprogramar Lima» y en «Reintentos Aliclik». Ahora, al guardar la guía de
+Aliclik, la caja de Grupo GF queda **en devolución** como con «Sacar con salida
+nueva» (custodia `retorno` y `output_replaced`), su solicitud de Grupo GF se
+**cierra** y, cuando el motorizado la trae, «Recibir en oficina» la manda a
+stock. La parada fallida queda en su ruta y en su paga.
+
+1. **Migración `0337_gf_replaced_by_aliclik.sql`**, a mano, ANTES del código:
+   ```bash
+   psql "$DATABASE_URL" -f db/migrations/0337_gf_replaced_by_aliclik.sql
+   ```
+   Crea `gf_replace_output_with_aliclik(uuid, uuid)` (sin `security definer`,
+   solo `service_role`) y **corre el barrido**: cada guía de Aliclik viva de un
+   pedido de Lima con una caja de Grupo GF todavía con el motorizado, «No
+   entregado» desde antes de la guía, sin recibir ni reemplazar (#KP203491 y
+   los demás). Correrla dos veces no cambia nada. Antes de aplicarla, cuántas
+   cajas tocaría (solo lectura):
+   ```sql
+   select count(distinct g.id) as cajas, count(distinct g.order_id) as pedidos
+     from shipments g
+     join order_master om on om.order_id = g.order_id and om.coverage = 'lima'
+     join lateral (select ds.* from delivery_stops ds where ds.shipment_id = g.id
+                    order by ds.created_at desc, ds.reported_at desc nulls last limit 1) st
+       on st.status = 'no_entregado'
+     join shipments a on a.order_id = g.order_id and a.id <> g.id
+      and lower(trim(a.courier)) = 'aliclik' and a.delivery_status in ('pendiente', 'en_ruta', 'entregado')
+      and a.returned_at is null and coalesce(a.custody_state, '') <> 'devuelto'
+      and greatest(a.created_at, a.assigned_at) > coalesce(st.reported_at, st.created_at)
+    where lower(trim(g.courier)) = 'propio' and g.delivery_status = 'pendiente'
+      and g.custody_state = 'courier' and g.returned_at is null
+      and not exists (select 1 from order_events e where e.shipment_id = g.id and e.kind = 'output_replaced')
+      and not exists (select 1 from dispatch_manifest_items i join dispatch_manifests m on m.id = i.manifest_id
+                       where i.shipment_id = g.id and i.removed_at is null
+                         and (m.courier <> 'propio' or st.dispatch_manifest_id is distinct from i.manifest_id));
+   ```
+   Después debe dar 0.
+2. El Master de esos pedidos se recalcula solo: el cambio de custodia mueve
+   `shipments.updated_at` y `master-reconcile` (cada 10 min) los recalcula. Salen
+   de «Por reprogramar Lima» y de «Reintentos Aliclik» y siguen a su guía.
+3. Desplegar el código: `createAliclikGuideFor` (el botón de la ficha, «Aprobar»
+   de Reintentos Aliclik, la pasada automática, Chatby, el día programado y el
+   agente) y el rescate de la huérfana de `/api/cron/aliclik-reconcile` llaman a
+   la función al guardar la guía. Si el código sale antes que la migración, la
+   guía se crea igual y la llamada solo deja un aviso en el log; el barrido de la
+   0337 lo arregla al aplicarla.
+
+Sin cron, variables ni pantallas nuevas. **Marcha atrás:** revertir el commit.
+Las cajas que ya quedaron en devolución se reciben a stock como las de «Sacar
+con salida nueva»; la función puede quedarse o borrarse con
+`drop function public.gf_replace_output_with_aliclik(uuid, uuid);`.
+
 ### 09-11-2026 · «Pago solo online (lista automática)»: la lista diaria a Kenku y Aurela y el freno en los pedidos de Kapta (0326, MOM §8 y §41.11)
 
 **Migración 0326** (`db/migrations/0326_pago_solo_online.sql`, aditiva): cinco
