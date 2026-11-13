@@ -6111,6 +6111,31 @@ Master: se calculan al leer, y el caso nunca se reescribe.
 | `falta_sacar` | Caja nueva desde stock, con la caja anterior todavía con el motorizado | «Falta: Sacar con salida nueva» |
 | `programado_vencido` | Su día pasó y no salió | «Programado para el jue 15/10 y no salió» |
 | `programado` | Programado para el día acordado | «Programado · sale jue 15/10 con Grupo GF» |
+| `guia_lista` | Tiene su guía viva de otro courier (abajo, «Acuerdo con la guía ya creada»), y el día acordado no pasó | «Listo · sale vie 13/11 con Aliclik · guía AUR5X…»; si la guía es de otro courier, «… (acordado con Swayp)» |
+
+**Acuerdo con la guía ya creada (decisión del owner, 13-11-2026).** El 12/11
+el equipo dejó listos para el 13/11 #KP205595 y #KP205580 (guía Aliclik) y
+#KP204592 (guía Swayp), y seguían como pendientes: con otro courier la fila
+quedaba en «Sale … · crea la salida en la Mesa de ruta» (`otro_courier`) y con
+Grupo GF en «Falta la salida nueva», porque Kapta nunca se enteraba de una guía
+creada desde la ficha o por Swayp directo, ni de una creada antes de anotar el
+acuerdo. Ahora:
+
+- Si el pedido tiene una **guía viva de otro courier** (no de Grupo GF ni por
+  definir; pendiente o en ruta, sin retorno ni devolución; y que **no es la
+  salida que falló** en el episodio, que puede seguir «en ruta» mientras
+  vuelve), esa es la salida del acuerdo: el estado es **`guia_lista`**, no es
+  un problema y la fila dice «Listo · sale vie 13/11 con Aliclik · guía
+  AUR5X…» (`liveGuideOf`, `lib/repro-box-action.ts`).
+- **Cuenta aunque sea de otro courier que el acordado**: se toma la guía real y
+  la chapa lo avisa, «(acordado con Swayp)». No bloquea.
+- La fecha pasada manda igual: si el día acordado pasa sin entrega, vuelve a
+  `acuerdo_vencido` y pide gestión. Materializado con su programa de Grupo GF,
+  sigue siendo `programado`.
+- En la tabla, la línea de atención de un pendiente con guía viva dice «Listo:
+  sale con Aliclik (guía …). No requiere gestión salvo que el cliente cambie
+  algo.» en vez de «confirma con el cliente la fecha y el courier».
+- Solo cambia la lectura: no programa, no cierra el caso ni cambia la guía.
 
 Dónde está la caja (`boxLocation`), para la fila y para la acción de la caja:
 `con_motorizado` («Con Roy desde sáb 10/10», también si su parada todavía no

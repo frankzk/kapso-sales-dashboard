@@ -273,6 +273,39 @@ export function priorOutputsWith(outputs: readonly { courier: string }[], courie
 type LiveOutputLike = Parameters<typeof outputsBlockingRetry>[0][number];
 
 /**
+ * Su guía viva de otro courier (no de Grupo GF ni por definir): pendiente o en
+ * ruta, sin retorno ni devolución, y que no es la salida que falló en el
+ * episodio (una de Swayp o Tanders que no entregó sigue «en ruta» mientras
+ * vuelve). La de consecutivo más alto, con su código. Es la salida de un
+ * acuerdo de Repro Lima aunque se haya creado por otro camino o antes de
+ * anotarlo (`agreementState` → `guia_lista`, owner, 13-11-2026). PURA.
+ */
+export function liveGuideOf(
+  outputs: readonly {
+    id: string;
+    courier: string;
+    delivery_status: string;
+    returned_at: string | null;
+    custody_state: string | null;
+    output_number: number | null;
+    guide_code: string | null;
+    output_code: string | null;
+  }[],
+  failedOutputId: string | null = null,
+): { courier: string; code: string | null } | null {
+  const live = outputs
+    .filter((o) =>
+      o.id !== failedOutputId &&
+      courierKey(o.courier) !== "propio" &&
+      !isCourierTbd(o.courier) &&
+      (o.delivery_status === "pendiente" || o.delivery_status === "en_ruta") &&
+      !o.returned_at &&
+      o.custody_state !== "devuelto")
+    .sort((a, b) => (b.output_number ?? 0) - (a.output_number ?? 0))[0];
+  return live ? { courier: live.courier, code: live.guide_code ?? live.output_code ?? null } : null;
+}
+
+/**
  * El courier de otra salida viva que se está trabajando, o null. Es el caso
  * `otra_salida_viva` de `reprogramBlockReason`: la lleva ese courier (una
  * reprogramación de Aliclik, por ejemplo), no Repro Lima.

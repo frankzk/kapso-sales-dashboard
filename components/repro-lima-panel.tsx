@@ -152,6 +152,15 @@ export function photoHref(path: string): string {
 /** El fallo en una línea (§11.7); en `crit-fg` si lo rechazó en la puerta. */
 export function FailureLine({ row, className }: { row: ReproRow; className?: string }) {
   if (row.attentionContext === "pending") {
+    // Con la guía viva de otro courier ya no falta confirmar fecha ni courier
+    // (owner, 13-11-2026): lo dice, y solo pide gestión si el cliente cambia algo.
+    if (row.liveGuide) {
+      return (
+        <p className={cn("text-[13px] leading-5 text-ok-fg", className)}>
+          {`Listo: sale con ${row.liveGuide.courierName}${row.liveGuide.code ? ` (guía ${row.liveGuide.code})` : ""}. No requiere gestión salvo que el cliente cambie algo.`}
+        </p>
+      );
+    }
     return <p className={cn("text-[13px] leading-5 text-ink-700", className)}>Programación y seguimiento de entrega: confirma con el cliente la fecha y el courier.</p>;
   }
   if (!row.failure) {
@@ -193,7 +202,7 @@ function boxTone(box: BoxLocation): BadgeTone {
 }
 
 function stateTone(kind: AgreementStateKind): BadgeTone {
-  if (kind === "programado") return "ok";
+  if (kind === "programado" || kind === "guia_lista") return "ok";
   if (kind === "esperando_caja") return "info";
   if (kind === "sin_acuerdo") return "neutral";
   return isProblemState(kind) ? "warn" : "neutral";

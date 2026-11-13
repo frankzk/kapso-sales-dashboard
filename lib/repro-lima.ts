@@ -718,11 +718,25 @@ export type AgreementStateKind =
   | "deriva_movido"
   | "falta_sacar"
   | "programado_vencido"
-  | "programado";
+  | "programado"
+  // Ya tiene su guía viva de otro courier para el día acordado (owner, 13-11-2026).
+  | "guia_lista";
 
 export type AgreementState =
-  | { kind: Exclude<AgreementStateKind, "deriva_movido"> }
-  | { kind: "deriva_movido"; gfDay: string; reason: string | null };
+  | { kind: Exclude<AgreementStateKind, "deriva_movido" | "guia_lista"> }
+  | { kind: "deriva_movido"; gfDay: string; reason: string | null }
+  | { kind: "guia_lista"; courier: string; code: string | null };
+
+/**
+ * La guía viva de un courier externo (Aliclik, Swayp, Tanders, Urpi, Axel):
+ * pendiente o en ruta, sin retorno ni devolución. Es la salida del acuerdo
+ * aunque se haya creado por otro camino (la ficha, Swayp directo) o antes de
+ * anotar el acuerdo, y aunque su courier no sea el acordado (owner, 13-11-2026).
+ */
+export interface ReproLiveGuide {
+  courier: string;
+  code: string | null;
+}
 
 /**
  * Los estados que piden a alguien: van primero en «Programados». Las derivas,
@@ -786,6 +800,8 @@ function missedToday(
  *    si Grupo GF lo quitó (§9.5, regla 4: su día pasó); si no, `deriva_quitado`
  *    si Grupo GF lo quitó o lo reemplazó después; sin evento, falló la
  *    escritura → `por_programar` (E9), o `acuerdo_vencido` si ya no alcanza hoy.
+ *    Con la guía viva de otro courier (`liveGuide`), antes que lo demás salvo
+ *    la fecha pasada → `guia_lista`: la salida ya existe (owner, 13-11-2026).
  * 4. Materializado con programa: `deriva_movido` (otro día), `falta_sacar`
  *    (caja nueva desde stock con la caja todavía con el motorizado),
  *    `programado_vencido` (su día pasó) o `programado`. Lo que diga el plan ya
@@ -805,13 +821,20 @@ export function agreementState(input: {
   nowMinute?: number | null;
   /** El corte del mismo día del proveedor (`same_day_cutoff`). */
   cutoff?: string | null;
+  /** Su guía viva de otro courier (`ReproLiveGuide`), o null. */
+  liveGuide?: ReproLiveGuide | null;
 }): AgreementState {
   const c = input.c;
   if (!c?.agreed_on) return { kind: "sin_acuerdo" };
   const agreedOn = c.agreed_on.slice(0, 10);
   const missed = agreedOn === input.today && missedToday(c, input.plan, input.today, input.nowMinute, input.cutoff);
+  // Con la guía viva, la salida ya existe: no falta crearla ni programarla.
+  // Vuelve a pedir gestión si su día pasa sin entrega (owner, 13-11-2026).
+  const guide = input.liveGuide ? { kind: "guia_lista" as const, courier: input.liveGuide.courier, code: input.liveGuide.code } : null;
   if (!c.materialized_at) {
-    if (agreedOn < input.today || missed) return { kind: "acuerdo_vencido" };
+    if (agreedOn < input.today) return { kind: "acuerdo_vencido" };
+    if (guide) return guide;
+    if (missed) return { kind: "acuerdo_vencido" };
     if (input.plan && typeof input.plan === "object") return { kind: input.plan.no };
     return { kind: input.plan === "al_recibir" ? "esperando_caja" : "por_programar" };
   }
@@ -819,6 +842,7 @@ export function agreementState(input: {
   const program = input.program;
   if (!program) {
     if (agreedOn < input.today) return { kind: "acuerdo_vencido" };
+    if (guide) return guide;
     const removed = input.programRemovedAt && Date.parse(input.programRemovedAt) > Date.parse(c.materialized_at);
     if (removed) return { kind: "deriva_quitado" };
     return { kind: missed ? "acuerdo_vencido" : "por_programar" };
@@ -872,6 +896,11 @@ export function agreementStateLabel(
       return `Programado para el ${day} y no salió`;
     case "programado":
       return `Programado · sale ${day} con ${courier}`;
+    case "guia_lista": {
+      const guideCourier = reproCourierName(state.courier);
+      const other = agreement?.agreed_courier && !sameCourier(state.courier, agreement.agreed_courier) ? ` (acordado con ${courier})` : "";
+      return `Listo · sale ${day} con ${guideCourier}${state.code ? ` · guía ${state.code}` : ""}${other}`;
+    }
   }
 }
 

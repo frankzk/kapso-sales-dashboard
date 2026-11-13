@@ -26,7 +26,7 @@ import { limaDay } from "@/lib/dispatch-day";
 import { guideFailedAt } from "@/lib/reproprovincia";
 import { chainFailureText, chainReadyOn, type ChainNext } from "@/lib/lima-retry-chain";
 import type { OwnReplaceDecision } from "@/lib/gf-retry";
-import { priorOutputsWith } from "@/lib/repro-box-action";
+import { liveGuideOf, priorOutputsWith } from "@/lib/repro-box-action";
 import { isReproLimaCandidate } from "@/lib/repro-lima-pending";
 import {
   agreementState,
@@ -56,6 +56,7 @@ import {
   type ReproChip,
   type ReproCourier,
   type ReproList,
+  type ReproLiveGuide,
 } from "@/lib/repro-lima";
 import {
   closeStaleReproCases,
@@ -161,6 +162,11 @@ export interface ReproRow {
   } | null;
   state: AgreementState;
   stateLabel: string;
+  /**
+   * Su guía viva de otro courier (Aliclik, Swayp…), con su nombre de pantalla:
+   * la salida ya existe y la fila dice «Listo» (owner, 13-11-2026). Null si no.
+   */
+  liveGuide?: (ReproLiveGuide & { courierName: string }) | null;
   /** Cuándo se programa el acuerdo con los hechos de ahora; null sin acuerdo. */
   plan: MaterializationPlan | null;
   /** `setAt`: cuándo se escribió el programa («Agregado hoy» de Almacén, entrega 1c). */
@@ -308,8 +314,10 @@ function buildRow(input: {
     ? { scheduled_for: f.program.scheduled_for.slice(0, 10), reason: f.program.reason ?? null, set_at: f.program.set_at ?? null }
     : null;
   const cutoff = f.provider?.same_day_cutoff ?? null;
+  const liveGuide = liveGuideOf(f.outputs, f.failedOutput?.id ?? null);
   // Con el minuto y el corte: un acuerdo para hoy que ya no alcanza vence hoy (E25).
   const state = agreementState({
+    liveGuide,
     c: open,
     program,
     box: f.box,
@@ -395,6 +403,7 @@ function buildRow(input: {
       : null,
     state,
     stateLabel: agreementStateLabel(state, open ? { agreed_on: open.agreed_on, agreed_courier: open.agreed_courier } : null, f.box, today),
+    liveGuide: liveGuide ? { ...liveGuide, courierName: reproCourierName(liveGuide.courier) } : null,
     plan,
     program: program
       ? { scheduledFor: program.scheduled_for, reason: program.reason, origin: programOrigin(program.reason), setAt: program.set_at }
