@@ -10819,12 +10819,21 @@ opciones y los mismos textos: **Swayp ok · con stock**, **Sin stock Swayp** y
 **Fuera de cobertura**. Responde, sobre el pedido, lo que Repro responde sobre
 la guía: ¿lo puede llevar Swayp hoy?
 
-- **La regla es la de Repro**, no una propia: `evaluateFenix`. «Ok» es que la
+- **La regla es la de la guía Swayp directa (13-11-2026).** «Ok» es que la
   ciudad de destino tiene almacén Swayp (o se reparte desde uno, como Chupaca
-  desde Huancayo) y hay stock disponible del producto del pedido; «sin stock»,
-  que hay almacén pero no stock; «fuera de cobertura», que no hay almacén. Lima
-  no lleva control de cantidad, así que siempre sale «ok»: para provincia se
-  combina con el filtro Cobertura.
+  desde Huancayo), que **cada** producto del pedido tiene stock disponible ahí
+  (`evaluateDirectFenixStock`) y que **cada** uno está vinculado al catálogo de
+  Swayp (`productosSinVinculo`); «sin stock», que hay almacén pero falta stock o
+  vínculo de algún producto; «fuera de cobertura», que no hay almacén. Lima no
+  lleva control de cantidad: ahí solo el vínculo puede decir que no.
+  > ⚠️ **Hasta el 13-11-2026 era `evaluateFenix`, la de Repro Provincia**, que
+  > da «ok» si CUALQUIER producto tiene stock. #KP205044 (aceite, Cándida y
+  > PUMPKIN SEED OIL) salía en «Swayp ok · con stock» y con «Swayp lo puede
+  > llevar hoy», pero el PUMPKIN no está en Swayp y la guía no se podía crear.
+  > Desde el Master el pedido sale ENTERO, así que la pregunta es la de la
+  > ventana de guía directa. Repro Provincia (sobre guías) sigue con
+  > `evaluateFenix`. Lo leen el filtro, el «Enviar por Swayp» de la ficha
+  > (§11.11), Leads y el envío automático desde Por confirmar.
 - **El destino** es el del Master: distrito y provincia del ubigeo, o el
   departamento si falta la provincia.
 - **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**
