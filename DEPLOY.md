@@ -1,3 +1,10 @@
+### 13-11-2026 · Pago de diferencia: Por retornar, Retornados y Copiar mensaje
+
+Sin migración. «Retornando» pasa a «Retornados». Nueva pestaña «Por retornar»
+(En agencia: Shalom 20+ días u Olva por vencer en 3) cuyo número se suma al
+globo del menú. Cada pedido En agencia tiene «Copiar mensaje» con el aviso
+«YA LLEGÓ a la agencia». Verificar ~48 por retornar y el texto copiado.
+
 ### 13-11-2026 · Pago de diferencia: pestaña «Retornando»
 
 Sin migración. La bandeja suma una pestaña «Retornando», fuera de «Todos» y

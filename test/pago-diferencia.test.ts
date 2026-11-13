@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import {
   buildPagoDiferenciaRows,
   PAGO_DIFERENCIA_GROUPS,
+  PAGO_DIFERENCIA_RETURN_WARN_DAYS,
   RETORNO_OVERDUE_DAYS,
+  agencyArrivalMessage,
+  porRetornar,
   filterPagoDiferencia,
   isPagoDiferenciaCobro,
   isPagoDiferenciaGestion,
@@ -198,8 +201,8 @@ describe("Pago de diferencia (MOM §44)", () => {
 
   it("la pestaña «Todos» suma los tres grupos (owner, 10-11-2026)", () => {
     const tray = readFileSync("components/pago-diferencia-tray.tsx", "utf8");
-    expect(tray).toContain('const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos", "retornando"];');
-    expect(tray).toContain('rows.filter((r) => (group === "todos" ? isPagoDiferenciaCobro(r.group) : r.group === group))');
+    expect(tray).toContain('const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos", "por_retornar", "retornando"];');
+    expect(tray).toContain('if (tab === "todos") return isPagoDiferenciaCobro(r.group);');
     // Abre en «Todos» (owner, 10-11-2026).
     expect(tray).toContain('useState<GroupTab>("todos")');
   });
@@ -225,7 +228,63 @@ describe("Pago de diferencia (MOM §44)", () => {
     expect(RETORNO_OVERDUE_DAYS).toBe(15);
     expect(readFileSync("app/dashboard/pedidos/pago-diferencia/page.tsx", "utf8")).toContain("bandeja: rows.filter((r) => isPagoDiferenciaCobro(r.group)).length");
     expect(readFileSync("lib/pago-diferencia-access.ts", "utf8")).toContain('"devolucion_fisica_pendiente"]');
-    expect(readFileSync("docs/mom/master-pedidos-v1.md", "utf8")).toContain("**«Retornando» (13-11-2026).**");
+    expect(readFileSync("docs/mom/master-pedidos-v1.md", "utf8")).toContain("**«Retornados» (13-11-2026).**");
+  });
+
+  // Owner, 13-11-2026: «que te lance los urgentes por llamar cuando se acercan
+  // al plazo». Shalom devuelve a los 38 días de mediana; el 5 % antes de 19.
+  it("«Por retornar»: en agencia desde 20 días con Shalom u Olva por vencer", () => {
+    const base = { group: "en_agencia" as const, courier: "shalom", waitingDays: 19, expiresAt: null };
+    expect(porRetornar(base, NOW)).toBe(false);
+    expect(porRetornar({ ...base, waitingDays: PAGO_DIFERENCIA_RETURN_WARN_DAYS }, NOW)).toBe(true);
+    expect(porRetornar({ ...base, group: "en_camino", waitingDays: 40 }, NOW)).toBe(false);
+    expect(porRetornar({ ...base, courier: "olva", waitingDays: 2, expiresAt: "2026-11-12T20:00:00Z" }, NOW)).toBe(true);
+    expect(porRetornar({ ...base, courier: "olva", waitingDays: 25, expiresAt: "2026-11-30T20:00:00Z" }, NOW)).toBe(false);
+    const rows = buildPagoDiferenciaRows({
+      orders: [order("v", { agency_arrived_at: "2026-10-15T15:00:00Z" }), order("n")],
+      payments: [],
+      events: [],
+      names: new Map(),
+      now: NOW,
+    });
+    expect(rows.find((r) => r.orderId === "v")?.porRetornar).toBe(true);
+    expect(rows.find((r) => r.orderId === "n")?.porRetornar).toBe(false);
+    const access = readFileSync("lib/pago-diferencia-access.ts", "utf8");
+    expect(access).toContain("export async function countPorRetornar(");
+  });
+
+  it("«Copiar mensaje»: el aviso YA LLEGÓ con guía, código, producto y saldo", () => {
+    const msg = agencyArrivalMessage({
+      guideCode: "103118676",
+      shalomCodigo: "7PHK",
+      products: ["SUPER HUMAN Ethiopian Black Seed Oil"],
+      orderTotal: 304.2,
+      paidValidated: 30,
+      remaining: 274.2,
+    });
+    expect(msg).toBe(
+      [
+        "Hola, 👋",
+        "",
+        "Tu pedido YA LLEGÓ a la agencia y te está esperando.",
+        "",
+        "📦 Guía: 103118676",
+        "🔑 Código: 7PHK",
+        "🛍️ Producto: SUPER HUMAN Ethiopian Black Seed Oil",
+        "",
+        "Resumen de pago:",
+        "💰 Monto total del pedido: S/ 304.20",
+        "✅ Adelanto recibido: S/ 30.00",
+        "💵 Saldo pendiente: S/ 274.20",
+        "",
+        "🙌 Te recomendamos recogerlo lo antes posible.",
+        "",
+        "Paga el saldo ahora y tu pedido queda listo para que solo pases a retirarlo.",
+        "",
+        "📲 Nuestro Yape a nombre del GRUPO GF SAC: 930 555 309",
+      ].join("\n"),
+    );
+    expect(readFileSync("components/pago-diferencia-tray.tsx", "utf8")).toContain("navigator.clipboard.writeText(agencyArrivalMessage(row))");
   });
 
   it("el menú la lleva y el MOM la documenta", () => {
