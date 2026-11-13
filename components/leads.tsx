@@ -6,7 +6,8 @@ import { LeadProductTabs } from "@/components/lead-product-tabs";
 
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import { ListaNegraBadge } from "@/components/lista-negra-badge";
-import { CALL_RETRY_SIGNAL_DAYS, prioritizeDueAppointments } from "@/lib/lead-call-queue";
+import { CALL_RETRY_SIGNAL_DAYS, isInCallQueue, prioritizeDueAppointments } from "@/lib/lead-call-queue";
+import { dailyLeadList, dailyListSummary, type DailyListPlan } from "@/lib/lead-daily-list";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -567,7 +568,35 @@ export function LeadsBoard({
   if (board.sourceLeads !== serverLeads || board.sourceCounts !== serverCounts) {
     setBoard({ sourceLeads: serverLeads, sourceCounts: serverCounts, leads: serverLeads, counts: serverCounts });
   }
-  const { leads, counts } = board;
+  const { counts } = board;
+  // La lista del día (0338, owner 13-11-2026): a quien tiene «Leads por día»
+  // en Equipo, «Por llamar» le muestra solo sus N más prioritarios repartidos
+  // por sus porcentajes (lib/lead-daily-list.ts). Es una vista compartida: se
+  // recalcula con cada cambio de la cola. «En seguimiento» no se toca. Sin
+  // capacidad, o si la lectura falla, la cola completa como siempre.
+  const [dailyPlan, setDailyPlan] = useState<DailyListPlan | null>(null);
+  const dailyScopeKey = scope.join(",");
+  useEffect(() => {
+    if (!canHoldNext) return;
+    let alive = true;
+    loadLeadStoreDistribution(dailyScopeKey.split(",").filter(Boolean))
+      .then((d) => { if (alive) setDailyPlan(d.capacity ? { capacity: d.capacity, weights: d.weights } : null); })
+      .catch(() => { if (alive) setDailyPlan(null); });
+    return () => { alive = false; };
+  }, [canHoldNext, dailyScopeKey]);
+  const dailyList = useMemo(() => {
+    if (!dailyPlan || view !== "por_llamar") return null;
+    const names = new Map(stores.map((st) => [st.id, st.name]));
+    const ranked = prioritizeDueAppointments(sortLeadsByPriorityScoped(board.leads.filter((l) => isInCallQueue(l)), (lead) =>
+      scoringProfileFor(names.get(lead.store_id) ?? null),
+    ));
+    const ids = dailyLeadList(ranked, dailyPlan);
+    return { ids, summary: dailyListSummary(ranked.filter((l) => ids.has(l.id)), names) };
+  }, [dailyPlan, view, board.leads, stores]);
+  const leads = useMemo(
+    () => (dailyList ? board.leads.filter((l) => !isInCallQueue(l) || dailyList.ids.has(l.id)) : board.leads),
+    [dailyList, board.leads],
+  );
   const countRequestRef = useRef(0);
   useEffect(() => {
     // Invalidate an older count request on refresh or unmount.
@@ -1769,6 +1798,12 @@ export function LeadsBoard({
           Leads). Arriba, qué lista; abajo, qué leads dentro de ella. Lo que no
           entra va a «Más filtros». */}
       <div className="flex flex-col gap-2">
+        {dailyList && inQueue && (
+          <p className="text-[13px] leading-5 text-ink-600">
+            <span className="font-semibold tabular-nums text-ink-900">{dailyList.summary}</span>
+            {" "}· los más prioritarios de tu cola, según tus «Leads por día» y porcentajes en Equipo.
+          </p>
+        )}
         {/* La búsqueda y «Más filtros» cierran la primera fila a la derecha:
             «Más filtros» como en la imagen aprobada (J; en la cabecera de la
             cola nadie lo encontraba) y la búsqueda a su lado, bajada de la

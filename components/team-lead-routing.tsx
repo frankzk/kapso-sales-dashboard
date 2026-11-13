@@ -4,7 +4,7 @@ import { LeadStoreMixEditor } from "@/components/lead-store-mix-editor";
 import { validStoreWeights } from "@/lib/lead-store-distribution";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { LEAD_WORK_BLOCKS, PRINCIPAL_BLOCKS, routingCoverage, routingLabel, type LeadBlockAssignment, type LeadRoutingSettings, type LeadWorkBlock } from "@/lib/lead-routing";
+import { LEAD_WORK_BLOCKS, PRINCIPAL_BLOCKS, routingCoverage, routingLabel, validDailyCapacity, type LeadBlockAssignment, type LeadRoutingSettings, type LeadWorkBlock } from "@/lib/lead-routing";
 import { saveTeamLeadRouting } from "@/app/dashboard/team/actions";
 import { Badge, CHECKBOX, FIELD_BOX, OpsButton } from "@/components/ops-ui";
 import { IconChevronDown, IconSearch } from "@/components/icons";
@@ -41,12 +41,12 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
   const [pending, start] = useTransition();
   const missing = routingCoverage(assignments, advisors, stores.map(s => s.id));
   const missingBlocks = new Set(missing.map(m => m.block)).size;
-  const invalidWeights = assignments.some(a => a.storeWeights != null && !validStoreWeights(a.storeWeights));
+  const invalidWeights = assignments.some(a => (a.storeWeights != null && !validStoreWeights(a.storeWeights)) || (a.dailyCapacity !== undefined && !validDailyCapacity(a.dailyCapacity)));
   const assignedCount = assignments.filter(a => a.blocks.length).length;
   const visible = advisors.filter(m => normalizeSearch(`${m.name} ${m.account}`).includes(normalizeSearch(search.trim())));
   const dirty = enabled !== initial.enabled || hours !== initial.freshHours || assignments.some(a => {
     const before = initial.assignments.find(row => row.userId === a.userId);
-    return !sameBlocks(a.blocks, before?.blocks ?? []) || a.backup !== (before?.backup ?? false) || !!a.manualTake !== !!before?.manualTake || JSON.stringify(a.storeWeights ?? null) !== JSON.stringify(before?.storeWeights ?? null);
+    return !sameBlocks(a.blocks, before?.blocks ?? []) || a.backup !== (before?.backup ?? false) || !!a.manualTake !== !!before?.manualTake || JSON.stringify(a.storeWeights ?? null) !== JSON.stringify(before?.storeWeights ?? null) || (a.dailyCapacity ?? null) !== (before?.dailyCapacity ?? null);
   });
   const patch = (userId: string, change: Partial<LeadBlockAssignment>) => setAssignments(rows => rows.map(a => a.userId === userId ? { ...a, ...change } : a));
   const toggle = (userId: string, block: LeadWorkBlock) => {
@@ -106,7 +106,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
               return <tr key={member.userId} className="group hover:bg-wash">
                 <th scope="row" className="sticky left-0 bg-white px-4 py-3 text-left font-normal group-hover:bg-wash"><span title={member.name} className="block truncate font-medium text-ink-900">{member.name}</span><span title={`${member.account} · ${storeNames(member)}`} className="mt-0.5 block truncate text-xs text-ink-500">{member.account} · {member.stores.length ? `${member.stores.length} ${member.stores.length === 1 ? "tienda" : "tiendas"}` : "Sin tiendas"}</span></th>
                 <td className="px-3 py-2"><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /></td>
-                <td className="px-3 py-3"><LeadStoreMixEditor name={member.name} stores={stores.filter(s => member.stores.includes(s.id))} value={a.storeWeights} onChange={storeWeights => patch(member.userId, { storeWeights })} /></td>
+                <td className="px-3 py-3"><LeadStoreMixEditor name={member.name} stores={stores.filter(s => member.stores.includes(s.id))} value={a.storeWeights} onChange={storeWeights => patch(member.userId, { storeWeights })} /><DailyCapacityInput name={member.name} value={a.dailyCapacity ?? null} onChange={dailyCapacity => patch(member.userId, { dailyCapacity })} /></td>
                 {LEAD_WORK_BLOCKS.map(block => <td key={block.key} className="p-0 text-center"><label className="relative flex min-h-14 cursor-pointer items-center justify-center"><input className={CHECKBOX} type="checkbox" checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span className="sr-only">{block.label} para {member.name}</span></label></td>)}
                 <td className="border-l border-line p-0 text-center"><label className="relative flex min-h-14 cursor-pointer items-center justify-center"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span className="sr-only">Respaldo para {member.name}</span></label></td>
                 <td className="p-0 text-center"><label className="flex min-h-14 cursor-pointer items-center justify-center"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span className="sr-only">Puede tomar leads fuera de sus bloques para {member.name}</span></label></td>
@@ -118,7 +118,7 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
           const a = assignments.find(row => row.userId === member.userId)!;
           return <details key={member.userId} className="group">
             <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3"><span className="min-w-0"><span className="block truncate text-sm font-medium text-ink-900">{member.name}</span><span className="mt-0.5 block text-xs text-ink-500">{routingLabel(a.blocks)}</span></span><IconChevronDown className="size-4 shrink-0 text-ink-500 group-open:rotate-180" /></summary>
-            <div className="space-y-3 px-4 pb-4"><p className="break-words text-xs text-ink-500">{member.account} · {storeNames(member)}</p><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /><div className="border-y border-line py-3"><p className="mb-2 text-xs font-medium text-ink-900">Distribución por tienda</p><LeadStoreMixEditor name={member.name} stores={stores.filter(s => member.stores.includes(s.id))} value={a.storeWeights} onChange={storeWeights => patch(member.userId, { storeWeights })} /></div><div>{LEAD_WORK_BLOCKS.map(block => <label key={block.key} className="relative flex min-h-11 cursor-pointer items-center gap-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span>{block.label}<span className="sr-only"> para {member.name}</span></span></label>)}</div><label className="relative flex min-h-11 cursor-pointer items-center gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span>Respaldo<span className="sr-only"> para {member.name}</span></span></label><label className="relative flex min-h-11 cursor-pointer items-start gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span>Puede tomar leads fuera de sus bloques<span className="sr-only"> para {member.name}</span><span className="mt-1 block text-xs text-ink-500">Solo desde búsqueda o venta por teléfono. Respeta reservas y citas.</span></span></label></div>
+            <div className="space-y-3 px-4 pb-4"><p className="break-words text-xs text-ink-500">{member.account} · {storeNames(member)}</p><PresetSelect member={member} assignment={a} onChange={blocks => patch(member.userId, { blocks })} /><div className="border-y border-line py-3"><p className="mb-2 text-xs font-medium text-ink-900">Distribución por tienda</p><LeadStoreMixEditor name={member.name} stores={stores.filter(s => member.stores.includes(s.id))} value={a.storeWeights} onChange={storeWeights => patch(member.userId, { storeWeights })} /><DailyCapacityInput name={member.name} value={a.dailyCapacity ?? null} onChange={dailyCapacity => patch(member.userId, { dailyCapacity })} /></div><div>{LEAD_WORK_BLOCKS.map(block => <label key={block.key} className="relative flex min-h-11 cursor-pointer items-center gap-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.blocks.includes(block.key)} onChange={() => toggle(member.userId, block.key)} /><span>{block.label}<span className="sr-only"> para {member.name}</span></span></label>)}</div><label className="relative flex min-h-11 cursor-pointer items-center gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={a.backup} onChange={e => patch(member.userId, { backup: e.target.checked })} /><span>Respaldo<span className="sr-only"> para {member.name}</span></span></label><label className="relative flex min-h-11 cursor-pointer items-start gap-3 border-t border-line pt-3 text-[13px] text-ink-900"><input type="checkbox" className={CHECKBOX} checked={!!a.manualTake} onChange={e => patch(member.userId, { manualTake: e.target.checked })} /><span>Puede tomar leads fuera de sus bloques<span className="sr-only"> para {member.name}</span><span className="mt-1 block text-xs text-ink-500">Solo desde búsqueda o venta por teléfono. Respeta reservas y citas.</span></span></label></div>
           </details>;
         })}</div>
         {!visible.length && <div className="px-4 py-10 text-center"><p className="text-sm text-ink-600">No se encontraron personas.</p><OpsButton className="mt-3" size="sm" onClick={() => setSearch("")}>Mostrar equipo</OpsButton></div>}
@@ -134,4 +134,20 @@ export function TeamLeadRouting({ orgId, initial, installed, advisors, stores }:
     </div>
     {!enabled && <p className="text-xs text-ink-500">El reparto está desactivado. Puedes preparar los bloques; la cola conserva el acceso actual hasta que lo actives y guardes.</p>}
   </section>;
+}
+
+/**
+ * «Leads por día» (0338, owner 13-11-2026): con un número, su «Por llamar»
+ * muestra solo los N más prioritarios, repartidos por sus porcentajes (lista
+ * compartida, no reserva). Vacío: la cola completa, como siempre.
+ */
+function DailyCapacityInput({ name, value, onChange }: { name: string; value: number | null; onChange: (value: number | null) => void }) {
+  const invalid = value !== null && !validDailyCapacity(value);
+  return <label className="mt-2 block text-xs text-ink-600">
+    <span className="mb-1 block font-medium text-ink-900">Leads por día</span>
+    <input aria-label={`Leads por día de ${name}`} type="number" inputMode="numeric" min={1} max={1000} step={1} placeholder="Toda la cola"
+      value={value ?? ""} className={`${FIELD_BOX} h-8 w-28 px-2 tabular-nums`}
+      onChange={e => onChange(e.target.value === "" ? null : Number(e.target.value))} />
+    <span className={`mt-1 block ${invalid ? "text-crit-fg" : "text-ink-500"}`}>{invalid ? "Entre 1 y 1000." : value ? `Ve solo sus ${value} más prioritarios.` : "Ve toda la cola."}</span>
+  </label>;
 }

@@ -8119,6 +8119,29 @@ bloques debe estar activo; desactivado conserva prioridad. Los porcentajes se
 guardan con revisión y auditoría antes/después; omitirlos desde clientes antiguos
 conserva el valor guardado. Instalación sin cambios de asignaciones ni leads.
 
+**La lista del día: «Leads por día» (13-11-2026, decisión del owner; 0338).**
+«Una persona puede atender unos 250 leads al día; que se le asignen 250, 90 %
+Aurela y 10 % Kenku, dando prioridad a los más prioritarios», porque a Daphne
+«Por llamar» le mostraba más de 1.000 pendientes. Equipo → Leads tiene, junto a
+los porcentajes, «Leads por día» (entero 1–1000; vacío = toda la cola). Solo
+aplica a quien la tiene puesta y con el reparto por bloques activo.
+
+Con capacidad N, su «Por llamar» muestra solo N leads: de la cola ya ordenada por
+prioridad (citas vencidas primero y el puntaje de siempre) se toman los primeros
+de cada tienda según sus porcentajes (250 con 90/10 → 225 Aurela y 25 Kenku;
+cupos por parte entera y resto mayor). Si una tienda no llega a su cupo, se
+completa con los siguientes más prioritarios de las otras tiendas («completar
+con Kenku»). Sin porcentajes, los N más prioritarios. Una cabecera dice «Tu
+lista del día: N · X Aurela · Y Kenku Peru».
+
+Es una vista compartida, no una reserva: otra asesora puede tomar el mismo lead.
+Se recalcula sola: lo gestionado sale de «Por llamar» y entra el siguiente; un
+lead nuevo más prioritario entra arriba. «Siguiente» y «Guardar y siguiente»
+eligen dentro de la lista. «En seguimiento», búsqueda y los demás filtros no se
+recortan. `save_lead_routing` guarda `dailyCapacity` con revisión y auditoría
+(ausente conserva la de antes); `lead_store_distribution` la devuelve como
+`capacity`. Instalación sin cambios de asignaciones, reservas ni leads.
+
 **La reserva por cita se suelta sola (08-11-2026, decisión del owner, opción c; 0322).**
 Con el reparto activo, la asesora que agenda «volver a llamar» se queda el lead
 (`appointment_owner` en `lead_routing_scope`) y las demás lo ven «Sin acceso».
@@ -10819,12 +10842,21 @@ opciones y los mismos textos: **Swayp ok · con stock**, **Sin stock Swayp** y
 **Fuera de cobertura**. Responde, sobre el pedido, lo que Repro responde sobre
 la guía: ¿lo puede llevar Swayp hoy?
 
-- **La regla es la de Repro**, no una propia: `evaluateFenix`. «Ok» es que la
+- **La regla es la de la guía Swayp directa (13-11-2026).** «Ok» es que la
   ciudad de destino tiene almacén Swayp (o se reparte desde uno, como Chupaca
-  desde Huancayo) y hay stock disponible del producto del pedido; «sin stock»,
-  que hay almacén pero no stock; «fuera de cobertura», que no hay almacén. Lima
-  no lleva control de cantidad, así que siempre sale «ok»: para provincia se
-  combina con el filtro Cobertura.
+  desde Huancayo), que **cada** producto del pedido tiene stock disponible ahí
+  (`evaluateDirectFenixStock`) y que **cada** uno está vinculado al catálogo de
+  Swayp (`productosSinVinculo`); «sin stock», que hay almacén pero falta stock o
+  vínculo de algún producto; «fuera de cobertura», que no hay almacén. Lima no
+  lleva control de cantidad: ahí solo el vínculo puede decir que no.
+  > ⚠️ **Hasta el 13-11-2026 era `evaluateFenix`, la de Repro Provincia**, que
+  > da «ok» si CUALQUIER producto tiene stock. #KP205044 (aceite, Cándida y
+  > PUMPKIN SEED OIL) salía en «Swayp ok · con stock» y con «Swayp lo puede
+  > llevar hoy», pero el PUMPKIN no está en Swayp y la guía no se podía crear.
+  > Desde el Master el pedido sale ENTERO, así que la pregunta es la de la
+  > ventana de guía directa. Repro Provincia (sobre guías) sigue con
+  > `evaluateFenix`. Lo leen el filtro, el «Enviar por Swayp» de la ficha
+  > (§11.11), Leads y el envío automático desde Por confirmar.
 - **El destino** es el del Master: distrito y provincia del ubigeo, o el
   departamento si falta la provincia.
 - **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**
