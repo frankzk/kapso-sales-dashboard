@@ -24,6 +24,7 @@ import {
   type PagoDiferenciaRow,
 } from "@/lib/pago-diferencia";
 import { cn } from "@/components/ui";
+import { useCopyToClipboard } from "@/components/copy-button";
 
 const PAGE = 50;
 const FILTERS: PagoDiferenciaFilter[] = ["por_gestionar", "gestionados_hoy", "sin_gestion", "todos"];
@@ -396,22 +397,14 @@ function Agency({ row, showGroup = false }: { row: PagoDiferenciaRow; showGroup?
  * la guía, el código, el producto y lo que falta, listo para pegar en WhatsApp.
  */
 function CopyMessageButton({ row }: { row: PagoDiferenciaRow }) {
-  const [state, setState] = useState<"idle" | "copied" | "error">("idle");
+  const { state, copy } = useCopyToClipboard(2000);
   return (
     <button
       type="button"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(agencyArrivalMessage(row));
-          setState("copied");
-        } catch {
-          setState("error");
-        }
-        window.setTimeout(() => setState("idle"), 2000);
-      }}
+      onClick={() => copy(agencyArrivalMessage(row))}
       className="inline-flex h-8 items-center rounded-md bg-white px-2.5 text-[13px] font-semibold text-ink-700 shadow-control ring-1 ring-inset ring-line-strong transition-colors hover:bg-wash hover:text-ink-900 pointer-coarse:h-11"
     >
-      <span aria-live="polite">{state === "copied" ? "Copiado ✓" : state === "error" ? "No se pudo copiar" : "Copiar mensaje"}</span>
+      <span aria-live="polite">{state === "ok" ? "Copiado ✓" : state === "fail" ? "No se pudo copiar" : "Copiar mensaje"}</span>
     </button>
   );
 }

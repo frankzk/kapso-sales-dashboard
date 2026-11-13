@@ -284,7 +284,7 @@ describe("Pago de diferencia (MOM §44)", () => {
         "📲 Nuestro Yape a nombre del GRUPO GF SAC: 930 555 309",
       ].join("\n"),
     );
-    expect(readFileSync("components/pago-diferencia-tray.tsx", "utf8")).toContain("navigator.clipboard.writeText(agencyArrivalMessage(row))");
+    expect(readFileSync("components/pago-diferencia-tray.tsx", "utf8")).toContain("onClick={() => copy(agencyArrivalMessage(row))}");
   });
 
   it("el menú la lleva y el MOM la documenta", () => {
