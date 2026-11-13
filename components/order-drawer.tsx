@@ -663,8 +663,8 @@ function DrawerJourneyRail({ current }: { current: string | null | undefined }) 
             />
             <span
               className={cn(
-                "mt-1 flex items-start gap-0.5 text-[11px] leading-[14px]",
-                isCurrent ? "font-semibold text-ink-900" : isDone ? "text-ink-600" : "text-ink-500",
+                "mt-1 flex items-start gap-0.5 text-xs leading-4",
+                isCurrent ? "font-semibold text-ink-900" : isDone ? "text-ink-700" : "text-ink-600",
               )}
             >
               {isDone && <IconCheck aria-hidden className="mt-px size-3 shrink-0" strokeWidth={2.6} />}
@@ -709,34 +709,61 @@ function DrawerNextActionCard({
   ) : null;
 
   // La franja de abajo de «Situación» (13-11-2026, owner eligió «S2»): la
-  // etapa y el recorrido arriba; aquí, lo que toca AHORA, con su contexto
-  // («Ahora · Preparación») y un solo botón. Azul claro; ámbar si algo la frena.
-  // Lo que la acompaña (Programar envío, el motorizado de Grupo GF, el rótulo
-  // de la salida nueva) va debajo, en la misma franja y sin otro separador.
+  // etapa y el recorrido arriba; aquí, lo que toca AHORA y un solo botón.
+  //
+  // CONTRASTE (13-11-2026, owner: «los colores no están haciendo bien el
+  // contraste… me pierdo un poco visualmente»). Antes la franja era un azul al
+  // 60 % casi igual al blanco, con un rótulo azul encima del título y el texto
+  // en gris. Ahora: el lavado azul entero con su borde, la chapa sólida
+  // «Ahora» en la línea del título (la misma forma que «Sugerido» en la Mesa de
+  // ruta: azul sólido = lo que toca), el texto de apoyo en tinta y no en gris,
+  // y lo que acompaña separado por una línea. La etapa ya la dice la chapa de
+  // «Situación»; del rótulo queda solo el matiz («pago requerido»,
+  // «incidencia»), como chapa junto al título.
   const amber = action.tone === "amber";
+  const qualifier = action.eyebrow.split(" · ").slice(1).join(" · ") || null;
   return (
     <div
       role="region"
       aria-label="Próxima acción"
       className={cn(
-        "-mx-4 -mb-4 rounded-b-lg border-t px-4 py-3 sm:-mx-5 sm:-mb-5 sm:px-5 sm:py-4",
-        amber ? "border-warn-bg bg-warn-wash" : "border-line bg-brand-50/60",
+        "-mx-4 -mb-4 rounded-b-lg border-t px-4 py-3.5 sm:-mx-5 sm:-mb-5 sm:px-5 sm:py-4",
+        amber ? "border-warn-bg bg-warn-wash" : "border-brand-100 bg-brand-50",
       )}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <p className={cn("text-xs font-semibold leading-4", amber ? "text-warn-fg" : "text-brand-700")}>
-            Ahora · {action.eyebrow}
-          </p>
-          <h3 className="mt-0.5 text-base font-semibold leading-6 text-ink-900">
-            <span className="sr-only">Próxima acción: </span>
-            {action.title}
-          </h3>
-          <p className="mt-0.5 max-w-[62ch] text-sm leading-5 text-ink-600">{action.description}</p>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className={cn(
+                "inline-flex h-5 items-center rounded px-1.5 text-xs font-semibold leading-none text-white",
+                amber ? "bg-warn-fg" : "bg-brand-600",
+              )}
+            >
+              Ahora
+            </span>
+            <h3 className="text-base font-semibold leading-6 text-ink-900">
+              <span className="sr-only">Próxima acción ({action.eyebrow}): </span>
+              {action.title}
+            </h3>
+            {qualifier && (
+              <span
+                className={cn(
+                  "inline-flex h-5 items-center rounded bg-white px-1.5 text-xs font-medium leading-none ring-1 ring-inset",
+                  amber ? "text-warn-fg ring-warn-bg" : "text-ink-700 ring-brand-100",
+                )}
+              >
+                {qualifier}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 max-w-[62ch] text-sm leading-5 text-ink-700">{action.description}</p>
         </div>
         {cta}
       </div>
-      {children && <div className="mt-3 space-y-2">{children}</div>}
+      {children && (
+        <div className={cn("mt-3.5 space-y-2 border-t pt-3", amber ? "border-warn-bg" : "border-brand-100")}>{children}</div>
+      )}
     </div>
   );
 }

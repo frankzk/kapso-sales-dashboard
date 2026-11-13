@@ -51,12 +51,19 @@ export function AliclikOutlookLadder({
   outlook,
   storeName,
   onWash = false,
+  bare = false,
   className,
 }: {
   outlook: AliclikOutlook;
   storeName?: string | null;
   /** La fila ya está en un lavado (aviso o sugerida): el recuadro va en blanco. */
   onWash?: boolean;
+  /**
+   * Sin recuadro: la fila blanca ya es el marco y una caja gris dentro de una
+   * lista dentro de una tarjeta era una caja de más (owner, 13-11-2026: «me
+   * pierdo un poco visualmente»).
+   */
+  bare?: boolean;
   className?: string;
 }) {
   const tone = TONE[outlook.level];
@@ -64,7 +71,7 @@ export function AliclikOutlookLadder({
   const badge = LEVEL_BADGE[outlook.level];
   return (
     // Un recuadro sin anillo, como la salida que bloquea: la fila ya es el marco.
-    <div className={cn("rounded-md px-3 py-2", onWash ? "bg-white" : "bg-wash", className)}>
+    <div className={cn(bare ? "" : cn("rounded-md px-3 py-2", onWash ? "bg-white" : "bg-wash"), className)}>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
         <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1 text-xs text-ink-600">
           <span className="font-semibold text-ink-700">Entrega estimada</span>
