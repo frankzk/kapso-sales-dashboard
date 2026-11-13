@@ -131,7 +131,7 @@ export function OrderRouteDesk({
             </span>
           </p>
         )}
-        <p className={cn("mt-1 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-500" : "text-ink-700")}>
+        <p className={cn("mt-1 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-600" : "text-ink-700")}>
           {route.reason}
         </p>
         {gfPrint && (
@@ -151,7 +151,7 @@ export function OrderRouteDesk({
             <a href={gfReady.labelHref} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">
               Reimprimir rótulo
             </a>
-            <span className="text-ink-500">· Almacén la arma; en Despacho del día se asigna al motorizado con su mismo QR.</span>
+            <span className="text-ink-600">· Almacén la arma; en Despacho del día se asigna al motorizado con su mismo QR.</span>
           </p>
         )}
         {/* Antes de abrir Aliclik, lo que suele pasar con un pedido de
@@ -162,7 +162,8 @@ export function OrderRouteDesk({
             outlook={aliclikOutlook}
             storeName={storeName}
             onWash={route.availability === "warning" && !suggested}
-            className="mt-2"
+            bare={route.availability !== "warning" || suggested}
+            className="mt-2.5"
           />
         )}
       </>
@@ -226,9 +227,12 @@ export function OrderRouteDesk({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Badge tone="brand">Sugerido</Badge>
+            {/* Azul sólido = lo que toca, igual que «Ahora» en Situación. */}
+            <span className="inline-flex h-5 items-center rounded bg-brand-600 px-1.5 text-xs font-semibold leading-none text-white">
+              Sugerido
+            </span>
             <h3 className="text-base font-semibold leading-6 text-ink-900">{route.label}</h3>
-            <span className="text-[13px] text-ink-500">{route.timing}</span>
+            <span className="text-[13px] text-ink-600">{route.timing}</span>
           </div>
           {renderDetails(route)}
         </div>
@@ -243,10 +247,10 @@ export function OrderRouteDesk({
       <div className="flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <p className={cn("text-sm font-semibold", route.availability === "blocked" ? "text-ink-600" : "text-ink-900")}>
+            <p className={cn("text-sm font-semibold", route.availability === "blocked" ? "text-ink-700" : "text-ink-900")}>
               {route.label}
             </p>
-            <span className="text-[13px] text-ink-500">{route.timing}</span>
+            <span className="text-[13px] text-ink-600">{route.timing}</span>
             {route.availability === "warning" && <Badge tone="warn">Con aviso</Badge>}
           </div>
           {renderDetails(route)}
@@ -320,7 +324,7 @@ export function OrderRouteDesk({
 
       {(others.length > 0 || rare.length > 0) && (
         <div className="space-y-2">
-          {featured && <p className="text-xs font-semibold leading-4 text-ink-600">Otras opciones</p>}
+          {featured && <h3 className="pt-1 text-[13px] font-semibold leading-5 text-ink-700">Otras opciones</h3>}
           <ul className="divide-y divide-line overflow-hidden rounded-lg ring-1 ring-inset ring-line">
             {others.map(renderRow)}
             {/* Lo que casi no se usa, plegado como la última fila. */}
@@ -335,7 +339,7 @@ export function OrderRouteDesk({
                 >
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold leading-5 text-ink-900">Otros couriers</span>
-                    <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">
+                    <span className="mt-0.5 block text-[13px] leading-5 text-ink-600">
                       {rare.map((route) => route.label).join(", ")} · casi no se usan; no se sugieren.
                     </span>
                   </span>

@@ -13327,7 +13327,7 @@ registra en cada evento.
   - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
     (validar y corregir pagos, alerta de comprobante repetido, Administrar
     Grupo GF, exportar datos, boletas y facturas, anular pedidos de
-    WooCommerce), ni confirmar reembolsos. Lo
+    WooCommerce, gestionar la Lista negra), ni confirmar reembolsos. Lo
     fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
   - «Gestionar pedidos» ya **no** incluye cambiar el estado a mano
@@ -25638,9 +25638,12 @@ de la Lista negra»** (motivo); y los sacados, que no se borran. La búsqueda po
 celular de la página contesta por las dos listas (§41.11). El motivo pide al menos 8 caracteres. **Ver** la lista puede
 cualquiera que vea pedidos de la organización (la RLS de la 0309 la deja leer a
 sus miembros); **cambiarla** pide el permiso nuevo **`prepay_list.manage`**
-(«Gestionar la lista de pago adelantado»), que dueño y admin traen por su rol y
-que no se da uno por uno. Cada acción vuelve a pedirlo en la organización y
-solo se guarda en producción.
+(«Gestionar la Lista negra»), que dueño y admin traen por su rol. Desde el
+13-11-2026 también **se da uno por uno** en Equipo → «Permisos por persona»,
+solo el dueño (owner: «¿cómo habilito para agregar celulares a la lista negra a
+Diana?»; eligió la casilla antes que subirla a admin o dárselo a todas las
+asesoras). Ningún rol por función lo trae. Cada acción vuelve a pedirlo en la
+organización y solo se guarda en producción.
 
 Una alta no se reescribe: solo se **quita**, una vez, con motivo, y queda como
 historia (un trigger de la 0309 lo impide en la base). **La baja se respeta:**
@@ -26132,7 +26135,7 @@ con «Pago total»; arriba, «Cómo se dice»). Así frena, igual que la otra li
 
 **Excepciones de Kapta** (`pago_online_exceptions`): «Exceptuar de la Lista
 negra» en el aviso de la ficha o en la búsqueda de la página, con motivo (8+ caracteres) y
-`prepay_list.manage` (dueño y admin). Kapta deja de frenarlo **al momento**
+`prepay_list.manage` (dueño, admin y quien tenga la casilla, §41.3). Kapta deja de frenarlo **al momento**
 (`pago_online_lookup` mira la excepción) y el celular **no va en el próximo
 envío** a las tiendas. Se quita en el panel, con motivo; la fila queda. El
 panel las muestra con los tres últimos dígitos y el pedido desde el que se
