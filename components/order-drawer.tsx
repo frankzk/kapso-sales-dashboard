@@ -2288,17 +2288,45 @@ export function OrderDrawer({
                   data-drawer-section="pagos"
                   className={cn(SECTION, paymentPanel.mode === "required" ? "order-3" : "order-5")}
                 >
-                  <PickupKeyPanel
-                    orderId={orderId}
-                    mode={paymentPanel.mode}
-                    gatewayNote={gatewayNote}
-                    shalomDestination={shalomDestination}
-                    onChanged={onSaved}
-                  />
-                  {/* MOM §35: la boleta sale del dinero que ya entró, así que
-                      vive bajo el cobro. Se dibuja solo si la organización
-                      tiene algún RUC o comprobante. */}
-                  <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
+                  {paymentPanel.collapsed ? (
+                    // Lima sin pagos: plegada (owner, 13-11-2026). Se abre para
+                    // subir la constancia de quien pagó antes.
+                    <details className="group">
+                      <summary className="flex min-h-11 cursor-pointer list-none items-start justify-between gap-3 [&::-webkit-details-marker]:hidden">
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-ink-900">Cobro anticipado</span>
+                          <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">
+                            Opcional. Si pagó antes, sube la constancia y valídala: el rótulo sale «PAGADO - NO COBRAR».
+                          </span>
+                        </span>
+                        <IconChevronDown aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none" />
+                      </summary>
+                      <div className="mt-4 space-y-4">
+                        <PickupKeyPanel
+                          orderId={orderId}
+                          mode={paymentPanel.mode}
+                          gatewayNote={gatewayNote}
+                          shalomDestination={shalomDestination}
+                          onChanged={onSaved}
+                        />
+                        <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
+                      </div>
+                    </details>
+                  ) : (
+                    <>
+                      <PickupKeyPanel
+                        orderId={orderId}
+                        mode={paymentPanel.mode}
+                        gatewayNote={gatewayNote}
+                        shalomDestination={shalomDestination}
+                        onChanged={onSaved}
+                      />
+                      {/* MOM §35: la boleta sale del dinero que ya entró, así que
+                          vive bajo el cobro. Se dibuja solo si la organización
+                          tiene algún RUC o comprobante. */}
+                      <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
+                    </>
+                  )}
                 </div>
               )}
               {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene

@@ -1,3 +1,8 @@
+### 13-11-2026 · Cobro anticipado plegado en Lima
+
+Sin migración. En la ficha de un pedido de Lima sin pagos, la tarjeta de Cobro
+aparece plegada como «Cobro anticipado · Opcional». Con un pago cargado, abierta.
+
 ### 13-11-2026 · Cobro en la ficha de pedidos contra entrega
 
 Sin migración. La tarjeta de Cobro aparece, opcional, en todo pedido de Lima o
