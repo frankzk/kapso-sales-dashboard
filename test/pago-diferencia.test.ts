@@ -201,7 +201,10 @@ describe("Pago de diferencia (MOM §44)", () => {
 
   it("la pestaña «Todos» suma los tres grupos (owner, 10-11-2026)", () => {
     const tray = readFileSync("components/pago-diferencia-tray.tsx", "utf8");
-    expect(tray).toContain('const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos", "por_retornar", "retornando"];');
+    // Dos bloques (owner, 13-11-2026: «reordena esto, está medio confuso»).
+    expect(tray).toContain('{ label: "Por cobrar", tabs: ["todos", "en_camino", "en_agencia", "recogido_sin_pago"] },');
+    expect(tray).toContain('{ label: RETURNS_LABEL, tabs: ["por_retornar", "retornando"] },');
+    expect(tray).toContain("const TABS: readonly GroupTab[] = TAB_SECTIONS.flatMap((section) => section.tabs);");
     expect(tray).toContain('if (tab === "todos") return isPagoDiferenciaCobro(r.group);');
     // Abre en «Todos» (owner, 10-11-2026).
     expect(tray).toContain('useState<GroupTab>("todos")');

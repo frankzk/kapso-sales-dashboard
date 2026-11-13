@@ -26635,6 +26635,14 @@ días. Su número va en rojo en la pestaña y **se suma al globo del menú**
 conteos sin filas). Siguen contando en «En agencia» y en «Todos». Medido el
 13-11-2026: 48 (21 con 30 días o más).
 
+**El orden de las pestañas (13-11-2026).** El owner: «reordena esto, está
+medio confuso». Dos bloques con su nombre, en un solo control: **Por cobrar**
+—«Todos» primero, que es la que abre, y después el viaje del paquete: En
+camino, En agencia, Recogidos sin pago— y **Retornos** —Por retornar (con su
+punto y número en rojo) y Retornados—. «Por retornar» sigue contando en En
+agencia y en Todos, pero va con los retornos porque es lo que hay que salvar
+hoy. En el teléfono, cada bloque en su propia cuadrícula.
+
 **«Copiar mensaje» (13-11-2026).** El owner: «que el mensaje se vea en este
 formato para copiar, pegar y no digitar». Cada pedido En agencia lleva el
 botón; copia el aviso «Tu pedido YA LLEGÓ a la agencia y te está esperando»

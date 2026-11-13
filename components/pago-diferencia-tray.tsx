@@ -10,7 +10,6 @@ import { Badge, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-u
 import { OrderLink, useOpenOrderDrawer } from "@/components/order-link";
 import {
   PAGO_DIFERENCIA_FILTER_LABEL,
-  PAGO_DIFERENCIA_GROUPS,
   PAGO_DIFERENCIA_GROUP_LABEL,
   PAGO_DIFERENCIA_OLVA_WARN_DAYS,
   PAGO_DIFERENCIA_RETURN_CRIT_DAYS,
@@ -36,7 +35,19 @@ const FILTERS: PagoDiferenciaFilter[] = ["por_gestionar", "gestionados_hoy", "si
  * devolvió: no se cobran, se reciben—.
  */
 type GroupTab = PagoDiferenciaGroup | "todos" | "por_retornar";
-const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos", "por_retornar", "retornando"];
+
+const RETURNS_LABEL = "Retornos";
+/**
+ * Dos bloques (13-11-2026): «Por cobrar» —«Todos» primero, luego el viaje del
+ * paquete: en camino, en agencia, recogido— y «Retornos» —por perderse y ya
+ * devueltos—. «Por retornar» es parte de «En agencia», pero va con los
+ * retornos porque es lo que hay que salvar hoy.
+ */
+const TAB_SECTIONS: readonly { label: string; tabs: readonly GroupTab[] }[] = [
+  { label: "Por cobrar", tabs: ["todos", "en_camino", "en_agencia", "recogido_sin_pago"] },
+  { label: RETURNS_LABEL, tabs: ["por_retornar", "retornando"] },
+];
+const TABS: readonly GroupTab[] = TAB_SECTIONS.flatMap((section) => section.tabs);
 const TAB_LABEL: Record<GroupTab, string> = { ...PAGO_DIFERENCIA_GROUP_LABEL, todos: "Todos", por_retornar: "Por retornar" };
 
 /** ¿La fila va en esa pestaña? */
@@ -47,7 +58,7 @@ function inTab(r: PagoDiferenciaRow, tab: GroupTab): boolean {
 }
 
 const GROUP_HINT: Record<GroupTab, string> = {
-  todos: "Los tres grupos juntos: en agencia, en camino y recogidos sin pago.",
+  todos: "Todo lo que falta cobrar: en camino, en agencia y recogidos sin pago.",
   en_agencia: "El paquete ya está en la sucursal: la clave de recojo no se libera hasta validar el pago.",
   en_camino: "Todavía viaja o recién llegó a la agencia: se puede pedir la diferencia antes de que esté disponible.",
   recogido_sin_pago: "La clienta ya lo recogió y falta parte del pago: queda por cobrar.",
@@ -150,53 +161,61 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
 
   return (
     <div className="space-y-4">
-      {/* Los grupos en control segmentado (DESIGN.md): las pestañas
-          subrayadas de arriba son las vistas de la página. Las flechas
-          mueven y eligen. */}
-      <div
-        role="tablist"
-        aria-label="Grupo de pedidos"
-        className="grid grid-cols-2 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line sm:inline-grid sm:grid-flow-col sm:grid-cols-none"
-      >
-        {TABS.map((g, i) => {
-          const on = group === g;
-          return (
-            <button
-              key={g}
-              ref={(el) => {
-                tabRefs.current[i] = el;
-              }}
-              type="button"
-              role="tab"
-              aria-selected={on}
-              tabIndex={on ? 0 : -1}
-              onClick={() => pickGroup(g)}
-              onKeyDown={(e) => {
-                const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-                if (!step) return;
-                e.preventDefault();
-                const next = (i + step + TABS.length) % TABS.length;
-                tabRefs.current[next]?.focus();
-                pickGroup(TABS[next]!);
-              }}
-              className={cn(
-                "flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-semibold outline-none transition-[background-color,color,box-shadow] duration-150 pointer-coarse:h-11",
-                "focus-visible:ring-2 focus-visible:ring-brand-600",
-                on ? "bg-white text-ink-900 shadow-control ring-1 ring-line" : "text-ink-500 hover:text-ink-900",
-              )}
+      {/* Los grupos en control segmentado (DESIGN.md), en DOS bloques
+          (owner, 13-11-2026: «reordena esto, está medio confuso»): lo que se
+          cobra, en el orden del viaje del paquete y con «Todos» primero
+          porque es lo que abre; y aparte los retornos, que ya no se cobran o
+          están por perderse. Un solo tablist: las flechas recorren los dos. */}
+      <div role="tablist" aria-label="Grupo de pedidos" className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:gap-4">
+        {TAB_SECTIONS.map((section) => (
+          <div key={section.label} role="presentation" className="min-w-0 space-y-1.5">
+            <p aria-hidden className="text-xs font-semibold text-ink-500">
+              {section.label}
+            </p>
+            <div
+              role="presentation"
+              className="grid grid-cols-2 gap-0.5 rounded-lg bg-wash p-0.5 ring-1 ring-inset ring-line sm:inline-grid sm:grid-flow-col sm:grid-cols-none"
             >
-              {TAB_LABEL[g]}
-              <span
-                className={cn(
-                  "tabular-nums",
-                  on ? "text-brand-700" : g === "por_retornar" && groupCounts[g] > 0 ? "font-bold text-crit-fg" : "text-ink-500",
-                )}
-              >
-                {groupCounts[g].toLocaleString("es-PE")}
-              </span>
-            </button>
-          );
-        })}
+              {section.tabs.map((g) => {
+                const i = TABS.indexOf(g);
+                const on = group === g;
+                const urgent = g === "por_retornar" && groupCounts[g] > 0;
+                return (
+                  <button
+                    key={g}
+                    ref={(el) => {
+                      tabRefs.current[i] = el;
+                    }}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    tabIndex={on ? 0 : -1}
+                    onClick={() => pickGroup(g)}
+                    onKeyDown={(e) => {
+                      const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+                      if (!step) return;
+                      e.preventDefault();
+                      const next = (i + step + TABS.length) % TABS.length;
+                      tabRefs.current[next]?.focus();
+                      pickGroup(TABS[next]!);
+                    }}
+                    className={cn(
+                      "flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-semibold outline-none transition-[background-color,color,box-shadow] duration-150 pointer-coarse:h-11",
+                      "focus-visible:ring-2 focus-visible:ring-brand-600",
+                      on ? "bg-white text-ink-900 shadow-control ring-1 ring-line" : "text-ink-500 hover:text-ink-900",
+                    )}
+                  >
+                    {urgent && <span aria-hidden className="size-1.5 rounded-full bg-crit-fg" />}
+                    {TAB_LABEL[g]}
+                    <span className={cn("tabular-nums", urgent ? "font-bold text-crit-fg" : on ? "text-brand-700" : "text-ink-500")}>
+                      {groupCounts[g].toLocaleString("es-PE")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
       <p className="text-sm text-ink-700">
         {GROUP_HINT[group]}{" "}
