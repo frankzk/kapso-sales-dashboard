@@ -32,9 +32,9 @@ export async function loadPagoDiferencia(
         "order_id,macro_substage,macro_operation,payment_state,store_id,order_name,customer_name,customer_phone,order_total,current_courier,guide_code,agency_branch,agency_arrived_at,agency_expires_at,macro_since,province,district",
       )
       .in("store_id", [...storeIds])
-      // Los tres grupos (lib/pago-diferencia.ts, `pagoDiferenciaGroup`, que
+      // Los grupos (lib/pago-diferencia.ts, `pagoDiferenciaGroup`, que
       // vuelve a decidir fila por fila).
-      .in("macro_substage", ["pendiente_pago_diferencia", "recogido_sin_pago_completo", "en_transito", "en_destino"])
+      .in("macro_substage", ["pendiente_pago_diferencia", "recogido_sin_pago_completo", "en_transito", "en_destino", "devolucion_fisica_pendiente"])
       .order("order_id")
       .range(from, to),
   );

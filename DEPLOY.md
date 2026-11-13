@@ -1,3 +1,11 @@
+### 13-11-2026 · Pago de diferencia: pestaña «Retornando»
+
+Sin migración. La bandeja suma una pestaña «Retornando», fuera de «Todos» y
+del número de «Bandeja»: Shalom u Olva en Por cerrar · Devolución física
+pendiente (la agencia lo sacó sin recojo ni pago), con los días en retorno y
+«Ya debería estar en Lima» desde 15. Verificar el conteo (~126) y que «Todos»
+no cambie.
+
 ### 12-11-2026 · Agencia: Estado de pago y conciliación histórica (0336)
 
 Aplicar db/migrations/0336_agency_payment_reconciliation.sql antes del código.

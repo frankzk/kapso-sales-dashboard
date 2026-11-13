@@ -10,7 +10,13 @@
 //     `en_destino` sin pago completo: se pide la diferencia antes de que llegue.
 //   - «Recogidos sin pago»: `recogido_sin_pago_completo` (Por cerrar): ya lo
 //     recogió y falta cobrar.
-// Los tres, solo con Shalom u Olva (`PAGO_DIFERENCIA_COURIERS`).
+// Y aparte, fuera de «Todos» (owner, 13-11-2026: «cómo saber cuáles están
+// retornando de la provincia a Lima porque el cliente nunca pagó la
+// diferencia»):
+//   - «Retornando»: `devolucion_fisica_pendiente` (Por cerrar). La agencia sacó
+//     el paquete sin recojo ni pago (el «entregado» que es el retorno, §12) y
+//     viene de vuelta; se recibe en Almacén → Devoluciones (§9.4).
+// Todos, solo con Shalom u Olva (`PAGO_DIFERENCIA_COURIERS`).
 //
 // Es una LECTURA: no escribe nada ni cambia etapas. La gestión se registra en
 // la ficha del pedido (comentario con foto de constancia §43, mensaje por
@@ -35,15 +41,25 @@ const GESTION_LABEL: Record<string, string> = {
   anura_call: "Llamada con Anura",
 };
 
-export type PagoDiferenciaGroup = "en_agencia" | "en_camino" | "recogido_sin_pago";
+export type PagoDiferenciaGroup = "en_agencia" | "en_camino" | "recogido_sin_pago" | "retornando";
 
+/** Los grupos por cobrar: los que suma «Todos». «Retornando» va aparte. */
 export const PAGO_DIFERENCIA_GROUPS: readonly PagoDiferenciaGroup[] = ["en_agencia", "en_camino", "recogido_sin_pago"];
 
 export const PAGO_DIFERENCIA_GROUP_LABEL: Record<PagoDiferenciaGroup, string> = {
   en_agencia: "En agencia",
   en_camino: "En camino",
   recogido_sin_pago: "Recogidos sin pago",
+  retornando: "Retornando",
 };
+
+/** Con estos días en retorno el paquete ya debería estar en Lima: buscarlo o reclamarlo. */
+export const RETORNO_OVERDUE_DAYS = 15;
+
+/** ¿Cuenta para lo que se cobra (la bandeja, «Todos»)? «Retornando» no. */
+export function isPagoDiferenciaCobro(group: PagoDiferenciaGroup): boolean {
+  return group !== "retornando";
+}
 
 /** A qué grupo va un pedido del Master; null si no es de la bandeja. */
 /**
@@ -62,6 +78,7 @@ export function pagoDiferenciaGroup(o: {
   if (!PAGO_DIFERENCIA_COURIERS.includes((o.current_courier ?? "").trim().toLowerCase())) return null;
   if (o.macro_substage === "pendiente_pago_diferencia") return "en_agencia";
   if (o.macro_substage === "recogido_sin_pago_completo") return "recogido_sin_pago";
+  if (o.macro_substage === "devolucion_fisica_pendiente") return "retornando";
   if (
     o.macro_operation === "agencia" &&
     (o.macro_substage === "en_transito" || o.macro_substage === "en_destino") &&
@@ -219,7 +236,7 @@ export function buildPagoDiferenciaRows(input: {
     const gestiones = (gestionesBy.get(o.order_id) ?? []).slice().sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1));
     const last = gestiones[0] ?? null;
     // En agencia: desde la llegada a la sucursal; en los otros, desde que
-    // entró a su subetapa.
+    // entró a su subetapa (en Retornando, desde que salió de la agencia).
     const waitingSince = group === "en_agencia" ? (o.agency_arrived_at ?? o.macro_since) : o.macro_since;
     return [{
       orderId: o.order_id,

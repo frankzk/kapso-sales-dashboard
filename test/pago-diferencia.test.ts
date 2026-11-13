@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   buildPagoDiferenciaRows,
+  PAGO_DIFERENCIA_GROUPS,
+  RETORNO_OVERDUE_DAYS,
   filterPagoDiferencia,
+  isPagoDiferenciaCobro,
   isPagoDiferenciaGestion,
   limaDayOf,
   pagoDiferenciaGroup,
@@ -195,10 +198,34 @@ describe("Pago de diferencia (MOM §44)", () => {
 
   it("la pestaña «Todos» suma los tres grupos (owner, 10-11-2026)", () => {
     const tray = readFileSync("components/pago-diferencia-tray.tsx", "utf8");
-    expect(tray).toContain('const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos"];');
-    expect(tray).toContain('group === "todos" ? rows : rows.filter((r) => r.group === group)');
+    expect(tray).toContain('const TABS: readonly GroupTab[] = [...PAGO_DIFERENCIA_GROUPS, "todos", "retornando"];');
+    expect(tray).toContain('rows.filter((r) => (group === "todos" ? isPagoDiferenciaCobro(r.group) : r.group === group))');
     // Abre en «Todos» (owner, 10-11-2026).
     expect(tray).toContain('useState<GroupTab>("todos")');
+  });
+
+  // Owner, 13-11-2026: «cómo saber cuáles están retornando de la provincia a
+  // Lima porque el cliente nunca pagó la diferencia».
+  it("«Retornando»: Shalom u Olva en devolución física pendiente, fuera de «Todos» y de la cuenta", () => {
+    const g = (macro_substage: string, current_courier: string | null = "shalom") =>
+      pagoDiferenciaGroup({ macro_substage, macro_operation: "agencia", payment_state: "adelanto_validado", current_courier });
+    expect(g("devolucion_fisica_pendiente")).toBe("retornando");
+    expect(g("devolucion_fisica_pendiente", "olva")).toBe("retornando");
+    expect(g("devolucion_fisica_pendiente", "aliclik")).toBeNull();
+    expect(isPagoDiferenciaCobro("retornando")).toBe(false);
+    expect(PAGO_DIFERENCIA_GROUPS).not.toContain("retornando");
+    const [row] = buildPagoDiferenciaRows({
+      orders: [order("r", { macro_substage: "devolucion_fisica_pendiente", macro_since: "2026-10-20T15:00:00Z" })],
+      payments: [],
+      events: [],
+      names: new Map(),
+      now: NOW,
+    });
+    expect(row).toMatchObject({ group: "retornando", waitingDays: 21 });
+    expect(RETORNO_OVERDUE_DAYS).toBe(15);
+    expect(readFileSync("app/dashboard/pedidos/pago-diferencia/page.tsx", "utf8")).toContain("bandeja: rows.filter((r) => isPagoDiferenciaCobro(r.group)).length");
+    expect(readFileSync("lib/pago-diferencia-access.ts", "utf8")).toContain('"devolucion_fisica_pendiente"]');
+    expect(readFileSync("docs/mom/master-pedidos-v1.md", "utf8")).toContain("**«Retornando» (13-11-2026).**");
   });
 
   it("el menú la lleva y el MOM la documenta", () => {
