@@ -224,7 +224,7 @@ import {
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
-import { orderPaymentPanelFor } from "@/lib/order-payment-panel";
+import { codPaymentPanel, orderPaymentPanelFor } from "@/lib/order-payment-panel";
 import { swaypDesdeConfirmacionOffer } from "@/lib/swayp-desde-confirmacion-offer";
 import { EnviarPorSwaypDesdeConfirmacion } from "@/components/swayp-desde-confirmacion-offer";
 import {
@@ -1300,7 +1300,13 @@ export function OrderDrawer({
   const paymentSetup = detail
     ? orderPaymentPanelFor({ row: detail.row, routePlan: detail.routePlan, brief, canCreateShalomGuide })
     : null;
-  const paymentPanel = paymentSetup?.presentation ?? null;
+  // Contra entrega, la tarjeta de Cobro también, opcional (owner, 13-11-2026:
+  // «cómo marco pagado un pedido de Lima, para que salga con el rótulo de
+  // Pagado; lo ideal sería subir las constancias y validar los pagos»). Solo en
+  // la ficha: el paso de después de «Generar pedido» en Leads no cambia.
+  const paymentPanel = paymentSetup?.presentation
+    ? codPaymentPanel(paymentSetup.presentation, detail?.row ?? null)
+    : null;
   const gatewayNote = paymentSetup?.gatewayNote ?? null;
   const showPaymentPanel = paymentPanel?.show ?? false;
   const shalomDestination = paymentSetup?.shalomDestination ?? false;

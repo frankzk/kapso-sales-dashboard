@@ -12558,6 +12558,21 @@ vincula nada: se hace al confirmar «Vincular guía externa», por el mismo cami
 
 ### Pagos
 
+- **Contra entrega pagado por adelantado: la tarjeta de Cobro en la ficha
+  (13-11-2026).** El owner: «¿cómo marco pagado un pedido de Lima, para que
+  salga con el rótulo de Pagado? Lo ideal sería subir las constancias y validar
+  los pagos». La tarjeta solo se dibujaba si algo exigía el pago (Agencia,
+  regla de riesgo, Lista negra) o si ya había un comprobante: en un pedido de
+  Lima o Provincia COD sin nada de eso no había por dónde subir la constancia.
+  Ahora un pedido contra entrega **abierto** (Lima o Provincia COD, ni
+  entregado, ni anulado, ni devuelto) la lleva siempre, en modo **opcional**
+  (`codPaymentPanel`, `lib/order-payment-panel.ts`): «Registrar un pago» y
+  «Validar», con los permisos de siempre. Cuando lo VALIDADO cubre el total
+  (`payment_state = pago_completo`), el rótulo dice **«PAGADO - NO COBRAR»**
+  (`orderFullyPaid`), la ruta del motorizado de Grupo GF dice «Pagado» y la guía
+  de Aliclik se crea sin cobro (`expectedCollectAmount`). Un rótulo ya impreso
+  no cambia solo: se reimprime. Solo la ficha: el paso de después de «Generar
+  pedido» en Leads sigue con `orderPaymentPanelFor`.
 - **Un pedido pagado en el checkout no tiene cobro que gestionar.** Desde que
   entran pedidos con pasarela (`financial_status = 'paid'`), «ya está cobrado»
   tiene dos vías —comprobante Yape o pago web— y **no se suman**: sumarlas sería

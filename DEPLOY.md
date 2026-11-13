@@ -1,3 +1,10 @@
+### 13-11-2026 · Cobro en la ficha de pedidos contra entrega
+
+Sin migración. La tarjeta de Cobro aparece, opcional, en todo pedido de Lima o
+Provincia COD abierto: se sube la constancia y se valida; con el total
+validado el rótulo dice «PAGADO - NO COBRAR». Verificar en un pedido de Lima sin
+pagos que la tarjeta aparezca y que Leads no cambie.
+
 ### 13-11-2026 · Pago de diferencia: pestañas en dos bloques
 
 Sin migración. Las pestañas se agrupan en «Por cobrar» (Todos, En camino, En
