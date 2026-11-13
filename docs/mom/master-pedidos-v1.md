@@ -12572,7 +12572,10 @@ vincula nada: se hace al confirmar «Vincular guía externa», por el mismo cami
   (`orderFullyPaid`), la ruta del motorizado de Grupo GF dice «Pagado» y la guía
   de Aliclik se crea sin cobro (`expectedCollectAmount`). Un rótulo ya impreso
   no cambia solo: se reimprime. Solo la ficha: el paso de después de «Generar
-  pedido» en Leads sigue con `orderPaymentPanelFor`.
+  pedido» en Leads sigue con `orderPaymentPanelFor`. **En Lima va plegada**
+  (owner: «para Lima puede quedar como plegado»), como «Cobro anticipado ·
+  Opcional»: casi todo se cobra en la puerta. Con un pago ya cargado se dibuja
+  abierta, como siempre. Provincia COD la muestra abierta.
 - **Un pedido pagado en el checkout no tiene cobro que gestionar.** Desde que
   entran pedidos con pasarela (`financial_status = 'paid'`), «ya está cobrado»
   tiene dos vías —comprobante Yape o pago web— y **no se suman**: sumarlas sería

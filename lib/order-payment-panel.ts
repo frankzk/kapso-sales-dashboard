@@ -17,6 +17,8 @@ export type OrderPaymentPanelMode = "required" | "optional" | "prepaid";
 export interface OrderPaymentPanelPresentation {
   show: boolean;
   mode: OrderPaymentPanelMode;
+  /** Plegada hasta que alguien la abra (Lima sin pagos, 13-11-2026). */
+  collapsed?: boolean;
 }
 
 interface OrderPaymentPanelInput {
@@ -235,5 +237,9 @@ export function codPaymentPanel(
   if (presentation.show || !row) return presentation;
   const cod = row.macro_operation === "lima" || row.macro_operation === "provincia_cod";
   const open = !["entregado", "anulado", "devuelto"].includes((row.general_status ?? "").trim());
-  return cod && open ? { show: true, mode: "optional" } : presentation;
+  if (!cod || !open) return presentation;
+  // En Lima, plegada (owner, 13-11-2026: «para Lima puede quedar como
+  // plegado»): casi todo se cobra en la puerta. Con un pago ya cargado la
+  // tarjeta se dibuja por `hasPaymentActivity` y no llega aquí: abierta.
+  return row.macro_operation === "lima" ? { show: true, mode: "optional", collapsed: true } : { show: true, mode: "optional" };
 }
