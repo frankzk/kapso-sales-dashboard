@@ -1,3 +1,9 @@
+### 13-11-2026 · Pago de diferencia: pestañas en dos bloques
+
+Sin migración. Las pestañas se agrupan en «Por cobrar» (Todos, En camino, En
+agencia, Recogidos sin pago) y «Retornos» (Por retornar, Retornados). Mismos
+números y filtros. Verificar en escritorio y teléfono.
+
 ### 13-11-2026 · Shalom: el reemplazo de una guía muerta quita la clave vieja
 
 Sin migración. Al vincular la guía que reemplaza a una muerta sin su clave, se
