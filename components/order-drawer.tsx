@@ -388,6 +388,16 @@ const DRAWER_STAGE_STEP: Record<string, string> = {
   finalizado: "bg-emerald-100 text-emerald-800 ring-2 ring-emerald-500",
 };
 
+// El tramo actual del recorrido, en el tono de su macroetapa (MOM §25).
+const DRAWER_STAGE_BAR: Record<string, string> = {
+  por_confirmar: "bg-amber-500",
+  preparacion: "bg-sky-500",
+  por_despachar: "bg-indigo-500",
+  en_curso: "bg-cyan-500",
+  por_cerrar: "bg-orange-500",
+  finalizado: "bg-emerald-500",
+};
+
 function workspaceForSection(section: DrawerSectionId): DrawerWorkspaceView {
   if (section === "ubicacion" || section === "productos") return "informacion";
   if (section === "historial") return "actividad";
@@ -613,53 +623,42 @@ function drawerNextAction(
   };
 }
 
+/**
+ * El recorrido en una franja (13-11-2026, owner: «ocupan demasiado espacio»):
+ * seis tramos de una línea con su nombre debajo (en el teléfono, dos filas
+ * de tres: «Preparación» no cabe en un sexto de 390 px). Lo hecho en tinta con su
+ * marca, el paso actual en el tono de su macroetapa y en negrita, lo que falta
+ * en gris. El número de paso queda para el lector de pantalla.
+ */
 function DrawerJourneyRail({ current }: { current: string | null | undefined }) {
   const currentIndex = DRAWER_STAGE_ORDER.findIndex((stage) => stage.key === current);
   return (
-    <ol className="grid grid-cols-6" aria-label="Avance del pedido en el MOM">
+    <ol className="grid grid-cols-3 gap-x-1 gap-y-2 sm:grid-cols-6" aria-label="Avance del pedido en el MOM">
       {DRAWER_STAGE_ORDER.map((stage, index) => {
         const isCurrent = index === currentIndex;
         const isDone = currentIndex >= 0 && index < currentIndex;
         return (
-          <li key={stage.key} className="relative min-w-0">
-            {index > 0 && (
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "absolute left-0 right-1/2 top-2.5 h-px",
-                  isDone || isCurrent ? "bg-ink-500" : "bg-line-strong",
-                )}
-              />
-            )}
-            {index < DRAWER_STAGE_ORDER.length - 1 && (
-              <span
-                aria-hidden="true"
-                className={cn("absolute left-1/2 right-0 top-2.5 h-px", isDone ? "bg-ink-500" : "bg-line-strong")}
-              />
-            )}
-            <div className="relative flex min-w-0 flex-col items-center px-0.5 text-center" aria-current={isCurrent ? "step" : undefined}>
-              <span
-                className={cn(
-                  "relative z-[1] grid size-5 place-items-center rounded-full text-xs font-semibold tabular-nums",
-                  isCurrent
-                    ? (DRAWER_STAGE_STEP[stage.key] ?? "bg-line text-ink-700 ring-2 ring-ink-500")
-                    : isDone
-                      ? "bg-ink-900 text-white"
-                      : "bg-white text-ink-500 ring-1 ring-inset ring-line-strong",
-                )}
-              >
-                {isDone ? <IconCheck aria-hidden className="size-3" strokeWidth={2.6} /> : index + 1}
-              </span>
-              <span
-                className={cn(
-                  "mt-1.5 max-w-[6.5rem] text-xs leading-4",
-                  isCurrent ? "font-semibold text-ink-900" : isDone ? "text-ink-600" : "text-ink-500",
-                )}
-              >
+          <li key={stage.key} className="min-w-0" aria-current={isCurrent ? "step" : undefined}>
+            <span
+              aria-hidden="true"
+              className={cn(
+                "block h-1 rounded-full",
+                isCurrent ? (DRAWER_STAGE_BAR[stage.key] ?? "bg-ink-500") : isDone ? "bg-ink-700" : "bg-line-strong",
+              )}
+            />
+            <span
+              className={cn(
+                "mt-1 flex items-start gap-0.5 text-[11px] leading-[14px]",
+                isCurrent ? "font-semibold text-ink-900" : isDone ? "text-ink-600" : "text-ink-500",
+              )}
+            >
+              {isDone && <IconCheck aria-hidden className="mt-px size-3 shrink-0" strokeWidth={2.6} />}
+              <span className="min-w-0">
+                <span className="sr-only">Paso {index + 1} de {DRAWER_STAGE_ORDER.length}: </span>
                 {stage.label}
                 {isDone && <span className="sr-only"> (hecho)</span>}
               </span>
-            </div>
+            </span>
           </li>
         );
       })}
@@ -700,7 +699,7 @@ function DrawerNextActionCard({
     <section
       aria-label="Próxima acción"
       className={cn(
-        "rounded-lg p-4 shadow-control sm:p-5",
+        "rounded-lg p-4 shadow-control",
         action.tone === "amber" ? "bg-warn-wash ring-1 ring-warn-bg" : "bg-white ring-2 ring-brand-600",
       )}
     >
@@ -717,7 +716,9 @@ function DrawerNextActionCard({
         </div>
         {cta}
       </div>
-      {children && <div className={cn(CARD_ZONE, "mt-4 sm:mt-5")}>{children}</div>}
+      {/* La zona de lo que acompaña, con la misma hairline y la mitad de aire
+          (13-11-2026): «Programar envío» es una línea, no un bloque. */}
+      {children && <div className="-mx-4 mt-3 border-t border-line px-4 pt-3">{children}</div>}
     </section>
   );
 }
@@ -1779,7 +1780,7 @@ export function OrderDrawer({
             >
               <section
                 data-drawer-section="resumen"
-                className={cn("order-1 space-y-5", SECTION)}
+                className={cn("order-1 space-y-3", SECTION)}
               >
                 {/* La macroetapa y la subetapa van EN la cabecera de la tarjeta:
                     son la respuesta a «¿dónde está?», y debajo solo queda el
