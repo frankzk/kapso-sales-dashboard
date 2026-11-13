@@ -7,9 +7,16 @@
 // el total—, así que la respuesta tiene que estar en una columna, no calcularse
 // en la página.
 //
-// LA REGLA NO SE REESCRIBE: es `evaluateFenix`, la misma que pinta el badge y
-// el filtro de Repro Provincia, con los mismos tres valores. Dos reglas para la
-// misma pregunta acabarían diciendo cosas distintas sobre el mismo pedido.
+// LA REGLA ES LA DE LA GUÍA SWAYP DIRECTA (13-11-2026). Hasta esa fecha era
+// `evaluateFenix`, la de Repro Provincia, que da «ok» si CUALQUIER producto
+// tiene stock: #KP205044 (aceite, Cándida y PUMPKIN SEED OIL) salía en «Swayp ok
+// · con stock» y con «Swayp lo puede llevar hoy», pero el PUMPKIN no está en
+// Swayp y la guía no se podía crear. Desde el Master el pedido sale ENTERO por
+// guía directa, así que la pregunta es la de esa ventana: TODOS los productos
+// con stock en la ciudad (`evaluateDirectFenixStock`) y vinculados al catálogo
+// de Swayp (`productosSinVinculo`). Sin vínculo cuenta como «sin stock»: no se
+// puede mandar. Mismos tres valores; el filtro, el «Enviar por Swayp» de la
+// ficha y el envío automático desde Por confirmar leen esta columna.
 //
 // CUÁNDO SE CALCULA. El stock cambia con cada sync de inventario y los pedidos
 // cambian de etapa a cada rato, así que no se calcula en el recálculo del
@@ -24,7 +31,9 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { chunk } from "@/lib/access";
-import { evaluateFenix, type FenixEligibility, type FenixStockRow } from "@/lib/fenix";
+import { coverageCityOf, evaluateDirectFenixStock, type FenixEligibility, type FenixStockRow } from "@/lib/fenix";
+import { productosSinVinculo } from "@/lib/swayp-productos";
+import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
 
 export type SwaypAvailability = FenixEligibility["reason"];
 
@@ -40,7 +49,10 @@ export interface MasterSwaypInput {
   region: string | null;
 }
 
-type LineItem = { title?: string | null; sku?: string | null };
+type LineItem = { title?: string | null; sku?: string | null; quantity?: number | null };
+
+/** El mapa de vínculos Swayp de la tienda (`cargarMapaSwayp`): SKU → código de barras. */
+export type SwaypLinkMap = Map<string, { codbar: string; nombre?: string | null }>;
 
 /**
  * La disponibilidad de UN pedido, o null si su etapa no la usa.
@@ -54,14 +66,20 @@ export function swaypAvailabilityFor(
   row: MasterSwaypInput,
   stockRows: FenixStockRow[],
   lineItems: LineItem[] | null | undefined,
+  linkMap?: SwaypLinkMap | null,
 ): SwaypAvailability | null {
   if (!row.macro_stage || !(SWAYP_AVAILABILITY_STAGES as readonly string[]).includes(row.macro_stage)) return null;
-  const products = (lineItems ?? []).map((item) => ({ title: item.title ?? null, sku: item.sku ?? null }));
-  return evaluateFenix(
-    { city: null, district: row.district, province: row.province ?? row.region },
-    stockRows,
-    products,
-  ).reason;
+  const items = (lineItems ?? []).map((item) => ({ title: item.title ?? null, sku: item.sku ?? null, quantity: item.quantity ?? 1 }));
+  const city = coverageCityOf({ city: null, district: row.district, province: row.province ?? row.region });
+  const check = evaluateDirectFenixStock(city, stockRows, items);
+  if (!check.ok) return check.reason ?? "sin_stock";
+  // Sin vínculo en el catálogo de Swayp la guía no sale, haya stock o no (y en
+  // Lima, sin control de cantidad, es lo único que dice que no).
+  const sinVinculo = productosSinVinculo(
+    items.map((item) => ({ title: item.title, quantity: item.quantity, sku: item.sku })),
+    linkMap,
+  );
+  return sinVinculo.length ? "sin_stock" : "ok";
 }
 
 const PAGE = 1000;
@@ -110,13 +128,13 @@ export async function recalcularDisponibilidadSwaypMaster(
 
   // Los de las etapas que la usan, y los que ya salieron de ellas con un valor
   // puesto: a esos hay que vaciarlos.
-  type Row = MasterSwaypInput & { order_id: string; swayp_availability: string | null };
+  type Row = MasterSwaypInput & { order_id: string; store_id: string; swayp_availability: string | null };
   const rows: Row[] = [];
   const stages = SWAYP_AVAILABILITY_STAGES.join(",");
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await admin
       .from("order_master")
-      .select("order_id,macro_stage,district,province,region,swayp_availability")
+      .select("order_id,store_id,macro_stage,district,province,region,swayp_availability")
       .in("store_id", storeIds)
       .or(`macro_stage.in.(${stages}),swayp_availability.not.is.null`)
       .order("order_id", { ascending: true })
@@ -137,11 +155,15 @@ export async function recalcularDisponibilidadSwaypMaster(
     }
   }
 
+  // El vínculo al catálogo de Swayp, por tienda (la guía lo exige).
+  const linkMaps = new Map<string, SwaypLinkMap>();
+  for (const storeId of storeIds) linkMaps.set(storeId, await cargarMapaSwayp(admin, storeId));
+
   // Agrupadas por el valor nuevo: tres o cuatro `update ... in (...)` en vez de
   // una escritura por pedido.
   const changes = new Map<SwaypAvailability | null, string[]>();
   for (const r of rows) {
-    const next = swaypAvailabilityFor(r, stockRows, itemsByOrder.get(r.order_id));
+    const next = swaypAvailabilityFor(r, stockRows, itemsByOrder.get(r.order_id), linkMaps.get(r.store_id));
     if (next === r.swayp_availability) continue;
     const list = changes.get(next) ?? [];
     list.push(r.order_id);

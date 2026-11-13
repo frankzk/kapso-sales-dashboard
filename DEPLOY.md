@@ -1,3 +1,10 @@
+### 13-11-2026 · «Swayp ok · con stock» exige todos los productos
+
+Sin migración. La disponibilidad Swayp del Master usa la regla de la guía
+directa: cada producto con stock en la ciudad y vinculado al catálogo de Swayp.
+La columna se recalcula sola en la pasada horaria (cron swayp-inventory).
+Verificar que #KP205044 pase a «Sin stock Swayp».
+
 ### 13-11-2026 · Cobro anticipado plegado en Lima
 
 Sin migración. En la ficha de un pedido de Lima sin pagos, la tarjeta de Cobro

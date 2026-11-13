@@ -9,7 +9,7 @@
 // es la puerta, no la cerradura.
 
 import { redirect } from "next/navigation";
-import { createServerSupabase } from "@/lib/db";
+import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getLeadRoutingScope } from "@/lib/lead-routing-access";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { loadConfirmationBrief, loadOrderDetail } from "@/app/dashboard/pedidos/actions";
@@ -17,6 +17,7 @@ import { loadShalomOrderDraft } from "@/app/dashboard/pedidos/shalom-actions";
 import { needsConfirmationBrief } from "@/lib/order-confirmation-brief";
 import { aliclikGuideOffered } from "@/lib/order-route-plan";
 import { swaypAvailabilityFor } from "@/lib/master-swayp-availability";
+import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
 import type { FenixStockRow } from "@/lib/fenix";
 import type { OrderMasterRow } from "@/lib/types";
 import { leadPostOrderChoices, type LeadPostOrderChoices } from "@/lib/lead-post-order";
@@ -50,6 +51,7 @@ async function swaypAvailabilityNow(
       { macro_stage: row.macro_stage ?? null, district: row.district, province: row.province, region: row.region },
       (stock as FenixStockRow[]) ?? [],
       lineItems,
+      await cargarMapaSwayp(createAdminSupabase(), row.store_id),
     );
   } catch {
     return null;
