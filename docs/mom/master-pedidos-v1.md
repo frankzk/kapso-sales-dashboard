@@ -13722,6 +13722,20 @@ solo «casi».
   vuelve a usar. Sin nada que validar no deja rastro; si valida o falla, queda
   en el registro de «Validación de pagos» como un reporte más, con el asunto
   «Recruce: comprobantes cargados después de su reporte».
+- **El buzón callado se avisa (owner, 14-11-2026: «si, agrégalo»).** El
+  reporte de Yape y los rótulos de Olva llegan por el mismo buzón de Outlook,
+  vía Make. Del 12-11 al 13-11 la conexión de Make con Outlook falló (502, 503
+  y 504) y Make espació sus reintentos hasta uno por día, sin avisar a nadie:
+  Kapta no tuvo un reporte de Yape del 09-11 al 13-11. Ahora
+  `/api/cron/inbox-watch` mira, a las 8:23, 13:23 y 18:23 de Lima (nunca de
+  noche), cuándo llegó lo último de cada fuente: **Yape** avisa pasadas
+  **30 horas** sin un reporte (de noche y en domingo pasan hasta 24) y **Olva**
+  pasadas **60** sin un rótulo (de sábado a lunes, hasta 52). Los recruces no
+  cuentan como correo. El aviso va al Telegram de las tiendas, una vez por chat,
+  y dice qué fuente calla desde cuándo y cómo se arregla: en Make, Connections →
+  «Outlook monono.pe (rótulos Olva)» → Reauthorize y «Run once» en el escenario.
+  Se repite en cada vuelta mientras siga callado. Sin nada recibido nunca no
+  avisa (`lib/inbox-watch.ts`).
 - **La hora leída 12 h antes.** Hasta el 04-10-2026 el lector perdía el
   «p. m.» de Yape (§12, Pagos). Al comprobante con hora de mañana se le prueba
   también la misma hora por la tarde; sigue exigiendo minuto, monto, la

@@ -105,7 +105,9 @@ describe("vercel.json", () => {
     //     (0326, MOM §41.11, 09-11-2026).
     // 38: el recruce de Yape con los movimientos ya guardados, cada media hora
     //     (MOM §16.2, 13-11-2026).
-    expect(crons).toHaveLength(38);
+    // 39: el vigía del buzón (Yape y Olva por correo), a las 8:23, 13:23 y
+    //     18:23 de Lima (MOM §16.2, 14-11-2026).
+    expect(crons).toHaveLength(39);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

@@ -118,6 +118,15 @@ Sin migración. «Retornando» pasa a «Retornados». Nueva pestaña «Por retor
 globo del menú. Cada pedido En agencia tiene «Copiar mensaje» con el aviso
 «YA LLEGÓ a la agencia». Verificar ~48 por retornar y el texto copiado.
 
+### 14-11-2026 · Aviso de buzón callado: Yape y Olva (sin migración, MOM §16.2)
+
+- Nuevo cron `/api/cron/inbox-watch` (`23 13,18,23 * * *`, en vercel.json:
+  8:23, 13:23 y 18:23 de Lima). Si el último reporte de Yape tiene más de 30 h
+  o el último rótulo de Olva más de 60 h, avisa por el Telegram de las tiendas
+  (una vez por chat) y responde 503.
+- Verificar: `GET /api/cron/inbox-watch?dry=1` (con el secreto del cron)
+  responde el estado de cada fuente sin mandar nada.
+
 ### 13-11-2026 · Yape: el recruce con los movimientos ya guardados (sin migración, MOM §16.2)
 
 - Nuevo cron `/api/cron/yape-rematch` (`17,47 * * * *`, en vercel.json): cruza
