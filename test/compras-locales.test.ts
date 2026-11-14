@@ -700,14 +700,13 @@ describe("la migración 0343", () => {
     expect(sql).not.toMatch(/security definer/i);
   });
 
-  it("la prueba de la base corre en verify-db y DEPLOY.md lleva la 0343 arriba, antes del código", () => {
+  it("la prueba de la base corre en verify-db y DEPLOY.md lleva la entrada de la 0343, antes del código", () => {
     expect(read("scripts/verify-db.sh")).toContain('$PSQL -f "$ROOT/scripts/sql/compras_locales_smoke.sql"');
     const deploy = read("DEPLOY.md");
-    // Ya no es la primera entrada (encima va la de la lista por páginas y el
-    // selector de productos, sin migración); sigue siendo la de la 0343.
-    const at = deploy.indexOf("### 14-11-2026 · Compras locales");
-    expect(at).toBeGreaterThan(-1);
-    const entry = deploy.slice(at, deploy.indexOf("\n### ", at + 4));
+    // Ya no es la primera entrada (encima va la de GF Courier por API, 0344, MOM §29.17): se busca por su título.
+    const first = deploy.indexOf("### 14-11-2026 · Compras locales");
+    expect(first).toBeGreaterThan(-1);
+    const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
     expect(entry).toContain("0343_compras_locales_entregas");
     expect(entry).toMatch(/ANTES del código/);
   });

@@ -525,6 +525,17 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     scope: "none",
     control: { kind: "readonly", how: "Se pausa en el escenario de Make que reenvía el reporte. No tiene interruptor en Kapta." },
   },
+  {
+    key: "inbox_watch",
+    group: "sin_interruptor",
+    name: "Aviso de buzón callado",
+    what:
+      "A las 8:23, 13:23 y 18:23 avisa por Telegram si no llega un reporte de Yape en 30 horas o un rótulo de Olva en 60: suele ser la conexión de Make con Outlook caída.",
+    effect: "Solo informa",
+    scope: "store",
+    control: { kind: "readonly", how: "Va a toda tienda con Telegram configurado. Se corta quitando el Telegram de la tienda." },
+    link: STORE_SETTINGS("telegram"),
+  },
 ];
 
 export type SwitchableEntry = AutomationEntry & { control: Extract<AutomationControl, { kind: "org_table" | "store_column" }> };

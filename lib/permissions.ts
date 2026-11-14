@@ -99,6 +99,9 @@ export const PERMISSIONS = [
   // Aliclik: crear una guía es una escritura hacia AFUERA e irreversible, con
   // ventanas de cancelación estrictas. Por eso tiene permiso propio y no cae
   // bajo `master.edit`.
+  // GF Courier por API (MOM §29.17): misma razón que Aliclik, escritura hacia afuera.
+  "gf_courier.create_guide",
+  "gf_courier.cancel_guide",
   "aliclik.create_guide",
   "aliclik.cancel_guide",
   "aliclik.manage_catalog",
@@ -246,6 +249,8 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "purchases.money": "Montos de compras",
   "purchases.receive": "Recepción de compras",
   "logistics.manage": "Administrar Grupo GF",
+  "gf_courier.create_guide": "Crear guías de GF Courier",
+  "gf_courier.cancel_guide": "Anular guías de GF Courier",
   "aliclik.create_guide": "Crear guías de Aliclik",
   "aliclik.cancel_guide": "Anular guías de Aliclik",
   "aliclik.manage_catalog": "Editar el catálogo de Aliclik",
@@ -306,6 +311,8 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "purchases.money": "Ver y cargar en Compras costos por unidad, costos repartidos, pagos, precios de venta y proformas.",
   "purchases.receive": "Abrir Compras sin montos, registrar lo que llegó a la bodega de Lima y subir sus fotos.",
   "logistics.manage": "Tarifas, clientes, pago de motorizados y exceso de efectivo del Grupo GF.",
+  "gf_courier.create_guide": "Crear la guía de contraentrega en GF Courier. Sale de verdad hacia GF.",
+  "gf_courier.cancel_guide": "Anular una guía de GF Courier antes de su preparación.",
   "aliclik.create_guide": "Crear la guía en Aliclik. Sale de verdad hacia el courier.",
   "aliclik.cancel_guide": "Anular una guía de Aliclik dentro del plazo que da el courier.",
   "aliclik.manage_catalog": "Vincular cada producto de la tienda con el suyo en Aliclik. Sin eso no se crean guías.",
@@ -376,6 +383,8 @@ export const PERMISSION_AREAS = [
     label: "Guías y couriers",
     permissions: [
       "aliclik.create_guide",
+      "gf_courier.create_guide",
+      "gf_courier.cancel_guide",
       "tanders.create_guide",
       "shalom.create_guide",
       "aliclik.cancel_guide",
@@ -648,6 +657,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "shalom.register_payment",
     "shalom.reveal_pickup_key",
     "aliclik.create_guide",
+    "gf_courier.create_guide",
     "tanders.create_guide",
     "shalom.create_guide",
     // Gestionar la novedad es gestión de venta: la misma persona que llamaría a
@@ -704,6 +714,7 @@ export const FUNCTIONAL_ROLES = [
       "shalom.register_payment",
       "shalom.reveal_pickup_key",
       "aliclik.create_guide",
+      "gf_courier.create_guide",
       "tanders.create_guide",
       "shalom.create_guide",
       "swayp.solve_novelty",
@@ -745,6 +756,7 @@ export const FUNCTIONAL_ROLES = [
       "stock.manage",
       "closure.return",
       "aliclik.create_guide",
+      "gf_courier.create_guide",
       "tanders.create_guide",
       "shalom.create_guide",
     ],

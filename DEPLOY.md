@@ -1,3 +1,28 @@
+### 14-11-2026 · GF Courier por API: reemplaza al reparto propio (0344, MOM §29.17)
+
+**Migración 0344_gf_courier_api: ya aplicada en producción (14-11-2026), antes del código.** Se aplicó con el nombre provisional 0342_gf_courier_api, que chocó con la 0342 de Compras entrada directo en `main`; el contenido es el mismo e idempotente, así que correr `db/apply.sql` otra vez no cambia nada. Agrega a `stores`
+`gf_courier_api_token_enc`, `gf_courier_webhook_secret_enc` y `gf_courier_enabled` (por defecto `false`), y crea
+`gf_order_requests` (intención antes del POST, una viva por pedido) y `gf_webhook_events` (append-only, con
+`reject_mutation()`). Sin `drop`; no toca datos; se puede correr otra vez. Sin ella, el panel y la configuración
+de GF no funcionan; «Tomar» de Grupo GF se comporta como antes.
+
+Variables nuevas en Vercel (Production):
+- `GF_COURIER_WRITE_ENABLED=true`, la llave global; sin ella el panel explica que está apagado;
+- `GF_COURIER_API_BASE`, opcional; por defecto `https://gf-courier.vercel.app`.
+
+Cron nuevo: `/api/cron/gf-reconcile` cada 20 minutos (`vercel.json`), con `CRON_SECRET`.
+
+Por tienda, en Configuración → Conexiones → GF Courier: pegar el token que emite GF (credencial con
+`shipments:read`, `shipments:write`, `catalogue:read`, `inventory:read` y `webhooks:manage`), «Probar conexión»,
+«Conectar webhook» y activar «Crear guías en GF Courier». Permisos nuevos: `gf_courier.create_guide` y
+`gf_courier.cancel_guide`; van con los roles que ya crean guías de Aliclik.
+
+Verificar con un pedido de prueba:
+1. «Crear guía en GF Courier» en el Master: aparece la guía `GF…` con su costo.
+2. Al anularla, la salida queda `anulado`.
+3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
+4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
+
 ### 14-11-2026 · Compras: catálogo vivo en «Agregar producto», lista por páginas, «Comprado» en soles y quitar con confirmación (sin migración, MOM §45.1, §45.2, §45.7, §45.8, §45.16)
 
 **Sin migración, sin crons ni variables nuevas.** Se despliega y ya está.
@@ -268,6 +293,15 @@ Sin migración. «Retornando» pasa a «Retornados». Nueva pestaña «Por retor
 (En agencia: Shalom 20+ días u Olva por vencer en 3) cuyo número se suma al
 globo del menú. Cada pedido En agencia tiene «Copiar mensaje» con el aviso
 «YA LLEGÓ a la agencia». Verificar ~48 por retornar y el texto copiado.
+
+### 14-11-2026 · Aviso de buzón callado: Yape y Olva (sin migración, MOM §16.2)
+
+- Nuevo cron `/api/cron/inbox-watch` (`23 13,18,23 * * *`, en vercel.json:
+  8:23, 13:23 y 18:23 de Lima). Si el último reporte de Yape tiene más de 30 h
+  o el último rótulo de Olva más de 60 h, avisa por el Telegram de las tiendas
+  (una vez por chat) y responde 503.
+- Verificar: `GET /api/cron/inbox-watch?dry=1` (con el secreto del cron)
+  responde el estado de cada fuente sin mandar nada.
 
 ### 13-11-2026 · Yape: el recruce con los movimientos ya guardados (sin migración, MOM §16.2)
 

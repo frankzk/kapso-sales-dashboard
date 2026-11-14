@@ -33,6 +33,8 @@ import {
   type StoreMetaAdAccount,
 } from "@/lib/meta-marketing";
 import { metaInsightsRange, syncMetaInsightsHistory } from "@/lib/meta-insights-sync";
+import { gfApiBase, gfCourier } from "@/lib/gf-courier";
+import { loadGfStore } from "@/lib/gf-courier-guide";
 import { listProducts } from "@/lib/aliclik";
 import { loadSkuCatalogSource, syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { catalogSkusPhrase } from "@/lib/catalog-source";
@@ -222,6 +224,8 @@ export async function updateStore(
     meta_access_token: get("meta_access_token"),
     aliclik_api_token: get("aliclik_api_token"),
     aliclik_enabled: get("aliclik_enabled"),
+    gf_courier_api_token: get("gf_courier_api_token"),
+    gf_courier_enabled: get("gf_courier_enabled"),
     tanders_email: get("tanders_email"),
     tanders_password: get("tanders_password"),
     tanders_origin_address: get("tanders_origin_address"),
@@ -547,6 +551,50 @@ export async function testAliclikConnection(
   return {
     error: `Ninguna de las dos salidas llegó a ${base}.\n· Directa (AWS): ${label(direct)}\n· Edge (otra red): ${label(edge)}`,
   };
+}
+
+/**
+ * GF Courier (MOM §29.17): comprueba el token con GET /v1/me. Solo lectura.
+ */
+export async function testGfCourierConnection(_prev: SettingsState, formData: FormData): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const store = await loadGfStore(ctx.admin, storeId);
+  if (!store?.token) return { error: "Esta tienda no tiene token de GF Courier." };
+  const me = await gfCourier.me({ apiToken: store.token });
+  if (!me.ok) return { error: `GF Courier respondió: ${me.error.message}` };
+  const missing = ["shipments:write", "shipments:read", "catalogue:read", "webhooks:manage"].filter((p) => !me.data.permissions.includes(p));
+  return missing.length
+    ? { error: `El token es válido (${me.data.business_name ?? me.data.merchant_id}) pero le faltan permisos: ${missing.join(", ")}. Pide a GF una credencial con ellos.` }
+    : { notice: `Conexión correcta con GF Courier · comercio ${me.data.business_name ?? me.data.merchant_id}.` };
+}
+
+/**
+ * GF Courier: acuña el secreto de firma, registra el webhook de esta tienda en GF (POST /v1/webhooks) y guarda el
+ * secreto cifrado. El secreto nunca se muestra: GF y Kapta lo comparten sin que nadie lo copie.
+ */
+export async function connectGfCourierWebhook(_prev: SettingsState, formData: FormData): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const store = await loadGfStore(ctx.admin, storeId);
+  if (!store?.token) return { error: "Guarda primero el token de GF Courier." };
+  const secret = `whsec_${randomBytes(32).toString("hex")}`;
+  const url = `${env.siteUrl()}/api/webhooks/gf/${storeId}`;
+  const res = await fetch(`${gfApiBase()}/v1/webhooks`, {
+    method: "POST", signal: AbortSignal.timeout(20_000), redirect: "error",
+    headers: { Authorization: `Bearer ${store.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ url, events: ["order.*"], secret }),
+  }).catch(() => null);
+  if (!res?.ok) {
+    const body = res ? await res.json().catch(() => null) as { error?: { message?: string }; message?: string } | null : null;
+    return { error: `No se pudo registrar el webhook en GF: ${body?.error?.message ?? body?.message ?? (res ? `HTTP ${res.status}` : "sin conexión")}` };
+  }
+  const { error } = await ctx.admin.from("stores").update(buildStoreUpdate({ gf_courier_webhook_secret: secret })).eq("id", storeId);
+  if (error) return { error: `GF registró el webhook, pero no se pudo guardar el secreto: ${error.message}. Vuelve a pulsar «Conectar webhook».` };
+  revalidatePath(`/dashboard/${storeId}/settings`);
+  return { notice: `Webhook de GF Courier conectado: ${url}` };
 }
 
 /** Sincroniza el catálogo de Aliclik bajo demanda (además del cron horario). */
