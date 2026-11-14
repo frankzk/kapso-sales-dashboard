@@ -26944,6 +26944,14 @@ de una compra local (§45.12), los tres **códigos de trazabilidad** de una
 importación (§45.15), el **tratamiento del IGV** de cada costo (sin IGV,
 incluye IGV o inafecto) y **editar** un costo o un pago (§45.3).
 
+**14-11-2026, sin migración:** «Agregar producto → De las tiendas» lee el
+**catálogo vivo** de cada tienda (§45.1); **quitar** pide un segundo paso en la
+misma fila y los archivos se eligen con un botón en castellano (§45.16); la
+lista va **por páginas** con cifras contadas en la base (§45.2); y lo
+**comprado** de cada proveedor y su ranking van en una **base comparable**,
+soles si se puede (§45.7, §45.8). Siguen fuera, por decisión del owner: los
+traslados, el correo diario y la consulta automática a la paquetera.
+
 ### 45.1 La importación
 
 - **Código** `IMP-<año>-<NNN>` (3 dígitos como mínimo), único por organización:
@@ -26972,14 +26980,38 @@ incluye IGV o inafecto) y **editar** un costo o un pago (§45.3).
   USD en una importación, **soles** en una compra local, §45.12) y precio de
   venta (S/). Un producto con entregas no se quita (§45.14).
 - **Agregar producto desde las tiendas** (14-11-2026, con «Compras»): «De las
-  tiendas» busca por nombre o SKU en el catálogo de la organización —el mismo
-  de «Leer con IA» (§45.10): los SKU de Costos de productos y los vistos en
-  pedidos (`org_shopify_products`), uno por SKU, los más pedidos primero— y al
-  elegir llena nombre y SKU y la tienda **solo** si el SKU se vio siempre en la
-  misma; lo demás (cantidad, peso, costo, precio) se escribe. «Producto nuevo»
-  sigue siendo todo a mano. Se guarda con la misma acción y validaciones que a
-  mano (`addImportItem`). El catálogo se lee en el servidor solo con «Compras»
-  y no trae montos (`buildProductPicker` en `lib/compras-ia.ts`).
+  tiendas» busca por nombre o SKU (sin tildes ni mayúsculas: «bóxer» =
+  «boxer») en el **catálogo vivo de cada tienda** de la organización que la
+  persona ve —el publicado de WooCommerce o el activo de Shopify, la misma
+  fuente de Envíos → «Catálogo de productos» (`loadSkuCatalogSource` +
+  `loadShopifySkuDetails`, §38.12)— y, para los SKU que no están en ningún
+  catálogo (p. ej. descontinuados), en lo conocido por el historial: los SKU de
+  Costos de productos y los vistos en pedidos (`org_shopify_products`), el
+  catálogo de «Leer con IA» (§45.10). Corrección del owner (14-11-2026, «no
+  aparece este producto»): antes salía solo del historial y un producto que
+  todavía no se vendió —«Bóxer Confort – Comodidad que se Mueve Contigo (Pack
+  de 4)», tallas 4XL/5XL/6XL, de Aurela en WooCommerce— no aparecía.
+  - Un producto del catálogo vivo es uno por **SKU y tienda**, con la tienda de
+    donde salió y el nombre «título – variante» («Default Title» no es
+    variante); al elegirlo llena nombre, SKU y esa tienda. Del historial, la
+    tienda **solo** si el SKU se vio siempre en la misma.
+  - Los pedidos de cada SKU salen de `org_shopify_products` (0 si nunca se
+    vendió); la lista va de más a menos pedidos y, a igual cifra, por nombre.
+  - Una **variante sin SKU** se muestra marcada «Sin SKU»: se puede agregar,
+    pero «Pasar a Costos» no la pasa (§45.5), y el formulario lo dice.
+  - Si el catálogo de una tienda no se puede leer, el selector lo dice («No se
+    pudo leer el catálogo de <tienda>; se muestran los productos vendidos»; a
+    medias, «… se leyó en parte; se completa con los productos vendidos»).
+  - Se pide **al abrir «Agregar producto»** (`loadImportPicker`, solo con
+    «Compras» en la organización, sin montos), no con cada vista del detalle;
+    cada tienda leída bien se guarda 5 minutos en memoria. El historial de
+    pedidos ya llega por `org_shopify_products`: no se relee `orders` por
+    tienda. Tope de **3.000** productos (los más pedidos); si se corta, se dice
+    y queda «Producto nuevo».
+  - Lo demás (cantidad, peso, costo, precio) se escribe. «Producto nuevo»
+    sigue siendo todo a mano. Se guarda con la misma acción y validaciones que
+    a mano (`addImportItem`). Código: `buildProductPicker` en
+    `lib/compras-ia.ts` (puro) y `lib/compras-catalogo.ts` (la lectura).
 - **Foto del producto** (con «Compras»): se agrega al crearlo o **después**,
   desde el detalle («Foto», «Cambiar», «Quitar»), por la misma subida al
   bucket (`items/`, solo JPG, PNG o WEBP, tipo y tamaño de Storage) y se ve
@@ -27034,6 +27066,20 @@ incluye IGV o inafecto) y **editar** un costo o un pago (§45.3).
   **Recibidas** (Recibido, Ingresado al inventario, Cerrado), **Canceladas** y
   **Todas**. No se elimina una importación: se cancela. La lista filtra por
   tipo (`?tipo=importacion|local`) y una compra local lleva la chapa «Local».
+- **La lista por páginas** (14-11-2026, sin migración; antes leía como mucho
+  500 y contaba sobre ellas). La pestaña, el proveedor y el tipo filtran **en
+  la base**. «Recibidas», «Canceladas» y «Todas» llegan **de a 100**, la más
+  reciente primero (`created_at` y, a igual instante, `id`), y **«Ver más»**
+  trae las siguientes desde la última mostrada (keyset, no desplazamiento: una
+  compra creada mientras tanto no repite ni salta filas; `loadMoreImports`
+  vuelve a pedir el permiso y valida el cursor). «Activas» y las píldoras de
+  excepción se leen **completas** (son las que están en curso: el resumen
+  «N activas · … en camino» y las alertas las cuentan todas). Las cifras de las
+  **tarjetas de estado**, de la píldora del tipo y de cada **proveedor** se
+  cuentan en la base (conteos), nunca sobre la página cargada; el pie dice «Se
+  muestran 100 de 340». Código: `lib/compras-list.ts` (puro),
+  `loadImportListPage`, `loadActiveImportList` y `loadImportListCounts` en
+  `lib/compras-server.ts`.
 
 ### 45.3 Costo aterrizado (`landedCosts`)
 
@@ -27249,8 +27295,14 @@ periodo de la primera el mismo día.
 - **Tabla**: nombre y país; condiciones de pago; contacto, WhatsApp y correo;
   **n.º de importaciones** (enlace a la lista filtrada `?proveedor=<id>`, que
   muestra todas sus importaciones) con cuántas son compras y la fecha de la
-  última; «Tarda», «A tiempo», «Faltantes y dañadas», «Comprado (USD)» (con
-  soles de las que tienen tipo de cambio) y «Le compras».
+  última; «Tarda», «A tiempo», «Faltantes y dañadas», «Comprado» (en una base
+  comparable, abajo) y «Le compras».
+- **Borrar** pide un segundo paso en la misma fila («¿Borrar el proveedor
+  «…»? Sí, borrar · No», §45.16).
+- **Sin historial de cambios del proveedor** (pendiente): el historial
+  append-only de Compras (`import_events`) es de cada importación (lleva
+  `import_id`) y no hay otro donde anotarlo sin una migración; editar un
+  proveedor no deja hecho todavía.
 
 **Estadísticas** (`supplierStats`, `lib/compras-reportes.ts`; referencia
 §6.17). **Una compra es una importación que no es cotización ni cancelada**;
@@ -27263,7 +27315,7 @@ ella, el día de Lima de la creación.
 | Tarda | Promedio de días del pedido a la llegada, de las **compras que llegaron** (solo diferencias ≥ 0). |
 | A tiempo | De las compras que llegaron **y tenían llegada estimada**, la parte con llegada ≤ estimada. **Rojo si < 70 %.** |
 | Faltantes y dañadas | (Σ max(0, pedidas − recibidas) + Σ dañadas) ÷ Σ pedidas, en las **líneas contadas** de las compras. **Rojo si ≥ 3 %.** |
-| Comprado (USD) | Σ costo aterrizado (§45.3) de las compras. Solo con «Montos de compras». Una compra con costos en soles y sin tipo de cambio no entra en los USD y se cuenta aparte («N fuera de los USD: falta el tipo de cambio»). |
+| Comprado | Σ costo aterrizado (§45.3) de las compras, en **una** moneda (`supplierBought`): en **soles** si todas se pueden llevar a soles (los soles tal cual y los USD × el tipo de cambio de **su** importación: un laboratorio local todo en soles no necesita tipo de cambio); si no, en **USD** si todas se pueden llevar a USD; si ninguna de las dos alcanza a todas, en la que alcanza a más (a igual cantidad, soles) y se dice cuántas quedan fuera («+N sin tipo de cambio, fuera del total»). El equivalente en la otra moneda va debajo **solo** si todas tienen con qué convertir; si no, «Sin US$: N sin tipo de cambio». Sin ninguna valorable, «Falta el tipo de cambio». Nunca mezcla monedas. Solo con «Montos de compras». |
 | Le compras | Los **3** productos con más unidades pedidas en las compras. |
 
 Un producto es el mismo entre importaciones si tiene **el mismo SKU en la misma
@@ -27299,7 +27351,16 @@ soles. En soles, los montos en soles entran tal cual.
   producto en una importación: Σ costo ÷ Σ buenas). Último, anterior y **cambio =
   último ÷ anterior − 1**: **rojo si sube más de 2 %, verde si baja más de 2 %**;
   historial por importación con su fecha, buenas y costo.
-- **Ranking de proveedores** por monto comprado, con su parte del total.
+- **Ranking de proveedores** por monto comprado, con su parte del total, en
+  **una sola moneda para todos** (`supplierRanking`, 14-11-2026: antes solo en
+  USD, y un laboratorio local todo en soles y sin tipo de cambio no aparecía):
+  **soles** si todas las compras de todos se pueden llevar a soles; si no,
+  **USD** si todas se pueden llevar a USD (lo de antes); si ninguna de las dos
+  alcanza a todas, la que alcanza a más compras (a igual cantidad, soles). Lo
+  que queda fuera por falta del tipo de cambio se dice: cuántas compras y qué
+  proveedores no tienen ninguna comparable; en la fila, «+N sin tipo de
+  cambio». El equivalente en la otra moneda, solo para quien tiene todas sus
+  compras convertibles.
 
 Las cuentas son puras (`lib/compras-reportes.ts`) y usan `landedCosts` (§45.3),
 no una copia. Las lecturas (`loadReportImports`) van por organización, de a 1000
@@ -27342,7 +27403,9 @@ Botón **Excel** en el detalle, para quien puede ver la importación:
   de cambio dice **«Falta el tipo de cambio»** en la celda.
 
 Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
-(estadísticas y reportes, puro), `lib/compras-server.ts` (lecturas),
+(estadísticas y reportes, puro), `lib/compras-list.ts` (la lista por páginas,
+puro), `lib/compras-server.ts` (lecturas), `lib/compras-catalogo.ts` (el
+catálogo vivo del selector de productos),
 `app/dashboard/compras/` (lista, detalle, proveedores, reportes y acciones),
 `components/compras/` (con `subnav.tsx` y `suppliers.tsx`),
 `app/api/compras/` (documento, foto y Excel),
@@ -27354,7 +27417,9 @@ Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
 `test/compras.test.ts`, `test/compras-actions.test.ts`,
 `test/compras-reportes.test.ts`, `test/compras-proveedores.test.ts`,
 `test/compras-monedas.test.ts`, `test/compras-monedas-acciones.test.ts`,
-`test/compras-locales.test.ts`, `scripts/sql/compras_smoke.sql`,
+`test/compras-locales.test.ts`, `test/compras-lista.test.ts`,
+`test/compras-picker.test.ts`, `test/compras-confirmar-archivos.test.ts`,
+`scripts/sql/compras_smoke.sql`,
 `scripts/sql/compras_proveedores_smoke.sql`,
 `scripts/sql/compras_monedas_smoke.sql` y
 `scripts/sql/compras_locales_smoke.sql`.
@@ -27521,7 +27586,9 @@ Excel, reportes y «Pasar a Costos».
 - **Reportes y proveedores** (§45.7, §45.8): una compra local entra en los
   totales en soles tal cual y en los de USD solo con su tipo de cambio (si no,
   se cuenta aparte como «Falta el tipo de cambio»); el cambio del costo por
-  unidad se mide en soles si ninguna de las dos tiene tipo de cambio.
+  unidad se mide en soles si ninguna de las dos tiene tipo de cambio. Su
+  «Comprado» y el ranking de proveedores van en soles cuando todas las compras
+  se pueden llevar a soles, así que el laboratorio aparece sin tipo de cambio.
 
 ### 45.13 Cortesía
 
@@ -27603,3 +27670,35 @@ completados para poder hacer toda la trazabilidad de los costos»:
   organización, el detalle lo avisa; no bloquea.
 - Una **compra local** no los usa (se ocultan; su «N.º de orden o cotización»
   es libre).
+
+### 45.16 Quitar con un segundo paso y elegir archivos en castellano
+
+Sin migración (14-11-2026). Solo la pantalla: las reglas y los permisos de
+cada acción no cambian.
+
+- **Quitar pide confirmación en la misma fila**, sin `window.confirm` ni otro
+  diálogo del navegador: un producto, su foto, un costo, un pago, un documento
+  y una entrega en el detalle, y borrar un proveedor (§45.7). El primer clic en
+  «Quitar» abre, dentro de esa fila y a todo su ancho, «¿Quitar «AFORO
+  FÍSICO»? Sí, quitar · No» con lo que pasa si hace falta decirlo (una entrega:
+  «Sus unidades dejan de contar; sus fotos se quedan en Documentos»; un
+  producto con un costo «a un producto»: «Su costo … pasa a repartirse por
+  valor», §45.3; un pago con comprobante: «Su comprobante se queda en
+  Documentos»). Solo «Sí, quitar» hace la acción. **Teclado y foco**: al abrir,
+  el foco va a «No» (dos Enter seguidos no quitan nada); «No» y Escape cierran
+  y lo devuelven al botón de la fila; «Sí, quitar» lo deja en la tarjeta de la
+  sección. El botón lleva `aria-expanded` y `aria-controls`; la pregunta es un
+  grupo con su nombre. Una fila a la vez por tarjeta. Código:
+  `components/compras/confirm-remove.tsx`.
+- **Elegir archivos en castellano**: el input nativo escribe «Choose Files / No
+  file chosen» en el idioma del navegador. En los documentos, las fotos de una
+  entrega, el comprobante de un pago y la foto de un producto nuevo se ve un
+  botón **«Elegir archivos»** («Elegir archivo» si es uno) y, al lado, los
+  nombres elegidos o **«Ningún archivo»**. El input nativo sigue siendo el
+  control: oculto a la vista (no `display: none`), en el orden del tabulador,
+  ligado a la etiqueta del campo y al botón (su nombre) y a lo elegido (su
+  descripción); el botón es su `<label>` y lleva su anillo de foco. «Foto /
+  Cambiar» de un producto y «Agregar fotos» de una entrega ya eran botones de
+  texto y siguen igual. «Leer con IA» lee un documento ya subido: no tiene
+  selector propio. Código: `components/compras/file-picker.tsx`.
+

@@ -12,8 +12,10 @@ export const dynamic = "force-dynamic";
 
 // Proveedores (MOM §45.7). Ver: «Compras» o «Montos de compras» en la
 // organización. Crear, editar y borrar: «Compras» (las acciones lo vuelven a
-// pedir). «Comprado (USD)»: solo con «Montos de compras»; sin él, el servidor
-// ni lee los montos (`loadReportImports(orgId, perms.canMoney)`).
+// pedir). «Comprado»: solo con «Montos de compras»; sin él, el servidor ni lee
+// los montos (`loadReportImports(orgId, perms.canMoney)`). En soles si todas las
+// compras del proveedor se pueden llevar a soles; si no, en USD
+// (`supplierBought`, MOM §45.7).
 
 export default function ProveedoresPage({ searchParams }: { searchParams: Promise<{ org?: string }> }) {
   return (

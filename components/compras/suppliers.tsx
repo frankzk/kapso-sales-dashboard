@@ -5,19 +5,20 @@
 // compras». Crear, editar y borrar solo con «Compras» (y el servidor lo vuelve
 // a pedir).
 
-import { useState, useTransition } from "react";
+import { Fragment, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { SECTION_CARD, SectionHead } from "@/components/ops-ui";
 import { IconPlus, IconWhatsApp } from "@/components/icons";
 import { ComprasEmpty } from "@/components/compras/chrome";
-import { formatDmy, whatsappShareUrl, type SupplierInput } from "@/lib/compras";
-import { onTimeIsLow, shortageIsHigh, type SupplierStats } from "@/lib/compras-reportes";
+import { MISSING_FX, formatDmy, whatsappShareUrl, type SupplierInput } from "@/lib/compras";
+import { onTimeIsLow, shortageIsHigh, supplierBought, type SupplierStats } from "@/lib/compras-reportes";
 import type { SupplierRow } from "@/lib/compras-server";
 import { createSupplier, deleteSupplier, updateSupplier, type ComprasActionState } from "@/app/dashboard/compras/actions";
 import { BTN_GHOST, BTN_PRIMARY, BTN_REMOVE, BTN_SECONDARY_SM, FIELD, Feedback, Field, TEXTAREA } from "@/components/compras/header-form";
 import { fmtInt, fmtPct, fmtPen, fmtUsd } from "@/components/compras/format";
+import { ConfirmRemove, removeTriggerProps } from "@/components/compras/confirm-remove";
 
 export interface SupplierViewRow {
   supplier: SupplierRow;
@@ -118,6 +119,8 @@ export function SuppliersView({
   const [form, setForm] = useState<FormState>(null);
   const [feedback, setFeedback] = useState<ComprasActionState | null>(null);
   const [pending, start] = useTransition();
+  // «Borrar» pregunta en la misma fila (`ConfirmRemove`): sin diálogo del navegador.
+  const [removing, setRemoving] = useState<string | null>(null);
 
   const done = (res: ComprasActionState) => {
     setForm(null);
@@ -126,7 +129,7 @@ export function SuppliersView({
   };
 
   const remove = (s: SupplierRow) => {
-    if (!window.confirm(`¿Borrar el proveedor «${s.name}»?`)) return;
+    setRemoving(null);
     start(async () => {
       const res = await deleteSupplier(s.id);
       setFeedback(res);
@@ -134,7 +137,9 @@ export function SuppliersView({
     });
   };
 
-  const actions = (s: SupplierRow, stats: SupplierStats) => (
+  // La tabla (desde 1280 px) y la lista (debajo) pintan las mismas filas: cada
+  // una con su propio id, para que el foco vuelva al botón que se ve.
+  const actions = (s: SupplierRow, stats: SupplierStats, view: "tabla" | "lista") => (
     <div className="flex gap-1">
       <button type="button" className={BTN_SECONDARY_SM} disabled={pending} onClick={() => setForm({ mode: "edit", supplier: s })}>
         Editar
@@ -144,12 +149,28 @@ export function SuppliersView({
         className={BTN_REMOVE}
         disabled={pending || stats.imports > 0}
         title={stats.imports > 0 ? "Tiene importaciones: no se puede borrar" : undefined}
-        onClick={() => remove(s)}
+        {...removeTriggerProps(`proveedor-${view}-${s.id}`, removing === s.id)}
+        aria-label={`Borrar el proveedor ${s.name}`}
+        onClick={() => setRemoving((r) => (r === s.id ? null : s.id))}
       >
         Borrar
       </button>
     </div>
   );
+
+  const confirmBar = (s: SupplierRow, stats: SupplierStats, view: "tabla" | "lista", className?: string) =>
+    canManage && removing === s.id && stats.imports === 0 ? (
+      <ConfirmRemove
+        id={`proveedor-${view}-${s.id}`}
+        className={className}
+        question={`¿Borrar el proveedor «${s.name}»?`}
+        confirmLabel="Sí, borrar"
+        pending={pending}
+        onCancel={() => setRemoving(null)}
+        onConfirm={() => remove(s)}
+      />
+    ) : null;
+  const columns = 7 + (canMoney ? 1 : 0) + (canManage ? 1 : 0);
 
   const importsLink = (s: SupplierRow, stats: SupplierStats) =>
     stats.imports ? (
@@ -167,7 +188,7 @@ export function SuppliersView({
         <SupplierForm key={form.mode === "edit" ? form.supplier.id : "new"} orgId={orgId} supplier={form.mode === "edit" ? form.supplier : null} onDone={done} />
       )}
 
-      <section aria-label="Proveedores" className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+      <section aria-label="Proveedores" tabIndex={-1} className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line outline-none">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-5">
           <p className="text-[13px] leading-5 tabular-nums text-ink-500">
             {fmtInt(rows.length)} proveedor{rows.length === 1 ? "" : "es"}
@@ -196,7 +217,7 @@ export function SuppliersView({
                   <th className={cn(TH, "w-[6%] text-right")}>Tarda</th>
                   <th className={cn(TH, "w-[7%] text-right")}>A tiempo</th>
                   <th className={cn(TH, "w-[9%] text-right")}>Faltantes y dañadas</th>
-                  {canMoney && <th className={cn(TH, "w-[10%] text-right")}>Comprado (USD)</th>}
+                  {canMoney && <th className={cn(TH, "w-[10%] text-right")}>Comprado</th>}
                   <th className={cn(TH, "pl-3")}>Le compras</th>
                   {canManage && <th className={cn(TH, "w-[136px] pr-5")}>
                     <span className="sr-only">Acciones</span>
@@ -205,7 +226,8 @@ export function SuppliersView({
               </thead>
               <tbody>
                 {rows.map(({ supplier: s, stats }) => (
-                  <tr key={s.id} className="border-b border-line transition-colors duration-150 last:border-0 hover:bg-wash">
+                  <Fragment key={s.id}>
+                  <tr className={cn("transition-colors duration-150 hover:bg-wash", removing === s.id ? "" : "border-b border-line last:border-0")}>
                     <td className={cn(TD, "pl-5")}>
                       <p className="font-medium text-ink-900">{s.name}</p>
                       <p className="truncate text-[13px] text-ink-500">{s.country ?? "Origen sin indicar"}</p>
@@ -253,24 +275,22 @@ export function SuppliersView({
                     </td>
                     {canMoney && (
                       <td className={cn(TD, "text-right tabular-nums")}>
-                        <p className="whitespace-nowrap font-medium text-ink-900">{fmtUsd(stats.boughtUsd ?? 0)}</p>
-                        {(stats.boughtPen ?? 0) > 0 && (
-                          <p className="text-[13px] text-ink-500">
-                            {fmtPen(stats.boughtPen)}
-                            {stats.boughtWithoutFx ? ` · ${stats.boughtWithoutFx} sin tipo de cambio` : ""}
-                          </p>
-                        )}
-                        {/* Costos en soles sin tipo de cambio: no entran en los USD (MOM §45.7). */}
-                        {(stats.boughtUsdWithoutFx ?? 0) > 0 && (
-                          <p className="text-[13px] font-medium text-warn-fg">{stats.boughtUsdWithoutFx} fuera de los USD: falta el tipo de cambio</p>
-                        )}
+                        <Bought stats={stats} />
                       </td>
                     )}
                     <td className={cn(TD, "pl-3")}>
                       <TopProducts stats={stats} />
                     </td>
-                    {canManage && <td className={cn(TD, "py-2 pr-5")}>{actions(s, stats)}</td>}
+                    {canManage && <td className={cn(TD, "py-2 pr-5")}>{actions(s, stats, "tabla")}</td>}
                   </tr>
+                  {removing === s.id && (
+                    <tr className="border-b border-line last:border-0">
+                      <td colSpan={columns} className="px-5 pb-3">
+                        {confirmBar(s, stats, "tabla")}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -287,10 +307,9 @@ export function SuppliersView({
                       </p>
                     </div>
                     {canMoney && (
-                      <p className="shrink-0 text-right text-sm font-medium leading-5 tabular-nums text-ink-900">
-                        {fmtUsd(stats.boughtUsd ?? 0)}
-                        {(stats.boughtUsdWithoutFx ?? 0) > 0 && <span className="block text-[13px] text-warn-fg">{stats.boughtUsdWithoutFx} sin tipo de cambio</span>}
-                      </p>
+                      <div className="max-w-[11rem] shrink-0 text-right text-sm leading-5 tabular-nums">
+                        <Bought stats={stats} />
+                      </div>
                     )}
                   </div>
                   <p className="mt-1 text-[13px] leading-5 tabular-nums text-ink-700">
@@ -330,8 +349,9 @@ export function SuppliersView({
                     </div>
                   )}
                   {canManage && (
-                    <div className="-ml-2.5 mt-2">{actions(s, stats)}</div>
+                    <div className="-ml-2.5 mt-2">{actions(s, stats, "lista")}</div>
                   )}
+                  {confirmBar(s, stats, "lista", "mt-2")}
                 </li>
               ))}
             </ul>
@@ -339,6 +359,40 @@ export function SuppliersView({
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * «Comprado» (MOM §45.7): en soles si todas sus compras se pueden llevar a soles
+ * (un laboratorio local todo en soles no necesita tipo de cambio), si no en USD;
+ * el equivalente en la otra moneda solo si todas tienen con qué convertir, y
+ * cuántas quedan fuera cuando falta el tipo de cambio. Nunca mezcla monedas.
+ */
+function Bought({ stats }: { stats: SupplierStats }) {
+  const v = supplierBought(stats);
+  if (!stats.bought) return DASH;
+  const fmt = v.base === "PEN" ? fmtPen : fmtUsd;
+  const fmtOther = v.base === "PEN" ? fmtUsd : fmtPen;
+  return (
+    <>
+      <p className={cn("whitespace-nowrap font-medium", v.amount == null ? "text-warn-fg" : "text-ink-900")}>{v.amount == null ? MISSING_FX : fmt(v.amount)}</p>
+      {v.other != null && <p className="whitespace-nowrap text-[13px] font-normal text-ink-500">{fmtOther(v.other)}</p>}
+      {v.missingFx > 0 && v.amount != null && (
+        <p className="text-[13px] font-medium text-warn-fg">
+          +{v.missingFx} sin tipo de cambio, fuera del total
+        </p>
+      )}
+      {v.amount == null && (
+        <p className="text-[13px] font-normal text-ink-500">
+          {v.missingFx} compra{v.missingFx === 1 ? "" : "s"}
+        </p>
+      )}
+      {v.amount != null && !v.missingFx && v.otherMissingFx > 0 && (
+        <p className="text-[13px] font-normal text-ink-500">
+          Sin {v.base === "PEN" ? "US$" : "S/"}: {v.otherMissingFx} sin tipo de cambio
+        </p>
+      )}
+    </>
   );
 }
 
