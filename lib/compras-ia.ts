@@ -249,6 +249,8 @@ export interface CatalogEntry {
   sku: string;
   name: string | null;
   storeId: string | null;
+  /** En cuántos pedidos de las tiendas apareció (`org_shopify_products`); los de Costos no traen. */
+  orderCount?: number | null;
 }
 
 export interface CatalogProduct {
@@ -289,6 +291,47 @@ export function buildCatalog(entries: readonly CatalogEntry[]): CatalogProduct[]
     const stores = [...p.stores];
     return { sku: p.sku, name: p.name, storeId: stores.length === 1 ? (stores[0] ?? null) : null };
   });
+}
+
+/** Un producto del selector de «Agregar producto» (MOM §45.1): el del catálogo y en cuántos pedidos salió. */
+export interface PickerProduct extends CatalogProduct {
+  orderCount: number;
+}
+
+/**
+ * El catálogo para elegir un producto a mano en «Agregar producto»: el mismo
+ * `buildCatalog` que usa «Leer con IA» (un producto por SKU, la tienda solo si
+ * el SKU se vio siempre en la misma), con los pedidos sumados por SKU y
+ * ordenado de más a menos pedidos; a igual cifra, por nombre.
+ */
+export function buildProductPicker(entries: readonly CatalogEntry[]): PickerProduct[] {
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    const key = skuKey(e.sku);
+    if (!key) continue;
+    const n = Number(e.orderCount);
+    counts.set(key, (counts.get(key) ?? 0) + (Number.isFinite(n) && n > 0 ? n : 0));
+  }
+  return buildCatalog(entries)
+    .map((p) => ({ ...p, orderCount: counts.get(skuKey(p.sku)) ?? 0 }))
+    .sort((a, b) => b.orderCount - a.orderCount || (a.name ?? a.sku).localeCompare(b.name ?? b.sku, "es"));
+}
+
+/**
+ * Buscar en el selector por nombre o SKU: cada palabra escrita tiene que estar
+ * en el nombre normalizado o en el SKU (sin tildes ni mayúsculas). Conserva el
+ * orden del catálogo (los más pedidos primero).
+ */
+export function searchProductPicker(list: readonly PickerProduct[], query: string, limit = 8): PickerProduct[] {
+  const words = normalizeProductName(query).split(" ").filter(Boolean);
+  if (!words.length) return list.slice(0, limit);
+  const out: PickerProduct[] = [];
+  for (const p of list) {
+    const hay = `${normalizeProductName(p.name)} ${normalizeProductName(p.sku)} ${skuKey(p.sku)}`;
+    if (words.every((w) => hay.includes(w))) out.push(p);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 export const MIN_NAME_MATCH = 6;

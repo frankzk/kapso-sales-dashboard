@@ -26869,6 +26869,15 @@ traslados, enlace automático con el inventario ni el correo diario.
   (opcional; sin tienda, el costo es general de la organización), foto
   opcional, cantidad entera de 1 a 10.000.000, peso por unidad y, con
   «Montos», costo por unidad (USD, 4 decimales) y precio de venta (S/).
+- **Agregar producto desde las tiendas** (14-11-2026, con «Compras»): «De las
+  tiendas» busca por nombre o SKU en el catálogo de la organización —el mismo
+  de «Leer con IA» (§45.10): los SKU de Costos de productos y los vistos en
+  pedidos (`org_shopify_products`), uno por SKU, los más pedidos primero— y al
+  elegir llena nombre y SKU y la tienda **solo** si el SKU se vio siempre en la
+  misma; lo demás (cantidad, peso, costo, precio) se escribe. «Producto nuevo»
+  sigue siendo todo a mano. Se guarda con la misma acción y validaciones que a
+  mano (`addImportItem`). El catálogo se lee en el servidor solo con «Compras»
+  y no trae montos (`buildProductPicker` en `lib/compras-ia.ts`).
 - **Foto del producto** (con «Compras»): se agrega al crearlo o **después**,
   desde el detalle («Foto», «Cambiar», «Quitar»), por la misma subida al
   bucket (`items/`, solo JPG, PNG o WEBP, tipo y tamaño de Storage) y se ve
