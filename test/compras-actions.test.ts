@@ -3,7 +3,8 @@
 //     unidad, precio de venta, tipo de cambio, costos, pagos, documentos con
 //     montos y eventos de dinero.
 //   - El código IMP-<año de Lima>-NNN, con reintento si choca.
-//   - La recepción pasa a Recibido y anota la llegada de hoy en Lima.
+//   - Una entrega que trae todo pasa a Recibido con la llegada del día de la
+//     entrega (0343: la recepción única pasó a entregas, MOM §45.14).
 //   - Quitar un producto no hace desaparecer su costo «a un producto».
 //   - «Pasar a Costos»: con `costs.manage`, en soles a 2 decimales, con la
 //     vigencia de Costos, y dos veces no duplica.
@@ -46,14 +47,15 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { FakeDb } from "./woocommerce-fake-db";
+import { withDeliveryTrigger } from "./compras-entregas-fake";
 import {
   addImportCost,
   addImportPayment,
   createImport,
   pushImportCosts,
   registerImportDocument,
+  registerDelivery,
   removeImportItem,
-  saveReception,
   setImportFx,
   startImportUpload,
   updateImportItem,
@@ -71,7 +73,7 @@ const SUPPLIER = "66666666-6666-4666-8666-666666666666";
 const ALL = ["purchases.manage", "purchases.money", "costs.manage"];
 
 function seed(overrides: { status?: string; arrived_on?: string | null; fx?: number | null } = {}) {
-  h.db = new FakeDb({
+  h.db = withDeliveryTrigger(new FakeDb({
     stores: [{ id: STORE, org_id: ORG }],
     import_suppliers: [{ id: SUPPLIER, org_id: ORG, name: "Yiwu Trading", country: "China", whatsapp: null, notes: null }],
     imports: [
@@ -107,7 +109,9 @@ function seed(overrides: { status?: string; arrived_on?: string | null; fx?: num
       { id: "e2", org_id: ORG, import_id: IMP, kind: "dinero", status: null, note: "Pago registrado: US$ 500.00", by_user: null, at: "2026-11-06T10:00:00Z" },
     ],
     product_costs: [],
-  });
+  }));
+  // Los tres códigos de trazabilidad (MOM §45.15): esta importación ya los tiene.
+  Object.assign(h.db.rows("imports")[0]!, { proforma_number: "PI-2026-0042", platform_order: "2045123456789", tracking_number: "1234567890" });
 }
 
 beforeEach(() => {
@@ -137,8 +141,8 @@ describe("sin «Montos de compras» el dinero no se lee ni se escribe", () => {
 
   it("costos, pagos, tipo de cambio y documentos con montos piden el permiso", async () => {
     h.perms = new Set(["purchases.manage"]);
-    expect((await addImportCost(IMP, { kind: "envio", amountUsd: "10", allocation: "units" })).error).toMatch(/Montos de compras/);
-    expect((await addImportPayment(IMP, { amountUsd: "10", paidOn: "2026-11-01", method: "paypal" })).error).toMatch(/Montos de compras/);
+    expect((await addImportCost(IMP, { kind: "envio", amount: "10", allocation: "units" })).error).toMatch(/Montos de compras/);
+    expect((await addImportPayment(IMP, { amount: "10", paidOn: "2026-11-01", method: "paypal" })).error).toMatch(/Montos de compras/);
     expect((await setImportFx(IMP, "3.8")).error).toMatch(/Montos de compras/);
     expect(await startImportUpload(IMP, { kind: "proforma", contentType: "application/pdf", filename: "p.pdf", size: 10 })).toHaveProperty("error");
     expect(await startImportUpload(IMP, { kind: "invoice", contentType: "application/pdf", filename: "f.pdf", size: 10 })).toHaveProperty("path");
@@ -207,22 +211,27 @@ describe("crear la importación", () => {
   });
 });
 
-describe("recepción", () => {
-  it("guarda lo contado, pasa a Recibido y anota la llegada de hoy en Lima", async () => {
-    const res = await saveReception(IMP, [
-      { itemId: ITEM_A, received: "98", damaged: "2" },
-      { itemId: ITEM_B, received: "50" },
-    ]);
+describe("recepción por entregas (MOM §45.14)", () => {
+  it("una entrega con todo lo esperado pasa a Recibido con la llegada del día de la entrega", async () => {
+    const res = await registerDelivery(IMP, {
+      deliveredOn: limaToday(),
+      lines: [
+        { itemId: ITEM_A, received: "100", damaged: "2" },
+        { itemId: ITEM_B, received: "50" },
+      ],
+    });
     expect(res.notice).toMatch(/Recibido/);
-    expect(h.db.rows("import_items").find((r) => r.id === ITEM_A)).toMatchObject({ received_qty: 98, damaged_qty: 2 });
+    expect(h.db.rows("import_items").find((r) => r.id === ITEM_A)).toMatchObject({ received_qty: 100, damaged_qty: 2 });
     expect(h.db.rows("imports")[0]).toMatchObject({ status: "recibido", arrived_on: limaToday() });
-    expect(events("recepcion").at(-1)!.note).toBe("Recepción: 148 de 150 u. · faltan 2 · 2 dañadas");
+    expect(events("recepcion").at(-1)!.note).toBe(`Entrega registrada del ${limaToday().split("-").reverse().join("/")}: 100 × A (2 dañadas) · 50 × B.`);
     expect(events("status").at(-1)).toMatchObject({ status: "recibido" });
   });
 
-  it("ya recibida: no cambia el estado ni pisa la llegada escrita", async () => {
+  it("una entrega con una parte pasa a Recibido parcial; ya recibida, no cambia el estado ni la llegada", async () => {
+    await registerDelivery(IMP, { deliveredOn: limaToday(), lines: [{ itemId: ITEM_A, received: "98" }] });
+    expect(h.db.rows("imports")[0]).toMatchObject({ status: "recibido_parcial", arrived_on: null });
     seed({ status: "ingresado", arrived_on: "2026-11-10" });
-    await saveReception(IMP, [{ itemId: ITEM_A, received: "100" }]);
+    await registerDelivery(IMP, { deliveredOn: limaToday(), lines: [{ itemId: ITEM_A, received: "100" }, { itemId: ITEM_B, received: "50" }] });
     expect(h.db.rows("imports")[0]).toMatchObject({ status: "ingresado", arrived_on: "2026-11-10" });
   });
 });
@@ -344,8 +353,8 @@ describe("las acciones vuelven a pedir el permiso", () => {
     }
   });
 
-  it("los productos pasan por cleanItem con el permiso de dinero", () => {
-    expect(src.match(/cleanItem\(input, a\.canMoney\)/g)).toHaveLength(2);
+  it("los productos pasan por cleanItem con el permiso de dinero (y la moneda de la compra, 0343)", () => {
+    expect(src.match(/cleanItem\(input, a\.canMoney, baseCurrencyOf\(a\.imp\.kind\)\)/g)).toHaveLength(2);
   });
 
   it("«Pasar a Costos» reutiliza la vigencia de Costos, no una copia", () => {

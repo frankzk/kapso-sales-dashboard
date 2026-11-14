@@ -1,9 +1,9 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getUserRoleSummary } from "@/lib/access";
-import { EmptyState } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { ComprasSubnav } from "@/components/compras/subnav";
+import { ComprasGate, ComprasHeader } from "@/components/compras/chrome";
 import { SuppliersView, type SupplierViewRow } from "@/components/compras/suppliers";
 import { comprasPerms, loadReportImports, loadSuppliers, resolveComprasOrg } from "@/lib/compras-server";
 import { supplierStats } from "@/lib/compras-reportes";
@@ -30,14 +30,14 @@ async function ProveedoresContent({ searchParams }: { searchParams: Promise<{ or
   const { orgId, allowed } = await resolveComprasOrg(sp.org);
   if (!orgId) {
     return (
-      <EmptyState title="Proveedores">
+      <ComprasGate title="Proveedores">
         Los proveedores de las importaciones los ve quien tiene «Compras» o «Montos de compras» en su organización.
-      </EmptyState>
+      </ComprasGate>
     );
   }
   const perms = await comprasPerms(orgId);
   if (!perms.canManage && !perms.canMoney) {
-    return <EmptyState title="Proveedores">Hace falta el permiso «Compras» o «Montos de compras».</EmptyState>;
+    return <ComprasGate title="Proveedores">Hace falta el permiso «Compras» o «Montos de compras».</ComprasGate>;
   }
   const [suppliers, imports] = await Promise.all([loadSuppliers(orgId), loadReportImports(orgId, perms.canMoney)]);
   const rows: SupplierViewRow[] = suppliers.map((supplier) => ({
@@ -46,14 +46,11 @@ async function ProveedoresContent({ searchParams }: { searchParams: Promise<{ or
   }));
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-slate-900">Compras</h1>
-        <p className="text-xs text-slate-500">
-          A quién le compras, cuánto tarda, si llega a tiempo y qué tan completo llega. Las cotizaciones y las canceladas no
-          cuentan como compras.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <ComprasHeader title="Compras">
+        A quién le compras, cuánto tarda, si llega a tiempo y qué tan completo llega. Las cotizaciones y las canceladas no cuentan como
+        compras.
+      </ComprasHeader>
       <ComprasSubnav current="proveedores" perms={perms} orgId={orgId} multiOrg={allowed.length > 1} />
       <SuppliersView
         orgId={orgId}

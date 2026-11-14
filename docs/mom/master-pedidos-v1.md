@@ -13329,7 +13329,13 @@ registra en cada evento.
   «Administración». Proveedores (§45.7): verlos con cualquiera de los dos;
   crearlos, editarlos y borrarlos con «Compras»; «Comprado» solo con «Montos».
   Reportes (§45.8): solo con «Montos de compras». El Excel (§45.9) sale sin
-  dinero para quien no tiene «Montos».
+  dinero para quien no tiene «Montos». «Leer con IA» (§45.10) pide «Compras»
+  (y «Montos» para la proforma); sin «Montos» la propuesta llega sin precios
+  ni cargos. **«Recepción de compras»** (`purchases.receive`, §45.11; owner,
+  admin y el rol «Almacén»): ver Compras sin montos, registrar entregas con sus
+  fotos (§45.14) y subir fotos; nada más, y ni Proveedores ni Reportes.
+  Corregir o quitar una entrega pide «Compras»; editar un costo o un pago,
+  «Compras» y «Montos de compras» (§45.3).
 - **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
@@ -26909,28 +26915,77 @@ el formulario de la importación.
 **Fase 4 (14-11-2026, migración 0341):** la página de **Proveedores** con sus
 estadísticas (§45.7), los **Reportes** (§45.8) y el **Excel** de cada
 importación (§45.9), con una sub-navegación Importaciones · Proveedores ·
-Reportes que solo muestra lo que la persona puede abrir. **No** entran todavía:
-seguimiento automático de la paquetera, lectura de facturas con IA,
-laboratorios, traslados, enlace automático con el inventario ni el correo
-diario.
+Reportes que solo muestra lo que la persona puede abrir.
+
+**14-11-2026, sin migración:** **«Leer con IA»** la factura comercial, la
+proforma o el packing list (§45.10), el permiso **«Recepción de compras»**
+para la bodega (§45.11) y la foto de un producto después de crearlo (§45.1).
+**No** entran todavía: seguimiento automático de la paquetera, laboratorios,
+traslados, enlace automático con el inventario ni el correo diario.
+
+**14-11-2026, migración 0342 (decisión del owner):** **cada costo y cada pago
+en su propia moneda** (USD o soles), guardado tal como se escribió, con el
+tipo de cambio de la importación para las cuentas (§45.3); la casilla
+**«Incluye IGV»** en cada costo; y «Leer con IA» toma la moneda de **cada
+cargo** del documento y deja el IGV aparte (§45.10). El caso que lo pidió: la
+factura de DHL Express Perú en soles (gastos de nacionalización S/ 37.60, aforo
+físico S/ 114.50, rectificación de la declaración aduanera S/ 189.70, cargo por
+aranceles e impuestos pagados S/ 85.45 → S/ 427.25 sin IGV; IGV S/ 76.91; total
+S/ 504.16).
+
+**14-11-2026, migración 0343 (decisiones del owner):** Kapta también compra a
+**laboratorios y maquilas de Perú, en soles** («cuando nos llegue la mercadería
+poder hacer los cruces parciales con foto y evidencia de lo que llega, y
+también subir la captura de lo que le pagamos al laboratorio»). Se agregan la
+**compra local** como un tipo de compra dentro de Compras (§45.12), las
+unidades de **cortesía** (§45.13), las **entregas parciales con evidencia** y
+el estado «Recibido parcial» (§45.14), el comprobante obligatorio en los pagos
+de una compra local (§45.12), los tres **códigos de trazabilidad** de una
+importación (§45.15), el **tratamiento del IGV** de cada costo (sin IGV,
+incluye IGV o inafecto) y **editar** un costo o un pago (§45.3).
 
 ### 45.1 La importación
 
 - **Código** `IMP-<año>-<NNN>` (3 dígitos como mínimo), único por organización:
   el mayor número del año + 1, con reintento si dos se crean a la vez. El año es
-  el de **America/Lima**, no el del servidor (§13.3 de la referencia).
-- **Cabecera**: proveedor, origen, n.º de orden de la plataforma (Alibaba u
-  otra), transporte (courier, aéreo, marítimo o terrestre), paquetera, n.º de
-  guía, enlace de seguimiento (solo `http://` o `https://`), fecha del pedido
-  (hoy en Lima por defecto), llegada estimada, llegada real y notas. Destino:
-  siempre la bodega de Kapta en Lima.
-- **Montos en USD.** Cada importación guarda **su propio tipo de cambio**
+  el de **America/Lima**, no el del servidor (§13.3 de la referencia). Una
+  compra local va en su propia serie, `LOC-<año>-<NNN>` (§45.12); las dos
+  series cuentan por separado y conviven (`IMP-2026-001` y `LOC-2026-001`).
+- **Cabecera**: proveedor, origen, los **códigos de trazabilidad** (§45.15:
+  código de la proforma invoice, orden de Alibaba y guía de envío), transporte
+  (courier, aéreo, marítimo o terrestre), paquetera, enlace de seguimiento
+  (solo `http://` o `https://`), fecha del pedido (hoy en Lima por defecto),
+  llegada estimada, llegada real y notas. Destino: siempre la bodega de Kapta
+  en Lima. Una compra local no lleva transporte, paquetera, guía ni proforma
+  (§45.12).
+- **La base es USD; cada costo y cada pago, en su propia moneda** (0342). El
+  costo del proveedor por unidad es en USD; cada costo repartido y cada pago se
+  guarda en **USD o en soles**, tal como se escribió, sin convertir al guardar
+  (§45.3). Cada importación guarda **su propio tipo de cambio**
   (`fx_pen_per_usd`, soles por 1 USD), opcional hasta «Pasar a Costos». Con él,
-  el costo aterrizado y el margen se ven también en soles.
+  el costo aterrizado y el margen se ven en USD y en soles; sin él, lo que
+  necesita convertir dice **«Falta el tipo de cambio»**.
 - **Productos**: nombre, SKU (opcional; sin SKU no pasa a Costos), tienda
   (opcional; sin tienda, el costo es general de la organización), foto
-  opcional, cantidad entera de 1 a 10.000.000, peso por unidad y, con
-  «Montos», costo por unidad (USD, 4 decimales) y precio de venta (S/).
+  opcional, cantidad entera de 1 a 10.000.000, **cortesía** (unidades gratis,
+  §45.13), peso por unidad y, con «Montos», costo por unidad (4 decimales:
+  USD en una importación, **soles** en una compra local, §45.12) y precio de
+  venta (S/). Un producto con entregas no se quita (§45.14).
+- **Agregar producto desde las tiendas** (14-11-2026, con «Compras»): «De las
+  tiendas» busca por nombre o SKU en el catálogo de la organización —el mismo
+  de «Leer con IA» (§45.10): los SKU de Costos de productos y los vistos en
+  pedidos (`org_shopify_products`), uno por SKU, los más pedidos primero— y al
+  elegir llena nombre y SKU y la tienda **solo** si el SKU se vio siempre en la
+  misma; lo demás (cantidad, peso, costo, precio) se escribe. «Producto nuevo»
+  sigue siendo todo a mano. Se guarda con la misma acción y validaciones que a
+  mano (`addImportItem`). El catálogo se lee en el servidor solo con «Compras»
+  y no trae montos (`buildProductPicker` en `lib/compras-ia.ts`).
+- **Foto del producto** (con «Compras»): se agrega al crearlo o **después**,
+  desde el detalle («Foto», «Cambiar», «Quitar»), por la misma subida al
+  bucket (`items/`, solo JPG, PNG o WEBP, tipo y tamaño de Storage) y se ve
+  por `/api/compras/foto/<producto>`. Al cambiarla o quitarla, la anterior se
+  **borra del bucket** y queda el hecho «Foto agregada / cambiada / quitada:
+  <producto>» en el historial. Una importación cancelada no cambia fotos.
 - **Documentos** en el bucket privado `import-files`: proforma invoice,
   factura comercial, packing list, comprobante de pago, guía (AWB / BL),
   aduana, foto y otro. PDF, JPG, PNG, WEBP o XLSX de hasta 25 MB (las fotos,
@@ -26952,6 +27007,7 @@ diario.
 | `en_transito` | En tránsito |
 | `en_aduana` | En aduana |
 | `en_camino_bodega` | En camino a bodega |
+| `recibido_parcial` | Recibido parcial |
 | `recibido` | Recibido |
 | `ingresado` | Ingresado al inventario |
 | `cerrado` | Cerrado |
@@ -26960,19 +27016,29 @@ diario.
 - Nace en **Cotización**. Los cambios son **manuales**, a cualquier estado, con
   nota opcional; el mismo estado con nota deja una **novedad**. Cada cambio y
   cada nota quedan en el historial.
-- **Un solo paso automático**: al guardar la recepción, una importación que
-  está antes de «Recibido» (de Cotización a En camino a bodega) pasa a
-  **Recibido** y, si no tenía fecha de llegada, se anota **hoy en Lima** (la
-  referencia usaba la fecha UTC, §13.3). Una llegada ya escrita no se pisa.
+- **«Recibido parcial»** (0343): llegó una parte de lo esperado y falta lo
+  demás (§45.14). Va entre «En camino a bodega» y «Recibido».
+- **Los únicos pasos automáticos** son los de las **entregas** (§45.14), y solo
+  avanzan: al registrar o corregir una entrega, si **todos** los productos
+  recibieron lo esperado (pedidas + cortesía) o más, una compra antes de
+  «Recibido» pasa a **Recibido** con la llegada = el **día de la última
+  entrega** (de Lima); si no, una que estaba antes de «Recibido parcial» pasa a
+  **Recibido parcial**. Ya Recibida (o después) o cancelada, no cambia. Quitar o
+  corregir una entrega nunca hace retroceder el estado: si hace falta, se
+  cambia a mano.
+- Los **códigos de trazabilidad** de una importación se piden para avanzar de
+  estado a mano (§45.15); las entregas no se bloquean por ellos.
 - **«Ingresado al inventario»** se marca a mano: Kapta no detecta sola la
   entrada al stock.
-- Pestañas de la lista: **Activas** (de Cotización a En camino a bodega),
+- Pestañas de la lista: **Activas** (de Cotización a Recibido parcial),
   **Recibidas** (Recibido, Ingresado al inventario, Cerrado), **Canceladas** y
-  **Todas**. No se elimina una importación: se cancela.
+  **Todas**. No se elimina una importación: se cancela. La lista filtra por
+  tipo (`?tipo=importacion|local`) y una compra local lleva la chapa «Local».
 
 ### 45.3 Costo aterrizado (`landedCosts`)
 
-Igual que §6.3 de la referencia, en USD y sin redondeo interno:
+Igual que §6.3 de la referencia, sin redondeo interno. Cada costo se reparte
+**en su moneda** con la misma regla (0342: abajo, «Monedas»):
 
 ```
 producto_i = qty_i × costo_por_unidad_i
@@ -26992,6 +27058,12 @@ costo por unidad_i = total_i / divisor_i   (y su desglose por unidad)
   costo por unidad se divide entre las unidades **buenas**: lo que faltó o
   llegó dañado lo pagan las que se pueden vender. Una línea sin ninguna buena
   es pérdida y se muestra sobre lo pedido, con aviso.
+- **Cortesía y compra local (0343).** Las unidades de cortesía (§45.13) no
+  entran en el reparto ni suben ningún monto, pero sí en las buenas (`buenas =
+  recibidas − dañadas`; sin entregas, `pedidas + cortesía`): bajan el costo por
+  unidad. En una compra local el costo del proveedor por unidad es en **soles**
+  (`producto_i = qty_i × costo en soles`) y «por valor» compara en soles; la
+  vista en soles no necesita tipo de cambio si todo está en soles.
 - Nada se pierde ni se duplica: Σ total = Σ producto + Σ costos.
 - **Ejemplo** (el de la referencia, fijado en `test/compras.test.ts`): A = 100
   u. × 2 USD, 0,5 kg; B = 50 u. × 12 USD, 0,2 kg. Importación 80 por valor,
@@ -27001,21 +27073,83 @@ costo por unidad_i = total_i / divisor_i   (y su desglose por unidad)
   borraba en cascada sin rastro, §13.4): el costo se queda sin producto
   (`item_id` nulo), se reparte por valor con aviso en el cálculo y queda un
   hecho de dinero en el historial.
-- **Margen** (en soles, con el tipo de cambio de la importación): precio de
-  venta − costo por unidad × tipo de cambio; % = margen ÷ precio; **margen
-  bajo** si es menos del 20 %. La ganancia esperada (Σ margen × buenas) solo se
+- **Margen** (en soles): precio de venta − costo aterrizado por unidad **en
+  soles** (la vista en soles de abajo: los costos en soles entran tal cual);
+  % = margen ÷ precio; **margen bajo** si es menos del 20 %. Sin tipo de
+  cambio no hay margen. La ganancia esperada (Σ margen × buenas) solo se
   muestra si todas las líneas tienen precio y hay tipo de cambio.
-- **Pagado** = Σ pagos (USD, con fecha, método y comprobante opcional de la
-  misma importación); **falta pagar** = costo total − pagado, si pasa de medio
-  centavo.
+- **Pagado** = Σ pagos (cada uno en su moneda, con fecha, método y
+  comprobante opcional de la misma importación); **falta pagar** = costo total
+  − pagado, si pasa de medio centavo, sin mezclar monedas (abajo).
+
+**Monedas (0342, decisión del owner del 14-11-2026).**
+
+- **Cada costo y cada pago guarda su propia moneda** (USD o PEN), tal como se
+  escribió: **no se convierte al guardar**. En la base, el monto va en la
+  columna de su moneda (`amount_usd` o `amount_pen`; la otra, nula) y
+  `currency` dice cuál (CHECK en la 0342). Una fila de antes de la 0342 es USD.
+- **El costo aterrizado se calcula en dos vistas** con el tipo de cambio de la
+  importación (`fx_pen_per_usd`):
+  - **en soles** = proveedor (USD × tipo de cambio) + costos en USD × tipo de
+    cambio + **costos en soles tal cual**, sin ida y vuelta por el dólar. Es lo
+    que lleva «Pasar a Costos» (§45.5), redondeado a 2 decimales **solo al
+    final**;
+  - **en USD** = proveedor + costos en USD + costos en soles ÷ tipo de cambio.
+- **El reparto no cambia** (por valor, unidades, peso o a un producto): «por
+  valor» sigue usando el valor del proveedor (USD) como base, sea cual sea la
+  moneda del costo.
+- **Sin tipo de cambio** se pueden guardar costos y pagos en soles, pero todo
+  lo que necesita convertir dice **«Falta el tipo de cambio»** en vez de una
+  cifra a medias: el costo aterrizado por unidad, los totales, el margen, el
+  saldo, los reportes y el Excel. Lo de cada moneda sin convertir sí se
+  muestra (p. ej. «US$ 920.00 + S/ 427.25»). Todo en USD, como antes, no lo
+  necesita para la vista en USD. «Pasar a Costos» sigue pidiendo el tipo de
+  cambio.
+- **«Pagado / Falta pagar» no mezcla monedas** (`paymentBalance`): se compara
+  en la base (USD) convirtiendo con el tipo de cambio, y se muestra también su
+  equivalente en soles. Sin tipo de cambio, solo si todo (costos y pagos) está
+  en una sola moneda —se compara en esa—; con monedas mezcladas se muestra
+  cada moneda por separado y se dice que el saldo necesita el tipo de cambio.
+- **El IGV de cada costo** (0343, decisión del owner del 14-11-2026: hay costos
+  que no llevan IGV, como el flete internacional, «inafecto»). Un selector de
+  tres opciones en «Agregar un costo» y «Editar», guardado en
+  `import_costs.igv_treatment`:
+  - **«Sin IGV (monto neto)»** (`neto`, por defecto): el monto entra tal cual
+    (lo de antes sin la casilla);
+  - **«Incluye IGV 18 %»** (`con_igv`): el monto escrito es con IGV y lo que
+    entra al costo es **monto ÷ 1,18** (`IGV_RATE` en `lib/compras.ts`),
+    **redondeado a 2 decimales** (`netOfIgv`); se guardan el monto con IGV
+    (`gross_amount`) y `includes_igv`, para que el historial y el Excel digan
+    «S/ 504.16 con IGV → S/ 427.25 sin IGV»;
+  - **«Inafecto a IGV»** (`inafecto`): el monto entra tal cual y queda dicho
+    («US$ 300.00 · inafecto a IGV»).
+  La ayuda del selector: «Las líneas de la factura ya suelen venir sin IGV.
+  Elige «Incluye IGV» solo si cargas el total con IGV, e «Inafecto» para lo que
+  no lleva IGV, como el flete internacional.» (el caso de S/ 427.25: las líneas
+  de DHL ya vienen sin IGV y se cargan «Sin IGV»). En la base, CHECK
+  `con_igv` ⇔ `includes_igv`; las filas de antes se pasaron así: con la casilla
+  → `con_igv`, sin ella → `neto`.
+- **«Editar» un costo o un pago** (0343, decisión del owner: «permíteme editar
+  los costos»; el caso: cuatro cargos de aduana de DHL cargados con tipo
+  «Envío» en vez de «Importación»). En cada fila de Costos y de Pagos, «Editar»
+  abre el mismo formulario lleno: tipo, nombre, moneda y monto, IGV, reparto y
+  producto (un costo); monto y moneda, fecha, método, comprobante y nota (un
+  pago). Las **mismas validaciones** y el **mismo permiso** que agregar
+  («Compras» y «Montos de compras»); no en una compra cancelada. Queda un hecho
+  de dinero con lo que cambió («Costo «AFORO FÍSICO»: tipo Envío →
+  Importación»); sin cambios no se guarda nada. Un pago editado conserva su
+  comprobante si no se cambia y, en una compra local, no se puede dejar sin él.
+  Todo se recalcula como siempre.
+- **En pantalla** cada monto va con su moneda («US$» o «S/») y, con tipo de
+  cambio, su equivalente en la otra en una línea secundaria. «Agregar un
+  costo» y «Registrar un pago» llevan el selector US$ / S/ junto al monto.
 
 ### 45.4 Recepción y alertas (fechas de Lima)
 
-- **Recepción**: por producto, recibidas, dañadas y nota. Vacío = sin contar;
-  no hay dañadas sin recibidas; dañadas ≤ recibidas; al menos una línea
-  contada. El resumen dice pedidas, llegaron, faltan, sobran, dañadas, buenas y
-  cuántas faltan contar, y queda en el historial («Recepción: X de Y u. ·
-  faltan … · sobran … · N dañadas · N sin contar»).
+- **Recepción**: desde la 0343, por **entregas** (§45.14); los totales de cada
+  producto (recibidas, dañadas, nota) son la suma de sus entregas. Un producto
+  sin entregas está «sin contar». El resumen dice pedidas, cortesía, llegaron,
+  faltan (sobre lo esperado: pedidas + cortesía), sobran, dañadas y buenas.
 - **Atrasada**: activa, **no** cotización, con llegada estimada anterior a hoy.
 - **Avisar a la bodega**: sin marcar «Reportada», activa, **no** cotización, y
   faltan 3 días o menos para la llegada estimada (o ya pasó). La referencia
@@ -27024,6 +27158,10 @@ costo por unidad_i = total_i / divisor_i   (y su desglose por unidad)
 - **Sin novedades**: en tránsito, en aduana o en camino a bodega, y 7 días o
   más (calendario de Lima) desde la última novedad (cambio de estado o nota; sin
   ninguna, la creación).
+- **Exclusiones (0343)**: una **compra local** no tiene transporte, guía ni aviso
+  a la bodega: nunca sale en «Avisar a la bodega» ni en «Sin novedades» (que
+  miran el viaje); «Atrasada» sí (el laboratorio no entregó a tiempo). Una
+  «Recibido parcial» ya está en la bodega: tampoco pide «Avisar a la bodega».
 - **Aviso a la bodega**: un mensaje para WhatsApp a la bodega de Kapta en Lima
   con el código, el proveedor, la guía, el enlace de seguimiento, la llegada
   estimada (dd/mm/aaaa) y los productos con sus unidades. «Copiar mensaje»,
@@ -27037,12 +27175,15 @@ costo por unidad_i = total_i / divisor_i   (y su desglose por unidad)
 ### 45.5 «Pasar a Costos»
 
 Cuando la importación está **Recibida (o después, nunca cancelada)**, **todas
-las líneas con SKU están contadas** y hay **tipo de cambio**, quien tiene
+las líneas con SKU están contadas** y hay **tipo de cambio** (solo si algún
+monto está en USD: una compra local toda en soles no lo pide, §45.12) y, en una
+importación, sus **tres códigos de trazabilidad** (§45.15), quien tiene
 «Montos de compras» **y** «Editar costos» pulsa «Pasar a Costos». Por cada
 línea con SKU, Kapta registra en **Costos de productos** (§26):
 
-- costo unitario = costo aterrizado por unidad × tipo de cambio, en **soles
-  redondeado a 2 decimales**; moneda PEN;
+- costo unitario = costo aterrizado por unidad **en soles** (proveedor y costos
+  en USD × tipo de cambio, costos en soles tal cual: §45.3), **redondeado a 2
+  decimales** al final; moneda PEN;
 - la tienda de la línea (sin tienda, el costo general), el SKU, el nombre, el
   proveedor = nombre del proveedor, el lote = el código de la importación;
 - vigente desde la **fecha de llegada** (o hoy en Lima si no tiene), con la nota
@@ -27073,14 +27214,22 @@ periodo de la primera el mismo día.
   precios de venta, tipo de cambio, costos repartidos, pagos y los documentos
   con montos, y ver los hechos de dinero del historial. Sin él, el servidor
   **no lee ni escribe** esos campos (no basta con esconderlos).
-- Ver la sección pide cualquiera de los dos **en la organización** de la
-  importación (§16). Escribir dinero pide los dos. «Pasar a Costos» pide
-  «Montos de compras» y «Editar costos».
-- Vienen con **owner y admin** por su acceso y con el rol **«Administración»**,
-  como «Editar costos». El menú muestra «Compras» solo con alguno de los dos.
+- **«Recepción de compras»** (`purchases.receive`, §45.11): ver sin montos,
+  registrar entregas con sus fotos (§45.14) y subir fotos. Nada más. Corregir
+  o quitar una entrega pide «Compras».
+- Ver la sección pide cualquiera de los tres **en la organización** de la
+  importación (§16). Escribir dinero pide «Compras» y «Montos». «Pasar a
+  Costos» pide «Montos de compras» y «Editar costos». «Leer con IA» pide
+  «Compras» (y «Montos» para leer la proforma).
+- «Compras» y «Montos» vienen con **owner y admin** por su acceso y con el rol
+  **«Administración»**, como «Editar costos»; «Recepción de compras», con owner
+  y admin y con el rol **«Almacén»**. El menú muestra «Compras» con alguno de
+  los tres (también a una vendedora con el rol Almacén).
 - **Historial append-only** (`import_events`, principio 6): creación, estados,
-  notas, productos, documentos, dinero, recepción, aviso a la bodega y «Pasó a
-  Costos», con quién y cuándo. No se edita ni se borra.
+  notas, productos, documentos, dinero (también lo que cambió al editar un
+  costo o un pago), entregas (registrada, corregida con su antes, quitada),
+  aviso a la bodega y «Pasó a Costos», con quién y cuándo. No se edita ni se
+  borra.
 - Todas las tablas de la migración **0340** tienen RLS **sin políticas**: solo
   el servidor (service role) lee y escribe, después de comprobar el permiso.
 
@@ -27114,7 +27263,7 @@ ella, el día de Lima de la creación.
 | Tarda | Promedio de días del pedido a la llegada, de las **compras que llegaron** (solo diferencias ≥ 0). |
 | A tiempo | De las compras que llegaron **y tenían llegada estimada**, la parte con llegada ≤ estimada. **Rojo si < 70 %.** |
 | Faltantes y dañadas | (Σ max(0, pedidas − recibidas) + Σ dañadas) ÷ Σ pedidas, en las **líneas contadas** de las compras. **Rojo si ≥ 3 %.** |
-| Comprado (USD) | Σ costo aterrizado (§45.3) de las compras. Solo con «Montos de compras». |
+| Comprado (USD) | Σ costo aterrizado (§45.3) de las compras. Solo con «Montos de compras». Una compra con costos en soles y sin tipo de cambio no entra en los USD y se cuenta aparte («N fuera de los USD: falta el tipo de cambio»). |
 | Le compras | Los **3** productos con más unidades pedidas en las compras. |
 
 Un producto es el mismo entre importaciones si tiene **el mismo SKU en la misma
@@ -27129,7 +27278,12 @@ misma organización) y lo muestra como filtro que se puede quitar.
 Solo con **«Montos de compras»** en la organización (todo es dinero); sin él la
 página no lee nada y la sub-navegación no la muestra. Todo en **USD** y, donde
 la importación tiene **su** tipo de cambio, también en soles (los totales en
-soles suman solo las que lo tienen y dicen cuántas no).
+soles suman solo las que lo tienen y dicen cuántas no). Con las conversiones
+de §45.3 (0342): los totales en USD llevan los costos y pagos en soles ÷ el
+tipo de cambio de **su** importación; una importación con montos en soles y
+sin tipo de cambio **no entra en los USD** y la página dice cuántas son
+(«Falta el tipo de cambio»), igual que ya decía cuántas no entran en los
+soles. En soles, los montos en soles entran tal cual.
 
 - **Dinero en camino**: importaciones **activas que no son cotización**: costo
   total, unidades, pagado y **falta pagar** = Σ por importación de
@@ -27173,6 +27327,19 @@ Botón **Excel** en el detalle, para quien puede ver la importación:
   y las hojas **Costos** (con las notas del cálculo) y **Pagos**. Sin el
   permiso no hay ni columnas ni hojas de dinero.
 - Montos a 2 decimales, costos por unidad a 4 y margen % a 1 (referencia §6.18).
+- **0343**: la hoja Importación dice el tipo (importación o compra local) y,
+  en una importación, los códigos de trazabilidad («N de 3»); una compra local
+  no lleva transporte ni guía y su dinero va en soles (costo por unidad y
+  desglose en S/). Productos con **Cortesía** y **Esperadas**; «Faltan» sobre lo
+  esperado. La hoja **Entregas** (sin montos, también sin «Montos de compras»):
+  fecha, quién, producto, llegaron, dañadas, notas y cuántas fotos. En Costos,
+  la columna **IGV** con su tratamiento; en Pagos, el comprobante.
+- **Monedas (0342)**: en **Costos** y **Pagos**, cada fila con su moneda, su
+  monto y su equivalente «En USD» y «En S/» con el tipo de cambio de la
+  importación; en Costos, además, «Incluye IGV», el monto con IGV y el detalle
+  «S/ 504.16 con IGV → S/ 427.25 sin IGV». En Importación, costos y pagado por
+  moneda y los totales convertidos. Lo que necesita convertir y no tiene tipo
+  de cambio dice **«Falta el tipo de cambio»** en la celda.
 
 Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
 (estadísticas y reportes, puro), `lib/compras-server.ts` (lecturas),
@@ -27181,7 +27348,258 @@ Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
 `app/api/compras/` (documento, foto y Excel),
 `lib/exports/compras-importacion.ts` (el Excel),
 `lib/product-cost-periods.ts` (vigencia compartida con Costos) y migraciones
-`0340_compras_importaciones.sql` y `0341_compras_proveedores.sql`. Pruebas:
+`0340_compras_importaciones.sql`, `0341_compras_proveedores.sql` y
+`0342_compras_monedas_igv.sql` y `0343_compras_locales_entregas.sql`
+(§45.12–§45.15). Pruebas:
 `test/compras.test.ts`, `test/compras-actions.test.ts`,
 `test/compras-reportes.test.ts`, `test/compras-proveedores.test.ts`,
-`scripts/sql/compras_smoke.sql` y `scripts/sql/compras_proveedores_smoke.sql`.
+`test/compras-monedas.test.ts`, `test/compras-monedas-acciones.test.ts`,
+`test/compras-locales.test.ts`, `scripts/sql/compras_smoke.sql`,
+`scripts/sql/compras_proveedores_smoke.sql`,
+`scripts/sql/compras_monedas_smoke.sql` y
+`scripts/sql/compras_locales_smoke.sql`.
+
+### 45.10 «Leer con IA» (factura, proforma y packing list)
+
+Referencia §3.1 paso 2, §6.5, §6.9 y §7.2, adaptada a Kapta.
+
+- **Quién**: con **«Compras»** en la organización. La proforma es un documento
+  con montos: leerla pide además «Montos de compras». La acción vuelve a pedir
+  el permiso y la importación no puede estar cancelada.
+- **Qué**: en Documentos, una **factura comercial**, **proforma** o **packing
+  list** ya subido, en **PDF** (va a Claude como bloque `document`) o
+  **imagen** JPG, PNG o WEBP (bloque `image`). XLSX no. **Tope**: imagen hasta
+  **5 MB** (lo que acepta la API por imagen) y PDF hasta **20 MB** (en base64
+  queda bajo los 32 MB de la petición); se comprueba con el tamaño real del
+  archivo antes de gastar la llamada, y lo que no entra se dice en castellano.
+- **La llamada**: el mismo patrón que la visión de Yape y de las hojas de
+  liquidación (`lib/vision.ts`, `lib/settlement-vision.ts`): `fetch` directo,
+  `anthropic-version` 2023-06-01, la clave y el modelo de visión del entorno
+  (`ANTHROPIC_API_KEY`, `YAPE_VISION_MODEL`; sin clave en el entorno, la de la
+  primera tienda de la organización que tenga una, 0052), tope de **105 s**
+  (la página del detalle tiene `maxDuration = 120`) y **nunca lanza**: sin
+  clave, HTTP, rechazo del modelo, salida cortada, respuesta ilegible o
+  timeout devuelven un motivo claro. La salida se pide con una herramienta con
+  esquema JSON: moneda (ISO 4217), líneas (nombre en español, SKU solo si está
+  escrito, cantidad, precio por unidad y/o total de la línea, peso si se ve),
+  cargos (tipo envío / importación / adicional, nombre, monto y **su moneda**,
+  0342) y el **IGV** aparte (`igv`, `igv_currency`). Los montos de las líneas
+  y de los cargos van **sin IGV** (el valor de venta). Lo que no se ve, null:
+  no se inventa.
+- **Normalización** (`parseAiProposal`, pura): tolera texto alrededor del JSON
+  y números como texto; **cantidad entera ≥ 1** (redondeo al entero más
+  cercano; una fracción de unidad sube a 1; sin cantidad, 0 o negativa, la
+  línea se descarta); **precio = el de la unidad o total ÷ cantidad**; peso por
+  unidad = el de la unidad o el de la línea ÷ cantidad; cargos solo con monto
+  > 0; como máximo 200 líneas y 20 cargos. Se dice cuántas filas se dejaron
+  fuera.
+- **Sin «Montos de compras»** la propuesta se arma en el servidor **sin
+  precios, sin cargos y sin moneda** (ni IGV) (`stripAiMoney`): ni llegan al
+  navegador ni se guardan. La IA igual propone las líneas con sus cantidades.
+- **La moneda de cada cargo y el IGV** (0342): cada cargo trae **su** moneda
+  del documento (sin ella, la del documento; «S/» es PEN y «US$» es USD). Un
+  cargo **en USD o en soles se guarda así**, sin convertir: la factura de DHL
+  Express Perú en soles da costos en soles. Un cargo en otra moneda (la del
+  documento: CNY, EUR…) pasa a USD con el tipo de cambio escrito. El **IGV**
+  del documento se muestra en la propuesta como una línea **informativa** y
+  **nunca se agrega como costo**; los costos de la IA nacen sin «Incluye IGV»
+  (ya vienen sin IGV).
+- **Coincidencia** con los SKU que la organización ya conoce (Costos de
+  productos, con su tienda, y los SKU de los pedidos de sus tiendas,
+  `org_shopify_products`; solo SKU, nombre y tienda, ningún costo), con la
+  regla de la referencia (§6.9): con SKU, el **único** cuyo SKU coincide sin
+  mayúsculas ni espacios al borde (si hay varios, ninguno y no se prueba por
+  nombre); si no, por el **nombre normalizado** (sin tildes, minúsculas, lo que
+  no es letra o número → espacio) de **al menos 6 caracteres** que coincida con
+  **exactamente uno**. Si no, es un producto nuevo. Coincide → se proponen su
+  SKU, su nombre y su tienda (si el SKU se vio siempre en la misma tienda; si
+  no, «Todas las tiendas»).
+- **Revisión humana**: la propuesta se muestra en el detalle; se puede
+  desmarcar cualquier fila y corregir nombre, SKU, tienda, cantidad y precio
+  (y el tipo y el reparto de cada cargo; nunca «a un producto»). **Nada se
+  guarda solo**: la lectura no escribe ni filas ni hechos. Solo **«Agregar
+  seleccionados»** escribe, y lo hace con las reglas de siempre (`cleanItem`,
+  `cleanCost`, tienda de la organización), validando **todo antes de escribir
+  nada**, y cada fila deja el mismo hecho que agregarla a mano («Producto
+  agregado: …», «Costo agregado: …»). Al final queda **«Leído con IA: N
+  productos, M cargos agregados de <archivo>»**. Si la importación ya tenía
+  productos, lo leído se agrega aparte (se avisa).
+- **Tipo de cambio** (referencia §6.5): si el documento no está en USD y hay
+  algún precio, o algún cargo en la moneda del documento (ni USD ni soles), hay
+  que escribir **«1 USD = X <moneda>»** (X > 0). Los productos siguen como
+  siempre: el **precio por unidad en USD = precio ÷ X, redondeado a 4
+  decimales**; un **cargo en la moneda del documento, en USD = monto ÷ X, a 2
+  decimales**; un cargo en USD o en soles, a 2 decimales sin convertir. En
+  USD, X = 1 con los mismos redondeos. Ese tipo de cambio es solo para
+  convertir el documento: **no** es el tipo de cambio en soles de la
+  importación (§45.1).
+
+- **Compra local y el IGV de cada cargo (0343).** En una compra local la base
+  es en soles: los precios de un documento en soles **se quedan en soles** (sin
+  tipo de cambio, a 4 decimales); en otra moneda, «1 <moneda> = X S/». Los
+  cargos siguen con su moneda como siempre. Un cargo que el documento marca
+  **inafecto o exonerado** (`igv_exempt` en la herramienta) se propone
+  «Inafecto a IGV»; los demás, «Sin IGV (monto neto)» (sus montos ya vienen sin
+  IGV); nunca «Incluye IGV». Se puede cambiar en la propuesta.
+
+Código: `lib/compras-ia.ts` (reglas puras), `lib/compras-ia-vision.ts` (la
+llamada), `readImportDocumentWithAi` y `addAiProposalRows` en
+`app/dashboard/compras/actions.ts`, `components/compras/ai-proposal.tsx`.
+Pruebas: `test/compras-ia.test.ts` y `test/compras-recepcion-ia.test.ts`
+(`fetch` simulado; nunca la API real).
+
+### 45.11 «Recepción de compras» (la bodega de Lima)
+
+Permiso **`purchases.receive`** («Recepción de compras»), en el área Compras de
+Equipo. Lo trae el rol por función **«Almacén»**; owner y admin lo tienen por
+su acceso. Viene con el rol: no es una casilla de «uno por uno» (§16); una
+revocación puntual se lo quita, como a cualquier permiso.
+
+**Puede:**
+
+- Abrir **Compras: la lista y el detalle**, **sin ningún monto**, igual que
+  quien no tiene «Montos de compras» (el servidor no lee costos por unidad,
+  precios, tipo de cambio, costos, pagos ni hechos de dinero).
+- **Registrar entregas** (§45.14, desde la 0343): fecha, nota, recibidas,
+  dañadas y nota por producto, y sus fotos (obligatorias en una compra local);
+  y agregar fotos a una entrega ya registrada. Los pasos automáticos a
+  «Recibido parcial» o «Recibido» de §45.2 son los **únicos** cambios de
+  estado que hace. No corrige ni quita entregas.
+- **Subir documentos de tipo «Foto»** (solo imágenes).
+- **Ver y descargar** la factura comercial, el packing list y las fotos.
+
+**No puede:** editar la cabecera, los productos ni su foto, el estado (salvo
+los pasos automáticos de arriba), corregir o quitar una entrega, el aviso a la bodega, costos,
+pagos ni el tipo de cambio; «Pasar a Costos»; «Leer con IA»; subir o quitar
+otros documentos, ni quitar fotos; ver la proforma, el comprobante de pago, la
+guía, la aduana ni «otro»; ver el contacto del proveedor (solo su nombre).
+**Proveedores** y **Reportes** no se muestran (la sub-navegación queda en
+Importaciones y las páginas no lo dejan entrar). Una vendedora con el rol
+Almacén entra a Compras y lo ve en su menú; el resto del panel sigue como
+siempre.
+
+Cada acción lo vuelve a pedir en la organización de la importación: registrar
+una entrega y la subida de fotos aceptan «Compras» **o** «Recepción de
+compras»; todas las demás siguen pidiendo «Compras» (y «Montos» lo de dinero).
+Las rutas del documento y de la foto aceptan los tres permisos con esos
+límites (`canSeeDocKind`).
+
+### 45.12 Compras locales (laboratorios y maquilas, 0343)
+
+Decisión del owner (14-11-2026): además de importar, Kapta compra a
+**laboratorios y maquilas de Perú, en soles**. Una compra local es **un tipo de
+compra dentro de Compras**, no otro módulo: la misma lista, el mismo detalle,
+proveedor, productos, documentos, pagos, entregas, historial, costo aterrizado,
+Excel, reportes y «Pasar a Costos».
+
+- **El tipo** (`imports.kind`): `importacion` (todas las de antes) o `local`.
+  Se elige en «Nueva compra» («Importación» o «Compra local (laboratorio /
+  maquila)») y **no cambia** después (el código lo lleva). El formulario dice
+  «Laboratorio o maquila» en vez de «Proveedor» (es la misma tabla de
+  proveedores).
+- **El código**: `LOC-<año>-<NNN>`, con la misma regla de `IMP-` (§45.1); CHECK
+  en la base: `IMP-` solo en una importación y `LOC-` solo en una compra local.
+- **La base es en soles**: el costo por unidad de cada producto va en soles
+  (`import_items.unit_cost_currency = 'PEN'` y `unit_cost_pen`; los productos
+  de una importación siguen en USD, CHECK: exactamente uno, el de su moneda).
+  Los costos y los pagos nacen en S/ y pueden ir en US$ con las reglas de
+  siempre (§45.3). **Sin tipo de cambio** se ve todo en soles; solo hace falta
+  si algún monto está en US$ (también para «Pasar a Costos», §45.5).
+- **No aplican**: transporte, paquetera, guía, enlace de seguimiento, código de
+  la proforma, «Avisar a la bodega» (la acción lo rechaza) ni la alerta «Sin
+  novedades»; se ocultan y el servidor guarda «terrestre» y vacíos (§45.4).
+- **Cada entrega lleva foto** (§45.14) y **cada pago, la captura del
+  comprobante** (imagen o PDF): «Registrar un pago» de una compra local pide
+  adjuntarla en el mismo formulario (o elegir un comprobante ya subido) y el
+  pago se guarda con su `document_id`; sin ella, el servidor no lo guarda
+  («En una compra local el pago lleva la captura del comprobante»). En una
+  importación sigue siendo opcional. La lista de pagos tiene «Ver
+  comprobante». El comprobante de un pago local no se puede quitar mientras el
+  pago exista.
+- **«Leer con IA»** de una compra local: los precios en soles quedan en soles
+  (§45.10).
+- **Reportes y proveedores** (§45.7, §45.8): una compra local entra en los
+  totales en soles tal cual y en los de USD solo con su tipo de cambio (si no,
+  se cuenta aparte como «Falta el tipo de cambio»); el cambio del costo por
+  unidad se mide en soles si ninguna de las dos tiene tipo de cambio.
+
+### 45.13 Cortesía
+
+Por producto, `courtesy_qty` (entero ≥ 0, 0 por defecto): las unidades que el
+laboratorio (o el proveedor de una importación) **regala**.
+
+- **Esperadas = pedidas + cortesía.** «Faltan» = esperadas − recibidas.
+- **No suben ningún monto** (el costo del proveedor es pedidas × costo por
+  unidad) y **no entran en el reparto** de los costos (no se pagaron); sí en
+  las unidades buenas (`recibidas − dañadas`), así que **bajan el costo por
+  unidad**: 600 pedidas a S/ 7.50 + 50 de cortesía que llegan → S/ 4500 ÷ 650 =
+  S/ 6.92 por unidad buena (sin la cortesía, S/ 7.50).
+- Se muestra solo si es mayor que 0 (o al editar): «600 u. +50 cortesía».
+- Las faltantes de los proveedores (§45.7) se miden sobre lo esperado.
+
+### 45.14 Entregas parciales con evidencia
+
+Lo que llega se registra por **entregas** («Registrar entrega»), para las dos
+clases de compra. Reemplaza la «Recepción» única de antes.
+
+- **Una entrega**: la fecha (día de Lima, hoy o antes), quién la registró, una
+  nota y, por producto **que llegó**, recibidas (entero ≥ 1), dañadas (0 a
+  recibidas) y nota (vacío o 0 = no vino en esta entrega), y sus **fotos**
+  (documentos de tipo «Foto» ligados a la entrega, `import_documents.delivery_id`).
+  En una **compra local** hace falta **al menos una foto** («En una compra local
+  cada entrega lleva al menos una foto de lo que llegó»); en una importación,
+  opcional. Tablas `import_deliveries` e `import_delivery_lines` (0343), con
+  llaves foráneas compuestas como las de la 0340.
+- **Los totales de cada producto** (`received_qty`, `damaged_qty`,
+  `reception_note`) son la **suma de sus entregas**: siguen guardados en
+  `import_items` (todo el código y los reportes los leen igual) y los mantiene
+  el trigger `import_delivery_lines_sync` en la misma transacción de cada línea.
+- **El estado** después de cada entrega: §45.2 («Recibido parcial» o
+  «Recibido», solo avanza; la llegada = el día de la última entrega).
+- **El detalle** muestra las entregas como lista (la más reciente arriba):
+  fecha, quién, unidades por producto, notas y las fotos en miniatura (abren el
+  enlace firmado, §45.1), y el avance de cada producto: «Llegaron 400 de 600
+  (+50 cortesía) · faltan 250».
+- **Corregir o quitar** una entrega pide «Compras» (`purchases.manage`) y queda
+  en el historial («Entrega corregida … Antes: …», «Entrega quitada …»).
+  Quitarla saca sus unidades de los totales y **deja sus fotos en
+  Documentos** (la evidencia no se borra). La única foto de una entrega local
+  no se quita sola. Un producto con entregas no se quita.
+- **«Recepción de compras»** (la bodega, §45.11) registra entregas y agrega
+  fotos a una entrega; no corrige ni quita.
+- **La recepción de antes** (una sola, escrita directo en `import_items` antes
+  de la 0343) pasó, en la migración, a **una entrega «Recepción anterior»**
+  (`legacy`) con los mismos números, la fecha de llegada y quien contó: nada se
+  puso en cero y las entregas nuevas se suman encima.
+
+### 45.15 Códigos de trazabilidad de una importación
+
+Decisión del owner (14-11-2026): tres códigos por pedido «que deberían ser
+completados para poder hacer toda la trazabilidad de los costos»:
+
+| Código | Columna |
+|---|---|
+| Código de la proforma invoice | `imports.proforma_number` (0343, hasta 80 caracteres) |
+| Orden de Alibaba | `imports.platform_order` (la de antes, con su nuevo nombre) |
+| Guía de envío (p. ej. el AWB de DHL) | `imports.tracking_number` |
+
+- La cabecera y el detalle los muestran juntos como **«Códigos de
+  trazabilidad»** con su **«N de 3»**; la lista los cuenta en su checklist
+  («Códigos 2/3») junto a la factura y el tracking, y el detalle avisa de los
+  que faltan.
+- **Se piden de forma progresiva** al cambiar el estado a mano
+  (`setImportStatus`, y la pantalla lo dice antes de intentarlo): para pasar a
+  **«Pagado» o después**, la proforma **y** la orden de Alibaba; para pasar a
+  **«En tránsito» o después** (en aduana, en camino a bodega, recibido parcial,
+  recibido, ingresado, cerrado), también la **guía de envío**. **Cancelar
+  nunca los pide**; una nota tampoco.
+- Una **entrega** que mueve el estado sola **no se bloquea** (la mercadería
+  llegó: se registra) y el detalle muestra los códigos que faltan como aviso.
+- **«Pasar a Costos»** de una importación pide los tres (§45.5).
+- Las importaciones que ya estaban más adelante **no se bloquean hacia
+  atrás**: muestran el aviso hasta que se completan.
+- **Posible duplicado**: si el mismo código de proforma o la misma orden de
+  Alibaba (sin mayúsculas ni espacios al borde) ya está en otra compra de la
+  organización, el detalle lo avisa; no bloquea.
+- Una **compra local** no los usa (se ocultan; su «N.º de orden o cotización»
+  es libre).

@@ -85,6 +85,13 @@ export const PERMISSIONS = [
   // acceso owner/admin y con el rol «Administración», como `costs.manage`.
   "purchases.manage",
   "purchases.money",
+  // «Recepción de compras» (MOM §45.11, 14-11-2026): la bodega de Lima abre
+  // Compras SIN montos, guarda lo que llegó (recibidas, dañadas, nota) y sube
+  // fotos; ve la factura comercial y el packing list. No edita la cabecera,
+  // los productos, el estado (salvo el paso a «Recibido» que hace guardar la
+  // recepción), costos, pagos ni «Pasar a Costos», y no ve Reportes ni
+  // Proveedores. Lo trae el rol «Almacén»; owner y admin, por su acceso.
+  "purchases.receive",
   // Grupo GF Courier: contratos, tarifas, clientes y parámetros operativos.
   // Se concede persona por persona porque Daysi debe administrarlo sin recibir
   // acceso implícito a todas las facultades financieras de un admin.
@@ -240,6 +247,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "costs.manage": "Editar costos",
   "purchases.manage": "Compras",
   "purchases.money": "Montos de compras",
+  "purchases.receive": "Recepción de compras",
   "logistics.manage": "Administrar Grupo GF",
   "gf_courier.create_guide": "Crear guías de GF Courier",
   "gf_courier.cancel_guide": "Anular guías de GF Courier",
@@ -301,6 +309,7 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "costs.manage": "Costos de producto, tarifas y gastos adicionales.",
   "purchases.manage": "Crear y editar importaciones: productos, documentos, estados, aviso a la bodega y recepción.",
   "purchases.money": "Ver y cargar en Compras costos por unidad, costos repartidos, pagos, precios de venta y proformas.",
+  "purchases.receive": "Abrir Compras sin montos, registrar lo que llegó a la bodega de Lima y subir sus fotos.",
   "logistics.manage": "Tarifas, clientes, pago de motorizados y exceso de efectivo del Grupo GF.",
   "gf_courier.create_guide": "Crear la guía de contraentrega en GF Courier. Sale de verdad hacia GF.",
   "gf_courier.cancel_guide": "Anular una guía de GF Courier antes de su preparación.",
@@ -409,7 +418,7 @@ export const PERMISSION_AREAS = [
   {
     key: "compras",
     label: "Compras",
-    permissions: ["purchases.manage", "purchases.money"],
+    permissions: ["purchases.manage", "purchases.money", "purchases.receive"],
   },
   {
     key: "administracion",
@@ -719,8 +728,10 @@ export const FUNCTIONAL_ROLES = [
   {
     role: "almacen",
     label: "Almacén",
-    description: "Para quien arma paquetes: los deja listos, recibe devoluciones y las reingresa al inventario.",
-    permissions: ["master.edit", "warehouse.prepare", "closure.return", "closure.inventory"],
+    description: "Para quien arma paquetes: los deja listos, recibe devoluciones, las reingresa y cuenta las importaciones que llegan.",
+    // «Recepción de compras» (MOM §45.11): cuenta lo que llegó de una
+    // importación y sube las fotos, sin ver montos ni editar la compra.
+    permissions: ["master.edit", "warehouse.prepare", "closure.return", "closure.inventory", "purchases.receive"],
   },
   {
     role: "despacho",
