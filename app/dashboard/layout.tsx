@@ -60,6 +60,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
     team: permissions.can("team.manage"),
     history: permissions.can("data.export"),
     automations: permissions.can("automations.manage"),
+    // «Compras» (MOM §45): la página y cada acción vuelven a pedir el permiso en la organización.
+    purchases: permissions.can("purchases.manage") || permissions.can("purchases.money"),
   };
   const roleLabel = isVendedoraOnly
     ? "Vendedora"

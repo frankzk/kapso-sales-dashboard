@@ -424,3 +424,40 @@ describe("master.set_status (Registrar estado a mano)", () => {
     expect(PERMISSION_HELP["master.edit"]).not.toMatch(/estado/);
   });
 });
+
+describe("Compras (MOM §45, 14-11-2026)", () => {
+  it("dos permisos: «Compras» y «Montos de compras», en su propia área", () => {
+    expect(PERMISSIONS).toContain("purchases.manage");
+    expect(PERMISSIONS).toContain("purchases.money");
+    expect(PERMISSION_LABEL["purchases.manage"]).toBe("Compras");
+    expect(PERMISSION_LABEL["purchases.money"]).toBe("Montos de compras");
+    for (const p of ["purchases.manage", "purchases.money"] as const) {
+      expect(PERMISSION_HELP[p].length, p).toBeLessThanOrEqual(130);
+      const areas = PERMISSION_AREAS.filter((area) => (area.permissions as readonly string[]).includes(p));
+      expect(areas.map((area) => area.key), p).toEqual(["compras"]);
+    }
+  });
+
+  it("como «Editar costos»: owner, admin y el rol Administración; nadie más", () => {
+    for (const role of ["owner", "admin"]) {
+      const p = permissionsFor([role]);
+      expect(p.has("purchases.manage"), role).toBe(true);
+      expect(p.has("purchases.money"), role).toBe(true);
+    }
+    const admin = permissionsFor(["vendedora"], [], ["administracion"]);
+    expect(admin.has("purchases.manage")).toBe(true);
+    expect(admin.has("purchases.money")).toBe(true);
+    for (const role of ["vendedora", "viewer", "motorizado"]) {
+      expect(permissionsFor([role]).has("purchases.manage"), role).toBe(false);
+      expect(permissionsFor([role]).has("purchases.money"), role).toBe(false);
+    }
+    for (const entry of FUNCTIONAL_ROLES.filter((r) => r.role !== "administracion")) {
+      expect((entry.permissions as readonly string[]).includes("purchases.manage"), entry.role).toBe(false);
+      expect((entry.permissions as readonly string[]).includes("purchases.money"), entry.role).toBe(false);
+    }
+    // Van con el rol, no se conceden uno por uno; una revocación puntual se los quita.
+    expect(isGrantedOneByOne("purchases.money")).toBe(false);
+    expect(permissionsFor(["admin"], [{ permission: "purchases.money", granted: false }]).has("purchases.money")).toBe(false);
+    expect(permissionsFor(["vendedora"], [{ permission: "purchases.manage", granted: true }]).has("purchases.manage")).toBe(true);
+  });
+});

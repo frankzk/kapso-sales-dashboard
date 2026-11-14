@@ -152,6 +152,8 @@ describe("el menú", () => {
       "/dashboard/stores",
       "/dashboard/stores/historial",
       "/dashboard/costos",
+      // Compras (MOM §45), junto a Costos.
+      "/dashboard/compras",
       "/dashboard/courier",
       "/dashboard/urpi",
       "/dashboard/team",

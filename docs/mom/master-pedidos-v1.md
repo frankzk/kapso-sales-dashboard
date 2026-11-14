@@ -13320,6 +13320,13 @@ registra en cada evento.
 - Retirar del manifiesto: motivo obligatorio.
 - Corrección de resultado courier: evento de corrección, nunca edición destructiva.
 - Cerrar liquidación observada: rol financiero autorizado.
+- Compras (14-11-2026, §45): **«Compras»** (`purchases.manage`) crea y edita
+  importaciones; **«Montos de compras»** (`purchases.money`) ve y carga lo que
+  cuestan (costos por unidad, costos repartidos, pagos, precios de venta,
+  tipo de cambio, proforma y comprobante). Sin «Montos» el servidor no lee ni
+  escribe esos campos. «Pasar a Costos» pide «Montos de compras» y «Editar
+  costos» (`costs.manage`). Vienen con owner y admin y con el rol
+  «Administración».
 - **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
@@ -26810,3 +26817,199 @@ Código: `lib/pago-diferencia.ts` (reglas, puro), `lib/pago-diferencia-access.ts
 (lectura), `components/pago-diferencia-tray.tsx` y
 `app/dashboard/pedidos/pago-diferencia/page.tsx`; menú «Pago de diferencia»
 debajo de «Lista negra». Pruebas: `test/pago-diferencia.test.ts`.
+
+## 45. Compras: importaciones (14-11-2026)
+
+Decisión del owner (14-11-2026): una sección **Compras** para las
+importaciones que llegan a la **bodega propia de Kapta en Lima**: qué se
+compró, a quién, cuánto costó de verdad cada unidad puesta en la bodega (costo
+aterrizado), qué se pagó, por dónde viene, qué llegó bien y qué no. La
+referencia funcional es el módulo de Miranova
+(`docs/compras/referencia-modulo-compras.md`, §3.1, §5, §6, §8, §11); se
+adapta a Kapta y **no** se copian sus fallas (§13 de la referencia).
+
+**Alcance de ahora: fases 1 a 3** de la referencia (§11): la importación
+(cabecera, productos, documentos, historial y estados), el dinero (costos
+repartidos, pagos, costo aterrizado y margen) y la recepción con sus alertas.
+Más un proveedor mínimo (nombre, país, WhatsApp, notas) que se da de alta desde
+el formulario de la importación. **No** entran todavía: la página de
+estadísticas de proveedores, reportes, seguimiento automático de la paquetera,
+lectura de facturas con IA, laboratorios, traslados, enlace automático con el
+inventario ni el correo diario.
+
+### 45.1 La importación
+
+- **Código** `IMP-<año>-<NNN>` (3 dígitos como mínimo), único por organización:
+  el mayor número del año + 1, con reintento si dos se crean a la vez. El año es
+  el de **America/Lima**, no el del servidor (§13.3 de la referencia).
+- **Cabecera**: proveedor, origen, n.º de orden de la plataforma (Alibaba u
+  otra), transporte (courier, aéreo, marítimo o terrestre), paquetera, n.º de
+  guía, enlace de seguimiento (solo `http://` o `https://`), fecha del pedido
+  (hoy en Lima por defecto), llegada estimada, llegada real y notas. Destino:
+  siempre la bodega de Kapta en Lima.
+- **Montos en USD.** Cada importación guarda **su propio tipo de cambio**
+  (`fx_pen_per_usd`, soles por 1 USD), opcional hasta «Pasar a Costos». Con él,
+  el costo aterrizado y el margen se ven también en soles.
+- **Productos**: nombre, SKU (opcional; sin SKU no pasa a Costos), tienda
+  (opcional; sin tienda, el costo es general de la organización), foto
+  opcional, cantidad entera de 1 a 10.000.000, peso por unidad y, con
+  «Montos», costo por unidad (USD, 4 decimales) y precio de venta (S/).
+- **Documentos** en el bucket privado `import-files`: proforma invoice,
+  factura comercial, packing list, comprobante de pago, guía (AWB / BL),
+  aduana, foto y otro. PDF, JPG, PNG, WEBP o XLSX de hasta 25 MB (las fotos,
+  solo imágenes). Tipo y tamaño se toman de Storage, no del navegador. Se
+  abren por `/api/compras/documento/<id>`, que vuelve a pedir el permiso y
+  responde con un enlace firmado de 10 minutos. **Proforma y comprobante de
+  pago** son documentos con montos: verlos, subirlos y quitarlos pide
+  «Montos de compras». La factura comercial la ve todo Compras.
+- **Checklist** de cada importación: factura comercial (hay un documento de
+  ese tipo) y tracking (hay número de guía o un documento de guía).
+
+### 45.2 Estados
+
+| Estado | Etiqueta |
+|---|---|
+| `cotizacion` | Cotización |
+| `pagado` | Pagado |
+| `en_produccion` | En producción |
+| `en_transito` | En tránsito |
+| `en_aduana` | En aduana |
+| `en_camino_bodega` | En camino a bodega |
+| `recibido` | Recibido |
+| `ingresado` | Ingresado al inventario |
+| `cerrado` | Cerrado |
+| `cancelado` | Cancelado |
+
+- Nace en **Cotización**. Los cambios son **manuales**, a cualquier estado, con
+  nota opcional; el mismo estado con nota deja una **novedad**. Cada cambio y
+  cada nota quedan en el historial.
+- **Un solo paso automático**: al guardar la recepción, una importación que
+  está antes de «Recibido» (de Cotización a En camino a bodega) pasa a
+  **Recibido** y, si no tenía fecha de llegada, se anota **hoy en Lima** (la
+  referencia usaba la fecha UTC, §13.3). Una llegada ya escrita no se pisa.
+- **«Ingresado al inventario»** se marca a mano: Kapta no detecta sola la
+  entrada al stock.
+- Pestañas de la lista: **Activas** (de Cotización a En camino a bodega),
+  **Recibidas** (Recibido, Ingresado al inventario, Cerrado), **Canceladas** y
+  **Todas**. No se elimina una importación: se cancela.
+
+### 45.3 Costo aterrizado (`landedCosts`)
+
+Igual que §6.3 de la referencia, en USD y sin redondeo interno:
+
+```
+producto_i = qty_i × costo_por_unidad_i
+Para cada costo (monto > 0, tipo envío | importación | adicional, reparto):
+  reparto «a un producto» cuyo producto ya no está → por valor (con aviso)
+  base_i = por valor: qty_i × costo_por_unidad_i · por unidades: qty_i
+           por peso: qty_i × peso_por_unidad_i · a un producto: 1 si es ese, 0 si no
+  si ninguna base_i > 0 → base_i = qty_i (aviso «Faltan pesos…» o «Sin costos por unidad cargados…»)
+  parte_i = monto × base_i / Σ base
+total_i   = producto_i + envío_i + importación_i + adicional_i
+buenas_i  = contada ? max(0, recibidas_i − dañadas_i) : qty_i
+divisor_i = buenas_i > 0 ? buenas_i : qty_i
+costo por unidad_i = total_i / divisor_i   (y su desglose por unidad)
+```
+
+- Los costos se reparten sobre lo **pedido** (se pagó y se envió todo) y el
+  costo por unidad se divide entre las unidades **buenas**: lo que faltó o
+  llegó dañado lo pagan las que se pueden vender. Una línea sin ninguna buena
+  es pérdida y se muestra sobre lo pedido, con aviso.
+- Nada se pierde ni se duplica: Σ total = Σ producto + Σ costos.
+- **Ejemplo** (el de la referencia, fijado en `test/compras.test.ts`): A = 100
+  u. × 2 USD, 0,5 kg; B = 50 u. × 12 USD, 0,2 kg. Importación 80 por valor,
+  envío 120 por peso, adicional 30 por unidades y adicional 25 a B. Costo por
+  unidad **A = 3,40** y **B = 14,30**.
+- **Quitar un producto no borra su costo «a un producto»** (la referencia lo
+  borraba en cascada sin rastro, §13.4): el costo se queda sin producto
+  (`item_id` nulo), se reparte por valor con aviso en el cálculo y queda un
+  hecho de dinero en el historial.
+- **Margen** (en soles, con el tipo de cambio de la importación): precio de
+  venta − costo por unidad × tipo de cambio; % = margen ÷ precio; **margen
+  bajo** si es menos del 20 %. La ganancia esperada (Σ margen × buenas) solo se
+  muestra si todas las líneas tienen precio y hay tipo de cambio.
+- **Pagado** = Σ pagos (USD, con fecha, método y comprobante opcional de la
+  misma importación); **falta pagar** = costo total − pagado, si pasa de medio
+  centavo.
+
+### 45.4 Recepción y alertas (fechas de Lima)
+
+- **Recepción**: por producto, recibidas, dañadas y nota. Vacío = sin contar;
+  no hay dañadas sin recibidas; dañadas ≤ recibidas; al menos una línea
+  contada. El resumen dice pedidas, llegaron, faltan, sobran, dañadas, buenas y
+  cuántas faltan contar, y queda en el historial («Recepción: X de Y u. ·
+  faltan … · sobran … · N dañadas · N sin contar»).
+- **Atrasada**: activa, **no** cotización, con llegada estimada anterior a hoy.
+- **Avisar a la bodega**: sin marcar «Reportada», activa, **no** cotización, y
+  faltan 3 días o menos para la llegada estimada (o ya pasó). La referencia
+  contaba cotizaciones en la fila y no en el resumen (§13.1 y §13.2): aquí,
+  nunca.
+- **Sin novedades**: en tránsito, en aduana o en camino a bodega, y 7 días o
+  más (calendario de Lima) desde la última novedad (cambio de estado o nota; sin
+  ninguna, la creación).
+- **Aviso a la bodega**: un mensaje para WhatsApp a la bodega de Kapta en Lima
+  con el código, el proveedor, la guía, el enlace de seguimiento, la llegada
+  estimada (dd/mm/aaaa) y los productos con sus unidades. «Copiar mensaje»,
+  «Abrir WhatsApp» y **«Marcar como reportada»** (con quién y cuándo), que
+  también se puede quitar.
+- **Enlace de seguimiento**: el escrito a mano si es http(s); si no, con número
+  de guía, la página pública de DHL, FedEx, UPS, USPS o Aramex (nombre exacto
+  de la paquetera, sin mayúsculas); cualquier otra, 17TRACK. No hay consulta
+  automática a la paquetera.
+
+### 45.5 «Pasar a Costos»
+
+Cuando la importación está **Recibida (o después, nunca cancelada)**, **todas
+las líneas con SKU están contadas** y hay **tipo de cambio**, quien tiene
+«Montos de compras» **y** «Editar costos» pulsa «Pasar a Costos». Por cada
+línea con SKU, Kapta registra en **Costos de productos** (§26):
+
+- costo unitario = costo aterrizado por unidad × tipo de cambio, en **soles
+  redondeado a 2 decimales**; moneda PEN;
+- la tienda de la línea (sin tienda, el costo general), el SKU, el nombre, el
+  proveedor = nombre del proveedor, el lote = el código de la importación;
+- vigente desde la **fecha de llegada** (o hoy en Lima si no tiene), con la nota
+  «Costo aterrizado IMP-…»;
+- con **la misma vigencia que Costos** (`insertProductCostPeriod`, la que usa
+  «Costos de productos»): el periodo abierto del mismo SKU y ámbito se cierra
+  el día anterior;
+- **nunca borra un costo posterior**: si Costos ya tiene un periodo abierto de
+  ese SKU y ámbito que empieza el día de la llegada o después (lo cargó una
+  persona), esa línea no se pasa, el costo de Costos queda como está y el aviso
+  dice «Costos ya tiene un costo más reciente para SKU (desde dd/mm/aaaa): no
+  se tocó; revísalo en Costos». (Costos, al cargar a mano, sí lo reemplaza:
+  `laterOpen: "replace"`.)
+
+Cada línea queda marcada (`cost_pushed_at`) y la importación lleva el hecho
+«Pasó a Costos …» en el historial. **Pasar dos veces no duplica**: una línea
+marcada no se vuelve a pasar (la marca se pone antes de escribir el costo y se
+quita si la escritura falla) y, si todas pasaron, dice «Ya se pasó a Costos».
+Una línea sin unidades buenas no se pasa (no entró nada que costear). Dos
+líneas con el mismo SKU en la misma tienda lo impiden: la segunda cerraría el
+periodo de la primera el mismo día.
+
+### 45.6 Permisos e historial
+
+- **«Compras»** (`purchases.manage`): crear y editar importaciones, productos,
+  documentos sin montos, estados, aviso a la bodega y recepción.
+- **«Montos de compras»** (`purchases.money`): ver y cargar costos por unidad,
+  precios de venta, tipo de cambio, costos repartidos, pagos y los documentos
+  con montos, y ver los hechos de dinero del historial. Sin él, el servidor
+  **no lee ni escribe** esos campos (no basta con esconderlos).
+- Ver la sección pide cualquiera de los dos **en la organización** de la
+  importación (§16). Escribir dinero pide los dos. «Pasar a Costos» pide
+  «Montos de compras» y «Editar costos».
+- Vienen con **owner y admin** por su acceso y con el rol **«Administración»**,
+  como «Editar costos». El menú muestra «Compras» solo con alguno de los dos.
+- **Historial append-only** (`import_events`, principio 6): creación, estados,
+  notas, productos, documentos, dinero, recepción, aviso a la bodega y «Pasó a
+  Costos», con quién y cuándo. No se edita ni se borra.
+- Todas las tablas de la migración **0340** tienen RLS **sin políticas**: solo
+  el servidor (service role) lee y escribe, después de comprobar el permiso.
+
+Código: `lib/compras.ts` (reglas, puro), `lib/compras-server.ts` (lecturas),
+`app/dashboard/compras/` (lista, detalle y acciones),
+`components/compras/`, `app/api/compras/` (documento y foto),
+`lib/product-cost-periods.ts` (vigencia compartida con Costos) y migración
+`0340_compras_importaciones.sql`. Pruebas: `test/compras.test.ts`,
+`test/compras-actions.test.ts` y `scripts/sql/compras_smoke.sql`.

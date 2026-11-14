@@ -1,3 +1,24 @@
+### 14-11-2026 · Compras: importaciones a la bodega de Lima (0340, MOM §45)
+
+**Migración 0340_compras_importaciones: ya aplicada en producción (14-11-2026),
+antes del código.** Crea `import_suppliers`, `imports`, `import_items`,
+`import_documents`, `import_costs`, `import_payments` e `import_events`
+(append-only), todas con RLS y sin políticas (solo el servidor), y el bucket
+privado **`import-files`** (25 MB; PDF, JPG, PNG, WEBP, XLSX). Sin `drop`; no
+toca datos existentes y se puede correr otra vez. Si el bucket no aparece en
+Storage, el código lo crea privado en la primera subida.
+
+Nuevo en el menú **Compras** (`/dashboard/compras`) para quien tenga los
+permisos nuevos **«Compras»** (`purchases.manage`) o **«Montos de compras»**
+(`purchases.money`): vienen con owner, admin y el rol «Administración».
+«Pasar a Costos» pide además «Editar costos». Verificar: crear una importación
+(debe salir `IMP-2026-001`), agregar dos productos con SKU, un costo y un pago,
+subir la factura comercial, guardar la recepción (pasa a Recibido con la
+llegada de hoy), poner el tipo de cambio y «Pasar a Costos»: los dos SKU
+aparecen en Costos → Costos de productos con lote `IMP-2026-001`; pulsar otra
+vez dice «Ya se pasó a Costos». Con un usuario sin «Montos de compras», la
+importación no muestra costos ni pagos.
+
 ### 13-11-2026 · Repro Lima reconoce la salida de cualquier courier y la caja en oficina
 
 Migración 0339_repro_box_con_courier (ya aplicada en producción: solo amplía el

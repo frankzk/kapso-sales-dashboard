@@ -679,4 +679,6 @@
 \ir migrations/0338_lead_daily_list.sql
 \echo 'Applying 0339_repro_box_con_courier.sql'
 \ir migrations/0339_repro_box_con_courier.sql
+\echo 'Applying 0340_compras_importaciones.sql'
+\ir migrations/0340_compras_importaciones.sql
 \echo 'Done.'
