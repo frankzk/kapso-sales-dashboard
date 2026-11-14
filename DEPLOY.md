@@ -1,3 +1,28 @@
+### 14-11-2026 · Compras: proveedores, reportes y el Excel de la importación (0341, MOM §45.7–§45.9)
+
+**Migración 0341_compras_proveedores: ya aplicada en producción (14-11-2026), antes del código.**
+Agrega a `import_suppliers` tres columnas opcionales con CHECK:
+`contact_name` (≤ 120), `email` (forma `a@b.c`, ≤ 160) y `payment_terms`
+(≤ 200). Sin `drop`, no toca datos y se puede correr otra vez; la tabla sigue
+solo para el servidor (RLS sin políticas, sin privilegios para anon ni
+authenticated). Sin ella, crear o editar un proveedor —también el alta rápida
+desde una importación— falla, porque el código ya escribe esas columnas.
+
+En Compras aparece una sub-navegación **Importaciones · Proveedores ·
+Reportes**. **Proveedores** (con «Compras» o «Montos de compras»; crear,
+editar y borrar con «Compras»): condiciones de pago, contacto, WhatsApp,
+correo, n.º de importaciones con enlace a la lista filtrada, «Tarda», «A tiempo»
+(rojo bajo 70 %), «Faltantes y dañadas» (rojo desde 3 %), «Comprado» (solo con
+«Montos») y «Le compras»; borrar solo si no tiene importaciones. **Reportes**
+(solo con «Montos de compras»): dinero en camino, comprado y pagado por mes,
+últimos 6 meses, costo por unidad de cada producto con su cambio y ranking de
+proveedores. En el detalle, botón **Excel**. Las cotizaciones y las canceladas
+no cuentan como compras. Verificar: editar un proveedor con correo y
+condiciones; intentar borrar uno con importaciones (no deja); abrir Reportes con
+y sin «Montos de compras» (sin él no aparece); descargar el Excel de una
+importación con y sin «Montos» (sin él, solo las hojas Importación y Productos,
+sin columnas de dinero).
+
 ### 14-11-2026 · Compras: importaciones a la bodega de Lima (0340, MOM §45)
 
 **Migración 0340_compras_importaciones: ya aplicada en producción (14-11-2026),

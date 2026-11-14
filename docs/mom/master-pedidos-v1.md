@@ -13326,7 +13326,10 @@ registra en cada evento.
   tipo de cambio, proforma y comprobante). Sin «Montos» el servidor no lee ni
   escribe esos campos. «Pasar a Costos» pide «Montos de compras» y «Editar
   costos» (`costs.manage`). Vienen con owner y admin y con el rol
-  «Administración».
+  «Administración». Proveedores (§45.7): verlos con cualquiera de los dos;
+  crearlos, editarlos y borrarlos con «Compras»; «Comprado» solo con «Montos».
+  Reportes (§45.8): solo con «Montos de compras». El Excel (§45.9) sale sin
+  dinero para quien no tiene «Montos».
 - **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
@@ -26832,10 +26835,15 @@ adapta a Kapta y **no** se copian sus fallas (§13 de la referencia).
 (cabecera, productos, documentos, historial y estados), el dinero (costos
 repartidos, pagos, costo aterrizado y margen) y la recepción con sus alertas.
 Más un proveedor mínimo (nombre, país, WhatsApp, notas) que se da de alta desde
-el formulario de la importación. **No** entran todavía: la página de
-estadísticas de proveedores, reportes, seguimiento automático de la paquetera,
-lectura de facturas con IA, laboratorios, traslados, enlace automático con el
-inventario ni el correo diario.
+el formulario de la importación.
+
+**Fase 4 (14-11-2026, migración 0341):** la página de **Proveedores** con sus
+estadísticas (§45.7), los **Reportes** (§45.8) y el **Excel** de cada
+importación (§45.9), con una sub-navegación Importaciones · Proveedores ·
+Reportes que solo muestra lo que la persona puede abrir. **No** entran todavía:
+seguimiento automático de la paquetera, lectura de facturas con IA,
+laboratorios, traslados, enlace automático con el inventario ni el correo
+diario.
 
 ### 45.1 La importación
 
@@ -27007,9 +27015,104 @@ periodo de la primera el mismo día.
 - Todas las tablas de la migración **0340** tienen RLS **sin políticas**: solo
   el servidor (service role) lee y escribe, después de comprobar el permiso.
 
-Código: `lib/compras.ts` (reglas, puro), `lib/compras-server.ts` (lecturas),
-`app/dashboard/compras/` (lista, detalle y acciones),
-`components/compras/`, `app/api/compras/` (documento y foto),
-`lib/product-cost-periods.ts` (vigencia compartida con Costos) y migración
-`0340_compras_importaciones.sql`. Pruebas: `test/compras.test.ts`,
-`test/compras-actions.test.ts` y `scripts/sql/compras_smoke.sql`.
+### 45.7 Proveedores (`/dashboard/compras/proveedores`)
+
+- **Quién**: verla pide «Compras» **o** «Montos de compras» en la
+  organización; **crear, editar y borrar** pide «Compras» (cada acción lo vuelve
+  a pedir en la organización del proveedor). La columna «Comprado» solo con
+  «Montos de compras»: sin él, el servidor ni lee los montos.
+- **Datos del proveedor** (0341): nombre (único sin mayúsculas en la
+  organización), país / origen, **condiciones de pago**, **contacto**, WhatsApp
+  (con código de país) y **correo** (`algo@dominio.tld`), todos opcionales menos
+  el nombre, con CHECK en la base. **Renombrar** no toca las importaciones:
+  apuntan al proveedor por su id.
+- **Borrar** solo si **no tiene ninguna importación** (de cualquier estado,
+  también cancelada). Con importaciones, se edita.
+- **Tabla**: nombre y país; condiciones de pago; contacto, WhatsApp y correo;
+  **n.º de importaciones** (enlace a la lista filtrada `?proveedor=<id>`, que
+  muestra todas sus importaciones) con cuántas son compras y la fecha de la
+  última; «Tarda», «A tiempo», «Faltantes y dañadas», «Comprado (USD)» (con
+  soles de las que tienen tipo de cambio) y «Le compras».
+
+**Estadísticas** (`supplierStats`, `lib/compras-reportes.ts`; referencia
+§6.17). **Una compra es una importación que no es cotización ni cancelada**;
+las fechas son días de Lima y «el día del pedido» es la fecha del pedido o, sin
+ella, el día de Lima de la creación.
+
+| Columna | Definición |
+|---|---|
+| Importaciones | Todas las del proveedor (cualquier estado); debajo, cuántas son compras y el día del pedido de la más reciente. |
+| Tarda | Promedio de días del pedido a la llegada, de las **compras que llegaron** (solo diferencias ≥ 0). |
+| A tiempo | De las compras que llegaron **y tenían llegada estimada**, la parte con llegada ≤ estimada. **Rojo si < 70 %.** |
+| Faltantes y dañadas | (Σ max(0, pedidas − recibidas) + Σ dañadas) ÷ Σ pedidas, en las **líneas contadas** de las compras. **Rojo si ≥ 3 %.** |
+| Comprado (USD) | Σ costo aterrizado (§45.3) de las compras. Solo con «Montos de compras». |
+| Le compras | Los **3** productos con más unidades pedidas en las compras. |
+
+Un producto es el mismo entre importaciones si tiene **el mismo SKU en la misma
+tienda**; sin SKU, si tiene **el mismo nombre normalizado** (sin mayúsculas,
+tildes ni signos).
+
+La lista de importaciones acepta `?proveedor=<id>` (solo un proveedor de la
+misma organización) y lo muestra como filtro que se puede quitar.
+
+### 45.8 Reportes (`/dashboard/compras/reportes`)
+
+Solo con **«Montos de compras»** en la organización (todo es dinero); sin él la
+página no lee nada y la sub-navegación no la muestra. Todo en **USD** y, donde
+la importación tiene **su** tipo de cambio, también en soles (los totales en
+soles suman solo las que lo tienen y dicen cuántas no).
+
+- **Dinero en camino**: importaciones **activas que no son cotización**: costo
+  total, unidades, pagado y **falta pagar** = Σ por importación de
+  max(0, costo − pagado) (lo pagado de más en una no descuenta otra; menos de
+  medio centavo no cuenta).
+- **Comprado por mes**: 12 meses de Lima que terminan en el actual; Σ costo
+  aterrizado de las **compras** por el **mes del pedido**.
+- **Pagado por mes**: Σ pagos por el **mes del pago**, **sin los de
+  importaciones canceladas** (el pago de una cotización sí cuenta: salió dinero).
+- **Últimos 6 meses**: tabla con compras, unidades, comprado y pagado.
+- **Costo por unidad de cada producto**: un punto por **compra** con unidades
+  buenas > 0: su costo aterrizado por unidad buena (§45.3; dos líneas del mismo
+  producto en una importación: Σ costo ÷ Σ buenas). Último, anterior y **cambio =
+  último ÷ anterior − 1**: **rojo si sube más de 2 %, verde si baja más de 2 %**;
+  historial por importación con su fecha, buenas y costo.
+- **Ranking de proveedores** por monto comprado, con su parte del total.
+
+Las cuentas son puras (`lib/compras-reportes.ts`) y usan `landedCosts` (§45.3),
+no una copia. Las lecturas (`loadReportImports`) van por organización, de a 1000
+filas, y sin «Montos de compras» no piden costos por unidad, tipo de cambio,
+costos ni pagos.
+
+### 45.9 El Excel de la importación
+
+Botón **Excel** en el detalle, para quien puede ver la importación:
+`/api/compras/excel/<id>`, que vuelve a pedir el permiso en la organización
+(404 si no; sin sesión, 401) y no se guarda en caché. Hojas:
+
+- **Importación**: código, estado, proveedor, origen, destino, transporte,
+  paquetera, guía y seguimiento, n.º de orden, fechas, aviso a la bodega, notas
+  y la recepción (pedidas, llegaron, faltan, sobran, dañadas, buenas, sin
+  contar).
+- **Productos**: producto, SKU, tienda, cantidad, peso, recibidas, dañadas,
+  buenas, faltan y nota de recepción.
+- Solo con **«Montos de compras»**: en Importación, tipo de cambio, costo de
+  productos, costos repartidos, costo total (y en soles), costo promedio por
+  unidad buena, pagado, falta pagar y ganancia esperada; en Productos, costo del
+  proveedor, **desglose del costo aterrizado por unidad buena** (proveedor,
+  envío, importación, adicional), costo aterrizado por unidad en USD y soles,
+  precio de venta, margen (S/ y %), costo total de la línea y si pasó a Costos;
+  y las hojas **Costos** (con las notas del cálculo) y **Pagos**. Sin el
+  permiso no hay ni columnas ni hojas de dinero.
+- Montos a 2 decimales, costos por unidad a 4 y margen % a 1 (referencia §6.18).
+
+Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
+(estadísticas y reportes, puro), `lib/compras-server.ts` (lecturas),
+`app/dashboard/compras/` (lista, detalle, proveedores, reportes y acciones),
+`components/compras/` (con `subnav.tsx` y `suppliers.tsx`),
+`app/api/compras/` (documento, foto y Excel),
+`lib/exports/compras-importacion.ts` (el Excel),
+`lib/product-cost-periods.ts` (vigencia compartida con Costos) y migraciones
+`0340_compras_importaciones.sql` y `0341_compras_proveedores.sql`. Pruebas:
+`test/compras.test.ts`, `test/compras-actions.test.ts`,
+`test/compras-reportes.test.ts`, `test/compras-proveedores.test.ts`,
+`scripts/sql/compras_smoke.sql` y `scripts/sql/compras_proveedores_smoke.sql`.

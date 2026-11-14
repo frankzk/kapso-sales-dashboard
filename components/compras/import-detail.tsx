@@ -333,11 +333,17 @@ function HeaderBox({ detail, canEdit, trackingLink }: { detail: ImportDetail; ca
             {imp.origin ?? "Origen sin indicar"} → bodega de Kapta, Lima · {transportLabel(imp.transport)}
           </p>
         </div>
-        {canEdit && !editing && (
-          <button type="button" className={BTN_SECONDARY} onClick={() => setEditing(true)}>
-            Editar datos
-          </button>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {/* El Excel vuelve a pedir el permiso; sin «Montos de compras» sale sin dinero (MOM §45.9). */}
+          <a href={`/api/compras/excel/${imp.id}`} className={BTN_SECONDARY} download>
+            Excel
+          </a>
+          {canEdit && !editing && (
+            <button type="button" className={BTN_SECONDARY} onClick={() => setEditing(true)}>
+              Editar datos
+            </button>
+          )}
+        </div>
       </div>
       {editing ? (
         <ImportHeaderForm orgId={imp.org_id} suppliers={detail.suppliers} imp={imp} onDone={() => setEditing(false)} />

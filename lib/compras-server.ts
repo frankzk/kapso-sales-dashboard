@@ -10,16 +10,19 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
-import { hasOrgPermission } from "@/lib/permissions-access";
+import { hasOrgPermission, orgsWithPermission } from "@/lib/permissions-access";
 import { resolveAgentNames } from "@/lib/agent-names";
 import {
   MONEY_EVENT_KINDS,
   MOVEMENT_EVENT_KINDS,
   isMoneyDoc,
   isUuid,
+  type Allocation,
+  type CostKind,
   type ImportEventKind,
   type ImportStatus,
 } from "@/lib/compras";
+import type { ReportImport } from "@/lib/compras-reportes";
 
 export const IMPORT_COLS: string =
   "id,org_id,code,supplier_id,origin,platform_order,transport,carrier,tracking_number,tracking_url,ordered_on,eta,arrived_on,status,reported_to_warehouse_at,reported_by,notes,created_by,created_at,updated_at";
@@ -82,7 +85,13 @@ export interface SupplierRow {
   country: string | null;
   whatsapp: string | null;
   notes: string | null;
+  /** Desde la 0341 (MOM §45.7). */
+  contact_name: string | null;
+  email: string | null;
+  payment_terms: string | null;
 }
+
+export const SUPPLIER_COLS: string = "id,name,country,whatsapp,notes,contact_name,email,payment_terms";
 
 export interface DocumentRow {
   id: string;
@@ -203,10 +212,10 @@ export async function loadImportAccess(
 export async function loadSuppliers(orgId: string, admin: SupabaseClient = createAdminSupabase()): Promise<SupplierRow[]> {
   const { data } = await admin
     .from("import_suppliers")
-    .select("id,name,country,whatsapp,notes")
+    .select(SUPPLIER_COLS)
     .eq("org_id", orgId)
     .order("name", { ascending: true });
-  return (data ?? []) as SupplierRow[];
+  return (data ?? []) as unknown as SupplierRow[];
 }
 
 export interface ImportListRow {
@@ -358,4 +367,143 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
     perms,
     reportedByName: imp.reported_by ? (names[imp.reported_by] ?? null) : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Proveedores y reportes (MOM §45.7 y §45.8)
+// ---------------------------------------------------------------------------
+
+/**
+ * La organización de Compras que se mira: la pedida (`?org=`) si la persona
+ * tiene allí el permiso, si no la primera. `need`: «any» = «Compras» o «Montos
+ * de compras» (ver la sección y Proveedores); «money» = «Montos de compras»
+ * (Reportes).
+ */
+export async function resolveComprasOrg(
+  requested: string | null | undefined,
+  need: "any" | "money" = "any",
+): Promise<{ orgId: string | null; allowed: string[] }> {
+  const [manageOrgs, moneyOrgs] = await Promise.all([
+    need === "money" ? Promise.resolve([]) : orgsWithPermission("purchases.manage"),
+    orgsWithPermission("purchases.money"),
+  ]);
+  const allowed = [...new Set([...manageOrgs, ...moneyOrgs].map((m) => m.org_id))];
+  const orgId = requested && allowed.includes(requested) ? requested : (allowed[0] ?? null);
+  return { orgId, allowed };
+}
+
+/** Filas por página al leer todo (el tope por defecto de PostgREST es 1000). */
+const PAGE = 1000;
+/** Tope de páginas: 50.000 filas, lejos de lo que tiene una organización de Kapta. */
+const MAX_PAGES = 50;
+
+type PageQuery = { range: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }> };
+
+/** Lee todas las filas de una consulta, de a 1000. */
+async function readAll(build: () => PageQuery): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data, error } = await build().range(page * PAGE, page * PAGE + PAGE - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+
+/**
+ * Todas las importaciones de la organización con sus productos, para las
+ * estadísticas de Proveedores y los Reportes. Sin `purchases.money` NO se piden
+ * el costo por unidad, el tipo de cambio, los costos ni los pagos: salen en 0 o
+ * vacíos y solo sirven los números sin dinero (unidades, días, a tiempo,
+ * faltantes).
+ */
+export async function loadReportImports(
+  orgId: string,
+  canMoney: boolean,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<ReportImport[]> {
+  const [imports, items, costs, payments] = await Promise.all([
+    readAll(() =>
+      admin
+        .from("imports")
+        .select(`${IMPORT_COLS}${canMoney ? IMPORT_MONEY_COLS : ""}`)
+        .eq("org_id", orgId)
+        .order("id", { ascending: true }) as unknown as PageQuery,
+    ),
+    readAll(() =>
+      admin
+        .from("import_items")
+        .select(`${ITEM_COLS}${canMoney ? ITEM_MONEY_COLS : ""}`)
+        .eq("org_id", orgId)
+        .order("id", { ascending: true }) as unknown as PageQuery,
+    ),
+    canMoney
+      ? readAll(() =>
+          admin
+            .from("import_costs")
+            .select("id,import_id,kind,label,amount_usd,allocation,item_id")
+            .eq("org_id", orgId)
+            .order("id", { ascending: true }) as unknown as PageQuery,
+        )
+      : Promise.resolve([]),
+    canMoney
+      ? readAll(() =>
+          admin
+            .from("import_payments")
+            .select("id,import_id,amount_usd,paid_on")
+            .eq("org_id", orgId)
+            .order("id", { ascending: true }) as unknown as PageQuery,
+        )
+      : Promise.resolve([]),
+  ]);
+  const byId = new Map<string, ReportImport>();
+  for (const raw of imports) {
+    const imp = normalizeImport(raw, canMoney);
+    byId.set(imp.id, {
+      id: imp.id,
+      code: imp.code,
+      supplierId: imp.supplier_id,
+      status: imp.status,
+      orderedOn: imp.ordered_on,
+      createdAt: imp.created_at,
+      eta: imp.eta,
+      arrivedOn: imp.arrived_on,
+      fxPenPerUsd: canMoney ? (imp.fx_pen_per_usd ?? null) : null,
+      items: [],
+      costs: [],
+      payments: [],
+    });
+  }
+  const sortedItems = items
+    .map((r) => normalizeItem(r, canMoney))
+    .sort((a, b) => num(a.position) - num(b.position) || String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")));
+  for (const it of sortedItems) {
+    byId.get(it.import_id)?.items.push({
+      id: it.id,
+      name: it.name,
+      sku: it.sku,
+      storeId: it.store_id,
+      qty: it.qty,
+      unitCostUsd: canMoney ? (it.unit_cost_usd ?? 0) : 0,
+      unitWeightKg: it.unit_weight_kg,
+      receivedQty: it.received_qty,
+      damagedQty: it.damaged_qty,
+    });
+  }
+  for (const c of costs) {
+    byId.get(String(c.import_id))?.costs.push({
+      id: String(c.id),
+      kind: c.kind as CostKind,
+      label: String(c.label),
+      amountUsd: num(c.amount_usd),
+      allocation: c.allocation as Allocation,
+      itemId: (c.item_id as string | null) ?? null,
+    });
+  }
+  for (const p of payments) {
+    byId.get(String(p.import_id))?.payments.push({ amountUsd: num(p.amount_usd), paidOn: String(p.paid_on) });
+  }
+  return [...byId.values()];
 }

@@ -424,9 +424,26 @@ export interface SupplierInput {
   country?: string | null;
   whatsapp?: string | null;
   notes?: string | null;
+  /** Desde la 0341 (MOM §45.7). */
+  contactName?: string | null;
+  email?: string | null;
+  paymentTerms?: string | null;
 }
 
-export function cleanSupplier(input: SupplierInput): Clean<{ name: string; country: string | null; whatsapp: string | null; notes: string | null }> {
+export interface SupplierValue {
+  name: string;
+  country: string | null;
+  whatsapp: string | null;
+  notes: string | null;
+  contact_name: string | null;
+  email: string | null;
+  payment_terms: string | null;
+}
+
+/** La forma del correo, la misma que el CHECK de la 0341. */
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+export function cleanSupplier(input: SupplierInput): Clean<SupplierValue> {
   const name = text(input.name, 120);
   if (!name) return { error: "Indica el nombre del proveedor." };
   const rawWa = String(input.whatsapp ?? "").trim();
@@ -436,7 +453,19 @@ export function cleanSupplier(input: SupplierInput): Clean<{ name: string; count
     if (!/^\+?\d{6,15}$/.test(digits)) return { error: "WhatsApp inválido: solo números, con el código de país." };
     whatsapp = digits;
   }
-  return { value: { name, country: text(input.country, 80), whatsapp, notes: longText(input.notes, 1000) } };
+  const rawEmail = String(input.email ?? "").trim().toLowerCase();
+  if (rawEmail && (rawEmail.length > 160 || !EMAIL_RE.test(rawEmail))) return { error: "Correo inválido." };
+  return {
+    value: {
+      name,
+      country: text(input.country, 80),
+      whatsapp,
+      notes: longText(input.notes, 1000),
+      contact_name: text(input.contactName, 120),
+      email: rawEmail || null,
+      payment_terms: text(input.paymentTerms, 200),
+    },
+  };
 }
 
 export const MAX_QTY = 10_000_000;

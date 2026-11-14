@@ -333,7 +333,7 @@ describe("las acciones vuelven a pedir el permiso", () => {
     expect(bodies.length).toBeGreaterThanOrEqual(15);
     for (const body of bodies) {
       const name = body.slice(0, body.indexOf("("));
-      expect(/authorize\(admin|hasOrgPermission\(/.test(body), name).toBe(true);
+      expect(/authorize(Supplier)?\(admin|hasOrgPermission\(/.test(body), name).toBe(true);
     }
   });
 
@@ -431,9 +431,11 @@ describe("el menú, el MOM y DEPLOY.md", () => {
     }
   });
 
-  it("DEPLOY.md: la 0340 antes que el código, con el bucket import-files, arriba de todo", () => {
+  it("DEPLOY.md: la 0340 antes que el código, con el bucket import-files", () => {
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("### ");
+    // Ya no es la primera entrada (encima va la de la 0341, MOM §45.7).
+    const first = deploy.indexOf("### 14-11-2026 · Compras: importaciones a la bodega de Lima (0340");
+    expect(first).toBeGreaterThan(-1);
     const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
     expect(entry).toContain("0340_compras_importaciones");
     expect(entry).toContain("import-files");

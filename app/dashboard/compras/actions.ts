@@ -144,7 +144,71 @@ export async function createSupplier(orgId: string, input: SupplierInput): Promi
   const { error } = await admin.from("import_suppliers").insert({ id, org_id: orgId, ...clean.value, created_by: user.id });
   if (error) return { error: error.code === "23505" ? "Ya existe un proveedor con ese nombre." : error.message };
   revalidate();
+  revalidatePath(SUPPLIERS_PATH);
   return { id, notice: `Proveedor «${clean.value.name}» creado.` };
+}
+
+const SUPPLIERS_PATH = `${LIST_PATH}/proveedores`;
+
+/** El proveedor y su organización, solo con «Compras» allí. */
+async function authorizeSupplier(
+  admin: SupabaseClient,
+  supplierId: string,
+): Promise<{ userId: string; supplier: { id: string; org_id: string; name: string } } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Inicia sesión otra vez." };
+  if (!isUuid(supplierId)) return { error: "No encontramos ese proveedor." };
+  const { data } = await admin.from("import_suppliers").select("id,org_id,name").eq("id", supplierId).maybeSingle();
+  const supplier = data as { id: string; org_id: string; name: string } | null;
+  if (!supplier) return { error: "No encontramos ese proveedor." };
+  if (!(await hasOrgPermission(supplier.org_id, "purchases.manage"))) return { error: "Tu rol no permite editar compras." };
+  return { userId: user.id, supplier };
+}
+
+/**
+ * Editar un proveedor (MOM §45.7). Cambiarle el nombre no toca las
+ * importaciones: apuntan al proveedor por su id.
+ */
+export async function updateSupplier(supplierId: string, input: SupplierInput): Promise<ComprasActionState> {
+  const admin = createAdminSupabase();
+  const a = await authorizeSupplier(admin, supplierId);
+  if ("error" in a) return a;
+  const clean = cleanSupplier(input);
+  if ("error" in clean) return clean;
+  const { data: same } = await admin
+    .from("import_suppliers")
+    .select("id,name")
+    .eq("org_id", a.supplier.org_id)
+    .ilike("name", clean.value.name);
+  if (((same ?? []) as { id: string }[]).some((s) => s.id !== a.supplier.id)) return { error: "Ya existe un proveedor con ese nombre." };
+  const { error } = await admin.from("import_suppliers").update(clean.value).eq("id", a.supplier.id).eq("org_id", a.supplier.org_id);
+  if (error) return { error: error.code === "23505" ? "Ya existe un proveedor con ese nombre." : error.message };
+  revalidate();
+  revalidatePath(SUPPLIERS_PATH);
+  return { id: a.supplier.id, notice: `Proveedor «${clean.value.name}» guardado.` };
+}
+
+/**
+ * Borrar un proveedor (MOM §45.7): solo si no tiene NINGUNA importación (de
+ * cualquier estado, también cancelada). Con importaciones, se edita.
+ */
+export async function deleteSupplier(supplierId: string): Promise<ComprasActionState> {
+  const admin = createAdminSupabase();
+  const a = await authorizeSupplier(admin, supplierId);
+  if ("error" in a) return a;
+  const { data: used, error: readError } = await admin
+    .from("imports")
+    .select("id")
+    .eq("org_id", a.supplier.org_id)
+    .eq("supplier_id", a.supplier.id)
+    .limit(1);
+  if (readError) return { error: readError.message };
+  if ((used ?? []).length) return { error: `«${a.supplier.name}» tiene importaciones: no se puede borrar.` };
+  const { error } = await admin.from("import_suppliers").delete().eq("id", a.supplier.id).eq("org_id", a.supplier.org_id);
+  if (error) return { error: error.message };
+  revalidate();
+  revalidatePath(SUPPLIERS_PATH);
+  return { notice: `Proveedor «${a.supplier.name}» borrado.` };
 }
 
 // ---------------------------------------------------------------------------

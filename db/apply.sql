@@ -681,4 +681,6 @@
 \ir migrations/0339_repro_box_con_courier.sql
 \echo 'Applying 0340_compras_importaciones.sql'
 \ir migrations/0340_compras_importaciones.sql
+\echo 'Applying 0341_compras_proveedores.sql'
+\ir migrations/0341_compras_proveedores.sql
 \echo 'Done.'

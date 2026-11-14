@@ -421,7 +421,15 @@ describe("validaciones", () => {
     expect(cleanSupplier({ name: " " })).toHaveProperty("error");
     expect(cleanSupplier({ name: "Yiwu", whatsapp: "abc" })).toHaveProperty("error");
     expect(cleanSupplier({ name: "Yiwu", whatsapp: "+86 138 0000 1111" })).toEqual({
-      value: { name: "Yiwu", country: null, whatsapp: "+8613800001111", notes: null },
+      value: { name: "Yiwu", country: null, whatsapp: "+8613800001111", notes: null, contact_name: null, email: null, payment_terms: null },
+    });
+  });
+
+  it("proveedor (0341): contacto, correo y condiciones de pago, opcionales", () => {
+    expect(cleanSupplier({ name: "Yiwu", email: "sin-arroba" })).toEqual({ error: "Correo inválido." });
+    expect(cleanSupplier({ name: "Yiwu", email: "a@b" })).toHaveProperty("error");
+    expect(cleanSupplier({ name: "Yiwu", contactName: "  Lily   Chen ", email: " Lily@Yiwu.CN ", paymentTerms: "30 % adelanto" })).toEqual({
+      value: { name: "Yiwu", country: null, whatsapp: null, notes: null, contact_name: "Lily Chen", email: "lily@yiwu.cn", payment_terms: "30 % adelanto" },
     });
   });
 
