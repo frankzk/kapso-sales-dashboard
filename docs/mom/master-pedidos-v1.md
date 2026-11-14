@@ -26852,6 +26852,16 @@ para la bodega (§45.11) y la foto de un producto después de crearlo (§45.1).
 **No** entran todavía: seguimiento automático de la paquetera, laboratorios,
 traslados, enlace automático con el inventario ni el correo diario.
 
+**14-11-2026, migración 0342 (decisión del owner):** **cada costo y cada pago
+en su propia moneda** (USD o soles), guardado tal como se escribió, con el
+tipo de cambio de la importación para las cuentas (§45.3); la casilla
+**«Incluye IGV»** en cada costo; y «Leer con IA» toma la moneda de **cada
+cargo** del documento y deja el IGV aparte (§45.10). El caso que lo pidió: la
+factura de DHL Express Perú en soles (gastos de nacionalización S/ 37.60, aforo
+físico S/ 114.50, rectificación de la declaración aduanera S/ 189.70, cargo por
+aranceles e impuestos pagados S/ 85.45 → S/ 427.25 sin IGV; IGV S/ 76.91; total
+S/ 504.16).
+
 ### 45.1 La importación
 
 - **Código** `IMP-<año>-<NNN>` (3 dígitos como mínimo), único por organización:
@@ -26862,9 +26872,13 @@ traslados, enlace automático con el inventario ni el correo diario.
   guía, enlace de seguimiento (solo `http://` o `https://`), fecha del pedido
   (hoy en Lima por defecto), llegada estimada, llegada real y notas. Destino:
   siempre la bodega de Kapta en Lima.
-- **Montos en USD.** Cada importación guarda **su propio tipo de cambio**
+- **La base es USD; cada costo y cada pago, en su propia moneda** (0342). El
+  costo del proveedor por unidad es en USD; cada costo repartido y cada pago se
+  guarda en **USD o en soles**, tal como se escribió, sin convertir al guardar
+  (§45.3). Cada importación guarda **su propio tipo de cambio**
   (`fx_pen_per_usd`, soles por 1 USD), opcional hasta «Pasar a Costos». Con él,
-  el costo aterrizado y el margen se ven también en soles.
+  el costo aterrizado y el margen se ven en USD y en soles; sin él, lo que
+  necesita convertir dice **«Falta el tipo de cambio»**.
 - **Productos**: nombre, SKU (opcional; sin SKU no pasa a Costos), tienda
   (opcional; sin tienda, el costo es general de la organización), foto
   opcional, cantidad entera de 1 a 10.000.000, peso por unidad y, con
@@ -26925,7 +26939,8 @@ traslados, enlace automático con el inventario ni el correo diario.
 
 ### 45.3 Costo aterrizado (`landedCosts`)
 
-Igual que §6.3 de la referencia, en USD y sin redondeo interno:
+Igual que §6.3 de la referencia, sin redondeo interno. Cada costo se reparte
+**en su moneda** con la misma regla (0342: abajo, «Monedas»):
 
 ```
 producto_i = qty_i × costo_por_unidad_i
@@ -26954,13 +26969,55 @@ costo por unidad_i = total_i / divisor_i   (y su desglose por unidad)
   borraba en cascada sin rastro, §13.4): el costo se queda sin producto
   (`item_id` nulo), se reparte por valor con aviso en el cálculo y queda un
   hecho de dinero en el historial.
-- **Margen** (en soles, con el tipo de cambio de la importación): precio de
-  venta − costo por unidad × tipo de cambio; % = margen ÷ precio; **margen
-  bajo** si es menos del 20 %. La ganancia esperada (Σ margen × buenas) solo se
+- **Margen** (en soles): precio de venta − costo aterrizado por unidad **en
+  soles** (la vista en soles de abajo: los costos en soles entran tal cual);
+  % = margen ÷ precio; **margen bajo** si es menos del 20 %. Sin tipo de
+  cambio no hay margen. La ganancia esperada (Σ margen × buenas) solo se
   muestra si todas las líneas tienen precio y hay tipo de cambio.
-- **Pagado** = Σ pagos (USD, con fecha, método y comprobante opcional de la
-  misma importación); **falta pagar** = costo total − pagado, si pasa de medio
-  centavo.
+- **Pagado** = Σ pagos (cada uno en su moneda, con fecha, método y
+  comprobante opcional de la misma importación); **falta pagar** = costo total
+  − pagado, si pasa de medio centavo, sin mezclar monedas (abajo).
+
+**Monedas (0342, decisión del owner del 14-11-2026).**
+
+- **Cada costo y cada pago guarda su propia moneda** (USD o PEN), tal como se
+  escribió: **no se convierte al guardar**. En la base, el monto va en la
+  columna de su moneda (`amount_usd` o `amount_pen`; la otra, nula) y
+  `currency` dice cuál (CHECK en la 0342). Una fila de antes de la 0342 es USD.
+- **El costo aterrizado se calcula en dos vistas** con el tipo de cambio de la
+  importación (`fx_pen_per_usd`):
+  - **en soles** = proveedor (USD × tipo de cambio) + costos en USD × tipo de
+    cambio + **costos en soles tal cual**, sin ida y vuelta por el dólar. Es lo
+    que lleva «Pasar a Costos» (§45.5), redondeado a 2 decimales **solo al
+    final**;
+  - **en USD** = proveedor + costos en USD + costos en soles ÷ tipo de cambio.
+- **El reparto no cambia** (por valor, unidades, peso o a un producto): «por
+  valor» sigue usando el valor del proveedor (USD) como base, sea cual sea la
+  moneda del costo.
+- **Sin tipo de cambio** se pueden guardar costos y pagos en soles, pero todo
+  lo que necesita convertir dice **«Falta el tipo de cambio»** en vez de una
+  cifra a medias: el costo aterrizado por unidad, los totales, el margen, el
+  saldo, los reportes y el Excel. Lo de cada moneda sin convertir sí se
+  muestra (p. ej. «US$ 920.00 + S/ 427.25»). Todo en USD, como antes, no lo
+  necesita para la vista en USD. «Pasar a Costos» sigue pidiendo el tipo de
+  cambio.
+- **«Pagado / Falta pagar» no mezcla monedas** (`paymentBalance`): se compara
+  en la base (USD) convirtiendo con el tipo de cambio, y se muestra también su
+  equivalente en soles. Sin tipo de cambio, solo si todo (costos y pagos) está
+  en una sola moneda —se compara en esa—; con monedas mezcladas se muestra
+  cada moneda por separado y se dice que el saldo necesita el tipo de cambio.
+- **«Incluye IGV»** (casilla en cada costo, apagada por defecto): el monto
+  escrito es con IGV y lo que entra al costo es **monto ÷ 1,18** (IGV del 18 %,
+  `IGV_RATE` en `lib/compras.ts`), **redondeado a 2 decimales**
+  (`netOfIgv`). Se guardan el monto con IGV (`gross_amount`) y la marca
+  (`includes_igv`), para que el historial y el Excel digan «S/ 504.16 con IGV →
+  S/ 427.25 sin IGV». La ayuda de la casilla dice: «Las líneas de la factura ya
+  suelen venir sin IGV; marca esta casilla solo si cargas el total con IGV.» (el
+  caso de S/ 427.25: las líneas de DHL ya vienen sin IGV y se cargan sin
+  marcarla).
+- **En pantalla** cada monto va con su moneda («US$» o «S/») y, con tipo de
+  cambio, su equivalente en la otra en una línea secundaria. «Agregar un
+  costo» y «Registrar un pago» llevan el selector US$ / S/ junto al monto.
 
 ### 45.4 Recepción y alertas (fechas de Lima)
 
@@ -26994,8 +27051,9 @@ las líneas con SKU están contadas** y hay **tipo de cambio**, quien tiene
 «Montos de compras» **y** «Editar costos» pulsa «Pasar a Costos». Por cada
 línea con SKU, Kapta registra en **Costos de productos** (§26):
 
-- costo unitario = costo aterrizado por unidad × tipo de cambio, en **soles
-  redondeado a 2 decimales**; moneda PEN;
+- costo unitario = costo aterrizado por unidad **en soles** (proveedor y costos
+  en USD × tipo de cambio, costos en soles tal cual: §45.3), **redondeado a 2
+  decimales** al final; moneda PEN;
 - la tienda de la línea (sin tienda, el costo general), el SKU, el nombre, el
   proveedor = nombre del proveedor, el lote = el código de la importación;
 - vigente desde la **fecha de llegada** (o hoy en Lima si no tiene), con la nota
@@ -27072,7 +27130,7 @@ ella, el día de Lima de la creación.
 | Tarda | Promedio de días del pedido a la llegada, de las **compras que llegaron** (solo diferencias ≥ 0). |
 | A tiempo | De las compras que llegaron **y tenían llegada estimada**, la parte con llegada ≤ estimada. **Rojo si < 70 %.** |
 | Faltantes y dañadas | (Σ max(0, pedidas − recibidas) + Σ dañadas) ÷ Σ pedidas, en las **líneas contadas** de las compras. **Rojo si ≥ 3 %.** |
-| Comprado (USD) | Σ costo aterrizado (§45.3) de las compras. Solo con «Montos de compras». |
+| Comprado (USD) | Σ costo aterrizado (§45.3) de las compras. Solo con «Montos de compras». Una compra con costos en soles y sin tipo de cambio no entra en los USD y se cuenta aparte («N fuera de los USD: falta el tipo de cambio»). |
 | Le compras | Los **3** productos con más unidades pedidas en las compras. |
 
 Un producto es el mismo entre importaciones si tiene **el mismo SKU en la misma
@@ -27087,7 +27145,12 @@ misma organización) y lo muestra como filtro que se puede quitar.
 Solo con **«Montos de compras»** en la organización (todo es dinero); sin él la
 página no lee nada y la sub-navegación no la muestra. Todo en **USD** y, donde
 la importación tiene **su** tipo de cambio, también en soles (los totales en
-soles suman solo las que lo tienen y dicen cuántas no).
+soles suman solo las que lo tienen y dicen cuántas no). Con las conversiones
+de §45.3 (0342): los totales en USD llevan los costos y pagos en soles ÷ el
+tipo de cambio de **su** importación; una importación con montos en soles y
+sin tipo de cambio **no entra en los USD** y la página dice cuántas son
+(«Falta el tipo de cambio»), igual que ya decía cuántas no entran en los
+soles. En soles, los montos en soles entran tal cual.
 
 - **Dinero en camino**: importaciones **activas que no son cotización**: costo
   total, unidades, pagado y **falta pagar** = Σ por importación de
@@ -27131,6 +27194,12 @@ Botón **Excel** en el detalle, para quien puede ver la importación:
   y las hojas **Costos** (con las notas del cálculo) y **Pagos**. Sin el
   permiso no hay ni columnas ni hojas de dinero.
 - Montos a 2 decimales, costos por unidad a 4 y margen % a 1 (referencia §6.18).
+- **Monedas (0342)**: en **Costos** y **Pagos**, cada fila con su moneda, su
+  monto y su equivalente «En USD» y «En S/» con el tipo de cambio de la
+  importación; en Costos, además, «Incluye IGV», el monto con IGV y el detalle
+  «S/ 504.16 con IGV → S/ 427.25 sin IGV». En Importación, costos y pagado por
+  moneda y los totales convertidos. Lo que necesita convertir y no tiene tipo
+  de cambio dice **«Falta el tipo de cambio»** en la celda.
 
 Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
 (estadísticas y reportes, puro), `lib/compras-server.ts` (lecturas),
@@ -27139,10 +27208,13 @@ Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
 `app/api/compras/` (documento, foto y Excel),
 `lib/exports/compras-importacion.ts` (el Excel),
 `lib/product-cost-periods.ts` (vigencia compartida con Costos) y migraciones
-`0340_compras_importaciones.sql` y `0341_compras_proveedores.sql`. Pruebas:
+`0340_compras_importaciones.sql`, `0341_compras_proveedores.sql` y
+`0342_compras_monedas_igv.sql`. Pruebas:
 `test/compras.test.ts`, `test/compras-actions.test.ts`,
 `test/compras-reportes.test.ts`, `test/compras-proveedores.test.ts`,
-`scripts/sql/compras_smoke.sql` y `scripts/sql/compras_proveedores_smoke.sql`.
+`test/compras-monedas.test.ts`, `test/compras-monedas-acciones.test.ts`,
+`scripts/sql/compras_smoke.sql`, `scripts/sql/compras_proveedores_smoke.sql` y
+`scripts/sql/compras_monedas_smoke.sql`.
 
 ### 45.10 «Leer con IA» (factura, proforma y packing list)
 
@@ -27166,9 +27238,11 @@ Referencia §3.1 paso 2, §6.5, §6.9 y §7.2, adaptada a Kapta.
   clave, HTTP, rechazo del modelo, salida cortada, respuesta ilegible o
   timeout devuelven un motivo claro. La salida se pide con una herramienta con
   esquema JSON: moneda (ISO 4217), líneas (nombre en español, SKU solo si está
-  escrito, cantidad, precio por unidad y/o total de la línea, peso si se ve) y
-  cargos (tipo envío / importación / adicional, nombre, monto). Lo que no se
-  ve, null: no se inventa.
+  escrito, cantidad, precio por unidad y/o total de la línea, peso si se ve),
+  cargos (tipo envío / importación / adicional, nombre, monto y **su moneda**,
+  0342) y el **IGV** aparte (`igv`, `igv_currency`). Los montos de las líneas
+  y de los cargos van **sin IGV** (el valor de venta). Lo que no se ve, null:
+  no se inventa.
 - **Normalización** (`parseAiProposal`, pura): tolera texto alrededor del JSON
   y números como texto; **cantidad entera ≥ 1** (redondeo al entero más
   cercano; una fracción de unidad sube a 1; sin cantidad, 0 o negativa, la
@@ -27177,8 +27251,16 @@ Referencia §3.1 paso 2, §6.5, §6.9 y §7.2, adaptada a Kapta.
   > 0; como máximo 200 líneas y 20 cargos. Se dice cuántas filas se dejaron
   fuera.
 - **Sin «Montos de compras»** la propuesta se arma en el servidor **sin
-  precios, sin cargos y sin moneda** (`stripAiMoney`): ni llegan al navegador
-  ni se guardan. La IA igual propone las líneas con sus cantidades.
+  precios, sin cargos y sin moneda** (ni IGV) (`stripAiMoney`): ni llegan al
+  navegador ni se guardan. La IA igual propone las líneas con sus cantidades.
+- **La moneda de cada cargo y el IGV** (0342): cada cargo trae **su** moneda
+  del documento (sin ella, la del documento; «S/» es PEN y «US$» es USD). Un
+  cargo **en USD o en soles se guarda así**, sin convertir: la factura de DHL
+  Express Perú en soles da costos en soles. Un cargo en otra moneda (la del
+  documento: CNY, EUR…) pasa a USD con el tipo de cambio escrito. El **IGV**
+  del documento se muestra en la propuesta como una línea **informativa** y
+  **nunca se agrega como costo**; los costos de la IA nacen sin «Incluye IGV»
+  (ya vienen sin IGV).
 - **Coincidencia** con los SKU que la organización ya conoce (Costos de
   productos, con su tienda, y los SKU de los pedidos de sus tiendas,
   `org_shopify_products`; solo SKU, nombre y tienda, ningún costo), con la
@@ -27200,11 +27282,14 @@ Referencia §3.1 paso 2, §6.5, §6.9 y §7.2, adaptada a Kapta.
   productos, M cargos agregados de <archivo>»**. Si la importación ya tenía
   productos, lo leído se agrega aparte (se avisa).
 - **Tipo de cambio** (referencia §6.5): si el documento no está en USD y hay
-  algún precio o cargo, hay que escribir **«1 USD = X <moneda>»** (X > 0). El
-  **precio por unidad en USD = precio ÷ X, redondeado a 4 decimales**; cada
-  **cargo en USD = monto ÷ X, a 2 decimales**. En USD, X = 1 con los mismos
-  redondeos. Ese tipo de cambio es solo para convertir el documento: **no** es
-  el tipo de cambio en soles de la importación (§45.1).
+  algún precio, o algún cargo en la moneda del documento (ni USD ni soles), hay
+  que escribir **«1 USD = X <moneda>»** (X > 0). Los productos siguen como
+  siempre: el **precio por unidad en USD = precio ÷ X, redondeado a 4
+  decimales**; un **cargo en la moneda del documento, en USD = monto ÷ X, a 2
+  decimales**; un cargo en USD o en soles, a 2 decimales sin convertir. En
+  USD, X = 1 con los mismos redondeos. Ese tipo de cambio es solo para
+  convertir el documento: **no** es el tipo de cambio en soles de la
+  importación (§45.1).
 
 Código: `lib/compras-ia.ts` (reglas puras), `lib/compras-ia-vision.ts` (la
 llamada), `readImportDocumentWithAi` y `addAiProposalRows` en

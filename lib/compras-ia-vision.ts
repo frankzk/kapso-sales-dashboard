@@ -44,7 +44,8 @@ export interface PurchaseAiOpts {
 export const PURCHASE_AI_SYSTEM =
   "Eres un asistente que lee documentos de importaciones para una empresa de Perú: " +
   "facturas comerciales, proformas (proforma invoice) y packing lists de proveedores " +
-  "del extranjero, normalmente de China.\n\n" +
+  "del extranjero, normalmente de China, y facturas de couriers o agentes de aduana " +
+  "en Perú (DHL Express Perú y otros), que suelen venir en soles.\n\n" +
   "Tu única tarea es TRANSCRIBIR lo que el documento dice, sin inventar:\n" +
   "- Una línea por producto, con las UNIDADES totales. Si viene por cajas o cartones, " +
   "unidades = cajas × unidades por caja.\n" +
@@ -54,6 +55,11 @@ export const PURCHASE_AI_SYSTEM =
   "transporte son «envio»; aranceles, impuestos y agente de aduana son «importacion»; " +
   "comisión bancaria, embalaje, inspección y cualquier otro cargo son «adicional».\n" +
   "- No pongas como línea ni como cargo los subtotales, totales, descuentos ni anticipos.\n" +
+  "- Cada cargo con SU moneda (ISO 4217) tal como figura: una factura de un courier o agente " +
+  "en Perú en soles da cargos en PEN. No conviertas montos de una moneda a otra.\n" +
+  "- Los montos de las líneas y de los cargos van SIN IGV (el valor de venta de cada línea). " +
+  "El IGV va aparte, en igv (con su moneda en igv_currency), nunca como línea ni como cargo; " +
+  "si el documento no tiene IGV, igv es null.\n" +
   "- Escribe el nombre del producto en español, breve y fiel; no agregues datos que no estén.\n" +
   "- El SKU (código, modelo o item no.) solo si está escrito; si no, null.\n" +
   "- Si un dato no aparece o no se lee con claridad, usa null. Un packing list " +
@@ -69,7 +75,9 @@ export const PURCHASE_AI_TOOL = {
     type: "object",
     additionalProperties: false,
     properties: {
-      currency: { ...nullable("string"), description: "Moneda del documento en ISO 4217 (USD, CNY, EUR…), o null si no lo dice." },
+      currency: { ...nullable("string"), description: "Moneda del documento en ISO 4217 (USD, CNY, EUR, PEN…), o null si no lo dice." },
+      igv: { ...nullable("number"), description: "El IGV total del documento, aparte (nunca es una línea ni un cargo); null si no tiene." },
+      igv_currency: { ...nullable("string"), description: "Moneda del IGV en ISO 4217, o null si es la del documento." },
       lines: {
         type: "array",
         items: {
@@ -79,8 +87,8 @@ export const PURCHASE_AI_TOOL = {
             name: { type: "string", description: "Nombre del producto, en español." },
             sku: { ...nullable("string"), description: "Código, modelo o SKU tal como está escrito, o null." },
             quantity: { ...nullable("number"), description: "Unidades totales (cajas × unidades por caja)." },
-            unit_price: { ...nullable("number"), description: "Precio por unidad en la moneda del documento." },
-            line_total: { ...nullable("number"), description: "Total de la línea en la moneda del documento." },
+            unit_price: { ...nullable("number"), description: "Precio por unidad SIN IGV en la moneda del documento." },
+            line_total: { ...nullable("number"), description: "Total de la línea SIN IGV (valor de venta) en la moneda del documento." },
             unit_weight_kg: { ...nullable("number"), description: "Peso por unidad en kg, si se ve." },
             line_weight_kg: { ...nullable("number"), description: "Peso total de la línea en kg, si solo se ve ese." },
           },
@@ -95,13 +103,14 @@ export const PURCHASE_AI_TOOL = {
           properties: {
             kind: { type: "string", enum: ["envio", "importacion", "adicional"] },
             label: { type: "string", description: "Nombre del cargo en español (Flete, Seguro, Comisión bancaria…)." },
-            amount: { ...nullable("number"), description: "Monto en la moneda del documento." },
+            amount: { ...nullable("number"), description: "Monto SIN IGV (valor de venta), en la moneda del cargo." },
+            currency: { ...nullable("string"), description: "Moneda de este cargo en ISO 4217 tal como figura (PEN para soles), o null si es la del documento." },
           },
-          required: ["kind", "label", "amount"],
+          required: ["kind", "label", "amount", "currency"],
         },
       },
     },
-    required: ["currency", "lines", "charges"],
+    required: ["currency", "lines", "charges", "igv", "igv_currency"],
   },
 } as const;
 

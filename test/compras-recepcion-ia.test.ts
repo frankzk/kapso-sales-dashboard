@@ -249,9 +249,9 @@ describe("«Recepción de compras»: guarda la recepción y sube fotos", () => {
       a.removeImportItem(ITEM_B),
       a.setImportItemPhoto(ITEM_A, null),
       a.setImportFx(IMP, "3.9"),
-      a.addImportCost(IMP, { kind: "envio", amountUsd: "10", allocation: "units" }),
+      a.addImportCost(IMP, { kind: "envio", amount: "10", allocation: "units" }),
       a.removeImportCost("c1"),
-      a.addImportPayment(IMP, { amountUsd: "10", paidOn: "2026-11-01", method: "paypal" }),
+      a.addImportPayment(IMP, { amount: "10", paidOn: "2026-11-01", method: "paypal" }),
       a.removeImportPayment("p1"),
       a.pushImportCosts(IMP),
       a.removeImportDocument(DOC_PHOTO),
@@ -293,7 +293,9 @@ describe("«Leer con IA»: la lectura no guarda nada", () => {
       { name: "Audífonos bluetooth pro", sku: "kp-aud-01", qty: 100, unitPrice: 14.2, unitWeightKg: 0.1, match: { sku: "KP-AUD-01", name: "Audífonos Bluetooth Pro", storeId: STORE } },
       { name: "Funda de silicona", sku: null, qty: 20, unitPrice: 3.55, unitWeightKg: null, match: { sku: "FUNDA-SIL", name: "Funda de silicona", storeId: null } },
     ]);
-    expect(res.charges).toEqual([{ kind: "envio", label: "Flete", amount: 142.5 }]);
+    // El cargo sin moneda propia es de la del documento.
+    expect(res.charges).toEqual([{ kind: "envio", label: "Flete", amount: 142.5, currency: "CNY" }]);
+    expect(res.igv).toBeNull();
     expect(writes()).toEqual([]);
     // Del catálogo se leen SKU, nombre y tienda; ningún costo.
     for (const op of h.db.opsOn("product_costs", "select")) expect(op.cols).toBe("sku,product_name,store_id");

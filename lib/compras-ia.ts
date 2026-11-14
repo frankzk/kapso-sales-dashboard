@@ -10,6 +10,13 @@
 // Lo que la IA lee es una PROPUESTA: nada se guarda hasta «Agregar
 // seleccionados», que pasa cada fila por las mismas reglas que agregar un
 // producto o un costo a mano (`cleanItem`, `cleanCost`).
+//
+// Monedas e IGV (0342, MOM §45.10): cada CARGO trae su moneda del documento y
+// uno en USD o en soles se guarda así, sin convertir (la factura de DHL Express
+// Perú en soles da costos en soles); uno en otra moneda (la del documento: CNY,
+// EUR…) pasa a USD con el tipo de cambio escrito. Los precios de los productos
+// siguen pasando a USD. La IA devuelve cada monto SIN IGV (el valor de venta) y
+// el IGV aparte: se muestra como dato y nunca se agrega como costo.
 
 import {
   COST_KINDS,
@@ -82,8 +89,16 @@ export interface AiLine {
 export interface AiCharge {
   kind: CostKind;
   label: string;
-  /** En la moneda del documento, > 0. */
+  /** Sin IGV, en `currency`, > 0. */
   amount: number;
+  /** La moneda del cargo (ISO 4217); sin ella, la del documento; null si ninguno la dice. */
+  currency: string | null;
+}
+
+/** El IGV del documento: un dato aparte, nunca un costo. */
+export interface AiIgv {
+  amount: number;
+  currency: string | null;
 }
 
 export interface AiProposal {
@@ -91,6 +106,8 @@ export interface AiProposal {
   currency: string | null;
   lines: AiLine[];
   charges: AiCharge[];
+  /** El IGV que dice el documento (los montos de las líneas y los cargos ya van sin IGV). */
+  igv: AiIgv | null;
   /** Lo que se descartó al normalizar (líneas sin nombre o sin cantidad, cargos sin monto). */
   dropped: number;
 }
@@ -131,6 +148,18 @@ export function unitPriceOf(unit: unknown, total: unknown, qty: number): number 
   const t = num(total);
   if (t !== null && t >= 0 && qty > 0) return t / qty;
   return null;
+}
+
+/**
+ * Una moneda que dijo el modelo: ISO 4217 en mayúsculas; «US$» es USD y «S/»,
+ * «S/.» o «soles» es PEN. Null si no es una moneda.
+ */
+export function isoCurrency(v: unknown): string | null {
+  const raw = str(v, 10)?.toUpperCase() ?? null;
+  if (!raw) return null;
+  if (raw === "US$") return "USD";
+  if (raw === "S/" || raw === "S/." || raw === "SOLES") return "PEN";
+  return /^[A-Z]{3}$/.test(raw) ? raw : null;
 }
 
 const CHARGE_KIND: Record<string, CostKind> = {
@@ -182,8 +211,7 @@ function toObject(raw: unknown): Record<string, unknown> | null {
 export function parseAiProposal(raw: unknown): AiProposal | null {
   const o = toObject(raw);
   if (!o) return null;
-  const rawCurrency = str(o.currency, 10)?.toUpperCase() ?? null;
-  const currency = rawCurrency && /^[A-Z]{3}$/.test(rawCurrency) ? rawCurrency : rawCurrency === "US$" ? "USD" : null;
+  const currency = isoCurrency(o.currency);
   let dropped = 0;
 
   const lines: AiLine[] = [];
@@ -225,19 +253,24 @@ export function parseAiProposal(raw: unknown): AiProposal | null {
       continue;
     }
     const kind = chargeKind(c.kind);
-    charges.push({ kind, label: str(c.label ?? c.name, 120) ?? costKindLabel(kind), amount });
+    // La moneda de CADA cargo; sin ella, la del documento.
+    charges.push({ kind, label: str(c.label ?? c.name, 120) ?? costKindLabel(kind), amount, currency: isoCurrency(c.currency) ?? currency });
     if (charges.length >= AI_MAX_CHARGES) break;
   }
 
-  return { currency, lines, charges, dropped };
+  // El IGV va aparte: se muestra, nunca es un cargo.
+  const igvAmount = num(o.igv ?? o.igv_amount);
+  const igv = igvAmount !== null && igvAmount > 0 ? { amount: igvAmount, currency: isoCurrency(o.igv_currency) ?? currency } : null;
+
+  return { currency, lines, charges, igv, dropped };
 }
 
 /**
- * Sin «Montos de compras» la propuesta no lleva precios, ni cargos, ni moneda:
- * se quitan en el servidor antes de mandarla al navegador.
+ * Sin «Montos de compras» la propuesta no lleva precios, ni cargos, ni moneda,
+ * ni IGV: se quitan en el servidor antes de mandarla al navegador.
  */
 export function stripAiMoney(p: AiProposal): AiProposal {
-  return { currency: null, lines: p.lines.map((l) => ({ ...l, unitPrice: null })), charges: [], dropped: p.dropped };
+  return { currency: null, lines: p.lines.map((l) => ({ ...l, unitPrice: null })), charges: [], igv: null, dropped: p.dropped };
 }
 
 // ---------------------------------------------------------------------------
@@ -373,8 +406,10 @@ export interface AiConfirmLine {
 export interface AiConfirmCharge {
   kind?: unknown;
   label?: unknown;
-  /** En la moneda del documento. */
+  /** Sin IGV, en `currency`. */
   amount?: unknown;
+  /** USD, PEN o la moneda del documento; vacío = la del documento. */
+  currency?: unknown;
   allocation?: unknown;
 }
 
@@ -411,12 +446,28 @@ export function chargeToUsd(amount: number, fx: number): number {
 }
 
 /**
+ * La moneda en que se GUARDA un cargo de la propuesta: USD y soles, tal cual
+ * (0342); la del documento (CNY, EUR…), en USD con el tipo de cambio escrito.
+ */
+export function aiChargeStoredCurrency(chargeCurrency: string): "USD" | "PEN" {
+  return chargeCurrency === "PEN" ? "PEN" : "USD";
+}
+
+/** ¿Este cargo hay que convertirlo con «1 USD = X <moneda del documento>»? Solo si no es USD ni soles. */
+export function aiChargeNeedsFx(chargeCurrency: string): boolean {
+  return chargeCurrency !== "USD" && chargeCurrency !== "PEN";
+}
+
+/**
  * Lo revisado, convertido a lo que reciben `cleanItem` y `cleanCost`. Sin
  * «Montos de compras» no se leen ni precios, ni cargos, ni tipo de cambio:
- * solo nombre, SKU, tienda, cantidad y peso. Con «Montos», un documento que no
- * está en USD pide el tipo de cambio si hay algún precio o cargo; el precio por
- * unidad pasa a USD a 4 decimales y los cargos a 2. Un cargo nunca va «a un
- * producto» (sus productos todavía no existen).
+ * solo nombre, SKU, tienda, cantidad y peso. Con «Montos», el precio por unidad
+ * de un documento que no está en USD pasa a USD con «1 USD = X <moneda>» a 4
+ * decimales. Cada cargo va en SU moneda: en USD o en soles se guarda así (a 2
+ * decimales, sin convertir); en la moneda del documento (ni USD ni soles), pasa
+ * a USD ÷ X a 2 decimales. El tipo de cambio se pide solo si algo lo necesita.
+ * Un cargo nunca va «a un producto» (sus productos todavía no existen) y el IGV
+ * del documento nunca entra: los cargos ya van sin IGV.
  */
 export function aiConfirmToInputs(
   input: AiConfirmInput,
@@ -430,12 +481,21 @@ export function aiConfirmToInputs(
 
   let currency: string | null = null;
   let fx: number | null = null;
+  const chargeCurrencies: string[] = [];
   if (canMoney) {
     currency = cleanAiCurrency(input.currency);
     if (!currency) return { error: "Moneda inválida: tres letras (USD, CNY, EUR…)." };
+    for (const [i, c] of charges.entries()) {
+      const raw = String(c.currency ?? "").trim();
+      const cur: string | null = raw ? cleanAiCurrency(raw) : currency;
+      if (!cur || (cur !== "USD" && cur !== "PEN" && cur !== currency)) {
+        return { error: `Cargo ${i + 1}: la moneda es US$, S/ o la del documento (${currency}).` };
+      }
+      chargeCurrencies.push(cur);
+    }
     const prices = lines.some((l) => String(l.unitPrice ?? "").trim() !== "");
     if (currency === "USD") fx = 1;
-    else if (prices || charges.length) {
+    else if (prices || chargeCurrencies.some(aiChargeNeedsFx)) {
       fx = cleanAiFx(input.fx);
       if (fx === null) return { error: `Escribe el tipo de cambio: 1 USD = X ${currency}.` };
     }
@@ -471,7 +531,10 @@ export function aiConfirmToInputs(
     if (amount === null || !(amount > 0)) return { error: `Cargo ${i + 1}: el monto debe ser mayor que 0.` };
     const allocation = String(c.allocation ?? "") || "value";
     if (allocation === "item") return { error: `Cargo ${i + 1}: elige un reparto por valor, unidades o peso.` };
-    costs.push({ kind, label: String(c.label ?? ""), amountUsd: String(chargeToUsd(amount, fx ?? 1)), allocation });
+    const cur = chargeCurrencies[i]!;
+    // USD y soles, tal cual; la moneda del documento, a USD con el tipo de cambio.
+    const stored = aiChargeNeedsFx(cur) ? chargeToUsd(amount, fx ?? 1) : round2(amount);
+    costs.push({ kind, label: String(c.label ?? ""), amount: String(stored), currency: aiChargeStoredCurrency(cur), allocation });
   }
   return { items, costs, currency, fx };
 }

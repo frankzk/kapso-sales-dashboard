@@ -1,3 +1,37 @@
+### 14-11-2026 · Compras: cada costo y cada pago en su moneda e «Incluye IGV» (0342, MOM §45.3)
+
+**Migración `0342_compras_monedas_igv.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:
+`psql "$DATABASE_URL" -f db/migrations/0342_compras_monedas_igv.sql` (por
+`apply_migration`, con `set local lock_timeout = '15s'` delante, como la
+0251). A `import_costs` e `import_payments` les agrega
+`currency` (`'USD'` por defecto, CHECK USD | PEN) y `amount_pen` (el monto de
+una fila en soles), deja `amount_usd` nulo para esas filas (`alter column
+amount_usd drop not null`, dentro del `alter table`: no borra nada) y pide con
+un CHECK **exactamente un monto, el de su moneda**. A `import_costs`, además,
+`includes_igv` (falso por defecto) y `gross_amount` (el monto con IGV), con su
+CHECK. Las filas que ya existen son todas USD: toman el default y quedan
+correctas, **sin backfill**. Idempotente; las tablas siguen solo para el
+servidor (RLS sin políticas, sin privilegios para anon ni authenticated).
+**El orden importa**: el código nuevo lee y escribe `currency`, `amount_pen`,
+`includes_igv` y `gross_amount`; sin la migración, el detalle de una
+importación con «Montos de compras» no carga sus costos ni sus pagos y
+agregar un costo o un pago falla. El código anterior sigue funcionando con la
+migración puesta (escribe `amount_usd` sin moneda → USD).
+
+Sin recálculo ni versión nueva del Master. En el detalle, «Agregar un costo» y
+«Registrar un pago» llevan **US$ / S/** junto al monto y cada monto se ve en su
+moneda (con su equivalente si la importación tiene tipo de cambio); los
+costos, la casilla **«Incluye IGV»** (monto ÷ 1,18). El costo aterrizado en
+soles —lo que lleva «Pasar a Costos»— suma los costos en soles tal cual; sin
+tipo de cambio, lo que necesita convertir dice «Falta el tipo de cambio».
+«Leer con IA» deja en soles los cargos de una factura en soles y muestra el
+IGV aparte, sin agregarlo. Verificar en una importación con tipo de cambio:
+agregar «Aforo físico» S/ 114.50 (sin IGV) y un costo de S/ 504.16 con
+«Incluye IGV» (debe quedar S/ 427.25 sin IGV y decirlo en el historial),
+registrar un pago en soles y ver que «Falta pagar» compara en USD; quitar el
+tipo de cambio y ver «Falta el tipo de cambio» en el costo aterrizado; bajar
+el Excel (hojas Costos y Pagos con moneda, IGV y equivalentes).
+
 ### 14-11-2026 · Compras con el aspecto de la Mesa de Despacho y buscador de productos
 
 Sin migración. Compras (lista, detalle, lectura con IA, Proveedores y

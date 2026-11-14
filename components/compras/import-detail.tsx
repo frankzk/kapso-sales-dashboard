@@ -9,6 +9,11 @@
 // recepción y se suben fotos; nada más se edita. «Leer con IA» (MOM §45.10) y
 // la foto de un producto, solo con «Compras».
 //
+// Monedas (MOM §45.3, 0342): cada costo y cada pago se muestra en SU moneda y,
+// con tipo de cambio, su equivalente en una línea secundaria; lo que necesita
+// convertir y no lo tiene dice «Falta el tipo de cambio». «Incluye IGV» en un
+// costo guarda el total con IGV y entra al costo ÷ 1,18.
+//
 // En el mundo de operación (DESIGN.md): título de 28 px con su chapa, el marco
 // de cifras, un índice pegajoso con el aviso de la última acción, la próxima
 // acción con anillo azul y cada parte en su tarjeta de sección sobre el lienzo.
@@ -18,7 +23,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ComponentType, type ReactNode, type SVGProps } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, CARD_ZONE, SECTION_CARD, SectionHead, choiceChipClass } from "@/components/ops-ui";
+import { Badge, Banner, CARD_ZONE, CHECKBOX, SECTION_CARD, SectionHead, choiceChipClass } from "@/components/ops-ui";
 import {
   IconActivity,
   IconArrowLeft,
@@ -40,9 +45,12 @@ import {
 import {
   ALLOCATIONS,
   COST_KINDS,
+  CURRENCIES,
   DOC_KINDS,
+  IGV_HELP,
   IMPORT_STATUSES,
   IMPORT_STATUS_LABEL,
+  MISSING_FX,
   MOVEMENT_EVENT_KINDS,
   PAYMENT_METHODS,
   RECEIVED_STATUSES,
@@ -55,22 +63,29 @@ import {
   formatDmy,
   importAlerts,
   importChecklist,
+  igvOf,
   isActiveStatus,
+  landedCostOf,
   landedCosts,
+  landedItemOf,
   limaToday,
   marginOf,
+  moneyInPen,
+  moneyInUsd,
+  moneyOf,
   moneySummary,
+  netOfIgv,
+  parseDecimal,
   paymentMethodLabel,
   receptionSummary,
   trackingPublicUrl,
   transportLabel,
   warehouseMessage,
   whatsappShareUrl,
-  type CostKind,
-  type Allocation,
+  type Currency,
   type ImportEventKind,
 } from "@/lib/compras";
-import type { ImportDetail, ItemRow } from "@/lib/compras-server";
+import type { CostRow, ImportDetail, ItemRow } from "@/lib/compras-server";
 import {
   addImportCost,
   addImportItem,
@@ -111,7 +126,7 @@ import {
 import { FigureCell, FigureFrame, importStatusTone } from "@/components/compras/chrome";
 import { uploadImportFile } from "@/components/compras/upload";
 import { useCopyToClipboard } from "@/components/copy-button";
-import { fmtBytes, fmtDateTime, fmtInt, fmtPct, fmtPen, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
+import { fmtBytes, fmtDateTime, fmtInt, fmtMoney, fmtPct, fmtPen, fmtSplit, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
 
 type Store = { id: string; name: string };
 type Run = (fn: () => Promise<ComprasActionState>, after?: () => void) => void;
@@ -187,37 +202,16 @@ export function ImportDetailView({
   const [receptionOpen, setReceptionOpen] = useState(false);
   const [editingData, setEditingData] = useState(false);
 
+  // Con el tipo de cambio de la importación: las dos vistas (USD y soles).
   const landed = useMemo(
-    () =>
-      money
-        ? landedCosts(
-            items.map((it) => ({
-              id: it.id,
-              name: it.name,
-              qty: it.qty,
-              unitCostUsd: it.unit_cost_usd ?? 0,
-              unitWeightKg: it.unit_weight_kg,
-              receivedQty: it.received_qty,
-              damagedQty: it.damaged_qty,
-            })),
-            (detail.costs ?? []).map((c) => ({
-              id: c.id,
-              kind: c.kind as CostKind,
-              label: c.label,
-              amountUsd: c.amount_usd,
-              allocation: c.allocation as Allocation,
-              itemId: c.item_id,
-            })),
-          )
-        : null,
-    [money, items, detail.costs],
+    () => (money ? landedCosts(items.map(landedItemOf), (detail.costs ?? []).map(landedCostOf), fx) : null),
+    [money, items, detail.costs, fx],
   );
   const summary = landed
     ? moneySummary(
         landed,
         items.map((it) => ({ id: it.id, salePricePen: it.sale_price_pen })),
-        (detail.payments ?? []).map((p) => ({ amountUsd: p.amount_usd })),
-        fx,
+        (detail.payments ?? []).map((p) => ({ amount: p.amount, currency: p.currency })),
       )
     : null;
   const reception = receptionSummary(items.map((it) => ({ id: it.id, name: it.name, qty: it.qty, receivedQty: it.received_qty, damagedQty: it.damaged_qty })));
@@ -301,20 +295,27 @@ export function ImportDetailView({
     },
     ...(summary
       ? [
-          {
-            key: "total",
-            label: "Costo total (USD)",
-            value: fmtUsd(summary.totalUsd),
-            sub: summary.avgUnitUsd != null ? `${fmtUsdUnit(summary.avgUnitUsd)} por unidad buena` : undefined,
-          },
-          {
-            key: "pagado",
-            label: "Pagado (USD)",
-            value: fmtUsd(summary.paidUsd),
-            // Sin nada que pagar todavía, «Pagado completo» se leería como un hecho.
-            sub: summary.pendingUsd > 0 ? `Falta pagar ${fmtUsd(summary.pendingUsd)}` : summary.totalUsd > 0 ? "Pagado completo" : "Sin costos todavía",
-            tone: summary.pendingUsd > 0 ? ("warn" as const) : summary.totalUsd > 0 ? ("ok" as const) : undefined,
-          },
+          summary.totalUsd !== null
+            ? {
+                key: "total",
+                label: "Costo total (USD)",
+                value: fmtUsd(summary.totalUsd),
+                sub:
+                  summary.avgUnitUsd != null
+                    ? `${fmtUsdUnit(summary.avgUnitUsd)} por unidad buena`
+                    : summary.totalPen !== null && summary.total.pen !== 0
+                      ? fmtPen(summary.totalPen)
+                      : undefined,
+              }
+            : {
+                // Costos en soles y sin tipo de cambio: cada moneda por separado, nunca una suma a medias.
+                key: "total",
+                label: "Costo total",
+                value: "—",
+                sub: `${MISSING_FX} · ${fmtSplit(summary.total)}`,
+                tone: "warn" as const,
+              },
+          balanceFigure(summary),
           {
             key: "ganancia",
             label: "Ganancia esperada (S/)",
@@ -416,8 +417,8 @@ export function ImportDetailView({
 
           {money && landed && <LandedBox detail={detail} landed={landed} fx={fx} canEdit={canEdit} run={run} pending={pending} />}
 
-          {money && <CostsBox detail={detail} canEdit={canEdit} run={run} pending={pending} />}
-          {money && <PaymentsBox detail={detail} summary={summary} canEdit={canEdit} run={run} pending={pending} />}
+          {money && <CostsBox detail={detail} fx={fx} canEdit={canEdit} run={run} pending={pending} />}
+          {money && <PaymentsBox detail={detail} summary={summary} fx={fx} canEdit={canEdit} run={run} pending={pending} />}
 
           {money && plan && (
             <Section id="pasar">
@@ -509,6 +510,31 @@ export function ImportDetailView({
 // ---------------------------------------------------------------------------
 // Cabecera, cifras e índice
 // ---------------------------------------------------------------------------
+
+type Summary = ReturnType<typeof moneySummary>;
+
+/**
+ * «Pagado / Falta pagar» sin mezclar monedas (MOM §45.3): en la base (USD) si se
+ * puede convertir; todo en soles y sin tipo de cambio, en soles; mezcladas y sin
+ * tipo de cambio, cada moneda por separado y el aviso.
+ */
+function balanceFigure(s: Summary): { key: string; label: string; value: ReactNode; sub?: ReactNode; tone?: "warn" | "ok" } {
+  const usd = s.pendingUsd !== null;
+  const pending = usd ? s.pendingUsd : s.pendingPen;
+  const total = usd ? s.totalUsd : s.totalPen;
+  if (pending === null || total === null) {
+    return { key: "pagado", label: "Pagado", value: "—", sub: `Pagado ${fmtSplit(s.paid)} · ${MISSING_FX} para el saldo`, tone: "warn" };
+  }
+  const fmt = usd ? fmtUsd : fmtPen;
+  return {
+    key: "pagado",
+    label: usd ? "Pagado (USD)" : "Pagado (S/)",
+    value: fmt(usd ? s.paidUsd : s.paidPen),
+    // Sin nada que pagar todavía, «Pagado completo» se leería como un hecho.
+    sub: pending > 0 ? `Falta pagar ${fmt(pending)}` : total > 0 ? "Pagado completo" : "Sin costos todavía",
+    tone: pending > 0 ? "warn" : total > 0 ? "ok" : undefined,
+  };
+}
 
 function arrivalFigure(
   arrivedOn: string | null,
@@ -1134,7 +1160,8 @@ function ItemsBox({
         <ul className={cn(adding ? ROWS : ROWS_TOP, "-mb-4 sm:-mb-5")}>
           {detail.items.map((it) => {
             const line = landed?.byItem.get(it.id);
-            const margin = line && money ? marginOf(line.unitCost, fx, it.sale_price_pen, line.good) : null;
+            // El margen con el costo en soles (los costos en soles, tal cual): sin tipo de cambio, no hay.
+            const margin = line && money ? marginOf(line.pen?.unitCost, it.sale_price_pen, line.good) : null;
             if (editing === it.id) {
               return (
                 <li key={it.id} className={ROW}>
@@ -1197,13 +1224,12 @@ function ItemsBox({
                         <dd
                           className="font-semibold text-ink-900"
                           title={
-                            line
-                              ? `Producto ${fmtUsdUnit(line.perUnit.product)} + envío ${fmtUsdUnit(line.perUnit.envio)} + importación ${fmtUsdUnit(line.perUnit.importacion)} + adicional ${fmtUsdUnit(line.perUnit.adicional)}`
+                            line?.usd
+                              ? `Producto ${fmtUsdUnit(line.usd.perUnit.product)} + envío ${fmtUsdUnit(line.usd.perUnit.envio)} + importación ${fmtUsdUnit(line.usd.perUnit.importacion)} + adicional ${fmtUsdUnit(line.usd.perUnit.adicional)}`
                               : undefined
                           }
                         >
-                          {line ? `${fmtUsdUnit(line.unitCost)}/u` : "—"}
-                          {line && fx ? <span className="block font-normal text-ink-500">{fmtPen(line.unitCost * fx)}</span> : null}
+                          {line ? <LandedUnit line={line} /> : "—"}
                         </dd>
                       </div>
                       <div>
@@ -1212,8 +1238,8 @@ function ItemsBox({
                       </div>
                       <div>
                         <dt className="text-ink-500">Margen</dt>
-                        <dd className={margin ? (margin.low ? "font-semibold text-crit-fg" : "text-ok-fg") : "text-ink-500"}>
-                          {margin ? `${fmtPen(margin.unit)} (${fmtPct(margin.pct)})` : "—"}
+                        <dd className={margin ? (margin.low ? "font-semibold text-crit-fg" : "text-ok-fg") : line && !line.pen && it.sale_price_pen ? "font-medium text-warn-fg" : "text-ink-500"}>
+                          {margin ? `${fmtPen(margin.unit)} (${fmtPct(margin.pct)})` : line && !line.pen && it.sale_price_pen ? MISSING_FX : "—"}
                         </dd>
                       </div>
                     </dl>
@@ -1482,6 +1508,27 @@ function ReceptionBox({
 // Dinero
 // ---------------------------------------------------------------------------
 
+type Landed = ReturnType<typeof landedCosts>;
+type LandedLineT = Landed["lines"][number];
+
+/**
+ * El costo aterrizado por unidad de una línea: en USD y, debajo, en soles. Sin
+ * tipo de cambio, la vista que lo necesita dice «Falta el tipo de cambio» (nunca
+ * una cifra a medias).
+ */
+function LandedUnit({ line }: { line: LandedLineT }) {
+  if (line.usd) {
+    return (
+      <>
+        {fmtUsdUnit(line.usd.unitCost)}/u
+        {line.pen ? <span className="block font-normal text-ink-500">{fmtPen(line.pen.unitCost)}</span> : null}
+      </>
+    );
+  }
+  if (line.pen) return <>{fmtPen(line.pen.unitCost)}/u</>;
+  return <span className="font-medium text-warn-fg">{MISSING_FX}</span>;
+}
+
 function LandedBox({
   detail,
   landed,
@@ -1491,7 +1538,7 @@ function LandedBox({
   pending,
 }: {
   detail: ImportDetail;
-  landed: ReturnType<typeof landedCosts>;
+  landed: Landed;
   fx: number | null;
   canEdit: boolean;
   run: Run;
@@ -1503,23 +1550,41 @@ function LandedBox({
   // así cada cifra cabe en una línea.
   const TH = "whitespace-nowrap py-2 pl-3 text-right text-xs font-semibold text-ink-600";
   const TD = "whitespace-nowrap py-2.5 pl-3 text-right text-[13px] leading-5 tabular-nums text-ink-700";
-  const n4 = (v: number) => fmtUsdUnit(v).replace("US$ ", "");
+  const n4 = (v: number | undefined) => (v == null ? "—" : fmtUsdUnit(v).replace("US$ ", ""));
+  const usd = landed.usd;
+  // Costos en soles y sin tipo de cambio: el total en USD no se puede decir.
+  const missingFx = landed.hasPenCosts && !fx;
   return (
     <Section id="aterrizado" className="@container">
       <SectionHead
         id={`${sectionDomId("aterrizado")}-t`}
         title="Costo aterrizado por unidad"
         help={
-          <>
-            Productos <span className="tabular-nums">{fmtUsd(landed.productTotal)}</span> + costos <span className="tabular-nums">{fmtUsd(landed.costsTotal)}</span> ={" "}
-            <span className="font-semibold tabular-nums text-ink-900">{fmtUsd(landed.total)}</span>. Los costos se reparten sobre lo pedido y el costo por unidad
-            se divide entre las unidades buenas.
-          </>
+          usd ? (
+            <>
+              Productos <span className="tabular-nums">{fmtUsd(usd.productTotal)}</span> + costos <span className="tabular-nums">{fmtUsd(usd.costsTotal)}</span> ={" "}
+              <span className="font-semibold tabular-nums text-ink-900">{fmtUsd(usd.total)}</span>
+              {landed.pen && landed.hasPenCosts ? <span className="tabular-nums"> ({fmtPen(landed.pen.total)})</span> : null}. Los costos se reparten sobre lo
+              pedido y el costo por unidad se divide entre las unidades buenas.
+            </>
+          ) : (
+            <>
+              Productos <span className="tabular-nums">{fmtUsd(landed.split.product.usd)}</span> + costos{" "}
+              <span className="tabular-nums">{fmtSplit(landed.split.costs)}</span>: sin tipo de cambio no se pueden sumar. Los costos se reparten sobre lo pedido
+              y el costo por unidad se divide entre las unidades buenas.
+            </>
+          )
         }
       />
       <div className="flex flex-wrap items-end gap-2">
         <Field label="Tipo de cambio (S/ por 1 USD)">
-          <input className={cn(fieldBox("w-32"), "tabular-nums")} inputMode="decimal" value={fxDraft} onChange={(e) => setFxDraft(e.target.value)} disabled={!canEdit} />
+          <input
+            className={cn(fieldBox("w-32"), "tabular-nums", missingFx && "ring-2 ring-warn-fg")}
+            inputMode="decimal"
+            value={fxDraft}
+            onChange={(e) => setFxDraft(e.target.value)}
+            disabled={!canEdit}
+          />
         </Field>
         {canEdit && (
           <button type="button" className={BTN_SECONDARY} disabled={pending} onClick={() => run(() => setImportFx(detail.imp.id, fxDraft))}>
@@ -1527,6 +1592,11 @@ function LandedBox({
           </button>
         )}
       </div>
+      {missingFx && (
+        <Banner tone="warn" title={MISSING_FX}>
+          <p>Hay costos en soles: con el tipo de cambio de la importación se ve el costo aterrizado en USD y en soles, y el margen.</p>
+        </Banner>
+      )}
       {landed.warnings.length > 0 && (
         <Banner tone="warn">
           <ul className="list-disc space-y-0.5 pl-4">
@@ -1538,7 +1608,9 @@ function LandedBox({
       )}
       {rows.length > 0 && (
         <>
-          <p className="hidden text-xs leading-4 text-ink-500 @2xl:block">USD por unidad buena; la última columna, en soles con el tipo de cambio.</p>
+          <p className="hidden text-xs leading-4 text-ink-500 @2xl:block">
+            USD por unidad buena (los costos en soles ÷ el tipo de cambio); la última columna, en soles (los costos en soles, tal cual).
+          </p>
           <table className="-mt-2 hidden w-full table-fixed @2xl:table">
             <thead className="border-b border-line">
               <tr>
@@ -1560,46 +1632,50 @@ function LandedBox({
                     {l.loss ? <Badge tone="crit">Pérdida</Badge> : null}
                   </td>
                   <td className={TD}>{fmtInt(l.good)}</td>
-                  <td className={TD}>{n4(l.perUnit.product)}</td>
-                  <td className={TD}>{n4(l.perUnit.envio)}</td>
-                  <td className={TD}>{n4(l.perUnit.importacion)}</td>
-                  <td className={TD}>{n4(l.perUnit.adicional)}</td>
-                  <td className={cn(TD, "font-semibold text-ink-900")}>{n4(l.unitCost)}</td>
-                  <td className={TD}>{fx ? fmtPen(l.unitCost * fx).replace("S/ ", "") : "—"}</td>
+                  <td className={TD}>{n4(l.usd?.perUnit.product)}</td>
+                  <td className={TD}>{n4(l.usd?.perUnit.envio)}</td>
+                  <td className={TD}>{n4(l.usd?.perUnit.importacion)}</td>
+                  <td className={TD}>{n4(l.usd?.perUnit.adicional)}</td>
+                  <td className={cn(TD, "font-semibold text-ink-900", !l.usd && "whitespace-normal font-medium text-warn-fg")}>{l.usd ? n4(l.usd.unitCost) : MISSING_FX}</td>
+                  <td className={TD} title={l.pen ? undefined : MISSING_FX}>{l.pen ? fmtPen(l.pen.unitCost).replace("S/ ", "") : "—"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <ul className={cn(ROWS, "-mb-4 sm:-mb-5 @2xl:hidden")}>
-            {rows.map(({ it, l }) => (
-              <li key={it.id} className={ROW}>
-                <div className="flex items-start justify-between gap-3">
-                  <p className="min-w-0 text-sm leading-5 text-ink-900">
-                    {it.name} {l.loss ? <Badge tone="crit">Pérdida</Badge> : null}
-                  </p>
-                  <p className="shrink-0 text-right text-sm font-semibold leading-5 tabular-nums text-ink-900">
-                    {fmtUsdUnit(l.unitCost)}/u
-                    {fx ? <span className="block text-[13px] font-normal text-ink-500">{fmtPen(l.unitCost * fx)}</span> : null}
-                  </p>
-                </div>
-                <dl className="mt-1 grid gap-x-6 text-[13px] leading-5 tabular-nums sm:grid-cols-2">
-                  {(
-                    [
-                      ["Buenas", fmtInt(l.good)],
-                      ["Proveedor", fmtUsdUnit(l.perUnit.product)],
-                      ["Envío", fmtUsdUnit(l.perUnit.envio)],
-                      ["Importación", fmtUsdUnit(l.perUnit.importacion)],
-                      ["Adicional", fmtUsdUnit(l.perUnit.adicional)],
-                    ] as const
-                  ).map(([k, v]) => (
-                    <div key={k} className="flex justify-between gap-2">
-                      <dt className="text-ink-500">{k}</dt>
-                      <dd className="text-ink-700">{v}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </li>
-            ))}
+            {rows.map(({ it, l }) => {
+              // El desglose en la vista que se pueda (USD primero).
+              const view = l.usd ?? l.pen;
+              const fmt = l.usd ? fmtUsdUnit : fmtPen;
+              return (
+                <li key={it.id} className={ROW}>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="min-w-0 text-sm leading-5 text-ink-900">
+                      {it.name} {l.loss ? <Badge tone="crit">Pérdida</Badge> : null}
+                    </p>
+                    <p className="shrink-0 text-right text-sm font-semibold leading-5 tabular-nums text-ink-900">
+                      <LandedUnit line={l} />
+                    </p>
+                  </div>
+                  <dl className="mt-1 grid gap-x-6 text-[13px] leading-5 tabular-nums sm:grid-cols-2">
+                    {(
+                      [
+                        ["Buenas", fmtInt(l.good)],
+                        ["Proveedor", view ? fmt(view.perUnit.product) : "—"],
+                        ["Envío", view ? fmt(view.perUnit.envio) : "—"],
+                        ["Importación", view ? fmt(view.perUnit.importacion) : "—"],
+                        ["Adicional", view ? fmt(view.perUnit.adicional) : "—"],
+                      ] as const
+                    ).map(([k, v]) => (
+                      <div key={k} className="flex justify-between gap-2">
+                        <dt className="text-ink-500">{k}</dt>
+                        <dd className="text-ink-700">{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </li>
+              );
+            })}
           </ul>
         </>
       )}
@@ -1607,48 +1683,122 @@ function LandedBox({
   );
 }
 
-function CostsBox({ detail, canEdit, run, pending }: { detail: ImportDetail; canEdit: boolean; run: Run; pending: boolean }) {
+/** El equivalente en la otra moneda con el tipo de cambio (línea secundaria); sin él, nada. */
+function equivalent(amount: number, currency: Currency, fx: number | null): string | null {
+  if (!fx) return null;
+  const m = moneyOf(amount, currency);
+  return currency === "PEN" ? `≈ ${fmtUsd(moneyInUsd(m, fx))}` : `≈ ${fmtPen(moneyInPen(m, fx))}`;
+}
+
+/** Monto con su moneda (US$ / S/) al lado: los dos controles en una fila, también en el teléfono. */
+function AmountField({
+  label,
+  currency,
+  onCurrency,
+  amount,
+  onAmount,
+  hint,
+}: {
+  label: string;
+  currency: Currency;
+  onCurrency: (c: Currency) => void;
+  amount: string;
+  onAmount: (v: string) => void;
+  hint?: ReactNode;
+}) {
+  return (
+    <div className={LABEL}>
+      <span>{label}</span>
+      <div className="flex min-w-0 gap-2">
+        <select className={fieldBox("w-[5.5rem] shrink-0")} value={currency} onChange={(e) => onCurrency(e.target.value as Currency)} aria-label={`${label}: moneda`}>
+          {CURRENCIES.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+        <input
+          className={cn(fieldBox("min-w-0 flex-1"), "tabular-nums")}
+          inputMode="decimal"
+          placeholder="0,00"
+          value={amount}
+          onChange={(e) => onAmount(e.target.value)}
+          aria-label={`${label} en ${currency === "PEN" ? "soles" : "dólares"}`}
+        />
+      </div>
+      {hint && <span className="text-xs font-normal text-ink-500">{hint}</span>}
+    </div>
+  );
+}
+
+/** «S/ 504.16 con IGV → S/ 427.25 sin IGV» de un costo guardado. */
+function costIgvNote(c: CostRow): string | null {
+  return c.includes_igv && c.gross_amount != null ? `${fmtMoney(c.gross_amount, c.currency)} con IGV → ${fmtMoney(c.amount, c.currency)} sin IGV` : null;
+}
+
+function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail; fx: number | null; canEdit: boolean; run: Run; pending: boolean }) {
   const [kind, setKind] = useState<string>("envio");
   const [label, setLabel] = useState("");
   const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState<Currency>("USD");
+  const [includesIgv, setIncludesIgv] = useState(false);
   const [allocation, setAllocation] = useState<string>("units");
   const [itemId, setItemId] = useState("");
   const costs = detail.costs ?? [];
   const itemName = new Map(detail.items.map((it) => [it.id, it.name]));
-  const byKind = COST_KINDS.map((k) => ({ ...k, total: costs.filter((c) => c.kind === k.id).reduce((a, c) => a + c.amount_usd, 0) }));
-  const total = byKind.reduce((a, k) => a + k.total, 0);
+  const sum = (list: CostRow[]) => list.reduce((a, c) => ({ usd: a.usd + (c.currency === "USD" ? c.amount : 0), pen: a.pen + (c.currency === "PEN" ? c.amount : 0) }), { usd: 0, pen: 0 });
+  const byKind = COST_KINDS.map((k) => ({ ...k, total: sum(costs.filter((c) => c.kind === k.id)) }));
+  const total = sum(costs);
+  const mixed = total.usd !== 0 && total.pen !== 0;
+  const totalUsd = moneyInUsd(total, fx);
+  // La vista previa de «Incluye IGV»: lo que entra al costo, sin IGV.
+  const typed = parseDecimal(amount);
+  const igvPreview = includesIgv && typed !== null && typed > 0 ? { net: netOfIgv(typed), igv: igvOf(typed) } : null;
   return (
     <Section id="costos">
       <SectionHead
         id={`${sectionDomId("costos")}-t`}
-        title="Costos a repartir (USD)"
-        badge={costs.length ? <Badge className="tabular-nums">{fmtUsd(total)}</Badge> : undefined}
-        help={<span className="tabular-nums">{byKind.map((k) => `${k.label} ${fmtUsd(k.total)}`).join(" · ")}</span>}
+        title="Costos a repartir"
+        badge={costs.length ? <Badge className="tabular-nums">{fmtSplit(total)}</Badge> : undefined}
+        help={
+          <span className="tabular-nums">
+            {byKind.map((k) => `${k.label} ${fmtSplit(k.total)}`).join(" · ")}
+            {mixed ? (totalUsd !== null ? ` · En USD: ${fmtUsd(totalUsd)}` : ` · ${MISSING_FX} para sumarlos en USD`) : ""}
+          </span>
+        }
       />
       {costs.length ? (
         <ul className={ROWS_TOP}>
-          {costs.map((c) => (
-            <li key={c.id} className={cn(ROW, "flex items-center justify-between gap-3")}>
-              <span className="min-w-0">
-                <span className="block text-sm leading-5 text-ink-900">{c.label}</span>
-                <span className="block text-[13px] leading-5 text-ink-500">
-                  {costKindLabel(c.kind)} · {c.allocation === "item" ? (c.item_id ? `a ${itemName.get(c.item_id) ?? "un producto"}` : "su producto ya no está: por valor") : allocationLabel(c.allocation).toLowerCase()}
+          {costs.map((c) => {
+            const igvNote = costIgvNote(c);
+            const eq = equivalent(c.amount, c.currency, fx);
+            return (
+              <li key={c.id} className={cn(ROW, "flex items-start justify-between gap-3")}>
+                <span className="min-w-0">
+                  <span className="block text-sm leading-5 text-ink-900">{c.label}</span>
+                  <span className="block text-[13px] leading-5 text-ink-500">
+                    {costKindLabel(c.kind)} · {c.allocation === "item" ? (c.item_id ? `a ${itemName.get(c.item_id) ?? "un producto"}` : "su producto ya no está: por valor") : allocationLabel(c.allocation).toLowerCase()}
+                  </span>
+                  {igvNote && <span className="block text-[13px] leading-5 tabular-nums text-ink-500">{igvNote}</span>}
                 </span>
-              </span>
-              <span className="flex shrink-0 items-center gap-1">
-                <span className="text-sm font-medium tabular-nums text-ink-900">{fmtUsd(c.amount_usd)}</span>
-                {canEdit && (
-                  <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportCost(c.id))} aria-label={`Quitar ${c.label}`}>
-                    Quitar
-                  </button>
-                )}
-              </span>
-            </li>
-          ))}
+                <span className="flex shrink-0 items-start gap-1">
+                  <span className="pt-1.5 text-right text-sm font-medium leading-5 tabular-nums text-ink-900 pointer-coarse:pt-3">
+                    {fmtMoney(c.amount, c.currency)}
+                    {eq && <span className="block text-[13px] font-normal text-ink-500">{eq}</span>}
+                  </span>
+                  {canEdit && (
+                    <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportCost(c.id))} aria-label={`Quitar ${c.label}`}>
+                      Quitar
+                    </button>
+                  )}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="text-sm text-ink-500">
-          Sin costos todavía.{canEdit ? " Agrega el flete, los aranceles y los demás cargos: se reparten entre los productos según el reparto que elijas." : ""}
+          Sin costos todavía.{canEdit ? " Agrega el flete, los aranceles y los demás cargos, en dólares o en soles: se reparten entre los productos según el reparto que elijas." : ""}
         </p>
       )}
       {canEdit && (
@@ -1665,11 +1815,16 @@ function CostsBox({ detail, canEdit, run, pending }: { detail: ImportDetail; can
               </select>
             </Field>
             <Field label="Nombre">
-              <input className={FIELD} placeholder="Flete DHL, aranceles…" value={label} onChange={(e) => setLabel(e.target.value)} />
+              <input className={FIELD} placeholder="Flete DHL, aforo físico…" value={label} onChange={(e) => setLabel(e.target.value)} />
             </Field>
-            <Field label="Monto (USD)">
-              <input className={cn(FIELD, "tabular-nums")} inputMode="decimal" placeholder="0,00" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </Field>
+            <AmountField
+              label="Monto"
+              currency={currency}
+              onCurrency={setCurrency}
+              amount={amount}
+              onAmount={setAmount}
+              hint={currency === "PEN" ? "En soles, tal como dice la factura: no se convierte al guardar." : undefined}
+            />
             <Field label="Reparto">
               <select className={FIELD} value={allocation} onChange={(e) => setAllocation(e.target.value)}>
                 {ALLOCATIONS.map((a) => (
@@ -1679,6 +1834,18 @@ function CostsBox({ detail, canEdit, run, pending }: { detail: ImportDetail; can
                 ))}
               </select>
             </Field>
+            <div className="space-y-1 sm:col-span-2">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] font-medium leading-5 text-ink-700 pointer-coarse:min-h-11">
+                <input type="checkbox" className={CHECKBOX} checked={includesIgv} onChange={(e) => setIncludesIgv(e.target.checked)} />
+                Incluye IGV (18 %)
+              </label>
+              <p className="text-xs leading-4 text-ink-500">{IGV_HELP}</p>
+              {igvPreview && (
+                <p className="text-[13px] leading-5 tabular-nums text-ink-700">
+                  Entra al costo: <span className="font-semibold text-ink-900">{fmtMoney(igvPreview.net, currency)} sin IGV</span> (IGV {fmtMoney(igvPreview.igv, currency)}).
+                </p>
+              )}
+            </div>
             {allocation === "item" && (
               <Field label="Producto" className="sm:col-span-2">
                 <select className={FIELD} value={itemId} onChange={(e) => setItemId(e.target.value)}>
@@ -1698,10 +1865,11 @@ function CostsBox({ detail, canEdit, run, pending }: { detail: ImportDetail; can
             disabled={pending}
             onClick={() =>
               run(
-                () => addImportCost(detail.imp.id, { kind, label, amountUsd: amount, allocation, itemId }),
+                () => addImportCost(detail.imp.id, { kind, label, amount, currency, includesIgv, allocation, itemId }),
                 () => {
                   setLabel("");
                   setAmount("");
+                  setIncludesIgv(false);
                 },
               )
             }
@@ -1717,83 +1885,105 @@ function CostsBox({ detail, canEdit, run, pending }: { detail: ImportDetail; can
 function PaymentsBox({
   detail,
   summary,
+  fx,
   canEdit,
   run,
   pending,
 }: {
   detail: ImportDetail;
-  summary: ReturnType<typeof moneySummary> | null;
+  summary: Summary | null;
+  fx: number | null;
   canEdit: boolean;
   run: Run;
   pending: boolean;
 }) {
   const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState<Currency>("USD");
   const [paidOn, setPaidOn] = useState(limaToday());
   const [method, setMethod] = useState<string>("transferencia");
   const [note, setNote] = useState("");
   const [documentId, setDocumentId] = useState("");
   const payments = detail.payments ?? [];
   const vouchers = detail.documents.filter((d) => d.kind === "payment");
+  const fig = summary ? balanceFigure(summary) : null;
+  const pending$ = summary ? (summary.pendingUsd ?? summary.pendingPen) : null;
+  const fmtBase = summary && summary.pendingUsd !== null ? fmtUsd : fmtPen;
   return (
     <Section id="pagos">
       <SectionHead
         id={`${sectionDomId("pagos")}-t`}
-        title="Pagos (USD)"
+        title="Pagos"
         badge={
-          summary && summary.totalUsd > 0 ? (
-            summary.pendingUsd > 0 ? (
+          summary && fig && (summary.total.usd > 0 || summary.total.pen > 0) ? (
+            summary.needsFx ? (
+              <Badge tone="warn">{MISSING_FX}</Badge>
+            ) : pending$ && pending$ > 0 ? (
               <Badge tone="warn" className="tabular-nums">
-                Falta pagar {fmtUsd(summary.pendingUsd)}
+                Falta pagar {fmtBase(pending$)}
               </Badge>
             ) : (
               <Badge tone="ok">Pagado completo</Badge>
             )
           ) : undefined
         }
-        help={summary ? <span className="tabular-nums">Pagado {fmtUsd(summary.paidUsd)} de {fmtUsd(summary.totalUsd)}.</span> : undefined}
+        help={
+          summary ? (
+            <span className="tabular-nums">
+              {summary.needsFx
+                ? `Pagado ${fmtSplit(summary.paid)} de ${fmtSplit(summary.total)}: con monedas mezcladas, el saldo necesita el tipo de cambio.`
+                : summary.pendingUsd !== null
+                  ? `Pagado ${fmtUsd(summary.paidUsd)} de ${fmtUsd(summary.totalUsd)}${summary.paid.pen !== 0 || summary.total.pen !== 0 ? " (los soles ÷ el tipo de cambio)" : ""}.`
+                  : `Pagado ${fmtPen(summary.paidPen)} de ${fmtPen(summary.totalPen)}.`}
+            </span>
+          ) : undefined
+        }
       />
       {payments.length ? (
         <ul className={ROWS_TOP}>
-          {payments.map((p) => (
-            <li key={p.id} className={cn(ROW, "flex items-center justify-between gap-3")}>
-              <span className="min-w-0">
-                <span className="block text-sm leading-5 tabular-nums text-ink-900">
-                  {formatDmy(p.paid_on)} · {paymentMethodLabel(p.method)}
-                </span>
-                {(p.note || p.document_id) && (
-                  <span className="block text-[13px] leading-5 text-ink-500">
-                    {p.note}
-                    {p.note && p.document_id ? " · " : null}
-                    {p.document_id ? (
-                      <a href={`/api/compras/documento/${p.document_id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-medium text-brand-700 hover:underline">
-                        Comprobante
-                        <IconArrowUpRight aria-hidden className="size-3.5" />
-                      </a>
-                    ) : null}
+          {payments.map((p) => {
+            const eq = equivalent(p.amount, p.currency, fx);
+            return (
+              <li key={p.id} className={cn(ROW, "flex items-start justify-between gap-3")}>
+                <span className="min-w-0">
+                  <span className="block text-sm leading-5 tabular-nums text-ink-900">
+                    {formatDmy(p.paid_on)} · {paymentMethodLabel(p.method)}
                   </span>
-                )}
-              </span>
-              <span className="flex shrink-0 items-center gap-1">
-                <span className="text-sm font-medium tabular-nums text-ink-900">{fmtUsd(p.amount_usd)}</span>
-                {canEdit && (
-                  <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportPayment(p.id))} aria-label={`Quitar el pago del ${formatDmy(p.paid_on)}`}>
-                    Quitar
-                  </button>
-                )}
-              </span>
-            </li>
-          ))}
+                  {(p.note || p.document_id) && (
+                    <span className="block text-[13px] leading-5 text-ink-500">
+                      {p.note}
+                      {p.note && p.document_id ? " · " : null}
+                      {p.document_id ? (
+                        <a href={`/api/compras/documento/${p.document_id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-medium text-brand-700 hover:underline">
+                          Comprobante
+                          <IconArrowUpRight aria-hidden className="size-3.5" />
+                        </a>
+                      ) : null}
+                    </span>
+                  )}
+                </span>
+                <span className="flex shrink-0 items-start gap-1">
+                  <span className="pt-1.5 text-right text-sm font-medium leading-5 tabular-nums text-ink-900 pointer-coarse:pt-3">
+                    {fmtMoney(p.amount, p.currency)}
+                    {eq && <span className="block text-[13px] font-normal text-ink-500">{eq}</span>}
+                  </span>
+                  {canEdit && (
+                    <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportPayment(p.id))} aria-label={`Quitar el pago del ${formatDmy(p.paid_on)}`}>
+                      Quitar
+                    </button>
+                  )}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       ) : (
-        <p className="text-sm text-ink-500">Sin pagos todavía.{canEdit ? " Registra cada pago al proveedor con su fecha y, si lo tienes, su comprobante." : ""}</p>
+        <p className="text-sm text-ink-500">Sin pagos todavía.{canEdit ? " Registra cada pago, en dólares o en soles, con su fecha y, si lo tienes, su comprobante." : ""}</p>
       )}
       {canEdit && (
         <div className={cn(CARD_ZONE, "space-y-3")}>
           <p className="text-[13px] font-semibold text-ink-900">Registrar un pago</p>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Monto (USD)">
-              <input className={cn(FIELD, "tabular-nums")} inputMode="decimal" placeholder="0,00" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </Field>
+            <AmountField label="Monto" currency={currency} onCurrency={setCurrency} amount={amount} onAmount={setAmount} />
             <Field label="Fecha del pago">
               <input type="date" className={FIELD} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} />
             </Field>
@@ -1826,7 +2016,7 @@ function PaymentsBox({
             disabled={pending}
             onClick={() =>
               run(
-                () => addImportPayment(detail.imp.id, { amountUsd: amount, paidOn, method, note, documentId }),
+                () => addImportPayment(detail.imp.id, { amount, currency, paidOn, method, note, documentId }),
                 () => {
                   setAmount("");
                   setNote("");

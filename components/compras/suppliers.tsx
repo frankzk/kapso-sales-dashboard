@@ -260,6 +260,10 @@ export function SuppliersView({
                             {stats.boughtWithoutFx ? ` · ${stats.boughtWithoutFx} sin tipo de cambio` : ""}
                           </p>
                         )}
+                        {/* Costos en soles sin tipo de cambio: no entran en los USD (MOM §45.7). */}
+                        {(stats.boughtUsdWithoutFx ?? 0) > 0 && (
+                          <p className="text-[13px] font-medium text-warn-fg">{stats.boughtUsdWithoutFx} fuera de los USD: falta el tipo de cambio</p>
+                        )}
                       </td>
                     )}
                     <td className={cn(TD, "pl-3")}>
@@ -282,7 +286,12 @@ export function SuppliersView({
                         {s.payment_terms ? ` · ${s.payment_terms}` : ""}
                       </p>
                     </div>
-                    {canMoney && <p className="shrink-0 text-sm font-medium leading-5 tabular-nums text-ink-900">{fmtUsd(stats.boughtUsd ?? 0)}</p>}
+                    {canMoney && (
+                      <p className="shrink-0 text-right text-sm font-medium leading-5 tabular-nums text-ink-900">
+                        {fmtUsd(stats.boughtUsd ?? 0)}
+                        {(stats.boughtUsdWithoutFx ?? 0) > 0 && <span className="block text-[13px] text-warn-fg">{stats.boughtUsdWithoutFx} sin tipo de cambio</span>}
+                      </p>
+                    )}
                   </div>
                   <p className="mt-1 text-[13px] leading-5 tabular-nums text-ink-700">
                     {importsLink(s, stats)}

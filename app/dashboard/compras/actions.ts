@@ -9,7 +9,9 @@
 //   - `purchases.money`: costos por unidad, precios de venta, tipo de cambio,
 //     costos repartidos, pagos y los documentos con montos (proforma y
 //     comprobante). Sin él esos campos NO se leen ni se escriben: no basta con
-//     esconderlos en la pantalla (`cleanItem(…, canMoney)`).
+//     esconderlos en la pantalla (`cleanItem(…, canMoney)`). Cada costo y cada
+//     pago se guarda en SU moneda (USD o soles, 0342), sin convertir; con
+//     «Incluye IGV» el costo guarda el monto con IGV y entra ÷ 1,18.
 //   - «Pasar a Costos»: `purchases.money` y `costs.manage`.
 //   - `purchases.receive` («Recepción de compras», MOM §45.11): SOLO guardar
 //     la recepción y subir fotos (tipo «Foto»). Esas dos aceptan
@@ -29,12 +31,15 @@ import { createAdminSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import {
+  COST_COLS,
   ITEM_COLS,
   ITEM_MONEY_COLS,
   comprasVisionCreds,
   loadImportAccess,
   loadSkuCatalog,
+  normalizeCost,
   normalizeItem,
+  normalizePayment,
   type ComprasPerms,
   type ImportRow,
 } from "@/lib/compras-server";
@@ -52,6 +57,7 @@ import {
   cleanReception,
   cleanStatusChange,
   cleanSupplier,
+  costAmountText,
   costKindLabel,
   costPushNote,
   costPushPlan,
@@ -62,9 +68,12 @@ import {
   isImportFilePath,
   isMoneyDoc,
   isUuid,
+  landedCostOf,
   landedCosts,
+  landedItemOf,
   limaToday,
   limaYear,
+  moneyText,
   nextImportCode,
   paymentMethodLabel,
   receptionEventNote,
@@ -81,7 +90,7 @@ import {
   type SupplierInput,
   type ItemValue,
   type CostKind,
-  type Allocation,
+  type CostValue,
   DOC_KINDS,
 } from "@/lib/compras";
 import { insertProductCostPeriod } from "@/lib/product-cost-periods";
@@ -111,8 +120,6 @@ function revalidate(importId?: string) {
   revalidatePath(LIST_PATH);
   if (importId) revalidatePath(`${LIST_PATH}/${importId}`);
 }
-
-const usd = (n: number) => `US$ ${n.toFixed(2)}`;
 
 /**
  * `manage`: «Compras». `money`: «Montos de compras». `receive`: «Compras» o
@@ -603,8 +610,6 @@ export async function addImportCost(importId: string, input: CostInput): Promise
   return { notice: "Costo agregado." };
 }
 
-type CostValue = { kind: CostKind; label: string; amount_usd: number; allocation: Allocation; item_id: string | null };
-
 /**
  * Inserta un costo YA validado (`cleanCost`) con su hecho de dinero. Lo usan
  * «Agregar costo» y «Leer con IA». Quien llama ya pidió `money: true`.
@@ -625,7 +630,7 @@ async function insertImportCost(admin: SupabaseClient, a: Access, v: CostValue):
     a.imp,
     a.userId,
     "dinero",
-    `Costo agregado: ${costKindLabel(v.kind)} · ${v.label} · ${usd(v.amount_usd)} · ${allocationLabel(v.allocation).toLowerCase()}.`,
+    `Costo agregado: ${costKindLabel(v.kind)} · ${v.label} · ${costAmountText({ ...v, amount: (v.currency === "PEN" ? v.amount_pen : v.amount_usd) ?? 0 })} · ${allocationLabel(v.allocation).toLowerCase()}.`,
   );
   return { id };
 }
@@ -633,14 +638,15 @@ async function insertImportCost(admin: SupabaseClient, a: Access, v: CostValue):
 export async function removeImportCost(costId: string): Promise<ComprasActionState> {
   if (!isUuid(costId)) return { error: "Ese costo ya no está." };
   const admin = createAdminSupabase();
-  const { data } = await admin.from("import_costs").select("import_id,label,amount_usd").eq("id", costId).maybeSingle();
-  const cost = data as { import_id: string; label: string; amount_usd: number } | null;
-  if (!cost) return { error: "Ese costo ya no está." };
+  const { data } = await admin.from("import_costs").select(`import_id,${COST_COLS}`).eq("id", costId).maybeSingle();
+  const row = data as Record<string, unknown> | null;
+  if (!row) return { error: "Ese costo ya no está." };
+  const cost = { import_id: String(row.import_id), ...normalizeCost(row) };
   const a = await authorize(admin, cost.import_id, { manage: true, money: true });
   if ("error" in a) return a;
   const { error } = await admin.from("import_costs").delete().eq("id", costId).eq("import_id", a.imp.id);
   if (error) return { error: error.message };
-  await addEvent(admin, a.imp, a.userId, "dinero", `Costo quitado: ${cost.label} · ${usd(Number(cost.amount_usd))}.`);
+  await addEvent(admin, a.imp, a.userId, "dinero", `Costo quitado: ${cost.label} · ${costAmountText(cost)}.`);
   revalidate(a.imp.id);
   return { notice: "Costo quitado." };
 }
@@ -661,7 +667,8 @@ export async function addImportPayment(importId: string, input: PaymentInput): P
   });
   if (error) return { error: error.message };
   const v = clean.value;
-  await addEvent(admin, a.imp, a.userId, "dinero", `Pago registrado: ${usd(v.amount_usd)} · ${paymentMethodLabel(v.method)} · ${formatDmy(v.paid_on)}.`);
+  const amount = (v.currency === "PEN" ? v.amount_pen : v.amount_usd) ?? 0;
+  await addEvent(admin, a.imp, a.userId, "dinero", `Pago registrado: ${moneyText(amount, v.currency)} · ${paymentMethodLabel(v.method)} · ${formatDmy(v.paid_on)}.`);
   revalidate(a.imp.id);
   return { notice: "Pago registrado." };
 }
@@ -669,14 +676,19 @@ export async function addImportPayment(importId: string, input: PaymentInput): P
 export async function removeImportPayment(paymentId: string): Promise<ComprasActionState> {
   if (!isUuid(paymentId)) return { error: "Ese pago ya no está." };
   const admin = createAdminSupabase();
-  const { data } = await admin.from("import_payments").select("import_id,amount_usd,paid_on").eq("id", paymentId).maybeSingle();
-  const pay = data as { import_id: string; amount_usd: number; paid_on: string } | null;
-  if (!pay) return { error: "Ese pago ya no está." };
+  const { data } = await admin
+    .from("import_payments")
+    .select("id,import_id,currency,amount_usd,amount_pen,paid_on,method")
+    .eq("id", paymentId)
+    .maybeSingle();
+  const row = data as Record<string, unknown> | null;
+  if (!row) return { error: "Ese pago ya no está." };
+  const pay = { import_id: String(row.import_id), ...normalizePayment(row) };
   const a = await authorize(admin, pay.import_id, { manage: true, money: true });
   if ("error" in a) return a;
   const { error } = await admin.from("import_payments").delete().eq("id", paymentId).eq("import_id", a.imp.id);
   if (error) return { error: error.message };
-  await addEvent(admin, a.imp, a.userId, "dinero", `Pago quitado: ${usd(Number(pay.amount_usd))} del ${formatDmy(pay.paid_on)}.`);
+  await addEvent(admin, a.imp, a.userId, "dinero", `Pago quitado: ${moneyText(pay.amount, pay.currency)} del ${formatDmy(pay.paid_on)}.`);
   revalidate(a.imp.id);
   return { notice: "Pago quitado." };
 }
@@ -814,25 +826,18 @@ export async function pushImportCosts(importId: string): Promise<ComprasActionSt
 
   const [{ data: itemRows }, { data: costRows }, { data: supplier }] = await Promise.all([
     admin.from("import_items").select(`${ITEM_COLS}${ITEM_MONEY_COLS}`).eq("import_id", a.imp.id),
-    admin.from("import_costs").select("id,kind,label,amount_usd,allocation,item_id").eq("import_id", a.imp.id),
+    admin.from("import_costs").select(COST_COLS).eq("import_id", a.imp.id),
     a.imp.supplier_id
       ? admin.from("import_suppliers").select("name").eq("id", a.imp.supplier_id).maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
   const items = ((itemRows ?? []) as unknown as Record<string, unknown>[]).map((r) => normalizeItem(r, true));
+  // En soles: el proveedor y los costos en USD × el tipo de cambio de la
+  // importación, y los costos en soles TAL CUAL (0342); se redondea al final.
   const landed = landedCosts(
-    items.map((it) => ({
-      id: it.id,
-      name: it.name,
-      qty: it.qty,
-      unitCostUsd: it.unit_cost_usd ?? 0,
-      unitWeightKg: it.unit_weight_kg,
-      receivedQty: it.received_qty,
-      damagedQty: it.damaged_qty,
-    })),
-    ((costRows ?? []) as { id: string; kind: "envio" | "importacion" | "adicional"; label: string; amount_usd: unknown; allocation: "value" | "units" | "weight" | "item"; item_id: string | null }[]).map(
-      (c) => ({ id: c.id, kind: c.kind, label: c.label, amountUsd: Number(c.amount_usd) || 0, allocation: c.allocation, itemId: c.item_id }),
-    ),
+    items.map(landedItemOf),
+    ((costRows ?? []) as unknown as Record<string, unknown>[]).map((r) => landedCostOf(normalizeCost(r))),
+    a.imp.fx_pen_per_usd ?? null,
   );
   const plan = costPushPlan({
     status: a.imp.status,
@@ -925,7 +930,10 @@ export type AiReadState =
       /** Sin «Montos de compras»: null, y ni precios ni cargos. */
       currency: string | null;
       lines: AiProposalLine[];
-      charges: { kind: CostKind; label: string; amount: number }[];
+      /** Cada cargo en la moneda que dice el documento (un courier de Perú, en soles). */
+      charges: { kind: CostKind; label: string; amount: number; currency: string | null }[];
+      /** El IGV del documento, aparte: se muestra, nunca se agrega como costo. */
+      igv: { amount: number; currency: string | null } | null;
       /** Filas que la IA devolvió sin nombre, sin cantidad o sin monto. */
       dropped: number;
       /** Productos que la importación ya tenía (lo leído se agrega aparte). */
@@ -992,6 +1000,7 @@ export async function readImportDocumentWithAi(documentId: string): Promise<AiRe
       return { ...l, match: m ? { sku: m.sku, name: m.name, storeId: m.storeId } : null };
     }),
     charges: proposal.charges,
+    igv: proposal.igv,
     dropped: proposal.dropped,
     existingItems: ((existing ?? []) as unknown[]).length,
     money: a.canMoney,
@@ -1005,8 +1014,10 @@ export async function readImportDocumentWithAi(documentId: string): Promise<AiRe
  * «Agregar producto» / «Agregar costo»; al final, «Leído con IA: …». Sin
  * «Montos de compras» no se leen precios, cargos ni tipo de cambio (ver
  * `aiConfirmToInputs`). Con «Montos», si el documento no está en USD hace
- * falta «1 USD = X <moneda>»: el precio por unidad pasa a USD a 4 decimales y
- * los cargos a 2.
+ * falta «1 USD = X <moneda>» para los precios: el precio por unidad pasa a USD
+ * a 4 decimales. Un cargo en USD o en soles se guarda en SU moneda (0342); uno
+ * en la moneda del documento (CNY, EUR…) pasa a USD a 2 decimales. El IGV del
+ * documento nunca se agrega.
  */
 export async function addAiProposalRows(importId: string, input: AiConfirmInput): Promise<ComprasActionState> {
   const admin = createAdminSupabase();

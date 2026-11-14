@@ -63,11 +63,11 @@ describe("la respuesta del modelo", () => {
   it("acepta el JSON dentro de texto o de cercas, y la entrada de la herramienta", () => {
     const text = 'Aquí está:\n```json\n{"currency":"cny","lines":[{"name":"Audífonos","quantity":10,"unit_price":12.5}],"charges":[]}\n```';
     expect(parseAiProposal(text)).toMatchObject({ currency: "CNY", lines: [{ name: "Audífonos", qty: 10, unitPrice: 12.5 }] });
-    expect(parseAiProposal({ currency: "USD", lines: [], charges: [] })).toEqual({ currency: "USD", lines: [], charges: [], dropped: 0 });
+    expect(parseAiProposal({ currency: "USD", lines: [], charges: [] })).toEqual({ currency: "USD", lines: [], charges: [], igv: null, dropped: 0 });
   });
 
   it("campos que faltan: moneda null, SKU null, precio null; sin listas, vacías", () => {
-    expect(parseAiProposal({})).toEqual({ currency: null, lines: [], charges: [], dropped: 0 });
+    expect(parseAiProposal({})).toEqual({ currency: null, lines: [], charges: [], igv: null, dropped: 0 });
     const p = parseAiProposal({ lines: [{ name: "Cargador", quantity: "3" }] })!;
     expect(p.currency).toBeNull();
     expect(p.lines).toEqual([{ name: "Cargador", sku: null, qty: 3, unitPrice: null, unitWeightKg: null }]);
@@ -128,19 +128,20 @@ describe("la respuesta del modelo", () => {
       ],
     })!;
     expect(p.charges).toEqual([
-      { kind: "envio", label: "Flete DHL", amount: 120 },
-      { kind: "envio", label: "Envío", amount: 35.5 },
-      { kind: "importacion", label: "Aranceles", amount: 40 },
-      { kind: "adicional", label: "Comisión bancaria", amount: 8 },
+      { kind: "envio", label: "Flete DHL", amount: 120, currency: null },
+      { kind: "envio", label: "Envío", amount: 35.5, currency: null },
+      { kind: "importacion", label: "Aranceles", amount: 40, currency: null },
+      { kind: "adicional", label: "Comisión bancaria", amount: 8, currency: null },
     ]);
     expect(p.dropped).toBe(2);
   });
 
-  it("sin «Montos de compras»: ni precios, ni cargos, ni moneda", () => {
-    const p = parseAiProposal({ currency: "CNY", lines: [{ name: "A", sku: "X1", quantity: 5, unit_price: 9 }], charges: [{ kind: "envio", amount: 50 }] })!;
+  it("sin «Montos de compras»: ni precios, ni cargos, ni moneda, ni IGV", () => {
+    const p = parseAiProposal({ currency: "CNY", igv: 76.91, lines: [{ name: "A", sku: "X1", quantity: 5, unit_price: 9 }], charges: [{ kind: "envio", amount: 50 }] })!;
+    expect(p.igv).toEqual({ amount: 76.91, currency: "CNY" });
     const stripped = stripAiMoney(p);
-    expect(stripped).toEqual({ currency: null, lines: [{ name: "A", sku: "X1", qty: 5, unitPrice: null, unitWeightKg: null }], charges: [], dropped: 0 });
-    expect(JSON.stringify(stripped)).not.toMatch(/9|50|CNY/);
+    expect(stripped).toEqual({ currency: null, lines: [{ name: "A", sku: "X1", qty: 5, unitPrice: null, unitWeightKg: null }], charges: [], igv: null, dropped: 0 });
+    expect(JSON.stringify(stripped)).not.toMatch(/9|50|CNY|76/);
   });
 });
 
@@ -233,8 +234,11 @@ describe("la conversión con «1 USD = X <moneda>» (§6.5 de la referencia)", (
     expect(r.items.map((i) => i.unitCostUsd)).toEqual(["1.4038", ""]);
     expect(cleanItem(r.items[0]!, true)).toMatchObject({ value: { unit_cost_usd: 1.4038, sale_price_pen: null } });
     expect(cleanItem(r.items[1]!, true)).toMatchObject({ value: { unit_cost_usd: 0 } });
-    expect(r.costs).toEqual([{ kind: "envio", label: "Flete", amountUsd: "14.04", allocation: "weight" }]);
-    expect(cleanCost(r.costs[0]!, [])).toEqual({ value: { kind: "envio", label: "Flete", amount_usd: 14.04, allocation: "weight", item_id: null } });
+    // Un cargo sin moneda es de la del documento (CNY): pasa a USD ÷ X, a 2 decimales.
+    expect(r.costs).toEqual([{ kind: "envio", label: "Flete", amount: "14.04", currency: "USD", allocation: "weight" }]);
+    expect(cleanCost(r.costs[0]!, [])).toEqual({
+      value: { kind: "envio", label: "Flete", currency: "USD", amount_usd: 14.04, amount_pen: null, includes_igv: false, gross_amount: null, allocation: "weight", item_id: null },
+    });
   });
 
   it("en USD no pide tipo de cambio y redondea a 4 decimales", () => {
@@ -292,7 +296,11 @@ describe("la llamada a la API (fetch simulado)", () => {
     const body = JSON.parse(String(init!.body));
     expect(body.model).toBe("claude-sonnet-5");
     expect(body.tools[0].name).toBe("registrar_documento");
-    expect(body.tools[0].input_schema.required).toEqual(["currency", "lines", "charges"]);
+    expect(body.tools[0].input_schema.required).toEqual(["currency", "lines", "charges", "igv", "igv_currency"]);
+    // Cada cargo trae su moneda; los montos, sin IGV.
+    expect(body.tools[0].input_schema.properties.charges.items.required).toEqual(["kind", "label", "amount", "currency"]);
+    expect(body.system).toMatch(/SIN IGV/);
+    expect(body.system).toMatch(/Cada cargo con SU moneda/);
     expect(body.messages[0].content[0]).toMatchObject({ type: "document", source: { media_type: "application/pdf" } });
     expect(init!.signal).toBeInstanceOf(AbortSignal);
   });
