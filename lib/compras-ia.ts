@@ -347,34 +347,100 @@ export function buildCatalog(entries: readonly CatalogEntry[]): CatalogProduct[]
   });
 }
 
-/** Un producto del selector de «Agregar producto» (MOM §45.1): el del catálogo y en cuántos pedidos salió. */
-export interface PickerProduct extends CatalogProduct {
+/**
+ * Una variante del catálogo VIVO de una tienda (MOM §45.1): el publicado de
+ * WooCommerce o el activo de Shopify (`loadShopifySkuDetails`, el mismo de
+ * Envíos → «Catálogo de productos»), con la tienda de donde salió. Incluye las
+ * variantes sin SKU. Sin montos.
+ */
+export interface LiveCatalogEntry {
+  storeId: string;
+  sku: string | null;
+  title: string;
+  variantTitle: string | null;
+  productId?: string | null;
+  variantId?: string | null;
+}
+
+/** Un producto del selector de «Agregar producto» (MOM §45.1). */
+export interface PickerProduct {
+  /** Única en la lista (el SKU no alcanza: el mismo SKU puede estar en dos tiendas, y hay variantes sin SKU). */
+  key: string;
+  /** Null: una variante de la tienda sin SKU («Sin SKU»: se puede agregar, pero no pasa a Costos). */
+  sku: string | null;
+  name: string | null;
+  /** La tienda: la del catálogo vivo; en el historial, solo si el SKU se vio siempre en la misma. */
+  storeId: string | null;
+  /** En cuántos pedidos de las tiendas salió (`org_shopify_products`); 0 si nunca. */
   orderCount: number;
 }
 
+/** El selector viaja al navegador con este tope. */
+export const PICKER_LIMIT = 3000;
+
+/** «Bóxer Confort – Comodidad… (Pack de 4) – 4XL»: el título y, si la hay, la variante (no «Default Title»). */
+export function pickerName(title: string, variantTitle: string | null | undefined): string {
+  const t = title.trim();
+  const v = (variantTitle ?? "").trim();
+  return v && v.toLowerCase() !== "default title" ? `${t} – ${v}` : t;
+}
+
 /**
- * El catálogo para elegir un producto a mano en «Agregar producto»: el mismo
- * `buildCatalog` que usa «Leer con IA» (un producto por SKU, la tienda solo si
- * el SKU se vio siempre en la misma), con los pedidos sumados por SKU y
- * ordenado de más a menos pedidos; a igual cifra, por nombre.
+ * El catálogo para elegir un producto a mano en «Agregar producto»:
+ *
+ *   1. el catálogo VIVO de cada tienda (`live`): un producto por SKU y tienda,
+ *      con la tienda de donde salió y el nombre «título – variante»; las
+ *      variantes sin SKU también, marcadas «Sin SKU»;
+ *   2. lo conocido por el historial (`history`: Costos de productos y los SKU
+ *      vistos en pedidos, el mismo `buildCatalog` de «Leer con IA»), solo para
+ *      los SKU que ningún catálogo vivo tiene (p. ej. descontinuados), con la
+ *      tienda solo si el SKU se vio siempre en la misma.
+ *
+ * Los pedidos se suman por SKU (`org_shopify_products`; 0 si nunca se vendió) y
+ * la lista va de más a menos pedidos; a igual cifra, por nombre.
  */
-export function buildProductPicker(entries: readonly CatalogEntry[]): PickerProduct[] {
+export function buildProductPicker(history: readonly CatalogEntry[], live: readonly LiveCatalogEntry[] = []): PickerProduct[] {
   const counts = new Map<string, number>();
-  for (const e of entries) {
+  for (const e of history) {
     const key = skuKey(e.sku);
     if (!key) continue;
     const n = Number(e.orderCount);
     counts.set(key, (counts.get(key) ?? 0) + (Number.isFinite(n) && n > 0 ? n : 0));
   }
-  return buildCatalog(entries)
-    .map((p) => ({ ...p, orderCount: counts.get(skuKey(p.sku)) ?? 0 }))
-    .sort((a, b) => b.orderCount - a.orderCount || (a.name ?? a.sku).localeCompare(b.name ?? b.sku, "es"));
+  const out = new Map<string, PickerProduct>();
+  const liveSkus = new Set<string>();
+  for (const e of live) {
+    const title = (e.title ?? "").trim();
+    if (!title || !e.storeId) continue;
+    const sku = (e.sku ?? "").trim();
+    const name = pickerName(title, e.variantTitle);
+    const key = sku
+      ? `sku:${e.storeId}:${skuKey(sku)}`
+      : `sinsku:${e.storeId}:${e.variantId || e.productId || normalizeProductName(name)}`;
+    if (out.has(key)) continue;
+    if (sku) liveSkus.add(skuKey(sku));
+    out.set(key, { key, sku: sku || null, name, storeId: e.storeId, orderCount: sku ? (counts.get(skuKey(sku)) ?? 0) : 0 });
+  }
+  for (const p of buildCatalog(history)) {
+    const k = skuKey(p.sku);
+    if (liveSkus.has(k)) continue;
+    const key = `sku:${p.storeId ?? ""}:${k}`;
+    if (!out.has(key)) out.set(key, { key, sku: p.sku, name: p.name, storeId: p.storeId, orderCount: counts.get(k) ?? 0 });
+  }
+  return [...out.values()].sort(
+    (a, b) => b.orderCount - a.orderCount || (a.name ?? a.sku ?? "").localeCompare(b.name ?? b.sku ?? "", "es") || a.key.localeCompare(b.key),
+  );
+}
+
+/** El tope del selector: los primeros `limit` (los más pedidos) y cuántos quedaron fuera. */
+export function capProductPicker(list: readonly PickerProduct[], limit = PICKER_LIMIT): { products: PickerProduct[]; omitted: number } {
+  return { products: list.slice(0, limit), omitted: Math.max(0, list.length - limit) };
 }
 
 /**
  * Buscar en el selector por nombre o SKU: cada palabra escrita tiene que estar
- * en el nombre normalizado o en el SKU (sin tildes ni mayúsculas). Conserva el
- * orden del catálogo (los más pedidos primero).
+ * en el nombre normalizado o en el SKU (sin tildes ni mayúsculas: «bóxer» =
+ * «boxer»). Conserva el orden del catálogo (los más pedidos primero).
  */
 export function searchProductPicker(list: readonly PickerProduct[], query: string, limit = 8): PickerProduct[] {
   const words = normalizeProductName(query).split(" ").filter(Boolean);

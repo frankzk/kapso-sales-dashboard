@@ -65,6 +65,8 @@ const TD = "py-2.5 pl-3 align-top text-sm leading-5 tabular-nums text-ink-700 fi
 const SUB = "text-[13px] leading-5 text-ink-500";
 // Las listas van justo bajo `SectionHead`: su hairline ya es la de arriba.
 const ROWS = "-mx-4 -mt-4 divide-y divide-line sm:-mx-5";
+/** Las mismas filas después de otra cosa (un aviso): con su hairline arriba. */
+const ROWS_AFTER = "-mx-4 divide-y divide-line border-t border-line sm:-mx-5";
 const ROW = "px-4 py-3 sm:px-5";
 
 export function ReportsView({
@@ -89,7 +91,11 @@ export function ReportsView({
   const last6 = [...months].slice(-6).reverse();
   const products = unitCostHistory(imports);
   const supplierName = new Map(suppliers.map((s) => [s.id, s.name]));
+  // En una sola moneda para todos: soles si todas las compras se pueden llevar a
+  // soles (un laboratorio local todo en soles entra sin tipo de cambio).
   const ranking = supplierRanking(suppliers.map((s) => supplierStats(s.id, imports, { money: true })));
+  const fmtBase = ranking.base === "PEN" ? fmtPen : fmtUsd;
+  const fmtOther = ranking.base === "PEN" ? fmtUsd : fmtPen;
   // Montos en soles sin tipo de cambio: no entran en los USD y se dice cuántas son.
   const missingFx = importsMissingFxForUsd(imports);
 
@@ -191,9 +197,26 @@ export function ReportsView({
         )}
       </Card>
 
-      <Card title="Proveedores por monto comprado">
-        {!ranking.length ? (
-          <p className="text-sm text-ink-500">Todavía no hay compras.</p>
+      <Card
+        title="Proveedores por monto comprado"
+        help={
+          ranking.base === "PEN"
+            ? "En soles: los montos en soles tal cual y los de USD × el tipo de cambio de cada importación. El equivalente en USD, solo si todas sus compras tienen con qué convertir."
+            : "En USD: alguna compra en USD no tiene tipo de cambio y no se puede llevar a soles. El equivalente en soles, solo si todas sus compras tienen con qué convertir."
+        }
+      >
+        {ranking.missingFx > 0 && (
+          <Banner tone="warn" role="status" title={MISSING_FX}>
+            <p>
+              {ranking.missingFx} compra{ranking.missingFx === 1 ? "" : "s"} no entra{ranking.missingFx === 1 ? "" : "n"} en el ranking en{" "}
+              {ranking.base === "PEN" ? "soles" : "USD"}: le{ranking.missingFx === 1 ? "" : "s"} falta el tipo de cambio.
+              {ranking.outside.length > 0 &&
+                ` Sin ninguna compra que se pueda comparar: ${ranking.outside.map((o) => supplierName.get(o.supplierId) ?? "—").join(", ")}.`}
+            </p>
+          </Banner>
+        )}
+        {!ranking.rows.length ? (
+          <p className="text-sm text-ink-500">{ranking.outside.length ? "Ninguna compra se puede comparar todavía." : "Todavía no hay compras."}</p>
         ) : (
           <>
             <table className="hidden w-full @xl:table">
@@ -201,14 +224,14 @@ export function ReportsView({
                 <tr>
                   <th className={cn(TH, "w-8 text-left")}>#</th>
                   <th className={cn(TH, "text-left")}>Proveedor</th>
-                  <th className={cn(TH, NUM)}>Comprado</th>
+                  <th className={cn(TH, NUM)}>Comprado ({ranking.base === "PEN" ? "S/" : "USD"})</th>
                   <th className={cn(TH, NUM)}>Del total</th>
                   <th className={cn(TH, NUM)}>Compras</th>
                   <th className={cn(TH, NUM)}>Unidades</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {ranking.map((r, i) => (
+                {ranking.rows.map((r, i) => (
                   <tr key={r.supplierId}>
                     <td className={cn(TD, "text-left text-ink-500")}>{i + 1}</td>
                     <td className={cn(TD, "text-left")}>
@@ -217,8 +240,9 @@ export function ReportsView({
                       </Link>
                     </td>
                     <td className={cn(TD, NUM)}>
-                      <span className="font-medium text-ink-900">{fmtUsd(r.boughtUsd)}</span>
-                      {r.boughtPen > 0 && <p className={SUB}>{fmtPen(r.boughtPen)}</p>}
+                      <span className="font-medium text-ink-900">{fmtBase(r.amount)}</span>
+                      {r.other != null && <p className={SUB}>{fmtOther(r.other)}</p>}
+                      {r.missingFx > 0 && <p className="text-[13px] font-medium leading-5 text-warn-fg">+{r.missingFx} sin tipo de cambio</p>}
                     </td>
                     <td className={cn(TD, NUM)}>
                       <ShareBar share={r.share} />
@@ -229,8 +253,8 @@ export function ReportsView({
                 ))}
               </tbody>
             </table>
-            <ul className={cn(ROWS, "-mb-4 sm:-mb-5 @xl:hidden")}>
-              {ranking.map((r, i) => (
+            <ul className={cn(ranking.missingFx > 0 ? ROWS_AFTER : ROWS, "-mb-4 sm:-mb-5 @xl:hidden")}>
+              {ranking.rows.map((r, i) => (
                 <li key={r.supplierId} className={cn(ROW, "flex items-start justify-between gap-3")}>
                   <span className="min-w-0">
                     <Link href={`/dashboard/compras?v=todas&proveedor=${r.supplierId}${orgQuery}`} className="text-sm font-medium leading-5 text-brand-700 hover:underline">
@@ -241,7 +265,9 @@ export function ReportsView({
                     </span>
                   </span>
                   <span className="text-right text-[13px] leading-5 tabular-nums">
-                    <span className="block text-sm font-medium text-ink-900">{fmtUsd(r.boughtUsd)}</span>
+                    <span className="block text-sm font-medium text-ink-900">{fmtBase(r.amount)}</span>
+                    {r.other != null && <span className="block text-ink-500">{fmtOther(r.other)}</span>}
+                    {r.missingFx > 0 && <span className="block font-medium text-warn-fg">+{r.missingFx} sin tipo de cambio</span>}
                     <span className="block text-ink-500">{fmtPct(r.share)} del total</span>
                   </span>
                 </li>

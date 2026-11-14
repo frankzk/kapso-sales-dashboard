@@ -23,6 +23,30 @@ Verificar con un pedido de prueba:
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
 
+### 14-11-2026 · Compras: catálogo vivo en «Agregar producto», lista por páginas, «Comprado» en soles y quitar con confirmación (sin migración, MOM §45.1, §45.2, §45.7, §45.8, §45.16)
+
+**Sin migración, sin crons ni variables nuevas.** Se despliega y ya está.
+
+- **«Agregar producto → De las tiendas»** lee el catálogo vivo de cada tienda
+  activa de la organización (WooCommerce o Shopify, la fuente de Envíos →
+  «Catálogo de productos»), además del historial: aparece lo que todavía no se
+  vendió (el «Bóxer Confort … (Pack de 4)» de Aurela). Se pide al abrir el
+  formulario, no con cada vista del detalle; 5 minutos en memoria por tienda.
+- **La lista** va de a 100 con «Ver más» en Recibidas, Canceladas y Todas
+  (Activas, completa); las tarjetas, el tipo y los proveedores se cuentan en la
+  base (antes, sobre las 500 primeras).
+- **«Comprado» y el ranking de proveedores** en soles cuando todas las compras
+  se pueden llevar a soles (un laboratorio local entra sin tipo de cambio); si
+  no, en USD; nunca mezclando y diciendo cuántas faltan.
+- **Quitar** (producto, foto, costo, pago, documento, entrega y proveedor) pide
+  «Sí, quitar · No» en la misma fila; los archivos se eligen con «Elegir
+  archivos» / «Ningún archivo».
+
+Verificar: en una importación, «Agregar producto» → buscar «boxer» y elegir
+una talla (llena la tienda Aurela); quitar un costo pide confirmación y «No» no
+quita nada; en Reportes, un laboratorio local sin tipo de cambio sale en el
+ranking en soles; con más de 100 recibidas, «Ver más» y la tarjeta cuenta todas.
+
 ### 14-11-2026 · Compras locales, cortesía, entregas parciales con foto, códigos de trazabilidad e IGV por costo (0343, MOM §45.12–§45.15)
 
 **Migración `0343_compras_locales_entregas.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:

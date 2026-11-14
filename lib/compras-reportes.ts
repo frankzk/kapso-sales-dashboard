@@ -12,6 +12,11 @@
 // necesita convertir y no tiene tipo de cambio no entra en ese total y se cuenta
 // aparte (`…WithoutFx`): nunca se suma a medias.
 //
+// «Comprado» de cada proveedor y su ranking (`supplierBought`,
+// `supplierRanking`): en una base comparable, soles si todas las compras se
+// pueden llevar a soles (un laboratorio local todo en soles no necesita tipo
+// de cambio), si no USD, y nunca mezclando monedas.
+//
 // Reglas comunes:
 //   - Las COTIZACIONES y las CANCELADAS no cuentan como compras (§6.17).
 //   - Las fechas son días de Lima: la del pedido (`ordered_on`) y, sin ella, el
@@ -198,11 +203,15 @@ export interface SupplierStats {
   topProducts: { key: string; name: string; sku: string | null; units: number }[];
   /** Solo con «Montos de compras»: Σ costo aterrizado de las compradas (USD), de las que se pueden llevar a USD. */
   boughtUsd?: number;
-  /** Compradas con costos en soles y sin tipo de cambio (no entran en `boughtUsd`). */
+  /** Compradas con montos en soles y sin tipo de cambio (no entran en `boughtUsd`). */
   boughtUsdWithoutFx?: number;
-  /** Lo mismo en soles, de las compradas que tienen tipo de cambio. */
+  /**
+   * Lo mismo en soles, de las compradas que se pueden llevar a soles: los soles
+   * tal cual y los USD × el tipo de cambio de SU importación (una compra local
+   * toda en soles entra sin tipo de cambio).
+   */
   boughtPen?: number;
-  /** Compradas sin tipo de cambio (no entran en `boughtPen`). */
+  /** Compradas con montos en USD y sin tipo de cambio (no entran en `boughtPen`). */
   boughtWithoutFx?: number;
 }
 
@@ -285,22 +294,133 @@ export const onTimeIsLow = (share: number | null) => share !== null && share < O
 /** «Faltantes y dañadas» alto (rojo): 3 % o más. */
 export const shortageIsHigh = (share: number | null) => share !== null && share >= SHORTAGE_WARN;
 
-/** Ranking de proveedores por monto comprado (USD), de mayor a menor; sin compras no entran. */
-export function supplierRanking(
-  stats: readonly SupplierStats[],
-): { supplierId: string; boughtUsd: number; boughtPen: number; share: number; bought: number; units: number }[] {
-  const rows = stats.filter((s) => (s.boughtUsd ?? 0) > 0);
-  const total = rows.reduce((a, s) => a + (s.boughtUsd ?? 0), 0);
-  return rows
-    .map((s) => ({
+// ---------------------------------------------------------------------------
+// «Comprado» en una base que se puede comparar (MOM §45.7 y §45.8)
+// ---------------------------------------------------------------------------
+//
+// Lo comprado se cuenta en UNA moneda, nunca mezclando: en SOLES si todas las
+// compras se pueden llevar a soles (los soles tal cual, los USD × el tipo de
+// cambio de su importación: un laboratorio local todo en soles no necesita
+// tipo de cambio); si no, en USD si todas se pueden llevar a USD (lo de antes);
+// si ninguna de las dos alcanza a todas, en la que alcanza a más (a igual
+// cantidad, soles) y se dice cuántas quedan fuera por falta del tipo de
+// cambio. El equivalente en la otra moneda solo se muestra si TODAS las
+// compras se pueden llevar a ella: nunca una cifra a medias al lado de otra
+// entera.
+
+/** La moneda en que se compara lo comprado. */
+export type BoughtBase = "PEN" | "USD";
+
+export interface BoughtView {
+  /** La moneda de `amount`; null si ninguna compra se puede valorar (o no hay compras). */
+  base: BoughtBase | null;
+  /** Σ costo aterrizado en `base` de las compras que se pueden llevar a ella. */
+  amount: number | null;
+  /** El equivalente en la otra moneda, solo si todas las compras se pueden llevar a ella. */
+  other: number | null;
+  /** Compras que no entran en `amount`: les falta el tipo de cambio. */
+  missingFx: number;
+  /** Compras que no se pueden llevar a la otra moneda (por eso no hay `other`). */
+  otherMissingFx: number;
+}
+
+/** Cuántas compras se pueden llevar a cada moneda. */
+function boughtCoverage(s: SupplierStats): { pen: number; usd: number } {
+  return { pen: s.bought - (s.boughtWithoutFx ?? 0), usd: s.bought - (s.boughtUsdWithoutFx ?? 0) };
+}
+
+const amountIn = (s: SupplierStats, base: BoughtBase) => (base === "PEN" ? (s.boughtPen ?? 0) : (s.boughtUsd ?? 0));
+
+/** Lo comprado a UN proveedor en una base comparable (la columna «Comprado» de Proveedores). */
+export function supplierBought(s: SupplierStats): BoughtView {
+  const none: BoughtView = { base: null, amount: null, other: null, missingFx: 0, otherMissingFx: 0 };
+  if (!s.bought || s.boughtUsd === undefined) return none;
+  const ok = boughtCoverage(s);
+  let base: BoughtBase | null;
+  if (ok.pen === s.bought) base = "PEN";
+  else if (ok.usd === s.bought) base = "USD";
+  else if (!ok.pen && !ok.usd) return { ...none, missingFx: s.bought, otherMissingFx: s.bought };
+  else base = ok.pen >= ok.usd ? "PEN" : "USD";
+  const otherBase: BoughtBase = base === "PEN" ? "USD" : "PEN";
+  const otherOk = otherBase === "PEN" ? ok.pen : ok.usd;
+  const covered = base === "PEN" ? ok.pen : ok.usd;
+  return {
+    base,
+    amount: amountIn(s, base),
+    // Solo entero: si la base deja alguna fuera, la otra moneda tampoco va.
+    other: covered === s.bought && otherOk === s.bought ? amountIn(s, otherBase) : null,
+    missingFx: s.bought - covered,
+    otherMissingFx: s.bought - otherOk,
+  };
+}
+
+export interface SupplierRankingRow {
+  supplierId: string;
+  /** En la base del ranking. */
+  amount: number;
+  /** El equivalente en la otra moneda, solo si todas sus compras se pueden llevar a ella. */
+  other: number | null;
+  /** `amount` ÷ Σ `amount` del ranking. */
+  share: number;
+  bought: number;
+  units: number;
+  /** Sus compras que no entran en `amount` (falta el tipo de cambio). */
+  missingFx: number;
+}
+
+export interface SupplierRanking {
+  /** Una sola moneda para todo el ranking. */
+  base: BoughtBase;
+  rows: SupplierRankingRow[];
+  /** Σ `amount` de las filas. */
+  total: number;
+  /** Proveedores con compras de las que ninguna se puede llevar a la base: no entran en el ranking. */
+  outside: { supplierId: string; bought: number }[];
+  /** Compras que no entran en el ranking (de las filas y de `outside`): les falta el tipo de cambio. */
+  missingFx: number;
+}
+
+/**
+ * Ranking de proveedores por monto comprado, de mayor a menor, en UNA base para
+ * todos: soles si todas las compras de todos se pueden llevar a soles; si no,
+ * USD si todas se pueden llevar a USD; si no, la que alcanza a más compras (a
+ * igual cantidad, soles), con las que quedan fuera contadas. Sin compras no
+ * entran. Solo con «Montos de compras» (las estadísticas sin montos no rankean).
+ */
+export function supplierRanking(stats: readonly SupplierStats[]): SupplierRanking {
+  const buyers = stats.filter((s) => s.bought > 0 && s.boughtUsd !== undefined);
+  const cover = buyers.map((s) => ({ s, ok: boughtCoverage(s) }));
+  const totalBought = buyers.reduce((a, s) => a + s.bought, 0);
+  const penOk = cover.reduce((a, c) => a + c.ok.pen, 0);
+  const usdOk = cover.reduce((a, c) => a + c.ok.usd, 0);
+  const base: BoughtBase = penOk === totalBought ? "PEN" : usdOk === totalBought ? "USD" : penOk >= usdOk ? "PEN" : "USD";
+  const rows: SupplierRankingRow[] = [];
+  const outside: SupplierRanking["outside"] = [];
+  let missingFx = 0;
+  for (const { s, ok } of cover) {
+    const covered = base === "PEN" ? ok.pen : ok.usd;
+    const otherOk = base === "PEN" ? ok.usd : ok.pen;
+    missingFx += s.bought - covered;
+    if (!covered) {
+      outside.push({ supplierId: s.supplierId, bought: s.bought });
+      continue;
+    }
+    // Compras sin ningún monto cargado todavía: como antes, no rankean.
+    if (!(amountIn(s, base) > 0)) continue;
+    rows.push({
       supplierId: s.supplierId,
-      boughtUsd: s.boughtUsd ?? 0,
-      boughtPen: s.boughtPen ?? 0,
-      share: total > 0 ? (s.boughtUsd ?? 0) / total : 0,
+      amount: amountIn(s, base),
+      other: covered === s.bought && otherOk === s.bought ? amountIn(s, base === "PEN" ? "USD" : "PEN") : null,
+      share: 0,
       bought: s.bought,
       units: s.units,
-    }))
-    .sort((a, b) => b.boughtUsd - a.boughtUsd);
+      missingFx: s.bought - covered,
+    });
+  }
+  const total = rows.reduce((a, r) => a + r.amount, 0);
+  for (const r of rows) r.share = total > 0 ? r.amount / total : 0;
+  rows.sort((a, b) => b.amount - a.amount || b.bought - a.bought);
+  return { base, rows, total, outside, missingFx };
 }
 
 // ---------------------------------------------------------------------------

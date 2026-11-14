@@ -1,13 +1,16 @@
 "use client";
 
-// El selector de «Agregar producto» (MOM §45.1): busca por nombre o SKU en el
-// catálogo de las tiendas de la organización (los SKU de Costos de productos y
-// los vistos en pedidos, `buildProductPicker`), los más pedidos primero. Elegir
-// uno llena nombre, SKU y, si el SKU se vio siempre en la misma, la tienda. Es
-// un combobox ARIA: flechas, Enter y Escape.
+// El selector de «Agregar producto» (MOM §45.1): busca por nombre o SKU (sin
+// tildes: «bóxer» = «boxer») en el catálogo VIVO de cada tienda de la
+// organización (WooCommerce o Shopify) y, para los SKU que ya no están en
+// ninguno, en lo conocido por el historial (`buildProductPicker`), los más
+// pedidos primero. Elegir uno llena nombre, SKU y la tienda de donde salió.
+// Una variante sin SKU sale marcada «Sin SKU». Es un combobox ARIA: flechas,
+// Enter y Escape.
 
 import { useId, useMemo, useRef, useState } from "react";
 import { cn } from "@/components/ui";
+import { Badge } from "@/components/ops-ui";
 import { IconSearch } from "@/components/icons";
 import { searchProductPicker, type PickerProduct } from "@/lib/compras-ia";
 import { FIELD } from "@/components/compras/header-form";
@@ -91,7 +94,7 @@ export function ProductPicker({
           {results.length ? (
             results.map((p, i) => (
               <li
-                key={p.sku}
+                key={p.key}
                 id={`${id}-o${i}`}
                 role="option"
                 aria-selected={i === active}
@@ -109,7 +112,7 @@ export function ProductPicker({
                 <span className="min-w-0">
                   <span className="block truncate text-sm leading-5 text-ink-900">{p.name ?? p.sku}</span>
                   <span className="block truncate text-[13px] leading-5 text-ink-500">
-                    <span className="font-mono text-xs text-ink-700">{p.sku}</span>
+                    {p.sku ? <span className="font-mono text-xs text-ink-700">{p.sku}</span> : <Badge tone="warn">Sin SKU</Badge>}
                     {" · "}
                     {p.storeId ? (storeName.get(p.storeId) ?? "Una tienda") : "Tienda por elegir"}
                   </span>

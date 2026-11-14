@@ -6,16 +6,13 @@ import { ComprasGate } from "@/components/compras/chrome";
 import { opsButtonClass } from "@/components/ops-styles";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { ImportDetailView } from "@/components/compras/import-detail";
-import { COMPRAS_VIEW_PERMISSIONS, comprasVisionCreds, loadImportDetail, loadSkuCatalog } from "@/lib/compras-server";
-import { buildProductPicker } from "@/lib/compras-ia";
+import { COMPRAS_VIEW_PERMISSIONS, comprasVisionCreds, loadImportDetail } from "@/lib/compras-server";
 import { limaToday } from "@/lib/compras";
 
 export const dynamic = "force-dynamic";
 // «Leer con IA» (MOM §45.10) corre como acción de esta página: la lectura se
 // corta a los 105 s (lib/compras-ia-vision.ts), dentro de estos 120.
 export const maxDuration = 120;
-/** Tope del catálogo que viaja al navegador para el selector de productos. */
-const PICKER_LIMIT = 3000;
 
 export default function ImportPage({ params }: { params: Promise<{ id: string }> }) {
   return (
@@ -49,20 +46,13 @@ async function ImportContent({ params }: { params: Promise<{ id: string }> }) {
     );
   }
   // «Leer con IA» solo con «Compras» y con una clave configurada (la acción lo vuelve a pedir).
-  // El catálogo de las tiendas para «Agregar producto» (MOM §45.1): solo con
-  // «Compras», que es quien agrega. SKU, nombre, tienda y pedidos: sin montos.
-  const [aiEnabled, catalog] = detail.perms.canManage
-    ? await Promise.all([
-        comprasVisionCreds(detail.imp.org_id).then((c) => Boolean(c.apiKey)),
-        loadSkuCatalog(detail.imp.org_id)
-          .then((rows) => buildProductPicker(rows).slice(0, PICKER_LIMIT))
-          .catch(() => []),
-      ])
-    : [false, []];
+  // El catálogo de las tiendas para «Agregar producto» (MOM §45.1) ya no se lee
+  // aquí: lo pide el formulario al abrirse (`loadImportPicker`, solo con
+  // «Compras»), porque leer el catálogo vivo de cada tienda puede tardar.
+  const aiEnabled = detail.perms.canManage ? await comprasVisionCreds(detail.imp.org_id).then((c) => Boolean(c.apiKey)) : false;
   return (
     <ImportDetailView
       aiEnabled={aiEnabled}
-      catalog={catalog}
       detail={detail}
       stores={stores.filter((s) => s.org_id === detail.imp.org_id).map((s) => ({ id: s.id, name: s.name }))}
       today={limaToday()}
