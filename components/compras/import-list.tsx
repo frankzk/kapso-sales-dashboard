@@ -11,13 +11,14 @@ import { cn } from "@/components/ui";
 import { Badge } from "@/components/ops-ui";
 import { statusCardClass } from "@/components/ops-styles";
 import { IconCheck, IconX } from "@/components/icons";
-import { fmtInt, fmtUsd } from "@/components/compras/format";
+import { fmtInt, fmtSplit, fmtUsd } from "@/components/compras/format";
 import { AlertPills, SupplierPill } from "@/components/compras/list-filters";
 import { ComprasEmpty, IMPORT_ALERT_FILTERS, comprasListHref, importStatusTone, type ImportAlertFilter } from "@/components/compras/chrome";
 import type { ImportListRow, SupplierRow } from "@/lib/compras-server";
 import {
   IMPORT_STATUS_LABEL,
   IMPORT_TABS,
+  MISSING_FX,
   formatDmy,
   importAlerts,
   importChecklist,
@@ -88,9 +89,10 @@ export function ImportListView({
     sin_novedades: active.filter((e) => e.alerts.stale).length,
   };
   const visible = enriched.filter((e) => inImportTab(e.row.imp.status, tab) && matchesAlert(e, alerta));
-  const inTransitUsd = canMoney
-    ? active.filter((e) => e.row.imp.status !== "cotizacion").reduce((a, e) => a + (e.row.money?.totalUsd ?? 0), 0)
-    : null;
+  // En camino, en USD: las que tienen costos en soles sin tipo de cambio no se suman a medias (se cuentan aparte).
+  const inTransit = active.filter((e) => e.row.imp.status !== "cotizacion");
+  const inTransitUsd = canMoney ? inTransit.reduce((a, e) => a + (e.row.money?.totalUsd ?? 0), 0) : null;
+  const inTransitWithoutFx = canMoney ? inTransit.filter((e) => e.row.money && e.row.money.totalUsd === null).length : 0;
   const proveedor = supplierFilter?.id ?? null;
   const supplierOptions = suppliers
     .map((s) => ({ value: s.id, label: s.name, count: allRows.filter((r) => r.imp.supplier_id === s.id).length }))
@@ -108,6 +110,12 @@ export function ImportListView({
             <>
               {" · "}
               <span className="font-semibold text-ink-900">{fmtUsd(inTransitUsd)}</span> en camino
+              {inTransitWithoutFx > 0 && (
+                <span className="font-medium text-warn-fg">
+                  {" "}
+                  ({inTransitWithoutFx} sin tipo de cambio)
+                </span>
+              )}
             </>
           )}
         </p>
@@ -257,12 +265,13 @@ function itemsLine(row: ImportListRow): string {
 
 function Money({ row }: { row: ImportListRow }) {
   if (!row.money) return <span className="text-ink-300">—</span>;
-  const pending = Math.max(0, row.money.totalUsd - row.money.paidUsd);
+  const { totalUsd, pendingUsd, total } = row.money;
   return (
     <>
-      <p className="whitespace-nowrap text-sm leading-5 tabular-nums text-ink-900">{fmtUsd(row.money.totalUsd)}</p>
-      <p className={cn("whitespace-nowrap text-[13px] leading-5 tabular-nums", pending > 0.005 ? "font-medium text-warn-fg" : "text-ink-500")}>
-        {pending > 0.005 ? `Falta ${fmtUsd(pending)}` : row.money.totalUsd > 0 ? "Pagado" : "Sin costos"}
+      {/* Costos en soles sin tipo de cambio: cada moneda por separado, nunca una suma a medias. */}
+      <p className={cn("text-sm leading-5 tabular-nums text-ink-900", totalUsd !== null && "whitespace-nowrap")}>{totalUsd !== null ? fmtUsd(totalUsd) : fmtSplit(total)}</p>
+      <p className={cn("text-[13px] leading-5 tabular-nums", pendingUsd === null || pendingUsd > 0 ? "font-medium text-warn-fg" : "text-ink-500")}>
+        {pendingUsd === null ? MISSING_FX : pendingUsd > 0 ? `Falta ${fmtUsd(pendingUsd)}` : (totalUsd ?? 0) > 0 ? "Pagado" : "Sin costos"}
       </p>
     </>
   );
@@ -346,7 +355,6 @@ function ImportTable({ rows, canMoney }: { rows: Enriched[]; canMoney: boolean }
 function ImportListItem({ e, canMoney }: { e: Enriched; canMoney: boolean }) {
   const { imp } = e.row;
   const a = arrival(e);
-  const pending = e.row.money ? Math.max(0, e.row.money.totalUsd - e.row.money.paidUsd) : 0;
   const missing = [!e.checklist.invoice && "Falta factura", !e.checklist.tracking && "Falta tracking"].filter(Boolean) as string[];
   return (
     <li className="relative px-4 py-3 transition-colors duration-150 hover:bg-wash sm:px-5">
@@ -383,8 +391,14 @@ function ImportListItem({ e, canMoney }: { e: Enriched; canMoney: boolean }) {
       </p>
       {canMoney && e.row.money && (
         <p className="text-[13px] leading-5 tabular-nums text-ink-700">
-          {fmtUsd(e.row.money.totalUsd)}
-          {pending > 0.005 ? <span className="font-medium text-warn-fg"> · falta {fmtUsd(pending)}</span> : e.row.money.totalUsd > 0 ? <span className="text-ink-500"> · pagado</span> : null}
+          {e.row.money.totalUsd !== null ? fmtUsd(e.row.money.totalUsd) : fmtSplit(e.row.money.total)}
+          {e.row.money.pendingUsd === null ? (
+            <span className="font-medium text-warn-fg"> · {MISSING_FX.toLowerCase()}</span>
+          ) : e.row.money.pendingUsd > 0 ? (
+            <span className="font-medium text-warn-fg"> · falta {fmtUsd(e.row.money.pendingUsd)}</span>
+          ) : (e.row.money.totalUsd ?? 0) > 0 ? (
+            <span className="text-ink-500"> · pagado</span>
+          ) : null}
         </p>
       )}
       <div className="mt-1.5 flex flex-wrap items-center gap-1">

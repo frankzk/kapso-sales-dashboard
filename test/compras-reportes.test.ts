@@ -33,10 +33,10 @@ const S1 = "sup-1";
 const S2 = "sup-2";
 
 const COSTS: LandedCostRow[] = [
-  { kind: "importacion", label: "Aranceles", amountUsd: 80, allocation: "value" },
-  { kind: "envio", label: "Flete", amountUsd: 120, allocation: "weight" },
-  { kind: "adicional", label: "Inspección", amountUsd: 30, allocation: "units" },
-  { kind: "adicional", label: "Etiquetas B", amountUsd: 25, allocation: "item", itemId: "i1-b" },
+  { kind: "importacion", label: "Aranceles", amount: 80, allocation: "value" },
+  { kind: "envio", label: "Flete", amount: 120, allocation: "weight" },
+  { kind: "adicional", label: "Inspección", amount: 30, allocation: "units" },
+  { kind: "adicional", label: "Etiquetas B", amount: 25, allocation: "item", itemId: "i1-b" },
 ];
 
 function item(p: Partial<ReportItem> & Pick<ReportItem, "id" | "name" | "qty">): ReportItem {
@@ -76,8 +76,8 @@ const IMPORTS: ReportImport[] = [
     ],
     costs: COSTS,
     payments: [
-      { amountUsd: 500, paidOn: "2026-09-02" },
-      { amountUsd: 400, paidOn: "2026-10-05" },
+      { amount: 500, paidOn: "2026-09-02" },
+      { amount: 400, paidOn: "2026-10-05" },
     ],
   }),
   // I2: en tránsito, sin tipo de cambio.
@@ -87,7 +87,7 @@ const IMPORTS: ReportImport[] = [
     orderedOn: "2026-10-10",
     eta: "2026-11-01",
     items: [item({ id: "i2-a", ...A, qty: 200, unitCostUsd: 2.1 })],
-    payments: [{ amountUsd: 100, paidOn: "2026-10-11" }],
+    payments: [{ amount: 100, paidOn: "2026-10-11" }],
   }),
   // I3: cotización: no es compra (pero su pago sí cuenta como pagado).
   imp({
@@ -95,7 +95,7 @@ const IMPORTS: ReportImport[] = [
     status: "cotizacion",
     orderedOn: "2026-11-01",
     items: [item({ id: "i3-a", ...A, qty: 1000, unitCostUsd: 1 })],
-    payments: [{ amountUsd: 10, paidOn: "2026-11-02" }],
+    payments: [{ amount: 10, paidOn: "2026-11-02" }],
   }),
   // I4: cancelada (aunque tenga llegada y pago): no cuenta para nada.
   imp({
@@ -106,7 +106,7 @@ const IMPORTS: ReportImport[] = [
     arrivedOn: "2026-08-30",
     fxPenPerUsd: 3.7,
     items: [item({ id: "i4-c", sku: "SKU-C", name: "Cargador C", qty: 10, unitCostUsd: 5, receivedQty: 0, damagedQty: 0 })],
-    payments: [{ amountUsd: 50, paidOn: "2026-08-02" }],
+    payments: [{ amount: 50, paidOn: "2026-08-02" }],
   }),
   // I5: cerrada, llegó tarde (39 días), sin contar.
   imp({
@@ -126,7 +126,7 @@ const IMPORTS: ReportImport[] = [
     orderedOn: "2026-11-03",
     fxPenPerUsd: 3.8,
     items: [item({ id: "i6-d", name: "Funda  iPhone-15", qty: 10, unitCostUsd: 10 })],
-    payments: [{ amountUsd: 120, paidOn: "2026-11-03" }],
+    payments: [{ amount: 120, paidOn: "2026-11-03" }],
   }),
   // I7 (otro proveedor): la misma funda sin SKU con otro nombre, y un cable que no llegó.
   imp({
@@ -168,12 +168,14 @@ describe("qué es una compra y qué día cuenta", () => {
   it("el costo es el de landedCosts, no otra cuenta (A = 3,40 y B = 14,30 del ejemplo)", () => {
     const i1 = { ...IMPORTS[0]!, items: IMPORTS[0]!.items.map((it) => ({ ...it, receivedQty: null, damagedQty: null })) };
     const landed = landedOf(i1);
-    close(landed.byItem.get("i1-a")!.unitCost, 3.4);
-    close(landed.byItem.get("i1-b")!.unitCost, 14.3);
-    expect(landed.total).toBe(landedCosts(
+    close(landed.byItem.get("i1-a")!.usd!.unitCost, 3.4);
+    close(landed.byItem.get("i1-b")!.usd!.unitCost, 14.3);
+    expect(landed.usd!.total).toBe(landedCosts(
       i1.items.map((it) => ({ id: it.id, qty: it.qty, unitCostUsd: it.unitCostUsd, unitWeightKg: it.unitWeightKg })),
       COSTS,
-    ).total);
+    ).usd!.total);
+    // Con SU tipo de cambio: la vista en soles también.
+    close(landed.pen!.total, 1055 * 3.75);
   });
 });
 

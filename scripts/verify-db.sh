@@ -405,4 +405,7 @@ echo "  ✅ código único por org, estados/transporte/reparto/monto con CHECK, 
 echo "▶ Compras: proveedores (0341, MOM §45.7): contacto, correo y condiciones de pago opcionales con CHECK, solo el servidor y dos veces es una"
 $PSQL -f "$ROOT/scripts/sql/compras_proveedores_smoke.sql"
 echo "  ✅ columnas nuevas nulas por defecto, correo con forma a@b.c, largos con tope, sin privilegios para anon/authenticated"
+echo "▶ Compras: cada costo y cada pago en su moneda e «Incluye IGV» (0342, MOM §45.3): lo de antes sigue en USD, un monto por moneda con CHECK, IGV con su monto con IGV, solo el servidor y dos veces es una"
+$PSQL -f "$ROOT/scripts/sql/compras_monedas_smoke.sql"
+echo "  ✅ filas sin moneda = USD, soles en amount_pen con amount_usd nulo, exactamente un monto, S/ 504.16 con IGV → S/ 427.25, sin privilegios para anon/authenticated"
 echo "✅ DB verification passed."

@@ -1,7 +1,7 @@
 // Formatos de la sección Compras (MOM §45). Puros: los usan el servidor y el
 // navegador.
 
-import { LIMA_TZ } from "@/lib/compras";
+import { LIMA_TZ, type Currency } from "@/lib/compras";
 
 const N2 = new Intl.NumberFormat("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const N4 = new Intl.NumberFormat("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
@@ -19,6 +19,13 @@ export const fmtUsd = (n: number | null | undefined) => (n == null || !Number.is
 /** Costo por unidad del proveedor: hasta 4 decimales. */
 export const fmtUsdUnit = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `US$ ${N4.format(n)}`);
 export const fmtPen = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `S/ ${N2.format(n)}`);
+/** Un monto en su moneda (0342): «US$ 1,055.00» o «S/ 427.25». */
+export const fmtMoney = (n: number | null | undefined, currency: Currency) => (currency === "PEN" ? fmtPen(n) : fmtUsd(n));
+/** «US$ 800.00 + S/ 427.25»: dinero sin convertir, cada moneda por separado (sin la que está en 0). */
+export const fmtSplit = (m: { usd: number; pen: number }) => {
+  const parts = [m.usd !== 0 || m.pen === 0 ? fmtUsd(m.usd) : null, m.pen !== 0 ? fmtPen(m.pen) : null].filter(Boolean);
+  return parts.join(" + ");
+};
 export const fmtInt = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : INT.format(n));
 export const fmtPct = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `${(n * 100).toFixed(1)} %`);
 /**

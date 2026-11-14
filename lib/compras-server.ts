@@ -19,11 +19,17 @@ import {
   canSeeDocKind,
   canViewCompras,
   isReceiveOnly,
+  addMoney,
   isUuid,
+  moneyOf,
+  paymentBalance,
+  zeroMoney,
   type Allocation,
   type CostKind,
+  type Currency,
   type ImportEventKind,
   type ImportStatus,
+  type Money2,
 } from "@/lib/compras";
 import type { ReportImport } from "@/lib/compras-reportes";
 import type { CatalogEntry } from "@/lib/compras-ia";
@@ -108,25 +114,38 @@ export interface DocumentRow {
   created_at: string;
 }
 
+/** Un costo leído (0342): el monto en su moneda, sin IGV. */
 export interface CostRow {
   id: string;
   kind: string;
   label: string;
-  amount_usd: number;
+  currency: Currency;
+  /** Lo que entra al costo (sin IGV), en `currency`. */
+  amount: number;
+  /** «Incluye IGV»: `gross_amount` es el monto con IGV tal como se escribió. */
+  includes_igv: boolean;
+  gross_amount: number | null;
   allocation: string;
   item_id: string | null;
   created_at: string;
 }
 
+/** Un pago leído (0342): el monto en su moneda. */
 export interface PaymentRow {
   id: string;
-  amount_usd: number;
+  currency: Currency;
+  amount: number;
   paid_on: string;
   method: string;
   note: string | null;
   document_id: string | null;
   created_at: string;
 }
+
+/** Las columnas de `import_costs` que se leen (solo con `purchases.money`). */
+export const COST_COLS: string = "id,kind,label,currency,amount_usd,amount_pen,includes_igv,gross_amount,allocation,item_id,created_at";
+/** Las columnas de `import_payments` que se leen (solo con `purchases.money`). */
+export const PAYMENT_COLS: string = "id,currency,amount_usd,amount_pen,paid_on,method,note,document_id,created_at";
 
 export interface EventRow {
   id: string;
@@ -194,6 +213,47 @@ export function normalizeItem(row: Record<string, unknown>, canMoney: boolean): 
   return out;
 }
 
+/** La moneda de una fila; sin ella (antes de la 0342), USD. */
+function currencyOf(v: unknown): Currency {
+  return v === "PEN" ? "PEN" : "USD";
+}
+
+/** El monto de una fila en su moneda: `amount_usd` o `amount_pen` (0342). */
+function amountOf(row: Record<string, unknown>, currency: Currency): number {
+  return num(currency === "PEN" ? row.amount_pen : row.amount_usd);
+}
+
+export function normalizeCost(row: Record<string, unknown>): CostRow {
+  const currency = currencyOf(row.currency);
+  const includesIgv = row.includes_igv === true;
+  return {
+    id: String(row.id),
+    kind: String(row.kind),
+    label: String(row.label),
+    currency,
+    amount: amountOf(row, currency),
+    includes_igv: includesIgv,
+    gross_amount: includesIgv ? numOrNull(row.gross_amount) : null,
+    allocation: String(row.allocation),
+    item_id: (row.item_id as string | null) ?? null,
+    created_at: String(row.created_at ?? ""),
+  };
+}
+
+export function normalizePayment(row: Record<string, unknown>): PaymentRow {
+  const currency = currencyOf(row.currency);
+  return {
+    id: String(row.id),
+    currency,
+    amount: amountOf(row, currency),
+    paid_on: String(row.paid_on),
+    method: String(row.method),
+    note: (row.note as string | null) ?? null,
+    document_id: (row.document_id as string | null) ?? null,
+    created_at: String(row.created_at ?? ""),
+  };
+}
+
 export function normalizeImport(row: Record<string, unknown>, canMoney: boolean): ImportRow {
   const out = { ...(row as unknown as ImportRow) };
   if (canMoney) out.fx_pen_per_usd = numOrNull(row.fx_pen_per_usd);
@@ -242,8 +302,12 @@ export interface ImportListRow {
   units: number;
   docKinds: string[];
   lastMovementAt: string | null;
-  /** Solo con `purchases.money`. */
-  money?: { totalUsd: number; paidUsd: number };
+  /**
+   * Solo con `purchases.money`. `total` y `paid` por moneda, sin convertir; los
+   * de USD (la base), con el tipo de cambio de la importación: null si hay
+   * soles y no lo tiene (MOM §45.3).
+   */
+  money?: { total: Money2; paid: Money2; totalUsd: number | null; paidUsd: number | null; pendingUsd: number | null };
 }
 
 /** Tope de la lista: una organización de Kapta no se acerca. */
@@ -273,8 +337,8 @@ export async function loadImportList(
       .in("kind", MOVEMENT_EVENT_KINDS as unknown as string[])
       .order("at", { ascending: false }),
     admin.from("import_suppliers").select("id,name").eq("org_id", orgId),
-    canMoney ? admin.from("import_costs").select("import_id,amount_usd").in("import_id", ids) : Promise.resolve({ data: [] }),
-    canMoney ? admin.from("import_payments").select("import_id,amount_usd").in("import_id", ids) : Promise.resolve({ data: [] }),
+    canMoney ? admin.from("import_costs").select("import_id,currency,amount_usd,amount_pen").in("import_id", ids) : Promise.resolve({ data: [] }),
+    canMoney ? admin.from("import_payments").select("import_id,currency,amount_usd,amount_pen").in("import_id", ids) : Promise.resolve({ data: [] }),
   ]);
   const supplierName = new Map(((suppliers.data ?? []) as { id: string; name: string }[]).map((s) => [s.id, s.name]));
   const byImport = new Map<string, ImportListRow>();
@@ -286,7 +350,7 @@ export async function loadImportList(
       units: 0,
       docKinds: [],
       lastMovementAt: null,
-      ...(canMoney ? { money: { totalUsd: 0, paidUsd: 0 } } : {}),
+      ...(canMoney ? { money: { total: zeroMoney(), paid: zeroMoney(), totalUsd: 0, paidUsd: 0, pendingUsd: 0 } } : {}),
     });
   }
   const sortedItems = ((items.data ?? []) as unknown as Record<string, unknown>[]).sort((a, b) => num(a.position) - num(b.position));
@@ -296,7 +360,7 @@ export async function loadImportList(
     const qty = num(it.qty);
     row.items.push({ name: String(it.name), qty, sku: (it.sku as string | null) ?? null });
     row.units += qty;
-    if (row.money) row.money.totalUsd += qty * num(it.unit_cost_usd);
+    if (row.money) row.money.total = addMoney(row.money.total, moneyOf(qty * num(it.unit_cost_usd), "USD"));
   }
   for (const d of (docs.data ?? []) as { import_id: string; kind: string }[]) {
     const row = byImport.get(d.import_id);
@@ -306,15 +370,26 @@ export async function loadImportList(
     const row = byImport.get(e.import_id);
     if (row && (!row.lastMovementAt || e.at > row.lastMovementAt)) row.lastMovementAt = e.at;
   }
-  for (const c of (costs.data ?? []) as { import_id: string; amount_usd: unknown }[]) {
-    const m = byImport.get(c.import_id)?.money;
-    if (m) m.totalUsd += num(c.amount_usd);
+  for (const c of (costs.data ?? []) as Record<string, unknown>[]) {
+    const m = byImport.get(String(c.import_id))?.money;
+    const currency = currencyOf(c.currency);
+    if (m) m.total = addMoney(m.total, moneyOf(amountOf(c, currency), currency));
   }
-  for (const p of (payments.data ?? []) as { import_id: string; amount_usd: unknown }[]) {
-    const m = byImport.get(p.import_id)?.money;
-    if (m) m.paidUsd += num(p.amount_usd);
+  for (const p of (payments.data ?? []) as Record<string, unknown>[]) {
+    const m = byImport.get(String(p.import_id))?.money;
+    const currency = currencyOf(p.currency);
+    if (m) m.paid = addMoney(m.paid, moneyOf(amountOf(p, currency), currency));
   }
-  for (const row of byImport.values()) row.lastMovementAt ??= row.imp.created_at;
+  for (const row of byImport.values()) {
+    row.lastMovementAt ??= row.imp.created_at;
+    if (row.money) {
+      // La base es USD: los soles con el tipo de cambio de ESTA importación.
+      const b = paymentBalance(row.money.total, row.money.paid, row.imp.fx_pen_per_usd);
+      row.money.totalUsd = b.totalUsd;
+      row.money.paidUsd = b.paidUsd;
+      row.money.pendingUsd = b.pendingUsd;
+    }
+  }
   return [...byImport.values()];
 }
 
@@ -354,10 +429,10 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
       .eq("import_id", imp.id)
       .order("created_at", { ascending: true }),
     money
-      ? admin.from("import_costs").select("id,kind,label,amount_usd,allocation,item_id,created_at").eq("import_id", imp.id).order("created_at", { ascending: true })
+      ? admin.from("import_costs").select(COST_COLS).eq("import_id", imp.id).order("created_at", { ascending: true })
       : Promise.resolve({ data: null }),
     money
-      ? admin.from("import_payments").select("id,amount_usd,paid_on,method,note,document_id,created_at").eq("import_id", imp.id).order("paid_on", { ascending: true })
+      ? admin.from("import_payments").select(PAYMENT_COLS).eq("import_id", imp.id).order("paid_on", { ascending: true })
       : Promise.resolve({ data: null }),
     admin.from("import_events").select("id,kind,status,note,by_user,at").eq("import_id", imp.id).order("at", { ascending: false }).limit(300),
     receiveOnly
@@ -384,12 +459,8 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
     documents: ((docs.data ?? []) as DocumentRow[])
       .filter((d) => canSeeDocKind(d.kind, perms))
       .map((d) => ({ ...d, size_bytes: num(d.size_bytes) })),
-    costs: costs.data
-      ? (costs.data as CostRow[]).map((c) => ({ ...c, amount_usd: num(c.amount_usd) }))
-      : null,
-    payments: payments.data
-      ? (payments.data as PaymentRow[]).map((p) => ({ ...p, amount_usd: num(p.amount_usd) }))
-      : null,
+    costs: costs.data ? (costs.data as unknown as Record<string, unknown>[]).map(normalizeCost) : null,
+    payments: payments.data ? (payments.data as unknown as Record<string, unknown>[]).map(normalizePayment) : null,
     events: eventRows.map((e) => ({ ...e, by_name: e.by_user ? (names[e.by_user] ?? null) : null })),
     suppliers: receiveOnly ? [] : suppliers,
     perms,
@@ -473,7 +544,7 @@ export async function loadReportImports(
       ? readAll(() =>
           admin
             .from("import_costs")
-            .select("id,import_id,kind,label,amount_usd,allocation,item_id")
+            .select("id,import_id,kind,label,currency,amount_usd,amount_pen,allocation,item_id")
             .eq("org_id", orgId)
             .order("id", { ascending: true }) as unknown as PageQuery,
         )
@@ -482,7 +553,7 @@ export async function loadReportImports(
       ? readAll(() =>
           admin
             .from("import_payments")
-            .select("id,import_id,amount_usd,paid_on")
+            .select("id,import_id,currency,amount_usd,amount_pen,paid_on")
             .eq("org_id", orgId)
             .order("id", { ascending: true }) as unknown as PageQuery,
         )
@@ -523,17 +594,20 @@ export async function loadReportImports(
     });
   }
   for (const c of costs) {
+    const currency = currencyOf(c.currency);
     byId.get(String(c.import_id))?.costs.push({
       id: String(c.id),
       kind: c.kind as CostKind,
       label: String(c.label),
-      amountUsd: num(c.amount_usd),
+      amount: amountOf(c, currency),
+      currency,
       allocation: c.allocation as Allocation,
       itemId: (c.item_id as string | null) ?? null,
     });
   }
   for (const p of payments) {
-    byId.get(String(p.import_id))?.payments.push({ amountUsd: num(p.amount_usd), paidOn: String(p.paid_on) });
+    const currency = currencyOf(p.currency);
+    byId.get(String(p.import_id))?.payments.push({ amount: amountOf(p, currency), currency, paidOn: String(p.paid_on) });
   }
   return [...byId.values()];
 }

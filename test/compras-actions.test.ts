@@ -137,8 +137,8 @@ describe("sin «Montos de compras» el dinero no se lee ni se escribe", () => {
 
   it("costos, pagos, tipo de cambio y documentos con montos piden el permiso", async () => {
     h.perms = new Set(["purchases.manage"]);
-    expect((await addImportCost(IMP, { kind: "envio", amountUsd: "10", allocation: "units" })).error).toMatch(/Montos de compras/);
-    expect((await addImportPayment(IMP, { amountUsd: "10", paidOn: "2026-11-01", method: "paypal" })).error).toMatch(/Montos de compras/);
+    expect((await addImportCost(IMP, { kind: "envio", amount: "10", allocation: "units" })).error).toMatch(/Montos de compras/);
+    expect((await addImportPayment(IMP, { amount: "10", paidOn: "2026-11-01", method: "paypal" })).error).toMatch(/Montos de compras/);
     expect((await setImportFx(IMP, "3.8")).error).toMatch(/Montos de compras/);
     expect(await startImportUpload(IMP, { kind: "proforma", contentType: "application/pdf", filename: "p.pdf", size: 10 })).toHaveProperty("error");
     expect(await startImportUpload(IMP, { kind: "invoice", contentType: "application/pdf", filename: "f.pdf", size: 10 })).toHaveProperty("path");

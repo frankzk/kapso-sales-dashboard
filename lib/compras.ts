@@ -1,8 +1,15 @@
 // «Compras»: importaciones (MOM §45, 14-11-2026). Reglas PURAS y probadas
 // (test/compras.test.ts). La referencia funcional es
 // docs/compras/referencia-modulo-compras.md (módulo de Miranova); esto la
-// adapta a Kapta: bodega propia en Lima, fechas de America/Lima, montos en USD
+// adapta a Kapta: bodega propia en Lima, fechas de America/Lima, la base en USD
 // con el tipo de cambio de cada importación, y «Pasar a Costos».
+//
+// Monedas (MOM §45.3, 0342): el costo del proveedor va en USD; cada costo
+// repartido y cada pago guarda SU moneda (USD o soles) tal como se escribió.
+// Nada se convierte al guardar: el costo aterrizado se calcula en las dos
+// vistas con el tipo de cambio de la importación (`Money2`, `moneyInUsd`,
+// `moneyInPen`) y, sin él, lo que necesita convertirse dice «Falta el tipo de
+// cambio» en vez de una cifra a medias.
 //
 // Lo que NO se copia de la referencia (su §13): la fecha de llegada y el año
 // del código en UTC (aquí, Lima); «atrasada» y «avisar» contando cotizaciones
@@ -378,6 +385,112 @@ export function parseInteger(raw: unknown): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Monedas (MOM §45.3, 0342): cada costo y cada pago en la suya
+// ---------------------------------------------------------------------------
+
+export const CURRENCIES = [
+  { id: "USD", label: "US$" },
+  { id: "PEN", label: "S/" },
+] as const;
+export type Currency = (typeof CURRENCIES)[number]["id"];
+
+export function isCurrency(value: unknown): value is Currency {
+  return value === "USD" || value === "PEN";
+}
+
+/** «US$» o «S/». */
+export const currencySymbol = (c: Currency | null | undefined) => (c === "PEN" ? "S/" : "US$");
+
+/** Lo que dice una pantalla o el historial cuando hace falta convertir y no hay con qué. */
+export const MISSING_FX = "Falta el tipo de cambio";
+
+/** El tipo de cambio de la importación si sirve (> 0); si no, null. */
+export function validFx(fx: number | null | undefined): number | null {
+  return typeof fx === "number" && Number.isFinite(fx) && fx > 0 ? fx : null;
+}
+
+/** Dinero SIN convertir: lo que está en USD y lo que está en soles, por separado. */
+export interface Money2 {
+  usd: number;
+  pen: number;
+}
+
+export const zeroMoney = (): Money2 => ({ usd: 0, pen: 0 });
+
+/** Un monto en su moneda como `Money2`. */
+export function moneyOf(amount: number, currency: Currency | null | undefined): Money2 {
+  return currency === "PEN" ? { usd: 0, pen: amount } : { usd: amount, pen: 0 };
+}
+
+export function addMoney(a: Money2, b: Money2): Money2 {
+  return { usd: a.usd + b.usd, pen: a.pen + b.pen };
+}
+
+/**
+ * En USD (la base de la importación): lo que está en USD tal cual y los soles ÷
+ * el tipo de cambio. Null si hay soles y no hay tipo de cambio.
+ */
+export function moneyInUsd(m: Money2, fx: number | null | undefined): number | null {
+  if (m.pen === 0) return m.usd;
+  const r = validFx(fx);
+  return r ? m.usd + m.pen / r : null;
+}
+
+/**
+ * En soles: lo que está en USD × el tipo de cambio y los soles TAL CUAL (sin ida
+ * y vuelta por el dólar). Null si hay USD y no hay tipo de cambio.
+ */
+export function moneyInPen(m: Money2, fx: number | null | undefined): number | null {
+  if (m.usd === 0) return m.pen;
+  const r = validFx(fx);
+  return r ? m.usd * r + m.pen : null;
+}
+
+/** `US$ 20.07` · `S/ 427.25`: como lo escribe el historial. */
+export function moneyText(amount: number, currency: Currency | null | undefined): string {
+  return `${currencySymbol(currency)} ${amount.toFixed(2)}`;
+}
+
+/** La moneda escrita en el formulario: vacía = USD (como antes de la 0342). Null si no es USD ni PEN. */
+export function cleanCurrency(raw: unknown): Currency | null {
+  const v = String(raw ?? "").trim().toUpperCase();
+  if (!v) return "USD";
+  if (v === "S/" || v === "S/.") return "PEN";
+  if (v === "US$") return "USD";
+  return isCurrency(v) ? v : null;
+}
+
+// ---------------------------------------------------------------------------
+// IGV (MOM §45.3): «Incluye IGV» en un costo
+// ---------------------------------------------------------------------------
+
+/** El IGV de Perú: 18 %. */
+export const IGV_RATE = 0.18;
+
+/** El monto sin IGV de un total con IGV: total ÷ 1,18, a 2 decimales (S/ 504.16 → S/ 427.25). */
+export function netOfIgv(gross: number): number {
+  return round2(gross / (1 + IGV_RATE));
+}
+
+/** El IGV de un total con IGV: total − sin IGV (S/ 504.16 → S/ 76.91). */
+export function igvOf(gross: number): number {
+  return round2(gross - netOfIgv(gross));
+}
+
+/** La ayuda de la casilla «Incluye IGV». */
+export const IGV_HELP = "Las líneas de la factura ya suelen venir sin IGV; marca esta casilla solo si cargas el total con IGV.";
+
+/**
+ * Un costo como se cuenta: «S/ 427.25», o con «Incluye IGV» «S/ 504.16 con IGV →
+ * S/ 427.25 sin IGV» (el historial, el detalle y el Excel).
+ */
+export function costAmountText(c: { amount: number; currency: Currency; includes_igv?: boolean; gross_amount?: number | null }): string {
+  const net = moneyText(c.amount, c.currency);
+  if (!c.includes_igv || c.gross_amount == null) return net;
+  return `${moneyText(c.gross_amount, c.currency)} con IGV → ${net} sin IGV`;
+}
+
+// ---------------------------------------------------------------------------
 // Validaciones de lo que llega del formulario
 // ---------------------------------------------------------------------------
 
@@ -580,20 +693,56 @@ export function cleanItem(input: ItemInput, canMoney: boolean): Clean<ItemValue>
 export interface CostInput {
   kind?: string | null;
   label?: string | null;
-  amountUsd?: unknown;
+  /** El monto escrito, en su moneda (con IGV si se marca «Incluye IGV»). */
+  amount?: unknown;
+  /** USD o PEN; vacío = USD. */
+  currency?: unknown;
+  /** «Incluye IGV»: al costo entra el monto ÷ 1,18 (a 2 decimales). */
+  includesIgv?: unknown;
   allocation?: string | null;
   itemId?: string | null;
 }
 
-export function cleanCost(
-  input: CostInput,
-  itemIds: readonly string[],
-): Clean<{ kind: CostKind; label: string; amount_usd: number; allocation: Allocation; item_id: string | null }> {
+/**
+ * La fila de `import_costs` (0342): el monto que entra al costo (SIN IGV) en
+ * la columna de su moneda —`amount_usd` o `amount_pen`, la otra nula— y, con
+ * «Incluye IGV», el monto con IGV tal como se escribió en `gross_amount`.
+ */
+export interface CostValue {
+  kind: CostKind;
+  label: string;
+  currency: Currency;
+  amount_usd: number | null;
+  amount_pen: number | null;
+  includes_igv: boolean;
+  gross_amount: number | null;
+  allocation: Allocation;
+  item_id: string | null;
+}
+
+/** Una casilla marcada que llega del navegador. */
+function checked(raw: unknown): boolean {
+  return raw === true || raw === "true" || raw === "on" || raw === "1";
+}
+
+/** El monto en su columna: `amount_usd` o `amount_pen`; la otra, nula (el CHECK de la 0342). */
+export function amountColumns(amount: number, currency: Currency): { amount_usd: number | null; amount_pen: number | null } {
+  return currency === "PEN" ? { amount_usd: null, amount_pen: amount } : { amount_usd: amount, amount_pen: null };
+}
+
+export function cleanCost(input: CostInput, itemIds: readonly string[]): Clean<CostValue> {
   const kind = input.kind as CostKind;
   if (!COST_KINDS.some((k) => k.id === kind)) return { error: "Tipo de costo inválido." };
   const label = text(input.label, 120) ?? costKindLabel(kind);
-  const amount = parseDecimal(input.amountUsd);
-  if (amount === null || round2(amount) <= 0) return { error: "El monto debe ser mayor que 0." };
+  const currency = cleanCurrency(input.currency);
+  if (!currency) return { error: "Moneda inválida: US$ o S/." };
+  const raw = parseDecimal(input.amount);
+  if (raw === null || round2(raw) <= 0) return { error: "El monto debe ser mayor que 0." };
+  const includesIgv = checked(input.includesIgv);
+  const gross = round2(raw);
+  // Con IGV: al costo entra el monto sin IGV (÷ 1,18), a 2 decimales.
+  const net = includesIgv ? netOfIgv(gross) : gross;
+  if (!(net > 0)) return { error: "El monto debe ser mayor que 0." };
   const allocation = (input.allocation || "value") as Allocation;
   if (!ALLOCATIONS.some((a) => a.id === allocation)) return { error: "Reparto inválido." };
   let itemId: string | null = null;
@@ -601,29 +750,62 @@ export function cleanCost(
     itemId = String(input.itemId ?? "").trim() || null;
     if (!itemId || !itemIds.includes(itemId)) return { error: "Elige el producto de esta importación al que va el costo." };
   }
-  return { value: { kind, label, amount_usd: round2(amount), allocation, item_id: itemId } };
+  return {
+    value: {
+      kind,
+      label,
+      currency,
+      ...amountColumns(net, currency),
+      includes_igv: includesIgv,
+      gross_amount: includesIgv ? gross : null,
+      allocation,
+      item_id: itemId,
+    },
+  };
 }
 
 export interface PaymentInput {
-  amountUsd?: unknown;
+  /** El monto, en su moneda. */
+  amount?: unknown;
+  /** USD o PEN; vacío = USD. */
+  currency?: unknown;
   paidOn?: string | null;
   method?: string | null;
   note?: string | null;
   documentId?: string | null;
 }
 
-export function cleanPayment(
-  input: PaymentInput,
-  paymentDocIds: readonly string[],
-): Clean<{ amount_usd: number; paid_on: string; method: PaymentMethod; note: string | null; document_id: string | null }> {
-  const amount = parseDecimal(input.amountUsd);
+/** La fila de `import_payments` (0342): el monto en la columna de su moneda. */
+export interface PaymentValue {
+  currency: Currency;
+  amount_usd: number | null;
+  amount_pen: number | null;
+  paid_on: string;
+  method: PaymentMethod;
+  note: string | null;
+  document_id: string | null;
+}
+
+export function cleanPayment(input: PaymentInput, paymentDocIds: readonly string[]): Clean<PaymentValue> {
+  const currency = cleanCurrency(input.currency);
+  if (!currency) return { error: "Moneda inválida: US$ o S/." };
+  const amount = parseDecimal(input.amount);
   if (amount === null || round2(amount) <= 0) return { error: "El monto debe ser mayor que 0." };
   if (!isIsoDate(input.paidOn)) return { error: "Fecha del pago inválida." };
   const method = input.method as PaymentMethod;
   if (!PAYMENT_METHODS.some((m) => m.id === method)) return { error: "Método de pago inválido." };
   const documentId = String(input.documentId ?? "").trim() || null;
   if (documentId && !paymentDocIds.includes(documentId)) return { error: "El comprobante debe ser de esta importación." };
-  return { value: { amount_usd: round2(amount), paid_on: input.paidOn as string, method, note: longText(input.note, 300), document_id: documentId } };
+  return {
+    value: {
+      currency,
+      ...amountColumns(round2(amount), currency),
+      paid_on: input.paidOn as string,
+      method,
+      note: longText(input.note, 300),
+      document_id: documentId,
+    },
+  };
 }
 
 export function cleanStatusChange(
@@ -655,41 +837,65 @@ export interface LandedCostRow {
   id?: string;
   kind: CostKind;
   label: string;
-  amountUsd: number;
+  /** Lo que entra al costo (sin IGV), en su moneda. */
+  amount: number;
+  /** Sin moneda: USD (como antes de la 0342). */
+  currency?: Currency;
   allocation: Allocation;
   itemId?: string | null;
 }
 
-export interface LandedLine {
-  itemId: string;
+/** Una línea en UNA moneda: USD (la base) o soles. */
+export interface LandedView {
   /** Costo del proveedor (qty × costo por unidad). */
   product: number;
   envio: number;
   importacion: number;
   adicional: number;
   total: number;
+  unitCost: number;
+  perUnit: { product: number; envio: number; importacion: number; adicional: number };
+}
+
+export interface LandedLine {
+  itemId: string;
+  /** Cada parte en su moneda, sin convertir (el proveedor, siempre en USD). */
+  split: { product: Money2; envio: Money2; importacion: Money2; adicional: Money2; total: Money2 };
   /** Unidades buenas: recibidas − dañadas si se contó; si no, las pedidas. */
   good: number;
   /** Sobre cuántas se divide (las buenas; si no hay ninguna, las pedidas). */
   divisor: number;
-  unitCost: number;
-  perUnit: { product: number; envio: number; importacion: number; adicional: number };
   /** Ninguna unidad buena: su costo es pérdida. */
   loss: boolean;
+  /** En USD: los soles ÷ tipo de cambio. Null si le tocan soles y no hay tipo de cambio. */
+  usd: LandedView | null;
+  /** En soles: USD × tipo de cambio + los soles tal cual. Null si tiene USD y no hay tipo de cambio. */
+  pen: LandedView | null;
 }
 
-export interface LandedResult {
-  lines: LandedLine[];
-  byItem: Map<string, LandedLine>;
-  warnings: string[];
+export interface LandedTotals {
   /** Σ costo del proveedor. */
   productTotal: number;
   /** Σ costos a repartir. */
   costsTotal: number;
   /** productTotal + costsTotal: nada se pierde ni se duplica. */
   total: number;
-  /** Costos que no se pudieron repartir (importación sin productos). */
-  unallocated: number;
+}
+
+export interface LandedResult {
+  lines: LandedLine[];
+  byItem: Map<string, LandedLine>;
+  warnings: string[];
+  /** El tipo de cambio con que se miró (soles por 1 USD), o null. */
+  fx: number | null;
+  /** Σ por moneda, sin convertir. `unallocated`: costos que no se pudieron repartir (sin productos). */
+  split: { product: Money2; costs: Money2; total: Money2; unallocated: Money2 };
+  /** Los totales en USD; null si hay costos en soles y no hay tipo de cambio. */
+  usd: LandedTotals | null;
+  /** Los totales en soles; null si hay USD y no hay tipo de cambio. */
+  pen: LandedTotals | null;
+  /** Algún costo está en soles. */
+  hasPenCosts: boolean;
   goodUnits: number;
 }
 
@@ -699,23 +905,90 @@ export function goodUnits(item: Pick<LandedItem, "qty" | "receivedQty" | "damage
   return Math.max(0, item.receivedQty - (item.damagedQty ?? 0));
 }
 
+/** Un producto de la base (`import_items`) como entra al cálculo. */
+export function landedItemOf(it: {
+  id: string;
+  name?: string;
+  qty: number;
+  unit_cost_usd?: number | null;
+  unit_weight_kg?: number | null;
+  received_qty?: number | null;
+  damaged_qty?: number | null;
+}): LandedItem {
+  return {
+    id: it.id,
+    name: it.name,
+    qty: it.qty,
+    unitCostUsd: it.unit_cost_usd ?? 0,
+    unitWeightKg: it.unit_weight_kg ?? null,
+    receivedQty: it.received_qty ?? null,
+    damagedQty: it.damaged_qty ?? null,
+  };
+}
+
+/** Un costo leído de la base (ya normalizado: monto en su moneda) como entra al cálculo. */
+export function landedCostOf(c: { id: string; kind: string; label: string; amount: number; currency: Currency; allocation: string; item_id: string | null }): LandedCostRow {
+  return { id: c.id, kind: c.kind as CostKind, label: c.label, amount: c.amount, currency: c.currency, allocation: c.allocation as Allocation, itemId: c.item_id };
+}
+
+function viewOf(
+  split: LandedLine["split"],
+  divisor: number,
+  convert: (m: Money2) => number | null,
+): LandedView | null {
+  const product = convert(split.product);
+  const envio = convert(split.envio);
+  const importacion = convert(split.importacion);
+  const adicional = convert(split.adicional);
+  const total = convert(split.total);
+  if (product === null || envio === null || importacion === null || adicional === null || total === null) return null;
+  return {
+    product,
+    envio,
+    importacion,
+    adicional,
+    total,
+    unitCost: total / divisor,
+    perUnit: { product: product / divisor, envio: envio / divisor, importacion: importacion / divisor, adicional: adicional / divisor },
+  };
+}
+
+function totalsOf(split: LandedResult["split"], convert: (m: Money2) => number | null): LandedTotals | null {
+  const productTotal = convert(split.product);
+  const costsTotal = convert(split.costs);
+  const total = convert(split.total);
+  return productTotal === null || costsTotal === null || total === null ? null : { productTotal, costsTotal, total };
+}
+
 /**
  * Costo final por unidad de cada línea, exactamente como §6.3 de la
  * referencia: los costos se reparten sobre lo PEDIDO (se pagó y se envió
  * todo) y el costo por unidad se divide entre las unidades BUENAS (lo que
  * faltó o llegó dañado lo pagan las que se pueden vender). Sin redondeo.
+ *
+ * Cada costo se reparte en SU moneda (0342) con la misma regla: «por valor» usa
+ * el valor del proveedor (USD) sea cual sea la moneda del costo. Las dos vistas
+ * salen del tipo de cambio de la importación (`fx`, soles por 1 USD): en soles,
+ * el proveedor y los costos en USD × fx más los costos en soles tal cual; en
+ * USD, los costos en soles ÷ fx. Sin `fx`, la vista que lo necesita es null.
  */
-export function landedCosts(items: readonly LandedItem[], costs: readonly LandedCostRow[]): LandedResult {
+export function landedCosts(items: readonly LandedItem[], costs: readonly LandedCostRow[], fxPenPerUsd?: number | null): LandedResult {
+  const fx = validFx(fxPenPerUsd);
   const warnings: string[] = [];
-  const parts = new Map<string, { envio: number; importacion: number; adicional: number }>();
-  for (const it of items) parts.set(it.id, { envio: 0, importacion: 0, adicional: 0 });
-  let unallocated = 0;
+  const parts = new Map<string, Record<CostKind, Money2>>();
+  for (const it of items) parts.set(it.id, { envio: zeroMoney(), importacion: zeroMoney(), adicional: zeroMoney() });
+  let unallocated = zeroMoney();
+  let costsSplit = zeroMoney();
+  let hasPenCosts = false;
 
   for (const cost of costs) {
-    const amount = Number(cost.amountUsd) || 0;
+    const amount = Number(cost.amount) || 0;
     if (!(amount > 0)) continue;
+    const cur: Currency = cost.currency === "PEN" ? "PEN" : "USD";
+    if (cur === "PEN") hasPenCosts = true;
+    costsSplit = addMoney(costsSplit, moneyOf(amount, cur));
     if (!items.length) {
-      unallocated += amount;
+      unallocated = addMoney(unallocated, moneyOf(amount, cur));
       warnings.push(`«${cost.label}» no se puede repartir: la importación no tiene productos.`);
       continue;
     }
@@ -742,49 +1015,44 @@ export function landedCosts(items: readonly LandedItem[], costs: readonly Landed
     const sum = base.reduce((a, b) => a + b, 0);
     items.forEach((it, i) => {
       const p = parts.get(it.id)!;
-      p[cost.kind] += (amount * base[i]!) / sum;
+      p[cost.kind] = addMoney(p[cost.kind], moneyOf((amount * base[i]!) / sum, cur));
     });
   }
 
+  const toUsd = (m: Money2) => moneyInUsd(m, fx);
+  const toPen = (m: Money2) => moneyInPen(m, fx);
   const lines: LandedLine[] = items.map((it) => {
     const p = parts.get(it.id)!;
-    const product = it.qty * it.unitCostUsd;
-    const total = product + p.envio + p.importacion + p.adicional;
+    const product = moneyOf(it.qty * it.unitCostUsd, "USD");
+    const total = addMoney(addMoney(addMoney(product, p.envio), p.importacion), p.adicional);
     const good = goodUnits(it);
     const divisor = good > 0 ? good : it.qty > 0 ? it.qty : 1;
     if (good === 0 && it.receivedQty != null) {
       warnings.push(`${it.name ? `«${it.name}»` : "Un producto"} no tiene unidades buenas: su costo es pérdida (se muestra sobre lo pedido).`);
     }
+    const split = { product, envio: p.envio, importacion: p.importacion, adicional: p.adicional, total };
     return {
       itemId: it.id,
-      product,
-      envio: p.envio,
-      importacion: p.importacion,
-      adicional: p.adicional,
-      total,
+      split,
       good,
       divisor,
-      unitCost: total / divisor,
-      perUnit: {
-        product: product / divisor,
-        envio: p.envio / divisor,
-        importacion: p.importacion / divisor,
-        adicional: p.adicional / divisor,
-      },
       loss: good === 0,
+      usd: viewOf(split, divisor, toUsd),
+      pen: viewOf(split, divisor, toPen),
     };
   });
 
-  const productTotal = lines.reduce((a, l) => a + l.product, 0);
-  const costsTotal = costs.reduce((a, c) => a + (Number(c.amountUsd) > 0 ? Number(c.amountUsd) : 0), 0);
+  const productSplit = lines.reduce((a, l) => addMoney(a, l.split.product), zeroMoney());
+  const split = { product: productSplit, costs: costsSplit, total: addMoney(productSplit, costsSplit), unallocated };
   return {
     lines,
     byItem: new Map(lines.map((l) => [l.itemId, l])),
     warnings: [...new Set(warnings)],
-    productTotal,
-    costsTotal,
-    total: productTotal + costsTotal,
-    unallocated,
+    fx,
+    split,
+    usd: totalsOf(split, toUsd),
+    pen: totalsOf(split, toPen),
+    hasPenCosts,
     goodUnits: lines.reduce((a, l) => a + l.good, 0),
   };
 }
@@ -807,59 +1075,113 @@ export interface Margin {
   low: boolean;
 }
 
-/** El margen de una línea. Null sin tipo de cambio o sin precio de venta > 0. */
-export function marginOf(
-  unitCostUsd: number,
-  fxPenPerUsd: number | null | undefined,
-  salePricePen: number | null | undefined,
-  good: number,
-): Margin | null {
-  if (!(fxPenPerUsd && fxPenPerUsd > 0) || !(salePricePen && salePricePen > 0)) return null;
-  const unitCostPen = unitCostUsd * fxPenPerUsd;
+/**
+ * El margen de una línea con su costo aterrizado por unidad EN SOLES (la vista
+ * `pen` de `landedCosts`: los costos en soles entran tal cual). Null sin ese
+ * costo (falta el tipo de cambio) o sin precio de venta > 0.
+ */
+export function marginOf(unitCostPen: number | null | undefined, salePricePen: number | null | undefined, good: number): Margin | null {
+  if (unitCostPen == null || !Number.isFinite(unitCostPen) || !(salePricePen && salePricePen > 0)) return null;
   const unit = salePricePen - unitCostPen;
   const pct = unit / salePricePen;
   return { unitCostPen, unit, pct, total: unit * good, low: pct < LOW_MARGIN };
 }
 
-export interface MoneySummary {
-  totalUsd: number;
-  paidUsd: number;
-  /** Lo que falta pagar (0 si se pagó todo; diferencias menores a medio centavo no cuentan). */
-  pendingUsd: number;
-  /** Costo promedio por unidad buena. Null sin unidades buenas. */
+/** Pagado de más por menos de medio centavo no cuenta. */
+export const HALF_CENT = 0.005;
+
+/** Un pago como entra a las cuentas: su monto en su moneda. */
+export interface PaymentAmount {
+  amount: number;
+  /** Sin moneda: USD (como antes de la 0342). */
+  currency?: Currency;
+}
+
+/** Σ pagos por moneda, sin convertir. */
+export function paidSplit(payments: readonly PaymentAmount[]): Money2 {
+  return payments.reduce((a, p) => addMoney(a, moneyOf(Number(p.amount) || 0, p.currency === "PEN" ? "PEN" : "USD")), zeroMoney());
+}
+
+export interface Balance {
+  /** En USD, la base. Null si hay soles y falta el tipo de cambio. */
+  totalUsd: number | null;
+  paidUsd: number | null;
+  /** Lo que falta pagar (0 si se pagó todo; menos de medio centavo no cuenta). */
+  pendingUsd: number | null;
+  /** En soles. Null si hay USD y falta el tipo de cambio. */
+  totalPen: number | null;
+  paidPen: number | null;
+  pendingPen: number | null;
+  /** Monedas mezcladas y sin tipo de cambio: no se puede decir cuánto falta. */
+  needsFx: boolean;
+}
+
+/**
+ * «Pagado / Falta pagar» sin mezclar monedas (MOM §45.3): se compara en la base
+ * (USD) convirtiendo con el tipo de cambio de la importación. Sin él, solo si
+ * todo está en una sola moneda (todo USD, o todo soles); si se mezclan, el saldo
+ * es null (`needsFx`) y se muestra cada moneda por separado.
+ */
+export function paymentBalance(total: Money2, paid: Money2, fx: number | null | undefined): Balance {
+  const positive = (d: number) => (d > HALF_CENT ? d : 0);
+  const totalUsd = moneyInUsd(total, fx);
+  const paidUsd = moneyInUsd(paid, fx);
+  const totalPen = moneyInPen(total, fx);
+  const paidPen = moneyInPen(paid, fx);
+  const pendingUsd = totalUsd !== null && paidUsd !== null ? positive(totalUsd - paidUsd) : null;
+  // La base decide: si en USD no falta nada, en soles tampoco (sin diferencias de redondeo).
+  const pendingPen = totalPen !== null && paidPen !== null ? (pendingUsd === 0 ? 0 : positive(totalPen - paidPen)) : null;
+  return { totalUsd, paidUsd, pendingUsd, totalPen, paidPen, pendingPen, needsFx: pendingUsd === null && pendingPen === null };
+}
+
+export interface MoneySummary extends Balance {
+  /** Costo total sin convertir: lo que está en USD y lo que está en soles. */
+  total: Money2;
+  /** Pagado sin convertir, por moneda. */
+  paid: Money2;
+  /** Costo promedio por unidad buena. Null sin unidades buenas o sin la vista. */
   avgUnitUsd: number | null;
-  /** Ganancia esperada en soles: solo si TODAS las líneas tienen precio y hay tipo de cambio. */
+  avgUnitPen: number | null;
+  /** Ganancia esperada en soles: solo si TODAS las líneas tienen precio y costo en soles (hace falta el tipo de cambio). */
   expectedProfitPen: number | null;
   /** Parte de las unidades que hay que vender para recuperar lo invertido (0–∞). */
   recoveryShare: number | null;
 }
 
+/** El dinero de la importación, con el tipo de cambio con que se calculó `landed`. */
 export function moneySummary(
   landed: LandedResult,
   items: readonly { id: string; salePricePen?: number | null }[],
-  payments: readonly { amountUsd: number }[],
-  fxPenPerUsd: number | null | undefined,
+  payments: readonly PaymentAmount[],
 ): MoneySummary {
-  const paidUsd = payments.reduce((a, p) => a + (Number(p.amountUsd) || 0), 0);
-  const diff = landed.total - paidUsd;
-  const pendingUsd = diff > 0.005 ? diff : 0;
-  const avgUnitUsd = landed.goodUnits > 0 ? landed.total / landed.goodUnits : null;
+  const paid = paidSplit(payments);
+  const balance = paymentBalance(landed.split.total, paid, landed.fx);
+  const good = landed.goodUnits;
   let expectedProfitPen: number | null = null;
   let recoveryShare: number | null = null;
-  if (fxPenPerUsd && fxPenPerUsd > 0 && items.length && items.every((it) => (it.salePricePen ?? 0) > 0)) {
+  const lines = items.map((it) => landed.byItem.get(it.id));
+  if (items.length && items.every((it) => (it.salePricePen ?? 0) > 0) && lines.every((l) => !l || l.pen) && balance.totalPen !== null) {
     let profit = 0;
     let revenue = 0;
-    for (const it of items) {
-      const line = landed.byItem.get(it.id);
-      if (!line) continue;
-      const m = marginOf(line.unitCost, fxPenPerUsd, it.salePricePen, line.good);
+    items.forEach((it, i) => {
+      const line = lines[i];
+      if (!line?.pen) return;
+      const m = marginOf(line.pen.unitCost, it.salePricePen, line.good);
       profit += m?.total ?? 0;
       revenue += (it.salePricePen ?? 0) * line.good;
-    }
+    });
     expectedProfitPen = profit;
-    recoveryShare = revenue > 0 ? (landed.total * fxPenPerUsd) / revenue : null;
+    recoveryShare = revenue > 0 ? balance.totalPen / revenue : null;
   }
-  return { totalUsd: landed.total, paidUsd, pendingUsd, avgUnitUsd, expectedProfitPen, recoveryShare };
+  return {
+    ...balance,
+    total: landed.split.total,
+    paid,
+    avgUnitUsd: good > 0 && balance.totalUsd !== null ? balance.totalUsd / good : null,
+    avgUnitPen: good > 0 && balance.totalPen !== null ? balance.totalPen / good : null,
+    expectedProfitPen,
+    recoveryShare,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1148,8 +1470,9 @@ export function costPushPlan(input: {
     if (it.receivedQty != null && line && line.good === 0) {
       return { ...base, state: "skip", reason: "Sin unidades buenas: no entró nada que costear." };
     }
-    if (!line || !fx) return { ...base, state: "skip", reason: "Sin costo calculado." };
-    return { ...base, state: "push", unitCostPen: round2(line.unitCost * fx) };
+    // La vista en soles: los costos en soles entran tal cual; se redondea solo al final.
+    if (!line || !fx || !line.pen) return { ...base, state: "skip", reason: "Sin costo calculado." };
+    return { ...base, state: "push", unitCostPen: round2(line.pen.unitCost) };
   });
   const alreadyDone = withSku.length > 0 && lines.every((l) => l.state === "already");
   return {

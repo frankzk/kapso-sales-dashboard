@@ -7,13 +7,14 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { cn } from "@/components/ui";
-import { SectionHead } from "@/components/ops-ui";
+import { Banner, SectionHead } from "@/components/ops-ui";
 import { SECTION_CARD } from "@/components/ops-styles";
 import { fmtInt, fmtPct, fmtPen, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
 import { FigureCell, FigureFrame } from "@/components/compras/chrome";
 import { IconArrowDown, IconArrowUp, IconChevronRight } from "@/components/icons";
-import { formatDmy } from "@/lib/compras";
+import { MISSING_FX, formatDmy } from "@/lib/compras";
 import {
+  importsMissingFxForUsd,
   moneyInTransit,
   monthlySpend,
   supplierRanking,
@@ -89,14 +90,25 @@ export function ReportsView({
   const products = unitCostHistory(imports);
   const supplierName = new Map(suppliers.map((s) => [s.id, s.name]));
   const ranking = supplierRanking(suppliers.map((s) => supplierStats(s.id, imports, { money: true })));
+  // Montos en soles sin tipo de cambio: no entran en los USD y se dice cuántas son.
+  const missingFx = importsMissingFxForUsd(imports);
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      {missingFx > 0 && (
+        <Banner tone="warn" role="status" title={MISSING_FX}>
+          <p>
+            {missingFx} importaci{missingFx === 1 ? "ón tiene" : "ones tienen"} montos en soles y no tiene{missingFx === 1 ? "" : "n"} tipo de cambio: no entra
+            {missingFx === 1 ? "" : "n"} en las cifras en USD. Escríbelo en el detalle de cada una.
+          </p>
+        </Banner>
+      )}
       <FigureFrame className="lg:grid-cols-4">
         <FigureCell
           label="Dinero en camino (USD)"
           value={fmtUsd(transit.totalUsd)}
-          sub={`${fmtInt(transit.units)} u. en ${transit.imports} importación${transit.imports === 1 ? "" : "es"}${penNote(transit.totalPen, transit.withoutFx)}`}
+          sub={`${fmtInt(transit.units)} u. en ${transit.imports} importación${transit.imports === 1 ? "" : "es"}${penNote(transit.totalPen, transit.withoutFx)}${transit.usdWithoutFx ? ` · ${transit.usdWithoutFx} sin tipo de cambio fuera de los USD` : ""}`}
+          tone={transit.usdWithoutFx ? "warn" : undefined}
         />
         <FigureCell
           label="Pagado de lo que viene"
@@ -109,10 +121,10 @@ export function ReportsView({
       </FigureFrame>
 
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
-        <Card title="Comprado por mes" help="Costo aterrizado de las compradas, por el mes del pedido. En USD.">
+        <Card title="Comprado por mes" help="Costo aterrizado de las compradas, por el mes del pedido. En USD (los costos en soles ÷ el tipo de cambio de cada importación).">
           <MonthBars rows={months} value={(m) => m.boughtUsd} current={thisMonth.month} />
         </Card>
-        <Card title="Pagado por mes" help="Pagos por el mes en que se pagaron, sin los de importaciones canceladas. En USD.">
+        <Card title="Pagado por mes" help="Pagos por el mes en que se pagaron, sin los de importaciones canceladas. En USD (los pagos en soles ÷ el tipo de cambio de su importación).">
           <MonthBars rows={months} value={(m) => m.paidUsd} current={thisMonth.month} />
         </Card>
       </div>
@@ -274,6 +286,9 @@ function ChangeLabel({ change }: { change: number }) {
   return <>{fmtPct(0)}</>;
 }
 
+/** El costo por unidad en USD o, si a esa importación le falta el tipo de cambio, el aviso. */
+const unitUsd = (n: number | null) => (n == null ? MISSING_FX : fmtUsdUnit(n));
+
 function penNote(pen: number, withoutFx: number): string {
   if (!(pen > 0)) return "";
   return ` · ${fmtPen(pen)}${withoutFx ? ` (${withoutFx} sin tipo de cambio)` : ""}`;
@@ -297,9 +312,9 @@ function UnitCostItem({ p, storeName }: { p: UnitCostProduct; storeName: string 
           </p>
         </div>
         <div className="grid grid-cols-3 gap-x-4 @2xl:contents">
-          <Price label="Último" value={fmtUsdUnit(p.last.unitCostUsd)} pen={p.last.unitCostPen} code={p.last.code} strong />
+          <Price label="Último" value={unitUsd(p.last.unitCostUsd)} pen={p.last.unitCostPen} code={p.last.code} strong />
           {p.previous ? (
-            <Price label="Anterior" value={fmtUsdUnit(p.previous.unitCostUsd)} pen={p.previous.unitCostPen} code={p.previous.code} />
+            <Price label="Anterior" value={unitUsd(p.previous.unitCostUsd)} pen={p.previous.unitCostPen} code={p.previous.code} />
           ) : (
             <Price label="Anterior" value="—" />
           )}
@@ -320,7 +335,7 @@ function UnitCostItem({ p, storeName }: { p: UnitCostProduct; storeName: string 
               <Link href={`/dashboard/compras/${pt.importId}`} className="font-mono text-xs text-brand-700 hover:underline">
                 {pt.code}
               </Link>{" "}
-              · {formatDmy(pt.date)} · {fmtInt(pt.good)} buenas · <span className="text-ink-900">{fmtUsdUnit(pt.unitCostUsd)}</span>
+              · {formatDmy(pt.date)} · {fmtInt(pt.good)} buenas · <span className={pt.unitCostUsd == null ? "font-medium text-warn-fg" : "text-ink-900"}>{unitUsd(pt.unitCostUsd)}</span>
               {pt.unitCostPen != null ? ` · ${fmtPen(pt.unitCostPen)}` : ""}
             </li>
           ))}
@@ -334,7 +349,7 @@ function Price({ label, value, pen, code, strong }: { label: string; value: stri
   return (
     <div className="min-w-0 @2xl:text-right">
       <p className="text-xs font-medium text-ink-500">{label}</p>
-      <p className={cn("text-sm leading-5 tabular-nums", strong ? "font-semibold text-ink-900" : "text-ink-700")}>{value}</p>
+      <p className={cn("text-sm leading-5 tabular-nums", value === MISSING_FX ? "font-medium text-warn-fg" : strong ? "font-semibold text-ink-900" : "text-ink-700")}>{value}</p>
       {pen != null && <p className={cn(SUB, "tabular-nums")}>{fmtPen(pen)}</p>}
       {code && <p className="font-mono text-xs leading-4 text-ink-500">{code}</p>}
     </div>

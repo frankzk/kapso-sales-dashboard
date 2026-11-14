@@ -151,7 +151,7 @@ describe("las lecturas de estadísticas y reportes", () => {
     expect(row!.fxPenPerUsd).toBe(3.75);
     expect(row!.items.map((it) => it.unitCostUsd)).toEqual([2, 12]);
     expect(row!.costs).toHaveLength(4);
-    expect(row!.payments).toEqual([{ amountUsd: 500, paidOn: "2026-11-02" }]);
+    expect(row!.payments).toEqual([{ amount: 500, currency: "USD", paidOn: "2026-11-02" }]);
     for (const t of ["imports", "import_items", "import_costs", "import_payments"]) {
       for (const op of h.db.opsOn(t)) expect(op.filters, t).toContainEqual(["eq", "org_id", ORG]);
     }
@@ -212,7 +212,10 @@ describe("el Excel de la importación (MOM §45.9)", () => {
     const costs = wb.getWorksheet("Costos")!;
     expect(costs.rowCount).toBeGreaterThanOrEqual(6);
     const pays = wb.getWorksheet("Pagos")!;
-    expect(pays.getRow(2).getCell(3).value).toBe(500);
+    const payCol = (name: string) => headers(pays).indexOf(name) + 1;
+    expect(pays.getRow(2).getCell(payCol("Moneda")).value).toBe("US$");
+    expect(pays.getRow(2).getCell(payCol("Monto")).value).toBe(500);
+    expect(pays.getRow(2).getCell(payCol("En S/")).value).toBe(1875);
     expect(allText(wb)).toContain("Costo total");
   });
 
