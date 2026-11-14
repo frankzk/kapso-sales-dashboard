@@ -77,6 +77,14 @@ export const PERMISSIONS = [
   "invoices.manage",
   // Costos
   "costs.manage",
+  // Compras: importaciones (MOM §45, 14-11-2026). `purchases.manage` crea y
+  // edita importaciones, productos, documentos, estados y recepción.
+  // `purchases.money` es lo que cuesta: costos por unidad, costos repartidos,
+  // pagos, precios de venta y los documentos con montos (proforma y
+  // comprobante). Sin él el servidor ni lee ni escribe esos campos. Van con el
+  // acceso owner/admin y con el rol «Administración», como `costs.manage`.
+  "purchases.manage",
+  "purchases.money",
   // Grupo GF Courier: contratos, tarifas, clientes y parámetros operativos.
   // Se concede persona por persona porque Daysi debe administrarlo sin recibir
   // acceso implícito a todas las facultades financieras de un admin.
@@ -227,6 +235,8 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "shalom.override_payment_validation": "Corregir pagos",
   "invoices.manage": "Boletas y facturas",
   "costs.manage": "Editar costos",
+  "purchases.manage": "Compras",
+  "purchases.money": "Montos de compras",
   "logistics.manage": "Administrar Grupo GF",
   "aliclik.create_guide": "Crear guías de Aliclik",
   "aliclik.cancel_guide": "Anular guías de Aliclik",
@@ -284,6 +294,8 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "shalom.override_payment_validation": "Pasar un pago a otro pedido o forzar su estado.",
   "invoices.manage": "Configurar los RUC de SimpleFact, asignarles cuentas, emitir boletas en modo Manual y registrar las emitidas fuera de Kapta.",
   "costs.manage": "Costos de producto, tarifas y gastos adicionales.",
+  "purchases.manage": "Crear y editar importaciones: productos, documentos, estados, aviso a la bodega y recepción.",
+  "purchases.money": "Ver y cargar en Compras costos por unidad, costos repartidos, pagos, precios de venta y proformas.",
   "logistics.manage": "Tarifas, clientes, pago de motorizados y exceso de efectivo del Grupo GF.",
   "aliclik.create_guide": "Crear la guía en Aliclik. Sale de verdad hacia el courier.",
   "aliclik.cancel_guide": "Anular una guía de Aliclik dentro del plazo que da el courier.",
@@ -384,6 +396,11 @@ export const PERMISSION_AREAS = [
     key: "liquidaciones",
     label: "Liquidaciones",
     permissions: ["settlements.manage", "settlements.close", "sheets.edit", "sheets.manage"],
+  },
+  {
+    key: "compras",
+    label: "Compras",
+    permissions: ["purchases.manage", "purchases.money"],
   },
   {
     key: "administracion",
@@ -750,7 +767,7 @@ export const FUNCTIONAL_ROLES = [
   {
     role: "administracion",
     label: "Administración",
-    description: "Para quien administra: equipo, tiendas, costos, stock, catálogo de Aliclik, anuncios, hojas y reportes.",
+    description: "Para quien administra: equipo, tiendas, costos, compras, stock, catálogo de Aliclik, anuncios, hojas y reportes.",
     permissions: [
       "master.edit",
       "master.import_report",
@@ -758,6 +775,9 @@ export const FUNCTIONAL_ROLES = [
       "stores.manage",
       "stock.manage",
       "costs.manage",
+      // Compras (MOM §45): con los costos, que es donde termina su costo aterrizado.
+      "purchases.manage",
+      "purchases.money",
       "aliclik.manage_catalog",
       "sheets.manage",
       "riders.manage",

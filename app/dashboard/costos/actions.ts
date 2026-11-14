@@ -15,6 +15,7 @@ import { getCurrentUser } from "@/lib/access";
 import { getMasterPermissions, hasOrgPermission } from "@/lib/permissions-access";
 import { COST_CONCEPTS, type CostConcept } from "@/lib/costs";
 import { refreshOrderCoverage } from "@/lib/order-coverage";
+import { insertProductCostPeriod } from "@/lib/product-cost-periods";
 
 const COSTS_PATH = "/dashboard/costos";
 
@@ -182,29 +183,8 @@ export async function upsertProductCost(input: ProductCostInput): Promise<CostAc
   if (unitCost === null || unitCost < 0) return { error: "Costo unitario inválido." };
   if (!DATE_RE.test(input.effectiveFrom)) return { error: "Fecha de vigencia inválida." };
 
-  const admin = createAdminSupabase();
-  const previousDay = new Date(Date.parse(`${input.effectiveFrom}T00:00:00Z`) - 86_400_000)
-    .toISOString()
-    .slice(0, 10);
-
-  let query = admin
-    .from("product_costs")
-    .select("id,effective_from")
-    .eq("org_id", input.orgId)
-    .eq("sku", sku)
-    .is("effective_to", null);
-  query = input.storeId ? query.eq("store_id", input.storeId) : query.is("store_id", null);
-  const { data: current } = await query;
-
-  for (const row of (current ?? []) as { id: string; effective_from: string }[]) {
-    if (row.effective_from > previousDay) {
-      await admin.from("product_costs").delete().eq("id", row.id);
-    } else {
-      await admin.from("product_costs").update({ effective_to: previousDay }).eq("id", row.id);
-    }
-  }
-
-  const { error } = await admin.from("product_costs").insert({
+  // La misma vigencia que usa «Pasar a Costos» de Compras (MOM §45).
+  const { error } = await insertProductCostPeriod(createAdminSupabase(), {
     org_id: input.orgId,
     store_id: input.storeId || null,
     sku,
@@ -215,7 +195,7 @@ export async function upsertProductCost(input: ProductCostInput): Promise<CostAc
     effective_from: input.effectiveFrom,
     created_by: auth.userId,
   });
-  if (error) return { error: error.message };
+  if (error) return { error };
   revalidatePath(COSTS_PATH);
   return { notice: "Costo de producto registrado." };
 }
