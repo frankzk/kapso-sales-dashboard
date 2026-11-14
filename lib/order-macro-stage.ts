@@ -990,7 +990,10 @@ function closingReasons(input: ResolveMacroStageInput): MacroSubstage[] {
 
   if (legacy.general === "entregado" && active.length) reasons.push("salida_adicional_activa");
   const commercialCancelled = Boolean(legacySaleCancelledAt(events));
-  if (commercialCancelled && active.length) reasons.push("salida_adicional_activa");
+  // Venta anulada (owner, 13-11-2026, #KP141229): la caja que sigue afuera es
+  // «Devolución física pendiente» (`closedOutside`, abajo), no una salida
+  // adicional. Solo la que sigue en la empresa es «Salida adicional activa».
+  if (commercialCancelled && active.some((guide) => !hasExternalCustody(guide))) reasons.push("salida_adicional_activa");
   if (
     legacy.general === "entregado" &&
     operation === "agencia" &&

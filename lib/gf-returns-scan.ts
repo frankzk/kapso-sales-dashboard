@@ -106,3 +106,12 @@ export function gfReceptionOutcome(decision: GfReturnDecision): ReturnScanOutcom
   if (decision.kind === "aviso") return decision.repeat ? "repetida" : "informativa";
   return null;
 }
+
+/**
+ * La caja de Grupo GF que sigue con el motorizado y se escanea en «Armar»
+ * (13-11-2026, #KP201841): no se arma, se recibe en Devoluciones, donde pasa
+ * si el motorizado la reportó «No entregado». PURA.
+ */
+export function gfReadyScanHint(label: string): string {
+  return `${label} está con el motorizado de Grupo GF. Si volvió, recíbelo en Devoluciones (necesita su reporte «No entregado»).`;
+}

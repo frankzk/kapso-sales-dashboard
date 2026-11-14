@@ -12,6 +12,7 @@ import { sortQueue, type QueueRow } from "@/lib/dispatch-day";
 
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
 vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAliclikRetry: vi.fn(), dismissAliclikRetry: vi.fn() }));
+vi.mock("@/app/dashboard/pedidos/repro-lima/prior-counts-actions", () => ({ loadPriorOrderCounts: vi.fn(async () => ({ counts: {} })) }));
 vi.mock("@/components/order-master-shared", () => ({ MacroStageDot: () => null }));
 const nav = vi.hoisted(() => ({ search: "" }));
 vi.mock("next/navigation", () => ({

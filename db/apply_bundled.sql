@@ -33463,3 +33463,707 @@ returns setof public.order_master language sql stable security invoker set searc
  select * from public.order_master_agency_payments(p_store_ids,p_from,p_to,'collect')
 $$;
 notify pgrst, 'reload schema';
+
+-- ---- 0337 ----
+-- ============================================================================
+-- 0337_gf_replaced_by_aliclik.sql — la guía de Aliclik deja «en devolución» la
+-- caja de Grupo GF que el motorizado todavía tiene «No entregado».
+--
+-- EL CASO (owner, 12-11-2026: «de acuerdo»). #KP203491, Lima. Alexis (Grupo
+-- GF) reportó KP203491-S01 «No entregado · no contesta» el 07-11 y todavía la
+-- tiene: `propio · pendiente`, custodia `courier`, sin recibir en oficina. El
+-- 11-11 una asesora creó desde la ficha la guía del reintento por Aliclik: la
+-- KP203491-S02, `aliclik`, custodia `empresa`, armada desde stock, con el
+-- motivo «Salida adicional por Aliclik con 1 salida(s) todavía viva(s)». El
+-- pedido seguía en «En curso · Por reprogramar Lima» y en «Reintentos
+-- Aliclik»: el «No entregado» de la S01 solo dejaba de mandar con un
+-- movimiento posterior de ESA salida (asignarla, «Lo llevo», custodia,
+-- entrega), y una guía de otro courier no lo es.
+--
+-- LA REGLA. Es «Sacar con salida nueva» (0248, MOM §9.3 y §29.13) con la
+-- salida nueva de Aliclik: la caja anterior queda en devolución a nombre del
+-- motorizado (custodia `retorno` y el evento `output_replaced`, la marca de
+-- `gf_output_replaced`) y, al recibirla en oficina, `gf_return_to_office`
+-- (rama «a stock», 0248/0307) la desarma y la devuelve a stock: no vuelve a
+-- «por asignar». El pedido sigue a la guía de Aliclik y sale de «Por
+-- reprogramar Lima», de «Reintentos Aliclik» y de Repro Lima. MOM §9.5.
+--
+-- QUÉ CAMBIA:
+--
+--   a) `gf_replace_output_with_aliclik(guía, actor)`: la llama Kapta después
+--      de guardar la guía de Aliclik (`createAliclikGuideFor` y el rescate de
+--      la huérfana en `/api/cron/aliclik-reconcile`). Busca las salidas de
+--      Grupo GF del MISMO pedido de Lima que siguen con el motorizado
+--      (`propio · pendiente`, custodia `courier`, sin `returned_at`, sin
+--      reemplazo) cuya ÚLTIMA parada dice «No entregado» desde ANTES de que
+--      naciera la guía, y a cada una:
+--        · la pasa a custodia `retorno` (conserva su parada, su lugar en la
+--          caja y `dispatched_at`, como la 0248);
+--        · CIERRA su solicitud viva de Grupo GF (`cancelled`, con un
+--          `logistics_request_events` `output_replaced`): a diferencia de la
+--          0248 no pasa a la salida nueva, que no es de Grupo GF;
+--        · escribe `output_replaced` en el pedido (sobre la salida anterior,
+--          con `replaced_by`/`replaced_by_code` de la guía de Aliclik y
+--          `replaced_by_courier = aliclik`) y, si está en una caja, en
+--          `dispatch_events`.
+--      La parada fallida del motorizado NO se toca: sigue en su ruta, cuenta
+--      en su paga y en la cadena de reintentos; desde ahora la guarda
+--      `delivery_stops_guard_replaced` (0248) no deja cambiarle el estado.
+--      Idempotente y sin error: lo que no cumple se salta y la respuesta dice
+--      por qué. Sin `security definer`; solo `service_role`.
+--   b) El barrido de lo que ya está así (#KP203491 y los demás): la misma
+--      función sobre cada guía de Aliclik viva de un pedido de Lima que tenga
+--      una caja de Grupo GF con el motorizado. Correrla dos veces no cambia
+--      nada. El Master se recalcula solo: cambiar la custodia mueve
+--      `shipments.updated_at` y el barrido `master-reconcile` (cada 10 min)
+--      recalcula esos pedidos (`order_master_stale`, 0123).
+--
+-- Aplicar a mano ANTES de desplegar el código (DEPLOY.md). Sin `begin`/`commit`
+-- propios, como el resto de migraciones.
+-- ============================================================================
+
+create or replace function public.gf_replace_output_with_aliclik(
+  p_guide_shipment uuid,
+  p_actor uuid
+)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_new shipments%rowtype;
+  v_old shipments%rowtype;
+  v_item dispatch_manifest_items%rowtype;
+  v_manifest dispatch_manifests%rowtype;
+  v_stop delivery_stops%rowtype;
+  v_guide_at timestamptz;
+  v_route_date date;
+  v_rider text;
+  v_rider_id uuid;
+  v_old_code text;
+  v_new_code text;
+  v_note text;
+  v_req uuid;
+  v_candidate uuid;
+  v_done jsonb := '[]'::jsonb;
+  v_skipped jsonb := '[]'::jsonb;
+begin
+  select * into v_new from shipments where id = p_guide_shipment;
+  if not found then return jsonb_build_object('replaced', v_done, 'skipped', 'no_existe'); end if;
+  if v_new.order_id is null then return jsonb_build_object('replaced', v_done, 'skipped', 'sin_pedido'); end if;
+  -- La guía de Aliclik viva o ya ENTREGADA (13-11-2026, #KP203491: Aliclik lo
+  -- entregó con la caja de stock y la de Grupo GF seguía «viva» con Alexis,
+  -- dejando el pedido en «salida adicional activa»). Una anulada o devuelta no
+  -- saca el pedido.
+  if lower(trim(coalesce(v_new.courier, ''))) <> 'aliclik'
+     or v_new.delivery_status not in ('pendiente', 'en_ruta', 'entregado')
+     or v_new.returned_at is not null or coalesce(v_new.custody_state, '') = 'devuelto' then
+    return jsonb_build_object('replaced', v_done, 'skipped', 'no_es_guia_aliclik_viva');
+  end if;
+  -- Solo Lima: fuera de Lima no hay salida adicional con otra viva (§9).
+  if not exists (select 1 from order_master where order_id = v_new.order_id and coverage = 'lima') then
+    return jsonb_build_object('replaced', v_done, 'skipped', 'no_es_lima');
+  end if;
+  -- Cuándo nació la guía: una «por definir» rellenada conserva su `created_at`
+  -- y la guía se le escribió al asignarla (`assigned_at`).
+  v_guide_at := greatest(v_new.created_at, v_new.assigned_at);
+
+  for v_candidate in
+    select s.id from shipments s
+     where s.order_id = v_new.order_id and s.id <> v_new.id
+       and lower(trim(s.courier)) = 'propio' and s.delivery_status = 'pendiente'
+       and s.custody_state = 'courier' and s.returned_at is null
+     order by s.output_number nulls last, s.created_at
+  loop
+    -- El mismo orden de candados que `gf_replace_output` y `gf_return_to_office`
+    -- (ítem, caja, parada, salida): un «Recibir en oficina» simultáneo no se
+    -- cruza con esto.
+    v_item := null; v_manifest := null; v_stop := null;
+    select * into v_item from dispatch_manifest_items
+     where shipment_id = v_candidate and removed_at is null
+     order by created_at desc limit 1 for update;
+    if v_item.id is not null then
+      select * into v_manifest from dispatch_manifests where id = v_item.manifest_id for update;
+    end if;
+    -- La última parada de ESTA salida, en cualquier ruta (como la 0305).
+    select * into v_stop from delivery_stops
+     where shipment_id = v_candidate
+     order by created_at desc, reported_at desc nulls last
+     limit 1 for update;
+    select * into v_old from shipments where id = v_candidate for update;
+
+    -- Releído con candado.
+    if lower(trim(v_old.courier)) <> 'propio' or v_old.delivery_status <> 'pendiente'
+       or v_old.custody_state is distinct from 'courier' or v_old.returned_at is not null then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'ya_no_esta_con_el_motorizado');
+      continue;
+    end if;
+    if gf_output_replaced(v_old.id) then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'ya_reemplazada');
+      continue;
+    end if;
+    if v_stop.id is null or v_stop.status <> 'no_entregado' then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'sin_no_entregado');
+      continue;
+    end if;
+    if coalesce(v_stop.reported_at, v_stop.created_at) >= v_guide_at then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'no_entregado_posterior_a_la_guia');
+      continue;
+    end if;
+    if v_item.id is not null and (v_manifest.courier is distinct from 'propio'
+       or v_stop.dispatch_manifest_id is distinct from v_item.manifest_id) then
+      -- En una caja que no es de Grupo GF, o con otra parada que la de su caja:
+      -- se revisa a mano.
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'caja_sin_su_reporte');
+      continue;
+    end if;
+
+    select dr.route_date, dr.rider_id, r.full_name into v_route_date, v_rider_id, v_rider
+      from delivery_routes dr left join riders r on r.id = dr.rider_id
+     where dr.id = v_stop.route_id;
+    v_rider := coalesce(v_manifest.driver_name, v_rider, 'el motorizado');
+    v_rider_id := coalesce(v_manifest.rider_id, v_rider_id);
+    v_route_date := coalesce(v_manifest.route_date, v_route_date);
+    v_old_code := coalesce(v_old.output_code, v_old.guide_code, 'La salida anterior');
+    v_new_code := coalesce(v_new.output_code, v_new.guide_code, 'la guía de Aliclik');
+    v_note := left(v_old_code || ' sigue con ' || v_rider || ' (en devolución): el pedido sale por Aliclik con '
+      || v_new_code || coalesce(' (' || nullif(v_new.guide_code, v_new_code) || ')', '')
+      || '. Al recibirla en oficina se desarma y vuelve a stock.', 300);
+
+    update shipments set custody_state = 'retorno' where id = v_old.id;
+
+    -- La solicitud de Grupo GF de la caja anterior se cierra: el pedido ya no
+    -- sale con Grupo GF. La parada fallida queda en la ruta del motorizado.
+    v_req := null;
+    update logistics_requests
+       set status = 'cancelled', observation = v_note
+     where shipment_id = v_old.id and status not in ('cancelled', 'completed')
+    returning id into v_req;
+    if v_req is not null then
+      insert into logistics_request_events(request_id, kind, status, actor, note, payload)
+      values (v_req, 'output_replaced', 'cancelled', p_actor, v_note,
+              jsonb_build_object('from', v_old.id, 'from_code', v_old.output_code,
+                                 'to', v_new.id, 'to_code', v_new.output_code,
+                                 'to_courier', 'aliclik', 'to_guide', v_new.guide_code));
+    end if;
+
+    if v_item.id is not null then
+      insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+      values (v_manifest.org_id, v_item.manifest_id, v_old.id, p_actor, 'output_replaced',
+              jsonb_build_object('stop_id', v_stop.id, 'outcome_reason', v_stop.outcome_reason,
+                                 'replaced_by', v_new.id, 'replaced_by_code', v_new.output_code,
+                                 'replaced_by_courier', 'aliclik', 'replaced_by_guide', v_new.guide_code));
+    end if;
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_old.store_id, v_old.order_id, 'output_replaced', p_actor, 'aliclik', 'propio',
+            v_old.guide_code, v_old.id, v_stop.outcome_reason, v_note,
+            jsonb_build_object('replaced_by', v_new.id, 'replaced_by_code', v_new.output_code,
+                               'replaced_by_courier', 'aliclik', 'replaced_by_guide', v_new.guide_code,
+                               'manifest_id', v_item.manifest_id, 'rider_id', v_rider_id,
+                               'route_date', v_route_date, 'stop_id', v_stop.id,
+                               'outcome_reason', v_stop.outcome_reason, 'request_id', v_req,
+                               'request_closed', v_req is not null));
+
+    v_done := v_done || jsonb_build_object('shipment_id', v_old.id, 'old_code', v_old.output_code,
+                                           'rider', v_rider, 'route_date', v_route_date, 'request_id', v_req);
+  end loop;
+
+  return jsonb_build_object('order_id', v_new.order_id, 'new_code', v_new.output_code,
+                            'replaced', v_done, 'skipped', v_skipped);
+end;
+$$;
+
+revoke all on function public.gf_replace_output_with_aliclik(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_replace_output_with_aliclik(uuid, uuid) to service_role;
+
+-- b) Lo que ya está así ---------------------------------------------------------
+-- La guía más antigua primero: si el pedido tiene varias de Aliclik vivas, la
+-- caja anterior queda reemplazada por la primera que salió después de su
+-- «No entregado». Las siguientes ya la encuentran reemplazada y no hacen nada.
+
+do $$
+declare
+  r record;
+begin
+  for r in
+    select a.id
+      from shipments a
+      join order_master om on om.order_id = a.order_id and om.coverage = 'lima'
+     where lower(trim(a.courier)) = 'aliclik'
+       and a.delivery_status in ('pendiente', 'en_ruta', 'entregado')
+       and a.returned_at is null and coalesce(a.custody_state, '') <> 'devuelto'
+       and exists (
+         select 1 from shipments g
+          where g.order_id = a.order_id and g.id <> a.id
+            and lower(trim(g.courier)) = 'propio' and g.delivery_status = 'pendiente'
+            and g.custody_state = 'courier' and g.returned_at is null
+       )
+     order by greatest(a.created_at, a.assigned_at), a.id
+  loop
+    perform public.gf_replace_output_with_aliclik(r.id, null);
+  end loop;
+end $$;
+
+-- ---- 0338 ----
+-- ============================================================================
+-- 0338_lead_daily_list.sql — «Leads por día»: la lista del día de una asesora
+-- (owner, 13-11-2026).
+--
+-- POR QUÉ. «Una persona puede atender unos 250 leads al día; que se le
+-- asignen 250, 90 % Aurela y 10 % Kenku, dando prioridad a los más
+-- prioritarios», porque a Daphne Leads le mostraba más de 1.000 pendientes.
+--
+-- QUÉ CAMBIA.
+--   * `lead_routing_assignments.daily_capacity` (1–1000, o null): la capacidad
+--     de la asesora. Con ella, su «Por llamar» muestra solo los N más
+--     prioritarios, repartidos por sus porcentajes (lib/lead-daily-list.ts).
+--     Es una vista compartida, no una reserva.
+--   * `save_lead_routing` la guarda (`dailyCapacity`; ausente conserva la de
+--     antes) y la audita como el resto.
+--   * `lead_store_distribution` la devuelve (`capacity`), con o sin porcentajes.
+-- No reasigna leads ni toca reservas. Correrla otra vez no cambia nada.
+-- ============================================================================
+
+alter table public.lead_routing_assignments add column if not exists daily_capacity integer
+  check (daily_capacity is null or daily_capacity between 1 and 1000);
+comment on column public.lead_routing_assignments.daily_capacity is 'NULL: la cola completa. Si no, «Por llamar» muestra solo los N más prioritarios según store_weights (vista, no reserva).';
+
+create or replace function public.save_lead_routing(p_org uuid,p_actor uuid,p_revision integer,p_enabled boolean,p_hours integer,p_assignments jsonb)
+returns integer language plpgsql security invoker set search_path=public,pg_temp as $$
+declare v_revision integer; v_before jsonb; v_after jsonb; v_assignment jsonb; v_weights jsonb; v_user uuid; v_capacity integer;
+begin
+  if not exists(select 1 from memberships m where m.org_id=p_org and m.user_id=p_actor and
+    (m.role in ('owner','admin') or exists(select 1 from membership_roles mr where mr.org_id=p_org and mr.user_id=p_actor and mr.role='administracion')
+     or exists(select 1 from user_permissions up where up.org_id=p_org and up.user_id=p_actor and up.permission='team.manage' and up.granted))) then
+    raise exception 'Sin permiso para configurar el equipo.';
+  end if;
+  if p_hours is null or p_hours not between 1 and 168 or p_enabled is null or jsonb_typeof(p_assignments) is distinct from 'array' or jsonb_array_length(p_assignments)>200 then
+    raise exception 'Configuración inválida.'; end if;
+  perform 1 from organizations where id=p_org for update;
+  insert into lead_routing_settings(org_id) values(p_org) on conflict do nothing;
+  select revision into v_revision from lead_routing_settings where org_id=p_org for update;
+  if v_revision<>p_revision then raise exception 'La configuración cambió. Recarga Equipo antes de guardar.'; end if;
+  select jsonb_build_object('settings',to_jsonb(s),'assignments',coalesce((select jsonb_agg(to_jsonb(a) order by a.user_id) from lead_routing_assignments a where a.org_id=p_org),'[]'::jsonb))
+    into v_before from lead_routing_settings s where s.org_id=p_org;
+  if (select count(*) from jsonb_array_elements(p_assignments))<>(select count(distinct a->>'userId') from jsonb_array_elements(p_assignments)a) then raise exception 'Persona repetida.'; end if;
+  delete from lead_routing_assignments where org_id=p_org;
+  for v_assignment in select * from jsonb_array_elements(p_assignments) loop
+    if not exists(select 1 from memberships m where m.org_id=p_org and m.user_id=(v_assignment->>'userId')::uuid and (m.role='vendedora' or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora')))
+      or jsonb_typeof(v_assignment->'blocks') is distinct from 'array' or jsonb_typeof(v_assignment->'backup') is distinct from 'boolean' or (v_assignment ? 'manualTake' and jsonb_typeof(v_assignment->'manualTake') is distinct from 'boolean') then raise exception 'Asesora o bloques inválidos.'; end if;
+    v_user:=(v_assignment->>'userId')::uuid;
+    v_weights:=case when v_assignment ? 'storeWeights' then nullif(v_assignment->'storeWeights','null'::jsonb)
+      else (select nullif(a->'store_weights','null'::jsonb) from jsonb_array_elements(v_before->'assignments') a where a->>'user_id'=v_assignment->>'userId') end;
+    if v_weights is not null then
+      if jsonb_typeof(v_weights)<>'object' then raise exception 'Porcentajes inválidos.'; end if;
+      if not exists(select 1 from jsonb_each(v_weights)) or (select count(*) from jsonb_each(v_weights))>100 then raise exception 'Indica las tiendas y sus porcentajes.'; end if;
+      if exists(select 1 from jsonb_each(v_weights) e where e.key !~* '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' or jsonb_typeof(e.value)<>'number' or e.value::text !~ '^[0-9]{1,3}$') then raise exception 'Los porcentajes deben ser enteros entre 0 y 100.'; end if;
+      if exists(select 1 from jsonb_each_text(v_weights) e where e.value::integer>100 or not exists(
+        select 1 from stores s join memberships m on m.org_id=s.org_id and m.user_id=v_user
+        where s.id=e.key::uuid and s.org_id=p_org and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=v_user and sa.store_id=s.id))))
+        or (select sum(value::integer) from jsonb_each_text(v_weights))<>100 then raise exception 'Usa tiendas de la asesora y porcentajes que sumen 100 %%.'; end if;
+    end if;
+    -- 0338: «Leads por día» (la lista del día). Ausente: se conserva el de antes.
+    if v_assignment ? 'dailyCapacity' and jsonb_typeof(v_assignment->'dailyCapacity') not in ('null','number') then raise exception 'Leads por día inválido.'; end if;
+    v_capacity:=case when v_assignment ? 'dailyCapacity' then (nullif(v_assignment->'dailyCapacity','null'::jsonb))::text::integer
+      else (select (a->>'daily_capacity')::integer from jsonb_array_elements(v_before->'assignments') a where a->>'user_id'=v_assignment->>'userId') end;
+    if v_capacity is not null and v_capacity not between 1 and 1000 then raise exception 'Leads por día: entre 1 y 1000.'; end if;
+    insert into lead_routing_assignments(org_id,user_id,blocks,backup,manual_take,store_weights,daily_capacity)
+    values(p_org,(v_assignment->>'userId')::uuid,array(select jsonb_array_elements_text(v_assignment->'blocks')),(v_assignment->>'backup')::boolean,coalesce((v_assignment->>'manualTake')::boolean,(select (a->>'manual_take')::boolean from jsonb_array_elements(v_before->'assignments') a where a->>'user_id'=v_assignment->>'userId'),false),v_weights,v_capacity);
+  end loop;
+  update lead_routing_settings set enabled=p_enabled,fresh_hours=p_hours,revision=revision+1,updated_at=clock_timestamp(),updated_by=p_actor where org_id=p_org;
+  perform public.lead_routing_coverage(p_org);
+  select jsonb_build_object('settings',to_jsonb(s),'assignments',coalesce((select jsonb_agg(to_jsonb(a) order by a.user_id) from lead_routing_assignments a where a.org_id=p_org),'[]'::jsonb))
+    into v_after from lead_routing_settings s where s.org_id=p_org;
+  insert into lead_routing_audit(org_id,actor,before_config,after_config) values(p_org,p_actor,v_before,v_after);
+  return v_revision+1;
+end $$;
+
+create or replace function public.lead_store_distribution(p_actor uuid,p_stores uuid[]) returns jsonb
+language plpgsql security invoker set search_path=public,pg_temp as $$
+declare v_weights jsonb; v_completed jsonb; v_capacity integer;
+begin
+  if p_actor is null or p_stores is null or cardinality(p_stores) not between 1 and 100 or exists(
+    select 1 from unnest(p_stores) requested(store_id) where not exists(select 1 from stores s join memberships m on m.org_id=s.org_id and m.user_id=p_actor
+      where s.id=requested.store_id and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=p_actor and sa.store_id=s.id)))) then
+    raise exception 'Sin acceso a estas tiendas.';
+  end if;
+  select jsonb_object_agg(e.key,e.value) into v_weights
+  from lead_routing_assignments a join lead_routing_settings cfg on cfg.org_id=a.org_id and cfg.enabled
+  cross join lateral jsonb_each(a.store_weights) e
+  join stores s on s.id=e.key::uuid and s.org_id=a.org_id
+  join memberships m on m.user_id=a.user_id and m.org_id=a.org_id
+  where a.user_id=p_actor and (m.role='vendedora' or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora'))
+    and exists(select 1 from stores requested where requested.id=any(p_stores) and requested.org_id=a.org_id)
+    and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=p_actor and sa.store_id=s.id));
+  -- 0338: «Leads por día» de la asesora, con o sin porcentajes.
+  select a.daily_capacity into v_capacity
+  from lead_routing_assignments a join lead_routing_settings cfg on cfg.org_id=a.org_id and cfg.enabled
+  where a.user_id=p_actor and exists(select 1 from stores requested where requested.id=any(p_stores) and requested.org_id=a.org_id)
+  limit 1;
+  if v_weights is null then return jsonb_build_object('weights',null,'completed','{}'::jsonb,'capacity',v_capacity); end if;
+  select coalesce(jsonb_object_agg(store_id,n),'{}'::jsonb) into v_completed from (
+    select s.id as store_id,count(distinct c.lead_id) as n
+    from stores s join jsonb_object_keys(v_weights) key on key::uuid=s.id
+    join lead_calls c on c.store_id=s.id and c.vendedora=p_actor and c.kind='call'
+      and c.occurred_at >= (date_trunc('day',statement_timestamp() at time zone coalesce(nullif(s.timezone,''),'America/Lima')) at time zone coalesce(nullif(s.timezone,''),'America/Lima'))
+      and c.occurred_at <= statement_timestamp()
+    group by s.id
+  ) t;
+  return jsonb_build_object('weights',v_weights,'completed',v_completed,'capacity',v_capacity);
+end $$;
+revoke all on function public.lead_store_distribution(uuid,uuid[]) from public,anon,authenticated;
+grant execute on function public.lead_store_distribution(uuid,uuid[]) to service_role;
+
+-- ---- 0339 ----
+-- ============================================================================
+-- 0339_repro_box_con_courier.sql — Repro Lima reconoce la salida viva de otro
+-- courier (owner, 13-11-2026: «cablea todas las conexiones para que no vuelva
+-- a suceder»).
+--
+-- POR QUÉ. Un acuerdo «Sale sáb 14/11 con Swayp» seguía pidiendo «crea la
+-- salida en la Mesa de ruta» con la salida de Swayp ya creada (#KP205892,
+-- #KP205878), y la caja salía «No consta» aunque estuviera armada en oficina.
+-- Kapta ahora dice dónde está la caja también cuando la tiene otro courier
+-- (`con_courier`, lib/repro-lima.ts). La fila del acuerdo guarda esa
+-- ubicación al registrar la llamada (`lima_repro_cases.box_location`), así que
+-- el CHECK la admite.
+--
+-- No toca filas. Correrla otra vez no cambia nada.
+-- ============================================================================
+
+alter table public.lima_repro_cases drop constraint if exists lima_repro_cases_box_location_check;
+alter table public.lima_repro_cases add constraint lima_repro_cases_box_location_check
+  check (box_location = any (array['con_motorizado'::text, 'en_oficina'::text, 'volviendo_courier'::text, 'con_courier'::text, 'desconocida'::text]));
+
+-- ---- 0340 ----
+-- ============================================================================
+-- 0340_compras_importaciones.sql — «Compras»: importaciones (MOM §45,
+-- 14-11-2026). Fases 1 a 3 de docs/compras/referencia-modulo-compras.md §11:
+-- la importación con sus productos, documentos, estados e historial; el dinero
+-- (costos repartidos, pagos, costo aterrizado, margen) y la recepción en la
+-- bodega propia de Kapta en Lima, con sus alertas.
+--
+-- QUÉ CREA.
+--   * `import_suppliers`: el proveedor mínimo (nombre, país, WhatsApp, notas),
+--     uno por nombre dentro de la organización. Se da de alta desde el
+--     formulario de la importación.
+--   * `imports`: la importación. Código `IMP-<año de Lima>-<NNN>` único por
+--     organización. Montos en USD; `fx_pen_per_usd` es el tipo de cambio de
+--     ESTA importación (soles por 1 USD), opcional hasta «Pasar a Costos».
+--   * `import_items`: los productos, con la recepción (`received_qty` nulo =
+--     todavía no se contó) y `cost_pushed_at` (ya pasó a Costos).
+--   * `import_costs`: los costos a repartir (envío, importación, adicional) y
+--     su regla de reparto. Un costo «todo a un producto» cuyo producto se
+--     quita NO desaparece (§13.4 de la referencia): `item_id` pasa a nulo y el
+--     cálculo lo reparte por valor, con aviso.
+--   * `import_payments`, `import_documents`: pagos (USD) y documentos.
+--   * `import_events`: el historial. Append-only: no se edita ni se borra.
+--   * El bucket privado `import-files` (25 MB; PDF, JPG, PNG, WEBP, XLSX).
+--
+-- Los valores cerrados van con CHECK en la base (§13.11 de la referencia: allí
+-- solo los validaba la aplicación).
+--
+-- QUIÉN LEE Y ESCRIBE. Solo el servidor (service_role), después de comprobar
+-- `purchases.manage` / `purchases.money` en la organización: RLS encendida y
+-- SIN políticas, sin privilegios para anon ni authenticated. Así un costo o un
+-- pago no se puede leer con la sesión de alguien sin «Montos de compras».
+--
+-- No cambia datos existentes y no usa `drop` (DEPLOY.md, 0248). Correrla otra
+-- vez no cambia nada.
+-- ============================================================================
+
+-- ── Proveedores ────────────────────────────────────────────────────────────
+create table if not exists public.import_suppliers (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references public.organizations(id) on delete cascade,
+  name        text not null check (char_length(btrim(name)) between 1 and 120),
+  country     text check (country is null or char_length(country) <= 80),
+  whatsapp    text check (whatsapp is null or whatsapp ~ '^\+?[0-9]{6,15}$'),
+  notes       text check (notes is null or char_length(notes) <= 1000),
+  created_by  uuid references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+comment on table public.import_suppliers is
+  'Compras (MOM §45): proveedores de las importaciones. Uno por nombre (sin mayúsculas) en la organización. Solo service_role.';
+
+create unique index if not exists import_suppliers_org_name_uniq
+  on public.import_suppliers (org_id, lower(btrim(name)));
+
+create or replace trigger import_suppliers_touch before update on public.import_suppliers
+  for each row execute function public.touch_updated_at();
+
+-- ── Importaciones ──────────────────────────────────────────────────────────
+create table if not exists public.imports (
+  id                       uuid primary key default gen_random_uuid(),
+  org_id                   uuid not null references public.organizations(id) on delete cascade,
+  code                     text not null check (code ~ '^IMP-[0-9]{4}-[0-9]{3,}$'),
+  supplier_id              uuid references public.import_suppliers(id) on delete set null,
+  origin                   text check (origin is null or char_length(origin) <= 80),
+  platform_order           text check (platform_order is null or char_length(platform_order) <= 60),
+  transport                text not null default 'courier'
+                             check (transport in ('courier', 'air', 'sea', 'land')),
+  carrier                  text check (carrier is null or char_length(carrier) <= 60),
+  tracking_number          text check (tracking_number is null or char_length(tracking_number) <= 80),
+  -- Solo http(s): el enlace se abre desde el panel.
+  tracking_url             text check (tracking_url is null or (tracking_url ~* '^https?://' and char_length(tracking_url) <= 500)),
+  ordered_on               date,
+  eta                      date,
+  arrived_on               date,
+  status                   text not null default 'cotizacion' check (status in (
+                             'cotizacion', 'pagado', 'en_produccion', 'en_transito', 'en_aduana',
+                             'en_camino_bodega', 'recibido', 'ingresado', 'cerrado', 'cancelado')),
+  -- Soles por 1 USD de ESTA importación. Opcional hasta «Pasar a Costos».
+  fx_pen_per_usd           numeric(10, 4) check (fx_pen_per_usd is null or fx_pen_per_usd > 0),
+  reported_to_warehouse_at timestamptz,
+  reported_by              uuid references auth.users(id) on delete set null,
+  notes                    text check (notes is null or char_length(notes) <= 2000),
+  created_by               uuid references auth.users(id) on delete set null,
+  created_at               timestamptz not null default now(),
+  updated_at               timestamptz not null default now(),
+  constraint imports_code_org_uniq unique (org_id, code),
+  -- Para que los hijos no puedan colgar de una importación de otra org.
+  constraint imports_id_org_uniq unique (id, org_id)
+);
+
+comment on table public.imports is
+  'Compras (MOM §45): una importación. Montos en USD; fx_pen_per_usd es su propio tipo de cambio. Solo service_role.';
+comment on column public.imports.fx_pen_per_usd is
+  'Soles por 1 USD de esta importación. Hace falta para mostrar en soles y para «Pasar a Costos».';
+
+create index if not exists imports_org_status_idx on public.imports (org_id, status, created_at desc);
+create index if not exists imports_supplier_idx on public.imports (supplier_id) where supplier_id is not null;
+
+create or replace trigger imports_touch before update on public.imports
+  for each row execute function public.touch_updated_at();
+
+-- ── Productos ──────────────────────────────────────────────────────────────
+create table if not exists public.import_items (
+  id              uuid primary key default gen_random_uuid(),
+  org_id          uuid not null,
+  import_id       uuid not null,
+  store_id        uuid references public.stores(id) on delete set null,
+  sku             text check (sku is null or char_length(sku) between 1 and 80),
+  name            text not null check (char_length(btrim(name)) between 1 and 200),
+  image_path      text,
+  qty             integer not null check (qty between 1 and 10000000),
+  unit_cost_usd   numeric(14, 4) not null default 0 check (unit_cost_usd >= 0),
+  unit_weight_kg  numeric(12, 4) check (unit_weight_kg is null or unit_weight_kg >= 0),
+  sale_price_pen  numeric(12, 2) check (sale_price_pen is null or sale_price_pen >= 0),
+  -- Recepción. received_qty nulo = todavía no se contó.
+  received_qty    integer check (received_qty is null or received_qty between 0 and 10000000),
+  damaged_qty     integer check (damaged_qty is null or damaged_qty >= 0),
+  reception_note  text check (reception_note is null or char_length(reception_note) <= 300),
+  received_at     timestamptz,
+  received_by     uuid references auth.users(id) on delete set null,
+  -- «Pasar a Costos» (MOM §45): una sola vez por línea.
+  cost_pushed_at  timestamptz,
+  cost_pushed_by  uuid references auth.users(id) on delete set null,
+  position        integer not null default 0,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  constraint import_items_import_fk foreign key (import_id, org_id)
+    references public.imports (id, org_id) on delete cascade,
+  constraint import_items_damaged_needs_received check (damaged_qty is null or received_qty is not null),
+  constraint import_items_damaged_le_received check (
+    received_qty is null or damaged_qty is null or damaged_qty <= received_qty),
+  constraint import_items_id_import_uniq unique (id, import_id)
+);
+
+comment on table public.import_items is
+  'Compras (MOM §45): productos de una importación, con su recepción y la marca de «Pasar a Costos». Solo service_role.';
+
+create index if not exists import_items_import_idx on public.import_items (import_id, position);
+create index if not exists import_items_sku_idx on public.import_items (org_id, sku) where sku is not null;
+
+create or replace trigger import_items_touch before update on public.import_items
+  for each row execute function public.touch_updated_at();
+
+-- ── Documentos ─────────────────────────────────────────────────────────────
+create table if not exists public.import_documents (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null,
+  import_id     uuid not null,
+  kind          text not null check (kind in (
+                  'proforma', 'invoice', 'packing', 'payment', 'tracking', 'customs', 'photo', 'other')),
+  storage_path  text not null unique,
+  filename      text check (filename is null or char_length(filename) <= 200),
+  mime          text not null check (mime in (
+                  'application/pdf', 'image/jpeg', 'image/png', 'image/webp',
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')),
+  size_bytes    integer not null check (size_bytes between 1 and 26214400),
+  uploaded_by   uuid references auth.users(id) on delete set null,
+  created_at    timestamptz not null default now(),
+  constraint import_documents_import_fk foreign key (import_id, org_id)
+    references public.imports (id, org_id) on delete cascade,
+  constraint import_documents_id_import_uniq unique (id, import_id)
+);
+
+comment on table public.import_documents is
+  'Compras (MOM §45): documentos en el bucket privado import-files. Proforma y comprobante de pago solo con «Montos de compras». Solo service_role.';
+
+create index if not exists import_documents_import_idx on public.import_documents (import_id, created_at);
+
+-- ── Costos a repartir ──────────────────────────────────────────────────────
+create table if not exists public.import_costs (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null,
+  import_id   uuid not null,
+  kind        text not null check (kind in ('envio', 'importacion', 'adicional')),
+  label       text not null check (char_length(btrim(label)) between 1 and 120),
+  amount_usd  numeric(14, 2) not null check (amount_usd > 0),
+  allocation  text not null default 'value' check (allocation in ('value', 'units', 'weight', 'item')),
+  item_id     uuid,
+  created_by  uuid references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now(),
+  constraint import_costs_import_fk foreign key (import_id, org_id)
+    references public.imports (id, org_id) on delete cascade,
+  -- El producto elegido es de la MISMA importación. Si se quita, el costo se
+  -- queda (item_id nulo) y el cálculo lo reparte por valor con aviso.
+  constraint import_costs_item_fk foreign key (item_id, import_id)
+    references public.import_items (id, import_id) on delete set null (item_id),
+  constraint import_costs_item_only_for_item check (allocation = 'item' or item_id is null)
+);
+
+comment on table public.import_costs is
+  'Compras (MOM §45): costos de una importación (USD) con su reparto. Quitar el producto de un costo «a un producto» lo deja con item_id nulo: se reparte por valor, no desaparece. Solo service_role.';
+
+create index if not exists import_costs_import_idx on public.import_costs (import_id, created_at);
+
+-- ── Pagos ──────────────────────────────────────────────────────────────────
+create table if not exists public.import_payments (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null,
+  import_id    uuid not null,
+  amount_usd   numeric(14, 2) not null check (amount_usd > 0),
+  paid_on      date not null,
+  method       text not null check (method in (
+                 'transferencia', 'tarjeta', 'paypal', 'alibaba', 'western_union', 'efectivo', 'otro')),
+  note         text check (note is null or char_length(note) <= 300),
+  document_id  uuid,
+  created_by   uuid references auth.users(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  constraint import_payments_import_fk foreign key (import_id, org_id)
+    references public.imports (id, org_id) on delete cascade,
+  -- El comprobante es de la misma importación.
+  constraint import_payments_document_fk foreign key (document_id, import_id)
+    references public.import_documents (id, import_id) on delete set null (document_id)
+);
+
+comment on table public.import_payments is
+  'Compras (MOM §45): pagos de una importación (USD). Solo service_role.';
+
+create index if not exists import_payments_import_idx on public.import_payments (import_id, paid_on);
+
+-- ── Historial (append-only) ────────────────────────────────────────────────
+create table if not exists public.import_events (
+  id         uuid primary key default gen_random_uuid(),
+  org_id     uuid not null,
+  import_id  uuid not null,
+  -- status: cambio de estado o nota · producto · dinero (costos, pagos,
+  -- montos y documentos con montos: solo con «Montos de compras») · documento
+  -- · recepcion · bodega (aviso a la bodega) · costos (pasó a Costos) · datos.
+  kind       text not null check (kind in (
+               'status', 'nota', 'producto', 'dinero', 'documento', 'recepcion', 'bodega', 'costos', 'datos')),
+  status     text check (status is null or status in (
+               'cotizacion', 'pagado', 'en_produccion', 'en_transito', 'en_aduana',
+               'en_camino_bodega', 'recibido', 'ingresado', 'cerrado', 'cancelado')),
+  note       text check (note is null or char_length(note) <= 1000),
+  by_user    uuid references auth.users(id) on delete set null,
+  at         timestamptz not null default now(),
+  constraint import_events_import_fk foreign key (import_id, org_id)
+    references public.imports (id, org_id) on delete cascade,
+  constraint import_events_status_kind check (status is null or kind = 'status')
+);
+
+comment on table public.import_events is
+  'Compras (MOM §45): historial de cada importación. Append-only: ni se edita ni se borra. Solo service_role.';
+
+create index if not exists import_events_import_idx on public.import_events (import_id, at desc);
+
+create or replace trigger import_events_append_only before update or delete on public.import_events
+  for each row execute function public.reject_mutation();
+
+-- ── Solo el servidor ───────────────────────────────────────────────────────
+-- Supabase concede todo a los tres roles al crear la tabla: sin el revoke, la
+-- RLS sin políticas seguiría siendo la única barrera.
+alter table public.import_suppliers enable row level security;
+alter table public.imports          enable row level security;
+alter table public.import_items     enable row level security;
+alter table public.import_documents enable row level security;
+alter table public.import_costs     enable row level security;
+alter table public.import_payments  enable row level security;
+alter table public.import_events    enable row level security;
+
+revoke all on public.import_suppliers, public.imports, public.import_items, public.import_documents,
+  public.import_costs, public.import_payments from anon, authenticated;
+grant all privileges on public.import_suppliers, public.imports, public.import_items, public.import_documents,
+  public.import_costs, public.import_payments to service_role;
+
+-- El historial: el servidor lo lee y agrega; no lo cambia (tampoco truncate).
+revoke all on public.import_events from anon, authenticated, service_role;
+grant select, insert on public.import_events to service_role;
+
+-- ── Bucket privado ─────────────────────────────────────────────────────────
+-- En Supabase existe `storage.buckets`; en una base sin Storage (la de pruebas)
+-- se salta. El código también lo crea si falta (privado).
+do $bucket$
+begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('import-files', 'import-files', false, 26214400, array[
+      'application/pdf', 'image/jpeg', 'image/png', 'image/webp',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'])
+    on conflict (id) do nothing;
+  end if;
+end
+$bucket$;
+
+-- ---- 0341 ----
+-- ============================================================================
+-- 0341_compras_proveedores.sql — «Compras»: la página de proveedores (MOM §45.7,
+-- 14-11-2026). Fase 4 de docs/compras/referencia-modulo-compras.md §11.
+--
+-- QUÉ CAMBIA. Tres columnas opcionales en `import_suppliers` (0340), las que la
+-- referencia (§4.3, §5.7) muestra en la tabla de proveedores:
+--   * `contact_name`:  la persona de contacto (hasta 120 caracteres).
+--   * `email`:         el correo (hasta 160, con forma `algo@dominio.tld`).
+--   * `payment_terms`: las condiciones de pago («30 % adelanto, 70 % al
+--                      embarque»; hasta 200).
+--
+-- QUIÉN LEE Y ESCRIBE. Igual que en la 0340: solo el servidor (service_role),
+-- después de comprobar el permiso. La tabla ya tiene RLS encendida, sin
+-- políticas y sin privilegios para anon ni authenticated; las columnas nuevas
+-- heredan eso. Se repite el revoke/grant para que quede escrito aquí también.
+--
+-- Solo agrega columnas nulas: no cambia datos existentes y no usa `drop`
+-- (DEPLOY.md, 0248). Correrla otra vez no cambia nada (`if not exists`).
+-- ============================================================================
+
+alter table public.import_suppliers
+  add column if not exists contact_name text
+    constraint import_suppliers_contact_name_len
+    check (contact_name is null or char_length(btrim(contact_name)) between 1 and 120);
+
+alter table public.import_suppliers
+  add column if not exists email text
+    constraint import_suppliers_email_shape
+    check (email is null or (char_length(email) <= 160 and email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'));
+
+alter table public.import_suppliers
+  add column if not exists payment_terms text
+    constraint import_suppliers_payment_terms_len
+    check (payment_terms is null or char_length(btrim(payment_terms)) between 1 and 200);
+
+comment on column public.import_suppliers.contact_name is
+  'Compras (MOM §45.7): persona de contacto del proveedor. Opcional.';
+comment on column public.import_suppliers.email is
+  'Compras (MOM §45.7): correo del proveedor. Opcional.';
+comment on column public.import_suppliers.payment_terms is
+  'Compras (MOM §45.7): condiciones de pago del proveedor. Opcional.';
+
+-- ── Solo el servidor (como en la 0340) ─────────────────────────────────────
+alter table public.import_suppliers enable row level security;
+revoke all on public.import_suppliers from anon, authenticated;
+grant all privileges on public.import_suppliers to service_role;

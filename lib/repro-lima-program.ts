@@ -57,6 +57,7 @@ import {
   boxLocation,
   compareEpisodeStops,
   isOwnBox,
+  liveOutputsOf,
   programOrigin,
   reproEpisode,
   reproProgramReason,
@@ -540,12 +541,18 @@ export async function loadReproFacts(
       row.close_reason === "desarmar_cerrar" &&
       row.episode_key === open.episode_key &&
       Date.parse(row.closed_at) <= Date.parse(open.opened_at)));
+    // Las salidas vivas que se trabajan (13-11-2026): la de otro courier manda
+    // sobre el acuerdo, y una caja propia o «por definir» en la empresa consta
+    // en oficina aunque el pedido nunca haya fallado.
+    const live = liveOutputsOf(outputs, replaced);
     let box = boxLocation({
       ownLive,
       box: ownBox,
       inOtherRequest: ownInOtherRequest,
       lastFailed,
       receivedAt,
+      liveOther: live.other,
+      liveInOffice: live.tbdInOffice,
     });
     // E29: reabierto después de «Desarmar y cerrar» con la caja que ya estaba
     // en oficina antes de reabrir (o sin fecha de recepción): Almacén pudo

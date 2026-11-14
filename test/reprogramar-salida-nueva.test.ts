@@ -426,7 +426,8 @@ describe("el cableado", () => {
   it("los escáneres de almacén nombran la salida hermana solo en el camino que ya falla", () => {
     const src = read("app/dashboard/pedidos/despacho/actions.ts");
     const ready = src.slice(src.indexOf("export async function markShipmentReady("));
-    expect(ready.indexOf('(await oldLabelError(shipment, "pedido")) ?? "Ese paquete ya no figura en custodia de la empresa."')).toBeGreaterThan(-1);
+    expect(ready.indexOf('(await oldLabelError(shipment, "pedido")) ?? (gfRider ? gfReadyScanHint(dispatchScanLabel(shipment)) : "Ese paquete ya no figura en custodia de la empresa.")')).toBeGreaterThan(-1);
+    expect(ready).toContain('const gfRider = (shipment.courier === "propio" || isCourierTbd(shipment.courier)) && shipment.custody_state === "courier";');
     expect(src).toContain('const oldLabel = box ? null : await oldLabelError(shipment, "caja", manifestId);');
     expect(src).toContain("return { error: oldLabel ?? notInThisBoxMessage(here, elsewhere) };");
   });

@@ -520,7 +520,7 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     group: "sin_interruptor",
     name: "Validación de pagos por Yape",
     what:
-      "Con cada reporte de movimientos de Yape Empresa valida solos los comprobantes que cuadran al céntimo y, si eso completa un pedido de agencia, manda la clave de recojo.",
+      "Con cada reporte de movimientos de Yape Empresa valida solos los comprobantes que cuadran al céntimo y, si eso completa un pedido de agencia, manda la clave de recojo. Cada media hora recruza los cargados después de su reporte.",
     effect: "Valida pagos",
     scope: "none",
     control: { kind: "readonly", how: "Se pausa en el escenario de Make que reenvía el reporte. No tiene interruptor en Kapta." },

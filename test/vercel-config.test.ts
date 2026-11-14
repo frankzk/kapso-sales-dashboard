@@ -103,7 +103,9 @@ describe("vercel.json", () => {
     // 37: «Pago solo online (lista automática)», cada minuto de las 05:00 de
     //     Lima: el cálculo diario, el envío a las tiendas y sus reintentos
     //     (0326, MOM §41.11, 09-11-2026).
-    expect(crons).toHaveLength(37);
+    // 38: el recruce de Yape con los movimientos ya guardados, cada media hora
+    //     (MOM §16.2, 13-11-2026).
+    expect(crons).toHaveLength(38);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);
