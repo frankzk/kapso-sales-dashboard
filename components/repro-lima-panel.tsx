@@ -152,6 +152,15 @@ export function photoHref(path: string): string {
 /** El fallo en una línea (§11.7); en `crit-fg` si lo rechazó en la puerta. */
 export function FailureLine({ row, className }: { row: ReproRow; className?: string }) {
   if (row.attentionContext === "pending") {
+    // Con la salida viva del courier acordado ya no falta confirmar fecha ni
+    // courier (owner, 13-11-2026; MOM §9.5): lo dice, y no pide gestión.
+    if (row.state.kind === "salida_creada" && row.box.kind === "con_courier") {
+      return (
+        <p className={cn("text-[13px] leading-5 text-ok-fg", className)}>
+          {`Listo: sale con ${reproCourierName(row.box.courier)}. No requiere gestión salvo que el cliente cambie algo.`}
+        </p>
+      );
+    }
     return <p className={cn("text-[13px] leading-5 text-ink-700", className)}>Programación y seguimiento de entrega: confirma con el cliente la fecha y el courier.</p>;
   }
   if (!row.failure) {

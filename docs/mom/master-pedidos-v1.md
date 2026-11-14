@@ -6214,7 +6214,11 @@ propia reemplazada—:
   («Salida de Swayp en oficina · la recoge Swayp» o «La lleva Aliclik») y el
   acuerdo pasa a `salida_creada` o `salida_distinta` (arriba), sea cual sea el
   camino por el que nació la salida. Grupo GF no programa esa caja; Almacén la
-  pone en «Todavía fuera» cuando ya la tiene el courier;
+  pone en «Todavía fuera» cuando ya la tiene el courier. En la fila de
+  atención de un pendiente que nunca falló, `salida_creada` dice «Listo: sale
+  con Aliclik. No requiere gestión salvo que el cliente cambie algo.» en vez de
+  «confirma con el cliente la fecha y el courier» (`salida_distinta` sigue
+  pidiéndolo: su chapa dice qué revisar);
 - una propia o «por definir» en la empresa, sin transferir, es `en_oficina`
   («En oficina»). Si nunca salió (`nuncaSalio`), Almacén no avisa «nadie
   registró su recepción»: no hay recepción que esperar.
