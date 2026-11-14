@@ -112,6 +112,7 @@ import {
   testAliclikConnection,
   testGfCourierConnection,
   connectGfCourierWebhook,
+  checkGfCatalog,
   testStoreMetaConnection,
   testShalomConnection,
   findShalomAgencies,
@@ -1670,6 +1671,7 @@ function AliclikSection({
 function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: string; hasToken: boolean; hasSecret: boolean; enabled: boolean }) {
   const [testState, testAction, testPending] = useActionState(testGfCourierConnection, initial);
   const [hookState, hookAction, hookPending] = useActionState(connectGfCourierWebhook, initial);
+  const [catalogState, catalogAction, catalogPending] = useActionState(checkGfCatalog, initial);
   return (
     <SettingsSection
       id="gf-courier"
@@ -1686,11 +1688,13 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
           <SubmitAction formAction={testAction} storeId={storeId} pending={testPending} disabled={!hasToken} label="Probar conexión" pendingLabel="Probando…" />
           <SubmitAction formAction={hookAction} storeId={storeId} pending={hookPending} disabled={!hasToken}
             label={hasSecret ? "Reconectar webhook" : "Conectar webhook"} pendingLabel="Conectando…" />
+          <SubmitAction formAction={catalogAction} storeId={storeId} pending={catalogPending} disabled={!hasToken} label="Comparar catálogo con GF" pendingLabel="Comparando…" />
         </>
       }
     >
       <ActionResult state={testState} />
       <ActionResult state={hookState} />
+      <ActionResult state={catalogState} />
       <StoreForm storeId={storeId} title="Integración" persisted={[hasToken, enabled]}>
         <div className={ROW}>
           <SecretField name="gf_courier_api_token" label="Token de integración de GF Courier" set={hasToken}
@@ -1704,7 +1708,8 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
         <strong>Catálogo para GF:</strong> GF solo despacha los SKU que tiene registrados para esta tienda.{" "}
         <a href={`/api/stores/${storeId}/gf-catalog`} className="font-medium text-slate-900 underline" download>
           Descargar catálogo para GF (CSV)
-        </a>{" "}
+        </a>
+        {hasToken ? (<>{" · "}<a href={`/api/stores/${storeId}/gf-catalog?only=missing`} className="font-medium text-slate-900 underline" download>solo los que faltan en GF</a></>) : null}{" "}
         e impórtalo en GF → Comercios → Catálogo. Sale del catálogo publicado de la tienda; las variantes sin SKU no van.
       </p>
     </SettingsSection>

@@ -1,16 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { hasOrgPermission } from "@/lib/permissions-access";
-import { getStoreCreds } from "@/lib/ingest";
-import { loadShopifySkuDetails, loadSkuCatalogSource } from "@/lib/aliclik-catalog";
-import { buildGfCatalogExport, gfCatalogCsv } from "@/lib/gf-courier-catalog";
+import { compareGfCatalog, gfCatalogCsv } from "@/lib/gf-courier-catalog";
+import { loadGfProducts, loadStoreCatalogForGf } from "@/lib/gf-courier-catalog-server";
+import { loadGfStore } from "@/lib/gf-courier-guide";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // GF Courier (MOM §29.17): descarga «sku,nombre» del catálogo vivo de la tienda para importarlo en GF
 // (Comercios → Catálogo). Solo lectura; quien administra la tienda («stores.manage»), como el resto de la sección.
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ storeId: string }> }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ storeId: string }> }) {
   const { storeId } = await ctx.params;
   const admin = createAdminSupabase();
   const { data: store } = await admin.from("stores").select("id, org_id, name").eq("id", storeId).maybeSingle();
@@ -20,13 +20,19 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ storeId: s
   if (!user) return new NextResponse("Inicia sesión.", { status: 401 });
   if (!(await hasOrgPermission(store.org_id, "stores.manage"))) return new NextResponse("Sin permiso.", { status: 403 });
 
-  const problems: string[] = [];
-  const source = await loadSkuCatalogSource(admin, storeId, await getStoreCreds(storeId, admin));
-  const details = await loadShopifySkuDetails(storeId, admin, 0, source, { onSourceError: (d) => problems.push(d), fresh: true });
-  const result = buildGfCatalogExport(details.values());
+  const result = await loadStoreCatalogForGf(admin, storeId);
+  const problems = result.problems;
+  // ?only=missing: solo los SKU que GF todavía no tiene (requiere el token de GF de la tienda).
+  if (req.nextUrl.searchParams.get("only") === "missing") {
+    const gfStore = await loadGfStore(admin, storeId);
+    if (!gfStore?.token) return new NextResponse("Esta tienda no tiene token de GF Courier.", { status: 409 });
+    const gf = await loadGfProducts(gfStore.token);
+    if (!gf.ok) return new NextResponse(`GF Courier respondió: ${gf.message}`, { status: 502 });
+    result.rows = compareGfCatalog(result.rows, gf.products).missingInGf;
+  }
   if (!result.rows.length) {
     return new NextResponse(
-      `No hay productos con SKU para exportar.${problems.length ? ` El catálogo no se pudo leer: ${problems.join(" ")}` : ""}`,
+      `No hay productos con SKU para exportar${req.nextUrl.searchParams.get("only") === "missing" ? " (GF ya tiene todos)" : ""}.${problems.length ? ` El catálogo no se pudo leer: ${problems.join(" ")}` : ""}`,
       { status: 409, headers: { "Content-Type": "text/plain; charset=utf-8" } },
     );
   }
@@ -34,7 +40,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ storeId: s
   return new NextResponse(gfCatalogCsv(result.rows), {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="gf-catalogo-${slug}.csv"`,
+      "Content-Disposition": `attachment; filename="gf-catalogo-${slug}${req.nextUrl.searchParams.get("only") === "missing" ? "-faltantes" : ""}.csv"`,
       "Cache-Control": "no-store",
       // Para la pantalla: cuántas variantes quedaron fuera por no tener SKU, SKU repetidos y si se leyó en parte.
       "X-Gf-Without-Sku": String(result.withoutSku.length),

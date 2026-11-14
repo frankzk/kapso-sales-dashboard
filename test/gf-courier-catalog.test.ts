@@ -27,3 +27,21 @@ describe("catálogo de la tienda → GF", () => {
     expect(readFileSync(join(process.cwd(), "components/store-settings.tsx"), "utf8")).toContain("/gf-catalog");
   });
 });
+
+describe("comparar con el catálogo de GF", () => {
+  it("faltantes, agotados y los que solo tiene GF, sin distinguir mayúsculas", async () => {
+    const { compareGfCatalog } = await import("@/lib/gf-courier-catalog");
+    const c = compareGfCatalog(
+      [{ sku: "FAJ-M", name: "Faja M" }, { sku: "faj-l", name: "Faja L" }, { sku: "GEL", name: "Gel" }],
+      [{ merchant_sku: "FAJ-M", name: "Faja M", sales_status: "OUT_OF_STOCK" }, { merchant_sku: "FAJ-L", name: "Faja L", sales_status: "IN_STOCK" }, { merchant_sku: "VIEJO", name: "Viejo" }],
+    );
+    expect(c.missingInGf).toEqual([{ sku: "GEL", name: "Gel" }]);
+    expect(c.outOfStock).toEqual([{ sku: "FAJ-M", name: "Faja M" }]);
+    expect(c.onlyInGf).toEqual(["VIEJO"]);
+  });
+  it("la descarga «solo los que faltan» y el botón «Comparar catálogo con GF» existen", () => {
+    expect(readFileSync(join(process.cwd(), "app/api/stores/[storeId]/gf-catalog/route.ts"), "utf8")).toContain('"only") === "missing"');
+    const ui = readFileSync(join(process.cwd(), "components/store-settings.tsx"), "utf8");
+    expect(ui).toContain("Comparar catálogo con GF");expect(ui).toContain("?only=missing");
+  });
+});

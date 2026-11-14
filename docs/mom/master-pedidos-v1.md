@@ -19396,8 +19396,11 @@ nombre «título – variante». Ese archivo se importa en GF (Comercios → Cat
 exactamente los SKU que la tienda vende, y cada pedido viaja con el mismo SKU.
 - Una variante **sin SKU** no se puede pedir a GF: no entra en la lista y se cuenta (`X-Gf-Without-Sku`).
 - Un SKU repetido en dos variantes entra una sola vez y se cuenta (`X-Gf-Repeated-Skus`).
-- La sincronización automática Kapta → GF todavía no existe: un producto nuevo se vuelve a exportar e importar, y GF
-  no duplica lo que ya tenía.
+- «Comparar catálogo con GF» (misma sección, solo lectura) lee el catálogo vivo y el de la tienda en GF
+  (`GET /v1/products`) y dice qué SKU **faltan en GF** (un pedido con ellos respondería `SKU_NOT_FOUND`) y cuáles GF
+  tiene **Agotados** (`OUT_OF_STOCK`). «Solo los que faltan en GF» (`?only=missing`) descarga únicamente esos.
+- La sincronización automática Kapta → GF todavía no existe: un producto nuevo se exporta e importa, y GF no duplica
+  lo que ya tenía.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 

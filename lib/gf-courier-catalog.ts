@@ -43,3 +43,25 @@ export function gfCatalogCsv(rows: readonly { sku: string; name: string }[]): st
   const cell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
   return ["sku,nombre", ...rows.map((r) => `${cell(r.sku)},${cell(r.name)}`)].join("\r\n") + "\r\n";
 }
+
+export interface GfCatalogProduct { merchant_sku: string; sku?: string; name: string; mode?: string; sales_status?: string }
+export interface GfCatalogComparison {
+  /** SKU de la tienda que GF todavía no tiene: un pedido con ellos respondería SKU_NOT_FOUND. */
+  missingInGf: { sku: string; name: string }[];
+  /** SKU que GF tiene marcados como Agotado: un pedido con ellos respondería OUT_OF_STOCK. */
+  outOfStock: { sku: string; name: string }[];
+  /** SKU que GF tiene y la tienda ya no publica (no molestan; se informan). */
+  onlyInGf: string[];
+}
+
+/** Compara el catálogo vivo de la tienda con el catálogo de la tienda en GF (GET /v1/products), sin distinguir mayúsculas. */
+export function compareGfCatalog(store: readonly { sku: string; name: string }[], gf: readonly GfCatalogProduct[]): GfCatalogComparison {
+  const key = (s: string) => s.trim().toUpperCase();
+  const gfBySku = new Map<string, GfCatalogProduct>();
+  for (const p of gf) { gfBySku.set(key(p.merchant_sku), p); if (p.sku) gfBySku.set(key(p.sku), gfBySku.get(key(p.sku)) ?? p); }
+  const storeSkus = new Set(store.map((r) => key(r.sku)));
+  const missingInGf = store.filter((r) => !gfBySku.has(key(r.sku)));
+  const outOfStock = store.filter((r) => gfBySku.get(key(r.sku))?.sales_status === "OUT_OF_STOCK");
+  const onlyInGf = gf.filter((p) => !storeSkus.has(key(p.merchant_sku)) && !(p.sku && storeSkus.has(key(p.sku)))).map((p) => p.merchant_sku);
+  return { missingInGf, outOfStock, onlyInGf };
+}
