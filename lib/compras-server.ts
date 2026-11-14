@@ -34,9 +34,11 @@ import {
   type ImportEventKind,
   type ImportKind,
   type ImportStatus,
+  type ImportTab,
   type Money2,
 } from "@/lib/compras";
 import type { ReportImport } from "@/lib/compras-reportes";
+import { IMPORT_LIST_PAGE, keysetFilter, pageOf, tabStatuses, type ImportListCursor } from "@/lib/compras-list";
 import type { CatalogEntry } from "@/lib/compras-ia";
 import { resolveVisionCreds } from "@/lib/vision";
 import { storeVisionCreds } from "@/lib/store-settings";
@@ -371,35 +373,210 @@ export interface ImportListRow {
   };
 }
 
-/** Tope de la lista: una organización de Kapta no se acerca. */
-export const IMPORT_LIST_LIMIT = 500;
+/** Filtros de la lista (MOM §45.2): la pestaña, el proveedor y el tipo van a la base. */
+export interface ImportListFilter {
+  tab?: ImportTab;
+  /** `?proveedor=`: siempre dentro de la organización (`org_id` va en cada consulta). */
+  supplierId?: string | null;
+  kind?: ImportKind | null;
+}
 
+export interface ImportListQuery extends ImportListFilter {
+  /** Seguir después de esta fila («Ver más»). */
+  cursor?: ImportListCursor | null;
+  /** Filas por página (por defecto `IMPORT_LIST_PAGE`). */
+  limit?: number;
+}
+
+export interface ImportListPage {
+  rows: ImportListRow[];
+  /** La última fila mostrada si hay más; null si no. */
+  next: ImportListCursor | null;
+}
+
+/** Tope por página que acepta el servidor. */
+const IMPORT_LIST_MAX_PAGE = 500;
+/** De a cuántas se piden los productos, documentos, hechos y montos de una página (el `in` va en la URL). */
+const LIST_ID_CHUNK = 100;
+
+type ListBuilder = {
+  eq: (c: string, v: unknown) => ListBuilder;
+  in: (c: string, v: readonly unknown[]) => ListBuilder;
+  or: (f: string) => ListBuilder;
+};
+
+function applyListFilter<B extends ListBuilder>(b: B, orgId: string, f: ImportListFilter): B {
+  let q = b.eq("org_id", orgId);
+  const statuses = tabStatuses(f.tab ?? "todas");
+  if (statuses) q = q.in("status", statuses);
+  if (f.supplierId) q = q.eq("supplier_id", f.supplierId);
+  if (f.kind) q = q.eq("kind", f.kind);
+  return q as B;
+}
+
+/**
+ * Una página de la lista: las importaciones de la organización con los
+ * filtros, la más reciente primero (`created_at` y `id`, descendentes), desde
+ * el cursor si lo hay (MOM §45.2). Sin `purchases.money` no se piden montos.
+ */
+export async function loadImportListPage(
+  orgId: string,
+  canMoney: boolean,
+  q: ImportListQuery = {},
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<ImportListPage> {
+  const limit = Math.min(IMPORT_LIST_MAX_PAGE, Math.max(1, Math.trunc(q.limit ?? IMPORT_LIST_PAGE)));
+  let query = applyListFilter(
+    admin.from("imports").select(`${IMPORT_COLS}${canMoney ? IMPORT_MONEY_COLS : ""}`) as unknown as ListBuilder,
+    orgId,
+    q,
+  );
+  if (q.cursor) query = query.or(keysetFilter(q.cursor));
+  const ordered = query as unknown as {
+    order: (c: string, o: { ascending: boolean }) => { order: (c: string, o: { ascending: boolean }) => { limit: (n: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }> } };
+  };
+  const { data, error } = await ordered.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit + 1);
+  if (error) throw new Error(error.message);
+  const page = pageOf(((data ?? []) as Record<string, unknown>[]).map((r) => normalizeImport(r, canMoney)), limit);
+  return { rows: await enrichImportList(admin, orgId, page.rows, canMoney), next: page.next };
+}
+
+/** La primera página de la lista (con los filtros que se pasen). */
 export async function loadImportList(
   orgId: string,
   canMoney: boolean,
   admin: SupabaseClient = createAdminSupabase(),
+  q: ImportListQuery = {},
 ): Promise<ImportListRow[]> {
-  const { data: rows } = await admin
-    .from("imports")
-    .select(`${IMPORT_COLS}${canMoney ? IMPORT_MONEY_COLS : ""}`)
-    .eq("org_id", orgId)
-    .order("created_at", { ascending: false })
-    .limit(IMPORT_LIST_LIMIT);
-  const imports = ((rows ?? []) as unknown as Record<string, unknown>[]).map((r) => normalizeImport(r, canMoney));
+  return (await loadImportListPage(orgId, canMoney, q, admin)).rows;
+}
+
+/** Tope de páginas al leer TODAS las activas (de a 200: 10.000, lejos de lo que tiene una organización). */
+const ACTIVE_PAGE = 200;
+const ACTIVE_MAX_PAGES = 50;
+
+/**
+ * TODAS las activas (de Cotización a Recibido parcial) con el proveedor y el
+ * tipo: las píldoras de excepción, «activas» y «en camino» las cuentan todas,
+ * no una página. Son las que están en curso: pocas aunque la lista crezca.
+ */
+export async function loadActiveImportList(
+  orgId: string,
+  canMoney: boolean,
+  f: Omit<ImportListFilter, "tab"> = {},
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<ImportListRow[]> {
+  const out: ImportListRow[] = [];
+  const seen = new Set<string>();
+  let cursor: ImportListCursor | null = null;
+  for (let i = 0; i < ACTIVE_MAX_PAGES; i++) {
+    const page = await loadImportListPage(orgId, canMoney, { ...f, tab: "activas", cursor, limit: ACTIVE_PAGE }, admin);
+    for (const row of page.rows) {
+      if (seen.has(row.imp.id)) continue;
+      seen.add(row.imp.id);
+      out.push(row);
+    }
+    if (!page.next) break;
+    cursor = page.next;
+  }
+  return out;
+}
+
+/** Las cifras de la lista, contadas en la base (MOM §45.2): nunca sobre la página cargada. */
+export interface ImportListCounts {
+  /** Las tarjetas de estado, con el proveedor y el tipo. */
+  tabs: Record<ImportTab, number>;
+  /** La píldora del tipo, con el proveedor (sin el tipo). */
+  kinds: Record<ImportKind, number>;
+  /** La píldora del proveedor: todas las de la organización, por proveedor. */
+  suppliers: Record<string, number>;
+}
+
+export async function loadImportListCounts(
+  orgId: string,
+  f: Omit<ImportListFilter, "tab"> = {},
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<ImportListCounts> {
+  const count = async (filter: ImportListFilter): Promise<number> => {
+    const b = applyListFilter(admin.from("imports").select("id", { count: "exact", head: true }) as unknown as ListBuilder, orgId, filter);
+    const { count: n, error } = (await (b as unknown as PromiseLike<{ count: number | null; error: { message: string } | null }>)) ?? {};
+    if (error) throw new Error(error.message);
+    return n ?? 0;
+  };
+  const [activas, recibidas, canceladas, todas, allKinds, local, supplierRows] = await Promise.all([
+    count({ ...f, tab: "activas" }),
+    count({ ...f, tab: "recibidas" }),
+    count({ ...f, tab: "canceladas" }),
+    count({ ...f, tab: "todas" }),
+    count({ supplierId: f.supplierId }),
+    count({ supplierId: f.supplierId, kind: "local" }),
+    readAll(() =>
+      admin
+        .from("imports")
+        .select("id,supplier_id")
+        .eq("org_id", orgId)
+        .not("supplier_id", "is", null)
+        .order("id", { ascending: true }) as unknown as PageQuery,
+    ),
+  ]);
+  const suppliers: Record<string, number> = {};
+  for (const r of supplierRows) {
+    const id = r.supplier_id ? String(r.supplier_id) : "";
+    if (id) suppliers[id] = (suppliers[id] ?? 0) + 1;
+  }
+  return { tabs: { activas, recibidas, canceladas, todas }, kinds: { importacion: allKinds - local, local }, suppliers };
+}
+
+/** Las filas de `ids` de una tabla, en tandas de ids y de a 1000 filas. */
+async function readByImport(
+  ids: readonly string[],
+  build: (chunk: string[]) => PageQuery,
+): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
+  for (let i = 0; i < ids.length; i += LIST_ID_CHUNK) {
+    const chunk = ids.slice(i, i + LIST_ID_CHUNK);
+    out.push(...(await readAll(() => build(chunk))));
+  }
+  return out;
+}
+
+/** Productos, documentos, último movimiento, proveedor y montos de cada importación de la página. */
+async function enrichImportList(
+  admin: SupabaseClient,
+  orgId: string,
+  imports: readonly ImportRow[],
+  canMoney: boolean,
+): Promise<ImportListRow[]> {
   if (!imports.length) return [];
   const ids = imports.map((i) => i.id);
   const [items, docs, events, suppliers, costs, payments] = await Promise.all([
-    admin.from("import_items").select(`import_id,name,qty,courtesy_qty,unit_cost_currency,sku,position${canMoney ? ITEM_MONEY_COLS : ""}`).in("import_id", ids),
-    admin.from("import_documents").select("import_id,kind").in("import_id", ids),
-    admin
-      .from("import_events")
-      .select("import_id,at")
-      .in("import_id", ids)
-      .in("kind", MOVEMENT_EVENT_KINDS as unknown as string[])
-      .order("at", { ascending: false }),
+    readByImport(
+      ids,
+      (chunk) =>
+        admin
+          .from("import_items")
+          .select(`id,import_id,name,qty,courtesy_qty,unit_cost_currency,sku,position${canMoney ? ITEM_MONEY_COLS : ""}`)
+          .in("import_id", chunk)
+          .order("id", { ascending: true }) as unknown as PageQuery,
+    ),
+    readByImport(ids, (chunk) => admin.from("import_documents").select("id,import_id,kind").in("import_id", chunk).order("id", { ascending: true }) as unknown as PageQuery),
+    readByImport(
+      ids,
+      (chunk) =>
+        admin
+          .from("import_events")
+          .select("id,import_id,at")
+          .in("import_id", chunk)
+          .in("kind", MOVEMENT_EVENT_KINDS as unknown as string[])
+          .order("id", { ascending: true }) as unknown as PageQuery,
+    ),
     admin.from("import_suppliers").select("id,name").eq("org_id", orgId),
-    canMoney ? admin.from("import_costs").select("import_id,currency,amount_usd,amount_pen").in("import_id", ids) : Promise.resolve({ data: [] }),
-    canMoney ? admin.from("import_payments").select("import_id,currency,amount_usd,amount_pen").in("import_id", ids) : Promise.resolve({ data: [] }),
+    canMoney
+      ? readByImport(ids, (chunk) => admin.from("import_costs").select("id,import_id,currency,amount_usd,amount_pen").in("import_id", chunk).order("id", { ascending: true }) as unknown as PageQuery)
+      : Promise.resolve([]),
+    canMoney
+      ? readByImport(ids, (chunk) => admin.from("import_payments").select("id,import_id,currency,amount_usd,amount_pen").in("import_id", chunk).order("id", { ascending: true }) as unknown as PageQuery)
+      : Promise.resolve([]),
   ]);
   const supplierName = new Map(((suppliers.data ?? []) as { id: string; name: string }[]).map((s) => [s.id, s.name]));
   const byImport = new Map<string, ImportListRow>();
@@ -414,7 +591,7 @@ export async function loadImportList(
       ...(canMoney ? { money: { total: zeroMoney(), paid: zeroMoney(), totalUsd: 0, paidUsd: 0, pendingUsd: 0, totalPen: 0, pendingPen: 0 } } : {}),
     });
   }
-  const sortedItems = ((items.data ?? []) as unknown as Record<string, unknown>[]).sort((a, b) => num(a.position) - num(b.position));
+  const sortedItems = items.sort((a, b) => num(a.position) - num(b.position));
   for (const it of sortedItems) {
     const row = byImport.get(String(it.import_id));
     if (!row) continue;
@@ -427,20 +604,20 @@ export async function loadImportList(
       row.money.total = addMoney(row.money.total, moneyOf(qty * num(pen ? it.unit_cost_pen : it.unit_cost_usd), pen ? "PEN" : "USD"));
     }
   }
-  for (const d of (docs.data ?? []) as { import_id: string; kind: string }[]) {
+  for (const d of docs as { import_id: string; kind: string }[]) {
     const row = byImport.get(d.import_id);
     if (row && !row.docKinds.includes(d.kind)) row.docKinds.push(d.kind);
   }
-  for (const e of (events.data ?? []) as { import_id: string; at: string }[]) {
+  for (const e of events as { import_id: string; at: string }[]) {
     const row = byImport.get(e.import_id);
     if (row && (!row.lastMovementAt || e.at > row.lastMovementAt)) row.lastMovementAt = e.at;
   }
-  for (const c of (costs.data ?? []) as Record<string, unknown>[]) {
+  for (const c of costs) {
     const m = byImport.get(String(c.import_id))?.money;
     const currency = currencyOf(c.currency);
     if (m) m.total = addMoney(m.total, moneyOf(amountOf(c, currency), currency));
   }
-  for (const p of (payments.data ?? []) as Record<string, unknown>[]) {
+  for (const p of payments) {
     const m = byImport.get(String(p.import_id))?.money;
     const currency = currencyOf(p.currency);
     if (m) m.paid = addMoney(m.paid, moneyOf(amountOf(p, currency), currency));

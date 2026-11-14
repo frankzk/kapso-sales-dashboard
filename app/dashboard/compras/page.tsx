@@ -10,10 +10,13 @@ import { ComprasGate, ComprasHeader, IMPORT_ALERT_FILTERS, type ImportAlertFilte
 import {
   COMPRAS_VIEW_PERMISSIONS,
   comprasPerms,
-  loadImportList,
+  loadActiveImportList,
+  loadImportListCounts,
+  loadImportListPage,
   loadSuppliers,
   resolveComprasOrg,
 } from "@/lib/compras-server";
+import { encodeListCursor } from "@/lib/compras-list";
 import { IMPORT_TABS, isImportKind, isUuid, limaToday, type ImportTab } from "@/lib/compras";
 
 export const dynamic = "force-dynamic";
@@ -44,8 +47,7 @@ async function ComprasContent({ searchParams }: { searchParams: SearchParams }) 
     );
   }
 
-  const perms = await comprasPerms(orgId);
-  const [allRows, suppliers] = await Promise.all([loadImportList(orgId, perms.canMoney), loadSuppliers(orgId)]);
+  const [perms, suppliers] = await Promise.all([comprasPerms(orgId), loadSuppliers(orgId)]);
   const tab: ImportTab = IMPORT_TABS.some((t) => t.id === sp.v) ? (sp.v as ImportTab) : "activas";
   // `?proveedor=<id>` (se llega desde Proveedores): solo un proveedor de esta organización.
   const supplierFilter = isUuid(sp.proveedor) ? (suppliers.find((s) => s.id === sp.proveedor) ?? null) : null;
@@ -53,6 +55,17 @@ async function ComprasContent({ searchParams }: { searchParams: SearchParams }) 
   const alerta = IMPORT_ALERT_FILTERS.some((f) => f.id === sp.alerta) ? (sp.alerta as ImportAlertFilter) : null;
   // `?tipo=`: importaciones o compras locales (MOM §45.12).
   const tipo = isImportKind(sp.tipo) ? sp.tipo : null;
+
+  // Por páginas (MOM §45.2): el proveedor y el tipo filtran en la base; las
+  // cifras se cuentan en la base; las activas se leen todas (el resumen y las
+  // alertas las cuentan todas) y las demás pestañas, de a 100 con «Ver más».
+  const filter = { supplierId: supplierFilter?.id ?? null, kind: tipo };
+  const paged = tab !== "activas" && !alerta;
+  const [counts, active, page] = await Promise.all([
+    loadImportListCounts(orgId, filter),
+    loadActiveImportList(orgId, perms.canMoney, filter),
+    paged ? loadImportListPage(orgId, perms.canMoney, { ...filter, tab }) : Promise.resolve(null),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -66,7 +79,10 @@ async function ComprasContent({ searchParams }: { searchParams: SearchParams }) 
       <ComprasSubnav current="importaciones" perms={perms} orgId={orgId} multiOrg={allowed.length > 1} />
 
       <ImportListView
-        rows={allRows}
+        active={active}
+        page={page ? { rows: page.rows, next: page.next ? encodeListCursor(page.next) : null } : null}
+        counts={counts}
+        orgId={orgId}
         suppliers={suppliers}
         supplierFilter={supplierFilter}
         tab={tab}

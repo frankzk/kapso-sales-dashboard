@@ -20,6 +20,7 @@ import {
   orderDateOf,
   productKey,
   shortageIsHigh,
+  supplierBought,
   supplierRanking,
   supplierStats,
   unitCostHistory,
@@ -255,10 +256,17 @@ describe("estadísticas del proveedor (§4.3, §6.17)", () => {
   });
 
   it("ranking por monto comprado, de mayor a menor", () => {
+    // I2 e I7 no tienen tipo de cambio (todo en USD): no se pueden llevar a
+    // soles, pero todas se pueden llevar a USD, así que el ranking va en USD.
     const ranking = supplierRanking([supplierStats(S2, IMPORTS, { money: true }), s1, supplierStats("nadie", IMPORTS, { money: true })]);
-    expect(ranking.map((r) => r.supplierId)).toEqual([S1, S2]);
-    close(ranking[1]!.boughtUsd, 100 + 105);
-    close(ranking[0]!.share, 1675 / 1880);
+    expect(ranking.base).toBe("USD");
+    expect(ranking.rows.map((r) => r.supplierId)).toEqual([S1, S2]);
+    close(ranking.rows[1]!.amount, 100 + 105);
+    close(ranking.rows[0]!.share, 1675 / 1880);
+    // Sin soles a medias: a los dos les falta el tipo de cambio en alguna.
+    expect(ranking.rows.map((r) => r.other)).toEqual([null, null]);
+    expect(ranking.missingFx).toBe(0);
+    expect(ranking.outside).toEqual([]);
   });
 });
 
@@ -355,5 +363,99 @@ describe("costo por unidad de cada producto (§6.17)", () => {
 
   it("el más reciente primero", () => {
     expect(products[0]!.last.date >= products[products.length - 1]!.last.date).toBe(true);
+  });
+});
+
+describe("«Comprado» y el ranking en una base comparable (MOM §45.7, §45.8)", () => {
+  // Un laboratorio local todo en soles (sin tipo de cambio: no le hace falta) y
+  // un proveedor de China con tipo de cambio.
+  const LAB = "lab";
+  const CN = "cn";
+  const CN2 = "cn-sin-tc";
+  const local = (p: Partial<ReportImport> & Pick<ReportImport, "id">) =>
+    imp({
+      status: "recibido",
+      kind: "local",
+      code: `LOC-2026-${p.id}`,
+      supplierId: LAB,
+      orderedOn: "2026-11-01",
+      items: [item({ id: `l-${p.id}`, name: "Crema", sku: "CREMA-1", qty: 600, unitCostPen: 7.5, unitCostCurrency: "PEN", receivedQty: 600, damagedQty: 0 })],
+      ...p,
+    });
+  const china = (p: Partial<ReportImport> & Pick<ReportImport, "id">) =>
+    imp({ status: "recibido", supplierId: CN, orderedOn: "2026-10-01", fxPenPerUsd: 3.75, items: [item({ id: `c-${p.id}`, name: "Funda", qty: 100, unitCostUsd: 2 })], ...p });
+  const stats = (id: string, list: ReportImport[]) => supplierStats(id, list, { money: true });
+
+  it("el laboratorio local todo en soles entra en soles, sin tipo de cambio; sin USD a medias", () => {
+    const v = supplierBought(stats(LAB, [local({ id: "001" })]));
+    expect(v).toEqual({ base: "PEN", amount: 4500, other: null, missingFx: 0, otherMissingFx: 1 });
+  });
+
+  it("con tipo de cambio en todas: en soles y su equivalente en USD", () => {
+    const v = supplierBought(stats(CN, [china({ id: "101" })]));
+    expect(v.base).toBe("PEN");
+    close(v.amount, 750);
+    close(v.other, 200);
+    expect(v.missingFx).toBe(0);
+  });
+
+  it("todo en USD y alguna sin tipo de cambio: en USD (lo de antes), sin soles a medias, y se dice cuántas", () => {
+    const v = supplierBought(stats(CN, [china({ id: "101" }), china({ id: "102", fxPenPerUsd: null })]));
+    expect(v).toEqual({ base: "USD", amount: 400, other: null, missingFx: 0, otherMissingFx: 1 });
+  });
+
+  it("ni soles ni USD alcanzan a todas: la que alcanza a más (empate: soles) y las de fuera contadas", () => {
+    const list = [
+      local({ id: "001", supplierId: "mixto" }),
+      china({ id: "102", supplierId: "mixto", fxPenPerUsd: null }),
+    ];
+    const v = supplierBought(stats("mixto", list));
+    expect(v).toEqual({ base: "PEN", amount: 4500, other: null, missingFx: 1, otherMissingFx: 1 });
+  });
+
+  it("USD con costos en soles y sin tipo de cambio: no se puede valorar, «Falta el tipo de cambio»", () => {
+    const v = supplierBought(
+      stats(CN, [china({ id: "103", fxPenPerUsd: null, costs: [{ kind: "importacion", label: "DHL", amount: 427.25, currency: "PEN", allocation: "value" }] })]),
+    );
+    expect(v).toEqual({ base: null, amount: null, other: null, missingFx: 1, otherMissingFx: 1 });
+  });
+
+  it("sin «Montos de compras» no hay nada que mostrar ni rankear", () => {
+    const s = supplierStats(LAB, [local({ id: "001" })], { money: false });
+    expect(supplierBought(s).base).toBeNull();
+    expect(supplierRanking([s]).rows).toEqual([]);
+  });
+
+  it("el ranking va en soles cuando todas se pueden llevar a soles: el laboratorio local aparece", () => {
+    const list = [local({ id: "001" }), china({ id: "101" })];
+    const r = supplierRanking([stats(CN, list), stats(LAB, list)]);
+    expect(r.base).toBe("PEN");
+    expect(r.rows.map((x) => [x.supplierId, x.amount])).toEqual([
+      [LAB, 4500],
+      [CN, 750],
+    ]);
+    close(r.total, 5250);
+    close(r.rows[0]!.share, 4500 / 5250);
+    // El equivalente en USD solo de quien tiene con qué convertir todas.
+    expect(r.rows[0]!.other).toBeNull();
+    close(r.rows[1]!.other, 200);
+    expect(r.missingFx).toBe(0);
+  });
+
+  it("un local sin tipo de cambio y una importación sin tipo de cambio: soles, la importación fuera y contada", () => {
+    const list = [local({ id: "001" }), china({ id: "102", supplierId: CN2, fxPenPerUsd: null })];
+    const r = supplierRanking([stats(LAB, list), stats(CN2, list)]);
+    expect(r.base).toBe("PEN");
+    expect(r.rows.map((x) => x.supplierId)).toEqual([LAB]);
+    expect(r.outside).toEqual([{ supplierId: CN2, bought: 1 }]);
+    expect(r.missingFx).toBe(1);
+  });
+
+  it("una fila con compras fuera de la base las cuenta en su fila; no se suman a medias en el total", () => {
+    const list = [local({ id: "001" }), local({ id: "002", kind: "importacion", code: "IMP-2026-002", items: [item({ id: "x", name: "Tela", qty: 10, unitCostUsd: 5 })] })];
+    const r = supplierRanking([stats(LAB, list)]);
+    expect(r.base).toBe("PEN");
+    expect(r.rows[0]).toMatchObject({ supplierId: LAB, amount: 4500, other: null, missingFx: 1 });
+    expect(r.missingFx).toBe(1);
   });
 });

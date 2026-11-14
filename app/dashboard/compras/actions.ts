@@ -33,7 +33,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
-import { getCurrentUser } from "@/lib/access";
+import { getAccessibleStores, getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import {
   COST_COLS,
@@ -43,13 +43,17 @@ import {
   ITEM_MONEY_COLS,
   comprasVisionCreds,
   loadImportAccess,
+  loadImportListPage,
   loadSkuCatalog,
   normalizeCost,
   normalizeItem,
   normalizePayment,
   type ComprasPerms,
+  type ImportListRow,
   type ImportRow,
 } from "@/lib/compras-server";
+import { decodeListCursor, encodeListCursor } from "@/lib/compras-list";
+import { loadPickerCatalog, type PickerCatalog } from "@/lib/compras-catalogo";
 import {
   DELIVERY_PHOTO_REQUIRED,
   IMPORT_CODE_PREFIX,
@@ -57,7 +61,9 @@ import {
   IMPORT_STATUS_LABEL,
   allocationLabel,
   baseCurrencyOf,
+  IMPORT_TABS,
   canUploadDocKind,
+  canViewCompras,
   checkImportFile,
   cleanCost,
   cleanDelivery,
@@ -189,6 +195,75 @@ async function storeInOrg(admin: SupabaseClient, orgId: string, storeId: string 
   if (!storeId) return true;
   const { data } = await admin.from("stores").select("id").eq("id", storeId).eq("org_id", orgId).maybeSingle();
   return Boolean(data);
+}
+
+// ---------------------------------------------------------------------------
+// «Agregar producto → De las tiendas» (MOM §45.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * El catálogo de las tiendas para elegir un producto: el catálogo vivo de cada
+ * tienda que la persona ve en la organización (WooCommerce o Shopify) y, para
+ * los SKU que no están en ninguno, el historial (`lib/compras-catalogo.ts`).
+ * Solo con «Compras» en la organización de la importación, que es quien
+ * agrega; sin montos. Se pide al abrir «Agregar producto», no con cada vista
+ * del detalle (leer el catálogo de una tienda puede tardar).
+ */
+export async function loadImportPicker(importId: string): Promise<PickerCatalog | { error: string }> {
+  const admin = createAdminSupabase();
+  const a = await authorize(admin, importId, { manage: true });
+  if ("error" in a) return a;
+  try {
+    const stores = (await getAccessibleStores()).filter((s) => s.org_id === a.imp.org_id);
+    return await loadPickerCatalog(a.imp.org_id, stores, admin);
+  } catch {
+    return { error: "No se pudo leer el catálogo de las tiendas. Elige «Producto nuevo» o intenta otra vez." };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// La lista: «Ver más» (MOM §45.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * La página siguiente de la lista, desde la última fila mostrada (keyset), con
+ * los mismos filtros de la URL. Vuelve a pedir «Compras», «Montos de compras»
+ * o «Recepción de compras» en la organización, y sin «Montos» no lee montos.
+ * El cursor y los filtros llegan del navegador: se validan antes de tocar la
+ * consulta (solo un instante y un UUID; el proveedor, un UUID dentro de la
+ * organización).
+ */
+export async function loadMoreImports(input: {
+  orgId: string;
+  tab: string;
+  proveedor?: string | null;
+  tipo?: string | null;
+  cursor: string;
+}): Promise<{ rows: ImportListRow[]; next: string | null } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Inicia sesión otra vez." };
+  if (!isUuid(input.orgId)) return { error: "Sin acceso a Compras en esa organización." };
+  // Ver la lista: «Compras», «Montos de compras» o «Recepción de compras» (MOM §45.11), en ESA organización.
+  const [canManage, canMoney, canReceive] = await Promise.all([
+    hasOrgPermission(input.orgId, "purchases.manage"),
+    hasOrgPermission(input.orgId, "purchases.money"),
+    hasOrgPermission(input.orgId, "purchases.receive"),
+  ]);
+  if (!canViewCompras({ canManage, canMoney, canReceive })) return { error: "Sin acceso a Compras en esa organización." };
+  const tab = IMPORT_TABS.find((t) => t.id === input.tab)?.id;
+  const cursor = decodeListCursor(input.cursor);
+  if (!tab || !cursor) return { error: "No se pudo seguir la lista: vuelve a abrirla." };
+  try {
+    const page = await loadImportListPage(input.orgId, canMoney, {
+      tab,
+      supplierId: isUuid(input.proveedor) ? input.proveedor : null,
+      kind: isImportKind(input.tipo) ? input.tipo : null,
+      cursor,
+    });
+    return { rows: page.rows, next: page.next ? encodeListCursor(page.next) : null };
+  } catch {
+    return { error: "No se pudo leer la lista. Intenta otra vez." };
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -45,8 +45,8 @@ async function ReportesContent({ searchParams }: { searchParams: Promise<{ org?:
   return (
     <div className="space-y-6">
       <ComprasHeader title="Compras">
-        Reportes en USD (con soles donde la importación tiene tipo de cambio). Las cotizaciones y las canceladas no cuentan como compras; los
-        meses son de Lima.
+        Reportes en USD (con soles donde la importación tiene tipo de cambio); el ranking de proveedores, en soles si todas las compras se
+        pueden llevar a soles. Las cotizaciones y las canceladas no cuentan como compras; los meses son de Lima.
       </ComprasHeader>
       <ComprasSubnav current="reportes" perms={perms} orgId={orgId} multiOrg={allowed.length > 1} />
       <ReportsView

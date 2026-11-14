@@ -7,12 +7,14 @@
 import type { ReactNode } from "react";
 import { cn } from "@/components/ui";
 import type { ImportKind, ImportStatus } from "@/lib/compras";
+import type { ImportAlertFilter } from "@/lib/compras-list";
 
 // ---------------------------------------------------------------------------
 // La lista: sus filtros viven en la URL
 // ---------------------------------------------------------------------------
 
-export type ImportAlertFilter = "avisar" | "atrasadas" | "sin_novedades";
+// Vive en lib/compras-list.ts (la usan también la página y el navegador).
+export type { ImportAlertFilter };
 
 export const IMPORT_ALERT_FILTERS: { id: ImportAlertFilter; label: string; hint: string }[] = [
   { id: "avisar", label: "Sin avisar a la bodega", hint: "La llegada estimada está a 3 días o menos y la bodega de Lima no está avisada" },

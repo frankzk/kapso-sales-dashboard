@@ -113,6 +113,7 @@ import {
   addImportItem,
   addImportPayment,
   pushImportCosts,
+  loadImportPicker,
   readImportDocumentWithAi,
   registerImportDocument,
   removeImportCost,
@@ -151,6 +152,8 @@ import {
 } from "@/components/compras/header-form";
 import { FigureCell, FigureFrame, importStatusTone } from "@/components/compras/chrome";
 import { uploadImportFile } from "@/components/compras/upload";
+import { ConfirmRemove, removeTriggerProps } from "@/components/compras/confirm-remove";
+import { FilePicker } from "@/components/compras/file-picker";
 import { useCopyToClipboard } from "@/components/copy-button";
 import { fmtBytes, fmtDateTime, fmtInt, fmtMoney, fmtPct, fmtPen, fmtPenUnit, fmtSplit, fmtUnit, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
 
@@ -196,15 +199,12 @@ export function ImportDetailView({
   stores,
   today,
   aiEnabled = false,
-  catalog = [],
 }: {
   detail: ImportDetail;
   stores: Store[];
   today: string;
   /** «Leer con IA»: con «Compras» y una clave configurada. */
   aiEnabled?: boolean;
-  /** El catálogo de las tiendas para «Agregar producto» (solo llega con «Compras»). */
-  catalog?: PickerProduct[];
 }) {
   const router = useRouter();
   const [feedback, setFeedback] = useState<ComprasActionState | null>(null);
@@ -471,7 +471,7 @@ export function ImportDetailView({
         </div>
 
         <div className="min-w-0 space-y-4 sm:space-y-6 xl:col-start-1 xl:row-span-2 xl:row-start-1">
-          <ItemsBox detail={detail} stores={stores} storeName={storeName} landed={landed} fx={fx} canEdit={canEdit} aiEnabled={aiEnabled && canEdit} catalog={catalog} run={run} pending={pending} />
+          <ItemsBox detail={detail} stores={stores} storeName={storeName} landed={landed} fx={fx} canEdit={canEdit} aiEnabled={aiEnabled && canEdit} run={run} pending={pending} />
 
           <DeliveriesBox
             detail={detail}
@@ -1031,6 +1031,15 @@ function DataBox({
 // Productos
 // ---------------------------------------------------------------------------
 
+/**
+ * El catálogo de «De las tiendas» (MOM §45.1): se pide al abrir «Agregar
+ * producto» (`loadImportPicker`), no con cada vista del detalle.
+ */
+type PickerState =
+  | { status: "loading" }
+  | { status: "ready"; products: PickerProduct[]; notices: string[] }
+  | { status: "error"; error: string };
+
 /** `unitCost`: en la moneda base de la compra (USD la importación, soles la compra local). */
 type ItemDraft = { name: string; sku: string; storeId: string; qty: string; courtesyQty: string; unitWeightKg: string; unitCost: string; salePricePen: string };
 
@@ -1050,16 +1059,13 @@ function itemDraft(it: ItemRow): ItemDraft {
   };
 }
 
-const FILE_INPUT =
-  "block w-full min-w-0 text-[13px] text-ink-600 file:mr-3 file:h-8 file:cursor-pointer file:rounded-md file:border-0 file:bg-white file:px-3 file:text-[13px] file:font-semibold file:text-ink-700 file:shadow-control file:ring-1 file:ring-inset file:ring-line-strong hover:file:bg-wash";
-
 function ItemForm({
   importId,
   stores,
   money,
   base = "USD",
   item,
-  catalog = [],
+  catalog,
   run,
   pending,
   onDone,
@@ -1070,16 +1076,18 @@ function ItemForm({
   /** La moneda del costo por unidad: USD (importación) o soles (compra local). */
   base?: Currency;
   item?: ItemRow;
-  /** Al agregar: el catálogo de las tiendas; vacío, solo «Producto nuevo». */
-  catalog?: PickerProduct[];
+  /** Al agregar: el catálogo de las tiendas (se está leyendo, listo o con error); sin él, solo «Producto nuevo». */
+  catalog?: PickerState;
   run: Run;
   pending: boolean;
   onDone: () => void;
 }) {
   const [d, setD] = useState<ItemDraft>(item ? itemDraft(item) : EMPTY_ITEM);
-  // «Del catálogo» llena nombre, SKU y la tienda (si el SKU se vio siempre en la
-  // misma); «Producto nuevo» es el de siempre, todo a mano. Se guarda igual.
-  const withCatalog = !item && catalog.length > 0;
+  // «Del catálogo» llena nombre, SKU y la tienda (la del catálogo de donde
+  // salió); «Producto nuevo» es el de siempre, todo a mano. Se guarda igual.
+  // Un catálogo leído y vacío (sin avisos) deja solo «Producto nuevo».
+  const withCatalog = !item && Boolean(catalog) && !(catalog?.status === "ready" && !catalog.products.length && !catalog.notices.length);
+  const products = catalog?.status === "ready" ? catalog.products : [];
   const [mode, setMode] = useState<"catalogo" | "nuevo">(withCatalog ? "catalogo" : "nuevo");
   const [picked, setPicked] = useState<PickerProduct | null>(null);
   const storeIds = new Set(stores.map((s) => s.id));
@@ -1126,14 +1134,27 @@ function ItemForm({
           </div>
         )}
       </div>
-      {fromCatalog && !picked && (
+      {fromCatalog && catalog?.status === "ready" && catalog.notices.length > 0 && (
+        <Banner tone="warn" role="status">
+          {catalog.notices.map((n) => (
+            <p key={n}>{n}</p>
+          ))}
+        </Banner>
+      )}
+      {fromCatalog && !picked && catalog?.status === "loading" && (
+        <p role="status" className="text-[13px] leading-5 text-ink-500">
+          Leyendo el catálogo de las tiendas…
+        </p>
+      )}
+      {fromCatalog && !picked && catalog?.status === "error" && <Feedback error={catalog.error} />}
+      {fromCatalog && !picked && catalog?.status === "ready" && (
         <ProductPicker
-          products={catalog}
+          products={products}
           storeName={storeName}
           autoFocus
           onPick={(p) => {
             setPicked(p);
-            setD((x) => ({ ...x, name: p.name ?? p.sku, sku: p.sku, storeId: p.storeId && storeIds.has(p.storeId) ? p.storeId : "" }));
+            setD((x) => ({ ...x, name: p.name ?? p.sku ?? "", sku: p.sku ?? "", storeId: p.storeId && storeIds.has(p.storeId) ? p.storeId : "" }));
           }}
         />
       )}
@@ -1142,9 +1163,20 @@ function ItemForm({
           <span className="min-w-0">
             <span className="block text-sm font-medium leading-5 text-ink-900">{d.name}</span>
             <span className="block text-[13px] leading-5 text-ink-500">
-              SKU <span className="font-mono text-xs text-ink-700">{d.sku}</span>
+              {picked.sku ? (
+                <>
+                  SKU <span className="font-mono text-xs text-ink-700">{d.sku}</span>
+                </>
+              ) : (
+                <Badge tone="warn">Sin SKU</Badge>
+              )}
               {picked.orderCount > 0 ? <span className="tabular-nums"> · en {picked.orderCount.toLocaleString("es-PE")} pedido{picked.orderCount === 1 ? "" : "s"}</span> : null}
             </span>
+            {!picked.sku && (
+              <span className="mt-0.5 block text-[13px] leading-5 text-warn-fg">
+                Esta variante no tiene SKU en la tienda: se puede agregar, pero «Pasar a Costos» no la pasa. Ponle el SKU en la tienda o elige «Producto nuevo» y escríbelo.
+              </span>
+            )}
           </span>
           <button
             type="button"
@@ -1202,9 +1234,14 @@ function ItemForm({
           </>
         )}
         {!item && (
-          <Field label="Foto (opcional)" className="sm:col-span-2">
-            <input type="file" accept="image/jpeg,image/png,image/webp" className={FILE_INPUT} onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />
-          </Field>
+          <FilePicker
+            label="Foto (opcional)"
+            className="sm:col-span-2"
+            accept="image/jpeg,image/png,image/webp"
+            files={photo ? [photo] : []}
+            onFiles={(f) => setPhoto(f[0] ?? null)}
+            hint="JPG, PNG o WEBP."
+          />
         )}
       </div>
       <Feedback error={uploadError} />
@@ -1247,7 +1284,6 @@ function ItemsBox({
   fx,
   canEdit,
   aiEnabled,
-  catalog,
   run,
   pending,
 }: {
@@ -1258,12 +1294,25 @@ function ItemsBox({
   fx: number | null;
   canEdit: boolean;
   aiEnabled: boolean;
-  catalog: PickerProduct[];
   run: Run;
   pending: boolean;
 }) {
   const [adding, setAdding] = useState(false);
+  // El catálogo de las tiendas se lee la primera vez que se abre «Agregar producto».
+  const [picker, setPicker] = useState<PickerState | null>(null);
+  const pickerAsked = useRef(false);
+  const importId = detail.imp.id;
+  useEffect(() => {
+    if (!adding || pickerAsked.current) return;
+    pickerAsked.current = true;
+    setPicker({ status: "loading" });
+    loadImportPicker(importId)
+      .then((res) => setPicker("error" in res ? { status: "error", error: res.error } : { status: "ready", products: res.products, notices: res.notices }))
+      .catch(() => setPicker({ status: "error", error: "No se pudo leer el catálogo de las tiendas. Elige «Producto nuevo» o intenta otra vez." }));
+  }, [adding, importId]);
   const [editing, setEditing] = useState<string | null>(null);
+  // Qué «Quitar» está preguntando (`producto-<id>` o `foto-<id>`): uno a la vez.
+  const [removing, setRemoving] = useState<string | null>(null);
   const money = detail.perms.canMoney;
   const base = baseCurrencyOf(detail.imp.kind);
   const editable = canEdit && detail.imp.status !== "cancelado";
@@ -1286,7 +1335,25 @@ function ItemsBox({
           ) : undefined
         }
       />
-      {adding && <ItemForm importId={detail.imp.id} stores={stores} money={money} base={base} catalog={catalog} run={run} pending={pending} onDone={() => setAdding(false)} />}
+      {adding && (
+        <ItemForm
+          importId={detail.imp.id}
+          stores={stores}
+          money={money}
+          base={base}
+          catalog={picker ?? { status: "loading" }}
+          run={run}
+          pending={pending}
+          onDone={() => {
+            setAdding(false);
+            // Un error no se queda: la próxima vez se vuelve a pedir.
+            if (picker?.status === "error") {
+              pickerAsked.current = false;
+              setPicker(null);
+            }
+          }}
+        />
+      )}
       {!detail.items.length && !adding && (
         <p className="text-sm text-ink-500">
           Sin productos todavía.
@@ -1318,7 +1385,16 @@ function ItemsBox({
                       <IconPackage className="size-5" />
                     </div>
                   )}
-                  {editable && <ItemPhotoControls importId={detail.imp.id} item={it} run={run} pending={pending} />}
+                  {editable && (
+                    <ItemPhotoControls
+                      importId={detail.imp.id}
+                      item={it}
+                      run={run}
+                      pending={pending}
+                      removeOpen={removing === `foto-${it.id}`}
+                      onAskRemove={() => setRemoving((r) => (r === `foto-${it.id}` ? null : `foto-${it.id}`))}
+                    />
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
@@ -1391,14 +1467,41 @@ function ItemsBox({
                           type="button"
                           className={BTN_REMOVE}
                           disabled={pending}
-                          onClick={() => {
-                            if (window.confirm(`¿Quitar «${it.name}» de la compra?`)) run(() => removeImportItem(it.id));
-                          }}
+                          {...removeTriggerProps(`producto-${it.id}`, removing === `producto-${it.id}`)}
+                          onClick={() => setRemoving((r) => (r === `producto-${it.id}` ? null : `producto-${it.id}`))}
                         >
                           Quitar
                         </button>
                       )}
                     </div>
+                  )}
+                  {editable && removing === `producto-${it.id}` && !delivered.has(it.id) && (
+                    <ConfirmRemove
+                      id={`producto-${it.id}`}
+                      className="mt-2"
+                      question={`¿Quitar «${it.name}» de la compra?`}
+                      // MOM §45.3: su costo «a un producto» no se borra, pasa a repartirse por valor.
+                      detail={(detail.costs ?? []).some((c) => c.item_id === it.id) ? "Su costo «a un producto» se queda y pasa a repartirse por valor." : undefined}
+                      pending={pending}
+                      onCancel={() => setRemoving(null)}
+                      onConfirm={() => {
+                        setRemoving(null);
+                        run(() => removeImportItem(it.id));
+                      }}
+                    />
+                  )}
+                  {editable && removing === `foto-${it.id}` && it.image_path && (
+                    <ConfirmRemove
+                      id={`foto-${it.id}`}
+                      className="mt-2"
+                      question={`¿Quitar la foto de «${it.name}»?`}
+                      pending={pending}
+                      onCancel={() => setRemoving(null)}
+                      onConfirm={() => {
+                        setRemoving(null);
+                        run(() => setImportItemPhoto(it.id, null));
+                      }}
+                    />
                   )}
                 </div>
               </li>
@@ -1427,7 +1530,22 @@ function photoUrl(it: ItemRow): string {
 }
 
 /** Agregar, cambiar o quitar la foto de un producto ya creado (`setImportItemPhoto`). */
-function ItemPhotoControls({ importId, item, run, pending }: { importId: string; item: ItemRow; run: Run; pending: boolean }) {
+function ItemPhotoControls({
+  importId,
+  item,
+  run,
+  pending,
+  removeOpen,
+  onAskRemove,
+}: {
+  importId: string;
+  item: ItemRow;
+  run: Run;
+  pending: boolean;
+  /** «Quitar» la foto pregunta en la fila del producto (`ConfirmRemove`), no aquí: esta columna es angosta. */
+  removeOpen: boolean;
+  onAskRemove: () => void;
+}) {
   const [inputKey, setInputKey] = useState(0);
   const pick = (file: File | undefined) => {
     if (!file) return;
@@ -1465,9 +1583,9 @@ function ItemPhotoControls({ importId, item, run, pending }: { importId: string;
           type="button"
           className="rounded px-1 py-0.5 text-ink-500 hover:text-crit-fg hover:underline disabled:opacity-50 pointer-coarse:py-2"
           disabled={pending}
-          onClick={() => {
-            if (window.confirm(`¿Quitar la foto de «${item.name}»?`)) run(() => setImportItemPhoto(item.id, null));
-          }}
+          {...removeTriggerProps(`foto-${item.id}`, removeOpen)}
+          aria-label={`Quitar la foto de ${item.name}`}
+          onClick={onAskRemove}
         >
           Quitar
         </button>
@@ -1648,6 +1766,7 @@ function DeliveryItem({
   pending: boolean;
 }) {
   const [inputKey, setInputKey] = useState(0);
+  const [asking, setAsking] = useState(false);
   const itemName = new Map(detail.items.map((it) => [it.id, it.name]));
   const units = d.lines.reduce((a, l) => a + l.received, 0);
   const addPhotos = (files: File[]) => {
@@ -1688,17 +1807,28 @@ function DeliveryItem({
               type="button"
               className={BTN_REMOVE}
               disabled={pending}
-              onClick={() => {
-                if (window.confirm(`¿Quitar la entrega del ${formatDmy(d.delivered_on)}? Sus unidades dejan de contar; sus fotos se quedan en Documentos.`)) {
-                  run(() => removeDelivery(d.id));
-                }
-              }}
+              {...removeTriggerProps(`entrega-${d.id}`, asking)}
+              aria-label={`Quitar la entrega del ${formatDmy(d.delivered_on)}`}
+              onClick={() => setAsking((v) => !v)}
             >
               Quitar
             </button>
           </span>
         )}
       </div>
+      {canCorrect && asking && (
+        <ConfirmRemove
+          id={`entrega-${d.id}`}
+          question={`¿Quitar la entrega del ${formatDmy(d.delivered_on)}?`}
+          detail="Sus unidades dejan de contar; sus fotos se quedan en Documentos."
+          pending={pending}
+          onCancel={() => setAsking(false)}
+          onConfirm={() => {
+            setAsking(false);
+            run(() => removeDelivery(d.id));
+          }}
+        />
+      )}
       <ul className="space-y-0.5 text-[13px] leading-5 tabular-nums text-ink-700">
         {d.lines.map((l) => (
           <li key={l.id}>
@@ -1883,12 +2013,15 @@ function DeliveryForm({
           );
         })}
       </ul>
-      <Field
+      <FilePicker
         label={needsPhoto && !keptPhotos ? "Fotos de lo que llegó (al menos una)" : delivery ? "Fotos nuevas (opcional)" : "Fotos de lo que llegó (opcional)"}
         hint={`JPG, PNG o WEBP, hasta 25 MB; hasta 10 por vez.${keptPhotos ? ` Ya tiene ${keptPhotos} foto${keptPhotos === 1 ? "" : "s"}.` : ""}`}
-      >
-        <input type="file" multiple accept={PHOTO_ACCEPT} className={cn(FILE_INPUT, "py-0.5")} onChange={(e) => setPhotos(Array.from(e.target.files ?? []).slice(0, 10))} />
-      </Field>
+        multiple
+        max={10}
+        accept={PHOTO_ACCEPT}
+        files={photos}
+        onFiles={setPhotos}
+      />
       <Feedback error={localError} />
       <div className="flex flex-wrap gap-2">
         <button type="button" className={BTN_PRIMARY} disabled={pending} onClick={submit}>
@@ -2280,6 +2413,7 @@ function CostForm({ detail, cost, run, pending, onDone }: { detail: ImportDetail
 
 function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail; fx: number | null; canEdit: boolean; run: Run; pending: boolean }) {
   const [editing, setEditing] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const costs = detail.costs ?? [];
   const itemName = new Map(detail.items.map((it) => [it.id, it.name]));
   const sum = (list: CostRow[]) => list.reduce((a, c) => ({ usd: a.usd + (c.currency === "USD" ? c.amount : 0), pen: a.pen + (c.currency === "PEN" ? c.amount : 0) }), { usd: 0, pen: 0 });
@@ -2315,7 +2449,8 @@ function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail;
             const igvNote = costIgvNote(c);
             const eq = equivalent(c.amount, c.currency, fx);
             return (
-              <li key={c.id} className={cn(ROW, "flex items-start justify-between gap-3")}>
+              <li key={c.id} className={cn(ROW, "space-y-2")}>
+                <div className="flex items-start justify-between gap-3">
                 <span className="min-w-0">
                   <span className="block text-sm leading-5 text-ink-900">{c.label}</span>
                   <span className="block text-[13px] leading-5 text-ink-500">
@@ -2334,11 +2469,32 @@ function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail;
                     </button>
                   )}
                   {canEdit && (
-                    <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportCost(c.id))} aria-label={`Quitar ${c.label}`}>
+                    <button
+                      type="button"
+                      className={BTN_REMOVE}
+                      disabled={pending}
+                      {...removeTriggerProps(`costo-${c.id}`, removing === c.id)}
+                      onClick={() => setRemoving((r) => (r === c.id ? null : c.id))}
+                      aria-label={`Quitar ${c.label}`}
+                    >
                       Quitar
                     </button>
                   )}
                 </span>
+                </div>
+                {canEdit && removing === c.id && (
+                  <ConfirmRemove
+                    id={`costo-${c.id}`}
+                    question={`¿Quitar «${c.label}»?`}
+                    detail={`${fmtMoney(c.amount, c.currency)} deja de repartirse entre los productos.`}
+                    pending={pending}
+                    onCancel={() => setRemoving(null)}
+                    onConfirm={() => {
+                      setRemoving(null);
+                      run(() => removeImportCost(c.id));
+                    }}
+                  />
+                )}
               </li>
             );
           })}
@@ -2367,7 +2523,6 @@ function PaymentForm({ detail, payment, run, pending, onDone }: { detail: Import
   const [documentId, setDocumentId] = useState(payment?.document_id ?? "");
   // La captura del pago, en el mismo formulario: obligatoria en una compra local (MOM §45.12).
   const [voucher, setVoucher] = useState<File | null>(null);
-  const [voucherKey, setVoucherKey] = useState(0);
   const [localError, setLocalError] = useState<string | null>(null);
   const voucherRequired = paymentNeedsVoucher(detail.imp.kind);
   const vouchers = detail.documents.filter((d) => d.kind === "payment");
@@ -2388,21 +2543,16 @@ function PaymentForm({ detail, payment, run, pending, onDone }: { detail: Import
             ))}
           </select>
         </Field>
-        <Field
+        <FilePicker
           label={payment ? "Cambiar la captura (opcional)" : voucherRequired ? "Captura del pago (obligatoria)" : "Adjuntar comprobante (opcional)"}
           hint="Imagen o PDF de la transferencia o del recibo, hasta 25 MB."
-        >
-          <input
-            key={voucherKey}
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
-            className={cn(FILE_INPUT, "py-0.5")}
-            onChange={(e) => {
-              setVoucher(e.target.files?.[0] ?? null);
-              if (e.target.files?.[0]) setDocumentId("");
-            }}
-          />
-        </Field>
+          accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+          files={voucher ? [voucher] : []}
+          onFiles={(f) => {
+            setVoucher(f[0] ?? null);
+            if (f[0]) setDocumentId("");
+          }}
+        />
         {vouchers.length > 0 && (
           <Field label={payment ? "Comprobante" : "O un comprobante ya subido"}>
             <select className={FIELD} value={documentId} onChange={(e) => setDocumentId(e.target.value)} disabled={Boolean(voucher)}>
@@ -2450,7 +2600,6 @@ function PaymentForm({ detail, payment, run, pending, onDone }: { detail: Import
                     setNote("");
                     setDocumentId("");
                     setVoucher(null);
-                    setVoucherKey((k) => k + 1);
                   },
             );
           }}
@@ -2484,6 +2633,7 @@ function PaymentsBox({
 }) {
   const local = !hasShipping(detail.imp.kind);
   const [editing, setEditing] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const voucherRequired = paymentNeedsVoucher(detail.imp.kind);
   const payments = detail.payments ?? [];
   const editable = canEdit && detail.imp.status !== "cancelado";
@@ -2535,7 +2685,8 @@ function PaymentsBox({
             }
             const eq = equivalent(p.amount, p.currency, fx);
             return (
-              <li key={p.id} className={cn(ROW, "flex items-start justify-between gap-3")}>
+              <li key={p.id} className={cn(ROW, "space-y-2")}>
+                <div className="flex items-start justify-between gap-3">
                 <span className="min-w-0">
                   <span className="block text-sm leading-5 tabular-nums text-ink-900">
                     {formatDmy(p.paid_on)} · {paymentMethodLabel(p.method)}
@@ -2564,11 +2715,32 @@ function PaymentsBox({
                     </button>
                   )}
                   {canEdit && (
-                    <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportPayment(p.id))} aria-label={`Quitar el pago del ${formatDmy(p.paid_on)}`}>
+                    <button
+                      type="button"
+                      className={BTN_REMOVE}
+                      disabled={pending}
+                      {...removeTriggerProps(`pago-${p.id}`, removing === p.id)}
+                      onClick={() => setRemoving((r) => (r === p.id ? null : p.id))}
+                      aria-label={`Quitar el pago del ${formatDmy(p.paid_on)}`}
+                    >
                       Quitar
                     </button>
                   )}
                 </span>
+                </div>
+                {canEdit && removing === p.id && (
+                  <ConfirmRemove
+                    id={`pago-${p.id}`}
+                    question={`¿Quitar el pago del ${formatDmy(p.paid_on)} (${fmtMoney(p.amount, p.currency)})?`}
+                    detail={p.document_id ? "Su comprobante se queda en Documentos." : undefined}
+                    pending={pending}
+                    onCancel={() => setRemoving(null)}
+                    onConfirm={() => {
+                      setRemoving(null);
+                      run(() => removeImportPayment(p.id));
+                    }}
+                  />
+                )}
               </li>
             );
           })}
@@ -2615,8 +2787,8 @@ function DocumentsBox({
   const photosOnly = uploadKinds.length > 0 && uploadKinds.every((k) => k.id === "photo");
   const [kind, setKind] = useState<string>(uploadKinds.some((k) => k.id === "invoice") ? "invoice" : (uploadKinds[0]?.id ?? "photo"));
   const [files, setFiles] = useState<File[]>([]);
-  const [inputKey, setInputKey] = useState(0);
   const [aiReading, setAiReading] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [proposal, setProposal] = useState<Exclude<AiReadState, { error: string }> | null>(null);
   const groups = DOC_KINDS.map((k) => ({ ...k, docs: detail.documents.filter((d) => d.kind === k.id) })).filter((g) => g.docs.length);
   const editable = canEdit && detail.imp.status !== "cancelado";
@@ -2696,14 +2868,28 @@ function DocumentsBox({
                           type="button"
                           className={BTN_REMOVE}
                           disabled={pending}
-                          onClick={() => {
-                            if (window.confirm("¿Quitar este documento?")) run(() => removeImportDocument(d.id));
-                          }}
+                          {...removeTriggerProps(`documento-${d.id}`, removing === d.id)}
+                          onClick={() => setRemoving((r) => (r === d.id ? null : d.id))}
+                          aria-label={`Quitar ${d.filename ?? docKindLabel(d.kind)}`}
                         >
                           Quitar
                         </button>
                       )}
                     </span>
+                    {canEdit && removing === d.id && (
+                      <ConfirmRemove
+                        id={`documento-${d.id}`}
+                        className="basis-full"
+                        question={`¿Quitar «${d.filename ?? docKindLabel(d.kind)}»?`}
+                        detail="Se borra el archivo; el historial lo anota."
+                        pending={pending}
+                        onCancel={() => setRemoving(null)}
+                        onConfirm={() => {
+                          setRemoving(null);
+                          run(() => removeImportDocument(d.id));
+                        }}
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
@@ -2723,20 +2909,18 @@ function DocumentsBox({
                 ))}
               </select>
             </Field>
-            <Field label="Archivos">
-              <input
-                key={inputKey}
-                type="file"
-                multiple
-                accept={
-                  kind === "photo"
-                    ? ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
-                    : ".pdf,.jpg,.jpeg,.png,.webp,.xlsx,application/pdf,image/jpeg,image/png,image/webp"
-                }
-                className={cn(FILE_INPUT, "py-0.5")}
-                onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 10))}
-              />
-            </Field>
+            <FilePicker
+              label="Archivos"
+              multiple
+              max={10}
+              accept={
+                kind === "photo"
+                  ? ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                  : ".pdf,.jpg,.jpeg,.png,.webp,.xlsx,application/pdf,image/jpeg,image/png,image/webp"
+              }
+              files={files}
+              onFiles={setFiles}
+            />
             <button
               type="button"
               className={BTN_PRIMARY}
@@ -2762,10 +2946,7 @@ function DocumentsBox({
                     }
                     return { notice: `${ok} documento${ok === 1 ? "" : "s"} subido${ok === 1 ? "" : "s"}.` };
                   },
-                  () => {
-                    setFiles([]);
-                    setInputKey((k) => k + 1);
-                  },
+                  () => setFiles([]),
                 )
               }
             >
