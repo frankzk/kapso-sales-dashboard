@@ -13329,7 +13329,11 @@ registra en cada evento.
   «Administración». Proveedores (§45.7): verlos con cualquiera de los dos;
   crearlos, editarlos y borrarlos con «Compras»; «Comprado» solo con «Montos».
   Reportes (§45.8): solo con «Montos de compras». El Excel (§45.9) sale sin
-  dinero para quien no tiene «Montos».
+  dinero para quien no tiene «Montos». «Leer con IA» (§45.10) pide «Compras»
+  (y «Montos» para la proforma); sin «Montos» la propuesta llega sin precios
+  ni cargos. **«Recepción de compras»** (`purchases.receive`, §45.11; owner,
+  admin y el rol «Almacén»): ver Compras sin montos, guardar la recepción y
+  subir fotos; nada más, y ni Proveedores ni Reportes.
 - **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
@@ -26840,10 +26844,13 @@ el formulario de la importación.
 **Fase 4 (14-11-2026, migración 0341):** la página de **Proveedores** con sus
 estadísticas (§45.7), los **Reportes** (§45.8) y el **Excel** de cada
 importación (§45.9), con una sub-navegación Importaciones · Proveedores ·
-Reportes que solo muestra lo que la persona puede abrir. **No** entran todavía:
-seguimiento automático de la paquetera, lectura de facturas con IA,
-laboratorios, traslados, enlace automático con el inventario ni el correo
-diario.
+Reportes que solo muestra lo que la persona puede abrir.
+
+**14-11-2026, sin migración:** **«Leer con IA»** la factura comercial, la
+proforma o el packing list (§45.10), el permiso **«Recepción de compras»**
+para la bodega (§45.11) y la foto de un producto después de crearlo (§45.1).
+**No** entran todavía: seguimiento automático de la paquetera, laboratorios,
+traslados, enlace automático con el inventario ni el correo diario.
 
 ### 45.1 La importación
 
@@ -26862,6 +26869,12 @@ diario.
   (opcional; sin tienda, el costo es general de la organización), foto
   opcional, cantidad entera de 1 a 10.000.000, peso por unidad y, con
   «Montos», costo por unidad (USD, 4 decimales) y precio de venta (S/).
+- **Foto del producto** (con «Compras»): se agrega al crearlo o **después**,
+  desde el detalle («Foto», «Cambiar», «Quitar»), por la misma subida al
+  bucket (`items/`, solo JPG, PNG o WEBP, tipo y tamaño de Storage) y se ve
+  por `/api/compras/foto/<producto>`. Al cambiarla o quitarla, la anterior se
+  **borra del bucket** y queda el hecho «Foto agregada / cambiada / quitada:
+  <producto>» en el historial. Una importación cancelada no cambia fotos.
 - **Documentos** en el bucket privado `import-files`: proforma invoice,
   factura comercial, packing list, comprobante de pago, guía (AWB / BL),
   aduana, foto y otro. PDF, JPG, PNG, WEBP o XLSX de hasta 25 MB (las fotos,
@@ -27004,11 +27017,16 @@ periodo de la primera el mismo día.
   precios de venta, tipo de cambio, costos repartidos, pagos y los documentos
   con montos, y ver los hechos de dinero del historial. Sin él, el servidor
   **no lee ni escribe** esos campos (no basta con esconderlos).
-- Ver la sección pide cualquiera de los dos **en la organización** de la
-  importación (§16). Escribir dinero pide los dos. «Pasar a Costos» pide
-  «Montos de compras» y «Editar costos».
-- Vienen con **owner y admin** por su acceso y con el rol **«Administración»**,
-  como «Editar costos». El menú muestra «Compras» solo con alguno de los dos.
+- **«Recepción de compras»** (`purchases.receive`, §45.11): ver sin montos,
+  guardar la recepción y subir fotos. Nada más.
+- Ver la sección pide cualquiera de los tres **en la organización** de la
+  importación (§16). Escribir dinero pide «Compras» y «Montos». «Pasar a
+  Costos» pide «Montos de compras» y «Editar costos». «Leer con IA» pide
+  «Compras» (y «Montos» para leer la proforma).
+- «Compras» y «Montos» vienen con **owner y admin** por su acceso y con el rol
+  **«Administración»**, como «Editar costos»; «Recepción de compras», con owner
+  y admin y con el rol **«Almacén»**. El menú muestra «Compras» con alguno de
+  los tres (también a una vendedora con el rol Almacén).
 - **Historial append-only** (`import_events`, principio 6): creación, estados,
   notas, productos, documentos, dinero, recepción, aviso a la bodega y «Pasó a
   Costos», con quién y cuándo. No se edita ni se borra.
@@ -27116,3 +27134,106 @@ Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
 `test/compras.test.ts`, `test/compras-actions.test.ts`,
 `test/compras-reportes.test.ts`, `test/compras-proveedores.test.ts`,
 `scripts/sql/compras_smoke.sql` y `scripts/sql/compras_proveedores_smoke.sql`.
+
+### 45.10 «Leer con IA» (factura, proforma y packing list)
+
+Referencia §3.1 paso 2, §6.5, §6.9 y §7.2, adaptada a Kapta.
+
+- **Quién**: con **«Compras»** en la organización. La proforma es un documento
+  con montos: leerla pide además «Montos de compras». La acción vuelve a pedir
+  el permiso y la importación no puede estar cancelada.
+- **Qué**: en Documentos, una **factura comercial**, **proforma** o **packing
+  list** ya subido, en **PDF** (va a Claude como bloque `document`) o
+  **imagen** JPG, PNG o WEBP (bloque `image`). XLSX no. **Tope**: imagen hasta
+  **5 MB** (lo que acepta la API por imagen) y PDF hasta **20 MB** (en base64
+  queda bajo los 32 MB de la petición); se comprueba con el tamaño real del
+  archivo antes de gastar la llamada, y lo que no entra se dice en castellano.
+- **La llamada**: el mismo patrón que la visión de Yape y de las hojas de
+  liquidación (`lib/vision.ts`, `lib/settlement-vision.ts`): `fetch` directo,
+  `anthropic-version` 2023-06-01, la clave y el modelo de visión del entorno
+  (`ANTHROPIC_API_KEY`, `YAPE_VISION_MODEL`; sin clave en el entorno, la de la
+  primera tienda de la organización que tenga una, 0052), tope de **105 s**
+  (la página del detalle tiene `maxDuration = 120`) y **nunca lanza**: sin
+  clave, HTTP, rechazo del modelo, salida cortada, respuesta ilegible o
+  timeout devuelven un motivo claro. La salida se pide con una herramienta con
+  esquema JSON: moneda (ISO 4217), líneas (nombre en español, SKU solo si está
+  escrito, cantidad, precio por unidad y/o total de la línea, peso si se ve) y
+  cargos (tipo envío / importación / adicional, nombre, monto). Lo que no se
+  ve, null: no se inventa.
+- **Normalización** (`parseAiProposal`, pura): tolera texto alrededor del JSON
+  y números como texto; **cantidad entera ≥ 1** (redondeo al entero más
+  cercano; una fracción de unidad sube a 1; sin cantidad, 0 o negativa, la
+  línea se descarta); **precio = el de la unidad o total ÷ cantidad**; peso por
+  unidad = el de la unidad o el de la línea ÷ cantidad; cargos solo con monto
+  > 0; como máximo 200 líneas y 20 cargos. Se dice cuántas filas se dejaron
+  fuera.
+- **Sin «Montos de compras»** la propuesta se arma en el servidor **sin
+  precios, sin cargos y sin moneda** (`stripAiMoney`): ni llegan al navegador
+  ni se guardan. La IA igual propone las líneas con sus cantidades.
+- **Coincidencia** con los SKU que la organización ya conoce (Costos de
+  productos, con su tienda, y los SKU de los pedidos de sus tiendas,
+  `org_shopify_products`; solo SKU, nombre y tienda, ningún costo), con la
+  regla de la referencia (§6.9): con SKU, el **único** cuyo SKU coincide sin
+  mayúsculas ni espacios al borde (si hay varios, ninguno y no se prueba por
+  nombre); si no, por el **nombre normalizado** (sin tildes, minúsculas, lo que
+  no es letra o número → espacio) de **al menos 6 caracteres** que coincida con
+  **exactamente uno**. Si no, es un producto nuevo. Coincide → se proponen su
+  SKU, su nombre y su tienda (si el SKU se vio siempre en la misma tienda; si
+  no, «Todas las tiendas»).
+- **Revisión humana**: la propuesta se muestra en el detalle; se puede
+  desmarcar cualquier fila y corregir nombre, SKU, tienda, cantidad y precio
+  (y el tipo y el reparto de cada cargo; nunca «a un producto»). **Nada se
+  guarda solo**: la lectura no escribe ni filas ni hechos. Solo **«Agregar
+  seleccionados»** escribe, y lo hace con las reglas de siempre (`cleanItem`,
+  `cleanCost`, tienda de la organización), validando **todo antes de escribir
+  nada**, y cada fila deja el mismo hecho que agregarla a mano («Producto
+  agregado: …», «Costo agregado: …»). Al final queda **«Leído con IA: N
+  productos, M cargos agregados de <archivo>»**. Si la importación ya tenía
+  productos, lo leído se agrega aparte (se avisa).
+- **Tipo de cambio** (referencia §6.5): si el documento no está en USD y hay
+  algún precio o cargo, hay que escribir **«1 USD = X <moneda>»** (X > 0). El
+  **precio por unidad en USD = precio ÷ X, redondeado a 4 decimales**; cada
+  **cargo en USD = monto ÷ X, a 2 decimales**. En USD, X = 1 con los mismos
+  redondeos. Ese tipo de cambio es solo para convertir el documento: **no** es
+  el tipo de cambio en soles de la importación (§45.1).
+
+Código: `lib/compras-ia.ts` (reglas puras), `lib/compras-ia-vision.ts` (la
+llamada), `readImportDocumentWithAi` y `addAiProposalRows` en
+`app/dashboard/compras/actions.ts`, `components/compras/ai-proposal.tsx`.
+Pruebas: `test/compras-ia.test.ts` y `test/compras-recepcion-ia.test.ts`
+(`fetch` simulado; nunca la API real).
+
+### 45.11 «Recepción de compras» (la bodega de Lima)
+
+Permiso **`purchases.receive`** («Recepción de compras»), en el área Compras de
+Equipo. Lo trae el rol por función **«Almacén»**; owner y admin lo tienen por
+su acceso. Viene con el rol: no es una casilla de «uno por uno» (§16); una
+revocación puntual se lo quita, como a cualquier permiso.
+
+**Puede:**
+
+- Abrir **Compras: la lista y el detalle**, **sin ningún monto**, igual que
+  quien no tiene «Montos de compras» (el servidor no lee costos por unidad,
+  precios, tipo de cambio, costos, pagos ni hechos de dinero).
+- **Guardar la recepción**: recibidas, dañadas y nota por producto, con las
+  reglas de §45.4. Si la importación estaba antes de «Recibido», guardar la
+  pasa a **Recibido** (y anota la llegada de hoy en Lima): es el **único**
+  cambio de estado que hace.
+- **Subir documentos de tipo «Foto»** (solo imágenes).
+- **Ver y descargar** la factura comercial, el packing list y las fotos.
+
+**No puede:** editar la cabecera, los productos ni su foto, el estado (salvo
+el paso automático a «Recibido» de arriba), el aviso a la bodega, costos,
+pagos ni el tipo de cambio; «Pasar a Costos»; «Leer con IA»; subir o quitar
+otros documentos, ni quitar fotos; ver la proforma, el comprobante de pago, la
+guía, la aduana ni «otro»; ver el contacto del proveedor (solo su nombre).
+**Proveedores** y **Reportes** no se muestran (la sub-navegación queda en
+Importaciones y las páginas no lo dejan entrar). Una vendedora con el rol
+Almacén entra a Compras y lo ve en su menú; el resto del panel sigue como
+siempre.
+
+Cada acción lo vuelve a pedir en la organización de la importación: la
+recepción y la subida de fotos aceptan «Compras» **o** «Recepción de
+compras»; todas las demás siguen pidiendo «Compras» (y «Montos» lo de dinero).
+Las rutas del documento y de la foto aceptan los tres permisos con esos
+límites (`canSeeDocKind`).

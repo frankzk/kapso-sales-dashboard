@@ -4,6 +4,10 @@
 // costos repartidos, pagos, costo aterrizado, margen, tipo de cambio y «Pasar
 // a Costos») solo se dibuja con «Montos de compras»; sin ese permiso el
 // servidor ni siquiera lo manda (lib/compras-server.ts).
+//
+// Con solo «Recepción de compras» (MOM §45.11) se ve sin montos, se guarda la
+// recepción y se suben fotos; nada más se edita. «Leer con IA» (MOM §45.10) y
+// la foto de un producto, solo con «Compras».
 
 import { useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -14,10 +18,10 @@ import {
   DOC_KINDS,
   IMPORT_STATUSES,
   IMPORT_STATUS_LABEL,
-  MONEY_DOC_KINDS,
   MOVEMENT_EVENT_KINDS,
   PAYMENT_METHODS,
   allocationLabel,
+  canUploadDocKind,
   costKindLabel,
   costPushPlan,
   docKindLabel,
@@ -43,6 +47,7 @@ import {
   addImportItem,
   addImportPayment,
   pushImportCosts,
+  readImportDocumentWithAi,
   registerImportDocument,
   removeImportCost,
   removeImportDocument,
@@ -50,11 +55,15 @@ import {
   removeImportPayment,
   saveReception,
   setImportFx,
+  setImportItemPhoto,
   setImportStatus,
   setWarehouseReported,
   updateImportItem,
+  type AiReadState,
   type ComprasActionState,
 } from "@/app/dashboard/compras/actions";
+import { AiProposalBox } from "@/components/compras/ai-proposal";
+import { canReadWithAi } from "@/lib/compras-ia";
 import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, FIELD, Feedback, ImportHeaderForm, LABEL } from "@/components/compras/header-form";
 import { uploadImportFile } from "@/components/compras/upload";
 import { useCopyToClipboard } from "@/components/copy-button";
@@ -87,7 +96,18 @@ function Metric({ label, value, sub, tone }: { label: string; value: string; sub
   );
 }
 
-export function ImportDetailView({ detail, stores, today }: { detail: ImportDetail; stores: Store[]; today: string }) {
+export function ImportDetailView({
+  detail,
+  stores,
+  today,
+  aiEnabled = false,
+}: {
+  detail: ImportDetail;
+  stores: Store[];
+  today: string;
+  /** «Leer con IA»: con «Compras» y una clave configurada. */
+  aiEnabled?: boolean;
+}) {
   const router = useRouter();
   const [feedback, setFeedback] = useState<ComprasActionState | null>(null);
   const [pending, start] = useTransition();
@@ -104,6 +124,8 @@ export function ImportDetailView({ detail, stores, today }: { detail: ImportDeta
   const { imp, items, perms } = detail;
   const money = perms.canMoney;
   const canEdit = perms.canManage;
+  // La recepción: «Compras» o «Recepción de compras» (MOM §45.11).
+  const canCount = perms.canManage || perms.canReceive;
   const fx = imp.fx_pen_per_usd ?? null;
 
   const landed = useMemo(
@@ -211,7 +233,7 @@ export function ImportDetailView({ detail, stores, today }: { detail: ImportDeta
 
       <ItemsBox detail={detail} stores={stores} storeName={storeName} landed={landed} fx={fx} canEdit={canEdit} run={run} pending={pending} />
 
-      <ReceptionBox detail={detail} summary={reception} canEdit={canEdit} run={run} pending={pending} />
+      <ReceptionBox detail={detail} summary={reception} canEdit={canCount} run={run} pending={pending} />
 
       {money && landed && (
         <LandedBox detail={detail} landed={landed} fx={fx} canEdit={canEdit} run={run} pending={pending} />
@@ -265,7 +287,15 @@ export function ImportDetailView({ detail, stores, today }: { detail: ImportDeta
         </Box>
       )}
 
-      <DocumentsBox detail={detail} canEdit={canEdit} run={run} pending={pending} setFeedback={setFeedback} />
+      <DocumentsBox
+        detail={detail}
+        stores={stores}
+        canEdit={canEdit}
+        aiEnabled={aiEnabled && canEdit}
+        run={run}
+        pending={pending}
+        setFeedback={setFeedback}
+      />
 
       <Box title="Historial">
         {detail.events.length ? (
@@ -647,12 +677,16 @@ function ItemsBox({
           }
           return (
             <li key={it.id} className="flex flex-wrap items-start gap-3 py-2.5">
-              {it.image_path ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={`/api/compras/foto/${it.id}`} alt="" className="h-12 w-12 shrink-0 rounded-md border border-slate-200 object-cover" />
-              ) : (
-                <div className="h-12 w-12 shrink-0 rounded-md border border-dashed border-slate-200 bg-slate-50" />
-              )}
+              <div className="flex shrink-0 flex-col items-center gap-1">
+                {it.image_path ? (
+                  // `?v=`: al cambiar la foto cambia la URL y no sale la vieja de la caché.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={photoUrl(it)} alt="" className="h-12 w-12 rounded-md border border-slate-200 object-cover" />
+                ) : (
+                  <div className="h-12 w-12 rounded-md border border-dashed border-slate-200 bg-slate-50" />
+                )}
+                {editable && <ItemPhotoControls importId={detail.imp.id} item={it} run={run} pending={pending} />}
+              </div>
               <div className="min-w-0 flex-1 space-y-0.5">
                 <p className="text-sm font-medium text-slate-900">{it.name}</p>
                 <p className="text-xs text-slate-500">
@@ -709,6 +743,56 @@ function ItemsBox({
         })}
       </ul>
     </Box>
+  );
+}
+
+function photoUrl(it: ItemRow): string {
+  const v = (it.image_path ?? "").split("/").pop() ?? "";
+  return `/api/compras/foto/${it.id}${v ? `?v=${encodeURIComponent(v)}` : ""}`;
+}
+
+/** Agregar, cambiar o quitar la foto de un producto ya creado (`setImportItemPhoto`). */
+function ItemPhotoControls({ importId, item, run, pending }: { importId: string; item: ItemRow; run: Run; pending: boolean }) {
+  const [inputKey, setInputKey] = useState(0);
+  const pick = (file: File | undefined) => {
+    if (!file) return;
+    run(
+      async () => {
+        const up = await uploadImportFile(importId, "item_photo", file);
+        if ("error" in up) return { error: up.error };
+        return setImportItemPhoto(item.id, up.path);
+      },
+      () => setInputKey((k) => k + 1),
+    );
+    setInputKey((k) => k + 1);
+  };
+  return (
+    <div className="flex flex-col items-center text-[11px]">
+      <label className={cn("cursor-pointer text-brand-700 hover:underline", pending && "pointer-events-none opacity-50")}>
+        {item.image_path ? "Cambiar" : "Foto"}
+        <input
+          key={inputKey}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          className="sr-only"
+          disabled={pending}
+          onChange={(e) => pick(e.target.files?.[0])}
+          aria-label={item.image_path ? `Cambiar la foto de ${item.name}` : `Agregar foto a ${item.name}`}
+        />
+      </label>
+      {item.image_path && (
+        <button
+          type="button"
+          className="text-slate-500 hover:text-red-700 hover:underline disabled:opacity-50"
+          disabled={pending}
+          onClick={() => {
+            if (window.confirm(`¿Quitar la foto de «${item.name}»?`)) run(() => setImportItemPhoto(item.id, null));
+          }}
+        >
+          Quitar
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -1092,25 +1176,51 @@ function PaymentsBox({ detail, canEdit, run, pending }: { detail: ImportDetail; 
 
 function DocumentsBox({
   detail,
+  stores,
   canEdit,
+  aiEnabled,
   run,
   pending,
   setFeedback,
 }: {
   detail: ImportDetail;
+  stores: Store[];
   canEdit: boolean;
+  aiEnabled: boolean;
   run: Run;
   pending: boolean;
   setFeedback: (f: ComprasActionState) => void;
 }) {
-  const money = detail.perms.canMoney;
-  const kinds = DOC_KINDS.filter((k) => money || !MONEY_DOC_KINDS.includes(k.id));
-  const [kind, setKind] = useState<string>("invoice");
+  // El servidor ya mandó solo lo que se puede ver (`canSeeDocKind`); se sube
+  // lo que `canUploadDocKind` deja: con solo «Recepción de compras», fotos.
+  const uploadKinds = DOC_KINDS.filter((k) => canUploadDocKind(k.id, detail.perms));
+  const photosOnly = uploadKinds.length > 0 && uploadKinds.every((k) => k.id === "photo");
+  const [kind, setKind] = useState<string>(uploadKinds.some((k) => k.id === "invoice") ? "invoice" : (uploadKinds[0]?.id ?? "photo"));
   const [files, setFiles] = useState<File[]>([]);
   const [inputKey, setInputKey] = useState(0);
-  const groups = kinds.map((k) => ({ ...k, docs: detail.documents.filter((d) => d.kind === k.id) })).filter((g) => g.docs.length);
+  const [aiReading, setAiReading] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<Exclude<AiReadState, { error: string }> | null>(null);
+  const groups = DOC_KINDS.map((k) => ({ ...k, docs: detail.documents.filter((d) => d.kind === k.id) })).filter((g) => g.docs.length);
+  const editable = canEdit && detail.imp.status !== "cancelado";
+  const readWithAi = (documentId: string) => {
+    setAiReading(documentId);
+    setProposal(null);
+    run(async () => {
+      try {
+        const res = await readImportDocumentWithAi(documentId);
+        if ("error" in res) return { error: res.error };
+        setProposal(res);
+        return { notice: `La IA propone ${res.lines.length} producto${res.lines.length === 1 ? "" : "s"}${res.money ? ` y ${res.charges.length} cargo${res.charges.length === 1 ? "" : "s"}` : ""}. Revísalos antes de agregar.` };
+      } finally {
+        setAiReading(null);
+      }
+    });
+  };
   return (
     <Box title="Documentos">
+      {proposal && (
+        <AiProposalBox importId={detail.imp.id} stores={stores} proposal={proposal} run={run} pending={pending} onClose={() => setProposal(null)} />
+      )}
       {!groups.length && <p className="text-sm text-slate-400">Sin documentos todavía.</p>}
       {groups.map((g) => (
         <div key={g.id} className="space-y-1">
@@ -1128,6 +1238,11 @@ function DocumentsBox({
                   <a href={`/api/compras/documento/${d.id}?dl=1`} className={BTN_GHOST}>
                     Descargar
                   </a>
+                  {aiEnabled && editable && canReadWithAi(d) && (
+                    <button type="button" className={BTN_GHOST} disabled={pending} onClick={() => readWithAi(d.id)}>
+                      {aiReading === d.id ? "Leyendo…" : "Leer con IA"}
+                    </button>
+                  )}
                   {canEdit && (
                     <button
                       type="button"
@@ -1146,10 +1261,10 @@ function DocumentsBox({
           </ul>
         </div>
       ))}
-      {canEdit && (
+      {uploadKinds.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <select className={cn(FIELD, "sm:w-56")} value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Tipo de documento">
-            {kinds.map((k) => (
+            {uploadKinds.map((k) => (
               <option key={k.id} value={k.id}>
                 {k.label}
               </option>
@@ -1159,7 +1274,11 @@ function DocumentsBox({
             key={inputKey}
             type="file"
             multiple
-            accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,application/pdf,image/jpeg,image/png,image/webp"
+            accept={
+              kind === "photo"
+                ? ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                : ".pdf,.jpg,.jpeg,.png,.webp,.xlsx,application/pdf,image/jpeg,image/png,image/webp"
+            }
             className="block min-w-0 flex-1 text-sm"
             onChange={(e) => setFiles(Array.from(e.target.files ?? []).slice(0, 10))}
           />
@@ -1197,7 +1316,10 @@ function DocumentsBox({
           >
             Subir
           </button>
-          <p className="w-full text-xs text-slate-500">PDF, JPG, PNG, WEBP o XLSX, hasta 25 MB. Hasta 10 por vez.</p>
+          <p className="w-full text-xs text-slate-500">
+            {photosOnly ? "Fotos de la recepción: JPG, PNG o WEBP, hasta 25 MB. Hasta 10 por vez." : "PDF, JPG, PNG, WEBP o XLSX, hasta 25 MB. Hasta 10 por vez."}
+            {aiEnabled && editable ? " La factura comercial, la proforma y el packing list en PDF o imagen se pueden «Leer con IA»." : ""}
+          </p>
         </div>
       )}
     </Box>

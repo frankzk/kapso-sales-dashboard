@@ -12,10 +12,13 @@ import { createAdminSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission, orgsWithPermission } from "@/lib/permissions-access";
 import { resolveAgentNames } from "@/lib/agent-names";
+import type { Permission } from "@/lib/permissions";
 import {
   MONEY_EVENT_KINDS,
   MOVEMENT_EVENT_KINDS,
-  isMoneyDoc,
+  canSeeDocKind,
+  canViewCompras,
+  isReceiveOnly,
   isUuid,
   type Allocation,
   type CostKind,
@@ -23,6 +26,9 @@ import {
   type ImportStatus,
 } from "@/lib/compras";
 import type { ReportImport } from "@/lib/compras-reportes";
+import type { CatalogEntry } from "@/lib/compras-ia";
+import { resolveVisionCreds } from "@/lib/vision";
+import { storeVisionCreds } from "@/lib/store-settings";
 
 export const IMPORT_COLS: string =
   "id,org_id,code,supplier_id,origin,platform_order,transport,carrier,tracking_number,tracking_url,ordered_on,eta,arrived_on,status,reported_to_warehouse_at,reported_by,notes,created_by,created_at,updated_at";
@@ -132,20 +138,30 @@ export interface EventRow {
   at: string;
 }
 
+/**
+ * Los permisos que abren Compras (lista y detalle). Una vendedora con alguno
+ * —la bodega con el rol «Almacén» trae «Recepción de compras»— entra aunque el
+ * resto del panel completo no sea para ella (MOM §45.11).
+ */
+export const COMPRAS_VIEW_PERMISSIONS: readonly Permission[] = ["purchases.manage", "purchases.money", "purchases.receive"];
+
 export interface ComprasPerms {
   canManage: boolean;
   canMoney: boolean;
+  /** «Recepción de compras» (MOM §45.11): ver sin montos, recepción y fotos. */
+  canReceive: boolean;
   /** «Pasar a Costos»: `purchases.money` + `costs.manage`. */
   canPushCosts: boolean;
 }
 
 export async function comprasPerms(orgId: string): Promise<ComprasPerms> {
-  const [canManage, canMoney, canCosts] = await Promise.all([
+  const [canManage, canMoney, canReceive, canCosts] = await Promise.all([
     hasOrgPermission(orgId, "purchases.manage"),
     hasOrgPermission(orgId, "purchases.money"),
+    hasOrgPermission(orgId, "purchases.receive"),
     hasOrgPermission(orgId, "costs.manage"),
   ]);
-  return { canManage, canMoney, canPushCosts: canMoney && canCosts };
+  return { canManage, canMoney, canReceive, canPushCosts: canMoney && canCosts };
 }
 
 function num(v: unknown): number {
@@ -187,7 +203,8 @@ export function normalizeImport(row: Record<string, unknown>, canMoney: boolean)
 
 /**
  * La importación y lo que la persona puede hacer en su organización. Null si
- * no existe o si no tiene ni `purchases.manage` ni `purchases.money` allí.
+ * no existe o si no tiene allí ni `purchases.manage`, ni `purchases.money`, ni
+ * `purchases.receive`.
  */
 export async function loadImportAccess(
   importId: string,
@@ -200,7 +217,7 @@ export async function loadImportAccess(
   if (!data) return null;
   const raw = data as unknown as Record<string, unknown>;
   const perms = await comprasPerms(String(raw.org_id));
-  if (!perms.canManage && !perms.canMoney) return null;
+  if (!canViewCompras(perms)) return null;
   // El tipo de cambio es dinero: se pide a la base solo con el permiso.
   if (perms.canMoney) {
     const { data: fx } = await admin.from("imports").select("fx_pen_per_usd").eq("id", importId).maybeSingle();
@@ -321,6 +338,9 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
   if (!access) return null;
   const { imp, perms } = access;
   const money = perms.canMoney;
+  // Solo «Recepción de compras» (MOM §45.11): ni la lista de proveedores (no
+  // edita la cabecera) ni los datos de contacto del proveedor.
+  const receiveOnly = isReceiveOnly(perms);
   const [items, docs, costs, payments, events, suppliers] = await Promise.all([
     admin
       .from("import_items")
@@ -340,7 +360,11 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
       ? admin.from("import_payments").select("id,amount_usd,paid_on,method,note,document_id,created_at").eq("import_id", imp.id).order("paid_on", { ascending: true })
       : Promise.resolve({ data: null }),
     admin.from("import_events").select("id,kind,status,note,by_user,at").eq("import_id", imp.id).order("at", { ascending: false }).limit(300),
-    loadSuppliers(imp.org_id, admin),
+    receiveOnly
+      ? imp.supplier_id
+        ? admin.from("import_suppliers").select(SUPPLIER_COLS).eq("id", imp.supplier_id).eq("org_id", imp.org_id).then((r) => (r.data ?? []) as unknown as SupplierRow[])
+        : Promise.resolve([] as SupplierRow[])
+      : loadSuppliers(imp.org_id, admin),
   ]);
   const eventRows = ((events.data ?? []) as Omit<EventRow, "by_name">[]).filter(
     (e) => money || !MONEY_EVENT_KINDS.includes(e.kind),
@@ -349,12 +373,16 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
   for (const e of eventRows) if (e.by_user) userIds.add(e.by_user);
   if (imp.reported_by) userIds.add(imp.reported_by);
   const names = userIds.size ? await resolveAgentNames(userIds, admin).catch(() => ({}) as Record<string, string>) : {};
+  const supplier = suppliers.find((s) => s.id === imp.supplier_id) ?? null;
   return {
     imp,
-    supplier: suppliers.find((s) => s.id === imp.supplier_id) ?? null,
+    supplier:
+      supplier && receiveOnly
+        ? { ...supplier, whatsapp: null, notes: null, contact_name: null, email: null, payment_terms: null }
+        : supplier,
     items: ((items.data ?? []) as unknown as Record<string, unknown>[]).map((r) => normalizeItem(r, money)),
     documents: ((docs.data ?? []) as DocumentRow[])
-      .filter((d) => money || !isMoneyDoc(d.kind))
+      .filter((d) => canSeeDocKind(d.kind, perms))
       .map((d) => ({ ...d, size_bytes: num(d.size_bytes) })),
     costs: costs.data
       ? (costs.data as CostRow[]).map((c) => ({ ...c, amount_usd: num(c.amount_usd) }))
@@ -363,7 +391,7 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
       ? (payments.data as PaymentRow[]).map((p) => ({ ...p, amount_usd: num(p.amount_usd) }))
       : null,
     events: eventRows.map((e) => ({ ...e, by_name: e.by_user ? (names[e.by_user] ?? null) : null })),
-    suppliers,
+    suppliers: receiveOnly ? [] : suppliers,
     perms,
     reportedByName: imp.reported_by ? (names[imp.reported_by] ?? null) : null,
   };
@@ -375,19 +403,21 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
 
 /**
  * La organización de Compras que se mira: la pedida (`?org=`) si la persona
- * tiene allí el permiso, si no la primera. `need`: «any» = «Compras» o «Montos
- * de compras» (ver la sección y Proveedores); «money» = «Montos de compras»
- * (Reportes).
+ * tiene allí el permiso, si no la primera. `need`: «view» = cualquiera de los
+ * tres, también «Recepción de compras» (la lista de importaciones, MOM
+ * §45.11); «any» = «Compras» o «Montos de compras» (Proveedores); «money» =
+ * «Montos de compras» (Reportes).
  */
 export async function resolveComprasOrg(
   requested: string | null | undefined,
-  need: "any" | "money" = "any",
+  need: "view" | "any" | "money" = "any",
 ): Promise<{ orgId: string | null; allowed: string[] }> {
-  const [manageOrgs, moneyOrgs] = await Promise.all([
+  const [manageOrgs, moneyOrgs, receiveOrgs] = await Promise.all([
     need === "money" ? Promise.resolve([]) : orgsWithPermission("purchases.manage"),
     orgsWithPermission("purchases.money"),
+    need === "view" ? orgsWithPermission("purchases.receive") : Promise.resolve([]),
   ]);
-  const allowed = [...new Set([...manageOrgs, ...moneyOrgs].map((m) => m.org_id))];
+  const allowed = [...new Set([...manageOrgs, ...moneyOrgs, ...receiveOrgs].map((m) => m.org_id))];
   const orgId = requested && allowed.includes(requested) ? requested : (allowed[0] ?? null);
   return { orgId, allowed };
 }
@@ -506,4 +536,57 @@ export async function loadReportImports(
     byId.get(String(p.import_id))?.payments.push({ amountUsd: num(p.amount_usd), paidOn: String(p.paid_on) });
   }
   return [...byId.values()];
+}
+
+// ---------------------------------------------------------------------------
+// «Leer con IA» (MOM §45.10)
+// ---------------------------------------------------------------------------
+
+/** Tope de filas de Costos que se leen para sugerir SKU. */
+const CATALOG_COST_ROWS = 5000;
+
+/**
+ * Los SKU que la organización ya conoce, para sugerir la coincidencia de una
+ * línea leída con IA: los de Costos de productos (con su tienda) y los vistos
+ * en los pedidos de sus tiendas (`org_shopify_products`, 0094). Solo SKU,
+ * nombre y tienda: ningún costo.
+ */
+export async function loadSkuCatalog(orgId: string, admin: SupabaseClient = createAdminSupabase()): Promise<CatalogEntry[]> {
+  const [costs, shop] = await Promise.all([
+    admin.from("product_costs").select("sku,product_name,store_id").eq("org_id", orgId).limit(CATALOG_COST_ROWS),
+    admin.rpc("org_shopify_products", { p_org_id: orgId }),
+  ]);
+  const out: CatalogEntry[] = [];
+  for (const r of ((costs.data ?? []) as { sku: string | null; product_name: string | null; store_id: string | null }[])) {
+    if (r.sku) out.push({ sku: r.sku, name: r.product_name, storeId: r.store_id ?? null });
+  }
+  if (!shop.error) {
+    for (const r of ((shop.data ?? []) as { sku: string | null; product_name: string | null }[])) {
+      if (r.sku) out.push({ sku: r.sku, name: r.product_name, storeId: null });
+    }
+  }
+  return out;
+}
+
+/**
+ * La clave de IA para Compras, que es de la organización y no de una tienda:
+ * la del entorno; si no hay, la primera tienda de la organización con clave
+ * propia (0052). Modelo y base, los de lib/vision.ts.
+ */
+export async function comprasVisionCreds(
+  orgId: string,
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<{ apiKey: string; model: string; apiBase: string }> {
+  const envCreds = resolveVisionCreds();
+  if (envCreds.apiKey) return envCreds;
+  const { data } = await admin
+    .from("stores")
+    .select("id")
+    .eq("org_id", orgId)
+    .not("anthropic_api_key_enc", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  const storeId = ((data ?? []) as { id: string }[])[0]?.id;
+  if (!storeId) return envCreds;
+  return resolveVisionCreds(await storeVisionCreds(admin, storeId));
 }

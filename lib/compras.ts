@@ -133,6 +133,52 @@ export function isMoneyDoc(kind: string): boolean {
   return (MONEY_DOC_KINDS as readonly string[]).includes(kind);
 }
 
+/**
+ * Lo que ve quien solo tiene «Recepción de compras» (MOM §45.11): la factura
+ * comercial y el packing list para contar, y las fotos (las que sube).
+ */
+export const RECEIVE_DOC_KINDS: readonly DocKind[] = ["invoice", "packing", "photo"];
+/** Lo único que sube quien solo tiene «Recepción de compras». */
+export const RECEIVE_UPLOAD_KINDS: readonly DocKind[] = ["photo"];
+
+/** Los permisos de Compras de una persona en una organización. */
+export interface ComprasAccess {
+  canManage: boolean;
+  canMoney: boolean;
+  /** «Recepción de compras» (`purchases.receive`, MOM §45.11). */
+  canReceive: boolean;
+}
+
+/** ¿Abre Compras (lista y detalle)? Cualquiera de los tres permisos. */
+export function canViewCompras(p: ComprasAccess): boolean {
+  return p.canManage || p.canMoney || p.canReceive;
+}
+
+/** Solo «Recepción de compras»: sin «Compras» ni «Montos de compras». */
+export function isReceiveOnly(p: ComprasAccess): boolean {
+  return p.canReceive && !p.canManage && !p.canMoney;
+}
+
+/**
+ * ¿Ve (y descarga) un documento de este tipo? Proforma y comprobante, solo con
+ * «Montos»; el resto, con «Compras» o «Montos»; con solo «Recepción», la
+ * factura comercial, el packing list y las fotos.
+ */
+export function canSeeDocKind(kind: string, p: ComprasAccess): boolean {
+  if (isMoneyDoc(kind)) return p.canMoney;
+  if (p.canManage || p.canMoney) return true;
+  return p.canReceive && (RECEIVE_DOC_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * ¿Sube un documento de este tipo? Con «Compras», los que no tienen montos (y
+ * con «Montos» además, todos); con «Recepción de compras», solo fotos.
+ */
+export function canUploadDocKind(kind: string, p: ComprasAccess): boolean {
+  if (p.canManage) return !isMoneyDoc(kind) || p.canMoney;
+  return p.canReceive && (RECEIVE_UPLOAD_KINDS as readonly string[]).includes(kind);
+}
+
 export const EVENT_KINDS = ["status", "nota", "producto", "dinero", "documento", "recepcion", "bodega", "costos", "datos"] as const;
 export type ImportEventKind = (typeof EVENT_KINDS)[number];
 /** Cuentan como novedad del envío (para «Sin novedades»). */
@@ -301,6 +347,11 @@ export function nextImportCode(existing: readonly string[], year: number): strin
 /** Redondeo a 2 decimales (lo que se guarda en soles). */
 export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/** Redondeo a 4 decimales (costos por unidad en USD). */
+export function round4(n: number): number {
+  return Math.round((n + Number.EPSILON) * 10_000) / 10_000;
 }
 
 /** Un número escrito por una persona: «1,234.50», «12,5», «US$ 30». Null si no es un número. */

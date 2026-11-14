@@ -2,8 +2,10 @@
 //   GET /api/compras/foto/<producto>
 //
 // Se entrega el archivo desde el servidor (no un enlace a Storage): la CSP del
-// panel solo deja cargar imágenes del mismo origen. Pide `purchases.manage` o
-// `purchases.money` EN la organización de la importación.
+// panel solo deja cargar imágenes del mismo origen. Pide `purchases.manage`,
+// `purchases.money` o `purchases.receive` (MOM §45.11) EN la organización de
+// la importación. La URL lleva `?v=` con el archivo: al cambiar la foto cambia
+// la URL y el navegador no muestra la vieja de su caché.
 
 import { NextResponse } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
@@ -26,11 +28,12 @@ export async function GET(_req: Request, context: { params: Promise<{ id: string
   const { data } = await admin.from("import_items").select("org_id,image_path").eq("id", id).maybeSingle();
   const item = data as { org_id: string; image_path: string | null } | null;
   if (!item?.image_path) return NOT_FOUND();
-  const [canManage, canMoney] = await Promise.all([
+  const [canManage, canMoney, canReceive] = await Promise.all([
     hasOrgPermission(item.org_id, "purchases.manage"),
     hasOrgPermission(item.org_id, "purchases.money"),
+    hasOrgPermission(item.org_id, "purchases.receive"),
   ]);
-  if (!canManage && !canMoney) return NOT_FOUND();
+  if (!canManage && !canMoney && !canReceive) return NOT_FOUND();
 
   const { data: file, error } = await admin.storage.from(IMPORT_FILES_BUCKET).download(item.image_path);
   if (error || !file) return NOT_FOUND();

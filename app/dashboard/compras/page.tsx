@@ -2,12 +2,20 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUserRoleSummary } from "@/lib/access";
+import { getMasterPermissions } from "@/lib/permissions-access";
 import { Card, EmptyState, cn } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { NewImportButton } from "@/components/compras/header-form";
 import { fmtInt, fmtUsd } from "@/components/compras/format";
 import { ComprasSubnav } from "@/components/compras/subnav";
-import { comprasPerms, loadImportList, loadSuppliers, resolveComprasOrg, type ImportListRow } from "@/lib/compras-server";
+import {
+  COMPRAS_VIEW_PERMISSIONS,
+  comprasPerms,
+  loadImportList,
+  loadSuppliers,
+  resolveComprasOrg,
+  type ImportListRow,
+} from "@/lib/compras-server";
 import {
   IMPORT_STATUS_LABEL,
   IMPORT_TABS,
@@ -35,11 +43,13 @@ export default function ComprasPage({ searchParams }: { searchParams: SearchPara
 }
 
 async function ComprasContent({ searchParams }: { searchParams: SearchParams }) {
-  const [{ isVendedoraOnly }, sp] = await Promise.all([getUserRoleSummary(), searchParams]);
-  if (isVendedoraOnly) redirect("/dashboard/leads");
+  const [{ isVendedoraOnly }, sp, master] = await Promise.all([getUserRoleSummary(), searchParams, getMasterPermissions()]);
+  // La vendedora con «Recepción de compras» (rol Almacén, MOM §45.11) sí entra.
+  if (isVendedoraOnly && !COMPRAS_VIEW_PERMISSIONS.some((p) => master.can(p))) redirect("/dashboard/leads");
 
-  // La organización donde tiene «Compras» o «Montos de compras» (MOM §16, §45).
-  const { orgId, allowed } = await resolveComprasOrg(sp.org);
+  // La organización donde tiene «Compras», «Montos de compras» o «Recepción de
+  // compras» (MOM §16, §45, §45.11).
+  const { orgId, allowed } = await resolveComprasOrg(sp.org, "view");
   if (!orgId) {
     return (
       <EmptyState title="Compras">

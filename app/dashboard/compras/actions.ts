@@ -11,6 +11,13 @@
 //     comprobante). Sin él esos campos NO se leen ni se escriben: no basta con
 //     esconderlos en la pantalla (`cleanItem(…, canMoney)`).
 //   - «Pasar a Costos»: `purchases.money` y `costs.manage`.
+//   - `purchases.receive` («Recepción de compras», MOM §45.11): SOLO guardar
+//     la recepción y subir fotos (tipo «Foto»). Esas dos aceptan
+//     `purchases.manage` o `purchases.receive`; todo lo demás sigue pidiendo
+//     `purchases.manage` (y `purchases.money` lo de dinero).
+//   - «Leer con IA» (MOM §45.10): lee y PROPONE; nada se guarda hasta
+//     «Agregar seleccionados», que pasa por las mismas reglas y los mismos
+//     hechos que agregar un producto o un costo a mano.
 //
 // Cada hecho queda en `import_events` (append-only). Los de dinero van con
 // `kind = 'dinero'` y solo los ve quien tiene `purchases.money`.
@@ -21,11 +28,21 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
-import { ITEM_COLS, ITEM_MONEY_COLS, loadImportAccess, normalizeItem, type ImportRow } from "@/lib/compras-server";
+import {
+  ITEM_COLS,
+  ITEM_MONEY_COLS,
+  comprasVisionCreds,
+  loadImportAccess,
+  loadSkuCatalog,
+  normalizeItem,
+  type ComprasPerms,
+  type ImportRow,
+} from "@/lib/compras-server";
 import {
   IMPORT_FILES_BUCKET,
   IMPORT_STATUS_LABEL,
   allocationLabel,
+  canUploadDocKind,
   checkImportFile,
   cleanCost,
   cleanFx,
@@ -62,9 +79,24 @@ import {
   type CostInput,
   type PaymentInput,
   type SupplierInput,
+  type ItemValue,
+  type CostKind,
+  type Allocation,
   DOC_KINDS,
 } from "@/lib/compras";
 import { insertProductCostPeriod } from "@/lib/product-cost-periods";
+import {
+  aiConfirmToInputs,
+  aiReadEventNote,
+  buildCatalog,
+  canReadWithAi,
+  checkAiFile,
+  matchCatalog,
+  stripAiMoney,
+  type AiConfirmInput,
+  type AiLine,
+} from "@/lib/compras-ia";
+import { readPurchaseDocument } from "@/lib/compras-ia-vision";
 
 export interface ComprasActionState {
   error?: string;
@@ -82,16 +114,21 @@ function revalidate(importId?: string) {
 
 const usd = (n: number) => `US$ ${n.toFixed(2)}`;
 
-type Need = { manage?: boolean; money?: boolean };
+/**
+ * `manage`: «Compras». `money`: «Montos de compras». `receive`: «Compras» o
+ * «Recepción de compras» (solo la recepción y las fotos, MOM §45.11).
+ */
+type Need = { manage?: boolean; money?: boolean; receive?: boolean };
 
-type Access = { userId: string; imp: ImportRow; canMoney: boolean; canPushCosts: boolean };
+type Access = { userId: string; imp: ImportRow; canMoney: boolean; canPushCosts: boolean; perms: ComprasPerms };
 
 async function authorize(admin: SupabaseClient, importId: string, need: Need): Promise<Access | { error: string }> {
   const a = await loadImportAccess(importId, admin);
   if (!a) return { error: "Sin acceso a esta importación." };
   if (need.manage && !a.perms.canManage) return { error: "Tu rol no permite editar compras." };
+  if (need.receive && !a.perms.canManage && !a.perms.canReceive) return { error: "Tu rol no permite registrar la recepción." };
   if (need.money && !a.perms.canMoney) return { error: "Hace falta el permiso «Montos de compras»." };
-  return { userId: a.userId, imp: a.imp, canMoney: a.perms.canMoney, canPushCosts: a.perms.canPushCosts };
+  return { userId: a.userId, imp: a.imp, canMoney: a.perms.canMoney, canPushCosts: a.perms.canPushCosts, perms: a.perms };
 }
 
 async function addEvent(
@@ -363,21 +400,41 @@ export async function addImportItem(importId: string, input: ItemInput & { image
     const file = await checkUploadedFile(admin, imagePath, "item_photo", null);
     if ("error" in file) return file;
   }
-  const { data: existing } = await admin.from("import_items").select("position").eq("import_id", a.imp.id);
-  const position = ((existing ?? []) as { position: number }[]).reduce((m, r) => Math.max(m, Number(r.position) || 0), 0) + 1;
-  const { error } = await admin.from("import_items").insert({
-    id: randomUUID(),
-    org_id: a.imp.org_id,
-    import_id: a.imp.id,
-    ...clean.value,
-    image_path: imagePath,
-    position,
-  });
-  if (error) return { error: error.message };
-  const v = clean.value;
-  await addEvent(admin, a.imp, a.userId, "producto", `Producto agregado: ${v.qty} × ${v.name}${v.sku ? ` (SKU ${v.sku})` : ""}.`);
+  const inserted = await insertImportItem(admin, a, clean.value, imagePath);
+  if ("error" in inserted) return inserted;
   revalidate(a.imp.id);
   return { notice: "Producto agregado." };
+}
+
+/** La siguiente posición de la lista de productos. */
+async function nextItemPosition(admin: SupabaseClient, importId: string): Promise<number> {
+  const { data: existing } = await admin.from("import_items").select("position").eq("import_id", importId);
+  return ((existing ?? []) as { position: number }[]).reduce((m, r) => Math.max(m, Number(r.position) || 0), 0) + 1;
+}
+
+/**
+ * Inserta un producto YA validado (`cleanItem`) y deja su hecho en el
+ * historial. Lo usan «Agregar producto» y «Leer con IA».
+ */
+async function insertImportItem(
+  admin: SupabaseClient,
+  a: Access,
+  v: ItemValue,
+  imagePath: string | null,
+  position?: number,
+): Promise<{ id: string } | { error: string }> {
+  const id = randomUUID();
+  const { error } = await admin.from("import_items").insert({
+    id,
+    org_id: a.imp.org_id,
+    import_id: a.imp.id,
+    ...v,
+    image_path: imagePath,
+    position: position ?? (await nextItemPosition(admin, a.imp.id)),
+  });
+  if (error) return { error: error.message };
+  await addEvent(admin, a.imp, a.userId, "producto", `Producto agregado: ${v.qty} × ${v.name}${v.sku ? ` (SKU ${v.sku})` : ""}.`);
+  return { id };
 }
 
 async function itemImport(admin: SupabaseClient, itemId: string): Promise<{ import_id: string; name: string; image_path: string | null } | null> {
@@ -435,6 +492,43 @@ export async function removeImportItem(itemId: string): Promise<ComprasActionSta
   };
 }
 
+/**
+ * Agregar, cambiar o quitar la foto de un producto ya creado (MOM §45.1). La
+ * foto nueva se sube antes con `startImportUpload(…, "item_photo")`; aquí se
+ * comprueba que la ruta sea de esta importación y que el archivo sea una
+ * imagen (tipo y tamaño de Storage), y la anterior se borra del bucket.
+ * `imagePath` null = quitarla.
+ */
+export async function setImportItemPhoto(itemId: string, imagePath: string | null): Promise<ComprasActionState> {
+  const admin = createAdminSupabase();
+  const item = await itemImport(admin, itemId);
+  if (!item) return { error: "Ese producto ya no está." };
+  const a = await authorize(admin, item.import_id, { manage: true });
+  if ("error" in a) return a;
+  if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
+  const next = (imagePath ?? "").trim() || null;
+  if (!next && !item.image_path) return { notice: "El producto no tiene foto." };
+  if (next) {
+    if (next === item.image_path) return { notice: "Sin cambios." };
+    if (!isImportFilePath(next, a.imp.org_id, a.imp.id, "items")) return { error: "La foto no es de esta importación." };
+    const { data: used } = await admin.from("import_items").select("id").eq("import_id", a.imp.id).eq("image_path", next).limit(1);
+    if (((used ?? []) as unknown[]).length) return { error: "Esa foto ya es de otro producto." };
+    const file = await checkUploadedFile(admin, next, "item_photo", null);
+    if ("error" in file) return file;
+  }
+  const { error } = await admin.from("import_items").update({ image_path: next }).eq("id", itemId).eq("import_id", a.imp.id);
+  if (error) {
+    if (next) await admin.storage.from(IMPORT_FILES_BUCKET).remove([next]).catch(() => {});
+    return { error: error.message };
+  }
+  // La anterior ya no la usa nadie: fuera del bucket.
+  if (item.image_path) await admin.storage.from(IMPORT_FILES_BUCKET).remove([item.image_path]).catch(() => {});
+  const what = next ? (item.image_path ? "Foto cambiada" : "Foto agregada") : "Foto quitada";
+  await addEvent(admin, a.imp, a.userId, "producto", `${what}: ${item.name}.`);
+  revalidate(a.imp.id);
+  return { notice: `${what}.` };
+}
+
 // ---------------------------------------------------------------------------
 // Recepción en la bodega de Lima
 // ---------------------------------------------------------------------------
@@ -445,7 +539,9 @@ export async function removeImportItem(itemId: string): Promise<ComprasActionSta
  */
 export async function saveReception(importId: string, lines: ReceptionLineInput[]): Promise<ComprasActionState> {
   const admin = createAdminSupabase();
-  const a = await authorize(admin, importId, { manage: true });
+  // «Compras» o «Recepción de compras» (MOM §45.11): la bodega guarda lo que
+  // contó, y el paso a «Recibido» de abajo es el único cambio de estado que hace.
+  const a = await authorize(admin, importId, { receive: true });
   if ("error" in a) return a;
   if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
   const { data: rows } = await admin.from("import_items").select("id,name,qty").eq("import_id", a.imp.id);
@@ -501,15 +597,29 @@ export async function addImportCost(importId: string, input: CostInput): Promise
   const { data: rows } = await admin.from("import_items").select("id").eq("import_id", a.imp.id);
   const clean = cleanCost(input, ((rows ?? []) as { id: string }[]).map((r) => r.id));
   if ("error" in clean) return clean;
+  const inserted = await insertImportCost(admin, a, clean.value);
+  if ("error" in inserted) return inserted;
+  revalidate(a.imp.id);
+  return { notice: "Costo agregado." };
+}
+
+type CostValue = { kind: CostKind; label: string; amount_usd: number; allocation: Allocation; item_id: string | null };
+
+/**
+ * Inserta un costo YA validado (`cleanCost`) con su hecho de dinero. Lo usan
+ * «Agregar costo» y «Leer con IA». Quien llama ya pidió `money: true`.
+ */
+async function insertImportCost(admin: SupabaseClient, a: Access, v: CostValue): Promise<{ id: string } | { error: string }> {
+  if (!a.canMoney) return { error: "Hace falta el permiso «Montos de compras»." };
+  const id = randomUUID();
   const { error } = await admin.from("import_costs").insert({
-    id: randomUUID(),
+    id,
     org_id: a.imp.org_id,
     import_id: a.imp.id,
-    ...clean.value,
+    ...v,
     created_by: a.userId,
   });
   if (error) return { error: error.message };
-  const v = clean.value;
   await addEvent(
     admin,
     a.imp,
@@ -517,8 +627,7 @@ export async function addImportCost(importId: string, input: CostInput): Promise
     "dinero",
     `Costo agregado: ${costKindLabel(v.kind)} · ${v.label} · ${usd(v.amount_usd)} · ${allocationLabel(v.allocation).toLowerCase()}.`,
   );
-  revalidate(a.imp.id);
-  return { notice: "Costo agregado." };
+  return { id };
 }
 
 export async function removeImportCost(costId: string): Promise<ComprasActionState> {
@@ -581,6 +690,17 @@ function isDocKind(kind: string): kind is DocKind {
 }
 
 /**
+ * ¿Sube (y registra) este tipo de documento? Con «Compras», los que no tienen
+ * montos, y con «Montos» además la proforma y el comprobante; con «Recepción
+ * de compras», solo fotos (MOM §45.11). Null = sí; si no, el motivo.
+ */
+function uploadDenied(kind: DocKind, perms: ComprasPerms): string | null {
+  if (canUploadDocKind(kind, perms)) return null;
+  if (perms.canManage && isMoneyDoc(kind)) return "Hace falta el permiso «Montos de compras».";
+  return perms.canReceive ? "Con «Recepción de compras» solo se suben fotos." : "Tu rol no permite editar compras.";
+}
+
+/**
  * Prepara la subida: el servidor decide la ruta (`<org>/<importación>/docs|items/<uuid>.<ext>`)
  * y devuelve un enlace firmado; el navegador sube directo a Storage.
  */
@@ -591,8 +711,14 @@ export async function startImportUpload(
   const kind = input.kind === "item_photo" ? "item_photo" : isDocKind(input.kind) ? input.kind : null;
   if (!kind) return { error: "Tipo de documento inválido." };
   const admin = createAdminSupabase();
-  const a = await authorize(admin, importId, { manage: true, money: kind !== "item_photo" && isMoneyDoc(kind) });
+  // La foto de un producto es de «Compras»; un documento, según su tipo
+  // (`uploadDenied`): la foto de la recepción también con «Recepción de compras».
+  const a = await authorize(admin, importId, kind === "item_photo" ? { manage: true } : { receive: kind === "photo" });
   if ("error" in a) return a;
+  if (kind !== "item_photo") {
+    const denied = uploadDenied(kind, a.perms);
+    if (denied) return { error: denied };
+  }
   const check = checkImportFile(kind, { contentType: input.contentType, filename: input.filename, size: Number(input.size) });
   if ("error" in check) return check;
   await admin.storage.createBucket(IMPORT_FILES_BUCKET, { public: false }).catch(() => {});
@@ -611,8 +737,10 @@ export async function registerImportDocument(
   if (!isDocKind(input.kind)) return { error: "Tipo de documento inválido." };
   const kind = input.kind;
   const admin = createAdminSupabase();
-  const a = await authorize(admin, importId, { manage: true, money: isMoneyDoc(kind) });
+  const a = await authorize(admin, importId, { receive: kind === "photo" });
   if ("error" in a) return a;
+  const denied = uploadDenied(kind, a.perms);
+  if (denied) return { error: denied };
   if (!isImportFilePath(input.path, a.imp.org_id, a.imp.id, "docs")) return { error: "El archivo no es de esta importación." };
   const filename = String(input.filename ?? "").replace(/[\u0000-\u001f/\\]/g, "_").trim().slice(0, 200) || null;
   const file = await checkUploadedFile(admin, input.path, kind, filename);
@@ -780,4 +908,162 @@ export async function pushImportCosts(importId: string): Promise<ComprasActionSt
     : { error: keptNote.trim() };
   if (!pushed.length) return { notice: "Ya se pasó a Costos." };
   return { notice: `Listo: ${pushed.length} costo${pushed.length === 1 ? "" : "s"} en Costos de productos desde el ${formatDmy(effectiveFrom)}.` };
+}
+
+// ---------------------------------------------------------------------------
+// «Leer con IA» (MOM §45.10)
+// ---------------------------------------------------------------------------
+
+/** Una línea propuesta, con el SKU conocido que coincide (si coincide). */
+export type AiProposalLine = AiLine & { match: { sku: string; name: string | null; storeId: string | null } | null };
+
+export type AiReadState =
+  | { error: string }
+  | {
+      documentId: string;
+      filename: string | null;
+      /** Sin «Montos de compras»: null, y ni precios ni cargos. */
+      currency: string | null;
+      lines: AiProposalLine[];
+      charges: { kind: CostKind; label: string; amount: number }[];
+      /** Filas que la IA devolvió sin nombre, sin cantidad o sin monto. */
+      dropped: number;
+      /** Productos que la importación ya tenía (lo leído se agrega aparte). */
+      existingItems: number;
+      money: boolean;
+    };
+
+type AiDoc = { id: string; import_id: string; kind: string; storage_path: string; filename: string | null; mime: string; size_bytes: number };
+
+async function loadAiDoc(admin: SupabaseClient, documentId: string): Promise<AiDoc | null> {
+  if (!isUuid(documentId)) return null;
+  const { data } = await admin
+    .from("import_documents")
+    .select("id,import_id,kind,storage_path,filename,mime,size_bytes")
+    .eq("id", documentId)
+    .maybeSingle();
+  const doc = data as AiDoc | null;
+  return doc ? { ...doc, size_bytes: Number(doc.size_bytes) || 0 } : null;
+}
+
+/**
+ * Lee con IA una factura comercial, proforma o packing list ya subido y
+ * devuelve la PROPUESTA: no escribe nada (ni filas ni hechos). Pide «Compras»
+ * (y «Montos» si es la proforma); sin «Montos de compras» la propuesta sale
+ * sin precios, sin cargos y sin moneda, quitados aquí, antes de llegar al
+ * navegador. Sugiere el SKU y la tienda conocidos de cada línea (§6.9 de la
+ * referencia).
+ */
+export async function readImportDocumentWithAi(documentId: string): Promise<AiReadState> {
+  const admin = createAdminSupabase();
+  const doc = await loadAiDoc(admin, documentId);
+  if (!doc) return { error: "Ese documento ya no está." };
+  const a = await authorize(admin, doc.import_id, { manage: true, money: isMoneyDoc(doc.kind) });
+  if ("error" in a) return a;
+  if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
+  if (!canReadWithAi(doc)) return { error: "«Leer con IA» es para la factura comercial, la proforma o el packing list en PDF o imagen." };
+  const fileCheck = checkAiFile({ kind: doc.kind, mime: doc.mime, size: doc.size_bytes });
+  if ("error" in fileCheck) return fileCheck;
+
+  const creds = await comprasVisionCreds(a.imp.org_id, admin);
+  if (!creds.apiKey) return { error: "No hay una clave de IA configurada para leer documentos." };
+  const { data: blob, error: downloadError } = await admin.storage.from(IMPORT_FILES_BUCKET).download(doc.storage_path);
+  if (downloadError || !blob) return { error: "No se pudo abrir el archivo. Vuelve a subirlo." };
+  const bytes = Buffer.from(await blob.arrayBuffer());
+  // El tamaño real, no el que se anotó al subirlo.
+  const realCheck = checkAiFile({ kind: doc.kind, mime: doc.mime, size: bytes.length });
+  if ("error" in realCheck) return realCheck;
+
+  const read = await readPurchaseDocument(bytes.toString("base64"), doc.mime, creds);
+  if (!read.ok) return { error: read.error };
+  const proposal = a.canMoney ? read.proposal : stripAiMoney(read.proposal);
+
+  const [catalogRows, { data: existing }] = await Promise.all([
+    loadSkuCatalog(a.imp.org_id, admin).catch(() => []),
+    admin.from("import_items").select("id").eq("import_id", a.imp.id),
+  ]);
+  const catalog = buildCatalog(catalogRows);
+  return {
+    documentId: doc.id,
+    filename: doc.filename,
+    currency: proposal.currency,
+    lines: proposal.lines.map((l) => {
+      const m = matchCatalog(l, catalog);
+      return { ...l, match: m ? { sku: m.sku, name: m.name, storeId: m.storeId } : null };
+    }),
+    charges: proposal.charges,
+    dropped: proposal.dropped,
+    existingItems: ((existing ?? []) as unknown[]).length,
+    money: a.canMoney,
+  };
+}
+
+/**
+ * «Agregar seleccionados»: lo que la persona revisó y dejó marcado en la
+ * propuesta. Todo se valida ANTES de escribir nada, con las mismas reglas que
+ * a mano (`cleanItem`, `cleanCost`), y cada fila deja el mismo hecho que
+ * «Agregar producto» / «Agregar costo»; al final, «Leído con IA: …». Sin
+ * «Montos de compras» no se leen precios, cargos ni tipo de cambio (ver
+ * `aiConfirmToInputs`). Con «Montos», si el documento no está en USD hace
+ * falta «1 USD = X <moneda>»: el precio por unidad pasa a USD a 4 decimales y
+ * los cargos a 2.
+ */
+export async function addAiProposalRows(importId: string, input: AiConfirmInput): Promise<ComprasActionState> {
+  const admin = createAdminSupabase();
+  const a = await authorize(admin, importId, { manage: true });
+  if ("error" in a) return a;
+  if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
+  const doc = await loadAiDoc(admin, String(input.documentId ?? ""));
+  if (!doc || doc.import_id !== a.imp.id || !canReadWithAi(doc)) return { error: "El documento leído no es de esta importación." };
+  if (isMoneyDoc(doc.kind) && !a.canMoney) return { error: "Hace falta el permiso «Montos de compras»." };
+
+  const conv = aiConfirmToInputs(input, a.canMoney);
+  if ("error" in conv) return conv;
+
+  const items: ItemValue[] = [];
+  for (const [i, row] of conv.items.entries()) {
+    const clean = cleanItem(row, a.canMoney);
+    if ("error" in clean) return { error: `Producto ${i + 1}: ${clean.error}` };
+    items.push(clean.value);
+  }
+  for (const storeId of new Set(items.map((v) => v.store_id).filter((id): id is string => Boolean(id)))) {
+    if (!(await storeInOrg(admin, a.imp.org_id, storeId))) return { error: "Esa tienda no es de esta organización." };
+  }
+  const { data: rows } = await admin.from("import_items").select("id").eq("import_id", a.imp.id);
+  const itemIds = ((rows ?? []) as { id: string }[]).map((r) => r.id);
+  const costs: CostValue[] = [];
+  for (const [i, c] of conv.costs.entries()) {
+    const clean = cleanCost(c, itemIds);
+    if ("error" in clean) return { error: `Cargo ${i + 1}: ${clean.error}` };
+    costs.push(clean.value);
+  }
+
+  let addedItems = 0;
+  let addedCosts = 0;
+  let failure: string | null = null;
+  let position = await nextItemPosition(admin, a.imp.id);
+  for (const v of items) {
+    const res = await insertImportItem(admin, a, v, null, position++);
+    if ("error" in res) {
+      failure = res.error;
+      break;
+    }
+    addedItems++;
+  }
+  if (!failure) {
+    for (const v of costs) {
+      const res = await insertImportCost(admin, a, v);
+      if ("error" in res) {
+        failure = res.error;
+        break;
+      }
+      addedCosts++;
+    }
+  }
+  if (addedItems || addedCosts) {
+    await addEvent(admin, a.imp, a.userId, "documento", aiReadEventNote(addedItems, addedCosts, doc.filename));
+  }
+  revalidate(a.imp.id);
+  if (failure) return { error: `Se agregaron ${addedItems} productos y ${addedCosts} cargos; lo demás falló: ${failure}` };
+  return { notice: `Agregados ${addedItems} producto${addedItems === 1 ? "" : "s"} y ${addedCosts} cargo${addedCosts === 1 ? "" : "s"}.` };
 }

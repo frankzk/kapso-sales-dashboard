@@ -3,15 +3,17 @@
 //   GET /api/compras/documento/<id>?dl=1     → lo descarga con su nombre
 //
 // El bucket `import-files` es privado. Se vuelve a pedir el permiso EN la
-// organización de la importación: `purchases.manage` o `purchases.money`, y la
-// proforma y el comprobante de pago solo con `purchases.money`. Responde 302 a
-// un enlace firmado de 10 minutos; nadie recibe una URL permanente.
+// organización de la importación: `purchases.manage`, `purchases.money` o
+// `purchases.receive`; la proforma y el comprobante de pago solo con
+// `purchases.money`, y con solo «Recepción de compras» (MOM §45.11) la factura
+// comercial, el packing list y las fotos (`canSeeDocKind`). Responde 302 a un
+// enlace firmado de 10 minutos; nadie recibe una URL permanente.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/db";
 import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
-import { IMPORT_FILES_BUCKET, isMoneyDoc, isUuid } from "@/lib/compras";
+import { IMPORT_FILES_BUCKET, canSeeDocKind, isMoneyDoc, isUuid } from "@/lib/compras";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,12 +37,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
   const doc = data as { org_id: string; kind: string; storage_path: string; filename: string | null } | null;
   if (!doc) return NOT_FOUND();
 
-  const [canManage, canMoney] = await Promise.all([
+  const [canManage, canMoney, canReceive] = await Promise.all([
     hasOrgPermission(doc.org_id, "purchases.manage"),
     hasOrgPermission(doc.org_id, "purchases.money"),
+    hasOrgPermission(doc.org_id, "purchases.receive"),
   ]);
-  if (!canManage && !canMoney) return NOT_FOUND();
+  if (!canManage && !canMoney && !canReceive) return NOT_FOUND();
   if (isMoneyDoc(doc.kind) && !canMoney) return NOT_FOUND();
+  if (!canSeeDocKind(doc.kind, { canManage, canMoney, canReceive })) return NOT_FOUND();
 
   const download = req.nextUrl.searchParams.get("dl") === "1" ? safeName(doc.filename) : undefined;
   const { data: signed, error } = await admin.storage
