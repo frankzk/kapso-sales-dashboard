@@ -1700,6 +1700,13 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
           description={<p>Hacen falta <strong>dos llaves</strong>: este interruptor y <code>GF_COURIER_WRITE_ENABLED=true</code> en el servidor.</p>} />
       </StoreForm>
       <p className={HELP}>{hasSecret ? "Webhook conectado: los cambios de estado de GF llegan firmados y se verifican." : "Sin webhook: pulsa «Conectar webhook» después de guardar el token."}</p>
+      <p className={HELP}>
+        <strong>Catálogo para GF:</strong> GF solo despacha los SKU que tiene registrados para esta tienda.{" "}
+        <a href={`/api/stores/${storeId}/gf-catalog`} className="font-medium text-slate-900 underline" download>
+          Descargar catálogo para GF (CSV)
+        </a>{" "}
+        e impórtalo en GF → Comercios → Catálogo. Sale del catálogo publicado de la tienda; las variantes sin SKU no van.
+      </p>
     </SettingsSection>
   );
 }

@@ -19389,6 +19389,16 @@ conservan su historial.
 **Inventario.** GF exige que cada SKU exista en su catálogo. Mientras no haya conteo físico, el catálogo de cada tienda
 se carga en GF en modo **ilimitado** con el interruptor **En existencias / Agotado** (GF, migración 039).
 
+**Catálogo para GF (14-11-2026).** La fuente es el **catálogo vivo** de la tienda (WooCommerce publicado o Shopify activo,
+la misma de Envíos → Catálogo de productos). En Configuración → GF Courier, «Descargar catálogo para GF (CSV)»
+(`/api/stores/<storeId>/gf-catalog`, permiso `stores.manage`, solo lectura) baja `sku,nombre`, una fila por SKU con el
+nombre «título – variante». Ese archivo se importa en GF (Comercios → Catálogo → Importar productos). Así GF ofrece
+exactamente los SKU que la tienda vende, y cada pedido viaja con el mismo SKU.
+- Una variante **sin SKU** no se puede pedir a GF: no entra en la lista y se cuenta (`X-Gf-Without-Sku`).
+- Un SKU repetido en dos variantes entra una sola vez y se cuenta (`X-Gf-Repeated-Skus`).
+- La sincronización automática Kapta → GF todavía no existe: un producto nuevo se vuelve a exportar e importar, y GF
+  no duplica lo que ya tenía.
+
 ## 30. Liquidaciones 2 — hojas por dominio
 
 Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0176;
