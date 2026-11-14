@@ -7,6 +7,7 @@
 // con el `ignoreDuplicates` de un upsert (ON CONFLICT DO NOTHING), y
 // `not(col, "like", "prefijo%")`. Lo demás (orden, `range`, otros `not`, `or`)
 // se acepta y no filtra: las pruebas no dependen de ello. `hangOn` deja una consulta sin contestar (una base que no responde).
+// `afterWrite` corre después de cada escritura, para imitar un trigger.
 //
 // No es un archivo de pruebas (no termina en .test.ts): lo importan.
 
@@ -208,7 +209,12 @@ class FakeQuery {
       return new Promise(() => {});
     }
     return Promise.resolve()
-      .then(() => this.exec())
+      .then(() => {
+        const out = this.exec();
+        // Lo que en la base haría un trigger (p. ej. los totales de las entregas de Compras, 0343).
+        if (this.op !== "select" && !out.error) this.db.afterWrite?.(this.table, this.op);
+        return out;
+      })
       .then(resolve, reject);
   }
   exec(): { data: any; error: DbError | null } {
@@ -268,6 +274,8 @@ export class FakeDb {
   failOn: ((table: string, op: string, payload: any, filters: [string, string, any][]) => DbError | null) | null = null;
   /** true: esa consulta no contesta nunca. */
   hangOn: ((table: string, op: string, payload: any, filters: [string, string, any][]) => boolean) | null = null;
+  /** Después de cada escritura sin error: para imitar un trigger de la base. */
+  afterWrite: ((table: string, op: string) => void) | null = null;
   constructor(seed: Record<string, Row[]> = {}) {
     for (const [t, rows] of Object.entries(seed)) this.tables[t] = rows.map((r) => ({ ...r }));
   }

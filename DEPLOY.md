@@ -1,6 +1,6 @@
-### 14-11-2026 · GF Courier por API: reemplaza al reparto propio (0342, MOM §29.17)
+### 14-11-2026 · GF Courier por API: reemplaza al reparto propio (0344, MOM §29.17)
 
-**Migración 0342_gf_courier_api: aplicar en producción ANTES del código.** Agrega a `stores`
+**Migración 0344_gf_courier_api: ya aplicada en producción (14-11-2026), antes del código.** Se aplicó con el nombre provisional 0342_gf_courier_api, que chocó con la 0342 de Compras entrada directo en `main`; el contenido es el mismo e idempotente, así que correr `db/apply.sql` otra vez no cambia nada. Agrega a `stores`
 `gf_courier_api_token_enc`, `gf_courier_webhook_secret_enc` y `gf_courier_enabled` (por defecto `false`), y crea
 `gf_order_requests` (intención antes del POST, una viva por pedido) y `gf_webhook_events` (append-only, con
 `reject_mutation()`). Sin `drop`; no toca datos; se puede correr otra vez. Sin ella, el panel y la configuración
@@ -22,6 +22,133 @@ Verificar con un pedido de prueba:
 2. Al anularla, la salida queda `anulado`.
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
+
+### 14-11-2026 · Compras locales, cortesía, entregas parciales con foto, códigos de trazabilidad e IGV por costo (0343, MOM §45.12–§45.15)
+
+**Migración `0343_compras_locales_entregas.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:
+`psql "$DATABASE_URL" -f db/migrations/0343_compras_locales_entregas.sql` (por
+`apply_migration`, con `set local lock_timeout = '15s'` delante, como la 0251).
+Qué hace:
+
+- `imports.kind` (`importacion` por defecto | `local`) y el CHECK del código por
+  tipo (`IMP-` / `LOC-`); el estado nuevo `recibido_parcial` en `imports.status`
+  e `import_events.status`; `imports.proforma_number` (≤ 80). Los CHECK en línea
+  de la 0340 se **reemplazan** (Postgres no deja cambiar su expresión): se
+  buscan por su definición y se cambian dentro de un bloque guardado, como la
+  0339. No se borra ninguna tabla, columna ni dato.
+- `import_items`: `unit_cost_currency` (USD por defecto) y `unit_cost_pen` con
+  CHECK de un costo por moneda (`unit_cost_usd` pasa a admitir nulo, como la
+  0342), y `courtesy_qty` (≥ 0, 0 por defecto).
+- `import_costs.igv_treatment` (`neto` | `con_igv` | `inafecto`), con backfill
+  (`includes_igv` → `con_igv`) y CHECK `con_igv` ⇔ `includes_igv`; un trigger lo
+  llena para el código anterior, que solo escribe `includes_igv`.
+- Tablas nuevas `import_deliveries` e `import_delivery_lines` (RLS sin
+  políticas, sin privilegios para anon ni authenticated) e
+  `import_documents.delivery_id` (fotos de una entrega). El trigger
+  `import_delivery_lines_sync` deja los totales de cada producto como la suma
+  de sus entregas.
+- **Backfill de la recepción de antes**: cada importación con productos ya
+  contados recibe UNA entrega «Recepción anterior» (`legacy`) con los mismos
+  números; los totales de `import_items` no se tocan. Idempotente.
+
+**El orden importa**: el código nuevo lee `kind`, `courtesy_qty`,
+`unit_cost_currency`, `proforma_number`, `igv_treatment` y las entregas; sin la
+migración, la lista y el detalle de Compras no cargan. El código anterior sigue
+funcionando con la migración puesta, pero **el código nuevo debe salir enseguida**:
+una recepción guardada con el código anterior después de la migración no queda
+como entrega (si el producto no tenía ninguna, volver a correr la 0343 la
+cubre). Comprobar que no quedó ninguna:
+`select count(*) from import_items it where it.received_qty is not null and not exists (select 1 from import_delivery_lines l where l.item_id = it.id);` → 0.
+
+Sin recálculo ni versión nueva del Master. Verificar:
+- «Nueva compra» → «Compra local (laboratorio / maquila)»: sale `LOC-2026-001`,
+  sin transporte ni guía; un producto con costo en S/ y 50 de cortesía;
+  «Registrar entrega» sin foto no deja (con foto, pasa a «Recibido parcial» y
+  dice «Llegaron 400 de 600 (+50 cortesía) · faltan 250»); la entrega del
+  resto la pasa a «Recibido»; «Registrar un pago» sin captura no deja; «Pasar
+  a Costos» sin tipo de cambio.
+- En una importación: «Códigos de trazabilidad 0 de 3» → pasar a «Pagado» no
+  deja hasta cargar la proforma y la orden de Alibaba; «En tránsito» pide
+  también la guía; cancelar siempre se puede.
+- Un costo «Inafecto a IGV» y «Editar» un costo (cambiarle el tipo de «Envío» a
+  «Importación»): el historial dice «Costo «…»: tipo Envío → Importación».
+- Una importación que ya estaba recibida muestra su entrega «Recepción
+  anterior» con los mismos números.
+
+### 14-11-2026 · Compras: cada costo y cada pago en su moneda e «Incluye IGV» (0342, MOM §45.3)
+
+**Migración `0342_compras_monedas_igv.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:
+`psql "$DATABASE_URL" -f db/migrations/0342_compras_monedas_igv.sql` (por
+`apply_migration`, con `set local lock_timeout = '15s'` delante, como la
+0251). A `import_costs` e `import_payments` les agrega
+`currency` (`'USD'` por defecto, CHECK USD | PEN) y `amount_pen` (el monto de
+una fila en soles), deja `amount_usd` nulo para esas filas (`alter column
+amount_usd drop not null`, dentro del `alter table`: no borra nada) y pide con
+un CHECK **exactamente un monto, el de su moneda**. A `import_costs`, además,
+`includes_igv` (falso por defecto) y `gross_amount` (el monto con IGV), con su
+CHECK. Las filas que ya existen son todas USD: toman el default y quedan
+correctas, **sin backfill**. Idempotente; las tablas siguen solo para el
+servidor (RLS sin políticas, sin privilegios para anon ni authenticated).
+**El orden importa**: el código nuevo lee y escribe `currency`, `amount_pen`,
+`includes_igv` y `gross_amount`; sin la migración, el detalle de una
+importación con «Montos de compras» no carga sus costos ni sus pagos y
+agregar un costo o un pago falla. El código anterior sigue funcionando con la
+migración puesta (escribe `amount_usd` sin moneda → USD).
+
+Sin recálculo ni versión nueva del Master. En el detalle, «Agregar un costo» y
+«Registrar un pago» llevan **US$ / S/** junto al monto y cada monto se ve en su
+moneda (con su equivalente si la importación tiene tipo de cambio); los
+costos, la casilla **«Incluye IGV»** (monto ÷ 1,18). El costo aterrizado en
+soles —lo que lleva «Pasar a Costos»— suma los costos en soles tal cual; sin
+tipo de cambio, lo que necesita convertir dice «Falta el tipo de cambio».
+«Leer con IA» deja en soles los cargos de una factura en soles y muestra el
+IGV aparte, sin agregarlo. Verificar en una importación con tipo de cambio:
+agregar «Aforo físico» S/ 114.50 (sin IGV) y un costo de S/ 504.16 con
+«Incluye IGV» (debe quedar S/ 427.25 sin IGV y decirlo en el historial),
+registrar un pago en soles y ver que «Falta pagar» compara en USD; quitar el
+tipo de cambio y ver «Falta el tipo de cambio» en el costo aterrizado; bajar
+el Excel (hojas Costos y Pagos con moneda, IGV y equivalentes).
+
+### 14-11-2026 · Compras con el aspecto de la Mesa de Despacho y buscador de productos
+
+Sin migración. Compras (lista, detalle, lectura con IA, Proveedores y
+Reportes) pasa al mundo de operación de DESIGN.md: cifras que filtran,
+pastillas de excepción (`?alerta=`), tabla desde 1280 px y lista en el
+teléfono, franja de cifras y «siguiente acción» en el detalle. «Agregar
+producto» busca en el catálogo de las tiendas (`org_shopify_products`) y
+llena nombre, SKU y, si es única, la tienda. Verificar en el celular la lista
+y el detalle de una importación, y agregar un producto desde «De las tiendas».
+
+### 14-11-2026 · Compras: «Leer con IA», «Recepción de compras» y la foto del producto (MOM §45.10–§45.11)
+
+**Sin migración.** El permiso nuevo **«Recepción de compras»**
+(`purchases.receive`) vive en el código (`user_permissions.permission` es
+texto libre y los roles por función no se guardan permiso por permiso), y
+«Leer con IA» no guarda nada nuevo: usa las tablas de la 0340. Usa la clave de
+visión que ya existe (`ANTHROPIC_API_KEY` y `YAPE_VISION_MODEL`; si el entorno
+no tiene clave, la de la primera tienda de la organización que tenga una). La
+página del detalle pasa a `maxDuration = 120`.
+
+- **«Leer con IA»** (con «Compras»): en Documentos, la factura comercial, la
+  proforma (con «Montos») o el packing list en PDF (≤ 20 MB) o imagen (≤ 5 MB)
+  muestran «Leer con IA». La IA propone productos y cargos; **no se guarda
+  nada** hasta «Agregar seleccionados». Sin «Montos de compras» la propuesta
+  llega sin precios ni cargos. Si el documento no está en USD, se escribe
+  «1 USD = X <moneda>». Sugiere SKU y tienda conocidos (Costos de productos y
+  pedidos de la tienda).
+- **«Recepción de compras»**: lo trae el rol **«Almacén»** (y owner y admin).
+  Abre Compras (lista y detalle) sin montos, guarda la recepción (pasa a
+  Recibido como siempre) y sube fotos; ve la factura comercial, el packing
+  list y las fotos. No edita nada más y no ve Proveedores ni Reportes. Una
+  vendedora con el rol Almacén ve «Compras» en su menú.
+- **Foto del producto**: en el detalle, «Foto», «Cambiar» y «Quitar» en cada
+  producto (con «Compras»); la anterior se borra del bucket.
+
+Verificar: con una factura en PDF, «Leer con IA» → la propuesta → desmarcar
+una fila → «Agregar seleccionados»: solo lo marcado queda, con el hecho «Leído
+con IA: …» en el historial; con un usuario con solo el rol Almacén, abrir una
+importación (sin montos), guardar la recepción y subir una foto; cambiar la
+foto de un producto y comprobar que se ve la nueva.
 
 ### 14-11-2026 · Compras: proveedores, reportes y el Excel de la importación (0341, MOM §45.7–§45.9)
 

@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0342_gf_courier_api.sql — GF Courier por API (MOM §29.17).
+-- 0344_gf_courier_api.sql — GF Courier por API (MOM §29.17).
 --
 -- POR QUÉ. GF Courier pasó a ser un sistema independiente con API propia
 -- (POST /v1/orders, webhooks firmados) y reemplaza al módulo interno de Grupo GF

@@ -107,12 +107,12 @@ describe("reparto propio frente a GF por API", () => {
 });
 
 describe("despliegue", () => {
-  it("DEPLOY.md: arriba de todo, la 0342 antes que el código; el cron de GF existe", () => {
+  it("DEPLOY.md: arriba de todo, la 0344 antes que el código; el cron de GF existe", () => {
     const deploy = readFileSync(join(process.cwd(), "DEPLOY.md"), "utf8");
     const first = deploy.indexOf("### ");
     const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
-    expect(entry).toContain("0342_gf_courier_api");
-    expect(entry).toMatch(/ANTES del código/);
+    expect(entry).toContain("0344_gf_courier_api");
+    expect(entry).toMatch(/antes del código/i);
     expect(readFileSync(join(process.cwd(), "vercel.json"), "utf8")).toContain("/api/cron/gf-reconcile");
   });
 });

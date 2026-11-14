@@ -1322,7 +1322,7 @@ async function storeUsesGfCourierApi(admin: ReturnType<typeof createAdminSupabas
   if (!storeId) return false;
   if (!gfApiStores.has(storeId)) {
     const { data } = await admin.from("stores").select("gf_courier_enabled").eq("id", storeId).maybeSingle();
-    // Sin la columna (0342 sin aplicar) data es null o trae error: se comporta como antes.
+    // Sin la columna (0344 sin aplicar) data es null o trae error: se comporta como antes.
     gfApiStores.set(storeId, Boolean((data as { gf_courier_enabled?: boolean } | null)?.gf_courier_enabled));
   }
   return gfApiStores.get(storeId)!;

@@ -460,4 +460,24 @@ describe("Compras (MOM §45, 14-11-2026)", () => {
     expect(permissionsFor(["admin"], [{ permission: "purchases.money", granted: false }]).has("purchases.money")).toBe(false);
     expect(permissionsFor(["vendedora"], [{ permission: "purchases.manage", granted: true }]).has("purchases.manage")).toBe(true);
   });
+  it("«Recepción de compras» (MOM §45.11): en el área Compras; owner, admin y el rol Almacén; sin montos ni edición", () => {
+    expect(PERMISSIONS).toContain("purchases.receive");
+    expect(PERMISSION_LABEL["purchases.receive"]).toBe("Recepción de compras");
+    expect(PERMISSION_HELP["purchases.receive"].length).toBeLessThanOrEqual(130);
+    const areas = PERMISSION_AREAS.filter((area) => (area.permissions as readonly string[]).includes("purchases.receive"));
+    expect(areas.map((area) => area.key)).toEqual(["compras"]);
+    for (const role of ["owner", "admin"]) expect(permissionsFor([role]).has("purchases.receive"), role).toBe(true);
+    const almacen = permissionsFor(["vendedora"], [], ["almacen"]);
+    expect(almacen.has("purchases.receive")).toBe(true);
+    // La bodega cuenta y sube fotos: ni edita la compra ni ve lo que cuesta.
+    expect(almacen.has("purchases.manage")).toBe(false);
+    expect(almacen.has("purchases.money")).toBe(false);
+    expect(almacen.has("costs.manage")).toBe(false);
+    expect(almacen.has("reports.view")).toBe(false);
+    const withReceive = FUNCTIONAL_ROLES.filter((r) => (r.permissions as readonly string[]).includes("purchases.receive")).map((r) => r.role);
+    expect(withReceive).toEqual(["almacen"]);
+    for (const role of ["vendedora", "viewer", "motorizado"]) expect(permissionsFor([role]).has("purchases.receive"), role).toBe(false);
+    expect(isGrantedOneByOne("purchases.receive")).toBe(false);
+    expect(permissionsFor(["vendedora"], [{ permission: "purchases.receive", granted: false }], ["almacen"]).has("purchases.receive")).toBe(false);
+  });
 });

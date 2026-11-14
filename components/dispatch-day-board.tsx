@@ -692,6 +692,10 @@ export function DispatchDayBoard(props: Props) {
   useEffect(() => { if (programConfirm) confirmFirst.current?.focus(); }, [programConfirm]);
   // Cambiar lo marcado deja la franja sin objeto: se vuelve a preguntar al asignar.
   useEffect(() => { setProgramConfirm(null); }, [selected]);
+  // «Asignando…» solo si lo que corre es asignar (14-11-2026, #KP204936): con
+  // «Recibir en oficina» o «Programar» en curso el botón decía «Asignando…».
+  const [assigning, setAssigning] = useState(false);
+  useEffect(() => { if (!pending) setAssigning(false); }, [pending]);
   function assign(opts: AssignOptions = {}) {
     if (!riderId || !selected.size) return;
     const ids = new Set([...selected].filter((id) => !opts.skip?.has(id)));
@@ -711,6 +715,7 @@ export function DispatchDayBoard(props: Props) {
     const confirmProgrammed = Boolean(opts.confirmProgrammed);
     const split = splitAssignment(ids, props.available, props.accepted);
     setSelected(new Set());
+    setAssigning(true);
     // Un «No entregado» que sigue en una caja no se asigna: se recibe en
     // oficina primero. Sin nada asignable, decirlo en vez de «Asignados».
     if (!split.orderIds.length && !split.requestIds.length) {
@@ -1186,7 +1191,7 @@ export function DispatchDayBoard(props: Props) {
                 title={riderId ? undefined : "Elige el motorizado arriba"}
                 className="max-w-full truncate"
               >
-                {pending ? "Asignando…" : `Asignar${selectedAssignable.length ? ` ${selectedAssignable.length}` : ""} a ${riderName || "…"}`}
+                {pending ? (assigning ? "Asignando…" : "Procesando…") : `Asignar${selectedAssignable.length ? ` ${selectedAssignable.length}` : ""} a ${riderName || "…"}`}
               </OpsButton>
               {/* Programar: guarda el día de salida de los marcados, sin tomarlos. */}
               <div className="relative">

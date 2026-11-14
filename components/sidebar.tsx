@@ -76,7 +76,7 @@ export interface NavAccess {
   history: boolean;
   /** El panel «Automatizaciones» (MOM §40): `automations.manage`, del dueño. */
   automations: boolean;
-  /** «Compras» (MOM §45): `purchases.manage` o `purchases.money`. */
+  /** «Compras» (MOM §45): `purchases.manage`, `purchases.money` o `purchases.receive`. */
   purchases?: boolean;
 }
 
@@ -104,6 +104,12 @@ export function navItems(
       // vendedora nunca ve los resultados del resto del equipo.
       { href: "/dashboard/productividad", label: "Mi productividad", icon: IconHeadset },
     ];
+    // La bodega con el rol «Almacén» trae «Recepción de compras» (MOM §45.11):
+    // la vendedora con algún permiso de Compras la ve en su menú. Sin `access`
+    // explícito (FULL_ACCESS), el menú de la vendedora es el de siempre.
+    if (access !== FULL_ACCESS && access.purchases) {
+      items.push({ href: "/dashboard/compras", label: "Compras", icon: IconTruck });
+    }
     if (canValidatePayments) {
       items.splice(2, 0, { href: "/dashboard/pagos", label: "Validar pagos", icon: IconMoney });
     }

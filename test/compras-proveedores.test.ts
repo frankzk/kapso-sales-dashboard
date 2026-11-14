@@ -151,7 +151,7 @@ describe("las lecturas de estadísticas y reportes", () => {
     expect(row!.fxPenPerUsd).toBe(3.75);
     expect(row!.items.map((it) => it.unitCostUsd)).toEqual([2, 12]);
     expect(row!.costs).toHaveLength(4);
-    expect(row!.payments).toEqual([{ amountUsd: 500, paidOn: "2026-11-02" }]);
+    expect(row!.payments).toEqual([{ amount: 500, currency: "USD", paidOn: "2026-11-02" }]);
     for (const t of ["imports", "import_items", "import_costs", "import_payments"]) {
       for (const op of h.db.opsOn(t)) expect(op.filters, t).toContainEqual(["eq", "org_id", ORG]);
     }
@@ -193,7 +193,8 @@ const allText = (wb: ExcelJS.Workbook) => {
 describe("el Excel de la importación (MOM §45.9)", () => {
   it("con «Montos de compras»: productos con el costo aterrizado y su desglose, margen, costos y pagos", async () => {
     const wb = await workbook();
-    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos", "Costos", "Pagos"]);
+    // 0343: la hoja «Entregas» (sin montos) va siempre.
+    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos", "Entregas", "Costos", "Pagos"]);
     const products = wb.getWorksheet("Productos")!;
     const cols = headers(products);
     const col = (name: string) => cols.indexOf(name) + 1;
@@ -212,14 +213,17 @@ describe("el Excel de la importación (MOM §45.9)", () => {
     const costs = wb.getWorksheet("Costos")!;
     expect(costs.rowCount).toBeGreaterThanOrEqual(6);
     const pays = wb.getWorksheet("Pagos")!;
-    expect(pays.getRow(2).getCell(3).value).toBe(500);
+    const payCol = (name: string) => headers(pays).indexOf(name) + 1;
+    expect(pays.getRow(2).getCell(payCol("Moneda")).value).toBe("US$");
+    expect(pays.getRow(2).getCell(payCol("Monto")).value).toBe(500);
+    expect(pays.getRow(2).getCell(payCol("En S/")).value).toBe(1875);
     expect(allText(wb)).toContain("Costo total");
   });
 
   it("sin «Montos de compras»: ni hojas ni columnas de dinero", async () => {
     h.perms = new Set(["purchases.manage"]);
     const wb = await workbook();
-    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos"]);
+    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos", "Entregas"]);
     const cols = headers(wb.getWorksheet("Productos")!);
     expect(cols).toContain("Cantidad");
     expect(cols).toContain("Buenas");
@@ -320,11 +324,11 @@ describe("el MOM y DEPLOY.md", () => {
     }
   });
 
-  it("DEPLOY.md: la entrada de la 0341, aplicada antes que el código", () => {
-    // Las entradas nuevas van arriba (la 0342 de GF Courier entró después): se busca la de la 0341 por su título.
+  it("DEPLOY.md: la 0341 antes que el código", () => {
     const deploy = read("DEPLOY.md");
+    // Ya no es la primera entrada (encima va la de «Leer con IA», MOM §45.10).
     const first = deploy.indexOf("### 14-11-2026 · Compras: proveedores");
-    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeGreaterThan(-1);
     const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
     expect(entry).toContain("0341_compras_proveedores");
     expect(entry).toMatch(/antes/i);
