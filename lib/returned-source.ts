@@ -48,6 +48,7 @@ const COURIER_LABEL: Record<string, string> = {
   urpi: "Urpi",
   tanders: "Tanders",
   propio: "reparto propio",
+  gf_courier: "GF Courier",
 };
 
 /**

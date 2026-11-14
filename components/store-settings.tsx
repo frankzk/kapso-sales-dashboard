@@ -110,6 +110,8 @@ import {
   syncAliclikCatalogNow,
   syncNow,
   testAliclikConnection,
+  testGfCourierConnection,
+  connectGfCourierWebhook,
   testStoreMetaConnection,
   testShalomConnection,
   findShalomAgencies,
@@ -215,6 +217,7 @@ export interface StoreSettingsData {
     urgent_telegram_chat_id: string | null;
     anthropic_model: string | null;
     aliclik_enabled: boolean;
+    gf_courier_enabled: boolean;
     tanders_email: string | null;
     tanders_origin_address: string | null;
     tanders_origin_lat: number | null;
@@ -285,6 +288,8 @@ export interface StoreSettingsData {
     anthropicKey: boolean;
     aliclikToken: boolean;
     aliclikWebhookSecret: boolean;
+    gfCourierToken: boolean;
+    gfCourierWebhookSecret: boolean;
     tandersPassword: boolean;
     shalomProPassword: boolean;
     olvaPortalPassword: boolean;
@@ -439,6 +444,7 @@ const INDEX: IndexGroup[] = [
       { id: "woocommerce", label: "WooCommerce" },
       { id: "bot-pedidos", label: "Bot de Kapso → pedidos" },
       { id: "kapso", label: "Kapso" },
+      { id: "gf-courier", label: "GF Courier" },
       { id: "aliclik", label: "Aliclik" },
       { id: "geocodificacion", label: "Coordenada por dirección" },
       { id: "shalom", label: "Shalom" },
@@ -634,6 +640,12 @@ export function StoreSettings({
             <WooCommerceSettingsSection storeId={s.id} data={data.woo} />
             <BotOrdersSettingsSection storeId={s.id} data={data.botOrders} />
             <KapsoSection data={data} />
+            <GfCourierSection
+              storeId={s.id}
+              hasToken={has.gfCourierToken}
+              hasSecret={has.gfCourierWebhookSecret}
+              enabled={s.gf_courier_enabled}
+            />
             <AliclikSection
               siteUrl={data.siteUrl}
               storeId={s.id}
@@ -1647,6 +1659,47 @@ function AliclikSection({
           </p>
         </div>
       </div>
+    </SettingsSection>
+  );
+}
+
+/**
+ * GF Courier por API (MOM §29.17): reemplaza al reparto propio de Grupo GF. Token de la credencial de integración que
+ * emite GF, «Conectar webhook» (acuña el secreto, lo registra en GF y lo guarda cifrado, sin mostrarlo) e interruptor.
+ */
+function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: string; hasToken: boolean; hasSecret: boolean; enabled: boolean }) {
+  const [testState, testAction, testPending] = useActionState(testGfCourierConnection, initial);
+  const [hookState, hookAction, hookPending] = useActionState(connectGfCourierWebhook, initial);
+  return (
+    <SettingsSection
+      id="gf-courier"
+      title="GF Courier"
+      badge={!hasToken ? <Badge>Sin token</Badge> : <OnOff on={enabled} onLabel="Creación de guías activada" offLabel="Creación de guías desactivada" />}
+      description={
+        <p>
+          Crea la guía de contraentrega en Lima en el sistema de GF Courier y sigue su estado por webhooks firmados. Reemplaza al
+          reparto propio: GF prepara, asigna motorizado, entrega y liquida. El token lo emite GF por tienda (credencial de integración).
+        </p>
+      }
+      actions={
+        <>
+          <SubmitAction formAction={testAction} storeId={storeId} pending={testPending} disabled={!hasToken} label="Probar conexión" pendingLabel="Probando…" />
+          <SubmitAction formAction={hookAction} storeId={storeId} pending={hookPending} disabled={!hasToken}
+            label={hasSecret ? "Reconectar webhook" : "Conectar webhook"} pendingLabel="Conectando…" />
+        </>
+      }
+    >
+      <ActionResult state={testState} />
+      <ActionResult state={hookState} />
+      <StoreForm storeId={storeId} title="Integración" persisted={[hasToken, enabled]}>
+        <div className={ROW}>
+          <SecretField name="gf_courier_api_token" label="Token de integración de GF Courier" set={hasToken}
+            hint="Credencial de la tienda en GF, con permisos de pedidos, catálogo y webhooks." className="max-w-xl" />
+        </div>
+        <ToggleRow name="gf_courier_enabled" label="Crear guías en GF Courier" defaultChecked={enabled} on="Habilitado" off="Deshabilitado"
+          description={<p>Hacen falta <strong>dos llaves</strong>: este interruptor y <code>GF_COURIER_WRITE_ENABLED=true</code> en el servidor.</p>} />
+      </StoreForm>
+      <p className={HELP}>{hasSecret ? "Webhook conectado: los cambios de estado de GF llegan firmados y se verifican." : "Sin webhook: pulsa «Conectar webhook» después de guardar el token."}</p>
     </SettingsSection>
   );
 }

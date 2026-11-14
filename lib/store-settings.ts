@@ -140,6 +140,12 @@ export interface StoreSettingsInput {
   aliclik_webhook_secret?: string;
   /** Interruptor por tienda de la creación de guías en Aliclik. */
   aliclik_enabled?: string | boolean;
+  /** Token de la API de GF Courier de esta tienda (MOM §29.17). */
+  gf_courier_api_token?: string;
+  /** Secreto de firma de los webhooks de GF (lo acuña y registra «Conectar webhook»). */
+  gf_courier_webhook_secret?: string;
+  /** Interruptor por tienda de la creación de guías en GF Courier. */
+  gf_courier_enabled?: string | boolean;
   // Tanders (0058): usuario + contraseña de la cuenta y almacén de origen. La
   // contraseña es un secreto; el resto es configuración normal.
   tanders_email?: string;
@@ -539,6 +545,13 @@ export function buildStoreUpdate(
   if (aliclikToken) patch.aliclik_api_token_enc = encrypt(aliclikToken, keyOverride);
   const aliclikWebhook = clean(input.aliclik_webhook_secret);
   if (aliclikWebhook) patch.aliclik_webhook_secret_enc = encrypt(aliclikWebhook, keyOverride);
+  const gfToken = clean(input.gf_courier_api_token);
+  if (gfToken) patch.gf_courier_api_token_enc = encrypt(gfToken, keyOverride);
+  const gfSecret = clean(input.gf_courier_webhook_secret);
+  if (gfSecret) patch.gf_courier_webhook_secret_enc = encrypt(gfSecret, keyOverride);
+  if (input.gf_courier_enabled !== undefined) {
+    patch.gf_courier_enabled = input.gf_courier_enabled === true || input.gf_courier_enabled === "true";
+  }
   if (input.aliclik_enabled !== undefined) {
     patch.aliclik_enabled =
       input.aliclik_enabled === true || input.aliclik_enabled === "true";

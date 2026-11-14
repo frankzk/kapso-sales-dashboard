@@ -43,6 +43,12 @@ export const DISPATCH_COURIERS: readonly CourierOption[] = [
   { key: "olva", value: "olva", label: "Olva" },
 ] as const;
 
+/**
+ * Couriers que solo entran por API y no se arman en la Mesa de despacho (no van en DISPATCH_COURIERS para que
+ * nadie les cree una ruta manual). GF Courier por API reemplaza al reparto propio (MOM §29.17).
+ */
+export const API_COURIER_LABELS: Record<string, string> = { gf_courier: "GF Courier" };
+
 export function courierOptionByKey(key: string): CourierOption | null {
   return DISPATCH_COURIERS.find((c) => c.key === key) ?? null;
 }
@@ -51,7 +57,7 @@ export function courierOptionByKey(key: string): CourierOption | null {
 export function courierLabelFor(value: string | null | undefined): string {
   if (!value) return "—";
   const k = courierKey(value);
-  return DISPATCH_COURIERS.find((c) => courierKey(c.value) === k)?.label ?? value;
+  return DISPATCH_COURIERS.find((c) => courierKey(c.value) === k)?.label ?? API_COURIER_LABELS[k] ?? value;
 }
 
 /**

@@ -1318,6 +1318,16 @@ const MAX_TAKE_ORDERS = 50;
  * hace de candado idempotente: un segundo clic ve la misma solicitud y no llega
  * a crear otra caja. La tarifa y la disponibilidad se vuelven a leer aquí.
  */
+async function storeUsesGfCourierApi(admin: ReturnType<typeof createAdminSupabase>, storeId: string | null, gfApiStores: Map<string, boolean>): Promise<boolean> {
+  if (!storeId) return false;
+  if (!gfApiStores.has(storeId)) {
+    const { data } = await admin.from("stores").select("gf_courier_enabled").eq("id", storeId).maybeSingle();
+    // Sin la columna (0342 sin aplicar) data es null o trae error: se comporta como antes.
+    gfApiStores.set(storeId, Boolean((data as { gf_courier_enabled?: boolean } | null)?.gf_courier_enabled));
+  }
+  return gfApiStores.get(storeId)!;
+}
+
 export async function takeGroupGfCourierOrders(
   orgId: string,
   orderIds: string[],
@@ -1360,6 +1370,7 @@ async function takeOrdersCore(
     .eq("code", "grupo-gf-courier")
     .maybeSingle()).data;
 
+  const gfApiStores = new Map<string, boolean>();
   // Secuencial a propósito: cada admisión vuelve a comprobar la configuración
   // vigente y deja su propio resultado. Un pedido inválido no tumba la tanda.
   for (const orderId of uniqueOrderIds) {
@@ -1395,6 +1406,12 @@ async function takeOrdersCore(
       const row = orderMaster as Record<string, unknown>;
       if (!storeAllowed(auth, row.store_id as string | null)) {
         failed.push({ orderId, error: OUTSIDE_STORE });
+        continue;
+      }
+      // GF Courier por API reemplaza al reparto propio (MOM §29.17): una tienda que despacha por la API no se toma
+      // aquí, o el pedido terminaría con una caja de Grupo GF en Kapta y otra guía en el sistema GF.
+      if (await storeUsesGfCourierApi(admin, row.store_id as string | null, gfApiStores)) {
+        failed.push({ orderId, error: `${(row.order_name as string | null) ?? "El pedido"}: esta tienda despacha por GF Courier (API). Crea la guía desde el Master.` });
         continue;
       }
       // La lista de pago adelantado (MOM §41): Grupo GF lo toma solo con el
