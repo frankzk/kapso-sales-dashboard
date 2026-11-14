@@ -57,6 +57,7 @@ import {
 } from "@/app/dashboard/compras/actions";
 import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, FIELD, Feedback, ImportHeaderForm, LABEL } from "@/components/compras/header-form";
 import { uploadImportFile } from "@/components/compras/upload";
+import { useCopyToClipboard } from "@/components/copy-button";
 import { fmtBytes, fmtDateTime, fmtInt, fmtPct, fmtPen, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
 
 type Store = { id: string; name: string };
@@ -417,7 +418,7 @@ function StatusBox({ detail, canEdit, run, pending }: { detail: ImportDetail; ca
 
 function WarehouseBox({ detail, trackingLink, run, pending }: { detail: ImportDetail; trackingLink: string | null; run: Run; pending: boolean }) {
   const { imp } = detail;
-  const [copied, setCopied] = useState(false);
+  const { state: copyState, copy } = useCopyToClipboard(2000);
   const message = warehouseMessage({
     code: imp.code,
     supplierName: detail.supplier?.name ?? null,
@@ -441,14 +442,9 @@ function WarehouseBox({ detail, trackingLink, run, pending }: { detail: ImportDe
         <button
           type="button"
           className={BTN_SECONDARY}
-          onClick={() => {
-            void navigator.clipboard?.writeText(message).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 2000);
-            });
-          }}
+          onClick={() => copy(message)}
         >
-          {copied ? "Copiado" : "Copiar mensaje"}
+          {copyState === "ok" ? "Copiado" : copyState === "fail" ? "No se pudo copiar" : "Copiar mensaje"}
         </button>
         <a href={whatsappShareUrl(message)} target="_blank" rel="noopener noreferrer" className={BTN_SECONDARY}>
           Abrir WhatsApp
