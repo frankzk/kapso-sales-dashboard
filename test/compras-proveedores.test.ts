@@ -193,7 +193,8 @@ const allText = (wb: ExcelJS.Workbook) => {
 describe("el Excel de la importación (MOM §45.9)", () => {
   it("con «Montos de compras»: productos con el costo aterrizado y su desglose, margen, costos y pagos", async () => {
     const wb = await workbook();
-    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos", "Costos", "Pagos"]);
+    // 0343: la hoja «Entregas» (sin montos) va siempre.
+    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos", "Entregas", "Costos", "Pagos"]);
     const products = wb.getWorksheet("Productos")!;
     const cols = headers(products);
     const col = (name: string) => cols.indexOf(name) + 1;
@@ -222,7 +223,7 @@ describe("el Excel de la importación (MOM §45.9)", () => {
   it("sin «Montos de compras»: ni hojas ni columnas de dinero", async () => {
     h.perms = new Set(["purchases.manage"]);
     const wb = await workbook();
-    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos"]);
+    expect(wb.worksheets.map((ws) => ws.name)).toEqual(["Importación", "Productos", "Entregas"]);
     const cols = headers(wb.getWorksheet("Productos")!);
     expect(cols).toContain("Cantidad");
     expect(cols).toContain("Buenas");

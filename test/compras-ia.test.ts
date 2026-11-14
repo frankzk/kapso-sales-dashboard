@@ -128,10 +128,10 @@ describe("la respuesta del modelo", () => {
       ],
     })!;
     expect(p.charges).toEqual([
-      { kind: "envio", label: "Flete DHL", amount: 120, currency: null },
-      { kind: "envio", label: "Envío", amount: 35.5, currency: null },
-      { kind: "importacion", label: "Aranceles", amount: 40, currency: null },
-      { kind: "adicional", label: "Comisión bancaria", amount: 8, currency: null },
+      { kind: "envio", label: "Flete DHL", amount: 120, currency: null, igvTreatment: "neto" },
+      { kind: "envio", label: "Envío", amount: 35.5, currency: null, igvTreatment: "neto" },
+      { kind: "importacion", label: "Aranceles", amount: 40, currency: null, igvTreatment: "neto" },
+      { kind: "adicional", label: "Comisión bancaria", amount: 8, currency: null, igvTreatment: "neto" },
     ]);
     expect(p.dropped).toBe(2);
   });
@@ -207,7 +207,7 @@ describe("la conversión con «1 USD = X <moneda>» (§6.5 de la referencia)", (
     );
     expect(r).toEqual({ items: [{ name: "A", sku: "X", storeId: "", qty: "5", unitWeightKg: "0.2" }], costs: [], currency: null, fx: null });
     const clean = cleanItem((r as { items: Parameters<typeof cleanItem>[0][] }).items[0]!, false);
-    expect(clean).toEqual({ value: { store_id: null, sku: "X", name: "A", qty: 5, unit_weight_kg: 0.2 } });
+    expect(clean).toEqual({ value: { store_id: null, sku: "X", name: "A", qty: 5, courtesy_qty: 0, unit_weight_kg: 0.2 } });
   });
 
   it("no USD con precio o cargos: pide el tipo de cambio", () => {
@@ -235,9 +235,9 @@ describe("la conversión con «1 USD = X <moneda>» (§6.5 de la referencia)", (
     expect(cleanItem(r.items[0]!, true)).toMatchObject({ value: { unit_cost_usd: 1.4038, sale_price_pen: null } });
     expect(cleanItem(r.items[1]!, true)).toMatchObject({ value: { unit_cost_usd: 0 } });
     // Un cargo sin moneda es de la del documento (CNY): pasa a USD ÷ X, a 2 decimales.
-    expect(r.costs).toEqual([{ kind: "envio", label: "Flete", amount: "14.04", currency: "USD", allocation: "weight" }]);
+    expect(r.costs).toEqual([{ kind: "envio", label: "Flete", amount: "14.04", currency: "USD", allocation: "weight", igvTreatment: "neto" }]);
     expect(cleanCost(r.costs[0]!, [])).toEqual({
-      value: { kind: "envio", label: "Flete", currency: "USD", amount_usd: 14.04, amount_pen: null, includes_igv: false, gross_amount: null, allocation: "weight", item_id: null },
+      value: { kind: "envio", label: "Flete", currency: "USD", amount_usd: 14.04, amount_pen: null, includes_igv: false, gross_amount: null, igv_treatment: "neto", allocation: "weight", item_id: null },
     });
   });
 
@@ -298,7 +298,7 @@ describe("la llamada a la API (fetch simulado)", () => {
     expect(body.tools[0].name).toBe("registrar_documento");
     expect(body.tools[0].input_schema.required).toEqual(["currency", "lines", "charges", "igv", "igv_currency"]);
     // Cada cargo trae su moneda; los montos, sin IGV.
-    expect(body.tools[0].input_schema.properties.charges.items.required).toEqual(["kind", "label", "amount", "currency"]);
+    expect(body.tools[0].input_schema.properties.charges.items.required).toEqual(["kind", "label", "amount", "currency", "igv_exempt"]);
     expect(body.system).toMatch(/SIN IGV/);
     expect(body.system).toMatch(/Cada cargo con SU moneda/);
     expect(body.messages[0].content[0]).toMatchObject({ type: "document", source: { media_type: "application/pdf" } });

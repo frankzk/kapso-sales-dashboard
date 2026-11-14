@@ -11,16 +11,20 @@
 // (la factura de DHL Express Perú en soles da costos en soles); en la moneda
 // del documento (CNY, EUR…) pasa a USD con el tipo de cambio. El IGV del
 // documento se muestra como dato y nunca se agrega como costo.
+//
+// En una compra local (0343, MOM §45.12) la base es en soles: un documento en
+// soles no pide tipo de cambio (los precios se quedan en soles) y uno en otra
+// moneda pide «1 <moneda> = X S/».
 
 import { useState } from "react";
 import { cn } from "@/components/ui";
-import { ALLOCATIONS, COST_KINDS, MISSING_FX } from "@/lib/compras";
-import { aiChargeNeedsFx, chargeToUsd, cleanAiFx, unitToUsd } from "@/lib/compras-ia";
+import { ALLOCATIONS, COST_KINDS, IGV_TREATMENTS, MISSING_FX } from "@/lib/compras";
+import { aiChargeNeedsFx, chargeToPen, chargeToUsd, cleanAiFx, unitToPen, unitToUsd } from "@/lib/compras-ia";
 import { addAiProposalRows, type AiReadState, type ComprasActionState } from "@/app/dashboard/compras/actions";
 import { BTN_GHOST, BTN_PRIMARY, FIELD, Field, fieldBox } from "@/components/compras/header-form";
 import { Badge, Banner, CHECKBOX } from "@/components/ops-ui";
 import { IconInfo } from "@/components/icons";
-import { fmtPen, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
+import { fmtPen, fmtPenUnit, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
 
 type Proposal = Exclude<AiReadState, { error: string }>;
 type Store = { id: string; name: string };
@@ -38,7 +42,7 @@ type LineDraft = {
   matched: boolean;
 };
 
-type ChargeDraft = { on: boolean; kind: string; label: string; amount: string; currency: string; allocation: string };
+type ChargeDraft = { on: boolean; kind: string; label: string; amount: string; currency: string; allocation: string; igvTreatment: "neto" | "inafecto" };
 
 /** Un monto en una moneda cualquiera: «S/ 76.91», «US$ 20.00», «CNY 142.50». */
 const fmtAny = (n: number, currency: string) => (currency === "PEN" ? fmtPen(n) : currency === "USD" ? fmtUsd(n) : `${currency} ${n.toFixed(2)}`);
@@ -61,8 +65,10 @@ export function AiProposalBox({
   onClose: () => void;
 }) {
   const money = proposal.money;
+  // La moneda base de la compra: USD (importación) o soles (compra local).
+  const base = proposal.base ?? "USD";
   const storeIds = new Set(stores.map((s) => s.id));
-  const [currency, setCurrency] = useState(proposal.currency ?? "USD");
+  const [currency, setCurrency] = useState(proposal.currency ?? base);
   const [fx, setFx] = useState("");
   const [lines, setLines] = useState<LineDraft[]>(() =>
     proposal.lines.map((l) => ({
@@ -85,14 +91,19 @@ export function AiProposalBox({
       amount: short(c.amount),
       currency: c.currency ?? proposal.currency ?? "USD",
       allocation: "value",
+      igvTreatment: c.igvTreatment ?? "neto",
     })),
   );
   const setLine = (i: number, patch: Partial<LineDraft>) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const setCharge = (i: number, patch: Partial<ChargeDraft>) => setCharges((cs) => cs.map((c, j) => (j === i ? { ...c, ...patch } : c)));
 
-  const cur = currency.trim().toUpperCase() || "USD";
-  const isUsd = cur === "USD";
+  const cur = currency.trim().toUpperCase() || base;
+  // En la moneda base no hace falta convertir los precios.
+  const isUsd = cur === base;
   const fxValue = isUsd ? 1 : cleanAiFx(fx);
+  const toBaseUnit = (price: number, x: number) => (base === "PEN" ? fmtPenUnit(unitToPen(price, x)) : fmtUsdUnit(unitToUsd(price, x)));
+  const toBaseCharge = (amount: number, x: number) => (base === "PEN" ? fmtPen(chargeToPen(amount, x)) : fmtUsd(chargeToUsd(amount, x)));
+  const fxLabel = base === "PEN" ? `1 ${cur} = X S/` : `1 USD = X ${cur}`;
   const chosenLines = lines.filter((l) => l.on);
   const chosenCharges = money ? charges.filter((c) => c.on) : [];
   // La moneda de cada cargo: US$, S/ o la del documento; otra cualquiera se toma como la del documento.
@@ -125,7 +136,7 @@ export function AiProposalBox({
             unitWeightKg: l.unitWeightKg,
             ...(money ? { unitPrice: l.unitPrice } : {}),
           })),
-          charges: chosenCharges.map((c) => ({ kind: c.kind, label: c.label, amount: c.amount, currency: chargeCur(c), allocation: c.allocation })),
+          charges: chosenCharges.map((c) => ({ kind: c.kind, label: c.label, amount: c.amount, currency: chargeCur(c), allocation: c.allocation, igvTreatment: c.igvTreatment })),
         }),
       onClose,
     );
@@ -163,21 +174,25 @@ export function AiProposalBox({
           </Field>
           {/* Solo si algo lo necesita: una factura en soles con cargos en soles no pide tipo de cambio. */}
           {!isUsd && (needsFx || fx.trim() !== "") && (
-            <Field label={`Tipo de cambio: 1 USD = X ${cur}`}>
+            <Field label={`Tipo de cambio: ${fxLabel}`}>
               <input
                 className={cn(fieldBox("w-36"), "tabular-nums", missingFx && "ring-2 ring-warn-fg")}
                 inputMode="decimal"
-                placeholder={`X ${cur}`}
+                placeholder={base === "PEN" ? "X S/" : `X ${cur}`}
                 value={fx}
                 onChange={(e) => setFx(e.target.value)}
-                aria-label={`1 USD en ${cur}`}
+                aria-label={base === "PEN" ? `1 ${cur} en soles` : `1 USD en ${cur}`}
               />
             </Field>
           )}
           <p className="pb-2 text-xs leading-4 text-ink-600">
-            {isUsd
-              ? "En USD: el precio por unidad se guarda a 4 decimales y los cargos a 2. Un cargo en S/ se guarda en soles."
-              : `Precio por unidad en USD = precio ÷ X, a 4 decimales. Los cargos en US$ o S/ se guardan así; en ${cur}, ÷ X a 2 decimales.`}
+            {base === "PEN"
+              ? isUsd
+                ? "Compra local en soles: el precio por unidad se queda en soles (4 decimales), sin tipo de cambio. Un cargo en US$ se guarda en dólares."
+                : `Precio por unidad en soles = precio × X, a 4 decimales. Los cargos en US$ o S/ se guardan así; en ${cur}, × X a 2 decimales.`
+              : isUsd
+                ? "En USD: el precio por unidad se guarda a 4 decimales y los cargos a 2. Un cargo en S/ se guarda en soles."
+                : `Precio por unidad en USD = precio ÷ X, a 4 decimales. Los cargos en US$ o S/ se guardan así; en ${cur}, ÷ X a 2 decimales.`}
           </p>
         </div>
       )}
@@ -230,7 +245,7 @@ export function AiProposalBox({
                         aria-label={`Precio por unidad en ${cur}`}
                       />
                       <span className={cn("text-[13px] tabular-nums", price !== null && !fxValue ? "font-medium text-warn-fg" : "text-ink-600")}>
-                        {price === null ? "Sin precio: se guarda en 0" : fxValue ? `= ${fmtUsdUnit(unitToUsd(price, fxValue))}/u` : "Falta el tipo de cambio"}
+                        {price === null ? "Sin precio: se guarda en 0" : fxValue ? `= ${toBaseUnit(price, fxValue)}/u` : "Falta el tipo de cambio"}
                       </span>
                       {l.unitWeightKg && <span className="text-[13px] tabular-nums text-ink-600">· {l.unitWeightKg} kg/u</span>}
                     </div>
@@ -293,17 +308,32 @@ export function AiProposalBox({
                           : amount === null
                             ? ccur
                             : fxValue
-                              ? `= ${fmtUsd(chargeToUsd(amount, fxValue))}`
+                              ? `= ${toBaseCharge(amount, fxValue)}`
                               : MISSING_FX}
                       </p>
                     </div>
-                    <select className={FIELD} value={c.allocation} onChange={(e) => setCharge(i, { allocation: e.target.value })} aria-label="Reparto">
-                      {ALLOCATIONS.filter((a) => a.id !== "item").map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="grid min-w-0 gap-2">
+                      <select className={FIELD} value={c.allocation} onChange={(e) => setCharge(i, { allocation: e.target.value })} aria-label="Reparto">
+                        {ALLOCATIONS.filter((a) => a.id !== "item").map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.label}
+                          </option>
+                        ))}
+                      </select>
+                      {/* Inafecto si el documento lo dice; si no, neto (los montos ya vienen sin IGV). */}
+                      <select
+                        className={FIELD}
+                        value={c.igvTreatment}
+                        onChange={(e) => setCharge(i, { igvTreatment: e.target.value === "inafecto" ? "inafecto" : "neto" })}
+                        aria-label="IGV del cargo"
+                      >
+                        {IGV_TREATMENTS.filter((t) => t.id !== "con_igv").map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </li>
               );
@@ -325,7 +355,7 @@ export function AiProposalBox({
 
       {missingFx && (
         <Banner tone="warn" role="alert">
-          <p>Escribe el tipo de cambio: 1 USD = X {cur}.</p>
+          <p>Escribe el tipo de cambio: {fxLabel}.</p>
         </Banner>
       )}
       <div className="flex flex-wrap gap-2">

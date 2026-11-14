@@ -1,3 +1,55 @@
+### 14-11-2026 · Compras locales, cortesía, entregas parciales con foto, códigos de trazabilidad e IGV por costo (0343, MOM §45.12–§45.15)
+
+**Migración `0343_compras_locales_entregas.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:
+`psql "$DATABASE_URL" -f db/migrations/0343_compras_locales_entregas.sql` (por
+`apply_migration`, con `set local lock_timeout = '15s'` delante, como la 0251).
+Qué hace:
+
+- `imports.kind` (`importacion` por defecto | `local`) y el CHECK del código por
+  tipo (`IMP-` / `LOC-`); el estado nuevo `recibido_parcial` en `imports.status`
+  e `import_events.status`; `imports.proforma_number` (≤ 80). Los CHECK en línea
+  de la 0340 se **reemplazan** (Postgres no deja cambiar su expresión): se
+  buscan por su definición y se cambian dentro de un bloque guardado, como la
+  0339. No se borra ninguna tabla, columna ni dato.
+- `import_items`: `unit_cost_currency` (USD por defecto) y `unit_cost_pen` con
+  CHECK de un costo por moneda (`unit_cost_usd` pasa a admitir nulo, como la
+  0342), y `courtesy_qty` (≥ 0, 0 por defecto).
+- `import_costs.igv_treatment` (`neto` | `con_igv` | `inafecto`), con backfill
+  (`includes_igv` → `con_igv`) y CHECK `con_igv` ⇔ `includes_igv`; un trigger lo
+  llena para el código anterior, que solo escribe `includes_igv`.
+- Tablas nuevas `import_deliveries` e `import_delivery_lines` (RLS sin
+  políticas, sin privilegios para anon ni authenticated) e
+  `import_documents.delivery_id` (fotos de una entrega). El trigger
+  `import_delivery_lines_sync` deja los totales de cada producto como la suma
+  de sus entregas.
+- **Backfill de la recepción de antes**: cada importación con productos ya
+  contados recibe UNA entrega «Recepción anterior» (`legacy`) con los mismos
+  números; los totales de `import_items` no se tocan. Idempotente.
+
+**El orden importa**: el código nuevo lee `kind`, `courtesy_qty`,
+`unit_cost_currency`, `proforma_number`, `igv_treatment` y las entregas; sin la
+migración, la lista y el detalle de Compras no cargan. El código anterior sigue
+funcionando con la migración puesta, pero **el código nuevo debe salir enseguida**:
+una recepción guardada con el código anterior después de la migración no queda
+como entrega (si el producto no tenía ninguna, volver a correr la 0343 la
+cubre). Comprobar que no quedó ninguna:
+`select count(*) from import_items it where it.received_qty is not null and not exists (select 1 from import_delivery_lines l where l.item_id = it.id);` → 0.
+
+Sin recálculo ni versión nueva del Master. Verificar:
+- «Nueva compra» → «Compra local (laboratorio / maquila)»: sale `LOC-2026-001`,
+  sin transporte ni guía; un producto con costo en S/ y 50 de cortesía;
+  «Registrar entrega» sin foto no deja (con foto, pasa a «Recibido parcial» y
+  dice «Llegaron 400 de 600 (+50 cortesía) · faltan 250»); la entrega del
+  resto la pasa a «Recibido»; «Registrar un pago» sin captura no deja; «Pasar
+  a Costos» sin tipo de cambio.
+- En una importación: «Códigos de trazabilidad 0 de 3» → pasar a «Pagado» no
+  deja hasta cargar la proforma y la orden de Alibaba; «En tránsito» pide
+  también la guía; cancelar siempre se puede.
+- Un costo «Inafecto a IGV» y «Editar» un costo (cambiarle el tipo de «Envío» a
+  «Importación»): el historial dice «Costo «…»: tipo Envío → Importación».
+- Una importación que ya estaba recibida muestra su entrega «Recepción
+  anterior» con los mismos números.
+
 ### 14-11-2026 · Compras: cada costo y cada pago en su moneda e «Incluye IGV» (0342, MOM §45.3)
 
 **Migración `0342_compras_monedas_igv.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:

@@ -16,6 +16,11 @@
 //   - Las COTIZACIONES y las CANCELADAS no cuentan como compras (§6.17).
 //   - Las fechas son días de Lima: la del pedido (`ordered_on`) y, sin ella, el
 //     día de Lima de la creación.
+//   - Las compras LOCALES (0343, MOM §45.12) entran igual: su costo es en soles
+//     (el del laboratorio por unidad y sus costos), así que en los totales en
+//     soles entran tal cual y en los de USD solo con su tipo de cambio (si no,
+//     se cuentan aparte como cualquier importación con soles sin tipo de
+//     cambio). Las faltantes se miden sobre lo esperado (pedidas + cortesía).
 
 import {
   addMoney,
@@ -30,6 +35,9 @@ import {
   paymentBalance,
   validFx,
   zeroMoney,
+  expectedUnits,
+  type Currency,
+  type ImportKind,
   type ImportStatus,
   type LandedCostRow,
   type LandedResult,
@@ -51,8 +59,14 @@ export interface ReportItem {
   sku: string | null;
   storeId: string | null;
   qty: number;
+  /** Cortesía (MOM §45.13); sin ella, 0. */
+  courtesyQty?: number | null;
   /** Solo con «Montos de compras»; sin él, 0. */
   unitCostUsd: number;
+  /** El costo por unidad en soles de una compra local (0343). Solo con «Montos de compras». */
+  unitCostPen?: number | null;
+  /** La moneda del costo por unidad; sin ella, USD. */
+  unitCostCurrency?: Currency;
   unitWeightKg: number | null;
   receivedQty: number | null;
   damagedQty: number | null;
@@ -61,6 +75,8 @@ export interface ReportItem {
 export interface ReportImport {
   id: string;
   code: string;
+  /** Sin tipo: importación. */
+  kind?: ImportKind;
   supplierId: string | null;
   status: ImportStatus;
   orderedOn: string | null;
@@ -96,7 +112,10 @@ export function landedOf(imp: Pick<ReportImport, "items" | "costs" | "fxPenPerUs
       id: it.id,
       name: it.name,
       qty: it.qty,
+      courtesyQty: it.courtesyQty ?? 0,
       unitCostUsd: it.unitCostUsd,
+      unitCostPen: it.unitCostPen ?? null,
+      unitCostCurrency: it.unitCostCurrency,
       unitWeightKg: it.unitWeightKg,
       receivedQty: it.receivedQty,
       damagedQty: it.damagedQty,
@@ -107,12 +126,17 @@ export function landedOf(imp: Pick<ReportImport, "items" | "costs" | "fxPenPerUs
 }
 
 /**
- * ¿Le falta el tipo de cambio para sus cifras en USD? Tiene algún costo o pago
- * en soles y no tiene tipo de cambio (los reportes dicen cuántas son).
+ * ¿Le falta el tipo de cambio para sus cifras en USD? Tiene algún costo, pago o
+ * costo por unidad (compra local) en soles y no tiene tipo de cambio (los
+ * reportes dicen cuántas son).
  */
-export function needsFxForUsd(imp: Pick<ReportImport, "costs" | "payments" | "fxPenPerUsd">): boolean {
+export function needsFxForUsd(imp: Pick<ReportImport, "costs" | "payments" | "fxPenPerUsd"> & { items?: readonly ReportItem[] }): boolean {
   if (validFx(imp.fxPenPerUsd)) return false;
-  return imp.costs.some((c) => c.currency === "PEN" && c.amount > 0) || imp.payments.some((p) => p.currency === "PEN" && p.amount > 0);
+  return (
+    imp.costs.some((c) => c.currency === "PEN" && c.amount > 0) ||
+    imp.payments.some((p) => p.currency === "PEN" && p.amount > 0) ||
+    (imp.items ?? []).some((it) => it.unitCostCurrency === "PEN" && (it.unitCostPen ?? 0) > 0)
+  );
 }
 
 /**
@@ -219,8 +243,10 @@ export function supplierStats(
     for (const it of imp.items) {
       units += it.qty;
       if (it.receivedQty != null) {
-        countedOrdered += it.qty;
-        countedBad += Math.max(0, it.qty - it.receivedQty) + (it.damagedQty ?? 0);
+        // Sobre lo esperado: la cortesía también tenía que llegar (MOM §45.13).
+        const expected = expectedUnits(it);
+        countedOrdered += expected;
+        countedBad += Math.max(0, expected - it.receivedQty) + (it.damagedQty ?? 0);
       }
       const key = productKey(it);
       const p = products.get(key) ?? { key, name: it.name, sku: (it.sku ?? "").trim() || null, units: 0 };
@@ -477,8 +503,14 @@ export function unitCostHistory(imports: readonly ReportImport[]): UnitCostProdu
     const points = [...e.points].sort((a, b) => (a.date === b.date ? a.code.localeCompare(b.code) : a.date < b.date ? -1 : 1));
     const last = points[points.length - 1]!;
     const previous = points.length > 1 ? points[points.length - 2]! : null;
+    // En USD; si a alguno le falta el tipo de cambio y los dos tienen soles
+    // (compras locales sin tipo de cambio), en soles.
     const change =
-      previous && previous.unitCostUsd != null && previous.unitCostUsd > 0 && last.unitCostUsd != null ? last.unitCostUsd / previous.unitCostUsd - 1 : null;
+      previous && previous.unitCostUsd != null && previous.unitCostUsd > 0 && last.unitCostUsd != null
+        ? last.unitCostUsd / previous.unitCostUsd - 1
+        : previous && previous.unitCostPen != null && previous.unitCostPen > 0 && last.unitCostPen != null
+          ? last.unitCostPen / previous.unitCostPen - 1
+          : null;
     out.push({ key: e.key, name: e.name, sku: e.sku, storeId: e.storeId, points, last, previous, change, trend: unitCostTrend(change) });
   }
   return out.sort((a, b) => (a.last.date === b.last.date ? a.name.localeCompare(b.name, "es") : a.last.date < b.last.date ? 1 : -1));

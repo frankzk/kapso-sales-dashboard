@@ -13,10 +13,15 @@
 //     pago se guarda en SU moneda (USD o soles, 0342), sin convertir; con
 //     «Incluye IGV» el costo guarda el monto con IGV y entra ÷ 1,18.
 //   - «Pasar a Costos»: `purchases.money` y `costs.manage`.
-//   - `purchases.receive` («Recepción de compras», MOM §45.11): SOLO guardar
-//     la recepción y subir fotos (tipo «Foto»). Esas dos aceptan
-//     `purchases.manage` o `purchases.receive`; todo lo demás sigue pidiendo
-//     `purchases.manage` (y `purchases.money` lo de dinero).
+//   - `purchases.receive` («Recepción de compras», MOM §45.11): SOLO registrar
+//     entregas (MOM §45.14) y subir fotos (tipo «Foto»). Esas dos aceptan
+//     `purchases.manage` o `purchases.receive`; corregir o quitar una entrega y
+//     todo lo demás sigue pidiendo `purchases.manage` (y `purchases.money` lo
+//     de dinero).
+//   - Compras locales (MOM §45.12, 0343): el mismo flujo, en soles. Cada
+//     entrega de una compra local lleva al menos una foto y cada pago, la
+//     captura del comprobante; transporte, guía y «Avisar a la bodega» no
+//     aplican.
 //   - «Leer con IA» (MOM §45.10): lee y PROPONE; nada se guarda hasta
 //     «Agregar seleccionados», que pasa por las mismas reglas y los mismos
 //     hechos que agregar un producto o un costo a mano.
@@ -32,6 +37,8 @@ import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import {
   COST_COLS,
+  PAYMENT_COLS,
+  DELIVERY_LINE_COLS,
   ITEM_COLS,
   ITEM_MONEY_COLS,
   comprasVisionCreds,
@@ -44,28 +51,38 @@ import {
   type ImportRow,
 } from "@/lib/compras-server";
 import {
+  DELIVERY_PHOTO_REQUIRED,
+  IMPORT_CODE_PREFIX,
   IMPORT_FILES_BUCKET,
   IMPORT_STATUS_LABEL,
   allocationLabel,
+  baseCurrencyOf,
   canUploadDocKind,
   checkImportFile,
   cleanCost,
+  cleanDelivery,
   cleanFx,
   cleanHeader,
   cleanItem,
   cleanPayment,
-  cleanReception,
   cleanStatusChange,
   cleanSupplier,
   costAmountText,
+  costChangeNote,
   costKindLabel,
+  costSnapshotOf,
   costPushNote,
   costPushPlan,
+  defaultItemCostColumns,
+  deliveryEventNote,
+  deliveryNeedsPhoto,
   docKindLabel,
   formatDmy,
+  hasShipping,
   importFileExt,
-  isBeforeReceived,
+  importKindLabel,
   isImportFilePath,
+  isImportKind,
   isMoneyDoc,
   isUuid,
   landedCostOf,
@@ -75,16 +92,22 @@ import {
   limaYear,
   moneyText,
   nextImportCode,
+  paymentChangeNote,
   paymentMethodLabel,
-  receptionEventNote,
-  receptionSummary,
+  paymentNeedsVoucher,
+  paymentSnapshotOf,
+  statusAfterDelivery,
+  statusTraceBlocker,
+  traceCodes,
+  type DeliveryInput,
+  type DeliveryLineValue,
   type DocKind,
   type HeaderInput,
   type HeaderValue,
   type ImportEventKind,
+  type ImportKind,
   type ImportStatus,
   type ItemInput,
-  type ReceptionLineInput,
   type CostInput,
   type PaymentInput,
   type SupplierInput,
@@ -133,7 +156,7 @@ async function authorize(admin: SupabaseClient, importId: string, need: Need): P
   const a = await loadImportAccess(importId, admin);
   if (!a) return { error: "Sin acceso a esta importación." };
   if (need.manage && !a.perms.canManage) return { error: "Tu rol no permite editar compras." };
-  if (need.receive && !a.perms.canManage && !a.perms.canReceive) return { error: "Tu rol no permite registrar la recepción." };
+  if (need.receive && !a.perms.canManage && !a.perms.canReceive) return { error: "Tu rol no permite registrar la recepción ni las entregas." };
   if (need.money && !a.perms.canMoney) return { error: "Hace falta el permiso «Montos de compras»." };
   return { userId: a.userId, imp: a.imp, canMoney: a.perms.canMoney, canPushCosts: a.perms.canPushCosts, perms: a.perms };
 }
@@ -259,14 +282,21 @@ export async function deleteSupplier(supplierId: string): Promise<ComprasActionS
 // La importación
 // ---------------------------------------------------------------------------
 
-/** Crea la importación en Cotización con el siguiente código `IMP-<año de Lima>-NNN`. */
-export async function createImport(orgId: string, input: HeaderInput): Promise<ComprasActionState> {
+/**
+ * Crea la compra en Cotización con el siguiente código de su serie:
+ * `IMP-<año de Lima>-NNN` una importación y `LOC-<año de Lima>-NNN` una compra
+ * local a un laboratorio o maquila (MOM §45.12). El tipo no cambia después.
+ */
+export async function createImport(orgId: string, input: HeaderInput & { kind?: string | null }): Promise<ComprasActionState> {
   const user = await getCurrentUser();
   if (!user) return { error: "Inicia sesión otra vez." };
   if (!isUuid(orgId) || !(await hasOrgPermission(orgId, "purchases.manage"))) {
     return { error: "Tu rol no permite crear importaciones." };
   }
-  const clean = cleanHeader(input);
+  const rawKind = String(input.kind ?? "").trim() || "importacion";
+  if (!isImportKind(rawKind)) return { error: "Tipo de compra inválido." };
+  const kind: ImportKind = rawKind;
+  const clean = cleanHeader(input, kind);
   if ("error" in clean) return clean;
   const admin = createAdminSupabase();
   if (!(await supplierInOrg(admin, orgId, clean.value.supplier_id))) return { error: "Ese proveedor no es de esta organización." };
@@ -274,18 +304,19 @@ export async function createImport(orgId: string, input: HeaderInput): Promise<C
 
   const year = limaYear();
   const id = randomUUID();
+  const prefix = IMPORT_CODE_PREFIX[kind];
   // Dos altas a la vez pueden elegir el mismo número: el índice único decide y
   // se reintenta con el siguiente.
   for (let attempt = 0; attempt < 3; attempt++) {
-    const { data: codes } = await admin.from("imports").select("code").eq("org_id", orgId).like("code", `IMP-${year}-%`);
-    const code = nextImportCode(((codes ?? []) as { code: string }[]).map((c) => c.code), year);
+    const { data: codes } = await admin.from("imports").select("code").eq("org_id", orgId).like("code", `${prefix}-${year}-%`);
+    const code = nextImportCode(((codes ?? []) as { code: string }[]).map((c) => c.code), year, kind);
     const { error } = await admin
       .from("imports")
-      .insert({ id, org_id: orgId, code, status: "cotizacion", ...header, created_by: user.id });
+      .insert({ id, org_id: orgId, code, kind, status: "cotizacion", ...header, created_by: user.id });
     if (!error) {
-      await addEvent(admin, { id, org_id: orgId }, user.id, "status", "Importación creada", "cotizacion");
+      await addEvent(admin, { id, org_id: orgId }, user.id, "status", kind === "local" ? "Compra local creada" : "Importación creada", "cotizacion");
       revalidate(id);
-      return { id, notice: `Importación ${code} creada en Cotización.` };
+      return { id, notice: `${importKindLabel(kind)} ${code} creada en Cotización.` };
     }
     if (error.code !== "23505") return { error: error.message };
   }
@@ -295,7 +326,8 @@ export async function createImport(orgId: string, input: HeaderInput): Promise<C
 const HEADER_LABEL: Record<keyof HeaderValue, string> = {
   supplier_id: "proveedor",
   origin: "origen",
-  platform_order: "n.º de orden",
+  platform_order: "orden de Alibaba",
+  proforma_number: "código de la proforma",
   transport: "transporte",
   carrier: "paquetera",
   tracking_number: "guía",
@@ -310,7 +342,8 @@ export async function updateImportHeader(importId: string, input: HeaderInput): 
   const admin = createAdminSupabase();
   const a = await authorize(admin, importId, { manage: true });
   if ("error" in a) return a;
-  const clean = cleanHeader(input);
+  // En una compra local no hay transporte ni guía (MOM §45.12): se ignoran.
+  const clean = cleanHeader(input, a.imp.kind);
   if ("error" in clean) return clean;
   if (!(await supplierInOrg(admin, a.imp.org_id, clean.value.supplier_id))) return { error: "Ese proveedor no es de esta organización." };
   const changed = (Object.keys(clean.value) as (keyof HeaderValue)[]).filter(
@@ -345,6 +378,13 @@ export async function setImportStatus(importId: string, status: string, note: st
   if ("error" in a) return a;
   const clean = cleanStatusChange(a.imp.status, status, note);
   if ("error" in clean) return clean;
+  // Los códigos de trazabilidad de una importación (MOM §45.15), de forma
+  // progresiva: desde «Pagado» la proforma y la orden de Alibaba; desde «En
+  // tránsito», también la guía. Cancelar nunca los pide; una nota tampoco.
+  if (clean.value.changed) {
+    const blocked = statusTraceBlocker(a.imp, clean.value.status);
+    if (blocked) return { error: `${blocked.message} Complétalos en «Datos».` };
+  }
   if (clean.value.changed) {
     const { error } = await admin.from("imports").update({ status: clean.value.status }).eq("id", a.imp.id);
     if (error) return { error: error.message };
@@ -361,6 +401,7 @@ export async function setWarehouseReported(importId: string, reported: boolean):
   const admin = createAdminSupabase();
   const a = await authorize(admin, importId, { manage: true });
   if ("error" in a) return a;
+  if (!hasShipping(a.imp.kind)) return { error: "El aviso a la bodega es de las importaciones: una compra local no lo lleva." };
   const { error } = await admin
     .from("imports")
     .update(reported ? { reported_to_warehouse_at: new Date().toISOString(), reported_by: a.userId } : { reported_to_warehouse_at: null, reported_by: null })
@@ -398,7 +439,7 @@ export async function addImportItem(importId: string, input: ItemInput & { image
   const a = await authorize(admin, importId, { manage: true });
   if ("error" in a) return a;
   if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
-  const clean = cleanItem(input, a.canMoney);
+  const clean = cleanItem(input, a.canMoney, baseCurrencyOf(a.imp.kind));
   if ("error" in clean) return clean;
   if (!(await storeInOrg(admin, a.imp.org_id, clean.value.store_id))) return { error: "Esa tienda no es de esta organización." };
   const imagePath = (input.imagePath ?? "").trim() || null;
@@ -435,12 +476,16 @@ async function insertImportItem(
     id,
     org_id: a.imp.org_id,
     import_id: a.imp.id,
+    // La moneda base de la compra con costo 0 si no se escribió (sin «Montos»):
+    // en una compra local, soles (CHECK de la 0343).
+    ...defaultItemCostColumns(baseCurrencyOf(a.imp.kind)),
     ...v,
     image_path: imagePath,
     position: position ?? (await nextItemPosition(admin, a.imp.id)),
   });
   if (error) return { error: error.message };
-  await addEvent(admin, a.imp, a.userId, "producto", `Producto agregado: ${v.qty} × ${v.name}${v.sku ? ` (SKU ${v.sku})` : ""}.`);
+  const courtesy = v.courtesy_qty ? ` (+${v.courtesy_qty} de cortesía)` : "";
+  await addEvent(admin, a.imp, a.userId, "producto", `Producto agregado: ${v.qty} × ${v.name}${courtesy}${v.sku ? ` (SKU ${v.sku})` : ""}.`);
   return { id };
 }
 
@@ -458,7 +503,7 @@ export async function updateImportItem(itemId: string, input: ItemInput): Promis
   if ("error" in a) return a;
   // Sin «Montos de compras», `cleanItem` no devuelve costo ni precio: la
   // edición no los lee ni los toca.
-  const clean = cleanItem(input, a.canMoney);
+  const clean = cleanItem(input, a.canMoney, baseCurrencyOf(a.imp.kind));
   if ("error" in clean) return clean;
   if (!(await storeInOrg(admin, a.imp.org_id, clean.value.store_id))) return { error: "Esa tienda no es de esta organización." };
   const { error } = await admin.from("import_items").update(clean.value).eq("id", itemId).eq("import_id", a.imp.id);
@@ -479,6 +524,11 @@ export async function removeImportItem(itemId: string): Promise<ComprasActionSta
   if (!item) return { error: "Ese producto ya no está." };
   const a = await authorize(admin, item.import_id, { manage: true });
   if ("error" in a) return a;
+  // Lo que llegó de él es evidencia (MOM §45.14): con entregas, no se quita.
+  const { data: delivered } = await admin.from("import_delivery_lines").select("id").eq("item_id", itemId).eq("import_id", a.imp.id).limit(1);
+  if (((delivered ?? []) as unknown[]).length) {
+    return { error: `«${item.name}» tiene entregas registradas: corrige o quita esas entregas antes de quitar el producto.` };
+  }
   const { data: assigned } = await admin.from("import_costs").select("id,label").eq("item_id", itemId).eq("import_id", a.imp.id);
   const orphaned = (assigned ?? []) as { id: string; label: string }[];
   if (orphaned.length) {
@@ -537,60 +587,320 @@ export async function setImportItemPhoto(itemId: string, imagePath: string | nul
 }
 
 // ---------------------------------------------------------------------------
-// Recepción en la bodega de Lima
+// Entregas parciales con evidencia (MOM §45.14, 0343)
 // ---------------------------------------------------------------------------
 
-/**
- * Lo que contó la bodega. Si la importación estaba antes de «Recibido», pasa a
- * «Recibido» y, sin fecha de llegada, se anota hoy (Lima).
- */
-export async function saveReception(importId: string, lines: ReceptionLineInput[]): Promise<ComprasActionState> {
-  const admin = createAdminSupabase();
-  // «Compras» o «Recepción de compras» (MOM §45.11): la bodega guarda lo que
-  // contó, y el paso a «Recibido» de abajo es el único cambio de estado que hace.
-  const a = await authorize(admin, importId, { receive: true });
-  if ("error" in a) return a;
-  if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
-  const { data: rows } = await admin.from("import_items").select("id,name,qty").eq("import_id", a.imp.id);
-  const items = (rows ?? []) as { id: string; name: string; qty: number }[];
-  const clean = cleanReception(items.map((i) => i.id), lines);
-  if ("error" in clean) return clean;
-  const now = new Date().toISOString();
-  for (const line of clean.value) {
-    const { error } = await admin
-      .from("import_items")
-      .update({
-        received_qty: line.received_qty,
-        damaged_qty: line.damaged_qty,
-        reception_note: line.reception_note,
-        received_at: line.received_qty === null ? null : now,
-        received_by: line.received_qty === null ? null : a.userId,
-      })
-      .eq("id", line.itemId)
-      .eq("import_id", a.imp.id);
-    if (error) return { error: error.message };
+/** Una foto ya subida (`startImportUpload(…, "photo")`) para una entrega. */
+export interface DeliveryPhotoInput {
+  path: string;
+  filename?: string | null;
+}
+
+export interface DeliveryActionInput extends DeliveryInput {
+  /** Fotos nuevas de lo que llegó (en una compra local, al menos una entre todas). */
+  photos?: DeliveryPhotoInput[];
+}
+
+/** Tope de fotos por vez. */
+const MAX_DELIVERY_PHOTOS = 10;
+
+type CheckedPhoto = { path: string; filename: string | null; mime: string; size: number };
+
+function cleanFilename(raw: unknown): string | null {
+  return String(raw ?? "").replace(/[\u0000-\u001f/\\]/g, "_").trim().slice(0, 200) || null;
+}
+
+/** Las fotos nuevas: rutas de ESTA compra, imágenes de verdad (tipo y tamaño de Storage). */
+async function checkDeliveryPhotos(admin: SupabaseClient, a: Access, photos: readonly DeliveryPhotoInput[]): Promise<CheckedPhoto[] | { error: string }> {
+  if (photos.length > MAX_DELIVERY_PHOTOS) return { error: `Como máximo ${MAX_DELIVERY_PHOTOS} fotos por vez.` };
+  const out: CheckedPhoto[] = [];
+  for (const p of photos) {
+    const path = String(p?.path ?? "").trim();
+    if (!isImportFilePath(path, a.imp.org_id, a.imp.id, "docs")) return { error: "Una foto no es de esta compra." };
+    if (out.some((x) => x.path === path)) continue;
+    const filename = cleanFilename(p.filename);
+    const file = await checkUploadedFile(admin, path, "photo", filename);
+    if ("error" in file) return file;
+    out.push({ path, filename, mime: file.mime, size: file.size });
   }
-  const byId = new Map(clean.value.map((l) => [l.itemId, l]));
-  const summary = receptionSummary(
-    items.map((i) => ({
-      id: i.id,
-      qty: Number(i.qty),
-      receivedQty: byId.get(i.id)?.received_qty ?? null,
-      damagedQty: byId.get(i.id)?.damaged_qty ?? null,
+  return out;
+}
+
+/** Inserta las fotos de una entrega como documentos «Foto» ligados a ella, todas en una sola escritura. */
+async function insertDeliveryPhotos(admin: SupabaseClient, a: Access, deliveryId: string, photos: readonly CheckedPhoto[]): Promise<{ error?: string }> {
+  if (!photos.length) return {};
+  const { error } = await admin.from("import_documents").insert(
+    photos.map((p) => ({
+      id: randomUUID(),
+      org_id: a.imp.org_id,
+      import_id: a.imp.id,
+      kind: "photo",
+      storage_path: p.path,
+      filename: p.filename,
+      mime: p.mime,
+      size_bytes: p.size,
+      uploaded_by: a.userId,
+      delivery_id: deliveryId,
     })),
   );
-  await addEvent(admin, a.imp, a.userId, "recepcion", receptionEventNote(summary));
-  let moved = false;
-  if (isBeforeReceived(a.imp.status)) {
-    const patch: Record<string, unknown> = { status: "recibido" };
-    if (!a.imp.arrived_on) patch.arrived_on = limaToday();
-    const { error } = await admin.from("imports").update(patch).eq("id", a.imp.id);
-    if (error) return { error: error.message };
-    await addEvent(admin, a.imp, a.userId, "status", "Al guardar la recepción en la bodega de Lima.", "recibido");
-    moved = true;
+  return error ? { error: error.message } : {};
+}
+
+type DeliveryItem = { id: string; name: string; qty: number; courtesy_qty: number };
+
+async function loadDeliveryItems(admin: SupabaseClient, importId: string): Promise<DeliveryItem[]> {
+  const { data } = await admin.from("import_items").select("id,name,qty,courtesy_qty").eq("import_id", importId);
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({ id: String(r.id), name: String(r.name), qty: Number(r.qty) || 0, courtesy_qty: Number(r.courtesy_qty) || 0 }));
+}
+
+function linesWithNames(lines: readonly DeliveryLineValue[], items: readonly DeliveryItem[]) {
+  const name = new Map(items.map((i) => [i.id, i.name]));
+  return lines.map((l) => ({ name: name.get(l.itemId) ?? "producto", received: l.received, damaged: l.damaged }));
+}
+
+/**
+ * Después de una entrega (o de corregirla), el estado AVANZA solo si toca
+ * (`statusAfterDelivery`, MOM §45.14): todo lo esperado llegó → «Recibido» con
+ * la llegada del día de la última entrega; si no, «Recibido parcial». Los
+ * totales del producto los dejó el trigger de la 0343 (Σ entregas): se leen de
+ * la base, no se calculan aquí. Devuelve el estado nuevo o null.
+ */
+async function advanceAfterDelivery(admin: SupabaseClient, a: Access): Promise<ImportStatus | null | { error: string }> {
+  const [{ data: rows }, { data: ds }] = await Promise.all([
+    admin.from("import_items").select("id,qty,courtesy_qty,received_qty").eq("import_id", a.imp.id),
+    admin.from("import_deliveries").select("delivered_on").eq("import_id", a.imp.id),
+  ]);
+  const items = ((rows ?? []) as Record<string, unknown>[]).map((r) => ({
+    qty: Number(r.qty) || 0,
+    courtesyQty: Number(r.courtesy_qty) || 0,
+    receivedQty: r.received_qty == null ? null : Number(r.received_qty),
+  }));
+  const last = ((ds ?? []) as { delivered_on: string }[]).map((d) => d.delivered_on).sort().pop() ?? null;
+  const next = statusAfterDelivery({ status: a.imp.status, items, lastDeliveredOn: last });
+  if (!next) return null;
+  const patch: Record<string, unknown> = { status: next.status };
+  if (next.arrivedOn) patch.arrived_on = next.arrivedOn;
+  const { error } = await admin.from("imports").update(patch).eq("id", a.imp.id);
+  if (error) return { error: error.message };
+  await addEvent(
+    admin,
+    a.imp,
+    a.userId,
+    "status",
+    next.status === "recibido"
+      ? `Al registrar las entregas: llegó todo lo esperado${next.arrivedOn ? ` (última entrega del ${formatDmy(next.arrivedOn)})` : ""}.`
+      : "Al registrar una entrega: llegó una parte, falta lo demás.",
+    next.status,
+  );
+  return next.status;
+}
+
+const movedNotice = (s: ImportStatus | null) =>
+  s === "recibido" ? " Llegó todo lo esperado: pasó a Recibido." : s === "recibido_parcial" ? " Pasó a Recibido parcial." : "";
+
+/**
+ * «Registrar entrega» (MOM §45.14): la fecha (Lima), una nota, lo que llegó
+ * por producto y sus fotos. «Compras» o «Recepción de compras» (la bodega). En
+ * una compra local, al menos una foto. Los totales del producto los suma el
+ * trigger de la 0343 en la misma transacción de cada línea; después, el estado
+ * avanza solo si toca.
+ */
+export async function registerDelivery(importId: string, input: DeliveryActionInput): Promise<ComprasActionState> {
+  const admin = createAdminSupabase();
+  const a = await authorize(admin, importId, { receive: true });
+  if ("error" in a) return a;
+  if (a.imp.status === "cancelado") return { error: "La compra está cancelada." };
+  const items = await loadDeliveryItems(admin, a.imp.id);
+  if (!items.length) return { error: "La compra todavía no tiene productos." };
+  const clean = cleanDelivery(input, items.map((i) => i.id), limaToday());
+  if ("error" in clean) return clean;
+  const photos = await checkDeliveryPhotos(admin, a, input.photos ?? []);
+  if ("error" in photos) return photos;
+  if (deliveryNeedsPhoto(a.imp.kind) && !photos.length) return { error: DELIVERY_PHOTO_REQUIRED };
+
+  const id = randomUUID();
+  const { error } = await admin.from("import_deliveries").insert({
+    id,
+    org_id: a.imp.org_id,
+    import_id: a.imp.id,
+    delivered_on: clean.value.delivered_on,
+    note: clean.value.note,
+    by_user: a.userId,
+  });
+  if (error) return { error: error.message };
+  const undo = async () => {
+    await admin.from("import_delivery_lines").delete().eq("delivery_id", id).eq("import_id", a.imp.id);
+    await admin.from("import_deliveries").delete().eq("id", id).eq("import_id", a.imp.id);
+  };
+  const { error: linesError } = await admin.from("import_delivery_lines").insert(
+    clean.value.lines.map((l) => ({
+      id: randomUUID(),
+      org_id: a.imp.org_id,
+      import_id: a.imp.id,
+      delivery_id: id,
+      item_id: l.itemId,
+      received: l.received,
+      damaged: l.damaged,
+      note: l.note,
+    })),
+  );
+  if (linesError) {
+    await undo();
+    return { error: linesError.message };
   }
+  const photoRes = await insertDeliveryPhotos(admin, a, id, photos);
+  if (photoRes.error) {
+    await undo();
+    return { error: `No se pudieron guardar las fotos: ${photoRes.error}` };
+  }
+  await addEvent(
+    admin,
+    a.imp,
+    a.userId,
+    "recepcion",
+    deliveryEventNote("Entrega registrada", { delivered_on: clean.value.delivered_on, lines: linesWithNames(clean.value.lines, items), photos: photos.length }),
+  );
+  const moved = await advanceAfterDelivery(admin, a);
+  if (moved && typeof moved === "object") return { error: moved.error };
   revalidate(a.imp.id);
-  return { notice: moved ? "Recepción guardada. La importación pasó a Recibido." : "Recepción guardada." };
+  return { id, notice: `Entrega registrada.${movedNotice(moved)}` };
+}
+
+type DeliveryRecord = { id: string; import_id: string; delivered_on: string; note: string | null; legacy: boolean };
+
+async function loadDelivery(admin: SupabaseClient, deliveryId: string): Promise<DeliveryRecord | null> {
+  if (!isUuid(deliveryId)) return null;
+  const { data } = await admin.from("import_deliveries").select("id,import_id,delivered_on,note,legacy").eq("id", deliveryId).maybeSingle();
+  return (data as DeliveryRecord | null) ?? null;
+}
+
+async function deliveryLines(admin: SupabaseClient, d: DeliveryRecord): Promise<{ id: string; item_id: string; received: number; damaged: number; note: string | null }[]> {
+  const { data } = await admin.from("import_delivery_lines").select(DELIVERY_LINE_COLS).eq("delivery_id", d.id).eq("import_id", d.import_id);
+  return ((data ?? []) as unknown as Record<string, unknown>[]).map((l) => ({
+    id: String(l.id),
+    item_id: String(l.item_id),
+    received: Number(l.received) || 0,
+    damaged: Number(l.damaged) || 0,
+    note: (l.note as string | null) ?? null,
+  }));
+}
+
+/**
+ * Corregir una entrega (MOM §45.14): fecha, nota, lo que llegó por producto y
+ * fotos nuevas. Solo «Compras». Queda el antes y el después en el historial;
+ * el estado solo avanza (nunca retrocede solo: si hace falta, se cambia a mano).
+ */
+export async function updateDelivery(deliveryId: string, input: DeliveryActionInput): Promise<ComprasActionState> {
+  const admin = createAdminSupabase();
+  const d = await loadDelivery(admin, deliveryId);
+  if (!d) return { error: "Esa entrega ya no está." };
+  const a = await authorize(admin, d.import_id, { manage: true });
+  if ("error" in a) return a;
+  if (a.imp.status === "cancelado") return { error: "La compra está cancelada." };
+  const items = await loadDeliveryItems(admin, a.imp.id);
+  const clean = cleanDelivery(input, items.map((i) => i.id), limaToday());
+  if ("error" in clean) return clean;
+  const photos = await checkDeliveryPhotos(admin, a, input.photos ?? []);
+  if ("error" in photos) return photos;
+  if (deliveryNeedsPhoto(a.imp.kind) && !photos.length) {
+    const { data: kept } = await admin.from("import_documents").select("id").eq("delivery_id", d.id).eq("import_id", a.imp.id).limit(1);
+    if (!((kept ?? []) as unknown[]).length) return { error: DELIVERY_PHOTO_REQUIRED };
+  }
+
+  const before = await deliveryLines(admin, d);
+  const { error } = await admin
+    .from("import_deliveries")
+    .update({ delivered_on: clean.value.delivered_on, note: clean.value.note })
+    .eq("id", d.id)
+    .eq("import_id", a.imp.id);
+  if (error) return { error: error.message };
+  // Primero lo que se agrega o cambia, después lo que se quita: si algo falla
+  // a la mitad, ningún producto queda con menos de lo que tenía.
+  const byItem = new Map(before.map((l) => [l.item_id, l]));
+  for (const l of clean.value.lines) {
+    const old = byItem.get(l.itemId);
+    if (old) {
+      if (old.received === l.received && old.damaged === l.damaged && (old.note ?? null) === l.note) continue;
+      const { error: e } = await admin
+        .from("import_delivery_lines")
+        .update({ received: l.received, damaged: l.damaged, note: l.note })
+        .eq("id", old.id)
+        .eq("import_id", a.imp.id);
+      if (e) return { error: e.message };
+    } else {
+      const { error: e } = await admin.from("import_delivery_lines").insert({
+        id: randomUUID(),
+        org_id: a.imp.org_id,
+        import_id: a.imp.id,
+        delivery_id: d.id,
+        item_id: l.itemId,
+        received: l.received,
+        damaged: l.damaged,
+        note: l.note,
+      });
+      if (e) return { error: e.message };
+    }
+  }
+  const keep = new Set(clean.value.lines.map((l) => l.itemId));
+  const gone = before.filter((l) => !keep.has(l.item_id));
+  if (gone.length) {
+    const { error: e } = await admin.from("import_delivery_lines").delete().in("id", gone.map((l) => l.id)).eq("import_id", a.imp.id);
+    if (e) return { error: e.message };
+  }
+  const photoRes = await insertDeliveryPhotos(admin, a, d.id, photos);
+  if (photoRes.error) return { error: `La entrega se corrigió, pero no las fotos: ${photoRes.error}` };
+
+  const name = new Map(items.map((i) => [i.id, i.name]));
+  const beforeText = before.map((l) => `${l.received} × ${name.get(l.item_id) ?? "producto"}${l.damaged ? ` (${l.damaged} dañada${l.damaged === 1 ? "" : "s"})` : ""}`).join(" · ");
+  await addEvent(
+    admin,
+    a.imp,
+    a.userId,
+    "recepcion",
+    `${deliveryEventNote("Entrega corregida", { delivered_on: clean.value.delivered_on, lines: linesWithNames(clean.value.lines, items), photos: photos.length })} Antes${d.delivered_on !== clean.value.delivered_on ? ` (del ${formatDmy(d.delivered_on)})` : ""}: ${beforeText || "nada"}.`,
+  );
+  const moved = await advanceAfterDelivery(admin, a);
+  if (moved && typeof moved === "object") return { error: moved.error };
+  revalidate(a.imp.id);
+  return { notice: `Entrega corregida.${movedNotice(moved)}` };
+}
+
+/**
+ * Quitar una entrega (MOM §45.14): sus unidades salen de los totales (trigger
+ * de la 0343) y sus fotos se quedan en Documentos (la evidencia no se borra).
+ * Solo «Compras». El estado no retrocede solo.
+ */
+export async function removeDelivery(deliveryId: string): Promise<ComprasActionState> {
+  const admin = createAdminSupabase();
+  const d = await loadDelivery(admin, deliveryId);
+  if (!d) return { error: "Esa entrega ya no está." };
+  const a = await authorize(admin, d.import_id, { manage: true });
+  if ("error" in a) return a;
+  const [lines, items] = await Promise.all([deliveryLines(admin, d), loadDeliveryItems(admin, a.imp.id)]);
+  const { data: photoRows } = await admin.from("import_documents").select("id").eq("delivery_id", d.id).eq("import_id", a.imp.id);
+  const photos = ((photoRows ?? []) as unknown[]).length;
+  // Las fotos quedan sueltas en Documentos (la 0343 también lo hace sola: `on delete set null`).
+  if (photos) {
+    const { error } = await admin.from("import_documents").update({ delivery_id: null }).eq("delivery_id", d.id).eq("import_id", a.imp.id);
+    if (error) return { error: error.message };
+  }
+  const { error: linesError } = await admin.from("import_delivery_lines").delete().eq("delivery_id", d.id).eq("import_id", a.imp.id);
+  if (linesError) return { error: linesError.message };
+  const { error } = await admin.from("import_deliveries").delete().eq("id", d.id).eq("import_id", a.imp.id);
+  if (error) return { error: error.message };
+  const name = new Map(items.map((i) => [i.id, i.name]));
+  await addEvent(
+    admin,
+    a.imp,
+    a.userId,
+    "recepcion",
+    `${deliveryEventNote("Entrega quitada", {
+      delivered_on: d.delivered_on,
+      lines: lines.map((l) => ({ name: name.get(l.item_id) ?? "producto", received: l.received, damaged: l.damaged })),
+    })}${photos ? ` ${photos === 1 ? "Su foto queda" : `Sus ${photos} fotos quedan`} en Documentos.` : ""}`,
+  );
+  revalidate(a.imp.id);
+  return { notice: "Entrega quitada: sus unidades ya no cuentan." };
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +912,7 @@ export async function addImportCost(importId: string, input: CostInput): Promise
   const a = await authorize(admin, importId, { manage: true, money: true });
   if ("error" in a) return a;
   const { data: rows } = await admin.from("import_items").select("id").eq("import_id", a.imp.id);
-  const clean = cleanCost(input, ((rows ?? []) as { id: string }[]).map((r) => r.id));
+  const clean = cleanCost(input, ((rows ?? []) as { id: string }[]).map((r) => r.id), baseCurrencyOf(a.imp.kind));
   if ("error" in clean) return clean;
   const inserted = await insertImportCost(admin, a, clean.value);
   if ("error" in inserted) return inserted;
@@ -635,6 +945,40 @@ async function insertImportCost(admin: SupabaseClient, a: Access, v: CostValue):
   return { id };
 }
 
+/**
+ * Editar un costo (MOM §45.3, «permíteme editar los costos»): tipo, nombre,
+ * moneda y monto, IGV, reparto y producto, con las MISMAS reglas que
+ * agregarlo (`cleanCost`) y el mismo permiso («Compras» y «Montos de
+ * compras»). No en una compra cancelada. El hecho de dinero dice qué cambió.
+ */
+export async function updateImportCost(costId: string, input: CostInput): Promise<ComprasActionState> {
+  if (!isUuid(costId)) return { error: "Ese costo ya no está." };
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("import_costs").select(`import_id,${COST_COLS}`).eq("id", costId).maybeSingle();
+  const row = data as Record<string, unknown> | null;
+  if (!row) return { error: "Ese costo ya no está." };
+  const a = await authorize(admin, String(row.import_id), { manage: true, money: true });
+  if ("error" in a) return a;
+  if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
+  const before = normalizeCost(row);
+  const { data: rows } = await admin.from("import_items").select("id,name").eq("import_id", a.imp.id);
+  const items = (rows ?? []) as { id: string; name: string }[];
+  const clean = cleanCost(input, items.map((r) => r.id), baseCurrencyOf(a.imp.kind));
+  if ("error" in clean) return clean;
+  const name = new Map(items.map((i) => [i.id, i.name]));
+  const note = costChangeNote(
+    { ...before, igv_treatment: before.igv_treatment },
+    costSnapshotOf(clean.value),
+    (id) => (id ? (name.get(id) ?? "un producto") : "un producto que ya no está"),
+  );
+  if (!note) return { notice: "Sin cambios." };
+  const { error } = await admin.from("import_costs").update(clean.value).eq("id", costId).eq("import_id", a.imp.id);
+  if (error) return { error: error.message };
+  await addEvent(admin, a.imp, a.userId, "dinero", note);
+  revalidate(a.imp.id);
+  return { notice: "Costo guardado." };
+}
+
 export async function removeImportCost(costId: string): Promise<ComprasActionState> {
   if (!isUuid(costId)) return { error: "Ese costo ya no está." };
   const admin = createAdminSupabase();
@@ -651,13 +995,55 @@ export async function removeImportCost(costId: string): Promise<ComprasActionSta
   return { notice: "Costo quitado." };
 }
 
-export async function addImportPayment(importId: string, input: PaymentInput): Promise<ComprasActionState> {
+/**
+ * Registrar un pago. El comprobante puede ser uno ya subido (`documentId`) o la
+ * captura que se adjunta en el mismo formulario (`voucher`: ya subida con
+ * `startImportUpload(…, "payment")`), que se registra como «Comprobante de
+ * pago» y queda ligada al pago. En una compra local el comprobante es
+ * obligatorio (MOM §45.12); en una importación, opcional.
+ */
+export async function addImportPayment(
+  importId: string,
+  input: PaymentInput & { voucher?: { path: string; filename?: string | null } | null },
+): Promise<ComprasActionState> {
   const admin = createAdminSupabase();
   const a = await authorize(admin, importId, { manage: true, money: true });
   if ("error" in a) return a;
   const { data: docs } = await admin.from("import_documents").select("id").eq("import_id", a.imp.id).eq("kind", "payment");
-  const clean = cleanPayment(input, ((docs ?? []) as { id: string }[]).map((d) => d.id));
-  if ("error" in clean) return clean;
+  const docIds = ((docs ?? []) as { id: string }[]).map((d) => d.id);
+  let voucher: { id: string; path: string; filename: string | null; mime: string; size: number } | null = null;
+  if (input.voucher?.path) {
+    const path = String(input.voucher.path).trim();
+    if (!isImportFilePath(path, a.imp.org_id, a.imp.id, "docs")) return { error: "El comprobante no es de esta compra." };
+    const filename = cleanFilename(input.voucher.filename);
+    const file = await checkUploadedFile(admin, path, "payment", filename);
+    if ("error" in file) return file;
+    voucher = { id: randomUUID(), path, filename, mime: file.mime, size: file.size };
+    docIds.push(voucher.id);
+  }
+  const clean = cleanPayment(voucher ? { ...input, documentId: voucher.id } : input, docIds, {
+    voucherRequired: paymentNeedsVoucher(a.imp.kind),
+    base: baseCurrencyOf(a.imp.kind),
+  });
+  if ("error" in clean) {
+    if (voucher) await admin.storage.from(IMPORT_FILES_BUCKET).remove([voucher.path]).catch(() => {});
+    return clean;
+  }
+  if (voucher) {
+    const { error } = await admin.from("import_documents").insert({
+      id: voucher.id,
+      org_id: a.imp.org_id,
+      import_id: a.imp.id,
+      kind: "payment",
+      storage_path: voucher.path,
+      filename: voucher.filename,
+      mime: voucher.mime,
+      size_bytes: voucher.size,
+      uploaded_by: a.userId,
+    });
+    if (error) return { error: error.message };
+    await addEvent(admin, a.imp, a.userId, "dinero", `Documento subido: ${docKindLabel("payment")}${voucher.filename ? ` (${voucher.filename})` : ""}.`);
+  }
   const { error } = await admin.from("import_payments").insert({
     id: randomUUID(),
     org_id: a.imp.org_id,
@@ -665,12 +1051,94 @@ export async function addImportPayment(importId: string, input: PaymentInput): P
     ...clean.value,
     created_by: a.userId,
   });
-  if (error) return { error: error.message };
+  if (error) {
+    // Sin pago, la captura que se subió para él no queda suelta.
+    if (voucher) {
+      await admin.from("import_documents").delete().eq("id", voucher.id).eq("import_id", a.imp.id);
+      await admin.storage.from(IMPORT_FILES_BUCKET).remove([voucher.path]).catch(() => {});
+    }
+    return { error: error.message };
+  }
   const v = clean.value;
   const amount = (v.currency === "PEN" ? v.amount_pen : v.amount_usd) ?? 0;
-  await addEvent(admin, a.imp, a.userId, "dinero", `Pago registrado: ${moneyText(amount, v.currency)} · ${paymentMethodLabel(v.method)} · ${formatDmy(v.paid_on)}.`);
+  await addEvent(
+    admin,
+    a.imp,
+    a.userId,
+    "dinero",
+    `Pago registrado: ${moneyText(amount, v.currency)} · ${paymentMethodLabel(v.method)} · ${formatDmy(v.paid_on)}${v.document_id ? " · con comprobante" : ""}.`,
+  );
   revalidate(a.imp.id);
   return { notice: "Pago registrado." };
+}
+
+/**
+ * Editar un pago (MOM §45.3): monto y moneda, fecha, método, nota y
+ * comprobante, con las mismas reglas que registrarlo (`cleanPayment`) y el
+ * mismo permiso. Sin tocarlo, el comprobante se queda; en una compra local
+ * sigue siendo obligatorio. Se puede adjuntar una captura nueva (`voucher`). No
+ * en una compra cancelada. El hecho de dinero dice qué cambió.
+ */
+export async function updateImportPayment(
+  paymentId: string,
+  input: PaymentInput & { voucher?: { path: string; filename?: string | null } | null },
+): Promise<ComprasActionState> {
+  if (!isUuid(paymentId)) return { error: "Ese pago ya no está." };
+  const admin = createAdminSupabase();
+  const { data } = await admin.from("import_payments").select(`import_id,${PAYMENT_COLS}`).eq("id", paymentId).maybeSingle();
+  const row = data as Record<string, unknown> | null;
+  if (!row) return { error: "Ese pago ya no está." };
+  const a = await authorize(admin, String(row.import_id), { manage: true, money: true });
+  if ("error" in a) return a;
+  if (a.imp.status === "cancelado") return { error: "La importación está cancelada." };
+  const before = normalizePayment(row);
+  const { data: docs } = await admin.from("import_documents").select("id").eq("import_id", a.imp.id).eq("kind", "payment");
+  const docIds = ((docs ?? []) as { id: string }[]).map((d) => d.id);
+  let voucher: { id: string; path: string; filename: string | null; mime: string; size: number } | null = null;
+  if (input.voucher?.path) {
+    const path = String(input.voucher.path).trim();
+    if (!isImportFilePath(path, a.imp.org_id, a.imp.id, "docs")) return { error: "El comprobante no es de esta compra." };
+    const filename = cleanFilename(input.voucher.filename);
+    const file = await checkUploadedFile(admin, path, "payment", filename);
+    if ("error" in file) return file;
+    voucher = { id: randomUUID(), path, filename, mime: file.mime, size: file.size };
+    docIds.push(voucher.id);
+  }
+  // Sin decir nada del comprobante, se queda el que tenía.
+  const documentId = voucher ? voucher.id : input.documentId === undefined ? before.document_id : input.documentId;
+  const clean = cleanPayment({ ...input, documentId }, docIds, {
+    voucherRequired: paymentNeedsVoucher(a.imp.kind),
+    base: baseCurrencyOf(a.imp.kind),
+  });
+  if ("error" in clean) {
+    if (voucher) await admin.storage.from(IMPORT_FILES_BUCKET).remove([voucher.path]).catch(() => {});
+    return clean;
+  }
+  const note = paymentChangeNote(before, paymentSnapshotOf(clean.value));
+  if (!note) {
+    if (voucher) await admin.storage.from(IMPORT_FILES_BUCKET).remove([voucher.path]).catch(() => {});
+    return { notice: "Sin cambios." };
+  }
+  if (voucher) {
+    const { error } = await admin.from("import_documents").insert({
+      id: voucher.id,
+      org_id: a.imp.org_id,
+      import_id: a.imp.id,
+      kind: "payment",
+      storage_path: voucher.path,
+      filename: voucher.filename,
+      mime: voucher.mime,
+      size_bytes: voucher.size,
+      uploaded_by: a.userId,
+    });
+    if (error) return { error: error.message };
+    await addEvent(admin, a.imp, a.userId, "dinero", `Documento subido: ${docKindLabel("payment")}${voucher.filename ? ` (${voucher.filename})` : ""}.`);
+  }
+  const { error } = await admin.from("import_payments").update(clean.value).eq("id", paymentId).eq("import_id", a.imp.id);
+  if (error) return { error: error.message };
+  await addEvent(admin, a.imp, a.userId, "dinero", note);
+  revalidate(a.imp.id);
+  return { notice: "Pago guardado." };
 }
 
 export async function removeImportPayment(paymentId: string): Promise<ComprasActionState> {
@@ -744,7 +1212,7 @@ export async function startImportUpload(
 /** Registra el documento ya subido, con el tipo y tamaño que dice Storage. */
 export async function registerImportDocument(
   importId: string,
-  input: { kind: string; path: string; filename: string },
+  input: { kind: string; path: string; filename: string; deliveryId?: string | null },
 ): Promise<ComprasActionState> {
   if (!isDocKind(input.kind)) return { error: "Tipo de documento inválido." };
   const kind = input.kind;
@@ -754,7 +1222,15 @@ export async function registerImportDocument(
   const denied = uploadDenied(kind, a.perms);
   if (denied) return { error: denied };
   if (!isImportFilePath(input.path, a.imp.org_id, a.imp.id, "docs")) return { error: "El archivo no es de esta importación." };
-  const filename = String(input.filename ?? "").replace(/[\u0000-\u001f/\\]/g, "_").trim().slice(0, 200) || null;
+  // Una foto más de una entrega ya registrada (MOM §45.14): la entrega es de ESTA compra.
+  const deliveryId = String(input.deliveryId ?? "").trim() || null;
+  let delivery: DeliveryRecord | null = null;
+  if (deliveryId) {
+    if (kind !== "photo") return { error: "A una entrega solo se le agregan fotos." };
+    delivery = await loadDelivery(admin, deliveryId);
+    if (!delivery || delivery.import_id !== a.imp.id) return { error: "Esa entrega no es de esta compra." };
+  }
+  const filename = cleanFilename(input.filename);
   const file = await checkUploadedFile(admin, input.path, kind, filename);
   if ("error" in file) return file;
   const id = randomUUID();
@@ -768,27 +1244,41 @@ export async function registerImportDocument(
     mime: file.mime,
     size_bytes: file.size,
     uploaded_by: a.userId,
+    ...(delivery ? { delivery_id: delivery.id } : {}),
   });
   if (error) return { error: error.message };
   await addEvent(
     admin,
     a.imp,
     a.userId,
-    isMoneyDoc(kind) ? "dinero" : "documento",
-    `Documento subido: ${docKindLabel(kind)}${filename ? ` (${filename})` : ""}.`,
+    delivery ? "recepcion" : isMoneyDoc(kind) ? "dinero" : "documento",
+    delivery
+      ? `Foto agregada a la entrega del ${formatDmy(delivery.delivered_on)}${filename ? ` (${filename})` : ""}.`
+      : `Documento subido: ${docKindLabel(kind)}${filename ? ` (${filename})` : ""}.`,
   );
   revalidate(a.imp.id);
-  return { id, notice: "Documento subido." };
+  return { id, notice: delivery ? "Foto agregada a la entrega." : "Documento subido." };
 }
 
 export async function removeImportDocument(documentId: string): Promise<ComprasActionState> {
   if (!isUuid(documentId)) return { error: "Ese documento ya no está." };
   const admin = createAdminSupabase();
-  const { data } = await admin.from("import_documents").select("import_id,kind,storage_path,filename").eq("id", documentId).maybeSingle();
-  const doc = data as { import_id: string; kind: string; storage_path: string; filename: string | null } | null;
+  const { data } = await admin.from("import_documents").select("import_id,kind,storage_path,filename,delivery_id").eq("id", documentId).maybeSingle();
+  const doc = data as { import_id: string; kind: string; storage_path: string; filename: string | null; delivery_id?: string | null } | null;
   if (!doc) return { error: "Ese documento ya no está." };
   const a = await authorize(admin, doc.import_id, { manage: true, money: isMoneyDoc(doc.kind) });
   if ("error" in a) return a;
+  // La evidencia obligatoria de una compra local (MOM §45.12, §45.14) no se queda en cero.
+  if (paymentNeedsVoucher(a.imp.kind) && doc.kind === "payment") {
+    const { data: paid } = await admin.from("import_payments").select("id").eq("document_id", documentId).eq("import_id", a.imp.id).limit(1);
+    if (((paid ?? []) as unknown[]).length) return { error: "Es el comprobante de un pago de esta compra local: quita primero el pago." };
+  }
+  if (deliveryNeedsPhoto(a.imp.kind) && doc.delivery_id) {
+    const { data: siblings } = await admin.from("import_documents").select("id").eq("delivery_id", doc.delivery_id).eq("import_id", a.imp.id);
+    if (((siblings ?? []) as { id: string }[]).filter((x) => x.id !== documentId).length === 0) {
+      return { error: "Es la única foto de esa entrega: agrega otra antes de quitarla, o quita la entrega." };
+    }
+  }
   if (doc.kind === "payment") {
     await admin.from("import_payments").update({ document_id: null }).eq("document_id", documentId).eq("import_id", a.imp.id);
   }
@@ -851,6 +1341,8 @@ export async function pushImportCosts(importId: string): Promise<ComprasActionSt
       costPushedAt: it.cost_pushed_at,
     })),
     landed,
+    // Una importación pide sus tres códigos de trazabilidad (MOM §45.15).
+    trace: traceCodes(a.imp),
   });
   if (plan.alreadyDone) return { notice: "Ya se pasó a Costos." };
   if (!plan.ready) return { error: plan.blockers.join(" ") || "No hay productos para pasar a Costos." };
@@ -931,7 +1423,7 @@ export type AiReadState =
       currency: string | null;
       lines: AiProposalLine[];
       /** Cada cargo en la moneda que dice el documento (un courier de Perú, en soles). */
-      charges: { kind: CostKind; label: string; amount: number; currency: string | null }[];
+      charges: { kind: CostKind; label: string; amount: number; currency: string | null; igvTreatment: "neto" | "inafecto" }[];
       /** El IGV del documento, aparte: se muestra, nunca se agrega como costo. */
       igv: { amount: number; currency: string | null } | null;
       /** Filas que la IA devolvió sin nombre, sin cantidad o sin monto. */
@@ -939,6 +1431,8 @@ export type AiReadState =
       /** Productos que la importación ya tenía (lo leído se agrega aparte). */
       existingItems: number;
       money: boolean;
+      /** La moneda base de la compra (MOM §45.12): en una compra local los precios van en soles. */
+      base: "USD" | "PEN";
     };
 
 type AiDoc = { id: string; import_id: string; kind: string; storage_path: string; filename: string | null; mime: string; size_bytes: number };
@@ -1004,6 +1498,7 @@ export async function readImportDocumentWithAi(documentId: string): Promise<AiRe
     dropped: proposal.dropped,
     existingItems: ((existing ?? []) as unknown[]).length,
     money: a.canMoney,
+    base: baseCurrencyOf(a.imp.kind),
   };
 }
 
@@ -1028,12 +1523,13 @@ export async function addAiProposalRows(importId: string, input: AiConfirmInput)
   if (!doc || doc.import_id !== a.imp.id || !canReadWithAi(doc)) return { error: "El documento leído no es de esta importación." };
   if (isMoneyDoc(doc.kind) && !a.canMoney) return { error: "Hace falta el permiso «Montos de compras»." };
 
-  const conv = aiConfirmToInputs(input, a.canMoney);
+  const base = baseCurrencyOf(a.imp.kind);
+  const conv = aiConfirmToInputs(input, a.canMoney, base);
   if ("error" in conv) return conv;
 
   const items: ItemValue[] = [];
   for (const [i, row] of conv.items.entries()) {
-    const clean = cleanItem(row, a.canMoney);
+    const clean = cleanItem(row, a.canMoney, base);
     if ("error" in clean) return { error: `Producto ${i + 1}: ${clean.error}` };
     items.push(clean.value);
   }
@@ -1044,7 +1540,7 @@ export async function addAiProposalRows(importId: string, input: AiConfirmInput)
   const itemIds = ((rows ?? []) as { id: string }[]).map((r) => r.id);
   const costs: CostValue[] = [];
   for (const [i, c] of conv.costs.entries()) {
-    const clean = cleanCost(c, itemIds);
+    const clean = cleanCost(c, itemIds, base);
     if ("error" in clean) return { error: `Cargo ${i + 1}: ${clean.error}` };
     costs.push(clean.value);
   }

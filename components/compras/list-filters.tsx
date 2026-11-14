@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { AttentionPill } from "@/components/ops-ui";
 import { ChoicePill } from "@/components/facet-pill";
 import { IconAlert, IconClock, IconTruck } from "@/components/icons";
-import { IMPORT_ALERT_FILTERS, comprasListHref, type ImportAlertFilter } from "@/components/compras/chrome";
+import { IMPORT_ALERT_FILTERS, IMPORT_KIND_FILTERS, comprasListHref, type ImportAlertFilter } from "@/components/compras/chrome";
 
 const ICON = { avisar: IconTruck, atrasadas: IconClock, sin_novedades: IconAlert } as const;
 
@@ -18,12 +18,14 @@ export function AlertPills({
   org,
   proveedor,
   alerta,
+  tipo = null,
   counts,
 }: {
   tab: string;
   org: string | null;
   proveedor: string | null;
   alerta: ImportAlertFilter | null;
+  tipo?: string | null;
   counts: Record<ImportAlertFilter, number>;
 }) {
   const router = useRouter();
@@ -41,7 +43,7 @@ export function AlertPills({
             hint={f.hint}
             // Las alertas son de las activas: encender una lleva a «Activas».
             onClick={() =>
-              router.push(comprasListHref({ tab: active ? tab : "activas", org, proveedor, alerta: active ? null : f.id }), { scroll: false })
+              router.push(comprasListHref({ tab: active ? tab : "activas", org, proveedor, tipo, alerta: active ? null : f.id }), { scroll: false })
             }
           />
         );
@@ -55,12 +57,14 @@ export function SupplierPill({
   org,
   proveedor,
   alerta,
+  tipo = null,
   options,
 }: {
   tab: string;
   org: string | null;
   proveedor: string | null;
   alerta: string | null;
+  tipo?: string | null;
   options: { value: string; label: string; count: number }[];
 }) {
   const router = useRouter();
@@ -72,7 +76,36 @@ export function SupplierPill({
       allValue=""
       options={options}
       value={proveedor ?? ""}
-      onChange={(next) => router.push(comprasListHref({ tab, org, proveedor: next || null, alerta }), { scroll: false })}
+      onChange={(next) => router.push(comprasListHref({ tab, org, proveedor: next || null, alerta, tipo }), { scroll: false })}
+    />
+  );
+}
+
+/** El tipo de compra (MOM §45.12): importaciones o compras locales; vive en `?tipo=`. */
+export function KindPill({
+  tab,
+  org,
+  proveedor,
+  alerta,
+  tipo,
+  counts,
+}: {
+  tab: string;
+  org: string | null;
+  proveedor: string | null;
+  alerta: string | null;
+  tipo: string | null;
+  counts: Record<string, number>;
+}) {
+  const router = useRouter();
+  return (
+    <ChoicePill
+      label="Tipo"
+      allLabel="Todas las compras"
+      allValue=""
+      options={IMPORT_KIND_FILTERS.map((k) => ({ value: k.id, label: k.label, count: counts[k.id] ?? 0 }))}
+      value={tipo ?? ""}
+      onChange={(next) => router.push(comprasListHref({ tab, org, proveedor, alerta, tipo: next || null }), { scroll: false })}
     />
   );
 }

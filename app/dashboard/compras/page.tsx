@@ -14,11 +14,11 @@ import {
   loadSuppliers,
   resolveComprasOrg,
 } from "@/lib/compras-server";
-import { IMPORT_TABS, isUuid, limaToday, type ImportTab } from "@/lib/compras";
+import { IMPORT_TABS, isImportKind, isUuid, limaToday, type ImportTab } from "@/lib/compras";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{ v?: string; org?: string; proveedor?: string; alerta?: string }>;
+type SearchParams = Promise<{ v?: string; org?: string; proveedor?: string; alerta?: string; tipo?: string }>;
 
 export default function ComprasPage({ searchParams }: { searchParams: SearchParams }) {
   return (
@@ -51,6 +51,8 @@ async function ComprasContent({ searchParams }: { searchParams: SearchParams }) 
   const supplierFilter = isUuid(sp.proveedor) ? (suppliers.find((s) => s.id === sp.proveedor) ?? null) : null;
   // `?alerta=`: las píldoras de excepción (solo filtran la vista).
   const alerta = IMPORT_ALERT_FILTERS.some((f) => f.id === sp.alerta) ? (sp.alerta as ImportAlertFilter) : null;
+  // `?tipo=`: importaciones o compras locales (MOM §45.12).
+  const tipo = isImportKind(sp.tipo) ? sp.tipo : null;
 
   return (
     <div className="space-y-6">
@@ -58,7 +60,7 @@ async function ComprasContent({ searchParams }: { searchParams: SearchParams }) 
         title="Compras"
         actions={perms.canManage ? <NewImportButton orgId={orgId} suppliers={suppliers} /> : undefined}
       >
-        Importaciones a la bodega de Kapta en Lima: productos, documentos, costos, pagos y recepción.
+        Importaciones y compras locales a laboratorios y maquilas, a la bodega de Kapta en Lima: productos, documentos, costos, pagos y entregas.
       </ComprasHeader>
 
       <ComprasSubnav current="importaciones" perms={perms} orgId={orgId} multiOrg={allowed.length > 1} />
@@ -69,6 +71,7 @@ async function ComprasContent({ searchParams }: { searchParams: SearchParams }) 
         supplierFilter={supplierFilter}
         tab={tab}
         alerta={alerta}
+        tipo={tipo}
         canMoney={perms.canMoney}
         orgParam={allowed.length > 1 ? orgId : null}
         today={limaToday()}

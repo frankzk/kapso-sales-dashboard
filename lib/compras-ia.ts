@@ -16,7 +16,14 @@
 // Perú en soles da costos en soles); uno en otra moneda (la del documento: CNY,
 // EUR…) pasa a USD con el tipo de cambio escrito. Los precios de los productos
 // siguen pasando a USD. La IA devuelve cada monto SIN IGV (el valor de venta) y
-// el IGV aparte: se muestra como dato y nunca se agrega como costo.
+// el IGV aparte: se muestra como dato y nunca se agrega como costo. Un cargo
+// que el documento marca inafecto o exonerado se propone «Inafecto a IGV»; los
+// demás, «Sin IGV (monto neto)» (0343).
+//
+// Compra LOCAL (0343, MOM §45.12): la base es en soles. Los precios de un
+// documento en soles se quedan en soles (sin tipo de cambio); los de otra
+// moneda pasan a soles con «1 <moneda> = X S/». Los cargos siguen igual: en
+// USD o en soles, tal cual.
 
 import {
   COST_KINDS,
@@ -93,6 +100,12 @@ export interface AiCharge {
   amount: number;
   /** La moneda del cargo (ISO 4217); sin ella, la del documento; null si ninguno la dice. */
   currency: string | null;
+  /**
+   * El IGV del cargo (0343, MOM §45.10): `inafecto` si el documento lo marca
+   * inafecto o exonerado; si no, `neto` (su monto ya viene sin IGV). Nunca
+   * `con_igv`: los montos de la IA vienen sin IGV.
+   */
+  igvTreatment: "neto" | "inafecto";
 }
 
 /** El IGV del documento: un dato aparte, nunca un costo. */
@@ -254,7 +267,15 @@ export function parseAiProposal(raw: unknown): AiProposal | null {
     }
     const kind = chargeKind(c.kind);
     // La moneda de CADA cargo; sin ella, la del documento.
-    charges.push({ kind, label: str(c.label ?? c.name, 120) ?? costKindLabel(kind), amount, currency: isoCurrency(c.currency) ?? currency });
+    // Inafecto o exonerado (lo dice el documento); si no, neto: su monto ya va sin IGV.
+    const exempt = c.igv_exempt === true || /^(inafect|exoner)/i.test(String(c.igv ?? c.igv_treatment ?? ""));
+    charges.push({
+      kind,
+      label: str(c.label ?? c.name, 120) ?? costKindLabel(kind),
+      amount,
+      currency: isoCurrency(c.currency) ?? currency,
+      igvTreatment: exempt ? "inafecto" : "neto",
+    });
     if (charges.length >= AI_MAX_CHARGES) break;
   }
 
@@ -411,6 +432,8 @@ export interface AiConfirmCharge {
   /** USD, PEN o la moneda del documento; vacío = la del documento. */
   currency?: unknown;
   allocation?: unknown;
+  /** neto (por defecto) o inafecto; nunca con IGV (los montos vienen sin IGV). */
+  igvTreatment?: unknown;
 }
 
 export interface AiConfirmInput {
@@ -445,6 +468,24 @@ export function chargeToUsd(amount: number, fx: number): number {
   return round2(amount / fx);
 }
 
+/** Precio por unidad en soles (compra local): × X («1 <moneda> = X S/») y a 4 decimales. */
+export function unitToPen(price: number, penPerUnit: number): number {
+  return round4(price * penPerUnit);
+}
+
+/** Un cargo en soles (compra local) desde la moneda del documento: × X y a 2 decimales. */
+export function chargeToPen(amount: number, penPerUnit: number): number {
+  return round2(amount * penPerUnit);
+}
+
+/**
+ * ¿Hace falta el tipo de cambio para los PRECIOS? Solo si el documento no está
+ * en la moneda base de la compra (USD la importación, soles la compra local).
+ */
+export function aiPricesNeedFx(documentCurrency: string, base: "USD" | "PEN"): boolean {
+  return documentCurrency !== base;
+}
+
 /**
  * La moneda en que se GUARDA un cargo de la propuesta: USD y soles, tal cual
  * (0342); la del documento (CNY, EUR…), en USD con el tipo de cambio escrito.
@@ -472,6 +513,8 @@ export function aiChargeNeedsFx(chargeCurrency: string): boolean {
 export function aiConfirmToInputs(
   input: AiConfirmInput,
   canMoney: boolean,
+  /** La moneda base de la compra: USD (importación) o PEN (compra local, MOM §45.12). */
+  base: "USD" | "PEN" = "USD",
 ): { items: ItemInput[]; costs: CostInput[]; currency: string | null; fx: number | null } | { error: string } {
   const lines = Array.isArray(input.lines) ? input.lines : [];
   const charges = canMoney && Array.isArray(input.charges) ? input.charges : [];
@@ -494,10 +537,12 @@ export function aiConfirmToInputs(
       chargeCurrencies.push(cur);
     }
     const prices = lines.some((l) => String(l.unitPrice ?? "").trim() !== "");
-    if (currency === "USD") fx = 1;
+    // Importación: «1 USD = X <moneda>». Compra local: «1 <moneda> = X S/»; en
+    // soles no se pide nada (los precios se quedan en soles).
+    if (currency === base) fx = 1;
     else if (prices || chargeCurrencies.some(aiChargeNeedsFx)) {
       fx = cleanAiFx(input.fx);
-      if (fx === null) return { error: `Escribe el tipo de cambio: 1 USD = X ${currency}.` };
+      if (fx === null) return { error: base === "PEN" ? `Escribe el tipo de cambio: 1 ${currency} = X S/.` : `Escribe el tipo de cambio: 1 USD = X ${currency}.` };
     }
   }
 
@@ -512,11 +557,12 @@ export function aiConfirmToInputs(
     };
     if (canMoney) {
       const raw = String(l.unitPrice ?? "").trim();
-      if (raw === "") item.unitCostUsd = "";
+      const key = base === "PEN" ? "unitCostPen" : "unitCostUsd";
+      if (raw === "") item[key] = "";
       else {
         const price = parseDecimal(raw);
         if (price === null || price < 0) return { error: `Producto ${i + 1}: precio inválido.` };
-        item.unitCostUsd = String(unitToUsd(price, fx ?? 1));
+        item[key] = String(base === "PEN" ? unitToPen(price, fx ?? 1) : unitToUsd(price, fx ?? 1));
       }
       item.salePricePen = "";
     }
@@ -532,9 +578,13 @@ export function aiConfirmToInputs(
     const allocation = String(c.allocation ?? "") || "value";
     if (allocation === "item") return { error: `Cargo ${i + 1}: elige un reparto por valor, unidades o peso.` };
     const cur = chargeCurrencies[i]!;
-    // USD y soles, tal cual; la moneda del documento, a USD con el tipo de cambio.
-    const stored = aiChargeNeedsFx(cur) ? chargeToUsd(amount, fx ?? 1) : round2(amount);
-    costs.push({ kind, label: String(c.label ?? ""), amount: String(stored), currency: aiChargeStoredCurrency(cur), allocation });
+    // USD y soles, tal cual; la moneda del documento, a la base con el tipo de
+    // cambio (a USD en una importación, a soles en una compra local).
+    const convert = aiChargeNeedsFx(cur);
+    const stored = convert ? (base === "PEN" ? chargeToPen(amount, fx ?? 1) : chargeToUsd(amount, fx ?? 1)) : round2(amount);
+    const storedCurrency = convert ? base : aiChargeStoredCurrency(cur);
+    const igvTreatment = String(c.igvTreatment ?? "") === "inafecto" ? "inafecto" : "neto";
+    costs.push({ kind, label: String(c.label ?? ""), amount: String(stored), currency: storedCurrency, allocation, igvTreatment });
   }
   return { items, costs, currency, fx };
 }

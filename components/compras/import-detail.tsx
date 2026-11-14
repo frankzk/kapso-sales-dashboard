@@ -14,6 +14,13 @@
 // convertir y no lo tiene dice «Falta el tipo de cambio». «Incluye IGV» en un
 // costo guarda el total con IGV y entra al costo ÷ 1,18.
 //
+// Compras locales, cortesía y entregas (MOM §45.12–§45.14, 0343): una compra
+// local va en soles y no lleva transporte, guía ni aviso a la bodega; cada
+// producto puede traer unidades de cortesía; lo que llega se registra por
+// entregas (fecha, quién, unidades por producto y fotos) con su avance «Llegaron
+// 400 de 600 (+50 cortesía) · faltan 250». Una entrega de una compra local lleva
+// foto y un pago, la captura del comprobante.
+//
 // En el mundo de operación (DESIGN.md): título de 28 px con su chapa, el marco
 // de cifras, un índice pegajoso con el aviso de la última acción, la próxima
 // acción con anillo azul y cada parte en su tarjeta de sección sobre el lienzo.
@@ -23,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ComponentType, type ReactNode, type SVGProps } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, CARD_ZONE, CHECKBOX, SECTION_CARD, SectionHead, choiceChipClass } from "@/components/ops-ui";
+import { Badge, Banner, CARD_ZONE, SECTION_CARD, SectionHead, choiceChipClass } from "@/components/ops-ui";
 import {
   IconActivity,
   IconArrowLeft,
@@ -46,16 +53,30 @@ import {
   ALLOCATIONS,
   COST_KINDS,
   CURRENCIES,
+  DELIVERY_PHOTO_REQUIRED,
   DOC_KINDS,
   IGV_HELP,
+  IGV_TREATMENTS,
   IMPORT_STATUSES,
   IMPORT_STATUS_LABEL,
   MISSING_FX,
   MOVEMENT_EVENT_KINDS,
   PAYMENT_METHODS,
+  PAYMENT_VOUCHER_REQUIRED,
   RECEIVED_STATUSES,
   TRAVELING_STATUSES,
   allocationLabel,
+  baseCurrencyOf,
+  deliveryNeedsPhoto,
+  expectedUnits,
+  hasShipping,
+  importKindLabel,
+  lineProgress,
+  lineProgressText,
+  paymentNeedsVoucher,
+  TRACE_CODES,
+  statusTraceBlocker,
+  traceCodes,
   canUploadDocKind,
   costKindLabel,
   costPushPlan,
@@ -83,9 +104,10 @@ import {
   warehouseMessage,
   whatsappShareUrl,
   type Currency,
+  type IgvTreatment,
   type ImportEventKind,
 } from "@/lib/compras";
-import type { CostRow, ImportDetail, ItemRow } from "@/lib/compras-server";
+import type { CostRow, DeliveryRow, ImportDetail, ItemRow, PaymentRow } from "@/lib/compras-server";
 import {
   addImportCost,
   addImportItem,
@@ -96,9 +118,13 @@ import {
   removeImportCost,
   removeImportDocument,
   removeImportItem,
+  updateDelivery,
+  registerDelivery,
+  removeDelivery,
   removeImportPayment,
-  saveReception,
   setImportFx,
+  updateImportCost,
+  updateImportPayment,
   setImportItemPhoto,
   setImportStatus,
   setWarehouseReported,
@@ -126,7 +152,7 @@ import {
 import { FigureCell, FigureFrame, importStatusTone } from "@/components/compras/chrome";
 import { uploadImportFile } from "@/components/compras/upload";
 import { useCopyToClipboard } from "@/components/copy-button";
-import { fmtBytes, fmtDateTime, fmtInt, fmtMoney, fmtPct, fmtPen, fmtSplit, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
+import { fmtBytes, fmtDateTime, fmtInt, fmtMoney, fmtPct, fmtPen, fmtPenUnit, fmtSplit, fmtUnit, fmtUsd, fmtUsdUnit } from "@/components/compras/format";
 
 type Store = { id: string; name: string };
 type Run = (fn: () => Promise<ComprasActionState>, after?: () => void) => void;
@@ -136,7 +162,7 @@ const SECTION_LABEL: Record<SectionId, string> = {
   estado: "Estado",
   bodega: "Bodega",
   productos: "Productos",
-  recepcion: "Recepción",
+  recepcion: "Entregas",
   aterrizado: "Costo aterrizado",
   costos: "Costos",
   pagos: "Pagos",
@@ -196,9 +222,11 @@ export function ImportDetailView({
   const { imp, items, perms } = detail;
   const money = perms.canMoney;
   const canEdit = perms.canManage;
-  // La recepción: «Compras» o «Recepción de compras» (MOM §45.11).
+  // Registrar entregas: «Compras» o «Recepción de compras» (MOM §45.11, §45.14).
   const canCount = perms.canManage || perms.canReceive;
   const fx = imp.fx_pen_per_usd ?? null;
+  // Compra local (MOM §45.12): en soles, sin transporte, guía ni aviso a la bodega.
+  const local = !hasShipping(imp.kind);
   const [receptionOpen, setReceptionOpen] = useState(false);
   const [editingData, setEditingData] = useState(false);
 
@@ -214,10 +242,12 @@ export function ImportDetailView({
         (detail.payments ?? []).map((p) => ({ amount: p.amount, currency: p.currency })),
       )
     : null;
-  const reception = receptionSummary(items.map((it) => ({ id: it.id, name: it.name, qty: it.qty, receivedQty: it.received_qty, damagedQty: it.damaged_qty })));
+  const reception = receptionSummary(
+    items.map((it) => ({ id: it.id, name: it.name, qty: it.qty, courtesyQty: it.courtesy_qty, receivedQty: it.received_qty, damagedQty: it.damaged_qty })),
+  );
   const lastMovement = detail.events.find((e) => MOVEMENT_EVENT_KINDS.includes(e.kind))?.at ?? imp.created_at;
-  const alerts = importAlerts({ status: imp.status, eta: imp.eta, reportedAt: imp.reported_to_warehouse_at, lastMovementAt: lastMovement }, today);
-  const checklist = importChecklist(detail.documents.map((d) => d.kind), imp.tracking_number);
+  const alerts = importAlerts({ status: imp.status, kind: imp.kind, eta: imp.eta, reportedAt: imp.reported_to_warehouse_at, lastMovementAt: lastMovement }, today);
+  const checklist = importChecklist(detail.documents.map((d) => d.kind), imp.tracking_number, imp.kind);
   const trackingLink = trackingPublicUrl({ carrier: imp.carrier, trackingNumber: imp.tracking_number, trackingUrl: imp.tracking_url });
   const plan =
     landed &&
@@ -226,12 +256,13 @@ export function ImportDetailView({
       fxPenPerUsd: fx,
       items: items.map((it) => ({ id: it.id, name: it.name, sku: it.sku, storeId: it.store_id, receivedQty: it.received_qty, costPushedAt: it.cost_pushed_at })),
       landed,
+      trace: traceCodes(imp),
     });
   const storeName = new Map(stores.map((s) => [s.id, s.name]));
 
   const sections: SectionId[] = [
     "estado",
-    ...(canEdit ? (["bodega"] as const) : []),
+    ...(canEdit && !local ? (["bodega"] as const) : []),
     "productos",
     "recepcion",
     ...(money && landed ? (["aterrizado", "costos", "pagos"] as const) : []),
@@ -253,8 +284,13 @@ export function ImportDetailView({
   // La próxima acción: la primera que aplica, solo con lo que ya dicen las
   // alertas, la recepción y el plan de Costos (no hay reglas nuevas aquí).
   const receptionEditable = canCount && imp.status !== "cancelado" && items.length > 0;
+  // Toca registrar lo que llega: ya en la bodega (o una parte), en camino con
+  // la llegada vencida o, en una compra local, en cualquier momento después de
+  // la cotización (la trae el laboratorio).
   const due =
-    (TRAVELING_STATUSES.includes(imp.status) && alerts.daysToEta !== null && alerts.daysToEta <= 0) || RECEIVED_STATUSES.includes(imp.status);
+    imp.status === "recibido_parcial" ||
+    (local ? isActiveStatus(imp.status) && imp.status !== "cotizacion" : TRAVELING_STATUSES.includes(imp.status) && alerts.daysToEta !== null && alerts.daysToEta <= 0) ||
+    RECEIVED_STATUSES.includes(imp.status);
   const next: { title: string; help: string; label: string; onClick: () => void } | null =
     canEdit && alerts.notifyWarehouse
       ? {
@@ -263,13 +299,13 @@ export function ImportDetailView({
           label: "Ir al aviso",
           onClick: () => jump("bodega"),
         }
-      : receptionEditable && due && !reception.complete
+      : receptionEditable && due && !reception.allArrived
         ? {
-            title: reception.counted ? "Completar la recepción" : "Registrar recepción",
-            help: reception.counted
-              ? `Falta contar ${reception.uncounted} producto${reception.uncounted === 1 ? "" : "s"}.`
-              : "Cuenta lo que llegó por producto: cuántas llegaron y cuántas dañadas. Al guardar, si estaba en camino, pasa a Recibido.",
-            label: reception.counted ? "Seguir contando" : "Registrar recepción",
+            title: detail.deliveries.length ? "Registrar la siguiente entrega" : "Registrar entrega",
+            help: detail.deliveries.length
+              ? `Faltan ${fmtInt(reception.expected - reception.received > 0 ? reception.expected - reception.received : 0)} u. de lo esperado (pedidas + cortesía).${local ? " Cada entrega lleva su foto." : ""}`
+              : `Anota lo que llegó por producto: cuántas llegaron y cuántas dañadas${local ? ", con la foto de lo que llegó" : ""}. Si llegó todo, pasa a Recibido; si no, a Recibido parcial.`,
+            label: "Registrar entrega",
             onClick: () => {
               setReceptionOpen(true);
               jump("recepcion");
@@ -278,24 +314,40 @@ export function ImportDetailView({
         : money && plan && !plan.alreadyDone && plan.ready && perms.canPushCosts
           ? {
               title: "Pasar a Costos",
-              help: "La recepción está contada y hay tipo de cambio: ya se puede llevar el costo aterrizado por unidad a Costos de productos.",
+              help: landed?.hasUsd
+                ? "La recepción está contada y hay tipo de cambio: ya se puede llevar el costo aterrizado por unidad a Costos de productos."
+                : "La recepción está contada: ya se puede llevar el costo aterrizado por unidad, en soles, a Costos de productos.",
               label: "Revisar y pasar",
               onClick: () => jump("pasar"),
             }
           : null;
 
   const arrival = arrivalFigure(imp.arrived_on, imp.eta, alerts, isActiveStatus(imp.status));
+  const lastDelivery = detail.deliveries[detail.deliveries.length - 1] ?? null;
   const figures: { key: string; label: string; value: ReactNode; sub?: ReactNode; tone?: "warn" | "crit" | "ok" }[] = [
-    { key: "llegada", label: imp.arrived_on ? "Llegó" : "Llegada estimada", value: arrival.value, sub: arrival.sub, tone: arrival.tone },
+    { key: "llegada", label: imp.arrived_on ? "Llegó" : local ? "Entrega estimada" : "Llegada estimada", value: arrival.value, sub: arrival.sub, tone: arrival.tone },
     {
       key: "unidades",
       label: "Unidades",
       value: fmtInt(reception.ordered),
-      sub: reception.counted ? `${fmtInt(reception.good)} buenas al recibir` : `${items.length} producto${items.length === 1 ? "" : "s"} · sin contar`,
+      sub: [
+        reception.courtesy ? `+${fmtInt(reception.courtesy)} de cortesía` : null,
+        reception.counted ? `${fmtInt(reception.received)} llegaron · ${fmtInt(reception.good)} buenas` : `${items.length} producto${items.length === 1 ? "" : "s"} · sin entregas`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     },
     ...(summary
       ? [
-          summary.totalUsd !== null
+          // La compra local se lee en soles: sin tipo de cambio si todo está en soles.
+          local && summary.totalPen !== null
+            ? {
+                key: "total",
+                label: "Costo total (S/)",
+                value: fmtPen(summary.totalPen),
+                sub: summary.avgUnitPen != null ? `${fmtPenUnit(summary.avgUnitPen)} por unidad buena` : undefined,
+              }
+            : summary.totalUsd !== null
             ? {
                 key: "total",
                 label: "Costo total (USD)",
@@ -315,7 +367,7 @@ export function ImportDetailView({
                 sub: `${MISSING_FX} · ${fmtSplit(summary.total)}`,
                 tone: "warn" as const,
               },
-          balanceFigure(summary),
+          balanceFigure(summary, local),
           {
             key: "ganancia",
             label: "Ganancia esperada (S/)",
@@ -323,26 +375,42 @@ export function ImportDetailView({
             sub:
               summary.recoveryShare != null
                 ? `Recuperas lo invertido al vender el ${Math.min(999, Math.round(summary.recoveryShare * 100))} % de las unidades`
-                : fx
+                : fx || (landed && !landed.hasUsd)
                   ? "Falta el precio de venta de algún producto"
                   : "Falta el tipo de cambio",
           },
         ]
-      : [
-          {
-            key: "guia",
-            label: "Guía",
-            value: <span className="font-mono text-base">{imp.tracking_number ?? "—"}</span>,
-            sub: imp.carrier ?? undefined,
-          },
-          {
-            key: "bodega",
-            label: "Bodega",
-            value: imp.reported_to_warehouse_at ? "Reportada" : "Sin avisar",
-            sub: imp.reported_to_warehouse_at ? fmtDateTime(imp.reported_to_warehouse_at) : undefined,
-            tone: alerts.notifyWarehouse ? ("warn" as const) : undefined,
-          },
-        ]),
+      : local
+        ? [
+            {
+              key: "entregas",
+              label: "Entregas",
+              value: fmtInt(detail.deliveries.length),
+              sub: lastDelivery ? `La última, ${formatDmy(lastDelivery.delivered_on)}` : "Ninguna todavía",
+            },
+            {
+              key: "faltan",
+              label: "Faltan",
+              value: fmtInt(Math.max(0, reception.expected - reception.received)),
+              sub: reception.allArrived ? "Llegó todo lo esperado" : "u. de lo esperado",
+              tone: reception.counted && !reception.allArrived ? ("warn" as const) : undefined,
+            },
+          ]
+        : [
+            {
+              key: "guia",
+              label: "Guía",
+              value: <span className="font-mono text-base">{imp.tracking_number ?? "—"}</span>,
+              sub: imp.carrier ?? undefined,
+            },
+            {
+              key: "bodega",
+              label: "Bodega",
+              value: imp.reported_to_warehouse_at ? "Reportada" : "Sin avisar",
+              sub: imp.reported_to_warehouse_at ? fmtDateTime(imp.reported_to_warehouse_at) : undefined,
+              tone: alerts.notifyWarehouse ? ("warn" as const) : undefined,
+            },
+          ]),
   ];
 
   return (
@@ -399,16 +467,18 @@ export function ImportDetailView({
       <div className="grid gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:grid-rows-[auto_1fr] xl:items-start">
         <div className="grid gap-4 sm:gap-6 lg:grid-cols-2 xl:col-start-2 xl:row-start-1 xl:grid-cols-1">
           <StatusBox detail={detail} canEdit={canEdit} run={run} pending={pending} />
-          {canEdit && <WarehouseBox detail={detail} trackingLink={trackingLink} notify={alerts.notifyWarehouse} run={run} pending={pending} />}
+          {canEdit && !local && <WarehouseBox detail={detail} trackingLink={trackingLink} notify={alerts.notifyWarehouse} run={run} pending={pending} />}
         </div>
 
         <div className="min-w-0 space-y-4 sm:space-y-6 xl:col-start-1 xl:row-span-2 xl:row-start-1">
           <ItemsBox detail={detail} stores={stores} storeName={storeName} landed={landed} fx={fx} canEdit={canEdit} aiEnabled={aiEnabled && canEdit} catalog={catalog} run={run} pending={pending} />
 
-          <ReceptionBox
+          <DeliveriesBox
             detail={detail}
             summary={reception}
-            canEdit={canCount}
+            canRegister={canCount}
+            canCorrect={canEdit}
+            today={today}
             open={receptionOpen}
             setOpen={setReceptionOpen}
             run={run}
@@ -440,7 +510,7 @@ export function ImportDetailView({
                   <>
                     Lleva el costo aterrizado por unidad, en soles, de cada producto con SKU a Costos de productos: lote{" "}
                     <span className="font-mono text-xs">{imp.code}</span>, vigente desde la llegada ({formatDmy(imp.arrived_on ?? limaToday())}). Cada
-                    producto se pasa una sola vez.
+                    producto se pasa una sola vez.{local && landed && !landed.hasUsd ? " Todo está en soles: no hace falta el tipo de cambio." : ""}
                   </>
                 }
               />
@@ -518,8 +588,9 @@ type Summary = ReturnType<typeof moneySummary>;
  * puede convertir; todo en soles y sin tipo de cambio, en soles; mezcladas y sin
  * tipo de cambio, cada moneda por separado y el aviso.
  */
-function balanceFigure(s: Summary): { key: string; label: string; value: ReactNode; sub?: ReactNode; tone?: "warn" | "ok" } {
-  const usd = s.pendingUsd !== null;
+function balanceFigure(s: Summary, preferPen = false): { key: string; label: string; value: ReactNode; sub?: ReactNode; tone?: "warn" | "ok" } {
+  // Una compra local se lee en soles si se puede (MOM §45.12); una importación, en USD.
+  const usd = s.pendingUsd !== null && !(preferPen && s.pendingPen !== null);
   const pending = usd ? s.pendingUsd : s.pendingPen;
   const total = usd ? s.totalUsd : s.totalPen;
   if (pending === null || total === null) {
@@ -560,18 +631,28 @@ function DetailHeader({
 }: {
   detail: ImportDetail;
   alerts: ReturnType<typeof importAlerts>;
-  checklist: { invoice: boolean; tracking: boolean };
+  checklist: ReturnType<typeof importChecklist>;
   canEdit: boolean;
   /** «Editar datos»: abre el formulario en la tarjeta «Datos». */
   onEdit?: () => void;
 }) {
   const { imp, supplier } = detail;
+  const local = !hasShipping(imp.kind);
   const flags: { key: string; tone: "warn" | "crit" | "neutral"; label: string }[] = [];
-  if (alerts.late) flags.push({ key: "late", tone: "crit", label: "Atrasada: la llegada estimada ya pasó" });
+  if (alerts.late) flags.push({ key: "late", tone: "crit", label: local ? "Atrasada: la entrega estimada ya pasó" : "Atrasada: la llegada estimada ya pasó" });
   if (alerts.notifyWarehouse) flags.push({ key: "notify", tone: "warn", label: "Avisar a la bodega" });
   if (alerts.stale) flags.push({ key: "stale", tone: "warn", label: `Sin novedades hace ${alerts.daysSinceMovement} días` });
-  if (!checklist.invoice) flags.push({ key: "invoice", tone: "neutral", label: "Falta la factura comercial" });
-  if (!checklist.tracking) flags.push({ key: "tracking", tone: "neutral", label: "Falta el tracking" });
+  if (!checklist.invoice) flags.push({ key: "invoice", tone: "neutral", label: local ? "Falta la factura del laboratorio" : "Falta la factura comercial" });
+  // Los códigos de trazabilidad de una importación (MOM §45.15): un aviso mientras falte alguno.
+  const codes = traceCodes(imp);
+  if (codes.applies && codes.missing.length) {
+    flags.push({ key: "codes", tone: "warn", label: `Códigos ${codes.filled} de 3 · falta ${codes.missing.map((id) => TRACE_CODES.find((c) => c.id === id)!.short).join(", ")}` });
+  }
+  if (detail.traceDuplicates.proforma.length || detail.traceDuplicates.alibaba.length) {
+    flags.push({ key: "dup", tone: "warn", label: `Posible duplicado: ${[...new Set([...detail.traceDuplicates.proforma, ...detail.traceDuplicates.alibaba])].join(", ")}` });
+  }
+  // Una compra local no tiene guía (`tracking` null).
+  if (checklist.tracking === false) flags.push({ key: "tracking", tone: "neutral", label: "Falta el tracking" });
   return (
     <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
       <div className="flex min-w-0 items-start gap-2">
@@ -582,9 +663,10 @@ function DetailHeader({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">{imp.code}</h1>
             <Badge tone={importStatusTone(imp.status)}>{IMPORT_STATUS_LABEL[imp.status]}</Badge>
+            {local && <Badge tone="info">{importKindLabel(imp.kind)}</Badge>}
           </div>
           <p className="mt-1 text-sm text-ink-500">
-            <span className="font-medium text-ink-700">{supplier?.name ?? "Sin proveedor"}</span>
+            <span className="font-medium text-ink-700">{supplier?.name ?? (local ? "Sin laboratorio" : "Sin proveedor")}</span>
             {canEdit && supplier?.whatsapp ? (
               <>
                 {" · "}
@@ -594,7 +676,7 @@ function DetailHeader({
               </>
             ) : null}
             {" · "}
-            {imp.origin ?? "Origen sin indicar"} → bodega de Kapta, Lima · {transportLabel(imp.transport)}
+            {imp.origin ?? "Origen sin indicar"} → bodega de Kapta, Lima · {local ? "en soles, la entrega el laboratorio" : transportLabel(imp.transport)}
           </p>
           {flags.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Lo que pide atención">
@@ -734,6 +816,11 @@ function SectionIndex({
 function StatusBox({ detail, canEdit, run, pending }: { detail: ImportDetail; canEdit: boolean; run: Run; pending: boolean }) {
   const [status, setStatus] = useState<string>(detail.imp.status);
   const [note, setNote] = useState("");
+  // Antes de intentarlo: lo que el servidor va a pedir para ese estado (MOM §45.15).
+  const blocked =
+    status !== detail.imp.status && IMPORT_STATUSES.some((s) => s.id === status)
+      ? statusTraceBlocker(detail.imp, status as ImportDetail["imp"]["status"])
+      : null;
   return (
     <Section id="estado">
       <SectionHead
@@ -756,10 +843,15 @@ function StatusBox({ detail, canEdit, run, pending }: { detail: ImportDetail; ca
           <Field label="Nota (opcional)">
             <textarea className={TEXTAREA} rows={2} placeholder="Novedad del envío, motivo…" value={note} onChange={(e) => setNote(e.target.value)} />
           </Field>
+          {blocked && (
+            <Banner tone="warn" title="Faltan códigos de trazabilidad">
+              <p>{blocked.message} Complétalos en «Datos».</p>
+            </Banner>
+          )}
           <button
             type="button"
             className={BTN_PRIMARY}
-            disabled={pending}
+            disabled={pending || Boolean(blocked)}
             onClick={() => run(() => setImportStatus(detail.imp.id, status, note), () => setNote(""))}
           >
             {status === detail.imp.status ? "Registrar nota" : "Cambiar estado"}
@@ -846,12 +938,13 @@ function DataBox({
   setEditing: (editing: boolean) => void;
 }) {
   const { imp, supplier } = detail;
-  const rows: { label: string; value: ReactNode; wide?: boolean }[] = [
-    { label: "Proveedor", value: supplier?.name ?? "Sin proveedor" },
-    { label: "Origen", value: imp.origin ?? "Sin indicar" },
-    { label: "Transporte", value: transportLabel(imp.transport) },
-    {
-      label: "Guía",
+  const local = !hasShipping(imp.kind);
+  const shippingRows: { label: string; value: ReactNode; wide?: boolean }[] = local
+    ? []
+    : [
+        { label: "Transporte", value: transportLabel(imp.transport) },
+        {
+          label: "Guía de envío",
       value: imp.tracking_number ? (
         <>
           {imp.carrier ? `${imp.carrier} ` : ""}
@@ -865,10 +958,41 @@ function DataBox({
           )}
         </>
       ) : (
-        <span className="text-ink-500">{imp.carrier ?? "—"}</span>
+        <span className="font-medium text-warn-fg">Falta{imp.carrier ? ` · ${imp.carrier}` : ""}</span>
       ),
-    },
-    { label: "N.º de orden", value: imp.platform_order ? <span className="font-mono text-xs">{imp.platform_order}</span> : "—" },
+        },
+      ];
+  const codes = traceCodes(imp);
+  const dup = detail.traceDuplicates;
+  const codeValue = (v: string | null | undefined, others: string[]) =>
+    v ? (
+      <>
+        <span className="font-mono text-xs">{v}</span>
+        {others.length ? <span className="block text-[13px] font-medium text-warn-fg">También en {others.join(", ")}: ¿duplicado?</span> : null}
+      </>
+    ) : (
+      <span className="font-medium text-warn-fg">Falta</span>
+    );
+  const rows: { label: string; value: ReactNode; wide?: boolean }[] = [
+    { label: "Tipo", value: local ? "Compra local (laboratorio o maquila), en soles" : "Importación" },
+    { label: local ? "Laboratorio" : "Proveedor", value: supplier?.name ?? "Sin proveedor" },
+    { label: "Origen", value: imp.origin ?? "Sin indicar" },
+    ...(codes.applies
+      ? [
+          {
+            label: "Códigos",
+            value: (
+              <Badge tone={codes.missing.length ? "warn" : "ok"} className="tabular-nums">
+                {codes.filled} de 3 de trazabilidad
+              </Badge>
+            ),
+          },
+          { label: "Proforma invoice", value: codeValue(imp.proforma_number, dup.proforma) },
+          { label: "Orden de Alibaba", value: codeValue(imp.platform_order, dup.alibaba) },
+        ]
+      : []),
+    ...shippingRows,
+    ...(codes.applies ? [] : [{ label: "N.º de orden", value: imp.platform_order ? <span className="font-mono text-xs">{imp.platform_order}</span> : "—" }]),
     { label: "Pedido", value: formatDmy(imp.ordered_on) },
     { label: imp.arrived_on ? "Llegó" : "Llegada estimada", value: formatDmy(imp.arrived_on ?? imp.eta) },
     ...(imp.arrived_on && imp.eta ? [{ label: "Estimada", value: formatDmy(imp.eta) }] : []),
@@ -907,18 +1031,21 @@ function DataBox({
 // Productos
 // ---------------------------------------------------------------------------
 
-type ItemDraft = { name: string; sku: string; storeId: string; qty: string; unitWeightKg: string; unitCostUsd: string; salePricePen: string };
+/** `unitCost`: en la moneda base de la compra (USD la importación, soles la compra local). */
+type ItemDraft = { name: string; sku: string; storeId: string; qty: string; courtesyQty: string; unitWeightKg: string; unitCost: string; salePricePen: string };
 
-const EMPTY_ITEM: ItemDraft = { name: "", sku: "", storeId: "", qty: "", unitWeightKg: "", unitCostUsd: "", salePricePen: "" };
+const EMPTY_ITEM: ItemDraft = { name: "", sku: "", storeId: "", qty: "", courtesyQty: "", unitWeightKg: "", unitCost: "", salePricePen: "" };
 
 function itemDraft(it: ItemRow): ItemDraft {
+  const cost = it.unit_cost_currency === "PEN" ? it.unit_cost_pen : it.unit_cost_usd;
   return {
     name: it.name,
     sku: it.sku ?? "",
     storeId: it.store_id ?? "",
     qty: String(it.qty),
+    courtesyQty: it.courtesy_qty ? String(it.courtesy_qty) : "",
     unitWeightKg: it.unit_weight_kg == null ? "" : String(it.unit_weight_kg),
-    unitCostUsd: it.unit_cost_usd == null ? "" : String(it.unit_cost_usd),
+    unitCost: cost == null ? "" : String(cost),
     salePricePen: it.sale_price_pen == null ? "" : String(it.sale_price_pen),
   };
 }
@@ -930,6 +1057,7 @@ function ItemForm({
   importId,
   stores,
   money,
+  base = "USD",
   item,
   catalog = [],
   run,
@@ -939,6 +1067,8 @@ function ItemForm({
   importId: string;
   stores: Store[];
   money: boolean;
+  /** La moneda del costo por unidad: USD (importación) o soles (compra local). */
+  base?: Currency;
   item?: ItemRow;
   /** Al agregar: el catálogo de las tiendas; vacío, solo «Producto nuevo». */
   catalog?: PickerProduct[];
@@ -960,8 +1090,9 @@ function ItemForm({
   const set = (k: keyof ItemDraft) => (e: { target: { value: string } }) => setD((x) => ({ ...x, [k]: e.target.value }));
   // Sin «Montos de compras» el formulario no manda costo ni precio (y el servidor no los leería).
   const payload = () => {
-    const base = { name: d.name, sku: d.sku, storeId: d.storeId, qty: d.qty, unitWeightKg: d.unitWeightKg };
-    return money ? { ...base, unitCostUsd: d.unitCostUsd, salePricePen: d.salePricePen } : base;
+    const fields = { name: d.name, sku: d.sku, storeId: d.storeId, qty: d.qty, courtesyQty: d.courtesyQty, unitWeightKg: d.unitWeightKg };
+    if (!money) return fields;
+    return { ...fields, ...(base === "PEN" ? { unitCostPen: d.unitCost } : { unitCostUsd: d.unitCost }), salePricePen: d.salePricePen };
   };
   return (
     <div className={FORM_ZONE}>
@@ -1054,13 +1185,16 @@ function ItemForm({
         <Field label="Cantidad">
           <input className={cn(FIELD, "tabular-nums")} inputMode="numeric" value={d.qty} onChange={set("qty")} />
         </Field>
+        <Field label="Cortesía (gratis)" hint="Las que regala el laboratorio: no suben el costo y bajan el costo por unidad.">
+          <input className={cn(FIELD, "tabular-nums")} inputMode="numeric" placeholder="0" value={d.courtesyQty} onChange={set("courtesyQty")} />
+        </Field>
         <Field label="Peso por unidad (kg)">
           <input className={cn(FIELD, "tabular-nums")} inputMode="decimal" value={d.unitWeightKg} onChange={set("unitWeightKg")} />
         </Field>
         {money && (
           <>
-            <Field label="Costo por unidad (USD)">
-              <input className={cn(FIELD, "tabular-nums")} inputMode="decimal" value={d.unitCostUsd} onChange={set("unitCostUsd")} />
+            <Field label={base === "PEN" ? "Costo por unidad (S/)" : "Costo por unidad (USD)"}>
+              <input className={cn(FIELD, "tabular-nums")} inputMode="decimal" value={d.unitCost} onChange={set("unitCost")} />
             </Field>
             <Field label="Precio de venta (S/)">
               <input className={cn(FIELD, "tabular-nums")} inputMode="decimal" value={d.salePricePen} onChange={set("salePricePen")} />
@@ -1131,15 +1265,18 @@ function ItemsBox({
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const money = detail.perms.canMoney;
+  const base = baseCurrencyOf(detail.imp.kind);
   const editable = canEdit && detail.imp.status !== "cancelado";
   const units = detail.items.reduce((a, it) => a + it.qty, 0);
+  const courtesy = detail.items.reduce((a, it) => a + (it.courtesy_qty ?? 0), 0);
+  const delivered = new Set(detail.deliveries.flatMap((d) => d.lines.map((l) => l.item_id)));
   return (
     <Section id="productos">
       <SectionHead
         id={`${sectionDomId("productos")}-t`}
         title="Productos"
         badge={<Badge className="tabular-nums">{detail.items.length}</Badge>}
-        help={detail.items.length ? `${fmtInt(units)} unidades pedidas.` : undefined}
+        help={detail.items.length ? `${fmtInt(units)} unidades pedidas${courtesy ? ` + ${fmtInt(courtesy)} de cortesía` : ""}.` : undefined}
         aside={
           editable && !adding ? (
             <button type="button" className={BTN_SECONDARY_SM} onClick={() => setAdding(true)}>
@@ -1149,7 +1286,7 @@ function ItemsBox({
           ) : undefined
         }
       />
-      {adding && <ItemForm importId={detail.imp.id} stores={stores} money={money} catalog={catalog} run={run} pending={pending} onDone={() => setAdding(false)} />}
+      {adding && <ItemForm importId={detail.imp.id} stores={stores} money={money} base={base} catalog={catalog} run={run} pending={pending} onDone={() => setAdding(false)} />}
       {!detail.items.length && !adding && (
         <p className="text-sm text-ink-500">
           Sin productos todavía.
@@ -1165,7 +1302,7 @@ function ItemsBox({
             if (editing === it.id) {
               return (
                 <li key={it.id} className={ROW}>
-                  <ItemForm importId={detail.imp.id} stores={stores} money={money} item={it} run={run} pending={pending} onDone={() => setEditing(null)} />
+                  <ItemForm importId={detail.imp.id} stores={stores} money={money} base={base} item={it} run={run} pending={pending} onDone={() => setEditing(null)} />
                 </li>
               );
             }
@@ -1188,6 +1325,7 @@ function ItemsBox({
                     <p className="min-w-0 text-sm font-semibold leading-5 text-ink-900">{it.name}</p>
                     <p className="shrink-0 text-sm leading-5 tabular-nums text-ink-900">
                       {fmtInt(it.qty)} <span className="text-ink-500">u.</span>
+                      {it.courtesy_qty > 0 && <span className="text-[13px] text-ok-fg"> +{fmtInt(it.courtesy_qty)} cortesía</span>}
                     </p>
                   </div>
                   <p className="text-[13px] leading-5 text-ink-500">
@@ -1203,12 +1341,9 @@ function ItemsBox({
                   </p>
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5 tabular-nums text-ink-700">
                     {it.received_qty != null ? (
-                      <span>
-                        Llegaron {fmtInt(it.received_qty)}
-                        {it.damaged_qty ? <span className="text-warn-fg"> ({fmtInt(it.damaged_qty)} dañadas)</span> : null}
-                      </span>
+                      <ProgressText it={it} />
                     ) : (
-                      <span className="text-ink-500">Sin contar</span>
+                      <span className="text-ink-500">Sin entregas · se esperan {fmtInt(expectedUnits({ qty: it.qty, courtesyQty: it.courtesy_qty }))}</span>
                     )}
                     {it.cost_pushed_at ? <Badge tone="ok">En Costos</Badge> : null}
                     {margin?.low ? <Badge tone="crit">Margen bajo</Badge> : null}
@@ -1216,8 +1351,8 @@ function ItemsBox({
                   {money && (
                     <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[13px] leading-5 tabular-nums sm:grid-cols-4">
                       <div>
-                        <dt className="text-ink-500">Proveedor</dt>
-                        <dd className="text-ink-900">{fmtUsdUnit(it.unit_cost_usd)}/u</dd>
+                        <dt className="text-ink-500">{base === "PEN" ? "Laboratorio" : "Proveedor"}</dt>
+                        <dd className="text-ink-900">{fmtUnit(it.unit_cost_currency === "PEN" ? it.unit_cost_pen : it.unit_cost_usd, it.unit_cost_currency)}/u</dd>
                       </div>
                       <div>
                         <dt className="text-ink-500">Aterrizado</dt>
@@ -1229,7 +1364,7 @@ function ItemsBox({
                               : undefined
                           }
                         >
-                          {line ? <LandedUnit line={line} /> : "—"}
+                          {line ? <LandedUnit line={line} preferPen={base === "PEN"} /> : "—"}
                         </dd>
                       </div>
                       <div>
@@ -1250,16 +1385,19 @@ function ItemsBox({
                       <button type="button" className={BTN_GHOST} onClick={() => setEditing(it.id)}>
                         Editar
                       </button>
-                      <button
-                        type="button"
-                        className={BTN_REMOVE}
-                        disabled={pending}
-                        onClick={() => {
-                          if (window.confirm(`¿Quitar «${it.name}» de la importación?`)) run(() => removeImportItem(it.id));
-                        }}
-                      >
-                        Quitar
-                      </button>
+                      {/* Con entregas no se quita: lo que llegó de él es evidencia (MOM §45.14). */}
+                      {!delivered.has(it.id) && (
+                        <button
+                          type="button"
+                          className={BTN_REMOVE}
+                          disabled={pending}
+                          onClick={() => {
+                            if (window.confirm(`¿Quitar «${it.name}» de la compra?`)) run(() => removeImportItem(it.id));
+                          }}
+                        >
+                          Quitar
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1269,6 +1407,17 @@ function ItemsBox({
         </ul>
       )}
     </Section>
+  );
+}
+
+/** «Llegaron 400 de 600 (+50 cortesía) · faltan 250», con lo dañado aparte. */
+function ProgressText({ it }: { it: Pick<ItemRow, "qty" | "courtesy_qty" | "received_qty" | "damaged_qty"> }) {
+  const p = lineProgress({ qty: it.qty, courtesyQty: it.courtesy_qty, receivedQty: it.received_qty, damagedQty: it.damaged_qty });
+  return (
+    <span className={cn(p.missing > 0 ? "text-ink-700" : p.extra > 0 ? "text-warn-fg" : "text-ok-fg")}>
+      {lineProgressText(p)}
+      {p.damaged ? <span className="text-warn-fg"> · {fmtInt(p.damaged)} dañada{p.damaged === 1 ? "" : "s"}</span> : null}
+    </span>
   );
 }
 
@@ -1328,13 +1477,28 @@ function ItemPhotoControls({ importId, item, run, pending }: { importId: string;
 }
 
 // ---------------------------------------------------------------------------
-// Recepción
+// Entregas (MOM §45.14): cada una con su fecha, quién, unidades y fotos
 // ---------------------------------------------------------------------------
 
-function ReceptionBox({
+const PHOTO_ACCEPT = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
+
+/** Sube las fotos elegidas (tipo «Foto») y devuelve sus rutas, o el primer error. */
+async function uploadPhotos(importId: string, files: readonly File[]): Promise<{ paths: { path: string; filename: string }[] } | { error: string }> {
+  const paths: { path: string; filename: string }[] = [];
+  for (const file of files) {
+    const up = await uploadImportFile(importId, "photo", file);
+    if ("error" in up) return { error: up.error };
+    paths.push({ path: up.path, filename: file.name });
+  }
+  return { paths };
+}
+
+function DeliveriesBox({
   detail,
   summary,
-  canEdit,
+  canRegister,
+  canCorrect,
+  today,
   open,
   setOpen,
   run,
@@ -1342,73 +1506,63 @@ function ReceptionBox({
 }: {
   detail: ImportDetail;
   summary: ReturnType<typeof receptionSummary>;
-  canEdit: boolean;
+  /** Registrar entregas y agregarles fotos: «Compras» o «Recepción de compras». */
+  canRegister: boolean;
+  /** Corregir o quitar una entrega: solo «Compras». */
+  canCorrect: boolean;
+  today: string;
   open: boolean;
   setOpen: (open: boolean) => void;
   run: Run;
   pending: boolean;
 }) {
-  const initial = () =>
-    Object.fromEntries(
-      detail.items.map((it) => [
-        it.id,
-        { received: it.received_qty == null ? "" : String(it.received_qty), damaged: it.damaged_qty ? String(it.damaged_qty) : "", note: it.reception_note ?? "" },
-      ]),
-    ) as Record<string, { received: string; damaged: string; note: string }>;
-  const [draft, setDraft] = useState(initial);
-  // Al abrirse desde «La próxima acción», el borrador parte de lo guardado.
-  const wasOpen = useRef(open);
-  useEffect(() => {
-    if (open && !wasOpen.current) setDraft(initial());
-    wasOpen.current = open;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  const editable = canEdit && detail.imp.status !== "cancelado" && detail.items.length > 0;
-  const lastCount = detail.items.map((it) => it.received_at).filter(Boolean).sort().pop() ?? null;
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const needsPhoto = deliveryNeedsPhoto(detail.imp.kind);
+  const active = detail.imp.status !== "cancelado";
+  const editable = canRegister && active && detail.items.length > 0;
+  const deliveries = [...detail.deliveries].reverse();
+  const missing = Math.max(0, summary.expected - summary.received);
   const cells: { label: string; value: number; tone?: "warn" }[] = [
     { label: "Pedidas", value: summary.ordered },
+    ...(summary.courtesy ? [{ label: "Cortesía", value: summary.courtesy }] : []),
     { label: "Llegaron", value: summary.received },
-    { label: "Faltan", value: summary.missing, tone: summary.missing > 0 ? "warn" : undefined },
-    { label: "Sobran", value: summary.extra, tone: summary.extra > 0 ? "warn" : undefined },
-    { label: "Dañadas", value: summary.damaged, tone: summary.damaged > 0 ? "warn" : undefined },
+    { label: "Faltan", value: missing, tone: summary.counted && missing > 0 ? ("warn" as const) : undefined },
+    { label: "Sobran", value: summary.extra, tone: summary.extra > 0 ? ("warn" as const) : undefined },
+    { label: "Dañadas", value: summary.damaged, tone: summary.damaged > 0 ? ("warn" as const) : undefined },
     { label: "Buenas", value: summary.good },
   ];
   return (
     <Section id="recepcion">
       <SectionHead
         id={`${sectionDomId("recepcion")}-t`}
-        title="Recepción en la bodega de Lima"
+        title="Entregas en la bodega de Lima"
         badge={
-          summary.counted === 0 ? (
-            <Badge>Sin contar</Badge>
-          ) : summary.complete ? (
-            <Badge tone="ok">Contada</Badge>
+          !detail.deliveries.length ? (
+            <Badge>Sin entregas</Badge>
+          ) : summary.allArrived ? (
+            <Badge tone="ok">Llegó todo</Badge>
           ) : (
-            <Badge tone="warn">
-              Faltan {summary.uncounted} por contar
+            <Badge tone="warn" className="tabular-nums">
+              Faltan {fmtInt(missing)} u.
             </Badge>
           )
         }
         help={
           <>
-            {summary.counted === 0
-              ? "Todavía no se contó nada."
-              : summary.complete
-                ? `Contada completa${lastCount ? ` · ${fmtDateTime(lastCount)}` : ""}.`
-                : `Falta contar ${summary.uncounted} producto${summary.uncounted === 1 ? "" : "s"}.`}
-            {summary.withDifferences.length ? ` ${summary.withDifferences.length} con diferencias.` : ""} Al guardar, si la importación estaba en camino
-            pasa a Recibido.
+            Cada entrega con su fecha, quién la recibió, lo que llegó por producto y sus fotos. Si llega todo lo esperado (pedidas + cortesía), la compra
+            pasa a Recibido; si llega una parte, a Recibido parcial.{needsPhoto ? " En una compra local cada entrega lleva al menos una foto." : ""}
           </>
         }
         aside={
           editable && !open ? (
             <button type="button" className={BTN_SECONDARY_SM} onClick={() => setOpen(true)}>
-              {summary.counted ? "Editar recepción" : "Registrar recepción"}
+              <IconPlus aria-hidden />
+              Registrar entrega
             </button>
           ) : undefined
         }
       />
-      <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-lg bg-line ring-1 ring-line sm:grid-cols-6">
+      <dl className={cn("grid grid-cols-3 gap-px overflow-hidden rounded-lg bg-line ring-1 ring-line", cells.length === 7 ? "sm:grid-cols-7" : "sm:grid-cols-6")}>
         {cells.map((c) => (
           <div key={c.label} className="bg-white px-3 py-2">
             <dt className="text-xs font-medium leading-4 text-ink-500">{c.label}</dt>
@@ -1416,91 +1570,335 @@ function ReceptionBox({
           </div>
         ))}
       </dl>
+      {detail.items.length > 0 && detail.deliveries.length > 0 && (
+        <ul className="space-y-1 text-[13px] leading-5 tabular-nums" aria-label="Avance por producto">
+          {detail.items.map((it) => (
+            <li key={it.id} className="flex flex-wrap justify-between gap-x-3">
+              <span className="min-w-0 truncate text-ink-900">{it.name}</span>
+              {it.received_qty != null ? <ProgressText it={it} /> : <span className="text-ink-500">Sin entregas · se esperan {fmtInt(expectedUnits({ qty: it.qty, courtesyQty: it.courtesy_qty }))}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       {open && (
-        <div className={FORM_ZONE}>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[13px] font-semibold text-ink-900">Lo que llegó, por producto</p>
-            <button
-              type="button"
-              className={BTN_GHOST}
-              onClick={() =>
-                setDraft((cur) =>
-                  Object.fromEntries(detail.items.map((it) => [it.id, { ...cur[it.id]!, received: String(it.qty), damaged: cur[it.id]?.damaged ?? "" }])),
-                )
-              }
-            >
-              Llenar con lo pedido
-            </button>
-          </div>
-          <div aria-hidden className="hidden gap-3 text-xs font-semibold text-ink-600 sm:grid sm:grid-cols-[minmax(0,2fr)_6rem_6rem_minmax(0,2fr)]">
-            <span>Producto</span>
-            <span>Llegaron</span>
-            <span>Dañadas</span>
-            <span>Nota</span>
-          </div>
-          <ul className="divide-y divide-line-strong/60">
-            {detail.items.map((it) => (
-              <li key={it.id} className="grid grid-cols-2 gap-x-3 gap-y-2 py-2.5 first:pt-0 last:pb-0 sm:grid-cols-[minmax(0,2fr)_6rem_6rem_minmax(0,2fr)] sm:items-center">
-                <p className="col-span-2 text-sm leading-5 text-ink-900 sm:col-span-1">
-                  {it.name} <span className="text-[13px] tabular-nums text-ink-500">· {fmtInt(it.qty)} pedidas</span>
-                </p>
-                <label className={LABEL}>
-                  <span className="sm:sr-only">Llegaron</span>
-                  <input
-                    className={cn(FIELD, "tabular-nums")}
-                    inputMode="numeric"
-                    aria-label={`Llegaron de ${it.name}`}
-                    value={draft[it.id]?.received ?? ""}
-                    onChange={(e) => setDraft((d) => ({ ...d, [it.id]: { ...d[it.id]!, received: e.target.value } }))}
-                  />
-                </label>
-                <label className={LABEL}>
-                  <span className="sm:sr-only">Dañadas</span>
-                  <input
-                    className={cn(FIELD, "tabular-nums")}
-                    inputMode="numeric"
-                    aria-label={`Dañadas de ${it.name}`}
-                    value={draft[it.id]?.damaged ?? ""}
-                    onChange={(e) => setDraft((d) => ({ ...d, [it.id]: { ...d[it.id]!, damaged: e.target.value } }))}
-                  />
-                </label>
-                <label className={cn(LABEL, "col-span-2 sm:col-span-1")}>
-                  <span className="sm:sr-only">Nota</span>
-                  <input
-                    className={FIELD}
-                    aria-label={`Nota de ${it.name}`}
-                    value={draft[it.id]?.note ?? ""}
-                    onChange={(e) => setDraft((d) => ({ ...d, [it.id]: { ...d[it.id]!, note: e.target.value } }))}
-                  />
-                </label>
+        <DeliveryForm
+          detail={detail}
+          needsPhoto={needsPhoto}
+          today={today}
+          run={run}
+          pending={pending}
+          onDone={() => setOpen(false)}
+        />
+      )}
+      {deliveries.length > 0 ? (
+        <ol className={cn(ROWS, "-mb-4 sm:-mb-5")} aria-label="Entregas, la más reciente arriba">
+          {deliveries.map((d) =>
+            editingId === d.id ? (
+              <li key={d.id} className={ROW}>
+                <DeliveryForm
+                  detail={detail}
+                  delivery={d}
+                  needsPhoto={needsPhoto}
+                  today={today}
+                  run={run}
+                  pending={pending}
+                  onDone={() => setEditingId(null)}
+                />
               </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className={BTN_PRIMARY}
-              disabled={pending}
-              onClick={() =>
-                run(
-                  () =>
-                    saveReception(
-                      detail.imp.id,
-                      detail.items.map((it) => ({ itemId: it.id, received: draft[it.id]?.received, damaged: draft[it.id]?.damaged, note: draft[it.id]?.note })),
-                    ),
-                  () => setOpen(false),
-                )
-              }
-            >
-              Guardar recepción
-            </button>
-            <button type="button" className={BTN_GHOST} onClick={() => setOpen(false)}>
-              Cancelar
-            </button>
-          </div>
-        </div>
+            ) : (
+              <DeliveryItem
+                key={d.id}
+                detail={detail}
+                delivery={d}
+                canAddPhoto={canRegister && active}
+                canCorrect={canCorrect && active}
+                onEdit={() => setEditingId(d.id)}
+                run={run}
+                pending={pending}
+              />
+            ),
+          )}
+        </ol>
+      ) : (
+        !open && (
+          <p className="text-sm text-ink-500">
+            Todavía no llegó nada.{editable ? " Cuando llegue mercadería, «Registrar entrega» con lo que vino por producto y sus fotos." : ""}
+          </p>
+        )
       )}
     </Section>
+  );
+}
+
+function DeliveryItem({
+  detail,
+  delivery: d,
+  canAddPhoto,
+  canCorrect,
+  onEdit,
+  run,
+  pending,
+}: {
+  detail: ImportDetail;
+  delivery: DeliveryRow;
+  canAddPhoto: boolean;
+  canCorrect: boolean;
+  onEdit: () => void;
+  run: Run;
+  pending: boolean;
+}) {
+  const [inputKey, setInputKey] = useState(0);
+  const itemName = new Map(detail.items.map((it) => [it.id, it.name]));
+  const units = d.lines.reduce((a, l) => a + l.received, 0);
+  const addPhotos = (files: File[]) => {
+    if (!files.length) return;
+    run(
+      async () => {
+        const up = await uploadPhotos(detail.imp.id, files.slice(0, 10));
+        if ("error" in up) return { error: up.error };
+        for (const p of up.paths) {
+          const res = await registerImportDocument(detail.imp.id, { kind: "photo", path: p.path, filename: p.filename, deliveryId: d.id });
+          if (res.error) return res;
+        }
+        return { notice: `${up.paths.length} foto${up.paths.length === 1 ? "" : "s"} agregada${up.paths.length === 1 ? "" : "s"} a la entrega.` };
+      },
+      () => setInputKey((k) => k + 1),
+    );
+    setInputKey((k) => k + 1);
+  };
+  return (
+    <li className={cn(ROW, "space-y-2")}>
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <p className="flex flex-wrap items-center gap-2 text-sm font-semibold leading-5 text-ink-900">
+            <span className="tabular-nums">{formatDmy(d.delivered_on)}</span>
+            <span className="font-normal tabular-nums text-ink-500">· {fmtInt(units)} u.</span>
+            {d.legacy && <Badge>Recepción anterior</Badge>}
+          </p>
+          <p className="text-[13px] leading-5 text-ink-500">
+            {d.legacy ? "Registrada antes de las entregas parciales" : `Registró ${d.by_name ?? "Kapta"} · ${fmtDateTime(d.created_at)}`}
+          </p>
+        </div>
+        {canCorrect && (
+          <span className="-mr-2.5 flex gap-1">
+            <button type="button" className={BTN_GHOST} onClick={onEdit}>
+              Corregir
+            </button>
+            <button
+              type="button"
+              className={BTN_REMOVE}
+              disabled={pending}
+              onClick={() => {
+                if (window.confirm(`¿Quitar la entrega del ${formatDmy(d.delivered_on)}? Sus unidades dejan de contar; sus fotos se quedan en Documentos.`)) {
+                  run(() => removeDelivery(d.id));
+                }
+              }}
+            >
+              Quitar
+            </button>
+          </span>
+        )}
+      </div>
+      <ul className="space-y-0.5 text-[13px] leading-5 tabular-nums text-ink-700">
+        {d.lines.map((l) => (
+          <li key={l.id}>
+            <span className="font-medium text-ink-900">{fmtInt(l.received)}</span> × {itemName.get(l.item_id) ?? "Producto"}
+            {l.damaged ? <span className="text-warn-fg"> · {fmtInt(l.damaged)} dañada{l.damaged === 1 ? "" : "s"}</span> : null}
+            {l.note ? <span className="text-ink-500"> · {l.note}</span> : null}
+          </li>
+        ))}
+      </ul>
+      {d.note && <p className="max-w-[68ch] whitespace-pre-line text-[13px] leading-5 text-ink-600">{d.note}</p>}
+      {(d.photos.length > 0 || canAddPhoto) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {d.photos.map((p) => (
+            <a
+              key={p.id}
+              href={`/api/compras/documento/${p.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={p.filename ?? "Foto de la entrega"}
+              className="block rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-500"
+            >
+              {/* La ruta vuelve a pedir el permiso y responde con un enlace firmado de 10 minutos. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`/api/compras/documento/${p.id}`} alt={p.filename ?? "Foto de la entrega"} loading="lazy" className="size-14 rounded-md object-cover ring-1 ring-line" />
+            </a>
+          ))}
+          {canAddPhoto && (
+            <label
+              className={cn(
+                "inline-flex h-8 cursor-pointer items-center gap-1 rounded-md px-2.5 text-[13px] font-semibold text-brand-700 hover:bg-wash focus-within:outline focus-within:outline-2 focus-within:outline-brand-500 pointer-coarse:h-11",
+                pending && "pointer-events-none opacity-50",
+              )}
+            >
+              <IconPlus aria-hidden className="size-4" />
+              {d.photos.length ? "Agregar foto" : "Agregar fotos"}
+              <input
+                key={inputKey}
+                type="file"
+                multiple
+                accept={PHOTO_ACCEPT}
+                className="sr-only"
+                disabled={pending}
+                onChange={(e) => addPhotos(Array.from(e.target.files ?? []))}
+                aria-label={`Agregar fotos a la entrega del ${formatDmy(d.delivered_on)}`}
+              />
+            </label>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+type LineDraft = { received: string; damaged: string; note: string };
+
+/**
+ * Registrar una entrega nueva o corregir una (`delivery`). Solo se guardan los
+ * productos que llegaron (vacío o 0 = no vino en esta entrega). En una compra
+ * local hace falta al menos una foto (el servidor lo vuelve a pedir).
+ */
+function DeliveryForm({
+  detail,
+  delivery,
+  needsPhoto,
+  today,
+  run,
+  pending,
+  onDone,
+}: {
+  detail: ImportDetail;
+  delivery?: DeliveryRow;
+  needsPhoto: boolean;
+  today: string;
+  run: Run;
+  pending: boolean;
+  onDone: () => void;
+}) {
+  const byItem = new Map((delivery?.lines ?? []).map((l) => [l.item_id, l]));
+  const [date, setDate] = useState(delivery?.delivered_on ?? today);
+  const [note, setNote] = useState(delivery?.note ?? "");
+  const [draft, setDraft] = useState<Record<string, LineDraft>>(() =>
+    Object.fromEntries(
+      detail.items.map((it) => {
+        const l = byItem.get(it.id);
+        return [it.id, { received: l ? String(l.received) : "", damaged: l?.damaged ? String(l.damaged) : "", note: l?.note ?? "" }];
+      }),
+    ),
+  );
+  const [photos, setPhotos] = useState<File[]>([]);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const keptPhotos = delivery?.photos.length ?? 0;
+  const set = (id: string, patch: Partial<LineDraft>) => setDraft((d) => ({ ...d, [id]: { ...d[id]!, ...patch } }));
+  // Lo que falta de cada producto sin contar esta entrega (al corregir, la suya vuelve a estar disponible).
+  const missingOf = (it: ItemRow) => {
+    const p = lineProgress({ qty: it.qty, courtesyQty: it.courtesy_qty, receivedQty: it.received_qty, damagedQty: it.damaged_qty });
+    return p.missing + (byItem.get(it.id)?.received ?? 0);
+  };
+  const submit = () => {
+    if (needsPhoto && !photos.length && !keptPhotos) {
+      setLocalError(DELIVERY_PHOTO_REQUIRED);
+      return;
+    }
+    setLocalError(null);
+    run(async () => {
+      const up = await uploadPhotos(detail.imp.id, photos);
+      if ("error" in up) return { error: up.error };
+      const input = {
+        deliveredOn: date,
+        note,
+        lines: detail.items.map((it) => ({ itemId: it.id, received: draft[it.id]?.received, damaged: draft[it.id]?.damaged, note: draft[it.id]?.note })),
+        photos: up.paths,
+      };
+      return delivery ? updateDelivery(delivery.id, input) : registerDelivery(detail.imp.id, input);
+    }, onDone);
+  };
+  return (
+    <div className={FORM_ZONE}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[13px] font-semibold text-ink-900">{delivery ? `Corregir la entrega del ${formatDmy(delivery.delivered_on)}` : "Lo que llegó en esta entrega"}</p>
+        <button
+          type="button"
+          className={BTN_GHOST}
+          onClick={() =>
+            setDraft((cur) => Object.fromEntries(detail.items.map((it) => [it.id, { ...cur[it.id]!, received: String(missingOf(it) || "") }])))
+          }
+        >
+          Llenar con lo que falta
+        </button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
+        <Field label="Fecha de la entrega">
+          <input type="date" className={FIELD} max={today} value={date} onChange={(e) => setDate(e.target.value)} />
+        </Field>
+        <Field label="Nota (opcional)">
+          <input className={FIELD} placeholder="Quién la trajo, guía de remisión, estado de las cajas…" value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+      </div>
+      <div aria-hidden className="hidden gap-3 text-xs font-semibold text-ink-600 sm:grid sm:grid-cols-[minmax(0,2fr)_6rem_6rem_minmax(0,2fr)]">
+        <span>Producto</span>
+        <span>Llegaron</span>
+        <span>Dañadas</span>
+        <span>Nota</span>
+      </div>
+      <ul className="divide-y divide-line-strong/60">
+        {detail.items.map((it) => {
+          const p = lineProgress({ qty: it.qty, courtesyQty: it.courtesy_qty, receivedQty: it.received_qty, damagedQty: it.damaged_qty });
+          return (
+            <li key={it.id} className="grid grid-cols-2 gap-x-3 gap-y-2 py-2.5 first:pt-0 last:pb-0 sm:grid-cols-[minmax(0,2fr)_6rem_6rem_minmax(0,2fr)] sm:items-center">
+              <p className="col-span-2 text-sm leading-5 text-ink-900 sm:col-span-1">
+                {it.name}{" "}
+                <span className="block text-[13px] tabular-nums text-ink-500">
+                  {lineProgressText(p)}
+                </span>
+              </p>
+              <label className={LABEL}>
+                <span className="sm:sr-only">Llegaron</span>
+                <input
+                  className={cn(FIELD, "tabular-nums")}
+                  inputMode="numeric"
+                  placeholder="0"
+                  aria-label={`Llegaron de ${it.name}`}
+                  value={draft[it.id]?.received ?? ""}
+                  onChange={(e) => set(it.id, { received: e.target.value })}
+                />
+              </label>
+              <label className={LABEL}>
+                <span className="sm:sr-only">Dañadas</span>
+                <input
+                  className={cn(FIELD, "tabular-nums")}
+                  inputMode="numeric"
+                  placeholder="0"
+                  aria-label={`Dañadas de ${it.name}`}
+                  value={draft[it.id]?.damaged ?? ""}
+                  onChange={(e) => set(it.id, { damaged: e.target.value })}
+                />
+              </label>
+              <label className={cn(LABEL, "col-span-2 sm:col-span-1")}>
+                <span className="sm:sr-only">Nota</span>
+                <input className={FIELD} aria-label={`Nota de ${it.name}`} value={draft[it.id]?.note ?? ""} onChange={(e) => set(it.id, { note: e.target.value })} />
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      <Field
+        label={needsPhoto && !keptPhotos ? "Fotos de lo que llegó (al menos una)" : delivery ? "Fotos nuevas (opcional)" : "Fotos de lo que llegó (opcional)"}
+        hint={`JPG, PNG o WEBP, hasta 25 MB; hasta 10 por vez.${keptPhotos ? ` Ya tiene ${keptPhotos} foto${keptPhotos === 1 ? "" : "s"}.` : ""}`}
+      >
+        <input type="file" multiple accept={PHOTO_ACCEPT} className={cn(FILE_INPUT, "py-0.5")} onChange={(e) => setPhotos(Array.from(e.target.files ?? []).slice(0, 10))} />
+      </Field>
+      <Feedback error={localError} />
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={BTN_PRIMARY} disabled={pending} onClick={submit}>
+          {delivery ? "Guardar corrección" : "Registrar entrega"}
+        </button>
+        <button type="button" className={BTN_GHOST} onClick={onDone}>
+          Cancelar
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1516,7 +1914,16 @@ type LandedLineT = Landed["lines"][number];
  * tipo de cambio, la vista que lo necesita dice «Falta el tipo de cambio» (nunca
  * una cifra a medias).
  */
-function LandedUnit({ line }: { line: LandedLineT }) {
+function LandedUnit({ line, preferPen = false }: { line: LandedLineT; preferPen?: boolean }) {
+  // Una compra local, en soles primero (MOM §45.12).
+  if (preferPen && line.pen) {
+    return (
+      <>
+        {fmtPenUnit(line.pen.unitCost)}/u
+        {line.usd ? <span className="block font-normal text-ink-500">{fmtUsdUnit(line.usd.unitCost)}</span> : null}
+      </>
+    );
+  }
   if (line.usd) {
     return (
       <>
@@ -1545,22 +1952,35 @@ function LandedBox({
   pending: boolean;
 }) {
   const [fxDraft, setFxDraft] = useState(fx == null ? "" : String(fx));
+  // Compra local (MOM §45.12): la vista principal es en soles y el tipo de
+  // cambio solo hace falta si algún monto está en US$.
+  const local = !hasShipping(detail.imp.kind);
   const rows = detail.items.map((it) => ({ it, l: landed.byItem.get(it.id) })).filter((r): r is { it: ItemRow; l: NonNullable<typeof r.l> } => Boolean(r.l));
   // En la tabla los montos van sin «US$»: la cabecera dice la moneda una vez y
   // así cada cifra cabe en una línea.
   const TH = "whitespace-nowrap py-2 pl-3 text-right text-xs font-semibold text-ink-600";
   const TD = "whitespace-nowrap py-2.5 pl-3 text-right text-[13px] leading-5 tabular-nums text-ink-700";
-  const n4 = (v: number | undefined) => (v == null ? "—" : fmtUsdUnit(v).replace("US$ ", ""));
+  const n4 = (v: number | undefined) => (v == null ? "—" : (local ? fmtPenUnit(v).replace("S/ ", "") : fmtUsdUnit(v).replace("US$ ", "")));
   const usd = landed.usd;
-  // Costos en soles y sin tipo de cambio: el total en USD no se puede decir.
-  const missingFx = landed.hasPenCosts && !fx;
+  const pen = landed.pen;
+  // Sin tipo de cambio: costos en soles en una importación, o algún US$ en una compra local.
+  const missingFx = !fx && (local ? landed.hasUsd : landed.hasPenCosts);
+  const showFx = !local || landed.hasUsd || fx != null;
+  const view = (l: LandedLineT) => (local ? l.pen : l.usd);
   return (
     <Section id="aterrizado" className="@container">
       <SectionHead
         id={`${sectionDomId("aterrizado")}-t`}
         title="Costo aterrizado por unidad"
         help={
-          usd ? (
+          local && pen ? (
+            <>
+              Productos <span className="tabular-nums">{fmtPen(pen.productTotal)}</span> + costos <span className="tabular-nums">{fmtPen(pen.costsTotal)}</span> ={" "}
+              <span className="font-semibold tabular-nums text-ink-900">{fmtPen(pen.total)}</span>
+              {usd && landed.hasUsd ? <span className="tabular-nums"> ({fmtUsd(usd.total)})</span> : null}. Los costos se reparten sobre lo pedido; la
+              cortesía no suma costo y el costo por unidad se divide entre las unidades buenas.
+            </>
+          ) : usd ? (
             <>
               Productos <span className="tabular-nums">{fmtUsd(usd.productTotal)}</span> + costos <span className="tabular-nums">{fmtUsd(usd.costsTotal)}</span> ={" "}
               <span className="font-semibold tabular-nums text-ink-900">{fmtUsd(usd.total)}</span>
@@ -1576,25 +1996,31 @@ function LandedBox({
           )
         }
       />
-      <div className="flex flex-wrap items-end gap-2">
-        <Field label="Tipo de cambio (S/ por 1 USD)">
-          <input
-            className={cn(fieldBox("w-32"), "tabular-nums", missingFx && "ring-2 ring-warn-fg")}
-            inputMode="decimal"
-            value={fxDraft}
-            onChange={(e) => setFxDraft(e.target.value)}
-            disabled={!canEdit}
-          />
-        </Field>
-        {canEdit && (
-          <button type="button" className={BTN_SECONDARY} disabled={pending} onClick={() => run(() => setImportFx(detail.imp.id, fxDraft))}>
-            Guardar tipo de cambio
-          </button>
-        )}
-      </div>
+      {showFx && (
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="Tipo de cambio (S/ por 1 USD)" hint={local ? "Solo hace falta si algún monto está en US$." : undefined}>
+            <input
+              className={cn(fieldBox("w-32"), "tabular-nums", missingFx && "ring-2 ring-warn-fg")}
+              inputMode="decimal"
+              value={fxDraft}
+              onChange={(e) => setFxDraft(e.target.value)}
+              disabled={!canEdit}
+            />
+          </Field>
+          {canEdit && (
+            <button type="button" className={BTN_SECONDARY} disabled={pending} onClick={() => run(() => setImportFx(detail.imp.id, fxDraft))}>
+              Guardar tipo de cambio
+            </button>
+          )}
+        </div>
+      )}
       {missingFx && (
         <Banner tone="warn" title={MISSING_FX}>
-          <p>Hay costos en soles: con el tipo de cambio de la importación se ve el costo aterrizado en USD y en soles, y el margen.</p>
+          <p>
+            {local
+              ? "Hay montos en US$: con el tipo de cambio de la compra se ve el costo aterrizado en soles y se puede pasar a Costos."
+              : "Hay costos en soles: con el tipo de cambio de la importación se ve el costo aterrizado en USD y en soles, y el margen."}
+          </p>
         </Banner>
       )}
       {landed.warnings.length > 0 && (
@@ -1609,7 +2035,9 @@ function LandedBox({
       {rows.length > 0 && (
         <>
           <p className="hidden text-xs leading-4 text-ink-500 @2xl:block">
-            USD por unidad buena (los costos en soles ÷ el tipo de cambio); la última columna, en soles (los costos en soles, tal cual).
+            {local
+              ? "Soles por unidad buena (los montos en US$ × el tipo de cambio); la última columna, en USD."
+              : "USD por unidad buena (los costos en soles ÷ el tipo de cambio); la última columna, en soles (los costos en soles, tal cual)."}
           </p>
           <table className="-mt-2 hidden w-full table-fixed @2xl:table">
             <thead className="border-b border-line">
@@ -1621,7 +2049,7 @@ function LandedBox({
                 <th className={TH}>Importación</th>
                 <th className={TH}>Adicional</th>
                 <th className={cn(TH, "text-ink-900")}>Total</th>
-                <th className={TH}>En S/</th>
+                <th className={TH}>{local ? "En US$" : "En S/"}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
@@ -1632,21 +2060,25 @@ function LandedBox({
                     {l.loss ? <Badge tone="crit">Pérdida</Badge> : null}
                   </td>
                   <td className={TD}>{fmtInt(l.good)}</td>
-                  <td className={TD}>{n4(l.usd?.perUnit.product)}</td>
-                  <td className={TD}>{n4(l.usd?.perUnit.envio)}</td>
-                  <td className={TD}>{n4(l.usd?.perUnit.importacion)}</td>
-                  <td className={TD}>{n4(l.usd?.perUnit.adicional)}</td>
-                  <td className={cn(TD, "font-semibold text-ink-900", !l.usd && "whitespace-normal font-medium text-warn-fg")}>{l.usd ? n4(l.usd.unitCost) : MISSING_FX}</td>
-                  <td className={TD} title={l.pen ? undefined : MISSING_FX}>{l.pen ? fmtPen(l.pen.unitCost).replace("S/ ", "") : "—"}</td>
+                  <td className={TD}>{n4(view(l)?.perUnit.product)}</td>
+                  <td className={TD}>{n4(view(l)?.perUnit.envio)}</td>
+                  <td className={TD}>{n4(view(l)?.perUnit.importacion)}</td>
+                  <td className={TD}>{n4(view(l)?.perUnit.adicional)}</td>
+                  <td className={cn(TD, "font-semibold text-ink-900", !view(l) && "whitespace-normal font-medium text-warn-fg")}>{view(l) ? n4(view(l)!.unitCost) : MISSING_FX}</td>
+                  {local ? (
+                    <td className={TD}>{l.usd ? fmtUsdUnit(l.usd.unitCost).replace("US$ ", "") : "—"}</td>
+                  ) : (
+                    <td className={TD} title={l.pen ? undefined : MISSING_FX}>{l.pen ? fmtPen(l.pen.unitCost).replace("S/ ", "") : "—"}</td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
           <ul className={cn(ROWS, "-mb-4 sm:-mb-5 @2xl:hidden")}>
             {rows.map(({ it, l }) => {
-              // El desglose en la vista que se pueda (USD primero).
-              const view = l.usd ?? l.pen;
-              const fmt = l.usd ? fmtUsdUnit : fmtPen;
+              // El desglose en la vista que se pueda (la de la moneda base primero).
+              const v = local ? (l.pen ?? l.usd) : (l.usd ?? l.pen);
+              const fmt = v === l.usd ? fmtUsdUnit : fmtPenUnit;
               return (
                 <li key={it.id} className={ROW}>
                   <div className="flex items-start justify-between gap-3">
@@ -1654,17 +2086,17 @@ function LandedBox({
                       {it.name} {l.loss ? <Badge tone="crit">Pérdida</Badge> : null}
                     </p>
                     <p className="shrink-0 text-right text-sm font-semibold leading-5 tabular-nums text-ink-900">
-                      <LandedUnit line={l} />
+                      <LandedUnit line={l} preferPen={local} />
                     </p>
                   </div>
                   <dl className="mt-1 grid gap-x-6 text-[13px] leading-5 tabular-nums sm:grid-cols-2">
                     {(
                       [
                         ["Buenas", fmtInt(l.good)],
-                        ["Proveedor", view ? fmt(view.perUnit.product) : "—"],
-                        ["Envío", view ? fmt(view.perUnit.envio) : "—"],
-                        ["Importación", view ? fmt(view.perUnit.importacion) : "—"],
-                        ["Adicional", view ? fmt(view.perUnit.adicional) : "—"],
+                        [local ? "Laboratorio" : "Proveedor", v ? fmt(v.perUnit.product) : "—"],
+                        ["Envío", v ? fmt(v.perUnit.envio) : "—"],
+                        ["Importación", v ? fmt(v.perUnit.importacion) : "—"],
+                        ["Adicional", v ? fmt(v.perUnit.adicional) : "—"],
                       ] as const
                     ).map(([k, v]) => (
                       <div key={k} className="flex justify-between gap-2">
@@ -1731,19 +2163,123 @@ function AmountField({
   );
 }
 
-/** «S/ 504.16 con IGV → S/ 427.25 sin IGV» de un costo guardado. */
+/** «con IGV S/ 504.16 → S/ 427.25» o «inafecto a IGV» de un costo guardado (MOM §45.3). */
 function costIgvNote(c: CostRow): string | null {
-  return c.includes_igv && c.gross_amount != null ? `${fmtMoney(c.gross_amount, c.currency)} con IGV → ${fmtMoney(c.amount, c.currency)} sin IGV` : null;
+  if (c.igv_treatment === "inafecto") return "Inafecto a IGV";
+  return c.includes_igv && c.gross_amount != null ? `Con IGV ${fmtMoney(c.gross_amount, c.currency)} → ${fmtMoney(c.amount, c.currency)} sin IGV` : null;
+}
+
+/**
+ * «Agregar un costo» y «Editar» (MOM §45.3): tipo, nombre, moneda y monto, el
+ * IGV (sin IGV, incluye IGV o inafecto), reparto y, «a un producto», cuál. Las
+ * mismas reglas en el servidor para las dos (`cleanCost`).
+ */
+function CostForm({ detail, cost, run, pending, onDone }: { detail: ImportDetail; cost?: CostRow; run: Run; pending: boolean; onDone?: () => void }) {
+  const [kind, setKind] = useState<string>(cost?.kind ?? "envio");
+  const [label, setLabel] = useState(cost?.label ?? "");
+  // Al editar, el monto como se escribió: con IGV si se cargó con IGV.
+  const [amount, setAmount] = useState(cost ? String(cost.igv_treatment === "con_igv" && cost.gross_amount != null ? cost.gross_amount : cost.amount) : "");
+  // En la moneda de la compra por defecto: S/ en una compra local (MOM §45.12).
+  const [currency, setCurrency] = useState<Currency>(cost?.currency ?? baseCurrencyOf(detail.imp.kind));
+  const [igvTreatment, setIgvTreatment] = useState<IgvTreatment>(cost?.igv_treatment ?? "neto");
+  const [allocation, setAllocation] = useState<string>(cost?.allocation ?? "units");
+  const [itemId, setItemId] = useState(cost?.item_id ?? "");
+  // La vista previa de «Incluye IGV»: lo que entra al costo, sin IGV.
+  const typed = parseDecimal(amount);
+  const igvPreview = igvTreatment === "con_igv" && typed !== null && typed > 0 ? { net: netOfIgv(typed), igv: igvOf(typed) } : null;
+  const reset = () => {
+    setLabel("");
+    setAmount("");
+    setIgvTreatment("neto");
+  };
+  return (
+    <div className={cn(cost ? FORM_ZONE : cn(CARD_ZONE, "space-y-3"))}>
+      <p className="text-[13px] font-semibold text-ink-900">{cost ? `Editar «${cost.label}»` : "Agregar un costo"}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Tipo">
+          <select className={FIELD} value={kind} onChange={(e) => setKind(e.target.value)}>
+            {COST_KINDS.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Nombre">
+          <input className={FIELD} placeholder="Flete DHL, aforo físico…" value={label} onChange={(e) => setLabel(e.target.value)} />
+        </Field>
+        <AmountField
+          label="Monto"
+          currency={currency}
+          onCurrency={setCurrency}
+          amount={amount}
+          onAmount={setAmount}
+          hint={currency === "PEN" ? "En soles, tal como dice la factura: no se convierte al guardar." : undefined}
+        />
+        <Field label="Reparto">
+          <select className={FIELD} value={allocation} onChange={(e) => setAllocation(e.target.value)}>
+            {ALLOCATIONS.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="space-y-1 sm:col-span-2">
+          <Field label="IGV">
+            <select className={FIELD} value={igvTreatment} onChange={(e) => setIgvTreatment(e.target.value as IgvTreatment)}>
+              {IGV_TREATMENTS.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <p className="text-xs leading-4 text-ink-500">{IGV_HELP}</p>
+          {igvPreview && (
+            <p className="text-[13px] leading-5 tabular-nums text-ink-700">
+              Entra al costo: <span className="font-semibold text-ink-900">{fmtMoney(igvPreview.net, currency)} sin IGV</span> (IGV {fmtMoney(igvPreview.igv, currency)}).
+            </p>
+          )}
+        </div>
+        {allocation === "item" && (
+          <Field label="Producto" className="sm:col-span-2">
+            <select className={FIELD} value={itemId} onChange={(e) => setItemId(e.target.value)}>
+              <option value="">Elige el producto</option>
+              {detail.items.map((it) => (
+                <option key={it.id} value={it.id}>
+                  {it.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={BTN_PRIMARY}
+          disabled={pending}
+          onClick={() =>
+            cost
+              ? run(() => updateImportCost(cost.id, { kind, label, amount, currency, igvTreatment, allocation, itemId }), onDone)
+              : run(() => addImportCost(detail.imp.id, { kind, label, amount, currency, igvTreatment, allocation, itemId }), reset)
+          }
+        >
+          {cost ? "Guardar costo" : "Agregar costo"}
+        </button>
+        {cost && (
+          <button type="button" className={BTN_GHOST} onClick={onDone}>
+            Cancelar
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail; fx: number | null; canEdit: boolean; run: Run; pending: boolean }) {
-  const [kind, setKind] = useState<string>("envio");
-  const [label, setLabel] = useState("");
-  const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState<Currency>("USD");
-  const [includesIgv, setIncludesIgv] = useState(false);
-  const [allocation, setAllocation] = useState<string>("units");
-  const [itemId, setItemId] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
   const costs = detail.costs ?? [];
   const itemName = new Map(detail.items.map((it) => [it.id, it.name]));
   const sum = (list: CostRow[]) => list.reduce((a, c) => ({ usd: a.usd + (c.currency === "USD" ? c.amount : 0), pen: a.pen + (c.currency === "PEN" ? c.amount : 0) }), { usd: 0, pen: 0 });
@@ -1751,9 +2287,8 @@ function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail;
   const total = sum(costs);
   const mixed = total.usd !== 0 && total.pen !== 0;
   const totalUsd = moneyInUsd(total, fx);
-  // La vista previa de «Incluye IGV»: lo que entra al costo, sin IGV.
-  const typed = parseDecimal(amount);
-  const igvPreview = includesIgv && typed !== null && typed > 0 ? { net: netOfIgv(typed), igv: igvOf(typed) } : null;
+  // Editar: el mismo permiso que agregar, y no en una compra cancelada.
+  const editable = canEdit && detail.imp.status !== "cancelado";
   return (
     <Section id="costos">
       <SectionHead
@@ -1770,6 +2305,13 @@ function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail;
       {costs.length ? (
         <ul className={ROWS_TOP}>
           {costs.map((c) => {
+            if (editing === c.id) {
+              return (
+                <li key={c.id} className={ROW}>
+                  <CostForm detail={detail} cost={c} run={run} pending={pending} onDone={() => setEditing(null)} />
+                </li>
+              );
+            }
             const igvNote = costIgvNote(c);
             const eq = equivalent(c.amount, c.currency, fx);
             return (
@@ -1786,6 +2328,11 @@ function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail;
                     {fmtMoney(c.amount, c.currency)}
                     {eq && <span className="block text-[13px] font-normal text-ink-500">{eq}</span>}
                   </span>
+                  {editable && (
+                    <button type="button" className={BTN_GHOST} onClick={() => setEditing(c.id)} aria-label={`Editar ${c.label}`}>
+                      Editar
+                    </button>
+                  )}
                   {canEdit && (
                     <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportCost(c.id))} aria-label={`Quitar ${c.label}`}>
                       Quitar
@@ -1801,84 +2348,122 @@ function CostsBox({ detail, fx, canEdit, run, pending }: { detail: ImportDetail;
           Sin costos todavía.{canEdit ? " Agrega el flete, los aranceles y los demás cargos, en dólares o en soles: se reparten entre los productos según el reparto que elijas." : ""}
         </p>
       )}
-      {canEdit && (
-        <div className={cn(CARD_ZONE, "space-y-3")}>
-          <p className="text-[13px] font-semibold text-ink-900">Agregar un costo</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Tipo">
-              <select className={FIELD} value={kind} onChange={(e) => setKind(e.target.value)}>
-                {COST_KINDS.map((k) => (
-                  <option key={k.id} value={k.id}>
-                    {k.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Nombre">
-              <input className={FIELD} placeholder="Flete DHL, aforo físico…" value={label} onChange={(e) => setLabel(e.target.value)} />
-            </Field>
-            <AmountField
-              label="Monto"
-              currency={currency}
-              onCurrency={setCurrency}
-              amount={amount}
-              onAmount={setAmount}
-              hint={currency === "PEN" ? "En soles, tal como dice la factura: no se convierte al guardar." : undefined}
-            />
-            <Field label="Reparto">
-              <select className={FIELD} value={allocation} onChange={(e) => setAllocation(e.target.value)}>
-                {ALLOCATIONS.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <div className="space-y-1 sm:col-span-2">
-              <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] font-medium leading-5 text-ink-700 pointer-coarse:min-h-11">
-                <input type="checkbox" className={CHECKBOX} checked={includesIgv} onChange={(e) => setIncludesIgv(e.target.checked)} />
-                Incluye IGV (18 %)
-              </label>
-              <p className="text-xs leading-4 text-ink-500">{IGV_HELP}</p>
-              {igvPreview && (
-                <p className="text-[13px] leading-5 tabular-nums text-ink-700">
-                  Entra al costo: <span className="font-semibold text-ink-900">{fmtMoney(igvPreview.net, currency)} sin IGV</span> (IGV {fmtMoney(igvPreview.igv, currency)}).
-                </p>
-              )}
-            </div>
-            {allocation === "item" && (
-              <Field label="Producto" className="sm:col-span-2">
-                <select className={FIELD} value={itemId} onChange={(e) => setItemId(e.target.value)}>
-                  <option value="">Elige el producto</option>
-                  {detail.items.map((it) => (
-                    <option key={it.id} value={it.id}>
-                      {it.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
-          </div>
-          <button
-            type="button"
-            className={BTN_PRIMARY}
-            disabled={pending}
-            onClick={() =>
-              run(
-                () => addImportCost(detail.imp.id, { kind, label, amount, currency, includesIgv, allocation, itemId }),
-                () => {
-                  setLabel("");
-                  setAmount("");
-                  setIncludesIgv(false);
-                },
-              )
-            }
-          >
-            Agregar costo
-          </button>
-        </div>
-      )}
+      {canEdit && <CostForm detail={detail} run={run} pending={pending} />}
     </Section>
+  );
+}
+
+/**
+ * «Registrar un pago» y «Editar» (MOM §45.3): monto y moneda, fecha, método,
+ * comprobante y nota. Al editar, el comprobante se queda si no se cambia; en
+ * una compra local siempre hace falta uno (el servidor lo vuelve a pedir).
+ */
+function PaymentForm({ detail, payment, run, pending, onDone }: { detail: ImportDetail; payment?: PaymentRow; run: Run; pending: boolean; onDone?: () => void }) {
+  const [amount, setAmount] = useState(payment ? String(payment.amount) : "");
+  const [currency, setCurrency] = useState<Currency>(payment?.currency ?? baseCurrencyOf(detail.imp.kind));
+  const [paidOn, setPaidOn] = useState(payment?.paid_on ?? limaToday());
+  const [method, setMethod] = useState<string>(payment?.method ?? "transferencia");
+  const [note, setNote] = useState(payment?.note ?? "");
+  const [documentId, setDocumentId] = useState(payment?.document_id ?? "");
+  // La captura del pago, en el mismo formulario: obligatoria en una compra local (MOM §45.12).
+  const [voucher, setVoucher] = useState<File | null>(null);
+  const [voucherKey, setVoucherKey] = useState(0);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const voucherRequired = paymentNeedsVoucher(detail.imp.kind);
+  const vouchers = detail.documents.filter((d) => d.kind === "payment");
+  return (
+    <div className={payment ? FORM_ZONE : cn(CARD_ZONE, "space-y-3")}>
+      <p className="text-[13px] font-semibold text-ink-900">{payment ? `Editar el pago del ${formatDmy(payment.paid_on)}` : "Registrar un pago"}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <AmountField label="Monto" currency={currency} onCurrency={setCurrency} amount={amount} onAmount={setAmount} />
+        <Field label="Fecha del pago">
+          <input type="date" className={FIELD} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} />
+        </Field>
+        <Field label="Método">
+          <select className={FIELD} value={method} onChange={(e) => setMethod(e.target.value)}>
+            {PAYMENT_METHODS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field
+          label={payment ? "Cambiar la captura (opcional)" : voucherRequired ? "Captura del pago (obligatoria)" : "Adjuntar comprobante (opcional)"}
+          hint="Imagen o PDF de la transferencia o del recibo, hasta 25 MB."
+        >
+          <input
+            key={voucherKey}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+            className={cn(FILE_INPUT, "py-0.5")}
+            onChange={(e) => {
+              setVoucher(e.target.files?.[0] ?? null);
+              if (e.target.files?.[0]) setDocumentId("");
+            }}
+          />
+        </Field>
+        {vouchers.length > 0 && (
+          <Field label={payment ? "Comprobante" : "O un comprobante ya subido"}>
+            <select className={FIELD} value={documentId} onChange={(e) => setDocumentId(e.target.value)} disabled={Boolean(voucher)}>
+              <option value="">{voucherRequired ? "Elige uno" : "Sin comprobante"}</option>
+              {vouchers.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.filename ?? "Comprobante"}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        <Field label="Nota" className="sm:col-span-2">
+          <input className={FIELD} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+      </div>
+      <Feedback error={localError} />
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={BTN_PRIMARY}
+          disabled={pending}
+          onClick={() => {
+            if (voucherRequired && !voucher && !documentId) {
+              setLocalError(PAYMENT_VOUCHER_REQUIRED);
+              return;
+            }
+            setLocalError(null);
+            run(
+              async () => {
+                let uploaded: { path: string; filename: string } | null = null;
+                if (voucher) {
+                  const up = await uploadImportFile(detail.imp.id, "payment", voucher);
+                  if ("error" in up) return { error: up.error };
+                  uploaded = { path: up.path, filename: voucher.name };
+                }
+                return payment
+                  ? updateImportPayment(payment.id, { amount, currency, paidOn, method, note, documentId: uploaded ? "" : documentId, voucher: uploaded })
+                  : addImportPayment(detail.imp.id, { amount, currency, paidOn, method, note, documentId: uploaded ? "" : documentId, voucher: uploaded });
+              },
+              payment
+                ? onDone
+                : () => {
+                    setAmount("");
+                    setNote("");
+                    setDocumentId("");
+                    setVoucher(null);
+                    setVoucherKey((k) => k + 1);
+                  },
+            );
+          }}
+        >
+          {payment ? "Guardar pago" : "Registrar pago"}
+        </button>
+        {payment && (
+          <button type="button" className={BTN_GHOST} onClick={onDone}>
+            Cancelar
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1897,17 +2482,16 @@ function PaymentsBox({
   run: Run;
   pending: boolean;
 }) {
-  const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState<Currency>("USD");
-  const [paidOn, setPaidOn] = useState(limaToday());
-  const [method, setMethod] = useState<string>("transferencia");
-  const [note, setNote] = useState("");
-  const [documentId, setDocumentId] = useState("");
+  const local = !hasShipping(detail.imp.kind);
+  const [editing, setEditing] = useState<string | null>(null);
+  const voucherRequired = paymentNeedsVoucher(detail.imp.kind);
   const payments = detail.payments ?? [];
-  const vouchers = detail.documents.filter((d) => d.kind === "payment");
-  const fig = summary ? balanceFigure(summary) : null;
-  const pending$ = summary ? (summary.pendingUsd ?? summary.pendingPen) : null;
-  const fmtBase = summary && summary.pendingUsd !== null ? fmtUsd : fmtPen;
+  const editable = canEdit && detail.imp.status !== "cancelado";
+  const fig = summary ? balanceFigure(summary, local) : null;
+  // La misma moneda que la cifra: soles en una compra local si se puede.
+  const inPen = summary ? summary.pendingUsd === null || (local && summary.pendingPen !== null) : false;
+  const pending$ = summary ? (inPen ? summary.pendingPen : summary.pendingUsd) : null;
+  const fmtBase = inPen ? fmtPen : fmtUsd;
   return (
     <Section id="pagos">
       <SectionHead
@@ -1931,9 +2515,10 @@ function PaymentsBox({
             <span className="tabular-nums">
               {summary.needsFx
                 ? `Pagado ${fmtSplit(summary.paid)} de ${fmtSplit(summary.total)}: con monedas mezcladas, el saldo necesita el tipo de cambio.`
-                : summary.pendingUsd !== null
+                : !inPen
                   ? `Pagado ${fmtUsd(summary.paidUsd)} de ${fmtUsd(summary.totalUsd)}${summary.paid.pen !== 0 || summary.total.pen !== 0 ? " (los soles ÷ el tipo de cambio)" : ""}.`
-                  : `Pagado ${fmtPen(summary.paidPen)} de ${fmtPen(summary.totalPen)}.`}
+                  : `Pagado ${fmtPen(summary.paidPen)} de ${fmtPen(summary.totalPen)}${summary.paid.usd !== 0 || summary.total.usd !== 0 ? " (los US$ × el tipo de cambio)" : ""}.`}
+              {voucherRequired ? " Cada pago lleva la captura del comprobante." : ""}
             </span>
           ) : undefined
         }
@@ -1941,6 +2526,13 @@ function PaymentsBox({
       {payments.length ? (
         <ul className={ROWS_TOP}>
           {payments.map((p) => {
+            if (editing === p.id) {
+              return (
+                <li key={p.id} className={ROW}>
+                  <PaymentForm detail={detail} payment={p} run={run} pending={pending} onDone={() => setEditing(null)} />
+                </li>
+              );
+            }
             const eq = equivalent(p.amount, p.currency, fx);
             return (
               <li key={p.id} className={cn(ROW, "flex items-start justify-between gap-3")}>
@@ -1954,7 +2546,7 @@ function PaymentsBox({
                       {p.note && p.document_id ? " · " : null}
                       {p.document_id ? (
                         <a href={`/api/compras/documento/${p.document_id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-medium text-brand-700 hover:underline">
-                          Comprobante
+                          Ver comprobante
                           <IconArrowUpRight aria-hidden className="size-3.5" />
                         </a>
                       ) : null}
@@ -1966,6 +2558,11 @@ function PaymentsBox({
                     {fmtMoney(p.amount, p.currency)}
                     {eq && <span className="block text-[13px] font-normal text-ink-500">{eq}</span>}
                   </span>
+                  {editable && (
+                    <button type="button" className={BTN_GHOST} onClick={() => setEditing(p.id)} aria-label={`Editar el pago del ${formatDmy(p.paid_on)}`}>
+                      Editar
+                    </button>
+                  )}
                   {canEdit && (
                     <button type="button" className={BTN_REMOVE} disabled={pending} onClick={() => run(() => removeImportPayment(p.id))} aria-label={`Quitar el pago del ${formatDmy(p.paid_on)}`}>
                       Quitar
@@ -1977,58 +2574,16 @@ function PaymentsBox({
           })}
         </ul>
       ) : (
-        <p className="text-sm text-ink-500">Sin pagos todavía.{canEdit ? " Registra cada pago, en dólares o en soles, con su fecha y, si lo tienes, su comprobante." : ""}</p>
+        <p className="text-sm text-ink-500">
+          Sin pagos todavía.
+          {canEdit
+            ? voucherRequired
+              ? " Registra cada pago al laboratorio con su fecha y la captura de lo que le pagaste."
+              : " Registra cada pago, en dólares o en soles, con su fecha y, si lo tienes, su comprobante."
+            : ""}
+        </p>
       )}
-      {canEdit && (
-        <div className={cn(CARD_ZONE, "space-y-3")}>
-          <p className="text-[13px] font-semibold text-ink-900">Registrar un pago</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <AmountField label="Monto" currency={currency} onCurrency={setCurrency} amount={amount} onAmount={setAmount} />
-            <Field label="Fecha del pago">
-              <input type="date" className={FIELD} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} />
-            </Field>
-            <Field label="Método">
-              <select className={FIELD} value={method} onChange={(e) => setMethod(e.target.value)}>
-                {PAYMENT_METHODS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Comprobante" hint={vouchers.length ? undefined : "Súbelo en Documentos como «Comprobante de pago» para elegirlo aquí."}>
-              <select className={FIELD} value={documentId} onChange={(e) => setDocumentId(e.target.value)}>
-                <option value="">Sin comprobante</option>
-                {vouchers.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.filename ?? "Comprobante"}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Nota" className="sm:col-span-2">
-              <input className={FIELD} value={note} onChange={(e) => setNote(e.target.value)} />
-            </Field>
-          </div>
-          <button
-            type="button"
-            className={BTN_PRIMARY}
-            disabled={pending}
-            onClick={() =>
-              run(
-                () => addImportPayment(detail.imp.id, { amount, currency, paidOn, method, note, documentId }),
-                () => {
-                  setAmount("");
-                  setNote("");
-                  setDocumentId("");
-                },
-              )
-            }
-          >
-            Registrar pago
-          </button>
-        </div>
-      )}
+      {canEdit && <PaymentForm detail={detail} run={run} pending={pending} />}
     </Section>
   );
 }
@@ -2097,7 +2652,13 @@ function DocumentsBox({
       {!groups.length && (
         <p className="text-sm text-ink-500">
           Sin documentos todavía.
-          {uploadKinds.length ? (photosOnly ? " Sube las fotos de la recepción." : " Empieza por la factura comercial y el tracking: son el checklist mínimo de cada importación.") : ""}
+          {uploadKinds.length
+            ? photosOnly
+              ? " Sube las fotos de la recepción."
+              : hasShipping(detail.imp.kind)
+                ? " Empieza por la factura comercial y el tracking: son el checklist mínimo de cada importación."
+                : " Empieza por la factura del laboratorio. Las fotos de cada entrega y las capturas de los pagos se suben en Entregas y en Pagos."
+            : ""}
         </p>
       )}
       {groups.length > 0 && (
@@ -2114,6 +2675,7 @@ function DocumentsBox({
                         <span className="block truncate text-sm leading-5 text-ink-900">{d.filename ?? docKindLabel(d.kind)}</span>
                         <span className="block text-[13px] leading-5 tabular-nums text-ink-500">
                           {fmtBytes(d.size_bytes)} · {fmtDateTime(d.created_at)}
+                          {d.delivery_id ? ` · entrega del ${formatDmy(detail.deliveries.find((x) => x.id === d.delivery_id)?.delivered_on)}` : ""}
                         </span>
                       </span>
                     </span>
@@ -2237,7 +2799,7 @@ const EVENT_LABEL: Record<ImportEventKind, string> = {
   producto: "Productos",
   dinero: "Dinero",
   documento: "Documentos",
-  recepcion: "Recepción",
+  recepcion: "Entregas",
   bodega: "Bodega",
   costos: "Costos",
   datos: "Datos",

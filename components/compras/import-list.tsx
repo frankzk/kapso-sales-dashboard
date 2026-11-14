@@ -4,6 +4,9 @@
 // compacta desde 1280 px y una lista con hairlines por debajo. La dibuja el
 // servidor (`app/dashboard/compras/page.tsx`); sin «Montos de compras» las
 // filas llegan sin `money` y la columna de costo no se dibuja.
+//
+// Compras locales (MOM §45.12): la misma lista, con la chapa «Local», el filtro
+// `?tipo=` y su costo en soles; no tienen guía ni aviso a la bodega.
 
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -11,8 +14,8 @@ import { cn } from "@/components/ui";
 import { Badge } from "@/components/ops-ui";
 import { statusCardClass } from "@/components/ops-styles";
 import { IconCheck, IconX } from "@/components/icons";
-import { fmtInt, fmtSplit, fmtUsd } from "@/components/compras/format";
-import { AlertPills, SupplierPill } from "@/components/compras/list-filters";
+import { fmtInt, fmtPen, fmtSplit, fmtUsd } from "@/components/compras/format";
+import { AlertPills, KindPill, SupplierPill } from "@/components/compras/list-filters";
 import { ComprasEmpty, IMPORT_ALERT_FILTERS, comprasListHref, importStatusTone, type ImportAlertFilter } from "@/components/compras/chrome";
 import type { ImportListRow, SupplierRow } from "@/lib/compras-server";
 import {
@@ -20,26 +23,43 @@ import {
   IMPORT_TABS,
   MISSING_FX,
   formatDmy,
+  hasShipping,
   importAlerts,
   importChecklist,
   inImportTab,
   isActiveStatus,
   trackingPublicUrl,
+  traceCodes,
+  type ImportKind,
   type ImportTab,
 } from "@/lib/compras";
 
 type Enriched = {
   row: ImportListRow;
   alerts: ReturnType<typeof importAlerts>;
-  checklist: { invoice: boolean; tracking: boolean };
+  /** `tracking` null: una compra local no tiene guía. */
+  checklist: ReturnType<typeof importChecklist>;
+  /** Los tres códigos de trazabilidad de una importación (MOM §45.15). */
+  codes: ReturnType<typeof traceCodes>;
 };
 
 const TAB_HINT: Record<ImportTab, string> = {
-  activas: "Ni llegaron ni se cancelaron (incluye las cotizaciones)",
+  activas: "Ni llegaron completas ni se cancelaron (incluye las cotizaciones y las recibidas en parte)",
   recibidas: "Ya llegaron a la bodega de Lima",
   canceladas: "Canceladas",
-  todas: "Todas las importaciones",
+  todas: "Todas las compras",
 };
+
+/** El costo y el saldo en la moneda de la compra: USD la importación, soles la compra local. */
+function moneyView(row: ImportListRow): { total: string; pending: number | null; fmt: (n: number) => string; zero: boolean } | null {
+  const m = row.money;
+  if (!m) return null;
+  if (row.imp.kind === "local" && m.totalPen !== null) {
+    return { total: fmtPen(m.totalPen), pending: m.pendingPen, fmt: fmtPen, zero: !(m.totalPen > 0) };
+  }
+  // Costos en soles sin tipo de cambio: cada moneda por separado, nunca una suma a medias.
+  return { total: m.totalUsd !== null ? fmtUsd(m.totalUsd) : fmtSplit(m.total), pending: m.pendingUsd, fmt: fmtUsd, zero: !((m.totalUsd ?? 0) > 0) };
+}
 
 function matchesAlert(e: Enriched, alerta: ImportAlertFilter | null): boolean {
   if (!alerta) return true;
@@ -55,6 +75,7 @@ export function ImportListView({
   supplierFilter,
   tab,
   alerta,
+  tipo = null,
   canMoney,
   orgParam,
   today,
@@ -65,6 +86,8 @@ export function ImportListView({
   supplierFilter: SupplierRow | null;
   tab: ImportTab;
   alerta: ImportAlertFilter | null;
+  /** `?tipo=`: solo importaciones o solo compras locales (MOM §45.12). */
+  tipo?: ImportKind | null;
   canMoney: boolean;
   /** `org` de la URL cuando la persona ve más de una organización. */
   orgParam: string | null;
@@ -72,14 +95,17 @@ export function ImportListView({
   /** «Nueva importación», para el estado vacío (solo con «Compras»). */
   emptyAction?: ReactNode;
 }) {
-  const rows = supplierFilter ? allRows.filter((r) => r.imp.supplier_id === supplierFilter.id) : allRows;
+  const bySupplier = supplierFilter ? allRows.filter((r) => r.imp.supplier_id === supplierFilter.id) : allRows;
+  const kindCounts = { importacion: bySupplier.filter((r) => r.imp.kind !== "local").length, local: bySupplier.filter((r) => r.imp.kind === "local").length };
+  const rows = tipo ? bySupplier.filter((r) => r.imp.kind === tipo) : bySupplier;
   const enriched: Enriched[] = rows.map((row) => ({
     row,
     alerts: importAlerts(
-      { status: row.imp.status, eta: row.imp.eta, reportedAt: row.imp.reported_to_warehouse_at, lastMovementAt: row.lastMovementAt },
+      { status: row.imp.status, kind: row.imp.kind, eta: row.imp.eta, reportedAt: row.imp.reported_to_warehouse_at, lastMovementAt: row.lastMovementAt },
       today,
     ),
-    checklist: importChecklist(row.docKinds, row.imp.tracking_number),
+    checklist: importChecklist(row.docKinds, row.imp.tracking_number, row.imp.kind),
+    codes: traceCodes(row.imp),
   }));
   const active = enriched.filter((e) => isActiveStatus(e.row.imp.status));
   const counts = Object.fromEntries(IMPORT_TABS.map((t) => [t.id, enriched.filter((e) => inImportTab(e.row.imp.status, t.id)).length])) as Record<ImportTab, number>;
@@ -89,15 +115,20 @@ export function ImportListView({
     sin_novedades: active.filter((e) => e.alerts.stale).length,
   };
   const visible = enriched.filter((e) => inImportTab(e.row.imp.status, tab) && matchesAlert(e, alerta));
-  // En camino, en USD: las que tienen costos en soles sin tipo de cambio no se suman a medias (se cuentan aparte).
+  // En camino, en USD: las que tienen costos en soles sin tipo de cambio no se
+  // suman a medias. Una compra local toda en soles se suma en soles aparte.
   const inTransit = active.filter((e) => e.row.imp.status !== "cotizacion");
   const inTransitUsd = canMoney ? inTransit.reduce((a, e) => a + (e.row.money?.totalUsd ?? 0), 0) : null;
-  const inTransitWithoutFx = canMoney ? inTransit.filter((e) => e.row.money && e.row.money.totalUsd === null).length : 0;
+  const inTransitPen = canMoney
+    ? inTransit.reduce((a, e) => a + (e.row.money && e.row.money.totalUsd === null && e.row.money.totalPen !== null ? e.row.money.totalPen : 0), 0)
+    : 0;
+  const inTransitWithoutFx = canMoney ? inTransit.filter((e) => e.row.money && e.row.money.totalUsd === null && e.row.money.totalPen === null).length : 0;
   const proveedor = supplierFilter?.id ?? null;
   const supplierOptions = suppliers
     .map((s) => ({ value: s.id, label: s.name, count: allRows.filter((r) => r.imp.supplier_id === s.id).length }))
     .filter((o) => o.count > 0 || o.value === proveedor);
-  const filtered = Boolean(supplierFilter || alerta);
+  const filtered = Boolean(supplierFilter || alerta || tipo);
+  const showKindPill = kindCounts.local > 0 || Boolean(tipo);
   const alertLabel = alerta ? IMPORT_ALERT_FILTERS.find((f) => f.id === alerta)?.label : null;
   const tabLabel = IMPORT_TABS.find((t) => t.id === tab)?.label ?? "";
 
@@ -109,7 +140,14 @@ export function ImportListView({
           {inTransitUsd !== null && (
             <>
               {" · "}
-              <span className="font-semibold text-ink-900">{fmtUsd(inTransitUsd)}</span> en camino
+              <span className="font-semibold text-ink-900">{fmtUsd(inTransitUsd)}</span>
+              {inTransitPen > 0 && (
+                <>
+                  {" + "}
+                  <span className="font-semibold text-ink-900">{fmtPen(inTransitPen)}</span>
+                </>
+              )}{" "}
+              en camino
               {inTransitWithoutFx > 0 && (
                 <span className="font-medium text-warn-fg">
                   {" "}
@@ -122,7 +160,7 @@ export function ImportListView({
         {active.length > 0 && (
           <>
             <span aria-hidden className="hidden h-4 w-px bg-line-strong sm:block" />
-            <AlertPills tab={tab} org={orgParam} proveedor={proveedor} alerta={alerta} counts={alertCounts} />
+            <AlertPills tab={tab} org={orgParam} proveedor={proveedor} alerta={alerta} tipo={tipo} counts={alertCounts} />
           </>
         )}
       </div>
@@ -133,7 +171,7 @@ export function ImportListView({
           return (
             <Link
               key={t.id}
-              href={comprasListHref({ tab: t.id, org: orgParam, proveedor })}
+              href={comprasListHref({ tab: t.id, org: orgParam, proveedor, tipo })}
               aria-current={on ? "page" : undefined}
               title={TAB_HINT[t.id]}
               className={statusCardClass(on)}
@@ -149,7 +187,8 @@ export function ImportListView({
       <section aria-label={`Importaciones: ${alertLabel ?? tabLabel}`} className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-5">
           <div className="flex flex-wrap items-center gap-2">
-            <SupplierPill tab={tab} org={orgParam} proveedor={proveedor} alerta={alerta} options={supplierOptions} />
+            {showKindPill && <KindPill tab={tab} org={orgParam} proveedor={proveedor} alerta={alerta} tipo={tipo} counts={kindCounts} />}
+            <SupplierPill tab={tab} org={orgParam} proveedor={proveedor} alerta={alerta} tipo={tipo} options={supplierOptions} />
             {filtered && (
               <Link href={comprasListHref({ tab, org: orgParam })} scroll={false} className="inline-flex h-8 items-center rounded-md px-2.5 text-[13px] font-semibold text-ink-600 transition-colors duration-150 hover:bg-wash hover:text-ink-900 pointer-coarse:h-11">
                 Quitar filtros
@@ -157,7 +196,7 @@ export function ImportListView({
             )}
           </div>
           <p className="text-[13px] leading-5 tabular-nums text-ink-500">
-            {fmtInt(visible.length)} importaci{visible.length === 1 ? "ón" : "ones"}
+            {fmtInt(visible.length)} compra{visible.length === 1 ? "" : "s"}
             {alertLabel ? ` · ${alertLabel.toLowerCase()}` : ""} · las más recientes primero
           </p>
         </div>
@@ -166,16 +205,20 @@ export function ImportListView({
           <div className="border-t border-line">
             {filtered ? (
               <ComprasEmpty title="Ninguna coincide con los filtros">
-                {supplierFilter ? `${supplierFilter.name} no tiene importaciones ${alertLabel ? `«${alertLabel.toLowerCase()}»` : `en «${tabLabel}»`}.` : `Nada «${alertLabel?.toLowerCase()}» por ahora.`}
+                {supplierFilter
+                  ? `${supplierFilter.name} no tiene compras ${alertLabel ? `«${alertLabel.toLowerCase()}»` : `en «${tabLabel}»`}.`
+                  : alertLabel
+                    ? `Nada «${alertLabel.toLowerCase()}» por ahora.`
+                    : `Sin ${tipo === "local" ? "compras locales" : "importaciones"} en «${tabLabel}».`}
               </ComprasEmpty>
             ) : !allRows.length ? (
-              <ComprasEmpty title="Todavía no hay importaciones" action={emptyAction}>
+              <ComprasEmpty title="Todavía no hay compras" action={emptyAction}>
                 {emptyAction
-                  ? "Registra la primera con «Nueva importación»: proveedor, guía y llegada estimada. Después agregas productos, documentos, costos y pagos en su detalle."
+                  ? "Registra la primera con «Nueva compra»: una importación (proveedor, guía y llegada estimada) o una compra local a un laboratorio o maquila. Después agregas productos, documentos, costos, pagos y entregas en su detalle."
                   : "Cuando se registre una, aparecerá aquí."}
               </ComprasEmpty>
             ) : (
-              <ComprasEmpty title={`Sin importaciones en «${tabLabel}»`}>{TAB_HINT[tab]}: ninguna por ahora.</ComprasEmpty>
+              <ComprasEmpty title={`Sin compras en «${tabLabel}»`}>{TAB_HINT[tab]}: ninguna por ahora.</ComprasEmpty>
             )}
           </div>
         ) : (
@@ -242,6 +285,8 @@ function Check({ ok, label }: { ok: boolean; label: string }) {
 
 function Tracking({ row }: { row: ImportListRow }) {
   const { imp } = row;
+  // Una compra local no tiene guía (MOM §45.12).
+  if (!hasShipping(imp.kind)) return <span className="text-ink-500">Entrega el laboratorio</span>;
   if (!imp.tracking_number) return <span className="text-ink-500">Sin guía</span>;
   const link = trackingPublicUrl({ carrier: imp.carrier, trackingNumber: imp.tracking_number, trackingUrl: imp.tracking_url });
   return (
@@ -264,17 +309,21 @@ function itemsLine(row: ImportListRow): string {
 }
 
 function Money({ row }: { row: ImportListRow }) {
-  if (!row.money) return <span className="text-ink-300">—</span>;
-  const { totalUsd, pendingUsd, total } = row.money;
+  const v = moneyView(row);
+  if (!v) return <span className="text-ink-300">—</span>;
   return (
     <>
-      {/* Costos en soles sin tipo de cambio: cada moneda por separado, nunca una suma a medias. */}
-      <p className={cn("text-sm leading-5 tabular-nums text-ink-900", totalUsd !== null && "whitespace-nowrap")}>{totalUsd !== null ? fmtUsd(totalUsd) : fmtSplit(total)}</p>
-      <p className={cn("text-[13px] leading-5 tabular-nums", pendingUsd === null || pendingUsd > 0 ? "font-medium text-warn-fg" : "text-ink-500")}>
-        {pendingUsd === null ? MISSING_FX : pendingUsd > 0 ? `Falta ${fmtUsd(pendingUsd)}` : (totalUsd ?? 0) > 0 ? "Pagado" : "Sin costos"}
+      <p className="whitespace-nowrap text-sm leading-5 tabular-nums text-ink-900">{v.total}</p>
+      <p className={cn("text-[13px] leading-5 tabular-nums", v.pending === null || v.pending > 0 ? "font-medium text-warn-fg" : "text-ink-500")}>
+        {v.pending === null ? MISSING_FX : v.pending > 0 ? `Falta ${v.fmt(v.pending)}` : v.zero ? "Sin costos" : "Pagado"}
       </p>
     </>
   );
+}
+
+/** La chapa del tipo: solo la compra local la lleva (la importación es lo de siempre). */
+function KindBadge({ row }: { row: ImportListRow }) {
+  return row.imp.kind === "local" ? <Badge tone="info">Local</Badge> : null;
 }
 
 const TH = "sticky top-0 z-[1] border-y border-line bg-white py-2 pr-3 text-left text-xs font-semibold text-ink-600";
@@ -284,12 +333,12 @@ function ImportTable({ rows, canMoney }: { rows: Enriched[]; canMoney: boolean }
     <table className="hidden w-full table-fixed text-left xl:table">
       <thead>
         <tr>
-          <th className={cn(TH, "w-[13%] pl-5")}>Importación</th>
+          <th className={cn(TH, "w-[13%] pl-5")}>Compra</th>
           <th className={cn(TH, "w-[15%]")}>Proveedor</th>
           <th className={TH}>Productos</th>
           <th className={cn(TH, "w-[17%]")}>Estado</th>
           <th className={cn(TH, "w-[10%]")}>Llegada</th>
-          <th className={cn(TH, "w-[9%]")}>Documentos</th>
+          <th className={cn(TH, "w-[9%]")}>Checklist</th>
           {canMoney && <th className={cn(TH, "w-[14%] pr-5 text-right")}>Costo total</th>}
         </tr>
       </thead>
@@ -300,16 +349,19 @@ function ImportTable({ rows, canMoney }: { rows: Enriched[]; canMoney: boolean }
           return (
             <tr key={imp.id} className="border-b border-line align-top transition-colors duration-150 last:border-0 hover:bg-wash">
               <td className="py-2.5 pl-5 pr-3">
-                <Link href={`/dashboard/compras/${imp.id}`} className="font-mono text-[13px] font-medium leading-5 text-brand-700 hover:underline">
-                  {imp.code}
-                </Link>
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <Link href={`/dashboard/compras/${imp.id}`} className="font-mono text-[13px] font-medium leading-5 text-brand-700 hover:underline">
+                    {imp.code}
+                  </Link>
+                  <KindBadge row={e.row} />
+                </span>
                 <p className="flex text-[13px] leading-5 text-ink-500">
                   <Tracking row={e.row} />
                 </p>
               </td>
               <td className="py-2.5 pr-3">
                 <p className="line-clamp-2 text-sm leading-5 text-ink-900">{e.row.supplierName ?? <span className="text-ink-500">Sin proveedor</span>}</p>
-                {imp.platform_order && <p className="truncate text-[13px] leading-5 text-ink-500">Orden {imp.platform_order}</p>}
+                {imp.platform_order && <p className="truncate text-[13px] leading-5 text-ink-500">{imp.kind === "local" ? "Orden" : "Alibaba"} {imp.platform_order}</p>}
               </td>
               <td className="py-2.5 pr-3">
                 <p className="text-sm leading-5 tabular-nums text-ink-900">
@@ -336,7 +388,8 @@ function ImportTable({ rows, canMoney }: { rows: Enriched[]; canMoney: boolean }
               <td className="py-2.5 pr-3">
                 <div className="grid">
                   <Check ok={e.checklist.invoice} label="Factura" />
-                  <Check ok={e.checklist.tracking} label="Tracking" />
+                  {e.checklist.tracking !== null && <Check ok={e.checklist.tracking} label="Tracking" />}
+                  {e.codes.applies && <Check ok={!e.codes.missing.length} label={`Códigos ${e.codes.filled}/3`} />}
                 </div>
               </td>
               {canMoney && (
@@ -355,7 +408,12 @@ function ImportTable({ rows, canMoney }: { rows: Enriched[]; canMoney: boolean }
 function ImportListItem({ e, canMoney }: { e: Enriched; canMoney: boolean }) {
   const { imp } = e.row;
   const a = arrival(e);
-  const missing = [!e.checklist.invoice && "Falta factura", !e.checklist.tracking && "Falta tracking"].filter(Boolean) as string[];
+  const missing = [
+    !e.checklist.invoice && "Falta factura",
+    e.checklist.tracking === false && "Falta tracking",
+    e.codes.applies && e.codes.missing.length > 0 && `Códigos ${e.codes.filled}/3`,
+  ].filter(Boolean) as string[];
+  const money = canMoney ? moneyView(e.row) : null;
   return (
     <li className="relative px-4 py-3 transition-colors duration-150 hover:bg-wash sm:px-5">
       <div className="flex items-start justify-between gap-3">
@@ -363,7 +421,8 @@ function ImportListItem({ e, canMoney }: { e: Enriched; canMoney: boolean }) {
         <Link href={`/dashboard/compras/${imp.id}`} className="font-mono text-[13px] font-medium leading-5 text-brand-700 after:absolute after:inset-0">
           {imp.code}
         </Link>
-        <span className="shrink-0">
+        <span className="flex shrink-0 gap-1">
+          <KindBadge row={e.row} />
           <Badge tone={importStatusTone(imp.status)}>{IMPORT_STATUS_LABEL[imp.status]}</Badge>
         </span>
       </div>
@@ -389,14 +448,14 @@ function ImportListItem({ e, canMoney }: { e: Enriched; canMoney: boolean }) {
           <span className="text-ink-500">Sin llegada estimada</span>
         )}
       </p>
-      {canMoney && e.row.money && (
+      {money && (
         <p className="text-[13px] leading-5 tabular-nums text-ink-700">
-          {e.row.money.totalUsd !== null ? fmtUsd(e.row.money.totalUsd) : fmtSplit(e.row.money.total)}
-          {e.row.money.pendingUsd === null ? (
+          {money.total}
+          {money.pending === null ? (
             <span className="font-medium text-warn-fg"> · {MISSING_FX.toLowerCase()}</span>
-          ) : e.row.money.pendingUsd > 0 ? (
-            <span className="font-medium text-warn-fg"> · falta {fmtUsd(e.row.money.pendingUsd)}</span>
-          ) : (e.row.money.totalUsd ?? 0) > 0 ? (
+          ) : money.pending > 0 ? (
+            <span className="font-medium text-warn-fg"> · falta {money.fmt(money.pending)}</span>
+          ) : !money.zero ? (
             <span className="text-ink-500"> · pagado</span>
           ) : null}
         </p>
