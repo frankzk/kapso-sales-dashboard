@@ -450,6 +450,7 @@ const WARN_STATES: ReadonlySet<AgreementStateKind> = new Set<AgreementStateKind>
   "falta_ubicar",
   "por_programar",
   "deriva_quitado",
+  "salida_distinta",
 ]);
 
 /**
@@ -465,6 +466,8 @@ const WARN_STATES: ReadonlySet<AgreementStateKind> = new Set<AgreementStateKind>
 export function retryGroup(f: RetryGroupFacts): RetryGroup {
   if (f.critical) return "con_aviso";
   if (f.box.kind === "con_motorizado" || f.box.kind === "volviendo_courier") return "fuera";
+  // La salida de otro courier ya entregada al courier también está fuera (13-11-2026).
+  if (f.box.kind === "con_courier" && !f.box.enOficina) return "fuera";
   if (f.unconfirmed || WARN_STATES.has(f.state) || f.defaultProblem || f.noReception || f.addressDrift || f.otherSalidaExists) {
     return "con_aviso";
   }
@@ -690,7 +693,8 @@ export function warehouseRetryRows(rows: readonly ReproRow[], ctx: RetryContext)
     }
 
     // Kapta la cuenta en oficina sin que nadie la haya recibido: no se da por puesta.
-    const noReception = r.box.kind === "en_oficina" && !r.receivedAt;
+    // Una caja que nunca salió (13-11-2026) no espera recepción.
+    const noReception = r.box.kind === "en_oficina" && !r.receivedAt && !r.box.nuncaSalio;
     if (noReception && r.box.kind === "en_oficina") {
       chips.push({
         tone: "warn",

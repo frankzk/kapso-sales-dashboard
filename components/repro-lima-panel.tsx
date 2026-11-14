@@ -187,13 +187,15 @@ function boxTone(box: BoxLocation): BadgeTone {
       return "neutral";
     case "volviendo_courier":
       return "info";
+    case "con_courier":
+      return "info";
     case "desconocida":
       return "warn";
   }
 }
 
 function stateTone(kind: AgreementStateKind): BadgeTone {
-  if (kind === "programado") return "ok";
+  if (kind === "programado" || kind === "salida_creada") return "ok";
   if (kind === "esperando_caja") return "info";
   if (kind === "sin_acuerdo") return "neutral";
   return isProblemState(kind) ? "warn" : "neutral";
