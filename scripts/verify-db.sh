@@ -402,4 +402,7 @@ echo "  ✅ la S01 pasa a retorno sin salir de la caja ni perder dispatched_at; 
 echo "▶ Compras: importaciones (0340, MOM §45): formas con CHECK, nada de otra org, el costo de un producto quitado se queda, historial append-only, solo el servidor y dos veces es una"
 $PSQL -f "$ROOT/scripts/sql/compras_smoke.sql"
 echo "  ✅ código único por org, estados/transporte/reparto/monto con CHECK, hijos de la misma org e importación, costo sin producto en vez de borrado, import_events inmutable, RLS sin políticas y sin privilegios para anon/authenticated"
+echo "▶ Compras: proveedores (0341, MOM §45.7): contacto, correo y condiciones de pago opcionales con CHECK, solo el servidor y dos veces es una"
+$PSQL -f "$ROOT/scripts/sql/compras_proveedores_smoke.sql"
+echo "  ✅ columnas nuevas nulas por defecto, correo con forma a@b.c, largos con tope, sin privilegios para anon/authenticated"
 echo "✅ DB verification passed."

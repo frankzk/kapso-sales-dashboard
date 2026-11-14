@@ -57,7 +57,7 @@ function SupplierQuickCreate({
             start(async () => {
               const res = await createSupplier(orgId, { name, country, whatsapp });
               if (res.error || !res.id) return setError(res.error ?? "No se pudo crear.");
-              onCreated({ id: res.id, name: name.trim(), country: country.trim() || null, whatsapp: whatsapp.trim() || null, notes: null });
+              onCreated({ id: res.id, name: name.trim(), country: country.trim() || null, whatsapp: whatsapp.trim() || null, notes: null, contact_name: null, email: null, payment_terms: null });
             })
           }
         >

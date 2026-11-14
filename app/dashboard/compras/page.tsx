@@ -2,12 +2,12 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUserRoleSummary } from "@/lib/access";
-import { orgsWithPermission } from "@/lib/permissions-access";
 import { Card, EmptyState, cn } from "@/components/ui";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { NewImportButton } from "@/components/compras/header-form";
 import { fmtInt, fmtUsd } from "@/components/compras/format";
-import { comprasPerms, loadImportList, loadSuppliers, type ImportListRow } from "@/lib/compras-server";
+import { ComprasSubnav } from "@/components/compras/subnav";
+import { comprasPerms, loadImportList, loadSuppliers, resolveComprasOrg, type ImportListRow } from "@/lib/compras-server";
 import {
   IMPORT_STATUS_LABEL,
   IMPORT_TABS,
@@ -16,6 +16,7 @@ import {
   importChecklist,
   inImportTab,
   isActiveStatus,
+  isUuid,
   limaToday,
   trackingPublicUrl,
   type ImportTab,
@@ -23,7 +24,9 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export default function ComprasPage({ searchParams }: { searchParams: Promise<{ v?: string; org?: string }> }) {
+type SearchParams = Promise<{ v?: string; org?: string; proveedor?: string }>;
+
+export default function ComprasPage({ searchParams }: { searchParams: SearchParams }) {
   return (
     <Suspense fallback={<DashboardRouteSkeleton />}>
       <ComprasContent searchParams={searchParams} />
@@ -31,14 +34,12 @@ export default function ComprasPage({ searchParams }: { searchParams: Promise<{ 
   );
 }
 
-async function ComprasContent({ searchParams }: { searchParams: Promise<{ v?: string; org?: string }> }) {
+async function ComprasContent({ searchParams }: { searchParams: SearchParams }) {
   const [{ isVendedoraOnly }, sp] = await Promise.all([getUserRoleSummary(), searchParams]);
   if (isVendedoraOnly) redirect("/dashboard/leads");
 
   // La organización donde tiene «Compras» o «Montos de compras» (MOM §16, §45).
-  const [manageOrgs, moneyOrgs] = await Promise.all([orgsWithPermission("purchases.manage"), orgsWithPermission("purchases.money")]);
-  const allowed = [...new Set([...manageOrgs, ...moneyOrgs].map((m) => m.org_id))];
-  const orgId = sp.org && allowed.includes(sp.org) ? sp.org : allowed[0];
+  const { orgId, allowed } = await resolveComprasOrg(sp.org);
   if (!orgId) {
     return (
       <EmptyState title="Compras">
@@ -48,8 +49,11 @@ async function ComprasContent({ searchParams }: { searchParams: Promise<{ v?: st
   }
 
   const perms = await comprasPerms(orgId);
-  const [rows, suppliers] = await Promise.all([loadImportList(orgId, perms.canMoney), loadSuppliers(orgId)]);
+  const [allRows, suppliers] = await Promise.all([loadImportList(orgId, perms.canMoney), loadSuppliers(orgId)]);
   const tab: ImportTab = IMPORT_TABS.some((t) => t.id === sp.v) ? (sp.v as ImportTab) : "activas";
+  // `?proveedor=<id>` (se llega desde Proveedores): solo un proveedor de esta organización.
+  const supplierFilter = isUuid(sp.proveedor) ? (suppliers.find((s) => s.id === sp.proveedor) ?? null) : null;
+  const rows = supplierFilter ? allRows.filter((r) => r.imp.supplier_id === supplierFilter.id) : allRows;
   const today = limaToday();
   const enriched = rows.map((row) => ({
     row,
@@ -68,7 +72,7 @@ async function ComprasContent({ searchParams }: { searchParams: Promise<{ v?: st
   const inTransitUsd = perms.canMoney
     ? active.filter((e) => e.row.imp.status !== "cotizacion").reduce((a, e) => a + (e.row.money?.totalUsd ?? 0), 0)
     : null;
-  const orgQuery = allowed.length > 1 ? `&org=${orgId}` : "";
+  const orgQuery = `${allowed.length > 1 ? `&org=${orgId}` : ""}${supplierFilter ? `&proveedor=${supplierFilter.id}` : ""}`;
 
   return (
     <div className="space-y-4">
@@ -81,6 +85,20 @@ async function ComprasContent({ searchParams }: { searchParams: Promise<{ v?: st
         </div>
         {perms.canManage && <NewImportButton orgId={orgId} suppliers={suppliers} />}
       </div>
+
+      <ComprasSubnav current="importaciones" perms={perms} orgId={orgId} multiOrg={allowed.length > 1} />
+
+      {supplierFilter && (
+        <p className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
+          <span className="rounded-full bg-brand-50 px-2.5 py-1 font-medium text-brand-700">Proveedor: {supplierFilter.name}</span>
+          <Link
+            href={`/dashboard/compras?v=${tab}${allowed.length > 1 ? `&org=${orgId}` : ""}`}
+            className="text-xs text-slate-500 hover:text-slate-900 hover:underline"
+          >
+            Quitar filtro
+          </Link>
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-2 text-xs">
         <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700">{active.length} activas</span>
