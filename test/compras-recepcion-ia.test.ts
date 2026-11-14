@@ -537,9 +537,11 @@ describe("el MOM y DEPLOY.md", () => {
     expect(mom.slice(0, mom.indexOf("## 45. Compras: importaciones"))).toContain("«Recepción de compras»** (`purchases.receive`");
   });
 
-  it("DEPLOY.md: arriba, sin migración", () => {
+  it("DEPLOY.md: su entrada, sin migración", () => {
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("### ");
+    // Por su título: otras entradas pueden ir encima.
+    const first = deploy.indexOf("### 14-11-2026 · Compras: «Leer con IA»");
+    expect(first).toBeGreaterThanOrEqual(0);
     const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
     expect(entry).toContain("«Leer con IA»");
     expect(entry).toContain("purchases.receive");
