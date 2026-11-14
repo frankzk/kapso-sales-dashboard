@@ -20,14 +20,19 @@ import {
   canViewCompras,
   isReceiveOnly,
   addMoney,
+  igvTreatmentOf,
+  importKindOf,
   isUuid,
+  traceCodeKey,
   moneyOf,
   paymentBalance,
   zeroMoney,
   type Allocation,
   type CostKind,
   type Currency,
+  type IgvTreatment,
   type ImportEventKind,
+  type ImportKind,
   type ImportStatus,
   type Money2,
 } from "@/lib/compras";
@@ -37,21 +42,31 @@ import { resolveVisionCreds } from "@/lib/vision";
 import { storeVisionCreds } from "@/lib/store-settings";
 
 export const IMPORT_COLS: string =
-  "id,org_id,code,supplier_id,origin,platform_order,transport,carrier,tracking_number,tracking_url,ordered_on,eta,arrived_on,status,reported_to_warehouse_at,reported_by,notes,created_by,created_at,updated_at";
+  "id,org_id,code,kind,supplier_id,origin,platform_order,proforma_number,transport,carrier,tracking_number,tracking_url,ordered_on,eta,arrived_on,status,reported_to_warehouse_at,reported_by,notes,created_by,created_at,updated_at";
 /** Solo con `purchases.money`. */
 export const IMPORT_MONEY_COLS: string = ",fx_pen_per_usd";
+/** `unit_cost_currency` no es un monto: dice en qué moneda va el costo (0343). */
 export const ITEM_COLS: string =
-  "id,import_id,store_id,sku,name,image_path,qty,unit_weight_kg,received_qty,damaged_qty,reception_note,received_at,cost_pushed_at,position,created_at";
+  "id,import_id,store_id,sku,name,image_path,qty,courtesy_qty,unit_cost_currency,unit_weight_kg,received_qty,damaged_qty,reception_note,received_at,cost_pushed_at,position,created_at";
 /** Solo con `purchases.money`. */
-export const ITEM_MONEY_COLS: string = ",unit_cost_usd,sale_price_pen";
+export const ITEM_MONEY_COLS: string = ",unit_cost_usd,unit_cost_pen,sale_price_pen";
+/** Las entregas y sus líneas (MOM §45.14): sin montos, las ve cualquiera que abra Compras. */
+export const DELIVERY_COLS: string = "id,import_id,delivered_on,note,by_user,legacy,created_at,updated_at";
+export const DELIVERY_LINE_COLS: string = "id,delivery_id,item_id,received,damaged,note";
+export const DOCUMENT_COLS: string = "id,kind,filename,mime,size_bytes,created_at,delivery_id";
 
 export interface ImportRow {
   id: string;
   org_id: string;
   code: string;
+  /** 0343 (MOM §45.12): importación o compra local; sin la columna, importación. */
+  kind: ImportKind;
   supplier_id: string | null;
   origin: string | null;
+  /** «Orden de Alibaba» (código de trazabilidad, MOM §45.15). */
   platform_order: string | null;
+  /** «Código de la proforma invoice» (0343, MOM §45.15). */
+  proforma_number?: string | null;
   transport: string;
   carrier: string | null;
   tracking_number: string | null;
@@ -78,7 +93,12 @@ export interface ItemRow {
   name: string;
   image_path: string | null;
   qty: number;
+  /** Cortesía (MOM §45.13): unidades gratis que también se esperan. */
+  courtesy_qty: number;
+  /** En qué moneda va el costo por unidad (0343): USD en una importación, PEN en una compra local. */
+  unit_cost_currency: Currency;
   unit_weight_kg: number | null;
+  /** Σ de sus entregas (trigger de la 0343); null sin ninguna. */
   received_qty: number | null;
   damaged_qty: number | null;
   reception_note: string | null;
@@ -87,8 +107,24 @@ export interface ItemRow {
   position: number;
   created_at: string;
   /** Solo con `purchases.money`. */
-  unit_cost_usd?: number;
+  unit_cost_usd?: number | null;
+  unit_cost_pen?: number | null;
   sale_price_pen?: number | null;
+}
+
+/** Una entrega con sus líneas y sus fotos (MOM §45.14). Sin montos. */
+export interface DeliveryRow {
+  id: string;
+  delivered_on: string;
+  note: string | null;
+  by_user: string | null;
+  by_name: string | null;
+  /** La recepción de antes de la 0343, pasada a entrega por el backfill. */
+  legacy: boolean;
+  created_at: string;
+  updated_at: string;
+  lines: { id: string; item_id: string; received: number; damaged: number; note: string | null }[];
+  photos: DocumentRow[];
 }
 
 export interface SupplierRow {
@@ -112,6 +148,8 @@ export interface DocumentRow {
   mime: string;
   size_bytes: number;
   created_at: string;
+  /** La entrega de la que es foto (0343), si lo es. */
+  delivery_id?: string | null;
 }
 
 /** Un costo leído (0342): el monto en su moneda, sin IGV. */
@@ -125,6 +163,8 @@ export interface CostRow {
   /** «Incluye IGV»: `gross_amount` es el monto con IGV tal como se escribió. */
   includes_igv: boolean;
   gross_amount: number | null;
+  /** 0343 (MOM §45.3): neto, con_igv o inafecto. */
+  igv_treatment: IgvTreatment;
   allocation: string;
   item_id: string | null;
   created_at: string;
@@ -143,7 +183,7 @@ export interface PaymentRow {
 }
 
 /** Las columnas de `import_costs` que se leen (solo con `purchases.money`). */
-export const COST_COLS: string = "id,kind,label,currency,amount_usd,amount_pen,includes_igv,gross_amount,allocation,item_id,created_at";
+export const COST_COLS: string = "id,kind,label,currency,amount_usd,amount_pen,includes_igv,gross_amount,igv_treatment,allocation,item_id,created_at";
 /** Las columnas de `import_payments` que se leen (solo con `purchases.money`). */
 export const PAYMENT_COLS: string = "id,currency,amount_usd,amount_pen,paid_on,method,note,document_id,created_at";
 
@@ -196,21 +236,32 @@ function numOrNull(v: unknown): number | null {
 
 /** PostgREST puede devolver numeric como texto: se normaliza. */
 export function normalizeItem(row: Record<string, unknown>, canMoney: boolean): ItemRow {
+  const currency: Currency = row.unit_cost_currency === "PEN" ? "PEN" : "USD";
   const out = {
     ...(row as unknown as ItemRow),
     qty: num(row.qty),
+    courtesy_qty: num(row.courtesy_qty),
+    unit_cost_currency: currency,
     unit_weight_kg: numOrNull(row.unit_weight_kg),
     received_qty: numOrNull(row.received_qty),
     damaged_qty: numOrNull(row.damaged_qty),
   };
   if (canMoney) {
-    out.unit_cost_usd = num(row.unit_cost_usd);
+    // El costo en la columna de su moneda; la otra, nula (0343).
+    out.unit_cost_usd = currency === "PEN" ? null : num(row.unit_cost_usd);
+    out.unit_cost_pen = currency === "PEN" ? num(row.unit_cost_pen) : null;
     out.sale_price_pen = numOrNull(row.sale_price_pen);
   } else {
     delete out.unit_cost_usd;
+    delete out.unit_cost_pen;
     delete out.sale_price_pen;
   }
   return out;
+}
+
+/** El costo por unidad de un producto en su moneda (solo con `purchases.money`). */
+export function itemCostOf(it: Pick<ItemRow, "unit_cost_currency" | "unit_cost_usd" | "unit_cost_pen">): { amount: number; currency: Currency } {
+  return it.unit_cost_currency === "PEN" ? { amount: it.unit_cost_pen ?? 0, currency: "PEN" } : { amount: it.unit_cost_usd ?? 0, currency: "USD" };
 }
 
 /** La moneda de una fila; sin ella (antes de la 0342), USD. */
@@ -234,6 +285,7 @@ export function normalizeCost(row: Record<string, unknown>): CostRow {
     amount: amountOf(row, currency),
     includes_igv: includesIgv,
     gross_amount: includesIgv ? numOrNull(row.gross_amount) : null,
+    igv_treatment: igvTreatmentOf(row),
     allocation: String(row.allocation),
     item_id: (row.item_id as string | null) ?? null,
     created_at: String(row.created_at ?? ""),
@@ -255,7 +307,7 @@ export function normalizePayment(row: Record<string, unknown>): PaymentRow {
 }
 
 export function normalizeImport(row: Record<string, unknown>, canMoney: boolean): ImportRow {
-  const out = { ...(row as unknown as ImportRow) };
+  const out = { ...(row as unknown as ImportRow), kind: importKindOf(row.kind) };
   if (canMoney) out.fx_pen_per_usd = numOrNull(row.fx_pen_per_usd);
   else delete out.fx_pen_per_usd;
   return out;
@@ -304,10 +356,19 @@ export interface ImportListRow {
   lastMovementAt: string | null;
   /**
    * Solo con `purchases.money`. `total` y `paid` por moneda, sin convertir; los
-   * de USD (la base), con el tipo de cambio de la importación: null si hay
-   * soles y no lo tiene (MOM §45.3).
+   * de USD con el tipo de cambio de la importación (null si hay soles y no lo
+   * tiene, MOM §45.3) y los de soles (null si hay USD y no lo tiene): una
+   * compra local toda en soles se lee en soles sin tipo de cambio (§45.12).
    */
-  money?: { total: Money2; paid: Money2; totalUsd: number | null; paidUsd: number | null; pendingUsd: number | null };
+  money?: {
+    total: Money2;
+    paid: Money2;
+    totalUsd: number | null;
+    paidUsd: number | null;
+    pendingUsd: number | null;
+    totalPen: number | null;
+    pendingPen: number | null;
+  };
 }
 
 /** Tope de la lista: una organización de Kapta no se acerca. */
@@ -328,7 +389,7 @@ export async function loadImportList(
   if (!imports.length) return [];
   const ids = imports.map((i) => i.id);
   const [items, docs, events, suppliers, costs, payments] = await Promise.all([
-    admin.from("import_items").select(`import_id,name,qty,sku,position${canMoney ? ITEM_MONEY_COLS : ""}`).in("import_id", ids),
+    admin.from("import_items").select(`import_id,name,qty,courtesy_qty,unit_cost_currency,sku,position${canMoney ? ITEM_MONEY_COLS : ""}`).in("import_id", ids),
     admin.from("import_documents").select("import_id,kind").in("import_id", ids),
     admin
       .from("import_events")
@@ -350,7 +411,7 @@ export async function loadImportList(
       units: 0,
       docKinds: [],
       lastMovementAt: null,
-      ...(canMoney ? { money: { total: zeroMoney(), paid: zeroMoney(), totalUsd: 0, paidUsd: 0, pendingUsd: 0 } } : {}),
+      ...(canMoney ? { money: { total: zeroMoney(), paid: zeroMoney(), totalUsd: 0, paidUsd: 0, pendingUsd: 0, totalPen: 0, pendingPen: 0 } } : {}),
     });
   }
   const sortedItems = ((items.data ?? []) as unknown as Record<string, unknown>[]).sort((a, b) => num(a.position) - num(b.position));
@@ -360,7 +421,11 @@ export async function loadImportList(
     const qty = num(it.qty);
     row.items.push({ name: String(it.name), qty, sku: (it.sku as string | null) ?? null });
     row.units += qty;
-    if (row.money) row.money.total = addMoney(row.money.total, moneyOf(qty * num(it.unit_cost_usd), "USD"));
+    // El proveedor en la moneda del producto: USD o soles (compra local, 0343).
+    if (row.money) {
+      const pen = it.unit_cost_currency === "PEN";
+      row.money.total = addMoney(row.money.total, moneyOf(qty * num(pen ? it.unit_cost_pen : it.unit_cost_usd), pen ? "PEN" : "USD"));
+    }
   }
   for (const d of (docs.data ?? []) as { import_id: string; kind: string }[]) {
     const row = byImport.get(d.import_id);
@@ -388,6 +453,8 @@ export async function loadImportList(
       row.money.totalUsd = b.totalUsd;
       row.money.paidUsd = b.paidUsd;
       row.money.pendingUsd = b.pendingUsd;
+      row.money.totalPen = b.totalPen;
+      row.money.pendingPen = b.pendingPen;
     }
   }
   return [...byImport.values()];
@@ -401,6 +468,14 @@ export interface ImportDetail {
   /** Null sin `purchases.money`. */
   costs: CostRow[] | null;
   payments: PaymentRow[] | null;
+  /** Las entregas (MOM §45.14), de la más vieja a la más reciente. */
+  deliveries: DeliveryRow[];
+  /**
+   * Posibles duplicados (MOM §45.15, aviso que no bloquea): los códigos de
+   * otras compras de la organización con el mismo código de proforma o la
+   * misma orden de Alibaba.
+   */
+  traceDuplicates: { proforma: string[]; alibaba: string[] };
   events: EventRow[];
   suppliers: SupplierRow[];
   perms: ComprasPerms;
@@ -416,7 +491,7 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
   // Solo «Recepción de compras» (MOM §45.11): ni la lista de proveedores (no
   // edita la cabecera) ni los datos de contacto del proveedor.
   const receiveOnly = isReceiveOnly(perms);
-  const [items, docs, costs, payments, events, suppliers] = await Promise.all([
+  const [items, docs, costs, payments, events, suppliers, deliveries, deliveryLines, traceDuplicates] = await Promise.all([
     admin
       .from("import_items")
       .select(`${ITEM_COLS}${money ? ITEM_MONEY_COLS : ""}`)
@@ -425,7 +500,7 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
       .order("created_at", { ascending: true }),
     admin
       .from("import_documents")
-      .select("id,kind,filename,mime,size_bytes,created_at")
+      .select(DOCUMENT_COLS)
       .eq("import_id", imp.id)
       .order("created_at", { ascending: true }),
     money
@@ -440,15 +515,26 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
         ? admin.from("import_suppliers").select(SUPPLIER_COLS).eq("id", imp.supplier_id).eq("org_id", imp.org_id).then((r) => (r.data ?? []) as unknown as SupplierRow[])
         : Promise.resolve([] as SupplierRow[])
       : loadSuppliers(imp.org_id, admin),
+    admin.from("import_deliveries").select(DELIVERY_COLS).eq("import_id", imp.id).order("delivered_on", { ascending: true }).order("created_at", { ascending: true }),
+    admin.from("import_delivery_lines").select(DELIVERY_LINE_COLS).eq("import_id", imp.id),
+    loadTraceDuplicates(admin, imp),
   ]);
   const eventRows = ((events.data ?? []) as Omit<EventRow, "by_name">[]).filter(
     (e) => money || !MONEY_EVENT_KINDS.includes(e.kind),
   );
+  const deliveryRows = ((deliveries.data ?? []) as unknown as Record<string, unknown>[]).sort(
+    (a, b) => String(a.delivered_on).localeCompare(String(b.delivered_on)) || String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")),
+  );
   const userIds = new Set<string>();
   for (const e of eventRows) if (e.by_user) userIds.add(e.by_user);
+  for (const d of deliveryRows) if (d.by_user) userIds.add(String(d.by_user));
   if (imp.reported_by) userIds.add(imp.reported_by);
   const names = userIds.size ? await resolveAgentNames(userIds, admin).catch(() => ({}) as Record<string, string>) : {};
   const supplier = suppliers.find((s) => s.id === imp.supplier_id) ?? null;
+  const documents = ((docs.data ?? []) as unknown as DocumentRow[])
+    .filter((d) => canSeeDocKind(d.kind, perms))
+    .map((d) => ({ ...d, size_bytes: num(d.size_bytes), delivery_id: d.delivery_id ?? null }));
+  const lines = (deliveryLines.data ?? []) as unknown as Record<string, unknown>[];
   return {
     imp,
     supplier:
@@ -456,16 +542,61 @@ export async function loadImportDetail(importId: string): Promise<ImportDetail |
         ? { ...supplier, whatsapp: null, notes: null, contact_name: null, email: null, payment_terms: null }
         : supplier,
     items: ((items.data ?? []) as unknown as Record<string, unknown>[]).map((r) => normalizeItem(r, money)),
-    documents: ((docs.data ?? []) as DocumentRow[])
-      .filter((d) => canSeeDocKind(d.kind, perms))
-      .map((d) => ({ ...d, size_bytes: num(d.size_bytes) })),
+    documents,
     costs: costs.data ? (costs.data as unknown as Record<string, unknown>[]).map(normalizeCost) : null,
     payments: payments.data ? (payments.data as unknown as Record<string, unknown>[]).map(normalizePayment) : null,
+    traceDuplicates,
+    deliveries: deliveryRows.map((d) => ({
+      id: String(d.id),
+      delivered_on: String(d.delivered_on),
+      note: (d.note as string | null) ?? null,
+      by_user: (d.by_user as string | null) ?? null,
+      by_name: d.by_user ? (names[String(d.by_user)] ?? null) : null,
+      legacy: d.legacy === true,
+      created_at: String(d.created_at ?? ""),
+      updated_at: String(d.updated_at ?? d.created_at ?? ""),
+      lines: lines
+        .filter((l) => String(l.delivery_id) === String(d.id))
+        .map((l) => ({ id: String(l.id), item_id: String(l.item_id), received: num(l.received), damaged: num(l.damaged), note: (l.note as string | null) ?? null })),
+      photos: documents.filter((doc) => doc.delivery_id === String(d.id)),
+    })),
     events: eventRows.map((e) => ({ ...e, by_name: e.by_user ? (names[e.by_user] ?? null) : null })),
     suppliers: receiveOnly ? [] : suppliers,
     perms,
     reportedByName: imp.reported_by ? (names[imp.reported_by] ?? null) : null,
   };
+}
+
+/**
+ * Otras compras de la organización con el mismo código de proforma o la misma
+ * orden de Alibaba (sin mayúsculas ni espacios al borde). Solo códigos, sin
+ * montos; un aviso de posible duplicado, nunca un bloqueo (MOM §45.15).
+ */
+async function loadTraceDuplicates(admin: SupabaseClient, imp: ImportRow): Promise<{ proforma: string[]; alibaba: string[] }> {
+  const out = { proforma: [] as string[], alibaba: [] as string[] };
+  if (imp.kind === "local") return out;
+  const checks: [keyof typeof out, "proforma_number" | "platform_order", string | null | undefined][] = [
+    ["proforma", "proforma_number", imp.proforma_number],
+    ["alibaba", "platform_order", imp.platform_order],
+  ];
+  await Promise.all(
+    checks.map(async ([key, column, value]) => {
+      const v = traceCodeKey(value);
+      if (!v) return;
+      const { data } = await admin
+        .from("imports")
+        .select(`id,code,${column}`)
+        .eq("org_id", imp.org_id)
+        .neq("id", imp.id)
+        // Contiene (sin mayúsculas); la igualdad exacta, sin espacios al borde, se mira abajo.
+        .ilike(column, `%${v.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
+        .limit(10);
+      out[key] = ((data ?? []) as unknown as Record<string, unknown>[])
+        .filter((r) => traceCodeKey(r[column] as string | null) === v)
+        .map((r) => String(r.code));
+    }),
+  );
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +696,7 @@ export async function loadReportImports(
     byId.set(imp.id, {
       id: imp.id,
       code: imp.code,
+      kind: imp.kind,
       supplierId: imp.supplier_id,
       status: imp.status,
       orderedOn: imp.ordered_on,
@@ -587,7 +719,10 @@ export async function loadReportImports(
       sku: it.sku,
       storeId: it.store_id,
       qty: it.qty,
+      courtesyQty: it.courtesy_qty,
       unitCostUsd: canMoney ? (it.unit_cost_usd ?? 0) : 0,
+      unitCostPen: canMoney ? (it.unit_cost_pen ?? null) : null,
+      unitCostCurrency: it.unit_cost_currency,
       unitWeightKg: it.unit_weight_kg,
       receivedQty: it.received_qty,
       damagedQty: it.damaged_qty,

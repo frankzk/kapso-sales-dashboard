@@ -1,6 +1,6 @@
 // «Compras» (MOM §45.10 y §45.11): las acciones nuevas y el permiso nuevo.
 //   - «Recepción de compras» (`purchases.receive`): ve sin montos (lista y
-//     detalle), guarda la recepción y sube fotos; NO edita nada más ni toca
+//     detalle), registra entregas (0343) y sube fotos; NO edita nada más ni toca
 //     dinero, documentos con montos, «Pasar a Costos», proveedores ni la IA.
 //   - «Leer con IA»: la lectura no escribe nada; sin «Montos de compras» la
 //     propuesta llega sin precios ni cargos; «Agregar seleccionados» pasa por
@@ -61,6 +61,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { FakeDb } from "./woocommerce-fake-db";
+import { withDeliveryTrigger } from "./compras-entregas-fake";
 import * as actions from "@/app/dashboard/compras/actions";
 import { loadImportDetail, loadImportList, resolveComprasOrg } from "@/lib/compras-server";
 import { visibleComprasSections } from "@/components/compras/subnav";
@@ -69,8 +70,8 @@ import { limaToday } from "@/lib/compras";
 const {
   addAiProposalRows,
   readImportDocumentWithAi,
+  registerDelivery,
   registerImportDocument,
-  saveReception,
   setImportItemPhoto,
   startImportUpload,
 } = actions;
@@ -93,7 +94,7 @@ const ALL = ["purchases.manage", "purchases.money", "costs.manage"];
 const RECEIVE = ["purchases.receive"];
 
 function seed(status = "en_camino_bodega") {
-  h.db = new FakeDb({
+  h.db = withDeliveryTrigger(new FakeDb({
     stores: [{ id: STORE, org_id: ORG }],
     import_suppliers: [
       { id: SUPPLIER, org_id: ORG, name: "Yiwu Trading", country: "China", whatsapp: "+8613800000000", notes: "paga por adelantado", contact_name: "Li", email: "li@yiwu.cn", payment_terms: "30 % adelanto" },
@@ -120,7 +121,7 @@ function seed(status = "en_camino_bodega") {
       { id: "e2", org_id: ORG, import_id: IMP, kind: "dinero", status: null, note: "Pago registrado: US$ 500.00", by_user: null, at: "2026-11-06T10:00:00Z" },
     ],
     product_costs: [{ id: "pc1", org_id: ORG, store_id: STORE, sku: "KP-AUD-01", product_name: "Audífonos Bluetooth Pro", unit_cost: 11 }],
-  });
+  }));
   h.files = new Map([
     [`${ORG}/${IMP}/docs/inv.pdf`, { size: 2048, contentType: "application/pdf" }],
     [`${ORG}/${IMP}/docs/pro.pdf`, { size: 2048, contentType: "application/pdf" }],
@@ -129,7 +130,7 @@ function seed(status = "en_camino_bodega") {
   ]);
 }
 
-const WRITES = ["import_items", "import_costs", "import_payments", "import_documents", "import_events", "imports", "import_suppliers", "product_costs"];
+const WRITES = ["import_items", "import_costs", "import_payments", "import_documents", "import_events", "imports", "import_suppliers", "product_costs", "import_deliveries", "import_delivery_lines"];
 const writes = () =>
   WRITES.flatMap((t) => ["insert", "update", "delete", "upsert"].flatMap((op) => h.db.opsOn(t, op))).map((o) => `${o.table}.${o.op}`);
 const events = (kind?: string) => h.db.rows("import_events").filter((e) => !kind || e.kind === kind);
@@ -200,17 +201,22 @@ describe("«Recepción de compras»: ve sin montos", () => {
   });
 });
 
-describe("«Recepción de compras»: guarda la recepción y sube fotos", () => {
-  it("guarda lo contado y pasa a Recibido (el único cambio de estado)", async () => {
+describe("«Recepción de compras»: registra entregas y sube fotos", () => {
+  it("registra una entrega: una parte pasa a Recibido parcial; el resto, a Recibido (los únicos cambios de estado)", async () => {
     h.perms = new Set(RECEIVE);
-    const res = await saveReception(IMP, [
-      { itemId: ITEM_A, received: "100", damaged: "1", note: "una caja golpeada" },
-      { itemId: ITEM_B, received: "48" },
-    ]);
-    expect(res.notice).toMatch(/Recibido/);
+    const res = await registerDelivery(IMP, {
+      deliveredOn: limaToday(),
+      lines: [
+        { itemId: ITEM_A, received: "100", damaged: "1", note: "una caja golpeada" },
+        { itemId: ITEM_B, received: "48" },
+      ],
+    });
+    expect(res.notice).toMatch(/Recibido parcial/);
     expect(h.db.rows("import_items").find((r) => r.id === ITEM_A)).toMatchObject({ received_qty: 100, damaged_qty: 1, reception_note: "una caja golpeada" });
+    expect(h.db.rows("imports").find((r) => r.id === IMP)).toMatchObject({ status: "recibido_parcial", arrived_on: null });
+    expect(events("recepcion").at(-1)!.note).toMatch(/^Entrega registrada del .*: 100 × A \(1 dañada\) · 48 × B\.$/);
+    expect((await registerDelivery(IMP, { deliveredOn: limaToday(), lines: [{ itemId: ITEM_B, received: "2" }] })).notice).toMatch(/Recibido/);
     expect(h.db.rows("imports").find((r) => r.id === IMP)).toMatchObject({ status: "recibido", arrived_on: limaToday() });
-    expect(events("recepcion").at(-1)!.note).toBe("Recepción: 148 de 150 u. · faltan 2 · 1 dañada");
     // Ni costo, ni precio, ni tipo de cambio en lo que se escribió.
     for (const op of [...h.db.opsOn("import_items", "update"), ...h.db.opsOn("imports", "update")]) {
       expect(Object.keys(op.payload ?? {}).join(",")).not.toMatch(/unit_cost_usd|sale_price_pen|fx_pen_per_usd/);
@@ -268,13 +274,13 @@ describe("«Recepción de compras»: guarda la recepción y sube fotos", () => {
 
   it("sin ningún permiso de Compras, ni la recepción", async () => {
     h.perms = new Set(["costs.manage"]);
-    expect((await saveReception(IMP, [{ itemId: ITEM_A, received: "1" }])).error).toBe("Sin acceso a esta importación.");
+    expect((await registerDelivery(IMP, { deliveredOn: limaToday(), lines: [{ itemId: ITEM_A, received: "1" }] })).error).toBe("Sin acceso a esta importación.");
     expect(await loadImportDetail(IMP)).toBeNull();
   });
 
   it("solo «Montos de compras» (sin «Compras» ni «Recepción») no guarda la recepción", async () => {
     h.perms = new Set(["purchases.money"]);
-    expect((await saveReception(IMP, [{ itemId: ITEM_A, received: "1" }])).error).toMatch(/recepción/);
+    expect((await registerDelivery(IMP, { deliveredOn: limaToday(), lines: [{ itemId: ITEM_A, received: "1" }] })).error).toMatch(/recepción/);
     expect(writes()).toEqual([]);
   });
 });
@@ -294,7 +300,7 @@ describe("«Leer con IA»: la lectura no guarda nada", () => {
       { name: "Funda de silicona", sku: null, qty: 20, unitPrice: 3.55, unitWeightKg: null, match: { sku: "FUNDA-SIL", name: "Funda de silicona", storeId: null } },
     ]);
     // El cargo sin moneda propia es de la del documento.
-    expect(res.charges).toEqual([{ kind: "envio", label: "Flete", amount: 142.5, currency: "CNY" }]);
+    expect(res.charges).toEqual([{ kind: "envio", label: "Flete", amount: 142.5, currency: "CNY", igvTreatment: "neto" }]);
     expect(res.igv).toBeNull();
     expect(writes()).toEqual([]);
     // Del catálogo se leen SKU, nombre y tienda; ningún costo.
@@ -456,10 +462,12 @@ describe("el fuente", () => {
   const bodies = src.split(/^export async function /m).slice(1);
   const body = (name: string) => bodies.find((b) => b.startsWith(`${name}(`))!;
 
-  it("solo la recepción y la subida de fotos aceptan «Recepción de compras»", () => {
+  it("solo registrar entregas y la subida de fotos aceptan «Recepción de compras»", () => {
     const withReceive = bodies.filter((b) => /receive:/.test(b)).map((b) => b.slice(0, b.indexOf("(")));
-    expect(withReceive.sort()).toEqual(["registerImportDocument", "saveReception", "startImportUpload"]);
-    expect(body("saveReception")).toContain("authorize(admin, importId, { receive: true })");
+    expect(withReceive.sort()).toEqual(["registerDelivery", "registerImportDocument", "startImportUpload"]);
+    expect(body("registerDelivery")).toContain("authorize(admin, importId, { receive: true })");
+    // Corregir o quitar una entrega, solo con «Compras» (MOM §45.14).
+    for (const name of ["updateDelivery", "removeDelivery"]) expect(body(name), name).toContain("{ manage: true }");
     expect(body("startImportUpload")).toContain('{ receive: kind === "photo" }');
     expect(body("startImportUpload")).toContain("uploadDenied(kind, a.perms)");
     expect(body("registerImportDocument")).toContain("uploadDenied(kind, a.perms)");
@@ -474,9 +482,10 @@ describe("el fuente", () => {
 
   it("«Agregar seleccionados» reutiliza las reglas y los hechos de agregar a mano", () => {
     const add = body("addAiProposalRows");
-    expect(add).toContain("aiConfirmToInputs(input, a.canMoney)");
-    expect(add).toContain("cleanItem(row, a.canMoney)");
-    expect(add).toContain("cleanCost(c, itemIds)");
+    // 0343: con la moneda base de la compra (soles en una compra local).
+    expect(add).toContain("aiConfirmToInputs(input, a.canMoney, base)");
+    expect(add).toContain("cleanItem(row, a.canMoney, base)");
+    expect(add).toContain("cleanCost(c, itemIds, base)");
     expect(add).toContain("insertImportItem(admin, a, v, null, position++)");
     expect(add).toContain("insertImportCost(admin, a, v)");
     expect(body("addImportItem")).toContain("insertImportItem(admin, a, clean.value, imagePath)");

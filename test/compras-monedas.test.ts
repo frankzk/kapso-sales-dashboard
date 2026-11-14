@@ -211,6 +211,7 @@ describe("«Incluye IGV» (18 %)", () => {
         amount_pen: 427.25,
         includes_igv: true,
         gross_amount: 504.16,
+        igv_treatment: "con_igv",
         allocation: "value",
         item_id: null,
       },
@@ -230,8 +231,10 @@ describe("«Incluye IGV» (18 %)", () => {
     expect(costAmountText({ amount: 20.07, currency: "USD", includes_igv: false, gross_amount: null })).toBe("US$ 20.07");
   });
 
-  it("la ayuda de la casilla", () => {
-    expect(IGV_HELP).toBe("Las líneas de la factura ya suelen venir sin IGV; marca esta casilla solo si cargas el total con IGV.");
+  it("la ayuda del selector de IGV (0343: sin IGV, incluye IGV o inafecto)", () => {
+    expect(IGV_HELP).toBe(
+      "Las líneas de la factura ya suelen venir sin IGV. Elige «Incluye IGV» solo si cargas el total con IGV, e «Inafecto» para lo que no lleva IGV, como el flete internacional.",
+    );
   });
 });
 

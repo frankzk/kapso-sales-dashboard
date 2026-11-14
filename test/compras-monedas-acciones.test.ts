@@ -93,6 +93,10 @@ function seed(overrides: { fx?: number | null; status?: string } = {}) {
         ordered_on: "2026-11-01",
         fx_pen_per_usd: overrides.fx === undefined ? 3.75 : overrides.fx,
         transport: "courier",
+        // Los tres códigos de trazabilidad (MOM §45.15): «Pasar a Costos» los pide.
+        proforma_number: "PI-7",
+        platform_order: "2045000007",
+        tracking_number: "DHL7",
         created_at: "2026-11-01T15:00:00Z",
       },
     ],
@@ -413,8 +417,11 @@ describe("el código", () => {
     expect(detail).toContain("MISSING_FX");
     expect(detail).toContain("IGV_HELP");
     expect(detail).toContain("CURRENCIES.map((c) =>");
-    expect(detail).toContain("addImportCost(detail.imp.id, { kind, label, amount, currency, includesIgv, allocation, itemId })");
-    expect(detail).toContain("addImportPayment(detail.imp.id, { amount, currency, paidOn, method, note, documentId })");
+    // 0343: el IGV es un selector (neto, con IGV, inafecto) y el mismo formulario edita.
+    expect(detail).toContain("addImportCost(detail.imp.id, { kind, label, amount, currency, igvTreatment, allocation, itemId })");
+    expect(detail).toContain("updateImportCost(cost.id, { kind, label, amount, currency, igvTreatment, allocation, itemId })");
+    // 0343: el comprobante se puede adjuntar en el mismo formulario (`voucher`).
+    expect(detail).toContain("addImportPayment(detail.imp.id, { amount, currency, paidOn, method, note, documentId: uploaded ? \"\" : documentId, voucher: uploaded })");
     expect(read("lib/exports/compras-importacion.ts")).toContain("MISSING_FX");
     expect(read("components/compras/reports-view.tsx")).toContain("importsMissingFxForUsd(imports)");
     // «Pasar a Costos» con el tipo de cambio de la importación (la vista en soles).
@@ -442,7 +449,8 @@ describe("el MOM y DEPLOY.md", () => {
       "504.16",
       "427.25",
       "IGV_RATE",
-      "Las líneas de la factura ya suelen venir sin IGV; marca esta casilla solo si cargas el total con IGV.",
+      // 0343: la casilla pasó a un selector de tres opciones (neto, con IGV, inafecto).
+      "Las líneas de la factura ya suelen venir sin IGV. Elige «Incluye IGV» solo si cargas el total con IGV, e «Inafecto» para lo que no lleva IGV, como el flete internacional.",
       "nunca se agrega como costo",
       "sin ida y vuelta",
     ]) {
@@ -450,9 +458,10 @@ describe("el MOM y DEPLOY.md", () => {
     }
   });
 
-  it("DEPLOY.md: la primera entrada es la 0342, antes que el código", () => {
+  it("DEPLOY.md: la entrada de la 0342, antes que el código", () => {
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("### ");
+    // Por su título: la de la 0343 va encima.
+    const first = deploy.indexOf("### 14-11-2026 · Compras: cada costo y cada pago en su moneda");
     const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
     expect(entry).toContain("0342_compras_monedas_igv");
     expect(entry).toMatch(/antes del código/i);

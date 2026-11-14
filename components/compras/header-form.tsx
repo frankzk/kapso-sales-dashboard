@@ -1,7 +1,9 @@
 "use client";
 
-// La cabecera de una importación (MOM §45): crear y editar. Incluye el alta
-// rápida de proveedor, porque una importación necesita uno.
+// La cabecera de una compra (MOM §45): crear y editar. Incluye el alta
+// rápida de proveedor, porque una compra necesita uno. Al crear se elige el
+// tipo (MOM §45.12): «Importación» o «Compra local (laboratorio / maquila)»;
+// una compra local no lleva transporte, paquetera ni guía.
 //
 // También guarda los controles de Compras en el mundo de operación
 // (DESIGN.md): campos de 36 px con anillo fino, botones de 6 px y avisos en el
@@ -10,9 +12,9 @@
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Banner, FIELD as OPS_FIELD, FIELD_BOX, SidePanel, opsButtonClass } from "@/components/ops-ui";
+import { Badge, Banner, FIELD as OPS_FIELD, FIELD_BOX, SidePanel, opsButtonClass } from "@/components/ops-ui";
 import { IconPlus } from "@/components/icons";
-import { TRANSPORTS, limaToday, type HeaderInput } from "@/lib/compras";
+import { TRANSPORTS, hasShipping, limaToday, traceCodes, traceMissingText, type HeaderInput, type ImportKind } from "@/lib/compras";
 import { createImport, createSupplier, updateImportHeader } from "@/app/dashboard/compras/actions";
 import type { ImportRow, SupplierRow } from "@/lib/compras-server";
 
@@ -64,21 +66,24 @@ export function Feedback({ error, notice }: { error?: string | null; notice?: st
 
 function SupplierQuickCreate({
   orgId,
+  local = false,
   onCreated,
   onCancel,
 }: {
   orgId: string;
+  /** Un laboratorio o maquila de Perú (compra local). */
+  local?: boolean;
   onCreated: (s: SupplierRow) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
-  const [country, setCountry] = useState("China");
+  const [country, setCountry] = useState(local ? "Perú" : "China");
   const [whatsapp, setWhatsapp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   return (
     <div className="mt-2 space-y-3 rounded-lg bg-wash p-3">
-      <p className="text-[13px] font-semibold text-ink-900">Nuevo proveedor</p>
+      <p className="text-[13px] font-semibold text-ink-900">{local ? "Nuevo laboratorio o maquila" : "Nuevo proveedor"}</p>
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Nombre">
           <input className={FIELD} value={name} onChange={(e) => setName(e.target.value)} />
@@ -87,7 +92,7 @@ function SupplierQuickCreate({
           <input className={FIELD} value={country} onChange={(e) => setCountry(e.target.value)} />
         </Field>
         <Field label="WhatsApp">
-          <input className={FIELD} placeholder="+86…" inputMode="tel" value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} />
+          <input className={FIELD} placeholder={local ? "+51…" : "+86…"} inputMode="tel" value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} />
         </Field>
       </div>
       <Feedback error={error} />
@@ -104,7 +109,7 @@ function SupplierQuickCreate({
             })
           }
         >
-          Crear proveedor
+          {local ? "Crear laboratorio" : "Crear proveedor"}
         </button>
         <button type="button" className={BTN_GHOST} onClick={onCancel}>
           Cancelar
@@ -114,11 +119,12 @@ function SupplierQuickCreate({
   );
 }
 
-/** Formulario de cabecera. Sin `imp` crea; con `imp` edita. */
+/** Formulario de cabecera. Sin `imp` crea (con el tipo elegido); con `imp` edita (el tipo no cambia). */
 export function ImportHeaderForm({
   orgId,
   suppliers: initialSuppliers,
   imp,
+  kind: newKind = "importacion",
   onDone,
   /** En una columna angosta (el riel del detalle) los campos van uno debajo de otro. */
   narrow = false,
@@ -126,16 +132,21 @@ export function ImportHeaderForm({
   orgId: string;
   suppliers: SupplierRow[];
   imp?: ImportRow;
+  /** Al crear: importación o compra local (MOM §45.12). */
+  kind?: ImportKind;
   onDone?: () => void;
   narrow?: boolean;
 }) {
   const router = useRouter();
+  const kind: ImportKind = imp?.kind ?? newKind;
+  const shipping = hasShipping(kind);
   const [suppliers, setSuppliers] = useState(initialSuppliers);
   const [creatingSupplier, setCreatingSupplier] = useState(false);
   const [form, setForm] = useState<Required<{ [K in keyof HeaderInput]: string }>>({
     supplierId: imp?.supplier_id ?? "",
-    origin: imp?.origin ?? (imp ? "" : "China"),
+    origin: imp?.origin ?? (imp ? "" : shipping ? "China" : "Lima"),
     platformOrder: imp?.platform_order ?? "",
+    proformaNumber: imp?.proforma_number ?? "",
     transport: imp?.transport ?? "courier",
     carrier: imp?.carrier ?? "",
     trackingNumber: imp?.tracking_number ?? "",
@@ -151,7 +162,7 @@ export function ImportHeaderForm({
 
   function submit() {
     start(async () => {
-      const res = imp ? await updateImportHeader(imp.id, form) : await createImport(orgId, form);
+      const res = imp ? await updateImportHeader(imp.id, form) : await createImport(orgId, { ...form, kind });
       if (res.error) return setError(res.error);
       setError(null);
       if (!imp && res.id) router.push(`/dashboard/compras/${res.id}`);
@@ -161,11 +172,13 @@ export function ImportHeaderForm({
   }
 
   const wide = narrow ? "" : "sm:col-span-2";
+  // Los tres códigos de una importación (MOM §45.15), con su «N de 3».
+  const codes = traceCodes({ kind, proforma_number: form.proformaNumber, platform_order: form.platformOrder, tracking_number: form.trackingNumber });
   return (
     <div className="space-y-4">
       <div className={cn("grid gap-x-3 gap-y-4", !narrow && "sm:grid-cols-2")}>
         <div className={cn("min-w-0", wide)}>
-          <Field label="Proveedor">
+          <Field label={shipping ? "Proveedor" : "Laboratorio o maquila"}>
             <div className="flex gap-2">
               <select className={FIELD} value={form.supplierId} onChange={set("supplierId")}>
                 <option value="">Sin proveedor</option>
@@ -184,6 +197,7 @@ export function ImportHeaderForm({
           {creatingSupplier && (
             <SupplierQuickCreate
               orgId={orgId}
+              local={!shipping}
               onCancel={() => setCreatingSupplier(false)}
               onCreated={(s) => {
                 setSuppliers((list) => [...list, s].sort((a, b) => a.name.localeCompare(b.name)));
@@ -194,33 +208,61 @@ export function ImportHeaderForm({
           )}
         </div>
         <Field label="Origen">
-          <input className={FIELD} placeholder="China, Yiwu" value={form.origin} onChange={set("origin")} />
+          <input className={FIELD} placeholder={shipping ? "China, Yiwu" : "Lima, Ate"} value={form.origin} onChange={set("origin")} />
         </Field>
-        <Field label="N.º de orden (Alibaba u otra)">
-          <input className={FIELD} value={form.platformOrder} onChange={set("platformOrder")} />
-        </Field>
-        <Field label="Transporte">
-          <select className={FIELD} value={form.transport} onChange={set("transport")}>
-            {TRANSPORTS.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Paquetera">
-          <input className={FIELD} placeholder="DHL, FedEx, UPS…" value={form.carrier} onChange={set("carrier")} />
-        </Field>
-        <Field label="N.º de guía">
-          <input className={cn(FIELD, "font-mono")} value={form.trackingNumber} onChange={set("trackingNumber")} />
-        </Field>
-        <Field label="Enlace de seguimiento (opcional)">
-          <input className={FIELD} placeholder="https://…" inputMode="url" value={form.trackingUrl} onChange={set("trackingUrl")} />
-        </Field>
+        {!shipping && (
+          <Field label="N.º de orden o cotización">
+            <input className={FIELD} value={form.platformOrder} onChange={set("platformOrder")} />
+          </Field>
+        )}
+        {/* Una compra local la entrega el laboratorio: sin transporte, paquetera, guía ni códigos (MOM §45.12, §45.15). */}
+        {shipping && (
+          <>
+            <fieldset className={cn("min-w-0 space-y-3 rounded-lg bg-wash p-3", wide)}>
+              <legend className="sr-only">Códigos de trazabilidad</legend>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[13px] font-semibold text-ink-900">Códigos de trazabilidad</p>
+                <Badge tone={codes.missing.length ? "warn" : "ok"} className="tabular-nums">
+                  {codes.filled} de {codes.total}
+                </Badge>
+              </div>
+              <div className={cn("grid gap-3", !narrow && "sm:grid-cols-3")}>
+                <Field label="Código de la proforma invoice">
+                  <input className={cn(FIELD, "font-mono")} placeholder="PI-…" value={form.proformaNumber} onChange={set("proformaNumber")} />
+                </Field>
+                <Field label="Orden de Alibaba">
+                  <input className={cn(FIELD, "font-mono")} value={form.platformOrder} onChange={set("platformOrder")} />
+                </Field>
+                <Field label="Guía de envío">
+                  <input className={cn(FIELD, "font-mono")} placeholder="AWB de DHL…" value={form.trackingNumber} onChange={set("trackingNumber")} />
+                </Field>
+              </div>
+              <p className="text-xs leading-4 text-ink-500">
+                {codes.missing.length ? `${traceMissingText(codes.missing)} ` : ""}Para pasar a Pagado hacen falta la proforma y la orden de Alibaba; para
+                pasar a En tránsito, también la guía. Con los tres, el costo se puede seguir de punta a punta.
+              </p>
+            </fieldset>
+            <Field label="Transporte">
+              <select className={FIELD} value={form.transport} onChange={set("transport")}>
+                {TRANSPORTS.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Paquetera">
+              <input className={FIELD} placeholder="DHL, FedEx, UPS…" value={form.carrier} onChange={set("carrier")} />
+            </Field>
+            <Field label="Enlace de seguimiento (opcional)" className={wide}>
+              <input className={FIELD} placeholder="https://…" inputMode="url" value={form.trackingUrl} onChange={set("trackingUrl")} />
+            </Field>
+          </>
+        )}
         <Field label="Fecha del pedido">
           <input type="date" className={FIELD} value={form.orderedOn} onChange={set("orderedOn")} />
         </Field>
-        <Field label="Llegada estimada">
+        <Field label={shipping ? "Llegada estimada" : "Entrega estimada"}>
           <input type="date" className={FIELD} value={form.eta} onChange={set("eta")} />
         </Field>
         {imp && (
@@ -235,7 +277,7 @@ export function ImportHeaderForm({
       <Feedback error={error} />
       <div className="flex flex-wrap gap-2">
         <button type="button" className={BTN_PRIMARY} disabled={pending} onClick={submit}>
-          {pending ? "Guardando…" : imp ? "Guardar datos" : "Crear importación"}
+          {pending ? "Guardando…" : imp ? "Guardar datos" : shipping ? "Crear importación" : "Crear compra local"}
         </button>
         {onDone && (
           <button type="button" className={BTN_GHOST} onClick={onDone} disabled={pending}>
@@ -247,9 +289,15 @@ export function ImportHeaderForm({
   );
 }
 
-/** «Nueva importación»: abre el formulario en un panel lateral. */
+const KIND_CHOICES: { id: ImportKind; label: string; help: string }[] = [
+  { id: "importacion", label: "Importación", help: "Del extranjero, en dólares, con guía y aviso a la bodega." },
+  { id: "local", label: "Compra local (laboratorio / maquila)", help: "En soles, sin guía; cada entrega con su foto y cada pago con su comprobante." },
+];
+
+/** «Nueva compra»: elige el tipo y abre el formulario en un panel lateral. */
 export function NewImportButton({ orgId, suppliers }: { orgId: string; suppliers: SupplierRow[] }) {
   const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<ImportKind>("importacion");
   useEffect(() => {
     if (!open) return;
     const esc = (e: KeyboardEvent) => {
@@ -262,17 +310,43 @@ export function NewImportButton({ orgId, suppliers }: { orgId: string; suppliers
     <>
       <button type="button" className={BTN_PRIMARY} onClick={() => setOpen(true)} aria-haspopup="dialog">
         <IconPlus aria-hidden />
-        Nueva importación
+        Nueva compra
       </button>
       {open && (
         <SidePanel
-          label="Nueva importación"
-          title="Nueva importación"
-          meta="Proveedor, guía y llegada. Productos, documentos y costos se agregan después, en su detalle."
+          label="Nueva compra"
+          title="Nueva compra"
+          meta={
+            kind === "local"
+              ? "Laboratorio o maquila y entrega estimada. Productos (en soles), documentos, pagos y entregas se agregan después, en su detalle."
+              : "Proveedor, guía y llegada. Productos, documentos y costos se agregan después, en su detalle."
+          }
           width="sm:max-w-[640px]"
           onClose={() => setOpen(false)}
         >
-          <ImportHeaderForm orgId={orgId} suppliers={suppliers} onDone={() => setOpen(false)} />
+          <div className="space-y-4">
+            <div role="radiogroup" aria-label="Tipo de compra" className="grid gap-2 sm:grid-cols-2">
+              {KIND_CHOICES.map((k) => (
+                <button
+                  key={k.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={kind === k.id}
+                  className={cn(
+                    // La tarjeta de elección: el mismo anillo que un chip elegido, con su ayuda debajo.
+                    "flex min-h-11 flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-shadow",
+                    kind === k.id ? "bg-brand-50 text-brand-700 ring-2 ring-inset ring-brand-600" : "bg-white text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+                  )}
+                  onClick={() => setKind(k.id)}
+                >
+                  <span>{k.label}</span>
+                  <span className="text-xs font-normal leading-4 text-ink-500">{k.help}</span>
+                </button>
+              ))}
+            </div>
+            {/* `key`: al cambiar el tipo, el formulario vuelve a sus valores de ese tipo. */}
+            <ImportHeaderForm key={kind} orgId={orgId} suppliers={suppliers} kind={kind} onDone={() => setOpen(false)} />
+          </div>
         </SidePanel>
       )}
     </>

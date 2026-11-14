@@ -19,6 +19,10 @@ export const fmtUsd = (n: number | null | undefined) => (n == null || !Number.is
 /** Costo por unidad del proveedor: hasta 4 decimales. */
 export const fmtUsdUnit = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `US$ ${N4.format(n)}`);
 export const fmtPen = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `S/ ${N2.format(n)}`);
+/** Costo por unidad de una compra local (0343): hasta 4 decimales, en soles. */
+export const fmtPenUnit = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `S/ ${N4.format(n)}`);
+/** Un costo por unidad en su moneda: «US$ 2.0333» o «S/ 7.50». */
+export const fmtUnit = (n: number | null | undefined, currency: Currency) => (currency === "PEN" ? fmtPenUnit(n) : fmtUsdUnit(n));
 /** Un monto en su moneda (0342): «US$ 1,055.00» o «S/ 427.25». */
 export const fmtMoney = (n: number | null | undefined, currency: Currency) => (currency === "PEN" ? fmtPen(n) : fmtUsd(n));
 /** «US$ 800.00 + S/ 427.25»: dinero sin convertir, cada moneda por separado (sin la que está en 0). */

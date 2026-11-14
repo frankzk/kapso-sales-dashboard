@@ -14,7 +14,7 @@ import {
   cleanHeader,
   cleanItem,
   cleanPayment,
-  cleanReception,
+  cleanDelivery,
   cleanStatusChange,
   cleanSupplier,
   costPushNote,
@@ -58,7 +58,7 @@ const COSTS: LandedCostRow[] = [
 ];
 
 describe("estados", () => {
-  it("los diez estados con sus etiquetas en español, en orden", () => {
+  it("los once estados con sus etiquetas en español, en orden («Recibido parcial», 0343)", () => {
     expect(IMPORT_STATUSES.map((s) => s.id)).toEqual([
       "cotizacion",
       "pagado",
@@ -66,6 +66,7 @@ describe("estados", () => {
       "en_transito",
       "en_aduana",
       "en_camino_bodega",
+      "recibido_parcial",
       "recibido",
       "ingresado",
       "cerrado",
@@ -73,6 +74,7 @@ describe("estados", () => {
     ]);
     expect(IMPORT_STATUS_LABEL.ingresado).toBe("Ingresado al inventario");
     expect(IMPORT_STATUS_LABEL.en_camino_bodega).toBe("En camino a bodega");
+    expect(IMPORT_STATUS_LABEL.recibido_parcial).toBe("Recibido parcial");
   });
 
   it("pestañas: activas, recibidas y canceladas", () => {
@@ -270,18 +272,17 @@ describe("recepción (§6.6)", () => {
     expect(receptionSummary(items.slice(0, 2)).complete).toBe(true);
   });
 
-  it("valida lo contado: vacío = sin contar; dañadas ≤ recibidas; al menos una línea", () => {
+  // 0343 (MOM §45.14): la recepción única pasó a entregas; la misma validación por línea.
+  it("valida lo que llegó en una entrega: vacío = no vino; dañadas ≤ llegaron; al menos una línea", () => {
     const ids = ["a", "b"];
-    expect(cleanReception(ids, [{ itemId: "a", received: "", damaged: "" }])).toEqual({ error: "Anota lo recibido de al menos un producto." });
-    expect(cleanReception(ids, [{ itemId: "a", received: "", damaged: "2" }])).toHaveProperty("error");
-    expect(cleanReception(ids, [{ itemId: "a", received: "3", damaged: "4" }])).toEqual({ error: "Las dañadas no pueden ser más que las recibidas." });
-    expect(cleanReception(ids, [{ itemId: "a", received: "-1" }])).toHaveProperty("error");
-    expect(cleanReception(ids, [{ itemId: "zz", received: "1" }])).toHaveProperty("error");
-    expect(cleanReception(ids, [{ itemId: "a", received: "1,500", damaged: "", note: " caja rota " }, { itemId: "b", received: "" }])).toEqual({
-      value: [
-        { itemId: "a", received_qty: 1500, damaged_qty: 0, reception_note: "caja rota" },
-        { itemId: "b", received_qty: null, damaged_qty: null, reception_note: null },
-      ],
+    const d = (lines: { itemId: string; received?: string; damaged?: string; note?: string }[]) => cleanDelivery({ deliveredOn: "2026-11-14", lines }, ids, "2026-11-14");
+    expect(d([{ itemId: "a", received: "", damaged: "" }])).toEqual({ error: "Anota lo que llegó de al menos un producto." });
+    expect(d([{ itemId: "a", received: "", damaged: "2" }])).toHaveProperty("error");
+    expect(d([{ itemId: "a", received: "3", damaged: "4" }])).toEqual({ error: "Las dañadas no pueden ser más que las que llegaron." });
+    expect(d([{ itemId: "a", received: "-1" }])).toHaveProperty("error");
+    expect(d([{ itemId: "zz", received: "1" }])).toHaveProperty("error");
+    expect(d([{ itemId: "a", received: "1,500", damaged: "", note: " caja rota " }, { itemId: "b", received: "" }])).toEqual({
+      value: { delivered_on: "2026-11-14", note: null, lines: [{ itemId: "a", received: 1500, damaged: 0, note: "caja rota" }] },
     });
   });
 });
@@ -401,9 +402,11 @@ describe("validaciones", () => {
     expect(cleanItem({ name: "X", qty: "10000001" }, true)).toHaveProperty("error");
     expect(cleanItem({ name: "", qty: "1" }, true)).toHaveProperty("error");
     const withMoney = cleanItem({ name: "X", sku: "S1", qty: "1,500", unitCostUsd: "2.1234", salePricePen: "19.9" }, true);
-    expect(withMoney).toEqual({ value: { store_id: null, sku: "S1", name: "X", qty: 1500, unit_weight_kg: null, unit_cost_usd: 2.1234, sale_price_pen: 19.9 } });
+    expect(withMoney).toEqual({
+      value: { store_id: null, sku: "S1", name: "X", qty: 1500, courtesy_qty: 0, unit_weight_kg: null, unit_cost_currency: "USD", unit_cost_usd: 2.1234, unit_cost_pen: null, sale_price_pen: 19.9 },
+    });
     const noMoney = cleanItem({ name: "X", qty: "5", unitCostUsd: "99", salePricePen: "1" }, false);
-    expect(noMoney).toEqual({ value: { store_id: null, sku: null, name: "X", qty: 5, unit_weight_kg: null } });
+    expect(noMoney).toEqual({ value: { store_id: null, sku: null, name: "X", qty: 5, courtesy_qty: 0, unit_weight_kg: null } });
     expect("value" in noMoney && "unit_cost_usd" in noMoney.value).toBe(false);
     expect("value" in noMoney && "sale_price_pen" in noMoney.value).toBe(false);
   });
@@ -413,7 +416,7 @@ describe("validaciones", () => {
     expect(cleanCost({ kind: "flete", amount: "5" }, [])).toHaveProperty("error");
     expect(cleanCost({ kind: "envio", amount: "5", allocation: "item", itemId: "otro" }, ["a"])).toHaveProperty("error");
     expect(cleanCost({ kind: "envio", amount: "120", allocation: "weight", itemId: "a" }, ["a"])).toEqual({
-      value: { kind: "envio", label: "Envío", currency: "USD", amount_usd: 120, amount_pen: null, includes_igv: false, gross_amount: null, allocation: "weight", item_id: null },
+      value: { kind: "envio", label: "Envío", currency: "USD", amount_usd: 120, amount_pen: null, includes_igv: false, gross_amount: null, igv_treatment: "neto", allocation: "weight", item_id: null },
     });
   });
 

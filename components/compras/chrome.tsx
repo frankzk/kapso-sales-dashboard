@@ -6,7 +6,7 @@
 
 import type { ReactNode } from "react";
 import { cn } from "@/components/ui";
-import type { ImportStatus } from "@/lib/compras";
+import type { ImportKind, ImportStatus } from "@/lib/compras";
 
 // ---------------------------------------------------------------------------
 // La lista: sus filtros viven en la URL
@@ -20,19 +20,27 @@ export const IMPORT_ALERT_FILTERS: { id: ImportAlertFilter; label: string; hint:
   { id: "sin_novedades", label: "Sin novedades", hint: "Viajan y llevan 7 días o más sin un cambio de estado ni una nota" },
 ];
 
+/** `?tipo=`: importaciones o compras locales (MOM §45.12); sin él, todas. */
+export const IMPORT_KIND_FILTERS: { id: ImportKind; label: string }[] = [
+  { id: "importacion", label: "Importaciones" },
+  { id: "local", label: "Compras locales" },
+];
+
 /** La URL de la lista con lo que cambia; lo demás se conserva. */
-export function comprasListHref(q: { tab: string; org?: string | null; proveedor?: string | null; alerta?: string | null }): string {
+export function comprasListHref(q: { tab: string; org?: string | null; proveedor?: string | null; alerta?: string | null; tipo?: string | null }): string {
   const p = new URLSearchParams({ v: q.tab });
   if (q.org) p.set("org", q.org);
   if (q.proveedor) p.set("proveedor", q.proveedor);
   if (q.alerta) p.set("alerta", q.alerta);
+  if (q.tipo) p.set("tipo", q.tipo);
   return `/dashboard/compras?${p.toString()}`;
 }
 
 /**
  * El tono de la chapa de un estado (MOM §45): no cambia el estado, solo cómo
- * se lee. En curso en `info`; ya en la bodega en `ok`; la cotización, lo
- * cerrado y lo cancelado en neutro (no piden a nadie que actúe).
+ * se lee. En curso en `info` (también «Recibido parcial»: falta lo demás); ya
+ * en la bodega en `ok`; la cotización, lo cerrado y lo cancelado en neutro (no
+ * piden a nadie que actúe).
  */
 export function importStatusTone(status: ImportStatus): "neutral" | "info" | "ok" {
   if (status === "recibido" || status === "ingresado") return "ok";

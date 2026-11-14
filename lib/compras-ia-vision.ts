@@ -60,6 +60,8 @@ export const PURCHASE_AI_SYSTEM =
   "- Los montos de las líneas y de los cargos van SIN IGV (el valor de venta de cada línea). " +
   "El IGV va aparte, en igv (con su moneda en igv_currency), nunca como línea ni como cargo; " +
   "si el documento no tiene IGV, igv es null.\n" +
+  "- En cada cargo, igv_exempt = true si el documento lo marca como inafecto o exonerado de IGV " +
+  "(«inafecto», «exonerado», «no gravado», el flete internacional); false si está gravado; null si no se ve.\n" +
   "- Escribe el nombre del producto en español, breve y fiel; no agregues datos que no estén.\n" +
   "- El SKU (código, modelo o item no.) solo si está escrito; si no, null.\n" +
   "- Si un dato no aparece o no se lee con claridad, usa null. Un packing list " +
@@ -105,8 +107,12 @@ export const PURCHASE_AI_TOOL = {
             label: { type: "string", description: "Nombre del cargo en español (Flete, Seguro, Comisión bancaria…)." },
             amount: { ...nullable("number"), description: "Monto SIN IGV (valor de venta), en la moneda del cargo." },
             currency: { ...nullable("string"), description: "Moneda de este cargo en ISO 4217 tal como figura (PEN para soles), o null si es la del documento." },
+            igv_exempt: {
+              type: ["boolean", "null"],
+              description: "true si el documento marca este cargo como inafecto o exonerado de IGV (p. ej. el flete internacional); false si está gravado; null si no se ve.",
+            },
           },
-          required: ["kind", "label", "amount", "currency"],
+          required: ["kind", "label", "amount", "currency", "igv_exempt"],
         },
       },
     },
