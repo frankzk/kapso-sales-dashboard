@@ -320,9 +320,11 @@ describe("el MOM y DEPLOY.md", () => {
     }
   });
 
-  it("DEPLOY.md: arriba de todo, la 0341 antes que el código", () => {
+  it("DEPLOY.md: la entrada de la 0341, aplicada antes que el código", () => {
+    // Las entradas nuevas van arriba (la 0342 de GF Courier entró después): se busca la de la 0341 por su título.
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("### ");
+    const first = deploy.indexOf("### 14-11-2026 · Compras: proveedores");
+    expect(first).toBeGreaterThanOrEqual(0);
     const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
     expect(entry).toContain("0341_compras_proveedores");
     expect(entry).toMatch(/antes/i);

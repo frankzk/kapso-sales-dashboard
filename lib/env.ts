@@ -175,6 +175,8 @@ export const env = {
   //     así que hacen falta dos llaves deliberadas (esta y stores.aliclik_enabled)
   //     para que salga una sola petición.
   aliclikWriteEnabled: () => process.env.ALICLIK_WRITE_ENABLED === "true",
+  // --- GF Courier por API (MOM §29.17). Dos llaves, como Aliclik: esta y stores.gf_courier_enabled. ---
+  gfCourierWriteEnabled: () => process.env.GF_COURIER_WRITE_ENABLED === "true",
   //     Por dónde salen las peticiones a Aliclik.
   //
   //     `edge` ES EL VALOR POR DEFECTO, y no es una preferencia: la salida

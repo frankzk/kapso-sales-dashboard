@@ -1,3 +1,28 @@
+### 14-11-2026 · GF Courier por API: reemplaza al reparto propio (0342, MOM §29.17)
+
+**Migración 0342_gf_courier_api: aplicar en producción ANTES del código.** Agrega a `stores`
+`gf_courier_api_token_enc`, `gf_courier_webhook_secret_enc` y `gf_courier_enabled` (por defecto `false`), y crea
+`gf_order_requests` (intención antes del POST, una viva por pedido) y `gf_webhook_events` (append-only, con
+`reject_mutation()`). Sin `drop`; no toca datos; se puede correr otra vez. Sin ella, el panel y la configuración
+de GF no funcionan; «Tomar» de Grupo GF se comporta como antes.
+
+Variables nuevas en Vercel (Production):
+- `GF_COURIER_WRITE_ENABLED=true`, la llave global; sin ella el panel explica que está apagado;
+- `GF_COURIER_API_BASE`, opcional; por defecto `https://gf-courier.vercel.app`.
+
+Cron nuevo: `/api/cron/gf-reconcile` cada 20 minutos (`vercel.json`), con `CRON_SECRET`.
+
+Por tienda, en Configuración → Conexiones → GF Courier: pegar el token que emite GF (credencial con
+`shipments:read`, `shipments:write`, `catalogue:read`, `inventory:read` y `webhooks:manage`), «Probar conexión»,
+«Conectar webhook» y activar «Crear guías en GF Courier». Permisos nuevos: `gf_courier.create_guide` y
+`gf_courier.cancel_guide`; van con los roles que ya crean guías de Aliclik.
+
+Verificar con un pedido de prueba:
+1. «Crear guía en GF Courier» en el Master: aparece la guía `GF…` con su costo.
+2. Al anularla, la salida queda `anulado`.
+3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
+4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
+
 ### 14-11-2026 · Compras: proveedores, reportes y el Excel de la importación (0341, MOM §45.7–§45.9)
 
 **Migración 0341_compras_proveedores: ya aplicada en producción (14-11-2026), antes del código.**

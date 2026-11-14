@@ -19328,6 +19328,61 @@ lógica es una sola para las dos pantallas (`lib/dispatch-plan.ts`).
   pedidos de Lima de nuestras tiendas: 35 sin rótulo, 3 sin armar, 86 sin caja y
   0 en caja.
 
+### 29.17 GF Courier por API: reemplaza al reparto propio (decisión del owner, 14-11-2026)
+
+GF Courier pasó a ser un **sistema independiente** (gf-courier.vercel.app) con API propia. El owner decidió que
+**reemplaza al módulo interno de Grupo GF** (§29.2–§29.16) para **todas las tiendas a la vez**: GF prepara, asigna
+motorizado, entrega, liquida y lleva su inventario; Kapta crea la guía y sigue su estado, igual que con Aliclik.
+
+**Identidad.** La salida lleva `courier = "gf_courier"` y `created_via = "gf_courier_api"`; `guide_code` y
+`external_order_number` son el número de guía GF (`GF…`). No se mezcla con `courier = "propio"` del reparto interno:
+las cajas que ese módulo ya tiene en la calle se cierran con sus reglas de siempre.
+
+**Conexión por tienda** (Configuración → Conexiones → GF Courier):
+- token de la credencial de integración que emite GF para esa tienda (cifrado con `ENCRYPTION_KEY`);
+- «Probar conexión» (`GET /v1/me`, comprueba permisos) y «Conectar webhook»: acuña el secreto, lo registra en GF
+  (`POST /v1/webhooks`, eventos `order.*`) y lo guarda cifrado; nadie lo copia;
+- dos llaves para escribir: el interruptor de la tienda y `GF_COURIER_WRITE_ENABLED=true` en el servidor.
+
+**Crear la guía** (panel «GF Courier» del Master, permiso `gf_courier.create_guide`). Solo contraentrega. Se envía:
+nombre separado en primera palabra y resto, teléfono, distrito en texto (o el ubigeo del territorio de WooCommerce),
+dirección, referencia, GPS, cada línea con su SKU y el total del pedido **repartido al céntimo** entre las líneas
+(si no se divide entre las unidades, el mismo SKU va en dos líneas que difieren en S/ 0.01), adelantos validados y
+`amount_to_collect = total − adelantos`. Sin SKU, sin apellido o sin distrito no se envía: se dice qué falta.
+GF responde la cobertura (`DISTRICT_NOT_COVERED` con la lista válida), el stock (`OUT_OF_STOCK`, incluido el
+interruptor «Agotado» de los productos sin conteo) y los montos.
+- La intención se escribe antes del POST (`gf_order_requests`, una viva por pedido).
+- A diferencia de Aliclik, GF tiene `Idempotency-Key` (`KP-<pedido>-<external_id>`): un timeout se reintenta con la
+  misma clave y GF devuelve la misma guía; `DUPLICATE_ORDER` o `IDEMPOTENCY_CONFLICT` con guía se **vinculan**.
+- `external_id` es el nombre del pedido; una salida posterior lleva `-S2`, `-S3`…
+- Anular (`gf_courier.cancel_guide`): GF solo anula antes de preparar, sin costo; después responde con el estado.
+
+**Estado.** El webhook firmado de GF (`/api/webhooks/gf/<storeId>`, `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
+`X-GF-Event-Id` único en `gf_webhook_events`) solo dispara una relectura de `GET /v1/orders/{guía}`; se aplica el estado
+actual con las mismas guardas que Aliclik (precedencia, intento fallido, sello único de devolución, preparación y
+custodia monotónicas). El cron `gf-reconcile` (cada 20 min) relee las guías vivas y resuelve las intenciones huérfanas.
+
+| GF | Salida en Kapta |
+| --- | --- |
+| CREATED | `pendiente` · confirmado sin preparar |
+| READY_FOR_PICKUP | `pendiente` · preparado sin despachar |
+| OUT_FOR_DELIVERY | `en_ruta` · custodia courier |
+| INCIDENT (NO_ANSWER, CUSTOMER_ABSENT, WRONG_ADDRESS) | `en_ruta` · intento de entrega |
+| INCIDENT (RESCHEDULE_REQUESTED) | `en_ruta` · reprogramado |
+| REFUSED | `en_ruta` · intento de entrega |
+| RETURNING | `en_ruta` · en proceso de retorno |
+| RETURNED (recibido en el almacén GF) | `anulado` · devuelto al origen, `returned_at` |
+| DELIVERED | `entregado` |
+| CANCELLED | `anulado` |
+| LOST y estados que GF aún no usa en COD Lima | **no se traducen**: quedan en `reported_status` para revisión |
+
+**Reparto propio.** «Tomar» y «Tomar y asignar» de Grupo GF rechazan los pedidos de una tienda con GF Courier por API
+habilitado, con el aviso de crear la guía desde el Master. Nada se borra: rutas, cotejos y liquidaciones anteriores
+conservan su historial.
+
+**Inventario.** GF exige que cada SKU exista en su catálogo. Mientras no haya conteo físico, el catálogo de cada tienda
+se carga en GF en modo **ilimitado** con el interruptor **En existencias / Agotado** (GF, migración 039).
+
 ## 30. Liquidaciones 2 — hojas por dominio
 
 Plan y hallazgos en `docs/plan/liquidaciones-2.md`. Base en la migración 0176;
