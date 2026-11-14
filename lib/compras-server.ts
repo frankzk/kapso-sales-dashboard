@@ -549,7 +549,8 @@ const CATALOG_COST_ROWS = 5000;
  * Los SKU que la organización ya conoce, para sugerir la coincidencia de una
  * línea leída con IA: los de Costos de productos (con su tienda) y los vistos
  * en los pedidos de sus tiendas (`org_shopify_products`, 0094). Solo SKU,
- * nombre y tienda: ningún costo.
+ * nombre, tienda y en cuántos pedidos salió: ningún costo. También alimenta el
+ * selector de «Agregar producto» (MOM §45.1).
  */
 export async function loadSkuCatalog(orgId: string, admin: SupabaseClient = createAdminSupabase()): Promise<CatalogEntry[]> {
   const [costs, shop] = await Promise.all([
@@ -561,8 +562,8 @@ export async function loadSkuCatalog(orgId: string, admin: SupabaseClient = crea
     if (r.sku) out.push({ sku: r.sku, name: r.product_name, storeId: r.store_id ?? null });
   }
   if (!shop.error) {
-    for (const r of ((shop.data ?? []) as { sku: string | null; product_name: string | null }[])) {
-      if (r.sku) out.push({ sku: r.sku, name: r.product_name, storeId: null });
+    for (const r of ((shop.data ?? []) as { sku: string | null; product_name: string | null; order_count?: number | string | null }[])) {
+      if (r.sku) out.push({ sku: r.sku, name: r.product_name, storeId: null, orderCount: r.order_count == null ? null : Number(r.order_count) });
     }
   }
   return out;

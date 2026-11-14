@@ -1,3 +1,13 @@
+### 14-11-2026 · Compras con el aspecto de la Mesa de Despacho y buscador de productos
+
+Sin migración. Compras (lista, detalle, lectura con IA, Proveedores y
+Reportes) pasa al mundo de operación de DESIGN.md: cifras que filtran,
+pastillas de excepción (`?alerta=`), tabla desde 1280 px y lista en el
+teléfono, franja de cifras y «siguiente acción» en el detalle. «Agregar
+producto» busca en el catálogo de las tiendas (`org_shopify_products`) y
+llena nombre, SKU y, si es única, la tienda. Verificar en el celular la lista
+y el detalle de una importación, y agregar un producto desde «De las tiendas».
+
 ### 14-11-2026 · Compras: «Leer con IA», «Recepción de compras» y la foto del producto (MOM §45.10–§45.11)
 
 **Sin migración.** El permiso nuevo **«Recepción de compras»**

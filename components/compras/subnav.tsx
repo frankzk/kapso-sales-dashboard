@@ -38,15 +38,17 @@ export function ComprasSubnav({
   const sections = visibleComprasSections(perms);
   if (sections.length < 2) return null;
   return (
-    <nav aria-label="Secciones de Compras" className="-mb-px flex gap-5 overflow-x-auto border-b border-slate-200">
+    <nav aria-label="Secciones de Compras" className="flex gap-6 overflow-x-auto border-b border-line">
       {sections.map((s) => (
         <Link
           key={s.id}
           href={multiOrg ? `${s.href}?org=${orgId}` : s.href}
           aria-current={s.id === current ? "page" : undefined}
           className={cn(
-            "inline-flex min-h-11 shrink-0 items-center border-b-2 px-0.5 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-inset",
-            s.id === current ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-900",
+            // Pestaña subrayada (DESIGN.md › Navigation): 48 px de objetivo, la
+            // activa en `brand-700` con su barra de 2 px sobre la hairline.
+            "-mb-px inline-flex min-h-12 shrink-0 items-center border-b-2 text-[13px] font-semibold transition-colors duration-150 lg:text-sm",
+            s.id === current ? "border-brand-600 text-brand-700" : "border-transparent text-ink-500 hover:text-ink-900",
           )}
         >
           {s.label}

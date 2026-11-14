@@ -21,7 +21,12 @@ export const fmtUsdUnit = (n: number | null | undefined) => (n == null || !Numbe
 export const fmtPen = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `S/ ${N2.format(n)}`);
 export const fmtInt = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : INT.format(n));
 export const fmtPct = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : `${(n * 100).toFixed(1)} %`);
-export const fmtDateTime = (iso: string | null | undefined) => (iso ? DATE_TIME.format(new Date(iso)) : "—");
+/**
+ * Fecha y hora de Lima. Los espacios raros que pone cada ICU alrededor de
+ * «a. m.» (fino o duro, según Node o el navegador) pasan a un espacio normal:
+ * si no, el texto del servidor y el del navegador no coinciden al hidratar.
+ */
+export const fmtDateTime = (iso: string | null | undefined) => (iso ? DATE_TIME.format(new Date(iso)).replace(/[\u00a0\u202f]/g, " ") : "—");
 
 export function fmtBytes(n: number): string {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
