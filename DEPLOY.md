@@ -1,3 +1,34 @@
+### 14-11-2026 · Compras: «Leer con IA», «Recepción de compras» y la foto del producto (MOM §45.10–§45.11)
+
+**Sin migración.** El permiso nuevo **«Recepción de compras»**
+(`purchases.receive`) vive en el código (`user_permissions.permission` es
+texto libre y los roles por función no se guardan permiso por permiso), y
+«Leer con IA» no guarda nada nuevo: usa las tablas de la 0340. Usa la clave de
+visión que ya existe (`ANTHROPIC_API_KEY` y `YAPE_VISION_MODEL`; si el entorno
+no tiene clave, la de la primera tienda de la organización que tenga una). La
+página del detalle pasa a `maxDuration = 120`.
+
+- **«Leer con IA»** (con «Compras»): en Documentos, la factura comercial, la
+  proforma (con «Montos») o el packing list en PDF (≤ 20 MB) o imagen (≤ 5 MB)
+  muestran «Leer con IA». La IA propone productos y cargos; **no se guarda
+  nada** hasta «Agregar seleccionados». Sin «Montos de compras» la propuesta
+  llega sin precios ni cargos. Si el documento no está en USD, se escribe
+  «1 USD = X <moneda>». Sugiere SKU y tienda conocidos (Costos de productos y
+  pedidos de la tienda).
+- **«Recepción de compras»**: lo trae el rol **«Almacén»** (y owner y admin).
+  Abre Compras (lista y detalle) sin montos, guarda la recepción (pasa a
+  Recibido como siempre) y sube fotos; ve la factura comercial, el packing
+  list y las fotos. No edita nada más y no ve Proveedores ni Reportes. Una
+  vendedora con el rol Almacén ve «Compras» en su menú.
+- **Foto del producto**: en el detalle, «Foto», «Cambiar» y «Quitar» en cada
+  producto (con «Compras»); la anterior se borra del bucket.
+
+Verificar: con una factura en PDF, «Leer con IA» → la propuesta → desmarcar
+una fila → «Agregar seleccionados»: solo lo marcado queda, con el hecho «Leído
+con IA: …» en el historial; con un usuario con solo el rol Almacén, abrir una
+importación (sin montos), guardar la recepción y subir una foto; cambiar la
+foto de un producto y comprobar que se ve la nueva.
+
 ### 14-11-2026 · Compras: proveedores, reportes y el Excel de la importación (0341, MOM §45.7–§45.9)
 
 **Migración 0341_compras_proveedores: ya aplicada en producción (14-11-2026), antes del código.**

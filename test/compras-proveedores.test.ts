@@ -320,9 +320,11 @@ describe("el MOM y DEPLOY.md", () => {
     }
   });
 
-  it("DEPLOY.md: arriba de todo, la 0341 antes que el código", () => {
+  it("DEPLOY.md: la 0341 antes que el código", () => {
     const deploy = read("DEPLOY.md");
-    const first = deploy.indexOf("### ");
+    // Ya no es la primera entrada (encima va la de «Leer con IA», MOM §45.10).
+    const first = deploy.indexOf("### 14-11-2026 · Compras: proveedores");
+    expect(first).toBeGreaterThan(-1);
     const entry = deploy.slice(first, deploy.indexOf("\n### ", first + 4));
     expect(entry).toContain("0341_compras_proveedores");
     expect(entry).toMatch(/antes/i);
