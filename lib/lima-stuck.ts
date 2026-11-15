@@ -33,6 +33,22 @@ export const LIMA_STUCK_OWNER_LABEL: Record<LimaStuckOwner, string> = {
   asesora: "Asesora",
 };
 
+/**
+ * Dónde se ve cada motivo (owner, 15-11-2026; MOM §9.5 y §9.6). Con GF Courier
+ * por API (§29.17) el equipo de Lima ya no maneja las cajas ni los motorizados
+ * de Grupo GF: lo de adentro del reparto propio vive en Grupo GF Courier →
+ * Despacho del día, junto a «Sale a reparto», para Kenku mientras siga con
+ * Grupo GF. Lo que sí es del equipo se queda en Repro Lima: en «Por gestionar
+ * hoy» o en «En manos del courier». Ningún motivo queda sin sitio.
+ */
+export type LimaStuckHome = "gestion" | "courier" | "grupo_gf";
+
+export const LIMA_STUCK_HOME_LABEL: Record<LimaStuckHome, string> = {
+  gestion: "Repro Lima · Por gestionar hoy",
+  courier: "Repro Lima · En manos del courier",
+  grupo_gf: "Grupo GF Courier · Despacho del día",
+};
+
 export type LimaStuckReason =
   // Por despachar
   | "armado_sin_caja"
@@ -63,6 +79,8 @@ export interface LimaStuckRule {
   action: string;
   /** La tarjeta: qué cuenta y desde cuándo. */
   hint: string;
+  /** La pantalla donde se ve (`LimaStuckHome`). */
+  home: LimaStuckHome;
 }
 
 /**
@@ -72,85 +90,85 @@ export interface LimaStuckRule {
  */
 export const LIMA_STUCK_RULES: readonly LimaStuckRule[] = [
   {
-    reason: "armado_sin_caja", stage: "por_despachar", threshold: 1, owner: "operaciones",
+    reason: "armado_sin_caja", stage: "por_despachar", threshold: 1, owner: "operaciones", home: "grupo_gf",
     label: "Armado sin caja de reparto",
     action: "Ponerlo en la caja del próximo reparto en Despacho del día.",
     hint: "Por despachar: armado, sin solicitud de Grupo GF ni caja, y ya pasó un día de reparto entero.",
   },
   {
-    reason: "tomado_sin_caja", stage: "por_despachar", threshold: 1, owner: "operaciones",
+    reason: "tomado_sin_caja", stage: "por_despachar", threshold: 1, owner: "operaciones", home: "grupo_gf",
     label: "Grupo GF lo tomó y no lo puso en caja",
     action: "Pedir a Grupo GF que lo asigne a una caja o que libere la solicitud.",
     hint: "Por despachar: Grupo GF aceptó la solicitud para un día que ya pasó y el pedido no está en ninguna caja.",
   },
   {
-    reason: "caja_vencida", stage: "por_despachar", threshold: 1, owner: "operaciones",
+    reason: "caja_vencida", stage: "por_despachar", threshold: 1, owner: "operaciones", home: "grupo_gf",
     label: "En una caja de un día que pasó",
     action: "Retirarlo de la caja vieja y asignarlo al próximo reparto.",
     hint: "Por despachar: está en la caja de un día que ya pasó y el motorizado no lo recogió.",
   },
   {
-    reason: "sin_condiciones_gf", stage: "por_despachar", threshold: 1, owner: "operaciones",
+    reason: "sin_condiciones_gf", stage: "por_despachar", threshold: 1, owner: "operaciones", home: "grupo_gf",
     label: "Grupo GF no lo puede llevar",
     action: "Elegir otro courier (Aliclik) desde la ficha.",
     hint: "Por despachar: el distrito no tiene convenio, tarifa o está en pausa en Grupo GF y no tiene otra guía viva.",
   },
   {
-    reason: "courier_no_recogio", stage: "por_despachar", threshold: 1, owner: "operaciones",
+    reason: "courier_no_recogio", stage: "por_despachar", threshold: 1, owner: "operaciones", home: "courier",
     label: "Guía creada y el courier no lo recogió",
     action: "Coordinar el recojo con el courier o crear la guía con otro.",
     hint: "Por despachar: la guía de otro courier espera su recojo y su día ya pasó.",
   },
   {
-    reason: "reparto_sin_resultado", stage: "en_curso", threshold: 2, owner: "operaciones",
+    reason: "reparto_sin_resultado", stage: "en_curso", threshold: 2, owner: "operaciones", home: "grupo_gf",
     label: "En reparto sin resultado del motorizado",
     action: "Pedir al motorizado el resultado de la parada o recibir el paquete en oficina.",
     hint: "En curso con Grupo GF: el motorizado lo recogió y lleva dos días de reparto enteros sin reportar la parada.",
   },
   {
-    reason: "entregado_sin_cierre", stage: "en_curso", threshold: 1, owner: "operaciones",
+    reason: "entregado_sin_cierre", stage: "en_curso", threshold: 1, owner: "operaciones", home: "gestion",
     label: "El courier dice entregado y Kapta no cerró",
     action: "Validar el cobro del courier (Tanders: cargar su constancia en Validar pagos).",
     hint: "En curso: el courier reporta la entrega, pero falta la constancia o la validación que lo pasa a Por cerrar.",
   },
   {
-    reason: "novedad_con_clienta", stage: "en_curso", threshold: 1, owner: "asesora",
+    reason: "novedad_con_clienta", stage: "en_curso", threshold: 1, owner: "asesora", home: "gestion",
     label: "El courier reporta una novedad con la clienta",
     action: "Llamar a la clienta y acordar la entrega o la devolución.",
     hint: "En curso: el último reporte del courier es de la clienta (no contesta, ausente, ya no lo quiere, rechazo o dirección) y no cambió en un día de reparto.",
   },
   {
-    reason: "courier_sin_resultado", stage: "en_curso", threshold: 3, owner: "operaciones",
+    reason: "courier_sin_resultado", stage: "en_curso", threshold: 3, owner: "operaciones", home: "courier",
     label: "Sin resultado del courier",
     action: "Pedir al courier el estado de la guía y dónde está el paquete.",
     hint: "En curso con un courier externo: tres días de reparto enteros sin entrega ni fallo (Tanders, uno: su paquete queda libre al día hábil siguiente).",
   },
   {
-    reason: "retorno_sin_recibir", stage: "en_curso", threshold: 3, owner: "almacen",
+    reason: "retorno_sin_recibir", stage: "en_curso", threshold: 3, owner: "almacen", home: "courier",
     label: "Retorno sin llegar al almacén",
     action: "Recibir la devolución en Almacén → Devoluciones o reclamarla al courier.",
     hint: "En curso: el courier lo está devolviendo y lleva tres días de reparto enteros sin llegar.",
   },
   {
-    reason: "sin_rotulo", stage: "preparacion", threshold: 1, owner: "operaciones",
+    reason: "sin_rotulo", stage: "preparacion", threshold: 1, owner: "operaciones", home: "gestion",
     label: "Sin rótulo",
     action: "Elegir la ruta y generar el rótulo en la ficha.",
     hint: "Preparación: sin guía ni rótulo, sin envío programado a futuro, y ya pasó un día de reparto entero.",
   },
   {
-    reason: "rotulo_sin_armar", stage: "preparacion", threshold: 1, owner: "almacen",
+    reason: "rotulo_sin_armar", stage: "preparacion", threshold: 1, owner: "almacen", home: "gestion",
     label: "Rótulo o guía creada y caja sin escanear",
     action: "Armar la caja y escanearla en Almacén.",
     hint: "Preparación · Por armar: tiene rótulo o guía y la caja no se escaneó en un día de reparto entero.",
   },
   {
-    reason: "incidencia_sin_resolver", stage: "preparacion", threshold: 1, owner: "almacen",
+    reason: "incidencia_sin_resolver", stage: "preparacion", threshold: 1, owner: "almacen", home: "gestion",
     label: "Incidencia de preparación sin resolver",
     action: "Resolver la incidencia en Almacén (stock, producto o caja).",
     hint: "Preparación · Incidencia: lleva un día de reparto entero sin resolverse.",
   },
   {
-    reason: "sin_rotulo_antiguo", stage: "preparacion", threshold: 1, owner: "asesora",
+    reason: "sin_rotulo_antiguo", stage: "preparacion", threshold: 1, owner: "asesora", home: "gestion",
     label: "Sin rótulo hace más de 30 días",
     action: "Confirmar con la clienta si la venta sigue; si no, anularla en la tienda.",
     hint: "Preparación · Por generar rótulo con más de 30 días desde la compra: antes de despachar hay que saber si sigue.",
@@ -161,6 +179,11 @@ const RULE = new Map(LIMA_STUCK_RULES.map((rule) => [rule.reason, rule]));
 
 export function limaStuckRule(reason: LimaStuckReason): LimaStuckRule {
   return RULE.get(reason)!;
+}
+
+/** Los motivos de una pantalla (`LimaStuckHome`), en el orden de las reglas. */
+export function stuckReasonsOf(...homes: readonly LimaStuckHome[]): LimaStuckReason[] {
+  return LIMA_STUCK_RULES.filter((rule) => homes.includes(rule.home)).map((rule) => rule.reason);
 }
 
 /** Más de esto desde la compra, un pedido sin rótulo se pregunta antes de armarlo (como «Antiguo por revisar»). */
@@ -174,8 +197,18 @@ const EN_CURSO_RETURN = new Set(["en_retorno", "retorno_solicitado"]);
 const POR_DESPACHAR_IN_BOX = new Set(["asignado_a_ruta", "en_cotejo", "cotejo_incompleto", "listo_para_recojo"]);
 /** Las salidas que son de Grupo GF: la «por definir» que rellena y la propia. */
 const GF_COURIERS = new Set(["propio", "por_definir"]);
-/** Lo que el courier reporta de la clienta, no del paquete. «Reprogramado» no: el courier vuelve a intentarlo. */
-const CUSTOMER_NOVELTY = /NOT_RESPOND|REFUSED|REJECTED|no contesta|ausente|no desea|ya no (lo )?quiere|rechaz|direcci[oó]n (incorrecta|errada|incompleta)/i;
+/**
+ * Lo que el courier reporta de la clienta, no del paquete. «Reprogramado» no:
+ * el courier vuelve a intentarlo. GF Courier (§29.17) lo dice con sus códigos:
+ * `INCIDENT:NO_ANSWER`, `INCIDENT:CUSTOMER_ABSENT`, `INCIDENT:WRONG_ADDRESS` y
+ * `REFUSED` son novedad; `INCIDENT:RESCHEDULE_REQUESTED` es su «Reprogramado».
+ */
+const CUSTOMER_NOVELTY = /NOT_RESPOND|REFUSED|REJECTED|INCIDENT(?!:RESCHEDULE_REQUESTED)|no contesta|ausente|no desea|ya no (lo )?quiere|rechaz|direcci[oó]n (incorrecta|errada|incompleta)/i;
+
+/** ¿El último reporte del courier es una novedad con la clienta? */
+export function isCustomerNovelty(reportedStatus: string | null | undefined): boolean {
+  return CUSTOMER_NOVELTY.test(reportedStatus ?? "");
+}
 
 export interface LimaStuckItem {
   orderId: string;
@@ -313,8 +346,7 @@ export function limaStuck(row: LimaPendingOrder, today: string): LimaStuckItem |
       return make("entregado_sin_cierre", `${courierDisplayName(row.ops.courierDelivered.courier)} lo reporta entregado.`);
     }
     if (isGfOutput(row)) return make("reparto_sin_resultado", riderDetail(row));
-    const status = row.ops?.reportedStatus ?? "";
-    if (CUSTOMER_NOVELTY.test(status)) return make("novedad_con_clienta", reportedDetail(row));
+    if (isCustomerNovelty(row.ops?.reportedStatus)) return make("novedad_con_clienta", reportedDetail(row));
     const courier = (row.ops?.liveCouriers.find((c) => !GF_COURIERS.has(c)) ?? row.courier ?? "").toLowerCase();
     return make("courier_sin_resultado", reportedDetail(row), courier === "tanders" ? TANDERS_THRESHOLD : undefined);
   }
@@ -338,8 +370,20 @@ export function limaStuckCounts(items: readonly LimaStuckItem[]): Record<LimaStu
   return counts;
 }
 
-/** El motivo que viaja por la URL (`trabado`), o «todos», o null si no se eligió. */
-export function stuckFilter(value: string | null): LimaStuckReason | "todos" | null {
+/**
+ * El motivo que viaja por la URL (`trabado`), o «todos», o null si no se eligió.
+ * Con `home`, solo los motivos de esa pantalla: un enlace guardado con un motivo
+ * que se mudó a Grupo GF Courier no filtra nada en Repro Lima (lo dice
+ * `stuckMovedTo`).
+ */
+export function stuckFilter(value: string | null, homes?: readonly LimaStuckHome[]): LimaStuckReason | "todos" | null {
   if (value === "todos") return "todos";
-  return value && RULE.has(value as LimaStuckReason) ? value as LimaStuckReason : null;
+  if (!value || !RULE.has(value as LimaStuckReason)) return null;
+  return !homes || homes.includes(RULE.get(value as LimaStuckReason)!.home) ? value as LimaStuckReason : null;
+}
+
+/** Un motivo de la URL que vive en otra pantalla: a dónde se fue, o null. */
+export function stuckMovedTo(value: string | null, homes: readonly LimaStuckHome[]): { reason: LimaStuckReason; home: LimaStuckHome } | null {
+  const rule = value ? RULE.get(value as LimaStuckReason) : undefined;
+  return rule && !homes.includes(rule.home) ? { reason: rule.reason, home: rule.home } : null;
 }

@@ -191,7 +191,7 @@ describe("la última llamada (F11)", () => {
     }));
     calls.push({ id: "call-last", case_id: "case-1", actor: "u-daysi", outcome: "no_contesta", channel: "whatsapp", occurred_at: "2026-10-12T14:55:00.000Z" });
     const { data } = await load(seed({ cases: [openCase({ call_count: 1001, no_answer_count: 1001 })], calls }));
-    expect(data.rows[0]!.lastCall).toEqual({ at: "2026-10-12T14:55:00.000Z", byName: "daysi", outcome: "no_contesta" });
+    expect(data.rows[0]!.lastCall).toEqual({ at: "2026-10-12T14:55:00.000Z", byName: "daysi", outcome: "no_contesta", note: null });
   });
 });
 

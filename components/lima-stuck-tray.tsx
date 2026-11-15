@@ -4,7 +4,12 @@
 // Preparación, Por despachar o En curso más de lo que deberían. Las cifras son
 // por motivo y filtran la lista (The Cifras Navegan Rule); cada fila dice qué
 // toca y de quién es, y abre la ficha del pedido. Solo lee: el motivo lo decide
-// `limaStuck` (lib/lima-stuck.ts) con las filas que ya trae Repro Lima.
+// `limaStuck` (lib/lima-stuck.ts) con las filas de Repro Lima.
+//
+// Desde el 15-11-2026 (owner) la bandeja vive en Grupo GF Courier → Despacho
+// del día con los motivos de las cajas y los motorizados de Grupo GF
+// (`reasons`, `stuckReasonsOf("grupo_gf")`). Los del equipo se ven dentro de
+// los bloques de Repro Lima.
 import { useMemo, useState, type MouseEvent } from "react";
 import { Badge, OpsButton, StatusCard, type BadgeTone } from "@/components/ops-ui";
 import { OrderLink, useOpenOrderDrawer } from "@/components/order-link";
@@ -22,7 +27,9 @@ import {
   type LimaStuckReason,
 } from "@/lib/lima-stuck";
 
-const OWNER_TONE: Record<LimaStuckOwner, BadgeTone> = { almacen: "teal", operaciones: "indigo", asesora: "orange" };
+/** El tono del responsable (DESIGN.md «Lima trabados»): Almacén, Operaciones, Asesora. */
+export const STUCK_OWNER_TONE: Record<LimaStuckOwner, BadgeTone> = { almacen: "teal", operaciones: "indigo", asesora: "orange" };
+const OWNER_TONE = STUCK_OWNER_TONE;
 const PAGE = 50;
 
 export type LimaStuckSelection = LimaStuckReason | "todos" | null;
@@ -36,7 +43,7 @@ function fromControl(event: MouseEvent): boolean {
   return Boolean((event.target as HTMLElement).closest("a,button"));
 }
 
-export function LimaStuckTray({ rows, today, selected, onSelect }: {
+export function LimaStuckTray({ rows, today, selected, onSelect, reasons, title = "Lima trabados", intro, footnote }: {
   /** Las filas de Repro Lima con sus filtros puestos (tienda, búsqueda, canal…). */
   rows: readonly LimaPendingOrder[];
   /** Día de Lima (`limaClock(now).day`). */
@@ -44,8 +51,20 @@ export function LimaStuckTray({ rows, today, selected, onSelect }: {
   /** El motivo elegido, «todos», o null con la lista cerrada. */
   selected: LimaStuckSelection;
   onSelect: (next: LimaStuckSelection) => void;
+  /** Solo estos motivos (la pantalla donde vive la bandeja); sin él, todos. */
+  reasons?: readonly LimaStuckReason[];
+  title?: string;
+  /** La primera frase con trabados. */
+  intro?: string;
+  /** Lo que va detrás del reparto por responsable. */
+  footnote?: string;
 }) {
-  const items = useMemo(() => limaStuckItems(rows, today), [rows, today]);
+  const items = useMemo(() => {
+    const all = limaStuckItems(rows, today);
+    if (!reasons) return all;
+    const allowed = new Set(reasons);
+    return all.filter((item) => allowed.has(item.reason));
+  }, [rows, today, reasons]);
   const counts = useMemo(() => limaStuckCounts(items), [items]);
   const byId = useMemo(() => new Map(rows.map((row) => [row.orderId, row])), [rows]);
   const owners = useMemo(() => {
@@ -58,12 +77,12 @@ export function LimaStuckTray({ rows, today, selected, onSelect }: {
   const visible = listed.slice(0, limit);
   const openDrawer = useOpenOrderDrawer();
   const open = (orderId: string) => openDrawer(orderId, "operar");
-  const reasons = LIMA_STUCK_RULES.filter((rule) => counts[rule.reason] > 0 || rule.reason === selected);
+  const shownRules = LIMA_STUCK_RULES.filter((rule) => (!reasons || reasons.includes(rule.reason)) && (counts[rule.reason] > 0 || rule.reason === selected));
 
   return (
     <section aria-labelledby="lima-stuck-title" className="space-y-3 rounded-lg bg-white p-4 shadow-control ring-1 ring-line">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <h3 id="lima-stuck-title" className="text-sm font-semibold text-ink-900">Lima trabados</h3>
+        <h3 id="lima-stuck-title" className="text-sm font-semibold text-ink-900">{title}</h3>
         <Badge tone={items.length ? "warn" : "ok"}>{items.length ? `${items.length.toLocaleString("es-PE")} trabados` : "Ninguno"}</Badge>
         {items.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
@@ -75,17 +94,17 @@ export function LimaStuckTray({ rows, today, selected, onSelect }: {
       </div>
       <p className="text-sm text-ink-700" aria-live="polite">
         {items.length
-          ? <>Quietos en Preparación, Por despachar o En curso más de lo que deberían.{" "}
+          ? <>{intro ?? "Quietos en Preparación, Por despachar o En curso más de lo que deberían."}{" "}
             <span className="text-ink-500">
               {(Object.keys(owners) as LimaStuckOwner[]).filter((o) => owners[o] > 0).map((o) => `${LIMA_STUCK_OWNER_LABEL[o]} ${owners[o].toLocaleString("es-PE")}`).join(" · ")}.
-              {" "}Los días cuentan de lunes a sábado; Por reprogramar y el cierre tienen su propia cola.
+              {" "}{footnote ?? "Los días cuentan de lunes a sábado; Por reprogramar y el cierre tienen su propia cola."}
             </span></>
           : "Ningún pedido de Lima está trabado en Preparación, Por despachar o En curso con estos filtros."}
       </p>
 
-      {reasons.length > 0 && (
+      {shownRules.length > 0 && (
         <div role="group" aria-label="Trabados por motivo" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto">
-          {reasons.map((rule) => (
+          {shownRules.map((rule) => (
             <StatusCard
               key={rule.reason}
               label={rule.label}
