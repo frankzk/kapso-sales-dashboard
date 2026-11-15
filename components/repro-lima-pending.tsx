@@ -15,7 +15,7 @@ import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "
 import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { AGENDA_ORIGIN_LABEL, agendaDayText, classifyLimaRows, courierNowText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { AGENDA_ORIGIN_LABEL, agendaDayText, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
@@ -121,8 +121,8 @@ function NextStep({ row, repro, cls, stuck, today, now }: { row: LimaPendingOrde
   );
 }
 
-/** «Fecha agendada»: el día de la Agenda y de dónde sale; con el courier y sin día por delante, lo dice. */
-function AgendaCell({ cls, repro, today }: { cls: LimaRowClass; repro?: ReproRow; today: string }) {
+/** «Fecha agendada»: el día de la Agenda y de dónde sale; con el courier y sin día por delante, la fecha de su ruta. */
+function AgendaCell({ row, cls, repro, today }: { row: LimaPendingOrder; cls: LimaRowClass; repro?: ReproRow; today: string }) {
   // Ruta vencida sin reporte (owner, 15-11-2026): el día en que salió, como un no entregado.
   if (cls.noReport) {
     return (
@@ -132,7 +132,16 @@ function AgendaCell({ cls, repro, today }: { cls: LimaRowClass; repro?: ReproRow
       </div>
     );
   }
-  if (!cls.agenda && cls.courier) return <p className="text-[13px] text-ink-500">Con el courier</p>;
+  // Con el courier y sin día por delante: la fecha de la ruta del courier (owner, 15-11-2026).
+  const route = !cls.agenda ? courierRouteText(row, cls, today) : null;
+  if (route) {
+    return (
+      <div>
+        <p className={cn("whitespace-nowrap text-sm font-medium tabular-nums", route.overdue ? "text-warn-fg" : "text-ink-900")}>{route.day}</p>
+        <p className="whitespace-nowrap text-xs text-ink-500">{route.detail}</p>
+      </div>
+    );
+  }
   const overdue = Boolean(cls.agendaDay && cls.agendaDay < today);
   const origin = cls.agendaOrigin;
   return (
@@ -340,7 +349,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
     <>
       <div className="hidden border-t border-line xl:block">
         <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-wash [&_th]:shadow-[inset_0_-1px_0_var(--color-line),inset_0_1px_0_var(--color-line)]">
-          <colgroup>{selection && <col className="w-10" />}<col className="w-[10rem]" /><col className="w-[15%]" /><col /><col className="w-[22%]" /><col className="w-[8.5rem]" /><col className="w-[7.5rem]" /></colgroup>
+          <colgroup>{selection && <col className="w-10" />}<col className="w-[10rem]" /><col className="w-[15%]" /><col /><col className="w-[22%]" /><col className="w-[8.5rem]" /><col className="w-[9rem]" /></colgroup>
           <thead><tr className="text-left text-xs font-semibold text-ink-500">{selection && (
             <th className="py-2.5 pl-4 pr-0">
               {selectableIds.length > 0 && (
@@ -365,7 +374,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
               <td className="space-y-0.5 px-3 py-4"><p className="truncate font-medium text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-[13px] tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
               <td className="px-3 py-4"><WhatHappens row={row} repro={repro} today={today} /></td>
               <td className="px-3 py-4">{cls && <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />}</td>
-              <td className="px-3 py-4">{cls && <AgendaCell cls={cls} repro={repro} today={today} />}</td>
+              <td className="px-3 py-4">{cls && <AgendaCell row={row} cls={cls} repro={repro} today={today} />}</td>
               <td className="px-4 py-4"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
             </tr>;
           })}</tbody>
@@ -393,7 +402,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
           {cls && (
             <div className="grid gap-2 border-t border-line pt-2 sm:grid-cols-[minmax(0,1fr)_auto]">
               <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />
-              <AgendaCell cls={cls} repro={repro} today={today} />
+              <AgendaCell row={row} cls={cls} repro={repro} today={today} />
             </div>
           )}
           {repro && <ClaimBadge row={repro} />}

@@ -6620,6 +6620,58 @@ cambia la etapa del Master ni `MOM_RESOLUTION_VERSION`, y no necesita migración
   «Llamar después» en su paso, por la hora; «Más de 30 días» dentro de Sacar a
   reparto; cada quien toma el pedido con «Atender» (candado).
 
+**Quinta vuelta: lo que vuelve, la fecha de la ruta, los trabados dentro de su
+paso, la guía automática de mañana y «No se entregó» (owner, 15-11-2026).**
+«Si con el courier incluye los que son retornando, esos deberían estar en no
+entregados», «tienes que figurar la fecha de por qué está con el courier, de la
+ruta del courier», «estos 255 en ruta, ¿cuándo estuvieron en ruta?» y sus
+respuestas: trabados dentro de cada paso, «Mañana sin guía» informativo si la
+automática está en Activo, el botón «No se entregó» con captura obligatoria
+como hoy, en otros couriers pedir el reporte al courier, «Con el courier» se
+queda con su nombre y «Para desarmar y cerrar» sigue solo como chapa. No crea
+estados, no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
+- **Retornando es un no entregado.** Lo que el courier devuelve (en retorno,
+  retorno solicitado o `RETURNING`) y no tiene otra tarea va a **No
+  entregados**, con el filtro de adentro **«Retornando»**; la fila dice «Lo
+  está devolviendo Aliclik: llama a la clienta y acuerda el nuevo día (Atender);
+  sale otra vez cuando llegue al almacén.». «Con el courier» queda con Guía
+  creada y En ruta, que suman su cifra.
+- **La fecha de la ruta** (`courierRouteText`). Lo que lleva un courier sin un
+  día por delante dice en «Fecha agendada» el día de su ruta: con guía, el
+  recojo de Aliclik o el día pedido a GF Courier («Vencido · vie 13/11 · Recojo
+  de Aliclik», «Hoy · Sale con GF Courier»; sin día, «Guía creada · Sin día del
+  courier»); en ruta o retornando, el día en que salió («Hoy · En ruta», «jue
+  12/11 · Retornando»). La celda de «Con el courier» dice cuántos están en ruta
+  hoy y cuántos son de la ruta anterior (`enRutaHoy`): con la regla de la ruta
+  vencida, «En ruta» solo puede ser de hoy o del día de reparto anterior.
+- **Los trabados viven dentro de su paso.** Cada paso dice «N trabados» en
+  `warn` en su celda y, elegido, lleva el filtro «Trabados» en su pie (los de ese
+  paso, lo que más lleva primero; `atencion=<paso>&trabado=todos`). Sale la
+  píldora «Trabados» de arriba y su fila «Trabados por motivo»: el motivo y el
+  siguiente paso los dice cada fila. Un enlace guardado con `trabado=<motivo>`
+  sigue abriendo ese motivo.
+- **«Mañana sin guía» y la guía automática** (`loadGfAutoActiveStores`,
+  `autoGuide`). En una tienda con GF Courier por API y la guía GF automática en
+  Activo, lo que sale mañana en Preparación · Por generar rótulo sin acuerdo de
+  Repro Lima (lo que toma la pasada, `gfAutoSkip`) no alarma: Mañana dice «N
+  con guía · M las crea la automática · K sin guía» y la alerta cuenta solo los
+  que la automática no cubre. La fila: «Sale mañana: la guía GF automática la
+  crea mañana en la mañana.». Si la lectura falla, alarma como antes.
+- **«No se entregó»** (`loadNoEntregoStop`, `components/repro-lima-no-entrego.tsx`).
+  En «Sin reporte de la ruta» del **reparto propio de Grupo GF**
+  (`limaOwnRoute`: sin guía de otro courier), cuando la clienta confirma que no
+  lo recibió, el equipo registra el no entregado por el motorizado con el
+  camino único de Coordinación (`reportStop`, delegado): el motivo del catálogo
+  (`NON_DELIVERY_REASONS`), una nota y **la captura obligatoria** del chat o de
+  la llamada con la clienta (owner: «captura obligatoria, como hoy»). La parada
+  debe estar en una ruta en curso y quien la registra necesita
+  `routes.report_others` (sin él, el botón no sale). Con el reporte, el Master
+  lo pasa a «Por reprogramar Lima» como cualquier no entregado del motorizado
+  (v1.14); el motorizado igual tiene que devolver el paquete. En las guías de
+  otros couriers (GF Courier por API, Aliclik, Tanders) no hay botón: la fila
+  dice «Pide el reporte a GF Courier: el pedido cambia cuando el courier lo
+  reporte.».
+
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
 son puras (`lib/repro-lima-blocks.ts`) y usan lo que Repro Lima ya lee

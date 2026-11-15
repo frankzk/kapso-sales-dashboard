@@ -55,11 +55,12 @@ export const LIMA_FLOW: readonly { key: LimaStep; why: string }[] = [
 /** Lo que vive dentro de cada paso: sus filtros (el pie de la tarjeta) y cómo se dice en su celda. */
 const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c: LimaBoardCounts) => string | null }>> = {
   no_entregados: {
-    keys: ["reintentos_aliclik", "sin_reporte"],
+    keys: ["reintentos_aliclik", "retornando", "sin_reporte"],
     note: (c) => {
       const parts = [
         c.sub.reintentos_aliclik ? `${fmt(c.sub.reintentos_aliclik)} reintentos Aliclik` : null,
-        c.sub.sin_reporte ? `${fmt(c.sub.sin_reporte)} sin reporte de la ruta` : null,
+        c.courier.retornando ? `${fmt(c.courier.retornando)} retornando` : null,
+        c.sub.sin_reporte ? `${fmt(c.sub.sin_reporte)} sin reporte` : null,
       ].filter(Boolean);
       return parts.length ? parts.join(" · ") : null;
     },
@@ -73,8 +74,14 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
     },
   },
   con_courier: {
-    keys: ["guia_creada", "en_ruta", "retornando"],
-    note: (c) => `${fmt(c.courier.en_ruta)} en ruta · ${fmt(c.courier.guia_creada)} con guía`,
+    keys: ["guia_creada", "en_ruta"],
+    // La fecha de la ruta (owner, 15-11-2026): cuántos salieron hoy y cuántos son de la ruta anterior.
+    note: (c) => {
+      const antes = c.courier.en_ruta - c.enRutaHoy;
+      const ruta = [c.enRutaHoy ? `${fmt(c.enRutaHoy)} hoy` : null, antes ? `${fmt(antes)} anterior` : null].filter(Boolean).join(" · ");
+      const parts = [ruta ? `En ruta: ${ruta}` : null, c.courier.guia_creada ? `${fmt(c.courier.guia_creada)} con guía` : null].filter(Boolean);
+      return parts.length ? parts.join(" · ") : null;
+    },
   },
   por_cerrar: {
     keys: ["esperan_anulacion"],
@@ -93,6 +100,18 @@ const COURIER = new Map(LIMA_COURIER_CARDS.map((card) => [card.key, card]));
 
 function fmt(n: number): string {
   return n.toLocaleString("es-PE");
+}
+
+/** El contexto de un paso con sus trabados al final, en `warn-fg`: «1 agendado · 2 sin fecha · 3 trabados». */
+function withStuck(note: ReactNode, n: number): ReactNode {
+  if (!n) return note;
+  return (
+    <>
+      {note}
+      {note ? " · " : null}
+      <span className="font-semibold text-warn-fg">{fmt(n)} {n === 1 ? "trabado" : "trabados"}</span>
+    </>
+  );
 }
 
 /** Lo que dice un filtro de adentro y cuántos tiene. */
@@ -259,7 +278,7 @@ function SumBar({ counts, total, active }: { counts: LimaBoardCounts; total: num
   );
 }
 
-export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = true }: {
+export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = true, stuck }: {
   counts: LimaBoardCounts;
   today: string;
   /** El filtro elegido; «todos» sin ninguno. */
@@ -267,6 +286,11 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
   onPick: (key: LimaBoardKey) => void;
   /** «Hoy sin guía» es alerta desde las 10:30 de Lima (`hoySinGuiaAlert`); antes se cuenta sin alarmar. */
   guideAlert?: boolean;
+  /**
+   * Los trabados (§9.6) viven dentro de su paso (owner, 15-11-2026): cuántos
+   * tiene cada paso, si el filtro «Trabados» está puesto y cómo se elige.
+   */
+  stuck?: { byStep: Readonly<Record<LimaStep, number>>; active: boolean; onPick: (step: LimaStep) => void };
 }) {
   const agenda = agendaCards(today);
   const flowTotal = LIMA_FLOW.reduce((sum, step) => sum + counts.step[step.key], 0);
@@ -277,6 +301,9 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
   const inside = step ? INSIDE[step] : undefined;
   const stepCard = step ? STEP.get(step) : undefined;
   const sinGuia = { hoy: counts.sub.hoy_sin_guia, manana: counts.sub.manana_sin_guia } as Record<string, number>;
+  const stuckIn = (key: LimaStep) => stuck?.byStep[key] ?? 0;
+  const stepStuck = step ? stuckIn(step) : 0;
+  const stuckOn = Boolean(stuck?.active && step);
 
   return (
     <div className="space-y-7">
@@ -292,7 +319,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
           label="Flujo del día"
           header={<SumBar counts={counts} total={flowTotal} active={step} />}
           cols="grid-cols-2 sm:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,0.66fr)_minmax(0,0.66fr)]"
-          footer={stepCard && inside ? (
+          footer={stepCard && (inside || stepStuck > 0 || stuckOn) ? (
             <>
               <span className="text-[13px] text-ink-600">
                 Dentro de <b className="font-semibold text-ink-900">{stepCard.label}</b>:
@@ -300,23 +327,33 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
               <ChoiceChip
                 label={`Todos (${stepCard.label.toLowerCase()})`}
                 count={counts.step[stepCard.key]}
-                active={active === stepCard.key}
+                active={active === stepCard.key && !stuckOn}
                 title={stepCard.hint}
-                onClick={() => { if (active !== stepCard.key) onPick(stepCard.key); }}
+                onClick={() => { if (active !== stepCard.key || stuckOn) onPick(stepCard.key); }}
               />
-              {inside.keys.map((key) => {
+              {(inside?.keys ?? []).map((key) => {
                 const chip = insideChip(key, counts);
                 return (
                   <ChoiceChip
                     key={key}
                     label={chip.label}
                     count={chip.count}
-                    active={active === key}
+                    active={active === key && !stuckOn}
                     title={chip.hint}
-                    onClick={() => onPick(active === key ? stepCard.key : key)}
+                    onClick={() => onPick(active === key && !stuckOn ? stepCard.key : key)}
                   />
                 );
               })}
+              {stuck && (stepStuck > 0 || stuckOn) && (
+                <AttentionPill
+                  icon={IconAlert}
+                  label="Trabados"
+                  count={stepStuck}
+                  active={stuckOn}
+                  hint="Pedidos de este paso quietos más de lo que deberían, lo que más lleva primero (§9.6). La fila dice el motivo y el siguiente paso."
+                  onClick={() => stuck.onPick(stepCard.key)}
+                />
+              )}
             </>
           ) : null}
         >
@@ -341,7 +378,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                 className={folded ? (flow.key === "con_courier" ? "sm:shadow-[inset_1px_0_0_var(--color-line-strong)]" : undefined) : "col-span-2 sm:col-span-1"}
                 lead={folded ? undefined : <StepNumber n={i + 1} active={isActive} />}
                 badge={start === flow.key && !isActive ? <Badge tone="brand" className="shrink-0">Empieza aquí</Badge> : null}
-                note={INSIDE[flow.key]?.note(counts) ?? flow.why}
+                note={withStuck(INSIDE[flow.key]?.note(counts) ?? flow.why, stuckIn(flow.key))}
               />
             );
           })}
@@ -412,8 +449,15 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                 stack
                 note={missing === undefined || value === 0 ? undefined : (
                   <>
-                    {fmt(value - missing)} con guía ·{" "}
-                    <span className={alarm ? "font-semibold text-warn-fg" : undefined}>{fmt(missing)} sin guía</span>
+                    {fmt(value - missing - (card.key === "manana" ? counts.autoGuideManana : 0))} con guía
+                    {/* La guía de mañana que creará la pasada automática no es una alerta (owner, 15-11-2026). */}
+                    {card.key === "manana" && counts.autoGuideManana > 0 ? ` · ${fmt(counts.autoGuideManana)} ${counts.autoGuideManana === 1 ? "la" : "las"} crea la automática` : null}
+                    {missing > 0 || card.key !== "manana" || !counts.autoGuideManana ? (
+                      <>
+                        {" · "}
+                        <span className={alarm ? "font-semibold text-warn-fg" : undefined}>{fmt(missing)} sin guía</span>
+                      </>
+                    ) : null}
                   </>
                 )}
               />
