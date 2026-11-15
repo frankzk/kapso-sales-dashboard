@@ -85,6 +85,23 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 15-11-2026 · Repro Lima: seis pasos que suman el total (dos plegados), Agenda Hoy/Mañana/Después con o sin guía y «Sacar a reparto» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados, permisos ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- **El flujo suma el total:** Novedad del courier, Llamar después, No entregados y Sacar a reparto, y plegados al final,
+  más delgados y en gris, Con el courier y Por cerrar. Cada pedido está en un solo paso; una barra de reparto encima
+  cierra con «= total pedidos».
+- **«Sacar a reparto»** reemplaza a «Confirmar primer despacho»: todo lo que falta que salga, con día o sin él.
+- **Agenda:** Hoy, Mañana, Después (de martes en adelante) y Sin fecha. Hoy y Mañana dicen cuántos tienen guía o rótulo
+  y cuántos no, con las alertas «Hoy sin guía» y «Mañana sin guía».
+- Los enlaces de antes (`atencion=primer_despacho`, `por_cerrar`, un día guardado) abren lo más cercano.
+
+Verificar en Repro Lima:
+1. Los seis pasos suman el total de arriba, y la barra cierra con el mismo número.
+2. La Agenda muestra cuatro cajones y, en Hoy y Mañana, «N con guía · M sin guía».
+3. «Hoy sin guía» filtra los que salen hoy sin guía ni rótulo.
+
 ### 15-11-2026 · Repro Lima: separaciones y jerarquía más claras al estilo Stripe (sin migración, DESIGN.md)
 
 Sin migración. Solo cambia la presentación:

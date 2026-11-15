@@ -1,7 +1,7 @@
 "use client";
 
-// La lista de Repro Lima (MOM §9.5): una sola, con los tres bloques de arriba
-// como filtros (owner, 15-11-2026). Cada fila dice de un vistazo el pedido, la
+// La lista de Repro Lima (MOM §9.5): una sola, con el flujo y la Agenda de
+// arriba como filtros (owner, 15-11-2026). Cada fila dice de un vistazo el pedido, la
 // clienta (teléfono y dirección), qué pasa (la etapa, el courier y su último
 // estado, el fallo, el acuerdo y la última nota), el próximo paso, la fecha
 // agendada y «Agendar» y «Atender».
@@ -308,7 +308,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
   /** La hora de Lima para «Llamar hoy 15:00». */
   now?: Date;
-  /** Los tres bloques de cada fila (`classifyLimaRows`). */
+  /** El paso, el día y el courier de cada fila (`classifyLimaRows`). */
   classes?: ReadonlyMap<string, LimaRowClass>;
   /** Los trabados del equipo (§9.6), por pedido. */
   stuck?: ReadonlyMap<string, LimaStuckItem>;

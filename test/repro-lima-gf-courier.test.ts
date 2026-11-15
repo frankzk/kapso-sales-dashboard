@@ -299,7 +299,7 @@ describe("la Agenda conserva el día de un acuerdo con GF Courier y su guía", (
   it("con el caso abierto: el día acordado, «Acordado con la clienta · GF Courier»", () => {
     const c = { orderId: "o1", list: "programados" as const, agreement: { agreedOn: MARTES, courier: "gf_courier", courierName: "GF Courier" } };
     expect(limaScheduledFor(row(), c)).toBe(MARTES);
-    expect(classifyLimaRow(row(), c, TODAY, WINDOW)).toMatchObject({ agenda: MARTES, agendaDay: MARTES, agendaOrigin: "acuerdo", courier: "guia_creada", agreed: true });
+    expect(classifyLimaRow(row(), c, TODAY, WINDOW)).toMatchObject({ step: "con_courier", guide: true, agenda: "despues", agendaDay: MARTES, agendaOrigin: "acuerdo", courier: "guia_creada", agreed: true });
     expect(agendarPath(row(), c, { canScheduleDispatch: true })).toMatchObject({ kind: "acuerdo", current: MARTES, courierName: "GF Courier" });
   });
 
@@ -307,7 +307,7 @@ describe("la Agenda conserva el día de un acuerdo con GF Courier y su guía", (
     const r = row({ courierPickup: { courier: "gf_courier", date: MARTES } });
     expect(limaScheduledFor(r)).toBe(MARTES);
     const cls = classifyLimaRow(r, undefined, TODAY, WINDOW);
-    expect(cls).toMatchObject({ agenda: MARTES, agendaDay: MARTES, agendaOrigin: "recojo", courier: "guia_creada" });
+    expect(cls).toMatchObject({ step: "con_courier", guide: true, agenda: "despues", agendaDay: MARTES, agendaOrigin: "recojo", courier: "guia_creada" });
     expect(limaNextStep(r, undefined, cls, TODAY, lima(TODAY, "10:00"))).toBe("Lo recoge GF Courier el mar 17/11.");
   });
 });

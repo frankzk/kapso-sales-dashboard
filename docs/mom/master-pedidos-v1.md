@@ -6505,6 +6505,72 @@ tipo de letra Inter». Cambia la presentación, no las reglas (`limaTaskOf`,
   separadas por líneas finas. En el teléfono, la Agenda va de dos en dos y el
   courier de tres en tres.
 
+**Tercera vuelta: cinco pasos que suman el total (owner, 15-11-2026).** «Por
+Cerrar no lo necesito como tal. Lo del martes al viernes, ponlo dentro de
+Después. En Hoy y Mañana, mostrar cuáles tienen guía y cuáles no: los que no
+tienen guía generada son una alerta. Lo de confirmar primer despacho: tenemos
+que estar más preocupados en sacar todos los pedidos a reparto.» Y: «estos 5 no
+suman 1,438 pedidos»; «visualmente, en la barra superior principal, las etapas
+deben sumar el total. Quizás las etapas que no necesitamos, como la de Por
+Cerrar, las dejamos plegadas para que no interrumpan visualmente, o con un
+cuadrante más delgado». Reemplaza lo que digan de los pasos, la Agenda y «En
+manos del courier» la segunda vuelta y «La pantalla», abajo. No crea estados
+ni subetapas, no cambia `MOM_RESOLUTION_VERSION` ni la clasificación de la
+tarea (`limaTaskOf`), y no necesita migración:
+- **Los seis pasos son una partición** (`limaStepOf`, `LIMA_STEPS`): cada
+  pedido pendiente está en exactamente un paso, así que suman el total de
+  arriba. La tarea manda (`limaTaskOf`); sin tarea, lo que lleva un courier
+  está con el courier y lo demás, por sacar. En su orden:
+  1. **Novedad del courier** (la tarea);
+  2. **Llamar después** (la tarea);
+  3. **No entregados** (la tarea), con «Reintentos Aliclik» dentro;
+  4. **Sacar a reparto** (`por_sacar`, antes «Confirmar primer despacho»): todo
+     lo que todavía no salió y no lleva un courier, con día o sin él —lo
+     agendado que espera su guía o su rótulo, un no entregado con su nuevo día
+     acordado, lo que nunca salió—. Dentro, «Sin fecha» y «Más de 30 días». En
+     la lista va lo que sale hoy (con lo vencido), mañana y después, y al final
+     lo que no tiene día, del más antiguo al más reciente. La meta es que salga
+     todo: agendar lo que no tiene día y generar la guía de lo que sale.
+  5. **Con el courier**, plegado (antes el bloque «En manos del courier»): con
+     la guía viva de un courier, en la calle o retornando. Dentro, Guía
+     creada, En ruta y Retornando. Solo seguimiento.
+  6. **Por cerrar**, plegado (la tarea): el courier lo dio por entregado y
+     falta validar el cobro, o se cerró con «Desarmar y cerrar» y espera que la
+     tienda anule la venta (dentro, «Esperan anulación»). No es trabajo del
+     equipo de Lima.
+- **Plegados** (`LIMA_FOLDED_STEPS`): «Con el courier» y «Por cerrar» van al
+  final, en un cuadrante más delgado y en gris, sin número de paso: cuentan para
+  que la suma cierre sin competir con el trabajo (pasos 1 a 4, numerados).
+  «Empieza aquí» marca el primer paso del trabajo con pedidos.
+- **La barra de reparto.** Encima de los pasos, una barra con un tramo por
+  paso, de ancho proporcional a su cifra y en el mismo orden, cierra con «=
+  1,438 pedidos»: la suma se ve. Los tramos del trabajo van en azul y los
+  plegados en gris; con un paso elegido, su tramo se marca.
+- **La Agenda tiene cuatro cajones** (`agendaKeyOf`, `AGENDA_NAMED_DAYS = 1`):
+  **Hoy** (con lo vencido), **Mañana** (el próximo día de reparto: el sábado,
+  el lunes, con el domingo dentro; se rotula «Mañana · Lun 16» cuando es
+  literalmente mañana y con su día si no), **Después** (de martes a viernes y
+  más allá) y **Sin fecha** (lo de «Sacar a reparto» que no tiene día). Entra lo
+  que tiene día —sin courier, siempre; con courier, solo con un día de hoy en
+  adelante— y lo que falta sacar sin día. **No suma el total**: un no
+  entregado sin acuerdo o lo que el courier lleva sin día por delante no tienen
+  cajón, y la pantalla lo dice. «Agendar» sigue ofreciendo hoy y los cinco
+  próximos días de reparto (`AGENDAR_QUICK_DAYS`).
+- **Con guía o sin guía.** Un pedido tiene guía (`guide`) si tiene la guía viva
+  de un courier, ya lo dio por entregado, o su subetapa ya no es «Por generar
+  rótulo» ni «Por reprogramar Lima» (tiene el rótulo de Grupo GF). Hoy y
+  Mañana dicen «N con guía · M sin guía»; los sin guía son una alerta con su
+  filtro, **«Hoy sin guía»** y **«Mañana sin guía»**, en el pie de la Agenda. El
+  próximo paso de la fila lo dice: «Sale hoy y no tiene guía ni rótulo: créala
+  desde la Mesa de ruta para que salga.», «Debía salir el jue 12/11 y no tiene
+  guía ni rótulo: créala hoy desde la Mesa de ruta o reagéndalo.» o «Sale
+  mañana y no tiene guía ni rótulo: genérala hoy.». Con la guía GF automática
+  en Activo (§29.17) lo agendado para hoy sale con su guía en la mañana; lo que
+  queda sin guía es lo que la automática no tomó.
+- **Los enlaces de antes**: `atencion=primer_despacho` y `nunca_salieron` abren
+  Sacar a reparto; `por_cerrar` sigue abriendo Por cerrar; `programados_manana`,
+  Mañana; un día guardado (`2026-11-18`), su cajón de ahora.
+
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
 son puras (`lib/repro-lima-blocks.ts`) y usan lo que Repro Lima ya lee
