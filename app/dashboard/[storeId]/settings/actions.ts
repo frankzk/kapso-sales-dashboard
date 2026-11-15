@@ -35,6 +35,8 @@ import {
 import { metaInsightsRange, syncMetaInsightsHistory } from "@/lib/meta-insights-sync";
 import { gfApiBase, gfCourier } from "@/lib/gf-courier";
 import { loadGfStore } from "@/lib/gf-courier-guide";
+import { compareGfCatalog } from "@/lib/gf-courier-catalog";
+import { loadGfProducts, loadStoreCatalogForGf } from "@/lib/gf-courier-catalog-server";
 import { listProducts } from "@/lib/aliclik";
 import { loadSkuCatalogSource, syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { catalogSkusPhrase } from "@/lib/catalog-source";
@@ -568,6 +570,30 @@ export async function testGfCourierConnection(_prev: SettingsState, formData: Fo
   return missing.length
     ? { error: `El token es válido (${me.data.business_name ?? me.data.merchant_id}) pero le faltan permisos: ${missing.join(", ")}. Pide a GF una credencial con ellos.` }
     : { notice: `Conexión correcta con GF Courier · comercio ${me.data.business_name ?? me.data.merchant_id}.` };
+}
+
+/**
+ * GF Courier (MOM §29.17): compara el catálogo vivo de la tienda con su catálogo en GF. Solo lectura en ambos lados.
+ * Dice qué SKU faltan en GF (un pedido con ellos respondería SKU_NOT_FOUND) y cuáles GF tiene Agotados.
+ */
+export async function checkGfCatalog(_prev: SettingsState, formData: FormData): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const store = await loadGfStore(ctx.admin, storeId);
+  if (!store?.token) return { error: "Esta tienda no tiene token de GF Courier." };
+  const [local, gf] = await Promise.all([loadStoreCatalogForGf(ctx.admin, storeId), loadGfProducts(store.token)]);
+  if (!gf.ok) return { error: `GF Courier respondió: ${gf.message}` };
+  if (!local.rows.length) return { error: `No se pudo leer el catálogo de la tienda${local.problems.length ? `: ${local.problems.join(" ")}` : "."}` };
+  const c = compareGfCatalog(local.rows, gf.products);
+  const list = (rows: { sku: string; name: string }[]) => rows.slice(0, 8).map((r) => `${r.name} (${r.sku})`).join("; ") + (rows.length > 8 ? `; y ${rows.length - 8} más` : "");
+  const parts = [
+    c.missingInGf.length ? `Faltan en GF ${c.missingInGf.length} de ${local.rows.length} SKU: ${list(c.missingInGf)}. Descarga «solo los que faltan» e impórtalos en GF.` : `GF tiene los ${local.rows.length} SKU de la tienda.`,
+    c.outOfStock.length ? `Agotados en GF: ${list(c.outOfStock)}.` : "",
+    local.withoutSku.length ? `${local.withoutSku.length} variantes sin SKU no se pueden pedir a GF.` : "",
+    local.problems.length ? "El catálogo de la tienda se leyó en parte." : "",
+  ].filter(Boolean).join(" ");
+  return c.missingInGf.length || c.outOfStock.length ? { error: parts } : { notice: parts };
 }
 
 /**
