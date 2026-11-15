@@ -17,9 +17,10 @@ export type RouteKey =
   | "tanders"
   | "axel"
   | "urpi"
-  | "propio";
+  | "propio"
+  | "gf_courier";
 
-export type RouteAction = "aliclik" | "swayp" | "shalom" | "tanders" | "manual";
+export type RouteAction = "aliclik" | "swayp" | "shalom" | "tanders" | "gf_courier" | "manual";
 export type RouteAvailability = "available" | "warning" | "blocked";
 
 export interface RouteOutputSnapshot {
@@ -53,6 +54,8 @@ export interface RouteOutputSnapshot {
   outputCode?: string | null;
   /** Decide cuál se rellena cuando hay varias por definir: la más reciente. */
   outputNumber?: number | null;
+  /** El envío que cotizó el courier; la tarjeta de GF Courier lo dice junto a su guía. */
+  quotedCost?: number | null;
 }
 
 /**
@@ -73,6 +76,7 @@ export interface RouteBlockingOutput {
   courier: string;
   swaypState: number | null;
   reportedStatus: string | null;
+  quotedCost?: number | null;
 }
 
 export interface SwaypRouteCheck {
@@ -129,12 +133,27 @@ export interface OrderRoutePlan {
   candidates: RouteCandidate[];
 }
 
+/**
+ * GF Courier por API en la tienda del pedido (MOM §29.17).
+ *
+ * `enabled` es el interruptor de la tienda: con él encendido, GF Courier
+ * REEMPLAZA al reparto propio de Grupo GF —«Tomar» lo rechaza—, así que la mesa
+ * deja de ofrecer Grupo GF y sugiere GF Courier. `blockedReason` dice por qué
+ * todavía no se puede crear la guía aunque esté encendido (servidor apagado,
+ * sin token).
+ */
+export interface GfCourierRouteCheck {
+  enabled: boolean;
+  blockedReason?: string | null;
+}
+
 export interface OrderRoutePlanInput {
   operation: OperationKind;
   outputs: readonly RouteOutputSnapshot[];
   paymentState?: string | null;
   swayp?: SwaypRouteCheck | null;
   grupoGfCourier?: GroupGfCourierRouteCheck | null;
+  gfCourier?: GfCourierRouteCheck | null;
   now?: Date;
 }
 
@@ -242,6 +261,7 @@ const ALL_ROUTE_ACTIONS: readonly RouteAction[] = [
   "swayp",
   "shalom",
   "tanders",
+  "gf_courier",
   "manual",
 ];
 
@@ -256,6 +276,7 @@ const LABELS: Record<RouteKey, string> = {
   // `propio` se conserva como token interno hasta migrar las rutas históricas.
   // En producto ya es un operador, no una excepción de cada tienda.
   propio: "Grupo GF Courier",
+  gf_courier: "GF Courier",
 };
 
 const ACTIONS: Record<RouteKey, RouteAction> = {
@@ -267,6 +288,7 @@ const ACTIONS: Record<RouteKey, RouteAction> = {
   axel: "manual",
   urpi: "manual",
   propio: "manual",
+  gf_courier: "gf_courier",
 };
 
 const OPERATION_LABEL: Record<OperationKind, string> = {
@@ -290,6 +312,7 @@ function courierKey(value: string): RouteKey | null {
   if (courier === "olva") return "olva";
   if (courier === "tanders") return "tanders";
   if (courier === "urpi") return "urpi";
+  if (courier === "gf_courier" || courier === "gf courier") return "gf_courier";
   return null;
 }
 
@@ -356,6 +379,25 @@ function groupGfCandidate(input: OrderRoutePlanInput, minute: number): RouteCand
     return candidate("propio", timing, check.reason, { availability: "blocked" });
   }
   return candidate("propio", timing, check.reason);
+}
+
+/**
+ * GF Courier por API (MOM §29.17). Con una guía GF viva no se pre-bloquea: la
+ * política de salidas la bloquea NOMBRANDO esa guía, que es lo que la tarjeta
+ * necesita para ofrecer «Anular guía».
+ */
+function gfCourierCandidate(input: OrderRoutePlanInput): RouteCandidate {
+  const blockedReason = hasActiveWith(input, "gf_courier") ? null : input.gfCourier?.blockedReason ?? null;
+  return candidate(
+    "gf_courier",
+    "Según la programación de GF",
+    blockedReason ?? "Guía por API: GF prepara, asigna motorizado, entrega y liquida.",
+    blockedReason ? { availability: "blocked" } : {},
+  );
+}
+
+function hasActiveWith(input: OrderRoutePlanInput, key: RouteKey): boolean {
+  return input.outputs.some((output) => courierKey(output.courier) === key && isActive(output));
 }
 
 function paymentAllowsAgency(paymentState: string | null | undefined): boolean {
@@ -447,6 +489,8 @@ function applyOutputPolicy(
         // consecutivo y obligaba a armar otra caja para el mismo paquete.
         : route.key === "propio"
         ? `${route.label} ya tiene una salida activa en este pedido${blocking.outputCode ? ` (${blocking.outputCode})` : ""}. Si no se entregó, se reprograma con esa misma salida desde Despacho del día («Desde la lista»).`
+        : route.key === "gf_courier"
+        ? "GF Courier ya tiene la guía de este pedido. GF solo la anula antes de prepararla; después sigue su estado en «Salidas y guías»."
         : route.key === "shalom"
         ? canRegisterShalomReplacement
           ? "Shalom no reconoce la guía activa. Si la caja salió con otra guía, usa «Ya la creé en Shalom Pro» para registrar la que la reemplaza."
@@ -462,6 +506,7 @@ function applyOutputPolicy(
         courier: blocking.courier,
         swaypState: blocking.swaypState ?? null,
         reportedStatus: blocking.reportedStatus ?? null,
+        ...(blocking.quotedCost != null ? { quotedCost: blocking.quotedCost } : {}),
       },
       canRegisterShalomReplacement,
     };
@@ -580,7 +625,11 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
     );
   }
   if (input.outputs.length >= MAX_OUTPUTS_PER_ORDER) {
-    warnings.push(`Se alcanzó el límite máximo de ${MAX_OUTPUTS_PER_ORDER} salidas por pedido.`);
+    warnings.push(
+      input.gfCourier?.enabled
+        ? `Se alcanzó el límite de ${MAX_OUTPUTS_PER_ORDER} salidas por pedido; solo GF Courier admite otra.`
+        : `Se alcanzó el límite máximo de ${MAX_OUTPUTS_PER_ORDER} salidas por pedido.`,
+    );
   }
 
   const hasFailedAliclik = input.outputs.some(
@@ -599,16 +648,40 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
     // Tanders deja de crear guías y Aliclik entra a Lima, solo con AUTOECOM
     // (26-10-2026, decisión del owner, MOM §9 «Aliclik en Lima»): ocupa el
     // lugar de Tanders detrás de Grupo GF.
-    const first = input.grupoGfCourier?.eligible && minute <= groupCutoff ? "propio" : "aliclik";
-    routes = [
-      { ...groupGf, recommended: first === "propio" && groupGf.availability !== "blocked" },
+    const aliclik = (recommended: boolean) =>
       candidate(
         "aliclik",
         "Según la cotización de Aliclik",
         "Aliclik con AUTOECOM: guía y rótulo de Aliclik.",
-        { recommended: first === "aliclik" },
-      ),
-      swaypCandidate(input, false),
+        { recommended },
+      );
+    let lead: RouteCandidate[];
+    if (input.gfCourier?.enabled) {
+      // GF Courier por API reemplaza al reparto propio en esta tienda (MOM
+      // §29.17, owner 15-11-2026: «debería estar ahí, junto a todas las opciones
+      // logísticas»). Va primero y sugerido; Grupo GF ya no toma sus pedidos, así
+      // que solo aparece si el pedido conserva una salida suya viva, para
+      // nombrarla.
+      const gf = gfCourierCandidate(input);
+      lead = [
+        { ...gf, recommended: gf.availability !== "blocked" },
+        aliclik(gf.availability === "blocked"),
+        swaypCandidate(input, false),
+        ...(hasActiveWith(input, "propio") ? [candidate("propio", groupGf.timing, groupGf.reason)] : []),
+      ];
+    } else {
+      const first = input.grupoGfCourier?.eligible && minute <= groupCutoff ? "propio" : "aliclik";
+      lead = [
+        { ...groupGf, recommended: first === "propio" && groupGf.availability !== "blocked" },
+        aliclik(first === "aliclik"),
+        swaypCandidate(input, false),
+        // Una guía GF viva de cuando la tienda tenía la API encendida: su
+        // tarjeta la nombra y deja anularla.
+        ...(hasActiveWith(input, "gf_courier") ? [gfCourierCandidate(input)] : []),
+      ];
+    }
+    routes = [
+      ...lead,
       // Plegados en «Otros couriers»: siguen disponibles, no se sugieren.
       candidate(
         "axel",
@@ -652,6 +725,11 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
         input.paymentState,
       ),
     ];
+  }
+
+  if (operation !== "lima" && hasActiveWith(input, "gf_courier")) {
+    // GF Courier atiende Lima, pero una guía suya viva se nombra donde sea.
+    routes = [...routes, gfCourierCandidate(input)];
   }
 
   routes = routes.map((route) => applyOutputPolicy(route, input, operation));

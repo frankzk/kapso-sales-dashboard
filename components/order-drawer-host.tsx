@@ -43,6 +43,9 @@ export interface OrderDrawerHostProps {
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  /** GF Courier en la Mesa de ruta (MOM §29.17). */
+  canCreateGfGuide?: boolean;
+  canCancelGfGuide?: boolean;
   /** «Atender» de Repro Lima en la ficha (`repro_lima.manage`, MOM §9.5): la pestaña «Repro Lima». */
   canAttendReproLima?: boolean;
   closurePermissions: {
@@ -105,6 +108,8 @@ function OrderDrawerHostInner({ stores, ...permissions }: OrderDrawerHostProps) 
       canEditCustomerName={permissions.canEditCustomerName}
       canCreateGuide={permissions.canCreateGuide}
       canCreateTandersGuide={permissions.canCreateTandersGuide}
+      canCreateGfGuide={permissions.canCreateGfGuide}
+      canCancelGfGuide={permissions.canCancelGfGuide}
       canCreateShalomGuide={permissions.canCreateShalomGuide}
       canAttendReproLima={permissions.canAttendReproLima}
       closurePermissions={permissions.closurePermissions}
