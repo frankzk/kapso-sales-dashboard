@@ -53,6 +53,16 @@ Verificar:
    pedido sin SKU deja «Guía GF automática no creada» en su historial y una sola alerta por Telegram, y la pasada de
    las 10:00 no lo repite.
 
+### 15-11-2026 · Repro Lima: separaciones y jerarquía más claras al estilo Stripe (sin migración, DESIGN.md)
+
+Sin migración. Solo cambia la presentación:
+- Los bloques tienen más aire y la ayuda va debajo de cada título.
+- Las cifras son más grandes.
+- La cabecera de la tabla va en gris claro.
+- Las filas tienen más relleno, y en cada celda una línea principal en negro y el detalle en gris.
+
+Verificar en Repro Lima que la lista se lee con la cabecera separada y una línea principal por celda.
+
 ### 15-11-2026 · Repro Lima: flujo del día numerado, total arriba, trabados como excepción y letra Inter (sin migración, MOM §9.5, DESIGN.md)
 
 Sin migración, sin crons ni variables nuevas.

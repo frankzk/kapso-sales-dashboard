@@ -70,14 +70,15 @@ function activeStep(active: LimaBoardKey): LimaTask | null {
   return parent && TASK.has(parent as LimaTask) ? (parent as LimaTask) : null;
 }
 
+/** Título del bloque con su total y, debajo, la ayuda: se leen juntos, como en Stripe. */
 function BlockHead({ id, title, total, unit, help }: { id: string; title: string; total: number; unit: string; help: string }) {
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
-      <div className="flex min-w-0 items-baseline gap-2">
-        <h2 id={id} className="text-[15px] font-semibold tracking-[-0.005em] text-ink-900">{title}</h2>
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <h2 id={id} className="text-base font-semibold tracking-[-0.01em] text-ink-900">{title}</h2>
         <span className="text-[13px] tabular-nums text-ink-500">{fmt(total)} {unit}</span>
       </div>
-      <p className="text-[13px] text-ink-500">{help}</p>
+      <p className="mt-0.5 text-[13px] leading-5 text-ink-500">{help}</p>
     </div>
   );
 }
@@ -110,7 +111,7 @@ function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, sta
       aria-pressed={active}
       title={hint}
       className={cn(
-        "group relative grid min-w-0 content-start items-center gap-x-3 gap-y-1 px-4 py-3 text-left transition-colors focus-visible:z-10 pointer-coarse:min-h-14",
+        "group relative grid min-w-0 content-start items-center gap-x-3 gap-y-1 px-4 py-3.5 text-left transition-colors focus-visible:z-10 pointer-coarse:min-h-14",
         stack ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-1",
         active ? "bg-brand-50" : "bg-white hover:bg-wash",
       )}
@@ -122,7 +123,7 @@ function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, sta
       </span>
       <span
         className={cn(
-          "text-xl font-semibold leading-7 tabular-nums tracking-[-0.01em]",
+          "text-[22px] font-semibold leading-7 tabular-nums tracking-[-0.015em]",
           stack ? "row-start-2" : "col-start-2 row-span-2 row-start-1 sm:col-start-1 sm:row-span-1 sm:row-start-2",
           active ? "text-brand-700" : dim ? "text-ink-300" : "text-ink-900",
         )}
@@ -183,8 +184,8 @@ export function ReproLimaBlocks({ counts, today, active, onPick }: {
   const stepCard = step ? TASK.get(step) : undefined;
 
   return (
-    <div className="space-y-5">
-      <section aria-labelledby="repro-flujo" className="space-y-2">
+    <div className="space-y-7">
+      <section aria-labelledby="repro-flujo" className="space-y-3">
         <BlockHead
           id="repro-flujo"
           title="Flujo del día"
@@ -241,8 +242,8 @@ export function ReproLimaBlocks({ counts, today, active, onPick }: {
         </Strip>
       </section>
 
-      <div className="grid gap-5 2xl:grid-cols-[minmax(0,8fr)_minmax(0,3fr)]">
-        <section aria-labelledby="repro-agenda" className="min-w-0 space-y-2">
+      <div className="grid gap-7 2xl:grid-cols-[minmax(0,8fr)_minmax(0,3fr)] 2xl:gap-5">
+        <section aria-labelledby="repro-agenda" className="min-w-0 space-y-3">
           <BlockHead
             id="repro-agenda"
             title="Agenda"
@@ -284,7 +285,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick }: {
           </Strip>
         </section>
 
-        <section aria-labelledby="repro-courier" className="min-w-0 space-y-2">
+        <section aria-labelledby="repro-courier" className="min-w-0 space-y-3">
           <BlockHead
             id="repro-courier"
             title="En manos del courier"
