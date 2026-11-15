@@ -44,8 +44,10 @@ import {
   boardCard,
   boardFilter,
   classifyLimaRows,
+  hoySinGuiaAlert,
   limaBoardCounts,
   limaBoardRows,
+  limaSuggestedDay,
   type LimaBoardKey,
 } from "@/lib/repro-lima-blocks";
 import { DISPATCH_DATE_MAX_DAYS } from "@/lib/dispatch-date";
@@ -255,7 +257,17 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const path = pathOf(row);
     return (
       <>
-        {path.kind && <AgendarButton row={row} path={path} today={today} size={size} onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }} />}
+        {path.kind && (
+          <AgendarButton
+            row={row}
+            path={path}
+            today={today}
+            size={size}
+            // Sin día, llega elegido el que propone Kapta: el equipo lo confirma (owner, 15-11-2026).
+            suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}
+            onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }}
+          />
+        )}
         <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>
       </>
     );
@@ -365,6 +377,18 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     refresh();
   }
 
+  // «Kapta propone, el equipo confirma» (owner, 15-11-2026): en «Sin fecha» y en
+  // «Sacar a reparto», un toque elige los que se pueden agendar y deja el
+  // próximo día de reparto puesto en «Mover a…». Nada se mueve hasta confirmar.
+  const suggestedDay = limaSuggestedDay(today);
+  const proposals = !stuck && !retriesOnly && (key === "sin_fecha" || key === "por_sacar")
+    ? inQueue.filter((row) => classes.get(row.orderId)?.agenda === "sin_fecha" && pathOf(row).kind !== null)
+    : [];
+  function pickProposals() {
+    setPicked(new Set(proposals.map((row) => row.orderId)));
+    setMoveDay(suggestedDay);
+  }
+
   const card = stuck ? null : boardCard(key, today);
   const listTitle = stuck
     ? stuck === "todos" ? "Trabados" : `Trabados · ${limaStuckRule(stuck).label}`
@@ -446,7 +470,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <StatusCard label={LIMA_SUB_FILTERS.reintentos_aliclik.label} value={counts.sub.reintentos_aliclik} hint={LIMA_SUB_FILTERS.reintentos_aliclik.hint} active onClick={() => {}} />
         </div>
       ) : (
-        <ReproLimaBlocks counts={counts} today={today} active={stuck ? "todos" : key} onPick={chooseKey} />
+        <ReproLimaBlocks counts={counts} today={today} active={stuck ? "todos" : key} onPick={chooseKey} guideAlert={hoySinGuiaAlert(now)} />
       )}
 
       {moved && (
@@ -493,6 +517,17 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
               <p className="mt-0.5 max-w-[80ch] text-[13px] leading-5 text-ink-500">{listHelp}</p>
             </div>
             {filtered && <OpsButton variant="ghost" size="sm" onClick={() => chooseKey("todos")} className="pointer-coarse:h-11">Ver todos</OpsButton>}
+          </div>
+        )}
+        {proposals.length > 0 && (
+          <div role="note" className="mx-4 mt-3 flex flex-col gap-2 rounded-md bg-brand-50 px-3 py-2.5 ring-1 ring-inset ring-brand-100 sm:flex-row sm:items-center sm:gap-3">
+            <p className="min-w-0 text-[13px] leading-5 text-ink-700 sm:flex-1">
+              Kapta sugiere el <b className="font-semibold text-ink-900">{programDayLabel(suggestedDay)}</b>, el próximo día de reparto, para{" "}
+              <b className="font-semibold tabular-nums text-ink-900">{proposals.length.toLocaleString("es-PE")}</b> {proposals.length === 1 ? "pedido sin fecha que se puede agendar" : "pedidos sin fecha que se pueden agendar"}. Revisa la lista, quita los que no y confirma abajo.
+            </p>
+            <OpsButton size="sm" variant="primary" disabled={Boolean(moving)} onClick={pickProposals} className="w-full shrink-0 sm:w-auto pointer-coarse:h-11">
+              Elegirlos para el {programDayLabel(suggestedDay)}
+            </OpsButton>
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 px-4 pb-4 pt-3">

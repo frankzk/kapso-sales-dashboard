@@ -55,8 +55,14 @@ export const LIMA_FLOW: readonly { key: LimaStep; why: string }[] = [
 /** Lo que vive dentro de cada paso: sus filtros (el pie de la tarjeta) y cómo se dice en su celda. */
 const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c: LimaBoardCounts) => string | null }>> = {
   no_entregados: {
-    keys: ["reintentos_aliclik"],
-    note: (c) => (c.sub.reintentos_aliclik ? `${fmt(c.sub.reintentos_aliclik)} ${c.sub.reintentos_aliclik === 1 ? "es reintento" : "son reintentos"} Aliclik` : null),
+    keys: ["reintentos_aliclik", "sin_reporte"],
+    note: (c) => {
+      const parts = [
+        c.sub.reintentos_aliclik ? `${fmt(c.sub.reintentos_aliclik)} reintentos Aliclik` : null,
+        c.sub.sin_reporte ? `${fmt(c.sub.sin_reporte)} sin reporte de la ruta` : null,
+      ].filter(Boolean);
+      return parts.length ? parts.join(" · ") : null;
+    },
   },
   por_sacar: {
     keys: ["sin_fecha", "mas_de_30"],
@@ -253,12 +259,14 @@ function SumBar({ counts, total, active }: { counts: LimaBoardCounts; total: num
   );
 }
 
-export function ReproLimaBlocks({ counts, today, active, onPick }: {
+export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = true }: {
   counts: LimaBoardCounts;
   today: string;
   /** El filtro elegido; «todos» sin ninguno. */
   active: LimaBoardKey;
   onPick: (key: LimaBoardKey) => void;
+  /** «Hoy sin guía» es alerta desde las 10:30 de Lima (`hoySinGuiaAlert`); antes se cuenta sin alarmar. */
+  guideAlert?: boolean;
 }) {
   const agenda = agendaCards(today);
   const flowTotal = LIMA_FLOW.reduce((sum, step) => sum + counts.step[step.key], 0);
@@ -353,17 +361,29 @@ export function ReproLimaBlocks({ counts, today, active, onPick }: {
           cols="grid-cols-2 sm:grid-cols-4"
           footer={counts.sub.hoy_sin_guia + counts.sub.manana_sin_guia + counts.sub.reprogramados > 0 || ["hoy_sin_guia", "manana_sin_guia", "reprogramados"].includes(active) ? (
             <>
-              {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => counts.sub[key] > 0 || active === key).map((key) => (
-                <AttentionPill
-                  key={key}
-                  icon={IconAlert}
-                  label={LIMA_SUB_FILTERS[key].label}
-                  count={counts.sub[key]}
-                  active={active === key}
-                  hint={LIMA_SUB_FILTERS[key].hint}
-                  onClick={() => onPick(active === key ? "todos" : key)}
-                />
-              ))}
+              {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => counts.sub[key] > 0 || active === key).map((key) =>
+                key === "hoy_sin_guia" && !guideAlert ? (
+                  // Antes de las 10:30, lo de hoy sin guía todavía puede recibirla: se filtra, pero no alarma.
+                  <ChoiceChip
+                    key={key}
+                    label={LIMA_SUB_FILTERS[key].label}
+                    count={counts.sub[key]}
+                    active={active === key}
+                    title={`${LIMA_SUB_FILTERS[key].hint} Es alerta desde las 10:30.`}
+                    onClick={() => onPick(active === key ? "todos" : key)}
+                  />
+                ) : (
+                  <AttentionPill
+                    key={key}
+                    icon={IconAlert}
+                    label={LIMA_SUB_FILTERS[key].label}
+                    count={counts.sub[key]}
+                    active={active === key}
+                    hint={LIMA_SUB_FILTERS[key].hint}
+                    onClick={() => onPick(active === key ? "todos" : key)}
+                  />
+                ),
+              )}
               {(counts.sub.reprogramados > 0 || active === "reprogramados") && (
                 <ChoiceChip
                   label={LIMA_SUB_FILTERS.reprogramados.label}
@@ -379,6 +399,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick }: {
           {agenda.map((card) => {
             const value = counts.agenda[card.key] ?? 0;
             const missing = sinGuia[card.key];
+            const alarm = missing !== undefined && missing > 0 && (card.key !== "hoy" || guideAlert);
             return (
               <Cell
                 key={card.key}
@@ -392,7 +413,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick }: {
                 note={missing === undefined || value === 0 ? undefined : (
                   <>
                     {fmt(value - missing)} con guía ·{" "}
-                    <span className={missing > 0 ? "font-semibold text-warn-fg" : undefined}>{fmt(missing)} sin guía</span>
+                    <span className={alarm ? "font-semibold text-warn-fg" : undefined}>{fmt(missing)} sin guía</span>
                   </>
                 )}
               />

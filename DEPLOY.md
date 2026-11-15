@@ -85,6 +85,21 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 15-11-2026 · Repro Lima: ruta vencida sin reporte a No entregados, Kapta propone el día y «Hoy sin guía» desde las 10:30 (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia la etapa del Master, estados, permisos ni
+`MOM_RESOLUTION_VERSION`; no escribe nada al desplegar.
+- **Ruta vencida:** lo que salió a ruta y lleva un día de reparto entero sin reporte (salió el lunes → el miércoles; el
+  domingo no cuenta) pasa de Con el courier a No entregados, filtro «Sin reporte de la ruta». Solo en Repro Lima.
+- **Kapta propone, el equipo confirma:** en «Sin fecha», «Elegirlos para el …» marca los que se pueden agendar con el
+  próximo día de reparto en «Mover a…»; nada se mueve sin confirmar. «Agendar» sin día llega con ese día elegido.
+- **«Hoy sin guía»** es alerta desde las 10:30 de Lima; antes, chip neutro.
+
+Verificar en Repro Lima:
+1. Un pedido que salió hace dos días de reparto sin resultado aparece en No entregados → «Sin reporte de la ruta».
+2. En «Sin fecha», «Elegirlos para el …» abre «Mover a…» con el día puesto.
+3. Antes de las 10:30, «Hoy sin guía» no está en rojo.
+
 ### 15-11-2026 · Repro Lima: seis pasos que suman el total (dos plegados), Agenda Hoy/Mañana/Después con o sin guía y «Sacar a reparto» (sin migración, MOM §9.5, DESIGN.md)
 
 Sin migración, sin crons ni variables nuevas. No cambia estados, permisos ni `MOM_RESOLUTION_VERSION`; no escribe nada al
