@@ -18,7 +18,7 @@ import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
-import { GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
+import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { categoryOf } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -112,4 +112,34 @@ export async function createGfGuideFor(orderId: string, ctx: { userId: string | 
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   return { ok: true, trackingId: gf.tracking_id, shippingCost: gf.shipping_cost, estimatedDeliveryDate: gf.estimated_delivery_date, adopted };
+}
+
+export type GfCancelResult = { ok: true; trackingId: string; cancelCost: number } | { ok: false; error: string };
+
+/**
+ * Anula UNA guía GF viva y aplica el estado que GF devuelve (MOM §29.17). La usan «Anular guía» de la Mesa de ruta y
+ * la creación de la guía de Aliclik, que anula sola la de GF cuando una persona decide mandar el pedido por Aliclik
+ * (owner, 15-11-2026). GF decide si todavía se puede: sin costo antes de preparar; después responde con el estado o
+ * con el costo de anular. Lo que GF responda se devuelve tal cual.
+ */
+export async function cancelGfGuideFor(
+  orderId: string,
+  trackingId: string,
+  ctx: { userId: string | null; reason: string; note: string },
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<GfCancelResult> {
+  const { data: row } = await admin.from("order_master").select("store_id").eq("order_id", orderId).maybeSingle();
+  const storeId = (row as { store_id?: string } | null)?.store_id;
+  if (!storeId) return { ok: false, error: "No se pudo leer el pedido." };
+  const store = await loadGfStore(admin, storeId);
+  if (!store?.token) return { ok: false, error: "La tienda no tiene token de GF Courier." };
+  const res = await gfCourier.cancelOrder({ apiToken: store.token }, trackingId, "MERCHANT_CANCELLED",
+    gfIdempotencyKey(orderId, `cancel-${trackingId}`), ctx.reason);
+  if (!res.ok) return { ok: false, error: res.error.message };
+  const current = await gfCourier.getOrder({ apiToken: store.token }, trackingId);
+  if (current.ok) await applyGfSnapshot(current.data, admin);
+  await admin.from("order_events").insert({ store_id: storeId, order_id: orderId, kind: "courier_status", occurred_at: new Date().toISOString(),
+    actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId, reason: ctx.reason, note: ctx.note,
+    payload: { cancel_cost: res.data.cancel_cost ?? 0 } });
+  return { ok: true, trackingId, cancelCost: Number(res.data.cancel_cost ?? 0) };
 }
