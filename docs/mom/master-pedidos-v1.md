@@ -23021,6 +23021,16 @@ otra provincia en el Master.
 - **`geo_source`** dice `shopify` —«según WooCommerce» en la ficha, la dirección
   del pedido en su tienda (§38.12)— cuando la ubicación sale del formulario y no
   hay un punto del courier ni del pedido; no hay valor nuevo.
+- **El «Punto de entrega» del mapa (15-11-2026).** Desde el 14-11-2026 el
+  formulario deja en la nota «Punto de entrega: https://www.google.com/maps?q=…»
+  y esa misma coordenada en la dirección del pedido: es el punto que la clienta
+  marcó, no una dirección geocodificada. Kapta ya lo toma como la ubicación del
+  pedido y la guía automática de Aliclik lo usa como su GPS cuando la dirección
+  está completa; con la dirección incompleta sigue decidiendo una asesora
+  (owner: «tendríamos que activarlo solo cuando la dirección está completa»).
+  Cuando la ubicación del pedido es ese punto, la ficha lo rotula «punto que
+  marcó la clienta en la web» en vez de «según WooCommerce»
+  (`lib/web-form-pin.ts`). `geo_source` sigue siendo `shopify`.
 
 **Coberturas.** Con el departamento del pedido conocido, la provincia solo
 entra a `order_coverage_for` por Cañete (§19.0.1): unos pocos pedidos de

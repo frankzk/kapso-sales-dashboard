@@ -20,6 +20,7 @@
 // mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
 // parpadear a vacío.
 
+import { WEB_FORM_PIN_LABEL, isWebFormPin } from "@/lib/web-form-pin";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -2555,6 +2556,7 @@ export function OrderDrawer({
                   orderId={orderId}
                   row={detail.row}
                   storePlatform={storePlatform}
+                  webPin={isWebFormPin(detail.shopifyNote, detail.row.latitude, detail.row.longitude)}
                   canEdit={canEdit}
                   onSaved={() => {
                     void reload();
@@ -2950,7 +2952,10 @@ const GEO_SOURCE_LABEL: Record<string, string> = {
   history: "historial confiable del cliente",
 };
 
-function geoSourceLabel(source: string, storePlatform: OrderPlatformName): string {
+function geoSourceLabel(source: string, storePlatform: OrderPlatformName, webPin = false): string {
+  // El pin del mapa del formulario de la web (15-11-2026, lib/web-form-pin.ts):
+  // no es una dirección geocodificada, es el punto que eligió la clienta.
+  if (source === "shopify" && webPin) return WEB_FORM_PIN_LABEL;
   if (source === "shopify") return `según ${storePlatform}`;
   return GEO_SOURCE_LABEL[source] ?? source;
 }
@@ -2965,11 +2970,14 @@ function GeoSection({
   orderId,
   row,
   storePlatform = "Shopify",
+  webPin = false,
   canEdit,
   onSaved,
 }: {
   orderId: string;
   row: OrderMasterRow;
+  /** La ubicación es el «Punto de entrega» que la clienta marcó en la web. */
+  webPin?: boolean;
   /** La tienda del pedido (`orders.platform`), para decir de dónde salió la dirección. */
   storePlatform?: OrderPlatformName;
   canEdit: boolean;
@@ -3071,7 +3079,7 @@ function GeoSection({
         badge={
           <>
             <CoverageBadge coverage={row.coverage} />
-            {row.geo_source && <Badge>{geoSourceLabel(row.geo_source, storePlatform)}</Badge>}
+            {row.geo_source && <Badge>{geoSourceLabel(row.geo_source, storePlatform, webPin)}</Badge>}
           </>
         }
         aside={
