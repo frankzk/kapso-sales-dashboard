@@ -284,19 +284,31 @@ describe("cada trabado tiene su sitio (§9.6, owner 15-11-2026)", () => {
 });
 
 describe("las piezas en pantalla", () => {
-  it("los bloques dicen su cifra, filtran y llevan los trabados del equipo", async () => {
-    const { ReproLimaBlocks } = await import("@/components/repro-lima-blocks");
+  it("el flujo del día numera los pasos en el orden del trabajo y lo de adentro va dentro de su paso", async () => {
+    const { ReproLimaBlocks, LIMA_FLOW } = await import("@/components/repro-lima-blocks");
+    // Owner, 15-11-2026: «falta ordenar un flujo de trabajo»; de lo que está en la calle a lo que solo falta cerrar.
+    expect(LIMA_FLOW.map((step) => step.key)).toEqual(["novedad", "llamar_despues", "no_entregados", "primer_despacho", "por_cerrar"]);
     const rows = [row(), failed({ orderId: "e" })];
     const counts = limaBoardCounts(rows, classifyLimaRows(rows, [], TODAY));
-    const html = renderToStaticMarkup(createElement(ReproLimaBlocks, {
-      counts, today: TODAY, active: "no_entregados", onPick: () => {},
-      stuck: { gestion: [{ reason: "sin_rotulo", count: 2 }], courier: [{ reason: "courier_no_recogio", count: 0 }] },
-      activeStuck: null, onStuck: () => {},
-    }));
-    for (const text of ["Por gestionar hoy", "Agenda", "En manos del courier", "Confirmar primer despacho", "Lun 16", "Sin fecha", "Guía creada", "Trabados", "Sin rótulo"]) expect(html, text).toContain(text);
+    const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "no_entregados", onPick: () => {} }));
+    for (const text of ["Flujo del día", "Agenda", "En manos del courier", "Confirmar primer despacho", "Lun 16", "Sin fecha", "Guía creada"]) expect(html, text).toContain(text);
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*No entregados/);
-    // Un trabado sin pedidos no se dibuja.
-    expect(html).not.toContain("Guía creada y el courier no lo recogió");
+    // «Reintentos Aliclik» vive DENTRO de «No entregados»: su filtro sale en el pie con el nombre del paso, no suelto.
+    expect(html).toContain("Dentro de <b");
+    expect(html).toContain("Reintentos Aliclik");
+    // Sin un paso elegido, no hay chips de adentro sueltos debajo de la fila.
+    const idle = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "todos", onPick: () => {} }));
+    expect(idle).not.toContain("Dentro de");
+    expect(idle).toContain("Empieza aquí");
+  });
+
+  it("el total y los trabados van arriba, como excepción, no mezclados con las tarjetas", () => {
+    const board = read("components/repro-lima-board.tsx");
+    expect(board).toContain("pedidos de Lima por entregar");
+    expect(board).toContain('label="Trabados"');
+    expect(board).toContain('aria-label="Trabados por motivo"');
+    expect(board).toContain('label="Etapa"');
+    expect(board).not.toContain('label="Solo trabados"');
   });
 });
 

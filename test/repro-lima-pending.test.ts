@@ -336,7 +336,11 @@ describe("presentación inicial y gestión", () => {
     expect(html).not.toContain("Gestionar pedido");
     expect(html).not.toContain("Resumen y cierres pendientes");
     expect(html.match(/<table /g)).toHaveLength(1);
-    expect(html).toContain("Todos activos al entrar.");
+    // Macroestado y subetapa viven en el filtro «Etapa» de la barra (15-11-2026), cerrado al entrar.
+    expect(html).toContain(">Etapa<");
+    expect(html).not.toContain("Todos activos al entrar.");
+    // El total arriba (owner: «el total desapareció»).
+    expect(html).toContain("pedidos de Lima por entregar");
   });
   it("los tres enlaces antiguos abren Todos y mantienen Atender, con los tres bloques en su orden", () => {
     for (const legacy of ["listas", "todos", "resumen"]) {
@@ -344,8 +348,8 @@ describe("presentación inicial y gestión", () => {
       const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending: [row()] }));
       expect(html).toContain('aria-label="Todos los pendientes de Lima"');
       expect(html).toContain(">Atender</button>");
-      expect(html.indexOf(">Por gestionar hoy<")).toBeGreaterThan(0);
-      expect(html.indexOf(">Por gestionar hoy<")).toBeLessThan(html.indexOf(">Agenda<"));
+      expect(html.indexOf(">Flujo del día<")).toBeGreaterThan(0);
+      expect(html.indexOf(">Flujo del día<")).toBeLessThan(html.indexOf(">Agenda<"));
       expect(html.indexOf(">Agenda<")).toBeLessThan(html.indexOf(">En manos del courier<"));
     }
     nav.search = "";

@@ -432,9 +432,10 @@ describe("el tablero (E31, E33)", () => {
     expect(board).not.toMatch(/router\.(push|replace)\(/);
     expect(board).not.toContain("requestAnimationFrame");
     const blocks = read("components/repro-lima-blocks.tsx");
-    expect(blocks.indexOf('title="Por gestionar hoy"')).toBeLessThan(blocks.indexOf('title="Agenda"'));
+    expect(blocks.indexOf('title="Flujo del día"')).toBeLessThan(blocks.indexOf('title="Agenda"'));
     expect(blocks.indexOf('title="Agenda"')).toBeLessThan(blocks.indexOf('title="En manos del courier"'));
-    expect(blocks.match(/<StatusCard /g)).toHaveLength(3);
+    // Una franja por bloque (celdas separadas por líneas finas), no tarjetas sueltas.
+    expect(blocks.match(/<Strip\b/g)).toHaveLength(3);
   });
 
   it("«Todos» agrupa por etapa y subetapa del Master, con enlaces a sus colas (§9.5)", () => {

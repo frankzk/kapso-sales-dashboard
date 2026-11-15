@@ -104,7 +104,8 @@ describe("los textos de la anulación dicen «la tienda»", () => {
     expect(read("app/dashboard/pedidos/repro-lima/actions.ts")).toContain("No anula la venta: solo la tienda la anula.");
     expect(read("components/repro-lima-panel.tsx")).toContain('text: "Espera que la tienda anule la venta"');
     expect(read("lib/repro-lima-blocks.ts")).toContain("hasta que la tienda anule la venta.");
-    expect(read("components/repro-lima-blocks.tsx")).toContain("title={LIMA_SUB_FILTERS[key].hint}");
+    // «Esperan anulación» dice su regla al pasar el ratón: el filtro de adentro de «Por cerrar».
+    expect(read("components/repro-lima-blocks.tsx")).toContain("title={LIMA_SUB_FILTERS[inside.sub].hint}");
     expect(read("app/dashboard/leads/actions.ts")).toContain("Si el cliente canceló, anula el pedido en la tienda primero.");
     expect(read("components/sheets-board.tsx")).toContain("una cancelación del courier nunca anula el pedido en la tienda.");
   });

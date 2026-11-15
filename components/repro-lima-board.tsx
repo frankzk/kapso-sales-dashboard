@@ -19,10 +19,10 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
+import { AttentionPill, Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { DateRangePill, FacetPill } from "@/components/facet-pill";
-import { IconCheck, IconSearch, IconX } from "@/components/icons";
+import { IconAlert, IconCheck, IconSearch, IconX } from "@/components/icons";
 import { useOpenOrderDrawer } from "@/components/order-link";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
 import { cutoffNotice } from "@/lib/repro-lima";
@@ -32,7 +32,7 @@ import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/co
 import { ReproLimaBlocks, type LimaStuckChip } from "@/components/repro-lima-blocks";
 import { AgendarButton, ChannelPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
-import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, stuckReasonsOf, type LimaStuckHome, type LimaStuckReason } from "@/lib/lima-stuck";
+import { LIMA_STUCK_HOME_LABEL, LIMA_STUCK_OWNER_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, stuckReasonsOf, type LimaStuckHome, type LimaStuckReason } from "@/lib/lima-stuck";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { agendarReproLima, type AgendarResult } from "@/app/dashboard/pedidos/repro-lima/agenda-actions";
 import { retryApproveNoLocation } from "@/lib/lima-retry-auto";
@@ -92,6 +92,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const [store, setStore] = useState("");
   const [storeSheet, setStoreSheet] = useState(false);
   const storePill = useRef<HTMLButtonElement>(null);
+  const [stageSheet, setStageSheet] = useState(false);
+  const stagePill = useRef<HTMLButtonElement>(null);
   const openDrawer = useOpenOrderDrawer();
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
@@ -380,13 +382,59 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <p className="mt-1 text-sm text-ink-500">
             {retriesOnly
               ? "Los no entregados de Lima que vuelven a salir por Aliclik, sin llamar. Abre el pedido y crea la guía con el transporte indicado."
-              : "El panel del equipo de Lima: lo que toca hoy, la agenda de salidas y lo que lleva el courier. «Agendar» pone el día; «Atender» abre la llamada y la gestión."}
+              : "El panel del equipo de Lima. Trabaja el flujo de izquierda a derecha; «Agendar» pone el día y «Atender» abre la llamada."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* El total, arriba y a la vista (owner, 15-11-2026: «el total desapareció»). Es también «Todos». */}
+          {!retriesOnly && (
+            <button
+              type="button"
+              onClick={() => chooseKey("todos")}
+              aria-pressed={key === "todos" && !stuck}
+              title="Todos los pendientes de entrega de Lima, con los filtros de abajo."
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3 text-[13px] font-medium shadow-control transition-shadow pointer-coarse:h-11",
+                key === "todos" && !stuck ? "text-brand-700 ring-2 ring-inset ring-brand-600" : "text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+              )}
+            >
+              <span className={cn("font-semibold tabular-nums", key === "todos" && !stuck ? "text-brand-700" : "text-ink-900")}>{pendingStore.length.toLocaleString("es-PE")}</span>
+              pedidos de Lima por entregar
+            </button>
+          )}
           <Badge tone={cutoff.passed ? "warn" : "info"} wrap>{cutoff.text}</Badge>
+          {/* Los trabados son la excepción de la página (DESIGN.md: «las píldoras de excepción»): una sola, y sus motivos al elegirla. */}
+          {!retriesOnly && (stuckItems.length > 0 || stuck) && (
+            <AttentionPill
+              icon={IconAlert}
+              label="Trabados"
+              count={stuckItems.length}
+              active={Boolean(stuck)}
+              hint="Pedidos del equipo quietos más de lo que deberían, lo que más lleva primero (§9.6)."
+              onClick={() => chooseStuck(stuck ? null : "todos")}
+            />
+          )}
           <span className="text-[13px] text-ink-500" aria-live="polite">{refreshing ? "Actualizando…" : null}</span>
         </div>
+        {stuck && (
+          <div role="group" aria-label="Trabados por motivo" className="flex flex-wrap items-center gap-1.5 rounded-lg bg-warn-wash px-3 py-2.5 ring-1 ring-inset ring-warn-bg">
+            <span className="mr-1 text-[13px] font-medium text-warn-fg">Trabados por motivo:</span>
+            <ChoiceChip label="Todos" count={stuckItems.length} active={stuck === "todos"} onClick={() => chooseStuck("todos")} />
+            {[...stuckChips.gestion, ...stuckChips.courier].filter((chip) => chip.count > 0 || stuck === chip.reason).map((chip) => {
+              const rule = limaStuckRule(chip.reason);
+              return (
+                <ChoiceChip
+                  key={chip.reason}
+                  label={rule.label}
+                  count={chip.count}
+                  active={stuck === chip.reason}
+                  title={`${rule.hint} Siguiente paso (${LIMA_STUCK_OWNER_LABEL[rule.owner]}): ${rule.action}`}
+                  onClick={() => chooseStuck(chip.reason)}
+                />
+              );
+            })}
+          </div>
+        )}
       </header>
 
       {retriesOnly ? (
@@ -394,15 +442,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <StatusCard label={LIMA_SUB_FILTERS.reintentos_aliclik.label} value={counts.sub.reintentos_aliclik} hint={LIMA_SUB_FILTERS.reintentos_aliclik.hint} active onClick={() => {}} />
         </div>
       ) : (
-        <ReproLimaBlocks
-          counts={counts}
-          today={today}
-          active={stuck ? "todos" : key}
-          onPick={chooseKey}
-          stuck={stuckChips}
-          activeStuck={stuck}
-          onStuck={chooseStuck}
-        />
+        <ReproLimaBlocks counts={counts} today={today} active={stuck ? "todos" : key} onPick={chooseKey} />
       )}
 
       {moved && (
@@ -413,8 +453,6 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           </p>
         </Banner>
       )}
-
-      <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
 
       {feedback && (
         <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
@@ -451,6 +489,15 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Pedido, cliente o teléfono" className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")} />
           </label>
           {data.stores.length > 1 && <FilterPill ref={storePill} label="Tienda" value={storeName} expanded={storeSheet} onClick={() => setStoreSheet((v) => !v)} onClear={() => setStore("")} />}
+          {/* Macroestado y subetapa del Master: un filtro más de la lista, no una fila de la página (15-11-2026). */}
+          <FilterPill
+            ref={stagePill}
+            label="Etapa"
+            value={hidden.size ? `${hidden.size} ${hidden.size === 1 ? "oculta" : "ocultas"}` : null}
+            expanded={stageSheet}
+            onClick={() => setStageSheet((v) => !v)}
+            onClear={() => changeHidden(new Set())}
+          />
           <DateRangePill label="Creación" from={rowFilters.createdFrom} to={rowFilters.createdTo} presets={createdPresets(today)} onChange={(createdFrom, createdTo) => patchRowFilters({ createdFrom, createdTo })} />
           <FacetPill label="Canal" allLabel="Todos los canales" options={filterOptions.channels} selected={rowFilters.channels as Set<string>} onChange={(channels) => patchRowFilters({ channels })} />
           <FacetPill label="Distrito" allLabel="Todos los distritos" options={filterOptions.districts} selected={rowFilters.districts as Set<string>} onChange={(districts) => patchRowFilters({ districts })} />
@@ -473,13 +520,18 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
               )}
             </>
           )}
-          {!retriesOnly && !inRetries && !picked.size && (
-            <ChoiceChip label="Solo trabados" count={stuckItems.length} active={stuck === "todos"} title="Los trabados del equipo (§9.6), lo que más lleva primero." onClick={() => chooseStuck(stuck === "todos" ? null : "todos")} />
-          )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">
             <b className="font-semibold text-ink-900">{inQueue.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega
           </p>
         </div>
+        {stageSheet && (
+          <Sheet look="ops" title="Etapa del Master" onClose={() => setStageSheet(false)} anchored anchorRef={stagePill}>
+            <div className="max-h-[60vh] max-w-xl space-y-2 overflow-auto">
+              <p className="text-[13px] text-ink-500">Muestra u oculta macroestados y subetapas. Las cifras de arriba cuentan solo lo que se muestra.</p>
+              <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
+            </div>
+          </Sheet>
+        )}
         {storeSheet && (
           <Sheet look="ops" title="Tienda" onClose={() => setStoreSheet(false)} anchored anchorRef={storePill}>
             <div role="group" className="-mx-1 grid max-h-72 gap-0.5 overflow-auto">

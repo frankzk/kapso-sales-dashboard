@@ -1,6 +1,11 @@
 @import "tailwindcss";
 
 @theme {
+  /* Inter variable, autoalojada (@fontsource-variable/inter, owner 15-11-2026):
+     la misma letra en Windows, Mac y el teléfono, como el panel de Stripe. Si no
+     carga, cae a la sans del sistema. */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+
   --color-brand-50: #eef6ff;
   --color-brand-100: #d9eaff;
   --color-brand-200: #b9d6ff;

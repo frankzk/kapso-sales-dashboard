@@ -1,12 +1,24 @@
 "use client";
 
-// Los tres bloques de Repro Lima (owner, 15-11-2026; MOM §9.5): «Por gestionar
-// hoy», «Agenda» y «En manos del courier». Cada cifra es una tarjeta de estado
-// que filtra la única lista de abajo (The Cifras Navegan Rule); los filtros de
-// adentro (Reintentos Aliclik, Esperan anulación, Más de 30 días,
-// Reprogramados) y los trabados del equipo (§9.6) son chips debajo de su
-// bloque. Solo dibuja: las cuentas salen de lib/repro-lima-blocks.ts.
-import { ChoiceChip, StatusCard } from "@/components/ops-ui";
+// Los tres bloques de Repro Lima (owner, 15-11-2026; MOM §9.5).
+//
+// «FLUJO DEL DÍA» Y NO «POR GESTIONAR HOY» (owner, 15-11-2026, segunda vuelta):
+// «la suma de Reintentos Aliclik 111 más los dos de su derecha no suman 184 …
+// aquí falta ordenar un flujo de trabajo». Los chips sueltos debajo de la fila
+// se leían como partes de la primera tarjeta. Ahora:
+// - las cinco tareas son PASOS numerados, en el orden en que el equipo las
+//   trabaja: primero lo que está en la calle, después lo que tiene hora, lo que
+//   falló, lo nuevo y al final lo administrativo. El número es información (el
+//   orden del trabajo), no adorno;
+// - lo que vive DENTRO de un paso (Reintentos Aliclik, Más de 30 días, Esperan
+//   anulación) se dice dentro de su celda («111 son reintentos Aliclik») y su
+//   filtro aparece en el pie de ESA tarjeta solo cuando el paso está elegido,
+//   con su nombre delante: ya no hay chips que parezcan sumarse a otra cifra.
+// Cada cifra sigue siendo un filtro de la única lista de abajo (The Cifras
+// Navegan Rule). Solo dibuja: las cuentas salen de lib/repro-lima-blocks.ts.
+import type { ReactNode } from "react";
+import { cn } from "@/components/ui";
+import { Badge, ChoiceChip } from "@/components/ops-ui";
 import {
   LIMA_COURIER_CARDS,
   LIMA_SUB_FILTERS,
@@ -15,114 +27,290 @@ import {
   type LimaBoardCounts,
   type LimaBoardKey,
   type LimaSubFilter,
+  type LimaTask,
 } from "@/lib/repro-lima-blocks";
-import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckReason } from "@/lib/lima-stuck";
+import type { LimaStuckReason } from "@/lib/lima-stuck";
 
+/**
+ * El orden del trabajo (owner, 15-11-2026): de lo más urgente a lo
+ * administrativo. La clasificación de cada pedido en una sola tarea sigue en
+ * `limaTaskOf`; esto es solo el orden en que se presentan.
+ */
+export const LIMA_FLOW: readonly { key: LimaTask; why: string }[] = [
+  { key: "novedad", why: "El courier lo tiene en la calle: llama ya." },
+  { key: "llamar_despues", why: "A la hora que pidió la clienta." },
+  { key: "no_entregados", why: "Acuerda el día y el courier." },
+  { key: "primer_despacho", why: "Confirma los datos y agenda." },
+  { key: "por_cerrar", why: "Cierra en Kapta lo que ya terminó." },
+];
+
+/** Lo que vive dentro de cada paso, y cómo se dice en su celda. */
+const INSIDE: Partial<Record<LimaTask, { sub: LimaSubFilter; phrase: (n: number) => string }>> = {
+  no_entregados: { sub: "reintentos_aliclik", phrase: (n) => `${fmt(n)} ${n === 1 ? "es reintento" : "son reintentos"} Aliclik` },
+  primer_despacho: { sub: "mas_de_30", phrase: (n) => `${fmt(n)} con más de 30 días` },
+  por_cerrar: { sub: "esperan_anulacion", phrase: (n) => `${fmt(n)} ${n === 1 ? "espera" : "esperan"} anulación` },
+};
+
+/** Un motivo de trabado con su cuenta (§9.6): el tablero los muestra como excepción arriba. */
 export interface LimaStuckChip {
   reason: LimaStuckReason;
   count: number;
 }
 
-const CARD_GRID = "grid grid-cols-2 gap-2 [&>button>span:first-child]:whitespace-normal [&>button>span:last-child]:mt-auto";
+const TASK = new Map(LIMA_TASK_CARDS.map((card) => [card.key, card]));
 
-function BlockHead({ id, title, total, help }: { id: string; title: string; total: number; help: string }) {
+function fmt(n: number): string {
+  return n.toLocaleString("es-PE");
+}
+
+/** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro. */
+function activeStep(active: LimaBoardKey): LimaTask | null {
+  if (TASK.has(active as LimaTask)) return active as LimaTask;
+  const parent = (LIMA_SUB_FILTERS as Record<string, { parent: string } | undefined>)[active]?.parent;
+  return parent && TASK.has(parent as LimaTask) ? (parent as LimaTask) : null;
+}
+
+function BlockHead({ id, title, total, unit, help }: { id: string; title: string; total: number; unit: string; help: string }) {
   return (
-    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-      <h2 id={id} className="text-sm font-semibold text-ink-900">{title}</h2>
-      <span className="text-[13px] font-semibold tabular-nums text-ink-600">{total.toLocaleString("es-PE")}</span>
-      <p className="w-full text-[13px] text-ink-500 lg:w-auto">{help}</p>
+    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <h2 id={id} className="text-[15px] font-semibold tracking-[-0.005em] text-ink-900">{title}</h2>
+        <span className="text-[13px] tabular-nums text-ink-500">{fmt(total)} {unit}</span>
+      </div>
+      <p className="text-[13px] text-ink-500">{help}</p>
     </div>
   );
 }
 
-function SubChips({ keys, counts, active, onPick }: { keys: readonly LimaSubFilter[]; counts: LimaBoardCounts; active: LimaBoardKey; onPick: (key: LimaBoardKey) => void }) {
-  const shown = keys.filter((key) => counts.sub[key] > 0 || active === key);
-  if (!shown.length) return null;
+/**
+ * Una celda de franja: etiqueta, cifra y una línea de contexto. Elegida, se
+ * subraya en azul como una pestaña y la cifra toma el azul (The Cifras Navegan
+ * Rule: el filtro activo se ve sin leer). En el teléfono, la de un paso pone la
+ * cifra a la derecha y el contexto debajo de la etiqueta; con `stack`, siempre
+ * en columna (la Agenda y el courier van de dos en dos).
+ */
+function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, stack }: {
+  label: string;
+  value: number;
+  note?: ReactNode;
+  lead?: ReactNode;
+  /** Junto a la etiqueta (p. ej. «Empieza aquí»). */
+  badge?: ReactNode;
+  active: boolean;
+  onClick: () => void;
+  hint?: string;
+  /** Cero: la celda se aclara, pero sigue filtrando. */
+  dim?: boolean;
+  stack?: boolean;
+}) {
   return (
-    <>
-      {shown.map((key) => (
-        <ChoiceChip key={key} label={LIMA_SUB_FILTERS[key].label} count={counts.sub[key]} title={LIMA_SUB_FILTERS[key].hint} active={active === key} onClick={() => onPick(key)} />
-      ))}
-    </>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={hint}
+      className={cn(
+        "group relative grid min-w-0 content-start items-center gap-x-3 gap-y-1 px-4 py-3 text-left transition-colors focus-visible:z-10 pointer-coarse:min-h-14",
+        stack ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-1",
+        active ? "bg-brand-50" : "bg-white hover:bg-wash",
+      )}
+    >
+      <span className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
+        {lead}
+        <span className={cn("truncate text-[13px] font-medium", active ? "text-brand-700" : "text-ink-600")}>{label}</span>
+        {badge}
+      </span>
+      <span
+        className={cn(
+          "text-xl font-semibold leading-7 tabular-nums tracking-[-0.01em]",
+          stack ? "row-start-2" : "col-start-2 row-span-2 row-start-1 sm:col-start-1 sm:row-span-1 sm:row-start-2",
+          active ? "text-brand-700" : dim ? "text-ink-300" : "text-ink-900",
+        )}
+      >
+        {fmt(value)}
+      </span>
+      {note ? (
+        <span className={cn("col-start-1 text-xs leading-4 text-ink-500", stack ? "row-start-3" : "row-start-2 sm:row-start-3")}>{note}</span>
+      ) : null}
+      {/* La marca de elegido: una barra de 2 px, como la pestaña activa (DESIGN.md «Shapes»). */}
+      <span aria-hidden className={cn("absolute inset-x-0 bottom-0 h-0.5", active ? "bg-brand-600" : "bg-transparent")} />
+    </button>
   );
 }
 
-function StuckChips({ chips, active, onStuck }: { chips: readonly LimaStuckChip[]; active: LimaStuckReason | "todos" | null; onStuck: (reason: LimaStuckReason) => void }) {
-  const shown = chips.filter((chip) => chip.count > 0 || active === chip.reason);
-  if (!shown.length) return null;
+/** El número del paso: un círculo de 20 px; relleno en azul cuando es el paso elegido. */
+function StepNumber({ n, active }: { n: number; active: boolean }) {
   return (
-    <span role="group" aria-label="Trabados" className="flex flex-wrap items-center gap-1.5">
-      <span className="text-[13px] font-medium text-warn-fg">Trabados</span>
-      {shown.map((chip) => {
-        const rule = limaStuckRule(chip.reason);
-        return (
-          <ChoiceChip
-            key={chip.reason}
-            label={rule.label}
-            count={chip.count}
-            active={active === chip.reason}
-            title={`${rule.hint} Siguiente paso (${LIMA_STUCK_OWNER_LABEL[rule.owner]}): ${rule.action}`}
-            onClick={() => onStuck(chip.reason)}
-          />
-        );
-      })}
+    <span
+      aria-hidden
+      className={cn(
+        "grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold tabular-nums",
+        active ? "bg-brand-600 text-white" : "bg-white text-ink-600 ring-1 ring-inset ring-line-strong",
+      )}
+    >
+      {n}
     </span>
   );
 }
 
-export function ReproLimaBlocks({ counts, today, active, onPick, stuck, activeStuck, onStuck }: {
+/** La franja: una sola tarjeta con las celdas separadas por líneas finas (no tarjetas sueltas). */
+function Strip({ label, cols, children, footer }: { label: string; cols: string; children: ReactNode; footer?: ReactNode }) {
+  return (
+    <div className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+      <div role="group" aria-label={label} className={cn("grid gap-px bg-line", cols)}>
+        {children}
+      </div>
+      {footer ? <div className="flex flex-wrap items-center gap-2 border-t border-line bg-wash/60 px-4 py-2.5">{footer}</div> : null}
+    </div>
+  );
+}
+
+export function ReproLimaBlocks({ counts, today, active, onPick }: {
   counts: LimaBoardCounts;
   today: string;
   /** El filtro elegido; «todos» sin ninguno. */
   active: LimaBoardKey;
   onPick: (key: LimaBoardKey) => void;
-  /** Los trabados de cada bloque (§9.6), por motivo. */
-  stuck: { gestion: readonly LimaStuckChip[]; courier: readonly LimaStuckChip[] };
-  activeStuck: LimaStuckReason | "todos" | null;
-  onStuck: (reason: LimaStuckReason) => void;
 }) {
   const agenda = agendaCards(today, counts.agenda);
-  const gestionTotal = LIMA_TASK_CARDS.reduce((sum, card) => sum + counts.task[card.key], 0);
+  const flowTotal = LIMA_FLOW.reduce((sum, step) => sum + counts.task[step.key], 0);
   const agendaTotal = agenda.reduce((sum, card) => sum + (counts.agenda[card.key] ?? 0), 0);
   const courierTotal = LIMA_COURIER_CARDS.reduce((sum, card) => sum + counts.courier[card.key], 0);
+  // «Empieza aquí»: el primer paso con algo que hacer, para que nadie tenga que decidir por dónde.
+  const start = LIMA_FLOW.find((step) => counts.task[step.key] > 0)?.key ?? null;
+  const step = activeStep(active);
+  const inside = step ? INSIDE[step] : undefined;
+  const stepCard = step ? TASK.get(step) : undefined;
+
   return (
-    <div className="space-y-4">
-      <section aria-labelledby="repro-bloque-gestion" className="space-y-2">
-        <BlockHead id="repro-bloque-gestion" title="Por gestionar hoy" total={gestionTotal} help="Lo que pide al equipo: confirmar, llamar, acordar o cerrar. Cada pedido, una sola tarea." />
-        <div role="group" aria-label="Por gestionar hoy" className={`${CARD_GRID} sm:grid-cols-3 xl:grid-cols-5`}>
-          {LIMA_TASK_CARDS.map((card) => (
-            <StatusCard key={card.key} label={card.label} value={counts.task[card.key]} hint={card.hint} active={active === card.key} onClick={() => onPick(card.key)} />
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 empty:hidden">
-          <SubChips keys={["mas_de_30", "reintentos_aliclik", "esperan_anulacion"]} counts={counts} active={active} onPick={onPick} />
-          <StuckChips chips={stuck.gestion} active={activeStuck} onStuck={onStuck} />
-        </div>
+    <div className="space-y-5">
+      <section aria-labelledby="repro-flujo" className="space-y-2">
+        <BlockHead
+          id="repro-flujo"
+          title="Flujo del día"
+          total={flowTotal}
+          unit="por gestionar"
+          help="De izquierda a derecha: de lo que está en la calle a lo que solo falta cerrar. Cada pedido está en un solo paso."
+        />
+        <Strip
+          label="Flujo del día"
+          cols="grid-cols-1 sm:grid-cols-5"
+          footer={stepCard && inside ? (
+            <>
+              <span className="text-[13px] text-ink-600">
+                Dentro de <b className="font-semibold text-ink-900">{stepCard.label}</b>:
+              </span>
+              <ChoiceChip
+                label={`Todos (${stepCard.label.toLowerCase()})`}
+                count={counts.task[stepCard.key]}
+                active={active === stepCard.key}
+                title={stepCard.hint}
+                onClick={() => { if (active !== stepCard.key) onPick(stepCard.key); }}
+              />
+              <ChoiceChip
+                label={LIMA_SUB_FILTERS[inside.sub].label}
+                count={counts.sub[inside.sub]}
+                active={active === inside.sub}
+                title={LIMA_SUB_FILTERS[inside.sub].hint}
+                onClick={() => onPick(active === inside.sub ? stepCard.key : inside.sub)}
+              />
+            </>
+          ) : null}
+        >
+          {LIMA_FLOW.map((flow, i) => {
+            const card = TASK.get(flow.key)!;
+            const value = counts.task[flow.key];
+            const isActive = step === flow.key;
+            const sub = INSIDE[flow.key];
+            const subCount = sub ? counts.sub[sub.sub] : 0;
+            return (
+              <Cell
+                key={flow.key}
+                label={card.label}
+                value={value}
+                dim={value === 0}
+                active={isActive}
+                onClick={() => onPick(flow.key)}
+                hint={card.hint}
+                lead={<StepNumber n={i + 1} active={isActive} />}
+                badge={start === flow.key && !isActive ? <Badge tone="brand" className="shrink-0">Empieza aquí</Badge> : null}
+                note={sub && subCount > 0 ? sub.phrase(subCount) : flow.why}
+              />
+            );
+          })}
+        </Strip>
       </section>
 
-      <section aria-labelledby="repro-bloque-agenda" className="space-y-2">
-        <BlockHead id="repro-bloque-agenda" title="Agenda" total={agendaTotal} help="El día en que sale: lo acordado con la clienta, «Programar envío», el programa de Grupo GF o el recojo del courier." />
-        <div role="group" aria-label="Agenda" className={`${CARD_GRID} sm:grid-cols-4 xl:grid-cols-8`}>
-          {agenda.map((card) => (
-            <StatusCard key={card.key} label={card.label} value={counts.agenda[card.key] ?? 0} hint={card.hint} active={active === card.key} onClick={() => onPick(card.key)} />
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 empty:hidden">
-          <SubChips keys={["reprogramados"]} counts={counts} active={active} onPick={onPick} />
-        </div>
-      </section>
+      <div className="grid gap-5 2xl:grid-cols-[minmax(0,8fr)_minmax(0,3fr)]">
+        <section aria-labelledby="repro-agenda" className="min-w-0 space-y-2">
+          <BlockHead
+            id="repro-agenda"
+            title="Agenda"
+            total={agendaTotal}
+            unit="pedidos"
+            help="El día en que sale: lo acordado con la clienta, «Programar envío», el programa o el recojo del courier."
+          />
+          <Strip
+            label="Agenda"
+            cols="grid-cols-2 sm:grid-cols-4 xl:grid-cols-8"
+            footer={counts.sub.reprogramados > 0 || active === "reprogramados" ? (
+              <>
+                <span className="text-[13px] text-ink-600">Filtrar la agenda:</span>
+                <ChoiceChip
+                  label={LIMA_SUB_FILTERS.reprogramados.label}
+                  count={counts.sub.reprogramados}
+                  active={active === "reprogramados"}
+                  title={LIMA_SUB_FILTERS.reprogramados.hint}
+                  onClick={() => onPick(active === "reprogramados" ? "todos" : "reprogramados")}
+                />
+              </>
+            ) : null}
+          >
+            {agenda.map((card) => {
+              const value = counts.agenda[card.key] ?? 0;
+              return (
+                <Cell
+                  key={card.key}
+                  label={card.label}
+                  value={value}
+                  dim={value === 0}
+                  active={active === card.key}
+                  hint={card.hint}
+                  onClick={() => onPick(card.key)}
+                  stack
+                />
+              );
+            })}
+          </Strip>
+        </section>
 
-      <section aria-labelledby="repro-bloque-courier" className="space-y-2">
-        <BlockHead id="repro-bloque-courier" title="En manos del courier" total={courierTotal} help="Solo seguimiento: con la guía viva de un courier, por su estado. Las cajas y los motorizados de Grupo GF están en Grupo GF Courier." />
-        <div role="group" aria-label="En manos del courier" className={`${CARD_GRID} sm:grid-cols-3 xl:grid-cols-5`}>
-          {LIMA_COURIER_CARDS.map((card) => (
-            <StatusCard key={card.key} label={card.label} value={counts.courier[card.key]} hint={card.hint} active={active === card.key} onClick={() => onPick(card.key)} />
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 empty:hidden">
-          <StuckChips chips={stuck.courier} active={activeStuck} onStuck={onStuck} />
-        </div>
-      </section>
+        <section aria-labelledby="repro-courier" className="min-w-0 space-y-2">
+          <BlockHead
+            id="repro-courier"
+            title="En manos del courier"
+            total={courierTotal}
+            unit="en seguimiento"
+            help="Solo se mira: con la guía viva de un courier."
+          />
+          <Strip label="En manos del courier" cols="grid-cols-3">
+            {LIMA_COURIER_CARDS.map((card) => {
+              const value = counts.courier[card.key];
+              return (
+                <Cell
+                  key={card.key}
+                  label={card.label}
+                  value={value}
+                  dim={value === 0}
+                  active={active === card.key}
+                  hint={card.hint}
+                  onClick={() => onPick(card.key)}
+                  stack
+                />
+              );
+            })}
+          </Strip>
+        </section>
+      </div>
     </div>
   );
 }

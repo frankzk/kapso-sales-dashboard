@@ -53,6 +53,20 @@ Verificar:
    pedido sin SKU deja «Guía GF automática no creada» en su historial y una sola alerta por Telegram, y la pasada de
    las 10:00 no lo repite.
 
+### 15-11-2026 · Repro Lima: flujo del día numerado, total arriba, trabados como excepción y letra Inter (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas.
+- **Flujo del día:** «Por gestionar hoy» pasa a ser este flujo, con cinco pasos numerados en el orden del trabajo. Los filtros de adentro, como Reintentos Aliclik, se dicen dentro de su paso y su chip aparece al elegirlo.
+- **Arriba:** el total «N pedidos de Lima por entregar» y una sola píldora «Trabados».
+- **Barra de la lista:** macroestado y subetapa se eligen desde «Etapa».
+- **Letra:** Inter autoalojada (`@fontsource-variable/inter`) en todo Kapta.
+
+Verificar en Repro Lima:
+1. Se ve el total arriba.
+2. Al elegir «No entregados» aparece «Dentro de No entregados: Reintentos Aliclik».
+3. «Trabados» abre sus motivos.
+4. En cualquier página, la letra es Inter (DevTools → Computed → font-family).
+
 ### 15-11-2026 · Repro Lima por las tareas del equipo; «Sale a reparto» y los trabados de Grupo GF, a Despacho del día (sin migración, MOM §9.5, §9.6 y §29.16)
 
 Sin migración, sin crons ni variables nuevas. No cambia permisos ni `MOM_RESOLUTION_VERSION`; no escribe nada al
