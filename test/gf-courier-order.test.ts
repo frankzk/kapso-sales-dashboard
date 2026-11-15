@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { allocateLines, buildGfOrderInput, splitName, type GfOrderSource } from "@/lib/gf-courier-order";
 import { mapGfStatus } from "@/lib/gf-courier-status";
@@ -47,5 +49,18 @@ describe("estados GF → salida Kapta", () => {
     expect(mapGfStatus("DELIVERED")).toMatchObject({ deliveryStatus: "entregado", terminal: true });
     expect(mapGfStatus("CANCELLED")).toMatchObject({ deliveryStatus: "anulado", returned: false, terminal: true });
     expect(mapGfStatus("LOST")).toMatchObject({ deliveryStatus: null, unknown: ["status=LOST"] });
+  });
+});
+
+describe("cobro de la guía GF", () => {
+  it("un pedido pagado completo viaja con cobro cero", () => {
+    const r = buildGfOrderInput({ ...base, advancePaid: 129 });
+    expect(r.ok && r.input.payment).toEqual({ total: 129, advance_paid: 129, amount_to_collect: 0 });
+  });
+  it("descuenta adelanto, diferencia y total validados (como Aliclik) y no filtra por modalidad", () => {
+    const src = readFileSync(join(process.cwd(), "lib/gf-courier-guide.ts"), "utf8");
+    expect(src).toContain('.in("kind", [...CUSTOMER_PAYMENT_KINDS])');
+    expect(src).not.toContain("shipping_mode !==");
+    expect(readFileSync(join(process.cwd(), "app/dashboard/pedidos/gf-courier-actions.ts"), "utf8")).not.toContain("shipping_mode !==");
   });
 });
