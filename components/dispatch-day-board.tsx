@@ -155,6 +155,12 @@ interface Props {
   /** No entregados de Lima que la tienda todavía no acordó en Repro Lima: no
    *  están en la cola (MOM §29.13, 01-11-2026). */
   awaitingRepro?: number;
+  /**
+   * Lo que va justo debajo de «Sale a reparto»: los trabados de las cajas y
+   * los motorizados de Grupo GF, que se fueron de Repro Lima (MOM §9.6, owner
+   * 15-11-2026).
+   */
+  afterPlan?: ReactNode;
 }
 
 const money = (n: number) => `S/ ${n.toFixed(2)}`;
@@ -840,6 +846,8 @@ export function DispatchDayBoard(props: Props) {
           </OpsButton>
         ) : undefined}
       />
+
+      {props.afterPlan}
 
       {/* Apartados de la cola como tarjetas de estado: cada una es un filtro con
           su cantidad y la elegida lleva el borde azul. «Nunca salieron» es el

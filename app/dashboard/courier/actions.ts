@@ -78,6 +78,9 @@ import {
   REPRO_LIMA_PATH,
   REPRO_NO_LO_QUIERE_CHIP,
 } from "@/lib/repro-lima-program";
+import { loadLimaPending } from "@/lib/repro-lima-pending-access";
+import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { limaStuckItems, stuckReasonsOf } from "@/lib/lima-stuck";
 
 const COURIER_PATH = "/dashboard/courier";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -4053,4 +4056,33 @@ export async function loadCourierRouteReport(routeId: string): Promise<CourierRo
     canCancelLoads: permissions.can("dispatch.manage"),
     kept,
   };
+}
+
+/**
+ * Los trabados de Grupo GF (MOM §9.6, owner 15-11-2026): los de sus cajas y
+ * sus motorizados, que se fueron de Repro Lima a Despacho del día junto a «Sale
+ * a reparto». Kenku sigue con Grupo GF hasta conectarse a GF Courier por API.
+ * Es la misma lectura de Repro Lima (`loadLimaPending`) y la misma regla
+ * (`limaStuck`), con las tiendas de quien opera: todas las de la organización
+ * con `logistics.manage`; las de Equipo si solo despacha. Devuelve solo las
+ * filas trabadas por un motivo de Grupo GF. Solo lee.
+ */
+export async function loadGfStuckOrders(orgId: string): Promise<{ rows: LimaPendingOrder[]; today: string } | { error: string }> {
+  const auth = await requireOperator(orgId);
+  if ("error" in auth) return auth;
+  try {
+    const admin = createAdminSupabase();
+    const { data: stores, error } = await admin.from("stores").select("id").eq("org_id", orgId);
+    if (error) return { error: `No pudimos leer las tiendas: ${error.message}` };
+    const storeIds = new Set(((stores ?? []) as Array<{ id: string }>).map((s) => s.id).filter((id) => storeAllowed(auth, id)));
+    const now = new Date();
+    const today = limaClock(now).day;
+    if (!storeIds.size) return { rows: [], today };
+    const rows = await loadLimaPending(admin, { userId: auth.userId, storeIds }, now);
+    const gfReasons = new Set(stuckReasonsOf("grupo_gf"));
+    const stuck = new Set(limaStuckItems(rows, today).filter((item) => gfReasons.has(item.reason)).map((item) => item.orderId));
+    return { rows: rows.filter((row) => stuck.has(row.orderId)), today };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 }

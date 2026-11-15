@@ -53,6 +53,31 @@ Verificar:
    pedido sin SKU deja «Guía GF automática no creada» en su historial y una sola alerta por Telegram, y la pasada de
    las 10:00 no lo repite.
 
+### 15-11-2026 · Repro Lima por las tareas del equipo; «Sale a reparto» y los trabados de Grupo GF, a Despacho del día (sin migración, MOM §9.5, §9.6 y §29.16)
+
+Sin migración, sin crons ni variables nuevas. No cambia permisos ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- Repro Lima se ordena en tres bloques sobre una sola lista: «Por gestionar hoy» (Confirmar primer despacho, No
+  entregados con «Reintentos Aliclik» dentro, Novedad del courier, Llamar después y Por cerrar con «Esperan
+  anulación»), «Agenda» (Hoy, los cinco próximos días por su nombre, Después y Sin fecha) y «En manos del courier»
+  (Guía creada, En ruta y Retornando, solo seguimiento). Los trabados del equipo son chips de su bloque.
+- Cada fila dice qué pasa, el próximo paso y la fecha agendada, con «Agendar» y «Atender». «Agendar» y «Mover a…»
+  usan las acciones de siempre: con un acuerdo, «Confirma fecha» con el mismo courier (`moveReproAgreement`, pide
+  si fue por llamada o WhatsApp); sin acuerdo y sin rótulo, «Programar envío» (`master.edit`).
+- «Sale a reparto» y los trabados de las cajas y los motorizados de Grupo GF («Armado sin caja de reparto», «Grupo GF
+  lo tomó y no lo puso en caja», «En una caja de un día que pasó», «Grupo GF no lo puede llevar» y «En reparto sin
+  resultado del motorizado») quedan solo en Grupo GF Courier → Despacho del día, para Kenku.
+- Los enlaces de antes (`atencion=programados_hoy`, `nunca_salieron`, `cerrados`…) abren lo más cercano.
+
+Verificar:
+1. Repro Lima abre en Todos con los tres bloques; la suma de la Agenda más «En manos del courier» cubre todos los
+   pendientes (un pedido puede estar en los dos si el courier tiene su guía y su día).
+2. «Agendar» en un pedido en Por generar rótulo deja «Programado · sale …» en el Master (`dispatch_date_set`); en uno
+   con acuerdo, la llamada nueva en «Antes de llamar» con «Día cambiado desde la lista de Repro Lima».
+3. «Mover a…» con varios elegidos dice cuántos se movieron y, por motivo, los que no.
+4. Grupo GF Courier → Despacho del día muestra «Trabados en Grupo GF» debajo de «Sale a reparto»; Repro Lima ya no
+   muestra ninguna de las dos.
+
 ### 15-11-2026 · Pasar de GF Courier a Aliclik anula la guía GF (sin migración, MOM §29.17)
 
 Sin migración, sin crons ni variables nuevas.

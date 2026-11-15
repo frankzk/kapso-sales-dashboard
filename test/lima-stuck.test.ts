@@ -14,6 +14,7 @@ import {
   limaStuckCounts,
   limaStuckItems,
   stuckFilter,
+  stuckReasonsOf,
 } from "@/lib/lima-stuck";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
@@ -250,10 +251,34 @@ describe("la bandeja", () => {
     expect(one).toContain("#KP134572");
     expect(one).not.toContain("#KP201072");
   });
-  it("vive en Repro Lima, fuera de «Reintentos Aliclik», con el motivo en la URL", () => {
+  it("la bandeja vive en Despacho del día con los motivos de Grupo GF; los del equipo, en los bloques de Repro Lima (owner, 15-11-2026)", () => {
     const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
-    expect(board).toContain("{!retriesOnly && <LimaStuckTray rows={scoped} today={today} selected={stuck} onSelect={chooseStuck} />}");
-    expect(board).toContain('stuckFilter(searchParams.get("trabado"))');
+    expect(board).not.toContain("<LimaStuckTray");
+    // El motivo sigue en la URL, solo con los del equipo; fuera de «Reintentos Aliclik».
+    expect(board).toContain('const stuck = retriesOnly ? null : stuckFilter(stuckParam, TEAM_HOMES);');
+    expect(board).toContain('const TEAM_HOMES: readonly LimaStuckHome[] = ["gestion", "courier"];');
+    const gf = readFileSync(resolve(process.cwd(), "components/gf-stuck-tray.tsx"), "utf8");
+    expect(gf).toContain('const GF_REASONS = stuckReasonsOf("grupo_gf");');
+    expect(gf).toContain("reasons={GF_REASONS}");
+    expect(gf).toContain("loadGfStuckOrders(orgId)");
+    const courier = readFileSync(resolve(process.cwd(), "app/dashboard/courier/actions.ts"), "utf8");
+    const load = courier.slice(courier.indexOf("export async function loadGfStuckOrders("));
+    expect(load).toContain("const auth = await requireOperator(orgId);");
+    expect(load).toContain("storeAllowed(auth, id)");
+    expect(load).toContain("await loadLimaPending(admin, { userId: auth.userId, storeIds }, now)");
+  });
+
+  it("con `reasons`, solo esos motivos: la bandeja de Grupo GF no enseña lo del equipo", async () => {
+    const { LimaStuckTray } = await import("@/components/lima-stuck-tray");
+    const rows = [
+      order({ orderId: "a", orderName: "#KP201072", macroSince: "2026-10-30T15:00:00Z" }),
+      order({ orderId: "c", orderName: "#KP3", stage: "preparacion", substage: "por_generar_rotulo", gf: null, macroSince: "2026-11-02T15:00:00Z", createdAt: "2026-11-02T15:00:00Z" }),
+    ];
+    const html = renderToStaticMarkup(createElement(LimaStuckTray, { rows, today: SUNDAY, selected: "todos", onSelect: () => {}, reasons: stuckReasonsOf("grupo_gf"), title: "Trabados en Grupo GF" }));
+    expect(html).toContain("Trabados en Grupo GF");
+    expect(html).toContain("#KP201072");
+    expect(html).not.toContain("#KP3");
+    expect(html).not.toContain("Sin rótulo<");
   });
 });
 
