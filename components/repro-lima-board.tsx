@@ -4,7 +4,7 @@
 // 15-11-2026). El «Flujo del día» —cinco pasos que suman el total— y la
 // «Agenda» sobre UNA lista: cada tarjeta filtra esa lista (`atencion` en la
 // URL; los valores de la pantalla anterior abren lo más cercano) y los
-// trabados del equipo (§9.6) van arriba como excepción (`trabado`). Las acciones
+// trabados del equipo (§9.6) van dentro de su paso (`trabado`). Las acciones
 // conservan los permisos y guardas del pedido y de cada caso.
 //
 // «Agendar» pone el día sin abrir la ficha y «Mover a…» lo pone a varios, por
@@ -29,10 +29,11 @@ import { cutoffNotice } from "@/lib/repro-lima";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
-import { ReproLimaBlocks, type LimaStuckChip } from "@/components/repro-lima-blocks";
+import { ReproLimaBlocks } from "@/components/repro-lima-blocks";
+import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { AgendarButton, ChannelPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
-import { LIMA_STUCK_HOME_LABEL, LIMA_STUCK_OWNER_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, stuckReasonsOf, type LimaStuckHome, type LimaStuckReason } from "@/lib/lima-stuck";
+import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, type LimaStuckHome } from "@/lib/lima-stuck";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { agendarReproLima, type AgendarResult } from "@/app/dashboard/pedidos/repro-lima/agenda-actions";
 import { retryApproveNoLocation } from "@/lib/lima-retry-auto";
@@ -47,8 +48,10 @@ import {
   hoySinGuiaAlert,
   limaBoardCounts,
   limaBoardRows,
+  limaOwnRoute,
   limaSuggestedDay,
   type LimaBoardKey,
+  type LimaStep,
 } from "@/lib/repro-lima-blocks";
 import { DISPATCH_DATE_MAX_DAYS } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
@@ -57,8 +60,6 @@ import { createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pen
 const FOCUS_REFRESH_MS = 20_000;
 /** Los trabados que se ven en Repro Lima; los de Grupo GF, en Despacho del día. */
 const TEAM_HOMES: readonly LimaStuckHome[] = ["gestion", "courier"];
-const GESTION_STUCK = stuckReasonsOf("gestion");
-const COURIER_STUCK = stuckReasonsOf("courier");
 
 type Feedback = {
   kind: "notice" | "error";
@@ -72,13 +73,17 @@ type Feedback = {
   mesa?: Array<{ orderId: string; orderName: string }>;
 };
 
-export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false }: {
+export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [] }: {
   data: ReproLimaData;
   pending: LimaPendingOrder[];
   /** Despacho sin `repro_lima.manage` (03-11-2026): solo «Reintentos Aliclik», sin Atender ni Agendar. */
   retriesOnly?: boolean;
   /** «Programar envío» (§6.2) pide `master.edit`: sin él, «Agendar» solo cambia acuerdos. */
   canScheduleDispatch?: boolean;
+  /** «No se entregó» escribe por el motorizado (`routes.report_others`, como Coordinación). */
+  canReportForRider?: boolean;
+  /** Las tiendas con la guía GF automática en Activo: su guía de mañana no alarma. */
+  autoGuideStores?: readonly string[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -122,7 +127,9 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
   // El paso, el día y el courier: una clasificación por pedido, para las cifras y la lista.
   const agendaDays = useMemo(() => agendaWindow(today), [today]);
-  const classes = useMemo(() => classifyLimaRows(scoped, data.rows, today, agendaDays), [scoped, data.rows, today, agendaDays]);
+  const autoGuideKey = autoGuideStores.join(",");
+  const autoGuide = useMemo(() => new Set(autoGuideKey ? autoGuideKey.split(",") : []), [autoGuideKey]);
+  const classes = useMemo(() => classifyLimaRows(scoped, data.rows, today, agendaDays, { autoGuideStores: autoGuide }), [scoped, data.rows, today, agendaDays, autoGuide]);
   const counts = useMemo(() => limaBoardCounts(scoped, classes), [scoped, classes]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
   // `loadReproLima` ya ordena los casos (`sortRepro`): No entregados y Llamar después siguen ese orden.
@@ -132,17 +139,21 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     [scoped, today, retriesOnly],
   );
   const stuckByOrder = useMemo(() => new Map(stuckItems.map((item) => [item.orderId, item])), [stuckItems]);
-  const stuckChips = useMemo(() => {
-    const count = new Map<LimaStuckReason, number>();
-    for (const item of stuckItems) count.set(item.reason, (count.get(item.reason) ?? 0) + 1);
-    const chips = (reasons: readonly LimaStuckReason[]): LimaStuckChip[] => reasons.map((reason) => ({ reason, count: count.get(reason) ?? 0 }));
-    return { gestion: chips(GESTION_STUCK), courier: chips(COURIER_STUCK) };
-  }, [stuckItems]);
+  // Los trabados viven dentro de su paso (owner, 15-11-2026): cuántos tiene cada uno.
+  const stuckByStep = useMemo(() => {
+    const out: Record<LimaStep, number> = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, con_courier: 0, por_cerrar: 0 };
+    for (const item of stuckItems) {
+      const step = classes.get(item.orderId)?.step;
+      if (step) out[step] = (out[step] ?? 0) + 1;
+    }
+    return out;
+  }, [stuckItems, classes]);
   const inQueue = useMemo(() => {
     if (stuck) {
-      // Los trabados, en su orden: por motivo y lo que más lleva primero.
+      // Los trabados, en su orden: por motivo y lo que más lleva primero; con un
+      // paso elegido, solo los de ese paso.
       const byId = new Map(scoped.map((row) => [row.orderId, row]));
-      return stuckItems.filter((item) => stuck === "todos" || item.reason === stuck)
+      return stuckItems.filter((item) => (stuck === "todos" || item.reason === stuck) && (key === "todos" || classes.get(item.orderId)?.step === key))
         .map((item) => byId.get(item.orderId))
         .filter((row): row is LimaPendingOrder => Boolean(row));
     }
@@ -182,12 +193,13 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     replaceParams(params);
   }
 
-  function chooseStuck(next: LimaStuckReason | "todos" | null) {
+  /** «Trabados» dentro de un paso: los trabados de ese paso; tocarlo otra vez vuelve al paso. */
+  function chooseStepStuck(step: LimaStep) {
     setPicked(new Set());
     const params = new URLSearchParams(searchParams.toString());
-    params.delete("atencion");
-    if (next && next !== stuck) params.set("trabado", next);
-    else params.delete("trabado");
+    params.set("atencion", step);
+    if (stuck && key === step) params.delete("trabado");
+    else params.set("trabado", "todos");
     replaceParams(params);
   }
 
@@ -267,6 +279,10 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}
             onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }}
           />
+        )}
+        {/* Ruta vencida del reparto propio: la clienta confirma que no lo recibió → se registra por el motorizado (owner, 15-11-2026). */}
+        {canReportForRider && classes.get(row.orderId)?.noReport && limaOwnRoute(row) && (
+          <NoEntregoButton row={row} size={size} onDone={(f) => { setFeedback(f); refresh(); }} />
         )}
         <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>
       </>
@@ -390,8 +406,9 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   }
 
   const card = stuck ? null : boardCard(key, today);
+  const stepCard = key !== "todos" ? boardCard(key, today) : null;
   const listTitle = stuck
-    ? stuck === "todos" ? "Trabados" : `Trabados · ${limaStuckRule(stuck).label}`
+    ? stuck !== "todos" ? `Trabados · ${limaStuckRule(stuck).label}` : stepCard ? `Trabados · ${stepCard.label}` : "Trabados"
     : card?.label ?? "Todos los pendientes";
   const listHelp = stuck
     ? stuck === "todos" ? "Lo del equipo que se quedó quieto más de lo que debería, lo que más lleva primero." : `${limaStuckRule(stuck).hint} Siguiente paso: ${limaStuckRule(stuck).action}`
@@ -431,38 +448,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             </button>
           )}
           <Badge tone={cutoff.passed ? "warn" : "info"} wrap>{cutoff.text}</Badge>
-          {/* Los trabados son la excepción de la página (DESIGN.md: «las píldoras de excepción»): una sola, y sus motivos al elegirla. */}
-          {!retriesOnly && (stuckItems.length > 0 || stuck) && (
-            <AttentionPill
-              icon={IconAlert}
-              label="Trabados"
-              count={stuckItems.length}
-              active={Boolean(stuck)}
-              hint="Pedidos del equipo quietos más de lo que deberían, lo que más lleva primero (§9.6)."
-              onClick={() => chooseStuck(stuck ? null : "todos")}
-            />
-          )}
           <span className="text-[13px] text-ink-500" aria-live="polite">{refreshing ? "Actualizando…" : null}</span>
         </div>
-        {stuck && (
-          <div role="group" aria-label="Trabados por motivo" className="flex flex-wrap items-center gap-1.5 rounded-lg bg-warn-wash px-3 py-2.5 ring-1 ring-inset ring-warn-bg">
-            <span className="mr-1 text-[13px] font-medium text-warn-fg">Trabados por motivo:</span>
-            <ChoiceChip label="Todos" count={stuckItems.length} active={stuck === "todos"} onClick={() => chooseStuck("todos")} />
-            {[...stuckChips.gestion, ...stuckChips.courier].filter((chip) => chip.count > 0 || stuck === chip.reason).map((chip) => {
-              const rule = limaStuckRule(chip.reason);
-              return (
-                <ChoiceChip
-                  key={chip.reason}
-                  label={rule.label}
-                  count={chip.count}
-                  active={stuck === chip.reason}
-                  title={`${rule.hint} Siguiente paso (${LIMA_STUCK_OWNER_LABEL[rule.owner]}): ${rule.action}`}
-                  onClick={() => chooseStuck(chip.reason)}
-                />
-              );
-            })}
-          </div>
-        )}
       </header>
 
       {retriesOnly ? (
@@ -470,7 +457,14 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <StatusCard label={LIMA_SUB_FILTERS.reintentos_aliclik.label} value={counts.sub.reintentos_aliclik} hint={LIMA_SUB_FILTERS.reintentos_aliclik.hint} active onClick={() => {}} />
         </div>
       ) : (
-        <ReproLimaBlocks counts={counts} today={today} active={stuck ? "todos" : key} onPick={chooseKey} guideAlert={hoySinGuiaAlert(now)} />
+        <ReproLimaBlocks
+          counts={counts}
+          today={today}
+          active={key}
+          onPick={chooseKey}
+          guideAlert={hoySinGuiaAlert(now)}
+          stuck={{ byStep: stuckByStep, active: Boolean(stuck), onPick: chooseStepStuck }}
+        />
       )}
 
       {moved && (

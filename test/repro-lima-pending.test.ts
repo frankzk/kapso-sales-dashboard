@@ -15,6 +15,8 @@ vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
 vi.mock("@/app/dashboard/pedidos/repro-lima/agenda-actions", () => ({ agendarReproLima: vi.fn() }));
 vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAliclikRetry: vi.fn(), dismissAliclikRetry: vi.fn() }));
 vi.mock("@/app/dashboard/pedidos/repro-lima/prior-counts-actions", () => ({ loadPriorOrderCounts: vi.fn(async () => ({ counts: {} })) }));
+vi.mock("@/app/dashboard/pedidos/repro-lima/no-entrego-actions", () => ({ loadNoEntregoStop: vi.fn() }));
+vi.mock("@/app/reparto/actions", () => ({ reportStop: vi.fn() }));
 vi.mock("@/components/order-master-shared", () => ({ MacroStageDot: () => null }));
 const nav = vi.hoisted(() => ({ search: "" }));
 vi.mock("next/navigation", () => ({

@@ -145,6 +145,25 @@ export async function loadGfReadyStores(
   return { stores, error: null };
 }
 
+/**
+ * Las tiendas (de las pedidas) cuya guía GF automática está en Activo: GF
+ * Courier por API habilitado y la organización en «activo». Para que Repro
+ * Lima no alarme por la guía de mañana que la pasada creará sola (owner,
+ * 15-11-2026). Sin descifrar el token: es solo para decidir el tono. Ante un
+ * error, ninguna (se alarma como antes).
+ */
+export async function loadGfAutoActiveStores(admin: SupabaseClient, storeIds: readonly string[]): Promise<string[]> {
+  if (!storeIds.length) return [];
+  const { data: stores, error } = await admin.from("stores").select("id,org_id").in("id", [...storeIds]).eq("status", "active").eq("gf_courier_enabled", true);
+  if (error || !stores?.length) return [];
+  const orgIds = [...new Set((stores as { org_id: string | null }[]).map((s) => s.org_id).filter((id): id is string => Boolean(id)))];
+  if (!orgIds.length) return [];
+  const { data: settings, error: settingsError } = await admin.from(GF_AUTO_SETTINGS).select("org_id,mode").in("org_id", orgIds);
+  if (settingsError) return [];
+  const active = new Set((settings ?? []).filter((r: { mode: string }) => gfAutoModeFrom(r.mode) === "activo").map((r: { org_id: string }) => r.org_id));
+  return (stores as { id: string; org_id: string | null }[]).filter((s) => s.org_id && active.has(s.org_id)).map((s) => s.id);
+}
+
 /** La tabla aún no existe (0345 sin aplicar): PostgREST o Postgres. */
 function isMissingRelation(error: { code?: string | null; message?: string | null } | null | undefined): boolean {
   if (!error) return false;

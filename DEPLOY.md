@@ -85,6 +85,23 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 15-11-2026 · Repro Lima: Retornando a No entregados, fecha de la ruta del courier, trabados dentro de su paso, guía automática de mañana y «No se entregó» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- **Retornando** pasa de Con el courier a No entregados (filtro «Retornando»).
+- **Fecha de la ruta:** lo que lleva un courier dice el día del recojo o de la ruta («Vencido · vie 13/11 · Recojo de
+  Aliclik», «Hoy · En ruta»); la celda dice cuántos están en ruta hoy y cuántos son de la ruta anterior.
+- **Trabados** dentro de cada paso («N trabados» y su filtro); sale la píldora de arriba.
+- **«Mañana sin guía»** no alarma por lo que creará la guía GF automática en Activo.
+- **«No se entregó»** en «Sin reporte de la ruta» del reparto propio: motivo, nota y captura obligatoria, por
+  `reportStop` (pide `routes.report_others`); el pedido pasa a «Por reprogramar Lima». En otros couriers, sin botón.
+
+Verificar en Repro Lima:
+1. Un pedido en retorno aparece en No entregados → «Retornando».
+2. «Con el courier» → filas con el día de su ruta o recojo.
+3. Con un rol con «Reportar por otros», «No se entregó» exige la captura y el pedido pasa a «Por reprogramar Lima».
+
 ### 15-11-2026 · Repro Lima: ruta vencida sin reporte a No entregados, Kapta propone el día y «Hoy sin guía» desde las 10:30 (sin migración, MOM §9.5, DESIGN.md)
 
 Sin migración, sin crons ni variables nuevas. No cambia la etapa del Master, estados, permisos ni
