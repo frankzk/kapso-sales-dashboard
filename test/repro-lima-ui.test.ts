@@ -416,7 +416,7 @@ describe("el tablero (E31, E33)", () => {
     expect(pendingUI).toContain('<ul className="divide-y divide-line border-t border-line xl:hidden">');
   });
 
-  it("una sola lista y, encima, los tres bloques como sus filtros (owner, 15-11-2026)", () => {
+  it("una sola lista y, encima, el flujo y la Agenda como sus filtros (owner, 15-11-2026)", () => {
     expect(board.match(/<LimaPendingList\b/g)).toHaveLength(1);
     expect(board).not.toContain("<ReproLimaTodos");
     expect(board).not.toContain("<table");
@@ -434,9 +434,10 @@ describe("el tablero (E31, E33)", () => {
     expect(board).not.toContain("requestAnimationFrame");
     const blocks = read("components/repro-lima-blocks.tsx");
     expect(blocks.indexOf('title="Flujo del día"')).toBeLessThan(blocks.indexOf('title="Agenda"'));
-    expect(blocks.indexOf('title="Agenda"')).toBeLessThan(blocks.indexOf('title="En manos del courier"'));
+    // «En manos del courier» es ahora el quinto paso del flujo (tercera vuelta): dos bloques.
+    expect(blocks).not.toContain('title="En manos del courier"');
     // Una franja por bloque (celdas separadas por líneas finas), no tarjetas sueltas.
-    expect(blocks.match(/<Strip\b/g)).toHaveLength(3);
+    expect(blocks.match(/<Strip\b/g)).toHaveLength(2);
   });
 
   it("«Todos» agrupa por etapa y subetapa del Master, con enlaces a sus colas (§9.5)", () => {

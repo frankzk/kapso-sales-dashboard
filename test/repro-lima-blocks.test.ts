@@ -1,8 +1,9 @@
 // «Repro Lima» por las tareas del equipo (owner, 15-11-2026; MOM §9.5): las
-// reglas puras de los tres bloques —«Por gestionar hoy», «Agenda» y «En manos
-// del courier»—, con qué acción existente se agenda cada pedido, dónde se ve
-// cada trabado (§9.6) y, leídas en el código, las guardas de «Agendar» y
-// «Mover a…» y la mudanza de «Sale a reparto» a Grupo GF Courier.
+// reglas puras del «Flujo del día» —seis pasos que suman el total, dos de
+// ellos plegados (tercera vuelta)— y de la «Agenda» —Hoy, Mañana, Después y Sin fecha, con o sin
+// guía—, con qué acción existente se agenda cada pedido, dónde se ve cada
+// trabado (§9.6) y, leídas en el código, las guardas de «Agendar» y «Mover a…»
+// y la mudanza de «Sale a reparto» a Grupo GF Courier.
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
@@ -10,7 +11,10 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LimaPendingOps, LimaPendingOrder } from "@/lib/repro-lima-pending";
 import {
+  AGENDAR_QUICK_DAYS,
   AGENDA_NAMED_DAYS,
+  LIMA_FOLDED_STEPS,
+  LIMA_STEP_CARDS,
   LIMA_TASK_CARDS,
   agendaCards,
   agendaDayLabel,
@@ -29,6 +33,7 @@ import {
   limaBoardRows,
   limaCourierState,
   limaNextStep,
+  limaStepOf,
   limaTaskOf,
   type BoardCase,
 } from "@/lib/repro-lima-blocks";
@@ -76,7 +81,8 @@ describe("«Por gestionar hoy»: una tarea por pedido, la primera que aplica", (
     expect(limaTaskOf(failed())).toBe("no_entregados");
     expect(limaTaskOf(failed(), caseOf())).toBe("no_entregados");
     expect(limaTaskOf(failed(), caseOf({ list: "programados", agreement: { agreedOn: "2026-11-17", courier: "propio" } }))).toBeNull();
-    expect(cls(failed(), caseOf({ list: "programados", agreement: { agreedOn: "2026-11-17", courier: "propio" } }))).toMatchObject({ task: null, agenda: "2026-11-17", agreed: true });
+    // Con su día acordado sale de No entregados: queda por sacar a reparto, en la Agenda (el mar 17 es «Después»), y sin guía todavía.
+    expect(cls(failed(), caseOf({ list: "programados", agreement: { agreedOn: "2026-11-17", courier: "propio" } }))).toMatchObject({ task: null, step: "por_sacar", agenda: "despues", agendaDay: "2026-11-17", agreed: true, guide: false });
   });
 
   it("los reintentos por Aliclik van dentro de No entregados, aunque se haya pedido llamar después", () => {
@@ -129,28 +135,41 @@ describe("«En manos del courier»: solo seguimiento, por su estado", () => {
   });
 });
 
-describe("«Agenda»: Hoy, los próximos días por su nombre, Después y Sin fecha", () => {
-  it("nombra cinco días de reparto desde mañana; un domingo en medio queda dentro", () => {
-    expect(AGENDA_NAMED_DAYS).toBe(5);
-    expect(agendaWindow(TODAY)).toEqual(["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20"]);
-    expect(agendaWindow("2026-11-14")).toEqual(["2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20"]);
+describe("«Agenda»: Hoy, Mañana, Después y Sin fecha (owner, 15-11-2026: «lo del martes al viernes, ponlo dentro de Después»)", () => {
+  it("«Mañana» es el próximo día de reparto; el sábado llega hasta el lunes (el domingo no se reparte)", () => {
+    expect(AGENDA_NAMED_DAYS).toBe(1);
+    expect(agendaWindow(TODAY)).toEqual(["2026-11-16"]);
+    expect(agendaWindow("2026-11-14")).toEqual(["2026-11-15", "2026-11-16"]);
+    expect(agendaWindow("2026-11-16")).toEqual(["2026-11-17"]);
     expect(agendaDayLabel("2026-11-16")).toBe("Lun 16");
     expect(agendaDayLabel("2026-11-17")).toBe("Mar 17");
   });
 
-  it("lo vencido sigue en Hoy; más allá de los días nombrados, Después; sin día, Sin fecha", () => {
+  it("lo vencido sigue en Hoy; el próximo día de reparto, Mañana; de martes a viernes y más allá, Después; sin día, Sin fecha", () => {
     expect(agendaKeyOf("2026-11-12", TODAY, WINDOW)).toBe("hoy");
     expect(agendaKeyOf(TODAY, TODAY, WINDOW)).toBe("hoy");
-    expect(agendaKeyOf("2026-11-20", TODAY, WINDOW)).toBe("2026-11-20");
-    expect(agendaKeyOf("2026-11-21", TODAY, WINDOW)).toBe("despues");
+    expect(agendaKeyOf("2026-11-16", TODAY, WINDOW)).toBe("manana");
+    for (const day of ["2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-21", "2026-12-01"]) expect(agendaKeyOf(day, TODAY, WINDOW), day).toBe("despues");
     expect(agendaKeyOf(null, TODAY, WINDOW)).toBe("sin_fecha");
+    // Un sábado, un acuerdo para el domingo o el lunes es «Mañana».
+    expect(agendaKeyOf("2026-11-15", "2026-11-14", agendaWindow("2026-11-14"))).toBe("manana");
+    expect(agendaKeyOf("2026-11-16", "2026-11-14", agendaWindow("2026-11-14"))).toBe("manana");
+    expect(agendaKeyOf("2026-11-17", "2026-11-14", agendaWindow("2026-11-14"))).toBe("despues");
   });
 
   it("el día: el acuerdo vigente, el programa de Grupo GF, el recojo del courier o «Programar envío», y de dónde sale", () => {
-    expect(cls(row({ scheduledOn: "2026-11-17" }))).toMatchObject({ agenda: "2026-11-17", agendaOrigin: "envio" });
-    expect(cls(row({ programmedFor: "2026-11-16", scheduledOn: "2026-11-17" }))).toMatchObject({ agenda: "2026-11-16", agendaOrigin: "programa" });
-    expect(cls(row({ stage: "por_despachar", substage: "listo_para_recojo", courierPickup: { courier: "aliclik", date: "2026-11-18" } }))).toMatchObject({ agenda: "2026-11-18", agendaOrigin: "recojo", courier: "guia_creada" });
-    expect(cls(failed({ programmedFor: "2026-11-16" }), caseOf({ list: "programados", agreement: { agreedOn: "2026-11-19" } }))).toMatchObject({ agenda: "2026-11-19", agendaOrigin: "acuerdo" });
+    expect(cls(row({ scheduledOn: "2026-11-17" }))).toMatchObject({ agenda: "despues", agendaDay: "2026-11-17", agendaOrigin: "envio" });
+    expect(cls(row({ programmedFor: "2026-11-16", scheduledOn: "2026-11-17" }))).toMatchObject({ agenda: "manana", agendaDay: "2026-11-16", agendaOrigin: "programa" });
+    expect(cls(row({ stage: "por_despachar", substage: "listo_para_recojo", courierPickup: { courier: "aliclik", date: "2026-11-18" } }))).toMatchObject({ agenda: "despues", agendaDay: "2026-11-18", agendaOrigin: "recojo", courier: "guia_creada" });
+    expect(cls(failed({ programmedFor: "2026-11-16" }), caseOf({ list: "programados", agreement: { agreedOn: "2026-11-19" } }))).toMatchObject({ agenda: "despues", agendaDay: "2026-11-19", agendaOrigin: "acuerdo" });
+  });
+
+  it("con guía o sin guía: la guía viva de un courier o el rótulo cuentan; «por generar rótulo» y «por reprogramar Lima» no", () => {
+    expect(cls(row({ programmedFor: TODAY })).guide).toBe(false);
+    expect(cls(row({ substage: "por_armar", programmedFor: TODAY, ops: ops({ liveCouriers: ["propio"] }) })).guide).toBe(true);
+    expect(cls(row({ stage: "por_despachar", substage: "listo_para_recojo", ops: ops({ liveCouriers: ["gf_courier"] }) })).guide).toBe(true);
+    expect(cls(row({ courierPickup: { courier: "aliclik", date: "2026-11-16" } })).guide).toBe(true);
+    expect(cls(failed(), caseOf({ list: "programados", agreement: { agreedOn: TODAY } })).guide).toBe(false);
   });
 
   it("con el courier, la Agenda solo lo lleva si tiene un día por delante; un día que pasó ya no es una fecha por cumplir", () => {
@@ -158,14 +177,16 @@ describe("«Agenda»: Hoy, los próximos días por su nombre, Después y Sin fec
     expect(cls(row({ stage: "por_despachar", substage: "listo_para_recojo", ops: ops({ liveCouriers: ["gf_courier"] }) }))).toMatchObject({ agenda: null, courier: "guia_creada" });
   });
 
-  it("las tarjetas: Hoy, cada día de reparto nombrado (el domingo solo con pedidos), Después y Sin fecha", () => {
-    expect(agendaCards(TODAY, {}).map((c) => c.label)).toEqual(["Hoy", "Lun 16", "Mar 17", "Mié 18", "Jue 19", "Vie 20", "Después", "Sin fecha"]);
-    expect(agendaCards("2026-11-14", {}).map((c) => c.label)).not.toContain("Dom 15");
-    expect(agendaCards("2026-11-14", { "2026-11-15": 2 }).map((c) => c.label)).toContain("Dom 15");
+  it("las cuatro tarjetas: Hoy, Mañana (con su día), Después y Sin fecha", () => {
+    expect(agendaCards(TODAY).map((c) => c.key)).toEqual(["hoy", "manana", "despues", "sin_fecha"]);
+    expect(agendaCards(TODAY).map((c) => c.label)).toEqual(["Hoy", "Mañana · Lun 16", "Después", "Sin fecha"]);
+    // Un sábado, «Mañana» es el lunes: se dice el día, no «Mañana».
+    expect(agendaCards("2026-11-14").map((c) => c.label)).toEqual(["Hoy", "Lun 16", "Después", "Sin fecha"]);
+    expect(agendaCards(TODAY).find((c) => c.key === "despues")?.hint).toBe("Agendados después del lunes 16/11.");
   });
 });
 
-describe("ningún pedido se pierde: todos están en la Agenda o en manos del courier", () => {
+describe("los seis pasos suman el total (owner, 15-11-2026: «estos 5 no suman 1,438 pedidos»)", () => {
   const rows = [
     row({ orderId: "a" }),
     row({ orderId: "b", scheduledOn: "2026-11-17" }),
@@ -177,18 +198,64 @@ describe("ningún pedido se pierde: todos están en la Agenda o en manos del cou
     row({ orderId: "h", hasPriorDispatch: true }),
   ];
   const classes = classifyLimaRows(rows, [], TODAY);
-  it("cada uno en uno o en los dos", () => {
+  it("cada pedido está en un paso y solo uno; lo que falta sacar está siempre en la Agenda", () => {
+    const counts = limaBoardCounts(rows, classes);
+    expect(counts.step).toEqual({ novedad: 1, llamar_despues: 0, no_entregados: 1, por_sacar: 3, con_courier: 3, por_cerrar: 0 });
+    expect(Object.values(counts.step).reduce((a, b) => a + b, 0)).toBe(counts.todos);
+    for (const step of LIMA_STEP_CARDS.map((c) => c.key)) {
+      expect(limaBoardRows(rows, classes, step).length, step).toBe(counts.step[step]);
+    }
     for (const r of rows) {
       const c = classes.get(r.orderId)!;
-      expect(c.agenda !== null || c.courier !== null, r.orderId).toBe(true);
+      if (c.step === "por_sacar") expect(c.agenda, r.orderId).not.toBeNull();
     }
-    const counts = limaBoardCounts(rows, classes);
     expect(counts.task).toEqual({ primer_despacho: 1, no_entregados: 1, novedad: 1, llamar_despues: 0, por_cerrar: 0 });
     expect(counts.courier).toEqual({ guia_creada: 1, en_ruta: 2, retornando: 1 });
-    expect(counts.agenda).toEqual({ hoy: 0, despues: 0, sin_fecha: 3, "2026-11-17": 1 });
+    expect(counts.agenda).toEqual({ hoy: 0, manana: 0, despues: 1, sin_fecha: 2 });
   });
-  it("en Todos, primero lo que pide al equipo (en el orden de sus tarjetas), después la Agenda, Sin fecha y el courier", () => {
-    expect(limaBoardRows(rows, classes, "todos").map((r) => r.orderId)).toEqual(["a", "e", "f", "b", "h", "c", "d", "g"]);
+  it("en Todos, por paso: la novedad, lo que tiene hora, lo que falló, lo que falta sacar (por su día) y lo del courier", () => {
+    expect(limaBoardRows(rows, classes, "todos").map((r) => r.orderId)).toEqual(["f", "e", "b", "a", "h", "c", "d", "g"]);
+  });
+  it("«Por cerrar» y «Con el courier» van plegados al final, pero cuentan: sin ellos la suma no cierra (owner, 15-11-2026)", () => {
+    expect(LIMA_STEP_CARDS.map((c) => c.label)).toEqual(["Novedad del courier", "Llamar después", "No entregados", "Sacar a reparto", "Con el courier", "Por cerrar"]);
+    expect([...LIMA_FOLDED_STEPS]).toEqual(["con_courier", "por_cerrar"]);
+    expect(limaStepOf("por_cerrar", "en_ruta")).toBe("por_cerrar");
+    expect(limaStepOf("por_cerrar", null)).toBe("por_cerrar");
+    expect(limaStepOf("primer_despacho", null)).toBe("por_sacar");
+    expect(limaStepOf(null, null)).toBe("por_sacar");
+    expect(limaStepOf(null, "guia_creada")).toBe("con_courier");
+    expect(limaStepOf("novedad", "en_ruta")).toBe("novedad");
+    const tanders = row({ stage: "en_curso", substage: "en_transito", courier: "tanders", ops: ops({ liveCouriers: ["tanders"], reportedStatus: "DELIVERED", courierDelivered: { courier: "tanders" } }) });
+    expect(cls(tanders)).toMatchObject({ task: "por_cerrar", step: "por_cerrar", courier: "en_ruta" });
+    expect(cls(failed(), caseOf({ list: "cerrados" }))).toMatchObject({ task: "por_cerrar", step: "por_cerrar", awaitingCancel: true });
+    const both = [tanders, failed({ orderId: "x" }), row({ orderId: "y" })];
+    const bc = limaBoardCounts(both, classifyLimaRows(both, [{ orderId: "x", list: "cerrados" }], TODAY));
+    expect(bc.step).toMatchObject({ por_cerrar: 2, por_sacar: 1 });
+    expect(Object.values(bc.step).reduce((a, b) => a + b, 0)).toBe(bc.todos);
+  });
+  it("Hoy y Mañana dicen cuántos tienen guía; los que no son una alerta con su filtro", () => {
+    const day = [
+      row({ orderId: "hoy-sin", programmedFor: TODAY }),
+      row({ orderId: "vencido-sin", programmedFor: "2026-11-12" }),
+      row({ orderId: "hoy-rotulo", substage: "por_armar", programmedFor: TODAY, ops: ops({ liveCouriers: ["propio"] }) }),
+      row({ orderId: "manana-sin", scheduledOn: "2026-11-16" }),
+      row({ orderId: "manana-guia", stage: "por_despachar", substage: "listo_para_recojo", courierPickup: { courier: "aliclik", date: "2026-11-16" } }),
+      row({ orderId: "despues-sin", scheduledOn: "2026-11-18" }),
+    ];
+    const c = classifyLimaRows(day, [], TODAY);
+    const counts = limaBoardCounts(day, c);
+    expect(counts.agenda).toMatchObject({ hoy: 3, manana: 2, despues: 1 });
+    expect(counts.sub).toMatchObject({ hoy_sin_guia: 2, manana_sin_guia: 1 });
+    expect(limaBoardRows(day, c, "hoy_sin_guia").map((r) => r.orderId)).toEqual(["vencido-sin", "hoy-sin"]);
+    expect(limaBoardRows(day, c, "manana_sin_guia").map((r) => r.orderId)).toEqual(["manana-sin"]);
+    // La guía de Aliclik para mañana está con el courier, y en la Agenda de mañana.
+    expect(c.get("manana-guia")).toMatchObject({ step: "con_courier", agenda: "manana", guide: true });
+    const now = new Date("2026-11-15T16:00:00Z");
+    const next = (id: string) => limaNextStep(day.find((r) => r.orderId === id)!, undefined, c.get(id)!, TODAY, now);
+    expect(next("hoy-sin")).toBe("Sale hoy y no tiene guía ni rótulo: créala desde la Mesa de ruta para que salga.");
+    expect(next("vencido-sin")).toBe("Debía salir el jue 12/11 y no tiene guía ni rótulo: créala hoy desde la Mesa de ruta o reagéndalo.");
+    expect(next("manana-sin")).toBe("Sale mañana y no tiene guía ni rótulo: genérala hoy.");
+    expect(next("hoy-rotulo")).toBe("Sale hoy.");
   });
   it("No entregados sigue el orden de los casos (`sortRepro`)", () => {
     const two = [failed({ orderId: "x" }), failed({ orderId: "y" })];
@@ -199,16 +266,25 @@ describe("ningún pedido se pierde: todos están en la Agenda o en manos del cou
 
 describe("el filtro de la URL (`atencion`)", () => {
   it("las claves nuevas pasan; un día que pasó abre Hoy; lo desconocido, Todos", () => {
-    for (const key of ["primer_despacho", "no_entregados", "novedad", "llamar_despues", "por_cerrar", "guia_creada", "en_ruta", "retornando", "hoy", "despues", "sin_fecha", "reprogramados", "esperan_anulacion"]) {
+    for (const key of ["novedad", "llamar_despues", "no_entregados", "por_sacar", "con_courier", "por_cerrar", "guia_creada", "en_ruta", "retornando", "hoy", "manana", "despues", "sin_fecha", "reprogramados", "esperan_anulacion", "reintentos_aliclik", "mas_de_30", "hoy_sin_guia", "manana_sin_guia"]) {
       expect(boardFilter(key, TODAY)).toBe(key);
     }
-    expect(boardFilter("2026-11-18", TODAY)).toBe("2026-11-18");
+    // «Confirmar primer despacho» de antes abre Sacar a reparto.
+    expect(boardFilter("primer_despacho", TODAY)).toBe("por_sacar");
+    // Un día guardado de la Agenda anterior abre su cajón de ahora.
+    expect(boardFilter("2026-11-16", TODAY)).toBe("manana");
+    expect(boardFilter("2026-11-18", TODAY)).toBe("despues");
     expect(boardFilter("2026-11-10", TODAY)).toBe("hoy");
     expect(boardFilter("2026-13-45", TODAY)).toBe("todos");
     expect(boardFilter("DROP", TODAY)).toBe("todos");
   });
   it("cada clave tiene su título y su vacío para la lista", () => {
     expect(boardCard("no_entregados", TODAY)).toMatchObject({ label: "No entregados", block: "gestion" });
+    expect(boardCard("por_sacar", TODAY)).toMatchObject({ label: "Sacar a reparto", block: "gestion" });
+    expect(boardCard("con_courier", TODAY)).toMatchObject({ label: "Con el courier", block: "gestion" });
+    expect(boardCard("por_cerrar", TODAY)).toMatchObject({ label: "Por cerrar", block: "gestion" });
+    expect(boardCard("manana", TODAY)).toMatchObject({ label: "Mañana · Lun 16", block: "agenda" });
+    expect(boardCard("hoy_sin_guia", TODAY)).toMatchObject({ label: "Hoy sin guía", block: "agenda" });
     expect(boardCard("reintentos_aliclik", TODAY)).toMatchObject({ label: "Reintentos Aliclik", block: "gestion" });
     expect(boardCard("2026-11-17", TODAY)).toMatchObject({ label: "Mar 17", block: "agenda" });
     expect(boardCard("2026-12-01", TODAY)?.empty).toBe("No hay pedidos agendados para el mar 01/12 con estos filtros.");
@@ -220,13 +296,13 @@ describe("el filtro de la URL (`atencion`)", () => {
 describe("el próximo paso de la fila", () => {
   const now = new Date("2026-11-15T16:00:00Z");
   it("dice qué toca por su tarea, su día o su courier", () => {
-    expect(limaNextStep(row(), undefined, cls(row()), TODAY, now)).toBe("Confirmar los datos con la clienta y agendar la salida.");
+    expect(limaNextStep(row(), undefined, cls(row()), TODAY, now)).toBe("Sacarlo a reparto: agenda el día y genera su guía (confirma los datos con la clienta si hace falta).");
     expect(limaNextStep(failed(), undefined, cls(failed()), TODAY, now)).toBe("Llamar a la clienta y acordar el día y el courier (Atender).");
     const llamar = caseOf({ list: "llamar_despues", nextCallAt: "2026-11-15T20:00:00Z" });
     expect(limaNextStep(failed(), llamar, cls(failed(), llamar), TODAY, now)).toBe("Llamar hoy 15:00.");
     const b = row({ scheduledOn: "2026-11-17" });
     expect(limaNextStep(b, undefined, cls(b), TODAY, now)).toBe("Sale el mar 17/11. Sin gestión salvo que la clienta cambie algo.");
-    const vencido = row({ programmedFor: "2026-11-12", hasPriorDispatch: true });
+    const vencido = row({ substage: "por_armar", programmedFor: "2026-11-12", hasPriorDispatch: true, ops: ops({ liveCouriers: ["propio"] }) });
     expect(limaNextStep(vencido, undefined, cls(vencido), TODAY, now)).toBe("Debía salir el jue 12/11: revisa por qué no salió y reagéndalo.");
     const gf = row({ stage: "en_curso", substage: "en_reparto", courier: "gf_courier", ops: ops({ liveCouriers: ["gf_courier"] }) });
     expect(limaNextStep(gf, undefined, cls(gf), TODAY, now)).toBe("Solo seguimiento: lo tiene GF Courier.");
@@ -251,7 +327,8 @@ describe("«Agendar»: con qué acción existente se pone el día", () => {
     expect(agendarPath(failed(), caseOf({ claim: { view: "otro", byName: "Diana" }, agreement: { agreedOn: "2026-11-17" } }), can)).toEqual({ kind: null, why: "Diana lo está atendiendo." });
     expect(agendarPath(failed(), caseOf({ list: "cerrados" }), can).kind).toBeNull();
   });
-  it("los días que ofrece: hoy y los próximos días de reparto", () => {
+  it("los días que ofrece: hoy y los cinco próximos días de reparto (no cambia con la Agenda de cuatro cajones)", () => {
+    expect(AGENDAR_QUICK_DAYS).toBe(5);
     expect(agendarQuickDays("2026-11-14")).toEqual(["2026-11-14", "2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20"]);
   });
 });
@@ -287,11 +364,17 @@ describe("las piezas en pantalla", () => {
   it("el flujo del día numera los pasos en el orden del trabajo y lo de adentro va dentro de su paso", async () => {
     const { ReproLimaBlocks, LIMA_FLOW } = await import("@/components/repro-lima-blocks");
     // Owner, 15-11-2026: «falta ordenar un flujo de trabajo»; de lo que está en la calle a lo que solo falta cerrar.
-    expect(LIMA_FLOW.map((step) => step.key)).toEqual(["novedad", "llamar_despues", "no_entregados", "primer_despacho", "por_cerrar"]);
-    const rows = [row(), failed({ orderId: "e" })];
+    // Tercera vuelta: «Sacar a reparto» en vez de «Confirmar primer despacho», y lo que solo se mira, plegado al final.
+    expect(LIMA_FLOW.map((step) => step.key)).toEqual(["novedad", "llamar_despues", "no_entregados", "por_sacar", "con_courier", "por_cerrar"]);
+    const rows = [row(), failed({ orderId: "e" }), row({ orderId: "h", programmedFor: TODAY })];
     const counts = limaBoardCounts(rows, classifyLimaRows(rows, [], TODAY));
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "no_entregados", onPick: () => {} }));
-    for (const text of ["Flujo del día", "Agenda", "En manos del courier", "Confirmar primer despacho", "Lun 16", "Sin fecha", "Guía creada"]) expect(html, text).toContain(text);
+    for (const text of ["Flujo del día", "los seis suman el total", "Agenda", "Sacar a reparto", "Con el courier", "Por cerrar", "Mañana · Lun 16", "Después", "Sin fecha", "Hoy sin guía", "0 con guía"]) expect(html, text).toContain(text);
+    for (const text of ["En manos del courier", "Confirmar primer despacho", "Mar 17"]) expect(html, text).not.toContain(text);
+    // La barra de reparto cierra con el total: los tramos en el orden de las celdas.
+    expect(html).toContain(`= <b class="font-semibold text-ink-900">${counts.todos}</b> pedidos`);
+    // Los plegados no llevan número de paso: solo los cuatro del trabajo.
+    expect(html.match(/size-5 shrink-0 place-items-center rounded-full/g)).toHaveLength(4);
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*No entregados/);
     // «Reintentos Aliclik» vive DENTRO de «No entregados»: su filtro sale en el pie con el nombre del paso, no suelto.
     expect(html).toContain("Dentro de <b");
@@ -389,12 +472,23 @@ describe("el MOM, DESIGN.md y DEPLOY.md", () => {
     expect(mom).toContain("**Dónde se ve cada motivo (owner, 15-11-2026).**");
     expect(mom).toContain("**Desde el 15-11-2026 está en un solo sitio**");
   });
-  it("DESIGN.md describe los tres bloques y DEPLOY.md lleva su entrada, sin migración", () => {
-    expect(flat(read("DESIGN.md"))).toContain("### Repro Lima: tres bloques sobre una lista (15-11-2026)");
+  it("§9.5 cuenta la tercera vuelta: los seis pasos suman el total, dos plegados, y la Agenda con o sin guía", () => {
+    expect(mom).toContain("**Tercera vuelta: cinco pasos que suman el total (owner, 15-11-2026).**");
+    for (const quote of ["`limaStepOf`", "**Sacar a reparto**", "**Con el courier**", "`LIMA_FOLDED_STEPS`", "**La barra de reparto.**", "`AGENDA_NAMED_DAYS = 1`", "**«Hoy sin guía»**", "**«Mañana sin guía»**", "**No suma el total**"]) {
+      expect(mom, quote).toContain(quote);
+    }
+    expect(mom.indexOf("**Tercera vuelta: cinco pasos que suman el total")).toBeGreaterThan(mom.indexOf("**Segunda vuelta: el flujo del día"));
+  });
+  it("DESIGN.md describe el flujo y la Agenda, y DEPLOY.md lleva sus entradas, sin migración", () => {
+    const design = flat(read("DESIGN.md"));
+    expect(design).toContain("### Repro Lima: el flujo del día y la Agenda sobre una lista (15-11-2026)");
+    expect(design).toContain("«N con guía · **M sin guía**»");
     const entries = [...read("DEPLOY.md").matchAll(/^### (.+)$/gm)].map((m) => m[1]!);
     // Se busca por título: el orden de arriba lo deciden las entradas con migración.
-    const entry = entries.find((title) => title.includes("Repro Lima por las tareas del equipo"));
-    expect(entry).toBeDefined();
-    expect(entry).toContain("sin migración");
+    for (const title of ["Repro Lima por las tareas del equipo", "Repro Lima: seis pasos que suman el total"]) {
+      const entry = entries.find((t) => t.includes(title));
+      expect(entry, title).toBeDefined();
+      expect(entry, title).toContain("sin migración");
+    }
   });
 });

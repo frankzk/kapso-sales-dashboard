@@ -16,8 +16,8 @@ import ReproLimaLoading from "./loading";
 // lee la lista amplia de pendientes de entrega (28-10-2026), sin crear casos
 // para quienes no tuvieron un fallo. Una única tabla presenta la atención de
 // todos los pendientes; no carga otro resumen ni una segunda vista. Desde el
-// 15-11-2026 la pantalla la ordena en tres bloques (Por gestionar hoy, Agenda,
-// En manos del courier) y «Agendar» pone el día por la acción de cada pedido:
+// 15-11-2026 la pantalla la ordena en el «Flujo del día» (cinco pasos que
+// suman el total) y la «Agenda», y «Agendar» pone el día por la acción de cada pedido:
 // «Programar envío» pide `master.edit`, que solo se lee para no ofrecerlo a
 // quien no lo tiene (la acción lo vuelve a pedir).
 // Un error de lectura impide presentar un total parcial como completo.

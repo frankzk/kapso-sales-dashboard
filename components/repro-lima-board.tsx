@@ -1,10 +1,10 @@
 "use client";
 
 // Repro Lima (MOM §9.5): el panel de gestión del equipo de Lima (owner,
-// 15-11-2026). Tres bloques —«Por gestionar hoy», «Agenda» y «En manos del
-// courier»— sobre UNA lista: cada tarjeta filtra esa lista (`atencion` en la
+// 15-11-2026). El «Flujo del día» —cinco pasos que suman el total— y la
+// «Agenda» sobre UNA lista: cada tarjeta filtra esa lista (`atencion` en la
 // URL; los valores de la pantalla anterior abren lo más cercano) y los
-// trabados del equipo (§9.6) son chips de su bloque (`trabado`). Las acciones
+// trabados del equipo (§9.6) van arriba como excepción (`trabado`). Las acciones
 // conservan los permisos y guardas del pedido y de cada caso.
 //
 // «Agendar» pone el día sin abrir la ficha y «Mover a…» lo pone a varios, por
@@ -118,7 +118,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     return { channels: without("channels"), districts: without("districts"), couriers: without("couriers") };
   }, [pendingStore, rowFilters, activeRowFilters]);
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
-  // Los tres bloques: una clasificación por pedido, para las cifras y la lista.
+  // El paso, el día y el courier: una clasificación por pedido, para las cifras y la lista.
   const agendaDays = useMemo(() => agendaWindow(today), [today]);
   const classes = useMemo(() => classifyLimaRows(scoped, data.rows, today, agendaDays), [scoped, data.rows, today, agendaDays]);
   const counts = useMemo(() => limaBoardCounts(scoped, classes), [scoped, classes]);
