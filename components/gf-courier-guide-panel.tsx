@@ -9,6 +9,8 @@ export function GfCourierGuidePanel({ orderId, onChanged }: { orderId: string; o
   const [state, setState] = useState<GfPanelState | null>(null);
   const [result, setResult] = useState<GfActionResult | null>(null);
   const [reason, setReason] = useState("");
+  // Anular es destructivo y poco frecuente: primero un botón; el motivo se pide solo al elegirlo.
+  const [cancelling, setCancelling] = useState(false);
   const [pending, start] = useTransition();
   const load = useCallback(() => { void gfCourierPanelState(orderId).then(setState).catch(() => setState(null)); }, [orderId]);
   useEffect(() => { load(); }, [load]);
@@ -27,16 +29,20 @@ export function GfCourierGuidePanel({ orderId, onChanged }: { orderId: string; o
         <button type="button" disabled={pending || Boolean(state.reason)} className="rounded-md bg-black px-3 py-1.5 text-white disabled:opacity-50"
           onClick={() => run(() => createGfCourierGuide(orderId))}>{pending ? "Creando…" : "Crear guía en GF Courier"}</button>
       ) : null}
-      {live && state.canCancel ? (
+      {live && state.canCancel && !cancelling ? (
+        <button type="button" disabled={pending} className="rounded-md border px-3 py-1.5 disabled:opacity-50" onClick={() => setCancelling(true)}>Anular guía</button>
+      ) : null}
+      {live && state.canCancel && cancelling ? (
         <div className="flex flex-wrap items-center gap-2">
-          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo de la anulación" className="min-w-0 flex-1 rounded-md border px-2 py-1" />
-          <button type="button" disabled={pending || reason.trim().length < 5} className="rounded-md border px-3 py-1.5 disabled:opacity-50"
-            onClick={() => run(() => cancelGfCourierGuide(orderId, reason))}>{pending ? "Anulando…" : "Anular guía"}</button>
+          <input autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Motivo de la anulación (mínimo 5 letras)" className="min-w-0 flex-1 rounded-md border px-2 py-1" />
+          <button type="button" disabled={pending || reason.trim().length < 5} className="rounded-md border border-crit-fg px-3 py-1.5 text-crit-fg disabled:opacity-50"
+            onClick={() => run(async () => { const r = await cancelGfCourierGuide(orderId, reason); if (!r.error) { setCancelling(false); setReason(""); } return r; })}>{pending ? "Anulando…" : "Confirmar anulación"}</button>
+          <button type="button" disabled={pending} className="px-2 py-1.5 text-ink-500 underline" onClick={() => { setCancelling(false); setReason(""); }}>Cancelar</button>
         </div>
       ) : null}
       {result?.notice ? <p role="status" className="text-ok-fg">{result.notice}</p> : null}
       {result?.error ? (
-        <div role="alert" className="text-err-fg">
+        <div role="alert" className="text-crit-fg">
           <p>{result.error}</p>
           {Array.isArray(result.allowed) && result.allowed.length ? <p className="text-xs">Válidos: {result.allowed.slice(0, 30).join(", ")}</p> : null}
           {result.pending ? <p className="text-xs">Vuelve a pulsar «Crear guía»: se reintenta con la misma clave y GF no duplica la guía.</p> : null}
