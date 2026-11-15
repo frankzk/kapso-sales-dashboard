@@ -102,6 +102,8 @@ const COURIER_NAMES: Record<string, string> = {
   shalom: "Shalom",
   olva: "Olva",
   axel: "Axel",
+  // GF Courier por API (MOM §29.17): sin esto, Repro Lima decía «Gf_courier».
+  gf_courier: "GF Courier",
 };
 
 /** Cómo se enseña un código de «Salió con». */
