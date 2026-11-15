@@ -60,6 +60,7 @@ import {
   IconX,
 } from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { GfCourierGuidePanel } from "@/components/gf-courier-guide-panel";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { OrderChatbyPanel } from "@/components/order-chatby-panel";
 import { OrderKapsoPanel } from "@/components/order-kapso-panel";
@@ -2361,6 +2362,13 @@ export function OrderDrawer({
                   tarjetas de agencia y, debajo, un formulario para crear una guía
                   de una ruta que ese pedido no puede tomar. Se lee el plan en vez
                   de repetir la regla aquí, que es como se vuelven a separar. */}
+              {/* GF Courier por API (MOM §29.17): el panel decide en el servidor si corresponde mostrarse. No a un pedido
+                  acompañante (§32): ya viaja en la guía de otro. */}
+              {detail && !detail.companion.travelsIn && (
+                <div data-drawer-section="gf-courier" className={cn("order-5", SECTION)}>
+                  <GfCourierGuidePanel orderId={orderId} onChanged={() => { void reload(); onSaved(); }} />
+                </div>
+              )}
               {canCreateGuide && aliclikOffered && (
                 <div
                   data-drawer-section="aliclik"

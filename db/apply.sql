@@ -683,4 +683,10 @@
 \ir migrations/0340_compras_importaciones.sql
 \echo 'Applying 0341_compras_proveedores.sql'
 \ir migrations/0341_compras_proveedores.sql
+\echo 'Applying 0342_compras_monedas_igv.sql'
+\ir migrations/0342_compras_monedas_igv.sql
+\echo 'Applying 0343_compras_locales_entregas.sql'
+\ir migrations/0343_compras_locales_entregas.sql
+\echo 'Applying 0344_gf_courier_api.sql'
+\ir migrations/0344_gf_courier_api.sql
 \echo 'Done.'

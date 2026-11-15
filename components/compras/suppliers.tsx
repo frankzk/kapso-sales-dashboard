@@ -5,16 +5,20 @@
 // compras». Crear, editar y borrar solo con «Compras» (y el servidor lo vuelve
 // a pedir).
 
-import { useState, useTransition } from "react";
+import { Fragment, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Card, EmptyState, cn } from "@/components/ui";
-import { formatDmy, whatsappShareUrl, type SupplierInput } from "@/lib/compras";
-import { onTimeIsLow, shortageIsHigh, type SupplierStats } from "@/lib/compras-reportes";
+import { cn } from "@/components/ui";
+import { SECTION_CARD, SectionHead } from "@/components/ops-ui";
+import { IconPlus, IconWhatsApp } from "@/components/icons";
+import { ComprasEmpty } from "@/components/compras/chrome";
+import { MISSING_FX, formatDmy, whatsappShareUrl, type SupplierInput } from "@/lib/compras";
+import { onTimeIsLow, shortageIsHigh, supplierBought, type SupplierStats } from "@/lib/compras-reportes";
 import type { SupplierRow } from "@/lib/compras-server";
 import { createSupplier, deleteSupplier, updateSupplier, type ComprasActionState } from "@/app/dashboard/compras/actions";
-import { BTN_DANGER, BTN_GHOST, BTN_PRIMARY, BTN_SECONDARY, FIELD, Feedback, LABEL } from "@/components/compras/header-form";
+import { BTN_GHOST, BTN_PRIMARY, BTN_REMOVE, BTN_SECONDARY_SM, FIELD, Feedback, Field, TEXTAREA } from "@/components/compras/header-form";
 import { fmtInt, fmtPct, fmtPen, fmtUsd } from "@/components/compras/format";
+import { ConfirmRemove, removeTriggerProps } from "@/components/compras/confirm-remove";
 
 export interface SupplierViewRow {
   supplier: SupplierRow;
@@ -45,37 +49,30 @@ function SupplierForm({
   const [pending, start] = useTransition();
   const set = (k: keyof typeof v) => (e: { target: { value: string } }) => setV((prev) => ({ ...prev, [k]: e.target.value }));
   return (
-    <Card className="space-y-3 p-4">
-      <h2 className="text-sm font-semibold text-slate-900">{supplier ? `Editar «${supplier.name}»` : "Nuevo proveedor"}</h2>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <label className={LABEL}>
-          Nombre
+    <section aria-labelledby="proveedor-form-t" className={cn(SECTION_CARD, "space-y-4")}>
+      <SectionHead id="proveedor-form-t" title={supplier ? `Editar «${supplier.name}»` : "Nuevo proveedor"} />
+      <div className="grid gap-x-3 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Field label="Nombre">
           <input className={FIELD} value={v.name} onChange={set("name")} maxLength={120} required />
-        </label>
-        <label className={LABEL}>
-          País / origen
+        </Field>
+        <Field label="País / origen">
           <input className={FIELD} value={v.country} onChange={set("country")} maxLength={80} />
-        </label>
-        <label className={LABEL}>
-          Condiciones de pago
+        </Field>
+        <Field label="Condiciones de pago">
           <input className={FIELD} value={v.paymentTerms} onChange={set("paymentTerms")} maxLength={200} placeholder="30 % adelanto, 70 % al embarque" />
-        </label>
-        <label className={LABEL}>
-          Contacto
+        </Field>
+        <Field label="Contacto">
           <input className={FIELD} value={v.contactName} onChange={set("contactName")} maxLength={120} />
-        </label>
-        <label className={LABEL}>
-          WhatsApp
+        </Field>
+        <Field label="WhatsApp">
           <input className={FIELD} value={v.whatsapp} onChange={set("whatsapp")} inputMode="tel" placeholder="+86…" />
-        </label>
-        <label className={LABEL}>
-          Correo
+        </Field>
+        <Field label="Correo">
           <input className={FIELD} value={v.email} onChange={set("email")} type="email" inputMode="email" maxLength={160} />
-        </label>
-        <label className={cn(LABEL, "sm:col-span-2 lg:col-span-3")}>
-          Notas
-          <textarea className={FIELD} rows={2} value={v.notes} onChange={set("notes")} maxLength={1000} />
-        </label>
+        </Field>
+        <Field label="Notas" className="sm:col-span-2 lg:col-span-3">
+          <textarea className={TEXTAREA} rows={2} value={v.notes} onChange={set("notes")} maxLength={1000} />
+        </Field>
       </div>
       <Feedback error={error} />
       <div className="flex flex-wrap gap-2">
@@ -97,12 +94,13 @@ function SupplierForm({
           Cancelar
         </button>
       </div>
-    </Card>
+    </section>
   );
 }
 
-const TH = "px-3 py-2 text-left text-xs font-medium text-slate-500";
-const TD = "px-3 py-2.5 align-top text-sm text-slate-700";
+const TH = "sticky top-0 z-[1] border-y border-line bg-white py-2 pr-3 text-left text-xs font-semibold text-ink-600";
+const TD = "py-2.5 pr-3 align-top text-sm leading-5 text-ink-700";
+const DASH = <span className="text-ink-300">—</span>;
 
 export function SuppliersView({
   orgId,
@@ -121,6 +119,8 @@ export function SuppliersView({
   const [form, setForm] = useState<FormState>(null);
   const [feedback, setFeedback] = useState<ComprasActionState | null>(null);
   const [pending, start] = useTransition();
+  // «Borrar» pregunta en la misma fila (`ConfirmRemove`): sin diálogo del navegador.
+  const [removing, setRemoving] = useState<string | null>(null);
 
   const done = (res: ComprasActionState) => {
     setForm(null);
@@ -129,7 +129,7 @@ export function SuppliersView({
   };
 
   const remove = (s: SupplierRow) => {
-    if (!window.confirm(`¿Borrar el proveedor «${s.name}»?`)) return;
+    setRemoving(null);
     start(async () => {
       const res = await deleteSupplier(s.id);
       setFeedback(res);
@@ -137,154 +137,285 @@ export function SuppliersView({
     });
   };
 
+  // La tabla (desde 1280 px) y la lista (debajo) pintan las mismas filas: cada
+  // una con su propio id, para que el foco vuelva al botón que se ve.
+  const actions = (s: SupplierRow, stats: SupplierStats, view: "tabla" | "lista") => (
+    <div className="flex gap-1">
+      <button type="button" className={BTN_SECONDARY_SM} disabled={pending} onClick={() => setForm({ mode: "edit", supplier: s })}>
+        Editar
+      </button>
+      <button
+        type="button"
+        className={BTN_REMOVE}
+        disabled={pending || stats.imports > 0}
+        title={stats.imports > 0 ? "Tiene importaciones: no se puede borrar" : undefined}
+        {...removeTriggerProps(`proveedor-${view}-${s.id}`, removing === s.id)}
+        aria-label={`Borrar el proveedor ${s.name}`}
+        onClick={() => setRemoving((r) => (r === s.id ? null : s.id))}
+      >
+        Borrar
+      </button>
+    </div>
+  );
+
+  const confirmBar = (s: SupplierRow, stats: SupplierStats, view: "tabla" | "lista", className?: string) =>
+    canManage && removing === s.id && stats.imports === 0 ? (
+      <ConfirmRemove
+        id={`proveedor-${view}-${s.id}`}
+        className={className}
+        question={`¿Borrar el proveedor «${s.name}»?`}
+        confirmLabel="Sí, borrar"
+        pending={pending}
+        onCancel={() => setRemoving(null)}
+        onConfirm={() => remove(s)}
+      />
+    ) : null;
+  const columns = 7 + (canMoney ? 1 : 0) + (canManage ? 1 : 0);
+
+  const importsLink = (s: SupplierRow, stats: SupplierStats) =>
+    stats.imports ? (
+      <Link href={`/dashboard/compras?v=todas&proveedor=${s.id}${orgQuery}`} className="font-medium tabular-nums text-brand-700 hover:underline">
+        {fmtInt(stats.imports)} importaci{stats.imports === 1 ? "ón" : "ones"}
+      </Link>
+    ) : (
+      <span className="text-ink-500">Sin importaciones</span>
+    );
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-slate-500">
-          {rows.length} proveedor{rows.length === 1 ? "" : "es"}
-        </p>
-        {canManage && !form && (
-          <button type="button" className={BTN_PRIMARY} onClick={() => setForm({ mode: "new" })}>
-            Nuevo proveedor
-          </button>
-        )}
-      </div>
+    <div className="space-y-4">
       {feedback && <Feedback error={feedback.error} notice={feedback.notice} />}
       {canManage && form && (
         <SupplierForm key={form.mode === "edit" ? form.supplier.id : "new"} orgId={orgId} supplier={form.mode === "edit" ? form.supplier : null} onDone={done} />
       )}
 
-      {!rows.length ? (
-        <EmptyState title="Sin proveedores">
-          {canManage ? "Crea uno con «Nuevo proveedor» o desde el formulario de una importación." : "Cuando se registre uno, aparecerá aquí."}
-        </EmptyState>
-      ) : (
-        <Card className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] text-sm">
-              <thead className="border-b border-slate-200 bg-slate-50">
+      <section aria-label="Proveedores" tabIndex={-1} className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line outline-none">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-5">
+          <p className="text-[13px] leading-5 tabular-nums text-ink-500">
+            {fmtInt(rows.length)} proveedor{rows.length === 1 ? "" : "es"}
+          </p>
+          {canManage && !form && (
+            <button type="button" className={BTN_PRIMARY} onClick={() => setForm({ mode: "new" })}>
+              <IconPlus aria-hidden />
+              Nuevo proveedor
+            </button>
+          )}
+        </div>
+        {!rows.length ? (
+          <div className="border-t border-line">
+            <ComprasEmpty title="Sin proveedores">
+              {canManage ? "Crea uno con «Nuevo proveedor» o desde el formulario de una importación." : "Cuando se registre uno, aparecerá aquí."}
+            </ComprasEmpty>
+          </div>
+        ) : (
+          <>
+            <table className="hidden w-full table-fixed text-left xl:table">
+              <thead>
                 <tr>
-                  <th className={TH}>Proveedor</th>
-                  <th className={TH}>Condiciones de pago</th>
-                  <th className={TH}>Contacto</th>
-                  <th className={TH}>Importaciones</th>
-                  <th className={cn(TH, "text-right")}>Tarda</th>
-                  <th className={cn(TH, "text-right")}>A tiempo</th>
-                  <th className={cn(TH, "text-right")}>Faltantes y dañadas</th>
-                  {canMoney && <th className={cn(TH, "text-right")}>Comprado (USD)</th>}
-                  <th className={TH}>Le compras</th>
-                  {canManage && <th className={TH}>
+                  <th className={cn(TH, "w-[16%] pl-5")}>Proveedor</th>
+                  <th className={cn(TH, "w-[14%]")}>Contacto</th>
+                  <th className={cn(TH, "w-[12%]")}>Importaciones</th>
+                  <th className={cn(TH, "w-[6%] text-right")}>Tarda</th>
+                  <th className={cn(TH, "w-[7%] text-right")}>A tiempo</th>
+                  <th className={cn(TH, "w-[9%] text-right")}>Faltantes y dañadas</th>
+                  {canMoney && <th className={cn(TH, "w-[10%] text-right")}>Comprado</th>}
+                  <th className={cn(TH, "pl-3")}>Le compras</th>
+                  {canManage && <th className={cn(TH, "w-[136px] pr-5")}>
                     <span className="sr-only">Acciones</span>
                   </th>}
                 </tr>
               </thead>
               <tbody>
                 {rows.map(({ supplier: s, stats }) => (
-                  <tr key={s.id} className="border-b border-slate-100 last:border-0">
-                    <td className={TD}>
-                      <p className="font-medium text-slate-900">{s.name}</p>
-                      <p className="text-xs text-slate-500">{s.country ?? "Origen sin indicar"}</p>
+                  <Fragment key={s.id}>
+                  <tr className={cn("transition-colors duration-150 hover:bg-wash", removing === s.id ? "" : "border-b border-line last:border-0")}>
+                    <td className={cn(TD, "pl-5")}>
+                      <p className="font-medium text-ink-900">{s.name}</p>
+                      <p className="truncate text-[13px] text-ink-500">{s.country ?? "Origen sin indicar"}</p>
+                      {s.payment_terms && (
+                        <p className="mt-0.5 line-clamp-2 text-[13px] text-ink-600" title="Condiciones de pago">
+                          {s.payment_terms}
+                        </p>
+                      )}
                     </td>
-                    <td className={cn(TD, "max-w-[180px]")}>{s.payment_terms ?? <span className="text-slate-400">—</span>}</td>
-                    <td className={cn(TD, "max-w-[200px] space-y-0.5")}>
-                      {s.contact_name && <p className="truncate">{s.contact_name}</p>}
+                    <td className={cn(TD, "space-y-0.5")}>
+                      {s.contact_name && <p className="truncate text-ink-900">{s.contact_name}</p>}
                       {s.whatsapp && (
-                        <p className="truncate text-xs">
-                          <a href={whatsappShareUrl("", s.whatsapp)} target="_blank" rel="noopener noreferrer" className="text-brand-700 hover:underline">
-                            WhatsApp {s.whatsapp}
+                        <p className="text-[13px]">
+                          <a href={whatsappShareUrl("", s.whatsapp)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand-700 hover:underline" aria-label={`WhatsApp ${s.whatsapp}`}>
+                            <IconWhatsApp aria-hidden className="size-3.5 shrink-0" />
+                            <span className="break-all tabular-nums">{s.whatsapp}</span>
                           </a>
                         </p>
                       )}
                       {s.email && (
-                        <p className="truncate text-xs">
+                        <p className="break-all text-[13px]">
                           <a href={`mailto:${s.email}`} className="text-brand-700 hover:underline">
                             {s.email}
                           </a>
                         </p>
                       )}
-                      {!s.contact_name && !s.whatsapp && !s.email && <span className="text-slate-400">—</span>}
+                      {!s.contact_name && !s.whatsapp && !s.email && DASH}
                     </td>
                     <td className={TD}>
-                      {stats.imports ? (
-                        <Link href={`/dashboard/compras?v=todas&proveedor=${s.id}${orgQuery}`} className="font-medium text-brand-700 hover:underline">
-                          {fmtInt(stats.imports)}
-                        </Link>
-                      ) : (
-                        <span className="text-slate-400">0</span>
-                      )}
+                      {importsLink(s, stats)}
                       {stats.imports > 0 && (
-                        <p className="text-xs text-slate-500">
+                        <p className="text-[13px] tabular-nums text-ink-500">
                           {fmtInt(stats.bought)} comprada{stats.bought === 1 ? "" : "s"} · última {formatDmy(stats.lastOrderedOn)}
                         </p>
                       )}
                     </td>
-                    <td className={cn(TD, "text-right")}>
-                      {stats.avgLeadDays != null ? (
-                        <span title={`Promedio de ${stats.leadSamples} que llegaron`}>{Math.round(stats.avgLeadDays)} días</span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
+                    <td className={cn(TD, "text-right tabular-nums text-ink-900")}>
+                      {stats.avgLeadDays != null ? <span title={`Promedio de ${stats.leadSamples} que llegaron`}>{Math.round(stats.avgLeadDays)} días</span> : DASH}
                     </td>
-                    <td className={cn(TD, "text-right", onTimeIsLow(stats.onTimeShare) && "font-semibold text-red-700")}>
-                      {stats.onTimeShare != null ? (
-                        <span title={`De ${stats.onTimeSamples} con llegada estimada`}>{fmtPct(stats.onTimeShare)}</span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
+                    <td className={cn(TD, "text-right tabular-nums text-ink-900")}>
+                      {stats.onTimeShare != null ? <Share value={stats.onTimeShare} bad={onTimeIsLow(stats.onTimeShare)} badLabel="bajo" title={`De ${stats.onTimeSamples} con llegada estimada`} /> : DASH}
                     </td>
-                    <td className={cn(TD, "text-right", shortageIsHigh(stats.shortageShare) && "font-semibold text-red-700")}>
-                      {stats.shortageShare != null ? fmtPct(stats.shortageShare) : <span className="text-slate-400">—</span>}
+                    <td className={cn(TD, "text-right tabular-nums text-ink-900")}>
+                      {stats.shortageShare != null ? <Share value={stats.shortageShare} bad={shortageIsHigh(stats.shortageShare)} badLabel="alto" /> : DASH}
                     </td>
                     {canMoney && (
-                      <td className={cn(TD, "text-right")}>
-                        <p className="font-medium text-slate-900">{fmtUsd(stats.boughtUsd ?? 0)}</p>
-                        {(stats.boughtPen ?? 0) > 0 && (
-                          <p className="text-xs text-slate-500">
-                            {fmtPen(stats.boughtPen)}
-                            {stats.boughtWithoutFx ? ` · ${stats.boughtWithoutFx} sin tipo de cambio` : ""}
-                          </p>
-                        )}
+                      <td className={cn(TD, "text-right tabular-nums")}>
+                        <Bought stats={stats} />
                       </td>
                     )}
-                    <td className={cn(TD, "max-w-[220px]")}>
-                      {stats.topProducts.length ? (
-                        <ul className="space-y-0.5 text-xs">
-                          {stats.topProducts.map((p) => (
-                            <li key={p.key} className="truncate">
-                              {fmtInt(p.units)} × {p.name}
-                              {p.sku ? <span className="text-slate-400"> · {p.sku}</span> : null}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
+                    <td className={cn(TD, "pl-3")}>
+                      <TopProducts stats={stats} />
                     </td>
-                    {canManage && (
-                      <td className={cn(TD, "whitespace-nowrap text-right")}>
-                        <div className="flex justify-end gap-1.5">
-                          <button type="button" className={BTN_SECONDARY} disabled={pending} onClick={() => setForm({ mode: "edit", supplier: s })}>
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            className={BTN_DANGER}
-                            disabled={pending || stats.imports > 0}
-                            title={stats.imports > 0 ? "Tiene importaciones: no se puede borrar" : undefined}
-                            onClick={() => remove(s)}
-                          >
-                            Borrar
-                          </button>
-                        </div>
-                      </td>
-                    )}
+                    {canManage && <td className={cn(TD, "py-2 pr-5")}>{actions(s, stats, "tabla")}</td>}
                   </tr>
+                  {removing === s.id && (
+                    <tr className="border-b border-line last:border-0">
+                      <td colSpan={columns} className="px-5 pb-3">
+                        {confirmBar(s, stats, "tabla")}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
-          </div>
-        </Card>
-      )}
+
+            <ul className="divide-y divide-line border-t border-line xl:hidden">
+              {rows.map(({ supplier: s, stats }) => (
+                <li key={s.id} className="px-4 py-3 sm:px-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold leading-5 text-ink-900">{s.name}</p>
+                      <p className="text-[13px] leading-5 text-ink-500">
+                        {s.country ?? "Origen sin indicar"}
+                        {s.payment_terms ? ` · ${s.payment_terms}` : ""}
+                      </p>
+                    </div>
+                    {canMoney && (
+                      <div className="max-w-[11rem] shrink-0 text-right text-sm leading-5 tabular-nums">
+                        <Bought stats={stats} />
+                      </div>
+                    )}
+                  </div>
+                  <p className="mt-1 text-[13px] leading-5 tabular-nums text-ink-700">
+                    {importsLink(s, stats)}
+                    {stats.avgLeadDays != null && ` · tarda ${Math.round(stats.avgLeadDays)} días`}
+                    {stats.onTimeShare != null && (
+                      <>
+                        {" · a tiempo "}
+                        <Share value={stats.onTimeShare} bad={onTimeIsLow(stats.onTimeShare)} badLabel="bajo" />
+                      </>
+                    )}
+                    {stats.shortageShare != null && (
+                      <>
+                        {" · faltantes "}
+                        <Share value={stats.shortageShare} bad={shortageIsHigh(stats.shortageShare)} badLabel="alto" />
+                      </>
+                    )}
+                  </p>
+                  {(s.contact_name || s.whatsapp || s.email) && (
+                    <p className="mt-0.5 flex flex-wrap gap-x-3 text-[13px] leading-5">
+                      {s.contact_name && <span className="text-ink-700">{s.contact_name}</span>}
+                      {s.whatsapp && (
+                        <a href={whatsappShareUrl("", s.whatsapp)} target="_blank" rel="noopener noreferrer" className="text-brand-700 hover:underline">
+                          WhatsApp {s.whatsapp}
+                        </a>
+                      )}
+                      {s.email && (
+                        <a href={`mailto:${s.email}`} className="break-all text-brand-700 hover:underline">
+                          {s.email}
+                        </a>
+                      )}
+                    </p>
+                  )}
+                  {stats.topProducts.length > 0 && (
+                    <div className="mt-1.5">
+                      <TopProducts stats={stats} />
+                    </div>
+                  )}
+                  {canManage && (
+                    <div className="-ml-2.5 mt-2">{actions(s, stats, "lista")}</div>
+                  )}
+                  {confirmBar(s, stats, "lista", "mt-2")}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
     </div>
+  );
+}
+
+/**
+ * «Comprado» (MOM §45.7): en soles si todas sus compras se pueden llevar a soles
+ * (un laboratorio local todo en soles no necesita tipo de cambio), si no en USD;
+ * el equivalente en la otra moneda solo si todas tienen con qué convertir, y
+ * cuántas quedan fuera cuando falta el tipo de cambio. Nunca mezcla monedas.
+ */
+function Bought({ stats }: { stats: SupplierStats }) {
+  const v = supplierBought(stats);
+  if (!stats.bought) return DASH;
+  const fmt = v.base === "PEN" ? fmtPen : fmtUsd;
+  const fmtOther = v.base === "PEN" ? fmtUsd : fmtPen;
+  return (
+    <>
+      <p className={cn("whitespace-nowrap font-medium", v.amount == null ? "text-warn-fg" : "text-ink-900")}>{v.amount == null ? MISSING_FX : fmt(v.amount)}</p>
+      {v.other != null && <p className="whitespace-nowrap text-[13px] font-normal text-ink-500">{fmtOther(v.other)}</p>}
+      {v.missingFx > 0 && v.amount != null && (
+        <p className="text-[13px] font-medium text-warn-fg">
+          +{v.missingFx} sin tipo de cambio, fuera del total
+        </p>
+      )}
+      {v.amount == null && (
+        <p className="text-[13px] font-normal text-ink-500">
+          {v.missingFx} compra{v.missingFx === 1 ? "" : "s"}
+        </p>
+      )}
+      {v.amount != null && !v.missingFx && v.otherMissingFx > 0 && (
+        <p className="text-[13px] font-normal text-ink-500">
+          Sin {v.base === "PEN" ? "US$" : "S/"}: {v.otherMissingFx} sin tipo de cambio
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Un porcentaje; en `crit` cuando cruza su umbral, y el lector oye por qué (el color no es la única señal). */
+function Share({ value, bad, badLabel, title }: { value: number; bad: boolean; badLabel: string; title?: string }) {
+  return (
+    <span title={title} className={cn("tabular-nums", bad && "font-semibold text-crit-fg")}>
+      {fmtPct(value)}
+      {bad && <span className="sr-only"> ({badLabel})</span>}
+    </span>
+  );
+}
+
+function TopProducts({ stats }: { stats: SupplierStats }) {
+  if (!stats.topProducts.length) return DASH;
+  return (
+    <ul className="space-y-0.5 text-[13px] leading-5">
+      {stats.topProducts.map((p) => (
+        <li key={p.key} className="line-clamp-2 text-ink-700">
+          <span className="tabular-nums">{fmtInt(p.units)}</span> × {p.name}
+          {p.sku ? <span className="font-mono text-xs text-ink-500"> · {p.sku}</span> : null}
+        </li>
+      ))}
+    </ul>
   );
 }

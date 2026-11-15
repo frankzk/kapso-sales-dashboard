@@ -1,6 +1,7 @@
 // «Compras»: importaciones (MOM §45). Las reglas puras de lib/compras.ts,
 // empezando por el ejemplo de la referencia (docs/compras/referencia-modulo-
-// compras.md §6.3): A = 3,40 y B = 14,30 por unidad.
+// compras.md §6.3): A = 3,40 y B = 14,30 por unidad. Las monedas y el IGV
+// (0342, MOM §45.3) están en test/compras-monedas.test.ts.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -13,7 +14,7 @@ import {
   cleanHeader,
   cleanItem,
   cleanPayment,
-  cleanReception,
+  cleanDelivery,
   cleanStatusChange,
   cleanSupplier,
   costPushNote,
@@ -50,14 +51,14 @@ import {
 const A: LandedItem = { id: "a", name: "A", qty: 100, unitCostUsd: 2, unitWeightKg: 0.5 };
 const B: LandedItem = { id: "b", name: "B", qty: 50, unitCostUsd: 12, unitWeightKg: 0.2 };
 const COSTS: LandedCostRow[] = [
-  { kind: "importacion", label: "Aranceles", amountUsd: 80, allocation: "value" },
-  { kind: "envio", label: "Flete", amountUsd: 120, allocation: "weight" },
-  { kind: "adicional", label: "Inspección", amountUsd: 30, allocation: "units" },
-  { kind: "adicional", label: "Etiquetas B", amountUsd: 25, allocation: "item", itemId: "b" },
+  { kind: "importacion", label: "Aranceles", amount: 80, allocation: "value" },
+  { kind: "envio", label: "Flete", amount: 120, allocation: "weight" },
+  { kind: "adicional", label: "Inspección", amount: 30, allocation: "units" },
+  { kind: "adicional", label: "Etiquetas B", amount: 25, allocation: "item", itemId: "b" },
 ];
 
 describe("estados", () => {
-  it("los diez estados con sus etiquetas en español, en orden", () => {
+  it("los once estados con sus etiquetas en español, en orden («Recibido parcial», 0343)", () => {
     expect(IMPORT_STATUSES.map((s) => s.id)).toEqual([
       "cotizacion",
       "pagado",
@@ -65,6 +66,7 @@ describe("estados", () => {
       "en_transito",
       "en_aduana",
       "en_camino_bodega",
+      "recibido_parcial",
       "recibido",
       "ingresado",
       "cerrado",
@@ -72,6 +74,7 @@ describe("estados", () => {
     ]);
     expect(IMPORT_STATUS_LABEL.ingresado).toBe("Ingresado al inventario");
     expect(IMPORT_STATUS_LABEL.en_camino_bodega).toBe("En camino a bodega");
+    expect(IMPORT_STATUS_LABEL.recibido_parcial).toBe("Recibido parcial");
   });
 
   it("pestañas: activas, recibidas y canceladas", () => {
@@ -106,8 +109,9 @@ describe("estados", () => {
 describe("costo aterrizado (§6.3)", () => {
   it("el ejemplo de la referencia: A = 3,40 y B = 14,30", () => {
     const r = landedCosts([A, B], COSTS);
-    const a = r.byItem.get("a")!;
-    const b = r.byItem.get("b")!;
+    // Todo en USD: la vista en USD no necesita tipo de cambio.
+    const a = r.byItem.get("a")!.usd!;
+    const b = r.byItem.get("b")!.usd!;
     expect(a.importacion).toBeCloseTo(20, 10);
     expect(b.importacion).toBeCloseTo(60, 10);
     expect(a.envio).toBeCloseTo(100, 10);
@@ -123,22 +127,24 @@ describe("costo aterrizado (§6.3)", () => {
 
   it("nada se pierde ni se duplica: Σ total = Σ producto + Σ costos", () => {
     const r = landedCosts([A, B], COSTS);
-    expect(r.productTotal).toBe(800);
-    expect(r.costsTotal).toBe(255);
-    expect(r.lines.reduce((s, l) => s + l.total, 0)).toBeCloseTo(1055, 9);
-    expect(r.total).toBe(1055);
+    expect(r.usd!.productTotal).toBe(800);
+    expect(r.usd!.costsTotal).toBe(255);
+    expect(r.lines.reduce((s, l) => s + l.usd!.total, 0)).toBeCloseTo(1055, 9);
+    expect(r.usd!.total).toBe(1055);
+    expect(r.split.total).toEqual({ usd: 1055, pen: 0 });
   });
 
   it("el desglose por unidad suma el costo por unidad", () => {
-    const b = landedCosts([A, B], COSTS).byItem.get("b")!;
+    const b = landedCosts([A, B], COSTS).byItem.get("b")!.usd!;
     expect(b.perUnit.product + b.perUnit.envio + b.perUnit.importacion + b.perUnit.adicional).toBeCloseTo(b.unitCost, 10);
     expect(b.perUnit.product).toBe(12);
   });
 
   it("se reparte sobre lo pedido y se divide entre las unidades buenas (recibidas − dañadas)", () => {
     const counted = landedCosts([{ ...A, receivedQty: 90, damagedQty: 10 }, B], COSTS);
-    const a = counted.byItem.get("a")!;
-    expect(a.good).toBe(80);
+    const line = counted.byItem.get("a")!;
+    const a = line.usd!;
+    expect(line.good).toBe(80);
     // Lo mismo repartido (340 USD), ahora entre 80 buenas.
     expect(a.total).toBeCloseTo(340, 9);
     expect(a.unitCost).toBeCloseTo(4.25, 10);
@@ -161,10 +167,10 @@ describe("costo aterrizado (§6.3)", () => {
         { id: "x", qty: 30, unitCostUsd: 1 },
         { id: "y", qty: 10, unitCostUsd: 1 },
       ],
-      [{ kind: "envio", label: "Flete", amountUsd: 40, allocation: "weight" }],
+      [{ kind: "envio", label: "Flete", amount: 40, allocation: "weight" }],
     );
-    expect(r.byItem.get("x")!.envio).toBeCloseTo(30, 10);
-    expect(r.byItem.get("y")!.envio).toBeCloseTo(10, 10);
+    expect(r.byItem.get("x")!.usd!.envio).toBeCloseTo(30, 10);
+    expect(r.byItem.get("y")!.usd!.envio).toBeCloseTo(10, 10);
     expect(r.warnings).toEqual(["Faltan pesos: «Flete» se reparte por unidades."]);
   });
 
@@ -174,26 +180,26 @@ describe("costo aterrizado (§6.3)", () => {
         { id: "x", qty: 1, unitCostUsd: 0 },
         { id: "y", qty: 3, unitCostUsd: 0 },
       ],
-      [{ kind: "importacion", label: "Agente", amountUsd: 8, allocation: "value" }],
+      [{ kind: "importacion", label: "Agente", amount: 8, allocation: "value" }],
     );
-    expect(r.byItem.get("y")!.importacion).toBeCloseTo(6, 10);
+    expect(r.byItem.get("y")!.usd!.importacion).toBeCloseTo(6, 10);
     expect(r.warnings[0]).toMatch(/Sin costos por unidad cargados/);
   });
 
   it("un costo «a un producto» cuyo producto se quitó NO desaparece: va por valor, con aviso (§13.4)", () => {
-    const r = landedCosts([A, B], [{ kind: "adicional", label: "Etiquetas", amountUsd: 80, allocation: "item", itemId: null }]);
-    expect(r.byItem.get("a")!.adicional).toBeCloseTo(20, 10);
-    expect(r.byItem.get("b")!.adicional).toBeCloseTo(60, 10);
-    expect(r.total).toBe(880);
+    const r = landedCosts([A, B], [{ kind: "adicional", label: "Etiquetas", amount: 80, allocation: "item", itemId: null }]);
+    expect(r.byItem.get("a")!.usd!.adicional).toBeCloseTo(20, 10);
+    expect(r.byItem.get("b")!.usd!.adicional).toBeCloseTo(60, 10);
+    expect(r.usd!.total).toBe(880);
     expect(r.warnings).toEqual(["«Etiquetas» estaba asignado a un producto que ya no está: se reparte por valor."]);
     // Lo mismo si apunta a un id que ya no está entre las líneas.
-    expect(landedCosts([A], [{ kind: "adicional", label: "E", amountUsd: 5, allocation: "item", itemId: "zz" }]).byItem.get("a")!.adicional).toBe(5);
+    expect(landedCosts([A], [{ kind: "adicional", label: "E", amount: 5, allocation: "item", itemId: "zz" }]).byItem.get("a")!.usd!.adicional).toBe(5);
   });
 
   it("sin productos, el costo queda sin repartir y se dice", () => {
-    const r = landedCosts([], [{ kind: "envio", label: "Flete", amountUsd: 50, allocation: "units" }]);
-    expect(r.unallocated).toBe(50);
-    expect(r.total).toBe(50);
+    const r = landedCosts([], [{ kind: "envio", label: "Flete", amount: 50, allocation: "units" }]);
+    expect(r.split.unallocated).toEqual({ usd: 50, pen: 0 });
+    expect(r.usd!.total).toBe(50);
     expect(r.warnings[0]).toMatch(/no se puede repartir/);
   });
 
@@ -205,33 +211,36 @@ describe("costo aterrizado (§6.3)", () => {
 });
 
 describe("margen en soles, pagado y falta pagar", () => {
-  it("margen = precio − costo × tipo de cambio; bajo si es menos del 20 %", () => {
-    const m = marginOf(3.4, 3.75, 20, 100)!;
+  it("margen = precio − costo por unidad en soles; bajo si es menos del 20 %", () => {
+    // El costo por unidad en soles es la vista `pen` de landedCosts: 3,40 × 3,75.
+    const pen = landedCosts([A, B], COSTS, 3.75).byItem.get("a")!.pen!.unitCost;
+    expect(pen).toBeCloseTo(12.75, 10);
+    const m = marginOf(pen, 20, 100)!;
     expect(m.unitCostPen).toBeCloseTo(12.75, 10);
     expect(m.unit).toBeCloseTo(7.25, 10);
     expect(m.pct).toBeCloseTo(0.3625, 10);
     expect(m.total).toBeCloseTo(725, 9);
     expect(m.low).toBe(false);
-    expect(marginOf(3.4, 3.75, 15, 1)!.low).toBe(true);
+    expect(marginOf(12.75, 15, 1)!.low).toBe(true);
     expect(LOW_MARGIN).toBe(0.2);
   });
 
-  it("sin tipo de cambio o sin precio, no hay margen", () => {
-    expect(marginOf(3.4, null, 20, 1)).toBeNull();
-    expect(marginOf(3.4, 3.75, null, 1)).toBeNull();
-    expect(marginOf(3.4, 3.75, 0, 1)).toBeNull();
+  it("sin costo en soles (falta el tipo de cambio) o sin precio, no hay margen", () => {
+    expect(landedCosts([A], COSTS).byItem.get("a")!.pen).toBeNull();
+    expect(marginOf(null, 20, 1)).toBeNull();
+    expect(marginOf(12.75, null, 1)).toBeNull();
+    expect(marginOf(12.75, 0, 1)).toBeNull();
   });
 
   it("pagado, falta pagar y ganancia esperada", () => {
-    const landed = landedCosts([A, B], COSTS);
+    const landed = landedCosts([A, B], COSTS, 3.75);
     const s = moneySummary(
       landed,
       [
         { id: "a", salePricePen: 20 },
         { id: "b", salePricePen: 60 },
       ],
-      [{ amountUsd: 500 }, { amountUsd: 255 }],
-      3.75,
+      [{ amount: 500 }, { amount: 255 }],
     );
     expect(s.totalUsd).toBe(1055);
     expect(s.paidUsd).toBe(755);
@@ -241,9 +250,10 @@ describe("margen en soles, pagado y falta pagar", () => {
     expect(s.expectedProfitPen).toBeCloseTo(1043.75, 6);
     expect(s.recoveryShare).toBeCloseTo((1055 * 3.75) / 5000, 9);
     // Medio centavo no es deuda.
-    expect(moneySummary(landed, [], [{ amountUsd: 1054.996 }], null).pendingUsd).toBe(0);
-    // Sin precio en alguna línea, no hay ganancia esperada.
-    expect(moneySummary(landed, [{ id: "a", salePricePen: 20 }, { id: "b", salePricePen: null }], [], 3.75).expectedProfitPen).toBeNull();
+    expect(moneySummary(landedCosts([A, B], COSTS), [], [{ amount: 1054.996 }]).pendingUsd).toBe(0);
+    // Sin precio en alguna línea, no hay ganancia esperada; sin tipo de cambio, tampoco.
+    expect(moneySummary(landed, [{ id: "a", salePricePen: 20 }, { id: "b", salePricePen: null }], []).expectedProfitPen).toBeNull();
+    expect(moneySummary(landedCosts([A, B], COSTS), [{ id: "a", salePricePen: 20 }, { id: "b", salePricePen: 60 }], []).expectedProfitPen).toBeNull();
   });
 });
 
@@ -262,18 +272,17 @@ describe("recepción (§6.6)", () => {
     expect(receptionSummary(items.slice(0, 2)).complete).toBe(true);
   });
 
-  it("valida lo contado: vacío = sin contar; dañadas ≤ recibidas; al menos una línea", () => {
+  // 0343 (MOM §45.14): la recepción única pasó a entregas; la misma validación por línea.
+  it("valida lo que llegó en una entrega: vacío = no vino; dañadas ≤ llegaron; al menos una línea", () => {
     const ids = ["a", "b"];
-    expect(cleanReception(ids, [{ itemId: "a", received: "", damaged: "" }])).toEqual({ error: "Anota lo recibido de al menos un producto." });
-    expect(cleanReception(ids, [{ itemId: "a", received: "", damaged: "2" }])).toHaveProperty("error");
-    expect(cleanReception(ids, [{ itemId: "a", received: "3", damaged: "4" }])).toEqual({ error: "Las dañadas no pueden ser más que las recibidas." });
-    expect(cleanReception(ids, [{ itemId: "a", received: "-1" }])).toHaveProperty("error");
-    expect(cleanReception(ids, [{ itemId: "zz", received: "1" }])).toHaveProperty("error");
-    expect(cleanReception(ids, [{ itemId: "a", received: "1,500", damaged: "", note: " caja rota " }, { itemId: "b", received: "" }])).toEqual({
-      value: [
-        { itemId: "a", received_qty: 1500, damaged_qty: 0, reception_note: "caja rota" },
-        { itemId: "b", received_qty: null, damaged_qty: null, reception_note: null },
-      ],
+    const d = (lines: { itemId: string; received?: string; damaged?: string; note?: string }[]) => cleanDelivery({ deliveredOn: "2026-11-14", lines }, ids, "2026-11-14");
+    expect(d([{ itemId: "a", received: "", damaged: "" }])).toEqual({ error: "Anota lo que llegó de al menos un producto." });
+    expect(d([{ itemId: "a", received: "", damaged: "2" }])).toHaveProperty("error");
+    expect(d([{ itemId: "a", received: "3", damaged: "4" }])).toEqual({ error: "Las dañadas no pueden ser más que las que llegaron." });
+    expect(d([{ itemId: "a", received: "-1" }])).toHaveProperty("error");
+    expect(d([{ itemId: "zz", received: "1" }])).toHaveProperty("error");
+    expect(d([{ itemId: "a", received: "1,500", damaged: "", note: " caja rota " }, { itemId: "b", received: "" }])).toEqual({
+      value: { delivered_on: "2026-11-14", note: null, lines: [{ itemId: "a", received: 1500, damaged: 0, note: "caja rota" }] },
     });
   });
 });
@@ -393,27 +402,29 @@ describe("validaciones", () => {
     expect(cleanItem({ name: "X", qty: "10000001" }, true)).toHaveProperty("error");
     expect(cleanItem({ name: "", qty: "1" }, true)).toHaveProperty("error");
     const withMoney = cleanItem({ name: "X", sku: "S1", qty: "1,500", unitCostUsd: "2.1234", salePricePen: "19.9" }, true);
-    expect(withMoney).toEqual({ value: { store_id: null, sku: "S1", name: "X", qty: 1500, unit_weight_kg: null, unit_cost_usd: 2.1234, sale_price_pen: 19.9 } });
+    expect(withMoney).toEqual({
+      value: { store_id: null, sku: "S1", name: "X", qty: 1500, courtesy_qty: 0, unit_weight_kg: null, unit_cost_currency: "USD", unit_cost_usd: 2.1234, unit_cost_pen: null, sale_price_pen: 19.9 },
+    });
     const noMoney = cleanItem({ name: "X", qty: "5", unitCostUsd: "99", salePricePen: "1" }, false);
-    expect(noMoney).toEqual({ value: { store_id: null, sku: null, name: "X", qty: 5, unit_weight_kg: null } });
+    expect(noMoney).toEqual({ value: { store_id: null, sku: null, name: "X", qty: 5, courtesy_qty: 0, unit_weight_kg: null } });
     expect("value" in noMoney && "unit_cost_usd" in noMoney.value).toBe(false);
     expect("value" in noMoney && "sale_price_pen" in noMoney.value).toBe(false);
   });
 
   it("costo: monto > 0, reparto válido, «a un producto» de ESTA importación", () => {
-    expect(cleanCost({ kind: "envio", amountUsd: "0" }, [])).toHaveProperty("error");
-    expect(cleanCost({ kind: "flete", amountUsd: "5" }, [])).toHaveProperty("error");
-    expect(cleanCost({ kind: "envio", amountUsd: "5", allocation: "item", itemId: "otro" }, ["a"])).toHaveProperty("error");
-    expect(cleanCost({ kind: "envio", amountUsd: "120", allocation: "weight", itemId: "a" }, ["a"])).toEqual({
-      value: { kind: "envio", label: "Envío", amount_usd: 120, allocation: "weight", item_id: null },
+    expect(cleanCost({ kind: "envio", amount: "0" }, [])).toHaveProperty("error");
+    expect(cleanCost({ kind: "flete", amount: "5" }, [])).toHaveProperty("error");
+    expect(cleanCost({ kind: "envio", amount: "5", allocation: "item", itemId: "otro" }, ["a"])).toHaveProperty("error");
+    expect(cleanCost({ kind: "envio", amount: "120", allocation: "weight", itemId: "a" }, ["a"])).toEqual({
+      value: { kind: "envio", label: "Envío", currency: "USD", amount_usd: 120, amount_pen: null, includes_igv: false, gross_amount: null, igv_treatment: "neto", allocation: "weight", item_id: null },
     });
   });
 
   it("pago: monto > 0, fecha, método y comprobante de la misma importación", () => {
-    expect(cleanPayment({ amountUsd: "10", paidOn: "2026-11-01", method: "bitcoin" }, [])).toHaveProperty("error");
-    expect(cleanPayment({ amountUsd: "10", paidOn: "2026-11-01", method: "paypal", documentId: "d2" }, ["d1"])).toHaveProperty("error");
-    expect(cleanPayment({ amountUsd: "1,234.5", paidOn: "2026-11-01", method: "transferencia", documentId: "d1" }, ["d1"])).toEqual({
-      value: { amount_usd: 1234.5, paid_on: "2026-11-01", method: "transferencia", note: null, document_id: "d1" },
+    expect(cleanPayment({ amount: "10", paidOn: "2026-11-01", method: "bitcoin" }, [])).toHaveProperty("error");
+    expect(cleanPayment({ amount: "10", paidOn: "2026-11-01", method: "paypal", documentId: "d2" }, ["d1"])).toHaveProperty("error");
+    expect(cleanPayment({ amount: "1,234.5", paidOn: "2026-11-01", method: "transferencia", documentId: "d1" }, ["d1"])).toEqual({
+      value: { currency: "USD", amount_usd: 1234.5, amount_pen: null, paid_on: "2026-11-01", method: "transferencia", note: null, document_id: "d1" },
     });
   });
 
@@ -475,6 +486,7 @@ describe("«Pasar a Costos»", () => {
       { ...B, receivedQty: 50, damagedQty: 0 },
     ],
     COSTS,
+    3.7517,
   );
 
   it("Recibida, contada y con tipo de cambio: el costo por unidad en soles a 2 decimales", () => {
