@@ -36,6 +36,7 @@ import {
   cutoffNotice,
   dismantleSuggested,
   failureLine,
+  gfAgreementGuidePlan,
   isAgreementBoxAction,
   isReproCourier,
   orderHasCoordinate,
@@ -50,6 +51,7 @@ import {
   type AgreementState,
   type BoxLocation,
   type ClaimView,
+  type GfAgreementGuidePlan,
   type MaterializationPlan,
   type ProgramOrigin,
   type ReproChanges,
@@ -116,6 +118,18 @@ export interface ReproRow {
   district: string | null;
   /** Tiene coordenada en el Master: «Confirma fecha» con Aliclik no la pide (06-11-2026). */
   hasCoordinate: boolean;
+  /**
+   * La tienda tiene GF Courier por API (`ReproFacts.gfCourierApi`): la hoja
+   * ofrece GF Courier primero y sin Grupo GF (owner, 15-11-2026; §9.5).
+   */
+  gfCourierApi: boolean;
+  /**
+   * Qué haría Kapta con la guía GF viva al guardar un acuerdo con GF Courier
+   * (`gfAgreementGuidePlan`, sin la hora del acuerdo: toda guía viva es de
+   * antes): crearla, anular la viva sin asignar y crear otra, o decir que GF ya
+   * la asignó a un motorizado.
+   */
+  gfGuidePlan: GfAgreementGuidePlan;
   orderTotal: number;
   /** Desde cuándo está en la etapa (`order_master.macro_since`). */
   macroSince: string | null;
@@ -340,6 +354,8 @@ function buildRow(input: {
   const priorByCourier = Object.fromEntries(
     REPRO_COURIERS.map((c) => [c, priorOutputsWith(f.outputs, c)]),
   ) as Record<ReproCourier, number>;
+  // Sin la hora del acuerdo: para la hoja, toda guía GF viva es de antes del acuerdo nuevo.
+  const gfPlan = gfAgreementGuidePlan(f.outputs);
   return {
     ...(!f.inStage ? { attentionContext: "pending" as const } : {}),
     orderId: f.orderId,
@@ -350,6 +366,8 @@ function buildRow(input: {
     customerPhone: order.customer_phone,
     district: order.district,
     hasCoordinate: orderHasCoordinate(order),
+    gfCourierApi: f.gfCourierApi,
+    gfGuidePlan: gfPlan,
     orderTotal: Number(order.order_total ?? 0),
     macroSince: order.macro_since,
     daysInStage: daysBetweenDays(limaDay(order.macro_since), today),
@@ -506,13 +524,15 @@ export async function loadReproLima(
     }).then((result) => result.data),
     opts.attention && !onlyOrders ? allCourierRows<{ order_id: string }>((from, to) => admin.from("lima_repro_cases")
       .select("order_id").in("store_id", storeIds).like("episode_key", "attention:%").order("id").range(from, to) as unknown as PromiseLike<{ data: Array<{ order_id: string }> | null; error: { message: string } | null }>) : Promise.resolve([]),
-    courierRowsByIds(storeIds, (chunk) => admin.from("stores").select("id,name,org_id").in("id", chunk)),
+    courierRowsByIds(storeIds, (chunk) => admin.from("stores").select("id,name,org_id,gf_courier_enabled").in("id", chunk)),
     admin.from("logistics_providers").select("id,org_id,status,same_day_cutoff").eq("code", "grupo-gf-courier"),
   ]);
-  const stores = (storeRows as Array<{ id: string; name: string; org_id: string }>)
+  const stores = (storeRows as Array<{ id: string; name: string; org_id: string; gf_courier_enabled?: boolean | null }>)
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
   const storeName = new Map(stores.map((store) => [store.id, store.name]));
   const storeOrg = new Map(stores.map((store) => [store.id, store.org_id]));
+  // GF Courier por API de cada tienda (§29.17): la hoja ofrece sus couriers con esto.
+  const gfCourierStores = new Set(stores.filter((store) => store.gf_courier_enabled).map((store) => store.id));
   const orgs = new Set(stores.map((store) => store.org_id));
   const providers = new Map(((providerRows ?? []) as ReproProviderRow[])
     .filter((provider) => orgs.has(provider.org_id))
@@ -530,7 +550,7 @@ export async function loadReproLima(
   const outOfStage = openCases.filter((row) => !inStage.has(row.order_id) && (opts.attention || !row.episode_key?.startsWith("attention:")));
 
   // Oleadas 2 y 3: los hechos de cada pedido.
-  const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers });
+  const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers, gfCourierStores });
 
   // Casos de otro episodio, más reciente: se cierran como nuevo intento.
   const newAttempt: string[] = [];

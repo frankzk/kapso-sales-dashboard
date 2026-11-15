@@ -288,6 +288,39 @@ describe("acceso a todos los pendientes", () => {
       o3: null, o4: null, o5: null, o6: null,
     });
   });
+  it("la guía de GF Courier sin salir lleva el día que se le pidió a GF (un acuerdo de Repro Lima, 15-11-2026), en la misma lectura", async () => {
+    const gf = (order_id: string, guide_code: string, extra: DBRow = {}) => ({
+      order_id, courier: "gf_courier", guide_code, status_category: "pending", delivery_status: "pendiente",
+      dispatched_at: null, out_for_delivery_at: null, returned_at: null, ...extra,
+    });
+    const db = database([master(1), master(2), master(3), master(4)], false, {
+      shipments: [
+        gf("o1", "GF1"),
+        // Ya salió o ya la asignaron: el día lo lleva GF.
+        gf("o2", "GF2", { dispatched_at: "2026-11-16T15:00:00Z" }),
+        gf("o3", "GF3", { delivery_status: "en_ruta", status_category: "in_route" }),
+        // Sin día pedido a GF: no se inventa.
+        gf("o4", "GF4"),
+      ],
+      tables: { gf_order_requests: [
+        { tracking_id: "GF1", status: "sent", scheduled_date: "2026-11-17" },
+        { tracking_id: "GF2", status: "sent", scheduled_date: "2026-11-16" },
+        { tracking_id: "GF3", status: "sent", scheduled_date: "2026-11-16" },
+        { tracking_id: "GF4", status: "sent", scheduled_date: null },
+        { tracking_id: "GF1", status: "failed", scheduled_date: "2026-11-30" },
+      ] },
+    });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    const pickup = Object.fromEntries(rows.map((r) => [r.orderId, r.courierPickup]));
+    expect(pickup).toEqual({ o1: { courier: "gf_courier", date: "2026-11-17" }, o2: null, o3: null, o4: null });
+    // Las salidas, en una sola lectura con las de Aliclik.
+    expect(db.from.mock.calls.filter(([table]) => table === "gf_order_requests")).toHaveLength(1);
+  });
+  it("sin guías GF no pregunta por sus días", async () => {
+    const db = database([master(1)]);
+    await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(db.from.mock.calls.some(([table]) => table === "gf_order_requests")).toBe(false);
+  });
   it("si no se pueden leer las guías, se dice; no se manda todo a «Nunca salieron»", async () => {
     await expect(loadLimaPending(database([master(1)], false, { shipmentError: "sin guías" }).admin, { userId: "u", storeIds: new Set(["a"]) }))
       .rejects.toThrow("sin guías");

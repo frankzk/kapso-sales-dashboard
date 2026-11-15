@@ -53,12 +53,14 @@ import { dispatchCoordinateInput } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { DISCARD_REASON_MIN, validarMotivoDescarte } from "@/lib/recovery-discard";
 import { telHref, whatsappHref } from "@/lib/rider-contact";
-import { MAX_OUTPUTS_PER_ORDER } from "@/lib/shipment-output";
+import { MAX_OUTPUTS_PER_ORDER, sameCourier } from "@/lib/shipment-output";
 import { boxActionReadyLabel, reproBoxAction, type ReproBoxActionResult } from "@/lib/repro-box-action";
 import {
   agreementDateProblem,
   BOX_ACTION_LABEL,
+  defaultReproCourier,
   firstAllowedDay,
+  gfAgreementGuideNote,
   isBoxAction,
   isProblemState,
   isReproCourier,
@@ -75,10 +77,10 @@ import {
   normalizeReproChanges,
   reproCallTimeLabel,
   reproChangesText,
+  reproCourierChoices,
   reproCourierDisabledReason,
   reproCourierName,
   REPRO_CLAIM_HEARTBEAT_MS,
-  REPRO_COURIER_CHOICES,
   REPRO_COURIER_LABEL,
   REPRO_LIST_LABEL,
   REPRO_OUTCOME_LABEL,
@@ -354,6 +356,8 @@ export function planText(plan: MaterializationPlan, courier: ReproCourier, box: 
   if (plan === "al_recibir") return `al recibir la caja de ${box.kind === "con_motorizado" ? box.riderName : "el motorizado"} en oficina.`;
   switch (plan.no) {
     case "otro_courier":
+      // GF Courier por API: Kapta crea la guía al guardar (owner, 15-11-2026, §9.5).
+      if (courier === "gf_courier") return "no en Grupo GF: al guardar, Kapta crea la guía de GF Courier para ese día (si falla, se crea desde la Mesa de ruta de la ficha).";
       return `no en Grupo GF: crea la salida de ${REPRO_COURIER_LABEL[courier]} desde la Mesa de ruta de la ficha.`;
     case "falta_salida": {
       // Lo mismo que dice el aviso al guardar (§9.5).
@@ -684,9 +688,12 @@ export function ReproLimaPanel({
   const [form, setForm] = useState<"call" | "close">("call");
   const [channel, setChannel] = useState<"llamada" | "whatsapp">("llamada");
   const [outcome, setOutcome] = useState<ReproOutcome | null>(null);
+  // Los couriers dependen de la tienda: con GF Courier por API, GF Courier
+  // primero y por defecto, sin Grupo GF (owner, 15-11-2026; §9.5).
+  const gfCourierApi = Boolean(row.gfCourierApi);
   const [courier, setCourier] = useState<ReproCourier | null>(() => {
     const agreed = row.agreement?.courier;
-    return agreed && (REPRO_COURIER_CHOICES as readonly string[]).includes(agreed) ? (agreed as ReproCourier) : "propio";
+    return agreed && (reproCourierChoices(gfCourierApi) as readonly string[]).includes(agreed) ? (agreed as ReproCourier) : defaultReproCourier(gfCourierApi);
   });
   const [changes, setChanges] = useState<ReproChanges>(() => normalizeReproChanges(row.agreement?.changes ?? null));
   // La fecha nunca se preselecciona: ni la que pidió el cliente ni la del motorizado (D9).
@@ -736,14 +743,18 @@ export function ReproLimaPanel({
     retryAdmission: current.retryAdmission,
   });
 
-  // Otra guía viva de otro courier: no se confirma nada aquí (la trabaja ese courier).
-  const confirmBlocked = current.boxInputs.otherLiveCourier
-    ? `La guía de ${reproCourierName(current.boxInputs.otherLiveCourier)} sigue viva: la trabaja ese courier. Revísala en la ficha.`
+  // Otra guía viva de otro courier: no se confirma nada aquí (la trabaja ese
+  // courier). Una guía GF viva en una tienda con GF Courier por API, sí: con
+  // GF Courier, Kapta la reemplaza al guardar (`reproBoxAction`, regla 2).
+  const otherLive = current.boxInputs.otherLiveCourier;
+  const gfReplaceable = Boolean(current.gfCourierApi) && sameCourier(otherLive, "gf_courier");
+  const confirmBlocked = otherLive && !gfReplaceable
+    ? `La guía de ${reproCourierName(otherLive)} sigue viva: la trabaja ese courier. Revísala en la ficha.`
     : null;
 
   // Urpi va apagado con su porqué (E16); los demás, con el problema que daría
   // la caja con ese courier (las cinco salidas, una vez por courier en Lima).
-  const courierOptions = [...REPRO_COURIER_CHOICES, "urpi" as const].map((c) => {
+  const courierOptions = [...reproCourierChoices(Boolean(current.gfCourierApi)), "urpi" as const].map((c) => {
     const fixed = reproCourierDisabledReason(c);
     if (fixed) return { courier: c, reason: fixed };
     if (confirmBlocked) return { courier: c, reason: null };
@@ -767,6 +778,8 @@ export function ReproLimaPanel({
   const todayProblem = dayProblem(today);
   const tomorrowProblem = dayProblem(tomorrow);
   const swayp = courier === "fenix";
+  // GF Courier con una guía GF viva: qué hace Kapta con ella al guardar.
+  const gfGuideNote = outcome === "confirma" && courier === "gf_courier" && current.gfGuidePlan ? gfAgreementGuideNote(current.gfGuidePlan) : null;
   // Aliclik no crea la guía sin coordenada: la misma regla que el servidor (§6.2).
   const needsCoordinate = outcome === "confirma" && reproNeedsCoordinate(courier, current.hasCoordinate);
   const coordinateCheck = needsCoordinate ? dispatchCoordinateInput(coordinate) : null;
@@ -1111,7 +1124,7 @@ export function ReproLimaPanel({
             </dl>
             {current.state.kind === "otro_courier" && (
               <OpsButton size="sm" className="pointer-coarse:h-11" onClick={onGoToMesa}>
-                Crear la salida en la Mesa de ruta
+                {agreement.courier === "gf_courier" ? "Crear la guía de GF Courier en la Mesa de ruta" : "Crear la salida en la Mesa de ruta"}
               </OpsButton>
             )}
             {(showProgramNow || showFound) && (
@@ -1348,6 +1361,11 @@ export function ReproLimaPanel({
                             <p className="text-ink-900"><b className="font-semibold">Qué hacer con la caja:</b> {decided.label}</p>
                             <p className="text-ink-600">{boxActionReadyLabel(decided.action, courier, current.cutoff)}</p>
                             {plan && <p className="text-ink-900"><b className="font-semibold">Se programa:</b> {planText(plan, courier, box, decided.action)}</p>}
+                            {gfGuideNote && (
+                              <p className={current.gfGuidePlan?.kind === "asignada" ? "text-warn-fg" : "text-ink-900"}>
+                                <b className="font-semibold">Guía GF:</b> {gfGuideNote}
+                              </p>
+                            )}
                           </>
                         ) : null}
                       </div>

@@ -356,7 +356,9 @@ describe("las guardas, en el código", () => {
     expect(board).toContain("<AgendarButton row={row} path={path} today={today} size={size}");
     expect(board).toContain('onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>');
     expect(board).toContain("const result = await agendarReproLima({");
-    expect(board).toContain("lines: groupApprovalFailures(failed) });");
+    expect(board).toContain("lines: groupApprovalFailures(failed),");
+    // GF Courier no anuló o no creó la guía del día nuevo: el aviso abre su Mesa de ruta (§9.5).
+    expect(board).toContain('onClick={() => openDrawer(m.orderId, "operar")}');
     expect(board).toContain('aria-label="Mover a otro día"');
     expect(board).not.toContain("DispatchPlanPanel");
     expect(board).not.toContain("planItems(");

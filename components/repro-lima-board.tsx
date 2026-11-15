@@ -66,6 +66,8 @@ type Feedback = {
   lines?: string[];
   /** Algún pedido no tuvo Google porque está apagado o Lima no está medida. */
   googleOff?: boolean;
+  /** Pedidos cuya guía de GF Courier no se anuló o no se creó al mover su acuerdo: su Mesa de ruta. */
+  mesa?: Array<{ orderId: string; orderName: string }>;
 };
 
 export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false }: {
@@ -253,7 +255,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const path = pathOf(row);
     return (
       <>
-        {path.kind && <AgendarButton row={row} path={path} today={today} size={size} onDone={(f) => { setFeedback(f); refresh(); }} />}
+        {path.kind && <AgendarButton row={row} path={path} today={today} size={size} onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }} />}
         <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>
       </>
     );
@@ -336,6 +338,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const label = programDayLabel(moveDay);
     if (!window.confirm(`Se moverán ${rows.length} ${rows.length === 1 ? "pedido" : "pedidos"} al ${label}. ¿Seguir?`)) return;
     const failed: Array<{ orderName: string; error: string }> = [];
+    const mesa: Array<{ orderId: string; orderName: string }> = [];
     let done = 0;
     setMoving({ done: 0, total: rows.length });
     for (const [i, row] of rows.entries()) {
@@ -347,7 +350,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           channel: path.kind === "acuerdo" ? moveChannel : null,
           operationId: newAgendarOperationId(),
         }).catch((e: unknown): AgendarResult => ({ error: e instanceof Error ? e.message : String(e) }));
-        const outcome = agendarOutcome(row.orderName, result);
+        const outcome = agendarOutcome(row.orderName, result, row.orderId);
+        if (outcome.feedback.mesa) mesa.push(outcome.feedback.mesa);
         if (outcome.saved && !result.error) done += 1;
         else failed.push({ orderName: row.orderName, error: result.error ?? outcome.feedback.text });
       } catch {
@@ -357,7 +361,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     }
     setMoving(null);
     setPicked(new Set());
-    setFeedback({ kind: failed.length ? "error" : "notice", text: `Movidos al ${label}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed) });
+    setFeedback({ kind: failed.length ? "error" : "notice", text: `Movidos al ${label}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed), ...(mesa.length ? { mesa } : {}) });
     refresh();
   }
 
@@ -461,6 +465,15 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
               <p>{feedback.text}</p>
               {feedback.extra && <p>{feedback.extra}</p>}
               {feedback.lines?.map((line) => <p key={line}>{line}</p>)}
+              {feedback.mesa?.length ? (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {feedback.mesa.map((m) => (
+                    <OpsButton key={m.orderId} size="sm" className="pointer-coarse:h-11" onClick={() => openDrawer(m.orderId, "operar")}>
+                      {feedback.mesa!.length === 1 ? "Abrir la Mesa de ruta del pedido" : `Mesa de ruta de ${m.orderName}`}
+                    </OpsButton>
+                  ))}
+                </div>
+              ) : null}
               {feedback.googleOff && (
                 <p><a href="/dashboard/automatizaciones#retry-ubicacion" className="font-medium underline underline-offset-2">Ir a «Ubicación por dirección» en Automatizaciones</a> para medir Lima y encenderla.</p>
               )}

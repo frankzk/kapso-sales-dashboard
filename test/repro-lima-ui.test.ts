@@ -306,7 +306,8 @@ describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
   });
 
   it("Urpi va apagado con su porqué (E16) y la acción de caja viaja como expectedBoxAction", () => {
-    expect(panel).toContain('[...REPRO_COURIER_CHOICES, "urpi" as const]');
+    // Los couriers dependen de la tienda (GF Courier por API, owner 15-11-2026); Urpi sigue apagado.
+    expect(panel).toContain('[...reproCourierChoices(Boolean(current.gfCourierApi)), "urpi" as const]');
     expect(panel).toContain("reproCourierDisabledReason(c)");
     expect(panel).toContain("input.expectedBoxAction = action;");
     expect(panel).toContain("boxActionReadyLabel(decided.action, courier, current.cutoff)");

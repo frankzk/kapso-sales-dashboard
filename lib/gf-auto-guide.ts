@@ -16,7 +16,8 @@
 // QUÉ NO HACE. No toca Agencia ni Provincia, ni un pedido programado para otro
 // día (tampoco uno cuyo día ya pasó: ese es de una persona), ni uno que ya
 // tiene guía de cualquier courier, ni un acompañante que viaja en la caja de
-// otro pedido (§32). Si la guía no sale —falta el SKU, el apellido o el
+// otro pedido (§32), ni uno con un acuerdo de Repro Lima con la clienta: el
+// acuerdo decide el día y el courier (§9.5, owner 15-11-2026). Si la guía no sale —falta el SKU, el apellido o el
 // distrito, o GF responde SKU_NOT_FOUND, DISTRICT_NOT_COVERED u OUT_OF_STOCK—,
 // deja el hecho en el historial del pedido y avisa por Telegram de ESE pedido.
 // Un intento por pedido y día: lo que falló lo toma una persona.
@@ -32,6 +33,8 @@ import { dispatchDateLabel } from "@/lib/dispatch-date";
 import { RETRY_MODE_LABEL, isRetryMode, type RetryMode } from "@/lib/lima-retry-auto";
 import { compareGfCatalog, type GfCatalogProduct } from "@/lib/gf-courier-catalog";
 import { escapeHtml } from "@/lib/telegram";
+import { programDayLabel } from "@/lib/dispatch-day";
+import { reproAttentionEpisodeKey, reproCourierName } from "@/lib/repro-lima";
 import type { OrderMasterRow } from "@/lib/types";
 
 /** El hecho que deja un intento fallido. Es también lo que impide repetirlo ese día. */
@@ -88,6 +91,35 @@ export function gfAutoSkip(row: GfAutoRow, todayLima: string): GfAutoSkip | null
   if (row.macro_stage !== "preparacion" || row.macro_substage !== "por_generar_rotulo") return "otra_etapa";
   if (classifyOperation(row) !== "lima") return "no_lima";
   return null;
+}
+
+/** Lo de un caso de Repro Lima que hace falta para saber si manda sobre la pasada. */
+export interface GfAutoReproCase {
+  order_id: string;
+  episode_key: string;
+  agreed_on: string | null;
+  agreed_courier?: string | null;
+  closed_at?: string | null;
+}
+
+/**
+ * El acuerdo de Repro Lima que manda sobre la pasada, o null (owner,
+ * 15-11-2026; MOM §9.5, §29.17): un caso abierto con día acordado
+ * (`agreed_on`) en su episodio vigente. Los pedidos de la pasada están en
+ * Preparación · Por generar rótulo: su episodio es el de atención
+ * (`reproAttentionEpisodeKey`, el mismo que usa `loadReproFacts`). Un caso de
+ * otro episodio ya no vale (Repro Lima lo cierra al leer). El acuerdo decide
+ * el día y el courier: la guía la crea Repro Lima, o una persona. PURA.
+ */
+export function gfAutoReproAgreement(orderId: string, cases: readonly GfAutoReproCase[]): GfAutoReproCase | null {
+  const episode = reproAttentionEpisodeKey(orderId);
+  return cases.find((c) => c.order_id === orderId && !c.closed_at && Boolean(c.agreed_on) && c.episode_key === episode) ?? null;
+}
+
+/** Lo que dice la pasada de un pedido que no toma por su acuerdo de Repro Lima. */
+export function gfAutoReproDetail(c: Pick<GfAutoReproCase, "agreed_on" | "agreed_courier">): string {
+  const day = c.agreed_on ? programDayLabel(c.agreed_on.slice(0, 10)) : "el día acordado";
+  return `Tiene un acuerdo en Repro Lima: sale el ${day} con ${reproCourierName(c.agreed_courier)}. El acuerdo decide el día y el courier.`;
 }
 
 type EventLike = { kind: string; payload?: unknown };

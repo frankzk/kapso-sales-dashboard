@@ -6,7 +6,9 @@
 // orden y gana la primera que aplica:
 //
 // 1. «Ya no lo quiere» → Desarmar y cerrar (no anula la venta).
-// 2. Otra guía viva de otro courier → problema: la trabaja ese courier.
+// 2. Otra guía viva de otro courier → problema: la trabaja ese courier. Salvo
+//    una guía GF viva con GF Courier acordado: Kapta la reemplaza al guardar
+//    (la anula si GF no la asignó y crea la del día acordado, owner 15-11-2026).
 // 3. Urpi → problema: en 1a no lleva reprogramados (E16).
 // 4. «No esperar la caja» con la caja fuera (o que no consta en un caso
 //    reabierto, E29) → Caja nueva desde stock. Va antes que el producto: es lo
@@ -20,6 +22,12 @@
 // misma salida): se respeta el tope de cinco y la repetición por
 // courier de Lima (`canRepeatCourier`). El tope y la repetición son problemas
 // que se le dicen a quien decide: nunca cierran el caso solos.
+//
+// GF Courier por API (MOM §9.5, §29.17) va por las mismas reglas que Aliclik en
+// Lima —otro courier que trae su propia guía—: sin tope (`canRepeatCourier`) y
+// sin programa de Grupo GF (`materializationPlan` → `otro_courier`). Solo cambia
+// quién hace la guía: Kapta la crea al guardar, para el día acordado, y GF
+// prepara el paquete.
 
 import { canRepeatCourier, MAX_OUTPUTS_PER_ORDER, sameCourier, isCourierTbd } from "@/lib/shipment-output";
 import { outputsBlockingRetry, reprogramBlockReason, replaceDecisionMessage, type OwnReplaceDecision } from "@/lib/gf-retry";
@@ -107,10 +115,13 @@ function newOutputProblem(input: ReproBoxActionInput, courier: ReproCourier): st
 
 /** Quién hace la salida del courier acordado, para la etiqueta. */
 function newOutputBy(courier: ReproCourier): string {
-  return courier === "propio"
-    ? "salida nueva de Grupo GF (la crea al tomarlo en Despacho del día)"
-    : `salida de ${REPRO_COURIER_LABEL[courier]} desde la Mesa de ruta`;
+  if (courier === "propio") return "salida nueva de Grupo GF (la crea al tomarlo en Despacho del día)";
+  if (courier === "gf_courier") return GF_GUIDE_BY;
+  return `salida de ${REPRO_COURIER_LABEL[courier]} desde la Mesa de ruta`;
 }
+
+/** GF Courier: Kapta crea la guía al guardar, para el día acordado, y GF prepara el paquete. */
+const GF_GUIDE_BY = "guía de GF Courier, que Kapta crea al guardar para el día acordado (GF prepara el paquete)";
 
 /**
  * «Caja nueva desde stock» lejos de la caja anterior (`previous`: qué pasa
@@ -144,8 +155,9 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
   const courier = input.courier;
   if (!courier) return { problem: "Elige con qué courier sale." };
 
-  // 2. Otra guía viva: la trabaja ese courier.
-  if (input.otherLiveCourier) {
+  // 2. Otra guía viva: la trabaja ese courier. Con GF Courier acordado y una
+  // guía GF viva, no: Kapta la reemplaza al guardar (`gfAgreementGuidePlan`).
+  if (input.otherLiveCourier && !(courier === "gf_courier" && sameCourier(input.otherLiveCourier, "gf_courier"))) {
     return { problem: `La guía de ${reproCourierName(input.otherLiveCourier)} sigue viva: la trabaja ese courier. Revísala en la ficha.` };
   }
 
@@ -209,6 +221,8 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
       newSalida: true,
       label: courier === "propio"
         ? "Desarmar y rearmar: salida, QR y rótulo nuevos (§9.3)."
+        : courier === "gf_courier"
+        ? `Desarmar y rearmar con lo que cambió: ${GF_GUIDE_BY}, con el producto de ahora (§9.3).`
         : `Desarmar y rearmar con salida, QR y rótulo nuevos de ${REPRO_COURIER_LABEL[courier]} desde la Mesa de ruta (§9.3).`,
     };
   }
@@ -220,7 +234,9 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
     return {
       action: "salida_nueva_rearmar",
       newSalida: true,
-      label: input.totalOutputs === 0
+      label: courier === "gf_courier"
+        ? `${input.totalOutputs === 0 ? "Primera salida" : "Salida nueva"} de GF Courier: ${GF_GUIDE_BY}.`
+        : input.totalOutputs === 0
         ? `Primera salida de ${REPRO_COURIER_LABEL[courier]}: prepara el paquete y genera su guía desde la Mesa de ruta.`
         : courier === "propio"
         ? "Salida nueva de Grupo GF: el rótulo nuevo va encima del anterior, tapando su QR (§9.3)."
@@ -249,6 +265,9 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
  */
 export function boxActionReadyLabel(action: BoxAction, courier: ReproCourier | null, cutoff: string | null | undefined): string {
   const cut = sameDayCutoffLabel(cutoff);
+  // GF Courier prepara el paquete él mismo: ni el corte de Grupo GF ni la noche
+  // anterior de Almacén (owner, 15-11-2026). Solo un día que ya pasó no vale.
+  if (courier === "gf_courier" && action !== "desarmar_cerrar") return GF_COURIER_READY;
   switch (action) {
     case "mantener":
       return `Lista para hoy si se confirma hasta las ${cut}.`;
@@ -264,6 +283,8 @@ export function boxActionReadyLabel(action: BoxAction, courier: ReproCourier | n
       return "Se desarma en el día en que la caja está en oficina.";
   }
 }
+
+export const GF_COURIER_READY = "Desde hoy: GF Courier prepara el paquete para el día acordado (sin corte ni noche anterior).";
 
 /** Cuántas salidas del pedido llevó ese courier (comparación canónica, E20). */
 export function priorOutputsWith(outputs: readonly { courier: string }[], courier: string): number {
