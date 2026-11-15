@@ -19365,7 +19365,9 @@ dirección, referencia, GPS, cada línea con su SKU y el total del pedido **repa
 `amount_to_collect = total − pagos`. Sin SKU, sin apellido o sin distrito no se envía: se dice qué falta.
 GF responde la cobertura (`DISTRICT_NOT_COVERED` con la lista válida), el stock (`OUT_OF_STOCK`, incluido el
 interruptor «Agotado» de los productos sin conteo) y los montos.
-- La intención se escribe antes del POST (`gf_order_requests`, una viva por pedido).
+- La intención se escribe antes del POST (`gf_order_requests`, una **en curso** por pedido). Desde la 0346 el
+  candado cuenta solo las pendientes: con la 0344 una intención enviada lo ocupaba para siempre y la guía `-S2` de un
+  pedido chocaba con «Ya hay una creación de guía GF en curso».
 - A diferencia de Aliclik, GF tiene `Idempotency-Key` (`KP-<pedido>-<external_id>`): un timeout se reintenta con la
   misma clave y GF devuelve la misma guía; `DUPLICATE_ORDER` o `IDEMPOTENCY_CONFLICT` con guía se **vinculan**.
 - `external_id` es el nombre del pedido; una salida posterior lleva `-S2`, `-S3`…
@@ -19446,6 +19448,65 @@ exactamente los SKU que la tienda vende, y cada pedido viaja con el mismo SKU.
   tiene **Agotados** (`OUT_OF_STOCK`). «Solo los que faltan en GF» (`?only=missing`) descarga únicamente esos.
 - La sincronización automática Kapta → GF todavía no existe: un producto nuevo se exporta e importa, y GF no duplica
   lo que ya tenía.
+
+#### Guía GF automática (owner, 15-11-2026)
+
+Decisión del owner: el día del despacho, en la mañana, la guía de GF Courier de los pedidos de Lima se crea sola.
+«Antes de eso, quien quiera Aliclik crea esa guía y GF ya no toma el pedido.»
+
+- **Cuándo.** Tres pasadas, a las 9:00, 10:00 y 11:00 de Lima (`/api/cron/gf-auto-guide`, `0 14,15,16 * * *` en UTC).
+  Fuera de 9:00–11:59 la pasada no crea nada (`fuera_de_horario`). Son varias y no una: un pedido que llega o se
+  programa para hoy a media mañana también entra.
+- **Qué pedidos entran.** Los que cumplen todo esto:
+  - la tienda tiene GF Courier por API habilitado (su interruptor y su token);
+  - el servidor tiene `GF_COURIER_WRITE_ENABLED`;
+  - el pedido está en Preparación · Por generar rótulo (`preparacion` / `por_generar_rotulo` en `order_master`);
+  - la operación es Lima (`classifyOperation`);
+  - `dispatch_scheduled_on` es hoy (Lima) o no tiene fecha;
+  - no tiene guía viva de ningún courier;
+  - no es un acompañante vinculado a la caja de otro pedido (§32). Cuenta aunque la caja ya no preste su estado: para
+    darle guía propia hay que desvincularlo antes (§32.1, reglas 8 y 9).
+- **Qué no entra.** No entran:
+  - Agencia ni Provincia;
+  - lo programado para otro día, también un día que ya pasó (la chapa roja «no salió» es para una persona);
+  - lo que ya tiene guía, por ejemplo la de Aliclik que alguien creó antes de las 9:00;
+  - el acompañante.
+- **Por dónde.** El mismo camino que «Crear guía en GF Courier» de la Mesa de ruta: `createGfGuideFor`
+  (`lib/gf-courier-guide.ts`). Pasa por sus compuertas: las dos llaves, ninguna guía GF viva, SKU, apellido y
+  distrito, y la intención escrita antes del POST en `gf_order_requests`. Usa la misma `Idempotency-Key`. Lo pagado
+  por la clienta se descuenta como en la tarjeta. Justo antes de crear vuelve a mirar dos cosas: si el pedido ya
+  tiene guía de cualquier courier y si tiene una creación GF pendiente.
+- **Qué queda.** La guía creada lleva su hecho `guide_registered` sin actor (lo creó el sistema), igual que la que
+  vincula `gf-reconcile`. En el registro del panel (`gf_auto_guide_log`) queda el renglón `creada` con el número `GF…`.
+- **Si falla: una alerta por ese pedido.** Falla si falta el SKU, el apellido o el distrito, o si GF responde
+  `SKU_NOT_FOUND`, `DISTRICT_NOT_COVERED` u `OUT_OF_STOCK`. Entonces:
+  - avisa por Telegram al grupo de alertas urgentes de la tienda (o, si no tiene, al del resumen diario), con el
+    pedido, la clienta, el motivo y el enlace a la ficha;
+  - deja el hecho `gf_auto_guide_failed` en el historial («Guía GF automática no creada»), con el motivo y la fecha;
+    con `DISTRICT_NOT_COVERED`, también la lista de distritos válidos de GF.
+
+  **Un intento por pedido y día**: lo que falló lo toma una persona y ese día no se vuelve a intentar. Un pedido sin
+  fecha que sigue sin poder crearse vuelve a entrar al día siguiente, y vuelve a avisar.
+- **No es un fallo y no avisa:**
+  - que el pedido ya tenga guía y el Master no lo haya recalculado: se recalcula;
+  - que otra creación GF del mismo pedido esté pendiente, sea una persona en la Mesa de ruta o un timeout (GF tiene
+    idempotencia y `gf-reconcile` lo resuelve);
+  - que sea acompañante.
+- **Tres posiciones, por organización** (Automatizaciones, grupo «Logística Lima», §40). Nace **Apagado**.
+  - **Apagado**: no hace nada.
+  - **Simulación**: dice qué guía habría creado. No crea nada afuera, no avisa y no escribe en el historial del
+    pedido. Hace las mismas lecturas que la creación hasta antes del POST y compara los SKU con el catálogo de la
+    tienda en GF (`GET /v1/products`, solo lectura), así anticipa `SKU_NOT_FOUND` y `OUT_OF_STOCK`. La cobertura del
+    distrito solo la responde GF al crear: la simulación no la sabe. Deja un renglón por pedido y día en
+    `gf_auto_guide_log` (`simulada`, o `fallo` = «No la crearía»), como los reintentos de Lima (§9.5).
+  - **Activo**: crea. Pide confirmación en el panel. No se deja elegir sin `GF_COURIER_WRITE_ENABLED` ni sin una
+    tienda con GF Courier por API y su token. Si eso falta después, el panel dice «Está en Activo, pero no corre».
+- **`?dry=1`.** El cron dice qué haría cada organización con GF Courier, esté como esté y a cualquier hora, sin crear,
+  sin escribir y sin avisar.
+
+Migración `0345_gf_auto_guide.sql` (`gf_auto_guide_settings`, `gf_auto_guide_log`). Código: `lib/gf-auto-guide.ts`
+(regla pura), `lib/gf-auto-guide-server.ts` (la pasada y la vista del panel) y `app/api/cron/gf-auto-guide/route.ts`.
+Pruebas: `test/gf-auto-guide.test.ts`.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
@@ -25666,6 +25727,15 @@ Vercel— y algunas no tenían interruptor.
     clientas con entregas» (§6.1, 0317, clave `chatby_auto_history`,
     `history_guide_mode`, `setChatbyHistoryMode`), que crea guías y confirma
     pedidos; en la pasada va antes de la pedida de 0318.
+  - **Logística Lima, con tres posiciones:** «Guía GF automática» (§29.17, 15-11-2026; 0345, clave
+    `gf_auto_guide`, `gf_auto_guide_settings.mode`, `setGfAutoGuideMode`). A las 9:00, 10:00 y 11:00 de Lima crea la
+    guía GF de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha, de las tiendas con GF Courier
+    por API. Apagado / Simulación / Activo, nace Apagado. Sin fila es Apagado y la acción la crea al cambiarla. Activo
+    pide confirmación y no se deja elegir sin `GF_COURIER_WRITE_ENABLED` ni sin una tienda con GF Courier por API y su
+    token. Si eso falta después, la fila dice «Está en Activo, pero no corre» y no cuenta entre las encendidas. La
+    fila nombra las tiendas con GF Courier por API y enlaza a sus Ajustes. Debajo está «Guía GF automática: hoy y
+    ayer» (`#guia-gf-hoy-y-ayer`), con lo que creó cada pasada o lo que habría creado en Simulación. Sin la 0345 la
+    fila se bloquea y funciona como Apagado.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -25694,7 +25764,8 @@ Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql`,
 `0316_chatby_approx_location.sql`, `0317_history_guide_auto.sql` y
 `0318_chatby_auto_ask.sql`; la de «Pedir la ubicación por WhatsApp» de los
 reintentos es `0324_lima_retry_chatby_ask.sql`; la de «Pago solo online» es
-`0326_pago_solo_online.sql`.
+`0326_pago_solo_online.sql`. La de la «Guía GF automática» es `0345_gf_auto_guide.sql`, con sus pruebas en
+`test/gf-auto-guide.test.ts`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`,
 `test/history-guide-auto.test.ts`, `test/lima-retry-chatby-ask.test.ts`.

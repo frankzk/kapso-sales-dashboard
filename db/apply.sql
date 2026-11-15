@@ -689,4 +689,8 @@
 \ir migrations/0343_compras_locales_entregas.sql
 \echo 'Applying 0344_gf_courier_api.sql'
 \ir migrations/0344_gf_courier_api.sql
+\echo 'Applying 0345_gf_auto_guide.sql'
+\ir migrations/0345_gf_auto_guide.sql
+\echo 'Applying 0346_gf_requests_lock_en_curso.sql'
+\ir migrations/0346_gf_requests_lock_en_curso.sql
 \echo 'Done.'

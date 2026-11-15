@@ -39,6 +39,8 @@ import { latestGeocodeLimaRun, runGeocodeLimaMeasure } from "@/lib/geocode-googl
 import { loadPrepaySettings, runPrepayAutoRule } from "@/lib/prepay-list-server";
 import { PREPAY_LIST_PATH, PREPAY_MODE_LABEL, isPrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import { APPROX_MODE_LABEL, isApproxMode } from "@/lib/geocode-approx";
+import { GF_AUTO_MODE_LABEL, gfAutoActivoBlocker, gfAutoModeFrom } from "@/lib/gf-auto-guide";
+import { GF_AUTO_SETTINGS, loadGfReadyStores } from "@/lib/gf-auto-guide-server";
 import {
   acceptPagoOnlineRun,
   emptyPagoOnlineStore,
@@ -62,6 +64,7 @@ import {
   CHATBY_APPROX_KEY,
   CHATBY_ASK_KEY,
   CHATBY_HISTORY_KEY,
+  GF_AUTO_GUIDE_KEY,
   PREPAY_MODE_EVENT,
   PAGO_ONLINE_ACCEPT_EVENT,
   PAGO_ONLINE_EMPTY_EVENT,
@@ -777,4 +780,58 @@ export async function setChatbyHistoryMode(orgId: string, mode: string): Promise
   });
   revalidatePath(PANEL_PATH);
   return { notice: warn ?? `Guía automática para clientas con entregas: ${APPROX_MODE_LABEL[mode]}.` };
+}
+
+// ── «Guía GF automática» (0345, MOM §29.17 y §40) ──
+
+const MISSING_0345 = "Falta la migración 0345 en la base de datos.";
+
+/**
+ * Apagado / Simulación / Activo de la guía GF automática, por organización.
+ * Solo escribe `gf_auto_guide_settings.mode`; sin fila es Apagado y se crea
+ * aquí (no tiene topes ni ventanas que decidir). Activo pide la confirmación en
+ * la página y, como todo automático que depende de otra función (§40), no se
+ * deja elegir sin la llave del servidor ni sin una tienda con GF Courier por API
+ * y su token. Apagar y Simulación se pueden siempre.
+ */
+export async function setGfAutoGuideMode(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isApproxMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const { data: current, error: readError } = await g.admin.from(GF_AUTO_SETTINGS).select("mode").eq("org_id", orgId).maybeSingle();
+  if (readError) {
+    if (/gf_auto_guide_settings|PGRST205|42P01/.test(`${readError.code ?? ""} ${readError.message ?? ""}`)) return { error: MISSING_0345 };
+    return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  }
+  const previous = gfAutoModeFrom((current as { mode?: string } | null)?.mode);
+  if (previous === mode) return { notice: "Ya estaba así." };
+  if (mode === "activo") {
+    const ready = await loadGfReadyStores(g.admin, { orgId });
+    if (ready.error) return { error: "No se pudieron leer las tiendas con GF Courier. Intenta de nuevo." };
+    const blocker = gfAutoActivoBlocker({ writeEnabled: env.gfCourierWriteEnabled(), readyStores: ready.stores.length });
+    if (blocker) return { error: `No se puede poner en Activo. ${blocker}` };
+  }
+  const { error } = await g.admin
+    .from(GF_AUTO_SETTINGS)
+    .upsert({ org_id: orgId, mode, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) {
+    if (/gf_auto_guide_settings/.test(error.message ?? "")) return { error: MISSING_0345 };
+    return { error: "No se pudo guardar. Intenta de nuevo." };
+  }
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: GF_AUTO_GUIDE_KEY,
+    previous,
+    next: mode,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  const tail =
+    mode === "activo"
+      ? " La próxima pasada es a las 9:00, 10:00 u 11:00 de Lima."
+      : mode === "simulacion"
+        ? " En la próxima pasada de la mañana dice qué guía habría creado, sin crear nada."
+        : "";
+  return { notice: warn ?? `Guía GF automática: ${GF_AUTO_MODE_LABEL[mode]}.${tail}` };
 }

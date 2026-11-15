@@ -36,7 +36,12 @@ export async function loadGfStore(admin: SupabaseClient, storeId: string) {
   return { enabled: Boolean(data.gf_courier_enabled), token: decryptOrNull(data.gf_courier_api_token_enc), webhookSecret: decryptOrNull(data.gf_courier_webhook_secret_enc) };
 }
 
-export async function createGfGuideFor(orderId: string, ctx: { userId: string | null }, admin: SupabaseClient = createAdminSupabase()): Promise<GfGuideResult> {
+export async function createGfGuideFor(
+  orderId: string,
+  /** `reason`: lo que dice el hecho `guide_registered`; la guía automática dice que lo es. */
+  ctx: { userId: string | null; reason?: string | null },
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<GfGuideResult> {
   if (!env.gfCourierWriteEnabled()) return { ok: false, error: "GF Courier por API está apagado (GF_COURIER_WRITE_ENABLED)." };
   const master = await admin.from("order_master").select(
     "store_id,order_id,order_name,customer_name,customer_phone,region,province,district,address,reference,latitude,longitude,order_total,dispatch_scheduled_on,shipping_mode",
@@ -107,7 +112,7 @@ export async function createGfGuideFor(orderId: string, ctx: { userId: string | 
   if ("error" in written) return { ok: false, error: `La guía se creó en GF (${gf.tracking_id}) pero no se pudo guardar: ${written.error}` };
   await admin.from("order_events").insert({
     store_id: row.store_id, order_id: orderId, kind: "guide_registered", occurred_at: new Date().toISOString(), actor: ctx.userId,
-    source: GF_COURIER, courier: GF_COURIER, guide_code: gf.tracking_id,
+    source: GF_COURIER, courier: GF_COURIER, guide_code: gf.tracking_id, ...(ctx.reason ? { reason: ctx.reason } : {}),
     payload: { shipping_cost: gf.shipping_cost, estimated_delivery_date: gf.estimated_delivery_date, external_id: externalId, adopted },
   });
   await recomputeOrderMasterSafe(admin, [orderId]);

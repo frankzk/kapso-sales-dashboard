@@ -23,6 +23,36 @@ Verificar con un pedido de prueba:
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
 
+### 15-11-2026 · Guía GF automática a las 9, 10 y 11 de Lima (0345 y 0346, MOM §29.17 y §40)
+
+**Migraciones `0345_gf_auto_guide.sql` y `0346_gf_requests_lock_en_curso.sql`: ya aplicadas en producción
+(15-11-2026), antes del código.**
+
+La 0346 rehace `gf_order_requests_live_uniq` para que cuente solo las creaciones en curso (`status = 'pending'`).
+Con la 0344, la intención enviada de la primera guía bloqueaba para siempre la `-S2` del mismo pedido. Antes de
+aplicarla había una sola intención en la tabla (#AUR900859), así que nadie llegó a chocar.
+
+La 0345 crea `gf_auto_guide_settings` (la posición por
+organización; sin fila es Apagado) y `gf_auto_guide_log` (lo que hizo o habría hecho cada pasada, uno por pedido,
+día y modo). Las dos tienen RLS de lectura para la organización y escritura solo del servidor. Es aditiva: sin `drop`,
+no toca datos y se puede correr otra vez. Sin ella, el cron responde 502 con «Falta la migración 0345» y la fila del
+panel queda bloqueada como Apagado; no se crea ninguna guía.
+
+Cron nuevo: `/api/cron/gf-auto-guide` a las `0 14,15,16 * * *` UTC (9:00, 10:00 y 11:00 de Lima), con `CRON_SECRET`.
+Sin variables nuevas: usa `GF_COURIER_WRITE_ENABLED` y el interruptor y el token de GF Courier de cada tienda (0344).
+**Nace Apagado en todas las organizaciones**: desplegar no crea ninguna guía.
+
+Verificar:
+1. `select count(*) from gf_auto_guide_settings;` → 0, y en Automatizaciones → «Logística Lima» la «Guía GF
+   automática» sale en Apagado, con las tiendas que tienen GF Courier por API.
+2. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET` responde 200 con `candidates` e
+   `items` (`simulada`, `fallo`…) y no escribe nada: `gf_auto_guide_log` sigue vacío.
+3. Poner Simulación. Después de la pasada de las 9:00, «Guía GF automática: hoy y ayer» lista los pedidos de Lima por
+   generar rótulo con «Habría creado la guía» o «No la crearía», sin guías nuevas en GF ni avisos por Telegram.
+4. Activo pide confirmación. Sin `GF_COURIER_WRITE_ENABLED` responde «No se puede poner en Activo». En Activo, un
+   pedido sin SKU deja «Guía GF automática no creada» en su historial y una sola alerta por Telegram, y la pasada de
+   las 10:00 no lo repite.
+
 ### 15-11-2026 · Pasar de GF Courier a Aliclik anula la guía GF (sin migración, MOM §29.17)
 
 Sin migración, sin crons ni variables nuevas.
