@@ -363,6 +363,8 @@ export interface ShipmentRow {
    *  que distingue una guía cerrada porque la entrega FALLÓ —y cuyo pedido
    *  todavía merece otra salida— de una cerrada por decisión nuestra. */
   reported_status?: string | null;
+  /** El envío que cotizó el courier (Aliclik, GF Courier). */
+  quoted_delivery_cost?: number | null;
   /** Aliclik, del Excel (0304): «SUB ESTADO» (DE VIAJE, POR CLIENTE…) y el
    *  último comentario del motorizado, del reporte más reciente. */
   aliclik_sub_status?: string | null;

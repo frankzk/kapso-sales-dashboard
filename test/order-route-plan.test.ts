@@ -490,3 +490,108 @@ describe("Swayp en devolución en la mesa de ruta", () => {
     expect(swayp?.reason).toContain("Mientras esa guía siga abierta no se crea otra con");
   });
 });
+
+describe("GF Courier por API en la mesa de ruta (MOM §29.17, owner 15-11-2026)", () => {
+  // «Ojo que GF Courier no ha quedado dentro de la mesa de ruta. Diría que
+  // debería estar ahí, junto a todas las opciones logísticas.»
+  const gfOn = { enabled: true, blockedReason: null } as const;
+  const lima = (extra: Partial<Parameters<typeof buildOrderRoutePlan>[0]> = {}) =>
+    buildOrderRoutePlan({
+      operation: "lima",
+      outputs: [],
+      grupoGfCourier: grupoGfDisponible,
+      now: new Date("2026-08-31T15:00:00Z"),
+      ...extra,
+    });
+  const gfGuide = (deliveryStatus: string, extra: Record<string, unknown> = {}) => ({
+    id: `gf-${deliveryStatus}`,
+    courier: "gf_courier",
+    deliveryStatus,
+    guideCode: "GF26AF62464D9F42F7",
+    createdVia: "gf_courier_api",
+    ...extra,
+  });
+
+  it("con la API encendida va primero y sugerida, y Grupo GF deja de ofrecerse", () => {
+    const plan = lima({ gfCourier: gfOn });
+    expect(plan.candidates[0]).toMatchObject({
+      key: "gf_courier",
+      label: "GF Courier",
+      action: "gf_courier",
+      recommended: true,
+      availability: "available",
+    });
+    expect(plan.candidates.some((route) => route.key === "propio")).toBe(false);
+    expect(plan.candidates.find((route) => route.key === "aliclik")?.recommended).toBe(false);
+  });
+
+  it("sin la API, la mesa sigue igual: Grupo GF sugerido y sin GF Courier", () => {
+    const plan = lima({ gfCourier: { enabled: false } });
+    expect(plan.candidates.find((route) => route.recommended)?.key).toBe("propio");
+    expect(plan.candidates.some((route) => route.key === "gf_courier")).toBe(false);
+    expect(lima().candidates.some((route) => route.key === "gf_courier")).toBe(false);
+  });
+
+  it("encendida pero sin token: bloqueada con el motivo y la sugerencia pasa a Aliclik", () => {
+    const plan = lima({ gfCourier: { enabled: true, blockedReason: "La tienda no tiene token de GF Courier." } });
+    const gf = plan.candidates.find((route) => route.key === "gf_courier");
+    expect(gf).toMatchObject({ availability: "blocked", recommended: false, reason: "La tienda no tiene token de GF Courier." });
+    expect(plan.candidates.find((route) => route.recommended)?.key).toBe("aliclik");
+  });
+
+  it("una guía GF viva bloquea crear otra y la nombra, para poder anularla", () => {
+    const gf = lima({ gfCourier: gfOn, outputs: [gfGuide("pendiente", { quotedCost: 13.5 })] }).candidates.find(
+      (route) => route.key === "gf_courier",
+    );
+    expect(gf?.availability).toBe("blocked");
+    expect(gf?.recommended).toBe(false);
+    expect(gf?.blockingOutput).toMatchObject({ guideCode: "GF26AF62464D9F42F7", courier: "gf_courier", quotedCost: 13.5 });
+    expect(gf?.reason).toContain("GF solo la anula antes de prepararla");
+  });
+
+  it("con la guía anterior cerrada se crea otra, sin el tope de cinco salidas", () => {
+    // «GF Courier es la única opción de Lima a la que puedo crearle guías
+    // ilimitadas. Obviamente sería una guía por día.»
+    const outputs = [
+      ...Array.from({ length: 4 }, (_, index) => ({ id: `axel-${index}`, courier: "axel", deliveryStatus: "anulado" })),
+      gfGuide("anulado"),
+      gfGuide("entregado", { id: "gf-2" }),
+    ];
+    const plan = lima({ gfCourier: gfOn, outputs });
+    const gf = plan.candidates.find((route) => route.key === "gf_courier");
+    expect(gf).toMatchObject({ availability: "available", recommended: true });
+    expect(plan.candidates.find((route) => route.key === "aliclik")?.availability).toBe("blocked");
+    expect(plan.warnings.join(" ")).toContain("solo GF Courier admite otra");
+  });
+
+  it("Grupo GF reaparece solo para nombrar una salida propia que sigue viva", () => {
+    const plan = lima({ gfCourier: gfOn, outputs: [{ id: "p1", courier: "propio", deliveryStatus: "en_ruta", guideCode: "KP1-S01" }] });
+    const propio = plan.candidates.find((route) => route.key === "propio");
+    expect(propio?.availability).toBe("blocked");
+    expect(propio?.blockingOutput?.id).toBe("p1");
+    expect(plan.candidates[0]?.key).toBe("gf_courier");
+  });
+
+  it("una guía GF viva se nombra también si la tienda apagó la API o el pedido no es de Lima", () => {
+    const off = lima({ gfCourier: { enabled: false }, outputs: [gfGuide("en_ruta")] });
+    expect(off.candidates.find((route) => route.key === "gf_courier")?.blockingOutput?.guideCode).toBe("GF26AF62464D9F42F7");
+    const provincia = buildOrderRoutePlan({ operation: "provincia_cod", outputs: [gfGuide("pendiente")] });
+    expect(provincia.candidates.find((route) => route.key === "gf_courier")?.availability).toBe("blocked");
+    expect(buildOrderRoutePlan({ operation: "provincia_cod", outputs: [] }).candidates.some((route) => route.key === "gf_courier")).toBe(false);
+  });
+
+  it("la tarjeta crea y anula en la mesa; el panel suelto ya no existe", () => {
+    const desk = readFileSync(resolve(__dirname, "../components/order-route-desk.tsx"), "utf8");
+    expect(desk).toContain('gf_courier: "Crear guía en GF Courier"');
+    expect(desk).toContain("Anular guía");
+    expect(desk).toContain("Confirmar anulación");
+    const drawer = readFileSync(resolve(__dirname, "../components/order-drawer.tsx"), "utf8");
+    expect(drawer).toContain("createGfCourierGuide(orderId)");
+    expect(drawer).toContain("cancelGfCourierGuide(orderId, reason)");
+    expect(drawer).not.toContain("GfCourierGuidePanel");
+    expect(drawer).not.toContain('data-drawer-section="gf-courier"');
+    const access = readFileSync(resolve(__dirname, "../lib/orders-master-access.ts"), "utf8");
+    expect(access).toContain("gfCourier,");
+    expect(access).toContain("quotedCost: guide.quoted_delivery_cost ?? null");
+  });
+});

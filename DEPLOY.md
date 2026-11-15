@@ -23,6 +23,21 @@ Verificar con un pedido de prueba:
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
 
+### 15-11-2026 · GF Courier dentro de la Mesa de ruta y sin tope de salidas (sin migración, MOM §29.17, §4)
+
+Sin migración, sin crons ni variables nuevas. GF Courier pasa a ser una opción del plan de rutas.
+- Con el interruptor de la tienda encendido, un pedido de Lima lo muestra primero y sugerido, y Grupo GF deja de
+  ofrecerse. Solo vuelve a aparecer si el pedido tiene una salida propia viva.
+- Crear y anular la guía se hace en esa tarjeta.
+- El panel suelto «GF Courier» y su entrada en el índice se retiraron.
+- Las guías GF no cuentan para el tope de cinco salidas. Se crea una tras otra (-S2, -S3…) cuando la anterior está
+  cerrada.
+
+Verificar en un pedido de Aurela:
+1. La Mesa de ruta sugiere «GF Courier» y no ofrece Grupo GF.
+2. #AUR900859, con su guía viva, muestra la guía con estado y envío, y el botón «Anular guía».
+3. En Kenku, con el interruptor apagado, sigue Grupo GF como antes.
+
 ### 15-11-2026 · Repro Lima: la salida de otro courier cuenta como lista, con aviso (sin migración, MOM §9.5)
 
 Sin migración. Decisión del owner («Cuenta, con aviso»): un acuerdo cuyo pedido

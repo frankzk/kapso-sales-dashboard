@@ -9,7 +9,7 @@ import { useId, useState } from "react";
 import { cn } from "@/components/ui";
 import { GuideNumber } from "@/components/guide-number";
 import { IconChevronDown } from "@/components/icons";
-import { Badge, Banner, OpsButton, SectionHead } from "@/components/ops-ui";
+import { Badge, Banner, FIELD_BOX, OpsButton, SectionHead } from "@/components/ops-ui";
 import { AliclikOutlookLadder } from "@/components/aliclik-outlook";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { shipmentIsReturning, shipmentStateLabel } from "@/lib/order-status";
@@ -34,8 +34,19 @@ const ACTION_LABEL: Record<RouteAction, string> = {
   swayp: "Gestionar Swayp",
   shalom: "Abrir Shalom",
   tanders: "Crear en Tanders",
+  gf_courier: "Crear guía en GF Courier",
   manual: "Crear salida",
 };
+
+/** Lo que devuelven crear y anular la guía de GF Courier. */
+export interface GfCourierDeskResult {
+  notice?: string;
+  error?: string;
+  /** Distritos válidos cuando GF responde `DISTRICT_NOT_COVERED`. */
+  allowed?: unknown[];
+  /** Timeout: se reintenta con la misma clave y GF no duplica la guía. */
+  pending?: boolean;
+}
 
 export function OrderRouteDesk({
   plan,
@@ -47,6 +58,7 @@ export function OrderRouteDesk({
   aliclikOutlook,
   storeName,
   groupGf,
+  gfCourier,
 }: {
   plan: OrderRoutePlan;
   /**
@@ -82,11 +94,35 @@ export function OrderRouteDesk({
     printNew?: { onPrint: () => void; pending: boolean } | null;
     ready?: { outputCode: string | null; labelHref: string } | null;
   };
+  /**
+   * GF Courier por API (MOM §29.17). La guía se crea y se anula en su tarjeta,
+   * no en un panel aparte (owner, 15-11-2026: «debería estar ahí, junto a todas
+   * las opciones logísticas»). Crear pasa por `onSelect`, como las demás;
+   * anular pide el motivo aquí mismo.
+   */
+  gfCourier?: {
+    canCancel: boolean;
+    pending: boolean;
+    result: GfCourierDeskResult | null;
+    /** `true` si GF la anuló: la tarjeta cierra el motivo. */
+    onCancel: (reason: string) => Promise<boolean>;
+  };
 }) {
   const blockers = gate?.blockers ?? [];
   const blockedActions = new Set(gate?.blockedActions ?? []);
   const [showRare, setShowRare] = useState(false);
+  // Anular la guía GF es destructivo y poco frecuente: primero el botón, el
+  // motivo se pide solo al elegirlo.
+  const [gfCancelling, setGfCancelling] = useState(false);
+  const [gfReason, setGfReason] = useState("");
   const uid = useId();
+  // La guía GF viva que se puede anular desde su tarjeta. Una que GF ya está
+  // devolviendo no se anula: el paquete viene de regreso.
+  const gfCancellable = (route: RouteCandidate) =>
+    route.key === "gf_courier" &&
+    Boolean(gfCourier?.canCancel) &&
+    Boolean(route.blockingOutput) &&
+    !shipmentIsReturning(route.blockingOutput!);
   // Lo que decide cada modalidad, para la destacada y para las filas.
   const stateOf = (route: RouteCandidate) => {
     // Por MODALIDAD, no por pedido: con el pedido cerrado, Tanders y
@@ -129,6 +165,9 @@ export function OrderRouteDesk({
             <span className={shipmentIsReturning(route.blockingOutput) ? "font-medium text-warn-fg" : "text-ink-500"}>
               · {shipmentStateLabel(route.blockingOutput)}
             </span>
+            {route.key === "gf_courier" && route.blockingOutput.quotedCost != null && (
+              <span className="tabular-nums text-ink-500">· envío S/ {Number(route.blockingOutput.quotedCost).toFixed(2)}</span>
+            )}
           </p>
         )}
         <p className={cn("mt-1 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-600" : "text-ink-700")}>
@@ -166,6 +205,73 @@ export function OrderRouteDesk({
             className="mt-2.5"
           />
         )}
+        {route.key === "gf_courier" && gfCourier && renderGfCourier(route)}
+      </>
+    );
+  };
+
+  // El motivo de la anulación y lo que respondió GF, dentro de su tarjeta.
+  const renderGfCourier = (route: RouteCandidate) => {
+    if (!gfCourier) return null;
+    const { pending, result } = gfCourier;
+    return (
+      <>
+        {gfCancelling && gfCancellable(route) && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <input
+              autoFocus
+              value={gfReason}
+              onChange={(event) => setGfReason(event.target.value)}
+              placeholder="Motivo de la anulación (mínimo 5 letras)"
+              aria-label="Motivo de la anulación"
+              className={cn(FIELD_BOX, "h-9 min-w-0 flex-1 px-3 pointer-coarse:h-11")}
+            />
+            <OpsButton
+              size="sm"
+              variant="danger"
+              disabled={pending || gfReason.trim().length < 5}
+              onClick={async () => {
+                if (await gfCourier.onCancel(gfReason)) {
+                  setGfCancelling(false);
+                  setGfReason("");
+                }
+              }}
+              className="pointer-coarse:h-11"
+            >
+              {pending ? "Anulando…" : "Confirmar anulación"}
+            </OpsButton>
+            <OpsButton
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => {
+                setGfCancelling(false);
+                setGfReason("");
+              }}
+              className="pointer-coarse:h-11"
+            >
+              Cancelar
+            </OpsButton>
+          </div>
+        )}
+        {result?.notice && (
+          <p role="status" className="mt-2 text-[13px] leading-5 text-ok-fg">
+            {result.notice}
+          </p>
+        )}
+        {result?.error && (
+          <div role="alert" className="mt-2 text-[13px] leading-5 text-crit-fg">
+            <p>{result.error}</p>
+            {Array.isArray(result.allowed) && result.allowed.length > 0 && (
+              <p className="mt-0.5 text-xs">Válidos: {result.allowed.slice(0, 30).join(", ")}</p>
+            )}
+            {result.pending && (
+              <p className="mt-0.5 text-xs">
+                Vuelve a pulsar «Crear guía en GF Courier»: se reintenta con la misma clave y GF no duplica la guía.
+              </p>
+            )}
+          </div>
+        )}
       </>
     );
   };
@@ -173,9 +279,23 @@ export function OrderRouteDesk({
   // Los botones, a la derecha en escritorio y debajo en el teléfono.
   const renderActions = (route: RouteCandidate) => {
     const { closed, enabled, suggested, gfPrint } = stateOf(route);
+    const gfPending = route.key === "gf_courier" && Boolean(gfCourier?.pending);
     return (
       <div className="flex shrink-0 flex-wrap gap-2 sm:max-w-[16rem] sm:flex-col sm:items-end">
-        {gfPrint ? (
+        {gfCancellable(route) ? (
+          // La guía GF viva se anula desde su tarjeta; el motivo se pide abajo.
+          !gfCancelling && (
+            <OpsButton
+              size="sm"
+              variant="secondary"
+              disabled={gfPending}
+              onClick={() => setGfCancelling(true)}
+              className="pointer-coarse:h-11"
+            >
+              Anular guía
+            </OpsButton>
+          )
+        ) : gfPrint ? (
           <OpsButton
             size="sm"
             variant={route.recommended ? "primary" : "secondary"}
@@ -189,11 +309,13 @@ export function OrderRouteDesk({
           <OpsButton
             size="sm"
             variant={suggested ? "primary" : "secondary"}
-            disabled={!enabled}
+            disabled={!enabled || gfPending}
             onClick={() => onSelect(route)}
             className="pointer-coarse:h-11"
           >
-            {closed
+            {gfPending
+              ? "Creando…"
+              : closed
               ? "Reabrir primero"
               : route.blockingOutput
               ? "Ya tiene salida activa"

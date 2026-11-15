@@ -246,6 +246,8 @@ async function PedidosContent({
       canCancelWoo={perms.can("orders.cancel_woo")}
       canCreateGuide={perms.can("aliclik.create_guide")}
       canCreateTandersGuide={perms.can("tanders.create_guide")}
+      canCreateGfGuide={perms.can("gf_courier.create_guide")}
+      canCancelGfGuide={perms.can("gf_courier.cancel_guide")}
       canCreateShalomGuide={perms.can("shalom.create_guide")}
       // La pestaña «Repro Lima» de la ficha (MOM §9.5): quien llama a los clientes de Lima.
       canAttendReproLima={perms.can("repro_lima.manage")}
