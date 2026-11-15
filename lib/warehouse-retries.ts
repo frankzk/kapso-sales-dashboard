@@ -450,7 +450,6 @@ const WARN_STATES: ReadonlySet<AgreementStateKind> = new Set<AgreementStateKind>
   "falta_ubicar",
   "por_programar",
   "deriva_quitado",
-  "salida_distinta",
 ]);
 
 /**

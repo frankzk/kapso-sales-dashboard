@@ -23,6 +23,18 @@ Verificar con un pedido de prueba:
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
 
+### 15-11-2026 · Repro Lima: la salida de otro courier cuenta como lista, con aviso (sin migración, MOM §9.5)
+
+Sin migración. Decisión del owner («Cuenta, con aviso»): un acuerdo cuyo pedido
+ya tiene una salida viva de otro courier que el acordado (`salida_distinta`)
+deja de ser problema. La chapa dice «Salida creada · sale … con Aliclik (se
+acordó Swayp)», la fila de atención de un pendiente dice «Listo: sale con
+Aliclik (se acordó Swayp). No requiere gestión salvo que el cliente cambie
+algo.», ya no va primero en «Programados» y Almacén la trata como «Salida
+creada». Con la salida del courier acordado (`salida_creada`), la fila de
+atención también dice «Listo» en vez de «confirma con el cliente la fecha y el
+courier». Verificar en Repro Lima un pendiente con guía de Aliclik ya creada.
+
 ### 14-11-2026 · Compras: catálogo vivo en «Agregar producto», lista por páginas, «Comprado» en soles y quitar con confirmación (sin migración, MOM §45.1, §45.2, §45.7, §45.8, §45.16)
 
 **Sin migración, sin crons ni variables nuevas.** Se despliega y ya está.

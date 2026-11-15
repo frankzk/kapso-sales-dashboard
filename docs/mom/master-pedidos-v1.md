@@ -6193,7 +6193,7 @@ Master: se calculan al leer, y el caso nunca se reescribe.
 | `programado_vencido` | Su día pasó y no salió | «Programado para el jue 15/10 y no salió» |
 | `programado` | Programado para el día acordado | «Programado · sale jue 15/10 con Grupo GF» |
 | `salida_creada` | (13-11-2026) El pedido ya tiene una salida viva con el courier acordado (Swayp, Aliclik, Tanders, Axel), creada o rellenada desde la Mesa de ruta o registrada por el courier. No pide nada | «Salida creada · sale sáb 14/11 con Swayp» |
-| `salida_distinta` | (13-11-2026) El pedido tiene una salida viva con otro courier que el acordado (también si se acordó Grupo GF). Es problema: va primero y deja la fila «Con aviso» en Almacén | «Ya tiene salida con Swayp (se acordó Aliclik): revisa cuál sale» |
+| `salida_distinta` | (13-11-2026; cambia el 15-11-2026, decisión del owner: «Cuenta, con aviso») El pedido tiene una salida viva con otro courier que el acordado (también si se acordó Grupo GF). Cuenta igual que `salida_creada`: no es problema, no va primero y en Almacén se trata como `salida_creada`; la chapa solo avisa qué courier se había acordado | «Salida creada · sale sáb 14/11 con Swayp (se acordó Aliclik)» |
 
 Dónde está la caja (`boxLocation`), para la fila y para la acción de la caja:
 `con_motorizado` («Con Roy desde sáb 10/10», también si su parada todavía no
@@ -6214,7 +6214,12 @@ propia reemplazada—:
   («Salida de Swayp en oficina · la recoge Swayp» o «La lleva Aliclik») y el
   acuerdo pasa a `salida_creada` o `salida_distinta` (arriba), sea cual sea el
   camino por el que nació la salida. Grupo GF no programa esa caja; Almacén la
-  pone en «Todavía fuera» cuando ya la tiene el courier;
+  pone en «Todavía fuera» cuando ya la tiene el courier. En la fila de
+  atención de un pendiente que nunca falló, `salida_creada` dice «Listo: sale
+  con Aliclik. No requiere gestión salvo que el cliente cambie algo.» en vez de
+  «confirma con el cliente la fecha y el courier». `salida_distinta` dice lo
+  mismo con el aviso del courier acordado: «Listo: sale con Aliclik (se acordó
+  Swayp). No requiere gestión salvo que el cliente cambie algo.»;
 - una propia o «por definir» en la empresa, sin transferir, es `en_oficina`
   («En oficina»). Si nunca salió (`nuncaSalio`), Almacén no avisa «nadie
   registró su recepción»: no hay recepción que esperar.

@@ -726,7 +726,7 @@ export function materializationPlan(input: {
 }): MaterializationPlan {
   if (input.courier !== "propio") return { no: "otro_courier" };
   // Ya la trabaja otro courier: Grupo GF no la programa (el estado lo dice:
-  // `salida_distinta`).
+  // `salida_creada` o `salida_distinta`).
   if (input.box.kind === "con_courier") return { no: "otro_courier" };
   if (input.boxAction === "caja_nueva_stock") {
     const box = input.box;
@@ -814,7 +814,6 @@ export const PROBLEM_STATES: ReadonlySet<AgreementStateKind> = new Set<Agreement
   "falta_sacar",
   "por_programar",
   "acuerdo_vencido",
-  "salida_distinta",
 ]);
 
 export function isProblemState(kind: AgreementStateKind): boolean {
@@ -864,8 +863,10 @@ function missedToday(
  *    escritura → `por_programar` (E9), o `acuerdo_vencido` si ya no alcanza hoy.
  * 1b. (13-11-2026, owner) Con una salida viva de otro courier (`box` es
  *    `con_courier`): si es el courier acordado → `salida_creada` (ya está, no
- *    pide nada); si es otro → `salida_distinta` (revisar cuál sale). Va antes
- *    que todo lo demás: la salida es un hecho, el acuerdo solo una intención.
+ *    pide nada); si es otro → `salida_distinta`, que cuenta igual y solo avisa
+ *    qué courier se había acordado (owner, 15-11-2026: «Cuenta, con aviso»; no
+ *    es problema). Va antes que todo lo demás: la salida es un hecho, el
+ *    acuerdo solo una intención.
  * 4. Materializado con programa: `deriva_movido` (otro día), `falta_sacar`
  *    (caja nueva desde stock con la caja todavía con el motorizado),
  *    `programado_vencido` (su día pasó) o `programado`. Lo que diga el plan ya
@@ -960,7 +961,7 @@ export function agreementStateLabel(
     case "salida_creada":
       return `Salida creada · sale ${day} con ${courier}`;
     case "salida_distinta":
-      return `Ya tiene salida con ${reproCourierName(state.courier)} (se acordó ${courier}): revisa cuál sale`;
+      return `Salida creada · sale ${day} con ${reproCourierName(state.courier)} (se acordó ${courier})`;
   }
 }
 
