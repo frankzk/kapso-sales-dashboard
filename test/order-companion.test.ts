@@ -473,7 +473,7 @@ describe("la mesa de rutas del acompañante se cierra (regla 8)", () => {
       generalStatus: "en_proceso",
       companionOf: { hostOrderName: "#AUR177622", guideCode: "AUR5XAUR177622" },
     });
-    expect(gate.blockedActions.sort()).toEqual(["aliclik", "manual", "shalom", "swayp", "tanders"]);
+    expect(gate.blockedActions.sort()).toEqual(["aliclik", "gf_courier", "manual", "shalom", "swayp", "tanders"]);
     expect(gate.blockers[0]).toMatchObject({ target: "guias" });
     expect(gate.blockers[0]!.text).toContain("#AUR177622");
     expect(routeDeskGate({ macroStage: "preparacion", generalStatus: "pendiente" }).blockedActions).toEqual([]);

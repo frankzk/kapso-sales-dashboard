@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { aliclikOutputPolicy, type AliclikExistingOutput } from "@/lib/aliclik-output-policy";
 
@@ -88,5 +90,57 @@ describe("Aliclik proactivo en Lima", () => {
     const swayp = { ...alexis, courier: "fenix", swayp_state: 8, delivery_status: "en_ruta" };
     expect(decide([swayp], null, "provincia_cod").ok).toBe(true);
     expect(decide([{ ...swayp, swayp_state: 6 }], null, "provincia_cod").ok).toBe(false);
+  });
+});
+
+describe("GF Courier → Aliclik: Kapta anula la guía GF (owner, 15-11-2026)", () => {
+  // «Kapta la anula sola. Pero el límite sería si ya se asignó: no crea la de
+  // Aliclik. Si la prepararon y aún no se asigna a motorizado, se puede anular.»
+  const gf = (deliveryStatus: string): AliclikExistingOutput => ({
+    id: `gf-${deliveryStatus}`, courier: "gf_courier", guide_code: "GF26AF62464D9F42F7", output_code: "AUR900859-S01",
+    delivery_status: deliveryStatus, created_via: "gf_courier_api", custody_state: "empresa", custody_transferred_at: null,
+  });
+  const byPerson = (outputs: AliclikExistingOutput[]) =>
+    aliclikOutputPolicy({ outputs, operation: "lima", motivo: null, manual: true, person: true });
+
+  it("creada o preparada sin asignar: una persona crea Aliclik sin motivo y la GF va a anularse", () => {
+    const result = byPerson([gf("pendiente")]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.gfToCancel?.map((o) => o.guide_code)).toEqual(["GF26AF62464D9F42F7"]);
+      expect(result.motivo).toBeNull();
+    }
+  });
+
+  it("asignada a motorizado (en ruta): no se crea la de Aliclik", () => {
+    const result = byPerson([gf("en_ruta")]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.pideMotivo).toBe(false);
+      expect(result.error).toContain("ya asignó el pedido a un motorizado");
+      expect(result.error).toContain("GF26AF62464D9F42F7");
+    }
+  });
+
+  it("el automático no anula la guía GF de nadie, ni el reintento de Lima con su motivo", () => {
+    const result = aliclikOutputPolicy({ outputs: [gf("pendiente")], operation: "lima", motivo: "reintento", manual: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("El automático no la anula");
+  });
+
+  it("una GF cerrada no se anula ni estorba", () => {
+    const result = byPerson([gf("anulado")]);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.gfToCancel).toBeUndefined();
+  });
+
+  it("la creación anula la GF después de las compuertas y antes del candado, y lo dice si Aliclik falla", () => {
+    const src = readFileSync(join(process.cwd(), "lib/aliclik-guide.ts"), "utf8");
+    const cancel = src.indexOf("finalOutputPolicy.gfToCancel");
+    expect(cancel).toBeGreaterThan(src.indexOf("const finalOutputPolicy = await readAliclikOutputPolicy"));
+    expect(cancel).toBeLessThan(src.indexOf('.from("aliclik_order_requests")\n    .insert('));
+    expect(src).toContain("No se creó la guía de Aliclik.");
+    expect(src).toContain("person: Boolean(ctx.userId) && !origin");
+    expect(src).toContain("${res.error}${gfNote}");
   });
 });

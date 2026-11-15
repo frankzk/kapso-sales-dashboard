@@ -60,7 +60,7 @@ import {
   IconX,
 } from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
-import { GfCourierGuidePanel } from "@/components/gf-courier-guide-panel";
+import { cancelGfCourierGuide, createGfCourierGuide } from "@/app/dashboard/pedidos/gf-courier-actions";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { OrderChatbyPanel } from "@/components/order-chatby-panel";
 import { OrderKapsoPanel } from "@/components/order-kapso-panel";
@@ -84,7 +84,7 @@ import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { OrderClosureDesk } from "@/components/order-closure-desk";
-import { OrderRouteDesk } from "@/components/order-route-desk";
+import { OrderRouteDesk, type GfCourierDeskResult } from "@/components/order-route-desk";
 import { PickupKeyPanel, ShalomPickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
@@ -336,7 +336,6 @@ const INDEX_LABEL: Record<string, string> = {
   rutas: "Mesa de ruta",
   pagos: "Cobro",
   aliclik: "Aliclik",
-  "gf-courier": "GF Courier",
   guias: "Salidas y guías",
   cierre: "Cierre",
   comentario: "Comentario",
@@ -780,6 +779,8 @@ export function OrderDrawer({
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
+  canCreateGfGuide = false,
+  canCancelGfGuide = false,
   closurePermissions,
   storeName,
   storeDomain,
@@ -806,6 +807,9 @@ export function OrderDrawer({
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  /** Crear y anular la guía de GF Courier en la Mesa de ruta (`gf_courier.create_guide` / `.cancel_guide`, MOM §29.17). */
+  canCreateGfGuide?: boolean;
+  canCancelGfGuide?: boolean;
   closurePermissions: {
     canReturn: boolean;
     canInventory: boolean;
@@ -1022,6 +1026,9 @@ export function OrderDrawer({
   const [swaypOrigen, setSwaypOrigen] = useState<"por_confirmar" | undefined>(undefined);
   const [manualRoute, setManualRoute] = useState<RouteCandidate | null>(null);
   const [pending, startTransition] = useTransition();
+  // GF Courier se crea y se anula en su tarjeta de la Mesa de ruta (MOM §29.17).
+  const [gfPending, startGf] = useTransition();
+  const [gfResult, setGfResult] = useState<GfCourierDeskResult | null>(null);
 
   const reload = useMemo(
     () => async () => {
@@ -1236,10 +1243,30 @@ export function OrderDrawer({
     if (route.action === "aliclik") return canCreateGuide;
     if (route.action === "shalom") return canCreateShalomGuide;
     if (route.action === "tanders") return canCreateTandersGuide;
+    if (route.action === "gf_courier") return canCreateGfGuide;
     return canEdit;
   }
 
+  /** Corre crear o anular la guía GF y deja la respuesta en su tarjeta. */
+  function runGf(action: () => Promise<GfCourierDeskResult>): Promise<boolean> {
+    return new Promise((resolve) => {
+      startGf(async () => {
+        const result = await action().catch(() => ({ error: "No se pudo hablar con el servidor. Inténtalo de nuevo." }));
+        setGfResult(result);
+        if (!result.error) {
+          void reload();
+          onSaved();
+        }
+        resolve(!result.error);
+      });
+    });
+  }
+
   function selectRoute(route: RouteCandidate) {
+    if (route.action === "gf_courier") {
+      void runGf(() => createGfCourierGuide(orderId));
+      return;
+    }
     if (route.key === "propio") {
       window.location.assign(`/dashboard/courier?pedido=${encodeURIComponent(orderId)}`);
       return;
@@ -2007,6 +2034,12 @@ export function OrderDrawer({
                         ? { outputCode: readyOutput.output_code ?? null, labelHref: `/api/pedidos/rotulos?ids=${readyOutput.id}` }
                         : null,
                   }}
+                  gfCourier={{
+                    canCancel: canCancelGfGuide,
+                    pending: gfPending,
+                    result: gfResult,
+                    onCancel: (reason) => runGf(() => cancelGfCourierGuide(orderId, reason)),
+                  }}
                 />
               </div>
               <section
@@ -2363,13 +2396,6 @@ export function OrderDrawer({
                   tarjetas de agencia y, debajo, un formulario para crear una guía
                   de una ruta que ese pedido no puede tomar. Se lee el plan en vez
                   de repetir la regla aquí, que es como se vuelven a separar. */}
-              {/* GF Courier por API (MOM §29.17): el panel decide en el servidor si corresponde mostrarse. No a un pedido
-                  acompañante (§32): ya viaja en la guía de otro. */}
-              {detail && !detail.companion.travelsIn && (
-                <div data-drawer-section="gf-courier" className={cn("order-5", SECTION)}>
-                  <GfCourierGuidePanel orderId={orderId} onChanged={() => { void reload(); onSaved(); }} />
-                </div>
-              )}
               {canCreateGuide && aliclikOffered && (
                 <div
                   data-drawer-section="aliclik"

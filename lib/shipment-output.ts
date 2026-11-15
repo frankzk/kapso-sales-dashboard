@@ -347,12 +347,16 @@ export function canRepeatCourier(input: {
   priorOutputsWithCourier: number;
   totalOutputs: number;
 }): { allowed: boolean; reason: "ok" | "max_outputs" | "courier_already_used" } {
+  const courier = input.courier.trim().toLowerCase();
+  // GF Courier por API no tiene tope ni límite de repetición (owner, 15-11-2026):
+  // es la salida de Lima, una guía por día de despacho. Lo que sí la frena es una
+  // guía GF viva: no se crea otra encima (`createGfGuideFor`, MOM §29.17).
+  if (courier === "gf_courier" || courier === "gf courier") return { allowed: true, reason: "ok" };
   if (input.totalOutputs >= MAX_OUTPUTS_PER_ORDER) {
     return { allowed: false, reason: "max_outputs" };
   }
   if (input.priorOutputsWithCourier <= 0) return { allowed: true, reason: "ok" };
 
-  const courier = input.courier.trim().toLowerCase();
   if (courier === "axel" || courier === "axel courier" || courier === "propio" || courier === "motorizado propio") {
     return { allowed: true, reason: "ok" };
   }

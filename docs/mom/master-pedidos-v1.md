@@ -203,7 +203,9 @@ Reglas:
   la mesa de despacho. Hasta entonces la etiqueta visible es solo
   `pedido + consecutivo` y el rótulo dice `Por definir`.
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
-  máximo de cinco salidas rige siempre, porque no depende del courier.
+  máximo de cinco salidas rige siempre, porque no depende del courier. **Única
+  excepción: GF Courier por API** (owner, 15-11-2026): es la salida de Lima, una
+  guía por día de despacho, sin tope ni límite de repetición (§29.17).
 - **«Sacar con salida nueva» (12-10-2026, §29.13)** abre un consecutivo más
   mientras el motorizado todavía tiene la caja anterior: cuenta en el máximo de
   cinco. La salida reemplazada conserva su consecutivo, código, QR y rótulo
@@ -285,7 +287,8 @@ Reglas:
   mentiras: nadie la busca y el paquete sale igual.
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
-- El límite global acordado es cinco salidas por pedido.
+- El límite global acordado es cinco salidas por pedido, salvo las guías de GF
+  Courier por API, que no tienen tope (§29.17).
 - Una salida de Aliclik puede llevar, además de su pedido, **pedidos
   acompañantes** de la misma clienta (§32). No es otra salida de ellos: es la
   misma caja, con una guía que cobra los dos, y el acompañante la hereda.
@@ -19373,7 +19376,7 @@ las cajas que ese módulo ya tiene en la calle se cierran con sus reglas de siem
   (`POST /v1/webhooks`, eventos `order.*`) y lo guarda cifrado; nadie lo copia;
 - dos llaves para escribir: el interruptor de la tienda y `GF_COURIER_WRITE_ENABLED=true` en el servidor.
 
-**Crear la guía** (panel «GF Courier» del Master, en Operar con su entrada «GF Courier» en el índice; permiso `gf_courier.create_guide`). **Cualquier pedido de la tienda**, sin importar su modalidad: decide la cobertura de GF (decisión del owner, 15-11-2026; antes solo `cod` y el panel no salía en 299 de 339 pedidos de Aurela de la semana, sin modalidad marcada). Lo ya pagado por la clienta —adelanto, diferencia o total validados, como en Aliclik— se descuenta del cobro: un pedido pagado completo viaja con cobro cero. Se envía:
+**Crear la guía** (tarjeta «GF Courier» de la Mesa de ruta, ver abajo; permiso `gf_courier.create_guide`). **Cualquier pedido de la tienda**, sin importar su modalidad: decide la cobertura de GF (decisión del owner, 15-11-2026; antes solo `cod` y el panel no salía en 299 de 339 pedidos de Aurela de la semana, sin modalidad marcada). Lo ya pagado por la clienta —adelanto, diferencia o total validados, como en Aliclik— se descuenta del cobro: un pedido pagado completo viaja con cobro cero. Se envía:
 nombre separado en primera palabra y resto, teléfono, distrito en texto (o el ubigeo del territorio de WooCommerce),
 dirección, referencia, GPS, cada línea con su SKU y el total del pedido **repartido al céntimo** entre las líneas
 (si no se divide entre las unidades, el mismo SKU va en dos líneas que difieren en S/ 0.01), pagos validados de la clienta y
@@ -19385,6 +19388,43 @@ interruptor «Agotado» de los productos sin conteo) y los montos.
   misma clave y GF devuelve la misma guía; `DUPLICATE_ORDER` o `IDEMPOTENCY_CONFLICT` con guía se **vinculan**.
 - `external_id` es el nombre del pedido; una salida posterior lleva `-S2`, `-S3`…
 - Anular (`gf_courier.cancel_guide`): GF solo anula antes de preparar, sin costo; después responde con el estado.
+
+**En la Mesa de ruta (owner, 15-11-2026: «debería estar ahí, junto a todas las opciones logísticas»).** GF Courier
+es una opción más del plan de rutas (`lib/order-route-plan.ts`, `RouteKey = "gf_courier"`), no un panel aparte: el
+panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
+- Con el interruptor de la tienda encendido, un pedido de **Lima** muestra GF Courier **primero y sugerido**; detrás,
+  Aliclik y Swayp. Grupo GF deja de ofrecerse —«Tomar» ya rechaza esos pedidos— y solo aparece si el pedido conserva
+  una salida propia viva, para nombrarla.
+- Encendido pero con el servidor apagado (`GF_COURIER_WRITE_ENABLED`) o sin token: la tarjeta sale bloqueada con ese
+  motivo y la sugerencia pasa a Aliclik.
+- Con el interruptor apagado la mesa queda como antes (Grupo GF).
+- «Crear guía en GF Courier» crea la guía desde la tarjeta. La respuesta de GF —guía y costo, o el error con los
+  distritos válidos— se lee ahí mismo.
+- Una guía GF viva bloquea crear otra y la tarjeta la nombra: número, estado y envío cotizado. El botón es
+  «Anular guía», y el motivo se pide al elegirlo. Una guía que GF ya está devolviendo no se ofrece anular.
+- La guía viva se nombra también si la tienda apagó la API o si el pedido no es de Lima.
+- **Sin tope de salidas** (owner, 15-11-2026: «una guía por día, despachada por día»): cerrada la anterior (entregada,
+  anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan
+  (`canRepeatCourier`). Lo único que frena es la guía GF viva.
+
+**GF Courier → Aliclik (owner, 15-11-2026).** Si una persona decide mandar por Aliclik (AUTOECOM) un pedido que ya
+tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`aliclikOutputPolicy` → `gfToCancel`,
+`cancelGfGuideFor`).
+- **Solo mientras GF no la asignó a un motorizado.** Creada o preparada sin asignar (`pendiente` en Kapta: CREATED,
+  READY_FOR_PICKUP) se anula. Asignada (`en_ruta`: OUT_FOR_DELIVERY o después) no se crea la de Aliclik, y la mesa ya
+  lo dice en su tarjeta.
+- La anulación va después de todas las compuertas de Aliclik y justo antes de su candado, para que una compuerta no
+  deje el pedido sin guía.
+- Si GF no la anula, no se crea la de Aliclik y se muestra lo que respondió GF.
+- Si Aliclik falla después, el mensaje dice que la guía GF ya quedó anulada.
+- Con la GF por anular, la de Aliclik no pide motivo de salida adicional. La tarjeta y la cotización de Aliclik
+  avisan «Al crearla, Kapta anula la guía de GF Courier…».
+- **El automático no anula guías de nadie.** Una guía GF viva frena las guías automáticas de Aliclik (reintento de
+  Lima incluido): lo decide una persona.
+
+**No entregado: se espera a GF (owner, 15-11-2026).** Una visita fallida deja la guía GF en incidencia, que sigue
+viva. No se crea otra guía GF encima: sale con la misma si GF la reprograma, o se crea la siguiente (`-S2`) cuando GF
+la devuelva o la anule.
 
 **Estado.** El webhook firmado de GF (`/api/webhooks/gf/<storeId>`, `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
 `X-GF-Event-Id` único en `gf_webhook_events`) solo dispara una relectura de `GET /v1/orders/{guía}`; se aplica el estado
