@@ -8,9 +8,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
-import { gfCourier, gfIdempotencyKey } from "@/lib/gf-courier";
-import { createGfGuideFor, loadGfStore } from "@/lib/gf-courier-guide";
-import { applyGfSnapshot, GF_COURIER } from "@/lib/gf-courier-track";
+import { cancelGfGuideFor, createGfGuideFor } from "@/lib/gf-courier-guide";
+import { GF_COURIER } from "@/lib/gf-courier-track";
 
 const MASTER_PATH = "/dashboard/pedidos";
 export interface GfActionResult { notice?: string; error?: string; allowed?: unknown[]; pending?: boolean }
@@ -43,18 +42,12 @@ export async function cancelGfCourierGuide(orderId: string, reason: string): Pro
   const why = reason.trim();
   if (why.length < 5) return { error: "Escribe el motivo de la anulación." };
   const admin = createAdminSupabase();
-  const store = await loadGfStore(admin, ctx.row.store_id);
-  if (!store?.token) return { error: "La tienda no tiene token de GF Courier." };
   const { data } = await admin.from("shipments").select("id,guide_code").eq("order_id", orderId).eq("courier", GF_COURIER)
     .in("delivery_status", ["pendiente", "en_ruta"]).limit(1);
   const live = data?.[0];
   if (!live?.guide_code) return { error: "El pedido no tiene una guía de GF Courier viva." };
-  const res = await gfCourier.cancelOrder({ apiToken: store.token }, live.guide_code, "MERCHANT_CANCELLED", gfIdempotencyKey(orderId, `cancel-${live.guide_code}`), why);
-  if (!res.ok) return { error: res.error.message };
-  const current = await gfCourier.getOrder({ apiToken: store.token }, live.guide_code);
-  if (current.ok) await applyGfSnapshot(current.data, admin);
-  await admin.from("order_events").insert({ store_id: ctx.row.store_id, order_id: orderId, kind: "courier_status", occurred_at: new Date().toISOString(),
-    actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: live.guide_code, reason: why, note: "Guía de GF Courier anulada desde Kapta." });
+  const res = await cancelGfGuideFor(orderId, live.guide_code, { userId: ctx.userId, reason: why, note: "Guía de GF Courier anulada desde Kapta." }, admin);
+  if (!res.ok) return { error: res.error };
   revalidatePath(MASTER_PATH);
-  return { notice: `Guía ${live.guide_code} anulada en GF Courier, sin costo.` };
+  return { notice: `Guía ${res.trackingId} anulada en GF Courier${res.cancelCost > 0 ? ` (costo de anular S/ ${res.cancelCost.toFixed(2)})` : ", sin costo"}.` };
 }

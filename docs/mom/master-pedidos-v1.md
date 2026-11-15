@@ -19389,6 +19389,25 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
   anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan
   (`canRepeatCourier`). Lo único que frena es la guía GF viva.
 
+**GF Courier → Aliclik (owner, 15-11-2026).** Si una persona decide mandar por Aliclik (AUTOECOM) un pedido que ya
+tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`aliclikOutputPolicy` → `gfToCancel`,
+`cancelGfGuideFor`).
+- **Solo mientras GF no la asignó a un motorizado.** Creada o preparada sin asignar (`pendiente` en Kapta: CREATED,
+  READY_FOR_PICKUP) se anula. Asignada (`en_ruta`: OUT_FOR_DELIVERY o después) no se crea la de Aliclik, y la mesa ya
+  lo dice en su tarjeta.
+- La anulación va después de todas las compuertas de Aliclik y justo antes de su candado, para que una compuerta no
+  deje el pedido sin guía.
+- Si GF no la anula, no se crea la de Aliclik y se muestra lo que respondió GF.
+- Si Aliclik falla después, el mensaje dice que la guía GF ya quedó anulada.
+- Con la GF por anular, la de Aliclik no pide motivo de salida adicional. La tarjeta y la cotización de Aliclik
+  avisan «Al crearla, Kapta anula la guía de GF Courier…».
+- **El automático no anula guías de nadie.** Una guía GF viva frena las guías automáticas de Aliclik (reintento de
+  Lima incluido): lo decide una persona.
+
+**No entregado: se espera a GF (owner, 15-11-2026).** Una visita fallida deja la guía GF en incidencia, que sigue
+viva. No se crea otra guía GF encima: sale con la misma si GF la reprograma, o se crea la siguiente (`-S2`) cuando GF
+la devuelva o la anule.
+
 **Estado.** El webhook firmado de GF (`/api/webhooks/gf/<storeId>`, `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
 `X-GF-Event-Id` único en `gf_webhook_events`) solo dispara una relectura de `GET /v1/orders/{guía}`; se aplica el estado
 actual con las mismas guardas que Aliclik (precedencia, intento fallido, sello único de devolución, preparación y

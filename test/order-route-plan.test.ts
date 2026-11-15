@@ -595,3 +595,21 @@ describe("GF Courier por API en la mesa de ruta (MOM §29.17, owner 15-11-2026)"
     expect(access).toContain("quotedCost: guide.quoted_delivery_cost ?? null");
   });
 });
+
+describe("la tarjeta de Aliclik con una guía GF viva (owner, 15-11-2026)", () => {
+  const gfLive = (deliveryStatus: string) => ({ id: "gf", courier: "gf_courier", deliveryStatus, guideCode: "GF26AF62464D9F42F7" });
+  const aliclikOf = (deliveryStatus: string) =>
+    buildOrderRoutePlan({ operation: "lima", outputs: [gfLive(deliveryStatus)], gfCourier: { enabled: true } }).candidates.find(
+      (route) => route.key === "aliclik",
+    );
+
+  it("sin asignar: avisa que al crearla Kapta anula la de GF", () => {
+    expect(aliclikOf("pendiente")).toMatchObject({ availability: "available" });
+    expect(aliclikOf("pendiente")?.reason).toContain("Kapta anula la guía de GF Courier GF26AF62464D9F42F7");
+  });
+
+  it("asignada a motorizado: Aliclik bloqueada", () => {
+    expect(aliclikOf("en_ruta")).toMatchObject({ availability: "blocked", recommended: false });
+    expect(aliclikOf("en_ruta")?.reason).toContain("ya asignó el pedido a un motorizado");
+  });
+});

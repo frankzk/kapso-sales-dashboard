@@ -400,6 +400,33 @@ function hasActiveWith(input: OrderRoutePlanInput, key: RouteKey): boolean {
   return input.outputs.some((output) => courierKey(output.courier) === key && isActive(output));
 }
 
+/**
+ * La tarjeta de Aliclik con una guía GF viva (owner, 15-11-2026). Mientras GF
+ * no la asignó a un motorizado, crear la de Aliclik la anula sola. Asignada ya
+ * no: no se crea la de Aliclik. Misma regla que `aliclikOutputPolicy`, que es la
+ * que manda en el servidor.
+ */
+function withGfHandover(route: RouteCandidate, input: OrderRoutePlanInput): RouteCandidate {
+  if (route.key !== "aliclik" || route.availability === "blocked") return route;
+  const liveGf = input.outputs.filter(
+    (output) => courierKey(output.courier) === "gf_courier" && isActive(output) && output.deliveryStatus !== "entregado",
+  );
+  if (liveGf.length === 0) return route;
+  const code = liveGf.map((output) => output.guideCode).filter(Boolean).join(", ");
+  if (liveGf.some((output) => output.deliveryStatus !== "pendiente")) {
+    return {
+      ...route,
+      recommended: false,
+      availability: "blocked",
+      reason: `GF Courier ya asignó el pedido a un motorizado${code ? ` (guía ${code})` : ""}: no se crea la guía de Aliclik.`,
+    };
+  }
+  return {
+    ...route,
+    reason: `Al crearla, Kapta anula la guía de GF Courier${code ? ` ${code}` : ""}: GF todavía no la asignó a un motorizado.`,
+  };
+}
+
 function paymentAllowsAgency(paymentState: string | null | undefined): boolean {
   return ["adelanto_validado", "diferencia_cargada", "pago_completo"].includes(
     paymentState ?? "",
@@ -732,6 +759,7 @@ export function buildOrderRoutePlan(input: OrderRoutePlanInput): OrderRoutePlan 
     routes = [...routes, gfCourierCandidate(input)];
   }
 
+  routes = routes.map((route) => withGfHandover(route, input));
   routes = routes.map((route) => applyOutputPolicy(route, input, operation));
   if (!routes.some((route) => route.recommended && route.availability !== "blocked")) {
     // Nunca se sugiere un courier que casi no se usa: si solo queda ese, no

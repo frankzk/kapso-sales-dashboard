@@ -23,6 +23,19 @@ Verificar con un pedido de prueba:
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
 
+### 15-11-2026 · Pasar de GF Courier a Aliclik anula la guía GF (sin migración, MOM §29.17)
+
+Sin migración, sin crons ni variables nuevas.
+- Al crear a mano la guía de Aliclik de un pedido con guía GF viva, Kapta anula antes la de GF, siempre que GF todavía
+  no la haya asignado a un motorizado.
+- Si ya la asignó (en ruta), no crea la de Aliclik. Si GF no la anula, tampoco.
+- Las guías automáticas de Aliclik no anulan guías GF.
+
+Verificar con un pedido de prueba con guía GF creada:
+1. La tarjeta de Aliclik en la Mesa de ruta avisa que anulará la de GF.
+2. Al crear la de Aliclik, la salida GF queda `anulado` y en el historial aparece «Guía de GF Courier anulada por
+   Kapta al crear la guía de Aliclik».
+
 ### 15-11-2026 · GF Courier dentro de la Mesa de ruta y sin tope de salidas (sin migración, MOM §29.17, §4)
 
 Sin migración, sin crons ni variables nuevas. GF Courier pasa a ser una opción del plan de rutas.
