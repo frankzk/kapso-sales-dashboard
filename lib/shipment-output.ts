@@ -398,6 +398,9 @@ export function nombreDeCourier(courier: string | null | undefined): string {
     "axel courier": "Axel Courier",
     propio: "Grupo GF Courier",
     "motorizado propio": "Grupo GF Courier",
+    // GF Courier por API (MOM §29.17): es otro courier, no el reparto propio de Grupo GF.
+    gf_courier: "GF Courier",
+    "gf courier": "GF Courier",
     [COURIER_TBD]: "Sin courier definido",
   };
   return nombres[key] ?? (courier?.trim() || "courier desconocido");
@@ -481,6 +484,7 @@ function mismoCourier(a: string, b: string): boolean {
     if (k === "swayp") return "fenix";
     if (k === "axel courier") return "axel";
     if (k === "motorizado propio") return "propio";
+    if (k === "gf courier") return "gf_courier";
     return k;
   };
   return canon(a) === canon(b);
@@ -488,7 +492,7 @@ function mismoCourier(a: string, b: string): boolean {
 
 /**
  * ¿Es el mismo courier? La comparación canónica: `swayp` = `fenix`,
- * `axel courier` = `axel`, `motorizado propio` = `propio`. `courierKey` solo
+ * `axel courier` = `axel`, `motorizado propio` = `propio`, `gf courier` = `gf_courier`. `courierKey` solo
  * no basta (lib/gf-tanders-review.ts escribe `swayp`). Vacío o nulo no es
  * ningún courier: nunca es el mismo que otro.
  */

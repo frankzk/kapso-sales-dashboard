@@ -6195,7 +6195,7 @@ Master: se calculan al leer, y el caso nunca se reescribe.
 | --- | --- | --- |
 | `sin_acuerdo` | No hay acuerdo vigente | Nada |
 | `acuerdo_vencido` | El día acordado pasó sin programarse, o sin su programa (también si Grupo GF quitó la fecha). O, con Grupo GF, el acuerdo es para hoy, no se programó y ya no alcanza hoy: pasó el corte (`same_day_cutoff`), o «Programar ahora» lo rechazaría porque su acción de caja se prepara la noche anterior; si espera la caja, solo cuenta el corte. Solo vence así lo que un botón programaría hoy («Programar ahora», «Ya la encontré» o la recepción): si falta la salida nueva, sigue en `falta_salida` todo su día y vence al siguiente | «El acuerdo era para el jue 15/10 y ya pasó: confírmalo de nuevo»; para hoy, «El acuerdo era para hoy (lun 12/10) y ya no alcanza: confírmalo de nuevo» |
-| `otro_courier` | Acordado con Tanders, Swayp o Axel | «Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta» |
+| `otro_courier` | Acordado con Tanders, Swayp o Axel, o con GF Courier sin su guía todavía (Kapta no la pudo crear al guardar, abajo) | «Sale jue 15/10 con Tanders · crea la salida en la Mesa de ruta» |
 | `falta_salida` | Hace falta una salida nueva de Grupo GF que Kapta todavía no crea (lagunas, abajo), o «Caja nueva desde stock» sin quien saque la salida (abajo) | «Falta la salida nueva» |
 | `falta_ubicar` | No consta dónde está la caja | «No consta dónde está la caja: búscala antes de programar», con «Ya la encontré: programar» |
 | `falta_recibir_devolucion` | La caja vuelve con Tanders o Swayp | «Vuelve con Tanders: se programa cuando llegue (Devoluciones)» |
@@ -6261,7 +6261,8 @@ programa por `otro_courier`, `falta_salida`, `falta_ubicar` o
 **Cuatro resultados por llamada** (§11.4). Canal: llamada o WhatsApp.
 
 - **Confirma fecha**: día, courier (Grupo GF por defecto, Tanders, Swayp o
-  Axel) y «¿Qué cambió?» (dirección o referencia, teléfono, monto, producto,
+  Axel; en una tienda con GF Courier por API, GF Courier por defecto y sin
+  Grupo GF, abajo «GF Courier en los acuerdos») y «¿Qué cambió?» (dirección o referencia, teléfono, monto, producto,
   caja abierta o dañada, y «No esperar la caja» cuando aplica). Kapta calcula
   la acción de la caja (§9.3) y la muestra con su «Lista para» antes de
   guardar. Si cambia mientras se decide, pide revisarla: el servidor no
@@ -6331,6 +6332,8 @@ Desde la lectura, «Atender» (o «Cambiar el acuerdo») vuelve a tomar el caso.
   Swayp hasta los mismos 60 días, no solo las próximas 24 fechas: una fecha
   que viene de «Otra fecha» de Grupo GF se ve en la lista.
 - Tanders y Axel: desde hoy.
+- GF Courier (15-11-2026): desde hoy, sin el corte de Grupo GF ni la noche
+  anterior de «Lista para»: GF prepara el paquete. Un día que ya pasó no vale.
 - «Lista para» de la acción de la caja (§9.3): reimprimir el rótulo, salida
   nueva y rearmado, y desarmar y rearmar, desde mañana; mantener, hoy hasta el
   corte.
@@ -6401,7 +6404,8 @@ día, el caso no cambia. La fila muestra el acuerdo frente al programa vigente
 jue 15/10)») y va primero en «Programados» para que la tienda lo vea. Grupo GF
 sigue mandando en su ruta.
 
-**Otros couriers, por la Mesa de ruta.** Con Tanders, Swayp o Axel, el acuerdo
+**Otros couriers, por la Mesa de ruta.** (GF Courier no: Kapta crea su guía al
+guardar, abajo.) Con Tanders, Swayp o Axel, el acuerdo
 se guarda y la fila enlaza a la Mesa de ruta del pedido («Crear la salida en la
 Mesa de ruta»). Ahí se crea la salida con `canRepeatCourier` y el tope de cinco
 salidas. Repro Lima no crea salidas en la entrega 1a. Cambiar de courier es
@@ -6655,6 +6659,108 @@ GF Courier, `components/gf-stuck-tray.tsx` y `loadGfStuckOrders` en
 `app/dashboard/courier/actions.ts`. Pruebas: `test/repro-lima-blocks.test.ts`,
 `test/repro-lima-pending.test.ts`, `test/repro-lima-actions.test.ts` y
 `test/lima-stuck.test.ts`.
+
+#### GF Courier en los acuerdos de Repro Lima (owner, 15-11-2026)
+
+Decisión del owner (15-11-2026): «Sí, haz lo de GF Courier en los acuerdos. En
+el caso de GF Courier la guía ya podría quedar generada para esa fecha.» Con GF
+Courier por API (§29.17) el courier de Lima es GF Courier: el acuerdo con la
+clienta lo nombra y Kapta deja la guía creada para el día acordado. No crea
+estados ni subetapas y no cambia `MOM_RESOLUTION_VERSION`. Migración
+`0347_lima_repro_gf_courier.sql`: `lima_repro_cases.agreed_courier` y
+`lima_repro_calls.courier` admiten `gf_courier`, como la 0283 con Aliclik.
+
+**Qué couriers ofrece la hoja** (`reproCourierChoices`, `lib/repro-lima.ts`).
+Lo decide la tienda del pedido (`stores.gf_courier_enabled`, que la hoja lee con
+los hechos del pedido: `ReproFacts.gfCourierApi`).
+- Con GF Courier por API: **GF Courier primero y por defecto**, después Aliclik,
+  Swayp y Axel. **Grupo GF no se ofrece**: «Tomar» de Grupo GF ya rechaza esos
+  pedidos (§29.17).
+- Sin GF Courier por API: lo de siempre (Grupo GF por defecto, Aliclik, Swayp y
+  Axel). GF Courier no se ofrece.
+- Urpi sigue apagado, con su porqué.
+- **El servidor lo vuelve a decidir** al guardar y al mover
+  (`reproCourierStoreProblem`): GF Courier en una tienda sin la API, «Esta tienda
+  no tiene GF Courier por API: elige Grupo GF u otro courier.»; Grupo GF en una
+  tienda con ella, «Esta tienda despacha por GF Courier (API): Grupo GF ya no toma
+  sus pedidos. Elige GF Courier u otro courier.». No se guarda nada. «Programar
+  ahora» de un acuerdo viejo con Grupo GF en esa tienda tampoco programa: se
+  acuerda de nuevo en «Atender».
+
+**La guía queda creada para el día acordado.** Al guardar «Confirma fecha» con
+GF Courier (lo que sigue a la llamada, `afterCall`), Kapta crea la guía por la
+misma puerta que la Mesa de ruta (`createGfGuideFor`, §29.17), con el día
+acordado como `scheduled_date` (`scheduledFor`, que manda sobre «Programar
+envío»), el actor real y el motivo «Repro Lima: acuerdo con la clienta para el
+lun 16/11». Pasa por todas sus compuertas: las dos llaves, el SKU, el apellido,
+el distrito y la intención antes del POST. Si el pedido ya tiene una guía GF viva
+(`gfAgreementGuidePlan`):
+- **sin asignar a un motorizado** (`pendiente`: CREATED o READY_FOR_PICKUP):
+  Kapta la anula primero (`cancelGfGuideFor`, motivo «Nuevo acuerdo en Repro
+  Lima») y después crea la del día acordado. Si GF no la anula, no se crea la
+  nueva y se dice lo que respondió GF;
+- **asignada** (`en_ruta`: OUT_FOR_DELIVERY, la incidencia o el retorno): no se
+  crea otra y se dice: «GF Courier ya asignó la guía GF… a un motorizado (en
+  ruta): no se crea otra. Sale con esa si GF la reprograma; si GF la devuelve o
+  la anula, se crea la siguiente.» (§29.17, «No entregado: se espera a GF»);
+- **nacida después de acordar** (el mismo envío otra vez, o la que alguien creó
+  después en la Mesa de ruta): es la del acuerdo y no se toca.
+
+La hoja lo dice antes de guardar, junto a «Qué hacer con la caja» («Guía GF: Al
+guardar, Kapta anula la guía GF… y crea otra para el día acordado.»). Una guía GF
+viva no bloquea el acuerdo con GF Courier, porque Kapta la reemplaza. Con otro
+courier sí lo bloquea: «La guía de GF Courier sigue viva: la trabaja ese
+courier».
+
+**Si GF no crea la guía, el acuerdo queda guardado.** La llamada ya está
+registrada y nada la deshace. El aviso dice lo que respondió GF («GF Courier no
+creó la guía del lun 16/11: … Créala desde la Mesa de ruta del pedido.»), con
+«Abrir la Mesa de ruta del pedido», como un acuerdo con otro courier. Un timeout
+no es un fallo de GF: la guía queda creándose con la misma `Idempotency-Key` y
+`gf-reconcile` la vincula. Sin guía, la fila dice «Sale lun 16/11 con GF Courier ·
+crea la salida en la Mesa de ruta» (`otro_courier`).
+
+**La caja y la fecha.** «Qué hacer con la caja» trata a GF Courier como a
+Aliclik en Lima, otro courier que trae su propia guía (`reproBoxAction`):
+- las mismas reglas: salida nueva y rearmado, desarmar y rearmar, caja nueva
+  desde stock;
+- sin tope de salidas (`canRepeatCourier`, §4);
+- nunca un programa de Grupo GF (`materializationPlan` → `otro_courier`; el
+  programa que hubiera se quita, como con todo otro courier).
+
+La etiqueta dice que la guía la crea Kapta al guardar, para el día acordado, y
+que GF prepara el paquete (§9.5, «Repro Lima por las tareas del equipo»). Por eso
+la fecha no tiene el corte de Grupo GF ni la noche anterior: desde hoy, hasta los
+60 días, y un día que ya pasó no vale (`agreementDateProblem`, `firstAllowedDay`).
+«Lista para» dice «Desde hoy: GF Courier prepara el paquete para el día acordado», y Almacén («Reintentos por
+salir», abajo) tampoco pide prepararla la noche anterior.
+
+**«Agendar» y «Mover a…»** de un acuerdo con GF Courier (`moveReproAgreement`)
+van por el mismo camino. Registran la llamada con el día nuevo y después anulan
+la guía del día anterior, si GF no la asignó, y crean la del nuevo. Si GF ya la
+asignó a un motorizado, no se mueve: «No se movió: GF Courier ya asignó la guía
+GF…», sin tomar el caso ni registrar la llamada. Si GF no anula o no crea, el día
+queda movido y el aviso de la lista lo dice con «Abrir la Mesa de ruta del
+pedido».
+
+**La Agenda conserva el día.** Con el caso abierto, la fila sale el día acordado
+(«Acordado con la clienta · GF Courier»). Si el caso se cierra al crear la guía
+—el pedido dejó «Por reprogramar Lima»—, sale el día que se le pidió a GF: el
+`scheduled_date` de la intención enviada de la guía viva sin salir, leído como el
+recojo de Aliclik (`courierPickup`, «Recojo del courier»: «Lo recoge GF Courier el
+mar 17/11.»).
+
+**Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen
+por la Mesa de ruta). No anula una guía asignada a un motorizado. No pide el
+permiso `gf_courier.create_guide` ni `gf_courier.cancel_guide`: lo hace el
+acuerdo de quien tiene `repro_lima.manage`, como «GF Courier → Aliclik» anula la
+de GF al crear la de Aliclik.
+
+Implementación: `lib/repro-lima.ts` (`reproCourierChoices`,
+`reproCourierStoreProblem`, `gfAgreementGuidePlan`), `lib/repro-box-action.ts`,
+`gfGuideForAgreement` en `app/dashboard/pedidos/repro-lima/actions.ts` y
+`createGfGuideFor` con `scheduledFor` en `lib/gf-courier-guide.ts`. Pruebas:
+`test/repro-lima-gf-courier.test.ts` y `test/repro-lima-actions.test.ts`.
 
 #### Almacén: «Reintentos por salir» (fase 1, entrega 1c, 13-10-2026)
 
@@ -19740,12 +19846,16 @@ Decisión del owner: el día del despacho, en la mañana, la guía de GF Courier
   - `dispatch_scheduled_on` es hoy (Lima) o no tiene fecha;
   - no tiene guía viva de ningún courier;
   - no es un acompañante vinculado a la caja de otro pedido (§32). Cuenta aunque la caja ya no preste su estado: para
-    darle guía propia hay que desvincularlo antes (§32.1, reglas 8 y 9).
+    darle guía propia hay que desvincularlo antes (§32.1, reglas 8 y 9);
+  - no tiene un acuerdo de Repro Lima con la clienta (abajo, «GF Courier en los acuerdos de Repro Lima»).
 - **Qué no entra.** No entran:
   - Agencia ni Provincia;
   - lo programado para otro día, también un día que ya pasó (la chapa roja «no salió» es para una persona);
   - lo que ya tiene guía, por ejemplo la de Aliclik que alguien creó antes de las 9:00;
-  - el acompañante.
+  - el acompañante;
+  - lo que tiene un acuerdo de Repro Lima: un caso abierto con día acordado (`agreed_on`) en su episodio vigente
+    (`gfAutoReproAgreement`). El acuerdo decide el día y el courier: la guía GF del día acordado la crea Repro Lima, y
+    la de otro courier, una persona desde la Mesa de ruta.
 - **Por dónde.** El mismo camino que «Crear guía en GF Courier» de la Mesa de ruta: `createGfGuideFor`
   (`lib/gf-courier-guide.ts`). Pasa por sus compuertas: las dos llaves, ninguna guía GF viva, SKU, apellido y
   distrito, y la intención escrita antes del POST en `gf_order_requests`. Usa la misma `Idempotency-Key`. Lo pagado
@@ -19766,7 +19876,10 @@ Decisión del owner: el día del despacho, en la mañana, la guía de GF Courier
   - que el pedido ya tenga guía y el Master no lo haya recalculado: se recalcula;
   - que otra creación GF del mismo pedido esté pendiente, sea una persona en la Mesa de ruta o un timeout (GF tiene
     idempotencia y `gf-reconcile` lo resuelve);
-  - que sea acompañante.
+  - que sea acompañante;
+  - que tenga un acuerdo de Repro Lima (`acuerdo_repro_lima` en el informe de la pasada, con «Tiene un acuerdo en Repro
+    Lima: sale el mar 17/11 con Aliclik. El acuerdo decide el día y el courier.»). Sin poder leer los casos, la pasada
+    no crea nada.
 - **Tres posiciones, por organización** (Automatizaciones, grupo «Logística Lima», §40). Nace **Apagado**.
   - **Apagado**: no hace nada.
   - **Simulación**: dice qué guía habría creado. No crea nada afuera, no avisa y no escribe en el historial del
@@ -19782,6 +19895,25 @@ Decisión del owner: el día del despacho, en la mañana, la guía de GF Courier
 Migración `0345_gf_auto_guide.sql` (`gf_auto_guide_settings`, `gf_auto_guide_log`). Código: `lib/gf-auto-guide.ts`
 (regla pura), `lib/gf-auto-guide-server.ts` (la pasada y la vista del panel) y `app/api/cron/gf-auto-guide/route.ts`.
 Pruebas: `test/gf-auto-guide.test.ts`.
+
+#### GF Courier en los acuerdos de Repro Lima (owner, 15-11-2026)
+
+Decisión del owner: «Sí, haz lo de GF Courier en los acuerdos. En el caso de GF Courier la guía ya podría quedar
+generada para esa fecha.» El detalle está en §9.5 («GF Courier en los acuerdos de Repro Lima»); lo que toca a GF
+Courier:
+- **La hoja.** En una tienda con GF Courier por API, la hoja de Repro Lima ofrece GF Courier primero y por defecto, sin
+  Grupo GF, igual que la Mesa de ruta. El acuerdo guarda `gf_courier` (0347).
+- **La guía del día acordado.** Al guardar el acuerdo, Kapta crea la guía con `createGfGuideFor`. Su `scheduledFor`
+  (el día acordado) se manda como `scheduled_date` y manda sobre `dispatch_scheduled_on`. El hecho `guide_registered`
+  lleva el actor real, el motivo «Repro Lima: acuerdo con la clienta para el lun 16/11» y el `scheduled_date`.
+- **La guía viva.** Sin asignar (`pendiente`), Kapta la anula primero con `cancelGfGuideFor` («Nuevo acuerdo en Repro
+  Lima») y después crea la nueva. Asignada (`en_ruta`), no se crea otra y se dice. Mover el acuerdo de día hace lo
+  mismo, y con la guía asignada no se mueve.
+- **Si GF no anula o no crea**, el acuerdo queda guardado, el aviso dice lo que respondió GF y enlaza a la Mesa de ruta.
+- **La guía GF automática no toma un pedido con acuerdo de Repro Lima** (`acuerdo_repro_lima`, arriba): el acuerdo
+  decide el día y el courier.
+- **La Agenda de Repro Lima** lee el `scheduled_date` de la guía GF sin salir como el día del courier, también cuando el
+  caso ya se cerró.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 

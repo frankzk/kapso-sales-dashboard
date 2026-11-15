@@ -59,6 +59,7 @@ import {
   isOwnBox,
   liveOutputsOf,
   programOrigin,
+  reproAttentionEpisodeKey,
   reproEpisode,
   reproProgramReason,
   type BoxLocation,
@@ -162,12 +163,14 @@ export interface ReproShipmentRow {
   dispatched_at: string | null;
   updated_at: string | null;
   closed_at: string | null;
+  /** Cuándo nació: la guía GF creada después de acordar es la del acuerdo (`gfAgreementGuidePlan`). */
+  created_at?: string | null;
 }
 
 const SHIPMENT_COLUMNS =
   "id,order_id,store_id,courier,created_via,delivery_status,custody_state,custody_transferred_at," +
   "output_number,output_code,guide_code,status_category,reported_status,swayp_state,returned_at," +
-  "dispatched_at,updated_at,closed_at,aliclik_transport_name,aliclik_sub_status,aliclik_rider_comment";
+  "dispatched_at,updated_at,closed_at,created_at,aliclik_transport_name,aliclik_sub_status,aliclik_rider_comment";
 
 /** Una parada «No entregado», con su ruta y su motorizado. */
 export interface ReproStopRow {
@@ -215,6 +218,11 @@ export interface ReproFacts {
   orderId: string;
   storeId: string | null;
   orgId: string | null;
+  /**
+   * La tienda tiene GF Courier por API (`stores.gf_courier_enabled`, MOM
+   * §29.17): la hoja ofrece GF Courier en vez de Grupo GF (owner, 15-11-2026).
+   */
+  gfCourierApi: boolean;
   /** La fila del Master; null si no se encontró. */
   order: ReproOrderRow | null;
   /** «En curso · Por reprogramar Lima». */
@@ -351,6 +359,11 @@ export interface ReproFactsOptions {
   storeOrg?: ReadonlyMap<string, string>;
   /** Organización → proveedor Grupo GF, ya leído. */
   providers?: ReadonlyMap<string, ReproProviderRow>;
+  /**
+   * Las tiendas de `storeOrg` con GF Courier por API, ya leídas (la lista las
+   * trae de su consulta de tiendas). Sin esto, se leen con la organización.
+   */
+  gfCourierStores?: ReadonlySet<string>;
 }
 
 /**
@@ -398,10 +411,18 @@ export async function loadReproFacts(
     ...orderBase.map((row) => row.store_id),
   ].filter((id): id is string => Boolean(id)))];
   const storeOrg = new Map(opts.storeOrg ?? []);
-  const missingStores = storeIds.filter((id) => !storeOrg.has(id));
+  // GF Courier por API de cada tienda (0344): viene con la organización.
+  const storeGf = new Map<string, boolean>();
+  if (opts.gfCourierStores) {
+    for (const id of storeIds) if (storeOrg.has(id)) storeGf.set(id, opts.gfCourierStores.has(id));
+  }
+  const missingStores = storeIds.filter((id) => !storeOrg.has(id) || !storeGf.has(id));
   if (missingStores.length) {
-    const { data } = await courierRowsByIds(missingStores, (chunk) => admin.from("stores").select("id,org_id").in("id", chunk));
-    for (const row of data as Array<{ id: string; org_id: string }>) storeOrg.set(row.id, row.org_id);
+    const { data } = await courierRowsByIds(missingStores, (chunk) => admin.from("stores").select("id,org_id,gf_courier_enabled").in("id", chunk));
+    for (const row of data as Array<{ id: string; org_id: string; gf_courier_enabled?: boolean | null }>) {
+      storeOrg.set(row.id, row.org_id);
+      storeGf.set(row.id, Boolean(row.gf_courier_enabled));
+    }
   }
   const providers = new Map(opts.providers ?? []);
   const missingOrgs = [...new Set(storeIds.map((id) => storeOrg.get(id)).filter((id): id is string => Boolean(id)))]
@@ -495,7 +516,7 @@ export async function loadReproFacts(
     const inStage = order?.macro_stage === "en_curso" && order?.macro_substage === "por_reprogramar_lima";
     const attentionEligible = order?.coverage === "lima" && ["por_confirmar", "preparacion", "por_despachar", "en_curso"].includes(order.macro_stage ?? "");
     const episode = !inStage && attentionEligible
-      ? { key: `attention:${orderId}`, at: null }
+      ? { key: reproAttentionEpisodeKey(orderId), at: null }
       : reproEpisode({ orderId, outputs, failedStops });
     let failedOutput: ReproShipmentRow | null = null;
     for (const output of outputs) {
@@ -566,6 +587,7 @@ export async function loadReproFacts(
       orderId,
       storeId,
       orgId,
+      gfCourierApi: storeId ? storeGf.get(storeId) ?? false : false,
       order,
       inStage,
       attentionEligible,

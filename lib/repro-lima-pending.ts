@@ -26,8 +26,11 @@ export type PendingCase = {
 
 /** La fecha acordada vigente manda sobre un programa anterior que aún no se
  * actualizó. Sin acuerdo vigente, se usa una programación persistida y, sin
- * ella, el día en que Aliclik recoge la guía que ya tiene (owner, 07-11-2026):
- * un pedido agendado con el courier no «nunca salió» sin gestión. */
+ * ella, el día en que Aliclik recoge la guía que ya tiene (owner, 07-11-2026)
+ * o el que se le pidió a GF Courier para la suya (15-11-2026): un pedido
+ * agendado con el courier no «nunca salió» sin gestión. Así un acuerdo con GF
+ * Courier conserva su día en la Agenda aunque su caso se cierre al crear la
+ * guía (el pedido deja «Por reprogramar Lima»). */
 export function limaScheduledFor(row: LimaPendingOrder, c?: PendingCase): string | null {
   return (c?.list === "programados" ? c.agreement?.agreedOn : null) ?? row.programmedFor ?? c?.program?.scheduledFor ??
     row.courierPickup?.date ?? null;
@@ -90,11 +93,13 @@ export interface LimaPendingOrder {
   reference: string | null;
   /**
    * La guía de un courier externo que espera su recojo (§9.5, owner
-   * 07-11-2026): hoy, Aliclik con la guía viva, sin salida ni retorno. `date`
+   * 07-11-2026): Aliclik con la guía viva, sin salida ni retorno. `date`
    * es el día de recojo: el que reportó Aliclik o, sin reporte, el de su regla
-   * de corte. Sin guía esperando, null.
+   * de corte. Desde el 15-11-2026, también la guía de GF Courier sin salir,
+   * con el día que se le pidió a GF (`scheduled_date`): el del acuerdo de Repro
+   * Lima o el de «Programar envío». Sin guía esperando, null.
    */
-  courierPickup?: { courier: "aliclik"; date: string } | null;
+  courierPickup?: { courier: "aliclik" | "gf_courier"; date: string } | null;
   /**
    * El detalle de su courier vigente (owner, 08-11-2026: «no me das grupo gf
    * alexis o aliclik autoecom»): el motorizado de su última caja de Grupo GF, o

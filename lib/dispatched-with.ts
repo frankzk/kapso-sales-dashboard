@@ -10,6 +10,7 @@
 //   gf:<Nombre>  una parada de Grupo GF con ese motorizado (delivery_stops)
 //   gf           una salida de Grupo GF sin parada conocida
 //   aliclik, fenix (Swayp), tanders, urpi, shalom, olva, axel…  el courier
+//   gf_courier   GF Courier por API (§29.17): otro courier, no Grupo GF
 //
 // Pura: el recálculo del Master la llama con lo que ya leyó.
 
@@ -85,7 +86,7 @@ export function dispatchedWith(input: {
     if (!courier || courier === "por_definir") continue;
     if (!guideLeft(guide, input.events)) continue;
     if (courier === "propio") {
-      if (!gfShipments.has(guide.id) && ![...out].some((code) => code.startsWith("gf"))) out.add("gf");
+      if (!gfShipments.has(guide.id) && ![...out].some(isGrupoGfCode)) out.add("gf");
       continue;
     }
     out.add(courier);
@@ -105,6 +106,16 @@ const COURIER_NAMES: Record<string, string> = {
   // GF Courier por API (MOM §29.17): sin esto, Repro Lima decía «Gf_courier».
   gf_courier: "GF Courier",
 };
+
+/**
+ * ¿Es un código de Grupo GF (`gf` o `gf:<motorizado>`)? `gf_courier` NO lo es:
+ * GF Courier por API es otro courier (MOM §29.17). Mirar solo el prefijo «gf»
+ * lo metía entre los motorizados de Grupo GF y escondía el «Grupo GF» de una
+ * salida propia sin parada.
+ */
+export function isGrupoGfCode(code: string): boolean {
+  return code === "gf" || code.startsWith("gf:");
+}
 
 /** Cómo se enseña un código de «Salió con». */
 export function dispatchedWithLabel(code: string): string {
@@ -129,7 +140,7 @@ export function dispatchedWithShort(code: string): string {
 
 /** Primero los motorizados de Grupo GF, luego los couriers, cada grupo por nombre. */
 export function compareDispatchCodes(a: string, b: string): number {
-  const ga = a.startsWith("gf") ? 0 : 1;
-  const gb = b.startsWith("gf") ? 0 : 1;
+  const ga = isGrupoGfCode(a) ? 0 : 1;
+  const gb = isGrupoGfCode(b) ? 0 : 1;
   return ga - gb || dispatchedWithLabel(a).localeCompare(dispatchedWithLabel(b), "es");
 }

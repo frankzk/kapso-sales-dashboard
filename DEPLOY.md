@@ -53,6 +53,38 @@ Verificar:
    pedido sin SKU deja «Guía GF automática no creada» en su historial y una sola alerta por Telegram, y la pasada de
    las 10:00 no lo repite.
 
+### 15-11-2026 · GF Courier en los acuerdos de Repro Lima (0347, MOM §9.5 y §29.17)
+
+**Migración 0347: ya aplicada en producción (15-11-2026), antes del código.** `0347_lima_repro_gf_courier.sql` solo
+amplía dos CHECK para que admitan `gf_courier`: `lima_repro_cases.agreed_courier` y `lima_repro_calls.courier`. Es lo
+mismo que hizo la 0283 con Aliclik. Usa `drop constraint if exists` y `add constraint`, no toca filas y se puede correr
+otra vez. Sin ella, guardar un acuerdo con GF Courier falla con el error del CHECK y los demás couriers siguen igual.
+
+Sin crons, variables ni permisos nuevos. Usa `GF_COURIER_WRITE_ENABLED` y el interruptor y el token de GF Courier de
+cada tienda (0344). No escribe nada al desplegar.
+- En una tienda con GF Courier por API, la hoja de Repro Lima ofrece GF Courier primero y por defecto, sin Grupo GF.
+  Las demás tiendas siguen igual. El servidor lo vuelve a validar al guardar y al mover.
+- Al guardar el acuerdo con GF Courier, Kapta crea la guía GF para el día acordado (`scheduled_date`). Si había una
+  guía GF viva sin asignar, la anula antes («Nuevo acuerdo en Repro Lima»). Si GF ya la asignó a un motorizado, no
+  crea otra y lo dice.
+- Si GF no anula o no crea, el acuerdo queda guardado y el aviso dice lo que respondió GF, con la Mesa de ruta.
+- «Agendar» y «Mover a…» hacen lo mismo con el día nuevo. Con la guía asignada, no se mueve.
+- La guía GF automática ya no toma un pedido con acuerdo de Repro Lima (`acuerdo_repro_lima` en el informe de la
+  pasada).
+
+Verificar:
+1. Que la 0347 está: `select pg_get_constraintdef(oid) from pg_constraint where conname in
+   ('lima_repro_cases_agreed_courier_check', 'lima_repro_calls_courier_check');` → las dos listas incluyen
+   `'gf_courier'`.
+2. En un pedido de Aurela en Repro Lima, «Atender» → «Confirma fecha» marca GF Courier y no ofrece Grupo GF. En Kenku
+   (sin la API) sigue Grupo GF por defecto y no aparece GF Courier.
+3. Guardar con GF Courier para mañana deja la guía `GF…` en la Mesa de ruta y, en el historial, «Repro Lima: acuerdo
+   con la clienta para el …». Su intención en `gf_order_requests` lleva `request->>'scheduled_date'` = ese día.
+4. «Agendar» ese pedido para otro día: la guía anterior queda `anulado` («Nuevo acuerdo en Repro Lima») y hay una
+   `-S2` para el día nuevo. En la Agenda sale ese día.
+5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
+   acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
+
 ### 15-11-2026 · Repro Lima: separaciones y jerarquía más claras al estilo Stripe (sin migración, DESIGN.md)
 
 Sin migración. Solo cambia la presentación:
