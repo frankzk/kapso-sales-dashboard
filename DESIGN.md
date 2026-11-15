@@ -505,11 +505,21 @@ El panel del equipo de Lima (MOM §9.5, «Repro Lima por las tareas del equipo»
 
 **Cabecera.** Debajo del título va una línea con la píldora del total «**N** pedidos de Lima por entregar». Es también «Todos»: la elegida con anillo azul de 2 px y la cifra en `brand-700`. A su lado, la chapa del corte y una sola píldora de excepción «Trabados N» (`AttentionPill` con el triángulo de alerta). Elegida, abre debajo una banda `warn-wash` con anillo `warn-bg`: «Trabados por motivo:» en 13 px peso 500 `warn-fg` y un chip de elección por motivo.
 
-**Tres bloques, separados 20 px.** Cada uno tiene su título en 15 px peso 600 `ink-900`, el total con su unidad en 13 px `ink-500` («11 por gestionar») y la ayuda en 13 px `ink-500` a la derecha. Cada bloque es una **franja**: una sola tarjeta blanca (sombra de control, anillo `line`) con las celdas separadas por líneas finas (`gap-px` sobre `line`). No son tarjetas sueltas.
+**Tres bloques, separados 28 px.** Cada uno tiene su título en 16 px peso 600 `ink-900`, el total con su unidad en 13 px `ink-500` («11 por gestionar») y, debajo del título, la ayuda en 13 px `ink-500`. La cifra de una celda va en 22 px. Cada bloque es una **franja**: una sola tarjeta blanca (sombra de control, anillo `line`) con las celdas separadas por líneas finas (`gap-px` sobre `line`). No son tarjetas sueltas.
 - **Celda:** etiqueta en 13 px peso 500 `ink-600`, cifra en 20 px peso 600 tabular (`ink-300` si es cero) y contexto en 12 px `ink-500`. Elegida: fondo `brand-50`, etiqueta y cifra en `brand-700` y una barra de 2 px `brand-600` al pie, como la pestaña activa.
 - **Flujo del día:** cinco pasos (1 columna en el teléfono, 5 desde `sm`). Cada uno lleva un número en un círculo de 20 px (anillo `line-strong`; relleno `brand-600` con texto blanco cuando es el elegido). El primer paso con pedidos lleva la chapa `brand` «Empieza aquí» junto a la etiqueta. El contexto dice el porqué del paso, o cuántos de sus pedidos son del filtro de adentro. En el teléfono, la cifra va a la derecha y el contexto debajo de la etiqueta. Con un paso elegido, el pie de la franja (`wash`, sobre una hairline) dice «Dentro de **No entregados**:» y lleva los chips «Todos (no entregados)» y el filtro de adentro.
 - **Agenda:** Hoy, los cinco próximos días por su nombre, Después y Sin fecha (2 columnas en el teléfono, 4 desde `sm`, 8 desde `xl`). El pie «Filtrar la agenda: Reprogramados» sale solo con pedidos o elegido.
 - **En manos del courier:** Guía creada, En ruta y Retornando (3 columnas siempre). Desde 1536 px va al lado de la Agenda (8 : 3).
+
+**La lista, más clara (owner, 15-11-2026: «los colores y separaciones que se vean más claras»).**
+- **Cabecera de la tarjeta:** el título va en 16 px.
+- **Cabecera de la tabla:** fondo `wash` con hairline arriba y abajo, en 12 px peso 600 `ink-500`.
+- **Filas:** 16 px de relleno vertical y hover `wash` suave.
+- **Celdas:** una línea principal en 14 px `ink-900` y el detalle en 12–13 px `ink-500`/`ink-600`, para que el ojo sepa qué leer primero. Las líneas principales son:
+  - el nombre del cliente, en peso 500;
+  - el courier y su estado en «Qué pasa», en peso 500;
+  - la frase de «Próximo paso»;
+  - la fecha agendada.
 
 La tarjeta de trabajo empieza con el título de lo elegido en 14 px peso 600 (o «Todos los pendientes») y su ayuda en 13 px `ink-500`, con «Ver todos» fantasma a la derecha cuando hay algo elegido; debajo, la barra de siempre (búsqueda, Tienda, **Etapa** —macroestado y subetapa en una hoja anclada—, Creación, Canal, Distrito, Courier, «Quitar filtros») y la cifra «N de M pendientes de entrega». Desde 1280 px la lista es una tabla fija: casilla, Pedido (código, tienda, creación, venta y quién lo atiende), Cliente (teléfono, sus pedidos de antes, dirección y referencia), **Qué pasa** (chapa `brand` de la macroetapa y neutra de la subetapa, el courier con su estado en 13 px `ink-700`, el fallo o la situación, las chapas del acuerdo y de la caja y «Última nota: …» en 12 px `ink-500`), **Próximo paso** (13 px `ink-700`; un trabado lleva la chapa `warn` «Trabado · N días», la del responsable, el motivo en 13 px peso 500 `ink-900`, su dato en 12 px y la acción), **Fecha agendada** (el día en 13 px peso 500 —`warn-fg` si está vencido, `ink-500` sin fecha— y de dónde sale en 12 px `ink-500`) y las acciones apiladas: «Agendar» (secundario) y «Atender» (secundario). Por debajo de 1280 px, la misma fila en renglones, con Próximo paso y Fecha agendada sobre una hairline y «Llamar …», «Agendar» y «Atender» a lo ancho.
 

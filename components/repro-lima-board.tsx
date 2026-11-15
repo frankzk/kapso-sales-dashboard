@@ -375,7 +375,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const filtered = Boolean(stuck) || key !== "todos";
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-7">
       <header className="space-y-3">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Repro Lima</h1>
@@ -474,15 +474,15 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
 
       <section aria-label={filtered ? listTitle : "Todos los pendientes de Lima"} className="rounded-lg bg-white shadow-control ring-1 ring-line">
         {!retriesOnly && (
-          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-4 pt-3">
+          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-4 pt-4">
             <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-ink-900">{listTitle}</h2>
-              <p className="max-w-[80ch] text-[13px] text-ink-500">{listHelp}</p>
+              <h2 className="text-base font-semibold tracking-[-0.01em] text-ink-900">{listTitle}</h2>
+              <p className="mt-0.5 max-w-[80ch] text-[13px] leading-5 text-ink-500">{listHelp}</p>
             </div>
             {filtered && <OpsButton variant="ghost" size="sm" onClick={() => chooseKey("todos")} className="pointer-coarse:h-11">Ver todos</OpsButton>}
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-4 pt-3">
           <label className="relative w-full sm:w-72">
             <span className="sr-only">Buscar pedido, cliente o teléfono</span>
             <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
