@@ -3,6 +3,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { gfCourier, verifyGfWebhook, type GfWebhookEnvelope } from "@/lib/gf-courier";
 import { loadGfStore } from "@/lib/gf-courier-guide";
 import { applyGfSnapshot } from "@/lib/gf-courier-track";
+import { gfWebhookNote } from "@/lib/gf-webhook-note";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,5 +49,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ storeId: s
   }
   const applied = await applyGfSnapshot(current.data, admin);
   const { error } = await log(applied.outcome);
+  // Un aviso con motivo («No respondió antes de salir (1 de 2)», la anulación) deja su línea en el historial. Solo la
+  // primera entrega del evento: un reenvío choca con el registro único y no la duplica.
+  const note = gfWebhookNote(envelope);
+  if (note && !error && applied.orderId) {
+    const order = await admin.from("orders").select("store_id").eq("id", applied.orderId).maybeSingle();
+    await admin.from("order_events").insert({ store_id: order.data?.store_id ?? storeId, order_id: applied.orderId, kind: "courier_report",
+      occurred_at: new Date().toISOString(), actor: null, source: "gf_courier", courier: "gf_courier", guide_code: tracking, note });
+  }
   return NextResponse.json({ ok: applied.ok, outcome: error?.code === "23505" ? "duplicate" : applied.outcome }, { status: applied.ok || applied.outcome === "unknown_order" ? 200 : 500 });
 }

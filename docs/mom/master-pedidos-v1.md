@@ -19410,7 +19410,20 @@ tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`alic
 viva. No se crea otra guía GF encima: sale con la misma si GF la reprograma, o se crea la siguiente (`-S2`) cuando GF
 la devuelva o la anule.
 
-**Estado.** El webhook firmado de GF (`/api/webhooks/gf/<storeId>`, `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
+**«No responde antes de salir» (owner, 15-11-2026).** En las rutas donde GF llama antes de salir (la de Alexis),
+Despacho de GF marca «No responde» al pedido que no contesta: sale de la carga de hoy y **pasa al siguiente día de
+reparto con la misma guía**, guardado en el estante «Por llamar» de GF. Dos veces como máximo; **a la tercera GF anula
+la guía**, desarma la caja y el producto vuelve a su stock.
+- Kapta no decide nada de esto: lo informa GF. Cada «No responde» llega como `order.delivery_date_changed` con
+  `reason` («No respondió antes de salir (1 de 2)») y deja una línea `courier_report` en el historial del pedido:
+  «GF Courier: No respondió antes de salir (1 de 2). Vuelve a salir el 17/11, con la misma guía.» La guía sigue viva.
+- La anulación llega como `order.status_changed` → `CANCELLED` con su `reason`; la salida pasa a `anulado` como
+  cualquier guía anulada (y el pedido sigue el camino de siempre hacia Repro Lima), y el motivo queda también como
+  `courier_report`. Después se puede crear la siguiente guía (`-S2`).
+- Solo la primera entrega de cada evento escribe la línea: un reenvío choca con el `X-GF-Event-Id` único.
+- Las líneas las arma `lib/gf-webhook-note.ts` (pura, con prueba); sin motivo no hay línea.
+
+, `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
 `X-GF-Event-Id` único en `gf_webhook_events`) solo dispara una relectura de `GET /v1/orders/{guía}`; se aplica el estado
 actual con las mismas guardas que Aliclik (precedencia, intento fallido, sello único de devolución, preparación y
 custodia monotónicas). El cron `gf-reconcile` (cada 20 min) relee las guías vivas y resuelve las intenciones huérfanas.
