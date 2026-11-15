@@ -4,6 +4,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { cameraErrorMessage } from "@/lib/camera-error";
 import { CameraSessionError, startDispatchCamera } from "@/lib/dispatch-camera-session";
 import { scanFeedbackVibration, scanProgressDone, scanProgressText, type ScanProgress, type ScanStatusTone } from "@/lib/scan-progress";
+import { playScanNotes, primeScanSound, scanResultNotes, SCAN_READ_NOTES } from "@/lib/scan-sound";
 import { cn } from "@/components/ui";
 
 /** Un mismo QR leído dos veces seguidas en menos de esto se ignora. */
@@ -113,6 +114,8 @@ export function DispatchCamera({
     if (feedbackKey === feedbackSeen.current) return;
     feedbackSeen.current = feedbackKey;
     if (!open || feedbackKey == null || !feedbackTone) return;
+    // El tono del resultado (13-11-2026), además de la vibración.
+    playScanNotes(scanResultNotes(feedbackTone));
     const pattern = scanFeedbackVibration(feedbackTone);
     if (!pattern) return;
     try {
@@ -140,6 +143,7 @@ export function DispatchCamera({
   }, [open]);
   useEffect(() => {
     if (!open) return;
+    primeScanSound();
     const previousFocus = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -166,6 +170,7 @@ export function DispatchCamera({
           session.stop();
         }
         window.navigator.vibrate?.(80);
+        playScanNotes(SCAN_READ_NOTES);
         scanLatest(text);
         if (!continuous) closeLatest();
       },

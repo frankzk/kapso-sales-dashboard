@@ -29,6 +29,26 @@ const pedido = (over: Partial<{ macro_stage: string | null; district: string | n
   ...over,
 });
 
+// 13-11-2026, #KP205044: el pedido sale entero por guía directa; un producto sin
+// stock o sin vínculo al catálogo de Swayp lo deja fuera de «Swayp ok».
+describe("todos los productos, con stock y vinculados", () => {
+  const mixto = [...serum, { title: "PUMPKIN SEED OIL", sku: "KEN099" }];
+  it("un producto sin stock en la ciudad: sin_stock, aunque otro tenga", () => {
+    expect(swaypAvailabilityFor(pedido(), stock, mixto)).toBe("sin_stock");
+  });
+  it("con stock pero sin vínculo al catálogo de Swayp: sin_stock", () => {
+    const map = new Map([["AURE020", { codbar: "775001" }]]);
+    expect(swaypAvailabilityFor(pedido(), [...stock, { city: "piura", product: "PUMPKIN SEED OIL", sku: "KEN099", quantity: 3 }], mixto, map)).toBe("sin_stock");
+    const full = new Map([["AURE020", { codbar: "775001" }], ["KEN099", { codbar: "775002" }]]);
+    expect(swaypAvailabilityFor(pedido(), [...stock, { city: "piura", product: "PUMPKIN SEED OIL", sku: "KEN099", quantity: 3 }], mixto, full)).toBe("ok");
+  });
+  it("la pasada carga el vínculo de cada tienda", () => {
+    const src = read("lib/master-swayp-availability.ts");
+    expect(src).toContain("linkMaps.set(storeId, await cargarMapaSwayp(admin, storeId));");
+    expect(read("app/dashboard/leads/post-order-actions.ts")).toContain("await cargarMapaSwayp(createAdminSupabase(), row.store_id),");
+  });
+});
+
 describe("la regla es la de Repro Provincia", () => {
   it("ciudad con almacén y stock del producto: ok", () => {
     expect(swaypAvailabilityFor(pedido(), stock, serum)).toBe("ok");

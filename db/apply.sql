@@ -673,4 +673,24 @@
 \ir migrations/0335_lead_store_distribution.sql
 \echo 'Applying 0336_agency_payment_reconciliation.sql'
 \ir migrations/0336_agency_payment_reconciliation.sql
+\echo 'Applying 0337_gf_replaced_by_aliclik.sql'
+\ir migrations/0337_gf_replaced_by_aliclik.sql
+\echo 'Applying 0338_lead_daily_list.sql'
+\ir migrations/0338_lead_daily_list.sql
+\echo 'Applying 0339_repro_box_con_courier.sql'
+\ir migrations/0339_repro_box_con_courier.sql
+\echo 'Applying 0340_compras_importaciones.sql'
+\ir migrations/0340_compras_importaciones.sql
+\echo 'Applying 0341_compras_proveedores.sql'
+\ir migrations/0341_compras_proveedores.sql
+\echo 'Applying 0342_compras_monedas_igv.sql'
+\ir migrations/0342_compras_monedas_igv.sql
+\echo 'Applying 0343_compras_locales_entregas.sql'
+\ir migrations/0343_compras_locales_entregas.sql
+\echo 'Applying 0344_gf_courier_api.sql'
+\ir migrations/0344_gf_courier_api.sql
+\echo 'Applying 0345_gf_auto_guide.sql'
+\ir migrations/0345_gf_auto_guide.sql
+\echo 'Applying 0346_gf_requests_lock_en_curso.sql'
+\ir migrations/0346_gf_requests_lock_en_curso.sql
 \echo 'Done.'

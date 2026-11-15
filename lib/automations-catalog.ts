@@ -23,6 +23,11 @@ import { lnHistoryLabel } from "@/lib/lista-negra-copy";
 /** Los grupos del panel, en su orden. */
 export const AUTOMATION_GROUPS = [
   {
+    key: "logistica_lima",
+    title: "Logística Lima",
+    description: "Guías que Kapta crea sola para los pedidos de Lima el día del despacho.",
+  },
+  {
     key: "logistica_provincia",
     title: "Logística Provincia",
     description: "Guías que Kapta saca sola por Swayp cuando Aliclik no entregó o la clienta no confirma.",
@@ -78,7 +83,7 @@ export const EXTERNAL_EFFECTS: readonly AutomationEffect[] = ["Crea guías", "En
 export type AutomationScope = "org" | "store" | "none";
 
 /** Tablas de configuración por organización que el panel puede escribir. */
-export const ORG_AUTOMATION_TABLES = ["swayp_auto_settings", "swayp_pc_auto_settings", "chatby_auto_settings"] as const;
+export const ORG_AUTOMATION_TABLES = ["swayp_auto_settings", "swayp_pc_auto_settings", "chatby_auto_settings", "gf_auto_guide_settings"] as const;
 export type OrgAutomationTable = (typeof ORG_AUTOMATION_TABLES)[number];
 
 /**
@@ -90,6 +95,8 @@ export const ORG_TABLE_SHAPE: Record<OrgAutomationTable, { columns: readonly str
   swayp_auto_settings: { columns: ["enabled", "pilot_enabled"], updatedBy: false },
   swayp_pc_auto_settings: { columns: ["enabled", "paused_reason"], updatedBy: true },
   chatby_auto_settings: { columns: ["enabled", "guide_enabled"], updatedBy: true },
+  // Solo la posición de la Guía GF automática (0345), que tiene su propia acción.
+  gf_auto_guide_settings: { columns: ["mode"], updatedBy: true },
 };
 
 export type AutomationControl =
@@ -99,7 +106,7 @@ export type AutomationControl =
    * Apagado / Simulación / Activo de una columna de texto de la organización
    * (0316). No es un interruptor: no entra en la lista blanca de `on/off` y
    * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`,
-   * `setChatbyHistoryMode`), que
+   * `setChatbyHistoryMode`, `setGfAutoGuideMode`), que
    * solo escribe esta columna con uno de los tres valores.
    */
   | { kind: "org_mode"; table: OrgAutomationTable; column: string; requires?: never }
@@ -131,10 +138,28 @@ export const CHATBY_APPROX_KEY = "chatby_auto_approx";
 export const CHATBY_ASK_KEY = "chatby_auto_ask";
 /** «Guía automática para clientas con entregas» (0317): su clave en el catálogo y en el historial. */
 export const CHATBY_HISTORY_KEY = "chatby_auto_history";
+/** «Guía GF automática» (0345, lib/gf-auto-guide.ts): su clave en el catálogo y en el historial. */
+export const GF_AUTO_GUIDE_KEY = "gf_auto_guide";
 
 const STORE_SETTINGS = (section: string, label = "Ajustes de la tienda"): AutomationLink => ({ kind: "store_settings", section, label });
 
 export const AUTOMATIONS: readonly AutomationEntry[] = [
+  // ── Logística Lima ─────────────────────────────────────────────────────
+  {
+    key: GF_AUTO_GUIDE_KEY,
+    group: "logistica_lima",
+    name: "Guía GF automática",
+    // 0345, owner 15-11-2026 (MOM §29.17). La regla está en lib/gf-auto-guide.ts;
+    // la pasada, en lib/gf-auto-guide-server.ts. Solo en las tiendas con GF
+    // Courier por API habilitado.
+    what:
+      "A las 9, 10 y 11 de la mañana crea la guía de GF Courier de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha. Si una no sale, avisa por Telegram. En Simulación solo dice qué guía habría creado.",
+    effect: "Crea guías",
+    scope: "org",
+    control: { kind: "org_mode", table: "gf_auto_guide_settings", column: "mode" },
+    link: STORE_SETTINGS("gf-courier"),
+  },
+
   // ── Logística Provincia ────────────────────────────────────────────────
   {
     key: "swayp_auto",
@@ -520,10 +545,21 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     group: "sin_interruptor",
     name: "Validación de pagos por Yape",
     what:
-      "Con cada reporte de movimientos de Yape Empresa valida solos los comprobantes que cuadran al céntimo y, si eso completa un pedido de agencia, manda la clave de recojo.",
+      "Con cada reporte de movimientos de Yape Empresa valida solos los comprobantes que cuadran al céntimo y, si eso completa un pedido de agencia, manda la clave de recojo. Cada media hora recruza los cargados después de su reporte.",
     effect: "Valida pagos",
     scope: "none",
     control: { kind: "readonly", how: "Se pausa en el escenario de Make que reenvía el reporte. No tiene interruptor en Kapta." },
+  },
+  {
+    key: "inbox_watch",
+    group: "sin_interruptor",
+    name: "Aviso de buzón callado",
+    what:
+      "A las 8:23, 13:23 y 18:23 avisa por Telegram si no llega un reporte de Yape en 30 horas o un rótulo de Olva en 60: suele ser la conexión de Make con Outlook caída.",
+    effect: "Solo informa",
+    scope: "store",
+    control: { kind: "readonly", how: "Va a toda tienda con Telegram configurado. Se corta quitando el Telegram de la tienda." },
+    link: STORE_SETTINGS("telegram"),
   },
 ];
 

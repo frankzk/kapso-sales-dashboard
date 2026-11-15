@@ -1,3 +1,396 @@
+### 14-11-2026 · GF Courier por API: reemplaza al reparto propio (0344, MOM §29.17)
+
+**Migración 0344_gf_courier_api: ya aplicada en producción (14-11-2026), antes del código.** Se aplicó con el nombre provisional 0342_gf_courier_api, que chocó con la 0342 de Compras entrada directo en `main`; el contenido es el mismo e idempotente, así que correr `db/apply.sql` otra vez no cambia nada. Agrega a `stores`
+`gf_courier_api_token_enc`, `gf_courier_webhook_secret_enc` y `gf_courier_enabled` (por defecto `false`), y crea
+`gf_order_requests` (intención antes del POST, una viva por pedido) y `gf_webhook_events` (append-only, con
+`reject_mutation()`). Sin `drop`; no toca datos; se puede correr otra vez. Sin ella, el panel y la configuración
+de GF no funcionan; «Tomar» de Grupo GF se comporta como antes.
+
+Variables nuevas en Vercel (Production):
+- `GF_COURIER_WRITE_ENABLED=true`, la llave global; sin ella el panel explica que está apagado;
+- `GF_COURIER_API_BASE`, opcional; por defecto `https://gf-courier.vercel.app`.
+
+Cron nuevo: `/api/cron/gf-reconcile` cada 20 minutos (`vercel.json`), con `CRON_SECRET`.
+
+Por tienda, en Configuración → Conexiones → GF Courier: pegar el token que emite GF (credencial con
+`shipments:read`, `shipments:write`, `catalogue:read`, `inventory:read` y `webhooks:manage`), «Probar conexión»,
+«Conectar webhook» y activar «Crear guías en GF Courier». Permisos nuevos: `gf_courier.create_guide` y
+`gf_courier.cancel_guide`; van con los roles que ya crean guías de Aliclik.
+
+Verificar con un pedido de prueba:
+1. «Crear guía en GF Courier» en el Master: aparece la guía `GF…` con su costo.
+2. Al anularla, la salida queda `anulado`.
+3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
+4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
+
+### 15-11-2026 · Guía GF automática a las 9, 10 y 11 de Lima (0345 y 0346, MOM §29.17 y §40)
+
+**Migraciones `0345_gf_auto_guide.sql` y `0346_gf_requests_lock_en_curso.sql`: ya aplicadas en producción
+(15-11-2026), antes del código.**
+
+La 0346 rehace `gf_order_requests_live_uniq` para que cuente solo las creaciones en curso (`status = 'pending'`).
+Con la 0344, la intención enviada de la primera guía bloqueaba para siempre la `-S2` del mismo pedido. Antes de
+aplicarla había una sola intención en la tabla (#AUR900859), así que nadie llegó a chocar.
+
+La 0345 crea `gf_auto_guide_settings` (la posición por
+organización; sin fila es Apagado) y `gf_auto_guide_log` (lo que hizo o habría hecho cada pasada, uno por pedido,
+día y modo). Las dos tienen RLS de lectura para la organización y escritura solo del servidor. Es aditiva: sin `drop`,
+no toca datos y se puede correr otra vez. Sin ella, el cron responde 502 con «Falta la migración 0345» y la fila del
+panel queda bloqueada como Apagado; no se crea ninguna guía.
+
+Cron nuevo: `/api/cron/gf-auto-guide` a las `0 14,15,16 * * *` UTC (9:00, 10:00 y 11:00 de Lima), con `CRON_SECRET`.
+Sin variables nuevas: usa `GF_COURIER_WRITE_ENABLED` y el interruptor y el token de GF Courier de cada tienda (0344).
+**Nace Apagado en todas las organizaciones**: desplegar no crea ninguna guía.
+
+Verificar:
+1. `select count(*) from gf_auto_guide_settings;` → 0, y en Automatizaciones → «Logística Lima» la «Guía GF
+   automática» sale en Apagado, con las tiendas que tienen GF Courier por API.
+2. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET` responde 200 con `candidates` e
+   `items` (`simulada`, `fallo`…) y no escribe nada: `gf_auto_guide_log` sigue vacío.
+3. Poner Simulación. Después de la pasada de las 9:00, «Guía GF automática: hoy y ayer» lista los pedidos de Lima por
+   generar rótulo con «Habría creado la guía» o «No la crearía», sin guías nuevas en GF ni avisos por Telegram.
+4. Activo pide confirmación. Sin `GF_COURIER_WRITE_ENABLED` responde «No se puede poner en Activo». En Activo, un
+   pedido sin SKU deja «Guía GF automática no creada» en su historial y una sola alerta por Telegram, y la pasada de
+   las 10:00 no lo repite.
+
+### 15-11-2026 · Pasar de GF Courier a Aliclik anula la guía GF (sin migración, MOM §29.17)
+
+Sin migración, sin crons ni variables nuevas.
+- Al crear a mano la guía de Aliclik de un pedido con guía GF viva, Kapta anula antes la de GF, siempre que GF todavía
+  no la haya asignado a un motorizado.
+- Si ya la asignó (en ruta), no crea la de Aliclik. Si GF no la anula, tampoco.
+- Las guías automáticas de Aliclik no anulan guías GF.
+
+Verificar con un pedido de prueba con guía GF creada:
+1. La tarjeta de Aliclik en la Mesa de ruta avisa que anulará la de GF.
+2. Al crear la de Aliclik, la salida GF queda `anulado` y en el historial aparece «Guía de GF Courier anulada por
+   Kapta al crear la guía de Aliclik».
+
+### 15-11-2026 · GF Courier dentro de la Mesa de ruta y sin tope de salidas (sin migración, MOM §29.17, §4)
+
+Sin migración, sin crons ni variables nuevas. GF Courier pasa a ser una opción del plan de rutas.
+- Con el interruptor de la tienda encendido, un pedido de Lima lo muestra primero y sugerido, y Grupo GF deja de
+  ofrecerse. Solo vuelve a aparecer si el pedido tiene una salida propia viva.
+- Crear y anular la guía se hace en esa tarjeta.
+- El panel suelto «GF Courier» y su entrada en el índice se retiraron.
+- Las guías GF no cuentan para el tope de cinco salidas. Se crea una tras otra (-S2, -S3…) cuando la anterior está
+  cerrada.
+
+Verificar en un pedido de Aurela:
+1. La Mesa de ruta sugiere «GF Courier» y no ofrece Grupo GF.
+2. #AUR900859, con su guía viva, muestra la guía con estado y envío, y el botón «Anular guía».
+3. En Kenku, con el interruptor apagado, sigue Grupo GF como antes.
+
+### 15-11-2026 · Repro Lima: la salida de otro courier cuenta como lista, con aviso (sin migración, MOM §9.5)
+
+Sin migración. Decisión del owner («Cuenta, con aviso»): un acuerdo cuyo pedido
+ya tiene una salida viva de otro courier que el acordado (`salida_distinta`)
+deja de ser problema. La chapa dice «Salida creada · sale … con Aliclik (se
+acordó Swayp)», la fila de atención de un pendiente dice «Listo: sale con
+Aliclik (se acordó Swayp). No requiere gestión salvo que el cliente cambie
+algo.», ya no va primero en «Programados» y Almacén la trata como «Salida
+creada». Con la salida del courier acordado (`salida_creada`), la fila de
+atención también dice «Listo» en vez de «confirma con el cliente la fecha y el
+courier». Verificar en Repro Lima un pendiente con guía de Aliclik ya creada.
+
+### 14-11-2026 · Compras: catálogo vivo en «Agregar producto», lista por páginas, «Comprado» en soles y quitar con confirmación (sin migración, MOM §45.1, §45.2, §45.7, §45.8, §45.16)
+
+**Sin migración, sin crons ni variables nuevas.** Se despliega y ya está.
+
+- **«Agregar producto → De las tiendas»** lee el catálogo vivo de cada tienda
+  activa de la organización (WooCommerce o Shopify, la fuente de Envíos →
+  «Catálogo de productos»), además del historial: aparece lo que todavía no se
+  vendió (el «Bóxer Confort … (Pack de 4)» de Aurela). Se pide al abrir el
+  formulario, no con cada vista del detalle; 5 minutos en memoria por tienda.
+- **La lista** va de a 100 con «Ver más» en Recibidas, Canceladas y Todas
+  (Activas, completa); las tarjetas, el tipo y los proveedores se cuentan en la
+  base (antes, sobre las 500 primeras).
+- **«Comprado» y el ranking de proveedores** en soles cuando todas las compras
+  se pueden llevar a soles (un laboratorio local entra sin tipo de cambio); si
+  no, en USD; nunca mezclando y diciendo cuántas faltan.
+- **Quitar** (producto, foto, costo, pago, documento, entrega y proveedor) pide
+  «Sí, quitar · No» en la misma fila; los archivos se eligen con «Elegir
+  archivos» / «Ningún archivo».
+
+Verificar: en una importación, «Agregar producto» → buscar «boxer» y elegir
+una talla (llena la tienda Aurela); quitar un costo pide confirmación y «No» no
+quita nada; en Reportes, un laboratorio local sin tipo de cambio sale en el
+ranking en soles; con más de 100 recibidas, «Ver más» y la tarjeta cuenta todas.
+
+### 14-11-2026 · Compras locales, cortesía, entregas parciales con foto, códigos de trazabilidad e IGV por costo (0343, MOM §45.12–§45.15)
+
+**Migración `0343_compras_locales_entregas.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:
+`psql "$DATABASE_URL" -f db/migrations/0343_compras_locales_entregas.sql` (por
+`apply_migration`, con `set local lock_timeout = '15s'` delante, como la 0251).
+Qué hace:
+
+- `imports.kind` (`importacion` por defecto | `local`) y el CHECK del código por
+  tipo (`IMP-` / `LOC-`); el estado nuevo `recibido_parcial` en `imports.status`
+  e `import_events.status`; `imports.proforma_number` (≤ 80). Los CHECK en línea
+  de la 0340 se **reemplazan** (Postgres no deja cambiar su expresión): se
+  buscan por su definición y se cambian dentro de un bloque guardado, como la
+  0339. No se borra ninguna tabla, columna ni dato.
+- `import_items`: `unit_cost_currency` (USD por defecto) y `unit_cost_pen` con
+  CHECK de un costo por moneda (`unit_cost_usd` pasa a admitir nulo, como la
+  0342), y `courtesy_qty` (≥ 0, 0 por defecto).
+- `import_costs.igv_treatment` (`neto` | `con_igv` | `inafecto`), con backfill
+  (`includes_igv` → `con_igv`) y CHECK `con_igv` ⇔ `includes_igv`; un trigger lo
+  llena para el código anterior, que solo escribe `includes_igv`.
+- Tablas nuevas `import_deliveries` e `import_delivery_lines` (RLS sin
+  políticas, sin privilegios para anon ni authenticated) e
+  `import_documents.delivery_id` (fotos de una entrega). El trigger
+  `import_delivery_lines_sync` deja los totales de cada producto como la suma
+  de sus entregas.
+- **Backfill de la recepción de antes**: cada importación con productos ya
+  contados recibe UNA entrega «Recepción anterior» (`legacy`) con los mismos
+  números; los totales de `import_items` no se tocan. Idempotente.
+
+**El orden importa**: el código nuevo lee `kind`, `courtesy_qty`,
+`unit_cost_currency`, `proforma_number`, `igv_treatment` y las entregas; sin la
+migración, la lista y el detalle de Compras no cargan. El código anterior sigue
+funcionando con la migración puesta, pero **el código nuevo debe salir enseguida**:
+una recepción guardada con el código anterior después de la migración no queda
+como entrega (si el producto no tenía ninguna, volver a correr la 0343 la
+cubre). Comprobar que no quedó ninguna:
+`select count(*) from import_items it where it.received_qty is not null and not exists (select 1 from import_delivery_lines l where l.item_id = it.id);` → 0.
+
+Sin recálculo ni versión nueva del Master. Verificar:
+- «Nueva compra» → «Compra local (laboratorio / maquila)»: sale `LOC-2026-001`,
+  sin transporte ni guía; un producto con costo en S/ y 50 de cortesía;
+  «Registrar entrega» sin foto no deja (con foto, pasa a «Recibido parcial» y
+  dice «Llegaron 400 de 600 (+50 cortesía) · faltan 250»); la entrega del
+  resto la pasa a «Recibido»; «Registrar un pago» sin captura no deja; «Pasar
+  a Costos» sin tipo de cambio.
+- En una importación: «Códigos de trazabilidad 0 de 3» → pasar a «Pagado» no
+  deja hasta cargar la proforma y la orden de Alibaba; «En tránsito» pide
+  también la guía; cancelar siempre se puede.
+- Un costo «Inafecto a IGV» y «Editar» un costo (cambiarle el tipo de «Envío» a
+  «Importación»): el historial dice «Costo «…»: tipo Envío → Importación».
+- Una importación que ya estaba recibida muestra su entrega «Recepción
+  anterior» con los mismos números.
+
+### 14-11-2026 · Compras: cada costo y cada pago en su moneda e «Incluye IGV» (0342, MOM §45.3)
+
+**Migración `0342_compras_monedas_igv.sql`: ya aplicada en producción (14-11-2026), antes del código.** Para otra base, a mano y ANTES del código:
+`psql "$DATABASE_URL" -f db/migrations/0342_compras_monedas_igv.sql` (por
+`apply_migration`, con `set local lock_timeout = '15s'` delante, como la
+0251). A `import_costs` e `import_payments` les agrega
+`currency` (`'USD'` por defecto, CHECK USD | PEN) y `amount_pen` (el monto de
+una fila en soles), deja `amount_usd` nulo para esas filas (`alter column
+amount_usd drop not null`, dentro del `alter table`: no borra nada) y pide con
+un CHECK **exactamente un monto, el de su moneda**. A `import_costs`, además,
+`includes_igv` (falso por defecto) y `gross_amount` (el monto con IGV), con su
+CHECK. Las filas que ya existen son todas USD: toman el default y quedan
+correctas, **sin backfill**. Idempotente; las tablas siguen solo para el
+servidor (RLS sin políticas, sin privilegios para anon ni authenticated).
+**El orden importa**: el código nuevo lee y escribe `currency`, `amount_pen`,
+`includes_igv` y `gross_amount`; sin la migración, el detalle de una
+importación con «Montos de compras» no carga sus costos ni sus pagos y
+agregar un costo o un pago falla. El código anterior sigue funcionando con la
+migración puesta (escribe `amount_usd` sin moneda → USD).
+
+Sin recálculo ni versión nueva del Master. En el detalle, «Agregar un costo» y
+«Registrar un pago» llevan **US$ / S/** junto al monto y cada monto se ve en su
+moneda (con su equivalente si la importación tiene tipo de cambio); los
+costos, la casilla **«Incluye IGV»** (monto ÷ 1,18). El costo aterrizado en
+soles —lo que lleva «Pasar a Costos»— suma los costos en soles tal cual; sin
+tipo de cambio, lo que necesita convertir dice «Falta el tipo de cambio».
+«Leer con IA» deja en soles los cargos de una factura en soles y muestra el
+IGV aparte, sin agregarlo. Verificar en una importación con tipo de cambio:
+agregar «Aforo físico» S/ 114.50 (sin IGV) y un costo de S/ 504.16 con
+«Incluye IGV» (debe quedar S/ 427.25 sin IGV y decirlo en el historial),
+registrar un pago en soles y ver que «Falta pagar» compara en USD; quitar el
+tipo de cambio y ver «Falta el tipo de cambio» en el costo aterrizado; bajar
+el Excel (hojas Costos y Pagos con moneda, IGV y equivalentes).
+
+### 14-11-2026 · Compras con el aspecto de la Mesa de Despacho y buscador de productos
+
+Sin migración. Compras (lista, detalle, lectura con IA, Proveedores y
+Reportes) pasa al mundo de operación de DESIGN.md: cifras que filtran,
+pastillas de excepción (`?alerta=`), tabla desde 1280 px y lista en el
+teléfono, franja de cifras y «siguiente acción» en el detalle. «Agregar
+producto» busca en el catálogo de las tiendas (`org_shopify_products`) y
+llena nombre, SKU y, si es única, la tienda. Verificar en el celular la lista
+y el detalle de una importación, y agregar un producto desde «De las tiendas».
+
+### 14-11-2026 · Compras: «Leer con IA», «Recepción de compras» y la foto del producto (MOM §45.10–§45.11)
+
+**Sin migración.** El permiso nuevo **«Recepción de compras»**
+(`purchases.receive`) vive en el código (`user_permissions.permission` es
+texto libre y los roles por función no se guardan permiso por permiso), y
+«Leer con IA» no guarda nada nuevo: usa las tablas de la 0340. Usa la clave de
+visión que ya existe (`ANTHROPIC_API_KEY` y `YAPE_VISION_MODEL`; si el entorno
+no tiene clave, la de la primera tienda de la organización que tenga una). La
+página del detalle pasa a `maxDuration = 120`.
+
+- **«Leer con IA»** (con «Compras»): en Documentos, la factura comercial, la
+  proforma (con «Montos») o el packing list en PDF (≤ 20 MB) o imagen (≤ 5 MB)
+  muestran «Leer con IA». La IA propone productos y cargos; **no se guarda
+  nada** hasta «Agregar seleccionados». Sin «Montos de compras» la propuesta
+  llega sin precios ni cargos. Si el documento no está en USD, se escribe
+  «1 USD = X <moneda>». Sugiere SKU y tienda conocidos (Costos de productos y
+  pedidos de la tienda).
+- **«Recepción de compras»**: lo trae el rol **«Almacén»** (y owner y admin).
+  Abre Compras (lista y detalle) sin montos, guarda la recepción (pasa a
+  Recibido como siempre) y sube fotos; ve la factura comercial, el packing
+  list y las fotos. No edita nada más y no ve Proveedores ni Reportes. Una
+  vendedora con el rol Almacén ve «Compras» en su menú.
+- **Foto del producto**: en el detalle, «Foto», «Cambiar» y «Quitar» en cada
+  producto (con «Compras»); la anterior se borra del bucket.
+
+Verificar: con una factura en PDF, «Leer con IA» → la propuesta → desmarcar
+una fila → «Agregar seleccionados»: solo lo marcado queda, con el hecho «Leído
+con IA: …» en el historial; con un usuario con solo el rol Almacén, abrir una
+importación (sin montos), guardar la recepción y subir una foto; cambiar la
+foto de un producto y comprobar que se ve la nueva.
+
+### 14-11-2026 · Compras: proveedores, reportes y el Excel de la importación (0341, MOM §45.7–§45.9)
+
+**Migración 0341_compras_proveedores: ya aplicada en producción (14-11-2026), antes del código.**
+Agrega a `import_suppliers` tres columnas opcionales con CHECK:
+`contact_name` (≤ 120), `email` (forma `a@b.c`, ≤ 160) y `payment_terms`
+(≤ 200). Sin `drop`, no toca datos y se puede correr otra vez; la tabla sigue
+solo para el servidor (RLS sin políticas, sin privilegios para anon ni
+authenticated). Sin ella, crear o editar un proveedor —también el alta rápida
+desde una importación— falla, porque el código ya escribe esas columnas.
+
+En Compras aparece una sub-navegación **Importaciones · Proveedores ·
+Reportes**. **Proveedores** (con «Compras» o «Montos de compras»; crear,
+editar y borrar con «Compras»): condiciones de pago, contacto, WhatsApp,
+correo, n.º de importaciones con enlace a la lista filtrada, «Tarda», «A tiempo»
+(rojo bajo 70 %), «Faltantes y dañadas» (rojo desde 3 %), «Comprado» (solo con
+«Montos») y «Le compras»; borrar solo si no tiene importaciones. **Reportes**
+(solo con «Montos de compras»): dinero en camino, comprado y pagado por mes,
+últimos 6 meses, costo por unidad de cada producto con su cambio y ranking de
+proveedores. En el detalle, botón **Excel**. Las cotizaciones y las canceladas
+no cuentan como compras. Verificar: editar un proveedor con correo y
+condiciones; intentar borrar uno con importaciones (no deja); abrir Reportes con
+y sin «Montos de compras» (sin él no aparece); descargar el Excel de una
+importación con y sin «Montos» (sin él, solo las hojas Importación y Productos,
+sin columnas de dinero).
+
+### 14-11-2026 · Compras: importaciones a la bodega de Lima (0340, MOM §45)
+
+**Migración 0340_compras_importaciones: ya aplicada en producción (14-11-2026),
+antes del código.** Crea `import_suppliers`, `imports`, `import_items`,
+`import_documents`, `import_costs`, `import_payments` e `import_events`
+(append-only), todas con RLS y sin políticas (solo el servidor), y el bucket
+privado **`import-files`** (25 MB; PDF, JPG, PNG, WEBP, XLSX). Sin `drop`; no
+toca datos existentes y se puede correr otra vez. Si el bucket no aparece en
+Storage, el código lo crea privado en la primera subida.
+
+Nuevo en el menú **Compras** (`/dashboard/compras`) para quien tenga los
+permisos nuevos **«Compras»** (`purchases.manage`) o **«Montos de compras»**
+(`purchases.money`): vienen con owner, admin y el rol «Administración».
+«Pasar a Costos» pide además «Editar costos». Verificar: crear una importación
+(debe salir `IMP-2026-001`), agregar dos productos con SKU, un costo y un pago,
+subir la factura comercial, guardar la recepción (pasa a Recibido con la
+llegada de hoy), poner el tipo de cambio y «Pasar a Costos»: los dos SKU
+aparecen en Costos → Costos de productos con lote `IMP-2026-001`; pulsar otra
+vez dice «Ya se pasó a Costos». Con un usuario sin «Montos de compras», la
+importación no muestra costos ni pagos.
+
+### 13-11-2026 · Repro Lima reconoce la salida de cualquier courier y la caja en oficina
+
+Migración 0339_repro_box_con_courier (ya aplicada en producción: solo amplía el
+CHECK de `lima_repro_cases.box_location`). Un acuerdo con Swayp, Aliclik,
+Tanders o Axel cuya salida ya existe dice «Salida creada · sale … con …» y deja
+de pedir crearla; si la salida es de otro courier, «revisa cuál sale». La caja
+de otro courier dice dónde está y la propia o «por definir» armada en la
+empresa dice «En oficina» en vez de «No consta». Verificar #KP205892 y
+#KP205878 en «Programados para mañana».
+
+### 13-11-2026 · Venta anulada con la caja afuera: «Devolución física pendiente» · sonido al escanear
+
+Sin migración y sin subir la versión del Master: los pedidos ya guardados
+cambian cuando se vuelven a recalcular (al tocarse su salida). Un pedido con la
+venta anulada en Kapta y la caja todavía con el courier o el motorizado pasa de
+«Salida adicional activa» a «Devolución física pendiente»; con la caja en la
+empresa sigue igual. Las cámaras de escaneo pitan al leer y, en Devoluciones,
+suenan distinto según el resultado. Verificar #KP141229 tras su próximo
+recálculo y escanear una caja en Devoluciones con el volumen multimedia arriba.
+
+### 13-11-2026 · Armar manda a Devoluciones la caja del motorizado de Grupo GF
+
+Sin migración. Escanear en Armar una caja de Grupo GF que sigue con el
+motorizado ya no dice «no figura en custodia»: dice que se reciba en
+Devoluciones (con su reporte «No entregado»). Verificar con #KP201841 en Armar.
+
+### 13-11-2026 · Leads: «Leads por día» (la lista del día)
+
+Migración 0338_lead_daily_list (ya aplicada en producción). En Equipo → Leads,
+«Leads por día» junto a los porcentajes. Quien la tenga puesta ve en «Por
+llamar» solo sus N más prioritarios repartidos por sus porcentajes; si una
+tienda no alcanza, se completa con la otra. Vista compartida, no reserva.
+Verificar: poner 250 a Daphne (90/10), guardar, y que su «Por llamar» diga
+«Tu lista del día: 250 · … Aurela · … Kenku Peru».
+
+### 13-11-2026 · «Swayp ok · con stock» exige todos los productos
+
+Sin migración. La disponibilidad Swayp del Master usa la regla de la guía
+directa: cada producto con stock en la ciudad y vinculado al catálogo de Swayp.
+La columna se recalcula sola en la pasada horaria (cron swayp-inventory).
+Verificar que #KP205044 pase a «Sin stock Swayp».
+
+### 13-11-2026 · Cobro anticipado plegado en Lima
+
+Sin migración. En la ficha de un pedido de Lima sin pagos, la tarjeta de Cobro
+aparece plegada como «Cobro anticipado · Opcional». Con un pago cargado, abierta.
+
+### 13-11-2026 · Cobro en la ficha de pedidos contra entrega
+
+Sin migración. La tarjeta de Cobro aparece, opcional, en todo pedido de Lima o
+Provincia COD abierto: se sube la constancia y se valida; con el total
+validado el rótulo dice «PAGADO - NO COBRAR». Verificar en un pedido de Lima sin
+pagos que la tarjeta aparezca y que Leads no cambie.
+
+### 13-11-2026 · Pago de diferencia: pestañas en dos bloques
+
+Sin migración. Las pestañas se agrupan en «Por cobrar» (Todos, En camino, En
+agencia, Recogidos sin pago) y «Retornos» (Por retornar, Retornados). Mismos
+números y filtros. Verificar en escritorio y teléfono.
+
+### 13-11-2026 · Shalom: el reemplazo de una guía muerta quita la clave vieja
+
+Sin migración. Al vincular la guía que reemplaza a una muerta sin su clave, se
+borra la clave guardada (era de la muerta) y la nota pide registrar la nueva y,
+si la clienta ya la tenía, avisarle. Verificar en el próximo reemplazo de
+Cotejar Shalom.
+
+### 13-11-2026 · Pago de diferencia: Por retornar, Retornados y Copiar mensaje
+
+Sin migración. «Retornando» pasa a «Retornados». Nueva pestaña «Por retornar»
+(En agencia: Shalom 20+ días u Olva por vencer en 3) cuyo número se suma al
+globo del menú. Cada pedido En agencia tiene «Copiar mensaje» con el aviso
+«YA LLEGÓ a la agencia». Verificar ~48 por retornar y el texto copiado.
+
+### 14-11-2026 · Aviso de buzón callado: Yape y Olva (sin migración, MOM §16.2)
+
+- Nuevo cron `/api/cron/inbox-watch` (`23 13,18,23 * * *`, en vercel.json:
+  8:23, 13:23 y 18:23 de Lima). Si el último reporte de Yape tiene más de 30 h
+  o el último rótulo de Olva más de 60 h, avisa por el Telegram de las tiendas
+  (una vez por chat) y responde 503.
+- Verificar: `GET /api/cron/inbox-watch?dry=1` (con el secreto del cron)
+  responde el estado de cada fuente sin mandar nada.
+
+### 13-11-2026 · Yape: el recruce con los movimientos ya guardados (sin migración, MOM §16.2)
+
+- Nuevo cron `/api/cron/yape-rematch` (`17,47 * * * *`, en vercel.json): cruza
+  los comprobantes «Pendiente de revisión» de los últimos 10 días con los
+  ingresos de Yape ya guardados, con la misma función que la importación del
+  reporte (`crossAndValidate`). Arregla el comprobante cargado después de que
+  llegó el reporte de su hora (#KP204474).
+- Verificar: `GET /api/cron/yape-rematch?dry=1` (con el secreto del cron)
+  responde los comprobantes que validaría sin escribir nada.
+
+### 13-11-2026 · Pago de diferencia: pestaña «Retornando»
+
+Sin migración. La bandeja suma una pestaña «Retornando», fuera de «Todos» y
+del número de «Bandeja»: Shalom u Olva en Por cerrar · Devolución física
+pendiente (la agencia lo sacó sin recojo ni pago), con los días en retorno y
+«Ya debería estar en Lima» desde 15. Verificar el conteo (~126) y que «Todos»
+no cambie.
+
 ### 12-11-2026 · Agencia: Estado de pago y conciliación histórica (0336)
 
 Aplicar db/migrations/0336_agency_payment_reconciliation.sql antes del código.
@@ -251,6 +644,61 @@ psql "$DATABASE_URL" -f db/migrations/0328_pago_online_recibio_cualquiera.sql
 
 Sin cron, variables ni pantallas nuevas. Marcha atrás: volver a correr la
 función de la 0326.
+
+### 12-11-2026 · La guía de Aliclik deja en devolución la caja de Grupo GF «No entregado» que el motorizado todavía tiene (0337, MOM §9.5)
+
+Decisión del owner tras #KP203491 («de acuerdo», 12-11-2026): Alexis reportó
+KP203491-S01 «No entregado · no contesta» el 07-11 y todavía la tiene; el 11-11
+salió la guía del reintento por Aliclik (S02) y el pedido seguía en «Por
+reprogramar Lima» y en «Reintentos Aliclik». Ahora, al guardar la guía de
+Aliclik, la caja de Grupo GF queda **en devolución** como con «Sacar con salida
+nueva» (custodia `retorno` y `output_replaced`), su solicitud de Grupo GF se
+**cierra** y, cuando el motorizado la trae, «Recibir en oficina» la manda a
+stock. La parada fallida queda en su ruta y en su paga.
+
+1. **Migración `0337_gf_replaced_by_aliclik.sql`**, a mano, ANTES del código:
+   ```bash
+   psql "$DATABASE_URL" -f db/migrations/0337_gf_replaced_by_aliclik.sql
+   ```
+   Crea `gf_replace_output_with_aliclik(uuid, uuid)` (sin `security definer`,
+   solo `service_role`) y **corre el barrido**: cada guía de Aliclik viva de un
+   pedido de Lima con una caja de Grupo GF todavía con el motorizado, «No
+   entregado» desde antes de la guía, sin recibir ni reemplazar (#KP203491 y
+   los demás). Correrla dos veces no cambia nada. Antes de aplicarla, cuántas
+   cajas tocaría (solo lectura):
+   ```sql
+   select count(distinct g.id) as cajas, count(distinct g.order_id) as pedidos
+     from shipments g
+     join order_master om on om.order_id = g.order_id and om.coverage = 'lima'
+     join lateral (select ds.* from delivery_stops ds where ds.shipment_id = g.id
+                    order by ds.created_at desc, ds.reported_at desc nulls last limit 1) st
+       on st.status = 'no_entregado'
+     join shipments a on a.order_id = g.order_id and a.id <> g.id
+      and lower(trim(a.courier)) = 'aliclik' and a.delivery_status in ('pendiente', 'en_ruta', 'entregado')
+      and a.returned_at is null and coalesce(a.custody_state, '') <> 'devuelto'
+      and greatest(a.created_at, a.assigned_at) > coalesce(st.reported_at, st.created_at)
+    where lower(trim(g.courier)) = 'propio' and g.delivery_status = 'pendiente'
+      and g.custody_state = 'courier' and g.returned_at is null
+      and not exists (select 1 from order_events e where e.shipment_id = g.id and e.kind = 'output_replaced')
+      and not exists (select 1 from dispatch_manifest_items i join dispatch_manifests m on m.id = i.manifest_id
+                       where i.shipment_id = g.id and i.removed_at is null
+                         and (m.courier <> 'propio' or st.dispatch_manifest_id is distinct from i.manifest_id));
+   ```
+   Después debe dar 0.
+2. El Master de esos pedidos se recalcula solo: el cambio de custodia mueve
+   `shipments.updated_at` y `master-reconcile` (cada 10 min) los recalcula. Salen
+   de «Por reprogramar Lima» y de «Reintentos Aliclik» y siguen a su guía.
+3. Desplegar el código: `createAliclikGuideFor` (el botón de la ficha, «Aprobar»
+   de Reintentos Aliclik, la pasada automática, Chatby, el día programado y el
+   agente) y el rescate de la huérfana de `/api/cron/aliclik-reconcile` llaman a
+   la función al guardar la guía. Si el código sale antes que la migración, la
+   guía se crea igual y la llamada solo deja un aviso en el log; el barrido de la
+   0337 lo arregla al aplicarla.
+
+Sin cron, variables ni pantallas nuevas. **Marcha atrás:** revertir el commit.
+Las cajas que ya quedaron en devolución se reciben a stock como las de «Sacar
+con salida nueva»; la función puede quedarse o borrarse con
+`drop function public.gf_replace_output_with_aliclik(uuid, uuid);`.
 
 ### 09-11-2026 · «Pago solo online (lista automática)»: la lista diaria a Kenku y Aurela y el freno en los pedidos de Kapta (0326, MOM §8 y §41.11)
 

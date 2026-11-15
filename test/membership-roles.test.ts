@@ -28,6 +28,9 @@ describe("cómo se suman", () => {
     // Lo que la vendedora traía y Almacén no usa, se va.
     expect(almacen.has("orders.create")).toBe(false);
     expect(almacen.has("recovery.contact")).toBe(false);
+    // La recepción de las importaciones en la bodega (MOM §45.11), sin montos.
+    expect(almacen.has("purchases.receive")).toBe(true);
+    expect(almacen.has("purchases.money")).toBe(false);
   });
 
   it("dos roles suman los dos", () => {
@@ -152,6 +155,8 @@ describe("el menú", () => {
       "/dashboard/stores",
       "/dashboard/stores/historial",
       "/dashboard/costos",
+      // Compras (MOM §45), junto a Costos.
+      "/dashboard/compras",
       "/dashboard/courier",
       "/dashboard/urpi",
       "/dashboard/team",
@@ -173,6 +178,13 @@ describe("el menú", () => {
       "/dashboard/productividad",
     ]);
     expect(items.find((item) => item.href === "/dashboard/productividad")!.label).toBe("Productividad");
+  });
+
+  it("la bodega con «Recepción de compras» (rol Almacén, MOM §45.11) ve Compras en el menú de vendedora", () => {
+    const access = { reports: false, catalog: false, mapAds: false, stores: false, costs: false, team: false, history: false, automations: false };
+    expect(hrefs(navItems(true, false, false, { ...access, purchases: true }))).toContain("/dashboard/compras");
+    expect(hrefs(navItems(true, false, false, { ...access, purchases: false }))).not.toContain("/dashboard/compras");
+    expect(hrefs(navItems(true, false, false))).not.toContain("/dashboard/compras");
   });
 
   it("la vendedora sin roles, igual que antes", () => {

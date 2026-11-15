@@ -77,6 +77,21 @@ export const PERMISSIONS = [
   "invoices.manage",
   // Costos
   "costs.manage",
+  // Compras: importaciones (MOM §45, 14-11-2026). `purchases.manage` crea y
+  // edita importaciones, productos, documentos, estados y recepción.
+  // `purchases.money` es lo que cuesta: costos por unidad, costos repartidos,
+  // pagos, precios de venta y los documentos con montos (proforma y
+  // comprobante). Sin él el servidor ni lee ni escribe esos campos. Van con el
+  // acceso owner/admin y con el rol «Administración», como `costs.manage`.
+  "purchases.manage",
+  "purchases.money",
+  // «Recepción de compras» (MOM §45.11, 14-11-2026): la bodega de Lima abre
+  // Compras SIN montos, guarda lo que llegó (recibidas, dañadas, nota) y sube
+  // fotos; ve la factura comercial y el packing list. No edita la cabecera,
+  // los productos, el estado (salvo el paso a «Recibido» que hace guardar la
+  // recepción), costos, pagos ni «Pasar a Costos», y no ve Reportes ni
+  // Proveedores. Lo trae el rol «Almacén»; owner y admin, por su acceso.
+  "purchases.receive",
   // Grupo GF Courier: contratos, tarifas, clientes y parámetros operativos.
   // Se concede persona por persona porque Daysi debe administrarlo sin recibir
   // acceso implícito a todas las facultades financieras de un admin.
@@ -84,6 +99,9 @@ export const PERMISSIONS = [
   // Aliclik: crear una guía es una escritura hacia AFUERA e irreversible, con
   // ventanas de cancelación estrictas. Por eso tiene permiso propio y no cae
   // bajo `master.edit`.
+  // GF Courier por API (MOM §29.17): misma razón que Aliclik, escritura hacia afuera.
+  "gf_courier.create_guide",
+  "gf_courier.cancel_guide",
   "aliclik.create_guide",
   "aliclik.cancel_guide",
   "aliclik.manage_catalog",
@@ -227,7 +245,12 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   "shalom.override_payment_validation": "Corregir pagos",
   "invoices.manage": "Boletas y facturas",
   "costs.manage": "Editar costos",
+  "purchases.manage": "Compras",
+  "purchases.money": "Montos de compras",
+  "purchases.receive": "Recepción de compras",
   "logistics.manage": "Administrar Grupo GF",
+  "gf_courier.create_guide": "Crear guías de GF Courier",
+  "gf_courier.cancel_guide": "Anular guías de GF Courier",
   "aliclik.create_guide": "Crear guías de Aliclik",
   "aliclik.cancel_guide": "Anular guías de Aliclik",
   "aliclik.manage_catalog": "Editar el catálogo de Aliclik",
@@ -284,7 +307,12 @@ export const PERMISSION_HELP: Record<Permission, string> = {
   "shalom.override_payment_validation": "Pasar un pago a otro pedido o forzar su estado.",
   "invoices.manage": "Configurar los RUC de SimpleFact, asignarles cuentas, emitir boletas en modo Manual y registrar las emitidas fuera de Kapta.",
   "costs.manage": "Costos de producto, tarifas y gastos adicionales.",
+  "purchases.manage": "Crear y editar importaciones: productos, documentos, estados, aviso a la bodega y recepción.",
+  "purchases.money": "Ver y cargar en Compras costos por unidad, costos repartidos, pagos, precios de venta y proformas.",
+  "purchases.receive": "Abrir Compras sin montos, registrar lo que llegó a la bodega de Lima y subir sus fotos.",
   "logistics.manage": "Tarifas, clientes, pago de motorizados y exceso de efectivo del Grupo GF.",
+  "gf_courier.create_guide": "Crear la guía de contraentrega en GF Courier. Sale de verdad hacia GF.",
+  "gf_courier.cancel_guide": "Anular una guía de GF Courier antes de su preparación.",
   "aliclik.create_guide": "Crear la guía en Aliclik. Sale de verdad hacia el courier.",
   "aliclik.cancel_guide": "Anular una guía de Aliclik dentro del plazo que da el courier.",
   "aliclik.manage_catalog": "Vincular cada producto de la tienda con el suyo en Aliclik. Sin eso no se crean guías.",
@@ -355,6 +383,8 @@ export const PERMISSION_AREAS = [
     label: "Guías y couriers",
     permissions: [
       "aliclik.create_guide",
+      "gf_courier.create_guide",
+      "gf_courier.cancel_guide",
       "tanders.create_guide",
       "shalom.create_guide",
       "aliclik.cancel_guide",
@@ -384,6 +414,11 @@ export const PERMISSION_AREAS = [
     key: "liquidaciones",
     label: "Liquidaciones",
     permissions: ["settlements.manage", "settlements.close", "sheets.edit", "sheets.manage"],
+  },
+  {
+    key: "compras",
+    label: "Compras",
+    permissions: ["purchases.manage", "purchases.money", "purchases.receive"],
   },
   {
     key: "administracion",
@@ -539,6 +574,20 @@ export const GRANTED_ONE_BY_ONE = [
     ownerOnly: true,
   },
   {
+    permission: "prepay_list.manage",
+    label: PERMISSION_LABEL["prepay_list.manage"],
+    description: `${PERMISSION_HELP["prepay_list.manage"]} Viene con dueño y admin.`,
+    // Sin nadie con la casilla, dueño y admin siguen cambiando la lista.
+    lastOneMatters: false,
+    // Dueño y admin ya la cambiaban: nadie pierde la capacidad. La casilla es
+    // para dársela a una persona concreta sin subirla a admin (owner,
+    // 13-11-2026: «¿cómo habilito para agregar celulares a la lista negra a
+    // Diana?»; eligió la casilla, MOM §41.3).
+    withAdminRole: true,
+    // Frenar a una clienta en las dos tiendas: lo concede el dueño.
+    ownerOnly: true,
+  },
+  {
     permission: "automations.manage",
     label: PERMISSION_LABEL["automations.manage"],
     description: PERMISSION_HELP["automations.manage"],
@@ -608,6 +657,7 @@ const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
     "shalom.register_payment",
     "shalom.reveal_pickup_key",
     "aliclik.create_guide",
+    "gf_courier.create_guide",
     "tanders.create_guide",
     "shalom.create_guide",
     // Gestionar la novedad es gestión de venta: la misma persona que llamaría a
@@ -664,6 +714,7 @@ export const FUNCTIONAL_ROLES = [
       "shalom.register_payment",
       "shalom.reveal_pickup_key",
       "aliclik.create_guide",
+      "gf_courier.create_guide",
       "tanders.create_guide",
       "shalom.create_guide",
       "swayp.solve_novelty",
@@ -677,8 +728,10 @@ export const FUNCTIONAL_ROLES = [
   {
     role: "almacen",
     label: "Almacén",
-    description: "Para quien arma paquetes: los deja listos, recibe devoluciones y las reingresa al inventario.",
-    permissions: ["master.edit", "warehouse.prepare", "closure.return", "closure.inventory"],
+    description: "Para quien arma paquetes: los deja listos, recibe devoluciones, las reingresa y cuenta las importaciones que llegan.",
+    // «Recepción de compras» (MOM §45.11): cuenta lo que llegó de una
+    // importación y sube las fotos, sin ver montos ni editar la compra.
+    permissions: ["master.edit", "warehouse.prepare", "closure.return", "closure.inventory", "purchases.receive"],
   },
   {
     role: "despacho",
@@ -703,6 +756,7 @@ export const FUNCTIONAL_ROLES = [
       "stock.manage",
       "closure.return",
       "aliclik.create_guide",
+      "gf_courier.create_guide",
       "tanders.create_guide",
       "shalom.create_guide",
     ],
@@ -736,7 +790,7 @@ export const FUNCTIONAL_ROLES = [
   {
     role: "administracion",
     label: "Administración",
-    description: "Para quien administra: equipo, tiendas, costos, stock, catálogo de Aliclik, anuncios, hojas y reportes.",
+    description: "Para quien administra: equipo, tiendas, costos, compras, stock, catálogo de Aliclik, anuncios, hojas y reportes.",
     permissions: [
       "master.edit",
       "master.import_report",
@@ -744,6 +798,9 @@ export const FUNCTIONAL_ROLES = [
       "stores.manage",
       "stock.manage",
       "costs.manage",
+      // Compras (MOM §45): con los costos, que es donde termina su costo aterrizado.
+      "purchases.manage",
+      "purchases.money",
       "aliclik.manage_catalog",
       "sheets.manage",
       "riders.manage",

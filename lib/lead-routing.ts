@@ -9,7 +9,12 @@ export const LEAD_WORK_BLOCKS = [
 export type LeadWorkBlock = typeof LEAD_WORK_BLOCKS[number]["key"];
 export const PRINCIPAL_BLOCKS: LeadWorkBlock[] = LEAD_WORK_BLOCKS.slice(0, 4).map(b => b.key);
 import { validStoreWeights, type StoreWeights } from "@/lib/lead-store-distribution";
-export interface LeadBlockAssignment { userId: string; blocks: LeadWorkBlock[]; backup: boolean; manualTake?: boolean; storeWeights?: StoreWeights | null }
+export interface LeadBlockAssignment { userId: string; blocks: LeadWorkBlock[]; backup: boolean; manualTake?: boolean; storeWeights?: StoreWeights | null; dailyCapacity?: number | null }
+
+/** «Leads por día» válido: entero de 1 a 1000, o null (la cola completa). */
+export function validDailyCapacity(v: unknown): v is number | null {
+  return v === null || (Number.isInteger(v) && Number(v) >= 1 && Number(v) <= 1000);
+}
 export interface LeadRoutingSettings {
   enabled: boolean;
   freshHours: number;
@@ -32,10 +37,12 @@ export function parseLeadRouting(input: unknown): Omit<LeadRoutingSettings, "rev
     if (typeof a.userId !== "string" || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(a.userId) || seen.has(a.userId) || typeof a.backup !== "boolean" || !Array.isArray(a.blocks) || !a.blocks.every(isLeadWorkBlock) || new Set(a.blocks).size !== a.blocks.length) return null;
     if (a.manualTake !== undefined && typeof a.manualTake !== "boolean") return null;
     if (a.storeWeights !== undefined && a.storeWeights !== null && !validStoreWeights(a.storeWeights)) return null;
+    if (a.dailyCapacity !== undefined && !validDailyCapacity(a.dailyCapacity)) return null;
     seen.add(a.userId);
     assignments.push({ userId: a.userId, blocks: a.blocks as LeadWorkBlock[], backup: a.backup,
       ...(a.manualTake === undefined ? {} : { manualTake: a.manualTake }),
-      ...(a.storeWeights === undefined ? {} : { storeWeights: a.storeWeights as StoreWeights | null }) });
+      ...(a.storeWeights === undefined ? {} : { storeWeights: a.storeWeights as StoreWeights | null }),
+      ...(a.dailyCapacity === undefined ? {} : { dailyCapacity: a.dailyCapacity as number | null }) });
   }
   return { enabled: x.enabled, freshHours: Number(x.freshHours), assignments };
 }

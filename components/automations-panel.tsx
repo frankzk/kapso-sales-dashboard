@@ -41,6 +41,7 @@ import {
   storeSettingsHref,
   CHATBY_ASK_KEY,
   CHATBY_HISTORY_KEY,
+  GF_AUTO_GUIDE_KEY,
   type AutomationEffect,
   type AutomationEntry,
   type AutomationGroup,
@@ -48,6 +49,7 @@ import {
 import type { AutomationsOrgView, OrgSwitchView, RetryChatbyAskView, RetryGeocodeView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
 import type { ApproxReportRow, ChatbyApproxView } from "@/lib/chatby-approx-server";
 import type { ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
+import type { GfAutoGuideView, GfAutoLogView } from "@/lib/gf-auto-guide-server";
 import {
   APPROX_MODE_LABEL,
   APPROX_NEAR_METERS,
@@ -91,6 +93,7 @@ import {
   setChatbyApproxMode,
   setChatbyAskMode,
   setChatbyHistoryMode,
+  setGfAutoGuideMode,
   setOrgAutomation,
   setRetryChatbyAsk,
   setRetryDailyCap,
@@ -146,6 +149,7 @@ const OUTCOME_TONE: Partial<Record<RetryOutcome, BadgeTone>> = {
 
 const groupId = (key: AutomationGroup) => `grupo-${key}`;
 const APPROX_TEST_ID = "prueba-ubicacion-aproximada";
+const GF_AUTO_LOG_ID = "guia-gf-hoy-y-ayer";
 
 const INDEX: IndexGroup[] = [
   {
@@ -174,6 +178,8 @@ const INDEX: IndexGroup[] = [
       { id: groupId(g.key), label: g.title },
       // La prueba de la ubicación aproximada va con la Confirmación (0316).
       ...(g.key === "confirmacion" ? [{ id: APPROX_TEST_ID, label: "Prueba de ubicación aproximada" }] : []),
+      // Lo que hizo la guía GF automática va con la Logística Lima (0345).
+      ...(g.key === "logistica_lima" ? [{ id: GF_AUTO_LOG_ID, label: "Guía GF: hoy y ayer" }] : []),
     ]),
   },
   { title: "Historial", items: [{ id: "ultimos-cambios", label: "Últimos cambios" }] },
@@ -1551,8 +1557,10 @@ function groupBadge(entries: AutomationEntry[], org: AutomationsOrgView): ReactN
     e.control.kind === "org_table"
       ? org.org[e.key]?.state === "on" && org.org[e.key]?.requiresOn !== false
       : e.control.kind === "org_mode"
-        ? (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : e.key === CHATBY_HISTORY_KEY ? org.chatbyHistory.mode : org.chatbyApprox.mode) ===
-          "activo"
+        ? e.key === GF_AUTO_GUIDE_KEY
+          ? org.gfAutoGuide.mode === "activo" && !org.gfAutoGuide.blocker
+          : (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : e.key === CHATBY_HISTORY_KEY ? org.chatbyHistory.mode : org.chatbyApprox.mode) ===
+            "activo"
         : (org.store?.[e.key] ?? []).some((s) => s.on && s.requiresOn),
   ).length;
   return <Badge tone={lit ? "ok" : "neutral"}>{lit ? `${lit} de ${switchable.length} encendidas` : "Todas apagadas"}</Badge>;
@@ -1576,6 +1584,8 @@ function CatalogSection({
             <OrgSwitchRow key={entry.key} entry={entry} orgId={org.orgId} view={org.org[entry.key]} writable={writable} />
           ) : entry.control.kind === "store_column" ? (
             <StoreSwitchRow key={entry.key} entry={entry} views={org.store?.[entry.key] ?? null} writable={writable} />
+          ) : entry.control.kind === "org_mode" && entry.key === GF_AUTO_GUIDE_KEY ? (
+            <GfAutoGuideRow key={entry.key} entry={entry} orgId={org.orgId} view={org.gfAutoGuide} stores={org.stores} writable={writable} />
           ) : entry.control.kind === "org_mode" && entry.key === CHATBY_HISTORY_KEY ? (
             <AskModeRow
               key={entry.key}
@@ -1596,6 +1606,7 @@ function CatalogSection({
         )}
       </div>
       {group.key === "confirmacion" && <ApproxTestCard view={org.chatbyApprox} />}
+      {group.key === "logistica_lima" && <GfAutoLogCard view={org.gfAutoGuide} />}
     </SettingsSection>
   );
 }
@@ -1934,6 +1945,135 @@ function AskModeRow({
       <div className="mt-1.5">
         <RowStatus pending={pending} status={status} blocked={blocked} />
       </div>
+    </div>
+  );
+}
+
+// ── Guía GF automática (0345, MOM §29.17) ───────────────────────────────────
+
+const GF_ACTIVE_CONFIRM =
+  "¿Poner en Activo «Guía GF automática»? A las 9:00, 10:00 y 11:00 de Lima, Kapta creará en GF Courier las guías de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha, sin que nadie las apruebe. Antes de las 9:00, lo que vaya por Aliclik necesita su guía creada.";
+
+/**
+ * Apagado / Simulación / Activo de la guía GF automática. Activo pide
+ * confirmación (crea guías) y no se deja guardar sin la llave del servidor ni sin
+ * una tienda con GF Courier por API (la acción lo vuelve a mirar). Si ya estaba
+ * en Activo cuando faltó eso, la fila dice que no corre.
+ */
+function GfAutoGuideRow({
+  entry,
+  orgId,
+  view,
+  stores,
+  writable,
+}: {
+  entry: AutomationEntry;
+  orgId: string;
+  view: GfAutoGuideView;
+  stores: { id: string; name: string }[];
+  writable: boolean;
+}) {
+  const id = useId();
+  const [mode, setMode] = useState<RetryMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available;
+  const blocked = !view.available
+    ? "Aún no está instalada en la base de datos: funciona como Apagado."
+    : view.blocker
+      ? mode === "activo"
+        ? `Está en Activo, pero no corre. ${view.blocker}`
+        : `Activo no se puede elegir. ${view.blocker}`
+      : null;
+
+  const change = (next: RetryMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (next === "activo" && !window.confirm(GF_ACTIVE_CONFIRM)) return false;
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setGfAutoGuideMode(orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  return (
+    <div className={ROW}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 sm:flex-1">
+          <EntryHead entry={entry} nameId={`${id}-name`} descId={`${id}-desc`} />
+          <p className={cn(HELP, "mt-1")}>
+            {view.stores.length ? `Tiendas con GF Courier por API: ${view.stores.join(", ")}.` : "Ninguna tienda tiene GF Courier por API habilitado."}{" "}
+            <a href={`#${GF_AUTO_LOG_ID}`} className={LINK}>
+              Ver hoy y ayer
+            </a>
+          </p>
+          <EntryLinks entry={entry} stores={stores} />
+        </div>
+        <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+      </div>
+      <div className="mt-1.5">
+        <RowStatus pending={pending} status={status} blocked={blocked} />
+      </div>
+    </div>
+  );
+}
+
+const GF_OUTCOME_TONE: Record<NonNullable<GfAutoLogView["outcome"]>, BadgeTone> = {
+  simulada: "info",
+  creada: "ok",
+  fallo: "crit",
+  en_curso: "warn",
+};
+
+/** «Hoy y ayer» de la guía GF automática: lo que creó (Activo) o habría creado (Simulación). */
+function GfAutoLogCard({ view }: { view: GfAutoGuideView }) {
+  const rows = view.log;
+  return (
+    <div id={GF_AUTO_LOG_ID} className={cn(CARD, "scroll-mt-20 xl:scroll-mt-6")}>
+      <CardHeader
+        title="Guía GF automática: hoy y ayer"
+        description="Cada pedido que entró a una pasada de la mañana, con lo que hizo en Activo o lo que habría hecho en Simulación. La última pasada del día manda."
+      />
+      {rows.length === 0 ? (
+        <p className={cn(ROW, "text-sm text-ink-500")}>
+          {view.available && view.mode === "apagado"
+            ? "Está Apagada. Ponla en Simulación para ver qué guías habría creado, sin crear nada."
+            : "Hoy y ayer no hubo pedidos en sus pasadas."}
+        </p>
+      ) : (
+        <ul className="max-h-[60vh] divide-y divide-line overflow-y-auto">
+          {rows.map((r) => (
+            <li key={r.id} className={cn(ROW, "py-3")}>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <Link href={`/dashboard/pedidos?abrir=${r.orderId}`} className={cn(LINK, "font-semibold")}>
+                  {r.orderName}
+                </Link>
+                <ModeBadge mode={r.mode} />
+                <Badge tone={r.outcome ? GF_OUTCOME_TONE[r.outcome] : "neutral"} wrap>
+                  {r.outcomeLabel}
+                </Badge>
+              </div>
+              {r.detail && <p className={cn(HELP, "mt-0.5 max-w-[80ch]")}>{r.detail}</p>}
+              <p className="mt-0.5 text-xs tabular-nums text-ink-500">
+                {r.day === "hoy" ? "Hoy" : "Ayer"} · {r.at}
+                {r.guideCode ? ` · Guía ${r.guideCode}` : ""}
+                {r.storeName ? ` · ${r.storeName}` : ""}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

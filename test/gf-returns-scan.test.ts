@@ -3,7 +3,7 @@
 // Grupo GF se recibe como en Despacho del día y el pedido queda por asignar.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { gfReceptionOutcome, gfReturnDecision } from "@/lib/gf-returns-scan";
+import { gfReadyScanHint, gfReceptionOutcome, gfReturnDecision } from "@/lib/gf-returns-scan";
 
 const NO_ENTREGADO = { riderName: "Yhoni", routeDate: "2026-10-04", stopStatus: "no_entregado" };
 
@@ -52,6 +52,15 @@ describe("gfReturnDecision", () => {
     // Vivo y en la empresa: el aviso de siempre, no el de inventario.
     expect(gfReturnDecision("KP1-S01", { box: null, custodyState: "empresa", receivedInOffice: true, saleEnded: true })).toMatchObject({ kind: "aviso" });
     expect(gfReturnDecision("KP1-S01", { box: null, custodyState: "empresa", receivedInOffice: true, saleEnded: true })).not.toHaveProperty("toInventory");
+  });
+});
+
+describe("gfReadyScanHint: la caja del motorizado escaneada en Armar (13-11-2026)", () => {
+  it("manda a Devoluciones y pide el reporte «No entregado»", () => {
+    const msg = gfReadyScanHint("KP201841-S01");
+    expect(msg).toContain("KP201841-S01 está con el motorizado de Grupo GF");
+    expect(msg).toContain("recíbelo en Devoluciones");
+    expect(msg).toContain("«No entregado»");
   });
 });
 

@@ -1,14 +1,15 @@
 "use client";
 
 // La mesa de ruta de la ficha del pedido, en el mundo de operación (DESIGN.md):
-// una sección con su título, los bloqueos y avisos como avisos de página, y una
-// tarjeta por modalidad. La sugerida lleva el anillo azul y el botón principal.
+// una sección con su título, los bloqueos y avisos como avisos de página, la
+// modalidad sugerida destacada sola (anillo azul, chapa y botón principal) y,
+// debajo, «Otras opciones» en una lista de filas (13-11-2026, owner eligió «B»).
 
 import { useId, useState } from "react";
 import { cn } from "@/components/ui";
 import { GuideNumber } from "@/components/guide-number";
 import { IconChevronDown } from "@/components/icons";
-import { Badge, Banner, OpsButton, SectionHead } from "@/components/ops-ui";
+import { Badge, Banner, FIELD_BOX, OpsButton, SectionHead } from "@/components/ops-ui";
 import { AliclikOutlookLadder } from "@/components/aliclik-outlook";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { shipmentIsReturning, shipmentStateLabel } from "@/lib/order-status";
@@ -20,13 +21,12 @@ import type {
   RouteDeskGate,
 } from "@/lib/order-route-plan";
 
-// Fondo y anillo por disponibilidad. La sugerida cambia el anillo por el azul
-// de 2 px EN LUGAR de este: `cn` no resuelve conflictos y `ring-line` va
-// detrás de `ring-brand-600` en el CSS, así que sumarlos dejaba el gris.
-const STATUS_TONE = {
-  available: { bg: "bg-white", ring: "ring-1 ring-inset ring-line" },
-  warning: { bg: "bg-warn-wash", ring: "ring-1 ring-inset ring-warn-bg" },
-  blocked: { bg: "bg-wash", ring: "ring-1 ring-inset ring-line" },
+// El fondo de la fila por disponibilidad. La sugerida no es una fila: va sola,
+// arriba, con su anillo, su chapa «Sugerido» y el botón principal.
+const ROW_TONE = {
+  available: "",
+  warning: "bg-warn-wash",
+  blocked: "bg-wash",
 } as const;
 
 const ACTION_LABEL: Record<RouteAction, string> = {
@@ -34,8 +34,19 @@ const ACTION_LABEL: Record<RouteAction, string> = {
   swayp: "Gestionar Swayp",
   shalom: "Abrir Shalom",
   tanders: "Crear en Tanders",
+  gf_courier: "Crear guía en GF Courier",
   manual: "Crear salida",
 };
+
+/** Lo que devuelven crear y anular la guía de GF Courier. */
+export interface GfCourierDeskResult {
+  notice?: string;
+  error?: string;
+  /** Distritos válidos cuando GF responde `DISTRICT_NOT_COVERED`. */
+  allowed?: unknown[];
+  /** Timeout: se reintenta con la misma clave y GF no duplica la guía. */
+  pending?: boolean;
+}
 
 export function OrderRouteDesk({
   plan,
@@ -47,6 +58,7 @@ export function OrderRouteDesk({
   aliclikOutlook,
   storeName,
   groupGf,
+  gfCourier,
 }: {
   plan: OrderRoutePlan;
   /**
@@ -82,13 +94,37 @@ export function OrderRouteDesk({
     printNew?: { onPrint: () => void; pending: boolean } | null;
     ready?: { outputCode: string | null; labelHref: string } | null;
   };
+  /**
+   * GF Courier por API (MOM §29.17). La guía se crea y se anula en su tarjeta,
+   * no en un panel aparte (owner, 15-11-2026: «debería estar ahí, junto a todas
+   * las opciones logísticas»). Crear pasa por `onSelect`, como las demás;
+   * anular pide el motivo aquí mismo.
+   */
+  gfCourier?: {
+    canCancel: boolean;
+    pending: boolean;
+    result: GfCourierDeskResult | null;
+    /** `true` si GF la anuló: la tarjeta cierra el motivo. */
+    onCancel: (reason: string) => Promise<boolean>;
+  };
 }) {
   const blockers = gate?.blockers ?? [];
   const blockedActions = new Set(gate?.blockedActions ?? []);
   const [showRare, setShowRare] = useState(false);
+  // Anular la guía GF es destructivo y poco frecuente: primero el botón, el
+  // motivo se pide solo al elegirlo.
+  const [gfCancelling, setGfCancelling] = useState(false);
+  const [gfReason, setGfReason] = useState("");
   const uid = useId();
-  // Una tarjeta por modalidad.
-  const renderTile = (route: RouteCandidate) => {
+  // La guía GF viva que se puede anular desde su tarjeta. Una que GF ya está
+  // devolviendo no se anula: el paquete viene de regreso.
+  const gfCancellable = (route: RouteCandidate) =>
+    route.key === "gf_courier" &&
+    Boolean(gfCourier?.canCancel) &&
+    Boolean(route.blockingOutput) &&
+    !shipmentIsReturning(route.blockingOutput!);
+  // Lo que decide cada modalidad, para la destacada y para las filas.
+  const stateOf = (route: RouteCandidate) => {
     // Por MODALIDAD, no por pedido: con el pedido cerrado, Tanders y
     // Shalom se niegan siempre, la salida manual solo si no se cerró por
     // una entrega fallida, y Aliclik y Swayp ni miran el estado. Ver
@@ -103,109 +139,169 @@ export function OrderRouteDesk({
     // pedido, no el permiso de Despacho GF, así que no depende de `enabled`.
     const gfPrint = route.key === "propio" && !closed && route.availability !== "blocked" ? groupGf?.printNew ?? null : null;
     const gfReady = route.key === "propio" && !gfPrint ? groupGf?.ready ?? null : null;
+    return { closed, enabled, suggested, gfPrint, gfReady };
+  };
+
+  // El cuerpo de una modalidad: cuándo sale, la salida que la bloquea, el
+  // motivo, lo de Grupo GF y la escalera de Aliclik. Igual en la destacada y en
+  // las filas: «más acotado sin ocultar la información» (owner, 13-11-2026).
+  const renderDetails = (route: RouteCandidate) => {
+    const { enabled, suggested, gfPrint, gfReady } = stateOf(route);
     return (
-      <article
-        key={route.key}
-        className={cn(
-          "flex min-h-36 flex-col rounded-lg p-4",
-          STATUS_TONE[route.availability].bg,
-          suggested ? "ring-2 ring-inset ring-brand-600" : STATUS_TONE[route.availability].ring,
-        )}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className={cn("text-sm font-semibold", route.availability === "blocked" ? "text-ink-600" : "text-ink-900")}>
-              {route.label}
-            </p>
-            <p className="mt-0.5 text-[13px] text-ink-500">{route.timing}</p>
-          </div>
-          {suggested && <Badge tone="brand">Sugerido</Badge>}
-          {route.availability === "warning" && !suggested && <Badge tone="warn">Con aviso</Badge>}
-        </div>
-        {/* Nombrar la salida que bloquea, no solo decir que existe.
-            «No disponible» a secas obliga a bajar hasta «Salidas y guías»
-            para saber de cuál se habla, y en el panel del courier hay que
-            buscarla por su número. Con el número, el código corto y el
-            estado que el courier reporta, la tarjeta ya contesta las tres
-            preguntas que uno se hace ahí mismo. */}
+      <>
+        {/* Nombrar la salida que bloquea, no solo decir que existe: número,
+            código corto y el estado que reporta el courier, en una línea. */}
         {route.blockingOutput && (
-          // Un recuadro sin anillo: la tarjeta de la modalidad ya es el
-          // marco, y otro anillo dentro sería un marco dentro de otro.
-          <div
-            className={cn(
-              "mt-3 rounded-md px-3 py-2",
-              route.availability === "warning" ? "bg-white" : "bg-wash",
-            )}
-          >
-            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
-              <span className="font-semibold text-ink-700">
-                {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
+            <span className="font-semibold text-ink-700">
+              {shipmentIsReturning(route.blockingOutput) ? "Salida en devolución" : "Salida activa"}
+            </span>
+            {route.blockingOutput.guideCode && <GuideNumber value={route.blockingOutput.guideCode} />}
+            {route.blockingOutput.shortCode && (
+              <span className="rounded bg-white px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">
+                {route.blockingOutput.shortCode}
               </span>
-              {route.blockingOutput.guideCode && (
-                <GuideNumber value={route.blockingOutput.guideCode} />
-              )}
-              {route.blockingOutput.shortCode && (
-                <span className="rounded bg-wash px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">
-                  {route.blockingOutput.shortCode}
-                </span>
-              )}
-            </p>
-            <p
-              className={cn(
-                "mt-0.5 text-xs",
-                shipmentIsReturning(route.blockingOutput) ? "font-medium text-warn-fg" : "text-ink-500",
-              )}
-            >
-              {shipmentStateLabel(route.blockingOutput)}
-            </p>
-          </div>
+            )}
+            <span className={shipmentIsReturning(route.blockingOutput) ? "font-medium text-warn-fg" : "text-ink-500"}>
+              · {shipmentStateLabel(route.blockingOutput)}
+            </span>
+            {route.key === "gf_courier" && route.blockingOutput.quotedCost != null && (
+              <span className="tabular-nums text-ink-500">· envío S/ {Number(route.blockingOutput.quotedCost).toFixed(2)}</span>
+            )}
+          </p>
         )}
-        <p className={cn("mt-3 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-500" : "text-ink-700")}>
+        <p className={cn("mt-1 text-[13px] leading-5", route.availability === "blocked" ? "text-ink-600" : "text-ink-700")}>
           {route.reason}
         </p>
         {gfPrint && (
-          <p className="mt-2 text-[13px] leading-5 text-ink-600">
+          <p className="mt-1 text-[13px] leading-5 text-ink-600">
             Primero el rótulo: crea la salida nueva, Almacén la arma desde stock y en Despacho del día se asigna al
             motorizado.
           </p>
         )}
         {gfReady && (
-          <div className="mt-3 rounded-md bg-wash px-3 py-2">
-            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
-              <span className="font-semibold text-ink-700">Salida lista</span>
-              {gfReady.outputCode && (
-                <span className="rounded bg-white px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">
-                  {gfReady.outputCode}
-                </span>
-              )}
-              <a href={gfReady.labelHref} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">
-                Reimprimir rótulo
-              </a>
-            </p>
-            <p className="mt-0.5 text-xs text-ink-500">
-              Almacén la arma; en Despacho del día se asigna al motorizado con su mismo QR.
-            </p>
-          </div>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-600">
+            <span className="font-semibold text-ink-700">Salida lista</span>
+            {gfReady.outputCode && (
+              <span className="rounded bg-white px-1.5 py-0.5 font-mono font-medium text-ink-700 ring-1 ring-inset ring-line">
+                {gfReady.outputCode}
+              </span>
+            )}
+            <a href={gfReady.labelHref} target="_blank" rel="noreferrer" className="font-medium text-brand-700 hover:underline">
+              Reimprimir rótulo
+            </a>
+            <span className="text-ink-600">· Almacén la arma; en Despacho del día se asigna al motorizado con su mismo QR.</span>
+          </p>
         )}
         {/* Antes de abrir Aliclik, lo que suele pasar con un pedido de
-            estos días. Solo si la tarjeta se puede tomar: en una
+            estos días. Solo si la modalidad se puede tomar: en una
             bloqueada o con salida activa la pregunta no está abierta. */}
         {route.action === "aliclik" && aliclikOutlook && enabled && !route.blockingOutput && (
           <AliclikOutlookLadder
             outlook={aliclikOutlook}
             storeName={storeName}
-            onWash={route.availability === "warning"}
-            className="mt-3"
+            onWash={route.availability === "warning" && !suggested}
+            bare={route.availability !== "warning" || suggested}
+            className="mt-2.5"
           />
         )}
-        <div className="flex-1" />
-        {gfPrint ? (
+        {route.key === "gf_courier" && gfCourier && renderGfCourier(route)}
+      </>
+    );
+  };
+
+  // El motivo de la anulación y lo que respondió GF, dentro de su tarjeta.
+  const renderGfCourier = (route: RouteCandidate) => {
+    if (!gfCourier) return null;
+    const { pending, result } = gfCourier;
+    return (
+      <>
+        {gfCancelling && gfCancellable(route) && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <input
+              autoFocus
+              value={gfReason}
+              onChange={(event) => setGfReason(event.target.value)}
+              placeholder="Motivo de la anulación (mínimo 5 letras)"
+              aria-label="Motivo de la anulación"
+              className={cn(FIELD_BOX, "h-9 min-w-0 flex-1 px-3 pointer-coarse:h-11")}
+            />
+            <OpsButton
+              size="sm"
+              variant="danger"
+              disabled={pending || gfReason.trim().length < 5}
+              onClick={async () => {
+                if (await gfCourier.onCancel(gfReason)) {
+                  setGfCancelling(false);
+                  setGfReason("");
+                }
+              }}
+              className="pointer-coarse:h-11"
+            >
+              {pending ? "Anulando…" : "Confirmar anulación"}
+            </OpsButton>
+            <OpsButton
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => {
+                setGfCancelling(false);
+                setGfReason("");
+              }}
+              className="pointer-coarse:h-11"
+            >
+              Cancelar
+            </OpsButton>
+          </div>
+        )}
+        {result?.notice && (
+          <p role="status" className="mt-2 text-[13px] leading-5 text-ok-fg">
+            {result.notice}
+          </p>
+        )}
+        {result?.error && (
+          <div role="alert" className="mt-2 text-[13px] leading-5 text-crit-fg">
+            <p>{result.error}</p>
+            {Array.isArray(result.allowed) && result.allowed.length > 0 && (
+              <p className="mt-0.5 text-xs">Válidos: {result.allowed.slice(0, 30).join(", ")}</p>
+            )}
+            {result.pending && (
+              <p className="mt-0.5 text-xs">
+                Vuelve a pulsar «Crear guía en GF Courier»: se reintenta con la misma clave y GF no duplica la guía.
+              </p>
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // Los botones, a la derecha en escritorio y debajo en el teléfono.
+  const renderActions = (route: RouteCandidate) => {
+    const { closed, enabled, suggested, gfPrint } = stateOf(route);
+    const gfPending = route.key === "gf_courier" && Boolean(gfCourier?.pending);
+    return (
+      <div className="flex shrink-0 flex-wrap gap-2 sm:max-w-[16rem] sm:flex-col sm:items-end">
+        {gfCancellable(route) ? (
+          // La guía GF viva se anula desde su tarjeta; el motivo se pide abajo.
+          !gfCancelling && (
+            <OpsButton
+              size="sm"
+              variant="secondary"
+              disabled={gfPending}
+              onClick={() => setGfCancelling(true)}
+              className="pointer-coarse:h-11"
+            >
+              Anular guía
+            </OpsButton>
+          )
+        ) : gfPrint ? (
           <OpsButton
             size="sm"
             variant={route.recommended ? "primary" : "secondary"}
             disabled={gfPrint.pending}
             onClick={gfPrint.onPrint}
-            className="mt-4 self-start pointer-coarse:h-11"
+            className="pointer-coarse:h-11"
           >
             Imprimir rótulo de la salida nueva
           </OpsButton>
@@ -213,11 +309,13 @@ export function OrderRouteDesk({
           <OpsButton
             size="sm"
             variant={suggested ? "primary" : "secondary"}
-            disabled={!enabled}
+            disabled={!enabled || gfPending}
             onClick={() => onSelect(route)}
-            className="mt-4 self-start pointer-coarse:h-11"
+            className="pointer-coarse:h-11"
           >
-            {closed
+            {gfPending
+              ? "Creando…"
+              : closed
               ? "Reabrir primero"
               : route.blockingOutput
               ? "Ya tiene salida activa"
@@ -236,14 +334,53 @@ export function OrderRouteDesk({
             variant="ghost"
             disabled={closed || !actionEnabled(route)}
             onClick={onRegisterShalom}
-            className="mt-2 self-start pointer-coarse:h-11"
+            className="pointer-coarse:h-11"
           >
             Ya la creé en Shalom Pro
           </OpsButton>
         )}
-      </article>
+      </div>
     );
   };
+
+  // La sugerida, sola y arriba: lo único con anillo azul en la mesa.
+  const renderFeatured = (route: RouteCandidate) => (
+    <article aria-label={`Sugerido: ${route.label}`} className="rounded-lg bg-white p-4 ring-2 ring-brand-600">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {/* Azul sólido = lo que toca, igual que «Ahora» en Situación. */}
+            <span className="inline-flex h-5 items-center rounded bg-brand-600 px-1.5 text-xs font-semibold leading-none text-white">
+              Sugerido
+            </span>
+            <h3 className="text-base font-semibold leading-6 text-ink-900">{route.label}</h3>
+            <span className="text-[13px] text-ink-600">{route.timing}</span>
+          </div>
+          {renderDetails(route)}
+        </div>
+        {renderActions(route)}
+      </div>
+    </article>
+  );
+
+  // Las demás, una fila cada una: nombre, cuándo sale, chapas y motivo.
+  const renderRow = (route: RouteCandidate) => (
+    <li key={route.key} className={cn("px-4 py-3", ROW_TONE[route.availability])}>
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <p className={cn("text-sm font-semibold", route.availability === "blocked" ? "text-ink-700" : "text-ink-900")}>
+              {route.label}
+            </p>
+            <span className="text-[13px] text-ink-600">{route.timing}</span>
+            {route.availability === "warning" && <Badge tone="warn">Con aviso</Badge>}
+          </div>
+          {renderDetails(route)}
+        </div>
+        {renderActions(route)}
+      </div>
+    </li>
+  );
 
   // Lo que casi no se usa (Axel, Urpi) va plegado al pie y nunca se sugiere
   // (09-10-2026). Se abre solo si una de esas tarjetas tiene algo que decir:
@@ -251,6 +388,9 @@ export function OrderRouteDesk({
   const main = plan.candidates.filter((route) => !route.rarelyUsed);
   const rare = plan.candidates.filter((route) => route.rarelyUsed);
   const rareOpen = showRare || rare.some((route) => Boolean(route.blockingOutput) || route.recommended);
+  // La destacada es la sugerida que se puede tomar; sin ella, todas en la lista.
+  const featured = main.find((route) => stateOf(route).suggested) ?? null;
+  const others = main.filter((route) => route !== featured);
 
   return (
     <section className="space-y-4">
@@ -302,33 +442,42 @@ export function OrderRouteDesk({
         </Banner>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">{main.map(renderTile)}</div>
+      {featured && renderFeatured(featured)}
 
-      {rare.length > 0 && (
-        <div className="-mx-4 border-t border-line px-4 pt-3 sm:-mx-5 sm:px-5">
-          <button
-            type="button"
-            onClick={() => setShowRare((open) => !open)}
-            aria-expanded={rareOpen}
-            aria-controls={`${uid}-otros`}
-            className="-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-4 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-wash pointer-coarse:min-h-11"
-          >
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold leading-5 text-ink-900">Otros couriers</span>
-              <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">
-                {rare.map((route) => route.label).join(", ")} · casi no se usan; no se sugieren.
-              </span>
-            </span>
-            <IconChevronDown
-              aria-hidden
-              className={cn("size-4 shrink-0 text-ink-500 transition-transform motion-reduce:transition-none", rareOpen && "rotate-180")}
-            />
-          </button>
-          {rareOpen && (
-            <div id={`${uid}-otros`} className="grid gap-3 pt-3 sm:grid-cols-2">
-              {rare.map(renderTile)}
-            </div>
-          )}
+      {(others.length > 0 || rare.length > 0) && (
+        <div className="space-y-2">
+          {featured && <h3 className="pt-1 text-[13px] font-semibold leading-5 text-ink-700">Otras opciones</h3>}
+          <ul className="divide-y divide-line overflow-hidden rounded-lg ring-1 ring-inset ring-line">
+            {others.map(renderRow)}
+            {/* Lo que casi no se usa, plegado como la última fila. */}
+            {rare.length > 0 && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => setShowRare((open) => !open)}
+                  aria-expanded={rareOpen}
+                  aria-controls={`${uid}-otros`}
+                  className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors hover:bg-wash pointer-coarse:min-h-11"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold leading-5 text-ink-900">Otros couriers</span>
+                    <span className="mt-0.5 block text-[13px] leading-5 text-ink-600">
+                      {rare.map((route) => route.label).join(", ")} · casi no se usan; no se sugieren.
+                    </span>
+                  </span>
+                  <IconChevronDown
+                    aria-hidden
+                    className={cn("size-4 shrink-0 text-ink-500 transition-transform motion-reduce:transition-none", rareOpen && "rotate-180")}
+                  />
+                </button>
+                {rareOpen && (
+                  <ul id={`${uid}-otros`} className="divide-y divide-line border-t border-line">
+                    {rare.map(renderRow)}
+                  </ul>
+                )}
+              </li>
+            )}
+          </ul>
         </div>
       )}
     </section>

@@ -10,7 +10,16 @@
 //     `en_destino` sin pago completo: se pide la diferencia antes de que llegue.
 //   - «Recogidos sin pago»: `recogido_sin_pago_completo` (Por cerrar): ya lo
 //     recogió y falta cobrar.
-// Los tres, solo con Shalom u Olva (`PAGO_DIFERENCIA_COURIERS`).
+// Y aparte, fuera de «Todos» (owner, 13-11-2026: «cómo saber cuáles están
+// retornando de la provincia a Lima porque el cliente nunca pagó la
+// diferencia»):
+//   - «Retornados»: `devolucion_fisica_pendiente` (Por cerrar). La agencia sacó
+//     el paquete sin recojo ni pago (el «entregado» que es el retorno, §12) y
+//     viene de vuelta; se recibe en Almacén → Devoluciones (§9.4).
+// Y la vista «Por retornar» (owner, 13-11-2026: «que te lance los urgentes por
+// llamar cuando se acercan al plazo»): los de «En agencia» que Shalom está por
+// devolver (`PAGO_DIFERENCIA_RETURN_WARN_DAYS`) u Olva por vencer.
+// Todos, solo con Shalom u Olva (`PAGO_DIFERENCIA_COURIERS`).
 //
 // Es una LECTURA: no escribe nada ni cambia etapas. La gestión se registra en
 // la ficha del pedido (comentario con foto de constancia §43, mensaje por
@@ -35,15 +44,36 @@ const GESTION_LABEL: Record<string, string> = {
   anura_call: "Llamada con Anura",
 };
 
-export type PagoDiferenciaGroup = "en_agencia" | "en_camino" | "recogido_sin_pago";
+export type PagoDiferenciaGroup = "en_agencia" | "en_camino" | "recogido_sin_pago" | "retornando";
 
+/** Los grupos por cobrar: los que suma «Todos». «Retornando» va aparte. */
 export const PAGO_DIFERENCIA_GROUPS: readonly PagoDiferenciaGroup[] = ["en_agencia", "en_camino", "recogido_sin_pago"];
 
 export const PAGO_DIFERENCIA_GROUP_LABEL: Record<PagoDiferenciaGroup, string> = {
   en_agencia: "En agencia",
   en_camino: "En camino",
   recogido_sin_pago: "Recogidos sin pago",
+  retornando: "Retornados",
 };
+
+/** Con estos días en retorno el paquete ya debería estar en Lima: buscarlo o reclamarlo. */
+export const RETORNO_OVERDUE_DAYS = 15;
+
+/**
+ * Desde cuántos días en la agencia de Shalom un pedido está «por retornar».
+ * Medido el 13-11-2026 sobre 115 retornos de Shalom: los saca a los 38 días
+ * de mediana, el 10 % antes de 29 y el 5 % antes de 19. Desde 20 hay que
+ * llamar ya; desde 30, ya casi se va.
+ */
+export const PAGO_DIFERENCIA_RETURN_WARN_DAYS = 20;
+export const PAGO_DIFERENCIA_RETURN_CRIT_DAYS = 30;
+/** Olva informa el vencimiento: por retornar si vence en estos días o ya venció. */
+export const PAGO_DIFERENCIA_OLVA_WARN_DAYS = 3;
+
+/** ¿Cuenta para lo que se cobra (la bandeja, «Todos»)? «Retornando» no. */
+export function isPagoDiferenciaCobro(group: PagoDiferenciaGroup): boolean {
+  return group !== "retornando";
+}
 
 /** A qué grupo va un pedido del Master; null si no es de la bandeja. */
 /**
@@ -62,6 +92,7 @@ export function pagoDiferenciaGroup(o: {
   if (!PAGO_DIFERENCIA_COURIERS.includes((o.current_courier ?? "").trim().toLowerCase())) return null;
   if (o.macro_substage === "pendiente_pago_diferencia") return "en_agencia";
   if (o.macro_substage === "recogido_sin_pago_completo") return "recogido_sin_pago";
+  if (o.macro_substage === "devolucion_fisica_pendiente") return "retornando";
   if (
     o.macro_operation === "agencia" &&
     (o.macro_substage === "en_transito" || o.macro_substage === "en_destino") &&
@@ -90,6 +121,10 @@ export interface PagoDiferenciaOrderInput {
   macro_since: string | null;
   province: string | null;
   district: string | null;
+  /** Los productos del pedido, sin variante (`order_master.product_titles`). */
+  product_titles?: string[] | null;
+  /** El código de la guía Shalom (sale de su salida), para el mensaje. */
+  shalom_codigo?: string | null;
 }
 
 export interface PagoDiferenciaPaymentInput {
@@ -151,6 +186,63 @@ export interface PagoDiferenciaRow {
   gestionCount: number;
   /** ¿Ya lo gestionó alguien HOY (día de Lima)? */
   gestionadoHoy: boolean;
+  /** En agencia y cerca de que la agencia lo devuelva (`porRetornar`). */
+  porRetornar: boolean;
+  /** El código de la guía Shalom, si se sabe. */
+  shalomCodigo: string | null;
+  /** Los productos, para el mensaje. */
+  products: string[];
+}
+
+/**
+ * ¿Está por retornar? En agencia, y: Shalom con `PAGO_DIFERENCIA_RETURN_WARN_DAYS`
+ * o más; Olva vencida o por vencer en `PAGO_DIFERENCIA_OLVA_WARN_DAYS`. Pura.
+ */
+export function porRetornar(
+  r: Pick<PagoDiferenciaRow, "group" | "courier" | "waitingDays" | "expiresAt">,
+  now: Date,
+): boolean {
+  if (r.group !== "en_agencia") return false;
+  const courier = (r.courier ?? "").trim().toLowerCase();
+  if (courier === "olva" && r.expiresAt) {
+    const left = Date.parse(r.expiresAt) - now.getTime();
+    if (Number.isFinite(left)) return left <= PAGO_DIFERENCIA_OLVA_WARN_DAYS * 86_400_000;
+  }
+  return (r.waitingDays ?? 0) >= PAGO_DIFERENCIA_RETURN_WARN_DAYS;
+}
+
+/** Lo que el Yape del mensaje dice: a nombre de quién y el número. */
+export const PAGO_DIFERENCIA_YAPE = { holder: "GRUPO GF SAC", phone: "930 555 309" } as const;
+
+function soles(n: number | null): string {
+  return `S/ ${(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * «Tu pedido YA LLEGÓ a la agencia» (owner, 13-11-2026: «para copiar, pegar y
+ * no digitar»), con los datos del pedido. Lo de adelanto es lo VALIDADO. Pura.
+ */
+export function agencyArrivalMessage(r: Pick<PagoDiferenciaRow, "guideCode" | "shalomCodigo" | "products" | "orderTotal" | "paidValidated" | "remaining">): string {
+  return [
+    "Hola, 👋",
+    "",
+    "Tu pedido YA LLEGÓ a la agencia y te está esperando.",
+    "",
+    `📦 Guía: ${r.guideCode ?? ""}`.trimEnd(),
+    `🔑 Código: ${r.shalomCodigo ?? ""}`.trimEnd(),
+    `🛍️ Producto: ${r.products.join(", ")}`.trimEnd(),
+    "",
+    "Resumen de pago:",
+    `💰 Monto total del pedido: ${soles(r.orderTotal)}`,
+    `✅ Adelanto recibido: ${soles(r.paidValidated)}`,
+    `💵 Saldo pendiente: ${soles(r.remaining)}`,
+    "",
+    "🙌 Te recomendamos recogerlo lo antes posible.",
+    "",
+    "Paga el saldo ahora y tu pedido queda listo para que solo pases a retirarlo.",
+    "",
+    `📲 Nuestro Yape a nombre del ${PAGO_DIFERENCIA_YAPE.holder}: ${PAGO_DIFERENCIA_YAPE.phone}`,
+  ].join("\n");
 }
 
 /** El día calendario de Lima de un instante, `AAAA-MM-DD`. */
@@ -219,7 +311,7 @@ export function buildPagoDiferenciaRows(input: {
     const gestiones = (gestionesBy.get(o.order_id) ?? []).slice().sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : -1));
     const last = gestiones[0] ?? null;
     // En agencia: desde la llegada a la sucursal; en los otros, desde que
-    // entró a su subetapa.
+    // entró a su subetapa (en Retornando, desde que salió de la agencia).
     const waitingSince = group === "en_agencia" ? (o.agency_arrived_at ?? o.macro_since) : o.macro_since;
     return [{
       orderId: o.order_id,
@@ -252,8 +344,11 @@ export function buildPagoDiferenciaRows(input: {
         : null,
       gestionCount: gestiones.length,
       gestionadoHoy: Boolean(last && limaDayOf(last.occurred_at) === today),
+      porRetornar: false,
+      shalomCodigo: o.shalom_codigo?.trim() || null,
+      products: (o.product_titles ?? []).map((t) => t.trim()).filter(Boolean),
     }];
-  });
+  }).map((r) => ({ ...r, porRetornar: porRetornar(r, input.now) }));
 
   const expiry = (r: PagoDiferenciaRow) => (r.expiresAt ? Date.parse(r.expiresAt) : Number.POSITIVE_INFINITY);
   return rows.sort(

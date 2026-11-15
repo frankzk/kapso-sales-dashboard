@@ -203,7 +203,9 @@ Reglas:
   la mesa de despacho. Hasta entonces la etiqueta visible es solo
   `pedido + consecutivo` y el rótulo dice `Por definir`.
 - La regla de repetición por modalidad se evalúa cuando el courier se conoce; el
-  máximo de cinco salidas rige siempre, porque no depende del courier.
+  máximo de cinco salidas rige siempre, porque no depende del courier. **Única
+  excepción: GF Courier por API** (owner, 15-11-2026): es la salida de Lima, una
+  guía por día de despacho, sin tope ni límite de repetición (§29.17).
 - **«Sacar con salida nueva» (12-10-2026, §29.13)** abre un consecutivo más
   mientras el motorizado todavía tiene la caja anterior: cuenta en el máximo de
   cinco. La salida reemplazada conserva su consecutivo, código, QR y rótulo
@@ -285,7 +287,8 @@ Reglas:
   mentiras: nadie la busca y el paquete sale igual.
 - El courier y la fecha son metadatos visibles; no forman parte del token QR.
 - El código de guía externa se conserva separado.
-- El límite global acordado es cinco salidas por pedido.
+- El límite global acordado es cinco salidas por pedido, salvo las guías de GF
+  Courier por API, que no tienen tope (§29.17).
 - Una salida de Aliclik puede llevar, además de su pedido, **pedidos
   acompañantes** de la misma clienta (§32). No es otra salida de ellos: es la
   misma caja, con una guía que cobra los dos, y el acompañante la hereda.
@@ -2064,6 +2067,8 @@ Ejemplos:
 | Entregado (no Agencia) sin ninguna salida ni motorizado, pagado completo a la tienda (v1.25, §6.5) | Finalizado | Entregado y cerrado |
 | Entregado (no Agencia) sin ninguna salida, sin pago completo validado | Por cerrar | Pendiente de liquidación |
 | Shopify anulado, paquete aún con courier | Por cerrar | Devolución física pendiente |
+| Venta anulada en Kapta (`legacy_shopify_sale_cancelled`) con su caja todavía afuera, con el courier o el motorizado (13-11-2026, owner, #KP141229) | Por cerrar | Devolución física pendiente |
+| Venta anulada en Kapta con una caja preparada que sigue en la empresa | Por cerrar | Salida adicional activa |
 | Shopify anulado, nunca se despachó | Finalizado | Anulado cerrado |
 | Pedido acompañante con la caja del principal aún en la empresa (§32) | Preparación | Viaja en la caja de otro pedido |
 | Pedido acompañante con la caja del principal entregada, sin liquidar (§32) | Por cerrar | Pendiente de liquidación |
@@ -2209,6 +2214,24 @@ que nadie tenga que resumirla a mano:
 - **Qué llevaba cada pedido.** Cuando el historial repite el mismo producto y la
   misma cantidad, se marca: eso no es un historial de compras variado, es el
   mismo pedido una y otra vez.
+- **También en «Información», en cualquier etapa (13-11-2026, owner: «en qué
+  parte del drawer me puedes colocar el historial de pedidos del cliente»).**
+  La ficha del pedido muestra la sección **«Historial del cliente»** bajo
+  «Pedido y cliente»: cuántos pedidos más tiene ese teléfono («Primer pedido» si
+  no tiene), el desglose por desenlace y la lista (los 5 más recientes a la
+  vista, el resto bajo «Ver los … más antiguos», hasta 50), con las mismas filas
+  de esta ficha. El número de cada pedido abre su ficha. Solo informa: no cambia
+  la regla de riesgo ni ningún estado. Se lee la primera vez que se abre la
+  pestaña (`loadCustomerHistory`) y, si «Antes de llamar» ya lo trajo, se reusa.
+  Sin teléfono no hay historial que buscar, y se dice así en vez de «sin pedidos».
+- **Y una etiqueta en el panel de Repro Lima (13-11-2026, owner: «agrega
+  también la etiqueta en el panel»).** Bajo el cliente de cada fila: **«Primer
+  pedido»** o **«3 pedidos más · 2 recibidos»** (verde si recibió alguna vez;
+  rojo, «ninguno recibido», si solo tiene devueltos o anulados). Mismo teléfono
+  (últimos 9 dígitos) y mismas tiendas de quien mira. Se pide solo para las
+  filas visibles, después de dibujar la tabla (`loadPriorOrderCounts`), para no
+  hacer lenta la página; un fallo deja la fila sin etiqueta, nunca un «Primer
+  pedido» inventado. Solo informa.
 - **Excepción: el cliente sin teléfono.** Desde el 29-jul-2026 Meta empezó a
   entregar conversaciones sin número — el cliente adoptó un *username* de
   WhatsApp y su identidad pasó a ser el **BSUID**. Fueron 0 durante 23 días y
@@ -4367,7 +4390,10 @@ entonces:
   devolución a su nombre (custodia `retorno`, evento `output_replaced`) y, al
   recibirla en oficina, se desarma y vuelve a stock: no se reutiliza ni vuelve a
   la cola. Cuenta dentro de las cinco salidas; el motivo de salida adicional lo
-  escribe el sistema.
+  escribe el sistema. **Lo mismo pasa cuando la salida nueva es una guía de
+  Aliclik** (12-11-2026, §9.5 «La guía de Aliclik deja en devolución la caja de
+  Grupo GF»): la caja anterior queda en devolución y su solicitud de Grupo GF
+  se cierra.
 - La nueva salida no debe borrar ni cerrar automáticamente la devolución física
   de la salida anterior.
 - El equipo revisa el courier anterior y el motivo antes de elegir el siguiente.
@@ -4939,6 +4965,11 @@ sin tope de antigüedad. Reglas:
           rojo no recibió nada y cuenta como error. En el teléfono, la repetida
           vibra con dos pulsos y el error con dos largos (mejor esfuerzo, una
           vez por resultado: reabrir la cámara no vuelve a vibrar).
+        - **Sonido (13-11-2026, owner).** Toda cámara de escaneo da un pitido
+          corto al leer un QR. En Devoluciones, además, un tono por resultado:
+          nueva, dos notas que suben; repetida, dos pitidos medios; error, un
+          zumbido grave; la informativa no suena (`lib/scan-sound.ts`, Web
+          Audio, volumen multimedia; mejor esfuerzo, como la vibración).
         - **«Esta tanda»** cuenta lo escaneado desde que se abrió la pantalla,
           cada lectura una vez: «Esta tanda: N recibidas · M repetidas · K con
           error · J sin devolución» (lo que es 0 no se dice, salvo las
@@ -5191,6 +5222,12 @@ GF (276 de Alexis), y 346 eran de pedidos anulados en la tienda.
   (`gfReturnDecision`, extendida en `classifyManifestScan`). **Nunca por número
   de pedido si el pedido tiene dos salidas:** pide el QR (§29.13). Un escaneo
   repetido actualiza su línea; no agrega otra.
+- **Escaneada en «Armar» por error (13-11-2026, #KP201841).** Una caja de
+  Grupo GF que sigue con el motorizado (custodia `courier`) no se arma: Armar
+  responde «{salida} está con el motorizado de Grupo GF. Si volvió, recíbelo en
+  Devoluciones (necesita su reporte «No entregado»)» (`gfReadyScanHint`), en vez
+  de «Ese paquete ya no figura en custodia de la empresa». Si la caja tiene una
+  salida hermana, sigue mandando el aviso del rótulo viejo.
 
   | La caja escaneada | Qué hace | Línea |
   | --- | --- | --- |
@@ -5395,6 +5432,63 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
 - **Se corta** al fallar ALIDRIVER, a los 7 días del primer intento, si el
   pedido se anula, si sale de «Por reprogramar Lima» o si la tienda deja un
   acuerdo en Repro Lima para ese episodio (lo acordado manda).
+- **La guía de Aliclik deja en devolución la caja de Grupo GF (12-11-2026,
+  decisión del owner: «de acuerdo»).** #KP203491: Alexis reportó KP203491-S01
+  «No entregado · no contesta» el 07-11 y todavía la tenía (custodia
+  `courier`, sin recibir en oficina) cuando el 11-11 una asesora creó desde la
+  ficha la guía del reintento, KP203491-S02 de Aliclik, armada desde stock. El
+  pedido seguía en «Por reprogramar Lima», en «Reintentos Aliclik» y en Repro
+  Lima: el «No entregado» de la S01 solo dejaba de mandar con un movimiento de
+  ESA salida, y una guía de otro courier no lo es. Desde ahora:
+  - **Al guardar la guía de Aliclik** (`createAliclikGuideFor`: el botón de la
+    ficha, «Aprobar», la pasada automática, Chatby, el día programado y el
+    agente; y el rescate de la huérfana en `/api/cron/aliclik-reconcile`),
+    `gf_replace_output_with_aliclik` (0337) busca en el mismo pedido de Lima
+    las cajas de Grupo GF que siguen con el motorizado (`propio · pendiente`,
+    custodia `courier`, sin recibir ni reemplazar) cuya última parada dice «No
+    entregado» desde antes de la guía, con cualquier motorizado y motivo. A
+    cada una, como «Sacar con salida nueva» (§29.13): custodia `retorno` y el
+    evento `output_replaced` sobre ella (con `replaced_by`/`replaced_by_code`
+    de la guía y `replaced_by_courier = aliclik`; también en `dispatch_events`
+    si está en una caja). Conserva su parada, su lugar en la caja y
+    `dispatched_at`.
+  - **Su solicitud viva de Grupo GF se cierra** (`cancelled`, con el hecho
+    `output_replaced` en la solicitud): a diferencia de «Sacar con salida
+    nueva», no pasa a la salida nueva, que no es de Grupo GF.
+  - **La parada fallida del motorizado no se toca**: sigue en su ruta y en su
+    paga, y sigue siendo el intento 1 de la cadena (si AUTOECOM también falla,
+    toca ALIDRIVER, 3 de 3). Desde ese momento no cambia de estado
+    (`delivery_stops_guard_replaced`, 0248).
+  - **El pedido sigue a la guía de Aliclik** (Preparación → Por despachar → En
+    curso) y sale de «Por reprogramar Lima», de «Reintentos Aliclik» y de Repro
+    Lima. El aviso de la guía lo dice: «KP203491-S01 sigue con Alexis: queda en
+    devolución y su solicitud de Grupo GF se cerró. Al recibirla en oficina se
+    desarma y vuelve a stock.»
+  - **Cuando el motorizado la trae**, «Recibir en oficina» (y Devoluciones, «Por
+    QR», el manifiesto de devolución) la deja `devuelto` a stock
+    (`a_stock_reemplazada`): no vuelve a «por asignar» y se registra su
+    reingreso a stock (§13).
+  - No se toca si el pedido no es de Lima, si la guía está anulada o ya
+    devuelta, si la parada no dice «No entregado» o es posterior a la guía, si
+    la caja ya se recibió o ya se reemplazó, o si la salida está en una caja
+    que no es la de su parada: eso se revisa a mano. Es idempotente; un fallo
+    no deshace la guía, que ya existe en Aliclik.
+  - **También con la guía de Aliclik ya ENTREGADA** (13-11-2026): #KP203491 lo
+    entregó Aliclik con la caja de stock mientras la S01 seguía con Alexis, y el
+    pedido quedaba en «Por cerrar · salida adicional activa». Con la S01 en
+    devolución, al recibirla va a stock y el pedido se cierra.
+  - **Lo que ya estaba así** (#KP203491 y los demás) lo arregla el barrido de la
+    0337 al aplicarla, con la misma función y la guía más antigua primero; el
+    Master de esos pedidos lo recalcula `master-reconcile`.
+- **Y la bandeja no ofrece «Aprobar» con el reintento ya en marcha
+  (13-11-2026).** Con una salida viva de otro courier (`otherLiveCourier`: la
+  guía de Aliclik sin entregar ni volver), `retryChainOf`
+  (`lib/repro-lima-access.ts`) corta la cadena aunque el pedido siga en «Por
+  reprogramar Lima»: es la segunda red para los casos que la devolución de
+  arriba no toca (caja ya recibida, en una caja que no es la de su parada,
+  revisión a mano). «Aprobar» ahí pediría una segunda guía para el mismo
+  paquete. Vale igual para la bandeja, «Aprobar», «Aprobar todos los listos» y
+  el automático; si esa guía falla, el fallo nuevo vuelve a abrir la cadena.
 - **Dónde se ve:** la primera tarjeta de Repro Lima, **«Reintentos Aliclik»**,
   con la chapa «Reintento Aliclik 2 de 3 · AUTOECOM», el intento que falló y si
   el paquete ya está en la oficina (la recepción en «Devoluciones» lo dice; los
@@ -6101,12 +6195,41 @@ Master: se calculan al leer, y el caso nunca se reescribe.
 | `falta_sacar` | Caja nueva desde stock, con la caja anterior todavía con el motorizado | «Falta: Sacar con salida nueva» |
 | `programado_vencido` | Su día pasó y no salió | «Programado para el jue 15/10 y no salió» |
 | `programado` | Programado para el día acordado | «Programado · sale jue 15/10 con Grupo GF» |
+| `salida_creada` | (13-11-2026) El pedido ya tiene una salida viva con el courier acordado (Swayp, Aliclik, Tanders, Axel), creada o rellenada desde la Mesa de ruta o registrada por el courier. No pide nada | «Salida creada · sale sáb 14/11 con Swayp» |
+| `salida_distinta` | (13-11-2026; cambia el 15-11-2026, decisión del owner: «Cuenta, con aviso») El pedido tiene una salida viva con otro courier que el acordado (también si se acordó Grupo GF). Cuenta igual que `salida_creada`: no es problema, no va primero y en Almacén se trata como `salida_creada`; la chapa solo avisa qué courier se había acordado | «Salida creada · sale sáb 14/11 con Swayp (se acordó Aliclik)» |
 
 Dónde está la caja (`boxLocation`), para la fila y para la acción de la caja:
 `con_motorizado` («Con Roy desde sáb 10/10», también si su parada todavía no
 tiene reporte), `en_oficina` (recibida: Grupo GF puede tomarla, o la devolvió
 su courier), `volviendo_courier` («Vuelve con Tanders») o `desconocida` («No
 consta dónde está la caja»).
+
+**Repro Lima lee todas las salidas vivas (13-11-2026, owner: «cablea todas
+las conexiones para que no vuelva a suceder»).** Medido ese día: los acuerdos
+«Sale sáb 14/11 con Swayp» seguían diciendo «crea la salida en la Mesa de ruta»
+con la salida de Swayp ya creada (#KP205892, #KP205878), y todo pendiente que
+nunca había fallado salía «No consta dónde está la caja» aunque su caja
+estuviera armada en oficina. Desde entonces (`liveOutputsOf`, lib/repro-lima.ts),
+de las salidas vivas que se trabajan —ni devueltas, ni la que falló, ni la
+propia reemplazada—:
+
+- la de otro courier manda sobre todo lo demás: la caja es `con_courier`
+  («Salida de Swayp en oficina · la recoge Swayp» o «La lleva Aliclik») y el
+  acuerdo pasa a `salida_creada` o `salida_distinta` (arriba), sea cual sea el
+  camino por el que nació la salida. Grupo GF no programa esa caja; Almacén la
+  pone en «Todavía fuera» cuando ya la tiene el courier. En la fila de
+  atención de un pendiente que nunca falló, `salida_creada` dice «Listo: sale
+  con Aliclik. No requiere gestión salvo que el cliente cambie algo.» en vez de
+  «confirma con el cliente la fecha y el courier». `salida_distinta` dice lo
+  mismo con el aviso del courier acordado: «Listo: sale con Aliclik (se acordó
+  Swayp). No requiere gestión salvo que el cliente cambie algo.»;
+- una propia o «por definir» en la empresa, sin transferir, es `en_oficina`
+  («En oficina»). Si nunca salió (`nuncaSalio`), Almacén no avisa «nadie
+  registró su recepción»: no hay recepción que esperar.
+
+`lima_repro_cases.box_location` admite `con_courier` (0339). Guardar un acuerdo
+con un courier cuya salida ya existe dice «la salida de Swayp ya existe» en vez
+de pedir crearla. Pruebas: `test/repro-lima-live-outputs.test.ts`.
 
 - La salida propia que está en la solicitud vigente de Grupo GF del mismo
   pedido —la que `gf_return_to_office` devuelve a `accepted` al recibirla— no
@@ -8040,6 +8163,29 @@ revoca acceso ni impide ese respaldo por falta de candidatos. El reparto por
 bloques debe estar activo; desactivado conserva prioridad. Los porcentajes se
 guardan con revisión y auditoría antes/después; omitirlos desde clientes antiguos
 conserva el valor guardado. Instalación sin cambios de asignaciones ni leads.
+
+**La lista del día: «Leads por día» (13-11-2026, decisión del owner; 0338).**
+«Una persona puede atender unos 250 leads al día; que se le asignen 250, 90 %
+Aurela y 10 % Kenku, dando prioridad a los más prioritarios», porque a Daphne
+«Por llamar» le mostraba más de 1.000 pendientes. Equipo → Leads tiene, junto a
+los porcentajes, «Leads por día» (entero 1–1000; vacío = toda la cola). Solo
+aplica a quien la tiene puesta y con el reparto por bloques activo.
+
+Con capacidad N, su «Por llamar» muestra solo N leads: de la cola ya ordenada por
+prioridad (citas vencidas primero y el puntaje de siempre) se toman los primeros
+de cada tienda según sus porcentajes (250 con 90/10 → 225 Aurela y 25 Kenku;
+cupos por parte entera y resto mayor). Si una tienda no llega a su cupo, se
+completa con los siguientes más prioritarios de las otras tiendas («completar
+con Kenku»). Sin porcentajes, los N más prioritarios. Una cabecera dice «Tu
+lista del día: N · X Aurela · Y Kenku Peru».
+
+Es una vista compartida, no una reserva: otra asesora puede tomar el mismo lead.
+Se recalcula sola: lo gestionado sale de «Por llamar» y entra el siguiente; un
+lead nuevo más prioritario entra arriba. «Siguiente» y «Guardar y siguiente»
+eligen dentro de la lista. «En seguimiento», búsqueda y los demás filtros no se
+recortan. `save_lead_routing` guarda `dailyCapacity` con revisión y auditoría
+(ausente conserva la de antes); `lead_store_distribution` la devuelve como
+`capacity`. Instalación sin cambios de asignaciones, reservas ni leads.
 
 **La reserva por cita se suelta sola (08-11-2026, decisión del owner, opción c; 0322).**
 Con el reparto activo, la asesora que agenda «volver a llamar» se queda el lead
@@ -10741,12 +10887,21 @@ opciones y los mismos textos: **Swayp ok · con stock**, **Sin stock Swayp** y
 **Fuera de cobertura**. Responde, sobre el pedido, lo que Repro responde sobre
 la guía: ¿lo puede llevar Swayp hoy?
 
-- **La regla es la de Repro**, no una propia: `evaluateFenix`. «Ok» es que la
+- **La regla es la de la guía Swayp directa (13-11-2026).** «Ok» es que la
   ciudad de destino tiene almacén Swayp (o se reparte desde uno, como Chupaca
-  desde Huancayo) y hay stock disponible del producto del pedido; «sin stock»,
-  que hay almacén pero no stock; «fuera de cobertura», que no hay almacén. Lima
-  no lleva control de cantidad, así que siempre sale «ok»: para provincia se
-  combina con el filtro Cobertura.
+  desde Huancayo), que **cada** producto del pedido tiene stock disponible ahí
+  (`evaluateDirectFenixStock`) y que **cada** uno está vinculado al catálogo de
+  Swayp (`productosSinVinculo`); «sin stock», que hay almacén pero falta stock o
+  vínculo de algún producto; «fuera de cobertura», que no hay almacén. Lima no
+  lleva control de cantidad: ahí solo el vínculo puede decir que no.
+  > ⚠️ **Hasta el 13-11-2026 era `evaluateFenix`, la de Repro Provincia**, que
+  > da «ok» si CUALQUIER producto tiene stock. #KP205044 (aceite, Cándida y
+  > PUMPKIN SEED OIL) salía en «Swayp ok · con stock» y con «Swayp lo puede
+  > llevar hoy», pero el PUMPKIN no está en Swayp y la guía no se podía crear.
+  > Desde el Master el pedido sale ENTERO, así que la pregunta es la de la
+  > ventana de guía directa. Repro Provincia (sobre guías) sigue con
+  > `evaluateFenix`. Lo leen el filtro, el «Enviar por Swayp» de la ficha
+  > (§11.11), Leads y el envío automático desde Por confirmar.
 - **El destino** es el del Master: distrito y provincia del ubigeo, o el
   departamento si falta la provincia.
 - **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**
@@ -11993,6 +12148,21 @@ Contingencia cuando la creación por API o Shalom Pro está degradada:
      listado la comprobó), como cualquier guía de Cotejar Shalom: si la muerta
      era una salida rellenada, la nueva se escribe encima de esa misma salida.
      El rastreo la pregunta en su pasada siguiente.
+     **Sin la clave de la nueva, la de la muerta se quita (13-11-2026).**
+     Cada guía de Shalom tiene su clave de recojo: la guardada era la de la
+     guía muerta y ya no sirve. #KP201792: Cotejar le vinculó la guía
+     102373533 el 10-11 sin clave, quedó la de la muerta (2912), se le dio a la
+     clienta y en la agencia le dijeron «no es la clave»; como ya había pagado
+     todo, el aviso de llegada no salió y tampoco supo la guía nueva. Medido el
+     13-11: de 39 reemplazos, ninguno trajo la clave nueva y 21 conservaban la
+     de la muerta (5 en agencia esperando la diferencia). Ahora el reemplazo
+     **borra la fila de `shalom_pickup_keys`** —nadie la muestra ni se manda
+     sola al validar— y la nota del `guide_created` lo dice; si la clienta ya
+     la tenía (`key_view`, `key_shared` o `pickup_key_shares`), agrega «La
+     clienta ya la tenía: avísale la guía y la clave nuevas.». Cotejar Shalom
+     pone la del listado en su pasada siguiente si la comprobó, o una persona
+     la registra desde Shalom Pro (`payload.clave_vieja_quitada`). Vale igual
+     para «Ya la creé en Shalom Pro» sin clave.
   4. En la línea de tiempo, un `guide_cancelled` («Guía anulada», fuente
      `shalom`) con la nota «Guía Shalom 102321353 (código HWND) no existe en
      Shalom (no encontrada en el rastreo); reemplazada por la guía 102371814
@@ -12465,6 +12635,24 @@ vincula nada: se hace al confirmar «Vincular guía externa», por el mismo cami
 
 ### Pagos
 
+- **Contra entrega pagado por adelantado: la tarjeta de Cobro en la ficha
+  (13-11-2026).** El owner: «¿cómo marco pagado un pedido de Lima, para que
+  salga con el rótulo de Pagado? Lo ideal sería subir las constancias y validar
+  los pagos». La tarjeta solo se dibujaba si algo exigía el pago (Agencia,
+  regla de riesgo, Lista negra) o si ya había un comprobante: en un pedido de
+  Lima o Provincia COD sin nada de eso no había por dónde subir la constancia.
+  Ahora un pedido contra entrega **abierto** (Lima o Provincia COD, ni
+  entregado, ni anulado, ni devuelto) la lleva siempre, en modo **opcional**
+  (`codPaymentPanel`, `lib/order-payment-panel.ts`): «Registrar un pago» y
+  «Validar», con los permisos de siempre. Cuando lo VALIDADO cubre el total
+  (`payment_state = pago_completo`), el rótulo dice **«PAGADO - NO COBRAR»**
+  (`orderFullyPaid`), la ruta del motorizado de Grupo GF dice «Pagado» y la guía
+  de Aliclik se crea sin cobro (`expectedCollectAmount`). Un rótulo ya impreso
+  no cambia solo: se reimprime. Solo la ficha: el paso de después de «Generar
+  pedido» en Leads sigue con `orderPaymentPanelFor`. **En Lima va plegada**
+  (owner: «para Lima puede quedar como plegado»), como «Cobro anticipado ·
+  Opcional»: casi todo se cobra en la puerta. Con un pago ya cargado se dibuja
+  abierta, como siempre. Provincia COD la muestra abierta.
 - **Un pedido pagado en el checkout no tiene cobro que gestionar.** Desde que
   entran pedidos con pasarela (`financial_status = 'paid'`), «ya está cobrado»
   tiene dos vías —comprobante Yape o pago web— y **no se suman**: sumarlas sería
@@ -13140,6 +13328,22 @@ registra en cada evento.
 - Retirar del manifiesto: motivo obligatorio.
 - Corrección de resultado courier: evento de corrección, nunca edición destructiva.
 - Cerrar liquidación observada: rol financiero autorizado.
+- Compras (14-11-2026, §45): **«Compras»** (`purchases.manage`) crea y edita
+  importaciones; **«Montos de compras»** (`purchases.money`) ve y carga lo que
+  cuestan (costos por unidad, costos repartidos, pagos, precios de venta,
+  tipo de cambio, proforma y comprobante). Sin «Montos» el servidor no lee ni
+  escribe esos campos. «Pasar a Costos» pide «Montos de compras» y «Editar
+  costos» (`costs.manage`). Vienen con owner y admin y con el rol
+  «Administración». Proveedores (§45.7): verlos con cualquiera de los dos;
+  crearlos, editarlos y borrarlos con «Compras»; «Comprado» solo con «Montos».
+  Reportes (§45.8): solo con «Montos de compras». El Excel (§45.9) sale sin
+  dinero para quien no tiene «Montos». «Leer con IA» (§45.10) pide «Compras»
+  (y «Montos» para la proforma); sin «Montos» la propuesta llega sin precios
+  ni cargos. **«Recepción de compras»** (`purchases.receive`, §45.11; owner,
+  admin y el rol «Almacén»): ver Compras sin montos, registrar entregas con sus
+  fotos (§45.14) y subir fotos; nada más, y ni Proveedores ni Reportes.
+  Corregir o quitar una entrega pide «Compras»; editar un costo o un pago,
+  «Compras» y «Montos de compras» (§45.3).
 - **Solo el dueño reparte poder (12-10-2026).** En **Equipo**, solo el owner
   cambia roles, invita a alguien como admin y quita a un admin. Un admin invita
   y quita vendedoras y solo lectura, y nada más. Los permisos de dinero y de
@@ -13178,7 +13382,7 @@ registra en cada evento.
   - Ningún rol trae los permisos de dinero o datos que da el dueño uno por uno
     (validar y corregir pagos, alerta de comprobante repetido, Administrar
     Grupo GF, exportar datos, boletas y facturas, anular pedidos de
-    WooCommerce), ni confirmar reembolsos. Lo
+    WooCommerce, gestionar la Lista negra), ni confirmar reembolsos. Lo
     fija una prueba.
   - Una revocación puntual sigue ganando sobre cualquier rol.
   - «Gestionar pedidos» ya **no** incluye cambiar el estado a mano
@@ -13518,6 +13722,34 @@ solo «casi».
 - **Dos imposibles se descartan**: un movimiento **posterior** a la carga del
   comprobante —nadie sube la constancia de un pago que aún no hizo— y uno que
   ya concilió otro comprobante.
+- **El recruce con los movimientos ya guardados (13-11-2026, owner: «si,
+  prepáralo»).** El cruce corría solo al llegar un reporte y con los
+  comprobantes que ya estaban cargados; uno cargado **después** de que llegó el
+  reporte de su hora no volvía a cruzarse y quedaba esperando a una persona
+  aunque el dinero estuviera en el reporte (#KP204474, adelanto de S/ 30 del
+  08-11). Ahora, cada media hora (`/api/cron/yape-rematch`, minutos 17 y 47),
+  los comprobantes «Pendiente de revisión» de los últimos 10 días se cruzan con
+  los ingresos ya guardados (`yape_statement_movements`), cuenta por cuenta,
+  con la **misma función** que la importación (`crossAndValidate`,
+  `lib/yape-statement/rematch.ts`): las mismas rejas de esta lista y el mismo
+  camino de validación, firmado por el estado de cuenta. Lo ya conciliado no se
+  vuelve a usar. Sin nada que validar no deja rastro; si valida o falla, queda
+  en el registro de «Validación de pagos» como un reporte más, con el asunto
+  «Recruce: comprobantes cargados después de su reporte».
+- **El buzón callado se avisa (owner, 14-11-2026: «si, agrégalo»).** El
+  reporte de Yape y los rótulos de Olva llegan por el mismo buzón de Outlook,
+  vía Make. Del 12-11 al 13-11 la conexión de Make con Outlook falló (502, 503
+  y 504) y Make espació sus reintentos hasta uno por día, sin avisar a nadie:
+  Kapta no tuvo un reporte de Yape del 09-11 al 13-11. Ahora
+  `/api/cron/inbox-watch` mira, a las 8:23, 13:23 y 18:23 de Lima (nunca de
+  noche), cuándo llegó lo último de cada fuente: **Yape** avisa pasadas
+  **30 horas** sin un reporte (de noche y en domingo pasan hasta 24) y **Olva**
+  pasadas **60** sin un rótulo (de sábado a lunes, hasta 52). Los recruces no
+  cuentan como correo. El aviso va al Telegram de las tiendas, una vez por chat,
+  y dice qué fuente calla desde cuándo y cómo se arregla: en Make, Connections →
+  «Outlook monono.pe (rótulos Olva)» → Reauthorize y «Run once» en el escenario.
+  Se repite en cada vuelta mientras siga callado. Sin nada recibido nunca no
+  avisa (`lib/inbox-watch.ts`).
 - **La hora leída 12 h antes.** Hasta el 04-10-2026 el lector perdía el
   «p. m.» de Yape (§12, Pagos). Al comprobante con hora de mañana se le prueba
   también la misma hora por la tarde; sigue exigiendo minuto, monto, la
@@ -18087,6 +18319,15 @@ sin devolver y otra saliendo (principio 7, §7).
     salidas. Dos clics o dos pestañas no crean dos: el segundo dice «ya salió
     con otra salida». Si la base rechaza el reemplazo, la salida nueva se borra
     y la solicitud abierta para ella también.
+- **Con una guía de Aliclik en vez de una salida de Grupo GF** (12-11-2026,
+  #KP203491; §9.5 «La guía de Aliclik deja en devolución la caja de Grupo
+  GF»): al guardar la guía, `gf_replace_output_with_aliclik` (0337) deja la
+  caja «No entregado» que el motorizado todavía tiene en devolución con la
+  misma marca (custodia `retorno` y `output_replaced`, `replaced_by_courier =
+  aliclik`), sin pasar por Despacho del día. Todo lo de abajo —la píldora «En
+  devolución», recibirla a stock, la parada que no cambia, el cuaderno que no
+  se la lleva— vale igual. Lo único distinto: su solicitud de Grupo GF **se
+  cierra** en vez de pasar a la salida nueva.
 - **La caja que vuelve** sale en la píldora **«En devolución»** de Despacho del
   día («S01 vuelve con Alexis · 3 d · sale con S02»), con su propio «Recibir en
   oficina». También la recibe «Devoluciones» (con la chapa «reemplazada · a
@@ -19100,6 +19341,172 @@ lógica es una sola para las dos pantallas (`lib/dispatch-plan.ts`).
 - **El 07-11-2026 a las 11:53** (sábado), para el lunes 09-11 salían 124
   pedidos de Lima de nuestras tiendas: 35 sin rótulo, 3 sin armar, 86 sin caja y
   0 en caja.
+
+### 29.17 GF Courier por API: reemplaza al reparto propio (decisión del owner, 14-11-2026)
+
+GF Courier pasó a ser un **sistema independiente** (gf-courier.vercel.app) con API propia. El owner decidió que
+**reemplaza al módulo interno de Grupo GF** (§29.2–§29.16) para **todas las tiendas a la vez**: GF prepara, asigna
+motorizado, entrega, liquida y lleva su inventario; Kapta crea la guía y sigue su estado, igual que con Aliclik.
+
+**Identidad.** La salida lleva `courier = "gf_courier"` y `created_via = "gf_courier_api"`; `guide_code` y
+`external_order_number` son el número de guía GF (`GF…`). No se mezcla con `courier = "propio"` del reparto interno:
+las cajas que ese módulo ya tiene en la calle se cierran con sus reglas de siempre.
+
+**Conexión por tienda** (Configuración → Conexiones → GF Courier):
+- token de la credencial de integración que emite GF para esa tienda (cifrado con `ENCRYPTION_KEY`);
+- «Probar conexión» (`GET /v1/me`, comprueba permisos) y «Conectar webhook»: acuña el secreto, lo registra en GF
+  (`POST /v1/webhooks`, eventos `order.*`) y lo guarda cifrado; nadie lo copia;
+- dos llaves para escribir: el interruptor de la tienda y `GF_COURIER_WRITE_ENABLED=true` en el servidor.
+
+**Crear la guía** (tarjeta «GF Courier» de la Mesa de ruta, ver abajo; permiso `gf_courier.create_guide`). **Cualquier pedido de la tienda**, sin importar su modalidad: decide la cobertura de GF (decisión del owner, 15-11-2026; antes solo `cod` y el panel no salía en 299 de 339 pedidos de Aurela de la semana, sin modalidad marcada). Lo ya pagado por la clienta —adelanto, diferencia o total validados, como en Aliclik— se descuenta del cobro: un pedido pagado completo viaja con cobro cero. Se envía:
+nombre separado en primera palabra y resto, teléfono, distrito en texto (o el ubigeo del territorio de WooCommerce),
+dirección, referencia, GPS, cada línea con su SKU y el total del pedido **repartido al céntimo** entre las líneas
+(si no se divide entre las unidades, el mismo SKU va en dos líneas que difieren en S/ 0.01), pagos validados de la clienta y
+`amount_to_collect = total − pagos`. Sin SKU, sin apellido o sin distrito no se envía: se dice qué falta.
+GF responde la cobertura (`DISTRICT_NOT_COVERED` con la lista válida), el stock (`OUT_OF_STOCK`, incluido el
+interruptor «Agotado» de los productos sin conteo) y los montos.
+- La intención se escribe antes del POST (`gf_order_requests`, una **en curso** por pedido). Desde la 0346 el
+  candado cuenta solo las pendientes: con la 0344 una intención enviada lo ocupaba para siempre y la guía `-S2` de un
+  pedido chocaba con «Ya hay una creación de guía GF en curso».
+- A diferencia de Aliclik, GF tiene `Idempotency-Key` (`KP-<pedido>-<external_id>`): un timeout se reintenta con la
+  misma clave y GF devuelve la misma guía; `DUPLICATE_ORDER` o `IDEMPOTENCY_CONFLICT` con guía se **vinculan**.
+- `external_id` es el nombre del pedido; una salida posterior lleva `-S2`, `-S3`…
+- Anular (`gf_courier.cancel_guide`): GF solo anula antes de preparar, sin costo; después responde con el estado.
+
+**En la Mesa de ruta (owner, 15-11-2026: «debería estar ahí, junto a todas las opciones logísticas»).** GF Courier
+es una opción más del plan de rutas (`lib/order-route-plan.ts`, `RouteKey = "gf_courier"`), no un panel aparte: el
+panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
+- Con el interruptor de la tienda encendido, un pedido de **Lima** muestra GF Courier **primero y sugerido**; detrás,
+  Aliclik y Swayp. Grupo GF deja de ofrecerse —«Tomar» ya rechaza esos pedidos— y solo aparece si el pedido conserva
+  una salida propia viva, para nombrarla.
+- Encendido pero con el servidor apagado (`GF_COURIER_WRITE_ENABLED`) o sin token: la tarjeta sale bloqueada con ese
+  motivo y la sugerencia pasa a Aliclik.
+- Con el interruptor apagado la mesa queda como antes (Grupo GF).
+- «Crear guía en GF Courier» crea la guía desde la tarjeta. La respuesta de GF —guía y costo, o el error con los
+  distritos válidos— se lee ahí mismo.
+- Una guía GF viva bloquea crear otra y la tarjeta la nombra: número, estado y envío cotizado. El botón es
+  «Anular guía», y el motivo se pide al elegirlo. Una guía que GF ya está devolviendo no se ofrece anular.
+- La guía viva se nombra también si la tienda apagó la API o si el pedido no es de Lima.
+- **Sin tope de salidas** (owner, 15-11-2026: «una guía por día, despachada por día»): cerrada la anterior (entregada,
+  anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan
+  (`canRepeatCourier`). Lo único que frena es la guía GF viva.
+
+**GF Courier → Aliclik (owner, 15-11-2026).** Si una persona decide mandar por Aliclik (AUTOECOM) un pedido que ya
+tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`aliclikOutputPolicy` → `gfToCancel`,
+`cancelGfGuideFor`).
+- **Solo mientras GF no la asignó a un motorizado.** Creada o preparada sin asignar (`pendiente` en Kapta: CREATED,
+  READY_FOR_PICKUP) se anula. Asignada (`en_ruta`: OUT_FOR_DELIVERY o después) no se crea la de Aliclik, y la mesa ya
+  lo dice en su tarjeta.
+- La anulación va después de todas las compuertas de Aliclik y justo antes de su candado, para que una compuerta no
+  deje el pedido sin guía.
+- Si GF no la anula, no se crea la de Aliclik y se muestra lo que respondió GF.
+- Si Aliclik falla después, el mensaje dice que la guía GF ya quedó anulada.
+- Con la GF por anular, la de Aliclik no pide motivo de salida adicional. La tarjeta y la cotización de Aliclik
+  avisan «Al crearla, Kapta anula la guía de GF Courier…».
+- **El automático no anula guías de nadie.** Una guía GF viva frena las guías automáticas de Aliclik (reintento de
+  Lima incluido): lo decide una persona.
+
+**No entregado: se espera a GF (owner, 15-11-2026).** Una visita fallida deja la guía GF en incidencia, que sigue
+viva. No se crea otra guía GF encima: sale con la misma si GF la reprograma, o se crea la siguiente (`-S2`) cuando GF
+la devuelva o la anule.
+
+**Estado.** El webhook firmado de GF (`/api/webhooks/gf/<storeId>`, `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
+`X-GF-Event-Id` único en `gf_webhook_events`) solo dispara una relectura de `GET /v1/orders/{guía}`; se aplica el estado
+actual con las mismas guardas que Aliclik (precedencia, intento fallido, sello único de devolución, preparación y
+custodia monotónicas). El cron `gf-reconcile` (cada 20 min) relee las guías vivas y resuelve las intenciones huérfanas.
+
+| GF | Salida en Kapta |
+| --- | --- |
+| CREATED | `pendiente` · confirmado sin preparar |
+| READY_FOR_PICKUP | `pendiente` · preparado sin despachar |
+| OUT_FOR_DELIVERY | `en_ruta` · custodia courier |
+| INCIDENT (NO_ANSWER, CUSTOMER_ABSENT, WRONG_ADDRESS) | `en_ruta` · intento de entrega |
+| INCIDENT (RESCHEDULE_REQUESTED) | `en_ruta` · reprogramado |
+| REFUSED | `en_ruta` · intento de entrega |
+| RETURNING | `en_ruta` · en proceso de retorno |
+| RETURNED (recibido en el almacén GF) | `anulado` · devuelto al origen, `returned_at` |
+| DELIVERED | `entregado` |
+| CANCELLED | `anulado` |
+| LOST y estados que GF aún no usa en COD Lima | **no se traducen**: quedan en `reported_status` para revisión |
+
+**Reparto propio.** «Tomar» y «Tomar y asignar» de Grupo GF rechazan los pedidos de una tienda con GF Courier por API
+habilitado, con el aviso de crear la guía desde el Master. Nada se borra: rutas, cotejos y liquidaciones anteriores
+conservan su historial.
+
+**Inventario.** GF exige que cada SKU exista en su catálogo. Mientras no haya conteo físico, el catálogo de cada tienda
+se carga en GF en modo **ilimitado** con el interruptor **En existencias / Agotado** (GF, migración 039).
+
+**Catálogo para GF (14-11-2026).** La fuente es el **catálogo vivo** de la tienda (WooCommerce publicado o Shopify activo,
+la misma de Envíos → Catálogo de productos). En Configuración → GF Courier, «Descargar catálogo para GF (CSV)»
+(`/api/stores/<storeId>/gf-catalog`, permiso `stores.manage`, solo lectura) baja `sku,nombre`, una fila por SKU con el
+nombre «título – variante». Ese archivo se importa en GF (Comercios → Catálogo → Importar productos). Así GF ofrece
+exactamente los SKU que la tienda vende, y cada pedido viaja con el mismo SKU.
+- Una variante **sin SKU** no se puede pedir a GF: no entra en la lista y se cuenta (`X-Gf-Without-Sku`).
+- Un SKU repetido en dos variantes entra una sola vez y se cuenta (`X-Gf-Repeated-Skus`).
+- «Comparar catálogo con GF» (misma sección, solo lectura) lee el catálogo vivo y el de la tienda en GF
+  (`GET /v1/products`) y dice qué SKU **faltan en GF** (un pedido con ellos respondería `SKU_NOT_FOUND`) y cuáles GF
+  tiene **Agotados** (`OUT_OF_STOCK`). «Solo los que faltan en GF» (`?only=missing`) descarga únicamente esos.
+- La sincronización automática Kapta → GF todavía no existe: un producto nuevo se exporta e importa, y GF no duplica
+  lo que ya tenía.
+
+#### Guía GF automática (owner, 15-11-2026)
+
+Decisión del owner: el día del despacho, en la mañana, la guía de GF Courier de los pedidos de Lima se crea sola.
+«Antes de eso, quien quiera Aliclik crea esa guía y GF ya no toma el pedido.»
+
+- **Cuándo.** Tres pasadas, a las 9:00, 10:00 y 11:00 de Lima (`/api/cron/gf-auto-guide`, `0 14,15,16 * * *` en UTC).
+  Fuera de 9:00–11:59 la pasada no crea nada (`fuera_de_horario`). Son varias y no una: un pedido que llega o se
+  programa para hoy a media mañana también entra.
+- **Qué pedidos entran.** Los que cumplen todo esto:
+  - la tienda tiene GF Courier por API habilitado (su interruptor y su token);
+  - el servidor tiene `GF_COURIER_WRITE_ENABLED`;
+  - el pedido está en Preparación · Por generar rótulo (`preparacion` / `por_generar_rotulo` en `order_master`);
+  - la operación es Lima (`classifyOperation`);
+  - `dispatch_scheduled_on` es hoy (Lima) o no tiene fecha;
+  - no tiene guía viva de ningún courier;
+  - no es un acompañante vinculado a la caja de otro pedido (§32). Cuenta aunque la caja ya no preste su estado: para
+    darle guía propia hay que desvincularlo antes (§32.1, reglas 8 y 9).
+- **Qué no entra.** No entran:
+  - Agencia ni Provincia;
+  - lo programado para otro día, también un día que ya pasó (la chapa roja «no salió» es para una persona);
+  - lo que ya tiene guía, por ejemplo la de Aliclik que alguien creó antes de las 9:00;
+  - el acompañante.
+- **Por dónde.** El mismo camino que «Crear guía en GF Courier» de la Mesa de ruta: `createGfGuideFor`
+  (`lib/gf-courier-guide.ts`). Pasa por sus compuertas: las dos llaves, ninguna guía GF viva, SKU, apellido y
+  distrito, y la intención escrita antes del POST en `gf_order_requests`. Usa la misma `Idempotency-Key`. Lo pagado
+  por la clienta se descuenta como en la tarjeta. Justo antes de crear vuelve a mirar dos cosas: si el pedido ya
+  tiene guía de cualquier courier y si tiene una creación GF pendiente.
+- **Qué queda.** La guía creada lleva su hecho `guide_registered` sin actor (lo creó el sistema), igual que la que
+  vincula `gf-reconcile`. En el registro del panel (`gf_auto_guide_log`) queda el renglón `creada` con el número `GF…`.
+- **Si falla: una alerta por ese pedido.** Falla si falta el SKU, el apellido o el distrito, o si GF responde
+  `SKU_NOT_FOUND`, `DISTRICT_NOT_COVERED` u `OUT_OF_STOCK`. Entonces:
+  - avisa por Telegram al grupo de alertas urgentes de la tienda (o, si no tiene, al del resumen diario), con el
+    pedido, la clienta, el motivo y el enlace a la ficha;
+  - deja el hecho `gf_auto_guide_failed` en el historial («Guía GF automática no creada»), con el motivo y la fecha;
+    con `DISTRICT_NOT_COVERED`, también la lista de distritos válidos de GF.
+
+  **Un intento por pedido y día**: lo que falló lo toma una persona y ese día no se vuelve a intentar. Un pedido sin
+  fecha que sigue sin poder crearse vuelve a entrar al día siguiente, y vuelve a avisar.
+- **No es un fallo y no avisa:**
+  - que el pedido ya tenga guía y el Master no lo haya recalculado: se recalcula;
+  - que otra creación GF del mismo pedido esté pendiente, sea una persona en la Mesa de ruta o un timeout (GF tiene
+    idempotencia y `gf-reconcile` lo resuelve);
+  - que sea acompañante.
+- **Tres posiciones, por organización** (Automatizaciones, grupo «Logística Lima», §40). Nace **Apagado**.
+  - **Apagado**: no hace nada.
+  - **Simulación**: dice qué guía habría creado. No crea nada afuera, no avisa y no escribe en el historial del
+    pedido. Hace las mismas lecturas que la creación hasta antes del POST y compara los SKU con el catálogo de la
+    tienda en GF (`GET /v1/products`, solo lectura), así anticipa `SKU_NOT_FOUND` y `OUT_OF_STOCK`. La cobertura del
+    distrito solo la responde GF al crear: la simulación no la sabe. Deja un renglón por pedido y día en
+    `gf_auto_guide_log` (`simulada`, o `fallo` = «No la crearía»), como los reintentos de Lima (§9.5).
+  - **Activo**: crea. Pide confirmación en el panel. No se deja elegir sin `GF_COURIER_WRITE_ENABLED` ni sin una
+    tienda con GF Courier por API y su token. Si eso falta después, el panel dice «Está en Activo, pero no corre».
+- **`?dry=1`.** El cron dice qué haría cada organización con GF Courier, esté como esté y a cualquier hora, sin crear,
+  sin escribir y sin avisar.
+
+Migración `0345_gf_auto_guide.sql` (`gf_auto_guide_settings`, `gf_auto_guide_log`). Código: `lib/gf-auto-guide.ts`
+(regla pura), `lib/gf-auto-guide-server.ts` (la pasada y la vista del panel) y `app/api/cron/gf-auto-guide/route.ts`.
+Pruebas: `test/gf-auto-guide.test.ts`.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
@@ -25330,6 +25737,15 @@ Vercel— y algunas no tenían interruptor.
     clientas con entregas» (§6.1, 0317, clave `chatby_auto_history`,
     `history_guide_mode`, `setChatbyHistoryMode`), que crea guías y confirma
     pedidos; en la pasada va antes de la pedida de 0318.
+  - **Logística Lima, con tres posiciones:** «Guía GF automática» (§29.17, 15-11-2026; 0345, clave
+    `gf_auto_guide`, `gf_auto_guide_settings.mode`, `setGfAutoGuideMode`). A las 9:00, 10:00 y 11:00 de Lima crea la
+    guía GF de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha, de las tiendas con GF Courier
+    por API. Apagado / Simulación / Activo, nace Apagado. Sin fila es Apagado y la acción la crea al cambiarla. Activo
+    pide confirmación y no se deja elegir sin `GF_COURIER_WRITE_ENABLED` ni sin una tienda con GF Courier por API y su
+    token. Si eso falta después, la fila dice «Está en Activo, pero no corre» y no cuenta entre las encendidas. La
+    fila nombra las tiendas con GF Courier por API y enlaza a sus Ajustes. Debajo está «Guía GF automática: hoy y
+    ayer» (`#guia-gf-hoy-y-ayer`), con lo que creó cada pasada o lo que habría creado en Simulación. Sin la 0345 la
+    fila se bloquea y funciona como Apagado.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
@@ -25358,7 +25774,8 @@ Migraciones `0306_automations_panel.sql`, `0308_lima_retry_geocode.sql`,
 `0316_chatby_approx_location.sql`, `0317_history_guide_auto.sql` y
 `0318_chatby_auto_ask.sql`; la de «Pedir la ubicación por WhatsApp» de los
 reintentos es `0324_lima_retry_chatby_ask.sql`; la de «Pago solo online» es
-`0326_pago_solo_online.sql`.
+`0326_pago_solo_online.sql`. La de la «Guía GF automática» es `0345_gf_auto_guide.sql`, con sus pruebas en
+`test/gf-auto-guide.test.ts`.
 Pruebas: `test/automations-catalog.test.ts`, `test/lima-retry-auto.test.ts`,
 `test/lima-retry-geocode-actions.test.ts`, `test/geocode-approx.test.ts`,
 `test/history-guide-auto.test.ts`, `test/lima-retry-chatby-ask.test.ts`.
@@ -25476,9 +25893,12 @@ de la Lista negra»** (motivo); y los sacados, que no se borran. La búsqueda po
 celular de la página contesta por las dos listas (§41.11). El motivo pide al menos 8 caracteres. **Ver** la lista puede
 cualquiera que vea pedidos de la organización (la RLS de la 0309 la deja leer a
 sus miembros); **cambiarla** pide el permiso nuevo **`prepay_list.manage`**
-(«Gestionar la lista de pago adelantado»), que dueño y admin traen por su rol y
-que no se da uno por uno. Cada acción vuelve a pedirlo en la organización y
-solo se guarda en producción.
+(«Gestionar la Lista negra»), que dueño y admin traen por su rol. Desde el
+13-11-2026 también **se da uno por uno** en Equipo → «Permisos por persona»,
+solo el dueño (owner: «¿cómo habilito para agregar celulares a la lista negra a
+Diana?»; eligió la casilla antes que subirla a admin o dárselo a todas las
+asesoras). Ningún rol por función lo trae. Cada acción vuelve a pedirlo en la
+organización y solo se guarda en producción.
 
 Una alta no se reescribe: solo se **quita**, una vez, con motivo, y queda como
 historia (un trigger de la 0309 lo impide en la base). **La baja se respeta:**
@@ -25970,7 +26390,7 @@ con «Pago total»; arriba, «Cómo se dice»). Así frena, igual que la otra li
 
 **Excepciones de Kapta** (`pago_online_exceptions`): «Exceptuar de la Lista
 negra» en el aviso de la ficha o en la búsqueda de la página, con motivo (8+ caracteres) y
-`prepay_list.manage` (dueño y admin). Kapta deja de frenarlo **al momento**
+`prepay_list.manage` (dueño, admin y quien tenga la casilla, §41.3). Kapta deja de frenarlo **al momento**
 (`pago_online_lookup` mira la excepción) y el celular **no va en el próximo
 envío** a las tiendas. Se quita en el panel, con motivo; la fila queda. El
 panel las muestra con los tres últimos dígitos y el pedido desde el que se
@@ -26525,6 +26945,49 @@ abre por defecto** (owner, 10-11-2026); cada fila dice de qué grupo es. Los
 grupos van en control segmentado, bajo las vistas de la página: «Bandeja»,
 «Cotejar Olva» y «Correos de Olva» (§12, «Dónde está»).
 
+**«Retornados» (13-11-2026).** El owner: «¿cómo saber cuáles están retornando
+de la provincia a Lima porque el cliente nunca pagó la diferencia?», y después
+«una columna de pedidos retornados y otra de pedidos por retornar». Una
+pestaña **fuera de «Todos»** y del número de «Bandeja» (ya no se cobra, se
+recibe): Shalom u Olva en `devolucion_fisica_pendiente` (Por cerrar). Son los
+que la agencia sacó sin recojo ni pago —el «entregado» que es el retorno de
+Shalom (§12), con la guía `retorno_iniciado` y custodia `retorno`— y vienen de
+vuelta; se reciben en Almacén → Devoluciones (§9.4). Cada fila dice «en retorno
+hace N días» desde que salió de la agencia (`macro_since`): ámbar desde 7 y,
+desde **15** (`RETORNO_OVERDUE_DAYS`), rojo con «Ya debería estar en Lima»:
+buscarlo en el almacén o reclamarlo al courier. Abre con el filtro «Todos».
+Medido el 13-11-2026: 126 pedidos (123 Shalom y 3 Olva); 64 llevaban 15 días o
+más, y ninguno de los 114 retornos de Shalom figuraba recibido en el almacén.
+
+**«Por retornar»: los urgentes por llamar (13-11-2026).** El owner: «que te
+lance los urgentes por llamar cuando se acercan al plazo». Una pestaña antes de
+«Retornados» con los de **En agencia** que la agencia está por devolver
+(`porRetornar`): Shalom con **20 días o más** en la agencia
+(`PAGO_DIFERENCIA_RETURN_WARN_DAYS`) u Olva **vencida o por vencer en 3 días**
+(`PAGO_DIFERENCIA_OLVA_WARN_DAYS`). Shalom no informa el plazo: medido sobre 115
+retornos, los saca a los **38 días** de mediana, el 10 % antes de 29 y el 5 %
+antes de 19. Cada fila lleva «Por retornar», o «Se devuelve pronto» desde 30
+días. Su número va en rojo en la pestaña y **se suma al globo del menú**
+«Pago de diferencia» junto con lo de Cotejar Olva (`countPorRetornar`, dos
+conteos sin filas). Siguen contando en «En agencia» y en «Todos». Medido el
+13-11-2026: 48 (21 con 30 días o más).
+
+**El orden de las pestañas (13-11-2026).** El owner: «reordena esto, está
+medio confuso». Dos bloques con su nombre, en un solo control: **Por cobrar**
+—«Todos» primero, que es la que abre, y después el viaje del paquete: En
+camino, En agencia, Recogidos sin pago— y **Retornos** —Por retornar (con su
+punto y número en rojo) y Retornados—. «Por retornar» sigue contando en En
+agencia y en Todos, pero va con los retornos porque es lo que hay que salvar
+hoy. En el teléfono, cada bloque en su propia cuadrícula.
+
+**«Copiar mensaje» (13-11-2026).** El owner: «que el mensaje se vea en este
+formato para copiar, pegar y no digitar». Cada pedido En agencia lleva el
+botón; copia el aviso «Tu pedido YA LLEGÓ a la agencia y te está esperando»
+con la guía, el código Shalom (de su salida), los productos
+(`order_master.product_titles`), el total, el adelanto recibido (lo VALIDADO),
+el saldo pendiente y el Yape a nombre del GRUPO GF SAC (930 555 309)
+(`agencyArrivalMessage`). Sin código, ese renglón queda vacío.
+
 Los ya pagados que esperan recojo no entran: no deben nada. **Solo Shalom u
 Olva** (`current_courier`, owner 10-11-2026): son los que dejan el paquete en
 una sucursal. Un pedido de Agencia que salió por Fenix desde Repro Provincia
@@ -26571,3 +27034,810 @@ Código: `lib/pago-diferencia.ts` (reglas, puro), `lib/pago-diferencia-access.ts
 (lectura), `components/pago-diferencia-tray.tsx` y
 `app/dashboard/pedidos/pago-diferencia/page.tsx`; menú «Pago de diferencia»
 debajo de «Lista negra». Pruebas: `test/pago-diferencia.test.ts`.
+
+## 45. Compras: importaciones (14-11-2026)
+
+Decisión del owner (14-11-2026): una sección **Compras** para las
+importaciones que llegan a la **bodega propia de Kapta en Lima**: qué se
+compró, a quién, cuánto costó de verdad cada unidad puesta en la bodega (costo
+aterrizado), qué se pagó, por dónde viene, qué llegó bien y qué no. La
+referencia funcional es el módulo de Miranova
+(`docs/compras/referencia-modulo-compras.md`, §3.1, §5, §6, §8, §11); se
+adapta a Kapta y **no** se copian sus fallas (§13 de la referencia).
+
+**Alcance de ahora: fases 1 a 3** de la referencia (§11): la importación
+(cabecera, productos, documentos, historial y estados), el dinero (costos
+repartidos, pagos, costo aterrizado y margen) y la recepción con sus alertas.
+Más un proveedor mínimo (nombre, país, WhatsApp, notas) que se da de alta desde
+el formulario de la importación.
+
+**Fase 4 (14-11-2026, migración 0341):** la página de **Proveedores** con sus
+estadísticas (§45.7), los **Reportes** (§45.8) y el **Excel** de cada
+importación (§45.9), con una sub-navegación Importaciones · Proveedores ·
+Reportes que solo muestra lo que la persona puede abrir.
+
+**14-11-2026, sin migración:** **«Leer con IA»** la factura comercial, la
+proforma o el packing list (§45.10), el permiso **«Recepción de compras»**
+para la bodega (§45.11) y la foto de un producto después de crearlo (§45.1).
+**No** entran todavía: seguimiento automático de la paquetera, laboratorios,
+traslados, enlace automático con el inventario ni el correo diario.
+
+**14-11-2026, migración 0342 (decisión del owner):** **cada costo y cada pago
+en su propia moneda** (USD o soles), guardado tal como se escribió, con el
+tipo de cambio de la importación para las cuentas (§45.3); la casilla
+**«Incluye IGV»** en cada costo; y «Leer con IA» toma la moneda de **cada
+cargo** del documento y deja el IGV aparte (§45.10). El caso que lo pidió: la
+factura de DHL Express Perú en soles (gastos de nacionalización S/ 37.60, aforo
+físico S/ 114.50, rectificación de la declaración aduanera S/ 189.70, cargo por
+aranceles e impuestos pagados S/ 85.45 → S/ 427.25 sin IGV; IGV S/ 76.91; total
+S/ 504.16).
+
+**14-11-2026, migración 0343 (decisiones del owner):** Kapta también compra a
+**laboratorios y maquilas de Perú, en soles** («cuando nos llegue la mercadería
+poder hacer los cruces parciales con foto y evidencia de lo que llega, y
+también subir la captura de lo que le pagamos al laboratorio»). Se agregan la
+**compra local** como un tipo de compra dentro de Compras (§45.12), las
+unidades de **cortesía** (§45.13), las **entregas parciales con evidencia** y
+el estado «Recibido parcial» (§45.14), el comprobante obligatorio en los pagos
+de una compra local (§45.12), los tres **códigos de trazabilidad** de una
+importación (§45.15), el **tratamiento del IGV** de cada costo (sin IGV,
+incluye IGV o inafecto) y **editar** un costo o un pago (§45.3).
+
+**14-11-2026, sin migración:** «Agregar producto → De las tiendas» lee el
+**catálogo vivo** de cada tienda (§45.1); **quitar** pide un segundo paso en la
+misma fila y los archivos se eligen con un botón en castellano (§45.16); la
+lista va **por páginas** con cifras contadas en la base (§45.2); y lo
+**comprado** de cada proveedor y su ranking van en una **base comparable**,
+soles si se puede (§45.7, §45.8). Siguen fuera, por decisión del owner: los
+traslados, el correo diario y la consulta automática a la paquetera.
+
+### 45.1 La importación
+
+- **Código** `IMP-<año>-<NNN>` (3 dígitos como mínimo), único por organización:
+  el mayor número del año + 1, con reintento si dos se crean a la vez. El año es
+  el de **America/Lima**, no el del servidor (§13.3 de la referencia). Una
+  compra local va en su propia serie, `LOC-<año>-<NNN>` (§45.12); las dos
+  series cuentan por separado y conviven (`IMP-2026-001` y `LOC-2026-001`).
+- **Cabecera**: proveedor, origen, los **códigos de trazabilidad** (§45.15:
+  código de la proforma invoice, orden de Alibaba y guía de envío), transporte
+  (courier, aéreo, marítimo o terrestre), paquetera, enlace de seguimiento
+  (solo `http://` o `https://`), fecha del pedido (hoy en Lima por defecto),
+  llegada estimada, llegada real y notas. Destino: siempre la bodega de Kapta
+  en Lima. Una compra local no lleva transporte, paquetera, guía ni proforma
+  (§45.12).
+- **La base es USD; cada costo y cada pago, en su propia moneda** (0342). El
+  costo del proveedor por unidad es en USD; cada costo repartido y cada pago se
+  guarda en **USD o en soles**, tal como se escribió, sin convertir al guardar
+  (§45.3). Cada importación guarda **su propio tipo de cambio**
+  (`fx_pen_per_usd`, soles por 1 USD), opcional hasta «Pasar a Costos». Con él,
+  el costo aterrizado y el margen se ven en USD y en soles; sin él, lo que
+  necesita convertir dice **«Falta el tipo de cambio»**.
+- **Productos**: nombre, SKU (opcional; sin SKU no pasa a Costos), tienda
+  (opcional; sin tienda, el costo es general de la organización), foto
+  opcional, cantidad entera de 1 a 10.000.000, **cortesía** (unidades gratis,
+  §45.13), peso por unidad y, con «Montos», costo por unidad (4 decimales:
+  USD en una importación, **soles** en una compra local, §45.12) y precio de
+  venta (S/). Un producto con entregas no se quita (§45.14).
+- **Agregar producto desde las tiendas** (14-11-2026, con «Compras»): «De las
+  tiendas» busca por nombre o SKU (sin tildes ni mayúsculas: «bóxer» =
+  «boxer») en el **catálogo vivo de cada tienda** de la organización que la
+  persona ve —el publicado de WooCommerce o el activo de Shopify, la misma
+  fuente de Envíos → «Catálogo de productos» (`loadSkuCatalogSource` +
+  `loadShopifySkuDetails`, §38.12)— y, para los SKU que no están en ningún
+  catálogo (p. ej. descontinuados), en lo conocido por el historial: los SKU de
+  Costos de productos y los vistos en pedidos (`org_shopify_products`), el
+  catálogo de «Leer con IA» (§45.10). Corrección del owner (14-11-2026, «no
+  aparece este producto»): antes salía solo del historial y un producto que
+  todavía no se vendió —«Bóxer Confort – Comodidad que se Mueve Contigo (Pack
+  de 4)», tallas 4XL/5XL/6XL, de Aurela en WooCommerce— no aparecía.
+  - Un producto del catálogo vivo es uno por **SKU y tienda**, con la tienda de
+    donde salió y el nombre «título – variante» («Default Title» no es
+    variante); al elegirlo llena nombre, SKU y esa tienda. Del historial, la
+    tienda **solo** si el SKU se vio siempre en la misma.
+  - Los pedidos de cada SKU salen de `org_shopify_products` (0 si nunca se
+    vendió); la lista va de más a menos pedidos y, a igual cifra, por nombre.
+  - Una **variante sin SKU** se muestra marcada «Sin SKU»: se puede agregar,
+    pero «Pasar a Costos» no la pasa (§45.5), y el formulario lo dice.
+  - Si el catálogo de una tienda no se puede leer, el selector lo dice («No se
+    pudo leer el catálogo de <tienda>; se muestran los productos vendidos»; a
+    medias, «… se leyó en parte; se completa con los productos vendidos»).
+  - Se pide **al abrir «Agregar producto»** (`loadImportPicker`, solo con
+    «Compras» en la organización, sin montos), no con cada vista del detalle;
+    cada tienda leída bien se guarda 5 minutos en memoria. El historial de
+    pedidos ya llega por `org_shopify_products`: no se relee `orders` por
+    tienda. Tope de **3.000** productos (los más pedidos); si se corta, se dice
+    y queda «Producto nuevo».
+  - Lo demás (cantidad, peso, costo, precio) se escribe. «Producto nuevo»
+    sigue siendo todo a mano. Se guarda con la misma acción y validaciones que
+    a mano (`addImportItem`). Código: `buildProductPicker` en
+    `lib/compras-ia.ts` (puro) y `lib/compras-catalogo.ts` (la lectura).
+- **Foto del producto** (con «Compras»): se agrega al crearlo o **después**,
+  desde el detalle («Foto», «Cambiar», «Quitar»), por la misma subida al
+  bucket (`items/`, solo JPG, PNG o WEBP, tipo y tamaño de Storage) y se ve
+  por `/api/compras/foto/<producto>`. Al cambiarla o quitarla, la anterior se
+  **borra del bucket** y queda el hecho «Foto agregada / cambiada / quitada:
+  <producto>» en el historial. Una importación cancelada no cambia fotos.
+- **Documentos** en el bucket privado `import-files`: proforma invoice,
+  factura comercial, packing list, comprobante de pago, guía (AWB / BL),
+  aduana, foto y otro. PDF, JPG, PNG, WEBP o XLSX de hasta 25 MB (las fotos,
+  solo imágenes). Tipo y tamaño se toman de Storage, no del navegador. Se
+  abren por `/api/compras/documento/<id>`, que vuelve a pedir el permiso y
+  responde con un enlace firmado de 10 minutos. **Proforma y comprobante de
+  pago** son documentos con montos: verlos, subirlos y quitarlos pide
+  «Montos de compras». La factura comercial la ve todo Compras.
+- **Checklist** de cada importación: factura comercial (hay un documento de
+  ese tipo) y tracking (hay número de guía o un documento de guía).
+
+### 45.2 Estados
+
+| Estado | Etiqueta |
+|---|---|
+| `cotizacion` | Cotización |
+| `pagado` | Pagado |
+| `en_produccion` | En producción |
+| `en_transito` | En tránsito |
+| `en_aduana` | En aduana |
+| `en_camino_bodega` | En camino a bodega |
+| `recibido_parcial` | Recibido parcial |
+| `recibido` | Recibido |
+| `ingresado` | Ingresado al inventario |
+| `cerrado` | Cerrado |
+| `cancelado` | Cancelado |
+
+- Nace en **Cotización**. Los cambios son **manuales**, a cualquier estado, con
+  nota opcional; el mismo estado con nota deja una **novedad**. Cada cambio y
+  cada nota quedan en el historial.
+- **«Recibido parcial»** (0343): llegó una parte de lo esperado y falta lo
+  demás (§45.14). Va entre «En camino a bodega» y «Recibido».
+- **Los únicos pasos automáticos** son los de las **entregas** (§45.14), y solo
+  avanzan: al registrar o corregir una entrega, si **todos** los productos
+  recibieron lo esperado (pedidas + cortesía) o más, una compra antes de
+  «Recibido» pasa a **Recibido** con la llegada = el **día de la última
+  entrega** (de Lima); si no, una que estaba antes de «Recibido parcial» pasa a
+  **Recibido parcial**. Ya Recibida (o después) o cancelada, no cambia. Quitar o
+  corregir una entrega nunca hace retroceder el estado: si hace falta, se
+  cambia a mano.
+- Los **códigos de trazabilidad** de una importación se piden para avanzar de
+  estado a mano (§45.15); las entregas no se bloquean por ellos.
+- **«Ingresado al inventario»** se marca a mano: Kapta no detecta sola la
+  entrada al stock.
+- Pestañas de la lista: **Activas** (de Cotización a Recibido parcial),
+  **Recibidas** (Recibido, Ingresado al inventario, Cerrado), **Canceladas** y
+  **Todas**. No se elimina una importación: se cancela. La lista filtra por
+  tipo (`?tipo=importacion|local`) y una compra local lleva la chapa «Local».
+- **La lista por páginas** (14-11-2026, sin migración; antes leía como mucho
+  500 y contaba sobre ellas). La pestaña, el proveedor y el tipo filtran **en
+  la base**. «Recibidas», «Canceladas» y «Todas» llegan **de a 100**, la más
+  reciente primero (`created_at` y, a igual instante, `id`), y **«Ver más»**
+  trae las siguientes desde la última mostrada (keyset, no desplazamiento: una
+  compra creada mientras tanto no repite ni salta filas; `loadMoreImports`
+  vuelve a pedir el permiso y valida el cursor). «Activas» y las píldoras de
+  excepción se leen **completas** (son las que están en curso: el resumen
+  «N activas · … en camino» y las alertas las cuentan todas). Las cifras de las
+  **tarjetas de estado**, de la píldora del tipo y de cada **proveedor** se
+  cuentan en la base (conteos), nunca sobre la página cargada; el pie dice «Se
+  muestran 100 de 340». Código: `lib/compras-list.ts` (puro),
+  `loadImportListPage`, `loadActiveImportList` y `loadImportListCounts` en
+  `lib/compras-server.ts`.
+
+### 45.3 Costo aterrizado (`landedCosts`)
+
+Igual que §6.3 de la referencia, sin redondeo interno. Cada costo se reparte
+**en su moneda** con la misma regla (0342: abajo, «Monedas»):
+
+```
+producto_i = qty_i × costo_por_unidad_i
+Para cada costo (monto > 0, tipo envío | importación | adicional, reparto):
+  reparto «a un producto» cuyo producto ya no está → por valor (con aviso)
+  base_i = por valor: qty_i × costo_por_unidad_i · por unidades: qty_i
+           por peso: qty_i × peso_por_unidad_i · a un producto: 1 si es ese, 0 si no
+  si ninguna base_i > 0 → base_i = qty_i (aviso «Faltan pesos…» o «Sin costos por unidad cargados…»)
+  parte_i = monto × base_i / Σ base
+total_i   = producto_i + envío_i + importación_i + adicional_i
+buenas_i  = contada ? max(0, recibidas_i − dañadas_i) : qty_i
+divisor_i = buenas_i > 0 ? buenas_i : qty_i
+costo por unidad_i = total_i / divisor_i   (y su desglose por unidad)
+```
+
+- Los costos se reparten sobre lo **pedido** (se pagó y se envió todo) y el
+  costo por unidad se divide entre las unidades **buenas**: lo que faltó o
+  llegó dañado lo pagan las que se pueden vender. Una línea sin ninguna buena
+  es pérdida y se muestra sobre lo pedido, con aviso.
+- **Cortesía y compra local (0343).** Las unidades de cortesía (§45.13) no
+  entran en el reparto ni suben ningún monto, pero sí en las buenas (`buenas =
+  recibidas − dañadas`; sin entregas, `pedidas + cortesía`): bajan el costo por
+  unidad. En una compra local el costo del proveedor por unidad es en **soles**
+  (`producto_i = qty_i × costo en soles`) y «por valor» compara en soles; la
+  vista en soles no necesita tipo de cambio si todo está en soles.
+- Nada se pierde ni se duplica: Σ total = Σ producto + Σ costos.
+- **Ejemplo** (el de la referencia, fijado en `test/compras.test.ts`): A = 100
+  u. × 2 USD, 0,5 kg; B = 50 u. × 12 USD, 0,2 kg. Importación 80 por valor,
+  envío 120 por peso, adicional 30 por unidades y adicional 25 a B. Costo por
+  unidad **A = 3,40** y **B = 14,30**.
+- **Quitar un producto no borra su costo «a un producto»** (la referencia lo
+  borraba en cascada sin rastro, §13.4): el costo se queda sin producto
+  (`item_id` nulo), se reparte por valor con aviso en el cálculo y queda un
+  hecho de dinero en el historial.
+- **Margen** (en soles): precio de venta − costo aterrizado por unidad **en
+  soles** (la vista en soles de abajo: los costos en soles entran tal cual);
+  % = margen ÷ precio; **margen bajo** si es menos del 20 %. Sin tipo de
+  cambio no hay margen. La ganancia esperada (Σ margen × buenas) solo se
+  muestra si todas las líneas tienen precio y hay tipo de cambio.
+- **Pagado** = Σ pagos (cada uno en su moneda, con fecha, método y
+  comprobante opcional de la misma importación); **falta pagar** = costo total
+  − pagado, si pasa de medio centavo, sin mezclar monedas (abajo).
+
+**Monedas (0342, decisión del owner del 14-11-2026).**
+
+- **Cada costo y cada pago guarda su propia moneda** (USD o PEN), tal como se
+  escribió: **no se convierte al guardar**. En la base, el monto va en la
+  columna de su moneda (`amount_usd` o `amount_pen`; la otra, nula) y
+  `currency` dice cuál (CHECK en la 0342). Una fila de antes de la 0342 es USD.
+- **El costo aterrizado se calcula en dos vistas** con el tipo de cambio de la
+  importación (`fx_pen_per_usd`):
+  - **en soles** = proveedor (USD × tipo de cambio) + costos en USD × tipo de
+    cambio + **costos en soles tal cual**, sin ida y vuelta por el dólar. Es lo
+    que lleva «Pasar a Costos» (§45.5), redondeado a 2 decimales **solo al
+    final**;
+  - **en USD** = proveedor + costos en USD + costos en soles ÷ tipo de cambio.
+- **El reparto no cambia** (por valor, unidades, peso o a un producto): «por
+  valor» sigue usando el valor del proveedor (USD) como base, sea cual sea la
+  moneda del costo.
+- **Sin tipo de cambio** se pueden guardar costos y pagos en soles, pero todo
+  lo que necesita convertir dice **«Falta el tipo de cambio»** en vez de una
+  cifra a medias: el costo aterrizado por unidad, los totales, el margen, el
+  saldo, los reportes y el Excel. Lo de cada moneda sin convertir sí se
+  muestra (p. ej. «US$ 920.00 + S/ 427.25»). Todo en USD, como antes, no lo
+  necesita para la vista en USD. «Pasar a Costos» sigue pidiendo el tipo de
+  cambio.
+- **«Pagado / Falta pagar» no mezcla monedas** (`paymentBalance`): se compara
+  en la base (USD) convirtiendo con el tipo de cambio, y se muestra también su
+  equivalente en soles. Sin tipo de cambio, solo si todo (costos y pagos) está
+  en una sola moneda —se compara en esa—; con monedas mezcladas se muestra
+  cada moneda por separado y se dice que el saldo necesita el tipo de cambio.
+- **El IGV de cada costo** (0343, decisión del owner del 14-11-2026: hay costos
+  que no llevan IGV, como el flete internacional, «inafecto»). Un selector de
+  tres opciones en «Agregar un costo» y «Editar», guardado en
+  `import_costs.igv_treatment`:
+  - **«Sin IGV (monto neto)»** (`neto`, por defecto): el monto entra tal cual
+    (lo de antes sin la casilla);
+  - **«Incluye IGV 18 %»** (`con_igv`): el monto escrito es con IGV y lo que
+    entra al costo es **monto ÷ 1,18** (`IGV_RATE` en `lib/compras.ts`),
+    **redondeado a 2 decimales** (`netOfIgv`); se guardan el monto con IGV
+    (`gross_amount`) y `includes_igv`, para que el historial y el Excel digan
+    «S/ 504.16 con IGV → S/ 427.25 sin IGV»;
+  - **«Inafecto a IGV»** (`inafecto`): el monto entra tal cual y queda dicho
+    («US$ 300.00 · inafecto a IGV»).
+  La ayuda del selector: «Las líneas de la factura ya suelen venir sin IGV.
+  Elige «Incluye IGV» solo si cargas el total con IGV, e «Inafecto» para lo que
+  no lleva IGV, como el flete internacional.» (el caso de S/ 427.25: las líneas
+  de DHL ya vienen sin IGV y se cargan «Sin IGV»). En la base, CHECK
+  `con_igv` ⇔ `includes_igv`; las filas de antes se pasaron así: con la casilla
+  → `con_igv`, sin ella → `neto`.
+- **«Editar» un costo o un pago** (0343, decisión del owner: «permíteme editar
+  los costos»; el caso: cuatro cargos de aduana de DHL cargados con tipo
+  «Envío» en vez de «Importación»). En cada fila de Costos y de Pagos, «Editar»
+  abre el mismo formulario lleno: tipo, nombre, moneda y monto, IGV, reparto y
+  producto (un costo); monto y moneda, fecha, método, comprobante y nota (un
+  pago). Las **mismas validaciones** y el **mismo permiso** que agregar
+  («Compras» y «Montos de compras»); no en una compra cancelada. Queda un hecho
+  de dinero con lo que cambió («Costo «AFORO FÍSICO»: tipo Envío →
+  Importación»); sin cambios no se guarda nada. Un pago editado conserva su
+  comprobante si no se cambia y, en una compra local, no se puede dejar sin él.
+  Todo se recalcula como siempre.
+- **En pantalla** cada monto va con su moneda («US$» o «S/») y, con tipo de
+  cambio, su equivalente en la otra en una línea secundaria. «Agregar un
+  costo» y «Registrar un pago» llevan el selector US$ / S/ junto al monto.
+
+### 45.4 Recepción y alertas (fechas de Lima)
+
+- **Recepción**: desde la 0343, por **entregas** (§45.14); los totales de cada
+  producto (recibidas, dañadas, nota) son la suma de sus entregas. Un producto
+  sin entregas está «sin contar». El resumen dice pedidas, cortesía, llegaron,
+  faltan (sobre lo esperado: pedidas + cortesía), sobran, dañadas y buenas.
+- **Atrasada**: activa, **no** cotización, con llegada estimada anterior a hoy.
+- **Avisar a la bodega**: sin marcar «Reportada», activa, **no** cotización, y
+  faltan 3 días o menos para la llegada estimada (o ya pasó). La referencia
+  contaba cotizaciones en la fila y no en el resumen (§13.1 y §13.2): aquí,
+  nunca.
+- **Sin novedades**: en tránsito, en aduana o en camino a bodega, y 7 días o
+  más (calendario de Lima) desde la última novedad (cambio de estado o nota; sin
+  ninguna, la creación).
+- **Exclusiones (0343)**: una **compra local** no tiene transporte, guía ni aviso
+  a la bodega: nunca sale en «Avisar a la bodega» ni en «Sin novedades» (que
+  miran el viaje); «Atrasada» sí (el laboratorio no entregó a tiempo). Una
+  «Recibido parcial» ya está en la bodega: tampoco pide «Avisar a la bodega».
+- **Aviso a la bodega**: un mensaje para WhatsApp a la bodega de Kapta en Lima
+  con el código, el proveedor, la guía, el enlace de seguimiento, la llegada
+  estimada (dd/mm/aaaa) y los productos con sus unidades. «Copiar mensaje»,
+  «Abrir WhatsApp» y **«Marcar como reportada»** (con quién y cuándo), que
+  también se puede quitar.
+- **Enlace de seguimiento**: el escrito a mano si es http(s); si no, con número
+  de guía, la página pública de DHL, FedEx, UPS, USPS o Aramex (nombre exacto
+  de la paquetera, sin mayúsculas); cualquier otra, 17TRACK. No hay consulta
+  automática a la paquetera.
+
+### 45.5 «Pasar a Costos»
+
+Cuando la importación está **Recibida (o después, nunca cancelada)**, **todas
+las líneas con SKU están contadas** y hay **tipo de cambio** (solo si algún
+monto está en USD: una compra local toda en soles no lo pide, §45.12) y, en una
+importación, sus **tres códigos de trazabilidad** (§45.15), quien tiene
+«Montos de compras» **y** «Editar costos» pulsa «Pasar a Costos». Por cada
+línea con SKU, Kapta registra en **Costos de productos** (§26):
+
+- costo unitario = costo aterrizado por unidad **en soles** (proveedor y costos
+  en USD × tipo de cambio, costos en soles tal cual: §45.3), **redondeado a 2
+  decimales** al final; moneda PEN;
+- la tienda de la línea (sin tienda, el costo general), el SKU, el nombre, el
+  proveedor = nombre del proveedor, el lote = el código de la importación;
+- vigente desde la **fecha de llegada** (o hoy en Lima si no tiene), con la nota
+  «Costo aterrizado IMP-…»;
+- con **la misma vigencia que Costos** (`insertProductCostPeriod`, la que usa
+  «Costos de productos»): el periodo abierto del mismo SKU y ámbito se cierra
+  el día anterior;
+- **nunca borra un costo posterior**: si Costos ya tiene un periodo abierto de
+  ese SKU y ámbito que empieza el día de la llegada o después (lo cargó una
+  persona), esa línea no se pasa, el costo de Costos queda como está y el aviso
+  dice «Costos ya tiene un costo más reciente para SKU (desde dd/mm/aaaa): no
+  se tocó; revísalo en Costos». (Costos, al cargar a mano, sí lo reemplaza:
+  `laterOpen: "replace"`.)
+
+Cada línea queda marcada (`cost_pushed_at`) y la importación lleva el hecho
+«Pasó a Costos …» en el historial. **Pasar dos veces no duplica**: una línea
+marcada no se vuelve a pasar (la marca se pone antes de escribir el costo y se
+quita si la escritura falla) y, si todas pasaron, dice «Ya se pasó a Costos».
+Una línea sin unidades buenas no se pasa (no entró nada que costear). Dos
+líneas con el mismo SKU en la misma tienda lo impiden: la segunda cerraría el
+periodo de la primera el mismo día.
+
+### 45.6 Permisos e historial
+
+- **«Compras»** (`purchases.manage`): crear y editar importaciones, productos,
+  documentos sin montos, estados, aviso a la bodega y recepción.
+- **«Montos de compras»** (`purchases.money`): ver y cargar costos por unidad,
+  precios de venta, tipo de cambio, costos repartidos, pagos y los documentos
+  con montos, y ver los hechos de dinero del historial. Sin él, el servidor
+  **no lee ni escribe** esos campos (no basta con esconderlos).
+- **«Recepción de compras»** (`purchases.receive`, §45.11): ver sin montos,
+  registrar entregas con sus fotos (§45.14) y subir fotos. Nada más. Corregir
+  o quitar una entrega pide «Compras».
+- Ver la sección pide cualquiera de los tres **en la organización** de la
+  importación (§16). Escribir dinero pide «Compras» y «Montos». «Pasar a
+  Costos» pide «Montos de compras» y «Editar costos». «Leer con IA» pide
+  «Compras» (y «Montos» para leer la proforma).
+- «Compras» y «Montos» vienen con **owner y admin** por su acceso y con el rol
+  **«Administración»**, como «Editar costos»; «Recepción de compras», con owner
+  y admin y con el rol **«Almacén»**. El menú muestra «Compras» con alguno de
+  los tres (también a una vendedora con el rol Almacén).
+- **Historial append-only** (`import_events`, principio 6): creación, estados,
+  notas, productos, documentos, dinero (también lo que cambió al editar un
+  costo o un pago), entregas (registrada, corregida con su antes, quitada),
+  aviso a la bodega y «Pasó a Costos», con quién y cuándo. No se edita ni se
+  borra.
+- Todas las tablas de la migración **0340** tienen RLS **sin políticas**: solo
+  el servidor (service role) lee y escribe, después de comprobar el permiso.
+
+### 45.7 Proveedores (`/dashboard/compras/proveedores`)
+
+- **Quién**: verla pide «Compras» **o** «Montos de compras» en la
+  organización; **crear, editar y borrar** pide «Compras» (cada acción lo vuelve
+  a pedir en la organización del proveedor). La columna «Comprado» solo con
+  «Montos de compras»: sin él, el servidor ni lee los montos.
+- **Datos del proveedor** (0341): nombre (único sin mayúsculas en la
+  organización), país / origen, **condiciones de pago**, **contacto**, WhatsApp
+  (con código de país) y **correo** (`algo@dominio.tld`), todos opcionales menos
+  el nombre, con CHECK en la base. **Renombrar** no toca las importaciones:
+  apuntan al proveedor por su id.
+- **Borrar** solo si **no tiene ninguna importación** (de cualquier estado,
+  también cancelada). Con importaciones, se edita.
+- **Tabla**: nombre y país; condiciones de pago; contacto, WhatsApp y correo;
+  **n.º de importaciones** (enlace a la lista filtrada `?proveedor=<id>`, que
+  muestra todas sus importaciones) con cuántas son compras y la fecha de la
+  última; «Tarda», «A tiempo», «Faltantes y dañadas», «Comprado» (en una base
+  comparable, abajo) y «Le compras».
+- **Borrar** pide un segundo paso en la misma fila («¿Borrar el proveedor
+  «…»? Sí, borrar · No», §45.16).
+- **Sin historial de cambios del proveedor** (pendiente): el historial
+  append-only de Compras (`import_events`) es de cada importación (lleva
+  `import_id`) y no hay otro donde anotarlo sin una migración; editar un
+  proveedor no deja hecho todavía.
+
+**Estadísticas** (`supplierStats`, `lib/compras-reportes.ts`; referencia
+§6.17). **Una compra es una importación que no es cotización ni cancelada**;
+las fechas son días de Lima y «el día del pedido» es la fecha del pedido o, sin
+ella, el día de Lima de la creación.
+
+| Columna | Definición |
+|---|---|
+| Importaciones | Todas las del proveedor (cualquier estado); debajo, cuántas son compras y el día del pedido de la más reciente. |
+| Tarda | Promedio de días del pedido a la llegada, de las **compras que llegaron** (solo diferencias ≥ 0). |
+| A tiempo | De las compras que llegaron **y tenían llegada estimada**, la parte con llegada ≤ estimada. **Rojo si < 70 %.** |
+| Faltantes y dañadas | (Σ max(0, pedidas − recibidas) + Σ dañadas) ÷ Σ pedidas, en las **líneas contadas** de las compras. **Rojo si ≥ 3 %.** |
+| Comprado | Σ costo aterrizado (§45.3) de las compras, en **una** moneda (`supplierBought`): en **soles** si todas se pueden llevar a soles (los soles tal cual y los USD × el tipo de cambio de **su** importación: un laboratorio local todo en soles no necesita tipo de cambio); si no, en **USD** si todas se pueden llevar a USD; si ninguna de las dos alcanza a todas, en la que alcanza a más (a igual cantidad, soles) y se dice cuántas quedan fuera («+N sin tipo de cambio, fuera del total»). El equivalente en la otra moneda va debajo **solo** si todas tienen con qué convertir; si no, «Sin US$: N sin tipo de cambio». Sin ninguna valorable, «Falta el tipo de cambio». Nunca mezcla monedas. Solo con «Montos de compras». |
+| Le compras | Los **3** productos con más unidades pedidas en las compras. |
+
+Un producto es el mismo entre importaciones si tiene **el mismo SKU en la misma
+tienda**; sin SKU, si tiene **el mismo nombre normalizado** (sin mayúsculas,
+tildes ni signos).
+
+La lista de importaciones acepta `?proveedor=<id>` (solo un proveedor de la
+misma organización) y lo muestra como filtro que se puede quitar.
+
+### 45.8 Reportes (`/dashboard/compras/reportes`)
+
+Solo con **«Montos de compras»** en la organización (todo es dinero); sin él la
+página no lee nada y la sub-navegación no la muestra. Todo en **USD** y, donde
+la importación tiene **su** tipo de cambio, también en soles (los totales en
+soles suman solo las que lo tienen y dicen cuántas no). Con las conversiones
+de §45.3 (0342): los totales en USD llevan los costos y pagos en soles ÷ el
+tipo de cambio de **su** importación; una importación con montos en soles y
+sin tipo de cambio **no entra en los USD** y la página dice cuántas son
+(«Falta el tipo de cambio»), igual que ya decía cuántas no entran en los
+soles. En soles, los montos en soles entran tal cual.
+
+- **Dinero en camino**: importaciones **activas que no son cotización**: costo
+  total, unidades, pagado y **falta pagar** = Σ por importación de
+  max(0, costo − pagado) (lo pagado de más en una no descuenta otra; menos de
+  medio centavo no cuenta).
+- **Comprado por mes**: 12 meses de Lima que terminan en el actual; Σ costo
+  aterrizado de las **compras** por el **mes del pedido**.
+- **Pagado por mes**: Σ pagos por el **mes del pago**, **sin los de
+  importaciones canceladas** (el pago de una cotización sí cuenta: salió dinero).
+- **Últimos 6 meses**: tabla con compras, unidades, comprado y pagado.
+- **Costo por unidad de cada producto**: un punto por **compra** con unidades
+  buenas > 0: su costo aterrizado por unidad buena (§45.3; dos líneas del mismo
+  producto en una importación: Σ costo ÷ Σ buenas). Último, anterior y **cambio =
+  último ÷ anterior − 1**: **rojo si sube más de 2 %, verde si baja más de 2 %**;
+  historial por importación con su fecha, buenas y costo.
+- **Ranking de proveedores** por monto comprado, con su parte del total, en
+  **una sola moneda para todos** (`supplierRanking`, 14-11-2026: antes solo en
+  USD, y un laboratorio local todo en soles y sin tipo de cambio no aparecía):
+  **soles** si todas las compras de todos se pueden llevar a soles; si no,
+  **USD** si todas se pueden llevar a USD (lo de antes); si ninguna de las dos
+  alcanza a todas, la que alcanza a más compras (a igual cantidad, soles). Lo
+  que queda fuera por falta del tipo de cambio se dice: cuántas compras y qué
+  proveedores no tienen ninguna comparable; en la fila, «+N sin tipo de
+  cambio». El equivalente en la otra moneda, solo para quien tiene todas sus
+  compras convertibles.
+
+Las cuentas son puras (`lib/compras-reportes.ts`) y usan `landedCosts` (§45.3),
+no una copia. Las lecturas (`loadReportImports`) van por organización, de a 1000
+filas, y sin «Montos de compras» no piden costos por unidad, tipo de cambio,
+costos ni pagos.
+
+### 45.9 El Excel de la importación
+
+Botón **Excel** en el detalle, para quien puede ver la importación:
+`/api/compras/excel/<id>`, que vuelve a pedir el permiso en la organización
+(404 si no; sin sesión, 401) y no se guarda en caché. Hojas:
+
+- **Importación**: código, estado, proveedor, origen, destino, transporte,
+  paquetera, guía y seguimiento, n.º de orden, fechas, aviso a la bodega, notas
+  y la recepción (pedidas, llegaron, faltan, sobran, dañadas, buenas, sin
+  contar).
+- **Productos**: producto, SKU, tienda, cantidad, peso, recibidas, dañadas,
+  buenas, faltan y nota de recepción.
+- Solo con **«Montos de compras»**: en Importación, tipo de cambio, costo de
+  productos, costos repartidos, costo total (y en soles), costo promedio por
+  unidad buena, pagado, falta pagar y ganancia esperada; en Productos, costo del
+  proveedor, **desglose del costo aterrizado por unidad buena** (proveedor,
+  envío, importación, adicional), costo aterrizado por unidad en USD y soles,
+  precio de venta, margen (S/ y %), costo total de la línea y si pasó a Costos;
+  y las hojas **Costos** (con las notas del cálculo) y **Pagos**. Sin el
+  permiso no hay ni columnas ni hojas de dinero.
+- Montos a 2 decimales, costos por unidad a 4 y margen % a 1 (referencia §6.18).
+- **0343**: la hoja Importación dice el tipo (importación o compra local) y,
+  en una importación, los códigos de trazabilidad («N de 3»); una compra local
+  no lleva transporte ni guía y su dinero va en soles (costo por unidad y
+  desglose en S/). Productos con **Cortesía** y **Esperadas**; «Faltan» sobre lo
+  esperado. La hoja **Entregas** (sin montos, también sin «Montos de compras»):
+  fecha, quién, producto, llegaron, dañadas, notas y cuántas fotos. En Costos,
+  la columna **IGV** con su tratamiento; en Pagos, el comprobante.
+- **Monedas (0342)**: en **Costos** y **Pagos**, cada fila con su moneda, su
+  monto y su equivalente «En USD» y «En S/» con el tipo de cambio de la
+  importación; en Costos, además, «Incluye IGV», el monto con IGV y el detalle
+  «S/ 504.16 con IGV → S/ 427.25 sin IGV». En Importación, costos y pagado por
+  moneda y los totales convertidos. Lo que necesita convertir y no tiene tipo
+  de cambio dice **«Falta el tipo de cambio»** en la celda.
+
+Código: `lib/compras.ts` (reglas, puro), `lib/compras-reportes.ts`
+(estadísticas y reportes, puro), `lib/compras-list.ts` (la lista por páginas,
+puro), `lib/compras-server.ts` (lecturas), `lib/compras-catalogo.ts` (el
+catálogo vivo del selector de productos),
+`app/dashboard/compras/` (lista, detalle, proveedores, reportes y acciones),
+`components/compras/` (con `subnav.tsx` y `suppliers.tsx`),
+`app/api/compras/` (documento, foto y Excel),
+`lib/exports/compras-importacion.ts` (el Excel),
+`lib/product-cost-periods.ts` (vigencia compartida con Costos) y migraciones
+`0340_compras_importaciones.sql`, `0341_compras_proveedores.sql` y
+`0342_compras_monedas_igv.sql` y `0343_compras_locales_entregas.sql`
+(§45.12–§45.15). Pruebas:
+`test/compras.test.ts`, `test/compras-actions.test.ts`,
+`test/compras-reportes.test.ts`, `test/compras-proveedores.test.ts`,
+`test/compras-monedas.test.ts`, `test/compras-monedas-acciones.test.ts`,
+`test/compras-locales.test.ts`, `test/compras-lista.test.ts`,
+`test/compras-picker.test.ts`, `test/compras-confirmar-archivos.test.ts`,
+`scripts/sql/compras_smoke.sql`,
+`scripts/sql/compras_proveedores_smoke.sql`,
+`scripts/sql/compras_monedas_smoke.sql` y
+`scripts/sql/compras_locales_smoke.sql`.
+
+### 45.10 «Leer con IA» (factura, proforma y packing list)
+
+Referencia §3.1 paso 2, §6.5, §6.9 y §7.2, adaptada a Kapta.
+
+- **Quién**: con **«Compras»** en la organización. La proforma es un documento
+  con montos: leerla pide además «Montos de compras». La acción vuelve a pedir
+  el permiso y la importación no puede estar cancelada.
+- **Qué**: en Documentos, una **factura comercial**, **proforma** o **packing
+  list** ya subido, en **PDF** (va a Claude como bloque `document`) o
+  **imagen** JPG, PNG o WEBP (bloque `image`). XLSX no. **Tope**: imagen hasta
+  **5 MB** (lo que acepta la API por imagen) y PDF hasta **20 MB** (en base64
+  queda bajo los 32 MB de la petición); se comprueba con el tamaño real del
+  archivo antes de gastar la llamada, y lo que no entra se dice en castellano.
+- **La llamada**: el mismo patrón que la visión de Yape y de las hojas de
+  liquidación (`lib/vision.ts`, `lib/settlement-vision.ts`): `fetch` directo,
+  `anthropic-version` 2023-06-01, la clave y el modelo de visión del entorno
+  (`ANTHROPIC_API_KEY`, `YAPE_VISION_MODEL`; sin clave en el entorno, la de la
+  primera tienda de la organización que tenga una, 0052), tope de **105 s**
+  (la página del detalle tiene `maxDuration = 120`) y **nunca lanza**: sin
+  clave, HTTP, rechazo del modelo, salida cortada, respuesta ilegible o
+  timeout devuelven un motivo claro. La salida se pide con una herramienta con
+  esquema JSON: moneda (ISO 4217), líneas (nombre en español, SKU solo si está
+  escrito, cantidad, precio por unidad y/o total de la línea, peso si se ve),
+  cargos (tipo envío / importación / adicional, nombre, monto y **su moneda**,
+  0342) y el **IGV** aparte (`igv`, `igv_currency`). Los montos de las líneas
+  y de los cargos van **sin IGV** (el valor de venta). Lo que no se ve, null:
+  no se inventa.
+- **Normalización** (`parseAiProposal`, pura): tolera texto alrededor del JSON
+  y números como texto; **cantidad entera ≥ 1** (redondeo al entero más
+  cercano; una fracción de unidad sube a 1; sin cantidad, 0 o negativa, la
+  línea se descarta); **precio = el de la unidad o total ÷ cantidad**; peso por
+  unidad = el de la unidad o el de la línea ÷ cantidad; cargos solo con monto
+  > 0; como máximo 200 líneas y 20 cargos. Se dice cuántas filas se dejaron
+  fuera.
+- **Sin «Montos de compras»** la propuesta se arma en el servidor **sin
+  precios, sin cargos y sin moneda** (ni IGV) (`stripAiMoney`): ni llegan al
+  navegador ni se guardan. La IA igual propone las líneas con sus cantidades.
+- **La moneda de cada cargo y el IGV** (0342): cada cargo trae **su** moneda
+  del documento (sin ella, la del documento; «S/» es PEN y «US$» es USD). Un
+  cargo **en USD o en soles se guarda así**, sin convertir: la factura de DHL
+  Express Perú en soles da costos en soles. Un cargo en otra moneda (la del
+  documento: CNY, EUR…) pasa a USD con el tipo de cambio escrito. El **IGV**
+  del documento se muestra en la propuesta como una línea **informativa** y
+  **nunca se agrega como costo**; los costos de la IA nacen sin «Incluye IGV»
+  (ya vienen sin IGV).
+- **Coincidencia** con los SKU que la organización ya conoce (Costos de
+  productos, con su tienda, y los SKU de los pedidos de sus tiendas,
+  `org_shopify_products`; solo SKU, nombre y tienda, ningún costo), con la
+  regla de la referencia (§6.9): con SKU, el **único** cuyo SKU coincide sin
+  mayúsculas ni espacios al borde (si hay varios, ninguno y no se prueba por
+  nombre); si no, por el **nombre normalizado** (sin tildes, minúsculas, lo que
+  no es letra o número → espacio) de **al menos 6 caracteres** que coincida con
+  **exactamente uno**. Si no, es un producto nuevo. Coincide → se proponen su
+  SKU, su nombre y su tienda (si el SKU se vio siempre en la misma tienda; si
+  no, «Todas las tiendas»).
+- **Revisión humana**: la propuesta se muestra en el detalle; se puede
+  desmarcar cualquier fila y corregir nombre, SKU, tienda, cantidad y precio
+  (y el tipo y el reparto de cada cargo; nunca «a un producto»). **Nada se
+  guarda solo**: la lectura no escribe ni filas ni hechos. Solo **«Agregar
+  seleccionados»** escribe, y lo hace con las reglas de siempre (`cleanItem`,
+  `cleanCost`, tienda de la organización), validando **todo antes de escribir
+  nada**, y cada fila deja el mismo hecho que agregarla a mano («Producto
+  agregado: …», «Costo agregado: …»). Al final queda **«Leído con IA: N
+  productos, M cargos agregados de <archivo>»**. Si la importación ya tenía
+  productos, lo leído se agrega aparte (se avisa).
+- **Tipo de cambio** (referencia §6.5): si el documento no está en USD y hay
+  algún precio, o algún cargo en la moneda del documento (ni USD ni soles), hay
+  que escribir **«1 USD = X <moneda>»** (X > 0). Los productos siguen como
+  siempre: el **precio por unidad en USD = precio ÷ X, redondeado a 4
+  decimales**; un **cargo en la moneda del documento, en USD = monto ÷ X, a 2
+  decimales**; un cargo en USD o en soles, a 2 decimales sin convertir. En
+  USD, X = 1 con los mismos redondeos. Ese tipo de cambio es solo para
+  convertir el documento: **no** es el tipo de cambio en soles de la
+  importación (§45.1).
+
+- **Compra local y el IGV de cada cargo (0343).** En una compra local la base
+  es en soles: los precios de un documento en soles **se quedan en soles** (sin
+  tipo de cambio, a 4 decimales); en otra moneda, «1 <moneda> = X S/». Los
+  cargos siguen con su moneda como siempre. Un cargo que el documento marca
+  **inafecto o exonerado** (`igv_exempt` en la herramienta) se propone
+  «Inafecto a IGV»; los demás, «Sin IGV (monto neto)» (sus montos ya vienen sin
+  IGV); nunca «Incluye IGV». Se puede cambiar en la propuesta.
+
+Código: `lib/compras-ia.ts` (reglas puras), `lib/compras-ia-vision.ts` (la
+llamada), `readImportDocumentWithAi` y `addAiProposalRows` en
+`app/dashboard/compras/actions.ts`, `components/compras/ai-proposal.tsx`.
+Pruebas: `test/compras-ia.test.ts` y `test/compras-recepcion-ia.test.ts`
+(`fetch` simulado; nunca la API real).
+
+### 45.11 «Recepción de compras» (la bodega de Lima)
+
+Permiso **`purchases.receive`** («Recepción de compras»), en el área Compras de
+Equipo. Lo trae el rol por función **«Almacén»**; owner y admin lo tienen por
+su acceso. Viene con el rol: no es una casilla de «uno por uno» (§16); una
+revocación puntual se lo quita, como a cualquier permiso.
+
+**Puede:**
+
+- Abrir **Compras: la lista y el detalle**, **sin ningún monto**, igual que
+  quien no tiene «Montos de compras» (el servidor no lee costos por unidad,
+  precios, tipo de cambio, costos, pagos ni hechos de dinero).
+- **Registrar entregas** (§45.14, desde la 0343): fecha, nota, recibidas,
+  dañadas y nota por producto, y sus fotos (obligatorias en una compra local);
+  y agregar fotos a una entrega ya registrada. Los pasos automáticos a
+  «Recibido parcial» o «Recibido» de §45.2 son los **únicos** cambios de
+  estado que hace. No corrige ni quita entregas.
+- **Subir documentos de tipo «Foto»** (solo imágenes).
+- **Ver y descargar** la factura comercial, el packing list y las fotos.
+
+**No puede:** editar la cabecera, los productos ni su foto, el estado (salvo
+los pasos automáticos de arriba), corregir o quitar una entrega, el aviso a la bodega, costos,
+pagos ni el tipo de cambio; «Pasar a Costos»; «Leer con IA»; subir o quitar
+otros documentos, ni quitar fotos; ver la proforma, el comprobante de pago, la
+guía, la aduana ni «otro»; ver el contacto del proveedor (solo su nombre).
+**Proveedores** y **Reportes** no se muestran (la sub-navegación queda en
+Importaciones y las páginas no lo dejan entrar). Una vendedora con el rol
+Almacén entra a Compras y lo ve en su menú; el resto del panel sigue como
+siempre.
+
+Cada acción lo vuelve a pedir en la organización de la importación: registrar
+una entrega y la subida de fotos aceptan «Compras» **o** «Recepción de
+compras»; todas las demás siguen pidiendo «Compras» (y «Montos» lo de dinero).
+Las rutas del documento y de la foto aceptan los tres permisos con esos
+límites (`canSeeDocKind`).
+
+### 45.12 Compras locales (laboratorios y maquilas, 0343)
+
+Decisión del owner (14-11-2026): además de importar, Kapta compra a
+**laboratorios y maquilas de Perú, en soles**. Una compra local es **un tipo de
+compra dentro de Compras**, no otro módulo: la misma lista, el mismo detalle,
+proveedor, productos, documentos, pagos, entregas, historial, costo aterrizado,
+Excel, reportes y «Pasar a Costos».
+
+- **El tipo** (`imports.kind`): `importacion` (todas las de antes) o `local`.
+  Se elige en «Nueva compra» («Importación» o «Compra local (laboratorio /
+  maquila)») y **no cambia** después (el código lo lleva). El formulario dice
+  «Laboratorio o maquila» en vez de «Proveedor» (es la misma tabla de
+  proveedores).
+- **El código**: `LOC-<año>-<NNN>`, con la misma regla de `IMP-` (§45.1); CHECK
+  en la base: `IMP-` solo en una importación y `LOC-` solo en una compra local.
+- **La base es en soles**: el costo por unidad de cada producto va en soles
+  (`import_items.unit_cost_currency = 'PEN'` y `unit_cost_pen`; los productos
+  de una importación siguen en USD, CHECK: exactamente uno, el de su moneda).
+  Los costos y los pagos nacen en S/ y pueden ir en US$ con las reglas de
+  siempre (§45.3). **Sin tipo de cambio** se ve todo en soles; solo hace falta
+  si algún monto está en US$ (también para «Pasar a Costos», §45.5).
+- **No aplican**: transporte, paquetera, guía, enlace de seguimiento, código de
+  la proforma, «Avisar a la bodega» (la acción lo rechaza) ni la alerta «Sin
+  novedades»; se ocultan y el servidor guarda «terrestre» y vacíos (§45.4).
+- **Cada entrega lleva foto** (§45.14) y **cada pago, la captura del
+  comprobante** (imagen o PDF): «Registrar un pago» de una compra local pide
+  adjuntarla en el mismo formulario (o elegir un comprobante ya subido) y el
+  pago se guarda con su `document_id`; sin ella, el servidor no lo guarda
+  («En una compra local el pago lleva la captura del comprobante»). En una
+  importación sigue siendo opcional. La lista de pagos tiene «Ver
+  comprobante». El comprobante de un pago local no se puede quitar mientras el
+  pago exista.
+- **«Leer con IA»** de una compra local: los precios en soles quedan en soles
+  (§45.10).
+- **Reportes y proveedores** (§45.7, §45.8): una compra local entra en los
+  totales en soles tal cual y en los de USD solo con su tipo de cambio (si no,
+  se cuenta aparte como «Falta el tipo de cambio»); el cambio del costo por
+  unidad se mide en soles si ninguna de las dos tiene tipo de cambio. Su
+  «Comprado» y el ranking de proveedores van en soles cuando todas las compras
+  se pueden llevar a soles, así que el laboratorio aparece sin tipo de cambio.
+
+### 45.13 Cortesía
+
+Por producto, `courtesy_qty` (entero ≥ 0, 0 por defecto): las unidades que el
+laboratorio (o el proveedor de una importación) **regala**.
+
+- **Esperadas = pedidas + cortesía.** «Faltan» = esperadas − recibidas.
+- **No suben ningún monto** (el costo del proveedor es pedidas × costo por
+  unidad) y **no entran en el reparto** de los costos (no se pagaron); sí en
+  las unidades buenas (`recibidas − dañadas`), así que **bajan el costo por
+  unidad**: 600 pedidas a S/ 7.50 + 50 de cortesía que llegan → S/ 4500 ÷ 650 =
+  S/ 6.92 por unidad buena (sin la cortesía, S/ 7.50).
+- Se muestra solo si es mayor que 0 (o al editar): «600 u. +50 cortesía».
+- Las faltantes de los proveedores (§45.7) se miden sobre lo esperado.
+
+### 45.14 Entregas parciales con evidencia
+
+Lo que llega se registra por **entregas** («Registrar entrega»), para las dos
+clases de compra. Reemplaza la «Recepción» única de antes.
+
+- **Una entrega**: la fecha (día de Lima, hoy o antes), quién la registró, una
+  nota y, por producto **que llegó**, recibidas (entero ≥ 1), dañadas (0 a
+  recibidas) y nota (vacío o 0 = no vino en esta entrega), y sus **fotos**
+  (documentos de tipo «Foto» ligados a la entrega, `import_documents.delivery_id`).
+  En una **compra local** hace falta **al menos una foto** («En una compra local
+  cada entrega lleva al menos una foto de lo que llegó»); en una importación,
+  opcional. Tablas `import_deliveries` e `import_delivery_lines` (0343), con
+  llaves foráneas compuestas como las de la 0340.
+- **Los totales de cada producto** (`received_qty`, `damaged_qty`,
+  `reception_note`) son la **suma de sus entregas**: siguen guardados en
+  `import_items` (todo el código y los reportes los leen igual) y los mantiene
+  el trigger `import_delivery_lines_sync` en la misma transacción de cada línea.
+- **El estado** después de cada entrega: §45.2 («Recibido parcial» o
+  «Recibido», solo avanza; la llegada = el día de la última entrega).
+- **El detalle** muestra las entregas como lista (la más reciente arriba):
+  fecha, quién, unidades por producto, notas y las fotos en miniatura (abren el
+  enlace firmado, §45.1), y el avance de cada producto: «Llegaron 400 de 600
+  (+50 cortesía) · faltan 250».
+- **Corregir o quitar** una entrega pide «Compras» (`purchases.manage`) y queda
+  en el historial («Entrega corregida … Antes: …», «Entrega quitada …»).
+  Quitarla saca sus unidades de los totales y **deja sus fotos en
+  Documentos** (la evidencia no se borra). La única foto de una entrega local
+  no se quita sola. Un producto con entregas no se quita.
+- **«Recepción de compras»** (la bodega, §45.11) registra entregas y agrega
+  fotos a una entrega; no corrige ni quita.
+- **La recepción de antes** (una sola, escrita directo en `import_items` antes
+  de la 0343) pasó, en la migración, a **una entrega «Recepción anterior»**
+  (`legacy`) con los mismos números, la fecha de llegada y quien contó: nada se
+  puso en cero y las entregas nuevas se suman encima.
+
+### 45.15 Códigos de trazabilidad de una importación
+
+Decisión del owner (14-11-2026): tres códigos por pedido «que deberían ser
+completados para poder hacer toda la trazabilidad de los costos»:
+
+| Código | Columna |
+|---|---|
+| Código de la proforma invoice | `imports.proforma_number` (0343, hasta 80 caracteres) |
+| Orden de Alibaba | `imports.platform_order` (la de antes, con su nuevo nombre) |
+| Guía de envío (p. ej. el AWB de DHL) | `imports.tracking_number` |
+
+- La cabecera y el detalle los muestran juntos como **«Códigos de
+  trazabilidad»** con su **«N de 3»**; la lista los cuenta en su checklist
+  («Códigos 2/3») junto a la factura y el tracking, y el detalle avisa de los
+  que faltan.
+- **Se piden de forma progresiva** al cambiar el estado a mano
+  (`setImportStatus`, y la pantalla lo dice antes de intentarlo): para pasar a
+  **«Pagado» o después**, la proforma **y** la orden de Alibaba; para pasar a
+  **«En tránsito» o después** (en aduana, en camino a bodega, recibido parcial,
+  recibido, ingresado, cerrado), también la **guía de envío**. **Cancelar
+  nunca los pide**; una nota tampoco.
+- Una **entrega** que mueve el estado sola **no se bloquea** (la mercadería
+  llegó: se registra) y el detalle muestra los códigos que faltan como aviso.
+- **«Pasar a Costos»** de una importación pide los tres (§45.5).
+- Las importaciones que ya estaban más adelante **no se bloquean hacia
+  atrás**: muestran el aviso hasta que se completan.
+- **Posible duplicado**: si el mismo código de proforma o la misma orden de
+  Alibaba (sin mayúsculas ni espacios al borde) ya está en otra compra de la
+  organización, el detalle lo avisa; no bloquea.
+- Una **compra local** no los usa (se ocultan; su «N.º de orden o cotización»
+  es libre).
+
+### 45.16 Quitar con un segundo paso y elegir archivos en castellano
+
+Sin migración (14-11-2026). Solo la pantalla: las reglas y los permisos de
+cada acción no cambian.
+
+- **Quitar pide confirmación en la misma fila**, sin `window.confirm` ni otro
+  diálogo del navegador: un producto, su foto, un costo, un pago, un documento
+  y una entrega en el detalle, y borrar un proveedor (§45.7). El primer clic en
+  «Quitar» abre, dentro de esa fila y a todo su ancho, «¿Quitar «AFORO
+  FÍSICO»? Sí, quitar · No» con lo que pasa si hace falta decirlo (una entrega:
+  «Sus unidades dejan de contar; sus fotos se quedan en Documentos»; un
+  producto con un costo «a un producto»: «Su costo … pasa a repartirse por
+  valor», §45.3; un pago con comprobante: «Su comprobante se queda en
+  Documentos»). Solo «Sí, quitar» hace la acción. **Teclado y foco**: al abrir,
+  el foco va a «No» (dos Enter seguidos no quitan nada); «No» y Escape cierran
+  y lo devuelven al botón de la fila; «Sí, quitar» lo deja en la tarjeta de la
+  sección. El botón lleva `aria-expanded` y `aria-controls`; la pregunta es un
+  grupo con su nombre. Una fila a la vez por tarjeta. Código:
+  `components/compras/confirm-remove.tsx`.
+- **Elegir archivos en castellano**: el input nativo escribe «Choose Files / No
+  file chosen» en el idioma del navegador. En los documentos, las fotos de una
+  entrega, el comprobante de un pago y la foto de un producto nuevo se ve un
+  botón **«Elegir archivos»** («Elegir archivo» si es uno) y, al lado, los
+  nombres elegidos o **«Ningún archivo»**. El input nativo sigue siendo el
+  control: oculto a la vista (no `display: none`), en el orden del tabulador,
+  ligado a la etiqueta del campo y al botón (su nombre) y a lo elegido (su
+  descripción); el botón es su `<label>` y lleva su anillo de foco. «Foto /
+  Cambiar» de un producto y «Agregar fotos» de una entrega ya eran botones de
+  texto y siguen igual. «Leer con IA» lee un documento ya subido: no tiene
+  selector propio. Código: `components/compras/file-picker.tsx`.
+

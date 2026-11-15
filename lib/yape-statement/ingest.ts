@@ -100,7 +100,7 @@ async function selectAll<T>(
 }
 
 /** Las tiendas que cobran en la cuenta del reporte: la tiene entre sus cuentas de cobro. */
-async function storesForDestination(admin: SupabaseClient, destination: string): Promise<string[]> {
+export async function storesForDestination(admin: SupabaseClient, destination: string): Promise<string[]> {
   const { data } = await admin
     .from("store_collection_accounts")
     .select("store_id,label,aliases")
@@ -263,10 +263,70 @@ export async function ingestYapeStatement(
     });
   }
 
+  // 3 y 4. Cruzar y validar (la misma función que el recruce con los
+  // movimientos ya guardados, lib/yape-statement/rematch.ts).
+  await crossAndValidate(admin, {
+    storeIds,
+    ingresos,
+    from: parsed.from,
+    to: parsed.to,
+    importId: result.importId,
+    dryRun: input.dryRun,
+    deadline,
+    result,
+  });
+
+  if (result.importId) {
+    await admin
+      .from("yape_statement_imports")
+      .update({
+        new_movements: result.nuevos,
+        validated: result.validados.length,
+        report: {
+          validados: result.validados,
+          omitidos: result.omitidos,
+          horas_courier: result.horasCourier,
+          errores: result.errores,
+        },
+        error: result.errores.length ? result.errores.slice(0, 5).join(" · ") : null,
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", result.importId);
+  }
+  return result;
+}
+
+/** Lo que el cruce va dejando: lo validado, lo omitido por motivo y los errores. */
+export type CrossResult = Pick<StatementRunResult, "validados" | "omitidos" | "errores" | "importId">;
+
+/**
+ * Cruza los comprobantes «Pendiente de revisión» de esas tiendas con esos
+ * ingresos y valida lo que coincide sin margen de duda (MOM §16.2). La usan la
+ * importación de un reporte y el recruce periódico con los movimientos ya
+ * guardados (`rematchStoredMovements`): la regla es UNA.
+ */
+export async function crossAndValidate(
+  admin: SupabaseClient,
+  opts: {
+    storeIds: string[];
+    ingresos: StatementMovement[];
+    /** El periodo de los movimientos (ISO): acota los comprobantes que se leen. */
+    from: string;
+    to: string;
+    importId: string | null;
+    dryRun: boolean;
+    deadline: number;
+    result: CrossResult;
+  },
+): Promise<void> {
+  const { storeIds, ingresos, deadline, result } = opts;
+  const omit = (reason: keyof StatementRunResult["omitidos"]) => {
+    result.omitidos[reason] = (result.omitidos[reason] ?? 0) + 1;
+  };
   // 3. El cruce. Una constancia con la hora leída 12 h antes (el «p. m.»
   //    perdido) guarda una hora hasta 12 h anterior al movimiento.
-  const lo = new Date(Date.parse(parsed.from) - 12 * HOUR - 5 * MINUTE).toISOString();
-  const hi = new Date(Date.parse(parsed.to) + 5 * MINUTE).toISOString();
+  const lo = new Date(Date.parse(opts.from) - 12 * HOUR - 5 * MINUTE).toISOString();
+  const hi = new Date(Date.parse(opts.to) + 5 * MINUTE).toISOString();
   const amounts = [...new Set(ingresos.map((m) => m.amount))];
   const pendingRows = await selectAll<PaymentRow>((from, to) =>
     admin
@@ -359,7 +419,7 @@ export async function ingestYapeStatement(
       omit("receptor_no_cuadra");
       continue;
     }
-    if (input.dryRun) {
+    if (opts.dryRun) {
       result.validados.push(summary);
       continue;
     }
@@ -439,22 +499,4 @@ export async function ingestYapeStatement(
     result.validados.push(summary);
   }
 
-  if (result.importId) {
-    await admin
-      .from("yape_statement_imports")
-      .update({
-        new_movements: result.nuevos,
-        validated: result.validados.length,
-        report: {
-          validados: result.validados,
-          omitidos: result.omitidos,
-          horas_courier: result.horasCourier,
-          errores: result.errores,
-        },
-        error: result.errores.length ? result.errores.slice(0, 5).join(" · ") : null,
-        finished_at: new Date().toISOString(),
-      })
-      .eq("id", result.importId);
-  }
-  return result;
 }

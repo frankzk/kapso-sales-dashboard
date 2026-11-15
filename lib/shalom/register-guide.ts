@@ -346,6 +346,31 @@ export async function registerExistingShalomGuide(
     keyWarning = " No se ingresó la clave de recojo; regístrala después desde la salida Shalom en Salidas y guías.";
   }
 
+  // LA CLAVE DE LA GUÍA MUERTA NO SIRVE (13-11-2026, #KP201792). Cada guía de
+  // Shalom tiene su clave de recojo. Al reemplazar una guía muerta sin la clave
+  // de la nueva, la guardada seguía siendo la de la muerta: se le dio a la
+  // clienta y en la agencia le dijeron «no es la clave». Se quita, para que nadie
+  // la muestre ni la mande sola al validar; Cotejar Shalom pone la del listado
+  // si puede, o una persona la registra desde Shalom Pro. Si la clienta ya la
+  // tenía, la nota lo dice: hay que avisarle la guía y la clave nuevas.
+  let staleKeyNote = "";
+  if (!guide.pickupCode && replaced.length) {
+    const { data: staleKey } = await admin.from("shalom_pickup_keys").select("order_id").eq("order_id", row.order_id).maybeSingle();
+    if (staleKey) {
+      const [{ data: given }, { data: shares }] = await Promise.all([
+        admin.from("order_events").select("id").eq("order_id", row.order_id).in("kind", ["key_view", "key_shared"]).limit(1),
+        admin.from("pickup_key_shares").select("id").eq("order_id", row.order_id).limit(1),
+      ]);
+      const removed = await admin.from("shalom_pickup_keys").delete().eq("order_id", row.order_id);
+      if (!removed.error) {
+        staleKeyNote =
+          ` La clave guardada era la de la guía ${replaced.join(", ")} y se quitó: no sirve para la nueva.` +
+          ((given ?? []).length || (shares ?? []).length ? " La clienta ya la tenía: avísale la guía y la clave nuevas." : "");
+        keyWarning += staleKeyNote;
+      }
+    }
+  }
+
   const { data: validatedPayments } = await admin
     .from("order_payments")
     .select("amount")
@@ -384,7 +409,8 @@ export async function registerExistingShalomGuide(
         ? keySaved
           ? " Clave de recojo tomada del listado de Shalom Pro."
           : " Falta la clave de recojo: regístrala desde la salida Shalom en Salidas y guías."
-        : ""),
+        : "") +
+      staleKeyNote,
     // Nunca se guarda la clave en la línea de tiempo: solo la confirmación de
     // que fue recibida y cifrada.
     payload: {
@@ -396,6 +422,7 @@ export async function registerExistingShalomGuide(
       shalom_order_id: guide.shalomOrderId,
       agency_branch: guide.agencyBranch,
       has_pickup_key: Boolean(guide.pickupCode),
+      ...(staleKeyNote ? { clave_vieja_quitada: true } : {}),
       validated_advance: advance,
       ...(replaced.length ? { reemplaza: replaced } : {}),
       ...(cotejo ? { registered_by: COTEJAR_SHALOM, ...(cotejo.payload ?? {}) } : {}),

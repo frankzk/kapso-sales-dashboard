@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { approveAliclikRetry, dismissAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
@@ -14,6 +14,8 @@ import { reproCourierName } from "@/lib/repro-lima";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { PLAN_STEP_LABEL, type PlanItem } from "@/lib/dispatch-plan";
 import { soles, telHref } from "@/lib/rider-contact";
+import { loadPriorOrderCounts } from "@/app/dashboard/pedidos/repro-lima/prior-counts-actions";
+import { priorCountsLabel, type PriorCounts } from "@/lib/customer-prior-counts";
 
 export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
   rows: readonly LimaPendingOrder[]; hidden: ReadonlySet<string>;
@@ -212,6 +214,45 @@ function SelectBox({ row, selection }: { row: LimaPendingOrder; selection: LimaR
   );
 }
 
+/**
+ * ¿Tuvo pedidos antes? (owner, 13-11-2026; MOM §8.1): los conteos de las filas
+ * que se ven, leídos después de dibujar la tabla. Se piden solo los que faltan;
+ * un fallo deja la fila sin etiqueta, nunca con «Primer pedido» inventado.
+ */
+function usePriorCounts(orderIds: readonly string[]): ReadonlyMap<string, PriorCounts> {
+  const [counts, setCounts] = useState<ReadonlyMap<string, PriorCounts>>(() => new Map());
+  const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
+  const key = orderIds.join(",");
+  useEffect(() => {
+    const missing = orderIds.filter((id) => !asked.has(id));
+    if (!missing.length) return;
+    setAsked((prev) => new Set([...prev, ...missing]));
+    // Sin «alive»: cada resultado va por pedido, así que guardarlo aunque la
+    // lista haya cambiado no pisa nada, y descartarlo dejaría esas filas sin
+    // etiqueta para siempre (ya constan como pedidas).
+    loadPriorOrderCounts(missing)
+      .then((res) => {
+        if ("counts" in res) setCounts((prev) => new Map([...prev, ...Object.entries(res.counts)]));
+      })
+      .catch(() => undefined);
+    // `key` resume la lista de ids; `asked` no se vuelve a leer como dependencia
+    // para no pedir dos veces lo mismo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return counts;
+}
+
+/** La etiqueta bajo el cliente: «Primer pedido» o «3 pedidos más · 2 recibidos». */
+function PriorCountsTag({ counts }: { counts: PriorCounts | undefined }) {
+  if (!counts) return null;
+  const label = priorCountsLabel(counts);
+  return (
+    <div className="mt-1">
+      <Badge tone={label.tone} className="tabular-nums" title={label.title}>{label.text}</Badge>
+    </div>
+  );
+}
+
 /** Atender siempre abre la gestión. El código abre la ficha del pedido. */
 export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText, selection, plan, planDay }: {
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
@@ -225,6 +266,7 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
   const [limit, setLimit] = useState(100);
   const cases = new Map(reproRows.map((r) => [r.orderId, r]));
   const visible = rows.slice(0, limit);
+  const priors = usePriorCounts(visible.map((row) => row.orderId));
   const action = (row: LimaPendingOrder, compact: boolean) => renderActions(row, compact);
   const selectableIds = selection ? rows.filter((row) => selection.selectable(row)).map((row) => row.orderId) : [];
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selection!.selected.has(id));
@@ -255,7 +297,7 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
             return <tr key={row.orderId} className={cn("border-b border-line align-top hover:bg-wash", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
               {selection && <td className="py-3 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
               <td className="px-4 py-3"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
-              <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PendingAddress row={row} /></td>
+              <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
               <td className="px-3 py-3"><PendingContext row={row} repro={repro} today={today} /></td>
               <td className="px-3 py-3"><PendingStage row={row} repro={repro} today={today} plan={plan?.get(row.orderId)} planDay={planDay} /></td>
               <td className="px-3 py-3 text-right"><p className="font-semibold tabular-nums text-ink-900">{soles(row.orderTotal)}</p>{row.courier && <p className="text-xs text-ink-500">{`${reproCourierName(row.courier)}${row.courierDetail ? ` · ${row.courierDetail}` : ""}`}</p>}</td>
@@ -280,7 +322,7 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
         const repro = cases.get(row.orderId);
         return <li key={row.orderId} className="space-y-2 px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span><span className="text-xs text-ink-500">{row.storeName}</span></div>
-          <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {soles(row.orderTotal)}</p><PendingAddress row={row} />
+          <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {soles(row.orderTotal)}</p><PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} />
           <PendingContext row={row} repro={repro} today={today} /><PendingStage row={row} repro={repro} today={today} plan={plan?.get(row.orderId)} planDay={planDay} />
           {repro && <ClaimBadge row={repro} />}
           <div className="flex flex-wrap gap-2 [&>*]:grow"><CallButton phone={row.customerPhone} size="md" />{action(row, false)}</div>

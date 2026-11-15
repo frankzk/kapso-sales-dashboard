@@ -79,6 +79,11 @@ describe("venta histórica de Shopify terminada en Kapta", () => {
     expect(result.reasons).toContain("pendiente_liquidacion");
     expect(result.reasons).not.toContain("recuperacion_vencida");
   });
+  it("con la caja todavía afuera es «Devolución física pendiente», no salida adicional (13-11-2026, #KP141229)", () => {
+    const result = macro();
+    expect(result.substage).toBe("devolucion_fisica_pendiente");
+    expect(result.reasons).not.toContain("salida_adicional_activa");
+  });
   it("una caja preparada sin despacho sigue pendiente de anularse por su propio flujo", () => {
     expect(macro([{ ...output, dispatched_at: null, custody_transferred_at: null, custody_state: "empresa" } as unknown as typeof output]))
       .toMatchObject({ stage: "por_cerrar", reasons: ["salida_adicional_activa"] });

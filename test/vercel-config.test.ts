@@ -103,7 +103,15 @@ describe("vercel.json", () => {
     // 37: «Pago solo online (lista automática)», cada minuto de las 05:00 de
     //     Lima: el cálculo diario, el envío a las tiendas y sus reintentos
     //     (0326, MOM §41.11, 09-11-2026).
-    expect(crons).toHaveLength(37);
+    // 38: el recruce de Yape con los movimientos ya guardados, cada media hora
+    //     (MOM §16.2, 13-11-2026).
+    // 39: el vigía del buzón (Yape y Olva por correo), a las 8:23, 13:23 y
+    //     18:23 de Lima (MOM §16.2, 14-11-2026).
+    // 40: la red de seguridad de GF Courier por API: guías vivas y creaciones
+    //     huérfanas, cada 20 minutos (0344, MOM §29.17, 14-11-2026).
+    // 41: la guía GF automática, a las 9:00, 10:00 y 11:00 de Lima del día del
+    //     despacho (0345, MOM §29.17, 15-11-2026).
+    expect(crons).toHaveLength(41);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

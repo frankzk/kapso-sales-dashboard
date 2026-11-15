@@ -5,7 +5,8 @@
 //   - La regla automática en Automatizaciones: `automations.manage`, solo
 //     producción, una fila en «Últimos cambios»; «Simular ahora» no agrega a
 //     nadie.
-//   - El permiso nuevo: dueño y admin por su rol, no se da uno por uno.
+//   - El permiso nuevo: dueño y admin por su rol; desde el 13-11-2026 también
+//     se da uno por uno en Equipo (solo el dueño).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -148,7 +149,7 @@ describe("la regla automática de la lista a mano, retirada (owner, 09-11-2026)"
 });
 
 describe("el permiso «Gestionar la Lista negra»", () => {
-  it("existe, en Pedidos, y viene con dueño y admin; la vendedora no; no se da uno por uno", () => {
+  it("existe, en Pedidos, y viene con dueño y admin; la vendedora no; se da uno por uno (13-11-2026)", () => {
     expect(PERMISSIONS).toContain("prepay_list.manage");
     expect(PERMISSION_LABEL["prepay_list.manage"]).toBe("Gestionar la Lista negra");
     expect(PERMISSION_AREAS.find((a) => a.key === "pedidos")!.permissions).toContain("prepay_list.manage");
@@ -156,6 +157,6 @@ describe("el permiso «Gestionar la Lista negra»", () => {
     expect(permissionsFor(["admin"]).has("prepay_list.manage")).toBe(true);
     expect(permissionsFor(["vendedora"]).has("prepay_list.manage")).toBe(false);
     expect(permissionsFor(["viewer"]).has("prepay_list.manage")).toBe(false);
-    expect(GRANTED_ONE_BY_ONE.some((g) => (g.permission as string) === "prepay_list.manage")).toBe(false);
+    expect(GRANTED_ONE_BY_ONE.some((g) => (g.permission as string) === "prepay_list.manage")).toBe(true);
   });
 });

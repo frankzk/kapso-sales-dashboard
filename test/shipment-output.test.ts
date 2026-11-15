@@ -37,6 +37,14 @@ describe("política de repetición", () => {
     });
   });
 
+  it("GF Courier se repite sin tope de salidas (owner, 15-11-2026)", () => {
+    expect(canRepeatCourier({ courier: "GF Courier", operation: "lima", priorOutputsWithCourier: 3, totalOutputs: 7 })).toEqual({
+      allowed: true,
+      reason: "ok",
+    });
+    expect(canRepeatCourier({ courier: "gf_courier", operation: "lima", priorOutputsWithCourier: 0, totalOutputs: 5 }).allowed).toBe(true);
+  });
+
   it("no inventa todavía un bloqueo para Aliclik", () => {
     expect(canRepeatCourier({ ...base, courier: "aliclik", operation: "provincia_cod" }).allowed).toBe(true);
   });

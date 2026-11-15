@@ -106,6 +106,7 @@ const POR_KIND: Record<string, TimelineFact> = {
   dispatch_date_set: consulta("programado"),
   dispatch_date_cleared: consulta("programado"),
   aliclik_auto_guide_failed: consulta("guia"),
+  gf_auto_guide_failed: consulta("guia"),
   chatby_confirmation_held: consulta("mensaje"),
   // MOM §6.1, «Guía automática para clientas con entregas» (0317): la guía de
   // Chatby salió con el GPS de una entrega anterior; el motivo nombra el pedido.

@@ -61,6 +61,7 @@ import {
   IconX,
 } from "@/components/icons";
 import { AliclikGuidePanel } from "@/components/aliclik-guide-panel";
+import { cancelGfCourierGuide, createGfCourierGuide } from "@/app/dashboard/pedidos/gf-courier-actions";
 import { OrderCompanionPanel } from "@/components/order-companion-panel";
 import { OrderChatbyPanel } from "@/components/order-chatby-panel";
 import { OrderKapsoPanel } from "@/components/order-kapso-panel";
@@ -84,7 +85,7 @@ import { AliclikCoverageProbe } from "@/components/aliclik-coverage-probe";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { ManualRouteOutputModal } from "@/components/manual-route-output-modal";
 import { OrderClosureDesk } from "@/components/order-closure-desk";
-import { OrderRouteDesk } from "@/components/order-route-desk";
+import { OrderRouteDesk, type GfCourierDeskResult } from "@/components/order-route-desk";
 import { PickupKeyPanel, ShalomPickupKeyPanel } from "@/components/pickup-key-panel";
 import { TandersGuideModal } from "@/components/tanders-guide-modal";
 import { markTandersLabelGenerated } from "@/app/dashboard/pedidos/tanders-actions";
@@ -108,6 +109,7 @@ import {
   loadOrderGeo,
   applyOrderStatusBulk,
   loadConfirmationBrief,
+  loadCustomerHistory,
   registerConfirmationAttempt,
   descartarRecuperacion,
   registerReturn,
@@ -224,7 +226,7 @@ import {
   type MacroSubstage,
 } from "@/lib/order-macro-stage";
 import { KEY_STATE_LABEL, PAYMENT_STATE_LABEL, type KeyState, type PaymentState } from "@/lib/pickup-key";
-import { orderPaymentPanelFor } from "@/lib/order-payment-panel";
+import { codPaymentPanel, orderPaymentPanelFor } from "@/lib/order-payment-panel";
 import { swaypDesdeConfirmacionOffer } from "@/lib/swayp-desde-confirmacion-offer";
 import { EnviarPorSwaypDesdeConfirmacion } from "@/components/swayp-desde-confirmacion-offer";
 import {
@@ -286,6 +288,7 @@ import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
 import { timelineOriginLabel } from "@/lib/order-timeline-fact";
 import { aliclikGuideOffered, type RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
+import { OrderLink } from "@/components/order-link";
 
 // ---------------------------------------------------------------------------
 // Formato
@@ -387,19 +390,44 @@ const DRAWER_STAGE_STEP: Record<string, string> = {
   finalizado: "bg-emerald-100 text-emerald-800 ring-2 ring-emerald-500",
 };
 
+// El tramo actual del recorrido, en el tono de su macroetapa (MOM §25).
+const DRAWER_STAGE_BAR: Record<string, string> = {
+  por_confirmar: "bg-amber-500",
+  preparacion: "bg-sky-500",
+  por_despachar: "bg-indigo-500",
+  en_curso: "bg-cyan-500",
+  por_cerrar: "bg-orange-500",
+  finalizado: "bg-emerald-500",
+};
+
 function workspaceForSection(section: DrawerSectionId): DrawerWorkspaceView {
   if (section === "ubicacion" || section === "productos") return "informacion";
   if (section === "historial") return "actividad";
   return "operar";
 }
 
-/** La chapa de la próxima acción: azul por defecto, ámbar cuando algo la frena. */
-const NEXT_ACTION_BADGE: Record<DrawerNextAction["tone"], BadgeTone> = {
-  indigo: "brand",
-  amber: "warn",
-  emerald: "brand",
-  slate: "neutral",
-};
+/**
+ * La tarjeta de Cobro, plegada en Lima sin pagos (owner, 13-11-2026: «para
+ * Lima puede quedar como plegado»): «Cobro anticipado · Opcional», que se abre
+ * para subir la constancia de quien pagó antes. Si no, tal cual.
+ */
+function CollapsibleCobro({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  if (!collapsed) return <>{children}</>;
+  return (
+    <details className="group">
+      <summary className="flex min-h-11 cursor-pointer list-none items-start justify-between gap-3 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold text-ink-900">Cobro anticipado</span>
+          <span className="mt-0.5 block text-[13px] leading-5 text-ink-500">
+            Opcional. Si pagó antes, sube la constancia y valídala: el rótulo sale «PAGADO - NO COBRAR».
+          </span>
+        </span>
+        <IconChevronDown aria-hidden className="mt-0.5 size-4 shrink-0 text-ink-500 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none" />
+      </summary>
+      <div className="mt-4 space-y-4">{children}</div>
+    </details>
+  );
+}
 
 /**
  * La acción dominante del drawer sigue el MOM, no el orden accidental de los
@@ -612,53 +640,42 @@ function drawerNextAction(
   };
 }
 
+/**
+ * El recorrido en una franja (13-11-2026, owner: «ocupan demasiado espacio»):
+ * seis tramos de una línea con su nombre debajo (en el teléfono, dos filas
+ * de tres: «Preparación» no cabe en un sexto de 390 px). Lo hecho en tinta con su
+ * marca, el paso actual en el tono de su macroetapa y en negrita, lo que falta
+ * en gris. El número de paso queda para el lector de pantalla.
+ */
 function DrawerJourneyRail({ current }: { current: string | null | undefined }) {
   const currentIndex = DRAWER_STAGE_ORDER.findIndex((stage) => stage.key === current);
   return (
-    <ol className="grid grid-cols-6" aria-label="Avance del pedido en el MOM">
+    <ol className="grid grid-cols-3 gap-x-1 gap-y-2 sm:grid-cols-6" aria-label="Avance del pedido en el MOM">
       {DRAWER_STAGE_ORDER.map((stage, index) => {
         const isCurrent = index === currentIndex;
         const isDone = currentIndex >= 0 && index < currentIndex;
         return (
-          <li key={stage.key} className="relative min-w-0">
-            {index > 0 && (
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "absolute left-0 right-1/2 top-2.5 h-px",
-                  isDone || isCurrent ? "bg-ink-500" : "bg-line-strong",
-                )}
-              />
-            )}
-            {index < DRAWER_STAGE_ORDER.length - 1 && (
-              <span
-                aria-hidden="true"
-                className={cn("absolute left-1/2 right-0 top-2.5 h-px", isDone ? "bg-ink-500" : "bg-line-strong")}
-              />
-            )}
-            <div className="relative flex min-w-0 flex-col items-center px-0.5 text-center" aria-current={isCurrent ? "step" : undefined}>
-              <span
-                className={cn(
-                  "relative z-[1] grid size-5 place-items-center rounded-full text-xs font-semibold tabular-nums",
-                  isCurrent
-                    ? (DRAWER_STAGE_STEP[stage.key] ?? "bg-line text-ink-700 ring-2 ring-ink-500")
-                    : isDone
-                      ? "bg-ink-900 text-white"
-                      : "bg-white text-ink-500 ring-1 ring-inset ring-line-strong",
-                )}
-              >
-                {isDone ? <IconCheck aria-hidden className="size-3" strokeWidth={2.6} /> : index + 1}
-              </span>
-              <span
-                className={cn(
-                  "mt-1.5 max-w-[6.5rem] text-xs leading-4",
-                  isCurrent ? "font-semibold text-ink-900" : isDone ? "text-ink-600" : "text-ink-500",
-                )}
-              >
+          <li key={stage.key} className="min-w-0" aria-current={isCurrent ? "step" : undefined}>
+            <span
+              aria-hidden="true"
+              className={cn(
+                "block h-1 rounded-full",
+                isCurrent ? (DRAWER_STAGE_BAR[stage.key] ?? "bg-ink-500") : isDone ? "bg-ink-700" : "bg-line-strong",
+              )}
+            />
+            <span
+              className={cn(
+                "mt-1 flex items-start gap-0.5 text-xs leading-4",
+                isCurrent ? "font-semibold text-ink-900" : isDone ? "text-ink-700" : "text-ink-600",
+              )}
+            >
+              {isDone && <IconCheck aria-hidden className="mt-px size-3 shrink-0" strokeWidth={2.6} />}
+              <span className="min-w-0">
+                <span className="sr-only">Paso {index + 1} de {DRAWER_STAGE_ORDER.length}: </span>
                 {stage.label}
                 {isDone && <span className="sr-only"> (hecho)</span>}
               </span>
-            </div>
+            </span>
           </li>
         );
       })}
@@ -693,31 +710,63 @@ function DrawerNextActionCard({
     </OpsButton>
   ) : null;
 
+  // La franja de abajo de «Situación» (13-11-2026, owner eligió «S2»): la
+  // etapa y el recorrido arriba; aquí, lo que toca AHORA y un solo botón.
+  //
+  // CONTRASTE (13-11-2026, owner: «los colores no están haciendo bien el
+  // contraste… me pierdo un poco visualmente»). Antes la franja era un azul al
+  // 60 % casi igual al blanco, con un rótulo azul encima del título y el texto
+  // en gris. Ahora: el lavado azul entero con su borde, la chapa sólida
+  // «Ahora» en la línea del título (la misma forma que «Sugerido» en la Mesa de
+  // ruta: azul sólido = lo que toca), el texto de apoyo en tinta y no en gris,
+  // y lo que acompaña separado por una línea. La etapa ya la dice la chapa de
+  // «Situación»; del rótulo queda solo el matiz («pago requerido»,
+  // «incidencia»), como chapa junto al título.
+  const amber = action.tone === "amber";
+  const qualifier = action.eyebrow.split(" · ").slice(1).join(" · ") || null;
   return (
-    // La única tarjeta con el anillo azul de 2 px: entre todas las de la ficha,
-    // es la que dice qué toca ahora. Si algo la frena, pasa al ámbar de aviso.
-    <section
+    <div
+      role="region"
       aria-label="Próxima acción"
       className={cn(
-        "rounded-lg p-4 shadow-control sm:p-5",
-        action.tone === "amber" ? "bg-warn-wash ring-1 ring-warn-bg" : "bg-white ring-2 ring-brand-600",
+        "-mx-4 -mb-4 rounded-b-lg border-t px-4 py-3.5 sm:-mx-5 sm:-mb-5 sm:px-5 sm:py-4",
+        amber ? "border-warn-bg bg-warn-wash" : "border-brand-100 bg-brand-50",
       )}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className={cn(
+                "inline-flex h-5 items-center rounded px-1.5 text-xs font-semibold leading-none text-white",
+                amber ? "bg-warn-fg" : "bg-brand-600",
+              )}
+            >
+              Ahora
+            </span>
             <h3 className="text-base font-semibold leading-6 text-ink-900">
-              <span className="sr-only">Próxima acción: </span>
+              <span className="sr-only">Próxima acción ({action.eyebrow}): </span>
               {action.title}
             </h3>
-            <Badge tone={NEXT_ACTION_BADGE[action.tone]}>{action.eyebrow}</Badge>
+            {qualifier && (
+              <span
+                className={cn(
+                  "inline-flex h-5 items-center rounded bg-white px-1.5 text-xs font-medium leading-none ring-1 ring-inset",
+                  amber ? "text-warn-fg ring-warn-bg" : "text-ink-700 ring-brand-100",
+                )}
+              >
+                {qualifier}
+              </span>
+            )}
           </div>
-          <p className="mt-1 max-w-[62ch] text-sm leading-5 text-ink-600">{action.description}</p>
+          <p className="mt-1 max-w-[62ch] text-sm leading-5 text-ink-700">{action.description}</p>
         </div>
         {cta}
       </div>
-      {children && <div className={cn(CARD_ZONE, "mt-4 sm:mt-5")}>{children}</div>}
-    </section>
+      {children && (
+        <div className={cn("mt-3.5 space-y-2 border-t pt-3", amber ? "border-warn-bg" : "border-brand-100")}>{children}</div>
+      )}
+    </div>
   );
 }
 
@@ -731,6 +780,8 @@ export function OrderDrawer({
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
+  canCreateGfGuide = false,
+  canCancelGfGuide = false,
   closurePermissions,
   storeName,
   storeDomain,
@@ -757,6 +808,9 @@ export function OrderDrawer({
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  /** Crear y anular la guía de GF Courier en la Mesa de ruta (`gf_courier.create_guide` / `.cancel_guide`, MOM §29.17). */
+  canCreateGfGuide?: boolean;
+  canCancelGfGuide?: boolean;
   closurePermissions: {
     canReturn: boolean;
     canInventory: boolean;
@@ -973,6 +1027,9 @@ export function OrderDrawer({
   const [swaypOrigen, setSwaypOrigen] = useState<"por_confirmar" | undefined>(undefined);
   const [manualRoute, setManualRoute] = useState<RouteCandidate | null>(null);
   const [pending, startTransition] = useTransition();
+  // GF Courier se crea y se anula en su tarjeta de la Mesa de ruta (MOM §29.17).
+  const [gfPending, startGf] = useTransition();
+  const [gfResult, setGfResult] = useState<GfCourierDeskResult | null>(null);
 
   const reload = useMemo(
     () => async () => {
@@ -1187,10 +1244,30 @@ export function OrderDrawer({
     if (route.action === "aliclik") return canCreateGuide;
     if (route.action === "shalom") return canCreateShalomGuide;
     if (route.action === "tanders") return canCreateTandersGuide;
+    if (route.action === "gf_courier") return canCreateGfGuide;
     return canEdit;
   }
 
+  /** Corre crear o anular la guía GF y deja la respuesta en su tarjeta. */
+  function runGf(action: () => Promise<GfCourierDeskResult>): Promise<boolean> {
+    return new Promise((resolve) => {
+      startGf(async () => {
+        const result = await action().catch(() => ({ error: "No se pudo hablar con el servidor. Inténtalo de nuevo." }));
+        setGfResult(result);
+        if (!result.error) {
+          void reload();
+          onSaved();
+        }
+        resolve(!result.error);
+      });
+    });
+  }
+
   function selectRoute(route: RouteCandidate) {
+    if (route.action === "gf_courier") {
+      void runGf(() => createGfCourierGuide(orderId));
+      return;
+    }
     if (route.key === "propio") {
       window.location.assign(`/dashboard/courier?pedido=${encodeURIComponent(orderId)}`);
       return;
@@ -1299,7 +1376,13 @@ export function OrderDrawer({
   const paymentSetup = detail
     ? orderPaymentPanelFor({ row: detail.row, routePlan: detail.routePlan, brief, canCreateShalomGuide })
     : null;
-  const paymentPanel = paymentSetup?.presentation ?? null;
+  // Contra entrega, la tarjeta de Cobro también, opcional (owner, 13-11-2026:
+  // «cómo marco pagado un pedido de Lima, para que salga con el rótulo de
+  // Pagado; lo ideal sería subir las constancias y validar los pagos»). Solo en
+  // la ficha: el paso de después de «Generar pedido» en Leads no cambia.
+  const paymentPanel = paymentSetup?.presentation
+    ? codPaymentPanel(paymentSetup.presentation, detail?.row ?? null)
+    : null;
   const gatewayNote = paymentSetup?.gatewayNote ?? null;
   const showPaymentPanel = paymentPanel?.show ?? false;
   const shalomDestination = paymentSetup?.shalomDestination ?? false;
@@ -1770,9 +1853,26 @@ export function OrderDrawer({
               hidden={workspace !== "operar"}
               className="flex flex-col gap-4 sm:gap-6"
             >
+              {/* La Lista negra agregada a mano (MOM §41): arriba, antes de
+                  llamar y antes de cualquier guía. Desde el 13-11-2026 va ANTES
+                  de «Situación», que ahora lleva dentro la próxima acción. */}
+              <PrepayListBanner
+                status={prepay}
+                canCreateLink={canEdit}
+                onCreateLink={() => createPrepayPaymentLink(orderId)}
+                className="order-1"
+              />
+              {/* La Lista negra automática (MOM §41.11). Solo si no tiene un
+                  alta a mano (que manda). */}
+              <PagoOnlineBanner
+                status={prepay?.pagoOnline}
+                canEdit={canEdit}
+                onExcept={(reason) => exceptPagoOnlineCustomer(orderId, reason)}
+                className="order-1"
+              />
               <section
                 data-drawer-section="resumen"
-                className={cn("order-1 space-y-5", SECTION)}
+                className={cn("order-1 space-y-3", SECTION)}
               >
                 {/* La macroetapa y la subetapa van EN la cabecera de la tarjeta:
                     son la respuesta a «¿dónde está?», y debajo solo queda el
@@ -1811,25 +1911,10 @@ export function OrderDrawer({
                 />
 
                 <DrawerJourneyRail current={detail.row.macro_stage} />
-              </section>
-              {/* La Lista negra agregada a mano (MOM §41): arriba, antes de
-                  llamar y antes de cualquier guía. */}
-              <PrepayListBanner
-                status={prepay}
-                canCreateLink={canEdit}
-                onCreateLink={() => createPrepayPaymentLink(orderId)}
-                className="order-2"
-              />
-              {/* La Lista negra automática (MOM §41.11). Solo si no tiene un
-                  alta a mano (que manda). */}
-              <PagoOnlineBanner
-                status={prepay?.pagoOnline}
-                canEdit={canEdit}
-                onExcept={(reason) => exceptPagoOnlineCustomer(orderId, reason)}
-                className="order-2"
-              />
-              {nextAction && workspace === "operar" && (
-                <div className="order-2">
+                {/* La próxima acción, en la franja de abajo de la misma tarjeta
+                    (13-11-2026, owner eligió «S2»): dónde está y qué toca, juntos. */}
+                {nextAction && workspace === "operar" && (
+                  <>
                   {/* Grupo GF: quién tiene el paquete y en qué quedó, arriba y en
                       cualquier etapa (también Por cerrar), sin bajar hasta
                       «Salidas y guías». Va DENTRO de la tarjeta de la acción, en
@@ -1872,8 +1957,9 @@ export function OrderDrawer({
                       </div>
                     )}
                   </DrawerNextActionCard>
-                </div>
-              )}
+                  </>
+                )}
+              </section>
               {/* La gestión de confirmación va arriba porque en Por confirmar ES
                   el trabajo. Se muestra antes que el panel de pago para que el
                   empate de `order-3` lo resuelva el orden del DOM: en Agencia el
@@ -1948,6 +2034,12 @@ export function OrderDrawer({
                       !offerNewOutputLabel && readyOutput?.qr_token
                         ? { outputCode: readyOutput.output_code ?? null, labelHref: `/api/pedidos/rotulos?ids=${readyOutput.id}` }
                         : null,
+                  }}
+                  gfCourier={{
+                    canCancel: canCancelGfGuide,
+                    pending: gfPending,
+                    result: gfResult,
+                    onCancel: (reason) => runGf(() => cancelGfCourierGuide(orderId, reason)),
                   }}
                 />
               </div>
@@ -2281,17 +2373,19 @@ export function OrderDrawer({
                   data-drawer-section="pagos"
                   className={cn(SECTION, paymentPanel.mode === "required" ? "order-3" : "order-5")}
                 >
-                  <PickupKeyPanel
-                    orderId={orderId}
-                    mode={paymentPanel.mode}
-                    gatewayNote={gatewayNote}
-                    shalomDestination={shalomDestination}
-                    onChanged={onSaved}
-                  />
-                  {/* MOM §35: la boleta sale del dinero que ya entró, así que
-                      vive bajo el cobro. Se dibuja solo si la organización
-                      tiene algún RUC o comprobante. */}
-                  <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
+                  <CollapsibleCobro collapsed={paymentPanel.collapsed ?? false}>
+                    <PickupKeyPanel
+                      orderId={orderId}
+                      mode={paymentPanel.mode}
+                      gatewayNote={gatewayNote}
+                      shalomDestination={shalomDestination}
+                      onChanged={onSaved}
+                    />
+                    {/* MOM §35: la boleta sale del dinero que ya entró, así que
+                        vive bajo el cobro. Se dibuja solo si la organización
+                        tiene algún RUC o comprobante. */}
+                    <OrderInvoicePanel orderId={orderId} pending={pending} run={run} />
+                  </CollapsibleCobro>
                 </div>
               )}
               {/* Crear guía: solo tiene sentido en un pedido que todavía no tiene
@@ -2551,6 +2645,13 @@ export function OrderDrawer({
                   </Banner>
                 )}
               </section>
+              <CustomerHistorySection
+                key={`historial-${orderId}`}
+                orderId={orderId}
+                visible={workspace === "informacion"}
+                preloaded={brief}
+                className={cn("order-2", SECTION)}
+              />
               <div data-drawer-section="ubicacion" className={cn("order-2", SECTION)}>
                 <GeoSection
                   orderId={orderId}
@@ -3416,9 +3517,15 @@ function PriorOrderRow({
   return (
     <li className="px-4 py-2.5 sm:px-5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-mono text-xs font-semibold text-ink-900">
+        {/* Abre la ficha de ese pedido en la misma pantalla: ahí está el porqué
+            de su resultado (la parada, la guía, la devolución). */}
+        <OrderLink
+          orderId={row.order_id}
+          className="rounded-sm font-mono text-xs font-semibold text-brand-700 underline decoration-brand-100 underline-offset-2 hover:decoration-brand-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+          title={`Abrir ${row.order_name ?? "el pedido"}`}
+        >
           {row.order_name ?? row.order_id}
-        </span>
+        </OrderLink>
         <span className="text-xs tabular-nums text-ink-500">
           {fmtDate(row.order_created_at)} · {fmtAge(row.order_created_at)}
         </span>
@@ -3463,6 +3570,141 @@ function PriorOrderRow({
         {row.order_total != null ? ` · ${fmtMoney(row.order_total)}` : ""}
       </p>
     </li>
+  );
+}
+
+type CustomerHistory = Pick<OrderConfirmationBrief, "priors" | "counts" | "orderCreatedAt" | "products"> & { hasPhone: boolean };
+
+/** Las filas que se ven sin abrir nada; el resto, bajo «Ver los demás». */
+const HISTORY_VISIBLE = 5;
+
+/**
+ * «Historial del cliente» en Información (owner, 13-11-2026). Responde de un
+ * vistazo lo que la asesora iba a buscar a Shopify: si el teléfono ya compró,
+ * cuántas veces y en qué terminó cada pedido. Se lee la primera vez que se abre
+ * la pestaña (no en cada ficha); si «Antes de llamar» ya lo trajo, se reusa.
+ */
+function CustomerHistorySection({ orderId, visible, preloaded, className }: {
+  orderId: string;
+  visible: boolean;
+  preloaded: OrderConfirmationBrief | null;
+  className?: string;
+}) {
+  const [asked, setAsked] = useState(visible);
+  useEffect(() => {
+    if (visible) setAsked(true);
+  }, [visible]);
+  const [state, setState] = useState<{ status: "loading" } | { status: "error" } | { status: "ok"; history: CustomerHistory }>({ status: "loading" });
+  const fromBrief: CustomerHistory | null = preloaded
+    ? { priors: preloaded.priors, counts: preloaded.counts, orderCreatedAt: preloaded.orderCreatedAt, products: preloaded.products, hasPhone: preloaded.hasPhone !== false }
+    : null;
+  useEffect(() => {
+    if (!asked || fromBrief) return;
+    let alive = true;
+    setState({ status: "loading" });
+    loadCustomerHistory(orderId)
+      .then((res) => {
+        if (alive) setState("history" in res ? { status: "ok", history: res.history } : { status: "error" });
+      })
+      .catch(() => {
+        if (alive) setState({ status: "error" });
+      });
+    return () => {
+      alive = false;
+    };
+    // `fromBrief` solo importa como «ya está»: es un objeto nuevo en cada render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, orderId, Boolean(fromBrief)]);
+
+  const history = fromBrief ?? (state.status === "ok" ? state.history : null);
+  const known = history?.priors.length ?? 0;
+  const later = history ? countLaterOrders(history.priors, history.orderCreatedAt) : 0;
+  const outcomes = history
+    ? (Object.keys(PRIOR_OUTCOME_LABEL) as PriorOutcome[]).filter((key) => history.counts[key] > 0)
+    : [];
+  const headId = `historial-cliente-${orderId}`;
+
+  const badge = !history
+    ? null
+    : !history.hasPhone
+      ? <Badge>Sin teléfono</Badge>
+      : known === 0
+        ? <Badge tone="info">Primer pedido</Badge>
+        : <Badge className="tabular-nums">{known} {known === 1 ? "pedido más" : "pedidos más"}</Badge>;
+
+  return (
+    <section aria-labelledby={headId} className={cn("space-y-4", className)}>
+      <SectionHead
+        id={headId}
+        title="Historial del cliente"
+        badge={badge}
+        help="Otros pedidos con este mismo teléfono, en las tiendas que puedes ver."
+      />
+
+      {!history && state.status === "error" && (
+        <p className="text-sm text-ink-600">No se pudo leer el historial. Cierra y vuelve a abrir el pedido.</p>
+      )}
+      {!history && state.status !== "error" && (
+        <div aria-busy="true" aria-label="Cargando el historial" className="space-y-2">
+          <div className="h-4 w-48 animate-pulse rounded-sm bg-wash motion-reduce:animate-none" />
+          <div className="h-4 w-full animate-pulse rounded-sm bg-wash motion-reduce:animate-none" />
+        </div>
+      )}
+
+      {history && !history.hasPhone && (
+        <p className="text-sm text-ink-600">El pedido no tiene teléfono, así que no hay con qué buscar sus otros pedidos.</p>
+      )}
+      {history?.hasPhone && known === 0 && (
+        <p className="text-sm text-ink-600">Es el primer pedido con este teléfono.</p>
+      )}
+
+      {history && known > 0 && (
+        <>
+          {/* Cuántos y en qué terminaron, antes de la lista: es lo que se mira
+              primero. Los entregados van en verde y primero; devueltos y
+              anulados, en rojo. La palabra lo dice igual que el color. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {outcomes.map((key) => (
+              <Badge
+                key={key}
+                className="tabular-nums"
+                tone={key === "entregado" ? "ok" : key === "anulado" || key === "devuelto" ? "crit" : "neutral"}
+              >
+                {PRIOR_OUTCOME_LABEL[key]}: {history.counts[key]}
+              </Badge>
+            ))}
+            {later > 0 && (
+              <span className="text-[13px] text-ink-500">
+                · {later} {later === 1 ? "es posterior" : "son posteriores"} a este
+              </span>
+            )}
+          </div>
+
+          <ul className="-mx-4 divide-y divide-line border-y border-line sm:-mx-5">
+            {history.priors.slice(0, HISTORY_VISIBLE).map((row) => (
+              <PriorOrderRow key={row.order_id} row={row} referenceCreatedAt={history.orderCreatedAt} currentProducts={history.products} />
+            ))}
+          </ul>
+          {known > HISTORY_VISIBLE && (
+            <details className="group">
+              <summary className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 text-[13px] font-medium text-ink-700 hover:text-ink-900 pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
+                <IconChevronRight aria-hidden className="size-4 text-ink-500 transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" />
+                <span className="group-open:hidden">Ver los {known - HISTORY_VISIBLE} más antiguos</span>
+                <span className="hidden group-open:inline">Ocultar los más antiguos</span>
+              </summary>
+              <ul className="-mx-4 mt-2 divide-y divide-line border-y border-line sm:-mx-5">
+                {history.priors.slice(HISTORY_VISIBLE).map((row) => (
+                  <PriorOrderRow key={row.order_id} row={row} referenceCreatedAt={history.orderCreatedAt} currentProducts={history.products} />
+                ))}
+              </ul>
+              {known >= 50 && (
+                <p className="mt-1.5 text-xs text-ink-500">Se muestran los 50 más recientes.</p>
+              )}
+            </details>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

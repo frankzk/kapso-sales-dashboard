@@ -38,9 +38,12 @@ import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { prepayOrderCheck, type PrepayOrderRow } from "@/lib/prepay-list-server";
 import { LEGACY_SALE_CANCEL_REASON } from "@/lib/legacy-sale-cancel";
 import { env } from "@/lib/env";
+import { cancelGfGuideFor } from "@/lib/gf-courier-guide";
 import { dispatchFallsOnSunday, expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { getStoreCreds } from "@/lib/ingest";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { ownBoxStillWithRider, replacedByGuideNotice } from "@/lib/gf-replaced-output";
+import { replaceOwnBoxWithAliclikGuide } from "@/lib/gf-replaced-by-guide";
 import { resolveEmails } from "@/lib/productivity";
 import { guideCreatorPhrase } from "@/lib/guide-note";
 import {
@@ -293,6 +296,8 @@ async function readAliclikOutputPolicy(
     // automático sigue sin motivo.
     outputs: (data ?? []) as AliclikExistingOutput[], operation, motivo,
     manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),
+    // Solo una persona hace que Kapta anule la guía GF viva (owner, 15-11-2026).
+    person: Boolean(ctx.userId) && !origin,
   });
 }
 
@@ -724,10 +729,13 @@ export async function previewAliclikGuideFor(
   const annotated = lima?.couriers ?? quoted;
   const warnings = lima?.warning ? [...(resolved.warnings ?? []), lima.warning] : resolved.warnings;
   const outputPolicy = await readAliclikOutputPolicy(admin, ctx);
+  const gfWarning = outputPolicy.ok && outputPolicy.gfToCancel?.length
+    ? `Al crearla, Kapta anula la guía de GF Courier ${outputPolicy.gfToCancel.map((gf) => gf.guide_code ?? "sin número").join(", ")}: GF todavía no la asignó a un motorizado.`
+    : null;
 
   return {
     ok: true,
-    warnings,
+    warnings: gfWarning ? [...(warnings ?? []), gfWarning] : warnings,
     warehouseId: quotedWarehouse.id,
     warehouseName: quotedWarehouse.name,
     items: priced.items,
@@ -1207,6 +1215,27 @@ export async function createAliclikGuideFor(
   const releaseError = await releaseClosedGuideIntents(admin, orderId);
   if (releaseError) return { error: releaseError };
 
+  // GF Courier → Aliclik (owner, 15-11-2026): la guía GF que todavía no se
+  // asignó a un motorizado se anula AQUÍ, después de todas las compuertas y
+  // justo antes del candado, para no dejar el pedido sin guía por una compuerta
+  // de Aliclik. Si GF no la anula, no se crea la de Aliclik.
+  const gfCancelled: string[] = [];
+  for (const gf of finalOutputPolicy.gfToCancel ?? []) {
+    if (!gf.guide_code) return { error: "La guía de GF Courier viva no tiene número: anúlala en GF antes de crear la de Aliclik." };
+    const cancelled = await cancelGfGuideFor(orderId, gf.guide_code, {
+      userId: ctx.userId,
+      reason: "Pasa a Aliclik",
+      note: "Guía de GF Courier anulada por Kapta al crear la guía de Aliclik.",
+    }, admin);
+    if (!cancelled.ok) {
+      return { error: `GF Courier no anuló la guía ${gf.guide_code}: ${cancelled.error} No se creó la guía de Aliclik.` };
+    }
+    gfCancelled.push(gf.guide_code);
+  }
+  const gfNote = gfCancelled.length
+    ? ` La guía de GF Courier ${gfCancelled.join(", ")} ya quedó anulada.`
+    : "";
+
   // EL CANDADO. Se escribe ANTES del POST: si dos peticiones llegan a la vez,
   // una choca aquí (23505) en lugar de crear dos pedidos reales en Aliclik.
   const { data: intent, error: intentErr } = await admin
@@ -1231,7 +1260,7 @@ export async function createAliclikGuideFor(
     if (intentErr.code === "23505") {
       return { error: await describeLockedIntent(admin, orderId), locked: true };
     }
-    return { error: `No se pudo registrar la intención: ${intentErr.message}` };
+    return { error: `No se pudo registrar la intención: ${intentErr.message}${gfNote}` };
   }
 
   const res = await createOrder(ctx.client, body);
@@ -1249,7 +1278,7 @@ export async function createAliclikGuideFor(
       timedOut: true,
       error:
         "Aliclik no respondió a tiempo. El pedido PUEDE haberse creado: no reintentes; se verificará " +
-        "automáticamente en el próximo barrido, y si nunca llegó a crearse el pedido se libera solo en ~90 min.",
+        "automáticamente en el próximo barrido, y si nunca llegó a crearse el pedido se libera solo en ~90 min." + gfNote,
     };
   }
 
@@ -1264,7 +1293,7 @@ export async function createAliclikGuideFor(
       })
       .eq("id", intent.id);
     // El mensaje de Aliclik viene en español y accionable: se muestra literal.
-    return { error: `Aliclik rechazó el pedido: ${res.error}` };
+    return { error: `Aliclik rechazó el pedido: ${res.error}${gfNote}` };
   }
 
   const orderNumber = (res.data.orderNumber ?? "").trim();
@@ -1498,12 +1527,25 @@ export async function createAliclikGuideFor(
     /* el historial es una comodidad; la guía ya existe y no se toca */
   }
 
+  // La caja de Grupo GF que el motorizado todavía tiene «No entregado» queda en
+  // devolución, como con «Sacar con salida nueva» (owner, 12-11-2026; 0337,
+  // MOM §9.5): el pedido sigue a esta guía y sale de «Por reprogramar Lima» y
+  // de «Reintentos Aliclik»; su solicitud de Grupo GF se cierra y, al
+  // recibirla en oficina, vuelve a stock. Antes del recálculo, que ya lo ve.
+  // Best-effort: la guía ya existe en Aliclik.
+  const gfReplaced = ownBoxStillWithRider(finalOutputPolicy.estorban)
+    ? await replaceOwnBoxWithAliclikGuide(admin, written.shipmentId, ctx.userId)
+    : null;
+  if (gfReplaced?.error) console.warn(`[aliclik-guide] ${ctx.row.order_name ?? orderId}: la caja de Grupo GF no quedó en devolución: ${gfReplaced.error}`);
+  const gfNotice = replacedByGuideNotice(gfReplaced?.replaced ?? []);
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   return {
     orderNumber,
     notice:
       `Guía creada en Aliclik para ${ctx.row.order_name ?? "el pedido"}: ${orderNumber} · ` +
       `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
-      `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.`,
+      `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.` +
+      (gfNotice ? ` ${gfNotice}` : ""),
   };
 }

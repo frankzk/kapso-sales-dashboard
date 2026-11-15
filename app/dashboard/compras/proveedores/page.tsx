@@ -1,0 +1,66 @@
+import { Suspense } from "react";
+import { redirect } from "next/navigation";
+import { getUserRoleSummary } from "@/lib/access";
+import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
+import { ComprasSubnav } from "@/components/compras/subnav";
+import { ComprasGate, ComprasHeader } from "@/components/compras/chrome";
+import { SuppliersView, type SupplierViewRow } from "@/components/compras/suppliers";
+import { comprasPerms, loadReportImports, loadSuppliers, resolveComprasOrg } from "@/lib/compras-server";
+import { supplierStats } from "@/lib/compras-reportes";
+
+export const dynamic = "force-dynamic";
+
+// Proveedores (MOM §45.7). Ver: «Compras» o «Montos de compras» en la
+// organización. Crear, editar y borrar: «Compras» (las acciones lo vuelven a
+// pedir). «Comprado»: solo con «Montos de compras»; sin él, el servidor ni lee
+// los montos (`loadReportImports(orgId, perms.canMoney)`). En soles si todas las
+// compras del proveedor se pueden llevar a soles; si no, en USD
+// (`supplierBought`, MOM §45.7).
+
+export default function ProveedoresPage({ searchParams }: { searchParams: Promise<{ org?: string }> }) {
+  return (
+    <Suspense fallback={<DashboardRouteSkeleton />}>
+      <ProveedoresContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function ProveedoresContent({ searchParams }: { searchParams: Promise<{ org?: string }> }) {
+  const [{ isVendedoraOnly }, sp] = await Promise.all([getUserRoleSummary(), searchParams]);
+  if (isVendedoraOnly) redirect("/dashboard/leads");
+
+  const { orgId, allowed } = await resolveComprasOrg(sp.org);
+  if (!orgId) {
+    return (
+      <ComprasGate title="Proveedores">
+        Los proveedores de las importaciones los ve quien tiene «Compras» o «Montos de compras» en su organización.
+      </ComprasGate>
+    );
+  }
+  const perms = await comprasPerms(orgId);
+  if (!perms.canManage && !perms.canMoney) {
+    return <ComprasGate title="Proveedores">Hace falta el permiso «Compras» o «Montos de compras».</ComprasGate>;
+  }
+  const [suppliers, imports] = await Promise.all([loadSuppliers(orgId), loadReportImports(orgId, perms.canMoney)]);
+  const rows: SupplierViewRow[] = suppliers.map((supplier) => ({
+    supplier,
+    stats: supplierStats(supplier.id, imports, { money: perms.canMoney }),
+  }));
+
+  return (
+    <div className="space-y-6">
+      <ComprasHeader title="Compras">
+        A quién le compras, cuánto tarda, si llega a tiempo y qué tan completo llega. Las cotizaciones y las canceladas no cuentan como
+        compras.
+      </ComprasHeader>
+      <ComprasSubnav current="proveedores" perms={perms} orgId={orgId} multiOrg={allowed.length > 1} />
+      <SuppliersView
+        orgId={orgId}
+        orgQuery={allowed.length > 1 ? `&org=${orgId}` : ""}
+        rows={rows}
+        canManage={perms.canManage}
+        canMoney={perms.canMoney}
+      />
+    </div>
+  );
+}

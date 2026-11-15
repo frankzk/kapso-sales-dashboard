@@ -8,7 +8,7 @@
 
 import { forwardRef, useEffect, useRef, type ButtonHTMLAttributes, type ComponentType, type ReactNode, type SVGProps } from "react";
 import { cn } from "@/components/ui";
-import { opsButtonClass, type ButtonSize, type ButtonVariant } from "@/components/ops-styles";
+import { CARD_ZONE, SECTION_CARD, opsButtonClass, statusCardClass, type ButtonSize, type ButtonVariant } from "@/components/ops-styles";
 import { IconAlert, IconCheck, IconCheckCircle, IconInfo, IconPlusCircle, IconXCircle } from "@/components/icons";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
@@ -164,10 +164,7 @@ export function StatusCard({ label, value, active, onClick, hint, marker }: {
       onClick={onClick}
       aria-pressed={active}
       title={hint}
-      className={cn(
-        "flex min-w-0 flex-col items-start gap-0.5 rounded-lg bg-white px-3.5 py-2.5 text-left transition-shadow",
-        active ? "shadow-control ring-2 ring-inset ring-brand-600" : "shadow-control ring-1 ring-inset ring-line hover:ring-line-strong",
-      )}
+      className={statusCardClass(active)}
     >
       {marker ? (
         <span className={cn("flex w-full min-w-0 items-center gap-1.5 text-[13px] font-medium", labelTone)}>
@@ -289,22 +286,9 @@ export function SidePanel({ label, title, badge, meta, actions, width, onClose, 
   );
 }
 
-/**
- * Tarjeta de sección (la ficha del pedido): blanca sobre el lienzo, con anillo
- * `line` y sombra de control. Arriba lleva su `SectionHead`; lo de dentro se
- * reparte en zonas sobre hairlines de borde a borde (`CARD_ZONE`), nunca en
- * otra tarjeta. Una sección que se notaba poco era una hairline gris clara
- * más débil que los marcos de dentro: al entornar los ojos se veían marcos,
- * no secciones.
- */
-export const SECTION_CARD = "rounded-lg bg-white p-4 shadow-control ring-1 ring-line sm:p-5";
-
-/**
- * Una zona dentro de la tarjeta de sección, sobre una hairline que la cruza
- * entera. Los márgenes negativos son el relleno de `SECTION_CARD`: si cambia
- * uno, cambia el otro.
- */
-export const CARD_ZONE = "-mx-4 border-t border-line px-4 pt-4 sm:-mx-5 sm:px-5 sm:pt-5";
+// `SECTION_CARD` y `CARD_ZONE` viven en components/ops-styles.ts: también los
+// usa el servidor (los reportes de Compras).
+export { SECTION_CARD, CARD_ZONE };
 
 /**
  * Cabecera de una tarjeta de sección: título de 16 px con su chapa, la ayuda

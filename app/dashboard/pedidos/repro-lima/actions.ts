@@ -10,6 +10,7 @@
 // Lo que NO hace: crear salidas (otro courier va por la Mesa de ruta, D7),
 // anular la venta («Ya no lo quiere» solo quita la fecha) ni tocar el Master.
 
+import { sameCourier } from "@/lib/shipment-output";
 import { revalidatePath } from "next/cache";
 import { createAdminSupabase } from "@/lib/db";
 import { resolveAgentName, resolveAgentNames } from "@/lib/agent-names";
@@ -618,6 +619,10 @@ async function afterCall(admin: Admin, input: {
   const tail = cleared ? CLEARED_NOTE : "";
   switch (plan.no) {
     case "otro_courier":
+      // Con la salida de ese courier ya viva no hay nada que crear (13-11-2026).
+      if (f.box.kind === "con_courier" && sameCourier(f.box.courier, courier)) {
+        return { notice: `Acuerdo guardado: la salida de ${courierName} ya existe.${tail}`, programChanged: cleared };
+      }
       return {
         notice: `Acuerdo guardado: crea la salida de ${courierName} desde la Mesa de ruta del pedido.${tail}`,
         href: orderDrawerHref(f.orderId, "operar", { pathname: REPRO_LIMA_PATH }),

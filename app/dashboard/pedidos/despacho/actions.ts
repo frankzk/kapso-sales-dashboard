@@ -56,7 +56,7 @@ import {
   type SwaypNoSaleCode,
 } from "@/lib/swayp-handover";
 import { decideReception } from "@/lib/returns-reception";
-import { gfReceptionOutcome, gfReturnDecision } from "@/lib/gf-returns-scan";
+import { gfReadyScanHint, gfReceptionOutcome, gfReturnDecision } from "@/lib/gf-returns-scan";
 import {
   courierReceptionOutcome,
   earliestOccurredAt,
@@ -322,7 +322,10 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
     }
     // La caja que volvió con el rótulo de Tanders encima: se nombra la salida
     // con la que sale. No hay alias, el QR viejo no se marca listo (§29.4).
-    return { error: (await oldLabelError(shipment, "pedido")) ?? "Ese paquete ya no figura en custodia de la empresa." };
+    // La caja de Grupo GF que vuelve del motorizado (13-11-2026, #KP201841) no
+    // se arma: se recibe en Devoluciones (`gfReadyScanHint`).
+    const gfRider = (shipment.courier === "propio" || isCourierTbd(shipment.courier)) && shipment.custody_state === "courier";
+    return { error: (await oldLabelError(shipment, "pedido")) ?? (gfRider ? gfReadyScanHint(dispatchScanLabel(shipment)) : "Ese paquete ya no figura en custodia de la empresa.") };
   }
   if (shipment.preparation_state === "listo_despacho") {
     return { notice: `${dispatchScanLabel(shipment)} ya estaba listo para despacho.`, shipment };

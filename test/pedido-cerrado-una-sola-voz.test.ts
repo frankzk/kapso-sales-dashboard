@@ -133,6 +133,7 @@ describe("se apaga por modalidad, no por pedido entero", () => {
     });
     expect([...blockedActions].sort()).toEqual([
       "aliclik",
+      "gf_courier",
       "manual",
       "shalom",
       "swayp",

@@ -76,9 +76,11 @@ export interface NavAccess {
   history: boolean;
   /** El panel «Automatizaciones» (MOM §40): `automations.manage`, del dueño. */
   automations: boolean;
+  /** «Compras» (MOM §45): `purchases.manage`, `purchases.money` o `purchases.receive`. */
+  purchases?: boolean;
 }
 
-const FULL_ACCESS: NavAccess = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true, history: true, automations: true };
+const FULL_ACCESS: NavAccess = { reports: true, catalog: true, mapAds: true, stores: true, costs: true, team: true, history: true, automations: true, purchases: true };
 
 export function navItems(
   isVendedoraOnly: boolean,
@@ -102,6 +104,12 @@ export function navItems(
       // vendedora nunca ve los resultados del resto del equipo.
       { href: "/dashboard/productividad", label: "Mi productividad", icon: IconHeadset },
     ];
+    // La bodega con el rol «Almacén» trae «Recepción de compras» (MOM §45.11):
+    // la vendedora con algún permiso de Compras la ve en su menú. Sin `access`
+    // explícito (FULL_ACCESS), el menú de la vendedora es el de siempre.
+    if (access !== FULL_ACCESS && access.purchases) {
+      items.push({ href: "/dashboard/compras", label: "Compras", icon: IconTruck });
+    }
     if (canValidatePayments) {
       items.splice(2, 0, { href: "/dashboard/pagos", label: "Validar pagos", icon: IconMoney });
     }
@@ -138,6 +146,8 @@ export function navItems(
     // menú desde el 22-09-2026 a pedido de operación. Las páginas siguen
     // funcionando en su URL; para volver a mostrarlas, repón estas dos líneas.
     ...(access.costs ? [{ href: "/dashboard/costos", label: "Costos", icon: IconMoney }] : []),
+    // Importaciones (MOM §45): junto a Costos, que es donde termina su costo aterrizado.
+    ...(access.purchases ? [{ href: "/dashboard/compras", label: "Compras", icon: IconTruck }] : []),
     ...(canManageLogistics
       ? [
         { href: "/dashboard/courier", label: "Grupo GF Courier", icon: IconTruck },

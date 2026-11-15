@@ -232,6 +232,8 @@ export function OrdersMasterBoard({
   canCreateGuide,
   canCreateTandersGuide,
   canCreateShalomGuide,
+  canCreateGfGuide = false,
+  canCancelGfGuide = false,
   canAttendReproLima = false,
   canDispatch,
   canWarehouse,
@@ -314,6 +316,9 @@ export function OrdersMasterBoard({
   canCreateGuide: boolean;
   canCreateTandersGuide: boolean;
   canCreateShalomGuide: boolean;
+  /** GF Courier en la Mesa de ruta (MOM §29.17). */
+  canCreateGfGuide?: boolean;
+  canCancelGfGuide?: boolean;
   /** La pestaña «Repro Lima» de la ficha (`repro_lima.manage`, MOM §9.5). */
   canAttendReproLima?: boolean;
   canDispatch: boolean;
@@ -1076,6 +1081,8 @@ export function OrdersMasterBoard({
           canEditCustomerName={canCreateOrder}
           canCreateGuide={canCreateGuide}
           canCreateTandersGuide={canCreateTandersGuide}
+          canCreateGfGuide={canCreateGfGuide}
+          canCancelGfGuide={canCancelGfGuide}
           canCreateShalomGuide={canCreateShalomGuide}
           canAttendReproLima={canAttendReproLima}
           closurePermissions={closurePermissions}

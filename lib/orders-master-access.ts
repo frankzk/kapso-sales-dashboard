@@ -29,6 +29,7 @@ import { loadShalomUnrecognized } from "@/lib/shalom/check-queue";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { loadAliclikOutlook } from "@/lib/aliclik-outlook-access";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
+import { env } from "@/lib/env";
 import { logisticsCostFactsFromRow } from "@/lib/closure-blocks";
 import { isOwnCourier } from "@/lib/costs";
 import { loadGfCostTariffGap, type GfTariffCheck } from "@/lib/gf-tariff";
@@ -65,6 +66,7 @@ import { deriveFenixCoverageCity } from "@/lib/shipments";
 import {
   buildOrderRoutePlan,
   routeDeskGate,
+  type GfCourierRouteCheck,
   type OrderRoutePlan,
   type RouteDeskGate,
   type SwaypRouteCheck,
@@ -789,6 +791,8 @@ const GUIDE_COLUMNS =
   // `swayp_guide` y `dispatched_at` deciden si la guía Swayp se puede anular
   // desde el drawer y si hay que avisarle a Swayp antes (ver `cancelFenixOutput`).
   "swayp_guide,swayp_state,dispatched_at,reported_status," +
+  // El envío que cotizó el courier: la tarjeta de GF Courier lo dice junto a su guía.
+  "quoted_delivery_cost," +
   "shalom_codigo,shalom_ose_id,shalom_order_id,shalom_serie,shalom_raw," +
   // 0174: el tracking de Olva y su último estado crudo. Sin ellos el drawer no
   // puede enseñar el número ni ofrecer registrarlo.
@@ -1044,6 +1048,31 @@ async function readOrderForDetail(sb: SupabaseClient, orderId: string) {
 }
 
 /**
+ * GF Courier por API en la tienda del pedido, para la Mesa de ruta (MOM §29.17).
+ * Las mismas dos llaves que `createGfGuideFor` —el interruptor de la tienda con
+ * su token y `GF_COURIER_WRITE_ENABLED`—, leídas con el cliente de servicio
+ * porque el token cifrado no se expone por RLS. Solo se pregunta si HAY token.
+ */
+async function loadGfCourierRouteCheck(storeId: string): Promise<GfCourierRouteCheck | null> {
+  const { data, error } = await createAdminSupabase()
+    .from("stores")
+    .select("gf_courier_enabled,gf_courier_api_token_enc")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const store = data as { gf_courier_enabled?: boolean | null; gf_courier_api_token_enc?: string | null } | null;
+  if (!store?.gf_courier_enabled) return { enabled: false };
+  return {
+    enabled: true,
+    blockedReason: !env.gfCourierWriteEnabled()
+      ? "GF Courier por API está apagado en el servidor."
+      : !store.gf_courier_api_token_enc
+        ? "La tienda no tiene token de GF Courier."
+        : null,
+  };
+}
+
+/**
  * Detalle de un pedido: su fila del Master, sus guías, la línea de tiempo
  * cronológica y los productos. La línea de tiempo MEZCLA `order_events` (lo del
  * Master) con `shipment_calls` (las gestiones de Repro Provincia) — por eso el
@@ -1242,7 +1271,7 @@ export async function getOrderMasterDetail(
     ...item,
     image_url: item.product_id ? images.get(item.product_id) ?? null : null,
   }));
-  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments, shalomUnrecognized] = await Promise.all([
+  const [swayp, aliclikHealth, aliclikOutlook, grupoGfCourier, gfDeliveries, companion, gfCostTariffGap, puntoPayments, shalomUnrecognized, gfCourier] = await Promise.all([
     swaypRouteCheck(sb, row, lineItems),
     loadAliclikHealthState(sb, row.store_id),
     // Un aviso, no un dato del pedido: si falla, la ficha sale sin él.
@@ -1277,6 +1306,11 @@ export async function getOrderMasterDetail(
       () => null,
     ),
     loadShalomUnrecognized(sb, guides.filter((guide) => guide.courier === "shalom").map((guide) => guide.id)),
+    // Si falla, la mesa sigue con Grupo GF como antes y el servidor lo registra.
+    loadGfCourierRouteCheck(row.store_id).catch((cause) => {
+      console.error("[order-detail] loadGfCourierRouteCheck", orderId, cause);
+      return null;
+    }),
   ]);
   const puntoSource = orderPuntoSource(orderRow?.raw, row.order_total);
   return {
@@ -1353,6 +1387,7 @@ export async function getOrderMasterDetail(
       paymentState: row.payment_state,
       swayp,
       grupoGfCourier,
+      gfCourier,
       outputs: guides.map((guide) => ({
         id: guide.id,
         courier: guide.courier,
@@ -1374,6 +1409,7 @@ export async function getOrderMasterDetail(
         custodyTransferredAt: guide.custody_transferred_at ?? null,
         outputCode: guide.output_code ?? null,
         outputNumber: guide.output_number ?? null,
+        quotedCost: guide.quoted_delivery_cost ?? null,
       })),
     }),
   };
@@ -2205,6 +2241,8 @@ export interface OrderConfirmationBrief {
   orderCreatedAt: string | null;
   /** Qué lleva este pedido, para poder verlo repetido en el historial. */
   products: string | null;
+  /** Sin teléfono no hay historial que buscar: «sin pedidos» no sería cierto. */
+  hasPhone?: boolean;
 }
 
 /**
@@ -2345,5 +2383,6 @@ export async function getOrderConfirmationBrief(
     coverage: row.coverage,
     orderCreatedAt: row.order_created_at,
     products: products.get(row.order_id) ?? null,
+    hasPhone: Boolean(phone),
   };
 }

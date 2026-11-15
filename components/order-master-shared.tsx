@@ -690,6 +690,8 @@ export const TIMELINE_LABEL: Record<string, string> = {
   aliclik_route_risk_exception: "Aliclik pese al riesgo de no entrega",
   // La guía automática del día programado (MOM §6.2) que no se pudo crear.
   aliclik_auto_guide_failed: "Guía automática no creada",
+  // La guía GF automática de la mañana (MOM §29.17, 0345) que no se pudo crear.
+  gf_auto_guide_failed: "Guía GF automática no creada",
   // MOM §6.1, «Confirmó por Chatby» (01-11-2026): la clienta escribió para
   // confirmar y algo no cuadró. La nota dice qué; lo confirma una persona.
   chatby_confirmation_held: "Confirmación por Chatby para la asesora",
