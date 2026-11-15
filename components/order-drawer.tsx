@@ -336,6 +336,7 @@ const INDEX_LABEL: Record<string, string> = {
   rutas: "Mesa de ruta",
   pagos: "Cobro",
   aliclik: "Aliclik",
+  "gf-courier": "GF Courier",
   guias: "Salidas y guías",
   cierre: "Cierre",
   comentario: "Comentario",
