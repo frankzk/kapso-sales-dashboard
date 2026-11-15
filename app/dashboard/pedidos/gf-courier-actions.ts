@@ -43,7 +43,6 @@ export async function gfCourierPanelState(orderId: string): Promise<GfPanelState
   const last = data?.[0];
   const guide = last ? { trackingId: last.guide_code, status: last.delivery_status, shippingCost: last.quoted_delivery_cost, labelUrl: last.label_url } : null;
   if (!store?.enabled && !guide) return { visible: false, canCreate, canCancel };
-  if (ctx.row.shipping_mode !== "cod" && !guide) return { visible: false, canCreate, canCancel };
   const reason = !env.gfCourierWriteEnabled() ? "GF Courier por API está apagado en el servidor." : !store?.token ? "La tienda no tiene token de GF Courier." : undefined;
   return { visible: true, canCreate, canCancel, reason, guide };
 }

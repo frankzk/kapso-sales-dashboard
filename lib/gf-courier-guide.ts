@@ -5,7 +5,9 @@ import "server-only";
 //
 // Compuertas, en orden:
 //   1. Dos interruptores: GF_COURIER_WRITE_ENABLED y stores.gf_courier_enabled, con token guardado.
-//   2. Solo contraentrega (shipping_mode = 'cod'); GF decide la cobertura del distrito y responde con la lista válida.
+//   2. Cualquier pedido de la tienda, sin importar su modalidad: lo que decide es la cobertura de GF, que responde
+//      DISTRICT_NOT_COVERED con la lista válida. Lo ya pagado por la clienta (adelanto, diferencia o total validados)
+//      se descuenta del monto a cobrar, igual que con Aliclik: un pedido pagado completo viaja con cobro cero.
 //   3. Ninguna guía GF viva en el pedido.
 //   4. La intención se escribe ANTES del POST; su índice único parcial impide dos intentos vivos.
 //   5. Un timeout NO es un fallo: la intención queda 'pending' y el reintento usa la MISMA Idempotency-Key, así que
@@ -21,6 +23,8 @@ import { writeCourierGuide } from "@/lib/route-output-fill";
 import { categoryOf } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { wooTerritorio } from "@/lib/woo-territorio";
+
+import { CUSTOMER_PAYMENT_KINDS } from "@/lib/pending-voucher";
 
 export type GfGuideResult =
   | { ok: true; trackingId: string; shippingCost: number; estimatedDeliveryDate: string; adopted: boolean }
@@ -41,7 +45,6 @@ export async function createGfGuideFor(orderId: string, ctx: { userId: string | 
   const row = master.data as Record<string, any>;
   const store = await loadGfStore(admin, row.store_id);
   if (!store?.enabled || !store.token) return { ok: false, error: "La tienda no tiene GF Courier habilitado o falta su token." };
-  if (row.shipping_mode !== "cod") return { ok: false, error: "GF Courier por API solo atiende contraentrega en Lima." };
 
   const shipments = await admin.from("shipments").select("id,delivery_status,returned_at").eq("order_id", orderId).eq("courier", GF_COURIER);
   if (shipments.error) return { ok: false, error: shipments.error.message };
@@ -50,7 +53,7 @@ export async function createGfGuideFor(orderId: string, ctx: { userId: string | 
 
   const order = await admin.from("orders").select("name,line_items,raw").eq("id", orderId).maybeSingle();
   if (order.error || !order.data) return { ok: false, error: "No se pudo leer el pedido." };
-  const payments = await admin.from("order_payments").select("amount").eq("order_id", orderId).eq("kind", "adelanto").eq("validation_status", "validado");
+  const payments = await admin.from("order_payments").select("amount").eq("order_id", orderId).in("kind", [...CUSTOMER_PAYMENT_KINDS]).eq("validation_status", "validado");
   const advance = (payments.data ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0);
   const sequence = (shipments.data ?? []).length + 1;
   const externalId = `${row.order_name ?? order.data.name}${sequence > 1 ? `-S${sequence}` : ""}`.slice(0, 100);

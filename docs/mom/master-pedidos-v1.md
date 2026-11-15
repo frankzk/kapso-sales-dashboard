@@ -19355,11 +19355,11 @@ las cajas que ese módulo ya tiene en la calle se cierran con sus reglas de siem
   (`POST /v1/webhooks`, eventos `order.*`) y lo guarda cifrado; nadie lo copia;
 - dos llaves para escribir: el interruptor de la tienda y `GF_COURIER_WRITE_ENABLED=true` en el servidor.
 
-**Crear la guía** (panel «GF Courier» del Master, permiso `gf_courier.create_guide`). Solo contraentrega. Se envía:
+**Crear la guía** (panel «GF Courier» del Master, en Operar con su entrada «GF Courier» en el índice; permiso `gf_courier.create_guide`). **Cualquier pedido de la tienda**, sin importar su modalidad: decide la cobertura de GF (decisión del owner, 15-11-2026; antes solo `cod` y el panel no salía en 299 de 339 pedidos de Aurela de la semana, sin modalidad marcada). Lo ya pagado por la clienta —adelanto, diferencia o total validados, como en Aliclik— se descuenta del cobro: un pedido pagado completo viaja con cobro cero. Se envía:
 nombre separado en primera palabra y resto, teléfono, distrito en texto (o el ubigeo del territorio de WooCommerce),
 dirección, referencia, GPS, cada línea con su SKU y el total del pedido **repartido al céntimo** entre las líneas
-(si no se divide entre las unidades, el mismo SKU va en dos líneas que difieren en S/ 0.01), adelantos validados y
-`amount_to_collect = total − adelantos`. Sin SKU, sin apellido o sin distrito no se envía: se dice qué falta.
+(si no se divide entre las unidades, el mismo SKU va en dos líneas que difieren en S/ 0.01), pagos validados de la clienta y
+`amount_to_collect = total − pagos`. Sin SKU, sin apellido o sin distrito no se envía: se dice qué falta.
 GF responde la cobertura (`DISTRICT_NOT_COVERED` con la lista válida), el stock (`OUT_OF_STOCK`, incluido el
 interruptor «Agotado» de los productos sin conteo) y los montos.
 - La intención se escribe antes del POST (`gf_order_requests`, una viva por pedido).
