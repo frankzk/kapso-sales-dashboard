@@ -23,6 +23,16 @@ Verificar con un pedido de prueba:
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
 
+### 15-11-2026 · Leads: la cola se revisa cada 60 s (sin migración, MOM «Bloques por asesora»)
+
+Sin migración. La pantalla de Leads pregunta por la firma de la cola cada 60 s
+en vez de 30 (`LEADS_LIVE_POLL_MS`). Cada pregunta es la cola entera de
+`lead_routing_scope`, la consulta que más tiempo de base gasta (24,5 % del total
+medido el 15-11-2026): ahora se hace la mitad de veces. Lo que cambian las
+demás asesoras aparece en hasta un minuto. Verificar: con Leads abierto, en los
+registros de Vercel `/api/leads/read` con `pollLeadsQueue` sale una vez por
+minuto por pestaña visible.
+
 ### 15-11-2026 · Repro Lima: la salida de otro courier cuenta como lista, con aviso (sin migración, MOM §9.5)
 
 Sin migración. Decisión del owner («Cuenta, con aviso»): un acuerdo cuyo pedido

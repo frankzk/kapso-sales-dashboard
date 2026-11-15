@@ -8220,6 +8220,24 @@ vencida hace más de 2 horas (366 de hace más de 7 días).
   que la 0312 hizo por el rendimiento: mismas ramas, mismos índices y ninguna
   tabla nueva leída; solo dos comparaciones por lead ya leído.
 
+**La cola de Leads se revisa cada 60 s (15-11-2026, decisión del owner).** Cada
+pantalla de Leads abierta y visible pregunta por la firma de la cola
+(`pollLeadsQueue`), y cada pregunta es la cola entera de `lead_routing_scope`:
+~0,28 s de base por asesora, y en conjunto la consulta que más tiempo de base
+gasta (24,5 % del total medido el 15-11-2026, 13 h). Antes se preguntaba cada
+30 s; desde ahora cada **60 s** (`LEADS_LIVE_POLL_MS`, components/leads.tsx),
+la mitad de veces.
+- Lo que hace la propia asesora se ve al momento; lo que cambian las demás
+  (un lead nuevo, uno tomado, un Yape por verificar) aparece en hasta un
+  minuto en vez de 30 s. Al volver a la pestaña se pregunta en el acto, y la
+  pestaña oculta no pregunta.
+- No cambia cuándo se recarga de verdad (`lib/leads-live-refresh.ts`: urgente
+  si cambian «Atender ahora» o los Yapes, tranquila cada 2 minutos, forzada
+  cada 5), ni el reparto, ni las alertas de Yape (cada 15 s), ni la reserva.
+- Se descartó calcular el reparto una sola vez para todas las asesoras: ahorra
+  lo mismo (la mitad del reparto) con un cambio grande en `lead_routing_scope`
+  y el mismo atraso. Prueba: `test/leads-live-poll.test.ts`.
+
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
 trabajan ahí, así que los reintentos que merecen una nueva llamada regresan a

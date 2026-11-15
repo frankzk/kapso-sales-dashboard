@@ -471,10 +471,13 @@ const EDAD_LABEL: Record<UrgencyTier, string> = {
 };
 const WIN_LABEL = { fresca: "A tiempo", por_vencer: "Por vencer", cerrada: "Vencida" } as const;
 
-// Cada cuánto se revalida la página en vivo (soft-refresh de datos del servidor).
-// Mismo espíritu que ONLINE_POLL_MS de Productividad, un poco más ágil porque
-// "Atender ahora" es una cola que se trabaja al momento.
-const LEADS_LIVE_POLL_MS = 30_000;
+// Cada cuánto se pregunta por la firma de la cola (soft-refresh de datos del
+// servidor). Cada pregunta es la cola entera de `lead_routing_scope`, la
+// consulta que más tiempo de base gasta (~25 % el 15-11-2026): con 60 s en vez
+// de 30 se hace la mitad de veces (decisión del owner, 15-11-2026; MOM
+// «Bloques por asesora»). Lo propio se ve al momento; lo de las demás, en
+// hasta un minuto. Al volver a la pestaña se pregunta en el acto.
+const LEADS_LIVE_POLL_MS = 60_000;
 // Cuándo recargar de verdad —urgente, tranquila cada dos minutos, o forzada
 // cada cinco— lo decide lib/leads-live-refresh.ts, que es puro y está probado.
 // El panel de gráficos se recarga con la misma calma: ve una semana entera, y
