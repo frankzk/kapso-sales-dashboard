@@ -1,6 +1,7 @@
-// Repro Lima: el pedido pendiente (nunca falló) cuyo acuerdo ya tiene la salida
-// viva del courier acordado dice «Listo» en la fila de atención y no pide
-// gestión (owner, 13-11-2026; MOM §9.5). La chapa ya decía «Salida creada»
+// Repro Lima: el pedido pendiente (nunca falló) cuyo acuerdo ya tiene su salida
+// viva dice «Listo» en la fila de atención y no pide gestión (owner,
+// 13-11-2026; MOM §9.5). Si la salida es de otro courier que el acordado,
+// cuenta igual y avisa cuál se acordó (owner, 15-11-2026: «Cuenta, con aviso»). La chapa ya decía «Salida creada»
 // (`salida_creada`, test/repro-lima-live-outputs.test.ts), pero la línea de
 // abajo seguía pidiendo «confirma con el cliente la fecha y el courier» en
 // pedidos con su guía de Aliclik ya creada para el 13/11.
@@ -28,9 +29,14 @@ describe("la línea de un pendiente con la salida ya creada", () => {
     expect(html).not.toContain("confirma con el cliente");
   });
 
-  it("con la salida de otro courier sigue pidiendo revisar (la chapa dice cuál)", () => {
-    const html = line(pending({ state: { kind: "salida_distinta", courier: "fenix" }, box: { kind: "con_courier", courier: "fenix", enOficina: false } }));
-    expect(html).toContain("confirma con el cliente la fecha y el courier");
+  it("con la salida de otro courier: «Listo» también, avisando cuál se acordó (owner, 15-11-2026)", () => {
+    const html = line(pending({
+      state: { kind: "salida_distinta", courier: "aliclik" },
+      box: { kind: "con_courier", courier: "aliclik", enOficina: false },
+      agreement: { courierName: "Swayp" } as ReproRow["agreement"],
+    }));
+    expect(html).toContain("Listo: sale con Aliclik (se acordó Swayp). No requiere gestión salvo que el cliente cambie algo.");
+    expect(html).not.toContain("confirma con el cliente");
   });
 
   it("sin salida: la de siempre", () => {
@@ -41,5 +47,7 @@ describe("la línea de un pendiente con la salida ya creada", () => {
   it("el MOM lo registra", () => {
     const mom = readFileSync(resolve(process.cwd(), "docs/mom/master-pedidos-v1.md"), "utf8").replace(/\s+/g, " ");
     expect(mom).toContain("En la fila de atención de un pendiente que nunca falló, `salida_creada` dice «Listo: sale con Aliclik. No requiere gestión salvo que el cliente cambie algo.»");
+    expect(mom).toContain("decisión del owner: «Cuenta, con aviso»");
+    expect(mom).toContain("«Salida creada · sale sáb 14/11 con Swayp (se acordó Aliclik)»");
   });
 });

@@ -68,12 +68,12 @@ describe("el acuerdo frente a la salida", () => {
     expect(isProblemState(s.kind)).toBe(false);
     expect(agreementStateLabel(s, agreement("fenix"))).toMatch(/^Salida creada · sale .* con Swayp$/);
   });
-  it("acordado con otro courier (o con Grupo GF): «revisa cuál sale», es problema", () => {
+  it("acordado con otro courier (o con Grupo GF): cuenta igual y avisa cuál se acordó (owner, 15-11-2026)", () => {
     for (const courier of ["aliclik", "propio"]) {
       const s = state(courier, swayp);
       expect(s).toEqual({ kind: "salida_distinta", courier: "fenix" });
-      expect(isProblemState(s.kind)).toBe(true);
-      expect(agreementStateLabel(s, agreement(courier))).toContain("Ya tiene salida con Swayp");
+      expect(isProblemState(s.kind)).toBe(false);
+      expect(agreementStateLabel(s, agreement(courier))).toMatch(/^Salida creada · sale .* con Swayp \(se acordó .+\)$/);
     }
   });
   it("sin salida todavía sigue pidiendo crearla en la Mesa de ruta", () => {
@@ -89,7 +89,9 @@ describe("Almacén y la base", () => {
   it("la salida ya entregada al courier va a «Todavía fuera»", () => {
     const facts = { critical: false, unconfirmed: false, defaultProblem: false, noReception: false, addressDrift: false, otherSalidaExists: false, state: "salida_creada" as const };
     expect(retryGroup({ ...facts, box: { kind: "con_courier", courier: "fenix", enOficina: false } } as never)).toBe("fuera");
-    expect(retryGroup({ ...facts, state: "salida_distinta", box: { kind: "con_courier", courier: "fenix", enOficina: true } } as never)).toBe("con_aviso");
+    // Con otro courier que el acordado, Almacén la trata como «Salida creada» (owner, 15-11-2026).
+    expect(retryGroup({ ...facts, state: "salida_distinta", box: { kind: "con_courier", courier: "fenix", enOficina: true } } as never)).toBe("anaquel");
+    expect(retryGroup({ ...facts, state: "salida_creada", box: { kind: "con_courier", courier: "fenix", enOficina: true } } as never)).toBe("anaquel");
   });
   it("la caja que nunca salió no pide recepción; la base admite «con_courier»", () => {
     expect(readFileSync("lib/warehouse-retries.ts", "utf8")).toContain("!r.box.nuncaSalio");
