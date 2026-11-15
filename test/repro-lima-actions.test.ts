@@ -106,7 +106,7 @@ vi.mock("@/lib/db", () => {
   };
 });
 
-import { claimReproCase, programReproAgreement, registerReproCall } from "@/app/dashboard/pedidos/repro-lima/actions";
+import { claimReproCase, moveReproAgreement, programReproAgreement, registerReproCall } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { priorOutputsWith, reproBoxAction as realBoxAction } from "@/lib/repro-box-action";
 import { DISPATCH_NEEDS_COORDINATE_ERROR } from "@/lib/dispatch-date";
 
@@ -558,5 +558,58 @@ describe("«Confirma fecha» con Aliclik pide la ubicación si el pedido no la t
     expect((await registerReproCall(confirmInput())).error).toBeUndefined();
     expect(writes()).toEqual([]);
     expect(recompute).not.toHaveBeenCalled();
+  });
+});
+
+describe("«Agendar» de la lista: otro día para un acuerdo (owner, 15-11-2026; §9.5)", () => {
+  const agreed = (over: Record<string, unknown> = {}) => caseRow({
+    agreement_call_id: "call-0", agreed_on: "2026-10-15", agreed_courier: "propio", box_action: "mantener", changes: { direccion: false },
+    claimed_by: null, claimed_until: null, ...over,
+  });
+  const move = (over: Record<string, unknown> = {}) => moveReproAgreement({ orderId: ORDER_ID, day: "2026-10-16", channel: "whatsapp", operationId: OP_ID, ...over } as Parameters<typeof moveReproAgreement>[0]);
+  const releases = () => state.queries.filter((q) => q.table === "lima_repro_cases" && q.op === "update" && q.values?.claimed_by === null && q.values?.claimed_until === null);
+  const claimThenRecord = (name: string) => name === "lima_repro_claim"
+    ? { data: { case_id: CASE_ID, claimed: true, until: "2026-10-13T13:10:00Z" }, error: null }
+    : { data: { call_id: "call-1", duplicate: false }, error: null };
+
+  it("toma el caso, registra «Confirma fecha» con el mismo courier, lo que cambió y la acción de la caja, y lo suelta", async () => {
+    state.facts = [facts({ open: agreed() })];
+    state.rpc = claimThenRecord;
+    const result = await move();
+    expect(result.error).toBeUndefined();
+    expect(state.rpcs.map((r) => r.name)).toEqual(["lima_repro_claim", "lima_repro_record"]);
+    expect(state.rpcs[1]?.params).toMatchObject({
+      p_case: CASE_ID, p_outcome: "confirma", p_channel: "whatsapp", p_agreed_on: "2026-10-16", p_courier: "propio", p_box_action: "mantener",
+      p_note: "Día cambiado desde la lista de Repro Lima (antes, jue 15/10).",
+    });
+    // La acción de la caja sale de la misma regla que la pestaña, con el courier del acuerdo.
+    expect(state.boxInputs.at(-1)).toMatchObject({ outcome: "confirma", courier: "propio" });
+    // No lo tenía: al terminar lo suelta.
+    expect(releases()).toHaveLength(1);
+  });
+
+  it("si ya lo tenía tomado (la ficha abierta), no lo suelta", async () => {
+    state.facts = [facts({ open: agreed({ claimed_by: "me", claimed_until: "2026-10-13T13:08:00Z" }) })];
+    state.rpc = claimThenRecord;
+    expect((await move()).error).toBeUndefined();
+    expect(releases()).toEqual([]);
+  });
+
+  it("sin acuerdo no inventa courier: se acuerda en «Atender»; el mismo día no registra nada", async () => {
+    state.facts = [facts({ open: caseRow({ claimed_by: null }) })];
+    expect(await move()).toEqual({ error: "Este pedido no tiene un acuerdo con la clienta: acuerda el día y el courier en «Atender»." });
+    state.facts = [facts({ open: agreed() })];
+    state.factsCalls = 0;
+    expect(await move({ day: "2026-10-15" })).toEqual({ notice: "Ya estaba acordado para el jue 15/10." });
+    expect(state.rpcs).toEqual([]);
+  });
+
+  it("pide por dónde se habló y una fecha; con otra persona en el caso, lo dice", async () => {
+    state.facts = [facts({ open: agreed() })];
+    expect((await move({ channel: "sin_contacto" })).error).toBe("Di si lo acordaste por llamada o por WhatsApp.");
+    expect((await move({ day: "mañana" })).error).toBe("Elige el día que acordaste con el cliente.");
+    state.rpc = () => ({ data: { case_id: CASE_ID, claimed: false, holder: "ana", until: "2026-10-13T13:09:00Z" }, error: null });
+    expect((await move()).error).toBe("Ana está atendiendo este pedido.");
+    expect(state.rpcs.map((r) => r.name)).toEqual(["lima_repro_claim"]);
   });
 });

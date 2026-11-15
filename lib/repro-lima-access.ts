@@ -142,7 +142,8 @@ export interface ReproRow {
   callCount: number;
   noAnswerCount: number;
   /** La última llamada del caso: «última 11/10 16:20, Daysi». */
-  lastCall: { at: string; byName: string | null; outcome: string | null } | null;
+  /** `note`: lo que se anotó en esa llamada (la lista lo enseña en «Qué pasa»). */
+  lastCall: { at: string; byName: string | null; outcome: string | null; note?: string | null } | null;
   nextCallAt: string | null;
   /** El acuerdo vigente del caso. */
   agreement: {
@@ -294,7 +295,7 @@ function buildRow(input: {
   now: Date;
   today: string;
   names: Record<string, string>;
-  lastCall: { at: string; actor: string | null; outcome: string | null } | null;
+  lastCall: { at: string; actor: string | null; outcome: string | null; note?: string | null } | null;
 }): ReproRow {
   const { f, order, now, today, names } = input;
   // Un caso de otro episodio cuenta como ausente: se cierra después de responder.
@@ -374,7 +375,7 @@ function buildRow(input: {
     callCount: open?.call_count ?? 0,
     noAnswerCount: open?.no_answer_count ?? 0,
     lastCall: input.lastCall
-      ? { at: input.lastCall.at, byName: input.lastCall.actor ? names[input.lastCall.actor] ?? null : null, outcome: input.lastCall.outcome }
+      ? { at: input.lastCall.at, byName: input.lastCall.actor ? names[input.lastCall.actor] ?? null : null, outcome: input.lastCall.outcome, note: input.lastCall.note ?? null }
       : null,
     nextCallAt: open?.next_call_at ?? null,
     agreement: open?.agreed_on && open.agreement_call_id
@@ -549,20 +550,20 @@ export async function loadReproLima(
   // respuesta trae 1000 filas como mucho y cortaría la última llamada.
   const { data: callRows } = await courierRowsByIds(openIds, (chunk) => allCourierRows((from, to) => admin
     .from("lima_repro_calls")
-    .select("case_id,actor,occurred_at,outcome,channel")
+    .select("case_id,actor,occurred_at,outcome,channel,note")
     .in("case_id", chunk)
     .neq("channel", "sin_contacto")
     .order("case_id")
     .order("occurred_at", { ascending: false })
     .order("id")
-    .range(from, to) as unknown as PromiseLike<{ data: Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null }> | null; error: { message: string } | null }>)
+    .range(from, to) as unknown as PromiseLike<{ data: Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }> | null; error: { message: string } | null }>)
     .then((data) => ({ data, error: null })));
-  const lastCallByCase = new Map<string, { at: string; actor: string | null; outcome: string | null }>();
-  for (const call of callRows as Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null }>) {
+  const lastCallByCase = new Map<string, { at: string; actor: string | null; outcome: string | null; note: string | null }>();
+  for (const call of callRows as Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }>) {
     // «Desarmar y cerrar sin llamada» no es una llamada.
     if (call.channel === "sin_contacto") continue;
     const current = lastCallByCase.get(call.case_id);
-    if (!current || call.occurred_at > current.at) lastCallByCase.set(call.case_id, { at: call.occurred_at, actor: call.actor, outcome: call.outcome });
+    if (!current || call.occurred_at > current.at) lastCallByCase.set(call.case_id, { at: call.occurred_at, actor: call.actor, outcome: call.outcome, note: call.note?.trim() || null });
   }
   const people = new Set<string>();
   for (const f of facts.values()) {

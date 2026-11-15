@@ -23,7 +23,8 @@ import {
   type ChainAttempt,
 } from "@/lib/lima-retry-chain";
 import { retryChainOf } from "@/lib/repro-lima-access";
-import { attentionCounts, attentionRows, LIMA_QUEUE_CARDS, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { LIMA_SUB_FILTERS, classifyLimaRows, limaBoardCounts, limaBoardRows } from "@/lib/repro-lima-blocks";
 import { permissionsFor } from "@/lib/permissions";
 
 /**
@@ -166,15 +167,19 @@ describe("la fila de Repro Lima", () => {
     expect(retryChainOf({ ...base, otherLiveCourier: null }, null, "2026-11-03")).not.toBeNull();
   });
 
-  it("la tarjeta «Reintentos Aliclik» va primera y cuenta solo esos", () => {
-    expect(LIMA_QUEUE_CARDS[0]?.key).toBe("reintentos_aliclik");
-    const rows = [{ orderId: "o1" }, { orderId: "o2" }] as unknown as LimaPendingOrder[];
+  it("«Reintentos Aliclik» va dentro de «No entregados» y cuenta solo esos (owner, 15-11-2026)", () => {
+    expect(LIMA_SUB_FILTERS.reintentos_aliclik.parent).toBe("no_entregados");
+    const failed = { stage: "en_curso", substage: "por_reprogramar_lima", hasPriorDispatch: true, createdAt: null, macroSince: null, programmedFor: null } as const;
+    const rows = [{ orderId: "o1", ...failed }, { orderId: "o2", ...failed }] as unknown as LimaPendingOrder[];
     const cases = [
       { orderId: "o1", list: "por_decidir" as const, retryChain: retryChainOf(base, null, "2026-11-03") },
       { orderId: "o2", list: "por_decidir" as const, retryChain: null },
     ];
-    expect(attentionCounts(rows, cases, "2026-11-03").reintentos_aliclik).toBe(1);
-    expect(attentionRows(rows, cases, "reintentos_aliclik", "2026-11-03").map((r) => r.orderId)).toEqual(["o1"]);
+    const classes = classifyLimaRows(rows, cases, "2026-11-03");
+    const counts = limaBoardCounts(rows, classes);
+    expect(counts.sub.reintentos_aliclik).toBe(1);
+    expect(counts.task.no_entregados).toBe(2);
+    expect(limaBoardRows(rows, classes, "reintentos_aliclik").map((r) => r.orderId)).toEqual(["o1"]);
   });
 });
 

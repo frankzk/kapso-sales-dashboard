@@ -780,6 +780,96 @@ export async function programReproAgreement(input: { caseId: string; found?: boo
 }
 
 // ---------------------------------------------------------------------------
+// «Agendar» desde la lista: otro día para un acuerdo que ya existe (15-11-2026)
+// ---------------------------------------------------------------------------
+
+const NO_AGREEMENT = "Este pedido no tiene un acuerdo con la clienta: acuerda el día y el courier en «Atender».";
+
+/**
+ * «Agendar» y «Mover a…» de la lista (owner, 15-11-2026; MOM §9.5) sobre un
+ * pedido que ya tiene un acuerdo: otro día, con el mismo courier y lo mismo que
+ * cambió. Es «Confirma fecha» de la pestaña por el mismo camino, sin abrir la
+ * ficha: toma el candado del caso (`claimReproCase`), recalcula «Qué hacer con
+ * la caja» con `reproBoxAction` y registra la llamada (`recordCall` →
+ * `lima_repro_record`), que valida la fecha (corte, Swayp, noche anterior) y
+ * después programa o quita la fecha de Grupo GF como al decidir. Quien agenda
+ * dice si lo acordó por llamada o por WhatsApp: es un acuerdo con la clienta,
+ * no un cambio de Kapta. Al terminar suelta el candado si no lo tenía. Sin
+ * acuerdo no hay courier que conservar: eso se acuerda en «Atender».
+ */
+export async function moveReproAgreement(input: {
+  orderId: string;
+  day: string;
+  channel: ReproChannel;
+  /** Un `crypto.randomUUID()` por pedido: un doble clic no registra dos llamadas. */
+  operationId: string;
+}): Promise<RegisterReproCallResult> {
+  const scope = await requireReproLima();
+  if ("error" in scope) return { error: scope.error };
+  if (!isUuid(input.orderId)) return { error: "No encontramos el pedido." };
+  if (input.channel !== "llamada" && input.channel !== "whatsapp") return { error: "Di si lo acordaste por llamada o por WhatsApp." };
+  const day = input.day?.trim() ?? "";
+  if (!DAY_RE.test(day)) return { error: "Elige el día que acordaste con el cliente." };
+  const admin = createAdminSupabase();
+  try {
+    const f = await factsOf(admin, input.orderId);
+    if (!f?.storeId || !f.order) return { error: "No encontramos el pedido." };
+    if (!scope.storeIds.has(f.storeId)) return { error: REPRO_OUTSIDE_STORE };
+    const open = f.open && f.open.episode_key === f.episode.key ? f.open : null;
+    const courier = open && isReproCourier(open.agreed_courier) ? open.agreed_courier : null;
+    if (!open || !open.agreed_on || !open.agreement_call_id || !courier) return { error: NO_AGREEMENT };
+    const before = open.agreed_on.slice(0, 10);
+    if (before === day) return { notice: `Ya estaba acordado para el ${programDayLabel(day)}.` };
+    const now = new Date();
+    const hadClaim = open.claimed_by === scope.userId && Boolean(open.claimed_until) && Date.parse(open.claimed_until!) > now.getTime();
+    const claim = await claimReproCase(input.orderId);
+    if ("error" in claim) return { error: claim.error };
+    try {
+      const changes = normalizeReproChanges(open.changes);
+      // La misma regla que la pestaña y que `recordCall`: si la caja cambió
+      // desde que se acordó, la acción nueva es la que vale.
+      const decided = reproBoxAction({
+        outcome: "confirma",
+        courier,
+        changes,
+        box: f.box,
+        ownLiveCourier: f.ownLive?.courier ?? null,
+        lastFailedCourier: f.failedOutput?.courier ?? null,
+        otherLiveCourier: f.otherLiveCourier,
+        hadPropio: f.hadPropio,
+        totalOutputs: f.outputs.length,
+        priorWithCourier: priorOutputsWith(f.outputs, courier),
+        ownReplace: f.ownReplace,
+        reopened: f.reopened,
+        retryAdmission: f.retryAdmission,
+      });
+      if ("problem" in decided) return { error: `${decided.problem} Ábrelo con «Atender».` };
+      return await recordCall(scope, {
+        caseId: claim.caseId,
+        operationId: input.operationId,
+        outcome: "confirma",
+        channel: input.channel,
+        agreedOn: day,
+        courier,
+        changes,
+        expectedBoxAction: decided.action,
+        note: `Día cambiado desde la lista de Repro Lima (antes, ${programDayLabel(before)}).`,
+      });
+    } finally {
+      if (!hadClaim) {
+        await admin
+          .from("lima_repro_cases")
+          .update({ claimed_by: null, claimed_until: null })
+          .eq("id", claim.caseId)
+          .eq("claimed_by", scope.userId);
+      }
+    }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Lecturas de la hoja
 // ---------------------------------------------------------------------------
 

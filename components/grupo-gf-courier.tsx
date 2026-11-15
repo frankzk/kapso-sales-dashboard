@@ -8,6 +8,7 @@ import { OrderLink } from "@/components/order-link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, cn, STICKY_HEAD, TABLE_WRAP_FROM } from "@/components/ui";
 import { DispatchDayBoard } from "@/components/dispatch-day-board";
+import { GfStuckTray } from "@/components/gf-stuck-tray";
 import { Badge, Banner, FIELD, OpsButton } from "@/components/ops-ui";
 import { IconChevronDown, IconMore, IconSearch } from "@/components/icons";
 import { CourierRoutesLedger } from "@/components/courier-routes-ledger";
@@ -211,6 +212,7 @@ export function GrupoGfCourierBoard({
           pendingReturns={pendingReturns}
           returnManifestRiders={returnManifestRiders}
           awaitingRepro={snapshot.operations.awaitingRepro}
+          afterPlan={<GfStuckTray orgId={orgId} />}
         />
       )}
       {tab === "available" && (
