@@ -1,4 +1,7 @@
 import type { Metadata, Viewport } from "next";
+// Inter, servida desde Kapta (sin pedirla a Google en cada carga): la letra del
+// mundo de operación (owner, 15-11-2026, DESIGN.md «Typography»).
+import "@fontsource-variable/inter";
 import "./globals.css";
 
 export const metadata: Metadata = {

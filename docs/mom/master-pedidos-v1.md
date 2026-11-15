@@ -6465,6 +6465,42 @@ los chips «Llamar después» y «Cerrados · esperan anulación», «Sale a rep
 la bandeja «Lima trabados». No crea estados ni subetapas, no cambia
 `MOM_RESOLUTION_VERSION` y no necesita migración.
 
+**Segunda vuelta: el flujo del día (owner, 15-11-2026).** «La suma de Reintentos
+Aliclik 111 más los dos de su derecha no suman 184 … el total desapareció … aquí
+falta ordenar un flujo de trabajo; además, le falta un rediseño al estilo Stripe,
+tipo de letra Inter». Cambia la presentación, no las reglas (`limaTaskOf`,
+`limaBoardRows` y las cuentas siguen igual):
+- **«Flujo del día»** reemplaza el título «Por gestionar hoy». Las cinco tareas
+  son pasos numerados en el orden en que el equipo las trabaja, de lo más urgente
+  a lo administrativo (`LIMA_FLOW`, `components/repro-lima-blocks.tsx`):
+  1. Novedad del courier (está en la calle: llamar ya);
+  2. Llamar después (a la hora pedida);
+  3. No entregados (acordar día y courier);
+  4. Confirmar primer despacho (datos y agenda);
+  5. Por cerrar.
+
+  El primer paso con pedidos lleva «Empieza aquí». El número es el orden del
+  trabajo; la precedencia para clasificar un pedido sigue siendo la de
+  `limaTaskOf`.
+- **Lo de adentro va dentro de su paso.** Cada celda dice cuántos de sus pedidos
+  caen en su filtro interno («111 son reintentos Aliclik», «N con más de 30
+  días», «N esperan anulación»). El chip de ese filtro aparece solo en el pie de
+  la tarjeta cuando el paso está elegido, precedido por «Dentro de No
+  entregados». Ya no hay chips sueltos debajo de la fila que parezcan sumarse a
+  otra cifra.
+- **El total arriba.** Debajo del título, la píldora «N pedidos de Lima por
+  entregar» (lo mismo que «N de M pendientes» de la lista) es también «Todos».
+- **Los trabados, como excepción.** Una sola píldora «Trabados N» al lado del
+  total. Al elegirla se abre debajo la fila «Trabados por motivo» con un chip por
+  motivo (los del flujo y los del courier juntos). Reemplaza los chips
+  «Trabados» de cada bloque y el chip «Solo trabados» de la barra.
+- **Macroestado y subetapa** pasan a la píldora «Etapa» de la barra de la lista,
+  que abre la misma selección en una hoja. Las cifras siguen contando solo lo que
+  se muestra.
+- La Agenda y «En manos del courier» son franjas: una tarjeta con celdas
+  separadas por líneas finas. En el teléfono, la Agenda va de dos en dos y el
+  courier de tres en tres.
+
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
 son puras (`lib/repro-lima-blocks.ts`) y usan lo que Repro Lima ya lee
