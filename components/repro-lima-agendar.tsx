@@ -101,16 +101,18 @@ export function ChannelPicker({ value, onChange }: { value: AgendarChannel; onCh
 }
 
 /** «Agendar» de una fila: un popover con el día y, con un acuerdo, por dónde se habló. */
-export function AgendarButton({ row, path, today, onDone, size = "sm" }: {
+export function AgendarButton({ row, path, today, onDone, size = "sm", suggested }: {
   row: Pick<LimaPendingOrder, "orderId" | "orderName">;
   path: Exclude<AgendarPath, { kind: null }>;
   today: string;
   onDone: (feedback: AgendarFeedback) => void;
   size?: "sm" | "md";
+  /** Sin día, el que propone Kapta (`limaSuggestedDay`): llega elegido y se confirma con un toque. */
+  suggested?: string;
 }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const initial = path.current && path.current >= today ? path.current : "";
+  const initial = path.current && path.current >= today ? path.current : suggested ?? "";
   const [day, setDay] = useState(initial);
   const [channel, setChannel] = useState<AgendarChannel>("llamada");
   const [note, setNote] = useState("");

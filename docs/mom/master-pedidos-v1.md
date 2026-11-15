@@ -6571,6 +6571,55 @@ tarea (`limaTaskOf`), y no necesita migración:
   Sacar a reparto; `por_cerrar` sigue abriendo Por cerrar; `programados_manana`,
   Mañana; un día guardado (`2026-11-18`), su cajón de ahora.
 
+**Cuarta vuelta: ruta vencida, propuesta de día y la hora de la alerta (owner,
+15-11-2026).** «Un pedido no puede estar con el courier si su ruta ya venció más
+de 24 horas de pasado el día de la ruta. Si salió a ruta un lunes, el miércoles
+no puede estar como con el courier: tiene que pasar a no entregado… dentro de
+No entregados, que falta el reporte del motorizado; se asume como no entregado,
+si no se van a quedar entrampados los pedidos.» Y sus respuestas: solo en Repro
+Lima, días de reparto, abrir en Todos, «Llamar después» en su paso por hora,
+«Kapta propone, el equipo confirma», «Más de 30 días» dentro de Sacar a
+reparto, cada quien toma y «Hoy sin guía» desde las 10:30. No crea estados, no
+cambia la etapa del Master ni `MOM_RESOLUTION_VERSION`, y no necesita migración:
+- **Ruta vencida sin reporte** (`routeWithoutReport`, `limaRouteDay`,
+  `ROUTE_REPORT_GRACE_DAYS = 1`). Un pedido En curso, en la calle (no
+  retornando, no dado por entregado, no en «Por reprogramar Lima») y sin otra
+  tarea, cuando pasó **un día de reparto entero** después del día de la ruta
+  (`fullDeliveryDaysBetween`; el domingo no cuenta): salió el lunes, el martes
+  sigue con el courier y desde el miércoles es no entregado; salió el sábado,
+  el lunes espera y desde el martes es no entregado. El día de la ruta es el más
+  reciente entre la caja de Grupo GF de su salida viva, `dispatched_at` y la
+  entrada a En curso, para que una salida nueva no se lea como una ruta vieja.
+  Va a **No entregados** con el filtro de adentro **«Sin reporte de la ruta»**,
+  y la fila dice «Salió a ruta el lun 16/11 y el motorizado Alexis (o GF
+  Courier) no reportó el resultado: se cuenta como no entregado. Pide el
+  reporte; si no se entregó, acuerda el nuevo día con la clienta (Atender).».
+  **Solo en Repro Lima**: el Master sigue En curso hasta que llegue el reporte
+  o alguien lo registre, así no se pierde el rastro de la caja ni del efectivo.
+  La novedad con la clienta y lo dado por entregado siguen su paso.
+- **Los filtros de adentro de «Con el courier»** (Guía creada, En ruta,
+  Retornando) cuentan solo lo que está en ese paso: suman su cifra. Una novedad
+  o un no entregado con la guía viva ya no se cuentan ahí.
+- **Kapta propone, el equipo confirma** (`limaSuggestedDay`). A lo que falta
+  sacar y no tiene día, Kapta le propone el próximo día de reparto (el de
+  «Mañana»). En «Sin fecha» y en «Sacar a reparto», un aviso dice «Kapta
+  sugiere el lun 16/11… para N pedidos sin fecha que se pueden agendar» con
+  «Elegirlos para el lun 16/11», que marca las casillas de los que se pueden
+  agendar y deja ese día puesto en «Mover a…». Nada se mueve hasta que alguien
+  confirma («Mover al lun 16/11», con su confirmación), y cada uno va por su
+  camino de siempre (`agendarReproLima`). «Agendar» de una fila sin día llega
+  con ese día elegido.
+- **«Hoy sin guía» es alerta desde las 10:30 de Lima**
+  (`HOY_SIN_GUIA_ALERT_MINUTE`, `hoySinGuiaAlert`), después de la guía GF
+  automática (9, 10 y 11). Antes se cuenta y se puede filtrar, pero sin
+  alarmar: la cifra «sin guía» de Hoy va sin color, el filtro es un chip neutro
+  y la fila dice «Sale hoy y todavía no tiene guía ni rótulo: si a las 10:30 no
+  la tiene, créala desde la Mesa de ruta.». Lo que debía salir un día anterior
+  es alerta siempre. «Mañana sin guía» no cambia.
+- **Se queda como está** (confirmado): abre en Todos con «Empieza aquí»;
+  «Llamar después» en su paso, por la hora; «Más de 30 días» dentro de Sacar a
+  reparto; cada quien toma el pedido con «Atender» (candado).
+
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
 son puras (`lib/repro-lima-blocks.ts`) y usan lo que Repro Lima ya lee

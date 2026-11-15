@@ -16,6 +16,7 @@ import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { AGENDA_ORIGIN_LABEL, agendaDayText, classifyLimaRows, courierNowText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 import { soles, telHref } from "@/lib/rider-contact";
@@ -122,6 +123,15 @@ function NextStep({ row, repro, cls, stuck, today, now }: { row: LimaPendingOrde
 
 /** «Fecha agendada»: el día de la Agenda y de dónde sale; con el courier y sin día por delante, lo dice. */
 function AgendaCell({ cls, repro, today }: { cls: LimaRowClass; repro?: ReproRow; today: string }) {
+  // Ruta vencida sin reporte (owner, 15-11-2026): el día en que salió, como un no entregado.
+  if (cls.noReport) {
+    return (
+      <div>
+        <p className="whitespace-nowrap text-sm font-medium tabular-nums text-warn-fg">{cls.routeDay ? `Salió ${programDayLabel(cls.routeDay)}` : "Salió a ruta"}</p>
+        <p className="whitespace-nowrap text-xs text-ink-500">Sin reporte</p>
+      </div>
+    );
+  }
   if (!cls.agenda && cls.courier) return <p className="text-[13px] text-ink-500">Con el courier</p>;
   const overdue = Boolean(cls.agendaDay && cls.agendaDay < today);
   const origin = cls.agendaOrigin;
