@@ -7,7 +7,7 @@
 // trabados del equipo (§9.6) van dentro de su paso (`trabado`). Las acciones
 // conservan los permisos y guardas del pedido y de cada caso.
 //
-// «Agendar» pone el día sin abrir la ficha y «Mover a…» lo pone a varios, por
+// «Programar» pone el día sin abrir la ficha y el lote lo pone a varios, por
 // la acción que ya existe para cada pedido (`agendarReproLima`). «Atender»
 // abre la ficha del pedido en su pestaña «Repro Lima»
 // (`?ficha=<pedido>&seccion=reprolima`, 07-11-2026) para llamar y registrar la
@@ -52,6 +52,7 @@ import {
   limaBoardRows,
   limaOwnRoute,
   limaQuickGuideEligible,
+  programarBatchLabel,
   limaSuggestedDay,
   type LimaBoardKey,
   type LimaStep,
@@ -292,6 +293,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             size={size}
             // Sin día, llega elegido el que propone Kapta: el equipo lo confirma (owner, 15-11-2026).
             suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}
+            hasDay={Boolean(classes.get(row.orderId)?.agendaDay)}
             onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }}
           />
         )}
@@ -325,7 +327,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     : [];
   // Elegir cuáles aprobar (owner, 06-11-2026): con alguno marcado, el botón
   // aprueba esos; sin marcar, todos los listos, como antes. En las demás listas
-  // la casilla elige qué «Mover a…» otro día (owner, 15-11-2026).
+  // la casilla elige qué se programa en lote (owner, 15-11-2026).
   const targets = retryApprovalTargets(readyToApprove, picked);
   const toggle = (orderId: string) => setPicked((current) => {
     const next = new Set(current);
@@ -378,10 +380,12 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     refresh();
   }
 
-  // «Mover a…» (owner, 15-11-2026): los elegidos que se pueden agendar, uno
+  // «Programar» en lote (owner, 15-11-2026; antes «Mover»): los elegidos que se pueden agendar, uno
   // por uno por la acción de cada uno; lo que no se movió, una línea por motivo.
   const movable = inRetries ? [] : inQueue.filter((row) => picked.has(row.orderId) && pathOf(row).kind !== null);
   const movableAgreements = movable.filter((row) => pathOf(row).kind === "acuerdo").length;
+  // «Programar» lo que no tiene día y «Reprogramar» lo que ya lo tiene (owner, 16-11-2026).
+  const movableDated = movable.filter((row) => Boolean(classes.get(row.orderId)?.agendaDay)).length;
   const moveMaxDays = movable.some((row) => pathOf(row).kind === "envio") ? DISPATCH_DATE_MAX_DAYS : RESCHEDULE_MAX_DAYS;
   const [moveDay, setMoveDay] = useState("");
   const [moveChannel, setMoveChannel] = useState<AgendarChannel>("llamada");
@@ -390,7 +394,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const rows = movable;
     if (!rows.length || !moveDay || moving) return;
     const label = programDayLabel(moveDay);
-    if (!window.confirm(`Se moverán ${rows.length} ${rows.length === 1 ? "pedido" : "pedidos"} al ${label}. ¿Seguir?`)) return;
+    if (!window.confirm(`${programarBatchLabel(movableDated, rows.length - movableDated, moveDay)}: ${rows.length} ${rows.length === 1 ? "pedido" : "pedidos"}. ¿Seguir?`)) return;
     const failed: Array<{ orderName: string; error: string }> = [];
     const mesa: Array<{ orderId: string; orderName: string }> = [];
     let done = 0;
@@ -409,19 +413,19 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         if (outcome.saved && !result.error) done += 1;
         else failed.push({ orderName: row.orderName, error: result.error ?? outcome.feedback.text });
       } catch {
-        failed.push({ orderName: row.orderName, error: "No se pudo agendar (error de conexión)." });
+        failed.push({ orderName: row.orderName, error: "No se pudo programar (error de conexión)." });
       }
       setMoving({ done: i + 1, total: rows.length });
     }
     setMoving(null);
     setPicked(new Set());
-    setFeedback({ kind: failed.length ? "error" : "notice", text: `Movidos al ${label}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed), ...(mesa.length ? { mesa } : {}) });
+    setFeedback({ kind: failed.length ? "error" : "notice", text: `Programados para el ${label}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed), ...(mesa.length ? { mesa } : {}) });
     refresh();
   }
 
   // «Kapta propone, el equipo confirma» (owner, 15-11-2026): en «Sin fecha» y en
   // «Sacar a reparto», un toque elige los que se pueden agendar y deja el
-  // próximo día de reparto puesto en «Mover a…». Nada se mueve hasta confirmar.
+  // próximo día de reparto puesto en el lote. Nada se mueve hasta confirmar.
   const suggestedDay = limaSuggestedDay(today);
   const proposals = !stuck && !retriesOnly && (key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia")
     ? inQueue.filter((row) => classes.get(row.orderId)?.agenda === "sin_fecha" && pathOf(row).kind !== null)
@@ -454,7 +458,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <p className="mt-1 text-sm text-ink-500">
             {retriesOnly
               ? "Los no entregados de Lima que vuelven a salir por Aliclik, sin llamar. Abre el pedido y crea la guía con el transporte indicado."
-              : "El panel del equipo de Lima. Trabaja el flujo de izquierda a derecha; «Agendar» pone el día y «Atender» abre la llamada."}
+              : "El panel del equipo de Lima. Trabaja el flujo de izquierda a derecha; «Programar» pone el día y «Atender» abre la llamada."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -633,23 +637,23 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
       </section>
 
       {movable.length > 0 && (
-        <div role="region" aria-label="Mover a otro día" className="sticky bottom-4 z-30 mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-lg bg-white p-3 shadow-pop ring-1 ring-line sm:w-fit sm:px-4">
+        <div role="region" aria-label="Programar otro día" className="sticky bottom-4 z-30 mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-lg bg-white p-3 shadow-pop ring-1 ring-line sm:w-fit sm:px-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="mr-1 text-sm font-semibold text-ink-900">
               <span className="tabular-nums">{movable.length.toLocaleString("es-PE")}</span> {movable.length === 1 ? "pedido elegido" : "pedidos elegidos"}
             </span>
             <OpsButton variant="primary" size="sm" disabled={!moveDay || Boolean(moving)} onClick={() => void moveAll()} className="pointer-coarse:h-11">
-              {moving ? `Moviendo ${moving.done} de ${moving.total}…` : moveDay ? `Mover al ${programDayLabel(moveDay)}` : "Mover a…"}
+              {moving ? `Guardando ${moving.done} de ${moving.total}…` : programarBatchLabel(movableDated, movable.length - movableDated, moveDay || null)}
             </OpsButton>
             <OpsButton variant="ghost" size="sm" disabled={Boolean(moving)} onClick={() => setPicked(new Set())} className="pointer-coarse:h-11">Limpiar</OpsButton>
           </div>
           <div className="border-t border-line pt-3">
-            <DayPicker today={today} maxDay={agendarMaxDay(today, moveMaxDays)} value={moveDay} onChange={setMoveDay} label="Mover a" />
+            <DayPicker today={today} maxDay={agendarMaxDay(today, moveMaxDays)} value={moveDay} onChange={setMoveDay} label="Para el día" />
           </div>
           {movableAgreements > 0 && (
             <div className="space-y-1">
               <ChannelPicker value={moveChannel} onChange={setMoveChannel} />
-              <p className="text-xs text-ink-500">{`${movableAgreements === 1 ? "Uno tiene" : `${movableAgreements} tienen`} un acuerdo con la clienta: se cambia su día con el mismo courier. Los demás van por «Programar envío».`}</p>
+              <p className="text-xs text-ink-500">{`${movableAgreements === 1 ? "Uno tiene" : `${movableAgreements} tienen`} un acuerdo con la clienta: se reprograma con el mismo courier. Los demás van por «Programar envío».`}</p>
             </div>
           )}
         </div>

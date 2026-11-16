@@ -272,17 +272,17 @@ function SelectBox({ row, selection }: { row: LimaPendingOrder; selection: LimaR
       className={cn(CHECKBOX, "pointer-coarse:size-5")}
       checked={selection.selected.has(row.orderId)}
       onChange={() => selection.onToggle(row.orderId)}
-      aria-label={`Elegir ${row.orderName} para ${selection.purpose === "mover" ? "moverlo a otro día" : "aprobar"}`}
+      aria-label={`Elegir ${row.orderName} para ${selection.purpose === "mover" ? "programarlo" : "aprobar"}`}
     />
   );
 }
 
 function allLabel(selection: LimaRowSelection, count: number): string {
-  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden agendar` : `Elegir los ${count} listos`;
+  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden programar` : `Elegir los ${count} listos`;
 }
 
 function allAria(selection: LimaRowSelection, count: number): string {
-  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden mover a otro día` : `Elegir los ${count} listos para aprobar`;
+  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden programar` : `Elegir los ${count} listos para aprobar`;
 }
 
 /**

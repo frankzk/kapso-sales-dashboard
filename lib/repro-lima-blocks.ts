@@ -1151,6 +1151,27 @@ export function agendarPath(row: LimaPendingOrder, c: BoardCase | undefined, opt
   return { kind: null, why: "Ya tiene rótulo: acuerda el día con la clienta en «Atender»." };
 }
 
+/**
+ * Cómo se dice poner el día (owner, 16-11-2026: «debería ser reprogramar o
+ * programar en vez de mover al»): «Programar» lo que no tiene día y
+ * «Reprogramar» lo que ya lo tiene, como el paso «Programados». Puras.
+ */
+export function programarVerb(hasDay: boolean): "Programar" | "Reprogramar" {
+  return hasDay ? "Reprogramar" : "Programar";
+}
+
+/** El botón de confirmar de una fila: «Programar para el lun 16/11» o «Reprogramar al lun 16/11». */
+export function programarConfirmLabel(hasDay: boolean, day: string): string {
+  return hasDay ? `Reprogramar al ${programDayLabel(day)}` : `Programar para el ${programDayLabel(day)}`;
+}
+
+/** El botón del lote: según cuántos de los elegidos ya tienen día. */
+export function programarBatchLabel(withDay: number, withoutDay: number, day: string | null): string {
+  const verb = withoutDay === 0 ? "Reprogramar" : withDay === 0 ? "Programar" : "Programar y reprogramar";
+  if (!day) return `${verb}…`;
+  return withoutDay === 0 ? `${verb} al ${programDayLabel(day)}` : `${verb} para el ${programDayLabel(day)}`;
+}
+
 /** Los días que «Agendar» ofrece como chips: hoy y los cinco próximos de reparto (no cambia con la Agenda de cuatro cajones). */
 export const AGENDAR_QUICK_DAYS = 5;
 export function agendarQuickDays(today: string, count = AGENDAR_QUICK_DAYS): string[] {

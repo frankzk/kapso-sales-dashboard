@@ -721,7 +721,10 @@ describe("las guardas, en el código", () => {
     expect(board).toContain("lines: groupApprovalFailures(failed),");
     // GF Courier no anuló o no creó la guía del día nuevo: el aviso abre su Mesa de ruta (§9.5).
     expect(board).toContain('onClick={() => openDrawer(m.orderId, "operar")}');
-    expect(board).toContain('aria-label="Mover a otro día"');
+    expect(board).toContain('aria-label="Programar otro día"');
+    // «Programar» / «Reprogramar», no «Mover al…» (owner, 16-11-2026).
+    expect(board).not.toMatch(/Mover al|Mover a…|Moviendo/);
+    expect(board).toContain("programarBatchLabel(movableDated, movable.length - movableDated, moveDay || null)");
     expect(board).not.toContain("DispatchPlanPanel");
     expect(board).not.toContain("planItems(");
     // Sin `repro_lima.manage` (solo reintentos) no hay Agendar ni Atender.
@@ -899,5 +902,23 @@ describe("la fila de Repro Lima y la guía directo (owner, 16-11-2026: «como un
     expect(header.indexOf(">Qué pasa</th>")).toBeLessThan(header.indexOf(">Fecha agendada</th>"));
     expect(header.indexOf(">Fecha agendada</th>")).toBeLessThan(header.indexOf(">Próximo paso</th>"));
     expect(pendingSrc).toContain("{row.orderName}</OrderLink><StageBadges row={row} />");
+  });
+});
+
+describe("«Programar» y «Reprogramar», no «Mover al…» (owner, 16-11-2026)", () => {
+  it("lo que no tiene día se programa; lo que ya lo tiene, se reprograma", async () => {
+    const { programarVerb, programarConfirmLabel, programarBatchLabel } = await import("@/lib/repro-lima-blocks");
+    expect(programarVerb(false)).toBe("Programar");
+    expect(programarVerb(true)).toBe("Reprogramar");
+    expect(programarConfirmLabel(false, "2026-11-16")).toBe("Programar para el lun 16/11");
+    expect(programarConfirmLabel(true, "2026-11-17")).toBe("Reprogramar al mar 17/11");
+    expect(programarBatchLabel(0, 3, "2026-11-16")).toBe("Programar para el lun 16/11");
+    expect(programarBatchLabel(2, 0, "2026-11-16")).toBe("Reprogramar al lun 16/11");
+    expect(programarBatchLabel(1, 2, "2026-11-16")).toBe("Programar y reprogramar para el lun 16/11");
+    expect(programarBatchLabel(1, 0, null)).toBe("Reprogramar…");
+    const agendar = read("components/repro-lima-agendar.tsx");
+    expect(agendar).toContain("{verb}");
+    expect(agendar).toContain("programarConfirmLabel(dated, day)");
+    expect(agendar).not.toMatch(/`Agendar para el|>\s*Agendar\s*</);
   });
 });

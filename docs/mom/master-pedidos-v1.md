@@ -6791,6 +6791,14 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   ofrecen solo a lo que no tiene guía ni rótulo, en Preparación, Por despachar
   o «Por reprogramar Lima» (`limaQuickGuideEligible`), nunca en una novedad ni
   en «Por cerrar».
+- **«Programar» y «Reprogramar», no «Agendar» ni «Mover al…»** (owner:
+  «estaría mal comunicado, debería ser reprogramar o programar en vez de mover
+  al»). El botón de la fila dice «Programar» si el pedido no tiene día y
+  «Reprogramar» si ya lo tiene, y confirma con «Programar para el lun 16/11» o
+  «Reprogramar al mar 17/11»; el lote dice «Programar para el…», «Reprogramar
+  al…» o «Programar y reprogramar para el…» según los elegidos
+  (`programarVerb`, `programarConfirmLabel`, `programarBatchLabel`). Lo que
+  hace no cambia.
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas

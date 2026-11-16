@@ -90,7 +90,7 @@ Verificar:
 Sin migración ni variables. La fila ya no muestra la tienda ni el total; la etapa va bajo el código y «Fecha
 agendada» entre «Qué pasa» y «Próximo paso». Bajo «Atender», crear la guía directo por las mismas acciones de la
 Mesa de ruta (permiso `aliclik.create_guide` / `gf_courier.create_guide`; GF solo en tiendas con GF habilitado y
-`GF_COURIER_WRITE_ENABLED`).
+`GF_COURIER_WRITE_ENABLED`). «Agendar» y «Mover al…» pasan a «Programar» / «Reprogramar».
 
 ### 16-11-2026 · Repro Lima: «Programados» es su propio paso del flujo (sin migración, MOM §9.5, DESIGN.md)
 
