@@ -19,6 +19,8 @@ export interface PagoOnlineBannerStatus {
   requirement: "adelanto" | "pago_completo";
   requirementLabel: string;
   met: boolean;
+  /** Pedido de Lima: la automática no frena, solo informa (MOM §41.12). */
+  lima?: boolean;
   canExcept: boolean;
 }
 
@@ -40,6 +42,7 @@ export function PagoOnlineBanner({
       requirement={status.requirement}
       context="order"
       met={status.met}
+      lima={status.lima}
       className={className}
     >
       {status.canExcept && <ExceptControl onExcept={onExcept} canEdit={canEdit} />}

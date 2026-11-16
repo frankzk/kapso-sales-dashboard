@@ -109,6 +109,15 @@ export function lnOrderBannerAction(requirement: LnRequirement, met: boolean): s
     : "No se confirma ni sale guía hasta validar el adelanto. Regístralo en «Cómo sale el pedido».";
 }
 
+/**
+ * La automática en un pedido de Lima (owner, 16-11-2026, MOM §41.12): no
+ * frena, solo informa. Las altas a mano no usan esto: frenan igual en Lima.
+ */
+export const LN_LIMA_ORDER_ACTION = "En Lima no frena: el pedido se confirma y sale contra entrega.";
+
+/** Lo mismo en el lead cuando su dirección es de Lima. */
+export const LN_LIMA_LEAD_ACTION = "En Lima puede pagar contra entrega: la Lista negra solo frena fuera de Lima.";
+
 /** Qué hacer, en la ficha del lead (warn, arriba de «Cómo sale el pedido»). Pura. */
 export function lnLeadBannerAction(requirement: LnRequirement): string {
   return requirement === "pago_completo"

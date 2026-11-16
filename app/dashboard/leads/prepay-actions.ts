@@ -18,6 +18,12 @@ export interface LeadPrepayStatus {
   listed: boolean;
   /** Por qué está y qué se le pide (la que pide más, si está en las dos). */
   mark?: ListaNegraMark;
+  /**
+   * Está solo en la automática (sin alta a mano): con una dirección de Lima no
+   * frena, solo informa (owner, 16-11-2026, MOM §41.12). Un alta a mano frena
+   * igual en Lima.
+   */
+  autoOnly?: boolean;
   error?: string;
 }
 
@@ -39,7 +45,7 @@ export async function loadLeadPrepayStatus(leadId: string): Promise<LeadPrepaySt
       manual.state === "listed" ? listaNegraManualMark(manual.entry) : null,
       auto.state === "listed" ? listaNegraAutoMark(auto.who, auto.requirement) : null,
     );
-    if (mark) return { listed: true, mark };
+    if (mark) return { listed: true, mark, autoOnly: manual.state !== "listed" };
     if (manual.state === "unread" || auto.state === "unread") return { listed: false, error: lnUnreadMessage() };
     return { listed: false };
   } catch {

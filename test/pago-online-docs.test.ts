@@ -104,7 +104,7 @@ describe("las piezas conectadas", () => {
     expect(read("lib/bot-orders.ts")).toContain('pagoOnlineOrderMessage("bot", auto.requirement, auto.who)');
     const leads = read("app/dashboard/leads/actions.ts");
     expect(leads).toContain('return mark?.requirement === "pago_completo" ? lnGenerateRefused(mark.motivo) : null;');
-    expect(leads).toContain("const pagoOnlineNote = await generatedOrderPagoOnlineNote(admin, ctx.storeId, [phone, l.phone]);");
+    expect(leads).toContain("const pagoOnlineNote = await generatedOrderPagoOnlineNote(\n    admin,\n    ctx.storeId,\n    [phone, l.phone],");
     // El Master marca las dos listas con UNA lectura y una sola chapa.
     expect(read("app/dashboard/pedidos/page.tsx")).toContain("rows={withListaNegra(");
     expect(read("components/orders-master.tsx")).toContain('{r.lista_negra && <ListaNegraBadge mark={r.lista_negra} className="xl:mt-0.5" />}');

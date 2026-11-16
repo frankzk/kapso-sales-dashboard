@@ -1062,7 +1062,14 @@ export function LeadDrawer({
               está abierto: una nota a medio escribir en el resultado de la
               llamada o el panel de la guía siguen ahí al cerrarlo. */}
           <div className={orderOpen ? "hidden" : "flex flex-col gap-4"}>
-            {prepayStatus?.mark && <ListaNegraBanner motivo={prepayStatus.mark.motivo} requirement={prepayStatus.mark.requirement} context="lead" />}
+            {prepayStatus?.mark && (
+              <ListaNegraBanner
+                motivo={prepayStatus.mark.motivo}
+                requirement={prepayStatus.mark.requirement}
+                context="lead"
+                lima={Boolean(prepayStatus.autoOnly) && masterCoverage === "lima"}
+              />
+            )}
             {(showContext || firstText) && (
               <section aria-label="Lo que pidió" className={SECTION_CARD}>
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
