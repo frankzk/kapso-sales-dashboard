@@ -85,11 +85,13 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
-### 16-11-2026 · Ficha: el courier con su nombre en Actividad y la fecha de la ruta en «Salidas y guías» (sin migración)
+### 16-11-2026 · Ficha: el courier con su nombre en Actividad y la fecha de la ruta en «Salidas y guías»; Repro Lima con un matiz por paso (sin migración, DESIGN.md)
 
 Sin migración, sin crons ni variables nuevas. Solo lectura.
 - **Actividad:** «Estado informado por el courier» pasa a «Estado informado por Aliclik · ALIDRIVER» (el transporte de la
   guía, `aliclik_transport_name`); los demás couriers con su nombre («GF Courier», «Swayp»).
+- **Repro Lima, paleta:** cada paso del flujo con su matiz (naranja, celeste, índigo, verde azulado; pizarra los
+  plegados) en el número, la barra de reparto, la celda elegida y la cabecera de la lista; tarjetas con borde más firme.
 - **Salidas y guías:** cada salida dice su fecha: la ruta del motorizado de Grupo GF, la fecha operativa de Aliclik, el
   día en que salió o, sin salida, cuándo se creó la guía.
 
