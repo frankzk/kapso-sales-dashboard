@@ -434,12 +434,13 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     const classes = classifyLimaRows(r, c, today);
     return { classes, counts: limaBoardCounts(r, classes), rows: (key: string) => limaBoardRows(r, classes, key).map((x) => x.orderId) };
   };
-  it("sin courier, todo pedido está en un cajón de la Agenda y suman Todos; Reprogramados cuenta las fechas acordadas", () => {
+  it("sin courier, lo que tiene día es Programados (por día) y lo que no, Sacar a reparto; suman Todos y Reprogramados cuenta las fechas acordadas", () => {
     const { counts } = board(rows, cases);
-    expect(counts.agenda).toEqual({ hoy: 2, manana: 2, despues: 1, sin_fecha: 4 });
-    expect(Object.values(counts.agenda).reduce((a, b) => a + b, 0)).toBe(counts.todos);
-    // Ninguno salió: los nueve están por sacar a reparto, y los pasos suman Todos.
-    expect(counts.step.por_sacar).toBe(9);
+    expect(counts.agenda).toEqual({ hoy: 2, manana: 2, despues: 1 });
+    // Ninguno salió: cinco con día son Programados (16-11-2026) y cuatro sin día, por sacar a reparto.
+    expect(counts.step.programados).toBe(5);
+    expect(counts.step.por_sacar).toBe(4);
+    expect(Object.values(counts.agenda).reduce((a, b) => a + b, 0)).toBe(counts.step.programados);
     expect(Object.values(counts.step).reduce((a, b) => a + b, 0)).toBe(counts.todos);
     expect(counts.task.primer_despacho).toBe(3);
     expect(counts.sub).toMatchObject({ mas_de_30: 1, reprogramados: 1 });
@@ -447,7 +448,7 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
   it("una salida que retornó no vuelve a Confirmar primer despacho aunque Master haya borrado el despacho", () => {
     const { rows: of } = board(rows, cases);
     expect(of("primer_despacho")).not.toContain("retorno");
-    expect(of("sin_fecha")).toContain("retorno");
+    expect(of("salieron_sin_dia")).toContain("retorno");
   });
   it("la fecha manda sobre la antigüedad y el historial de salidas; lo vencido sigue en Hoy y va primero", () => {
     const old = row({ createdAt: "2026-01-01T15:00:00Z", hasPriorDispatch: true, programmedFor: "2026-10-29" });
@@ -484,9 +485,9 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     ];
     const { rows: of } = board(pico, []);
     expect(of("primer_despacho")).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
-    // Todos están por sacar: primero lo que sale hoy; después, sin día, del más antiguo al más reciente.
-    expect(of("todos")).toEqual(["prog", "volvio-antes", "hace-5-dias", "ayer", "volvio-ayer", "hoy-1"]);
-    expect(of("por_sacar")).toEqual(of("todos"));
+    // Sacar a reparto es lo que no tiene día, del más antiguo al más reciente; lo de hoy es un Programado (16-11-2026).
+    expect(of("por_sacar")).toEqual(["volvio-antes", "hace-5-dias", "ayer", "volvio-ayer", "hoy-1"]);
+    expect(of("programados")).toEqual(["prog"]);
   });
   it("solo Repro Lima cambia: Despacho del día sigue del más reciente al más antiguo (§29.13)", () => {
     // Solo los campos que mira el orden; el resto de la fila no participa.
@@ -517,7 +518,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
   });
   it("los enlaces de la pantalla anterior abren lo más cercano", () => {
     for (const value of [null, "listas", "resumen", "todos", "desconocido", "ya_salieron"]) expect(boardFilter(value, TODAY)).toBe("todos");
-    expect(boardFilter("programados", TODAY)).toBe("reprogramados");
+    // «Programados» es ahora su paso (16-11-2026); los reprogramados viven dentro.
+    expect(boardFilter("programados", TODAY)).toBe("programados");
     expect(boardFilter("programados_hoy", TODAY)).toBe("hoy");
     expect(boardFilter("programados_manana", TODAY)).toBe("manana");
     expect(boardFilter("programados_despues", TODAY)).toBe("despues");

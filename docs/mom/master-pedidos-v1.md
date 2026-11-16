@@ -6744,21 +6744,33 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   - **Con el courier** = «Guía creada» + «En ruta» (ya lo era).
   La nota de cada paso nombra solo las partes con pedidos, en el orden de los
   chips. Los trabados no son una parte: son una alerta encima.
-- **«Programados» en vez de «Agenda», sin «Sin fecha»** (owner: «¿qué sentido
-  tiene un programado sin fecha?»). El bloque de los días se llama
-  **«Programados»** y tiene Hoy (de lunes a sábado), Mañana y Después: lo que
-  ya tiene día de salida en todo el flujo (lo agendado de Sacar a reparto, sin
-  guía, y lo que el courier recoge, con guía). Lo que no tiene día está en Sacar
-  a reparto; `?atencion=sin_fecha` abre Sacar a reparto.
-- **«Programados» sigue al paso elegido** (owner: «cuando me muevo entre los
-  flujos del día, ese número no se cambia»; elige «Que siga al paso»). Con un
-  paso elegido (o una de sus partes), el bloque se llama «Programados de
-  {paso}» y cuenta solo lo de ese paso (`LimaBoardCounts.byStep`,
-  `agendaScopeOf`): Sacar a reparto, sus agendados; Con el courier, sus recojos;
-  un paso sin días (No entregados) queda en cero. Tocar un día filtra el paso Y
-  ese día con una clave compuesta (`por_sacar:manana`, `scopedKeyParts`), igual
-  con «Mañana sin guía», «Hoy sin guía» y «Reprogramados». Sin paso elegido,
-  todo el flujo.
+- **«Programados», su propio paso del flujo** (owner: «¿qué sentido tiene un
+  programado sin fecha?»; «un programado es un programado y tiene que salir a
+  su propio flujo del día… en no entregados y en sacar a reparto quedan
+  básicamente los pedidos estancados»). El flujo tiene **siete pasos** que suman
+  el total: Novedad del courier, Llamar después, No entregados, Sacar a reparto,
+  **Programados**, Con el courier y Por cerrar (los dos últimos, plegados).
+  - **Programados** = tiene día de salida (`agenda` Hoy, Mañana o Después) y
+    todavía no sale: sin courier o con la guía que espera su recojo. Viene de
+    No entregados (un «Por reprogramar Lima» con su día en el programa de
+    Grupo GF, aunque no haya acuerdo: #KP143245), de Sacar a reparto (lo
+    agendado) o de la guía creada (el recojo del courier, como #KP204876 y
+    #KP204807). La novedad, «Llamar después» y «Por cerrar» mandan; la guía que
+    el courier no recogió en su día es un estancado de Sacar a reparto.
+  - Sus partes son sus días (Hoy de lunes a sábado, Mañana y Después) y suman
+    el paso; dentro van también «Hoy sin guía» (alerta desde las 10:30),
+    «Mañana sin guía» (sin lo que creará la guía GF automática, que se dice
+    aparte) y «Reprogramados». La celda dice «N mañana · M después · K sin
+    guía», con lo sin guía en `warn-fg`. La lista va por día, lo vencido
+    primero.
+  - **No entregados y Sacar a reparto son lo que no tiene día** (los
+    estancados): Sacar a reparto = Guía sin recoger + Nunca salieron + Más de
+    30 días + Ya salieron, sin día. **Con el courier** = En ruta + la guía sin
+    un día de recojo por delante.
+  - Ya no hay un bloque «Agenda»/«Programados» aparte ni «Programados por
+    paso» (la versión del mismo día): `?atencion=agendados` abre Programados,
+    `?atencion=por_sacar:manana` abre Mañana y `?atencion=programados` es el
+    paso (antes abría «Reprogramados», que vive dentro).
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
