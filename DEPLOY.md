@@ -85,6 +85,17 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Repro Lima: lo vencido sale el próximo día de reparto; el domingo sin «Hoy»; la guía que espera recojo sin «Vencido» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`.
+- Un día pasado cuenta para el próximo día de reparto: Hoy de lunes a sábado; el domingo, Mañana (sin tarjeta «Hoy»).
+- La guía Aliclik o GF Courier que espera recojo y cuyo día pasó hace menos de un día de reparto entero: «Lo recoge
+  Aliclik el lun 16/11», en Con el courier. «Guía sin recoger» solo después de un día de reparto entero.
+- Un «Por reprogramar Lima» que ya tiene su guía nueva esperando recojo (#KP204876) está en Con el courier · Guía
+  creada, no en No entregados.
+
+Verificar en Repro Lima un domingo: la Agenda empieza en «Mañana · Lun 16» y #KP204807 dice «lun 16/11 · Recojo del courier».
+
 ### 16-11-2026 · Ficha: el courier con su nombre en Actividad y la fecha de la ruta en «Salidas y guías»; Repro Lima con un matiz por paso (sin migración, DESIGN.md)
 
 Sin migración, sin crons ni variables nuevas. Solo lectura.

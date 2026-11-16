@@ -469,7 +469,9 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(limaQueueSegment(r, "2026-11-01")).toBe("programados_hoy");
     // El sábado, «Mañana» llega hasta el lunes: el domingo no se reparte (§29.16), así que un día de domingo cae ahí.
     expect(board([r], [], "2026-10-31").classes.get("o1")?.agenda).toBe("manana");
-    expect(board([r], [], "2026-11-01").classes.get("o1")?.agenda).toBe("hoy");
+    // El domingo 01 no se reparte: sale el lunes 02, en Mañana; el lunes 02, un programa del domingo ya pasado sale hoy.
+    expect(board([r], [], "2026-11-01").classes.get("o1")?.agenda).toBe("manana");
+    expect(board([r], [], "2026-11-02").classes.get("o1")?.agenda).toBe("hoy");
   });
   it("Sacar a reparto: lo que sale hoy primero y lo que no tiene día del más antiguo al más reciente (owner, 06-11 y 15-11-2026)", () => {
     const pico = [
