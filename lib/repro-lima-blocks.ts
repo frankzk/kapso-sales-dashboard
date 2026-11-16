@@ -661,6 +661,24 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
   };
 }
 
+/**
+ * ¿La fila ofrece crear la guía directo («Guía Aliclik», «Guía GF»; owner,
+ * 16-11-2026: «como un fast forward»)? Solo si todavía no tiene guía ni rótulo
+ * y está en Preparación, Por despachar o «Por reprogramar Lima»; la novedad y
+ * «Por cerrar» no. La acción vuelve a pasar por todas las compuertas. Pura.
+ */
+export function limaQuickGuideEligible(row: Pick<LimaPendingOrder, "stage" | "substage">, cls: Pick<LimaRowClass, "guide" | "step">): boolean {
+  if (cls.guide || cls.step === "por_cerrar" || cls.step === "novedad") return false;
+  return row.stage === "preparacion" || row.stage === "por_despachar" || isPorReprogramarLima(row);
+}
+
+/** El transporte de Aliclik que «Guía Aliclik» propone: AUTOECOM si se puede (en Lima, owner 03-11-2026); si no, el primero elegible. Pura. */
+export function defaultAliclikTransport(couriers: readonly { transportId: number; transportName?: string | null; selectable: boolean }[] | null | undefined): number | null {
+  const selectable = (couriers ?? []).filter((c) => c.selectable);
+  const autoecom = selectable.find((c) => /autoecom/i.test(c.transportName ?? ""));
+  return (autoecom ?? selectable[0])?.transportId ?? null;
+}
+
 /** Las subetapas en las que el pedido todavía no tiene guía ni rótulo de salida. */
 const NO_GUIDE_SUBSTAGES = new Set(["por_generar_rotulo", "por_reprogramar_lima"]);
 

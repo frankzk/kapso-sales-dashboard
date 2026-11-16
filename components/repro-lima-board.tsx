@@ -31,6 +31,7 @@ import { programDayLabel } from "@/lib/dispatch-day";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
 import { ReproLimaBlocks, STEP_TONE, activeStep } from "@/components/repro-lima-blocks";
 import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
+import { QuickGuideButtons } from "@/components/repro-lima-quick-guide";
 import { AgendarButton, ChannelPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
 import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, type LimaStuckHome } from "@/lib/lima-stuck";
@@ -50,6 +51,7 @@ import {
   limaBoardCounts,
   limaBoardRows,
   limaOwnRoute,
+  limaQuickGuideEligible,
   limaSuggestedDay,
   type LimaBoardKey,
   type LimaStep,
@@ -74,7 +76,7 @@ type Feedback = {
   mesa?: Array<{ orderId: string; orderName: string }>;
 };
 
-export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [] }: {
+export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [], quickGuide }: {
   data: ReproLimaData;
   pending: LimaPendingOrder[];
   /** Despacho sin `repro_lima.manage` (03-11-2026): solo «Reintentos Aliclik», sin Atender ni Agendar. */
@@ -85,6 +87,11 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   canReportForRider?: boolean;
   /** Las tiendas con la guía GF automática en Activo: su guía de mañana no alarma. */
   autoGuideStores?: readonly string[];
+  /**
+   * «Guía Aliclik» y «Guía GF» bajo «Atender» (owner, 16-11-2026): con el
+   * permiso de cada courier y, para GF, las tiendas con GF Courier habilitado.
+   */
+  quickGuide?: { aliclik: boolean; gfStores: readonly string[] };
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -105,6 +112,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const [stageSheet, setStageSheet] = useState(false);
   const stagePill = useRef<HTMLButtonElement>(null);
   const openDrawer = useOpenOrderDrawer();
+  const gfStores = useMemo(() => new Set(quickGuide?.gfStores ?? []), [quickGuide?.gfStores]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
   const hiddenParam = searchParams.getAll("ocultar").join("|");
@@ -273,6 +281,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     if (retriesOnly) return null;
     const size = stacked ? "sm" : "md";
     const path = pathOf(row);
+    const cls = classes.get(row.orderId);
     return (
       <>
         {path.kind && (
@@ -291,6 +300,17 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <NoEntregoButton row={row} size={size} onDone={(f) => { setFeedback(f); refresh(); }} />
         )}
         <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>
+        {/* Crear la guía directo, por las mismas acciones de la Mesa de ruta (owner, 16-11-2026: «como un fast forward»). */}
+        {quickGuide && cls && limaQuickGuideEligible(row, cls) && (
+          <QuickGuideButtons
+            row={row}
+            aliclik={quickGuide.aliclik}
+            gf={gfStores.has(row.storeId)}
+            size={size}
+            onDone={(f) => { setFeedback(f); refresh(); }}
+            onOpenFicha={() => openDrawer(row.orderId, "operar")}
+          />
+        )}
       </>
     );
   }

@@ -1,3 +1,4 @@
+import { env } from "@/lib/env";
 import { loadGfAutoActiveStores } from "@/lib/gf-auto-guide-server";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/ui";
@@ -25,6 +26,14 @@ import ReproLimaLoading from "./loading";
 
 export const dynamic = "force-dynamic";
 
+/** Las tiendas con GF Courier habilitado para crear guías (`stores.gf_courier_enabled` y la llave global). */
+async function loadGfCourierStores(storeIds: readonly string[]): Promise<string[]> {
+  if (!env.gfCourierWriteEnabled() || !storeIds.length) return [];
+  const { data, error } = await createAdminSupabase().from("stores").select("id").in("id", [...storeIds]).eq("gf_courier_enabled", true);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+}
+
 export default function ReproLimaPage() {
   return (
     <Suspense fallback={<ReproLimaLoading />}>
@@ -47,20 +56,30 @@ async function ReproLimaContent() {
   // «No se entregó» escribe por el motorizado: pide lo mismo que Coordinación (`routes.report_others`).
   let canReportForRider = false;
   let autoGuideStores: string[] = [];
+  // «Guía Aliclik» y «Guía GF» bajo «Atender» (owner, 16-11-2026): el permiso de
+  // cada courier y las tiendas con GF Courier habilitado (las acciones lo vuelven a pedir).
+  let quickGuide: { aliclik: boolean; gfStores: string[] } | undefined;
   try {
     let permissions: Awaited<ReturnType<typeof getMasterPermissions>>;
-    [data, pending, permissions, autoGuideStores] = await Promise.all([
+    let gfStores: string[];
+    [data, pending, permissions, autoGuideStores, gfStores] = await Promise.all([
       loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true }),
       loadLimaPending(createAdminSupabase(), scope),
       getMasterPermissions(),
       // Best-effort: sin la lectura, «Mañana sin guía» alarma como antes.
       loadGfAutoActiveStores(createAdminSupabase(), [...scope.storeIds]).catch(() => []),
+      // Best-effort: sin la lectura, la fila no ofrece «Guía GF» (la ficha sí).
+      loadGfCourierStores([...scope.storeIds]).catch(() => []),
     ]);
     canScheduleDispatch = permissions.can("master.edit");
     canReportForRider = permissions.can("routes.report_others");
+    quickGuide = {
+      aliclik: permissions.can("aliclik.create_guide"),
+      gfStores: permissions.can("gf_courier.create_guide") ? gfStores : [],
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return <EmptyState title="No pudimos cargar Repro Lima">{`${message} Recarga la página.`}</EmptyState>;
   }
-  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} />;
+  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} quickGuide={scope.retriesOnly ? undefined : quickGuide} />;
 }
