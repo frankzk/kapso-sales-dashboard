@@ -30,7 +30,6 @@ import { DIRECT_GUIDE_ORDER_COLUMNS, type DirectGuideOrderRecord } from "@/lib/s
 import { loadReproFacts } from "@/lib/repro-lima-program";
 import { sameCourier } from "@/lib/shipment-output";
 import { defaultAliclikTransport } from "@/lib/repro-lima-blocks";
-import { expectedDispatchDate } from "@/lib/aliclik-dispatch-date";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { formatLimaDateTime } from "@/lib/automations-catalog";
 import {
@@ -41,7 +40,6 @@ import {
   limaCourierAutoActivoBlocker,
   limaCourierAutoModeFrom,
   limaCourierAutoOutcomeLabel,
-  limaAliclikPickupFits,
   limaCourierAutoPassOpen,
   limaCourierCaseCourier,
   limaCourierEnvioCourier,
@@ -65,7 +63,7 @@ export const LIMA_COURIER_AUTO_LOG = "lima_courier_auto_log";
 /** El tiempo de una pasada. Lo que no entra se intenta en la siguiente. */
 const TIME_BUDGET_MS = 240_000;
 
-export type LimaCourierAutoItemOutcome = LimaCourierAutoOutcome | "ya_intentado" | "ya_tiene_guia" | "espera" | "error";
+export type LimaCourierAutoItemOutcome = LimaCourierAutoOutcome | "ya_intentado" | "ya_tiene_guia" | "error";
 
 export interface LimaCourierAutoItem {
   orderId: string;
@@ -430,13 +428,6 @@ export async function runLimaCourierAuto(
         const transport = preview.couriers?.find((t) => t.transportId === transportId) ?? null;
         if (!transport) {
           await fail("Aliclik no ofrece un transporte que se pueda agendar ahora para esta dirección.");
-          continue;
-        }
-        // Lo de un día que viene, solo si Aliclik lo recoge ese día: creada antes de su corte, la recogería hoy.
-        const pickup = expectedDispatchDate(transport.schedule, now);
-        if (!limaAliclikPickupFits(c.day, today, pickup)) {
-          item.outcome = "espera";
-          item.detail = `Aliclik la recogería el ${pickup}: se crea en una pasada que caiga ${c.day}.`;
           continue;
         }
         const extra = preview.additionalOutput;

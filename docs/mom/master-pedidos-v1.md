@@ -6884,9 +6884,10 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   - **Cuándo** (owner, 16-11-2026: «también debe intentar en la noche porque
     están agendando todo el día»): Aliclik, a las 8:00, 10:00 y 12:00 de Lima
     lo de HOY, antes de su corte; y a las 15:00, 18:00, 20:00 y 21:00 lo del
-    próximo día (de lunes a sábado, `limaCourierTargetDay`), solo si Aliclik
-    lo recoge ese día (`expectedDispatchDate` del transporte,
-    `limaAliclikPickupFits`; si no, espera a la pasada siguiente). **Swayp arma
+    próximo día (de lunes a sábado, `limaCourierTargetDay`). No espera a que
+    el corte de la cotización diga «mañana»: AUTOECOM no lo trae fiable (a las
+    16:13 decía «hoy»; owner: «¿cómo que recogería hoy?»), y el equipo ya crea
+    en la tarde y la noche lo del día siguiente. **Swayp arma
     su ruta el día anterior**, así que su guía se crea la víspera de su próximo
     día de despacho, en todas esas pasadas hasta las 21:00 (su corte es 21:20),
     con esa fecha de despacho. Cron `12 13,15,17,20,23,1,2 * * *` UTC.
@@ -26642,13 +26643,13 @@ Vercel— y algunas no tenían interruptor.
     Y «Guía Aliclik y Swayp del día programado» (§9.5, 16-11-2026; 0349, clave `lima_courier_auto`,
     `lima_courier_auto_settings.mode`, `setLimaCourierAutoMode`, `/api/cron/lima-courier-auto` a las
     `12 13,15,17,20,23,1,2 * * *` UTC). Lo de Lima que Repro Lima programó con Aliclik o Swayp: a las 8:00, 10:00 y
-    12:00 crea la guía de Aliclik (AUTOECOM si se puede) de hoy, y a las 15:00, 18:00, 20:00 y 21:00 la de mañana (si
-    Aliclik la recoge ese día); la de Swayp, la víspera, hasta las 21:00, con su fecha de despacho. Las mismas tres posiciones, nace Apagado; Activo pide confirmación y no se deja elegir sin
+    12:00 crea la guía de Aliclik (AUTOECOM si se puede) de hoy, y a las 15:00, 18:00, 20:00 y 21:00 la de mañana;
+    la de Swayp, la víspera, hasta las 21:00, con su fecha de despacho. Las mismas tres posiciones, nace Apagado; Activo pide confirmación y no se deja elegir sin
     `ALICLIK_WRITE_ENABLED` ni Swayp en el servidor. Debajo, «Guía del día programado: hoy y ayer»
     (`#guia-dia-programado-hoy-y-ayer`). Sin la 0349 la fila se bloquea y funciona como Apagado. Su fila tiene
     **«Correr ahora»** (16-11-2026, `runLimaCourierAutoNow`): la misma pasada del cron, ya, para esa organización y con
     la hora de ahora (en Simulación solo dice qué habría creado; en Activo pide confirmación y crea). Dice en una línea
-    cuántas creó, cuántas no salieron y cuántas esperan otra pasada (`limaCourierRunSummary`).
+    cuántas creó, cuántas no salieron y cuántas ya tenían guía (`limaCourierRunSummary`).
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp
