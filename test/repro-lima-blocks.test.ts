@@ -532,6 +532,22 @@ describe("las piezas en pantalla", () => {
     expect(board).toContain('label="Etapa"');
     expect(board).not.toContain('label="Solo trabados"');
   });
+  it("cada paso tiene su matiz: número, tramo de la barra, celda elegida y cabecera de la lista (owner, 16-11-2026)", async () => {
+    const { ReproLimaBlocks, STEP_TONE, activeStep } = await import("@/components/repro-lima-blocks");
+    // Clasificación, no estados: ni rojo ni verde.
+    for (const tone of Object.values(STEP_TONE)) expect(JSON.stringify(tone)).not.toMatch(/red-|green-|emerald-|crit|ok-/);
+    const rows = [row(), failed({ orderId: "e" })];
+    const counts = limaBoardCounts(rows, classifyLimaRows(rows, [], TODAY));
+    const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "por_sacar", onPick: () => {} }));
+    expect(html).toContain(STEP_TONE.por_sacar.on);
+    expect(html).toContain(STEP_TONE.por_sacar.numOn);
+    expect(html).toContain(STEP_TONE.no_entregados.num);
+    expect(html).toContain(STEP_TONE.no_entregados.segDim);
+    expect(activeStep("sin_fecha")).toBe("por_sacar");
+    expect(activeStep("hoy")).toBeNull();
+    const board = read("components/repro-lima-board.tsx");
+    expect(board).toContain('listStep ? STEP_TONE[listStep].band : "bg-wash/70"');
+  });
   it("cada paso dice sus trabados y, elegido, lleva su filtro «Trabados»", async () => {
     const { ReproLimaBlocks } = await import("@/components/repro-lima-blocks");
     const rows = [row(), failed({ orderId: "e" })];

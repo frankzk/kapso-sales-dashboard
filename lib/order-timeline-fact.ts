@@ -20,6 +20,8 @@
 // nunca la única señal. Puro: lo prueba `test/order-timeline-fact.test.ts`.
 
 import type { TimelineEntry } from "@/lib/orders-master-access";
+import { courierDisplayName } from "@/lib/dispatched-with";
+import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
 
 /** El dibujo del marcador; la ficha lo traduce a un icono de `components/icons`. */
 export type TimelineIcon =
@@ -251,4 +253,32 @@ export function timelineFact(t: TimelineFactInput): TimelineFact {
     }
   }
   return POR_KIND[t.kind] ?? consulta(null);
+}
+
+/**
+ * El nombre del courier de un hecho de la Actividad (owner, 16-11-2026: «en este
+ * historial falta el nombre del courier»): «Aliclik · ALIDRIVER», «GF Courier»,
+ * «Swayp». Con Aliclik, su transporte (el de la guía); sin courier, null.
+ */
+export function courierEventName(courier: string | null | undefined, transportName?: string | null): string | null {
+  const code = courier?.trim();
+  if (!code) return null;
+  const name = courierDisplayName(code);
+  if (code.toLowerCase() !== "aliclik") return name;
+  const transport = isAutoecom(transportName) ? "AUTOECOM" : isAlidriver(transportName) ? "ALIDRIVER" : transportName?.trim() || null;
+  return transport ? `${name} · ${transport}` : name;
+}
+
+/** Los hechos que informa un courier: su título nombra al courier en vez de «el courier». */
+const COURIER_EVENT_TITLE: Record<string, string> = {
+  courier_status: "Estado informado por",
+  courier_report: "Resultado informado por",
+};
+
+/** El título de un hecho de la Actividad que dice qué courier lo informó; null para el resto. */
+export function courierEventTitle(entry: Pick<TimelineEntry, "kind" | "courier"> & { courierName?: string | null }): string | null {
+  const head = COURIER_EVENT_TITLE[entry.kind];
+  if (!head) return null;
+  const name = entry.courierName ?? courierEventName(entry.courier);
+  return name ? `${head} ${name}` : null;
 }

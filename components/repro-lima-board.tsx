@@ -29,7 +29,7 @@ import { cutoffNotice } from "@/lib/repro-lima";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
-import { ReproLimaBlocks } from "@/components/repro-lima-blocks";
+import { ReproLimaBlocks, STEP_TONE, activeStep } from "@/components/repro-lima-blocks";
 import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { AgendarButton, ChannelPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
@@ -424,6 +424,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     : stuck ? "No hay pedidos trabados por este motivo con estos filtros."
       : key === "todos" ? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda." : card?.empty ?? "No hay pedidos con estos filtros.";
   const filtered = Boolean(stuck) || key !== "todos";
+  const listStep = activeStep(key);
 
   return (
     <div className="space-y-7">
@@ -510,11 +511,15 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         </Banner>
       )}
 
-      <section aria-label={filtered ? listTitle : "Todos los pendientes de Lima"} className="rounded-lg bg-white shadow-control ring-1 ring-line">
+      <section aria-label={filtered ? listTitle : "Todos los pendientes de Lima"} className="rounded-lg bg-white shadow-control ring-1 ring-line-strong/70">
         {!retriesOnly && (
-          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-4 pt-4">
+          // La cabecera toma el matiz del paso elegido (owner, 16-11-2026: contraste entre secciones): se ve de dónde viene la lista.
+          <div className={cn("flex flex-wrap items-start justify-between gap-x-3 gap-y-1 rounded-t-lg border-b border-line px-4 py-3.5", listStep ? STEP_TONE[listStep].band : "bg-wash/70")}>
             <div className="min-w-0">
-              <h2 className="text-base font-semibold tracking-[-0.01em] text-ink-900">{listTitle}</h2>
+              <h2 className="flex items-center gap-2 text-base font-semibold tracking-[-0.01em] text-ink-900">
+                {listStep && <span aria-hidden className={cn("size-2.5 shrink-0 rounded-full", STEP_TONE[listStep].dot)} />}
+                {listTitle}
+              </h2>
               <p className="mt-0.5 max-w-[80ch] text-[13px] leading-5 text-ink-500">{listHelp}</p>
             </div>
             {filtered && <OpsButton variant="ghost" size="sm" onClick={() => chooseKey("todos")} className="pointer-coarse:h-11">Ver todos</OpsButton>}

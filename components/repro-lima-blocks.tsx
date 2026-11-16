@@ -97,6 +97,32 @@ export interface LimaStuckChip {
 }
 
 const STEP = new Map(LIMA_STEP_CARDS.map((card) => [card.key, card]));
+
+/**
+ * El matiz de cada paso (owner, 16-11-2026: «mejorar la paleta para hacer
+ * contrastes entre las secciones»). Los pasos son una clasificación, no
+ * estados: llevan los matices de `CategoryTone` (DESIGN.md), sin rojo ni verde.
+ * El mismo matiz va en el número, el tramo de la barra de reparto, la celda
+ * elegida y la cabecera de la lista: la fila de pasos es la leyenda.
+ * Clases literales para que Tailwind las vea.
+ */
+export const STEP_TONE: Record<LimaStep, {
+  /** Tramo de la barra de reparto; apagado, cuando hay otro paso elegido. */
+  seg: string; segDim: string;
+  /** Número del paso: en reposo y elegido (texto blanco sobre el 700: 4.5:1 o más). */
+  num: string; numOn: string;
+  /** Celda elegida: fondo, texto y barra de 2 px. */
+  on: string; text: string; bar: string;
+  /** Punto y banda de la cabecera de la lista. */
+  dot: string; band: string;
+}> = {
+  novedad: { seg: "bg-orange-500", segDim: "bg-orange-200", num: "bg-orange-50 text-orange-800 ring-orange-200", numOn: "bg-orange-700 text-white ring-orange-700", on: "bg-orange-50", text: "text-orange-800", bar: "bg-orange-700", dot: "bg-orange-500", band: "bg-orange-50/70" },
+  llamar_despues: { seg: "bg-sky-500", segDim: "bg-sky-200", num: "bg-sky-50 text-sky-800 ring-sky-200", numOn: "bg-sky-700 text-white ring-sky-700", on: "bg-sky-50", text: "text-sky-800", bar: "bg-sky-700", dot: "bg-sky-500", band: "bg-sky-50/70" },
+  no_entregados: { seg: "bg-indigo-500", segDim: "bg-indigo-200", num: "bg-indigo-50 text-indigo-800 ring-indigo-200", numOn: "bg-indigo-700 text-white ring-indigo-700", on: "bg-indigo-50", text: "text-indigo-800", bar: "bg-indigo-700", dot: "bg-indigo-500", band: "bg-indigo-50/70" },
+  por_sacar: { seg: "bg-teal-500", segDim: "bg-teal-200", num: "bg-teal-50 text-teal-800 ring-teal-200", numOn: "bg-teal-700 text-white ring-teal-700", on: "bg-teal-50", text: "text-teal-800", bar: "bg-teal-700", dot: "bg-teal-500", band: "bg-teal-50/70" },
+  con_courier: { seg: "bg-slate-400", segDim: "bg-slate-200", num: "bg-slate-50 text-slate-700 ring-slate-200", numOn: "bg-slate-700 text-white ring-slate-700", on: "bg-slate-100", text: "text-slate-800", bar: "bg-slate-600", dot: "bg-slate-400", band: "bg-slate-100/70" },
+  por_cerrar: { seg: "bg-slate-300", segDim: "bg-slate-100", num: "bg-slate-50 text-slate-700 ring-slate-200", numOn: "bg-slate-700 text-white ring-slate-700", on: "bg-slate-100", text: "text-slate-800", bar: "bg-slate-600", dot: "bg-slate-300", band: "bg-slate-100/70" },
+};
 const COURIER = new Map(LIMA_COURIER_CARDS.map((card) => [card.key, card]));
 
 function fmt(n: number): string {
@@ -124,8 +150,8 @@ function insideChip(key: LimaBoardKey, counts: LimaBoardCounts): { label: string
   return { label: sub?.label ?? key, count: (counts.sub as Record<string, number>)[key] ?? 0, hint: sub?.hint ?? "" };
 }
 
-/** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro. */
-function activeStep(active: LimaBoardKey): LimaStep | null {
+/** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro (la lista toma su matiz). */
+export function activeStep(active: LimaBoardKey): LimaStep | null {
   if (STEP.has(active as LimaStep)) return active as LimaStep;
   for (const [step, inside] of Object.entries(INSIDE)) if (inside?.keys.includes(active)) return step as LimaStep;
   return null;
@@ -151,7 +177,7 @@ function BlockHead({ id, title, total, unit, help }: { id: string; title: string
  * cifra a la derecha y el contexto debajo de la etiqueta; con `stack`, siempre
  * en columna (la Agenda y el courier van de dos en dos).
  */
-function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, stack, folded, className }: {
+function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, stack, folded, className, tone }: {
   label: string;
   value: number;
   note?: ReactNode;
@@ -171,6 +197,8 @@ function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, sta
    */
   folded?: boolean;
   className?: string;
+  /** El matiz del paso (`STEP_TONE`): la celda elegida lo toma en vez del azul de la marca. */
+  tone?: (typeof STEP_TONE)[LimaStep];
 }) {
   return (
     <button
@@ -182,14 +210,14 @@ function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, sta
         "group relative grid min-w-0 content-start items-center gap-x-3 gap-y-1 text-left transition-colors focus-visible:z-10 pointer-coarse:min-h-14",
         folded ? "px-3 py-3" : "px-4 py-3.5",
         stack ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-1",
-        active ? "bg-brand-50" : folded ? "bg-wash hover:bg-line/60" : "bg-white hover:bg-wash",
+        active ? tone?.on ?? "bg-brand-50" : folded ? "bg-wash hover:bg-line/60" : "bg-white hover:bg-wash",
         className,
       )}
     >
       {/* La chapa («Empieza aquí») va junto al nombre en el teléfono y junto a la cifra desde `sm`: así no corta el nombre ni desalinea las cifras de la fila. */}
       <span className="col-start-1 row-start-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         {lead}
-        <span className={cn("min-w-0 font-medium", folded ? "text-xs" : "text-[13px]", active ? "text-brand-700" : folded ? "text-ink-500" : "text-ink-600")}>{label}</span>
+        <span className={cn("min-w-0 font-medium", folded ? "text-xs" : "text-[13px]", active ? tone?.text ?? "text-brand-700" : folded ? "text-ink-500" : "text-ink-600")}>{label}</span>
         {badge ? <span className="sm:hidden">{badge}</span> : null}
       </span>
       <span
@@ -197,7 +225,7 @@ function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, sta
           "font-semibold tabular-nums tracking-[-0.015em]",
           folded ? "text-lg leading-6" : "text-[22px] leading-7",
           stack ? "row-start-2" : "col-start-2 row-span-2 row-start-1 sm:col-start-1 sm:row-span-1 sm:row-start-2",
-          active ? "text-brand-700" : dim ? "text-ink-300" : folded ? "text-ink-600" : "text-ink-900",
+          active ? tone?.text ?? "text-brand-700" : dim ? "text-ink-300" : folded ? "text-ink-600" : "text-ink-900",
         )}
       >
         {fmt(value)}
@@ -207,20 +235,17 @@ function Cell({ label, value, note, lead, badge, active, onClick, hint, dim, sta
         <span className={cn("col-start-1 text-xs leading-4 text-ink-500", stack ? "row-start-3" : "row-start-2 sm:row-start-3")}>{note}</span>
       ) : null}
       {/* La marca de elegido: una barra de 2 px, como la pestaña activa (DESIGN.md «Shapes»). */}
-      <span aria-hidden className={cn("absolute inset-x-0 bottom-0 h-0.5", active ? "bg-brand-600" : "bg-transparent")} />
+      <span aria-hidden className={cn("absolute inset-x-0 bottom-0 h-0.5", active ? tone?.bar ?? "bg-brand-600" : "bg-transparent")} />
     </button>
   );
 }
 
 /** El número del paso: un círculo de 20 px; relleno en azul cuando es el paso elegido. */
-function StepNumber({ n, active }: { n: number; active: boolean }) {
+function StepNumber({ n, active, tone }: { n: number; active: boolean; tone: (typeof STEP_TONE)[LimaStep] }) {
   return (
     <span
       aria-hidden
-      className={cn(
-        "grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold tabular-nums",
-        active ? "bg-brand-600 text-white" : "bg-white text-ink-600 ring-1 ring-inset ring-line-strong",
-      )}
+      className={cn("grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold tabular-nums ring-1 ring-inset", active ? tone.numOn : tone.num)}
     >
       {n}
     </span>
@@ -230,7 +255,7 @@ function StepNumber({ n, active }: { n: number; active: boolean }) {
 /** La franja: una sola tarjeta con las celdas separadas por líneas finas (no tarjetas sueltas). */
 function Strip({ label, cols, children, footer, header }: { label: string; cols: string; children: ReactNode; footer?: ReactNode; header?: ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line">
+    <div className="overflow-hidden rounded-lg bg-white shadow-control ring-1 ring-line-strong/70">
       {header ? <div className="border-b border-line px-4 py-3">{header}</div> : null}
       <div role="group" aria-label={label} className={cn("grid gap-px bg-line", cols)}>
         {children}
@@ -255,19 +280,13 @@ function SumBar({ counts, total, active }: { counts: LimaBoardCounts; total: num
         {total > 0 ? LIMA_FLOW.map(({ key }) => {
           const value = counts.step[key];
           if (!value) return null;
-          const folded = LIMA_FOLDED_STEPS.has(key);
           const on = active === null || active === key;
           return (
             <span
               key={key}
               title={`${STEP.get(key)!.label}: ${fmt(value)}`}
               style={{ flexGrow: value, flexBasis: 0 }}
-              className={cn(
-                "min-w-1 transition-colors",
-                folded
-                  ? (active === key ? "bg-ink-600" : on ? "bg-ink-300" : "bg-line-strong")
-                  : (active === key ? "bg-brand-700" : on ? "bg-brand-500" : "bg-brand-200"),
-              )}
+              className={cn("min-w-1 transition-colors", on ? STEP_TONE[key].seg : STEP_TONE[key].segDim)}
             />
           );
         }) : null}
@@ -376,10 +395,12 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                 hint={card.hint}
                 folded={folded}
                 stack={folded}
+                tone={STEP_TONE[flow.key]}
                 // El trabajo ocupa la fila entera en el teléfono; los dos plegados van de a dos. Una línea más
                 // marcada separa el trabajo de lo que solo se mira.
                 className={folded ? (flow.key === "con_courier" ? "sm:shadow-[inset_1px_0_0_var(--color-line-strong)]" : undefined) : "col-span-2 sm:col-span-1"}
-                lead={folded ? undefined : <StepNumber n={i + 1} active={isActive} />}
+                // El plegado lleva un punto de su matiz (la leyenda de la barra); el trabajo, su número.
+                lead={folded ? <span aria-hidden className={cn("size-2 shrink-0 rounded-full", STEP_TONE[flow.key].dot)} /> : <StepNumber n={i + 1} active={isActive} tone={STEP_TONE[flow.key]} />}
                 badge={start === flow.key && !isActive ? <Badge tone="brand" className="shrink-0">Empieza aquí</Badge> : null}
                 note={withStuck(
                   flow.key === "llamar_despues" && callsDue > 0

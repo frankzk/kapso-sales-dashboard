@@ -285,7 +285,8 @@ import {
   type OrderPlatformName,
 } from "@/lib/order-admin-url";
 import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
-import { timelineOriginLabel } from "@/lib/order-timeline-fact";
+import { courierEventTitle, timelineOriginLabel } from "@/lib/order-timeline-fact";
+import { outputRouteDay } from "@/lib/output-route-day";
 import { aliclikGuideOffered, type RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 import { OrderLink } from "@/components/order-link";
@@ -2114,6 +2115,12 @@ export function OrderDrawer({
                             <span className="ml-auto text-[13px] text-ink-500">Guía actual</span>
                           )}
                         </div>
+                        {/* La fecha de su ruta (owner, 16-11-2026): la del motorizado de
+                            Grupo GF, la que reporta Aliclik o el día en que salió. */}
+                        {(() => {
+                          const route = outputRouteDay(g, gf);
+                          return route ? <p className="text-[13px] tabular-nums text-ink-600">{route.text}</p> : null;
+                        })()}
                         {/* El GPS con el que se generó la guía Aliclik, con su
                             origen (MOM §25): sirve para la próxima guía de la
                             misma clienta. */}
@@ -2711,7 +2718,8 @@ export function OrderDrawer({
                             icono ni el color son nunca la única señal. */}
                         <TimelineMarker entry={t} />
                         <p className="text-sm font-medium leading-5 text-ink-900">
-                          {TIMELINE_LABEL[t.kind] ?? t.kind}
+                          {/* Los hechos de un courier lo nombran: «Estado informado por Aliclik · ALIDRIVER» (owner, 16-11-2026). */}
+                          {courierEventTitle(t) ?? TIMELINE_LABEL[t.kind] ?? t.kind}
                           {/* El resultado va pegado al título, no en la línea de
                               la nota: la nota es opcional y sin esto dos
                               resultados distintos se leían idénticos. */}
