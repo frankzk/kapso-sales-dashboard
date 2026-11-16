@@ -85,6 +85,36 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Repro Lima: programar en lote con courier (0348, MOM §6.2, §9.5 y §29.17, DESIGN.md)
+
+**Migración 0348: ya aplicada en producción (16-11-2026), antes del código.** `0348_dispatch_courier.sql` agrega
+`order_master.dispatch_courier` (texto, sin CHECK: es una tabla derivada) y amplía `lima_repro_calls_sin_contacto`
+para que `sin_contacto` también valga con `confirma`. Es aditiva: `add column if not exists`, `drop constraint if
+exists` y `add constraint`, sin `drop` de datos; no toca filas y se puede correr otra vez. Sin ella, «Programar envío»
+con courier falla al recalcular el Master y el acuerdo sin llamada falla con el error del CHECK.
+
+Sin crons, variables ni permisos nuevos. No escribe nada al desplegar.
+- «Programar» (fila y lote) pide «Sale con»: Grupo GF o GF Courier según la tienda, Aliclik o Swayp.
+- Un pedido con acuerdo se reprograma con su courier; el del lote no lo cambia.
+- En Preparación · Por generar rótulo, «Programar envío» guarda el courier (`dispatch_date_set.payload.courier` →
+  `order_master.dispatch_courier`). Con GF Courier crea la guía GF para ese día al programar. Con Aliclik, Swayp o Grupo
+  GF, la guía GF automática ya no toma el pedido (`otro_courier`). Sin courier, todo como antes.
+- Un no entregado «Por acordar» queda acordado sin llamada (canal `sin_contacto`, no cuenta como intento), con la
+  misma RPC y «Qué hacer con la caja» que «Confirma fecha».
+- «Kapta sugiere…» también propone los por acordar en No entregados, y «Fecha agendada» dice el courier.
+
+Verificar:
+1. Que la 0348 está: `select column_name from information_schema.columns where table_name = 'order_master' and
+   column_name = 'dispatch_courier';` → una fila, y `select pg_get_constraintdef(oid) from pg_constraint where
+   conname = 'lima_repro_calls_sin_contacto';` → incluye `'confirma'`.
+2. En Sacar a reparto, elegir dos pedidos de Kenku, «Sale con» Aliclik, mañana: los dos quedan en Programados con
+   «Programar envío · Aliclik» y `order_master.dispatch_courier = 'aliclik'`.
+3. En un pedido de Aurela por generar rótulo, «Programar» con GF Courier para mañana: la guía `GF…` queda creada y su
+   intención lleva `request->>'scheduled_date'` = ese día.
+4. En No entregados · Por acordar, programar uno con Grupo GF: en su historial, «Repro Lima · Confirma (sin llamada):
+   sale el …», y el caso sale de No entregados a Programados.
+5. `GET /api/cron/gf-auto-guide?dry=1`: un pedido programado para hoy con Aliclik no aparece entre los candidatos.
+
 ### 16-11-2026 · Repro Lima: fila más limpia y «Guía Aliclik» / «Guía GF» bajo «Atender» (sin migración, MOM §9.5, DESIGN.md)
 
 Sin migración ni variables. La fila ya no muestra la tienda ni el total; la etapa va bajo el código y «Fecha

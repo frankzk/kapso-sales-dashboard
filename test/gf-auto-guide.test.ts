@@ -84,6 +84,14 @@ describe("qué pedido entra a la pasada", () => {
     expect(gfAutoSkip(row({ province: "Cañete", district: "San Vicente de Cañete" }), TODAY)).toBe("no_lima");
   });
 
+  it("programado con otro courier no (0348, Repro Lima 16-11-2026): sale con el elegido", () => {
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: TODAY, dispatch_courier: "aliclik" }), TODAY)).toBe("otro_courier");
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: TODAY, dispatch_courier: "fenix" }), TODAY)).toBe("otro_courier");
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: TODAY, dispatch_courier: "propio" }), TODAY)).toBe("otro_courier");
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: TODAY, dispatch_courier: "gf_courier" }), TODAY)).toBeNull();
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: TODAY, dispatch_courier: null }), TODAY)).toBeNull();
+  });
+
   it("Callao es Lima", () => {
     expect(gfAutoSkip(row({ coverage: null, region: "Callao", province: "Callao", district: "Bellavista" }), TODAY)).toBeNull();
   });

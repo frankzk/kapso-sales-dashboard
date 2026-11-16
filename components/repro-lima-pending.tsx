@@ -15,7 +15,7 @@ import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "
 import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { AGENDA_ORIGIN_LABEL, agendaDayText, callDue, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
@@ -152,7 +152,7 @@ function AgendaCell({ row, cls, repro, today }: { row: LimaPendingOrder; cls: Li
   return (
     <div>
       <p className={cn("text-sm font-medium tabular-nums", overdue ? "text-warn-fg" : cls.agendaDay ? "text-ink-900" : "text-ink-500")}>{agendaDayText(cls.agendaDay, today)}</p>
-      {origin && <p className="text-xs text-ink-500">{AGENDA_ORIGIN_LABEL[origin]}{origin === "acuerdo" && repro?.agreement ? ` · ${repro.agreement.courierName}` : ""}</p>}
+      {origin && <p className="text-xs text-ink-500">{agendaOriginLine(origin, row, repro?.agreement?.courierName)}</p>}
     </div>
   );
 }

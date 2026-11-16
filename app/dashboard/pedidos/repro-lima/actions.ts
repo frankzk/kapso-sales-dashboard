@@ -994,6 +994,104 @@ export async function moveReproAgreement(input: {
 }
 
 // ---------------------------------------------------------------------------
+// «Programar» en lote un no entregado sin acuerdo: acuerdo sin llamada (16-11-2026)
+// ---------------------------------------------------------------------------
+
+/** La nota del acuerdo que nace al programar en lote, sin hablar con la clienta. */
+const REPRO_NO_CALL_NOTE = "Programado en lote desde Repro Lima, sin llamada.";
+
+/**
+ * «Programar» un no entregado «Por acordar» desde la lista, con el día y el
+ * courier elegidos (owner, 16-11-2026: «con un botón ya lo dejamos programados
+ * exactamente para un courier»; MOM §9.5). No hay llamada: el acuerdo se
+ * registra con el canal `sin_contacto` (0348), que no cuenta como intento. Es
+ * el mismo camino que «Confirma fecha» de la pestaña: toma el candado del caso
+ * (`claimReproCase`), calcula «Qué hacer con la caja» con `reproBoxAction` sin
+ * cambios del pedido y registra el acuerdo (`recordCall` →
+ * `lima_repro_record`), que valida el courier de la tienda, la cobertura de
+ * Grupo GF y la fecha, y después programa, crea la guía GF del día o dice qué
+ * falta. Si el pedido ya tiene un acuerdo, se reprograma con el suyo
+ * (`moveReproAgreement`); si la caja pide una decisión (un problema de caja) o
+ * Aliclik pide la ubicación, se abre con «Atender». Al terminar suelta el
+ * candado si no lo tenía.
+ */
+export async function programReproWithoutCall(input: {
+  orderId: string;
+  day: string;
+  courier: string;
+  /** Un `crypto.randomUUID()` por pedido: un doble clic no registra dos acuerdos. */
+  operationId: string;
+}): Promise<RegisterReproCallResult> {
+  const scope = await requireReproLima();
+  if ("error" in scope) return { error: scope.error };
+  if (!isUuid(input.orderId)) return { error: "No encontramos el pedido." };
+  const day = input.day?.trim() ?? "";
+  if (!DAY_RE.test(day)) return { error: "Elige el día en que sale." };
+  if (!isReproCourier(input.courier)) return { error: "Elige con qué courier sale." };
+  const courier = input.courier;
+  const disabled = reproCourierDisabledReason(courier);
+  if (disabled) return { error: disabled };
+  const admin = createAdminSupabase();
+  try {
+    const f = await factsOf(admin, input.orderId);
+    if (!f?.storeId || !f.order) return { error: "No encontramos el pedido." };
+    if (!scope.storeIds.has(f.storeId)) return { error: REPRO_OUTSIDE_STORE };
+    if (!f.inStage) return { error: OUT_OF_STAGE };
+    const open = f.open && f.open.episode_key === f.episode.key ? f.open : null;
+    if (open?.agreed_on && open.agreement_call_id) return { error: "Ya tiene un acuerdo con la clienta: se reprograma con su courier." };
+    const storeProblem = reproCourierStoreProblem(courier, Boolean(f.gfCourierApi));
+    if (storeProblem) return { error: storeProblem };
+    if (reproNeedsCoordinate(courier, orderHasCoordinate(f.order))) {
+      return { error: "Aliclik necesita la ubicación del pedido: acuérdalo en «Atender» y pega ahí el enlace de Google Maps." };
+    }
+    const now = new Date();
+    const hadClaim = Boolean(open && open.claimed_by === scope.userId && open.claimed_until && Date.parse(open.claimed_until) > now.getTime());
+    const claim = await claimReproCase(input.orderId);
+    if ("error" in claim) return { error: claim.error };
+    try {
+      const changes = normalizeReproChanges(null);
+      const decided = reproBoxAction({
+        outcome: "confirma",
+        courier,
+        changes,
+        box: f.box,
+        ownLiveCourier: f.ownLive?.courier ?? null,
+        lastFailedCourier: f.failedOutput?.courier ?? null,
+        otherLiveCourier: f.otherLiveCourier,
+        hadPropio: f.hadPropio,
+        totalOutputs: f.outputs.length,
+        priorWithCourier: priorOutputsWith(f.outputs, courier),
+        ownReplace: f.ownReplace,
+        reopened: f.reopened,
+        retryAdmission: f.retryAdmission,
+      });
+      if ("problem" in decided) return { error: `${decided.problem} Ábrelo con «Atender».` };
+      return await recordCall(scope, {
+        caseId: claim.caseId,
+        operationId: input.operationId,
+        outcome: "confirma",
+        channel: "sin_contacto",
+        agreedOn: day,
+        courier,
+        changes,
+        expectedBoxAction: decided.action,
+        note: REPRO_NO_CALL_NOTE,
+      });
+    } finally {
+      if (!hadClaim) {
+        await admin
+          .from("lima_repro_cases")
+          .update({ claimed_by: null, claimed_until: null })
+          .eq("id", claim.caseId)
+          .eq("claimed_by", scope.userId);
+      }
+    }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Lecturas de la hoja
 // ---------------------------------------------------------------------------
 

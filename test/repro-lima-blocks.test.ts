@@ -21,8 +21,15 @@ import {
   agendaDayLabel,
   agendaKeyOf,
   agendaWindow,
+  agendaOriginLine,
   agendarPath,
   agendarQuickDays,
+  batchCourierChoices,
+  batchCourierRejects,
+  programCourierChoices,
+  programCourierName,
+  proposalsNoun,
+  PROGRAM_COURIER_HINT,
   boardCard,
   boardFilter,
   classifyLimaRow,
@@ -498,8 +505,10 @@ describe("«Agendar»: con qué acción existente se pone el día", () => {
     expect(agendarPath(row({ scheduledOn: "2026-11-17" }), undefined, can)).toEqual({ kind: "envio", current: "2026-11-17", maxDays: 45 });
     expect(agendarPath(row(), undefined, { canScheduleDispatch: false })).toEqual({ kind: null, why: "Tu rol no permite programar envíos." });
   });
-  it("un no entregado sin acuerdo se acuerda en «Atender»; con guía, el día lo lleva el courier; con otra persona, no se toma", () => {
-    expect(agendarPath(failed(), caseOf(), can)).toEqual({ kind: null, why: "Primero acuerda el día y el courier con la clienta en «Atender»." });
+  it("un no entregado sin acuerdo se programa con courier (acuerdo sin llamada, 16-11-2026); el reintento no; con guía, el día lo lleva el courier; con otra persona, no se toma", () => {
+    expect(agendarPath(failed(), caseOf(), can)).toEqual({ kind: "acuerdo_nuevo", current: null, maxDays: 60 });
+    expect(agendarPath(failed(), undefined, can)).toEqual({ kind: "acuerdo_nuevo", current: null, maxDays: 60 });
+    expect(agendarPath(failed(), caseOf({ retryChain: { attempt: 2, of: 3 } }), can)).toEqual({ kind: null, why: "Tiene un reintento por Aliclik: apruébalo en «Reintentos Aliclik»." });
     expect(agendarPath(row({ stage: "por_despachar", substage: "listo_para_recojo", ops: ops({ liveCouriers: ["gf_courier"] }) }), undefined, can).kind).toBeNull();
     expect(agendarPath(row({ stage: "preparacion", substage: "por_armar", ops: ops({ liveCouriers: ["propio"] }) }), undefined, can)).toEqual({ kind: null, why: "Ya tiene rótulo: acuerda el día con la clienta en «Atender»." });
     expect(agendarPath(failed(), caseOf({ claim: { view: "otro", byName: "Diana" }, agreement: { agreedOn: "2026-11-17" } }), can)).toEqual({ kind: null, why: "Diana lo está atendiendo." });
@@ -520,6 +529,31 @@ describe("«Agendar»: con qué acción existente se pone el día", () => {
     const c = classifyLimaRow(hoy, undefined, TUE, agendaWindow(TUE));
     expect(limaNextStep(hoy, undefined, c, TUE, new Date("2026-11-17T14:00:00Z"))).toBe("Sale hoy y todavía no tiene guía ni rótulo: si a las 10:30 no la tiene, créala desde la Mesa de ruta.");
     expect(limaNextStep(hoy, undefined, c, TUE, new Date("2026-11-17T16:00:00Z"))).toBe("Sale hoy y no tiene guía ni rótulo: créala desde la Mesa de ruta para que salga.");
+  });
+  it("el courier al programar (owner, 16-11-2026): GF Courier solo con su API, Grupo GF nunca con ella; el lote ofrece la unión y cuenta los que no pueden", () => {
+    expect(programCourierChoices(false)).toEqual(["propio", "aliclik", "fenix"]);
+    expect(programCourierChoices(true)).toEqual(["gf_courier", "aliclik", "fenix"]);
+    expect(batchCourierChoices([false, false])).toEqual(["propio", "aliclik", "fenix"]);
+    expect(batchCourierChoices([false, true])).toEqual(["propio", "gf_courier", "aliclik", "fenix"]);
+    expect(batchCourierRejects("gf_courier", [false, true, false])).toBe(2);
+    expect(batchCourierRejects("propio", [false, true, false])).toBe(1);
+    expect(batchCourierRejects("aliclik", [false, true])).toBe(0);
+    expect(batchCourierRejects(null, [false, true])).toBe(0);
+    expect(PROGRAM_COURIER_HINT.gf_courier).toBe("GF Courier: la guía queda creada para ese día.");
+    expect(programCourierName("fenix")).toBe("Swayp");
+    expect(programCourierName("tanders")).toBeNull();
+    expect(agendaOriginLine("envio", { scheduledCourier: "aliclik" })).toBe("Programar envío · Aliclik");
+    expect(agendaOriginLine("envio", { scheduledCourier: null })).toBe("Programar envío");
+    expect(agendaOriginLine("acuerdo", { scheduledCourier: null }, "GF Courier")).toBe("Acordado con la clienta · GF Courier");
+    expect(proposalsNoun(3, true)).toBe("no entregados por acordar (elige el courier abajo)");
+    expect(proposalsNoun(1, false)).toBe("pedido sin fecha que se puede programar");
+  });
+  it("programado con otro courier, la guía GF automática no lo cubre (0348)", () => {
+    const stores = { autoGuideStores: new Set(["s1"]) };
+    const prep = (scheduledCourier: string | null) => row({ storeId: "s1", stage: "preparacion", substage: "por_generar_rotulo", scheduledOn: "2026-11-16", scheduledCourier });
+    expect(classifyLimaRow(prep(null), undefined, TODAY, WINDOW, stores).autoGuide).toBe(true);
+    expect(classifyLimaRow(prep("gf_courier"), undefined, TODAY, WINDOW, stores).autoGuide).toBe(true);
+    expect(classifyLimaRow(prep("aliclik"), undefined, TODAY, WINDOW, stores).autoGuide).toBe(false);
   });
   it("los días que ofrece: hoy y los cinco próximos días de reparto (no cambia con la Agenda de cuatro cajones)", () => {
     expect(AGENDAR_QUICK_DAYS).toBe(5);
@@ -689,7 +723,13 @@ describe("las guardas, en el código", () => {
     expect(fn.indexOf("await requireReproLima()")).toBeLessThan(fn.indexOf("createAdminSupabase()"));
     expect(fn).toContain("if (!scope.storeIds.has(f.storeId)) return { error: REPRO_OUTSIDE_STORE };");
     expect(fn).toContain("await moveReproAgreement(");
-    expect(fn).toContain("await scheduleOrderDispatch(input.orderId, { date: day, note: input.note ?? null })");
+    expect(fn).toContain("await scheduleOrderDispatch(input.orderId, { date: day, note: input.note ?? null, courier })");
+    // Con GF Courier la guía queda creada para ese día; un no entregado sin acuerdo, acuerdo sin llamada (16-11-2026).
+    expect(fn).toContain("reproCourierStoreProblem(courier, Boolean(f.gfCourierApi))");
+    expect(fn).toContain('if (result.error || courier !== "gf_courier") {');
+    expect(fn).toContain("await gfGuideForDispatch(admin, input.orderId, day, scope.userId)");
+    expect(fn).toContain("await programReproWithoutCall({ orderId: input.orderId, day, courier, operationId: input.operationId })");
+    expect(body(agenda, "async function gfGuideForDispatch(")).toContain("await createGfGuideFor(orderId, { userId, reason: `Repro Lima: envío programado para el ${programDayLabel(day)} con GF Courier.`, scheduledFor: day }, admin)");
     // Ninguna escritura propia: ni casos, ni programas, ni el Master.
     expect(agenda).not.toMatch(/\.(insert|update|upsert|delete)\(/);
     expect(agenda).not.toContain("writeGfDispatchProgram");
@@ -708,11 +748,32 @@ describe("las guardas, en el código", () => {
     expect(fn).toContain('.update({ claimed_by: null, claimed_until: null })');
   });
 
+  it("programar sin llamada es «Confirma fecha» por el canal `sin_contacto`: candado, acción de la caja y la RPC", () => {
+    const fn = body(actions, "export async function programReproWithoutCall(");
+    expect(fn.indexOf("await requireReproLima()")).toBeLessThan(fn.indexOf("createAdminSupabase()"));
+    expect(fn).toContain("if (!scope.storeIds.has(f.storeId)) return { error: REPRO_OUTSIDE_STORE };");
+    expect(fn).toContain("if (!f.inStage) return { error: OUT_OF_STAGE };");
+    expect(fn).toContain("const storeProblem = reproCourierStoreProblem(courier, Boolean(f.gfCourierApi));");
+    expect(fn).toContain("if (reproNeedsCoordinate(courier, orderHasCoordinate(f.order))) {");
+    expect(fn).toContain("const claim = await claimReproCase(input.orderId);");
+    expect(fn).toContain("const decided = reproBoxAction({");
+    expect(fn).toContain('channel: "sin_contacto",');
+    expect(fn).toContain("note: REPRO_NO_CALL_NOTE,");
+    expect(fn).toContain("if (!hadClaim) {");
+    // «Desarmar y cerrar» sigue siendo lo único que pide `sin_contacto` desde la hoja.
+    expect(body(actions, "export async function registerReproCall(")).toContain('if (input.channel === "sin_contacto")');
+  });
+
   it("el tablero: «Agendar» y «Atender» en la fila, «Mover a…» en lote con un aviso por motivo, y sin «Sale a reparto»", () => {
     expect(flat(board)).toContain("<AgendarButton row={row} path={path} today={today} size={size}");
     // Sin día, «Agendar» llega con el día que propone Kapta, y en «Sin fecha» un toque los elige a todos para ese día.
     expect(board).toContain("suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}");
-    expect(board).toContain('(key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia")');
+    expect(board).toContain('key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia"');
+    // «Sin día y no entregados» (16-11-2026): también los no entregados por acordar, con el courier del lote.
+    expect(board).toContain('return cls?.step === "no_entregados" && limaStepPart(cls) === "por_acordar" && pathOf(row).kind === "acuerdo_nuevo";');
+    expect(board).toContain("<CourierPicker value={moveCourier} onChange={setMoveCourier} choices={moveCourierChoices} optional={movableNew === 0} />");
+    expect(board).toContain('courier: path.kind === "acuerdo" ? null : moveCourier,');
+    expect(board).toContain("const needsMoveCourier = movableNew > 0 && !moveCourier;");
     expect(board).toContain("setMoveDay(suggestedDay);");
     expect(board).toContain("Elegirlos para el {programDayLabel(suggestedDay)}");
     expect(board).toContain("guideAlert={hoySinGuiaAlert(now)}");

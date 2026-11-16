@@ -4,14 +4,17 @@
 // elegir el día sin abrir la ficha. El camino lo decide el pedido
 // (`agendarPath`, y otra vez el servidor en `agendarReproLima`): con un acuerdo
 // con la clienta se cambia su día con el mismo courier; sin acuerdo y sin
-// rótulo, «Programar envío». «Atender» sigue siendo para llamar y registrar la
-// gestión.
+// rótulo, «Programar envío»; un no entregado sin acuerdo, un acuerdo sin
+// llamada. Desde el 16-11-2026 se elige también el courier («con un botón ya lo
+// dejamos programados exactamente para un courier»). «Atender» sigue siendo
+// para llamar y registrar la gestión.
 import { useRef, useState, useTransition } from "react";
 import { cn } from "@/components/ui";
 import { Banner, FIELD_BOX, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { agendarReproLima, type AgendarResult } from "@/app/dashboard/pedidos/repro-lima/agenda-actions";
-import { agendaDayLabel, agendarMaxDay, agendarQuickDays, programarConfirmLabel, programarVerb, type AgendarPath } from "@/lib/repro-lima-blocks";
+import { PROGRAM_COURIER_HINT, agendaDayLabel, agendarMaxDay, agendarQuickDays, programCourierChoices, programarConfirmLabel, programarVerb, type AgendarPath } from "@/lib/repro-lima-blocks";
+import { DISPATCH_COURIER_LABEL, type DispatchCourier } from "@/lib/dispatch-date";
 import { programDayLabel } from "@/lib/dispatch-day";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
 
@@ -101,10 +104,45 @@ export function ChannelPicker({ value, onChange }: { value: AgendarChannel; onCh
 }
 
 /**
- * «Programar» / «Reprogramar» de una fila (antes «Agendar»; owner, 16-11-2026):
- * un popover con el día y, con un acuerdo, por dónde se habló.
+ * Con qué courier sale (owner, 16-11-2026). `optional`: «Sin elegir» deja el
+ * envío como antes (la ruta la decide quien crea la guía). Debajo, qué pasa con
+ * el elegido: GF Courier crea la guía para ese día; Aliclik y Swayp quedan
+ * programados.
  */
-export function AgendarButton({ row, path, today, onDone, size = "sm", suggested, hasDay }: {
+export function CourierPicker({ value, onChange, choices, optional = false }: {
+  value: DispatchCourier | null;
+  onChange: (courier: DispatchCourier | null) => void;
+  choices: readonly DispatchCourier[];
+  optional?: boolean;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div role="group" aria-label="Sale con" className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs font-medium text-ink-600">Sale con</span>
+        {optional && (
+          <button type="button" aria-pressed={value === null} onClick={() => onChange(null)} className={cn(choiceChipClass(value === null), "pointer-coarse:h-11")}>
+            Sin elegir
+          </button>
+        )}
+        {choices.map((c) => (
+          <button key={c} type="button" aria-pressed={value === c} onClick={() => onChange(c)} className={cn(choiceChipClass(value === c), "pointer-coarse:h-11")}>
+            {DISPATCH_COURIER_LABEL[c]}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs leading-5 text-ink-500">
+        {value ? PROGRAM_COURIER_HINT[value] : optional ? "Sin courier: la ruta la decide quien crea la guía." : "Elige con qué courier sale."}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * «Programar» / «Reprogramar» de una fila (antes «Agendar»; owner, 16-11-2026):
+ * un popover con el día, el courier (sin acuerdo) y, con un acuerdo, por dónde
+ * se habló.
+ */
+export function AgendarButton({ row, path, today, onDone, size = "sm", suggested, hasDay, gfCourierApi = false, currentCourier = null }: {
   row: Pick<LimaPendingOrder, "orderId" | "orderName">;
   path: Exclude<AgendarPath, { kind: null }>;
   today: string;
@@ -114,17 +152,25 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
   suggested?: string;
   /** Ya tiene día (`agendaDay`): «Reprogramar»; si no, «Programar». */
   hasDay?: boolean;
+  /** Su tienda tiene GF Courier por API: se ofrece GF Courier en vez de Grupo GF. */
+  gfCourierApi?: boolean;
+  /** El courier con que ya está programado el envío (0348), si tiene uno. */
+  currentCourier?: DispatchCourier | null;
 }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const initial = path.current && path.current >= today ? path.current : suggested ?? "";
   const [day, setDay] = useState(initial);
   const [channel, setChannel] = useState<AgendarChannel>("llamada");
+  const choices = programCourierChoices(gfCourierApi);
+  // Un no entregado sin acuerdo necesita courier: llega el de la tienda (GF Courier con la API, si no Grupo GF), como «Atender».
+  const [courier, setCourier] = useState<DispatchCourier | null>(path.kind === "acuerdo_nuevo" ? choices[0] ?? null : currentCourier);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const maxDay = agendarMaxDay(today, path.maxDays);
-  const unchanged = Boolean(path.current) && day === path.current;
+  const unchanged = Boolean(path.current) && day === path.current && courier === currentCourier;
+  const needsCourier = path.kind === "acuerdo_nuevo" && !courier;
   const dated = hasDay ?? Boolean(path.current);
   const verb = programarVerb(dated);
 
@@ -137,6 +183,7 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
         day,
         channel: path.kind === "acuerdo" ? channel : null,
         note: path.kind === "envio" ? note.trim() || null : null,
+        courier: path.kind === "acuerdo" ? null : courier,
         operationId: newAgendarOperationId(),
       }).catch((e: unknown): AgendarResult => ({ error: e instanceof Error ? e.message : String(e) }));
       const outcome = agendarOutcome(row.orderName, result, row.orderId);
@@ -160,12 +207,15 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
             <p className="text-[13px] leading-5 text-ink-500">
               {path.kind === "acuerdo"
                 ? `Otro día para lo que acordaste con la clienta: sale con ${path.courierName}, acordado para el ${programDayLabel(path.current)}. Kapta revisa qué hacer con la caja y lo programa como en «Atender».`
-                : path.current
+                : path.kind === "acuerdo_nuevo"
+                  ? "Sin llamada: queda acordado para ese día con el courier que elijas, como «Confirma fecha». Kapta revisa qué hacer con la caja."
+                  : path.current
                   ? `«Programar envío»: el día en que sale. Hoy está para el ${programDayLabel(path.current)}.`
                   : "«Programar envío»: el día en que sale su primera guía. Se cambia o se quita desde la ficha."}
             </p>
             <DayPicker today={today} maxDay={maxDay} value={day} onChange={setDay} />
             {path.kind === "acuerdo" && <ChannelPicker value={channel} onChange={setChannel} />}
+            {path.kind !== "acuerdo" && <CourierPicker value={courier} onChange={setCourier} choices={choices} optional={path.kind === "envio"} />}
             {path.kind === "envio" && (
               <label className="grid gap-1 text-xs font-medium text-ink-600">
                 Nota (opcional)
@@ -175,8 +225,8 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
             {error && <Banner tone="crit" role="alert">{error}</Banner>}
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
               <OpsButton variant="ghost" size="sm" onClick={() => setOpen(false)} className="pointer-coarse:h-11">Cancelar</OpsButton>
-              <OpsButton variant="primary" size="sm" disabled={!day || unchanged || pending} onClick={save} className="pointer-coarse:h-11">
-                {pending ? "Guardando…" : day ? programarConfirmLabel(dated, day) : "Elige el día"}
+              <OpsButton variant="primary" size="sm" disabled={!day || unchanged || needsCourier || pending} onClick={save} className="pointer-coarse:h-11">
+                {pending ? "Guardando…" : !day ? "Elige el día" : needsCourier ? "Elige el courier" : programarConfirmLabel(dated, day)}
               </OpsButton>
             </div>
           </div>

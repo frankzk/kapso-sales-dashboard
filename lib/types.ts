@@ -587,6 +587,8 @@ export interface OrderMasterRow {
   swayp_availability?: "ok" | "sin_stock" | "sin_cobertura" | null;
   /** «Programar envío» (0267, lib/dispatch-date.ts): fecha acordada, YYYY-MM-DD. */
   dispatch_scheduled_on?: string | null;
+  /** El courier de «Programar envío» (0348): `propio`, `gf_courier`, `aliclik` o `fenix`; null sin elegir. */
+  dispatch_courier?: string | null;
   /** Con quién salió (0266, lib/dispatched-with.ts): `gf:Roy`, `tanders`… */
   dispatched_with?: string[] | null;
   /**

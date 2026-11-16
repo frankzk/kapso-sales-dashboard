@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DISPATCH_COURIERS,
+  DISPATCH_COURIER_LABEL,
   DISPATCH_NEEDS_COORDINATE_ERROR,
+  isDispatchCourier,
   currentDispatchDate,
   dispatchCoordinateInput,
   dispatchCoordinateMissing,
@@ -25,7 +28,19 @@ describe("Programar envío (MOM §6.2, 15-10-2026)", () => {
       date: "2026-10-26",
       note: "recibe en su trabajo",
       at: "2026-10-15T16:00:00Z",
+      courier: null,
     });
+  });
+  it("Repro Lima (16-11-2026): el courier elegido viaja en el hecho; uno desconocido no cuenta", () => {
+    const withCourier = (courier: unknown) => ({ kind: "dispatch_date_set", occurred_at: "2026-11-16T15:00:00Z", payload: { date: "2026-11-17", courier } });
+    expect(currentDispatchDate([withCourier("aliclik")])?.courier).toBe("aliclik");
+    expect(currentDispatchDate([withCourier("gf_courier")])?.courier).toBe("gf_courier");
+    expect(currentDispatchDate([withCourier("tanders")])?.courier).toBeNull();
+    expect(currentDispatchDate([withCourier(undefined)])?.courier).toBeNull();
+    expect(DISPATCH_COURIERS).toEqual(["propio", "gf_courier", "aliclik", "fenix"]);
+    expect(DISPATCH_COURIER_LABEL).toEqual({ propio: "Grupo GF", gf_courier: "GF Courier", aliclik: "Aliclik", fenix: "Swayp" });
+    expect(isDispatchCourier("fenix")).toBe(true);
+    expect(isDispatchCourier("axel")).toBe(false);
   });
   it("quitarla, o crear una guía después, la deja sin efecto; una guía anterior no", () => {
     expect(currentDispatchDate([set("2026-10-15T15:00:00Z", "2026-10-26"), cleared("2026-10-15T17:00:00Z")])).toBeNull();
@@ -70,8 +85,15 @@ describe("Programar envío (MOM §6.2, 15-10-2026)", () => {
     expect(actions).toContain('if (ctx.row.macro_stage !== "preparacion" || ctx.row.macro_substage !== "por_generar_rotulo") {');
     expect(actions).toContain('if (why.length < 3) return { error: "Escribe por qué se quita la fecha." };');
     const master = read("lib/order-master.ts");
-    expect(master).toContain('macro.stage === "preparacion" && macro.substage === "por_generar_rotulo"');
-    expect(master).toContain("? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))?.date ?? null");
+    expect(master).toContain('const dispatchProgram = macro.stage === "preparacion" && macro.substage === "por_generar_rotulo"');
+    expect(master).toContain("? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))");
+    expect(master).toContain("dispatch_scheduled_on: dispatchProgram?.date ?? null,");
+    expect(master).toContain("dispatch_courier: dispatchProgram?.courier ?? null,");
+    expect(actions).toContain("payload: { date, ...(note ? { note } : {}), ...(courier ? { courier } : {}) },");
+    const m0348 = read("db/migrations/0348_dispatch_courier.sql");
+    expect(m0348).toContain("add column if not exists dispatch_courier text");
+    expect(m0348).toContain("check (channel <> 'sin_contacto' or outcome in ('no_quiere', 'confirma'))");
+    expect(m0348).not.toMatch(/drop\s+(table|column)/i);
     expect(read("db/migrations/0267_order_master_dispatch_scheduled_on.sql")).toContain("add column if not exists dispatch_scheduled_on date");
   });
   it("en vivo: «Confirmó el pedido» acepta «Sale el», validado antes de registrar el intento", () => {

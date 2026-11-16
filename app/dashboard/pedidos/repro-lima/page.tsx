@@ -59,6 +59,8 @@ async function ReproLimaContent() {
   // «Guía Aliclik» y «Guía GF» bajo «Atender» (owner, 16-11-2026): el permiso de
   // cada courier y las tiendas con GF Courier habilitado (las acciones lo vuelven a pedir).
   let quickGuide: { aliclik: boolean; gfStores: string[] } | undefined;
+  // Las tiendas con GF Courier por API: «Programar» ofrece GF Courier en vez de Grupo GF (16-11-2026).
+  let gfApiStores: string[] = [];
   try {
     let permissions: Awaited<ReturnType<typeof getMasterPermissions>>;
     let gfStores: string[];
@@ -71,6 +73,7 @@ async function ReproLimaContent() {
       // Best-effort: sin la lectura, la fila no ofrece «Guía GF» (la ficha sí).
       loadGfCourierStores([...scope.storeIds]).catch(() => []),
     ]);
+    gfApiStores = gfStores;
     canScheduleDispatch = permissions.can("master.edit");
     canReportForRider = permissions.can("routes.report_others");
     quickGuide = {
@@ -81,5 +84,5 @@ async function ReproLimaContent() {
     const message = error instanceof Error ? error.message : String(error);
     return <EmptyState title="No pudimos cargar Repro Lima">{`${message} Recarga la página.`}</EmptyState>;
   }
-  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} quickGuide={scope.retriesOnly ? undefined : quickGuide} />;
+  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} quickGuide={scope.retriesOnly ? undefined : quickGuide} gfApiStores={gfApiStores} />;
 }
