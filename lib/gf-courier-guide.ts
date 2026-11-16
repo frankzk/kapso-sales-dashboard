@@ -38,6 +38,21 @@ export async function loadGfStore(admin: SupabaseClient, storeId: string) {
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Día acordado en Repro Lima con GF Courier (owner, 16-11-2026: «ella lo quiere para el 18»). Al guardar el acuerdo,
+ * Kapta quita la salida programada de Grupo GF; si la guía no se creó en ese momento, la Mesa de ruta (o la guía
+ * automática) la crea después para el día del acuerdo, no para el siguiente día de reparto. Solo un caso abierto, con
+ * GF Courier y un día que no pasó.
+ */
+export async function reproAgreedGfDay(admin: SupabaseClient, orderId: string): Promise<string | null> {
+  const today = limaTodayKey();
+  const { data } = await admin.from("lima_repro_cases").select("agreed_on,agreed_courier")
+    .eq("order_id", orderId).is("closed_at", null).eq("agreed_courier", "gf_courier").not("agreed_on", "is", null)
+    .order("agreed_on", { ascending: false }).limit(1);
+  const day = (data?.[0]?.agreed_on as string | undefined)?.slice(0, 10) ?? null;
+  return day && DAY_RE.test(day) && day >= today ? day : null;
+}
+
 export async function createGfGuideFor(
   orderId: string,
   /**
@@ -78,7 +93,8 @@ export async function createGfGuideFor(
     externalId, customerName: row.customer_name, customerPhone: row.customer_phone, district: row.district,
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address, reference: row.reference,
     latitude: row.latitude, longitude: row.longitude, orderTotal: Number(row.order_total), advancePaid: advance,
-    scheduledFor: scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null),
+    scheduledFor: scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
+      ?? await reproAgreedGfDay(admin, orderId),
     lines,
   });
   if (!built.ok) return { ok: false, error: built.reason };
