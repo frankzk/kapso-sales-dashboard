@@ -41,8 +41,8 @@ import { PREPAY_LIST_PATH, PREPAY_MODE_LABEL, isPrepayMode, type PrepaySimulatio
 import { APPROX_MODE_LABEL, isApproxMode } from "@/lib/geocode-approx";
 import { GF_AUTO_MODE_LABEL, gfAutoActivoBlocker, gfAutoModeFrom } from "@/lib/gf-auto-guide";
 import { GF_AUTO_SETTINGS, loadGfReadyStores } from "@/lib/gf-auto-guide-server";
-import { LIMA_COURIER_AUTO_MODE_LABEL, limaCourierAutoActivoBlocker, limaCourierAutoModeFrom } from "@/lib/lima-courier-auto";
-import { LIMA_COURIER_AUTO_SETTINGS } from "@/lib/lima-courier-auto-server";
+import { LIMA_COURIER_AUTO_MODE_LABEL, limaCourierAutoActivoBlocker, limaCourierAutoModeFrom, limaCourierRunSummary } from "@/lib/lima-courier-auto";
+import { LIMA_COURIER_AUTO_SETTINGS, runLimaCourierAuto } from "@/lib/lima-courier-auto-server";
 import {
   acceptPagoOnlineRun,
   emptyPagoOnlineStore,
@@ -832,7 +832,7 @@ export async function setGfAutoGuideMode(orgId: string, mode: string): Promise<A
   revalidatePath(PANEL_PATH);
   const tail =
     mode === "activo"
-      ? " La próxima pasada es a las 9:00, 10:00 u 11:00 de Lima."
+      ? " Revisa cada 10 minutos: lo que entre a «Por generar rótulo» toma su guía en minutos."
       : mode === "simulacion"
         ? " En la próxima pasada de la mañana dice qué guía habría creado, sin crear nada."
         : "";
@@ -840,6 +840,27 @@ export async function setGfAutoGuideMode(orgId: string, mode: string): Promise<A
 }
 
 const MISSING_0349 = "Falta la migración 0349 en la base de datos.";
+
+/**
+ * «Correr ahora» de la guía Aliclik y Swayp del día programado (owner,
+ * 16-11-2026: «las puedes crear ahora mismo?»): la misma pasada del cron, con
+ * las mismas reglas y la hora de ahora, solo para esta organización. En
+ * Simulación solo dice qué habría creado; en Activo, crea.
+ */
+export async function runLimaCourierAutoNow(orgId: string): Promise<AutomationActionResult> {
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const { data: current, error: readError } = await g.admin.from(LIMA_COURIER_AUTO_SETTINGS).select("mode").eq("org_id", orgId).maybeSingle();
+  if (readError) return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  const mode = limaCourierAutoModeFrom((current as { mode?: string } | null)?.mode);
+  if (mode === "apagado") return { error: "Está Apagada: ponla en Simulación o en Activo antes de correrla." };
+  const report = await runLimaCourierAuto(g.admin, { orgId });
+  revalidatePath(PANEL_PATH);
+  if (report.skipped === "fuera_de_horario") return { error: "Fuera de horario: la pasada crea de 8:00 a 21:59 de Lima." };
+  const summary = limaCourierRunSummary(report.items);
+  if (report.error) return { error: `${summary} Avisos: ${report.error}` };
+  return { notice: summary };
+}
 
 /**
  * «Guía Aliclik y Swayp del día programado» (0349, owner 16-11-2026; MOM §9.5).
@@ -879,7 +900,7 @@ export async function setLimaCourierAutoMode(orgId: string, mode: string): Promi
   revalidatePath(PANEL_PATH);
   const tail =
     mode === "activo"
-      ? " La próxima pasada es a las 8:00, 10:00, 12:00 o 15:00 de Lima."
+      ? " Pasa a las 8:00, 10:00 y 12:00 (lo de hoy) y a las 15:00, 18:00, 20:00 y 21:00 (lo de mañana) de Lima."
       : mode === "simulacion"
         ? " En la próxima pasada dice qué guía habría creado, sin crear nada."
         : "";

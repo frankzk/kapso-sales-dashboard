@@ -49,7 +49,6 @@ import {
   gfAutoFailureTelegram,
   gfAutoModeFrom,
   gfAutoOutcomeLabel,
-  gfAutoPassOpen,
   gfAutoReproAgreement,
   gfAutoReproDetail,
   gfAutoSimulationDetail,
@@ -103,7 +102,7 @@ export interface GfAutoItem {
 export interface GfAutoReport {
   today: string;
   limaHour: number;
-  /** `fuera_de_horario`: la pasada solo crea de 9:00 a 11:59 de Lima. */
+  /** Siempre null desde el 16-11-2026: la pasada corre todo el día (se conserva por quien lee el informe). */
   skipped: "fuera_de_horario" | null;
   candidates: number;
   created: number;
@@ -203,7 +202,7 @@ async function recordFailure(
           customerName: row.customer_name,
           place: placeOf(row),
           date: today,
-          scheduled: row.dispatch_scheduled_on === today,
+          scheduledOn: row.dispatch_scheduled_on ?? null,
           error,
           url: `${env.siteUrl()}/dashboard/pedidos?abrir=${encodeURIComponent(row.order_id)}`,
         }),
@@ -320,10 +319,6 @@ export async function runGfAutoGuides(
     return report;
   };
 
-  if (!dry && !gfAutoPassOpen(limaHour)) {
-    report.skipped = "fuera_de_horario";
-    return report;
-  }
 
   const ready = await loadGfReadyStores(admin, { orgId: opts.orgId });
   if (ready.error) {
@@ -361,8 +356,9 @@ export async function runGfAutoGuides(
   const storeById = new Map(ready.stores.filter((s) => acting.has(s.orgId)).map((s) => [s.id, s]));
   if (!storeById.size) return done();
 
-  // Los pedidos de hoy: Preparación · Por generar rótulo, programados para hoy o
-  // sin fecha. Lima y la fecha los decide `gfAutoSkip` (la misma regla que las pruebas).
+  // Los pedidos de la pasada: Preparación · Por generar rótulo, sin fecha o
+  // programados para hoy o un día que viene. Lima y la fecha los decide
+  // `gfAutoSkip` (la misma regla que las pruebas).
   let rows: OrderMasterRow[];
   try {
     rows = (
@@ -375,7 +371,7 @@ export async function runGfAutoGuides(
               .in("store_id", chunk)
               .eq("macro_stage", "preparacion")
               .eq("macro_substage", "por_generar_rotulo")
-              .or(`dispatch_scheduled_on.is.null,dispatch_scheduled_on.eq.${today}`)
+              .or(`dispatch_scheduled_on.is.null,dispatch_scheduled_on.gte.${today}`)
               .order("order_id")
               .range(from, to) as unknown as PromiseLike<{ data: OrderMasterRow[] | null; error: { message: string } | null }>,
         ),

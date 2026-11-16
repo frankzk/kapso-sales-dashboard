@@ -10,16 +10,13 @@ import { describe, expect, it } from "vitest";
 import {
   GF_AUTO_FAILED,
   GF_AUTO_FAILED_NOTE,
-  GF_AUTO_FIRST_HOUR_LIMA,
-  GF_AUTO_LAST_HOUR_LIMA,
+  GF_AUTO_CRON,
   GF_AUTO_OUTCOMES,
-  GF_AUTO_PASS_HOURS_LIMA,
   gfAutoActivoBlocker,
   gfAutoDayLine,
   gfAutoFailureTelegram,
   gfAutoModeFrom,
   gfAutoOutcomeLabel,
-  gfAutoPassOpen,
   gfAutoSimulationDetail,
   gfAutoSkip,
   gfAutoTriedOn,
@@ -64,10 +61,11 @@ describe("qué pedido entra a la pasada", () => {
     expect(gfAutoSkip(row({ dispatch_scheduled_on: undefined }), TODAY)).toBeNull();
   });
 
-  it("programado para otro día no: ni uno que viene ni uno que ya pasó", () => {
-    expect(gfAutoSkip(row({ dispatch_scheduled_on: "2026-11-17" }), TODAY)).toBe("otro_dia");
+  it("«ni bien entra el pedido» (16-11-2026): un día que viene entra (la guía va con ese día); uno que ya pasó no", () => {
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: "2026-11-17" }), TODAY)).toBeNull();
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: "2026-11-30" }), TODAY)).toBeNull();
     // Su día pasó sin guía: la chapa roja «no salió» es para una persona.
-    expect(gfAutoSkip(row({ dispatch_scheduled_on: "2026-11-15" }), TODAY)).toBe("otro_dia");
+    expect(gfAutoSkip(row({ dispatch_scheduled_on: "2026-11-15" }), TODAY)).toBe("dia_pasado");
   });
 
   it("fuera de Preparación · Por generar rótulo no: ya tiene guía, o viaja en la caja de otro pedido", () => {
@@ -98,22 +96,10 @@ describe("qué pedido entra a la pasada", () => {
 });
 
 describe("cuándo corre", () => {
-  it("a las 9:00, 10:00 y 11:00 de Lima", () => {
-    expect([...GF_AUTO_PASS_HOURS_LIMA]).toEqual([9, 10, 11]);
-    expect(GF_AUTO_FIRST_HOUR_LIMA).toBe(9);
-    expect(GF_AUTO_LAST_HOUR_LIMA).toBe(11);
-  });
-
-  it("solo crea de 9:00 a 11:59 de Lima", () => {
-    for (const h of [0, 7, 8, 12, 13, 18, 23]) expect(gfAutoPassOpen(h), String(h)).toBe(false);
-    for (const h of [9, 10, 11]) expect(gfAutoPassOpen(h), String(h)).toBe(true);
-  });
-
-  it("vercel.json: 14, 15 y 16 UTC (Lima es UTC−5), en el minuto 0", () => {
+  it("cada 10 minutos, todo el día (owner, 16-11-2026: «ni bien entra el pedido»)", () => {
+    expect(GF_AUTO_CRON).toBe("2,12,22,32,42,52 * * * *");
     const cfg = JSON.parse(read("vercel.json")) as { crons: { path: string; schedule: string }[] };
-    const cron = cfg.crons.find((c) => c.path === "/api/cron/gf-auto-guide");
-    expect(cron?.schedule).toBe("0 14,15,16 * * *");
-    expect(cron?.schedule).toBe(`0 ${GF_AUTO_PASS_HOURS_LIMA.map((h) => h + 5).join(",")} * * *`);
+    expect(cfg.crons.find((c) => c.path === "/api/cron/gf-auto-guide")?.schedule).toBe(GF_AUTO_CRON);
   });
 
   it("la ruta: secreto del cron, y solo en producción salvo `?dry=1`", () => {
@@ -124,11 +110,10 @@ describe("cuándo corre", () => {
     expect(route).toContain("export const maxDuration = 300;");
   });
 
-  it("la pasada mira la hora antes de leer nada", () => {
+  it("la pasada no mira la hora y lee también lo programado para un día que viene", () => {
     const runner = read("lib/gf-auto-guide-server.ts");
-    const fn = runner.slice(runner.indexOf("export async function runGfAutoGuides("));
-    expect(fn.indexOf("if (!dry && !gfAutoPassOpen(limaHour))")).toBeGreaterThan(-1);
-    expect(fn.indexOf("if (!dry && !gfAutoPassOpen(limaHour))")).toBeLessThan(fn.indexOf("loadGfReadyStores(admin"));
+    expect(runner).not.toContain("gfAutoPassOpen");
+    expect(runner).toContain(".or(`dispatch_scheduled_on.is.null,dispatch_scheduled_on.gte.${today}`)");
   });
 });
 
@@ -198,10 +183,10 @@ describe("crea por la misma puerta que la Mesa de ruta", () => {
     expect(fn).toContain("GF_COURIER_WRITE_ENABLED está apagado: en Activo no se crea nada");
   });
 
-  it("los pedidos: Por generar rótulo, de hoy o sin fecha, y la regla pura decide", () => {
+  it("los pedidos: Por generar rótulo, sin fecha o de hoy en adelante, y la regla pura decide", () => {
     expect(fn).toContain('.eq("macro_stage", "preparacion")');
     expect(fn).toContain('.eq("macro_substage", "por_generar_rotulo")');
-    expect(fn).toContain(".or(`dispatch_scheduled_on.is.null,dispatch_scheduled_on.eq.${today}`)");
+    expect(fn).toContain(".or(`dispatch_scheduled_on.is.null,dispatch_scheduled_on.gte.${today}`)");
     expect(fn).toContain(".filter((row) => gfAutoSkip(row, today) === null)");
   });
 
@@ -303,7 +288,7 @@ describe("la alerta de Telegram", () => {
     customerName: "María <Pérez>",
     place: "Miraflores, Lima",
     date: TODAY,
-    scheduled: true,
+    scheduledOn: TODAY,
     error: "Hay un producto sin SKU: GF solo despacha productos de su catálogo.",
     url: "https://kapta.example/dashboard/pedidos?abrir=abc",
   };
@@ -319,8 +304,9 @@ describe("la alerta de Telegram", () => {
   });
 
   it("un pedido sin fecha dice que entró por la pasada de hoy", () => {
-    expect(gfAutoDayLine(TODAY, false)).toBe("Sin fecha programada: entró en la pasada de hoy, lun 16/11.");
-    expect(gfAutoFailureTelegram({ ...base, scheduled: false })).toContain("Sin fecha programada: entró en la pasada de hoy, lun 16/11.");
+    expect(gfAutoDayLine(TODAY, null)).toBe("Sin fecha programada: entró en la pasada de hoy, lun 16/11.");
+    expect(gfAutoFailureTelegram({ ...base, scheduledOn: null })).toContain("Sin fecha programada: entró en la pasada de hoy, lun 16/11.");
+    expect(gfAutoDayLine(TODAY, "2026-11-18")).toBe("Programado para el mié 18/11.");
   });
 
   it("escapa lo que escribió la clienta", () => {
@@ -456,11 +442,11 @@ describe("el MOM y el despliegue", () => {
   it("el MOM lo dice en §29.17 y en §40", () => {
     const mom = read("docs/mom/master-pedidos-v1.md");
     const gf = mom.indexOf("### 29.17 GF Courier por API");
-    const sub = mom.indexOf("#### Guía GF automática (owner, 15-11-2026)");
+    const sub = mom.indexOf("#### Guía GF automática (owner, 15-11-2026; «ni bien entra el pedido», 16-11-2026)");
     expect(sub).toBeGreaterThan(gf);
     expect(sub).toBeLessThan(mom.indexOf("## 30. Liquidaciones 2"));
     const body = mom.slice(sub, mom.indexOf("## 30. Liquidaciones 2")).replace(/\s+/g, " ");
-    expect(body).toContain("`0 14,15,16 * * *`");
+    expect(body).toContain("`2,12,22,32,42,52 * * * *`");
     expect(body).toContain("`gf_auto_guide_failed`");
     expect(body).toContain("**Un intento por pedido y día**");
     expect(body).toContain("Nace **Apagado**");

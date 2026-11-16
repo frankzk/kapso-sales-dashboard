@@ -357,8 +357,8 @@ export function limaSuggestedDay(today: string): string {
 
 /**
  * Desde qué minuto de Lima «Hoy sin guía» es alerta (owner, 15-11-2026: «desde
- * las 10:30»). Antes, que falte la guía de hoy es normal (la guía GF
- * automática corre a las 9, 10 y 11): se cuenta, pero sin alerta.
+ * las 10:30»). Antes, que falte la guía de hoy es normal (la de Aliclik del
+ * día programado se crea a las 8, 10 y 12): se cuenta, pero sin alerta.
  */
 export const HOY_SIN_GUIA_ALERT_MINUTE = 10 * 60 + 30;
 export function hoySinGuiaAlert(now: Date): boolean {
@@ -586,7 +586,7 @@ export interface LimaRowClass {
   /**
    * La guía GF automática lo cubre: su tienda la tiene en Activo y está en
    * Preparación · Por generar rótulo sin un acuerdo de Repro Lima (como
-   * `gfAutoSkip`). La pasada crea su guía el día que sale, en la mañana.
+   * `gfAutoSkip`). La pasada crea su guía en minutos, todo el día (16-11-2026).
    */
   autoGuide: boolean;
   /**
@@ -1153,9 +1153,9 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
       : "Sale hoy y todavía no tiene guía ni rótulo: si a las 10:30 no la tiene, créala desde la Mesa de ruta.";
   }
   if (!cls.guide && cls.agenda === "manana") {
-    if (cls.autoGuideBy === "fenix") return "Sale mañana con Swayp: Kapta crea su guía hoy, la víspera.";
-    if (cls.autoGuideBy === "aliclik") return "Sale mañana con Aliclik: Kapta crea su guía mañana en la mañana.";
-    return cls.autoGuide ? "Sale mañana: la guía GF automática la crea mañana en la mañana." : "Sale mañana y no tiene guía ni rótulo: genérala hoy.";
+    if (cls.autoGuideBy === "fenix") return "Sale mañana con Swayp: Kapta crea su guía hoy, hasta las 21:00.";
+    if (cls.autoGuideBy === "aliclik") return "Sale mañana con Aliclik: Kapta crea su guía esta noche o mañana temprano.";
+    return cls.autoGuide ? "Sale mañana: la guía GF automática la crea en minutos; si no puede, avisa por Telegram." : "Sale mañana y no tiene guía ni rótulo: genérala hoy.";
   }
   if (cls.agendaDay && cls.agendaDay < today) return `Debía salir el ${programDayLabel(cls.agendaDay)}: revisa por qué no salió y reagéndalo.`;
   if (cls.agendaDay === today) return "Sale hoy.";
@@ -1246,8 +1246,8 @@ export const PROGRAM_COURIER_HINT: Record<DispatchCourier, string> = {
  * la guía sola: lo dice así. Sin ella, `PROGRAM_COURIER_HINT`. Pura.
  */
 export function programCourierHint(courier: DispatchCourier, autoActive: boolean): string {
-  if (autoActive && courier === "aliclik") return "Aliclik: la mañana de ese día Kapta crea su guía (AUTOECOM si se puede). Si no puede, avisa por Telegram.";
-  if (autoActive && courier === "fenix") return "Swayp: Kapta crea su guía la víspera, con ese día de despacho. Elige desde mañana.";
+  if (autoActive && courier === "aliclik") return "Aliclik: Kapta crea su guía la noche anterior o la mañana de ese día (AUTOECOM si se puede). Si no puede, avisa por Telegram.";
+  if (autoActive && courier === "fenix") return "Swayp: Kapta crea su guía la víspera, hasta las 21:00, con ese día de despacho. Elige desde mañana.";
   return PROGRAM_COURIER_HINT[courier];
 }
 
