@@ -20125,6 +20125,11 @@ interruptor «Agotado» de los productos sin conteo) y los montos.
   pedido chocaba con «Ya hay una creación de guía GF en curso».
 - A diferencia de Aliclik, GF tiene `Idempotency-Key` (`KP-<pedido>-<external_id>`): un timeout se reintenta con la
   misma clave y GF devuelve la misma guía; `DUPLICATE_ORDER` o `IDEMPOTENCY_CONFLICT` con guía se **vinculan**.
+- **Un intento que GF rechazó no frena el siguiente** (16-11-2026, #KP205759: «Ya hay una creación de guía GF en
+  curso» sin nada en curso). La intención `failed` (distrito sin cobertura, SKU…) no creó nada en GF, así que el
+  reintento va con una clave nueva (`gfRetryKey`: `…~r2`, `…~r3`) y el mismo `external_id`. Antes chocaba con el
+  índice único de la clave (`gf_order_requests_key_uniq`). «En curso» se dice solo si de verdad hay una pendiente; si
+  GF ya recibió esa guía, se dice que se busque en la Mesa de ruta. Si GF vuelve a rechazarla, se ve su motivo real.
 - `external_id` es el nombre del pedido; una salida posterior lleva `-S2`, `-S3`…
 - Anular (`gf_courier.cancel_guide`): GF solo anula antes de preparar, sin costo; después responde con el estado.
 

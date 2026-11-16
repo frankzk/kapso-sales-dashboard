@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
-import { gfCourier, gfIdempotencyKey, verifyGfWebhook } from "@/lib/gf-courier";
+import { gfCourier, gfIdempotencyKey, gfRetryKey, verifyGfWebhook } from "@/lib/gf-courier";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -53,5 +55,46 @@ describe("firma de webhooks GF", () => {
     expect(verifyGfWebhook(body, { signature: sign(ts, body), timestamp: ts }, "otro", now)).toEqual({ ok: false, reason: "bad_signature" });
     expect(verifyGfWebhook(body, { signature: sign(ts, body), timestamp: ts }, secret, now + 301_000)).toEqual({ ok: false, reason: "stale_timestamp" });
     expect(verifyGfWebhook(body, { signature: null, timestamp: ts }, secret, now)).toEqual({ ok: false, reason: "missing_headers" });
+  });
+});
+
+describe("reintentar después de un rechazo de GF (#KP205759, 16-11-2026)", () => {
+  it("la clave del reintento es otra, cabe en 128 y conserva la guía externa", () => {
+    const base = gfIdempotencyKey("7c5a2e5c-12e8-4e3b-8f46-fb5c7a876b8d", "#KP205759");
+    expect(gfRetryKey(base, 2)).toBe(`${base}~r2`);
+    expect(gfRetryKey(base, 2)).not.toBe(base);
+    const long = gfIdempotencyKey("o", "x".repeat(200));
+    expect(gfRetryKey(long, 12)).toHaveLength(128);
+    expect(gfRetryKey(long, 12).endsWith("~r12")).toBe(true);
+  });
+  it("un intento `failed` no frena: se prueba la clave siguiente; un choque real se dice como es", () => {
+    const src = readFileSync(resolve(process.cwd(), "lib/gf-courier-guide.ts"), "utf8").replace(/\s+/g, " ");
+    expect(src).toContain('for (let attempt = 2; prior.data?.status === "failed" && attempt <= GF_MAX_RETRY_KEYS; attempt += 1) {');
+    expect(src).toContain("key = gfRetryKey(base, attempt);");
+    expect(src).toContain('const live = await admin.from("gf_order_requests").select("id").eq("order_id", orderId).eq("status", "pending").limit(1);');
+  });
+});
+
+describe("el aviso flotante de «Guía Aliclik» / «Guía GF» (16-11-2026)", () => {
+  it("el resultado en el título y el pedido con la guía debajo, sin repetir la frase", async () => {
+    const { quickGuideToast } = await import("@/lib/repro-lima-blocks");
+    expect(quickGuideToast("#AUR900792", "GF Courier", "Guía creada en GF Courier: AURELA-AUR900792 · envío S/ 13.50 · entrega estimada 2026-11-17.")).toEqual({
+      title: "Guía creada en GF Courier",
+      detail: "#AUR900792 · AURELA-AUR900792 · envío S/ 13.50 · entrega estimada 2026-11-17",
+    });
+    expect(quickGuideToast("#KP1", "Aliclik", "Guía creada en Aliclik para #KP1: 123456 · cobrar S/ 80.00 · AUTOECOM S/ 9.")).toEqual({
+      title: "Guía creada en Aliclik",
+      detail: "#KP1 · 123456 · cobrar S/ 80.00 · AUTOECOM S/ 9",
+    });
+    expect(quickGuideToast("#KP2", "GF Courier", "Guía existente vinculada en GF Courier: GF-1 · envío S/ 10.00 · entrega estimada 2026-11-18.").title).toBe("Guía vinculada en GF Courier");
+  });
+  it("la página lo repite donde se mira, y el lector lo oye una vez", () => {
+    const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
+    expect(board).toContain("<OpsToast toast={toast} onClose={() => setToast(null)} />");
+    expect(board).toContain('role={feedback.toasted ? undefined : feedback.kind === "error" ? "alert" : "status"}');
+    const toast = readFileSync(resolve(process.cwd(), "components/ops-toast.tsx"), "utf8");
+    expect(toast).toContain("if (!toast || paused) return;");
+    expect(toast).toContain('if (e.key === "Escape") close();');
+    expect(toast).toContain("motion-reduce:transition-opacity");
   });
 });

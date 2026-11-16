@@ -85,6 +85,18 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · GF: reintentar después de un rechazo; aviso flotante al crear la guía desde Repro Lima (sin migración, MOM §29.17, DESIGN.md)
+
+Sin migración ni variables.
+- **GF Courier:** un intento que GF rechazó (`gf_order_requests.status = 'failed'`, por ejemplo DISTRICT_NOT_COVERED)
+  ya no bloquea el siguiente. El reintento usa una clave nueva (`…~r2`) con el mismo `external_id`. Antes decía «Ya
+  hay una creación de guía GF en curso» sin nada en curso (#KP205759).
+- **Repro Lima:** al crear la guía con «Guía Aliclik» o «Guía GF», además del aviso de la página sale un aviso
+  flotante con el pedido, la guía y «Abrir la Mesa de ruta».
+
+Verificar: en #KP205759, «Crear guía en GF Courier» ya no dice «en curso». Responde lo que diga GF; si vuelve a
+rechazarlo, en `gf_order_requests` queda otra fila `failed` con la clave `…~r2`.
+
 ### 16-11-2026 · Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5 y §40)
 
 **Migración 0349: ya aplicada en producción (16-11-2026), antes del código.** `0349_lima_courier_auto.sql` crea
