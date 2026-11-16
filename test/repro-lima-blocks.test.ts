@@ -195,13 +195,14 @@ describe("«Agenda»: Hoy, Mañana, Después y Sin fecha (owner, 15-11-2026: «l
     expect(cls(row({ stage: "por_despachar", substage: "listo_para_recojo", ops: ops({ liveCouriers: ["gf_courier"] }) }))).toMatchObject({ agenda: null, courier: "guia_creada" });
   });
 
-  it("las tarjetas: Hoy, Mañana (con su día), Después y Sin fecha; el domingo, sin «Hoy»", () => {
-    expect(agendaCards(TODAY).map((c) => c.key)).toEqual(["manana", "despues", "sin_fecha"]);
-    expect(agendaCards(TODAY).map((c) => c.label)).toEqual(["Mañana · Lun 16", "Después", "Sin fecha"]);
+  it("las tarjetas de Programados: Hoy, Mañana (con su día) y Después, sin «Sin fecha»; el domingo, sin «Hoy»", () => {
+    // Owner, 16-11-2026: «¿qué sentido tiene un programado sin fecha?». Lo sin día vive en Sacar a reparto.
+    expect(agendaCards(TODAY).map((c) => c.key)).toEqual(["manana", "despues"]);
+    expect(agendaCards(TODAY).map((c) => c.label)).toEqual(["Mañana · Lun 16", "Después"]);
     expect(agendaCards(TODAY)[0]!.hint).toContain("hoy no se reparte");
-    expect(agendaCards("2026-11-17").map((c) => c.label)).toEqual(["Hoy", "Mañana · Mié 18", "Después", "Sin fecha"]);
+    expect(agendaCards("2026-11-17").map((c) => c.label)).toEqual(["Hoy", "Mañana · Mié 18", "Después"]);
     // Un sábado, «Mañana» es el lunes: se dice el día, no «Mañana».
-    expect(agendaCards("2026-11-14").map((c) => c.label)).toEqual(["Hoy", "Lun 16", "Después", "Sin fecha"]);
+    expect(agendaCards("2026-11-14").map((c) => c.label)).toEqual(["Hoy", "Lun 16", "Después"]);
     expect(agendaCards(TODAY).find((c) => c.key === "despues")?.hint).toBe("Agendados después del lunes 16/11.");
   });
 });
@@ -430,11 +431,12 @@ describe("los seis pasos suman el total (owner, 15-11-2026: «estos 5 no suman 1
 
 describe("el filtro de la URL (`atencion`)", () => {
   it("las claves nuevas pasan; un día que pasó abre Hoy; lo desconocido, Todos", () => {
-    for (const key of ["novedad", "llamar_despues", "no_entregados", "por_sacar", "con_courier", "por_cerrar", "guia_creada", "en_ruta", "retornando", "manana", "despues", "sin_fecha", "reprogramados", "esperan_anulacion", "reintentos_aliclik", "mas_de_30", "hoy_sin_guia", "manana_sin_guia"]) {
+    for (const key of ["novedad", "llamar_despues", "no_entregados", "por_sacar", "con_courier", "por_cerrar", "guia_creada", "en_ruta", "retornando", "manana", "despues", "reprogramados", "esperan_anulacion", "reintentos_aliclik", "mas_de_30", "hoy_sin_guia", "manana_sin_guia", "agendados", "nunca_salieron", "salieron_sin_dia", "por_acordar", "guia_sin_recoger", "sin_reporte"]) {
       expect(boardFilter(key, TODAY)).toBe(key);
     }
-    // «Confirmar primer despacho» de antes abre Sacar a reparto.
-    expect(boardFilter("primer_despacho", TODAY)).toBe("primer_despacho");
+    // «Confirmar primer despacho» de antes abre Sacar a reparto; «Sin fecha» también (ya no es de Programados).
+    expect(boardFilter("primer_despacho", TODAY)).toBe("por_sacar");
+    expect(boardFilter("sin_fecha", TODAY)).toBe("por_sacar");
     // Un día guardado de la Agenda anterior abre su cajón de ahora.
     expect(boardFilter("2026-11-16", TODAY)).toBe("manana");
     expect(boardFilter("2026-11-18", TODAY)).toBe("despues");
@@ -555,11 +557,11 @@ describe("las piezas en pantalla", () => {
     const rows = [row(), failed({ orderId: "e" }), row({ orderId: "h", programmedFor: TODAY })];
     const counts = limaBoardCounts(rows, classifyLimaRows(rows, [], TODAY));
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "no_entregados", onPick: () => {} }));
-    for (const text of ["Flujo del día", "los seis suman el total", "Agenda", "Sacar a reparto", "Con el courier", "Por cerrar", "Mañana · Lun 16", "Después", "Sin fecha", "Mañana sin guía", "0 con guía"]) expect(html, text).toContain(text);
-    for (const text of ["En manos del courier", "Confirmar primer despacho", "Mar 17"]) expect(html, text).not.toContain(text);
+    for (const text of ["Flujo del día", "los seis suman el total", "Programados", "Sacar a reparto", "Con el courier", "Por cerrar", "Mañana · Lun 16", "Después", "Mañana sin guía", "0 con guía"]) expect(html, text).toContain(text);
+    for (const text of ["En manos del courier", "Confirmar primer despacho", "Mar 17", "Sin fecha"]) expect(html, text).not.toContain(text);
     // «Nunca salieron» con su nombre en la nota del paso y como filtro de adentro (owner, 16-11-2026).
     expect(html).toContain("1 agendado · 1 nunca salieron");
-    const inside = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "primer_despacho", onPick: () => {} }));
+    const inside = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "nunca_salieron", onPick: () => {} }));
     const chips = inside.slice(inside.indexOf(">Sacar a reparto</b>:"), inside.indexOf('aria-labelledby="repro-agenda"'));
     expect(chips).toContain("Nunca salieron");
     expect(chips).not.toContain("Sin fecha");
@@ -606,9 +608,8 @@ describe("las piezas en pantalla", () => {
     expect(html).toContain(STEP_TONE.por_sacar.numOn);
     expect(html).toContain(STEP_TONE.no_entregados.num);
     expect(html).toContain(STEP_TONE.no_entregados.segDim);
-    expect(activeStep("primer_despacho")).toBe("por_sacar");
-    // «Sin fecha» es de la Agenda: dentro de Sacar a reparto, el chip es «Nunca salieron».
-    expect(activeStep("sin_fecha")).toBeNull();
+    for (const part of ["agendados", "guia_sin_recoger", "nunca_salieron", "mas_de_30", "salieron_sin_dia"] as const) expect(activeStep(part)).toBe("por_sacar");
+    for (const part of ["por_acordar", "reintentos_aliclik", "retornando", "sin_reporte"] as const) expect(activeStep(part)).toBe("no_entregados");
     expect(activeStep("hoy")).toBeNull();
     const board = read("components/repro-lima-board.tsx");
     expect(board).toContain('listStep ? STEP_TONE[listStep].band : "bg-wash/70"');
@@ -698,7 +699,7 @@ describe("las guardas, en el código", () => {
     expect(flat(board)).toContain("<AgendarButton row={row} path={path} today={today} size={size}");
     // Sin día, «Agendar» llega con el día que propone Kapta, y en «Sin fecha» un toque los elige a todos para ese día.
     expect(board).toContain("suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}");
-    expect(board).toContain('(key === "sin_fecha" || key === "por_sacar")');
+    expect(board).toContain('(key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia")');
     expect(board).toContain("setMoveDay(suggestedDay);");
     expect(board).toContain("Elegirlos para el {programDayLabel(suggestedDay)}");
     expect(board).toContain("guideAlert={hoySinGuiaAlert(now)}");
@@ -775,5 +776,44 @@ describe("el MOM, DESIGN.md y DEPLOY.md", () => {
       expect(entry, title).toBeDefined();
       expect(entry, title).toContain("sin migración");
     }
+  });
+});
+
+describe("las partes de un paso suman su cifra (owner, 16-11-2026: «la suma de las partes no da 216»)", () => {
+  it("Sacar a reparto: agendados, guía sin recoger, nunca salieron, más de 30 días y ya salieron sin día", async () => {
+    const { LIMA_STEP_PARTS, limaStepPart } = await import("@/lib/repro-lima-blocks");
+    const rows = [
+      row({ orderId: "nunca" }),
+      row({ orderId: "viejo", createdAt: "2026-10-01T15:00:00Z" }),
+      row({ orderId: "agendado", programmedFor: TODAY }),
+      row({ orderId: "volvio", hasPriorDispatch: true }),
+      row({ orderId: "sin-recoger", substage: "por_armar", courierPickup: { courier: "aliclik", date: "2026-11-12" }, ops: ops({ liveCouriers: ["aliclik"] }) }),
+      failed({ orderId: "acordar" }),
+      failed({ orderId: "acordar-2", courier: null }),
+      row({ orderId: "ruta", stage: "en_curso", substage: "en_reparto", courier: "aliclik", macroSince: "2026-11-10T15:00:00Z", ops: ops({ liveCouriers: ["aliclik"] }) }),
+      row({ orderId: "vuelve", stage: "en_curso", substage: "en_retorno", courier: "aliclik", ops: ops({ liveCouriers: ["aliclik"] }) }),
+    ];
+    const classes = classifyLimaRows(rows, [], TODAY);
+    const counts = limaBoardCounts(rows, classes);
+    const part = (id: string) => limaStepPart(classes.get(id)!);
+    expect([part("nunca"), part("viejo"), part("agendado"), part("volvio"), part("sin-recoger")]).toEqual(["nunca_salieron", "mas_de_30", "agendados", "salieron_sin_dia", "guia_sin_recoger"]);
+    expect([part("acordar"), part("acordar-2"), part("ruta"), part("vuelve")]).toEqual(["por_acordar", "por_acordar", "sin_reporte", null]);
+    const sum = (keys: readonly string[]) =>
+      keys.reduce((n, key) => n + ((counts.sub as Record<string, number>)[key] ?? (counts.courier as Record<string, number>)[key] ?? 0), 0);
+    for (const step of ["por_sacar", "no_entregados", "con_courier"] as const) {
+      expect(sum(LIMA_STEP_PARTS[step]!), step).toBe(counts.step[step]);
+    }
+    expect(counts.step.por_sacar).toBe(5);
+    expect(counts.step.no_entregados).toBe(4);
+  });
+
+  it("un reintento cuya guía nueva espera recojo no se cuenta como reintento: está con el courier", async () => {
+    const { limaStepPart } = await import("@/lib/repro-lima-blocks");
+    const r = failed({ orderId: "r", courierPickup: { courier: "aliclik", date: "2026-11-16" }, ops: ops({ liveCouriers: ["aliclik"] }) });
+    const cases = [{ orderId: "r", retryChain: { attempt: 1 } }] as never;
+    const classes = classifyLimaRows([r], cases, TODAY);
+    expect(classes.get("r")!.step).toBe("con_courier");
+    expect(limaStepPart(classes.get("r")!)).toBeNull();
+    expect(limaBoardCounts([r], classes).sub.reintentos_aliclik).toBe(0);
   });
 });

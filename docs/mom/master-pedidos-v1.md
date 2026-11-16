@@ -6726,14 +6726,30 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   Master no cambia: sigue en «Por reprogramar Lima» hasta que la guía sale.
 - **«Nunca salieron», con su nombre** (owner: «no veo el bloque de no salieron
   nunca»; «¿será este los de sin fecha?»). Sí: dentro de «Sacar a reparto», lo
-  que no tiene día es lo que nunca salió (la tarea `primer_despacho`: antes de
-  salir, sin salida previa, sin día y sin guía de courier). El filtro de adentro
-  se llama **«Nunca salieron»** (antes «Sin fecha») y la nota del paso dice
-  «N agendados · M nunca salieron · K sin recoger». Lo poco que salió antes y
-  quedó sin día se cuenta aparte («· N sin fecha»), y la Agenda sigue con su
-  «Sin fecha», que los muestra todos. `?atencion=nunca_salieron` (el enlace de
-  la pantalla anterior) abre ese filtro. Dentro van también los de más de 30
-  días, que tienen su propio filtro.
+  que no tiene día y nunca salió (la tarea `primer_despacho`) es su parte
+  **«Nunca salieron»**; `?atencion=nunca_salieron` (el enlace de la pantalla
+  anterior) la abre.
+- **Las partes de un paso suman su cifra** (owner: «sacar a reparto tiene 216
+  pedidos y en el desglose dentro la suma de las partes no da 216»; «de igual
+  manera en No entregados»). Como los seis pasos suman el total, los filtros de
+  adentro de un paso se lo reparten sin repetirse (`LIMA_STEP_PARTS`,
+  `limaStepPart`, la primera que aplica):
+  - **Sacar a reparto** = «Guía sin recoger» + «Agendados» (con su día) +
+    «Nunca salieron» (los últimos 30 días) + «Más de 30 días» + «Ya salieron,
+    sin día» (salió antes, volvió y no tiene día nuevo).
+  - **No entregados** = «Reintentos Aliclik» + «Sin reporte de la ruta» +
+    «Retornando» + **«Por acordar»** (lo demás de «Por reprogramar Lima»: llamar
+    y acordar el día). Un reintento cuya guía nueva ya espera recojo está Con el
+    courier y no se cuenta como reintento.
+  - **Con el courier** = «Guía creada» + «En ruta» (ya lo era).
+  La nota de cada paso nombra solo las partes con pedidos, en el orden de los
+  chips. Los trabados no son una parte: son una alerta encima.
+- **«Programados» en vez de «Agenda», sin «Sin fecha»** (owner: «¿qué sentido
+  tiene un programado sin fecha?»). El bloque de los días se llama
+  **«Programados»** y tiene Hoy (de lunes a sábado), Mañana y Después: lo que
+  ya tiene día de salida en todo el flujo (lo agendado de Sacar a reparto, sin
+  guía, y lo que el courier recoge, con guía). Lo que no tiene día está en Sacar
+  a reparto; `?atencion=sin_fecha` abre Sacar a reparto.
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
