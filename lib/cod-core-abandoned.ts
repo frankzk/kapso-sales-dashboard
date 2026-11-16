@@ -105,6 +105,44 @@ function lineItems(productos: unknown): OrderLineItem[] {
   return out;
 }
 
+// EL PRODUCTO DESDE EL ENLACE DE RECUPERACIÓN (owner, 16-11-2026: «dice 1
+// producto pero no indica el producto»). Desde el 15-11-2026 algunos
+// abandonos de COD Core (casi uno de cada tres en Aurela) llegan con
+// `productos: []` y sin total, pero el enlace para retomar la compra sigue
+// apuntando a la ficha del producto:
+//   https://aurela.pe/products/posturefit-brasier…/#cod-recuperar=…
+// Sin lista, ese producto es la línea del carrito: su nombre sale del enlace
+// (como `productLabel` de lib/leads.ts) y la ficha de la tienda lo resuelve
+// por su `handle` cuando el catálogo lo tiene. Sin precio: no se inventa.
+const RECOVERY_PRODUCT_RE = /\/products\/([A-Za-z0-9._~%-]+)/i;
+
+/** La línea que dice el enlace de recuperación, o null. Pura. */
+export function recoveryLineItem(recuperacion: unknown): OrderLineItem | null {
+  const url = text(recuperacion);
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  const m = RECOVERY_PRODUCT_RE.exec(url);
+  if (!m) return null;
+  let handle = m[1]!;
+  try {
+    handle = decodeURIComponent(handle);
+  } catch {
+    /* se queda como vino */
+  }
+  handle = handle.toLowerCase();
+  const words = handle.replace(/[-_]+/g, " ").trim();
+  if (!words) return null;
+  return {
+    title: words[0]!.toUpperCase() + words.slice(1),
+    quantity: 1,
+    sku: null,
+    product_id: null,
+    variant_id: null,
+    variant_title: null,
+    price: null,
+    product_handle: handle,
+  };
+}
+
 export type CodCoreParse =
   | { ok: true; event: CodCoreEvent; formId: string; row: DraftOrderRow; orderId: string | null }
   | { ok: false; reason: string };
@@ -125,7 +163,9 @@ export function parseCodCoreForm(body: unknown, store: { id: string; siteKey: st
   const phone = normalizePhone(text(b.cliente?.celular));
   if (!phone) return { ok: false, reason: "el formulario no trae celular" };
 
-  const items = lineItems(b.productos);
+  const listed = lineItems(b.productos);
+  const fromLink = listed.length ? null : recoveryLineItem(b.recuperacion);
+  const items = fromLink ? [fromLink] : listed;
   const sum = items.reduce((s, li) => s + (li.price ?? 0) * li.quantity, 0);
   const total = num(b.total) ?? (sum > 0 ? Math.round(sum * 100) / 100 : null);
   const createdAt = codCoreDate(b.creado);

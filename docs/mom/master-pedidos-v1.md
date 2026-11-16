@@ -25478,6 +25478,16 @@ Ajustes → WooCommerce, bajo la de los webhooks de pedidos.
   la tienda (no hay uno nuevo), HMAC-SHA256 del cuerpo crudo en base64, en
   `X-Kapta-Signature`. Sin secreto guardado o con la firma mala, 401 y no se
   escribe nada.
+- **Sin lista de productos, el producto del enlace** (owner, 16-11-2026:
+  «dice 1 producto pero no indica el producto»). Desde el 15-11-2026 algunos
+  abandonos llegan con `productos: []` y sin total (en Aurela, casi uno de cada
+  tres), pero `recuperacion` sigue apuntando a la ficha del producto
+  (`/products/<handle>/#cod-recuperar=…`). Entonces esa ficha es la línea del
+  carrito: el nombre sale del enlace y el catálogo de la tienda la resuelve por
+  su handle; sin precio, que no se inventa (`recoveryLineItem`). La pasada de
+  cada 5 minutos corrige los que ya habían llegado vacíos, desde `raw`. Si
+  tampoco hay enlace, la ficha del lead dice «El formulario no mandó el
+  producto: pregúntale en la llamada», no «1 producto(s)».
 - **Dos eventos:** `abandonado` (entra a «Formularios abandonados») y
   `recuperado` (pasa a «Recuperados», con `pedido_id`). Cualquier otro, o un
   formulario sin `id` o sin celular, es 422: reenviarlo no lo arregla. Si la

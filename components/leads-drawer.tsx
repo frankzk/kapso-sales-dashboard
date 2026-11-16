@@ -854,7 +854,12 @@ export function LeadDrawer({
       askLine.push(
         <span key="cart">
           {lead.draft_order_gid ? "" : "Carrito: "}
-          {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
+          {/* Sin nombre: el formulario no mandó el producto (16-11-2026). Antes
+              decía «1 producto(s)», un relleno que la asesora buscaba. */}
+          {lead.cart_summary ||
+            (lead.draft_order_gid?.startsWith("cod-core://")
+              ? "El formulario no mandó el producto: pregúntale en la llamada"
+              : `${lead.cart_item_count} producto(s)`)}
         </span>,
       );
     }
