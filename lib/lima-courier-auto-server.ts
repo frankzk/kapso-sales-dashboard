@@ -232,8 +232,7 @@ export async function runLimaCourierAuto(
   const storeIds = [...orgOfStore.keys()];
   if (!storeIds.length) return done();
 
-  const swaypDay = limaCourierTargetDay("fenix", today);
-  const days = [...new Set([today, swaypDay])];
+  const days = [...new Set([limaCourierTargetDay("aliclik", today, limaHour), limaCourierTargetDay("fenix", today, limaHour)])];
   const serves = (courier: LimaAutoCourier) => dry || limaCourierServes(courier, limaHour);
 
   // 1. «Programar envío» con courier (0348): Preparación · Por generar rótulo.
@@ -277,17 +276,17 @@ export async function runLimaCourierAuto(
 
   const byOrder = new Map<string, Candidate>();
   for (const row of envioRows) {
-    const courier = limaCourierEnvioCourier(row, today);
+    const courier = limaCourierEnvioCourier(row, today, limaHour);
     const orgId = orgOfStore.get(row.store_id);
     if (!courier || !orgId || !serves(courier)) continue;
     byOrder.set(row.order_id, {
       orderId: row.order_id, orderName: row.order_name, storeId: row.store_id, orgId, courier,
-      day: limaCourierTargetDay(courier, today), origin: "envio", createdAt: row.order_created_at ?? "", master: row,
+      day: limaCourierTargetDay(courier, today, limaHour), origin: "envio", createdAt: row.order_created_at ?? "", master: row,
     });
   }
   // El acuerdo con la clienta manda sobre el «Programar envío» del mismo pedido.
   const agreed = caseRows.filter((c) => {
-    const courier = limaCourierCaseCourier(c, today);
+    const courier = limaCourierCaseCourier(c, today, limaHour);
     return Boolean(courier && serves(courier));
   });
   if (agreed.length) {
@@ -304,7 +303,7 @@ export async function runLimaCourierAuto(
       // Solo el acuerdo vigente: el caso abierto de su episodio, en un pedido que sigue pendiente en Lima.
       if (!f?.order || !orgId || f.cancelled || !(f.inStage || f.attentionEligible)) continue;
       if (!f.open || f.open.id !== c.id || f.open.episode_key !== f.episode.key) continue;
-      const courier = limaCourierCaseCourier(c, today)!;
+      const courier = limaCourierCaseCourier(c, today, limaHour)!;
       byOrder.set(c.order_id, {
         orderId: c.order_id, orderName: f.order.order_name ?? null, storeId: c.store_id, orgId, courier,
         day: c.agreed_on!.slice(0, 10), origin: "acuerdo", createdAt: f.order.macro_since ?? "",

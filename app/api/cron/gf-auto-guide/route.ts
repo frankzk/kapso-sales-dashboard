@@ -7,9 +7,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Guía GF automática (MOM §29.17, owner 15-11-2026). A las 9:00, 10:00 y 11:00
-// de Lima, el día del despacho. Solo los pedidos de Lima en Preparación · Por
-// generar rótulo, programados para hoy o sin fecha, de las tiendas con GF Courier
+// Guía GF automática (MOM §29.17, owner 15-11-2026; «ni bien entra el pedido»,
+// 16-11-2026). Cada 10 minutos, todo el día. Solo los pedidos de Lima en
+// Preparación · Por generar rótulo, sin fecha o programados para hoy o un día que
+// viene (la guía va con ese día), de las tiendas con GF Courier
 // por API; cada organización según su posición en Automatizaciones (Apagado /
 // Simulación / Activo). Los que fallan avisan por Telegram, uno por uno.
 // `?dry=1` dice qué haría, sin crear, sin escribir y sin avisar.

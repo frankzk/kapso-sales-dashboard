@@ -97,6 +97,7 @@ import {
   setChatbyHistoryMode,
   setGfAutoGuideMode,
   setLimaCourierAutoMode,
+  runLimaCourierAutoNow,
   setOrgAutomation,
   setRetryChatbyAsk,
   setRetryDailyCap,
@@ -1963,7 +1964,7 @@ function AskModeRow({
 // ── Guía GF automática (0345, MOM §29.17) ───────────────────────────────────
 
 const GF_ACTIVE_CONFIRM =
-  "¿Poner en Activo «Guía GF automática»? A las 9:00, 10:00 y 11:00 de Lima, Kapta creará en GF Courier las guías de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha, sin que nadie las apruebe. Antes de las 9:00, lo que vaya por Aliclik necesita su guía creada.";
+  "¿Poner en Activo «Guía GF automática»? Apenas un pedido de Lima entre a «Por generar rótulo», Kapta creará su guía en GF Courier (cada 10 minutos, todo el día), sin que nadie la apruebe. Lo que vaya por Aliclik u otro courier se programa con ese courier en Repro Lima; crear la guía de Aliclik anula la de GF si GF no la asignó.";
 
 /**
  * Apagado / Simulación / Activo de la guía GF automática. Activo pide
@@ -2092,7 +2093,7 @@ function GfAutoLogCard({ view }: { view: GfAutoGuideView }) {
 // ── Guía Aliclik y Swayp del día programado (0349, MOM §9.5) ────────────────
 
 const LIMA_COURIER_ACTIVE_CONFIRM =
-  "¿Poner en Activo «Guía Aliclik y Swayp del día programado»? A las 8:00, 10:00 y 12:00 de Lima, Kapta creará la guía de Aliclik (AUTOECOM si se puede) de lo de Lima programado para hoy con Aliclik, y la de Swayp la víspera (también a las 15:00), sin que nadie las apruebe.";
+  "¿Poner en Activo «Guía Aliclik y Swayp del día programado»? Kapta creará, sin que nadie las apruebe, la guía de Aliclik (AUTOECOM si se puede) de lo de Lima programado con Aliclik —a las 8:00, 10:00 y 12:00 lo de hoy; a las 15:00, 18:00, 20:00 y 21:00 lo de mañana— y la de Swayp la víspera, hasta las 21:00.";
 
 /**
  * Apagado / Simulación / Activo de la guía del día programado. Activo pide
@@ -2120,6 +2121,22 @@ function LimaCourierAutoRow({
   const [, startTransition] = useTransition();
   const canEdit = writable && view.available;
   const off = [!view.aliclikWrite ? "Aliclik" : null, !view.swaypEnabled ? "Swayp" : null].filter(Boolean).join(" y ");
+  // «Correr ahora» (16-11-2026): la misma pasada del cron, ya, para esta organización.
+  const [runPending, startRun] = useTransition();
+  const [runStatus, setRunStatus] = useState<Status>(null);
+  const runNow = () => {
+    if (!canEdit || runPending || mode === "apagado") return;
+    if (mode === "activo" && !window.confirm("¿Correr la pasada ahora? En Activo, Kapta crea ya las guías de Aliclik y Swayp que le tocan a esta hora (desde las 15:00, las de mañana).")) return;
+    setRunStatus(null);
+    startRun(async () => {
+      try {
+        const r = await runLimaCourierAutoNow(orgId);
+        setRunStatus(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: r.notice ?? "Pasada hecha." });
+      } catch {
+        setRunStatus({ kind: "error", text: "No respondió: se cortó o se perdió la conexión. Mira «hoy y ayer» antes de volver a correrla." });
+      }
+    });
+  };
   const blocked = !view.available
     ? "Aún no está instalada en la base de datos: funciona como Apagado."
     : view.blocker
@@ -2160,10 +2177,16 @@ function LimaCourierAutoRow({
           </p>
           <EntryLinks entry={entry} stores={stores} />
         </div>
-        <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+        <div className="flex flex-col items-start gap-2 sm:items-end">
+          <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+          <OpsButton size="sm" disabled={!canEdit || runPending || mode === "apagado"} onClick={runNow} className="pointer-coarse:h-11">
+            {runPending ? "Corriendo…" : "Correr ahora"}
+          </OpsButton>
+        </div>
       </div>
-      <div className="mt-1.5">
+      <div className="mt-1.5 space-y-1">
         <RowStatus pending={pending} status={status} blocked={blocked} />
+        {runStatus && <RowStatus pending={false} status={runStatus} blocked={null} />}
       </div>
     </div>
   );

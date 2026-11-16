@@ -157,7 +157,7 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     // la pasada, en lib/gf-auto-guide-server.ts. Solo en las tiendas con GF
     // Courier por API habilitado.
     what:
-      "A las 9, 10 y 11 de la mañana crea la guía de GF Courier de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha. Si una no sale, avisa por Telegram. En Simulación solo dice qué guía habría creado.",
+      "Apenas un pedido de Lima entra a «Por generar rótulo» (cada 10 minutos, todo el día) crea su guía de GF Courier; si está programado para otro día, con ese día. Si una no sale, avisa por Telegram. En Simulación solo dice qué habría creado.",
     effect: "Crea guías",
     scope: "org",
     control: { kind: "org_mode", table: "gf_auto_guide_settings", column: "mode" },
@@ -170,7 +170,7 @@ export const AUTOMATIONS: readonly AutomationEntry[] = [
     // 0349, owner 16-11-2026 (MOM §9.5): «Kapta la crea ese día». La regla está
     // en lib/lima-courier-auto.ts; la pasada, en lib/lima-courier-auto-server.ts.
     what:
-      "Lo de Lima programado con Aliclik o Swayp: a las 8, 10 y 12 crea la guía de Aliclik (AUTOECOM) del día; la de Swayp, la víspera, porque Swayp arma su ruta antes. Si una no sale, avisa por Telegram. En Simulación solo dice qué habría creado.",
+      "Lo de Lima programado con Aliclik o Swayp. Aliclik (AUTOECOM): a las 8, 10 y 12 lo de hoy; de 15 a 21, lo de mañana. Swayp: la víspera, hasta las 21. Si una no sale, avisa por Telegram. En Simulación solo dice qué habría creado.",
     effect: "Crea guías",
     scope: "org",
     control: { kind: "org_mode", table: "lima_courier_auto_settings", column: "mode" },

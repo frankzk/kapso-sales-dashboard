@@ -6645,8 +6645,9 @@ cambia la etapa del Master ni `MOM_RESOLUTION_VERSION`, y no necesita migración
   camino de siempre (`agendarReproLima`). «Agendar» de una fila sin día llega
   con ese día elegido.
 - **«Hoy sin guía» es alerta desde las 10:30 de Lima**
-  (`HOY_SIN_GUIA_ALERT_MINUTE`, `hoySinGuiaAlert`), después de la guía GF
-  automática (9, 10 y 11). Antes se cuenta y se puede filtrar, pero sin
+  (`HOY_SIN_GUIA_ALERT_MINUTE`, `hoySinGuiaAlert`), después de las pasadas de
+  la mañana de Aliclik (8, 10 y 12; la guía GF automática corre cada 10 minutos
+  desde el 16-11-2026). Antes se cuenta y se puede filtrar, pero sin
   alarmar: la cifra «sin guía» de Hoy va sin color, el filtro es un chip neutro
   y la fila dice «Sale hoy y todavía no tiene guía ni rótulo: si a las 10:30 no
   la tiene, créala desde la Mesa de ruta.». Lo que debía salir un día anterior
@@ -6880,11 +6881,16 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     (`limaCourierEnvioCourier`) y el acuerdo vigente de Repro Lima, el caso
     abierto de su episodio (`limaCourierCaseCourier`). El acuerdo manda sobre
     el envío del mismo pedido.
-  - **Cuándo**: Aliclik, el mismo día, a las 8:00, 10:00 y 12:00 de Lima,
-    antes de su corte. **Swayp arma su ruta el día anterior**, así que su
-    guía se crea la víspera de su próximo día de despacho (de lunes a sábado,
-    `limaCourierTargetDay`), en esas pasadas y en la de las 15:00, con esa
-    fecha de despacho.
+  - **Cuándo** (owner, 16-11-2026: «también debe intentar en la noche porque
+    están agendando todo el día»): Aliclik, a las 8:00, 10:00 y 12:00 de Lima
+    lo de HOY, antes de su corte; y a las 15:00, 18:00, 20:00 y 21:00 lo del
+    próximo día (de lunes a sábado, `limaCourierTargetDay`). No espera a que
+    el corte de la cotización diga «mañana»: AUTOECOM no lo trae fiable (a las
+    16:13 decía «hoy»; owner: «¿cómo que recogería hoy?»), y el equipo ya crea
+    en la tarde y la noche lo del día siguiente. **Swayp arma
+    su ruta el día anterior**, así que su guía se crea la víspera de su próximo
+    día de despacho, en todas esas pasadas hasta las 21:00 (su corte es 21:20),
+    con esa fecha de despacho. Cron `12 13,15,17,20,23,1,2 * * *` UTC.
   - **Por dónde**: los mismos caminos que las personas. Aliclik va por
     `createAliclikGuideFor` con el transporte AUTOECOM si se puede
     (`defaultAliclikTransport`), con sus compuertas, candado e intención, y
@@ -20302,27 +20308,31 @@ exactamente los SKU que la tienda vende, y cada pedido viaja con el mismo SKU.
 - La sincronización automática Kapta → GF todavía no existe: un producto nuevo se exporta e importa, y GF no duplica
   lo que ya tenía.
 
-#### Guía GF automática (owner, 15-11-2026)
+#### Guía GF automática (owner, 15-11-2026; «ni bien entra el pedido», 16-11-2026)
 
-Decisión del owner: el día del despacho, en la mañana, la guía de GF Courier de los pedidos de Lima se crea sola.
-«Antes de eso, quien quiera Aliclik crea esa guía y GF ya no toma el pedido.»
+Decisión del owner: la guía de GF Courier de los pedidos de Lima se crea sola. Primero era el día del despacho, en la
+mañana; desde el 16-11-2026, «el de GF Courier debe ser ni bien entra el pedido». Lo que vaya por Aliclik u otro
+courier se programa con ese courier en Repro Lima (`dispatch_courier`), o se crea su guía: la de Aliclik anula sola la
+guía GF que GF todavía no asignó.
 
-- **Cuándo.** Tres pasadas, a las 9:00, 10:00 y 11:00 de Lima (`/api/cron/gf-auto-guide`, `0 14,15,16 * * *` en UTC).
-  Fuera de 9:00–11:59 la pasada no crea nada (`fuera_de_horario`). Son varias y no una: un pedido que llega o se
-  programa para hoy a media mañana también entra.
+- **Cuándo.** Cada 10 minutos, todo el día (`/api/cron/gf-auto-guide`, `GF_AUTO_CRON` =
+  `2,12,22,32,42,52 * * * *`): lo que entra a Por generar rótulo tiene su guía en minutos. Ya no hay horario
+  (antes, 9:00, 10:00 y 11:00 de Lima).
 - **Qué pedidos entran.** Los que cumplen todo esto:
   - la tienda tiene GF Courier por API habilitado (su interruptor y su token);
   - el servidor tiene `GF_COURIER_WRITE_ENABLED`;
   - el pedido está en Preparación · Por generar rótulo (`preparacion` / `por_generar_rotulo` en `order_master`);
   - la operación es Lima (`classifyOperation`);
-  - `dispatch_scheduled_on` es hoy (Lima) o no tiene fecha;
+  - `dispatch_scheduled_on` no tiene fecha, es hoy (Lima) o un día que viene: la guía va con ese día
+    (`scheduled_date`, como en Repro Lima);
   - no tiene guía viva de ningún courier;
   - no es un acompañante vinculado a la caja de otro pedido (§32). Cuenta aunque la caja ya no preste su estado: para
     darle guía propia hay que desvincularlo antes (§32.1, reglas 8 y 9);
   - no tiene un acuerdo de Repro Lima con la clienta (abajo, «GF Courier en los acuerdos de Repro Lima»).
 - **Qué no entra.** No entran:
   - Agencia ni Provincia;
-  - lo programado para otro día, también un día que ya pasó (la chapa roja «no salió» es para una persona);
+  - lo programado para un día que ya pasó (la chapa roja «no salió» es para una persona; `gfAutoSkip` →
+    `dia_pasado`);
   - lo programado con otro courier en «Programar envío» (Aliclik, Swayp o Grupo GF; `dispatch_courier`, 0348,
     16-11-2026): sale con el elegido (`gfAutoSkip` → `otro_courier`). Lo programado con GF Courier ya tiene su guía
     del día desde que se programó; si GF no la creó, la pasada de ese día la vuelve a intentar;
@@ -26630,9 +26640,9 @@ Vercel— y algunas no tenían interruptor.
     `history_guide_mode`, `setChatbyHistoryMode`), que crea guías y confirma
     pedidos; en la pasada va antes de la pedida de 0318.
   - **Logística Lima, con tres posiciones:** «Guía GF automática» (§29.17, 15-11-2026; 0345, clave
-    `gf_auto_guide`, `gf_auto_guide_settings.mode`, `setGfAutoGuideMode`). A las 9:00, 10:00 y 11:00 de Lima crea la
-    guía GF de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha, de las tiendas con GF Courier
-    por API. Apagado / Simulación / Activo, nace Apagado. Sin fila es Apagado y la acción la crea al cambiarla. Activo
+    `gf_auto_guide`, `gf_auto_guide_settings.mode`, `setGfAutoGuideMode`). Cada 10 minutos, todo el día (desde el
+    16-11-2026; antes a las 9:00, 10:00 y 11:00), crea la guía GF de los pedidos de Lima por generar rótulo, sin fecha
+    o programados para hoy o un día que viene (con ese día), de las tiendas con GF Courier por API. Apagado / Simulación / Activo, nace Apagado. Sin fila es Apagado y la acción la crea al cambiarla. Activo
     pide confirmación y no se deja elegir sin `GF_COURIER_WRITE_ENABLED` ni sin una tienda con GF Courier por API y su
     token. Si eso falta después, la fila dice «Está en Activo, pero no corre» y no cuenta entre las encendidas. La
     fila nombra las tiendas con GF Courier por API y enlaza a sus Ajustes. Debajo está «Guía GF automática: hoy y
@@ -26640,11 +26650,14 @@ Vercel— y algunas no tenían interruptor.
     fila se bloquea y funciona como Apagado.
     Y «Guía Aliclik y Swayp del día programado» (§9.5, 16-11-2026; 0349, clave `lima_courier_auto`,
     `lima_courier_auto_settings.mode`, `setLimaCourierAutoMode`, `/api/cron/lima-courier-auto` a las
-    `12 13,15,17,20 * * *` UTC). Lo de Lima que Repro Lima programó con Aliclik o Swayp: a las 8:00, 10:00 y 12:00
-    crea la guía de Aliclik (AUTOECOM si se puede) del día; la de Swayp, la víspera (también a las 15:00), con su
-    fecha de despacho. Las mismas tres posiciones, nace Apagado; Activo pide confirmación y no se deja elegir sin
+    `12 13,15,17,20,23,1,2 * * *` UTC). Lo de Lima que Repro Lima programó con Aliclik o Swayp: a las 8:00, 10:00 y
+    12:00 crea la guía de Aliclik (AUTOECOM si se puede) de hoy, y a las 15:00, 18:00, 20:00 y 21:00 la de mañana;
+    la de Swayp, la víspera, hasta las 21:00, con su fecha de despacho. Las mismas tres posiciones, nace Apagado; Activo pide confirmación y no se deja elegir sin
     `ALICLIK_WRITE_ENABLED` ni Swayp en el servidor. Debajo, «Guía del día programado: hoy y ayer»
-    (`#guia-dia-programado-hoy-y-ayer`). Sin la 0349 la fila se bloquea y funciona como Apagado.
+    (`#guia-dia-programado-hoy-y-ayer`). Sin la 0349 la fila se bloquea y funciona como Apagado. Su fila tiene
+    **«Correr ahora»** (16-11-2026, `runLimaCourierAutoNow`): la misma pasada del cron, ya, para esa organización y con
+    la hora de ahora (en Simulación solo dice qué habría creado; en Activo pide confirmación y crea). Dice en una línea
+    cuántas creó, cuántas no salieron y cuántas ya tenían guía (`limaCourierRunSummary`).
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp

@@ -109,6 +109,24 @@ Verificar:
    guía activa»; al crearla, MOM-AUR900778-PROPIO-00F1A578 pasa a custodia
    `retorno` con el hecho `output_replaced`.
 
+### 16-11-2026 · Guía GF automática «ni bien entra el pedido»; Aliclik y Swayp también en la noche (sin migración, MOM §9.5, §29.17 y §40)
+
+Sin migración ni variables. **Cambian dos crons** (`vercel.json`):
+- `/api/cron/gf-auto-guide`: de `0 14,15,16 * * *` a `2,12,22,32,42,52 * * * *` (cada 10 minutos, todo el día). La
+  guía GF automática también toma lo programado para un día que viene, con ese día (`scheduled_date`); solo deja lo
+  que tiene un día que ya pasó.
+- `/api/cron/lima-courier-auto`: de `12 13,15,17,20 * * *` a `12 13,15,17,20,23,1,2 * * *`. Son las 8:00, 10:00,
+  12:00, 15:00, 18:00, 20:00 y 21:00 de Lima. Aliclik toma lo de hoy en la mañana y lo de mañana desde las 15:00 (sin
+  esperar al corte de la cotización, que con AUTOECOM no es fiable). Swayp toma lo de mañana en todas las pasadas, hasta
+  las 21:00.
+
+En Automatizaciones, la fila «Guía Aliclik y Swayp del día programado» suma **«Correr ahora»**: hace la misma pasada,
+ya, para esa organización.
+
+Verificar: un pedido de Lima de una tienda con GF Courier que entra a «Por generar rótulo» tiene su guía GF en menos
+de 10 minutos, y aparece en «Guía GF automática: hoy y ayer». `GET /api/cron/lima-courier-auto?dry=1` después de las
+15:00 lista lo programado con Aliclik para mañana.
+
 ### 16-11-2026 · Repro Lima: aviso flotante al crear la guía desde la fila; reintento de GF documentado (sin migración, MOM §29.17, DESIGN.md)
 
 Sin migración ni variables.

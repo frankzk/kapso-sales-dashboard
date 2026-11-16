@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   LIMA_COURIER_AUTO_FAILED,
+  LIMA_COURIER_AUTO_CRON,
   LIMA_COURIER_AUTO_PASS_HOURS_LIMA,
   isLimaCourierAutoOutcome,
   limaCourierAutoActivoBlocker,
@@ -57,46 +58,56 @@ const acuerdo = (over: Partial<LimaCourierCase> = {}): LimaCourierCase => ({
 });
 
 describe("el día y la hora de cada courier (owner, 16-11-2026: «Kapta la crea ese día»)", () => {
-  it("Aliclik, el mismo día; Swayp, la víspera de su próximo día de despacho (sin domingos)", () => {
-    expect(limaCourierTargetDay("aliclik", MON)).toBe(MON);
-    expect(limaCourierTargetDay("fenix", MON)).toBe("2026-11-17");
-    expect(limaCourierTargetDay("fenix", "2026-11-20")).toBe(SAT); // el viernes, el sábado
-    expect(limaCourierTargetDay("fenix", SAT)).toBe("2026-11-23"); // el sábado, el lunes
-    expect(limaCourierTargetDay("fenix", "2026-11-22")).toBe("2026-11-23"); // el domingo, el lunes
+  it("Aliclik: en la mañana, hoy; desde las 15:00, el próximo día. Swayp: la víspera de su próximo día (sin domingos)", () => {
+    expect(limaCourierTargetDay("aliclik", MON, 8)).toBe(MON);
+    expect(limaCourierTargetDay("aliclik", MON, 12)).toBe(MON);
+    expect(limaCourierTargetDay("aliclik", MON, 18)).toBe("2026-11-17");
+    expect(limaCourierTargetDay("aliclik", SAT, 20)).toBe("2026-11-23"); // el sábado en la noche, el lunes
+    expect(limaCourierTargetDay("fenix", MON, 8)).toBe("2026-11-17");
+    expect(limaCourierTargetDay("fenix", "2026-11-20", 21)).toBe(SAT); // el viernes, el sábado
+    expect(limaCourierTargetDay("fenix", SAT, 10)).toBe("2026-11-23"); // el sábado, el lunes
+    expect(limaCourierTargetDay("fenix", "2026-11-22", 10)).toBe("2026-11-23"); // el domingo, el lunes
   });
-  it("las pasadas: 8, 10 y 12 para Aliclik (antes de su corte) y además 15 para Swayp", () => {
-    expect(LIMA_COURIER_AUTO_PASS_HOURS_LIMA).toEqual([8, 10, 12, 15]);
+  it("las pasadas: 8, 10 y 12 (Aliclik de hoy) y 15, 18, 20 y 21 (owner: «también debe intentar en la noche»)", () => {
+    expect(LIMA_COURIER_AUTO_PASS_HOURS_LIMA).toEqual([8, 10, 12, 15, 18, 20, 21]);
+    expect(LIMA_COURIER_AUTO_CRON).toBe("12 13,15,17,20,23,1,2 * * *");
     expect(limaCourierAutoPassOpen(7)).toBe(false);
-    expect(limaCourierAutoPassOpen(8)).toBe(true);
-    expect(limaCourierAutoPassOpen(15)).toBe(true);
-    expect(limaCourierAutoPassOpen(16)).toBe(false);
+    expect(limaCourierAutoPassOpen(21)).toBe(true);
+    expect(limaCourierAutoPassOpen(22)).toBe(false);
     expect(limaCourierServes("aliclik", 12)).toBe(true);
-    expect(limaCourierServes("aliclik", 15)).toBe(false);
-    expect(limaCourierServes("fenix", 15)).toBe(true);
+    expect(limaCourierServes("aliclik", 13)).toBe(false);
+    expect(limaCourierServes("aliclik", 18)).toBe(true);
+    expect(limaCourierServes("fenix", 21)).toBe(true);
     expect(limaCourierServes("fenix", 7)).toBe(false);
+  });
+  it("lo de mañana con Aliclik se crea en la tarde sin esperar al corte de la cotización (owner: «¿cómo que recogería hoy?»)", () => {
+    const server = read("lib/lima-courier-auto-server.ts");
+    expect(server).not.toContain("expectedDispatchDate");
+    expect(server).not.toContain('item.outcome = "espera"');
   });
 });
 
 describe("qué pedido entra", () => {
   it("«Programar envío» con courier (0348): Lima, por generar rótulo, Aliclik de hoy o Swayp de mañana", () => {
-    expect(limaCourierEnvioCourier(envio(), MON)).toBe("aliclik");
-    expect(limaCourierEnvioCourier(envio({ dispatch_scheduled_on: "2026-11-17" }), MON)).toBeNull();
-    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "fenix", dispatch_scheduled_on: "2026-11-17" }), MON)).toBe("fenix");
-    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "fenix" }), MON)).toBeNull();
+    expect(limaCourierEnvioCourier(envio(), MON, 8)).toBe("aliclik");
+    expect(limaCourierEnvioCourier(envio({ dispatch_scheduled_on: "2026-11-17" }), MON, 8)).toBeNull();
+    expect(limaCourierEnvioCourier(envio({ dispatch_scheduled_on: "2026-11-17" }), MON, 20)).toBe("aliclik");
+    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "fenix", dispatch_scheduled_on: "2026-11-17" }), MON, 8)).toBe("fenix");
+    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "fenix" }), MON, 8)).toBeNull();
     // GF Courier y Grupo GF no son de esta pasada; sin courier, tampoco.
-    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "gf_courier" }), MON)).toBeNull();
-    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "propio" }), MON)).toBeNull();
-    expect(limaCourierEnvioCourier(envio({ dispatch_courier: null }), MON)).toBeNull();
-    expect(limaCourierEnvioCourier(envio({ macro_substage: "por_armar" }), MON)).toBeNull();
-    expect(limaCourierEnvioCourier(envio({ coverage: "provincia_cod", region: "Arequipa", province: "Arequipa", district: "Cayma" }), MON)).toBeNull();
+    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "gf_courier" }), MON, 8)).toBeNull();
+    expect(limaCourierEnvioCourier(envio({ dispatch_courier: "propio" }), MON, 8)).toBeNull();
+    expect(limaCourierEnvioCourier(envio({ dispatch_courier: null }), MON, 8)).toBeNull();
+    expect(limaCourierEnvioCourier(envio({ macro_substage: "por_armar" }), MON, 8)).toBeNull();
+    expect(limaCourierEnvioCourier(envio({ coverage: "provincia_cod", region: "Arequipa", province: "Arequipa", district: "Cayma" }), MON, 8)).toBeNull();
   });
   it("el acuerdo de Repro Lima vigente con Aliclik o Swayp para ese día", () => {
-    expect(limaCourierCaseCourier(acuerdo(), MON)).toBe("aliclik");
-    expect(limaCourierCaseCourier(acuerdo({ agreed_courier: "fenix", agreed_on: "2026-11-17" }), MON)).toBe("fenix");
-    expect(limaCourierCaseCourier(acuerdo({ agreed_courier: "propio" }), MON)).toBeNull();
-    expect(limaCourierCaseCourier(acuerdo({ closed_at: "2026-11-16T10:00:00Z" }), MON)).toBeNull();
-    expect(limaCourierCaseCourier(acuerdo({ agreement_call_id: null }), MON)).toBeNull();
-    expect(limaCourierCaseCourier(acuerdo({ agreed_on: "2026-11-18" }), MON)).toBeNull();
+    expect(limaCourierCaseCourier(acuerdo(), MON, 8)).toBe("aliclik");
+    expect(limaCourierCaseCourier(acuerdo({ agreed_courier: "fenix", agreed_on: "2026-11-17" }), MON, 8)).toBe("fenix");
+    expect(limaCourierCaseCourier(acuerdo({ agreed_courier: "propio" }), MON, 8)).toBeNull();
+    expect(limaCourierCaseCourier(acuerdo({ closed_at: "2026-11-16T10:00:00Z" }), MON, 8)).toBeNull();
+    expect(limaCourierCaseCourier(acuerdo({ agreement_call_id: null }), MON, 8)).toBeNull();
+    expect(limaCourierCaseCourier(acuerdo({ agreed_on: "2026-11-18" }), MON, 8)).toBeNull();
   });
   it("un intento por pedido y día", () => {
     expect(limaCourierTriedOn([{ kind: LIMA_COURIER_AUTO_FAILED, payload: { date: MON } }], MON)).toBe(true);
@@ -138,7 +149,7 @@ describe("Repro Lima lo dice al programar (0349)", () => {
     expect(programCourierProblem("propio", MON, MON, false)).toBeNull();
   });
   it("con la automática en Activo, dice que Kapta crea la guía", () => {
-    expect(programCourierHint("aliclik", true)).toContain("Kapta crea su guía");
+    expect(programCourierHint("aliclik", true)).toContain("Kapta crea su guía la noche anterior o la mañana de ese día");
     expect(programCourierHint("aliclik", false)).toContain("«Guía Aliclik»");
     expect(programCourierHint("fenix", true)).toContain("la víspera");
     expect(programCourierHint("gf_courier", true)).toBe("GF Courier: la guía queda creada para ese día.");
@@ -174,7 +185,7 @@ describe("las guardas, en el código", () => {
     expect(route).toContain("if (!internalAuthorized(req))");
     expect(route).toContain('if (!dry && process.env.VERCEL_ENV !== "production")');
     const vercel = JSON.parse(read("vercel.json")) as { crons: { path: string; schedule: string }[] };
-    expect(vercel.crons.find((c) => c.path === "/api/cron/lima-courier-auto")?.schedule).toBe("12 13,15,17,20 * * *");
+    expect(vercel.crons.find((c) => c.path === "/api/cron/lima-courier-auto")?.schedule).toBe(LIMA_COURIER_AUTO_CRON);
   });
   it("Automatizaciones: Apagado / Simulación / Activo por organización, con su tabla y confirmación", () => {
     const entry = AUTOMATIONS.find((a) => a.key === LIMA_COURIER_AUTO_KEY)!;
@@ -194,5 +205,23 @@ describe("las guardas, en el código", () => {
     expect(sql).toContain("enable row level security");
     expect(sql).toContain("revoke all on public.lima_courier_auto_settings, public.lima_courier_auto_log from anon, authenticated;");
     expect(sql).not.toMatch(/drop\s+(table|column)/i);
+  });
+});
+
+describe("«Correr ahora» (owner, 16-11-2026: «las puedes crear ahora mismo?»)", () => {
+  it("dice lo que hizo la pasada, en una línea", async () => {
+    const { limaCourierRunSummary } = await import("@/lib/lima-courier-auto");
+    expect(limaCourierRunSummary([])).toBe("No hay nada programado con Aliclik o Swayp para lo que atiende esta pasada.");
+    expect(limaCourierRunSummary([{ outcome: "creada" }, { outcome: "creada" }, { outcome: "fallo" }, { outcome: "ya_tiene_guia" }]))
+      .toBe("Pasada hecha: 2 creadas · 1 no salió (mira «hoy y ayer») · 1 ya tenían guía.");
+  });
+  it("es la misma pasada del cron, con el permiso del panel y la posición guardada", () => {
+    const actions = flat(read("app/dashboard/automatizaciones/actions.ts"));
+    const fn = actions.slice(actions.indexOf("export async function runLimaCourierAutoNow("));
+    expect(fn.indexOf("const g = await gate(orgId);")).toBeGreaterThan(-1);
+    expect(fn).toContain('if (mode === "apagado") return { error: "Está Apagada: ponla en Simulación o en Activo antes de correrla." };');
+    expect(fn).toContain("const report = await runLimaCourierAuto(g.admin, { orgId });");
+    const panel = read("components/automations-panel.tsx");
+    expect(panel).toContain('{runPending ? "Corriendo…" : "Correr ahora"}');
   });
 });
