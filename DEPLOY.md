@@ -85,6 +85,13 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Repro Lima: las partes de cada paso suman su cifra; «Programados» sin «Sin fecha» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración ni variables. Dentro de «Sacar a reparto» (Agendados · Guía sin recoger · Nunca salieron · Más de
+30 días · Ya salieron, sin día) y de «No entregados» (Por acordar · Reintentos Aliclik · Retornando · Sin reporte
+de la ruta), los filtros se reparten el paso y suman su cifra. El bloque «Agenda» se llama «Programados» y ya no
+tiene «Sin fecha». `?atencion=sin_fecha` abre Sacar a reparto.
+
 ### 16-11-2026 · Repro Lima: «Nunca salieron» con su nombre dentro de Sacar a reparto (sin migración, MOM §9.5)
 
 Sin migración ni variables. El filtro de adentro de «Sacar a reparto» que decía «Sin fecha» se llama «Nunca

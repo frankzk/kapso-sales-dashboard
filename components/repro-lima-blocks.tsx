@@ -30,8 +30,8 @@ import {
   LIMA_COURIER_CARDS,
   LIMA_FOLDED_STEPS,
   LIMA_STEP_CARDS,
+  LIMA_STEP_PARTS,
   LIMA_SUB_FILTERS,
-  LIMA_TASK_CARDS,
   agendaCards,
   type LimaBoardCounts,
   type LimaBoardKey,
@@ -53,33 +53,37 @@ export const LIMA_FLOW: readonly { key: LimaStep; why: string }[] = [
   { key: "por_cerrar", why: "Validar el cobro o anular." },
 ];
 
-/** Lo que vive dentro de cada paso: sus filtros (el pie de la tarjeta) y cómo se dice en su celda. */
+/**
+ * Lo que vive dentro de cada paso: sus filtros (el pie de la tarjeta) y cómo se
+ * dice en su celda. En «No entregados» y «Sacar a reparto» son sus partes
+ * (`LIMA_STEP_PARTS`): se reparten el paso y suman su cifra (owner,
+ * 16-11-2026: «en el desglose dentro la suma de las partes no da 216»). La nota
+ * nombra solo las partes con pedidos, en el mismo orden que los chips.
+ */
+const partsNote = (c: LimaBoardCounts, parts: readonly [number, string][]): string | null => {
+  const named = parts.filter(([n]) => n > 0).map(([n, text]) => `${fmt(n)} ${text}`);
+  return named.length ? named.join(" · ") : null;
+};
+
 const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c: LimaBoardCounts) => string | null }>> = {
   no_entregados: {
-    keys: ["reintentos_aliclik", "retornando", "sin_reporte"],
-    note: (c) => {
-      const parts = [
-        c.sub.reintentos_aliclik ? `${fmt(c.sub.reintentos_aliclik)} reintentos Aliclik` : null,
-        c.courier.retornando ? `${fmt(c.courier.retornando)} retornando` : null,
-        c.sub.sin_reporte ? `${fmt(c.sub.sin_reporte)} sin reporte` : null,
-      ].filter(Boolean);
-      return parts.length ? parts.join(" · ") : null;
-    },
+    keys: LIMA_STEP_PARTS.no_entregados ?? [],
+    note: (c) => partsNote(c, [
+      [c.sub.por_acordar, "por acordar"],
+      [c.sub.reintentos_aliclik, "reintentos Aliclik"],
+      [c.courier.retornando, "retornando"],
+      [c.sub.sin_reporte, "sin reporte"],
+    ]),
   },
-  // «Nunca salieron» con su nombre (owner, 16-11-2026): son los «sin fecha» que
-  // nunca tuvieron una salida. Lo poco que salió antes y quedó sin día se
-  // cuenta aparte, en «sin fecha» (la Agenda los muestra todos juntos).
   por_sacar: {
-    keys: ["primer_despacho", "guia_sin_recoger", "mas_de_30"],
-    note: (c) => {
-      const sinFecha = c.agenda.sin_fecha ?? 0;
-      const agendados = c.step.por_sacar - sinFecha;
-      const nunca = c.task.primer_despacho;
-      const otros = Math.max(0, sinFecha - nunca);
-      const resto = otros ? ` · ${fmt(otros)} sin fecha` : "";
-      const recoger = c.sub.guia_sin_recoger ? ` · ${fmt(c.sub.guia_sin_recoger)} sin recoger` : "";
-      return `${fmt(agendados)} ${agendados === 1 ? "agendado" : "agendados"} · ${fmt(nunca)} nunca salieron${resto}${recoger}`;
-    },
+    keys: LIMA_STEP_PARTS.por_sacar ?? [],
+    note: (c) => partsNote(c, [
+      [c.sub.agendados, c.sub.agendados === 1 ? "agendado" : "agendados"],
+      [c.sub.guia_sin_recoger, "sin recoger"],
+      [c.sub.nunca_salieron, "nunca salieron"],
+      [c.sub.mas_de_30, "de más de 30 días"],
+      [c.sub.salieron_sin_dia, "ya salieron, sin día"],
+    ]),
   },
   con_courier: {
     keys: ["guia_creada", "en_ruta"],
@@ -150,9 +154,6 @@ function withStuck(note: ReactNode, n: number): ReactNode {
 
 /** Lo que dice un filtro de adentro y cuántos tiene. */
 function insideChip(key: LimaBoardKey, counts: LimaBoardCounts): { label: string; count: number; hint: string } {
-  if (key === "sin_fecha") return { label: "Sin fecha", count: counts.agenda.sin_fecha ?? 0, hint: "Por sacar a reparto y todavía sin día." };
-  const task = LIMA_TASK_CARDS.find((card) => card.key === key);
-  if (task) return { label: task.label, count: counts.task[task.key], hint: task.hint };
   const courier = COURIER.get(key as never);
   if (courier) return { label: courier.label, count: counts.courier[courier.key], hint: courier.hint };
   const sub = (LIMA_SUB_FILTERS as Record<string, { label: string; hint: string } | undefined>)[key];
@@ -426,14 +427,14 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
       <section aria-labelledby="repro-agenda" className="space-y-3">
         <BlockHead
           id="repro-agenda"
-          title="Agenda"
+          title="Programados"
           total={agendaTotal}
           unit="pedidos"
-          help="El día en que sale: lo acordado con la clienta, «Programar envío», el programa o el recojo del courier; «Sin fecha», lo que falta sacar y no tiene día. No suma el total: un no entregado sin acuerdo o lo que el courier ya lleva no tiene día. Hoy y Mañana dicen cuáles tienen guía; los que no, son una alerta."
+          help="Lo que ya tiene día de salida, en todo el flujo: lo acordado con la clienta, «Programar envío», el programa o el recojo del courier. Junta lo agendado de «Sacar a reparto» (sin guía) y lo que el courier recoge (con guía), así que no cambia con el paso elegido ni suma el total. Lo que no tiene día está en «Sacar a reparto». Hoy y Mañana dicen cuáles tienen guía; los que no, son una alerta."
         />
         <Strip
-          label="Agenda"
-          cols={agenda.length === 4 ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 sm:grid-cols-3"}
+          label="Programados"
+          cols={agenda.length === 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}
           footer={counts.sub.hoy_sin_guia + counts.sub.manana_sin_guia + counts.sub.reprogramados > 0 || ["hoy_sin_guia", "manana_sin_guia", "reprogramados"].includes(active) ? (
             <>
               {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => counts.sub[key] > 0 || active === key).map((key) =>

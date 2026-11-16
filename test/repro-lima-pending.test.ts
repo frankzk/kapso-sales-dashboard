@@ -384,10 +384,10 @@ describe("presentación inicial y gestión", () => {
       expect(html).toContain('aria-label="Todos los pendientes de Lima"');
       expect(html).toContain(">Atender</button>");
       expect(html.indexOf(">Flujo del día<")).toBeGreaterThan(0);
-      expect(html.indexOf(">Flujo del día<")).toBeLessThan(html.indexOf(">Agenda<"));
+      expect(html.indexOf(">Flujo del día<")).toBeLessThan(html.indexOf(">Programados<"));
       // «Con el courier» es un paso plegado del flujo (owner, 15-11-2026, tercera vuelta), no un bloque aparte.
       expect(html.indexOf("Con el courier")).toBeGreaterThan(html.indexOf(">Flujo del día<"));
-      expect(html.indexOf("Con el courier")).toBeLessThan(html.indexOf(">Agenda<"));
+      expect(html.indexOf("Con el courier")).toBeLessThan(html.indexOf(">Programados<"));
       expect(html).not.toContain("En manos del courier");
     }
     nav.search = "";
@@ -522,8 +522,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(boardFilter("programados_manana", TODAY)).toBe("manana");
     expect(boardFilter("programados_despues", TODAY)).toBe("despues");
     // «Nunca salieron» abre su filtro dentro de Sacar a reparto (owner, 16-11-2026).
-    expect(boardFilter("nunca_salieron", TODAY)).toBe("primer_despacho");
-    expect(boardFilter("primer_despacho", TODAY)).toBe("primer_despacho");
+    expect(boardFilter("nunca_salieron", TODAY)).toBe("nunca_salieron");
+    expect(boardFilter("primer_despacho", TODAY)).toBe("por_sacar");
     expect(boardFilter("por_cerrar", TODAY)).toBe("por_cerrar");
     expect(boardFilter("por_decidir", TODAY)).toBe("no_entregados");
     expect(boardFilter("cerrados", TODAY)).toBe("esperan_anulacion");

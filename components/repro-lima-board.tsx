@@ -403,7 +403,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   // «Sacar a reparto», un toque elige los que se pueden agendar y deja el
   // próximo día de reparto puesto en «Mover a…». Nada se mueve hasta confirmar.
   const suggestedDay = limaSuggestedDay(today);
-  const proposals = !stuck && !retriesOnly && (key === "sin_fecha" || key === "por_sacar")
+  const proposals = !stuck && !retriesOnly && (key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia")
     ? inQueue.filter((row) => classes.get(row.orderId)?.agenda === "sin_fecha" && pathOf(row).kind !== null)
     : [];
   function pickProposals() {
