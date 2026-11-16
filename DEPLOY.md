@@ -85,6 +85,11 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Repro Lima: «Programados» sigue al paso elegido (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración ni variables. Con un paso elegido, el bloque dice «Programados de {paso}» y cuenta solo lo de ese
+paso; tocar un día filtra el paso y ese día (`?atencion=por_sacar:manana`). Sin paso elegido, todo el flujo.
+
 ### 16-11-2026 · Repro Lima: las partes de cada paso suman su cifra; «Programados» sin «Sin fecha» (sin migración, MOM §9.5, DESIGN.md)
 
 Sin migración ni variables. Dentro de «Sacar a reparto» (Agendados · Guía sin recoger · Nunca salieron · Más de

@@ -6750,6 +6750,15 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   ya tiene día de salida en todo el flujo (lo agendado de Sacar a reparto, sin
   guía, y lo que el courier recoge, con guía). Lo que no tiene día está en Sacar
   a reparto; `?atencion=sin_fecha` abre Sacar a reparto.
+- **«Programados» sigue al paso elegido** (owner: «cuando me muevo entre los
+  flujos del día, ese número no se cambia»; elige «Que siga al paso»). Con un
+  paso elegido (o una de sus partes), el bloque se llama «Programados de
+  {paso}» y cuenta solo lo de ese paso (`LimaBoardCounts.byStep`,
+  `agendaScopeOf`): Sacar a reparto, sus agendados; Con el courier, sus recojos;
+  un paso sin días (No entregados) queda en cero. Tocar un día filtra el paso Y
+  ese día con una clave compuesta (`por_sacar:manana`, `scopedKeyParts`), igual
+  con «Mañana sin guía», «Hoy sin guía» y «Reprogramados». Sin paso elegido,
+  todo el flujo.
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas

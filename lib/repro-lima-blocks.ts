@@ -70,7 +70,14 @@ export const LIMA_COURIER_STATES: readonly LimaCourierState[] = ["guia_creada", 
 export type LimaAgendaKey = string;
 
 /** Lo que viaja por `atencion` en la URL. */
-export type LimaBoardKey = "todos" | LimaStep | LimaTask | LimaSubFilter | LimaCourierState | LimaAgendaKey;
+/**
+ * Un día de «Programados» dentro de un paso (owner, 16-11-2026: Programados
+ * sigue al paso elegido): `por_sacar:manana`, `con_courier:despues`,
+ * `por_sacar:manana_sin_guia`… La lista es el paso Y ese filtro.
+ */
+export type LimaScopedKey = `${LimaStep}:${LimaAgendaKey | "hoy_sin_guia" | "manana_sin_guia" | "reprogramados"}`;
+
+export type LimaBoardKey = "todos" | LimaStep | LimaTask | LimaSubFilter | LimaCourierState | LimaAgendaKey | LimaScopedKey;
 
 export interface LimaCard<K extends string = string> {
   key: K;
@@ -693,6 +700,31 @@ export interface LimaBoardCounts {
    * son de la ruta anterior (owner, 15-11-2026: «¿cuándo estuvieron en ruta?»).
    */
   enRutaHoy: number;
+  /** «Programados» de cada paso: sigue al paso elegido (owner, 16-11-2026). */
+  byStep: Record<LimaStep, LimaAgendaScope>;
+}
+
+/** Lo que muestra «Programados»: sus días, lo que sale sin guía, lo que crea la automática y los reprogramados. */
+export interface LimaAgendaScope {
+  agenda: Record<string, number>;
+  hoy_sin_guia: number;
+  manana_sin_guia: number;
+  autoGuideManana: number;
+  reprogramados: number;
+}
+
+const emptyScope = (): LimaAgendaScope => ({ agenda: { hoy: 0, manana: 0, despues: 0 }, hoy_sin_guia: 0, manana_sin_guia: 0, autoGuideManana: 0, reprogramados: 0 });
+
+/** «Programados» de todo el flujo (sin paso elegido) o de un paso. */
+export function agendaScopeOf(counts: LimaBoardCounts, step: LimaStep | null): LimaAgendaScope {
+  if (step) return counts.byStep[step];
+  return {
+    agenda: counts.agenda,
+    hoy_sin_guia: counts.sub.hoy_sin_guia,
+    manana_sin_guia: counts.sub.manana_sin_guia,
+    autoGuideManana: counts.autoGuideManana,
+    reprogramados: counts.sub.reprogramados,
+  };
 }
 
 export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: ReadonlyMap<string, LimaRowClass>): LimaBoardCounts {
@@ -705,10 +737,20 @@ export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: Read
     courier: { guia_creada: 0, en_ruta: 0, retornando: 0 },
     autoGuideManana: 0,
     enRutaHoy: 0,
+    byStep: { novedad: emptyScope(), llamar_despues: emptyScope(), no_entregados: emptyScope(), por_sacar: emptyScope(), con_courier: emptyScope(), por_cerrar: emptyScope() },
   };
   for (const row of rows) {
     const cls = classes.get(row.orderId);
     if (!cls) continue;
+    // «Programados» del paso del pedido, con las mismas reglas que el de todo el flujo.
+    const scope = counts.byStep[cls.step];
+    if (cls.agenda && cls.agenda !== "sin_fecha") scope.agenda[cls.agenda] = (scope.agenda[cls.agenda] ?? 0) + 1;
+    if (cls.agenda === "hoy" && !cls.guide) scope.hoy_sin_guia += 1;
+    if (cls.agenda === "manana" && !cls.guide) {
+      if (cls.autoGuide) scope.autoGuideManana += 1;
+      else scope.manana_sin_guia += 1;
+    }
+    if (cls.agreed) scope.reprogramados += 1;
     counts.step[cls.step] += 1;
     if (cls.task) counts.task[cls.task] += 1;
     if (cls.agenda === "hoy" && !cls.guide) counts.sub.hoy_sin_guia += 1;
@@ -761,9 +803,23 @@ export function limaStepPart(cls: LimaRowClass): LimaSubFilter | null {
   return null;
 }
 
+/** El paso y el filtro de un `LimaScopedKey`, o null si la clave no es de las compuestas. */
+export function scopedKeyParts(key: string): { step: LimaStep; inner: LimaBoardKey } | null {
+  const at = key.indexOf(":");
+  if (at < 0) return null;
+  const step = key.slice(0, at);
+  const inner = key.slice(at + 1);
+  if (!STEP_SET.has(step) || !SCOPED_INNER.has(inner)) return null;
+  return { step: step as LimaStep, inner: inner as LimaBoardKey };
+}
+
+const SCOPED_INNER = new Set<string>(["hoy", "manana", "despues", "hoy_sin_guia", "manana_sin_guia", "reprogramados"]);
+
 /** ¿La fila entra en el filtro `key`? */
 export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
   if (key === "todos") return true;
+  const scoped = scopedKeyParts(key);
+  if (scoped) return cls.step === scoped.step && boardMatches(cls, scoped.inner);
   if (STEP_SET.has(key)) return cls.step === key;
   if (TASK_SET.has(key)) return cls.task === key;
   if (COURIER_SET.has(key)) return cls.courier === key && cls.step === COURIER_STEP[key as LimaCourierState];
@@ -809,6 +865,12 @@ export function boardFilter(value: string | null, today: string): LimaBoardKey {
     case "programados": return "reprogramados";
   }
   if (STEP_SET.has(value) || TASK_SET.has(value) || COURIER_SET.has(value) || value in LIMA_SUB_FILTERS) return value;
+  // Un día de Programados dentro de un paso: «Hoy» de un domingo abre «Mañana», como afuera.
+  const scoped = scopedKeyParts(value);
+  if (scoped) {
+    const inner = scoped.inner === "hoy" && !isDeliveryDay(today) ? "manana" : scoped.inner;
+    return `${scoped.step}:${inner}` as LimaScopedKey;
+  }
   // Un día sin reparto no tiene «Hoy»: abre «Mañana».
   if (value === "hoy") return isDeliveryDay(today) ? "hoy" : "manana";
   if (value === "manana" || value === "despues") return value;
@@ -825,6 +887,20 @@ export function boardFilter(value: string | null, today: string): LimaBoardKey {
 /** La tarjeta (o el filtro de adentro) de una clave, para el título de la lista y su vacío. */
 export function boardCard(key: LimaBoardKey, today: string): (LimaCard & { block: "gestion" | "agenda" | "courier" }) | null {
   if (key === "todos") return null;
+  // «Sacar a reparto · Mañana»: el paso y su día de Programados.
+  const scoped = scopedKeyParts(key);
+  if (scoped) {
+    const stepCard = LIMA_STEP_CARDS.find((c) => c.key === scoped.step)!;
+    const inner = boardCard(scoped.inner, today);
+    if (!inner) return { ...stepCard, block: "gestion" };
+    return {
+      key,
+      label: `${stepCard.label} · ${inner.label}`,
+      hint: `${inner.hint} Solo los de «${stepCard.label}».`,
+      empty: `«${stepCard.label}» no tiene pedidos para este filtro.`,
+      block: "agenda",
+    };
+  }
   const step = LIMA_STEP_CARDS.find((c) => c.key === key);
   if (step) return { ...step, block: "gestion" };
   const task = LIMA_TASK_CARDS.find((c) => c.key === key);
