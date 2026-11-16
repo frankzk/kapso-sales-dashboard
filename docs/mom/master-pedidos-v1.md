@@ -6695,6 +6695,34 @@ crea estados, no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
 - **Sin cambios** (confirmado): la propuesta de día pone todo en el próximo día
   de reparto, sin tope; «Hoy sin guía» avisa solo en pantalla.
 
+**Séptima vuelta: lo vencido sale el próximo día de reparto (owner, 16-11-2026).**
+«Hoy es domingo, ¿cómo sería aquí?», «¿por qué atrasados? Si saldrían mañana de
+todas maneras… estuvo mal ahí el agendamiento» y #KP204807: «sale a reparto
+mañana y ya está listo, pero el sistema lo marca como Vencido». No crea estados,
+no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
+- **Un día que ya pasó (o hoy) cuenta para el próximo día de reparto**
+  (`agendaKeyOf`): de lunes a sábado, **Hoy** (como antes, lo vencido primero);
+  en un día sin reparto (domingo), **Mañana**, y ese día la Agenda no muestra
+  «Hoy» (`agendaCards`). La fila sigue diciendo «Vencido · sáb 14/11» y su
+  próximo paso pide reagendarlo: el agendamiento estuvo mal. No hay cajón
+  «Atrasados».
+- **La guía que espera su recojo** (Aliclik, GF Courier) y cuyo día pasó hace
+  menos de un día de reparto entero (`pickupRolled`): el courier la recoge el
+  **próximo día de reparto** (`nextDeliveryDay`), que pasa a ser su día, sin
+  «Vencido»: «lun 16/11 · Recojo del courier» y «Lo recoge Aliclik el lun 16/11.»,
+  en Con el courier. El día de recojo de Aliclik sale de su regla de corte
+  (`aliclik_expected_dispatch_date`): una guía de un sábado antes del corte
+  queda para el sábado aunque Aliclik la recoja el lunes. Solo cuando pasó un día
+  de reparto entero después de su día sin recogerla es **«Guía sin recoger»**
+  (`missedPickup`, el mismo margen que la ruta vencida).
+- **Un no entregado que ya tiene su guía nueva** (#KP204876: «ya tiene guía
+  para mañana… se entiende que no guarda lógica»). Un «Por reprogramar Lima»
+  con la guía de un courier que espera su recojo (`courierPickup`) ya tiene su
+  salida nueva: no es una tarea (`limaTaskOf` → ninguna) y está **Con el
+  courier · Guía creada** (`limaCourierState`), con su día de recojo, en vez de
+  No entregados con «Llamar a la clienta y acordar el día». La macroetapa del
+  Master no cambia: sigue en «Por reprogramar Lima» hasta que la guía sale.
+
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
 son puras (`lib/repro-lima-blocks.ts`) y usan lo que Repro Lima ya lee

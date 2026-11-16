@@ -424,7 +424,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
         />
         <Strip
           label="Agenda"
-          cols="grid-cols-2 sm:grid-cols-4"
+          cols={agenda.length === 4 ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 sm:grid-cols-3"}
           footer={counts.sub.hoy_sin_guia + counts.sub.manana_sin_guia + counts.sub.reprogramados > 0 || ["hoy_sin_guia", "manana_sin_guia", "reprogramados"].includes(active) ? (
             <>
               {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => counts.sub[key] > 0 || active === key).map((key) =>
