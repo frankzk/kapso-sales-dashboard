@@ -32,7 +32,7 @@ import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/co
 import { ReproLimaBlocks, STEP_TONE, activeStep } from "@/components/repro-lima-blocks";
 import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { QuickGuideButtons } from "@/components/repro-lima-quick-guide";
-import { AgendarButton, ChannelPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
+import { AgendarButton, ChannelPicker, CourierPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
 import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, type LimaStuckHome } from "@/lib/lima-stuck";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
@@ -43,6 +43,8 @@ import {
   agendaWindow,
   agendarMaxDay,
   agendarPath,
+  batchCourierChoices,
+  batchCourierRejects,
   boardCard,
   boardFilter,
   callDue,
@@ -52,12 +54,14 @@ import {
   limaBoardRows,
   limaOwnRoute,
   limaQuickGuideEligible,
+  limaStepPart,
   programarBatchLabel,
+  proposalsNoun,
   limaSuggestedDay,
   type LimaBoardKey,
   type LimaStep,
 } from "@/lib/repro-lima-blocks";
-import { DISPATCH_DATE_MAX_DAYS } from "@/lib/dispatch-date";
+import { DISPATCH_COURIER_LABEL, DISPATCH_DATE_MAX_DAYS, isDispatchCourier, type DispatchCourier } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
@@ -77,7 +81,7 @@ type Feedback = {
   mesa?: Array<{ orderId: string; orderName: string }>;
 };
 
-export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [], quickGuide }: {
+export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [], quickGuide, gfApiStores = [] }: {
   data: ReproLimaData;
   pending: LimaPendingOrder[];
   /** Despacho sin `repro_lima.manage` (03-11-2026): solo «Reintentos Aliclik», sin Atender ni Agendar. */
@@ -93,6 +97,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
    * permiso de cada courier y, para GF, las tiendas con GF Courier habilitado.
    */
   quickGuide?: { aliclik: boolean; gfStores: readonly string[] };
+  /** Las tiendas con GF Courier por API: al programar se ofrece GF Courier en vez de Grupo GF (16-11-2026). */
+  gfApiStores?: readonly string[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -114,6 +120,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const stagePill = useRef<HTMLButtonElement>(null);
   const openDrawer = useOpenOrderDrawer();
   const gfStores = useMemo(() => new Set(quickGuide?.gfStores ?? []), [quickGuide?.gfStores]);
+  const gfApi = useMemo(() => new Set(gfApiStores), [gfApiStores]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
   const hiddenParam = searchParams.getAll("ocultar").join("|");
@@ -294,6 +301,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             // Sin día, llega elegido el que propone Kapta: el equipo lo confirma (owner, 15-11-2026).
             suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}
             hasDay={Boolean(classes.get(row.orderId)?.agendaDay)}
+            gfCourierApi={gfApi.has(row.storeId)}
+            currentCourier={isDispatchCourier(row.scheduledCourier) ? row.scheduledCourier : null}
             onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }}
           />
         )}
@@ -384,6 +393,16 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   // por uno por la acción de cada uno; lo que no se movió, una línea por motivo.
   const movable = inRetries ? [] : inQueue.filter((row) => picked.has(row.orderId) && pathOf(row).kind !== null);
   const movableAgreements = movable.filter((row) => pathOf(row).kind === "acuerdo").length;
+  // Los que no tienen acuerdo salen con el courier del lote (owner, 16-11-2026): un no
+  // entregado sin acuerdo lo necesita; un envío puede quedar sin elegir, como antes.
+  const movableNew = movable.filter((row) => pathOf(row).kind === "acuerdo_nuevo").length;
+  const movableEnvio = movable.filter((row) => pathOf(row).kind === "envio").length;
+  const courierRows = movable.filter((row) => pathOf(row).kind !== "acuerdo");
+  const courierFlags = courierRows.map((row) => gfApi.has(row.storeId));
+  const moveCourierChoices = batchCourierChoices(courierFlags);
+  const [moveCourier, setMoveCourier] = useState<DispatchCourier | null>(null);
+  const moveRejects = batchCourierRejects(moveCourier, courierFlags);
+  const needsMoveCourier = movableNew > 0 && !moveCourier;
   // «Programar» lo que no tiene día y «Reprogramar» lo que ya lo tiene (owner, 16-11-2026).
   const movableDated = movable.filter((row) => Boolean(classes.get(row.orderId)?.agendaDay)).length;
   const moveMaxDays = movable.some((row) => pathOf(row).kind === "envio") ? DISPATCH_DATE_MAX_DAYS : RESCHEDULE_MAX_DAYS;
@@ -392,9 +411,10 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const [moving, setMoving] = useState<{ done: number; total: number } | null>(null);
   async function moveAll() {
     const rows = movable;
-    if (!rows.length || !moveDay || moving) return;
+    if (!rows.length || !moveDay || needsMoveCourier || moving) return;
     const label = programDayLabel(moveDay);
-    if (!window.confirm(`${programarBatchLabel(movableDated, rows.length - movableDated, moveDay)}: ${rows.length} ${rows.length === 1 ? "pedido" : "pedidos"}. ¿Seguir?`)) return;
+    const withCourier = moveCourier && courierRows.length ? ` con ${DISPATCH_COURIER_LABEL[moveCourier]}` : "";
+    if (!window.confirm(`${programarBatchLabel(movableDated, rows.length - movableDated, moveDay)}${withCourier}: ${rows.length} ${rows.length === 1 ? "pedido" : "pedidos"}. ¿Seguir?`)) return;
     const failed: Array<{ orderName: string; error: string }> = [];
     const mesa: Array<{ orderId: string; orderName: string }> = [];
     let done = 0;
@@ -406,6 +426,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           orderId: row.orderId,
           day: moveDay,
           channel: path.kind === "acuerdo" ? moveChannel : null,
+          courier: path.kind === "acuerdo" ? null : moveCourier,
           operationId: newAgendarOperationId(),
         }).catch((e: unknown): AgendarResult => ({ error: e instanceof Error ? e.message : String(e) }));
         const outcome = agendarOutcome(row.orderName, result, row.orderId);
@@ -419,17 +440,24 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     }
     setMoving(null);
     setPicked(new Set());
-    setFeedback({ kind: failed.length ? "error" : "notice", text: `Programados para el ${label}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed), ...(mesa.length ? { mesa } : {}) });
+    setFeedback({ kind: failed.length ? "error" : "notice", text: `Programados para el ${label}${withCourier}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed), ...(mesa.length ? { mesa } : {}) });
     refresh();
   }
 
-  // «Kapta propone, el equipo confirma» (owner, 15-11-2026): en «Sin fecha» y en
-  // «Sacar a reparto», un toque elige los que se pueden agendar y deja el
-  // próximo día de reparto puesto en el lote. Nada se mueve hasta confirmar.
+  // «Kapta propone, el equipo confirma» (owner, 15-11-2026): en «Sacar a reparto»
+  // y, desde el 16-11-2026, en «No entregados» («Sin día y no entregados»), un
+  // toque elige los que se pueden programar y deja el próximo día de reparto
+  // puesto en el lote. Nada se mueve hasta confirmar.
   const suggestedDay = limaSuggestedDay(today);
-  const proposals = !stuck && !retriesOnly && (key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia")
-    ? inQueue.filter((row) => classes.get(row.orderId)?.agenda === "sin_fecha" && pathOf(row).kind !== null)
-    : [];
+  const proposals = stuck || retriesOnly ? []
+    : key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia"
+      ? inQueue.filter((row) => classes.get(row.orderId)?.agenda === "sin_fecha" && pathOf(row).kind !== null)
+      : key === "no_entregados" || key === "por_acordar"
+        ? inQueue.filter((row) => {
+          const cls = classes.get(row.orderId);
+          return cls?.step === "no_entregados" && limaStepPart(cls) === "por_acordar" && pathOf(row).kind === "acuerdo_nuevo";
+        })
+        : [];
   function pickProposals() {
     setPicked(new Set(proposals.map((row) => row.orderId)));
     setMoveDay(suggestedDay);
@@ -553,7 +581,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <div role="note" className="mx-4 mt-3 flex flex-col gap-2 rounded-md bg-brand-50 px-3 py-2.5 ring-1 ring-inset ring-brand-100 sm:flex-row sm:items-center sm:gap-3">
             <p className="min-w-0 text-[13px] leading-5 text-ink-700 sm:flex-1">
               Kapta sugiere el <b className="font-semibold text-ink-900">{programDayLabel(suggestedDay)}</b>, el próximo día de reparto, para{" "}
-              <b className="font-semibold tabular-nums text-ink-900">{proposals.length.toLocaleString("es-PE")}</b> {proposals.length === 1 ? "pedido sin fecha que se puede agendar" : "pedidos sin fecha que se pueden agendar"}. Revisa la lista, quita los que no y confirma abajo.
+              <b className="font-semibold tabular-nums text-ink-900">{proposals.length.toLocaleString("es-PE")}</b> {proposalsNoun(proposals.length, key === "no_entregados" || key === "por_acordar")}. Revisa la lista, quita los que no y confirma abajo.
             </p>
             <OpsButton size="sm" variant="primary" disabled={Boolean(moving)} onClick={pickProposals} className="w-full shrink-0 sm:w-auto pointer-coarse:h-11">
               Elegirlos para el {programDayLabel(suggestedDay)}
@@ -642,18 +670,32 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             <span className="mr-1 text-sm font-semibold text-ink-900">
               <span className="tabular-nums">{movable.length.toLocaleString("es-PE")}</span> {movable.length === 1 ? "pedido elegido" : "pedidos elegidos"}
             </span>
-            <OpsButton variant="primary" size="sm" disabled={!moveDay || Boolean(moving)} onClick={() => void moveAll()} className="pointer-coarse:h-11">
-              {moving ? `Guardando ${moving.done} de ${moving.total}…` : programarBatchLabel(movableDated, movable.length - movableDated, moveDay || null)}
+            <OpsButton variant="primary" size="sm" disabled={!moveDay || needsMoveCourier || Boolean(moving)} onClick={() => void moveAll()} className="pointer-coarse:h-11">
+              {moving ? `Guardando ${moving.done} de ${moving.total}…` : moveDay && needsMoveCourier ? "Elige el courier" : programarBatchLabel(movableDated, movable.length - movableDated, moveDay || null)}
             </OpsButton>
             <OpsButton variant="ghost" size="sm" disabled={Boolean(moving)} onClick={() => setPicked(new Set())} className="pointer-coarse:h-11">Limpiar</OpsButton>
           </div>
           <div className="border-t border-line pt-3">
             <DayPicker today={today} maxDay={agendarMaxDay(today, moveMaxDays)} value={moveDay} onChange={setMoveDay} label="Para el día" />
           </div>
+          {courierRows.length > 0 && (
+            <div className="space-y-1">
+              <CourierPicker value={moveCourier} onChange={setMoveCourier} choices={moveCourierChoices} optional={movableNew === 0} />
+              {movableNew > 0 && movableEnvio > 0 && (
+                <p className="text-xs text-ink-500">{`${movableNew === 1 ? "Uno es un no entregado" : `${movableNew} son no entregados`}: queda${movableNew === 1 ? "" : "n"} acordado${movableNew === 1 ? "" : "s"} sin llamada. Los demás van por «Programar envío».`}</p>
+              )}
+              {movableNew > 0 && movableEnvio === 0 && (
+                <p className="text-xs text-ink-500">{movableNew === 1 ? "Es un no entregado: queda acordado sin llamada." : "Son no entregados: quedan acordados sin llamada."}</p>
+              )}
+              {moveRejects > 0 && moveCourier && (
+                <p className="text-xs text-warn-fg">{`${moveRejects === 1 ? "Uno no puede" : `${moveRejects} no pueden`} salir con ${DISPATCH_COURIER_LABEL[moveCourier]} por su tienda: ${moveCourier === "gf_courier" ? "no tiene GF Courier por API" : "despacha por GF Courier"}. Se avisa al terminar.`}</p>
+              )}
+            </div>
+          )}
           {movableAgreements > 0 && (
             <div className="space-y-1">
               <ChannelPicker value={moveChannel} onChange={setMoveChannel} />
-              <p className="text-xs text-ink-500">{`${movableAgreements === 1 ? "Uno tiene" : `${movableAgreements} tienen`} un acuerdo con la clienta: se reprograma con el mismo courier. Los demás van por «Programar envío».`}</p>
+              <p className="text-xs text-ink-500">{`${movableAgreements === 1 ? "Uno tiene" : `${movableAgreements} tienen`} un acuerdo con la clienta: se reprograma con el mismo courier.`}</p>
             </div>
           )}
         </div>

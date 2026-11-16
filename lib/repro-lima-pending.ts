@@ -114,6 +114,8 @@ export interface LimaPendingOrder {
   gf?: LimaPendingGf | null;
   /** «Programar envío» (§6.2, `order_master.dispatch_scheduled_on`): solo en Por generar rótulo. */
   scheduledOn?: string | null;
+  /** El courier de ese «Programar envío» (0348, `order_master.dispatch_courier`): `propio`, `gf_courier`, `aliclik` o `fenix`. */
+  scheduledCourier?: string | null;
   /** Lo que dicen sus salidas, para «Lima trabados» (§9.6); null en Por confirmar o sin salidas. */
   ops?: LimaPendingOps | null;
 }

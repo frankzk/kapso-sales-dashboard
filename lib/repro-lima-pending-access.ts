@@ -19,6 +19,7 @@ interface PendingMasterRow {
   current_courier: string | null; dispatched_at: string | null; attempt_count: number | null;
   sales_channel: string | null; address: string | null; reference: string | null;
   dispatch_scheduled_on?: string | null;
+  dispatch_courier?: string | null;
 }
 interface PendingProgramRow { order_id: string; store_id: string; scheduled_for: string }
 interface GfShipmentRow {
@@ -336,7 +337,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
     allCourierRows<PendingMasterRow>((from, to) => admin.from("order_master")
-      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,sales_channel,address,reference,dispatch_scheduled_on")
+      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier")
       .in("store_id", ids).eq("coverage", "lima").in("macro_stage", [...LIMA_PENDING_STAGES])
       .order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id")
       .range(from, to) as unknown as PromiseLike<{ data: PendingMasterRow[] | null; error: { message: string } | null }>),
@@ -420,6 +421,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       courierDetail: courierDetails.get(row.order_id) ?? null,
       gf: gfFacts.get(row.order_id) ?? null,
       scheduledOn: row.dispatch_scheduled_on?.slice(0, 10) ?? null,
+      scheduledCourier: row.dispatch_courier ?? null,
       ops: stuckFacts.get(row.order_id) ?? null,
       courierPickup: pickups.has(row.order_id)
         ? { courier: "aliclik", date: pickups.get(row.order_id)! }

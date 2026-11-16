@@ -1361,6 +1361,13 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 - **Qué queda.** Un hecho del historial con actor: `dispatch_date_set` (fecha
   y nota) o `dispatch_date_cleared` (motivo). Manda el último. Se programa hoy
   o hasta 45 días adelante.
+- **Con courier (16-11-2026, 0348).** Desde Repro Lima («Programar», la fila
+  y el lote, §9.5) se puede elegir también con qué courier sale: Grupo GF, GF
+  Courier, Aliclik o Swayp (`DISPATCH_COURIERS`). Viaja en el mismo hecho
+  (`payload.courier`) y el Master lo guarda en `order_master.dispatch_courier`
+  con la misma regla que la fecha (solo en Por generar rótulo). Sin courier
+  queda como antes. Con GF Courier, la guía GF queda creada para ese día; con
+  otro courier, la guía GF automática no lo toma (§29.17).
 - **Qué se ve.** La fila del Master y el encabezado de la ficha llevan una
   chapa: «Programado · sale lun 26/10», «Programado · sale hoy» o, si el día
   pasó sin guía, «Programado para el lun 19/10 y no salió» en rojo. El filtro
@@ -6799,6 +6806,46 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   al…» o «Programar y reprogramar para el…» según los elegidos
   (`programarVerb`, `programarConfirmLabel`, `programarBatchLabel`). Lo que
   hace no cambia.
+- **Programar con courier, en lote** (owner: «¿por qué no utilizamos la misma
+  funcionalidad que tenemos en el botón de reintentos… donde con un botón ya lo
+  dejamos programados exactamente para un courier… y en el caso de GF Courier
+  ya se crea incluso hasta la guía para la fecha que se programe»). «Programar»
+  (la fila y el lote) pide también **con qué courier sale**: Grupo GF o GF
+  Courier según la tienda (GF Courier solo con su API, Grupo GF nunca con ella,
+  `reproCourierStoreProblem`), Aliclik y Swayp (`programCourierChoices`; el
+  lote ofrece los que valen para alguno de los elegidos y avisa cuántos no
+  pueden por su tienda, `batchCourierChoices`, `batchCourierRejects`). Lo que
+  pasa depende del pedido (`agendarPath`, otra vez en el servidor con
+  `agendarReproLima`):
+  - **Con un acuerdo** se reprograma con **su** courier: el courier del lote
+    no lo cambia (eso se acuerda en «Atender»).
+  - **En Preparación · Por generar rótulo**, «Programar envío» guarda el
+    courier junto con el día (`dispatch_date_set.payload.courier`,
+    `DispatchDate.courier`, `order_master.dispatch_courier`, 0348). En la ficha
+    sigue siendo opcional («Sin elegir», como antes). Con **GF Courier** la
+    guía queda creada para ese día al programar (`createGfGuideFor` con
+    `scheduledFor`, como en el acuerdo); si GF no la crea, el día queda
+    guardado, se dice por qué y se enlaza a la Mesa de ruta. Con **Aliclik o
+    Swayp** queda programado con ese courier y la guía GF automática no lo
+    toma (`gfAutoSkip` → `otro_courier`, §29.17). Hoy su guía se crea ese día
+    con «Guía Aliclik» o desde la Mesa de ruta; que Kapta la cree sola esa
+    mañana es la entrega siguiente (decisión del owner: «Kapta la crea ese
+    día»). Con **Grupo GF**, sale en el reparto propio de ese día.
+  - **Un no entregado «Por acordar»** (un «Por reprogramar Lima» sin acuerdo,
+    sin reintento por Aliclik) queda **acordado sin llamada** para ese día con
+    ese courier (`programReproWithoutCall`, decisión del owner: «sin día y no
+    entregados»). Es «Confirma fecha» por el mismo camino: el candado del
+    caso, «Qué hacer con la caja» sin cambios del pedido (`reproBoxAction`) y
+    la misma RPC (`lima_repro_record`), por el canal **`sin_contacto`** («sin
+    llamada»; 0348 lo admite con `confirma`, y no cuenta como intento), con la
+    nota «Programado en lote desde Repro Lima, sin llamada.». Después programa
+    el reparto de Grupo GF, crea la guía GF del día o dice qué falta, como al
+    acordar. Un problema de caja o Aliclik sin la ubicación del pedido se
+    abren con «Atender». «Kapta sugiere…» también propone, en No entregados,
+    los por acordar para el próximo día de reparto: el equipo elige el courier
+    y confirma.
+  - «Fecha agendada» dice el courier bajo el día: «Programar envío · Aliclik»,
+    «Acordado con la clienta · GF Courier» (`agendaOriginLine`).
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
@@ -20168,6 +20215,9 @@ Decisión del owner: el día del despacho, en la mañana, la guía de GF Courier
 - **Qué no entra.** No entran:
   - Agencia ni Provincia;
   - lo programado para otro día, también un día que ya pasó (la chapa roja «no salió» es para una persona);
+  - lo programado con otro courier en «Programar envío» (Aliclik, Swayp o Grupo GF; `dispatch_courier`, 0348,
+    16-11-2026): sale con el elegido (`gfAutoSkip` → `otro_courier`). Lo programado con GF Courier ya tiene su guía
+    del día desde que se programó; si GF no la creó, la pasada de ese día la vuelve a intentar;
   - lo que ya tiene guía, por ejemplo la de Aliclik que alguien creó antes de las 9:00;
   - el acompañante;
   - lo que tiene un acuerdo de Repro Lima: un caso abierto con día acordado (`agreed_on`) en su episodio vigente

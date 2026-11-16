@@ -25,11 +25,11 @@ import { courierLabel, limaQueueSegment, limaScheduledFor, type LimaPendingOrder
 import { isDeliveryDay } from "@/lib/dispatch-plan";
 import { limaDay, programDayLabel } from "@/lib/dispatch-day";
 import { courierDisplayName } from "@/lib/dispatched-with";
-import { DISPATCH_DATE_MAX_DAYS } from "@/lib/dispatch-date";
+import { DISPATCH_COURIER_LABEL, DISPATCH_DATE_MAX_DAYS, isDispatchCourier, type DispatchCourier } from "@/lib/dispatch-date";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { fullDeliveryDaysBetween, isCustomerNovelty } from "@/lib/lima-stuck";
-import { reproCallTimeLabel } from "@/lib/repro-lima";
+import { reproCallTimeLabel, reproCourierStoreProblem } from "@/lib/repro-lima";
 
 /** El caso de la fila, con lo que el tablero mira además (`ReproRow`). */
 export type BoardCase = PendingCase & {
@@ -650,7 +650,9 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
     missedPickup,
     routeDay: row.stage === "en_curso" ? limaRouteDay(row) : null,
     routeToday: row.stage === "en_curso" && limaRouteDay(row) === today,
-    autoGuide: Boolean(opts.autoGuideStores?.has(row.storeId)) && row.stage === "preparacion" && row.substage === "por_generar_rotulo" && !c?.agreement?.agreedOn,
+    // Programado con otro courier (Aliclik, Swayp, Grupo GF; 0348): la guía GF automática no lo toma (`gfAutoSkip`).
+    autoGuide: Boolean(opts.autoGuideStores?.has(row.storeId)) && row.stage === "preparacion" && row.substage === "por_generar_rotulo" && !c?.agreement?.agreedOn
+      && (!row.scheduledCourier || row.scheduledCourier === "gf_courier"),
     awaitingCancel: c?.list === "cerrados",
     agreed: c?.list === "programados" && Boolean(c.agreement?.agreedOn),
     agenda,
@@ -1120,8 +1122,13 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
 export type AgendarPath =
   /** Un acuerdo con la clienta que ya existe: se cambia su día, con su courier (`moveReproAgreement`). */
   | { kind: "acuerdo"; current: string; courierName: string; maxDays: number }
-  /** Sin guía ni acuerdo, en Preparación · Por generar rótulo: «Programar envío» (`scheduleOrderDispatch`, §6.2). */
+  /** Sin guía ni acuerdo, en Preparación · Por generar rótulo: «Programar envío» (`scheduleOrderDispatch`, §6.2), con courier o sin él. */
   | { kind: "envio"; current: string | null; maxDays: number }
+  /**
+   * Un no entregado sin acuerdo (16-11-2026): se programa con un courier elegido y
+   * queda un acuerdo sin llamada (`programReproWithoutCall`).
+   */
+  | { kind: "acuerdo_nuevo"; current: null; maxDays: number }
   | { kind: null; why: string };
 
 /**
@@ -1131,7 +1138,9 @@ export type AgendarPath =
  *   courier y lo que cambió ya se acordaron con la clienta.
  * - Sin acuerdo y en Por generar rótulo, «Programar envío»: el día en que sale
  *   su primera guía (con GF Courier por API, la guía automática de ese día).
- * - Un no entregado sin acuerdo no tiene courier: se acuerda en «Atender».
+ * - Un no entregado sin acuerdo se programa eligiendo el courier: queda un
+ *   acuerdo sin llamada (owner, 16-11-2026). El reintento por Aliclik no: se
+ *   aprueba en su filtro.
  * - Con una guía, el día lo lleva el courier; con rótulo, se acuerda en
  *   «Atender».
  */
@@ -1146,9 +1155,59 @@ export function agendarPath(row: LimaPendingOrder, c: BoardCase | undefined, opt
       ? { kind: "envio", current: row.scheduledOn ?? null, maxDays: DISPATCH_DATE_MAX_DAYS }
       : { kind: null, why: "Tu rol no permite programar envíos." };
   }
-  if (isPorReprogramarLima(row)) return { kind: null, why: "Primero acuerda el día y el courier con la clienta en «Atender»." };
+  if (isPorReprogramarLima(row) && c?.retryChain) return { kind: null, why: "Tiene un reintento por Aliclik: apruébalo en «Reintentos Aliclik»." };
+  if (isPorReprogramarLima(row)) return { kind: "acuerdo_nuevo", current: null, maxDays: RESCHEDULE_MAX_DAYS };
   if (liveGuideCourier(row) || row.stage === "en_curso") return { kind: null, why: "Ya tiene guía: el día lo lleva el courier." };
   return { kind: null, why: "Ya tiene rótulo: acuerda el día con la clienta en «Atender»." };
+}
+
+// ---------------------------------------------------------------------------
+// El courier al programar (owner, 16-11-2026: «con un botón ya lo dejamos
+// programados exactamente para un courier»)
+// ---------------------------------------------------------------------------
+
+/** El orden en que se ofrecen: Grupo GF o GF Courier según la tienda, luego Aliclik y Swayp. */
+const PROGRAM_COURIER_ORDER: readonly DispatchCourier[] = ["propio", "gf_courier", "aliclik", "fenix"];
+
+/** Los couriers que se ofrecen para un pedido: GF Courier solo con su API, Grupo GF nunca con ella (`reproCourierStoreProblem`). Pura. */
+export function programCourierChoices(gfCourierApi: boolean): DispatchCourier[] {
+  return PROGRAM_COURIER_ORDER.filter((c) => !reproCourierStoreProblem(c, gfCourierApi));
+}
+
+/** Los del lote: los que valen para al menos uno de los elegidos, en el mismo orden. Pura. */
+export function batchCourierChoices(gfFlags: readonly boolean[]): DispatchCourier[] {
+  return PROGRAM_COURIER_ORDER.filter((c) => gfFlags.some((gf) => !reproCourierStoreProblem(c, gf)));
+}
+
+/** Cuántos de los elegidos no pueden salir con ese courier por su tienda. Pura. */
+export function batchCourierRejects(courier: DispatchCourier | null, gfFlags: readonly boolean[]): number {
+  if (!courier) return 0;
+  return gfFlags.filter((gf) => Boolean(reproCourierStoreProblem(courier, gf))).length;
+}
+
+/** Qué pasa al programar con cada courier: lo que se dice bajo los chips. */
+export const PROGRAM_COURIER_HINT: Record<DispatchCourier, string> = {
+  propio: "Grupo GF: sale en el reparto propio de ese día.",
+  gf_courier: "GF Courier: la guía queda creada para ese día.",
+  aliclik: "Aliclik: queda programado; ese día se crea su guía con «Guía Aliclik».",
+  fenix: "Swayp: queda programado; ese día se crea su guía desde la Mesa de ruta.",
+};
+
+/** El courier de un programa, por su nombre, o null. Pura. */
+export function programCourierName(value: string | null | undefined): string | null {
+  return isDispatchCourier(value) ? DISPATCH_COURIER_LABEL[value] : null;
+}
+
+/** La línea de «Fecha agendada» bajo el día: de dónde sale y, si se sabe, con qué courier. Pura. */
+export function agendaOriginLine(origin: LimaAgendaOrigin, row: Pick<LimaPendingOrder, "scheduledCourier">, agreementCourierName?: string | null): string {
+  const courier = origin === "acuerdo" ? agreementCourierName ?? null : origin === "envio" ? programCourierName(row.scheduledCourier) : null;
+  return courier ? `${AGENDA_ORIGIN_LABEL[origin]} · ${courier}` : AGENDA_ORIGIN_LABEL[origin];
+}
+
+/** «Kapta sugiere…»: de qué pedidos habla, en Sacar a reparto o en No entregados. Pura. */
+export function proposalsNoun(n: number, noEntregados: boolean): string {
+  if (noEntregados) return n === 1 ? "no entregado por acordar (elige el courier abajo)" : "no entregados por acordar (elige el courier abajo)";
+  return n === 1 ? "pedido sin fecha que se puede programar" : "pedidos sin fecha que se pueden programar";
 }
 
 /**

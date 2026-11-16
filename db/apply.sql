@@ -695,4 +695,6 @@
 \ir migrations/0346_gf_requests_lock_en_curso.sql
 \echo 'Applying 0347_lima_repro_gf_courier.sql'
 \ir migrations/0347_lima_repro_gf_courier.sql
+\echo 'Applying 0348_dispatch_courier.sql'
+\ir migrations/0348_dispatch_courier.sql
 \echo 'Done.'

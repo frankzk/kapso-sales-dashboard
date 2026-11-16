@@ -67,6 +67,7 @@ export function gfAutoModeFrom(value: unknown): GfAutoMode {
 export type GfAutoRow = Pick<
   OrderMasterRow,
   | "dispatch_scheduled_on"
+  | "dispatch_courier"
   | "macro_stage"
   | "macro_substage"
   | "shipping_mode"
@@ -81,15 +82,18 @@ export type GfAutoRow = Pick<
  *   * `otro_dia`   — programado para otro día, futuro o ya pasado;
  *   * `otra_etapa` — no está en Preparación · Por generar rótulo (ya tiene guía,
  *                    o es acompañante: «Viaja en la caja de otro pedido»);
- *   * `no_lima`    — Agencia o Provincia (`classifyOperation`).
+ *   * `no_lima`    — Agencia o Provincia (`classifyOperation`);
+ *   * `otro_courier` — «Programar envío» eligió otro courier (Aliclik, Swayp,
+ *                    Grupo GF; 0348, owner 16-11-2026): sale con ese.
  */
-export type GfAutoSkip = "otro_dia" | "otra_etapa" | "no_lima";
+export type GfAutoSkip = "otro_dia" | "otra_etapa" | "no_lima" | "otro_courier";
 
 /** Por qué este pedido no entra a la pasada de hoy, o null si entra. Sin fecha programada, entra. */
 export function gfAutoSkip(row: GfAutoRow, todayLima: string): GfAutoSkip | null {
   if (row.dispatch_scheduled_on && row.dispatch_scheduled_on !== todayLima) return "otro_dia";
   if (row.macro_stage !== "preparacion" || row.macro_substage !== "por_generar_rotulo") return "otra_etapa";
   if (classifyOperation(row) !== "lima") return "no_lima";
+  if (row.dispatch_courier && row.dispatch_courier !== "gf_courier") return "otro_courier";
   return null;
 }
 
