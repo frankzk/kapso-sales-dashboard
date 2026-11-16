@@ -79,9 +79,11 @@ export interface LimaCard<K extends string = string> {
 export const LIMA_TASK_CARDS: readonly LimaCard<LimaTask>[] = [
   {
     key: "primer_despacho",
-    label: "Confirmar primer despacho",
-    hint: "Nunca salieron y no tienen día: confirma con la clienta y agenda la salida. Del más antiguo al más reciente; dentro, los de más de 30 días.",
-    empty: "No hay pedidos sin primer despacho por confirmar con estos filtros.",
+    // «Nunca salieron», como lo llama el equipo (owner, 16-11-2026: «no veo el
+    // bloque de no salieron nunca»): el filtro de adentro de «Sacar a reparto».
+    label: "Nunca salieron",
+    hint: "Nunca tuvieron una salida a reparto y no tienen día: confirma con la clienta y agenda la salida. Del más antiguo al más reciente; dentro, los de más de 30 días.",
+    empty: "No hay pedidos que nunca salieron y estén sin día con estos filtros.",
   },
   {
     key: "no_entregados",
@@ -716,8 +718,8 @@ export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
 /**
  * Lo que dice `atencion` en la URL. Los enlaces de la pantalla anterior
  * siguen abriendo lo más cercano: «Programados para hoy» es Hoy, «para
- * mañana» Mañana, «para después» Después, «Nunca salieron» y «Confirmar primer
- * despacho» Sacar a reparto, «Por decidir» No entregados, «Cerrados» Esperan
+ * mañana» Mañana, «para después» Después, «Nunca salieron» (y su llave
+ * `primer_despacho`) su filtro dentro de Sacar a reparto, «Por decidir» No entregados, «Cerrados» Esperan
  * anulación y `programados` Reprogramados. «Ya salieron» no tiene par: abre
  * Todos, igual que un valor desconocido. Un día que ya pasó abre Hoy.
  */
@@ -730,8 +732,7 @@ export function boardFilter(value: string | null, today: string): LimaBoardKey {
     case "programados_hoy": return isDeliveryDay(today) ? "hoy" : "manana";
     case "programados_manana": return "manana";
     case "programados_despues": return "despues";
-    case "nunca_salieron": return "por_sacar";
-    case "primer_despacho": return "por_sacar";
+    case "nunca_salieron": return "primer_despacho";
     case "por_decidir": return "no_entregados";
     case "cerrados": return "esperan_anulacion";
     case "programados": return "reprogramados";

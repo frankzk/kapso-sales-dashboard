@@ -85,6 +85,12 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Repro Lima: «Nunca salieron» con su nombre dentro de Sacar a reparto (sin migración, MOM §9.5)
+
+Sin migración ni variables. El filtro de adentro de «Sacar a reparto» que decía «Sin fecha» se llama «Nunca
+salieron» (los que nunca tuvieron una salida y no tienen día); la nota del paso dice «N agendados · M nunca
+salieron». La Agenda conserva «Sin fecha». `?atencion=nunca_salieron` abre ese filtro.
+
 ### 16-11-2026 · Lista negra: en Lima la automática no frena; las altas a mano sí (sin migración, MOM §41.12)
 
 Sin migración ni variables. Decisión del owner (#KP205510, segundo intento por Aliclik frenado por «falta el
