@@ -73,6 +73,8 @@ vi.mock("@/lib/repro-lima-program", async (importOriginal) => {
   };
 });
 // La guía GF (MOM §29.17) sin red ni base: se mira qué se pidió y en qué orden.
+// «Guía Aliclik y Swayp del día programado» (0349): sin tiendas en Activo, el aviso de siempre.
+vi.mock("@/lib/lima-courier-auto-server", () => ({ loadLimaCourierAutoActiveStores: vi.fn(async () => []) }));
 vi.mock("@/lib/gf-courier-guide", () => ({
   createGfGuideFor: async (...args: unknown[]) => { state.gfCalls.push("create"); return state.gfCreate(...args); },
   cancelGfGuideFor: async (...args: unknown[]) => { state.gfCalls.push("cancel"); return state.gfCancel(...args); },

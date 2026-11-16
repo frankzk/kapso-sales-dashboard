@@ -19,7 +19,7 @@
  */
 export function guideCreatorPhrase(
   creator: string | null | undefined,
-  automatic: boolean | "envio_programado" | "confirmado_chatby" | "reintento_lima" | "agente_ia" = false,
+  automatic: boolean | "envio_programado" | "confirmado_chatby" | "reintento_lima" | "agente_ia" | "dia_programado_lima" = false,
   gpsFrom?: string | null,
 ): string {
   // La que pidió el agente de IA por el conector (MOM §42.9): no es una persona.
@@ -30,6 +30,8 @@ export function guideCreatorPhrase(
   }
   // El reintento de la cadena de Lima que encendió el owner (MOM §9.5, entrega 3).
   if (automatic === "reintento_lima") return "automáticamente (reintento Lima)";
+  // La guía del día programado en Lima, desde Repro Lima (0349, 16-11-2026).
+  if (automatic === "dia_programado_lima") return "automáticamente (día programado en Lima)";
   if (automatic) return "automáticamente (envío programado)";
   const who = creator?.trim();
   return who ? `por ${who}` : "por el sistema";

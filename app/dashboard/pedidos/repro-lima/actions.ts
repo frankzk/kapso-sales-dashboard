@@ -37,6 +37,7 @@ import {
 } from "@/lib/repro-lima-program";
 import { clearGfDispatchPrograms, type GfProgramRow } from "@/lib/gf-dispatch-program";
 import { cancelGfGuideFor, createGfGuideFor, type GfCancelResult, type GfGuideResult } from "@/lib/gf-courier-guide";
+import { loadLimaCourierAutoActiveStores } from "@/lib/lima-courier-auto-server";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { validarMotivoDescarte } from "@/lib/recovery-discard";
@@ -733,6 +734,16 @@ async function afterCall(admin: Admin, input: {
       // Con la salida de ese courier ya viva no hay nada que crear (13-11-2026).
       if (f.box.kind === "con_courier" && sameCourier(f.box.courier, courier)) {
         return { notice: `Acuerdo guardado: la salida de ${courierName} ya existe.${tail}`, programChanged: cleared };
+      }
+      // Con «Guía Aliclik y Swayp del día programado» en Activo (0349), la guía la crea Kapta.
+      if ((courier === "aliclik" || courier === "fenix") && f.storeId) {
+        const auto = await loadLimaCourierAutoActiveStores(admin, [f.storeId]).catch(() => [] as string[]);
+        if (auto.includes(f.storeId)) {
+          return {
+            notice: `Acuerdo guardado: sale el ${programDayLabel(day)} con ${courierName}. Kapta crea su guía ${courier === "aliclik" ? "la mañana de ese día" : "la víspera"}; si no puede, avisa por Telegram.${tail}`,
+            programChanged: cleared,
+          };
+        }
       }
       return {
         notice: `Acuerdo guardado: crea la salida de ${courierName} desde la Mesa de ruta del pedido.${tail}`,

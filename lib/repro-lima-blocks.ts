@@ -30,6 +30,7 @@ import { limaClock } from "@/lib/grupo-gf-courier";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { fullDeliveryDaysBetween, isCustomerNovelty } from "@/lib/lima-stuck";
 import { reproCallTimeLabel, reproCourierStoreProblem } from "@/lib/repro-lima";
+import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 
 /** El caso de la fila, con lo que el tablero mira además (`ReproRow`). */
 export type BoardCase = PendingCase & {
@@ -588,6 +589,12 @@ export interface LimaRowClass {
    * `gfAutoSkip`). La pasada crea su guía el día que sale, en la mañana.
    */
   autoGuide: boolean;
+  /**
+   * Quién crea esa guía sola: `gf_courier` (la guía GF automática) o `aliclik`
+   * / `fenix` («Guía Aliclik y Swayp del día programado» en Activo, 0349, con
+   * lo programado con ese courier). Null si nadie.
+   */
+  autoGuideBy: "gf_courier" | "aliclik" | "fenix" | null;
   /** Cerrado con «Desarmar y cerrar»: espera la anulación. */
   awaitingCancel: boolean;
   /** Con una fecha acordada vigente con la clienta. */
@@ -640,6 +647,7 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
     && (courier === null || courier === "guia_creada")
     && (baseStep === "no_entregados" || baseStep === "por_sacar" || baseStep === "con_courier");
   const step: LimaStep = programmed ? "programados" : baseStep;
+  const autoBy = limaAutoGuideBy(row, c, opts);
   return {
     step,
     guide: Boolean(courier) || Boolean(row.ops?.courierDelivered) || (row.substage != null && !NO_GUIDE_SUBSTAGES.has(row.substage)),
@@ -650,9 +658,8 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
     missedPickup,
     routeDay: row.stage === "en_curso" ? limaRouteDay(row) : null,
     routeToday: row.stage === "en_curso" && limaRouteDay(row) === today,
-    // Programado con otro courier (Aliclik, Swayp, Grupo GF; 0348): la guía GF automática no lo toma (`gfAutoSkip`).
-    autoGuide: Boolean(opts.autoGuideStores?.has(row.storeId)) && row.stage === "preparacion" && row.substage === "por_generar_rotulo" && !c?.agreement?.agreedOn
-      && (!row.scheduledCourier || row.scheduledCourier === "gf_courier"),
+    autoGuide: autoBy !== null,
+    autoGuideBy: autoBy,
     awaitingCancel: c?.list === "cerrados",
     agreed: c?.list === "programados" && Boolean(c.agreement?.agreedOn),
     agenda,
@@ -699,6 +706,28 @@ export function limaStepOf(task: LimaTask | null, courier: LimaCourierState | nu
 export interface LimaClassifyOptions {
   /** Las tiendas con la guía GF automática en Activo (`loadGfAutoActiveStores`). */
   autoGuideStores?: ReadonlySet<string>;
+  /** Las tiendas con «Guía Aliclik y Swayp del día programado» en Activo (`loadLimaCourierAutoActiveStores`, 0349). */
+  courierAutoStores?: ReadonlySet<string>;
+}
+
+/**
+ * Quién crea sola la guía de un pedido sin guía, o null. Pura.
+ * - La guía GF automática: Preparación · Por generar rótulo, sin acuerdo de
+ *   Repro Lima y sin otro courier programado (como `gfAutoSkip`, 0348).
+ * - La del día programado (0349): lo programado con Aliclik o Swayp, con
+ *   «Programar envío» en Por generar rótulo o con un acuerdo en «Por
+ *   reprogramar Lima» (`limaCourierEnvioCourier`, `limaCourierCaseCourier`).
+ */
+export function limaAutoGuideBy(row: LimaPendingOrder, c: PendingCase | undefined, opts: LimaClassifyOptions = {}): "gf_courier" | "aliclik" | "fenix" | null {
+  const porRotulo = row.stage === "preparacion" && row.substage === "por_generar_rotulo";
+  const agreedCourier = c?.agreement?.agreedOn ? c.agreement.courier ?? null : null;
+  if (opts.courierAutoStores?.has(row.storeId)) {
+    const courier = agreedCourier ?? (porRotulo ? row.scheduledCourier ?? null : null);
+    if ((courier === "aliclik" || courier === "fenix") && (porRotulo || isPorReprogramarLima(row))) return courier;
+  }
+  if (opts.autoGuideStores?.has(row.storeId) && porRotulo && !agreedCourier && !c?.agreement?.agreedOn
+    && (!row.scheduledCourier || row.scheduledCourier === "gf_courier")) return "gf_courier";
+  return null;
 }
 
 /** Una clasificación por pedido: las cifras y la lista la reusan. */
@@ -1107,6 +1136,8 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
       : "Sale hoy y todavía no tiene guía ni rótulo: si a las 10:30 no la tiene, créala desde la Mesa de ruta.";
   }
   if (!cls.guide && cls.agenda === "manana") {
+    if (cls.autoGuideBy === "fenix") return "Sale mañana con Swayp: Kapta crea su guía hoy, la víspera.";
+    if (cls.autoGuideBy === "aliclik") return "Sale mañana con Aliclik: Kapta crea su guía mañana en la mañana.";
     return cls.autoGuide ? "Sale mañana: la guía GF automática la crea mañana en la mañana." : "Sale mañana y no tiene guía ni rótulo: genérala hoy.";
   }
   if (cls.agendaDay && cls.agendaDay < today) return `Debía salir el ${programDayLabel(cls.agendaDay)}: revisa por qué no salió y reagéndalo.`;
@@ -1190,8 +1221,35 @@ export const PROGRAM_COURIER_HINT: Record<DispatchCourier, string> = {
   propio: "Grupo GF: sale en el reparto propio de ese día.",
   gf_courier: "GF Courier: la guía queda creada para ese día.",
   aliclik: "Aliclik: queda programado; ese día se crea su guía con «Guía Aliclik».",
-  fenix: "Swayp: queda programado; ese día se crea su guía desde la Mesa de ruta.",
+  fenix: "Swayp: queda programado; su guía se crea la víspera desde la Mesa de ruta. Elige desde mañana.",
 };
+
+/**
+ * Con «Guía Aliclik y Swayp del día programado» en Activo (0349), Kapta crea
+ * la guía sola: lo dice así. Sin ella, `PROGRAM_COURIER_HINT`. Pura.
+ */
+export function programCourierHint(courier: DispatchCourier, autoActive: boolean): string {
+  if (autoActive && courier === "aliclik") return "Aliclik: la mañana de ese día Kapta crea su guía (AUTOECOM si se puede). Si no puede, avisa por Telegram.";
+  if (autoActive && courier === "fenix") return "Swayp: Kapta crea su guía la víspera, con ese día de despacho. Elige desde mañana.";
+  return PROGRAM_COURIER_HINT[courier];
+}
+
+/**
+ * Lo que la guía de ese courier necesita, dicho al programar (0349): Swayp arma
+ * su ruta el día anterior (desde mañana, de lunes a sábado, como
+ * `agreementDateProblem`) y Aliclik no crea la guía sin la ubicación. Null si
+ * se puede. Pura.
+ */
+export function programCourierProblem(courier: DispatchCourier, day: string, today: string, hasCoordinate: boolean): string | null {
+  if (courier === "fenix") {
+    if (day <= today) return "Swayp arma su ruta el día anterior: elige desde mañana.";
+    if (!isSwaypDispatchDay(day)) return SWAYP_SUNDAY_ERROR;
+  }
+  if (courier === "aliclik" && !hasCoordinate) {
+    return "Aliclik necesita la ubicación del pedido: ponla en la ficha (Aliclik) y vuelve a programarlo.";
+  }
+  return null;
+}
 
 /** El courier de un programa, por su nombre, o null. Pura. */
 export function programCourierName(value: string | null | undefined): string | null {

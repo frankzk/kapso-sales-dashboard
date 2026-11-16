@@ -30,7 +30,9 @@ import { createGfGuideFor } from "@/lib/gf-courier-guide";
 import { DISPATCH_COURIER_LABEL, isDispatchCourier } from "@/lib/dispatch-date";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { orderDrawerHref } from "@/lib/order-drawer-href";
-import { reproCourierStoreProblem } from "@/lib/repro-lima";
+import { orderHasCoordinate, reproCourierStoreProblem, reproNeedsCoordinate } from "@/lib/repro-lima";
+import { limaClock } from "@/lib/grupo-gf-courier";
+import { programCourierProblem } from "@/lib/repro-lima-blocks";
 import { requireReproLima, REPRO_OUTSIDE_STORE } from "@/lib/repro-lima-access";
 import { loadReproFacts, REPRO_LIMA_PATH } from "@/lib/repro-lima-program";
 import type { ReproChannel } from "@/lib/repro-lima";
@@ -123,6 +125,10 @@ export async function agendarReproLima(input: {
       // La misma regla que el acuerdo: GF Courier solo con su API, Grupo GF nunca con ella.
       const storeProblem = courier ? reproCourierStoreProblem(courier, Boolean(f.gfCourierApi)) : null;
       if (storeProblem) return { error: storeProblem, path: "envio" };
+      // Lo que su guía necesita, dicho al programar y no la mañana del día (0349):
+      // Swayp arma su ruta la víspera y Aliclik no crea la guía sin la ubicación.
+      const courierProblem = courier ? programCourierProblem(courier, day, limaClock(new Date()).day, !reproNeedsCoordinate("aliclik", orderHasCoordinate(f.order))) : null;
+      if (courierProblem) return { error: courierProblem, path: "envio" };
       const result = await scheduleOrderDispatch(input.orderId, { date: day, note: input.note ?? null, courier });
       if (result.error || courier !== "gf_courier") {
         return { ...(result.error ? { error: result.error } : {}), ...(result.notice ? { notice: result.notice } : {}), path: "envio" };

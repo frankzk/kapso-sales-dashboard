@@ -47,6 +47,7 @@ import { loadChatbyApproxView, type ChatbyApproxView } from "@/lib/chatby-approx
 import { loadChatbyAskModeView, loadChatbyHistoryModeView, type ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
 import { retryAskModeFrom, type RetryAskMode } from "@/lib/lima-retry-chatby-ask";
 import { loadGfAutoGuideView, type GfAutoGuideView } from "@/lib/gf-auto-guide-server";
+import { loadLimaCourierAutoView, type LimaCourierAutoView } from "@/lib/lima-courier-auto-server";
 import { parsePrepaySimulationSummary, type PrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import {
   GEOCODE_KEY_MISSING,
@@ -172,6 +173,8 @@ export interface AutomationsOrgView {
   chatbyHistory: ChatbyAskModeView;
   /** «Guía GF automática» (0345, MOM §29.17): la posición, si Activo correría y «Hoy y ayer». */
   gfAutoGuide: GfAutoGuideView;
+  /** «Guía Aliclik y Swayp del día programado» (0349). */
+  limaCourierAuto: LimaCourierAutoView;
   org: Record<string, OrgSwitchView>;
   /** Interruptores de tienda; `null` si no se pudieron leer las tiendas. */
   store: Record<string, StoreSwitchView[]> | null;
@@ -224,7 +227,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
   const storeColumns = ["id", "name", "status", ...STORE_AUTOMATION_COLUMNS, "aliclik_enabled", "telegram_chat_id"];
   const storesQuery = admin.from("stores").select(storeColumns.join(",")).eq("org_id", orgId).order("name");
 
-  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes, prepay, chatbyApprox, chatbyAsk, chatbyHistory, pagoOnline, gfAutoGuide] = await Promise.all([
+  const [storesRes, retry, orgSwitches, eventsRes, invoicesRes, routingRes, cohortsRes, prepay, chatbyApprox, chatbyAsk, chatbyHistory, pagoOnline, gfAutoGuide, limaCourierAuto] = await Promise.all([
     storesQuery,
     loadRetry(admin, orgId, today, yesterday),
     loadOrgSwitches(admin, orgId),
@@ -243,6 +246,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     loadChatbyHistoryModeView(admin, orgId),
     loadPagoOnlinePanel(admin, orgId),
     loadGfAutoGuideView(admin, orgId, today, yesterday),
+    loadLimaCourierAutoView(admin, orgId, today, yesterday),
   ]);
 
   const allStores = storesRes.error ? [] : ((storesRes.data ?? []) as unknown as StoreRow[]);
@@ -355,11 +359,13 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
   if (chatbyAsk.error) errors.push(chatbyAsk.error);
   if (chatbyHistory.error) errors.push(chatbyHistory.error);
   if (gfAutoGuide.error) errors.push(gfAutoGuide.error);
+  if (limaCourierAuto.error) errors.push(limaCourierAuto.error);
   errors.push(...orgSwitches.errors);
 
   // El nombre de la tienda en el registro de los reintentos.
   retry.log = retry.log.map((row) => ({ ...row, storeName: storeName.get(row.storeId) ?? null }));
   gfAutoGuide.log = gfAutoGuide.log.map((row) => ({ ...row, storeName: storeName.get(row.storeId) ?? null }));
+  limaCourierAuto.log = limaCourierAuto.log.map((row) => ({ ...row, storeName: storeName.get(row.storeId) ?? null }));
 
   return {
     orgId,
@@ -372,6 +378,7 @@ async function loadOrg(admin: SupabaseClient, orgId: string, orgName: string): P
     chatbyAsk,
     chatbyHistory,
     gfAutoGuide,
+    limaCourierAuto,
     org: orgSwitches.view,
     store,
     readonly,
