@@ -32,9 +32,11 @@ const cents = (soles: number) => Math.round((soles + Number.EPSILON) * 100);
 const soles = (c: number) => c / 100;
 const clean = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/gu, " ").trim() : "");
 
-export function splitName(full: string | null): { first_name: string; last_name: string } | null {
+// GF acepta el pedido solo con el nombre (16-11-2026): sin apellido, se envía solo first_name.
+export function splitName(full: string | null): { first_name: string; last_name?: string } | null {
   const parts = clean(full).split(" ").filter(Boolean);
-  if (parts.length < 2) return null;
+  if (!parts.length) return null;
+  if (parts.length === 1) return { first_name: parts[0]!.slice(0, 70) };
   return { first_name: parts[0]!.slice(0, 70), last_name: parts.slice(1).join(" ").slice(0, 70) };
 }
 
@@ -57,7 +59,7 @@ export function allocateLines(lines: GfOrderSource["lines"], totalCents: number)
 
 export function buildGfOrderInput(src: GfOrderSource): GfOrderBuild {
   const name = splitName(src.customerName);
-  if (!name) return { ok: false, reason: "Falta el nombre y apellido del cliente." };
+  if (!name) return { ok: false, reason: "Falta el nombre del cliente." };
   const phone = clean(src.customerPhone);
   if (!phone) return { ok: false, reason: "Falta el teléfono del cliente." };
   const address = clean(src.address);

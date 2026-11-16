@@ -27,7 +27,7 @@ export interface GfOrder {
 }
 export interface GfOrderInput {
   external_id: string; service: "COD_LIMA";
-  recipient: { first_name: string; last_name: string; second_last_name?: string; phone: string; document?: string };
+  recipient: { first_name: string; last_name?: string; second_last_name?: string; phone: string; document?: string };
   destination: { ubigeo?: string; district?: string; address: string; reference?: string; gps?: string };
   items: { sku: string; name?: string; quantity: number; unit_price: number }[];
   payment: { total: number; advance_paid: number; amount_to_collect: number };
