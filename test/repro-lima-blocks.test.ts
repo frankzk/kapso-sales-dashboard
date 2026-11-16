@@ -31,6 +31,7 @@ import {
   courierNowText,
   courierRouteText,
   courierStatusText,
+  callDue,
   limaBoardCounts,
   limaBoardRows,
   limaCourierState,
@@ -134,7 +135,10 @@ describe("«En manos del courier»: solo seguimiento, por su estado", () => {
 
   it("qué pasa con el courier, dicho con palabras", () => {
     expect(courierStatusText("INCIDENT:CUSTOMER_ABSENT")).toBe("Incidencia: no estaba");
-    expect(courierStatusText("DELIVERED · PICKED · CONFIRMED")).toBe("DELIVERED · PICKED · CONFIRMED");
+    // Aliclik, con las palabras de su Excel; lo desconocido va como llegó.
+    expect(courierStatusText("DELIVERED · PICKED · CONFIRMED")).toBe("Entregado · Recolectado · Confirmado");
+    expect(courierStatusText("PENDING_DELIVERY · PREPARED · CONFIRMED")).toBe("Por entregar · Validado · Confirmado");
+    expect(courierStatusText("PENDING_DELIVERY · FOO")).toBe("Por entregar · FOO");
     expect(courierStatusText(null)).toBeNull();
     expect(courierNowText(row({ stage: "en_curso", substage: "en_reparto", courier: "gf_courier", ops: ops({ liveCouriers: ["gf_courier"], reportedStatus: "OUT_FOR_DELIVERY" }) }))).toBe("GF Courier · En reparto");
     expect(courierNowText(row({ stage: "en_curso", substage: "en_reparto", courier: "propio", courierDetail: "Alexis", ops: ops({ liveCouriers: ["propio"] }) }))).toBe("Grupo GF · Alexis");
@@ -285,6 +289,34 @@ describe("los seis pasos suman el total (owner, 15-11-2026: «estos 5 no suman 1
     expect(limaBoardRows(list, c, "sin_reporte").map((r) => r.orderId).sort()).toEqual(["r0", "r1"]);
     expect(LIMA_SUB_FILTERS.sin_reporte).toMatchObject({ parent: "no_entregados", label: "Sin reporte de la ruta" });
     expect(boardFilter("sin_reporte", TODAY)).toBe("sin_reporte");
+  });
+  it("una guía que el courier no recogió en su día todavía no salió: está en Sacar a reparto, en Hoy como vencida (owner, 15-11-2026)", () => {
+    const missed = row({ orderId: "m", stage: "por_despachar", substage: "listo_para_asignar", courierPickup: { courier: "aliclik", date: "2026-11-13" } });
+    const waiting = row({ orderId: "w", stage: "por_despachar", substage: "listo_para_recojo", courierPickup: { courier: "aliclik", date: "2026-11-16" } });
+    expect(cls(missed)).toMatchObject({ step: "por_sacar", missedPickup: true, courier: "guia_creada", agenda: "hoy", guide: true });
+    expect(cls(waiting)).toMatchObject({ step: "con_courier", missedPickup: false, agenda: "manana" });
+    expect(limaNextStep(missed, undefined, cls(missed), TODAY)).toBe("Aliclik debía recogerlo el vie 13/11 y no lo recogió: coordina el recojo o crea la guía con otro courier (Mesa de ruta).");
+    const both = [missed, waiting];
+    const c = classifyLimaRows(both, [], TODAY);
+    const counts = limaBoardCounts(both, c);
+    expect(counts.sub.guia_sin_recoger).toBe(1);
+    expect(counts.courier.guia_creada).toBe(1);
+    expect(counts.step).toMatchObject({ por_sacar: 1, con_courier: 1 });
+    expect(limaBoardRows(both, c, "guia_sin_recoger").map((r) => r.orderId)).toEqual(["m"]);
+    expect(LIMA_SUB_FILTERS.guia_sin_recoger.parent).toBe("por_sacar");
+  });
+  it("«Llamar después»: cuando llega la hora, ya toca: el paso lo cuenta y la fila lo dice primero (owner, 15-11-2026)", async () => {
+    const llamar = caseOf({ list: "llamar_despues", nextCallAt: "2026-11-15T15:00:00Z" }); // 10:00 de Lima
+    expect(callDue(llamar, new Date("2026-11-15T14:59:00Z"))).toBe(false);
+    expect(callDue(llamar, new Date("2026-11-15T15:00:00Z"))).toBe(true);
+    expect(callDue(caseOf({ list: "por_decidir", nextCallAt: "2026-11-15T15:00:00Z" }), new Date("2026-11-15T16:00:00Z"))).toBe(false);
+    expect(limaNextStep(failed(), llamar, cls(failed(), llamar), TODAY, new Date("2026-11-15T16:00:00Z"))).toBe("Ya toca llamar (pidió hoy 10:00).");
+    const { ReproLimaBlocks } = await import("@/components/repro-lima-blocks");
+    const rows = [failed()];
+    const counts = limaBoardCounts(rows, classifyLimaRows(rows, [llamar], TODAY));
+    const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "todos", onPick: () => {}, callsDue: 1 }));
+    expect(html).toContain("1 ya toca");
+    expect(read("components/repro-lima-pending.tsx")).toContain('cls.task === "llamar_despues" && callDue(repro, now ?? new Date()) ? "font-medium text-warn-fg"');
   });
   it("con el courier, la fila dice la fecha de su ruta: el recojo, el día pedido a GF Courier o el día en que salió (owner, 15-11-2026)", () => {
     const at = (r: LimaPendingOrder) => courierRouteText(r, cls(r), TODAY);
@@ -643,13 +675,17 @@ describe("el MOM, DESIGN.md y DEPLOY.md", () => {
       expect(mom, quote).toContain(quote);
     }
   });
+  it("§9.5 cuenta la sexta vuelta: la guía sin recoger, las llamadas que ya tocan y Aliclik con palabras", () => {
+    expect(mom).toContain("**Sexta vuelta: la guía sin recoger, las llamadas que ya tocan y los estados de Aliclik (owner, 16-11-2026).**");
+    for (const quote of ["`missedPickup`", "**«Guía sin recoger»**", "`callDue`", "**Los estados de Aliclik con palabras**"]) expect(mom, quote).toContain(quote);
+  });
   it("DESIGN.md describe el flujo y la Agenda, y DEPLOY.md lleva sus entradas, sin migración", () => {
     const design = flat(read("DESIGN.md"));
     expect(design).toContain("### Repro Lima: el flujo del día y la Agenda sobre una lista (15-11-2026)");
     expect(design).toContain("«N con guía · **M sin guía**»");
     const entries = [...read("DEPLOY.md").matchAll(/^### (.+)$/gm)].map((m) => m[1]!);
     // Se busca por título: el orden de arriba lo deciden las entradas con migración.
-    for (const title of ["Repro Lima por las tareas del equipo", "Repro Lima: seis pasos que suman el total", "Repro Lima: ruta vencida sin reporte a No entregados", "Repro Lima: Retornando a No entregados"]) {
+    for (const title of ["Repro Lima por las tareas del equipo", "Repro Lima: seis pasos que suman el total", "Repro Lima: ruta vencida sin reporte a No entregados", "Repro Lima: Retornando a No entregados", "Repro Lima: guía sin recoger a Sacar a reparto"]) {
       const entry = entries.find((t) => t.includes(title));
       expect(entry, title).toBeDefined();
       expect(entry, title).toContain("sin migración");

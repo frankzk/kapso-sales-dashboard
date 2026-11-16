@@ -46,7 +46,7 @@ export type LimaTask = "primer_despacho" | "no_entregados" | "novedad" | "llamar
 export const LIMA_TASKS: readonly LimaTask[] = ["primer_despacho", "no_entregados", "novedad", "llamar_despues", "por_cerrar"];
 
 /** Filtros dentro de una tarjeta: no suman aparte. */
-export type LimaSubFilter = "mas_de_30" | "reintentos_aliclik" | "sin_reporte" | "esperan_anulacion" | "reprogramados" | "hoy_sin_guia" | "manana_sin_guia";
+export type LimaSubFilter = "mas_de_30" | "guia_sin_recoger" | "reintentos_aliclik" | "sin_reporte" | "esperan_anulacion" | "reprogramados" | "hoy_sin_guia" | "manana_sin_guia";
 
 /**
  * Los seis pasos del flujo (owner, 15-11-2026, tercera vuelta: «estos 5 no
@@ -132,7 +132,7 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
   {
     key: "por_sacar",
     label: "Sacar a reparto",
-    hint: "Todo lo que todavía no salió: lo agendado que espera su guía o su rótulo, y lo que nunca salió y no tiene día. La meta es que salga todo: agenda lo que no tiene día y genera la guía de lo que sale hoy o mañana.",
+    hint: "Todo lo que todavía no salió: lo agendado que espera su guía o su rótulo, la guía que el courier no recogió en su día y lo que nunca salió y no tiene día. La meta es que salga todo: agenda lo que no tiene día y genera la guía de lo que sale hoy o mañana.",
     empty: "No queda nada por sacar a reparto con estos filtros.",
   },
   {
@@ -156,6 +156,13 @@ export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & {
     label: "Más de 30 días",
     hint: "Nunca salieron y se crearon hace más de 30 días: confirma si la venta sigue; si no, anúlala en la tienda.",
     empty: "No hay pedidos de más de 30 días sin salida registrada con estos filtros.",
+  },
+  guia_sin_recoger: {
+    key: "guia_sin_recoger",
+    parent: "por_sacar",
+    label: "Guía sin recoger",
+    hint: "Con la guía de un courier que debía recogerlo un día que ya pasó y no lo recogió: todavía no salió. Coordina el recojo o crea la guía con otro courier desde la Mesa de ruta.",
+    empty: "Ninguna guía se quedó sin recoger con estos filtros.",
   },
   reintentos_aliclik: {
     key: "reintentos_aliclik",
@@ -489,6 +496,8 @@ export interface LimaRowClass {
   retry: boolean;
   /** Salió a ruta hace más de un día sin reporte: cuenta como no entregado (`routeWithoutReport`). */
   noReport: boolean;
+  /** Su guía debía recogerse un día que ya pasó y el courier no la recogió: por sacar a reparto. */
+  missedPickup: boolean;
   /** El día en que salió a ruta (`limaRouteDay`), o null si no está En curso. */
   routeDay: string | null;
   /** Salió a ruta hoy. */
@@ -525,10 +534,15 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
   const returning = base === null && courier === "retornando";
   const task: LimaTask | null = noReport || returning ? "no_entregados" : base;
   const day = limaAgendaDay(row, c);
-  const step = limaStepOf(task, courier);
+  // Una guía que el courier no recogió en su día todavía no salió: está por
+  // sacar a reparto, en Hoy como vencida (owner, 15-11-2026).
+  const pickupDay = courier === "guia_creada" ? row.courierPickup?.date ?? day : null;
+  const missedPickup = base === null && Boolean(pickupDay && pickupDay < today);
+  const step = missedPickup ? "por_sacar" : limaStepOf(task, courier);
   // Con un courier, la Agenda solo lo cuenta con un día de hoy en adelante. Sin
-  // courier: con su día; sin día, «Sin fecha» solo si es por sacar a reparto.
-  const agenda = courier
+  // courier (o con la guía sin recoger): con su día; sin día, «Sin fecha» solo
+  // si es por sacar a reparto.
+  const agenda = courier && !missedPickup
     ? (day && day >= today ? agendaKeyOf(day, today, window) : null)
     : day ? agendaKeyOf(day, today, window) : step === "por_sacar" ? "sin_fecha" : null;
   return {
@@ -538,6 +552,7 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
     stale: task === "primer_despacho" && limaQueueSegment(row, today, c) === "mas_de_30",
     retry: Boolean(c?.retryChain),
     noReport,
+    missedPickup,
     routeDay: row.stage === "en_curso" ? limaRouteDay(row) : null,
     routeToday: row.stage === "en_curso" && limaRouteDay(row) === today,
     autoGuide: Boolean(opts.autoGuideStores?.has(row.storeId)) && row.stage === "preparacion" && row.substage === "por_generar_rotulo" && !c?.agreement?.agreedOn,
@@ -603,7 +618,7 @@ export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: Read
     todos: rows.length,
     step: { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, con_courier: 0, por_cerrar: 0 },
     task: { primer_despacho: 0, no_entregados: 0, novedad: 0, llamar_despues: 0, por_cerrar: 0 },
-    sub: { mas_de_30: 0, reintentos_aliclik: 0, sin_reporte: 0, esperan_anulacion: 0, reprogramados: 0, hoy_sin_guia: 0, manana_sin_guia: 0 },
+    sub: { mas_de_30: 0, guia_sin_recoger: 0, reintentos_aliclik: 0, sin_reporte: 0, esperan_anulacion: 0, reprogramados: 0, hoy_sin_guia: 0, manana_sin_guia: 0 },
     agenda: { hoy: 0, manana: 0, despues: 0, sin_fecha: 0 },
     courier: { guia_creada: 0, en_ruta: 0, retornando: 0 },
     autoGuideManana: 0,
@@ -622,6 +637,7 @@ export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: Read
     if (cls.stale) counts.sub.mas_de_30 += 1;
     if (cls.retry) counts.sub.reintentos_aliclik += 1;
     if (cls.noReport) counts.sub.sin_reporte += 1;
+    if (cls.missedPickup) counts.sub.guia_sin_recoger += 1;
     if (cls.awaitingCancel) counts.sub.esperan_anulacion += 1;
     if (cls.agreed) counts.sub.reprogramados += 1;
     if (cls.agenda) counts.agenda[cls.agenda] = (counts.agenda[cls.agenda] ?? 0) + 1;
@@ -649,6 +665,7 @@ export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
     case "mas_de_30": return cls.stale;
     case "reintentos_aliclik": return cls.retry;
     case "sin_reporte": return cls.noReport;
+    case "guia_sin_recoger": return cls.missedPickup;
     case "esperan_anulacion": return cls.awaitingCancel;
     case "reprogramados": return cls.agreed;
     case "hoy_sin_guia": return cls.agenda === "hoy" && !cls.guide;
@@ -773,6 +790,40 @@ export function limaBoardRows(
 // Lo que dice la fila
 // ---------------------------------------------------------------------------
 
+/** «Llamar después» cuya hora ya llegó (owner, 15-11-2026: «arriba en la lista y en rojo»). */
+export function callDue(c: Pick<PendingCase, "list" | "nextCallAt"> | undefined, now: Date): boolean {
+  if (c?.list !== "llamar_despues" || !c.nextCallAt) return false;
+  const at = Date.parse(c.nextCallAt);
+  return Number.isFinite(at) && at <= now.getTime();
+}
+
+/**
+ * Los estados de Aliclik (`status · dispatchStatus · callStatus`), con las
+ * palabras de su propio Excel (`lib/aliclik-import.ts`): «PENDING_DELIVERY ·
+ * PREPARED · CONFIRMED» se lee «Por entregar · Validado · Confirmado».
+ */
+const ALICLIK_STATUS_TEXT: Record<string, string> = {
+  PENDING_DELIVERY: "Por entregar",
+  DELIVERED: "Entregado",
+  CANCEL: "Cancelado",
+  ANNULLED: "Anulado",
+  REFUSED: "Rechazado",
+  NOT_RESPOND: "No contesta",
+  RESCHEDULED: "Reprogramado",
+  TO_PREPARE: "Por preparar",
+  PREPARED: "Validado",
+  PICKED: "Recolectado",
+  IN_TRANSIT: "En tránsito",
+  REMAINING_IN_TRANSIT: "Remanente en tránsito",
+  STORE_CENTRAL: "Almacén central",
+  TO_RETURN: "Por devolver",
+  RETURNED: "Devuelto",
+  IN_AGENCY: "En agencia",
+  LEFT_IN_WAREHOUSE: "Dejado en almacén",
+  CONFIRMED: "Confirmado",
+  IMPORTED: "Importado",
+};
+
 /** Los estados de GF Courier (§29.17), dichos con palabras; lo demás va como lo reportó el courier. */
 const GF_STATUS_TEXT: Record<string, string> = {
   CREATED: "Guía creada",
@@ -793,7 +844,10 @@ const GF_STATUS_TEXT: Record<string, string> = {
 export function courierStatusText(status: string | null | undefined): string | null {
   const raw = status?.trim();
   if (!raw) return null;
-  return GF_STATUS_TEXT[raw.toUpperCase()] ?? raw;
+  const whole = GF_STATUS_TEXT[raw.toUpperCase()];
+  if (whole) return whole;
+  // Los estados compuestos de Aliclik, parte por parte; lo desconocido va como llegó.
+  return raw.split(/\s*·\s*/).map((part) => ALICLIK_STATUS_TEXT[part.toUpperCase()] ?? part).join(" · ");
 }
 
 /** «GF Courier · Incidencia: no contesta», «Grupo GF · Alexis», o null sin courier. */
@@ -866,13 +920,19 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
     case "novedad":
       return `Llamar a la clienta y acordar con ${courierName} la entrega o la devolución: la guía sigue viva.`;
     case "llamar_despues":
-      return c?.nextCallAt ? `Llamar ${reproCallTimeLabel(c.nextCallAt, now)}.` : "Llamar a la clienta otra vez.";
+      if (!c?.nextCallAt) return "Llamar a la clienta otra vez.";
+      // Ya llegó la hora (owner, 15-11-2026): lo dice primero; la fila lo pinta en rojo (`callDue`).
+      return callDue(c, now) ? `Ya toca llamar (pidió ${reproCallTimeLabel(c.nextCallAt, now)}).` : `Llamar ${reproCallTimeLabel(c.nextCallAt, now)}.`;
     case "primer_despacho":
       return cls.stale
         ? "Confirmar con la clienta si la venta sigue; si no, anularla en la tienda."
         : `Sacarlo a reparto: Kapta sugiere el ${programDayLabel(limaSuggestedDay(today))}. Confírmalo (y los datos con la clienta si hace falta).`;
     case null:
       break;
+  }
+  if (cls.missedPickup) {
+    const who = row.courierPickup ? courierDisplayName(row.courierPickup.courier) : courierName;
+    return `${who} debía recogerlo el ${programDayLabel(row.courierPickup?.date ?? cls.agendaDay ?? today)} y no lo recogió: coordina el recojo o crea la guía con otro courier (Mesa de ruta).`;
   }
   if (cls.courier === "retornando") return "Recibir la devolución en Almacén cuando llegue.";
   if (cls.courier === "en_ruta") return `Solo seguimiento: lo tiene ${courierName}.`;

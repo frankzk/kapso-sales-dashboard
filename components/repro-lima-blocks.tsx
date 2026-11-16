@@ -66,11 +66,12 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
     },
   },
   por_sacar: {
-    keys: ["sin_fecha", "mas_de_30"],
+    keys: ["sin_fecha", "guia_sin_recoger", "mas_de_30"],
     note: (c) => {
       const sinFecha = c.agenda.sin_fecha ?? 0;
       const agendados = c.step.por_sacar - sinFecha;
-      return `${fmt(agendados)} ${agendados === 1 ? "agendado" : "agendados"} · ${fmt(sinFecha)} sin fecha`;
+      const recoger = c.sub.guia_sin_recoger ? ` · ${fmt(c.sub.guia_sin_recoger)} sin recoger` : "";
+      return `${fmt(agendados)} ${agendados === 1 ? "agendado" : "agendados"} · ${fmt(sinFecha)} sin fecha${recoger}`;
     },
   },
   con_courier: {
@@ -278,7 +279,7 @@ function SumBar({ counts, total, active }: { counts: LimaBoardCounts; total: num
   );
 }
 
-export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = true, stuck }: {
+export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = true, stuck, callsDue = 0 }: {
   counts: LimaBoardCounts;
   today: string;
   /** El filtro elegido; «todos» sin ninguno. */
@@ -291,6 +292,8 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
    * tiene cada paso, si el filtro «Trabados» está puesto y cómo se elige.
    */
   stuck?: { byStep: Readonly<Record<LimaStep, number>>; active: boolean; onPick: (step: LimaStep) => void };
+  /** «Llamar después» cuya hora ya llegó (`callDue`): la celda lo dice en rojo. */
+  callsDue?: number;
 }) {
   const agenda = agendaCards(today);
   const flowTotal = LIMA_FLOW.reduce((sum, step) => sum + counts.step[step.key], 0);
@@ -378,7 +381,12 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                 className={folded ? (flow.key === "con_courier" ? "sm:shadow-[inset_1px_0_0_var(--color-line-strong)]" : undefined) : "col-span-2 sm:col-span-1"}
                 lead={folded ? undefined : <StepNumber n={i + 1} active={isActive} />}
                 badge={start === flow.key && !isActive ? <Badge tone="brand" className="shrink-0">Empieza aquí</Badge> : null}
-                note={withStuck(INSIDE[flow.key]?.note(counts) ?? flow.why, stuckIn(flow.key))}
+                note={withStuck(
+                  flow.key === "llamar_despues" && callsDue > 0
+                    ? <span className="font-semibold text-warn-fg">{fmt(callsDue)} {callsDue === 1 ? "ya toca" : "ya tocan"}</span>
+                    : INSIDE[flow.key]?.note(counts) ?? flow.why,
+                  stuckIn(flow.key),
+                )}
               />
             );
           })}

@@ -15,7 +15,7 @@ import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "
 import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { AGENDA_ORIGIN_LABEL, agendaDayText, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { AGENDA_ORIGIN_LABEL, agendaDayText, callDue, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
@@ -114,7 +114,8 @@ function NextStep({ row, repro, cls, stuck, today, now }: { row: LimaPendingOrde
           <p className="text-[13px] leading-5 text-ink-700">{rule.action}</p>
         </>
       ) : (
-        <p className="text-sm leading-5 text-ink-900">{limaNextStep(row, repro, cls, today, now)}</p>
+        // La llamada pedida cuya hora ya llegó va en rojo (owner, 15-11-2026).
+        <p className={cn("text-sm leading-5", cls.task === "llamar_despues" && callDue(repro, now ?? new Date()) ? "font-medium text-warn-fg" : "text-ink-900")}>{limaNextStep(row, repro, cls, today, now)}</p>
       )}
       {repro?.retryChain && <RetryChainNote orderId={row.orderId} chain={repro.retryChain} />}
     </div>

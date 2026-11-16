@@ -6672,6 +6672,29 @@ estados, no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   dice «Pide el reporte a GF Courier: el pedido cambia cuando el courier lo
   reporte.».
 
+**Sexta vuelta: la guía sin recoger, las llamadas que ya tocan y los estados de
+Aliclik (owner, 16-11-2026).** Respuestas: la guía que el courier no recogió en
+su día va a Sacar a reparto; la propuesta de día no tiene tope; el aviso de las
+10:30 es solo en pantalla; «Llamar después» que ya toca va arriba y en rojo. No
+crea estados, no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
+- **Guía sin recoger** (`missedPickup`). Con la guía de un courier y un día de
+  recojo que ya pasó (el recojo de Aliclik o el día pedido a GF Courier), sin
+  otra tarea: todavía no salió. Va a **Sacar a reparto**, en **Hoy** como
+  vencida y con guía, con el filtro de adentro **«Guía sin recoger»**; la fila:
+  «Aliclik debía recogerlo el vie 13/11 y no lo recogió: coordina el recojo o
+  crea la guía con otro courier (Mesa de ruta).». La guía que todavía espera su
+  día sigue en Con el courier.
+- **«Llamar después» que ya toca** (`callDue`). La lista ya va por la hora de
+  la llamada (`sortRepro`), así que lo que ya toca va primero. La celda del paso
+  dice «N ya tocan» en `warn` y la fila «Ya toca llamar (pidió hoy 10:00).» en
+  `warn`. Sin mensajes fuera de Kapta.
+- **Los estados de Aliclik con palabras** (`courierStatusText`): «PENDING_DELIVERY
+  · PREPARED · CONFIRMED» se lee «Por entregar · Validado · Confirmado», con el
+  vocabulario de su propio Excel (`lib/aliclik-import.ts`); lo desconocido va
+  como llegó.
+- **Sin cambios** (confirmado): la propuesta de día pone todo en el próximo día
+  de reparto, sin tope; «Hoy sin guía» avisa solo en pantalla.
+
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
 son puras (`lib/repro-lima-blocks.ts`) y usan lo que Repro Lima ya lee

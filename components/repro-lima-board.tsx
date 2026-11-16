@@ -44,6 +44,7 @@ import {
   agendarPath,
   boardCard,
   boardFilter,
+  callDue,
   classifyLimaRows,
   hoySinGuiaAlert,
   limaBoardCounts,
@@ -148,6 +149,11 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     }
     return out;
   }, [stuckItems, classes]);
+  // «Llamar después» cuya hora ya llegó: la celda del paso lo dice en rojo.
+  const callsDue = useMemo(
+    () => scoped.filter((row) => classes.get(row.orderId)?.step === "llamar_despues" && callDue(caseById.get(row.orderId), now)).length,
+    [scoped, classes, caseById, now],
+  );
   const inQueue = useMemo(() => {
     if (stuck) {
       // Los trabados, en su orden: por motivo y lo que más lleva primero; con un
@@ -464,6 +470,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           onPick={chooseKey}
           guideAlert={hoySinGuiaAlert(now)}
           stuck={{ byStep: stuckByStep, active: Boolean(stuck), onPick: chooseStepStuck }}
+          callsDue={callsDue}
         />
       )}
 
