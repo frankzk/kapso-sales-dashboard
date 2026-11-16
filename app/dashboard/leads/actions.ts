@@ -164,6 +164,7 @@ import {
 import { loadDoNotCallPhones } from "@/lib/voice-recovery-server";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
 import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor, getLeadManualTakeStores, filterManualSearchLeads } from "@/lib/lead-routing-access";
+import { callbackReturnsFor, RETURN_HOLD_MINUTES, type CallbackReturn, type CallbackReturnCallRow, type CallbackReturnLeadRow } from "@/lib/callback-returns";
 
 export interface LeadActionState {
   error?: string;
@@ -916,6 +917,56 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
 }
 
 /** "Ahora no": pass the offer to the next advisor immediately (adds me to passed). */
+/**
+ * «Tu cliente respondió» (0351): los leads cuya clienta escribió después de que
+ * ESTA asesora agendó «Volver a llamar» y que siguen siendo solo suyos (10
+ * minutos desde el mensaje). Lo lee el aviso flotante cada 15 s con la pestaña
+ * visible. Solo lee: el apartado lo decide la base (`lead_routing_scope`).
+ */
+export async function listCallbackReturns(): Promise<CallbackReturn[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) return [];
+  const { data: storeRows } = await sb.from("stores").select("id,org_id");
+  const stores = (storeRows as { id: string; org_id: string }[] | null) ?? [];
+  if (!stores.length) return [];
+  const admin = createAdminSupabase();
+  const nowMs = Date.now();
+  const since = new Date(nowMs - RETURN_HOLD_MINUTES * 60_000).toISOString();
+  const { data: leadRows, error } = await admin
+    .from("leads")
+    .select("id,store_id,name,phone,wa_id,status,last_inbound_at,next_followup_at,claimed_by,claimed_at")
+    .in("store_id", stores.map((s) => s.id))
+    .in("category", ["open", "hot"])
+    .not("next_followup_at", "is", null)
+    .gt("last_inbound_at", since)
+    .lte("last_inbound_at", new Date(nowMs).toISOString())
+    .limit(50);
+  // Casi siempre vacío: entonces no se leen llamadas ni el reparto.
+  if (error || !leadRows?.length) return [];
+  const leads = (leadRows as Array<CallbackReturnLeadRow & { wa_id: string | null }>).map((l) => ({ ...l, phone: l.phone ?? l.wa_id }));
+  const [{ data: callRows }, { data: routing }] = await Promise.all([
+    admin
+      .from("lead_calls")
+      .select("id,lead_id,vendedora,occurred_at,next_followup_at")
+      .in("lead_id", leads.map((l) => l.id))
+      .eq("kind", "call")
+      .not("vendedora", "is", null)
+      .not("next_followup_at", "is", null),
+    admin.from("lead_routing_settings").select("org_id").eq("enabled", true).in("org_id", [...new Set(stores.map((s) => s.org_id))]),
+  ]);
+  const routedOrgs = new Set(((routing as { org_id: string }[] | null) ?? []).map((r) => r.org_id));
+  return callbackReturnsFor({
+    userId: user.id,
+    leads,
+    calls: (callRows as CallbackReturnCallRow[] | null) ?? [],
+    nowMs,
+    routedStores: new Set(stores.filter((s) => routedOrgs.has(s.org_id)).map((s) => s.id)),
+  });
+}
+
 export async function passYape(leadId: string): Promise<LeadActionState> {
   const sb = await createServerSupabase();
   const {

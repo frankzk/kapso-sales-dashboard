@@ -85,6 +85,19 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · La clienta que responde vuelve 10 minutos a quien agendó (0351, MOM «Bloques por asesora»)
+
+1. **Migración `0351_lead_appointment_return_hold.sql`**: redefine
+   `lead_routing_scope` y `lead_manual_take_check` con su cuerpo vigente y solo
+   la condición de la reserva por cita cambiada (10 minutos desde el mensaje de
+   la clienta). Mismos permisos (`service_role`), sin datos. Idempotente.
+2. El código suma el aviso «Tu cliente respondió» (`listCallbackReturns`, solo
+   lectura) para las asesoras. Sin la migración, el aviso sale igual pero el
+   lead no queda apartado: aplicar la migración primero.
+3. Verificar: una asesora agenda «Volver a llamar»; cuando la clienta escribe,
+   a ella le sale el aviso con la cuenta atrás y otra asesora ve el lead «Sin
+   acceso» hasta que pasan los 10 minutos.
+
 ### 16-11-2026 · La caja de Grupo GF ya reportada «No entregado» no frena otra guía (0350, MOM §9.5)
 
 1. **Migración `0350_gf_replaced_by_aliclik_any_coverage.sql`**, ANTES del

@@ -8983,6 +8983,40 @@ vencida hace más de 2 horas (366 de hace más de 7 días).
   que la 0312 hizo por el rendimiento: mismas ramas, mismos índices y ninguna
   tabla nueva leída; solo dos comparaciones por lead ya leído.
 
+**La clienta que responde vuelve 10 minutos a quien agendó (16-11-2026, decisión del owner; 0351).**
+Caso real: una asesora agendó «Volver a llamar» para las 10:00 («mañana
+yapea»). La reserva se soltó a las 12:00 (2 horas de gracia de la 0322). A las
+15:01 la clienta escribió y mandó el Yape. A las 15:03 otra asesora lo tomó del
+reparto, llamó y creó el pedido. El owner: «sí, por 10 minutos nuevamente desde
+la respuesta del cliente. Y le debe avisar a quien lo agendó en un popup».
+
+- Mientras el lead tenga la cita de esa asesora (la misma `appointment_owner`
+  de la 0322: la fecha sigue en `next_followup_at` y ninguna llamada la
+  consumió), un mensaje **entrante** de la clienta posterior a la llamada que la
+  agendó deja el lead **solo para ella durante 10 minutos** contados desde el
+  mensaje (`leads.last_inbound_at`), **aunque la cita ya esté vencida**. Cada
+  mensaje nuevo vuelve a contar 10 minutos. Pasados, se suelta como dice la
+  0322 y sigue el reparto normal.
+- Va en el reparto (`lead_routing_scope`) y en «Tomar» manual
+  (`lead_manual_take_check`). La reserva de 10 minutos de quien ya tenía el lead
+  abierto sigue antes, igual que siempre. Qué cuenta como mensaje de la clienta
+  es lo mismo de la 0322: solo `last_inbound_at`.
+- **El aviso.** A quien agendó le sale un aviso flotante en cualquier pantalla
+  de Kapta, «Tu cliente respondió», con la hora agendada, la cuenta atrás de sus
+  10 minutos y «Abrir lead» (`components/callback-return-alerts.tsx`, lee
+  `listCallbackReturns` cada 15 s con la pestaña visible). No sale si ya abrió
+  el lead después del mensaje. «Más tarde» lo oculta hasta el siguiente mensaje.
+  Con el reparto por bloques apagado no hay apartado: el aviso lo dice.
+- Una llamada guardada después de agendar **no borra la cita**: la fecha queda en
+  `next_followup_at` hasta que pasa su hora y alguien vuelve a llamar
+  (`lead_record_call_attempt`, 0289). El estado del lead sí cambia al último
+  registrado.
+- La regla pura: `lib/lead-appointment-hold.ts` (motivo `respondio`); la lista
+  del aviso: `lib/callback-returns.ts`. Pruebas: `test/lead-appointment-hold.test.ts`,
+  `test/callback-returns.test.ts` y, en la base,
+  `scripts/sql/lead_appointment_release_smoke.sql` y
+  `scripts/sql/lead_manual_take_smoke.sql`.
+
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
 trabajan ahí, así que los reintentos que merecen una nueva llamada regresan a

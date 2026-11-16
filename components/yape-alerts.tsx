@@ -21,7 +21,7 @@ const POLL_MS = 15_000;
 
 /** Short attention beep via WebAudio (no asset). Best-effort: stays silent if the
  *  browser blocks audio before a user gesture. */
-function beep() {
+export function beep() {
   try {
     const Ctx =
       window.AudioContext ??

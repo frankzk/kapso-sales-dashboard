@@ -52,6 +52,22 @@
 
   /* /reparto: el detalle de la parada entra deslizándose desde la derecha. */
   --animate-slide-in-right: slide-in-right 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+
+  /* Aviso flotante «Tu cliente respondió»: baja apenas y se enfoca. */
+  --animate-toast-in: toast-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
 }
 
 @keyframes pulse-dot {
@@ -116,7 +132,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-slide-in-right {
+  .animate-slide-in-right,
+  .animate-toast-in {
     animation: none;
   }
   .animate-\[photo-progress_1\.1s_ease-in-out_infinite\] {

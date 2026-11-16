@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { Sidebar, type NavAccess } from "@/components/sidebar";
 import { YapeAlerts } from "@/components/yape-alerts";
+import { CallbackReturnAlerts } from "@/components/callback-return-alerts";
 import { CollectionAlerts } from "@/components/collection-alerts";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import { finishPanelNavigation } from "@/lib/client-performance";
@@ -75,6 +76,8 @@ export function DashboardShell({
         {routePending ? <DashboardRouteSkeleton /> : children}
       </main>
       <YapeAlerts enabled={yapeAlertsEnabled} />
+      {/* «Tu cliente respondió» (0351): a quien agendó «Volver a llamar». */}
+      <CallbackReturnAlerts enabled={yapeAlertsEnabled} />
       <CollectionAlerts />
     </div>
   );

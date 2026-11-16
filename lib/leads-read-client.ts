@@ -3,7 +3,7 @@
 import type * as Actions from "@/app/dashboard/leads/actions";
 
 // Type-only reference: this module never invokes a Next Server Action.
-type Reads = Pick<typeof Actions, "loadLeadStoreDistribution" | "loadLeadCustomerHistory" | "loadLeadDetail" | "loadNextLeadCart" | "loadLeadDeliveryCoverage" | "loadLeadVoicePanel" | "loadLeadsInsightsPanel" | "pollLeadsQueue" | "searchLeads" | "loadLeadsForAudience" | "listLeadTemplates" | "listQuickReplies" | "loadLeadConversation" | "loadOrderDraft" | "pollLeadState" | "searchStoreProducts" | "listStoreVendedoras" | "listYapeAlerts">;
+type Reads = Pick<typeof Actions, "loadLeadStoreDistribution" | "loadLeadCustomerHistory" | "loadLeadDetail" | "loadNextLeadCart" | "loadLeadDeliveryCoverage" | "loadLeadVoicePanel" | "loadLeadsInsightsPanel" | "pollLeadsQueue" | "searchLeads" | "loadLeadsForAudience" | "listLeadTemplates" | "listQuickReplies" | "loadLeadConversation" | "loadOrderDraft" | "pollLeadState" | "searchStoreProducts" | "listStoreVendedoras" | "listYapeAlerts" | "listCallbackReturns">;
 
 export async function readLeadData<K extends keyof Reads>(
   operation: K,
@@ -45,6 +45,8 @@ export const pollLeadState = (...args: Parameters<Reads["pollLeadState"]>) => re
 export const searchStoreProducts = (...args: Parameters<Reads["searchStoreProducts"]>) => readLeadData("searchStoreProducts", args);
 export const listStoreVendedoras = (...args: Parameters<Reads["listStoreVendedoras"]>) => readLeadData("listStoreVendedoras", args);
 export const listYapeAlerts = (...args: Parameters<Reads["listYapeAlerts"]>) => readLeadData("listYapeAlerts", args);
+
+export const listCallbackReturns = (...args: Parameters<Reads["listCallbackReturns"]>) => readLeadData("listCallbackReturns", args);
 
 export const searchLeads = (...[scope, query, signal]: [...Parameters<Reads["searchLeads"]>, AbortSignal?]) =>
   readLeadData("searchLeads", [scope, query], signal);

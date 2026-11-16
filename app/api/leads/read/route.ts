@@ -29,6 +29,7 @@ const schemas = {
   searchStoreProducts: z.tuple([uuid, z.string().max(200)]),
   listStoreVendedoras: lead,
   listYapeAlerts: z.tuple([]),
+  listCallbackReturns: z.tuple([]),
 } as const;
 
 const envelope = z.object({

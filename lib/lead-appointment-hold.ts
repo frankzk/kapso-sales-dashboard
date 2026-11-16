@@ -13,6 +13,12 @@
  *      la cita (`leads.last_inbound_at` posterior al `occurred_at` de la llamada
  *      que la agendó). Una fecha futura no cuenta.
  *
+ * Desde la 0351 (owner, 16-11-2026) el mensaje de la clienta, antes de soltar,
+ * devuelve el lead a la asesora que agendó durante
+ * {@link RETURN_HOLD_MINUTES} minutos contados desde ese mensaje, aunque la
+ * cita ya esté vencida (`respondio`); cada mensaje nuevo vuelve a contar. Kapta
+ * se lo avisa con un aviso flotante (`components/callback-return-alerts.tsx`).
+ *
  * Suelta, el lead sigue el reparto normal. La cita no se borra: solo deja de
  * reservar. Esta función es el espejo puro de `appointment_released` en
  * `lead_routing_scope` (db/migrations/0322_lead_appointment_release.sql), que
@@ -25,6 +31,9 @@
 
 /** Horas después de la hora de la cita en las que la reserva se suelta sola. */
 export const APPOINTMENT_HOLD_GRACE_HOURS = 2;
+
+/** Minutos que el mensaje de la clienta devuelve el lead a quien agendó (0351). */
+export const RETURN_HOLD_MINUTES = 10;
 
 export type AppointmentHoldRelease = "vencida" | "volvio_sola";
 
@@ -40,7 +49,7 @@ export interface AppointmentHoldInput {
 export type AppointmentHoldState =
   | { held: false; reason: "sin_cita" }
   | { held: false; reason: AppointmentHoldRelease }
-  | { held: true; releasesAt: string };
+  | { held: true; releasesAt: string; reason: "cita" | "respondio" };
 
 const ms = (iso: string | null): number | null => {
   if (!iso) return null;
@@ -51,17 +60,24 @@ const ms = (iso: string | null): number | null => {
 /**
  * ¿La cita sigue reservando el lead a su asesora en `nowMs`? Sin cita (sin hora
  * o sin la llamada que la agendó) no hay reserva. El orden de los motivos es
- * el del MOM: primero el vencimiento, después la clienta que volvió sola.
+ * el del MOM: primero los 10 minutos tras el mensaje de la clienta (0351),
+ * después el vencimiento y por último la clienta que volvió sola.
  */
 export function appointmentHoldState(input: AppointmentHoldInput, nowMs: number): AppointmentHoldState {
   const followup = ms(input.followupAt);
   const booked = ms(input.bookedAt);
   if (followup === null || booked === null) return { held: false, reason: "sin_cita" };
+  const inbound = ms(input.lastInboundAt);
+  const wroteAfter = inbound !== null && inbound <= nowMs && inbound > booked;
+  // 0351: los 10 minutos que siguen al mensaje ganan a los dos motivos de soltar.
+  if (wroteAfter) {
+    const returnEndsMs = inbound + RETURN_HOLD_MINUTES * 60_000;
+    if (nowMs < returnEndsMs) return { held: true, releasesAt: new Date(returnEndsMs).toISOString(), reason: "respondio" };
+  }
   const releasesAtMs = followup + APPOINTMENT_HOLD_GRACE_HOURS * 3_600_000;
   if (releasesAtMs <= nowMs) return { held: false, reason: "vencida" };
-  const inbound = ms(input.lastInboundAt);
-  if (inbound !== null && inbound <= nowMs && inbound > booked) return { held: false, reason: "volvio_sola" };
-  return { held: true, releasesAt: new Date(releasesAtMs).toISOString() };
+  if (wroteAfter) return { held: false, reason: "volvio_sola" };
+  return { held: true, releasesAt: new Date(releasesAtMs).toISOString(), reason: "cita" };
 }
 
 /** Atajo: `true` si la cita sigue reservando el lead. */
