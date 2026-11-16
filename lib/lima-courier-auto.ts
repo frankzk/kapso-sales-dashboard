@@ -13,8 +13,9 @@
 // (`lima_repro_cases.agreed_courier`). En las pasadas de la mañana (8:00, 10:00
 // y 12:00 de Lima), lo de HOY; en las de la tarde y la noche (15:00, 18:00,
 // 20:00 y 21:00), lo del próximo día, porque se programa todo el día (owner,
-// 16-11-2026: «también debe intentar en la noche»), y solo si Aliclik lo recoge
-// ese día y no antes. Swayp arma su ruta el día anterior
+// 16-11-2026: «también debe intentar en la noche»). No espera a que el corte de
+// la cotización diga «mañana»: AUTOECOM no lo trae fiable (a las 16:13 decía
+// «hoy»), y el equipo ya crea en la tarde lo del día siguiente. Swayp arma su ruta el día anterior
 // (`agreementDateProblem`), así que su guía se crea la víspera, en todas las
 // pasadas hasta las 21:00 (su corte es 21:20), con la fecha de despacho
 // programada.
@@ -145,14 +146,6 @@ export function limaCourierCaseCourier(c: LimaCourierCase, today: string, limaHo
   return c.agreed_on.slice(0, 10) === limaCourierTargetDay(c.agreed_courier, today, limaHour) ? c.agreed_courier : null;
 }
 
-/**
- * La guía de Aliclik de un día que viene se crea solo si Aliclik la recoge ESE
- * día (su `expectedDispatchDate` con el horario del transporte): creada antes
- * del corte, la recogería hoy. Si no, espera a la pasada siguiente. Pura.
- */
-export function limaAliclikPickupFits(day: string, today: string, pickup: string): boolean {
-  return day === today || pickup === day;
-}
 
 type EventLike = { kind: string; payload?: unknown };
 
@@ -211,7 +204,7 @@ export function limaCourierAutoActivoBlocker(input: { aliclikWrite: boolean; swa
 
 /**
  * Lo que dice «Correr ahora»: cuántas guías creó, cuántas no salieron, cuántas
- * habría creado (Simulación) y cuántas esperan otra pasada. Pura.
+ * habría creado (Simulación) y cuántas ya tenían guía. Pura.
  */
 export function limaCourierRunSummary(items: readonly { outcome: string }[]): string {
   const n = (outcome: string) => items.filter((i) => i.outcome === outcome).length;
@@ -221,7 +214,6 @@ export function limaCourierRunSummary(items: readonly { outcome: string }[]): st
     n("simulada") ? `${n("simulada")} habría creado (Simulación)` : null,
     n("fallo") ? `${n("fallo")} no salió${n("fallo") === 1 ? "" : "eron"} (mira «hoy y ayer»)` : null,
     n("en_curso") ? `${n("en_curso")} creándose` : null,
-    n("espera") ? `${n("espera")} esperan otra pasada (Aliclik las recogería antes)` : null,
     n("ya_tiene_guia") ? `${n("ya_tiene_guia")} ya tenían guía` : null,
     n("ya_intentado") ? `${n("ya_intentado")} ya se intentaron hoy` : null,
     n("error") ? `${n("error")} con error al leer` : null,

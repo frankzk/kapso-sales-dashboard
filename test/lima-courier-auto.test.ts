@@ -5,7 +5,6 @@ import {
   LIMA_COURIER_AUTO_FAILED,
   LIMA_COURIER_AUTO_CRON,
   LIMA_COURIER_AUTO_PASS_HOURS_LIMA,
-  limaAliclikPickupFits,
   isLimaCourierAutoOutcome,
   limaCourierAutoActivoBlocker,
   limaCourierAutoModeFrom,
@@ -81,10 +80,10 @@ describe("el día y la hora de cada courier (owner, 16-11-2026: «Kapta la crea 
     expect(limaCourierServes("fenix", 21)).toBe(true);
     expect(limaCourierServes("fenix", 7)).toBe(false);
   });
-  it("lo de mañana con Aliclik, solo si Aliclik lo recoge ese día", () => {
-    expect(limaAliclikPickupFits(MON, MON, "2026-11-17")).toBe(true); // lo de hoy se crea igual
-    expect(limaAliclikPickupFits("2026-11-17", MON, "2026-11-17")).toBe(true);
-    expect(limaAliclikPickupFits("2026-11-17", MON, MON)).toBe(false); // antes del corte la recogería hoy
+  it("lo de mañana con Aliclik se crea en la tarde sin esperar al corte de la cotización (owner: «¿cómo que recogería hoy?»)", () => {
+    const server = read("lib/lima-courier-auto-server.ts");
+    expect(server).not.toContain("expectedDispatchDate");
+    expect(server).not.toContain('item.outcome = "espera"');
   });
 });
 
@@ -213,8 +212,8 @@ describe("«Correr ahora» (owner, 16-11-2026: «las puedes crear ahora mismo?»
   it("dice lo que hizo la pasada, en una línea", async () => {
     const { limaCourierRunSummary } = await import("@/lib/lima-courier-auto");
     expect(limaCourierRunSummary([])).toBe("No hay nada programado con Aliclik o Swayp para lo que atiende esta pasada.");
-    expect(limaCourierRunSummary([{ outcome: "creada" }, { outcome: "creada" }, { outcome: "fallo" }, { outcome: "espera" }]))
-      .toBe("Pasada hecha: 2 creadas · 1 no salió (mira «hoy y ayer») · 1 esperan otra pasada (Aliclik las recogería antes).");
+    expect(limaCourierRunSummary([{ outcome: "creada" }, { outcome: "creada" }, { outcome: "fallo" }, { outcome: "ya_tiene_guia" }]))
+      .toBe("Pasada hecha: 2 creadas · 1 no salió (mira «hoy y ayer») · 1 ya tenían guía.");
   });
   it("es la misma pasada del cron, con el permiso del panel y la posición guardada", () => {
     const actions = flat(read("app/dashboard/automatizaciones/actions.ts"));

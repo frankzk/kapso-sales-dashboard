@@ -116,8 +116,9 @@ Sin migración ni variables. **Cambian dos crons** (`vercel.json`):
   guía GF automática también toma lo programado para un día que viene, con ese día (`scheduled_date`); solo deja lo
   que tiene un día que ya pasó.
 - `/api/cron/lima-courier-auto`: de `12 13,15,17,20 * * *` a `12 13,15,17,20,23,1,2 * * *`. Son las 8:00, 10:00,
-  12:00, 15:00, 18:00, 20:00 y 21:00 de Lima. Aliclik toma lo de hoy en la mañana y lo de mañana desde las 15:00, solo
-  si Aliclik lo recoge ese día. Swayp toma lo de mañana en todas las pasadas, hasta las 21:00.
+  12:00, 15:00, 18:00, 20:00 y 21:00 de Lima. Aliclik toma lo de hoy en la mañana y lo de mañana desde las 15:00 (sin
+  esperar al corte de la cotización, que con AUTOECOM no es fiable). Swayp toma lo de mañana en todas las pasadas, hasta
+  las 21:00.
 
 En Automatizaciones, la fila «Guía Aliclik y Swayp del día programado» suma **«Correr ahora»**: hace la misma pasada,
 ya, para esa organización.
