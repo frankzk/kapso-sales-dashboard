@@ -2181,7 +2181,9 @@ Kapta paga **el adelanto de esta escalera (S/ 20) validado** antes de confirmar
 o de sacar la guía contra entrega, o el pago online completo. El adelanto es la
 decisión del owner y un ajuste de Automatizaciones («Adelanto (regla §8)» o
 «Pago completo»). La escalera sigue encima: con 3 o más antecedentes, Aliclik
-pide el total por su lado.
+pide el total por su lado. **En Lima la automática no frena** (owner,
+16-11-2026, §41.12): el pedido se confirma y sale contra entrega; la agregada a
+mano frena igual.
 
 **Y en Provincia COD, Aliclik puede quedar cerrado para el pedido (§8.6,
 owner 05-11-2026)**: si el cliente ya tuvo un despacho que no se entregó y
@@ -26598,6 +26600,8 @@ quien no deba estar, se quita de la lista.
 
 La misma compuerta (`prepayOrderCheck`) frena también por la lista automática
 (§41.11), con lo que el owner decidió cobrar ahí (el adelanto, por defecto).
+**En un pedido de Lima, la automática no frena en ninguna fila de esta tabla
+(§41.12, 16-11-2026)**; las altas a mano, sí.
 **Desde el 09-11-2026 todos los mensajes de esta tabla son los de la Lista
 negra** (§41.11 «Cómo se dice», `lib/lista-negra-copy.ts`): el mismo freno al
 confirmar y en las guías, el mismo motivo de Chatby (`pago_online`), el mismo
@@ -26623,6 +26627,10 @@ lista sale por **Grupo GF (motorizado propio) o Swayp con cobro cero**; en
 cero de Swayp lo pone Kapta en la última puerta (`createFenixGuideViaApi`), no
 cada camino (§41.5). El texto de
 `aliclikPrepaidBlocker` recomendaba Tanders y ya no (05-11-2026).
+
+**Desde el 16-11-2026 esto vale solo para las altas a mano** (§41.12): un
+pedido de Lima de la lista automática sale contra entrega por Aliclik o Grupo
+GF, como cualquiera.
 
 ### 41.7 La tienda: WordPress y COD Core
 
@@ -26713,6 +26721,10 @@ crear la guía.
 
 ### 41.9 Lo que falta
 
+- **Mandar el campo `lima` en el envío diario** (§41.12,
+  `docs/kapta/lista-negra-lima.md`) cuando Kenku y Aurela confirmen que su
+  endpoint lo acepta.
+
 - ~~La chapa en la **lista de Leads**~~: hecha el 09-11-2026 (§25.3).
 - Las funciones `check-coverage` del bot de Kapso (`docs/kapso-functions/`)
   todavía ofrecen contra entrega sin preguntar a la lista; además piden «S/30»
@@ -26794,6 +26806,9 @@ se leen igual; solo cambian el motivo y «pago total» cuando es lo que se pide.
   pídele el adelanto de S/ 20.» o «No le ofrezcas contra entrega: solo pago
   total por adelantado.»— y la nota «Kapta no le escribe a la clienta sobre la
   Lista negra.»
+- **En Lima** (la automática, §41.12): el aviso es info y dice «En Lima no
+  frena: el pedido se confirma y sale contra entrega.»; en el lead, «En Lima
+  puede pagar contra entrega: la Lista negra solo frena fuera de Lima.»
 - **Los mensajes cortos:** el freno «Lista negra ({motivo}): falta el adelanto
   de S/ 20 validado.» (o «…: falta el pago total validado.»); Chatby «Lista
   negra ({motivo}): Kapta no crea la guía ni le escribe. Cobra el adelanto y
@@ -27083,6 +27098,43 @@ y las decisiones puras: `lib/pago-online.ts`; el freno de un celular:
 `components/automations-panel.tsx`; la ficha: `components/pago-online-banner.tsx`
 y `app/dashboard/pedidos/prepay-actions.ts`. Pruebas: `test/pago-online.test.ts`,
 `test/pago-online-server.test.ts`, `scripts/sql/pago_solo_online_smoke.sql`.
+
+### 41.12 La Lista negra en Lima (owner, 16-11-2026)
+
+**Decisión del owner** (#KP205510: segundo intento por Aliclik en Lima, frenado
+por «Lista negra (devolvió 1 pedido y nunca recibió): falta el adelanto de
+S/ 20 validado»): «para Lima, no aplicaría lo de la Lista negra que no deja
+sacar pedidos». En Lima una entrega fallida casi no cuesta (Aliclik cobra
+S/ 0.00 de devolución; Grupo GF es motorizado propio).
+
+- **En un pedido de Lima la lista automática (§41.11) no frena nada**: ni
+  confirmar ni crear la guía o la salida. `order_master.coverage = 'lima'`
+  (`order_coverage_for`, §5) es «Lima»; la regla pura es
+  `listaNegraAutoBrakes` (lib/lista-negra.ts). La compuerta única
+  (`prepayOrderCheck`) contesta `ok` con `limaExempt`, así que vale en todas
+  sus puertas: Aliclik (el botón, Chatby, el día programado y el reintento
+  automático), Grupo GF, las salidas manuales, «Sacar con salida nueva» de
+  Repro Lima, Swayp y la confirmación por llamada. La cobertura la trae la
+  fila o la compuerta la lee sola, y solo cuando la automática frenaría; si no
+  se puede leer, frena como siempre (falla cerrado).
+- **Las altas a mano (§41) frenan igual en Lima**: son una decisión de una
+  persona (un fraude, una clienta que avisó que no va a recibir).
+- **La chapa «Lista negra» se queda** en el Master y en Leads: es un hecho del
+  cliente. **El aviso de la ficha pasa a informativo** (info, no crit): «En
+  Lima no frena: el pedido se confirma y sale contra entrega.» En el lead, con
+  la dirección de entrega en Lima y solo en la automática: «En Lima puede pagar
+  contra entrega: la Lista negra solo frena fuera de Lima.»
+- **El bot de Kapso y «Generar pedido»** (y «Recuperar carrito») miran la
+  cobertura de la dirección (`order_coverage_for`): en Lima no devuelven
+  `prepay_required` por la automática, no rechazan con «Pago total» ni agregan
+  el aviso del adelanto. Sin cobertura conocida, pide lo de siempre.
+- **La web de las tiendas** (owner: «También en la web»): el contrato
+  `docs/kapta/lista-negra-lima.md` suma al envío diario un campo `lima`
+  (`celulares` y `correos` de la automática, y los `distritos` de Lima
+  Metropolitana y Callao donde Kapta entrega contra entrega; hoy todos menos
+  Pucusana). Es compatible hacia atrás: una tienda que no lo implementa sigue
+  bloqueando a todos. **Kapta lo empieza a mandar cuando las tiendas confirmen
+  que el endpoint lo acepta** (pendiente, §41.9).
 
 ## 42. Conector para agentes de IA (Grok Bot, 08-11-2026)
 

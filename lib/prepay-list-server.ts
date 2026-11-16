@@ -22,6 +22,7 @@
 // de la base como argumento; nada de aquí lee un secreto.
 
 import { forgetListaNegraIndex } from "@/lib/lista-negra-cache";
+import { listaNegraAutoBrakes } from "@/lib/lista-negra";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import {
@@ -203,9 +204,15 @@ export interface PrepayOrderRow {
   total_refunded?: number | null;
   payment_state?: string | null;
   payment_gateway?: string | null;
+  /**
+   * La cobertura del pedido: en Lima la lista automática no frena (MOM
+   * §41.12). Si la fila no la trae, la compuerta la lee sola, y solo cuando
+   * la automática frenaría (un celular que no está en la lista no cuesta nada).
+   */
+  coverage?: string | null;
 }
 
-const ORDER_COLUMNS = "order_id,store_id,customer_phone,financial_status,total_refunded,payment_state,payment_gateway";
+const ORDER_COLUMNS = "order_id,store_id,customer_phone,financial_status,total_refunded,payment_state,payment_gateway,coverage";
 
 export type PrepayOrderCheck =
   /**
@@ -213,7 +220,7 @@ export type PrepayOrderCheck =
    * así que su guía sale con cobro cero —la última puerta de Swayp lo usa para
    * no mandar a cobrar el total a quien ya pagó—. Sin pedido leído, false.
    */
-  | { state: "ok"; listed: boolean; fullyPaid: boolean }
+  | { state: "ok"; listed: boolean; fullyPaid: boolean; limaExempt?: boolean }
   /** Un alta a mano, con lo que pide (0329; sin la columna, el total). */
   | { state: "blocked"; source: "lista"; message: string; motivo: string; entry: PrepayEntryRow; requirement: PrepayEntryRequirement }
   /**
@@ -295,10 +302,28 @@ export async function prepayOrderCheck(
       point: point === "confirmar" ? "confirmar" : "guia",
     });
     if (brake.state === "ok") return { state: "ok", listed: true, fullyPaid };
+    // En Lima la automática no frena (owner, 16-11-2026, MOM §41.12): se
+    // confirma y sale contra entrega. Las altas a mano (arriba) sí frenan. Si
+    // la cobertura no se puede leer, frena como siempre (falla cerrado).
+    const coverage = await coverageOfOrder(admin, row);
+    if (!coverage.ok) return unread(coverage.error);
+    if (!listaNegraAutoBrakes(coverage.coverage)) return { state: "ok", listed: true, fullyPaid, limaExempt: true };
     return { state: "blocked", source: "pago_online", message: brake.message, motivo: pagoOnlineMotivo(auto.who), entry: null, failed: auto.failed, requirement: auto.requirement };
   } catch (e) {
     return unread(e instanceof Error ? e.message : String(e));
   }
+}
+
+/** La cobertura del pedido: la de la fila si la trae, o una lectura de `order_master`. */
+async function coverageOfOrder(
+  admin: SupabaseClient,
+  row: PrepayOrderRow,
+): Promise<{ ok: true; coverage: string | null } | { ok: false; error: string }> {
+  if (row.coverage !== undefined) return { ok: true, coverage: row.coverage };
+  if (!row.order_id) return { ok: true, coverage: null };
+  const { data, error } = await admin.from("order_master").select("coverage").eq("order_id", row.order_id).maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, coverage: ((data as { coverage?: string | null } | null)?.coverage ?? null) };
 }
 
 /**

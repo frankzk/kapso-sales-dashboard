@@ -314,7 +314,7 @@ describe("dónde está la compuerta (una por camino, ninguno sin ella)", () => {
   it("«Generar pedido» y el bot no crean contra entrega para la lista", () => {
     const leads = read("app/dashboard/leads/actions.ts");
     const gen = leads.slice(leads.indexOf("export async function generateOrder("));
-    const block = gen.indexOf("const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId,");
+    const block = gen.indexOf("const prepayBlock = await generateOrderPrepayBlock(\n    admin,\n    ctx.storeId,");
     expect(block).toBeGreaterThan(0);
     expect(block).toBeLessThan(gen.indexOf("loadStoreOrderPlatform(admin, ctx.storeId)"));
     const bot = read("lib/bot-orders.ts");
@@ -322,7 +322,7 @@ describe("dónde está la compuerta (una por camino, ninguno sin ella)", () => {
     expect(bot.indexOf('fail("prepay_required"')).toBeLessThan(bot.indexOf("const claimed = await claimBotOrder("));
     // «Recuperar carrito» completa un borrador contra entrega: la misma compuerta, antes de Shopify.
     const recover = leads.slice(leads.indexOf("export async function recoverCart("));
-    const rb = recover.indexOf("const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId, [l.phone]);");
+    const rb = recover.indexOf("const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId, [l.phone], await addressCoverage(admin, ctx.storeId, l));");
     expect(rb).toBeGreaterThan(0);
     expect(rb).toBeLessThan(recover.indexOf("completeDraftOrder({"));
   });
@@ -331,7 +331,7 @@ describe("dónde está la compuerta (una por camino, ninguno sin ella)", () => {
     expect(read("components/order-drawer.tsx")).toContain("<PrepayListBanner");
     // El lead, con el mismo aviso de las dos listas, arriba de «Cómo sale el pedido».
     const drawer = read("components/leads-drawer.tsx");
-    const banner = drawer.indexOf('{prepayStatus?.mark && <ListaNegraBanner motivo={prepayStatus.mark.motivo} requirement={prepayStatus.mark.requirement} context="lead" />}');
+    const banner = drawer.indexOf("{prepayStatus?.mark && (\n              <ListaNegraBanner");
     expect(banner).toBeGreaterThan(0);
     expect(banner).toBeLessThan(drawer.indexOf("<LeadPostOrderChoices"));
     const link = read("app/dashboard/pedidos/prepay-actions.ts");

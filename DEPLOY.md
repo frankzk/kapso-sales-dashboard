@@ -85,6 +85,19 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Lista negra: en Lima la automática no frena; las altas a mano sí (sin migración, MOM §41.12)
+
+Sin migración ni variables. Decisión del owner (#KP205510, segundo intento por Aliclik frenado por «falta el
+adelanto de S/ 20»):
+- Un pedido de **Lima** (`order_master.coverage = 'lima'`) con el celular en la Lista negra **automática** se
+  confirma y sale contra entrega: Aliclik, Grupo GF, Repro Lima, el reintento automático, Chatby y la
+  confirmación por llamada (`prepayOrderCheck` → `limaExempt`). El aviso de la ficha pasa a informativo.
+- Las **altas a mano** frenan igual en Lima.
+- El bot de Kapso y «Generar pedido» con una dirección de Lima (`order_coverage_for`) crean el pedido contra
+  entrega sin el aviso del adelanto.
+- La web de las tiendas: contrato nuevo `docs/kapta/lista-negra-lima.md` (campo `lima` del envío diario,
+  compatible hacia atrás) para que el owner se lo pase a WordPress y COD Core. Kapta todavía no lo manda.
+
 ### 16-11-2026 · Repro Lima: lo vencido sale el próximo día de reparto; el domingo sin «Hoy»; la guía que espera recojo sin «Vencido» (sin migración, MOM §9.5, DESIGN.md)
 
 Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`.
