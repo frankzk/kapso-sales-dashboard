@@ -85,6 +85,17 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · La caja de Grupo GF ya reportada «No entregado» no frena otra guía (0350, MOM §9.5)
+
+1. **Migración `0350_gf_replaced_by_aliclik_any_coverage.sql`**, ANTES del
+   código: redefine `gf_replace_output_with_aliclik` sin la condición de Lima
+   (mismas rejas, solo `service_role`, sin barrido). Idempotente.
+2. El código deja de contar como «guía activa» la salida propia con el
+   motorizado cuya última parada es «No entregado» (#AUR900778).
+3. Verificar: en #AUR900778, «Crear guía en Aliclik» ya no dice «ya tiene una
+   guía activa»; al crearla, MOM-AUR900778-PROPIO-00F1A578 pasa a custodia
+   `retorno` con el hecho `output_replaced`.
+
 ### 16-11-2026 · Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5 y §40)
 
 **Migración 0349: ya aplicada en producción (16-11-2026), antes del código.** `0349_lima_courier_auto.sql` crea

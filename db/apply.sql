@@ -699,4 +699,6 @@
 \ir migrations/0348_dispatch_courier.sql
 \echo 'Applying 0349_lima_courier_auto.sql'
 \ir migrations/0349_lima_courier_auto.sql
+\echo 'Applying 0350_gf_replaced_by_aliclik_any_coverage.sql'
+\ir migrations/0350_gf_replaced_by_aliclik_any_coverage.sql
 \echo 'Done.'

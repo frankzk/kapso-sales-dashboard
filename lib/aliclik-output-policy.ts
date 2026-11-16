@@ -1,6 +1,6 @@
 import { swaypGuiaDeVuelta } from "@/lib/swayp-desde-confirmacion";
 import {
-  isFillableRouteOutput, MAX_OUTPUTS_PER_ORDER, puertaDeSalidaAdicional,
+  gfNoEntregadaReportada, isFillableRouteOutput, MAX_OUTPUTS_PER_ORDER, puertaDeSalidaAdicional,
   type PuertaDeSalidaAdicional, type SalidaExistente,
 } from "@/lib/shipment-output";
 
@@ -49,7 +49,10 @@ export function aliclikOutputPolicy(input: {
 }): AliclikOutputPolicyResult {
   const live = input.outputs.filter((output) =>
     !["anulado", "transferido"].includes(output.delivery_status) &&
-    !isFillableRouteOutput(output) && !swaypGuiaDeVuelta(output),
+    !isFillableRouteOutput(output) && !swaypGuiaDeVuelta(output) &&
+    // La caja de Grupo GF ya reportada «No entregado» (16-11-2026): no estorba;
+    // al crear la guía queda «en devolución» (`gf_replace_output_with_aliclik`).
+    !gfNoEntregadaReportada(output),
   );
   // GF Courier por API → Aliclik (owner, 15-11-2026). Si una persona decide
   // mandarlo por Aliclik, Kapta anula sola la guía GF mientras GF todavía no la

@@ -5499,6 +5499,19 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
   - **Lo que ya estaba así** (#KP203491 y los demás) lo arregla el barrido de la
     0337 al aplicarla, con la misma función y la guía más antigua primero; el
     Master de esos pedidos lo recalcula `master-reconcile`.
+  - **La caja ya reportada «No entregado» no frena la guía nueva, en ninguna
+    cobertura (0350, owner 16-11-2026: «no debería ser un limitante para crear
+    guía en otro lado, porque ya tenemos el reporte de la NO entrega»).**
+    #AUR900778 (Chimbote) salió por error en la ruta de Roy del 14-11, que la
+    reportó «No entregado · Provincia»; como la ruta no se había cerrado, la
+    caja seguía viva y la guía de Aliclik se negaba («ya tiene una guía
+    activa»). Ahora una salida propia `pendiente`, con el motorizado y cuya
+    última parada dice «No entregado» no estorba a otra salida
+    (`gfNoEntregadaReportada`, en `salidasQueEstorban` y en la regla de
+    Aliclik): en Lima no pide motivo por ella, y en provincia ya no obliga a
+    cerrar la ruta. Al guardar la guía de Aliclik, la 0350 la deja en
+    devolución también fuera de Lima, con las mismas rejas de la 0337. Sin
+    reporte, o con la parada «Entregado», sigue frenando como antes.
 - **Y la bandeja no ofrece «Aprobar» con el reintento ya en marcha
   (13-11-2026).** Con una salida viva de otro courier (`otherLiveCourier`: la
   guía de Aliclik sin entregar ni volver), `retryChainOf`
