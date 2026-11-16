@@ -71,11 +71,12 @@ function macroGuia(g: GuideSnapshot, over: Partial<MacroGuideSnapshot> = {}): Ma
     rescheduled_at: g.rescheduled_at,
     returned_at: g.returned_at,
     pickup_state: g.pickup_state,
-    custody_state: g.swayp_state === 8 ? "retorno" : "courier",
+    custody_state: g.swayp_state === 8 ? "retorno" : g.dispatched_at || g.delivery_status === "en_ruta" ? "courier" : null,
     reported_status: g.reported_status,
     swayp_state: g.swayp_state,
     closed_at: g.closed_at,
     updated_at: g.updated_at,
+    created_at: g.created_at,
     ...over,
   };
 }
@@ -310,5 +311,27 @@ describe("el botón", () => {
   it("la versión sube y el MOM lo documenta", () => {
     expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.40");
     expect(read("docs/mom/master-pedidos-v1.md")).toContain("### 11.11 Swayp desde Por confirmar (v1.24, 09-10-2026)");
+  });
+});
+
+describe("una salida posterior que salió y se anuló también manda (16-11-2026, #KP203694)", () => {
+  const fallida = () => guia({ swayp_state: 9, delivery_status: "anulado", reported_status: "Swayp · Falta Inventario (18)" });
+  const aliclikAnulada = (over: Partial<GuideSnapshot> = {}) =>
+    guia({
+      id: "al1", courier: "aliclik", guide_code: "AUR5X3", delivery_status: "anulado", swayp_state: null,
+      dispatched_at: hace(0.3), created_at: hace(0.5), assigned_at: hace(0.5), ...over,
+    });
+  const reconfirmado = { kind: "confirmed", occurred_at: hace(0.8) };
+
+  it("Aliclik la recogió y la anuló: no vuelve a «Por generar rótulo»", () => {
+    const r = resolver([fallida(), aliclikAnulada()], [caso, reconfirmado]);
+    // Anulada después de salir: la recuperación de provincia, como cualquier otra.
+    expect(r.stage).toBe("en_curso");
+    expect(r.substage).toBe("gestion_reproprovincia");
+  });
+
+  it("una guía posterior anulada sin haber salido no cambia nada: sigue el rótulo nuevo", () => {
+    const r = resolver([fallida(), aliclikAnulada({ dispatched_at: null })], [caso, reconfirmado]);
+    expect(r.substage).toBe("por_generar_rotulo");
   });
 });

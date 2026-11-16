@@ -11746,6 +11746,14 @@ implica confirmación» (§6.1), como la del §11.9.
   (la guía nueva toma el pedido), la anulación en Shopify, o una confirmación
   (`confirmed`) posterior al envío, que lo pasa a **Preparación · Por generar
   rótulo** para la salida nueva.
+- Desde el 16-11-2026 (#KP203694) también deja de mandar una salida **nacida
+  después del envío que ya salió de la empresa** (`hasExternalCustody`), aunque
+  después se anule: Aliclik recogió la caja y anuló la guía con la caja en su
+  poder. Esa anulación después de salir abre la recuperación como cualquier
+  otra (**En curso · Gestión Reproprovincia**, `guideAnnulledAfterDispatch`), en
+  vez de volver a «Por generar rótulo» por la reconfirmación de antes de esa
+  guía. Una guía posterior anulada sin haber salido no cambia nada. El registro
+  de Swayp desde Por confirmar la cuenta igual («Salió por otra vía»).
 - **La guía Swayp en Devolución no frena la guía Aliclik.** La regla «fuera de
   Lima no hay otra salida viva» pide anular la anterior, pero una guía Swayp en
   Devolución no se puede anular (Swayp solo cancela en Generada) ni se va a
