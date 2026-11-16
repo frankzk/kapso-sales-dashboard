@@ -771,7 +771,7 @@ describe("las guardas, en el código", () => {
     expect(board).toContain('key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia"');
     // «Sin día y no entregados» (16-11-2026): también los no entregados por acordar, con el courier del lote.
     expect(board).toContain('return cls?.step === "no_entregados" && limaStepPart(cls) === "por_acordar" && pathOf(row).kind === "acuerdo_nuevo";');
-    expect(board).toContain("<CourierPicker value={moveCourier} onChange={setMoveCourier} choices={moveCourierChoices} optional={movableNew === 0} />");
+    expect(board).toContain("<CourierPicker value={moveCourier} onChange={setMoveCourier} choices={moveCourierChoices} optional={movableNew === 0} autoActive={courierRows.every((row) => courierAuto.has(row.storeId))} />");
     expect(board).toContain('courier: path.kind === "acuerdo" ? null : moveCourier,');
     expect(board).toContain("const needsMoveCourier = movableNew > 0 && !moveCourier;");
     expect(board).toContain("setMoveDay(suggestedDay);");

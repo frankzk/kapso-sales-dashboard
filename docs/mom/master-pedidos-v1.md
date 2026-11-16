@@ -6837,10 +6837,10 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     `scheduledFor`, como en el acuerdo); si GF no la crea, el día queda
     guardado, se dice por qué y se enlaza a la Mesa de ruta. Con **Aliclik o
     Swayp** queda programado con ese courier y la guía GF automática no lo
-    toma (`gfAutoSkip` → `otro_courier`, §29.17). Hoy su guía se crea ese día
-    con «Guía Aliclik» o desde la Mesa de ruta; que Kapta la cree sola esa
-    mañana es la entrega siguiente (decisión del owner: «Kapta la crea ese
-    día»). Con **Grupo GF**, sale en el reparto propio de ese día.
+    toma (`gfAutoSkip` → `otro_courier`, §29.17). Su guía la crea Kapta con
+    «Guía Aliclik y Swayp del día programado» (abajo); con ella Apagada, se crea
+    a mano con «Guía Aliclik» o desde la Mesa de ruta. Con **Grupo GF**, sale en
+    el reparto propio de ese día.
   - **Un no entregado «Por acordar»** (un «Por reprogramar Lima» sin acuerdo,
     sin reintento por Aliclik) queda **acordado sin llamada** para ese día con
     ese courier (`programReproWithoutCall`, decisión del owner: «sin día y no
@@ -6856,6 +6856,41 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     y confirma.
   - «Fecha agendada» dice el courier bajo el día: «Programar envío · Aliclik»,
     «Acordado con la clienta · GF Courier» (`agendaOriginLine`).
+- **«Guía Aliclik y Swayp del día programado»: Kapta la crea** (decisión del
+  owner: «Kapta la crea ese día»; 0349, `lib/lima-courier-auto.ts` y
+  `lib/lima-courier-auto-server.ts`, Automatizaciones → Logística Lima, §40).
+  - **Qué entra**: lo de Lima programado con Aliclik o Swayp. El «Programar
+    envío» con courier en Preparación · Por generar rótulo
+    (`limaCourierEnvioCourier`) y el acuerdo vigente de Repro Lima, el caso
+    abierto de su episodio (`limaCourierCaseCourier`). El acuerdo manda sobre
+    el envío del mismo pedido.
+  - **Cuándo**: Aliclik, el mismo día, a las 8:00, 10:00 y 12:00 de Lima,
+    antes de su corte. **Swayp arma su ruta el día anterior**, así que su
+    guía se crea la víspera de su próximo día de despacho (de lunes a sábado,
+    `limaCourierTargetDay`), en esas pasadas y en la de las 15:00, con esa
+    fecha de despacho.
+  - **Por dónde**: los mismos caminos que las personas. Aliclik va por
+    `createAliclikGuideFor` con el transporte AUTOECOM si se puede
+    (`defaultAliclikTransport`), con sus compuertas, candado e intención, y
+    el origen `dia_programado_lima`. Como el reintento de Lima, ese origen
+    puede justificar otra salida: el motivo lo escribe la regla
+    (`limaCourierMotive`, `MOTIVE_ORIGIN_KINDS`). Swayp va por
+    `emitirGuiaSwaypDirecta`, sin actor y con la evidencia del automático.
+  - **Si no sale**: un intento por pedido y día. Deja
+    `lima_courier_auto_failed` en el historial y avisa por Telegram de ese
+    pedido; lo toma una persona. En Simulación solo dice qué habría hecho:
+    Aliclik cotiza y mira las compuertas de Kapta (`aliclikCreateGates`), y
+    Swayp solo lo dice. El registro de hoy y ayer queda en
+    `lima_courier_auto_log`.
+  - **Lo que pide al programar**: Swayp, desde mañana y nunca un domingo;
+    Aliclik, con la ubicación del pedido (`programCourierProblem`, para no
+    enterarse la mañana del día).
+  - **Cómo se dice**: con la automática en Activo, «Sale con» dice «Aliclik:
+    la mañana de ese día Kapta crea su guía…» (`programCourierHint`).
+    «Próximo paso» dice «Sale mañana con Aliclik: Kapta crea su guía mañana en
+    la mañana» o «…con Swayp: Kapta crea su guía hoy, la víspera»
+    (`limaAutoGuideBy`), y «Mañana sin guía» no los alarma. Guardar el acuerdo
+    dice «Kapta crea su guía…» en vez de «créala desde la Mesa de ruta».
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
@@ -26530,6 +26565,13 @@ Vercel— y algunas no tenían interruptor.
     fila nombra las tiendas con GF Courier por API y enlaza a sus Ajustes. Debajo está «Guía GF automática: hoy y
     ayer» (`#guia-gf-hoy-y-ayer`), con lo que creó cada pasada o lo que habría creado en Simulación. Sin la 0345 la
     fila se bloquea y funciona como Apagado.
+    Y «Guía Aliclik y Swayp del día programado» (§9.5, 16-11-2026; 0349, clave `lima_courier_auto`,
+    `lima_courier_auto_settings.mode`, `setLimaCourierAutoMode`, `/api/cron/lima-courier-auto` a las
+    `12 13,15,17,20 * * *` UTC). Lo de Lima que Repro Lima programó con Aliclik o Swayp: a las 8:00, 10:00 y 12:00
+    crea la guía de Aliclik (AUTOECOM si se puede) del día; la de Swayp, la víspera (también a las 15:00), con su
+    fecha de despacho. Las mismas tres posiciones, nace Apagado; Activo pide confirmación y no se deja elegir sin
+    `ALICLIK_WRITE_ENABLED` ni Swayp en el servidor. Debajo, «Guía del día programado: hoy y ayer»
+    (`#guia-dia-programado-hoy-y-ayer`). Sin la 0349 la fila se bloquea y funciona como Apagado.
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp

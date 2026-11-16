@@ -85,6 +85,32 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5 y §40)
+
+**Migración 0349: ya aplicada en producción (16-11-2026), antes del código.** `0349_lima_courier_auto.sql` crea
+`lima_courier_auto_settings` (la posición por organización; sin fila es Apagado) y `lima_courier_auto_log` (lo que hizo
+o habría hecho cada pasada, uno por pedido, día y modo, con el courier). Las dos tienen RLS de lectura para la
+organización y escritura solo del servidor. Es aditiva: sin `drop`, no toca datos y se puede correr otra vez. Sin ella,
+el cron responde 502 con «Falta la migración 0349» y la fila del panel queda bloqueada como Apagado.
+
+Cron nuevo: `/api/cron/lima-courier-auto` a las `12 13,15,17,20 * * *` UTC (8:12, 10:12, 12:12 y 15:12 de Lima), con
+`CRON_SECRET`. Sin variables nuevas: usa `ALICLIK_WRITE_ENABLED` y la integración de Swayp. **Nace Apagado en todas las
+organizaciones**: desplegar no crea ninguna guía.
+- Aliclik: el mismo día, de 8:00 a 12:00, con AUTOECOM si se puede, por `createAliclikGuideFor` (origen
+  `dia_programado_lima`).
+- Swayp: la víspera de su próximo día de despacho, por `emitirGuiaSwaypDirecta`.
+- Al programar, Repro Lima pide Swayp desde mañana y la ubicación para Aliclik.
+
+Verificar:
+1. `select count(*) from lima_courier_auto_settings;` → 0. En Automatizaciones → «Logística Lima», «Guía Aliclik y
+   Swayp del día programado» sale en Apagado.
+2. `GET /api/cron/lima-courier-auto?dry=1` con `Authorization: Bearer $CRON_SECRET` responde 200 con `candidates` e
+   `items`, y no escribe nada: `lima_courier_auto_log` sigue vacío.
+3. Poner Simulación. Después de la pasada de las 8:12, «Guía del día programado: hoy y ayer» lista lo programado para
+   hoy con Aliclik («Habría creado la guía» o «No la crearía»), sin guías nuevas ni avisos por Telegram.
+4. Activo pide confirmación. Un pedido sin ubicación deja «lima_courier_auto_failed» en su historial y una sola
+   alerta por Telegram; la pasada siguiente no lo repite.
+
 ### 16-11-2026 · Repro Lima: programar en lote con courier (0348, MOM §6.2, §9.5 y §29.17, DESIGN.md)
 
 **Migración 0348: ya aplicada en producción (16-11-2026), antes del código.** `0348_dispatch_courier.sql` agrega

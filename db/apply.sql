@@ -697,4 +697,6 @@
 \ir migrations/0347_lima_repro_gf_courier.sql
 \echo 'Applying 0348_dispatch_courier.sql'
 \ir migrations/0348_dispatch_courier.sql
+\echo 'Applying 0349_lima_courier_auto.sql'
+\ir migrations/0349_lima_courier_auto.sql
 \echo 'Done.'

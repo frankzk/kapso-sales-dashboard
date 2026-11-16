@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
 import { loadGfAutoActiveStores } from "@/lib/gf-auto-guide-server";
+import { loadLimaCourierAutoActiveStores } from "@/lib/lima-courier-auto-server";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/ui";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
@@ -61,10 +62,12 @@ async function ReproLimaContent() {
   let quickGuide: { aliclik: boolean; gfStores: string[] } | undefined;
   // Las tiendas con GF Courier por API: «Programar» ofrece GF Courier en vez de Grupo GF (16-11-2026).
   let gfApiStores: string[] = [];
+  // Las tiendas con la guía Aliclik y Swayp del día programado en Activo (0349).
+  let courierAutoStores: string[] = [];
   try {
     let permissions: Awaited<ReturnType<typeof getMasterPermissions>>;
     let gfStores: string[];
-    [data, pending, permissions, autoGuideStores, gfStores] = await Promise.all([
+    [data, pending, permissions, autoGuideStores, gfStores, courierAutoStores] = await Promise.all([
       loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true }),
       loadLimaPending(createAdminSupabase(), scope),
       getMasterPermissions(),
@@ -72,6 +75,8 @@ async function ReproLimaContent() {
       loadGfAutoActiveStores(createAdminSupabase(), [...scope.storeIds]).catch(() => []),
       // Best-effort: sin la lectura, la fila no ofrece «Guía GF» (la ficha sí).
       loadGfCourierStores([...scope.storeIds]).catch(() => []),
+      // Best-effort: sin la lectura, «Programar» dice que la guía se crea a mano.
+      loadLimaCourierAutoActiveStores(createAdminSupabase(), [...scope.storeIds]).catch(() => []),
     ]);
     gfApiStores = gfStores;
     canScheduleDispatch = permissions.can("master.edit");
@@ -84,5 +89,5 @@ async function ReproLimaContent() {
     const message = error instanceof Error ? error.message : String(error);
     return <EmptyState title="No pudimos cargar Repro Lima">{`${message} Recarga la página.`}</EmptyState>;
   }
-  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} quickGuide={scope.retriesOnly ? undefined : quickGuide} gfApiStores={gfApiStores} />;
+  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} quickGuide={scope.retriesOnly ? undefined : quickGuide} gfApiStores={gfApiStores} courierAutoStores={courierAutoStores} />;
 }

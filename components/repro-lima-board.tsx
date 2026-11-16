@@ -81,7 +81,7 @@ type Feedback = {
   mesa?: Array<{ orderId: string; orderName: string }>;
 };
 
-export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [], quickGuide, gfApiStores = [] }: {
+export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [], quickGuide, gfApiStores = [], courierAutoStores = [] }: {
   data: ReproLimaData;
   pending: LimaPendingOrder[];
   /** Despacho sin `repro_lima.manage` (03-11-2026): solo «Reintentos Aliclik», sin Atender ni Agendar. */
@@ -99,6 +99,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   quickGuide?: { aliclik: boolean; gfStores: readonly string[] };
   /** Las tiendas con GF Courier por API: al programar se ofrece GF Courier en vez de Grupo GF (16-11-2026). */
   gfApiStores?: readonly string[];
+  /** Las tiendas con «Guía Aliclik y Swayp del día programado» en Activo (0349): Kapta crea esa guía sola. */
+  courierAutoStores?: readonly string[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -121,6 +123,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const openDrawer = useOpenOrderDrawer();
   const gfStores = useMemo(() => new Set(quickGuide?.gfStores ?? []), [quickGuide?.gfStores]);
   const gfApi = useMemo(() => new Set(gfApiStores), [gfApiStores]);
+  const courierAuto = useMemo(() => new Set(courierAutoStores), [courierAutoStores]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
   const hiddenParam = searchParams.getAll("ocultar").join("|");
@@ -146,7 +149,10 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const agendaDays = useMemo(() => agendaWindow(today), [today]);
   const autoGuideKey = autoGuideStores.join(",");
   const autoGuide = useMemo(() => new Set(autoGuideKey ? autoGuideKey.split(",") : []), [autoGuideKey]);
-  const classes = useMemo(() => classifyLimaRows(scoped, data.rows, today, agendaDays, { autoGuideStores: autoGuide }), [scoped, data.rows, today, agendaDays, autoGuide]);
+  const classes = useMemo(
+    () => classifyLimaRows(scoped, data.rows, today, agendaDays, { autoGuideStores: autoGuide, courierAutoStores: courierAuto }),
+    [scoped, data.rows, today, agendaDays, autoGuide, courierAuto],
+  );
   const counts = useMemo(() => limaBoardCounts(scoped, classes), [scoped, classes]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
   // `loadReproLima` ya ordena los casos (`sortRepro`): No entregados y Llamar después siguen ese orden.
@@ -302,6 +308,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}
             hasDay={Boolean(classes.get(row.orderId)?.agendaDay)}
             gfCourierApi={gfApi.has(row.storeId)}
+            courierAuto={courierAuto.has(row.storeId)}
             currentCourier={isDispatchCourier(row.scheduledCourier) ? row.scheduledCourier : null}
             onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }}
           />
@@ -680,7 +687,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           </div>
           {courierRows.length > 0 && (
             <div className="space-y-1">
-              <CourierPicker value={moveCourier} onChange={setMoveCourier} choices={moveCourierChoices} optional={movableNew === 0} />
+              <CourierPicker value={moveCourier} onChange={setMoveCourier} choices={moveCourierChoices} optional={movableNew === 0} autoActive={courierRows.every((row) => courierAuto.has(row.storeId))} />
               {movableNew > 0 && movableEnvio > 0 && (
                 <p className="text-xs text-ink-500">{`${movableNew === 1 ? "Uno es un no entregado" : `${movableNew} son no entregados`}: queda${movableNew === 1 ? "" : "n"} acordado${movableNew === 1 ? "" : "s"} sin llamada. Los demás van por «Programar envío».`}</p>
               )}

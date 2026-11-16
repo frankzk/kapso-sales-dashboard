@@ -13,7 +13,7 @@ import { cn } from "@/components/ui";
 import { Banner, FIELD_BOX, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { agendarReproLima, type AgendarResult } from "@/app/dashboard/pedidos/repro-lima/agenda-actions";
-import { PROGRAM_COURIER_HINT, agendaDayLabel, agendarMaxDay, agendarQuickDays, programCourierChoices, programarConfirmLabel, programarVerb, type AgendarPath } from "@/lib/repro-lima-blocks";
+import { agendaDayLabel, programCourierHint, agendarMaxDay, agendarQuickDays, programCourierChoices, programarConfirmLabel, programarVerb, type AgendarPath } from "@/lib/repro-lima-blocks";
 import { DISPATCH_COURIER_LABEL, type DispatchCourier } from "@/lib/dispatch-date";
 import { programDayLabel } from "@/lib/dispatch-day";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
@@ -109,11 +109,13 @@ export function ChannelPicker({ value, onChange }: { value: AgendarChannel; onCh
  * el elegido: GF Courier crea la guía para ese día; Aliclik y Swayp quedan
  * programados.
  */
-export function CourierPicker({ value, onChange, choices, optional = false }: {
+export function CourierPicker({ value, onChange, choices, optional = false, autoActive = false }: {
   value: DispatchCourier | null;
   onChange: (courier: DispatchCourier | null) => void;
   choices: readonly DispatchCourier[];
   optional?: boolean;
+  /** «Guía Aliclik y Swayp del día programado» en Activo (0349): Kapta crea la guía sola. */
+  autoActive?: boolean;
 }) {
   return (
     <div className="space-y-1.5">
@@ -131,7 +133,7 @@ export function CourierPicker({ value, onChange, choices, optional = false }: {
         ))}
       </div>
       <p className="text-xs leading-5 text-ink-500">
-        {value ? PROGRAM_COURIER_HINT[value] : optional ? "Sin courier: la ruta la decide quien crea la guía." : "Elige con qué courier sale."}
+        {value ? programCourierHint(value, autoActive) : optional ? "Sin courier: la ruta la decide quien crea la guía." : "Elige con qué courier sale."}
       </p>
     </div>
   );
@@ -142,7 +144,7 @@ export function CourierPicker({ value, onChange, choices, optional = false }: {
  * un popover con el día, el courier (sin acuerdo) y, con un acuerdo, por dónde
  * se habló.
  */
-export function AgendarButton({ row, path, today, onDone, size = "sm", suggested, hasDay, gfCourierApi = false, currentCourier = null }: {
+export function AgendarButton({ row, path, today, onDone, size = "sm", suggested, hasDay, gfCourierApi = false, currentCourier = null, courierAuto = false }: {
   row: Pick<LimaPendingOrder, "orderId" | "orderName">;
   path: Exclude<AgendarPath, { kind: null }>;
   today: string;
@@ -156,6 +158,8 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
   gfCourierApi?: boolean;
   /** El courier con que ya está programado el envío (0348), si tiene uno. */
   currentCourier?: DispatchCourier | null;
+  /** Su organización tiene la guía del día programado en Activo (0349). */
+  courierAuto?: boolean;
 }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -215,7 +219,7 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
             </p>
             <DayPicker today={today} maxDay={maxDay} value={day} onChange={setDay} />
             {path.kind === "acuerdo" && <ChannelPicker value={channel} onChange={setChannel} />}
-            {path.kind !== "acuerdo" && <CourierPicker value={courier} onChange={setCourier} choices={choices} optional={path.kind === "envio"} />}
+            {path.kind !== "acuerdo" && <CourierPicker value={courier} onChange={setCourier} choices={choices} optional={path.kind === "envio"} autoActive={courierAuto} />}
             {path.kind === "envio" && (
               <label className="grid gap-1 text-xs font-medium text-ink-600">
                 Nota (opcional)

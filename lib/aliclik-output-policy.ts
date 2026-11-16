@@ -18,7 +18,7 @@ export interface AliclikExistingOutput extends SalidaExistente {
  * «pide motivo». El motivo no lo pone una persona: lo escribe la regla que el
  * owner encendió en Automatizaciones, y el texto lo dice.
  */
-export const MOTIVE_ORIGIN_KINDS = ["reintento_lima"] as const;
+export const MOTIVE_ORIGIN_KINDS = ["reintento_lima", "dia_programado_lima"] as const;
 
 /**
  * ¿Puede esta creación justificar otra salida con motivo? Una persona, sí; el
