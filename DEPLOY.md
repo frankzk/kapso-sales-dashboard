@@ -106,6 +106,9 @@ Sin migración ni variables. **Cambian dos crons** (`vercel.json`):
   12:00, 15:00, 18:00, 20:00 y 21:00 de Lima. Aliclik toma lo de hoy en la mañana y lo de mañana desde las 15:00, solo
   si Aliclik lo recoge ese día. Swayp toma lo de mañana en todas las pasadas, hasta las 21:00.
 
+En Automatizaciones, la fila «Guía Aliclik y Swayp del día programado» suma **«Correr ahora»**: hace la misma pasada,
+ya, para esa organización.
+
 Verificar: un pedido de Lima de una tienda con GF Courier que entra a «Por generar rótulo» tiene su guía GF en menos
 de 10 minutos, y aparece en «Guía GF automática: hoy y ayer». `GET /api/cron/lima-courier-auto?dry=1` después de las
 15:00 lista lo programado con Aliclik para mañana.

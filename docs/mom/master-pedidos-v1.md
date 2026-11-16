@@ -26611,7 +26611,10 @@ Vercel— y algunas no tenían interruptor.
     12:00 crea la guía de Aliclik (AUTOECOM si se puede) de hoy, y a las 15:00, 18:00, 20:00 y 21:00 la de mañana (si
     Aliclik la recoge ese día); la de Swayp, la víspera, hasta las 21:00, con su fecha de despacho. Las mismas tres posiciones, nace Apagado; Activo pide confirmación y no se deja elegir sin
     `ALICLIK_WRITE_ENABLED` ni Swayp en el servidor. Debajo, «Guía del día programado: hoy y ayer»
-    (`#guia-dia-programado-hoy-y-ayer`). Sin la 0349 la fila se bloquea y funciona como Apagado.
+    (`#guia-dia-programado-hoy-y-ayer`). Sin la 0349 la fila se bloquea y funciona como Apagado. Su fila tiene
+    **«Correr ahora»** (16-11-2026, `runLimaCourierAutoNow`): la misma pasada del cron, ya, para esa organización y con
+    la hora de ahora (en Simulación solo dice qué habría creado; en Activo pide confirmación y crea). Dice en una línea
+    cuántas creó, cuántas no salieron y cuántas esperan otra pasada (`limaCourierRunSummary`).
   - **Con interruptor por tienda:** los automáticos de los agentes de voz
     (Reproprovincia y Leads) y de «Recuperar pedidos devueltos» —solo con su
     función encendida en Ajustes—, las plantillas automáticas de WhatsApp

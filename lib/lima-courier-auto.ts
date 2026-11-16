@@ -209,6 +209,26 @@ export function limaCourierAutoActivoBlocker(input: { aliclikWrite: boolean; swa
   return null;
 }
 
+/**
+ * Lo que dice «Correr ahora»: cuántas guías creó, cuántas no salieron, cuántas
+ * habría creado (Simulación) y cuántas esperan otra pasada. Pura.
+ */
+export function limaCourierRunSummary(items: readonly { outcome: string }[]): string {
+  const n = (outcome: string) => items.filter((i) => i.outcome === outcome).length;
+  if (!items.length) return "No hay nada programado con Aliclik o Swayp para lo que atiende esta pasada.";
+  const parts = [
+    n("creada") ? `${n("creada")} creada${n("creada") === 1 ? "" : "s"}` : null,
+    n("simulada") ? `${n("simulada")} habría creado (Simulación)` : null,
+    n("fallo") ? `${n("fallo")} no salió${n("fallo") === 1 ? "" : "eron"} (mira «hoy y ayer»)` : null,
+    n("en_curso") ? `${n("en_curso")} creándose` : null,
+    n("espera") ? `${n("espera")} esperan otra pasada (Aliclik las recogería antes)` : null,
+    n("ya_tiene_guia") ? `${n("ya_tiene_guia")} ya tenían guía` : null,
+    n("ya_intentado") ? `${n("ya_intentado")} ya se intentaron hoy` : null,
+    n("error") ? `${n("error")} con error al leer` : null,
+  ].filter(Boolean);
+  return `Pasada hecha: ${parts.join(" · ")}.`;
+}
+
 /** Lo que queda en el historial del pedido cuando no se pudo. */
 export function limaCourierFailedNote(courier: LimaAutoCourier, day: string): string {
   return `No se pudo crear la guía ${LIMA_AUTO_COURIER_LABEL[courier]} automática del ${programDayLabel(day)}. Hoy no se vuelve a intentar: créala a mano desde la Mesa de ruta.`;

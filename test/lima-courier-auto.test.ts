@@ -208,3 +208,21 @@ describe("las guardas, en el código", () => {
     expect(sql).not.toMatch(/drop\s+(table|column)/i);
   });
 });
+
+describe("«Correr ahora» (owner, 16-11-2026: «las puedes crear ahora mismo?»)", () => {
+  it("dice lo que hizo la pasada, en una línea", async () => {
+    const { limaCourierRunSummary } = await import("@/lib/lima-courier-auto");
+    expect(limaCourierRunSummary([])).toBe("No hay nada programado con Aliclik o Swayp para lo que atiende esta pasada.");
+    expect(limaCourierRunSummary([{ outcome: "creada" }, { outcome: "creada" }, { outcome: "fallo" }, { outcome: "espera" }]))
+      .toBe("Pasada hecha: 2 creadas · 1 no salió (mira «hoy y ayer») · 1 esperan otra pasada (Aliclik las recogería antes).");
+  });
+  it("es la misma pasada del cron, con el permiso del panel y la posición guardada", () => {
+    const actions = flat(read("app/dashboard/automatizaciones/actions.ts"));
+    const fn = actions.slice(actions.indexOf("export async function runLimaCourierAutoNow("));
+    expect(fn.indexOf("const g = await gate(orgId);")).toBeGreaterThan(-1);
+    expect(fn).toContain('if (mode === "apagado") return { error: "Está Apagada: ponla en Simulación o en Activo antes de correrla." };');
+    expect(fn).toContain("const report = await runLimaCourierAuto(g.admin, { orgId });");
+    const panel = read("components/automations-panel.tsx");
+    expect(panel).toContain('{runPending ? "Corriendo…" : "Correr ahora"}');
+  });
+});
