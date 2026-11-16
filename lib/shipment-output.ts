@@ -417,6 +417,28 @@ export interface SalidaExistente {
   custody_transferred_at?: string | null;
   /** Etiqueta del courier (`status · dispatchStatus · callStatus` en Aliclik). */
   reported_status?: string | null;
+  /**
+   * Grupo GF: la última parada de esta salida está reportada «No entregado»
+   * (`delivery_stops`). Quien lee las salidas lo llena; sin leerlo, `undefined`.
+   */
+  no_entregado_reportado?: boolean;
+}
+
+/**
+ * ¿Es una caja de Grupo GF que el motorizado ya reportó «No entregado» y
+ * todavía tiene? (owner, 16-11-2026, #AUR900778: «no debería ser un limitante
+ * para crear guía en otro lado, porque ya tenemos el reporte de la NO
+ * entrega»). No estorba a otra salida: ya no se va a entregar, y vuelve a la
+ * oficina sola. Antes había que cerrar la ruta del motorizado («Terminar ruta
+ * operativa») para que dejara de contar.
+ */
+export function gfNoEntregadaReportada(o: Pick<SalidaExistente, "courier" | "delivery_status" | "custody_state" | "no_entregado_reportado">): boolean {
+  return (
+    (o.courier ?? "").trim().toLowerCase() === "propio" &&
+    o.delivery_status === "pendiente" &&
+    o.custody_state === "courier" &&
+    o.no_entregado_reportado === true
+  );
 }
 
 const ESTADOS_VIVOS = new Set(["pendiente", "en_ruta", "por_preparar"]);
@@ -463,6 +485,7 @@ export function salidasQueEstorban<T extends SalidaExistente>(outputs: readonly 
       ESTADOS_VIVOS.has(o.delivery_status) &&
       o.custody_state !== "devuelto" &&
       !aliclikVuelveSinEntregar(o) &&
+      !gfNoEntregadaReportada(o) &&
       !isFillableRouteOutput({
         courier: o.courier,
         created_via: o.created_via ?? null,

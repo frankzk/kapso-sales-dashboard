@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
-import { gfCourier, gfIdempotencyKey, gfRetryKey, verifyGfWebhook } from "@/lib/gf-courier";
+import { gfCourier, gfIdempotencyKey, verifyGfWebhook } from "@/lib/gf-courier";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -55,23 +55,6 @@ describe("firma de webhooks GF", () => {
     expect(verifyGfWebhook(body, { signature: sign(ts, body), timestamp: ts }, "otro", now)).toEqual({ ok: false, reason: "bad_signature" });
     expect(verifyGfWebhook(body, { signature: sign(ts, body), timestamp: ts }, secret, now + 301_000)).toEqual({ ok: false, reason: "stale_timestamp" });
     expect(verifyGfWebhook(body, { signature: null, timestamp: ts }, secret, now)).toEqual({ ok: false, reason: "missing_headers" });
-  });
-});
-
-describe("reintentar después de un rechazo de GF (#KP205759, 16-11-2026)", () => {
-  it("la clave del reintento es otra, cabe en 128 y conserva la guía externa", () => {
-    const base = gfIdempotencyKey("7c5a2e5c-12e8-4e3b-8f46-fb5c7a876b8d", "#KP205759");
-    expect(gfRetryKey(base, 2)).toBe(`${base}~r2`);
-    expect(gfRetryKey(base, 2)).not.toBe(base);
-    const long = gfIdempotencyKey("o", "x".repeat(200));
-    expect(gfRetryKey(long, 12)).toHaveLength(128);
-    expect(gfRetryKey(long, 12).endsWith("~r12")).toBe(true);
-  });
-  it("un intento `failed` no frena: se prueba la clave siguiente; un choque real se dice como es", () => {
-    const src = readFileSync(resolve(process.cwd(), "lib/gf-courier-guide.ts"), "utf8").replace(/\s+/g, " ");
-    expect(src).toContain('for (let attempt = 2; prior.data?.status === "failed" && attempt <= GF_MAX_RETRY_KEYS; attempt += 1) {');
-    expect(src).toContain("key = gfRetryKey(base, attempt);");
-    expect(src).toContain('const live = await admin.from("gf_order_requests").select("id").eq("order_id", orderId).eq("status", "pending").limit(1);');
   });
 });
 

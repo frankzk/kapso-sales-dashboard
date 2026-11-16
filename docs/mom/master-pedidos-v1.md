@@ -5499,6 +5499,19 @@ en 37–50 %. Propuesta y datos: «Propuesta: reintentos automáticos en Lima».
   - **Lo que ya estaba así** (#KP203491 y los demás) lo arregla el barrido de la
     0337 al aplicarla, con la misma función y la guía más antigua primero; el
     Master de esos pedidos lo recalcula `master-reconcile`.
+  - **La caja ya reportada «No entregado» no frena la guía nueva, en ninguna
+    cobertura (0350, owner 16-11-2026: «no debería ser un limitante para crear
+    guía en otro lado, porque ya tenemos el reporte de la NO entrega»).**
+    #AUR900778 (Chimbote) salió por error en la ruta de Roy del 14-11, que la
+    reportó «No entregado · Provincia»; como la ruta no se había cerrado, la
+    caja seguía viva y la guía de Aliclik se negaba («ya tiene una guía
+    activa»). Ahora una salida propia `pendiente`, con el motorizado y cuya
+    última parada dice «No entregado» no estorba a otra salida
+    (`gfNoEntregadaReportada`, en `salidasQueEstorban` y en la regla de
+    Aliclik): en Lima no pide motivo por ella, y en provincia ya no obliga a
+    cerrar la ruta. Al guardar la guía de Aliclik, la 0350 la deja en
+    devolución también fuera de Lima, con las mismas rejas de la 0337. Sin
+    reporte, o con la parada «Entregado», sigue frenando como antes.
 - **Y la bandeja no ofrece «Aprobar» con el reintento ya en marcha
   (13-11-2026).** Con una salida viva de otro courier (`otherLiveCourier`: la
   guía de Aliclik sin entregar ni volver), `retryChainOf`
@@ -5891,7 +5904,10 @@ ficha y la hoja; ahora es un solo lugar. La pestaña sale **solo mientras el
 pedido está en Repro Lima**: lo dice la misma lectura de la pantalla
 (`loadReproRow`: hay fila o no la hay), que la ficha hace una vez por pedido,
 solo a quien tiene `repro_lima.manage` y solo si el pedido puede estar (Lima y
-por entregar, `isReproLimaCandidate`) o si «Atender» la pidió; sin sondeos. La
+por entregar, `isReproLimaCandidate`) o si «Atender» la pidió; sin sondeos.
+Desde el 16-11-2026 («tarda en aparecer el tab de repro lima») la pestaña sale
+ya mientras esa lectura comprueba, con su esqueleto, y se va si no hay fila; la
+lectura junta en paralelo lo que no depende entre sí. La
 ficha la enseña igual abierta desde el Master de Pedidos o desde cualquier
 otra pantalla. Si «Atender» la pide y el pedido ya salió, la ficha abre Operar
 con «Este pedido ya no está pendiente de entrega en Lima». Dentro de la
@@ -20126,10 +20142,10 @@ interruptor «Agotado» de los productos sin conteo) y los montos.
 - A diferencia de Aliclik, GF tiene `Idempotency-Key` (`KP-<pedido>-<external_id>`): un timeout se reintenta con la
   misma clave y GF devuelve la misma guía; `DUPLICATE_ORDER` o `IDEMPOTENCY_CONFLICT` con guía se **vinculan**.
 - **Un intento que GF rechazó no frena el siguiente** (16-11-2026, #KP205759: «Ya hay una creación de guía GF en
-  curso» sin nada en curso). La intención `failed` (distrito sin cobertura, SKU…) no creó nada en GF, así que el
-  reintento va con una clave nueva (`gfRetryKey`: `…~r2`, `…~r3`) y el mismo `external_id`. Antes chocaba con el
-  índice único de la clave (`gf_order_requests_key_uniq`). «En curso» se dice solo si de verdad hay una pendiente; si
-  GF ya recibió esa guía, se dice que se busque en la Mesa de ruta. Si GF vuelve a rechazarla, se ve su motivo real.
+  curso» sin nada en curso). La intención `failed` (distrito sin cobertura, SKU…) con la misma clave se reutiliza:
+  vuelve a `pending` con el pedido de ahora y se manda otra vez con la MISMA `Idempotency-Key`, porque GF no guarda
+  sus rechazos en la idempotencia (#1216). Antes, el reintento intentaba insertar otra fila con esa clave, chocaba con
+  `gf_order_requests_key_uniq` y lo decía como «en curso». Si GF vuelve a rechazarla, se ve su motivo.
 - `external_id` es el nombre del pedido; una salida posterior lleva `-S2`, `-S3`…
 - Anular (`gf_courier.cancel_guide`): GF solo anula antes de preparar, sin costo; después responde con el estado.
 
@@ -25483,6 +25499,16 @@ Ajustes → WooCommerce, bajo la de los webhooks de pedidos.
   la tienda (no hay uno nuevo), HMAC-SHA256 del cuerpo crudo en base64, en
   `X-Kapta-Signature`. Sin secreto guardado o con la firma mala, 401 y no se
   escribe nada.
+- **Sin lista de productos, el producto del enlace** (owner, 16-11-2026:
+  «dice 1 producto pero no indica el producto»). Desde el 15-11-2026 algunos
+  abandonos llegan con `productos: []` y sin total (en Aurela, casi uno de cada
+  tres), pero `recuperacion` sigue apuntando a la ficha del producto
+  (`/products/<handle>/#cod-recuperar=…`). Entonces esa ficha es la línea del
+  carrito: el nombre sale del enlace y el catálogo de la tienda la resuelve por
+  su handle; sin precio, que no se inventa (`recoveryLineItem`). La pasada de
+  cada 5 minutos corrige los que ya habían llegado vacíos, desde `raw`. Si
+  tampoco hay enlace, la ficha del lead dice «El formulario no mandó el
+  producto: pregúntale en la llamada», no «1 producto(s)».
 - **Dos eventos:** `abandonado` (entra a «Formularios abandonados») y
   `recuperado` (pasa a «Recuperados», con `pedido_id`). Cualquier otro, o un
   formulario sin `id` o sin celular, es 422: reenviarlo no lo arregla. Si la

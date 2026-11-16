@@ -85,17 +85,27 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
-### 16-11-2026 · GF: reintentar después de un rechazo; aviso flotante al crear la guía desde Repro Lima (sin migración, MOM §29.17, DESIGN.md)
+### 16-11-2026 · La caja de Grupo GF ya reportada «No entregado» no frena otra guía (0350, MOM §9.5)
+
+1. **Migración `0350_gf_replaced_by_aliclik_any_coverage.sql`**, ANTES del
+   código: redefine `gf_replace_output_with_aliclik` sin la condición de Lima
+   (mismas rejas, solo `service_role`, sin barrido). Idempotente.
+2. El código deja de contar como «guía activa» la salida propia con el
+   motorizado cuya última parada es «No entregado» (#AUR900778).
+3. Verificar: en #AUR900778, «Crear guía en Aliclik» ya no dice «ya tiene una
+   guía activa»; al crearla, MOM-AUR900778-PROPIO-00F1A578 pasa a custodia
+   `retorno` con el hecho `output_replaced`.
+
+### 16-11-2026 · Repro Lima: aviso flotante al crear la guía desde la fila; reintento de GF documentado (sin migración, MOM §29.17, DESIGN.md)
 
 Sin migración ni variables.
-- **GF Courier:** un intento que GF rechazó (`gf_order_requests.status = 'failed'`, por ejemplo DISTRICT_NOT_COVERED)
-  ya no bloquea el siguiente. El reintento usa una clave nueva (`…~r2`) con el mismo `external_id`. Antes decía «Ya
-  hay una creación de guía GF en curso» sin nada en curso (#KP205759).
 - **Repro Lima:** al crear la guía con «Guía Aliclik» o «Guía GF», además del aviso de la página sale un aviso
-  flotante con el pedido, la guía y «Abrir la Mesa de ruta».
+  flotante con el pedido, la guía y «Abrir la Mesa de ruta» (`components/ops-toast.tsx`).
+- **GF Courier:** el reintento después de un rechazo (#KP205759) ya lo arregló el #1216. Aquí solo queda escrito en el
+  MOM §29.17.
 
-Verificar: en #KP205759, «Crear guía en GF Courier» ya no dice «en curso». Responde lo que diga GF; si vuelve a
-rechazarlo, en `gf_order_requests` queda otra fila `failed` con la clave `…~r2`.
+Verificar: en Repro Lima, crear una guía con «Guía GF» muestra el aviso abajo a la derecha (arriba en el teléfono), y
+este se va solo a los 6 s.
 
 ### 16-11-2026 · Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5 y §40)
 

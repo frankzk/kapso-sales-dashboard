@@ -16,7 +16,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
-import { gfCourier, gfIdempotencyKey, gfRetryKey, type GfOrder } from "@/lib/gf-courier";
+import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
 import { writeCourierGuide } from "@/lib/route-output-fill";
@@ -25,9 +25,6 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { wooTerritorio } from "@/lib/woo-territorio";
 
 import { CUSTOMER_PAYMENT_KINDS } from "@/lib/pending-voucher";
-
-/** Cuántas claves de reintento se prueban después de intentos rechazados por GF. */
-const GF_MAX_RETRY_KEYS = 20;
 
 export type GfGuideResult =
   | { ok: true; trackingId: string; shippingCost: number; estimatedDeliveryDate: string; adopted: boolean }
@@ -86,32 +83,22 @@ export async function createGfGuideFor(
   });
   if (!built.ok) return { ok: false, error: built.reason };
 
-  const base = gfIdempotencyKey(orderId, externalId);
-  // Si ya hay una intención pendiente con esta misma clave (timeout anterior), se reintenta con ella. Una que GF
-  // RECHAZÓ (`failed`: distrito sin cobertura, SKU…) no creó nada, así que no frena el reintento: va con una clave
-  // nueva (`gfRetryKey`) y el mismo número de guía externo. Antes el reintento chocaba con el índice único de la clave
-  // y decía «en curso» sin que hubiera nada en curso (owner, 16-11-2026, #KP205759).
-  let key = base;
-  let prior = await admin.from("gf_order_requests").select("id,status").eq("idempotency_key", key).maybeSingle();
-  for (let attempt = 2; prior.data?.status === "failed" && attempt <= GF_MAX_RETRY_KEYS; attempt += 1) {
-    key = gfRetryKey(base, attempt);
-    prior = await admin.from("gf_order_requests").select("id,status").eq("idempotency_key", key).maybeSingle();
+  const key = gfIdempotencyKey(orderId, externalId);
+  // Si ya hay una intención con esta misma clave, se reintenta con ella: pendiente (timeout anterior) o fallida (GF la
+  // rechazó, p. ej. sin cobertura, y ya se corrigió). Un rechazo de GF no queda guardado en su idempotencia, así que la
+  // misma clave vuelve a evaluarse. Antes, un intento fallido bloqueaba el reintento con «creación en curso».
+  const prior = await admin.from("gf_order_requests").select("id,status").eq("idempotency_key", key).maybeSingle();
+  let intentId = prior.data && ["pending", "failed"].includes(prior.data.status) ? prior.data.id as string : null;
+  if (intentId && prior.data?.status === "failed") {
+    const reset = await admin.from("gf_order_requests").update({ status: "pending", request: built.input, http_status: null, error_code: null,
+      response: null, created_by: ctx.userId, updated_at: new Date().toISOString() }).eq("id", intentId).eq("status", "failed").select("id");
+    if (reset.error) return { ok: false, error: reset.error.code === "23505" ? "Ya hay una creación de guía GF en curso para este pedido." : reset.error.message };
+    if (!reset.data?.length) return { ok: false, error: "Ya hay una creación de guía GF en curso para este pedido." };
   }
-  let intentId = prior.data?.status === "pending" ? prior.data.id as string : null;
   if (!intentId) {
     const ins = await admin.from("gf_order_requests").insert({ store_id: row.store_id, order_id: orderId, external_id: externalId,
       idempotency_key: key, request: built.input, created_by: ctx.userId }).select("id").single();
-    if (ins.error) {
-      if (ins.error.code !== "23505") return { ok: false, error: ins.error.message };
-      // Lo que choca de verdad: otra creación viva del pedido, o una guía que GF ya creó con este número.
-      const live = await admin.from("gf_order_requests").select("id").eq("order_id", orderId).eq("status", "pending").limit(1);
-      return {
-        ok: false,
-        error: live.data?.length
-          ? "Ya hay una creación de guía GF en curso para este pedido."
-          : `GF ya recibió la guía ${externalId}: búscala en la Mesa de ruta antes de crear otra (la conciliación la vincula sola).`,
-      };
-    }
+    if (ins.error) return { ok: false, error: ins.error.code === "23505" ? "Ya hay una creación de guía GF en curso para este pedido." : ins.error.message };
     intentId = ins.data.id as string;
   }
 

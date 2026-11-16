@@ -49,15 +49,6 @@ export function gfIdempotencyKey(orderId: string, shipmentId: string): string {
   return `KP-${orderId}-${shipmentId}`.slice(0, 128);
 }
 
-/**
- * La clave del intento `attempt` (2, 3…) después de uno que GF rechazó (`failed`): la misma guía externa con otra
- * clave, para que el reintento no choque con el índice único de la anterior (#KP205759, 16-11-2026). Pura.
- */
-export function gfRetryKey(base: string, attempt: number): string {
-  const suffix = `~r${attempt}`;
-  return `${base.slice(0, 128 - suffix.length)}${suffix}`;
-}
-
 async function call<T>(opts: GfClientOpts, method: "GET" | "POST", path: string, body?: unknown, key?: string): Promise<GfResult<T>> {
   const url = `${(opts.baseUrl ?? gfApiBase()).replace(/\/$/, "")}${path}`;
   const headers: Record<string, string> = { Authorization: `Bearer ${opts.apiToken.trim()}`, Accept: "application/json" };

@@ -436,28 +436,15 @@ export async function loadReproFacts(
     for (const row of data as ReproProviderRow[]) providers.set(row.org_id, row);
   }
 
-  // La ruta y el motorizado de cada parada.
+  // Tres cadenas que no dependen entre sí, a la vez (16-11-2026: la pestaña de
+  // la ficha las esperaba una tras otra): la ruta y el motorizado de cada
+  // parada; el último reporte de Urpi; y la salida propia que se reusa con su caja.
   const routeIds = [...new Set(stops.map((stop) => stop.route_id).filter((id): id is string => Boolean(id)))];
-  const { data: routes } = await courierRowsByIds(routeIds, (chunk) =>
-    admin.from("delivery_routes").select("id,route_date,rider_id").in("id", chunk));
-  const routeById = new Map((routes as Array<{ id: string; route_date: string; rider_id: string | null }>).map((route) => [route.id, route]));
-  const riderIds = [...new Set([...routeById.values()].map((route) => route.rider_id).filter((id): id is string => Boolean(id)))];
-  const { data: riders } = await courierRowsByIds(riderIds, (chunk) => admin.from("riders").select("id,full_name").in("id", chunk));
-  const riderName = new Map((riders as Array<{ id: string; full_name: string }>).map((rider) => [rider.id, rider.full_name]));
-
   // El último reporte de Urpi de los pedidos con una guía de Urpi que no
   // entregó: su resultado y su motivo (texto libre) deciden la cadena.
   const urpiOrderIds = [...new Set(shipments
     .filter((row) => (row.courier ?? "").trim().toLowerCase() === "urpi" && row.order_id && guideFailedAfterDispatch(row))
     .map((row) => row.order_id as string))];
-  const { data: urpiRows } = await courierRowsByIds(urpiOrderIds, (chunk) =>
-    admin.from("urpi_report_rows").select("order_id,report_date,urpi_row,result_code,data").in("order_id", chunk));
-  const urpiLastByOrder = new Map<string, { result_code: string | null; reason: string | null; key: string }>();
-  for (const row of urpiRows as Array<{ order_id: string; report_date: string | null; urpi_row: number | null; result_code: string | null; data: { reason?: string | null } | null }>) {
-    const key = `${row.report_date ?? ""}#${String(row.urpi_row ?? 0).padStart(9, "0")}`;
-    const prev = urpiLastByOrder.get(row.order_id);
-    if (!prev || key > prev.key) urpiLastByOrder.set(row.order_id, { result_code: row.result_code, reason: row.data?.reason ?? null, key });
-  }
 
   const group = <T extends { order_id: string | null }>(rows: readonly T[]): Map<string, T[]> => {
     const map = new Map<string, T[]>();
@@ -486,10 +473,30 @@ export async function loadReproFacts(
     if (own) ownByOrder.set(id, own);
   }
   const ownIds = [...ownByOrder.values()].map((output) => output.id);
-  const [ownBoxes, { data: ownRequests }] = await Promise.all([
-    loadActiveBoxes(admin, ownIds),
-    courierRowsByIds(ownIds, (chunk) => admin.from("logistics_requests").select("shipment_id").in("shipment_id", chunk)),
+
+  const [{ routeById, riderName }, { data: urpiRows }, [ownBoxes, { data: ownRequests }]] = await Promise.all([
+    (async () => {
+      const { data: routes } = await courierRowsByIds(routeIds, (chunk) =>
+        admin.from("delivery_routes").select("id,route_date,rider_id").in("id", chunk));
+      const routeById = new Map((routes as Array<{ id: string; route_date: string; rider_id: string | null }>).map((route) => [route.id, route]));
+      const riderIds = [...new Set([...routeById.values()].map((route) => route.rider_id).filter((id): id is string => Boolean(id)))];
+      const { data: riders } = await courierRowsByIds(riderIds, (chunk) => admin.from("riders").select("id,full_name").in("id", chunk));
+      const riderName = new Map((riders as Array<{ id: string; full_name: string }>).map((rider) => [rider.id, rider.full_name]));
+      return { routeById, riderName };
+    })(),
+    courierRowsByIds(urpiOrderIds, (chunk) =>
+      admin.from("urpi_report_rows").select("order_id,report_date,urpi_row,result_code,data").in("order_id", chunk)),
+    Promise.all([
+      loadActiveBoxes(admin, ownIds),
+      courierRowsByIds(ownIds, (chunk) => admin.from("logistics_requests").select("shipment_id").in("shipment_id", chunk)),
+    ]),
   ]);
+  const urpiLastByOrder = new Map<string, { result_code: string | null; reason: string | null; key: string }>();
+  for (const row of urpiRows as Array<{ order_id: string; report_date: string | null; urpi_row: number | null; result_code: string | null; data: { reason?: string | null } | null }>) {
+    const key = `${row.report_date ?? ""}#${String(row.urpi_row ?? 0).padStart(9, "0")}`;
+    const prev = urpiLastByOrder.get(row.order_id);
+    if (!prev || key > prev.key) urpiLastByOrder.set(row.order_id, { result_code: row.result_code, reason: row.data?.reason ?? null, key });
+  }
   const ownInRequest = new Set((ownRequests as Array<{ shipment_id: string }>).map((row) => row.shipment_id));
 
   for (const orderId of ids) {

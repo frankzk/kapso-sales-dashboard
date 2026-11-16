@@ -289,12 +289,34 @@ async function readAliclikOutputPolicy(
     ok: false as const, pideMotivo: false, estorban: [], unread: true as const,
     error: `No se pudieron leer las salidas del pedido: ${error.message}`,
   };
+  const outputs = (data ?? []) as AliclikExistingOutput[];
+  // La última parada de cada caja de Grupo GF que el motorizado tiene: con
+  // «No entregado» reportado ya no estorba (16-11-2026, #AUR900778). Sin poder
+  // leerla, cuenta como antes.
+  const withRider = outputs.filter((o) => (o.courier ?? "").trim().toLowerCase() === "propio" && o.delivery_status === "pendiente" && o.custody_state === "courier");
+  if (withRider.length) {
+    try {
+      const { data: stops, error: stopsError } = await admin.from("delivery_stops")
+        .select("shipment_id,status,created_at,reported_at")
+        .in("shipment_id", withRider.map((o) => o.id))
+        .order("created_at", { ascending: false });
+      if (!stopsError) {
+        const last = new Map<string, string>();
+        for (const stop of (stops ?? []) as { shipment_id: string; status: string }[]) {
+          if (!last.has(stop.shipment_id)) last.set(stop.shipment_id, stop.status);
+        }
+        for (const o of withRider) o.no_entregado_reportado = last.get(o.id) === "no_entregado";
+      }
+    } catch {
+      /* sin leer las paradas, la caja cuenta como antes */
+    }
+  }
   const operation = operationOf(ctx.row);
   return aliclikOutputPolicy({
     // `manual` es «puede justificar otra salida»: una persona, o el reintento
     // de Lima que el owner encendió (`aliclikMotiveAllowed`). El resto del
     // automático sigue sin motivo.
-    outputs: (data ?? []) as AliclikExistingOutput[], operation, motivo,
+    outputs, operation, motivo,
     manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),
     // Solo una persona hace que Kapta anule la guía GF viva (owner, 15-11-2026).
     person: Boolean(ctx.userId) && !origin,
