@@ -6724,6 +6724,16 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   courier · Guía creada** (`limaCourierState`), con su día de recojo, en vez de
   No entregados con «Llamar a la clienta y acordar el día». La macroetapa del
   Master no cambia: sigue en «Por reprogramar Lima» hasta que la guía sale.
+- **«Nunca salieron», con su nombre** (owner: «no veo el bloque de no salieron
+  nunca»; «¿será este los de sin fecha?»). Sí: dentro de «Sacar a reparto», lo
+  que no tiene día es lo que nunca salió (la tarea `primer_despacho`: antes de
+  salir, sin salida previa, sin día y sin guía de courier). El filtro de adentro
+  se llama **«Nunca salieron»** (antes «Sin fecha») y la nota del paso dice
+  «N agendados · M nunca salieron · K sin recoger». Lo poco que salió antes y
+  quedó sin día se cuenta aparte («· N sin fecha»), y la Agenda sigue con su
+  «Sin fecha», que los muestra todos. `?atencion=nunca_salieron` (el enlace de
+  la pantalla anterior) abre ese filtro. Dentro van también los de más de 30
+  días, que tienen su propio filtro.
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas

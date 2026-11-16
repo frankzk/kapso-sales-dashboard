@@ -31,6 +31,7 @@ import {
   LIMA_FOLDED_STEPS,
   LIMA_STEP_CARDS,
   LIMA_SUB_FILTERS,
+  LIMA_TASK_CARDS,
   agendaCards,
   type LimaBoardCounts,
   type LimaBoardKey,
@@ -65,13 +66,19 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
       return parts.length ? parts.join(" · ") : null;
     },
   },
+  // «Nunca salieron» con su nombre (owner, 16-11-2026): son los «sin fecha» que
+  // nunca tuvieron una salida. Lo poco que salió antes y quedó sin día se
+  // cuenta aparte, en «sin fecha» (la Agenda los muestra todos juntos).
   por_sacar: {
-    keys: ["sin_fecha", "guia_sin_recoger", "mas_de_30"],
+    keys: ["primer_despacho", "guia_sin_recoger", "mas_de_30"],
     note: (c) => {
       const sinFecha = c.agenda.sin_fecha ?? 0;
       const agendados = c.step.por_sacar - sinFecha;
+      const nunca = c.task.primer_despacho;
+      const otros = Math.max(0, sinFecha - nunca);
+      const resto = otros ? ` · ${fmt(otros)} sin fecha` : "";
       const recoger = c.sub.guia_sin_recoger ? ` · ${fmt(c.sub.guia_sin_recoger)} sin recoger` : "";
-      return `${fmt(agendados)} ${agendados === 1 ? "agendado" : "agendados"} · ${fmt(sinFecha)} sin fecha${recoger}`;
+      return `${fmt(agendados)} ${agendados === 1 ? "agendado" : "agendados"} · ${fmt(nunca)} nunca salieron${resto}${recoger}`;
     },
   },
   con_courier: {
@@ -144,6 +151,8 @@ function withStuck(note: ReactNode, n: number): ReactNode {
 /** Lo que dice un filtro de adentro y cuántos tiene. */
 function insideChip(key: LimaBoardKey, counts: LimaBoardCounts): { label: string; count: number; hint: string } {
   if (key === "sin_fecha") return { label: "Sin fecha", count: counts.agenda.sin_fecha ?? 0, hint: "Por sacar a reparto y todavía sin día." };
+  const task = LIMA_TASK_CARDS.find((card) => card.key === key);
+  if (task) return { label: task.label, count: counts.task[task.key], hint: task.hint };
   const courier = COURIER.get(key as never);
   if (courier) return { label: courier.label, count: counts.courier[courier.key], hint: courier.hint };
   const sub = (LIMA_SUB_FILTERS as Record<string, { label: string; hint: string } | undefined>)[key];

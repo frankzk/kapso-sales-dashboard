@@ -521,8 +521,9 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(boardFilter("programados_hoy", TODAY)).toBe("hoy");
     expect(boardFilter("programados_manana", TODAY)).toBe("manana");
     expect(boardFilter("programados_despues", TODAY)).toBe("despues");
-    expect(boardFilter("nunca_salieron", TODAY)).toBe("por_sacar");
-    expect(boardFilter("primer_despacho", TODAY)).toBe("por_sacar");
+    // «Nunca salieron» abre su filtro dentro de Sacar a reparto (owner, 16-11-2026).
+    expect(boardFilter("nunca_salieron", TODAY)).toBe("primer_despacho");
+    expect(boardFilter("primer_despacho", TODAY)).toBe("primer_despacho");
     expect(boardFilter("por_cerrar", TODAY)).toBe("por_cerrar");
     expect(boardFilter("por_decidir", TODAY)).toBe("no_entregados");
     expect(boardFilter("cerrados", TODAY)).toBe("esperan_anulacion");

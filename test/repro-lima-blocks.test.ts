@@ -72,7 +72,8 @@ const cls = (r: LimaPendingOrder, c?: BoardCase) => classifyLimaRow(r, c, TODAY,
 
 describe("«Por gestionar hoy»: una tarea por pedido, la primera que aplica", () => {
   it("las cinco tarjetas, en el orden del owner", () => {
-    expect(LIMA_TASK_CARDS.map((c) => c.label)).toEqual(["Confirmar primer despacho", "No entregados", "Novedad del courier", "Llamar después", "Por cerrar"]);
+    // «Nunca salieron», como lo llama el equipo (owner, 16-11-2026: «no veo el bloque de no salieron nunca»).
+    expect(LIMA_TASK_CARDS.map((c) => c.label)).toEqual(["Nunca salieron", "No entregados", "Novedad del courier", "Llamar después", "Por cerrar"]);
   });
 
   it("Confirmar primer despacho: antes de salir, nunca salió, sin día y sin guía (los «Nunca salieron» y «Más de 30 días»)", () => {
@@ -433,7 +434,7 @@ describe("el filtro de la URL (`atencion`)", () => {
       expect(boardFilter(key, TODAY)).toBe(key);
     }
     // «Confirmar primer despacho» de antes abre Sacar a reparto.
-    expect(boardFilter("primer_despacho", TODAY)).toBe("por_sacar");
+    expect(boardFilter("primer_despacho", TODAY)).toBe("primer_despacho");
     // Un día guardado de la Agenda anterior abre su cajón de ahora.
     expect(boardFilter("2026-11-16", TODAY)).toBe("manana");
     expect(boardFilter("2026-11-18", TODAY)).toBe("despues");
@@ -556,6 +557,12 @@ describe("las piezas en pantalla", () => {
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "no_entregados", onPick: () => {} }));
     for (const text of ["Flujo del día", "los seis suman el total", "Agenda", "Sacar a reparto", "Con el courier", "Por cerrar", "Mañana · Lun 16", "Después", "Sin fecha", "Mañana sin guía", "0 con guía"]) expect(html, text).toContain(text);
     for (const text of ["En manos del courier", "Confirmar primer despacho", "Mar 17"]) expect(html, text).not.toContain(text);
+    // «Nunca salieron» con su nombre en la nota del paso y como filtro de adentro (owner, 16-11-2026).
+    expect(html).toContain("1 agendado · 1 nunca salieron");
+    const inside = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "primer_despacho", onPick: () => {} }));
+    const chips = inside.slice(inside.indexOf(">Sacar a reparto</b>:"), inside.indexOf('aria-labelledby="repro-agenda"'));
+    expect(chips).toContain("Nunca salieron");
+    expect(chips).not.toContain("Sin fecha");
     // Antes de las 10:30, «Hoy sin guía» es un chip neutro; después, una alerta.
     // (un martes: el domingo no hay «Hoy»)
     const tueRows = [row({ orderId: "t", programmedFor: "2026-11-17" })];
@@ -599,7 +606,9 @@ describe("las piezas en pantalla", () => {
     expect(html).toContain(STEP_TONE.por_sacar.numOn);
     expect(html).toContain(STEP_TONE.no_entregados.num);
     expect(html).toContain(STEP_TONE.no_entregados.segDim);
-    expect(activeStep("sin_fecha")).toBe("por_sacar");
+    expect(activeStep("primer_despacho")).toBe("por_sacar");
+    // «Sin fecha» es de la Agenda: dentro de Sacar a reparto, el chip es «Nunca salieron».
+    expect(activeStep("sin_fecha")).toBeNull();
     expect(activeStep("hoy")).toBeNull();
     const board = read("components/repro-lima-board.tsx");
     expect(board).toContain('listStep ? STEP_TONE[listStep].band : "bg-wash/70"');
