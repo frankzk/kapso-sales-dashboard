@@ -7101,7 +7101,8 @@ GF Courier (lo que sigue a la llamada, `afterCall`), Kapta crea la guía por la
 misma puerta que la Mesa de ruta (`createGfGuideFor`, §29.17), con el día
 acordado como `scheduled_date` (`scheduledFor`, que manda sobre «Programar
 envío»), el actor real y el motivo «Repro Lima: acuerdo con la clienta para el
-lun 16/11». Pasa por todas sus compuertas: las dos llaves, el SKU, el apellido,
+lun 16/11». Pasa por todas sus compuertas: las dos llaves, el SKU, el nombre
+(desde el 16-11-2026 basta el nombre: GF acepta el pedido sin apellido),
 el distrito y la intención antes del POST. Si el pedido ya tiene una guía GF viva
 (`gfAgreementGuidePlan`):
 - **sin asignar a un motorizado** (`pendiente`: CREATED o READY_FOR_PICKUP):

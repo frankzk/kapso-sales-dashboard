@@ -31,7 +31,11 @@ describe("pedido Kapta → GF", () => {
   });
   it("no inventa datos: rechaza sin SKU, sin apellido, sin distrito o con adelanto mayor al total", () => {
     expect(buildGfOrderInput({ ...base, lines: [{ sku: null, quantity: 1, price: 10 }] })).toMatchObject({ ok: false });
-    expect(buildGfOrderInput({ ...base, customerName: "María" })).toMatchObject({ ok: false, reason: expect.stringContaining("apellido") });
+    expect(buildGfOrderInput({ ...base, customerName: "   " })).toMatchObject({ ok: false, reason: expect.stringContaining("nombre") });
+    // Solo nombre (#KP205891 «Mariela»): GF lo acepta sin apellido.
+    const solo = buildGfOrderInput({ ...base, customerName: "Mariela" });
+    expect(solo.ok && solo.input.recipient).toMatchObject({ first_name: "Mariela" });
+    expect(solo.ok && "last_name" in solo.input.recipient).toBe(false);
     expect(buildGfOrderInput({ ...base, district: null, ubigeo: null })).toMatchObject({ ok: false, reason: expect.stringContaining("distrito") });
     expect(buildGfOrderInput({ ...base, advancePaid: 200 })).toMatchObject({ ok: false });
     expect(splitName("  Ana   Pérez  ")).toEqual({ first_name: "Ana", last_name: "Pérez" });
