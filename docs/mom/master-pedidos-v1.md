@@ -20270,6 +20270,13 @@ la guía**, desarma la caja y el producto vuelve a su stock.
 - Solo la primera entrega de cada evento escribe la línea: un reenvío choca con el `X-GF-Event-Id` único.
 - Las líneas las arma `lib/gf-webhook-note.ts` (pura, con prueba); sin motivo no hay línea.
 
+**El día del acuerdo de Repro Lima manda (owner, 16-11-2026: «ella lo quiere para el 18»).** Al guardar un acuerdo
+con GF Courier, Kapta quita la salida programada de Grupo GF y crea la guía para el día acordado. Si esa creación
+falla (por ejemplo, por un dato que GF rechazaba), la guía que se cree después —el botón de la Mesa de ruta o la
+guía automática— usa el **día del acuerdo** del caso abierto de Repro Lima (`reproAgreedGfDay`), no el siguiente día
+de reparto. Orden: el día pedido explícitamente; si no, la salida programada vigente; si no, el acuerdo abierto con
+GF Courier cuyo día no pasó; si no, el día que decida GF.
+
 , `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
 `X-GF-Event-Id` único en `gf_webhook_events`) solo dispara una relectura de `GET /v1/orders/{guía}`; se aplica el estado
 actual con las mismas guardas que Aliclik (precedencia, intento fallido, sello único de devolución, preparación y
@@ -20535,6 +20542,7 @@ motorizado no puede confirmar desde su teléfono. «La entrega de esta carga
 quedó registrada» solo cuando todos están confirmados. El paso 2 con
 custodia queda cerrado: la caja ya salió. El modo viaja con los datos de la
 mesa (`DispatchWorkspaceData.pickupModeByOrg`).
+
 ### 30.1 Qué es y de dónde viene
 
 El cierre de Lima vivía en un Google Sheet («MASTER KEY 2.0»): una hoja por
