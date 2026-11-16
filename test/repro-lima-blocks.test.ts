@@ -367,7 +367,7 @@ describe("los siete pasos suman el total (owner, 15-11-2026: «estos 5 no suman 
     expect(counts.sub.manana_sin_guia).toBe(2);
     expect(counts.autoGuideManana).toBe(1);
     expect(limaBoardRows(day, c, "manana_sin_guia").map((r) => r.orderId).sort()).toEqual(["acuerdo", "otra"]);
-    expect(limaNextStep(day[0]!, undefined, c.get("auto")!, TODAY)).toBe("Sale mañana: la guía GF automática la crea mañana en la mañana.");
+    expect(limaNextStep(day[0]!, undefined, c.get("auto")!, TODAY)).toBe("Sale mañana: la guía GF automática la crea en minutos; si no puede, avisa por Telegram.");
     const { ReproLimaBlocks } = await import("@/components/repro-lima-blocks");
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "programados", onPick: () => {} }));
     expect(html).toContain("1 de mañana la crea la automática");

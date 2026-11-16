@@ -1963,7 +1963,7 @@ function AskModeRow({
 // ── Guía GF automática (0345, MOM §29.17) ───────────────────────────────────
 
 const GF_ACTIVE_CONFIRM =
-  "¿Poner en Activo «Guía GF automática»? A las 9:00, 10:00 y 11:00 de Lima, Kapta creará en GF Courier las guías de los pedidos de Lima por generar rótulo, programados para hoy o sin fecha, sin que nadie las apruebe. Antes de las 9:00, lo que vaya por Aliclik necesita su guía creada.";
+  "¿Poner en Activo «Guía GF automática»? Apenas un pedido de Lima entre a «Por generar rótulo», Kapta creará su guía en GF Courier (cada 10 minutos, todo el día), sin que nadie la apruebe. Lo que vaya por Aliclik u otro courier se programa con ese courier en Repro Lima; crear la guía de Aliclik anula la de GF si GF no la asignó.";
 
 /**
  * Apagado / Simulación / Activo de la guía GF automática. Activo pide
@@ -2092,7 +2092,7 @@ function GfAutoLogCard({ view }: { view: GfAutoGuideView }) {
 // ── Guía Aliclik y Swayp del día programado (0349, MOM §9.5) ────────────────
 
 const LIMA_COURIER_ACTIVE_CONFIRM =
-  "¿Poner en Activo «Guía Aliclik y Swayp del día programado»? A las 8:00, 10:00 y 12:00 de Lima, Kapta creará la guía de Aliclik (AUTOECOM si se puede) de lo de Lima programado para hoy con Aliclik, y la de Swayp la víspera (también a las 15:00), sin que nadie las apruebe.";
+  "¿Poner en Activo «Guía Aliclik y Swayp del día programado»? Kapta creará, sin que nadie las apruebe, la guía de Aliclik (AUTOECOM si se puede) de lo de Lima programado con Aliclik —a las 8:00, 10:00 y 12:00 lo de hoy; a las 15:00, 18:00, 20:00 y 21:00 lo de mañana— y la de Swayp la víspera, hasta las 21:00.";
 
 /**
  * Apagado / Simulación / Activo de la guía del día programado. Activo pide

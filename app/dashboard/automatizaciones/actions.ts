@@ -832,7 +832,7 @@ export async function setGfAutoGuideMode(orgId: string, mode: string): Promise<A
   revalidatePath(PANEL_PATH);
   const tail =
     mode === "activo"
-      ? " La próxima pasada es a las 9:00, 10:00 u 11:00 de Lima."
+      ? " Revisa cada 10 minutos: lo que entre a «Por generar rótulo» toma su guía en minutos."
       : mode === "simulacion"
         ? " En la próxima pasada de la mañana dice qué guía habría creado, sin crear nada."
         : "";
@@ -879,7 +879,7 @@ export async function setLimaCourierAutoMode(orgId: string, mode: string): Promi
   revalidatePath(PANEL_PATH);
   const tail =
     mode === "activo"
-      ? " La próxima pasada es a las 8:00, 10:00, 12:00 o 15:00 de Lima."
+      ? " Pasa a las 8:00, 10:00 y 12:00 (lo de hoy) y a las 15:00, 18:00, 20:00 y 21:00 (lo de mañana) de Lima."
       : mode === "simulacion"
         ? " En la próxima pasada dice qué guía habría creado, sin crear nada."
         : "";

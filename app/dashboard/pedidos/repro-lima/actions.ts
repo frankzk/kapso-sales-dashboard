@@ -740,7 +740,7 @@ async function afterCall(admin: Admin, input: {
         const auto = await loadLimaCourierAutoActiveStores(admin, [f.storeId]).catch(() => [] as string[]);
         if (auto.includes(f.storeId)) {
           return {
-            notice: `Acuerdo guardado: sale el ${programDayLabel(day)} con ${courierName}. Kapta crea su guía ${courier === "aliclik" ? "la mañana de ese día" : "la víspera"}; si no puede, avisa por Telegram.${tail}`,
+            notice: `Acuerdo guardado: sale el ${programDayLabel(day)} con ${courierName}. Kapta crea su guía ${courier === "aliclik" ? "la noche anterior o la mañana de ese día" : "la víspera"}; si no puede, avisa por Telegram.${tail}`,
             programChanged: cleared,
           };
         }
