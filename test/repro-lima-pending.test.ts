@@ -17,6 +17,8 @@ vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAlic
 vi.mock("@/app/dashboard/pedidos/repro-lima/prior-counts-actions", () => ({ loadPriorOrderCounts: vi.fn(async () => ({ counts: {} })) }));
 vi.mock("@/app/dashboard/pedidos/repro-lima/no-entrego-actions", () => ({ loadNoEntregoStop: vi.fn() }));
 vi.mock("@/app/reparto/actions", () => ({ reportStop: vi.fn() }));
+vi.mock("@/app/dashboard/pedidos/aliclik-actions", () => ({ previewAliclikGuide: vi.fn(), createAliclikGuide: vi.fn() }));
+vi.mock("@/app/dashboard/pedidos/gf-courier-actions", () => ({ createGfCourierGuide: vi.fn() }));
 vi.mock("@/components/order-master-shared", () => ({ MacroStageDot: () => null }));
 const nav = vi.hoisted(() => ({ search: "" }));
 vi.mock("next/navigation", () => ({
@@ -683,10 +685,10 @@ describe("Reintentos Aliclik: elegir cuáles aprobar (owner, 06-11-2026)", () =>
     expect(html).not.toMatch(/aria-label="Elegir #KPA para aprobar" checked=""/);
     // Sin selección no hay casillas.
     expect(renderToStaticMarkup(createElement(LimaPendingList, { rows, reproRows: [], today: TODAY, renderActions: () => null }))).not.toContain('type="checkbox"');
-    // Para «Mover a…» la casilla lo dice (owner, 15-11-2026).
+    // Para «Programar» la casilla lo dice (owner, 15-11-2026; «Programar», 16-11-2026).
     const mover = renderToStaticMarkup(createElement(LimaPendingList, { rows, reproRows: [], today: TODAY, renderActions: () => null, selection: { ...selection, purpose: "mover" as const } }));
-    expect(mover).toContain('aria-label="Elegir #KPA para moverlo a otro día"');
-    expect(mover).toContain('aria-label="Elegir los 3 que se pueden mover a otro día"');
+    expect(mover).toContain('aria-label="Elegir #KPA para programarlo"');
+    expect(mover).toContain('aria-label="Elegir los 3 que se pueden programar"');
   });
   it("en Reintentos Aliclik la casilla aprueba y el botón dice cuántos; en las demás listas, «Mover a…»", () => {
     const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");

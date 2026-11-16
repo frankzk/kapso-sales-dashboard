@@ -661,6 +661,24 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
   };
 }
 
+/**
+ * ¿La fila ofrece crear la guía directo («Guía Aliclik», «Guía GF»; owner,
+ * 16-11-2026: «como un fast forward»)? Solo si todavía no tiene guía ni rótulo
+ * y está en Preparación, Por despachar o «Por reprogramar Lima»; la novedad y
+ * «Por cerrar» no. La acción vuelve a pasar por todas las compuertas. Pura.
+ */
+export function limaQuickGuideEligible(row: Pick<LimaPendingOrder, "stage" | "substage">, cls: Pick<LimaRowClass, "guide" | "step">): boolean {
+  if (cls.guide || cls.step === "por_cerrar" || cls.step === "novedad") return false;
+  return row.stage === "preparacion" || row.stage === "por_despachar" || isPorReprogramarLima(row);
+}
+
+/** El transporte de Aliclik que «Guía Aliclik» propone: AUTOECOM si se puede (en Lima, owner 03-11-2026); si no, el primero elegible. Pura. */
+export function defaultAliclikTransport(couriers: readonly { transportId: number; transportName?: string | null; selectable: boolean }[] | null | undefined): number | null {
+  const selectable = (couriers ?? []).filter((c) => c.selectable);
+  const autoecom = selectable.find((c) => /autoecom/i.test(c.transportName ?? ""));
+  return (autoecom ?? selectable[0])?.transportId ?? null;
+}
+
 /** Las subetapas en las que el pedido todavía no tiene guía ni rótulo de salida. */
 const NO_GUIDE_SUBSTAGES = new Set(["por_generar_rotulo", "por_reprogramar_lima"]);
 
@@ -1131,6 +1149,27 @@ export function agendarPath(row: LimaPendingOrder, c: BoardCase | undefined, opt
   if (isPorReprogramarLima(row)) return { kind: null, why: "Primero acuerda el día y el courier con la clienta en «Atender»." };
   if (liveGuideCourier(row) || row.stage === "en_curso") return { kind: null, why: "Ya tiene guía: el día lo lleva el courier." };
   return { kind: null, why: "Ya tiene rótulo: acuerda el día con la clienta en «Atender»." };
+}
+
+/**
+ * Cómo se dice poner el día (owner, 16-11-2026: «debería ser reprogramar o
+ * programar en vez de mover al»): «Programar» lo que no tiene día y
+ * «Reprogramar» lo que ya lo tiene, como el paso «Programados». Puras.
+ */
+export function programarVerb(hasDay: boolean): "Programar" | "Reprogramar" {
+  return hasDay ? "Reprogramar" : "Programar";
+}
+
+/** El botón de confirmar de una fila: «Programar para el lun 16/11» o «Reprogramar al lun 16/11». */
+export function programarConfirmLabel(hasDay: boolean, day: string): string {
+  return hasDay ? `Reprogramar al ${programDayLabel(day)}` : `Programar para el ${programDayLabel(day)}`;
+}
+
+/** El botón del lote: según cuántos de los elegidos ya tienen día. */
+export function programarBatchLabel(withDay: number, withoutDay: number, day: string | null): string {
+  const verb = withoutDay === 0 ? "Reprogramar" : withDay === 0 ? "Programar" : "Programar y reprogramar";
+  if (!day) return `${verb}…`;
+  return withoutDay === 0 ? `${verb} al ${programDayLabel(day)}` : `${verb} para el ${programDayLabel(day)}`;
 }
 
 /** Los días que «Agendar» ofrece como chips: hoy y los cinco próximos de reparto (no cambia con la Agenda de cuatro cajones). */

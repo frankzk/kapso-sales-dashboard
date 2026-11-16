@@ -19,7 +19,7 @@ import { AGENDA_ORIGIN_LABEL, agendaDayText, callDue, classifyLimaRows, courierN
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
-import { soles, telHref } from "@/lib/rider-contact";
+import { telHref } from "@/lib/rider-contact";
 import { loadPriorOrderCounts } from "@/app/dashboard/pedidos/repro-lima/prior-counts-actions";
 import { priorCountsLabel, type PriorCounts } from "@/lib/customer-prior-counts";
 
@@ -73,15 +73,19 @@ export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
 }
 
 /**
- * «Qué pasa»: la etapa del Master, el courier con su último estado, el fallo o
- * la situación, el acuerdo y la caja (las chapas de Repro Lima) y la nota de
- * la última llamada.
+ * «Qué pasa»: el courier con su último estado, el fallo o la situación, el
+ * acuerdo y la caja (las chapas de Repro Lima) y la nota de la última llamada.
+ * La etapa va debajo del código (`StageBadges`).
  */
+/** La etapa del Master y su subetapa: debajo del código del pedido (owner, 16-11-2026). */
+function StageBadges({ row }: { row: LimaPendingOrder }) {
+  return <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>;
+}
+
 function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
   const courier = courierNowText(row);
   return (
     <div className="space-y-1.5">
-      <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>
       {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}
       {repro ? <FailureLine row={repro} /> : <p className="text-[13px] leading-5 text-ink-600">{pendingGroup(row, today).label}</p>}
       {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
@@ -268,17 +272,17 @@ function SelectBox({ row, selection }: { row: LimaPendingOrder; selection: LimaR
       className={cn(CHECKBOX, "pointer-coarse:size-5")}
       checked={selection.selected.has(row.orderId)}
       onChange={() => selection.onToggle(row.orderId)}
-      aria-label={`Elegir ${row.orderName} para ${selection.purpose === "mover" ? "moverlo a otro día" : "aprobar"}`}
+      aria-label={`Elegir ${row.orderName} para ${selection.purpose === "mover" ? "programarlo" : "aprobar"}`}
     />
   );
 }
 
 function allLabel(selection: LimaRowSelection, count: number): string {
-  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden agendar` : `Elegir los ${count} listos`;
+  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden programar` : `Elegir los ${count} listos`;
 }
 
 function allAria(selection: LimaRowSelection, count: number): string {
-  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden mover a otro día` : `Elegir los ${count} listos para aprobar`;
+  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden programar` : `Elegir los ${count} listos para aprobar`;
 }
 
 /**
@@ -350,7 +354,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
     <>
       <div className="hidden border-t border-line xl:block">
         <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-wash [&_th]:shadow-[inset_0_-1px_0_var(--color-line),inset_0_1px_0_var(--color-line)]">
-          <colgroup>{selection && <col className="w-10" />}<col className="w-[10rem]" /><col className="w-[15%]" /><col /><col className="w-[22%]" /><col className="w-[8.5rem]" /><col className="w-[9rem]" /></colgroup>
+          <colgroup>{selection && <col className="w-10" />}<col className="w-[10rem]" /><col className="w-[15%]" /><col /><col className="w-[8.5rem]" /><col className="w-[22%]" /><col className="w-[9rem]" /></colgroup>
           <thead><tr className="text-left text-xs font-semibold text-ink-500">{selection && (
             <th className="py-2.5 pl-4 pr-0">
               {selectableIds.length > 0 && (
@@ -365,17 +369,17 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
                 />
               )}
             </th>
-          )}<th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Qué pasa</th><th className="px-3 py-2.5">Próximo paso</th><th className="px-3 py-2.5">Fecha agendada</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
+          )}<th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Qué pasa</th><th className="px-3 py-2.5">Fecha agendada</th><th className="px-3 py-2.5">Próximo paso</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
           <tbody>{visible.map((row) => {
             const repro = cases.get(row.orderId);
             const cls = own.get(row.orderId);
             return <tr key={row.orderId} className={cn("border-b border-line align-top transition-colors hover:bg-wash/70", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
               {selection && <td className="py-4 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
-              <td className="space-y-0.5 px-4 py-4"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} /><p className="text-xs tabular-nums text-ink-500">{soles(row.orderTotal)}</p>{repro && <ClaimBadge row={repro} />}</td>
+              <td className="space-y-1 px-4 py-4"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><StageBadges row={row} /><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
               <td className="space-y-0.5 px-3 py-4"><p className="truncate font-medium text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-[13px] tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
               <td className="px-3 py-4"><WhatHappens row={row} repro={repro} today={today} /></td>
-              <td className="px-3 py-4">{cls && <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />}</td>
               <td className="px-3 py-4">{cls && <AgendaCell row={row} cls={cls} repro={repro} today={today} />}</td>
+              <td className="px-3 py-4">{cls && <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />}</td>
               <td className="px-4 py-4"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
             </tr>;
           })}</tbody>
@@ -397,13 +401,13 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
         const repro = cases.get(row.orderId);
         const cls = own.get(row.orderId);
         return <li key={row.orderId} className="space-y-2 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span><span className="text-xs text-ink-500">{row.storeName}</span></div>
-          <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {soles(row.orderTotal)}</p><PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} />
+          <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span></div>
+          <StageBadges row={row} /><PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName}</p><PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} />
           <WhatHappens row={row} repro={repro} today={today} />
           {cls && (
-            <div className="grid gap-2 border-t border-line pt-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />
+            <div className="grid gap-2 border-t border-line pt-2 sm:grid-cols-[auto_minmax(0,1fr)]">
               <AgendaCell row={row} cls={cls} repro={repro} today={today} />
+              <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />
             </div>
           )}
           {repro && <ClaimBadge row={repro} />}

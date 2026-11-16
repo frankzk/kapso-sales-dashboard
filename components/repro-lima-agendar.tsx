@@ -11,7 +11,7 @@ import { cn } from "@/components/ui";
 import { Banner, FIELD_BOX, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { agendarReproLima, type AgendarResult } from "@/app/dashboard/pedidos/repro-lima/agenda-actions";
-import { agendaDayLabel, agendarMaxDay, agendarQuickDays, type AgendarPath } from "@/lib/repro-lima-blocks";
+import { agendaDayLabel, agendarMaxDay, agendarQuickDays, programarConfirmLabel, programarVerb, type AgendarPath } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
 
@@ -100,8 +100,11 @@ export function ChannelPicker({ value, onChange }: { value: AgendarChannel; onCh
   );
 }
 
-/** «Agendar» de una fila: un popover con el día y, con un acuerdo, por dónde se habló. */
-export function AgendarButton({ row, path, today, onDone, size = "sm", suggested }: {
+/**
+ * «Programar» / «Reprogramar» de una fila (antes «Agendar»; owner, 16-11-2026):
+ * un popover con el día y, con un acuerdo, por dónde se habló.
+ */
+export function AgendarButton({ row, path, today, onDone, size = "sm", suggested, hasDay }: {
   row: Pick<LimaPendingOrder, "orderId" | "orderName">;
   path: Exclude<AgendarPath, { kind: null }>;
   today: string;
@@ -109,6 +112,8 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
   size?: "sm" | "md";
   /** Sin día, el que propone Kapta (`limaSuggestedDay`): llega elegido y se confirma con un toque. */
   suggested?: string;
+  /** Ya tiene día (`agendaDay`): «Reprogramar»; si no, «Programar». */
+  hasDay?: boolean;
 }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -120,6 +125,8 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
   const [pending, start] = useTransition();
   const maxDay = agendarMaxDay(today, path.maxDays);
   const unchanged = Boolean(path.current) && day === path.current;
+  const dated = hasDay ?? Boolean(path.current);
+  const verb = programarVerb(dated);
 
   function save() {
     if (!day || pending) return;
@@ -145,10 +152,10 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
   return (
     <>
       <OpsButton ref={anchor} size={size} aria-expanded={open} onClick={() => { setError(null); setOpen((v) => !v); }} className="pointer-coarse:h-11">
-        Agendar
+        {verb}
       </OpsButton>
       {open && (
-        <Sheet look="ops" title={`Agendar ${row.orderName}`} onClose={() => setOpen(false)} anchored anchorRef={anchor}>
+        <Sheet look="ops" title={`${verb} ${row.orderName}`} onClose={() => setOpen(false)} anchored anchorRef={anchor}>
           <div className="space-y-3">
             <p className="text-[13px] leading-5 text-ink-500">
               {path.kind === "acuerdo"
@@ -169,7 +176,7 @@ export function AgendarButton({ row, path, today, onDone, size = "sm", suggested
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
               <OpsButton variant="ghost" size="sm" onClick={() => setOpen(false)} className="pointer-coarse:h-11">Cancelar</OpsButton>
               <OpsButton variant="primary" size="sm" disabled={!day || unchanged || pending} onClick={save} className="pointer-coarse:h-11">
-                {pending ? "Guardando…" : day ? `Agendar para el ${programDayLabel(day)}` : "Elige el día"}
+                {pending ? "Guardando…" : day ? programarConfirmLabel(dated, day) : "Elige el día"}
               </OpsButton>
             </div>
           </div>

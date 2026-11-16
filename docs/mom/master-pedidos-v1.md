@@ -6772,6 +6772,34 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     `?atencion=por_sacar:manana` abre Mañana y `?atencion=programados` es el
     paso (antes abría «Reprogramados», que vive dentro).
 
+- **La fila, más limpia, y la guía directo** (owner: «quita el nombre de la
+  tienda, quita el valor del pedido, mueve lo de en curso y por reprogramar
+  Lima debajo del código, fecha agendada entre Qué pasa y Próximo paso»;
+  «debajo del botón de atender… botones para crear directamente la guía con
+  los couriers, como un fast forward»). La fila ya no muestra la tienda ni el
+  total; la macroetapa y la subetapa van bajo el código, y las columnas son
+  Pedido · Cliente · Qué pasa · Fecha agendada · Próximo paso. Bajo «Atender»,
+  **«Guía Aliclik»** y **«Guía GF»** (`components/repro-lima-quick-guide.tsx`)
+  crean la guía sin abrir la ficha, por las MISMAS acciones de la Mesa de ruta
+  (`previewAliclikGuide` + `createAliclikGuide`, `createGfCourierGuide`), con
+  su permiso (`aliclik.create_guide`, `gf_courier.create_guide`) y todas sus
+  compuertas. Aliclik cotiza primero y muestra el transporte (AUTOECOM
+  elegido si se puede, `defaultAliclikTransport`), lo que cobra en la puerta y
+  el día de recojo, y pide el motivo si es una salida adicional; lo que pide
+  la ubicación o una excepción por escrito se hace en la ficha («Abrir la
+  ficha»). «Guía GF» sale solo en las tiendas con GF Courier habilitado. Se
+  ofrecen solo a lo que no tiene guía ni rótulo, en Preparación, Por despachar
+  o «Por reprogramar Lima» (`limaQuickGuideEligible`), nunca en una novedad ni
+  en «Por cerrar».
+- **«Programar» y «Reprogramar», no «Agendar» ni «Mover al…»** (owner:
+  «estaría mal comunicado, debería ser reprogramar o programar en vez de mover
+  al»). El botón de la fila dice «Programar» si el pedido no tiene día y
+  «Reprogramar» si ya lo tiene, y confirma con «Programar para el lun 16/11» o
+  «Reprogramar al mar 17/11»; el lote dice «Programar para el…», «Reprogramar
+  al…» o «Programar y reprogramar para el…» según los elegidos
+  (`programarVerb`, `programarConfirmLabel`, `programarBatchLabel`). Lo que
+  hace no cambia.
+
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
 esa lista (`atencion` en la URL) y tocar la elegida vuelve a Todos. Las reglas
 son puras (`lib/repro-lima-blocks.ts`) y usan lo que Repro Lima ya lee

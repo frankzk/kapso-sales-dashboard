@@ -721,7 +721,10 @@ describe("las guardas, en el código", () => {
     expect(board).toContain("lines: groupApprovalFailures(failed),");
     // GF Courier no anuló o no creó la guía del día nuevo: el aviso abre su Mesa de ruta (§9.5).
     expect(board).toContain('onClick={() => openDrawer(m.orderId, "operar")}');
-    expect(board).toContain('aria-label="Mover a otro día"');
+    expect(board).toContain('aria-label="Programar otro día"');
+    // «Programar» / «Reprogramar», no «Mover al…» (owner, 16-11-2026).
+    expect(board).not.toMatch(/Mover al|Mover a…|Moviendo/);
+    expect(board).toContain("programarBatchLabel(movableDated, movable.length - movableDated, moveDay || null)");
     expect(board).not.toContain("DispatchPlanPanel");
     expect(board).not.toContain("planItems(");
     // Sin `repro_lima.manage` (solo reintentos) no hay Agendar ni Atender.
@@ -858,5 +861,64 @@ describe("«Programados», su propio paso (owner, 16-11-2026: «un programado es
     expect(rows.filter((r) => boardMatches(classes.get(r.orderId)!, "manana")).map((r) => r.orderId)).toEqual(["a", "c", "gf"]);
     expect(rows.filter((r) => boardMatches(classes.get(r.orderId)!, "programados")).map((r) => r.orderId)).toEqual(["a", "b", "c", "gf"]);
     expect(limaBoardRows(rows, classes, "programados").map((r) => r.orderId)).toEqual(["a", "c", "gf", "b"]);
+  });
+});
+
+describe("la fila de Repro Lima y la guía directo (owner, 16-11-2026: «como un fast forward»)", () => {
+  it("ofrece crear la guía solo a lo que no tiene guía ni rótulo, antes de salir o por reprogramar", async () => {
+    const { limaQuickGuideEligible } = await import("@/lib/repro-lima-blocks");
+    const sin = row();
+    expect(limaQuickGuideEligible({ ...sin, stage: "preparacion", substage: "por_generar_rotulo" }, { guide: false, step: "por_sacar" })).toBe(true);
+    expect(limaQuickGuideEligible(failed(), { guide: false, step: "no_entregados" })).toBe(true);
+    expect(limaQuickGuideEligible({ ...sin, stage: "preparacion", substage: "por_armar" }, { guide: true, step: "programados" })).toBe(false);
+    expect(limaQuickGuideEligible({ ...sin, stage: "por_confirmar", substage: null }, { guide: false, step: "por_sacar" })).toBe(false);
+    expect(limaQuickGuideEligible(failed(), { guide: false, step: "novedad" })).toBe(false);
+    expect(limaQuickGuideEligible(failed(), { guide: false, step: "por_cerrar" })).toBe(false);
+  });
+
+  it("Aliclik elige AUTOECOM si se puede; GF y Aliclik van por las acciones de la Mesa de ruta", async () => {
+    const { defaultAliclikTransport } = await import("@/lib/repro-lima-blocks");
+    const quote = (transportId: number, transportName: string, selectable = true) => ({ transportId, transportName, selectable, addDays: 1, deliveryCost: 13.5, returnCost: 0, flagDeliveryExpress: false });
+    expect(defaultAliclikTransport([quote(1, "ALIDRIVER"), quote(2, "AutoEcom Logistic")])).toBe(2);
+    expect(defaultAliclikTransport([quote(1, "ALIDRIVER"), quote(2, "AutoEcom Logistic", false)])).toBe(1);
+    expect(defaultAliclikTransport([quote(2, "AutoEcom Logistic", false)])).toBeNull();
+    const quick = read("components/repro-lima-quick-guide.tsx");
+    for (const call of ["previewAliclikGuide(row.orderId)", "createAliclikGuide(row.orderId, {", "expectedCollectTotal: ok.collectTotal ?? null", "createGfCourierGuide(row.orderId)"]) expect(quick, call).toContain(call);
+    // Sin atajos: nada de llamar a Aliclik o GF por fuera de las acciones (permiso, compuertas y candado).
+    expect(quick).not.toMatch(/fetch\(|lib\/aliclik"|createAliclikGuideFor|createGfGuideFor/);
+    const board = read("components/repro-lima-board.tsx");
+    expect(board.indexOf(">Atender</OpsButton>")).toBeLessThan(board.indexOf("<QuickGuideButtons"));
+    expect(board).toContain("limaQuickGuideEligible(row, cls)");
+    const page = read("app/dashboard/pedidos/repro-lima/page.tsx");
+    expect(page).toContain('aliclik: permissions.can("aliclik.create_guide")');
+    expect(page).toContain('gfStores: permissions.can("gf_courier.create_guide") ? gfStores : []');
+  });
+
+  it("la fila: sin tienda ni valor, la etapa bajo el código y la fecha entre «Qué pasa» y «Próximo paso»", () => {
+    const pendingSrc = read("components/repro-lima-pending.tsx");
+    expect(pendingSrc).not.toContain("{row.storeName}");
+    expect(pendingSrc).not.toContain("soles(row.orderTotal)");
+    const header = pendingSrc.slice(pendingSrc.indexOf(">Pedido</th>"));
+    expect(header.indexOf(">Qué pasa</th>")).toBeLessThan(header.indexOf(">Fecha agendada</th>"));
+    expect(header.indexOf(">Fecha agendada</th>")).toBeLessThan(header.indexOf(">Próximo paso</th>"));
+    expect(pendingSrc).toContain("{row.orderName}</OrderLink><StageBadges row={row} />");
+  });
+});
+
+describe("«Programar» y «Reprogramar», no «Mover al…» (owner, 16-11-2026)", () => {
+  it("lo que no tiene día se programa; lo que ya lo tiene, se reprograma", async () => {
+    const { programarVerb, programarConfirmLabel, programarBatchLabel } = await import("@/lib/repro-lima-blocks");
+    expect(programarVerb(false)).toBe("Programar");
+    expect(programarVerb(true)).toBe("Reprogramar");
+    expect(programarConfirmLabel(false, "2026-11-16")).toBe("Programar para el lun 16/11");
+    expect(programarConfirmLabel(true, "2026-11-17")).toBe("Reprogramar al mar 17/11");
+    expect(programarBatchLabel(0, 3, "2026-11-16")).toBe("Programar para el lun 16/11");
+    expect(programarBatchLabel(2, 0, "2026-11-16")).toBe("Reprogramar al lun 16/11");
+    expect(programarBatchLabel(1, 2, "2026-11-16")).toBe("Programar y reprogramar para el lun 16/11");
+    expect(programarBatchLabel(1, 0, null)).toBe("Reprogramar…");
+    const agendar = read("components/repro-lima-agendar.tsx");
+    expect(agendar).toContain("{verb}");
+    expect(agendar).toContain("programarConfirmLabel(dated, day)");
+    expect(agendar).not.toMatch(/`Agendar para el|>\s*Agendar\s*</);
   });
 });
