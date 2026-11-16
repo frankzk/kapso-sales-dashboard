@@ -516,6 +516,7 @@ El panel del equipo de Lima (MOM §9.5, «Repro Lima por las tareas del equipo»
 - **Trabados dentro de su paso:** la celda termina su contexto con «· **N trabados**» en peso 600 `warn-fg`; elegido el paso, su pie lleva al final la píldora de excepción «Trabados N» (`AttentionPill` con el triángulo). No hay píldora «Trabados» en la cabecera.
 - **Fecha de la ruta del courier:** en «Fecha agendada», el día en 14 px peso 500 `ink-900` (`warn-fg` si el recojo venció) y debajo, en 12 px `ink-500`, de qué es: «Recojo de Aliclik», «Sale con GF Courier», «En ruta», «Retornando». Sin partir línea.
 - **«No se entregó»:** botón secundario de la fila junto a «Atender», con la hoja anclada de «Agendar»: el texto en 13 px `ink-600` con el motorizado en peso 600, los motivos como chips de elección, la nota, la captura (`PhotoCapture`) y, al pie sobre una hairline, lo que falta en 12 px `ink-500` y el botón primario «Registrar no entregado».
+- **Llamadas que ya tocan:** la celda de «Llamar después» dice «**N ya tocan**» en peso 600 `warn-fg` (en lugar de su porqué) y el próximo paso de la fila va en peso 500 `warn-fg`.
 - **Ruta vencida en la lista:** la «Fecha agendada» dice «Salió lun 16/11» en 14 px peso 500 `warn-fg` y debajo «Sin reporte» en 12 px `ink-500`, sin partir línea.
 
 **La lista, más clara (owner, 15-11-2026: «los colores y separaciones que se vean más claras»).**

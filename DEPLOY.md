@@ -85,6 +85,19 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Repro Lima: guía sin recoger a Sacar a reparto, llamadas que ya tocan en rojo y estados de Aliclik con palabras (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- **Guía sin recoger:** la guía que el courier debía recoger un día que ya pasó va a Sacar a reparto (en Hoy, vencida),
+  filtro «Guía sin recoger».
+- **Llamar después:** la celda dice «N ya tocan» y la fila «Ya toca llamar (pidió …)» en rojo.
+- **Aliclik:** «PENDING_DELIVERY · PREPARED · CONFIRMED» se lee «Por entregar · Validado · Confirmado».
+
+Verificar en Repro Lima:
+1. Un pedido con «Aliclik no lo recogió» aparece en Sacar a reparto → «Guía sin recoger».
+2. Un «Llamar después» con la hora pasada sale en rojo.
+
 ### 15-11-2026 · Repro Lima: Retornando a No entregados, fecha de la ruta del courier, trabados dentro de su paso, guía automática de mañana y «No se entregó» (sin migración, MOM §9.5, DESIGN.md)
 
 Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`; no escribe nada al
