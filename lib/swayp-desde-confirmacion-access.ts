@@ -6,6 +6,7 @@ import { createServerSupabase } from "@/lib/db";
 import { chunk } from "@/lib/access";
 import { resolveEmails } from "@/lib/productivity";
 import { SWAYP_STATES } from "@/lib/swayp-states";
+import { hasExternalCustody } from "@/lib/order-macro-stage";
 import {
   SWAYP_DESDE_CONFIRMACION_KIND,
   swaypDesdeConfirmacionOutcome,
@@ -52,6 +53,9 @@ interface GuideRow {
   returned_at: string | null;
   updated_at: string | null;
   created_at: string;
+  custody_state: string | null;
+  out_for_delivery_at: string | null;
+  pickup_state: string | null;
 }
 
 /** Los últimos `limit` casos, del más reciente al más viejo. */
@@ -83,7 +87,7 @@ export async function getSwaypDesdeConfirmacionLog(limit = 300): Promise<SwaypDe
     const [guides, master, orders] = await Promise.all([
       sb
         .from("shipments")
-        .select("id,order_id,courier,guide_code,delivery_status,swayp_state,reported_status,dispatched_at,closed_at,returned_at,updated_at,created_at")
+        .select("id,order_id,courier,guide_code,delivery_status,swayp_state,reported_status,dispatched_at,closed_at,returned_at,updated_at,created_at,custody_state,out_for_delivery_at,pickup_state")
         .in("order_id", part),
       sb
         .from("order_master")
@@ -111,7 +115,8 @@ export async function getSwaypDesdeConfirmacionLog(limit = 300): Promise<SwaypDe
     const guide = guides.find((g) => g.id === c.shipment_id);
     if (!guide) continue;
     const later = guides
-      .filter((g) => g.id !== guide.id && g.created_at > guide.created_at && g.delivery_status !== "anulado")
+      // Una anulada cuenta si alcanzó a salir (16-11-2026, igual que el Master).
+      .filter((g) => g.id !== guide.id && g.created_at > guide.created_at && (g.delivery_status !== "anulado" || hasExternalCustody(g)))
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
     const outcome = swaypDesdeConfirmacionOutcome({
       guide,

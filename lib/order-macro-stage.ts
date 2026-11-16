@@ -1449,8 +1449,17 @@ export function resolveMacroStage(input: ResolveMacroStageInput): ResolvedMacroS
   const swaypCase = input.order.cancelled_at ? null : swaypDesdeConfirmacionCase(input.guides, input.events);
   if (swaypCase && swaypDesdeConfirmacionFailed(swaypCase.guide)) {
     const caseGuide = swaypCase.guide;
+    // Una salida nacida DESPUÉS del envío que ya salió de la empresa también
+    // toma el pedido, aunque después se anule (16-11-2026, #KP203694: Aliclik
+    // la recogió y la anuló con la caja en su poder). Esa anulación después de
+    // salir abre la recuperación como cualquier otra; sin esto el pedido volvía
+    // a «Por generar rótulo» por la reconfirmación de antes de la guía Aliclik.
     const anotherOutput = input.guides.some(
-      (guide) => guide.id !== caseGuide.id && (guide.delivery_status === "entregado" || isActiveGuide(guide)),
+      (guide) =>
+        guide.id !== caseGuide.id &&
+        (guide.delivery_status === "entregado" ||
+          isActiveGuide(guide) ||
+          (Boolean(guide.created_at && guide.created_at > swaypCase.sentAt) && hasExternalCustody(guide))),
     );
     if (!anotherOutput) {
       const inventoryPending = hasReturned(caseGuide) && !inventoryResolvedForGuide(caseGuide, input.events);
