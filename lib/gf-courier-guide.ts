@@ -84,9 +84,17 @@ export async function createGfGuideFor(
   if (!built.ok) return { ok: false, error: built.reason };
 
   const key = gfIdempotencyKey(orderId, externalId);
-  // Si ya hay una intención pendiente con esta misma clave (timeout anterior), se reintenta con ella.
+  // Si ya hay una intención con esta misma clave, se reintenta con ella: pendiente (timeout anterior) o fallida (GF la
+  // rechazó, p. ej. sin cobertura, y ya se corrigió). Un rechazo de GF no queda guardado en su idempotencia, así que la
+  // misma clave vuelve a evaluarse. Antes, un intento fallido bloqueaba el reintento con «creación en curso».
   const prior = await admin.from("gf_order_requests").select("id,status").eq("idempotency_key", key).maybeSingle();
-  let intentId = prior.data?.status === "pending" ? prior.data.id as string : null;
+  let intentId = prior.data && ["pending", "failed"].includes(prior.data.status) ? prior.data.id as string : null;
+  if (intentId && prior.data?.status === "failed") {
+    const reset = await admin.from("gf_order_requests").update({ status: "pending", request: built.input, http_status: null, error_code: null,
+      response: null, created_by: ctx.userId, updated_at: new Date().toISOString() }).eq("id", intentId).eq("status", "failed").select("id");
+    if (reset.error) return { ok: false, error: reset.error.code === "23505" ? "Ya hay una creación de guía GF en curso para este pedido." : reset.error.message };
+    if (!reset.data?.length) return { ok: false, error: "Ya hay una creación de guía GF en curso para este pedido." };
+  }
   if (!intentId) {
     const ins = await admin.from("gf_order_requests").insert({ store_id: row.store_id, order_id: orderId, external_id: externalId,
       idempotency_key: key, request: built.input, created_by: ctx.userId }).select("id").single();
