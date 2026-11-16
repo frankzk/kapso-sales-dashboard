@@ -47,19 +47,22 @@ export const LIMA_TASKS: readonly LimaTask[] = ["primer_despacho", "no_entregado
 
 /** Filtros dentro de una tarjeta: no suman aparte. */
 export type LimaSubFilter =
-  | "agendados" | "nunca_salieron" | "mas_de_30" | "guia_sin_recoger" | "salieron_sin_dia"
+  | "nunca_salieron" | "mas_de_30" | "guia_sin_recoger" | "salieron_sin_dia"
   | "por_acordar" | "reintentos_aliclik" | "sin_reporte"
   | "esperan_anulacion" | "reprogramados" | "hoy_sin_guia" | "manana_sin_guia";
 
 /**
- * Los seis pasos del flujo (owner, 15-11-2026, tercera vuelta: «estos 5 no
+ * Los siete pasos del flujo (owner, 15-11-2026, tercera vuelta: «estos 5 no
  * suman 1,438»). Son una PARTICIÓN: cada pedido pendiente está en exactamente
- * un paso, así que suman el total. Los cuatro primeros son el trabajo del
+ * un paso, así que suman el total. Los cinco primeros son el trabajo del
  * equipo; «Con el courier» y «Por cerrar» («no lo necesito como tal») se
  * dibujan plegados (`LIMA_FOLDED_STEPS`), pero cuentan para que la suma cierre.
+ * «Programados» es un paso propio desde el 16-11-2026 (owner: «un programado es
+ * un programado y tiene que salir a su propio flujo del día… en no entregados
+ * y en sacar a reparto quedan básicamente los pedidos estancados»).
  */
-export type LimaStep = "novedad" | "llamar_despues" | "no_entregados" | "por_sacar" | "con_courier" | "por_cerrar";
-export const LIMA_STEPS: readonly LimaStep[] = ["novedad", "llamar_despues", "no_entregados", "por_sacar", "con_courier", "por_cerrar"];
+export type LimaStep = "novedad" | "llamar_despues" | "no_entregados" | "por_sacar" | "programados" | "con_courier" | "por_cerrar";
+export const LIMA_STEPS: readonly LimaStep[] = ["novedad", "llamar_despues", "no_entregados", "por_sacar", "programados", "con_courier", "por_cerrar"];
 /** Los pasos que el equipo no trabaja: solo se miran, plegados al final del flujo. */
 export const LIMA_FOLDED_STEPS: ReadonlySet<LimaStep> = new Set<LimaStep>(["con_courier", "por_cerrar"]);
 
@@ -70,14 +73,7 @@ export const LIMA_COURIER_STATES: readonly LimaCourierState[] = ["guia_creada", 
 export type LimaAgendaKey = string;
 
 /** Lo que viaja por `atencion` en la URL. */
-/**
- * Un día de «Programados» dentro de un paso (owner, 16-11-2026: Programados
- * sigue al paso elegido): `por_sacar:manana`, `con_courier:despues`,
- * `por_sacar:manana_sin_guia`… La lista es el paso Y ese filtro.
- */
-export type LimaScopedKey = `${LimaStep}:${LimaAgendaKey | "hoy_sin_guia" | "manana_sin_guia" | "reprogramados"}`;
-
-export type LimaBoardKey = "todos" | LimaStep | LimaTask | LimaSubFilter | LimaCourierState | LimaAgendaKey | LimaScopedKey;
+export type LimaBoardKey = "todos" | LimaStep | LimaTask | LimaSubFilter | LimaCourierState | LimaAgendaKey;
 
 export interface LimaCard<K extends string = string> {
   key: K;
@@ -138,19 +134,25 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
   {
     key: "no_entregados",
     label: "No entregados",
-    hint: "«Por reprogramar Lima» sin una fecha acordada, lo que el courier está devolviendo y lo que salió a ruta hace más de un día sin reporte: llama a la clienta y acuerda el día y el courier con «Atender». Dentro, los reintentos por Aliclik (salen sin llamar), «Retornando» y «Sin reporte de la ruta».",
+    hint: "«Por reprogramar Lima» sin un día de salida, lo que el courier está devolviendo y lo que salió a ruta hace más de un día sin reporte: llama a la clienta y acuerda el día y el courier con «Atender»; con su día pasa a «Programados». Dentro, los reintentos por Aliclik (salen sin llamar), «Retornando» y «Sin reporte de la ruta».",
     empty: "No hay no entregados por gestionar con estos filtros.",
   },
   {
     key: "por_sacar",
     label: "Sacar a reparto",
-    hint: "Todo lo que todavía no salió: lo agendado que espera su guía o su rótulo, la guía que el courier no recogió en su día y lo que nunca salió y no tiene día. La meta es que salga todo: agenda lo que no tiene día y genera la guía de lo que sale hoy o mañana.",
+    hint: "Lo que todavía no salió y no tiene día: lo que nunca salió, lo que salió antes y volvió sin un día nuevo, y la guía que el courier no recogió en su día. Agéndalo: con su día pasa a «Programados».",
     empty: "No queda nada por sacar a reparto con estos filtros.",
+  },
+  {
+    key: "programados",
+    label: "Programados",
+    hint: "Ya tienen día de salida y todavía no salen: lo acordado con la clienta, «Programar envío», el programa de Grupo GF o la guía que el courier recoge en su día. Dentro, por día: Hoy, Mañana y Después. Que salgan: lo de hoy y mañana sin guía ni rótulo es una alerta.",
+    empty: "No hay pedidos programados con estos filtros.",
   },
   {
     key: "con_courier",
     label: "Con el courier",
-    hint: "Con la guía viva de un courier: creada (todavía no lo recoge) o en ruta. Solo seguimiento: aquí no se opera al courier. Lo que el courier devuelve está en No entregados.",
+    hint: "Ya salieron con un courier (en ruta) o tienen su guía sin un día de recojo por delante. Solo seguimiento: aquí no se opera al courier. Lo que el courier devuelve está en No entregados.",
     empty: "Ningún courier lleva pedidos con estos filtros.",
   },
   {
@@ -170,18 +172,13 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
  */
 export const LIMA_STEP_PARTS: Partial<Record<LimaStep, readonly LimaSubFilter[] | readonly LimaBoardKey[]>> = {
   no_entregados: ["por_acordar", "reintentos_aliclik", "retornando", "sin_reporte"],
-  por_sacar: ["agendados", "guia_sin_recoger", "nunca_salieron", "mas_de_30", "salieron_sin_dia"],
+  por_sacar: ["guia_sin_recoger", "nunca_salieron", "mas_de_30", "salieron_sin_dia"],
+  // Hoy (si hoy se reparte), Mañana (el próximo día de reparto) y Después: `agendaCards`.
+  programados: ["hoy", "manana", "despues"],
   con_courier: ["guia_creada", "en_ruta"],
 };
 
 export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & { parent: LimaStep | LimaTask | "agenda" }> = {
-  agendados: {
-    key: "agendados",
-    parent: "por_sacar",
-    label: "Agendados",
-    hint: "Por sacar a reparto y con su día (acuerdo con la clienta, programa o «Programar envío»): falta la guía o el rótulo para que salgan. Están en la Agenda.",
-    empty: "No hay pedidos agendados por sacar con estos filtros.",
-  },
   nunca_salieron: {
     key: "nunca_salieron",
     parent: "por_sacar",
@@ -207,7 +204,7 @@ export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & {
     key: "por_acordar",
     parent: "no_entregados",
     label: "Por acordar",
-    hint: "«Por reprogramar Lima» sin una fecha acordada ni un reintento por Aliclik: llama a la clienta y acuerda el día y el courier con «Atender».",
+    hint: "«Por reprogramar Lima» sin un día de salida ni un reintento por Aliclik: llama a la clienta y acuerda el día y el courier con «Atender».",
     empty: "No hay no entregados por acordar con estos filtros.",
   },
   guia_sin_recoger: {
@@ -626,13 +623,23 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
   const pickupLate = base === null && Boolean(pickupDay && pickupDay < today);
   const missedPickup = pickupLate && fullDeliveryDaysBetween(pickupDay!, today) >= ROUTE_REPORT_GRACE_DAYS;
   const day = pickupLate && !missedPickup ? nextDeliveryDay(today) : scheduled;
-  const step = missedPickup ? "por_sacar" : limaStepOf(task, courier);
+  const baseStep = missedPickup ? "por_sacar" : limaStepOf(task, courier);
   // Con un courier, la Agenda solo lo cuenta con un día de hoy en adelante. Sin
   // courier (o con la guía sin recoger): con su día; sin día, «Sin fecha» solo
   // si es por sacar a reparto.
   const agenda = courier && !missedPickup
     ? (day && day >= today ? agendaKeyOf(day, today, window) : null)
-    : day ? agendaKeyOf(day, today, window) : step === "por_sacar" ? "sin_fecha" : null;
+    : day ? agendaKeyOf(day, today, window) : baseStep === "por_sacar" ? "sin_fecha" : null;
+  // «Programados», su propio paso (owner, 16-11-2026: «un programado es un
+  // programado»): tiene día de salida y todavía no sale (sin courier o con la
+  // guía que espera su recojo), venga de No entregados (un «Por reprogramar
+  // Lima» con su día en el programa de Grupo GF), de Sacar a reparto o de la
+  // guía creada. La novedad, «Llamar después» y «Por cerrar» mandan; la guía
+  // que el courier no recogió en su día es un estancado de Sacar a reparto.
+  const programmed = Boolean(agenda && agenda !== "sin_fecha") && !missedPickup
+    && (courier === null || courier === "guia_creada")
+    && (baseStep === "no_entregados" || baseStep === "por_sacar" || baseStep === "con_courier");
+  const step: LimaStep = programmed ? "programados" : baseStep;
   return {
     step,
     guide: Boolean(courier) || Boolean(row.ops?.courierDelivered) || (row.substage != null && !NO_GUIDE_SUBSTAGES.has(row.substage)),
@@ -700,70 +707,39 @@ export interface LimaBoardCounts {
    * son de la ruta anterior (owner, 15-11-2026: «¿cuándo estuvieron en ruta?»).
    */
   enRutaHoy: number;
-  /** «Programados» de cada paso: sigue al paso elegido (owner, 16-11-2026). */
-  byStep: Record<LimaStep, LimaAgendaScope>;
-}
-
-/** Lo que muestra «Programados»: sus días, lo que sale sin guía, lo que crea la automática y los reprogramados. */
-export interface LimaAgendaScope {
-  agenda: Record<string, number>;
-  hoy_sin_guia: number;
-  manana_sin_guia: number;
-  autoGuideManana: number;
-  reprogramados: number;
-}
-
-const emptyScope = (): LimaAgendaScope => ({ agenda: { hoy: 0, manana: 0, despues: 0 }, hoy_sin_guia: 0, manana_sin_guia: 0, autoGuideManana: 0, reprogramados: 0 });
-
-/** «Programados» de todo el flujo (sin paso elegido) o de un paso. */
-export function agendaScopeOf(counts: LimaBoardCounts, step: LimaStep | null): LimaAgendaScope {
-  if (step) return counts.byStep[step];
-  return {
-    agenda: counts.agenda,
-    hoy_sin_guia: counts.sub.hoy_sin_guia,
-    manana_sin_guia: counts.sub.manana_sin_guia,
-    autoGuideManana: counts.autoGuideManana,
-    reprogramados: counts.sub.reprogramados,
-  };
 }
 
 export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: ReadonlyMap<string, LimaRowClass>): LimaBoardCounts {
   const counts: LimaBoardCounts = {
     todos: rows.length,
-    step: { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, con_courier: 0, por_cerrar: 0 },
+    step: { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, programados: 0, con_courier: 0, por_cerrar: 0 },
     task: { primer_despacho: 0, no_entregados: 0, novedad: 0, llamar_despues: 0, por_cerrar: 0 },
-    sub: { agendados: 0, nunca_salieron: 0, mas_de_30: 0, guia_sin_recoger: 0, salieron_sin_dia: 0, por_acordar: 0, reintentos_aliclik: 0, sin_reporte: 0, esperan_anulacion: 0, reprogramados: 0, hoy_sin_guia: 0, manana_sin_guia: 0 },
-    agenda: { hoy: 0, manana: 0, despues: 0, sin_fecha: 0 },
+    sub: { nunca_salieron: 0, mas_de_30: 0, guia_sin_recoger: 0, salieron_sin_dia: 0, por_acordar: 0, reintentos_aliclik: 0, sin_reporte: 0, esperan_anulacion: 0, reprogramados: 0, hoy_sin_guia: 0, manana_sin_guia: 0 },
+    agenda: { hoy: 0, manana: 0, despues: 0 },
     courier: { guia_creada: 0, en_ruta: 0, retornando: 0 },
     autoGuideManana: 0,
     enRutaHoy: 0,
-    byStep: { novedad: emptyScope(), llamar_despues: emptyScope(), no_entregados: emptyScope(), por_sacar: emptyScope(), con_courier: emptyScope(), por_cerrar: emptyScope() },
   };
   for (const row of rows) {
     const cls = classes.get(row.orderId);
     if (!cls) continue;
-    // «Programados» del paso del pedido, con las mismas reglas que el de todo el flujo.
-    const scope = counts.byStep[cls.step];
-    if (cls.agenda && cls.agenda !== "sin_fecha") scope.agenda[cls.agenda] = (scope.agenda[cls.agenda] ?? 0) + 1;
-    if (cls.agenda === "hoy" && !cls.guide) scope.hoy_sin_guia += 1;
-    if (cls.agenda === "manana" && !cls.guide) {
-      if (cls.autoGuide) scope.autoGuideManana += 1;
-      else scope.manana_sin_guia += 1;
-    }
-    if (cls.agreed) scope.reprogramados += 1;
     counts.step[cls.step] += 1;
     if (cls.task) counts.task[cls.task] += 1;
-    if (cls.agenda === "hoy" && !cls.guide) counts.sub.hoy_sin_guia += 1;
-    if (cls.agenda === "manana" && !cls.guide) {
-      if (cls.autoGuide) counts.autoGuideManana += 1;
-      else counts.sub.manana_sin_guia += 1;
+    // «Programados»: sus días (Hoy, Mañana, Después) son sus partes; lo de hoy y
+    // mañana sin guía y los reprogramados, filtros de adentro (no suman aparte).
+    if (cls.step === "programados") {
+      if (cls.agenda) counts.agenda[cls.agenda] = (counts.agenda[cls.agenda] ?? 0) + 1;
+      if (cls.agenda === "hoy" && !cls.guide) counts.sub.hoy_sin_guia += 1;
+      if (cls.agenda === "manana" && !cls.guide) {
+        if (cls.autoGuide) counts.autoGuideManana += 1;
+        else counts.sub.manana_sin_guia += 1;
+      }
+      if (cls.agreed) counts.sub.reprogramados += 1;
     }
     // Las partes de «Sacar a reparto» y de «No entregados»: una y solo una por pedido (`limaStepPart`).
     const part = limaStepPart(cls);
     if (part) counts.sub[part] += 1;
     if (cls.awaitingCancel) counts.sub.esperan_anulacion += 1;
-    if (cls.agreed) counts.sub.reprogramados += 1;
-    if (cls.agenda) counts.agenda[cls.agenda] = (counts.agenda[cls.agenda] ?? 0) + 1;
     // Guía creada y En ruta son los filtros de adentro de «Con el courier»; Retornando, de «No entregados».
     if (cls.courier && cls.step === COURIER_STEP[cls.courier]) counts.courier[cls.courier] += 1;
     if (cls.step === "con_courier" && cls.courier === "en_ruta" && cls.routeToday) counts.enRutaHoy += 1;
@@ -781,8 +757,9 @@ const COURIER_STEP: Record<LimaCourierState, LimaStep> = { guia_creada: "con_cou
 /**
  * La parte de su paso, para «Sacar a reparto» y «No entregados» (owner,
  * 16-11-2026: las partes suman el paso). La primera que aplica:
- * - Sacar a reparto: «Guía sin recoger», «Agendados» (con su día), «Nunca
+ * - Sacar a reparto (lo que no tiene día): «Guía sin recoger», «Nunca
  *   salieron» (los últimos 30 días), «Más de 30 días» y «Ya salieron, sin día».
+ *   Lo que tiene día es «Programados», cuyas partes son sus días.
  * - No entregados: «Reintentos Aliclik», «Sin reporte de la ruta», «Retornando»
  *   (es el filtro del courier, sin parte propia) y «Por acordar».
  * Null en los demás pasos. Pura.
@@ -790,7 +767,6 @@ const COURIER_STEP: Record<LimaCourierState, LimaStep> = { guia_creada: "con_cou
 export function limaStepPart(cls: LimaRowClass): LimaSubFilter | null {
   if (cls.step === "por_sacar") {
     if (cls.missedPickup) return "guia_sin_recoger";
-    if (cls.agenda && cls.agenda !== "sin_fecha") return "agendados";
     if (cls.task === "primer_despacho") return cls.stale ? "mas_de_30" : "nunca_salieron";
     return "salieron_sin_dia";
   }
@@ -803,28 +779,13 @@ export function limaStepPart(cls: LimaRowClass): LimaSubFilter | null {
   return null;
 }
 
-/** El paso y el filtro de un `LimaScopedKey`, o null si la clave no es de las compuestas. */
-export function scopedKeyParts(key: string): { step: LimaStep; inner: LimaBoardKey } | null {
-  const at = key.indexOf(":");
-  if (at < 0) return null;
-  const step = key.slice(0, at);
-  const inner = key.slice(at + 1);
-  if (!STEP_SET.has(step) || !SCOPED_INNER.has(inner)) return null;
-  return { step: step as LimaStep, inner: inner as LimaBoardKey };
-}
-
-const SCOPED_INNER = new Set<string>(["hoy", "manana", "despues", "hoy_sin_guia", "manana_sin_guia", "reprogramados"]);
-
 /** ¿La fila entra en el filtro `key`? */
 export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
   if (key === "todos") return true;
-  const scoped = scopedKeyParts(key);
-  if (scoped) return cls.step === scoped.step && boardMatches(cls, scoped.inner);
   if (STEP_SET.has(key)) return cls.step === key;
   if (TASK_SET.has(key)) return cls.task === key;
   if (COURIER_SET.has(key)) return cls.courier === key && cls.step === COURIER_STEP[key as LimaCourierState];
   switch (key) {
-    case "agendados":
     case "nunca_salieron":
     case "mas_de_30":
     case "salieron_sin_dia":
@@ -834,10 +795,11 @@ export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
     case "guia_sin_recoger":
       return limaStepPart(cls) === key;
     case "esperan_anulacion": return cls.awaitingCancel;
-    case "reprogramados": return cls.agreed;
-    case "hoy_sin_guia": return cls.agenda === "hoy" && !cls.guide;
-    case "manana_sin_guia": return cls.agenda === "manana" && !cls.guide && !cls.autoGuide;
-    default: return cls.agenda === key;
+    // Los días y sus filtros son de «Programados» (owner, 16-11-2026).
+    case "reprogramados": return cls.step === "programados" && cls.agreed;
+    case "hoy_sin_guia": return cls.step === "programados" && cls.agenda === "hoy" && !cls.guide;
+    case "manana_sin_guia": return cls.step === "programados" && cls.agenda === "manana" && !cls.guide && !cls.autoGuide;
+    default: return cls.step === "programados" && cls.agenda === key;
   }
 }
 
@@ -862,15 +824,12 @@ export function boardFilter(value: string | null, today: string): LimaBoardKey {
     case "primer_despacho": return "por_sacar";
     case "por_decidir": return "no_entregados";
     case "cerrados": return "esperan_anulacion";
-    case "programados": return "reprogramados";
+    case "agendados": return "programados";
   }
   if (STEP_SET.has(value) || TASK_SET.has(value) || COURIER_SET.has(value) || value in LIMA_SUB_FILTERS) return value;
-  // Un día de Programados dentro de un paso: «Hoy» de un domingo abre «Mañana», como afuera.
-  const scoped = scopedKeyParts(value);
-  if (scoped) {
-    const inner = scoped.inner === "hoy" && !isDeliveryDay(today) ? "manana" : scoped.inner;
-    return `${scoped.step}:${inner}` as LimaScopedKey;
-  }
+  // Un enlace de «Programados por paso» (`por_sacar:manana`, 16-11-2026, ya
+  // reemplazado por el paso «Programados»): abre el día.
+  if (value.includes(":")) return boardFilter(value.slice(value.indexOf(":") + 1), today);
   // Un día sin reparto no tiene «Hoy»: abre «Mañana».
   if (value === "hoy") return isDeliveryDay(today) ? "hoy" : "manana";
   if (value === "manana" || value === "despues") return value;
@@ -887,20 +846,6 @@ export function boardFilter(value: string | null, today: string): LimaBoardKey {
 /** La tarjeta (o el filtro de adentro) de una clave, para el título de la lista y su vacío. */
 export function boardCard(key: LimaBoardKey, today: string): (LimaCard & { block: "gestion" | "agenda" | "courier" }) | null {
   if (key === "todos") return null;
-  // «Sacar a reparto · Mañana»: el paso y su día de Programados.
-  const scoped = scopedKeyParts(key);
-  if (scoped) {
-    const stepCard = LIMA_STEP_CARDS.find((c) => c.key === scoped.step)!;
-    const inner = boardCard(scoped.inner, today);
-    if (!inner) return { ...stepCard, block: "gestion" };
-    return {
-      key,
-      label: `${stepCard.label} · ${inner.label}`,
-      hint: `${inner.hint} Solo los de «${stepCard.label}».`,
-      empty: `«${stepCard.label}» no tiene pedidos para este filtro.`,
-      block: "agenda",
-    };
-  }
   const step = LIMA_STEP_CARDS.find((c) => c.key === key);
   if (step) return { ...step, block: "gestion" };
   const task = LIMA_TASK_CARDS.find((c) => c.key === key);
@@ -928,10 +873,10 @@ const STEP_RANK = new Map(LIMA_STEPS.map((step, i) => [step, i * 10]));
 const COURIER_RANK = new Map(LIMA_COURIER_STATES.map((state, i) => [state, i]));
 const AGENDA_RANK: Record<string, number> = { hoy: 0, manana: 1, despues: 2, sin_fecha: 3 };
 
-/** El orden de la lista: por paso; en «Sacar a reparto», hoy, mañana, después y sin fecha; con el courier, por su estado. */
+/** El orden de la lista: por paso; en «Programados», hoy, mañana y después; con el courier, por su estado. */
 function groupRank(cls: LimaRowClass): number {
   const base = STEP_RANK.get(cls.step)!;
-  if (cls.step === "por_sacar") return base + (AGENDA_RANK[cls.agenda ?? "sin_fecha"] ?? 3);
+  if (cls.step === "programados") return base + (AGENDA_RANK[cls.agenda ?? "despues"] ?? 2);
   if (cls.step === "con_courier") return base + (cls.courier ? COURIER_RANK.get(cls.courier)! : 3);
   return base;
 }
@@ -968,8 +913,9 @@ export function limaBoardRows(
     if (a.group !== b.group) return a.group - b.group;
     const step = a.cls.step;
     if (step === "no_entregados" || step === "llamar_despues") return a.caseAt - b.caseAt || a.since - b.since;
+    // Programados, por día (lo vencido primero); Sacar a reparto, lo más antiguo primero (owner, 06-11-2026).
+    if (step === "programados") return (a.cls.agendaDay ?? "9999").localeCompare(b.cls.agendaDay ?? "9999") || a.created - b.created;
     if (step === "por_sacar") {
-      // Lo que tiene día, por día (lo vencido primero); sin día, lo más antiguo primero (owner, 06-11-2026).
       if (a.cls.agendaDay || b.cls.agendaDay) return (a.cls.agendaDay ?? "9999").localeCompare(b.cls.agendaDay ?? "9999") || a.created - b.created;
       return a.created - b.created;
     }

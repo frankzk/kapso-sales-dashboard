@@ -18,8 +18,9 @@
 // - lo que vive DENTRO de un paso (Reintentos Aliclik, Sin fecha, En ruta…) se
 //   dice dentro de su celda y su filtro aparece en el pie de ESA tarjeta solo
 //   cuando el paso está elegido, con su nombre delante;
-// - la Agenda es Hoy, Mañana, Después y Sin fecha. Hoy y Mañana dicen cuántos
-//   tienen guía o rótulo y cuántos no; los que no, son una alerta con filtro.
+// - «Programados» es un paso del flujo (16-11-2026: «un programado es un
+//   programado»), con sus días dentro (Hoy, Mañana, Después) y las alertas de
+//   lo que sale hoy o mañana sin guía. Ya no hay un bloque aparte.
 // Cada cifra sigue siendo un filtro de la única lista de abajo (The Cifras
 // Navegan Rule). Solo dibuja: las cuentas salen de lib/repro-lima-blocks.ts.
 import type { ReactNode } from "react";
@@ -32,8 +33,6 @@ import {
   LIMA_STEP_CARDS,
   LIMA_STEP_PARTS,
   LIMA_SUB_FILTERS,
-  agendaScopeOf,
-  scopedKeyParts,
   agendaCards,
   type LimaBoardCounts,
   type LimaBoardKey,
@@ -50,7 +49,8 @@ export const LIMA_FLOW: readonly { key: LimaStep; why: string }[] = [
   { key: "novedad", why: "El courier lo tiene en la calle: llama ya." },
   { key: "llamar_despues", why: "A la hora que pidió la clienta." },
   { key: "no_entregados", why: "Acuerda el día y el courier." },
-  { key: "por_sacar", why: "Que salga todo: agenda y genera su guía." },
+  { key: "por_sacar", why: "Sin día: agéndalos." },
+  { key: "programados", why: "Que salgan: genera su guía." },
   { key: "con_courier", why: "Solo seguimiento." },
   { key: "por_cerrar", why: "Validar el cobro o anular." },
 ];
@@ -80,11 +80,19 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
   por_sacar: {
     keys: LIMA_STEP_PARTS.por_sacar ?? [],
     note: (c) => partsNote(c, [
-      [c.sub.agendados, c.sub.agendados === 1 ? "agendado" : "agendados"],
       [c.sub.guia_sin_recoger, "sin recoger"],
       [c.sub.nunca_salieron, "nunca salieron"],
       [c.sub.mas_de_30, "de más de 30 días"],
       [c.sub.salieron_sin_dia, "ya salieron, sin día"],
+    ]),
+  },
+  // Sus días son sus partes; lo de hoy y mañana sin guía va en la celda como alerta (`programadosNote`).
+  programados: {
+    keys: LIMA_STEP_PARTS.programados ?? [],
+    note: (c) => partsNote(c, [
+      [c.agenda.hoy ?? 0, "hoy"],
+      [c.agenda.manana ?? 0, "mañana"],
+      [c.agenda.despues ?? 0, "después"],
     ]),
   },
   con_courier: {
@@ -132,6 +140,7 @@ export const STEP_TONE: Record<LimaStep, {
   novedad: { seg: "bg-orange-500", segDim: "bg-orange-200", num: "bg-orange-50 text-orange-800 ring-orange-200", numOn: "bg-orange-700 text-white ring-orange-700", on: "bg-orange-50", text: "text-orange-800", bar: "bg-orange-700", dot: "bg-orange-500", band: "bg-orange-50/70" },
   llamar_despues: { seg: "bg-sky-500", segDim: "bg-sky-200", num: "bg-sky-50 text-sky-800 ring-sky-200", numOn: "bg-sky-700 text-white ring-sky-700", on: "bg-sky-50", text: "text-sky-800", bar: "bg-sky-700", dot: "bg-sky-500", band: "bg-sky-50/70" },
   no_entregados: { seg: "bg-indigo-500", segDim: "bg-indigo-200", num: "bg-indigo-50 text-indigo-800 ring-indigo-200", numOn: "bg-indigo-700 text-white ring-indigo-700", on: "bg-indigo-50", text: "text-indigo-800", bar: "bg-indigo-700", dot: "bg-indigo-500", band: "bg-indigo-50/70" },
+  programados: { seg: "bg-violet-500", segDim: "bg-violet-200", num: "bg-violet-50 text-violet-800 ring-violet-200", numOn: "bg-violet-700 text-white ring-violet-700", on: "bg-violet-50", text: "text-violet-800", bar: "bg-violet-700", dot: "bg-violet-500", band: "bg-violet-50/70" },
   por_sacar: { seg: "bg-teal-500", segDim: "bg-teal-200", num: "bg-teal-50 text-teal-800 ring-teal-200", numOn: "bg-teal-700 text-white ring-teal-700", on: "bg-teal-50", text: "text-teal-800", bar: "bg-teal-700", dot: "bg-teal-500", band: "bg-teal-50/70" },
   con_courier: { seg: "bg-slate-400", segDim: "bg-slate-200", num: "bg-slate-50 text-slate-700 ring-slate-200", numOn: "bg-slate-700 text-white ring-slate-700", on: "bg-slate-100", text: "text-slate-800", bar: "bg-slate-600", dot: "bg-slate-400", band: "bg-slate-100/70" },
   por_cerrar: { seg: "bg-slate-300", segDim: "bg-slate-100", num: "bg-slate-50 text-slate-700 ring-slate-200", numOn: "bg-slate-700 text-white ring-slate-700", on: "bg-slate-100", text: "text-slate-800", bar: "bg-slate-600", dot: "bg-slate-300", band: "bg-slate-100/70" },
@@ -154,8 +163,22 @@ function withStuck(note: ReactNode, n: number): ReactNode {
   );
 }
 
+/** La celda de «Programados»: sus días y, en `warn-fg`, lo que sale hoy o mañana sin guía. */
+function programadosNote(days: string | null, sinGuia: number): ReactNode {
+  if (!sinGuia) return days;
+  return (
+    <>
+      {days}
+      {days ? " · " : null}
+      <span className="font-semibold text-warn-fg">{fmt(sinGuia)} sin guía</span>
+    </>
+  );
+}
+
 /** Lo que dice un filtro de adentro y cuántos tiene. */
-function insideChip(key: LimaBoardKey, counts: LimaBoardCounts): { label: string; count: number; hint: string } {
+function insideChip(key: LimaBoardKey, counts: LimaBoardCounts, today: string): { label: string; count: number; hint: string } {
+  const day = agendaCards(today).find((card) => card.key === key);
+  if (day) return { label: day.label, count: counts.agenda[day.key] ?? 0, hint: day.hint };
   const courier = COURIER.get(key as never);
   if (courier) return { label: courier.label, count: counts.courier[courier.key], hint: courier.hint };
   const sub = (LIMA_SUB_FILTERS as Record<string, { label: string; hint: string } | undefined>)[key];
@@ -165,9 +188,9 @@ function insideChip(key: LimaBoardKey, counts: LimaBoardCounts): { label: string
 /** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro (la lista toma su matiz). */
 export function activeStep(active: LimaBoardKey): LimaStep | null {
   if (STEP.has(active as LimaStep)) return active as LimaStep;
-  const scoped = scopedKeyParts(active);
-  if (scoped) return scoped.step;
   for (const [step, inside] of Object.entries(INSIDE)) if (inside?.keys.includes(active)) return step as LimaStep;
+  // Las alertas y los reprogramados viven dentro de «Programados».
+  if (active === "hoy_sin_guia" || active === "manana_sin_guia" || active === "reprogramados") return "programados";
   return null;
 }
 
@@ -335,13 +358,9 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
   const step = activeStep(active);
   const inside = step ? INSIDE[step] : undefined;
   const stepCard = step ? STEP.get(step) : undefined;
-  // «Programados» sigue al paso elegido (owner, 16-11-2026): sus cifras son las
-  // del paso y tocar un día filtra el paso Y ese día (`por_sacar:manana`).
-  const view = agendaScopeOf(counts, step);
-  const scopeKey = (key: string): LimaBoardKey => (step ? (`${step}:${key}` as LimaBoardKey) : (key as LimaBoardKey));
-  const agendaTotal = agenda.reduce((sum, card) => sum + (view.agenda[card.key] ?? 0), 0);
-  const sinGuia = { hoy: view.hoy_sin_guia, manana: view.manana_sin_guia } as Record<string, number>;
-  const viewSub = { hoy_sin_guia: view.hoy_sin_guia, manana_sin_guia: view.manana_sin_guia, reprogramados: view.reprogramados };
+  const dayKeys = new Set(agenda.map((card) => card.key));
+  // Lo de hoy (desde las 10:30) y mañana sin guía ni rótulo: la alerta de «Programados».
+  const sinGuiaAlarm = (guideAlert ? counts.sub.hoy_sin_guia : 0) + counts.sub.manana_sin_guia;
   const stuckIn = (key: LimaStep) => stuck?.byStep[key] ?? 0;
   const stepStuck = step ? stuckIn(step) : 0;
   const stuckOn = Boolean(stuck?.active && step);
@@ -354,12 +373,12 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
           title="Flujo del día"
           total={flowTotal}
           unit="pedidos"
-          help="Cada pedido está en un solo paso: los seis suman el total. Del 1 al 4, el trabajo del equipo, de izquierda a derecha; «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
+          help="Cada pedido está en un solo paso: los siete suman el total. Del 1 al 5, el trabajo del equipo, de izquierda a derecha: lo que no tiene día está en No entregados y Sacar a reparto; con su día pasa a Programados. «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
         />
         <Strip
           label="Flujo del día"
           header={<SumBar counts={counts} total={flowTotal} active={step} />}
-          cols="grid-cols-2 sm:grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,0.66fr)_minmax(0,0.66fr)]"
+          cols="grid-cols-2 sm:grid-cols-[repeat(5,minmax(0,1fr))_minmax(0,0.66fr)_minmax(0,0.66fr)]"
           footer={stepCard && (inside || stepStuck > 0 || stuckOn) ? (
             <>
               <span className="text-[13px] text-ink-600">
@@ -372,8 +391,8 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                 title={stepCard.hint}
                 onClick={() => { if (active !== stepCard.key || stuckOn) onPick(stepCard.key); }}
               />
-              {(inside?.keys ?? []).map((key) => {
-                const chip = insideChip(key, counts);
+              {(inside?.keys ?? []).filter((key) => stepCard.key !== "programados" || dayKeys.has(key)).map((key) => {
+                const chip = insideChip(key, counts, today);
                 return (
                   <ChoiceChip
                     key={key}
@@ -385,6 +404,48 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                   />
                 );
               })}
+              {stepCard.key === "programados" && (
+                <>
+                  {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => (key !== "hoy_sin_guia" || dayKeys.has("hoy")) && (counts.sub[key] > 0 || active === key)).map((key) =>
+                    key === "hoy_sin_guia" && !guideAlert ? (
+                      // Antes de las 10:30, lo de hoy sin guía todavía puede recibirla: se filtra, pero no alarma.
+                      <ChoiceChip
+                        key={key}
+                        label={LIMA_SUB_FILTERS[key].label}
+                        count={counts.sub[key]}
+                        active={active === key && !stuckOn}
+                        title={`${LIMA_SUB_FILTERS[key].hint} Es alerta desde las 10:30.`}
+                        onClick={() => onPick(active === key && !stuckOn ? "programados" : key)}
+                      />
+                    ) : (
+                      <AttentionPill
+                        key={key}
+                        icon={IconAlert}
+                        label={LIMA_SUB_FILTERS[key].label}
+                        count={counts.sub[key]}
+                        active={active === key && !stuckOn}
+                        hint={LIMA_SUB_FILTERS[key].hint}
+                        onClick={() => onPick(active === key && !stuckOn ? "programados" : key)}
+                      />
+                    ),
+                  )}
+                  {/* La guía de mañana que creará la pasada automática no es una alerta (owner, 15-11-2026). */}
+                  {counts.autoGuideManana > 0 && (
+                    <span className="text-[13px] text-ink-500">
+                      {fmt(counts.autoGuideManana)} de mañana {counts.autoGuideManana === 1 ? "la crea" : "las crea"} la automática
+                    </span>
+                  )}
+                  {(counts.sub.reprogramados > 0 || active === "reprogramados") && (
+                    <ChoiceChip
+                      label={LIMA_SUB_FILTERS.reprogramados.label}
+                      count={counts.sub.reprogramados}
+                      active={active === "reprogramados" && !stuckOn}
+                      title={LIMA_SUB_FILTERS.reprogramados.hint}
+                      onClick={() => onPick(active === "reprogramados" && !stuckOn ? "programados" : "reprogramados")}
+                    />
+                  )}
+                </>
+              )}
               {stuck && (stepStuck > 0 || stuckOn) && (
                 <AttentionPill
                   icon={IconAlert}
@@ -424,7 +485,9 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                 note={withStuck(
                   flow.key === "llamar_despues" && callsDue > 0
                     ? <span className="font-semibold text-warn-fg">{fmt(callsDue)} {callsDue === 1 ? "ya toca" : "ya tocan"}</span>
-                    : INSIDE[flow.key]?.note(counts) ?? flow.why,
+                    : flow.key === "programados"
+                      ? programadosNote(INSIDE.programados?.note(counts) ?? null, sinGuiaAlarm) ?? flow.why
+                      : INSIDE[flow.key]?.note(counts) ?? flow.why,
                   stuckIn(flow.key),
                 )}
               />
@@ -433,89 +496,6 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
         </Strip>
       </section>
 
-      <section aria-labelledby="repro-agenda" className="space-y-3">
-        <BlockHead
-          id="repro-agenda"
-          title={stepCard ? `Programados de ${stepCard.label}` : "Programados"}
-          total={agendaTotal}
-          unit="pedidos"
-          help={stepCard
-            ? `Lo de «${stepCard.label}» que ya tiene día de salida. Toca un día para ver solo esos; «Ver todos» vuelve a todo el flujo.`
-            : "Lo que ya tiene día de salida: lo acordado con la clienta, «Programar envío», el programa o el recojo del courier. Elige un paso del flujo y muestra solo los de ese paso. Lo que no tiene día está en «Sacar a reparto». Hoy y Mañana dicen cuáles tienen guía; los que no, son una alerta."}
-        />
-        <Strip
-          label="Programados"
-          cols={agenda.length === 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}
-          footer={viewSub.hoy_sin_guia + viewSub.manana_sin_guia + viewSub.reprogramados > 0 || (["hoy_sin_guia", "manana_sin_guia", "reprogramados"] as const).some((key) => active === scopeKey(key)) ? (
-            <>
-              {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => viewSub[key] > 0 || active === scopeKey(key)).map((key) =>
-                key === "hoy_sin_guia" && !guideAlert ? (
-                  // Antes de las 10:30, lo de hoy sin guía todavía puede recibirla: se filtra, pero no alarma.
-                  <ChoiceChip
-                    key={key}
-                    label={LIMA_SUB_FILTERS[key].label}
-                    count={viewSub[key]}
-                    active={active === scopeKey(key)}
-                    title={`${LIMA_SUB_FILTERS[key].hint} Es alerta desde las 10:30.`}
-                    onClick={() => onPick(active === scopeKey(key) ? (step ?? "todos") : scopeKey(key))}
-                  />
-                ) : (
-                  <AttentionPill
-                    key={key}
-                    icon={IconAlert}
-                    label={LIMA_SUB_FILTERS[key].label}
-                    count={viewSub[key]}
-                    active={active === scopeKey(key)}
-                    hint={LIMA_SUB_FILTERS[key].hint}
-                    onClick={() => onPick(active === scopeKey(key) ? (step ?? "todos") : scopeKey(key))}
-                  />
-                ),
-              )}
-              {(viewSub.reprogramados > 0 || active === scopeKey("reprogramados")) && (
-                <ChoiceChip
-                  label={LIMA_SUB_FILTERS.reprogramados.label}
-                  count={viewSub.reprogramados}
-                  active={active === scopeKey("reprogramados")}
-                  title={LIMA_SUB_FILTERS.reprogramados.hint}
-                  onClick={() => onPick(active === scopeKey("reprogramados") ? (step ?? "todos") : scopeKey("reprogramados"))}
-                />
-              )}
-            </>
-          ) : null}
-        >
-          {agenda.map((card) => {
-            const value = view.agenda[card.key] ?? 0;
-            const missing = sinGuia[card.key];
-            const alarm = missing !== undefined && missing > 0 && (card.key !== "hoy" || guideAlert);
-            const auto = view.autoGuideManana;
-            return (
-              <Cell
-                key={card.key}
-                label={card.label}
-                value={value}
-                dim={value === 0}
-                active={active === scopeKey(card.key)}
-                hint={card.hint}
-                onClick={() => onPick(active === scopeKey(card.key) && step ? step : scopeKey(card.key))}
-                stack
-                note={missing === undefined || value === 0 ? undefined : (
-                  <>
-                    {fmt(value - missing - (card.key === "manana" ? auto : 0))} con guía
-                    {/* La guía de mañana que creará la pasada automática no es una alerta (owner, 15-11-2026). */}
-                    {card.key === "manana" && auto > 0 ? ` · ${fmt(auto)} ${auto === 1 ? "la" : "las"} crea la automática` : null}
-                    {missing > 0 || card.key !== "manana" || !auto ? (
-                      <>
-                        {" · "}
-                        <span className={alarm ? "font-semibold text-warn-fg" : undefined}>{fmt(missing)} sin guía</span>
-                      </>
-                    ) : null}
-                  </>
-                )}
-              />
-            );
-          })}
-        </Strip>
-      </section>
     </div>
   );
 }

@@ -433,11 +433,12 @@ describe("el tablero (E31, E33)", () => {
     expect(board).not.toMatch(/router\.(push|replace)\(/);
     expect(board).not.toContain("requestAnimationFrame");
     const blocks = read("components/repro-lima-blocks.tsx");
-    expect(blocks.indexOf('title="Flujo del día"')).toBeLessThan(blocks.indexOf('"Programados"}'));
-    // «En manos del courier» es ahora el quinto paso del flujo (tercera vuelta): dos bloques.
+    expect(blocks.indexOf('title="Flujo del día"')).toBeGreaterThan(0);
+    // «En manos del courier» y «Programados» son pasos del flujo (tercera vuelta; 16-11-2026): un solo bloque.
     expect(blocks).not.toContain('title="En manos del courier"');
-    // Una franja por bloque (celdas separadas por líneas finas), no tarjetas sueltas.
-    expect(blocks.match(/<Strip\b/g)).toHaveLength(2);
+    expect(blocks).not.toContain('aria-labelledby="repro-agenda"');
+    // Una franja (celdas separadas por líneas finas), no tarjetas sueltas.
+    expect(blocks.match(/<Strip\b/g)).toHaveLength(1);
   });
 
   it("«Todos» agrupa por etapa y subetapa del Master, con enlaces a sus colas (§9.5)", () => {

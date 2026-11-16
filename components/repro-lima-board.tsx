@@ -2,7 +2,7 @@
 
 // Repro Lima (MOM §9.5): el panel de gestión del equipo de Lima (owner,
 // 15-11-2026). El «Flujo del día» —cinco pasos que suman el total— y la
-// «Agenda» sobre UNA lista: cada tarjeta filtra esa lista (`atencion` en la
+// «Programados» sobre UNA lista: cada tarjeta filtra esa lista (`atencion` en la
 // URL; los valores de la pantalla anterior abren lo más cercano) y los
 // trabados del equipo (§9.6) van dentro de su paso (`trabado`). Las acciones
 // conservan los permisos y guardas del pedido y de cada caso.
@@ -142,7 +142,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const stuckByOrder = useMemo(() => new Map(stuckItems.map((item) => [item.orderId, item])), [stuckItems]);
   // Los trabados viven dentro de su paso (owner, 15-11-2026): cuántos tiene cada uno.
   const stuckByStep = useMemo(() => {
-    const out: Record<LimaStep, number> = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, con_courier: 0, por_cerrar: 0 };
+    const out: Record<LimaStep, number> = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, programados: 0, con_courier: 0, por_cerrar: 0 };
     for (const item of stuckItems) {
       const step = classes.get(item.orderId)?.step;
       if (step) out[step] = (out[step] ?? 0) + 1;
@@ -418,7 +418,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     : card?.label ?? "Todos los pendientes";
   const listHelp = stuck
     ? stuck === "todos" ? "Lo del equipo que se quedó quieto más de lo que debería, lo que más lleva primero." : `${limaStuckRule(stuck).hint} Siguiente paso: ${limaStuckRule(stuck).action}`
-    : card?.hint ?? "Primero lo que pide al equipo; después la Agenda por día y lo que lleva el courier.";
+    : card?.hint ?? "Primero lo que pide al equipo; después lo programado por día y lo que lleva el courier.";
   const emptyText = query.trim()
     ? `Ningún pedido coincide con «${query.trim()}».`
     : stuck ? "No hay pedidos trabados por este motivo con estos filtros."
