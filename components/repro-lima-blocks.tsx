@@ -32,6 +32,8 @@ import {
   LIMA_STEP_CARDS,
   LIMA_STEP_PARTS,
   LIMA_SUB_FILTERS,
+  agendaScopeOf,
+  scopedKeyParts,
   agendaCards,
   type LimaBoardCounts,
   type LimaBoardKey,
@@ -163,6 +165,8 @@ function insideChip(key: LimaBoardKey, counts: LimaBoardCounts): { label: string
 /** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro (la lista toma su matiz). */
 export function activeStep(active: LimaBoardKey): LimaStep | null {
   if (STEP.has(active as LimaStep)) return active as LimaStep;
+  const scoped = scopedKeyParts(active);
+  if (scoped) return scoped.step;
   for (const [step, inside] of Object.entries(INSIDE)) if (inside?.keys.includes(active)) return step as LimaStep;
   return null;
 }
@@ -326,13 +330,18 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
 }) {
   const agenda = agendaCards(today);
   const flowTotal = LIMA_FLOW.reduce((sum, step) => sum + counts.step[step.key], 0);
-  const agendaTotal = agenda.reduce((sum, card) => sum + (counts.agenda[card.key] ?? 0), 0);
   // «Empieza aquí»: el primer paso del trabajo con algo que hacer (los plegados solo se miran).
   const start = LIMA_FLOW.find((step) => !LIMA_FOLDED_STEPS.has(step.key) && counts.step[step.key] > 0)?.key ?? null;
   const step = activeStep(active);
   const inside = step ? INSIDE[step] : undefined;
   const stepCard = step ? STEP.get(step) : undefined;
-  const sinGuia = { hoy: counts.sub.hoy_sin_guia, manana: counts.sub.manana_sin_guia } as Record<string, number>;
+  // «Programados» sigue al paso elegido (owner, 16-11-2026): sus cifras son las
+  // del paso y tocar un día filtra el paso Y ese día (`por_sacar:manana`).
+  const view = agendaScopeOf(counts, step);
+  const scopeKey = (key: string): LimaBoardKey => (step ? (`${step}:${key}` as LimaBoardKey) : (key as LimaBoardKey));
+  const agendaTotal = agenda.reduce((sum, card) => sum + (view.agenda[card.key] ?? 0), 0);
+  const sinGuia = { hoy: view.hoy_sin_guia, manana: view.manana_sin_guia } as Record<string, number>;
+  const viewSub = { hoy_sin_guia: view.hoy_sin_guia, manana_sin_guia: view.manana_sin_guia, reprogramados: view.reprogramados };
   const stuckIn = (key: LimaStep) => stuck?.byStep[key] ?? 0;
   const stepStuck = step ? stuckIn(step) : 0;
   const stuckOn = Boolean(stuck?.active && step);
@@ -427,71 +436,74 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
       <section aria-labelledby="repro-agenda" className="space-y-3">
         <BlockHead
           id="repro-agenda"
-          title="Programados"
+          title={stepCard ? `Programados de ${stepCard.label}` : "Programados"}
           total={agendaTotal}
           unit="pedidos"
-          help="Lo que ya tiene día de salida, en todo el flujo: lo acordado con la clienta, «Programar envío», el programa o el recojo del courier. Junta lo agendado de «Sacar a reparto» (sin guía) y lo que el courier recoge (con guía), así que no cambia con el paso elegido ni suma el total. Lo que no tiene día está en «Sacar a reparto». Hoy y Mañana dicen cuáles tienen guía; los que no, son una alerta."
+          help={stepCard
+            ? `Lo de «${stepCard.label}» que ya tiene día de salida. Toca un día para ver solo esos; «Ver todos» vuelve a todo el flujo.`
+            : "Lo que ya tiene día de salida: lo acordado con la clienta, «Programar envío», el programa o el recojo del courier. Elige un paso del flujo y muestra solo los de ese paso. Lo que no tiene día está en «Sacar a reparto». Hoy y Mañana dicen cuáles tienen guía; los que no, son una alerta."}
         />
         <Strip
           label="Programados"
           cols={agenda.length === 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2"}
-          footer={counts.sub.hoy_sin_guia + counts.sub.manana_sin_guia + counts.sub.reprogramados > 0 || ["hoy_sin_guia", "manana_sin_guia", "reprogramados"].includes(active) ? (
+          footer={viewSub.hoy_sin_guia + viewSub.manana_sin_guia + viewSub.reprogramados > 0 || (["hoy_sin_guia", "manana_sin_guia", "reprogramados"] as const).some((key) => active === scopeKey(key)) ? (
             <>
-              {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => counts.sub[key] > 0 || active === key).map((key) =>
+              {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => viewSub[key] > 0 || active === scopeKey(key)).map((key) =>
                 key === "hoy_sin_guia" && !guideAlert ? (
                   // Antes de las 10:30, lo de hoy sin guía todavía puede recibirla: se filtra, pero no alarma.
                   <ChoiceChip
                     key={key}
                     label={LIMA_SUB_FILTERS[key].label}
-                    count={counts.sub[key]}
-                    active={active === key}
+                    count={viewSub[key]}
+                    active={active === scopeKey(key)}
                     title={`${LIMA_SUB_FILTERS[key].hint} Es alerta desde las 10:30.`}
-                    onClick={() => onPick(active === key ? "todos" : key)}
+                    onClick={() => onPick(active === scopeKey(key) ? (step ?? "todos") : scopeKey(key))}
                   />
                 ) : (
                   <AttentionPill
                     key={key}
                     icon={IconAlert}
                     label={LIMA_SUB_FILTERS[key].label}
-                    count={counts.sub[key]}
-                    active={active === key}
+                    count={viewSub[key]}
+                    active={active === scopeKey(key)}
                     hint={LIMA_SUB_FILTERS[key].hint}
-                    onClick={() => onPick(active === key ? "todos" : key)}
+                    onClick={() => onPick(active === scopeKey(key) ? (step ?? "todos") : scopeKey(key))}
                   />
                 ),
               )}
-              {(counts.sub.reprogramados > 0 || active === "reprogramados") && (
+              {(viewSub.reprogramados > 0 || active === scopeKey("reprogramados")) && (
                 <ChoiceChip
                   label={LIMA_SUB_FILTERS.reprogramados.label}
-                  count={counts.sub.reprogramados}
-                  active={active === "reprogramados"}
+                  count={viewSub.reprogramados}
+                  active={active === scopeKey("reprogramados")}
                   title={LIMA_SUB_FILTERS.reprogramados.hint}
-                  onClick={() => onPick(active === "reprogramados" ? "todos" : "reprogramados")}
+                  onClick={() => onPick(active === scopeKey("reprogramados") ? (step ?? "todos") : scopeKey("reprogramados"))}
                 />
               )}
             </>
           ) : null}
         >
           {agenda.map((card) => {
-            const value = counts.agenda[card.key] ?? 0;
+            const value = view.agenda[card.key] ?? 0;
             const missing = sinGuia[card.key];
             const alarm = missing !== undefined && missing > 0 && (card.key !== "hoy" || guideAlert);
+            const auto = view.autoGuideManana;
             return (
               <Cell
                 key={card.key}
                 label={card.label}
                 value={value}
                 dim={value === 0}
-                active={active === card.key}
+                active={active === scopeKey(card.key)}
                 hint={card.hint}
-                onClick={() => onPick(card.key)}
+                onClick={() => onPick(active === scopeKey(card.key) && step ? step : scopeKey(card.key))}
                 stack
                 note={missing === undefined || value === 0 ? undefined : (
                   <>
-                    {fmt(value - missing - (card.key === "manana" ? counts.autoGuideManana : 0))} con guía
+                    {fmt(value - missing - (card.key === "manana" ? auto : 0))} con guía
                     {/* La guía de mañana que creará la pasada automática no es una alerta (owner, 15-11-2026). */}
-                    {card.key === "manana" && counts.autoGuideManana > 0 ? ` · ${fmt(counts.autoGuideManana)} ${counts.autoGuideManana === 1 ? "la" : "las"} crea la automática` : null}
-                    {missing > 0 || card.key !== "manana" || !counts.autoGuideManana ? (
+                    {card.key === "manana" && auto > 0 ? ` · ${fmt(auto)} ${auto === 1 ? "la" : "las"} crea la automática` : null}
+                    {missing > 0 || card.key !== "manana" || !auto ? (
                       <>
                         {" · "}
                         <span className={alarm ? "font-semibold text-warn-fg" : undefined}>{fmt(missing)} sin guía</span>

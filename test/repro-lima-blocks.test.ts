@@ -557,7 +557,10 @@ describe("las piezas en pantalla", () => {
     const rows = [row(), failed({ orderId: "e" }), row({ orderId: "h", programmedFor: TODAY })];
     const counts = limaBoardCounts(rows, classifyLimaRows(rows, [], TODAY));
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "no_entregados", onPick: () => {} }));
-    for (const text of ["Flujo del día", "los seis suman el total", "Programados", "Sacar a reparto", "Con el courier", "Por cerrar", "Mañana · Lun 16", "Después", "Mañana sin guía", "0 con guía"]) expect(html, text).toContain(text);
+    for (const text of ["Flujo del día", "los seis suman el total", "Programados", "Sacar a reparto", "Con el courier", "Por cerrar", "Mañana · Lun 16", "Después"]) expect(html, text).toContain(text);
+    // Programados de todo el flujo (sin paso elegido): lo de mañana sin guía es una alerta.
+    const whole = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "todos", onPick: () => {} }));
+    for (const text of ["Mañana sin guía", "0 con guía"]) expect(whole, text).toContain(text);
     for (const text of ["En manos del courier", "Confirmar primer despacho", "Mar 17", "Sin fecha"]) expect(html, text).not.toContain(text);
     // «Nunca salieron» con su nombre en la nota del paso y como filtro de adentro (owner, 16-11-2026).
     expect(html).toContain("1 agendado · 1 nunca salieron");
@@ -815,5 +818,42 @@ describe("las partes de un paso suman su cifra (owner, 16-11-2026: «la suma de 
     expect(classes.get("r")!.step).toBe("con_courier");
     expect(limaStepPart(classes.get("r")!)).toBeNull();
     expect(limaBoardCounts([r], classes).sub.reintentos_aliclik).toBe(0);
+  });
+});
+
+describe("«Programados» sigue al paso elegido (owner, 16-11-2026)", () => {
+  it("las cifras del paso, el filtro compuesto paso:día y su título", async () => {
+    const { agendaScopeOf, boardMatches, boardCard, scopedKeyParts } = await import("@/lib/repro-lima-blocks");
+    const { ReproLimaBlocks, activeStep } = await import("@/components/repro-lima-blocks");
+    const rows = [
+      row({ orderId: "a", programmedFor: TODAY }),
+      row({ orderId: "b", programmedFor: "2026-11-20" }),
+      row({ orderId: "c", substage: "por_armar", courierPickup: { courier: "aliclik", date: "2026-11-16" }, ops: ops({ liveCouriers: ["aliclik"] }) }),
+      failed({ orderId: "d" }),
+    ];
+    const classes = classifyLimaRows(rows, [], TODAY);
+    const counts = limaBoardCounts(rows, classes);
+    // Todo el flujo: Mañana 2 (el agendado y el recojo), Después 1.
+    expect(agendaScopeOf(counts, null).agenda).toMatchObject({ manana: 2, despues: 1 });
+    // Sacar a reparto: solo sus agendados; Con el courier: su recojo; No entregados: nada.
+    expect(agendaScopeOf(counts, "por_sacar").agenda).toMatchObject({ manana: 1, despues: 1 });
+    expect(agendaScopeOf(counts, "con_courier").agenda).toMatchObject({ manana: 1, despues: 0 });
+    expect(agendaScopeOf(counts, "no_entregados").agenda).toMatchObject({ manana: 0, despues: 0 });
+    // El filtro compuesto: el paso Y el día.
+    expect(scopedKeyParts("por_sacar:manana")).toEqual({ step: "por_sacar", inner: "manana" });
+    expect(scopedKeyParts("x:manana")).toBeNull();
+    expect(boardFilter("por_sacar:manana", TODAY)).toBe("por_sacar:manana");
+    // Un domingo, «Hoy» de un paso abre su «Mañana», como afuera.
+    expect(boardFilter("por_sacar:hoy", TODAY)).toBe("por_sacar:manana");
+    expect(rows.filter((r) => boardMatches(classes.get(r.orderId)!, "por_sacar:manana")).map((r) => r.orderId)).toEqual(["a"]);
+    expect(rows.filter((r) => boardMatches(classes.get(r.orderId)!, "con_courier:manana")).map((r) => r.orderId)).toEqual(["c"]);
+    expect(boardCard("por_sacar:manana", TODAY)?.label).toBe("Sacar a reparto · Mañana · Lun 16");
+    expect(activeStep("por_sacar:manana")).toBe("por_sacar");
+    // En pantalla: el título dice el paso y la celda elegida es la del día dentro del paso.
+    const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "por_sacar", onPick: () => {} }));
+    expect(html).toContain("Programados de Sacar a reparto");
+    const all = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "todos", onPick: () => {} }));
+    expect(all).toContain(">Programados<");
+    expect(all).not.toContain("Programados de");
   });
 });
