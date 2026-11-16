@@ -29,6 +29,7 @@ import {
 import { ExecutiveDashboard } from "@/components/executive-dashboard";
 import { salesAttribution } from "@/lib/metrics";
 import { EmptyState } from "@/components/ui";
+import { consolidadoTimer } from "@/lib/consolidado-timing";
 import { DashboardRouteSkeleton } from "@/components/dashboard-route-skeleton";
 import {
   MomOwnerSummaryPanel,
@@ -67,10 +68,13 @@ async function ConsolidatedContent({
   // entra al login, y el login siempre aterriza aquí: se retoma el reclamo de
   // la instalación (MOM §29.15.9). La cookie vence con la instalación.
   if ((await cookies()).get(PENDING_INSTALL_COOKIE)) redirect("/dashboard/conectar-shopify");
+  // Una semana midiendo cada consulta (lib/consolidado-timing.ts, 16-11-2026).
+  const timer = consolidadoTimer();
+  const t = timer.time;
   const [role, sp, stores] = await Promise.all([
-    getUserRoleSummary(),
+    t("rol", getUserRoleSummary()),
     searchParams,
-    getAccessibleStores(),
+    t("tiendas", getAccessibleStores()),
   ]);
   if (role.isVendedoraOnly) redirect("/dashboard/leads");
   const range = parseRange(sp);
@@ -156,27 +160,27 @@ async function ConsolidatedContent({
     productOrders,
   ] =
     await Promise.all([
-      getRollups(storeIds, range),
-      getRollups(storeIds, prev),
-      getOrders(storeIds, range, timeZones),
-      getConversations(storeIds, range, timeZones),
-      leadsPromise,
-      getLatestOps(storeIds),
-      adNamesPromise,
-      waNumbersPromise,
-      campaignDeliveriesPromise,
-      campaignLeadsPromise,
-      campaignOrdersPromise,
-      metaAdPerformancePromise,
-      webAdOrdersPromise,
-      metaAdCatalogPromise,
+      t("rollups", getRollups(storeIds, range)),
+      t("rollupsPrevios", getRollups(storeIds, prev)),
+      t("pedidos", getOrders(storeIds, range, timeZones)),
+      t("conversaciones", getConversations(storeIds, range, timeZones)),
+      t("leads", leadsPromise),
+      t("ops", getLatestOps(storeIds)),
+      t("nombresAnuncios", adNamesPromise),
+      t("numerosWa", waNumbersPromise),
+      t("entregasCampanas", campaignDeliveriesPromise),
+      t("leadsCampanas", campaignLeadsPromise),
+      t("pedidosCampanas", campaignOrdersPromise),
+      t("metaAnuncios", metaAdPerformancePromise),
+      t("pedidosWebAnuncios", webAdOrdersPromise),
+      t("catalogoMeta", metaAdCatalogPromise),
       // Quién cerró TODAS las ventas de las tiendas, no solo las del bot (MOM §17.3).
-      getClosingChannels(storeIds, range),
+      t("canalesCierre", getClosingChannels(storeIds, range)),
       // Todas las ventas por día y origen, y la conversión de cada fuente (MOM §17.4).
-      getOriginSales(storeIds, range),
-      getSourceConversion(storeIds, range),
+      t("origen", getOriginSales(storeIds, range)),
+      t("conversionFuente", getSourceConversion(storeIds, range)),
       // «Productos»: las líneas de todas las ventas, no solo las del bot (26-10-2026).
-      getSalesProductOrders(storeIds, range),
+      t("productos", getSalesProductOrders(storeIds, range)),
     ]);
 
   // Atribución de fuente y canal de cierre, igual que en la página de tienda.
@@ -186,7 +190,8 @@ async function ConsolidatedContent({
   // por la etiqueta del pedido, así que las 12.667 gestiones que las asesoras
   // registran cada 30 días no contaban salvo que además hubieran creado el
   // pedido desde el dashboard.
-  const attribution = salesAttribution(orders, await getAttributionInputs(storeIds, orders));
+  const attribution = salesAttribution(orders, await t("atribucion", getAttributionInputs(storeIds, orders)));
+  timer.done({ tiendas: storeIds.length, dias: Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000) || null });
 
   const first = stores[0]!;
   const currency = stores.every((s) => s.currency === first.currency) ? first.currency : "PEN";
