@@ -946,6 +946,16 @@ se creó**.
   clienta manda su ubicación, Kapta les crea la guía (`guide_detail =
   sin_ubicacion` → `creada`). Si la guía no sale, queda el hecho «Guía
   automática no creada» como antes.
+- **Medición de «mensaje posterior», del 16-11 al 23-11-2026** (owner: «sí,
+  guárdalos una semana y mídelo»). En 14 días se frenaron 59 confirmaciones por
+  «mensaje posterior» y ninguna terminó con el envío programado a otra fecha:
+  antes de automatizar «programar solo» hay que saber qué escribe la clienta.
+  Kapta no guarda el texto de los chats; durante esa semana, al frenar por ese
+  motivo, guarda en la evidencia del chequeo (`posterior`) hasta 8 mensajes de
+  la clienta posteriores a su confirmación: el texto recortado a 300 letras y el
+  tipo (audio, foto, botón, ubicación), nunca la coordenada. Pasado el
+  23-11-2026 ya no se guarda (`POSTERIOR_CAPTURE_UNTIL`). No cambia ninguna
+  regla de confirmación.
 - **Pedir la ubicación desde la ficha, y releer cuando la clienta la manda**
   (owner, 08-11-2026). Antes la asesora salía de Kapta para pedírsela, y el
   pedido que quedó por `direccion_incompleta` no se volvía a leer aunque la
