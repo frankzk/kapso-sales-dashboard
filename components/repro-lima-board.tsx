@@ -32,6 +32,7 @@ import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/co
 import { ReproLimaBlocks, STEP_TONE, activeStep } from "@/components/repro-lima-blocks";
 import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { QuickGuideButtons } from "@/components/repro-lima-quick-guide";
+import { OpsToast, type OpsToastData } from "@/components/ops-toast";
 import { AgendarButton, ChannelPicker, CourierPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
 import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, type LimaStuckHome } from "@/lib/lima-stuck";
@@ -79,6 +80,8 @@ type Feedback = {
   googleOff?: boolean;
   /** Pedidos cuya guía de GF Courier no se anuló o no se creó al mover su acuerdo: su Mesa de ruta. */
   mesa?: Array<{ orderId: string; orderName: string }>;
+  /** También salió como aviso flotante: el lector lo oye una vez. */
+  toasted?: boolean;
 };
 
 export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [], quickGuide, gfApiStores = [], courierAutoStores = [] }: {
@@ -125,6 +128,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const gfApi = useMemo(() => new Set(gfApiStores), [gfApiStores]);
   const courierAuto = useMemo(() => new Set(courierAutoStores), [courierAutoStores]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  // El aviso flotante de «Guía Aliclik» / «Guía GF» (owner, 16-11-2026): repite el éxito donde se mira.
+  const [toast, setToast] = useState<OpsToastData | null>(null);
   const lastRefresh = useRef(0);
   const hiddenParam = searchParams.getAll("ocultar").join("|");
   const hidden = useMemo(() => new Set(hiddenParam ? hiddenParam.split("|") : []), [hiddenParam]);
@@ -325,7 +330,13 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             aliclik={quickGuide.aliclik}
             gf={gfStores.has(row.storeId)}
             size={size}
-            onDone={(f) => { setFeedback(f); refresh(); }}
+            onDone={(f) => {
+              setFeedback({ kind: f.kind, text: f.text, toasted: Boolean(f.toast) });
+              if (f.toast) {
+                setToast({ id: Date.now(), ...f.toast, action: { label: "Abrir la Mesa de ruta", onClick: () => openDrawer(row.orderId, "operar") } });
+              }
+              refresh();
+            }}
             onOpenFicha={() => openDrawer(row.orderId, "operar")}
           />
         )}
@@ -544,7 +555,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
       )}
 
       {feedback && (
-        <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
+        // Con el aviso flotante, ese es el que se anuncia: la página no lo repite al lector.
+        <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.toasted ? undefined : feedback.kind === "error" ? "alert" : "status"}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
               <p>{feedback.text}</p>
@@ -707,6 +719,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           )}
         </div>
       )}
+
+      <OpsToast toast={toast} onClose={() => setToast(null)} />
     </div>
   );
 }

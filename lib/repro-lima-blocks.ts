@@ -681,6 +681,23 @@ export function limaQuickGuideEligible(row: Pick<LimaPendingOrder, "stage" | "su
   return row.stage === "preparacion" || row.stage === "por_despachar" || isPorReprogramarLima(row);
 }
 
+/**
+ * El aviso flotante de «Guía Aliclik» / «Guía GF» (owner, 16-11-2026: «esa
+ * alerta en verde que salga como un popup también»): el resultado en el título
+ * y, debajo, el pedido con el dato de la guía, sin repetir la frase del aviso
+ * de la página («Guía creada en GF Courier: …», «Guía creada en Aliclik para
+ * #KP…: …»). Pura.
+ */
+export function quickGuideToast(orderName: string, courierName: string, notice: string | null | undefined): { title: string; detail: string } {
+  const text = (notice ?? "").trim();
+  const linked = /^Gu[ií]a existente vinculada/i.test(text) || /ya estaba vinculada/i.test(text);
+  const rest = text.replace(/^Gu[ií]a (?:creada|existente vinculada) en [^:]+?(?: para [^:]+)?:\s*/i, "").replace(/\.$/, "");
+  return {
+    title: `${linked ? "Guía vinculada" : "Guía creada"} en ${courierName}`,
+    detail: rest ? `${orderName} · ${rest}` : orderName,
+  };
+}
+
 /** El transporte de Aliclik que «Guía Aliclik» propone: AUTOECOM si se puede (en Lima, owner 03-11-2026); si no, el primero elegible. Pura. */
 export function defaultAliclikTransport(couriers: readonly { transportId: number; transportName?: string | null; selectable: boolean }[] | null | undefined): number | null {
   const selectable = (couriers ?? []).filter((c) => c.selectable);

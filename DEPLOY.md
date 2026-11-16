@@ -96,6 +96,17 @@ Verificar:
    guía activa»; al crearla, MOM-AUR900778-PROPIO-00F1A578 pasa a custodia
    `retorno` con el hecho `output_replaced`.
 
+### 16-11-2026 · Repro Lima: aviso flotante al crear la guía desde la fila; reintento de GF documentado (sin migración, MOM §29.17, DESIGN.md)
+
+Sin migración ni variables.
+- **Repro Lima:** al crear la guía con «Guía Aliclik» o «Guía GF», además del aviso de la página sale un aviso
+  flotante con el pedido, la guía y «Abrir la Mesa de ruta» (`components/ops-toast.tsx`).
+- **GF Courier:** el reintento después de un rechazo (#KP205759) ya lo arregló el #1216. Aquí solo queda escrito en el
+  MOM §29.17.
+
+Verificar: en Repro Lima, crear una guía con «Guía GF» muestra el aviso abajo a la derecha (arriba en el teléfono), y
+este se va solo a los 6 s.
+
 ### 16-11-2026 · Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5 y §40)
 
 **Migración 0349: ya aplicada en producción (16-11-2026), antes del código.** `0349_lima_courier_auto.sql` crea
