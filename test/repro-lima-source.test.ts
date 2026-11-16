@@ -76,7 +76,7 @@ describe("quién entra (§9.5, D11, E32, E36)", () => {
     const gate = body(access, "export async function requireReproLima(");
     expect(gate).toContain('if (!user) redirect("/login");');
     expect(gate).toContain('permissions.can("repro_lima.manage")');
-    expect(gate).toContain("await getAccessibleStores()");
+    expect(gate).toContain("Promise.all([getMasterPermissions(), getAccessibleStores()])");
     expect(access).toContain('"Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo."');
     expect(access).toContain('"No tienes tiendas asignadas. Pide acceso en Equipo."');
     // Cada caso se mira contra la tienda antes de tocarlo.

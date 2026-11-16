@@ -94,13 +94,13 @@ export async function requireReproLima(
 ): Promise<(ReproScope & { retriesOnly: boolean }) | { error: string; reason: "permiso" | "tiendas" }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const permissions = await getMasterPermissions();
+  // Permisos y tiendas a la vez: la pestaña de la ficha espera esta puerta.
+  const [permissions, stores] = await Promise.all([getMasterPermissions(), getAccessibleStores()]);
   const manage = permissions.can("repro_lima.manage");
   // La pantalla también abre con «Reintentos Aliclik» solo (Despacho,
   // 03-11-2026); las acciones de llamar y acordar siguen pidiendo manage.
   const retriesOnly = !manage && Boolean(opts.retries) && permissions.can("repro_lima.retries");
   if (!manage && !retriesOnly) return { error: REPRO_NO_PERMISSION, reason: "permiso" };
-  const stores = await getAccessibleStores();
   if (!stores.length) return { error: REPRO_NO_STORES, reason: "tiendas" };
   return { userId: user.id, storeIds: new Set(stores.map((store) => store.id)), retriesOnly };
 }

@@ -5904,7 +5904,10 @@ ficha y la hoja; ahora es un solo lugar. La pestaña sale **solo mientras el
 pedido está en Repro Lima**: lo dice la misma lectura de la pantalla
 (`loadReproRow`: hay fila o no la hay), que la ficha hace una vez por pedido,
 solo a quien tiene `repro_lima.manage` y solo si el pedido puede estar (Lima y
-por entregar, `isReproLimaCandidate`) o si «Atender» la pidió; sin sondeos. La
+por entregar, `isReproLimaCandidate`) o si «Atender» la pidió; sin sondeos.
+Desde el 16-11-2026 («tarda en aparecer el tab de repro lima») la pestaña sale
+ya mientras esa lectura comprueba, con su esqueleto, y se va si no hay fila; la
+lectura junta en paralelo lo que no depende entre sí. La
 ficha la enseña igual abierta desde el Master de Pedidos o desde cualquier
 otra pantalla. Si «Atender» la pide y el pedido ya salió, la ficha abre Operar
 con «Este pedido ya no está pendiente de entrega en Lima». Dentro de la

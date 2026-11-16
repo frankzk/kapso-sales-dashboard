@@ -1489,9 +1489,10 @@ export function OrderDrawer({
         ? `${kapsoCustomerMessages === 1 ? "1 mensaje" : `${kapsoCustomerMessages} mensajes`} de la clienta con el bot de Kapso`
         : undefined,
     },
-    // Solo mientras el pedido está en Repro Lima (MOM §9.5); mientras se
-    // comprueba, solo si «Atender» la pidió.
-    ...(reproRow || (reproLoading && workspace === "reprolima") ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),
+    // Solo mientras el pedido está en Repro Lima (MOM §9.5). Sale apenas la
+    // ficha sabe que es de Lima y por entregar, mientras se comprueba con su
+    // esqueleto (owner, 16-11-2026: «tarda en aparecer»), y se va si no está.
+    ...(reproRow || reproLoading ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
