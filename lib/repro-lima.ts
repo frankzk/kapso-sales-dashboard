@@ -68,14 +68,28 @@ export function isReproChannel(value: unknown): value is ReproChannel {
  * Desde el 26-10-2026 (decisión del owner, MOM §9 «Aliclik en Lima») Tanders
  * no crea guías nuevas y la hoja ofrece Aliclik en su lugar (0283 lo admite en
  * el CHECK). `tanders` se queda en el tipo por los acuerdos ya guardados.
+ *
+ * GF Courier por API (`gf_courier`, owner 15-11-2026; MOM §9.5 y §29.17; 0347
+ * lo admite en el CHECK): en una tienda con GF Courier por API la hoja lo
+ * ofrece primero y por defecto, y Grupo GF deja de ofrecerse —«Tomar» ya
+ * rechaza esos pedidos—. Al guardar, Kapta crea la guía GF para el día acordado.
  */
-export type ReproCourier = "propio" | "aliclik" | "tanders" | "fenix" | "urpi" | "axel";
-export const REPRO_COURIERS: readonly ReproCourier[] = ["propio", "aliclik", "tanders", "fenix", "urpi", "axel"];
-/** Los que se ofrecen en la hoja, en este orden (Grupo GF por defecto). Sin Urpi en 1a (E16) ni Tanders (26-10-2026). */
+export type ReproCourier = "propio" | "gf_courier" | "aliclik" | "tanders" | "fenix" | "urpi" | "axel";
+export const REPRO_COURIERS: readonly ReproCourier[] = ["propio", "gf_courier", "aliclik", "tanders", "fenix", "urpi", "axel"];
+/**
+ * Los que se ofrecen en la hoja de una tienda SIN GF Courier por API, en este
+ * orden (Grupo GF por defecto). Sin Urpi en 1a (E16) ni Tanders (26-10-2026).
+ */
 export const REPRO_COURIER_CHOICES: readonly ReproCourier[] = ["propio", "aliclik", "fenix", "axel"];
+/**
+ * Los de una tienda CON GF Courier por API (`stores.gf_courier_enabled`): GF
+ * Courier primero y por defecto, sin Grupo GF (owner, 15-11-2026).
+ */
+export const REPRO_GF_COURIER_CHOICES: readonly ReproCourier[] = ["gf_courier", "aliclik", "fenix", "axel"];
 
 export const REPRO_COURIER_LABEL: Record<ReproCourier, string> = {
   propio: "Grupo GF",
+  gf_courier: "GF Courier",
   aliclik: "Aliclik",
   tanders: "Tanders",
   fenix: "Swayp",
@@ -85,6 +99,131 @@ export const REPRO_COURIER_LABEL: Record<ReproCourier, string> = {
 
 export function isReproCourier(value: unknown): value is ReproCourier {
   return typeof value === "string" && (REPRO_COURIERS as readonly string[]).includes(value);
+}
+
+/** Los couriers que ofrece la hoja según la tienda tenga GF Courier por API o no. */
+export function reproCourierChoices(gfCourierApi: boolean): readonly ReproCourier[] {
+  return gfCourierApi ? REPRO_GF_COURIER_CHOICES : REPRO_COURIER_CHOICES;
+}
+
+/** El courier que la hoja marca de entrada: GF Courier con la API, si no Grupo GF. */
+export function defaultReproCourier(gfCourierApi: boolean): ReproCourier {
+  return reproCourierChoices(gfCourierApi)[0]!;
+}
+
+export const GF_COURIER_STORE_ONLY = "Esta tienda no tiene GF Courier por API: elige Grupo GF u otro courier.";
+export const GRUPO_GF_NOT_IN_GF_STORE =
+  "Esta tienda despacha por GF Courier (API): Grupo GF ya no toma sus pedidos. Elige GF Courier u otro courier.";
+
+/**
+ * ¿Este courier vale para la tienda del pedido? Null si sí. La misma regla en
+ * la hoja (que solo ofrece los de `reproCourierChoices`) y en el servidor: GF
+ * Courier solo con la API de la tienda, y Grupo GF nunca con ella («Tomar» de
+ * Grupo GF rechaza esos pedidos, §29.17).
+ */
+export function reproCourierStoreProblem(courier: ReproCourier, gfCourierApi: boolean): string | null {
+  if (courier === "gf_courier" && !gfCourierApi) return GF_COURIER_STORE_ONLY;
+  if (courier === "propio" && gfCourierApi) return GRUPO_GF_NOT_IN_GF_STORE;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// GF Courier en el acuerdo: la guía para el día acordado (owner, 15-11-2026)
+// ---------------------------------------------------------------------------
+
+/** Lo de una salida que hace falta para saber si es una guía GF viva. */
+export interface GfGuideOutputLike {
+  courier: string | null;
+  delivery_status: string | null;
+  returned_at?: string | null;
+  guide_code?: string | null;
+  /** Cuándo nació la salida: la creada después de acordar es la del acuerdo. */
+  created_at?: string | null;
+}
+
+/**
+ * Qué pasa con la guía GF del pedido al guardar (o mover) un acuerdo con GF
+ * Courier. «Viva» es lo mismo que mira `createGfGuideFor`: `pendiente` o
+ * `en_ruta`, sin retorno.
+ * - `asignada`: GF ya la asignó a un motorizado (`en_ruta`): no se crea otra;
+ *   se dice. Va primero: esa guía no se anula.
+ * - `lista`: la viva nació después de acordar (`decidedAt`): es la de este
+ *   acuerdo (un reintento del mismo envío, o la que alguien creó después en la
+ *   Mesa de ruta). No se toca.
+ * - `reemplazar`: la viva está `pendiente` y es de antes del acuerdo: Kapta la
+ *   anula primero y después crea la del día acordado.
+ * - `crear`: no hay guía GF viva; Kapta crea la del día acordado.
+ * PURA.
+ */
+export type GfAgreementGuidePlan =
+  | { kind: "crear" }
+  | { kind: "lista"; guideCode: string | null }
+  | { kind: "reemplazar"; cancel: Array<{ guideCode: string | null }> }
+  | { kind: "asignada"; guideCode: string | null };
+
+export function isLiveGfGuide(output: GfGuideOutputLike): boolean {
+  return sameCourier(output.courier, "gf_courier") &&
+    (output.delivery_status === "pendiente" || output.delivery_status === "en_ruta") &&
+    !output.returned_at;
+}
+
+export function gfAgreementGuidePlan(
+  outputs: readonly GfGuideOutputLike[],
+  /** Cuándo se registró el acuerdo (`lima_repro_cases.decided_at`); sin él, toda guía viva es de antes. */
+  decidedAt?: string | null,
+): GfAgreementGuidePlan {
+  const live = outputs.filter(isLiveGfGuide);
+  const assigned = live.find((output) => output.delivery_status === "en_ruta");
+  if (assigned) return { kind: "asignada", guideCode: assigned.guide_code ?? null };
+  const since = Date.parse(decidedAt ?? "");
+  const own = Number.isFinite(since)
+    ? live.find((output) => Number.isFinite(Date.parse(output.created_at ?? "")) && Date.parse(output.created_at!) >= since)
+    : undefined;
+  if (own) return { kind: "lista", guideCode: own.guide_code ?? null };
+  if (live.length) return { kind: "reemplazar", cancel: live.map((output) => ({ guideCode: output.guide_code ?? null })) };
+  return { kind: "crear" };
+}
+
+/** Lo que se dice cuando GF ya asignó la guía viva a un motorizado. */
+export function gfGuideAssignedMessage(guideCode: string | null | undefined): string {
+  return `GF Courier ya asignó la guía ${guideCode?.trim() || "viva"} a un motorizado (en ruta): no se crea otra. Sale con esa si GF la reprograma; si GF la devuelve o la anula, se crea la siguiente.`;
+}
+
+/** El motivo del hecho `guide_registered` de la guía que crea Repro Lima. */
+export function reproGfGuideReason(day: string): string {
+  return `Repro Lima: acuerdo con la clienta para el ${programDayLabel(day)}`;
+}
+
+/** El motivo con el que Kapta anula la guía GF anterior al acordar otro día. */
+export const REPRO_GF_CANCEL_REASON = "Nuevo acuerdo en Repro Lima";
+export const REPRO_GF_CANCEL_NOTE = "Guía de GF Courier anulada por Kapta: la clienta acordó otro día en Repro Lima.";
+
+/**
+ * La línea de la hoja con GF Courier elegido y una guía GF viva: qué hará
+ * Kapta con ella al guardar. Null sin guía viva. PURA.
+ */
+export function gfAgreementGuideNote(plan: GfAgreementGuidePlan): string | null {
+  switch (plan.kind) {
+    case "crear":
+      return null;
+    case "lista":
+      return `La guía ${plan.guideCode?.trim() || "de GF Courier"} ya es de este acuerdo: no se crea otra.`;
+    case "reemplazar": {
+      const codes = plan.cancel.map((c) => c.guideCode?.trim() || "sin número").join(", ");
+      return `Al guardar, Kapta anula la guía ${codes} (GF todavía no la asigna a un motorizado) y crea otra para el día acordado.`;
+    }
+    case "asignada":
+      return gfGuideAssignedMessage(plan.guideCode);
+  }
+}
+
+/**
+ * La llave del episodio de un pendiente de Lima que nunca falló (la atención
+ * de «Todos · por entregar»): la que usa `loadReproFacts` para todo pedido que
+ * no está en «Por reprogramar Lima».
+ */
+export function reproAttentionEpisodeKey(orderId: string): string {
+  return `attention:${orderId}`;
 }
 
 /** ¿El pedido tiene coordenada guardada en el Master? */
@@ -370,6 +509,8 @@ export function nextCallProblem(iso: string | null | undefined, now: Date = new 
  *   desarmar y rearmar): desde mañana (E14).
  * - Grupo GF: hoy hasta el corte (`same_day_cutoff`), después mañana.
  * - Aliclik, Tanders y Axel: hoy (la guía de Aliclik trae su propio horario de recojo).
+ * - GF Courier (owner, 15-11-2026): hoy, sin corte ni noche anterior. GF
+ *   prepara el paquete y Kapta crea su guía para ese día (§9.5, §29.17).
  */
 export function firstAllowedDay(
   courier: ReproCourier,
@@ -379,6 +520,7 @@ export function firstAllowedDay(
 ): string {
   const today = limaClock(now).day;
   if (sameCourier(courier, "fenix")) return firstSwaypDispatchDay(today);
+  if (courier === "gf_courier") return today;
   if (boxAction && NIGHT_BEFORE_BOX_ACTIONS.has(boxAction)) return nextDay(today);
   if (courier === "propio") return scheduledDay(cutoff, now);
   return today;
@@ -389,8 +531,10 @@ export function firstAllowedDay(
  * acción y (el rango) en la RPC (§11.6):
  * 1. hoy o después, hasta 60 días (`rescheduleDateProblem`);
  * 2. Swayp: nunca hoy y nunca domingo;
- * 3. una acción de la noche anterior: nunca hoy (E14);
+ * 3. una acción de la noche anterior: nunca hoy (E14), salvo con GF Courier,
+ *    que prepara el paquete él mismo (owner, 15-11-2026);
  * 4. Grupo GF hoy después del corte: lo aprueba Despacho GF desde «Programar» (D6).
+ *    El corte es de Grupo GF: GF Courier no lo tiene; solo un día pasado no vale.
  */
 export function agreementDateProblem(input: {
   day: string;
@@ -408,7 +552,7 @@ export function agreementDateProblem(input: {
     if (today) return "Swayp arma su ruta el día anterior: elige desde mañana.";
     if (!isSwaypDispatchDay(input.day)) return SWAYP_SUNDAY_ERROR;
   }
-  if (today && input.boxAction && NIGHT_BEFORE_BOX_ACTIONS.has(input.boxAction)) {
+  if (today && input.courier !== "gf_courier" && input.boxAction && NIGHT_BEFORE_BOX_ACTIONS.has(input.boxAction)) {
     return `«${BOX_ACTION_LABEL[input.boxAction]}» se prepara la noche anterior: elige desde mañana.`;
   }
   if (input.courier === "propio" && today && input.nowMinute > sameDayCutoffMinute(input.cutoff)) {

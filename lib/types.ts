@@ -462,6 +462,8 @@ export interface ShipmentRow {
   aliclik_attempts: number | null;
   /** Operative delivery date reported by Aliclik, as YYYY-MM-DD. */
   aliclik_service_date: string | null;
+  /** El transporte de la guía Aliclik (AUTOECOM, ALIDRIVER…): la Actividad lo nombra en sus estados. */
+  aliclik_transport_name?: string | null;
   reroute_attempts: number;
   /** Number of logged calls, populated on shipment queue reads. */
   contact_count?: number;

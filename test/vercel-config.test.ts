@@ -111,7 +111,9 @@ describe("vercel.json", () => {
     //     huérfanas, cada 20 minutos (0344, MOM §29.17, 14-11-2026).
     // 41: la guía GF automática, a las 9:00, 10:00 y 11:00 de Lima del día del
     //     despacho (0345, MOM §29.17, 15-11-2026).
-    expect(crons).toHaveLength(41);
+    // 42: el catálogo sincronizado con GF Courier, cada hora a los :37 (MOM
+    //     §29.17, 16-11-2026).
+    expect(crons).toHaveLength(42);
     for (const c of crons) {
       expect(c.path.startsWith("/api/cron/")).toBe(true);
       expect(c.schedule.trim().split(/\s+/)).toHaveLength(5);

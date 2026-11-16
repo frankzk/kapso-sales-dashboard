@@ -1,3 +1,4 @@
+import { loadGfAutoActiveStores } from "@/lib/gf-auto-guide-server";
 import { Suspense } from "react";
 import { EmptyState } from "@/components/ui";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
@@ -16,8 +17,8 @@ import ReproLimaLoading from "./loading";
 // lee la lista amplia de pendientes de entrega (28-10-2026), sin crear casos
 // para quienes no tuvieron un fallo. Una única tabla presenta la atención de
 // todos los pendientes; no carga otro resumen ni una segunda vista. Desde el
-// 15-11-2026 la pantalla la ordena en tres bloques (Por gestionar hoy, Agenda,
-// En manos del courier) y «Agendar» pone el día por la acción de cada pedido:
+// 15-11-2026 la pantalla la ordena en el «Flujo del día» (cinco pasos que
+// suman el total) y la «Agenda», y «Agendar» pone el día por la acción de cada pedido:
 // «Programar envío» pide `master.edit`, que solo se lee para no ofrecerlo a
 // quien no lo tiene (la acción lo vuelve a pedir).
 // Un error de lectura impide presentar un total parcial como completo.
@@ -43,17 +44,23 @@ async function ReproLimaContent() {
   let data: Awaited<ReturnType<typeof loadReproLima>>;
   let pending: LimaPendingOrder[];
   let canScheduleDispatch = false;
+  // «No se entregó» escribe por el motorizado: pide lo mismo que Coordinación (`routes.report_others`).
+  let canReportForRider = false;
+  let autoGuideStores: string[] = [];
   try {
     let permissions: Awaited<ReturnType<typeof getMasterPermissions>>;
-    [data, pending, permissions] = await Promise.all([
+    [data, pending, permissions, autoGuideStores] = await Promise.all([
       loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true }),
       loadLimaPending(createAdminSupabase(), scope),
       getMasterPermissions(),
+      // Best-effort: sin la lectura, «Mañana sin guía» alarma como antes.
+      loadGfAutoActiveStores(createAdminSupabase(), [...scope.storeIds]).catch(() => []),
     ]);
     canScheduleDispatch = permissions.can("master.edit");
+    canReportForRider = permissions.can("routes.report_others");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return <EmptyState title="No pudimos cargar Repro Lima">{`${message} Recarga la página.`}</EmptyState>;
   }
-  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} />;
+  return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} />;
 }

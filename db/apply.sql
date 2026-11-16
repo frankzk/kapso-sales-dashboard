@@ -693,4 +693,6 @@
 \ir migrations/0345_gf_auto_guide.sql
 \echo 'Applying 0346_gf_requests_lock_en_curso.sql'
 \ir migrations/0346_gf_requests_lock_en_curso.sql
+\echo 'Applying 0347_lima_repro_gf_courier.sql'
+\ir migrations/0347_lima_repro_gf_courier.sql
 \echo 'Done.'

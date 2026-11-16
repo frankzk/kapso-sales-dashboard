@@ -32,34 +32,34 @@ colors:
   urgent: "#df1b41"
 typography:
   headline:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
+    fontFamily: "'Inter Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
     fontSize: "28px"
     fontWeight: 700
     lineHeight: "36px"
     letterSpacing: "-0.01em"
   figure:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
+    fontFamily: "'Inter Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
     fontSize: "20px"
     fontWeight: 600
     lineHeight: "28px"
     fontFeature: "'tnum'"
   title:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
+    fontFamily: "'Inter Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
     fontSize: "14px"
     fontWeight: 600
     lineHeight: "20px"
   body:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
+    fontFamily: "'Inter Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: "20px"
   body-sm:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
+    fontFamily: "'Inter Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
     fontSize: "13px"
     fontWeight: 500
     lineHeight: 1.5
   label:
-    fontFamily: "ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
+    fontFamily: "'Inter Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'"
     fontSize: "12px"
     fontWeight: 600
     lineHeight: "16px"
@@ -288,6 +288,7 @@ Una paleta fría y contenida: tinta azulada, hairlines casi invisibles, un azul 
   - **La chapa**, la misma en el Master, en Leads y en la página «Lista negra» (`ListaNegraBadge`, `components/lista-negra-badge.tsx`): «Lista negra», o «Lista negra · pago total» cuando se pide el pago total; el tooltip es «{motivo}. {requisito}». Los avisos de la ficha del pedido y del lead tienen la misma estructura (`ListaNegraBanner`): título «Lista negra», motivo, requisito, qué hacer y la nota al pie en `ink-500`. Cada texto sale de `lib/lista-negra-copy.ts` y de ningún otro sitio.
 - **Macroetapas del MOM** (excepción consciente): la macroetapa de un pedido lleva el tono que fija el MOM (§25 de `docs/mom/master-pedidos-v1.md`): ámbar para confirmación, celeste para preparación, índigo para despacho, cian para seguimiento, naranja para cierre, verde para completado y gris para consulta. Va en chapa de 4 px con el par `*-100` / `*-800` de Tailwind (`MacroStageBadge`) y, en las tarjetas de macroetapa, como un cuadro de 8 px en `*-500` delante de la etiqueta (`MacroStageDot`), que hace de leyenda de la tabla. Son tonos de una regla de negocio, no estados de este sistema: no se usan para nada más.
 - **Cobertura** (excepción consciente, 09-10-2026): la cobertura del pedido es una clasificación y no un estado, así que no usa los pares `ok`/`warn`/`crit` —un «Agencia» en ámbar se leería como un problema— ni los matices de las macroetapas, que van en la misma fila. Lleva un tinte suave de un matiz propio: fondo `*-50`, anillo interior `*-200` y texto `*-800` de Tailwind, Lima en violeta, Provincia COD en verde azulado (`teal`) y Agencia en fucsia (`CoverageBadge`, en `components/coverage-badge.tsx`). Queda más callado que la chapa de etapa (`*-100` / `*-800`), que sigue siendo lo más fuerte de la fila. «Por revisar» es la única con el par `warn`, porque pide que alguien actúe. El texto dice siempre la cobertura: el color ayuda a escanear, no la sustituye.
+- **Pasos de Repro Lima** (excepción consciente, 16-11-2026, pedido del owner: «mejorar la paleta para hacer contrastes entre las secciones»): los seis pasos del Flujo del día son una clasificación, no estados, así que llevan matices de `CategoryTone` y nunca rojo ni verde (`STEP_TONE`, `components/repro-lima-blocks.tsx`): Novedad del courier en naranja, Llamar después en celeste, No entregados en índigo, Sacar a reparto en verde azulado, y los plegados (Con el courier, Por cerrar) en pizarra. El matiz va en el número del paso (`*-50` con anillo `*-200` y texto `*-800`; elegido, relleno `*-700` con texto blanco), en su tramo de la barra de reparto (`*-500`; con otro paso elegido, `*-200`), en la celda elegida (fondo `*-50`, etiqueta y cifra `*-800`, barra de 2 px `*-700`), en el punto de los plegados y en la cabecera de la lista, que toma la banda `*-50` y el punto del paso de donde viene. La fila de pasos es la leyenda de la barra: el color nunca va sin su nombre. Las tarjetas de Repro Lima llevan el anillo `line-strong` al 70 % para separarse del lienzo.
 - **Segmento del lead** (excepción consciente, 14-10-2026): en Leads el segmento y la línea de WhatsApp son clasificaciones, así que llevan la misma chapa que la cobertura —fondo `*-50`, anillo interior `*-200`, texto `*-800`— con los matices de `CategoryTone` (`components/ops-ui.tsx`) y el mapa de `components/lead-segment-tone.ts`. Una escalera de intención con matices que ya usa el Master: Carrito en naranja (el de la macroetapa de cierre) con el monto en `orange-950`, Distrito en verde azulado (el de la cobertura: dónde se entrega), Producto en índigo, Conversó en celeste y Frío en pizarra; la línea de WhatsApp («API», «Business») en esmeralda. Las chapas de estado de la misma fila («Tu siguiente», «Hora dorada», la ventana, «Atención») siguen con sus pares rellenos y sin anillo, así que se leen distinto. «Anulado» en un pedido anterior es un estado: par `crit`. Leads no muestra la chapa de macroetapa; la de cobertura solo va en «Entrega» de la tarjeta del siguiente lead y en el distrito de la ficha, en su propia fila, lejos de la del segmento.
 
 ### Datos (excepción consciente, 13-10-2026)
@@ -306,11 +307,11 @@ Los gráficos de Consolidado tienen su propia paleta, en `components/palette.ts`
 
 ## Typography
 
-**Display Font:** ninguna fuente web; la sans del sistema (`ui-sans-serif, system-ui, sans-serif`)
-**Body Font:** la misma sans del sistema
+**Display Font:** Inter variable, autoalojada (`@fontsource-variable/inter`, importada en `app/layout.tsx`; `--font-sans` en `app/globals.css`), con la sans del sistema como respaldo
+**Body Font:** la misma Inter
 **Label/Mono Font:** `ui-monospace` solo para códigos QR y de paquete
 
-**Character:** La sans nativa de cada plataforma es deliberada en una herramienta de operación: carga al instante, se lee como el sistema operativo y deja que la jerarquía la hagan el peso y la tinta, no la fuente.
+**Character:** Inter desde el 15-11-2026 (owner: «rediseño al estilo Stripe … tipo de letra Inter»). Es la misma letra en Windows, Mac y el teléfono: antes cada equipo veía su sans nativa (Segoe UI en las computadoras de la operación) y el panel no se parecía al de Stripe. Viene en el paquete de la app, no de Google, así que no agrega una petición externa por carga. La jerarquía la siguen haciendo el peso y la tinta; las cifras, tabulares.
 
 ### Hierarchy
 - **Headline** (700, 28px, 36px, -0.01em): el título de la página («Grupo GF Courier»), uno por pantalla y sin antetítulo encima.
@@ -500,15 +501,36 @@ En Repro Lima, entre «Sale a reparto» y los chips de macroestado, una tarjeta 
 
 Desde el 15-11-2026 la misma tarjeta vive en Grupo GF Courier → Despacho del día, justo debajo de «Sale a reparto», con el título «Trabados en Grupo GF» y solo los motivos de las cajas y los motorizados de Grupo GF (mientras carga, un esqueleto en `wash` de su alto; si la lectura falla, un aviso `warn`). En Repro Lima ya no está: sus motivos del equipo son chips de los bloques (abajo).
 
-### Repro Lima: tres bloques sobre una lista (15-11-2026)
-El panel del equipo de Lima (MOM §9.5, «Repro Lima por las tareas del equipo»). Debajo de la cabecera (título, ayuda y la chapa del corte), tres bloques, uno debajo del otro y separados 16 px; cada uno con su título en 14 px peso 600 `ink-900`, su total en 13 px peso 600 `ink-600` y la ayuda en 13 px `ink-500` (debajo en el teléfono, al lado desde 1024 px), y sus tarjetas de estado (`StatusCard`, la etiqueta parte en líneas) que filtran la única lista (The Cifras Navegan Rule):
-- **Por gestionar hoy**: Confirmar primer despacho, No entregados, Novedad del courier, Llamar después y Por cerrar (2 columnas en el teléfono, 3 desde `sm`, 5 desde `xl`).
-- **Agenda**: Hoy, los cinco próximos días de reparto por su nombre («Lun 16»), Después y Sin fecha (2, 4 desde `sm`, 8 desde `xl`).
-- **En manos del courier**: Guía creada, En ruta y Retornando (2, 3 desde `sm`, 5 desde `xl`, del ancho de las de arriba).
+### Repro Lima: el flujo del día y la Agenda sobre una lista (15-11-2026)
+El panel del equipo de Lima (MOM §9.5, «Repro Lima por las tareas del equipo», su «Segunda vuelta: el flujo del día» y su «Tercera vuelta: cinco pasos que suman el total»).
 
-Debajo de las tarjetas de cada bloque, una fila de chips de elección (`ChoiceChip`): los filtros de adentro (Más de 30 días, Reintentos Aliclik, Esperan anulación; Reprogramados en la Agenda), solo con pedidos o elegidos, y, tras la palabra «Trabados» en 13 px peso 500 `warn-fg`, un chip por motivo trabado del bloque (solo los que tienen pedidos); sin nada, la fila no se dibuja. Una sola cosa elegida a la vez entre tarjetas, chips y trabados; la elegida con el borde azul, y tocarla vuelve a Todos.
+**Cabecera.** Debajo del título va una línea con la píldora del total «**N** pedidos de Lima por entregar». Es también «Todos»: la elegida con anillo azul de 2 px y la cifra en `brand-700`. A su lado, la chapa del corte y una sola píldora de excepción «Trabados N» (`AttentionPill` con el triángulo de alerta). Elegida, abre debajo una banda `warn-wash` con anillo `warn-bg`: «Trabados por motivo:» en 13 px peso 500 `warn-fg` y un chip de elección por motivo.
 
-La tarjeta de trabajo empieza con el título de lo elegido en 14 px peso 600 (o «Todos los pendientes») y su ayuda en 13 px `ink-500`, con «Ver todos» fantasma a la derecha cuando hay algo elegido; debajo, la barra de siempre (búsqueda, Tienda, Creación, Canal, Distrito, Courier, «Quitar filtros»), el chip «Solo trabados» y la cifra «N de M pendientes de entrega». Desde 1280 px la lista es una tabla fija: casilla, Pedido (código, tienda, creación, venta y quién lo atiende), Cliente (teléfono, sus pedidos de antes, dirección y referencia), **Qué pasa** (chapa `brand` de la macroetapa y neutra de la subetapa, el courier con su estado en 13 px `ink-700`, el fallo o la situación, las chapas del acuerdo y de la caja y «Última nota: …» en 12 px `ink-500`), **Próximo paso** (13 px `ink-700`; un trabado lleva la chapa `warn` «Trabado · N días», la del responsable, el motivo en 13 px peso 500 `ink-900`, su dato en 12 px y la acción), **Fecha agendada** (el día en 13 px peso 500 —`warn-fg` si está vencido, `ink-500` sin fecha— y de dónde sale en 12 px `ink-500`) y las acciones apiladas: «Agendar» (secundario) y «Atender» (secundario). Por debajo de 1280 px, la misma fila en renglones, con Próximo paso y Fecha agendada sobre una hairline y «Llamar …», «Agendar» y «Atender» a lo ancho.
+**Dos bloques, separados 28 px.** Cada uno tiene su título en 16 px peso 600 `ink-900`, el total con su unidad en 13 px `ink-500` («1,438 pedidos») y, debajo del título, la ayuda en 13 px `ink-500`. La cifra de una celda va en 22 px. Cada bloque es una **franja**: una sola tarjeta blanca (sombra de control, anillo `line`) con las celdas separadas por líneas finas (`gap-px` sobre `line`). No son tarjetas sueltas.
+- **Celda:** etiqueta en 13 px peso 500 `ink-600`, cifra en 20 px peso 600 tabular (`ink-300` si es cero) y contexto en 12 px `ink-500`. Elegida: fondo `brand-50`, etiqueta y cifra en `brand-700` y una barra de 2 px `brand-600` al pie, como la pestaña activa.
+- **Flujo del día:** seis pasos que suman el total. Los cuatro del trabajo (Novedad del courier, Llamar después, No entregados, Sacar a reparto) van numerados y a lo ancho; los dos que solo se miran (Con el courier, Por cerrar) van **plegados** al final: un cuadrante de 0.66 del ancho, sobre `wash`, sin número, con la etiqueta en 12 px `ink-500` y la cifra en 18 px `ink-600`, separados del trabajo por una línea `line-strong`. En el teléfono, el trabajo ocupa una fila cada uno y los dos plegados comparten una. La ayuda lo dice: «los seis suman el total».
+- **Barra de reparto:** arriba de la franja, sobre una hairline, una barra de 8 px redondeada con un tramo por paso (ancho proporcional a su cifra, mínimo 4 px, separados por 2 px), azul `brand-500` para el trabajo y gris `ink-300` para los plegados, y al final «= **1,438** pedidos» en 13 px. Con un paso elegido, su tramo va en `brand-700` (o `ink-600` si es plegado) y los demás se aclaran (`brand-200`, `line-strong`). Es decorativa para el lector de pantalla: las cifras están en las celdas. Cada uno lleva un número en un círculo de 20 px (anillo `line-strong`; relleno `brand-600` con texto blanco cuando es el elegido). El primer paso del trabajo con pedidos lleva la chapa `brand` «Empieza aquí»: junto a la cifra desde `sm` (así no corta el nombre ni desalinea las cifras) y junto a la etiqueta en el teléfono. El contexto dice el porqué del paso, o cuántos de sus pedidos son del filtro de adentro. En el teléfono, la cifra va a la derecha y el contexto debajo de la etiqueta. Con un paso elegido, el pie de la franja (`wash`, sobre una hairline) dice «Dentro de **No entregados**:» y lleva los chips «Todos (no entregados)» y el filtro de adentro.
+- **Agenda:** Hoy, Mañana («Mañana · Lun 16», o el día si mañana no se reparte), Después y Sin fecha (2 columnas en el teléfono, 4 desde `sm`). En un día sin reparto (domingo) no hay «Hoy»: tres tarjetas (3 columnas desde `sm`), y lo vencido va en Mañana. Hoy y Mañana dicen en su contexto «N con guía · **M sin guía**», con la parte sin guía en peso 600 `warn-fg` cuando no es cero; en Mañana, lo que creará la guía GF automática se dice aparte y sin color («M las crea la automática»). El pie de la franja lleva las alertas «Hoy sin guía» y «Mañana sin guía» (`AttentionPill` con el triángulo) y el chip «Reprogramados»; cada uno sale solo con pedidos o elegido. La ayuda avisa que la Agenda no suma el total.
+- **Con el courier** ya no es un bloque: es un paso plegado, y Guía creada, En ruta y Retornando son sus filtros de adentro.
+- **«Hoy sin guía» antes de las 10:30:** un chip de elección neutro (no `AttentionPill`) y la cifra «sin guía» de Hoy sin `warn-fg`; desde las 10:30, alerta. «Mañana sin guía» siempre es alerta.
+- **Propuesta de día:** en «Sin fecha» y «Sacar a reparto», debajo del título de la lista, una banda `brand-50` con anillo `brand-100` y radio de control: el texto en 13 px `ink-700` con el día y la cantidad en peso 600 `ink-900`, y a la derecha el botón primario pequeño «Elegirlos para el lun 16/11». Lo confirma la barra «Mover a…» de siempre. En el teléfono el botón baja debajo del texto, a todo el ancho.
+- **Trabados dentro de su paso:** la celda termina su contexto con «· **N trabados**» en peso 600 `warn-fg`; elegido el paso, su pie lleva al final la píldora de excepción «Trabados N» (`AttentionPill` con el triángulo). No hay píldora «Trabados» en la cabecera.
+- **Fecha de la ruta del courier:** en «Fecha agendada», el día en 14 px peso 500 `ink-900` (`warn-fg` si el recojo venció) y debajo, en 12 px `ink-500`, de qué es: «Recojo de Aliclik», «Sale con GF Courier», «En ruta», «Retornando». Sin partir línea.
+- **«No se entregó»:** botón secundario de la fila junto a «Atender», con la hoja anclada de «Agendar»: el texto en 13 px `ink-600` con el motorizado en peso 600, los motivos como chips de elección, la nota, la captura (`PhotoCapture`) y, al pie sobre una hairline, lo que falta en 12 px `ink-500` y el botón primario «Registrar no entregado».
+- **Llamadas que ya tocan:** la celda de «Llamar después» dice «**N ya tocan**» en peso 600 `warn-fg` (en lugar de su porqué) y el próximo paso de la fila va en peso 500 `warn-fg`.
+- **Ruta vencida en la lista:** la «Fecha agendada» dice «Salió lun 16/11» en 14 px peso 500 `warn-fg` y debajo «Sin reporte» en 12 px `ink-500`, sin partir línea.
+
+**La lista, más clara (owner, 15-11-2026: «los colores y separaciones que se vean más claras»).**
+- **Cabecera de la tarjeta:** el título va en 16 px.
+- **Cabecera de la tabla:** fondo `wash` con hairline arriba y abajo, en 12 px peso 600 `ink-500`.
+- **Filas:** 16 px de relleno vertical y hover `wash` suave.
+- **Celdas:** una línea principal en 14 px `ink-900` y el detalle en 12–13 px `ink-500`/`ink-600`, para que el ojo sepa qué leer primero. Las líneas principales son:
+  - el nombre del cliente, en peso 500;
+  - el courier y su estado en «Qué pasa», en peso 500;
+  - la frase de «Próximo paso»;
+  - la fecha agendada.
+
+La tarjeta de trabajo empieza con el título de lo elegido en 14 px peso 600 (o «Todos los pendientes») y su ayuda en 13 px `ink-500`, con «Ver todos» fantasma a la derecha cuando hay algo elegido; debajo, la barra de siempre (búsqueda, Tienda, **Etapa** —macroestado y subetapa en una hoja anclada—, Creación, Canal, Distrito, Courier, «Quitar filtros») y la cifra «N de M pendientes de entrega». Desde 1280 px la lista es una tabla fija: casilla, Pedido (código, tienda, creación, venta y quién lo atiende), Cliente (teléfono, sus pedidos de antes, dirección y referencia), **Qué pasa** (chapa `brand` de la macroetapa y neutra de la subetapa, el courier con su estado en 13 px `ink-700`, el fallo o la situación, las chapas del acuerdo y de la caja y «Última nota: …» en 12 px `ink-500`), **Próximo paso** (13 px `ink-700`; un trabado lleva la chapa `warn` «Trabado · N días», la del responsable, el motivo en 13 px peso 500 `ink-900`, su dato en 12 px y la acción), **Fecha agendada** (el día en 13 px peso 500 —`warn-fg` si está vencido, `ink-500` sin fecha— y de dónde sale en 12 px `ink-500`) y las acciones apiladas: «Agendar» (secundario) y «Atender» (secundario). Por debajo de 1280 px, la misma fila en renglones, con Próximo paso y Fecha agendada sobre una hairline y «Llamar …», «Agendar» y «Atender» a lo ancho.
 
 «Agendar» abre una hoja anclada `look="ops"` (inferior en el teléfono): una línea de 13 px `ink-500` que dice por qué camino va (el acuerdo con su courier, o «Programar envío»), los días como chips de elección («Hoy», «Lun 16»…), «Otro día» en un campo de fecha de 36 px y 176 px de ancho, «¿Cómo lo acordaste?» con Llamada / WhatsApp en chips si es un acuerdo, la nota opcional si es «Programar envío», el error en un aviso `crit` y, sobre una hairline, «Cancelar» fantasma y «Agendar para el lun 16/11» principal. Con casillas marcadas aparece al pie la barra de acciones en lote de la casa (pegajosa, blanca, sombra de popover y anillo `line`): cuántos, «Mover al lun 16/11» principal, «Limpiar» fantasma y, sobre una hairline, los mismos chips de día, el campo de fecha y, si hay acuerdos, Llamada / WhatsApp con su línea de 12 px `ink-500`. Lo que no se movió sale en el aviso de la página, una línea por motivo.
 

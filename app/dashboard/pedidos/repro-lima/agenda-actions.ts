@@ -7,7 +7,9 @@
 // mostró la lista es una intención):
 // - con un acuerdo con la clienta, se cambia su día con el mismo courier
 //   (`moveReproAgreement`: el candado del caso, «Qué hacer con la caja» y la
-//   misma RPC que «Confirma fecha», `repro_lima.manage`);
+//   misma RPC que «Confirma fecha», `repro_lima.manage`). Con GF Courier,
+//   eso anula la guía GF del día anterior si GF no la asignó y crea la del
+//   nuevo (§29.17); si GF no responde, el aviso enlaza a la Mesa de ruta;
 // - sin acuerdo y en Preparación · Por generar rótulo, «Programar envío»
 //   (`scheduleOrderDispatch`, §6.2: `master.edit`, la ubicación y hasta 45
 //   días). Con GF Courier por API, ese día la guía se crea sola (§29.17);
@@ -31,6 +33,8 @@ export interface AgendarResult {
   notice?: string;
   /** Por dónde fue: el acuerdo con la clienta o «Programar envío». */
   path?: "acuerdo" | "envio";
+  /** La ficha del pedido en la Mesa de ruta: GF Courier no anuló o no creó la guía del día nuevo. */
+  href?: string;
 }
 
 /** Por qué un pedido no se agenda desde la lista (la misma regla que `agendarPath`). */
@@ -64,7 +68,12 @@ export async function agendarReproLima(input: {
     const open = f.open && f.open.episode_key === f.episode.key ? f.open : null;
     if (open?.agreed_on && open.agreement_call_id) {
       const result = await moveReproAgreement({ orderId: input.orderId, day, channel: input.channel ?? "llamada", operationId: input.operationId });
-      return { ...(result.error ? { error: result.error } : {}), ...(result.notice ? { notice: result.notice } : {}), path: "acuerdo" };
+      return {
+        ...(result.error ? { error: result.error } : {}),
+        ...(result.notice ? { notice: result.notice } : {}),
+        ...(result.href ? { href: result.href } : {}),
+        path: "acuerdo",
+      };
     }
     // La subetapa es la del Master: sin rótulo ni guía. «Programar envío» la vuelve a comprobar.
     if (f.order.macro_stage === "preparacion" && f.order.macro_substage === "por_generar_rotulo") {

@@ -18,7 +18,9 @@ import "server-only";
 // LO QUE NO ES UN FALLO Y NO AVISA. Que el pedido ya tenga guía de cualquier
 // courier y el Master no lo haya recalculado (se recalcula), que otra creación
 // del mismo pedido esté en marcha (una persona en la Mesa de ruta, o un timeout
-// cuya intención resuelve `gf-reconcile`), ni que sea acompañante (§32).
+// cuya intención resuelve `gf-reconcile`), que sea acompañante (§32), ni que
+// tenga un acuerdo de Repro Lima con la clienta: el acuerdo decide el día y el
+// courier (owner, 15-11-2026; §9.5).
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { env } from "@/lib/env";
@@ -48,6 +50,8 @@ import {
   gfAutoModeFrom,
   gfAutoOutcomeLabel,
   gfAutoPassOpen,
+  gfAutoReproAgreement,
+  gfAutoReproDetail,
   gfAutoSimulationDetail,
   gfAutoSkip,
   gfAutoTriedOn,
@@ -55,6 +59,7 @@ import {
   isGfAutoOutcome,
   type GfAutoMode,
   type GfAutoOutcome,
+  type GfAutoReproCase,
 } from "@/lib/gf-auto-guide";
 import type { OrderMasterRow } from "@/lib/types";
 
@@ -75,10 +80,13 @@ const IN_FLIGHT_DETAIL =
  *   * `acompanante`   — viaja en la caja de otro pedido (§32).
  *   * `ya_tiene_guia` — tiene una guía viva de cualquier courier y el Master
  *                       aún no lo había recalculado.
+ *   * `acuerdo_repro_lima` — tiene un acuerdo de Repro Lima con la clienta
+ *                       (`gfAutoReproAgreement`): el acuerdo decide el día y el
+ *                       courier, no la pasada (owner, 15-11-2026; §9.5).
  *   * `error`         — algo inesperado al revisarlo: no se creó ni se avisó;
  *                       queda en el error de la pasada y se mira en la siguiente.
  */
-export type GfAutoItemOutcome = GfAutoOutcome | "ya_intentado" | "acompanante" | "ya_tiene_guia" | "error";
+export type GfAutoItemOutcome = GfAutoOutcome | "ya_intentado" | "acompanante" | "acuerdo_repro_lima" | "ya_tiene_guia" | "error";
 
 export interface GfAutoItem {
   orderId: string;
@@ -135,6 +143,25 @@ export async function loadGfReadyStores(
     if (gf?.enabled && gf.token) stores.push({ id: s.id, orgId: s.org_id, name: s.name ?? "Tienda", token: gf.token });
   }
   return { stores, error: null };
+}
+
+/**
+ * Las tiendas (de las pedidas) cuya guía GF automática está en Activo: GF
+ * Courier por API habilitado y la organización en «activo». Para que Repro
+ * Lima no alarme por la guía de mañana que la pasada creará sola (owner,
+ * 15-11-2026). Sin descifrar el token: es solo para decidir el tono. Ante un
+ * error, ninguna (se alarma como antes).
+ */
+export async function loadGfAutoActiveStores(admin: SupabaseClient, storeIds: readonly string[]): Promise<string[]> {
+  if (!storeIds.length) return [];
+  const { data: stores, error } = await admin.from("stores").select("id,org_id").in("id", [...storeIds]).eq("status", "active").eq("gf_courier_enabled", true);
+  if (error || !stores?.length) return [];
+  const orgIds = [...new Set((stores as { org_id: string | null }[]).map((s) => s.org_id).filter((id): id is string => Boolean(id)))];
+  if (!orgIds.length) return [];
+  const { data: settings, error: settingsError } = await admin.from(GF_AUTO_SETTINGS).select("org_id,mode").in("org_id", orgIds);
+  if (settingsError) return [];
+  const active = new Set((settings ?? []).filter((r: { mode: string }) => gfAutoModeFrom(r.mode) === "activo").map((r: { org_id: string }) => r.org_id));
+  return (stores as { id: string; org_id: string | null }[]).filter((s) => s.org_id && active.has(s.org_id)).map((s) => s.id);
 }
 
 /** La tabla aún no existe (0345 sin aplicar): PostgREST o Postgres. */
@@ -366,14 +393,17 @@ export async function runGfAutoGuides(
   report.candidates = candidates.length;
   if (!candidates.length) return done();
 
-  // Lo que ya se intentó hoy y los acompañantes (§32). Sin poder leerlos no se
-  // crea nada: repetir sería volver a avisar de lo mismo, y crearle guía a un
-  // acompañante sería un segundo paquete para la misma clienta.
+  // Lo que ya se intentó hoy, los acompañantes (§32) y los casos abiertos de
+  // Repro Lima (§9.5). Sin poder leerlos no se crea nada: repetir sería volver a
+  // avisar de lo mismo, crearle guía a un acompañante sería un segundo paquete
+  // para la misma clienta, y saltarse un acuerdo sería mandarlo otro día o con
+  // otro courier que el que la clienta acordó.
   const ids = candidates.map((row) => row.order_id);
   const triedByOrder = new Map<string, { kind: string; payload: unknown }[]>();
   const companions = new Set<string>();
+  let reproCases: GfAutoReproCase[] = [];
   try {
-    const [tried, rides] = await Promise.all([
+    const [tried, rides, cases] = await Promise.all([
       courierRowsByIds(ids, (chunk) =>
         admin.from("order_events").select("order_id,kind,payload").eq("kind", GF_AUTO_FAILED).in("order_id", chunk) as unknown as PromiseLike<{
           data: { order_id: string; kind: string; payload: unknown }[] | null;
@@ -381,14 +411,21 @@ export async function runGfAutoGuides(
         }>,
       ),
       loadCompanionRides(admin, ids),
+      courierRowsByIds(ids, (chunk) =>
+        admin.from("lima_repro_cases").select("order_id,episode_key,agreed_on,agreed_courier,closed_at").in("order_id", chunk).is("closed_at", null) as unknown as PromiseLike<{
+          data: GfAutoReproCase[] | null;
+          error: { message: string } | null;
+        }>,
+      ),
     ]);
     for (const event of tried.data) triedByOrder.set(event.order_id, [...(triedByOrder.get(event.order_id) ?? []), event]);
     // Vinculado como acompañante, preste o no su caja: darle salida propia
     // exige desvincularlo antes (§32.1, reglas 8 y 9).
     const idSet = new Set(ids);
     for (const ride of rides) if (idSet.has(ride.link.companionOrderId)) companions.add(ride.link.companionOrderId);
+    reproCases = cases.data;
   } catch (e) {
-    errors.push(`No se pudo verificar qué pedidos ya se intentaron hoy o viajan en la caja de otro: ${e instanceof Error ? e.message : String(e)}`);
+    errors.push(`No se pudo verificar qué pedidos ya se intentaron hoy o viajan en la caja de otro (ni sus acuerdos de Repro Lima): ${e instanceof Error ? e.message : String(e)}`);
     return done();
   }
 
@@ -449,6 +486,15 @@ export async function runGfAutoGuides(
     if (companions.has(row.order_id)) {
       item.outcome = "acompanante";
       item.detail = "Viaja en la caja de otro pedido: para darle guía propia hay que desvincularlo antes.";
+      continue;
+    }
+    // Un acuerdo de Repro Lima con la clienta decide el día y el courier (§9.5):
+    // la guía GF del día acordado la crea Repro Lima; la de otro courier, una
+    // persona desde la Mesa de ruta. No es un fallo y no avisa.
+    const agreement = gfAutoReproAgreement(row.order_id, reproCases);
+    if (agreement) {
+      item.outcome = "acuerdo_repro_lima";
+      item.detail = gfAutoReproDetail(agreement);
       continue;
     }
 

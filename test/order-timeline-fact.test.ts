@@ -148,3 +148,32 @@ describe("la ficha pinta el marcador y las etiquetas", () => {
     }
   });
 });
+
+// Owner, 16-11-2026: «en este historial falta el nombre del courier». Los
+// estados que informa un courier lo nombran, con el transporte de Aliclik.
+import { courierEventName, courierEventTitle } from "@/lib/order-timeline-fact";
+
+describe("los hechos de un courier lo nombran (owner, 16-11-2026)", () => {
+  it("Aliclik con su transporte; los demás con su nombre; sin courier, nada", () => {
+    expect(courierEventName("aliclik", "ALIDRIVER EXPRESS")).toBe("Aliclik · ALIDRIVER");
+    expect(courierEventName("aliclik", "Auto Ecom SAC")).toBe("Aliclik · AUTOECOM");
+    expect(courierEventName("aliclik", null)).toBe("Aliclik");
+    expect(courierEventName("gf_courier")).toBe("GF Courier");
+    expect(courierEventName("propio")).toBe("Grupo GF");
+    expect(courierEventName(null)).toBeNull();
+  });
+  it("«Estado informado por Aliclik · ALIDRIVER» en vez de «por el courier»; los demás hechos no cambian", () => {
+    expect(courierEventTitle({ kind: "courier_status", courier: "aliclik", courierName: "Aliclik · ALIDRIVER" })).toBe("Estado informado por Aliclik · ALIDRIVER");
+    expect(courierEventTitle({ kind: "courier_status", courier: "swayp" })).toBe("Estado informado por Swayp");
+    expect(courierEventTitle({ kind: "courier_report", courier: "swayp" })).toBe("Resultado informado por Swayp");
+    expect(courierEventTitle({ kind: "courier_status", courier: null })).toBeNull();
+    expect(courierEventTitle({ kind: "comment", courier: "aliclik" })).toBeNull();
+  });
+  it("la ficha lo usa y la lectura trae el transporte de la guía", () => {
+    const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
+    expect(read("components/order-drawer.tsx")).toContain("{courierEventTitle(t) ?? TIMELINE_LABEL[t.kind] ?? t.kind}");
+    const access = read("lib/orders-master-access.ts");
+    expect(access).toContain("aliclik_service_date,aliclik_transport_name,");
+    expect(access).toContain("courierEventName(t.courier, t.guideCode ? transportByGuide.get(t.guideCode) : null)");
+  });
+});

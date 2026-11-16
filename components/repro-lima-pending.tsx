@@ -1,7 +1,7 @@
 "use client";
 
-// La lista de Repro Lima (MOM §9.5): una sola, con los tres bloques de arriba
-// como filtros (owner, 15-11-2026). Cada fila dice de un vistazo el pedido, la
+// La lista de Repro Lima (MOM §9.5): una sola, con el flujo y la Agenda de
+// arriba como filtros (owner, 15-11-2026). Cada fila dice de un vistazo el pedido, la
 // clienta (teléfono y dirección), qué pasa (la etapa, el courier y su último
 // estado, el fallo, el acuerdo y la última nota), el próximo paso, la fecha
 // agendada y «Agendar» y «Atender».
@@ -15,7 +15,8 @@ import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "
 import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { AGENDA_ORIGIN_LABEL, agendaDayText, classifyLimaRows, courierNowText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { AGENDA_ORIGIN_LABEL, agendaDayText, callDue, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
 import { soles, telHref } from "@/lib/rider-contact";
@@ -79,10 +80,10 @@ export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
 function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
   const courier = courierNowText(row);
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>
-      {courier && <p className="break-words text-[13px] leading-5 text-ink-700">{courier}</p>}
-      {repro ? <FailureLine row={repro} /> : <p className="text-[13px] leading-5 text-ink-700">{pendingGroup(row, today).label}</p>}
+      {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}
+      {repro ? <FailureLine row={repro} /> : <p className="text-[13px] leading-5 text-ink-600">{pendingGroup(row, today).label}</p>}
       {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
       {repro?.lastCall?.note && <p className="break-words text-xs leading-5 text-ink-500">Última nota: {repro.lastCall.note}</p>}
     </div>
@@ -108,26 +109,45 @@ function NextStep({ row, repro, cls, stuck, today, now }: { row: LimaPendingOrde
             <Badge tone="warn" wrap>{`Trabado · ${days(stuck.daysStuck)}`}</Badge>
             <Badge tone={STUCK_OWNER_TONE[stuck.owner]}>{LIMA_STUCK_OWNER_LABEL[stuck.owner]}</Badge>
           </div>
-          <p className="text-[13px] font-medium leading-5 text-ink-900">{rule.label}</p>
+          <p className="text-sm font-medium leading-5 text-ink-900">{rule.label}</p>
           {stuck.detail && <p className="break-words text-xs text-ink-500">{stuck.detail}</p>}
           <p className="text-[13px] leading-5 text-ink-700">{rule.action}</p>
         </>
       ) : (
-        <p className="text-[13px] leading-5 text-ink-700">{limaNextStep(row, repro, cls, today, now)}</p>
+        // La llamada pedida cuya hora ya llegó va en rojo (owner, 15-11-2026).
+        <p className={cn("text-sm leading-5", cls.task === "llamar_despues" && callDue(repro, now ?? new Date()) ? "font-medium text-warn-fg" : "text-ink-900")}>{limaNextStep(row, repro, cls, today, now)}</p>
       )}
       {repro?.retryChain && <RetryChainNote orderId={row.orderId} chain={repro.retryChain} />}
     </div>
   );
 }
 
-/** «Fecha agendada»: el día de la Agenda y de dónde sale; con el courier y sin día por delante, lo dice. */
-function AgendaCell({ cls, repro, today }: { cls: LimaRowClass; repro?: ReproRow; today: string }) {
-  if (!cls.agenda && cls.courier) return <p className="text-[13px] text-ink-500">Con el courier</p>;
+/** «Fecha agendada»: el día de la Agenda y de dónde sale; con el courier y sin día por delante, la fecha de su ruta. */
+function AgendaCell({ row, cls, repro, today }: { row: LimaPendingOrder; cls: LimaRowClass; repro?: ReproRow; today: string }) {
+  // Ruta vencida sin reporte (owner, 15-11-2026): el día en que salió, como un no entregado.
+  if (cls.noReport) {
+    return (
+      <div>
+        <p className="whitespace-nowrap text-sm font-medium tabular-nums text-warn-fg">{cls.routeDay ? `Salió ${programDayLabel(cls.routeDay)}` : "Salió a ruta"}</p>
+        <p className="whitespace-nowrap text-xs text-ink-500">Sin reporte</p>
+      </div>
+    );
+  }
+  // Con el courier y sin día por delante: la fecha de la ruta del courier (owner, 15-11-2026).
+  const route = !cls.agenda ? courierRouteText(row, cls, today) : null;
+  if (route) {
+    return (
+      <div>
+        <p className={cn("whitespace-nowrap text-sm font-medium tabular-nums", route.overdue ? "text-warn-fg" : "text-ink-900")}>{route.day}</p>
+        <p className="whitespace-nowrap text-xs text-ink-500">{route.detail}</p>
+      </div>
+    );
+  }
   const overdue = Boolean(cls.agendaDay && cls.agendaDay < today);
   const origin = cls.agendaOrigin;
   return (
     <div>
-      <p className={cn("text-[13px] font-medium tabular-nums", overdue ? "text-warn-fg" : cls.agendaDay ? "text-ink-900" : "text-ink-500")}>{agendaDayText(cls.agendaDay, today)}</p>
+      <p className={cn("text-sm font-medium tabular-nums", overdue ? "text-warn-fg" : cls.agendaDay ? "text-ink-900" : "text-ink-500")}>{agendaDayText(cls.agendaDay, today)}</p>
       {origin && <p className="text-xs text-ink-500">{AGENDA_ORIGIN_LABEL[origin]}{origin === "acuerdo" && repro?.agreement ? ` · ${repro.agreement.courierName}` : ""}</p>}
     </div>
   );
@@ -308,7 +328,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
   /** La hora de Lima para «Llamar hoy 15:00». */
   now?: Date;
-  /** Los tres bloques de cada fila (`classifyLimaRows`). */
+  /** El paso, el día y el courier de cada fila (`classifyLimaRows`). */
   classes?: ReadonlyMap<string, LimaRowClass>;
   /** Los trabados del equipo (§9.6), por pedido. */
   stuck?: ReadonlyMap<string, LimaStuckItem>;
@@ -329,9 +349,9 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
   return (
     <>
       <div className="hidden border-t border-line xl:block">
-        <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
-          <colgroup>{selection && <col className="w-10" />}<col className="w-[10rem]" /><col className="w-[15%]" /><col /><col className="w-[22%]" /><col className="w-[8.5rem]" /><col className="w-[7.5rem]" /></colgroup>
-          <thead><tr className="text-left text-xs font-semibold text-ink-600">{selection && (
+        <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-wash [&_th]:shadow-[inset_0_-1px_0_var(--color-line),inset_0_1px_0_var(--color-line)]">
+          <colgroup>{selection && <col className="w-10" />}<col className="w-[10rem]" /><col className="w-[15%]" /><col /><col className="w-[22%]" /><col className="w-[8.5rem]" /><col className="w-[9rem]" /></colgroup>
+          <thead><tr className="text-left text-xs font-semibold text-ink-500">{selection && (
             <th className="py-2.5 pl-4 pr-0">
               {selectableIds.length > 0 && (
                 <input
@@ -349,14 +369,14 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
           <tbody>{visible.map((row) => {
             const repro = cases.get(row.orderId);
             const cls = own.get(row.orderId);
-            return <tr key={row.orderId} className={cn("border-b border-line align-top hover:bg-wash", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
-              {selection && <td className="py-3 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
-              <td className="px-4 py-3"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} /><p className="text-xs tabular-nums text-ink-500">{soles(row.orderTotal)}</p>{repro && <ClaimBadge row={repro} />}</td>
-              <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
-              <td className="px-3 py-3"><WhatHappens row={row} repro={repro} today={today} /></td>
-              <td className="px-3 py-3">{cls && <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />}</td>
-              <td className="px-3 py-3">{cls && <AgendaCell cls={cls} repro={repro} today={today} />}</td>
-              <td className="px-4 py-3"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
+            return <tr key={row.orderId} className={cn("border-b border-line align-top transition-colors hover:bg-wash/70", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
+              {selection && <td className="py-4 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
+              <td className="space-y-0.5 px-4 py-4"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} /><p className="text-xs tabular-nums text-ink-500">{soles(row.orderTotal)}</p>{repro && <ClaimBadge row={repro} />}</td>
+              <td className="space-y-0.5 px-3 py-4"><p className="truncate font-medium text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-[13px] tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
+              <td className="px-3 py-4"><WhatHappens row={row} repro={repro} today={today} /></td>
+              <td className="px-3 py-4">{cls && <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />}</td>
+              <td className="px-3 py-4">{cls && <AgendaCell row={row} cls={cls} repro={repro} today={today} />}</td>
+              <td className="px-4 py-4"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
             </tr>;
           })}</tbody>
         </table>
@@ -383,7 +403,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
           {cls && (
             <div className="grid gap-2 border-t border-line pt-2 sm:grid-cols-[minmax(0,1fr)_auto]">
               <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />
-              <AgendaCell cls={cls} repro={repro} today={today} />
+              <AgendaCell row={row} cls={cls} repro={repro} today={today} />
             </div>
           )}
           {repro && <ClaimBadge row={repro} />}

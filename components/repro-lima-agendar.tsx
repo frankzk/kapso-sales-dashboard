@@ -16,7 +16,12 @@ import { programDayLabel } from "@/lib/dispatch-day";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
 
 export type AgendarChannel = "llamada" | "whatsapp";
-export type AgendarFeedback = { kind: "notice" | "error"; text: string };
+export type AgendarFeedback = {
+  kind: "notice" | "error";
+  text: string;
+  /** GF Courier no anuló o no creó la guía del día nuevo: abrir la Mesa de ruta de este pedido. */
+  mesa?: { orderId: string; orderName: string } | null;
+};
 
 /** Un id por pedido y envío. `crypto.randomUUID` solo existe en contexto seguro: si falta, uno v4 a mano. */
 export function newAgendarOperationId(): string {
@@ -30,12 +35,22 @@ export function newAgendarOperationId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/** El resultado de una acción, dicho para el aviso. Guardado con un error después (no se programó) es un error. */
-export function agendarOutcome(orderName: string, result: AgendarResult): { saved: boolean; feedback: AgendarFeedback } {
+/**
+ * El resultado de una acción, dicho para el aviso. Guardado con un error después
+ * (no se programó, o GF Courier no creó la guía) es un error; si la acción
+ * enlaza a la Mesa de ruta (`href`), el aviso la ofrece para ese pedido.
+ */
+export function agendarOutcome(orderName: string, result: AgendarResult, orderId?: string): { saved: boolean; feedback: AgendarFeedback } {
+  const mesa = result.href && orderId ? { orderId, orderName } : null;
   if (result.notice) {
-    return { saved: true, feedback: result.error ? { kind: "error", text: `${orderName}: ${result.error}` } : { kind: "notice", text: `${orderName}: ${result.notice}` } };
+    return {
+      saved: true,
+      feedback: result.error
+        ? { kind: "error", text: `${orderName}: ${result.error}`, mesa }
+        : { kind: "notice", text: `${orderName}: ${result.notice}`, mesa },
+    };
   }
-  return { saved: false, feedback: { kind: "error", text: result.error ?? "No se pudo agendar. Vuelve a intentarlo." } };
+  return { saved: false, feedback: { kind: "error", text: result.error ?? "No se pudo agendar. Vuelve a intentarlo.", mesa } };
 }
 
 /** Los próximos días por su nombre y, aparte, cualquier otro día hasta `maxDay`. */
@@ -86,16 +101,18 @@ export function ChannelPicker({ value, onChange }: { value: AgendarChannel; onCh
 }
 
 /** «Agendar» de una fila: un popover con el día y, con un acuerdo, por dónde se habló. */
-export function AgendarButton({ row, path, today, onDone, size = "sm" }: {
+export function AgendarButton({ row, path, today, onDone, size = "sm", suggested }: {
   row: Pick<LimaPendingOrder, "orderId" | "orderName">;
   path: Exclude<AgendarPath, { kind: null }>;
   today: string;
   onDone: (feedback: AgendarFeedback) => void;
   size?: "sm" | "md";
+  /** Sin día, el que propone Kapta (`limaSuggestedDay`): llega elegido y se confirma con un toque. */
+  suggested?: string;
 }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const initial = path.current && path.current >= today ? path.current : "";
+  const initial = path.current && path.current >= today ? path.current : suggested ?? "";
   const [day, setDay] = useState(initial);
   const [channel, setChannel] = useState<AgendarChannel>("llamada");
   const [note, setNote] = useState("");
@@ -115,7 +132,7 @@ export function AgendarButton({ row, path, today, onDone, size = "sm" }: {
         note: path.kind === "envio" ? note.trim() || null : null,
         operationId: newAgendarOperationId(),
       }).catch((e: unknown): AgendarResult => ({ error: e instanceof Error ? e.message : String(e) }));
-      const outcome = agendarOutcome(row.orderName, result);
+      const outcome = agendarOutcome(row.orderName, result, row.orderId);
       if (!outcome.saved) {
         setError(outcome.feedback.text);
         return;

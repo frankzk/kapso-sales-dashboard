@@ -5,26 +5,30 @@
 // siempre la información a la mano de lo que pasa con cada pedido y puedan
 // reprogramar y agendar los pedidos a su gusto.» Con GF Courier por API
 // (§29.17) el courier prepara, asigna y reparte; el equipo confirma, reprograma,
-// agenda, sigue y cierra. Tres bloques sobre UNA lista:
+// agenda, sigue y cierra. Dos bloques sobre UNA lista (tercera vuelta, owner
+// 15-11-2026: «estos 5 no suman 1,438»; «en la barra superior las etapas deben
+// sumar el total… las que no necesitamos, como Por cerrar, plegadas»):
 //
-//  - «Por gestionar hoy»: lo que pide al equipo. Cada pedido tiene a lo sumo
-//    una tarea: la primera que aplica (`limaTaskOf`).
+//  - «Flujo del día»: seis pasos que son una PARTICIÓN —cada pedido está en
+//    exactamente uno (`limaStepOf`), así que suman el total—: los cuatro del
+//    trabajo del equipo (Novedad del courier, Llamar después, No entregados y
+//    Sacar a reparto) y, plegados, los dos que solo se miran (Con el courier y
+//    Por cerrar). La tarea del equipo (`limaTaskOf`) decide los pasos.
 //  - «Agenda»: el día en que sale —el acuerdo vigente con la clienta, el
-//    programa de Grupo GF, el recojo del courier o «Programar envío» (§6.2)—,
-//    por día; «Sin fecha», lo que todavía no lo tiene.
-//  - «En manos del courier»: con la guía viva de un courier, por su estado.
-//    Solo seguimiento: aquí no se opera al courier.
+//    programa de Grupo GF, el recojo del courier o «Programar envío» (§6.2)—
+//    en Hoy (con lo vencido), Mañana, Después y Sin fecha. En Hoy y Mañana,
+//    cuántos tienen guía o rótulo y cuántos no: los que no, son una alerta.
 //
-// Todo pedido está en la Agenda o en manos del courier (ninguno se pierde); la
-// tarea es una capa encima. Son etiquetas de pantalla, no estados: no cambian
-// la macroetapa ni `MOM_RESOLUTION_VERSION`, y no escriben nada. Pura.
+// Son etiquetas de pantalla, no estados: no cambian la macroetapa ni
+// `MOM_RESOLUTION_VERSION`, y no escriben nada. Pura.
 import { courierLabel, limaQueueSegment, limaScheduledFor, type LimaPendingOrder, type PendingCase } from "@/lib/repro-lima-pending";
 import { isDeliveryDay } from "@/lib/dispatch-plan";
-import { programDayLabel } from "@/lib/dispatch-day";
+import { limaDay, programDayLabel } from "@/lib/dispatch-day";
 import { courierDisplayName } from "@/lib/dispatched-with";
 import { DISPATCH_DATE_MAX_DAYS } from "@/lib/dispatch-date";
+import { limaClock } from "@/lib/grupo-gf-courier";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
-import { isCustomerNovelty } from "@/lib/lima-stuck";
+import { fullDeliveryDaysBetween, isCustomerNovelty } from "@/lib/lima-stuck";
 import { reproCallTimeLabel } from "@/lib/repro-lima";
 
 /** El caso de la fila, con lo que el tablero mira además (`ReproRow`). */
@@ -34,7 +38,7 @@ export type BoardCase = PendingCase & {
 };
 
 // ---------------------------------------------------------------------------
-// Vocabulario de los tres bloques
+// Vocabulario del flujo y la Agenda
 // ---------------------------------------------------------------------------
 
 export type LimaTask = "primer_despacho" | "no_entregados" | "novedad" | "llamar_despues" | "por_cerrar";
@@ -42,7 +46,19 @@ export type LimaTask = "primer_despacho" | "no_entregados" | "novedad" | "llamar
 export const LIMA_TASKS: readonly LimaTask[] = ["primer_despacho", "no_entregados", "novedad", "llamar_despues", "por_cerrar"];
 
 /** Filtros dentro de una tarjeta: no suman aparte. */
-export type LimaSubFilter = "mas_de_30" | "reintentos_aliclik" | "esperan_anulacion" | "reprogramados";
+export type LimaSubFilter = "mas_de_30" | "guia_sin_recoger" | "reintentos_aliclik" | "sin_reporte" | "esperan_anulacion" | "reprogramados" | "hoy_sin_guia" | "manana_sin_guia";
+
+/**
+ * Los seis pasos del flujo (owner, 15-11-2026, tercera vuelta: «estos 5 no
+ * suman 1,438»). Son una PARTICIÓN: cada pedido pendiente está en exactamente
+ * un paso, así que suman el total. Los cuatro primeros son el trabajo del
+ * equipo; «Con el courier» y «Por cerrar» («no lo necesito como tal») se
+ * dibujan plegados (`LIMA_FOLDED_STEPS`), pero cuentan para que la suma cierre.
+ */
+export type LimaStep = "novedad" | "llamar_despues" | "no_entregados" | "por_sacar" | "con_courier" | "por_cerrar";
+export const LIMA_STEPS: readonly LimaStep[] = ["novedad", "llamar_despues", "no_entregados", "por_sacar", "con_courier", "por_cerrar"];
+/** Los pasos que el equipo no trabaja: solo se miran, plegados al final del flujo. */
+export const LIMA_FOLDED_STEPS: ReadonlySet<LimaStep> = new Set<LimaStep>(["con_courier", "por_cerrar"]);
 
 export type LimaCourierState = "guia_creada" | "en_ruta" | "retornando";
 export const LIMA_COURIER_STATES: readonly LimaCourierState[] = ["guia_creada", "en_ruta", "retornando"];
@@ -51,7 +67,7 @@ export const LIMA_COURIER_STATES: readonly LimaCourierState[] = ["guia_creada", 
 export type LimaAgendaKey = string;
 
 /** Lo que viaja por `atencion` en la URL. */
-export type LimaBoardKey = "todos" | LimaTask | LimaSubFilter | LimaCourierState | LimaAgendaKey;
+export type LimaBoardKey = "todos" | LimaStep | LimaTask | LimaSubFilter | LimaCourierState | LimaAgendaKey;
 
 export interface LimaCard<K extends string = string> {
   key: K;
@@ -93,13 +109,60 @@ export const LIMA_TASK_CARDS: readonly LimaCard<LimaTask>[] = [
   },
 ];
 
-export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & { parent: LimaTask | "agenda" }> = {
+/** Las cinco tarjetas del flujo, en su orden de trabajo. */
+export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
+  {
+    key: "novedad",
+    label: "Novedad del courier",
+    hint: "El courier todavía tiene el paquete y reporta un problema con la clienta (no contesta, no estaba, rechazo o dirección): llámala y acuerda la entrega o la devolución.",
+    empty: "Ningún courier reporta una novedad con la clienta con estos filtros.",
+  },
+  {
+    key: "llamar_despues",
+    label: "Llamar después",
+    hint: "La clienta pidió que la llamen a otra hora. Por la hora de la llamada.",
+    empty: "Nadie pidió que lo llamen después.",
+  },
+  {
+    key: "no_entregados",
+    label: "No entregados",
+    hint: "«Por reprogramar Lima» sin una fecha acordada, lo que el courier está devolviendo y lo que salió a ruta hace más de un día sin reporte: llama a la clienta y acuerda el día y el courier con «Atender». Dentro, los reintentos por Aliclik (salen sin llamar), «Retornando» y «Sin reporte de la ruta».",
+    empty: "No hay no entregados por gestionar con estos filtros.",
+  },
+  {
+    key: "por_sacar",
+    label: "Sacar a reparto",
+    hint: "Todo lo que todavía no salió: lo agendado que espera su guía o su rótulo, la guía que el courier no recogió en su día y lo que nunca salió y no tiene día. La meta es que salga todo: agenda lo que no tiene día y genera la guía de lo que sale hoy o mañana.",
+    empty: "No queda nada por sacar a reparto con estos filtros.",
+  },
+  {
+    key: "con_courier",
+    label: "Con el courier",
+    hint: "Con la guía viva de un courier: creada (todavía no lo recoge) o en ruta. Solo seguimiento: aquí no se opera al courier. Lo que el courier devuelve está en No entregados.",
+    empty: "Ningún courier lleva pedidos con estos filtros.",
+  },
+  {
+    key: "por_cerrar",
+    label: "Por cerrar",
+    hint: "El courier dice que lo entregó y Kapta todavía no lo cierra (falta validar el cobro), o el caso se cerró con «Desarmar y cerrar» y espera que la tienda anule la venta. No es trabajo del equipo de Lima: se mira.",
+    empty: "No hay pedidos por cerrar con estos filtros.",
+  },
+];
+
+export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & { parent: LimaStep | LimaTask | "agenda" }> = {
   mas_de_30: {
     key: "mas_de_30",
-    parent: "primer_despacho",
+    parent: "por_sacar",
     label: "Más de 30 días",
     hint: "Nunca salieron y se crearon hace más de 30 días: confirma si la venta sigue; si no, anúlala en la tienda.",
     empty: "No hay pedidos de más de 30 días sin salida registrada con estos filtros.",
+  },
+  guia_sin_recoger: {
+    key: "guia_sin_recoger",
+    parent: "por_sacar",
+    label: "Guía sin recoger",
+    hint: "Con la guía de un courier que debía recogerlo un día que ya pasó y no lo recogió: todavía no salió. Coordina el recojo o crea la guía con otro courier desde la Mesa de ruta.",
+    empty: "Ninguna guía se quedó sin recoger con estos filtros.",
   },
   reintentos_aliclik: {
     key: "reintentos_aliclik",
@@ -107,6 +170,13 @@ export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & {
     label: "Reintentos Aliclik",
     hint: "No entregados de Alexis, Urpi o AUTOECOM por «no contesta», «no estaba» u «otro»: vuelven a salir por Aliclik (AUTOECOM, luego ALIDRIVER), sin llamar. Apruébalos aquí o crea la guía desde la ficha con el transporte indicado.",
     empty: "No hay reintentos por Aliclik con estos filtros.",
+  },
+  sin_reporte: {
+    key: "sin_reporte",
+    parent: "no_entregados",
+    label: "Sin reporte de la ruta",
+    hint: "Salieron a ruta y pasó un día de reparto entero después del día de la ruta (el domingo no cuenta) sin que el motorizado ni el courier reporten la entrega: se cuentan como no entregados para que no se queden trabados «con el courier». Pide el reporte; si no se entregó, acuerda el nuevo día con la clienta.",
+    empty: "Todas las rutas vencidas tienen su reporte con estos filtros.",
   },
   esperan_anulacion: {
     key: "esperan_anulacion",
@@ -122,6 +192,20 @@ export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & {
     hint: "Con una nueva fecha acordada y vigente con la clienta. Están en la Agenda, en el día acordado.",
     empty: "No hay pedidos con una nueva fecha acordada con estos filtros.",
   },
+  hoy_sin_guia: {
+    key: "hoy_sin_guia",
+    parent: "agenda",
+    label: "Hoy sin guía",
+    hint: "Salen hoy (o debían salir) y todavía no tienen guía del courier ni rótulo: no van a salir si nadie la genera. Ábrelos y crea la guía desde la Mesa de ruta.",
+    empty: "Todo lo de hoy tiene su guía o su rótulo.",
+  },
+  manana_sin_guia: {
+    key: "manana_sin_guia",
+    parent: "agenda",
+    label: "Mañana sin guía",
+    hint: "Salen mañana sin guía del courier ni rótulo, y la guía GF automática no los cubre (otra tienda, otro courier o con un acuerdo). Genérala hoy para que salgan.",
+    empty: "Todo lo de mañana tiene su guía o su rótulo.",
+  },
 };
 
 export const LIMA_COURIER_CARDS: readonly LimaCard<LimaCourierState>[] = [
@@ -134,13 +218,13 @@ export const LIMA_COURIER_CARDS: readonly LimaCard<LimaCourierState>[] = [
   {
     key: "en_ruta",
     label: "En ruta",
-    hint: "El courier ya lo tiene: recibido, en tránsito, en reparto o con una novedad que todavía no lo devuelve.",
+    hint: "El courier ya lo tiene y la ruta es de hoy o del día de reparto anterior: recibido, en tránsito o en reparto. Si pasa un día de reparto entero sin reporte, va a No entregados → «Sin reporte de la ruta». Cada fila dice el día de su ruta.",
     empty: "Ningún courier lleva pedidos con estos filtros.",
   },
   {
     key: "retornando",
     label: "Retornando",
-    hint: "El courier lo está devolviendo al almacén.",
+    hint: "El courier lo está devolviendo al almacén: no se entregó. Llama a la clienta y acuerda el nuevo día; sale otra vez cuando llegue al almacén.",
     empty: "Ningún courier está devolviendo pedidos con estos filtros.",
   },
 ];
@@ -149,8 +233,12 @@ export const LIMA_COURIER_CARDS: readonly LimaCard<LimaCourierState>[] = [
 // La Agenda: hoy, los próximos días por su nombre, después y sin fecha
 // ---------------------------------------------------------------------------
 
-/** Cuántos días de reparto se nombran después de hoy («Lun 16», «Mar 17»…). */
-export const AGENDA_NAMED_DAYS = 5;
+/**
+ * Cuántos días de reparto tiene «Mañana»: uno, el próximo (owner, 15-11-2026:
+ * «lo del martes al viernes, ponlo dentro de Después»). Si mañana es domingo,
+ * un acuerdo para el domingo cae en «Mañana» con el lunes.
+ */
+export const AGENDA_NAMED_DAYS = 1;
 
 function shiftDay(day: string, delta: number): string {
   return new Date(Date.parse(`${day}T12:00:00Z`) + delta * 86_400_000).toISOString().slice(0, 10);
@@ -171,11 +259,23 @@ export function agendaWindow(today: string, count = AGENDA_NAMED_DAYS): string[]
   return out;
 }
 
-/** El cajón de la Agenda de un día: lo vencido sigue en Hoy. */
+/** El próximo día de reparto desde hoy: hoy si se reparte; si no (domingo), el siguiente. */
+export function nextDeliveryDay(today: string): string {
+  let day = today;
+  while (!isDeliveryDay(day)) day = shiftDay(day, 1);
+  return day;
+}
+
+/**
+ * El cajón de la Agenda de un día. Un día que ya pasó (o hoy) sale el próximo
+ * día de reparto: hoy si se reparte, y si no —domingo— «Mañana» (owner,
+ * 16-11-2026: «¿por qué atrasados? Si saldrían mañana de todas maneras… estuvo
+ * mal ahí el agendamiento»). La fila sigue diciendo «Vencido · sáb 14/11».
+ */
 export function agendaKeyOf(day: string | null, today: string, window: readonly string[]): LimaAgendaKey {
   if (!day) return "sin_fecha";
-  if (day <= today) return "hoy";
-  return window.length && day <= window[window.length - 1]! ? day : "despues";
+  if (day <= today) return isDeliveryDay(today) ? "hoy" : "manana";
+  return window.length && day <= window[window.length - 1]! ? "manana" : "despues";
 }
 
 const WEEKDAY = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
@@ -194,35 +294,64 @@ function agendaDayLong(day: string): string {
 }
 
 /**
- * Las tarjetas de la Agenda: Hoy, cada día nombrado (un domingo solo si tiene
- * pedidos), Después y Sin fecha.
+ * El día que Kapta propone a lo que falta sacar y no tiene día: el próximo día
+ * de reparto (el de «Mañana»). Es una propuesta: el equipo la confirma con
+ * «Agendar» o en lote con «Mover a…» (owner, 15-11-2026: «Kapta propone, el
+ * equipo confirma»).
  */
-export function agendaCards(today: string, counts: Readonly<Record<string, number>>, window = agendaWindow(today)): LimaCard<LimaAgendaKey>[] {
-  const last = window[window.length - 1];
+export function limaSuggestedDay(today: string): string {
+  const window = agendaWindow(today);
+  return window[window.length - 1] ?? shiftDay(today, 1);
+}
+
+/**
+ * Desde qué minuto de Lima «Hoy sin guía» es alerta (owner, 15-11-2026: «desde
+ * las 10:30»). Antes, que falte la guía de hoy es normal (la guía GF
+ * automática corre a las 9, 10 y 11): se cuenta, pero sin alerta.
+ */
+export const HOY_SIN_GUIA_ALERT_MINUTE = 10 * 60 + 30;
+export function hoySinGuiaAlert(now: Date): boolean {
+  return limaClock(now).minute >= HOY_SIN_GUIA_ALERT_MINUTE;
+}
+
+/**
+ * Las tarjetas de la Agenda: Hoy, Mañana (el próximo día de reparto), Después y
+ * Sin fecha. En un día sin reparto (domingo) no hay «Hoy»: lo de hoy y lo que
+ * tenía un día que ya pasó sale el próximo día de reparto, en «Mañana».
+ */
+export function agendaCards(today: string, _counts: Readonly<Record<string, number>> = {}, window = agendaWindow(today)): LimaCard<LimaAgendaKey>[] {
+  const manana = window[window.length - 1] ?? shiftDay(today, 1);
+  const literal = manana === shiftDay(today, 1);
+  const delivery = isDeliveryDay(today);
+  const hoy: LimaCard<LimaAgendaKey>[] = delivery
+    ? [{
+        key: "hoy",
+        label: "Hoy",
+        hint: "Salen hoy, y los de un día que ya pasó sin que salieran (van primero). Los que no tienen guía ni rótulo son una alerta.",
+        empty: "No hay pedidos agendados para hoy con estos filtros.",
+      }]
+    : [];
   return [
+    ...hoy,
     {
-      key: "hoy",
-      label: "Hoy",
-      hint: "Agendados para hoy, y los de un día que ya pasó sin que salieran (van primero).",
-      empty: "No hay pedidos agendados para hoy con estos filtros.",
+      key: "manana",
+      label: literal ? `Mañana · ${agendaDayLabel(manana)}` : agendaDayLabel(manana),
+      hint: delivery
+        ? `Salen el ${agendaDayLong(manana)}, el próximo día de reparto. Los que no tienen guía ni rótulo son una alerta.`
+        : `Salen el ${agendaDayLong(manana)}, el próximo día de reparto: hoy no se reparte, así que también lo que tenía un día que ya pasó o hoy (van primero). Los que no tienen guía ni rótulo son una alerta.`,
+      empty: `No hay pedidos agendados para el ${programDayLabel(manana)} con estos filtros.`,
     },
-    ...window.filter((day) => isDeliveryDay(day) || (counts[day] ?? 0) > 0).map((day) => ({
-      key: day,
-      label: agendaDayLabel(day),
-      hint: `Agendados para el ${agendaDayLong(day)}.`,
-      empty: `No hay pedidos agendados para el ${programDayLabel(day)} con estos filtros.`,
-    })),
     {
       key: "despues",
       label: "Después",
-      hint: last ? `Agendados después del ${agendaDayLong(last)}.` : "Agendados más adelante.",
+      hint: `Agendados después del ${agendaDayLong(manana)}.`,
       empty: "No hay pedidos agendados más adelante con estos filtros.",
     },
     {
       key: "sin_fecha",
       label: "Sin fecha",
-      hint: "Todavía sin día: ni acuerdo con la clienta, ni programa de Grupo GF, ni recojo del courier, ni «Programar envío». Elige varios y «Mover a…» un día.",
-      empty: "Todos los pedidos tienen día con estos filtros.",
+      hint: "Por sacar a reparto y todavía sin día: ni acuerdo con la clienta, ni programa, ni recojo del courier, ni «Programar envío». Elige varios y «Mover a…» un día.",
+      empty: "Todo lo que falta sacar tiene día con estos filtros.",
     },
   ];
 }
@@ -261,6 +390,8 @@ export function limaCourierState(row: LimaPendingOrder): LimaCourierState | null
   const guide = liveGuideCourier(row);
   if (row.stage === "en_curso") {
     if (isPorReprogramarLima(row) && !guide) return null;
+    // Un no entregado que ya tiene su guía nueva esperando recojo (owner, 16-11-2026, #KP204876): guía creada, no en ruta.
+    if (isPorReprogramarLima(row) && row.courierPickup) return "guia_creada";
     const returning = RETURNING_SUBSTAGES.has(row.substage ?? "") || /^RETURNING\b/i.test(row.ops?.reportedStatus?.trim() ?? "");
     return returning ? "retornando" : "en_ruta";
   }
@@ -277,6 +408,50 @@ export function courierNovelty(row: LimaPendingOrder): boolean {
   if (row.stage !== "en_curso" || RETURNING_SUBSTAGES.has(row.substage ?? "")) return false;
   if (!row.ops?.liveCouriers.some((c) => !GF_INTERNAL.has(c))) return false;
   return isCustomerNovelty(row.ops.reportedStatus);
+}
+
+/**
+ * El día en que salió a ruta: el más reciente entre la caja de Grupo GF de su
+ * salida viva (el día de la ruta del motorizado), la salida
+ * (`dispatched_at`) y la entrada a En curso. El más reciente, para que una
+ * salida nueva nunca se lea como una ruta vieja.
+ */
+export function limaRouteDay(row: LimaPendingOrder): string | null {
+  const days = [row.ops?.lastGfBox?.day ?? null, limaDay(row.dispatchedAt), limaDay(row.macroSince)].filter((d): d is string => Boolean(d));
+  return days.length ? days.sort()[days.length - 1]! : null;
+}
+
+/**
+ * Sale con el reparto propio de Grupo GF (una parada en Kapta), no con la guía
+ * de otro courier: solo ahí el equipo puede registrar «No se entregó» por el
+ * motorizado (owner, 15-11-2026). En las guías de otros couriers el resultado
+ * lo reporta el courier.
+ */
+export function limaOwnRoute(row: LimaPendingOrder): boolean {
+  if (liveGuideCourier(row)) return false;
+  return Boolean(row.ops?.lastGfBox) || GF_INTERNAL.has(row.courier ?? "");
+}
+
+/**
+ * Cuántos días de reparto enteros se espera el reporte después del día de la
+ * ruta (owner, 15-11-2026): «si salió a ruta un lunes, el miércoles no puede
+ * estar con el courier». El martes todavía sí; desde el miércoles, no
+ * entregado. El domingo no cuenta (owner, «días de reparto»): si salió un
+ * sábado, el lunes todavía espera y desde el martes es no entregado.
+ */
+export const ROUTE_REPORT_GRACE_DAYS = 1;
+
+/**
+ * Salió a ruta y venció: En curso, en la calle (no retornando ni dado por
+ * entregado), y pasó un día de reparto entero después del día de la ruta sin
+ * resultado.
+ * Repro Lima lo cuenta como no entregado («se asume como no entregado… si no se
+ * van a quedar entrampados»). Es una etiqueta de pantalla: no cambia la etapa.
+ */
+export function routeWithoutReport(row: LimaPendingOrder, courier: LimaCourierState | null, today: string): boolean {
+  if (row.stage !== "en_curso" || courier !== "en_ruta" || row.ops?.courierDelivered || isPorReprogramarLima(row)) return false;
+  const day = limaRouteDay(row);
+  return Boolean(day && fullDeliveryDaysBetween(day, today) >= ROUTE_REPORT_GRACE_DAYS);
 }
 
 /**
@@ -324,6 +499,10 @@ export function limaAgendaOrigin(row: LimaPendingOrder, c?: PendingCase): LimaAg
 export function limaTaskOf(row: LimaPendingOrder, c?: PendingCase): LimaTask | null {
   if (row.ops?.courierDelivered) return "por_cerrar";
   if (c?.list === "cerrados") return "por_cerrar";
+  // Ya tiene su salida nueva: la guía de un courier que espera su recojo. No es
+  // un no entregado por gestionar, lo lleva el courier (owner, 16-11-2026: «ya
+  // tiene guía para mañana… no guarda lógica»).
+  if (isPorReprogramarLima(row) && row.courierPickup) return null;
   if (isPorReprogramarLima(row) && c?.retryChain) return "no_entregados";
   if (c?.list === "programados") return null;
   if (c?.list === "llamar_despues") return "llamar_despues";
@@ -334,11 +513,34 @@ export function limaTaskOf(row: LimaPendingOrder, c?: PendingCase): LimaTask | n
 }
 
 export interface LimaRowClass {
+  /** Su paso del flujo: uno y solo uno por pedido (los pasos suman el total). */
+  step: LimaStep;
+  /** Tiene guía de courier viva o un rótulo de salida (no está en «por generar rótulo» ni «por reprogramar»). */
+  guide: boolean;
   task: LimaTask | null;
-  /** Nunca salió y se creó hace más de 30 días (dentro de «Confirmar primer despacho»). */
+  /** Nunca salió y se creó hace más de 30 días (dentro de «Sacar a reparto»). */
   stale: boolean;
   /** Tiene un reintento por Aliclik que toca. */
   retry: boolean;
+  /** Salió a ruta hace más de un día sin reporte: cuenta como no entregado (`routeWithoutReport`). */
+  noReport: boolean;
+  /** Su guía debía recogerse un día que ya pasó y el courier no la recogió: por sacar a reparto. */
+  missedPickup: boolean;
+  /**
+   * Su día de recojo pasó hace menos de un día de reparto entero: el courier la
+   * recoge el próximo día de reparto, que es su `agendaDay` (sin «Vencido»).
+   */
+  pickupRolled: boolean;
+  /** El día en que salió a ruta (`limaRouteDay`), o null si no está En curso. */
+  routeDay: string | null;
+  /** Salió a ruta hoy. */
+  routeToday: boolean;
+  /**
+   * La guía GF automática lo cubre: su tienda la tiene en Activo y está en
+   * Preparación · Por generar rótulo sin un acuerdo de Repro Lima (como
+   * `gfAutoSkip`). La pasada crea su guía el día que sale, en la mañana.
+   */
+  autoGuide: boolean;
   /** Cerrado con «Desarmar y cerrar»: espera la anulación. */
   awaitingCancel: boolean;
   /** Con una fecha acordada vigente con la clienta. */
@@ -351,33 +553,81 @@ export interface LimaRowClass {
 }
 
 /**
- * Los tres bloques de un pedido. Con un courier, entra a la Agenda solo si
+ * Su paso, su cajón de la Agenda y su courier. Con un courier, entra a la Agenda solo si
  * tiene un día de hoy en adelante (el recojo de Aliclik, un acuerdo): un día
  * que pasó ya no es una fecha por cumplir, el courier lo tiene. Sin courier,
  * siempre: con su día (lo vencido en Hoy) o en «Sin fecha».
  */
-export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefined, today: string, window: readonly string[]): LimaRowClass {
-  const task = limaTaskOf(row, c);
+export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefined, today: string, window: readonly string[], opts: LimaClassifyOptions = {}): LimaRowClass {
   const courier = limaCourierState(row);
-  const day = limaAgendaDay(row, c);
-  const agenda = courier ? (day && day >= today ? agendaKeyOf(day, today, window) : null) : agendaKeyOf(day, today, window);
+  const base = limaTaskOf(row, c);
+  // Una ruta vencida sin reporte ya no está «con el courier»: es un no entregado (owner, 15-11-2026).
+  const noReport = base === null && routeWithoutReport(row, courier, today);
+  // Lo que el courier devuelve tampoco: no se entregó (owner, 15-11-2026: «los de retornando deberían estar en no entregados»).
+  const returning = base === null && courier === "retornando";
+  const task: LimaTask | null = noReport || returning ? "no_entregados" : base;
+  const scheduled = limaAgendaDay(row, c);
+  // La guía que espera su recojo y cuyo día ya pasó: el courier la recoge el
+  // próximo día de reparto (owner, 16-11-2026, #KP204807: «sale a reparto
+  // mañana y ya está listo, pero el sistema lo marca como Vencido»). Solo si
+  // pasó un día de reparto entero después de su día sin que la recoja, es una
+  // guía sin recoger: todavía no salió, está por sacar a reparto (15-11-2026).
+  const pickupDay = courier === "guia_creada" ? row.courierPickup?.date ?? scheduled : null;
+  const pickupLate = base === null && Boolean(pickupDay && pickupDay < today);
+  const missedPickup = pickupLate && fullDeliveryDaysBetween(pickupDay!, today) >= ROUTE_REPORT_GRACE_DAYS;
+  const day = pickupLate && !missedPickup ? nextDeliveryDay(today) : scheduled;
+  const step = missedPickup ? "por_sacar" : limaStepOf(task, courier);
+  // Con un courier, la Agenda solo lo cuenta con un día de hoy en adelante. Sin
+  // courier (o con la guía sin recoger): con su día; sin día, «Sin fecha» solo
+  // si es por sacar a reparto.
+  const agenda = courier && !missedPickup
+    ? (day && day >= today ? agendaKeyOf(day, today, window) : null)
+    : day ? agendaKeyOf(day, today, window) : step === "por_sacar" ? "sin_fecha" : null;
   return {
+    step,
+    guide: Boolean(courier) || Boolean(row.ops?.courierDelivered) || (row.substage != null && !NO_GUIDE_SUBSTAGES.has(row.substage)),
     task,
     stale: task === "primer_despacho" && limaQueueSegment(row, today, c) === "mas_de_30",
     retry: Boolean(c?.retryChain),
+    noReport,
+    missedPickup,
+    routeDay: row.stage === "en_curso" ? limaRouteDay(row) : null,
+    routeToday: row.stage === "en_curso" && limaRouteDay(row) === today,
+    autoGuide: Boolean(opts.autoGuideStores?.has(row.storeId)) && row.stage === "preparacion" && row.substage === "por_generar_rotulo" && !c?.agreement?.agreedOn,
     awaitingCancel: c?.list === "cerrados",
     agreed: c?.list === "programados" && Boolean(c.agreement?.agreedOn),
     agenda,
     agendaDay: day,
     agendaOrigin: day ? limaAgendaOrigin(row, c) : null,
+    pickupRolled: pickupLate && !missedPickup,
     courier,
   };
 }
 
+/** Las subetapas en las que el pedido todavía no tiene guía ni rótulo de salida. */
+const NO_GUIDE_SUBSTAGES = new Set(["por_generar_rotulo", "por_reprogramar_lima"]);
+
+/**
+ * El paso del flujo, de la tarea y el courier (owner, 15-11-2026). La tarea
+ * manda («Por cerrar» gana a todo, como en `limaTaskOf`); sin tarea, lo que
+ * lleva un courier está «Con el courier» y lo demás —lo que nunca salió, lo
+ * agendado sin courier— en «Sacar a reparto».
+ */
+export function limaStepOf(task: LimaTask | null, courier: LimaCourierState | null): LimaStep {
+  if (task === "novedad" || task === "llamar_despues" || task === "no_entregados" || task === "por_cerrar") return task;
+  if (task === "primer_despacho") return "por_sacar";
+  return courier ? "con_courier" : "por_sacar";
+}
+
+export interface LimaClassifyOptions {
+  /** Las tiendas con la guía GF automática en Activo (`loadGfAutoActiveStores`). */
+  autoGuideStores?: ReadonlySet<string>;
+}
+
 /** Una clasificación por pedido: las cifras y la lista la reusan. */
-export function classifyLimaRows(rows: readonly LimaPendingOrder[], cases: readonly PendingCase[], today: string, window = agendaWindow(today)): Map<string, LimaRowClass> {
+export function classifyLimaRows(rows: readonly LimaPendingOrder[], cases: readonly PendingCase[], today: string, window = agendaWindow(today), opts: LimaClassifyOptions = {}): Map<string, LimaRowClass> {
   const caseById = new Map(cases.map((c) => [c.orderId, c]));
-  return new Map(rows.map((row) => [row.orderId, classifyLimaRow(row, caseById.get(row.orderId), today, window)]));
+  return new Map(rows.map((row) => [row.orderId, classifyLimaRow(row, caseById.get(row.orderId), today, window, opts)]));
 }
 
 // ---------------------------------------------------------------------------
@@ -386,49 +636,79 @@ export function classifyLimaRows(rows: readonly LimaPendingOrder[], cases: reado
 
 export interface LimaBoardCounts {
   todos: number;
+  /** Los seis pasos: suman `todos`. */
+  step: Record<LimaStep, number>;
   task: Record<LimaTask, number>;
   sub: Record<LimaSubFilter, number>;
   /** Por cajón: «hoy», cada día, «despues» y «sin_fecha». */
   agenda: Record<string, number>;
   courier: Record<LimaCourierState, number>;
+  /** De lo que sale mañana sin guía, los que creará la guía GF automática: no alarman. */
+  autoGuideManana: number;
+  /**
+   * De «En ruta» (dentro de Con el courier), cuántos salieron hoy; los demás
+   * son de la ruta anterior (owner, 15-11-2026: «¿cuándo estuvieron en ruta?»).
+   */
+  enRutaHoy: number;
 }
 
 export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: ReadonlyMap<string, LimaRowClass>): LimaBoardCounts {
   const counts: LimaBoardCounts = {
     todos: rows.length,
+    step: { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, con_courier: 0, por_cerrar: 0 },
     task: { primer_despacho: 0, no_entregados: 0, novedad: 0, llamar_despues: 0, por_cerrar: 0 },
-    sub: { mas_de_30: 0, reintentos_aliclik: 0, esperan_anulacion: 0, reprogramados: 0 },
-    agenda: { hoy: 0, despues: 0, sin_fecha: 0 },
+    sub: { mas_de_30: 0, guia_sin_recoger: 0, reintentos_aliclik: 0, sin_reporte: 0, esperan_anulacion: 0, reprogramados: 0, hoy_sin_guia: 0, manana_sin_guia: 0 },
+    agenda: { hoy: 0, manana: 0, despues: 0, sin_fecha: 0 },
     courier: { guia_creada: 0, en_ruta: 0, retornando: 0 },
+    autoGuideManana: 0,
+    enRutaHoy: 0,
   };
   for (const row of rows) {
     const cls = classes.get(row.orderId);
     if (!cls) continue;
+    counts.step[cls.step] += 1;
     if (cls.task) counts.task[cls.task] += 1;
+    if (cls.agenda === "hoy" && !cls.guide) counts.sub.hoy_sin_guia += 1;
+    if (cls.agenda === "manana" && !cls.guide) {
+      if (cls.autoGuide) counts.autoGuideManana += 1;
+      else counts.sub.manana_sin_guia += 1;
+    }
     if (cls.stale) counts.sub.mas_de_30 += 1;
     if (cls.retry) counts.sub.reintentos_aliclik += 1;
+    if (cls.noReport) counts.sub.sin_reporte += 1;
+    if (cls.missedPickup) counts.sub.guia_sin_recoger += 1;
     if (cls.awaitingCancel) counts.sub.esperan_anulacion += 1;
     if (cls.agreed) counts.sub.reprogramados += 1;
     if (cls.agenda) counts.agenda[cls.agenda] = (counts.agenda[cls.agenda] ?? 0) + 1;
-    if (cls.courier) counts.courier[cls.courier] += 1;
+    // Guía creada y En ruta son los filtros de adentro de «Con el courier»; Retornando, de «No entregados».
+    if (cls.courier && cls.step === COURIER_STEP[cls.courier]) counts.courier[cls.courier] += 1;
+    if (cls.step === "con_courier" && cls.courier === "en_ruta" && cls.routeToday) counts.enRutaHoy += 1;
   }
   return counts;
 }
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const TASK_SET = new Set<string>(LIMA_TASKS);
+const STEP_SET = new Set<string>(LIMA_STEPS);
 const COURIER_SET = new Set<string>(LIMA_COURIER_STATES);
+/** El paso donde vive el filtro de cada estado del courier: lo que vuelve es un no entregado. */
+const COURIER_STEP: Record<LimaCourierState, LimaStep> = { guia_creada: "con_courier", en_ruta: "con_courier", retornando: "no_entregados" };
 
 /** ¿La fila entra en el filtro `key`? */
 export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
   if (key === "todos") return true;
+  if (STEP_SET.has(key)) return cls.step === key;
   if (TASK_SET.has(key)) return cls.task === key;
-  if (COURIER_SET.has(key)) return cls.courier === key;
+  if (COURIER_SET.has(key)) return cls.courier === key && cls.step === COURIER_STEP[key as LimaCourierState];
   switch (key) {
     case "mas_de_30": return cls.stale;
     case "reintentos_aliclik": return cls.retry;
+    case "sin_reporte": return cls.noReport;
+    case "guia_sin_recoger": return cls.missedPickup;
     case "esperan_anulacion": return cls.awaitingCancel;
     case "reprogramados": return cls.agreed;
+    case "hoy_sin_guia": return cls.agenda === "hoy" && !cls.guide;
+    case "manana_sin_guia": return cls.agenda === "manana" && !cls.guide && !cls.autoGuide;
     default: return cls.agenda === key;
   }
 }
@@ -436,8 +716,8 @@ export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
 /**
  * Lo que dice `atencion` en la URL. Los enlaces de la pantalla anterior
  * siguen abriendo lo más cercano: «Programados para hoy» es Hoy, «para
- * mañana» el día de mañana, «para después» Después, «Nunca salieron»
- * Confirmar primer despacho, «Por decidir» No entregados, «Cerrados» Esperan
+ * mañana» Mañana, «para después» Después, «Nunca salieron» y «Confirmar primer
+ * despacho» Sacar a reparto, «Por decidir» No entregados, «Cerrados» Esperan
  * anulación y `programados` Reprogramados. «Ya salieron» no tiene par: abre
  * Todos, igual que un valor desconocido. Un día que ya pasó abre Hoy.
  */
@@ -447,23 +727,32 @@ export function boardFilter(value: string | null, today: string): LimaBoardKey {
     case "":
     case "todos":
       return "todos";
-    case "programados_hoy": return "hoy";
-    case "programados_manana": return shiftDay(today, 1);
+    case "programados_hoy": return isDeliveryDay(today) ? "hoy" : "manana";
+    case "programados_manana": return "manana";
     case "programados_despues": return "despues";
-    case "nunca_salieron": return "primer_despacho";
+    case "nunca_salieron": return "por_sacar";
+    case "primer_despacho": return "por_sacar";
     case "por_decidir": return "no_entregados";
     case "cerrados": return "esperan_anulacion";
     case "programados": return "reprogramados";
   }
-  if (TASK_SET.has(value) || COURIER_SET.has(value) || value in LIMA_SUB_FILTERS) return value;
-  if (value === "hoy" || value === "despues" || value === "sin_fecha") return value;
-  if (ISO_DAY.test(value) && Number.isFinite(Date.parse(`${value}T12:00:00Z`))) return value <= today ? "hoy" : value;
+  if (STEP_SET.has(value) || TASK_SET.has(value) || COURIER_SET.has(value) || value in LIMA_SUB_FILTERS) return value;
+  // Un día sin reparto no tiene «Hoy»: abre «Mañana».
+  if (value === "hoy") return isDeliveryDay(today) ? "hoy" : "manana";
+  if (value === "manana" || value === "despues" || value === "sin_fecha") return value;
+  // Un día guardado de la Agenda anterior abre su cajón de ahora.
+  if (ISO_DAY.test(value) && Number.isFinite(Date.parse(`${value}T12:00:00Z`))) {
+    const key = agendaKeyOf(value, today, agendaWindow(today));
+    return key === "sin_fecha" ? "todos" : key;
+  }
   return "todos";
 }
 
 /** La tarjeta (o el filtro de adentro) de una clave, para el título de la lista y su vacío. */
 export function boardCard(key: LimaBoardKey, today: string): (LimaCard & { block: "gestion" | "agenda" | "courier" }) | null {
   if (key === "todos") return null;
+  const step = LIMA_STEP_CARDS.find((c) => c.key === key);
+  if (step) return { ...step, block: "gestion" };
   const task = LIMA_TASK_CARDS.find((c) => c.key === key);
   if (task) return { ...task, block: "gestion" };
   const courier = LIMA_COURIER_CARDS.find((c) => c.key === key);
@@ -485,29 +774,29 @@ export function boardCard(key: LimaBoardKey, today: string): (LimaCard & { block
   return agenda ? { ...agenda, block: "agenda" } : null;
 }
 
-const TASK_RANK = new Map(LIMA_TASKS.map((task, i) => [task, i]));
+const STEP_RANK = new Map(LIMA_STEPS.map((step, i) => [step, i * 10]));
 const COURIER_RANK = new Map(LIMA_COURIER_STATES.map((state, i) => [state, i]));
+const AGENDA_RANK: Record<string, number> = { hoy: 0, manana: 1, despues: 2, sin_fecha: 3 };
 
+/** El orden de la lista: por paso; en «Sacar a reparto», hoy, mañana, después y sin fecha; con el courier, por su estado. */
 function groupRank(cls: LimaRowClass): number {
-  if (cls.task) return TASK_RANK.get(cls.task)!;
-  if (cls.agenda && cls.agenda !== "sin_fecha") return 10;
-  if (cls.agenda === "sin_fecha") return 20;
-  return 30 + (cls.courier ? COURIER_RANK.get(cls.courier)! : 0);
+  const base = STEP_RANK.get(cls.step)!;
+  if (cls.step === "por_sacar") return base + (AGENDA_RANK[cls.agenda ?? "sin_fecha"] ?? 3);
+  if (cls.step === "con_courier") return base + (cls.courier ? COURIER_RANK.get(cls.courier)! : 3);
+  return base;
 }
 
 /**
- * La lista de un filtro, en el orden de las tareas: primero lo que pide al
- * equipo (en el orden de sus tarjetas), después la Agenda por día (lo vencido
- * primero), lo que no tiene fecha y lo que lleva el courier.
+ * La lista de un filtro, en el orden de los pasos del flujo.
  * - No entregados y Llamar después siguen el orden de los casos
  *   (`caseOrder`, el de `sortRepro`: los fallos de ayer, lo vencido, la hora
  *   de la llamada).
- * - Confirmar primer despacho, del más antiguo al más reciente (owner,
- *   06-11-2026: en un pico lo armado hace días se hundía al final); sin fecha
- *   de creación, primero.
- * - Novedad, Por cerrar, Sin fecha y lo del courier: lo que más lleva en su
- *   etapa, primero.
- * - En la Agenda, por día y, en el mismo día, del más reciente al más antiguo.
+ * - Sacar a reparto: hoy (lo vencido primero), mañana, después y, al final, lo
+ *   que no tiene día, del más antiguo al más reciente (owner, 06-11-2026: en
+ *   un pico lo armado hace días se hundía al final); sin fecha de creación,
+ *   primero.
+ * - Con el courier, por su estado (guía creada, en ruta, retornando).
+ * - Novedad, Por cerrar y lo del courier: lo que más lleva en su etapa, primero.
  */
 export function limaBoardRows(
   rows: readonly LimaPendingOrder[],
@@ -527,10 +816,13 @@ export function limaBoardRows(
     }] : [];
   }).sort((a, b) => {
     if (a.group !== b.group) return a.group - b.group;
-    const task = a.cls.task;
-    if (task === "no_entregados" || task === "llamar_despues") return a.caseAt - b.caseAt || a.since - b.since;
-    if (task === "primer_despacho") return a.created - b.created;
-    if (!task && a.group === 10) return (a.cls.agendaDay ?? "").localeCompare(b.cls.agendaDay ?? "") || b.created - a.created;
+    const step = a.cls.step;
+    if (step === "no_entregados" || step === "llamar_despues") return a.caseAt - b.caseAt || a.since - b.since;
+    if (step === "por_sacar") {
+      // Lo que tiene día, por día (lo vencido primero); sin día, lo más antiguo primero (owner, 06-11-2026).
+      if (a.cls.agendaDay || b.cls.agendaDay) return (a.cls.agendaDay ?? "9999").localeCompare(b.cls.agendaDay ?? "9999") || a.created - b.created;
+      return a.created - b.created;
+    }
     return a.since - b.since;
   }).map((r) => r.row);
 }
@@ -538,6 +830,40 @@ export function limaBoardRows(
 // ---------------------------------------------------------------------------
 // Lo que dice la fila
 // ---------------------------------------------------------------------------
+
+/** «Llamar después» cuya hora ya llegó (owner, 15-11-2026: «arriba en la lista y en rojo»). */
+export function callDue(c: Pick<PendingCase, "list" | "nextCallAt"> | undefined, now: Date): boolean {
+  if (c?.list !== "llamar_despues" || !c.nextCallAt) return false;
+  const at = Date.parse(c.nextCallAt);
+  return Number.isFinite(at) && at <= now.getTime();
+}
+
+/**
+ * Los estados de Aliclik (`status · dispatchStatus · callStatus`), con las
+ * palabras de su propio Excel (`lib/aliclik-import.ts`): «PENDING_DELIVERY ·
+ * PREPARED · CONFIRMED» se lee «Por entregar · Validado · Confirmado».
+ */
+const ALICLIK_STATUS_TEXT: Record<string, string> = {
+  PENDING_DELIVERY: "Por entregar",
+  DELIVERED: "Entregado",
+  CANCEL: "Cancelado",
+  ANNULLED: "Anulado",
+  REFUSED: "Rechazado",
+  NOT_RESPOND: "No contesta",
+  RESCHEDULED: "Reprogramado",
+  TO_PREPARE: "Por preparar",
+  PREPARED: "Validado",
+  PICKED: "Recolectado",
+  IN_TRANSIT: "En tránsito",
+  REMAINING_IN_TRANSIT: "Remanente en tránsito",
+  STORE_CENTRAL: "Almacén central",
+  TO_RETURN: "Por devolver",
+  RETURNED: "Devuelto",
+  IN_AGENCY: "En agencia",
+  LEFT_IN_WAREHOUSE: "Dejado en almacén",
+  CONFIRMED: "Confirmado",
+  IMPORTED: "Importado",
+};
 
 /** Los estados de GF Courier (§29.17), dichos con palabras; lo demás va como lo reportó el courier. */
 const GF_STATUS_TEXT: Record<string, string> = {
@@ -559,7 +885,10 @@ const GF_STATUS_TEXT: Record<string, string> = {
 export function courierStatusText(status: string | null | undefined): string | null {
   const raw = status?.trim();
   if (!raw) return null;
-  return GF_STATUS_TEXT[raw.toUpperCase()] ?? raw;
+  const whole = GF_STATUS_TEXT[raw.toUpperCase()];
+  if (whole) return whole;
+  // Los estados compuestos de Aliclik, parte por parte; lo desconocido va como llegó.
+  return raw.split(/\s*·\s*/).map((part) => ALICLIK_STATUS_TEXT[part.toUpperCase()] ?? part).join(" · ");
 }
 
 /** «GF Courier · Incidencia: no contesta», «Grupo GF · Alexis», o null sin courier. */
@@ -570,6 +899,30 @@ export function courierNowText(row: LimaPendingOrder): string | null {
   const name = courierLabel(code, code === row.courier ? row.courierDetail : null);
   const status = courierStatusText(row.ops?.reportedStatus);
   return status ? `${name} · ${status}` : name;
+}
+
+/**
+ * La fecha de la ruta del courier, para la fila de lo que lleva un courier
+ * (owner, 15-11-2026: «tienes que figurar la fecha de por qué está con el
+ * courier, de la ruta del courier»):
+ * - **Guía creada**: el día de recojo (Aliclik) o el que se le pidió a GF
+ *   Courier; uno que pasó, «Vencido · vie 13/11». Sin día, «Guía creada».
+ * - **En ruta** y **Retornando**: el día de la ruta (`limaRouteDay`): «Hoy» o
+ *   «dom 15/11».
+ */
+export function courierRouteText(row: LimaPendingOrder, cls: Pick<LimaRowClass, "courier" | "agendaDay" | "routeDay">, today: string): { day: string; detail: string; overdue: boolean } | null {
+  if (!cls.courier) return null;
+  if (cls.courier === "guia_creada") {
+    const pickup = row.courierPickup;
+    const day = cls.agendaDay ?? pickup?.date;
+    const detail = pickup ? (pickup.courier === "aliclik" ? "Recojo de Aliclik" : "Sale con GF Courier") : "Guía creada";
+    if (!day) return { day: "Guía creada", detail: "Sin día del courier", overdue: false };
+    return { day: agendaDayText(day, today), detail, overdue: day < today };
+  }
+  const day = cls.routeDay ?? limaRouteDay(row);
+  const detail = cls.courier === "retornando" ? "Retornando" : "En ruta";
+  if (!day) return { day: detail, detail: "Sin día de ruta", overdue: false };
+  return { day: day === today ? "Hoy" : programDayLabel(day), detail, overdue: false };
 }
 
 /** El día de la Agenda dicho en la fila: «Hoy», «lun 16/11» o «Vencido · jue 12/11». */
@@ -592,32 +945,58 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
       return cls.awaitingCancel
         ? "Anular la venta en la tienda: el caso se cerró con «Desarmar y cerrar»."
         : `Validar el cobro de ${row.ops?.courierDelivered ? courierDisplayName(row.ops.courierDelivered.courier) : courierName} para cerrarlo (Tanders: su constancia en Validar pagos).`;
-    case "no_entregados":
-      return cls.retry
-        ? "Reintento por Aliclik: apruébalo en «Reintentos Aliclik», sin llamar."
-        : "Llamar a la clienta y acordar el día y el courier (Atender).";
+    case "no_entregados": {
+      if (cls.retry) return "Reintento por Aliclik: apruébalo en «Reintentos Aliclik», sin llamar.";
+      if (cls.courier === "retornando") return `Lo está devolviendo ${courierName}: llama a la clienta y acuerda el nuevo día (Atender); sale otra vez cuando llegue al almacén.`;
+      if (cls.noReport) {
+        const rider = row.ops?.lastGfBox?.riderName;
+        const who = courier ? courierDisplayName(courier) : GF_INTERNAL.has(row.courier ?? "") || row.ops?.lastGfBox ? (rider ? `el motorizado ${rider}` : "el motorizado") : courierName;
+        const when = cls.routeDay ? `Salió a ruta el ${programDayLabel(cls.routeDay)}` : "Salió a ruta";
+        return limaOwnRoute(row)
+          ? `${when} y ${who} no reportó el resultado: se cuenta como no entregado. Llama a la clienta; si no lo recibió, regístralo con «No se entregó» (con la captura) y acuerda el nuevo día.`
+          : `${when} y ${who} no reportó el resultado: se cuenta como no entregado. Pide el reporte a ${who}: el pedido cambia cuando el courier lo reporte.`;
+      }
+      return "Llamar a la clienta y acordar el día y el courier (Atender).";
+    }
     case "novedad":
       return `Llamar a la clienta y acordar con ${courierName} la entrega o la devolución: la guía sigue viva.`;
     case "llamar_despues":
-      return c?.nextCallAt ? `Llamar ${reproCallTimeLabel(c.nextCallAt, now)}.` : "Llamar a la clienta otra vez.";
+      if (!c?.nextCallAt) return "Llamar a la clienta otra vez.";
+      // Ya llegó la hora (owner, 15-11-2026): lo dice primero; la fila lo pinta en rojo (`callDue`).
+      return callDue(c, now) ? `Ya toca llamar (pidió ${reproCallTimeLabel(c.nextCallAt, now)}).` : `Llamar ${reproCallTimeLabel(c.nextCallAt, now)}.`;
     case "primer_despacho":
       return cls.stale
         ? "Confirmar con la clienta si la venta sigue; si no, anularla en la tienda."
-        : "Confirmar los datos con la clienta y agendar la salida.";
+        : `Sacarlo a reparto: Kapta sugiere el ${programDayLabel(limaSuggestedDay(today))}. Confírmalo (y los datos con la clienta si hace falta).`;
     case null:
       break;
+  }
+  if (cls.missedPickup) {
+    const who = row.courierPickup ? courierDisplayName(row.courierPickup.courier) : courierName;
+    return `${who} debía recogerlo el ${programDayLabel(row.courierPickup?.date ?? cls.agendaDay ?? today)} y no lo recogió: coordina el recojo o crea la guía con otro courier (Mesa de ruta).`;
   }
   if (cls.courier === "retornando") return "Recibir la devolución en Almacén cuando llegue.";
   if (cls.courier === "en_ruta") return `Solo seguimiento: lo tiene ${courierName}.`;
   if (cls.courier === "guia_creada") {
-    return row.courierPickup && row.courierPickup.date >= today
-      ? `Lo recoge ${courierDisplayName(row.courierPickup.courier)} el ${programDayLabel(row.courierPickup.date)}.`
+    // El día de recojo es el de la clase: si su día pasó sin recogerlo, el próximo día de reparto.
+    const pickup = row.courierPickup && cls.agendaDay && cls.agendaDay >= today ? cls.agendaDay : null;
+    return row.courierPickup && pickup
+      ? `Lo recoge ${courierDisplayName(row.courierPickup.courier)} ${pickup === today ? "hoy" : `el ${programDayLabel(pickup)}`}.`
       : `Lo prepara y lo recoge ${courierName}.`;
+  }
+  if (!cls.guide && cls.agenda === "hoy") {
+    if (cls.agendaDay && cls.agendaDay < today) return `Debía salir el ${programDayLabel(cls.agendaDay)} y no tiene guía ni rótulo: créala hoy desde la Mesa de ruta o reagéndalo.`;
+    return hoySinGuiaAlert(now)
+      ? "Sale hoy y no tiene guía ni rótulo: créala desde la Mesa de ruta para que salga."
+      : "Sale hoy y todavía no tiene guía ni rótulo: si a las 10:30 no la tiene, créala desde la Mesa de ruta.";
+  }
+  if (!cls.guide && cls.agenda === "manana") {
+    return cls.autoGuide ? "Sale mañana: la guía GF automática la crea mañana en la mañana." : "Sale mañana y no tiene guía ni rótulo: genérala hoy.";
   }
   if (cls.agendaDay && cls.agendaDay < today) return `Debía salir el ${programDayLabel(cls.agendaDay)}: revisa por qué no salió y reagéndalo.`;
   if (cls.agendaDay === today) return "Sale hoy.";
   if (cls.agendaDay) return `Sale el ${programDayLabel(cls.agendaDay)}. Sin gestión salvo que la clienta cambie algo.`;
-  return "Agendar la salida.";
+  return `Sin día: Kapta sugiere el ${programDayLabel(limaSuggestedDay(today))} para que salga.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -658,8 +1037,9 @@ export function agendarPath(row: LimaPendingOrder, c: BoardCase | undefined, opt
   return { kind: null, why: "Ya tiene rótulo: acuerda el día con la clienta en «Atender»." };
 }
 
-/** Los días que ofrece «Agendar»: hoy y los próximos días de reparto, hasta `count`. */
-export function agendarQuickDays(today: string, count = AGENDA_NAMED_DAYS): string[] {
+/** Los días que «Agendar» ofrece como chips: hoy y los cinco próximos de reparto (no cambia con la Agenda de cuatro cajones). */
+export const AGENDAR_QUICK_DAYS = 5;
+export function agendarQuickDays(today: string, count = AGENDAR_QUICK_DAYS): string[] {
   return [today, ...agendaWindow(today, count).filter(isDeliveryDay)];
 }
 

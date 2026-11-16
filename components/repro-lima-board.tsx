@@ -1,10 +1,10 @@
 "use client";
 
 // Repro Lima (MOM §9.5): el panel de gestión del equipo de Lima (owner,
-// 15-11-2026). Tres bloques —«Por gestionar hoy», «Agenda» y «En manos del
-// courier»— sobre UNA lista: cada tarjeta filtra esa lista (`atencion` en la
+// 15-11-2026). El «Flujo del día» —cinco pasos que suman el total— y la
+// «Agenda» sobre UNA lista: cada tarjeta filtra esa lista (`atencion` en la
 // URL; los valores de la pantalla anterior abren lo más cercano) y los
-// trabados del equipo (§9.6) son chips de su bloque (`trabado`). Las acciones
+// trabados del equipo (§9.6) van dentro de su paso (`trabado`). Las acciones
 // conservan los permisos y guardas del pedido y de cada caso.
 //
 // «Agendar» pone el día sin abrir la ficha y «Mover a…» lo pone a varios, por
@@ -19,20 +19,21 @@
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui";
-import { Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
+import { AttentionPill, Badge, Banner, FIELD, FilterPill, OpsButton, StatusCard, ChoiceChip } from "@/components/ops-ui";
 import { Sheet } from "@/components/filter-sheet";
 import { DateRangePill, FacetPill } from "@/components/facet-pill";
-import { IconCheck, IconSearch, IconX } from "@/components/icons";
+import { IconAlert, IconCheck, IconSearch, IconX } from "@/components/icons";
 import { useOpenOrderDrawer } from "@/components/order-link";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
 import { cutoffNotice } from "@/lib/repro-lima";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
-import { ReproLimaBlocks, type LimaStuckChip } from "@/components/repro-lima-blocks";
+import { ReproLimaBlocks, STEP_TONE, activeStep } from "@/components/repro-lima-blocks";
+import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { AgendarButton, ChannelPicker, DayPicker, agendarOutcome, newAgendarOperationId, type AgendarChannel } from "@/components/repro-lima-agendar";
 import { clearReproLimaQueue, setReproLimaQueue, type ReproLimaQueue } from "@/lib/repro-lima-queue";
-import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, stuckReasonsOf, type LimaStuckHome, type LimaStuckReason } from "@/lib/lima-stuck";
+import { LIMA_STUCK_HOME_LABEL, limaStuckItems, limaStuckRule, stuckFilter, stuckMovedTo, type LimaStuckHome } from "@/lib/lima-stuck";
 import { approveAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { agendarReproLima, type AgendarResult } from "@/app/dashboard/pedidos/repro-lima/agenda-actions";
 import { retryApproveNoLocation } from "@/lib/lima-retry-auto";
@@ -43,10 +44,15 @@ import {
   agendarPath,
   boardCard,
   boardFilter,
+  callDue,
   classifyLimaRows,
+  hoySinGuiaAlert,
   limaBoardCounts,
   limaBoardRows,
+  limaOwnRoute,
+  limaSuggestedDay,
   type LimaBoardKey,
+  type LimaStep,
 } from "@/lib/repro-lima-blocks";
 import { DISPATCH_DATE_MAX_DAYS } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
@@ -55,8 +61,6 @@ import { createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pen
 const FOCUS_REFRESH_MS = 20_000;
 /** Los trabados que se ven en Repro Lima; los de Grupo GF, en Despacho del día. */
 const TEAM_HOMES: readonly LimaStuckHome[] = ["gestion", "courier"];
-const GESTION_STUCK = stuckReasonsOf("gestion");
-const COURIER_STUCK = stuckReasonsOf("courier");
 
 type Feedback = {
   kind: "notice" | "error";
@@ -66,15 +70,21 @@ type Feedback = {
   lines?: string[];
   /** Algún pedido no tuvo Google porque está apagado o Lima no está medida. */
   googleOff?: boolean;
+  /** Pedidos cuya guía de GF Courier no se anuló o no se creó al mover su acuerdo: su Mesa de ruta. */
+  mesa?: Array<{ orderId: string; orderName: string }>;
 };
 
-export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false }: {
+export function ReproLimaBoard({ data, pending, retriesOnly = false, canScheduleDispatch = false, canReportForRider = false, autoGuideStores = [] }: {
   data: ReproLimaData;
   pending: LimaPendingOrder[];
   /** Despacho sin `repro_lima.manage` (03-11-2026): solo «Reintentos Aliclik», sin Atender ni Agendar. */
   retriesOnly?: boolean;
   /** «Programar envío» (§6.2) pide `master.edit`: sin él, «Agendar» solo cambia acuerdos. */
   canScheduleDispatch?: boolean;
+  /** «No se entregó» escribe por el motorizado (`routes.report_others`, como Coordinación). */
+  canReportForRider?: boolean;
+  /** Las tiendas con la guía GF automática en Activo: su guía de mañana no alarma. */
+  autoGuideStores?: readonly string[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -92,6 +102,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const [store, setStore] = useState("");
   const [storeSheet, setStoreSheet] = useState(false);
   const storePill = useRef<HTMLButtonElement>(null);
+  const [stageSheet, setStageSheet] = useState(false);
+  const stagePill = useRef<HTMLButtonElement>(null);
   const openDrawer = useOpenOrderDrawer();
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const lastRefresh = useRef(0);
@@ -114,9 +126,11 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     return { channels: without("channels"), districts: without("districts"), couriers: without("couriers") };
   }, [pendingStore, rowFilters, activeRowFilters]);
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
-  // Los tres bloques: una clasificación por pedido, para las cifras y la lista.
+  // El paso, el día y el courier: una clasificación por pedido, para las cifras y la lista.
   const agendaDays = useMemo(() => agendaWindow(today), [today]);
-  const classes = useMemo(() => classifyLimaRows(scoped, data.rows, today, agendaDays), [scoped, data.rows, today, agendaDays]);
+  const autoGuideKey = autoGuideStores.join(",");
+  const autoGuide = useMemo(() => new Set(autoGuideKey ? autoGuideKey.split(",") : []), [autoGuideKey]);
+  const classes = useMemo(() => classifyLimaRows(scoped, data.rows, today, agendaDays, { autoGuideStores: autoGuide }), [scoped, data.rows, today, agendaDays, autoGuide]);
   const counts = useMemo(() => limaBoardCounts(scoped, classes), [scoped, classes]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
   // `loadReproLima` ya ordena los casos (`sortRepro`): No entregados y Llamar después siguen ese orden.
@@ -126,17 +140,26 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     [scoped, today, retriesOnly],
   );
   const stuckByOrder = useMemo(() => new Map(stuckItems.map((item) => [item.orderId, item])), [stuckItems]);
-  const stuckChips = useMemo(() => {
-    const count = new Map<LimaStuckReason, number>();
-    for (const item of stuckItems) count.set(item.reason, (count.get(item.reason) ?? 0) + 1);
-    const chips = (reasons: readonly LimaStuckReason[]): LimaStuckChip[] => reasons.map((reason) => ({ reason, count: count.get(reason) ?? 0 }));
-    return { gestion: chips(GESTION_STUCK), courier: chips(COURIER_STUCK) };
-  }, [stuckItems]);
+  // Los trabados viven dentro de su paso (owner, 15-11-2026): cuántos tiene cada uno.
+  const stuckByStep = useMemo(() => {
+    const out: Record<LimaStep, number> = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, con_courier: 0, por_cerrar: 0 };
+    for (const item of stuckItems) {
+      const step = classes.get(item.orderId)?.step;
+      if (step) out[step] = (out[step] ?? 0) + 1;
+    }
+    return out;
+  }, [stuckItems, classes]);
+  // «Llamar después» cuya hora ya llegó: la celda del paso lo dice en rojo.
+  const callsDue = useMemo(
+    () => scoped.filter((row) => classes.get(row.orderId)?.step === "llamar_despues" && callDue(caseById.get(row.orderId), now)).length,
+    [scoped, classes, caseById, now],
+  );
   const inQueue = useMemo(() => {
     if (stuck) {
-      // Los trabados, en su orden: por motivo y lo que más lleva primero.
+      // Los trabados, en su orden: por motivo y lo que más lleva primero; con un
+      // paso elegido, solo los de ese paso.
       const byId = new Map(scoped.map((row) => [row.orderId, row]));
-      return stuckItems.filter((item) => stuck === "todos" || item.reason === stuck)
+      return stuckItems.filter((item) => (stuck === "todos" || item.reason === stuck) && (key === "todos" || classes.get(item.orderId)?.step === key))
         .map((item) => byId.get(item.orderId))
         .filter((row): row is LimaPendingOrder => Boolean(row));
     }
@@ -176,12 +199,13 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     replaceParams(params);
   }
 
-  function chooseStuck(next: LimaStuckReason | "todos" | null) {
+  /** «Trabados» dentro de un paso: los trabados de ese paso; tocarlo otra vez vuelve al paso. */
+  function chooseStepStuck(step: LimaStep) {
     setPicked(new Set());
     const params = new URLSearchParams(searchParams.toString());
-    params.delete("atencion");
-    if (next && next !== stuck) params.set("trabado", next);
-    else params.delete("trabado");
+    params.set("atencion", step);
+    if (stuck && key === step) params.delete("trabado");
+    else params.set("trabado", "todos");
     replaceParams(params);
   }
 
@@ -251,7 +275,21 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const path = pathOf(row);
     return (
       <>
-        {path.kind && <AgendarButton row={row} path={path} today={today} size={size} onDone={(f) => { setFeedback(f); refresh(); }} />}
+        {path.kind && (
+          <AgendarButton
+            row={row}
+            path={path}
+            today={today}
+            size={size}
+            // Sin día, llega elegido el que propone Kapta: el equipo lo confirma (owner, 15-11-2026).
+            suggested={classes.get(row.orderId)?.agendaDay ? undefined : limaSuggestedDay(today)}
+            onDone={(f) => { setFeedback({ kind: f.kind, text: f.text, mesa: f.mesa ? [f.mesa] : undefined }); refresh(); }}
+          />
+        )}
+        {/* Ruta vencida del reparto propio: la clienta confirma que no lo recibió → se registra por el motorizado (owner, 15-11-2026). */}
+        {canReportForRider && classes.get(row.orderId)?.noReport && limaOwnRoute(row) && (
+          <NoEntregoButton row={row} size={size} onDone={(f) => { setFeedback(f); refresh(); }} />
+        )}
         <OpsButton size={size} className="pointer-coarse:h-11" onClick={() => openDrawer(row.orderId, "reprolima")}>Atender</OpsButton>
       </>
     );
@@ -334,6 +372,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const label = programDayLabel(moveDay);
     if (!window.confirm(`Se moverán ${rows.length} ${rows.length === 1 ? "pedido" : "pedidos"} al ${label}. ¿Seguir?`)) return;
     const failed: Array<{ orderName: string; error: string }> = [];
+    const mesa: Array<{ orderId: string; orderName: string }> = [];
     let done = 0;
     setMoving({ done: 0, total: rows.length });
     for (const [i, row] of rows.entries()) {
@@ -345,7 +384,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           channel: path.kind === "acuerdo" ? moveChannel : null,
           operationId: newAgendarOperationId(),
         }).catch((e: unknown): AgendarResult => ({ error: e instanceof Error ? e.message : String(e) }));
-        const outcome = agendarOutcome(row.orderName, result);
+        const outcome = agendarOutcome(row.orderName, result, row.orderId);
+        if (outcome.feedback.mesa) mesa.push(outcome.feedback.mesa);
         if (outcome.saved && !result.error) done += 1;
         else failed.push({ orderName: row.orderName, error: result.error ?? outcome.feedback.text });
       } catch {
@@ -355,13 +395,26 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     }
     setMoving(null);
     setPicked(new Set());
-    setFeedback({ kind: failed.length ? "error" : "notice", text: `Movidos al ${label}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed) });
+    setFeedback({ kind: failed.length ? "error" : "notice", text: `Movidos al ${label}: ${done} de ${rows.length}.`, lines: groupApprovalFailures(failed), ...(mesa.length ? { mesa } : {}) });
     refresh();
   }
 
+  // «Kapta propone, el equipo confirma» (owner, 15-11-2026): en «Sin fecha» y en
+  // «Sacar a reparto», un toque elige los que se pueden agendar y deja el
+  // próximo día de reparto puesto en «Mover a…». Nada se mueve hasta confirmar.
+  const suggestedDay = limaSuggestedDay(today);
+  const proposals = !stuck && !retriesOnly && (key === "sin_fecha" || key === "por_sacar")
+    ? inQueue.filter((row) => classes.get(row.orderId)?.agenda === "sin_fecha" && pathOf(row).kind !== null)
+    : [];
+  function pickProposals() {
+    setPicked(new Set(proposals.map((row) => row.orderId)));
+    setMoveDay(suggestedDay);
+  }
+
   const card = stuck ? null : boardCard(key, today);
+  const stepCard = key !== "todos" ? boardCard(key, today) : null;
   const listTitle = stuck
-    ? stuck === "todos" ? "Trabados" : `Trabados · ${limaStuckRule(stuck).label}`
+    ? stuck !== "todos" ? `Trabados · ${limaStuckRule(stuck).label}` : stepCard ? `Trabados · ${stepCard.label}` : "Trabados"
     : card?.label ?? "Todos los pendientes";
   const listHelp = stuck
     ? stuck === "todos" ? "Lo del equipo que se quedó quieto más de lo que debería, lo que más lleva primero." : `${limaStuckRule(stuck).hint} Siguiente paso: ${limaStuckRule(stuck).action}`
@@ -371,19 +424,36 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     : stuck ? "No hay pedidos trabados por este motivo con estos filtros."
       : key === "todos" ? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda." : card?.empty ?? "No hay pedidos con estos filtros.";
   const filtered = Boolean(stuck) || key !== "todos";
+  const listStep = activeStep(key);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-7">
       <header className="space-y-3">
         <div className="min-w-0">
           <h1 className="text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Repro Lima</h1>
           <p className="mt-1 text-sm text-ink-500">
             {retriesOnly
               ? "Los no entregados de Lima que vuelven a salir por Aliclik, sin llamar. Abre el pedido y crea la guía con el transporte indicado."
-              : "El panel del equipo de Lima: lo que toca hoy, la agenda de salidas y lo que lleva el courier. «Agendar» pone el día; «Atender» abre la llamada y la gestión."}
+              : "El panel del equipo de Lima. Trabaja el flujo de izquierda a derecha; «Agendar» pone el día y «Atender» abre la llamada."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* El total, arriba y a la vista (owner, 15-11-2026: «el total desapareció»). Es también «Todos». */}
+          {!retriesOnly && (
+            <button
+              type="button"
+              onClick={() => chooseKey("todos")}
+              aria-pressed={key === "todos" && !stuck}
+              title="Todos los pendientes de entrega de Lima, con los filtros de abajo."
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-full bg-white px-3 text-[13px] font-medium shadow-control transition-shadow pointer-coarse:h-11",
+                key === "todos" && !stuck ? "text-brand-700 ring-2 ring-inset ring-brand-600" : "text-ink-700 ring-1 ring-inset ring-line-strong hover:ring-ink-300",
+              )}
+            >
+              <span className={cn("font-semibold tabular-nums", key === "todos" && !stuck ? "text-brand-700" : "text-ink-900")}>{pendingStore.length.toLocaleString("es-PE")}</span>
+              pedidos de Lima por entregar
+            </button>
+          )}
           <Badge tone={cutoff.passed ? "warn" : "info"} wrap>{cutoff.text}</Badge>
           <span className="text-[13px] text-ink-500" aria-live="polite">{refreshing ? "Actualizando…" : null}</span>
         </div>
@@ -397,11 +467,11 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         <ReproLimaBlocks
           counts={counts}
           today={today}
-          active={stuck ? "todos" : key}
+          active={key}
           onPick={chooseKey}
-          stuck={stuckChips}
-          activeStuck={stuck}
-          onStuck={chooseStuck}
+          guideAlert={hoySinGuiaAlert(now)}
+          stuck={{ byStep: stuckByStep, active: Boolean(stuck), onPick: chooseStepStuck }}
+          callsDue={callsDue}
         />
       )}
 
@@ -414,8 +484,6 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         </Banner>
       )}
 
-      <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
-
       {feedback && (
         <Banner tone={feedback.kind === "error" ? "crit" : "ok"} role={feedback.kind === "error" ? "alert" : "status"}>
           <div className="flex items-start justify-between gap-3">
@@ -423,6 +491,15 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
               <p>{feedback.text}</p>
               {feedback.extra && <p>{feedback.extra}</p>}
               {feedback.lines?.map((line) => <p key={line}>{line}</p>)}
+              {feedback.mesa?.length ? (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {feedback.mesa.map((m) => (
+                    <OpsButton key={m.orderId} size="sm" className="pointer-coarse:h-11" onClick={() => openDrawer(m.orderId, "operar")}>
+                      {feedback.mesa!.length === 1 ? "Abrir la Mesa de ruta del pedido" : `Mesa de ruta de ${m.orderName}`}
+                    </OpsButton>
+                  ))}
+                </div>
+              ) : null}
               {feedback.googleOff && (
                 <p><a href="/dashboard/automatizaciones#retry-ubicacion" className="font-medium underline underline-offset-2">Ir a «Ubicación por dirección» en Automatizaciones</a> para medir Lima y encenderla.</p>
               )}
@@ -434,23 +511,47 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         </Banner>
       )}
 
-      <section aria-label={filtered ? listTitle : "Todos los pendientes de Lima"} className="rounded-lg bg-white shadow-control ring-1 ring-line">
+      <section aria-label={filtered ? listTitle : "Todos los pendientes de Lima"} className="rounded-lg bg-white shadow-control ring-1 ring-line-strong/70">
         {!retriesOnly && (
-          <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-4 pt-3">
+          // La cabecera toma el matiz del paso elegido (owner, 16-11-2026: contraste entre secciones): se ve de dónde viene la lista.
+          <div className={cn("flex flex-wrap items-start justify-between gap-x-3 gap-y-1 rounded-t-lg border-b border-line px-4 py-3.5", listStep ? STEP_TONE[listStep].band : "bg-wash/70")}>
             <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-ink-900">{listTitle}</h2>
-              <p className="max-w-[80ch] text-[13px] text-ink-500">{listHelp}</p>
+              <h2 className="flex items-center gap-2 text-base font-semibold tracking-[-0.01em] text-ink-900">
+                {listStep && <span aria-hidden className={cn("size-2.5 shrink-0 rounded-full", STEP_TONE[listStep].dot)} />}
+                {listTitle}
+              </h2>
+              <p className="mt-0.5 max-w-[80ch] text-[13px] leading-5 text-ink-500">{listHelp}</p>
             </div>
             {filtered && <OpsButton variant="ghost" size="sm" onClick={() => chooseKey("todos")} className="pointer-coarse:h-11">Ver todos</OpsButton>}
           </div>
         )}
-        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+        {proposals.length > 0 && (
+          <div role="note" className="mx-4 mt-3 flex flex-col gap-2 rounded-md bg-brand-50 px-3 py-2.5 ring-1 ring-inset ring-brand-100 sm:flex-row sm:items-center sm:gap-3">
+            <p className="min-w-0 text-[13px] leading-5 text-ink-700 sm:flex-1">
+              Kapta sugiere el <b className="font-semibold text-ink-900">{programDayLabel(suggestedDay)}</b>, el próximo día de reparto, para{" "}
+              <b className="font-semibold tabular-nums text-ink-900">{proposals.length.toLocaleString("es-PE")}</b> {proposals.length === 1 ? "pedido sin fecha que se puede agendar" : "pedidos sin fecha que se pueden agendar"}. Revisa la lista, quita los que no y confirma abajo.
+            </p>
+            <OpsButton size="sm" variant="primary" disabled={Boolean(moving)} onClick={pickProposals} className="w-full shrink-0 sm:w-auto pointer-coarse:h-11">
+              Elegirlos para el {programDayLabel(suggestedDay)}
+            </OpsButton>
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2 px-4 pb-4 pt-3">
           <label className="relative w-full sm:w-72">
             <span className="sr-only">Buscar pedido, cliente o teléfono</span>
             <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
             <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Pedido, cliente o teléfono" className={cn(FIELD, "h-8 pl-8 pointer-coarse:h-11")} />
           </label>
           {data.stores.length > 1 && <FilterPill ref={storePill} label="Tienda" value={storeName} expanded={storeSheet} onClick={() => setStoreSheet((v) => !v)} onClear={() => setStore("")} />}
+          {/* Macroestado y subetapa del Master: un filtro más de la lista, no una fila de la página (15-11-2026). */}
+          <FilterPill
+            ref={stagePill}
+            label="Etapa"
+            value={hidden.size ? `${hidden.size} ${hidden.size === 1 ? "oculta" : "ocultas"}` : null}
+            expanded={stageSheet}
+            onClick={() => setStageSheet((v) => !v)}
+            onClear={() => changeHidden(new Set())}
+          />
           <DateRangePill label="Creación" from={rowFilters.createdFrom} to={rowFilters.createdTo} presets={createdPresets(today)} onChange={(createdFrom, createdTo) => patchRowFilters({ createdFrom, createdTo })} />
           <FacetPill label="Canal" allLabel="Todos los canales" options={filterOptions.channels} selected={rowFilters.channels as Set<string>} onChange={(channels) => patchRowFilters({ channels })} />
           <FacetPill label="Distrito" allLabel="Todos los distritos" options={filterOptions.districts} selected={rowFilters.districts as Set<string>} onChange={(districts) => patchRowFilters({ districts })} />
@@ -473,13 +574,18 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
               )}
             </>
           )}
-          {!retriesOnly && !inRetries && !picked.size && (
-            <ChoiceChip label="Solo trabados" count={stuckItems.length} active={stuck === "todos"} title="Los trabados del equipo (§9.6), lo que más lleva primero." onClick={() => chooseStuck(stuck === "todos" ? null : "todos")} />
-          )}
           <p className="w-full text-[13px] tabular-nums text-ink-500 lg:ml-auto lg:w-auto" aria-live="polite">
             <b className="font-semibold text-ink-900">{inQueue.length.toLocaleString("es-PE")}</b> de {pendingStore.length.toLocaleString("es-PE")} pendientes de entrega
           </p>
         </div>
+        {stageSheet && (
+          <Sheet look="ops" title="Etapa del Master" onClose={() => setStageSheet(false)} anchored anchorRef={stagePill}>
+            <div className="max-h-[60vh] max-w-xl space-y-2 overflow-auto">
+              <p className="text-[13px] text-ink-500">Muestra u oculta macroestados y subetapas. Las cifras de arriba cuentan solo lo que se muestra.</p>
+              <LimaPendingFilters rows={narrowed} hidden={hidden} onToggle={(keys) => changeHidden(togglePendingKeys(hidden, keys))} onReset={() => changeHidden(new Set())} />
+            </div>
+          </Sheet>
+        )}
         {storeSheet && (
           <Sheet look="ops" title="Tienda" onClose={() => setStoreSheet(false)} anchored anchorRef={storePill}>
             <div role="group" className="-mx-1 grid max-h-72 gap-0.5 overflow-auto">

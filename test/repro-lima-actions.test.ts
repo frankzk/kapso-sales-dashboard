@@ -4,6 +4,8 @@
 // con la caja», el programa de otro día que queda cuando falla programar
 // (E23), y «Programar ahora», que toma el candado de SU caso y nunca abre otro.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Query = {
@@ -29,6 +31,10 @@ const state = vi.hoisted(() => ({
   closeStale: vi.fn(),
   /** Lo que recibió `reproBoxAction` (la acción real, solo se mira). */
   boxInputs: [] as Array<Record<string, unknown>>,
+  /** GF Courier por API: crear y anular la guía, y en qué orden se llamaron. */
+  gfCreate: vi.fn(),
+  gfCancel: vi.fn(),
+  gfCalls: [] as string[],
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -66,6 +72,11 @@ vi.mock("@/lib/repro-lima-program", async (importOriginal) => {
     closeStaleReproCases: (...args: unknown[]) => state.closeStale(...args),
   };
 });
+// La guía GF (MOM §29.17) sin red ni base: se mira qué se pidió y en qué orden.
+vi.mock("@/lib/gf-courier-guide", () => ({
+  createGfGuideFor: async (...args: unknown[]) => { state.gfCalls.push("create"); return state.gfCreate(...args); },
+  cancelGfGuideFor: async (...args: unknown[]) => { state.gfCalls.push("cancel"); return state.gfCancel(...args); },
+}));
 vi.mock("@/lib/repro-box-action", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/repro-box-action")>();
   return {
@@ -212,6 +223,9 @@ beforeEach(() => {
   state.cleared.mockReset();
   state.closeStale.mockReset();
   state.boxInputs = [];
+  state.gfCreate.mockReset();
+  state.gfCancel.mockReset();
+  state.gfCalls = [];
   state.respond = (q) => (isCaseRead(q) ? { data: caseRow(), error: null } : { data: null, error: null });
   state.rpc = () => ({ data: { call_id: "call-1", duplicate: false }, error: null });
 });
@@ -611,5 +625,251 @@ describe("«Agendar» de la lista: otro día para un acuerdo (owner, 15-11-2026;
     state.rpc = () => ({ data: { case_id: CASE_ID, claimed: false, holder: "ana", until: "2026-10-13T13:09:00Z" }, error: null });
     expect((await move()).error).toBe("Ana está atendiendo este pedido.");
     expect(state.rpcs.map((r) => r.name)).toEqual(["lima_repro_claim"]);
+  });
+});
+
+describe("GF Courier en el acuerdo: la guía queda creada para el día acordado (owner, 15-11-2026; §9.5, §29.17)", () => {
+  /** Una tienda con GF Courier por API. Sin salida propia: la guía la hace GF. */
+  const gfFacts = (over: Record<string, unknown> = {}) => facts({
+    gfCourierApi: true,
+    outputs: [],
+    ownLive: null,
+    box: { kind: "desconocida" },
+    hadPropio: false,
+    provider: null,
+    ...over,
+  });
+  /** Una guía GF viva: `pendiente` (sin asignar) o `en_ruta` (asignada a un motorizado). */
+  const gfGuide = (status: "pendiente" | "en_ruta", over: Record<string, unknown> = {}) => ({
+    id: "g1", courier: "gf_courier", delivery_status: status, guide_code: "GF1", returned_at: null, created_at: "2026-10-12T15:00:00Z", ...over,
+  });
+  const withGuide = (status: "pendiente" | "en_ruta", over: Record<string, unknown> = {}) => gfFacts({
+    outputs: [gfGuide(status, over)],
+    otherLiveCourier: "gf_courier",
+    box: { kind: "con_courier", courier: "gf_courier", enOficina: false },
+  });
+  const agreed = (over: Record<string, unknown> = {}) => caseRow({
+    agreement_call_id: "call-1", agreed_on: "2026-10-15", agreed_courier: "gf_courier", box_action: "salida_nueva_rearmar",
+    decided_by: "me", decided_at: NOW.toISOString(), ...over,
+  });
+  /** La acción de la caja que el servidor calcula con estos hechos (la misma regla que la hoja). */
+  const gfAction = (f: ReturnType<typeof facts>) => {
+    const r = realBoxAction({
+      outcome: "confirma", courier: "gf_courier", changes: {}, box: f.box as never, ownLiveCourier: null, lastFailedCourier: null,
+      otherLiveCourier: (f.otherLiveCourier as string | null) ?? null, hadPropio: false, totalOutputs: (f.outputs as unknown[]).length,
+      priorWithCourier: priorOutputsWith(f.outputs as never, "gf_courier"), ownReplace: null, reopened: false, retryAdmission: false,
+    });
+    return "action" in r ? r.action : null;
+  };
+  const created = { ok: true, trackingId: "GF9", shippingCost: 10, estimatedDeliveryDate: "2026-10-15", adopted: false };
+
+  it("la tienda decide: GF Courier solo con su API, y Grupo GF nunca con ella; no se guarda nada", async () => {
+    state.facts = [facts({ gfCourierApi: false })];
+    const noApi = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: "salida_nueva_rearmar" }));
+    expect(noApi.error).toBe("Esta tienda no tiene GF Courier por API: elige Grupo GF u otro courier.");
+    state.facts = [gfFacts()];
+    state.factsCalls = 0;
+    const propio = await registerReproCall(confirmInput({ courier: "propio", expectedBoxAction: "salida_nueva_rearmar" }));
+    expect(propio.error).toBe("Esta tienda despacha por GF Courier (API): Grupo GF ya no toma sus pedidos. Elige GF Courier u otro courier.");
+    expect(state.rpcs).toEqual([]);
+    expect(state.gfCalls).toEqual([]);
+  });
+
+  it("guarda el acuerdo y crea la guía GF para ese día, con quien acordó y el motivo de Repro Lima", async () => {
+    const f = gfFacts();
+    state.facts = [f, { ...f, cases: [agreed()] }];
+    state.gfCreate.mockResolvedValue(created);
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: gfAction(f) }));
+    expect(state.rpcs[0]?.params).toMatchObject({ p_courier: "gf_courier", p_agreed_on: "2026-10-15", p_box_action: "salida_nueva_rearmar" });
+    expect(state.gfCalls).toEqual(["create"]);
+    expect(state.gfCreate).toHaveBeenCalledWith(
+      ORDER_ID,
+      { userId: "me", reason: "Repro Lima: acuerdo con la clienta para el jue 15/10", scheduledFor: "2026-10-15" },
+      expect.anything(),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.href).toBeUndefined();
+    expect(result.notice).toBe("Acuerdo guardado: sale el jue 15/10 con GF Courier. Guía GF9 creada para ese día.");
+    // Nunca programa en Grupo GF.
+    expect(state.materialize).not.toHaveBeenCalled();
+  });
+
+  it("sin corte ni noche anterior: hoy, pasadas las 12:00, también vale; un día pasado no", async () => {
+    vi.setSystemTime(new Date("2026-10-13T18:30:00Z")); // 13:30 en Lima
+    const f = gfFacts();
+    state.facts = [f, { ...f, cases: [agreed({ agreed_on: "2026-10-13" })] }];
+    state.respond = (q) => (isCaseRead(q) ? { data: caseRow({ claimed_until: "2026-10-13T18:38:00Z" }), error: null } : { data: null, error: null });
+    state.gfCreate.mockResolvedValue(created);
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", agreedOn: "2026-10-13", expectedBoxAction: gfAction(f) }));
+    expect(result.error).toBeUndefined();
+    expect(state.gfCreate.mock.calls[0]![1]).toMatchObject({ scheduledFor: "2026-10-13" });
+    state.rpcs = [];
+    state.factsCalls = 0;
+    const past = await registerReproCall(confirmInput({ courier: "gf_courier", agreedOn: "2026-10-12", operationId: CASE_ID, expectedBoxAction: gfAction(f) }));
+    expect(past.error).toBeTruthy();
+    expect(state.rpcs).toEqual([]);
+  });
+
+  it("con una guía GF sin asignar: primero la anula («Nuevo acuerdo en Repro Lima») y después crea la del día acordado", async () => {
+    const f = withGuide("pendiente");
+    state.facts = [f, { ...f, cases: [agreed()] }];
+    state.gfCancel.mockResolvedValue({ ok: true, trackingId: "GF1", cancelCost: 0 });
+    state.gfCreate.mockResolvedValue(created);
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: gfAction(f) }));
+    expect(state.gfCalls).toEqual(["cancel", "create"]);
+    expect(state.gfCancel).toHaveBeenCalledWith(ORDER_ID, "GF1", expect.objectContaining({ userId: "me", reason: "Nuevo acuerdo en Repro Lima" }), expect.anything());
+    expect(result.notice).toBe("Acuerdo guardado: sale el jue 15/10 con GF Courier. Guía GF9 creada para ese día. La guía GF1 quedó anulada.");
+  });
+
+  it("si GF no la anula, no crea la nueva; el acuerdo queda y el aviso dice lo que respondió GF, con la Mesa de ruta", async () => {
+    const f = withGuide("pendiente");
+    state.facts = [f, { ...f, cases: [agreed()] }];
+    state.gfCancel.mockResolvedValue({ ok: false, error: "La guía ya está preparada." });
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: gfAction(f) }));
+    expect(state.gfCalls).toEqual(["cancel"]);
+    expect(result.callId).toBe("call-1");
+    expect(result.notice).toBe("Acuerdo guardado: sale el jue 15/10 con GF Courier.");
+    expect(result.error).toBe("GF Courier no anuló la guía GF1: La guía ya está preparada. No se creó la guía nueva: revísalo en la Mesa de ruta del pedido.");
+    expect(result.href).toBe(`/dashboard/pedidos/repro-lima?ficha=${ORDER_ID}`);
+  });
+
+  it("si GF no crea la guía, el acuerdo NO se deshace: aviso con la respuesta de GF y la Mesa de ruta", async () => {
+    const f = gfFacts();
+    state.facts = [f, { ...f, cases: [agreed()] }];
+    state.gfCreate.mockResolvedValue({ ok: false, error: "Distrito no cubierto por GF (DISTRICT_NOT_COVERED)" });
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: gfAction(f) }));
+    expect(result.callId).toBe("call-1");
+    expect(result.notice).toBe("Acuerdo guardado: sale el jue 15/10 con GF Courier.");
+    expect(result.error).toBe("GF Courier no creó la guía del jue 15/10: Distrito no cubierto por GF (DISTRICT_NOT_COVERED). Créala desde la Mesa de ruta del pedido.");
+    expect(result.href).toContain(`ficha=${ORDER_ID}`);
+    // Ni se borra la llamada ni se toca el caso: solo la RPC escribió.
+    expect(state.rpcs.map((r) => r.name)).toEqual(["lima_repro_record"]);
+    expect(state.queries.filter((q) => q.table.startsWith("lima_repro") && q.op !== "select")).toEqual([]);
+  });
+
+  it("un error inesperado al crear tampoco deshace el acuerdo", async () => {
+    const f = gfFacts();
+    state.facts = [f, { ...f, cases: [agreed()] }];
+    state.gfCreate.mockRejectedValue(new Error("fetch failed"));
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: gfAction(f) }));
+    expect(result.callId).toBe("call-1");
+    expect(result.error).toContain("GF Courier no creó la guía del jue 15/10: fetch failed.");
+  });
+
+  it("con la guía GF ya asignada a un motorizado: ni anula ni crea; lo dice", async () => {
+    const f = withGuide("en_ruta");
+    state.facts = [f, { ...f, cases: [agreed()] }];
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: gfAction(f) }));
+    expect(state.gfCalls).toEqual([]);
+    expect(result.callId).toBe("call-1");
+    expect(result.error).toBe("GF Courier ya asignó la guía GF1 a un motorizado (en ruta): no se crea otra. Sale con esa si GF la reprograma; si GF la devuelve o la anula, se crea la siguiente.");
+  });
+
+  it("el mismo envío otra vez (duplicado) no reemplaza la guía que ya creó ese acuerdo", async () => {
+    const f = withGuide("pendiente", { created_at: "2026-10-13T13:00:05Z" });
+    state.facts = [f, { ...f, cases: [agreed()] }];
+    state.rpc = () => ({ data: { call_id: "call-1", duplicate: true }, error: null });
+    const result = await registerReproCall(confirmInput({ courier: "gf_courier", expectedBoxAction: gfAction(f) }));
+    expect(state.gfCalls).toEqual([]);
+    expect(result.notice).toBe("Acuerdo guardado: sale el jue 15/10 con GF Courier. La guía GF1 ya está creada para ese día.");
+  });
+
+  describe("«Agendar» y «Mover a…» de un acuerdo con GF Courier", () => {
+    const open = (over: Record<string, unknown> = {}) => agreed({ agreement_call_id: "call-0", decided_at: "2026-10-12T15:00:00Z", claimed_by: null, claimed_until: null, ...over });
+    const claimThenRecord = (name: string) => name === "lima_repro_claim"
+      ? { data: { case_id: CASE_ID, claimed: true, until: "2026-10-13T13:10:00Z" }, error: null }
+      : { data: { call_id: "call-1", duplicate: false }, error: null };
+    const move = () => moveReproAgreement({ orderId: ORDER_ID, day: "2026-10-16", channel: "llamada", operationId: OP_ID });
+
+    it("anula la guía del día anterior (sin asignar) y crea la del día nuevo", async () => {
+      const f = { ...withGuide("pendiente"), open: open() };
+      state.facts = [f, f, f, { ...f, cases: [agreed({ agreed_on: "2026-10-16" })] }];
+      state.rpc = claimThenRecord;
+      state.gfCancel.mockResolvedValue({ ok: true, trackingId: "GF1", cancelCost: 0 });
+      state.gfCreate.mockResolvedValue({ ...created, estimatedDeliveryDate: "2026-10-16" });
+      const result = await move();
+      expect(state.rpcs.map((r) => r.name)).toEqual(["lima_repro_claim", "lima_repro_record"]);
+      expect(state.rpcs[1]?.params).toMatchObject({ p_courier: "gf_courier", p_agreed_on: "2026-10-16" });
+      expect(state.gfCalls).toEqual(["cancel", "create"]);
+      expect(state.gfCreate.mock.calls[0]![1]).toMatchObject({ scheduledFor: "2026-10-16", reason: "Repro Lima: acuerdo con la clienta para el vie 16/10" });
+      expect(result.notice).toBe("Acuerdo guardado: sale el vie 16/10 con GF Courier. Guía GF9 creada para ese día. La guía GF1 quedó anulada.");
+    });
+
+    it("con la guía ya asignada a un motorizado no se mueve, y se dice por qué: ni candado ni llamada", async () => {
+      state.facts = [{ ...withGuide("en_ruta"), open: open() }];
+      const result = await move();
+      expect(result.error).toBe("No se movió: GF Courier ya asignó la guía GF1 a un motorizado (en ruta): no se crea otra. Sale con esa si GF la reprograma; si GF la devuelve o la anula, se crea la siguiente.");
+      expect(state.rpcs).toEqual([]);
+      expect(state.gfCalls).toEqual([]);
+    });
+
+    it("si GF no crea la del día nuevo, el día queda movido y el aviso lleva la Mesa de ruta", async () => {
+      const f = { ...gfFacts(), open: open() };
+      state.facts = [f, f, f, { ...f, cases: [agreed({ agreed_on: "2026-10-16" })] }];
+      state.rpc = claimThenRecord;
+      state.gfCreate.mockResolvedValue({ ok: false, error: "OUT_OF_STOCK" });
+      const result = await move();
+      expect(result.callId).toBe("call-1");
+      expect(result.error).toBe("GF Courier no creó la guía del vie 16/10: OUT_OF_STOCK. Créala desde la Mesa de ruta del pedido.");
+      expect(result.href).toBe(`/dashboard/pedidos/repro-lima?ficha=${ORDER_ID}`);
+    });
+
+    it("un acuerdo viejo con Grupo GF en una tienda que ya despacha por GF Courier se vuelve a acordar en «Atender»", async () => {
+      state.facts = [{ ...gfFacts(), open: open({ agreed_courier: "propio", box_action: "mantener" }) }];
+      const result = await move();
+      expect(result.error).toBe("Esta tienda despacha por GF Courier (API): Grupo GF ya no toma sus pedidos. Elige GF Courier u otro courier. Acuérdalo de nuevo en «Atender».");
+      expect(state.rpcs).toEqual([]);
+    });
+  });
+});
+
+describe("GF Courier en el acuerdo, en el código: anular antes de crear, y nada deshace la llamada", () => {
+  const src = readFileSync(resolve(process.cwd(), "app/dashboard/pedidos/repro-lima/actions.ts"), "utf8");
+  /** El cuerpo de una función, hasta la siguiente función del archivo. */
+  const fnOf = (signature: string) => {
+    const start = src.indexOf(signature);
+    expect(start, signature).toBeGreaterThanOrEqual(0);
+    const ends = [src.indexOf("\nasync function ", start + signature.length), src.indexOf("\nexport async function ", start + signature.length)].filter((i) => i > start);
+    return src.slice(start, ends.length ? Math.min(...ends) : undefined);
+  };
+  const gf = fnOf("async function gfGuideForAgreement(");
+
+  it("la guía GF: asignada no se toca, la de antes se anula y solo después se crea la del día acordado", () => {
+    const assigned = gf.indexOf('if (guidePlan.kind === "asignada")');
+    const cancel = gf.indexOf("await cancelGfGuideFor(");
+    const create = gf.indexOf("await createGfGuideFor(");
+    expect(assigned).toBeGreaterThan(-1);
+    expect(cancel).toBeGreaterThan(assigned);
+    expect(create).toBeGreaterThan(cancel);
+    expect(gf).toContain("{ userId: actor, reason: reproGfGuideReason(day), scheduledFor: day }");
+    expect(gf).toContain("reason: REPRO_GF_CANCEL_REASON");
+    // Si GF no anula, sale antes de crear.
+    const failedCancel = gf.indexOf("if (!res.ok) {");
+    expect(failedCancel).toBeGreaterThan(cancel);
+    expect(gf.slice(failedCancel, gf.indexOf("cancelled.push("))).toContain("return {");
+  });
+
+  it("nada de esto deshace la llamada: no escribe casos ni llamadas, y el error va con el aviso y la Mesa de ruta", () => {
+    expect(gf).not.toMatch(/\.(update|delete|insert|upsert)\(/);
+    expect(gf).not.toContain("lima_repro_");
+    expect(gf).toContain('const href = orderDrawerHref(f.orderId, "operar", { pathname: REPRO_LIMA_PATH });');
+    // Se llama desde `afterCall`, después de la RPC que guardó la llamada.
+    const record = src.indexOf('admin.rpc("lima_repro_record", {');
+    const after = src.indexOf("const next = await afterCall(admin, {");
+    expect(record).toBeGreaterThan(-1);
+    expect(after).toBeGreaterThan(record);
+    const afterCallFn = fnOf("async function afterCall(");
+    expect(afterCallFn).toContain('if (courier === "gf_courier") {');
+    expect(afterCallFn).toContain("await gfGuideForAgreement(admin, { facts: f, day, actor, decidedAt: c.decided_at, tail, programChanged: cleared })");
+  });
+
+  it("«Mover» rechaza la guía asignada antes de tomar el caso, y la tienda se vuelve a validar al guardar", () => {
+    const move = fnOf("export async function moveReproAgreement(");
+    const assigned = move.indexOf('if (guidePlan.kind === "asignada") return { error: `No se movió: ${gfGuideAssignedMessage(guidePlan.guideCode)}` };');
+    expect(assigned).toBeGreaterThan(-1);
+    expect(assigned).toBeLessThan(move.indexOf("const claim = await claimReproCase(input.orderId);"));
+    const record = src.slice(src.indexOf("async function recordCall("), src.indexOf("async function clearPrograms("));
+    expect(record).toContain("const storeProblem = reproCourierStoreProblem(courier, Boolean(f.gfCourierApi));");
+    expect(record.indexOf("reproCourierStoreProblem(")).toBeLessThan(record.indexOf('admin.rpc("lima_repro_record", {'));
   });
 });

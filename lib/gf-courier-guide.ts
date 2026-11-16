@@ -20,7 +20,7 @@ import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { categoryOf } from "@/lib/shipments";
+import { categoryOf, limaTodayKey } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { wooTerritorio } from "@/lib/woo-territorio";
 
@@ -36,13 +36,24 @@ export async function loadGfStore(admin: SupabaseClient, storeId: string) {
   return { enabled: Boolean(data.gf_courier_enabled), token: decryptOrNull(data.gf_courier_api_token_enc), webhookSecret: decryptOrNull(data.gf_courier_webhook_secret_enc) };
 }
 
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export async function createGfGuideFor(
   orderId: string,
-  /** `reason`: lo que dice el hecho `guide_registered`; la guía automática dice que lo es. */
-  ctx: { userId: string | null; reason?: string | null },
+  /**
+   * `reason`: lo que dice el hecho `guide_registered`; la guía automática dice que lo es.
+   * `scheduledFor` (YYYY-MM-DD de Lima): el día que se le pide a GF (`scheduled_date`). Manda sobre el «Programar
+   * envío» del pedido (`dispatch_scheduled_on`): Repro Lima crea la guía para el día acordado con la clienta
+   * (owner, 15-11-2026; MOM §9.5). Un día que ya pasó no se manda.
+   */
+  ctx: { userId: string | null; reason?: string | null; scheduledFor?: string | null },
   admin: SupabaseClient = createAdminSupabase(),
 ): Promise<GfGuideResult> {
   if (!env.gfCourierWriteEnabled()) return { ok: false, error: "GF Courier por API está apagado (GF_COURIER_WRITE_ENABLED)." };
+  const scheduledFor = ctx.scheduledFor?.trim() || null;
+  if (scheduledFor && (!DAY_RE.test(scheduledFor) || scheduledFor < limaTodayKey())) {
+    return { ok: false, error: "El día pedido para la guía de GF Courier no es válido o ya pasó." };
+  }
   const master = await admin.from("order_master").select(
     "store_id,order_id,order_name,customer_name,customer_phone,region,province,district,address,reference,latitude,longitude,order_total,dispatch_scheduled_on,shipping_mode",
   ).eq("order_id", orderId).maybeSingle();
@@ -67,7 +78,7 @@ export async function createGfGuideFor(
     externalId, customerName: row.customer_name, customerPhone: row.customer_phone, district: row.district,
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address, reference: row.reference,
     latitude: row.latitude, longitude: row.longitude, orderTotal: Number(row.order_total), advancePaid: advance,
-    scheduledFor: row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null,
+    scheduledFor: scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null),
     lines,
   });
   if (!built.ok) return { ok: false, error: built.reason };
@@ -113,7 +124,8 @@ export async function createGfGuideFor(
   await admin.from("order_events").insert({
     store_id: row.store_id, order_id: orderId, kind: "guide_registered", occurred_at: new Date().toISOString(), actor: ctx.userId,
     source: GF_COURIER, courier: GF_COURIER, guide_code: gf.tracking_id, ...(ctx.reason ? { reason: ctx.reason } : {}),
-    payload: { shipping_cost: gf.shipping_cost, estimated_delivery_date: gf.estimated_delivery_date, external_id: externalId, adopted },
+    payload: { shipping_cost: gf.shipping_cost, estimated_delivery_date: gf.estimated_delivery_date, external_id: externalId, adopted,
+      ...(built.input.scheduled_date ? { scheduled_date: built.input.scheduled_date } : {}) },
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   return { ok: true, trackingId: gf.tracking_id, shippingCost: gf.shipping_cost, estimatedDeliveryDate: gf.estimated_delivery_date, adopted };
