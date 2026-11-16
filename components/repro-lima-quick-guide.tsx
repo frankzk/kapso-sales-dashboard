@@ -17,9 +17,14 @@ import { createAliclikGuide, previewAliclikGuide, type AliclikPreview } from "@/
 import { createGfCourierGuide } from "@/app/dashboard/pedidos/gf-courier-actions";
 import { programDayLabel } from "@/lib/dispatch-day";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { defaultAliclikTransport } from "@/lib/repro-lima-blocks";
+import { defaultAliclikTransport, quickGuideToast } from "@/lib/repro-lima-blocks";
 
-type Feedback = { kind: "notice" | "error"; text: string };
+type Feedback = {
+  kind: "notice" | "error";
+  text: string;
+  /** El aviso flotante del éxito (`quickGuideToast`): la página lo repite donde se mira. */
+  toast?: { title: string; detail: string } | null;
+};
 type QuickRow = Pick<LimaPendingOrder, "orderId" | "orderName">;
 
 /** Mínimo de caracteres del motivo de una salida adicional en Lima (el mismo criterio que la ficha: una frase). */
@@ -89,7 +94,8 @@ function AliclikQuick({ row, size, onDone, onOpenFicha }: { row: QuickRow; size:
         return;
       }
       setOpen(false);
-      onDone({ kind: "notice", text: `${row.orderName}: ${("notice" in result && result.notice) || "guía creada en Aliclik."}` });
+      const notice = ("notice" in result && result.notice) || "guía creada en Aliclik.";
+      onDone({ kind: "notice", text: `${row.orderName}: ${notice}`, toast: quickGuideToast(row.orderName, "Aliclik", notice) });
     });
   }
 
@@ -190,7 +196,8 @@ function GfQuick({ row, size, onDone }: { row: QuickRow; size: "sm" | "md"; onDo
         return;
       }
       setOpen(false);
-      onDone({ kind: "notice", text: `${row.orderName}: ${"notice" in result && result.notice ? result.notice : "guía creada en GF Courier."}` });
+      const notice = "notice" in result && result.notice ? result.notice : "guía creada en GF Courier.";
+      onDone({ kind: "notice", text: `${row.orderName}: ${notice}`, toast: quickGuideToast(row.orderName, "GF Courier", notice) });
     });
   }
 
