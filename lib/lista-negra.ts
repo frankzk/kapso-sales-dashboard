@@ -33,6 +33,18 @@ import { prepayEntryRequirementOf, prepayPhoneLabel, type PrepayEntryRequirement
 // ── Lo que se manda a las tiendas ───────────────────────────────────────────
 
 /**
+ * ¿La lista AUTOMÁTICA frena este pedido? En Lima no (owner, 16-11-2026, MOM
+ * §41.12): un pedido de Lima se confirma y sale contra entrega aunque el
+ * celular esté en la automática —la devolución en Lima casi no cuesta—. Las
+ * altas a mano frenan igual en todas partes: son una decisión de una persona
+ * (un fraude, una clienta que avisó que no va a recibir). `coverage` es la del
+ * pedido (`order_master.coverage`, `order_coverage_for`). Pura.
+ */
+export function listaNegraAutoBrakes(coverage: string | null | undefined): boolean {
+  return coverage !== "lima";
+}
+
+/**
  * La lista que se manda a cada tienda: los celulares de la corrida vigente de
  * la automática (ya sin las excepciones de Kapta) MÁS los de las altas vivas a
  * mano, en 9 dígitos, sin repetidos y ordenados. `manualOnly`: cuántos van

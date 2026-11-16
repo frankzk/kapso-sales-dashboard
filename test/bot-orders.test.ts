@@ -1224,6 +1224,35 @@ describe("la Lista negra automática (MOM §41.11, 09-11-2026)", () => {
     expect(h.db.rpcCalls.some((c) => c.name === "pago_online_lookup")).toBe(false);
   });
 
+  it("en Lima no frena: crea el pedido contra entrega (owner, 16-11-2026, MOM §41.12)", async () => {
+    setup({ store: storeRow({ org_id: ORG }) });
+    h.db.rpc = (async (name: string, args: Record<string, unknown>) => {
+      h.db.rpcCalls.push({ name, args });
+      if (name === "pago_online_lookup") return { data: [{ listed: true, failed: 1, reason: "devuelto", orders: 1, requirement: "adelanto" }], error: null };
+      if (name === "order_coverage_for") return { data: "lima", error: null };
+      return { data: null, error: null };
+    }) as typeof h.db.rpc;
+    const res = await call(pedido({ phone: "+51 988 805 509" }));
+    expect(res.status).toBe(200);
+    const coverage = h.db.rpcCalls.find((c) => c.name === "order_coverage_for");
+    expect(coverage?.args).toMatchObject({ p_district: pedido().district, p_region: pedido().department });
+  });
+
+  it("fuera de Lima, o sin cobertura conocida, frena como siempre", async () => {
+    for (const answer of ["provincia_cod", null]) {
+      setup({ store: storeRow({ org_id: ORG }) });
+      h.db.rpc = (async (name: string, args: Record<string, unknown>) => {
+        h.db.rpcCalls.push({ name, args });
+        if (name === "pago_online_lookup") return { data: [{ listed: true, failed: 1, reason: "devuelto", orders: 1, requirement: "adelanto" }], error: null };
+        if (name === "order_coverage_for") return answer ? { data: answer, error: null } : { data: null, error: { message: "timeout" } };
+        return { data: null, error: null };
+      }) as typeof h.db.rpc;
+      const res = await call(pedido());
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ code: "prepay_required" });
+    }
+  });
+
   it("fuera de la lista, o si no se pudo leer (falla abierto): crea el pedido", async () => {
     setup({ store: storeRow({ org_id: ORG }) });
     h.db.rpc = (async (name: string, args: Record<string, unknown>) => {

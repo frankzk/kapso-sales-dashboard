@@ -122,6 +122,8 @@ import {
   dispatchDateError,
   dispatchDateLabel,
   dispatchLocationMissing,
+  DISPATCH_COURIER_LABEL,
+  isDispatchCourier,
 } from "@/lib/dispatch-date";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
@@ -2555,7 +2557,7 @@ async function ensureDispatchCoordinate(ctx: OrderContext, raw: string | null | 
  */
 export async function scheduleOrderDispatch(
   orderId: string,
-  input: { date: string; note?: string | null; coordinate?: string | null },
+  input: { date: string; note?: string | null; coordinate?: string | null; courier?: string | null },
 ): Promise<MasterActionState> {
   const perms = await getMasterPermissions();
   if (!perms.can("master.edit")) return { error: "Tu rol no permite programar envíos." };
@@ -2564,6 +2566,9 @@ export async function scheduleOrderDispatch(
   if (dateError) return { error: dateError };
   const note = input.note?.trim() || null;
   if (note && note.length > 500) return { error: "La nota es demasiado larga (máx. 500)." };
+  // El courier elegido (Repro Lima, 16-11-2026): opcional; uno desconocido no se guarda a ciegas.
+  const courier = input.courier ? (isDispatchCourier(input.courier) ? input.courier : undefined) : null;
+  if (courier === undefined) return { error: "Ese courier no se puede programar." };
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
@@ -2579,13 +2584,13 @@ export async function scheduleOrderDispatch(
   const admin = createAdminSupabase();
   const eventError = await recordEvent(admin, ctx, {
     kind: DISPATCH_DATE_SET,
-    reason: note ?? `Envío programado para el ${dispatchDateLabel(date)}.`,
-    payload: { date, ...(note ? { note } : {}) },
+    reason: note ?? `Envío programado para el ${dispatchDateLabel(date)}${courier ? ` con ${DISPATCH_COURIER_LABEL[courier]}` : ""}.`,
+    payload: { date, ...(note ? { note } : {}), ...(courier ? { courier } : {}) },
   });
   if (eventError) return { error: eventError };
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
-  return { notice: `Envío programado para el ${dispatchDateLabel(date)}.` };
+  return { notice: `Envío programado para el ${dispatchDateLabel(date)}${courier ? ` con ${DISPATCH_COURIER_LABEL[courier]}` : ""}.` };
 }
 
 /** Quita la fecha programada, con motivo: el historial dice por qué ya no vale. */

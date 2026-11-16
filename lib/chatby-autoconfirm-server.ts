@@ -57,9 +57,11 @@ import {
   chatbyOperationId,
   chatbyOrderSkip,
   chatbyReadOrder,
+  capturePosterior,
   evaluateChatbyConfirmation,
   guideCapLeft,
   limaDayStartIso,
+  posteriorMessages,
   type ChatbyAutoSettings,
   type ChatbyCandidate,
   type ChatbyCheckOutcome,
@@ -459,6 +461,10 @@ async function confirmPass(
       if (ctx.dry) continue;
       const evidence = heldEvidence;
       if (verdict.amountCents != null) evidence.amount_cents = verdict.amountCents;
+      // Una semana: qué escribió después de confirmar (POSTERIOR_CAPTURE_UNTIL).
+      if (verdict.reason === "mensaje_posterior" && capturePosterior()) {
+        evidence.posterior = posteriorMessages(conversation.messages, verdict.messageId);
+      }
       await holdForAdvisor(admin, key, item, { reason: verdict.reason, messageId: verdict.messageId, evidence, reads });
       // (0318) La dirección incompleta: Kapta le pide sola la dirección completa.
       if (verdict.reason === "direccion_incompleta" && item.outcome !== "error") {

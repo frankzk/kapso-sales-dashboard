@@ -39,7 +39,13 @@ begin
  insert into lead_calls(lead_id,store_id,vendedora,kind,next_followup_at,occurred_at)
  select id,store_id,b,'call',next_followup_at,now()-interval '1 hour' from leads where id=reserved;
  if (claim_manual_lead(a,reserved,'busqueda')->>'reason')<>'appointment' then raise exception 'manual take stole appointment'; end if;
+ -- 0351: the customer's reply keeps it with the advisor who booked it for 10 minutes, even expired.
  update leads set last_inbound_at=now()-interval '1 minute' where id=reserved;
+ if (claim_manual_lead(a,reserved,'busqueda')->>'reason')<>'appointment' then raise exception 'manual take stole a customer reply hold'; end if;
+ update leads set next_followup_at=now()-interval '3 hours' where id=reserved;
+ update lead_calls set next_followup_at=now()-interval '3 hours' where lead_id=reserved and vendedora=b;
+ if (claim_manual_lead(a,reserved,'busqueda')->>'reason')<>'appointment' then raise exception 'manual take stole an expired appointment reply hold'; end if;
+ update leads set last_inbound_at=now()-interval '11 minutes' where id=reserved;
  if not (claim_manual_lead(a,reserved,'busqueda')->>'ok')::boolean then raise exception 'released appointment stayed blocked'; end if;
  -- Two live reservations remain the atomic ceiling.
  perform claim_manual_lead(a,l,'venta_telefonica');

@@ -20,7 +20,7 @@ import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
 import { writeCourierGuide } from "@/lib/route-output-fill";
-import { categoryOf } from "@/lib/shipments";
+import { categoryOf, limaTodayKey } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { wooTerritorio } from "@/lib/woo-territorio";
 
@@ -36,8 +36,39 @@ export async function loadGfStore(admin: SupabaseClient, storeId: string) {
   return { enabled: Boolean(data.gf_courier_enabled), token: decryptOrNull(data.gf_courier_api_token_enc), webhookSecret: decryptOrNull(data.gf_courier_webhook_secret_enc) };
 }
 
-export async function createGfGuideFor(orderId: string, ctx: { userId: string | null }, admin: SupabaseClient = createAdminSupabase()): Promise<GfGuideResult> {
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Día acordado en Repro Lima con GF Courier (owner, 16-11-2026: «ella lo quiere para el 18»). Al guardar el acuerdo,
+ * Kapta quita la salida programada de Grupo GF; si la guía no se creó en ese momento, la Mesa de ruta (o la guía
+ * automática) la crea después para el día del acuerdo, no para el siguiente día de reparto. Solo un caso abierto, con
+ * GF Courier y un día que no pasó.
+ */
+export async function reproAgreedGfDay(admin: SupabaseClient, orderId: string): Promise<string | null> {
+  const today = limaTodayKey();
+  const { data } = await admin.from("lima_repro_cases").select("agreed_on,agreed_courier")
+    .eq("order_id", orderId).is("closed_at", null).eq("agreed_courier", "gf_courier").not("agreed_on", "is", null)
+    .order("agreed_on", { ascending: false }).limit(1);
+  const day = (data?.[0]?.agreed_on as string | undefined)?.slice(0, 10) ?? null;
+  return day && DAY_RE.test(day) && day >= today ? day : null;
+}
+
+export async function createGfGuideFor(
+  orderId: string,
+  /**
+   * `reason`: lo que dice el hecho `guide_registered`; la guía automática dice que lo es.
+   * `scheduledFor` (YYYY-MM-DD de Lima): el día que se le pide a GF (`scheduled_date`). Manda sobre el «Programar
+   * envío» del pedido (`dispatch_scheduled_on`): Repro Lima crea la guía para el día acordado con la clienta
+   * (owner, 15-11-2026; MOM §9.5). Un día que ya pasó no se manda.
+   */
+  ctx: { userId: string | null; reason?: string | null; scheduledFor?: string | null },
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<GfGuideResult> {
   if (!env.gfCourierWriteEnabled()) return { ok: false, error: "GF Courier por API está apagado (GF_COURIER_WRITE_ENABLED)." };
+  const scheduledFor = ctx.scheduledFor?.trim() || null;
+  if (scheduledFor && (!DAY_RE.test(scheduledFor) || scheduledFor < limaTodayKey())) {
+    return { ok: false, error: "El día pedido para la guía de GF Courier no es válido o ya pasó." };
+  }
   const master = await admin.from("order_master").select(
     "store_id,order_id,order_name,customer_name,customer_phone,region,province,district,address,reference,latitude,longitude,order_total,dispatch_scheduled_on,shipping_mode",
   ).eq("order_id", orderId).maybeSingle();
@@ -62,15 +93,24 @@ export async function createGfGuideFor(orderId: string, ctx: { userId: string | 
     externalId, customerName: row.customer_name, customerPhone: row.customer_phone, district: row.district,
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address, reference: row.reference,
     latitude: row.latitude, longitude: row.longitude, orderTotal: Number(row.order_total), advancePaid: advance,
-    scheduledFor: row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null,
+    scheduledFor: scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
+      ?? await reproAgreedGfDay(admin, orderId),
     lines,
   });
   if (!built.ok) return { ok: false, error: built.reason };
 
   const key = gfIdempotencyKey(orderId, externalId);
-  // Si ya hay una intención pendiente con esta misma clave (timeout anterior), se reintenta con ella.
+  // Si ya hay una intención con esta misma clave, se reintenta con ella: pendiente (timeout anterior) o fallida (GF la
+  // rechazó, p. ej. sin cobertura, y ya se corrigió). Un rechazo de GF no queda guardado en su idempotencia, así que la
+  // misma clave vuelve a evaluarse. Antes, un intento fallido bloqueaba el reintento con «creación en curso».
   const prior = await admin.from("gf_order_requests").select("id,status").eq("idempotency_key", key).maybeSingle();
-  let intentId = prior.data?.status === "pending" ? prior.data.id as string : null;
+  let intentId = prior.data && ["pending", "failed"].includes(prior.data.status) ? prior.data.id as string : null;
+  if (intentId && prior.data?.status === "failed") {
+    const reset = await admin.from("gf_order_requests").update({ status: "pending", request: built.input, http_status: null, error_code: null,
+      response: null, created_by: ctx.userId, updated_at: new Date().toISOString() }).eq("id", intentId).eq("status", "failed").select("id");
+    if (reset.error) return { ok: false, error: reset.error.code === "23505" ? "Ya hay una creación de guía GF en curso para este pedido." : reset.error.message };
+    if (!reset.data?.length) return { ok: false, error: "Ya hay una creación de guía GF en curso para este pedido." };
+  }
   if (!intentId) {
     const ins = await admin.from("gf_order_requests").insert({ store_id: row.store_id, order_id: orderId, external_id: externalId,
       idempotency_key: key, request: built.input, created_by: ctx.userId }).select("id").single();
@@ -107,8 +147,9 @@ export async function createGfGuideFor(orderId: string, ctx: { userId: string | 
   if ("error" in written) return { ok: false, error: `La guía se creó en GF (${gf.tracking_id}) pero no se pudo guardar: ${written.error}` };
   await admin.from("order_events").insert({
     store_id: row.store_id, order_id: orderId, kind: "guide_registered", occurred_at: new Date().toISOString(), actor: ctx.userId,
-    source: GF_COURIER, courier: GF_COURIER, guide_code: gf.tracking_id,
-    payload: { shipping_cost: gf.shipping_cost, estimated_delivery_date: gf.estimated_delivery_date, external_id: externalId, adopted },
+    source: GF_COURIER, courier: GF_COURIER, guide_code: gf.tracking_id, ...(ctx.reason ? { reason: ctx.reason } : {}),
+    payload: { shipping_cost: gf.shipping_cost, estimated_delivery_date: gf.estimated_delivery_date, external_id: externalId, adopted,
+      ...(built.input.scheduled_date ? { scheduled_date: built.input.scheduled_date } : {}) },
   });
   await recomputeOrderMasterSafe(admin, [orderId]);
   return { ok: true, trackingId: gf.tracking_id, shippingCost: gf.shipping_cost, estimatedDeliveryDate: gf.estimated_delivery_date, adopted };

@@ -39,6 +39,10 @@ import { latestGeocodeLimaRun, runGeocodeLimaMeasure } from "@/lib/geocode-googl
 import { loadPrepaySettings, runPrepayAutoRule } from "@/lib/prepay-list-server";
 import { PREPAY_LIST_PATH, PREPAY_MODE_LABEL, isPrepayMode, type PrepaySimulationSummary } from "@/lib/prepay-list";
 import { APPROX_MODE_LABEL, isApproxMode } from "@/lib/geocode-approx";
+import { GF_AUTO_MODE_LABEL, gfAutoActivoBlocker, gfAutoModeFrom } from "@/lib/gf-auto-guide";
+import { GF_AUTO_SETTINGS, loadGfReadyStores } from "@/lib/gf-auto-guide-server";
+import { LIMA_COURIER_AUTO_MODE_LABEL, limaCourierAutoActivoBlocker, limaCourierAutoModeFrom, limaCourierRunSummary } from "@/lib/lima-courier-auto";
+import { LIMA_COURIER_AUTO_SETTINGS, runLimaCourierAuto } from "@/lib/lima-courier-auto-server";
 import {
   acceptPagoOnlineRun,
   emptyPagoOnlineStore,
@@ -62,6 +66,8 @@ import {
   CHATBY_APPROX_KEY,
   CHATBY_ASK_KEY,
   CHATBY_HISTORY_KEY,
+  GF_AUTO_GUIDE_KEY,
+  LIMA_COURIER_AUTO_KEY,
   PREPAY_MODE_EVENT,
   PAGO_ONLINE_ACCEPT_EVENT,
   PAGO_ONLINE_EMPTY_EVENT,
@@ -777,4 +783,126 @@ export async function setChatbyHistoryMode(orgId: string, mode: string): Promise
   });
   revalidatePath(PANEL_PATH);
   return { notice: warn ?? `Guía automática para clientas con entregas: ${APPROX_MODE_LABEL[mode]}.` };
+}
+
+// ── «Guía GF automática» (0345, MOM §29.17 y §40) ──
+
+const MISSING_0345 = "Falta la migración 0345 en la base de datos.";
+
+/**
+ * Apagado / Simulación / Activo de la guía GF automática, por organización.
+ * Solo escribe `gf_auto_guide_settings.mode`; sin fila es Apagado y se crea
+ * aquí (no tiene topes ni ventanas que decidir). Activo pide la confirmación en
+ * la página y, como todo automático que depende de otra función (§40), no se
+ * deja elegir sin la llave del servidor ni sin una tienda con GF Courier por API
+ * y su token. Apagar y Simulación se pueden siempre.
+ */
+export async function setGfAutoGuideMode(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isApproxMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const { data: current, error: readError } = await g.admin.from(GF_AUTO_SETTINGS).select("mode").eq("org_id", orgId).maybeSingle();
+  if (readError) {
+    if (/gf_auto_guide_settings|PGRST205|42P01/.test(`${readError.code ?? ""} ${readError.message ?? ""}`)) return { error: MISSING_0345 };
+    return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  }
+  const previous = gfAutoModeFrom((current as { mode?: string } | null)?.mode);
+  if (previous === mode) return { notice: "Ya estaba así." };
+  if (mode === "activo") {
+    const ready = await loadGfReadyStores(g.admin, { orgId });
+    if (ready.error) return { error: "No se pudieron leer las tiendas con GF Courier. Intenta de nuevo." };
+    const blocker = gfAutoActivoBlocker({ writeEnabled: env.gfCourierWriteEnabled(), readyStores: ready.stores.length });
+    if (blocker) return { error: `No se puede poner en Activo. ${blocker}` };
+  }
+  const { error } = await g.admin
+    .from(GF_AUTO_SETTINGS)
+    .upsert({ org_id: orgId, mode, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) {
+    if (/gf_auto_guide_settings/.test(error.message ?? "")) return { error: MISSING_0345 };
+    return { error: "No se pudo guardar. Intenta de nuevo." };
+  }
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: GF_AUTO_GUIDE_KEY,
+    previous,
+    next: mode,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  const tail =
+    mode === "activo"
+      ? " Revisa cada 10 minutos: lo que entre a «Por generar rótulo» toma su guía en minutos."
+      : mode === "simulacion"
+        ? " En la próxima pasada de la mañana dice qué guía habría creado, sin crear nada."
+        : "";
+  return { notice: warn ?? `Guía GF automática: ${GF_AUTO_MODE_LABEL[mode]}.${tail}` };
+}
+
+const MISSING_0349 = "Falta la migración 0349 en la base de datos.";
+
+/**
+ * «Correr ahora» de la guía Aliclik y Swayp del día programado (owner,
+ * 16-11-2026: «las puedes crear ahora mismo?»): la misma pasada del cron, con
+ * las mismas reglas y la hora de ahora, solo para esta organización. En
+ * Simulación solo dice qué habría creado; en Activo, crea.
+ */
+export async function runLimaCourierAutoNow(orgId: string): Promise<AutomationActionResult> {
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const { data: current, error: readError } = await g.admin.from(LIMA_COURIER_AUTO_SETTINGS).select("mode").eq("org_id", orgId).maybeSingle();
+  if (readError) return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  const mode = limaCourierAutoModeFrom((current as { mode?: string } | null)?.mode);
+  if (mode === "apagado") return { error: "Está Apagada: ponla en Simulación o en Activo antes de correrla." };
+  const report = await runLimaCourierAuto(g.admin, { orgId });
+  revalidatePath(PANEL_PATH);
+  if (report.skipped === "fuera_de_horario") return { error: "Fuera de horario: la pasada crea de 8:00 a 21:59 de Lima." };
+  const summary = limaCourierRunSummary(report.items);
+  if (report.error) return { error: `${summary} Avisos: ${report.error}` };
+  return { notice: summary };
+}
+
+/**
+ * «Guía Aliclik y Swayp del día programado» (0349, owner 16-11-2026; MOM §9.5).
+ * Activo pide la escritura de Aliclik o la integración de Swayp en el servidor
+ * (`limaCourierAutoActivoBlocker`).
+ */
+export async function setLimaCourierAutoMode(orgId: string, mode: string): Promise<AutomationActionResult> {
+  if (!isApproxMode(mode)) return { error: "Esa posición no existe." };
+  const g = await gate(orgId);
+  if ("error" in g) return { error: g.error };
+  const { data: current, error: readError } = await g.admin.from(LIMA_COURIER_AUTO_SETTINGS).select("mode").eq("org_id", orgId).maybeSingle();
+  if (readError) {
+    if (/lima_courier_auto_settings|PGRST205|42P01/.test(`${readError.code ?? ""} ${readError.message ?? ""}`)) return { error: MISSING_0349 };
+    return { error: "No se pudo leer la posición actual. Intenta de nuevo." };
+  }
+  const previous = limaCourierAutoModeFrom((current as { mode?: string } | null)?.mode);
+  if (previous === mode) return { notice: "Ya estaba así." };
+  if (mode === "activo") {
+    const blocker = limaCourierAutoActivoBlocker({ aliclikWrite: env.aliclikWriteEnabled(), swaypEnabled: env.swaypEnabled() });
+    if (blocker) return { error: `No se puede poner en Activo. ${blocker}` };
+  }
+  const { error } = await g.admin
+    .from(LIMA_COURIER_AUTO_SETTINGS)
+    .upsert({ org_id: orgId, mode, updated_by: g.actor, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+  if (error) {
+    if (/lima_courier_auto_settings/.test(error.message ?? "")) return { error: MISSING_0349 };
+    return { error: "No se pudo guardar. Intenta de nuevo." };
+  }
+  const warn = await recordSwitch(g.admin, {
+    org_id: orgId,
+    store_id: null,
+    automation: LIMA_COURIER_AUTO_KEY,
+    previous,
+    next: mode,
+    actor: g.actor,
+  });
+  revalidatePath(PANEL_PATH);
+  const tail =
+    mode === "activo"
+      ? " Pasa a las 8:00, 10:00 y 12:00 (lo de hoy) y a las 15:00, 18:00, 20:00 y 21:00 (lo de mañana) de Lima."
+      : mode === "simulacion"
+        ? " En la próxima pasada dice qué guía habría creado, sin crear nada."
+        : "";
+  return { notice: warn ?? `Guía Aliclik y Swayp del día programado: ${LIMA_COURIER_AUTO_MODE_LABEL[mode]}.${tail}` };
 }

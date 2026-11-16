@@ -37,6 +37,7 @@ import { gfApiBase, gfCourier } from "@/lib/gf-courier";
 import { loadGfStore } from "@/lib/gf-courier-guide";
 import { compareGfCatalog } from "@/lib/gf-courier-catalog";
 import { loadGfProducts, loadStoreCatalogForGf } from "@/lib/gf-courier-catalog-server";
+import { describeGfCatalogSync, syncGfCatalog } from "@/lib/gf-catalog-sync-server";
 import { listProducts } from "@/lib/aliclik";
 import { loadSkuCatalogSource, syncAliclikCatalog } from "@/lib/aliclik-catalog";
 import { catalogSkusPhrase } from "@/lib/catalog-source";
@@ -567,9 +568,11 @@ export async function testGfCourierConnection(_prev: SettingsState, formData: Fo
   const me = await gfCourier.me({ apiToken: store.token });
   if (!me.ok) return { error: `GF Courier respondió: ${me.error.message}` };
   const missing = ["shipments:write", "shipments:read", "catalogue:read", "webhooks:manage"].filter((p) => !me.data.permissions.includes(p));
-  return missing.length
-    ? { error: `El token es válido (${me.data.business_name ?? me.data.merchant_id}) pero le faltan permisos: ${missing.join(", ")}. Pide a GF una credencial con ellos.` }
-    : { notice: `Conexión correcta con GF Courier · comercio ${me.data.business_name ?? me.data.merchant_id}.` };
+  if (missing.length) return { error: `El token es válido (${me.data.business_name ?? me.data.merchant_id}) pero le faltan permisos: ${missing.join(", ")}. Pide a GF una credencial con ellos.` };
+  // Sin catalogue:write todo funciona, pero el catálogo no se sincroniza solo (MOM §29.17, 16-11-2026).
+  if (!me.data.permissions.includes("catalogue:write"))
+    return { error: `Conexión correcta con GF Courier · comercio ${me.data.business_name ?? me.data.merchant_id}, pero al token le falta catalogue:write: el catálogo no se sincroniza solo. En GF → Comercios → ficha → Conexión, crea una credencial con «Sincronizar su catálogo desde su sistema» y pégala aquí.` };
+  return { notice: `Conexión correcta con GF Courier · comercio ${me.data.business_name ?? me.data.merchant_id}. El catálogo se sincroniza cada hora.` };
 }
 
 /**
@@ -594,6 +597,19 @@ export async function checkGfCatalog(_prev: SettingsState, formData: FormData): 
     local.problems.length ? "El catálogo de la tienda se leyó en parte." : "",
   ].filter(Boolean).join(" ");
   return c.missingInGf.length || c.outOfStock.length ? { error: parts } : { notice: parts };
+}
+
+/**
+ * GF Courier (MOM §29.17, owner 16-11-2026): «Sincronizar ahora». Sube a GF lo que falta o cambió de nombre y agota lo
+ * que la tienda dejó de vender; lo mismo que hace el cron cada hora. Requiere catalogue:write en el token.
+ */
+export async function syncGfCatalogNow(_prev: SettingsState, formData: FormData): Promise<SettingsState> {
+  const storeId = String(formData.get("store_id") ?? "");
+  const ctx = await requireStoreAdmin(storeId);
+  if (!ctx) return { error: "Sin permiso." };
+  const report = await syncGfCatalog(ctx.admin, storeId);
+  const text = describeGfCatalogSync(report);
+  return report.ok ? { notice: text } : { error: text };
 }
 
 /**

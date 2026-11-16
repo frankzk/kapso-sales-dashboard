@@ -76,7 +76,7 @@ describe("quién entra (§9.5, D11, E32, E36)", () => {
     const gate = body(access, "export async function requireReproLima(");
     expect(gate).toContain('if (!user) redirect("/login");');
     expect(gate).toContain('permissions.can("repro_lima.manage")');
-    expect(gate).toContain("await getAccessibleStores()");
+    expect(gate).toContain("Promise.all([getMasterPermissions(), getAccessibleStores()])");
     expect(access).toContain('"Repro Lima es del equipo de la tienda, que llama a los clientes (rol «Asesora»). Pide ese rol en Equipo."');
     expect(access).toContain('"No tienes tiendas asignadas. Pide acceso en Equipo."');
     // Cada caso se mira contra la tienda antes de tocarlo.
@@ -547,8 +547,11 @@ describe("la migración 0256 y «Todos» (§9.5, 14-10-2026)", () => {
     const board = read("components/repro-lima-board.tsx");
     const todos = read("components/repro-lima-todos.tsx");
     const pure = read("lib/repro-lima-todos.ts");
+    // La tarjeta «Todos · por entregar» la reemplazan los tres bloques (15-11-2026): el MOM lo dice.
+    expect(block).toContain("la tarjeta «Todos · por entregar» la reemplazan desde el 15-11-2026 los tres bloques de «Repro Lima por las tareas del equipo»");
+    expect(board).not.toContain('label="Todos · por entregar"');
+    expect(board).toContain("<ReproLimaBlocks");
     const pairs: Array<[mom: string, src: string, code: string]> = [
-      ["«Todos · por entregar»", board, 'label="Todos · por entregar"'],
       ["«Todavía por entregar»", todos, 'title="Todavía por entregar"'],
       ["«Ya entregado, anulado o devuelto: falta cerrar»", todos, 'title="Ya entregado, anulado o devuelto: falta cerrar"'],
       ["«En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar».»", todos, 'note="En Lima, lo que no se entrega vuelve a «Por reprogramar Lima»; solo la entrega lo pasa a «Por cerrar»."'],

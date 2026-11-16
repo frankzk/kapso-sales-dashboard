@@ -1,19 +1,25 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+// La lista de Repro Lima (MOM §9.5): una sola, con el flujo y la Agenda de
+// arriba como filtros (owner, 15-11-2026). Cada fila dice de un vistazo el pedido, la
+// clienta (teléfono y dirección), qué pasa (la etapa, el courier y su último
+// estado, el fallo, el acuerdo y la última nota), el próximo paso, la fecha
+// agendada y «Agendar» y «Atender».
+import { useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/components/ui";
 import { approveAliclikRetry, dismissAliclikRetry } from "@/app/dashboard/pedidos/repro-lima/retry-actions";
 import { Badge, CHECKBOX, ChoiceChip, OpsButton, choiceChipClass } from "@/components/ops-ui";
 import { OrderLink } from "@/components/order-link";
 import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "@/components/repro-lima-panel";
+import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
-import { reproCourierName } from "@/lib/repro-lima";
+import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
-import { PLAN_STEP_LABEL, type PlanItem } from "@/lib/dispatch-plan";
-import { soles, telHref } from "@/lib/rider-contact";
+import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
+import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
+import { telHref } from "@/lib/rider-contact";
 import { loadPriorOrderCounts } from "@/app/dashboard/pedidos/repro-lima/prior-counts-actions";
 import { priorCountsLabel, type PriorCounts } from "@/lib/customer-prior-counts";
 
@@ -66,33 +72,87 @@ export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
   );
 }
 
-function PendingContext({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
-  if (repro) return <FailureLine row={repro} />;
-  const group = pendingGroup(row, today);
-  return <><p className="font-medium text-ink-700">{group.label}</p><p className="mt-1 text-xs text-ink-500">{group.detail}</p></>;
+/**
+ * «Qué pasa»: el courier con su último estado, el fallo o la situación, el
+ * acuerdo y la caja (las chapas de Repro Lima) y la nota de la última llamada.
+ * La etapa va debajo del código (`StageBadges`).
+ */
+/** La etapa del Master y su subetapa: debajo del código del pedido (owner, 16-11-2026). */
+function StageBadges({ row }: { row: LimaPendingOrder }) {
+  return <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>;
+}
+
+function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
+  const courier = courierNowText(row);
+  return (
+    <div className="space-y-1.5">
+      {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}
+      {repro ? <FailureLine row={repro} /> : <p className="text-[13px] leading-5 text-ink-600">{pendingGroup(row, today).label}</p>}
+      {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
+      {repro?.lastCall?.note && <p className="break-words text-xs leading-5 text-ink-500">Última nota: {repro.lastCall.note}</p>}
+    </div>
+  );
+}
+
+function days(n: number): string {
+  return `${n.toLocaleString("es-PE")} ${n === 1 ? "día" : "días"}`;
 }
 
 /**
- * «Sale a reparto» (§29.16): el día que sale con Grupo GF y lo que le falta,
- * dicho con palabras: «Sale sáb 07/11 · En caja de Jhon», «… · Sin armar».
+ * «Próximo paso»: un trabado (§9.6) lo dice con su regla, su responsable y sus
+ * días; si no, lo que toca por su tarea, su día o su courier. Un reintento por
+ * Aliclik lleva aquí «Aprobar».
  */
-function PlanBadge({ item, planDay }: { item: PlanItem; planDay: string }) {
-  const done = item.step === "en_caja";
-  const where = item.riderName ? ` · caja de ${item.riderName}` : "";
-  const status = done ? (item.pickedUp ? "recibido" : item.officeChecked ? "cotejado" : "en caja") : PLAN_STEP_LABEL[item.step].label.toLowerCase();
-  const office = item.awaitingOffice ? " · por recibir en oficina" : "";
-  const late = item.overdueSince ? ` · debía salir ${programDayLabel(item.overdueSince)}` : "";
-  return <Badge tone={done ? "ok" : "warn"} wrap title={PLAN_STEP_LABEL[item.step].hint}>{`Sale ${programDayLabel(planDay)} · ${status}${where}${office}${late}`}</Badge>;
-}
-
-function PendingStage({ row, repro, today, plan, planDay }: { row: LimaPendingOrder; repro?: ReproRow; today: string; plan?: PlanItem; planDay?: string }) {
+function NextStep({ row, repro, cls, stuck, today, now }: { row: LimaPendingOrder; repro?: ReproRow; cls: LimaRowClass; stuck?: LimaStuckItem; today: string; now?: Date }) {
+  const rule = stuck ? limaStuckRule(stuck.reason) : null;
   return (
     <div className="space-y-1">
-      <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>
-      {plan && planDay && <div><PlanBadge item={plan} planDay={planDay} /></div>}
+      {stuck && rule ? (
+        <>
+          <div className="flex flex-wrap items-center gap-1">
+            <Badge tone="warn" wrap>{`Trabado · ${days(stuck.daysStuck)}`}</Badge>
+            <Badge tone={STUCK_OWNER_TONE[stuck.owner]}>{LIMA_STUCK_OWNER_LABEL[stuck.owner]}</Badge>
+          </div>
+          <p className="text-sm font-medium leading-5 text-ink-900">{rule.label}</p>
+          {stuck.detail && <p className="break-words text-xs text-ink-500">{stuck.detail}</p>}
+          <p className="text-[13px] leading-5 text-ink-700">{rule.action}</p>
+        </>
+      ) : (
+        // La llamada pedida cuya hora ya llegó va en rojo (owner, 15-11-2026).
+        <p className={cn("text-sm leading-5", cls.task === "llamar_despues" && callDue(repro, now ?? new Date()) ? "font-medium text-warn-fg" : "text-ink-900")}>{limaNextStep(row, repro, cls, today, now)}</p>
+      )}
       {repro?.retryChain && <RetryChainNote orderId={row.orderId} chain={repro.retryChain} />}
-      {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
-      {!repro && row.programmedFor && <Badge tone={row.programmedFor < today ? "warn" : "info"} wrap>{`Programado ${programDayLabel(row.programmedFor)}${row.programmedFor < today ? " · vencido" : ""}`}</Badge>}
+    </div>
+  );
+}
+
+/** «Fecha agendada»: el día de la Agenda y de dónde sale; con el courier y sin día por delante, la fecha de su ruta. */
+function AgendaCell({ row, cls, repro, today }: { row: LimaPendingOrder; cls: LimaRowClass; repro?: ReproRow; today: string }) {
+  // Ruta vencida sin reporte (owner, 15-11-2026): el día en que salió, como un no entregado.
+  if (cls.noReport) {
+    return (
+      <div>
+        <p className="whitespace-nowrap text-sm font-medium tabular-nums text-warn-fg">{cls.routeDay ? `Salió ${programDayLabel(cls.routeDay)}` : "Salió a ruta"}</p>
+        <p className="whitespace-nowrap text-xs text-ink-500">Sin reporte</p>
+      </div>
+    );
+  }
+  // Con el courier y sin día por delante: la fecha de la ruta del courier (owner, 15-11-2026).
+  const route = !cls.agenda ? courierRouteText(row, cls, today) : null;
+  if (route) {
+    return (
+      <div>
+        <p className={cn("whitespace-nowrap text-sm font-medium tabular-nums", route.overdue ? "text-warn-fg" : "text-ink-900")}>{route.day}</p>
+        <p className="whitespace-nowrap text-xs text-ink-500">{route.detail}</p>
+      </div>
+    );
+  }
+  const overdue = Boolean(cls.agendaDay && cls.agendaDay < today);
+  const origin = cls.agendaOrigin;
+  return (
+    <div>
+      <p className={cn("text-sm font-medium tabular-nums", overdue ? "text-warn-fg" : cls.agendaDay ? "text-ink-900" : "text-ink-500")}>{agendaDayText(cls.agendaDay, today)}</p>
+      {origin && <p className="text-xs text-ink-500">{agendaOriginLine(origin, row, repro?.agreement?.courierName)}</p>}
     </div>
   );
 }
@@ -191,14 +251,17 @@ function PendingAddress({ row }: { row: LimaPendingOrder }) {
 }
 
 /**
- * Elegir qué reintentos de Aliclik aprobar (owner, 06-11-2026): una casilla en
- * cada fila que se puede aprobar y, arriba, la de todas las listas.
+ * Elegir varios: qué reintentos de Aliclik aprobar (owner, 06-11-2026) o, en
+ * las demás listas, qué pedidos «Mover a…» otro día (owner, 15-11-2026). Una
+ * casilla en cada fila que se puede elegir y, arriba, la de todas.
  */
 export interface LimaRowSelection {
   selectable: (row: LimaPendingOrder) => boolean;
   selected: ReadonlySet<string>;
   onToggle: (orderId: string) => void;
   onToggleAll: (orderIds: string[], on: boolean) => void;
+  /** Para qué se elige: «aprobar» o «mover». */
+  purpose?: "aprobar" | "mover";
 }
 
 function SelectBox({ row, selection }: { row: LimaPendingOrder; selection: LimaRowSelection }) {
@@ -209,9 +272,17 @@ function SelectBox({ row, selection }: { row: LimaPendingOrder; selection: LimaR
       className={cn(CHECKBOX, "pointer-coarse:size-5")}
       checked={selection.selected.has(row.orderId)}
       onChange={() => selection.onToggle(row.orderId)}
-      aria-label={`Elegir ${row.orderName} para aprobar`}
+      aria-label={`Elegir ${row.orderName} para ${selection.purpose === "mover" ? "programarlo" : "aprobar"}`}
     />
   );
+}
+
+function allLabel(selection: LimaRowSelection, count: number): string {
+  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden programar` : `Elegir los ${count} listos`;
+}
+
+function allAria(selection: LimaRowSelection, count: number): string {
+  return selection.purpose === "mover" ? `Elegir los ${count} que se pueden programar` : `Elegir los ${count} listos para aprobar`;
 }
 
 /**
@@ -253,18 +324,25 @@ function PriorCountsTag({ counts }: { counts: PriorCounts | undefined }) {
   );
 }
 
-/** Atender siempre abre la gestión. El código abre la ficha del pedido. */
-export function LimaPendingList({ rows, reproRows, today, renderActions, emptyText, selection, plan, planDay }: {
+/**
+ * La única lista. «Atender» siempre abre la gestión y el código, la ficha del
+ * pedido. Sin `classes` se clasifica aquí (la pantalla las pasa ya hechas).
+ */
+export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, renderActions, emptyText, selection }: {
   rows: readonly LimaPendingOrder[]; reproRows: readonly ReproRow[]; today: string;
+  /** La hora de Lima para «Llamar hoy 15:00». */
+  now?: Date;
+  /** El paso, el día y el courier de cada fila (`classifyLimaRows`). */
+  classes?: ReadonlyMap<string, LimaRowClass>;
+  /** Los trabados del equipo (§9.6), por pedido. */
+  stuck?: ReadonlyMap<string, LimaStuckItem>;
   renderActions: (row: LimaPendingOrder, compact: boolean) => ReactNode;
   emptyText?: string;
   selection?: LimaRowSelection;
-  /** «Sale a reparto»: lo que sale ese día y lo que le falta, por pedido. */
-  plan?: ReadonlyMap<string, PlanItem>;
-  planDay?: string;
 }) {
   const [limit, setLimit] = useState(100);
-  const cases = new Map(reproRows.map((r) => [r.orderId, r]));
+  const cases = useMemo(() => new Map(reproRows.map((r) => [r.orderId, r])), [reproRows]);
+  const own = useMemo(() => classes ?? classifyLimaRows(rows, reproRows, today), [classes, rows, reproRows, today]);
   const visible = rows.slice(0, limit);
   const priors = usePriorCounts(visible.map((row) => row.orderId));
   const action = (row: LimaPendingOrder, compact: boolean) => renderActions(row, compact);
@@ -275,9 +353,9 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
   return (
     <>
       <div className="hidden border-t border-line xl:block">
-        <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-white [&_th]:shadow-[inset_0_-1px_0_var(--color-line)]">
-          <colgroup>{selection && <col className="w-10" />}<col className="w-[10.5rem]" /><col /><col /><col /><col className="w-[8.5rem]" /><col className="w-[10rem]" /></colgroup>
-          <thead><tr className="text-left text-xs font-semibold text-ink-600">{selection && (
+        <table className="w-full table-fixed border-collapse text-sm [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-wash [&_th]:shadow-[inset_0_-1px_0_var(--color-line),inset_0_1px_0_var(--color-line)]">
+          <colgroup>{selection && <col className="w-10" />}<col className="w-[10rem]" /><col className="w-[15%]" /><col /><col className="w-[8.5rem]" /><col className="w-[22%]" /><col className="w-[9rem]" /></colgroup>
+          <thead><tr className="text-left text-xs font-semibold text-ink-500">{selection && (
             <th className="py-2.5 pl-4 pr-0">
               {selectableIds.length > 0 && (
                 <input
@@ -286,22 +364,23 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
                   checked={allSelected}
                   ref={(el) => { if (el) el.indeterminate = someSelected; }}
                   onChange={() => selection.onToggleAll(selectableIds, !allSelected)}
-                  aria-label={allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos para aprobar`}
-                  title={allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos`}
+                  aria-label={allSelected ? "Quitar todos" : allAria(selection, selectableIds.length)}
+                  title={allSelected ? "Quitar todos" : allLabel(selection, selectableIds.length)}
                 />
               )}
             </th>
-          )}<th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Gestión pendiente</th><th className="px-3 py-2.5">Estado y subetapa</th><th className="px-3 py-2.5 text-right">Venta</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
+          )}<th className="px-4 py-2.5">Pedido</th><th className="px-3 py-2.5">Cliente</th><th className="px-3 py-2.5">Qué pasa</th><th className="px-3 py-2.5">Fecha agendada</th><th className="px-3 py-2.5">Próximo paso</th><th className="px-4 py-2.5"><span className="sr-only">Acciones</span></th></tr></thead>
           <tbody>{visible.map((row) => {
             const repro = cases.get(row.orderId);
-            return <tr key={row.orderId} className={cn("border-b border-line align-top hover:bg-wash", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
-              {selection && <td className="py-3 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
-              <td className="px-4 py-3"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><p className="truncate text-xs text-ink-500">{row.storeName}</p><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
-              <td className="px-3 py-3"><p className="truncate text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-xs tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
-              <td className="px-3 py-3"><PendingContext row={row} repro={repro} today={today} /></td>
-              <td className="px-3 py-3"><PendingStage row={row} repro={repro} today={today} plan={plan?.get(row.orderId)} planDay={planDay} /></td>
-              <td className="px-3 py-3 text-right"><p className="font-semibold tabular-nums text-ink-900">{soles(row.orderTotal)}</p>{row.courier && <p className="text-xs text-ink-500">{`${reproCourierName(row.courier)}${row.courierDetail ? ` · ${row.courierDetail}` : ""}`}</p>}</td>
-              <td className="px-4 py-3"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
+            const cls = own.get(row.orderId);
+            return <tr key={row.orderId} className={cn("border-b border-line align-top transition-colors hover:bg-wash/70", selection?.selected.has(row.orderId) && "bg-brand-50/60")}>
+              {selection && <td className="py-4 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
+              <td className="space-y-1 px-4 py-4"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><StageBadges row={row} /><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
+              <td className="space-y-0.5 px-3 py-4"><p className="truncate font-medium text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-[13px] tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
+              <td className="px-3 py-4"><WhatHappens row={row} repro={repro} today={today} /></td>
+              <td className="px-3 py-4">{cls && <AgendaCell row={row} cls={cls} repro={repro} today={today} />}</td>
+              <td className="px-3 py-4">{cls && <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />}</td>
+              <td className="px-4 py-4"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
             </tr>;
           })}</tbody>
         </table>
@@ -315,15 +394,22 @@ export function LimaPendingList({ rows, reproRows, today, renderActions, emptyTe
             ref={(el) => { if (el) el.indeterminate = someSelected; }}
             onChange={() => selection.onToggleAll(selectableIds, !allSelected)}
           />
-          {allSelected ? "Quitar todos" : `Elegir los ${selectableIds.length} listos`}
+          {allSelected ? "Quitar todos" : allLabel(selection, selectableIds.length)}
         </label>
       )}
       <ul className="divide-y divide-line border-t border-line xl:hidden">{visible.map((row) => {
         const repro = cases.get(row.orderId);
+        const cls = own.get(row.orderId);
         return <li key={row.orderId} className="space-y-2 px-4 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span><span className="text-xs text-ink-500">{row.storeName}</span></div>
-          <PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName} · {soles(row.orderTotal)}</p><PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} />
-          <PendingContext row={row} repro={repro} today={today} /><PendingStage row={row} repro={repro} today={today} plan={plan?.get(row.orderId)} planDay={planDay} />
+          <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span></div>
+          <StageBadges row={row} /><PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName}</p><PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} />
+          <WhatHappens row={row} repro={repro} today={today} />
+          {cls && (
+            <div className="grid gap-2 border-t border-line pt-2 sm:grid-cols-[auto_minmax(0,1fr)]">
+              <AgendaCell row={row} cls={cls} repro={repro} today={today} />
+              <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />
+            </div>
+          )}
           {repro && <ClaimBadge row={repro} />}
           <div className="flex flex-wrap gap-2 [&>*]:grow"><CallButton phone={row.customerPhone} size="md" />{action(row, false)}</div>
         </li>;

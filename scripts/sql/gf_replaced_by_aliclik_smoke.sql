@@ -79,16 +79,17 @@ begin
   -- Una salida que no es guía de Aliclik no reemplaza nada.
   v_res := gf_replace_output_with_aliclik(v_s01, v_actor);
   if v_res->>'skipped' <> 'no_es_guia_aliclik_viva' then raise exception 'GF output accepted as guide: %', v_res; end if;
-  -- Provincia: no.
+  -- Provincia: también, desde la 0350 (16-11-2026, #AUR900778).
   v_res := gf_replace_output_with_aliclik('32900000-0000-0000-0000-000000000122', v_actor);
-  if v_res->>'skipped' <> 'no_es_lima' then raise exception 'non-Lima order: %', v_res; end if;
+  if jsonb_array_length(v_res->'replaced') <> 1 or (v_res->'replaced'->0->>'shipment_id')::uuid <> '32900000-0000-0000-0000-000000000121' then raise exception 'non-Lima order not replaced (0350): %', v_res; end if;
+  if (select custody_state from shipments where id='32900000-0000-0000-0000-000000000121') <> 'retorno' then raise exception 'province S01 not in retorno'; end if;
   -- La guía anulada: no.
   v_res := gf_replace_output_with_aliclik('32900000-0000-0000-0000-000000000132', v_actor);
   if v_res->>'skipped' <> 'no_es_guia_aliclik_viva' then raise exception 'cancelled guide: %', v_res; end if;
   -- La parada sin reporte: no.
   v_res := gf_replace_output_with_aliclik('32900000-0000-0000-0000-000000000142', v_actor);
   if jsonb_array_length(v_res->'replaced') <> 0 or v_res->'skipped'->0->>'why' <> 'sin_no_entregado' then raise exception 'pending stop: %', v_res; end if;
-  if exists (select 1 from shipments where id in ('32900000-0000-0000-0000-000000000121','32900000-0000-0000-0000-000000000131','32900000-0000-0000-0000-000000000141') and custody_state <> 'courier') then
+  if exists (select 1 from shipments where id in ('32900000-0000-0000-0000-000000000131','32900000-0000-0000-0000-000000000141') and custody_state <> 'courier') then
     raise exception 'a skipped S01 changed custody';
   end if;
 
@@ -161,7 +162,7 @@ begin
   if not exists (select 1 from order_events where shipment_id='32900000-0000-0000-0000-000000000151' and kind='output_replaced'
                   and payload->>'replaced_by'='32900000-0000-0000-0000-000000000153') then raise exception 'backfill event missing'; end if;
   if (select count(*) from order_events where shipment_id='32900000-0000-0000-0000-000000000111' and kind='output_replaced') <> 1 then raise exception 'backfill touched #A1 again'; end if;
-  if (select custody_state from shipments where id='32900000-0000-0000-0000-000000000121') <> 'courier' then raise exception 'backfill touched the province'; end if;
+  if (select count(*) from order_events where shipment_id='32900000-0000-0000-0000-000000000121' and kind='output_replaced') <> 1 then raise exception 'backfill touched the province again'; end if;
   if (select custody_state from shipments where id='32900000-0000-0000-0000-000000000141') <> 'courier' then raise exception 'backfill touched the pending stop'; end if;
 end $$;
 \ir ../../db/migrations/0337_gf_replaced_by_aliclik.sql

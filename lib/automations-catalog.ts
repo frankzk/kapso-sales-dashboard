@@ -23,6 +23,11 @@ import { lnHistoryLabel } from "@/lib/lista-negra-copy";
 /** Los grupos del panel, en su orden. */
 export const AUTOMATION_GROUPS = [
   {
+    key: "logistica_lima",
+    title: "Logística Lima",
+    description: "Guías que Kapta crea sola para los pedidos de Lima el día del despacho.",
+  },
+  {
     key: "logistica_provincia",
     title: "Logística Provincia",
     description: "Guías que Kapta saca sola por Swayp cuando Aliclik no entregó o la clienta no confirma.",
@@ -78,7 +83,7 @@ export const EXTERNAL_EFFECTS: readonly AutomationEffect[] = ["Crea guías", "En
 export type AutomationScope = "org" | "store" | "none";
 
 /** Tablas de configuración por organización que el panel puede escribir. */
-export const ORG_AUTOMATION_TABLES = ["swayp_auto_settings", "swayp_pc_auto_settings", "chatby_auto_settings"] as const;
+export const ORG_AUTOMATION_TABLES = ["swayp_auto_settings", "swayp_pc_auto_settings", "chatby_auto_settings", "gf_auto_guide_settings", "lima_courier_auto_settings"] as const;
 export type OrgAutomationTable = (typeof ORG_AUTOMATION_TABLES)[number];
 
 /**
@@ -90,6 +95,10 @@ export const ORG_TABLE_SHAPE: Record<OrgAutomationTable, { columns: readonly str
   swayp_auto_settings: { columns: ["enabled", "pilot_enabled"], updatedBy: false },
   swayp_pc_auto_settings: { columns: ["enabled", "paused_reason"], updatedBy: true },
   chatby_auto_settings: { columns: ["enabled", "guide_enabled"], updatedBy: true },
+  // Solo la posición de la Guía GF automática (0345), que tiene su propia acción.
+  gf_auto_guide_settings: { columns: ["mode"], updatedBy: true },
+  // Solo la posición de la guía Aliclik y Swayp del día programado (0349), que tiene su propia acción.
+  lima_courier_auto_settings: { columns: ["mode"], updatedBy: true },
 };
 
 export type AutomationControl =
@@ -99,7 +108,7 @@ export type AutomationControl =
    * Apagado / Simulación / Activo de una columna de texto de la organización
    * (0316). No es un interruptor: no entra en la lista blanca de `on/off` y
    * tiene su propia acción (`setChatbyApproxMode`, `setChatbyAskMode`,
-   * `setChatbyHistoryMode`), que
+   * `setChatbyHistoryMode`, `setGfAutoGuideMode`, `setLimaCourierAutoMode`), que
    * solo escribe esta columna con uno de los tres valores.
    */
   | { kind: "org_mode"; table: OrgAutomationTable; column: string; requires?: never }
@@ -131,10 +140,43 @@ export const CHATBY_APPROX_KEY = "chatby_auto_approx";
 export const CHATBY_ASK_KEY = "chatby_auto_ask";
 /** «Guía automática para clientas con entregas» (0317): su clave en el catálogo y en el historial. */
 export const CHATBY_HISTORY_KEY = "chatby_auto_history";
+/** «Guía GF automática» (0345, lib/gf-auto-guide.ts): su clave en el catálogo y en el historial. */
+export const GF_AUTO_GUIDE_KEY = "gf_auto_guide";
+/** «Guía Aliclik y Swayp del día programado» (0349, lib/lima-courier-auto.ts): su clave en el catálogo y en el historial. */
+export const LIMA_COURIER_AUTO_KEY = "lima_courier_auto";
 
 const STORE_SETTINGS = (section: string, label = "Ajustes de la tienda"): AutomationLink => ({ kind: "store_settings", section, label });
 
 export const AUTOMATIONS: readonly AutomationEntry[] = [
+  // ── Logística Lima ─────────────────────────────────────────────────────
+  {
+    key: GF_AUTO_GUIDE_KEY,
+    group: "logistica_lima",
+    name: "Guía GF automática",
+    // 0345, owner 15-11-2026 (MOM §29.17). La regla está en lib/gf-auto-guide.ts;
+    // la pasada, en lib/gf-auto-guide-server.ts. Solo en las tiendas con GF
+    // Courier por API habilitado.
+    what:
+      "Apenas un pedido de Lima entra a «Por generar rótulo» (cada 10 minutos, todo el día) crea su guía de GF Courier; si está programado para otro día, con ese día. Si una no sale, avisa por Telegram. En Simulación solo dice qué habría creado.",
+    effect: "Crea guías",
+    scope: "org",
+    control: { kind: "org_mode", table: "gf_auto_guide_settings", column: "mode" },
+    link: STORE_SETTINGS("gf-courier"),
+  },
+  {
+    key: LIMA_COURIER_AUTO_KEY,
+    group: "logistica_lima",
+    name: "Guía Aliclik y Swayp del día programado",
+    // 0349, owner 16-11-2026 (MOM §9.5): «Kapta la crea ese día». La regla está
+    // en lib/lima-courier-auto.ts; la pasada, en lib/lima-courier-auto-server.ts.
+    what:
+      "Lo de Lima programado con Aliclik o Swayp. Aliclik (AUTOECOM): a las 8, 10 y 12 lo de hoy; de 15 a 21, lo de mañana. Swayp: la víspera, hasta las 21. Si una no sale, avisa por Telegram. En Simulación solo dice qué habría creado.",
+    effect: "Crea guías",
+    scope: "org",
+    control: { kind: "org_mode", table: "lima_courier_auto_settings", column: "mode" },
+    link: { kind: "page", href: "/dashboard/pedidos/repro-lima?atencion=programados", label: "Ver Programados" },
+  },
+
   // ── Logística Provincia ────────────────────────────────────────────────
   {
     key: "swayp_auto",

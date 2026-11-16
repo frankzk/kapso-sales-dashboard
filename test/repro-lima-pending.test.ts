@@ -4,15 +4,21 @@ import { resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
-import { attentionCounts, attentionFilter, attentionRows, createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, limaPlanCandidate, courierLabel, groupApprovalFailures, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, courierLabel, groupApprovalFailures, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { boardFilter, classifyLimaRows, limaBoardCounts, limaBoardRows } from "@/lib/repro-lima-blocks";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
 import { sortQueue, type QueueRow } from "@/lib/dispatch-day";
 
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
+vi.mock("@/app/dashboard/pedidos/repro-lima/agenda-actions", () => ({ agendarReproLima: vi.fn() }));
 vi.mock("@/app/dashboard/pedidos/repro-lima/retry-actions", () => ({ approveAliclikRetry: vi.fn(), dismissAliclikRetry: vi.fn() }));
 vi.mock("@/app/dashboard/pedidos/repro-lima/prior-counts-actions", () => ({ loadPriorOrderCounts: vi.fn(async () => ({ counts: {} })) }));
+vi.mock("@/app/dashboard/pedidos/repro-lima/no-entrego-actions", () => ({ loadNoEntregoStop: vi.fn() }));
+vi.mock("@/app/reparto/actions", () => ({ reportStop: vi.fn() }));
+vi.mock("@/app/dashboard/pedidos/aliclik-actions", () => ({ previewAliclikGuide: vi.fn(), createAliclikGuide: vi.fn() }));
+vi.mock("@/app/dashboard/pedidos/gf-courier-actions", () => ({ createGfCourierGuide: vi.fn() }));
 vi.mock("@/components/order-master-shared", () => ({ MacroStageDot: () => null }));
 const nav = vi.hoisted(() => ({ search: "" }));
 vi.mock("next/navigation", () => ({
@@ -181,7 +187,7 @@ describe("acceso a todos los pendientes", () => {
     await expect(loadLimaPending(database([master(1)], false, { rpcError: "sin historial" }).admin, scope)).rejects.toThrow("sin historial");
     await expect(loadLimaPending(database([master(1)], false, { programError: "sin programas" }).admin, scope)).rejects.toThrow("sin programas");
   });
-  it("«Sale a reparto»: la caja de Grupo GF, la solicitud y el armado de su salida; otra salida viva no es de Grupo GF", async () => {
+  it("lo de Grupo GF (para sus trabados, §9.6): la caja, la solicitud y el armado de su salida; otra salida viva no es de Grupo GF", async () => {
     const source = [
       master(1, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" }),
       master(2, { macro_stage: "por_despachar", macro_substage: "listo_para_asignar" }),
@@ -245,7 +251,6 @@ describe("acceso a todos los pendientes", () => {
     expect(gf.o3).toEqual({ box: null, requestDay: null, labeled: false, armed: false }); // sin salida todavía
     // Todo «Por reprogramar Lima» se lee (su acuerdo vive en el caso); sin acuerdo ni programa no tiene día.
     expect(gf.o4).toEqual({ box: null, requestDay: null, labeled: false, armed: false });
-    expect(limaPlanCandidate(rows.find((r) => r.orderId === "o4")!, undefined, "2026-11-09")?.day).toBeNull();
     expect(gf.o5).toBeNull(); // ya salió, y no está en una caja vigente
     expect(gf.o6).toEqual({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: true, pickedUp: true }, requestDay: null, labeled: true, armed: true });
     // La caja del 04/11 no es su caja: sale el día de su programa y se recibe en oficina.
@@ -286,6 +291,39 @@ describe("acceso a todos los pendientes", () => {
       o2: { courier: "aliclik", date: "2026-11-08" },
       o3: null, o4: null, o5: null, o6: null,
     });
+  });
+  it("la guía de GF Courier sin salir lleva el día que se le pidió a GF (un acuerdo de Repro Lima, 15-11-2026), en la misma lectura", async () => {
+    const gf = (order_id: string, guide_code: string, extra: DBRow = {}) => ({
+      order_id, courier: "gf_courier", guide_code, status_category: "pending", delivery_status: "pendiente",
+      dispatched_at: null, out_for_delivery_at: null, returned_at: null, ...extra,
+    });
+    const db = database([master(1), master(2), master(3), master(4)], false, {
+      shipments: [
+        gf("o1", "GF1"),
+        // Ya salió o ya la asignaron: el día lo lleva GF.
+        gf("o2", "GF2", { dispatched_at: "2026-11-16T15:00:00Z" }),
+        gf("o3", "GF3", { delivery_status: "en_ruta", status_category: "in_route" }),
+        // Sin día pedido a GF: no se inventa.
+        gf("o4", "GF4"),
+      ],
+      tables: { gf_order_requests: [
+        { tracking_id: "GF1", status: "sent", scheduled_date: "2026-11-17" },
+        { tracking_id: "GF2", status: "sent", scheduled_date: "2026-11-16" },
+        { tracking_id: "GF3", status: "sent", scheduled_date: "2026-11-16" },
+        { tracking_id: "GF4", status: "sent", scheduled_date: null },
+        { tracking_id: "GF1", status: "failed", scheduled_date: "2026-11-30" },
+      ] },
+    });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    const pickup = Object.fromEntries(rows.map((r) => [r.orderId, r.courierPickup]));
+    expect(pickup).toEqual({ o1: { courier: "gf_courier", date: "2026-11-17" }, o2: null, o3: null, o4: null });
+    // Las salidas, en una sola lectura con las de Aliclik.
+    expect(db.from.mock.calls.filter(([table]) => table === "gf_order_requests")).toHaveLength(1);
+  });
+  it("sin guías GF no pregunta por sus días", async () => {
+    const db = database([master(1)]);
+    await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(db.from.mock.calls.some(([table]) => table === "gf_order_requests")).toBe(false);
   });
   it("si no se pueden leer las guías, se dice; no se manda todo a «Nunca salieron»", async () => {
     await expect(loadLimaPending(database([master(1)], false, { shipmentError: "sin guías" }).admin, { userId: "u", storeIds: new Set(["a"]) }))
@@ -335,15 +373,24 @@ describe("presentación inicial y gestión", () => {
     expect(html).not.toContain("Gestionar pedido");
     expect(html).not.toContain("Resumen y cierres pendientes");
     expect(html.match(/<table /g)).toHaveLength(1);
-    expect(html).toContain("Todos activos al entrar.");
+    // Macroestado y subetapa viven en el filtro «Etapa» de la barra (15-11-2026), cerrado al entrar.
+    expect(html).toContain(">Etapa<");
+    expect(html).not.toContain("Todos activos al entrar.");
+    // El total arriba (owner: «el total desapareció»).
+    expect(html).toContain("pedidos de Lima por entregar");
   });
-  it("los tres enlaces antiguos abren Todos y mantienen Atender", () => {
+  it("los tres enlaces antiguos abren Todos y mantienen Atender, con el flujo y la Agenda en su orden", () => {
     for (const legacy of ["listas", "todos", "resumen"]) {
       nav.search = `vista=${legacy}`;
       const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending: [row()] }));
       expect(html).toContain('aria-label="Todos los pendientes de Lima"');
       expect(html).toContain(">Atender</button>");
-      expect(html.indexOf("Todos · por entregar")).toBeLessThan(html.indexOf("Reprogramados"));
+      expect(html.indexOf(">Flujo del día<")).toBeGreaterThan(0);
+      expect(html.indexOf(">Flujo del día<")).toBeLessThan(html.indexOf(">Programados<"));
+      // «Con el courier» es un paso plegado del flujo (owner, 15-11-2026, tercera vuelta), no un bloque aparte.
+      expect(html.indexOf("Con el courier")).toBeGreaterThan(html.indexOf(">Flujo del día<"));
+      expect(html.indexOf("Con el courier")).toBeLessThan(html.indexOf(">Programados<"));
+      expect(html).not.toContain("En manos del courier");
     }
     nav.search = "";
   });
@@ -371,7 +418,8 @@ describe("presentación inicial y gestión", () => {
   });
 });
 
-describe("apartados operativos de la misma cola", () => {
+describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)", () => {
+  // Miércoles 28-10-2026: «Mañana» es el jue 29; lo de más adelante, «Después».
   const rows = [
     row({ orderId: "reciente" }),
     row({ orderId: "antiguo", createdAt: "2026-09-27T05:00:00Z" }),
@@ -380,38 +428,55 @@ describe("apartados operativos de la misma cola", () => {
     row({ orderId: "hoy", programmedFor: TODAY }),
     row({ orderId: "vencido", programmedFor: "2026-10-26" }),
     row({ orderId: "manana", programmedFor: "2026-10-29" }),
-    row({ orderId: "despues", programmedFor: "2026-10-30" }),
+    row({ orderId: "despues", programmedFor: "2026-11-10" }),
     row({ orderId: "acuerdo", hasPriorDispatch: true }),
   ];
   const cases = [{ orderId: "acuerdo", list: "programados" as const, agreement: { agreedOn: "2026-10-29" } }];
-  it("los seis apartados suman Todos; Reprogramados cuenta las nuevas fechas acordadas", () => {
-    const counts = attentionCounts(rows, cases, TODAY);
-    expect(counts).toEqual({ todos: 9, reintentos_aliclik: 0, reprogramados: 1, programados_hoy: 2, programados_manana: 2, nunca_salieron: 2, ya_salieron: 1, mas_de_30: 1, programados_despues: 1, llamar_despues: 0, cerrados: 0 });
-    expect(counts.programados_hoy + counts.programados_manana + counts.nunca_salieron + counts.ya_salieron + counts.mas_de_30 + counts.programados_despues).toBe(counts.todos);
+  const board = (r: readonly LimaPendingOrder[], c: Parameters<typeof classifyLimaRows>[1], today = TODAY) => {
+    const classes = classifyLimaRows(r, c, today);
+    return { classes, counts: limaBoardCounts(r, classes), rows: (key: string) => limaBoardRows(r, classes, key).map((x) => x.orderId) };
+  };
+  it("sin courier, lo que tiene día es Programados (por día) y lo que no, Sacar a reparto; suman Todos y Reprogramados cuenta las fechas acordadas", () => {
+    const { counts } = board(rows, cases);
+    expect(counts.agenda).toEqual({ hoy: 2, manana: 2, despues: 1 });
+    // Ninguno salió: cinco con día son Programados (16-11-2026) y cuatro sin día, por sacar a reparto.
+    expect(counts.step.programados).toBe(5);
+    expect(counts.step.por_sacar).toBe(4);
+    expect(Object.values(counts.agenda).reduce((a, b) => a + b, 0)).toBe(counts.step.programados);
+    expect(Object.values(counts.step).reduce((a, b) => a + b, 0)).toBe(counts.todos);
+    expect(counts.task.primer_despacho).toBe(3);
+    expect(counts.sub).toMatchObject({ mas_de_30: 1, reprogramados: 1 });
   });
-  it("una salida que retornó no vuelve a Nunca salieron aunque Master haya borrado el despacho", () => {
-    expect(attentionRows(rows, cases, "ya_salieron", TODAY).map((r) => r.orderId)).toEqual(["retorno"]);
-    expect(attentionRows(rows, cases, "nunca_salieron", TODAY).map((r) => r.orderId)).not.toContain("retorno");
+  it("una salida que retornó no vuelve a Confirmar primer despacho aunque Master haya borrado el despacho", () => {
+    const { rows: of } = board(rows, cases);
+    expect(of("primer_despacho")).not.toContain("retorno");
+    expect(of("salieron_sin_dia")).toContain("retorno");
   });
-  it("la fecha manda sobre la antigüedad y el historial de salidas", () => {
+  it("la fecha manda sobre la antigüedad y el historial de salidas; lo vencido sigue en Hoy y va primero", () => {
     const old = row({ createdAt: "2026-01-01T15:00:00Z", hasPriorDispatch: true, programmedFor: "2026-10-29" });
     expect(limaQueueSegment(old, TODAY)).toBe("programados_manana");
-    expect(attentionRows(rows, cases, "programados_hoy", TODAY).map((r) => r.orderId)).toEqual(["vencido", "hoy"]);
+    expect(board(rows, cases).rows("hoy")).toEqual(["vencido", "hoy"]);
   });
   it("la fecha acordada vigente manda sobre un programa anterior; no se inventa un acuerdo", () => {
     const r = row({ programmedFor: TODAY });
     const c = { orderId: r.orderId, list: "programados" as const, agreement: { agreedOn: "2026-10-29" } };
     expect(limaScheduledFor(r, c)).toBe("2026-10-29");
     expect(limaQueueSegment(r, TODAY, c)).toBe("programados_manana");
-    expect(attentionCounts([r], [{ orderId: r.orderId, list: "programados" }], TODAY).reprogramados).toBe(0);
-    expect(attentionCounts([r], [{ ...c, list: "por_decidir" }], TODAY).reprogramados).toBe(0);
+    expect(board([r], [c]).classes.get(r.orderId)).toMatchObject({ agenda: "manana", agendaDay: "2026-10-29", agendaOrigin: "acuerdo", agreed: true });
+    expect(board([r], [{ orderId: r.orderId, list: "programados" }]).counts.sub.reprogramados).toBe(0);
+    expect(board([r], [{ ...c, list: "por_decidir" }]).counts.sub.reprogramados).toBe(0);
   });
   it("mañana se convierte en hoy al cambiar el día de Lima, incluso al cambiar de mes", () => {
     const r = row({ programmedFor: "2026-11-01" });
     expect(limaQueueSegment(r, "2026-10-31")).toBe("programados_manana");
     expect(limaQueueSegment(r, "2026-11-01")).toBe("programados_hoy");
+    // El sábado, «Mañana» llega hasta el lunes: el domingo no se reparte (§29.16), así que un día de domingo cae ahí.
+    expect(board([r], [], "2026-10-31").classes.get("o1")?.agenda).toBe("manana");
+    // El domingo 01 no se reparte: sale el lunes 02, en Mañana; el lunes 02, un programa del domingo ya pasado sale hoy.
+    expect(board([r], [], "2026-11-01").classes.get("o1")?.agenda).toBe("manana");
+    expect(board([r], [], "2026-11-02").classes.get("o1")?.agenda).toBe("hoy");
   });
-  it("Nunca salieron va del más antiguo al más reciente, en su tarjeta y en Todos (owner, 06-11-2026)", () => {
+  it("Sacar a reparto: lo que sale hoy primero y lo que no tiene día del más antiguo al más reciente (owner, 06-11 y 15-11-2026)", () => {
     const pico = [
       row({ orderId: "hoy-1", createdAt: "2026-10-28T15:00:00Z" }),
       row({ orderId: "hace-5-dias", createdAt: "2026-10-23T15:00:00Z" }),
@@ -420,11 +485,11 @@ describe("apartados operativos de la misma cola", () => {
       row({ orderId: "volvio-antes", createdAt: "2026-10-20T15:00:00Z", hasPriorDispatch: true }),
       row({ orderId: "prog", createdAt: "2026-10-01T15:00:00Z", programmedFor: TODAY }),
     ];
-    expect(attentionRows(pico, [], "nunca_salieron", TODAY).map((r) => r.orderId)).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
-    // En Todos el orden de los apartados no cambia; solo el de adentro de Nunca salieron.
-    expect(attentionRows(pico, [], "todos", TODAY).map((r) => r.orderId)).toEqual(["prog", "hace-5-dias", "ayer", "hoy-1", "volvio-ayer", "volvio-antes"]);
-    // Ya salieron sigue del más reciente al más antiguo.
-    expect(attentionRows(pico, [], "ya_salieron", TODAY).map((r) => r.orderId)).toEqual(["volvio-ayer", "volvio-antes"]);
+    const { rows: of } = board(pico, []);
+    expect(of("primer_despacho")).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
+    // Sacar a reparto es lo que no tiene día, del más antiguo al más reciente; lo de hoy es un Programado (16-11-2026).
+    expect(of("por_sacar")).toEqual(["volvio-antes", "hace-5-dias", "ayer", "volvio-ayer", "hoy-1"]);
+    expect(of("programados")).toEqual(["prog"]);
   });
   it("solo Repro Lima cambia: Despacho del día sigue del más reciente al más antiguo (§29.13)", () => {
     // Solo los campos que mira el orden; el resto de la fila no participa.
@@ -435,24 +500,40 @@ describe("apartados operativos de la misma cola", () => {
     expect(limaQueueSegment(row({ createdAt: "2026-09-28T04:59:59Z" }), TODAY)).toBe("mas_de_30");
     expect(limaQueueSegment(row({ createdAt: "2026-09-28T05:00:00Z" }), TODAY)).toBe("nunca_salieron");
     expect(limaQueueSegment(row({ createdAt: null }), TODAY)).toBe("nunca_salieron");
+    expect(board(rows, cases).rows("mas_de_30")).toEqual(["antiguo"]);
   });
-  it("Todas las filas siguen accesibles sin duplicar pedidos por Reprogramados", () => {
-    const all = attentionRows(rows, cases, "todos", TODAY);
+  it("todas las filas siguen accesibles sin duplicar pedidos por Reprogramados", () => {
+    const all = board(rows, cases).rows("todos");
     expect(all).toHaveLength(9);
-    expect(new Set(all.map((r) => r.orderId)).size).toBe(9);
-    expect(attentionRows(rows, cases, "reprogramados", TODAY).map((r) => r.orderId)).toEqual(["acuerdo"]);
+    expect(new Set(all).size).toBe(9);
+    expect(board(rows, cases).rows("reprogramados")).toEqual(["acuerdo"]);
     expect(rows[0]?.orderId).toBe("reciente");
   });
-  it("mantiene llamadas y cierres como filtros secundarios sobre las mismas filas", () => {
+  it("Llamar después y Esperan anulación son tareas sobre las mismas filas", () => {
     const follow = [{ orderId: "hoy", list: "cerrados" as const }, { orderId: "retorno", list: "llamar_despues" as const }];
-    expect(attentionRows(rows, follow, "cerrados", TODAY).map((r) => r.orderId)).toEqual(["hoy"]);
-    expect(attentionCounts(rows.slice(0, 3), follow, TODAY).cerrados).toBe(0);
+    const { rows: of, counts } = board(rows, follow);
+    expect(of("esperan_anulacion")).toEqual(["hoy"]);
+    expect(of("por_cerrar")).toEqual(["hoy"]);
+    expect(of("llamar_despues")).toEqual(["retorno"]);
+    expect(board(rows.slice(0, 3), follow).counts.sub.esperan_anulacion).toBe(0);
+    expect(counts.task.llamar_despues).toBe(1);
   });
-  it("los enlaces antiguos se normalizan y las nuevas tarjetas tienen un filtro explícito", () => {
-    for (const value of [null, "listas", "resumen", "por_decidir", "todos", "desconocido"]) expect(attentionFilter(value)).toBe("todos");
-    expect(attentionFilter("programados")).toBe("reprogramados");
-    expect(attentionFilter("programados_manana")).toBe("programados_manana");
-    expect(attentionFilter("llamar_despues")).toBe("llamar_despues");
+  it("los enlaces de la pantalla anterior abren lo más cercano", () => {
+    for (const value of [null, "listas", "resumen", "todos", "desconocido", "ya_salieron"]) expect(boardFilter(value, TODAY)).toBe("todos");
+    // «Programados» es ahora su paso (16-11-2026); los reprogramados viven dentro.
+    expect(boardFilter("programados", TODAY)).toBe("programados");
+    expect(boardFilter("programados_hoy", TODAY)).toBe("hoy");
+    expect(boardFilter("programados_manana", TODAY)).toBe("manana");
+    expect(boardFilter("programados_despues", TODAY)).toBe("despues");
+    // «Nunca salieron» abre su filtro dentro de Sacar a reparto (owner, 16-11-2026).
+    expect(boardFilter("nunca_salieron", TODAY)).toBe("nunca_salieron");
+    expect(boardFilter("primer_despacho", TODAY)).toBe("por_sacar");
+    expect(boardFilter("por_cerrar", TODAY)).toBe("por_cerrar");
+    expect(boardFilter("por_decidir", TODAY)).toBe("no_entregados");
+    expect(boardFilter("cerrados", TODAY)).toBe("esperan_anulacion");
+    expect(boardFilter("llamar_despues", TODAY)).toBe("llamar_despues");
+    expect(boardFilter("mas_de_30", TODAY)).toBe("mas_de_30");
+    expect(boardFilter("reintentos_aliclik", TODAY)).toBe("reintentos_aliclik");
   });
 });
 
@@ -602,12 +683,19 @@ describe("Reintentos Aliclik: elegir cuáles aprobar (owner, 06-11-2026)", () =>
     expect(html).toContain("Elegir los 3 listos</label>");
     expect(html.match(/aria-label="Elegir #KPB para aprobar" checked=""/g)).toHaveLength(2);
     expect(html).not.toMatch(/aria-label="Elegir #KPA para aprobar" checked=""/);
-    // Sin selección (las demás listas) no hay casillas.
+    // Sin selección no hay casillas.
     expect(renderToStaticMarkup(createElement(LimaPendingList, { rows, reproRows: [], today: TODAY, renderActions: () => null }))).not.toContain('type="checkbox"');
+    // Para «Programar» la casilla lo dice (owner, 15-11-2026; «Programar», 16-11-2026).
+    const mover = renderToStaticMarkup(createElement(LimaPendingList, { rows, reproRows: [], today: TODAY, renderActions: () => null, selection: { ...selection, purpose: "mover" as const } }));
+    expect(mover).toContain('aria-label="Elegir #KPA para programarlo"');
+    expect(mover).toContain('aria-label="Elegir los 3 que se pueden programar"');
   });
-  it("el tablero solo elige en Reintentos Aliclik y el botón dice cuántos aprueba", () => {
+  it("en Reintentos Aliclik la casilla aprueba y el botón dice cuántos; en las demás listas, «Mover a…»", () => {
     const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
-    expect(board).toContain('const selection: LimaRowSelection | undefined = list === "reintentos_aliclik"');
+    expect(board).toContain("const selection: LimaRowSelection | undefined = inRetries ? {");
+    expect(board).toContain('purpose: "aprobar",');
+    expect(board).toContain('purpose: "mover",');
+    expect(board).toContain("selectable: (row) => pathOf(row).kind !== null,");
     expect(board).toContain("const rows = targets.rows;");
     expect(board).toContain("`Aprobar elegidos (${targets.rows.length})`");
     expect(board).toContain("`Aprobar todos los listos (${readyToApprove.length})`");
@@ -637,65 +725,29 @@ describe("«Aprobar elegidos»: lo que no se creó, una línea por motivo (owner
   });
 });
 
-describe("«Sale a reparto» en Repro Lima (owner, 07-11-2026; §29.16)", () => {
+
+describe("«Sale a reparto» se fue a Despacho del día (owner, 15-11-2026; §29.16)", () => {
   const gf = (over: Record<string, unknown> = {}) => ({ box: null, requestDay: null, labeled: true, armed: true, ...over });
-  it("el día: la caja, el acuerdo o programa, la solicitud y, sin nada, el corte", () => {
-    expect(limaPlanCandidate(row({ gf: gf() }), undefined, "2026-11-07")).toMatchObject({ day: "2026-11-07", box: null });
-    expect(limaPlanCandidate(row({ gf: gf(), programmedFor: "2026-11-09" }), undefined, "2026-11-07")?.day).toBe("2026-11-09");
-    expect(limaPlanCandidate(row({ gf: gf({ requestDay: "2026-11-06" }) }), undefined, "2026-11-07")?.day).toBe("2026-11-06");
-    const acuerdo = { orderId: "o1", list: "programados" as const, agreement: { agreedOn: "2026-11-10", courier: "propio" } };
-    expect(limaPlanCandidate(row({ gf: gf(), programmedFor: "2026-11-09" }), acuerdo, "2026-11-07")?.day).toBe("2026-11-10");
-    // Un acuerdo con otro courier no sale con Grupo GF; sin datos de Grupo GF, tampoco.
-    expect(limaPlanCandidate(row({ gf: gf() }), { ...acuerdo, agreement: { agreedOn: "2026-11-07", courier: "aliclik" } }, "2026-11-07")).toBeNull();
-    expect(limaPlanCandidate(row({ gf: null }), undefined, "2026-11-07")).toBeNull();
-    // Un reintento sin acuerdo ni programa no toma el día del corte ni el de su solicitud vieja.
-    expect(limaPlanCandidate(row({ stage: "en_curso", substage: "por_reprogramar_lima", gf: gf() }), undefined, "2026-11-07")?.day).toBeNull();
-    expect(limaPlanCandidate(row({ stage: "en_curso", substage: "por_reprogramar_lima", gf: gf({ requestDay: "2026-11-04" }) }), undefined, "2026-11-07")?.day).toBeNull();
-    // Con el acuerdo con Grupo GF, aunque todavía no sea programa (#KP140108), sale ese día.
-    expect(limaPlanCandidate(row({ stage: "en_curso", substage: "por_reprogramar_lima", gf: gf({ pastBox: true, awaitingOffice: true }) }), acuerdo, "2026-11-07"))
-      .toMatchObject({ day: "2026-11-10", awaitingOffice: true });
-    // Lo que sigue en una caja de un día que pasó (#KP140302, borrador del 19/10) no toma la solicitud vieja ni el corte.
-    expect(limaPlanCandidate(row({ gf: gf({ pastBox: true, requestDay: "2026-10-19", armed: false }) }), undefined, "2026-11-09")?.day).toBeNull();
-    expect(limaPlanCandidate(row({ gf: gf({ pastBox: true, requestDay: "2026-10-19" }), programmedFor: "2026-11-09" }), undefined, "2026-11-09")?.day).toBe("2026-11-09");
-  });
-  it("el tablero muestra la tarjeta y, en cada pedido que sale, el día y lo que le falta", () => {
+  it("Repro Lima ya no la dibuja ni pone la chapa «Sale …» en las filas", () => {
     const data = { today: "2026-11-06", nowIso: "2026-11-06T23:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
     const pending = [
       row({ orderId: "a", orderName: "#KPA", stage: "por_despachar", substage: "listo_para_asignar", gf: gf() }),
       row({ orderId: "b", orderName: "#KPB", gf: gf({ box: { day: "2026-11-07", riderName: "Jhon", officeChecked: false, pickedUp: false } }) }),
-      row({ orderId: "c", orderName: "#KPC", gf: gf({ labeled: false, armed: false }) }),
-      row({ orderId: "d", orderName: "#KPD", gf: null }),
     ];
     nav.search = "";
     const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
-    // Las 18:00 de Lima: pasó el corte, la tarjeta abre en mañana.
-    expect(html).toContain("Sale a reparto");
-    expect(html).toMatch(/aria-pressed="true"[^>]*>Mañana · sáb 07\/11<\/button>/);
-    expect(html).toContain("Faltan 1 sin rótulo y 1 sin caja.");
-    expect(html).toContain("Sale sáb 07/11 · sin caja");
-    expect(html).toContain("Sale sáb 07/11 · en caja · caja de Jhon");
-    expect(html).toContain("Sale sáb 07/11 · sin rótulo");
-    expect(html.match(/Sale sáb 07\/11 ·/g)?.length).toBe(6); // tres pedidos, en la tabla y en la lista del teléfono
+    expect(html).not.toContain("Sale a reparto");
+    expect(html).not.toContain("Sale sáb 07/11");
+    expect(html).toContain("#KPA");
+    const board = readFileSync(resolve(process.cwd(), "components/repro-lima-board.tsx"), "utf8");
+    expect(board).not.toContain("DispatchPlanPanel");
+    expect(board).not.toContain("<LimaStuckTray");
   });
-  it("sábado después del corte: lo del domingo sale el lunes sin estar atrasado; el domingo solo se ofrece el lunes", () => {
-    const sat = { today: "2026-11-07", nowIso: "2026-11-07T20:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
-    const pending = [
-      row({ orderId: "a", orderName: "#KPA", stage: "por_despachar", substage: "listo_para_asignar", gf: gf() }),
-      // Su solicitud era para el viernes y no salió: sí está atrasado.
-      row({ orderId: "b", orderName: "#KPB", stage: "por_despachar", substage: "listo_para_asignar", gf: gf({ requestDay: "2026-11-06" }) }),
-      // Programado para el lunes, todavía con el motorizado en la caja del 04/11.
-      row({ orderId: "c", orderName: "#KPC", stage: "en_curso", substage: "por_reprogramar_lima", programmedFor: "2026-11-09", gf: gf({ awaitingOffice: true }) }),
-    ];
-    nav.search = "";
-    const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data: sat, pending }));
-    expect(html).toMatch(/aria-pressed="true"[^>]*>Próximo reparto · lun 09\/11<\/button>/);
-    expect(html).toContain("Faltan 3 sin caja.");
-    expect(html).toContain("1 debía salir antes.");
-    expect(html).not.toContain("debía salir dom");
-    expect(html).toContain("Sale lun 09/11 · sin caja · debía salir vie 06/11");
-    expect(html).toContain("Sale lun 09/11 · sin caja · por recibir en oficina");
-    const sun = renderToStaticMarkup(createElement(ReproLimaBoard, { data: { ...sat, today: "2026-11-08", nowIso: "2026-11-08T15:00:00Z" }, pending }));
-    expect(sun).toMatch(/aria-pressed="true"[^>]*>Mañana · lun 09\/11<\/button>/);
-    expect(sun).not.toContain(">Hoy · dom 08/11<");
+  it("sigue en Despacho del día, con los trabados de Grupo GF justo debajo", () => {
+    const despacho = readFileSync(resolve(process.cwd(), "components/dispatch-day-board.tsx"), "utf8");
+    expect(despacho).toContain("<DispatchPlanPanel");
+    expect(despacho.indexOf("<DispatchPlanPanel")).toBeLessThan(despacho.indexOf("{props.afterPlan}"));
+    const courier = readFileSync(resolve(process.cwd(), "components/grupo-gf-courier.tsx"), "utf8");
+    expect(courier).toContain("afterPlan={<GfStuckTray orgId={orgId} />}");
   });
 });

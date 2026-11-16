@@ -65,3 +65,55 @@ export function compareGfCatalog(store: readonly { sku: string; name: string }[]
   const onlyInGf = gf.filter((p) => !storeSkus.has(key(p.merchant_sku)) && !(p.sku && storeSkus.has(key(p.sku)))).map((p) => p.merchant_sku);
   return { missingInGf, outOfStock, onlyInGf };
 }
+
+// ---- Sincronización (owner, 16-11-2026): lo que la tienda vende en Kapta existe en GF, sin importar archivos ----
+// GF recibe POST /v1/products/batch (permiso catalogue:write) por SKU: crea lo nuevo sin conteo, actualiza nombre y
+// disponibilidad, nunca borra ni toca el modo o el conteo. Kapta manda solo lo que falta o cambió.
+
+export interface GfSyncItem { sku: string; name: string; sales_status: "IN_STOCK" | "OUT_OF_STOCK" }
+export interface GfSyncPlan {
+  /** SKU que GF no tiene: se crean «En existencias». */
+  create: GfSyncItem[];
+  /** SKU que GF tiene con otro nombre: se renombran conservando la disponibilidad que tenga en GF. */
+  rename: GfSyncItem[];
+  /** SKU sin conteo que la tienda ya no publica y GF tiene «En existencias»: pasan a «Agotado». */
+  discontinue: GfSyncItem[];
+  /** Por qué no se marcó nada como Agotado, si se frenó. */
+  discontinueSkipped: string | null;
+}
+/** Tope de seguridad: si «dejó de vender» supera esta parte del catálogo en GF, lo más probable es una lectura incompleta. */
+export const GF_DISCONTINUE_MAX_SHARE = 0.3;
+/** GF admite hasta 200 productos por llamada. */
+export const GF_BATCH_SIZE = 200;
+
+/**
+ * Qué mandar a GF. `partial`: la lectura del catálogo de la tienda tuvo problemas; entonces no se marca nada como
+ * Agotado (una lectura a medias no es «dejó de vender»). Tampoco si son demasiados de golpe.
+ * Solo se agotan productos sin conteo (UNBOUNDED): los de stock físico los gobierna el inventario de GF.
+ */
+export function planGfCatalogSync(store: readonly { sku: string; name: string }[], gf: readonly GfCatalogProduct[], opts: { partial?: boolean } = {}): GfSyncPlan {
+  const key = (s: string) => s.trim().toUpperCase();
+  const gfBySku = new Map<string, GfCatalogProduct>();
+  for (const p of gf) gfBySku.set(key(p.merchant_sku), p);
+  const storeSkus = new Set(store.map((r) => key(r.sku)));
+  const create: GfSyncItem[] = [], rename: GfSyncItem[] = [];
+  for (const r of store) {
+    const g = gfBySku.get(key(r.sku));
+    if (!g) create.push({ sku: r.sku, name: r.name, sales_status: "IN_STOCK" });
+    else if (g.name.trim() !== r.name.trim()) rename.push({ sku: g.merchant_sku, name: r.name, sales_status: g.sales_status === "OUT_OF_STOCK" ? "OUT_OF_STOCK" : "IN_STOCK" });
+  }
+  const gone = gf.filter((p) => !storeSkus.has(key(p.merchant_sku)) && p.mode === "UNBOUNDED" && p.sales_status !== "OUT_OF_STOCK")
+    .map((p) => ({ sku: p.merchant_sku, name: p.name, sales_status: "OUT_OF_STOCK" as const }));
+  let discontinueSkipped: string | null = null;
+  if (gone.length && (opts.partial || !store.length)) discontinueSkipped = "El catálogo de la tienda se leyó en parte: no se marcó nada como Agotado.";
+  else if (gone.length && gf.length && gone.length / gf.length > GF_DISCONTINUE_MAX_SHARE)
+    discontinueSkipped = `${gone.length} de ${gf.length} productos dejarían de venderse de golpe: no se marcaron como Agotado. Revisa el catálogo de la tienda.`;
+  return { create, rename, discontinue: discontinueSkipped ? [] : gone, discontinueSkipped };
+}
+
+/** En lotes de hasta 200, en el orden: crear, renombrar, agotar. */
+export function gfSyncBatches(plan: GfSyncPlan, size = GF_BATCH_SIZE): GfSyncItem[][] {
+  const all = [...plan.create, ...plan.rename, ...plan.discontinue], out: GfSyncItem[][] = [];
+  for (let i = 0; i < all.length; i += size) out.push(all.slice(i, i + size));
+  return out;
+}

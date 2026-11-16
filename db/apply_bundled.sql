@@ -34809,3 +34809,631 @@ create trigger gf_webhook_events_immutable before update or delete on gf_webhook
 
 comment on table gf_order_requests is 'MOM §29.17: intención de crear la guía en GF Courier, escrita antes del POST; candado de una guía viva por pedido.';
 comment on table gf_webhook_events is 'MOM §29.17: eventos firmados recibidos de GF Courier, append-only; X-GF-Event-Id es la idempotencia.';
+
+-- ---- 0345 ----
+-- ============================================================================
+-- 0345_gf_auto_guide.sql — «Guía GF automática» (MOM §29.17 y §40; owner,
+-- 15-11-2026).
+--
+-- POR QUÉ. GF Courier por API (0344) ya crea la guía desde la Mesa de ruta,
+-- pero cada pedido de Lima seguía esperando a que alguien la pulsara. El owner
+-- decidió que el día del despacho, a las 9:00, 10:00 y 11:00 de Lima, Kapta la
+-- cree sola para los pedidos de Lima por generar rótulo, y que se encienda desde
+-- el panel de Automatizaciones con Apagado / Simulación / Activo, como los
+-- reintentos de Lima (0306).
+--
+-- QUÉ CREA (aditiva: no toca ninguna fila).
+--   * `gf_auto_guide_settings`: la posición por organización. Sin fila =
+--     apagado: así nace todo, y el panel la crea al cambiarla.
+--   * `gf_auto_guide_log`: lo que hizo o habría hecho cada pasada, un renglón
+--     por pedido, día de Lima y modo; la última pasada del día lo sobrescribe.
+--     Es lo que el panel muestra en «Hoy y ayer» y lo que deja la Simulación.
+--
+-- La regla de un intento por pedido y día no vive aquí: la da el hecho
+-- `gf_auto_guide_failed` del historial del pedido, como la guía Aliclik del día
+-- programado (§6.2). La creación sigue siendo la de 0344 (`gf_order_requests`).
+--
+-- No cambia datos. Correrla otra vez no cambia nada. Aplicar ANTES del código
+-- (DEPLOY.md): sin ella el cron responde que falta y el panel bloquea la fila.
+-- ============================================================================
+
+create table if not exists public.gf_auto_guide_settings (
+  org_id      uuid primary key references public.organizations(id) on delete cascade,
+  mode        text not null default 'apagado',
+  updated_by  uuid references auth.users(id) on delete set null,
+  updated_at  timestamptz not null default now()
+);
+alter table public.gf_auto_guide_settings drop constraint if exists gf_auto_guide_settings_mode_check;
+alter table public.gf_auto_guide_settings add constraint gf_auto_guide_settings_mode_check
+  check (mode in ('apagado', 'simulacion', 'activo'));
+comment on table public.gf_auto_guide_settings is
+  'Guía GF automática (0345, MOM §29.17): apagado | simulacion | activo por organización. Sin fila = apagado.';
+
+create table if not exists public.gf_auto_guide_log (
+  id          bigserial primary key,
+  org_id      uuid not null references public.organizations(id) on delete cascade,
+  store_id    uuid not null references public.stores(id) on delete cascade,
+  order_id    uuid not null references public.orders(id) on delete cascade,
+  order_name  text,
+  lima_day    date not null,
+  mode        text not null,
+  outcome     text not null,
+  guide_code  text,
+  detail      text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+alter table public.gf_auto_guide_log drop constraint if exists gf_auto_guide_log_mode_check;
+alter table public.gf_auto_guide_log add constraint gf_auto_guide_log_mode_check
+  check (mode in ('simulacion', 'activo'));
+alter table public.gf_auto_guide_log drop constraint if exists gf_auto_guide_log_outcome_check;
+alter table public.gf_auto_guide_log add constraint gf_auto_guide_log_outcome_check
+  check (outcome in ('simulada', 'creada', 'fallo', 'en_curso'));
+-- Un renglón por pedido, día y modo: el upsert de cada pasada choca aquí.
+create unique index if not exists gf_auto_guide_log_day_uniq
+  on public.gf_auto_guide_log (order_id, lima_day, mode);
+-- «Hoy y ayer» del panel, por organización.
+create index if not exists gf_auto_guide_log_org_day_idx
+  on public.gf_auto_guide_log (org_id, lima_day desc, mode);
+comment on table public.gf_auto_guide_log is
+  'Guía GF automática (0345, MOM §29.17): lo que hizo (activo) o habría hecho (simulacion) cada pasada, por pedido y día de Lima.';
+
+-- RLS como sus pares de 0306: la organización lee lo suyo; solo el servidor
+-- (service_role) escribe. Como en 0344, ni anon ni authenticated escriben.
+alter table public.gf_auto_guide_settings enable row level security;
+alter table public.gf_auto_guide_log enable row level security;
+
+drop policy if exists gf_auto_guide_settings_read on public.gf_auto_guide_settings;
+create policy gf_auto_guide_settings_read on public.gf_auto_guide_settings
+  for select to authenticated using (org_id in (select auth_org_ids()));
+drop policy if exists gf_auto_guide_log_read on public.gf_auto_guide_log;
+create policy gf_auto_guide_log_read on public.gf_auto_guide_log
+  for select to authenticated using (store_id in (select auth_store_ids()));
+
+revoke all on public.gf_auto_guide_settings, public.gf_auto_guide_log from anon, authenticated;
+grant select on public.gf_auto_guide_settings, public.gf_auto_guide_log to authenticated;
+grant all on public.gf_auto_guide_settings, public.gf_auto_guide_log to service_role;
+grant usage, select on sequence public.gf_auto_guide_log_id_seq to service_role;
+
+-- ---- 0346 ----
+-- ============================================================================
+-- 0346_gf_requests_lock_en_curso.sql — el candado de GF Courier cuenta solo la
+-- creación EN CURSO (MOM §29.17; owner, 15-11-2026).
+--
+-- POR QUÉ. La 0344 creó `gf_order_requests_live_uniq` sobre `order_id` con
+-- `status <> 'failed'`: una intención ENVIADA ('sent') seguía ocupando el
+-- candado para siempre. El owner decidió que GF Courier no tiene tope de salidas
+-- —una guía por día de despacho, la siguiente con `-S2`, `-S3`…— y con ese
+-- índice la segunda guía de un pedido chocaba (23505) y Kapta respondía «Ya hay
+-- una creación de guía GF en curso» aunque la primera estuviera anulada o
+-- devuelta.
+--
+-- QUÉ CAMBIA. El candado pasa a ser «una creación en curso por pedido»
+-- (`status = 'pending'`), que es lo que protege de dos POST a la vez. Que no haya
+-- dos guías GF VIVAS lo sigue diciendo `createGfGuideFor` mirando las salidas, y
+-- dos clics simultáneos calculan la misma `-Sn` y chocan en
+-- `gf_order_requests_key_uniq` (la misma Idempotency-Key).
+--
+-- No toca filas. Correrla otra vez no cambia nada.
+-- ============================================================================
+
+drop index if exists public.gf_order_requests_live_uniq;
+create unique index if not exists gf_order_requests_live_uniq
+  on public.gf_order_requests (order_id) where status = 'pending';
+comment on index public.gf_order_requests_live_uniq is
+  'GF Courier (0346, MOM §29.17): una creación EN CURSO por pedido. Las enviadas no ocupan el candado: la -S2 se crea cuando la anterior está cerrada.';
+
+-- ---- 0347 ----
+-- ============================================================================
+-- 0347_lima_repro_gf_courier.sql — Repro Lima acuerda con GF Courier por API
+-- (MOM §9.5 y §29.17; decisión del owner, 15-11-2026: «Sí, haz lo de GF
+-- Courier en los acuerdos. En el caso de GF Courier la guía ya podría quedar
+-- generada para esa fecha.»).
+--
+-- En una tienda con GF Courier por API (`stores.gf_courier_enabled`, 0344) la
+-- hoja de Repro Lima ofrece GF Courier primero y por defecto, sin Grupo GF, y
+-- al guardar el acuerdo Kapta crea la guía GF para el día acordado. El acuerdo
+-- guarda el courier como `gf_courier`, el mismo token de la salida
+-- (`shipments.courier`), así que `lima_repro_cases.agreed_courier` y
+-- `lima_repro_calls.courier` tienen que admitirlo. Es lo mismo que hizo la 0283
+-- con Aliclik.
+--
+-- Solo cambian los dos CHECK; no toca filas, sin drop de datos. Correrla otra
+-- vez no cambia nada. Sin ella, guardar un acuerdo con GF Courier falla con el
+-- error del CHECK y los demás couriers siguen igual.
+-- Se aplica a mano ANTES del código (DEPLOY.md).
+-- ============================================================================
+
+alter table public.lima_repro_cases
+  drop constraint if exists lima_repro_cases_agreed_courier_check;
+
+alter table public.lima_repro_cases
+  add constraint lima_repro_cases_agreed_courier_check
+  check (agreed_courier in ('propio', 'gf_courier', 'aliclik', 'tanders', 'fenix', 'urpi', 'axel'));
+
+-- La llamada que cerró el acuerdo guarda el mismo courier.
+alter table public.lima_repro_calls
+  drop constraint if exists lima_repro_calls_courier_check;
+
+alter table public.lima_repro_calls
+  add constraint lima_repro_calls_courier_check
+  check (courier in ('propio', 'gf_courier', 'aliclik', 'tanders', 'fenix', 'urpi', 'axel'));
+
+-- ---- 0348 ----
+-- ============================================================================
+-- 0348_dispatch_courier.sql — Programar en lote con courier en Repro Lima
+-- (MOM §6.2 y §9.5; owner, 16-11-2026: «con un botón ya lo dejamos programados
+-- exactamente para un courier… en el caso de GF Courier ya se crea incluso
+-- hasta la guía para la fecha que se programe»).
+--
+-- 1. `order_master.dispatch_courier`: el courier elegido en «Programar envío»
+--    (`dispatch_date_set.payload.courier`), al lado de `dispatch_scheduled_on`
+--    y con la misma regla: solo mientras el pedido sigue en Preparación · Por
+--    generar rótulo sin guía. La guía GF automática no toma un pedido
+--    programado con otro courier, y la fila de Repro Lima dice con quién sale.
+--    Los valores los decide `isDispatchCourier` (propio, gf_courier, aliclik,
+--    fenix); es una tabla derivada, así que no lleva CHECK: un valor raro no
+--    debe frenar el recálculo del Master.
+-- 2. `lima_repro_calls_sin_contacto`: el canal `sin_contacto` también vale con
+--    `confirma`. Es el acuerdo que nace al programar en lote un no entregado
+--    «Por acordar» sin hablar con la clienta. La RPC ya no lo cuenta como
+--    llamada (`v_contact = 0`).
+--
+-- Aditiva: sin drop de datos, no toca filas y se puede correr otra vez. Sin
+-- ella, «Programar envío» con courier falla al recalcular el Master y el
+-- acuerdo sin llamada falla con el error del CHECK; lo demás sigue igual.
+-- Se aplica a mano ANTES del código (DEPLOY.md).
+-- ============================================================================
+
+alter table public.order_master
+  add column if not exists dispatch_courier text;
+
+comment on column public.order_master.dispatch_courier is
+  'Courier elegido en «Programar envío» (dispatch_date_set.payload.courier): propio, gf_courier, aliclik o fenix. Solo en Preparación · Por generar rótulo.';
+
+alter table public.lima_repro_calls
+  drop constraint if exists lima_repro_calls_sin_contacto;
+
+alter table public.lima_repro_calls
+  add constraint lima_repro_calls_sin_contacto
+  check (channel <> 'sin_contacto' or outcome in ('no_quiere', 'confirma'));
+
+-- ---- 0349 ----
+-- ============================================================================
+-- 0349_lima_courier_auto.sql — Guía Aliclik y Swayp del día programado en Lima
+-- (MOM §9.5, §6.2 y §40; owner, 16-11-2026: «Kapta la crea ese día»).
+--
+-- Desde la 0348 Repro Lima programa en lote con un courier. Con Aliclik o Swayp
+-- el pedido queda programado; esta automatización crea su guía: la de Aliclik
+-- la mañana del día y la de Swayp la víspera (Swayp arma su ruta el día
+-- anterior). Es lo mismo que la 0345 hizo con la guía GF automática:
+--
+-- 1. `lima_courier_auto_settings`: la posición por organización (Apagado /
+--    Simulación / Activo). Sin fila es Apagado.
+-- 2. `lima_courier_auto_log`: lo que hizo (activo) o habría hecho (simulacion)
+--    cada pasada, uno por pedido, día de Lima y modo, con el courier.
+--
+-- RLS de lectura para la organización; escritura solo del servidor. Aditiva:
+-- sin drop de datos, no toca filas y se puede correr otra vez. Sin ella, el cron
+-- responde 502 con «Falta la migración 0349» y la fila del panel queda bloqueada
+-- como Apagado; no se crea ninguna guía. Nace Apagado en todas las organizaciones.
+-- Se aplica a mano ANTES del código (DEPLOY.md).
+-- ============================================================================
+
+create table if not exists public.lima_courier_auto_settings (
+  org_id      uuid primary key references public.organizations(id) on delete cascade,
+  mode        text not null default 'apagado',
+  updated_by  uuid references auth.users(id) on delete set null,
+  updated_at  timestamptz not null default now()
+);
+alter table public.lima_courier_auto_settings drop constraint if exists lima_courier_auto_settings_mode_check;
+alter table public.lima_courier_auto_settings add constraint lima_courier_auto_settings_mode_check
+  check (mode in ('apagado', 'simulacion', 'activo'));
+comment on table public.lima_courier_auto_settings is
+  'Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5): apagado | simulacion | activo por organización. Sin fila = apagado.';
+
+create table if not exists public.lima_courier_auto_log (
+  id          bigserial primary key,
+  org_id      uuid not null references public.organizations(id) on delete cascade,
+  store_id    uuid not null references public.stores(id) on delete cascade,
+  order_id    uuid not null references public.orders(id) on delete cascade,
+  order_name  text,
+  lima_day    date not null,
+  mode        text not null,
+  courier     text not null,
+  dispatch_on date not null,
+  origin      text not null,
+  outcome     text not null,
+  guide_code  text,
+  detail      text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+alter table public.lima_courier_auto_log drop constraint if exists lima_courier_auto_log_mode_check;
+alter table public.lima_courier_auto_log add constraint lima_courier_auto_log_mode_check
+  check (mode in ('simulacion', 'activo'));
+alter table public.lima_courier_auto_log drop constraint if exists lima_courier_auto_log_courier_check;
+alter table public.lima_courier_auto_log add constraint lima_courier_auto_log_courier_check
+  check (courier in ('aliclik', 'fenix'));
+alter table public.lima_courier_auto_log drop constraint if exists lima_courier_auto_log_origin_check;
+alter table public.lima_courier_auto_log add constraint lima_courier_auto_log_origin_check
+  check (origin in ('envio', 'acuerdo'));
+alter table public.lima_courier_auto_log drop constraint if exists lima_courier_auto_log_outcome_check;
+alter table public.lima_courier_auto_log add constraint lima_courier_auto_log_outcome_check
+  check (outcome in ('simulada', 'creada', 'fallo', 'en_curso'));
+create unique index if not exists lima_courier_auto_log_day_uniq
+  on public.lima_courier_auto_log (order_id, lima_day, mode);
+create index if not exists lima_courier_auto_log_org_day_idx
+  on public.lima_courier_auto_log (org_id, lima_day desc, mode);
+comment on table public.lima_courier_auto_log is
+  'Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5): lo que hizo (activo) o habría hecho (simulacion) cada pasada, por pedido y día de Lima.';
+
+alter table public.lima_courier_auto_settings enable row level security;
+alter table public.lima_courier_auto_log enable row level security;
+
+drop policy if exists lima_courier_auto_settings_read on public.lima_courier_auto_settings;
+create policy lima_courier_auto_settings_read on public.lima_courier_auto_settings
+  for select to authenticated using (org_id in (select auth_org_ids()));
+drop policy if exists lima_courier_auto_log_read on public.lima_courier_auto_log;
+create policy lima_courier_auto_log_read on public.lima_courier_auto_log
+  for select to authenticated using (store_id in (select auth_store_ids()));
+
+revoke all on public.lima_courier_auto_settings, public.lima_courier_auto_log from anon, authenticated;
+grant select on public.lima_courier_auto_settings, public.lima_courier_auto_log to authenticated;
+grant all on public.lima_courier_auto_settings, public.lima_courier_auto_log to service_role;
+grant usage, select on sequence public.lima_courier_auto_log_id_seq to service_role;
+
+-- ---- 0350 ----
+-- 0350 — La caja de Grupo GF ya reportada «No entregado» no frena la guía de
+-- Aliclik en ninguna cobertura (owner, 16-11-2026: «no debería ser un
+-- limitante para crear guía en otro lado, porque ya tenemos el reporte de la NO
+-- entrega»; #AUR900778, MOM §9.5).
+--
+-- La 0337 dejaba «en devolución» la caja que el motorizado todavía tiene
+-- cuando sale la guía de Aliclik, pero solo en Lima. Un pedido de provincia que
+-- salió por error en una ruta de Lima (#AUR900778, Chimbote, «No entregado ·
+-- Provincia») quedaba con la caja «viva» hasta cerrar la ruta del motorizado, y
+-- la guía de Aliclik no se podía crear. La regla de la creación ya no la cuenta
+-- (`gfNoEntregadaReportada`, lib/shipment-output.ts); aquí, al crear la guía,
+-- la caja pasa a `retorno` también fuera de Lima, con las mismas rejas: propia,
+-- pendiente, con el motorizado, no reemplazada antes, con su última parada «No
+-- entregado» reportada ANTES de la guía y en su propia caja. Idempotente.
+
+create or replace function public.gf_replace_output_with_aliclik(
+  p_guide_shipment uuid,
+  p_actor uuid
+)
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_new shipments%rowtype;
+  v_old shipments%rowtype;
+  v_item dispatch_manifest_items%rowtype;
+  v_manifest dispatch_manifests%rowtype;
+  v_stop delivery_stops%rowtype;
+  v_guide_at timestamptz;
+  v_route_date date;
+  v_rider text;
+  v_rider_id uuid;
+  v_old_code text;
+  v_new_code text;
+  v_note text;
+  v_req uuid;
+  v_candidate uuid;
+  v_done jsonb := '[]'::jsonb;
+  v_skipped jsonb := '[]'::jsonb;
+begin
+  select * into v_new from shipments where id = p_guide_shipment;
+  if not found then return jsonb_build_object('replaced', v_done, 'skipped', 'no_existe'); end if;
+  if v_new.order_id is null then return jsonb_build_object('replaced', v_done, 'skipped', 'sin_pedido'); end if;
+  -- La guía de Aliclik viva o ya ENTREGADA (13-11-2026, #KP203491: Aliclik lo
+  -- entregó con la caja de stock y la de Grupo GF seguía «viva» con Alexis,
+  -- dejando el pedido en «salida adicional activa»). Una anulada o devuelta no
+  -- saca el pedido.
+  if lower(trim(coalesce(v_new.courier, ''))) <> 'aliclik'
+     or v_new.delivery_status not in ('pendiente', 'en_ruta', 'entregado')
+     or v_new.returned_at is not null or coalesce(v_new.custody_state, '') = 'devuelto' then
+    return jsonb_build_object('replaced', v_done, 'skipped', 'no_es_guia_aliclik_viva');
+  end if;
+  -- Desde la 0350, en cualquier cobertura: la caja de Grupo GF ya reportada
+  -- «No entregado» no estorba a la guía nueva en ninguna parte (owner,
+  -- 16-11-2026, #AUR900778, un pedido de Chimbote que salió por error con Roy).
+  -- Cuándo nació la guía: una «por definir» rellenada conserva su `created_at`
+  -- y la guía se le escribió al asignarla (`assigned_at`).
+  v_guide_at := greatest(v_new.created_at, v_new.assigned_at);
+
+  for v_candidate in
+    select s.id from shipments s
+     where s.order_id = v_new.order_id and s.id <> v_new.id
+       and lower(trim(s.courier)) = 'propio' and s.delivery_status = 'pendiente'
+       and s.custody_state = 'courier' and s.returned_at is null
+     order by s.output_number nulls last, s.created_at
+  loop
+    -- El mismo orden de candados que `gf_replace_output` y `gf_return_to_office`
+    -- (ítem, caja, parada, salida): un «Recibir en oficina» simultáneo no se
+    -- cruza con esto.
+    v_item := null; v_manifest := null; v_stop := null;
+    select * into v_item from dispatch_manifest_items
+     where shipment_id = v_candidate and removed_at is null
+     order by created_at desc limit 1 for update;
+    if v_item.id is not null then
+      select * into v_manifest from dispatch_manifests where id = v_item.manifest_id for update;
+    end if;
+    -- La última parada de ESTA salida, en cualquier ruta (como la 0305).
+    select * into v_stop from delivery_stops
+     where shipment_id = v_candidate
+     order by created_at desc, reported_at desc nulls last
+     limit 1 for update;
+    select * into v_old from shipments where id = v_candidate for update;
+
+    -- Releído con candado.
+    if lower(trim(v_old.courier)) <> 'propio' or v_old.delivery_status <> 'pendiente'
+       or v_old.custody_state is distinct from 'courier' or v_old.returned_at is not null then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'ya_no_esta_con_el_motorizado');
+      continue;
+    end if;
+    if gf_output_replaced(v_old.id) then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'ya_reemplazada');
+      continue;
+    end if;
+    if v_stop.id is null or v_stop.status <> 'no_entregado' then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'sin_no_entregado');
+      continue;
+    end if;
+    if coalesce(v_stop.reported_at, v_stop.created_at) >= v_guide_at then
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'no_entregado_posterior_a_la_guia');
+      continue;
+    end if;
+    if v_item.id is not null and (v_manifest.courier is distinct from 'propio'
+       or v_stop.dispatch_manifest_id is distinct from v_item.manifest_id) then
+      -- En una caja que no es de Grupo GF, o con otra parada que la de su caja:
+      -- se revisa a mano.
+      v_skipped := v_skipped || jsonb_build_object('shipment_id', v_candidate, 'why', 'caja_sin_su_reporte');
+      continue;
+    end if;
+
+    select dr.route_date, dr.rider_id, r.full_name into v_route_date, v_rider_id, v_rider
+      from delivery_routes dr left join riders r on r.id = dr.rider_id
+     where dr.id = v_stop.route_id;
+    v_rider := coalesce(v_manifest.driver_name, v_rider, 'el motorizado');
+    v_rider_id := coalesce(v_manifest.rider_id, v_rider_id);
+    v_route_date := coalesce(v_manifest.route_date, v_route_date);
+    v_old_code := coalesce(v_old.output_code, v_old.guide_code, 'La salida anterior');
+    v_new_code := coalesce(v_new.output_code, v_new.guide_code, 'la guía de Aliclik');
+    v_note := left(v_old_code || ' sigue con ' || v_rider || ' (en devolución): el pedido sale por Aliclik con '
+      || v_new_code || coalesce(' (' || nullif(v_new.guide_code, v_new_code) || ')', '')
+      || '. Al recibirla en oficina se desarma y vuelve a stock.', 300);
+
+    update shipments set custody_state = 'retorno' where id = v_old.id;
+
+    -- La solicitud de Grupo GF de la caja anterior se cierra: el pedido ya no
+    -- sale con Grupo GF. La parada fallida queda en la ruta del motorizado.
+    v_req := null;
+    update logistics_requests
+       set status = 'cancelled', observation = v_note
+     where shipment_id = v_old.id and status not in ('cancelled', 'completed')
+    returning id into v_req;
+    if v_req is not null then
+      insert into logistics_request_events(request_id, kind, status, actor, note, payload)
+      values (v_req, 'output_replaced', 'cancelled', p_actor, v_note,
+              jsonb_build_object('from', v_old.id, 'from_code', v_old.output_code,
+                                 'to', v_new.id, 'to_code', v_new.output_code,
+                                 'to_courier', 'aliclik', 'to_guide', v_new.guide_code));
+    end if;
+
+    if v_item.id is not null then
+      insert into dispatch_events(org_id, manifest_id, shipment_id, actor, kind, payload)
+      values (v_manifest.org_id, v_item.manifest_id, v_old.id, p_actor, 'output_replaced',
+              jsonb_build_object('stop_id', v_stop.id, 'outcome_reason', v_stop.outcome_reason,
+                                 'replaced_by', v_new.id, 'replaced_by_code', v_new.output_code,
+                                 'replaced_by_courier', 'aliclik', 'replaced_by_guide', v_new.guide_code));
+    end if;
+    insert into order_events(store_id, order_id, kind, actor, source, courier, guide_code, shipment_id, reason, note, payload)
+    values (v_old.store_id, v_old.order_id, 'output_replaced', p_actor, 'aliclik', 'propio',
+            v_old.guide_code, v_old.id, v_stop.outcome_reason, v_note,
+            jsonb_build_object('replaced_by', v_new.id, 'replaced_by_code', v_new.output_code,
+                               'replaced_by_courier', 'aliclik', 'replaced_by_guide', v_new.guide_code,
+                               'manifest_id', v_item.manifest_id, 'rider_id', v_rider_id,
+                               'route_date', v_route_date, 'stop_id', v_stop.id,
+                               'outcome_reason', v_stop.outcome_reason, 'request_id', v_req,
+                               'request_closed', v_req is not null));
+
+    v_done := v_done || jsonb_build_object('shipment_id', v_old.id, 'old_code', v_old.output_code,
+                                           'rider', v_rider, 'route_date', v_route_date, 'request_id', v_req);
+  end loop;
+
+  return jsonb_build_object('order_id', v_new.order_id, 'new_code', v_new.output_code,
+                            'replaced', v_done, 'skipped', v_skipped);
+end;
+$$;
+
+revoke all on function public.gf_replace_output_with_aliclik(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.gf_replace_output_with_aliclik(uuid, uuid) to service_role;
+
+-- ---- 0351 ----
+-- ============================================================================
+-- 0351_lead_appointment_return_hold.sql — la clienta que responde vuelve 10
+-- minutos a quien agendó «Volver a llamar» (decisión del owner, 16-11-2026;
+-- MOM «Bloques por asesora»).
+--
+-- POR QUÉ. Caso real (16-11-2026): una asesora agendó «Volver a llamar» para
+-- las 10:00 («mañana yapea»). La reserva por cita se soltó a las 12:00 (0322:
+-- 2 h de gracia). A las 15:01 la clienta escribió y mandó el Yape; a las 15:03
+-- otra asesora lo tomó del reparto, llamó y creó el pedido. Desde la 0322, que
+-- la clienta escriba SUELTA la reserva; el owner pide lo contrario: «sí, por
+-- 10 minutos nuevamente desde la respuesta del cliente», con un aviso a quien
+-- lo agendó.
+--
+-- LA REGLA. Mientras el lead tenga la cita de esa asesora (`appointment_owner`,
+-- la misma de la 0322: la cita sigue en `next_followup_at` y ninguna llamada
+-- la consumió), un mensaje ENTRANTE de la clienta posterior a la llamada que la
+-- agendó reserva el lead a esa asesora durante 10 minutos contados desde el
+-- mensaje (`leads.last_inbound_at`), aunque la cita ya esté vencida. Cada
+-- mensaje nuevo vuelve a contar 10 minutos. Pasados, se suelta como en la 0322
+-- y el lead sigue el reparto normal. Fuera de esos 10 minutos todo es la 0322.
+-- La reserva de 10 minutos de quien ya tenía el lead abierto (`claimed_by`)
+-- sigue primero, igual que antes. Qué cuenta como mensaje de la clienta, igual
+-- que la 0322: solo `last_inbound_at` (no `handoff_at` ni lo que manda una
+-- asesora). La regla pura y su espejo: lib/lead-appointment-hold.ts.
+--
+-- ALCANCE. Se reescriben dos funciones con su cuerpo vigente letra a letra y
+-- solo la condición de la reserva cambia:
+--   * `lead_routing_scope` (0322): `appointment_released`.
+--   * `lead_manual_take_check` (0332): la misma condición para «Tomar» manual.
+-- Rendimiento: sin tablas ni índices nuevos; una comparación más por lead ya
+-- leído. No cambia datos. Correrla otra vez no cambia nada.
+-- ============================================================================
+
+create or replace function public.lead_routing_scope(p_actor uuid,p_stores uuid[],p_lead uuid default null)
+returns jsonb language sql stable security invoker set search_path=public,pg_temp as $$
+with scope as materialized (
+  select s.id,s.org_id,coalesce(cfg.enabled,false) as enabled,coalesce(cfg.fresh_hours,24) as hours,coalesce(cfg.revision,0) as revision,
+    (m.role='vendedora' or exists(select 1 from membership_roles r where r.org_id=m.org_id and r.user_id=m.user_id and r.role='asesora'))
+    and m.role<>'owner' and not exists(select 1 from membership_roles r where r.org_id=m.org_id and r.user_id=m.user_id and r.role in ('administracion','supervision')) as advisor,
+    coalesce(a.blocks,'{}'::text[]) as blocks,coalesce(a.backup,false) as backup
+  from stores s join memberships m on m.org_id=s.org_id and m.user_id=p_actor
+  left join lead_routing_settings cfg on cfg.org_id=s.org_id
+  left join lead_routing_assignments a on a.org_id=s.org_id and a.user_id=p_actor
+  where s.id=any(p_stores) and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.store_id=s.id and sa.user_id=p_actor))
+), base as materialized (
+  select l.id,l.store_id,l.category,l.status,l.call_attempt_count,l.first_seen_at,l.last_inbound_at,l.draft_order_gid,l.next_followup_at,l.claimed_by,l.claimed_at,l.updated_at,l.needs_attention,l.handoff_at,l.call_queue_ready,l.contact_opt_out_at,l.has_order,l.order_id,sc.hours,sc.revision,sc.enabled and sc.advisor as restricted,sc.blocks,sc.backup,
+    (coalesce(l.cart_item_count,0)>0 or nullif(l.draft_order_gid,'') is not null) as cart,
+    (nullif(trim(l.district),'') is not null or coalesce(l.first_inbound_text,'') ~* 'https?://[^[:space:]]*/products/[^[:space:]]' or l.status in ('casi_cierra','yape_por_verificar')) as interest
+  -- 0312: dos ramas excluyentes en vez de un OR sobre p_lead. La cola entera
+  -- (p_lead nulo) entra por leads_store_category_idx y un lead suelto por
+  -- leads_pkey; el OR obligaba a recorrer `leads` entera en las dos. Mismas
+  -- filas que el filtro de la 0299.
+  from scope sc cross join lateral (
+    select l.id,l.store_id,l.category,l.status,l.call_attempt_count,l.first_seen_at,l.last_inbound_at,l.draft_order_gid,l.next_followup_at,l.claimed_by,l.claimed_at,l.updated_at,l.needs_attention,l.handoff_at,l.call_queue_ready,l.contact_opt_out_at,l.has_order,l.order_id,l.cart_item_count,l.district,l.first_inbound_text from leads l
+     where p_lead is null and sc.enabled and sc.advisor and l.store_id=sc.id and l.category in ('open','hot')
+    union all
+    select l.id,l.store_id,l.category,l.status,l.call_attempt_count,l.first_seen_at,l.last_inbound_at,l.draft_order_gid,l.next_followup_at,l.claimed_by,l.claimed_at,l.updated_at,l.needs_attention,l.handoff_at,l.call_queue_ready,l.contact_opt_out_at,l.has_order,l.order_id,l.cart_item_count,l.district,l.first_inbound_text from leads l
+     where l.id=p_lead and l.store_id=sc.id
+  ) l
+), drafts as materialized (
+  select d.store_id,d.draft_order_gid,max(d.created_at) as created_at from draft_orders d
+  join (select distinct store_id,draft_order_gid from base where category in ('open','hot') and restricted and draft_order_gid is not null)b using(store_id,draft_order_gid)
+  where d.created_at<=now() group by d.store_id,d.draft_order_gid
+), calls as materialized (
+  -- 0322: la llamada que agendó la cita vigente con una asesora habilitada se
+  -- marca una vez (`appointment`) y da la dueña y CUÁNDO se agendó. Mismas
+  -- filas y mismo índice que la 0312; `offset 0` evita que la marca se copie
+  -- en los dos agregados.
+  select x.lead_id,max(x.occurred_at) as last_call_at,
+    (array_agg(x.vendedora order by x.occurred_at desc,x.id desc) filter(where x.appointment))[1] as appointment_owner,
+    max(x.occurred_at) filter(where x.appointment) as appointment_booked_at
+  from (
+    select c.lead_id,c.occurred_at,c.id,c.vendedora,
+      (b.next_followup_at is not null and c.next_followup_at=b.next_followup_at
+      and exists(select 1 from memberships m join stores st on st.org_id=m.org_id and st.id=c.store_id
+        where m.user_id=c.vendedora and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=m.user_id and sa.store_id=st.id))
+        and (m.role in ('owner','admin','vendedora') or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora')))) as appointment
+    from lead_calls c join base b on b.id=c.lead_id and b.store_id=c.store_id
+    where b.restricted and b.category in ('open','hot') and c.kind='call' and c.vendedora is not null and c.occurred_at<=now()
+    offset 0
+  ) x group by x.lead_id
+), classified as materialized (
+  select b.*,c.appointment_owner,
+    -- 0322: la reserva por cita se suelta 2 h después de la hora de la cita, o
+    -- cuando la clienta escribió después de que se agendó (lib/lead-appointment-hold.ts).
+    -- 0351: salvo durante los 10 minutos que siguen a ese mensaje, en los que el
+    -- lead vuelve a ser de quien agendó, aunque la cita ya esté vencida.
+    -- `coalesce`: sin mensaje entrante la comparación da nulo, y un nulo en el
+    -- `case` de `permitted` saltaría la reserva en vez de mantenerla.
+    coalesce(c.appointment_owner is not null
+      and not coalesce(b.last_inbound_at<=now() and b.last_inbound_at>c.appointment_booked_at
+        and b.last_inbound_at>now()-interval '10 minutes',false)
+      and (b.next_followup_at<=now()-interval '2 hours'
+      or (b.last_inbound_at<=now() and b.last_inbound_at>c.appointment_booked_at)),false) as appointment_released,
+    case
+    when status='yape_por_verificar' then 'interes_reciente'
+    when greatest(case when b.first_seen_at<=now() then b.first_seen_at end,case when b.last_inbound_at<=now() then b.last_inbound_at end,d.created_at)>=now()-make_interval(hours=>b.hours)
+      and (coalesce(call_attempt_count,0)=0 or c.last_call_at is null or greatest(case when b.first_seen_at<=now() then b.first_seen_at end,case when b.last_inbound_at<=now() then b.last_inbound_at end,d.created_at)>c.last_call_at)
+      then case when cart then 'carrito_reciente' when interest then 'interes_reciente' else 'nuevo_sin_intencion' end
+    when cart or interest then 'pendiente_con_interes' else 'recuperacion' end as block
+  from base b left join drafts d using(store_id,draft_order_gid) left join calls c on c.lead_id=b.id
+), available as materialized (
+  select a.org_id,sa.store_id,a.user_id,a.blocks from lead_routing_assignments a
+  join memberships m on m.user_id=a.user_id and m.org_id=a.org_id
+  join user_store_access sa on sa.user_id=a.user_id
+  join scope s on s.id=sa.store_id and s.org_id=a.org_id
+  join user_presence p on p.user_id=a.user_id and p.last_seen_at>=now()-interval '40 seconds'
+  where (m.role='vendedora' or exists(select 1 from membership_roles mr where mr.org_id=m.org_id and mr.user_id=m.user_id and mr.role='asesora'))
+  and (select count(*) from leads held where held.claimed_by=a.user_id and held.claimed_at>now()-interval '10 minutes' and held.category not in ('won','lost'))<2
+), permitted as materialized (
+  select c.*,case
+    when not restricted or category not in ('open','hot') then true
+    when claimed_by=p_actor and claimed_at>now()-interval '10 minutes' then true
+    -- 0322: una cita suelta ya no reserva; sigue el reparto normal de abajo.
+    when appointment_owner is not null and not appointment_released then appointment_owner=p_actor
+    when block=any(blocks) then true
+    when backup and block<>'recuperacion' and not exists(select 1 from available av where av.store_id=c.store_id and c.block=any(av.blocks)) then true
+    else false end as allowed from classified c
+)
+select jsonb_build_object(
+  'enabled',coalesce((select bool_or(enabled and advisor) from scope),false),
+  'blocks',coalesce((select jsonb_agg(distinct b) from scope cross join unnest(blocks)b),'[]'::jsonb),
+  'blockedIds',coalesce(jsonb_agg(id) filter(where not allowed),'[]'::jsonb),
+  'allowed',case when p_lead is null then exists(select 1 from scope) else coalesce(bool_and(allowed),false) end,
+  'signature',concat(max(updated_at),'|',max(revision),'|',md5(coalesce(string_agg(id::text,',' order by id) filter(where not allowed),'')),'|',floor(extract(epoch from now())/60)),
+  'counts',jsonb_build_object(
+    'por_llamar',count(*) filter(where allowed and category in ('open','hot') and status<>'yape_por_verificar'),
+    'handoff',count(*) filter(where allowed and needs_attention and handoff_at>=now()-interval '24 hours'),
+    'yape',count(*) filter(where allowed and status='yape_por_verificar'),
+    'seguimientos',count(*) filter(where allowed and next_followup_at<=now()),
+    -- 0312: solo la cola entera lee ganados/perdidos; un lead suelto no los cuenta.
+    'ganados',case when p_lead is null and (select bool_or(enabled and advisor) from scope) then (select count(*) from leads l join scope s on s.id=l.store_id where l.category='won') else 0 end, 'perdidos',case when p_lead is null and (select bool_or(enabled and advisor) from scope) then (select count(*) from leads l join scope s on s.id=l.store_id where l.category='lost') else 0 end,
+    'sin_llamar',count(*) filter(where allowed and public.lead_in_call_queue(status,category,call_queue_ready,contact_opt_out_at,has_order,order_id,next_followup_at)))
+) from permitted
+$$;
+revoke all on function public.lead_routing_scope(uuid,uuid[],uuid) from public,anon,authenticated;
+grant execute on function public.lead_routing_scope(uuid,uuid[],uuid) to service_role;
+comment on function public.lead_routing_scope(uuid,uuid[],uuid) is
+  'Alcance del reparto de Leads por bloques (MOM «Bloques por asesora»; 0295, 0299, 0312). Desde la 0322 la reserva por cita se suelta 2 h después de la cita o cuando la clienta vuelve a escribir; desde la 0351 ese mensaje la devuelve 10 minutos a quien agendó.';
+
+create or replace function public.lead_manual_take_check(p_actor uuid,p_lead uuid)
+returns jsonb language plpgsql stable security invoker set search_path=public,pg_temp as $$
+declare l leads%rowtype; o uuid; routed boolean; appointment record;
+begin
+  select * into l from leads where id=p_lead;
+  if not found then return jsonb_build_object('ok',false,'reason','store'); end if;
+  select s.org_id into o from stores s join memberships m on m.org_id=s.org_id and m.user_id=p_actor
+    where s.id=l.store_id
+    and (m.role in ('owner','admin','vendedora') or exists(select 1 from membership_roles r where r.org_id=m.org_id and r.user_id=m.user_id and r.role='asesora'))
+    and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=p_actor and sa.store_id=s.id));
+  if o is null then return jsonb_build_object('ok',false,'reason','store'); end if;
+  if l.claimed_by is not null and l.claimed_by<>p_actor and l.claimed_at>now()-interval '10 minutes' then
+    return jsonb_build_object('ok',false,'reason','claimed','holder',l.claimed_by);
+  end if;
+  -- Same appointment ownership/release rule as 0322 and 0351. A manual
+  -- permission cannot take a different advisor's still-valid appointment.
+  select c.vendedora,c.occurred_at into appointment from lead_calls c
+    join memberships m on m.user_id=c.vendedora and m.org_id=o
+    where c.lead_id=l.id and c.store_id=l.store_id and c.kind='call'
+      and l.category in ('open','hot') and l.next_followup_at is not null and c.next_followup_at=l.next_followup_at
+      and c.occurred_at<=now()
+      and (m.role in ('owner','admin','vendedora') or exists(select 1 from membership_roles r where r.org_id=o and r.user_id=c.vendedora and r.role='asesora'))
+      and (m.role in ('owner','admin') or exists(select 1 from user_store_access sa where sa.user_id=c.vendedora and sa.store_id=l.store_id))
+    order by c.occurred_at desc,c.id desc limit 1;
+  if appointment.vendedora is not null and appointment.vendedora<>p_actor
+    and (coalesce(l.last_inbound_at<=now() and l.last_inbound_at>appointment.occurred_at
+        and l.last_inbound_at>now()-interval '10 minutes',false)
+      or (l.next_followup_at>now()-interval '2 hours'
+        and not coalesce(l.last_inbound_at<=now() and l.last_inbound_at>appointment.occurred_at,false))) then
+    return jsonb_build_object('ok',false,'reason','appointment','holder',appointment.vendedora);
+  end if;
+  routed:=coalesce((lead_routing_scope(p_actor,array[l.store_id],l.id)->>'allowed')::boolean,false);
+  if not routed and not(l.store_id=any(lead_manual_take_stores(p_actor,array[l.store_id]))) then
+    return jsonb_build_object('ok',false,'reason','permission');
+  end if;
+  if (select count(*) from leads held where held.claimed_by=p_actor and held.claimed_at>now()-interval '10 minutes'
+    and held.id<>l.id and held.category not in ('won','lost'))>=2 then
+    return jsonb_build_object('ok',false,'reason','capacity');
+  end if;
+  return jsonb_build_object('ok',true,'manualException',not routed);
+end $$;
+
+revoke all on function public.lead_manual_take_check(uuid,uuid) from public,anon,authenticated;
+grant execute on function public.lead_manual_take_check(uuid,uuid) to service_role;

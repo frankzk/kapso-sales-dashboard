@@ -62,6 +62,8 @@ import { orgOfStore, prepayEntryRequirementFor } from "@/lib/prepay-list-server"
 import { prepayEntryBlockMessage } from "@/lib/prepay-list";
 import { pagoOnlineOrderMessage } from "@/lib/pago-online";
 import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
+import { listaNegraAutoBrakes } from "@/lib/lista-negra";
+import { limaTodayKey } from "@/lib/shipments";
 import { priceMismatchRejection, resolveOrderDiscount, type OrderDiscountInput } from "@/lib/shopify";
 import { TAGS } from "@/lib/types";
 import { mapWooOrder, toWooPeruState, type WooClientOpts, type WooOrder } from "@/lib/woocommerce";
@@ -959,7 +961,29 @@ export async function handleBotOrder(req: BotOrderRequest, deps: BotOrderDeps): 
         auto = { state: "unread", error: "timeout" };
       }
       if (auto.state === "unread") events.push("pago_online.unread");
-      if (auto.state === "listed") return finish(fail("prepay_required", pagoOnlineOrderMessage("bot", auto.requirement, auto.who)));
+      if (auto.state === "listed") {
+        // En Lima la automática no frena (owner, 16-11-2026, MOM §41.12): el
+        // bot crea el pedido contra entrega. La cobertura es la del pedido
+        // (`order_coverage_for`); si no se puede saber, frena como siempre.
+        let coverage: string | null = null;
+        try {
+          const { data, error } = await step(
+            "coverage",
+            admin.rpc("order_coverage_for", {
+              p_store_id: storeId,
+              p_region: input.department,
+              p_province: null,
+              p_district: input.district,
+              p_day: limaTodayKey(new Date(now())),
+            }),
+          );
+          coverage = !error && typeof data === "string" ? data : null;
+        } catch {
+          events.push("coverage.unread");
+        }
+        if (listaNegraAutoBrakes(coverage)) return finish(fail("prepay_required", pagoOnlineOrderMessage("bot", auto.requirement, auto.who)));
+        events.push("pago_online.lima");
+      }
     }
 
     // Los montos, con las reglas de «Generar pedido»: contraentrega, el total

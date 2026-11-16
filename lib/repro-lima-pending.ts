@@ -1,99 +1,43 @@
 // Repro Lima: la cola de trabajo amplia. Son filtros de lectura del Master;
 // ver un pendiente no crea un caso de entrega fallida ni autoriza otra salida.
+//
+// Desde el 15-11-2026 (owner; MOM §9.5) la pantalla ordena esta cola por las
+// tareas del equipo en tres bloques —«Por gestionar hoy», «Agenda» y «En manos
+// del courier»—, que calcula lib/repro-lima-blocks.ts. Aquí quedan la fila, sus
+// fechas, los filtros de la barra y las piezas que comparten.
 import { MACRO_SUBSTAGES_BY_STAGE, macroStageLabel, macroSubstageLabel, type OrderMacroStage } from "@/lib/order-macro-stage";
 import { tandersReleaseCutoff } from "@/lib/gf-tanders-review";
 import type { ReproList } from "@/lib/repro-lima";
-import { QUEUE_SEGMENTS, QUEUE_SEGMENT_LABEL, limaDay, programDayLabel, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
+import { limaDay, programDayLabel, queueSegment, type QueueSegment } from "@/lib/dispatch-day";
 import { SALES_CHANNEL_OPTIONS } from "@/lib/sales-channel";
-import type { PlanBox, PlanCandidate } from "@/lib/dispatch-plan";
+import type { PlanBox } from "@/lib/dispatch-plan";
 import { courierDisplayName } from "@/lib/dispatched-with";
 
-export type LimaAttentionFilter = "todos" | "reintentos_aliclik" | "reprogramados" | QueueSegment | "llamar_despues" | "cerrados";
-type AttentionCase = {
+/** Lo que la cola mira del caso de Repro Lima (`ReproRow`). */
+export type PendingCase = {
   orderId: string; list: ReproList;
   /** El reintento por Aliclik que toca (lib/lima-retry-chain.ts), o null. */
   retryChain?: unknown;
-  agreement?: { agreedOn: string; courier?: string } | null;
+  agreement?: { agreedOn: string; courier?: string; courierName?: string } | null;
   program?: { scheduledFor: string } | null;
+  /** La próxima llamada del caso («Llamar después», «No contesta»). */
+  nextCallAt?: string | null;
 };
-
-export const LIMA_QUEUE_CARDS: readonly { key: Exclude<LimaAttentionFilter, "todos" | "llamar_despues" | "cerrados">; label: string; hint: string; empty: string }[] = [
-  { key: "reintentos_aliclik", label: "Reintentos Aliclik", hint: "No entregados de Alexis, Urpi o AUTOECOM por «no contesta», «no estaba» u «otro»: vuelven a salir por Aliclik (AUTOECOM, luego ALIDRIVER), sin llamar. Crea la guía desde la ficha con el transporte indicado.", empty: "No hay reintentos por Aliclik con estos filtros." },
-  { key: "reprogramados", label: "Reprogramados", hint: "Con una nueva fecha acordada y vigente en Repro Lima. También aparecen en Hoy, Mañana o Después según esa fecha.", empty: "No hay pedidos con una nueva fecha acordada con estos filtros." },
-  { key: "programados_hoy", label: "Programados para hoy", hint: QUEUE_SEGMENT_LABEL.programados_hoy.hint, empty: "No hay pedidos programados para hoy con estos filtros." },
-  { key: "programados_manana", label: "Programados para mañana", hint: QUEUE_SEGMENT_LABEL.programados_manana.hint, empty: "No hay pedidos programados para mañana con estos filtros." },
-  { key: "nunca_salieron", label: "Nunca salieron", hint: `${QUEUE_SEGMENT_LABEL.nunca_salieron.hint} Del más antiguo al más reciente: arriba lo que lleva más días esperando.`, empty: "No hay pedidos recientes sin salida registrada con estos filtros." },
-  { key: "ya_salieron", label: "Ya salieron", hint: "Con al menos una salida a reparto registrada y sin una nueva fecha pendiente. La situación indica si sigue con el courier o ya retornó.", empty: "No hay pedidos con una salida previa y sin nueva fecha con estos filtros." },
-  { key: "mas_de_30", label: "Más de 30 días", hint: QUEUE_SEGMENT_LABEL.mas_de_30.hint, empty: "No hay pedidos de más de 30 días sin salida registrada con estos filtros." },
-  { key: "programados_despues", label: "Programados para después", hint: QUEUE_SEGMENT_LABEL.programados_despues.hint, empty: "No hay pedidos programados para después de mañana con estos filtros." },
-];
-
-export const LIMA_FOLLOWUP_FILTERS = [
-  { key: "llamar_despues" as const, label: "Llamar después", hint: "El cliente pidió que lo llamen a otra hora. Por la hora de la llamada.", empty: "Nadie pidió que lo llamen después." },
-  { key: "cerrados" as const, label: "Cerrados · esperan anulación", hint: "«Desarmar y cerrar» del intento vigente: el pedido sigue en la etapa hasta que la tienda anule la venta.", empty: "Ningún caso cerrado espera la anulación." },
-];
-
-/** Las tarjetas filtran una sola cola. Los pedidos sin caso siguen en Todos;
- * no se les inventa un resultado de llamada ni se cambia su macroestado. */
-export function attentionFilter(value: string | null): LimaAttentionFilter {
-  if (value === "programados") return "reprogramados";
-  return [...LIMA_QUEUE_CARDS, ...LIMA_FOLLOWUP_FILTERS].some((c) => c.key === value) ? value as LimaAttentionFilter : "todos";
-}
 
 /** La fecha acordada vigente manda sobre un programa anterior que aún no se
  * actualizó. Sin acuerdo vigente, se usa una programación persistida y, sin
- * ella, el día en que Aliclik recoge la guía que ya tiene (owner, 07-11-2026):
- * un pedido agendado con el courier no «nunca salió» sin gestión. */
-export function limaScheduledFor(row: LimaPendingOrder, c?: AttentionCase): string | null {
+ * ella, el día en que Aliclik recoge la guía que ya tiene (owner, 07-11-2026)
+ * o el que se le pidió a GF Courier para la suya (15-11-2026): un pedido
+ * agendado con el courier no «nunca salió» sin gestión. Así un acuerdo con GF
+ * Courier conserva su día en la Agenda aunque su caso se cierre al crear la
+ * guía (el pedido deja «Por reprogramar Lima»). */
+export function limaScheduledFor(row: LimaPendingOrder, c?: PendingCase): string | null {
   return (c?.list === "programados" ? c.agreement?.agreedOn : null) ?? row.programmedFor ?? c?.program?.scheduledFor ??
     row.courierPickup?.date ?? null;
 }
 
-export function limaQueueSegment(row: LimaPendingOrder, today: string, c?: AttentionCase): QueueSegment {
+export function limaQueueSegment(row: LimaPendingOrder, today: string, c?: PendingCase): QueueSegment {
   return queueSegment({ programmedFor: limaScheduledFor(row, c), hasPriorDispatch: row.hasPriorDispatch, createdAt: row.createdAt }, today);
-}
-
-export function attentionRows(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[], filter: LimaAttentionFilter, today: string): LimaPendingOrder[] {
-  const caseById = new Map(cases.map((c) => [c.orderId, c]));
-  if (filter === "todos" || QUEUE_SEGMENTS.includes(filter as QueueSegment)) {
-    // Una clasificación por pedido: el comparador no reconstruye fechas de
-    // Lima miles de veces cuando la cola amplia tiene más de 2000 filas.
-    return rows.map((row) => {
-      const c = caseById.get(row.orderId);
-      const segment = limaQueueSegment(row, today, c);
-      return { row, segment, rank: QUEUE_SEGMENTS.indexOf(segment), day: limaScheduledFor(row, c) ?? "", created: Date.parse(row.createdAt ?? "") || 0 };
-    }).filter((r) => filter === "todos" || r.segment === filter)
-      // «Nunca salieron», del más antiguo al más reciente (owner, 06-11-2026):
-      // en un pico lo armado hace días se hundía al final y nadie lo llamaba.
-      // El resto, y Despacho del día (`sortQueue`, §29.13), siguen del más reciente.
-      .sort((a, b) => a.rank - b.rank || a.day.localeCompare(b.day) || (a.segment === "nunca_salieron" ? a.created - b.created : b.created - a.created))
-      .map((r) => r.row);
-  }
-  const byId = new Map(rows.map((row) => [row.orderId, row]));
-  // La carga de casos ya aplica sortRepro: al filtrar se conservan el orden de
-  // llamada y las prioridades de acuerdos, sin reconstruir otra tabla.
-  return cases.flatMap((c) => {
-    const row = byId.get(c.orderId);
-    const matches = filter === "reintentos_aliclik"
-      ? Boolean(c.retryChain)
-      : filter === "reprogramados" ? c.list === "programados" && Boolean(c.agreement?.agreedOn) : c.list === filter;
-    if (!row || !matches) return [];
-    byId.delete(c.orderId);
-    return [row];
-  });
-}
-
-export function attentionCounts(rows: readonly LimaPendingOrder[], cases: readonly AttentionCase[], today: string): Record<LimaAttentionFilter, number> {
-  const counts: Record<LimaAttentionFilter, number> = { todos: rows.length, reintentos_aliclik: 0, reprogramados: 0, programados_hoy: 0, programados_manana: 0, nunca_salieron: 0, ya_salieron: 0, mas_de_30: 0, programados_despues: 0, llamar_despues: 0, cerrados: 0 };
-  const byId = new Map(cases.map((row) => [row.orderId, row]));
-  for (const row of rows) {
-    const c = byId.get(row.orderId);
-    counts[limaQueueSegment(row, today, c)] += 1;
-    if (c?.retryChain) counts.reintentos_aliclik += 1;
-    if (c?.list === "programados" && c.agreement?.agreedOn) counts.reprogramados += 1;
-    if (c?.list === "llamar_despues" || c?.list === "cerrados") counts[c.list] += 1;
-  }
-  return counts;
 }
 
 /**
@@ -149,21 +93,29 @@ export interface LimaPendingOrder {
   reference: string | null;
   /**
    * La guía de un courier externo que espera su recojo (§9.5, owner
-   * 07-11-2026): hoy, Aliclik con la guía viva, sin salida ni retorno. `date`
+   * 07-11-2026): Aliclik con la guía viva, sin salida ni retorno. `date`
    * es el día de recojo: el que reportó Aliclik o, sin reporte, el de su regla
-   * de corte. Sin guía esperando, null.
+   * de corte. Desde el 15-11-2026, también la guía de GF Courier sin salir,
+   * con el día que se le pidió a GF (`scheduled_date`): el del acuerdo de Repro
+   * Lima o el de «Programar envío». Sin guía esperando, null.
    */
-  courierPickup?: { courier: "aliclik"; date: string } | null;
+  courierPickup?: { courier: "aliclik" | "gf_courier"; date: string } | null;
   /**
    * El detalle de su courier vigente (owner, 08-11-2026: «no me das grupo gf
    * alexis o aliclik autoecom»): el motorizado de su última caja de Grupo GF, o
    * el transporte de su guía Aliclik (AUTOECOM, ALIDRIVER). Null si no hay.
    */
   courierDetail?: string | null;
-  /** Lo de Grupo GF para «Sale a reparto» (§29.16); null si no sale con Grupo GF. */
+  /**
+   * Lo de Grupo GF (la caja, la solicitud, el rótulo y el armado); null si no
+   * sale con Grupo GF. Desde el 15-11-2026 Repro Lima no lo enseña: lo leen los
+   * trabados de Grupo GF que viven en Despacho del día (§9.6, §29.16).
+   */
   gf?: LimaPendingGf | null;
   /** «Programar envío» (§6.2, `order_master.dispatch_scheduled_on`): solo en Por generar rótulo. */
   scheduledOn?: string | null;
+  /** El courier de ese «Programar envío» (0348, `order_master.dispatch_courier`): `propio`, `gf_courier`, `aliclik` o `fenix`. */
+  scheduledCourier?: string | null;
   /** Lo que dicen sus salidas, para «Lima trabados» (§9.6); null en Por confirmar o sin salidas. */
   ops?: LimaPendingOps | null;
 }
@@ -204,24 +156,6 @@ export interface LimaPendingGf {
    * el corte le dan día; solo el acuerdo o el programa.
    */
   pastBox?: boolean;
-}
-
-/**
- * El pedido para «Sale a reparto» (§29.16, `lib/dispatch-plan.ts`). Su día:
- * el de la caja; si no, el acuerdo o el programa (`limaScheduledFor`), la
- * solicitud tomada, y, sin nada de eso, el corte (`cutoffDay`, el que da
- * `scheduledDay` ahora). Un reintento (En curso) o lo que sigue en una caja de
- * un día que pasó solo tiene el día del acuerdo o el programa: sin ellos espera
- * a la tienda (§29.13) y no entra, como en Despacho del día. Un acuerdo con
- * otro courier no es de Grupo GF.
- */
-export function limaPlanCandidate(row: LimaPendingOrder, c: AttentionCase | undefined, cutoffDay: string): PlanCandidate | null {
-  if (!row.gf) return null;
-  if (c?.list === "programados" && c.agreement?.courier && c.agreement.courier !== "propio") return null;
-  const agreedOrProgrammed = limaScheduledFor(row, c);
-  const waitsForStore = row.stage === "en_curso" || Boolean(row.gf.pastBox);
-  const day = agreedOrProgrammed ?? (waitsForStore ? null : row.gf.requestDay ?? cutoffDay);
-  return { orderId: row.orderId, day: day?.slice(0, 10) ?? null, box: row.gf.box, labeled: row.gf.labeled, armed: row.gf.armed, awaitingOffice: Boolean(row.gf.awaitingOffice) };
 }
 
 // ---------------------------------------------------------------------------

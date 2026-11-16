@@ -406,6 +406,25 @@ describe("el freno de Kapta: la lista automática como otra fuente de `prepayOrd
     expect((await prepayOrderCheck(db.client(), order() as any, "guia")).state).toBe("ok");
   });
 
+  it("en Lima la automática no frena; el alta a mano sí (owner, 16-11-2026, MOM §41.12)", async () => {
+    const db = await listedDb();
+    // La cobertura en la fila: Lima pasa, informada; provincia frena como siempre.
+    expect(await prepayOrderCheck(db.client(), order({ coverage: "lima" }) as any, "confirmar")).toEqual({ state: "ok", listed: true, fullyPaid: false, limaExempt: true });
+    expect(await prepayOrderCheck(db.client(), order({ coverage: "lima" }) as any, "guia")).toEqual({ state: "ok", listed: true, fullyPaid: false, limaExempt: true });
+    expect((await prepayOrderCheck(db.client(), order({ coverage: "provincia_cod" }) as any, "guia")).state).toBe("blocked");
+    expect((await prepayOrderCheck(db.client(), order({ coverage: null }) as any, "guia")).state).toBe("blocked");
+    // Sin la cobertura en la fila, la compuerta la lee del pedido.
+    const read = seed("activo", { order_master: [{ order_id: "o1", store_id: "s-ken", coverage: "lima" }] });
+    await runPagoOnlineForOrg(read.client(), { orgId: ORG, trigger: "cron", now: NOW, fetchImpl: fakeStore(ok).fetchImpl });
+    expect((await prepayOrderCheck(read.client(), order() as any, "guia")).state).toBe("ok");
+    // Un alta a mano frena igual en Lima.
+    const manual = await listedDb("adelanto", [
+      { id: "e1", org_id: ORG, phone: "51987654321", source: "manual", reason: "Avisó que no va a recibir", requirement: "adelanto", evidence: { kind: "manual" }, added_at: "2026-11-01T00:00:00Z", removed_at: null },
+    ]);
+    const c = await prepayOrderCheck(manual.client(), order({ coverage: "lima" }) as any, "guia");
+    expect(c.state === "blocked" && c.source).toBe("lista");
+  });
+
   it("el alta a mano manda: sin decir qué pide (o sin la 0329), el total", async () => {
     const db = await listedDb("adelanto", [
       { id: "e1", org_id: ORG, phone: "51987654321", source: "manual", reason: "Rechazó en la puerta", evidence: { kind: "manual" }, added_at: "2026-11-01T00:00:00Z", removed_at: null },

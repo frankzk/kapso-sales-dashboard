@@ -41,6 +41,8 @@ import {
   storeSettingsHref,
   CHATBY_ASK_KEY,
   CHATBY_HISTORY_KEY,
+  GF_AUTO_GUIDE_KEY,
+  LIMA_COURIER_AUTO_KEY,
   type AutomationEffect,
   type AutomationEntry,
   type AutomationGroup,
@@ -48,6 +50,8 @@ import {
 import type { AutomationsOrgView, OrgSwitchView, RetryChatbyAskView, RetryGeocodeView, RetryLogView, StoreSwitchView } from "@/lib/automations-access";
 import type { ApproxReportRow, ChatbyApproxView } from "@/lib/chatby-approx-server";
 import type { ChatbyAskModeView } from "@/lib/chatby-auto-ask-server";
+import type { GfAutoGuideView, GfAutoLogView } from "@/lib/gf-auto-guide-server";
+import type { LimaCourierAutoLogView, LimaCourierAutoView } from "@/lib/lima-courier-auto-server";
 import {
   APPROX_MODE_LABEL,
   APPROX_NEAR_METERS,
@@ -91,6 +95,9 @@ import {
   setChatbyApproxMode,
   setChatbyAskMode,
   setChatbyHistoryMode,
+  setGfAutoGuideMode,
+  setLimaCourierAutoMode,
+  runLimaCourierAutoNow,
   setOrgAutomation,
   setRetryChatbyAsk,
   setRetryDailyCap,
@@ -146,6 +153,8 @@ const OUTCOME_TONE: Partial<Record<RetryOutcome, BadgeTone>> = {
 
 const groupId = (key: AutomationGroup) => `grupo-${key}`;
 const APPROX_TEST_ID = "prueba-ubicacion-aproximada";
+const GF_AUTO_LOG_ID = "guia-gf-hoy-y-ayer";
+const LIMA_COURIER_LOG_ID = "guia-dia-programado-hoy-y-ayer";
 
 const INDEX: IndexGroup[] = [
   {
@@ -174,6 +183,10 @@ const INDEX: IndexGroup[] = [
       { id: groupId(g.key), label: g.title },
       // La prueba de la ubicación aproximada va con la Confirmación (0316).
       ...(g.key === "confirmacion" ? [{ id: APPROX_TEST_ID, label: "Prueba de ubicación aproximada" }] : []),
+      // Lo que hizo la guía GF automática va con la Logística Lima (0345).
+      ...(g.key === "logistica_lima"
+        ? [{ id: GF_AUTO_LOG_ID, label: "Guía GF: hoy y ayer" }, { id: LIMA_COURIER_LOG_ID, label: "Día programado: hoy y ayer" }]
+        : []),
     ]),
   },
   { title: "Historial", items: [{ id: "ultimos-cambios", label: "Últimos cambios" }] },
@@ -1551,8 +1564,12 @@ function groupBadge(entries: AutomationEntry[], org: AutomationsOrgView): ReactN
     e.control.kind === "org_table"
       ? org.org[e.key]?.state === "on" && org.org[e.key]?.requiresOn !== false
       : e.control.kind === "org_mode"
-        ? (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : e.key === CHATBY_HISTORY_KEY ? org.chatbyHistory.mode : org.chatbyApprox.mode) ===
-          "activo"
+        ? e.key === GF_AUTO_GUIDE_KEY
+          ? org.gfAutoGuide.mode === "activo" && !org.gfAutoGuide.blocker
+          : e.key === LIMA_COURIER_AUTO_KEY
+            ? org.limaCourierAuto.mode === "activo" && !org.limaCourierAuto.blocker
+            : (e.key === CHATBY_ASK_KEY ? org.chatbyAsk.mode : e.key === CHATBY_HISTORY_KEY ? org.chatbyHistory.mode : org.chatbyApprox.mode) ===
+            "activo"
         : (org.store?.[e.key] ?? []).some((s) => s.on && s.requiresOn),
   ).length;
   return <Badge tone={lit ? "ok" : "neutral"}>{lit ? `${lit} de ${switchable.length} encendidas` : "Todas apagadas"}</Badge>;
@@ -1576,6 +1593,10 @@ function CatalogSection({
             <OrgSwitchRow key={entry.key} entry={entry} orgId={org.orgId} view={org.org[entry.key]} writable={writable} />
           ) : entry.control.kind === "store_column" ? (
             <StoreSwitchRow key={entry.key} entry={entry} views={org.store?.[entry.key] ?? null} writable={writable} />
+          ) : entry.control.kind === "org_mode" && entry.key === GF_AUTO_GUIDE_KEY ? (
+            <GfAutoGuideRow key={entry.key} entry={entry} orgId={org.orgId} view={org.gfAutoGuide} stores={org.stores} writable={writable} />
+          ) : entry.control.kind === "org_mode" && entry.key === LIMA_COURIER_AUTO_KEY ? (
+            <LimaCourierAutoRow key={entry.key} entry={entry} orgId={org.orgId} view={org.limaCourierAuto} stores={org.stores} writable={writable} />
           ) : entry.control.kind === "org_mode" && entry.key === CHATBY_HISTORY_KEY ? (
             <AskModeRow
               key={entry.key}
@@ -1596,6 +1617,8 @@ function CatalogSection({
         )}
       </div>
       {group.key === "confirmacion" && <ApproxTestCard view={org.chatbyApprox} />}
+      {group.key === "logistica_lima" && <GfAutoLogCard view={org.gfAutoGuide} />}
+      {group.key === "logistica_lima" && <LimaCourierAutoLogCard view={org.limaCourierAuto} />}
     </SettingsSection>
   );
 }
@@ -1934,6 +1957,287 @@ function AskModeRow({
       <div className="mt-1.5">
         <RowStatus pending={pending} status={status} blocked={blocked} />
       </div>
+    </div>
+  );
+}
+
+// ── Guía GF automática (0345, MOM §29.17) ───────────────────────────────────
+
+const GF_ACTIVE_CONFIRM =
+  "¿Poner en Activo «Guía GF automática»? Apenas un pedido de Lima entre a «Por generar rótulo», Kapta creará su guía en GF Courier (cada 10 minutos, todo el día), sin que nadie la apruebe. Lo que vaya por Aliclik u otro courier se programa con ese courier en Repro Lima; crear la guía de Aliclik anula la de GF si GF no la asignó.";
+
+/**
+ * Apagado / Simulación / Activo de la guía GF automática. Activo pide
+ * confirmación (crea guías) y no se deja guardar sin la llave del servidor ni sin
+ * una tienda con GF Courier por API (la acción lo vuelve a mirar). Si ya estaba
+ * en Activo cuando faltó eso, la fila dice que no corre.
+ */
+function GfAutoGuideRow({
+  entry,
+  orgId,
+  view,
+  stores,
+  writable,
+}: {
+  entry: AutomationEntry;
+  orgId: string;
+  view: GfAutoGuideView;
+  stores: { id: string; name: string }[];
+  writable: boolean;
+}) {
+  const id = useId();
+  const [mode, setMode] = useState<RetryMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available;
+  const blocked = !view.available
+    ? "Aún no está instalada en la base de datos: funciona como Apagado."
+    : view.blocker
+      ? mode === "activo"
+        ? `Está en Activo, pero no corre. ${view.blocker}`
+        : `Activo no se puede elegir. ${view.blocker}`
+      : null;
+
+  const change = (next: RetryMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (next === "activo" && !window.confirm(GF_ACTIVE_CONFIRM)) return false;
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setGfAutoGuideMode(orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  return (
+    <div className={ROW}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 sm:flex-1">
+          <EntryHead entry={entry} nameId={`${id}-name`} descId={`${id}-desc`} />
+          <p className={cn(HELP, "mt-1")}>
+            {view.stores.length ? `Tiendas con GF Courier por API: ${view.stores.join(", ")}.` : "Ninguna tienda tiene GF Courier por API habilitado."}{" "}
+            <a href={`#${GF_AUTO_LOG_ID}`} className={LINK}>
+              Ver hoy y ayer
+            </a>
+          </p>
+          <EntryLinks entry={entry} stores={stores} />
+        </div>
+        <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+      </div>
+      <div className="mt-1.5">
+        <RowStatus pending={pending} status={status} blocked={blocked} />
+      </div>
+    </div>
+  );
+}
+
+const GF_OUTCOME_TONE: Record<NonNullable<GfAutoLogView["outcome"]>, BadgeTone> = {
+  simulada: "info",
+  creada: "ok",
+  fallo: "crit",
+  en_curso: "warn",
+};
+
+/** «Hoy y ayer» de la guía GF automática: lo que creó (Activo) o habría creado (Simulación). */
+function GfAutoLogCard({ view }: { view: GfAutoGuideView }) {
+  const rows = view.log;
+  return (
+    <div id={GF_AUTO_LOG_ID} className={cn(CARD, "scroll-mt-20 xl:scroll-mt-6")}>
+      <CardHeader
+        title="Guía GF automática: hoy y ayer"
+        description="Cada pedido que entró a una pasada de la mañana, con lo que hizo en Activo o lo que habría hecho en Simulación. La última pasada del día manda."
+      />
+      {rows.length === 0 ? (
+        <p className={cn(ROW, "text-sm text-ink-500")}>
+          {view.available && view.mode === "apagado"
+            ? "Está Apagada. Ponla en Simulación para ver qué guías habría creado, sin crear nada."
+            : "Hoy y ayer no hubo pedidos en sus pasadas."}
+        </p>
+      ) : (
+        <ul className="max-h-[60vh] divide-y divide-line overflow-y-auto">
+          {rows.map((r) => (
+            <li key={r.id} className={cn(ROW, "py-3")}>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <Link href={`/dashboard/pedidos?abrir=${r.orderId}`} className={cn(LINK, "font-semibold")}>
+                  {r.orderName}
+                </Link>
+                <ModeBadge mode={r.mode} />
+                <Badge tone={r.outcome ? GF_OUTCOME_TONE[r.outcome] : "neutral"} wrap>
+                  {r.outcomeLabel}
+                </Badge>
+              </div>
+              {r.detail && <p className={cn(HELP, "mt-0.5 max-w-[80ch]")}>{r.detail}</p>}
+              <p className="mt-0.5 text-xs tabular-nums text-ink-500">
+                {r.day === "hoy" ? "Hoy" : "Ayer"} · {r.at}
+                {r.guideCode ? ` · Guía ${r.guideCode}` : ""}
+                {r.storeName ? ` · ${r.storeName}` : ""}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ── Guía Aliclik y Swayp del día programado (0349, MOM §9.5) ────────────────
+
+const LIMA_COURIER_ACTIVE_CONFIRM =
+  "¿Poner en Activo «Guía Aliclik y Swayp del día programado»? Kapta creará, sin que nadie las apruebe, la guía de Aliclik (AUTOECOM si se puede) de lo de Lima programado con Aliclik —a las 8:00, 10:00 y 12:00 lo de hoy; a las 15:00, 18:00, 20:00 y 21:00 lo de mañana— y la de Swayp la víspera, hasta las 21:00.";
+
+/**
+ * Apagado / Simulación / Activo de la guía del día programado. Activo pide
+ * confirmación (crea guías) y no se deja guardar sin Aliclik ni Swayp en el
+ * servidor (la acción lo vuelve a mirar).
+ */
+function LimaCourierAutoRow({
+  entry,
+  orgId,
+  view,
+  stores,
+  writable,
+}: {
+  entry: AutomationEntry;
+  orgId: string;
+  view: LimaCourierAutoView;
+  stores: { id: string; name: string }[];
+  writable: boolean;
+}) {
+  const id = useId();
+  const [mode, setMode] = useState<RetryMode>(view.mode);
+  useEffect(() => setMode(view.mode), [view.mode]);
+  const [pending, setPending] = useState(false);
+  const [status, setStatus] = useState<Status>(null);
+  const [, startTransition] = useTransition();
+  const canEdit = writable && view.available;
+  const off = [!view.aliclikWrite ? "Aliclik" : null, !view.swaypEnabled ? "Swayp" : null].filter(Boolean).join(" y ");
+  // «Correr ahora» (16-11-2026): la misma pasada del cron, ya, para esta organización.
+  const [runPending, startRun] = useTransition();
+  const [runStatus, setRunStatus] = useState<Status>(null);
+  const runNow = () => {
+    if (!canEdit || runPending || mode === "apagado") return;
+    if (mode === "activo" && !window.confirm("¿Correr la pasada ahora? En Activo, Kapta crea ya las guías de Aliclik y Swayp que le tocan a esta hora (desde las 15:00, las de mañana).")) return;
+    setRunStatus(null);
+    startRun(async () => {
+      try {
+        const r = await runLimaCourierAutoNow(orgId);
+        setRunStatus(r.error ? { kind: "error", text: r.error } : { kind: "ok", text: r.notice ?? "Pasada hecha." });
+      } catch {
+        setRunStatus({ kind: "error", text: "No respondió: se cortó o se perdió la conexión. Mira «hoy y ayer» antes de volver a correrla." });
+      }
+    });
+  };
+  const blocked = !view.available
+    ? "Aún no está instalada en la base de datos: funciona como Apagado."
+    : view.blocker
+      ? mode === "activo"
+        ? `Está en Activo, pero no corre. ${view.blocker}`
+        : `Activo no se puede elegir. ${view.blocker}`
+      : null;
+
+  const change = (next: RetryMode): boolean => {
+    if (!canEdit || pending || next === mode) return false;
+    if (next === "activo" && !window.confirm(LIMA_COURIER_ACTIVE_CONFIRM)) return false;
+    setPending(true);
+    setStatus(null);
+    startTransition(async () => {
+      try {
+        const result = await setLimaCourierAutoMode(orgId, next);
+        if (!result.error) setMode(next);
+        setStatus(statusOf(result));
+      } catch {
+        setStatus({ kind: "error", text: NETWORK_ERROR });
+      } finally {
+        setPending(false);
+      }
+    });
+    return true;
+  };
+
+  return (
+    <div className={ROW}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0 sm:flex-1">
+          <EntryHead entry={entry} nameId={`${id}-name`} descId={`${id}-desc`} />
+          <p className={cn(HELP, "mt-1")}>
+            {off && !view.blocker ? `${off} está apagado en el servidor: lo de ese courier no se crea. ` : ""}
+            <a href={`#${LIMA_COURIER_LOG_ID}`} className={LINK}>
+              Ver hoy y ayer
+            </a>
+          </p>
+          <EntryLinks entry={entry} stores={stores} />
+        </div>
+        <div className="flex flex-col items-start gap-2 sm:items-end">
+          <ModeControl value={mode} label={entry.name} disabled={!canEdit} pending={pending} onChange={change} />
+          <OpsButton size="sm" disabled={!canEdit || runPending || mode === "apagado"} onClick={runNow} className="pointer-coarse:h-11">
+            {runPending ? "Corriendo…" : "Correr ahora"}
+          </OpsButton>
+        </div>
+      </div>
+      <div className="mt-1.5 space-y-1">
+        <RowStatus pending={pending} status={status} blocked={blocked} />
+        {runStatus && <RowStatus pending={false} status={runStatus} blocked={null} />}
+      </div>
+    </div>
+  );
+}
+
+const LIMA_COURIER_OUTCOME_TONE: Record<NonNullable<LimaCourierAutoLogView["outcome"]>, BadgeTone> = {
+  simulada: "info",
+  creada: "ok",
+  fallo: "crit",
+  en_curso: "warn",
+};
+
+/** «Hoy y ayer» de la guía del día programado: lo que creó (Activo) o habría creado (Simulación). */
+function LimaCourierAutoLogCard({ view }: { view: LimaCourierAutoView }) {
+  const rows = view.log;
+  return (
+    <div id={LIMA_COURIER_LOG_ID} className={cn(CARD, "scroll-mt-20 xl:scroll-mt-6")}>
+      <CardHeader
+        title="Guía del día programado: hoy y ayer"
+        description="Cada pedido programado con Aliclik o Swayp que entró a una pasada, con lo que hizo en Activo o lo que habría hecho en Simulación. La última pasada del día manda."
+      />
+      {rows.length === 0 ? (
+        <p className={cn(ROW, "text-sm text-ink-500")}>
+          {view.available && view.mode === "apagado"
+            ? "Está Apagada. Ponla en Simulación para ver qué guías habría creado, sin crear nada."
+            : "Hoy y ayer no hubo pedidos programados con Aliclik o Swayp en sus pasadas."}
+        </p>
+      ) : (
+        <ul className="max-h-[60vh] divide-y divide-line overflow-y-auto">
+          {rows.map((r) => (
+            <li key={r.id} className={cn(ROW, "py-3")}>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <Link href={`/dashboard/pedidos?abrir=${r.orderId}`} className={cn(LINK, "font-semibold")}>
+                  {r.orderName}
+                </Link>
+                <ModeBadge mode={r.mode} />
+                <Badge tone="neutral">{r.courierName}</Badge>
+                <Badge tone={r.outcome ? LIMA_COURIER_OUTCOME_TONE[r.outcome] : "neutral"} wrap>
+                  {r.outcomeLabel}
+                </Badge>
+              </div>
+              {r.detail && <p className={cn(HELP, "mt-0.5 max-w-[80ch]")}>{r.detail}</p>}
+              <p className="mt-0.5 text-xs tabular-nums text-ink-500">
+                {r.day === "hoy" ? "Hoy" : "Ayer"} · {r.at} · Sale el {r.dispatchOn}
+                {r.guideCode ? ` · Guía ${r.guideCode}` : ""}
+                {r.storeName ? ` · ${r.storeName}` : ""}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

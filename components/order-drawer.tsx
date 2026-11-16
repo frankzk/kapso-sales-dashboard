@@ -20,6 +20,7 @@
 // mantiene el listado anterior en pantalla mientras llega el nuevo en vez de
 // parpadear a vacío.
 
+import { WEB_FORM_PIN_LABEL, isWebFormPin } from "@/lib/web-form-pin";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -284,7 +285,8 @@ import {
   type OrderPlatformName,
 } from "@/lib/order-admin-url";
 import { orderPuntoText, type PuntoCollect } from "@/lib/order-punto";
-import { timelineOriginLabel } from "@/lib/order-timeline-fact";
+import { courierEventTitle, timelineOriginLabel } from "@/lib/order-timeline-fact";
+import { outputRouteDay } from "@/lib/output-route-day";
 import { aliclikGuideOffered, type RouteCandidate } from "@/lib/order-route-plan";
 import type { OrderMasterRow, ShipmentRow, StoreSummary } from "@/lib/types";
 import { OrderLink } from "@/components/order-link";
@@ -1487,9 +1489,10 @@ export function OrderDrawer({
         ? `${kapsoCustomerMessages === 1 ? "1 mensaje" : `${kapsoCustomerMessages} mensajes`} de la clienta con el bot de Kapso`
         : undefined,
     },
-    // Solo mientras el pedido está en Repro Lima (MOM §9.5); mientras se
-    // comprueba, solo si «Atender» la pidió.
-    ...(reproRow || (reproLoading && workspace === "reprolima") ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),
+    // Solo mientras el pedido está en Repro Lima (MOM §9.5). Sale apenas la
+    // ficha sabe que es de Lima y por entregar, mientras se comprueba con su
+    // esqueleto (owner, 16-11-2026: «tarda en aparecer»), y se va si no está.
+    ...(reproRow || reproLoading ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),
   ];
   // Pestañas con flechas, Inicio y Fin (patrón ARIA): el foco se mueve y la
   // pestaña se abre en el mismo gesto.
@@ -2113,6 +2116,12 @@ export function OrderDrawer({
                             <span className="ml-auto text-[13px] text-ink-500">Guía actual</span>
                           )}
                         </div>
+                        {/* La fecha de su ruta (owner, 16-11-2026): la del motorizado de
+                            Grupo GF, la que reporta Aliclik o el día en que salió. */}
+                        {(() => {
+                          const route = outputRouteDay(g, gf);
+                          return route ? <p className="text-[13px] tabular-nums text-ink-600">{route.text}</p> : null;
+                        })()}
                         {/* El GPS con el que se generó la guía Aliclik, con su
                             origen (MOM §25): sirve para la próxima guía de la
                             misma clienta. */}
@@ -2656,6 +2665,7 @@ export function OrderDrawer({
                   orderId={orderId}
                   row={detail.row}
                   storePlatform={storePlatform}
+                  webPin={isWebFormPin(detail.shopifyNote, detail.row.latitude, detail.row.longitude)}
                   canEdit={canEdit}
                   onSaved={() => {
                     void reload();
@@ -2709,7 +2719,8 @@ export function OrderDrawer({
                             icono ni el color son nunca la única señal. */}
                         <TimelineMarker entry={t} />
                         <p className="text-sm font-medium leading-5 text-ink-900">
-                          {TIMELINE_LABEL[t.kind] ?? t.kind}
+                          {/* Los hechos de un courier lo nombran: «Estado informado por Aliclik · ALIDRIVER» (owner, 16-11-2026). */}
+                          {courierEventTitle(t) ?? TIMELINE_LABEL[t.kind] ?? t.kind}
                           {/* El resultado va pegado al título, no en la línea de
                               la nota: la nota es opcional y sin esto dos
                               resultados distintos se leían idénticos. */}
@@ -3051,7 +3062,10 @@ const GEO_SOURCE_LABEL: Record<string, string> = {
   history: "historial confiable del cliente",
 };
 
-function geoSourceLabel(source: string, storePlatform: OrderPlatformName): string {
+function geoSourceLabel(source: string, storePlatform: OrderPlatformName, webPin = false): string {
+  // El pin del mapa del formulario de la web (15-11-2026, lib/web-form-pin.ts):
+  // no es una dirección geocodificada, es el punto que eligió la clienta.
+  if (source === "shopify" && webPin) return WEB_FORM_PIN_LABEL;
   if (source === "shopify") return `según ${storePlatform}`;
   return GEO_SOURCE_LABEL[source] ?? source;
 }
@@ -3066,11 +3080,14 @@ function GeoSection({
   orderId,
   row,
   storePlatform = "Shopify",
+  webPin = false,
   canEdit,
   onSaved,
 }: {
   orderId: string;
   row: OrderMasterRow;
+  /** La ubicación es el «Punto de entrega» que la clienta marcó en la web. */
+  webPin?: boolean;
   /** La tienda del pedido (`orders.platform`), para decir de dónde salió la dirección. */
   storePlatform?: OrderPlatformName;
   canEdit: boolean;
@@ -3172,7 +3189,7 @@ function GeoSection({
         badge={
           <>
             <CoverageBadge coverage={row.coverage} />
-            {row.geo_source && <Badge>{geoSourceLabel(row.geo_source, storePlatform)}</Badge>}
+            {row.geo_source && <Badge>{geoSourceLabel(row.geo_source, storePlatform, webPin)}</Badge>}
           </>
         }
         aside={

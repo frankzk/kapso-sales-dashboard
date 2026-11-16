@@ -12,7 +12,7 @@
 //   · 503: la base no contestó o falta la clave del sitio: reenviarlo sí.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { parseCodCoreForm } from "@/lib/cod-core-abandoned";
+import { parseCodCoreForm, recoveryLineItem } from "@/lib/cod-core-abandoned";
 import { upsertDraftOrders } from "@/lib/ingest";
 import {
   closeCartLeadsWithOrders,
@@ -21,7 +21,7 @@ import {
   linkDraftOrdersToLeads,
 } from "@/lib/leads-ingest";
 import { DRAFT_OPEN_WINDOW_DAYS } from "@/lib/shopify";
-import type { DraftOrderRow } from "@/lib/types";
+import type { DraftOrderRow, OrderLineItem } from "@/lib/types";
 import { verifyWooSignature } from "@/lib/woocommerce";
 import { loadWooStoreCreds } from "@/lib/woocommerce-intake";
 
@@ -184,7 +184,7 @@ async function closeRecoveredForm(
 }
 
 const RELINK_COLUMNS =
-  "store_id, shopify_draft_order_id, draft_order_gid, name, status, created_at, updated_at, completed_at, invoice_url, total_amount, currency, customer_phone, customer_name, district, province, region, address1, referencia, tags, note, line_items, order_gid";
+  "store_id, shopify_draft_order_id, draft_order_gid, name, status, created_at, updated_at, completed_at, invoice_url, total_amount, currency, customer_phone, customer_name, district, province, region, address1, referencia, tags, note, line_items, order_gid, raw";
 
 /**
  * La red de seguridad de la pasada (cada 5 minutos): vuelve a enlazar los
@@ -204,12 +204,26 @@ export async function relinkCodCoreForms(admin: SupabaseClient, storeId: string)
     .gte("created_at", floor)
     .limit(500);
   if (error) throw new Error(`formularios de COD Core: ${error.message}`);
-  const rows = ((data as unknown as DraftOrderRow[] | null) ?? []).map((r) => ({
-    ...r,
-    tags: r.tags ?? [],
-    line_items: r.line_items ?? [],
-  }));
+  const fixes: { gid: string; items: OrderLineItem[] }[] = [];
+  const rows = ((data as unknown as Array<DraftOrderRow & { raw?: unknown }> | null) ?? []).map(({ raw, ...r }) => {
+    const row = { ...r, tags: r.tags ?? [], line_items: r.line_items ?? [] };
+    // Los que llegaron con `productos: []` antes de leer el enlace de
+    // recuperación (16-11-2026): el producto sale de su enlace, guardado en
+    // `raw`, y se corrige el formulario guardado una sola vez.
+    if (!row.line_items.length) {
+      const body = (raw as { body?: { recuperacion?: unknown } } | null)?.body;
+      const item = recoveryLineItem(body?.recuperacion);
+      if (item) {
+        row.line_items = [item];
+        fixes.push({ gid: row.draft_order_gid, items: row.line_items });
+      }
+    }
+    return row;
+  });
   if (!rows.length) return 0;
+  for (const fix of fixes) {
+    await admin.from("draft_orders").update({ line_items: fix.items }).eq("store_id", storeId).eq("draft_order_gid", fix.gid);
+  }
   await linkDraftOrdersToLeads(admin, storeId, rows);
   return rows.length;
 }

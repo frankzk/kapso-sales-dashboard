@@ -689,4 +689,18 @@
 \ir migrations/0343_compras_locales_entregas.sql
 \echo 'Applying 0344_gf_courier_api.sql'
 \ir migrations/0344_gf_courier_api.sql
+\echo 'Applying 0345_gf_auto_guide.sql'
+\ir migrations/0345_gf_auto_guide.sql
+\echo 'Applying 0346_gf_requests_lock_en_curso.sql'
+\ir migrations/0346_gf_requests_lock_en_curso.sql
+\echo 'Applying 0347_lima_repro_gf_courier.sql'
+\ir migrations/0347_lima_repro_gf_courier.sql
+\echo 'Applying 0348_dispatch_courier.sql'
+\ir migrations/0348_dispatch_courier.sql
+\echo 'Applying 0349_lima_courier_auto.sql'
+\ir migrations/0349_lima_courier_auto.sql
+\echo 'Applying 0350_gf_replaced_by_aliclik_any_coverage.sql'
+\ir migrations/0350_gf_replaced_by_aliclik_any_coverage.sql
+\echo 'Applying 0351_lead_appointment_return_hold.sql'
+\ir migrations/0351_lead_appointment_return_hold.sql
 \echo 'Done.'

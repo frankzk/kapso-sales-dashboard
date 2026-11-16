@@ -854,7 +854,12 @@ export function LeadDrawer({
       askLine.push(
         <span key="cart">
           {lead.draft_order_gid ? "" : "Carrito: "}
-          {lead.cart_summary || `${lead.cart_item_count} producto(s)`}
+          {/* Sin nombre: el formulario no mandó el producto (16-11-2026). Antes
+              decía «1 producto(s)», un relleno que la asesora buscaba. */}
+          {lead.cart_summary ||
+            (lead.draft_order_gid?.startsWith("cod-core://")
+              ? "El formulario no mandó el producto: pregúntale en la llamada"
+              : `${lead.cart_item_count} producto(s)`)}
         </span>,
       );
     }
@@ -1062,7 +1067,14 @@ export function LeadDrawer({
               está abierto: una nota a medio escribir en el resultado de la
               llamada o el panel de la guía siguen ahí al cerrarlo. */}
           <div className={orderOpen ? "hidden" : "flex flex-col gap-4"}>
-            {prepayStatus?.mark && <ListaNegraBanner motivo={prepayStatus.mark.motivo} requirement={prepayStatus.mark.requirement} context="lead" />}
+            {prepayStatus?.mark && (
+              <ListaNegraBanner
+                motivo={prepayStatus.mark.motivo}
+                requirement={prepayStatus.mark.requirement}
+                context="lead"
+                lima={Boolean(prepayStatus.autoOnly) && masterCoverage === "lima"}
+              />
+            )}
             {(showContext || firstText) && (
               <section aria-label="Lo que pidió" className={SECTION_CARD}>
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">

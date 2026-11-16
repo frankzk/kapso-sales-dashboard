@@ -353,3 +353,43 @@ describe("la marca de las filas (Leads y Master)", () => {
     expect(listaNegraMergeMarks(null, null)).toBeNull();
   });
 });
+
+describe("la Lista negra en Lima (owner, 16-11-2026, MOM §41.12)", () => {
+  it("la automática no frena un pedido de Lima; frena en provincia, en agencia y sin cobertura", async () => {
+    const { listaNegraAutoBrakes } = await import("@/lib/lista-negra");
+    expect(listaNegraAutoBrakes("lima")).toBe(false);
+    for (const c of ["provincia_cod", "agencia", "por_revisar", null, undefined]) expect(listaNegraAutoBrakes(c)).toBe(true);
+  });
+
+  it("el aviso lo dice sin frenar, en el pedido y en el lead", async () => {
+    const copy = await import("@/lib/lista-negra-copy");
+    expect(copy.LN_LIMA_ORDER_ACTION).toBe("En Lima no frena: el pedido se confirma y sale contra entrega.");
+    expect(copy.LN_LIMA_LEAD_ACTION).toBe("En Lima puede pagar contra entrega: la Lista negra solo frena fuera de Lima.");
+    const banner = readFileSync(resolve(process.cwd(), "components/lista-negra-banner.tsx"), "utf8");
+    expect(banner).toContain('const tone = lima || (context === "order" && met) ? "info" : context === "lead" ? "warn" : "crit";');
+    // El lead solo lo pasa a informativo si está SOLO en la automática.
+    const drawer = readFileSync(resolve(process.cwd(), "components/leads-drawer.tsx"), "utf8");
+    expect(drawer).toContain('lima={Boolean(prepayStatus.autoOnly) && masterCoverage === "lima"}');
+  });
+
+  it("el MOM, DEPLOY y el contrato de la web lo dicen", () => {
+    const read = (f: string) => readFileSync(resolve(process.cwd(), f), "utf8");
+    const flat = (t: string) => t.replace(/\s+/g, " ");
+    const mom = read("docs/mom/master-pedidos-v1.md");
+    const s4112 = flat(mom.slice(mom.indexOf("### 41.12 La Lista negra en Lima"), mom.indexOf("## 42. ")));
+    for (const quote of [
+      "«para Lima, no aplicaría lo de la Lista negra que no deja sacar pedidos»",
+      "**En un pedido de Lima la lista automática (§41.11) no frena nada**",
+      "**Las altas a mano (§41) frenan igual en Lima**",
+      "`listaNegraAutoBrakes`",
+      "`limaExempt`",
+      "`docs/kapta/lista-negra-lima.md`",
+    ]) expect(s4112, quote).toContain(quote);
+    expect(flat(mom)).toContain("**En un pedido de Lima, la automática no frena en ninguna fila de esta tabla (§41.12, 16-11-2026)**");
+    expect(read("DEPLOY.md")).toContain("### 16-11-2026 · Lista negra: en Lima la automática no frena; las altas a mano sí");
+    const contract = flat(read("docs/kapta/lista-negra-lima.md"));
+    for (const quote of ['"lima": {', "`lima.celulares`", "`lima.distritos`", "**Una tienda que todavía no lo implementa sigue bloqueando a todos, como hoy**", "**Pucusana**"]) {
+      expect(contract, quote).toContain(quote);
+    }
+  });
+});

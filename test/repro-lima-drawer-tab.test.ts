@@ -56,7 +56,8 @@ describe("la pestaña sale solo para pedidos que están en Repro Lima", () => {
 
   it("quien decide es `loadReproRow`: con fila sale la pestaña; sin fila o con error, no", () => {
     const tabs = between(drawer, "const tabs: { id: DrawerWorkspaceView;", "\n  ];");
-    expect(tabs).toContain('...(reproRow || (reproLoading && workspace === "reprolima") ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),');
+    // Sale mientras se comprueba (con su esqueleto) y se va si no está (16-11-2026).
+    expect(tabs).toContain('...(reproRow || reproLoading ? [{ id: "reprolima" as const, label: "Repro Lima" }] : []),');
     const lookup = between(drawer, "loadReproRow(orderId)", "});\n    return () => {");
     expect(lookup).toContain('if ("error" in result) setReproLookup({ orderId, status: "none", message: result.error });');
     expect(lookup).toContain('else if (result.row) setReproLookup({ orderId, status: "ready", row: result.row });');

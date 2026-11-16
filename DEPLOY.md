@@ -23,6 +23,356 @@ Verificar con un pedido de prueba:
 3. Un webhook de GF cambia el estado (`gf_webhook_events.outcome = applied`).
 4. «Tomar» de Grupo GF rechaza el pedido de esa tienda con el aviso.
 
+### 15-11-2026 · Guía GF automática a las 9, 10 y 11 de Lima (0345 y 0346, MOM §29.17 y §40)
+
+**Migraciones `0345_gf_auto_guide.sql` y `0346_gf_requests_lock_en_curso.sql`: ya aplicadas en producción
+(15-11-2026), antes del código.**
+
+La 0346 rehace `gf_order_requests_live_uniq` para que cuente solo las creaciones en curso (`status = 'pending'`).
+Con la 0344, la intención enviada de la primera guía bloqueaba para siempre la `-S2` del mismo pedido. Antes de
+aplicarla había una sola intención en la tabla (#AUR900859), así que nadie llegó a chocar.
+
+La 0345 crea `gf_auto_guide_settings` (la posición por
+organización; sin fila es Apagado) y `gf_auto_guide_log` (lo que hizo o habría hecho cada pasada, uno por pedido,
+día y modo). Las dos tienen RLS de lectura para la organización y escritura solo del servidor. Es aditiva: sin `drop`,
+no toca datos y se puede correr otra vez. Sin ella, el cron responde 502 con «Falta la migración 0345» y la fila del
+panel queda bloqueada como Apagado; no se crea ninguna guía.
+
+Cron nuevo: `/api/cron/gf-auto-guide` a las `0 14,15,16 * * *` UTC (9:00, 10:00 y 11:00 de Lima), con `CRON_SECRET`.
+Sin variables nuevas: usa `GF_COURIER_WRITE_ENABLED` y el interruptor y el token de GF Courier de cada tienda (0344).
+**Nace Apagado en todas las organizaciones**: desplegar no crea ninguna guía.
+
+Verificar:
+1. `select count(*) from gf_auto_guide_settings;` → 0, y en Automatizaciones → «Logística Lima» la «Guía GF
+   automática» sale en Apagado, con las tiendas que tienen GF Courier por API.
+2. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET` responde 200 con `candidates` e
+   `items` (`simulada`, `fallo`…) y no escribe nada: `gf_auto_guide_log` sigue vacío.
+3. Poner Simulación. Después de la pasada de las 9:00, «Guía GF automática: hoy y ayer» lista los pedidos de Lima por
+   generar rótulo con «Habría creado la guía» o «No la crearía», sin guías nuevas en GF ni avisos por Telegram.
+4. Activo pide confirmación. Sin `GF_COURIER_WRITE_ENABLED` responde «No se puede poner en Activo». En Activo, un
+   pedido sin SKU deja «Guía GF automática no creada» en su historial y una sola alerta por Telegram, y la pasada de
+   las 10:00 no lo repite.
+
+### 15-11-2026 · GF Courier en los acuerdos de Repro Lima (0347, MOM §9.5 y §29.17)
+
+**Migración 0347: ya aplicada en producción (15-11-2026), antes del código.** `0347_lima_repro_gf_courier.sql` solo
+amplía dos CHECK para que admitan `gf_courier`: `lima_repro_cases.agreed_courier` y `lima_repro_calls.courier`. Es lo
+mismo que hizo la 0283 con Aliclik. Usa `drop constraint if exists` y `add constraint`, no toca filas y se puede correr
+otra vez. Sin ella, guardar un acuerdo con GF Courier falla con el error del CHECK y los demás couriers siguen igual.
+
+Sin crons, variables ni permisos nuevos. Usa `GF_COURIER_WRITE_ENABLED` y el interruptor y el token de GF Courier de
+cada tienda (0344). No escribe nada al desplegar.
+- En una tienda con GF Courier por API, la hoja de Repro Lima ofrece GF Courier primero y por defecto, sin Grupo GF.
+  Las demás tiendas siguen igual. El servidor lo vuelve a validar al guardar y al mover.
+- Al guardar el acuerdo con GF Courier, Kapta crea la guía GF para el día acordado (`scheduled_date`). Si había una
+  guía GF viva sin asignar, la anula antes («Nuevo acuerdo en Repro Lima»). Si GF ya la asignó a un motorizado, no
+  crea otra y lo dice.
+- Si GF no anula o no crea, el acuerdo queda guardado y el aviso dice lo que respondió GF, con la Mesa de ruta.
+- «Agendar» y «Mover a…» hacen lo mismo con el día nuevo. Con la guía asignada, no se mueve.
+- La guía GF automática ya no toma un pedido con acuerdo de Repro Lima (`acuerdo_repro_lima` en el informe de la
+  pasada).
+
+Verificar:
+1. Que la 0347 está: `select pg_get_constraintdef(oid) from pg_constraint where conname in
+   ('lima_repro_cases_agreed_courier_check', 'lima_repro_calls_courier_check');` → las dos listas incluyen
+   `'gf_courier'`.
+2. En un pedido de Aurela en Repro Lima, «Atender» → «Confirma fecha» marca GF Courier y no ofrece Grupo GF. En Kenku
+   (sin la API) sigue Grupo GF por defecto y no aparece GF Courier.
+3. Guardar con GF Courier para mañana deja la guía `GF…` en la Mesa de ruta y, en el historial, «Repro Lima: acuerdo
+   con la clienta para el …». Su intención en `gf_order_requests` lleva `request->>'scheduled_date'` = ese día.
+4. «Agendar» ese pedido para otro día: la guía anterior queda `anulado` («Nuevo acuerdo en Repro Lima») y hay una
+   `-S2` para el día nuevo. En la Agenda sale ese día.
+5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
+   acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
+
+### 16-11-2026 · La clienta que responde vuelve 10 minutos a quien agendó (0351, MOM «Bloques por asesora»)
+
+1. **Migración `0351_lead_appointment_return_hold.sql`**: redefine
+   `lead_routing_scope` y `lead_manual_take_check` con su cuerpo vigente y solo
+   la condición de la reserva por cita cambiada (10 minutos desde el mensaje de
+   la clienta). Mismos permisos (`service_role`), sin datos. Idempotente.
+2. El código suma el aviso «Tu cliente respondió» (`listCallbackReturns`, solo
+   lectura) para las asesoras. Sin la migración, el aviso sale igual pero el
+   lead no queda apartado: aplicar la migración primero.
+3. Verificar: una asesora agenda «Volver a llamar»; cuando la clienta escribe,
+   a ella le sale el aviso con la cuenta atrás y otra asesora ve el lead «Sin
+   acceso» hasta que pasan los 10 minutos.
+
+### 16-11-2026 · La caja de Grupo GF ya reportada «No entregado» no frena otra guía (0350, MOM §9.5)
+
+1. **Migración `0350_gf_replaced_by_aliclik_any_coverage.sql`**, ANTES del
+   código: redefine `gf_replace_output_with_aliclik` sin la condición de Lima
+   (mismas rejas, solo `service_role`, sin barrido). Idempotente.
+2. El código deja de contar como «guía activa» la salida propia con el
+   motorizado cuya última parada es «No entregado» (#AUR900778).
+3. Verificar: en #AUR900778, «Crear guía en Aliclik» ya no dice «ya tiene una
+   guía activa»; al crearla, MOM-AUR900778-PROPIO-00F1A578 pasa a custodia
+   `retorno` con el hecho `output_replaced`.
+
+### 16-11-2026 · Guía GF automática «ni bien entra el pedido»; Aliclik y Swayp también en la noche (sin migración, MOM §9.5, §29.17 y §40)
+
+Sin migración ni variables. **Cambian dos crons** (`vercel.json`):
+- `/api/cron/gf-auto-guide`: de `0 14,15,16 * * *` a `2,12,22,32,42,52 * * * *` (cada 10 minutos, todo el día). La
+  guía GF automática también toma lo programado para un día que viene, con ese día (`scheduled_date`); solo deja lo
+  que tiene un día que ya pasó.
+- `/api/cron/lima-courier-auto`: de `12 13,15,17,20 * * *` a `12 13,15,17,20,23,1,2 * * *`. Son las 8:00, 10:00,
+  12:00, 15:00, 18:00, 20:00 y 21:00 de Lima. Aliclik toma lo de hoy en la mañana y lo de mañana desde las 15:00 (sin
+  esperar al corte de la cotización, que con AUTOECOM no es fiable). Swayp toma lo de mañana en todas las pasadas, hasta
+  las 21:00.
+
+En Automatizaciones, la fila «Guía Aliclik y Swayp del día programado» suma **«Correr ahora»**: hace la misma pasada,
+ya, para esa organización.
+
+Verificar: un pedido de Lima de una tienda con GF Courier que entra a «Por generar rótulo» tiene su guía GF en menos
+de 10 minutos, y aparece en «Guía GF automática: hoy y ayer». `GET /api/cron/lima-courier-auto?dry=1` después de las
+15:00 lista lo programado con Aliclik para mañana.
+
+### 16-11-2026 · Repro Lima: aviso flotante al crear la guía desde la fila; reintento de GF documentado (sin migración, MOM §29.17, DESIGN.md)
+
+Sin migración ni variables.
+- **Repro Lima:** al crear la guía con «Guía Aliclik» o «Guía GF», además del aviso de la página sale un aviso
+  flotante con el pedido, la guía y «Abrir la Mesa de ruta» (`components/ops-toast.tsx`).
+- **GF Courier:** el reintento después de un rechazo (#KP205759) ya lo arregló el #1216. Aquí solo queda escrito en el
+  MOM §29.17.
+
+Verificar: en Repro Lima, crear una guía con «Guía GF» muestra el aviso abajo a la derecha (arriba en el teléfono), y
+este se va solo a los 6 s.
+
+### 16-11-2026 · Guía Aliclik y Swayp del día programado en Lima (0349, MOM §9.5 y §40)
+
+**Migración 0349: ya aplicada en producción (16-11-2026), antes del código.** `0349_lima_courier_auto.sql` crea
+`lima_courier_auto_settings` (la posición por organización; sin fila es Apagado) y `lima_courier_auto_log` (lo que hizo
+o habría hecho cada pasada, uno por pedido, día y modo, con el courier). Las dos tienen RLS de lectura para la
+organización y escritura solo del servidor. Es aditiva: sin `drop`, no toca datos y se puede correr otra vez. Sin ella,
+el cron responde 502 con «Falta la migración 0349» y la fila del panel queda bloqueada como Apagado.
+
+Cron nuevo: `/api/cron/lima-courier-auto` a las `12 13,15,17,20 * * *` UTC (8:12, 10:12, 12:12 y 15:12 de Lima), con
+`CRON_SECRET`. Sin variables nuevas: usa `ALICLIK_WRITE_ENABLED` y la integración de Swayp. **Nace Apagado en todas las
+organizaciones**: desplegar no crea ninguna guía.
+- Aliclik: el mismo día, de 8:00 a 12:00, con AUTOECOM si se puede, por `createAliclikGuideFor` (origen
+  `dia_programado_lima`).
+- Swayp: la víspera de su próximo día de despacho, por `emitirGuiaSwaypDirecta`.
+- Al programar, Repro Lima pide Swayp desde mañana y la ubicación para Aliclik.
+
+Verificar:
+1. `select count(*) from lima_courier_auto_settings;` → 0. En Automatizaciones → «Logística Lima», «Guía Aliclik y
+   Swayp del día programado» sale en Apagado.
+2. `GET /api/cron/lima-courier-auto?dry=1` con `Authorization: Bearer $CRON_SECRET` responde 200 con `candidates` e
+   `items`, y no escribe nada: `lima_courier_auto_log` sigue vacío.
+3. Poner Simulación. Después de la pasada de las 8:12, «Guía del día programado: hoy y ayer» lista lo programado para
+   hoy con Aliclik («Habría creado la guía» o «No la crearía»), sin guías nuevas ni avisos por Telegram.
+4. Activo pide confirmación. Un pedido sin ubicación deja «lima_courier_auto_failed» en su historial y una sola
+   alerta por Telegram; la pasada siguiente no lo repite.
+
+### 16-11-2026 · Repro Lima: programar en lote con courier (0348, MOM §6.2, §9.5 y §29.17, DESIGN.md)
+
+**Migración 0348: ya aplicada en producción (16-11-2026), antes del código.** `0348_dispatch_courier.sql` agrega
+`order_master.dispatch_courier` (texto, sin CHECK: es una tabla derivada) y amplía `lima_repro_calls_sin_contacto`
+para que `sin_contacto` también valga con `confirma`. Es aditiva: `add column if not exists`, `drop constraint if
+exists` y `add constraint`, sin `drop` de datos; no toca filas y se puede correr otra vez. Sin ella, «Programar envío»
+con courier falla al recalcular el Master y el acuerdo sin llamada falla con el error del CHECK.
+
+Sin crons, variables ni permisos nuevos. No escribe nada al desplegar.
+- «Programar» (fila y lote) pide «Sale con»: Grupo GF o GF Courier según la tienda, Aliclik o Swayp.
+- Un pedido con acuerdo se reprograma con su courier; el del lote no lo cambia.
+- En Preparación · Por generar rótulo, «Programar envío» guarda el courier (`dispatch_date_set.payload.courier` →
+  `order_master.dispatch_courier`). Con GF Courier crea la guía GF para ese día al programar. Con Aliclik, Swayp o Grupo
+  GF, la guía GF automática ya no toma el pedido (`otro_courier`). Sin courier, todo como antes.
+- Un no entregado «Por acordar» queda acordado sin llamada (canal `sin_contacto`, no cuenta como intento), con la
+  misma RPC y «Qué hacer con la caja» que «Confirma fecha».
+- «Kapta sugiere…» también propone los por acordar en No entregados, y «Fecha agendada» dice el courier.
+
+Verificar:
+1. Que la 0348 está: `select column_name from information_schema.columns where table_name = 'order_master' and
+   column_name = 'dispatch_courier';` → una fila, y `select pg_get_constraintdef(oid) from pg_constraint where
+   conname = 'lima_repro_calls_sin_contacto';` → incluye `'confirma'`.
+2. En Sacar a reparto, elegir dos pedidos de Kenku, «Sale con» Aliclik, mañana: los dos quedan en Programados con
+   «Programar envío · Aliclik» y `order_master.dispatch_courier = 'aliclik'`.
+3. En un pedido de Aurela por generar rótulo, «Programar» con GF Courier para mañana: la guía `GF…` queda creada y su
+   intención lleva `request->>'scheduled_date'` = ese día.
+4. En No entregados · Por acordar, programar uno con Grupo GF: en su historial, «Repro Lima · Confirma (sin llamada):
+   sale el …», y el caso sale de No entregados a Programados.
+5. `GET /api/cron/gf-auto-guide?dry=1`: un pedido programado para hoy con Aliclik no aparece entre los candidatos.
+
+### 16-11-2026 · Repro Lima: fila más limpia y «Guía Aliclik» / «Guía GF» bajo «Atender» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración ni variables. La fila ya no muestra la tienda ni el total; la etapa va bajo el código y «Fecha
+agendada» entre «Qué pasa» y «Próximo paso». Bajo «Atender», crear la guía directo por las mismas acciones de la
+Mesa de ruta (permiso `aliclik.create_guide` / `gf_courier.create_guide`; GF solo en tiendas con GF habilitado y
+`GF_COURIER_WRITE_ENABLED`). «Agendar» y «Mover al…» pasan a «Programar» / «Reprogramar».
+
+### 16-11-2026 · Repro Lima: «Programados» es su propio paso del flujo (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración ni variables. Siete pasos que suman el total: lo que tiene día de salida y todavía no sale
+(agendado, programa de Grupo GF aunque esté en «Por reprogramar Lima», o la guía que espera su recojo) es
+«Programados», con Hoy · Mañana · Después dentro y las alertas sin guía. No entregados y Sacar a reparto quedan con
+lo que no tiene día. Ya no hay bloque aparte ni «Programados por paso».
+
+### 16-11-2026 · Repro Lima: «Programados» sigue al paso elegido (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración ni variables. Con un paso elegido, el bloque dice «Programados de {paso}» y cuenta solo lo de ese
+paso; tocar un día filtra el paso y ese día (`?atencion=por_sacar:manana`). Sin paso elegido, todo el flujo.
+
+### 16-11-2026 · Repro Lima: las partes de cada paso suman su cifra; «Programados» sin «Sin fecha» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración ni variables. Dentro de «Sacar a reparto» (Agendados · Guía sin recoger · Nunca salieron · Más de
+30 días · Ya salieron, sin día) y de «No entregados» (Por acordar · Reintentos Aliclik · Retornando · Sin reporte
+de la ruta), los filtros se reparten el paso y suman su cifra. El bloque «Agenda» se llama «Programados» y ya no
+tiene «Sin fecha». `?atencion=sin_fecha` abre Sacar a reparto.
+
+### 16-11-2026 · Repro Lima: «Nunca salieron» con su nombre dentro de Sacar a reparto (sin migración, MOM §9.5)
+
+Sin migración ni variables. El filtro de adentro de «Sacar a reparto» que decía «Sin fecha» se llama «Nunca
+salieron» (los que nunca tuvieron una salida y no tienen día); la nota del paso dice «N agendados · M nunca
+salieron». La Agenda conserva «Sin fecha». `?atencion=nunca_salieron` abre ese filtro.
+
+### 16-11-2026 · Lista negra: en Lima la automática no frena; las altas a mano sí (sin migración, MOM §41.12)
+
+Sin migración ni variables. Decisión del owner (#KP205510, segundo intento por Aliclik frenado por «falta el
+adelanto de S/ 20»):
+- Un pedido de **Lima** (`order_master.coverage = 'lima'`) con el celular en la Lista negra **automática** se
+  confirma y sale contra entrega: Aliclik, Grupo GF, Repro Lima, el reintento automático, Chatby y la
+  confirmación por llamada (`prepayOrderCheck` → `limaExempt`). El aviso de la ficha pasa a informativo.
+- Las **altas a mano** frenan igual en Lima.
+- El bot de Kapso y «Generar pedido» con una dirección de Lima (`order_coverage_for`) crean el pedido contra
+  entrega sin el aviso del adelanto.
+- La web de las tiendas: contrato nuevo `docs/kapta/lista-negra-lima.md` (campo `lima` del envío diario,
+  compatible hacia atrás) para que el owner se lo pase a WordPress y COD Core. Kapta todavía no lo manda.
+
+### 16-11-2026 · Repro Lima: lo vencido sale el próximo día de reparto; el domingo sin «Hoy»; la guía que espera recojo sin «Vencido» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`.
+- Un día pasado cuenta para el próximo día de reparto: Hoy de lunes a sábado; el domingo, Mañana (sin tarjeta «Hoy»).
+- La guía Aliclik o GF Courier que espera recojo y cuyo día pasó hace menos de un día de reparto entero: «Lo recoge
+  Aliclik el lun 16/11», en Con el courier. «Guía sin recoger» solo después de un día de reparto entero.
+- Un «Por reprogramar Lima» que ya tiene su guía nueva esperando recojo (#KP204876) está en Con el courier · Guía
+  creada, no en No entregados.
+
+Verificar en Repro Lima un domingo: la Agenda empieza en «Mañana · Lun 16» y #KP204807 dice «lun 16/11 · Recojo del courier».
+
+### 16-11-2026 · Ficha: el courier con su nombre en Actividad y la fecha de la ruta en «Salidas y guías»; Repro Lima con un matiz por paso (sin migración, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. Solo lectura.
+- **Actividad:** «Estado informado por el courier» pasa a «Estado informado por Aliclik · ALIDRIVER» (el transporte de la
+  guía, `aliclik_transport_name`); los demás couriers con su nombre («GF Courier», «Swayp»).
+- **Repro Lima, paleta:** cada paso del flujo con su matiz (naranja, celeste, índigo, verde azulado; pizarra los
+  plegados) en el número, la barra de reparto, la celda elegida y la cabecera de la lista; tarjetas con borde más firme.
+- **Salidas y guías:** cada salida dice su fecha: la ruta del motorizado de Grupo GF, la fecha operativa de Aliclik, el
+  día en que salió o, sin salida, cuándo se creó la guía.
+
+Verificar en la ficha de un pedido con guías Aliclik: Actividad nombra el transporte y cada salida dice «Ruta del …».
+
+### 16-11-2026 · Repro Lima: guía sin recoger a Sacar a reparto, llamadas que ya tocan en rojo y estados de Aliclik con palabras (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- **Guía sin recoger:** la guía que el courier debía recoger un día que ya pasó va a Sacar a reparto (en Hoy, vencida),
+  filtro «Guía sin recoger».
+- **Llamar después:** la celda dice «N ya tocan» y la fila «Ya toca llamar (pidió …)» en rojo.
+- **Aliclik:** «PENDING_DELIVERY · PREPARED · CONFIRMED» se lee «Por entregar · Validado · Confirmado».
+
+Verificar en Repro Lima:
+1. Un pedido con «Aliclik no lo recogió» aparece en Sacar a reparto → «Guía sin recoger».
+2. Un «Llamar después» con la hora pasada sale en rojo.
+
+### 15-11-2026 · Repro Lima: Retornando a No entregados, fecha de la ruta del courier, trabados dentro de su paso, guía automática de mañana y «No se entregó» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- **Retornando** pasa de Con el courier a No entregados (filtro «Retornando»).
+- **Fecha de la ruta:** lo que lleva un courier dice el día del recojo o de la ruta («Vencido · vie 13/11 · Recojo de
+  Aliclik», «Hoy · En ruta»); la celda dice cuántos están en ruta hoy y cuántos son de la ruta anterior.
+- **Trabados** dentro de cada paso («N trabados» y su filtro); sale la píldora de arriba.
+- **«Mañana sin guía»** no alarma por lo que creará la guía GF automática en Activo.
+- **«No se entregó»** en «Sin reporte de la ruta» del reparto propio: motivo, nota y captura obligatoria, por
+  `reportStop` (pide `routes.report_others`); el pedido pasa a «Por reprogramar Lima». En otros couriers, sin botón.
+
+Verificar en Repro Lima:
+1. Un pedido en retorno aparece en No entregados → «Retornando».
+2. «Con el courier» → filas con el día de su ruta o recojo.
+3. Con un rol con «Reportar por otros», «No se entregó» exige la captura y el pedido pasa a «Por reprogramar Lima».
+
+### 15-11-2026 · Repro Lima: ruta vencida sin reporte a No entregados, Kapta propone el día y «Hoy sin guía» desde las 10:30 (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia la etapa del Master, estados, permisos ni
+`MOM_RESOLUTION_VERSION`; no escribe nada al desplegar.
+- **Ruta vencida:** lo que salió a ruta y lleva un día de reparto entero sin reporte (salió el lunes → el miércoles; el
+  domingo no cuenta) pasa de Con el courier a No entregados, filtro «Sin reporte de la ruta». Solo en Repro Lima.
+- **Kapta propone, el equipo confirma:** en «Sin fecha», «Elegirlos para el …» marca los que se pueden agendar con el
+  próximo día de reparto en «Mover a…»; nada se mueve sin confirmar. «Agendar» sin día llega con ese día elegido.
+- **«Hoy sin guía»** es alerta desde las 10:30 de Lima; antes, chip neutro.
+
+Verificar en Repro Lima:
+1. Un pedido que salió hace dos días de reparto sin resultado aparece en No entregados → «Sin reporte de la ruta».
+2. En «Sin fecha», «Elegirlos para el …» abre «Mover a…» con el día puesto.
+3. Antes de las 10:30, «Hoy sin guía» no está en rojo.
+
+### 15-11-2026 · Repro Lima: seis pasos que suman el total (dos plegados), Agenda Hoy/Mañana/Después con o sin guía y «Sacar a reparto» (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas. No cambia estados, permisos ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- **El flujo suma el total:** Novedad del courier, Llamar después, No entregados y Sacar a reparto, y plegados al final,
+  más delgados y en gris, Con el courier y Por cerrar. Cada pedido está en un solo paso; una barra de reparto encima
+  cierra con «= total pedidos».
+- **«Sacar a reparto»** reemplaza a «Confirmar primer despacho»: todo lo que falta que salga, con día o sin él.
+- **Agenda:** Hoy, Mañana, Después (de martes en adelante) y Sin fecha. Hoy y Mañana dicen cuántos tienen guía o rótulo
+  y cuántos no, con las alertas «Hoy sin guía» y «Mañana sin guía».
+- Los enlaces de antes (`atencion=primer_despacho`, `por_cerrar`, un día guardado) abren lo más cercano.
+
+Verificar en Repro Lima:
+1. Los seis pasos suman el total de arriba, y la barra cierra con el mismo número.
+2. La Agenda muestra cuatro cajones y, en Hoy y Mañana, «N con guía · M sin guía».
+3. «Hoy sin guía» filtra los que salen hoy sin guía ni rótulo.
+
+### 15-11-2026 · Repro Lima: separaciones y jerarquía más claras al estilo Stripe (sin migración, DESIGN.md)
+
+Sin migración. Solo cambia la presentación:
+- Los bloques tienen más aire y la ayuda va debajo de cada título.
+- Las cifras son más grandes.
+- La cabecera de la tabla va en gris claro.
+- Las filas tienen más relleno, y en cada celda una línea principal en negro y el detalle en gris.
+
+Verificar en Repro Lima que la lista se lee con la cabecera separada y una línea principal por celda.
+
+### 15-11-2026 · Repro Lima: flujo del día numerado, total arriba, trabados como excepción y letra Inter (sin migración, MOM §9.5, DESIGN.md)
+
+Sin migración, sin crons ni variables nuevas.
+- **Flujo del día:** «Por gestionar hoy» pasa a ser este flujo, con cinco pasos numerados en el orden del trabajo. Los filtros de adentro, como Reintentos Aliclik, se dicen dentro de su paso y su chip aparece al elegirlo.
+- **Arriba:** el total «N pedidos de Lima por entregar» y una sola píldora «Trabados».
+- **Barra de la lista:** macroestado y subetapa se eligen desde «Etapa».
+- **Letra:** Inter autoalojada (`@fontsource-variable/inter`) en todo Kapta.
+
+Verificar en Repro Lima:
+1. Se ve el total arriba.
+2. Al elegir «No entregados» aparece «Dentro de No entregados: Reintentos Aliclik».
+3. «Trabados» abre sus motivos.
+4. En cualquier página, la letra es Inter (DevTools → Computed → font-family).
+
+### 15-11-2026 · Repro Lima por las tareas del equipo; «Sale a reparto» y los trabados de Grupo GF, a Despacho del día (sin migración, MOM §9.5, §9.6 y §29.16)
+
+Sin migración, sin crons ni variables nuevas. No cambia permisos ni `MOM_RESOLUTION_VERSION`; no escribe nada al
+desplegar.
+- Repro Lima se ordena en tres bloques sobre una sola lista: «Por gestionar hoy» (Confirmar primer despacho, No
+  entregados con «Reintentos Aliclik» dentro, Novedad del courier, Llamar después y Por cerrar con «Esperan
+  anulación»), «Agenda» (Hoy, los cinco próximos días por su nombre, Después y Sin fecha) y «En manos del courier»
+  (Guía creada, En ruta y Retornando, solo seguimiento). Los trabados del equipo son chips de su bloque.
+- Cada fila dice qué pasa, el próximo paso y la fecha agendada, con «Agendar» y «Atender». «Agendar» y «Mover a…»
+  usan las acciones de siempre: con un acuerdo, «Confirma fecha» con el mismo courier (`moveReproAgreement`, pide
+  si fue por llamada o WhatsApp); sin acuerdo y sin rótulo, «Programar envío» (`master.edit`).
+- «Sale a reparto» y los trabados de las cajas y los motorizados de Grupo GF («Armado sin caja de reparto», «Grupo GF
+  lo tomó y no lo puso en caja», «En una caja de un día que pasó», «Grupo GF no lo puede llevar» y «En reparto sin
+  resultado del motorizado») quedan solo en Grupo GF Courier → Despacho del día, para Kenku.
+- Los enlaces de antes (`atencion=programados_hoy`, `nunca_salieron`, `cerrados`…) abren lo más cercano.
+
+Verificar:
+1. Repro Lima abre en Todos con los tres bloques; la suma de la Agenda más «En manos del courier» cubre todos los
+   pendientes (un pedido puede estar en los dos si el courier tiene su guía y su día).
+2. «Agendar» en un pedido en Por generar rótulo deja «Programado · sale …» en el Master (`dispatch_date_set`); en uno
+   con acuerdo, la llamada nueva en «Antes de llamar» con «Día cambiado desde la lista de Repro Lima».
+3. «Mover a…» con varios elegidos dice cuántos se movieron y, por motivo, los que no.
+4. Grupo GF Courier → Despacho del día muestra «Trabados en Grupo GF» debajo de «Sale a reparto»; Repro Lima ya no
+   muestra ninguna de las dos.
+
 ### 15-11-2026 · Pasar de GF Courier a Aliclik anula la guía GF (sin migración, MOM §29.17)
 
 Sin migración, sin crons ni variables nuevas.

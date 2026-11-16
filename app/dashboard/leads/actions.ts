@@ -143,7 +143,7 @@ import { shopifyOrderAdminUrl } from "@/lib/shopify-urls";
 import { mergePriorOrders } from "@/lib/order-admin-url";
 import { normalizePhone, peruMobileProblem } from "@/lib/phone";
 import { orgOfStore, prepayEntryRequirementFor } from "@/lib/prepay-list-server";
-import { listaNegraAutoMark, listaNegraManualMark, listaNegraMergeMarks, type ListaNegraMark } from "@/lib/lista-negra";
+import { listaNegraAutoBrakes, listaNegraAutoMark, listaNegraManualMark, listaNegraMergeMarks, type ListaNegraMark } from "@/lib/lista-negra";
 import { LN_GENERATE_NOTICE, lnGenerateRefused } from "@/lib/lista-negra-copy";
 import { pagoOnlineLookupAny } from "@/lib/pago-online-lookup";
 import {
@@ -164,6 +164,7 @@ import {
 import { loadDoNotCallPhones } from "@/lib/voice-recovery-server";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
 import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor, getLeadManualTakeStores, filterManualSearchLeads } from "@/lib/lead-routing-access";
+import { callbackReturnsFor, RETURN_HOLD_MINUTES, type CallbackReturn, type CallbackReturnCallRow, type CallbackReturnLeadRow } from "@/lib/callback-returns";
 
 export interface LeadActionState {
   error?: string;
@@ -916,6 +917,56 @@ export async function listYapeAlerts(): Promise<YapeAlert[]> {
 }
 
 /** "Ahora no": pass the offer to the next advisor immediately (adds me to passed). */
+/**
+ * «Tu cliente respondió» (0351): los leads cuya clienta escribió después de que
+ * ESTA asesora agendó «Volver a llamar» y que siguen siendo solo suyos (10
+ * minutos desde el mensaje). Lo lee el aviso flotante cada 15 s con la pestaña
+ * visible. Solo lee: el apartado lo decide la base (`lead_routing_scope`).
+ */
+export async function listCallbackReturns(): Promise<CallbackReturn[]> {
+  const sb = await createServerSupabase();
+  const {
+    data: { user },
+  } = await sb.auth.getUser();
+  if (!user) return [];
+  const { data: storeRows } = await sb.from("stores").select("id,org_id");
+  const stores = (storeRows as { id: string; org_id: string }[] | null) ?? [];
+  if (!stores.length) return [];
+  const admin = createAdminSupabase();
+  const nowMs = Date.now();
+  const since = new Date(nowMs - RETURN_HOLD_MINUTES * 60_000).toISOString();
+  const { data: leadRows, error } = await admin
+    .from("leads")
+    .select("id,store_id,name,phone,wa_id,status,last_inbound_at,next_followup_at,claimed_by,claimed_at")
+    .in("store_id", stores.map((s) => s.id))
+    .in("category", ["open", "hot"])
+    .not("next_followup_at", "is", null)
+    .gt("last_inbound_at", since)
+    .lte("last_inbound_at", new Date(nowMs).toISOString())
+    .limit(50);
+  // Casi siempre vacío: entonces no se leen llamadas ni el reparto.
+  if (error || !leadRows?.length) return [];
+  const leads = (leadRows as Array<CallbackReturnLeadRow & { wa_id: string | null }>).map((l) => ({ ...l, phone: l.phone ?? l.wa_id }));
+  const [{ data: callRows }, { data: routing }] = await Promise.all([
+    admin
+      .from("lead_calls")
+      .select("id,lead_id,vendedora,occurred_at,next_followup_at")
+      .in("lead_id", leads.map((l) => l.id))
+      .eq("kind", "call")
+      .not("vendedora", "is", null)
+      .not("next_followup_at", "is", null),
+    admin.from("lead_routing_settings").select("org_id").eq("enabled", true).in("org_id", [...new Set(stores.map((s) => s.org_id))]),
+  ]);
+  const routedOrgs = new Set(((routing as { org_id: string }[] | null) ?? []).map((r) => r.org_id));
+  return callbackReturnsFor({
+    userId: user.id,
+    leads,
+    calls: (callRows as CallbackReturnCallRow[] | null) ?? [],
+    nowMs,
+    routedStores: new Set(stores.filter((s) => routedOrgs.has(s.org_id)).map((s) => s.id)),
+  });
+}
+
 export async function passYape(leadId: string): Promise<LeadActionState> {
   const sb = await createServerSupabase();
   const {
@@ -1361,7 +1412,7 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
   const admin = createAdminSupabase();
   const { data: lead } = await admin
     .from("leads")
-    .select("phone, draft_order_gid, draft_order_name, cart_value, cart_summary, district, has_order")
+    .select("phone, draft_order_gid, draft_order_name, cart_value, cart_summary, district, province, region, has_order")
     .eq("id", leadId)
     .maybeSingle();
   if (!lead) return { error: "Lead no encontrado." };
@@ -1372,6 +1423,8 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
     cart_value: number | null;
     cart_summary: string | null;
     district: string | null;
+    province: string | null;
+    region: string | null;
     has_order: boolean;
   };
   if (l.has_order) return { error: "Este lead ya tiene un pedido registrado." };
@@ -1390,7 +1443,7 @@ export async function recoverCart(leadId: string): Promise<LeadActionState> {
 
   // La lista de pago adelantado (MOM §41): completar el borrador crea un pedido
   // contra entrega, así que se frena igual que «Generar pedido». Falla abierto.
-  const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId, [l.phone]);
+  const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId, [l.phone], await addressCoverage(admin, ctx.storeId, l));
   if (prepayBlock) return { error: prepayBlock };
 
   // 1) Complete the draft in Shopify (COD ⇒ payment pending). Tolerate "already
@@ -2778,6 +2831,45 @@ function defaultConfirmation(o: {
 }
 
 /**
+ * La cobertura de una dirección con la regla del pedido (`order_coverage_for`,
+ * MOM §5), para la Lista negra en Lima (§41.12). Null si no se puede saber:
+ * entonces la lista automática pide lo de siempre.
+ */
+async function addressCoverage(
+  admin: ReturnType<typeof createAdminSupabase>,
+  storeId: string,
+  address: { district: string | null | undefined; province?: string | null; region?: string | null },
+): Promise<OrderCoverage | null> {
+  try {
+    const district = usableAddress(address.district ?? null);
+    if (!district) return null;
+    const { data: geo } = await admin
+      .from("peru_districts")
+      .select("province, department")
+      .eq("district_key", normalizeDistrict(district))
+      .maybeSingle();
+    const probe = leadDeliveryProbe(
+      { district, province: address.province?.trim() || null, region: address.region?.trim() || null },
+      (geo as { province: string | null; department: string | null } | null) ?? null,
+      null,
+    );
+    if (!probe) return null;
+    const { data, error } = await admin.rpc("order_coverage_for", {
+      p_store_id: storeId,
+      p_region: probe.region,
+      p_province: probe.province,
+      p_district: probe.district,
+      p_lat: null,
+      p_lng: null,
+      p_day: limaTodayKey(),
+    });
+    return error ? null : asOrderCoverage(data);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Lo que pide la Lista negra (MOM §41 y §41.11) para el celular del pedido o el
  * del lead: el alta a mano (la que pide más, si está en las dos) o la
  * automática vigente. Null si no está o no se pudo leer (falla abierto: las
@@ -2787,6 +2879,7 @@ async function generateOrderListaNegra(
   admin: ReturnType<typeof createAdminSupabase>,
   storeId: string,
   phones: (string | null | undefined)[],
+  coverage: OrderCoverage | null,
 ): Promise<ListaNegraMark | null> {
   try {
     const orgId = await orgOfStore(admin, storeId);
@@ -2799,6 +2892,9 @@ async function generateOrderListaNegra(
         break;
       }
     }
+    // En Lima la automática no frena (owner, 16-11-2026, MOM §41.12); el alta
+    // a mano, sí. Sin cobertura conocida, pide lo de siempre.
+    if (!listaNegraAutoBrakes(coverage)) return manual;
     const auto = await pagoOnlineLookupAny(admin, orgId, phones);
     return listaNegraMergeMarks(manual, auto.state === "listed" ? listaNegraAutoMark(auto.who, auto.requirement) : null);
   } catch {
@@ -2816,8 +2912,9 @@ async function generateOrderPrepayBlock(
   admin: ReturnType<typeof createAdminSupabase>,
   storeId: string,
   phones: (string | null | undefined)[],
+  coverage: OrderCoverage | null,
 ): Promise<string | null> {
-  const mark = await generateOrderListaNegra(admin, storeId, phones);
+  const mark = await generateOrderListaNegra(admin, storeId, phones, coverage);
   return mark?.requirement === "pago_completo" ? lnGenerateRefused(mark.motivo) : null;
 }
 
@@ -2830,8 +2927,9 @@ async function generatedOrderPagoOnlineNote(
   admin: ReturnType<typeof createAdminSupabase>,
   storeId: string,
   phones: (string | null | undefined)[],
+  coverage: OrderCoverage | null,
 ): Promise<string> {
-  const mark = await generateOrderListaNegra(admin, storeId, phones);
+  const mark = await generateOrderListaNegra(admin, storeId, phones, coverage);
   return mark?.requirement === "adelanto" ? ` ${LN_GENERATE_NOTICE}` : "";
 }
 
@@ -2919,7 +3017,12 @@ export async function generateOrder(
   // no se le crea ninguno. Se mira el celular del pedido y el del lead. Si la
   // lista no se pudo leer, se deja pasar: el pedido se vuelve a frenar al
   // confirmarlo y al crear su guía.
-  const prepayBlock = await generateOrderPrepayBlock(admin, ctx.storeId, [(input.phone ?? "").trim() || null, l.phone]);
+  const prepayBlock = await generateOrderPrepayBlock(
+    admin,
+    ctx.storeId,
+    [(input.phone ?? "").trim() || null, l.phone],
+    await addressCoverage(admin, ctx.storeId, { district: input.district, province: input.province ?? null }),
+  );
   if (prepayBlock) return { error: prepayBlock };
 
   // DÓNDE SE CREA (MOM §38.12). `stores.platform = 'woocommerce'` → el pedido
@@ -3376,7 +3479,12 @@ async function registrarVentaGenerada(v: {
 
   // La Lista negra con adelanto (MOM §41.11): el pedido nace, y el aviso dice
   // que no sale sin el adelanto validado.
-  const pagoOnlineNote = await generatedOrderPagoOnlineNote(admin, ctx.storeId, [phone, l.phone]);
+  const pagoOnlineNote = await generatedOrderPagoOnlineNote(
+    admin,
+    ctx.storeId,
+    [phone, l.phone],
+    await addressCoverage(admin, ctx.storeId, { district: input.district, province: input.province ?? null }),
+  );
   const notice = `Pedido generado ✓ · ${currency} ${amount.toFixed(2)} (contraentrega)${confirmNote}${phoneNote}${pagoOnlineNote}`;
   const confirmationSent = confirmNote.toLowerCase().includes("enviada");
 

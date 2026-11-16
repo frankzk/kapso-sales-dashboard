@@ -48,6 +48,7 @@ import {
   type OutcomeCounts,
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
+import { courierEventName } from "@/lib/order-timeline-fact";
 import { countDoorRejections, type DoorRejectionShipment } from "@/lib/door-rejection";
 import { parseLabelLineItems } from "@/lib/labels/line-items";
 import { filledShipmentIds } from "@/lib/shipment-output";
@@ -433,6 +434,12 @@ export interface TimelineEntry {
   /** De dónde salió: el Master, una gestión de Repro Provincia, o la cola de Leads. */
   origin: "master" | "gestion" | "leads";
   /**
+   * El courier dicho con su nombre (owner, 16-11-2026): «Aliclik · ALIDRIVER»
+   * con el transporte de la guía del hecho (`courierEventName`). Ausente: sin
+   * courier o sin su guía en el pedido.
+   */
+  courierName?: string | null;
+  /**
    * Etiqueta ya resuelta del estado, cuando NO es un estado de pedido.
    *
    * Las entradas de Leads llevan un estado de LEAD (`pedido_generado`,
@@ -797,7 +804,7 @@ const GUIDE_COLUMNS =
   // 0174: el tracking de Olva y su último estado crudo. Sin ellos el drawer no
   // puede enseñar el número ni ofrecer registrarlo.
   "olva_tracking,olva_emision,olva_status," +
-  "aliclik_attempts,aliclik_service_date,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
+  "aliclik_attempts,aliclik_service_date,aliclik_transport_name,reroute_attempts,reroute_outcome,claimed_by,claimed_at," +
   "next_followup_at,source_batch_id,last_report_at,suggested_order_gid,suggested_store_id," +
   // 0061: el código corto que Shalom muestra junto al nº de orden, y el id con
   // el que sirve el rótulo PDF. Sin ellos el drawer no puede ni identificar el
@@ -1212,9 +1219,16 @@ export async function getOrderMasterDetail(
   // El GPS de cada guía Aliclik, de su hecho o de la guía: las guías ya están
   // leídas arriba, así que no cuesta ninguna consulta más (lib/guide-gps.ts).
   const gpsByEvent = guideGpsByEvent(events, guides);
+  // El transporte de cada guía (Aliclik: AUTOECOM, ALIDRIVER), por su código y
+  // por el ALC… provisional: los estados del courier lo nombran (owner, 16-11-2026).
+  const transportByGuide = new Map<string, string | null>();
+  for (const g of guides) {
+    for (const code of [g.guide_code, g.external_order_number]) if (code) transportByGuide.set(code, g.aliclik_transport_name ?? null);
+  }
   const fromEvents = orderEventsToTimeline(events, names).map((t) => {
     const gps = gpsByEvent.get(t.id.replace(/^event:/, ""));
-    return gps ? { ...t, gps } : t;
+    const courierName = t.courier ? courierEventName(t.courier, t.guideCode ? transportByGuide.get(t.guideCode) : null) : null;
+    return { ...t, ...(gps ? { gps } : {}), ...(courierName ? { courierName } : {}) };
   });
   const guideGps = Object.fromEntries(guideGpsByShipment(events, guides));
 
@@ -1229,6 +1243,7 @@ export async function getOrderMasterDetail(
       source: "repro_provincia",
       courier: guide?.courier ?? null,
       guideCode: guide?.guide_code ?? null,
+      courierName: courierEventName(guide?.courier, guide?.aliclik_transport_name),
       previousStatus: null,
       newStatus: c.new_status,
       note: c.note,

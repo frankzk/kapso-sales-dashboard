@@ -140,7 +140,7 @@ export const SWAYP_DESDE_CONFIRMACION_OUTCOME_LABEL: Record<SwaypDesdeConfirmaci
  */
 export function swaypDesdeConfirmacionOutcome(input: {
   guide: RecoveryGuideLike;
-  /** Otras salidas del pedido nacidas DESPUÉS del envío por Swayp, sin las anuladas. */
+  /** Otras salidas del pedido nacidas DESPUÉS del envío por Swayp, sin las anuladas que nunca salieron. */
   laterOutputs: readonly { delivery_status: string }[];
   cancelledAt: string | null;
 }): SwaypDesdeConfirmacionOutcome {

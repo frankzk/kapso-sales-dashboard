@@ -25,10 +25,31 @@ export const DISPATCH_DATE_CLEARED = "dispatch_date_cleared";
 /** Hasta cuántos días adelante se puede programar. Más que eso no es una fecha, es un «algún día». */
 export const DISPATCH_DATE_MAX_DAYS = 45;
 
+/**
+ * Con qué courier sale el día programado (owner, 16-11-2026: «programar varios…
+ * exactamente para un courier»; MOM §9.5). Opcional: sin courier, como antes,
+ * la ruta la decide quien crea la guía (y en Lima, la guía GF automática).
+ * Con GF Courier la guía se crea al programar, para ese día; con Aliclik o
+ * Swayp, Kapta la crea ese día en la mañana; con Grupo GF, el rótulo la hereda.
+ */
+export const DISPATCH_COURIERS = ["propio", "gf_courier", "aliclik", "fenix"] as const;
+export type DispatchCourier = (typeof DISPATCH_COURIERS)[number];
+export const DISPATCH_COURIER_LABEL: Record<DispatchCourier, string> = {
+  propio: "Grupo GF",
+  gf_courier: "GF Courier",
+  aliclik: "Aliclik",
+  fenix: "Swayp",
+};
+export function isDispatchCourier(value: unknown): value is DispatchCourier {
+  return typeof value === "string" && (DISPATCH_COURIERS as readonly string[]).includes(value);
+}
+
 export interface DispatchDate {
   date: string;
   note: string | null;
   at: string;
+  /** El courier elegido al programar, o null si no se eligió. */
+  courier: DispatchCourier | null;
 }
 
 type EventLike = { kind: string; occurred_at: string; reason?: string | null; payload?: unknown };
@@ -52,7 +73,8 @@ export function currentDispatchDate(
   const date = (latest.payload as { date?: unknown } | null | undefined)?.date;
   if (typeof date !== "string" || !ISO_DAY.test(date)) return null;
   if (guideCreatedAt.some((created) => created && created > latest!.occurred_at)) return null;
-  return { date, note: latest.reason?.trim() || null, at: latest.occurred_at };
+  const courier = (latest.payload as { courier?: unknown } | null | undefined)?.courier;
+  return { date, note: latest.reason?.trim() || null, at: latest.occurred_at, courier: isDispatchCourier(courier) ? courier : null };
 }
 
 /**

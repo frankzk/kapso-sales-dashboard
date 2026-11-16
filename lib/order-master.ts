@@ -1591,6 +1591,12 @@ export async function recomputeOrderMaster(
         : {}),
     });
 
+    // «Programar envío» (0267, MOM §6.2): la fecha acordada para despachar y,
+    // desde la 0348, su courier; solo mientras sigue sin guía en Por generar rótulo.
+    const dispatchProgram = macro.stage === "preparacion" && macro.substage === "por_generar_rotulo"
+      ? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))
+      : null;
+
     return {
       store_id: order.store_id,
       order_id: order.id,
@@ -1631,12 +1637,10 @@ export async function recomputeOrderMaster(
       macro_operation: macro.operation,
       macro_version: macro.version,
       macro_since: macro.since,
-      // «Programar envío» (0267, MOM §6.2): la fecha acordada para despachar,
-      // solo mientras el pedido sigue sin guía en Por generar rótulo.
-      dispatch_scheduled_on:
-        macro.stage === "preparacion" && macro.substage === "por_generar_rotulo"
-          ? currentDispatchDate(orderEvents, guides.map((g) => g.created_at))?.date ?? null
-          : null,
+      dispatch_scheduled_on: dispatchProgram?.date ?? null,
+      // Con qué courier se programó (0348, Repro Lima 16-11-2026): la guía GF
+      // automática no toma uno programado con otro courier.
+      dispatch_courier: dispatchProgram?.courier ?? null,
       // Cómo se cobró: lo necesitan la compuerta de la clave, el panel del
       // drawer y el rótulo, y los tres leen esta tabla (0128).
       financial_status: order.financial_status,

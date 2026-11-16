@@ -30,7 +30,7 @@
 
 import { lnChatbyHold } from "@/lib/lista-negra-copy";
 import { createHash } from "node:crypto";
-import { chatbyMentionsOrder, type ChatbyMessage } from "@/lib/chatby-conversation";
+import { chatbyMentionsOrder, type ChatbyMediaKind, type ChatbyMessage } from "@/lib/chatby-conversation";
 import { classifyOperation } from "@/lib/order-macro-stage";
 import { limaDayKey } from "@/lib/order-confirmation";
 import { PAYMENT_ROUNDING_TOLERANCE_CENTS } from "@/lib/payment-rounding";
@@ -636,6 +636,47 @@ export type ChatbyVerdict =
   | { confirm: false; final: true; reason: ChatbyHoldReason; messageId: string | null; amountCents?: number | null }
   /** Todavía no hay un mensaje de confirmación de este pedido. */
   | { confirm: false; final: false; reason: "sin_confirmacion" };
+
+/**
+ * MEDICIÓN DE UNA SEMANA (owner, 16-11-2026: «guárdalos una semana y mídelo»).
+ * Un pedido frenado por «mensaje posterior» se queda con lo que la clienta
+ * escribió DESPUÉS de confirmar, para saber qué es: ¿pide otra fecha, pregunta,
+ * manda un audio? Hasta esta fecha; después ya no se guarda. Se guarda el
+ * texto recortado y el tipo, nunca la coordenada de una ubicación.
+ */
+export const POSTERIOR_CAPTURE_UNTIL = "2026-11-23T05:00:00Z";
+
+export interface PosteriorMessage {
+  at: string | null;
+  /** Recortado a 300 letras; vacío en un audio, una foto o una ubicación. */
+  text: string;
+  media: ChatbyMediaKind | null;
+  button: boolean;
+  location: boolean;
+}
+
+/** Lo que la clienta escribió después del mensaje que confirmó (hasta 8). Pura. */
+export function posteriorMessages(messages: readonly ChatbyMessage[], confirmationId: string | null): PosteriorMessage[] {
+  if (!confirmationId) return [];
+  const i = messages.findIndex((m) => m.id === confirmationId);
+  if (i < 0) return [];
+  return messages
+    .slice(i + 1)
+    .filter((m) => m.kind === "cliente")
+    .slice(0, 8)
+    .map((m) => ({
+      at: m.at,
+      text: m.location ? "" : m.text.slice(0, 300),
+      media: m.media,
+      button: m.button,
+      location: Boolean(m.location),
+    }));
+}
+
+/** ¿Se guarda todavía? */
+export function capturePosterior(now: Date = new Date()): boolean {
+  return now.getTime() < Date.parse(POSTERIOR_CAPTURE_UNTIL);
+}
 
 /** Un mensaje anterior al pedido no puede ser su confirmación. Media hora de margen por los relojes. */
 const BEFORE_ORDER_MARGIN_MS = 30 * 60_000;

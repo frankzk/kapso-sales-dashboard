@@ -2,7 +2,8 @@
 -- 0322: an appointment («volver a llamar») reserves the lead to the advisor who
 -- booked it only until 2 hours after the appointment time, or until the
 -- customer writes again after it was booked (owner decision 08-11-2026, option
--- c). Once released the lead follows the normal block routing. The appointment
+-- c). 0351: that message gives the lead back to the advisor for 10 minutes
+-- from the message, even after the appointment expired (owner, 16-11-2026). Once released the lead follows the normal block routing. The appointment
 -- itself (lead_calls row, next_followup_at) is untouched, and against the 0312
 -- body the only answers that change are those of released appointments.
 begin;
@@ -33,7 +34,11 @@ insert into appt_cases values
  -- trigger already consumes the expired appointment, so 0312 and 0322 agree.
  ('expired-called-after', interval '-3 hours',             interval '-5 hours',    null,                    null,                    'none'),
  ('old',                  interval '-10 days',             interval '-11 days',    null,                    null,                    'released'),
- ('came-back',            interval '5 hours',              interval '-10 minutes', interval '-1 minute',    null,                    'released-fresh'),
+ -- 0351: the customer's message gives the lead back to its advisor for 10
+ -- minutes (even after the appointment expired); after that it is released.
+ ('came-back',            interval '5 hours',              interval '-20 minutes', interval '-11 minutes',  null,                    'released-fresh'),
+ ('came-back-now',        interval '5 hours',              interval '-10 minutes', interval '-1 minute',    null,                    'held'),
+ ('expired-came-back-now',interval '-3 hours',             interval '-5 hours',    interval '-1 minute',    null,                    'held'),
  ('wrote-before',         interval '5 hours',              interval '-10 minutes', interval '-1 hour',      null,                    'held'),
  ('wrote-in-future',      interval '5 hours',              interval '-10 minutes', interval '1 hour',       null,                    'held'),
  ('voice-handoff',        interval '5 hours',              interval '-10 minutes', null,                    interval '-1 minute',    'held'),

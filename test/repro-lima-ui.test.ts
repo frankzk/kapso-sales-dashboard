@@ -21,6 +21,7 @@ import { navItems } from "@/components/sidebar";
 
 // La hoja importa las acciones de servidor; aquí solo se prueban sus textos.
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
+vi.mock("@/app/dashboard/pedidos/repro-lima/agenda-actions", () => ({}));
 // La chapa de etapa vive junto a la ficha, que arrastra acciones de servidor:
 // aquí basta con saber de qué etapa es.
 vi.mock("@/components/order-master-shared", () => ({
@@ -305,7 +306,8 @@ describe("la hoja decide con las reglas del servidor (§11.6, E14-E19)", () => {
   });
 
   it("Urpi va apagado con su porqué (E16) y la acción de caja viaja como expectedBoxAction", () => {
-    expect(panel).toContain('[...REPRO_COURIER_CHOICES, "urpi" as const]');
+    // Los couriers dependen de la tienda (GF Courier por API, owner 15-11-2026); Urpi sigue apagado.
+    expect(panel).toContain('[...reproCourierChoices(Boolean(current.gfCourierApi)), "urpi" as const]');
     expect(panel).toContain("reproCourierDisabledReason(c)");
     expect(panel).toContain("input.expectedBoxAction = action;");
     expect(panel).toContain("boxActionReadyLabel(decided.action, courier, current.cutoff)");
@@ -414,19 +416,29 @@ describe("el tablero (E31, E33)", () => {
     expect(pendingUI).toContain('<ul className="divide-y divide-line border-t border-line xl:hidden">');
   });
 
-  it("una sola tabla, Todos primero y las tarjetas como filtros de atención", () => {
-    expect(board.match(/<LimaPendingList /g)).toHaveLength(1);
+  it("una sola lista y, encima, el flujo y la Agenda como sus filtros (owner, 15-11-2026)", () => {
+    expect(board.match(/<LimaPendingList\b/g)).toHaveLength(1);
     expect(board).not.toContain("<ReproLimaTodos");
     expect(board).not.toContain("<table");
     expect(board).not.toContain("showView(");
-    expect(board.indexOf('label="Todos · por entregar"')).toBeLessThan(board.indexOf("{LIMA_QUEUE_CARDS.filter((card) => !retriesOnly || card.key === \"reintentos_aliclik\").map((card) => ("));
-    expect(board.indexOf("{LIMA_QUEUE_CARDS.filter(")).toBeGreaterThan(-1);
-    expect(board).toContain('active={list === "todos"}');
-    expect(board).toContain('onClick={() => chooseList(list === card.key ? "todos" : card.key)}');
+    // Los bloques van antes que la lista, y la lista recibe lo que eligen.
+    expect(board.indexOf("<ReproLimaBlocks")).toBeGreaterThan(-1);
+    expect(board.indexOf("<ReproLimaBlocks")).toBeLessThan(board.indexOf("<LimaPendingList"));
+    expect(board).toContain("onPick={chooseKey}");
+    expect(board).toContain("return limaBoardRows(scoped, classes, key, caseOrder);");
+    // Tocar la tarjeta elegida vuelve a Todos; la elegida viaja por `atencion`.
+    expect(board).toContain('if (next === "todos" || (next === key && !stuck)) params.delete("atencion");');
     expect(board).toContain('params.delete("vista")');
-    expect(board).toContain('searchParams.get("atencion")');
+    expect(board).toContain('boardFilter(searchParams.get("atencion"), today)');
     expect(board).not.toMatch(/router\.(push|replace)\(/);
     expect(board).not.toContain("requestAnimationFrame");
+    const blocks = read("components/repro-lima-blocks.tsx");
+    expect(blocks.indexOf('title="Flujo del día"')).toBeGreaterThan(0);
+    // «En manos del courier» y «Programados» son pasos del flujo (tercera vuelta; 16-11-2026): un solo bloque.
+    expect(blocks).not.toContain('title="En manos del courier"');
+    expect(blocks).not.toContain('aria-labelledby="repro-agenda"');
+    // Una franja (celdas separadas por líneas finas), no tarjetas sueltas.
+    expect(blocks.match(/<Strip\b/g)).toHaveLength(1);
   });
 
   it("«Todos» agrupa por etapa y subetapa del Master, con enlaces a sus colas (§9.5)", () => {
@@ -458,13 +470,14 @@ describe("el tablero (E31, E33)", () => {
   });
 
   it("las listas vacías y la búsqueda sin resultado lo dicen", () => {
+    const blocksRules = read("lib/repro-lima-blocks.ts");
     for (const text of [
-      "No hay pedidos programados para hoy con estos filtros.",
+      "No hay pedidos agendados para hoy con estos filtros.",
       "Nadie pidió que lo llamen después.",
       "No hay pedidos con una nueva fecha acordada con estos filtros.",
       "Ningún caso cerrado espera la anulación.",
       "`Ningún pedido coincide con «${query.trim()}».`",
-    ]) expect(board + pendingRules).toContain(text);
+    ]) expect(board + blocksRules).toContain(text);
   });
 
   it("se relee tras cada acción y al volver a la pestaña", () => {

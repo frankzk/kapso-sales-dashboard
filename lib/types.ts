@@ -462,6 +462,8 @@ export interface ShipmentRow {
   aliclik_attempts: number | null;
   /** Operative delivery date reported by Aliclik, as YYYY-MM-DD. */
   aliclik_service_date: string | null;
+  /** El transporte de la guía Aliclik (AUTOECOM, ALIDRIVER…): la Actividad lo nombra en sus estados. */
+  aliclik_transport_name?: string | null;
   reroute_attempts: number;
   /** Number of logged calls, populated on shipment queue reads. */
   contact_count?: number;
@@ -585,6 +587,8 @@ export interface OrderMasterRow {
   swayp_availability?: "ok" | "sin_stock" | "sin_cobertura" | null;
   /** «Programar envío» (0267, lib/dispatch-date.ts): fecha acordada, YYYY-MM-DD. */
   dispatch_scheduled_on?: string | null;
+  /** El courier de «Programar envío» (0348): `propio`, `gf_courier`, `aliclik` o `fenix`; null sin elegir. */
+  dispatch_courier?: string | null;
   /** Con quién salió (0266, lib/dispatched-with.ts): `gf:Roy`, `tanders`… */
   dispatched_with?: string[] | null;
   /**

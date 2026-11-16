@@ -9,6 +9,9 @@
 //
 // Lo que NO hace: crear salidas (otro courier va por la Mesa de ruta, D7),
 // anular la venta («Ya no lo quiere» solo quita la fecha) ni tocar el Master.
+// La excepción es GF Courier por API (owner, 15-11-2026; MOM §9.5): un acuerdo
+// con GF Courier deja la guía GF creada para el día acordado (`createGfGuideFor`)
+// y, si había una viva sin asignar, la anula antes (`cancelGfGuideFor`).
 
 import { sameCourier } from "@/lib/shipment-output";
 import { revalidatePath } from "next/cache";
@@ -33,6 +36,8 @@ import {
   type ReproFacts,
 } from "@/lib/repro-lima-program";
 import { clearGfDispatchPrograms, type GfProgramRow } from "@/lib/gf-dispatch-program";
+import { cancelGfGuideFor, createGfGuideFor, type GfCancelResult, type GfGuideResult } from "@/lib/gf-courier-guide";
+import { loadLimaCourierAutoActiveStores } from "@/lib/lima-courier-auto-server";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { limaClock } from "@/lib/grupo-gf-courier";
 import { validarMotivoDescarte } from "@/lib/recovery-discard";
@@ -45,6 +50,8 @@ import { priorOutputsWith, reproBoxAction } from "@/lib/repro-box-action";
 import {
   agreementDateProblem,
   faltaSalidaWhy,
+  gfAgreementGuidePlan,
+  gfGuideAssignedMessage,
   isAgreementBoxAction,
   isReproChannel,
   isReproCourier,
@@ -58,10 +65,15 @@ import {
   reproCallTimeLabel,
   reproCourierDisabledReason,
   reproCourierName,
+  reproCourierStoreProblem,
   reproEventNote,
+  reproGfGuideReason,
   reproProgramReason,
+  GRUPO_GF_NOT_IN_GF_STORE,
   REPRO_CLAIM_TTL_MINUTES,
   REPRO_COURIER_LABEL,
+  REPRO_GF_CANCEL_NOTE,
+  REPRO_GF_CANCEL_REASON,
   type BoxAction,
   type ReproChannel,
   type ReproChanges,
@@ -350,6 +362,10 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
         if (!courier) return { error: "Elige con qué courier sale." };
         const disabled = reproCourierDisabledReason(courier);
         if (disabled) return { error: disabled };
+        // La tienda decide: GF Courier solo con su API, y Grupo GF nunca con ella
+        // («Tomar» ya rechaza esos pedidos, §29.17). La hoja ofrece lo mismo.
+        const storeProblem = reproCourierStoreProblem(courier, Boolean(f.gfCourierApi));
+        if (storeProblem) return { error: storeProblem };
         let cutoff = f.provider?.same_day_cutoff ?? null;
         if (courier === "propio") {
           // La misma comprobación que la Mesa de ruta: cobertura, contrato y tarifa.
@@ -508,11 +524,101 @@ const SUFFIX_NO_LO_QUIERE = "Repro Lima: el cliente ya no lo quiere.";
 const SUFFIX_LLAMAR = "Repro Lima: se vuelve a llamar al cliente; el acuerdo anterior ya no vale.";
 const CLEARED_NOTE = " Se quitó la fecha que tenía en Grupo GF.";
 
+type AfterCallResult = { notice: string; error?: string; href?: string; programChanged: boolean };
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** Lo que respondió GF, cerrado con un solo punto. */
+const sentence = (text: string) => `${text.trim().replace(/[.\s]+$/, "")}.`;
+
+/**
+ * GF Courier en el acuerdo (owner, 15-11-2026: «En el caso de GF Courier la
+ * guía ya podría quedar generada para esa fecha»; MOM §9.5). La llamada ya está
+ * guardada y nada de esto la deshace:
+ * 1. Con una guía GF viva ya asignada a un motorizado (`en_ruta`), no se crea
+ *    otra: se dice.
+ * 2. Con una viva sin asignar (`pendiente`), Kapta la anula primero
+ *    (`cancelGfGuideFor`, «Nuevo acuerdo en Repro Lima»). Si GF no la anula,
+ *    no se crea la nueva.
+ * 3. Después crea la guía para el día acordado (`createGfGuideFor` con
+ *    `scheduledFor`), con el actor real y el motivo «Repro Lima: acuerdo con la
+ *    clienta para el …».
+ * Si GF no anula o no crea, el aviso dice lo que respondió y enlaza a la Mesa
+ * de ruta del pedido, como «otro courier».
+ */
+async function gfGuideForAgreement(admin: Admin, input: {
+  facts: ReproFacts;
+  day: string;
+  actor: string;
+  /** Cuándo se registró el acuerdo: la guía GF creada después es la suya (un reintento no la reemplaza). */
+  decidedAt: string | null;
+  /** Lo que ya se dijo del programa de Grupo GF quitado. */
+  tail: string;
+  programChanged: boolean;
+}): Promise<AfterCallResult> {
+  const { facts: f, day, actor, tail, programChanged } = input;
+  const saved = `Acuerdo guardado: sale el ${programDayLabel(day)} con GF Courier.${tail}`;
+  const href = orderDrawerHref(f.orderId, "operar", { pathname: REPRO_LIMA_PATH });
+  const guidePlan = gfAgreementGuidePlan(f.outputs, input.decidedAt);
+  if (guidePlan.kind === "asignada") {
+    return { notice: saved, error: gfGuideAssignedMessage(guidePlan.guideCode), href, programChanged };
+  }
+  // Ya es la de este acuerdo (el mismo envío otra vez): no se anula ni se repite.
+  if (guidePlan.kind === "lista") {
+    return { notice: `${saved} La guía ${guidePlan.guideCode ?? "de GF Courier"} ya está creada para ese día.`, programChanged };
+  }
+  const cancelled: string[] = [];
+  if (guidePlan.kind === "reemplazar") {
+    for (const old of guidePlan.cancel) {
+      if (!old.guideCode) {
+        return { notice: saved, error: "La guía de GF Courier viva no tiene número: anúlala desde la Mesa de ruta del pedido y crea ahí la nueva.", href, programChanged };
+      }
+      let res: GfCancelResult;
+      try {
+        res = await cancelGfGuideFor(f.orderId, old.guideCode, { userId: actor, reason: REPRO_GF_CANCEL_REASON, note: REPRO_GF_CANCEL_NOTE }, admin);
+      } catch (error) {
+        res = { ok: false, error: errorText(error) };
+      }
+      if (!res.ok) {
+        return {
+          notice: saved,
+          error: `GF Courier no anuló la guía ${old.guideCode}: ${sentence(res.error)} No se creó la guía nueva: revísalo en la Mesa de ruta del pedido.`,
+          href,
+          programChanged,
+        };
+      }
+      cancelled.push(old.guideCode);
+    }
+  }
+  // Solo después de anular la anterior: GF no deja dos guías vivas del mismo pedido.
+  let created: GfGuideResult;
+  try {
+    created = await createGfGuideFor(f.orderId, { userId: actor, reason: reproGfGuideReason(day), scheduledFor: day }, admin);
+  } catch (error) {
+    created = { ok: false, error: errorText(error) };
+  }
+  const cancelledNote = cancelled.length ? ` La guía ${cancelled.join(", ")} quedó anulada.` : "";
+  if (!created.ok) {
+    return {
+      notice: saved,
+      error: created.pending
+        ? `GF Courier no respondió a tiempo: la guía del ${programDayLabel(day)} quedó creándose (Kapta la vincula sola).${cancelledNote} Revísala en la Mesa de ruta del pedido.`
+        : `GF Courier no creó la guía del ${programDayLabel(day)}: ${sentence(created.error)}${cancelledNote} Créala desde la Mesa de ruta del pedido.`,
+      href,
+      programChanged,
+    };
+  }
+  return {
+    notice: `Acuerdo guardado: sale el ${programDayLabel(day)} con GF Courier. Guía ${created.trackingId} ${created.adopted ? "vinculada" : "creada"} para ese día.${cancelledNote}${tail}`,
+    programChanged,
+  };
+}
+
 /**
  * Lo que sigue a cada resultado (E23):
  * - confirma, plan `ahora` → se programa (se reescribe el programa);
  * - confirma, `al_recibir` → se quita el programa si es de otro día;
  * - confirma, otro plan → se quita todo programa de Grupo GF;
+ * - confirma con GF Courier → además, la guía GF del día acordado (`gfGuideForAgreement`);
  * - no quiere → se quita todo programa;
  * - llamar después → se quita el programa que puso un acuerdo de Repro Lima.
  * Sus fallos van al aviso y nunca deshacen la llamada.
@@ -526,7 +632,7 @@ async function afterCall(admin: Admin, input: {
   now: Date;
   nextCallAt: string | null;
   noAnswerCount: number;
-}): Promise<{ notice: string; error?: string; href?: string; programChanged: boolean }> {
+}): Promise<AfterCallResult> {
   const { facts: f, caseRow: c, scope } = input;
   const today = limaClock(input.now).day;
   const actor = scope.userId;
@@ -619,9 +725,25 @@ async function afterCall(admin: Admin, input: {
   const tail = cleared ? CLEARED_NOTE : "";
   switch (plan.no) {
     case "otro_courier":
+      // GF Courier por API: la guía queda creada para el día acordado (owner,
+      // 15-11-2026). Va antes que «la salida ya existe»: la guía GF viva se
+      // reemplaza por la del día acordado, no se conserva.
+      if (courier === "gf_courier") {
+        return await gfGuideForAgreement(admin, { facts: f, day, actor, decidedAt: c.decided_at, tail, programChanged: cleared });
+      }
       // Con la salida de ese courier ya viva no hay nada que crear (13-11-2026).
       if (f.box.kind === "con_courier" && sameCourier(f.box.courier, courier)) {
         return { notice: `Acuerdo guardado: la salida de ${courierName} ya existe.${tail}`, programChanged: cleared };
+      }
+      // Con «Guía Aliclik y Swayp del día programado» en Activo (0349), la guía la crea Kapta.
+      if ((courier === "aliclik" || courier === "fenix") && f.storeId) {
+        const auto = await loadLimaCourierAutoActiveStores(admin, [f.storeId]).catch(() => [] as string[]);
+        if (auto.includes(f.storeId)) {
+          return {
+            notice: `Acuerdo guardado: sale el ${programDayLabel(day)} con ${courierName}. Kapta crea su guía ${courier === "aliclik" ? "la noche anterior o la mañana de ese día" : "la víspera"}; si no puede, avisa por Telegram.${tail}`,
+            programChanged: cleared,
+          };
+        }
       }
       return {
         notice: `Acuerdo guardado: crea la salida de ${courierName} desde la Mesa de ruta del pedido.${tail}`,
@@ -687,6 +809,9 @@ export async function programReproAgreement(input: { caseId: string; found?: boo
     const courier = isReproCourier(c0.agreed_courier) ? c0.agreed_courier : null;
     const boxAction = isAgreementBoxAction(c0.box_action) ? c0.box_action : null;
     if (courier !== "propio" || !boxAction) return { error: "Solo se programa en Grupo GF un acuerdo con Grupo GF." };
+    // Un acuerdo viejo con Grupo GF en una tienda que ya despacha por GF Courier:
+    // Grupo GF no lo toma (§29.17). Se acuerda otra vez con GF Courier.
+    if (f.gfCourierApi) return { error: `${GRUPO_GF_NOT_IN_GF_STORE} Acuérdalo de nuevo en «Atender».` };
     const plan = materializationPlan({ courier, boxAction, box: f.box, retryAdmission: f.retryAdmission });
     const allowed = input.found
       ? typeof plan === "object" && plan.no === "falta_ubicar"
@@ -771,6 +896,204 @@ export async function programReproAgreement(input: { caseId: string; found?: boo
           .from("lima_repro_cases")
           .update({ claimed_by: null, claimed_until: null })
           .eq("id", c0.id)
+          .eq("claimed_by", scope.userId);
+      }
+    }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// «Agendar» desde la lista: otro día para un acuerdo que ya existe (15-11-2026)
+// ---------------------------------------------------------------------------
+
+const NO_AGREEMENT = "Este pedido no tiene un acuerdo con la clienta: acuerda el día y el courier en «Atender».";
+
+/**
+ * «Agendar» y «Mover a…» de la lista (owner, 15-11-2026; MOM §9.5) sobre un
+ * pedido que ya tiene un acuerdo: otro día, con el mismo courier y lo mismo que
+ * cambió. Es «Confirma fecha» de la pestaña por el mismo camino, sin abrir la
+ * ficha: toma el candado del caso (`claimReproCase`), recalcula «Qué hacer con
+ * la caja» con `reproBoxAction` y registra la llamada (`recordCall` →
+ * `lima_repro_record`), que valida la fecha (corte, Swayp, noche anterior) y
+ * después programa o quita la fecha de Grupo GF como al decidir. Quien agenda
+ * dice si lo acordó por llamada o por WhatsApp: es un acuerdo con la clienta,
+ * no un cambio de Kapta. Al terminar suelta el candado si no lo tenía. Sin
+ * acuerdo no hay courier que conservar: eso se acuerda en «Atender».
+ */
+export async function moveReproAgreement(input: {
+  orderId: string;
+  day: string;
+  channel: ReproChannel;
+  /** Un `crypto.randomUUID()` por pedido: un doble clic no registra dos llamadas. */
+  operationId: string;
+}): Promise<RegisterReproCallResult> {
+  const scope = await requireReproLima();
+  if ("error" in scope) return { error: scope.error };
+  if (!isUuid(input.orderId)) return { error: "No encontramos el pedido." };
+  if (input.channel !== "llamada" && input.channel !== "whatsapp") return { error: "Di si lo acordaste por llamada o por WhatsApp." };
+  const day = input.day?.trim() ?? "";
+  if (!DAY_RE.test(day)) return { error: "Elige el día que acordaste con el cliente." };
+  const admin = createAdminSupabase();
+  try {
+    const f = await factsOf(admin, input.orderId);
+    if (!f?.storeId || !f.order) return { error: "No encontramos el pedido." };
+    if (!scope.storeIds.has(f.storeId)) return { error: REPRO_OUTSIDE_STORE };
+    const open = f.open && f.open.episode_key === f.episode.key ? f.open : null;
+    const courier = open && isReproCourier(open.agreed_courier) ? open.agreed_courier : null;
+    if (!open || !open.agreed_on || !open.agreement_call_id || !courier) return { error: NO_AGREEMENT };
+    const before = open.agreed_on.slice(0, 10);
+    if (before === day) return { notice: `Ya estaba acordado para el ${programDayLabel(day)}.` };
+    // La tienda pudo cambiar desde el acuerdo: el courier se vuelve a acordar en «Atender».
+    const storeProblem = reproCourierStoreProblem(courier, Boolean(f.gfCourierApi));
+    if (storeProblem) return { error: `${storeProblem} Acuérdalo de nuevo en «Atender».` };
+    // GF Courier: mover es anular la guía del día anterior y crear la del nuevo
+    // (`gfGuideForAgreement`, después de registrar la llamada). Si GF ya la
+    // asignó a un motorizado no se anula: no se mueve, y se dice por qué.
+    if (courier === "gf_courier") {
+      const guidePlan = gfAgreementGuidePlan(f.outputs);
+      if (guidePlan.kind === "asignada") return { error: `No se movió: ${gfGuideAssignedMessage(guidePlan.guideCode)}` };
+    }
+    const now = new Date();
+    const hadClaim = open.claimed_by === scope.userId && Boolean(open.claimed_until) && Date.parse(open.claimed_until!) > now.getTime();
+    const claim = await claimReproCase(input.orderId);
+    if ("error" in claim) return { error: claim.error };
+    try {
+      const changes = normalizeReproChanges(open.changes);
+      // La misma regla que la pestaña y que `recordCall`: si la caja cambió
+      // desde que se acordó, la acción nueva es la que vale.
+      const decided = reproBoxAction({
+        outcome: "confirma",
+        courier,
+        changes,
+        box: f.box,
+        ownLiveCourier: f.ownLive?.courier ?? null,
+        lastFailedCourier: f.failedOutput?.courier ?? null,
+        otherLiveCourier: f.otherLiveCourier,
+        hadPropio: f.hadPropio,
+        totalOutputs: f.outputs.length,
+        priorWithCourier: priorOutputsWith(f.outputs, courier),
+        ownReplace: f.ownReplace,
+        reopened: f.reopened,
+        retryAdmission: f.retryAdmission,
+      });
+      if ("problem" in decided) return { error: `${decided.problem} Ábrelo con «Atender».` };
+      return await recordCall(scope, {
+        caseId: claim.caseId,
+        operationId: input.operationId,
+        outcome: "confirma",
+        channel: input.channel,
+        agreedOn: day,
+        courier,
+        changes,
+        expectedBoxAction: decided.action,
+        note: `Día cambiado desde la lista de Repro Lima (antes, ${programDayLabel(before)}).`,
+      });
+    } finally {
+      if (!hadClaim) {
+        await admin
+          .from("lima_repro_cases")
+          .update({ claimed_by: null, claimed_until: null })
+          .eq("id", claim.caseId)
+          .eq("claimed_by", scope.userId);
+      }
+    }
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// «Programar» en lote un no entregado sin acuerdo: acuerdo sin llamada (16-11-2026)
+// ---------------------------------------------------------------------------
+
+/** La nota del acuerdo que nace al programar en lote, sin hablar con la clienta. */
+const REPRO_NO_CALL_NOTE = "Programado en lote desde Repro Lima, sin llamada.";
+
+/**
+ * «Programar» un no entregado «Por acordar» desde la lista, con el día y el
+ * courier elegidos (owner, 16-11-2026: «con un botón ya lo dejamos programados
+ * exactamente para un courier»; MOM §9.5). No hay llamada: el acuerdo se
+ * registra con el canal `sin_contacto` (0348), que no cuenta como intento. Es
+ * el mismo camino que «Confirma fecha» de la pestaña: toma el candado del caso
+ * (`claimReproCase`), calcula «Qué hacer con la caja» con `reproBoxAction` sin
+ * cambios del pedido y registra el acuerdo (`recordCall` →
+ * `lima_repro_record`), que valida el courier de la tienda, la cobertura de
+ * Grupo GF y la fecha, y después programa, crea la guía GF del día o dice qué
+ * falta. Si el pedido ya tiene un acuerdo, se reprograma con el suyo
+ * (`moveReproAgreement`); si la caja pide una decisión (un problema de caja) o
+ * Aliclik pide la ubicación, se abre con «Atender». Al terminar suelta el
+ * candado si no lo tenía.
+ */
+export async function programReproWithoutCall(input: {
+  orderId: string;
+  day: string;
+  courier: string;
+  /** Un `crypto.randomUUID()` por pedido: un doble clic no registra dos acuerdos. */
+  operationId: string;
+}): Promise<RegisterReproCallResult> {
+  const scope = await requireReproLima();
+  if ("error" in scope) return { error: scope.error };
+  if (!isUuid(input.orderId)) return { error: "No encontramos el pedido." };
+  const day = input.day?.trim() ?? "";
+  if (!DAY_RE.test(day)) return { error: "Elige el día en que sale." };
+  if (!isReproCourier(input.courier)) return { error: "Elige con qué courier sale." };
+  const courier = input.courier;
+  const disabled = reproCourierDisabledReason(courier);
+  if (disabled) return { error: disabled };
+  const admin = createAdminSupabase();
+  try {
+    const f = await factsOf(admin, input.orderId);
+    if (!f?.storeId || !f.order) return { error: "No encontramos el pedido." };
+    if (!scope.storeIds.has(f.storeId)) return { error: REPRO_OUTSIDE_STORE };
+    if (!f.inStage) return { error: OUT_OF_STAGE };
+    const open = f.open && f.open.episode_key === f.episode.key ? f.open : null;
+    if (open?.agreed_on && open.agreement_call_id) return { error: "Ya tiene un acuerdo con la clienta: se reprograma con su courier." };
+    const storeProblem = reproCourierStoreProblem(courier, Boolean(f.gfCourierApi));
+    if (storeProblem) return { error: storeProblem };
+    if (reproNeedsCoordinate(courier, orderHasCoordinate(f.order))) {
+      return { error: "Aliclik necesita la ubicación del pedido: acuérdalo en «Atender» y pega ahí el enlace de Google Maps." };
+    }
+    const now = new Date();
+    const hadClaim = Boolean(open && open.claimed_by === scope.userId && open.claimed_until && Date.parse(open.claimed_until) > now.getTime());
+    const claim = await claimReproCase(input.orderId);
+    if ("error" in claim) return { error: claim.error };
+    try {
+      const changes = normalizeReproChanges(null);
+      const decided = reproBoxAction({
+        outcome: "confirma",
+        courier,
+        changes,
+        box: f.box,
+        ownLiveCourier: f.ownLive?.courier ?? null,
+        lastFailedCourier: f.failedOutput?.courier ?? null,
+        otherLiveCourier: f.otherLiveCourier,
+        hadPropio: f.hadPropio,
+        totalOutputs: f.outputs.length,
+        priorWithCourier: priorOutputsWith(f.outputs, courier),
+        ownReplace: f.ownReplace,
+        reopened: f.reopened,
+        retryAdmission: f.retryAdmission,
+      });
+      if ("problem" in decided) return { error: `${decided.problem} Ábrelo con «Atender».` };
+      return await recordCall(scope, {
+        caseId: claim.caseId,
+        operationId: input.operationId,
+        outcome: "confirma",
+        channel: "sin_contacto",
+        agreedOn: day,
+        courier,
+        changes,
+        expectedBoxAction: decided.action,
+        note: REPRO_NO_CALL_NOTE,
+      });
+    } finally {
+      if (!hadClaim) {
+        await admin
+          .from("lima_repro_cases")
+          .update({ claimed_by: null, claimed_until: null })
+          .eq("id", claim.caseId)
           .eq("claimed_by", scope.userId);
       }
     }

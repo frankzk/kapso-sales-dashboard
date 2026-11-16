@@ -684,7 +684,10 @@ export function warehouseRetryRows(rows: readonly ReproRow[], ctx: RetryContext)
         : { tone: "info", text: RETRY_ADDED_TODAY(hhmm(added)) });
     }
 
-    const nightBefore = act.action ? NIGHT_BEFORE_BOX_ACTIONS.has(act.action) : false;
+    // GF Courier prepara el paquete él mismo (owner, 15-11-2026; §9.5): no hay
+    // noche anterior para Almacén, como tampoco la hay en la fecha del acuerdo.
+    const gfPrepares = Boolean(agreement && sameCourier(agreement.courier, "gf_courier"));
+    const nightBefore = act.action && !gfPrepares ? NIGHT_BEFORE_BOX_ACTIONS.has(act.action) : false;
     if (nightBefore && slot.bucket === "manana") chips.push({ tone: "warn", text: RETRY_NIGHT_BEFORE_MANANA });
     // «Prepárala ya» solo si lo programado hoy es el acuerdo: el programa de otro no la prepara.
     if (nightBefore && slot.bucket === "hoy" && added != null && !foreignProgram) {

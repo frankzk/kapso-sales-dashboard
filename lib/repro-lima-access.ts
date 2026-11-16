@@ -36,6 +36,7 @@ import {
   cutoffNotice,
   dismantleSuggested,
   failureLine,
+  gfAgreementGuidePlan,
   isAgreementBoxAction,
   isReproCourier,
   orderHasCoordinate,
@@ -50,6 +51,7 @@ import {
   type AgreementState,
   type BoxLocation,
   type ClaimView,
+  type GfAgreementGuidePlan,
   type MaterializationPlan,
   type ProgramOrigin,
   type ReproChanges,
@@ -92,13 +94,13 @@ export async function requireReproLima(
 ): Promise<(ReproScope & { retriesOnly: boolean }) | { error: string; reason: "permiso" | "tiendas" }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const permissions = await getMasterPermissions();
+  // Permisos y tiendas a la vez: la pestaña de la ficha espera esta puerta.
+  const [permissions, stores] = await Promise.all([getMasterPermissions(), getAccessibleStores()]);
   const manage = permissions.can("repro_lima.manage");
   // La pantalla también abre con «Reintentos Aliclik» solo (Despacho,
   // 03-11-2026); las acciones de llamar y acordar siguen pidiendo manage.
   const retriesOnly = !manage && Boolean(opts.retries) && permissions.can("repro_lima.retries");
   if (!manage && !retriesOnly) return { error: REPRO_NO_PERMISSION, reason: "permiso" };
-  const stores = await getAccessibleStores();
   if (!stores.length) return { error: REPRO_NO_STORES, reason: "tiendas" };
   return { userId: user.id, storeIds: new Set(stores.map((store) => store.id)), retriesOnly };
 }
@@ -116,6 +118,18 @@ export interface ReproRow {
   district: string | null;
   /** Tiene coordenada en el Master: «Confirma fecha» con Aliclik no la pide (06-11-2026). */
   hasCoordinate: boolean;
+  /**
+   * La tienda tiene GF Courier por API (`ReproFacts.gfCourierApi`): la hoja
+   * ofrece GF Courier primero y sin Grupo GF (owner, 15-11-2026; §9.5).
+   */
+  gfCourierApi: boolean;
+  /**
+   * Qué haría Kapta con la guía GF viva al guardar un acuerdo con GF Courier
+   * (`gfAgreementGuidePlan`, sin la hora del acuerdo: toda guía viva es de
+   * antes): crearla, anular la viva sin asignar y crear otra, o decir que GF ya
+   * la asignó a un motorizado.
+   */
+  gfGuidePlan: GfAgreementGuidePlan;
   orderTotal: number;
   /** Desde cuándo está en la etapa (`order_master.macro_since`). */
   macroSince: string | null;
@@ -142,7 +156,8 @@ export interface ReproRow {
   callCount: number;
   noAnswerCount: number;
   /** La última llamada del caso: «última 11/10 16:20, Daysi». */
-  lastCall: { at: string; byName: string | null; outcome: string | null } | null;
+  /** `note`: lo que se anotó en esa llamada (la lista lo enseña en «Qué pasa»). */
+  lastCall: { at: string; byName: string | null; outcome: string | null; note?: string | null } | null;
   nextCallAt: string | null;
   /** El acuerdo vigente del caso. */
   agreement: {
@@ -294,7 +309,7 @@ function buildRow(input: {
   now: Date;
   today: string;
   names: Record<string, string>;
-  lastCall: { at: string; actor: string | null; outcome: string | null } | null;
+  lastCall: { at: string; actor: string | null; outcome: string | null; note?: string | null } | null;
 }): ReproRow {
   const { f, order, now, today, names } = input;
   // Un caso de otro episodio cuenta como ausente: se cierra después de responder.
@@ -339,6 +354,8 @@ function buildRow(input: {
   const priorByCourier = Object.fromEntries(
     REPRO_COURIERS.map((c) => [c, priorOutputsWith(f.outputs, c)]),
   ) as Record<ReproCourier, number>;
+  // Sin la hora del acuerdo: para la hoja, toda guía GF viva es de antes del acuerdo nuevo.
+  const gfPlan = gfAgreementGuidePlan(f.outputs);
   return {
     ...(!f.inStage ? { attentionContext: "pending" as const } : {}),
     orderId: f.orderId,
@@ -349,6 +366,8 @@ function buildRow(input: {
     customerPhone: order.customer_phone,
     district: order.district,
     hasCoordinate: orderHasCoordinate(order),
+    gfCourierApi: f.gfCourierApi,
+    gfGuidePlan: gfPlan,
     orderTotal: Number(order.order_total ?? 0),
     macroSince: order.macro_since,
     daysInStage: daysBetweenDays(limaDay(order.macro_since), today),
@@ -374,7 +393,7 @@ function buildRow(input: {
     callCount: open?.call_count ?? 0,
     noAnswerCount: open?.no_answer_count ?? 0,
     lastCall: input.lastCall
-      ? { at: input.lastCall.at, byName: input.lastCall.actor ? names[input.lastCall.actor] ?? null : null, outcome: input.lastCall.outcome }
+      ? { at: input.lastCall.at, byName: input.lastCall.actor ? names[input.lastCall.actor] ?? null : null, outcome: input.lastCall.outcome, note: input.lastCall.note ?? null }
       : null,
     nextCallAt: open?.next_call_at ?? null,
     agreement: open?.agreed_on && open.agreement_call_id
@@ -505,13 +524,15 @@ export async function loadReproLima(
     }).then((result) => result.data),
     opts.attention && !onlyOrders ? allCourierRows<{ order_id: string }>((from, to) => admin.from("lima_repro_cases")
       .select("order_id").in("store_id", storeIds).like("episode_key", "attention:%").order("id").range(from, to) as unknown as PromiseLike<{ data: Array<{ order_id: string }> | null; error: { message: string } | null }>) : Promise.resolve([]),
-    courierRowsByIds(storeIds, (chunk) => admin.from("stores").select("id,name,org_id").in("id", chunk)),
+    courierRowsByIds(storeIds, (chunk) => admin.from("stores").select("id,name,org_id,gf_courier_enabled").in("id", chunk)),
     admin.from("logistics_providers").select("id,org_id,status,same_day_cutoff").eq("code", "grupo-gf-courier"),
   ]);
-  const stores = (storeRows as Array<{ id: string; name: string; org_id: string }>)
+  const stores = (storeRows as Array<{ id: string; name: string; org_id: string; gf_courier_enabled?: boolean | null }>)
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
   const storeName = new Map(stores.map((store) => [store.id, store.name]));
   const storeOrg = new Map(stores.map((store) => [store.id, store.org_id]));
+  // GF Courier por API de cada tienda (§29.17): la hoja ofrece sus couriers con esto.
+  const gfCourierStores = new Set(stores.filter((store) => store.gf_courier_enabled).map((store) => store.id));
   const orgs = new Set(stores.map((store) => store.org_id));
   const providers = new Map(((providerRows ?? []) as ReproProviderRow[])
     .filter((provider) => orgs.has(provider.org_id))
@@ -529,7 +550,7 @@ export async function loadReproLima(
   const outOfStage = openCases.filter((row) => !inStage.has(row.order_id) && (opts.attention || !row.episode_key?.startsWith("attention:")));
 
   // Oleadas 2 y 3: los hechos de cada pedido.
-  const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers });
+  const facts = await loadReproFacts(admin, rows.map((row) => row.order_id), { orders: rows, storeOrg, providers, gfCourierStores });
 
   // Casos de otro episodio, más reciente: se cierran como nuevo intento.
   const newAttempt: string[] = [];
@@ -549,20 +570,20 @@ export async function loadReproLima(
   // respuesta trae 1000 filas como mucho y cortaría la última llamada.
   const { data: callRows } = await courierRowsByIds(openIds, (chunk) => allCourierRows((from, to) => admin
     .from("lima_repro_calls")
-    .select("case_id,actor,occurred_at,outcome,channel")
+    .select("case_id,actor,occurred_at,outcome,channel,note")
     .in("case_id", chunk)
     .neq("channel", "sin_contacto")
     .order("case_id")
     .order("occurred_at", { ascending: false })
     .order("id")
-    .range(from, to) as unknown as PromiseLike<{ data: Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null }> | null; error: { message: string } | null }>)
+    .range(from, to) as unknown as PromiseLike<{ data: Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }> | null; error: { message: string } | null }>)
     .then((data) => ({ data, error: null })));
-  const lastCallByCase = new Map<string, { at: string; actor: string | null; outcome: string | null }>();
-  for (const call of callRows as Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null }>) {
+  const lastCallByCase = new Map<string, { at: string; actor: string | null; outcome: string | null; note: string | null }>();
+  for (const call of callRows as Array<{ case_id: string; actor: string | null; occurred_at: string; outcome: string | null; channel: string | null; note?: string | null }>) {
     // «Desarmar y cerrar sin llamada» no es una llamada.
     if (call.channel === "sin_contacto") continue;
     const current = lastCallByCase.get(call.case_id);
-    if (!current || call.occurred_at > current.at) lastCallByCase.set(call.case_id, { at: call.occurred_at, actor: call.actor, outcome: call.outcome });
+    if (!current || call.occurred_at > current.at) lastCallByCase.set(call.case_id, { at: call.occurred_at, actor: call.actor, outcome: call.outcome, note: call.note?.trim() || null });
   }
   const people = new Set<string>();
   for (const f of facts.values()) {

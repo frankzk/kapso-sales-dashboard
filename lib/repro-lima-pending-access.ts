@@ -19,6 +19,7 @@ interface PendingMasterRow {
   current_courier: string | null; dispatched_at: string | null; attempt_count: number | null;
   sales_channel: string | null; address: string | null; reference: string | null;
   dispatch_scheduled_on?: string | null;
+  dispatch_courier?: string | null;
 }
 interface PendingProgramRow { order_id: string; store_id: string; scheduled_for: string }
 interface GfShipmentRow {
@@ -296,7 +297,37 @@ async function loadCourierDetails(admin: Admin, rows: PendingMasterRow[]): Promi
 }
 
 interface PendingPickupRow {
-  order_id: string; aliclik_expected_dispatch_date: string | null; aliclik_reported_dispatch_date: string | null;
+  order_id: string; courier: string | null; guide_code: string | null; delivery_status: string | null;
+  aliclik_expected_dispatch_date: string | null; aliclik_reported_dispatch_date: string | null;
+}
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * El día pedido a GF Courier para cada guía GF que todavía no salió
+ * (`guides`: número de guía → pedido), por pedido: el `scheduled_date` de su
+ * intención enviada (`gf_order_requests.request`, la misma que creó la guía).
+ * Sin día pedido, no entra. Lotes de 500, como las demás lecturas; sin guías
+ * GF, no pregunta.
+ */
+async function loadGfGuideDays(admin: Admin, guides: ReadonlyMap<string, string>): Promise<Map<string, string>> {
+  const days = new Map<string, string>();
+  const codes = [...guides.keys()];
+  for (let offset = 0; offset < codes.length; offset += 500) {
+    const { data, error } = await admin.from("gf_order_requests")
+      .select("tracking_id,scheduled_date:request->>scheduled_date")
+      .in("tracking_id", codes.slice(offset, offset + 500))
+      .eq("status", "sent");
+    if (error) throw new Error(`No pudimos leer los días pedidos a GF Courier: ${error.message}`);
+    for (const r of (data ?? []) as Array<{ tracking_id: string | null; scheduled_date: string | null }>) {
+      const orderId = r.tracking_id ? guides.get(r.tracking_id) : undefined;
+      const day = (r.scheduled_date ?? "").slice(0, 10);
+      if (!orderId || !ISO_DAY.test(day)) continue;
+      // Dos guías GF vivas no deberían existir; si existen, manda la más tardía.
+      if ((days.get(orderId) ?? "") < day) days.set(orderId, day);
+    }
+  }
+  return days;
 }
 
 /** Solo lectura, después de requireReproLima. Pagina todos los pedidos, sin
@@ -306,7 +337,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
     allCourierRows<PendingMasterRow>((from, to) => admin.from("order_master")
-      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,sales_channel,address,reference,dispatch_scheduled_on")
+      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier")
       .in("store_id", ids).eq("coverage", "lima").in("macro_stage", [...LIMA_PENDING_STAGES])
       .order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id")
       .range(from, to) as unknown as PromiseLike<{ data: PendingMasterRow[] | null; error: { message: string } | null }>),
@@ -343,23 +374,36 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   // Las guías Aliclik que esperan su recojo (owner, 07-11-2026): viva, sin
   // salida, sin reparto y sin retorno. Su día de recojo programa el pedido en
   // Repro Lima; sin esto caía en «Nunca salieron» como si nadie lo hubiera
-  // gestionado. Mismos lotes de 500; un error se muestra, no se adivina.
+  // gestionado. Mismos lotes de 500; un error se muestra, no se adivina. En la
+  // misma lectura, las guías de GF Courier que todavía no salieron (15-11-2026).
   const pickups = new Map<string, string>();
+  const gfGuides = new Map<string, string>();
   for (let offset = 0; offset < safeIds.length; offset += 500) {
     const { data, error } = await admin.from("shipments")
-      .select("order_id,aliclik_expected_dispatch_date,aliclik_reported_dispatch_date")
+      .select("order_id,courier,guide_code,delivery_status,aliclik_expected_dispatch_date,aliclik_reported_dispatch_date")
       .in("order_id", safeIds.slice(offset, offset + 500))
-      .eq("courier", "aliclik").eq("status_category", "pending")
+      .in("courier", ["aliclik", "gf_courier"]).eq("status_category", "pending")
       .not("delivery_status", "in", "(anulado,transferido)")
       .is("dispatched_at", null).is("out_for_delivery_at", null).is("returned_at", null);
-    if (error) throw new Error(`No pudimos leer las guías de Aliclik: ${error.message}`);
+    if (error) throw new Error(`No pudimos leer las guías de Aliclik y GF Courier: ${error.message}`);
     for (const g of (data ?? []) as PendingPickupRow[]) {
+      if (g.courier === "gf_courier") {
+        if (g.delivery_status === "pendiente" && g.guide_code && orderStore.has(g.order_id)) gfGuides.set(g.guide_code, g.order_id);
+        continue;
+      }
       const day = (g.aliclik_reported_dispatch_date ?? g.aliclik_expected_dispatch_date ?? "").slice(0, 10);
       if (!orderStore.has(g.order_id) || !day) continue;
       // Dos guías vivas a la vez no deberían existir; si existen, manda la más tardía.
       if ((pickups.get(g.order_id) ?? "") < day) pickups.set(g.order_id, day);
     }
   }
+  // Las guías de GF Courier que todavía no salieron, con el día que se le pidió
+  // a GF (`scheduled_date` de su intención enviada, §29.17): el de un acuerdo
+  // de Repro Lima o el de «Programar envío» (owner, 15-11-2026; §9.5). Sin
+  // esto, el acuerdo cuyo caso se cerró al crear la guía —el pedido dejó «Por
+  // reprogramar Lima»— perdía su día en la Agenda. Solo se pregunta por las
+  // guías que hay; un error se muestra, no se adivina.
+  const gfPickups = await loadGfGuideDays(admin, gfGuides);
   return safe.map((row) => {
     // El filtro de arriba valida también la macroetapa de cada fila.
     const stage = row.macro_stage as LimaPendingOrder["stage"];
@@ -377,8 +421,11 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       courierDetail: courierDetails.get(row.order_id) ?? null,
       gf: gfFacts.get(row.order_id) ?? null,
       scheduledOn: row.dispatch_scheduled_on?.slice(0, 10) ?? null,
+      scheduledCourier: row.dispatch_courier ?? null,
       ops: stuckFacts.get(row.order_id) ?? null,
-      courierPickup: pickups.has(row.order_id) ? { courier: "aliclik", date: pickups.get(row.order_id)! } : null,
+      courierPickup: pickups.has(row.order_id)
+        ? { courier: "aliclik", date: pickups.get(row.order_id)! }
+        : gfPickups.has(row.order_id) ? { courier: "gf_courier", date: gfPickups.get(row.order_id)! } : null,
     };
   });
 }

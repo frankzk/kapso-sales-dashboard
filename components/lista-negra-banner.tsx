@@ -12,6 +12,8 @@ import { Banner } from "@/components/ops-ui";
 import {
   LN_BANNER_TITLE,
   LN_FOOTNOTE,
+  LN_LIMA_LEAD_ACTION,
+  LN_LIMA_ORDER_ACTION,
   lnLeadBannerAction,
   lnOrderBannerAction,
   lnRequisito,
@@ -23,6 +25,7 @@ export function ListaNegraBanner({
   requirement,
   context,
   met = false,
+  lima = false,
   className,
   children,
 }: {
@@ -31,11 +34,18 @@ export function ListaNegraBanner({
   /** La ficha del pedido (crit si falta, info si ya cumple) o la del lead (warn). */
   context: "order" | "lead";
   met?: boolean;
+  /**
+   * La lista automática en un pedido (o un lead) de Lima: no frena, solo
+   * informa (owner, 16-11-2026, MOM §41.12). Las altas a mano nunca lo pasan.
+   */
+  lima?: boolean;
   className?: string;
   children?: ReactNode;
 }) {
-  const tone = context === "lead" ? "warn" : met ? "info" : "crit";
-  const action = context === "lead" ? lnLeadBannerAction(requirement) : lnOrderBannerAction(requirement, met);
+  const tone = lima || (context === "order" && met) ? "info" : context === "lead" ? "warn" : "crit";
+  const action = lima
+    ? context === "lead" ? LN_LIMA_LEAD_ACTION : LN_LIMA_ORDER_ACTION
+    : context === "lead" ? lnLeadBannerAction(requirement) : lnOrderBannerAction(requirement, met);
   return (
     <Banner tone={tone} role={tone === "crit" ? "alert" : "status"} className={className} title={LN_BANNER_TITLE}>
       <p className="mt-0.5 text-[13px] leading-5 text-ink-900">{motivo}</p>

@@ -28,6 +28,7 @@ import { formatLimaDateTime, isUuid, PAGO_ONLINE_EXCEPTION_EVENT } from "@/lib/a
 import { getCurrentUser } from "@/lib/access";
 import { hasOrgPermission } from "@/lib/permissions-access";
 import { pagoOnlineLookup } from "@/lib/pago-online-lookup";
+import { listaNegraAutoBrakes } from "@/lib/lista-negra";
 import { addPagoOnlineException } from "@/lib/pago-online-server";
 import {
   PAGO_ONLINE_REQUIREMENT_LABEL,
@@ -75,6 +76,8 @@ export interface OrderPagoOnlineStatus {
   requirementLabel: string;
   /** Ya tiene lo que se pide (el adelanto validado o el pago completo): sigue. */
   met: boolean;
+  /** Pedido de Lima: la automática no frena, solo informa (MOM §41.12). */
+  lima?: boolean;
   /** Quien mira puede exceptuarlo (`prepay_list.manage`). */
   canExcept: boolean;
 }
@@ -90,7 +93,7 @@ async function readOrder(orderId: string): Promise<OrderRow | null> {
   if (!user) redirect("/login");
   const { data } = await sb
     .from("order_master")
-    .select("order_id,store_id,order_name,order_total,customer_phone,financial_status,total_refunded,payment_state,payment_gateway")
+    .select("order_id,store_id,order_name,order_total,customer_phone,financial_status,total_refunded,payment_state,payment_gateway,coverage")
     .eq("order_id", orderId)
     .maybeSingle();
   return (data as OrderRow | null) ?? null;
@@ -122,6 +125,7 @@ export async function loadOrderPrepayStatus(orderId: string): Promise<OrderPrepa
           requirement: auto.requirement,
           requirementLabel: PAGO_ONLINE_REQUIREMENT_LABEL[auto.requirement],
           met: pagoOnlineRequirementMet(auto.requirement, paymentFactsOf(order)),
+          lima: !listaNegraAutoBrakes(order.coverage),
           canExcept: await hasOrgPermission(orgId, "prepay_list.manage").catch(() => false),
         },
       };
