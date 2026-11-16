@@ -7,6 +7,7 @@
 //   GET  /v1/orders?external_id=          — consultar por id del pedido en Kapta
 //   POST /v1/orders/{tracking}/cancel     — anular (sin costo antes de la preparación)
 //   GET  /v1/products                     — catálogo de la tienda en GF (SKU, modo, disponibilidad)
+//   POST /v1/products/batch               — crear o actualizar hasta 200 productos por SKU (catalogue:write)
 //   GET  /v1/me                           — comprobar el token al guardarlo
 //
 // CONVENCIONES (las mismas del cliente de Aliclik, lib/aliclik.ts)
@@ -81,6 +82,8 @@ export const gfCourier = {
     call<{ tracking_id: string; status: { code: "CANCELLED" }; cancel_cost: number }>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/cancel`, { reason, ...(note ? { note } : {}) }, idempotencyKey),
   products: (o: GfClientOpts, after?: string) => call<{ data: { sku: string; merchant_sku: string; name: string; mode: string; sales_status?: string; variant_id: string }[]; next_cursor: string | null }>(
     o, "GET", `/v1/products?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`),
+  productsBatch: (o: GfClientOpts, items: { sku: string; name: string; sales_status: "IN_STOCK" | "OUT_OF_STOCK" }[], idempotencyKey: string) =>
+    call<{ results: { sku: string; status: "created" | "updated" | "unchanged" | "error"; error?: { code: string; message: string } }[] }>(o, "POST", "/v1/products/batch", { items }, idempotencyKey),
 };
 
 // ---- Webhooks de GF (sección 8): X-GF-Signature = v1=HMAC_SHA256(secret, timestamp + "." + body) ----

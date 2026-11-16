@@ -19968,6 +19968,28 @@ tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`alic
 viva. No se crea otra guía GF encima: sale con la misma si GF la reprograma, o se crea la siguiente (`-S2`) cuando GF
 la devuelva o la anule.
 
+**Catálogo sincronizado con GF (owner, 16-11-2026: «que los dos sistemas estén sincronizados»).** Lo que la tienda
+vende en Kapta existe en GF, sin importar archivos. GF lo permite con `POST /v1/products/batch` y el permiso
+`catalogue:write` en el token.
+- **Cuándo:** cada hora (cron `gf-catalog-sync`, minuto 37, antes de la guía automática de las 9:00) y con
+  «Sincronizar ahora» en Configuración → GF Courier. Corre en las tiendas con GF Courier por API habilitado y token.
+- **Qué manda:** compara el catálogo vivo de la tienda (WooCommerce publicado o Shopify activo, una fila por SKU,
+  «título – variante») con `GET /v1/products` y envía solo:
+  - lo que GF no tiene, que se crea «En existencias» y sin conteo;
+  - lo que cambió de nombre, conservando la disponibilidad que tenga en GF;
+  - lo que la tienda dejó de vender y GF tiene sin conteo y «En existencias», que pasa a «Agotado».
+- **Frenos para no agotar por error:** si la lectura del catálogo de la tienda fue parcial, o si «dejó de vender»
+  supera el 30 % del catálogo en GF, no se agota nada y se dice por qué. Los productos con conteo físico no se agotan
+  desde Kapta: los gobierna el inventario de GF. Nunca se borra nada.
+- **Lotes:** de 200, con `Idempotency-Key` estable por lote (`KP-CAT-…`). Errores por producto, en español, en el
+  resultado del botón.
+- **Lo que no se puede subir:** las variantes sin SKU; se cuentan para que les pongan SKU en la tienda. Un SKU
+  repetido en dos variantes va una vez y se informa.
+- **«Probar conexión»** avisa si al token le falta `catalogue:write`: todo funciona, pero el catálogo no se sincroniza
+  solo. Sin ese permiso sigue la carga a mano (CSV «solo los que faltan»).
+- **Dónde vive:** `planGfCatalogSync` en `lib/gf-courier-catalog.ts` (pura, con prueba) y
+  `lib/gf-catalog-sync-server.ts`.
+
 **«No responde antes de salir» (owner, 15-11-2026).** En las rutas donde GF llama antes de salir (la de Alexis),
 Despacho de GF marca «No responde» al pedido que no contesta: sale de la carga de hoy y **pasa al siguiente día de
 reparto con la misma guía**, guardado en el estante «Por llamar» de GF. Dos veces como máximo; **a la tercera GF anula

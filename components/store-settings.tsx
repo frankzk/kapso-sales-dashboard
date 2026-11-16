@@ -113,6 +113,7 @@ import {
   testGfCourierConnection,
   connectGfCourierWebhook,
   checkGfCatalog,
+  syncGfCatalogNow,
   testStoreMetaConnection,
   testShalomConnection,
   findShalomAgencies,
@@ -1672,6 +1673,7 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
   const [testState, testAction, testPending] = useActionState(testGfCourierConnection, initial);
   const [hookState, hookAction, hookPending] = useActionState(connectGfCourierWebhook, initial);
   const [catalogState, catalogAction, catalogPending] = useActionState(checkGfCatalog, initial);
+  const [syncState, syncAction, syncPending] = useActionState(syncGfCatalogNow, initial);
   return (
     <SettingsSection
       id="gf-courier"
@@ -1689,12 +1691,14 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
           <SubmitAction formAction={hookAction} storeId={storeId} pending={hookPending} disabled={!hasToken}
             label={hasSecret ? "Reconectar webhook" : "Conectar webhook"} pendingLabel="Conectando…" />
           <SubmitAction formAction={catalogAction} storeId={storeId} pending={catalogPending} disabled={!hasToken} label="Comparar catálogo con GF" pendingLabel="Comparando…" />
+          <SubmitAction formAction={syncAction} storeId={storeId} pending={syncPending} disabled={!hasToken} label="Sincronizar ahora" pendingLabel="Sincronizando…" />
         </>
       }
     >
       <ActionResult state={testState} />
       <ActionResult state={hookState} />
       <ActionResult state={catalogState} />
+      <ActionResult state={syncState} />
       <StoreForm storeId={storeId} title="Integración" persisted={[hasToken, enabled]}>
         <div className={ROW}>
           <SecretField name="gf_courier_api_token" label="Token de integración de GF Courier" set={hasToken}
@@ -1705,7 +1709,9 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
       </StoreForm>
       <p className={HELP}>{hasSecret ? "Webhook conectado: los cambios de estado de GF llegan firmados y se verifican." : "Sin webhook: pulsa «Conectar webhook» después de guardar el token."}</p>
       <p className={HELP}>
-        <strong>Catálogo para GF:</strong> GF solo despacha los SKU que tiene registrados para esta tienda.{" "}
+        <strong>Catálogo para GF:</strong> GF solo despacha los SKU que tiene registrados para esta tienda. Se sincroniza solo cada
+        hora (y con «Sincronizar ahora») si el token tiene el permiso <code>catalogue:write</code>: sube lo que falta o cambió de
+        nombre y pasa a «Agotado» lo que la tienda dejó de vender. Sin ese permiso, a mano:{" "}
         <a href={`/api/stores/${storeId}/gf-catalog`} className="font-medium text-slate-900 underline" download>
           Descargar catálogo para GF (CSV)
         </a>
