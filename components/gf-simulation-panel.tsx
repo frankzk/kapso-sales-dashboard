@@ -5,6 +5,7 @@
 // recargarla se pierden. «Detener» termina después de la pasada en curso.
 import { useMemo, useRef, useState } from "react";
 import { Badge, Banner, OpsButton } from "@/components/ops-ui";
+import { copyLabel, useCopyToClipboard } from "@/components/copy-button";
 import { SECTION_CARD } from "@/components/ops-styles";
 import { runGfSimulationStep, startGfSimulation } from "@/app/dashboard/pedidos/gf-simulacion/actions";
 import {
@@ -25,14 +26,14 @@ export function GfSimulationPanel({ stores }: { stores: string[] }) {
   const [total, setTotal] = useState(0);
   const [plan, setPlan] = useState<{ name: string; count: number }[]>([]);
   const [outcomes, setOutcomes] = useState<GfSimOutcome[]>([]);
-  const [copied, setCopied] = useState(false);
   const stop = useRef(false);
+  const clip = useCopyToClipboard();
   const summary = useMemo(() => summarizeGfSimulation(outcomes), [outcomes]);
   const busy = phase === "listing" || phase === "running" || phase === "stopping";
 
   async function run() {
     stop.current = false;
-    setError(null); setOutcomes([]); setCopied(false); setPhase("listing");
+    setError(null); setOutcomes([]); clip.reset(); setPhase("listing");
     const start = await startGfSimulation().catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }));
     if (!start.ok) { setError(start.error); setPhase("error"); return; }
     setPlan(start.stores.map((s) => ({ name: s.name, count: s.count })));
@@ -46,10 +47,6 @@ export function GfSimulationPanel({ stores }: { stores: string[] }) {
       setOutcomes((prev) => [...prev, ...step.outcomes]);
     }
     setPhase("done");
-  }
-
-  async function copy() {
-    try { await navigator.clipboard.writeText(gfSimulationText(summary)); setCopied(true); } catch { setCopied(false); }
   }
 
   const done = summary.total;
@@ -90,7 +87,7 @@ export function GfSimulationPanel({ stores }: { stores: string[] }) {
         <section className={`${SECTION_CARD} space-y-4`}>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base font-semibold text-ink-900">Resumen</h2>
-            <OpsButton size="sm" onClick={() => void copy()}>{copied ? "Copiado" : "Copiar resumen"}</OpsButton>
+            <OpsButton size="sm" onClick={() => clip.copy(gfSimulationText(summary))}>{copyLabel(clip.state, "Copiar resumen")}</OpsButton>
           </div>
           <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
             <Stat label="Revisados" value={summary.total} />
