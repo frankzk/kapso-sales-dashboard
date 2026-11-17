@@ -235,7 +235,7 @@ describe("Simulación: dice qué guía habría creado, sin crear nada afuera", (
     for (const piece of [
       '.select("id,delivery_status,returned_at").eq("order_id", orderId).eq("courier", GF_COURIER)',
       '["pendiente", "en_ruta"].includes(s.delivery_status) && !s.returned_at',
-      '.from("orders").select("name,line_items,raw").eq("id", orderId)',
+      '.from("orders").select("name,line_items,raw,financial_status,payment_gateway,total_refunded").eq("id", orderId)',
       '.in("kind", [...CUSTOMER_PAYMENT_KINDS]).eq("validation_status", "validado")',
       "const sequence = (shipments.data ?? []).length + 1;",
       "sequence > 1 ? `-S${sequence}` : \"\"",

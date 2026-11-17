@@ -163,8 +163,11 @@ describe("el estado del pedido la aplica", () => {
     expect(s.general).toBe("anulado");
   });
 
-  it("si el paquete nunca salió, no hay recuperación: anulado como siempre", () => {
-    expect(resolver([guia({ reported_status: FALLO_SIN_SALIR, dispatched_at: null })]).general).toBe("anulado");
+  it("v1.41: si el courier la anuló sin que el paquete saliera, también hay recuperación mientras dure la ventana", () => {
+    // Antes: «anulado como siempre». Owner, 17-11-2026: solo una persona o la tienda terminan la venta.
+    expect(resolver([guia({ reported_status: FALLO_SIN_SALIR, dispatched_at: null })]).operational).toBe("pendiente_nuevo_courier");
+    // Vencida la ventana, sigue anulado como antes.
+    expect(resolver([guia({ reported_status: FALLO_SIN_SALIR, dispatched_at: null, closed_at: hace(40), updated_at: hace(40) })]).general).toBe("anulado");
   });
 
   it("entregado sigue siendo pegajoso", () => {
@@ -332,7 +335,8 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // no debe encender sin etiqueta de intento fallido.
     const r = resolveMacroStage({
       order: macroPedido(),
-      guides: [macroGuia({ reported_status: null, dispatched_at: null, custody_state: "empresa", attempts: 0 })],
+      // La salida propia anulada antes de salir no es un intento fallido (solo la anula una persona, v1.41).
+      guides: [macroGuia({ courier: "propio", reported_status: null, dispatched_at: null, custody_state: "empresa", attempts: 0 })],
       events: [],
       legacy: { general: "en_proceso", operational: "pendiente_nuevo_courier", since: hace(5) },
       paymentState: "sin_pago",
@@ -356,7 +360,7 @@ describe("y la macroetapa la aplica IGUAL", () => {
     // guía de cualquier courier de Lima anulada después de salir, también.
     // v1.24: Swayp desde Por confirmar. v1.25: entregado, pagado completo a la
     // tienda y sin courier, no espera liquidación.
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.40");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.41");
   });
 });
 

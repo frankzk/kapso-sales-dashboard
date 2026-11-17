@@ -96,8 +96,11 @@ describe("resolveOrderState — pedido sin gestión", () => {
 
   it("con guía pero sin despacho, el pedido nunca salió a reparto", () => {
     // El estado general ya es "en proceso" (hay gestión), pero el matiz importa
-    // en el sub-estado cuando la guía se anula sin haber salido.
-    const s = resolve([guide("1", { delivery_status: "anulado", closed_at: "2026-07-03T10:00:00.000Z" })]);
+    // en el sub-estado cuando la guía se anula sin haber salido. Desde la v1.41
+    // (17-11-2026) eso abre la recuperación mientras dura su ventana; vencida,
+    // el pedido sigue anulado como antes.
+    expect(resolve([guide("1", { delivery_status: "anulado", closed_at: "2026-07-03T10:00:00.000Z" })]).operational).toBe("pendiente_nuevo_courier");
+    const s = resolve([guide("1", { delivery_status: "anulado", closed_at: "2026-06-01T10:00:00.000Z" })]);
     expect(s.general).toBe("anulado");
   });
 });
@@ -236,13 +239,23 @@ describe("resolveOrderState — anulado (§3.4)", () => {
     expect(s.since).toBe("2026-07-08T10:00:00.000Z");
   });
 
-  it("todas las guías anuladas anulan el pedido aunque Shopify aún no lo refleje", () => {
+  it("todas las guías anuladas anulan el pedido aunque Shopify aún no lo refleje (con la recuperación vencida)", () => {
     const s = resolve([
-      guide("1", { delivery_status: "anulado", closed_at: "2026-07-05T10:00:00.000Z" }),
-      guide("2", { courier: "fenix", delivery_status: "anulado", closed_at: "2026-07-06T10:00:00.000Z" }),
+      guide("1", { delivery_status: "anulado", closed_at: "2026-06-05T10:00:00.000Z" }),
+      guide("2", { courier: "fenix", delivery_status: "anulado", closed_at: "2026-06-06T10:00:00.000Z" }),
     ]);
     expect(s.general).toBe("anulado");
-    expect(s.since).toBe("2026-07-06T10:00:00.000Z");
+    expect(s.since).toBe("2026-06-06T10:00:00.000Z");
+  });
+
+  it("v1.41: la guía que el courier anuló sin que la caja saliera no termina la venta (#KP206984)", () => {
+    const s = resolve([guide("1", { courier: "gf_courier", delivery_status: "anulado", closed_at: "2026-07-19T17:28:00.000Z" })]);
+    expect(s.general).toBe("en_proceso");
+    expect(s.operational).toBe("pendiente_nuevo_courier");
+    // La anulación en la tienda sí la termina.
+    expect(resolve([guide("1", { courier: "gf_courier", delivery_status: "anulado", closed_at: "2026-07-19T17:28:00.000Z" })], order({ cancelled_at: "2026-07-19T18:00:00.000Z" })).general).toBe("anulado");
+    // La salida propia anulada antes de salir solo la anula una persona: no abre la recuperación.
+    expect(resolve([guide("1", { courier: "propio", delivery_status: "anulado", closed_at: "2026-07-19T17:28:00.000Z" })]).general).toBe("anulado");
   });
 
   it("una guía activa junto a otra anulada mantiene el pedido en proceso", () => {
@@ -315,8 +328,8 @@ describe("resolveOrderState — anular una salida es corregir, no rendirse", () 
     expect(s.general).toBe("anulado");
   });
 
-  it("una guía de courier anulada SÍ sigue anulando: ahí la operación se rindió", () => {
-    const s = resolve([guide("1", { delivery_status: "anulado", closed_at: "2026-07-05T10:00:00.000Z" })]);
+  it("una guía de courier anulada SÍ sigue anulando: ahí la operación se rindió (con la recuperación vencida)", () => {
+    const s = resolve([guide("1", { delivery_status: "anulado", closed_at: "2026-06-05T10:00:00.000Z" })]);
     expect(s.general).toBe("anulado");
   });
 
@@ -341,12 +354,12 @@ describe("resolveOrderState — anular una salida es corregir, no rendirse", () 
     // La corrección sale del reparto; lo que queda decide. Y la fecha sale de la
     // guía REAL, no de la corrección.
     const s = resolve(
-      [anulada("1"), guide("2", { courier: "aliclik", delivery_status: "anulado", closed_at: "2026-07-06T10:00:00.000Z" })],
+      [anulada("1"), guide("2", { courier: "aliclik", delivery_status: "anulado", closed_at: "2026-06-06T10:00:00.000Z" })],
       order(),
       [eventoCorreccion("1")],
     );
     expect(s.general).toBe("anulado");
-    expect(s.since).toBe("2026-07-06T10:00:00.000Z");
+    expect(s.since).toBe("2026-06-06T10:00:00.000Z");
   });
 });
 
@@ -712,7 +725,8 @@ describe("resolveOrderState — la recogida del courier prueba la salida (owner,
     custody_state: "devuelto",
     returned_at: "2026-06-27T19:32:30.000Z",
   });
-  const hija = guide("hija", { courier: "fenix", guide_code: "#KP11701517072026", delivery_status: "anulado", custody_state: "empresa" });
+  // La transferencia anulada es de junio: su ventana de recuperación ya venció.
+  const hija = guide("hija", { courier: "fenix", guide_code: "#KP11701517072026", delivery_status: "anulado", custody_state: "empresa", closed_at: "2026-06-01T10:00:00.000Z" });
 
   it("con la devolución sellada y sin otra salida viva, el pedido queda devuelto", () => {
     const s = resolve([madre, hija]);

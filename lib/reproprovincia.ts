@@ -273,6 +273,30 @@ export function guideAnnulledAfterDispatch(guide: RecoveryGuideLike): boolean {
   return Boolean(guide.dispatched_at || guide.returned_at);
 }
 
+/**
+ * Couriers cuya guía anulada ANTES de salir no abre la recuperación: la salida
+ * propia de Grupo GF solo la anula una persona («Retirar y anular salida»), las
+ * agencias no reparten y «por definir» no es un courier.
+ */
+const NOT_BEFORE_DISPATCH = new Set(["propio", "shalom", "olva", "por_definir"]);
+
+/**
+ * ¿El courier anuló la guía ANTES de que la caja saliera? (owner, 17-11-2026:
+ * «esto está super mal»; #KP206984, GF Courier la anuló porque la clienta
+ * «quiere para otro día» y el pedido quedó «Anulado y cerrado»). Solo una
+ * persona o la tienda terminan la venta: la guía anulada por el courier, en
+ * Lima o en provincia, abre la recuperación igual que la anulada después de
+ * salir. La anulación que hace una persona desde Kapta va con otra guía (cambio
+ * de courier) o con la venta terminada, que ganan antes; la corrección de
+ * registro («Anular salida») ni siquiera llega aquí. Solo cuenta mientras su
+ * ventana está abierta (`recoveryWindow`): lo viejo sigue cerrado como estaba.
+ */
+export function guideAnnulledBeforeDispatch(guide: RecoveryGuideLike): boolean {
+  const courier = (guide.courier ?? "").trim().toLowerCase();
+  if (!courier || NOT_BEFORE_DISPATCH.has(courier)) return false;
+  return guide.delivery_status === "anulado" && !guide.dispatched_at && !guide.returned_at;
+}
+
 /** ¿Esta guía abre la recuperación del pedido? Cualquier courier que no entregó. */
 export function guideFailedAfterDispatch(guide: RecoveryGuideLike): boolean {
   return aliclikGuideFailedAfterDispatch(guide) || liveGuideFailed(guide) || guideAnnulledAfterDispatch(guide);
@@ -358,7 +382,7 @@ export function recoveryWindow(
 ): RecoveryWindow | null {
   if (events.some((e) => e.kind === RECOVERY_DISCARDED_KIND)) return null;
   if (!recoveryApplies(guides)) return null;
-  const failed = guides.filter(guideFailedAfterDispatch);
+  const failed = guides.filter((g) => guideFailedAfterDispatch(g) || guideAnnulledBeforeDispatch(g));
   if (!failed.length) return null;
   // La más reciente: si hubo dos intentos con Aliclik, la ventana corre desde
   // el último cierre, no desde el primero. Y con la ventana de SU courier.
@@ -373,6 +397,9 @@ export function recoveryWindow(
   }
   if (!closedAt) return null;
   const deadline = addDays(closedAt, recoveryWindowDaysFor(guide, windowDays));
+  // La anulada antes de salir solo cuenta con su ventana abierta (17-11-2026):
+  // vencida, el pedido sigue «Anulado y cerrado» como antes, sin pasar a Por cerrar.
+  if (!guideFailedAfterDispatch(guide) && nowIso > deadline) return null;
   return {
     guide,
     closedAt,

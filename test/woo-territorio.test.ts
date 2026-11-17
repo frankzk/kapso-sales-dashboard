@@ -288,7 +288,7 @@ describe("recomputeOrderMaster: corrección manual > ubigeo del formulario > lo 
 
 describe("NARROW_VERSION_BUMP: mom-v1.40 solo recalcula los pedidos de WooCommerce", () => {
   it("es la versión vigente, sobre la anterior, para los `wc-…`", () => {
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.40");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.41");
     expect(NARROW_VERSION_BUMP).toEqual({ version: "mom-v1.40", previous: "mom-v1.39", idPrefix: "wc-" });
   });
 
@@ -332,7 +332,9 @@ describe("NARROW_VERSION_BUMP: mom-v1.40 solo recalcula los pedidos de WooCommer
     };
     await reconcileOrderMaster(admin, ["store-a"]);
     const versionDoor = calls.filter((c) => c.table === "order_master" && (c.method === "or" || c.method === "neq"));
-    expect(versionDoor).toEqual([{ table: "order_master", method: "or", args: [narrowVersionFilter(MOM_RESOLUTION_VERSION)] }]);
+    // Con mom-v1.41 la subida acotada ya se apagó: vuelve la puerta de siempre.
+    expect(narrowVersionFilter(MOM_RESOLUTION_VERSION)).toBeNull();
+    expect(versionDoor).toEqual([{ table: "order_master", method: "neq", args: ["macro_version", MOM_RESOLUTION_VERSION] }]);
     expect(calls.some((c) => c.table === "order_master" && c.method === "limit" && c.args[0] === 250)).toBe(true);
   });
 });

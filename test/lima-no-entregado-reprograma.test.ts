@@ -191,10 +191,13 @@ describe("#AUR177276 en el Master", () => {
     expect(macro.stage).toBe("finalizado");
   });
 
-  it("Tanders `CANCELLED` que nunca salió sigue cerrándose solo", () => {
+  it("v1.41: Tanders `CANCELLED` que nunca salió vuelve a reprogramar mientras dure su ventana; vencida, se cierra solo", () => {
     const { legacy, macro } = resolverTodo([salida({ dispatched_at: null })]);
-    expect(legacy.general).toBe("anulado");
-    expect(macro).toMatchObject({ stage: "finalizado", substage: "anulado_cerrado" });
+    expect(legacy.operational).toBe("pendiente_nuevo_courier");
+    expect(macro).toMatchObject({ stage: "en_curso", substage: "por_reprogramar_lima" });
+    const viejo = resolverTodo([salida({ dispatched_at: null, closed_at: hace(40), updated_at: hace(40) })]);
+    expect(viejo.legacy.general).toBe("anulado");
+    expect(viejo.macro).toMatchObject({ stage: "finalizado", substage: "anulado_cerrado" });
   });
 });
 

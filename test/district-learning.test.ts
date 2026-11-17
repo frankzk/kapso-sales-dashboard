@@ -183,6 +183,6 @@ describe("MOM y versión", () => {
     expect(mom).toContain("**Recordar la provincia de un distrito, con guarda (25-10-2026, `mom-v1.32`).**");
     expect(mom).toContain("**Solo distritos nuevos (08-11-2026).**");
     expect(mom).toContain("`learnedDistrictFits`");
-    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.40");
+    expect(MOM_RESOLUTION_VERSION).toBe("mom-v1.41");
   });
 });

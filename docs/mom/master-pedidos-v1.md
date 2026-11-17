@@ -3655,6 +3655,25 @@ Decisión del owner (30-09-2026), para **todos los couriers de Lima**:
   antes (8 guías Tanders `CANCELLED` que nunca salieron, medido el 30-09-2026).
   Aliclik conserva su regla —su etiqueta distingue el intento fallido de la
   anulación de la tienda— y las agencias no entran: no reparten.
+- **Desde el 17-11-2026 (`mom-v1.41`) tampoco la guía que el courier anuló sin
+  que la caja saliera termina la venta, en Lima ni en provincia** (owner:
+  «esto está super mal»; #KP206984, GF Courier la anuló porque la clienta
+  «quiere para otro día» y Kapta cerró el pedido como «Anulado y cerrado»). Solo
+  una persona o la tienda terminan la venta: la anulación en la tienda, «Anular
+  venta», «Terminar venta» o un estado registrado a mano. La guía anulada por el
+  courier antes de salir abre la recuperación como la anulada después
+  (`guideAnnulledBeforeDispatch`, `lib/reproprovincia.ts`): **Por reprogramar
+  Lima** en Lima y **Gestión Reproprovincia** en provincia, con la ventana
+  anclada en su cierre. Cubre Aliclik, GF Courier, Swayp, Tanders, Urpi y los
+  demás couriers; no la salida propia de Grupo GF (solo la anula una persona,
+  «Retirar y anular salida»), ni las agencias, ni «por definir». La corrección
+  de registro («Anular salida») sigue fuera. **Solo con la ventana abierta**:
+  vencida, el pedido sigue «Anulado y cerrado» como antes, sin pasar a Por
+  cerrar. Lo que una persona anula desde Kapta va con otra guía (cambio de
+  courier, que manda) o con la venta terminada (que gana antes). Medido el
+  17-11-2026: 6 pedidos de Lima y 8 de provincia de los últimos 30 días vuelven
+  a la cola; los 245 de provincia de más de 30 días siguen cerrados. La versión
+  sube a `mom-v1.41` para que el barrido los recalcule.
 - **«Rechazó el pedido» del motorizado propio tampoco cierra la venta**: se
   reprograma como cualquier «No entregado». Deshace, para el rechazo, lo que
   fijaron la v1.15, la v1.16 y la 0189 (§29.13). El cierre de la ruta y

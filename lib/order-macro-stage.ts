@@ -30,6 +30,15 @@ import {
   swaypNoEntregoMotivo,
 } from "@/lib/swayp-desde-confirmacion";
 
+// v1.41 (17-11-2026, owner: «esto está super mal»): la guía que el courier
+// anuló ANTES de que la caja saliera abre la recuperación, en Lima y en
+// provincia, como la anulada después de salir (lib/reproprovincia.ts,
+// `guideAnnulledBeforeDispatch`). #KP206984: GF Courier la anuló porque la
+// clienta «quiere para otro día» y el pedido quedó «Anulado y cerrado». Solo
+// mientras su ventana está abierta: medido el 17-11-2026, 6 de Lima y 8 de
+// provincia vuelven a Por reprogramar Lima / Gestión Reproprovincia; lo de más
+// de 30 días sigue cerrado. Cambia filas que nadie tocó, así que la versión sube.
+//
 // v1.40 (08-11-2026, owner): la provincia de un pedido de WooCommerce sale del
 // ubigeo que la clienta eligió en el formulario de la web (`_cod_territorio`,
 // lib/woo-territorio.ts, MOM §38.6), después de la corrección manual y antes
@@ -267,7 +276,7 @@ import {
 // v1.6: el pago exigido pasa a motivo y «Último intento» se deriva de los siete
 // días distintos con gestión. Cambia el resultado de filas que nadie tocó, así
 // que la versión sube para que el cron las reconcilie.
-export const MOM_RESOLUTION_VERSION = "mom-v1.40" as const;
+export const MOM_RESOLUTION_VERSION = "mom-v1.41" as const;
 
 export type OrderMacroStage =
   | "por_confirmar"

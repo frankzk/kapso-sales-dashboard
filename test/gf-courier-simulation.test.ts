@@ -156,7 +156,7 @@ describe("el mismo cuerpo que la creación, y solo lectura", () => {
     for (const piece of [
       '"store_id,order_id,order_name,customer_name,customer_phone,region,province,district,address,reference,latitude,longitude,order_total,dispatch_scheduled_on,shipping_mode"',
       '.select("id,delivery_status,returned_at").eq("order_id", orderId).eq("courier", GF_COURIER)',
-      '.from("orders").select("name,line_items,raw").eq("id", orderId)',
+      '.from("orders").select("name,line_items,raw,financial_status,payment_gateway,total_refunded").eq("id", orderId)',
       '.in("kind", [...CUSTOMER_PAYMENT_KINDS]).eq("validation_status", "validado")',
       "const sequence = (shipments.data ?? []).length + 1;",
       "sequence > 1 ? `-S${sequence}` : \"\"",
