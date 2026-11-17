@@ -7216,8 +7216,11 @@ el distrito y la intención antes del POST. Si el pedido ya tiene una guía GF v
 La hoja lo dice antes de guardar, junto a «Qué hacer con la caja» («Guía GF: Al
 guardar, Kapta anula la guía GF… y crea otra para el día acordado.»). Una guía GF
 viva no bloquea el acuerdo con GF Courier, porque Kapta la reemplaza. Con otro
-courier sí lo bloquea: «La guía de GF Courier sigue viva: la trabaja ese
-courier».
+courier sí lo bloquea, y dice dónde anularla (owner, 17-11-2026, #AUR901039: «no
+me deja cancelar la guía para poder ponerlo programado en Repro Lima con otro
+courier como Aliclik»): «La guía de GF Courier sigue viva. Para mandarlo con
+Aliclik, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y
+vuelve a guardar.».
 
 **Si GF no crea la guía, el acuerdo queda guardado.** La llamada ya está
 registrada y nada la deshace. El aviso dice lo que respondió GF («GF Courier no
@@ -20386,6 +20389,11 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
   distritos válidos— se lee ahí mismo.
 - Una guía GF viva bloquea crear otra y la tarjeta la nombra: número, estado y envío cotizado. El botón es
   «Anular guía», y el motivo se pide al elegirlo. Una guía que GF ya está devolviendo no se ofrece anular.
+- **«Anular guía GF» también en «Salidas y guías»** (owner, 17-11-2026, #AUR901039): en la fila de la guía GF viva
+  (pendiente o en ruta, sin devolución), con el permiso `gf_courier.cancel_guide`. Es la misma acción que la tarjeta
+  (`cancelGfCourierGuide`): pide el motivo, GF decide si la anula —una guía que GF ya preparó («Lista para recojo»)
+  puede tener costo, y el aviso lo dice— y Kapta aplica lo que devuelve. Es el paso para mandar con otro courier un
+  pedido de Repro Lima que tiene guía GF.
 - La guía viva se nombra también si la tienda apagó la API o si el pedido no es de Lima.
 - **Sin tope de salidas** (owner, 15-11-2026: «una guía por día, despachada por día»): cerrada la anterior (entregada,
   anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan

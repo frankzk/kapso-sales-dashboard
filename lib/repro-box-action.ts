@@ -158,6 +158,11 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
   // 2. Otra guía viva: la trabaja ese courier. Con GF Courier acordado y una
   // guía GF viva, no: Kapta la reemplaza al guardar (`gfAgreementGuidePlan`).
   if (input.otherLiveCourier && !(courier === "gf_courier" && sameCourier(input.otherLiveCourier, "gf_courier"))) {
+    // La guía GF la anula una persona desde la ficha (owner, 17-11-2026,
+    // #AUR901039): se dice dónde, para que no quede en «revísala».
+    if (sameCourier(input.otherLiveCourier, "gf_courier")) {
+      return { problem: `${GF_LIVE_OTHER_COURIER} Para mandarlo con ${REPRO_COURIER_LABEL[courier]}, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar.` };
+    }
     return { problem: `La guía de ${reproCourierName(input.otherLiveCourier)} sigue viva: la trabaja ese courier. Revísala en la ficha.` };
   }
 
@@ -283,6 +288,9 @@ export function boxActionReadyLabel(action: BoxAction, courier: ReproCourier | n
       return "Se desarma en el día en que la caja está en oficina.";
   }
 }
+
+/** El comienzo del aviso cuando una guía GF viva frena acordar otro courier. */
+export const GF_LIVE_OTHER_COURIER = "La guía de GF Courier sigue viva.";
 
 export const GF_COURIER_READY = "Desde hoy: GF Courier prepara el paquete para el día acordado (sin corte ni noche anterior).";
 
