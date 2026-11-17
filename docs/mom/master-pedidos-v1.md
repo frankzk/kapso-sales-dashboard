@@ -25468,6 +25468,37 @@ SKU no hay nada que asociar. La fila suelta (en «Sin asociar Aliclik» y
 Implementación: `lib/catalog-missing-sku.ts` y `components/aliclik-catalog.tsx`.
 Pruebas: `test/catalog-missing-sku.test.ts`.
 
+**El SKU que el pedido no guardó (17-11-2026).** Un pedido guarda sus productos
+como estaban al venderse. #AUR900965 (Aurela) se vendió el 16-11, cuando la
+variación «FourLines» de las calcetines no tenía SKU propio: su línea quedó con
+`sku: null`. Al día siguiente el producto ya tenía SKU y estaba sincronizado,
+pero el pedido no cambió, y GF Courier decía «Hay un producto sin SKU». Aliclik
+ya completaba el SKU al crear su guía, pero solo con Shopify; GF, Swayp y los
+rótulos leen la línea tal cual.
+
+- **Al sincronizar el catálogo** (el botón, Ajustes y el cron de cada hora),
+  con la lista recién leída, Kapta completa el SKU que les falta a los pedidos
+  abiertos de la tienda: los de Por confirmar, Preparación, Por despachar o En
+  curso, de los últimos 120 días.
+- **Solo por la identidad de la variante:** su id, o el del producto si en el
+  catálogo ese producto tiene una sola variante. **Nunca por nombre**: en un
+  producto con tallas donde solo la M tiene SKU, la L no recibe el de la M. Una
+  variante con dos SKU distintos en el catálogo no recibe ninguno.
+- **Lo que ya tiene SKU no se toca**, aunque el catálogo diga otro: es el que
+  se vendió.
+- **Queda escrito:** se guarda la línea completada en el pedido
+  (`orders.line_items`, la que leen todos) y una nota en su historial: «SKU
+  completado desde el catálogo de WooCommerce: «…» (FourLines) → 958737445. El
+  pedido se guardó cuando el producto no tenía SKU.». El aviso de la
+  sincronización dice cuántos pedidos lo recibieron. Un fallo aquí no corta la
+  sincronización: se informa.
+- **#AUR900965** se completó a mano el 17-11-2026 con la misma regla y la misma
+  nota.
+
+Implementación: `lib/order-line-sku-backfill.ts` (puro) y
+`lib/order-line-sku-backfill-server.ts`, llamados desde `syncAliclikCatalog`.
+Pruebas: `test/order-line-sku-backfill.test.ts`.
+
 #### El enlace al pedido y el nombre de su tienda (24-10-2026)
 
 **Por qué.** El 24-10-2026, ya con Aurela recibiendo pedidos de WooCommerce, la
@@ -26802,6 +26833,15 @@ asignó a un motorizado), la venta no se termina y se dice por qué. Cualquier o
 salida viva que no salió bloquea: se anula con su propio botón, que avisa a su
 courier, y después se termina la venta. Lo que ya salió o volvió a oficina sigue
 como antes.
+
+**Anular el pedido a mano también anula su guía de GF Courier (17-11-2026).**
+#KP206909 se marcó Anulado («no desea») con el cambio de estado manual y su guía
+KENKU-KP206909 siguió «Por asignar» en GF, con la caja armada esperando
+motorizado. Ahora `setOrderStatus` (y el cambio masivo, que lo usa pedido por
+pedido), al pasar un pedido a Anulado, anula antes en GF cada guía de GF Courier
+viva que nunca salió (`wooSaleGfToCancel`, `cancelGfGuideFor`), con el motivo
+escrito o «Pedido anulado en Kapta». Si GF no la anula (ya la asignó a un
+motorizado), el pedido no se marca y se dice por qué. Otras salidas no cambian.
 
 **Recepción anterior a terminar la venta (0286, 28-10-2026).** KP200152 ya había
 vuelto a oficina para reprogramar y quedaba bloqueado entre la anulación de venta

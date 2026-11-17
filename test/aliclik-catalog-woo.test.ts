@@ -274,6 +274,8 @@ function fakeAdmin(opts: { store?: Record<string, unknown> | null; storeError?: 
       Object.assign(q, {
         select: self,
         eq: self,
+        // Los pedidos abiertos sin SKU (17-11-2026): ninguno, la lectura viene vacía.
+        in: self,
         gte: self,
         order: self,
         maybeSingle: async () =>
