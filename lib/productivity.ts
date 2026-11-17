@@ -1159,10 +1159,12 @@ export async function getTeamToday(
   let stats: AdvisorStat[] = [];
   if (calls.length || sales.length) {
     const { scopedCalls, leadStore, scopedSales } = await buildAdvisorInputs(sb, calls, null, sales);
+    // Las asistidas de hoy (MOM §17.6), como en Productividad.
+    const assists = await loadSaleAssists(sb, scopedSales, today.endIso);
     const emailById = await resolveEmails([
-      ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora)]),
+      ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora), ...assists.keys()]),
     ]);
-    stats = computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById }, tz);
+    stats = computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById, assists }, tz);
   }
 
   const byAgent = computeWeekActivity(
