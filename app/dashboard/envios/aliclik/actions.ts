@@ -78,7 +78,11 @@ export async function syncCatalog(
   // Los avisos se muestran, igual que en Ajustes: una pasada de agencia fallida
   // deja la elegibilidad de la sincronización anterior, y quien sincroniza a
   // mano tiene que saberlo en vez de leer «actualizado» a secas.
-  const notice = `Catálogo actualizado: ${catalogSkusPhrase(report.shopifySkus, report.sourcePlatform)}, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.`;
+  const notice = `Catálogo actualizado: ${catalogSkusPhrase(report.shopifySkus, report.sourcePlatform)}, ${report.skus} SKUs de Aliclik, ${report.agencies} agencias. ${report.autoMapped} mapeos nuevos automáticos.${
+    report.ordersSkuFilled
+      ? ` ${report.ordersSkuFilled} pedido(s) abierto(s) recibieron el SKU que no tenían.`
+      : ""
+  }`;
   return {
     notice: report.errors.length ? `${notice} Avisos: ${report.errors.join("; ")}` : notice,
   };

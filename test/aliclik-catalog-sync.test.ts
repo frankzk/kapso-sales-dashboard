@@ -46,6 +46,8 @@ function fakeAdmin() {
   const read = {
     select: () => read,
     eq: () => read,
+    // Los pedidos abiertos sin SKU (17-11-2026): ninguno, la lectura viene vacía.
+    in: () => read,
     gte: () => read,
     order: () => read,
     range: async () => ({ data: [], error: null }),

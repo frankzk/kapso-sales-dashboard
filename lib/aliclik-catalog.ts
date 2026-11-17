@@ -34,6 +34,7 @@ import { hasWooApiCredentials, loadWooStoreCreds, wooClientOpts } from "@/lib/wo
 import { listWooCatalogVariants, type WooCatalogListing } from "@/lib/woocommerce-orders";
 import { isWooMigrationMissing } from "@/lib/woocommerce-settings";
 import { catalogSourceName, type CatalogPlatform } from "@/lib/catalog-source";
+import { backfillOpenOrderLineSkus } from "@/lib/order-line-sku-backfill-server";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -589,6 +590,11 @@ export interface CatalogSyncResult {
   agencies: number;
   packageSizes: number;
   autoMapped: number;
+  /**
+   * Pedidos abiertos a los que se les completó el SKU que no guardaron al
+   * venderse (17-11-2026, lib/order-line-sku-backfill.ts).
+   */
+  ordersSkuFilled: number;
   errors: string[];
 }
 
@@ -618,6 +624,7 @@ export async function syncAliclikCatalog(
     agencies: 0,
     packageSizes: 0,
     autoMapped: 0,
+    ordersSkuFilled: 0,
     errors: [],
   };
 
@@ -673,11 +680,29 @@ export async function syncAliclikCatalog(
   // WooCommerce (MOM §38.12). Los productos observados en pedidos quedan como
   // respaldo histórico. La sincronización lee WooCommerce de nuevo (`fresh`):
   // quien acaba de poner un SKU allí y sincroniza tiene que verlo.
-  const shopifyProducts = await loadShopifySkuNames(storeId, admin, 365, skuSource, {
+  const storeDetails = await loadShopifySkuDetails(storeId, admin, 365, skuSource, {
     fresh: true,
     onSourceError: (detail) => out.errors.push(skuSourceErrorText(skuSource.platform, detail)),
   });
+  const shopifyProducts = skuNamesOf(storeDetails);
   out.shopifySkus = shopifyProducts.size;
+
+  // EL SKU QUE EL PEDIDO NO GUARDÓ (17-11-2026, #AUR900965). Con el catálogo
+  // recién leído, los pedidos abiertos que se vendieron cuando su producto no
+  // tenía SKU lo reciben ahora, solo por la identidad de la variante. Así GF,
+  // Swayp, Aliclik y los rótulos lo ven. Un fallo aquí no corta la sincronización.
+  try {
+    const filled = await backfillOpenOrderLineSkus(
+      admin,
+      storeId,
+      [...storeDetails.values()],
+      catalogSourceName(skuSource.platform) ?? "la tienda",
+    );
+    out.ordersSkuFilled = filled.orders.length;
+    out.errors.push(...filled.errors);
+  } catch (e) {
+    out.errors.push(`SKU de pedidos: ${e instanceof Error ? e.message : String(e)}`);
+  }
   if (shopifyProducts.size) {
     // Un nombre que apunta a DOS EAN distintos es ambiguo: no se siembra ninguno
     // y queda para que lo decida una persona.
@@ -1106,7 +1131,11 @@ export async function loadShopifySkuNames(
   source?: ShopifyClientOpts | SkuCatalogSource,
   opts: SkuLoadOpts = {},
 ): Promise<Map<string, string>> {
-  const details = await loadShopifySkuDetails(storeId, admin, sinceDays, source, opts);
+  return skuNamesOf(await loadShopifySkuDetails(storeId, admin, sinceDays, source, opts));
+}
+
+/** SKU → título, de los que tienen SKU. */
+function skuNamesOf(details: Map<string, ShopifySkuDetails>): Map<string, string> {
   return new Map(
     [...details.values()]
       .filter((item): item is ShopifySkuDetails & { shopifySku: string } => Boolean(item.shopifySku))
