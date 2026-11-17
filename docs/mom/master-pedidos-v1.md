@@ -23920,8 +23920,9 @@ Reglas:
   «Registrar / Generar pedido (contraentrega)» con la dirección escrita
   encima de la del borrador: Cliente (quién recibió, si se sabe; si no, el que
   ya traía), Dirección, Referencia (vacía si esa dirección no tenía: no se
-  mezcla con la del carrito), Distrito y Provincia / Región (la región,
-  ajustada a la lista del formulario). **El celular no se toca**: es el del
+  mezcla con la del carrito) y Distrito: si su nombre está tal cual en la
+  lista oficial queda elegido, con su provincia y región; si no, el campo pide
+  elegirlo (§37.10). **El celular no se toca**: es el del
   lead, por donde va la confirmación de WhatsApp. Arriba de la dirección, el
   aviso «Dirección de un pedido anterior: del pedido #… Confírmala con la
   clienta antes de generar.». Nada se guarda hasta «Generar pedido», por la
@@ -23946,6 +23947,73 @@ servidor), `getCustomerKnownAddresses` en `lib/leads-access.ts` (las lecturas),
 `KnownAddressesCard` y `OrderFormPanel` (`initialAddress`) en
 `components/leads-drawer.tsx`. Pruebas: `test/lead-known-addresses.test.ts` y
 `test/leads-prior-orders-history.test.ts` (el celular del historial).
+
+### 37.10 El distrito del pedido sale de la lista oficial (owner, 16-11-2026)
+
+**Por qué.** El owner (16-11-2026), con #AUR900990 en pantalla: «San Martín de
+portes… escribieron mal el distrito, ¿cómo está construido el formulario de
+Leads? Para que quede bien registrado el distrito sin errores ortográficos». El
+distrito de «Generar pedido» era texto libre: lo tecleado viajaba tal cual a la
+tienda (`city` de la dirección), a la guía del courier y a la cobertura.
+
+**La lista.** Los 1893 distritos del Perú con su ubigeo del INEI, su provincia y
+su departamento (`lib/peru-ubigeo-data.ts`, generado por
+`scripts/gen-peru-ubigeo.mjs` desde el paquete `peru-ubigeo` 0.1.3, licencia
+MIT, con la ortografía de cuatro nombres corregida: Lurín, La Unión, Páucar del
+Sara Sara y Anco Huallo). Kapta muestra dos nombres distinto del INEI: el
+150101 es **«Cercado de Lima»** (el INEI dice «Lima») y la provincia
+constitucional del Callao es **«Callao»**. Todos los distritos de Lima
+Metropolitana y del Callao, con el nombre de la lista, los reconoce la
+cobertura de Lima (`resolveLimaDistrict`), así que la cobertura, el tarifario
+de Grupo GF y la guía GF leen lo mismo que antes.
+
+**El campo.** En el formulario de «Generar pedido (contraentrega)» (la ficha del
+lead y la venta por teléfono, que abre el mismo), «Distrito *» es un buscador:
+
+- busca sin tildes ni mayúsculas, por el comienzo del nombre («san mar»), por
+  palabras («martin porres») y con las siglas del equipo (SJL, SJM, SMP, VES,
+  VMT; «Surco», «Magdalena», «Chosica», «Cercado»);
+- perdona una letra mal desde 4 escritas y dos desde 9 («San Martín de
+  portes», «chorrilos»), pero si algo calza de verdad no ofrece parecidos;
+- entre homónimos ordena primero los del departamento que vino con la
+  dirección; después, los de Lima y Callao;
+- cada opción dice el distrito y, debajo, «provincia, región». Elegirlo llena
+  «Provincia / Región», que ya no se escribe: sale del distrito.
+
+**Lo que viene escrito** (el lead, el borrador, «Usar en el pedido» de §37.9) se
+coteja con la lista. Queda elegido solo si el nombre es exactamente uno de la
+lista (sin contar tildes ni mayúsculas) y no hay otro igual. En el departamento
+de Lima se desempata como la cobertura (`isLimaMetropolitanaOrCallao`): gana
+el de Lima Metropolitana (Miraflores, no el de Yauyos; Santiago de Surco, no el
+Surco de Huarochirí), salvo San Luis con «Lima (departamento)», que también es
+de Cañete y se elige a mano. **Kapta nunca corrige una letra por su cuenta**:
+un nombre mal escrito se queda escrito, con el aviso «… no está en la lista.» y
+la sugerencia «¿Es San Martín de Porres (Lima, Lima)?», que la asesora toca
+para elegirla. Escrito entero y sin otro igual, queda elegido al salir del
+campo.
+
+**Sin distrito elegido no se genera** el pedido: «Elige el distrito de la lista
+antes de generar.».
+
+**En el servidor.** `generateOrder` resuelve el distrito antes de leer nada
+(`resolveOrderDistrict`): manda el ubigeo elegido, y el nombre y la región que
+se guardan salen de la lista, no de lo tecleado. Un ubigeo que no existe, o que
+no es el del nombre que vino, se rechaza («Vuelve a elegir el distrito de la
+lista»). Sin ubigeo —un formulario abierto antes de este cambio— solo pasa un
+nombre exacto de la lista; si no, «“…” no está en la lista oficial de
+distritos. ¿Es …? Elígelo de la lista.». De ahí en adelante el pedido sigue igual
+(Shopify o WooCommerce, cobertura, Lista negra) con el distrito y la región
+oficiales.
+
+**Lo que no cambia.** Lo que ya está guardado (leads, pedidos, `peru_districts`)
+no se toca; los demás caminos que crean pedidos (bot, webhooks, sincronización)
+siguen con su dirección. La región que va a la tienda es el departamento, como
+antes del cambio.
+
+Implementación: `lib/peru-districts.ts` (pura: la lista, la búsqueda, el cotejo y
+`resolveOrderDistrict`), `components/district-picker.tsx` (el campo) y
+`OrderFormPanel` en `components/leads-drawer.tsx`; `generateOrder` en
+`app/dashboard/leads/actions.ts`. Pruebas: `test/peru-districts.test.ts`.
 
 ## 38. WooCommerce (23-10-2026)
 

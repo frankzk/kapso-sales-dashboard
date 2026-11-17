@@ -138,6 +138,8 @@ import { orderPlatformName } from "@/lib/order-admin-url";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { cn } from "@/components/ui";
 import { formatPeruMobile, peruMobileDigits, peruMobileProblem } from "@/lib/phone";
+import { DistrictPicker } from "@/components/district-picker";
+import { matchPeruDistrict, peruDistrictPlace, type PeruDistrict } from "@/lib/peru-districts";
 import { YapeAssign } from "@/components/yape-alerts";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
 import { cartsTone, cartsVerdict, type CustomerCarts } from "@/lib/customer-carts";
@@ -2801,19 +2803,6 @@ const rid = () => Math.random().toString(36).slice(2);
  */
 const newRequestId = () => globalThis.crypto?.randomUUID?.() ?? `${rid()}${rid()}${rid()}`;
 
-const PERU_REGIONS = [
-  "Amazonas", "Áncash", "Apurímac", "Arequipa", "Ayacucho", "Cajamarca", "Callao", "Cusco",
-  "Huancavelica", "Huánuco", "Ica", "Junín", "La Libertad", "Lambayeque", "Lima", "Loreto",
-  "Madre de Dios", "Moquegua", "Pasco", "Piura", "Puno", "San Martín", "Tacna", "Tumbes", "Ucayali",
-];
-/** Map a free-text province (e.g. "Lima (provincia)") to a canonical Peru region. */
-function matchPeruRegion(v: string | null | undefined): string {
-  if (!v) return "";
-  const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const nv = norm(v);
-  return PERU_REGIONS.find((r) => nv.includes(norm(r))) ?? v;
-}
-
 export function OrderFormPanel({
   leadId,
   currency,
@@ -2845,7 +2834,12 @@ export function OrderFormPanel({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [address1, setAddress1] = useState("");
+  // El distrito se ELIGE de la lista del INEI (MOM §37.10): `district` es lo
+  // que se ve en el campo y `place`, el distrito elegido; sin elegir no se
+  // genera. `province` es la región que vino con la dirección (lead, borrador
+  // o pedido anterior): solo ordena los homónimos del buscador.
   const [district, setDistrict] = useState("");
+  const [place, setPlace] = useState<PeruDistrict | null>(null);
   const [province, setProvince] = useState("");
   const [referencia, setReferencia] = useState("");
   const [orderNote, setOrderNote] = useState(""); // → Notas del pedido en la tienda
@@ -2875,7 +2869,7 @@ export function OrderFormPanel({
   const [generatedOrder, setGeneratedOrder] = useState<NonNullable<LeadActionState["generatedOrder"]> | null>(null);
   const { state: copiedOrder, copy: copyOrder, reset: resetCopiedOrder } = useCopyToClipboard();
   const headingId = useId();
-  const provinceId = useId();
+  const regionId = useId();
   const noteId = useId();
 
   useEffect(() => {
@@ -2912,8 +2906,13 @@ export function OrderFormPanel({
         );
         setName(fields.name);
         setAddress1(fields.address1);
-        setDistrict(fields.district);
-        setProvince(matchPeruRegion(fields.province));
+        // Un nombre que está tal cual en la lista queda elegido; uno mal
+        // escrito («San Martín de portes») o repetido en otra provincia se
+        // queda escrito y el campo pide elegirlo.
+        const known = matchPeruDistrict(fields.district, fields.province);
+        setDistrict(known.kind === "exact" ? known.district.name : fields.district);
+        setPlace(known.kind === "exact" ? known.district : null);
+        setProvince(fields.province);
         setReferencia(fields.referencia);
         setPrefillNote(prefill?.sourceLine ?? null);
         setWindowOpen(res.windowOpen);
@@ -2945,7 +2944,7 @@ export function OrderFormPanel({
   const valid =
     items.length > 0 &&
     address1.trim().length > 0 &&
-    district.trim().length > 0 &&
+    place !== null &&
     subtotal > 0 &&
     !phoneProblem;
 
@@ -2958,10 +2957,15 @@ export function OrderFormPanel({
 
   /** `confirmarDuplicado`: el asesor vio el aviso de duplicado y lo crea igual. */
   function submit(confirmarDuplicado = false) {
-    if (!valid) {
-      setMsg("Completa productos, dirección y distrito antes de generar.");
+    if (!valid || !place) {
+      setMsg(
+        !place && district.trim()
+          ? "Elige el distrito de la lista antes de generar."
+          : "Completa productos, dirección y distrito antes de generar.",
+      );
       return;
     }
+    const chosen = place;
     setMsg(null);
     setDuplicateWarning(null);
     setGeneratedOrder(null);
@@ -2980,8 +2984,9 @@ export function OrderFormPanel({
         customerName: name.trim(),
         phone: phone.trim(),
         address1: address1.trim(),
-        district: district.trim(),
-        province: province.trim(),
+        district: chosen.name,
+        province: chosen.department,
+        ubigeo: chosen.ubigeo,
         referencia: referencia.trim(),
         note: orderNote.trim() || undefined,
         sendConfirmation: sendConfirm,
@@ -3246,24 +3251,33 @@ export function OrderFormPanel({
             </div>
             <Field label="Dirección *" value={address1} onChange={setAddress1} disabled={pending} placeholder="Av. / Calle y número" />
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Distrito *" value={district} onChange={setDistrict} disabled={pending} placeholder="Distrito de entrega" />
+              <DistrictPicker
+                text={district}
+                picked={place}
+                department={province || null}
+                onType={(t) => {
+                  setDistrict(t);
+                  setPlace(null);
+                }}
+                onPick={(d) => {
+                  setDistrict(d.name);
+                  setPlace(d);
+                }}
+                disabled={pending}
+              />
               <div className="min-w-0">
-                <label htmlFor={provinceId} className={LABEL}>Provincia / Región</label>
-                <select
-                  id={provinceId}
-                  value={province}
-                  onChange={(e) => setProvince(e.currentTarget.value)}
-                  className={cn(FIELD, "mt-1")}
-                  disabled={pending}
+                <label htmlFor={regionId} className={LABEL}>Provincia / Región</label>
+                <output
+                  id={regionId}
+                  // Se lee, no se escribe: sale del distrito elegido. Sin `FIELD`, que
+                  // trae `bg-white` y `cn` no resuelve el choque con `bg-wash`.
+                  className={cn(
+                    "mt-1 block h-9 w-full min-w-0 truncate rounded-md bg-wash px-3 text-sm leading-9 ring-1 ring-inset ring-line",
+                    place ? "text-ink-700" : "text-ink-500",
+                  )}
                 >
-                  <option value="">—</option>
-                  {province && !PERU_REGIONS.includes(province) && <option value={province}>{province}</option>}
-                  {PERU_REGIONS.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
+                  {place ? peruDistrictPlace(place) : "Sale del distrito"}
+                </output>
               </div>
             </div>
             <Field label="Referencia" value={referencia} onChange={setReferencia} disabled={pending} placeholder="Frente a…, color de puerta…" />

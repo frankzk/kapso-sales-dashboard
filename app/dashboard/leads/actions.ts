@@ -163,6 +163,7 @@ import {
 } from "@/lib/voice-leads-server";
 import { loadDoNotCallPhones } from "@/lib/voice-recovery-server";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
+import { resolveOrderDistrict } from "@/lib/peru-districts";
 import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor, getLeadManualTakeStores, filterManualSearchLeads } from "@/lib/lead-routing-access";
 import { callbackReturnsFor, RETURN_HOLD_MINUTES, type CallbackReturn, type CallbackReturnCallRow, type CallbackReturnLeadRow } from "@/lib/callback-returns";
 
@@ -2779,6 +2780,8 @@ export interface GenerateOrderInput {
   address1: string;
   district: string;
   province?: string;
+  /** El ubigeo del distrito elegido de la lista (MOM §37.10). */
+  ubigeo?: string;
   referencia?: string;
   note?: string;
   sendConfirmation?: boolean;
@@ -2958,9 +2961,16 @@ export async function generateOrder(
   );
   if (!items.length) return { error: "Agrega al menos un producto." };
   const address1 = (input.address1 ?? "").trim();
-  const district = (input.district ?? "").trim();
   if (!address1) return { error: "La dirección es obligatoria." };
-  if (!district) return { error: "El distrito es obligatorio." };
+  // EL DISTRITO, DE LA LISTA (MOM §37.10). A la tienda, la guía y la cobertura
+  // va el nombre oficial con su región, no lo tecleado: «San Martín de portes»
+  // (#AUR900990, 16-11-2026) viajaba tal cual hasta el courier. El formulario
+  // manda el ubigeo elegido; sin él, el nombre tiene que estar tal cual en la
+  // lista. De aquí en adelante `input` lleva el distrito y la región oficiales.
+  const place = resolveOrderDistrict({ ubigeo: input.ubigeo, district: input.district, province: input.province });
+  if (!place.ok) return { error: place.error };
+  const district = place.district.name;
+  input = { ...input, district, province: place.district.department };
 
   const admin = createAdminSupabase();
   const { data: lead } = await admin
