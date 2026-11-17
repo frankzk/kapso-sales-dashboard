@@ -5,7 +5,7 @@
 // la trata como anulada en ningún camino (MOM §29.17).
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { gfCancelBlockedByRider, gfCancelRequested, gfCancelRequestedText, mapGfStatus } from "@/lib/gf-courier-status";
+import { gfCancelBlockedByRider, gfCancelRequested, gfCancelRequestedText, liveGfGuides, mapGfStatus } from "@/lib/gf-courier-status";
 import { courierStatusText } from "@/lib/repro-lima-blocks";
 
 const read = (p: string) => readFileSync(p, "utf8");
@@ -72,5 +72,21 @@ describe("con motorizado no se anula desde Kapta (owner 17-11-2026)", () => {
   it("deja anular lo que no tiene motorizado", () => {
     expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_ASSIGNMENT"))).toBeNull();
     expect(gfCancelBlockedByRider(order("CREATED", "TO_PREPARE"))).toBeNull();
+  });
+});
+
+describe("Swayp anula la guía GF viva al crearse (owner 17-11-2026, #KP206994)", () => {
+  it("liveGfGuides toma solo GF viva con número", () => {
+    const outs = [
+      { courier: "gf_courier", delivery_status: "pendiente", guide_code: "KENKU-KP206994" },
+      { courier: "gf_courier", delivery_status: "anulado", guide_code: "KENKU-KP206994-S2" },
+      { courier: "fenix", delivery_status: "en_ruta", guide_code: "50000176883" },
+    ];
+    expect(liveGfGuides(outs).map((o) => o.guide_code)).toEqual(["KENKU-KP206994"]);
+  });
+  it("la guía Swayp directa la anula antes de pedirla a Swayp, solo si la crea una persona", () => {
+    const src = read("lib/swayp-directa.ts");
+    expect(src).toContain("const gfToCancel = input.actorId ? liveGfGuides(guides) : [];");
+    expect(src.indexOf("cancelLiveGfForOtherCourier(admin")).toBeLessThan(src.indexOf("createFenixGuideViaApi({"));
   });
 });

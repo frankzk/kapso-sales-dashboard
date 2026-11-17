@@ -17,7 +17,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
-import { gfCancelBlockedByRider } from "@/lib/gf-courier-status";
+import { gfCancelBlockedByRider, liveGfGuides } from "@/lib/gf-courier-status";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
@@ -234,3 +234,25 @@ export async function cancelGfGuideFor(
   return { ok: true, trackingId, cancelCost: Number(res.data.cancel_cost ?? 0), requested };
 }
 
+
+/**
+ * Una persona manda el pedido por otro courier (owner, 17-11-2026, #KP206994: se creó la guía de Swayp y la de GF
+ * seguía viva en «Por asignar»). Las guías GF vivas sin motorizado se anulan en GF, con el mismo `cancelGfGuideFor`
+ * que «Anular guía GF»; si GF no la anula (ya tiene motorizado), no se crea la otra. El automático no anula guías.
+ */
+export async function cancelLiveGfForOtherCourier(
+  admin: SupabaseClient, orderId: string,
+  outputs: readonly { courier: string | null; delivery_status: string; guide_code: string | null }[],
+  ctx: { userId: string; courier: string },
+): Promise<{ ok: true; cancelled: string[] } | { ok: false; error: string }> {
+  const cancelled: string[] = [];
+  for (const gf of liveGfGuides(outputs)) {
+    const res = await cancelGfGuideFor(orderId, gf.guide_code!, {
+      userId: ctx.userId, reason: `Pasa a ${ctx.courier}`, note: `Guía de GF Courier anulada por Kapta al crear la guía de ${ctx.courier}.`,
+    }, admin);
+    if (!res.ok) return { ok: false, error: `GF Courier no anuló la guía ${gf.guide_code}: ${res.error} No se creó la guía de ${ctx.courier}.` };
+    if (res.requested) return { ok: false, error: `GF todavía no confirma la anulación de ${gf.guide_code}. No se creó la guía de ${ctx.courier}.` };
+    cancelled.push(gf.guide_code!);
+  }
+  return { ok: true, cancelled };
+}
