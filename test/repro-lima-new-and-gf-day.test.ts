@@ -39,3 +39,24 @@ describe("«Nuevo»", () => {
     expect(read("components/repro-lima-pending.tsx")).toContain("{limaIsNew(row) && <Badge tone=\"teal\"");
   });
 });
+
+describe("el filtro «Nuevo» de la barra (17-11-2026)", async () => {
+  const { readRowFilters, rowFiltersMatch, emptyRowFilters, writeRowFilters } = await import("@/lib/repro-lima-pending");
+  const nuevo = { stage: "preparacion", hasPriorDispatch: false, dispatchedAt: null, attempts: 0, createdAt: null, salesChannel: null, district: null, courier: null, courierDetail: null } as never;
+  const viejo = { stage: "en_curso", hasPriorDispatch: true, dispatchedAt: "2026-11-10T15:00:00Z", attempts: 1, createdAt: null, salesChannel: null, district: null, courier: null, courierDetail: null } as never;
+  it("Nuevos, No nuevos o todos", () => {
+    expect(rowFiltersMatch(nuevo, { ...emptyRowFilters(), novelty: new Set(["nuevo"]) })).toBe(true);
+    expect(rowFiltersMatch(viejo, { ...emptyRowFilters(), novelty: new Set(["nuevo"]) })).toBe(false);
+    expect(rowFiltersMatch(viejo, { ...emptyRowFilters(), novelty: new Set(["no_nuevo"]) })).toBe(true);
+    expect(rowFiltersMatch(viejo, emptyRowFilters())).toBe(true);
+  });
+  it("vive en la URL como «nuevo» y descarta valores extraños", () => {
+    expect([...readRowFilters(new URLSearchParams("nuevo=nuevo&nuevo=otro")).novelty]).toEqual(["nuevo"]);
+    const out = new URLSearchParams();
+    writeRowFilters(out, { ...emptyRowFilters(), novelty: new Set(["no_nuevo"]) });
+    expect(out.toString()).toBe("nuevo=no_nuevo");
+  });
+  it("la barra lo ofrece", () => {
+    expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Nuevo" allLabel="Todos"');
+  });
+});

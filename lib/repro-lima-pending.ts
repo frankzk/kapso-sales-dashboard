@@ -169,20 +169,41 @@ export interface LimaRowFilters {
   channels: ReadonlySet<string>;
   districts: ReadonlySet<string>;
   couriers: ReadonlySet<string>;
+  /** «nuevo» y/o «no_nuevo» (`limaIsNew`, owner 17-11-2026). Vacío o los dos: todos. */
+  novelty: ReadonlySet<string>;
+}
+
+const PRE_DISPATCH_STAGES = new Set(["por_confirmar", "preparacion", "por_despachar"]);
+
+/**
+ * «Nuevo» (owner, 17-11-2026: «para poder diferenciarlos exactamente»): el
+ * pedido que sale por PRIMERA vez —nunca salió a reparto, sin intentos— y
+ * todavía no sale. Lo distingue de lo reprogramado. Pura.
+ */
+export function limaIsNew(row: Pick<LimaPendingOrder, "stage" | "hasPriorDispatch" | "dispatchedAt" | "attempts">): boolean {
+  return PRE_DISPATCH_STAGES.has(row.stage) && !row.hasPriorDispatch && !row.dispatchedAt && (row.attempts ?? 0) === 0;
+}
+
+export const NOVELTY_OPTIONS = [
+  { value: "nuevo", label: "Nuevos" },
+  { value: "no_nuevo", label: "No nuevos" },
+] as const;
+export function noveltyKey(row: Pick<LimaPendingOrder, "stage" | "hasPriorDispatch" | "dispatchedAt" | "attempts">): "nuevo" | "no_nuevo" {
+  return limaIsNew(row) ? "nuevo" : "no_nuevo";
 }
 export type LimaFilterOption = { value: string; label: string; count: number };
 
 export const NO_COURIER = "sin_courier";
 export const NO_DISTRICT = "sin_distrito";
-const ROW_FILTER_PARAMS = { channels: "canal", districts: "distrito", couriers: "courier", createdFrom: "creado_desde", createdTo: "creado_hasta" } as const;
+const ROW_FILTER_PARAMS = { channels: "canal", districts: "distrito", couriers: "courier", novelty: "nuevo", createdFrom: "creado_desde", createdTo: "creado_hasta" } as const;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export function emptyRowFilters(): LimaRowFilters {
-  return { createdFrom: "", createdTo: "", channels: new Set(), districts: new Set(), couriers: new Set() };
+  return { createdFrom: "", createdTo: "", channels: new Set(), districts: new Set(), couriers: new Set(), novelty: new Set() };
 }
 
 export function rowFiltersActive(f: LimaRowFilters): number {
-  return Number(Boolean(f.createdFrom || f.createdTo)) + Number(f.channels.size > 0) + Number(f.districts.size > 0) + Number(f.couriers.size > 0);
+  return Number(Boolean(f.createdFrom || f.createdTo)) + Number(f.channels.size > 0) + Number(f.districts.size > 0) + Number(f.couriers.size > 0) + Number(f.novelty.size > 0);
 }
 
 /** El mismo distrito escrito con o sin tilde o con otras mayúsculas es uno. */
@@ -221,6 +242,7 @@ export function rowFiltersMatch(row: LimaPendingOrder, f: LimaRowFilters): boole
     if (!day || (f.createdFrom && day < f.createdFrom) || (f.createdTo && day > f.createdTo)) return false;
   }
   if (f.channels.size && !f.channels.has(channelKey(row.salesChannel))) return false;
+  if (f.novelty.size && !f.novelty.has(noveltyKey(row))) return false;
   if (f.districts.size && !f.districts.has(districtKey(row.district))) return false;
   if (f.couriers.size) {
     // El courier entero («Grupo GF») o su detalle («Grupo GF · Alexis»).
@@ -292,6 +314,7 @@ export function readRowFilters(params: Pick<URLSearchParams, "get" | "getAll">):
     channels: set(ROW_FILTER_PARAMS.channels),
     districts: set(ROW_FILTER_PARAMS.districts),
     couriers: set(ROW_FILTER_PARAMS.couriers),
+    novelty: new Set([...set(ROW_FILTER_PARAMS.novelty)].filter((v) => v === "nuevo" || v === "no_nuevo")),
   };
 }
 
@@ -299,7 +322,7 @@ export function writeRowFilters(params: URLSearchParams, f: LimaRowFilters): voi
   for (const name of Object.values(ROW_FILTER_PARAMS)) params.delete(name);
   if (f.createdFrom) params.set(ROW_FILTER_PARAMS.createdFrom, f.createdFrom);
   if (f.createdTo) params.set(ROW_FILTER_PARAMS.createdTo, f.createdTo);
-  for (const [field, name] of [["channels", ROW_FILTER_PARAMS.channels], ["districts", ROW_FILTER_PARAMS.districts], ["couriers", ROW_FILTER_PARAMS.couriers]] as const) {
+  for (const [field, name] of [["channels", ROW_FILTER_PARAMS.channels], ["districts", ROW_FILTER_PARAMS.districts], ["couriers", ROW_FILTER_PARAMS.couriers], ["novelty", ROW_FILTER_PARAMS.novelty]] as const) {
     for (const value of [...f[field]].sort()) params.append(name, value);
   }
 }

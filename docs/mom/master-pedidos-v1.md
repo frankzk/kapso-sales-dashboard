@@ -7273,7 +7273,9 @@ con su guía, y si su día pasa sin recojo sigue la regla del recojo vencido.
 vez —nunca salió a reparto y sin intentos, todavía en Por confirmar,
 Preparación o Por despachar (`limaIsNew`)— lleva la etiqueta **Nuevo** junto a
 su etapa, para distinguirlo de lo reprogramado. Lo creado hoy dice la hora
-(«Creado hoy 11:45»): se ve si entró antes o después del corte.
+(«Creado hoy 11:45»): se ve si entró antes o después del corte. La barra tiene
+el filtro **«Nuevo»** (Nuevos, No nuevos o Todos; `nuevo=` en la URL), junto a
+Canal, Distrito y Courier, que recorta los bloques y la lista como los demás.
 
 **Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen
 por la Mesa de ruta). No anula una guía asignada a un motorizado. No pide el
