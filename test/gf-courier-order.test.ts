@@ -68,3 +68,14 @@ describe("cobro de la guía GF", () => {
     expect(readFileSync(join(process.cwd(), "app/dashboard/pedidos/gf-courier-actions.ts"), "utf8")).not.toContain("shipping_mode !==");
   });
 });
+
+describe("pagado en el checkout web: la guía sale sin cobro (17-11-2026, #KP206871)", () => {
+  it("advance_paid = total y amount_to_collect = 0", () => {
+    const r = buildGfOrderInput({ ...base, orderTotal: 134.1, advancePaid: 0, webPrepaid: true });
+    expect(r.ok && r.input.payment).toEqual({ total: 134.1, advance_paid: 134.1, amount_to_collect: 0 });
+  });
+  it("los tres caminos que crean la guía leen el prepago web", () => {
+    for (const f of ["lib/gf-courier-guide.ts", "lib/gf-auto-guide-server.ts", "lib/gf-courier-simulate-server.ts"])
+      expect(readFileSync(join(process.cwd(), f), "utf8")).toContain("webPrepaid: isWebPrepaid(");
+  });
+});

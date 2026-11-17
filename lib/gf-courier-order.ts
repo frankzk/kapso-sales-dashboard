@@ -7,7 +7,8 @@
 // - Precios: el total del pedido se reparte en CÉNTIMOS exactos entre las líneas, en proporción a precio × cantidad.
 //   Si el importe de una línea no se divide entre sus unidades, se envía el mismo SKU en dos líneas que difieren en
 //   S/ 0.01 (GF las agrupa). Así GF cobra exactamente el total, sin el redondeo a soles enteros de Aliclik.
-// - Cobro: amount_to_collect = total − adelantos validados.
+// - Cobro: amount_to_collect = total − adelantos validados. Pagado en el checkout web (`isWebPrepaid`): 0 por cobrar
+//   (17-11-2026, #KP206871: la guía salió con S/ 134.10 a cobrar y el motorizado no podía reportar «Sin cobro»).
 import type { GfOrderInput } from "@/lib/gf-courier";
 
 export interface GfOrderSource {
@@ -22,6 +23,8 @@ export interface GfOrderSource {
   longitude?: number | null;
   orderTotal: number | null;
   advancePaid: number;
+  /** Pagado en el checkout web: GF no cobra nada en la puerta. */
+  webPrepaid?: boolean;
   scheduledFor?: string | null;
   observations?: string | null;
   lines: { sku: string | null; title?: string | null; quantity: number; price: number }[];
@@ -69,7 +72,7 @@ export function buildGfOrderInput(src: GfOrderSource): GfOrderBuild {
   if (!/^\d{6}$/.test(ubigeo) && !district) return { ok: false, reason: "Falta el distrito de entrega." };
   if (src.lines.some((l) => !clean(l.sku))) return { ok: false, reason: "Hay un producto sin SKU: GF solo despacha productos de su catálogo." };
   if (src.orderTotal == null || !(src.orderTotal > 0)) return { ok: false, reason: "El pedido no tiene un total válido." };
-  const total = cents(src.orderTotal), advance = Math.max(0, cents(src.advancePaid));
+  const total = cents(src.orderTotal), advance = src.webPrepaid ? total : Math.max(0, cents(src.advancePaid));
   if (advance > total) return { ok: false, reason: "Los adelantos validados superan el total del pedido." };
   const items = allocateLines(src.lines.map((l) => ({ ...l, sku: clean(l.sku) })), total);
   if (!items) return { ok: false, reason: "No se pudo repartir el total entre los productos." };

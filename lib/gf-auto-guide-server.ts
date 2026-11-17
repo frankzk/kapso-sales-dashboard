@@ -31,6 +31,7 @@ import { telegramTarget } from "@/lib/aliclik-scheduled-server";
 import { activeAliclikBlocker } from "@/lib/aliclik-guide";
 import { createGfGuideFor, loadGfStore, type GfGuideResult } from "@/lib/gf-courier-guide";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
+import { isWebPrepaid } from "@/lib/order-paid";
 import { GF_COURIER } from "@/lib/gf-courier-track";
 import { loadGfProducts } from "@/lib/gf-courier-catalog-server";
 import type { GfCatalogProduct } from "@/lib/gf-courier-catalog";
@@ -260,7 +261,7 @@ async function previewGfGuide(
   if ((shipments.data ?? []).some((s) => ["pendiente", "en_ruta"].includes(s.delivery_status) && !s.returned_at))
     return { ok: false, error: "El pedido ya tiene una guía de GF Courier viva." };
 
-  const order = await admin.from("orders").select("name,line_items,raw").eq("id", orderId).maybeSingle();
+  const order = await admin.from("orders").select("name,line_items,raw,financial_status,payment_gateway,total_refunded").eq("id", orderId).maybeSingle();
   if (order.error || !order.data) return { ok: false, error: "No se pudo leer el pedido." };
   const payments = await admin.from("order_payments").select("amount").eq("order_id", orderId).in("kind", [...CUSTOMER_PAYMENT_KINDS]).eq("validation_status", "validado");
   if (payments.error) return { ok: false, error: `No se pudieron leer los pagos del pedido: ${payments.error.message}` };
@@ -274,6 +275,7 @@ async function previewGfGuide(
     externalId, customerName: row.customer_name, customerPhone: row.customer_phone, district: row.district,
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address ?? null, reference: row.reference ?? null,
     latitude: row.latitude ?? null, longitude: row.longitude ?? null, orderTotal: Number(row.order_total), advancePaid: advance,
+    webPrepaid: isWebPrepaid({ financialStatus: order.data.financial_status, totalRefunded: Number(order.data.total_refunded ?? 0), paymentGateway: order.data.payment_gateway }),
     lines,
   });
   if (!built.ok) return { ok: false, error: built.reason };

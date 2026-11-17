@@ -18,6 +18,7 @@ import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
+import { isWebPrepaid } from "@/lib/order-paid";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { categoryOf, limaTodayKey } from "@/lib/shipments";
@@ -82,7 +83,7 @@ export async function createGfGuideFor(
   if ((shipments.data ?? []).some((s) => ["pendiente", "en_ruta"].includes(s.delivery_status) && !s.returned_at))
     return { ok: false, error: "El pedido ya tiene una guía de GF Courier viva." };
 
-  const order = await admin.from("orders").select("name,line_items,raw").eq("id", orderId).maybeSingle();
+  const order = await admin.from("orders").select("name,line_items,raw,financial_status,payment_gateway,total_refunded").eq("id", orderId).maybeSingle();
   if (order.error || !order.data) return { ok: false, error: "No se pudo leer el pedido." };
   const payments = await admin.from("order_payments").select("amount").eq("order_id", orderId).in("kind", [...CUSTOMER_PAYMENT_KINDS]).eq("validation_status", "validado");
   const advance = (payments.data ?? []).reduce((s, p) => s + Number(p.amount ?? 0), 0);
@@ -93,6 +94,7 @@ export async function createGfGuideFor(
     externalId, customerName: row.customer_name, customerPhone: row.customer_phone, district: row.district,
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address, reference: row.reference,
     latitude: row.latitude, longitude: row.longitude, orderTotal: Number(row.order_total), advancePaid: advance,
+    webPrepaid: isWebPrepaid({ financialStatus: order.data.financial_status, totalRefunded: Number(order.data.total_refunded ?? 0), paymentGateway: order.data.payment_gateway }),
     scheduledFor: scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
       ?? await reproAgreedGfDay(admin, orderId),
     lines,

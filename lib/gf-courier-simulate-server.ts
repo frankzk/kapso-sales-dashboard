@@ -8,6 +8,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { gfCourier } from "@/lib/gf-courier";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
+import { isWebPrepaid } from "@/lib/order-paid";
 import { reproAgreedGfDay } from "@/lib/gf-courier-guide";
 import { GF_COURIER } from "@/lib/gf-courier-track";
 import { wooTerritorio } from "@/lib/woo-territorio";
@@ -78,7 +79,7 @@ export async function simulateGfOrder(
   if (shipments.error) return fail(label, store.name, shipments.error.message);
   const hadGuide = (shipments.data ?? []).length > 0;
 
-  const order = await admin.from("orders").select("name,line_items,raw").eq("id", orderId).maybeSingle();
+  const order = await admin.from("orders").select("name,line_items,raw,financial_status,payment_gateway,total_refunded").eq("id", orderId).maybeSingle();
   if (order.error || !order.data) return fail(label, store.name, "No se pudo leer el pedido.", hadGuide);
   const payments = await admin.from("order_payments").select("amount").eq("order_id", orderId).in("kind", [...CUSTOMER_PAYMENT_KINDS]).eq("validation_status", "validado");
   if (payments.error) return fail(label, store.name, `No se pudieron leer los pagos del pedido: ${payments.error.message}`, hadGuide);
@@ -90,6 +91,7 @@ export async function simulateGfOrder(
     externalId, customerName: row.customer_name, customerPhone: row.customer_phone, district: row.district,
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address, reference: row.reference,
     latitude: row.latitude, longitude: row.longitude, orderTotal: Number(row.order_total), advancePaid: advance,
+    webPrepaid: isWebPrepaid({ financialStatus: order.data.financial_status, totalRefunded: Number(order.data.total_refunded ?? 0), paymentGateway: order.data.payment_gateway }),
     scheduledFor: (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
       ?? await reproAgreedGfDay(admin, orderId),
     lines,
