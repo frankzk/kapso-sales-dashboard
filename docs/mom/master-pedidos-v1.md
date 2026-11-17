@@ -20414,6 +20414,10 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
   momento y `cancelGfGuideFor` la da por anulada (no `requested`), así que se puede crear otra guía, anular el
   pedido o terminar la venta sin esperar a GF. El CANCELLED posterior se aplica igual. Antes (#AUR901039) Kapta la
   dejaba viva hasta que GF confirmara el desarmado.
+- **Quién lo hizo en GF (owner, 17-11-2026).** GF manda en cada aviso `performed_by` (nombre y rol: GF, motorizado,
+  tienda o GF automático) **solo a las suscripciones de Kapta** (GF 056, `include_actor`; Rentabilify y otras
+  integraciones no lo reciben, ni al recuperar eventos). Kapta lo escribe en Actividad del drawer como
+  «GF Courier: <qué pasó> — por <nombre> (<rol>)» (`gfWebhookNote`, `gfPerformedBy`).
 - **Con motorizado no se anula desde Kapta.** Antes de pedir la anulación, `cancelGfGuideFor` lee la guía en GF: si
   está asignada a un motorizado (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) o ya salió (`OUT_FOR_DELIVERY`,
   `INCIDENT`, `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`).
