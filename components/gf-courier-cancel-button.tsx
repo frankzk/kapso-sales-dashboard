@@ -41,7 +41,9 @@ export function GfCourierCancelButton({
     <div className="w-full space-y-3 rounded-lg bg-white p-3 ring-1 ring-line">
       <p className="text-[13px] leading-5 text-ink-700">
         Anula <span className="font-mono font-medium text-ink-900">{guideCode}</span> en GF Courier.
-        {prepared ? " GF ya preparó el paquete: puede cobrar la anulación y lo dice al anular." : " GF todavía no prepara el paquete: sin costo."}{" "}
+        {prepared
+          ? " GF ya preparó el paquete: la anulación queda pedida y GF la confirma cuando lo saque de preparación (hasta entonces la guía sigue viva)."
+          : " GF todavía no prepara el paquete: se anula al momento y sin costo."}{" "}
         Después puedes acordar otro courier en Repro Lima o crear otra guía en la Mesa de ruta.
       </p>
       <div>

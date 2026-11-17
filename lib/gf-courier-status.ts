@@ -42,9 +42,23 @@ export function mapGfStatus(code: GfStatusCode | string, subStatus: string | nul
       return { ...base, deliveryStatus: "entregado", operational: "entregado", terminal: true, preparationState: "listo_despacho", custodyState: "courier" };
     case "CANCELLED":
       return { ...base, deliveryStatus: "anulado", operational: "anulado", terminal: true };
+    case "CANCEL_REQUESTED":
+      // GF recibió el pedido de anular una guía que ya preparó: la anula (CANCELLED) cuando su almacén saca el
+      // paquete. Hasta entonces la guía sigue viva y la salida no se toca; `reported_status` lo dice (17-11-2026).
+      return base;
     default:
       return { ...base, unknown: [`status=${code}${subStatus ? `:${subStatus}` : ""}`] };
   }
+}
+
+/** ¿GF tiene la anulación de esta guía pedida y todavía sin confirmar? (`shipments.reported_status`). */
+export function gfCancelRequested(reportedStatus: string | null | undefined): boolean {
+  return /^CANCEL_REQUESTED\b/i.test((reportedStatus ?? "").trim());
+}
+
+/** Lo que se dice cuando GF recibió la anulación de una guía ya preparada y falta que la confirme. */
+export function gfCancelRequestedText(trackingId: string): string {
+  return `GF recibió la anulación de ${trackingId}, pero ya había preparado el paquete: la anula cuando lo saque de preparación. Hasta entonces la guía sigue viva; Kapta la marca anulada cuando GF lo confirme.`;
 }
 
 /** Etiqueta cruda que se guarda en `shipments.reported_status`, para comparar lo que dijo GF con nuestra lectura. */

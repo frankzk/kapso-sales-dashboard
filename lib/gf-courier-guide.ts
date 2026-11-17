@@ -20,6 +20,7 @@ import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
+import { gfCancelRequestedText } from "@/lib/gf-courier-status";
 import { writeCourierGuide } from "@/lib/route-output-fill";
 import { categoryOf, limaTodayKey } from "@/lib/shipments";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
@@ -157,7 +158,13 @@ export async function createGfGuideFor(
   return { ok: true, trackingId: gf.tracking_id, shippingCost: gf.shipping_cost, estimatedDeliveryDate: gf.estimated_delivery_date, adopted };
 }
 
-export type GfCancelResult = { ok: true; trackingId: string; cancelCost: number } | { ok: false; error: string };
+/**
+ * `requested`: GF recibió la anulación pero no la confirmó (CANCEL_REQUESTED: ya había preparado el paquete). La guía
+ * sigue viva hasta que GF la anule; quien llama no puede tratarla como anulada (17-11-2026, #AUR901039).
+ */
+export type GfCancelResult =
+  | { ok: true; trackingId: string; cancelCost: number; requested: boolean }
+  | { ok: false; error: string };
 
 /**
  * Anula UNA guía GF viva y aplica el estado que GF devuelve (MOM §29.17). La usan «Anular guía» de la Mesa de ruta y
@@ -209,8 +216,13 @@ export async function cancelGfGuideFor(
   if (!res.ok) return { ok: false, error: res.error.message };
   const current = await gfCourier.getOrder({ apiToken: store.token }, trackingId);
   if (current.ok) await applyGfSnapshot(current.data, admin);
+  // Anulada es solo lo que GF dice CANCELLED. Con el paquete ya preparado responde CANCEL_REQUESTED: la anula cuando
+  // lo saca de preparación. Antes Kapta decía «anulada, sin costo» y la guía seguía viva (#AUR901039).
+  const code = String((current.ok ? current.data.status?.code : res.data.status?.code) ?? "");
+  const requested = code !== "CANCELLED";
   await admin.from("order_events").insert({ store_id: storeId, order_id: orderId, kind: "courier_status", occurred_at: new Date().toISOString(),
-    actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId, reason: ctx.reason, note: ctx.note,
-    payload: { cancel_cost: res.data.cancel_cost ?? 0 } });
-  return { ok: true, trackingId, cancelCost: Number(res.data.cancel_cost ?? 0) };
+    actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId, reason: ctx.reason,
+    note: requested ? `Anulación pedida a GF Courier: ${gfCancelRequestedText(trackingId)}` : ctx.note,
+    payload: { cancel_cost: res.data.cancel_cost ?? 0, ...(requested ? { cancel_requested: true, gf_status: code || null } : {}) } });
+  return { ok: true, trackingId, cancelCost: Number(res.data.cancel_cost ?? 0), requested };
 }

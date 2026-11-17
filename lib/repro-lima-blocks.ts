@@ -1051,6 +1051,8 @@ const GF_STATUS_TEXT: Record<string, string> = {
   RETURNED: "Devuelto al almacén de GF",
   DELIVERED: "Entregado",
   CANCELLED: "Anulada",
+  // GF recibió la anulación de una guía ya preparada y falta que la confirme (17-11-2026).
+  CANCEL_REQUESTED: "En GF: anulación pedida, falta que GF la confirme",
 };
 
 export function courierStatusText(status: string | null | undefined): string | null {

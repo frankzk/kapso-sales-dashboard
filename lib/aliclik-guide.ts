@@ -1,4 +1,5 @@
 import "server-only";
+import { gfCancelRequestedText } from "@/lib/gf-courier-status";
 
 // Cotizar y crear una guía en Aliclik: el núcleo que comparten el botón del
 // Master y la guía automática del día programado (MOM §6.2, 16-10-2026).
@@ -1256,6 +1257,11 @@ export async function createAliclikGuideFor(
     }, admin);
     if (!cancelled.ok) {
       return { error: `GF Courier no anuló la guía ${gf.guide_code}: ${cancelled.error} No se creó la guía de Aliclik.` };
+    }
+    // Pedida y sin confirmar (paquete ya preparado): la GF sigue viva, así que
+    // no se crea la de Aliclik encima (17-11-2026, #AUR901039).
+    if (cancelled.requested) {
+      return { error: `${gfCancelRequestedText(gf.guide_code)} No se creó la guía de Aliclik: créala cuando GF la anule.` };
     }
     gfCancelled.push(gf.guide_code);
   }

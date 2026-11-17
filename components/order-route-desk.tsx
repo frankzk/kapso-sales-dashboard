@@ -14,6 +14,7 @@ import { AliclikOutlookLadder } from "@/components/aliclik-outlook";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { shipmentIsReturning, shipmentStateLabel } from "@/lib/order-status";
 import { courierStatusText } from "@/lib/repro-lima-blocks";
+import { gfCancelRequested } from "@/lib/gf-courier-status";
 
 /** Etapa dentro de GF (owner, 17-11-2026): «por asignar», «asignado · falta cotejo»… Solo las que dicen «En GF». */
 const gfStageText = (reported: string | null | undefined) => {
@@ -125,11 +126,14 @@ export function OrderRouteDesk({
   const uid = useId();
   // La guía GF viva que se puede anular desde su tarjeta. Una que GF ya está
   // devolviendo no se anula: el paquete viene de regreso.
+  // Con la anulación ya pedida (GF tiene que sacar el paquete de preparación)
+  // no se ofrece otra vez: su etapa lo dice.
   const gfCancellable = (route: RouteCandidate) =>
     route.key === "gf_courier" &&
     Boolean(gfCourier?.canCancel) &&
     Boolean(route.blockingOutput) &&
-    !shipmentIsReturning(route.blockingOutput!);
+    !shipmentIsReturning(route.blockingOutput!) &&
+    !gfCancelRequested(route.blockingOutput!.reportedStatus);
   // Lo que decide cada modalidad, para la destacada y para las filas.
   const stateOf = (route: RouteCandidate) => {
     // Por MODALIDAD, no por pedido: con el pedido cerrado, Tanders y

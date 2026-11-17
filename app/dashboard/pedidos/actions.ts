@@ -2221,7 +2221,7 @@ export async function setOrderStatus(
       if (!res.ok) {
         return { error: `GF Courier no anuló la guía ${gf.guide_code}: ${res.error} El pedido no se anuló; si ya tiene motorizado, retíralo primero en GF.${cancelled.length ? ` (Sí se anuló ${cancelled.join(", ")}.)` : ""}` };
       }
-      cancelled.push(gf.guide_code!);
+      cancelled.push(res.requested ? `${gf.guide_code!} (anulación pedida: GF la confirma cuando saque el paquete de preparación)` : gf.guide_code!);
     }
     if (cancelled.length) gfNote = ` Guía de GF Courier ${cancelled.join(", ")} anulada en GF.`;
   }

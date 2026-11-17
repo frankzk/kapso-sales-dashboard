@@ -161,7 +161,7 @@ export function reproBoxAction(input: ReproBoxActionInput): ReproBoxActionResult
     // La guía GF la anula una persona desde la ficha (owner, 17-11-2026,
     // #AUR901039): se dice dónde, para que no quede en «revísala».
     if (sameCourier(input.otherLiveCourier, "gf_courier")) {
-      return { problem: `${GF_LIVE_OTHER_COURIER} Para mandarlo con ${REPRO_COURIER_LABEL[courier]}, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar.` };
+      return { problem: `${GF_LIVE_OTHER_COURIER} Para mandarlo con ${REPRO_COURIER_LABEL[courier]}, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar. Si ya la anulaste y GF la tenía preparada, espera a que GF la confirme.` };
     }
     return { problem: `La guía de ${reproCourierName(input.otherLiveCourier)} sigue viva: la trabaja ese courier. Revísala en la ficha.` };
   }
