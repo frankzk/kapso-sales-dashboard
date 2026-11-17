@@ -82,7 +82,7 @@ describe("el filtro «Motorizado» (owner, 17-11-2026)", () => {
     writeRowFilters(out, { ...emptyRowFilters(), suggested: new Set(["Roy"]) });
     expect(out.toString()).toBe("motorizado=Roy");
     expect([...readRowFilters(out).suggested]).toEqual(["Roy"]);
-    expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Motorizado" allLabel="Todos"');
+    expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Motorizado sugerido" allLabel="Todos"');
   });
 });
 

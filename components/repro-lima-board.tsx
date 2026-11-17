@@ -637,8 +637,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <FacetPill label="Canal" allLabel="Todos los canales" options={filterOptions.channels} selected={rowFilters.channels as Set<string>} onChange={(channels) => patchRowFilters({ channels })} />
           <FacetPill label="Distrito" allLabel="Todos los distritos" options={filterOptions.districts} selected={rowFilters.districts as Set<string>} onChange={(districts) => patchRowFilters({ districts })} />
           <FacetPill label="Courier" allLabel="Todos los couriers" options={filterOptions.couriers} selected={rowFilters.couriers as Set<string>} onChange={(couriers) => patchRowFilters({ couriers })} />
-          {/* El motorizado: el asignado por GF o, sin él, el sugerido por distrito (owner, 17-11-2026: «cámbialo a Motorizado»). */}
-          <FacetPill label="Motorizado" allLabel="Todos" options={filterOptions.suggested} selected={rowFilters.suggested as Set<string>} onChange={(suggested) => patchRowFilters({ suggested })} />
+          {/* El motorizado: el asignado por GF o, sin él, el sugerido por distrito (owner, 17-11-2026: «cámbialo a Motorizado», luego «Motorizado Sugerido»). */}
+          <FacetPill label="Motorizado sugerido" allLabel="Todos" options={filterOptions.suggested} selected={rowFilters.suggested as Set<string>} onChange={(suggested) => patchRowFilters({ suggested })} />
           {activeRowFilters > 0 && (
             <OpsButton variant="ghost" size="sm" onClick={() => patchRowFilters(emptyRowFilters())} className="pointer-coarse:h-11">Quitar filtros</OpsButton>
           )}
