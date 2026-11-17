@@ -2,7 +2,7 @@
 // Misma forma que mapAliclikStatus (lib/aliclik-status.ts) para que el aplicador de snapshots sea análogo.
 // No se inventan estados (AGENTS.md, MOM): lo que GF todavía no usa en COD Lima (PICKED_UP, IN_WAREHOUSE,
 // HANDED_TO_CARRIER) y LOST no se traducen solos; se devuelven como `unknown` para revisión y la salida no se toca.
-import type { GfStatusCode } from "@/lib/gf-courier";
+import type { GfOrder, GfStatusCode } from "@/lib/gf-courier";
 
 export interface GfStatusMapping {
   /** null = no se pudo determinar; el llamador DEJA el estado como está. */
@@ -42,12 +42,38 @@ export function mapGfStatus(code: GfStatusCode | string, subStatus: string | nul
       return { ...base, deliveryStatus: "entregado", operational: "entregado", terminal: true, preparationState: "listo_despacho", custodyState: "courier" };
     case "CANCELLED":
       return { ...base, deliveryStatus: "anulado", operational: "anulado", terminal: true };
+    case "CANCEL_REQUESTED":
+      // GF aceptó anular una guía que ya preparó (owner, 17-11-2026, #KP206881: «no tengo que esperar a GF»): para
+      // Kapta queda anulada ya. GF no la puede asignar ni hacer salir con un motorizado; solo le falta desarmar la caja.
+      // No es terminal: el CANCELLED posterior de GF también se aplica.
+      return { ...base, deliveryStatus: "anulado", operational: "anulado" };
     default:
       return { ...base, unknown: [`status=${code}${subStatus ? `:${subStatus}` : ""}`] };
   }
 }
 
+/** ¿GF tiene la anulación de esta guía pedida y todavía sin confirmar? (`shipments.reported_status`). */
+export function gfCancelRequested(reportedStatus: string | null | undefined): boolean {
+  return /^CANCEL_REQUESTED\b/i.test((reportedStatus ?? "").trim());
+}
+
+/** Lo que se dice cuando GF recibió la anulación de una guía ya preparada y falta que la confirme. */
+export function gfCancelRequestedText(trackingId: string): string {
+  return `Guía ${trackingId} anulada. GF ya no la asigna a ningún motorizado; su almacén solo desarma la caja.`;
+}
+
 /** Etiqueta cruda que se guarda en `shipments.reported_status`, para comparar lo que dijo GF con nuestra lectura. */
 export function gfReportedStatus(code: string, subStatus: string | null): string {
   return subStatus ? `${code}:${subStatus}` : code;
+}
+
+/** ¿La guía ya tiene motorizado en GF? Devuelve el motivo para no anularla desde Kapta, o null. */
+export function gfCancelBlockedByRider(order: Pick<GfOrder, "status" | "stage">): string | null {
+  const code = order.status?.code ?? "";
+  if (["OUT_FOR_DELIVERY", "INCIDENT", "REFUSED", "RETURNING"].includes(code))
+    return "La guía ya salió con un motorizado: no se anula desde Kapta. Coordina el retorno con GF Courier.";
+  const stage = order.stage?.code ?? "";
+  if (stage === "AWAITING_OFFICE_CHECK" || stage === "AWAITING_RIDER")
+    return `La guía ya está asignada a ${order.stage?.rider_name ?? "un motorizado"} en GF: no se anula desde Kapta. Pide a GF que la retire de la carga.`;
+  return null;
 }

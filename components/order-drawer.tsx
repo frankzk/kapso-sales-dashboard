@@ -137,6 +137,7 @@ import { GfOutputCancelButton } from "@/components/gf-output-cancel-button";
 import { GfCourierCancelButton } from "@/components/gf-courier-cancel-button";
 import { courierDisplayName } from "@/lib/dispatched-with";
 import { courierKey } from "@/lib/dispatch";
+import { gfCancelRequested } from "@/lib/gf-courier-status";
 import { gfOutputIsCancelableBeforeDispatch } from "@/lib/gf-output-cancel";
 import { cancelWooOrder } from "@/app/dashboard/pedidos/woo-cancel-actions";
 import { cancelLegacyShopifySale } from "@/app/dashboard/pedidos/legacy-sale-cancel-actions";
@@ -2241,9 +2242,15 @@ export function OrderDrawer({
                           {/* GF Courier por API: la misma anulación que su tarjeta en la
                               Mesa de ruta (MOM §29.17), aquí donde se mira la guía. GF
                               decide si puede; una que ya devuelve no se ofrece. */}
+                          {courierKey(g.courier) === "gf_courier" && gfCancelRequested(g.reported_status) &&
+                            (g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") && (
+                            <span className="text-[13px] font-medium text-warn-fg">
+                              Anulación pedida a GF: falta que GF saque el paquete de preparación y la confirme.
+                            </span>
+                          )}
                           {canCancelGfGuide && courierKey(g.courier) === "gf_courier" && g.guide_code &&
                             (g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") &&
-                            !g.returned_at && !shipmentIsReturning(estado) && (
+                            !g.returned_at && !shipmentIsReturning(estado) && !gfCancelRequested(g.reported_status) && (
                             <GfCourierCancelButton
                               orderId={orderId}
                               guideCode={g.guide_code}

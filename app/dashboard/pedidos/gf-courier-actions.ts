@@ -10,6 +10,7 @@ import { createAdminSupabase, createServerSupabase } from "@/lib/db";
 import { getMasterPermissions } from "@/lib/permissions-access";
 import { cancelGfGuideFor, createGfGuideFor } from "@/lib/gf-courier-guide";
 import { GF_COURIER } from "@/lib/gf-courier-track";
+import { gfCancelRequested, gfCancelRequestedText } from "@/lib/gf-courier-status";
 
 const MASTER_PATH = "/dashboard/pedidos";
 export interface GfActionResult { notice?: string; error?: string; allowed?: unknown[]; pending?: boolean }
@@ -42,12 +43,16 @@ export async function cancelGfCourierGuide(orderId: string, reason: string): Pro
   const why = reason.trim();
   if (why.length < 5) return { error: "Escribe el motivo de la anulación." };
   const admin = createAdminSupabase();
-  const { data } = await admin.from("shipments").select("id,guide_code").eq("order_id", orderId).eq("courier", GF_COURIER)
+  const { data } = await admin.from("shipments").select("id,guide_code,reported_status").eq("order_id", orderId).eq("courier", GF_COURIER)
     .in("delivery_status", ["pendiente", "en_ruta"]).limit(1);
-  const live = data?.[0];
+  const live = data?.[0] as { id: string; guide_code: string | null; reported_status: string | null } | undefined;
   if (!live?.guide_code) return { error: "El pedido no tiene una guía de GF Courier viva." };
+  // Ya pedida: otra vez no la acelera, solo repite el pedido en GF.
+  if (gfCancelRequested(live.reported_status)) return { notice: `Ya pediste anular ${live.guide_code}. ${gfCancelRequestedText(live.guide_code)}`, pending: true };
   const res = await cancelGfGuideFor(orderId, live.guide_code, { userId: ctx.userId, reason: why, note: "Guía de GF Courier anulada desde Kapta." }, admin);
   if (!res.ok) return { error: res.error };
   revalidatePath(MASTER_PATH);
+  const cost = res.cancelCost > 0 ? ` Costo de anular: S/ ${res.cancelCost.toFixed(2)}.` : "";
+  if (res.requested) return { notice: `${gfCancelRequestedText(res.trackingId)}${cost}`, pending: true };
   return { notice: `Guía ${res.trackingId} anulada en GF Courier${res.cancelCost > 0 ? ` (costo de anular S/ ${res.cancelCost.toFixed(2)})` : ", sin costo"}.` };
 }

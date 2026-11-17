@@ -20391,9 +20391,17 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
   «Anular guía», y el motivo se pide al elegirlo. Una guía que GF ya está devolviendo no se ofrece anular.
 - **«Anular guía GF» también en «Salidas y guías»** (owner, 17-11-2026, #AUR901039): en la fila de la guía GF viva
   (pendiente o en ruta, sin devolución), con el permiso `gf_courier.cancel_guide`. Es la misma acción que la tarjeta
-  (`cancelGfCourierGuide`): pide el motivo, GF decide si la anula —una guía que GF ya preparó («Lista para recojo»)
-  puede tener costo, y el aviso lo dice— y Kapta aplica lo que devuelve. Es el paso para mandar con otro courier un
-  pedido de Repro Lima que tiene guía GF.
+  (`cancelGfCourierGuide`): pide el motivo, GF decide si la anula y Kapta aplica lo que devuelve. Es el paso para
+  mandar con otro courier un pedido de Repro Lima que tiene guía GF.
+- **Anulación aceptada (`CANCEL_REQUESTED`) = anulada en Kapta (owner, 17-11-2026, #KP206881).** Una guía que GF
+  ya preparó («Lista para recojo») responde CANCEL_REQUESTED: GF aceptó anularla, ya no la asigna ni la hace salir
+  con un motorizado, y solo le falta desarmar la caja. Kapta **no espera**: `mapGfStatus` la marca `anulado` en ese
+  momento y `cancelGfGuideFor` la da por anulada (no `requested`), así que se puede crear otra guía, anular el
+  pedido o terminar la venta sin esperar a GF. El CANCELLED posterior se aplica igual. Antes (#AUR901039) Kapta la
+  dejaba viva hasta que GF confirmara el desarmado.
+- **Con motorizado no se anula desde Kapta.** Antes de pedir la anulación, `cancelGfGuideFor` lee la guía en GF: si
+  está asignada a un motorizado (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) o ya salió (`OUT_FOR_DELIVERY`,
+  `INCIDENT`, `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`).
 - La guía viva se nombra también si la tienda apagó la API o si el pedido no es de Lima.
 - **Sin tope de salidas** (owner, 15-11-2026: «una guía por día, despachada por día»): cerrada la anterior (entregada,
   anulada o devuelta), se crea la siguiente (`-S2`, `-S3`…). Las cinco salidas de §4 no la frenan

@@ -169,10 +169,10 @@ describe("«Qué hacer con la caja» con GF Courier: como Aliclik en Lima, otro 
     expect(reproBoxAction(base(gfLive))).toMatchObject({ action: "salida_nueva_rearmar" });
     // Dice dónde anularla (owner, 17-11-2026, #AUR901039).
     expect(reproBoxAction(base({ ...gfLive, courier: "aliclik" }))).toEqual({
-      problem: "La guía de GF Courier sigue viva. Para mandarlo con Aliclik, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar.",
+      problem: "La guía de GF Courier sigue viva. Para mandarlo con Aliclik, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar. Si ya la anulaste y GF la tenía preparada, espera a que GF la confirme.",
     });
     expect(reproBoxAction(base({ ...gfLive, courier: "fenix" }))).toEqual({
-      problem: "La guía de GF Courier sigue viva. Para mandarlo con Swayp, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar.",
+      problem: "La guía de GF Courier sigue viva. Para mandarlo con Swayp, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar. Si ya la anulaste y GF la tenía preparada, espera a que GF la confirme.",
     });
     expect(reproBoxAction(base({ otherLiveCourier: "aliclik" }))).toEqual({ problem: "La guía de Aliclik sigue viva: la trabaja ese courier. Revísala en la ficha." });
   });
@@ -185,6 +185,7 @@ describe("«Qué hacer con la caja» con GF Courier: como Aliclik en Lima, otro 
     expect(guard).toContain('courierKey(g.courier) === "gf_courier"');
     expect(guard).toContain('(g.delivery_status === "pendiente" || g.delivery_status === "en_ruta")');
     expect(guard).toContain("!shipmentIsReturning(estado)");
+    expect(guard).toContain("!gfCancelRequested(g.reported_status)");
     expect(drawer).toContain("{courierDisplayName(g.courier)}");
     const button = readFileSync("components/gf-courier-cancel-button.tsx", "utf8");
     expect(button).toContain("await cancelGfCourierGuide(orderId, reason)");

@@ -20,11 +20,16 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export type GfStatusCode =
   | "CREATED" | "READY_FOR_PICKUP" | "PICKED_UP" | "IN_WAREHOUSE" | "OUT_FOR_DELIVERY" | "INCIDENT"
-  | "DELIVERED" | "REFUSED" | "RETURNING" | "RETURNED" | "HANDED_TO_CARRIER" | "CANCELLED" | "LOST";
+  | "DELIVERED" | "REFUSED" | "RETURNING" | "RETURNED" | "HANDED_TO_CARRIER" | "CANCELLED" | "LOST"
+  // Anular una guía que GF ya preparó: GF recibe el pedido y la anula (CANCELLED) cuando saca el paquete de
+  // preparación. Visto en producción el 17-11-2026 (#AUR901039, KP206968).
+  | "CANCEL_REQUESTED";
 export interface GfStatus { code: GfStatusCode; name?: string; sub_status: string | null; final: boolean }
 export interface GfOrder {
   tracking_id: string; external_id: string; service: "COD_LIMA"; status: GfStatus; shipping_cost: number;
   currency: "PEN"; estimated_delivery_date: string; label_url: string; tracking_url: string | null; created_at?: string;
+  /** Etapa de despacho (GF 049): AWAITING_OFFICE_CHECK / AWAITING_RIDER = ya tiene motorizado. */
+  stage?: { code: string; name?: string; rider_name?: string | null } | null;
 }
 export interface GfOrderInput {
   external_id: string; service: "COD_LIMA";
@@ -88,7 +93,7 @@ export const gfCourier = {
   getOrder: (o: GfClientOpts, tracking: string) => call<GfOrder>(o, "GET", `/v1/orders/${encodeURIComponent(tracking)}`),
   findByExternalId: (o: GfClientOpts, externalId: string) => call<GfOrder>(o, "GET", `/v1/orders?external_id=${encodeURIComponent(externalId)}`),
   cancelOrder: (o: GfClientOpts, tracking: string, reason: string, idempotencyKey: string, note?: string) =>
-    call<{ tracking_id: string; status: { code: "CANCELLED" }; cancel_cost: number }>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/cancel`, { reason, ...(note ? { note } : {}) }, idempotencyKey),
+    call<{ tracking_id: string; status: { code: "CANCELLED" | "CANCEL_REQUESTED" }; cancel_cost: number }>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/cancel`, { reason, ...(note ? { note } : {}) }, idempotencyKey),
   /** Cambiar la fecha antes de que salga (owner, 17-11-2026): misma guía y caja armada; GF lo rechaza si ya tiene motorizado. */
   changeDeliveryDate: (o: GfClientOpts, tracking: string, newDate: string, reason: string, idempotencyKey: string) =>
     call<GfOrder>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/delivery-date`, { new_date: newDate, reason: reason.slice(0, 200) }, idempotencyKey),
