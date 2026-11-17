@@ -7273,9 +7273,29 @@ con su guía, y si su día pasa sin recojo sigue la regla del recojo vencido.
 vez —nunca salió a reparto y sin intentos, todavía en Por confirmar,
 Preparación o Por despachar (`limaIsNew`)— lleva la etiqueta **Nuevo** junto a
 su etapa, para distinguirlo de lo reprogramado. Lo creado hoy dice la hora
-(«Creado hoy 11:45»): se ve si entró antes o después del corte. La barra tiene
-el filtro **«Nuevo»** (Nuevos, No nuevos o Todos; `nuevo=` en la URL), junto a
-Canal, Distrito y Courier, que recorta los bloques y la lista como los demás.
+(«Creado hoy 11:45»): se ve si entró antes o después del corte.
+
+**El paso «Nuevos» del Flujo del día (17-11-2026).** Owner: «queremos un
+apartado que incluya esos nuevos aquí en el flujo del día» (el filtro «Nuevo» de
+la barra, del mismo día, se quitó: no convencía). Entre Sacar a reparto y
+Programados, ocho pasos que siguen siendo una partición. Va a «Nuevos» lo que
+sale por primera vez y todavía no sale (`limaIsNew`), venga de Sacar a reparto,
+de Programados o de la guía creada; la novedad, «Llamar después», No entregados y
+«Por cerrar» siguen mandando. Sus partes, por el día de su guía: **Hoy**,
+**Mañana**, **Después** y **Sin día** (sin guía ni día, o con una guía sin día de
+recojo; «Kapta sugiere…» los ofrece para programar). La alerta, en su celda y
+como chip: «Sin guía (hoy o mañana)», lo que sale hoy o mañana sin guía ni rótulo
+y la automática no crea (`limaNewWithoutGuide`). Programados queda para lo ya
+salido con día nuevo, y Sacar a reparto para lo ya salido sin día y la guía sin
+recoger. Matiz fucsia, también en la etiqueta «Nuevo».
+
+**El motorizado sugerido (17-11-2026; 0353).** La API de GF Courier solo dice el
+motorizado cuando ya lo asignó. Mientras no, la fila con guía de GF Courier dice
+«Sugerido: Roy · por su distrito» con el reparto de los últimos 30 días
+(`lima_rider_district_share`, solo lectura y solo el servidor;
+`lib/lima-rider-suggest.ts`): un motorizado con el 70% o más de las paradas del
+distrito, o los dos primeros si juntos llegan al 80% («Yordani o Alexis»); con
+menos de 5 paradas o muy repartido, nada. Es una sugerencia: asigna GF.
 
 **Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen
 por la Mesa de ruta). No anula una guía asignada a un motorizado. No pide el

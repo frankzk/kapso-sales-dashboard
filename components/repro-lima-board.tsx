@@ -64,7 +64,7 @@ import {
 } from "@/lib/repro-lima-blocks";
 import { DISPATCH_COURIER_LABEL, DISPATCH_DATE_MAX_DAYS, isDispatchCourier, type DispatchCourier } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
-import { NOVELTY_OPTIONS, noveltyKey, createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
+import { createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
 /** Los trabados que se ven en Repro Lima; los de Grupo GF, en Despacho del día. */
@@ -147,10 +147,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const without = (field: "channels" | "districts" | "couriers") => rowFilterOptions(
       activeRowFilters ? pendingStore.filter((row) => rowFiltersMatch(row, { ...rowFilters, [field]: new Set<string>() })) : pendingStore,
     )[field];
-    // «Nuevo» (17-11-2026): cuántos nuevos y no nuevos hay con los demás filtros puestos.
-    const base = activeRowFilters ? pendingStore.filter((row) => rowFiltersMatch(row, { ...rowFilters, novelty: new Set<string>() })) : pendingStore;
-    const novelty = NOVELTY_OPTIONS.map((o) => ({ value: o.value, label: o.label, count: base.filter((row) => noveltyKey(row) === o.value).length }));
-    return { channels: without("channels"), districts: without("districts"), couriers: without("couriers"), novelty };
+    return { channels: without("channels"), districts: without("districts"), couriers: without("couriers") };
   }, [pendingStore, rowFilters, activeRowFilters]);
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
   // El paso, el día y el courier: una clasificación por pedido, para las cifras y la lista.
@@ -172,7 +169,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const stuckByOrder = useMemo(() => new Map(stuckItems.map((item) => [item.orderId, item])), [stuckItems]);
   // Los trabados viven dentro de su paso (owner, 15-11-2026): cuántos tiene cada uno.
   const stuckByStep = useMemo(() => {
-    const out: Record<LimaStep, number> = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, programados: 0, con_courier: 0, por_cerrar: 0 };
+    const out: Record<LimaStep, number> = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, nuevos: 0, programados: 0, con_courier: 0, por_cerrar: 0 };
     for (const item of stuckItems) {
       const step = classes.get(item.orderId)?.step;
       if (step) out[step] = (out[step] ?? 0) + 1;
@@ -471,7 +468,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   // puesto en el lote. Nada se mueve hasta confirmar.
   const suggestedDay = limaSuggestedDay(today);
   const proposals = stuck || retriesOnly ? []
-    : key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia"
+    : key === "por_sacar" || key === "nunca_salieron" || key === "mas_de_30" || key === "salieron_sin_dia" || key === "nuevos" || key === "nuevos_sin_dia"
       ? inQueue.filter((row) => classes.get(row.orderId)?.agenda === "sin_fecha" && pathOf(row).kind !== null)
       : key === "no_entregados" || key === "por_acordar"
         ? inQueue.filter((row) => {
@@ -630,7 +627,6 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <FacetPill label="Canal" allLabel="Todos los canales" options={filterOptions.channels} selected={rowFilters.channels as Set<string>} onChange={(channels) => patchRowFilters({ channels })} />
           <FacetPill label="Distrito" allLabel="Todos los distritos" options={filterOptions.districts} selected={rowFilters.districts as Set<string>} onChange={(districts) => patchRowFilters({ districts })} />
           <FacetPill label="Courier" allLabel="Todos los couriers" options={filterOptions.couriers} selected={rowFilters.couriers as Set<string>} onChange={(couriers) => patchRowFilters({ couriers })} />
-          <FacetPill label="Nuevo" allLabel="Todos" options={filterOptions.novelty} selected={rowFilters.novelty as Set<string>} onChange={(novelty) => patchRowFilters({ novelty })} />
           {activeRowFilters > 0 && (
             <OpsButton variant="ghost" size="sm" onClick={() => patchRowFilters(emptyRowFilters())} className="pointer-coarse:h-11">Quitar filtros</OpsButton>
           )}

@@ -41,7 +41,7 @@ export const OpsButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTML
  *  de WhatsApp. Tinte suave con anillo, como la chapa de cobertura del Master
  *  (DESIGN.md › Estados › Cobertura): se distingue de las chapas de estado, que
  *  van rellenas y sin anillo. */
-export type CategoryTone = "slate" | "sky" | "indigo" | "teal" | "orange" | "emerald";
+export type CategoryTone = "slate" | "sky" | "indigo" | "teal" | "orange" | "emerald" | "fuchsia";
 
 /** `blacklist`: la chapa «Lista negra» (MOM §41.11), negra con letras blancas (owner 09-11-2026). */
 export type BadgeTone = "neutral" | "info" | "ok" | "warn" | "crit" | "urgent" | "brand" | "blacklist" | CategoryTone;
@@ -61,6 +61,7 @@ const BADGE_TONE: Record<BadgeTone, string> = {
   teal: "bg-teal-50 text-teal-800 ring-1 ring-inset ring-teal-200",
   orange: "bg-orange-50 text-orange-800 ring-1 ring-inset ring-orange-200",
   emerald: "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200",
+  fuchsia: "bg-fuchsia-50 text-fuchsia-800 ring-1 ring-inset ring-fuchsia-200",
 };
 
 /** Chapa de estado: 20 px de alto, 4 px de radio, texto de 12 px. */

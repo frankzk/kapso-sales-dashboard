@@ -15,10 +15,11 @@ import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "
 import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, limaIsNew, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, limaIsNew, liveGuideCourier, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
+import { gfAwaitingRider, riderSuggestionText } from "@/lib/lima-rider-suggest";
 import { telHref } from "@/lib/rider-contact";
 import { loadPriorOrderCounts } from "@/app/dashboard/pedidos/repro-lima/prior-counts-actions";
 import { priorCountsLabel, type PriorCounts } from "@/lib/customer-prior-counts";
@@ -79,14 +80,22 @@ export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
  */
 /** La etapa del Master y su subetapa: debajo del código del pedido (owner, 16-11-2026). */
 function StageBadges({ row }: { row: LimaPendingOrder }) {
-  return <div className="flex flex-wrap gap-1">{limaIsNew(row) && <Badge tone="teal" title="Sale por primera vez: nunca salió a reparto.">Nuevo</Badge>}<Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>;
+  return <div className="flex flex-wrap gap-1">{limaIsNew(row) && <Badge tone="fuchsia" title="Sale por primera vez: nunca salió a reparto.">Nuevo</Badge>}<Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>;
 }
 
 function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
   const courier = courierNowText(row);
+  // El motorizado que llevaría su distrito (17-11-2026), mientras GF Courier no asigne a nadie.
+  const suggested = row.suggestedRiders?.length && liveGuideCourier(row) === "gf_courier" && gfAwaitingRider(row.ops?.reportedStatus)
+    ? riderSuggestionText(row.suggestedRiders) : null;
   return (
     <div className="space-y-1.5">
       {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}
+      {suggested && (
+        <p className="text-[13px] leading-5 text-ink-600" title="Quién llevó la mayoría de entregas de este distrito en los últimos 30 días. GF Courier asigna el motorizado; esto es una sugerencia.">
+          Sugerido: <span className="font-medium text-ink-900">{suggested}</span> <span className="text-ink-500">· por su distrito</span>
+        </p>
+      )}
       {repro ? <FailureLine row={repro} /> : <p className="text-[13px] leading-5 text-ink-600">{pendingGroup(row, today).label}</p>}
       {repro && <div className="flex flex-wrap gap-1"><ReproRowChips row={repro} today={today} /></div>}
       {repro?.lastCall?.note && <p className="break-words text-xs leading-5 text-ink-500">Última nota: {repro.lastCall.note}</p>}

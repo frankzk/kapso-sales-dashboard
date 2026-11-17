@@ -141,6 +141,17 @@ días (contraentrega y manuales, sin anular) a `POST /v1/orders/validate` de GF 
 crea la guía, a 4 por segundo, y resume los errores por código y campo. No crea guías ni escribe nada. Verificar: con
 la cuenta del owner, abrir `/dashboard/pedidos/gf-simulacion`, pulsar «Simular» y ver avanzar «revisados».
 
+### 17-11-2026 · Repro Lima: paso «Nuevos» y motorizado sugerido (0353, MOM §9.5)
+
+1. **Migración `0353_lima_rider_district_share.sql`**: función de solo lectura
+   `lima_rider_district_share(p_days)` (solo `service_role`). Sin tablas, índices
+   ni datos. Idempotente.
+2. El código suma el paso «Nuevos» al Flujo del día, quita el filtro «Nuevo» y
+   muestra «Sugerido: …» en las filas con guía de GF Courier sin motorizado. Sin la
+   migración, Repro Lima abre igual y no sugiere (la lectura es best-effort).
+3. Verificar: «Nuevos» entre Sacar a reparto y Programados, con Hoy, Mañana,
+   Después y Sin día; una fila de Surco con guía GF por asignar dice «Sugerido: Roy».
+
 ### 16-11-2026 · La clienta que responde vuelve 10 minutos a quien agendó (0351, MOM «Bloques por asesora»)
 
 1. **Migración `0351_lead_appointment_return_hold.sql`**: redefine

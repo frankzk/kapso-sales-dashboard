@@ -705,4 +705,6 @@
 \ir migrations/0351_lead_appointment_return_hold.sql
 \echo 'Applying 0352_repro_box_con_courier.sql'
 \ir migrations/0352_repro_box_con_courier.sql
+\echo 'Applying 0353_lima_rider_district_share.sql'
+\ir migrations/0353_lima_rider_district_share.sql
 \echo 'Done.'

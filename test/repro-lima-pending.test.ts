@@ -165,13 +165,16 @@ describe("acceso a todos los pendientes", () => {
     expect(rows[0]?.orderTotal).toBe(149);
     // Más lo de «Sale a reparto» (§29.16): las cajas vigentes (por lo En curso), el proveedor y las salidas de los candidatos.
     expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "dispatch_manifests", "logistics_providers", "shipments"]));
-    expect(db.rpc.mock.calls.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
+    // Las salidas en lotes de 500; aparte, una lectura del reparto por distrito (motorizado sugerido, 17-11-2026).
+    const departures = db.rpc.mock.calls.filter(([name]) => name === "gf_order_departures");
+    expect(departures.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
+    expect(db.rpc.mock.calls.filter(([name]) => name === "lima_rider_district_share")).toHaveLength(1);
   });
   it("usa salidas reales aunque Master haya vuelto a dejar dispatched_at vacío", async () => {
     const db = database([master(1)], false, { departures: [{ order_id: "o1", last_departure_at: "2026-10-27T17:00:00Z" }], programs: [{ order_id: "o1", store_id: "a", scheduled_for: "2026-10-29" }] });
     const [r] = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
     expect(r).toMatchObject({ dispatchedAt: null, hasPriorDispatch: true, programmedFor: "2026-10-29" });
-    expect(db.rpc.mock.calls[0]?.[0]).toBe("gf_order_departures");
+    expect(db.rpc.mock.calls.map(([name]) => name)).toContain("gf_order_departures");
   });
   it("pagina también los programas y solo asocia la tienda correcta del pedido", async () => {
     const source = Array.from({ length: 1201 }, (_, i) => master(i));
@@ -438,14 +441,18 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
   };
   it("sin courier, lo que tiene día es Programados (por día) y lo que no, Sacar a reparto; suman Todos y Reprogramados cuenta las fechas acordadas", () => {
     const { counts } = board(rows, cases);
-    expect(counts.agenda).toEqual({ hoy: 2, manana: 2, despues: 1 });
-    // Ninguno salió: cinco con día son Programados (16-11-2026) y cuatro sin día, por sacar a reparto.
-    expect(counts.step.programados).toBe(5);
-    expect(counts.step.por_sacar).toBe(4);
+    // Desde el 17-11-2026 lo que sale por primera vez está en «Nuevos», por su día:
+    // siete nuevos (dos hoy, uno mañana, uno después, tres sin día). Programados es
+    // lo ya salido con día (el acuerdo) y Sacar a reparto, lo ya salido sin día.
+    expect(counts.step.nuevos).toBe(7);
+    expect(counts.sub).toMatchObject({ nuevos_hoy: 2, nuevos_manana: 1, nuevos_despues: 1, nuevos_sin_dia: 3 });
+    expect(counts.agenda).toEqual({ hoy: 0, manana: 1, despues: 0 });
+    expect(counts.step.programados).toBe(1);
+    expect(counts.step.por_sacar).toBe(1);
     expect(Object.values(counts.agenda).reduce((a, b) => a + b, 0)).toBe(counts.step.programados);
     expect(Object.values(counts.step).reduce((a, b) => a + b, 0)).toBe(counts.todos);
     expect(counts.task.primer_despacho).toBe(3);
-    expect(counts.sub).toMatchObject({ mas_de_30: 1, reprogramados: 1 });
+    expect(counts.sub).toMatchObject({ mas_de_30: 0, reprogramados: 1 });
   });
   it("una salida que retornó no vuelve a Confirmar primer despacho aunque Master haya borrado el despacho", () => {
     const { rows: of } = board(rows, cases);
@@ -455,7 +462,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
   it("la fecha manda sobre la antigüedad y el historial de salidas; lo vencido sigue en Hoy y va primero", () => {
     const old = row({ createdAt: "2026-01-01T15:00:00Z", hasPriorDispatch: true, programmedFor: "2026-10-29" });
     expect(limaQueueSegment(old, TODAY)).toBe("programados_manana");
-    expect(board(rows, cases).rows("hoy")).toEqual(["vencido", "hoy"]);
+    // Nuevos: lo vencido primero, en su Hoy (17-11-2026).
+    expect(board(rows, cases).rows("nuevos_hoy")).toEqual(["vencido", "hoy"]);
   });
   it("la fecha acordada vigente manda sobre un programa anterior; no se inventa un acuerdo", () => {
     const r = row({ programmedFor: TODAY });
@@ -487,9 +495,11 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     ];
     const { rows: of } = board(pico, []);
     expect(of("primer_despacho")).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
-    // Sacar a reparto es lo que no tiene día, del más antiguo al más reciente; lo de hoy es un Programado (16-11-2026).
-    expect(of("por_sacar")).toEqual(["volvio-antes", "hace-5-dias", "ayer", "volvio-ayer", "hoy-1"]);
-    expect(of("programados")).toEqual(["prog"]);
+    // Sacar a reparto es lo ya salido sin día, del más antiguo al más reciente; lo nuevo va a «Nuevos»
+    // (17-11-2026): primero lo que tiene día y después lo sin día, del más antiguo al más reciente.
+    expect(of("por_sacar")).toEqual(["volvio-antes", "volvio-ayer"]);
+    expect(of("nuevos")).toEqual(["prog", "hace-5-dias", "ayer", "hoy-1"]);
+    expect(of("programados")).toEqual([]);
   });
   it("solo Repro Lima cambia: Despacho del día sigue del más reciente al más antiguo (§29.13)", () => {
     // Solo los campos que mira el orden; el resto de la fila no participa.
@@ -500,7 +510,9 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(limaQueueSegment(row({ createdAt: "2026-09-28T04:59:59Z" }), TODAY)).toBe("mas_de_30");
     expect(limaQueueSegment(row({ createdAt: "2026-09-28T05:00:00Z" }), TODAY)).toBe("nunca_salieron");
     expect(limaQueueSegment(row({ createdAt: null }), TODAY)).toBe("nunca_salieron");
-    expect(board(rows, cases).rows("mas_de_30")).toEqual(["antiguo"]);
+    // Lo nuevo de más de 30 días sin día también está en «Nuevos · Sin día» (17-11-2026).
+    expect(board(rows, cases).rows("mas_de_30")).toEqual([]);
+    expect(board(rows, cases).rows("nuevos_sin_dia")).toContain("antiguo");
   });
   it("todas las filas siguen accesibles sin duplicar pedidos por Reprogramados", () => {
     const all = board(rows, cases).rows("todos");

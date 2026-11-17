@@ -50,6 +50,7 @@ export const LIMA_FLOW: readonly { key: LimaStep; why: string }[] = [
   { key: "llamar_despues", why: "A la hora que pidió la clienta." },
   { key: "no_entregados", why: "Acuerda el día y el courier." },
   { key: "por_sacar", why: "Sin día: agéndalos." },
+  { key: "nuevos", why: "Primera salida: que salgan." },
   { key: "programados", why: "Que salgan: genera su guía." },
   { key: "con_courier", why: "Solo seguimiento." },
   { key: "por_cerrar", why: "Validar el cobro o anular." },
@@ -84,6 +85,16 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
       [c.sub.nunca_salieron, "nunca salieron"],
       [c.sub.mas_de_30, "de más de 30 días"],
       [c.sub.salieron_sin_dia, "ya salieron, sin día"],
+    ]),
+  },
+  // Los nuevos, por día de su guía (owner, 17-11-2026); la alerta sin guía va en la celda.
+  nuevos: {
+    keys: LIMA_STEP_PARTS.nuevos ?? [],
+    note: (c) => partsNote(c, [
+      [c.sub.nuevos_hoy, "hoy"],
+      [c.sub.nuevos_manana, "mañana"],
+      [c.sub.nuevos_despues, "después"],
+      [c.sub.nuevos_sin_dia, "sin día"],
     ]),
   },
   // Sus días son sus partes; lo de hoy y mañana sin guía va en la celda como alerta (`programadosNote`).
@@ -141,6 +152,8 @@ export const STEP_TONE: Record<LimaStep, {
   llamar_despues: { seg: "bg-sky-500", segDim: "bg-sky-200", num: "bg-sky-50 text-sky-800 ring-sky-200", numOn: "bg-sky-700 text-white ring-sky-700", on: "bg-sky-50", text: "text-sky-800", bar: "bg-sky-700", dot: "bg-sky-500", band: "bg-sky-50/70" },
   no_entregados: { seg: "bg-indigo-500", segDim: "bg-indigo-200", num: "bg-indigo-50 text-indigo-800 ring-indigo-200", numOn: "bg-indigo-700 text-white ring-indigo-700", on: "bg-indigo-50", text: "text-indigo-800", bar: "bg-indigo-700", dot: "bg-indigo-500", band: "bg-indigo-50/70" },
   programados: { seg: "bg-violet-500", segDim: "bg-violet-200", num: "bg-violet-50 text-violet-800 ring-violet-200", numOn: "bg-violet-700 text-white ring-violet-700", on: "bg-violet-50", text: "text-violet-800", bar: "bg-violet-700", dot: "bg-violet-500", band: "bg-violet-50/70" },
+  // «Nuevos» (17-11-2026): fucsia, un matiz que no usa ningún otro paso (ni rojo ni verde: es una clasificación).
+  nuevos: { seg: "bg-fuchsia-500", segDim: "bg-fuchsia-200", num: "bg-fuchsia-50 text-fuchsia-800 ring-fuchsia-200", numOn: "bg-fuchsia-700 text-white ring-fuchsia-700", on: "bg-fuchsia-50", text: "text-fuchsia-800", bar: "bg-fuchsia-700", dot: "bg-fuchsia-500", band: "bg-fuchsia-50/70" },
   por_sacar: { seg: "bg-teal-500", segDim: "bg-teal-200", num: "bg-teal-50 text-teal-800 ring-teal-200", numOn: "bg-teal-700 text-white ring-teal-700", on: "bg-teal-50", text: "text-teal-800", bar: "bg-teal-700", dot: "bg-teal-500", band: "bg-teal-50/70" },
   con_courier: { seg: "bg-slate-400", segDim: "bg-slate-200", num: "bg-slate-50 text-slate-700 ring-slate-200", numOn: "bg-slate-700 text-white ring-slate-700", on: "bg-slate-100", text: "text-slate-800", bar: "bg-slate-600", dot: "bg-slate-400", band: "bg-slate-100/70" },
   por_cerrar: { seg: "bg-slate-300", segDim: "bg-slate-100", num: "bg-slate-50 text-slate-700 ring-slate-200", numOn: "bg-slate-700 text-white ring-slate-700", on: "bg-slate-100", text: "text-slate-800", bar: "bg-slate-600", dot: "bg-slate-300", band: "bg-slate-100/70" },
@@ -191,6 +204,7 @@ export function activeStep(active: LimaBoardKey): LimaStep | null {
   for (const [step, inside] of Object.entries(INSIDE)) if (inside?.keys.includes(active)) return step as LimaStep;
   // Las alertas y los reprogramados viven dentro de «Programados».
   if (active === "hoy_sin_guia" || active === "manana_sin_guia" || active === "reprogramados") return "programados";
+  if (active === "nuevos_sin_guia") return "nuevos";
   return null;
 }
 
@@ -375,12 +389,12 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
           title="Flujo del día"
           total={flowTotal}
           unit="pedidos"
-          help="Cada pedido está en un solo paso: los siete suman el total. Del 1 al 5, el trabajo del equipo, de izquierda a derecha: lo que no tiene día está en No entregados y Sacar a reparto; con su día pasa a Programados. «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
+          help="Cada pedido está en un solo paso: los ocho suman el total. Del 1 al 6, el trabajo del equipo, de izquierda a derecha: lo que no tiene día está en No entregados y Sacar a reparto; lo que sale por primera vez, en Nuevos; lo ya salido con su día, en Programados. «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
         />
         <Strip
           label="Flujo del día"
           header={<SumBar counts={counts} total={flowTotal} active={step} />}
-          cols="grid-cols-2 sm:grid-cols-[repeat(5,minmax(0,1fr))_minmax(0,0.66fr)_minmax(0,0.66fr)]"
+          cols="grid-cols-2 sm:grid-cols-[repeat(6,minmax(0,1fr))_minmax(0,0.66fr)_minmax(0,0.66fr)]"
           footer={stepCard && (inside || stepStuck > 0 || stuckOn) ? (
             <>
               <span className="text-[13px] text-ink-600">
@@ -450,6 +464,17 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                   )}
                 </>
               )}
+              {/* La alerta de «Nuevos» (17-11-2026): sale hoy o mañana sin guía y la automática no la crea. */}
+              {stepCard.key === "nuevos" && (counts.sub.nuevos_sin_guia > 0 || active === "nuevos_sin_guia") && (
+                <AttentionPill
+                  icon={IconAlert}
+                  label={LIMA_SUB_FILTERS.nuevos_sin_guia.label}
+                  count={counts.sub.nuevos_sin_guia}
+                  active={active === "nuevos_sin_guia" && !stuckOn}
+                  hint={LIMA_SUB_FILTERS.nuevos_sin_guia.hint}
+                  onClick={() => onPick(active === "nuevos_sin_guia" && !stuckOn ? "nuevos" : "nuevos_sin_guia")}
+                />
+              )}
               {stuck && (stepStuck > 0 || stuckOn) && (
                 <AttentionPill
                   icon={IconAlert}
@@ -491,6 +516,8 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                     ? <span className="font-semibold text-warn-fg">{fmt(callsDue)} {callsDue === 1 ? "ya toca" : "ya tocan"}</span>
                     : flow.key === "programados"
                       ? programadosNote(INSIDE.programados?.note(counts) ?? null, sinGuiaAlarm) ?? flow.why
+                      : flow.key === "nuevos"
+                      ? programadosNote(INSIDE.nuevos?.note(counts) ?? null, counts.sub.nuevos_sin_guia) ?? flow.why
                       : INSIDE[flow.key]?.note(counts) ?? flow.why,
                   stuckIn(flow.key),
                 )}

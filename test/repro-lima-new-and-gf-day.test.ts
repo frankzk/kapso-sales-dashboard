@@ -36,27 +36,46 @@ describe("«Nuevo»", () => {
     expect(limaIsNew({ ...base, stage: "en_curso" })).toBe(false);
   });
   it("la fila lo dice junto a la etapa", () => {
-    expect(read("components/repro-lima-pending.tsx")).toContain("{limaIsNew(row) && <Badge tone=\"teal\"");
+    expect(read("components/repro-lima-pending.tsx")).toContain("{limaIsNew(row) && <Badge tone=\"fuchsia\"");
   });
 });
 
-describe("el filtro «Nuevo» de la barra (17-11-2026)", async () => {
-  const { readRowFilters, rowFiltersMatch, emptyRowFilters, writeRowFilters } = await import("@/lib/repro-lima-pending");
-  const nuevo = { stage: "preparacion", hasPriorDispatch: false, dispatchedAt: null, attempts: 0, createdAt: null, salesChannel: null, district: null, courier: null, courierDetail: null } as never;
-  const viejo = { stage: "en_curso", hasPriorDispatch: true, dispatchedAt: "2026-11-10T15:00:00Z", attempts: 1, createdAt: null, salesChannel: null, district: null, courier: null, courierDetail: null } as never;
-  it("Nuevos, No nuevos o todos", () => {
-    expect(rowFiltersMatch(nuevo, { ...emptyRowFilters(), novelty: new Set(["nuevo"]) })).toBe(true);
-    expect(rowFiltersMatch(viejo, { ...emptyRowFilters(), novelty: new Set(["nuevo"]) })).toBe(false);
-    expect(rowFiltersMatch(viejo, { ...emptyRowFilters(), novelty: new Set(["no_nuevo"]) })).toBe(true);
-    expect(rowFiltersMatch(viejo, emptyRowFilters())).toBe(true);
+describe("el paso «Nuevos» del Flujo del día (17-11-2026)", async () => {
+  const { classifyLimaRow, limaBoardCounts, limaBoardRows, agendaWindow, LIMA_STEPS } = await import("@/lib/repro-lima-blocks");
+  const TODAY = "2026-11-17";
+  const base = {
+    orderId: "n1", storeId: "s", storeName: "Kenku", orderName: "#KP1", customerName: "C", customerPhone: null, district: "Surco",
+    orderTotal: 100, createdAt: "2026-11-17T16:00:00Z", macroSince: "2026-11-17T16:00:00Z", stage: "por_despachar", substage: "listo_para_asignar",
+    courier: "gf_courier", dispatchedAt: null, attempts: 0, hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null,
+    salesChannel: null, address: null, reference: null, courierDetail: null, gf: null, scheduledOn: null, scheduledCourier: null, ops: null,
+    courierPickup: { courier: "gf_courier", date: "2026-11-18" },
+  } as never as Parameters<typeof classifyLimaRow>[0];
+  const win = agendaWindow(TODAY);
+  it("va entre Sacar a reparto y Programados", () => {
+    expect(LIMA_STEPS.indexOf("nuevos")).toBe(LIMA_STEPS.indexOf("por_sacar") + 1);
+    expect(LIMA_STEPS.indexOf("programados")).toBe(LIMA_STEPS.indexOf("nuevos") + 1);
   });
-  it("vive en la URL como «nuevo» y descarta valores extraños", () => {
-    expect([...readRowFilters(new URLSearchParams("nuevo=nuevo&nuevo=otro")).novelty]).toEqual(["nuevo"]);
-    const out = new URLSearchParams();
-    writeRowFilters(out, { ...emptyRowFilters(), novelty: new Set(["no_nuevo"]) });
-    expect(out.toString()).toBe("nuevo=no_nuevo");
+  it("lo nuevo con su guía de mañana está en Nuevos · Mañana, no en Programados", () => {
+    const cls = classifyLimaRow(base, undefined, TODAY, win);
+    expect(cls.step).toBe("nuevos");
+    const counts = limaBoardCounts([base], new Map([["n1", cls]]));
+    expect(counts.step.nuevos).toBe(1);
+    expect(counts.step.programados).toBe(0);
+    expect(counts.sub.nuevos_manana).toBe(1);
+    expect(limaBoardRows([base], new Map([["n1", cls]]), "nuevos_manana").map((r) => r.orderId)).toEqual(["n1"]);
   });
-  it("la barra lo ofrece", () => {
-    expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Nuevo" allLabel="Todos"');
+  it("lo nuevo sin guía ni día está en Nuevos · Sin día", () => {
+    const row = { ...base, courier: null, courierPickup: null, stage: "preparacion", substage: "por_generar_rotulo" } as typeof base;
+    const cls = classifyLimaRow(row, undefined, TODAY, win);
+    expect(cls.step).toBe("nuevos");
+    expect(limaBoardCounts([row], new Map([["n1", cls]])).sub.nuevos_sin_dia).toBe(1);
+  });
+  it("lo que ya salió alguna vez no es nuevo: sigue en su paso", () => {
+    const row = { ...base, hasPriorDispatch: true } as typeof base;
+    expect(classifyLimaRow(row, undefined, TODAY, win).step).not.toBe("nuevos");
+  });
+  it("la barra ya no tiene el filtro «Nuevo»; la fila conserva la etiqueta", () => {
+    expect(read("components/repro-lima-board.tsx")).not.toContain('label="Nuevo"');
+    expect(read("components/repro-lima-pending.tsx")).toContain("{limaIsNew(row) && <Badge tone=\"fuchsia\"");
   });
 });

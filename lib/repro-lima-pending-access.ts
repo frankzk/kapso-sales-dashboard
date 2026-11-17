@@ -1,7 +1,8 @@
 import type { createAdminSupabase } from "@/lib/db";
 import type { ReproScope } from "@/lib/repro-lima-access";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
-import { isLimaPendingStage, LIMA_PENDING_STAGES, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { buildRiderSuggestions, RIDER_SHARE_DAYS, type RiderShareRow } from "@/lib/lima-rider-suggest";
+import { districtKey, isLimaPendingStage, LIMA_PENDING_STAGES, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { isCurrentBoxDay } from "@/lib/dispatch-plan";
 import { outputsBlockingRetry } from "@/lib/gf-retry";
 import { gfDistrictBlock } from "@/lib/gf-district-check";
@@ -310,6 +311,13 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
  * Sin día pedido, no entra. Lotes de 500, como las demás lecturas; sin guías
  * GF, no pregunta.
  */
+/** Quién lleva cada distrito de Lima en los últimos 30 días (0353), con la regla de `lib/lima-rider-suggest.ts`. */
+async function loadRiderSuggestions(admin: Admin): Promise<Map<string, string[]>> {
+  const { data, error } = await admin.rpc("lima_rider_district_share", { p_days: RIDER_SHARE_DAYS });
+  if (error) throw new Error(error.message);
+  return buildRiderSuggestions((data ?? []) as RiderShareRow[]);
+}
+
 /** El día de una guía de GF Courier que no salió: el pedido a GF o, sin él, la fecha estimada que GF devolvió. Pura. */
 export function gfGuideDay(scheduled: string | null | undefined, estimated: string | null | undefined): string {
   const asked = (scheduled ?? "").slice(0, 10);
@@ -367,9 +375,11 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   const scheduled = new Map(programs.filter((p) => orderStore.get(p.order_id) === p.store_id).map((p) => [p.order_id, p.scheduled_for]));
   const departures = new Map<string, string>();
   const safeIds = [...orderStore.keys()];
-  const [{ gf: gfFacts, ops: stuckFacts }, courierDetails] = await Promise.all([
+  const [{ gf: gfFacts, ops: stuckFacts }, courierDetails, riderSuggestions] = await Promise.all([
     loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day),
     loadCourierDetails(admin, safe),
+    // Best-effort (17-11-2026): sin la lectura, la fila no sugiere motorizado.
+    loadRiderSuggestions(admin).catch(() => new Map<string, string[]>()),
   ]);
   // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
   // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
@@ -435,6 +445,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       courierPickup: pickups.has(row.order_id)
         ? { courier: "aliclik", date: pickups.get(row.order_id)! }
         : gfPickups.has(row.order_id) ? { courier: "gf_courier", date: gfPickups.get(row.order_id)! } : null,
+      suggestedRiders: riderSuggestions.get(districtKey(row.district)) ?? null,
     };
   });
 }

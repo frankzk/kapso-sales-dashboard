@@ -66,10 +66,13 @@ const TODAY = "2026-11-15";
 const WINDOW = agendaWindow(TODAY);
 
 const ops = (over: Partial<LimaPendingOps> = {}): LimaPendingOps => ({ liveCouriers: [], reportedStatus: null, courierDelivered: null, lastGfBox: null, ...over });
+// `attempts: 1` por defecto (17-11-2026): estas pruebas son de los pasos de lo que
+// NO es nuevo; lo que sale por primera vez va al paso «Nuevos»
+// (test/repro-lima-new-and-gf-day.test.ts), y aquí se pide con `attempts: 0`.
 const row = (over: Partial<LimaPendingOrder> = {}): LimaPendingOrder => ({
   orderId: "o1", storeId: "a", storeName: "Aurela", orderName: "#AUR1", customerName: "Ana", customerPhone: "51987654321",
   district: "Surco", orderTotal: 149, createdAt: "2026-11-14T15:00:00Z", macroSince: "2026-11-14T15:00:00Z",
-  stage: "preparacion", substage: "por_generar_rotulo", courier: null, dispatchedAt: null, attempts: 0,
+  stage: "preparacion", substage: "por_generar_rotulo", courier: null, dispatchedAt: null, attempts: 1,
   hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, salesChannel: null, address: "Av. Benavides 123", reference: null,
   courierPickup: null, gf: null, scheduledOn: null, ops: null, ...over,
 });
@@ -230,7 +233,7 @@ describe("los siete pasos suman el total (owner, 15-11-2026: «estos 5 no suman 
     const counts = limaBoardCounts(rows, classes);
     // g (retornando) es un no entregado: el courier lo está devolviendo.
     // b tiene día (el 17): es un Programado; en Sacar a reparto queda lo que no tiene día (a, h).
-    expect(counts.step).toEqual({ novedad: 1, llamar_despues: 0, no_entregados: 2, por_sacar: 2, programados: 1, con_courier: 2, por_cerrar: 0 });
+    expect(counts.step).toEqual({ novedad: 1, llamar_despues: 0, no_entregados: 2, por_sacar: 2, nuevos: 0, programados: 1, con_courier: 2, por_cerrar: 0 });
     expect(Object.values(counts.step).reduce((a, b) => a + b, 0)).toBe(counts.todos);
     for (const step of LIMA_STEP_CARDS.map((c) => c.key)) {
       expect(limaBoardRows(rows, classes, step).length, step).toBe(counts.step[step]);
@@ -254,7 +257,8 @@ describe("los siete pasos suman el total (owner, 15-11-2026: «estos 5 no suman 
     expect(limaBoardRows(rows, classes, "todos").map((r) => r.orderId)).toEqual(["f", "e", "g", "a", "h", "b", "c", "d"]);
   });
   it("«Por cerrar» y «Con el courier» van plegados al final, pero cuentan: sin ellos la suma no cierra (owner, 15-11-2026)", () => {
-    expect(LIMA_STEP_CARDS.map((c) => c.label)).toEqual(["Novedad del courier", "Llamar después", "No entregados", "Sacar a reparto", "Programados", "Con el courier", "Por cerrar"]);
+    // «Nuevos» entre Sacar a reparto y Programados (owner, 17-11-2026).
+    expect(LIMA_STEP_CARDS.map((c) => c.label)).toEqual(["Novedad del courier", "Llamar después", "No entregados", "Sacar a reparto", "Nuevos", "Programados", "Con el courier", "Por cerrar"]);
     expect([...LIMA_FOLDED_STEPS]).toEqual(["con_courier", "por_cerrar"]);
     expect(limaStepOf("por_cerrar", "en_ruta")).toBe("por_cerrar");
     expect(limaStepOf("por_cerrar", null)).toBe("por_cerrar");
@@ -595,11 +599,11 @@ describe("las piezas en pantalla", () => {
     // Owner, 15-11-2026: «falta ordenar un flujo de trabajo»; de lo que está en la calle a lo que solo falta cerrar.
     // Tercera vuelta: «Sacar a reparto» en vez de «Confirmar primer despacho», y lo que solo se mira, plegado al final.
     // «Programados» es su propio paso (owner, 16-11-2026: «un programado es un programado»), sin bloque aparte.
-    expect(LIMA_FLOW.map((step) => step.key)).toEqual(["novedad", "llamar_despues", "no_entregados", "por_sacar", "programados", "con_courier", "por_cerrar"]);
+    expect(LIMA_FLOW.map((step) => step.key)).toEqual(["novedad", "llamar_despues", "no_entregados", "por_sacar", "nuevos", "programados", "con_courier", "por_cerrar"]);
     const rows = [row(), failed({ orderId: "e" }), row({ orderId: "h", programmedFor: TODAY })];
     const counts = limaBoardCounts(rows, classifyLimaRows(rows, [], TODAY));
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "no_entregados", onPick: () => {} }));
-    for (const text of ["Flujo del día", "los siete suman el total", "Programados", "Sacar a reparto", "Con el courier", "Por cerrar"]) expect(html, text).toContain(text);
+    for (const text of ["Flujo del día", "los ocho suman el total", "Programados", "Sacar a reparto", "Con el courier", "Por cerrar"]) expect(html, text).toContain(text);
     for (const text of ["En manos del courier", "Confirmar primer despacho", "Mar 17", "Sin fecha", "repro-agenda"]) expect(html, text).not.toContain(text);
     // La celda de Programados: sus días y lo de mañana sin guía, como alerta.
     expect(html).toContain("1 mañana · ");
@@ -624,8 +628,8 @@ describe("las piezas en pantalla", () => {
     expect(late).toContain("Hoy sin guía");
     // La barra de reparto cierra con el total: los tramos en el orden de las celdas.
     expect(html).toContain(`= <b class="font-semibold text-ink-900">${counts.todos}</b> pedidos`);
-    // Los plegados no llevan número de paso: solo los cinco del trabajo.
-    expect(html.match(/size-5 shrink-0 place-items-center rounded-full/g)).toHaveLength(5);
+    // Los plegados no llevan número de paso: solo los seis del trabajo («Nuevos», 17-11-2026).
+    expect(html.match(/size-5 shrink-0 place-items-center rounded-full/g)).toHaveLength(6);
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*No entregados/);
     // «Reintentos Aliclik» vive DENTRO de «No entregados»: su filtro sale en el pie con el nombre del paso, no suelto.
     expect(html).toContain("Dentro de <b");
@@ -666,7 +670,7 @@ describe("las piezas en pantalla", () => {
     const { ReproLimaBlocks } = await import("@/components/repro-lima-blocks");
     const rows = [row(), failed({ orderId: "e" })];
     const counts = limaBoardCounts(rows, classifyLimaRows(rows, [], TODAY));
-    const byStep = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 3, programados: 0, con_courier: 0, por_cerrar: 0 };
+    const byStep = { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 3, nuevos: 0, programados: 0, con_courier: 0, por_cerrar: 0 };
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "por_sacar", onPick: () => {}, stuck: { byStep, active: false, onPick: () => {} } }));
     expect(html).toContain("3 trabados");
     expect(html).toMatch(/Dentro de <b[^>]*>Sacar a reparto<\/b>/);
