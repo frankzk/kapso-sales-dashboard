@@ -1,3 +1,4 @@
+import { masterFilterDay } from "@/lib/order-master-filters";
 import { describe, expect, it } from "vitest";
 import { buildMasterQuery, hasQueryFilters, masterQueueHref, parseMasterQuery } from "@/lib/master-query";
 import { MASTER_PATH } from "@/lib/order-drawer-href";
@@ -159,5 +160,13 @@ describe("masterQueueHref", () => {
     expect(params.has("st")).toBe(false);
     expect(params.get("view")).toBe("por_despachar");
     expect(split(masterQueueHref({ view: "por_despachar" })).has("substage")).toBe(false);
+  });
+});
+
+describe("los filtros de fecha del Master cuentan el día en Lima (17-11-2026)", () => {
+  it("un pedido de las 20:00 de Lima es de ese día, no del siguiente en UTC", () => {
+    expect(masterFilterDay("2026-11-18T01:00:00Z")).toBe("2026-11-17");
+    expect(masterFilterDay("2026-11-17T15:30:00+00:00")).toBe("2026-11-17");
+    expect(masterFilterDay("2026-11-17")).toBe("2026-11-17");
   });
 });

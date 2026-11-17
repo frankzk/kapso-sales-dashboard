@@ -343,10 +343,19 @@ function inSet(set: Set<string>, value: string | null | undefined): boolean {
 }
 
 /** Rango de fechas sobre un timestamp ISO, comparando por día calendario. */
+/**
+ * El día en Lima (owner, 17-11-2026): un pedido creado a las 20:00 de Lima es el
+ * día siguiente en UTC y caía fuera de «Creación: hoy». Una fecha sola
+ * (`YYYY-MM-DD`) ya es un día y se deja igual. Pura.
+ */
+export function masterFilterDay(iso: string): string {
+  return iso.length <= 10 ? iso : limaDayKey(iso) || iso.slice(0, 10);
+}
+
 function inDateRange(iso: string | null | undefined, from: string, to: string): boolean {
   if (!from && !to) return true;
   if (!iso) return false;
-  const day = iso.slice(0, 10);
+  const day = masterFilterDay(iso);
   if (from && day < from) return false;
   if (to && day > to) return false;
   return true;

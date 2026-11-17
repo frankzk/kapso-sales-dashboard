@@ -11814,6 +11814,12 @@ pendiente, lo demás. Los retornos de Swayp no traen costo registrado, así que 
 costo por entrega queda «pendiente» hasta tenerlo, en vez de mostrarse más bajo
 de lo que es.
 
+**Los filtros de fecha del Master cuentan el día en Lima (17-11-2026).** Creación,
+despacho, último movimiento y entrega comparaban el día en UTC: un pedido creado
+después de las 19:00 de Lima caía en el día siguiente y no salía en «Creación:
+hoy». Ahora el día es el de Lima (`masterFilterDay`, `lib/order-master-filters.ts`),
+como ya lo hacía el filtro de creación de Repro Lima.
+
 ### 11.10 Filtro «Swayp» en el Master (08-10-2026)
 
 El Master tiene el mismo filtro «Swayp» que Repro Provincia, con las mismas tres

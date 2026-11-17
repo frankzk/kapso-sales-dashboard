@@ -148,7 +148,9 @@ describe("matchesFilters — fechas", () => {
   it("acota por fecha de creación, extremos inclusive", () => {
     const f = withFilter({ createdFrom: "2026-07-01", createdTo: "2026-07-01" });
     expect(matchesFilters(row("1"), f, NOW)).toBe(true);
-    expect(matchesFilters(row("2", { order_created_at: "2026-07-02T00:00:00.000Z" }), f, NOW)).toBe(false);
+    // El día es el de Lima (17-11-2026): las 00:00 UTC del 2 son las 19:00 del 1 en Lima.
+    expect(matchesFilters(row("2", { order_created_at: "2026-07-02T00:00:00.000Z" }), f, NOW)).toBe(true);
+    expect(matchesFilters(row("3", { order_created_at: "2026-07-02T05:00:00.000Z" }), f, NOW)).toBe(false);
   });
 
   it("acota por fecha de despacho, de entrega y de último movimiento", () => {
