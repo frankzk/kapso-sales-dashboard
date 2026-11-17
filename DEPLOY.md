@@ -85,6 +85,14 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 17-11-2026 · Productividad: «Asistidas» de cada asesora (sin migración, MOM §17.6, DESIGN.md)
+
+Sin migración ni variables. Productividad muestra, bajo «Cerrados», las asistidas de cada asesora: ventas que generó
+otra con una clienta con la que ella habló (llamada contestada) en las 72 h antes, desde el 01-11-2026. Cerrados e
+Ingresos no cambian. Se corrige el título de la columna «Cerrados», que todavía decía «último toque».
+
+Verificar: en Productividad, mes de noviembre, Antu muestra «3 asistidas» y al pasar el cursor sale #AUR900998.
+
 ### 16-11-2026 · Leads: el distrito del pedido se elige de la lista oficial del INEI (sin migración, MOM §37.10, DESIGN.md)
 
 Sin migración ni variables. En «Generar pedido (contraentrega)» de Leads (y en la venta por teléfono, que abre el
