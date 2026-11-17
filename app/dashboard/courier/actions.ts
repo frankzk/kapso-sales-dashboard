@@ -1315,6 +1315,9 @@ export interface TakeCourierOrdersResult extends CourierActionResult {
 }
 
 const MAX_TAKE_ORDERS = 50;
+/** Grupo GF ya no sale con salidas nuevas (owner, 17-11-2026): las que existen siguen su curso. */
+const GRUPO_GF_NEW_OUTPUTS_CLOSED = true;
+const GRUPO_GF_CLOSED_MESSAGE = "Grupo GF ya no sale con salidas nuevas: usa GF Courier (crea la guía desde el Master).";
 
 /**
  * Admite pedidos desde la bandeja del operador. Reservar primero la solicitud
@@ -2020,6 +2023,8 @@ export async function replaceOwnOutputs(
   const auth = await requireOperator(orgId);
   if ("error" in auth) return { ...auth, ...empty };
   if (!auth.canManageDispatch) return { error: "No tienes permiso para organizar rutas.", ...empty };
+  // Grupo GF ya no sale con salidas nuevas (owner, 17-11-2026): lo reemplaza GF Courier por API (MOM §29.17).
+  if (GRUPO_GF_NEW_OUTPUTS_CLOSED) return { error: GRUPO_GF_CLOSED_MESSAGE, ...empty };
   const ids = [...new Set(shipmentIds.filter(Boolean))];
   if (!ids.length) return { error: "Marca al menos un paquete.", ...empty };
   if (ids.length > MAX_TAKE_ORDERS) return { error: `Puedes sacar hasta ${MAX_TAKE_ORDERS} pedidos por tanda.`, ...empty };
