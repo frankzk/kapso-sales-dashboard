@@ -9031,6 +9031,24 @@ la respuesta del cliente. Y le debe avisar a quien lo agendó en un popup».
   `scripts/sql/lead_appointment_release_smoke.sql` y
   `scripts/sql/lead_manual_take_smoke.sql`.
 
+**La cola de Leads se revisa cada 60 s (15-11-2026, decisión del owner).** Cada
+pantalla de Leads abierta y visible pregunta por la firma de la cola
+(`pollLeadsQueue`), y cada pregunta es la cola entera de `lead_routing_scope`:
+~0,28 s de base por asesora, y en conjunto la consulta que más tiempo de base
+gasta (24,5 % del total medido el 15-11-2026, 13 h). Antes se preguntaba cada
+30 s; desde ahora cada **60 s** (`LEADS_LIVE_POLL_MS`, components/leads.tsx),
+la mitad de veces.
+- Lo que hace la propia asesora se ve al momento; lo que cambian las demás
+  (un lead nuevo, uno tomado, un Yape por verificar) aparece en hasta un
+  minuto en vez de 30 s. Al volver a la pestaña se pregunta en el acto, y la
+  pestaña oculta no pregunta.
+- No cambia cuándo se recarga de verdad (`lib/leads-live-refresh.ts`: urgente
+  si cambian «Atender ahora» o los Yapes, tranquila cada 2 minutos, forzada
+  cada 5), ni el reparto, ni las alertas de Yape (cada 15 s), ni la reserva.
+- Se descartó calcular el reparto una sola vez para todas las asesoras: ahorra
+  lo mismo (la mitad del reparto) con un cambio grande en `lead_routing_scope`
+  y el mismo atraso. Prueba: `test/leads-live-poll.test.ts`.
+
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
 trabajan ahí, así que los reintentos que merecen una nueva llamada regresan a
@@ -20414,6 +20432,30 @@ Courier:
   decide el día y el courier.
 - **La Agenda de Repro Lima** lee el `scheduled_date` de la guía GF sin salir como el día del courier, también cuando el
   caso ya se cerró.
+
+#### Simular GF Courier: qué impide crear la guía (owner, 16-11-2026)
+
+Pedido del owner: simular en GF los pedidos de Lima de los últimos 90 días, **sin crear guías**, para encontrar qué
+impide crear la guía. GF publicó `POST /v1/orders/validate`: el mismo cuerpo, la misma clave y las mismas reglas que
+`POST /v1/orders`, sin crear nada, sin reservar stock y sin `Idempotency-Key`. Responde `200 {valid:true,
+would_create, destination:{ubigeo, district, taken_from_address}}` o el mismo error que daría al crear.
+- **Dónde.** Pedidos › «Simular GF Courier» (`/dashboard/pedidos/gf-simulacion`; enlace en Ajustes → GF Courier).
+  **Solo el owner** de la organización, con las tiendas que tienen token de GF; el token se descifra en el servidor y
+  no sale de él.
+- **Qué pedidos.** De cada tienda, los de **Lima y Callao** (región del pedido) creados en los últimos 90 días, **sin
+  anular**, en **contraentrega o manuales**: modo `cod`, o pasarela `cod` o `manual` (decisión del owner). Cada uno con
+  la clave de su tienda.
+- **El cuerpo.** El mismo de `createGfGuideFor`: las mismas lecturas, `buildGfOrderInput` y el mismo día programado
+  (`lib/gf-courier-simulate-server.ts`; `test/gf-courier-simulation.test.ts` vigila que no se separen). Dos cambios:
+  si el pedido ya tuvo guía en GF, el `external_id` lleva **«-SIM»** (para que GF no responda `DUPLICATE_ORDER`), y un
+  `scheduled_date` **pasado no se manda** (GF elige el próximo día de reparto). Lo que Kapta no llega a armar (falta
+  el nombre, el teléfono, un SKU…) se cuenta como error «Kapta no arma el cuerpo», con el motivo.
+- **Ritmo.** 4 llamadas por segundo como máximo (GF permite 300 por minuto por clave), en pasadas de 120 pedidos.
+- **El resumen** (en la pantalla, con «Copiar resumen»): revisados, válidos y con error; por tienda; errores agrupados
+  por `code` y `field`, con la cantidad y 3 ejemplos (pedido, mensaje y valor enviado en ese campo); y cuántos válidos
+  tuvieron `destination.taken_from_address = true`.
+- **Nada se guarda.** Ni guías, ni intenciones (`gf_order_requests`), ni hechos, ni el resultado: vive solo en la
+  pantalla del owner y se pierde al cerrarla. «Detener» termina después de la pasada en curso.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 
