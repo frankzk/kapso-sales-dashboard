@@ -89,6 +89,9 @@ export const gfCourier = {
   findByExternalId: (o: GfClientOpts, externalId: string) => call<GfOrder>(o, "GET", `/v1/orders?external_id=${encodeURIComponent(externalId)}`),
   cancelOrder: (o: GfClientOpts, tracking: string, reason: string, idempotencyKey: string, note?: string) =>
     call<{ tracking_id: string; status: { code: "CANCELLED" }; cancel_cost: number }>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/cancel`, { reason, ...(note ? { note } : {}) }, idempotencyKey),
+  /** Cambiar la fecha antes de que salga (owner, 17-11-2026): misma guía y caja armada; GF lo rechaza si ya tiene motorizado. */
+  changeDeliveryDate: (o: GfClientOpts, tracking: string, newDate: string, reason: string, idempotencyKey: string) =>
+    call<GfOrder>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/delivery-date`, { new_date: newDate, reason: reason.slice(0, 200) }, idempotencyKey),
   products: (o: GfClientOpts, after?: string) => call<{ data: { sku: string; merchant_sku: string; name: string; mode: string; sales_status?: string; variant_id: string }[]; next_cursor: string | null }>(
     o, "GET", `/v1/products?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`),
   productsBatch: (o: GfClientOpts, items: { sku: string; name: string; sales_status: "IN_STOCK" | "OUT_OF_STOCK" }[], idempotencyKey: string) =>

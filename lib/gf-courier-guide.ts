@@ -163,6 +163,34 @@ export type GfCancelResult = { ok: true; trackingId: string; cancelCost: number 
  * (owner, 15-11-2026). GF decide si todavía se puede: sin costo antes de preparar; después responde con el estado o
  * con el costo de anular. Lo que GF responda se devuelve tal cual.
  */
+export type GfDateResult = { ok: true; trackingId: string; newDate: string } | { ok: false; error: string; code?: string };
+
+/**
+ * Cambia el día de una guía GF viva que todavía no tiene motorizado (owner, 17-11-2026): la caja sigue armada con la
+ * misma guía, sin anular ni volver a crear. GF responde ASSIGNED_TO_RIDER si ya está asignada.
+ */
+export async function changeGfGuideDateFor(
+  orderId: string,
+  trackingId: string,
+  ctx: { userId: string | null; day: string; reason: string },
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<GfDateResult> {
+  const { data: row } = await admin.from("order_master").select("store_id").eq("order_id", orderId).maybeSingle();
+  const storeId = (row as { store_id?: string } | null)?.store_id;
+  if (!storeId) return { ok: false, error: "No se pudo leer el pedido." };
+  const store = await loadGfStore(admin, storeId);
+  if (!store?.token) return { ok: false, error: "La tienda no tiene token de GF Courier." };
+  const res = await gfCourier.changeDeliveryDate({ apiToken: store.token }, trackingId, ctx.day, ctx.reason,
+    gfIdempotencyKey(orderId, `date-${trackingId}-${ctx.day}`));
+  if (!res.ok) return { ok: false, error: res.error.message, code: res.error.code };
+  await applyGfSnapshot(res.data, admin);
+  await admin.from("order_events").insert({ store_id: storeId, order_id: orderId, kind: "courier_status", occurred_at: new Date().toISOString(),
+    actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId, reason: ctx.reason,
+    note: `Fecha de la guía ${trackingId} cambiada al ${ctx.day} en GF Courier, con la misma guía y la caja armada.`,
+    payload: { new_date: ctx.day, label_kept: true } });
+  return { ok: true, trackingId, newDate: ctx.day };
+}
+
 export async function cancelGfGuideFor(
   orderId: string,
   trackingId: string,

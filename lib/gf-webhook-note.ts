@@ -15,10 +15,17 @@ const ddmm = (iso: unknown): string | null =>
 
 export function gfWebhookNote(envelope: GfWebhookLike): string | null {
   const data = envelope.data ?? {};
+  // Etapa en GF (owner, 17-11-2026): al asignarse a un motorizado queda la línea «asignado a Alexis».
+  const stage = data.stage && typeof data.stage === "object" ? data.stage as Record<string, unknown> : null;
+  if (envelope.type === "order.status_changed" && stage?.code === "AWAITING_OFFICE_CHECK" && typeof stage.rider_name === "string") {
+    const day = ddmm(stage.route_date);
+    return `GF Courier: asignado a ${stage.rider_name}${day ? ` para la ruta del ${day}` : ""}.`;
+  }
   const reason = typeof data.reason === "string" ? data.reason.trim() : "";
   if (!reason) return null;
   if (envelope.type === "order.delivery_date_changed") {
     const date = ddmm(data.new_date);
+    if (data.changed_by) return `GF Courier: fecha de entrega cambiada${date ? ` al ${date}` : ""} (${reason}), con la misma guía.`;
     return `GF Courier: ${reason}.${date ? ` Vuelve a salir el ${date}, con la misma guía.` : ""}`;
   }
   if (envelope.type === "order.status_changed") return `GF Courier: ${reason}.`;
