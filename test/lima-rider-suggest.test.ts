@@ -103,3 +103,12 @@ describe("el motorizado asignado por GF Courier (owner, 17-11-2026)", () => {
     expect(ui).toContain("{!assigned && suggested && (");
   });
 });
+
+describe("las cifras de las píldoras cuentan la lista abierta (owner, 17-11-2026)", () => {
+  it("en Nuevos (125) el filtro cuenta solo esos 125, no los 1,376", () => {
+    const board = read("components/repro-lima-board.tsx");
+    expect(board).toContain('if (!stuck) return key === "todos" ? rows : limaBoardRows(rows, classes, key);');
+    expect(board).toContain("inList(activeRowFilters ? visibleAll.filter(");
+    expect(board).toContain("classifyLimaRows(visibleAll, data.rows");
+  });
+});

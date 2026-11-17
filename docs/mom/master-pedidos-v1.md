@@ -7299,7 +7299,10 @@ menos de 5 paradas o muy repartido, nada. Es una sugerencia: asigna GF. El
 servidor decide cuándo se muestra (`shownRiderSuggestion`), y la barra tiene el
 filtro **«Sugerido»** (owner, 17-11-2026: «ármale un filtro de Sugeridos»): cada
 motorizado con su cifra y «Sin sugerencia» (`sugerido=` en la URL); «Yordani o
-Alexis» entra con cualquiera de los dos.
+Alexis» entra con cualquiera de los dos. Las cifras de Canal, Distrito, Courier
+y Sugerido cuentan la lista abierta (el paso y su parte, o los trabados), con los
+demás filtros puestos: en Nuevos (125) «Sin sugerencia» y los motorizados cuentan
+esos 125, no los 1,376 del panel.
 
 **El motorizado asignado (17-11-2026).** Cuando GF Courier ya asignó la guía
 viva, su aviso deja en el historial «GF Courier: asignado a Alexis para la ruta

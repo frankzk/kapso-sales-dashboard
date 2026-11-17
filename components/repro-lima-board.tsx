@@ -141,23 +141,33 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const rowFilters = useMemo(() => readRowFilters(new URLSearchParams(rowFiltersKey)), [rowFiltersKey]);
   const activeRowFilters = rowFiltersActive(rowFilters);
   const narrowed = useMemo(() => activeRowFilters ? pendingStore.filter((row) => rowFiltersMatch(row, rowFilters)) : pendingStore, [pendingStore, rowFilters, activeRowFilters]);
-  // Cada píldora cuenta con las DEMÁS puestas: con «Antes de ayer o más», Canal
-  // dice cuántos de esos son de cada canal.
-  const filterOptions = useMemo(() => {
-    const without = (field: "channels" | "districts" | "couriers" | "suggested") => rowFilterOptions(
-      activeRowFilters ? pendingStore.filter((row) => rowFiltersMatch(row, { ...rowFilters, [field]: new Set<string>() })) : pendingStore,
-    )[field];
-    return { channels: without("channels"), districts: without("districts"), couriers: without("couriers"), suggested: without("suggested") };
-  }, [pendingStore, rowFilters, activeRowFilters]);
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
   // El paso, el día y el courier: una clasificación por pedido, para las cifras y la lista.
+  // Se clasifica cada pedido visible SIN los filtros de fila (la clase de un pedido no depende de los demás):
+  // así las píldoras pueden contar dentro de la lista abierta.
   const agendaDays = useMemo(() => agendaWindow(today), [today]);
   const autoGuideKey = autoGuideStores.join(",");
   const autoGuide = useMemo(() => new Set(autoGuideKey ? autoGuideKey.split(",") : []), [autoGuideKey]);
+  const visibleAll = useMemo(() => pendingStore.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [pendingStore, hidden, query]);
   const classes = useMemo(
-    () => classifyLimaRows(scoped, data.rows, today, agendaDays, { autoGuideStores: autoGuide, courierAutoStores: courierAuto }),
-    [scoped, data.rows, today, agendaDays, autoGuide, courierAuto],
+    () => classifyLimaRows(visibleAll, data.rows, today, agendaDays, { autoGuideStores: autoGuide, courierAutoStores: courierAuto }),
+    [visibleAll, data.rows, today, agendaDays, autoGuide, courierAuto],
   );
+  // Cada píldora cuenta con las DEMÁS puestas, y solo lo de la lista abierta (owner, 17-11-2026: en Nuevos
+  // «este conteo debería sumar 125»): con «Antes de ayer o más», Canal dice cuántos de esos son de cada canal.
+  const filterOptions = useMemo(() => {
+    const inList = (rows: LimaPendingOrder[]): LimaPendingOrder[] => {
+      if (!stuck) return key === "todos" ? rows : limaBoardRows(rows, classes, key);
+      const ids = new Set(limaStuckItems(rows, today)
+        .filter((item) => TEAM_HOMES.includes(limaStuckRule(item.reason).home) && (stuck === "todos" || item.reason === stuck) && (key === "todos" || classes.get(item.orderId)?.step === key))
+        .map((item) => item.orderId));
+      return rows.filter((row) => ids.has(row.orderId));
+    };
+    const without = (field: "channels" | "districts" | "couriers" | "suggested") => rowFilterOptions(
+      inList(activeRowFilters ? visibleAll.filter((row) => rowFiltersMatch(row, { ...rowFilters, [field]: new Set<string>() })) : visibleAll),
+    )[field];
+    return { channels: without("channels"), districts: without("districts"), couriers: without("couriers"), suggested: without("suggested") };
+  }, [visibleAll, rowFilters, activeRowFilters, stuck, key, classes, today]);
   const counts = useMemo(() => limaBoardCounts(scoped, classes), [scoped, classes]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
   // `loadReproLima` ya ordena los casos (`sortRepro`): No entregados y Llamar después siguen ese orden.
