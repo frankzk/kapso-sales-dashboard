@@ -703,4 +703,6 @@
 \ir migrations/0350_gf_replaced_by_aliclik_any_coverage.sql
 \echo 'Applying 0351_lead_appointment_return_hold.sql'
 \ir migrations/0351_lead_appointment_return_hold.sql
+\echo 'Applying 0352_repro_box_con_courier.sql'
+\ir migrations/0352_repro_box_con_courier.sql
 \echo 'Done.'
