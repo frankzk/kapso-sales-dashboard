@@ -13,7 +13,8 @@
 //   Alexis», el de más paradas primero.
 // - Si no, nada: el distrito está repartido entre muchos.
 
-import { districtKey } from "@/lib/repro-lima-pending";
+import { districtKey, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { liveGuideCourier } from "@/lib/repro-lima-blocks";
 
 export const MIN_DELIVERIES = 5;
 export const ONE_RIDER_SHARE = 0.7;
@@ -54,6 +55,19 @@ export function buildRiderSuggestions(rows: readonly RiderShareRow[]): Map<strin
     else if (second && (top![1] + second[1]) / total >= TWO_RIDER_SHARE) out.set(key, [top![0], second[0]]);
   }
   return out;
+}
+
+/**
+ * La sugerencia que se MUESTRA: con guía viva de GF Courier que todavía no tiene
+ * motorizado. Lo demás no lleva sugerencia (null). La fila y el filtro
+ * «Sugerido» leen esto mismo (`LimaPendingOrder.suggestedRiders`). Pura.
+ */
+export function shownRiderSuggestion(
+  row: Pick<LimaPendingOrder, "ops" | "courierPickup">,
+  riders: readonly string[] | null | undefined,
+): string[] | null {
+  if (!riders?.length) return null;
+  return liveGuideCourier(row) === "gf_courier" && gfAwaitingRider(row.ops?.reportedStatus) ? [...riders] : null;
 }
 
 /** «Roy» o «Yordani o Alexis». */

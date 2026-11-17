@@ -144,10 +144,10 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   // Cada píldora cuenta con las DEMÁS puestas: con «Antes de ayer o más», Canal
   // dice cuántos de esos son de cada canal.
   const filterOptions = useMemo(() => {
-    const without = (field: "channels" | "districts" | "couriers") => rowFilterOptions(
+    const without = (field: "channels" | "districts" | "couriers" | "suggested") => rowFilterOptions(
       activeRowFilters ? pendingStore.filter((row) => rowFiltersMatch(row, { ...rowFilters, [field]: new Set<string>() })) : pendingStore,
     )[field];
-    return { channels: without("channels"), districts: without("districts"), couriers: without("couriers") };
+    return { channels: without("channels"), districts: without("districts"), couriers: without("couriers"), suggested: without("suggested") };
   }, [pendingStore, rowFilters, activeRowFilters]);
   const scoped = useMemo(() => narrowed.filter((row) => !hidden.has(pendingKey(row)) && pendingMatches(row, query)), [narrowed, hidden, query]);
   // El paso, el día y el courier: una clasificación por pedido, para las cifras y la lista.
@@ -627,6 +627,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           <FacetPill label="Canal" allLabel="Todos los canales" options={filterOptions.channels} selected={rowFilters.channels as Set<string>} onChange={(channels) => patchRowFilters({ channels })} />
           <FacetPill label="Distrito" allLabel="Todos los distritos" options={filterOptions.districts} selected={rowFilters.districts as Set<string>} onChange={(districts) => patchRowFilters({ districts })} />
           <FacetPill label="Courier" allLabel="Todos los couriers" options={filterOptions.couriers} selected={rowFilters.couriers as Set<string>} onChange={(couriers) => patchRowFilters({ couriers })} />
+          {/* El motorizado sugerido por distrito (owner, 17-11-2026: «ármale un filtro de Sugeridos»). */}
+          <FacetPill label="Sugerido" allLabel="Todos" options={filterOptions.suggested} selected={rowFilters.suggested as Set<string>} onChange={(suggested) => patchRowFilters({ suggested })} />
           {activeRowFilters > 0 && (
             <OpsButton variant="ghost" size="sm" onClick={() => patchRowFilters(emptyRowFilters())} className="pointer-coarse:h-11">Quitar filtros</OpsButton>
           )}

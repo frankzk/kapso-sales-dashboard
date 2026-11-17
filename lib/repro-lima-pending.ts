@@ -100,7 +100,10 @@ export interface LimaPendingOrder {
    * Lima o el de «Programar envío». Sin guía esperando, null.
    */
   courierPickup?: { courier: "aliclik" | "gf_courier"; date: string } | null;
-  /** Quién lleva su distrito según el reparto de 30 días (`lib/lima-rider-suggest.ts`): uno, dos o null. */
+  /**
+   * Quién lleva su distrito según el reparto de 30 días (`lib/lima-rider-suggest.ts`): uno, dos o null. Solo
+   * con guía de GF Courier sin motorizado (`shownRiderSuggestion`): lo que se muestra y filtra «Sugerido».
+   */
   suggestedRiders?: string[] | null;
   /**
    * El detalle de su courier vigente (owner, 08-11-2026: «no me das grupo gf
@@ -171,6 +174,15 @@ export interface LimaRowFilters {
   channels: ReadonlySet<string>;
   districts: ReadonlySet<string>;
   couriers: ReadonlySet<string>;
+  /** «Sugerido» (owner, 17-11-2026): el nombre del motorizado sugerido, o `sin_sugerido`. */
+  suggested: ReadonlySet<string>;
+}
+
+export const NO_SUGGESTED = "sin_sugerido";
+
+/** Los motorizados sugeridos de la fila (uno o dos), o `sin_sugerido`. */
+export function suggestedKeys(row: Pick<LimaPendingOrder, "suggestedRiders">): string[] {
+  return row.suggestedRiders?.length ? row.suggestedRiders : [NO_SUGGESTED];
 }
 
 const PRE_DISPATCH_STAGES = new Set(["por_confirmar", "preparacion", "por_despachar"]);
@@ -189,15 +201,15 @@ export type LimaFilterOption = { value: string; label: string; count: number };
 
 export const NO_COURIER = "sin_courier";
 export const NO_DISTRICT = "sin_distrito";
-const ROW_FILTER_PARAMS = { channels: "canal", districts: "distrito", couriers: "courier", createdFrom: "creado_desde", createdTo: "creado_hasta" } as const;
+const ROW_FILTER_PARAMS = { channels: "canal", districts: "distrito", couriers: "courier", suggested: "sugerido", createdFrom: "creado_desde", createdTo: "creado_hasta" } as const;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export function emptyRowFilters(): LimaRowFilters {
-  return { createdFrom: "", createdTo: "", channels: new Set(), districts: new Set(), couriers: new Set() };
+  return { createdFrom: "", createdTo: "", channels: new Set(), districts: new Set(), couriers: new Set(), suggested: new Set() };
 }
 
 export function rowFiltersActive(f: LimaRowFilters): number {
-  return Number(Boolean(f.createdFrom || f.createdTo)) + Number(f.channels.size > 0) + Number(f.districts.size > 0) + Number(f.couriers.size > 0);
+  return Number(Boolean(f.createdFrom || f.createdTo)) + Number(f.channels.size > 0) + Number(f.districts.size > 0) + Number(f.couriers.size > 0) + Number(f.suggested.size > 0);
 }
 
 /** El mismo distrito escrito con o sin tilde o con otras mayúsculas es uno. */
@@ -236,6 +248,8 @@ export function rowFiltersMatch(row: LimaPendingOrder, f: LimaRowFilters): boole
     if (!day || (f.createdFrom && day < f.createdFrom) || (f.createdTo && day > f.createdTo)) return false;
   }
   if (f.channels.size && !f.channels.has(channelKey(row.salesChannel))) return false;
+  // «Yordani o Alexis» entra con cualquiera de los dos.
+  if (f.suggested.size && !suggestedKeys(row).some((k) => f.suggested.has(k))) return false;
   if (f.districts.size && !f.districts.has(districtKey(row.district))) return false;
   if (f.couriers.size) {
     // El courier entero («Grupo GF») o su detalle («Grupo GF · Alexis»).
@@ -250,7 +264,13 @@ function titleCase(value: string): string {
 }
 
 /** Las opciones de cada píldora con su cantidad, sobre las filas que se le pasan. */
-export function rowFilterOptions(rows: readonly LimaPendingOrder[]): { channels: LimaFilterOption[]; districts: LimaFilterOption[]; couriers: LimaFilterOption[] } {
+export function rowFilterOptions(rows: readonly LimaPendingOrder[]): { channels: LimaFilterOption[]; districts: LimaFilterOption[]; couriers: LimaFilterOption[]; suggested: LimaFilterOption[] } {
+  const suggestedCount = new Map<string, number>();
+  for (const row of rows) for (const k of suggestedKeys(row)) suggestedCount.set(k, (suggestedCount.get(k) ?? 0) + 1);
+  // «Sugerido»: cada motorizado (el de más pedidos primero) y, al final, «Sin sugerencia».
+  const suggested = [...suggestedCount.entries()]
+    .map(([value, count]) => ({ value, label: value === NO_SUGGESTED ? "Sin sugerencia" : value, count }))
+    .sort((a, b) => Number(a.value === NO_SUGGESTED) - Number(b.value === NO_SUGGESTED) || b.count - a.count || a.label.localeCompare(b.label, "es"));
   const channelCount = new Map<string, number>();
   const courierCount = new Map<string, number>();
   const detailCount = new Map<string, { parent: string; label: string; count: number }>();
@@ -294,7 +314,7 @@ export function rowFilterOptions(rows: readonly LimaPendingOrder[]): { channels:
       .map(([value, d]) => ({ value, label: d.label, count: d.count }))
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "es")),
   ]);
-  return { channels, districts, couriers };
+  return { channels, districts, couriers, suggested };
 }
 
 /** De la URL: `canal`, `distrito` y `courier` se repiten; las fechas, una vez. */
@@ -307,6 +327,7 @@ export function readRowFilters(params: Pick<URLSearchParams, "get" | "getAll">):
     channels: set(ROW_FILTER_PARAMS.channels),
     districts: set(ROW_FILTER_PARAMS.districts),
     couriers: set(ROW_FILTER_PARAMS.couriers),
+    suggested: set(ROW_FILTER_PARAMS.suggested),
   };
 }
 
@@ -314,7 +335,7 @@ export function writeRowFilters(params: URLSearchParams, f: LimaRowFilters): voi
   for (const name of Object.values(ROW_FILTER_PARAMS)) params.delete(name);
   if (f.createdFrom) params.set(ROW_FILTER_PARAMS.createdFrom, f.createdFrom);
   if (f.createdTo) params.set(ROW_FILTER_PARAMS.createdTo, f.createdTo);
-  for (const [field, name] of [["channels", ROW_FILTER_PARAMS.channels], ["districts", ROW_FILTER_PARAMS.districts], ["couriers", ROW_FILTER_PARAMS.couriers]] as const) {
+  for (const [field, name] of [["channels", ROW_FILTER_PARAMS.channels], ["districts", ROW_FILTER_PARAMS.districts], ["couriers", ROW_FILTER_PARAMS.couriers], ["suggested", ROW_FILTER_PARAMS.suggested]] as const) {
     for (const value of [...f[field]].sort()) params.append(name, value);
   }
 }

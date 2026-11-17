@@ -1,7 +1,7 @@
 import type { createAdminSupabase } from "@/lib/db";
 import type { ReproScope } from "@/lib/repro-lima-access";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
-import { buildRiderSuggestions, RIDER_SHARE_DAYS, type RiderShareRow } from "@/lib/lima-rider-suggest";
+import { buildRiderSuggestions, RIDER_SHARE_DAYS, shownRiderSuggestion, type RiderShareRow } from "@/lib/lima-rider-suggest";
 import { districtKey, isLimaPendingStage, LIMA_PENDING_STAGES, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { isCurrentBoxDay } from "@/lib/dispatch-plan";
 import { outputsBlockingRetry } from "@/lib/gf-retry";
@@ -426,6 +426,10 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   return safe.map((row) => {
     // El filtro de arriba valida también la macroetapa de cada fila.
     const stage = row.macro_stage as LimaPendingOrder["stage"];
+    const ops = stuckFacts.get(row.order_id) ?? null;
+    const courierPickup: LimaPendingOrder["courierPickup"] = pickups.has(row.order_id)
+      ? { courier: "aliclik", date: pickups.get(row.order_id)! }
+      : gfPickups.has(row.order_id) ? { courier: "gf_courier", date: gfPickups.get(row.order_id)! } : null;
     return {
       orderId: row.order_id, storeId: row.store_id, storeName: names.get(row.store_id) ?? "Tienda",
       orderName: row.order_name ?? "Sin código", customerName: row.customer_name ?? "Sin nombre",
@@ -441,11 +445,10 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       gf: gfFacts.get(row.order_id) ?? null,
       scheduledOn: row.dispatch_scheduled_on?.slice(0, 10) ?? null,
       scheduledCourier: row.dispatch_courier ?? null,
-      ops: stuckFacts.get(row.order_id) ?? null,
-      courierPickup: pickups.has(row.order_id)
-        ? { courier: "aliclik", date: pickups.get(row.order_id)! }
-        : gfPickups.has(row.order_id) ? { courier: "gf_courier", date: gfPickups.get(row.order_id)! } : null,
-      suggestedRiders: riderSuggestions.get(districtKey(row.district)) ?? null,
+      ops,
+      courierPickup,
+      // Solo con guía de GF Courier sin motorizado (17-11-2026): la fila y el filtro «Sugerido» leen esto.
+      suggestedRiders: shownRiderSuggestion({ ops, courierPickup }, riderSuggestions.get(districtKey(row.district))),
     };
   });
 }

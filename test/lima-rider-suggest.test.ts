@@ -3,7 +3,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildRiderSuggestions, gfAwaitingRider, riderFirstName, riderSuggestionText } from "@/lib/lima-rider-suggest";
+import { buildRiderSuggestions, gfAwaitingRider, riderFirstName, riderSuggestionText, shownRiderSuggestion } from "@/lib/lima-rider-suggest";
+import { emptyRowFilters, readRowFilters, rowFilterOptions, rowFiltersMatch, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const r = (district: string, rider_name: string, deliveries: number) => ({ district, rider_name, deliveries });
@@ -49,5 +50,37 @@ describe("solo mientras GF Courier no asigne", () => {
     expect(sql).toContain("grant execute on function public.lima_rider_district_share(integer) to service_role;");
     expect(read("lib/repro-lima-pending-access.ts")).toContain('admin.rpc("lima_rider_district_share", { p_days: RIDER_SHARE_DAYS })');
     expect(read("components/repro-lima-pending.tsx")).toContain("Sugerido: <span");
+  });
+  it("solo se muestra con guía de GF Courier sin motorizado", () => {
+    const gf = { ops: { liveCouriers: ["gf_courier"], reportedStatus: "READY_FOR_PICKUP:AWAITING_ASSIGNMENT", courierDelivered: null, lastGfBox: null }, courierPickup: null };
+    expect(shownRiderSuggestion(gf, ["Roy"])).toEqual(["Roy"]);
+    expect(shownRiderSuggestion({ ...gf, ops: { ...gf.ops, reportedStatus: "READY_FOR_PICKUP:AWAITING_OFFICE_CHECK" } }, ["Roy"])).toBeNull();
+    expect(shownRiderSuggestion({ ...gf, ops: { ...gf.ops, liveCouriers: ["aliclik"] } }, ["Roy"])).toBeNull();
+    expect(shownRiderSuggestion(gf, null)).toBeNull();
+  });
+});
+
+describe("el filtro «Sugerido» (owner, 17-11-2026)", () => {
+  const row = (orderId: string, suggestedRiders: string[] | null) => ({ orderId, salesChannel: null, district: null, courier: null, courierDetail: null, createdAt: null, suggestedRiders }) as unknown as LimaPendingOrder;
+  const rows = [row("a", ["Roy"]), row("b", ["Yordani", "Alexis"]), row("c", ["Alexis"]), row("d", null)];
+  it("cuenta cada motorizado y «Sin sugerencia» al final", () => {
+    expect(rowFilterOptions(rows).suggested).toEqual([
+      { value: "Alexis", label: "Alexis", count: 2 },
+      { value: "Roy", label: "Roy", count: 1 },
+      { value: "Yordani", label: "Yordani", count: 1 },
+      { value: "sin_sugerido", label: "Sin sugerencia", count: 1 },
+    ]);
+  });
+  it("«Yordani o Alexis» entra con cualquiera de los dos", () => {
+    const f = { ...emptyRowFilters(), suggested: new Set(["Alexis"]) };
+    expect(rows.filter((r) => rowFiltersMatch(r, f)).map((r) => r.orderId)).toEqual(["b", "c"]);
+    expect(rows.filter((r) => rowFiltersMatch(r, { ...emptyRowFilters(), suggested: new Set(["sin_sugerido"]) })).map((r) => r.orderId)).toEqual(["d"]);
+  });
+  it("vive en la URL como «sugerido» y la barra lo ofrece", () => {
+    const out = new URLSearchParams();
+    writeRowFilters(out, { ...emptyRowFilters(), suggested: new Set(["Roy"]) });
+    expect(out.toString()).toBe("sugerido=Roy");
+    expect([...readRowFilters(out).suggested]).toEqual(["Roy"]);
+    expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Sugerido" allLabel="Todos"');
   });
 });

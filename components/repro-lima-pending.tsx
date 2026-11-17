@@ -15,11 +15,11 @@ import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "
 import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, limaIsNew, liveGuideCourier, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, limaIsNew, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
-import { gfAwaitingRider, riderSuggestionText } from "@/lib/lima-rider-suggest";
+import { riderSuggestionText } from "@/lib/lima-rider-suggest";
 import { telHref } from "@/lib/rider-contact";
 import { loadPriorOrderCounts } from "@/app/dashboard/pedidos/repro-lima/prior-counts-actions";
 import { priorCountsLabel, type PriorCounts } from "@/lib/customer-prior-counts";
@@ -86,8 +86,8 @@ function StageBadges({ row }: { row: LimaPendingOrder }) {
 function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
   const courier = courierNowText(row);
   // El motorizado que llevaría su distrito (17-11-2026), mientras GF Courier no asigne a nadie.
-  const suggested = row.suggestedRiders?.length && liveGuideCourier(row) === "gf_courier" && gfAwaitingRider(row.ops?.reportedStatus)
-    ? riderSuggestionText(row.suggestedRiders) : null;
+  // El servidor solo la deja con guía de GF Courier sin motorizado (`shownRiderSuggestion`), igual que el filtro «Sugerido».
+  const suggested = row.suggestedRiders?.length ? riderSuggestionText(row.suggestedRiders) : null;
   return (
     <div className="space-y-1.5">
       {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}

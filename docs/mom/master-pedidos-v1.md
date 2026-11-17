@@ -7295,7 +7295,11 @@ motorizado cuando ya lo asignó. Mientras no, la fila con guía de GF Courier di
 (`lima_rider_district_share`, solo lectura y solo el servidor;
 `lib/lima-rider-suggest.ts`): un motorizado con el 70% o más de las paradas del
 distrito, o los dos primeros si juntos llegan al 80% («Yordani o Alexis»); con
-menos de 5 paradas o muy repartido, nada. Es una sugerencia: asigna GF.
+menos de 5 paradas o muy repartido, nada. Es una sugerencia: asigna GF. El
+servidor decide cuándo se muestra (`shownRiderSuggestion`), y la barra tiene el
+filtro **«Sugerido»** (owner, 17-11-2026: «ármale un filtro de Sugeridos»): cada
+motorizado con su cifra y «Sin sugerencia» (`sugerido=` en la URL); «Yordani o
+Alexis» entra con cualquiera de los dos.
 
 **Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen
 por la Mesa de ruta). No anula una guía asignada a un motorizado. No pide el
