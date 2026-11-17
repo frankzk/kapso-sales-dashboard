@@ -36,7 +36,7 @@ import {
   type ReproFacts,
 } from "@/lib/repro-lima-program";
 import { clearGfDispatchPrograms, type GfProgramRow } from "@/lib/gf-dispatch-program";
-import { cancelGfGuideFor, createGfGuideFor, type GfCancelResult, type GfGuideResult } from "@/lib/gf-courier-guide";
+import { cancelGfGuideFor, createGfGuideFor, type GfCancelResult, type GfGuideResult, changeGfGuideDateFor, type GfDateResult } from "@/lib/gf-courier-guide";
 import { loadLimaCourierAutoActiveStores } from "@/lib/lima-courier-auto-server";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { limaClock } from "@/lib/grupo-gf-courier";
@@ -565,6 +565,19 @@ async function gfGuideForAgreement(admin: Admin, input: {
   // Ya es la de este acuerdo (el mismo envío otra vez): no se anula ni se repite.
   if (guidePlan.kind === "lista") {
     return { notice: `${saved} La guía ${guidePlan.guideCode ?? "de GF Courier"} ya está creada para ese día.`, programChanged };
+  }
+  // Una sola guía viva sin motorizado: GF le cambia el día con la misma guía y la caja armada (owner, 17-11-2026),
+  // sin anularla ni volver a armar. Si GF no puede (ya asignada, reprogramación abierta), sigue el camino de siempre.
+  if (guidePlan.kind === "reemplazar" && guidePlan.cancel.length === 1 && guidePlan.cancel[0]!.guideCode) {
+    const code = guidePlan.cancel[0]!.guideCode;
+    let moved: GfDateResult;
+    try {
+      moved = await changeGfGuideDateFor(f.orderId, code, { userId: actor, day, reason: reproGfGuideReason(day) }, admin);
+    } catch (error) {
+      moved = { ok: false, error: errorText(error) };
+    }
+    if (moved.ok) return { notice: `${saved} La guía ${code} ahora sale ese día, con la misma guía y la caja armada.`, programChanged };
+    if (!moved.ok && moved.code === "ASSIGNED_TO_RIDER") return { notice: saved, error: gfGuideAssignedMessage(code), href, programChanged };
   }
   const cancelled: string[] = [];
   if (guidePlan.kind === "reemplazar") {

@@ -162,8 +162,9 @@ describe("listWooCatalogVariants: todo el catálogo publicado, solo leyendo", ()
     expect(r.incompleteReason).toBeNull();
     expect(r.variants).toEqual([
       { productId: "woo:10", productTitle: "Fat-Burn Shorts", variantId: "woo:10", variantTitle: null, sku: "818531465", inventory: 4 },
-      { productId: "woo:11", productTitle: "Polo & Short", variantId: "woo:111", variantTitle: "M / Negro", sku: "POLO-M", inventory: null },
-      { productId: "woo:11", productTitle: "Polo & Short", variantId: "woo:112", variantTitle: "L / Negro", sku: null, inventory: null },
+      { productId: "woo:11", productTitle: "Polo & Short", variantId: "woo:111", variantTitle: "M / Negro", sku: "POLO-M", parentSku: null, inventory: null },
+      // Sin SKU propio, con el del producto a la vista (pestaña «Sin SKU», 17-11-2026).
+      { productId: "woo:11", productTitle: "Polo & Short", variantId: "woo:112", variantTitle: "L / Negro", sku: null, parentSku: "POLO", inventory: null },
       { productId: "woo:12", productTitle: "Astaxantina", variantId: "woo:12", variantTitle: null, sku: null, inventory: null },
     ]);
     // Solo lectura, solo lo publicado, 100 por página y en orden estable.

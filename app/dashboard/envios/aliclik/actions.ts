@@ -145,6 +145,8 @@ export async function unmapSku(
 export interface CatalogRow {
   rowKey: string;
   shopifySku: string | null;
+  /** WooCommerce: el SKU del producto cuando la variación no tiene el suyo. */
+  parentSku: string | null;
   title: string;
   variantTitle: string | null;
   ean: string | null;
@@ -266,6 +268,7 @@ export async function loadCatalogView(storeId: string): Promise<CatalogView> {
       return {
         rowKey,
         shopifySku,
+        parentSku: shopifySku ? null : (shopifyProduct.parentSku ?? null),
         title,
         variantTitle,
         ean: m?.ean ?? null,

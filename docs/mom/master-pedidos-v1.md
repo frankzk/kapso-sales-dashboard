@@ -20423,6 +20423,16 @@ la guía**, desarma la caja y el producto vuelve a su stock.
 - Solo la primera entrega de cada evento escribe la línea: un reenvío choca con el `X-GF-Event-Id` único.
 - Las líneas las arma `lib/gf-webhook-note.ts` (pura, con prueba); sin motivo no hay línea.
 
+**Etapa dentro de GF y cambio de fecha sin anular (owner, 17-11-2026).** GF informa dónde está el pedido antes de
+salir, en `status.sub_status` y en `stage`: por preparar (`CREATED:TO_PREPARE`), en preparación (`CREATED:PREPARING`),
+guía impresa (`READY_FOR_PICKUP:LABELED`), por asignar (`READY_FOR_PICKUP:AWAITING_ASSIGNMENT`), asignado con falta de
+cotejo (`AWAITING_OFFICE_CHECK`, con el motorizado) y falta que el motorizado lo reciba (`AWAITING_RIDER`). Kapta lo
+guarda en `reported_status`, lo muestra en «Salida activa» de la Mesa de ruta («En GF: por asignar a motorizado») y deja
+en el historial «GF Courier: asignado a Alexis para la ruta del 18/11». Si la clienta pide otro día y la guía viva
+**todavía no tiene motorizado**, Kapta le cambia la fecha en GF (`POST /v1/orders/{tracking}/delivery-date`,
+`changeGfGuideDateFor`): misma guía, caja armada, sin anular ni rearmar. Si GF responde que ya está asignada, se dice
+y no se crea otra; si no puede por otra causa (reprogramación abierta), sigue el camino de anular y crear.
+
 **El día del acuerdo de Repro Lima manda (owner, 16-11-2026: «ella lo quiere para el 18»).** Al guardar un acuerdo
 con GF Courier, Kapta quita la salida programada de Grupo GF y crea la guía para el día acordado. Si esa creación
 falla (por ejemplo, por un dato que GF rechazaba), la guía que se cree después —el botón de la Mesa de ruta o la
@@ -25432,6 +25442,31 @@ pedidos.» (con Shopify, «Catálogo activo de Shopify: …», como siempre). El
 detalle es el mensaje del `WooError`, sin secretos ni la dirección.
 
 Pruebas: `test/aliclik-catalog-woo.test.ts`.
+
+**La pestaña «Sin SKU» (17-11-2026).** El aviso rojo contaba los productos sin
+SKU, pero para encontrarlos había que recorrer «Sin asociar Aliclik», donde se
+mezclan con los que tienen SKU y solo esperan su EAN. Ahora hay una pestaña
+**«Sin SKU en WooCommerce (N)»** (o «en Shopify», según la fuente), entre «Sin
+vincular Swayp» y «Todos», visible mientras haya alguno. Muestra una tarjeta
+por producto con sus variantes sin SKU, clasificada por cómo se arregla:
+
+- **«El SKU está en el producto, no en la variación»** (primero). El producto
+  variable tiene SKU en su pestaña Inventario y la variación no tiene uno
+  propio: WooCommerce le muestra el del padre, pero Kapta la cuenta sin SKU (la
+  regla de arriba). Pasó el 17-11-2026 con el «Pack de 10 Pares de Calcetines
+  FourLines» de Aurela: le pusieron 958737445 al producto y la variación
+  «FourLines» siguió sin el suyo. La tarjeta muestra el SKU del producto y dice
+  que se ponga en cada variación; con una sola variación, se le quita al
+  producto y se pone en la variación (WooCommerce no deja repetirlo). Para
+  saberlo, la lectura del catálogo guarda el SKU del padre de cada variación
+  sin SKU propio (`parentSku` en `listWooCatalogVariants`).
+- **«Sin SKU»**: ni el producto ni la variación lo tienen.
+
+La pestaña respeta la búsqueda y no tiene botones: hasta que la tienda tenga el
+SKU no hay nada que asociar. La fila suelta (en «Sin asociar Aliclik» y
+«Todos») dice lo mismo: «El SKU … está en el producto, no en la variación».
+Implementación: `lib/catalog-missing-sku.ts` y `components/aliclik-catalog.tsx`.
+Pruebas: `test/catalog-missing-sku.test.ts`.
 
 #### El enlace al pedido y el nombre de su tienda (24-10-2026)
 

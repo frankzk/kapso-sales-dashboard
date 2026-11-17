@@ -13,6 +13,13 @@ import { Badge, Banner, FIELD_BOX, OpsButton, SectionHead } from "@/components/o
 import { AliclikOutlookLadder } from "@/components/aliclik-outlook";
 import type { AliclikOutlook } from "@/lib/aliclik-outlook";
 import { shipmentIsReturning, shipmentStateLabel } from "@/lib/order-status";
+import { courierStatusText } from "@/lib/repro-lima-blocks";
+
+/** Etapa dentro de GF (owner, 17-11-2026): «por asignar», «asignado · falta cotejo»… Solo las que dicen «En GF». */
+const gfStageText = (reported: string | null | undefined) => {
+  const text = courierStatusText(reported);
+  return text?.startsWith("En GF: ") ? text.slice(7) : null;
+};
 import type {
   OrderRoutePlan,
   RouteCandidate,
@@ -165,6 +172,9 @@ export function OrderRouteDesk({
             <span className={shipmentIsReturning(route.blockingOutput) ? "font-medium text-warn-fg" : "text-ink-500"}>
               · {shipmentStateLabel(route.blockingOutput)}
             </span>
+            {route.key === "gf_courier" && gfStageText(route.blockingOutput.reportedStatus) && (
+              <span className="font-medium text-ink-700">· {gfStageText(route.blockingOutput.reportedStatus)}</span>
+            )}
             {route.key === "gf_courier" && route.blockingOutput.quotedCost != null && (
               <span className="tabular-nums text-ink-500">· envío S/ {Number(route.blockingOutput.quotedCost).toFixed(2)}</span>
             )}

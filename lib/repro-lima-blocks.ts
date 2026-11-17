@@ -1033,6 +1033,13 @@ const ALICLIK_STATUS_TEXT: Record<string, string> = {
 const GF_STATUS_TEXT: Record<string, string> = {
   CREATED: "Guía creada",
   READY_FOR_PICKUP: "Lista para recojo",
+  // Etapa dentro de GF (owner, 17-11-2026).
+  "CREATED:TO_PREPARE": "En GF: por preparar",
+  "CREATED:PREPARING": "En GF: en preparación",
+  "READY_FOR_PICKUP:LABELED": "En GF: guía impresa, falta escanear",
+  "READY_FOR_PICKUP:AWAITING_ASSIGNMENT": "En GF: por asignar a motorizado",
+  "READY_FOR_PICKUP:AWAITING_OFFICE_CHECK": "En GF: asignado · falta cotejo de oficina",
+  "READY_FOR_PICKUP:AWAITING_RIDER": "En GF: asignado · falta que el motorizado lo reciba",
   OUT_FOR_DELIVERY: "En reparto",
   INCIDENT: "Incidencia",
   "INCIDENT:NO_ANSWER": "Incidencia: no contesta",
