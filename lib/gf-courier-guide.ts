@@ -17,6 +17,7 @@ import { createAdminSupabase } from "@/lib/db";
 import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
+import { gfCancelBlockedByRider } from "@/lib/gf-courier-status";
 import { buildGfOrderInput } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
@@ -211,18 +212,25 @@ export async function cancelGfGuideFor(
   if (!storeId) return { ok: false, error: "No se pudo leer el pedido." };
   const store = await loadGfStore(admin, storeId);
   if (!store?.token) return { ok: false, error: "La tienda no tiene token de GF Courier." };
+  // Con motorizado no se anula desde Kapta (owner, 17-11-2026): asignado en una carga, esperando salir o ya en la calle.
+  const before = await gfCourier.getOrder({ apiToken: store.token }, trackingId);
+  if (before.ok) {
+    const blocked = gfCancelBlockedByRider(before.data);
+    if (blocked) return { ok: false, error: blocked };
+  }
   const res = await gfCourier.cancelOrder({ apiToken: store.token }, trackingId, "MERCHANT_CANCELLED",
     gfIdempotencyKey(orderId, `cancel-${trackingId}`), ctx.reason);
   if (!res.ok) return { ok: false, error: res.error.message };
   const current = await gfCourier.getOrder({ apiToken: store.token }, trackingId);
   if (current.ok) await applyGfSnapshot(current.data, admin);
-  // Anulada es solo lo que GF dice CANCELLED. Con el paquete ya preparado responde CANCEL_REQUESTED: la anula cuando
-  // lo saca de preparación. Antes Kapta decía «anulada, sin costo» y la guía seguía viva (#AUR901039).
+  // CANCELLED o CANCEL_REQUESTED: para Kapta la guía queda anulada (owner, 17-11-2026, #KP206881). Con la caja ya
+  // armada, GF solo tiene pendiente desarmarla; ya no la asigna ni la hace salir. `requested` = otro estado inesperado.
   const code = String((current.ok ? current.data.status?.code : res.data.status?.code) ?? "");
-  const requested = code !== "CANCELLED";
+  const requested = code !== "CANCELLED" && code !== "CANCEL_REQUESTED";
   await admin.from("order_events").insert({ store_id: storeId, order_id: orderId, kind: "courier_status", occurred_at: new Date().toISOString(),
     actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId, reason: ctx.reason,
     note: requested ? `Anulación pedida a GF Courier: ${gfCancelRequestedText(trackingId)}` : ctx.note,
     payload: { cancel_cost: res.data.cancel_cost ?? 0, ...(requested ? { cancel_requested: true, gf_status: code || null } : {}) } });
   return { ok: true, trackingId, cancelCost: Number(res.data.cancel_cost ?? 0), requested };
 }
+

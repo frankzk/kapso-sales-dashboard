@@ -28,6 +28,8 @@ export interface GfStatus { code: GfStatusCode; name?: string; sub_status: strin
 export interface GfOrder {
   tracking_id: string; external_id: string; service: "COD_LIMA"; status: GfStatus; shipping_cost: number;
   currency: "PEN"; estimated_delivery_date: string; label_url: string; tracking_url: string | null; created_at?: string;
+  /** Etapa de despacho (GF 049): AWAITING_OFFICE_CHECK / AWAITING_RIDER = ya tiene motorizado. */
+  stage?: { code: string; name?: string; rider_name?: string | null } | null;
 }
 export interface GfOrderInput {
   external_id: string; service: "COD_LIMA";

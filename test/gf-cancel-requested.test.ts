@@ -5,14 +5,14 @@
 // la trata como anulada en ningún camino (MOM §29.17).
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { gfCancelRequested, gfCancelRequestedText, mapGfStatus } from "@/lib/gf-courier-status";
+import { gfCancelBlockedByRider, gfCancelRequested, gfCancelRequestedText, mapGfStatus } from "@/lib/gf-courier-status";
 import { courierStatusText } from "@/lib/repro-lima-blocks";
 
 const read = (p: string) => readFileSync(p, "utf8");
 
 describe("CANCEL_REQUESTED de GF", () => {
-  it("no cambia la salida: sigue viva hasta que GF diga CANCELLED", () => {
-    expect(mapGfStatus("CANCEL_REQUESTED")).toMatchObject({ deliveryStatus: null, terminal: false, unknown: [] });
+  it("para Kapta la guía queda anulada ya (owner 17-11-2026, #KP206881)", () => {
+    expect(mapGfStatus("CANCEL_REQUESTED")).toMatchObject({ deliveryStatus: "anulado", operational: "anulado", terminal: false, unknown: [] });
     expect(mapGfStatus("CANCELLED")).toMatchObject({ deliveryStatus: "anulado", terminal: true });
   });
 
@@ -23,16 +23,16 @@ describe("CANCEL_REQUESTED de GF", () => {
     expect(gfCancelRequested("READY_FOR_PICKUP:AWAITING_ASSIGNMENT")).toBe(false);
     expect(gfCancelRequested(null)).toBe(false);
     expect(gfCancelRequestedText("AURELA-AUR901039")).toBe(
-      "GF recibió la anulación de AURELA-AUR901039, pero ya había preparado el paquete: la anula cuando lo saque de preparación. Hasta entonces la guía sigue viva; Kapta la marca anulada cuando GF lo confirme.",
+      "Guía AURELA-AUR901039 anulada. GF ya no la asigna a ningún motorizado; su almacén solo desarma la caja.",
     );
-    expect(courierStatusText("CANCEL_REQUESTED")).toBe("En GF: anulación pedida, falta que GF la confirme");
+    expect(courierStatusText("CANCEL_REQUESTED")).toBe("En GF: anulada, GF desarma la caja");
   });
 });
 
-describe("ningún camino la trata como anulada", () => {
-  it("cancelGfGuideFor: anulada es solo CANCELLED; lo demás vuelve `requested`", () => {
+describe("caminos que dependen de la anulación", () => {
+  it("cancelGfGuideFor: CANCELLED y CANCEL_REQUESTED cuentan como anulada; otro estado vuelve `requested`", () => {
     const src = read("lib/gf-courier-guide.ts");
-    expect(src).toContain("const requested = code !== \"CANCELLED\";");
+    expect(src).toContain("const requested = code !== \"CANCELLED\" && code !== \"CANCEL_REQUESTED\";");
     expect(src).toContain("return { ok: true, trackingId, cancelCost: Number(res.data.cancel_cost ?? 0), requested };");
   });
 
@@ -59,5 +59,18 @@ describe("ningún camino la trata como anulada", () => {
   it("la Mesa de ruta y «Salidas y guías» no ofrecen anularla otra vez", () => {
     expect(read("components/order-route-desk.tsx")).toContain("!gfCancelRequested(route.blockingOutput!.reportedStatus)");
     expect(read("components/order-drawer.tsx")).toContain("Anulación pedida a GF: falta que GF saque el paquete de preparación y la confirme.");
+  });
+});
+
+describe("con motorizado no se anula desde Kapta (owner 17-11-2026)", () => {
+  const order = (code: string, stage: string | null = null) => ({ status: { code, sub_status: null, final: false } as any, stage: stage ? { code: stage, rider_name: "Alexis" } : null });
+  it("bloquea si está asignado, esperando al motorizado o en la calle", () => {
+    expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_OFFICE_CHECK"))).toContain("Alexis");
+    expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_RIDER"))).toContain("no se anula desde Kapta");
+    expect(gfCancelBlockedByRider(order("OUT_FOR_DELIVERY"))).toContain("ya salió");
+  });
+  it("deja anular lo que no tiene motorizado", () => {
+    expect(gfCancelBlockedByRider(order("READY_FOR_PICKUP", "AWAITING_ASSIGNMENT"))).toBeNull();
+    expect(gfCancelBlockedByRider(order("CREATED", "TO_PREPARE"))).toBeNull();
   });
 });
