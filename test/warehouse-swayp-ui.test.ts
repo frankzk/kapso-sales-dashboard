@@ -331,7 +331,8 @@ describe("lee; solo la entrega a Swayp escribe (fase 3, 04-11-2026)", () => {
   it("nunca hay «marcar armada» a mano: lo único que se pulsa es imprimir, abrir, filtrar, plegar y actualizar (R4)", () => {
     expect(ui).not.toContain("markShipmentReady");
     expect(ui).not.toMatch(/>\s*Marcar/);
-    expect(count(ui, 'target="_blank"')).toBe(1);
+    // Imprimir un rótulo y, desde 17-11-2026, imprimir todos los que faltan (4 por hoja): las dos solo imprimen.
+    expect(count(ui, 'target="_blank"')).toBe(2);
     expect(ui).toContain("href={row.labelHref}");
     expect(count(ui, "<OrderLink ")).toBe(2);
   });

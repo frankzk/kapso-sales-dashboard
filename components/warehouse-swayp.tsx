@@ -65,6 +65,7 @@ import {
   type SwaypTone,
   type SwaypZone,
   type WarehouseSwaypData,
+  swaypLabelsHref,
 } from "@/lib/warehouse-swayp";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,8 @@ export const SWAYP_LIST_LABEL = {
 } as const;
 export const SWAYP_SALIERON_HELP = "Ya no salen en este lote. Si alguna estaba armada, sácala del sitio de Swayp.";
 export const SWAYP_PRINT_LABEL = "Imprimir rótulo";
+/** Todos los rótulos que faltan en un PDF, 4 por hoja A4 (owner, 17-11-2026). */
+export const swaypPrintAllLabel = (n: number) => `Imprimir los ${n} rótulos que faltan (4 por hoja)`;
 export const SWAYP_OPEN_ORDER = "Abrir pedido";
 export const SWAYP_LOADING = "Cargando «Swayp por salir»…";
 /** La relectura falló pero hay un lote anterior: se sigue viendo, con su hora (también en la celda). */
@@ -549,6 +552,12 @@ function SwaypFaltanList({ rows, crit }: { rows: SwaypFaltaRow[]; crit: boolean 
   return (
     <section>
       <ListHead title={SWAYP_LIST_LABEL.faltan} count={rows.length} tone={crit ? "crit" : "warn"} />
+      {rows.length > 1 && (
+        <a href={swaypLabelsHref(rows.map((row) => row.shipmentId), { fourPerPage: true })} target="_blank" rel="noreferrer"
+          className={cn(opsButtonClass("primary", "sm", "pointer-coarse:h-11"), "mb-2")}>
+          {swaypPrintAllLabel(rows.length)}
+        </a>
+      )}
       <ul className="divide-y divide-line rounded-lg ring-1 ring-line">
         {rows.map((row) => (
           <SwaypFaltaItem key={row.shipmentId} row={row} />
