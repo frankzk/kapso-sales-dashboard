@@ -167,8 +167,28 @@ describe("«Qué hacer con la caja» con GF Courier: como Aliclik en Lima, otro 
   it("la guía GF viva no bloquea un acuerdo con GF Courier (Kapta la reemplaza); sí bloquea a los demás, y la de otro courier bloquea a GF Courier", () => {
     const gfLive: Partial<ReproBoxActionInput> = { otherLiveCourier: "gf_courier", box: { kind: "con_courier", courier: "gf_courier", enOficina: false } };
     expect(reproBoxAction(base(gfLive))).toMatchObject({ action: "salida_nueva_rearmar" });
-    expect(reproBoxAction(base({ ...gfLive, courier: "aliclik" }))).toEqual({ problem: "La guía de GF Courier sigue viva: la trabaja ese courier. Revísala en la ficha." });
+    // Dice dónde anularla (owner, 17-11-2026, #AUR901039).
+    expect(reproBoxAction(base({ ...gfLive, courier: "aliclik" }))).toEqual({
+      problem: "La guía de GF Courier sigue viva. Para mandarlo con Aliclik, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar.",
+    });
+    expect(reproBoxAction(base({ ...gfLive, courier: "fenix" }))).toEqual({
+      problem: "La guía de GF Courier sigue viva. Para mandarlo con Swayp, anúlala primero en la ficha («Salidas y guías» → «Anular guía GF») y vuelve a guardar.",
+    });
     expect(reproBoxAction(base({ otherLiveCourier: "aliclik" }))).toEqual({ problem: "La guía de Aliclik sigue viva: la trabaja ese courier. Revísala en la ficha." });
+  });
+
+  it("«Salidas y guías» ofrece «Anular guía GF» en la guía GF viva, con la misma acción de la Mesa de ruta", () => {
+    const drawer = readFileSync("components/order-drawer.tsx", "utf8");
+    const at = drawer.indexOf("<GfCourierCancelButton");
+    expect(at).toBeGreaterThan(0);
+    const guard = drawer.slice(drawer.lastIndexOf("{canCancelGfGuide &&", at), at);
+    expect(guard).toContain('courierKey(g.courier) === "gf_courier"');
+    expect(guard).toContain('(g.delivery_status === "pendiente" || g.delivery_status === "en_ruta")');
+    expect(guard).toContain("!shipmentIsReturning(estado)");
+    expect(drawer).toContain("{courierDisplayName(g.courier)}");
+    const button = readFileSync("components/gf-courier-cancel-button.tsx", "utf8");
+    expect(button).toContain("await cancelGfCourierGuide(orderId, reason)");
+    expect(button).toContain("reason.trim().length >= 5");
   });
 
   it("nunca se programa en Grupo GF: `otro_courier`, como Aliclik", () => {

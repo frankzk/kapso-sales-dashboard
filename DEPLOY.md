@@ -85,6 +85,16 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 17-11-2026 · «Anular guía GF» en «Salidas y guías» y Repro Lima dice dónde anularla (sin migración, MOM §9.5 y §29.17, DESIGN.md)
+
+Sin migración ni variables. La fila de una guía GF Courier viva en «Salidas y guías» de la ficha ofrece «Anular guía
+GF» (permiso `gf_courier.cancel_guide`, la misma acción de la tarjeta GF Courier de la Mesa de ruta). En Repro Lima,
+elegir otro courier con una guía GF viva ya no dice solo «revísala en la ficha»: dice que la anule en «Salidas y
+guías» y vuelva a guardar. La fila nombra el courier por su nombre («GF Courier», no «Gf_courier»).
+
+Verificar: en #AUR901039, «Salidas y guías» muestra «Anular guía GF» en AURELA-AUR901039; anulada, Repro Lima deja
+acordar con Aliclik.
+
 ### 17-11-2026 · Tablero de hoy de Leads: «Asistidas» bajo cada persona (sin migración, MOM §17.6, DESIGN.md)
 
 Sin migración ni variables. En «El equipo hoy» del Tablero de hoy, bajo el nombre de cada persona sale «N asistidas»:
