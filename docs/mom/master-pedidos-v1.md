@@ -20336,6 +20336,9 @@ nombre separado en primera palabra y resto, teléfono, distrito en texto (o el u
 dirección, referencia, GPS, cada línea con su SKU y el total del pedido **repartido al céntimo** entre las líneas
 (si no se divide entre las unidades, el mismo SKU va en dos líneas que difieren en S/ 0.01), pagos validados de la clienta y
 `amount_to_collect = total − pagos`. Sin SKU, sin apellido o sin distrito no se envía: se dice qué falta.
+Un pedido pagado en el checkout web (`isWebPrepaid`) sale con `advance_paid = total` y
+`amount_to_collect = 0` (17-11-2026, #KP206871: la guía salió con S/ 134.10 a cobrar y el motorizado
+no podía reportar «Sin cobro»). Vale para la guía manual, la automática y la simulación.
 GF responde la cobertura (`DISTRICT_NOT_COVERED` con la lista válida), el stock (`OUT_OF_STOCK`, incluido el
 interruptor «Agotado» de los productos sin conteo) y los montos.
 - La intención se escribe antes del POST (`gf_order_requests`, una **en curso** por pedido). Desde la 0346 el
