@@ -26757,6 +26757,17 @@ escaneos de despacho ni arrastre GF a otro reparto. Un webhook, reporte o overri
 logístico no reactiva esta venta. Corregir una venta terminada con stock pendiente
 exige revisión del dueño fuera de este flujo; no se ofrece reactivación automática.
 
+**La guía de GF Courier que no salió se anula al terminar la venta (17-11-2026).**
+#AUR900668: la venta se terminó con la caja de Grupo GF afuera, pero su guía de
+GF Courier (salida nueva para el día siguiente) siguió «Lista para recojo» en GF:
+Kapta nunca le avisó. Ahora, antes de la transacción, Kapta anula en GF cada guía
+de GF Courier viva que nunca salió (`wooSaleGfToCancel`, `cancelGfGuideFor`, la
+misma de «Anular guía»), con motivo «Venta terminada». Si GF no la anula (ya la
+asignó a un motorizado), la venta no se termina y se dice por qué. Cualquier otra
+salida viva que no salió bloquea: se anula con su propio botón, que avisa a su
+courier, y después se termina la venta. Lo que ya salió o volvió a oficina sigue
+como antes.
+
 **Recepción anterior a terminar la venta (0286, 28-10-2026).** KP200152 ya había
 vuelto a oficina para reprogramar y quedaba bloqueado entre la anulación de venta
 y la de salida. La transacción incluye esa salida por su recepción histórica.

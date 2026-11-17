@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { wooReturnStockBlock, wooSaleEndBlocks, wooSaleWasDispatched, WOO_SALE_ENDED } from "@/lib/woo-sale-return";
+import { wooReturnStockBlock, wooSaleEndBlocks, wooSaleGfToCancel, wooSaleWasDispatched, WOO_SALE_ENDED } from "@/lib/woo-sale-return";
 import { legacySaleCancelledAt } from "@/lib/legacy-sale-cancel";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
 import { resolveMacroStage, type ResolveMacroStageInput } from "@/lib/order-macro-stage";
@@ -10,6 +10,23 @@ const s={id:"s1",courier:"propio",delivery_status:"pendiente",custody_state:"cou
 const facts={platform:"woocommerce",generalStatus:"en_proceso",financialStatus:"pending",shipments:[s],payments:[]};
 const receipt={kind:"return_received",occurred_at:at,source:"dispatch",actor:"almacen",shipment_id:"s1"};
 const inventory={...receipt,kind:"inventory_reconciled",source:"manual"};
+describe("terminar la venta con una salida viva que no salió (17-11-2026, #AUR900668)",()=>{
+  const gf={id:"s2",courier:"gf_courier",guide_code:"AURELA-AUR900668",delivery_status:"pendiente",custody_state:"empresa",dispatched_at:null};
+  it("la guía de GF Courier no bloquea: se anula en GF antes de terminar",()=>{
+    expect(wooSaleEndBlocks({...facts,shipments:[s,gf]})).toEqual([]);
+    expect(wooSaleGfToCancel({shipments:[s,gf]}).map((x)=>x.id)).toEqual(["s2"]);
+  });
+  it("otra salida viva que no salió bloquea hasta anularla con su botón",()=>{
+    const aliclik={...gf,id:"s3",courier:"aliclik",guide_code:"AUR5X1"};
+    expect(wooSaleEndBlocks({...facts,shipments:[s,aliclik]}).join(" ")).toContain("anúlala primero con su propio botón");
+    expect(wooSaleGfToCancel({shipments:[s,aliclik]})).toEqual([]);
+  });
+  it("lo que ya salió, se anuló o volvió a oficina no se toca",()=>{
+    expect(wooSaleGfToCancel({shipments:[{...gf,custody_state:"courier"}]})).toEqual([]);
+    expect(wooSaleGfToCancel({shipments:[{...gf,delivery_status:"anulado"}]})).toEqual([]);
+    expect(wooSaleGfToCancel({shipments:[gf],events:[{kind:"returned_to_office",source:"dispatch",actor:"almacen",shipment_id:"s2"}]})).toEqual([]);
+  });
+});
 describe("venta WooCommerce terminada con stock pendiente",()=>{
   it("KP200152: recibir para reprogramar conserva el acceso a Terminar venta",()=>{
     const returned={...s,custody_state:"empresa",dispatched_at:null,custody_transferred_at:null};

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { loadCompanionRides } from "@/lib/order-companion-access";
-import { wooSaleEndBlocks } from "@/lib/woo-sale-return";
+import { wooSaleEndBlocks, wooSaleGfToCancel } from "@/lib/woo-sale-return";
+import { cancelGfGuideFor } from "@/lib/gf-courier-guide";
 import {
   isHistoricalShopifyOrder, LEGACY_SALE_CANCELLED, legacySaleCancelBlocks,
   legacySaleCancelledAt, validateLegacySaleCancelReason,
@@ -64,13 +65,25 @@ export async function cancelHistoricalShopifySale(input: {
         blocks.push("Hay una entrega reportada. Pide al admin revisar el expediente antes de anular la venta.");
       if (blocks.length) return { error: blocks.join(" ") };
       if (input.wooReturn) {
+        // La guía de GF Courier que todavía no salió se anula en GF ANTES de
+        // terminar la venta (17-11-2026, #AUR900668): si GF no la anula (ya la
+        // asignó a un motorizado), la venta no se termina y se dice por qué.
+        const gfCancelled: string[] = [];
+        for (const gf of wooSaleGfToCancel({ shipments: shipments.data ?? [], events: events.data ?? [] })) {
+          const res = await cancelGfGuideFor(orderId, gf.guide_code!, {
+            userId, reason: "Venta terminada", note: "Guía de GF Courier anulada por Kapta al terminar la venta.",
+          }, admin);
+          if (!res.ok) return { error: `GF Courier no anuló la guía ${gf.guide_code}: ${res.error} No se terminó la venta.` };
+          gfCancelled.push(gf.guide_code!);
+        }
+        const gfNote = gfCancelled.length ? ` La guía de GF Courier ${gfCancelled.join(", ")} quedó anulada en GF.` : "";
         const { error } = await admin.rpc("woo_end_sale_pending_return", {
           p_order_id: orderId, p_actor: userId, p_reason: `${reason.label} — ${reason.text}`,
           p_operation_id: legacySaleCancelOperationId(orderId, input.requestId),
         });
-        if (error) return { error: "No se pudo terminar la venta: " + error.message };
+        if (error) return { error: "No se pudo terminar la venta: " + error.message + gfNote };
         await recomputeOrderMasterSafe(admin, [orderId]);
-        return { notice: `${order.name ?? "El pedido"}: venta terminada. El paquete sigue en seguimiento; WooCommerce y el stock esperan la recepción e inventario en almacén.` };
+        return { notice: `${order.name ?? "El pedido"}: venta terminada. El paquete sigue en seguimiento; WooCommerce y el stock esperan la recepción e inventario en almacén.${gfNote}` };
       }
       const { error } = await admin.from("order_events").insert({
         store_id: order.store_id, order_id: orderId, kind: LEGACY_SALE_CANCELLED,

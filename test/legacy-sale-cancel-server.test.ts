@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-const mocks = vi.hoisted(() => ({ recompute: vi.fn(), rides: vi.fn() }));
+const mocks = vi.hoisted(() => ({ recompute: vi.fn(), rides: vi.fn(), gfCancel: vi.fn() }));
 vi.mock("@/lib/order-master", () => ({ recomputeOrderMasterSafe: mocks.recompute }));
+vi.mock("@/lib/gf-courier-guide", () => ({ cancelGfGuideFor: mocks.gfCancel }));
 vi.mock("@/lib/order-companion-access", () => ({ loadCompanionRides: mocks.rides }));
 import { cancelHistoricalShopifySale } from "@/lib/legacy-sale-cancel-server";
 import { legacySaleManifestBlock, legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
@@ -43,6 +44,25 @@ beforeEach(() => {
 });
 
 describe("anulación comercial histórica del servidor", () => {
+  it("#AUR900668: la guía de GF Courier que no salió se anula en GF antes de terminar la venta",async()=>{
+    tables.orders![0]!.platform="woocommerce";
+    tables.shipments!.push({ id: "s2", order_id: "o1", courier: "gf_courier", guide_code: "AURELA-AUR900668", delivery_status: "pendiente", custody_state: "empresa" });
+    const rpc=vi.fn().mockResolvedValue({error:null}); Object.assign(admin,{rpc});
+    mocks.gfCancel.mockResolvedValue({ok:true,trackingId:"AURELA-AUR900668",cancelCost:0});
+    const result=await cancelHistoricalShopifySale({admin,orderId:"o1",userId:"diana",reasonCode:"entrega_no_lograda",reasonText:"No habrá otro intento",requestId:"request-123456",wooReturn:true});
+    expect(mocks.gfCancel).toHaveBeenCalledWith("o1","AURELA-AUR900668",expect.objectContaining({userId:"diana"}),admin);
+    expect(rpc).toHaveBeenCalled();
+    expect(result.notice).toContain("AURELA-AUR900668 quedó anulada en GF");
+  });
+  it("si GF no anula su guía, la venta no se termina",async()=>{
+    tables.orders![0]!.platform="woocommerce";
+    tables.shipments!.push({ id: "s2", order_id: "o1", courier: "gf_courier", guide_code: "AURELA-AUR900668", delivery_status: "pendiente", custody_state: "empresa" });
+    const rpc=vi.fn().mockResolvedValue({error:null}); Object.assign(admin,{rpc});
+    mocks.gfCancel.mockResolvedValue({ok:false,error:"Ya asignada a un motorizado."});
+    const result=await cancelHistoricalShopifySale({admin,orderId:"o1",userId:"diana",reasonCode:"entrega_no_lograda",reasonText:"No habrá otro intento",requestId:"request-123456",wooReturn:true});
+    expect(result.error).toContain("No se terminó la venta");
+    expect(rpc).not.toHaveBeenCalled();
+  });
   it("Woo ya recibido para reprogramar llega al RPC de terminar venta con la evidencia del historial",async()=>{
     tables.orders![0]!.platform="woocommerce";
     tables.shipments![0]!.custody_state="empresa";
