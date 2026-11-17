@@ -1609,6 +1609,13 @@ export interface WooCatalogVariant {
   variantTitle: string | null;
   /** Null si no tiene SKU propio (una variación sin SKU muestra el del padre). */
   sku: string | null;
+  /**
+   * El SKU del producto padre cuando la variación no tiene uno propio: el caso
+   * de quien le pone el SKU al producto variable y no a la variación (pestaña
+   * «Sin SKU» del Catálogo, 17-11-2026). Null en un producto simple o si la
+   * variación tiene el suyo.
+   */
+  parentSku?: string | null;
   inventory: number | null;
 }
 
@@ -1780,6 +1787,7 @@ export async function listWooCatalogVariants(
         variantId: wooVariantRef(vid),
         variantTitle: optionsOf(v.attributes) || null,
         sku: sku && sku !== parentSku ? sku : null,
+        parentSku: sku && sku !== parentSku ? null : parentSku || null,
         inventory: stockOf(v.stock_quantity),
       });
     }
