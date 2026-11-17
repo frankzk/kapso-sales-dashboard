@@ -9,6 +9,7 @@
 //   GET  /v1/products                     — catálogo de la tienda en GF (SKU, modo, disponibilidad)
 //   POST /v1/products/batch               — crear o actualizar hasta 200 productos por SKU (catalogue:write)
 //   GET  /v1/me                           — comprobar el token al guardarlo
+//   POST /v1/orders/validate              — mismo cuerpo y reglas que crear, sin crear nada (simulación, 16-11-2026)
 //
 // CONVENCIONES (las mismas del cliente de Aliclik, lib/aliclik.ts)
 // 1. Nunca lanza: devuelve GfResult<T>.
@@ -32,6 +33,12 @@ export interface GfOrderInput {
   items: { sku: string; name?: string; quantity: number; unit_price: number }[];
   payment: { total: number; advance_paid: number; amount_to_collect: number };
   scheduled_date?: string; observations?: string;
+}
+/** Respuesta 200 de POST /v1/orders/validate: lo que GF crearía y dónde entendió el destino. No reserva nada. */
+export interface GfValidation {
+  valid: true;
+  would_create?: { shipping_cost?: number; estimated_delivery_date?: string; [k: string]: unknown };
+  destination?: { ubigeo?: string | null; district?: string | null; taken_from_address?: boolean };
 }
 export interface GfError { code: string; message: string; field?: string; allowed?: unknown[]; tracking_id?: string }
 export type GfResult<T> =
@@ -76,6 +83,8 @@ async function call<T>(opts: GfClientOpts, method: "GET" | "POST", path: string,
 export const gfCourier = {
   me: (o: GfClientOpts) => call<{ merchant_id: string; business_name: string | null; permissions: string[] }>(o, "GET", "/v1/me"),
   createOrder: (o: GfClientOpts, input: GfOrderInput, idempotencyKey: string) => call<GfOrder>(o, "POST", "/v1/orders", input, idempotencyKey),
+  /** Mismas reglas que `createOrder`; no crea, no reserva stock y no lleva Idempotency-Key. */
+  validateOrder: (o: GfClientOpts, input: GfOrderInput) => call<GfValidation>(o, "POST", "/v1/orders/validate", input),
   getOrder: (o: GfClientOpts, tracking: string) => call<GfOrder>(o, "GET", `/v1/orders/${encodeURIComponent(tracking)}`),
   findByExternalId: (o: GfClientOpts, externalId: string) => call<GfOrder>(o, "GET", `/v1/orders?external_id=${encodeURIComponent(externalId)}`),
   cancelOrder: (o: GfClientOpts, tracking: string, reason: string, idempotencyKey: string, note?: string) =>

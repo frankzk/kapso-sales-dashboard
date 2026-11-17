@@ -293,7 +293,7 @@ describe("Provincia COD sin coordenada (#AUR900167, 02-11-2026)", () => {
     expect(dispatchEvents()).toHaveLength(1);
   });
 
-  it("«Sale el» al confirmar sin ubicación se rechaza antes de registrar el intento; sin fecha confirma igual", async () => {
+  it("«Sale el» al confirmar sin ubicación se rechaza antes de registrar el intento; sin fecha ya no se confirma (17-11-2026)", async () => {
     st.row = { ...SIN_COORDENADA, macro_stage: "por_confirmar", macro_substage: "sin_llamar" };
     const res = await registerConfirmationAttempt(ORDER, {
       result: "confirmado",
@@ -302,10 +302,12 @@ describe("Provincia COD sin coordenada (#AUR900167, 02-11-2026)", () => {
       coordinate: "https://maps.app.goo.gl/abc",
     });
     expect(res.error).toMatch(/acortado/);
-    expect(res.error).toContain("Puedes confirmar dejando «Sale el» vacío.");
+    // En Provincia COD ya no hay «confirmar sin fecha» que sugerir (MOM §6.2).
+    expect(res.error).not.toContain("Puedes confirmar dejando «Sale el» vacío.");
     expect(st.rpcs).toHaveLength(0);
     const sinFecha = await registerConfirmationAttempt(ORDER, { result: "confirmado", channel: "llamada", dispatchOn: "" });
-    expect(sinFecha.error).toBeUndefined();
+    expect(sinFecha.error).toMatch(/^Elige el día de salida/);
+    expect(st.rpcs).toHaveLength(0);
     expect(geo()).toHaveLength(0);
   });
 });

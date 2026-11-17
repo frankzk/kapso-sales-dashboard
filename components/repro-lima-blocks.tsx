@@ -360,7 +360,9 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
   const stepCard = step ? STEP.get(step) : undefined;
   const dayKeys = new Set(agenda.map((card) => card.key));
   // Lo de hoy (desde las 10:30) y mañana sin guía ni rótulo: la alerta de «Programados».
-  const sinGuiaAlarm = (guideAlert ? counts.sub.hoy_sin_guia : 0) + counts.sub.manana_sin_guia;
+  // Lo de mañana que creará la automática está en el filtro pero no alarma.
+  const mananaSinAuto = counts.sub.manana_sin_guia - counts.autoGuideManana;
+  const sinGuiaAlarm = (guideAlert ? counts.sub.hoy_sin_guia : 0) + mananaSinAuto;
   const stuckIn = (key: LimaStep) => stuck?.byStep[key] ?? 0;
   const stepStuck = step ? stuckIn(step) : 0;
   const stuckOn = Boolean(stuck?.active && step);
@@ -407,14 +409,14 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
               {stepCard.key === "programados" && (
                 <>
                   {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => (key !== "hoy_sin_guia" || dayKeys.has("hoy")) && (counts.sub[key] > 0 || active === key)).map((key) =>
-                    key === "hoy_sin_guia" && !guideAlert ? (
+                    (key === "hoy_sin_guia" && !guideAlert) || (key === "manana_sin_guia" && mananaSinAuto === 0) ? (
                       // Antes de las 10:30, lo de hoy sin guía todavía puede recibirla: se filtra, pero no alarma.
                       <ChoiceChip
                         key={key}
                         label={LIMA_SUB_FILTERS[key].label}
                         count={counts.sub[key]}
                         active={active === key && !stuckOn}
-                        title={`${LIMA_SUB_FILTERS[key].hint} Es alerta desde las 10:30.`}
+                        title={key === "hoy_sin_guia" ? `${LIMA_SUB_FILTERS[key].hint} Es alerta desde las 10:30.` : `${LIMA_SUB_FILTERS[key].hint} Todos los crea la automática.`}
                         onClick={() => onPick(active === key && !stuckOn ? "programados" : key)}
                       />
                     ) : (
@@ -429,10 +431,12 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                       />
                     ),
                   )}
-                  {/* La guía de mañana que creará la pasada automática no es una alerta (owner, 15-11-2026). */}
+                  {/* Dentro de «Mañana sin guía»: los que creará la pasada automática no alarman (owner, 15 y 17-11-2026). */}
                   {counts.autoGuideManana > 0 && (
                     <span className="text-[13px] text-ink-500">
-                      {fmt(counts.autoGuideManana)} de mañana {counts.autoGuideManana === 1 ? "la crea" : "las crea"} la automática
+                      {counts.autoGuideManana === counts.sub.manana_sin_guia
+                        ? `${counts.autoGuideManana === 1 ? "la crea" : "todas las crea"} la automática`
+                        : `de ellas, ${fmt(counts.autoGuideManana)} ${counts.autoGuideManana === 1 ? "la crea" : "las crea"} la automática`}
                     </span>
                   )}
                   {(counts.sub.reprogramados > 0 || active === "reprogramados") && (

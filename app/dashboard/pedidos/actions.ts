@@ -125,6 +125,7 @@ import {
   DISPATCH_COURIER_LABEL,
   isDispatchCourier,
 } from "@/lib/dispatch-date";
+import { confirmationProgramsDispatch, programmedConfirmationError } from "@/lib/confirmation-dispatch";
 import { loadGroupGfCourierRouteCheck } from "@/lib/grupo-gf-courier-route-access";
 import { writeGfDispatchProgram } from "@/lib/gf-dispatch-program";
 import { agencyPaymentReady, classifyOperation, type OperationKind } from "@/lib/order-macro-stage";
@@ -2426,6 +2427,23 @@ export async function registerConfirmationAttempt(
 
   const ctx = await authorizeOrder(orderId);
   if (!ctx) return { error: "Sin acceso a este pedido." };
+  // «CONFIRMADO · PROGRAMAR SALIDA» (MOM §6.2, 17-11-2026). En Provincia COD
+  // confirmar es programar: día desde mañana y GPS, los dos obligatorios. Lo
+  // que sale hoy no se confirma aquí: se crea su guía, que lo deja confirmado.
+  // Va antes de registrar nada, como una fecha inválida.
+  const programs = result.confirms && confirmationProgramsDispatch(classifyOperation(ctx.row));
+  if (programs) {
+    const programError = programmedConfirmationError({
+      dispatchOn,
+      todayLima: limaTodayKey(),
+      coordinateMissing: dispatchCoordinateMissing(ctx.row, classifyOperation(ctx.row)),
+      coordinate: input.coordinate,
+    });
+    if (programError) return { error: programError };
+  }
+  // Fuera de Provincia COD la fecha sigue siendo opcional, y por eso se puede
+  // confirmar sin ella; en Provincia COD esa salida no existe.
+  const withoutDate = programs ? "" : " Puedes confirmar dejando «Sale el» vacío.";
   // LA LISTA DE PAGO ADELANTADO (MOM §41). Un cliente de la lista no se
   // confirma contra entrega: paga el total antes. Se rechaza antes de registrar
   // el intento (y antes de guardar una coordenada), como la fecha inválida. Los
@@ -2439,13 +2457,13 @@ export async function registerConfirmationAttempt(
   // registrar el intento, como la fecha inválida: si no, la confirmación
   // quedaría registrada y la fecha perdida a medias.
   if (dispatchOn && dispatchLocationMissing(ctx.row)) {
-    return { error: `${DISPATCH_NEEDS_LOCATION_ERROR} Puedes confirmar dejando «Sale el» vacío.` };
+    return { error: `${DISPATCH_NEEDS_LOCATION_ERROR}${withoutDate}` };
   }
   // Provincia COD: sin coordenada, ese día Aliclik no crea la guía. Se guarda
   // antes del intento: una coordenada guardada no estorba si el intento falla.
   if (dispatchOn) {
     const coordinateError = await ensureDispatchCoordinate(ctx, input.coordinate);
-    if (coordinateError) return { error: `${coordinateError} Puedes confirmar dejando «Sale el» vacío.` };
+    if (coordinateError) return { error: `${coordinateError}${withoutDate}` };
   }
 
   const admin = createAdminSupabase();

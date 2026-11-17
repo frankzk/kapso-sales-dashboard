@@ -1362,7 +1362,9 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 - **Dónde.** En vivo, al confirmar: en la gestión de confirmación, con
   «Confirmó el pedido», el campo **«Sale el (opcional)»** guarda la fecha
   acordada en la llamada junto con el intento (vacío = sale apenas se genere la
-  guía). Y después, en la ficha, pestaña Operar, dentro de «Elegir ruta y
+  guía). **En Provincia COD ya no es opcional** (17-11-2026): ahí el resultado
+  se llama «Confirmado · programar salida» y pide el día y el GPS (abajo). Y
+  después, en la ficha, pestaña Operar, dentro de «Elegir ruta y
   generar el rótulo»: **«Programar envío»**, con la fecha y una nota opcional,
   solo en Preparación · Por generar rótulo. Las dos exigen permiso para editar
   el Master. Programar otra vez cambia la fecha; **«Quitar»** pide motivo. En
@@ -1406,6 +1408,72 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 - **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
   (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
   anterior a la guía.
+
+#### Confirmado · programar salida (owner, 17-11-2026)
+
+> ⚠️ **Ocurrió.** #AUR900908 (Aurela, Juliaca) se confirmó el 15-11-2026 a las
+> 3:59 p. m. con «Sale el» vacío. Quedó en Preparación · Por generar rótulo sin
+> guía ni fecha: el automático no lo tomaba, porque solo crea la guía en un día
+> programado, y nada avisaba. Otra persona lo programó al día siguiente.
+> #KP205536 llevaba cinco días igual, y ese día había nueve Provincia COD
+> confirmados sin fecha ni guía (ocho, sin coordenada: con fecha, Kapta pedía el
+> GPS; sin ella, no).
+
+Medido en las guías Aliclik de Provincia COD de los 30 días anteriores:
+**1.140 de 2.654** se crearon sin «Confirmó» antes, y de las que sí lo tenían,
+1.386 las creó la misma persona que confirmó. La confirmación de verdad ya era
+crear la guía; «confirmado» suelto solo tenía sentido para lo que sale otro día.
+Que un pedido estuviera confirmado y saliera hoy era una contradicción, y es
+justo lo que se perdía.
+
+Decisión del owner, **solo en Provincia COD**:
+
+- **Confirmar es programar la salida.** En la gestión de confirmación,
+  «Confirmó el pedido» se llama **«Confirmado · programar salida»** (mismo
+  código `confirmado`: los hechos ya escritos no cambian) y pide, **los dos
+  obligatorios**:
+  - **el día de salida, desde mañana** (hasta 45 días);
+  - **el GPS**, si el pedido no tiene coordenada: el enlace de Google Maps o el
+    par, que se guarda en el pedido como en «Provincia COD: programar pide la
+    coordenada» (abajo). Si ya la tiene, se dice («Ubicación: ya tiene
+    coordenada»).
+
+  Ese día Kapta crea sola la guía Aliclik (abajo), con las excepciones de
+  siempre (Shalom guardado, pago registrado).
+- **Lo que sale hoy no se confirma ahí.** El servidor rechaza confirmar sin día
+  o con el día de hoy, antes de registrar nada, con «¿Sale hoy? No se confirma
+  aquí: crea la guía Aliclik, que deja el pedido confirmado.». Lo que toca es
+  la acción logística:
+  - **Crear la guía Aliclik a mano confirma.** Al crearla, si el pedido no
+    tiene ya un `confirmed`, se escribe uno con quien la creó, el courier y la
+    guía (`payload.via = "guia_aliclik"`, sin canal: nadie dijo por dónde se
+    habló). El aviso de la creación termina en «El pedido queda confirmado.».
+    Así la tasa de confirmación, la productividad y los días de gestión ven lo
+    que antes no veían.
+  - **Registrar el adelanto o el pago total confirma**, igual y una vez
+    (`via = "adelanto"` o `"pago_total"`), salvo el comprobante que entra a
+    revisión administrativa (§16): ese todavía no prueba nada.
+  - **La guía automática no confirma por nadie**: lo que crea el día programado
+    ya se confirmó al programarlo.
+  - Swayp desde Por confirmar **no** confirma: sale sin confirmar a propósito
+    y, si Swayp no entrega, el pedido vuelve a Por confirmar (§11.11).
+- **Si la guía Aliclik no sale hoy** (Aliclik caído, la cotización falla, una
+  compuerta la detiene), el panel ofrece **«Programar salida»**, que lleva a la
+  gestión de confirmación si el pedido se está confirmando, o a «Programar
+  envío» si ya está en Por generar rótulo. Así no queda confirmado de palabra y
+  sin nada en Kapta.
+- **No cambia:** Lima (las rutas las arma otra persona) y Agencia (la
+  confirmación exige el pago validado, §6.1), donde «Sale el» sigue opcional;
+  un pedido «Por revisar» sin ubicación, que no es Provincia COD hasta tener
+  destino y por eso se puede confirmar sin fecha; los demás resultados de la
+  gestión; y «Programar envío» de la ficha, que sigue aceptando hoy.
+
+Implementación: `lib/confirmation-dispatch.ts`; `registerConfirmationAttempt`
+(`app/dashboard/pedidos/actions.ts`); la ficha (`ConfirmationDesk`); la
+creación de la guía (`lib/aliclik-guide.ts`); `registerPayment`
+(`app/dashboard/pedidos/payment-actions.ts`); el panel
+(`components/aliclik-guide-panel.tsx`, `ScheduleInsteadLine`). Pruebas:
+`test/confirmado-programar-salida.test.ts`.
 
 #### Guía Aliclik automática el día programado (16-10-2026)
 
@@ -1475,7 +1543,8 @@ tiene su propia guía automática con tope diario.
   `ALICLIK_WRITE_ENABLED` y `stores.aliclik_enabled`. `?dry=1` cotiza y dice qué
   haría, sin crear ni avisar.
 - **Se dice al programar.** En un pedido de Provincia COD, «Programar envío» y
-  «Sale el (opcional)» avisan que ese día la guía se crea sola.
+  el «Sale el» de «Confirmado · programar salida» avisan que ese día la guía se
+  crea sola.
 
 #### Sin ubicación no se programa el envío (owner, 30-10-2026)
 
@@ -1546,7 +1615,9 @@ ubicación** (la coordenada que pide Aliclik), y se guarda en el pedido.
   ese registro tuviera, y deja en el historial «Ubicación guardada al programar
   el envío». Al confirmar con fecha, va antes de registrar el intento; si falta
   o no sirve, se rechaza y se dice que se puede confirmar dejando «Sale el»
-  vacío. **Confirmar sin fecha no la pide.**
+  vacío. **Confirmar sin fecha no la pide.** (Desde el 17-11-2026, en Provincia
+  COD no hay confirmar sin fecha: «Confirmado · programar salida» pide el día y
+  el GPS, y el rechazo ya no sugiere dejar «Sale el» vacío.)
 - **Lo ya programado sin ella** lo dice la ficha: «Sin ubicación: ese día
   Aliclik no podrá crear la guía.», con «Agregar ubicación», que abre el mismo
   formulario con la fecha que ya tiene.
@@ -6693,6 +6764,13 @@ estados, no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   con guía · M las crea la automática · K sin guía» y la alerta cuenta solo los
   que la automática no cubre. La fila: «Sale mañana: la guía GF automática la
   crea mañana en la mañana.». Si la lectura falla, alarma como antes.
+  Desde el 17-11-2026 (owner: «lo lógico es que aparezca en mañana sin guía,
+  por más que esté acordado o no», #KP205757) el filtro **«Mañana sin guía»
+  lista todo** lo de mañana sin guía ni rótulo, también lo que creará la
+  automática (GF, Aliclik o Swayp); a su lado dice «de ellas, N las crea la
+  automática» y cada fila lo dice en «Próximo paso». La alerta sigue contando
+  solo los que la automática no cubre: si todos los cubre, el filtro sale sin
+  alarma.
 - **«No se entregó»** (`loadNoEntregoStop`, `components/repro-lima-no-entrego.tsx`).
   En «Sin reporte de la ruta» del **reparto propio de Grupo GF**
   (`limaOwnRoute`: sin guía de otro courier), cuando la clienta confirma que no
@@ -6793,8 +6871,8 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     el courier no recogió en su día es un estancado de Sacar a reparto.
   - Sus partes son sus días (Hoy de lunes a sábado, Mañana y Después) y suman
     el paso; dentro van también «Hoy sin guía» (alerta desde las 10:30),
-    «Mañana sin guía» (sin lo que creará la guía GF automática, que se dice
-    aparte) y «Reprogramados». La celda dice «N mañana · M después · K sin
+    «Mañana sin guía» (todo lo de mañana sin guía; lo que creará la
+    automática se dice aparte y no alarma, 17-11-2026) y «Reprogramados». La celda dice «N mañana · M después · K sin
     guía», con lo sin guía en `warn-fg`. La lista va por día, lo vencido
     primero.
   - **No entregados y Sacar a reparto son lo que no tiene día** (los
@@ -6911,7 +6989,7 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     la mañana de ese día Kapta crea su guía…» (`programCourierHint`).
     «Próximo paso» dice «Sale mañana con Aliclik: Kapta crea su guía mañana en
     la mañana» o «…con Swayp: Kapta crea su guía hoy, la víspera»
-    (`limaAutoGuideBy`), y «Mañana sin guía» no los alarma. Guardar el acuerdo
+    (`limaAutoGuideBy`); «Mañana sin guía» los lista pero no los alarma. Guardar el acuerdo
     dice «Kapta crea su guía…» en vez de «créala desde la Mesa de ruta».
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra
@@ -9023,6 +9101,24 @@ la respuesta del cliente. Y le debe avisar a quien lo agendó en un popup».
   `test/callback-returns.test.ts` y, en la base,
   `scripts/sql/lead_appointment_release_smoke.sql` y
   `scripts/sql/lead_manual_take_smoke.sql`.
+
+**La cola de Leads se revisa cada 60 s (15-11-2026, decisión del owner).** Cada
+pantalla de Leads abierta y visible pregunta por la firma de la cola
+(`pollLeadsQueue`), y cada pregunta es la cola entera de `lead_routing_scope`:
+~0,28 s de base por asesora, y en conjunto la consulta que más tiempo de base
+gasta (24,5 % del total medido el 15-11-2026, 13 h). Antes se preguntaba cada
+30 s; desde ahora cada **60 s** (`LEADS_LIVE_POLL_MS`, components/leads.tsx),
+la mitad de veces.
+- Lo que hace la propia asesora se ve al momento; lo que cambian las demás
+  (un lead nuevo, uno tomado, un Yape por verificar) aparece en hasta un
+  minuto en vez de 30 s. Al volver a la pestaña se pregunta en el acto, y la
+  pestaña oculta no pregunta.
+- No cambia cuándo se recarga de verdad (`lib/leads-live-refresh.ts`: urgente
+  si cambian «Atender ahora» o los Yapes, tranquila cada 2 minutos, forzada
+  cada 5), ni el reparto, ni las alertas de Yape (cada 15 s), ni la reserva.
+- Se descartó calcular el reparto una sola vez para todas las asesoras: ahorra
+  lo mismo (la mitad del reparto) con un cambio grande en `lead_routing_scope`
+  y el mismo atraso. Prueba: `test/leads-live-poll.test.ts`.
 
 **Por llamar: nuevos y reintentos en una sola cola (29-10-2026, decisión del owner).**
 La pestaña antes llamada «Sin llamar» se llama **Por llamar**. Las asesoras
@@ -20460,6 +20556,30 @@ Courier:
   decide el día y el courier.
 - **La Agenda de Repro Lima** lee el `scheduled_date` de la guía GF sin salir como el día del courier, también cuando el
   caso ya se cerró.
+
+#### Simular GF Courier: qué impide crear la guía (owner, 16-11-2026)
+
+Pedido del owner: simular en GF los pedidos de Lima de los últimos 90 días, **sin crear guías**, para encontrar qué
+impide crear la guía. GF publicó `POST /v1/orders/validate`: el mismo cuerpo, la misma clave y las mismas reglas que
+`POST /v1/orders`, sin crear nada, sin reservar stock y sin `Idempotency-Key`. Responde `200 {valid:true,
+would_create, destination:{ubigeo, district, taken_from_address}}` o el mismo error que daría al crear.
+- **Dónde.** Pedidos › «Simular GF Courier» (`/dashboard/pedidos/gf-simulacion`; enlace en Ajustes → GF Courier).
+  **Solo el owner** de la organización, con las tiendas que tienen token de GF; el token se descifra en el servidor y
+  no sale de él.
+- **Qué pedidos.** De cada tienda, los de **Lima y Callao** (región del pedido) creados en los últimos 90 días, **sin
+  anular**, en **contraentrega o manuales**: modo `cod`, o pasarela `cod` o `manual` (decisión del owner). Cada uno con
+  la clave de su tienda.
+- **El cuerpo.** El mismo de `createGfGuideFor`: las mismas lecturas, `buildGfOrderInput` y el mismo día programado
+  (`lib/gf-courier-simulate-server.ts`; `test/gf-courier-simulation.test.ts` vigila que no se separen). Dos cambios:
+  si el pedido ya tuvo guía en GF, el `external_id` lleva **«-SIM»** (para que GF no responda `DUPLICATE_ORDER`), y un
+  `scheduled_date` **pasado no se manda** (GF elige el próximo día de reparto). Lo que Kapta no llega a armar (falta
+  el nombre, el teléfono, un SKU…) se cuenta como error «Kapta no arma el cuerpo», con el motivo.
+- **Ritmo.** 4 llamadas por segundo como máximo (GF permite 300 por minuto por clave), en pasadas de 120 pedidos.
+- **El resumen** (en la pantalla, con «Copiar resumen»): revisados, válidos y con error; por tienda; errores agrupados
+  por `code` y `field`, con la cantidad y 3 ejemplos (pedido, mensaje y valor enviado en ese campo); y cuántos válidos
+  tuvieron `destination.taken_from_address = true`.
+- **Nada se guarda.** Ni guías, ni intenciones (`gf_order_requests`), ni hechos, ni el resultado: vive solo en la
+  pantalla del owner y se pierde al cerrarla. «Detener» termina después de la pasada en curso.
 
 ## 30. Liquidaciones 2 — hojas por dominio
 

@@ -107,6 +107,13 @@ Verificar: en Leads, «Generar pedido» con «san mar» ofrece «San Martín de 
 dice «Lima, Lima». Un lead con el distrito mal escrito abre el formulario con el aviso «… no está en la lista» y la
 sugerencia; sin elegir, «Generar pedido» no sale.
 
+### 16-11-2026 · Simular GF Courier: qué impide crear la guía (sin migración, MOM §29.17)
+
+Sin migración. Pedidos › «Simular GF Courier» (solo el owner): manda los pedidos de Lima y Callao de los últimos 90
+días (contraentrega y manuales, sin anular) a `POST /v1/orders/validate` de GF con el mismo cuerpo con el que Kapta
+crea la guía, a 4 por segundo, y resume los errores por código y campo. No crea guías ni escribe nada. Verificar: con
+la cuenta del owner, abrir `/dashboard/pedidos/gf-simulacion`, pulsar «Simular» y ver avanzar «revisados».
+
 ### 16-11-2026 · La clienta que responde vuelve 10 minutos a quien agendó (0351, MOM «Bloques por asesora»)
 
 1. **Migración `0351_lead_appointment_return_hold.sql`**: redefine
@@ -422,6 +429,16 @@ Verificar en un pedido de Aurela:
 1. La Mesa de ruta sugiere «GF Courier» y no ofrece Grupo GF.
 2. #AUR900859, con su guía viva, muestra la guía con estado y envío, y el botón «Anular guía».
 3. En Kenku, con el interruptor apagado, sigue Grupo GF como antes.
+
+### 15-11-2026 · Leads: la cola se revisa cada 60 s (sin migración, MOM «Bloques por asesora»)
+
+Sin migración. La pantalla de Leads pregunta por la firma de la cola cada 60 s
+en vez de 30 (`LEADS_LIVE_POLL_MS`). Cada pregunta es la cola entera de
+`lead_routing_scope`, la consulta que más tiempo de base gasta (24,5 % del total
+medido el 15-11-2026): ahora se hace la mitad de veces. Lo que cambian las
+demás asesoras aparece en hasta un minuto. Verificar: con Leads abierto, en los
+registros de Vercel `/api/leads/read` con `pollLeadsQueue` sale una vez por
+minuto por pestaña visible.
 
 ### 15-11-2026 · Repro Lima: la salida de otro courier cuenta como lista, con aviso (sin migración, MOM §9.5)
 

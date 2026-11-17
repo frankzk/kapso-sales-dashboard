@@ -2,7 +2,8 @@
 //
 // EL COSTE. Cada recarga del tablero (`router.refresh()`) vuelve a bajar la
 // cola entera de «Por llamar» —unos 2.500 leads con cuarenta columnas— y los
-// contadores. El sondeo de la firma cada 30 s evitaba recargar cuando NADA
+// contadores. El sondeo de la firma (cada 30 s; cada 60 s desde el 15-11-2026,
+// `LEADS_LIVE_POLL_MS` en components/leads.tsx) evitaba recargar cuando NADA
 // cambió; pero en horario de atención algo cambia casi siempre: cada mensaje
 // de WhatsApp toca `last_interaction_at` y mueve la firma. Resultado, medido
 // el 10-09-2026: 24,5 millones de filas de `leads` servidas en 24 horas, la

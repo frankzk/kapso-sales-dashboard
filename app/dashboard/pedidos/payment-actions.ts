@@ -63,6 +63,8 @@ import {
   inspectVoucher,
 } from "@/lib/voucher-inspect";
 import type { OrderMasterRow } from "@/lib/types";
+import { classifyOperation } from "@/lib/order-macro-stage";
+import { implicitConfirmationEvent, writesImplicitConfirmation } from "@/lib/confirmation-dispatch";
 import { raiseRepeatedVoucherAlert } from "@/lib/repeated-voucher-alert";
 import { describeFlowReceipt, flowRegistrationStatus, type FlowReceiptCheck } from "@/lib/flow/verify";
 
@@ -869,6 +871,34 @@ export async function registerPayment(
         ? `Pago con Flow de ${input.kind} registrado (S/ ${amount}).`
         : `Yape de ${input.kind} registrado${input.amount ? ` (S/ ${input.amount})` : ""}.`,
   });
+
+  // EL ADELANTO CONFIRMA (MOM §6.2, 17-11-2026). En Provincia COD, lo que sale
+  // hoy con adelanto no pasa por «Confirmado · programar salida»: el comprobante
+  // es la confirmación, y queda escrita con quien lo subió. Un comprobante que
+  // va a revisión administrativa (otra cuenta, de días antes, datos cruzados) no
+  // confirma nada todavía. Una vez por pedido.
+  if ((input.kind === "adelanto" || input.kind === "total") && status !== "revision_admin") {
+    const operation = ctx.row.macro_operation ?? classifyOperation(ctx.row);
+    if (writesImplicitConfirmation({ operation, actor: ctx.userId, automatic: false, alreadyConfirmed: false })) {
+      const { data: confirmed, error: confirmedError } = await admin
+        .from("order_events")
+        .select("id")
+        .eq("order_id", orderId)
+        .eq("kind", "confirmed")
+        .limit(1);
+      if (!confirmedError && !(confirmed ?? []).length) {
+        await admin.from("order_events").insert(
+          implicitConfirmationEvent({
+            storeId: ctx.storeId,
+            orderId,
+            actor: ctx.userId,
+            via: input.kind === "total" ? "pago_total" : "adelanto",
+            occurredAt: new Date().toISOString(),
+          }),
+        );
+      }
+    }
+  }
 
   // VALIDADO POR LA PASARELA. Sin persona (`actor` NULL), como el cruce con el
   // estado de cuenta: lo validó Flow, y la línea de tiempo lo dice.

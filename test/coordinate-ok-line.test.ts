@@ -18,7 +18,9 @@ describe("Provincia COD con coordenada: programar lo dice (02-11-2026, #KP201412
 
   it("sale bajo «Sale el» al confirmar y en «Programar envío», solo si no falta", () => {
     const drawer = readFileSync(resolve(process.cwd(), "components/order-drawer.tsx"), "utf8");
-    expect(drawer).toMatch(/!coordinateMissing && classifyOperation\(row\) === "provincia_cod" && savedCoordinate\(row\) && \(\s*<CoordinateOkLine/);
+    // `operation` es `classifyOperation(row)`, leída una vez en la gestión (17-11-2026).
+    expect(drawer).toContain("const operation = classifyOperation(row);");
+    expect(drawer).toMatch(/!coordinateMissing && operation === "provincia_cod" && savedCoordinate\(row\) && \(\s*<CoordinateOkLine/);
     expect(drawer).toContain("coordinate={savedCoordinate(detail.row)}");
     const panel = readFileSync(resolve(process.cwd(), "components/dispatch-date-panel.tsx"), "utf8");
     expect(panel).toContain("{!coordinateMissing && autoAliclik && savedCoordinate && (");

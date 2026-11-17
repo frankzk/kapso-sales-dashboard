@@ -155,7 +155,14 @@ import { anuraCallForEntry } from "@/lib/anura/ui";
 import { UrpiAttemptsSection } from "@/components/urpi-attempts-section";
 import { limaTodayKey } from "@/lib/shipments";
 import { CoordinateOkLine, DispatchDatePanel } from "@/components/dispatch-date-panel";
-import { AUTO_GUIDE_HINT } from "@/lib/aliclik-scheduled";
+import {
+  SALE_HOY_HINT,
+  confirmationProgramsDispatch,
+  confirmationResultsFor,
+  firstProgrammableDay,
+  scheduleInsteadSection,
+  withSection,
+} from "@/lib/confirmation-dispatch";
 import {
   DISPATCH_DATE_SET,
   DISPATCH_NEEDS_COORDINATE_ERROR,
@@ -2436,6 +2443,10 @@ export function OrderDrawer({
                       void reload();
                       onSaved();
                     }}
+                    onScheduleInstead={withSection(
+                      scheduleInsteadSection(detail.row, classifyOperation(detail.row)),
+                      jumpTo,
+                    )}
                   />
                 </div>
               )}
@@ -3949,14 +3960,27 @@ function ConfirmationDesk({
     ? confirmationDueBucket(row.confirmation_next_contact_on)
     : null;
 
-  const selected = confirmationResult(result);
+  // En Provincia COD «Confirmó el pedido» se llama y es «Confirmado · programar
+  // salida» (MOM §6.2, 17-11-2026): mismo código, otra promesa.
+  const operation = classifyOperation(row);
+  const results = confirmationResultsFor(CONFIRMATION_RESULTS, operation);
+  const selected = results.find((option) => option.code === result) ?? confirmationResult(result);
   const needsDate = Boolean(selected?.schedulesFollowup);
   // Confirmar sin ubicación sí; programar el envío no (MOM §6.2, #KP142558).
   const locationMissing = dispatchLocationMissing(row);
-  const coordinateMissing = dispatchCoordinateMissing(row, classifyOperation(row));
+  const coordinateMissing = dispatchCoordinateMissing(row, operation);
+  // Provincia COD: confirmar ES programar. Día desde mañana y GPS, obligatorios.
+  const programs = Boolean(selected?.confirms && confirmationProgramsDispatch(operation));
+  const firstDay = programs ? firstProgrammableDay(today) : today;
   const schedules = Boolean(selected?.confirms && !locationMissing && dispatchOn);
+  const programIncomplete =
+    programs && (!dispatchOn || dispatchOn < firstDay || (coordinateMissing && !coordinate.trim()));
   const blocked =
-    pending || lastAttempt || (needsDate && !nextContactOn) || (schedules && coordinateMissing && !coordinate.trim());
+    pending ||
+    lastAttempt ||
+    (needsDate && !nextContactOn) ||
+    (schedules && coordinateMissing && !coordinate.trim()) ||
+    programIncomplete;
 
   return (
     <section className="space-y-4">
@@ -4103,7 +4127,7 @@ function ConfirmationDesk({
               onChange={(e) => setResult(e.target.value)}
               className={cn(FIELD, "font-normal pointer-coarse:h-11")}
             >
-              {CONFIRMATION_RESULTS.map((option) => (
+              {results.map((option) => (
                 <option key={option.code} value={option.code}>
                   {option.label}
                 </option>
@@ -4130,12 +4154,13 @@ function ConfirmationDesk({
         {selected?.confirms && (
           <div className="space-y-1">
             <label className={cn(LABEL, "sm:w-56")}>
-              Sale el (opcional)
+              {programs ? "Sale el" : "Sale el (opcional)"}
               <input
                 type="date"
                 value={locationMissing ? "" : dispatchOn}
-                min={today}
+                min={firstDay}
                 max={dispatchDateMax(today)}
+                required={programs}
                 disabled={locationMissing}
                 aria-describedby="sale-el-ayuda"
                 onChange={(e) => setDispatchOn(e.target.value)}
@@ -4151,16 +4176,19 @@ function ConfirmationDesk({
                   Corregir ubicación
                 </OpsButton>
               </div>
+            ) : programs ? (
+              <p id="sale-el-ayuda" className="text-[13px] leading-5 text-ink-500">
+                Desde mañana. Ese día Kapta crea sola la guía Aliclik (8:00 a. m. a 1:00 p. m.). {SALE_HOY_HINT}
+              </p>
             ) : (
               <p id="sale-el-ayuda" className="text-[13px] leading-5 text-ink-500">
                 Solo si acordaron otro día para el envío. Vacío: sale apenas se genere la guía.
-                {classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`}
               </p>
             )}
-            {selected?.confirms && !locationMissing && !coordinateMissing && classifyOperation(row) === "provincia_cod" && savedCoordinate(row) && (
+            {selected?.confirms && !locationMissing && !coordinateMissing && operation === "provincia_cod" && savedCoordinate(row) && (
               <CoordinateOkLine latitude={savedCoordinate(row)!.latitude} longitude={savedCoordinate(row)!.longitude} className="pt-1" />
             )}
-            {schedules && coordinateMissing && (
+            {(schedules || programs) && coordinateMissing && (
               <label className={cn(LABEL, "pt-2")}>
                 Ubicación (obligatoria para programar)
                 <input
@@ -4200,7 +4228,7 @@ function ConfirmationDesk({
                 note,
                 nextContactOn,
                 dispatchOn: selected?.confirms && !locationMissing ? dispatchOn : "",
-                coordinate: schedules && coordinateMissing ? coordinate : "",
+                coordinate: (schedules || programs) && coordinateMissing ? coordinate : "",
                 operationId: crypto.randomUUID(),
               });
               setNote("");

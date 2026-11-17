@@ -254,7 +254,7 @@ export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & {
     key: "manana_sin_guia",
     parent: "agenda",
     label: "Mañana sin guía",
-    hint: "Salen mañana sin guía del courier ni rótulo, y la guía GF automática no los cubre (otra tienda, otro courier o con un acuerdo). Genérala hoy para que salgan.",
+    hint: "Todo lo que sale mañana y todavía no tiene guía del courier ni rótulo, acordado o no. Los que va a crear la automática (GF, Aliclik o Swayp) lo dicen en su fila; los demás, genéralos hoy para que salgan.",
     empty: "Todo lo de mañana tiene su guía o su rótulo.",
   },
 };
@@ -766,7 +766,7 @@ export interface LimaBoardCounts {
   /** Por cajón: «hoy», cada día, «despues» y «sin_fecha». */
   agenda: Record<string, number>;
   courier: Record<LimaCourierState, number>;
-  /** De lo que sale mañana sin guía, los que creará la guía GF automática: no alarman. */
+  /** De lo que sale mañana sin guía (todos en `manana_sin_guia`), los que creará la automática: no alarman. */
   autoGuideManana: number;
   /**
    * De «En ruta» (dentro de Con el courier), cuántos salieron hoy; los demás
@@ -796,9 +796,11 @@ export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: Read
     if (cls.step === "programados") {
       if (cls.agenda) counts.agenda[cls.agenda] = (counts.agenda[cls.agenda] ?? 0) + 1;
       if (cls.agenda === "hoy" && !cls.guide) counts.sub.hoy_sin_guia += 1;
+      // Todo lo de mañana sin guía, acordado o no (owner, 17-11-2026: «lo lógico es que aparezca en
+      // mañana sin guía»); los que creará la automática se cuentan aparte y no alarman.
       if (cls.agenda === "manana" && !cls.guide) {
+        counts.sub.manana_sin_guia += 1;
         if (cls.autoGuide) counts.autoGuideManana += 1;
-        else counts.sub.manana_sin_guia += 1;
       }
       if (cls.agreed) counts.sub.reprogramados += 1;
     }
@@ -864,7 +866,7 @@ export function boardMatches(cls: LimaRowClass, key: LimaBoardKey): boolean {
     // Los días y sus filtros son de «Programados» (owner, 16-11-2026).
     case "reprogramados": return cls.step === "programados" && cls.agreed;
     case "hoy_sin_guia": return cls.step === "programados" && cls.agenda === "hoy" && !cls.guide;
-    case "manana_sin_guia": return cls.step === "programados" && cls.agenda === "manana" && !cls.guide && !cls.autoGuide;
+    case "manana_sin_guia": return cls.step === "programados" && cls.agenda === "manana" && !cls.guide;
     default: return cls.step === "programados" && cls.agenda === key;
   }
 }
