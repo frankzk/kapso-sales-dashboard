@@ -24,6 +24,7 @@ import {
 // Type-only import: pulling runtime values from lib/productivity would drag the
 // whole server data layer (supabase clients) into this client bundle.
 import type { AdvisorBoardRow, AgentLeadRow, SourceBucket, TrendCell } from "@/lib/productivity";
+import { ASSIST_WINDOW_HOURS } from "@/lib/sale-assists";
 
 const ONLINE_POLL_MS = 45_000; // refresco de los puntos "en línea"
 
@@ -646,6 +647,25 @@ function WeekLine({ s }: { s: WeekStatus | undefined }) {
 
 // ── Piezas de la fila ───────────────────────────────────────────────────────────
 
+/** «3 asistidas» (MOM §17.6). */
+function assistLabel(n: number): string {
+  return `${nf.format(n)} ${n === 1 ? "asistida" : "asistidas"}`;
+}
+
+/** Bajo «Cerrados»: las ventas que cerró otra con una clienta con la que ella habló. */
+function AssistLine({ r }: { r: Pick<AdvisorBoardRow, "asistidas" | "asistidasDetalle"> }) {
+  if (r.asistidas <= 0) return null;
+  const pedidos = r.asistidasDetalle.map((o) => o.name).filter(Boolean);
+  return (
+    <span
+      className="block whitespace-nowrap text-xs tabular-nums text-ink-500"
+      title={`Habló con la clienta en las ${ASSIST_WINDOW_HOURS} h antes y la venta la generó otra asesora${pedidos.length ? `: ${pedidos.join(", ")}` : ""}`}
+    >
+      {assistLabel(r.asistidas)}
+    </span>
+  );
+}
+
 /** «KP 7/44 · AUR 4/27»: cerrados de cuántos leads trabajados por tienda. Una
  *  tienda con leads y sin cierres va en rojo: es el barril roto. */
 function StoreSplit({
@@ -924,6 +944,12 @@ export function ProductivityTable({
                       <span className="font-semibold tabular-nums text-ink-900">{nf.format(r.cerrados)}</span>{" "}
                       {r.cerrados === 1 ? "cerrado" : "cerrados"}
                       {showDelta && <Signed value={r.delta.cerrados} fmt={nf.format} className="ml-1 text-xs font-medium" />}
+                      {r.asistidas > 0 && (
+                        <>
+                          {SEP}
+                          <span className="tabular-nums">{assistLabel(r.asistidas)}</span>
+                        </>
+                      )}
                     </span>
                     <span className="font-semibold tabular-nums text-ink-900">
                       {money(r.ingresos, currency)}
@@ -1034,7 +1060,7 @@ export function ProductivityTable({
               <th
                 scope="col"
                 className={cn(TH, "pr-3 text-right")}
-                title="El pedido se acredita a la asesora del último toque sobre el lead (llamada, mensaje o venta)"
+                title={`La venta es de quien generó el pedido. Debajo, sus asistidas: ventas que cerró otra asesora con una clienta con la que ella habló en las ${ASSIST_WINDOW_HOURS} h antes (no suman aquí)`}
               >
                 Cerrados
                 <span className={TH_SUB}>por tienda</span>
@@ -1129,6 +1155,7 @@ export function ProductivityTable({
                       {showDelta && <Signed value={r.delta.cerrados} fmt={nf.format} className="ml-1.5 text-xs font-medium" />}
                     </span>
                     <StoreSplit porTienda={r.porTienda} storeInfo={storeInfo} />
+                    <AssistLine r={r} />
                   </td>
                   <td className="py-3 pr-5 text-right">
                     <span className="block font-semibold tabular-nums text-ink-900">{money(r.ingresos, currency)}</span>
@@ -1330,6 +1357,21 @@ function AdvisorPanel({
               </>
             )}
           </p>
+          {r.asistidas > 0 && (
+            <p className="mt-2 text-[13px] leading-5 text-ink-600">
+              <span className="font-medium tabular-nums text-ink-900">{assistLabel(r.asistidas)}</span> por{" "}
+              <span className="tabular-nums">{money(r.asistidasIngresos, currency)}</span>: ventas que cerró otra asesora con
+              clientas con las que {solo ? "hablaste" : "habló"} en las {ASSIST_WINDOW_HOURS} h antes. No suman a Cerrados.
+              {r.asistidasDetalle.some((o) => o.name) && (
+                <span className="mt-0.5 block text-xs tabular-nums text-ink-500">
+                  {r.asistidasDetalle
+                    .map((o) => o.name)
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              )}
+            </p>
+          )}
         </section>
 
         {period && periodUser && periodUser.dias.length > 0 && (

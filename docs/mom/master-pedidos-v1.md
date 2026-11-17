@@ -15419,6 +15419,59 @@ dueña) y los pedidos del día del corte, para cortar al minuto. Se arma en
 /api/dashboard/pulso?periodo=hoy|semana|mes`, con las mismas puertas que la
 página: sin tiendas, o solo vendedora o solo motorizado, no hay ventas que ver.
 
+### 17.6 «Asistidas»: la que habló con la clienta y la venta la cerró otra (owner, 17-11-2026)
+
+**Por qué.** #AUR900998 (16-11-2026, Aurela). Antu llamó dos veces a la
+clienta, habló con ella («quiere fotos del producto») y le mandó las fotos; no
+agendó «Volver a llamar». Tres horas después Medaly tomó el lead desde la
+búsqueda («Toma puntual fuera de bloques») y generó el pedido. La venta es de
+Medaly y el trabajo de Antu no aparecía en ningún número. El owner: «la idea es
+hacer el conteo más justo». Entre repartir la venta a medias, dársela entera a
+la primera que habló o dejarla con quien la generó y mostrar aparte lo que la
+otra aportó, eligió lo último, con una ventana de 72 horas y desde noviembre.
+
+Medido sobre los 30 días previos (2.512 ventas): en 88 (3,5 %) otra asesora
+había hablado con la clienta en las 72 h antes; en 24 h, 65; en 7 días, 106.
+Casi nunca viene de la toma puntual (2 de 20): es el lead que vuelve al reparto
+cuando se vence la reserva.
+
+**La regla** (`lib/sale-assists.ts`, pura):
+
+- **La venta no se mueve.** Sigue siendo de quien generó el pedido
+  (`order_sales`, §17.3) y Cerrados e Ingresos no cambian.
+- **Asistida.** Una venta es asistida por una asesora si ella tuvo una llamada
+  firmada (`lead_calls.kind = call`) con la clienta **contestando** —resultado
+  «Contactado, dejó WhatsApp», «Consultó otros productos», «Casi cierra»,
+  «Volver a llamar», «Yape/Shalom por verificar» o «Sin stock»— en las **72
+  horas antes** de la venta, en el mismo lead, y no es quien la generó. «No
+  responde», buzón, cuelga, los mensajes sueltos y las notas no cuentan: no es
+  haberla atendido.
+- **Una por venta.** Si hablaron varias, es de la **primera** que habló con ella
+  en esa ventana.
+- **Desde el 01-11-2026** (hora de Lima). Las ventas anteriores no tienen
+  asistida.
+- **No se mueve sola.** Solo mira lo que pasó antes de la venta, así que, hecha
+  la venta, su asistida queda fija (la lección de «el último toque», §17.3).
+- Un vistazo para premiar o corregir el reparto, no una venta: no entra en el %
+  de cierre, en el ranking ni en la meta.
+
+**Dónde se ve.** En Productividad (`/dashboard/productividad`), bajo «Cerrados»
+de cada asesora, «N asistidas» en `ink-500` (al pasar el cursor, los pedidos);
+en el teléfono, en su línea de cerrados; y en el panel de la asesora, «N
+asistidas por S/ …: ventas que cerró otra asesora con clientas con las que habló
+en las 72 h antes. No suman a Cerrados.», con los pedidos. Con la lente de
+fuente, solo las de esas ventas.
+
+**Cómo se calcula.** Con la sesión de quien mira: de las ventas del rango
+(`order_sales.lead_id`) se leen sus llamadas contestadas desde 72 h antes de la
+primera venta (`loadSaleAssists` en `lib/productivity.ts`, 100 leads por
+lectura) y decide la regla pura. Si esa lectura falla, el tablero sale sin
+asistidas; nunca cambia Cerrados. Sin migración. Pruebas:
+`test/sale-assists.test.ts`.
+
+Al publicarlo (17-11-2026), noviembre llevaba 34 asistidas: Medaly 12, Jessica
+10, Albornoz 5, Antu 3, Grace 2, Yohalis 1 y Jazmín 1.
+
 ## 18. Implementación incremental
 
 ### Fase 1 — Fundaciones

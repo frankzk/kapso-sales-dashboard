@@ -19,6 +19,14 @@ import { onlineVendedoraIds } from "@/lib/presence";
 import { leadSegment, type LeadSegment } from "@/lib/leads";
 import type { DayTotals } from "@/lib/productivity-month";
 import { activeHoursFromTimes, computeWeekActivity, daysBetween, type DayActivity, type WeekDay } from "@/lib/productivity-week";
+import {
+  ASSIST_CONTACT_STATUSES,
+  ASSIST_FROM_ISO,
+  assistContactsFromIso,
+  computeAssists,
+  type AssistCell,
+  type AssistContact,
+} from "@/lib/sale-assists";
 
 const DB_READ_CONCURRENCY = 4;
 
@@ -112,6 +120,11 @@ export interface AdvisorStat {
   cerrados: number; // ventas REGISTRADAS por ella en el rango (`order_sales`)
   cerradosDetalle: WonOrderRef[]; // the orders behind `cerrados`, oldest first
   ingresos: number; // net revenue (total - refunded) of those orders
+  /** Ventas del rango que cerró OTRA con una clienta con la que ella habló antes
+   *  (lib/sale-assists.ts, MOM §17.6). No suman a `cerrados` ni a `ingresos`. */
+  asistidas: number;
+  asistidasDetalle: WonOrderRef[];
+  asistidasIngresos: number;
   porFuente: Record<SourceBucket, SourceCell>; // cerrados+ingresos split by acquisition source
   porTienda: Record<string, StoreCell>; // leads trabajados + cerrados + ingresos por tienda
   conversion: number; // cerrados / leadsTrabajados, 0..1
@@ -500,6 +513,8 @@ export function computeFirstTouchStats(opts: {
 export interface AdvisorSale {
   vendedora: string;
   orderId: string;
+  /** El lead desde el que se vendió (`order_sales.lead_id`): de ahí salen las asistidas. */
+  leadId?: string | null;
   /** ISO del instante de la venta (`order_sales.occurred_at`). */
   occurredAt: string;
   storeId: string | null;
@@ -518,6 +533,8 @@ export interface ProductivityInput {
    *  lleva el resultado del lead: quién cerró qué lo dice `sales`. */
   leadStore: Map<string, string | null | undefined>;
   emailById: Map<string, string>;
+  /** Las asistidas de cada asesora para estas ventas (`computeAssists`). */
+  assists?: Map<string, AssistCell>;
 }
 
 // Las horas activas (bloques cortados en pausas de más de 45 min) se calculan
@@ -538,7 +555,7 @@ export interface ProductivityInput {
  * distintas y merecen dos respuestas distintas.
  */
 export function computeAdvisorStats(
-  { calls, sales, leadStore, emailById }: ProductivityInput,
+  { calls, sales, leadStore, emailById, assists }: ProductivityInput,
   tz = "America/Lima",
 ): AdvisorStat[] {
   const agg = new Map<string, { llamadas: number; leads: Set<string> }>();
@@ -607,6 +624,11 @@ export function computeAdvisorStats(
   for (const userId of won.keys()) {
     if (!agg.has(userId)) agg.set(userId, { llamadas: 0, leads: new Set<string>() });
   }
+  // Lo mismo con quien solo asistió: habló con la clienta antes del rango y otra
+  // cerró dentro de él.
+  for (const userId of assists?.keys() ?? []) {
+    if (!agg.has(userId)) agg.set(userId, { llamadas: 0, leads: new Set<string>() });
+  }
 
   const rows: AdvisorStat[] = [];
   for (const [userId, a] of agg) {
@@ -629,6 +651,7 @@ export function computeAdvisorStats(
     }
     // Oldest first; wins without an ingested order (no date yet) go last.
     w.detalle.sort((x, y) => ((x.at ?? "9999") < (y.at ?? "9999") ? -1 : 1));
+    const as = assists?.get(userId);
     rows.push({
       userId,
       email: emailById.get(userId) ?? userId,
@@ -637,6 +660,9 @@ export function computeAdvisorStats(
       cerrados: w.cerrados,
       cerradosDetalle: w.detalle,
       ingresos: w.ingresos,
+      asistidas: as?.asistidas ?? 0,
+      asistidasDetalle: as?.detalle ?? [],
+      asistidasIngresos: as?.ingresos ?? 0,
       porFuente: w.porFuente,
       porTienda,
       conversion: leadsTrabajados ? w.cerrados / leadsTrabajados : 0,
@@ -741,6 +767,7 @@ async function fetchAdvisorSalesPaged(
   return raw.map((r) => ({
     vendedora: r.vendedora,
     orderId: r.order_id,
+    leadId: r.lead_id,
     occurredAt: r.occurred_at,
     storeId: r.store_id,
     net: (r.orders?.total_amount ?? 0) - (r.orders?.total_refunded ?? 0),
@@ -748,6 +775,45 @@ async function fetchAdvisorSalesPaged(
     orderAt: r.orders?.created_at ?? null,
     source: sourceKey(r.lead_id ? sourceByLead.get(r.lead_id) : null),
   }));
+}
+
+/**
+ * Las asistidas de estas ventas (lib/sale-assists.ts, MOM §17.6): lee las
+ * llamadas contestadas de sus leads en la ventana previa a cada venta y decide
+ * con la regla pura. Best-effort como el resto del tablero: si la lectura falla,
+ * sin asistidas (nunca mueve cerrados ni ingresos).
+ */
+async function loadSaleAssists(
+  sb: Awaited<ReturnType<typeof createServerSupabase>>,
+  sales: AdvisorSale[],
+  endIso: string,
+): Promise<Map<string, AssistCell>> {
+  const counted = sales
+    .filter((s) => s.leadId && s.occurredAt >= ASSIST_FROM_ISO)
+    .map((s) => ({ ...s, leadId: s.leadId ?? null }));
+  if (!counted.length) return new Map();
+  const firstSale = counted.reduce((min, s) => (s.occurredAt < min ? s.occurredAt : min), counted[0]!.occurredAt);
+  const fromIso = assistContactsFromIso(firstSale);
+  const leadIds = [...new Set(counted.map((s) => s.leadId!))];
+  const contacts: AssistContact[] = [];
+  // 100 leads por lectura: con varias llamadas por lead, una tanda de 300 podía
+  // pasar de las 1000 filas que PostgREST devuelve sin avisar.
+  const pages = await mapInBatches(chunk(leadIds, 100), async (part) =>
+    await sb
+      .from("lead_calls")
+      .select("lead_id, vendedora, kind, new_status, occurred_at")
+      .in("lead_id", part)
+      .eq("kind", "call")
+      .in("new_status", [...ASSIST_CONTACT_STATUSES])
+      .gte("occurred_at", fromIso)
+      .lte("occurred_at", endIso)
+      .limit(1000),
+  );
+  for (const { data, error } of pages) {
+    if (error) return new Map();
+    contacts.push(...((data as AssistContact[] | null) ?? []));
+  }
+  return computeAssists(counted, contacts);
 }
 
 /** From the range's advisor calls, resolve each touched lead's store and apply
@@ -851,10 +917,11 @@ export async function getAdvisorProductivity(
   const { scopedCalls, leadStore, scopedSales } = await buildAdvisorInputs(sb, calls, source, sales);
   if (!scopedCalls.length && !scopedSales.length) return [];
 
+  const assists = await loadSaleAssists(sb, scopedSales, endIso);
   const emailById = await resolveEmails([
-    ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora)]),
+    ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora), ...assists.keys()]),
   ]);
-  return computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById }, tz);
+  return computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById, assists }, tz);
 }
 
 // ───────────────────────── Comparativo vs período anterior ─────────────────────
@@ -1304,12 +1371,13 @@ export async function getProductivityBoard(
   // Metrics from the SAME calls (source lens inside), same as getAdvisorProductivity.
   const salesInRange = salesWindow.filter((s) => s.occurredAt >= startIso);
   const { scopedCalls, leadStore, scopedSales } = await buildAdvisorInputs(sb, calls, source, salesInRange);
+  const assists = await loadSaleAssists(sb, scopedSales, endIso);
   const emailById = await resolveEmails([
-    ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora)]),
+    ...new Set([...scopedCalls.map((c) => c.vendedora), ...scopedSales.map((s) => s.vendedora), ...assists.keys()]),
   ]);
   const cur =
     scopedCalls.length || scopedSales.length
-      ? computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById }, tz)
+      ? computeAdvisorStats({ calls: scopedCalls, sales: scopedSales, leadStore, emailById, assists }, tz)
       : [];
   const { rows: withDeltas, prevTotals } = attachDeltas(cur, prevRows);
 
