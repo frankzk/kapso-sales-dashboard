@@ -86,7 +86,7 @@ function StageBadges({ row }: { row: LimaPendingOrder }) {
 function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
   const courier = courierNowText(row);
   // El motorizado que llevaría su distrito (17-11-2026), mientras GF Courier no asigne a nadie.
-  // El servidor solo la deja con guía de GF Courier sin motorizado (`shownRiderSuggestion`), igual que el filtro «Sugerido».
+  // El servidor solo la deja con guía de GF Courier sin motorizado (`shownRiderSuggestion`), y el filtro «Motorizado» la usa sin asignado.
   const suggested = row.suggestedRiders?.length ? riderSuggestionText(row.suggestedRiders) : null;
   // El que GF Courier ya asignó (17-11-2026): manda sobre la sugerencia.
   const assigned = row.gfAssigned ?? null;

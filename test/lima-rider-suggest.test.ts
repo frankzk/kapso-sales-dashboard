@@ -60,28 +60,29 @@ describe("solo mientras GF Courier no asigne", () => {
   });
 });
 
-describe("el filtro «Sugerido» (owner, 17-11-2026)", () => {
-  const row = (orderId: string, suggestedRiders: string[] | null) => ({ orderId, salesChannel: null, district: null, courier: null, courierDetail: null, createdAt: null, suggestedRiders }) as unknown as LimaPendingOrder;
-  const rows = [row("a", ["Roy"]), row("b", ["Yordani", "Alexis"]), row("c", ["Alexis"]), row("d", null)];
-  it("cuenta cada motorizado y «Sin sugerencia» al final", () => {
+describe("el filtro «Motorizado» (owner, 17-11-2026)", () => {
+  const row = (orderId: string, suggestedRiders: string[] | null, gfAssigned: { rider: string; day: string | null } | null = null) =>
+    ({ orderId, salesChannel: null, district: null, courier: null, courierDetail: null, createdAt: null, suggestedRiders, gfAssigned }) as unknown as LimaPendingOrder;
+  const rows = [row("a", ["Roy"]), row("b", ["Yordani", "Alexis"]), row("c", ["Alexis"]), row("d", null), row("e", null, { rider: "Alexis", day: "17/11" })];
+  it("cuenta cada motorizado, con el asignado, y «Sin motorizado» al final", () => {
     expect(rowFilterOptions(rows).suggested).toEqual([
-      { value: "Alexis", label: "Alexis", count: 2 },
+      { value: "Alexis", label: "Alexis", count: 3 },
       { value: "Roy", label: "Roy", count: 1 },
       { value: "Yordani", label: "Yordani", count: 1 },
-      { value: "sin_sugerido", label: "Sin sugerencia", count: 1 },
+      { value: "sin_motorizado", label: "Sin motorizado", count: 1 },
     ]);
   });
-  it("«Yordani o Alexis» entra con cualquiera de los dos", () => {
+  it("«Alexis» trae lo asignado y lo sugerido; «Yordani o Alexis» entra con cualquiera", () => {
     const f = { ...emptyRowFilters(), suggested: new Set(["Alexis"]) };
-    expect(rows.filter((r) => rowFiltersMatch(r, f)).map((r) => r.orderId)).toEqual(["b", "c"]);
-    expect(rows.filter((r) => rowFiltersMatch(r, { ...emptyRowFilters(), suggested: new Set(["sin_sugerido"]) })).map((r) => r.orderId)).toEqual(["d"]);
+    expect(rows.filter((r) => rowFiltersMatch(r, f)).map((r) => r.orderId)).toEqual(["b", "c", "e"]);
+    expect(rows.filter((r) => rowFiltersMatch(r, { ...emptyRowFilters(), suggested: new Set(["sin_motorizado"]) })).map((r) => r.orderId)).toEqual(["d"]);
   });
-  it("vive en la URL como «sugerido» y la barra lo ofrece", () => {
+  it("vive en la URL como «motorizado» y la barra lo ofrece", () => {
     const out = new URLSearchParams();
     writeRowFilters(out, { ...emptyRowFilters(), suggested: new Set(["Roy"]) });
-    expect(out.toString()).toBe("sugerido=Roy");
+    expect(out.toString()).toBe("motorizado=Roy");
     expect([...readRowFilters(out).suggested]).toEqual(["Roy"]);
-    expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Sugerido" allLabel="Todos"');
+    expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Motorizado" allLabel="Todos"');
   });
 });
 

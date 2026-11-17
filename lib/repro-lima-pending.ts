@@ -102,7 +102,7 @@ export interface LimaPendingOrder {
   courierPickup?: { courier: "aliclik" | "gf_courier"; date: string } | null;
   /**
    * Quién lleva su distrito según el reparto de 30 días (`lib/lima-rider-suggest.ts`): uno, dos o null. Solo
-   * con guía de GF Courier sin motorizado (`shownRiderSuggestion`): lo que se muestra y filtra «Sugerido».
+   * con guía de GF Courier sin motorizado (`shownRiderSuggestion`): lo que se muestra; el filtro «Motorizado» lo usa sin asignado.
    */
   suggestedRiders?: string[] | null;
   /**
@@ -179,14 +179,18 @@ export interface LimaRowFilters {
   channels: ReadonlySet<string>;
   districts: ReadonlySet<string>;
   couriers: ReadonlySet<string>;
-  /** «Sugerido» (owner, 17-11-2026): el nombre del motorizado sugerido, o `sin_sugerido`. */
+  /**
+   * «Motorizado» (owner, 17-11-2026: «cámbialo a Motorizado»): el motorizado que GF ya asignó o, sin asignado, el
+   * sugerido por su distrito; o `sin_motorizado`. Antes «Sugerido».
+   */
   suggested: ReadonlySet<string>;
 }
 
-export const NO_SUGGESTED = "sin_sugerido";
+export const NO_SUGGESTED = "sin_motorizado";
 
-/** Los motorizados sugeridos de la fila (uno o dos), o `sin_sugerido`. */
-export function suggestedKeys(row: Pick<LimaPendingOrder, "suggestedRiders">): string[] {
+/** El motorizado de la fila: el asignado por GF; sin él, los sugeridos (uno o dos); si no, `sin_motorizado`. */
+export function suggestedKeys(row: Pick<LimaPendingOrder, "suggestedRiders" | "gfAssigned">): string[] {
+  if (row.gfAssigned?.rider) return [row.gfAssigned.rider];
   return row.suggestedRiders?.length ? row.suggestedRiders : [NO_SUGGESTED];
 }
 
@@ -206,7 +210,7 @@ export type LimaFilterOption = { value: string; label: string; count: number };
 
 export const NO_COURIER = "sin_courier";
 export const NO_DISTRICT = "sin_distrito";
-const ROW_FILTER_PARAMS = { channels: "canal", districts: "distrito", couriers: "courier", suggested: "sugerido", createdFrom: "creado_desde", createdTo: "creado_hasta" } as const;
+const ROW_FILTER_PARAMS = { channels: "canal", districts: "distrito", couriers: "courier", suggested: "motorizado", createdFrom: "creado_desde", createdTo: "creado_hasta" } as const;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export function emptyRowFilters(): LimaRowFilters {
@@ -272,9 +276,9 @@ function titleCase(value: string): string {
 export function rowFilterOptions(rows: readonly LimaPendingOrder[]): { channels: LimaFilterOption[]; districts: LimaFilterOption[]; couriers: LimaFilterOption[]; suggested: LimaFilterOption[] } {
   const suggestedCount = new Map<string, number>();
   for (const row of rows) for (const k of suggestedKeys(row)) suggestedCount.set(k, (suggestedCount.get(k) ?? 0) + 1);
-  // «Sugerido»: cada motorizado (el de más pedidos primero) y, al final, «Sin sugerencia».
+  // «Motorizado»: cada uno (el de más pedidos primero) y, al final, «Sin motorizado».
   const suggested = [...suggestedCount.entries()]
-    .map(([value, count]) => ({ value, label: value === NO_SUGGESTED ? "Sin sugerencia" : value, count }))
+    .map(([value, count]) => ({ value, label: value === NO_SUGGESTED ? "Sin motorizado" : value, count }))
     .sort((a, b) => Number(a.value === NO_SUGGESTED) - Number(b.value === NO_SUGGESTED) || b.count - a.count || a.label.localeCompare(b.label, "es"));
   const channelCount = new Map<string, number>();
   const courierCount = new Map<string, number>();

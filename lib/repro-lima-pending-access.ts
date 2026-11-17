@@ -481,7 +481,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       courierPickup,
       // El que GF ya asignó a su guía viva (17-11-2026). Con asignado, ya no se sugiere.
       gfAssigned: gfAssigned.get(row.order_id) ?? null,
-      // Solo con guía de GF Courier sin motorizado (17-11-2026): la fila y el filtro «Sugerido» leen esto.
+      // Solo con guía de GF Courier sin motorizado (17-11-2026): la fila lee esto; el filtro «Motorizado», esto o el asignado.
       suggestedRiders: gfAssigned.has(row.order_id) ? null : shownRiderSuggestion({ ops, courierPickup }, riderSuggestions.get(districtKey(row.district))),
     };
   });

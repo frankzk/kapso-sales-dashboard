@@ -7296,20 +7296,24 @@ motorizado cuando ya lo asignó. Mientras no, la fila con guía de GF Courier di
 `lib/lima-rider-suggest.ts`): un motorizado con el 70% o más de las paradas del
 distrito, o los dos primeros si juntos llegan al 80% («Yordani o Alexis»); con
 menos de 5 paradas o muy repartido, nada. Es una sugerencia: asigna GF. El
-servidor decide cuándo se muestra (`shownRiderSuggestion`), y la barra tiene el
-filtro **«Sugerido»** (owner, 17-11-2026: «ármale un filtro de Sugeridos»): cada
-motorizado con su cifra y «Sin sugerencia» (`sugerido=` en la URL); «Yordani o
-Alexis» entra con cualquiera de los dos. Las cifras de Canal, Distrito, Courier
-y Sugerido cuentan la lista abierta (el paso y su parte, o los trabados), con los
-demás filtros puestos: en Nuevos (125) «Sin sugerencia» y los motorizados cuentan
-esos 125, no los 1,376 del panel.
+servidor decide cuándo se muestra (`shownRiderSuggestion`).
+
+**El filtro «Motorizado» (owner, 17-11-2026: «ármale un filtro de Sugeridos»;
+luego «cámbialo a Motorizado»).** Cada pedido entra con el motorizado que GF ya
+asignó o, sin asignado, con el sugerido por su distrito; sin ninguno, «Sin
+motorizado» (`suggestedKeys`; `motorizado=` en la URL). Marcar «Alexis» trae lo
+asignado a Alexis y lo que se le sugiere; «Yordani o Alexis» entra con
+cualquiera de los dos (por eso las cifras pueden sumar más que la lista). Las
+cifras de Canal, Distrito, Courier y Motorizado cuentan la lista abierta (el
+paso y su parte, o los trabados), con los demás filtros puestos: en Nuevos (125)
+cuentan esos 125, no los 1,376 del panel.
 
 **El motorizado asignado (17-11-2026).** Cuando GF Courier ya asignó la guía
 viva, su aviso deja en el historial «GF Courier: asignado a Alexis para la ruta
 del 17/11.» (`lib/gf-webhook-note.ts`). La fila lo dice: **«Asignado: Alexis ·
 ruta del 17/11»** (`parseGfAssigned`), con la línea más reciente de ESA guía
-(la de una guía anterior no cuenta). Con asignado ya no hay «Sugerido» ni entra
-al filtro como sugerido. Es solo lectura: si la lectura falla, la fila no dice
+(la de una guía anterior no cuenta). Con asignado ya no hay «Sugerido»: en el
+filtro «Motorizado» entra con el asignado. Es solo lectura: si la lectura falla, la fila no dice
 el asignado.
 
 **Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen

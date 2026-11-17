@@ -60,7 +60,7 @@ export function buildRiderSuggestions(rows: readonly RiderShareRow[]): Map<strin
 /**
  * La sugerencia que se MUESTRA: con guía viva de GF Courier que todavía no tiene
  * motorizado. Lo demás no lleva sugerencia (null). La fila y el filtro
- * «Sugerido» leen esto mismo (`LimaPendingOrder.suggestedRiders`). Pura.
+ * «Motorizado» (sin asignado) leen esto mismo (`LimaPendingOrder.suggestedRiders`). Pura.
  */
 export function shownRiderSuggestion(
   row: Pick<LimaPendingOrder, "ops" | "courierPickup">,
