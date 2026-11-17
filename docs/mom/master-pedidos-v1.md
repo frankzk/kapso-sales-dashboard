@@ -6693,6 +6693,13 @@ estados, no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
   con guía · M las crea la automática · K sin guía» y la alerta cuenta solo los
   que la automática no cubre. La fila: «Sale mañana: la guía GF automática la
   crea mañana en la mañana.». Si la lectura falla, alarma como antes.
+  Desde el 17-11-2026 (owner: «lo lógico es que aparezca en mañana sin guía,
+  por más que esté acordado o no», #KP205757) el filtro **«Mañana sin guía»
+  lista todo** lo de mañana sin guía ni rótulo, también lo que creará la
+  automática (GF, Aliclik o Swayp); a su lado dice «de ellas, N las crea la
+  automática» y cada fila lo dice en «Próximo paso». La alerta sigue contando
+  solo los que la automática no cubre: si todos los cubre, el filtro sale sin
+  alarma.
 - **«No se entregó»** (`loadNoEntregoStop`, `components/repro-lima-no-entrego.tsx`).
   En «Sin reporte de la ruta» del **reparto propio de Grupo GF**
   (`limaOwnRoute`: sin guía de otro courier), cuando la clienta confirma que no
@@ -6793,8 +6800,8 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     el courier no recogió en su día es un estancado de Sacar a reparto.
   - Sus partes son sus días (Hoy de lunes a sábado, Mañana y Después) y suman
     el paso; dentro van también «Hoy sin guía» (alerta desde las 10:30),
-    «Mañana sin guía» (sin lo que creará la guía GF automática, que se dice
-    aparte) y «Reprogramados». La celda dice «N mañana · M después · K sin
+    «Mañana sin guía» (todo lo de mañana sin guía; lo que creará la
+    automática se dice aparte y no alarma, 17-11-2026) y «Reprogramados». La celda dice «N mañana · M después · K sin
     guía», con lo sin guía en `warn-fg`. La lista va por día, lo vencido
     primero.
   - **No entregados y Sacar a reparto son lo que no tiene día** (los
@@ -6911,7 +6918,7 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     la mañana de ese día Kapta crea su guía…» (`programCourierHint`).
     «Próximo paso» dice «Sale mañana con Aliclik: Kapta crea su guía mañana en
     la mañana» o «…con Swayp: Kapta crea su guía hoy, la víspera»
-    (`limaAutoGuideBy`), y «Mañana sin guía» no los alarma. Guardar el acuerdo
+    (`limaAutoGuideBy`); «Mañana sin guía» los lista pero no los alarma. Guardar el acuerdo
     dice «Kapta crea su guía…» en vez de «créala desde la Mesa de ruta».
 
 **La pantalla.** Tres bloques de tarjetas sobre UNA lista. Cada tarjeta filtra

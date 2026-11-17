@@ -351,7 +351,7 @@ describe("los siete pasos suman el total (owner, 15-11-2026: «estos 5 no suman 
     expect(at(row({ stage: "en_curso", substage: "en_retorno", courier: "aliclik", dispatchedAt: "2026-11-12T15:00:00Z", macroSince: "2026-11-12T15:00:00Z" }))).toEqual({ day: "jue 12/11", detail: "Retornando", overdue: false });
     expect(courierRouteText(row(), cls(row()), TODAY)).toBeNull();
   });
-  it("«Mañana sin guía» no alarma por lo que creará la guía GF automática en Activo (owner, 15-11-2026)", async () => {
+  it("«Mañana sin guía» incluye lo que creará la automática, sin alarmar por eso (owner, 15 y 17-11-2026)", async () => {
     const day = [
       row({ orderId: "auto", storeId: "a", scheduledOn: "2026-11-16" }),
       row({ orderId: "otra", storeId: "b", scheduledOn: "2026-11-16" }),
@@ -364,13 +364,14 @@ describe("los siete pasos suman el total (owner, 15-11-2026: «estos 5 no suman 
     // Con un acuerdo de Repro Lima la pasada no lo toma (`gfAutoSkip`): sigue siendo alerta.
     expect(c.get("acuerdo")).toMatchObject({ agenda: "manana", autoGuide: false });
     const counts = limaBoardCounts(day, c);
-    expect(counts.sub.manana_sin_guia).toBe(2);
+    // Todo lo de mañana sin guía está en el filtro (17-11-2026, #KP205757); la automática se dice aparte.
+    expect(counts.sub.manana_sin_guia).toBe(3);
     expect(counts.autoGuideManana).toBe(1);
-    expect(limaBoardRows(day, c, "manana_sin_guia").map((r) => r.orderId).sort()).toEqual(["acuerdo", "otra"]);
+    expect(limaBoardRows(day, c, "manana_sin_guia").map((r) => r.orderId).sort()).toEqual(["acuerdo", "auto", "otra"]);
     expect(limaNextStep(day[0]!, undefined, c.get("auto")!, TODAY)).toBe("Sale mañana: la guía GF automática la crea en minutos; si no puede, avisa por Telegram.");
     const { ReproLimaBlocks } = await import("@/components/repro-lima-blocks");
     const html = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "programados", onPick: () => {} }));
-    expect(html).toContain("1 de mañana la crea la automática");
+    expect(html).toContain("de ellas, 1 la crea la automática");
     // Sin la automática, todo lo de mañana sin guía alarma, como antes.
     expect(limaBoardCounts(day, classifyLimaRows(day, cases, TODAY)).sub.manana_sin_guia).toBe(3);
   });
