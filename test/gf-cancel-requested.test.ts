@@ -90,3 +90,13 @@ describe("Swayp anula la guía GF viva al crearse (owner 17-11-2026, #KP206994)"
     expect(src.indexOf("cancelLiveGfForOtherCourier(admin")).toBeLessThan(src.indexOf("createFenixGuideViaApi({"));
   });
 });
+
+describe("Grupo GF ya no sale con salidas nuevas (owner 17-11-2026)", () => {
+  it("«Sacar con salida nueva» queda cerrado; tomar en tiendas con GF por API sigue bloqueado", () => {
+    const src = read("app/dashboard/courier/actions.ts");
+    expect(src).toContain("const GRUPO_GF_NEW_OUTPUTS_CLOSED = true;");
+    const replace = src.slice(src.indexOf("export async function replaceOwnOutputs("));
+    expect(replace.indexOf("if (GRUPO_GF_NEW_OUTPUTS_CLOSED)")).toBeLessThan(replace.indexOf("createAdminSupabase()"));
+    expect(src).toContain("if (await storeUsesGfCourierApi(admin, row.store_id as string | null, gfApiStores)) {");
+  });
+});

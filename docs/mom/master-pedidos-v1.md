@@ -20468,6 +20468,9 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
 - **Otro courier anula la guía GF (owner, 17-11-2026, #KP206994).** Como al crear la de Aliclik, al crear una persona
   la guía **Swayp directa** Kapta anula antes en GF la guía GF viva sin motorizado (`cancelLiveGfForOtherCourier`),
   sin pedir motivo de salida adicional; si GF no la anula, no se crea la de Swayp. El automático no anula guías.
+- **Grupo GF ya no sale con salidas nuevas (owner, 17-11-2026).** «Tomar pedidos» ya no crea cajas de Grupo GF en las
+  tiendas con GF Courier por API (Kenku y Aurela, desde el 16-11) y «Sacar con salida nueva» queda cerrado
+  (`GRUPO_GF_NEW_OUTPUTS_CLOSED`); las salidas que ya existen siguen su curso (asignar, cotejar, reportar, retornar). El reparto en Lima va por GF Courier.
 - **Con motorizado no se anula desde Kapta.** Antes de pedir la anulación, `cancelGfGuideFor` lee la guía en GF: si
   está asignada a un motorizado (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) o ya salió (`OUT_FOR_DELIVERY`,
   `INCIDENT`, `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`).
