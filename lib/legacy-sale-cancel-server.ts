@@ -74,7 +74,7 @@ export async function cancelHistoricalShopifySale(input: {
             userId, reason: "Venta terminada", note: "Guía de GF Courier anulada por Kapta al terminar la venta.",
           }, admin);
           if (!res.ok) return { error: `GF Courier no anuló la guía ${gf.guide_code}: ${res.error} No se terminó la venta.` };
-          gfCancelled.push(gf.guide_code!);
+          gfCancelled.push(res.requested ? `${gf.guide_code!} (anulación pedida: GF la confirma cuando saque el paquete de preparación)` : gf.guide_code!);
         }
         const gfNote = gfCancelled.length ? ` La guía de GF Courier ${gfCancelled.join(", ")} quedó anulada en GF.` : "";
         const { error } = await admin.rpc("woo_end_sale_pending_return", {

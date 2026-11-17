@@ -13,6 +13,7 @@
 // con GF Courier deja la guía GF creada para el día acordado (`createGfGuideFor`)
 // y, si había una viva sin asignar, la anula antes (`cancelGfGuideFor`).
 
+import { gfCancelRequestedText } from "@/lib/gf-courier-status";
 import { sameCourier } from "@/lib/shipment-output";
 import { revalidatePath } from "next/cache";
 import { createAdminSupabase } from "@/lib/db";
@@ -595,6 +596,14 @@ async function gfGuideForAgreement(admin: Admin, input: {
         return {
           notice: saved,
           error: `GF Courier no anuló la guía ${old.guideCode}: ${sentence(res.error)} No se creó la guía nueva: revísalo en la Mesa de ruta del pedido.`,
+          href,
+          programChanged,
+        };
+      }
+      if (res.requested) {
+        return {
+          notice: saved,
+          error: `${gfCancelRequestedText(old.guideCode)} No se creó la guía nueva: créala en la Mesa de ruta cuando GF la anule.`,
           href,
           programChanged,
         };

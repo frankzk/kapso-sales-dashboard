@@ -85,6 +85,15 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 17-11-2026 · GF Courier: la anulación de una guía ya preparada queda «pedida», no «anulada» (sin migración, MOM §29.17, DESIGN.md)
+
+Sin migración ni variables. Anular una guía GF que GF ya preparó devuelve CANCEL_REQUESTED: GF la anula cuando saca
+el paquete de preparación. Kapta decía «anulada, sin costo» con la guía viva (#AUR901039). Ahora dice que quedó
+pedida, la fila y la Mesa de ruta muestran «Anulación pedida a GF» sin volver a ofrecer anularla, y ni Aliclik ni la
+guía GF nueva de Repro Lima se crean hasta que GF la anule. Cuando GF la anula, el webhook la cierra.
+
+Verificar: #AUR901039 muestra «Anulación pedida a GF» en «Salidas y guías»; cuando GF la anule, pasa a anulada sola.
+
 ### 17-11-2026 · «Anular guía GF» en «Salidas y guías» y Repro Lima dice dónde anularla (sin migración, MOM §9.5 y §29.17, DESIGN.md)
 
 Sin migración ni variables. La fila de una guía GF Courier viva en «Salidas y guías» de la ficha ofrece «Anular guía
