@@ -12,7 +12,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import QRCode from "qrcode";
 import { createServerSupabase } from "@/lib/db";
 import { outputDisplayCode } from "@/lib/shipment-output";
-import { buildRotulosPdf, type RotuloData } from "@/lib/labels/rotulo-pdf";
+import { buildRotulosPdf, rotulosFourPerPage, type RotuloData } from "@/lib/labels/rotulo-pdf";
 import { selectLabelsForOrders, type ShipmentForLabel } from "@/lib/labels/pick-shipment";
 import { labelItemsFor } from "@/lib/labels/line-items";
 import { orderFullyPaid } from "@/lib/order-paid";
@@ -286,7 +286,9 @@ export async function GET(request: NextRequest) {
     }),
   );
 
-  const pdf = await buildRotulosPdf(labels);
+  // `layout=4`: cuatro rótulos por hoja A4 (impresora común), p. ej. «Imprimir los que faltan» de Swayp Lima.
+  const single = await buildRotulosPdf(labels);
+  const pdf = params.get("layout") === "4" ? await rotulosFourPerPage(single) : single;
   const stamp = new Date().toISOString().slice(0, 10);
   const filename =
     labels.length === 1 ? `rotulo-${labels[0]!.code}.pdf` : `rotulos-${stamp}-${labels.length}.pdf`;

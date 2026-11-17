@@ -676,8 +676,8 @@ function outputSuffix(code: string): string {
   return /-(S\d+)$/i.exec(code)?.[1]?.toUpperCase() ?? code;
 }
 
-export function swaypLabelsHref(shipmentIds: readonly string[]): string {
-  return `/api/pedidos/rotulos?ids=${[...new Set(shipmentIds.filter(Boolean))].join(",")}`;
+export function swaypLabelsHref(shipmentIds: readonly string[], opts: { fourPerPage?: boolean } = {}): string {
+  return `/api/pedidos/rotulos?ids=${[...new Set(shipmentIds.filter(Boolean))].join(",")}${opts.fourPerPage ? "&layout=4" : ""}`;
 }
 
 function cmpText(a: string | null | undefined, b: string | null | undefined): number {

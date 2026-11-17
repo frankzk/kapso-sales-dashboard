@@ -875,3 +875,30 @@ export async function buildRotulosPdf(labels: readonly RotuloData[]): Promise<Ui
   }
   return doc.save();
 }
+
+/**
+ * Cuatro rótulos por hoja A4 (owner, 17-11-2026: «imprimir todos los rótulos faltantes, 4 guías por página»), para
+ * impresora común. Cada rótulo de 100 × 150 mm se coloca en una cuadrícula de 2 × 2 apenas reducido (98 %) para que
+ * entre con margen, con líneas de corte suaves. El contenido es el mismo rótulo, sin cambios.
+ */
+export async function rotulosFourPerPage(labelsPdf: Uint8Array): Promise<Uint8Array> {
+  const source = await PDFDocument.load(labelsPdf);
+  const doc = await PDFDocument.create();
+  doc.setTitle(source.getTitle() ?? "Rotulos");
+  doc.setCreator("Kapta");
+  const A4_W = 210 * MM, A4_H = 297 * MM, scale = 0.98;
+  const cellW = PAGE_W * scale, cellH = PAGE_H * scale;
+  const left = (A4_W - cellW * 2) / 2, bottom = (A4_H - cellH * 2) / 2;
+  const pages = await doc.embedPdf(source, source.getPageIndices());
+  for (let i = 0; i < pages.length; i += 4) {
+    const page = doc.addPage([A4_W, A4_H]);
+    pages.slice(i, i + 4).forEach((label, k) => {
+      const col = k % 2, row = 1 - Math.floor(k / 2);
+      page.drawPage(label, { x: left + col * cellW, y: bottom + row * cellH, width: cellW, height: cellH });
+    });
+    const cut = { thickness: 0.4, color: rgb(0.75, 0.75, 0.75), dashArray: [3, 3] };
+    page.drawLine({ start: { x: left + cellW, y: bottom }, end: { x: left + cellW, y: bottom + cellH * 2 }, ...cut });
+    page.drawLine({ start: { x: left, y: bottom + cellH }, end: { x: left + cellW * 2, y: bottom + cellH }, ...cut });
+  }
+  return doc.save();
+}
