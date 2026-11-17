@@ -77,3 +77,10 @@ export function gfCancelBlockedByRider(order: Pick<GfOrder, "status" | "stage">)
     return `La guía ya está asignada a ${order.stage?.rider_name ?? "un motorizado"} en GF: no se anula desde Kapta. Pide a GF que la retire de la carga.`;
   return null;
 }
+
+/** Guías de GF Courier vivas (pendiente o en ruta) con número. */
+export function liveGfGuides<T extends { courier: string | null; delivery_status: string; guide_code: string | null }>(outputs: readonly T[]): T[] {
+  return outputs.filter((o) => (o.courier ?? "").trim().toLowerCase().replace(" ", "_") === "gf_courier"
+    && ["pendiente", "en_ruta"].includes(o.delivery_status) && Boolean(o.guide_code));
+}
+

@@ -20426,6 +20426,9 @@ panel suelto y su entrada «GF Courier» en el índice de la ficha se retiraron.
   tienda o GF automático) **solo a las suscripciones de Kapta** (GF 056, `include_actor`; Rentabilify y otras
   integraciones no lo reciben, ni al recuperar eventos). Kapta lo escribe en Actividad del drawer como
   «GF Courier: <qué pasó> — por <nombre> (<rol>)» (`gfWebhookNote`, `gfPerformedBy`).
+- **Otro courier anula la guía GF (owner, 17-11-2026, #KP206994).** Como al crear la de Aliclik, al crear una persona
+  la guía **Swayp directa** Kapta anula antes en GF la guía GF viva sin motorizado (`cancelLiveGfForOtherCourier`),
+  sin pedir motivo de salida adicional; si GF no la anula, no se crea la de Swayp. El automático no anula guías.
 - **Con motorizado no se anula desde Kapta.** Antes de pedir la anulación, `cancelGfGuideFor` lee la guía en GF: si
   está asignada a un motorizado (etapa `AWAITING_OFFICE_CHECK` o `AWAITING_RIDER`) o ya salió (`OUT_FOR_DELIVERY`,
   `INCIDENT`, `REFUSED`, `RETURNING`), no la anula y dice por qué (`gfCancelBlockedByRider`).

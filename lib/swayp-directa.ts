@@ -26,6 +26,7 @@ import { esNumeroDeGuiaSwayp } from "@/lib/swayp-guide";
 import { avisoSinVinculoSwayp, productosSinVinculo } from "@/lib/swayp-productos";
 import { cargarMapaSwayp } from "@/lib/swayp-sku-map";
 import { swaypDestinationRefusal } from "@/lib/swayp-destination-guard";
+import { liveGfGuides } from "@/lib/gf-courier-status";
 import {
   createFenixGuideViaApi,
   resolveDirectGuideAddress,
@@ -208,10 +209,13 @@ export async function emitirGuiaSwaypDirecta(
   // «por definir» todavía en casa no cuenta: se rellena. Ver
   // `puertaDeSalidaAdicional`, la misma regla que Tanders.
   const guides = await findGuidesOfOrder(admin, order);
+  // La guía GF viva sin motorizado la anula Kapta justo antes de pedir la de Swayp (owner, 17-11-2026, #KP206994):
+  // no pide motivo de salida adicional porque deja de estar viva. Solo cuando la crea una persona.
+  const gfToCancel = input.actorId ? liveGfGuides(guides) : [];
   const puerta = puertaDeSalidaAdicional({
     courier: "fenix",
     operation: await operacionDelPedido(admin, order.id),
-    outputs: guides,
+    outputs: guides.filter((g) => !gfToCancel.includes(g)),
     motivo: input.motivoSalidaAdicional,
   });
   if (!puerta.ok) return { error: puerta.error };
@@ -269,6 +273,13 @@ export async function emitirGuiaSwaypDirecta(
   const swaypNotice = "";
   const finalSaleBlock = await legacySaleSendBlock(admin, order.id);
   if (finalSaleBlock) return { error: finalSaleBlock };
+  let gfNote = "";
+  if (gfToCancel.length && input.actorId) {
+    const { cancelLiveGfForOtherCourier } = await import("@/lib/gf-courier-guide");
+    const gf = await cancelLiveGfForOtherCourier(admin, order.id, gfToCancel, { userId: input.actorId, courier: "Swayp" });
+    if (!gf.ok) return { error: gf.error };
+    gfNote = ` La guía de GF Courier ${gf.cancelled.join(", ")} quedó anulada.`;
+  }
   if (!input.guideCode?.trim()) {
     const viaApi = await createFenixGuideViaApi({
       admin,
@@ -436,6 +447,6 @@ export async function emitirGuiaSwaypDirecta(
     childId,
     filled: !!written.filled,
     outputCode: written.outputCode ?? null,
-    avisoOrigen,
+    avisoOrigen: avisoOrigen + gfNote,
   };
 }
