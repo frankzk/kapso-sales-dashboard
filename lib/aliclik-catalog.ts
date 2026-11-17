@@ -769,6 +769,12 @@ export interface ShopifySkuDetails {
   variantTitle: string | null;
   productId: string | null;
   variantId: string | null;
+  /**
+   * WooCommerce: el SKU que tiene el producto padre cuando esta variación no
+   * tiene el suyo (17-11-2026). Dice cómo se arregla: el SKU está puesto, pero
+   * en el producto y no en la variación.
+   */
+  parentSku?: string | null;
 }
 
 const SHOPIFY_NO_SKU_PREFIX = "__SHOPIFY_NO_SKU__:";
@@ -779,7 +785,7 @@ const SHOPIFY_NO_SKU_PREFIX = "__SHOPIFY_NO_SKU__:";
  * el dato en Shopify en vez de confundir "sin SKU" con "no sincronizado".
  */
 export function collectActiveShopifyCatalogDetails(
-  variants: readonly ActiveShopifyCatalogVariant[],
+  variants: readonly (ActiveShopifyCatalogVariant & { parentSku?: string | null })[],
   out = new Map<string, ShopifySkuDetails>(),
 ): Map<string, ShopifySkuDetails> {
   for (const variant of variants) {
@@ -793,6 +799,7 @@ export function collectActiveShopifyCatalogDetails(
       variantTitle: variant.variantTitle,
       productId: variant.productId || null,
       variantId: variant.variantId || null,
+      ...(!sku && variant.parentSku ? { parentSku: variant.parentSku } : {}),
     });
   }
   return out;

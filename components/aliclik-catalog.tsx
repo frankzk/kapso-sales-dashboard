@@ -16,6 +16,13 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Card, EmptyState } from "@/components/ui";
 import { catalogSourceIn, catalogSourceTag, type CatalogPlatform } from "@/lib/catalog-source";
 import {
+  MISSING_SKU_KIND_LABEL,
+  groupMissingSku,
+  missingSkuCounts,
+  missingSkuFix,
+  missingSkuSummary,
+} from "@/lib/catalog-missing-sku";
+import {
   mapSku,
   mapSwaypCodbar,
   searchAliclikSkus,
@@ -27,7 +34,7 @@ import {
   type CatalogView,
 } from "@/app/dashboard/envios/aliclik/actions";
 
-type Filter = "sin_mapear" | "mapeados" | "sin_swayp" | "todos";
+type Filter = "sin_mapear" | "mapeados" | "sin_swayp" | "sin_sku" | "todos";
 
 export function AliclikCatalog({
   view,
@@ -57,6 +64,7 @@ export function AliclikCatalog({
       if (filter === "sin_mapear" && r.ean) return false;
       if (filter === "mapeados" && !r.ean) return false;
       if (filter === "sin_swayp" && r.codbar) return false;
+      if (filter === "sin_sku" && r.shopifySku) return false;
       if (!q) return true;
       return (
         r.title.toLowerCase().includes(q) ||
@@ -65,6 +73,9 @@ export function AliclikCatalog({
       );
     });
   }, [view.rows, filter, search]);
+  // La pestaña «Sin SKU» (17-11-2026): una tarjeta por producto, clasificada por
+  // cómo se arregla. Respeta la búsqueda.
+  const missingGroups = useMemo(() => (filter === "sin_sku" ? groupMissingSku(rows) : []), [filter, rows]);
 
   const run = (fd: FormData, fn: typeof mapSku, rowKey?: string) => {
     setMsg(null);
@@ -148,7 +159,9 @@ export function AliclikCatalog({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        {(["sin_mapear", "mapeados", "sin_swayp", "todos"] as Filter[]).map((f) => (
+        {(["sin_mapear", "mapeados", "sin_swayp", "sin_sku", "todos"] as Filter[])
+          .filter((f) => f !== "sin_sku" || view.missingSku > 0 || filter === "sin_sku")
+          .map((f) => (
           <button
             key={f}
             type="button"
@@ -165,7 +178,9 @@ export function AliclikCatalog({
                 ? `Asociados Aliclik (${view.mapped})`
                 : f === "sin_swayp"
                   ? `Sin vincular Swayp (${view.swaypUnmapped})`
-                  : "Todos"}
+                  : f === "sin_sku"
+                    ? `Sin SKU ${catalogSourceIn(view.source)} (${view.missingSku})`
+                    : "Todos"}
           </button>
         ))}
         <input
@@ -176,7 +191,9 @@ export function AliclikCatalog({
         />
       </div>
 
-      {rows.length === 0 ? (
+      {filter === "sin_sku" && rows.length > 0 ? (
+        <MissingSkuGroups groups={missingGroups} source={view.source} />
+      ) : rows.length === 0 ? (
         <EmptyState title="Nada que mostrar">
           {view.catalogSize === 0
             ? "El catálogo de Aliclik está vacío. Pulsa «Sincronizar catálogo»."
@@ -262,7 +279,12 @@ function CatalogRowCard({
             )}
           </p>
 
-          {!row.shopifySku ? (
+          {!row.shopifySku && row.parentSku ? (
+            <p className="mt-1 text-xs text-rose-700">
+              El SKU <code className="rounded bg-rose-50 px-1">{row.parentSku}</code> está en el producto, no en la
+              variación: ponlo en la variación (Variaciones) y vuelve a sincronizar.
+            </p>
+          ) : !row.shopifySku ? (
             <p className="mt-1 text-xs text-rose-700">
               Abre este producto {catalogSourceIn(source)}, asigna un SKU a la variante y vuelve a sincronizar.
             </p>
@@ -617,6 +639,62 @@ function SkuPicker({
           )}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * La pestaña «Sin SKU»: una tarjeta por producto, primero los que tienen el SKU
+ * solo en el producto (hay que moverlo a la variación) y después los que no lo
+ * tienen en ningún lado. Sin botones: aquí no hay nada que asociar hasta que
+ * la tienda tenga el SKU.
+ */
+function MissingSkuGroups({
+  groups,
+  source,
+}: {
+  groups: ReturnType<typeof groupMissingSku<CatalogRow>>;
+  source: CatalogPlatform;
+}) {
+  const counts = missingSkuCounts(groups);
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-slate-600">
+        {missingSkuSummary(groups)} ·{" "}
+        <span className="font-medium text-slate-800">{counts.solo_en_producto}</span>{" "}
+        {MISSING_SKU_KIND_LABEL.solo_en_producto.toLowerCase()} ·{" "}
+        <span className="font-medium text-slate-800">{counts.sin_sku}</span> sin SKU en ningún lado
+      </p>
+      {groups.map((group) => (
+        <Card key={group.title}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="min-w-0 flex-1 text-sm font-medium text-slate-900">{group.title}</p>
+            <span
+              className={`shrink-0 rounded px-2 py-0.5 text-xs font-medium ${
+                group.kind === "solo_en_producto" ? "bg-amber-50 text-amber-800" : "bg-rose-50 text-rose-700"
+              }`}
+            >
+              {MISSING_SKU_KIND_LABEL[group.kind]}
+            </span>
+          </div>
+          {group.parentSku && (
+            <p className="mt-1 text-xs text-slate-600">
+              SKU del producto: <code className="rounded bg-slate-100 px-1">{group.parentSku}</code>
+            </p>
+          )}
+          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="font-medium uppercase tracking-wide text-slate-400">
+              {group.rows.length === 1 ? "Variante sin SKU" : `${group.rows.length} variantes sin SKU`}
+            </span>
+            {group.rows.map((row) => (
+              <span key={row.rowKey} className="rounded bg-sky-50 px-1.5 py-0.5 font-medium text-sky-800">
+                {row.variantTitle ?? "Producto simple"}
+              </span>
+            ))}
+          </p>
+          <p className="mt-2 text-xs text-rose-700">{missingSkuFix(group.kind, catalogSourceIn(source))}</p>
+        </Card>
+      ))}
     </div>
   );
 }
