@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildRiderSuggestions, gfAwaitingRider, riderFirstName, riderSuggestionText, shownRiderSuggestion } from "@/lib/lima-rider-suggest";
+import { buildRiderSuggestions, gfAwaitingRider, parseGfAssigned, riderFirstName, riderSuggestionText, shownRiderSuggestion } from "@/lib/lima-rider-suggest";
 import { emptyRowFilters, readRowFilters, rowFilterOptions, rowFiltersMatch, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
@@ -82,5 +82,24 @@ describe("el filtro «Sugerido» (owner, 17-11-2026)", () => {
     expect(out.toString()).toBe("sugerido=Roy");
     expect([...readRowFilters(out).suggested]).toEqual(["Roy"]);
     expect(read("components/repro-lima-board.tsx")).toContain('<FacetPill label="Sugerido" allLabel="Todos"');
+  });
+});
+
+describe("el motorizado asignado por GF Courier (owner, 17-11-2026)", () => {
+  it("lee el nombre y el día de la línea del aviso", () => {
+    expect(parseGfAssigned("GF Courier: asignado a Alexis para la ruta del 17/11.")).toEqual({ rider: "Alexis", day: "17/11" });
+    expect(parseGfAssigned("GF Courier: asignado a Roy Pérez para la ruta del 18/11 — por Daysi (GF).")).toEqual({ rider: "Roy", day: "18/11" });
+    expect(parseGfAssigned("GF Courier: asignado a Yhonny.")).toEqual({ rider: "Yhonny", day: null });
+    expect(parseGfAssigned("GF Courier: entregada.")).toBeNull();
+    expect(parseGfAssigned(null)).toBeNull();
+  });
+  it("solo cuenta la línea de la guía viva y, con asignado, ya no sugiere", () => {
+    const access = read("lib/repro-lima-pending-access.ts");
+    expect(access).toContain('.ilike("note", "GF Courier: asignado a %")');
+    expect(access).toContain("guides.get(e.guide_code) !== e.order_id");
+    expect(access).toContain("suggestedRiders: gfAssigned.has(row.order_id) ? null :");
+    const ui = read("components/repro-lima-pending.tsx");
+    expect(ui).toContain("Asignado: <span");
+    expect(ui).toContain("{!assigned && suggested && (");
   });
 });

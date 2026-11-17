@@ -88,10 +88,17 @@ function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: Rep
   // El motorizado que llevaría su distrito (17-11-2026), mientras GF Courier no asigne a nadie.
   // El servidor solo la deja con guía de GF Courier sin motorizado (`shownRiderSuggestion`), igual que el filtro «Sugerido».
   const suggested = row.suggestedRiders?.length ? riderSuggestionText(row.suggestedRiders) : null;
+  // El que GF Courier ya asignó (17-11-2026): manda sobre la sugerencia.
+  const assigned = row.gfAssigned ?? null;
   return (
     <div className="space-y-1.5">
       {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}
-      {suggested && (
+      {assigned && (
+        <p className="text-[13px] leading-5 text-ink-600" title="El motorizado que GF Courier asignó a esta guía, según su aviso.">
+          Asignado: <span className="font-medium text-ink-900">{assigned.rider}</span>{assigned.day && <span className="text-ink-500"> · ruta del {assigned.day}</span>}
+        </p>
+      )}
+      {!assigned && suggested && (
         <p className="text-[13px] leading-5 text-ink-600" title="Quién llevó la mayoría de entregas de este distrito en los últimos 30 días. GF Courier asigna el motorizado; esto es una sugerencia.">
           Sugerido: <span className="font-medium text-ink-900">{suggested}</span> <span className="text-ink-500">· por su distrito</span>
         </p>

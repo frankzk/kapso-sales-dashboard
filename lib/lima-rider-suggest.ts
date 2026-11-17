@@ -85,3 +85,21 @@ export function gfAwaitingRider(reportedStatus: string | null | undefined): bool
   if (!s) return true;
   return ["CREATED", "CREATED:TO_PREPARE", "CREATED:PREPARING", "READY_FOR_PICKUP", "READY_FOR_PICKUP:LABELED", "READY_FOR_PICKUP:AWAITING_ASSIGNMENT"].includes(s);
 }
+
+/**
+ * El motorizado que GF Courier YA asignó (owner, 17-11-2026: «agrega el
+ * asignado»). GF lo avisa por webhook y Kapta deja la línea en el historial
+ * (`lib/gf-webhook-note.ts`, etapa AWAITING_OFFICE_CHECK): «GF Courier:
+ * asignado a Alexis para la ruta del 17/11.», a veces con «— por Daysi (GF).».
+ * De esa línea sale el nombre y el día de la ruta; otra línea, null. Puro.
+ */
+export interface GfAssignedRider { rider: string; day: string | null }
+
+const GF_ASSIGNED = /^GF Courier: asignado a (.+?)(?: para la ruta del (\d{2}\/\d{2}))?\.?(?: — por .*)?$/;
+
+export function parseGfAssigned(note: string | null | undefined): GfAssignedRider | null {
+  const m = GF_ASSIGNED.exec((note ?? "").trim());
+  const rider = m?.[1]?.trim();
+  return rider ? { rider: riderFirstName(rider), day: m?.[2] ?? null } : null;
+}
+

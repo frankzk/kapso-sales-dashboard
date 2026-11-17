@@ -7301,6 +7301,14 @@ filtro **«Sugerido»** (owner, 17-11-2026: «ármale un filtro de Sugeridos»):
 motorizado con su cifra y «Sin sugerencia» (`sugerido=` en la URL); «Yordani o
 Alexis» entra con cualquiera de los dos.
 
+**El motorizado asignado (17-11-2026).** Cuando GF Courier ya asignó la guía
+viva, su aviso deja en el historial «GF Courier: asignado a Alexis para la ruta
+del 17/11.» (`lib/gf-webhook-note.ts`). La fila lo dice: **«Asignado: Alexis ·
+ruta del 17/11»** (`parseGfAssigned`), con la línea más reciente de ESA guía
+(la de una guía anterior no cuenta). Con asignado ya no hay «Sugerido» ni entra
+al filtro como sugerido. Es solo lectura: si la lectura falla, la fila no dice
+el asignado.
+
 **Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen
 por la Mesa de ruta). No anula una guía asignada a un motorizado. No pide el
 permiso `gf_courier.create_guide` ni `gf_courier.cancel_guide`: lo hace el

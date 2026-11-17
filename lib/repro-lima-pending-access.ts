@@ -1,7 +1,7 @@
 import type { createAdminSupabase } from "@/lib/db";
 import type { ReproScope } from "@/lib/repro-lima-access";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
-import { buildRiderSuggestions, RIDER_SHARE_DAYS, shownRiderSuggestion, type RiderShareRow } from "@/lib/lima-rider-suggest";
+import { buildRiderSuggestions, parseGfAssigned, RIDER_SHARE_DAYS, shownRiderSuggestion, type GfAssignedRider, type RiderShareRow } from "@/lib/lima-rider-suggest";
 import { districtKey, isLimaPendingStage, LIMA_PENDING_STAGES, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { isCurrentBoxDay } from "@/lib/dispatch-plan";
 import { outputsBlockingRetry } from "@/lib/gf-retry";
@@ -347,6 +347,34 @@ async function loadGfGuideDays(admin: Admin, guides: ReadonlyMap<string, string>
   return days;
 }
 
+/**
+ * El motorizado que GF Courier ya asignó a cada guía GF que todavía no salió
+ * (`guides`: número de guía → pedido), por pedido (owner, 17-11-2026: «agrega
+ * el asignado»). Sale de la línea «GF Courier: asignado a …» que deja su
+ * webhook (`parseGfAssigned`), solo la de ESA guía (una guía anterior no
+ * cuenta) y la más reciente. Por pedido (índice `order_events_order_idx`), en
+ * lotes de 200.
+ */
+async function loadGfAssigned(admin: Admin, guides: ReadonlyMap<string, string>): Promise<Map<string, GfAssignedRider>> {
+  const out = new Map<string, GfAssignedRider>();
+  const orderIds = [...new Set(guides.values())];
+  for (let offset = 0; offset < orderIds.length; offset += 200) {
+    const { data, error } = await admin.from("order_events")
+      .select("order_id,guide_code,note,occurred_at")
+      .in("order_id", orderIds.slice(offset, offset + 200))
+      .eq("kind", "courier_report").eq("courier", "gf_courier")
+      .ilike("note", "GF Courier: asignado a %")
+      .order("occurred_at", { ascending: false });
+    if (error) throw new Error(`No pudimos leer los motorizados asignados por GF Courier: ${error.message}`);
+    for (const e of (data ?? []) as Array<{ order_id: string; guide_code: string | null; note: string | null }>) {
+      if (out.has(e.order_id) || !e.guide_code || guides.get(e.guide_code) !== e.order_id) continue;
+      const assigned = parseGfAssigned(e.note);
+      if (assigned) out.set(e.order_id, assigned);
+    }
+  }
+  return out;
+}
+
 /** Solo lectura, después de requireReproLima. Pagina todos los pedidos, sin
  * truncarlos a 1000 y sin cargar expedientes completos por cada fila. */
 export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date = new Date()): Promise<LimaPendingOrder[]> {
@@ -422,7 +450,11 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   // esto, el acuerdo cuyo caso se cerró al crear la guía —el pedido dejó «Por
   // reprogramar Lima»— perdía su día en la Agenda. Solo se pregunta por las
   // guías que hay; un error se muestra, no se adivina.
-  const gfPickups = await loadGfGuideDays(admin, gfGuides);
+  const [gfPickups, gfAssigned] = await Promise.all([
+    loadGfGuideDays(admin, gfGuides),
+    // Best-effort: sin la lectura, la fila no dice el asignado (y sigue sugiriendo).
+    loadGfAssigned(admin, gfGuides).catch(() => new Map<string, GfAssignedRider>()),
+  ]);
   return safe.map((row) => {
     // El filtro de arriba valida también la macroetapa de cada fila.
     const stage = row.macro_stage as LimaPendingOrder["stage"];
@@ -447,8 +479,10 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       scheduledCourier: row.dispatch_courier ?? null,
       ops,
       courierPickup,
+      // El que GF ya asignó a su guía viva (17-11-2026). Con asignado, ya no se sugiere.
+      gfAssigned: gfAssigned.get(row.order_id) ?? null,
       // Solo con guía de GF Courier sin motorizado (17-11-2026): la fila y el filtro «Sugerido» leen esto.
-      suggestedRiders: shownRiderSuggestion({ ops, courierPickup }, riderSuggestions.get(districtKey(row.district))),
+      suggestedRiders: gfAssigned.has(row.order_id) ? null : shownRiderSuggestion({ ops, courierPickup }, riderSuggestions.get(districtKey(row.district))),
     };
   });
 }
