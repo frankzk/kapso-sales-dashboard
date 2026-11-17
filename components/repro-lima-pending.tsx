@@ -15,7 +15,7 @@ import { CallButton, ClaimBadge, FailureLine, ReproRowChips, phoneLabel } from "
 import { STUCK_OWNER_TONE } from "@/components/lima-stuck-tray";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import { pendingFilters, pendingGroup, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
+import { agendaDayText, agendaOriginLine, callDue, classifyLimaRows, courierNowText, limaIsNew, courierRouteText, limaNextStep, type LimaRowClass } from "@/lib/repro-lima-blocks";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LIMA_STUCK_OWNER_LABEL, limaStuckRule, type LimaStuckItem } from "@/lib/lima-stuck";
 import { macroStageLabel, macroSubstageLabel } from "@/lib/order-macro-stage";
@@ -79,7 +79,7 @@ export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
  */
 /** La etapa del Master y su subetapa: debajo del código del pedido (owner, 16-11-2026). */
 function StageBadges({ row }: { row: LimaPendingOrder }) {
-  return <div className="flex flex-wrap gap-1"><Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>;
+  return <div className="flex flex-wrap gap-1">{limaIsNew(row) && <Badge tone="teal" title="Sale por primera vez: nunca salió a reparto.">Nuevo</Badge>}<Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>;
 }
 
 function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
@@ -230,10 +230,17 @@ function RetryChainNote({ orderId, chain }: { orderId: string; chain: NonNullabl
   );
 }
 
+const LIMA_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" });
+const LIMA_HOUR = new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", hour: "2-digit", minute: "2-digit", hour12: false });
+
 function PendingDate({ row }: { row: LimaPendingOrder }) {
-  const label = row.createdAt && Number.isFinite(Date.parse(row.createdAt))
-    ? new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit", year: "2-digit" }).format(new Date(row.createdAt)) : null;
-  return label ? <p className="text-xs tabular-nums text-ink-500">Creado {label}</p> : null;
+  if (!row.createdAt || !Number.isFinite(Date.parse(row.createdAt))) return null;
+  const at = new Date(row.createdAt);
+  // Lo de hoy con su hora (owner, 17-11-2026): se ve si entró antes o después del corte.
+  const label = LIMA_DAY.format(at) === LIMA_DAY.format(new Date())
+    ? `hoy ${LIMA_HOUR.format(at)}`
+    : new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", day: "2-digit", month: "2-digit", year: "2-digit" }).format(at);
+  return <p className="text-xs tabular-nums text-ink-500">Creado {label}</p>;
 }
 
 /**

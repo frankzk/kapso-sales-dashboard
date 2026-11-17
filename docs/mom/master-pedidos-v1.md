@@ -7260,6 +7260,21 @@ pedido».
 recojo de Aliclik (`courierPickup`, «Recojo del courier»: «Lo recoge GF Courier el
 mar 17/11.»).
 
+**Sin día pedido, la fecha que estimó GF (17-11-2026).** La guía GF automática de
+un pedido nuevo se crea sin `scheduled_date`, y sin día la fila caía en «Con el
+courier · guía creada» aunque la caja siguiera en almacén (36 pedidos de Lima
+entrados ese día). Ahora el día es el pedido a GF o, sin él, la
+`estimated_delivery_date` que GF devolvió al crearla (`gfGuideDay`,
+`lib/repro-lima-pending-access.ts`): la fila va a **Programados** (Hoy, Mañana)
+con su guía, y si su día pasa sin recojo sigue la regla del recojo vencido.
+«Con el courier» queda para lo que ya salió.
+
+**«Nuevo» y la hora de entrada (17-11-2026).** El pedido que sale por primera
+vez —nunca salió a reparto y sin intentos, todavía en Por confirmar,
+Preparación o Por despachar (`limaIsNew`)— lleva la etiqueta **Nuevo** junto a
+su etapa, para distinguirlo de lo reprogramado. Lo creado hoy dice la hora
+(«Creado hoy 11:45»): se ve si entró antes o después del corte.
+
 **Lo que no hace.** No crea la guía de otro courier (Aliclik, Swayp y Axel siguen
 por la Mesa de ruta). No anula una guía asignada a un motorizado. No pide el
 permiso `gf_courier.create_guide` ni `gf_courier.cancel_guide`: lo hace el

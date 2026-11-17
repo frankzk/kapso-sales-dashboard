@@ -310,18 +310,27 @@ const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
  * Sin día pedido, no entra. Lotes de 500, como las demás lecturas; sin guías
  * GF, no pregunta.
  */
+/** El día de una guía de GF Courier que no salió: el pedido a GF o, sin él, la fecha estimada que GF devolvió. Pura. */
+export function gfGuideDay(scheduled: string | null | undefined, estimated: string | null | undefined): string {
+  const asked = (scheduled ?? "").slice(0, 10);
+  return ISO_DAY.test(asked) ? asked : (estimated ?? "").slice(0, 10);
+}
+
 async function loadGfGuideDays(admin: Admin, guides: ReadonlyMap<string, string>): Promise<Map<string, string>> {
   const days = new Map<string, string>();
   const codes = [...guides.keys()];
   for (let offset = 0; offset < codes.length; offset += 500) {
     const { data, error } = await admin.from("gf_order_requests")
-      .select("tracking_id,scheduled_date:request->>scheduled_date")
+      .select("tracking_id,scheduled_date:request->>scheduled_date,estimated:response->>estimated_delivery_date")
       .in("tracking_id", codes.slice(offset, offset + 500))
       .eq("status", "sent");
     if (error) throw new Error(`No pudimos leer los días pedidos a GF Courier: ${error.message}`);
-    for (const r of (data ?? []) as Array<{ tracking_id: string | null; scheduled_date: string | null }>) {
+    for (const r of (data ?? []) as Array<{ tracking_id: string | null; scheduled_date: string | null; estimated: string | null }>) {
       const orderId = r.tracking_id ? guides.get(r.tracking_id) : undefined;
-      const day = (r.scheduled_date ?? "").slice(0, 10);
+      // Sin día pedido (la guía GF automática de un pedido nuevo), la fecha
+      // estimada que GF devolvió al crearla (owner, 17-11-2026): así el pedido
+      // queda en Programados (Hoy, Mañana) y no «Con el courier» sin haber salido.
+      const day = gfGuideDay(r.scheduled_date, r.estimated);
       if (!orderId || !ISO_DAY.test(day)) continue;
       // Dos guías GF vivas no deberían existir; si existen, manda la más tardía.
       if ((days.get(orderId) ?? "") < day) days.set(orderId, day);

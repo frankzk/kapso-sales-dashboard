@@ -413,6 +413,16 @@ const GF_INTERNAL = new Set(["propio", "por_definir"]);
 const RETURNING_SUBSTAGES = new Set(["en_retorno", "retorno_solicitado"]);
 const PRE_DISPATCH = new Set(["por_confirmar", "preparacion", "por_despachar"]);
 
+/**
+ * «Nuevo» (owner, 17-11-2026: «para poder diferenciarlos exactamente»): el
+ * pedido que sale por PRIMERA vez —nunca salió a reparto, sin intentos— y
+ * todavía no sale. Lo distingue de lo reprogramado dentro de Programados y Con
+ * el courier. Pura.
+ */
+export function limaIsNew(row: Pick<LimaPendingOrder, "stage" | "hasPriorDispatch" | "dispatchedAt" | "attempts">): boolean {
+  return PRE_DISPATCH.has(row.stage) && !row.hasPriorDispatch && !row.dispatchedAt && (row.attempts ?? 0) === 0;
+}
+
 export function isPorReprogramarLima(row: Pick<LimaPendingOrder, "stage" | "substage">): boolean {
   return row.stage === "en_curso" && row.substage === "por_reprogramar_lima";
 }
