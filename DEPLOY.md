@@ -85,6 +85,20 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Leads: el distrito del pedido se elige de la lista oficial del INEI (sin migración, MOM §37.10, DESIGN.md)
+
+Sin migración ni variables. En «Generar pedido (contraentrega)» de Leads (y en la venta por teléfono, que abre el
+mismo formulario) el distrito ya no es texto libre: se busca y se elige de los 1893 distritos del INEI
+(`lib/peru-ubigeo-data.ts`, del paquete `peru-ubigeo` 0.1.3, licencia MIT; se regenera con
+`node scripts/gen-peru-ubigeo.mjs <ubigeo.json>`). Al elegir, «Provincia / Región» se llena sola. `generateOrder`
+recibe el ubigeo y guarda el nombre y la región de la lista; un formulario abierto antes del deploy (sin ubigeo) solo
+pasa con un nombre exacto de la lista y, si no, recibe «… no está en la lista oficial de distritos. ¿Es …? Elígelo de
+la lista.».
+
+Verificar: en Leads, «Generar pedido» con «san mar» ofrece «San Martín de Porres · Lima, Lima»; al elegirlo, la región
+dice «Lima, Lima». Un lead con el distrito mal escrito abre el formulario con el aviso «… no está en la lista» y la
+sugerencia; sin elegir, «Generar pedido» no sale.
+
 ### 16-11-2026 · La clienta que responde vuelve 10 minutos a quien agendó (0351, MOM «Bloques por asesora»)
 
 1. **Migración `0351_lead_appointment_return_hold.sql`**: redefine
