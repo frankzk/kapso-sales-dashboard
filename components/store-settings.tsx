@@ -1708,6 +1708,13 @@ function GfCourierSection({ storeId, hasToken, hasSecret, enabled }: { storeId: 
           description={<p>Hacen falta <strong>dos llaves</strong>: este interruptor y <code>GF_COURIER_WRITE_ENABLED=true</code> en el servidor.</p>} />
       </StoreForm>
       <p className={HELP}>{hasSecret ? "Webhook conectado: los cambios de estado de GF llegan firmados y se verifican." : "Sin webhook: pulsa «Conectar webhook» después de guardar el token."}</p>
+      {hasToken ? (
+        <p className={HELP}>
+          <a href="/dashboard/pedidos/gf-simulacion" className="font-medium text-slate-900 underline">Simular GF Courier</a>{" "}
+          (solo el dueño): manda los pedidos de Lima y Callao de los últimos 90 días a la validación de GF, sin crear guías, y
+          resume qué impide crearlas.
+        </p>
+      ) : null}
       <p className={HELP}>
         <strong>Catálogo para GF:</strong> GF solo despacha los SKU que tiene registrados para esta tienda. Se sincroniza solo cada
         hora (y con «Sincronizar ahora») si el token tiene el permiso <code>catalogue:write</code>: sube lo que falta o cambió de

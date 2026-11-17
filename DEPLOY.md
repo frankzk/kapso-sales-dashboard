@@ -85,6 +85,13 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 16-11-2026 · Simular GF Courier: qué impide crear la guía (sin migración, MOM §29.17)
+
+Sin migración. Pedidos › «Simular GF Courier» (solo el owner): manda los pedidos de Lima y Callao de los últimos 90
+días (contraentrega y manuales, sin anular) a `POST /v1/orders/validate` de GF con el mismo cuerpo con el que Kapta
+crea la guía, a 4 por segundo, y resume los errores por código y campo. No crea guías ni escribe nada. Verificar: con
+la cuenta del owner, abrir `/dashboard/pedidos/gf-simulacion`, pulsar «Simular» y ver avanzar «revisados».
+
 ### 16-11-2026 · La clienta que responde vuelve 10 minutos a quien agendó (0351, MOM «Bloques por asesora»)
 
 1. **Migración `0351_lead_appointment_return_hold.sql`**: redefine
