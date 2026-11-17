@@ -26834,6 +26834,15 @@ salida viva que no salió bloquea: se anula con su propio botón, que avisa a su
 courier, y después se termina la venta. Lo que ya salió o volvió a oficina sigue
 como antes.
 
+**Anular el pedido a mano también anula su guía de GF Courier (17-11-2026).**
+#KP206909 se marcó Anulado («no desea») con el cambio de estado manual y su guía
+KENKU-KP206909 siguió «Por asignar» en GF, con la caja armada esperando
+motorizado. Ahora `setOrderStatus` (y el cambio masivo, que lo usa pedido por
+pedido), al pasar un pedido a Anulado, anula antes en GF cada guía de GF Courier
+viva que nunca salió (`wooSaleGfToCancel`, `cancelGfGuideFor`), con el motivo
+escrito o «Pedido anulado en Kapta». Si GF no la anula (ya la asignó a un
+motorizado), el pedido no se marca y se dice por qué. Otras salidas no cambian.
+
 **Recepción anterior a terminar la venta (0286, 28-10-2026).** KP200152 ya había
 vuelto a oficina para reprogramar y quedaba bloqueado entre la anulación de venta
 y la de salida. La transacción incluye esa salida por su recepción histórica.

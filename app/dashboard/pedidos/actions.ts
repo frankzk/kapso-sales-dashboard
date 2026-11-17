@@ -59,6 +59,8 @@ import { orderPlatformOf } from "@/lib/shipment-order-capture";
 import { orderPlatformName } from "@/lib/order-admin-url";
 import { applyConfirmationCycleToStore, freshLogisticsCost, recomputeOrderMasterSafe } from "@/lib/order-master";
 import { processWooSaleReturn } from "@/lib/woo-sale-return-server";
+import { wooSaleGfToCancel } from "@/lib/woo-sale-return";
+import { cancelGfGuideFor } from "@/lib/gf-courier-guide";
 import {
   ACTIVE_OUTPUTS_ERROR,
   activeOutputs,
@@ -2196,6 +2198,34 @@ export async function setOrderStatus(
     };
   }
 
+  // ANULAR UN PEDIDO ANULA SU GUÍA DE GF COURIER QUE NO SALIÓ (17-11-2026,
+  // #KP206909): se anuló en Kapta con «no desea» y la guía siguió «Por asignar»
+  // en GF, con la caja armada esperando motorizado. Se anula en GF ANTES de
+  // marcar: si GF no la anula (ya la asignó a un motorizado), el pedido no se
+  // marca y se dice por qué — igual que al terminar una venta (#AUR900668).
+  let gfNote = "";
+  if (target === "anulado" && ctx.row.general_status !== "anulado") {
+    const [gfShipments, gfEvents] = await Promise.all([
+      admin.from("shipments").select("id,courier,guide_code,delivery_status,custody_state,dispatched_at,custody_transferred_at").eq("order_id", orderId),
+      admin.from("order_events").select("kind,source,actor,shipment_id").eq("order_id", orderId).eq("kind", "returned_to_office"),
+    ]);
+    if (gfShipments.error || gfEvents.error) {
+      return { error: "No se pudieron revisar las guías de courier del pedido. No se anuló; vuelve a intentarlo." };
+    }
+    const cancelled: string[] = [];
+    for (const gf of wooSaleGfToCancel({ shipments: gfShipments.data ?? [], events: gfEvents.data ?? [] })) {
+      const res = await cancelGfGuideFor(orderId, gf.guide_code!, {
+        userId: ctx.userId, reason: reason || "Pedido anulado en Kapta",
+        note: "Guía de GF Courier anulada por Kapta al anular el pedido.",
+      }, admin);
+      if (!res.ok) {
+        return { error: `GF Courier no anuló la guía ${gf.guide_code}: ${res.error} El pedido no se anuló; si ya tiene motorizado, retíralo primero en GF.${cancelled.length ? ` (Sí se anuló ${cancelled.join(", ")}.)` : ""}` };
+      }
+      cancelled.push(gf.guide_code!);
+    }
+    if (cancelled.length) gfNote = ` Guía de GF Courier ${cancelled.join(", ")} anulada en GF.`;
+  }
+
   const eventError = await recordEvent(admin, ctx, {
     kind: "status_override",
     previousStatus: ctx.row.general_status,
@@ -2218,7 +2248,7 @@ export async function setOrderStatus(
 
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
-  return { notice: `Estado actualizado a ${target.replace("_", " ")}.${attested}` };
+  return { notice: `Estado actualizado a ${target.replace("_", " ")}.${attested}${gfNote}` };
 }
 
 /**

@@ -70,3 +70,10 @@ describe("venta WooCommerce terminada con stock pendiente",()=>{
     expect(resolveMacroStage({...input,events:[...input.events,{kind:"woo_sale_return_synced",occurred_at:at}]}).stage).toBe("finalizado");
   });
 });
+describe("anular el pedido a mano anula su guía de GF Courier (17-11-2026, #KP206909)",()=>{
+  it("la guía en Por asignar (custodia empresa, sin salida) se anula en GF",()=>{
+    const kp={id:"g1",courier:"gf_courier",guide_code:"KENKU-KP206909",delivery_status:"pendiente",custody_state:"empresa",dispatched_at:null,custody_transferred_at:null};
+    expect(wooSaleGfToCancel({shipments:[kp],events:[]}).map((x)=>x.guide_code)).toEqual(["KENKU-KP206909"]);
+    expect(wooSaleGfToCancel({shipments:[{...kp,delivery_status:"anulado"}],events:[]})).toEqual([]);
+  });
+});
