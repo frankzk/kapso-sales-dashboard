@@ -54,6 +54,7 @@ import {
 import { aliclikRiskGate } from "@/lib/order-confirmation-brief";
 import { aliclikDoorBan } from "@/lib/door-rejection";
 import { aliclikRouteRisk, aliclikRouteRiskGate, type AliclikRouteRisk } from "@/lib/aliclik-route-risk";
+import { implicitConfirmationEvent, writesImplicitConfirmation } from "@/lib/confirmation-dispatch";
 import { DUPLICATE_READ_ERROR, loadAliclikDuplicateHold } from "@/lib/aliclik-duplicate-access";
 import type { DuplicateHold } from "@/lib/aliclik-duplicate";
 import { classifyOperation } from "@/lib/order-macro-stage";
@@ -1394,7 +1395,38 @@ export async function createAliclikGuideFor(
   }
 
   const registeredAt = new Date().toISOString();
+  // CREAR LA GUÍA CONFIRMA (MOM §6.2, 17-11-2026). En Provincia COD lo que sale
+  // hoy no pasa por «Confirmado · programar salida»: la guía creada por una
+  // persona es la confirmación, y queda escrita con su nombre. Una vez por
+  // pedido; el automático no confirma por nadie. Si la lectura falla no se
+  // escribe: una confirmación de más no se puede borrar del historial.
+  let confirmsHere = false;
+  if (writesImplicitConfirmation({
+    operation: operationOf(ctx.row),
+    actor: ctx.userId,
+    automatic: Boolean(origin),
+    alreadyConfirmed: false,
+  })) {
+    const { data: confirmed, error: confirmedError } = await admin
+      .from("order_events")
+      .select("id")
+      .eq("order_id", orderId)
+      .eq("kind", "confirmed")
+      .limit(1);
+    confirmsHere = !confirmedError && !(confirmed ?? []).length;
+  }
   await admin.from("order_events").insert([
+    ...(confirmsHere && ctx.userId
+      ? [implicitConfirmationEvent({
+          storeId: ctx.storeId,
+          orderId,
+          actor: ctx.userId,
+          via: "guia_aliclik",
+          occurredAt: registeredAt,
+          courier: "aliclik",
+          guideCode: orderNumber,
+        })]
+      : []),
     ...(additionalOutputEvidence ? [{
       store_id: ctx.storeId,
       order_id: orderId,
@@ -1572,6 +1604,7 @@ export async function createAliclikGuideFor(
       `Guía creada en Aliclik para ${ctx.row.order_name ?? "el pedido"}: ${orderNumber} · ` +
       `cobrar S/ ${(preview.collectTotal ?? 0).toFixed(2)} · ` +
       `${courierBlock.transportName ?? "courier"} S/ ${courierBlock.deliveryCost}.` +
+      (confirmsHere ? " El pedido queda confirmado." : "") +
       (gfNotice ? ` ${gfNotice}` : ""),
   };
 }

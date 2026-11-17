@@ -263,7 +263,11 @@ describe("se ve", () => {
     expect(AUTO_GUIDE_HINT).toContain("crea sola la guía Aliclik");
     expect(AUTO_GUIDE_HINT).toContain("salvo que vaya por Shalom o tenga un pago registrado");
     expect(read("components/dispatch-date-panel.tsx")).toContain("{AUTO_GUIDE_HINT}");
-    expect(read("components/order-drawer.tsx")).toContain('classifyOperation(row) === "provincia_cod" && ` ${AUTO_GUIDE_HINT}`');
+    // Al confirmar un Provincia COD (MOM §6.2, 17-11-2026) la fecha es obligatoria
+    // y el aviso de la guía automática va con ella.
+    expect(read("components/order-drawer.tsx")).toContain(
+      "Desde mañana. Ese día Kapta crea sola la guía Aliclik (8:00 a. m. a 1:00 p. m.). {SALE_HOY_HINT}",
+    );
   });
 
   it("el MOM lo dice", () => {

@@ -1362,7 +1362,9 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 - **Dónde.** En vivo, al confirmar: en la gestión de confirmación, con
   «Confirmó el pedido», el campo **«Sale el (opcional)»** guarda la fecha
   acordada en la llamada junto con el intento (vacío = sale apenas se genere la
-  guía). Y después, en la ficha, pestaña Operar, dentro de «Elegir ruta y
+  guía). **En Provincia COD ya no es opcional** (17-11-2026): ahí el resultado
+  se llama «Confirmado · programar salida» y pide el día y el GPS (abajo). Y
+  después, en la ficha, pestaña Operar, dentro de «Elegir ruta y
   generar el rótulo»: **«Programar envío»**, con la fecha y una nota opcional,
   solo en Preparación · Por generar rótulo. Las dos exigen permiso para editar
   el Master. Programar otra vez cambia la fecha; **«Quitar»** pide motivo. En
@@ -1406,6 +1408,72 @@ pedido aparecía como confirmado sin guía, igual que uno olvidado (#KP140347).
 - **No cambia la etapa** ni es la «salida programada» de Grupo GF en Lima
   (`dispatch_programmed`, §29.13), que ya tiene caja y motorizado: esta es
   anterior a la guía.
+
+#### Confirmado · programar salida (owner, 17-11-2026)
+
+> ⚠️ **Ocurrió.** #AUR900908 (Aurela, Juliaca) se confirmó el 15-11-2026 a las
+> 3:59 p. m. con «Sale el» vacío. Quedó en Preparación · Por generar rótulo sin
+> guía ni fecha: el automático no lo tomaba, porque solo crea la guía en un día
+> programado, y nada avisaba. Otra persona lo programó al día siguiente.
+> #KP205536 llevaba cinco días igual, y ese día había nueve Provincia COD
+> confirmados sin fecha ni guía (ocho, sin coordenada: con fecha, Kapta pedía el
+> GPS; sin ella, no).
+
+Medido en las guías Aliclik de Provincia COD de los 30 días anteriores:
+**1.140 de 2.654** se crearon sin «Confirmó» antes, y de las que sí lo tenían,
+1.386 las creó la misma persona que confirmó. La confirmación de verdad ya era
+crear la guía; «confirmado» suelto solo tenía sentido para lo que sale otro día.
+Que un pedido estuviera confirmado y saliera hoy era una contradicción, y es
+justo lo que se perdía.
+
+Decisión del owner, **solo en Provincia COD**:
+
+- **Confirmar es programar la salida.** En la gestión de confirmación,
+  «Confirmó el pedido» se llama **«Confirmado · programar salida»** (mismo
+  código `confirmado`: los hechos ya escritos no cambian) y pide, **los dos
+  obligatorios**:
+  - **el día de salida, desde mañana** (hasta 45 días);
+  - **el GPS**, si el pedido no tiene coordenada: el enlace de Google Maps o el
+    par, que se guarda en el pedido como en «Provincia COD: programar pide la
+    coordenada» (abajo). Si ya la tiene, se dice («Ubicación: ya tiene
+    coordenada»).
+
+  Ese día Kapta crea sola la guía Aliclik (abajo), con las excepciones de
+  siempre (Shalom guardado, pago registrado).
+- **Lo que sale hoy no se confirma ahí.** El servidor rechaza confirmar sin día
+  o con el día de hoy, antes de registrar nada, con «¿Sale hoy? No se confirma
+  aquí: crea la guía Aliclik, que deja el pedido confirmado.». Lo que toca es
+  la acción logística:
+  - **Crear la guía Aliclik a mano confirma.** Al crearla, si el pedido no
+    tiene ya un `confirmed`, se escribe uno con quien la creó, el courier y la
+    guía (`payload.via = "guia_aliclik"`, sin canal: nadie dijo por dónde se
+    habló). El aviso de la creación termina en «El pedido queda confirmado.».
+    Así la tasa de confirmación, la productividad y los días de gestión ven lo
+    que antes no veían.
+  - **Registrar el adelanto o el pago total confirma**, igual y una vez
+    (`via = "adelanto"` o `"pago_total"`), salvo el comprobante que entra a
+    revisión administrativa (§16): ese todavía no prueba nada.
+  - **La guía automática no confirma por nadie**: lo que crea el día programado
+    ya se confirmó al programarlo.
+  - Swayp desde Por confirmar **no** confirma: sale sin confirmar a propósito
+    y, si Swayp no entrega, el pedido vuelve a Por confirmar (§11.11).
+- **Si la guía Aliclik no sale hoy** (Aliclik caído, la cotización falla, una
+  compuerta la detiene), el panel ofrece **«Programar salida»**, que lleva a la
+  gestión de confirmación si el pedido se está confirmando, o a «Programar
+  envío» si ya está en Por generar rótulo. Así no queda confirmado de palabra y
+  sin nada en Kapta.
+- **No cambia:** Lima (las rutas las arma otra persona) y Agencia (la
+  confirmación exige el pago validado, §6.1), donde «Sale el» sigue opcional;
+  un pedido «Por revisar» sin ubicación, que no es Provincia COD hasta tener
+  destino y por eso se puede confirmar sin fecha; los demás resultados de la
+  gestión; y «Programar envío» de la ficha, que sigue aceptando hoy.
+
+Implementación: `lib/confirmation-dispatch.ts`; `registerConfirmationAttempt`
+(`app/dashboard/pedidos/actions.ts`); la ficha (`ConfirmationDesk`); la
+creación de la guía (`lib/aliclik-guide.ts`); `registerPayment`
+(`app/dashboard/pedidos/payment-actions.ts`); el panel
+(`components/aliclik-guide-panel.tsx`, `ScheduleInsteadLine`). Pruebas:
+`test/confirmado-programar-salida.test.ts`.
 
 #### Guía Aliclik automática el día programado (16-10-2026)
 
@@ -1475,7 +1543,8 @@ tiene su propia guía automática con tope diario.
   `ALICLIK_WRITE_ENABLED` y `stores.aliclik_enabled`. `?dry=1` cotiza y dice qué
   haría, sin crear ni avisar.
 - **Se dice al programar.** En un pedido de Provincia COD, «Programar envío» y
-  «Sale el (opcional)» avisan que ese día la guía se crea sola.
+  el «Sale el» de «Confirmado · programar salida» avisan que ese día la guía se
+  crea sola.
 
 #### Sin ubicación no se programa el envío (owner, 30-10-2026)
 
@@ -1546,7 +1615,9 @@ ubicación** (la coordenada que pide Aliclik), y se guarda en el pedido.
   ese registro tuviera, y deja en el historial «Ubicación guardada al programar
   el envío». Al confirmar con fecha, va antes de registrar el intento; si falta
   o no sirve, se rechaza y se dice que se puede confirmar dejando «Sale el»
-  vacío. **Confirmar sin fecha no la pide.**
+  vacío. **Confirmar sin fecha no la pide.** (Desde el 17-11-2026, en Provincia
+  COD no hay confirmar sin fecha: «Confirmado · programar salida» pide el día y
+  el GPS, y el rechazo ya no sugiere dejar «Sale el» vacío.)
 - **Lo ya programado sin ella** lo dice la ficha: «Sin ubicación: ese día
   Aliclik no podrá crear la guía.», con «Agregar ubicación», que abre el mismo
   formulario con la fecha que ya tiene.

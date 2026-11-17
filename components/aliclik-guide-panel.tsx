@@ -105,6 +105,7 @@ export function AliclikGuidePanel({
   storeName,
   onDuplicateChanged,
   onCreated,
+  onScheduleInstead,
 }: {
   orderId: string;
   hasCoordinate: boolean;
@@ -120,6 +121,13 @@ export function AliclikGuidePanel({
   storeName?: string | null;
   onDuplicateChanged?: () => void;
   onCreated: () => void;
+  /**
+   * Si la guía no se puede crear hoy, el pedido no queda confirmado de palabra
+   * y sin nada en Kapta: se programa su salida (MOM §6.2, 17-11-2026). Lo da la
+   * ficha, que sabe a dónde llevar: la gestión de confirmación o «Programar
+   * envío».
+   */
+  onScheduleInstead?: () => void;
 }) {
   const [coordinate, setCoordinate] = useState("");
   const [coordinatePasteError, setCoordinatePasteError] = useState(false);
@@ -435,6 +443,9 @@ export function AliclikGuidePanel({
             <p className="whitespace-pre-line">{message.text}</p>
           </Banner>
         )}
+        {message?.at === "create" && message.kind === "error" && !preview?.ok && (
+          <ScheduleInsteadLine onScheduleInstead={onScheduleInstead} />
+        )}
 
         <ol aria-label="Pasos para crear la guía">
           <Step
@@ -616,6 +627,9 @@ export function AliclikGuidePanel({
               <Banner tone={message.kind === "ok" ? "ok" : "crit"} role="alert">
                 <p className="whitespace-pre-line">{message.text}</p>
               </Banner>
+            )}
+            {message?.at === "quote" && message.kind === "error" && !preview?.pinSinCorroborar && (
+              <ScheduleInsteadLine onScheduleInstead={onScheduleInstead} />
             )}
 
             {/* EL PIN CONTRADICHO POR EL PEDIDO (§10). Es el único bloqueo que va
@@ -851,6 +865,9 @@ export function AliclikGuidePanel({
                   <Banner tone={message.kind === "ok" ? "ok" : "crit"} role={message.kind === "ok" ? "status" : "alert"}>
                     <p className="whitespace-pre-line">{message.text}</p>
                   </Banner>
+                )}
+                {message?.at === "create" && message.kind === "error" && (
+                  <ScheduleInsteadLine onScheduleInstead={onScheduleInstead} />
                 )}
 
                 {/* El servidor vuelve a comprobar las llaves antes de escribir:
@@ -1155,5 +1172,24 @@ function Spinner() {
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
       <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/**
+ * Si la guía no sale hoy, se programa (MOM §6.2, 17-11-2026): el pedido no se
+ * queda confirmado de palabra y sin nada en Kapta. Sin destino que ofrecer, no
+ * se dibuja.
+ */
+function ScheduleInsteadLine({ onScheduleInstead }: { onScheduleInstead?: () => void }) {
+  if (!onScheduleInstead) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <p className="text-[13px] leading-5 text-ink-700">
+        ¿No sale hoy? Programa la salida y ese día Kapta vuelve a intentar la guía.
+      </p>
+      <OpsButton size="sm" onClick={onScheduleInstead} className="pointer-coarse:h-11">
+        Programar salida
+      </OpsButton>
+    </div>
   );
 }
