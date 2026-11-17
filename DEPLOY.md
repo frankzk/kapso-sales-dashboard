@@ -85,6 +85,14 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 17-11-2026 · Tablero de hoy de Leads: «Asistidas» bajo cada persona (sin migración, MOM §17.6, DESIGN.md)
+
+Sin migración ni variables. En «El equipo hoy» del Tablero de hoy, bajo el nombre de cada persona sale «N asistidas»:
+los pedidos de hoy que generó otra asesora con una clienta con la que ella habló en las 72 h antes. No suman a sus
+pedidos ni a los del equipo.
+
+Verificar: en Leads, con una asistida de hoy, la persona muestra «1 asistida» y al pasar el cursor sale el pedido.
+
 ### 17-11-2026 · Productividad: «Asistidas» de cada asesora (sin migración, MOM §17.6, DESIGN.md)
 
 Sin migración ni variables. Productividad muestra, bajo «Cerrados», las asistidas de cada asesora: ventas que generó

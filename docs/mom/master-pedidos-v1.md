@@ -15556,7 +15556,11 @@ de cada asesora, «N asistidas» en `ink-500` (al pasar el cursor, los pedidos);
 en el teléfono, en su línea de cerrados; y en el panel de la asesora, «N
 asistidas por S/ …: ventas que cerró otra asesora con clientas con las que habló
 en las 72 h antes. No suman a Cerrados.», con los pedidos. Con la lente de
-fuente, solo las de esas ventas.
+fuente, solo las de esas ventas. **En el «Tablero de hoy» de Leads** (owner,
+17-11-2026), en «El equipo hoy», bajo el nombre de cada persona: «N asistidas»
+de los pedidos de hoy, con los pedidos en el título; no suman a sus pedidos ni
+a los del equipo, y quien hoy solo asistió sale entre las de poca actividad
+(`getTeamToday` y `buildTeamToday` en `lib/leads-team-today.ts`).
 
 **Cómo se calcula.** Con la sesión de quien mira: de las ventas del rango
 (`order_sales.lead_id`) se leen sus llamadas contestadas desde 72 h antes de la

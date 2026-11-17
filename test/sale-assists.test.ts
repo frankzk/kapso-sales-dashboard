@@ -11,7 +11,8 @@ import {
   type AssistContact,
   type AssistSale,
 } from "@/lib/sale-assists";
-import { computeAdvisorStats, emptyPorFuente, type AdvisorSale } from "@/lib/productivity";
+import { computeAdvisorStats, emptyPorFuente, type AdvisorSale, type TeamTodayRaw } from "@/lib/productivity";
+import { buildTeamToday } from "@/lib/leads-team-today";
 
 // Hora de Lima (UTC−5).
 const lima = (date: string, time: string) => new Date(`${date}T${time}:00-05:00`).toISOString();
@@ -156,5 +157,59 @@ describe("Productividad", () => {
     const table = readFileSync("components/productivity-table.tsx", "utf8");
     expect(table).toContain("<AssistLine r={r} />");
     expect(table).not.toContain("asesora del último toque");
+  });
+});
+
+describe("Tablero de hoy de Leads", () => {
+  const raw = (stats: TeamTodayRaw["stats"]): TeamTodayRaw => ({
+    stats,
+    activity: {},
+    sales: { hoy: [], ayer: [], semana: [] },
+    days: { hoy: "2026-11-16", ayer: "2026-11-15", semana: "2026-11-09", isoDow: 1 },
+  });
+
+  it("cada persona lleva sus asistidas de hoy, y quien solo asistió también sale", () => {
+    const assists = computeAssists([sale()], [call("antu", "contactado_dejo_wsp", lima("2026-11-16", "15:58"))]);
+    const stats = computeAdvisorStats({
+      calls: [],
+      sales: [
+        {
+          vendedora: "medaly",
+          orderId: "o1",
+          leadId: "L1",
+          occurredAt: lima("2026-11-16", "18:47"),
+          storeId: "aur",
+          net: 238,
+          orderName: "#AUR900998",
+          orderAt: lima("2026-11-16", "18:47"),
+          source: "web",
+        },
+      ],
+      leadStore: new Map(),
+      emailById: new Map([["medaly", "medaly@kapta.pe"], ["antu", "antu@kapta.pe"]]),
+      assists,
+    });
+    const team = buildTeamToday({
+      raw: raw(stats),
+      nowIso: lima("2026-11-16", "19:00"),
+      tz: "America/Lima",
+      schedules: new Map(),
+      viewerId: null,
+      horasDeTodas: true,
+    });
+    const all = [...team.rows, ...team.quiet];
+    const antu = all.find((r) => r.userId === "antu")!;
+    expect(antu).toMatchObject({ pedidos: 0, asistidas: 1, asistidasDetalle: [{ code: "#AUR900998", fecha: "16/11/26" }] });
+    expect(all.find((r) => r.userId === "medaly")).toMatchObject({ pedidos: 1, asistidas: 0 });
+    // Las asistidas no suman a los pedidos del equipo.
+    expect(team.totals.pedidos).toBe(1);
+  });
+
+  it("la tarjeta muestra «N asistidas» en la segunda línea de la persona", () => {
+    const card = readFileSync("components/leads-insights.tsx", "utf8");
+    expect(card).toContain("<Asistidas row={row} />");
+    expect(card).toContain('!keepLine && "@3xl:hidden"');
+    const src = readFileSync("lib/productivity.ts", "utf8");
+    expect(src).toContain("const assists = await loadSaleAssists(sb, scopedSales, today.endIso);");
   });
 });

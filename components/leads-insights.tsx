@@ -14,6 +14,7 @@ import { cn } from "@/components/ui";
 import type { LeadsInsights } from "@/lib/leads-insights";
 // Del módulo puro: el componente no arrastra la lectura ni el cliente de servicio.
 import { CIERRE_MIN_LEADS, type TeamRace, type TeamRow, type TeamToday } from "@/lib/leads-team-today";
+import { ASSIST_WINDOW_HOURS } from "@/lib/sale-assists";
 import type { LeadInteractionDateFilter } from "@/lib/leads";
 
 const n = (v: number) => v.toLocaleString("es-PE");
@@ -197,8 +198,23 @@ function Pedidos({ row, open, onToggle }: { row: TeamRow; open: boolean; onToggl
 //     llamadas bajan a la segunda línea de la persona;
 //   • desde 576 px, las horas en su columna;
 //   • desde 768 px, además la barra del cierre y las llamadas.
+/** «2 asistidas» en la segunda línea de la persona (MOM §17.6); el título dice cuáles. */
+function Asistidas({ row }: { row: TeamRow }) {
+  if (row.asistidas <= 0) return null;
+  const codes = row.asistidasDetalle.map((o) => o.code).filter(Boolean);
+  return (
+    <span
+      className="whitespace-nowrap tabular-nums"
+      title={`Pedidos que generó otra asesora con clientas con las que habló en las ${ASSIST_WINDOW_HOURS} h antes; no suman a sus pedidos${codes.length ? `: ${codes.join(", ")}` : ""}`}
+    >
+      {row.asistidas} {row.asistidas === 1 ? "asistida" : "asistidas"}
+    </span>
+  );
+}
+
 function TeamRowView({ row, rank, open, onToggle }: { row: TeamRow; rank: number; open: boolean; onToggle: (open: boolean) => void }) {
   const avisos = row.tardeMin != null || row.inactivaDesde != null || row.salioAntesMin != null;
+  const keepLine = avisos || row.asistidas > 0;
   return (
     <tr className="align-middle">
       <td className="py-2.5 pr-2 tabular-nums text-ink-500">{rank}</td>
@@ -206,10 +222,12 @@ function TeamRowView({ row, rank, open, onToggle }: { row: TeamRow; rank: number
         <span className="block truncate text-ink-900" title={row.name}>
           {row.name}
         </span>
-        {/* La segunda línea: los avisos siempre; las horas y las llamadas solo
-            mientras no tienen su columna. Sin avisos, desaparece entera. */}
-        <div className={cn("mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-500", !avisos && "@3xl:hidden")}>
+        {/* La segunda línea: los avisos y las asistidas siempre; las horas y las
+            llamadas solo mientras no tienen su columna. Sin avisos ni asistidas,
+            desaparece entera cuando caben las columnas. */}
+        <div className={cn("mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-500", !keepLine && "@3xl:hidden")}>
           <Avisos row={row} />
+          <Asistidas row={row} />
           <span className="@xl:hidden">
             <Horas row={row} compact />
           </span>

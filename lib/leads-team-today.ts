@@ -39,6 +39,10 @@ export interface TeamRow {
   llamadas: number;
   /** Los pedidos de hoy, para ver cuáles son («#AUR1091» + «15/10/26»). */
   pedidosDetalle: { code: string | null; fecha: string | null }[];
+  /** Pedidos de hoy que generó otra con una clienta con la que ella habló en las
+   *  72 h antes (MOM §17.6). No suman a `pedidos`. */
+  asistidas: number;
+  asistidasDetalle: { code: string | null; fecha: string | null }[];
   /** Horas activas de hoy; null si quien mira no puede ver las de esta persona. */
   horas: number | null;
   /** Su parte de la meta para hoy (la de la semana entre sus días de trabajo);
@@ -198,13 +202,16 @@ export function buildTeamToday({
         leads: s.leadsTrabajados,
         llamadas: s.llamadas,
         pedidosDetalle: s.cerradosDetalle.map((o) => ({ code: o.name, fecha: shortLocalDate(o.at, tz) })),
+        asistidas: s.asistidas ?? 0,
+        asistidasDetalle: (s.asistidasDetalle ?? []).map((o) => ({ code: o.name, fecha: shortLocalDate(o.at, tz) })),
         horas: sees ? (act?.horas ?? 0) : null,
         metaDia: sees ? metaDia : null,
         ...warnings,
       };
     })
-    // Quien solo ordenó la cola («Resuelto») no trabajó leads ni vendió.
-    .filter((r) => r.leads > 0 || r.pedidos > 0)
+    // Quien solo ordenó la cola («Resuelto») no trabajó leads ni vendió. Quien
+    // hoy solo asistió (habló con la clienta antes) sí sale, entre las de poca actividad.
+    .filter((r) => r.leads > 0 || r.pedidos > 0 || r.asistidas > 0)
     .sort((a, b) => b.pedidos - a.pedidos || b.leads - a.leads || a.name.localeCompare(b.name));
 
   const isQuiet = (r: TeamRow) => r.pedidos === 0 && r.leads < CIERRE_MIN_LEADS;
