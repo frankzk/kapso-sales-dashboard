@@ -134,6 +134,9 @@ import { wooSaleWasDispatched } from "@/lib/woo-sale-return";
 import { endWooSalePendingReturn } from "@/app/dashboard/pedidos/woo-sale-return-actions";
 import { WooCancelZone } from "@/components/woo-cancel-zone";
 import { GfOutputCancelButton } from "@/components/gf-output-cancel-button";
+import { GfCourierCancelButton } from "@/components/gf-courier-cancel-button";
+import { courierDisplayName } from "@/lib/dispatched-with";
+import { courierKey } from "@/lib/dispatch";
 import { gfOutputIsCancelableBeforeDispatch } from "@/lib/gf-output-cancel";
 import { cancelWooOrder } from "@/app/dashboard/pedidos/woo-cancel-actions";
 import { cancelLegacyShopifySale } from "@/app/dashboard/pedidos/legacy-sale-cancel-actions";
@@ -2088,7 +2091,8 @@ export function OrderDrawer({
                       return (
                       <li key={g.id} className="space-y-2.5 px-4 py-3 sm:px-5">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                          <span className="text-sm font-semibold capitalize text-ink-900">{g.courier}</span>
+                          {/* El nombre del courier, no su código: «GF Courier», no «Gf_courier». */}
+                          <span className="text-sm font-semibold text-ink-900">{courierDisplayName(g.courier)}</span>
                           <span className="font-mono text-xs text-ink-600">
                             {outputDisplayCode(g.output_code, g.courier) || g.guide_code}
                           </span>
@@ -2233,6 +2237,23 @@ export function OrderDrawer({
                               Rótulo interno
                               <IconArrowUpRight aria-hidden className="size-3.5" />
                             </a>
+                          )}
+                          {/* GF Courier por API: la misma anulación que su tarjeta en la
+                              Mesa de ruta (MOM §29.17), aquí donde se mira la guía. GF
+                              decide si puede; una que ya devuelve no se ofrece. */}
+                          {canCancelGfGuide && courierKey(g.courier) === "gf_courier" && g.guide_code &&
+                            (g.delivery_status === "pendiente" || g.delivery_status === "en_ruta") &&
+                            !g.returned_at && !shipmentIsReturning(estado) && (
+                            <GfCourierCancelButton
+                              orderId={orderId}
+                              guideCode={g.guide_code}
+                              prepared={/^READY_FOR_PICKUP/i.test(g.reported_status ?? "")}
+                              onDone={(msg) => {
+                                setNotice(msg);
+                                void reload();
+                                onSaved();
+                              }}
+                            />
                           )}
                           {canCreateShalomGuide && shalomGuideIsCancelable(g) && (
                             <ShalomCancelButton
