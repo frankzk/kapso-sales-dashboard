@@ -30,3 +30,19 @@ describe("GF: etapa y cambio de fecha (17-11-2026)", () => {
     expect(gfWebhookNote({ type: "order.status_changed", data: { stage: { code: "AWAITING_ASSIGNMENT", name: "Por asignar" } } })).toBeNull();
   });
 });
+
+describe("quién lo hizo en GF (056, solo Kapta)", () => {
+  it("añade «— por …» a la línea con motivo o etapa", () => {
+    expect(gfWebhookNote({ type: "order.status_changed", data: { stage: { code: "AWAITING_OFFICE_CHECK", rider_name: "Alexis", route_date: "2026-11-18" }, performed_by: { name: "Daysi", role: "GF" } } }))
+      .toBe("GF Courier: asignado a Alexis para la ruta del 18/11 — por Daysi (GF).");
+  });
+  it("sin motivo, el cambio de etapa o estado deja su línea con quién lo hizo", () => {
+    expect(gfWebhookNote({ type: "order.status_changed", data: { status: { code: "READY_FOR_PICKUP" }, stage: { code: "AWAITING_ASSIGNMENT", name: "Por asignar" }, performed_by: { name: "Diana", role: "GF" } } }))
+      .toBe("GF Courier: Por asignar — por Diana (GF).");
+    expect(gfWebhookNote({ type: "order.status_changed", data: { status: { code: "OUT_FOR_DELIVERY" }, stage: null, performed_by: { name: "Alexis", role: "RIDER" } } }))
+      .toBe("GF Courier: en reparto — por Alexis (motorizado).");
+    expect(gfWebhookNote({ type: "order.delivered", data: { performed_by: { name: "GF (automático)", role: "SYSTEM" } } }))
+      .toBe("GF Courier: entregada — por GF (automático).");
+  });
+});
+

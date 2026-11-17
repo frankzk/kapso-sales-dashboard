@@ -13,7 +13,38 @@ export interface GfWebhookLike {
 const ddmm = (iso: unknown): string | null =>
   typeof iso === "string" && /^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : null;
 
+// Quién lo hizo en GF (056, owner 17-11-2026): GF lo manda solo a Kapta. «— por Daysi (GF)», «— por Alexis (motorizado)».
+const ROLE: Record<string, string> = { GF: "GF", RIDER: "motorizado", STORE: "tienda" };
+const GF_STATUS: Record<string, string> = { CREATED: "generada", READY_FOR_PICKUP: "lista para recojo", OUT_FOR_DELIVERY: "en reparto",
+  INCIDENT: "novedad en la visita", DELIVERED: "entregada", REFUSED: "rechazada en puerta", RETURNING: "en devolución", RETURNED: "devuelta",
+  CANCEL_REQUESTED: "anulada (GF desarma la caja)", CANCELLED: "anulada" };
+
+export function gfPerformedBy(data: Record<string, unknown>): string | null {
+  const who = data.performed_by && typeof data.performed_by === "object" ? data.performed_by as Record<string, unknown> : null;
+  const name = typeof who?.name === "string" ? who.name.trim() : "";
+  if (!name) return null;
+  const role = typeof who?.role === "string" ? ROLE[who.role] : undefined;
+  return role ? `${name} (${role})` : name;
+}
+
 export function gfWebhookNote(envelope: GfWebhookLike): string | null {
+  const data = envelope.data ?? {};
+  const note = gfWebhookReason(envelope), who = gfPerformedBy(data);
+  if (!who) return note;
+  let line = note;
+  if (!line) {
+    const stage = data.stage && typeof data.stage === "object" ? data.stage as Record<string, unknown> : null;
+    const status = data.status && typeof data.status === "object" ? data.status as Record<string, unknown> : null;
+    if (envelope.type === "order.status_changed") {
+      const what = typeof stage?.name === "string" ? stage.name : GF_STATUS[String(status?.code ?? "")] ?? String(status?.code ?? "");
+      line = what ? `GF Courier: ${what}.` : null;
+    } else if (envelope.type === "order.delivered") line = "GF Courier: entregada.";
+    else if (envelope.type === "order.delivery_date_changed") { const d = ddmm(data.new_date); line = `GF Courier: fecha de entrega cambiada${d ? ` al ${d}` : ""}.`; }
+  }
+  return line ? `${line.replace(/\.$/, "")} — por ${who}.` : null;
+}
+
+function gfWebhookReason(envelope: GfWebhookLike): string | null {
   const data = envelope.data ?? {};
   // Etapa en GF (owner, 17-11-2026): al asignarse a un motorizado queda la línea «asignado a Alexis».
   const stage = data.stage && typeof data.stage === "object" ? data.stage as Record<string, unknown> : null;
