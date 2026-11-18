@@ -7051,10 +7051,11 @@ de la última llamada (`lima_repro_calls.note`, en la misma consulta).
       llamada.
    6. **No entregados**: lo demás de «Por reprogramar Lima» (sin acuerdo,
       acuerdo vencido, llamada que ya toca…), en el orden de «Por decidir»
-      (`sortRepro`).
+      (`sortRepro`). Salvo la caja que nunca salió (`neverLeft`, 18-11-2026):
+      va al punto 7.
    7. **Confirmar primer despacho**: Por confirmar, Preparación o Por
-      despachar, sin salida previa (`gf_order_departures`), sin día y sin guía
-      de courier: los «Nunca salieron» y «Más de 30 días» de antes, del más
+      despachar —o un «Por reprogramar Lima» cuya caja nunca salió—, sin salida
+      previa (`gf_order_departures`), sin día y sin guía de courier: los «Nunca salieron» y «Más de 30 días» de antes, del más
       antiguo al más reciente (06-11-2026), con el filtro de adentro **«Más de
       30 días»**.
 2. **«Agenda»**: el día en que sale (`limaAgendaDay`): el acuerdo vigente con
@@ -7288,6 +7289,27 @@ como chip: «Sin guía (hoy o mañana)», lo que sale hoy o mañana sin guía ni
 y la automática no crea (`limaNewWithoutGuide`). Programados queda para lo ya
 salido con día nuevo, y Sacar a reparto para lo ya salido sin día y la guía sin
 recoger. Matiz fucsia, también en la etiqueta «Nuevo».
+
+**La caja que nunca salió va a «Nuevos» (owner, 18-11-2026, #KP206971: «este
+pedido nunca salió a reparto, ¿debería estar en Sacar a reparto?»).** GF Courier
+anuló su guía por «no responde» con la caja lista para recojo. La anulación del
+courier antes de recoger abre la recuperación (`guideAnnulledBeforeDispatch`,
+17-11-2026) y el Master lo deja En curso · Por reprogramar Lima, pero Repro Lima
+lo mostraba en No entregados con «Sin "No entregado" registrado» y «No consta
+dónde está la caja». No es un no entregado: la caja nunca salió de la oficina.
+Ahora, un «Por reprogramar Lima» sin ninguna salida previa
+(`gf_order_departures`), sin `dispatched_at` ni intentos, cuyas guías siguen
+todas con la caja en la empresa (ninguna salió, volvió ni pasó a un courier) y
+alguna la anuló un courier que recoge (`limaBoxNeverLeft`; no la salida propia
+de Grupo GF, una agencia ni «por definir») es **su primera salida**:
+`neverLeft`, la etiqueta «Nuevo» y el paso **Nuevos** (Sin día, o el día de su
+acuerdo). La caja dice **«En oficina»** y la fila dice «GF Courier anuló la
+guía el mié 18/11 antes de recogerla: la caja nunca salió de la oficina. Es su
+primera salida.» (`annulledBeforePickup`, `annulledBeforePickupLine`). El
+Master no cambia. Una caja que el courier se llevó a su almacén antes de anular
+(#KP205214, Aliclik, custodia `courier`) no cuenta: sigue en No entregados. Ese
+día eran 11 pedidos (4 de GF Courier, 6 de Aliclik y 1 de Swayp), 10 con la
+caja en la empresa. Pruebas: `test/repro-lima-never-left.test.ts`.
 
 **El motorizado sugerido (17-11-2026; 0353).** La API de GF Courier solo dice el
 motorizado cuando ya lo asignó. Mientras no, la fila con guía de GF Courier dice

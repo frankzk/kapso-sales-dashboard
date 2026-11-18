@@ -85,6 +85,24 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 18-11-2026 · Leads: la pestaña renueva la sesión una sola vez antes de leer (sin migración)
+
+Sin migración ni variables. Las lecturas de Leads (`/api/leads/read`) que salen juntas esperan una sola renovación de la
+sesión en el navegador (`ensureFreshSession`, `lib/leads-read-client.ts`), con un tope de 3 s: un fallo o una espera
+más larga no las frena. A las 08:50 del 18-11 diez lecturas con la sesión vencida la renovaron a la vez en el servidor
+(`AuthRefreshDiscardedError` en Vercel y una consulta de roles con el usuario vacío).
+
+Verificar: en Vercel, `AuthRefreshDiscardedError` en `/api/leads/read` deja de aparecer en los días siguientes.
+
+### 18-11-2026 · Repro Lima: la caja que nunca salió va a «Nuevos», no a No entregados (sin migración, MOM §9.5)
+
+Sin migración ni variables. Un «Por reprogramar Lima» cuya guía anuló el courier antes de recogerla, con la caja en la
+empresa y sin ninguna salida ni intento (#KP206971, GF Courier «no responde»), es su primera salida: Nuevos, con la
+etiqueta «Nuevo», la caja «En oficina» y la línea «GF Courier anuló la guía … antes de recogerla». El Master no cambia.
+
+Verificar: en Repro Lima, #KP206971 sale en Nuevos · Sin día con «En oficina»; #KP205214 (Aliclik, caja con el
+courier) sigue en No entregados.
+
 ### 17-11-2026 · GF Courier: la anulación de una guía ya preparada queda «pedida», no «anulada» (sin migración, MOM §29.17, DESIGN.md)
 
 Sin migración ni variables. Anular una guía GF que GF ya preparó devuelve CANCEL_REQUESTED: GF la anula cuando saca

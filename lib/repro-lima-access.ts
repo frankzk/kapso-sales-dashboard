@@ -31,6 +31,7 @@ import { isReproLimaCandidate } from "@/lib/repro-lima-pending";
 import {
   agreementState,
   agreementStateLabel,
+  annulledBeforePickupLine,
   boxLocationLabel,
   claimView,
   cutoffNotice,
@@ -296,6 +297,14 @@ function failureOf(f: ReproFacts): { line: ReproRow["failure"]; failedOn: string
       dispatchedOn: fromDispatch ? outputAt : null,
     });
     return { line: { ...line, photoPath: null }, failedOn: limaDay(outputAt) };
+  }
+  // El courier anuló la guía antes de recogerla: no hubo «No entregado», la caja nunca salió (18-11-2026, #KP206971).
+  const annulled = f.annulledBeforePickup;
+  if (annulled) {
+    return {
+      line: { text: annulledBeforePickupLine(annulled.courier, annulled.closed_at), rejected: false, photoPath: null },
+      failedOn: limaDay(annulled.closed_at),
+    };
   }
   return { line: null, failedOn: null };
 }

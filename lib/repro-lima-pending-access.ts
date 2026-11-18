@@ -2,7 +2,7 @@ import type { createAdminSupabase } from "@/lib/db";
 import type { ReproScope } from "@/lib/repro-lima-access";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import { buildRiderSuggestions, parseGfAssigned, RIDER_SHARE_DAYS, shownRiderSuggestion, type GfAssignedRider, type RiderShareRow } from "@/lib/lima-rider-suggest";
-import { districtKey, isLimaPendingStage, LIMA_PENDING_STAGES, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { districtKey, isLimaPendingStage, LIMA_PENDING_STAGES, limaBoxNeverLeft, type LimaPendingGf, type LimaPendingOps, type LimaPendingOrder, type NeverLeftGuide } from "@/lib/repro-lima-pending";
 import { isCurrentBoxDay } from "@/lib/dispatch-plan";
 import { outputsBlockingRetry } from "@/lib/gf-retry";
 import { gfDistrictBlock } from "@/lib/gf-district-check";
@@ -418,6 +418,26 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       if (orderStore.has(d.order_id) && d.last_departure_at) departures.set(d.order_id, d.last_departure_at);
     }
   }
+  // «Por reprogramar Lima» cuya caja nunca salió (owner, 18-11-2026, #KP206971):
+  // el courier anuló la guía antes de recogerla. Solo se miran los que no tienen
+  // ninguna salida ni intento; un error se muestra, no se adivina.
+  const neverLeft = new Set<string>();
+  const neverLeftCandidates = safe
+    .filter((row) => row.macro_stage === "en_curso" && row.macro_substage === "por_reprogramar_lima"
+      && !departures.has(row.order_id) && !row.dispatched_at && Number(row.attempt_count ?? 0) === 0)
+    .map((row) => row.order_id);
+  for (let offset = 0; offset < neverLeftCandidates.length; offset += 500) {
+    const ids = neverLeftCandidates.slice(offset, offset + 500);
+    const { data, error } = await admin.from("shipments")
+      .select("order_id,courier,delivery_status,custody_state,dispatched_at,out_for_delivery_at,returned_at")
+      .in("order_id", ids);
+    if (error) throw new Error(`No pudimos leer las guías de los pedidos que nunca salieron: ${error.message}`);
+    const byOrder = new Map<string, NeverLeftGuide[]>();
+    for (const g of (data ?? []) as Array<NeverLeftGuide & { order_id: string }>) {
+      byOrder.set(g.order_id, [...(byOrder.get(g.order_id) ?? []), g]);
+    }
+    for (const id of ids) if (limaBoxNeverLeft(byOrder.get(id) ?? [])) neverLeft.add(id);
+  }
   // Las guías Aliclik que esperan su recojo (owner, 07-11-2026): viva, sin
   // salida, sin reparto y sin retorno. Su día de recojo programa el pedido en
   // Repro Lima; sin esto caía en «Nunca salieron» como si nadie lo hubiera
@@ -470,6 +490,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       substage: row.macro_substage, courier: row.current_courier, dispatchedAt: row.dispatched_at,
       attempts: Number(row.attempt_count ?? 0),
       hasPriorDispatch: departures.has(row.order_id), lastDepartureAt: departures.get(row.order_id) ?? null,
+      ...(neverLeft.has(row.order_id) ? { neverLeft: true } : {}),
       programmedFor: scheduled.get(row.order_id) ?? null,
       salesChannel: row.sales_channel ?? null,
       address: row.address?.trim() || null, reference: row.reference?.trim() || null,
