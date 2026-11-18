@@ -6,7 +6,7 @@ import { permissionsFor } from "@/lib/permissions";
 import { classifyOperation, gfRiderSignal, type MacroEventSnapshot } from "@/lib/order-macro-stage";
 import { OUTPUT_REPLACED_KIND } from "@/lib/gf-replaced-output";
 import { normalizePhone } from "@/lib/phone";
-import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment, transferredElsewhere,
+import { DECLARED_OUTCOME_KINDS, duplicateGate, duplicateItems, laterOrderDelivered, sharesDuplicateItem, staleNeverDispatched, unresolvedDuplicateShipment, transferredElsewhere,
   type DuplicateConflict, type DuplicateHold, type DuplicateResolution, type DuplicateShipment } from "@/lib/aliclik-duplicate";
 
 export const DUPLICATE_READ_ERROR = "No se pudo verificar si hay otro envío del mismo producto pendiente. Reintenta antes de crear la guía Aliclik.";
@@ -83,7 +83,11 @@ export async function loadAliclikDuplicateHold(
   }
   // Una guía transferida cuyo paquete terminó en otra salida del mismo pedido
   // ya no es una caja pendiente (owner, 30-10-2026, MOM §8.3).
-  const notTransferred = active.filter((g) => !transferredElsewhere(g, allGuides));
+  // Tampoco retiene la de una clienta que recibió un pedido posterior, ni la que
+  // nunca salió y lleva 30 días o más (owner, 18-11-2026, MOM §8.3).
+  const nowMs = Date.now();
+  const notTransferred = active.filter((g) => !transferredElsewhere(g, allGuides) &&
+    !laterOrderDelivered(g, allGuides) && !staleNeverDispatched(g, nowMs));
   active.length = 0;
   active.push(...notTransferred);
   if (!active.length) return clear;

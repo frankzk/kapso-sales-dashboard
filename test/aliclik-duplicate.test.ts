@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duplicateItems, sharesDuplicateItem, unresolvedDuplicateShipment, transferredElsewhere, duplicateGate,
+import { duplicateItems, laterOrderDelivered, sharesDuplicateItem, staleNeverDispatched, unresolvedDuplicateShipment, transferredElsewhere, duplicateGate,
   duplicateResolutionProblem, type DuplicateShipment, type DuplicateConflict, type DuplicateResolution } from "@/lib/aliclik-duplicate";
 
 const shipment: DuplicateShipment = {
@@ -95,5 +95,30 @@ describe("una guía transferida que terminó en otra salida del mismo pedido (#K
   });
   it("solo aplica a una guía transferida", () => {
     expect(transferredElsewhere({ ...madre, delivery_status: "en_ruta" }, [hija({ delivery_status: "entregado" })])).toBe(false);
+  });
+});
+
+describe("guías viejas que ya no retienen (owner, 18-11-2026)", () => {
+  const now = Date.parse("2026-11-18T19:00:00Z");
+  // #KP128621: Fénix de agosto, «en ruta» sin ningún despacho y en la empresa.
+  const fenix: DuplicateShipment = { ...shipment, id: "fenix", order_id: "kp128621", courier: "fenix", guide_code: "#KP12862127082026",
+    created_at: "2026-08-27T15:00:00Z", dispatched_at: null, delivery_status: "en_ruta", custody_state: "empresa" };
+  it("regla 1: la clienta recibió un pedido posterior", () => {
+    const later = { ...shipment, id: "later", order_id: "kp205412", created_at: "2026-11-12T15:00:00Z", delivery_status: "entregado" };
+    expect(laterOrderDelivered(fenix, [fenix, later])).toBe(true);
+    expect(laterOrderDelivered(fenix, [fenix, { ...later, delivery_status: "en_ruta" }])).toBe(false);
+    expect(laterOrderDelivered(fenix, [fenix, { ...later, delivery_status: "devuelto", returned_at: "2026-11-14T00:00:00Z" }])).toBe(false);
+    expect(laterOrderDelivered(fenix, [fenix, { ...later, created_at: "2026-08-01T00:00:00Z" }])).toBe(false);
+    expect(laterOrderDelivered(fenix, [fenix, { ...later, order_id: "kp128621" }])).toBe(false);
+  });
+  it("regla 2: nunca salió, en la empresa y con 30 días o más", () => {
+    expect(unresolvedDuplicateShipment(fenix)).toBe(true);
+    expect(staleNeverDispatched(fenix, now)).toBe(true);
+    expect(staleNeverDispatched({ ...fenix, created_at: "2026-11-01T00:00:00Z" }, now)).toBe(false);
+    expect(staleNeverDispatched({ ...fenix, dispatched_at: "2026-08-28T00:00:00Z" }, now)).toBe(false);
+    expect(staleNeverDispatched({ ...fenix, custody_state: "courier" }, now)).toBe(false);
+    expect(staleNeverDispatched({ ...fenix, courier: "shalom", pickup_state: "en_transito" }, now)).toBe(false);
+    expect(staleNeverDispatched({ ...fenix, custody_state: null }, now)).toBe(true);
+    expect(staleNeverDispatched({ ...fenix, created_at: null }, now)).toBe(false);
   });
 });
