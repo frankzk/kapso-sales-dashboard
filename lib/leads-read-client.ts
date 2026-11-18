@@ -1,8 +1,40 @@
 "use client";
 
 import type * as Actions from "@/app/dashboard/leads/actions";
+import { createBrowserSupabase } from "@/lib/supabase-browser";
 
 // Type-only reference: this module never invokes a Next Server Action.
+
+/** Lo más que una lectura espera a que la pestaña renueve la sesión; después sigue igual. */
+export const SESSION_FRESHNESS_TIMEOUT_MS = 3_000;
+
+let freshness: Promise<void> | null = null;
+
+/**
+ * Renueva la sesión UNA vez antes de las lecturas (owner, 18-11-2026). A las
+ * 08:50 la pestaña de Leads pidió ~10 cosas a la vez con la sesión vencida y
+ * cada una la renovó en el servidor: 10 renovaciones simultáneas, algunas
+ * descartadas (`AuthRefreshDiscardedError`) y una lectura sin usuario. Ahora
+ * las lecturas que salen juntas esperan una sola renovación en el navegador
+ * (`getSession` renueva si venció, con su candado) y llegan con la cookie
+ * fresca. Nunca bloquea: un fallo o más de 3 s y la lectura sale igual.
+ * Fuera del navegador devuelve null y la lectura sale en el mismo instante.
+ */
+export function ensureFreshSession(): Promise<void> | null {
+  if (typeof window === "undefined") return null;
+  if (!freshness) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = Promise.resolve()
+      .then(() => createBrowserSupabase().auth.getSession())
+      .then(() => undefined, () => undefined);
+    const cap = new Promise<void>((resolve) => { timer = setTimeout(resolve, SESSION_FRESHNESS_TIMEOUT_MS); });
+    freshness = Promise.race([refresh, cap]).finally(() => {
+      clearTimeout(timer);
+      freshness = null;
+    });
+  }
+  return freshness;
+}
 type Reads = Pick<typeof Actions, "loadLeadStoreDistribution" | "loadLeadCustomerHistory" | "loadLeadDetail" | "loadNextLeadCart" | "loadLeadDeliveryCoverage" | "loadLeadVoicePanel" | "loadLeadsInsightsPanel" | "pollLeadsQueue" | "searchLeads" | "loadLeadsForAudience" | "listLeadTemplates" | "listQuickReplies" | "loadLeadConversation" | "loadOrderDraft" | "pollLeadState" | "searchStoreProducts" | "listStoreVendedoras" | "listYapeAlerts" | "listCallbackReturns">;
 
 export async function readLeadData<K extends keyof Reads>(
@@ -10,6 +42,12 @@ export async function readLeadData<K extends keyof Reads>(
   args: Parameters<Reads[K]>,
   signal?: AbortSignal,
 ): Promise<Awaited<ReturnType<Reads[K]>>> {
+  const fresh = ensureFreshSession();
+  if (fresh) {
+    await fresh;
+    // Cancelada mientras esperaba la sesión (una búsqueda vieja): no sale.
+    signal?.throwIfAborted();
+  }
   const response = await fetch("/api/leads/read", {
     method: "POST",
     credentials: "same-origin",
