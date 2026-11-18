@@ -85,6 +85,13 @@ export interface LimaPendingOrder {
   attempts: number;
   hasPriorDispatch: boolean;
   lastDepartureAt: string | null;
+  /**
+   * «Por reprogramar Lima» cuya caja nunca salió (owner, 18-11-2026, #KP206971):
+   * su courier anuló la guía antes de recogerla, con la caja en la empresa, y
+   * no hay ninguna salida previa ni intento (`limaBoxNeverLeft`). No es un no
+   * entregado: es su primera salida pendiente.
+   */
+  neverLeft?: boolean;
   programmedFor: string | null;
   /** Por dónde se generó (`order_master.sales_channel`, 0264); null sin calcular. */
   salesChannel: string | null;
@@ -199,10 +206,40 @@ const PRE_DISPATCH_STAGES = new Set(["por_confirmar", "preparacion", "por_despac
 /**
  * «Nuevo» (owner, 17-11-2026: «para poder diferenciarlos exactamente»): el
  * pedido que sale por PRIMERA vez —nunca salió a reparto, sin intentos— y
- * todavía no sale. Lo distingue de lo reprogramado. Pura.
+ * todavía no sale. Lo distingue de lo reprogramado. También el «Por
+ * reprogramar Lima» cuya caja nunca salió (`neverLeft`, 18-11-2026): el
+ * courier anuló la guía antes de recogerla. Pura.
  */
-export function limaIsNew(row: Pick<LimaPendingOrder, "stage" | "hasPriorDispatch" | "dispatchedAt" | "attempts">): boolean {
-  return PRE_DISPATCH_STAGES.has(row.stage) && !row.hasPriorDispatch && !row.dispatchedAt && (row.attempts ?? 0) === 0;
+export function limaIsNew(row: Pick<LimaPendingOrder, "stage" | "hasPriorDispatch" | "dispatchedAt" | "attempts" | "neverLeft">): boolean {
+  return (PRE_DISPATCH_STAGES.has(row.stage) || row.neverLeft === true)
+    && !row.hasPriorDispatch && !row.dispatchedAt && (row.attempts ?? 0) === 0;
+}
+
+/** Lo de una guía que dice si su caja llegó a salir de la empresa. */
+export interface NeverLeftGuide {
+  courier: string | null;
+  delivery_status: string;
+  custody_state?: string | null;
+  dispatched_at?: string | null;
+  out_for_delivery_at?: string | null;
+  returned_at?: string | null;
+}
+
+/** Las salidas que no son de un courier que recoge: la propia de Grupo GF, las agencias y «por definir». */
+const NOT_PICKUP_COURIERS = new Set(["propio", "shalom", "olva", "por_definir"]);
+
+/**
+ * ¿La caja de este pedido nunca salió de la empresa? (owner, 18-11-2026,
+ * #KP206971: «este pedido nunca salió a reparto»). Sí cuando un courier que
+ * recoge (GF Courier, Aliclik, Swayp…) anuló su guía ANTES de recogerla
+ * (`guideAnnulledBeforeDispatch`, que abre la recuperación y lo deja en «Por
+ * reprogramar Lima») y ninguna guía del pedido salió, volvió ni pasó a manos
+ * de un courier: todas siguen con la caja en la empresa. Pura.
+ */
+export function limaBoxNeverLeft(guides: readonly NeverLeftGuide[]): boolean {
+  const left = guides.some((g) => g.dispatched_at || g.out_for_delivery_at || g.returned_at || (g.custody_state ?? "empresa") !== "empresa");
+  if (left) return false;
+  return guides.some((g) => g.delivery_status === "anulado" && !NOT_PICKUP_COURIERS.has((g.courier ?? "").trim().toLowerCase()));
 }
 
 

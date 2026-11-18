@@ -18,7 +18,8 @@
 import { limaClock, nextDay, sameDayCutoffLabel, sameDayCutoffMinute, scheduledDay } from "@/lib/grupo-gf-courier";
 import { rescheduleDateProblem, RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
 import { programDayLabel } from "@/lib/dispatch-day";
-import { guideDoorRejection, guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
+import { guideAnnulledBeforeDispatch, guideDoorRejection, guideFailedAfterDispatch, type RecoveryGuideLike } from "@/lib/reproprovincia";
+import { limaBoxNeverLeft } from "@/lib/repro-lima-pending";
 import { outputsBlockingRetry, ownRetryDecision, type OwnRetryBlock } from "@/lib/gf-retry";
 import { courierDetail, motivoDelCourier } from "@/lib/aliclik-status";
 import { NON_DELIVERY_REASONS } from "@/lib/routes";
@@ -733,6 +734,11 @@ export function boxLocation(input: {
    * Sin `dispatched_at` nunca salió: no hay recepción que esperar.
    */
   liveInOffice?: { dispatched_at?: string | null } | null;
+  /**
+   * La guía que su courier anuló antes de recogerla, con la caja en la empresa
+   * (`annulledBeforePickup`, 18-11-2026, #KP206971): la caja nunca salió.
+   */
+  annulledInOffice?: { courier: string } | null;
 }): BoxLocation {
   if (input.box) {
     return {
@@ -765,7 +771,30 @@ export function boxLocation(input: {
   if (input.liveInOffice) {
     return { kind: "en_oficina", since: input.receivedAt, courier: null, ...(input.liveInOffice.dispatched_at ? {} : { nuncaSalio: true }) };
   }
+  // El courier anuló la guía antes de recogerla: la caja sigue en la empresa, consta.
+  if (input.annulledInOffice) {
+    return { kind: "en_oficina", since: null, courier: input.annulledInOffice.courier, nuncaSalio: true };
+  }
   return { kind: "desconocida" };
+}
+
+/**
+ * La última guía que su courier anuló ANTES de recogerla, si la caja del pedido
+ * nunca salió de la empresa (owner, 18-11-2026, #KP206971: GF Courier la anuló
+ * por «no responde» con la caja lista para recojo). La misma regla que
+ * `limaBoxNeverLeft`: ninguna salida salió, volvió ni pasó a un courier. Null si
+ * alguna salió. PURA.
+ */
+export function annulledBeforePickup<T extends LiveOutputFacts & { closed_at?: string | null; out_for_delivery_at?: string | null }>(outputs: readonly T[]): T | null {
+  if (!limaBoxNeverLeft(outputs)) return null;
+  const annulled = outputs.filter((o) => guideAnnulledBeforeDispatch(o));
+  return annulled.sort((a, b) => (b.output_number ?? 0) - (a.output_number ?? 0))[0] ?? null;
+}
+
+/** La línea de la fila cuando el courier anuló la guía antes de recogerla. */
+export function annulledBeforePickupLine(courier: string, closedAt: string | null | undefined): string {
+  const day = limaDayOf(closedAt ?? null);
+  return `${reproCourierName(courier)} anuló la guía${day ? ` el ${programDayLabel(day)}` : ""} antes de recogerla: la caja nunca salió de la oficina. Es su primera salida.`;
 }
 
 /** ¿La caja es la salida propia de Grupo GF? (con el motorizado, en oficina o perdida). */

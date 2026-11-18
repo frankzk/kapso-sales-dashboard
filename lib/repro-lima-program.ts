@@ -54,6 +54,7 @@ import { limaDay, programDayLabel } from "@/lib/dispatch-day";
 import { sameCourier } from "@/lib/shipment-output";
 import { otherLiveCourierOf } from "@/lib/repro-box-action";
 import {
+  annulledBeforePickup,
   boxLocation,
   compareEpisodeStops,
   isOwnBox,
@@ -238,6 +239,11 @@ export interface ReproFacts {
   lastStop: ReproStopRow | null;
   /** La salida de otro courier que no entregó (la de consecutivo más alto), o null. */
   failedOutput: ReproShipmentRow | null;
+  /**
+   * La guía que su courier anuló antes de recogerla, si la caja nunca salió de
+   * la empresa (`annulledBeforePickup`, 18-11-2026, #KP206971), o null.
+   */
+  annulledBeforePickup?: ReproShipmentRow | null;
   episode: { key: string; at: string | null };
   /** La salida propia que se reusa (`ownRetryOutput`), su caja y si ya estuvo en otra solicitud. */
   ownLive: ReproShipmentRow | null;
@@ -573,6 +579,8 @@ export async function loadReproFacts(
     // sobre el acuerdo, y una caja propia o «por definir» en la empresa consta
     // en oficina aunque el pedido nunca haya fallado.
     const live = liveOutputsOf(outputs, replaced);
+    // La caja que nunca salió: el courier anuló la guía antes de recogerla (18-11-2026, #KP206971).
+    const annulledInOffice = failedStops.length || failedOutput ? null : annulledBeforePickup(outputs);
     let box = boxLocation({
       ownLive,
       box: ownBox,
@@ -581,6 +589,7 @@ export async function loadReproFacts(
       receivedAt,
       liveOther: live.other,
       liveInOffice: live.tbdInOffice,
+      annulledInOffice,
     });
     // E29: reabierto después de «Desarmar y cerrar» con la caja que ya estaba
     // en oficina antes de reabrir (o sin fecha de recepción): Almacén pudo
@@ -603,6 +612,7 @@ export async function loadReproFacts(
       failedStops,
       lastStop: failedStops[0] ?? null,
       failedOutput,
+      annulledBeforePickup: annulledInOffice,
       episode,
       ownLive,
       ownBox,

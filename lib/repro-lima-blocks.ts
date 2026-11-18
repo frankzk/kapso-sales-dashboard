@@ -599,8 +599,10 @@ export function limaTaskOf(row: LimaPendingOrder, c?: PendingCase): LimaTask | n
   if (c?.list === "programados") return null;
   if (c?.list === "llamar_despues") return "llamar_despues";
   if (courierNovelty(row)) return "novedad";
-  if (isPorReprogramarLima(row)) return "no_entregados";
-  if (PRE_DISPATCH.has(row.stage) && !row.hasPriorDispatch && !limaAgendaDay(row, c) && !liveGuideCourier(row)) return "primer_despacho";
+  // La caja que nunca salió (el courier anuló la guía antes de recogerla) no es
+  // un no entregado: es su primera salida (owner, 18-11-2026, #KP206971).
+  if (isPorReprogramarLima(row) && !row.neverLeft) return "no_entregados";
+  if ((PRE_DISPATCH.has(row.stage) || row.neverLeft) && !row.hasPriorDispatch && !limaAgendaDay(row, c) && !liveGuideCourier(row)) return "primer_despacho";
   return null;
 }
 
