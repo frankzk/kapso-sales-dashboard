@@ -21,7 +21,7 @@
 // Pruebas en test/returns-scan-outcome.test.ts.
 
 export type ReturnScanOutcome = "nueva" | "repetida" | "informativa";
-export type ReturnScanCourier = "grupo_gf" | "tanders" | "shalom";
+export type ReturnScanCourier = "grupo_gf" | "tanders" | "shalom" | "swayp";
 
 /** Lo que el escaneo hizo, legible por máquina, junto al `notice` / `error` de siempre. */
 export interface ReturnScanReception {

@@ -356,8 +356,13 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
   return { notice: `${dispatchScanLabel(shipment)} quedó listo para despacho.`, shipment };
 }
 
-/** Los couriers cuyas cajas devueltas se reciben escaneando (MOM §9.4). */
-const RETURN_SCAN_COURIERS = new Set(["tanders", "shalom"]);
+/**
+ * Los couriers cuyas cajas devueltas se reciben escaneando (MOM §9.4). Swayp
+ * (`fenix`) desde el 19-11-2026 (owner: «estoy escaneando devoluciones de
+ * Swayp», KP205271-S01): con la regla de Tanders, el sello del courier no se
+ * pisa y quien la tiene en la mano la sella si Swayp no lo hizo.
+ */
+const RETURN_SCAN_COURIERS = new Set(["tanders", "shalom", "fenix"]);
 
 /**
  * Registra que una caja devuelta LLEGÓ al almacén. Es el escaneo de la pantalla
@@ -371,7 +376,7 @@ const RETURN_SCAN_COURIERS = new Set(["tanders", "shalom"]);
  * escaneó. Si el courier todavía no la había reportado, quien la tiene en la
  * mano la sella — exactamente lo que hacía el botón manual del drawer.
  *
- * Tanders y Shalom. Shalom tiene su propia decisión (`receiveShalomReturn`):
+ * Tanders, Swayp y Shalom. Shalom tiene su propia decisión (`receiveShalomReturn`):
  * una guía que dio por recogida también se recibe si la clienta nunca tuvo la
  * clave. Aliclik sigue con su vía de sellado y su cola de recuperación.
  *
@@ -398,7 +403,7 @@ export async function receiveReturnedPackage(
   const shipment = pick.shipment;
   if (shipment.courier === "propio" || isCourierTbd(shipment.courier)) return receiveGrupoGfReturn(shipment);
   if (!RETURN_SCAN_COURIERS.has(shipment.courier)) {
-    return { error: `${dispatchScanLabel(shipment)} no es de Tanders, Shalom ni Grupo GF: su devolución se registra desde el Master.` };
+    return { error: `${dispatchScanLabel(shipment)} no es de Tanders, Shalom, Swayp ni Grupo GF: su devolución se registra desde el Master.` };
   }
   if (shipment.courier === "shalom") return receiveShalomReturn(shipment, returnGuide);
 
@@ -430,7 +435,7 @@ export async function receiveReturnedPackage(
           notice: `${dispatchScanLabel(shipment)}: ${decision.message}`,
           shipment,
           reception: receptionOf(
-            "tanders",
+            courierKey(shipment.courier) === "fenix" ? "swayp" : "tanders",
             dispatchScanLabel(shipment),
             "repetida",
             earliestOccurredAt(received as { occurred_at?: string | null }[] | null, (guide as { returned_at: string | null }).returned_at),
@@ -481,7 +486,7 @@ export async function receiveReturnedPackage(
   return {
     notice: `${dispatchScanLabel(shipment)} recibida en almacén.`,
     shipment,
-    reception: receptionOf("tanders", dispatchScanLabel(shipment), "nueva"),
+    reception: receptionOf(courierKey(shipment.courier) === "fenix" ? "swayp" : "tanders", dispatchScanLabel(shipment), "nueva"),
   };
 }
 

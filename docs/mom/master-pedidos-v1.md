@@ -5033,8 +5033,13 @@ sin tope de antigüedad. Reglas:
       - No se recibe como devolución una guía que el courier dio por ENTREGADA:
         si esa caja está en el almacén es una incidencia que hay que escalar.
         La única excepción es la de Shalom, abajo.
-      - **Tanders y Shalom** (Shalom desde el 03-10-2026). Aliclik sigue con su
-        propia vía de sellado y su cola de recuperación.
+      - **Tanders, Shalom y Swayp** (Shalom desde el 03-10-2026; Swayp desde el
+        19-11-2026, owner: «estoy escaneando devoluciones de Swayp», con
+        KP205271-S01 rechazada por «no es de Tanders, Shalom ni Grupo GF»).
+        Swayp sigue la regla de Tanders: si Swayp ya la dio por devuelta, su
+        sello no se pisa; si no, quien la tiene en la mano la sella. Cuenta en
+        la tanda como Swayp. Aliclik sigue con su propia vía de sellado y su
+        cola de recuperación.
       - **Shalom, en la misma pantalla.** Un solo escáner para los dos
         couriers: sirve el QR de nuestra banda del rótulo, el nº de guía Shalom
         original o el nº de pedido. La etiqueta de retorno de Shalom trae una
