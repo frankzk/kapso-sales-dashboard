@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   keyViewed: false,
   keyShared: false,
   keyReadFails: false,
+  receptionReadFails: false,
   raceLost: false,
   calls: [] as Call[],
   recomputed: [] as string[][],
@@ -51,6 +52,7 @@ vi.mock("@/lib/db", () => {
     }
     if (call.table === "pickup_key_shares") return { data: state.keyShared ? [{ id: "s" }] : [], error: null };
     if (call.table === "order_events" && has("eq:kind", "return_received")) {
+      if (state.receptionReadFails) return { data: null, error: { message: "lectura fallida" } };
       return { data: state.received ? [{ id: "r2", occurred_at: "2026-11-05T23:00:00Z" }, { id: "r", occurred_at: "2026-11-05T21:45:00Z" }] : [], error: null };
     }
     if (call.table === "order_events" && has("in:kind")) return { data: state.keyViewed ? [{ id: "v" }] : [], error: null };
@@ -90,7 +92,7 @@ const writes = () => state.calls.filter((c) => c.op !== "select");
 beforeEach(() => {
   Object.assign(state, {
     courier: "shalom", guide: RECOGIDA_SIN_CLAVE, received: false, hasKey: true, keyViewed: false,
-    keyShared: false, keyReadFails: false, raceLost: false, calls: [], recomputed: [],
+    keyShared: false, keyReadFails: false, receptionReadFails: false, raceLost: false, calls: [], recomputed: [],
   });
 });
 
@@ -205,7 +207,51 @@ describe("receiveReturnedPackage con una caja de Shalom", () => {
 
   it("las cajas de Aliclik siguen recibiéndose desde el Master", async () => {
     state.courier = "aliclik";
-    expect((await receiveReturnedPackage("92083386")).error).toContain("no es de Tanders, Shalom ni Grupo GF");
+    expect((await receiveReturnedPackage("92083386")).error).toContain("no es de Tanders, Shalom, Swayp ni Grupo GF");
     expect(writes()).toEqual([]);
+  });
+});
+
+describe("receiveReturnedPackage con una devolución de Swayp", () => {
+  beforeEach(() => { state.courier = "fenix"; state.guide = { delivery_status: "anulado", custody_state: "retorno", returned_at: null }; });
+  it("acepta la salida en retorno, sella su recepción y la cuenta como Swayp", async () => {
+    const result = await receiveReturnedPackage("KP128064-S01");
+    expect(result.error).toBeUndefined();
+    expect(result.reception).toEqual({ outcome: "nueva", courier: "swayp", label: "KP128064-S01" });
+    const update = writes().find((w) => w.op === "update")!;
+    expect(update.value).toMatchObject({ custody_state: "devuelto", pickup_state: "devuelto", returned_source: "manual", returned_by: "persona" });
+    expect(update.filters).toContainEqual(["eq:id", "ship-1"]);
+    expect(update.value).not.toHaveProperty("delivery_status");
+    expect(update.value).not.toHaveProperty("swayp_state");
+    const event = writes().find((w) => w.table === "order_events")!;
+    expect(event.value).toMatchObject({ kind: "return_received", shipment_id: "ship-1", order_id: "order-1", actor: "persona" });
+    expect(state.recomputed).toContainEqual(["order-1"]);
+  });
+  it("conserva el sello previo del courier y registra solo la llegada física", async () => {
+    state.guide = { ...state.guide, custody_state: "devuelto", returned_at: "2026-11-18T20:00:00Z" };
+    const result = await receiveReturnedPackage("92083386");
+    expect(result.reception?.outcome).toBe("nueva");
+    expect(writes().find((w) => w.op === "update")!.value).toEqual({ custody_state: "devuelto" });
+  });
+  it("una repetida no escribe otra recepción y muestra la primera hora", async () => {
+    state.received = true;
+    const result = await receiveReturnedPackage("92083386");
+    expect(result.reception).toMatchObject({ outcome: "repetida", courier: "swayp", firstReceivedAt: "2026-11-05T21:45:00Z" });
+    expect(writes()).toEqual([]);
+  });
+  it.each([{ delivery_status: "entregado", custody_state: "courier", returned_at: null }, { delivery_status: "pendiente", custody_state: "empresa", returned_at: null }])("no recibe una entrega ni una caja que nunca salió: %j", async (guide) => {
+    state.guide = guide;
+    expect((await receiveReturnedPackage("92083386")).error).toBeTruthy();
+    expect(writes()).toEqual([]);
+  });
+  it("si falla leer las recepciones anteriores no inventa una nueva", async () => {
+    state.receptionReadFails = true;
+    expect((await receiveReturnedPackage("92083386")).error).toContain("No se pudo comprobar");
+    expect(writes()).toEqual([]);
+  });
+  it("si otra escritura gana al sello, pide reescanear sin inventar auditoría", async () => {
+    state.raceLost = true;
+    expect((await receiveReturnedPackage("92083386")).error).toContain("Vuelve a escanear");
+    expect(writes().some((w) => w.op === "insert")).toBe(false);
   });
 });

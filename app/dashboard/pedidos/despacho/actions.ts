@@ -357,7 +357,7 @@ export async function markShipmentReady(code: string): Promise<DispatchActionRes
 }
 
 /** Los couriers cuyas cajas devueltas se reciben escaneando (MOM §9.4). */
-const RETURN_SCAN_COURIERS = new Set(["tanders", "shalom"]);
+const RETURN_SCAN_COURIERS = new Set(["tanders", "shalom", "fenix"]);
 
 /**
  * Registra que una caja devuelta LLEGÓ al almacén. Es el escaneo de la pantalla
@@ -371,7 +371,7 @@ const RETURN_SCAN_COURIERS = new Set(["tanders", "shalom"]);
  * escaneó. Si el courier todavía no la había reportado, quien la tiene en la
  * mano la sella — exactamente lo que hacía el botón manual del drawer.
  *
- * Tanders y Shalom. Shalom tiene su propia decisión (`receiveShalomReturn`):
+ * Tanders, Swayp y Shalom. Shalom tiene su propia decisión (`receiveShalomReturn`):
  * una guía que dio por recogida también se recibe si la clienta nunca tuvo la
  * clave. Aliclik sigue con su vía de sellado y su cola de recuperación.
  *
@@ -398,12 +398,13 @@ export async function receiveReturnedPackage(
   const shipment = pick.shipment;
   if (shipment.courier === "propio" || isCourierTbd(shipment.courier)) return receiveGrupoGfReturn(shipment);
   if (!RETURN_SCAN_COURIERS.has(shipment.courier)) {
-    return { error: `${dispatchScanLabel(shipment)} no es de Tanders, Shalom ni Grupo GF: su devolución se registra desde el Master.` };
+    return { error: `${dispatchScanLabel(shipment)} no es de Tanders, Shalom, Swayp ni Grupo GF: su devolución se registra desde el Master.` };
   }
   if (shipment.courier === "shalom") return receiveShalomReturn(shipment, returnGuide);
+  const receptionCourier: ReturnScanCourier = shipment.courier === "fenix" ? "swayp" : "tanders";
 
   const admin = createAdminSupabase();
-  const [{ data: guide }, { data: received }] = await Promise.all([
+  const [{ data: guide, error: guideError }, { data: received, error: receivedError }] = await Promise.all([
     admin
       .from("shipments")
       .select("delivery_status,custody_state,returned_at")
@@ -417,6 +418,7 @@ export async function receiveReturnedPackage(
       .eq("kind", "return_received")
       .limit(50),
   ]);
+  if (guideError || receivedError) return { error: "No se pudo comprobar la devolución y su recepción anterior. Vuelve a escanear; no se registró la llegada." };
   if (!guide) return { error: SCAN_NOT_FOUND };
   const decision = decideReception(
     guide as { delivery_status: string; custody_state: string | null; returned_at: string | null },
@@ -430,7 +432,7 @@ export async function receiveReturnedPackage(
           notice: `${dispatchScanLabel(shipment)}: ${decision.message}`,
           shipment,
           reception: receptionOf(
-            "tanders",
+            receptionCourier,
             dispatchScanLabel(shipment),
             "repetida",
             earliestOccurredAt(received as { occurred_at?: string | null }[] | null, (guide as { returned_at: string | null }).returned_at),
@@ -461,11 +463,12 @@ export async function receiveReturnedPackage(
     // Nada escrito: otra lectura (otro teléfono, un reintento) o el courier la
     // sellaron entre la lectura y la escritura. Sin evento de auditoría: si ya
     // está recibida es una repetida; si no, se pide volver a escanear.
-    if (!sealed?.length) return tandersSealLost(admin, shipment);
+    if (!sealed?.length) return tandersSealLost(admin, shipment, receptionCourier);
   } else {
     // El courier ya la selló: la custodia puede seguir en `retorno` si el
     // último reporte fue RETURNING; con la caja acá, ya es nuestra.
-    await admin.from("shipments").update({ custody_state: "devuelto" }).eq("id", shipment.id);
+    const { error } = await admin.from("shipments").update({ custody_state: "devuelto" }).eq("id", shipment.id);
+    if (error) return { error: error.message };
   }
   await auditDispatch({
     orgId,
@@ -481,7 +484,7 @@ export async function receiveReturnedPackage(
   return {
     notice: `${dispatchScanLabel(shipment)} recibida en almacén.`,
     shipment,
-    reception: receptionOf("tanders", dispatchScanLabel(shipment), "nueva"),
+    reception: receptionOf(receptionCourier, dispatchScanLabel(shipment), "nueva"),
   };
 }
 
@@ -521,6 +524,7 @@ async function gfReceptionWonElsewhere(
 async function tandersSealLost(
   admin: ReturnType<typeof createAdminSupabase>,
   shipment: DispatchShipment,
+  courier: ReturnScanCourier = "tanders",
 ): Promise<DispatchActionResult> {
   const label = dispatchScanLabel(shipment);
   const { data } = await admin
@@ -533,7 +537,7 @@ async function tandersSealLost(
   return {
     notice: `${label}: Esta caja ya se había recibido en almacén.`,
     shipment,
-    reception: receptionOf("tanders", label, "repetida", earliestOccurredAt(data as { occurred_at?: string | null }[])),
+    reception: receptionOf(courier, label, "repetida", earliestOccurredAt(data as { occurred_at?: string | null }[])),
   };
 }
 
