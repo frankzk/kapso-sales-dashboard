@@ -675,6 +675,45 @@ describe("la dirección completa bajo el cliente (owner, 06-11-2026)", () => {
   });
 });
 
+describe("detalle de cada bloque de Lima", () => {
+  it("la URL recorta la lista, mantiene el desglose del bloque y respeta los demás filtros", () => {
+    const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const pending = [
+      row({ orderId: "o1", orderName: "#CONROTULO", district: "Ate", substage: "por_armar" }),
+      row({ orderId: "o2", orderName: "#SINROTULO", district: "Ate", substage: "por_generar_rotulo" }),
+      row({ orderId: "o3", orderName: "#CALLAO", district: "Callao", substage: "por_generar_rotulo" }),
+    ];
+    try {
+      nav.search = "atencion=nuevos&detalle=no-guide&distrito=ate";
+      const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(html).toContain('aria-label="Detalle de Nuevos"');
+      expect(html).toContain("#SINROTULO");
+      expect(html).not.toContain("#CONROTULO");
+      expect(html).not.toContain("#CALLAO");
+      expect(html).toContain("Nuevos · Sin guía o rótulo vigente");
+      // El panel sigue contando los dos pedidos del bloque recortado por Ate, aunque la lista muestre uno.
+      expect(html).toMatch(/Dentro de Nuevos.*?2 pedidos/);
+      nav.search = "atencion=nuevos&detalle=desconocido";
+      const unknown = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(unknown).toContain("#CONROTULO");
+      expect(unknown).toContain("#SINROTULO");
+    } finally { nav.search = ""; }
+  });
+
+  it("lee el historial de couriers y de documentos sin confundirlos con la salida actual", async () => {
+    const db = database([master(1, { dispatched_with: ["gf:Roy", "tanders"] })], false, {
+      shipments: [
+        { id: "s1", order_id: "o1", courier: "gf_courier", guide_code: "GF-1", delivery_status: "anulado", reported_status: "CANCEL_REQUESTED" },
+        { id: "s2", order_id: "o1", courier: "tanders", guide_code: "T-2", delivery_status: "no_entregado", returned_at: "2026-10-27T15:00:00Z", custody_state: "devuelto" },
+        { id: "s3", order_id: "o1", courier: "por_definir", delivery_status: "pendiente" },
+      ],
+    });
+    const [r] = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(r?.dispatchedWith).toEqual(["gf:Roy", "tanders"]);
+    expect(r?.ops?.guides).toMatchObject({ total: 2, annulled: 1, returned: 1, cancelRequested: 1 });
+  });
+});
+
 describe("Reintentos Aliclik: elegir cuáles aprobar (owner, 06-11-2026)", () => {
   const listos = [row({ orderId: "a", orderName: "#KPA" }), row({ orderId: "b", orderName: "#KPB" }), row({ orderId: "c", orderName: "#KPC" })];
   it("con marcados aprueba esos; sin marcar, todos los listos; un marcado que ya no está listo no cuenta", () => {

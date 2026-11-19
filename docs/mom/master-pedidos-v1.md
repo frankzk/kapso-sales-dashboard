@@ -6579,6 +6579,46 @@ sale con la caja en oficina. Una recepción de un episodio anterior no cuenta.
 Es solo una chapa. Lo decide una persona con «Desarmar y cerrar sin llamada»,
 porque la merma no se automatiza (principio 11).
 
+#### Detalle de los ocho bloques de Repro Lima (owner, 18-11-2026)
+
+Cada bloque abre un desglose de lectura sobre los mismos pedidos y filtros
+de tienda, búsqueda, fecha, canal, distrito y courier. Las cifras filtran la
+lista mediante `detalle` en la URL, dentro de `atencion`; al cambiar de bloque
+o elegir Trabados se quita el detalle. No cambia la clasificación del flujo,
+estados, permisos, salidas, acuerdos ni `MOM_RESOLUTION_VERSION`.
+
+- **Salidas comprobadas:** el historial de salidas, `dispatched_at`, la última
+  salida, intentos positivos o `dispatched_with` prueban que salió. «Nunca
+  salieron» requiere `limaIsNew`, incluida la guía anulada antes del recojo
+  sin salida previa. El resto dice «Sin evidencia suficiente». Estas tres
+  cifras suman el bloque. Ni asignar motorizado ni crear guía prueba salida.
+- **Intentos registrados:** 0, 1, 2 y cada cantidad exacta de visitas del Master.
+  Suman el bloque, pero no son el número de salidas físicas: una ruta sin
+  reporte puede tener cero visitas. No se inventa un número exacto de salidas
+  contando guías, eventos o couriers.
+- **Guías y rótulos:** vigente usa la regla existente `LimaRowClass.guide`.
+  Además se conservan los documentos de salidas anteriores (código de guía o
+  QR), anulados y devueltos. Cada cifra cuenta pedidos una sola vez, aunque
+  tengan varios documentos. Anular una guía no equivale a anular la venta.
+- **Programación:** con/sin día suman el bloque. Reprogramados con día son
+  los que tienen acuerdo vigente, o ya salieron y esperan una nueva salida
+  con día (sin courier en ruta/retorno). No basta con una fecha de recojo de
+  una ruta que sigue en la calle.
+- **Cruces:** con documento vigente y programados, con documento vigente y
+  reprogramados, reprogramados sin documento vigente, esperan anulación de la
+  venta y sus cruces con documentos vigentes o históricos; solicitud GF
+  `CANCEL_REQUESTED`; entregado por el courier pendiente de cierre. Esperar
+  anulación requiere `awaitingCancel` (caso cerrado); no se predice un cierre.
+- **Con quién salió:** `order_master.dispatched_with`, con todos los couriers
+  y motorizados históricos comprobados; se muestra separado del courier
+  actual. Un pedido puede contar en varios couriers históricos. La asignación
+  o sugerencia para su siguiente ruta no se presenta como reparto realizado.
+
+Las particiones se identifican como tales; los cruces se solapan y la interfaz
+lo explica. La fila muestra salida conocida, visitas registradas y couriers
+históricos tanto en computadora como en celular. Todo se lee en los mismos
+lotes existentes; no hay consultas por pedido ni migraciones nuevas.
+
 #### Repro Lima por las tareas del equipo (owner, 15-11-2026)
 
 Decisión del owner (15-11-2026): «Busco que Repro Lima sea el panel de gestión

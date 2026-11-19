@@ -389,7 +389,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
           title="Flujo del día"
           total={flowTotal}
           unit="pedidos"
-          help="Cada pedido está en un solo paso: los ocho suman el total. Del 1 al 6, el trabajo del equipo, de izquierda a derecha: lo que no tiene día está en No entregados y Sacar a reparto; lo que sale por primera vez, en Nuevos; lo ya salido con su día, en Programados. «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
+          help="Cada pedido está en un solo paso: los ocho suman el total. Toca un bloque para ver sus salidas, intentos, couriers, guías y programación, y filtrar sus pedidos por cada característica. Del 1 al 6, el trabajo del equipo; «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
         />
         <Strip
           label="Flujo del día"

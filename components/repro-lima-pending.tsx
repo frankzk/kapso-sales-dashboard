@@ -23,6 +23,7 @@ import { riderSuggestionText } from "@/lib/lima-rider-suggest";
 import { telHref } from "@/lib/rider-contact";
 import { loadPriorOrderCounts } from "@/app/dashboard/pedidos/repro-lima/prior-counts-actions";
 import { priorCountsLabel, type PriorCounts } from "@/lib/customer-prior-counts";
+import { limaHistoryText } from "@/lib/lima-block-details";
 
 export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
   rows: readonly LimaPendingOrder[]; hidden: ReadonlySet<string>;
@@ -93,6 +94,7 @@ function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: Rep
   return (
     <div className="space-y-1.5">
       {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}
+      <p className="break-words text-xs leading-5 text-ink-500">{limaHistoryText(row)}</p>
       {assigned && (
         <p className="text-[13px] leading-5 text-ink-600" title="El motorizado que GF Courier asignó a esta guía, según su aviso.">
           Asignado: <span className="font-medium text-ink-900">{assigned.rider}</span>{assigned.day && <span className="text-ink-500"> · ruta del {assigned.day}</span>}

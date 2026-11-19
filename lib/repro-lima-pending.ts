@@ -83,6 +83,8 @@ export interface LimaPendingOrder {
   courier: string | null;
   dispatchedAt: string | null;
   attempts: number;
+  /** Couriers y motorizados con salida comprobada, del historial del Master. */
+  dispatchedWith?: string[];
   hasPriorDispatch: boolean;
   lastDepartureAt: string | null;
   /**
@@ -143,6 +145,8 @@ export interface LimaPendingOrder {
  * decide `limaStuck` (lib/lima-stuck.ts).
  */
 export interface LimaPendingOps {
+  /** Documentos de todas sus salidas, incluidas las anuladas; no son repartos. */
+  guides?: { total: number; annulled: number; returned: number; cancelRequested?: number };
   /** Los couriers de sus salidas vivas (`pendiente`/`en_ruta`, sin retorno ni devolución), la más nueva primero. */
   liveCouriers: string[];
   /** Lo último que reportó el courier de la salida viva más nueva (`shipments.reported_status`). */

@@ -21,6 +21,7 @@ interface PendingMasterRow {
   sales_channel: string | null; address: string | null; reference: string | null;
   dispatch_scheduled_on?: string | null;
   dispatch_courier?: string | null;
+  dispatched_with?: string[] | null;
 }
 interface PendingProgramRow { order_id: string; store_id: string; scheduled_for: string }
 interface GfShipmentRow {
@@ -31,6 +32,7 @@ interface GfShipmentRow {
   returned_at: string | null; updated_at: string | null; custody_state: string | null; output_number: number | null;
   // Para saber, como la cola, si es la «por definir» que Grupo GF rellena (`pickFillableRouteOutput`).
   created_via: string | null; custody_transferred_at: string | null;
+  guide_code?: string | null;
 }
 interface GfItemRow { shipment_id: string; manifest_id: string; office_checked_at: string | null; pickup_checked_at: string | null }
 interface GfManifestRow { id: string; route_date: string; driver_name: string | null; courier: string | null; kind: string | null; state: string | null }
@@ -40,7 +42,7 @@ type Read<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null
 /** Las salidas que son de Grupo GF: la «por definir» que rellena y la propia. */
 const GF_OUTPUT_COURIERS = new Set(["por_definir", "propio"]);
 const LIVE_OUTPUT = new Set(["pendiente", "en_ruta"]);
-const GF_SHIPMENT_COLUMNS = "id,order_id,courier,preparation_state,qr_token,delivery_status,created_at,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at,custody_state,output_number,created_via,custody_transferred_at";
+const GF_SHIPMENT_COLUMNS = "id,order_id,courier,preparation_state,qr_token,delivery_status,created_at,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at,custody_state,output_number,created_via,custody_transferred_at,guide_code";
 const TARIFF_COLUMNS = "id,provider_id,agreement_id,district_key,zone,delivery_amount,rejection_amount,includes_igv,currency,effective_from,effective_to,status";
 const AVAILABILITY_COLUMNS = "id,provider_id,agreement_id,district_key,action,reason,paused_until,created_by,created_at";
 
@@ -228,6 +230,12 @@ function opsFacts(outputs: readonly GfShipmentRow[], latestBox: ReadonlyMap<stri
   const box = live.map((s) => latestBox.get(s.id)).filter((b): b is { day: string; riderName: string | null } => Boolean(b))
     .sort((a, b) => b.day.localeCompare(a.day))[0] ?? null;
   return {
+    guides: {
+      total: outputs.filter((s) => s.guide_code?.trim() || s.qr_token).length,
+      annulled: outputs.filter((s) => (s.guide_code?.trim() || s.qr_token) && s.delivery_status === "anulado").length,
+      returned: outputs.filter((s) => (s.guide_code?.trim() || s.qr_token) && (s.returned_at || s.custody_state === "devuelto")).length,
+      cancelRequested: outputs.filter((s) => s.courier === "gf_courier" && s.reported_status?.trim().toUpperCase() === "CANCEL_REQUESTED").length,
+    },
     liveCouriers: [...new Set(live.map((s) => s.courier ?? "").filter(Boolean))],
     reportedStatus: live[0]?.reported_status?.trim() || null,
     courierDelivered: delivered ? { courier: delivered.courier ?? "" } : null,
@@ -382,7 +390,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
     allCourierRows<PendingMasterRow>((from, to) => admin.from("order_master")
-      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier")
+      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,dispatched_with,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier")
       .in("store_id", ids).eq("coverage", "lima").in("macro_stage", [...LIMA_PENDING_STAGES])
       .order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id")
       .range(from, to) as unknown as PromiseLike<{ data: PendingMasterRow[] | null; error: { message: string } | null }>),
@@ -489,6 +497,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       createdAt: row.order_created_at, macroSince: row.macro_since, stage,
       substage: row.macro_substage, courier: row.current_courier, dispatchedAt: row.dispatched_at,
       attempts: Number(row.attempt_count ?? 0),
+      dispatchedWith: row.dispatched_with ?? [],
       hasPriorDispatch: departures.has(row.order_id), lastDepartureAt: departures.get(row.order_id) ?? null,
       ...(neverLeft.has(row.order_id) ? { neverLeft: true } : {}),
       programmedFor: scheduled.get(row.order_id) ?? null,
