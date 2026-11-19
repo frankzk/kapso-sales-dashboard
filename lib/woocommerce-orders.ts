@@ -1800,3 +1800,54 @@ export async function listWooCatalogVariants(
 export function wooSaleClient(creds: WooApiCreds, extra: Partial<WooClientOpts> = {}): WooClientOpts {
   return { siteUrl: creds.siteUrl, consumerKey: creds.consumerKey, consumerSecret: creds.consumerSecret, ...extra };
 }
+
+// ---------------------------------------------------------------------------
+// El SKU del producto con variaciones, ANTES de crear el pedido (19-11-2026)
+// ---------------------------------------------------------------------------
+
+/** Lo más que se espera a WooCommerce para mirar los SKU antes de crear. */
+export const WOO_VARIABLE_CHECK_MS = 8_000;
+
+/**
+ * Las líneas que van por el SKU de un producto CON VARIACIONES, y no por el de
+ * una variación (owner, 19-11-2026, #AUR901173 y #AUR900973: el formulario
+ * abandonado de COD Core sin talla ni color). WooCommerce crea el pedido igual
+ * y Kapta lo rechazaba después, borrándolo (`wooSaleMismatches`). Se mira
+ * antes: una consulta por SKU, solo de las líneas que no vienen del buscador
+ * (las del buscador ya traen su variación). Si WooCommerce no responde no
+ * frena: queda la comprobación de después, como antes. Devuelve sus títulos.
+ */
+export async function wooVariableSkuLines(
+  client: WooClientOpts,
+  lines: readonly Pick<WooSaleLine, "title" | "sku" | "variantId">[],
+): Promise<string[]> {
+  const bySku = new Map<string, string>();
+  for (const li of lines) {
+    const sku = (li.sku ?? "").trim();
+    if (!sku || isWooVariantRef(li.variantId ?? "")) continue;
+    if (!bySku.has(sku)) bySku.set(sku, (li.title ?? "").trim() || sku);
+  }
+  if (!bySku.size) return [];
+  const out: string[] = [];
+  try {
+    await withWooAuthFallback({ ...client, timeoutMs: WOO_VARIABLE_CHECK_MS }, async (o) => {
+      out.length = 0;
+      for (const [sku, title] of bySku) {
+        const { data } = await wooRequest<unknown>(o, {
+          path: "/products",
+          query: { sku, per_page: 10, _fields: "id,type,sku" },
+        });
+        if (wooSkuIsOnlyVariable(sku, Array.isArray(data) ? (data as { type?: unknown; sku?: unknown }[]) : [])) out.push(title);
+      }
+    });
+  } catch {
+    return []; // sin respuesta no se frena: la comprobación de después sigue ahí
+  }
+  return out;
+}
+
+/** ¿Ese SKU, tal cual, es solo el de un producto con variaciones? PURA. */
+export function wooSkuIsOnlyVariable(sku: string, found: readonly { type?: unknown; sku?: unknown }[]): boolean {
+  const same = found.filter((p) => String(p?.sku ?? "").trim() === sku);
+  return same.some((p) => p?.type === "variable") && !same.some((p) => p?.type === "simple" || p?.type === "variation");
+}

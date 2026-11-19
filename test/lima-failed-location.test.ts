@@ -16,6 +16,30 @@ const row = (over: Partial<LimaPendingOrder> = {}): LimaPendingOrder => ({
 const classify = (r: LimaPendingOrder, cases: PendingCase[] = []) => classifyLimaRows([r], cases, today).get(r.orderId)!;
 
 describe("corrección de No entregados por evidencia de su salida", () => {
+  it("la incidencia GF de una salida que sigue con el courier prevalece sobre el acuerdo vencido", () => {
+    const r = row({ courier: "gf_courier", dispatchedWith: ["gf_courier"], dispatchedAt: "2026-11-16T15:00:00Z",
+      ops: { ...row().ops!, custody: "courier", liveCouriers: ["gf_courier"], reportedStatus: "INCIDENT:NO_ANSWER" } });
+    const old: PendingCase = { orderId: "o", list: "programados", agreement: { agreedOn: "2026-11-16", courier: "gf_courier" } };
+    const cls = classify(r, [old]);
+    expect(cls).toMatchObject({ step: "novedad", noReport: false, courier: "en_ruta", guide: true });
+    expect(limaNextStep(r, old, cls, today)).toContain("acuerdo anterior vencido");
+    expect(classify(r, [{ ...old, agreement: { ...old.agreement!, agreedOn: "2026-11-19" } }]).step).not.toBe("novedad");
+    expect(classify(r, [{ ...old, list: "llamar_despues" }]).step).toBe("llamar_despues");
+    expect(classify(r, [{ ...old, list: "cerrados" }]).step).toBe("por_cerrar");
+    expect(classify({ ...r, substage: "en_retorno" }, [old]).step).not.toBe("novedad");
+    expect(classify({ ...r, ops: { ...r.ops!, custody: "empresa" } }, [old]).step).not.toBe("novedad");
+  });
+
+  it("dos guías externas vivas priorizan conciliar las cajas sobre pedir otro intento, sin anular nada", () => {
+    const r = row({ substage: "en_retorno", attempts: 1, ops: { ...row().ops!, custody: "retorno", liveCouriers: ["fenix", "gf_courier"] } });
+    const before = JSON.stringify(r);
+    const cls = classify(r);
+    expect(cls.step).toBe("no_entregados");
+    expect(limaNextStep(r, undefined, cls, today)).toContain("guías vivas de Swayp y GF Courier");
+    expect(limaNextStep(r, undefined, cls, today)).toContain("antes de crear otra salida");
+    expect(limaReviewReasons(r, cls)).toContain("guides");
+    expect(JSON.stringify(r)).toBe(before);
+  });
   it("Generada pendiente de recojo con acuerdo futuro pasa a Programados; sin esa prueba conserva bloque y pide revisión", () => {
     const r = row({ ops: { ...row().ops!, pickupPending: true } });
     const c: PendingCase = { orderId: "o", list: "programados", agreement: { agreedOn: "2026-11-19", courier: "fenix" } };

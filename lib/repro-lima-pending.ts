@@ -86,8 +86,10 @@ export interface LimaPendingOrder {
   attempts: number;
   /** Gestión histórica del mismo pedido; una lectura fallida no produce falsos «sin llamar». */
   management?: { hasCall: boolean; lastCallAt: string | null; lastCallResult: string | null; movedToLimaAt: string | null };
-  /** Couriers y motorizados con salida comprobada, del historial del Master. */
+  /** Couriers y motorizados comprobados del Master o reconstruidos desde rutas reportadas. */
   dispatchedWith?: string[];
+  /** El historial vacío se reconstruyó de rutas fechadas con resultado y motorizado. */
+  historyFromRoutes?: boolean;
   hasPriorDispatch: boolean;
   lastDepartureAt: string | null;
   /**

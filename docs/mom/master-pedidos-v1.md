@@ -6603,6 +6603,21 @@ porque la merma no se automatiza (principio 11).
 
 #### Detalle de los ocho bloques de Repro Lima (owner, 18-11-2026)
 
+**Ejecución aprobada de la revisión (owner, 19-11-2026).** Repro Lima puede
+reconstruir el historial vacío de un pedido propio cuando todas sus salidas
+son propias y existen paradas reportadas (entregado/no entregado) con ruta
+fechada y motorizado identificado. Se muestran esos hechos con su procedencia,
+sin reescribir el Master ni inventar visitas. Una parada pendiente, una
+sugerencia o una asignación no sirven; si falta ruta, fecha o motorizado,
+se conserva la revisión. Tampoco se aplica a pedidos con otras salidas de
+courier que hagan incompleta esa reconstrucción.
+Una incidencia vigente con paquete en custodia del courier y salida comprobada
+prevalece sobre el acuerdo de una fecha anterior a hoy: pasa a Novedad del
+courier. Un nuevo día vigente, las llamadas aplazadas y los cierres conservan
+sus prioridades. Las guías externas simultáneas muestran primero la gestión
+de verificar las salidas y cajas antes de crear otra guía. Siguen marcadas para
+revisión; no se elige ni anula automáticamente una guía, venta o retorno.
+
 **Corrección aprobada de No entregados (18-11-2026).** La salida Swayp
 vigente con estado Generada, custodia empresa y sin despacho ni salida a ruta
 se lee pendiente de recojo aunque el Master siga En curso. Con acuerdo vigente
@@ -24382,8 +24397,8 @@ tienda (`city` de la dirección), a la guía del courier y a la cobertura.
 **La lista.** Los 1893 distritos del Perú con su ubigeo del INEI, su provincia y
 su departamento (`lib/peru-ubigeo-data.ts`, generado por
 `scripts/gen-peru-ubigeo.mjs` desde el paquete `peru-ubigeo` 0.1.3, licencia
-MIT, con la ortografía de cuatro nombres corregida: Lurín, La Unión, Páucar del
-Sara Sara y Anco Huallo). Kapta muestra dos nombres distinto del INEI: el
+MIT, con la ortografía de cinco nombres corregida: Lurín, La Unión, Páucar del
+Sara Sara, Anco Huallo y Callería). Kapta muestra dos nombres distinto del INEI: el
 150101 es **«Cercado de Lima»** (el INEI dice «Lima») y la provincia
 constitucional del Callao es **«Callao»**. Todos los distritos de Lima
 Metropolitana y del Callao, con el nombre de la lista, los reconoce la
@@ -24398,6 +24413,14 @@ lead y la venta por teléfono, que abre el mismo), «Distrito *» es un buscador
   VMT; «Surco», «Magdalena», «Chosica», «Cercado»);
 - perdona una letra mal desde 4 escritas y dos desde 9 («San Martín de
   portes», «chorrilos»), pero si algo calza de verdad no ofrece parecidos;
+- encuentra las **ciudades que no se llaman como su distrito** (owner,
+  19-11-2026: «no me permite colocar Pucallpa»): «Pucallpa» ofrece Callería,
+  Manantay y Yarinacocha, y el aviso dice «"Pucallpa" es una ciudad: elige su
+  distrito (…)»; «Tingo María» es Rupa-Rupa, «Puerto Maldonado» Tambopata,
+  «Cerro de Pasco» Chaupimarca o Yanacancha, «Talara» Pariñas, «La Merced»
+  Chanchamayo, «Quillabamba» Santa Ana, «Aguaytía» Padre Abad y «Atalaya»
+  Raymondi. La de un solo distrito queda elegida; lo que se guarda es
+  siempre el distrito;
 - entre homónimos ordena primero los del departamento que vino con la
   dirección; después, los de Lima y Callao;
 - cada opción dice el distrito y, debajo, «provincia, región». Elegirlo llena
@@ -26204,6 +26227,26 @@ Ajustes → WooCommerce, bajo la de los webhooks de pedidos.
   enlace al borrador. «Generar pedido» lo prellena con los productos por SKU y crea el
   pedido en WooCommerce (arriba, «Los carritos»). Sale también en «Carritos
   anteriores» y en la tarjeta del siguiente lead sin tocar nada de eso.
+- **Sin talla ni color** (owner, 19-11-2026: «¿qué hacemos para que no vuelva
+  a suceder?»; #AUR901173 y, el 16-11, #AUR900973). Si la clienta deja el
+  formulario antes de elegir la variante, COD Core manda el producto con
+  variaciones con `variante: "sin elegir"`, sin `variacion_id` y con el SKU
+  del padre. Por ese SKU WooCommerce creaba el pedido, Kapta lo rechazaba
+  («ese SKU es el del producto con variaciones») y lo borraba. Ahora:
+  - en «Generar pedido» esa línea dice «Falta elegir la variante (talla,
+    color…): la clienta no la eligió en la web. Pregúntasela y elígela del
+    catálogo.», con **«Elegir variante»**, que abre el catálogo con el
+    producto ya buscado y reemplaza la línea por la variante elegida con su
+    cantidad (`cartLineNeedsVariant`, `lib/cart-line-variant.ts`). Mientras
+    falte, no se genera;
+  - el servidor lo vuelve a mirar **antes de crear nada**: cada línea que va
+    por SKU (no las del buscador, que ya traen su variación) se consulta en
+    WooCommerce, y si ese SKU es solo el de un producto con variaciones, la
+    venta se frena con «… es un producto con variaciones y falta elegir la
+    variante (talla, color…). No se creó nada en la tienda.»
+    (`wooVariableSkuLines`, `variableLinesProblem`). Si WooCommerce no
+    responde, no frena: queda la comprobación de después, como antes.
+  `test/cart-line-variant.test.ts`.
 
 **Lo que no cambia, a propósito.**
 
