@@ -17811,8 +17811,17 @@ entregada no cuenta como activa.
   antes de taparlo, aunque el barrido ya diga `RETURNED`: eso dice que Tanders
   la devolvió, no que alguien la recibió. La salida nueva no cierra la
   devolución de la anterior (§9.3), y sin ese registro la guía quedaría en
-  «Faltan» y el pedido entregado en Por cerrar. Swayp no se recibe escaneando;
-  su devolución se registra en la mesa de cierre.
+  «Faltan» y el pedido entregado en Por cerrar. Desde el 19-11-2026, las cajas
+  de **Swayp también se reciben escaneando en Almacén → Devoluciones** (permiso
+  `warehouse.prepare` y acceso a la salida por RLS), además de la mesa de cierre.
+  Sirven el QR interno, código de salida, guía o pedido, con el mismo buscador
+  y rechazo de ambigüedades. Se registra `return_received` con la persona y la
+  salida exacta, se sella manualmente solo si falta `returned_at`, y se pasa
+  la custodia a `devuelto`. Se conserva el sello previo del courier y su
+  reporte, sin anular la venta ni confirmar inventario o liquidación.
+  Una repetida muestra cuándo llegó y no suma en «Esta tanda»; una entregada,
+  una que nunca salió o una lectura fallida no se reciben. El resumen histórico
+  de Tanders/Shalom conserva ese alcance; la tanda sí incluye a Swayp.
 - Si la lectura de las salidas falla, no se decide nada: sin salidas a la vista
   cada pedido parecería no tener ninguna y se crearía una por pedido.
 

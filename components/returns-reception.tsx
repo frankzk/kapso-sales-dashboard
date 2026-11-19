@@ -181,7 +181,7 @@ export function ReturnsReception({ initialData, nav }: {
         <Link href="/dashboard/pedidos/almacen" className="text-[13px] font-medium text-ink-500 hover:text-ink-900">← Almacén</Link>
         <h1 className="mt-1 text-[28px] font-bold leading-9 tracking-[-0.01em] text-ink-900">Devoluciones</h1>
         <p className="mt-1 max-w-2xl text-sm text-ink-500">
-          Escanea cada caja que vuelve al almacén, sea de Tanders, de Shalom o de Grupo GF. Lo que el courier devolvió y nadie escaneó es lo que falta recibir. Un «No entregado» de Grupo GF vuelve a «por asignar» para reprogramarlo; el de un pedido anulado en la tienda va a inventario.
+          Escanea cada caja que vuelve al almacén, sea de Swayp, Tanders, Shalom o Grupo GF. Lo que el courier devolvió y nadie escaneó es lo que falta recibir. Un «No entregado» de Grupo GF vuelve a «por asignar» para reprogramarlo; el de un pedido anulado en la tienda va a inventario.
         </p>
         {nav}
       </header>
