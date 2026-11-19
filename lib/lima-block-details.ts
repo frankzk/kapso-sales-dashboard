@@ -2,6 +2,7 @@
 import { compareDispatchCodes, dispatchedWithLabel } from "@/lib/dispatched-with";
 import { courierLabel, limaIsNew, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import type { LimaRowClass, LimaStep } from "@/lib/repro-lima-blocks";
+import { limaNeedsReview, limaSituationKey } from "@/lib/lima-situations";
 
 export type LimaDetailGroup = { title: string; help?: string; items: { key: string; label: string; count: number }[] };
 
@@ -44,7 +45,18 @@ export function limaDetailMatches(row: LimaPendingOrder, cls: LimaRowClass, key:
     case "delivered": return Boolean(row.ops?.courierDelivered);
     case "guide-cancel-requested": return (row.ops?.guides?.cancelRequested ?? 0) > 0;
     case "left-no-courier": return departure === "left" && !row.dispatchedWith?.length;
+    case "review-couriers": return limaNeedsReview(row);
+    case "with-call": return row.management?.hasCall === true;
+    case "no-call": return row.management?.hasCall === false;
+    case "unknown-call": return row.management == null;
+    case "moved-lima": return Boolean(row.management?.movedToLimaAt);
+    case "manage-today": return cls.needsToday === true;
+    case "custody-unknown": return !row.ops?.custody;
+    case "no-report": return !row.ops?.reportedStatus;
     default:
+      if (key.startsWith("situation:")) return limaSituationKey(row, cls) === key;
+      if (key.startsWith("custody:")) return row.ops?.custody === key.slice(8);
+      if (key.startsWith("report:")) return row.ops?.reportedStatus === key.slice(7);
       if (/^attempts:\d+$/.test(key)) return row.attempts === Number(key.slice(9));
       if (key.startsWith("with:")) return row.dispatchedWith?.includes(key.slice(5)) ?? false;
       if (key.startsWith("current:")) return courierLabel(row.courier, row.courierDetail) === key.slice(8);
@@ -65,6 +77,7 @@ export function limaBlockDetails(rows: readonly LimaPendingOrder[], classes: Rea
   const historical = [...new Set([...inside.flatMap(({ row }) => row.dispatchedWith ?? []), ...(selected?.startsWith("with:") && selected.length > 5 ? [selected.slice(5)] : [])])].sort(compareDispatchCodes);
   const current = [...new Set([...inside.map(({ row }) => courierLabel(row.courier, row.courierDetail)), ...(selected?.startsWith("current:") && selected.length > 8 ? [selected.slice(8)] : [])])].sort((a, b) => a.localeCompare(b, "es"));
   const attempts = [...new Set([0, 1, 2, ...inside.map(({ row }) => row.attempts), ...(/^attempts:\d+$/.test(selected ?? "") ? [Number(selected!.slice(9))] : [])])].sort((a, b) => a - b);
+  const reports = [...new Set([...inside.flatMap(({ row }) => row.ops?.reportedStatus ? [row.ops.reportedStatus] : []), ...(selected?.startsWith("report:") ? [selected.slice(7)] : [])])].sort();
   return [
     group("Salidas a reparto", [["never", "Nunca salieron"], ["left", "Salieron al menos una vez"], ["unknown", "Sin evidencia suficiente"]], "Estas tres cifras suman el bloque. Tener guía o motorizado asignado no prueba una salida."),
     group("Intentos de entrega registrados", attempts.map((n) => [`attempts:${n}`, `${n} ${n === 1 ? "intento" : "intentos"}`]), "Suman el bloque. Son visitas reportadas; una salida sin resultado todavía puede tener 0 intentos."),
@@ -73,6 +86,10 @@ export function limaBlockDetails(rows: readonly LimaPendingOrder[], classes: Rea
     group("Cruces para gestionar", [["guide-scheduled", "Con guía vigente y programados"], ["guide-reprogrammed", "Con guía vigente y reprogramados"], ["no-guide-reprogrammed", "Reprogramados sin guía vigente"], ["cancel", "Esperan anulación de la venta"], ["guide-cancel", "Con guía vigente y esperan anulación"], ["any-guide-cancel", "Con guía en el historial y esperan anulación"], ["guide-cancel-requested", "Guía GF con anulación solicitada"], ["delivered", "Courier reportó entregado, falta cierre"]], "Son cruces: un pedido puede aparecer en varias cifras. La anulación requiere un cierre explícito del caso; no se predice."),
     group("Salió con (historial)", [...historical.map((code) => [`with:${code}`, dispatchedWithLabel(code)] as const), ["left-no-courier", "Salió, courier sin registrar"]], "Solo salidas comprobadas. Si salió con varios couriers, cuenta una vez en cada uno. Un asignado o sugerido aún no cuenta como salida."),
     group("Courier actual", current.map((label) => [`current:${label}`, label]), "Cada pedido cuenta una vez. Puede ser diferente de quien hizo los repartos anteriores."),
+    group("Gestión y llamadas", [["with-call", "Con llamada registrada"], ["no-call", "Sin llamadas registradas"], ["unknown-call", "Historial de llamadas sin leer"], ["moved-lima", "Cobertura corregida a Lima"], ["manage-today", "Provincia a Lima: gestionar hoy"]], "Con llamada, sin llamada y sin lectura suman el bloque. Gestionar hoy no crea una fecha de despacho."),
+    group("Custodia del paquete", [["custody:empresa", "En la empresa"], ["custody:courier", "Con el courier"], ["custody:retorno", "En retorno"], ["custody:devuelto", "Devuelto a la empresa"], ["custody-unknown", "Custodia sin confirmar"]]),
+    group("Reporte del courier", [...reports.map((report) => [`report:${report}`, report] as const), ["no-report", "Sin reporte del courier"]]),
+    group("Revisión para posible cierre", [["review-couriers", "Salieron con varios couriers"]], "Solo revisión. No anula ventas ni guías. Dos motorizados de Grupo GF cuentan como un courier."),
   ];
 }
 

@@ -22,6 +22,7 @@ export type PendingCase = {
   program?: { scheduledFor: string } | null;
   /** La próxima llamada del caso («Llamar después», «No contesta»). */
   nextCallAt?: string | null;
+  lastCall?: { at: string; outcome?: string | null } | null;
 };
 
 /** La fecha acordada vigente manda sobre un programa anterior que aún no se
@@ -83,6 +84,8 @@ export interface LimaPendingOrder {
   courier: string | null;
   dispatchedAt: string | null;
   attempts: number;
+  /** Gestión histórica del mismo pedido; una lectura fallida no produce falsos «sin llamar». */
+  management?: { hasCall: boolean; lastCallAt: string | null; lastCallResult: string | null; movedToLimaAt: string | null };
   /** Couriers y motorizados con salida comprobada, del historial del Master. */
   dispatchedWith?: string[];
   hasPriorDispatch: boolean;
@@ -145,6 +148,8 @@ export interface LimaPendingOrder {
  * decide `limaStuck` (lib/lima-stuck.ts).
  */
 export interface LimaPendingOps {
+  /** Custodia de la salida viva más reciente o, sin ella, de la última salida. */
+  custody?: string | null;
   /** Documentos de todas sus salidas, incluidas las anuladas; no son repartos. */
   guides?: { total: number; annulled: number; returned: number; cancelRequested?: number };
   /** Los couriers de sus salidas vivas (`pendiente`/`en_ruta`, sin retorno ni devolución), la más nueva primero. */
@@ -207,6 +212,11 @@ export function suggestedKeys(row: Pick<LimaPendingOrder, "suggestedRiders" | "g
 
 const PRE_DISPATCH_STAGES = new Set(["por_confirmar", "preparacion", "por_despachar"]);
 
+/** Hechos positivos de salida; nunca se deduce una salida de una guía creada. */
+export function limaHasDeparture(row: Pick<LimaPendingOrder, "hasPriorDispatch" | "dispatchedAt" | "attempts"> & Partial<Pick<LimaPendingOrder, "dispatchedWith" | "lastDepartureAt">>): boolean {
+  return Boolean(row.hasPriorDispatch || row.dispatchedAt || row.lastDepartureAt || row.attempts > 0 || row.dispatchedWith?.length);
+}
+
 /**
  * «Nuevo» (owner, 17-11-2026: «para poder diferenciarlos exactamente»): el
  * pedido que sale por PRIMERA vez —nunca salió a reparto, sin intentos— y
@@ -214,9 +224,9 @@ const PRE_DISPATCH_STAGES = new Set(["por_confirmar", "preparacion", "por_despac
  * reprogramar Lima» cuya caja nunca salió (`neverLeft`, 18-11-2026): el
  * courier anuló la guía antes de recogerla. Pura.
  */
-export function limaIsNew(row: Pick<LimaPendingOrder, "stage" | "hasPriorDispatch" | "dispatchedAt" | "attempts" | "neverLeft">): boolean {
+export function limaIsNew(row: Pick<LimaPendingOrder, "stage" | "hasPriorDispatch" | "dispatchedAt" | "attempts" | "neverLeft"> & Partial<Pick<LimaPendingOrder, "dispatchedWith" | "lastDepartureAt">>): boolean {
   return (PRE_DISPATCH_STAGES.has(row.stage) || row.neverLeft === true)
-    && !row.hasPriorDispatch && !row.dispatchedAt && (row.attempts ?? 0) === 0;
+    && !limaHasDeparture(row);
 }
 
 /** Lo de una guía que dice si su caja llegó a salir de la empresa. */

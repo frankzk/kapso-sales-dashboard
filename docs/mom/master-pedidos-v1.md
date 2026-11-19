@@ -6603,6 +6603,41 @@ porque la merma no se automatiza (principio 11).
 
 #### Detalle de los ocho bloques de Repro Lima (owner, 18-11-2026)
 
+**Revisión con Daysi (18-11-2026).** Sustituye la definición anterior de
+«Nuevos» y la separación entre «Sacar a reparto» y «No entregados»:
+
+- «Nuevos» es primera salida pendiente, sin llamadas registradas, sin acuerdo
+  de reprogramación y sin guía viva de courier externo. Una guía de Aliclik
+  (incluido AUTOECOM), Swayp o GF Courier lo saca de Nuevos: con día pendiente
+  va a Programados y sin día, a Con el courier. No implica que ya salió.
+- Lo que ya salió y espera un nuevo intento sin día vuelve a No entregados,
+  aunque el Master haya vuelto a Preparación/Por despachar. Las novedades
+  vigentes, las llamadas aplazadas y los cierres mantienen su precedencia.
+  Sacar a reparto queda para preparar la primera salida que ya fue gestionada
+  y para incidencias de recojo sin salida previa; no contiene reintentos
+  comprobados. Con día nuevo, lo pendiente de salir va a Programados.
+- Provincia corregida a Lima sin día pendiente se muestra como **gestionar
+  hoy**, con el hecho `coverage_changed`. No se inventa ni se guarda una fecha
+  de despacho o un acuerdo; en Nuevos aparece en Hoy. Una fecha real vigente
+  se conserva, y la prioridad no se aplica a lo que ya lleva el courier.
+- «Sin llamadas» usa hechos de confirmación, Repro Lima, Repro Provincia,
+  Leads vinculados al mismo pedido y telefonía real. Una prueba de voz,
+  una cola sin marcar, un mensaje automático o «sin contacto» no es llamada.
+  La lectura fallida no se interpreta como historial vacío.
+- **Varios couriers:** decisión explícita del owner: marcar para revisión y
+  posible cierre, **sin anular automáticamente** venta ni guía. Se cuentan
+  proveedores distintos con salida comprobada; Roy y Alexis son motorizados
+  de un solo proveedor, Grupo GF. Dos intentos con el mismo courier tampoco
+  significan dos couriers.
+- Cada bloque añade **Situaciones completas**: combinaciones de salida,
+  intentos, couriers históricos y actual, guía, programación, reporte,
+  custodia y gestión. Cada pedido pertenece a una sola situación dentro de
+  su bloque; sus cifras suman el bloque. Las cifras de los atributos
+  independientes y sus cruces siguen pudiendo solaparse.
+
+Estas son reglas de lectura de Repro Lima. No cambian estados del Master,
+historial, custodia real, permisos, guías ni la resolución global del pedido.
+
 Cada bloque abre un desglose de lectura sobre los mismos pedidos y filtros
 de tienda, búsqueda, fecha, canal, distrito y courier. Las cifras filtran la
 lista mediante `detalle` en la URL, dentro de `atencion`; al cambiar de bloque

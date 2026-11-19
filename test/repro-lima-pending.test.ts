@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
 import { createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, courierLabel, groupApprovalFailures, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { boardFilter, classifyLimaRows, limaBoardCounts, limaBoardRows } from "@/lib/repro-lima-blocks";
+import { limaSituations } from "@/lib/lima-situations";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -164,7 +165,7 @@ describe("acceso a todos los pendientes", () => {
     expect(rows.at(-1)?.substage).toBe("en_transito");
     expect(rows[0]?.orderTotal).toBe(149);
     // Más lo de «Sale a reparto» (§29.16): las cajas vigentes (por lo En curso), el proveedor y las salidas de los candidatos.
-    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "dispatch_manifests", "logistics_providers", "shipments"]));
+    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "dispatch_manifests", "logistics_providers", "shipments", "order_events", "lima_repro_calls", "voice_calls", "anura_calls", "leads"]));
     // Las salidas en lotes de 500; aparte, una lectura del reparto por distrito (motorizado sugerido, 17-11-2026).
     const departures = db.rpc.mock.calls.filter(([name]) => name === "gf_order_departures");
     expect(departures.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
@@ -448,7 +449,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(counts.sub).toMatchObject({ nuevos_hoy: 2, nuevos_manana: 1, nuevos_despues: 1, nuevos_sin_dia: 3 });
     expect(counts.agenda).toEqual({ hoy: 0, manana: 1, despues: 0 });
     expect(counts.step.programados).toBe(1);
-    expect(counts.step.por_sacar).toBe(1);
+    expect(counts.step.por_sacar).toBe(0);
+    expect(counts.step.no_entregados).toBe(1);
     expect(Object.values(counts.agenda).reduce((a, b) => a + b, 0)).toBe(counts.step.programados);
     expect(Object.values(counts.step).reduce((a, b) => a + b, 0)).toBe(counts.todos);
     expect(counts.task.primer_despacho).toBe(3);
@@ -457,7 +459,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
   it("una salida que retornó no vuelve a Confirmar primer despacho aunque Master haya borrado el despacho", () => {
     const { rows: of } = board(rows, cases);
     expect(of("primer_despacho")).not.toContain("retorno");
-    expect(of("salieron_sin_dia")).toContain("retorno");
+    expect(of("no_entregados")).toContain("retorno");
+    expect(of("por_sacar")).not.toContain("retorno");
   });
   it("la fecha manda sobre la antigüedad y el historial de salidas; lo vencido sigue en Hoy y va primero", () => {
     const old = row({ createdAt: "2026-01-01T15:00:00Z", hasPriorDispatch: true, programmedFor: "2026-10-29" });
@@ -497,7 +500,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(of("primer_despacho")).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
     // Sacar a reparto es lo ya salido sin día, del más antiguo al más reciente; lo nuevo va a «Nuevos»
     // (17-11-2026): primero lo que tiene día y después lo sin día, del más antiguo al más reciente.
-    expect(of("por_sacar")).toEqual(["volvio-antes", "volvio-ayer"]);
+    expect(of("por_sacar")).toEqual([]);
+    expect(of("no_entregados")).toEqual(["volvio-ayer", "volvio-antes"]); // Mantiene el orden de los casos/cola.
     expect(of("nuevos")).toEqual(["prog", "hace-5-dias", "ayer", "hoy-1"]);
     expect(of("programados")).toEqual([]);
   });
@@ -676,6 +680,59 @@ describe("la dirección completa bajo el cliente (owner, 06-11-2026)", () => {
 });
 
 describe("detalle de cada bloque de Lima", () => {
+  it("la situación completa elegida en la URL filtra exactamente su combinación", () => {
+    const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const pending = [row({ orderId: "o1", orderName: "#MISMO1" }), row({ orderId: "o2", orderName: "#MISMO2" }), row({ orderId: "o3", orderName: "#OTRODIA", programmedFor: "2026-10-29" })];
+    const classes = classifyLimaRows(pending, [], TODAY);
+    const situation = limaSituations(pending, classes, "nuevos", TODAY).find((s) => s.count === 2)!;
+    try {
+      nav.search = new URLSearchParams({ atencion: "nuevos", detalle: situation.key }).toString();
+      const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(html).toContain("#MISMO1"); expect(html).toContain("#MISMO2"); expect(html).not.toContain("#OTRODIA");
+      expect(html).toContain("Situaciones completas");
+      expect(html).toMatch(/Dentro de Nuevos.*?3 pedidos/);
+    } finally { nav.search = ""; }
+  });
+  it("lee llamadas reales de todas las fuentes del pedido y excluye mensajes, pruebas y solicitudes sin marcar", async () => {
+    const source = Array.from({ length: 8 }, (_, i) => master(i + 1));
+    const db = database(source, false, { tables: {
+      order_events: [
+        { id: "e1", order_id: "o1", kind: "confirmation_contact", occurred_at: "2026-11-18T15:00:00Z", payload: { channel: "whatsapp" } },
+        { id: "e2", order_id: "o2", kind: "confirmation_contact", occurred_at: "2026-11-18T15:00:00Z", payload: { channel: "llamada", result: "confirmado" } },
+        { id: "e3", order_id: "o1", kind: "coverage_changed", occurred_at: "2026-11-18T16:00:00Z", payload: { from: "provincia_cod", to: "lima" } },
+      ],
+      lima_repro_calls: [{ id: "r", order_id: "o3", channel: "llamada", occurred_at: "2026-11-18T17:00:00Z", outcome: "no_contesta" }],
+      voice_calls: [
+        { id: "v1", order_id: "o1", mode: "test", dialed_at: "2026-11-18T15:00:00Z" },
+        { id: "v2", order_id: "o4", mode: "real", dialed_at: "2026-11-18T15:00:00Z", outcome: "no_contesta" },
+        { id: "v3", order_id: "o1", mode: "real", dialed_at: null, started_at: null },
+      ],
+      anura_calls: [
+        { id: "a1", order_id: "o1", mode: "pedido", status: "solicitada", requested_at: "2026-11-18T15:00:00Z" },
+        { id: "a2", order_id: "o5", mode: "pedido", status: "no_contestada", requested_at: "2026-11-18T16:00:00Z" },
+      ],
+      leads: [{ id: "l", order_id: "o6" }, { id: "otro", order_id: "fuera" }],
+      lead_calls: [{ id: "l1", lead_id: "l", kind: "call", occurred_at: "2026-11-18T16:00:00Z" }, { id: "l2", lead_id: "otro", kind: "call", occurred_at: "2026-11-18T16:00:00Z" }],
+      shipments: [{ id: "g", order_id: "o7", courier: "tanders", delivery_status: "anulado" }],
+      shipment_calls: [{ id: "s", shipment_id: "g", kind: "call", occurred_at: "2026-11-18T16:00:00Z", new_status: "llamar_despues" }],
+    } });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    const by = new Map(rows.map((r) => [r.orderId, r]));
+    expect(by.get("o1")?.management).toMatchObject({ hasCall: false, movedToLimaAt: "2026-11-18T16:00:00Z" });
+    expect(by.get("o8")?.management?.hasCall).toBe(false);
+    for (const id of ["o2", "o3", "o4", "o5", "o6", "o7"]) expect(by.get(id)?.management?.hasCall, id).toBe(true);
+    expect(by.get("o3")?.management?.lastCallResult).toBe("no_contesta");
+  });
+
+  it("pagina más de mil gestiones y falla explícitamente si no se pudo leer el historial", async () => {
+    const events = Array.from({ length: 1201 }, (_, i) => ({ id: `e${i}`, order_id: "o1", kind: "confirmation_contact", occurred_at: "2026-11-18T15:00:00Z", payload: { channel: i === 1200 ? "llamada" : "whatsapp" } }));
+    const db = database([master(1)], false, { tables: { order_events: events } });
+    const [r] = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(r?.management?.hasCall).toBe(true);
+    const broken = database([master(1)], false, { tableErrors: { order_events: "historial no disponible" } });
+    await expect(loadLimaPending(broken.admin, { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("historial no disponible");
+  });
+
   it("la URL recorta la lista, mantiene el desglose del bloque y respeta los demás filtros", () => {
     const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
     const pending = [

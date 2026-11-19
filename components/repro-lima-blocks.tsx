@@ -84,7 +84,7 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
       [c.sub.guia_sin_recoger, "sin recoger"],
       [c.sub.nunca_salieron, "nunca salieron"],
       [c.sub.mas_de_30, "de más de 30 días"],
-      [c.sub.salieron_sin_dia, "ya salieron, sin día"],
+      [c.sub.salida_por_verificar, "salidas por verificar"],
     ]),
   },
   // Los nuevos, por día de su guía (owner, 17-11-2026); la alerta sin guía va en la celda.
@@ -200,6 +200,7 @@ function insideChip(key: LimaBoardKey, counts: LimaBoardCounts, today: string): 
 
 /** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro (la lista toma su matiz). */
 export function activeStep(active: LimaBoardKey): LimaStep | null {
+  if (active === "salieron_sin_dia") return "no_entregados";
   if (STEP.has(active as LimaStep)) return active as LimaStep;
   for (const [step, inside] of Object.entries(INSIDE)) if (inside?.keys.includes(active)) return step as LimaStep;
   // Las alertas y los reprogramados viven dentro de «Programados».

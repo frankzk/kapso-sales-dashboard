@@ -32,6 +32,7 @@ import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/co
 import { ReproLimaBlocks, STEP_TONE, activeStep } from "@/components/repro-lima-blocks";
 import { LimaBlockDetails } from "@/components/lima-block-details";
 import { limaBlockDetails, limaDetailMatches } from "@/lib/lima-block-details";
+import { isLimaSituationKey, limaSituations } from "@/lib/lima-situations";
 import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { QuickGuideButtons } from "@/components/repro-lima-quick-guide";
 import { OpsToast, type OpsToastData } from "@/components/ops-toast";
@@ -158,9 +159,10 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     [visibleAll, data.rows, today, agendaDays, autoGuide, courierAuto],
   );
   const detailGroups = useMemo(() => detailStep ? limaBlockDetails(scoped, classes, detailStep, detailParam) : [], [scoped, classes, detailStep, detailParam]);
+  const situations = useMemo(() => detailStep ? limaSituations(scoped, classes, detailStep, today) : [], [scoped, classes, detailStep, today]);
   // Un detalle guardado desconocido no vacía la cola. Solo se combina con su paso completo.
-  const detail = !retriesOnly && !stuck && key === detailStep && detailGroups.some((group) => group.items.some((item) => item.key === detailParam)) ? detailParam : null;
-  const detailLabel = detailGroups.flatMap((group) => group.items).find((item) => item.key === detail)?.label;
+  const detail = !retriesOnly && !stuck && key === detailStep && (isLimaSituationKey(detailParam) || detailGroups.some((group) => group.items.some((item) => item.key === detailParam))) ? detailParam : null;
+  const detailLabel = detailGroups.flatMap((group) => group.items).find((item) => item.key === detail)?.label ?? situations.find((s) => s.key === detail)?.title ?? (isLimaSituationKey(detail) ? "Situación seleccionada" : undefined);
   // Cada píldora cuenta con las DEMÁS puestas, y solo lo de la lista abierta (owner, 17-11-2026: en Nuevos
   // «este conteo debería sumar 125»): con «Antes de ayer o más», Canal dice cuántos de esos son de cada canal.
   const filterOptions = useMemo(() => {
@@ -581,7 +583,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         />
       )}
       {!retriesOnly && !stuck && detailStep ? (
-        <LimaBlockDetails label={boardCard(detailStep, today)!.label} total={counts.step[detailStep]} groups={detailGroups} active={detail} onPick={chooseDetail} />
+        <LimaBlockDetails label={boardCard(detailStep, today)!.label} total={counts.step[detailStep]} groups={detailGroups} situations={situations} active={detail} onPick={chooseDetail} />
       ) : null}
 
       {moved && (

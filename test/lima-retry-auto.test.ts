@@ -187,7 +187,7 @@ describe("la salida adicional de Lima: el motivo solo para una persona o el rein
   });
 
   it("el origen se enhebra en las dos lecturas de la creación; el navegador no lo manda", () => {
-    const guide = readFileSync(resolve(process.cwd(), "lib/aliclik-guide.ts"), "utf8");
+    const guide = readFileSync(resolve(process.cwd(), "lib/aliclik-guide.ts"), "utf8").replace(/\r\n/g, "\n");
     expect(guide).toContain("readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);");
     expect(guide).toContain("const finalOutputPolicy = await readAliclikOutputPolicy(admin, ctx, input.motivoSalidaAdicional, origin);");
     expect(guide).toContain("manual: aliclikMotiveAllowed(ctx.userId, origin?.kind),");

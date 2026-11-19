@@ -10,6 +10,7 @@ import { pickFillableRouteOutput } from "@/lib/shipment-output";
 import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
 import type { DistrictAvailabilityEventRow, DistrictTariffRow } from "@/lib/grupo-gf-courier";
 import { limaClock } from "@/lib/grupo-gf-courier";
+import { loadLimaManagement } from "@/lib/lima-management-access";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
 interface PendingMasterRow {
@@ -230,6 +231,7 @@ function opsFacts(outputs: readonly GfShipmentRow[], latestBox: ReadonlyMap<stri
   const box = live.map((s) => latestBox.get(s.id)).filter((b): b is { day: string; riderName: string | null } => Boolean(b))
     .sort((a, b) => b.day.localeCompare(a.day))[0] ?? null;
   return {
+    custody: (live[0] ?? [...outputs].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))[0])?.custody_state ?? null,
     guides: {
       total: outputs.filter((s) => s.guide_code?.trim() || s.qr_token).length,
       annulled: outputs.filter((s) => (s.guide_code?.trim() || s.qr_token) && s.delivery_status === "anulado").length,
@@ -411,11 +413,12 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   const scheduled = new Map(programs.filter((p) => orderStore.get(p.order_id) === p.store_id).map((p) => [p.order_id, p.scheduled_for]));
   const departures = new Map<string, string>();
   const safeIds = [...orderStore.keys()];
-  const [{ gf: gfFacts, ops: stuckFacts }, courierDetails, riderSuggestions] = await Promise.all([
+  const [{ gf: gfFacts, ops: stuckFacts }, courierDetails, riderSuggestions, management] = await Promise.all([
     loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day),
     loadCourierDetails(admin, safe),
     // Best-effort (17-11-2026): sin la lectura, la fila no sugiere motorizado.
     loadRiderSuggestions(admin).catch(() => new Map<string, string[]>()),
+    loadLimaManagement(admin, safeIds),
   ]);
   // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
   // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
@@ -498,6 +501,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       substage: row.macro_substage, courier: row.current_courier, dispatchedAt: row.dispatched_at,
       attempts: Number(row.attempt_count ?? 0),
       dispatchedWith: row.dispatched_with ?? [],
+      management: management.get(row.order_id),
       hasPriorDispatch: departures.has(row.order_id), lastDepartureAt: departures.get(row.order_id) ?? null,
       ...(neverLeft.has(row.order_id) ? { neverLeft: true } : {}),
       programmedFor: scheduled.get(row.order_id) ?? null,
