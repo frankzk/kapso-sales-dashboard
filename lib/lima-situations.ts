@@ -2,17 +2,10 @@ import { compareDispatchCodes, dispatchedWithLabel } from "@/lib/dispatched-with
 import { courierLabel, limaHasDeparture, limaIsNew, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { agendaDayText, courierStatusText, LIMA_COURIER_CARDS, type LimaRowClass, type LimaStep } from "@/lib/repro-lima-blocks";
 import { limaDay } from "@/lib/dispatch-day";
+import { limaReviewReasons, LIMA_REVIEW_LABELS } from "@/lib/lima-review";
+export { limaHistoricalProviders, limaNeedsReview } from "@/lib/lima-review";
 
 export interface LimaSituation { key: string; title: string; detail: string; count: number }
-
-/** Dos motorizados propios son un courier. GF por API sí es otro proveedor. */
-export function limaHistoricalProviders(row: Pick<LimaPendingOrder, "dispatchedWith">): string[] {
-  return [...new Set((row.dispatchedWith ?? []).map((code) => code === "propio" || code === "gf" || code.startsWith("gf:") ? "gf" : code === "swayp" ? "fenix" : code))].sort();
-}
-
-export function limaNeedsReview(row: Pick<LimaPendingOrder, "dispatchedWith">): boolean {
-  return limaHistoricalProviders(row).length > 1;
-}
 
 const CUSTODY: Record<string, string> = { empresa: "En la empresa", courier: "Con el courier", retorno: "En retorno", devuelto: "Devuelto a la empresa" };
 const CALL_RESULT: Record<string, string> = { confirma: "Confirmó", confirmado: "Confirmó", llamar_despues: "Pidió otra llamada", no_contesta: "No contesta", no_quiere: "Ya no lo quiere", cancela: "Pidió cancelar", programar: "Pidió programar", sin_resultado: "Sin resultado" };
@@ -27,6 +20,7 @@ function signature(row: LimaPendingOrder, cls: LimaRowClass): unknown[] {
     cls.awaitingCancel, cls.retry, row.ops?.guides?.annulled ?? 0, row.ops?.guides?.returned ?? 0,
     row.ops?.guides?.total ?? 0, limaDay(row.lastDepartureAt ?? row.dispatchedAt), limaDay(row.management?.lastCallAt ?? null),
     row.gfAssigned?.rider ?? null, row.gfAssigned?.day ?? null, cls.courier, row.ops?.autoGfGuide ?? false,
+    limaReviewReasons(row, cls),
   ];
 }
 
@@ -37,7 +31,7 @@ export function limaSituationKey(row: LimaPendingOrder, cls: LimaRowClass): stri
 export function isLimaSituationKey(key: string | null): boolean {
   if (!key?.startsWith("situation:") || key.length > 6000) return false;
   // Los enlaces anteriores siguen siendo válidos y avisan si su situación cambió.
-  try { const parts = JSON.parse(key.slice(10)); return Array.isArray(parts) && [23, 24, 25].includes(parts.length); }
+  try { const parts = JSON.parse(key.slice(10)); return Array.isArray(parts) && [23, 24, 25, 26].includes(parts.length); }
   catch { return false; }
 }
 
@@ -64,7 +58,7 @@ export function limaSituation(row: LimaPendingOrder, cls: LimaRowClass, today: s
     cls.retry ? "Reintento Aliclik por aprobar" : null,
     row.ops?.guides?.annulled ? `${row.ops.guides.annulled} documento(s) anulado(s)` : null,
     row.ops?.guides?.returned ? `${row.ops.guides.returned} documento(s) devuelto(s)` : null,
-    limaNeedsReview(row) ? "Revisar posible cierre: salió con varios couriers" : null,
+    ...limaReviewReasons(row, cls).map((reason) => LIMA_REVIEW_LABELS[reason]),
   ].filter(Boolean);
   return { key: limaSituationKey(row, cls), title: [known, attempts, guide, program].join(" · "), detail: extra.join(" · ") };
 }

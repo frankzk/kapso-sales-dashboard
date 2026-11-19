@@ -6,6 +6,18 @@ import { useState } from "react";
 import { cn } from "@/components/ui";
 import type { LimaSituation } from "@/lib/lima-situations";
 
+function DetailGroups({ groups, active, onPick }: { groups: readonly LimaDetailGroup[]; active: string | null; onPick: (key: string | null) => void }) {
+  return <div className="mt-4 grid gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
+    {groups.map((group) => <div key={group.title} role="group" aria-label={group.title} className="min-w-0 space-y-2">
+      <h4 className="text-[13px] font-semibold text-ink-700">{group.title}</h4>
+      <div className="flex flex-wrap gap-1.5 [&>button]:h-auto [&>button]:min-h-11 [&>button]:max-w-full [&>button]:whitespace-normal [&>button]:py-2 [&>button]:text-left [&>button>span]:shrink-0">
+        {group.items.map((item) => <ChoiceChip key={item.key} label={item.label} count={item.count} active={active === item.key} onClick={() => onPick(active === item.key ? null : item.key)} />)}
+      </div>
+      {group.help ? <p className="max-w-prose text-xs leading-5 text-ink-500">{group.help}</p> : null}
+    </div>)}
+  </div>;
+}
+
 function SituationList({ situations, active, onPick }: { situations: readonly LimaSituation[]; active: string | null; onPick: (key: string | null) => void }) {
   const [limit, setLimit] = useState(8);
   const shown = situations.slice(0, limit);
@@ -36,20 +48,11 @@ export function LimaBlockDetails({ label, total, groups, active, onPick, situati
         <ChoiceChip label="Todos los del bloque" count={total} active={!active} onClick={() => onPick(null)} />
       </div>
       <p className="mt-1 text-[13px] leading-5 text-ink-500">Toca una cifra para ver sus pedidos abajo. Cada cifra cuenta pedidos, aunque tengan varias guías. Los cruces no se suman entre sí.</p>
+      <DetailGroups groups={groups.filter((group) => group.prominent)} active={active} onPick={onPick} />
       {situations ? <SituationList key={label} situations={situations} active={active} onPick={onPick} /> : null}
       <details className="mt-4" open={!situations || Boolean(active && !active.startsWith("situation:"))}>
       <summary className="cursor-pointer py-2 text-[13px] font-semibold text-ink-700">Explorar características por separado</summary>
-      <div className="mt-4 grid gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
-        {groups.map((group) => (
-          <div key={group.title} role="group" aria-label={group.title} className="min-w-0 space-y-2">
-            <h4 className="text-[13px] font-semibold text-ink-700">{group.title}</h4>
-            <div className="flex flex-wrap gap-1.5 [&>button]:h-auto [&>button]:min-h-11 [&>button]:max-w-full [&>button]:whitespace-normal [&>button]:py-2 [&>button]:text-left [&>button>span]:shrink-0">
-              {group.items.map((item) => <ChoiceChip key={item.key} label={item.label} count={item.count} active={active === item.key} onClick={() => onPick(active === item.key ? null : item.key)} />)}
-            </div>
-            {group.help ? <p className="max-w-prose text-xs leading-5 text-ink-500">{group.help}</p> : null}
-          </div>
-        ))}
-      </div>
+      <DetailGroups groups={groups.filter((group) => !group.prominent)} active={active} onPick={onPick} />
       </details>
     </section>
   );

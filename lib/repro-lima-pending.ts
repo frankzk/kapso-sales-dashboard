@@ -148,6 +148,10 @@ export interface LimaPendingOrder {
  * decide `limaStuck` (lib/lima-stuck.ts).
  */
 export interface LimaPendingOps {
+  /** Swayp Generada, en empresa y sin evidencia de despacho de su salida viva. */
+  pickupPending?: boolean;
+  /** Última salida devuelta y ninguna salida viva posterior. */
+  returnedToWarehouse?: boolean;
   /** Todas las guías GF vivas provienen del automático y siguen sin recoger ni despachar. */
   autoGfGuide?: boolean;
   /** Custodia de la salida viva más reciente o, sin ella, de la última salida. */

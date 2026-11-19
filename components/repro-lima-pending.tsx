@@ -24,7 +24,7 @@ import { telHref } from "@/lib/rider-contact";
 import { loadPriorOrderCounts } from "@/app/dashboard/pedidos/repro-lima/prior-counts-actions";
 import { priorCountsLabel, type PriorCounts } from "@/lib/customer-prior-counts";
 import { limaHistoryText } from "@/lib/lima-block-details";
-import { limaNeedsReview } from "@/lib/lima-situations";
+import { limaReviewReasons, LIMA_REVIEW_LABELS } from "@/lib/lima-review";
 
 export function LimaPendingFilters({ rows, hidden, onToggle, onReset }: {
   rows: readonly LimaPendingOrder[]; hidden: ReadonlySet<string>;
@@ -85,7 +85,7 @@ function StageBadges({ row, cls }: { row: LimaPendingOrder; cls?: LimaRowClass }
   return <div className="flex flex-wrap gap-1">{cls?.step === "nuevos" && <Badge tone="fuchsia" title="Primera salida pendiente, sin llamada ni guía de courier.">Nuevo</Badge>}<Badge tone="brand">{macroStageLabel(row.stage)}</Badge><Badge wrap>{row.substage ? macroSubstageLabel(row.substage) : "Sin subetapa"}</Badge></div>;
 }
 
-function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: ReproRow; today: string }) {
+function WhatHappens({ row, repro, today, cls }: { row: LimaPendingOrder; repro?: ReproRow; today: string; cls?: LimaRowClass }) {
   const courier = courierNowText(row);
   // El motorizado que llevaría su distrito (17-11-2026), mientras GF Courier no asigne a nadie.
   // El servidor solo la deja con guía de GF Courier sin motorizado (`shownRiderSuggestion`), y el filtro «Motorizado» la usa sin asignado.
@@ -96,7 +96,8 @@ function WhatHappens({ row, repro, today }: { row: LimaPendingOrder; repro?: Rep
     <div className="space-y-1.5">
       {courier && <p className="break-words text-sm font-medium leading-5 text-ink-900">{courier}</p>}
       <p className="break-words text-xs leading-5 text-ink-500">{limaHistoryText(row)}</p>
-      {limaNeedsReview(row) ? <Badge tone="warn" wrap>Revisar posible cierre: salió con varios couriers</Badge> : null}
+      {cls?.step === "no_entregados" && <p className="text-xs text-ink-600">Ubicación registrada: {row.ops?.custody === "empresa" ? "En almacén" : row.ops?.custody === "devuelto" ? "Devuelto a almacén" : row.ops?.custody === "courier" ? "Con el courier" : row.ops?.custody === "retorno" ? "Retornando" : "Sin confirmar"}</p>}
+      {limaReviewReasons(row, cls).map((reason) => <Badge key={reason} tone="warn" wrap>{LIMA_REVIEW_LABELS[reason]}</Badge>)}
       {assigned && (
         <p className="text-[13px] leading-5 text-ink-600" title="El motorizado que GF Courier asignó a esta guía, según su aviso.">
           Asignado: <span className="font-medium text-ink-900">{assigned.rider}</span>{assigned.day && <span className="text-ink-500"> · ruta del {assigned.day}</span>}
@@ -405,7 +406,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
               {selection && <td className="py-4 pl-4 pr-0"><SelectBox row={row} selection={selection} /></td>}
               <td className="space-y-1 px-4 py-4"><OrderLink orderId={row.orderId} className="block truncate font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink><StageBadges row={row} cls={cls} /><PendingDate row={row} />{repro && <ClaimBadge row={repro} />}</td>
               <td className="space-y-0.5 px-3 py-4"><p className="truncate font-medium text-ink-900" title={row.customerName}>{row.customerName}</p>{telHref(row.customerPhone) ? <a href={telHref(row.customerPhone)!} className="text-[13px] tabular-nums text-brand-700 hover:underline">{phoneLabel(row.customerPhone)}</a> : <p className="text-xs text-ink-500">Sin teléfono</p>}<PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} /></td>
-              <td className="px-3 py-4"><WhatHappens row={row} repro={repro} today={today} /></td>
+              <td className="px-3 py-4"><WhatHappens row={row} repro={repro} today={today} cls={cls} /></td>
               <td className="px-3 py-4">{cls && <AgendaCell row={row} cls={cls} repro={repro} today={today} />}</td>
               <td className="px-3 py-4">{cls && <NextStep row={row} repro={repro} cls={cls} stuck={stuck?.get(row.orderId)} today={today} now={now} />}</td>
               <td className="px-4 py-4"><div className="flex flex-col gap-1.5">{action(row, true)}</div></td>
@@ -431,7 +432,7 @@ export function LimaPendingList({ rows, reproRows, today, now, classes, stuck, r
         return <li key={row.orderId} className="space-y-2 px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-2">{selection && <SelectBox row={row} selection={selection} />}<OrderLink orderId={row.orderId} className="font-semibold text-ink-900 hover:text-brand-700">{row.orderName}</OrderLink></span></div>
           <StageBadges row={row} cls={cls} /><PendingDate row={row} /><p className="text-sm text-ink-900">{row.customerName}</p><PriorCountsTag counts={priors.get(row.orderId)} /><PendingAddress row={row} />
-          <WhatHappens row={row} repro={repro} today={today} />
+          <WhatHappens row={row} repro={repro} today={today} cls={cls} />
           {cls && (
             <div className="grid gap-2 border-t border-line pt-2 sm:grid-cols-[auto_minmax(0,1fr)]">
               <AgendaCell row={row} cls={cls} repro={repro} today={today} />

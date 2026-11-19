@@ -152,6 +152,22 @@ function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; dep
   return { admin: { from, rpc } as unknown as Admin, pages, ranges, from, rpc };
 }
 describe("acceso a todos los pendientes", () => {
+  it("Swayp Generada solo prueba recojo pendiente si todas las salidas vivas siguen en empresa sin despacho; una devolución no revive la guía", async () => {
+    const swayp = (order_id: string, extra: DBRow = {}): DBRow => ({ id: `${order_id}-s`, order_id, courier: "fenix", guide_code: "g", delivery_status: "en_ruta", swayp_state: 1, custody_state: "empresa", created_at: "2026-11-09T15:00:00Z", ...extra });
+    const db = database(Array.from({ length: 8 }, (_, i) => master(i + 1, { macro_stage: "en_curso", macro_substage: "en_transito" })), false, { shipments: [
+      swayp("o1"), swayp("o2", { swayp_state: null }), swayp("o3", { custody_state: "courier" }),
+      swayp("o4", { dispatched_at: "2026-11-16T15:00:00Z" }),
+      swayp("o5", { custody_transferred_at: "2026-11-16T15:00:00Z" }),
+      swayp("o6", { delivery_status: "anulado", custody_state: "devuelto", returned_at: "2026-11-18T15:00:00Z" }),
+      swayp("o7", { delivery_status: "anulado", custody_state: "devuelto", returned_at: "2026-11-17T15:00:00Z" }),
+      swayp("o7", { id: "new", created_at: "2026-11-18T15:00:00Z" }),
+      swayp("o8"), swayp("o8", { id: "other", courier: "aliclik", created_at: "2026-11-08T15:00:00Z" }),
+    ] });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(rows.filter((r) => r.ops?.pickupPending).map((r) => r.orderId)).toEqual(["o1", "o7"]);
+    expect(rows.filter((r) => r.ops?.returnedToWarehouse).map((r) => r.orderId)).toEqual(["o6"]);
+    expect(rows.find((r) => r.orderId === "o6")?.ops).toMatchObject({ custody: "devuelto", liveCouriers: [], guides: { total: 1, annulled: 1, returned: 1 } });
+  });
   it("carga más de 1383 filas y solo las tiendas/cobertura/etapas autorizadas", async () => {
     const db = database([...Array.from({ length: 1383 }, (_, i) => master(i)),
       master(2000, { store_id: "fuera" }), master(2001, { coverage: "provincia_cod" }),
@@ -823,6 +839,32 @@ describe("detalle de cada bloque de Lima", () => {
       expect(picked).not.toContain("#PORRECOGER");
       expect(picked).toContain("Recogido / en ruta");
       expect(picked).toContain("Custodia: Con el courier");
+    } finally { nav.search = ""; }
+  });
+
+  it("No entregados filtra ubicación, falta de reporte y revisión por separado sin colapsar el desglose principal", () => {
+    const data = { today: TODAY, nowIso: `${TODAY}T15:00:00Z`, cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const ops = { liveCouriers: ["urpi"], reportedStatus: null, courierDelivered: null, lastGfBox: null };
+    const pending = [
+      row({ orderId: "warehouse", orderName: "#ALMACEN", stage: "en_curso", substage: "en_transito", courier: "urpi", macroSince: "2026-10-25T14:00:00Z", dispatchedAt: "2026-10-25T14:00:00Z", dispatchedWith: ["urpi"], ops: { ...ops, custody: "empresa" } }),
+      row({ orderId: "courier", orderName: "#COURIER", stage: "en_curso", substage: "en_transito", courier: "urpi", macroSince: "2026-10-25T14:00:00Z", dispatchedAt: "2026-10-25T14:00:00Z", dispatchedWith: ["urpi"], ops: { ...ops, custody: "courier" } }),
+      row({ orderId: "returning", orderName: "#RETORNANDO", stage: "en_curso", substage: "por_reprogramar_lima", attempts: 1, dispatchedWith: ["urpi"], ops: { ...ops, custody: "retorno" } }),
+    ];
+    try {
+      for (const [detail, visible, hidden] of [
+        ["location:warehouse", ["#ALMACEN"], ["#COURIER", "#RETORNANDO"]],
+        ["location:returning", ["#RETORNANDO"], ["#COURIER", "#ALMACEN"]],
+        ["failed-no-report", ["#ALMACEN", "#COURIER"], ["#RETORNANDO"]],
+        ["review", ["#ALMACEN"], ["#COURIER", "#RETORNANDO"]],
+      ] as const) {
+        nav.search = new URLSearchParams({ atencion: "no_entregados", detalle: detail }).toString();
+        const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+        for (const name of visible) expect(html).toContain(name);
+        for (const name of hidden) expect(html).not.toContain(name);
+        expect(html).toMatch(/Dentro de No entregados.*?3 pedidos/);
+        expect(html.indexOf('aria-label="Dónde figura el paquete"')).toBeLessThan(html.indexOf('<details'));
+        expect(html).toContain("Revisar: figura en ruta y en almacén");
+      }
     } finally { nav.search = ""; }
   });
 

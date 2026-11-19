@@ -631,9 +631,9 @@ describe("las piezas en pantalla", () => {
     // Los plegados no llevan número de paso: solo los seis del trabajo («Nuevos», 17-11-2026).
     expect(html.match(/size-5 shrink-0 place-items-center rounded-full/g)).toHaveLength(6);
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*No entregados/);
-    // «Reintentos Aliclik» vive DENTRO de «No entregados»: su filtro sale en el pie con el nombre del paso, no suelto.
+    // No entregados expone ubicación/gestión en su detalle; la franja conserva solo Todos/Trabados.
     expect(html).toContain("Dentro de <b");
-    expect(html).toContain("Reintentos Aliclik");
+    expect(html).not.toContain("Reintentos Aliclik");
     // Sin un paso elegido, no hay chips de adentro sueltos debajo de la fila.
     const idle = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "todos", onPick: () => {} }));
     expect(idle).not.toContain("Dentro de");

@@ -6603,6 +6603,20 @@ porque la merma no se automatiza (principio 11).
 
 #### Detalle de los ocho bloques de Repro Lima (owner, 18-11-2026)
 
+**Corrección aprobada de No entregados (18-11-2026).** La salida Swayp
+vigente con estado Generada, custodia empresa y sin despacho ni salida a ruta
+se lee pendiente de recojo aunque el Master siga En curso. Con acuerdo vigente
+para una fecha futura pertenece a Programados. Sin salidas vivas, una última
+salida devuelta a almacén no implica guía vigente ni ruta sin reporte: si ya
+salió y no tiene nuevo día, permanece No entregados, por acordar.
+El desglose separa ubicación registrada (En almacén, Con el courier,
+Retornando y Ubicación sin confirmar; suman el bloque) de gestión pendiente
+(por acordar, reintentos y sin reporte). Sin reporte puede coincidir con una
+ubicación y no se suma a ellas. Se marcan para revisión las contradicciones
+entre ruta y custodia, salidas sin fecha ni intentos comprobados, courier
+histórico faltante y acuerdos vencidos aún sin resolver, además de varios
+couriers. No se mueve un caso dudoso ni se anula automáticamente.
+
 **Revisión con Daysi (18-11-2026).** Sustituye la definición anterior de
 «Nuevos» y la separación entre «Sacar a reparto» y «No entregados»:
 

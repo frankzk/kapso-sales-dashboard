@@ -250,11 +250,17 @@ function opsFacts(outputs: readonly GfShipmentRow[], latestBox: ReadonlyMap<stri
     (LIVE_OUTPUT.has(s.delivery_status ?? "") && COURIER_SAYS_DELIVERED.test((s.reported_status ?? "").trim()))));
   const box = live.map((s) => latestBox.get(s.id)).filter((b): b is { day: string; riderName: string | null } => Boolean(b))
     .sort((a, b) => b.day.localeCompare(a.day))[0] ?? null;
+  const latest = [...outputs].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))[0]!;
+  const current = live[0];
   return {
+    pickupPending: Boolean(current && current.courier === "fenix" && current.swayp_state === 1
+      && live.every((s) => s.courier === "fenix" && s.custody_state === "empresa"
+        && !s.custody_transferred_at && !s.dispatched_at && !s.out_for_delivery_at)),
+    returnedToWarehouse: !live.length && Boolean(latest.returned_at || latest.custody_state === "devuelto"),
     autoGfGuide: live.some((s) => s.courier === "gf_courier") && live.filter((s) => s.courier === "gf_courier").every((s) =>
       s.guide_code && automaticGuides.has(`${s.order_id}:${s.guide_code}`) && s.delivery_status === "pendiente"
       && !s.dispatched_at && !s.out_for_delivery_at && (s.custody_state == null || s.custody_state === "empresa")),
-    custody: (live[0] ?? [...outputs].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))[0])?.custody_state ?? null,
+    custody: (current ?? latest).custody_state ?? null,
     guides: {
       total: outputs.filter((s) => s.guide_code?.trim() || s.qr_token).length,
       annulled: outputs.filter((s) => (s.guide_code?.trim() || s.qr_token) && s.delivery_status === "anulado").length,

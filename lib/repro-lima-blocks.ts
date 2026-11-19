@@ -32,6 +32,8 @@ import { fullDeliveryDaysBetween, isCustomerNovelty } from "@/lib/lima-stuck";
 import { reproCallTimeLabel, reproCourierStoreProblem } from "@/lib/repro-lima";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
 import { isDeliveryManagementCall } from "@/lib/lima-management";
+import { limaPackageLocation, type LimaPackageLocation } from "@/lib/lima-package";
+import { limaReviewReasons } from "@/lib/lima-review";
 
 /** El caso de la fila, con lo que el tablero mira además (`ReproRow`). */
 export type BoardCase = PendingCase & {
@@ -137,7 +139,7 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
   {
     key: "no_entregados",
     label: "No entregados",
-    hint: "«Por reprogramar Lima» sin un día de salida, lo que el courier está devolviendo y lo que salió a ruta hace más de un día sin reporte: llama a la clienta y acuerda el día y el courier con «Atender»; con su día pasa a «Programados». Dentro, los reintentos por Aliclik (salen sin llamar), «Retornando» y «Sin reporte de la ruta».",
+    hint: "Salidas no entregadas que requieren gestión: distingue la ubicación registrada (almacén, courier, retorno o sin confirmar) de la tarea pendiente (acordar nuevo intento, reintento Aliclik o pedir reporte). Los datos contradictorios quedan para revisión. Con nuevo día y pendiente de salir pasa a Programados.",
     empty: "No hay no entregados por gestionar con estos filtros.",
   },
   {
@@ -485,6 +487,8 @@ export function liveGuideCourier(row: Pick<LimaPendingOrder, "ops" | "courierPic
  * - **Retornando**: en retorno, retorno solicitado o `RETURNING` del courier.
  */
 export function limaCourierState(row: LimaPendingOrder): LimaCourierState | null {
+  if (row.ops?.returnedToWarehouse) return null;
+  if (row.ops?.pickupPending) return "guia_creada";
   const guide = liveGuideCourier(row);
   if (row.stage === "en_curso") {
     if (isPorReprogramarLima(row) && !guide) return null;
@@ -605,6 +609,7 @@ export function limaTaskOf(row: LimaPendingOrder, c?: PendingCase): LimaTask | n
   if (c?.list === "programados") return null;
   if (c?.list === "llamar_despues") return "llamar_despues";
   if (courierNovelty(row)) return "novedad";
+  if (row.ops?.returnedToWarehouse && limaHasDeparture(row)) return "no_entregados";
   if (limaHasDeparture(row) && PRE_DISPATCH.has(row.stage) && !limaAgendaDay(row, c) && !liveGuideCourier(row)) return "no_entregados";
   // La caja que nunca salió (el courier anuló la guía antes de recogerla) no es
   // un no entregado: es su primera salida (owner, 18-11-2026, #KP206971).
@@ -722,7 +727,7 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
   return {
     step,
     departureUnknown: !limaHasDeparture(row) && !limaIsNew(row),
-    guide: Boolean(courier) || Boolean(row.ops?.courierDelivered) || (row.substage != null && !NO_GUIDE_SUBSTAGES.has(row.substage)),
+    guide: !row.ops?.returnedToWarehouse && (Boolean(courier) || Boolean(row.ops?.courierDelivered) || (row.substage != null && !NO_GUIDE_SUBSTAGES.has(row.substage))),
     task,
     stale: task === "primer_despacho" && limaQueueSegment(row, today, c) === "mas_de_30",
     retry: Boolean(c?.retryChain),
@@ -832,6 +837,8 @@ export function classifyLimaRows(rows: readonly LimaPendingOrder[], cases: reado
 // ---------------------------------------------------------------------------
 
 export interface LimaBoardCounts {
+  /** Ubicación registrada de No entregados: las cuatro cifras suman el bloque. */
+  failedLocation?: Record<LimaPackageLocation, number>;
   todos: number;
   /** Los seis pasos: suman `todos`. */
   step: Record<LimaStep, number>;
@@ -851,6 +858,7 @@ export interface LimaBoardCounts {
 
 export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: ReadonlyMap<string, LimaRowClass>): LimaBoardCounts {
   const counts: LimaBoardCounts = {
+    failedLocation: { warehouse: 0, courier: 0, returning: 0, unknown: 0 },
     todos: rows.length,
     step: { novedad: 0, llamar_despues: 0, no_entregados: 0, por_sacar: 0, nuevos: 0, programados: 0, con_courier: 0, por_cerrar: 0 },
     task: { primer_despacho: 0, no_entregados: 0, novedad: 0, llamar_despues: 0, por_cerrar: 0 },
@@ -864,6 +872,7 @@ export function limaBoardCounts(rows: readonly LimaPendingOrder[], classes: Read
     const cls = classes.get(row.orderId);
     if (!cls) continue;
     counts.step[cls.step] += 1;
+    if (cls.step === "no_entregados") counts.failedLocation![limaPackageLocation(row)]++;
     if (cls.task) counts.task[cls.task] += 1;
     // «Programados»: sus días (Hoy, Mañana, Después) son sus partes; lo de hoy y
     // mañana sin guía y los reprogramados, filtros de adentro (no suman aparte).
@@ -1210,8 +1219,12 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
         ? "Anular la venta en la tienda: el caso se cerró con «Desarmar y cerrar»."
         : `Validar el cobro de ${row.ops?.courierDelivered ? courierDisplayName(row.ops.courierDelivered.courier) : courierName} para cerrarlo (Tanders: su constancia en Validar pagos).`;
     case "no_entregados": {
+      const review = limaReviewReasons(row, cls);
+      if (review.includes("custody") || review.includes("departure")) return "Verificar la salida y la ubicación del paquete: los datos de ruta y custodia no permiten confirmarlas. Pedir evidencia al courier antes de programar otro intento.";
+      if (review.includes("agreement")) return "Verificar el acuerdo vencido y si salió con el courier acordado. Resolver la ruta anterior antes de crear otra salida.";
       if (cls.retry) return "Reintento por Aliclik: apruébalo en «Reintentos Aliclik», sin llamar.";
-      if (cls.courier === "retornando") return `Lo está devolviendo ${courierName}: llama a la clienta y acuerda el nuevo día (Atender); sale otra vez cuando llegue al almacén.`;
+      if (row.ops?.returnedToWarehouse) return "Paquete devuelto a almacén, sin guía vigente. Llamar a la clienta y acordar el nuevo día y el courier (Atender).";
+      if (cls.courier === "retornando" || limaPackageLocation(row) === "returning") return `Lo está devolviendo ${courierName}: llama a la clienta y acuerda el nuevo día (Atender); sale otra vez cuando llegue al almacén.`;
       if (cls.noReport) {
         const rider = row.ops?.lastGfBox?.riderName;
         const who = courier ? courierDisplayName(courier) : GF_INTERNAL.has(row.courier ?? "") || row.ops?.lastGfBox ? (rider ? `el motorizado ${rider}` : "el motorizado") : courierName;

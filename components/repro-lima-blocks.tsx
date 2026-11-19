@@ -70,8 +70,14 @@ const partsNote = (c: LimaBoardCounts, parts: readonly [number, string][]): stri
 
 const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c: LimaBoardCounts) => string | null }>> = {
   no_entregados: {
-    keys: LIMA_STEP_PARTS.no_entregados ?? [],
-    note: (c) => partsNote(c, [
+    // Ubicación y gestión se filtran en el detalle visible; no duplicar el desglose antiguo.
+    keys: [],
+    note: (c) => c.failedLocation ? partsNote(c, [
+      [c.failedLocation.warehouse, "en almacén"],
+      [c.failedLocation.courier, "con el courier"],
+      [c.failedLocation.returning, "retornando"],
+      [c.failedLocation.unknown, "sin ubicación confirmada"],
+    ]) : partsNote(c, [
       [c.sub.por_acordar, "por acordar"],
       [c.sub.reintentos_aliclik, "reintentos Aliclik"],
       [c.courier.retornando, "retornando"],
@@ -200,7 +206,8 @@ function insideChip(key: LimaBoardKey, counts: LimaBoardCounts, today: string): 
 
 /** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro (la lista toma su matiz). */
 export function activeStep(active: LimaBoardKey): LimaStep | null {
-  if (active === "salieron_sin_dia") return "no_entregados";
+  if (active === "salieron_sin_dia" || active === "retornando") return "no_entregados";
+  if (active === "por_acordar" || active === "reintentos_aliclik" || active === "sin_reporte") return "no_entregados";
   if (STEP.has(active as LimaStep)) return active as LimaStep;
   for (const [step, inside] of Object.entries(INSIDE)) if (inside?.keys.includes(active)) return step as LimaStep;
   // Las alertas y los reprogramados viven dentro de «Programados».
