@@ -6603,6 +6603,21 @@ porque la merma no se automatiza (principio 11).
 
 #### Detalle de los ocho bloques de Repro Lima (owner, 18-11-2026)
 
+**Ejecución aprobada de la revisión (owner, 19-11-2026).** Repro Lima puede
+reconstruir el historial vacío de un pedido propio cuando todas sus salidas
+son propias y existen paradas reportadas (entregado/no entregado) con ruta
+fechada y motorizado identificado. Se muestran esos hechos con su procedencia,
+sin reescribir el Master ni inventar visitas. Una parada pendiente, una
+sugerencia o una asignación no sirven; si falta ruta, fecha o motorizado,
+se conserva la revisión. Tampoco se aplica a pedidos con otras salidas de
+courier que hagan incompleta esa reconstrucción.
+Una incidencia vigente con paquete en custodia del courier y salida comprobada
+prevalece sobre el acuerdo de una fecha anterior a hoy: pasa a Novedad del
+courier. Un nuevo día vigente, las llamadas aplazadas y los cierres conservan
+sus prioridades. Las guías externas simultáneas muestran primero la gestión
+de verificar las salidas y cajas antes de crear otra guía. Siguen marcadas para
+revisión; no se elige ni anula automáticamente una guía, venta o retorno.
+
 **Corrección aprobada de No entregados (18-11-2026).** La salida Swayp
 vigente con estado Generada, custodia empresa y sin despacho ni salida a ruta
 se lee pendiente de recojo aunque el Master siga En curso. Con acuerdo vigente

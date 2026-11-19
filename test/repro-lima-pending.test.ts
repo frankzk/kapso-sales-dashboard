@@ -7,6 +7,7 @@ import { loadLimaPending } from "@/lib/repro-lima-pending-access";
 import { createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, courierLabel, groupApprovalFailures, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { boardFilter, classifyLimaRows, limaBoardCounts, limaBoardRows } from "@/lib/repro-lima-blocks";
 import { limaSituations } from "@/lib/lima-situations";
+import { limaDetailMatches, limaHistoryText } from "@/lib/lima-block-details";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -152,6 +153,42 @@ function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; dep
   return { admin: { from, rpc } as unknown as Admin, pages, ranges, from, rpc };
 }
 describe("acceso a todos los pendientes", () => {
+  it("reconstruye solo historial vacío con salidas propias y rutas reportadas completas; conserva otros couriers y no usa asignaciones", async () => {
+    const source = Array.from({ length: 6 }, (_, i) => master(i + 1, { current_courier: "propio", macro_stage: "en_curso", macro_substage: "por_reprogramar_lima", attempt_count: 1 }));
+    source[1]!.dispatched_with = ["aliclik"];
+    const shipments = source.map((r, i) => ({ id: `s${i + 1}`, order_id: r.order_id, courier: "propio", delivery_status: "pendiente", custody_state: "empresa" }));
+    const db = database(source, false, { shipments: [...shipments, { id: "external", order_id: "o3", courier: "aliclik", delivery_status: "anulado" }], tables: {
+      delivery_stops: source.map((r, i) => ({ id: `stop${i + 1}`, order_id: r.order_id, route_id: i === 4 ? "missing" : i === 5 ? "no-rider" : "route", status: i === 3 ? "pendiente" : "no_entregado" })),
+      delivery_routes: [{ id: "route", route_date: "2026-11-16", rider_id: "rider" }, { id: "no-rider", route_date: "2026-11-16", rider_id: null }],
+      riders: [{ id: "rider", full_name: "Motorizado A" }],
+    } });
+    const before = JSON.stringify(source);
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(rows.filter((r) => r.historyFromRoutes).map((r) => r.orderId)).toEqual(["o1"]);
+    expect(rows.find((r) => r.orderId === "o1")).toMatchObject({ dispatchedWith: ["gf:Motorizado A"], attempts: 1 });
+    const rebuilt = rows.find((r) => r.orderId === "o1")!;
+    const cls = classifyLimaRows(rows, [], "2026-11-18").get("o1")!;
+    expect(limaDetailMatches(rebuilt, cls, "history-routes")).toBe(true);
+    expect(limaHistoryText(rebuilt)).toContain("Historial reconstruido desde rutas reportadas");
+    expect(rows.find((r) => r.orderId === "o2")?.dispatchedWith).toEqual(["aliclik"]);
+    expect(rows.find((r) => r.orderId === "o3")?.dispatchedWith).toEqual([]);
+    expect(JSON.stringify(source)).toBe(before);
+    await expect(loadLimaPending(database(source, false, { shipments, tableErrors: { delivery_stops: "rutas sin leer" } }).admin,
+      { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("rutas sin leer");
+  });
+  it("pagina más de mil paradas y conserva al motorizado de la última página", async () => {
+    const db = database([master(1, { current_courier: "propio" })], false, {
+      shipments: [{ id: "own", order_id: "o1", courier: "propio", delivery_status: "pendiente", custody_state: "empresa" }],
+      tables: {
+        delivery_stops: Array.from({ length: 1001 }, (_, i) => ({ id: String(i), order_id: "o1", status: "no_entregado", route_id: i < 1000 ? "a" : "b" })),
+        delivery_routes: [{ id: "a", route_date: "2026-11-16", rider_id: "ra" }, { id: "b", route_date: "2026-11-17", rider_id: "rb" }],
+        riders: [{ id: "ra", full_name: "Motorizado A" }, { id: "rb", full_name: "Motorizado B" }],
+      },
+    });
+    const [r] = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(r?.dispatchedWith).toEqual(["gf:Motorizado A", "gf:Motorizado B"]);
+    expect(db.ranges.filter((r) => r.table === "delivery_stops").map((r) => r.from)).toEqual([0, 500, 1000]);
+  });
   it("Swayp Generada solo prueba recojo pendiente si todas las salidas vivas siguen en empresa sin despacho; una devolución no revive la guía", async () => {
     const swayp = (order_id: string, extra: DBRow = {}): DBRow => ({ id: `${order_id}-s`, order_id, courier: "fenix", guide_code: "g", delivery_status: "en_ruta", swayp_state: 1, custody_state: "empresa", created_at: "2026-11-09T15:00:00Z", ...extra });
     const db = database(Array.from({ length: 8 }, (_, i) => master(i + 1, { macro_stage: "en_curso", macro_substage: "en_transito" })), false, { shipments: [

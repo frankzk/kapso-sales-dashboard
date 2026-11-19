@@ -598,7 +598,7 @@ export function limaAgendaOrigin(row: LimaPendingOrder, c?: PendingCase): LimaAg
  * 7. **Confirmar primer despacho**: antes de salir, nunca salió, sin día y sin
  *    guía de courier (los «Nunca salieron» y «Más de 30 días» de antes).
  */
-export function limaTaskOf(row: LimaPendingOrder, c?: PendingCase): LimaTask | null {
+export function limaTaskOf(row: LimaPendingOrder, c?: PendingCase, today?: string): LimaTask | null {
   if (row.ops?.courierDelivered) return "por_cerrar";
   if (c?.list === "cerrados") return "por_cerrar";
   // Ya tiene su salida nueva: la guía de un courier que espera su recojo. No es
@@ -606,6 +606,11 @@ export function limaTaskOf(row: LimaPendingOrder, c?: PendingCase): LimaTask | n
   // tiene guía para mañana… no guarda lógica»).
   if (isPorReprogramarLima(row) && row.courierPickup) return null;
   if (isPorReprogramarLima(row) && c?.retryChain) return "no_entregados";
+  // La incidencia de la salida que sigue con el courier requiere atención:
+  // un acuerdo vencido no debe esconderla. Un nuevo día vigente sigue mandando.
+  if (c?.list === "programados" && today && c.agreement?.agreedOn && c.agreement.agreedOn < today
+    && row.ops?.custody === "courier" && (row.dispatchedAt || row.lastDepartureAt || row.hasPriorDispatch)
+    && courierNovelty(row)) return "novedad";
   if (c?.list === "programados") return null;
   if (c?.list === "llamar_despues") return "llamar_despues";
   if (courierNovelty(row)) return "novedad";
@@ -676,7 +681,7 @@ export interface LimaRowClass {
  */
 export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefined, today: string, window: readonly string[], opts: LimaClassifyOptions = {}): LimaRowClass {
   const courier = limaCourierState(row);
-  const base = limaTaskOf(row, c);
+  const base = limaTaskOf(row, c, today);
   // Una ruta vencida sin reporte ya no está «con el courier»: es un no entregado (owner, 15-11-2026).
   const noReport = base === null && routeWithoutReport(row, courier, today);
   // Lo que el courier devuelve tampoco: no se entregó (owner, 15-11-2026: «los de retornando deberían estar en no entregados»).
@@ -1212,6 +1217,10 @@ export function agendaDayText(day: string | null, today: string): string {
  * (`limaStuckRule(...).action`), aparte.
  */
 export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, cls: LimaRowClass, today: string, now: Date = new Date()): string {
+  if (cls.step !== "por_cerrar" && limaReviewReasons(row, cls).includes("guides")) {
+    const couriers = [...new Set(row.ops?.liveCouriers.filter((code) => !GF_INTERNAL.has(code)))].map(courierDisplayName).join(" y ");
+    return `Hay guías vivas de ${couriers}. Verificar qué guía y qué caja corresponden a la entrega vigente; coordinar los couriers antes de crear otra salida. No anular ninguna automáticamente.`;
+  }
   if (cls.needsToday) return "La dirección cambió de provincia a Lima: gestionar hoy. Verifica con la clienta y programa su salida; todavía no tiene una fecha de despacho.";
   if (cls.step === "por_sacar" && cls.departureUnknown) return "Verificar si llegó a salir a reparto: el historial no permite confirmarlo. Luego programa la primera salida o gestiona el reintento que corresponda.";
   const courier = liveGuideCourier(row);
@@ -1239,7 +1248,7 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
       return "Llamar a la clienta y acordar el día y el courier (Atender).";
     }
     case "novedad":
-      return `Llamar a la clienta y acordar con ${courierName} la entrega o la devolución: la guía sigue viva.`;
+      return `Llamar a la clienta y acordar con ${courierName} la entrega o la devolución: la guía sigue viva.${cls.agreed && cls.agendaDay && cls.agendaDay < today ? " Resolver también el acuerdo anterior vencido." : ""}`;
     case "llamar_despues":
       if (!c?.nextCallAt) return "Llamar a la clienta otra vez.";
       // Ya llegó la hora (owner, 15-11-2026): lo dice primero; la fila lo pinta en rojo (`callDue`).

@@ -48,6 +48,7 @@ export function limaDetailMatches(row: LimaPendingOrder, cls: LimaRowClass, key:
     case "delivered": return Boolean(row.ops?.courierDelivered);
     case "guide-cancel-requested": return (row.ops?.guides?.cancelRequested ?? 0) > 0;
     case "left-no-courier": return departure === "left" && !row.dispatchedWith?.length;
+    case "history-routes": return row.historyFromRoutes === true;
     case "review-couriers": return limaNeedsReview(row);
     case "review": return limaReviewReasons(row, cls).length > 0;
     case "failed-no-report": return cls.step === "no_entregados" && cls.noReport;
@@ -101,7 +102,7 @@ export function limaBlockDetails(rows: readonly LimaPendingOrder[], classes: Rea
     group("Guías y rótulos", [["guide", "Con guía o rótulo vigente"], ["no-guide", "Sin guía o rótulo vigente"], ["auto-gf-guide", "Con guía GF automática pendiente de recojo"], ["old-guide", "Con documentos en el historial"], ["annulled-guide", "Con guía o rótulo anulado"], ["returned-guide", "Con guía o rótulo devuelto"]], "Con y sin documento vigente suman el bloque. La guía GF automática permite seguir en Nuevos mientras no haya gestión ni salida. El historial incluye documentos anteriores y puede cruzarse."),
     group("Programación actual", [["scheduled", "Con día programado"], ["no-day", "Sin día programado"], ["reprogrammed", "Reprogramados con día"], ["agreement", "Con acuerdo vigente con la clienta"]], "Con y sin día suman el bloque. Reprogramados: ya salieron o tienen acuerdo vigente y cuentan con un nuevo día."),
     group("Cruces para gestionar", [["guide-scheduled", "Con guía vigente y programados"], ["guide-reprogrammed", "Con guía vigente y reprogramados"], ["no-guide-reprogrammed", "Reprogramados sin guía vigente"], ["cancel", "Esperan anulación de la venta"], ["guide-cancel", "Con guía vigente y esperan anulación"], ["any-guide-cancel", "Con guía en el historial y esperan anulación"], ["guide-cancel-requested", "Guía GF con anulación solicitada"], ["delivered", "Courier reportó entregado, falta cierre"]], "Son cruces: un pedido puede aparecer en varias cifras. La anulación requiere un cierre explícito del caso; no se predice."),
-    group("Salió con (historial)", [...historical.map((code) => [`with:${code}`, dispatchedWithLabel(code)] as const), ["left-no-courier", "Salió, courier sin registrar"]], "Solo salidas comprobadas. Si salió con varios couriers, cuenta una vez en cada uno. Un asignado o sugerido aún no cuenta como salida."),
+    group("Salió con (historial)", [...historical.map((code) => [`with:${code}`, dispatchedWithLabel(code)] as const), ["left-no-courier", "Salió, courier sin registrar"], ["history-routes", "Historial reconstruido desde rutas reportadas"]], "Solo salidas comprobadas. Si salió con varios couriers, cuenta una vez en cada uno. Un asignado o sugerido aún no cuenta como salida."),
     group("Courier actual", current.map((label) => [`current:${label}`, label]), "Cada pedido cuenta una vez. Puede ser diferente de quien hizo los repartos anteriores."),
     group("Gestión y llamadas", [["with-call", "Con llamada de gestión de entrega"], ["no-call", "Sin llamadas de gestión de entrega"], ["unknown-call", "Historial de llamadas sin leer"], ["moved-lima", "Cobertura corregida a Lima"], ["manage-today", "Provincia a Lima: gestionar hoy"]], "Solo cuentan las llamadas desde la creación del pedido. Las anteriores se conservan en el historial comercial. Con llamada, sin llamada y sin lectura suman el bloque. Gestionar hoy no crea una fecha de despacho."),
     group("Custodia del paquete", [["custody:empresa", "En la empresa"], ["custody:courier", "Con el courier"], ["custody:retorno", "En retorno"], ["custody:devuelto", "Devuelto a la empresa"], ["custody-unknown", "Custodia sin confirmar"]]),
@@ -115,5 +116,5 @@ export function limaHistoryText(row: LimaPendingOrder): string {
   const state = limaDepartureState(row);
   const departure = state === "never" ? "Nunca salió a reparto" : state === "left" ? "Salió al menos una vez" : "Salida sin evidencia suficiente";
   const history = [...new Set(row.dispatchedWith ?? [])].sort(compareDispatchCodes).map(dispatchedWithLabel);
-  return `${departure} · ${row.attempts} ${row.attempts === 1 ? "intento registrado" : "intentos registrados"}${history.length ? ` · Salió con: ${history.join(", ")}` : state === "left" ? " · Courier de salida sin registrar" : ""}`;
+  return `${departure} · ${row.attempts} ${row.attempts === 1 ? "intento registrado" : "intentos registrados"}${history.length ? ` · Salió con: ${history.join(", ")}` : state === "left" ? " · Courier de salida sin registrar" : ""}${row.historyFromRoutes ? " · Historial reconstruido desde rutas reportadas" : ""}`;
 }
