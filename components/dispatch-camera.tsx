@@ -5,12 +5,27 @@ import { cameraErrorMessage } from "@/lib/camera-error";
 import { CameraSessionError, startDispatchCamera } from "@/lib/dispatch-camera-session";
 import { scanFeedbackVibration, scanProgressDone, scanProgressText, type ScanProgress, type ScanStatusTone } from "@/lib/scan-progress";
 import { playScanNotes, primeScanSound, scanResultNotes, SCAN_READ_NOTES } from "@/lib/scan-sound";
+import { readScanVoicePref, scanVerdictWord, scanVoiceText, speakScan, writeScanVoicePref } from "@/lib/scan-voice";
 import { cn } from "@/components/ui";
 
 /** Un mismo QR leído dos veces seguidas en menos de esto se ignora. */
 const REPEAT_MS = 2500;
 /** Con todo confirmado, la cámara se cierra sola tras este tiempo. */
 const AUTO_CLOSE_MS = 1000;
+/** Lo que dura el resultado grande encima del visor. */
+const VERDICT_MS = 2200;
+
+/**
+ * El resultado grande encima del visor y el color del marco (19-11-2026: «mi
+ * tía escanea y no logra ver bien»): se ve donde se está mirando el QR, sin
+ * leer el aviso de arriba.
+ */
+const VERDICT_CLASS: Record<ScanStatusTone, { badge: string; frame: string }> = {
+  ok: { badge: "bg-emerald-600 text-white", frame: "border-emerald-400" },
+  warn: { badge: "bg-amber-400 text-amber-950", frame: "border-amber-300" },
+  neutral: { badge: "bg-slate-700 text-white", frame: "border-white/90" },
+  crit: { badge: "bg-red-600 text-white", frame: "border-red-500" },
+};
 
 /** `status.tone` explícito (05-11-2026); sin él, el color de siempre por `ok` / `warn`. */
 const STATUS_TONE_CLASS: Record<ScanStatusTone, string> = {
@@ -41,6 +56,7 @@ export function DispatchCamera({
   hint,
   extraLines,
   feedback = null,
+  bigVerdict = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -92,6 +108,12 @@ export function DispatchCamera({
    * `key` cambia una vez por resultado: así no vuelve a vibrar en cada render.
    */
   feedback?: { key: string | number; tone: ScanStatusTone } | null;
+  /**
+   * Devoluciones (19-11-2026): con cada resultado, la palabra grande
+   * («RECIBIDA», «REPETIDA», «ERROR») encima del visor, el marco de su color y,
+   * con «Voz» prendida, el teléfono la dice en voz alta (`lib/scan-voice.ts`).
+   */
+  bigVerdict?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   // Parent callbacks change after every scan; they must not reopen the camera.
@@ -110,10 +132,21 @@ export function DispatchCamera({
   const feedbackKey = feedback?.key ?? null;
   const feedbackTone = feedback?.tone ?? null;
   const feedbackSeen = useRef(feedbackKey);
+  const [voiceOn, setVoiceOn] = useState(() => (bigVerdict && typeof window !== "undefined" ? readScanVoicePref() : false));
+  const [verdict, setVerdict] = useState<{ key: string | number; tone: ScanStatusTone } | null>(null);
+  useEffect(() => {
+    if (!verdict) return;
+    const t = window.setTimeout(() => setVerdict(null), VERDICT_MS);
+    return () => window.clearTimeout(t);
+  }, [verdict]);
   useEffect(() => {
     if (feedbackKey === feedbackSeen.current) return;
     feedbackSeen.current = feedbackKey;
     if (!open || feedbackKey == null || !feedbackTone) return;
+    if (bigVerdict) {
+      setVerdict({ key: feedbackKey, tone: feedbackTone });
+      if (voiceOn) speakScan(scanVoiceText(feedbackTone));
+    }
     // El tono del resultado (13-11-2026), además de la vibración.
     playScanNotes(scanResultNotes(feedbackTone));
     const pattern = scanFeedbackVibration(feedbackTone);
@@ -123,12 +156,14 @@ export function DispatchCamera({
     } catch {
       // sin vibración
     }
-  }, [open, feedbackKey, feedbackTone]);
+  }, [open, feedbackKey, feedbackTone, bigVerdict, voiceOn]);
   const closeRef = useRef<HTMLButtonElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
   const [attempt, setAttempt] = useState(0);
   const [pageVisible, setPageVisible] = useState(true);
+  const sessionRef = useRef<ReturnType<typeof startDispatchCamera> | null>(null);
+  const [torch, setTorchState] = useState<{ supported: boolean; on: boolean }>({ supported: false, on: false });
   useEffect(() => {
     if (!open) return;
     const visibility = () => setPageVisible(document.visibilityState !== "hidden");
@@ -174,14 +209,22 @@ export function DispatchCamera({
         scanLatest(text);
         if (!continuous) closeLatest();
       },
-      onReady: () => setStarting(false),
+      onReady: () => {
+        setStarting(false);
+        setTorchState({ supported: session.torchSupported(), on: false });
+      },
       onError: (err) => {
         console.error("[dispatch-camera] cámara interrumpida", err);
         setStarting(false);
         setError(err instanceof CameraSessionError ? err.message : cameraErrorMessage(err, window.isSecureContext));
       },
     });
-    return () => session.stop();
+    sessionRef.current = session;
+    return () => {
+      session.stop();
+      if (sessionRef.current === session) sessionRef.current = null;
+      setTorchState({ supported: false, on: false });
+    };
   }, [open, continuous, attempt, pageVisible]);
 
   if (!open) return null;
@@ -202,6 +245,21 @@ export function DispatchCamera({
             <p id="dispatch-camera-title" className="font-semibold text-slate-950">{title}</p>
             <p className="text-xs text-slate-500">{hint ?? (continuous ? "Apunta a cada rótulo; la cámara sigue abierta hasta que termines." : "Apunta al rótulo hasta que vibre el lector.")}</p>
           </div>
+          {bigVerdict && (
+            <button
+              type="button"
+              aria-pressed={voiceOn}
+              onClick={() => {
+                const next = !voiceOn;
+                setVoiceOn(next);
+                writeScanVoicePref(next);
+                if (next) speakScan("Voz prendida");
+              }}
+              className={cn("mr-2 min-h-10 shrink-0 rounded-lg border px-3 text-sm font-semibold", voiceOn ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-slate-300 text-slate-700")}
+            >
+              {voiceOn ? "Voz: sí" : "Voz: no"}
+            </button>
+          )}
           {continuous
             ? <button ref={closeRef} type="button" onClick={onClose} className="min-h-10 shrink-0 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-800">Listo</button>
             : <button ref={closeRef} type="button" onClick={onClose} className="grid size-12 shrink-0 place-items-center rounded-full bg-slate-100 text-lg" aria-label="Cerrar cámara">×</button>}
@@ -210,7 +268,8 @@ export function DispatchCamera({
           "sticky top-0 z-10 border-b px-5 py-3 text-base font-semibold leading-snug break-words",
           status ? (status.tone ? STATUS_TONE_CLASS[status.tone] : status.warn ? "border-amber-200 bg-amber-50 text-amber-900" : status.ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-800") : "border-slate-200 bg-slate-50 text-slate-600",
         )}>
-          {status?.text ?? (pending > 0 ? "Lectura recibida" : "Apunta al QR del pedido para escanear.")}
+          {bigVerdict && status?.tone && <p className="text-[32px] font-black leading-none tracking-tight">{scanVerdictWord(status.tone)}</p>}
+          {bigVerdict && status?.tone ? <p className="mt-1 text-lg font-semibold leading-snug">{status.text}</p> : (status?.text ?? (pending > 0 ? "Lectura recibida" : "Apunta al QR del pedido para escanear."))}
           {status?.detail && <p className="mt-1 text-sm font-normal">{status.detail}</p>}
           {status && statusAction && (
             <button
@@ -235,7 +294,18 @@ export function DispatchCamera({
         {error && <p role="alert" className="bg-red-50 px-5 py-3 text-sm text-red-700">{error}</p>}
         <div className="relative aspect-[4/3] max-h-[60dvh] overflow-hidden bg-slate-950">
           <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
-          <div className="pointer-events-none absolute inset-[16%] rounded-3xl border-2 border-white/90 shadow-[0_0_0_999px_rgba(2,6,23,.28)]" />
+          <div className={cn(
+            "pointer-events-none absolute inset-[16%] rounded-3xl shadow-[0_0_0_999px_rgba(2,6,23,.28)] transition-colors",
+            verdict ? cn("border-[6px]", VERDICT_CLASS[verdict.tone].frame) : "border-2 border-white/90",
+          )} />
+          {verdict && (
+            <p aria-hidden="true" className={cn(
+              "pointer-events-none absolute inset-x-4 bottom-4 rounded-2xl px-4 py-3 text-center text-[40px] font-black leading-none tracking-tight shadow-lg",
+              VERDICT_CLASS[verdict.tone].badge,
+            )}>
+              {scanVerdictWord(verdict.tone)}
+            </p>
+          )}
           {starting && <p role="status" className="absolute inset-0 grid place-items-center bg-slate-950/80 text-sm font-medium text-white">Abriendo cámara…</p>}
         </div>
         {continuous && progress && (
@@ -257,8 +327,22 @@ export function DispatchCamera({
             )}
           </div>
         )}
-        <div className="px-5 pb-3 pt-2">
+        <div className="flex flex-wrap gap-2 px-5 pb-3 pt-2">
           <button type="button" onClick={() => setAttempt((value) => value + 1)} className="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">Reiniciar cámara</button>
+          {/* La linterna, si la cámara la tiene (19-11-2026: el almacén con poca luz). */}
+          {torch.supported && (
+            <button
+              type="button"
+              aria-pressed={torch.on}
+              onClick={async () => {
+                const next = !torch.on;
+                if (await sessionRef.current?.setTorch(next)) setTorchState((cur) => ({ ...cur, on: next }));
+              }}
+              className={cn("min-h-11 rounded-lg border px-4 text-sm font-semibold", torch.on ? "border-amber-300 bg-amber-100 text-amber-950" : "border-slate-300 text-slate-700 hover:bg-slate-50")}
+            >
+              {torch.on ? "Linterna: sí" : "Linterna"}
+            </button>
+          )}
         </div>
       </div>
     </div>
