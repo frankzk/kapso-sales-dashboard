@@ -872,6 +872,7 @@ export async function linkExistingAliclikGuide(
 export async function cancelAliclikGuide(
   orderId: string,
   reason: string,
+  shipmentId?: string,
 ): Promise<AliclikActionState> {
   if (!env.aliclikWriteEnabled()) {
     return { error: "La escritura hacia Aliclik está desactivada en este entorno." };
@@ -884,13 +885,15 @@ export async function cancelAliclikGuide(
   // Un pedido puede tener más de una guía de Aliclik: la anterior anulada y la
   // de su reintento (MOM §10.2, 03-11-2026). Se cancela la viva más reciente;
   // solo si no hay ninguna viva, la más reciente.
-  const { data: guides } = await admin
+  let query = admin
     .from("shipments")
     .select("id,guide_code,external_order_number,delivery_status")
     .eq("order_id", orderId)
     .eq("courier", "aliclik")
     .not("external_order_number", "is", null)
     .order("created_at", { ascending: false });
+  if (shipmentId) query = query.eq("id", shipmentId);
+  const { data: guides } = await query;
   const guide = pickGuideToCancel(guides ?? []);
 
   if (!guide?.external_order_number) {

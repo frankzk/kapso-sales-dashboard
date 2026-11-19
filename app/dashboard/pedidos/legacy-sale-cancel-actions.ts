@@ -8,7 +8,7 @@ import { WOO_CANCEL_PERMISSION } from "@/lib/woo-cancel";
 import { cancelHistoricalShopifySale } from "@/lib/legacy-sale-cancel-server";
 
 export async function cancelLegacyShopifySale(orderId: string,
-  input: { reasonCode: string; reasonText: string; requestId: string },
+  input: { reasonCode: string; reasonText: string; requestId: string; requireResolvedGuides?: boolean },
 ): Promise<{ error?: string; notice?: string }> {
   const sb = await createServerSupabase();
   const { data: { user } } = await sb.auth.getUser();
@@ -22,6 +22,7 @@ export async function cancelLegacyShopifySale(orderId: string,
   const result = await cancelHistoricalShopifySale({
     admin: createAdminSupabase(), orderId, userId: user.id,
     reasonCode: input?.reasonCode, reasonText: input?.reasonText, requestId: input?.requestId,
+    requireResolvedGuides: input?.requireResolvedGuides,
   });
   revalidatePath("/dashboard/pedidos");
   revalidatePath("/dashboard/pedidos/despacho");

@@ -4,6 +4,7 @@ import { recomputeOrderMasterSafe } from "@/lib/order-master";
 import { loadCompanionRides } from "@/lib/order-companion-access";
 import { wooSaleEndBlocks, wooSaleGfToCancel } from "@/lib/woo-sale-return";
 import { cancelGfGuideFor } from "@/lib/gf-courier-guide";
+import { reproSaleGuideBlocks } from "@/lib/repro-sale-cancel";
 import {
   isHistoricalShopifyOrder, LEGACY_SALE_CANCELLED, legacySaleCancelBlocks,
   legacySaleCancelledAt, validateLegacySaleCancelReason,
@@ -20,6 +21,8 @@ export async function cancelHistoricalShopifySale(input: {
   admin: SupabaseClient; orderId: string; userId: string;
   reasonCode: unknown; reasonText: unknown; requestId: unknown;
   wooReturn?: boolean;
+  /** Atender resuelve sus guías de preparación antes del segundo clic comercial. */
+  requireResolvedGuides?: boolean;
 }): Promise<{ error?: string; notice?: string }> {
   const reason = validateLegacySaleCancelReason(input.reasonCode, input.reasonText);
   if (!reason.ok) return { error: reason.error };
@@ -63,6 +66,7 @@ export async function cancelHistoricalShopifySale(input: {
       if (stops?.some((stop) => stop.status === "entregado") ||
         events.data?.some((event) => event.kind === "delivered" || event.new_status === "entregado"))
         blocks.push("Hay una entrega reportada. Pide al admin revisar el expediente antes de anular la venta.");
+      if (input.requireResolvedGuides) blocks.push(...reproSaleGuideBlocks({ shipments: shipments.data ?? [], events: events.data ?? [] }));
       if (blocks.length) return { error: blocks.join(" ") };
       if (input.wooReturn) {
         // La guía de GF Courier que todavía no salió se anula en GF ANTES de

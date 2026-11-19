@@ -16,12 +16,18 @@ export function GfCourierCancelButton({
   guideCode,
   prepared,
   onDone,
+  shipmentId,
+  purpose,
+  defaultReason,
 }: {
   orderId: string;
   guideCode: string;
   /** GF ya preparó el paquete (Lista para recojo): anularla puede tener costo. */
   prepared: boolean;
   onDone: (notice: string) => void;
+  shipmentId?: string;
+  purpose?: "cancel_sale";
+  defaultReason?: string;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -31,7 +37,7 @@ export function GfCourierCancelButton({
 
   if (!open) {
     return (
-      <OpsButton size="sm" variant="ghost" onClick={() => setOpen(true)}>
+      <OpsButton size="sm" variant="ghost" onClick={() => { if (defaultReason !== undefined) setReason(defaultReason); setOpen(true); }}>
         Anular guía GF
       </OpsButton>
     );
@@ -44,7 +50,7 @@ export function GfCourierCancelButton({
         {prepared
           ? " GF ya preparó el paquete: la anulación queda pedida y GF la confirma cuando lo saque de preparación (hasta entonces la guía sigue viva)."
           : " GF todavía no prepara el paquete: se anula al momento y sin costo."}{" "}
-        Después puedes acordar otro courier en Repro Lima o crear otra guía en la Mesa de ruta.
+        {purpose === "cancel_sale" ? "La venta se anula en el paso siguiente, cuando la guía esté resuelta." : "Después puedes acordar otro courier en Repro Lima o crear otra guía en la Mesa de ruta."}
       </p>
       <div>
         <label htmlFor={id} className="block text-[13px] font-medium leading-5 text-ink-700">
@@ -57,7 +63,7 @@ export function GfCourierCancelButton({
           value={reason}
           disabled={busy}
           onChange={(e) => setReason(e.currentTarget.value)}
-          placeholder="Ej.: sale con Aliclik el viernes"
+          placeholder={purpose === "cancel_sale" ? "Ej.: la clienta pidió cancelar su pedido" : "Ej.: sale con Aliclik el viernes"}
           className={`${FIELD_BOX} mt-1 w-full px-3 py-2`}
         />
       </div>
@@ -71,7 +77,7 @@ export function GfCourierCancelButton({
             setBusy(true);
             setError(null);
             try {
-              const result = await cancelGfCourierGuide(orderId, reason);
+              const result = shipmentId ? await cancelGfCourierGuide(orderId, reason, shipmentId) : await cancelGfCourierGuide(orderId, reason);
               if (result.error) setError(result.error);
               else {
                 setOpen(false);

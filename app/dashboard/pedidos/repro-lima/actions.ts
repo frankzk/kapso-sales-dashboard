@@ -8,7 +8,7 @@
 // escrituras condicionales, como el candado de Envíos.
 //
 // Lo que NO hace: crear salidas (otro courier va por la Mesa de ruta, D7),
-// anular la venta («Ya no lo quiere» solo quita la fecha) ni tocar el Master.
+// El cierre operativo sigue separado de la anulación comercial (§11.5).
 // La excepción es GF Courier por API (owner, 15-11-2026; MOM §9.5): un acuerdo
 // con GF Courier deja la guía GF creada para el día acordado (`createGfGuideFor`)
 // y, si había una viva sin asignar, la anula antes (`cancelGfGuideFor`).
@@ -47,6 +47,11 @@ import { limaDay, programDayLabel } from "@/lib/dispatch-day";
 import { dispatchCoordinateInput } from "@/lib/dispatch-date";
 import { saveOrderCoordinate } from "@/lib/order-coordinate-save";
 import { recomputeOrderMasterSafe } from "@/lib/order-master";
+import { cancelWooOrder } from "@/app/dashboard/pedidos/woo-cancel-actions";
+import { cancelLegacyShopifySale } from "@/app/dashboard/pedidos/legacy-sale-cancel-actions";
+import { endWooSalePendingReturn } from "@/app/dashboard/pedidos/woo-sale-return-actions";
+import { wooKaptaCancelOperationId } from "@/lib/woo-cancel-server";
+import { legacySaleCancelOperationId } from "@/lib/legacy-sale-cancel-server";
 import { priorOutputsWith, reproBoxAction } from "@/lib/repro-box-action";
 import {
   agreementDateProblem,
@@ -251,6 +256,8 @@ export interface RegisterReproCallInput {
   expectedBoxAction?: BoxAction | null;
   /** «Ya no lo quiere»: el pedido escrito en el segundo clic (§11.5). */
   confirmOrderName?: string | null;
+  /** Confirmación comercial explícita, con las mismas acciones y permisos de Operar. */
+  cancelSale?: "woocommerce" | "woocommerce_return" | "shopify_history";
   /**
    * «Confirma fecha» con Aliclik en un pedido sin coordenada: el enlace de
    * Google Maps o el par (06-11-2026). Se guarda en el pedido.
@@ -259,6 +266,8 @@ export interface RegisterReproCallInput {
 }
 
 export interface RegisterReproCallResult extends ReproActionResult {
+  /** La venta terminó aunque no se haya podido registrar después la llamada. */
+  saleCancelled?: boolean;
   callId?: string;
   /** El mismo envío ya estaba guardado (doble clic o reintento de red). */
   duplicate?: boolean;
@@ -304,7 +313,14 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
   if (!isUuid(input.operationId)) return { error: "Vuelve a abrir el caso: falta el identificador del envío." };
   if (!isReproOutcome(input.outcome)) return { error: "Elige el resultado de la llamada." };
   if (!isReproChannel(input.channel)) return { error: "Elige si fue llamada o WhatsApp." };
+  if (input.cancelSale && (input.outcome !== "no_quiere" || input.channel === "sin_contacto" ||
+    !["woocommerce", "woocommerce_return", "shopify_history"].includes(input.cancelSale))) {
+    return { error: "La anulación de venta requiere «Ya no lo quiere» y su confirmación." };
+  }
   const admin = createAdminSupabase();
+  let saleNotice: string | null = null;
+  const saleDone = (error: string): RegisterReproCallResult => ({ saleCancelled: true,
+    notice: saleNotice ?? "La venta ya está anulada.", error: `La venta terminó, pero falta registrar la llamada y su cierre: ${error}` });
   try {
     const c = await caseInScope(admin, scope, input.caseId);
     if ("error" in c) return c;
@@ -313,10 +329,34 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
     const now = new Date();
     const clock = limaClock(now);
     const note = input.note?.trim().slice(0, NOTE_MAX) || null;
+    if (input.cancelSale) {
+      const reason = validarMotivoDescarte(note);
+      if ("error" in reason) return { error: reason.error };
+      if ((note?.length ?? 0) > 500) return { error: "El motivo de anulación admite hasta 500 caracteres." };
+      if (!sameOrderName(input.confirmOrderName, f.order.order_name)) return { error: "Confirma el nombre del pedido para anular la venta." };
+    }
 
     // Un reintento del mismo envío no se vuelve a validar: la RPC devuelve
     // el duplicado (o lo rechaza si el contenido es otro, E3).
-    const { data: prior } = await admin.from("lima_repro_calls").select("id").eq("operation_id", input.operationId).maybeSingle();
+    const { data: prior, error: priorError } = await admin.from("lima_repro_calls").select("id").eq("operation_id", input.operationId).maybeSingle();
+    if (input.cancelSale && priorError) return { error: "No se pudo comprobar el registro anterior. No se solicitó la anulación." };
+    // Recuperación de una respuesta perdida: solo nuestro intento comercial,
+    // del mismo actor y pedido, permite registrar la llamada tras anularlo.
+    let recoveringSale = false;
+    if (input.cancelSale) {
+      const operation = input.cancelSale === "woocommerce"
+        ? wooKaptaCancelOperationId(c.order_id, input.operationId)
+        : legacySaleCancelOperationId(c.order_id, input.operationId);
+      const { data: event, error } = await admin.from("order_events").select("id").eq("order_id", c.order_id)
+        .eq("operation_id", operation).eq("actor", scope.userId)
+        .in("kind", ["cancelled_woocommerce", "legacy_shopify_sale_cancelled", "woo_sale_ended_pending_return"]).maybeSingle();
+      if (error) return { error: "No se pudo comprobar la anulación anterior. Actualiza antes de reintentar." };
+      recoveringSale = Boolean(event);
+      if (recoveringSale) saleNotice = "La venta ya terminó con esta confirmación.";
+      // Un envío ya usado para un cierre sin anulación no autoriza convertirlo
+      // luego en otra operación comercial, ni omitir el candado.
+      if (prior && !recoveringSale) return { error: "Esta llamada ya se guardó sin anular la venta. Abre una atención nueva." };
+    }
 
     let nextCallAt: string | null = null;
     let agreedOn: string | null = null;
@@ -334,8 +374,8 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
     if (input.outcome === "no_quiere") boxAction = "desarmar_cerrar";
 
     if (!prior) {
-      if (c.closed_at) return { error: "El caso ya está cerrado." };
-      const problem = reproCaseProblem(f, c);
+      if (c.closed_at) return recoveringSale ? saleDone("El caso ya está cerrado.") : { error: "El caso ya está cerrado." };
+      const problem = recoveringSale ? null : reproCaseProblem(f, c);
       if (problem) {
         if (problem.reason !== "cambio") {
           await closeStaleReproCases(admin, [c.id], problem.reason);
@@ -346,6 +386,7 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
         return problem.reason === "cambio" ? { error: problem.message, boxChanged: true } : { error: problem.message };
       }
       if (c.claimed_by !== scope.userId || !c.claimed_until || Date.parse(c.claimed_until) <= now.getTime()) {
+        if (recoveringSale) return saleDone(CASE_GONE);
         return { error: CASE_GONE, claimLost: true };
       }
 
@@ -429,6 +470,17 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
       }
     }
 
+    if (input.cancelSale) {
+      // No se cierra Repro ni se registra éxito hasta que la acción comercial
+      // existente confirme su resultado. Revalida RLS, permiso, dinero y cajas.
+      const cancel = input.cancelSale === "woocommerce" ? cancelWooOrder
+        : input.cancelSale === "woocommerce_return" ? endWooSalePendingReturn : cancelLegacyShopifySale;
+      const cancelInput = { reasonCode: "cliente_desiste", reasonText: note ?? "", requestId: input.operationId, requireResolvedGuides: true };
+      const result = await cancel(c.order_id, cancelInput);
+      if (result.error) return recoveringSale ? saleDone(result.error) : { error: result.error };
+      saleNotice = result.notice ?? "Venta anulada.";
+    }
+
     if (coordinate) {
       const saveError = await saveOrderCoordinate(admin, { orderId: c.order_id, storeId: f.order.store_id, userId: scope.userId, ...coordinate });
       if (saveError) return { error: saveError };
@@ -462,7 +514,7 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
       p_case: c.id,
       p_actor: scope.userId,
       p_operation: input.operationId,
-      p_episode: f.episode.key,
+      p_episode: recoveringSale ? c.episode_key : f.episode.key,
       p_outcome: input.outcome,
       p_channel: input.channel,
       p_next_call_at: nextCallAt,
@@ -476,6 +528,7 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
       p_ttl_minutes: REPRO_CLAIM_TTL_MINUTES,
     });
     // La RPC vuelve a mirar el candado: se pudo perder entre la lectura y aquí.
+    if (error && saleNotice) return saleDone(error.message);
     if (error) return error.message === CASE_GONE ? { error: CASE_GONE, claimLost: true } : { error: error.message };
     const recorded = data as { call_id: string; duplicate: boolean };
 
@@ -496,14 +549,16 @@ async function recordCall(scope: ReproScope, input: RegisterReproCallInput): Pro
     revalidatePath(REPRO_LIMA_PATH);
     if (next.programChanged) revalidatePath(COURIER_PATH);
     return {
-      notice: next.notice,
+      notice: saleNotice ?? next.notice,
+      ...(saleNotice ? { saleCancelled: true } : {}),
       ...(next.href ? { href: next.href } : {}),
       ...(next.error ? { error: next.error } : {}),
       callId: recorded.call_id,
       duplicate: Boolean(recorded.duplicate),
     };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    const message = error instanceof Error ? error.message : String(error);
+    return saleNotice ? saleDone(message) : { error: message };
   }
 }
 

@@ -35,7 +35,7 @@ export async function createGfCourierGuide(orderId: string): Promise<GfActionRes
 }
 
 /** Anula la guía GF viva (GF solo lo permite antes de la preparación, sin costo) y aplica el estado devuelto. */
-export async function cancelGfCourierGuide(orderId: string, reason: string): Promise<GfActionResult> {
+export async function cancelGfCourierGuide(orderId: string, reason: string, shipmentId?: string): Promise<GfActionResult> {
   const perms = await getMasterPermissions();
   if (!perms.can("gf_courier.cancel_guide")) return { error: "Tu rol no permite anular guías de GF Courier." };
   const ctx = await access(orderId);
@@ -43,8 +43,10 @@ export async function cancelGfCourierGuide(orderId: string, reason: string): Pro
   const why = reason.trim();
   if (why.length < 5) return { error: "Escribe el motivo de la anulación." };
   const admin = createAdminSupabase();
-  const { data } = await admin.from("shipments").select("id,guide_code,reported_status").eq("order_id", orderId).eq("courier", GF_COURIER)
-    .in("delivery_status", ["pendiente", "en_ruta"]).limit(1);
+  let query = admin.from("shipments").select("id,guide_code,reported_status").eq("order_id", orderId).eq("courier", GF_COURIER)
+    .in("delivery_status", ["pendiente", "en_ruta"]);
+  if (shipmentId) query = query.eq("id", shipmentId);
+  const { data } = await query.limit(1);
   const live = data?.[0] as { id: string; guide_code: string | null; reported_status: string | null } | undefined;
   if (!live?.guide_code) return { error: "El pedido no tiene una guía de GF Courier viva." };
   // Ya pedida: otra vez no la acelera, solo repite el pedido en GF.

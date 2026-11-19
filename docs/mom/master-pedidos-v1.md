@@ -6439,10 +6439,12 @@ programa por `otro_courier`, `falta_salida`, `falta_ubicar` o
   ser hoy, para la vuelta de las 15:00.
 - **No contesta**: suma un intento y propone la vuelta siguiente (hoy a las
   15:00, o mañana a las 08:30), que se puede quitar.
-- **Ya no lo quiere**: motivo de 8 caracteres como mínimo y segundo clic que
-  nombra el pedido (§11.5).
+- **Ya no lo quiere · Anular pedido** (19-11-2026): motivo de 8 caracteres
+  como mínimo, resolución de las guías y segundo clic que nombra el pedido
+  y el alcance comercial (§11.5).
 
-«Desarmar y cerrar sin llamada» registra lo mismo con el canal `sin_contacto`.
+«Desarmar y cerrar sin llamada» conserva el cierre operativo con el canal
+`sin_contacto`, sin anulación de la venta.
 Cada resultado deja una fila en `lima_repro_calls` (append-only) y un evento
 con kind propio: `lima_repro_agreed` (confirma), `lima_repro_closed` (ya no lo
 quiere, o desarmar y cerrar) y `lima_repro_call` (llamar después y no
@@ -6562,7 +6564,10 @@ esta fase.». Repro Lima no ofrece Urpi; si el equipo le da a Urpi la caja que
 Grupo GF no entregó, la programación de Urpi la registra (03-11-2026, §30.10).
 Urpi desde Kapta llega en la fase 2 (decisión 12).
 
-**«Ya no lo quiere» quita la fecha y no anula la venta.** Cierra el caso con
+**Cierre operativo sin anulación.** Hasta el 19-11-2026, «Ya no lo quiere»
+solo cerraba el caso; ahora su formulario permite confirmar la anulación
+comercial dentro de Atender (§11.5). «Desarmar y cerrar sin llamada» sigue
+sin anular la venta. Cierra el caso con
 «Desarmar y cerrar» y quita el programa de Grupo GF que hubiera
 (`dispatch_program_cleared`, «Repro Lima: el cliente ya no lo quiere.»). La
 caja se desarma cuando está en oficina (cuaderno «DESARMAR»). Solo la anulación
@@ -10749,8 +10754,9 @@ propios: `lima_repro_agreed`, `lima_repro_call` y `lima_repro_closed`. No usa
 los de Envíos ni los de confirmación (`call`, `confirmation_contact`,
 `contact_attempt`), así que no gasta el cupo de confirmación. Tampoco es una
 puerta a «entregado»: «Confirma fecha» guarda un acuerdo, no un resultado. Y
-«Ya no lo quiere» no anula nada: cierra el caso para desarmar la caja, y la
-venta sigue hasta que Shopify la anule.
+«Ya no lo quiere» registraba solo el cierre operativo. Desde el 19-11-2026,
+«Ya no lo quiere · Anular pedido» integra su confirmación comercial (§11.5),
+con el alcance de la plataforma; cerrar sin llamada conserva su efecto operativo.
 
 **La puerta a «entregado» no escribe sobre una anulación de Shopify
 (15-10-2026).** La puerta única de las fuentes de reparto
@@ -10806,7 +10812,8 @@ otra guía con una nota a medio escribir, el texto se descartaba sin preguntar.
 Ahora se avisa y se puede volver. En una cola de llamadas, ese texto es lo que
 la asesora acaba de oír por teléfono.
 
-**En Repro Lima, la misma ceremonia (12-10-2026).** «Ya no lo quiere» y
+**En Repro Lima, la misma ceremonia (12-10-2026, alcance ampliado abajo el
+19-11-2026).** «Ya no lo quiere» y
 «Desarmar y cerrar sin llamada» (§9.5) cierran el caso y mandan a desarmar la
 caja. Piden lo mismo que el descarte: un motivo de `DISCARD_REASON_MIN`
 caracteres como mínimo y un segundo clic que nombra el pedido («Sí, desarmar y
@@ -10814,6 +10821,24 @@ cerrar #KP138029»), con «No anula la venta: solo la tienda la anula.» al lado
 («la tienda» desde el 24-10-2026, §38.12). El
 servidor vuelve a comparar el nombre del pedido. La hoja también avisa antes de
 cerrarse con una nota a medio escribir.
+
+**Atender y anular desde Repro Lima (owner, 19-11-2026).** El resultado
+«Ya no lo quiere · Anular pedido» abre en la misma pestaña la resolución de
+sus guías y la confirmación comercial, sin ir a Operar. Reutiliza los botones
+y permisos propios de cada courier y `orders.cancel_woo` en la organización
+del pedido; tener acceso a Repro Lima no concede esos permisos. La guía GF
+automática no se confunde con la venta: una anulación solicitada a GF sigue
+pendiente hasta que GF la confirme. Se releen las guías después de resolverlas.
+
+El motivo y el segundo clic nombran el pedido y el alcance: WooCommerce sin
+salida física (§38.15), venta terminada con retorno pendiente (§38.18) o
+histórico Shopify solo en Kapta (§38.16). Se conservan las guardas de dinero,
+entregas, cajas compartidas y logística. Primero se confirma la anulación
+comercial por su acción existente y después se registra el resultado de la
+llamada y se cierra el caso. Si falla la anulación no se cierra Repro; si la
+venta terminó pero falla el registro de la llamada, se informa esa diferencia
+sin afirmar que no se anuló. «Desarmar y cerrar sin llamada» conserva su
+alcance de cierre operativo y no anula la venta.
 
 ### 11.6 Una reprogramación confirmada no puede ser de ayer
 
