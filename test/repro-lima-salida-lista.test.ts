@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+vi.mock("@/components/repro-lima-sale-cancel", () => ({ ReproLimaSaleCancel: () => null }));
 
 // La hoja importa las acciones de servidor; aquí solo se prueba la línea.
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
