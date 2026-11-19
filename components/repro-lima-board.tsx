@@ -580,7 +580,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           callsDue={callsDue}
         />
       )}
-      {!retriesOnly && detailStep ? (
+      {!retriesOnly && !stuck && detailStep ? (
         <LimaBlockDetails label={boardCard(detailStep, today)!.label} total={counts.step[detailStep]} groups={detailGroups} active={detail} onPick={chooseDetail} />
       ) : null}
 
