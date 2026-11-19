@@ -2481,6 +2481,28 @@ pasó a la Fénix #KP12211529072026, entregada el 28-07-2026, retenía a
 viva, la caja sigue pendiente por ella, no por la transferida. Pruebas:
 `test/aliclik-duplicate.test.ts`.
 
+#### Guías viejas que ya no retienen (18-11-2026)
+
+Decisión del owner («revisa cómo filtrar la lista negra porque sí tiene
+entregas»; «la 1 y 2»). Caso: #KP207252 retenido por la Fénix de #KP128621
+(27-08-2026): «en ruta», sin ningún despacho, con la caja en la empresa, y la
+clienta había recibido #KP205412 el 12-11. «Volvió al almacén» se rechazaba
+porque la caja figura en la empresa y «Lo recibió el cliente» es solo de
+Aliclik: no había salida. Ahora una salida **no retiene** cuando:
+
+1. **La clienta recibió un pedido posterior**: otro pedido del mismo teléfono
+   tiene una salida creada después y entregada o recogida
+   (`laterOrderDelivered`). Una devolución posterior no cuenta.
+2. **Nunca salió**: sin fecha de despacho, de entrega a courier, de reparto ni
+   de despacho informado por Aliclik; custodia en la empresa (o sin custodia);
+   sin estado de agencia; y con 30 días o más desde que se creó
+   (`staleNeverDispatched`, `STALE_NO_DISPATCH_DAYS`). Las recientes siguen
+   reteniendo y Shalom y Olva siguen por su estado en agencia.
+
+Al 18-11-2026 eran 331 salidas «en ruta» sin despacho (268 Fénix, 58 Aliclik);
+28 con un pedido posterior entregado. Solo lectura: no cambia los datos de esas
+guías. Pruebas: `test/aliclik-duplicate.test.ts`.
+
 #### Reemplazo: se declara el destino del envío anterior (10-10-2026)
 
 Decisión del owner. Hasta esta fecha «reemplaza» esperaba una constancia de

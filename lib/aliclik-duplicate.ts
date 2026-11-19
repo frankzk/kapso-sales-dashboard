@@ -176,6 +176,47 @@ export function transferredElsewhere(guide: DuplicateShipment, siblings: readonl
       Boolean(other.returned_at) || other.custody_state === "devuelto"));
 }
 
+/**
+ * LA CLIENTA RECIBIÓ UN PEDIDO POSTERIOR (owner, 18-11-2026: «revisa cómo
+ * filtrar la lista negra porque sí tiene entregas»; regla 1).
+ *
+ * Caso: #KP207252 retenido por la Fénix de #KP128621 (agosto), que nunca se
+ * cerró, aunque la clienta recibió #KP205412 el 12-11. Una salida no retiene
+ * cuando OTRO pedido del mismo teléfono tiene una salida creada después de ella
+ * y entregada o recogida. Una devolución posterior no cuenta: no dice que la
+ * clienta reciba.
+ */
+export function laterOrderDelivered(guide: DuplicateShipment, others: readonly DuplicateShipment[]): boolean {
+  const created = guide.created_at ?? "";
+  if (!created) return false;
+  return others.some((other) =>
+    other.order_id !== guide.order_id && (other.created_at ?? "") > created &&
+    (other.delivery_status === "entregado" || other.pickup_state === "recogido"));
+}
+
+/** Días sin ninguna señal de despacho tras los que una salida deja de retener (regla 2). */
+export const STALE_NO_DISPATCH_DAYS = 30;
+
+/**
+ * UNA GUÍA QUE NUNCA SALIÓ (owner, 18-11-2026; regla 2).
+ *
+ * 331 guías antiguas (sobre todo Fénix y Aliclik de julio y agosto) dicen
+ * `en_ruta` o `transferido` sin fecha de despacho, de entrega a courier ni de
+ * reparto, con la custodia en la empresa y sin estado de agencia. Retenían la
+ * guía de cualquier pedido nuevo y no había salida: «Volvió al almacén» se
+ * rechaza porque la caja figura en la empresa. Con `STALE_NO_DISPATCH_DAYS` o
+ * más desde que se creó, ya no retiene. Las recientes sí (una Fénix nueva puede
+ * salir todavía), y Shalom y Olva siguen por su estado en agencia
+ * (`AGENCY_IN_CUSTODY`), que esta regla no toca.
+ */
+export function staleNeverDispatched(guide: DuplicateShipment, nowMs: number): boolean {
+  if (guide.dispatched_at || guide.custody_transferred_at || guide.out_for_delivery_at || guide.aliclik_reported_dispatch_date) return false;
+  if (guide.custody_state && guide.custody_state !== "empresa") return false;
+  if (AGENCY_IN_CUSTODY.has(guide.pickup_state ?? "")) return false;
+  const created = Date.parse(guide.created_at ?? "");
+  return Number.isFinite(created) && nowMs - created >= STALE_NO_DISPATCH_DAYS * 86_400_000;
+}
+
 export function duplicateGate(
   conflicts: DuplicateConflict[], fingerprint: string | null,
   resolution: DuplicateResolution | null, validatedAmount: number,
