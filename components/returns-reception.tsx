@@ -123,7 +123,7 @@ export function ReturnsReception({ initialData, nav }: {
     }
   }, [sessionStart]);
 
-  const executeScan = useCallback(async (raw: string) => {
+  const executeScan = useCallback(async (raw: string, from: "field" | "camera" = "field") => {
     const value = raw.trim();
     if (!value) return;
     if (busyRef.current) {
@@ -145,7 +145,10 @@ export function ReturnsReception({ initialData, nav }: {
     }
     // El escaneo ya respondió: el cuadre se refresca sin bloquear la siguiente lectura.
     void reload();
-    requestAnimationFrame(() => inputRef.current?.focus());
+    // Solo vuelve al campo si la lectura vino de él (la pistola o lo tecleado).
+    // Con la cámara abierta, enfocar el campo de atrás abría el teclado del
+    // teléfono encima del visor (owner, 19-11-2026: «a mí se me abre el teclado»).
+    if (from === "field") requestAnimationFrame(() => inputRef.current?.focus());
   }, [reload, scanOne]);
 
   function submitScan(event: FormEvent) {
@@ -162,7 +165,7 @@ export function ReturnsReception({ initialData, nav }: {
   }
 
   const onCameraScan = useCallback((value: string) => {
-    void executeScan(value);
+    void executeScan(value, "camera");
   }, [executeScan]);
 
   const { tanders, shalom, gf } = data;

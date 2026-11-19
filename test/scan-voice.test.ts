@@ -66,3 +66,12 @@ describe("la cámara de Devoluciones", () => {
     expect(session).toContain("return { stop, torchSupported, setTorch };");
   });
 });
+
+describe("la cámara no abre el teclado (owner, 19-11-2026: «a mí se me abre el teclado»)", () => {
+  it("tras una lectura de la cámara no se enfoca el campo de atrás; tras la del campo, sí", () => {
+    const src = read("components/returns-reception.tsx");
+    expect(src).toContain('if (from === "field") requestAnimationFrame(() => inputRef.current?.focus());');
+    expect(src).toContain('void executeScan(value, "camera");');
+    expect(src).not.toMatch(/void reload\(\);\s+requestAnimationFrame\(\(\) => inputRef\.current\?\.focus\(\)\);/);
+  });
+});

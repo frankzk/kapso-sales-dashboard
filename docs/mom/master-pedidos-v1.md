@@ -5051,7 +5051,10 @@ sin tope de antigüedad. Reglas:
         y la cámara pide 1280×720 para leer un QR chico o lejano
         (`lib/scan-voice.ts`, `bigVerdict` en `components/dispatch-camera.tsx`;
         las demás pantallas de escaneo no cambian salvo la linterna y la
-        resolución).
+        resolución). Tras una lectura de la cámara el cursor ya no vuelve al
+        campo «QR, guía o nº de pedido»: abría el teclado del teléfono encima
+        del visor. Solo vuelve tras una lectura del campo (la pistola o lo
+        tecleado).
       - **Shalom, en la misma pantalla.** Un solo escáner para los dos
         couriers: sirve el QR de nuestra banda del rótulo, el nº de guía Shalom
         original o el nº de pedido. La etiqueta de retorno de Shalom trae una
