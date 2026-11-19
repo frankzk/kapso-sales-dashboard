@@ -8,6 +8,25 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 afterEach(() => { document.body.innerHTML = ""; });
 
 describe("selección del detalle operativo", () => {
+  it("plega todo el detalle al entrar y al cambiar de bloque; un enlace con filtro elegido lo abre", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const render = async (label: string, active: string | null = null) => {
+      await act(async () => { root.render(createElement(LimaBlockDetails, { label, total: 2, active, onPick: () => {}, groups: [], situations: [] })); });
+      return container.querySelector("section > details") as HTMLDetailsElement;
+    };
+    try {
+      const details = await render("Nuevos");
+      expect(details.open).toBe(false);
+      expect(details.querySelector("summary")?.textContent).toContain("Situaciones y características de Nuevos");
+      details.open = true;
+      expect((await render("No entregados")).open).toBe(false);
+      expect((await render("No entregados", "location:warehouse")).open).toBe(true);
+      expect((await render("Nuevos", "situation:guardada")).open).toBe(true);
+      expect((await render("Nuevos")).open).toBe(false);
+    } finally { await act(async () => { root.unmount(); }); }
+  });
   it("filtra al tocar una cifra, la marca elegida y permite volver a todo el bloque", async () => {
     const container = document.createElement("div");
     document.body.append(container);

@@ -862,7 +862,7 @@ describe("detalle de cada bloque de Lima", () => {
         for (const name of visible) expect(html).toContain(name);
         for (const name of hidden) expect(html).not.toContain(name);
         expect(html).toMatch(/Dentro de No entregados.*?3 pedidos/);
-        expect(html.indexOf('aria-label="Dónde figura el paquete"')).toBeLessThan(html.indexOf('<details'));
+        expect(html.indexOf('aria-label="Dónde figura el paquete"')).toBeLessThan(html.indexOf('>Explorar características por separado</summary>'));
         expect(html).toContain("Revisar: figura en ruta y en almacén");
       }
     } finally { nav.search = ""; }

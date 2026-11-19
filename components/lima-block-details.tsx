@@ -43,6 +43,11 @@ export function LimaBlockDetails({ label, total, groups, active, onPick, situati
 }) {
   return (
     <section aria-label={`Detalle de ${label}`} className="border-t border-line pt-4">
+      <details key={label} open={Boolean(active)}>
+      <summary className="cursor-pointer py-2 text-[13px] font-semibold text-ink-700 focus-visible:outline-2 focus-visible:outline-brand-600">
+        Situaciones y características de {label} <span className="font-normal tabular-nums text-ink-500">· {total.toLocaleString("es-PE")} pedidos</span>
+      </summary>
+      <div className="pt-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm font-semibold text-ink-900">Dentro de {label} <span className="font-normal tabular-nums text-ink-500">· {total.toLocaleString("es-PE")} pedidos</span></h3>
         <ChoiceChip label="Todos los del bloque" count={total} active={!active} onClick={() => onPick(null)} />
@@ -53,6 +58,8 @@ export function LimaBlockDetails({ label, total, groups, active, onPick, situati
       <details className="mt-4" open={!situations || Boolean(active && !active.startsWith("situation:"))}>
       <summary className="cursor-pointer py-2 text-[13px] font-semibold text-ink-700">Explorar características por separado</summary>
       <DetailGroups groups={groups.filter((group) => !group.prominent)} active={active} onPick={onPick} />
+      </details>
+      </div>
       </details>
     </section>
   );
