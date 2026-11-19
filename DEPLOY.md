@@ -85,6 +85,15 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 19-11-2026 · Shalom: buscar el DNI y cotizar reintentan el 5xx de paso (sin migración)
+
+Sin migración ni variables. «Buscar» el documento del destinatario (`/v1/persons/search`) y la cotización reintentan
+un 502, 503 o 504 del proveedor a los 2 s y a los 5 s, como ya lo hacía la sesión (`readWithRetry`,
+`lib/shalom/client.ts`). Antes el aviso decía «ya se reintentó solo» sin haberlo hecho (#KP201823, 19-11-2026). Crear la
+guía sigue sin reintentarse nunca. Si el proveedor sigue caído, el aviso es el mismo de antes.
+
+Verificar: con Shalom Pro respondiendo, «Buscar» un DNI conocido completa nombre y apellidos.
+
 ### 18-11-2026 · Leads: la pestaña renueva la sesión una sola vez antes de leer (sin migración)
 
 Sin migración ni variables. Las lecturas de Leads (`/api/leads/read`) que salen juntas esperan una sola renovación de la

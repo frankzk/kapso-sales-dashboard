@@ -1025,3 +1025,50 @@ describe("el cupo de la API key (15-10-2026)", () => {
     expect(isShalomRateLimited(new Error("429"))).toBe(false);
   });
 });
+
+describe("las lecturas con sesión reintentan el 5xx de paso (19-11-2026, #KP201823)", () => {
+  // «Buscar» el DNI mostró el 502 «error temporal del upstream» diciendo «ya se
+  // reintentó solo» sin haberlo hecho. Buscar persona y cotizar son lecturas:
+  // reintentan como la sesión. Crear la guía, nunca.
+  afterEach(() => vi.useRealTimers());
+  const upstream = () =>
+    Response.json({ error: { code: "upstream_error", message: "error temporal del upstream, reintenta en unos segundos" } }, { status: 502 });
+  const person = () => Response.json({ id: 7, name: "Rosa", last_name: "Cuya", sur_name: "Inga", phone: 993097631 });
+
+  it("buscar persona: a los 2 s y a los 5 s, y responde si el proveedor vuelve", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(upstream()).mockResolvedValueOnce(upstream()).mockResolvedValueOnce(person());
+    const client = new ShalomClient({ apiKey: "sk_test", sessionToken: "ssk_abc", fetchImpl });
+    const found = client.findPerson("41010755", "DNI");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(found).resolves.toMatchObject({ id: 7, name: "Rosa" });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("si sigue caído, a los tres intentos devuelve el 502 con su aviso", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn().mockImplementation(async () => upstream());
+    const client = new ShalomClient({ apiKey: "sk_test", sessionToken: "ssk_abc", fetchImpl });
+    const found = client.findPerson("41010755", "DNI").catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(7_000);
+    const err = await found;
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(describeShalomError(err)).toMatch(/\(502\).*ya se reintentó solo/);
+  });
+
+  it("que la persona no exista no se reintenta", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(Response.json({ error: { code: "not_found", message: "no existe" } }, { status: 404 }));
+    const client = new ShalomClient({ apiKey: "sk_test", sessionToken: "ssk_abc", fetchImpl });
+    await expect(client.findPerson("41010755", "DNI")).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("crear la guía NUNCA se reintenta", async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => upstream());
+    const client = new ShalomClient({ apiKey: "sk_test", sessionToken: "ssk_abc", fetchImpl });
+    await expect(client.createOrder({} as never)).rejects.toBeInstanceOf(ShalomApiError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
