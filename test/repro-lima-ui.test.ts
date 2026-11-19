@@ -425,7 +425,8 @@ describe("el tablero (E31, E33)", () => {
     expect(board.indexOf("<ReproLimaBlocks")).toBeGreaterThan(-1);
     expect(board.indexOf("<ReproLimaBlocks")).toBeLessThan(board.indexOf("<LimaPendingList"));
     expect(board).toContain("onPick={chooseKey}");
-    expect(board).toContain("return limaBoardRows(scoped, classes, key, caseOrder);");
+    expect(board).toContain("const ordered = limaBoardRows(scoped, classes, key, caseOrder);");
+    expect(board).toContain("limaDetailMatches(row, cls, detail)");
     // Tocar la tarjeta elegida vuelve a Todos; la elegida viaja por `atencion`.
     expect(board).toContain('if (next === "todos" || (next === key && !stuck)) params.delete("atencion");');
     expect(board).toContain('params.delete("vista")');

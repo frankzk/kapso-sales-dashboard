@@ -215,8 +215,8 @@ describe("lo que la lectura de Repro Lima le da (sin consultas nuevas por fila)"
     });
     const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) }, new Date("2026-11-08T15:00:00Z"));
     const by = Object.fromEntries(rows.map((r) => [r.orderId, r]));
-    expect(by.o1!.ops).toEqual({ liveCouriers: ["propio"], reportedStatus: null, courierDelivered: null, lastGfBox: { day: "2026-11-02", riderName: "Roy" } });
-    expect(by.o2!.ops).toEqual({ liveCouriers: ["tanders"], reportedStatus: "DELIVERED", courierDelivered: { courier: "tanders" }, lastGfBox: null });
+    expect(by.o1!.ops).toMatchObject({ liveCouriers: ["propio"], reportedStatus: null, courierDelivered: null, lastGfBox: { day: "2026-11-02", riderName: "Roy" }, guides: { total: 0 } });
+    expect(by.o2!.ops).toMatchObject({ liveCouriers: ["tanders"], reportedStatus: "DELIVERED", courierDelivered: { courier: "tanders" }, lastGfBox: null, guides: { total: 0 } });
     expect(by.o3).toMatchObject({ scheduledOn: "2026-11-10", ops: null });
     // Por confirmar no es de esta bandeja: no se leen sus salidas.
     expect(by.o4!.ops).toBeNull();
@@ -225,7 +225,7 @@ describe("lo que la lectura de Repro Lima le da (sin consultas nuevas por fila)"
     expect(limaStuck(by.o3!, SUNDAY)).toBeNull();
     // Las salidas se leen en lote por `order_id`, una vez.
     const shipmentReads = db.from.mock.calls.filter(([table]) => table === "shipments").length;
-    expect(shipmentReads).toBeLessThanOrEqual(3);
+    expect(shipmentReads).toBeLessThanOrEqual(4); // Incluye el lote de guías para enlazar sus llamadas históricas.
   });
 });
 

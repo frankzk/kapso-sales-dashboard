@@ -70,8 +70,14 @@ const partsNote = (c: LimaBoardCounts, parts: readonly [number, string][]): stri
 
 const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c: LimaBoardCounts) => string | null }>> = {
   no_entregados: {
-    keys: LIMA_STEP_PARTS.no_entregados ?? [],
-    note: (c) => partsNote(c, [
+    // Ubicación y gestión se filtran en el detalle visible; no duplicar el desglose antiguo.
+    keys: [],
+    note: (c) => c.failedLocation ? partsNote(c, [
+      [c.failedLocation.warehouse, "en almacén"],
+      [c.failedLocation.courier, "con el courier"],
+      [c.failedLocation.returning, "retornando"],
+      [c.failedLocation.unknown, "sin ubicación confirmada"],
+    ]) : partsNote(c, [
       [c.sub.por_acordar, "por acordar"],
       [c.sub.reintentos_aliclik, "reintentos Aliclik"],
       [c.courier.retornando, "retornando"],
@@ -84,7 +90,7 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
       [c.sub.guia_sin_recoger, "sin recoger"],
       [c.sub.nunca_salieron, "nunca salieron"],
       [c.sub.mas_de_30, "de más de 30 días"],
-      [c.sub.salieron_sin_dia, "ya salieron, sin día"],
+      [c.sub.salida_por_verificar, "salidas por verificar"],
     ]),
   },
   // Los nuevos, por día de su guía (owner, 17-11-2026); la alerta sin guía va en la celda.
@@ -112,7 +118,7 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
     note: (c) => {
       const antes = c.courier.en_ruta - c.enRutaHoy;
       const ruta = [c.enRutaHoy ? `${fmt(c.enRutaHoy)} hoy` : null, antes ? `${fmt(antes)} anterior` : null].filter(Boolean).join(" · ");
-      const parts = [ruta ? `En ruta: ${ruta}` : null, c.courier.guia_creada ? `${fmt(c.courier.guia_creada)} con guía` : null].filter(Boolean);
+      const parts = [ruta ? `Recogido / en ruta: ${ruta}` : null, c.courier.guia_creada ? `${fmt(c.courier.guia_creada)} pendientes de recojo` : null].filter(Boolean);
       return parts.length ? parts.join(" · ") : null;
     },
   },
@@ -200,6 +206,8 @@ function insideChip(key: LimaBoardKey, counts: LimaBoardCounts, today: string): 
 
 /** El paso al que pertenece lo elegido: el propio paso o un filtro de adentro (la lista toma su matiz). */
 export function activeStep(active: LimaBoardKey): LimaStep | null {
+  if (active === "salieron_sin_dia" || active === "retornando") return "no_entregados";
+  if (active === "por_acordar" || active === "reintentos_aliclik" || active === "sin_reporte") return "no_entregados";
   if (STEP.has(active as LimaStep)) return active as LimaStep;
   for (const [step, inside] of Object.entries(INSIDE)) if (inside?.keys.includes(active)) return step as LimaStep;
   // Las alertas y los reprogramados viven dentro de «Programados».
@@ -389,7 +397,7 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
           title="Flujo del día"
           total={flowTotal}
           unit="pedidos"
-          help="Cada pedido está en un solo paso: los ocho suman el total. Del 1 al 6, el trabajo del equipo, de izquierda a derecha: lo que no tiene día está en No entregados y Sacar a reparto; lo que sale por primera vez, en Nuevos; lo ya salido con su día, en Programados. «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
+          help="Cada pedido está en un solo paso: los ocho suman el total. Toca un bloque para ver sus salidas, intentos, couriers, guías y programación, y filtrar sus pedidos por cada característica. Del 1 al 6, el trabajo del equipo; «Con el courier» y «Por cerrar» van plegados al final porque solo se miran."
         />
         <Strip
           label="Flujo del día"

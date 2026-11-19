@@ -10,6 +10,8 @@ import { pickFillableRouteOutput } from "@/lib/shipment-output";
 import { isAlidriver, isAutoecom } from "@/lib/aliclik-lima";
 import type { DistrictAvailabilityEventRow, DistrictTariffRow } from "@/lib/grupo-gf-courier";
 import { limaClock } from "@/lib/grupo-gf-courier";
+import { loadLimaManagement } from "@/lib/lima-management-access";
+import { GF_AUTO_GUIDE_REASON } from "@/lib/gf-auto-guide";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
 interface PendingMasterRow {
@@ -21,6 +23,7 @@ interface PendingMasterRow {
   sales_channel: string | null; address: string | null; reference: string | null;
   dispatch_scheduled_on?: string | null;
   dispatch_courier?: string | null;
+  dispatched_with?: string[] | null;
 }
 interface PendingProgramRow { order_id: string; store_id: string; scheduled_for: string }
 interface GfShipmentRow {
@@ -31,6 +34,8 @@ interface GfShipmentRow {
   returned_at: string | null; updated_at: string | null; custody_state: string | null; output_number: number | null;
   // Para saber, como la cola, si es la «por definir» que Grupo GF rellena (`pickFillableRouteOutput`).
   created_via: string | null; custody_transferred_at: string | null;
+  guide_code?: string | null;
+  out_for_delivery_at?: string | null;
 }
 interface GfItemRow { shipment_id: string; manifest_id: string; office_checked_at: string | null; pickup_checked_at: string | null }
 interface GfManifestRow { id: string; route_date: string; driver_name: string | null; courier: string | null; kind: string | null; state: string | null }
@@ -40,7 +45,7 @@ type Read<T> = PromiseLike<{ data: T[] | null; error: { message: string } | null
 /** Las salidas que son de Grupo GF: la «por definir» que rellena y la propia. */
 const GF_OUTPUT_COURIERS = new Set(["por_definir", "propio"]);
 const LIVE_OUTPUT = new Set(["pendiente", "en_ruta"]);
-const GF_SHIPMENT_COLUMNS = "id,order_id,courier,preparation_state,qr_token,delivery_status,created_at,reported_status,swayp_state,dispatched_at,closed_at,returned_at,updated_at,custody_state,output_number,created_via,custody_transferred_at";
+const GF_SHIPMENT_COLUMNS = "id,order_id,courier,preparation_state,qr_token,delivery_status,created_at,reported_status,swayp_state,dispatched_at,out_for_delivery_at,closed_at,returned_at,updated_at,custody_state,output_number,created_via,custody_transferred_at,guide_code";
 const TARIFF_COLUMNS = "id,provider_id,agreement_id,district_key,zone,delivery_amount,rejection_amount,includes_igv,currency,effective_from,effective_to,status";
 const AVAILABILITY_COLUMNS = "id,provider_id,agreement_id,district_key,action,reason,paused_until,created_by,created_at";
 
@@ -122,7 +127,9 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
   const candidateOrderIds = [...candidateIds];
   const providerIds = providers.data.map((p) => p.id);
   const providerByOrg = new Map(providers.data.map((p) => [p.org_id, p.id]));
-  const [requests, items, agreements, tariffs, events] = await Promise.all([
+  const gfOrderIds = [...new Set(shipments.data.filter((s) => s.courier === "gf_courier" && LIVE_OUTPUT.has(s.delivery_status ?? "") && !s.returned_at && s.custody_state !== "devuelto").map((s) => s.order_id))];
+  type GuideOrigin = { order_id: string; guide_code: string | null; reason: string | null; occurred_at: string };
+  const [requests, items, agreements, tariffs, events, guideOrigins] = await Promise.all([
     providerIds.length
       ? courierRowsByIds<GfRequestRow>(candidateOrderIds, (chunk) => admin.from("logistics_requests")
         .select("order_id,shipment_id,scheduled_for,status").in("provider_id", providerIds).in("status", ["accepted", "scheduled"]).in("order_id", chunk) as unknown as Read<GfRequestRow>)
@@ -142,7 +149,23 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
       ? allCourierRows<DistrictAvailabilityEventRow>((from, to) => admin.from("logistics_district_availability_events")
         .select(AVAILABILITY_COLUMNS).in("provider_id", providerIds).order("id").range(from, to) as unknown as Read<DistrictAvailabilityEventRow>)
       : Promise.resolve([] as DistrictAvailabilityEventRow[]),
+    courierRowsByIds<GuideOrigin>(gfOrderIds, (chunk) => allCourierRows<GuideOrigin>((from, to) => admin.from("order_events")
+      .select("order_id,guide_code,reason,occurred_at").in("order_id", chunk).eq("kind", "guide_registered").eq("courier", "gf_courier")
+      .order("id").range(from, to) as unknown as Read<GuideOrigin>).then((data) => ({ data, error: null }))),
   ]);
+  // Manda el último registro de ESA guía. Una creación manual posterior no
+  // hereda el origen automático de una anterior con el mismo código.
+  const latestOrigins = new Map<string, { at: number; automatic: boolean }>();
+  for (const event of guideOrigins.data) {
+    if (!event.guide_code) continue;
+    const key = `${event.order_id}:${event.guide_code}`;
+    const at = Date.parse(event.occurred_at);
+    if (!Number.isFinite(at)) continue;
+    const automatic = event.reason === GF_AUTO_GUIDE_REASON;
+    const prior = latestOrigins.get(key);
+    if (!prior || at > prior.at || (at === prior.at && !automatic)) latestOrigins.set(key, { at, automatic });
+  }
+  const automaticGuides = new Set([...latestOrigins].filter(([, origin]) => origin.automatic).map(([key]) => key));
   const agreementByStore = new Map(agreements.filter((a) => a.store_id).map((a) => [`${a.provider_id}:${a.store_id}`, a.id]));
   const tariffRows = tariffs.map((t) => ({ ...t, delivery_amount: Number(t.delivery_amount), rejection_amount: Number(t.rejection_amount) }));
   const manifests = await courierRowsByIds<GfManifestRow>([...new Set(items.data.map((i) => i.manifest_id))], (chunk) => admin.from("dispatch_manifests")
@@ -166,7 +189,7 @@ async function loadGfPlanFacts(admin: Admin, rows: PendingMasterRow[], storeOrg:
   const outputsByOrder = new Map<string, GfShipmentRow[]>();
   for (const s of shipments.data) outputsByOrder.set(s.order_id, [...(outputsByOrder.get(s.order_id) ?? []), s]);
   for (const row of operational) {
-    const fact = opsFacts(outputsByOrder.get(row.order_id) ?? [], latestBoxByShipment);
+    const fact = opsFacts(outputsByOrder.get(row.order_id) ?? [], latestBoxByShipment, automaticGuides);
     if (fact) ops.set(row.order_id, fact);
   }
   for (const row of candidates) {
@@ -218,7 +241,7 @@ const COURIER_SAYS_DELIVERED = /^DELIVERED\b/i;
  * devolución), lo último que reportó el courier, si alguna ya la da por
  * entregada y su última caja de Grupo GF. Sin salidas, null.
  */
-function opsFacts(outputs: readonly GfShipmentRow[], latestBox: ReadonlyMap<string, { day: string; riderName: string | null }>): LimaPendingOps | null {
+function opsFacts(outputs: readonly GfShipmentRow[], latestBox: ReadonlyMap<string, { day: string; riderName: string | null }>, automaticGuides: ReadonlySet<string>): LimaPendingOps | null {
   if (!outputs.length) return null;
   const live = outputs
     .filter((s) => LIVE_OUTPUT.has(s.delivery_status ?? "") && !s.returned_at && s.custody_state !== "devuelto")
@@ -227,7 +250,23 @@ function opsFacts(outputs: readonly GfShipmentRow[], latestBox: ReadonlyMap<stri
     (LIVE_OUTPUT.has(s.delivery_status ?? "") && COURIER_SAYS_DELIVERED.test((s.reported_status ?? "").trim()))));
   const box = live.map((s) => latestBox.get(s.id)).filter((b): b is { day: string; riderName: string | null } => Boolean(b))
     .sort((a, b) => b.day.localeCompare(a.day))[0] ?? null;
+  const latest = [...outputs].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))[0]!;
+  const current = live[0];
   return {
+    pickupPending: Boolean(current && current.courier === "fenix" && current.swayp_state === 1
+      && live.every((s) => s.courier === "fenix" && s.custody_state === "empresa"
+        && !s.custody_transferred_at && !s.dispatched_at && !s.out_for_delivery_at)),
+    returnedToWarehouse: !live.length && Boolean(latest.returned_at || latest.custody_state === "devuelto"),
+    autoGfGuide: live.some((s) => s.courier === "gf_courier") && live.filter((s) => s.courier === "gf_courier").every((s) =>
+      s.guide_code && automaticGuides.has(`${s.order_id}:${s.guide_code}`) && s.delivery_status === "pendiente"
+      && !s.dispatched_at && !s.out_for_delivery_at && (s.custody_state == null || s.custody_state === "empresa")),
+    custody: (current ?? latest).custody_state ?? null,
+    guides: {
+      total: outputs.filter((s) => s.guide_code?.trim() || s.qr_token).length,
+      annulled: outputs.filter((s) => (s.guide_code?.trim() || s.qr_token) && s.delivery_status === "anulado").length,
+      returned: outputs.filter((s) => (s.guide_code?.trim() || s.qr_token) && (s.returned_at || s.custody_state === "devuelto")).length,
+      cancelRequested: outputs.filter((s) => s.courier === "gf_courier" && s.reported_status?.trim().toUpperCase() === "CANCEL_REQUESTED").length,
+    },
     liveCouriers: [...new Set(live.map((s) => s.courier ?? "").filter(Boolean))],
     reportedStatus: live[0]?.reported_status?.trim() || null,
     courierDelivered: delivered ? { courier: delivered.courier ?? "" } : null,
@@ -382,7 +421,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   if (!ids.length) return [];
   const [orders, stores, programs] = await Promise.all([
     allCourierRows<PendingMasterRow>((from, to) => admin.from("order_master")
-      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier")
+      .select("order_id,store_id,order_name,customer_name,customer_phone,district,order_total,order_created_at,macro_since,macro_stage,macro_substage,coverage,current_courier,dispatched_at,attempt_count,dispatched_with,sales_channel,address,reference,dispatch_scheduled_on,dispatch_courier")
       .in("store_id", ids).eq("coverage", "lima").in("macro_stage", [...LIMA_PENDING_STAGES])
       .order("order_created_at", { ascending: false, nullsFirst: false }).order("order_id")
       .range(from, to) as unknown as PromiseLike<{ data: PendingMasterRow[] | null; error: { message: string } | null }>),
@@ -403,11 +442,12 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   const scheduled = new Map(programs.filter((p) => orderStore.get(p.order_id) === p.store_id).map((p) => [p.order_id, p.scheduled_for]));
   const departures = new Map<string, string>();
   const safeIds = [...orderStore.keys()];
-  const [{ gf: gfFacts, ops: stuckFacts }, courierDetails, riderSuggestions] = await Promise.all([
+  const [{ gf: gfFacts, ops: stuckFacts }, courierDetails, riderSuggestions, management] = await Promise.all([
     loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day),
     loadCourierDetails(admin, safe),
     // Best-effort (17-11-2026): sin la lectura, la fila no sugiere motorizado.
     loadRiderSuggestions(admin).catch(() => new Map<string, string[]>()),
+    loadLimaManagement(admin, safeIds, new Map(safe.map((row) => [row.order_id, row.order_created_at]))),
   ]);
   // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
   // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
@@ -489,6 +529,8 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       createdAt: row.order_created_at, macroSince: row.macro_since, stage,
       substage: row.macro_substage, courier: row.current_courier, dispatchedAt: row.dispatched_at,
       attempts: Number(row.attempt_count ?? 0),
+      dispatchedWith: row.dispatched_with ?? [],
+      management: management.get(row.order_id),
       hasPriorDispatch: departures.has(row.order_id), lastDepartureAt: departures.get(row.order_id) ?? null,
       ...(neverLeft.has(row.order_id) ? { neverLeft: true } : {}),
       programmedFor: scheduled.get(row.order_id) ?? null,

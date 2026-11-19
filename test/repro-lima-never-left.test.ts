@@ -72,9 +72,9 @@ describe("en Repro Lima es su primera salida (Nuevos), no un no entregado", () =
     expect(limaIsNew(row)).toBe(true);
   });
 
-  it("sin `neverLeft`, un «Por reprogramar Lima» sigue en No entregados", () => {
+  it("sin `neverLeft` ni evidencia de salida, se revisa en Sacar a reparto", () => {
     const other = { ...row, neverLeft: false } as typeof row;
-    expect(classifyLimaRow(other, undefined, TODAY, win).step).toBe("no_entregados");
+    expect(classifyLimaRow(other, undefined, TODAY, win).step).toBe("por_sacar");
     expect(limaIsNew(other)).toBe(false);
   });
 

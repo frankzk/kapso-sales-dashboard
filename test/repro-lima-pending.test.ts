@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { loadLimaPending } from "@/lib/repro-lima-pending-access";
 import { createdPresets, emptyRowFilters, limaQueueSegment, limaScheduledFor, pendingFilters, pendingGroup, pendingKey, pendingMatches, courierLabel, groupApprovalFailures, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersMatch, rowFiltersParam, togglePendingKeys, writeRowFilters, type LimaPendingOrder } from "@/lib/repro-lima-pending";
 import { boardFilter, classifyLimaRows, limaBoardCounts, limaBoardRows } from "@/lib/repro-lima-blocks";
+import { limaSituations } from "@/lib/lima-situations";
 import { LimaPendingFilters, LimaPendingList } from "@/components/repro-lima-pending";
 import { ReproLimaBoard } from "@/components/repro-lima-board";
 import type { ReproLimaData } from "@/lib/repro-lima-access";
@@ -151,6 +152,22 @@ function database(source: DBRow[], fail = false, opts: { programs?: DBRow[]; dep
   return { admin: { from, rpc } as unknown as Admin, pages, ranges, from, rpc };
 }
 describe("acceso a todos los pendientes", () => {
+  it("Swayp Generada solo prueba recojo pendiente si todas las salidas vivas siguen en empresa sin despacho; una devolución no revive la guía", async () => {
+    const swayp = (order_id: string, extra: DBRow = {}): DBRow => ({ id: `${order_id}-s`, order_id, courier: "fenix", guide_code: "g", delivery_status: "en_ruta", swayp_state: 1, custody_state: "empresa", created_at: "2026-11-09T15:00:00Z", ...extra });
+    const db = database(Array.from({ length: 8 }, (_, i) => master(i + 1, { macro_stage: "en_curso", macro_substage: "en_transito" })), false, { shipments: [
+      swayp("o1"), swayp("o2", { swayp_state: null }), swayp("o3", { custody_state: "courier" }),
+      swayp("o4", { dispatched_at: "2026-11-16T15:00:00Z" }),
+      swayp("o5", { custody_transferred_at: "2026-11-16T15:00:00Z" }),
+      swayp("o6", { delivery_status: "anulado", custody_state: "devuelto", returned_at: "2026-11-18T15:00:00Z" }),
+      swayp("o7", { delivery_status: "anulado", custody_state: "devuelto", returned_at: "2026-11-17T15:00:00Z" }),
+      swayp("o7", { id: "new", created_at: "2026-11-18T15:00:00Z" }),
+      swayp("o8"), swayp("o8", { id: "other", courier: "aliclik", created_at: "2026-11-08T15:00:00Z" }),
+    ] });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(rows.filter((r) => r.ops?.pickupPending).map((r) => r.orderId)).toEqual(["o1", "o7"]);
+    expect(rows.filter((r) => r.ops?.returnedToWarehouse).map((r) => r.orderId)).toEqual(["o6"]);
+    expect(rows.find((r) => r.orderId === "o6")?.ops).toMatchObject({ custody: "devuelto", liveCouriers: [], guides: { total: 1, annulled: 1, returned: 1 } });
+  });
   it("carga más de 1383 filas y solo las tiendas/cobertura/etapas autorizadas", async () => {
     const db = database([...Array.from({ length: 1383 }, (_, i) => master(i)),
       master(2000, { store_id: "fuera" }), master(2001, { coverage: "provincia_cod" }),
@@ -164,7 +181,7 @@ describe("acceso a todos los pendientes", () => {
     expect(rows.at(-1)?.substage).toBe("en_transito");
     expect(rows[0]?.orderTotal).toBe(149);
     // Más lo de «Sale a reparto» (§29.16): las cajas vigentes (por lo En curso), el proveedor y las salidas de los candidatos.
-    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "dispatch_manifests", "logistics_providers", "shipments"]));
+    expect(new Set(db.from.mock.calls.map(([table]) => table))).toEqual(new Set(["stores", "order_master", "gf_dispatch_programs", "dispatch_manifests", "logistics_providers", "shipments", "order_events", "lima_repro_calls", "voice_calls", "anura_calls", "leads"]));
     // Las salidas en lotes de 500; aparte, una lectura del reparto por distrito (motorizado sugerido, 17-11-2026).
     const departures = db.rpc.mock.calls.filter(([name]) => name === "gf_order_departures");
     expect(departures.map(([, args]) => args.p_order_ids.length)).toEqual([500, 500, 384]);
@@ -448,7 +465,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(counts.sub).toMatchObject({ nuevos_hoy: 2, nuevos_manana: 1, nuevos_despues: 1, nuevos_sin_dia: 3 });
     expect(counts.agenda).toEqual({ hoy: 0, manana: 1, despues: 0 });
     expect(counts.step.programados).toBe(1);
-    expect(counts.step.por_sacar).toBe(1);
+    expect(counts.step.por_sacar).toBe(0);
+    expect(counts.step.no_entregados).toBe(1);
     expect(Object.values(counts.agenda).reduce((a, b) => a + b, 0)).toBe(counts.step.programados);
     expect(Object.values(counts.step).reduce((a, b) => a + b, 0)).toBe(counts.todos);
     expect(counts.task.primer_despacho).toBe(3);
@@ -457,7 +475,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
   it("una salida que retornó no vuelve a Confirmar primer despacho aunque Master haya borrado el despacho", () => {
     const { rows: of } = board(rows, cases);
     expect(of("primer_despacho")).not.toContain("retorno");
-    expect(of("salieron_sin_dia")).toContain("retorno");
+    expect(of("no_entregados")).toContain("retorno");
+    expect(of("por_sacar")).not.toContain("retorno");
   });
   it("la fecha manda sobre la antigüedad y el historial de salidas; lo vencido sigue en Hoy y va primero", () => {
     const old = row({ createdAt: "2026-01-01T15:00:00Z", hasPriorDispatch: true, programmedFor: "2026-10-29" });
@@ -497,7 +516,8 @@ describe("las fechas de la cola: la Agenda y Sacar a reparto (owner, 15-11-2026)
     expect(of("primer_despacho")).toEqual(["hace-5-dias", "ayer", "hoy-1"]);
     // Sacar a reparto es lo ya salido sin día, del más antiguo al más reciente; lo nuevo va a «Nuevos»
     // (17-11-2026): primero lo que tiene día y después lo sin día, del más antiguo al más reciente.
-    expect(of("por_sacar")).toEqual(["volvio-antes", "volvio-ayer"]);
+    expect(of("por_sacar")).toEqual([]);
+    expect(of("no_entregados")).toEqual(["volvio-ayer", "volvio-antes"]); // Mantiene el orden de los casos/cola.
     expect(of("nuevos")).toEqual(["prog", "hace-5-dias", "ayer", "hoy-1"]);
     expect(of("programados")).toEqual([]);
   });
@@ -672,6 +692,193 @@ describe("la dirección completa bajo el cliente (owner, 06-11-2026)", () => {
     const html = renderToStaticMarkup(createElement(LimaPendingList, { rows: [row({ address: null, reference: null, district: "Ate" })], reproRows: [], today: TODAY, renderActions: () => null }));
     expect(html).toContain("Sin dirección · Ate");
     expect(html).not.toContain("Ref.");
+  });
+});
+
+describe("detalle de cada bloque de Lima", () => {
+  it("la situación completa elegida en la URL filtra exactamente su combinación", () => {
+    const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const pending = [row({ orderId: "o1", orderName: "#MISMO1" }), row({ orderId: "o2", orderName: "#MISMO2" }), row({ orderId: "o3", orderName: "#OTRODIA", programmedFor: "2026-10-29" })];
+    const classes = classifyLimaRows(pending, [], TODAY);
+    const situation = limaSituations(pending, classes, "nuevos", TODAY).find((s) => s.count === 2)!;
+    try {
+      nav.search = new URLSearchParams({ atencion: "nuevos", detalle: situation.key }).toString();
+      const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(html).toContain("#MISMO1"); expect(html).toContain("#MISMO2"); expect(html).not.toContain("#OTRODIA");
+      expect(html).toContain("Situaciones completas");
+      expect(html).toMatch(/Dentro de Nuevos.*?3 pedidos/);
+    } finally { nav.search = ""; }
+  });
+  it("lee llamadas reales de todas las fuentes del pedido y excluye mensajes, pruebas y solicitudes sin marcar", async () => {
+    const source = Array.from({ length: 8 }, (_, i) => master(i + 1));
+    const db = database(source, false, { tables: {
+      order_events: [
+        { id: "e1", order_id: "o1", kind: "confirmation_contact", occurred_at: "2026-11-18T15:00:00Z", payload: { channel: "whatsapp" } },
+        { id: "e2", order_id: "o2", kind: "confirmation_contact", occurred_at: "2026-11-18T15:00:00Z", payload: { channel: "llamada", result: "confirmado" } },
+        { id: "e3", order_id: "o1", kind: "coverage_changed", occurred_at: "2026-11-18T16:00:00Z", payload: { from: "provincia_cod", to: "lima" } },
+      ],
+      lima_repro_calls: [{ id: "r", order_id: "o3", channel: "llamada", occurred_at: "2026-11-18T17:00:00Z", outcome: "no_contesta" }],
+      voice_calls: [
+        { id: "v1", order_id: "o1", mode: "test", dialed_at: "2026-11-18T15:00:00Z" },
+        { id: "v2", order_id: "o4", mode: "real", dialed_at: "2026-11-18T15:00:00Z", outcome: "no_contesta" },
+        { id: "v3", order_id: "o1", mode: "real", dialed_at: null, started_at: null },
+      ],
+      anura_calls: [
+        { id: "a1", order_id: "o1", mode: "pedido", status: "solicitada", requested_at: "2026-11-18T15:00:00Z" },
+        { id: "a2", order_id: "o5", mode: "pedido", status: "no_contestada", requested_at: "2026-11-18T16:00:00Z" },
+      ],
+      leads: [{ id: "l", order_id: "o6" }, { id: "otro", order_id: "fuera" }],
+      lead_calls: [{ id: "l1", lead_id: "l", kind: "call", occurred_at: "2026-11-18T16:00:00Z" }, { id: "l2", lead_id: "otro", kind: "call", occurred_at: "2026-11-18T16:00:00Z" }],
+      shipments: [{ id: "g", order_id: "o7", courier: "tanders", delivery_status: "anulado" }],
+      shipment_calls: [{ id: "s", shipment_id: "g", kind: "call", occurred_at: "2026-11-18T16:00:00Z", new_status: "llamar_despues" }],
+    } });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    const by = new Map(rows.map((r) => [r.orderId, r]));
+    expect(by.get("o1")?.management).toMatchObject({ hasCall: false, movedToLimaAt: "2026-11-18T16:00:00Z" });
+    expect(by.get("o8")?.management?.hasCall).toBe(false);
+    for (const id of ["o2", "o3", "o4", "o5", "o6", "o7"]) expect(by.get(id)?.management?.hasCall, id).toBe(true);
+    expect(by.get("o3")?.management?.lastCallResult).toBe("no_contesta");
+  });
+
+  it("pagina más de mil gestiones y falla explícitamente si no se pudo leer el historial", async () => {
+    const events = Array.from({ length: 1201 }, (_, i) => ({ id: `e${i}`, order_id: "o1", kind: "confirmation_contact", occurred_at: "2026-11-18T15:00:00Z", payload: { channel: i === 1200 ? "llamada" : "whatsapp" } }));
+    const db = database([master(1)], false, { tables: { order_events: events } });
+    const [r] = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(r?.management?.hasCall).toBe(true);
+    const broken = database([master(1)], false, { tableErrors: { order_events: "historial no disponible" } });
+    await expect(loadLimaPending(broken.admin, { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("historial no disponible");
+  });
+
+  it("las llamadas anteriores a crear el pedido no son gestión de entrega, cualquiera que sea su fuente", async () => {
+    const before = "2026-11-18T14:59:59Z";
+    const created = "2026-11-18T15:00:00Z";
+    const tables: Record<string, DBRow[]> = {
+      order_events: [{ id: "e", order_id: "o1", kind: "call", occurred_at: before }],
+      lima_repro_calls: [{ id: "r", order_id: "o2", channel: "llamada", occurred_at: before }],
+      voice_calls: [{ id: "v", order_id: "o3", mode: "real", dialed_at: before, started_at: "2026-11-18T15:00:01Z" }],
+      anura_calls: [{ id: "a", order_id: "o4", mode: "pedido", status: "no_contestada", requested_at: before, started_at: before }],
+      leads: [{ id: "l", order_id: "o5" }],
+      lead_calls: [{ id: "lc", lead_id: "l", kind: "call", occurred_at: before }],
+      shipment_calls: [{ id: "sc", shipment_id: "s", kind: "call", occurred_at: before }],
+    };
+    const db = database(Array.from({ length: 6 }, (_, i) => master(i + 1, { order_created_at: created })), false, {
+      shipments: [{ id: "s", order_id: "o6", courier: "tanders", delivery_status: "anulado" }], tables,
+    });
+    const scope = { userId: "u", storeIds: new Set(["a"]) };
+    const first = await loadLimaPending(db.admin, scope);
+    expect(first.every((r) => r.management?.hasCall === false && r.management.lastCallAt === null)).toBe(true);
+    // La misma hora en Lima cuenta, y no se borró la llamada comercial previa.
+    tables.lead_calls!.push({ id: "lc2", lead_id: "l", kind: "call", occurred_at: "2026-11-18T10:00:00-05:00", new_status: "confirmado" });
+    const later = await loadLimaPending(db.admin, scope);
+    expect(later.find((r) => r.orderId === "o5")?.management).toMatchObject({ hasCall: true, lastCallResult: "confirmado" });
+    expect(tables.lead_calls).toHaveLength(2);
+  });
+
+  it("comprueba el origen de la guía GF viva, sin heredar una automática vieja ni una manual posterior", async () => {
+    const autoReason = "Guía GF automática: al entrar a Por generar rótulo.";
+    const source = Array.from({ length: 7 }, (_, i) => master(i + 1));
+    const shipments: DBRow[] = source.map((m, i) => ({ id: `s${i}`, order_id: m.order_id, courier: "gf_courier", guide_code: `GF-${i + 1}`,
+      delivery_status: "pendiente", custody_state: "empresa", created_at: "2026-11-18T15:00:00Z" }));
+    shipments[3]!.custody_state = "courier";
+    shipments[4]!.out_for_delivery_at = "2026-11-18T16:00:00Z";
+    shipments.push({ id: "old", order_id: "o2", courier: "gf_courier", guide_code: "OLD-2", delivery_status: "anulado" });
+    const events = [1, 3, 4, 5, 6, 7].map((i) => ({ id: `e${i}`, order_id: `o${i}`, courier: "gf_courier", guide_code: `GF-${i}`, kind: "guide_registered", reason: autoReason, occurred_at: "2026-11-18T15:00:00Z" }));
+    events.push({ id: "old", order_id: "o2", courier: "gf_courier", guide_code: "OLD-2", kind: "guide_registered", reason: autoReason, occurred_at: "2026-11-18T15:00:00Z" });
+    events.push({ id: "manual", order_id: "o3", courier: "gf_courier", guide_code: "GF-3", kind: "guide_registered", reason: "Creada a mano", occurred_at: "2026-11-18T16:00:00Z" });
+    // Una segunda guía GF manual vigente también bloquea la excepción.
+    shipments.push({ id: "s6b", order_id: "o6", courier: "gf_courier", guide_code: "MANUAL-6", delivery_status: "pendiente", custody_state: "empresa" });
+    const db = database(source, false, { shipments, tables: { order_events: events } });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(rows.filter((r) => r.ops?.autoGfGuide).map((r) => r.orderId)).toEqual(["o1", "o7"]);
+    const broken = database(source, false, { shipments, tableErrors: { order_events: "origen no disponible" } });
+    await expect(loadLimaPending(broken.admin, { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("origen no disponible");
+  });
+
+  it("la URL recorta la lista, mantiene el desglose del bloque y respeta los demás filtros", () => {
+    const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const pending = [
+      row({ orderId: "o1", orderName: "#CONROTULO", district: "Ate", substage: "por_armar" }),
+      row({ orderId: "o2", orderName: "#SINROTULO", district: "Ate", substage: "por_generar_rotulo" }),
+      row({ orderId: "o3", orderName: "#CALLAO", district: "Callao", substage: "por_generar_rotulo" }),
+    ];
+    try {
+      nav.search = "atencion=nuevos&detalle=no-guide&distrito=ate";
+      const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(html).toContain('aria-label="Detalle de Nuevos"');
+      expect(html).toContain("#SINROTULO");
+      expect(html).not.toContain("#CONROTULO");
+      expect(html).not.toContain("#CALLAO");
+      expect(html).toContain("Nuevos · Sin guía o rótulo vigente");
+      // El panel sigue contando los dos pedidos del bloque recortado por Ate, aunque la lista muestre uno.
+      expect(html).toMatch(/Dentro de Nuevos.*?2 pedidos/);
+      nav.search = "atencion=nuevos&detalle=desconocido";
+      const unknown = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(unknown).toContain("#CONROTULO");
+      expect(unknown).toContain("#SINROTULO");
+    } finally { nav.search = ""; }
+  });
+
+  it("el filtro de recojo separa la guía creada de la ruta y conserva el total del bloque", () => {
+    const data = { today: TODAY, nowIso: `${TODAY}T15:00:00Z`, cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const ops = { liveCouriers: ["gf_courier"], reportedStatus: null, courierDelivered: null, lastGfBox: null };
+    const pending = [
+      row({ orderId: "waiting", orderName: "#PORRECOGER", stage: "por_despachar", substage: "listo_para_recojo", courier: "gf_courier", ops: { ...ops, custody: "empresa" } }),
+      row({ orderId: "picked", orderName: "#RECOGIDO", stage: "en_curso", substage: "en_reparto", courier: "gf_courier", dispatchedAt: `${TODAY}T14:00:00Z`, ops: { ...ops, custody: "courier" } }),
+    ];
+    try {
+      nav.search = "atencion=con_courier&detalle=pickup-pending";
+      const waiting = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(waiting).toContain("#PORRECOGER");
+      expect(waiting).not.toContain("#RECOGIDO");
+      expect(waiting).toContain("Guía creada, pendiente de recojo");
+      expect(waiting).toContain("Custodia: En la empresa");
+      expect(waiting).toMatch(/Dentro de Con el courier.*?2 pedidos/);
+      nav.search = "atencion=con_courier&detalle=pickup-done";
+      const picked = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(picked).toContain("#RECOGIDO");
+      expect(picked).not.toContain("#PORRECOGER");
+      expect(picked).toContain("Recogido / en ruta");
+      expect(picked).toContain("Custodia: Con el courier");
+    } finally { nav.search = ""; }
+  });
+
+  it("No entregados filtra ubicación, falta de reporte y revisión por separado sin colapsar el desglose principal", () => {
+    const data = { today: TODAY, nowIso: `${TODAY}T15:00:00Z`, cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const ops = { liveCouriers: ["urpi"], reportedStatus: null, courierDelivered: null, lastGfBox: null };
+    const pending = [
+      row({ orderId: "warehouse", orderName: "#ALMACEN", stage: "en_curso", substage: "en_transito", courier: "urpi", macroSince: "2026-10-25T14:00:00Z", dispatchedAt: "2026-10-25T14:00:00Z", dispatchedWith: ["urpi"], ops: { ...ops, custody: "empresa" } }),
+      row({ orderId: "courier", orderName: "#COURIER", stage: "en_curso", substage: "en_transito", courier: "urpi", macroSince: "2026-10-25T14:00:00Z", dispatchedAt: "2026-10-25T14:00:00Z", dispatchedWith: ["urpi"], ops: { ...ops, custody: "courier" } }),
+      row({ orderId: "returning", orderName: "#RETORNANDO", stage: "en_curso", substage: "por_reprogramar_lima", attempts: 1, dispatchedWith: ["urpi"], ops: { ...ops, custody: "retorno" } }),
+    ];
+    try {
+      for (const [detail, visible, hidden] of [
+        ["location:warehouse", ["#ALMACEN"], ["#COURIER", "#RETORNANDO"]],
+        ["location:returning", ["#RETORNANDO"], ["#COURIER", "#ALMACEN"]],
+        ["failed-no-report", ["#ALMACEN", "#COURIER"], ["#RETORNANDO"]],
+        ["review", ["#ALMACEN"], ["#COURIER", "#RETORNANDO"]],
+      ] as const) {
+        nav.search = new URLSearchParams({ atencion: "no_entregados", detalle: detail }).toString();
+        const html = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+        for (const name of visible) expect(html).toContain(name);
+        for (const name of hidden) expect(html).not.toContain(name);
+        expect(html).toMatch(/Dentro de No entregados.*?3 pedidos/);
+        expect(html.indexOf('aria-label="Dónde figura el paquete"')).toBeLessThan(html.indexOf('<details'));
+        expect(html).toContain("Revisar: figura en ruta y en almacén");
+      }
+    } finally { nav.search = ""; }
+  });
+
+  it("lee el historial de couriers y de documentos sin confundirlos con la salida actual", async () => {
+    const db = database([master(1, { dispatched_with: ["gf:Roy", "tanders"] })], false, {
+      shipments: [
+        { id: "s1", order_id: "o1", courier: "gf_courier", guide_code: "GF-1", delivery_status: "anulado", reported_status: "CANCEL_REQUESTED" },
+        { id: "s2", order_id: "o1", courier: "tanders", guide_code: "T-2", delivery_status: "no_entregado", returned_at: "2026-10-27T15:00:00Z", custody_state: "devuelto" },
+        { id: "s3", order_id: "o1", courier: "por_definir", delivery_status: "pendiente" },
+      ],
+    });
+    const [r] = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(r?.dispatchedWith).toEqual(["gf:Roy", "tanders"]);
+    expect(r?.ops?.guides).toMatchObject({ total: 2, annulled: 1, returned: 1, cancelRequested: 1 });
   });
 });
 

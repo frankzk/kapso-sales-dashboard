@@ -30,6 +30,9 @@ import { limaClock } from "@/lib/grupo-gf-courier";
 import { programDayLabel } from "@/lib/dispatch-day";
 import { LimaPendingFilters, LimaPendingList, type LimaRowSelection } from "@/components/repro-lima-pending";
 import { ReproLimaBlocks, STEP_TONE, activeStep } from "@/components/repro-lima-blocks";
+import { LimaBlockDetails } from "@/components/lima-block-details";
+import { limaBlockDetails, limaDetailMatches } from "@/lib/lima-block-details";
+import { isLimaSituationKey, limaSituations } from "@/lib/lima-situations";
 import { NoEntregoButton } from "@/components/repro-lima-no-entrego";
 import { QuickGuideButtons } from "@/components/repro-lima-quick-guide";
 import { OpsToast, type OpsToastData } from "@/components/ops-toast";
@@ -112,6 +115,8 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const [now, setNow] = useState(() => new Date(data.nowIso));
   const today = limaClock(now).day;
   const key: LimaBoardKey = retriesOnly ? "reintentos_aliclik" : boardFilter(searchParams.get("atencion"), today);
+  const detailStep = activeStep(key);
+  const detailParam = searchParams.get("detalle");
   // «Lima trabados» (§9.6): el motivo elegido viaja por `trabado`. Uno que se
   // mudó a Grupo GF Courier no filtra aquí: se dice a dónde se fue.
   const stuckParam = searchParams.get("trabado");
@@ -153,11 +158,19 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     () => classifyLimaRows(visibleAll, data.rows, today, agendaDays, { autoGuideStores: autoGuide, courierAutoStores: courierAuto }),
     [visibleAll, data.rows, today, agendaDays, autoGuide, courierAuto],
   );
+  const detailGroups = useMemo(() => detailStep ? limaBlockDetails(scoped, classes, detailStep, detailParam) : [], [scoped, classes, detailStep, detailParam]);
+  const situations = useMemo(() => detailStep ? limaSituations(scoped, classes, detailStep, today) : [], [scoped, classes, detailStep, today]);
+  // Un detalle guardado desconocido no vacía la cola. Solo se combina con su paso completo.
+  const detail = !retriesOnly && !stuck && key === detailStep && (isLimaSituationKey(detailParam) || detailGroups.some((group) => group.items.some((item) => item.key === detailParam))) ? detailParam : null;
+  const detailLabel = detailGroups.flatMap((group) => group.items).find((item) => item.key === detail)?.label ?? situations.find((s) => s.key === detail)?.title ?? (isLimaSituationKey(detail) ? "Situación seleccionada" : undefined);
   // Cada píldora cuenta con las DEMÁS puestas, y solo lo de la lista abierta (owner, 17-11-2026: en Nuevos
   // «este conteo debería sumar 125»): con «Antes de ayer o más», Canal dice cuántos de esos son de cada canal.
   const filterOptions = useMemo(() => {
     const inList = (rows: LimaPendingOrder[]): LimaPendingOrder[] => {
-      if (!stuck) return key === "todos" ? rows : limaBoardRows(rows, classes, key);
+      if (!stuck) {
+        const inStep = key === "todos" ? rows : limaBoardRows(rows, classes, key);
+        return detail ? inStep.filter((row) => { const cls = classes.get(row.orderId); return cls && limaDetailMatches(row, cls, detail); }) : inStep;
+      }
       const ids = new Set(limaStuckItems(rows, today)
         .filter((item) => TEAM_HOMES.includes(limaStuckRule(item.reason).home) && (stuck === "todos" || item.reason === stuck) && (key === "todos" || classes.get(item.orderId)?.step === key))
         .map((item) => item.orderId));
@@ -167,7 +180,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
       inList(activeRowFilters ? visibleAll.filter((row) => rowFiltersMatch(row, { ...rowFilters, [field]: new Set<string>() })) : visibleAll),
     )[field];
     return { channels: without("channels"), districts: without("districts"), couriers: without("couriers"), suggested: without("suggested") };
-  }, [visibleAll, rowFilters, activeRowFilters, stuck, key, classes, today]);
+  }, [visibleAll, rowFilters, activeRowFilters, stuck, key, classes, today, detail]);
   const counts = useMemo(() => limaBoardCounts(scoped, classes), [scoped, classes]);
   const caseById = useMemo(() => new Map(data.rows.map((row) => [row.orderId, row])), [data.rows]);
   // `loadReproLima` ya ordena los casos (`sortRepro`): No entregados y Llamar después siguen ese orden.
@@ -200,8 +213,9 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
         .map((item) => byId.get(item.orderId))
         .filter((row): row is LimaPendingOrder => Boolean(row));
     }
-    return limaBoardRows(scoped, classes, key, caseOrder);
-  }, [stuck, stuckItems, scoped, classes, key, caseOrder]);
+    const ordered = limaBoardRows(scoped, classes, key, caseOrder);
+    return detail ? ordered.filter((row) => { const cls = classes.get(row.orderId); return cls && limaDetailMatches(row, cls, detail); }) : ordered;
+  }, [stuck, stuckItems, scoped, classes, key, caseOrder, detail]);
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
 
   // La selección es de una lista: al cambiar de tarjeta se vacía.
@@ -231,6 +245,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     setPicked(new Set());
     const params = new URLSearchParams(searchParams.toString());
     params.delete("trabado");
+    params.delete("detalle");
     if (next === "todos" || (next === key && !stuck)) params.delete("atencion");
     else params.set("atencion", next);
     replaceParams(params);
@@ -241,8 +256,20 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     setPicked(new Set());
     const params = new URLSearchParams(searchParams.toString());
     params.set("atencion", step);
+    params.delete("detalle");
     if (stuck && key === step) params.delete("trabado");
     else params.set("trabado", "todos");
+    replaceParams(params);
+  }
+
+  function chooseDetail(next: string | null) {
+    if (!detailStep) return;
+    setPicked(new Set());
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("atencion", detailStep);
+    params.delete("trabado");
+    if (next) params.set("detalle", next);
+    else params.delete("detalle");
     replaceParams(params);
   }
 
@@ -495,13 +522,14 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const stepCard = key !== "todos" ? boardCard(key, today) : null;
   const listTitle = stuck
     ? stuck !== "todos" ? `Trabados · ${limaStuckRule(stuck).label}` : stepCard ? `Trabados · ${stepCard.label}` : "Trabados"
-    : card?.label ?? "Todos los pendientes";
+    : detailLabel ? `${card?.label} · ${detailLabel}` : card?.label ?? "Todos los pendientes";
   const listHelp = stuck
     ? stuck === "todos" ? "Lo del equipo que se quedó quieto más de lo que debería, lo que más lleva primero." : `${limaStuckRule(stuck).hint} Siguiente paso: ${limaStuckRule(stuck).action}`
     : card?.hint ?? "Primero lo que pide al equipo; después lo programado por día y lo que lleva el courier.";
   const emptyText = query.trim()
     ? `Ningún pedido coincide con «${query.trim()}».`
     : stuck ? "No hay pedidos trabados por este motivo con estos filtros."
+      : detail ? "No hay pedidos con esta característica y los filtros actuales. Elige otra cifra o «Todos los del bloque»."
       : key === "todos" ? "No hay pedidos con estos filtros. Activa otros macroestados o quita la búsqueda." : card?.empty ?? "No hay pedidos con estos filtros.";
   const filtered = Boolean(stuck) || key !== "todos";
   const listStep = activeStep(key);
@@ -554,6 +582,9 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           callsDue={callsDue}
         />
       )}
+      {!retriesOnly && !stuck && detailStep ? (
+        <LimaBlockDetails label={boardCard(detailStep, today)!.label} total={counts.step[detailStep]} groups={detailGroups} situations={situations} active={detail} onPick={chooseDetail} />
+      ) : null}
 
       {moved && (
         <Banner tone="info" role="status" title={`«${limaStuckRule(moved.reason).label}» se ve en ${LIMA_STUCK_HOME_LABEL[moved.home]}`}>

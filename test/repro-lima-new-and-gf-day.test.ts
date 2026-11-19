@@ -36,7 +36,7 @@ describe("«Nuevo»", () => {
     expect(limaIsNew({ ...base, stage: "en_curso" })).toBe(false);
   });
   it("la fila lo dice junto a la etapa", () => {
-    expect(read("components/repro-lima-pending.tsx")).toContain("{limaIsNew(row) && <Badge tone=\"fuchsia\"");
+    expect(read("components/repro-lima-pending.tsx")).toContain("{cls?.step === \"nuevos\" && <Badge tone=\"fuchsia\"");
   });
 });
 
@@ -55,14 +55,14 @@ describe("el paso «Nuevos» del Flujo del día (17-11-2026)", async () => {
     expect(LIMA_STEPS.indexOf("nuevos")).toBe(LIMA_STEPS.indexOf("por_sacar") + 1);
     expect(LIMA_STEPS.indexOf("programados")).toBe(LIMA_STEPS.indexOf("nuevos") + 1);
   });
-  it("lo nuevo con su guía de mañana está en Nuevos · Mañana, no en Programados", () => {
+  it("con guía de mañana deja Nuevos y pasa a Programados (Daysi, 18-11-2026)", () => {
     const cls = classifyLimaRow(base, undefined, TODAY, win);
-    expect(cls.step).toBe("nuevos");
+    expect(cls.step).toBe("programados");
     const counts = limaBoardCounts([base], new Map([["n1", cls]]));
-    expect(counts.step.nuevos).toBe(1);
-    expect(counts.step.programados).toBe(0);
-    expect(counts.sub.nuevos_manana).toBe(1);
-    expect(limaBoardRows([base], new Map([["n1", cls]]), "nuevos_manana").map((r) => r.orderId)).toEqual(["n1"]);
+    expect(counts.step.nuevos).toBe(0);
+    expect(counts.step.programados).toBe(1);
+    expect(counts.agenda.manana).toBe(1);
+    expect(limaBoardRows([base], new Map([["n1", cls]]), "manana").map((r) => r.orderId)).toEqual(["n1"]);
   });
   it("lo nuevo sin guía ni día está en Nuevos · Sin día", () => {
     const row = { ...base, courier: null, courierPickup: null, stage: "preparacion", substage: "por_generar_rotulo" } as typeof base;
@@ -76,6 +76,6 @@ describe("el paso «Nuevos» del Flujo del día (17-11-2026)", async () => {
   });
   it("la barra ya no tiene el filtro «Nuevo»; la fila conserva la etiqueta", () => {
     expect(read("components/repro-lima-board.tsx")).not.toContain('label="Nuevo"');
-    expect(read("components/repro-lima-pending.tsx")).toContain("{limaIsNew(row) && <Badge tone=\"fuchsia\"");
+    expect(read("components/repro-lima-pending.tsx")).toContain("{cls?.step === \"nuevos\" && <Badge tone=\"fuchsia\"");
   });
 });

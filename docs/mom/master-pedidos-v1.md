@@ -6601,6 +6601,117 @@ sale con la caja en oficina. Una recepción de un episodio anterior no cuenta.
 Es solo una chapa. Lo decide una persona con «Desarmar y cerrar sin llamada»,
 porque la merma no se automatiza (principio 11).
 
+#### Detalle de los ocho bloques de Repro Lima (owner, 18-11-2026)
+
+**Corrección aprobada de No entregados (18-11-2026).** La salida Swayp
+vigente con estado Generada, custodia empresa y sin despacho ni salida a ruta
+se lee pendiente de recojo aunque el Master siga En curso. Con acuerdo vigente
+para una fecha futura pertenece a Programados. Sin salidas vivas, una última
+salida devuelta a almacén no implica guía vigente ni ruta sin reporte: si ya
+salió y no tiene nuevo día, permanece No entregados, por acordar.
+El desglose separa ubicación registrada (En almacén, Con el courier,
+Retornando y Ubicación sin confirmar; suman el bloque) de gestión pendiente
+(por acordar, reintentos y sin reporte). Sin reporte puede coincidir con una
+ubicación y no se suma a ellas. Se marcan para revisión las contradicciones
+entre ruta y custodia, salidas sin fecha ni intentos comprobados, courier
+histórico faltante y acuerdos vencidos aún sin resolver, además de varios
+couriers. No se mueve un caso dudoso ni se anula automáticamente.
+
+**Revisión con Daysi (18-11-2026).** Sustituye la definición anterior de
+«Nuevos» y la separación entre «Sacar a reparto» y «No entregados»:
+
+- «Nuevos» es primera salida pendiente, sin llamadas de gestión de entrega ni
+  acuerdo de reprogramación. **Corrección explícita del owner (18-11-2026,
+  revisión de los 28 de GF):** la guía GF creada automáticamente no lo saca
+  de Nuevos; conserva su guía y su día dentro de Nuevos. Se comprueba el origen
+  de la guía viva concreta en su último hecho `guide_registered`, cuyo motivo
+  es «Guía GF automática: al entrar a Por generar rótulo.». No basta que su
+  courier sea GF o que una guía anterior fuera automática. La excepción es
+  para la guía que aún no salió ni se recogió, sin otra guía externa que la
+  bloquee. Una guía de Aliclik (incluido AUTOECOM), Swayp o una guía GF manual
+  sigue sacándolo de Nuevos: con día pendiente va a Programados y sin día,
+  a Con el courier. Crear una guía no prueba salida física.
+- **Criterios confirmados por el owner (18-11-2026):** un rótulo interno de
+  Grupo GF (`propio`) o «por definir» no excluye de Nuevos mientras no haya
+  salida comprobada, llamadas ni acuerdo de reprogramación. Crear la guía
+  externa sí lo excluye, salvo la GF automática descrita arriba. Dentro de Con
+  el courier se distinguen **Guía creada,
+  pendiente de recojo** y **Recogido / en ruta**, con cifras que suman el
+  bloque y filtran sus pedidos. La custodia registrada se muestra por separado:
+  crear guía o asignar motorizado no demuestra que el courier tenga el paquete;
+  sin dato se dice «Custodia sin confirmar». Las situaciones completas también
+  distinguen ambos estados de recojo.
+- Lo que ya salió y espera un nuevo intento sin día vuelve a No entregados,
+  aunque el Master haya vuelto a Preparación/Por despachar. Las novedades
+  vigentes, las llamadas aplazadas y los cierres mantienen su precedencia.
+  Sacar a reparto queda para preparar la primera salida que ya fue gestionada
+  y para incidencias de recojo sin salida previa; no contiene reintentos
+  comprobados. Con día nuevo, lo pendiente de salir va a Programados.
+- Provincia corregida a Lima sin día pendiente se muestra como **gestionar
+  hoy**, con el hecho `coverage_changed`. No se inventa ni se guarda una fecha
+  de despacho o un acuerdo; en Nuevos aparece en Hoy. Una fecha real vigente
+  se conserva, y la prioridad no se aplica a lo que ya lleva el courier.
+- «Sin llamadas» usa hechos de confirmación, Repro Lima, Repro Provincia,
+  Leads vinculados al mismo pedido y telefonía real. Una prueba de voz,
+  una cola sin marcar, un mensaje automático o «sin contacto» no es llamada.
+  Solo se cuentan las llamadas desde la creación del pedido en la tienda
+  (`order_created_at`), inclusive. Las anteriores se conservan en su historial
+  comercial y no cuentan como gestión de entrega, cualquiera que sea la fuente.
+  Las fechas se comparan como instantes, con su zona horaria. Sin una fecha de
+  creación válida no se descarta una llamada comprobada por esta regla.
+  La lectura fallida no se interpreta como historial vacío.
+- **Varios couriers:** decisión explícita del owner: marcar para revisión y
+  posible cierre, **sin anular automáticamente** venta ni guía. Se cuentan
+  proveedores distintos con salida comprobada; Roy y Alexis son motorizados
+  de un solo proveedor, Grupo GF. Dos intentos con el mismo courier tampoco
+  significan dos couriers.
+- Cada bloque añade **Situaciones completas**: combinaciones de salida,
+  intentos, couriers históricos y actual, guía, programación, reporte,
+  custodia y gestión. Cada pedido pertenece a una sola situación dentro de
+  su bloque; sus cifras suman el bloque. Las cifras de los atributos
+  independientes y sus cruces siguen pudiendo solaparse.
+
+Estas son reglas de lectura de Repro Lima. No cambian estados del Master,
+historial, custodia real, permisos, guías ni la resolución global del pedido.
+
+Cada bloque abre un desglose de lectura sobre los mismos pedidos y filtros
+de tienda, búsqueda, fecha, canal, distrito y courier. Las cifras filtran la
+lista mediante `detalle` en la URL, dentro de `atencion`; al cambiar de bloque
+o elegir Trabados se quita el detalle. No cambia la clasificación del flujo,
+estados, permisos, salidas, acuerdos ni `MOM_RESOLUTION_VERSION`.
+
+- **Salidas comprobadas:** el historial de salidas, `dispatched_at`, la última
+  salida, intentos positivos o `dispatched_with` prueban que salió. «Nunca
+  salieron» requiere `limaIsNew`, incluida la guía anulada antes del recojo
+  sin salida previa. El resto dice «Sin evidencia suficiente». Estas tres
+  cifras suman el bloque. Ni asignar motorizado ni crear guía prueba salida.
+- **Intentos registrados:** 0, 1, 2 y cada cantidad exacta de visitas del Master.
+  Suman el bloque, pero no son el número de salidas físicas: una ruta sin
+  reporte puede tener cero visitas. No se inventa un número exacto de salidas
+  contando guías, eventos o couriers.
+- **Guías y rótulos:** vigente usa la regla existente `LimaRowClass.guide`.
+  Además se conservan los documentos de salidas anteriores (código de guía o
+  QR), anulados y devueltos. Cada cifra cuenta pedidos una sola vez, aunque
+  tengan varios documentos. Anular una guía no equivale a anular la venta.
+- **Programación:** con/sin día suman el bloque. Reprogramados con día son
+  los que tienen acuerdo vigente, o ya salieron y esperan una nueva salida
+  con día (sin courier en ruta/retorno). No basta con una fecha de recojo de
+  una ruta que sigue en la calle.
+- **Cruces:** con documento vigente y programados, con documento vigente y
+  reprogramados, reprogramados sin documento vigente, esperan anulación de la
+  venta y sus cruces con documentos vigentes o históricos; solicitud GF
+  `CANCEL_REQUESTED`; entregado por el courier pendiente de cierre. Esperar
+  anulación requiere `awaitingCancel` (caso cerrado); no se predice un cierre.
+- **Con quién salió:** `order_master.dispatched_with`, con todos los couriers
+  y motorizados históricos comprobados; se muestra separado del courier
+  actual. Un pedido puede contar en varios couriers históricos. La asignación
+  o sugerencia para su siguiente ruta no se presenta como reparto realizado.
+
+Las particiones se identifican como tales; los cruces se solapan y la interfaz
+lo explica. La fila muestra salida conocida, visitas registradas y couriers
+históricos tanto en computadora como en celular. Todo se lee en los mismos
+lotes existentes; no hay consultas por pedido ni migraciones nuevas.
+
 #### Repro Lima por las tareas del equipo (owner, 15-11-2026)
 
 Decisión del owner (15-11-2026): «Busco que Repro Lima sea el panel de gestión
