@@ -148,6 +148,8 @@ export interface LimaPendingOrder {
  * decide `limaStuck` (lib/lima-stuck.ts).
  */
 export interface LimaPendingOps {
+  /** Todas las guías GF vivas provienen del automático y siguen sin recoger ni despachar. */
+  autoGfGuide?: boolean;
   /** Custodia de la salida viva más reciente o, sin ella, de la última salida. */
   custody?: string | null;
   /** Documentos de todas sus salidas, incluidas las anuladas; no son repartos. */

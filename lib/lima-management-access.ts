@@ -1,6 +1,7 @@
 import type { createAdminSupabase } from "@/lib/db";
 import { allCourierRows, courierRowsByIds } from "@/lib/courier-flow";
 import type { LimaPendingOrder } from "@/lib/repro-lima-pending";
+import { isDeliveryManagementCall } from "@/lib/lima-management";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
 type Query = ReturnType<ReturnType<Admin["from"]>["select"]>;
@@ -10,13 +11,13 @@ type Contact = { order_id: string; occurred_at: string; outcome?: string | null 
 const PHONE = new Set(["llamada", "telefono", "voz", "call", "voice"]);
 
 /** Historia del pedido, no del teléfono: evita heredar llamadas de otra compra. */
-export async function loadLimaManagement(admin: Admin, orderIds: string[]): Promise<Map<string, Management>> {
+export async function loadLimaManagement(admin: Admin, orderIds: string[], createdAtByOrder: ReadonlyMap<string, string | null>): Promise<Map<string, Management>> {
   const out = new Map(orderIds.map((id) => [id, { hasCall: false, lastCallAt: null, lastCallResult: null, movedToLimaAt: null } as Management]));
   const record = (id: string, at: string | null | undefined, result?: string | null) => {
     const fact = out.get(id);
-    if (!fact || !at) return;
+    if (!fact || !at || !isDeliveryManagementCall(at, createdAtByOrder.get(id))) return;
     fact.hasCall = true;
-    if (!fact.lastCallAt || at > fact.lastCallAt) { fact.lastCallAt = at; fact.lastCallResult = result ?? null; }
+    if (!fact.lastCallAt || Date.parse(at) > Date.parse(fact.lastCallAt)) { fact.lastCallAt = at; fact.lastCallResult = result ?? null; }
   };
   // Se pagina también dentro de cada lote: más de mil gestiones nunca se cortan.
   const read = async <T,>(table: string, columns: string, field: string, ids: string[], filter: (q: Query) => Query = (q) => q): Promise<T[]> => {

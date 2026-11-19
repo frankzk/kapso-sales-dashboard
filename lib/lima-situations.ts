@@ -26,7 +26,7 @@ function signature(row: LimaPendingOrder, cls: LimaRowClass): unknown[] {
     row.management?.hasCall ?? null, row.management?.lastCallResult ?? null, cls.nextCallAt ?? null,
     cls.awaitingCancel, cls.retry, row.ops?.guides?.annulled ?? 0, row.ops?.guides?.returned ?? 0,
     row.ops?.guides?.total ?? 0, limaDay(row.lastDepartureAt ?? row.dispatchedAt), limaDay(row.management?.lastCallAt ?? null),
-    row.gfAssigned?.rider ?? null, row.gfAssigned?.day ?? null, cls.courier,
+    row.gfAssigned?.rider ?? null, row.gfAssigned?.day ?? null, cls.courier, row.ops?.autoGfGuide ?? false,
   ];
 }
 
@@ -37,7 +37,7 @@ export function limaSituationKey(row: LimaPendingOrder, cls: LimaRowClass): stri
 export function isLimaSituationKey(key: string | null): boolean {
   if (!key?.startsWith("situation:") || key.length > 6000) return false;
   // Los enlaces anteriores siguen siendo válidos y avisan si su situación cambió.
-  try { const parts = JSON.parse(key.slice(10)); return Array.isArray(parts) && (parts.length === 23 || parts.length === 24); }
+  try { const parts = JSON.parse(key.slice(10)); return Array.isArray(parts) && [23, 24, 25].includes(parts.length); }
   catch { return false; }
 }
 
@@ -45,11 +45,11 @@ export function limaSituation(row: LimaPendingOrder, cls: LimaRowClass, today: s
   const left = limaHasDeparture(row);
   const known = left ? "Ya salió" : limaIsNew(row) ? "Nunca salió" : "Salida sin evidencia suficiente";
   const attempts = `${row.attempts} ${row.attempts === 1 ? "intento registrado" : "intentos registrados"}`;
-  const guide = cls.guide ? "Con guía o rótulo vigente" : "Sin guía o rótulo vigente";
+  const guide = row.ops?.autoGfGuide ? "Con guía GF automática vigente" : cls.guide ? "Con guía o rótulo vigente" : "Sin guía o rótulo vigente";
   const program = cls.needsToday ? "Provincia a Lima: gestionar hoy, sin fecha de despacho" : cls.agendaDay ? `${left || cls.agreed ? "Reprogramado" : "Programado"}: ${agendaDayText(cls.agendaDay, today)}` : "Sin día programado";
   const historical = [...new Set(row.dispatchedWith ?? [])].sort(compareDispatchCodes).map(dispatchedWithLabel);
   const history = historical.length ? `Salió con: ${historical.join(", ")}` : left ? "Courier histórico sin registrar" : "Sin courier de salida comprobado";
-  const call = row.management ? row.management.hasCall ? `Con llamada registrada${row.management.lastCallResult ? ` (${CALL_RESULT[row.management.lastCallResult] ?? row.management.lastCallResult})` : ""}` : "Sin llamadas registradas" : "Historial de llamadas no disponible";
+  const call = row.management ? row.management.hasCall ? `Con llamada de gestión de entrega${row.management.lastCallResult ? ` (${CALL_RESULT[row.management.lastCallResult] ?? row.management.lastCallResult})` : ""}` : "Sin llamadas de gestión de entrega" : "Historial de llamadas no disponible";
   const extra = [
     history, `Courier actual: ${courierLabel(row.courier, row.courierDetail)}`, `Custodia: ${CUSTODY[row.ops?.custody ?? ""] ?? "sin confirmar"}`, call,
     cls.courier ? `Recojo: ${LIMA_COURIER_CARDS.find((card) => card.key === cls.courier)!.label}` : null,

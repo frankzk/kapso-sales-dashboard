@@ -6606,14 +6606,22 @@ porque la merma no se automatiza (principio 11).
 **Revisión con Daysi (18-11-2026).** Sustituye la definición anterior de
 «Nuevos» y la separación entre «Sacar a reparto» y «No entregados»:
 
-- «Nuevos» es primera salida pendiente, sin llamadas registradas, sin acuerdo
-  de reprogramación y sin guía viva de courier externo. Una guía de Aliclik
-  (incluido AUTOECOM), Swayp o GF Courier lo saca de Nuevos: con día pendiente
-  va a Programados y sin día, a Con el courier. No implica que ya salió.
+- «Nuevos» es primera salida pendiente, sin llamadas de gestión de entrega ni
+  acuerdo de reprogramación. **Corrección explícita del owner (18-11-2026,
+  revisión de los 28 de GF):** la guía GF creada automáticamente no lo saca
+  de Nuevos; conserva su guía y su día dentro de Nuevos. Se comprueba el origen
+  de la guía viva concreta en su último hecho `guide_registered`, cuyo motivo
+  es «Guía GF automática: al entrar a Por generar rótulo.». No basta que su
+  courier sea GF o que una guía anterior fuera automática. La excepción es
+  para la guía que aún no salió ni se recogió, sin otra guía externa que la
+  bloquee. Una guía de Aliclik (incluido AUTOECOM), Swayp o una guía GF manual
+  sigue sacándolo de Nuevos: con día pendiente va a Programados y sin día,
+  a Con el courier. Crear una guía no prueba salida física.
 - **Criterios confirmados por el owner (18-11-2026):** un rótulo interno de
   Grupo GF (`propio`) o «por definir» no excluye de Nuevos mientras no haya
   salida comprobada, llamadas ni acuerdo de reprogramación. Crear la guía
-  externa sí lo excluye. Dentro de Con el courier se distinguen **Guía creada,
+  externa sí lo excluye, salvo la GF automática descrita arriba. Dentro de Con
+  el courier se distinguen **Guía creada,
   pendiente de recojo** y **Recogido / en ruta**, con cifras que suman el
   bloque y filtran sus pedidos. La custodia registrada se muestra por separado:
   crear guía o asignar motorizado no demuestra que el courier tenga el paquete;
@@ -6632,6 +6640,11 @@ porque la merma no se automatiza (principio 11).
 - «Sin llamadas» usa hechos de confirmación, Repro Lima, Repro Provincia,
   Leads vinculados al mismo pedido y telefonía real. Una prueba de voz,
   una cola sin marcar, un mensaje automático o «sin contacto» no es llamada.
+  Solo se cuentan las llamadas desde la creación del pedido en la tienda
+  (`order_created_at`), inclusive. Las anteriores se conservan en su historial
+  comercial y no cuentan como gestión de entrega, cualquiera que sea la fuente.
+  Las fechas se comparan como instantes, con su zona horaria. Sin una fecha de
+  creación válida no se descarta una llamada comprobada por esta regla.
   La lectura fallida no se interpreta como historial vacío.
 - **Varios couriers:** decisión explícita del owner: marcar para revisión y
   posible cierre, **sin anular automáticamente** venta ni guía. Se cuentan

@@ -28,6 +28,26 @@ describe("clasificación acordada con Daysi", () => {
     expect(classify(r).step).toBe("con_courier");
     expect(classify({ ...r, scheduledOn: "2026-11-19" }).step).toBe("programados");
   });
+  it("la guía GF automática conserva Nuevo con su día y documento; gestión, acuerdo, otros couriers y salidas siguen excluyéndolo", () => {
+    const r = row({ stage: "preparacion", substage: "por_armar", courier: "gf_courier", courierPickup: { courier: "gf_courier", date: "2026-11-19" },
+      ops: { autoGfGuide: true, liveCouriers: ["gf_courier"], custody: "empresa", reportedStatus: "CREATED:TO_PREPARE", courierDelivered: null, lastGfBox: null } });
+    expect(classify(r)).toMatchObject({ step: "nuevos", agenda: "manana", agendaDay: "2026-11-19", guide: true });
+    expect(limaDetailMatches(r, classify(r), "auto-gf-guide")).toBe(true);
+    expect(classify({ ...r, courierPickup: null })).toMatchObject({ step: "nuevos", guide: true });
+    expect(classify({ ...r, ops: { ...r.ops!, autoGfGuide: false } }).step).toBe("programados");
+    expect(classify({ ...r, management: { ...r.management!, hasCall: true, lastCallAt: "2026-11-18T16:00:00Z" } }).step).toBe("programados");
+    expect(classify(r, [{ orderId: r.orderId, list: "programados", agreement: { agreedOn: "2026-11-19" } }]).step).toBe("programados");
+    expect(classify({ ...r, ops: { ...r.ops!, liveCouriers: ["gf_courier", "aliclik"] } }).step).toBe("programados");
+    expect(classify({ ...r, courierPickup: { courier: "aliclik", date: "2026-11-19" } }).step).toBe("programados");
+    expect(classify({ ...r, hasPriorDispatch: true, attempts: 1 }).step).toBe("programados");
+    expect(classify(r, [{ orderId: r.orderId, list: "cerrados" }]).step).toBe("por_cerrar");
+    expect(limaSituations([r], new Map([[r.orderId, classify(r)]]), "nuevos", TODAY)[0]?.title).toContain("guía GF automática");
+  });
+  it("una llamada de caso anterior a crear el pedido tampoco bloquea Nuevos", () => {
+    const r = row();
+    expect(classify(r, [{ orderId: r.orderId, list: "por_decidir", lastCall: { at: "2026-11-18T14:59:59Z" } }]).step).toBe("nuevos");
+    expect(classify(r, [{ orderId: r.orderId, list: "por_decidir", lastCall: { at: r.createdAt! } }]).step).toBe("por_sacar");
+  });
   it.each(["propio", "por_definir"])("el rótulo interno %s permite Nuevos solo mientras siga sin gestionar y sin salida", (courier) => {
     const r = row({ stage: "por_despachar", substage: "listo_para_asignar", courier, ops: { liveCouriers: [courier], custody: "empresa", reportedStatus: null, courierDelivered: null, lastGfBox: null } });
     expect(classify(r)).toMatchObject({ step: "nuevos", guide: true });

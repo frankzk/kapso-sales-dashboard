@@ -733,6 +733,51 @@ describe("detalle de cada bloque de Lima", () => {
     await expect(loadLimaPending(broken.admin, { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("historial no disponible");
   });
 
+  it("las llamadas anteriores a crear el pedido no son gestión de entrega, cualquiera que sea su fuente", async () => {
+    const before = "2026-11-18T14:59:59Z";
+    const created = "2026-11-18T15:00:00Z";
+    const tables: Record<string, DBRow[]> = {
+      order_events: [{ id: "e", order_id: "o1", kind: "call", occurred_at: before }],
+      lima_repro_calls: [{ id: "r", order_id: "o2", channel: "llamada", occurred_at: before }],
+      voice_calls: [{ id: "v", order_id: "o3", mode: "real", dialed_at: before, started_at: "2026-11-18T15:00:01Z" }],
+      anura_calls: [{ id: "a", order_id: "o4", mode: "pedido", status: "no_contestada", requested_at: before, started_at: before }],
+      leads: [{ id: "l", order_id: "o5" }],
+      lead_calls: [{ id: "lc", lead_id: "l", kind: "call", occurred_at: before }],
+      shipment_calls: [{ id: "sc", shipment_id: "s", kind: "call", occurred_at: before }],
+    };
+    const db = database(Array.from({ length: 6 }, (_, i) => master(i + 1, { order_created_at: created })), false, {
+      shipments: [{ id: "s", order_id: "o6", courier: "tanders", delivery_status: "anulado" }], tables,
+    });
+    const scope = { userId: "u", storeIds: new Set(["a"]) };
+    const first = await loadLimaPending(db.admin, scope);
+    expect(first.every((r) => r.management?.hasCall === false && r.management.lastCallAt === null)).toBe(true);
+    // La misma hora en Lima cuenta, y no se borró la llamada comercial previa.
+    tables.lead_calls!.push({ id: "lc2", lead_id: "l", kind: "call", occurred_at: "2026-11-18T10:00:00-05:00", new_status: "confirmado" });
+    const later = await loadLimaPending(db.admin, scope);
+    expect(later.find((r) => r.orderId === "o5")?.management).toMatchObject({ hasCall: true, lastCallResult: "confirmado" });
+    expect(tables.lead_calls).toHaveLength(2);
+  });
+
+  it("comprueba el origen de la guía GF viva, sin heredar una automática vieja ni una manual posterior", async () => {
+    const autoReason = "Guía GF automática: al entrar a Por generar rótulo.";
+    const source = Array.from({ length: 7 }, (_, i) => master(i + 1));
+    const shipments: DBRow[] = source.map((m, i) => ({ id: `s${i}`, order_id: m.order_id, courier: "gf_courier", guide_code: `GF-${i + 1}`,
+      delivery_status: "pendiente", custody_state: "empresa", created_at: "2026-11-18T15:00:00Z" }));
+    shipments[3]!.custody_state = "courier";
+    shipments[4]!.out_for_delivery_at = "2026-11-18T16:00:00Z";
+    shipments.push({ id: "old", order_id: "o2", courier: "gf_courier", guide_code: "OLD-2", delivery_status: "anulado" });
+    const events = [1, 3, 4, 5, 6, 7].map((i) => ({ id: `e${i}`, order_id: `o${i}`, courier: "gf_courier", guide_code: `GF-${i}`, kind: "guide_registered", reason: autoReason, occurred_at: "2026-11-18T15:00:00Z" }));
+    events.push({ id: "old", order_id: "o2", courier: "gf_courier", guide_code: "OLD-2", kind: "guide_registered", reason: autoReason, occurred_at: "2026-11-18T15:00:00Z" });
+    events.push({ id: "manual", order_id: "o3", courier: "gf_courier", guide_code: "GF-3", kind: "guide_registered", reason: "Creada a mano", occurred_at: "2026-11-18T16:00:00Z" });
+    // Una segunda guía GF manual vigente también bloquea la excepción.
+    shipments.push({ id: "s6b", order_id: "o6", courier: "gf_courier", guide_code: "MANUAL-6", delivery_status: "pendiente", custody_state: "empresa" });
+    const db = database(source, false, { shipments, tables: { order_events: events } });
+    const rows = await loadLimaPending(db.admin, { userId: "u", storeIds: new Set(["a"]) });
+    expect(rows.filter((r) => r.ops?.autoGfGuide).map((r) => r.orderId)).toEqual(["o1", "o7"]);
+    const broken = database(source, false, { shipments, tableErrors: { order_events: "origen no disponible" } });
+    await expect(loadLimaPending(broken.admin, { userId: "u", storeIds: new Set(["a"]) })).rejects.toThrow("origen no disponible");
+  });
+
   it("la URL recorta la lista, mantiene el desglose del bloque y respeta los demás filtros", () => {
     const data = { today: TODAY, nowIso: "2026-10-28T15:00:00Z", cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
     const pending = [
