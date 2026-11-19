@@ -42,8 +42,11 @@ export function startDispatchCamera(video: HTMLVideoElement, events: {
     try {
       const { BrowserQRCodeReader } = await import("@zxing/browser");
       if (stopped) return;
+      // 1280×720 ideal (19-11-2026): con la resolución por defecto (640×480 en
+      // muchos teléfonos) un QR chico o lejano no se lee; el navegador baja si
+      // la cámara no da más.
       const acquired = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } }, audio: false,
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false,
       });
       if (stopped) {
         acquired.getTracks().forEach((track) => track.stop());
@@ -72,5 +75,26 @@ export function startDispatchCamera(video: HTMLVideoElement, events: {
     }
   })();
 
-  return { stop };
+  /** La linterna del teléfono (19-11-2026, la luz del almacén): solo si la cámara la tiene. */
+  const torchTrack = () => stream?.getVideoTracks()[0] ?? null;
+  const torchSupported = () => {
+    try {
+      const caps = torchTrack()?.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
+      return Boolean(caps?.torch);
+    } catch {
+      return false;
+    }
+  };
+  const setTorch = async (on: boolean): Promise<boolean> => {
+    const track = torchTrack();
+    if (!track) return false;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on } as MediaTrackConstraintSet] });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  return { stop, torchSupported, setTorch };
 }

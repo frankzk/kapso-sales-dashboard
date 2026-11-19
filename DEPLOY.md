@@ -85,6 +85,14 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 19-11-2026 · Devoluciones: el resultado en grande, la voz y la linterna (sin migración, MOM §9.4)
+
+Sin migración ni variables. En la cámara de Almacén → Devoluciones cada lectura sale en grande encima del visor
+(RECIBIDA, REPETIDA, ERROR), el marco toma su color y, con «Voz: sí», el teléfono la dice en voz alta. Todas las cámaras
+de escaneo ofrecen «Linterna» si el teléfono la tiene y piden 1280×720.
+
+Verificar: en Devoluciones, una caja nueva muestra «RECIBIDA» en verde sobre el visor y se oye «Recibida».
+
 ### 19-11-2026 · Devoluciones: el escáner recibe las cajas de Swayp (sin migración, MOM §9.4)
 
 Sin migración ni variables. El escáner de Almacén → Devoluciones rechazaba las cajas de Swayp (`fenix`) con «no es de

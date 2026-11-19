@@ -331,6 +331,7 @@ export function ReturnsReception({ initialData, nav }: {
         ]}
         status={last ? { ok: last.line.tone === "ok", warn: last.line.tone === "warn", tone: last.line.tone, text: last.line.headline, detail: last.line.detail } : null}
         feedback={last ? { key: last.id, tone: last.line.tone } : null}
+        bigVerdict
       />
     </div>
   );

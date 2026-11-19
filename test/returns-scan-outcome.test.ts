@@ -210,7 +210,7 @@ describe("la cámara, compatible con quien ya la usa", () => {
 
   it("la vibración extra es de mejor esfuerzo y no vuelve a vibrar en cada render", () => {
     expect(camera).toContain('if (typeof window.navigator.vibrate === "function") window.navigator.vibrate(pattern);');
-    expect(camera).toContain("}, [open, feedbackKey, feedbackTone]);");
+    expect(camera).toContain("}, [open, feedbackKey, feedbackTone, bigVerdict, voiceOn]);");
     // Una vez por resultado: reabrir la cámara con el mismo último resultado no vuelve a vibrar.
     expect(camera).toContain("if (feedbackKey === feedbackSeen.current) return;");
     expect(camera).toContain("feedbackSeen.current = feedbackKey;");

@@ -5040,6 +5040,18 @@ sin tope de antigüedad. Reglas:
         sello no se pisa; si no, quien la tiene en la mano la sella. Cuenta en
         la tanda como Swayp. Aliclik sigue con su propia vía de sellado y su
         cola de recuperación.
+      - **Para quien no ve bien la pantalla** (owner, 19-11-2026: «mi tía
+        escanea y no logra ver bien, se le dificulta el escaneo»). Con cada
+        lectura, encima del visor sale en grande **RECIBIDA**, **REPETIDA**,
+        **ERROR** o **AVISO** con su color, el marco del visor toma ese color
+        y el aviso de arriba empieza con la misma palabra. Con **«Voz: sí»**
+        (prendida si nunca se tocó; se recuerda en el teléfono) el teléfono la
+        dice: «Recibida», «Repetida, no suma», «Error, mira la pantalla». Si la
+        cámara tiene linterna, sale **«Linterna»** junto a «Reiniciar cámara»,
+        y la cámara pide 1280×720 para leer un QR chico o lejano
+        (`lib/scan-voice.ts`, `bigVerdict` en `components/dispatch-camera.tsx`;
+        las demás pantallas de escaneo no cambian salvo la linterna y la
+        resolución).
       - **Shalom, en la misma pantalla.** Un solo escáner para los dos
         couriers: sirve el QR de nuestra banda del rótulo, el nº de guía Shalom
         original o el nº de pedido. La etiqueta de retorno de Shalom trae una
