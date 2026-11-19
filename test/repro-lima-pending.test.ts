@@ -757,6 +757,30 @@ describe("detalle de cada bloque de Lima", () => {
     } finally { nav.search = ""; }
   });
 
+  it("el filtro de recojo separa la guía creada de la ruta y conserva el total del bloque", () => {
+    const data = { today: TODAY, nowIso: `${TODAY}T15:00:00Z`, cutoffLabel: "12:00", stores: [{ id: "a", name: "Kenku" }], rows: [], me: "u" } as unknown as ReproLimaData;
+    const ops = { liveCouriers: ["gf_courier"], reportedStatus: null, courierDelivered: null, lastGfBox: null };
+    const pending = [
+      row({ orderId: "waiting", orderName: "#PORRECOGER", stage: "por_despachar", substage: "listo_para_recojo", courier: "gf_courier", ops: { ...ops, custody: "empresa" } }),
+      row({ orderId: "picked", orderName: "#RECOGIDO", stage: "en_curso", substage: "en_reparto", courier: "gf_courier", dispatchedAt: `${TODAY}T14:00:00Z`, ops: { ...ops, custody: "courier" } }),
+    ];
+    try {
+      nav.search = "atencion=con_courier&detalle=pickup-pending";
+      const waiting = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(waiting).toContain("#PORRECOGER");
+      expect(waiting).not.toContain("#RECOGIDO");
+      expect(waiting).toContain("Guía creada, pendiente de recojo");
+      expect(waiting).toContain("Custodia: En la empresa");
+      expect(waiting).toMatch(/Dentro de Con el courier.*?2 pedidos/);
+      nav.search = "atencion=con_courier&detalle=pickup-done";
+      const picked = renderToStaticMarkup(createElement(ReproLimaBoard, { data, pending }));
+      expect(picked).toContain("#RECOGIDO");
+      expect(picked).not.toContain("#PORRECOGER");
+      expect(picked).toContain("Recogido / en ruta");
+      expect(picked).toContain("Custodia: Con el courier");
+    } finally { nav.search = ""; }
+  });
+
   it("lee el historial de couriers y de documentos sin confundirlos con la salida actual", async () => {
     const db = database([master(1, { dispatched_with: ["gf:Roy", "tanders"] })], false, {
       shipments: [

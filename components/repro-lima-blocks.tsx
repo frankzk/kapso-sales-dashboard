@@ -112,7 +112,7 @@ const INSIDE: Partial<Record<LimaStep, { keys: readonly LimaBoardKey[]; note: (c
     note: (c) => {
       const antes = c.courier.en_ruta - c.enRutaHoy;
       const ruta = [c.enRutaHoy ? `${fmt(c.enRutaHoy)} hoy` : null, antes ? `${fmt(antes)} anterior` : null].filter(Boolean).join(" · ");
-      const parts = [ruta ? `En ruta: ${ruta}` : null, c.courier.guia_creada ? `${fmt(c.courier.guia_creada)} con guía` : null].filter(Boolean);
+      const parts = [ruta ? `Recogido / en ruta: ${ruta}` : null, c.courier.guia_creada ? `${fmt(c.courier.guia_creada)} pendientes de recojo` : null].filter(Boolean);
       return parts.length ? parts.join(" · ") : null;
     },
   },

@@ -1,6 +1,6 @@
 import { compareDispatchCodes, dispatchedWithLabel } from "@/lib/dispatched-with";
 import { courierLabel, limaHasDeparture, limaIsNew, type LimaPendingOrder } from "@/lib/repro-lima-pending";
-import { agendaDayText, courierStatusText, type LimaRowClass, type LimaStep } from "@/lib/repro-lima-blocks";
+import { agendaDayText, courierStatusText, LIMA_COURIER_CARDS, type LimaRowClass, type LimaStep } from "@/lib/repro-lima-blocks";
 import { limaDay } from "@/lib/dispatch-day";
 
 export interface LimaSituation { key: string; title: string; detail: string; count: number }
@@ -26,7 +26,7 @@ function signature(row: LimaPendingOrder, cls: LimaRowClass): unknown[] {
     row.management?.hasCall ?? null, row.management?.lastCallResult ?? null, cls.nextCallAt ?? null,
     cls.awaitingCancel, cls.retry, row.ops?.guides?.annulled ?? 0, row.ops?.guides?.returned ?? 0,
     row.ops?.guides?.total ?? 0, limaDay(row.lastDepartureAt ?? row.dispatchedAt), limaDay(row.management?.lastCallAt ?? null),
-    row.gfAssigned?.rider ?? null, row.gfAssigned?.day ?? null,
+    row.gfAssigned?.rider ?? null, row.gfAssigned?.day ?? null, cls.courier,
   ];
 }
 
@@ -36,7 +36,8 @@ export function limaSituationKey(row: LimaPendingOrder, cls: LimaRowClass): stri
 
 export function isLimaSituationKey(key: string | null): boolean {
   if (!key?.startsWith("situation:") || key.length > 6000) return false;
-  try { const parts = JSON.parse(key.slice(10)); return Array.isArray(parts) && parts.length === 23; }
+  // Los enlaces anteriores siguen siendo válidos y avisan si su situación cambió.
+  try { const parts = JSON.parse(key.slice(10)); return Array.isArray(parts) && (parts.length === 23 || parts.length === 24); }
   catch { return false; }
 }
 
@@ -51,6 +52,7 @@ export function limaSituation(row: LimaPendingOrder, cls: LimaRowClass, today: s
   const call = row.management ? row.management.hasCall ? `Con llamada registrada${row.management.lastCallResult ? ` (${CALL_RESULT[row.management.lastCallResult] ?? row.management.lastCallResult})` : ""}` : "Sin llamadas registradas" : "Historial de llamadas no disponible";
   const extra = [
     history, `Courier actual: ${courierLabel(row.courier, row.courierDetail)}`, `Custodia: ${CUSTODY[row.ops?.custody ?? ""] ?? "sin confirmar"}`, call,
+    cls.courier ? `Recojo: ${LIMA_COURIER_CARDS.find((card) => card.key === cls.courier)!.label}` : null,
     row.ops?.reportedStatus ? `Reporte: ${courierStatusText(row.ops.reportedStatus) ?? row.ops.reportedStatus}` : null,
     cls.routeDay ? `Ruta: ${cls.routeDay}` : null,
     cls.nextCallAt ? `Próxima llamada: ${new Date(cls.nextCallAt).toLocaleString("es-PE", { timeZone: "America/Lima", dateStyle: "short", timeStyle: "short" })}` : null,

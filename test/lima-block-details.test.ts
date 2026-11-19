@@ -29,14 +29,31 @@ describe("detalle operativo de los ocho bloques", () => {
       const rows = [row(), row({ orderId: "b", attempts: 2, hasPriorDispatch: true, dispatchedWith: ["gf:Roy", "aliclik", "aliclik"], programmedFor: "2026-11-19" }), row({ orderId: "c", stage: "en_curso", substage: "por_reprogramar_lima" })];
       const classes = new Map(rows.map((r) => [r.orderId, { ...cls(r), step }]));
       const groups = limaBlockDetails(rows, classes, step);
-      for (const index of [0, 1]) expect(groups[index]!.items.reduce((sum, item) => sum + item.count, 0)).toBe(3);
-      for (const index of [2, 3]) expect(groups[index]!.items.slice(0, 2).reduce((sum, item) => sum + item.count, 0)).toBe(3);
+      for (const title of ["Salidas a reparto", "Intentos de entrega registrados"]) expect(groups.find((g) => g.title === title)!.items.reduce((sum, item) => sum + item.count, 0)).toBe(3);
+      for (const title of ["Guías y rótulos", "Programación actual"]) expect(groups.find((g) => g.title === title)!.items.slice(0, 2).reduce((sum, item) => sum + item.count, 0)).toBe(3);
       for (const group of groups) for (const item of group.items) {
         expect(item.count).toBe(rows.filter((r) => limaDetailMatches(r, classes.get(r.orderId)!, item.key)).length);
       }
       expect(groups.find((g) => g.title === "Salió con (historial)")?.items.find((i) => i.label === "Aliclik")?.count).toBe(1);
-      expect(limaBlockDetails(rows.slice(1, 2), classes, step)[0]!.items.find((i) => i.key === "left")?.count).toBe(1);
+      expect(limaBlockDetails(rows.slice(1, 2), classes, step).find((g) => g.title === "Salidas a reparto")!.items.find((i) => i.key === "left")?.count).toBe(1);
     }
+  });
+
+  it("separa guía pendiente de recojo y paquete en ruta sin deducir la custodia de la guía", () => {
+    const facts = { liveCouriers: ["gf_courier"], reportedStatus: null, courierDelivered: null, lastGfBox: null };
+    const rows = [
+      row({ orderId: "pending", stage: "por_despachar", substage: "listo_para_recojo", courier: "gf_courier", ops: { ...facts, custody: "empresa" } }),
+      row({ orderId: "unknown", stage: "por_despachar", substage: "listo_para_recojo", courier: "gf_courier", ops: { ...facts, custody: null } }),
+      row({ orderId: "picked", stage: "en_curso", substage: "en_reparto", courier: "gf_courier", dispatchedAt: "2026-11-18T15:00:00Z", ops: { ...facts, custody: "courier" } }),
+    ];
+    const classes = classifyLimaRows(rows, [], "2026-11-18");
+    const groups = limaBlockDetails(rows, classes, "con_courier");
+    expect(groups[0]).toMatchObject({ title: "Estado del recojo", items: [{ key: "pickup-pending", count: 2 }, { key: "pickup-done", count: 1 }] });
+    expect(groups[0]!.items.reduce((sum, i) => sum + i.count, 0)).toBe(3);
+    expect(rows.filter((r) => limaDetailMatches(r, classes.get(r.orderId)!, "pickup-pending")).map((r) => r.orderId)).toEqual(["pending", "unknown"]);
+    expect(rows.filter((r) => limaDetailMatches(r, classes.get(r.orderId)!, "pickup-done")).map((r) => r.orderId)).toEqual(["picked"]);
+    expect(limaDetailMatches(rows[1]!, classes.get("unknown")!, "custody:empresa")).toBe(false);
+    expect(limaDetailMatches(rows[1]!, classes.get("unknown")!, "custody-unknown")).toBe(true);
   });
 
   it("cuenta una vez por pedido aunque tenga varias guías y conserva el documento anulado del caso por cerrar", () => {

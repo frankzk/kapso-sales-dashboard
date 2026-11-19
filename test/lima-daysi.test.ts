@@ -28,6 +28,15 @@ describe("clasificación acordada con Daysi", () => {
     expect(classify(r).step).toBe("con_courier");
     expect(classify({ ...r, scheduledOn: "2026-11-19" }).step).toBe("programados");
   });
+  it.each(["propio", "por_definir"])("el rótulo interno %s permite Nuevos solo mientras siga sin gestionar y sin salida", (courier) => {
+    const r = row({ stage: "por_despachar", substage: "listo_para_asignar", courier, ops: { liveCouriers: [courier], custody: "empresa", reportedStatus: null, courierDelivered: null, lastGfBox: null } });
+    expect(classify(r)).toMatchObject({ step: "nuevos", guide: true });
+    expect(classify({ ...r, management: { ...r.management!, hasCall: true } }).step).toBe("por_sacar");
+    expect(classify({ ...r, hasPriorDispatch: true, attempts: 1, dispatchedWith: ["gf:Roy"] }).step).toBe("no_entregados");
+    expect(classify(r, [{ orderId: r.orderId, list: "programados", agreement: { agreedOn: "2026-11-19" } }]).step).toBe("programados");
+    const external = { ...r, ops: { ...r.ops!, liveCouriers: [courier, "aliclik"] } };
+    expect(classify(external).step).toBe("con_courier");
+  });
   it.each([1, 2, 3])("%s intentos previos sin nuevo día son No entregados, incluso en Preparación", (attempts) => {
     const r = row({ attempts, dispatchedWith: ["gf:Roy"] });
     expect(classify(r).step).toBe("no_entregados");
@@ -81,6 +90,8 @@ describe("situaciones completas que particionan cada bloque", () => {
     const r = row(); const c = classify(r); const key = limaSituationKey(r, c);
     expect(limaSituationKey(r, { ...c, guide: true })).not.toBe(key);
     expect(limaSituationKey(r, { ...c, agendaDay: "2026-11-19" })).not.toBe(key);
+    expect(limaSituationKey(r, { ...c, courier: "guia_creada" })).not.toBe(limaSituationKey(r, { ...c, courier: "en_ruta" }));
+    expect(isLimaSituationKey(`situation:${JSON.stringify(JSON.parse(key.slice(10)).slice(0, 23))}`)).toBe(true);
     expect(isLimaSituationKey("situation:[]")).toBe(false);
     const assigned = row({ gfAssigned: { rider: "Alexis", day: TODAY } });
     const [s] = limaSituations([assigned], new Map([[assigned.orderId, classify(assigned)]]), "nuevos", TODAY);

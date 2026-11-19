@@ -149,7 +149,7 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
     key: "nuevos",
     label: "Nuevos",
     // Owner, 17-11-2026: «queremos un apartado que incluya esos nuevos aquí en el flujo del día».
-    hint: "Primera salida pendiente, sin llamadas registradas, sin acuerdo de reprogramación y sin guía viva de courier externo. Al crear guía sale de Nuevos. Lo corregido de provincia a Lima sin día se gestiona en Hoy, sin inventar fecha de despacho.",
+    hint: "Primera salida pendiente, sin llamadas registradas, sin acuerdo de reprogramación y sin guía vigente de courier externo. Puede tener rótulo interno de Grupo GF o por definir. Al crear una guía externa sale de Nuevos. Lo corregido de provincia a Lima sin día se gestiona en Hoy, sin inventar fecha de despacho.",
     empty: "No hay pedidos nuevos por salir con estos filtros.",
   },
   {
@@ -161,7 +161,7 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
   {
     key: "con_courier",
     label: "Con el courier",
-    hint: "Ya salieron con un courier (en ruta) o tienen su guía sin un día de recojo por delante. Solo seguimiento: aquí no se opera al courier. Lo que el courier devuelve está en No entregados.",
+    hint: "Distingue «Guía creada, pendiente de recojo» de «Recogido / en ruta». Una guía creada no prueba que el courier tenga el paquete: la custodia se muestra por separado. Con día pendiente de recojo está en Programados; lo que el courier devuelve está en No entregados.",
     empty: "Ningún courier lleva pedidos con estos filtros.",
   },
   {
@@ -302,13 +302,13 @@ export const LIMA_SUB_FILTERS: Record<LimaSubFilter, LimaCard<LimaSubFilter> & {
 export const LIMA_COURIER_CARDS: readonly LimaCard<LimaCourierState>[] = [
   {
     key: "guia_creada",
-    label: "Guía creada",
-    hint: "Con la guía de un courier (GF Courier, Aliclik, Swayp…) que todavía no lo recoge.",
+    label: "Guía creada, pendiente de recojo",
+    hint: "Tiene guía de courier externo, pero todavía espera el recojo. Revisa la custodia registrada; si falta, se muestra sin confirmar.",
     empty: "No hay guías creadas sin recoger con estos filtros.",
   },
   {
     key: "en_ruta",
-    label: "En ruta",
+    label: "Recogido / en ruta",
     hint: "El courier ya lo tiene y la ruta es de hoy o del día de reparto anterior: recibido, en tránsito o en reparto. Si pasa un día de reparto entero sin reporte, va a No entregados → «Sin reporte de la ruta». Cada fila dice el día de su ruta.",
     empty: "Ningún courier lleva pedidos con estos filtros.",
   },

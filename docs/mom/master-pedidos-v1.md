@@ -6610,6 +6610,15 @@ porque la merma no se automatiza (principio 11).
   de reprogramación y sin guía viva de courier externo. Una guía de Aliclik
   (incluido AUTOECOM), Swayp o GF Courier lo saca de Nuevos: con día pendiente
   va a Programados y sin día, a Con el courier. No implica que ya salió.
+- **Criterios confirmados por el owner (18-11-2026):** un rótulo interno de
+  Grupo GF (`propio`) o «por definir» no excluye de Nuevos mientras no haya
+  salida comprobada, llamadas ni acuerdo de reprogramación. Crear la guía
+  externa sí lo excluye. Dentro de Con el courier se distinguen **Guía creada,
+  pendiente de recojo** y **Recogido / en ruta**, con cifras que suman el
+  bloque y filtran sus pedidos. La custodia registrada se muestra por separado:
+  crear guía o asignar motorizado no demuestra que el courier tenga el paquete;
+  sin dato se dice «Custodia sin confirmar». Las situaciones completas también
+  distinguen ambos estados de recojo.
 - Lo que ya salió y espera un nuevo intento sin día vuelve a No entregados,
   aunque el Master haya vuelto a Preparación/Por despachar. Las novedades
   vigentes, las llamadas aplazadas y los cierres mantienen su precedencia.
