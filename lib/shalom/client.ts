@@ -280,10 +280,10 @@ export class ShalomClient {
   /** Resuelve un documento a una persona ya registrada. 404 = no existe. */
   async findPerson(document: string, type: string): Promise<ShalomPerson | null> {
     try {
-      return await this.request<ShalomPerson>(
+      return await this.readWithRetry(() => this.request<ShalomPerson>(
         `/v1/persons/search?document=${encodeURIComponent(document)}&type=${encodeURIComponent(type)}`,
         { shalomAuth: true },
-      );
+      ));
     } catch (err) {
       // Que no exista es información, no un fallo: se registra al crear la orden.
       if (err instanceof ShalomApiError && err.status === 404) return null;
@@ -297,11 +297,31 @@ export class ShalomClient {
     product_id?: number;
     dimensions?: { weight_kg: number; height_m: number; length_m: number; width_m: number };
   }): Promise<ShalomTariff> {
-    return this.request<ShalomTariff>("/v1/tariff/calculate", {
+    // Cotizar no compromete nada: es una lectura aunque vaya por POST.
+    return this.readWithRetry(() => this.request<ShalomTariff>("/v1/tariff/calculate", {
       method: "POST",
       body,
       shalomAuth: true,
-    });
+    }));
+  }
+
+  /**
+   * Una LECTURA con el mismo reintento acotado que la sesión: solo un 502, 503
+   * o 504 de paso del proveedor, a los 2 s y a los 5 s (`shalomRetryDelay`).
+   * El 19-11-2026 «Buscar» el DNI de #KP201823 mostró el 502 «error temporal del
+   * upstream» diciendo «ya se reintentó solo» sin haberlo hecho. Nunca se usa
+   * para crear la guía (`createOrder`): ahí un reintento despacharía dos veces.
+   */
+  private async readWithRetry<T>(read: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await read();
+      } catch (err) {
+        const wait = shalomRetryDelay(err, attempt);
+        if (wait === null) throw err;
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
   }
 
   // ── Órdenes ───────────────────────────────────────────────────────────────
