@@ -20695,6 +20695,11 @@ la guía**, desarma la caja y el producto vuelve a su stock.
   `courier_report`. Después se puede crear la siguiente guía (`-S2`).
 - Solo la primera entrega de cada evento escribe la línea: un reenvío choca con el `X-GF-Event-Id` único.
 - Las líneas las arma `lib/gf-webhook-note.ts` (pura, con prueba); sin motivo no hay línea.
+- En la Actividad de la ficha el motivo va **junto a su cambio de estado** (owner, 19-11-2026: «¿estas dos no deberían
+  ir juntas?»): «Estado informado por GF Courier → Anulado / GF Courier: anulado · Anulada. / GF Courier: sin
+  cobertura — por Frankz Kastner (GF).». Se une el `courier_report` de GF al `courier_status` de la misma guía a 2
+  minutos o menos, el más cercano, uno por estado (`mergeGfStatusReasons`, `lib/order-timeline-fact.ts`). Un motivo
+  sin cambio de estado cerca (una fecha nueva) sigue en su fila. Solo la vista: los hechos guardados no cambian.
 
 **Etapa dentro de GF y cambio de fecha sin anular (owner, 17-11-2026).** GF informa dónde está el pedido antes de
 salir, en `status.sub_status` y en `stage`: por preparar (`CREATED:TO_PREPARE`), en preparación (`CREATED:PREPARING`),

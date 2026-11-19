@@ -2779,6 +2779,10 @@ export function OrderDrawer({
                             {eventNoteLabel(t.kind, t.note ?? t.reason, detail.platform)}
                           </p>
                         )}
+                        {/* El motivo de GF que vino en el mismo aviso (19-11-2026, `mergeGfStatusReasons`). */}
+                        {t.extraNote && (
+                          <p className="mt-0.5 max-w-[68ch] text-sm leading-5 text-ink-700">{t.extraNote}</p>
+                        )}
                         {t.commentType && (
                           <p className="mt-1">
                             <Badge>{t.commentType}</Badge>

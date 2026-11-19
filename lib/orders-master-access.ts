@@ -48,7 +48,7 @@ import {
   type OutcomeCounts,
   type PriorOrderSnapshot,
 } from "@/lib/order-confirmation-brief";
-import { courierEventName } from "@/lib/order-timeline-fact";
+import { courierEventName, mergeGfStatusReasons } from "@/lib/order-timeline-fact";
 import { countDoorRejections, type DoorRejectionShipment } from "@/lib/door-rejection";
 import { parseLabelLineItems } from "@/lib/labels/line-items";
 import { filledShipmentIds } from "@/lib/shipment-output";
@@ -471,6 +471,12 @@ export interface TimelineEntry {
    * lib/order-comment-photos.ts). Vacío o ausente: no tiene.
    */
   photos?: string[];
+  /**
+   * El motivo que GF Courier mandó en el MISMO aviso que este cambio de estado
+   * («GF Courier: sin cobertura — por Frankz Kastner (GF).»), unido aquí por
+   * `mergeGfStatusReasons` (owner, 19-11-2026). Ausente: no lo trae.
+   */
+  extraNote?: string | null;
 }
 
 /** Lo que hace falta de `lead_calls` para la línea de tiempo del pedido. */
@@ -1255,9 +1261,9 @@ export async function getOrderMasterDetail(
     };
   });
 
-  const timeline = [...fromEvents, ...fromCalls, ...fromLeads]
+  const timeline = mergeGfStatusReasons([...fromEvents, ...fromCalls, ...fromLeads]
     .filter((t) => t.occurredAt)
-    .sort((a, b) => (a.occurredAt < b.occurredAt ? -1 : a.occurredAt > b.occurredAt ? 1 : 0));
+    .sort((a, b) => (a.occurredAt < b.occurredAt ? -1 : a.occurredAt > b.occurredAt ? 1 : 0)));
   const tasks: OrderTaskSummary[] = taskRows.map((task) => ({
     id: task.id,
     kind: task.kind,

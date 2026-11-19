@@ -282,3 +282,41 @@ export function courierEventTitle(entry: Pick<TimelineEntry, "kind" | "courier">
   const name = entry.courierName ?? courierEventName(entry.courier);
   return name ? `${head} ${name}` : null;
 }
+
+/** Segundos entre el cambio de estado y su motivo para leerlos como un solo aviso de GF Courier. */
+export const GF_REASON_WINDOW_SECONDS = 120;
+
+/**
+ * EL ESTADO Y SU MOTIVO, EN UNA SOLA LÍNEA (owner, 19-11-2026: «¿estas dos no
+ * deberían ir juntas?»). Un aviso de GF Courier con motivo deja dos hechos: el
+ * cambio de estado que escribe la relectura (`courier_status`, «GF Courier:
+ * anulado · Anulada.») y su motivo (`courier_report`, «GF Courier: sin
+ * cobertura — por Frankz Kastner (GF).», lib/gf-webhook-note.ts), con
+ * segundos de diferencia. La Actividad los muestra juntos: el motivo pasa a
+ * `extraNote` del cambio de estado de la MISMA guía dentro de
+ * `GF_REASON_WINDOW_SECONDS`, el más cercano, y deja de ser una fila aparte.
+ * Un motivo sin cambio de estado cerca (una fecha nueva, una nota) sigue solo.
+ * Solo la vista: los hechos guardados no cambian. Pura; la línea llega ordenada.
+ */
+export function mergeGfStatusReasons<T extends Pick<TimelineEntry, "id" | "kind" | "courier" | "guideCode" | "occurredAt" | "note"> & { extraNote?: string | null }>(timeline: readonly T[]): T[] {
+  const isGf = (t: T) => (t.courier ?? "").toLowerCase() === "gf_courier" && Boolean(t.guideCode);
+  const statuses = timeline.filter((t) => t.kind === "courier_status" && isGf(t));
+  if (!statuses.length) return [...timeline];
+  const extra = new Map<string, string[]>();
+  const merged = new Set<string>();
+  for (const report of timeline) {
+    if (report.kind !== "courier_report" || !isGf(report) || !report.note?.trim()) continue;
+    const at = Date.parse(report.occurredAt);
+    let best: T | null = null;
+    let bestGap = Infinity;
+    for (const status of statuses) {
+      if (status.guideCode !== report.guideCode || extra.get(status.id)?.length) continue;
+      const gap = Math.abs(Date.parse(status.occurredAt) - at);
+      if (gap <= GF_REASON_WINDOW_SECONDS * 1000 && gap < bestGap) { best = status; bestGap = gap; }
+    }
+    if (!best) continue;
+    extra.set(best.id, [report.note.trim()]);
+    merged.add(report.id);
+  }
+  return timeline.filter((t) => !merged.has(t.id)).map((t) => (extra.has(t.id) ? { ...t, extraNote: extra.get(t.id)!.join(" ") } : t));
+}
