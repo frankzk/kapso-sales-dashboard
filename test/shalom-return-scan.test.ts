@@ -205,7 +205,44 @@ describe("receiveReturnedPackage con una caja de Shalom", () => {
 
   it("las cajas de Aliclik siguen recibiéndose desde el Master", async () => {
     state.courier = "aliclik";
-    expect((await receiveReturnedPackage("92083386")).error).toContain("no es de Tanders, Shalom ni Grupo GF");
+    expect((await receiveReturnedPackage("92083386")).error).toContain("no es de Tanders, Shalom, Swayp ni Grupo GF");
+    expect(writes()).toEqual([]);
+  });
+});
+
+describe("receiveReturnedPackage con una caja de Swayp (19-11-2026, KP205271-S01)", () => {
+  // «Estoy escaneando devoluciones de Swayp»: decía «no es de Tanders, Shalom ni
+  // Grupo GF». Swayp la dio por «Devolución confirmada» (9) y nadie la había
+  // sellado: quien la tiene en la mano la sella, con la regla de Tanders.
+  const SWAYP_DE_VUELTA = { delivery_status: "anulado", custody_state: "retorno", returned_at: null };
+
+  it("se recibe: sella la llegada, custodia devuelto, y cuenta como Swayp", async () => {
+    Object.assign(state, { courier: "fenix", guide: SWAYP_DE_VUELTA });
+    const result = await receiveReturnedPackage("92083386");
+    expect(result.error).toBeUndefined();
+    expect(result.notice).toBe("KP128064-S01 recibida en almacén.");
+    expect(result.reception).toEqual({ outcome: "nueva", courier: "swayp", label: "KP128064-S01" });
+    const [update] = writes();
+    expect(update).toMatchObject({
+      client: "admin", table: "shipments", op: "update",
+      value: { custody_state: "devuelto", pickup_state: "devuelto", returned_source: "manual", returned_by: "persona" },
+    });
+    // Solo si nadie la selló entre la lectura y la escritura.
+    expect(update!.filters).toContainEqual(["is:returned_at", null]);
+  });
+
+  it("si Swayp ya la selló, no se pisa su sello: solo la custodia", async () => {
+    Object.assign(state, { courier: "fenix", guide: { ...SWAYP_DE_VUELTA, returned_at: "2026-11-18T10:00:00Z" } });
+    const result = await receiveReturnedPackage("92083386");
+    expect(result.error).toBeUndefined();
+    const [update] = writes();
+    expect(update!.value).toEqual({ custody_state: "devuelto" });
+  });
+
+  it("dos veces la misma caja es repetida, sin escribir", async () => {
+    Object.assign(state, { courier: "fenix", guide: SWAYP_DE_VUELTA, received: true });
+    const result = await receiveReturnedPackage("92083386");
+    expect(result.reception).toMatchObject({ outcome: "repetida", courier: "swayp" });
     expect(writes()).toEqual([]);
   });
 });

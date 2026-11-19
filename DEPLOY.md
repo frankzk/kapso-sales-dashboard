@@ -85,6 +85,14 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 19-11-2026 · Devoluciones: el escáner recibe las cajas de Swayp (sin migración, MOM §9.4)
+
+Sin migración ni variables. El escáner de Almacén → Devoluciones rechazaba las cajas de Swayp (`fenix`) con «no es de
+Tanders, Shalom ni Grupo GF» (KP205271-S01). Ahora las recibe con la regla de Tanders: sella la llegada si Swayp no lo
+hizo, no pisa su sello si ya lo hizo, y la segunda lectura es repetida.
+
+Verificar: escanear una caja de Swayp devuelta dice «… recibida en almacén.» y suma en la tanda.
+
 ### 19-11-2026 · Generar pedido: el carrito sin talla ni color se frena antes de crear, y Pucallpa en el distrito (sin migración, MOM §37.10 y §38.12)
 
 Sin migración ni variables.
