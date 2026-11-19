@@ -85,6 +85,19 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 19-11-2026 · Generar pedido: el carrito sin talla ni color se frena antes de crear, y Pucallpa en el distrito (sin migración, MOM §37.10 y §38.12)
+
+Sin migración ni variables.
+- El formulario abandonado de COD Core con `variante: "sin elegir"` (#AUR901173, #AUR900973) llega a «Generar pedido»
+  con el aviso «Falta elegir la variante…» y «Elegir variante»; mientras falte, no se genera. El servidor consulta en
+  WooCommerce las líneas que van por SKU y frena el SKU de un producto con variaciones antes de crear nada.
+- El buscador de distritos encuentra «Pucallpa» (Callería, Manantay o Yarinacocha) y otras ciudades que no se llaman
+  como su distrito (Tingo María, Puerto Maldonado, Cerro de Pasco, Talara, La Merced, Quillabamba, Aguaytía, Atalaya).
+  Callería, con tilde.
+
+Verificar: un lead de COD Core con «sin elegir» muestra el aviso y el botón; en el distrito, «Pucallpa» ofrece sus tres
+distritos.
+
 ### 19-11-2026 · Shalom: buscar el DNI y cotizar reintentan el 5xx de paso (sin migración)
 
 Sin migración ni variables. «Buscar» el documento del destinatario (`/v1/persons/search`) y la cotización reintentan

@@ -140,6 +140,7 @@ import { cn } from "@/components/ui";
 import { formatPeruMobile, peruMobileDigits, peruMobileProblem } from "@/lib/phone";
 import { DistrictPicker } from "@/components/district-picker";
 import { matchPeruDistrict, peruDistrictPlace, type PeruDistrict } from "@/lib/peru-districts";
+import { NEEDS_VARIANT_TEXT } from "@/lib/cart-line-variant";
 import { YapeAssign } from "@/components/yape-alerts";
 import { reportClientPerformanceMetric } from "@/lib/client-performance";
 import { cartsTone, cartsVerdict, type CustomerCarts } from "@/lib/customer-carts";
@@ -2790,6 +2791,8 @@ type OrderItem = {
   unitPrice: number | null;
   /** El SKU del catálogo. WooCommerce crea la línea por él; Shopify no lo usa. */
   sku: string | null;
+  /** Llegó del carrito sin su variante (talla, color…): hay que elegirla (`cartLineNeedsVariant`). */
+  needsVariant?: boolean;
 };
 type ProductResult = Awaited<ReturnType<typeof searchStoreProducts>>[number]; // producto + variantes
 // A single variant flattened for the line-item add (what ProductPicker returns).
@@ -2855,6 +2858,9 @@ export function OrderFormPanel({
   const [sendConfirm, setSendConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [showPicker, setShowPicker] = useState(false);
+  // «Elegir variante» de una línea del carrito sin talla ni color: la variante
+  // elegida reemplaza esa línea, con su cantidad.
+  const [replaceKey, setReplaceKey] = useState<string | null>(null);
   const [discountKind, setDiscountKind] = useState<"none" | "fixed" | "percent">("none");
   const [discountValue, setDiscountValue] = useState<number | null>(null);
   const [pending, startTransition] = useTransition();
@@ -2946,7 +2952,8 @@ export function OrderFormPanel({
     address1.trim().length > 0 &&
     place !== null &&
     subtotal > 0 &&
-    !phoneProblem;
+    !phoneProblem &&
+    !items.some((it) => it.needsVariant);
 
   function patchItem(key: string, patch: Partial<OrderItem>) {
     setItems((x) => x.map((it) => (it.key === key ? { ...it, ...patch } : it)));
@@ -3067,7 +3074,24 @@ export function OrderFormPanel({
                   <li key={it.key} className="px-4 py-2.5 sm:px-5">
                     <div className="flex items-start gap-2">
                       {it.variantId || it.sku ? (
-                        <span className="min-w-0 flex-1 pt-1.5 text-sm text-ink-900">{it.title}</span>
+                        <span className="min-w-0 flex-1 pt-1.5 text-sm text-ink-900">
+                          {it.title}
+                          {it.needsVariant && (
+                            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-5 text-warn-fg">
+                              <span>{NEEDS_VARIANT_TEXT}</span>
+                              <OpsButton
+                                size="sm"
+                                onClick={() => {
+                                  setReplaceKey(it.key);
+                                  setShowPicker(true);
+                                }}
+                                disabled={pending}
+                              >
+                                Elegir variante
+                              </OpsButton>
+                            </span>
+                          )}
+                        </span>
                       ) : (
                         <input
                           value={it.title}
@@ -3160,14 +3184,21 @@ export function OrderFormPanel({
               <ProductPicker
                 leadId={leadId}
                 currency={currency}
+                initialQuery={replaceKey ? items.find((it) => it.key === replaceKey)?.title ?? "" : ""}
                 onPick={(p) => {
-                  setItems((x) => [
-                    ...x,
-                    { key: rid(), variantId: p.variantId, title: p.title, quantity: 1, unitPrice: p.price, sku: p.sku },
-                  ]);
+                  const picked = { variantId: p.variantId, title: p.title, unitPrice: p.price, sku: p.sku };
+                  setItems((x) =>
+                    replaceKey && x.some((it) => it.key === replaceKey)
+                      ? x.map((it) => (it.key === replaceKey ? { ...it, ...picked, needsVariant: false } : it))
+                      : [...x, { key: rid(), quantity: 1, ...picked }],
+                  );
+                  setReplaceKey(null);
                   setShowPicker(false);
                 }}
-                onClose={() => setShowPicker(false)}
+                onClose={() => {
+                  setReplaceKey(null);
+                  setShowPicker(false);
+                }}
               />
             )}
 
@@ -3502,15 +3533,18 @@ function Field({
 function ProductPicker({
   leadId,
   currency,
+  initialQuery = "",
   onPick,
   onClose,
 }: {
   leadId: string;
   currency: string;
+  /** Lo que ya viene escrito: el producto de la línea cuya variante se elige. */
+  initialQuery?: string;
   onPick: (v: PickedVariant) => void;
   onClose: () => void;
 }) {
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(initialQuery);
   const [results, setResults] = useState<ProductResult[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [openProd, setOpenProd] = useState<string | null>(null); // productId cuyas variantes están expandidas

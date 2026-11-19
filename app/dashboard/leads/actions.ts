@@ -103,6 +103,7 @@ import {
   wooOrderAdminUrl,
   wooSaleClient,
   wooSaleLinesProblem,
+  wooVariableSkuLines,
   type WooApiCreds,
 } from "@/lib/woocommerce-orders";
 import {
@@ -164,6 +165,7 @@ import {
 import { loadDoNotCallPhones } from "@/lib/voice-recovery-server";
 import { zadarmaLocalPeru } from "@/lib/zadarma";
 import { resolveOrderDistrict } from "@/lib/peru-districts";
+import { cartLineNeedsVariant, variableLinesProblem } from "@/lib/cart-line-variant";
 import { filterRoutedLeads, getLeadRoutingScope, readRoutingForActor, getLeadManualTakeStores, filterManualSearchLeads } from "@/lib/lead-routing-access";
 import { callbackReturnsFor, RETURN_HOLD_MINUTES, type CallbackReturn, type CallbackReturnCallRow, type CallbackReturnLeadRow } from "@/lib/callback-returns";
 
@@ -2556,7 +2558,8 @@ export interface OrderFormPrefill {
    */
   platform: "shopify" | "woocommerce";
   /** `sku`: solo en WooCommerce, el del carrito guardado (`draft_orders`). */
-  lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null; sku?: string | null }[];
+  /** `needsVariant`: la línea del carrito llegó sin su variante (`cartLineNeedsVariant`): hay que elegirla. */
+  lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null; sku?: string | null; needsVariant?: boolean }[];
   customerName: string | null;
   phone: string | null;
   address1: string | null;
@@ -2666,6 +2669,8 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
           // El mismo SKU que en Shopify (brief de WooCommerce): con él la línea
           // se crea en WooCommerce. Sin SKU queda como ítem manual y se frena.
           ...(enWoo ? { sku: typeof li?.sku === "string" && li.sku.trim() ? li.sku.trim() : null } : {}),
+          // La clienta dejó el formulario de la web sin elegir talla ni color (COD Core, 19-11-2026).
+          ...(cartLineNeedsVariant(li) ? { needsVariant: true } : {}),
         }));
         addressFromCart = Boolean(dd.address1?.trim());
         out.address1 = dd.address1 ?? out.address1;
@@ -3574,6 +3579,11 @@ async function generateWooOrder(args: {
   // llamar a la tienda.
   const lineasProblema = wooSaleLinesProblem(lineItemsInput);
   if (lineasProblema) return { error: lineasProblema };
+  // El SKU de un producto con variaciones, sin talla ni color (19-11-2026,
+  // #AUR901173: el formulario abandonado de COD Core): se frena antes de crear
+  // nada en WooCommerce, en vez de crearlo y borrarlo.
+  const sinVariante = variableLinesProblem(await wooVariableSkuLines(wooSaleClient(woo), lineItemsInput));
+  if (sinVariante) return { error: sinVariante };
   const subtotal = Math.round(lineItemsInput.reduce((s, li) => s + (li.unitPrice ?? 0) * li.quantity, 0) * 100) / 100;
   if (subtotal <= 0) return { error: "El monto del pedido debe ser mayor a 0." };
   const { total: amount, discountAmount } = resolveOrderDiscount(subtotal, input.discount);

@@ -193,3 +193,29 @@ describe("el formulario y la acción usan la lista", () => {
     expect(gen).toContain("input = { ...input, district, province: place.district.department };");
   });
 });
+
+describe("las ciudades que no se llaman como su distrito (owner, 19-11-2026)", () => {
+  it("«Pucallpa» ofrece sus tres distritos, Callería primero", () => {
+    expect(names(searchPeruDistricts("Pucallpa"))).toEqual(["Callería", "Manantay", "Yarinacocha"]);
+    expect(peruDistrictByUbigeo("250101")?.name).toBe("Callería");
+  });
+
+  it("escrito a mano es una ciudad: hay que elegir el distrito", () => {
+    const m = matchPeruDistrict("Pucallpa", "Ucayali");
+    expect(m).toMatchObject({ kind: "ambiguous", name: "Pucallpa", city: true });
+    expect(districtPendingHint("Pucallpa", null)?.message).toBe(
+      "«Pucallpa» es una ciudad: elige su distrito (Callería, Manantay o Yarinacocha).",
+    );
+    expect(resolveOrderDistrict({ district: "Pucallpa" })).toEqual({
+      ok: false,
+      error: "«Pucallpa» es una ciudad con 3 distritos (Callería, Manantay o Yarinacocha). Elige de la lista el de la entrega.",
+    });
+  });
+
+  it("la ciudad de un solo distrito queda elegida", () => {
+    expect(matchPeruDistrict("Tingo María")).toMatchObject({ kind: "exact", district: { name: "Rupa-Rupa" } });
+    expect(matchPeruDistrict("Puerto Maldonado")).toMatchObject({ kind: "exact", district: { name: "Tambopata" } });
+    expect(matchPeruDistrict("talara")).toMatchObject({ kind: "exact", district: { name: "Pariñas" } });
+    expect(names(searchPeruDistricts("quillabamba"))[0]).toBe("Santa Ana");
+  });
+});
