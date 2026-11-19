@@ -5,7 +5,7 @@ import { hasOrgPermission } from "@/lib/permissions-access";
 import { WOO_CANCEL_PERMISSION } from "@/lib/woo-cancel";
 import { cancelHistoricalShopifySale } from "@/lib/legacy-sale-cancel-server";
 
-export async function endWooSalePendingReturn(orderId: string, input: { reasonCode: string; reasonText: string; requestId: string }) {
+export async function endWooSalePendingReturn(orderId: string, input: { reasonCode: string; reasonText: string; requestId: string; requireResolvedGuides?: boolean }) {
   const sb = await createServerSupabase();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return { error: "Inicia sesión antes de terminar la venta." };
@@ -14,7 +14,7 @@ export async function endWooSalePendingReturn(orderId: string, input: { reasonCo
   const { data: store, error: storeError } = await sb.from("stores").select("org_id").eq("id", order.store_id).maybeSingle();
   if (storeError || !store?.org_id || !(await hasOrgPermission(store.org_id, WOO_CANCEL_PERMISSION))) return { error: "No tienes el permiso «Anular pedidos» en esta organización." };
   const result = await cancelHistoricalShopifySale({ admin: createAdminSupabase(), orderId, userId: user.id,
-    reasonCode:input?.reasonCode,reasonText:input?.reasonText,requestId:input?.requestId,wooReturn: true });
+    reasonCode:input?.reasonCode,reasonText:input?.reasonText,requestId:input?.requestId,wooReturn: true, requireResolvedGuides: input?.requireResolvedGuides });
   for (const path of ["/dashboard/pedidos", "/dashboard/pedidos/despacho", "/dashboard/courier"]) revalidatePath(path);
   return result;
 }

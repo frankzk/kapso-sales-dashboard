@@ -2887,6 +2887,12 @@ export function OrderDrawer({
                   <ReproLimaPanel
                     key={`${orderId}:${reproSession.key}`}
                     row={reproRow}
+                    saleCancellation={wooCancel ? {
+                      mode: wooCancel.mode ?? "woocommerce", facts: wooCancel.facts,
+                      guides: detail.guides, gfDeliveries: detail.gfDeliveries,
+                      filledOutputIds: detail.filledOutputIds, canCancelGfGuide, canEdit, canCreateShalomGuide,
+                      refresh: reload,
+                    } : null}
                     initialMode={reproSession.mode ?? reproAttendMode(reproRow)}
                     active={workspace === "reprolima"}
                     hasNext={reproHasNext}

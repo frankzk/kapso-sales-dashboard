@@ -32,6 +32,7 @@ import { cn } from "@/components/ui";
 import { Badge, Banner, CHECKBOX, choiceChipClass, FIELD, OpsButton, OptionTile, Skeleton, opsButtonClass, type BadgeTone } from "@/components/ops-ui";
 import { IconPhone, IconWhatsApp } from "@/components/icons";
 import { SwaypDispatchDateSelect } from "@/components/swayp-dispatch-date-select";
+import { ReproLimaSaleCancel, type ReproSaleCancelContext } from "@/components/repro-lima-sale-cancel";
 import type { ReproRow } from "@/lib/repro-lima-access";
 import {
   claimReproCase,
@@ -327,7 +328,7 @@ const OUTCOME_HELP: Record<ReproOutcome, string> = {
   confirma: "Fecha y courier. Kapta calcula qué hacer con la caja.",
   llamar_despues: "El cliente pidió que lo llames a otra hora.",
   no_contesta: "Suma un intento sin respuesta.",
-  no_quiere: "Desarmar y cerrar. No anula la venta.",
+  no_quiere: "Resuelve las guías y confirma la anulación de la venta aquí.",
 };
 
 /** Un id por formulario. `crypto.randomUUID` solo existe en contexto seguro: si falta, uno v4 a mano. */
@@ -473,8 +474,10 @@ export function ReproLimaPanel({
   onGoToMesa,
   exitGuard,
   previous = null,
+  saleCancellation = null,
 }: {
   row: ReproRow;
+  saleCancellation?: ReproSaleCancelContext | null;
   /** `edit`: «Atender» (toma el caso). `read`: un acuerdo programado y «Cerrados» (E29), sin candado. */
   initialMode: "edit" | "read";
   /** «Volver a atender» desde «Cerrados»: el segundo clic va en la pestaña (E29). */
@@ -834,13 +837,14 @@ export function ReproLimaPanel({
   })();
 
   const destructive = form === "close" || outcome === "no_quiere";
+  const saleFlow = form === "call" && outcome === "no_quiere";
   const hasDraft = note.trim().length > 0 || closeNote.trim().length > 0;
   // Sin el caso (perdido, tomándolo, con otra persona o si falló la toma), lo
   // escrito se sigue viendo, apagado: la hoja lo conserva (§9.5).
   const showForm = mine || (mode === "edit" && (claimState === "lost" || hasDraft));
 
   function finish(result: RegisterReproCallResult, advance: boolean) {
-    if (result.callId) {
+    if (result.callId || result.saleCancelled) {
       releaseCurrentClaim();
       onSaved({
         orderId,
@@ -869,7 +873,7 @@ export function ReproLimaPanel({
 
   function save(advance: boolean) {
     const id = caseId ?? current.caseId;
-    if (!mine || !id || blocker) return;
+    if (!mine || !id || blocker || saleFlow) return;
     if (destructive && !confirmClose) { setConfirmClose(true); return; }
     submittedRef.current = fingerprint;
     setFeedback(null);
@@ -902,6 +906,19 @@ export function ReproLimaPanel({
       const result = await registerReproCall(input)
         .catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }) as RegisterReproCallResult);
       finish(result, advance);
+    });
+  }
+
+  function cancelSale() {
+    const id = caseId ?? current.caseId;
+    if (!mine || !id || blocker || !saleFlow || !saleCancellation || pending) return;
+    submittedRef.current = fingerprint;
+    setFeedback(null);
+    start(async () => {
+      const result = await registerReproCall({ caseId: id, operationId, outcome: "no_quiere", channel,
+        note: note.trim(), confirmOrderName: current.orderName, cancelSale: saleCancellation.mode })
+        .catch(() => ({ error: "No se pudo confirmar la respuesta. Actualiza el pedido para comprobar si la venta se anuló antes de reintentar." }));
+      finish(result, hasNext);
     });
   }
 
@@ -1187,7 +1204,7 @@ export function ReproLimaPanel({
                     {(["confirma", "llamar_despues", "no_contesta", "no_quiere"] as const).map((o) => (
                       <OptionTile
                         key={o}
-                        label={REPRO_OUTCOME_LABEL[o]}
+                        label={o === "no_quiere" ? "Ya no lo quiere · Anular pedido" : REPRO_OUTCOME_LABEL[o]}
                         description={
                           o === "confirma" && confirmBlocked
                             ? <span className="text-warn-fg">{confirmBlocked}</span>
@@ -1387,13 +1404,16 @@ export function ReproLimaPanel({
                         value={note}
                         onChange={(e) => setNote(e.target.value)}
                         rows={3}
-                        maxLength={1000}
+                        maxLength={outcome === "no_quiere" ? 500 : 1000}
                         placeholder={outcome === "no_quiere" ? `Por qué ya no lo quiere (mínimo ${DISCARD_REASON_MIN} caracteres)` : "Lo que dijo el cliente (opcional)"}
                         className={cn(FIELD, "h-auto py-2")}
                       />
                     </label>
                   </Section>
                 )}
+                {saleFlow && <ReproLimaSaleCancel orderId={orderId} orderName={current.orderName ?? "este pedido"}
+                  context={saleCancellation} reason={note} pending={pending}
+                  onRefresh={() => { void reload(); onChanged(); }} onConfirm={cancelSale} />}
               </>
             ) : (
               <Section title="Desarmar y cerrar sin llamada">
@@ -1434,7 +1454,7 @@ export function ReproLimaPanel({
               </div>
             </Banner>
           )}
-          {mine && confirmClose && destructive && !blocker && (
+          {mine && !saleFlow && confirmClose && destructive && !blocker && (
             <Banner tone="warn" role="alert" title="Almacén desarma la caja cuando esté en oficina">
               <p>No anula la venta: solo la tienda la anula.</p>
               <div className="mt-2 flex flex-wrap gap-2">
@@ -1449,7 +1469,7 @@ export function ReproLimaPanel({
             <p id="repro-save-blocker" className={cn("text-[13px] leading-5", outcome || form === "close" ? "text-warn-fg" : "text-ink-500")}>{blocker}</p>
           )}
           <div className="flex flex-wrap items-center gap-2">
-            {mine && !(confirmClose && destructive) && (
+            {mine && !saleFlow && !(confirmClose && destructive) && (
               <OpsButton
                 variant={destructive ? "danger" : "primary"}
                 size="lg"

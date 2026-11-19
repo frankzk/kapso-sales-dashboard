@@ -37,6 +37,15 @@ const state = vi.hoisted(() => ({
   gfCalls: [] as string[],
 }));
 
+const sale = vi.hoisted(() => ({ woo: vi.fn(), historical: vi.fn(), returning: vi.fn() }));
+vi.mock("@/app/dashboard/pedidos/woo-cancel-actions", () => ({ cancelWooOrder: sale.woo }));
+vi.mock("@/app/dashboard/pedidos/legacy-sale-cancel-actions", () => ({ cancelLegacyShopifySale: sale.historical }));
+vi.mock("@/app/dashboard/pedidos/woo-sale-return-actions", () => ({ endWooSalePendingReturn: sale.returning }));
+// Los identificadores siguen deterministas; las suites de cada anulación
+// prueban el hash real, los permisos y la API con dobles, sin tocar ventas.
+vi.mock("@/lib/woo-cancel-server", () => ({ wooKaptaCancelOperationId: (id: string, op: string) => `woo:${id}:${op}` }));
+vi.mock("@/lib/legacy-sale-cancel-server", () => ({ legacySaleCancelOperationId: (id: string, op: string) => `legacy:${id}:${op}` }));
+
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 const recompute = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/lib/order-master", () => ({ recomputeOrderMasterSafe: recompute }));
@@ -119,7 +128,7 @@ vi.mock("@/lib/db", () => {
   };
 });
 
-import { claimReproCase, moveReproAgreement, programReproAgreement, registerReproCall } from "@/app/dashboard/pedidos/repro-lima/actions";
+import { claimReproCase, closeReproCase, moveReproAgreement, programReproAgreement, registerReproCall } from "@/app/dashboard/pedidos/repro-lima/actions";
 import { priorOutputsWith, reproBoxAction as realBoxAction } from "@/lib/repro-box-action";
 import { DISPATCH_NEEDS_COORDINATE_ERROR } from "@/lib/dispatch-date";
 
@@ -228,8 +237,70 @@ beforeEach(() => {
   state.gfCreate.mockReset();
   state.gfCancel.mockReset();
   state.gfCalls = [];
+  for (const fn of Object.values(sale)) fn.mockReset().mockResolvedValue({ notice: "Venta anulada por su acción comercial." });
   state.respond = (q) => (isCaseRead(q) ? { data: caseRow(), error: null } : { data: null, error: null });
   state.rpc = () => ({ data: { call_id: "call-1", duplicate: false }, error: null });
+});
+
+describe("anular la venta desde Atender sin cerrar el caso antes de confirmarla", () => {
+  const input = (over: Record<string, unknown> = {}) => confirmInput({ outcome: "no_quiere", note: "La clienta pidió cancelar su compra", confirmOrderName: "#KP1", cancelSale: "woocommerce", ...over });
+  it.each(["woocommerce", "woocommerce_return", "shopify_history"] as const)("reutiliza la acción %s y luego registra la llamada", async (mode) => {
+    const fn = mode === "woocommerce" ? sale.woo : mode === "woocommerce_return" ? sale.returning : sale.historical;
+    fn.mockImplementation(async () => {
+      expect(state.rpcs).toHaveLength(0);
+      return { notice: `Venta terminada ${mode}` };
+    });
+    const result = await registerReproCall(input({ cancelSale: mode }));
+    expect(fn).toHaveBeenCalledExactlyOnceWith(ORDER_ID, { reasonCode: "cliente_desiste", reasonText: "La clienta pidió cancelar su compra", requestId: OP_ID, requireResolvedGuides: true });
+    expect(result).toMatchObject({ saleCancelled: true, callId: "call-1", notice: `Venta terminada ${mode}` });
+    expect(state.rpcs[0]?.params).toMatchObject({ p_operation: OP_ID, p_outcome: "no_quiere", p_channel: "llamada" });
+    expect(Object.values(sale).filter((f) => f.mock.calls.length)).toHaveLength(1);
+  });
+  it.each(["No tienes el permiso «Anular pedidos».", "La guía sigue viva.", "WooCommerce no confirmó la anulación."])("sin cierre ni llamada cuando la acción rechaza: %s", async (error) => {
+    sale.woo.mockResolvedValue({ error });
+    expect(await registerReproCall(input())).toEqual({ error });
+    expect(state.rpcs).toHaveLength(0);
+    expect(state.cleared).not.toHaveBeenCalled();
+  });
+  it("perder el candado impide llamar a la tienda", async () => {
+    state.respond = (q) => isCaseRead(q) ? { data: caseRow({ claimed_by: "otra" }), error: null } : { data: null, error: null };
+    expect(await registerReproCall(input())).toMatchObject({ claimLost: true });
+    expect(sale.woo).not.toHaveBeenCalled();
+  });
+  it.each([{ confirmOrderName: "#OTRO" }, { note: "corto" }, { note: "x".repeat(501) }, { outcome: "confirma" }, { cancelSale: "otra" }])("rechaza una confirmación inválida: %j", async (over) => {
+    expect((await registerReproCall(input(over))).error).toBeTruthy();
+    expect(sale.woo).not.toHaveBeenCalled();
+    expect(state.rpcs).toHaveLength(0);
+  });
+  it("si termina la venta pero falla la RPC, distingue el éxito comercial del registro pendiente", async () => {
+    state.rpc = () => ({ data: null, error: { message: "Falló el registro de llamada" } });
+    expect(await registerReproCall(input())).toMatchObject({ saleCancelled: true, error: expect.stringContaining("La venta terminó, pero falta registrar") });
+    expect(state.cleared).not.toHaveBeenCalled();
+  });
+  it("recupera una respuesta perdida solo con el hecho de ese pedido, actor e intento", async () => {
+    state.facts = [facts({ cancelled: true, inStage: false })];
+    state.respond = (q) => ({ data: isCaseRead(q) ? caseRow() : q.table === "order_events" ? { id: "anulacion" } : null, error: null });
+    const result = await registerReproCall(input());
+    expect(result).toMatchObject({ saleCancelled: true, callId: "call-1" });
+    const event = state.queries.find((q) => q.table === "order_events")!;
+    expect(event.filters).toEqual(expect.arrayContaining([["eq", "order_id", ORDER_ID], ["eq", "actor", "me"], ["eq", "operation_id", `woo:${ORDER_ID}:${OP_ID}`]]));
+    expect(state.closeStale).not.toHaveBeenCalled();
+  });
+  it("un pedido cancelado por otro intento no autoriza el registro como recuperación", async () => {
+    state.facts = [facts({ cancelled: true, inStage: false })];
+    expect((await registerReproCall(input())).error).toBeTruthy();
+    expect(sale.woo).not.toHaveBeenCalled();
+  });
+  it("una llamada anterior sin anulación no se convierte en venta anulada al repetir su id", async () => {
+    state.respond = (q) => ({ data: isCaseRead(q) ? caseRow() : q.table === "lima_repro_calls" ? { id: "previa" } : null, error: null });
+    expect((await registerReproCall(input())).error).toContain("ya se guardó sin anular");
+    expect(sale.woo).not.toHaveBeenCalled();
+  });
+  it("el cierre sin llamada conserva su alcance y nunca llama a la tienda", async () => {
+    await closeReproCase({ caseId: CASE_ID, operationId: OP_ID, note: "Sin respuesta, se desarma la caja", confirmOrderName: "#KP1" });
+    for (const fn of Object.values(sale)) expect(fn).not.toHaveBeenCalled();
+    expect(state.rpcs[0]?.params.p_channel).toBe("sin_contacto");
+  });
 });
 
 describe("un guardado rechazado le dice a la hoja qué pasó (C3)", () => {

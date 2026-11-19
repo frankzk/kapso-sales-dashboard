@@ -21,6 +21,7 @@ import { navItems } from "@/components/sidebar";
 
 // La hoja importa las acciones de servidor; aquí solo se prueban sus textos.
 vi.mock("@/app/dashboard/pedidos/repro-lima/actions", () => ({}));
+vi.mock("@/components/repro-lima-sale-cancel", () => ({ ReproLimaSaleCancel: () => null }));
 vi.mock("@/app/dashboard/pedidos/repro-lima/agenda-actions", () => ({}));
 // La chapa de etapa vive junto a la ficha, que arrastra acciones de servidor:
 // aquí basta con saber de qué etapa es.

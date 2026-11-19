@@ -44,6 +44,14 @@ beforeEach(() => {
 });
 
 describe("anulación comercial histórica del servidor", () => {
+  it.each([true, false])("Atender frena una guía GF sin salir hasta resolverla, también con wooReturn=%s", async (wooReturn) => {
+    if (wooReturn) tables.orders![0]!.platform = "woocommerce";
+    tables.shipments!.push({ id: "gf-nueva", order_id: "o1", courier: "gf_courier", guide_code: "GF-PENDIENTE", delivery_status: "pendiente", custody_state: "empresa" });
+    const result = await cancelHistoricalShopifySale({ admin, orderId: "o1", userId: "diana", reasonCode: "cliente_desiste", reasonText: "La clienta canceló su compra", requestId: "request-123456", wooReturn, requireResolvedGuides: true });
+    expect(result.error).toContain("GF-PENDIENTE");
+    expect(mocks.gfCancel).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
+  });
   it("#AUR900668: la guía de GF Courier que no salió se anula en GF antes de terminar la venta",async()=>{
     tables.orders![0]!.platform="woocommerce";
     tables.shipments!.push({ id: "s2", order_id: "o1", courier: "gf_courier", guide_code: "AURELA-AUR900668", delivery_status: "pendiente", custody_state: "empresa" });
