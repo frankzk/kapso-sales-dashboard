@@ -20,6 +20,7 @@ const FIXES = {
   "0508": "Páucar del Sara Sara",
   "030602": "Anco Huallo",
   "150119": "Lurín",
+  "250101": "Callería",
 };
 
 const tree = JSON.parse(readFileSync(src, "utf8"));

@@ -11,6 +11,7 @@ import { cn } from "@/components/ui";
 import { FIELD } from "@/components/ops-ui";
 import { IconAlert, IconCheck, IconSearch } from "@/components/icons";
 import {
+  cityDistrictNames,
   districtSearchKey,
   matchPeruDistrict,
   peruDistrictPlace,
@@ -28,6 +29,9 @@ export function districtPendingHint(
   if (!districtSearchKey(text)) return null;
   const m = matchPeruDistrict(text, department);
   if (m.kind === "ambiguous") {
+    if (m.city) {
+      return { message: `«${m.name}» es una ciudad: elige su distrito (${cityDistrictNames(m.options)}).`, suggestion: null };
+    }
     return { message: `Hay ${m.options.length} distritos «${m.name}»: elige el de la entrega.`, suggestion: null };
   }
   if (m.kind === "none" && m.suggestions[0]) {

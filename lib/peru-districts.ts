@@ -52,7 +52,25 @@ const ALIASES: Readonly<Record<string, readonly string[]>> = {
   "150142": ["ves"],
   "150143": ["vmt"],
   "070103": ["carmen de la legua"],
+  // Ciudades que no se llaman como su distrito (owner, 19-11-2026: «no me
+  // permite colocar Pucallpa»). La ciudad de Pucallpa son tres distritos;
+  // las demás, uno (`CITY_ALIASES`).
+  "250101": ["pucallpa"],
+  "250105": ["pucallpa"],
+  "250107": ["pucallpa"],
+  "100601": ["tingo maria"],
+  "170101": ["puerto maldonado"],
+  "190101": ["cerro de pasco"],
+  "190113": ["cerro de pasco"],
+  "200701": ["talara"],
+  "120301": ["la merced"],
+  "080901": ["quillabamba"],
+  "250301": ["aguaytia"],
+  "250201": ["atalaya"],
 };
+
+/** Los nombres de ciudad de `ALIASES`: lo escrito es una ciudad, no un distrito. */
+const CITY_ALIASES = new Set(["pucallpa", "tingo maria", "puerto maldonado", "cerro de pasco", "talara", "la merced", "quillabamba", "aguaytia", "atalaya"]);
 
 /** Sin tildes, sin mayúsculas, sin signos: para comparar, nunca para mostrar. */
 export function districtSearchKey(raw: string | null | undefined): string {
@@ -210,7 +228,8 @@ export function searchPeruDistricts(
 
 export type PeruDistrictMatch =
   | { kind: "exact"; district: PeruDistrict }
-  | { kind: "ambiguous"; name: string; options: PeruDistrict[] }
+  /** `city`: lo escrito es una ciudad con varios distritos («Pucallpa»): `name` es lo escrito. */
+  | { kind: "ambiguous"; name: string; options: PeruDistrict[]; city?: boolean }
   | { kind: "none"; suggestions: PeruDistrict[] };
 
 /**
@@ -240,6 +259,12 @@ export function matchPeruDistrict(raw: string | null | undefined, department?: s
   if (same.length === 1 && first) return { kind: "exact", district: plain(first) };
   if (first) {
     const options = (inDep.length > 1 ? inDep : same).map(plain);
+    // Una ciudad con varios distritos, sin ningún distrito que se llame así.
+    if (CITY_ALIASES.has(q) && !same.some((d) => d.key === q)) {
+      // En el mismo orden que el buscador: por nombre.
+      const byName = [...options].sort((a, b) => districtSearchKey(a.name).localeCompare(districtSearchKey(b.name)));
+      return { kind: "ambiguous", name: String(raw ?? "").trim(), options: byName, city: true };
+    }
     return { kind: "ambiguous", name: first.name, options };
   }
   return { kind: "none", suggestions: searchPeruDistricts(q, { department, limit: 3 }) };
@@ -272,10 +297,18 @@ export function resolveOrderDistrict(input: {
   if (m.kind === "ambiguous") {
     return {
       ok: false,
-      error: `Hay ${m.options.length} distritos «${m.name}». Elige de la lista el de la entrega.`,
+      error: m.city
+        ? `«${m.name}» es una ciudad con ${m.options.length} distritos (${cityDistrictNames(m.options)}). Elige de la lista el de la entrega.`
+        : `Hay ${m.options.length} distritos «${m.name}». Elige de la lista el de la entrega.`,
     };
   }
   const [guess] = m.suggestions;
   const hint = guess ? ` ¿Es ${guess.name} (${peruDistrictPlace(guess)})?` : "";
   return { ok: false, error: `«${typed}» no está en la lista oficial de distritos.${hint} Elígelo de la lista.` };
+}
+
+/** «Callería, Manantay o Yarinacocha»: los distritos de una ciudad, para decirlos. */
+export function cityDistrictNames(options: readonly Pick<PeruDistrict, "name">[]): string {
+  const names = options.map((d) => d.name);
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} o ${names[names.length - 1]}` : (names[0] ?? "");
 }
