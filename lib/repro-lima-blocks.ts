@@ -152,7 +152,7 @@ export const LIMA_STEP_CARDS: readonly LimaCard<LimaStep>[] = [
     key: "nuevos",
     label: "Nuevos",
     // Owner, 17-11-2026: «queremos un apartado que incluya esos nuevos aquí en el flujo del día».
-    hint: "Primera salida pendiente, sin llamadas de gestión de entrega ni acuerdo de reprogramación. Puede tener rótulo interno o guía GF automática pendiente de recojo. Las llamadas anteriores a crear el pedido no cuentan como gestión de entrega. Una guía externa manual, de Aliclik o Swayp lo saca de Nuevos. Lo corregido de provincia a Lima sin día se gestiona en Hoy.",
+    hint: "Primera salida pendiente, sin llamadas de gestión de entrega ni acuerdo de reprogramación. Puede tener rótulo interno o guía GF automática pendiente de recojo. Con motorizado GF asignado y día de salida pasa a Programados. Las llamadas anteriores a crear el pedido no cuentan como gestión de entrega. Una guía externa manual, de Aliclik o Swayp lo saca de Nuevos. Lo corregido de provincia a Lima sin día se gestiona en Hoy.",
     empty: "No hay pedidos nuevos por salir con estos filtros.",
   },
   {
@@ -717,7 +717,10 @@ export function classifyLimaRow(row: LimaPendingOrder, c: PendingCase | undefine
   const automaticGfOnly = row.ops?.autoGfGuide === true
     && row.ops.liveCouriers.every((courier) => GF_INTERNAL.has(courier) || courier === "gf_courier")
     && (!row.courierPickup || row.courierPickup.courier === "gf_courier");
-  const unworked = limaIsNew(row) && !contacted && !c?.agreement && c?.list !== "programados" && (!liveGuideCourier(row) || automaticGfOnly);
+  // Owner, 19-11-2026: la guía automática con motorizado asignado y día ya es
+  // Programados. Sigue pendiente de recojo: asignación no es salida física.
+  const gfAssignedWithDay = automaticGfOnly && Boolean(row.gfAssigned?.rider.trim()) && planned === "programados";
+  const unworked = limaIsNew(row) && !contacted && !c?.agreement && c?.list !== "programados" && !gfAssignedWithDay && (!liveGuideCourier(row) || automaticGfOnly);
   const firstStep: LimaStep = unworked && (planned === "por_sacar" || planned === "programados" || planned === "con_courier") ? "nuevos" : planned;
   // Un reintento sin día se gestiona con los no entregados, aunque el Master haya vuelto a Preparación.
   const step: LimaStep = firstStep === "por_sacar" && limaHasDeparture(row) ? "no_entregados" : firstStep;

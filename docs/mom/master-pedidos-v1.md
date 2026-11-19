@@ -6623,7 +6623,15 @@ couriers. No se mueve un caso dudoso ni se anula automáticamente.
 - «Nuevos» es primera salida pendiente, sin llamadas de gestión de entrega ni
   acuerdo de reprogramación. **Corrección explícita del owner (18-11-2026,
   revisión de los 28 de GF):** la guía GF creada automáticamente no lo saca
-  de Nuevos; conserva su guía y su día dentro de Nuevos. Se comprueba el origen
+  de Nuevos; conserva su guía y su día dentro de Nuevos.
+  **Precisión del owner (19-11-2026):** cuando esa guía GF viva ya tiene un
+  motorizado asignado y una fecha pendiente de salida, pertenece a
+  **Programados**, aunque no haya llamadas y aún esté en la empresa esperando
+  cotejo de oficina. Sin esa combinación, la guía automática por sí sola sigue
+  admitiéndose en Nuevos. Una sugerencia de motorizado no es una asignación,
+  y una asignación sin día no inventa una programación.
+  Esta asignación no prueba recojo ni salida física y no cambia la custodia.
+  Se comprueba el origen
   de la guía viva concreta en su último hecho `guide_registered`, cuyo motivo
   es «Guía GF automática: al entrar a Por generar rótulo.». No basta que su
   courier sea GF o que una guía anterior fuera automática. La excepción es

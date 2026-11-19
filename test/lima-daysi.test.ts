@@ -48,6 +48,24 @@ describe("clasificación acordada con Daysi", () => {
     expect(classify(r, [{ orderId: r.orderId, list: "por_decidir", lastCall: { at: "2026-11-18T14:59:59Z" } }]).step).toBe("nuevos");
     expect(classify(r, [{ orderId: r.orderId, list: "por_decidir", lastCall: { at: r.createdAt! } }]).step).toBe("por_sacar");
   });
+  it.each(["Roycker", "Yhonny", "Yordani", "Alexis"])("GF automático asignado a %s con día pasa a Programados sin inventar una salida", (rider) => {
+    const r = row({ stage: "por_despachar", substage: "listo_para_recojo", courier: "gf_courier", courierPickup: { courier: "gf_courier", date: TODAY },
+      gfAssigned: { rider, day: "18/11" },
+      ops: { autoGfGuide: true, liveCouriers: ["gf_courier"], custody: "empresa", reportedStatus: "AWAITING_OFFICE_CHECK", courierDelivered: null, lastGfBox: null } });
+    const before = JSON.stringify(r);
+    const cls = classify(r);
+    expect(cls).toMatchObject({ step: "programados", agenda: "hoy", agendaDay: TODAY, courier: "guia_creada", guide: true, noReport: false });
+    expect(limaSituations([r], new Map([[r.orderId, cls]]), "programados", TODAY)[0]).toMatchObject({ title: expect.stringContaining("Nunca salió"), detail: expect.stringContaining(`Asignado para la siguiente ruta: ${rider}`) });
+    expect(classify({ ...r, gfAssigned: null, suggestedRiders: [rider] }).step).toBe("nuevos");
+    expect(classify({ ...r, courierPickup: { courier: "gf_courier", date: "2026-11-19" } })).toMatchObject({ step: "programados", agenda: "manana" });
+    expect(classify(r, [{ orderId: "o", list: "llamar_despues" }]).step).toBe("llamar_despues");
+    expect(classify(r, [{ orderId: "o", list: "cerrados" }]).step).toBe("por_cerrar");
+    const counts = limaBoardCounts([r], new Map([[r.orderId, cls]]));
+    expect(counts.step.nuevos).toBe(0);
+    expect(counts.step.programados).toBe(1);
+    expect(Object.values(counts.step).reduce((sum, n) => sum + n, 0)).toBe(1);
+    expect(JSON.stringify(r)).toBe(before);
+  });
   it.each(["propio", "por_definir"])("el rótulo interno %s permite Nuevos solo mientras siga sin gestionar y sin salida", (courier) => {
     const r = row({ stage: "por_despachar", substage: "listo_para_asignar", courier, ops: { liveCouriers: [courier], custody: "empresa", reportedStatus: null, courierDelivered: null, lastGfBox: null } });
     expect(classify(r)).toMatchObject({ step: "nuevos", guide: true });
