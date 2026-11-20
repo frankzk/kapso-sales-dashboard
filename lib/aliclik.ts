@@ -319,6 +319,8 @@ export function aliclikErrorMessage(
   body: unknown,
   contentType?: string | null,
   rayId?: string | null,
+  /** Qué se le pidió a Aliclik (`aliclikOperationLabel`), para el 5xx. */
+  operation?: string | null,
 ): string {
   // Antes que nada: si esto es un muro de Cloudflare, decirlo con todas las
   // letras. Enseñar el HTML mandaría al equipo a revisar el token, que está bien.
@@ -344,9 +346,14 @@ export function aliclikErrorMessage(
   // clave de idempotencia y repetir deja dos guías reales para el mismo
   // paquete— y decirle a la operadora que reintente sería el peor consejo
   // posible justo ahí.
+  //
+  // Y se nombra la operación que falló (20-11-2026): el texto decía siempre «La
+  // cotización no pudo completarse», también cuando lo que falló era CREAR la
+  // guía (#KP207465, #AUR901236), y mandaba a buscar el problema en la
+  // cotización, que había salido bien un paso antes.
   const attribute = (msg: string) =>
     status >= 500
-      ? `El endpoint de Aliclik respondió HTTP ${status}: «${msg}». La cotización no pudo completarse en su API.`
+      ? `El endpoint de Aliclik respondió HTTP ${status}: «${msg}». ${operation ?? "La operación"} no se completó en su API.`
       : msg;
 
   if (body && typeof body === "object") {
@@ -417,6 +424,7 @@ async function request<T>(
       egress,
       serialized,
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      operation: aliclikOperationLabel(method, path),
     });
     if (out.ok) return out;
     last = out;
@@ -439,6 +447,25 @@ async function request<T>(
   return last ?? { ok: false, status: null, error: "Aliclik no respondió." };
 }
 
+/**
+ * Qué se le pidió a Aliclik, para decirlo en un error 5xx («La creación de la
+ * guía no se completó en su API»). Sale del método y la ruta, que es lo único
+ * que `request` sabe de quien lo llama.
+ */
+export function aliclikOperationLabel(method: "GET" | "POST", path: string): string {
+  const route = path.split("?")[0]!.replace(/\/+$/, "");
+  if (method === "POST" && route.endsWith("/cancel")) return "La anulación de la guía";
+  if (method === "POST" && (route === "/integration/order" || route === "/integration/order/agency")) {
+    return "La creación de la guía";
+  }
+  if (route === "/integration/order/shipping/cost") return "La cotización";
+  if (route === "/integration/product/public") return "La lectura del catálogo";
+  if (route === "/integration/order") return "La consulta de pedidos";
+  if (route === "/integration/order/agencies") return "La lectura de agencias";
+  if (route === "/integration/order/package-sizes") return "La lectura de tamaños de paquete";
+  return "La operación";
+}
+
 /** Un intento suelto. Separado para que el reintento no duplique la lógica. */
 async function attemptRequest<T>(
   opts: AliclikClientOpts,
@@ -449,6 +476,8 @@ async function attemptRequest<T>(
     egress: AliclikEgress;
     serialized: string | undefined;
     timeoutMs: number;
+    /** `aliclikOperationLabel` de esta petición. */
+    operation: string;
   },
 ): Promise<AliclikResult<T>> {
   const { doFetch, egress, serialized } = ctx;
@@ -542,7 +571,7 @@ async function attemptRequest<T>(
   if (!res.ok) {
     return {
       ok: false,
-      error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
+      error: aliclikErrorMessage(res.status, parsed, contentType, rayId, ctx.operation),
       status: res.status,
       requestRef,
     };
@@ -553,7 +582,7 @@ async function attemptRequest<T>(
   if (isBotChallenge(parsed, contentType)) {
     return {
       ok: false,
-      error: aliclikErrorMessage(res.status, parsed, contentType, rayId),
+      error: aliclikErrorMessage(res.status, parsed, contentType, rayId, ctx.operation),
       status: res.status,
       requestRef,
     };

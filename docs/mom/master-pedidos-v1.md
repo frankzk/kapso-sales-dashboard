@@ -8622,6 +8622,19 @@ sale, porque invita a pulsar el botón que deja el pedido bloqueado.
 - El aviso nombra la **consecuencia**, no el síntoma: lo que la operadora
   necesita saber no es que falla, sino que cada intento le bloquea el pedido.
 
+**Un 5xx dice qué operación falló (20-11-2026).** Cuando Aliclik responde un
+error de su servidor (HTTP 500 y vecinos), el mensaje decía siempre «La
+cotización no pudo completarse en su API», también cuando lo que falló era
+**crear** la guía (#KP207465 el 19-11, #AUR901236 el 20-11). Mandaba a buscar el
+problema en la cotización, que había salido bien un paso antes. Ahora nombra la
+operación por el endpoint (`aliclikOperationLabel`): «El endpoint de Aliclik
+respondió HTTP 500: «Internal server error». **La creación de la guía** no se
+completó en su API.» Igual «La cotización», «La anulación de la guía», «La
+lectura del catálogo», «La consulta de pedidos» y las lecturas de agencias y
+tamaños; un endpoint sin nombre dice «La operación». Los 4xx siguen literales,
+porque Aliclik los escribe en español y son accionables («No hay stock
+disponible»). Pruebas: `test/aliclik-api.test.ts`.
+
 #### Guardar la fila es lo último que puede fallar
 
 La guía ya existe en Aliclik cuando llega el momento de escribir nuestra fila.
