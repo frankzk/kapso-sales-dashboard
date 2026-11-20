@@ -10131,10 +10131,19 @@ bodega, «Enviar a Excel»), que se sube en Stock Swayp. Reglas:
 - **Un archivo por bodega**, y la ciudad sale de la columna `Bodega` del propio
   archivo. No hay selector: elegir la ciudad a mano es la forma de importar
   Trujillo sobre Juliaca y poner a cero una ciudad entera.
-- **Sólo se toca la ciudad del archivo.** Nuestra tabla cubre más ciudades que
-  las bodegas que se leen de Swayp: Cusco, Huancayo, Chiclayo y Chimbote se
-  abastecen de otra forma y un importador que «limpiara lo que no vino» las
-  vaciaría de un plumazo.
+- **Sólo se toca la ciudad del archivo.** Un importador que «limpiara lo que no
+  vino» vaciaría las demás ciudades de un plumazo.
+- **Las diez bodegas de Swayp entran al sync (owner, 20-11-2026: «todas estas
+  bodegas disponibles… conectarlas con Kapta, sincronizado y conciliado»).**
+  Hasta esa fecha Cusco, Huancayo, Chiclayo y Chimbote quedaban fuera
+  (`CIUDADES_DEL_SYNC`, `BODEGA_A_CIUDAD`) y su stock en Kapta era una carga a
+  mano de julio a septiembre: Huancayo tenía Extreme Detox, Berberina y Fórmula
+  Kids que la bodega no tiene, 16 Aceites Etíopes contra 39, y le faltaban
+  Astaxantina e Hígado y Drenaje. Desde entonces se leen como las otras seis
+  (Arequipa, Trujillo, Juliaca-Puno, Piura, Lima, Ica), con las mismas reglas:
+  lo que Swayp no lista queda en 0, lo que tiene y no estaba se da de alta con la
+  etiqueta de otra ciudad, y una ciudad que quedaría vacía de golpe espera a una
+  persona. Un código de Swayp sin vínculo en Catálogo se informa como huérfano.
 - **Lo que Swayp no lista queda en 0**, no se borra el renglón. La exportación de
   una bodega es su inventario completo; si una referencia no aparece, esa bodega
   no la tiene. El producto sigue existiendo y mañana puede reponerse.

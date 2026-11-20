@@ -50,6 +50,8 @@ describe("el nombre de la bodega de Swayp se traduce a nuestra ciudad", () => {
   });
 
   it("una bodega que no conocemos devuelve null en vez de adivinar", () => {
+    // Las diez bodegas de Swayp (20-11-2026).
+    expect(["BODEGA CUSCO", "BODEGA HUANCAYO", "BODEGA CHICLAYO", "BODEGA CHIMBOTE"].map(ciudadDeBodega)).toEqual(["cusco", "huancayo", "chiclayo", "chimbote"]);
     expect(ciudadDeBodega("BODEGA TACNA")).toBeNull();
     expect(ciudadDeBodega("")).toBeNull();
     expect(ciudadDeBodega(null)).toBeNull();

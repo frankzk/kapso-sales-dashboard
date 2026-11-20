@@ -193,13 +193,14 @@ describe("groupInventoryByCity", () => {
       { barCode: "AURE003", availableAmount: 5, name: "Ethiopian", idWarehouse: "6a3c-are" }, // otro lote, por alias
       { barCode: "AURE001", availableAmount: 3, name: "Candida", idWarehouse: "200" },
       { barCode: "AURE001", availableAmount: 9, name: "Candida", idWarehouse: "300" }, // ciudad sin mapear
-      { barCode: "AURE001", availableAmount: 4, name: "Candida", idWarehouse: "400" }, // Cusco: fuera del sync
+      { barCode: "AURE001", availableAmount: 4, name: "Candida", idWarehouse: "400" }, // Cusco: en el sync desde el 20-11-2026
       { barCode: "AURE001", availableAmount: 1, name: "Candida", idWarehouse: "999" }, // bodega fuera de la lista
       { barCode: "AURE001", availableAmount: 1, name: "Candida", idWarehouse: "999" },
     ].map(normalizeInventoryRow);
 
     const { porCiudad, sinCiudad } = groupInventoryByCity(rows, WAREHOUSES);
-    expect([...porCiudad.keys()].sort()).toEqual(["arequipa", "trujillo"]);
+    expect([...porCiudad.keys()].sort()).toEqual(["arequipa", "cusco", "trujillo"]);
+    expect(porCiudad.get("cusco")).toEqual([{ codbar: "AURE001", nombre: "Candida", bodega: "Bodega Cusco", disponible: 4 }]);
     expect(porCiudad.get("arequipa")).toEqual([
       { codbar: "AURE003", nombre: "Ethiopian", bodega: "arequipa", disponible: 75 },
     ]);
@@ -208,7 +209,6 @@ describe("groupInventoryByCity", () => {
     ]);
     expect(sinCiudad).toEqual([
       { idWarehouse: "300", ciudad: null, nombre: "", ciudadInei: "", direccion: "Parque industrial", filas: 1 },
-      { idWarehouse: "400", ciudad: "cusco", nombre: "Bodega Cusco", ciudadInei: "080101", direccion: "", filas: 1 },
       { idWarehouse: "999", ciudad: null, nombre: "", ciudadInei: "", direccion: "", filas: 2 },
     ]);
   });
@@ -312,12 +312,10 @@ describe("inventarioDesdeProductos (GET /v1/integrations/products)", () => {
     expect(r.bodegas.find((b) => b.id === "40101")).toMatchObject({ ciudadInei: "040101", city: "arequipa" });
   });
 
-  it("Cusco resuelve pero no entra al sync; el producto sin código se ignora", () => {
+  it("Cusco entra al sync (20-11-2026); el producto sin código se ignora", () => {
     const r = inventarioDesdeProductos(respuesta);
-    expect(r.porCiudad.has("cusco")).toBe(false);
-    expect(r.sinCiudad).toEqual([
-      { idWarehouse: "80101", ciudad: "cusco", nombre: "BODEGA CUSCO", ciudadInei: "080101", direccion: "", filas: 1 },
-    ]);
+    expect(r.porCiudad.has("cusco")).toBe(true);
+    expect(r.sinCiudad).toEqual([]);
     expect(r.totalFilas).toBe(7);
     expect(r.filasPorBodega["40101"]).toBe(3);
   });
