@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { allocateLines, buildGfOrderInput, gfGuideConfirmed, splitName, type GfOrderSource } from "@/lib/gf-courier-order";
+import { allocateLines, buildGfOrderInput, gfGuideConfirmed, gfNotesInSync, gfOrderNote, splitName, type GfOrderSource } from "@/lib/gf-courier-order";
 import { mapGfStatus } from "@/lib/gf-courier-status";
 
 const sum = (items: { quantity: number; unit_price: number }[]) => Math.round(items.reduce((s, i) => s + i.unit_price * 100 * i.quantity, 0));
@@ -90,5 +90,34 @@ describe("«Confirmado» en GF (owner, 20-11-2026)", () => {
     const yes = buildGfOrderInput({ ...base, confirmed: true }), no = buildGfOrderInput(base);
     expect(yes.ok && yes.input.confirmed).toBe(true);
     expect(no.ok && "confirmed" in no.input).toBe(false);
+  });
+});
+
+describe("nota del pedido en el rótulo de GF (owner, 20-11-2026)", () => {
+  it("la nota del pedido (raw.note, la misma de shopify_note) va como observations, limpia y hasta 500", () => {
+    expect(gfOrderNote({ note: "  CNF - ALEXIS\n// entrega después de las 5 pm " })).toBe("CNF - ALEXIS // entrega después de las 5 pm");
+    expect(gfOrderNote({ note: "   " })).toBeNull();
+    expect(gfOrderNote({})).toBeNull();
+    expect(gfOrderNote(null)).toBeNull();
+    expect(gfOrderNote({ note: "x".repeat(900) })!.length).toBe(500);
+    const r = buildGfOrderInput({ ...base, observations: gfOrderNote({ note: "Pedir ubicación por WhatsApp" }) });
+    expect(r.ok && r.input.observations).toBe("Pedir ubicación por WhatsApp");
+    const none = buildGfOrderInput({ ...base, observations: gfOrderNote({ note: "" }) });
+    expect(none.ok && "observations" in none.input).toBe(false);
+  });
+  it("sabe si la nota que tiene GF es la vigente, también si GF la recortó por su límite", () => {
+    expect(gfNotesInSync("CNF - ALEXIS", "CNF - ALEXIS")).toBe(true);
+    expect(gfNotesInSync(null, null)).toBe(true);
+    expect(gfNotesInSync(null, "")).toBe(true);
+    expect(gfNotesInSync("CNF - ALEXIS", null)).toBe(false);
+    expect(gfNotesInSync(null, "Llamar antes")).toBe(false);
+    expect(gfNotesInSync("CNF - ALEXIS // 5 pm", "CNF - ALEXIS")).toBe(false); // corta: no es un recorte de GF
+    const long = "a".repeat(500);
+    expect(gfNotesInSync(long, long.slice(0, 445))).toBe(true);
+  });
+  it("las tres lecturas de la guía (crear, vista previa automática y simulación) mandan la misma nota", () => {
+    for (const path of ["lib/gf-courier-guide.ts", "lib/gf-auto-guide-server.ts", "lib/gf-courier-simulate-server.ts"]) {
+      expect(readFileSync(join(process.cwd(), path), "utf8"), path).toContain("observations: gfOrderNote(order.data.raw),");
+    }
   });
 });
