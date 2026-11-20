@@ -20957,6 +20957,30 @@ Código: `lib/gf-courier-order.ts` (`gfGuideConfirmed`, `confirmed` en el cuerpo
 Pruebas: `test/gf-courier-order.test.ts`.
 Pruebas: `test/gf-auto-guide.test.ts`.
 
+#### La nota del pedido en el rótulo de GF (owner, 20-11-2026)
+
+Pregunta del owner: «en los rótulos de GF no se está mostrando las notas que vienen de Kapta o de Rentabilify, ¿los estás
+recibiendo?». No: Kapta nunca mandaba la nota (de las 617 guías enviadas hasta el 20-11, ninguna la llevaba y 397 pedidos
+tenían nota). La nota es la misma que imprime el rótulo de Kapta (`shopify_note` = `raw->>note`, §0098): «CNF - ALEXIS»,
+«entrega después de las 5 pm», «pedir ubicación por WhatsApp», el enlace del punto de entrega. Ahora:
+
+- **Al crear la guía** (`createGfGuideFor`, la de una persona y la automática) va como `observations`
+  (`gfOrderNote(order.data.raw)`, limpia y hasta 500 caracteres). GF la imprime como «Notas del pedido» y la muestra en la
+  hoja de ruta y en la app del motorizado. La vista previa automática y la simulación la arman igual.
+- **Si la nota se escribe o cambia después** (la guía automática nace a los minutos del pedido), `gf-reconcile` (cada 20
+  minutos) compara la nota del pedido con la que devuelve GF (`observations` en `GET /v1/orders/{tracking}`) en la misma
+  lectura de cada guía viva y, si no es la misma, la manda con `POST /v1/orders/{tracking}/notes` (`syncGfNoteFor`). Sin
+  nota en Kapta, la borra en GF. Hasta 120 notas por pasada. No deja hecho en el pedido: es la misma nota que ya está en
+  Kapta.
+- **El rótulo ya pegado no cambia.** Si GF imprimió el rótulo antes de la nota nueva, el motorizado la ve en su app y en la
+  hoja de ruta; reimprimirlo en GF la trae.
+
+Lo que manda la tienda en otro campo (`notes`, `note`) GF no lo guarda: la nota va en `observations`.
+
+Código: `lib/gf-courier-order.ts` (`gfOrderNote`, `gfNotesInSync`), `lib/gf-courier.ts` (`updateNotes`),
+`lib/gf-courier-guide.ts` (`syncGfNoteFor`) y `app/api/cron/gf-reconcile/route.ts`.
+Pruebas: `test/gf-courier-order.test.ts` y `test/gf-notes-sync.test.ts`.
+
 #### GF Courier en los acuerdos de Repro Lima (owner, 15-11-2026)
 
 Decisión del owner: «Sí, haz lo de GF Courier en los acuerdos. En el caso de GF Courier la guía ya podría quedar

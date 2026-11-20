@@ -30,7 +30,7 @@ import { sendTelegramToAll } from "@/lib/telegram";
 import { telegramTarget } from "@/lib/aliclik-scheduled-server";
 import { activeAliclikBlocker } from "@/lib/aliclik-guide";
 import { createGfGuideFor, loadGfStore, type GfGuideResult } from "@/lib/gf-courier-guide";
-import { buildGfOrderInput } from "@/lib/gf-courier-order";
+import { buildGfOrderInput, gfOrderNote } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { GF_COURIER } from "@/lib/gf-courier-track";
 import { loadGfProducts } from "@/lib/gf-courier-catalog-server";
@@ -276,6 +276,8 @@ async function previewGfGuide(
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address ?? null, reference: row.reference ?? null,
     latitude: row.latitude ?? null, longitude: row.longitude ?? null, orderTotal: Number(row.order_total), advancePaid: advance,
     webPrepaid: isWebPrepaid({ financialStatus: order.data.financial_status, totalRefunded: Number(order.data.total_refunded ?? 0), paymentGateway: order.data.payment_gateway }),
+    // La nota del pedido sale en el rótulo de GF (owner, 20-11-2026).
+    observations: gfOrderNote(order.data.raw),
     lines,
   });
   if (!built.ok) return { ok: false, error: built.reason };
