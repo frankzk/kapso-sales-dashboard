@@ -51,7 +51,9 @@ describe("nota del pedido → GF", () => {
 
   it("gf-reconcile lo hace con la misma lectura de cada guía viva, con la columna shopify_note y con tope por pasada", () => {
     const cron = readFileSync(join(process.cwd(), "app/api/cron/gf-reconcile/route.ts"), "utf8");
-    expect(cron).toContain('.select("store_id,guide_code,order_id")');
+    // Qué guías lee y en qué orden: test/gf-reconcile-coverage.test.ts.
+    expect(cron).toContain("loadLiveGfGuides(admin, GF_COURIER)");
+    expect(readFileSync(join(process.cwd(), "lib/gf-reconcile-live.ts"), "utf8")).toContain('.select("id,store_id,guide_code,order_id,api_report_at")');
     expect(cron).toContain('.from("orders").select("id,shopify_note")');
     expect(cron).toContain("syncGfNoteFor({ token, orderId: s.order_id, current: current.data");
     expect(cron).toContain("report.notes < NOTES_PER_RUN");

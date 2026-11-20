@@ -20781,7 +20781,8 @@ GF Courier cuyo día no pasó; si no, el día que decida GF.
 , `X-GF-Signature` sobre el cuerpo crudo, ±5 min,
 `X-GF-Event-Id` único en `gf_webhook_events`) solo dispara una relectura de `GET /v1/orders/{guía}`; se aplica el estado
 actual con las mismas guardas que Aliclik (precedencia, intento fallido, sello único de devolución, preparación y
-custodia monotónicas). El cron `gf-reconcile` (cada 20 min) relee las guías vivas y resuelve las intenciones huérfanas.
+custodia monotónicas). El cron `gf-reconcile` (cada 20 min) relee **todas** las guías vivas, la leída hace más tiempo
+primero, y resuelve las intenciones huérfanas (abajo: «`gf-reconcile` relee todas las guías vivas»).
 
 | GF | Salida en Kapta |
 | --- | --- |
@@ -20939,6 +20940,31 @@ Lo que manda la tienda en otro campo (`notes`, `note`) GF no lo guarda: la nota 
 Código: `lib/gf-courier-order.ts` (`gfOrderNote`, `gfNotesInSync`), `lib/gf-courier.ts` (`updateNotes`),
 `lib/gf-courier-guide.ts` (`syncGfNoteFor`) y `app/api/cron/gf-reconcile/route.ts`.
 Pruebas: `test/gf-courier-order.test.ts` y `test/gf-notes-sync.test.ts`.
+
+#### `gf-reconcile` relee todas las guías vivas (20-11-2026)
+
+El 20-11-2026 producción tenía justo 300 guías GF vivas (211 `pendiente`, 89 `en_ruta`, la más vieja del 11-11) y la
+pasada leía `.limit(300)` sin orden: toda guía de más no se releía nunca. Si se perdía su webhook, su estado se quedaba
+viejo en Kapta y la nota (arriba, `syncGfNoteFor`) no le llegaba. Ahora:
+
+- **Todas las vivas, la leída hace más tiempo primero.** La pasada trae todas las salidas GF `pendiente` y `en_ruta` (de
+  a 1000 filas, por `id`) y las lee en orden de `api_report_at`: primero la que nunca se leyó, después la que GF reportó
+  hace más tiempo. Cada lectura de GF sella `api_report_at` (también la que dispara el webhook), así que la guía leída
+  pasa al final de la cola. No hay cursor guardado: el orden sale del propio sello.
+- **Presupuesto de tiempo.** La pasada no empieza otra lectura pasados 230 s desde que arrancó; la lectura más lenta (20 s
+  de timeout al leer y otros 20 s al mandar la nota) termina igual antes de los 300 s de `maxDuration`. Las que no alcanzó
+  van primero en la pasada siguiente, 20 minutos después. Se leen una por una: GF admite 300 pedidos por minuto por token
+  y el webhook relee con el mismo token.
+- **Una guía que GF no devuelve** (error al leer) no se sella: queda en `errors` y va primero otra vez en la pasada
+  siguiente.
+- **El tope de notas no cambia:** hasta 120 por pasada. La nota (`shopify_note`) se trae de a 100 pedidos y solo de las
+  guías que se van a leer.
+- **El reporte** dice `live` (guías vivas), `refreshed` (leídas en esta pasada), `remaining` (las que no alcanzó: van
+  primero en la siguiente) y `skipped` (sin guía o sin token de la tienda: ninguna pasada puede leerlas).
+  `live = refreshed + remaining + skipped`.
+
+Código: `lib/gf-reconcile-live.ts` (`loadLiveGfGuides`, `stalestFirst`, `GF_READ_BUDGET_MS`) y
+`app/api/cron/gf-reconcile/route.ts`. Pruebas: `test/gf-reconcile-coverage.test.ts`.
 
 #### GF Courier en los acuerdos de Repro Lima (owner, 15-11-2026)
 
