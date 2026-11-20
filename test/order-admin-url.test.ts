@@ -397,8 +397,8 @@ describe("cada enlace a un pedido pasa por orderAdminLink (fuente)", () => {
     expect(envios).toContain('order.shopify_order_id && order.platform !== "woocommerce"');
     const shipments = flat(read("lib/shipments-access.ts"));
     expect(shipments).toContain('if (!shippingAddress && orderRow.shopify_order_id && platform === "shopify") {');
-    expect(shipments).toContain('let orderRes = await readOrder("name,shopify_order_id,line_items,raw,platform");');
-    expect(shipments).toContain('if (orderRes.error) orderRes = await readOrder("name,shopify_order_id,line_items,raw");');
+    expect(shipments).toContain('let orderRes = await readOrder("name,shopify_order_id,line_items,raw,platform,created_at");');
+    expect(shipments).toContain('if (orderRes.error) orderRes = await readOrder("name,shopify_order_id,line_items,raw,created_at");');
     expect(read("app/dashboard/pedidos/tanders-actions.ts")).toContain(
       'if ((await orderPlatformOf(admin, orderId)) === "woocommerce") return stored;',
     );

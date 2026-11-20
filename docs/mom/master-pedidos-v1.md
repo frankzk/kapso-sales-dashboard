@@ -12124,7 +12124,20 @@ la guía: ¿lo puede llevar Swayp hoy?
   > (Ceylon Cinnamon + Nattokinase) salía «Swayp ok · con stock» en Juliaca, sin
   > Ceylon en el almacén, y «Crear guía Swayp» lo rechazaba después. Ese día
   > pasaron a «Sin stock Swayp» 10 de las 111 guías pendientes con varios
-  > productos. El vínculo al catálogo se sigue exigiendo al crear la guía.
+  > productos. En la segunda revisión (owner: «a ver si falta filtrar algo»)
+  > Envíos exige también el **vínculo** al catálogo de Swayp, como el Master:
+  > un producto sin vínculo cuenta como «Sin stock Swayp» aunque haya stock
+  > (`withCurrentFenixEligibility`, `lib/shipments-access.ts`, con el mapa
+  > `swayp_sku_map` de toda la organización; sin mapa cargado no se exige). Ese
+  > día fueron 345 guías: 258 de Lima, 86 del Callao (allí no hay control de
+  > cantidad y el vínculo es lo único que dice que no) y #KP135398 en Chiclayo.
+  > Se calcula al abrir la cola: no espera al sync de inventario.
+  >
+  > **El cajón de Envíos dice cuándo se creó el pedido** (owner, 20-11-2026:
+  > «para saber si es un pedido al menos medio reciente»): sobre los productos,
+  > «Creado el 13/11/26, 10:12 a. m. · hace 7 días» (`orders.created_at`, en
+  > días de Lima, `lib/order-age.ts`); con más de 14 días, la antigüedad va en
+  > ámbar.
 - **El destino** es el del Master: distrito y provincia del ubigeo, o el
   departamento si falta la provincia.
 - **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**

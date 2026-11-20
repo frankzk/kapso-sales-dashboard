@@ -12,6 +12,7 @@ import type {
   ShipmentRow,
 } from "@/lib/types";
 import { evaluateFenix, type FenixStockRow } from "@/lib/fenix";
+import { normalizeSku, productosSinVinculo } from "@/lib/swayp-productos";
 import {
   ALICLIK_REPROGRAM_OUTCOMES,
   COURIERS_FUERA_DE_REPRO,
@@ -473,11 +474,31 @@ async function withCurrentFenixEligibility(
       sb.from("orders").select("id,line_items").in("id", part),
     ),
   );
-  const [{ data: stock, error: stockError }, orderPages] = await Promise.all([
+  // El catálogo de Swayp de cada organización (owner, 20-11-2026): un producto
+  // sin vínculo no sale por Swayp aunque haya stock, igual que en el Master
+  // (`swayp_availability`). Sin catálogo cargado no se exige (no se adivina).
+  const orgStorePromise = sb.from("stores").select("id,org_id").in("org_id", orgIds);
+  const [{ data: stock, error: stockError }, orderPages, { data: orgStores }] = await Promise.all([
     stockPromise,
     orderPagesPromise,
+    orgStorePromise,
   ]);
   if (stockError || orderPages.some((page) => !!page.error)) return rows;
+  const orgOfStore = new Map(((orgStores as { id: string; org_id: string }[] | null) ?? []).map((st) => [st.id, st.org_id]));
+  const linkByOrg = new Map<string, Map<string, { codbar: string }>>();
+  if (orgOfStore.size) {
+    const { data: links, error: linksError } = await sb.from("swayp_sku_map")
+      .select("store_id,shopify_sku,codbar").in("store_id", [...orgOfStore.keys()]);
+    if (!linksError) {
+      for (const link of (links as { store_id: string; shopify_sku: string; codbar: string | null }[] | null) ?? []) {
+        const org = orgOfStore.get(link.store_id);
+        if (!org || !link.codbar?.trim()) continue;
+        const map = linkByOrg.get(org) ?? new Map<string, { codbar: string }>();
+        map.set(normalizeSku(link.shopify_sku), { codbar: link.codbar });
+        linkByOrg.set(org, map);
+      }
+    }
+  }
 
   const stockByOrg = new Map<string, FenixStockRow[]>();
   for (const item of (stock as (FenixStockRow & { org_id: string })[]) ?? []) {
@@ -508,15 +529,15 @@ async function withCurrentFenixEligibility(
 
   return rows.map((shipment) => {
     const orgId = orgByStore.get(shipment.store_id);
-    const current = evaluateFenix(
-      shipment,
-      orgId ? stockByOrg.get(orgId) ?? [] : [],
-      shipment.order_id ? productsByOrder.get(shipment.order_id) : undefined,
-    );
+    const products = shipment.order_id ? productsByOrder.get(shipment.order_id) : undefined;
+    const current = evaluateFenix(shipment, orgId ? stockByOrg.get(orgId) ?? [] : [], products);
+    const unlinked = current.eligible && products?.length && orgId
+      ? productosSinVinculo(products, linkByOrg.get(orgId)).length > 0
+      : false;
     return {
       ...shipment,
-      fenix_eligible: current.eligible,
-      fenix_reason: current.reason,
+      fenix_eligible: current.eligible && !unlinked,
+      fenix_reason: unlinked ? "sin_stock" : current.reason,
     };
   });
 }
@@ -1145,8 +1166,8 @@ export async function getShipmentWithCalls(
       sb.from("orders").select(columns).eq("id", shipmentRow.order_id!).maybeSingle();
     // Con `platform` (0274, MOM §38.12); sin la columna, se repite sin ella y el
     // pedido es de Shopify, como siempre.
-    let orderRes = await readOrder("name,shopify_order_id,line_items,raw,platform");
-    if (orderRes.error) orderRes = await readOrder("name,shopify_order_id,line_items,raw");
+    let orderRes = await readOrder("name,shopify_order_id,line_items,raw,platform,created_at");
+    if (orderRes.error) orderRes = await readOrder("name,shopify_order_id,line_items,raw,created_at");
     const orderRow = orderRes.data as unknown as
       | (Omit<ShipmentOrderDetail, "shipping_address" | "platform"> & { raw?: unknown; platform?: unknown })
       | null;
@@ -1204,6 +1225,7 @@ export async function getShipmentWithCalls(
         })),
         shipping_address: shippingAddress,
         platform,
+        created_at: (orderRow as { created_at?: string | null }).created_at ?? null,
       };
     }
   }

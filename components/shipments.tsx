@@ -157,6 +157,7 @@ import { OrderLinkPicker } from "@/components/order-link-picker";
 import { DirectFenixGuideModal } from "@/components/direct-fenix-guide-modal";
 import { DistrictMismatchWarning, useDistrictMismatchCheck } from "@/components/district-mismatch-warning";
 import { SwaypNoveltyModal } from "@/components/swayp-novelty-modal";
+import { orderAgeDays, orderAgeText, orderCreatedLabel } from "@/lib/order-age";
 import {
   currentFenixReason,
   matchesFenixAvailability,
@@ -4315,7 +4316,10 @@ function ShipmentDrawer({
                 )}
                 {detail.shipment.matched && !showOrderPicker &&
                   (detail.order ? (
-                    <ShipmentOrderItems order={detail.order} />
+                    <>
+                      <OrderCreatedLine createdAt={detail.order.created_at} />
+                      <ShipmentOrderItems order={detail.order} />
+                    </>
                   ) : (
                     <p className="text-[13px] leading-5 text-ink-500">
                       No se encontró el detalle sincronizado de Shopify.
@@ -4835,6 +4839,21 @@ const ACTION_CARD = "rounded-lg bg-white p-4 shadow-control ring-2 ring-brand-60
 function OrderNameLabel({ name, matched }: { name: string | null; matched: boolean }) {
   if (matched && name) return <>{name}</>;
   return <span className="text-ink-500">—</span>;
+}
+
+/**
+ * Cuándo se creó el pedido y cuánto lleva (owner, 20-11-2026: «para saber si es
+ * un pedido al menos medio reciente»): «Creado el 13/11/26, 10:12 a. m. · hace 7 días».
+ */
+function OrderCreatedLine({ createdAt }: { createdAt: string | null | undefined }) {
+  const days = orderAgeDays(createdAt);
+  if (!createdAt || days === null) return null;
+  return (
+    <p className="mb-3 text-[13px] leading-5 text-ink-600">
+      Creado el <span className="tabular-nums text-ink-900">{orderCreatedLabel(createdAt)}</span>
+      <span className={cn("font-medium", days > 14 ? "text-warn-fg" : "text-ink-700")}> · {orderAgeText(days)}</span>
+    </p>
+  );
 }
 
 function ShipmentOrderItems({ order }: { order: ShipmentOrderDetail }) {

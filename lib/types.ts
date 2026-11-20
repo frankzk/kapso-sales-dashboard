@@ -85,6 +85,8 @@ export interface ShipmentOrderDetail {
    * su tienda.
    */
   platform?: OrderPlatform;
+  /** Cuándo se creó el pedido (`orders.created_at`): el cajón de Envíos dice su antigüedad (20-11-2026). */
+  created_at?: string | null;
 }
 
 /**
