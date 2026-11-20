@@ -18,7 +18,7 @@ import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { gfCancelBlockedByRider, liveGfGuides } from "@/lib/gf-courier-status";
-import { buildGfOrderInput, gfGuideConfirmed } from "@/lib/gf-courier-order";
+import { buildGfOrderInput, gfGuideConfirmed, gfNotesInSync, gfOrderNote } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
 import { gfCancelRequestedText } from "@/lib/gf-courier-status";
@@ -102,6 +102,8 @@ export async function createGfGuideFor(
     scheduledFor: day,
     // «Confirmado» en GF: la creó una persona o tiene un día acordado (owner, 20-11-2026).
     confirmed: gfGuideConfirmed({ actor: ctx.userId, scheduledDate: day }),
+    // La nota del pedido sale en el rótulo de GF (owner, 20-11-2026).
+    observations: gfOrderNote(order.data.raw),
     lines,
   });
   if (!built.ok) return { ok: false, error: built.reason };
@@ -227,6 +229,24 @@ export async function confirmGfGuideFor(
     actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId,
     note: `Confirmado en GF Courier (${trackingId}): sale sin volver a llamar a la clienta.`, payload: { gf_confirmed: true } });
   return { ok: true, trackingId };
+}
+
+/**
+ * La nota del pedido cambió con la guía GF ya creada (owner, 20-11-2026): la guía automática nace a los minutos del pedido y la
+ * nota («CNF - ALEXIS», «entrega después de las 5 pm») a veces se escribe después. `current` es lo que GF devolvió al releer la
+ * guía (gf-reconcile): si GF todavía no informa `observations` (versión anterior), no se toca. Una misma nota no se reenvía.
+ */
+export async function syncGfNoteFor(
+  input: { token: string; orderId: string; current: GfOrder; raw: unknown },
+): Promise<"same" | "unknown" | "sent" | { error: string }> {
+  if (!("observations" in input.current)) return "unknown";
+  const note = gfOrderNote(input.raw);
+  if (gfNotesInSync(note, input.current.observations)) return "same";
+  const tracking = input.current.tracking_id;
+  // Sin estado guardado en Kapta: la clave cambia en cada envío y GF no duplica (la misma nota no es un cambio).
+  const res = await gfCourier.updateNotes({ apiToken: input.token }, tracking, note ?? "",
+    gfIdempotencyKey(input.orderId, `notes-${tracking}-${Date.now().toString(36)}`));
+  return res.ok ? "sent" : { error: `${res.error.code}: ${res.error.message}` };
 }
 
 export async function cancelGfGuideFor(

@@ -100,6 +100,26 @@ export function buildGfOrderInput(src: GfOrderSource): GfOrderBuild {
 }
 
 /**
+ * La nota del pedido (`orders.raw.note`, la misma columna `shopify_note` que imprime el rótulo de Kapta): «CNF - ALEXIS»,
+ * «entrega después de las 5 pm», «pedir ubicación por WhatsApp». Va a GF como `observations` y sale en su rótulo como
+ * «Notas del pedido» (owner, 20-11-2026: «en los rótulos de GF no se está mostrando las notas que vienen de Kapta»).
+ */
+export function gfOrderNote(raw: unknown): string | null {
+  const note = raw && typeof raw === "object" ? (raw as { note?: unknown }).note : null;
+  return clean(note).slice(0, 500) || null;
+}
+
+/**
+ * ¿La nota que tiene GF es la del pedido? GF guarda hasta 500 caracteres contando lo que antepone él («Distrito tomado de la
+ * dirección: …»), así que una nota muy larga puede volver recortada: si lo que tiene GF es el comienzo de la nota y está
+ * cerca del límite, ya está al día (si no, se reenviaría cada vez sin cambiar nada).
+ */
+export function gfNotesInSync(note: string | null, gf: string | null | undefined): boolean {
+  const want = note ?? "", have = clean(gf);
+  return want === have || (have.length >= 440 && want.length > have.length && want.startsWith(have));
+}
+
+/**
  * ¿La guía GF nace «Confirmada»? (owner, 20-11-2026: «los que solo tienen guía automática y no tienen una acción concreta de
  * programación… van a ser llamados»). Sí si una persona la creó (Mesa de ruta, Repro Lima) o el pedido trae un día acordado
  * («Programar envío» o el acuerdo de Repro Lima). La guía automática sin día no: en GF pasa por «Por llamar» si su motorizado

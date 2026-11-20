@@ -30,6 +30,8 @@ export interface GfOrder {
   currency: "PEN"; estimated_delivery_date: string; label_url: string; tracking_url: string | null; created_at?: string;
   /** Etapa de despacho (GF 049): AWAITING_OFFICE_CHECK / AWAITING_RIDER = ya tiene motorizado. */
   stage?: { code: string; name?: string; rider_name?: string | null } | null;
+  /** La nota del pedido que tiene GF (sin lo que agrega GF). Ausente en un GF anterior a la ruta de notas. */
+  observations?: string | null;
 }
 export interface GfOrderInput {
   external_id: string; service: "COD_LIMA";
@@ -102,6 +104,9 @@ export const gfCourier = {
   /** «Confirmado» en GF (owner, 20-11-2026): la clienta confirmó en Kapta; con Alexis (solo confirmados) ya no se la llama. */
   confirmOrder: (o: GfClientOpts, tracking: string, idempotencyKey: string, note?: string) =>
     call<GfOrder>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/confirmation`, note ? { note: note.slice(0, 200) } : {}, idempotencyKey),
+  /** Nota del pedido (owner, 20-11-2026): la que se escribe con la guía ya creada sale igual en el rótulo de GF. Vacío la borra. */
+  updateNotes: (o: GfClientOpts, tracking: string, observations: string, idempotencyKey: string) =>
+    call<GfOrder>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/notes`, { observations: observations.slice(0, 500) }, idempotencyKey),
   products: (o: GfClientOpts, after?: string) => call<{ data: { sku: string; merchant_sku: string; name: string; mode: string; sales_status?: string; variant_id: string }[]; next_cursor: string | null }>(
     o, "GET", `/v1/products?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`),
   productsBatch: (o: GfClientOpts, items: { sku: string; name: string; sales_status: "IN_STOCK" | "OUT_OF_STOCK" }[], idempotencyKey: string) =>

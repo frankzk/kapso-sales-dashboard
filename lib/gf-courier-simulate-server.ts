@@ -7,7 +7,7 @@ import "server-only";
 // pedido ya tuvo guía en GF, y un `scheduled_date` pasado no se manda. Solo lee: ni guías, ni intenciones, ni hechos.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { gfCourier } from "@/lib/gf-courier";
-import { buildGfOrderInput } from "@/lib/gf-courier-order";
+import { buildGfOrderInput, gfOrderNote } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { reproAgreedGfDay } from "@/lib/gf-courier-guide";
 import { GF_COURIER } from "@/lib/gf-courier-track";
@@ -94,6 +94,8 @@ export async function simulateGfOrder(
     webPrepaid: isWebPrepaid({ financialStatus: order.data.financial_status, totalRefunded: Number(order.data.total_refunded ?? 0), paymentGateway: order.data.payment_gateway }),
     scheduledFor: (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
       ?? await reproAgreedGfDay(admin, orderId),
+    // La nota del pedido sale en el rótulo de GF (owner, 20-11-2026).
+    observations: gfOrderNote(order.data.raw),
     lines,
   });
   if (!built.ok) return fail(label, store.name, built.reason, hadGuide);
