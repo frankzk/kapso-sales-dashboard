@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { allocateLines, buildGfOrderInput, splitName, type GfOrderSource } from "@/lib/gf-courier-order";
+import { allocateLines, buildGfOrderInput, gfGuideConfirmed, splitName, type GfOrderSource } from "@/lib/gf-courier-order";
 import { mapGfStatus } from "@/lib/gf-courier-status";
 
 const sum = (items: { quantity: number; unit_price: number }[]) => Math.round(items.reduce((s, i) => s + i.unit_price * 100 * i.quantity, 0));
@@ -77,5 +77,18 @@ describe("pagado en el checkout web: la guía sale sin cobro (17-11-2026, #KP206
   it("los tres caminos que crean la guía leen el prepago web", () => {
     for (const f of ["lib/gf-courier-guide.ts", "lib/gf-auto-guide-server.ts", "lib/gf-courier-simulate-server.ts"])
       expect(readFileSync(join(process.cwd(), f), "utf8")).toContain("webPrepaid: isWebPrepaid(");
+  });
+});
+
+describe("«Confirmado» en GF (owner, 20-11-2026)", () => {
+  it("la guía automática sin día no nace confirmada; la de una persona o con día acordado sí", () => {
+    expect(gfGuideConfirmed({ actor: null, scheduledDate: null })).toBe(false);
+    expect(gfGuideConfirmed({ actor: "user-1", scheduledDate: null })).toBe(true);
+    expect(gfGuideConfirmed({ actor: null, scheduledDate: "2026-11-21" })).toBe(true);
+  });
+  it("manda confirmed:true solo cuando corresponde", () => {
+    const yes = buildGfOrderInput({ ...base, confirmed: true }), no = buildGfOrderInput(base);
+    expect(yes.ok && yes.input.confirmed).toBe(true);
+    expect(no.ok && "confirmed" in no.input).toBe(false);
   });
 });

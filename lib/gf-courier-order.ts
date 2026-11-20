@@ -27,6 +27,8 @@ export interface GfOrderSource {
   webPrepaid?: boolean;
   scheduledFor?: string | null;
   observations?: string | null;
+  /** Coordinado por una persona (guía a mano, «Programar envío» o acuerdo de Repro Lima): GF lo marca «Confirmado». */
+  confirmed?: boolean;
   lines: { sku: string | null; title?: string | null; quantity: number; price: number }[];
 }
 export type GfOrderBuild = { ok: true; input: GfOrderInput } | { ok: false; reason: string };
@@ -92,6 +94,17 @@ export function buildGfOrderInput(src: GfOrderSource): GfOrderBuild {
       payment: { total: soles(total), advance_paid: soles(advance), amount_to_collect: soles(total - advance) },
       ...(src.scheduledFor ? { scheduled_date: src.scheduledFor } : {}),
       ...(observations ? { observations: observations.slice(0, 500) } : {}),
+      ...(src.confirmed ? { confirmed: true } : {}),
     },
   };
+}
+
+/**
+ * ¿La guía GF nace «Confirmada»? (owner, 20-11-2026: «los que solo tienen guía automática y no tienen una acción concreta de
+ * programación… van a ser llamados»). Sí si una persona la creó (Mesa de ruta, Repro Lima) o el pedido trae un día acordado
+ * («Programar envío» o el acuerdo de Repro Lima). La guía automática sin día no: en GF pasa por «Por llamar» si su motorizado
+ * sale solo con confirmados (Alexis).
+ */
+export function gfGuideConfirmed(input: { actor: string | null; scheduledDate: string | null | undefined }): boolean {
+  return Boolean(input.actor) || Boolean(input.scheduledDate);
 }

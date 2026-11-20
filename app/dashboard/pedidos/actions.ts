@@ -60,7 +60,7 @@ import { orderPlatformName } from "@/lib/order-admin-url";
 import { applyConfirmationCycleToStore, freshLogisticsCost, recomputeOrderMasterSafe } from "@/lib/order-master";
 import { processWooSaleReturn } from "@/lib/woo-sale-return-server";
 import { wooSaleGfToCancel } from "@/lib/woo-sale-return";
-import { cancelGfGuideFor } from "@/lib/gf-courier-guide";
+import { cancelGfGuideFor, confirmGfGuideFor } from "@/lib/gf-courier-guide";
 import {
   ACTIVE_OUTPUTS_ERROR,
   activeOutputs,
@@ -2542,6 +2542,15 @@ export async function registerConfirmationAttempt(
       : ` Envío programado para el ${dispatchDateLabel(dispatchOn)}.`;
   }
 
+  // «Confirmado» en GF Courier (owner, 20-11-2026: se llama «desde los dos lados»): si el pedido ya tiene su guía GF, GF
+  // la marca confirmada y no la pone en «Por llamar» (Alexis sale solo con confirmados). No bloquea la confirmación.
+  let gfNotice = "";
+  if (result.confirms && !response.duplicate) {
+    const gf = await confirmGfGuideFor(orderId, { userId: ctx.userId, note: note ? note.slice(0, 200) : null }, admin);
+    if (gf.ok) gfNotice = " GF Courier: confirmado, sale sin volver a llamar.";
+    else if (!gf.skipped) gfNotice = ` No se pudo avisar a GF Courier (${gf.error}): confírmalo en GF.`;
+  }
+
   await recomputeOrderMasterSafe(admin, [orderId]);
   revalidatePath(MASTER_PATH);
   const days = Number(response.day_count ?? 0);
@@ -2557,7 +2566,7 @@ export async function registerConfirmationAttempt(
       notice:
         (paymentReady
           ? "Pedido confirmado; pasa a Preparación."
-          : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.") + scheduledNotice,
+          : "Confirmado de palabra. Sigue en confirmación hasta validar el pago exigido.") + scheduledNotice + gfNotice,
     };
   }
   if (days >= CONFIRMATION_MAX_DAYS) {

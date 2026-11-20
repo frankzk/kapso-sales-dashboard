@@ -20888,6 +20888,32 @@ guía GF que GF todavía no asignó.
 
 Migración `0345_gf_auto_guide.sql` (`gf_auto_guide_settings`, `gf_auto_guide_log`). Código: `lib/gf-auto-guide.ts`
 (regla pura), `lib/gf-auto-guide-server.ts` (la pasada y la vista del panel) y `app/api/cron/gf-auto-guide/route.ts`.
+
+#### «Confirmado» en GF y «Por llamar» de Alexis (owner, 20-11-2026)
+
+Decisión del owner: «los que solo tienen guía automática y no tienen una acción concreta de programación antes de ser
+asignados a un motorizado van a ser llamados. Básicamente los de la ruta y la zona de Alexis… con Alexis solo sacamos
+pedidos con confirmación… si ya una guía está coordinada para ese día… hay que saber identificarlas y que no se queden en
+el filtro de llamadas». Se llama desde los dos lados: GF y Kapta.
+
+En GF, Alexis tiene «Solo confirmados» (GF 077). En su zona, lo que no está «Confirmado» va a «Por llamar», en Preparación
+→ Por asignar, y no se le puede asignar. Las reglas de «Confirmado» son de GF: confirmado por oficina o por la tienda, la
+fecha se movió («Cambiar fecha»), la fecha la pidió la clienta, o venía programado. Un «No contesta» lo deja sin confirmar.
+Kapta pone su parte:
+
+- **Al crear la guía** (`createGfGuideFor`), manda `confirmed: true` si la guía nace coordinada (`gfGuideConfirmed`):
+  - la creó una persona: Mesa de ruta o Repro Lima;
+  - o el pedido lleva un día acordado: «Programar envío» (`dispatch_scheduled_on`) o el día del acuerdo de Repro Lima.
+  La guía automática sin día no lo lleva: es la que GF llama.
+- **Cuando la clienta confirma en Kapta** («Confirmó el pedido» en la gestión de confirmación) y el pedido ya tiene su
+  guía GF viva, Kapta llama a `POST /v1/orders/{tracking}/confirmation` (`confirmGfGuideFor`) y deja el hecho
+  `courier_status` «Confirmado en GF Courier». Si GF no responde, la confirmación en Kapta queda igual y el aviso dice que
+  se confirme en GF.
+- **Repro Lima** ya cambia el día de la guía GF (`changeGfGuideDateFor`): GF lo cuenta como confirmado.
+
+Código: `lib/gf-courier-order.ts` (`gfGuideConfirmed`, `confirmed` en el cuerpo), `lib/gf-courier.ts` (`confirmOrder`),
+`lib/gf-courier-guide.ts` (`confirmGfGuideFor`) y `registerConfirmationAttempt` en `app/dashboard/pedidos/actions.ts`.
+Pruebas: `test/gf-courier-order.test.ts`.
 Pruebas: `test/gf-auto-guide.test.ts`.
 
 #### GF Courier en los acuerdos de Repro Lima (owner, 15-11-2026)

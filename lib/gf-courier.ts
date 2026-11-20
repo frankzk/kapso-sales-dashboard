@@ -38,6 +38,8 @@ export interface GfOrderInput {
   items: { sku: string; name?: string; quantity: number; unit_price: number }[];
   payment: { total: number; advance_paid: number; amount_to_collect: number };
   scheduled_date?: string; observations?: string;
+  /** «Confirmado» en GF (owner, 20-11-2026): una persona lo programó o creó la guía; GF no lo pone en «Por llamar». */
+  confirmed?: boolean;
 }
 /** Respuesta 200 de POST /v1/orders/validate: lo que GF crearía y dónde entendió el destino. No reserva nada. */
 export interface GfValidation {
@@ -97,6 +99,9 @@ export const gfCourier = {
   /** Cambiar la fecha antes de que salga (owner, 17-11-2026): misma guía y caja armada; GF lo rechaza si ya tiene motorizado. */
   changeDeliveryDate: (o: GfClientOpts, tracking: string, newDate: string, reason: string, idempotencyKey: string) =>
     call<GfOrder>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/delivery-date`, { new_date: newDate, reason: reason.slice(0, 200) }, idempotencyKey),
+  /** «Confirmado» en GF (owner, 20-11-2026): la clienta confirmó en Kapta; con Alexis (solo confirmados) ya no se la llama. */
+  confirmOrder: (o: GfClientOpts, tracking: string, idempotencyKey: string, note?: string) =>
+    call<GfOrder>(o, "POST", `/v1/orders/${encodeURIComponent(tracking)}/confirmation`, note ? { note: note.slice(0, 200) } : {}, idempotencyKey),
   products: (o: GfClientOpts, after?: string) => call<{ data: { sku: string; merchant_sku: string; name: string; mode: string; sales_status?: string; variant_id: string }[]; next_cursor: string | null }>(
     o, "GET", `/v1/products?limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`),
   productsBatch: (o: GfClientOpts, items: { sku: string; name: string; sales_status: "IN_STOCK" | "OUT_OF_STOCK" }[], idempotencyKey: string) =>
