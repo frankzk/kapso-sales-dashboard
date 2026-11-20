@@ -2717,7 +2717,10 @@ function ShipmentDrawer({
     : null;
   const fenixRouteAvailable =
     !!shipment && (shipment.courier !== "aliclik" || shipment.fenix_eligible) && !swaypSinCodbar;
+  // «Cliente cancela» también descarta la recuperación: pide el mismo motivo.
+  const cancelReasonMissing = disposition === "cancela" && note.trim().length < DISCARD_REASON_MIN;
   const requiredDateMissing =
+    cancelReasonMissing ||
     (disposition === "confirma" && !nextDate) ||
     programDateInvalid ||
     overrideNoteMissing ||
@@ -2876,7 +2879,7 @@ function ShipmentDrawer({
             ? "Vuelve a Pendiente con el mismo intento."
             : `Suma un intento: van ${shipment?.reroute_attempts ?? 0} de ${MAX_INTENTOS}.`;
       case "cancela":
-        return "Anula la guía y el pedido pasa a cierre.";
+        return "Anula la guía, el pedido pasa a cierre y no se vuelve a llamar.";
     }
   };
   const recoveryHint: Record<RecoveryCallDisposition, string> = {
@@ -3991,10 +3994,17 @@ function ShipmentDrawer({
                       <textarea
                         value={note}
                         onChange={(e) => setNote(e.target.value)}
-                        placeholder="Qué dijo la clienta…"
+                        placeholder={disposition === "cancela" ? "P. ej. la clienta ya no quiere el producto" : "Qué dijo la clienta…"}
                         className={DRAWER_TEXTAREA}
                         rows={2}
                       />
+                      {disposition === "cancela" && (
+                        <span className="text-[13px] font-normal leading-5 text-ink-500">
+                          {cancelReasonMissing
+                            ? `Mínimo ${DISCARD_REASON_MIN} caracteres · faltan ${DISCARD_REASON_MIN - note.trim().length}`
+                            : "Queda escrito en el pedido como motivo del cierre."}
+                        </span>
+                      )}
                     </label>
                   </div>
                   {/* EL ÚLTIMO INTENTO CIERRA LA VENTA, Y ANTES NO LO DECÍA. Con
@@ -4039,7 +4049,7 @@ function ShipmentDrawer({
                             },
                           )
                         }
-                        disabled={pending}
+                        disabled={pending || cancelReasonMissing}
                         className="pointer-coarse:h-11"
                       >
                         {pending

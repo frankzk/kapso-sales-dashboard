@@ -8811,7 +8811,8 @@ La regla vive en `lib/reproprovincia.ts` y la leen igual el estado del pedido
   nueva, la acción se niega y pide actualizar el panel.
 - **Sale** por cuatro puertas: se crea la salida Swayp (pasa a En curso con la
   guía nueva); se reprograma Aliclik (excepción con motivo, como hasta ahora);
-  se **descarta a mano con motivo** (evento `recovery_discarded`); o **vence la
+  se **descarta a mano con motivo** (evento `recovery_discarded`, también desde
+  «Cliente cancela / anula» sobre la guía viva, §11.5); o **vence la
   ventana**. Vencida o descartada, el pedido cae por su cadena normal a
   `anulado`/`devuelto` y a Por cerrar, con la razón `recuperacion_vencida`
   escrita cuando fue recuperable y nadie lo trabajó — la única forma de medir
@@ -10840,6 +10841,20 @@ ceremonia, porque el coste de equivocarse es el mismo:
   pedido («Sí, anular la guía AUR5X… del pedido #KP…»), con Cancelar al lado.
   Antes se registraba con el mismo botón «Registrar llamada» que un «No
   contesta».
+  - **Y no devuelve el pedido a la cola (20-11-2026, owner, #KP203721).** «Si
+    el cliente ya no quiere, ¿cómo lo quitamos de la lista de pendientes de
+    llamar? No queremos anular el pedido como tal». Anular una guía Aliclik que
+    ya falló afuera es justo lo que abre la recuperación (§11): el pedido
+    volvía en el mismo segundo a «En gestión Reproprovincia» y a la cola, con
+    7 días más de llamadas (4 pedidos del 16 al 20-11). Ahora, si la anulación
+    deja la recuperación activa, escribe también el descarte, el mismo hecho
+    que «Cliente no quiere» (`discardRecovery`, `payload.via =
+    "cliente_cancela"`). Por eso pide el mismo motivo: `DISCARD_REASON_MIN`
+    caracteres, dicho junto al campo, y queda en el pedido. El pedido cae a
+    cierre por su cadena normal («Anulado · Descartada»; la caja que vuelve,
+    a Devolución pendiente de inventario). No anula la venta en la tienda.
+    Si el descarte fallara, la acción lo dice en vez de dar la anulación por
+    buena. No sube `MOM_RESOLUTION_VERSION`: el resolvedor es el mismo.
 - **El último intento.** Con los {MAX_INTENTOS} intentos agotados, registrar un
   «No contesta» más **anula la guía** (`nextShipmentTransition`). El cajón lo
   dice antes, en ámbar, y el botón pasa a «Registrar y anular la guía»: la

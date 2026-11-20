@@ -660,6 +660,10 @@ export async function registerRerouteCall(
   if (!isCallable(cur.delivery_status)) {
     return { error: "Este envío ya no admite gestión (entregado, anulado o transferido)." };
   }
+  // «Cliente cancela / anula» cierra la venta: el motivo es el mismo que pide el
+  // descarte, porque también lo escribe (ver abajo, `discardRecovery`).
+  const cancelReason = input.disposition === "cancela" ? validarMotivoDescarte(input.note) : null;
+  if (cancelReason && "error" in cancelReason) return cancelReason;
   // Una pestaña con el código viejo todavía puede mandar «entregado». La
   // puerta es una sola: el resultado del courier (ver lib/shipments.ts).
   if ((input.disposition as string) === "entregado") {
@@ -857,8 +861,39 @@ export async function registerRerouteCall(
     next_followup_at: nextFollowup,
   });
 
+  // «LA CLIENTA NO QUIERE» NO REABRE LA COLA (owner, 20-11-2026, #KP203721: «si
+  // el cliente ya no quiere, ¿cómo lo quitamos de la lista de pendientes de
+  // llamar?»). Anular una guía Aliclik que ya falló afuera es justo lo que abre
+  // la recuperación (MOM §11): el pedido volvía en el acto a «En gestión
+  // Reproprovincia» y a la cola, con 7 días más de llamadas. Si la anulación la
+  // deja activa, se descarta con el mismo hecho que «Cliente no quiere».
+  let discardFailed: string | null = null;
+  if (cancelReason && cur.order_id) {
+    const { data: after } = await admin
+      .from("shipments")
+      .select("id,store_id,courier,guide_code,delivery_status,status_category,order_id,reported_status,closed_at,returned_at,updated_at")
+      .eq("id", shipmentId)
+      .maybeSingle();
+    const decidida = after ? (await withRecoveryState(admin, [after as unknown as ShipmentRow]))[0] : null;
+    if (decidida?.recovery === "activa") {
+      const { error } = await discardRecovery(admin, {
+        storeId: ctx.storeId,
+        orderId: cur.order_id,
+        actor: ctx.userId,
+        reason: cancelReason.reason,
+        payload: { via: "cliente_cancela", shipment_id: shipmentId },
+      });
+      discardFailed = error ?? null;
+    }
+  }
+
   await syncMasterForShipment(admin, shipmentId);
   revalidatePath("/dashboard/envios");
+  if (discardFailed) {
+    return {
+      error: `La guía quedó anulada, pero el pedido sigue en Reproprovincia: ${discardFailed}. Descártalo desde el Master con el mismo motivo.`,
+    };
+  }
   let notice: string;
   if (input.disposition === "programar") {
     const date = new Date(nextFollowup!).toLocaleDateString("es-PE", {
@@ -870,7 +905,9 @@ export async function registerRerouteCall(
   } else if (t.status === "en_ruta") {
     notice = "Registrado — En ruta (Swayp).";
   } else if (t.status === "anulado") {
-    notice = "Registrado — Anulado.";
+    notice = cancelReason
+      ? "Registrado — Anulado. El pedido pasa a cierre con el motivo y no vuelve a la cola de llamadas."
+      : "Registrado — Anulado.";
   } else {
     notice = `Registrado — ${attemptLabel(t.attempts)}.`;
   }
