@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   aliclikErrorMessage,
+  aliclikOperationLabel,
   extractRayId,
   isBotChallenge,
   cancelOrder,
@@ -632,5 +633,62 @@ describe("el mensaje no le pide a la operadora lo que ya se hizo", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).not.toMatch(/reintent/i);
+  });
+});
+
+describe("el 5xx dice qué operación falló (20-11-2026)", () => {
+  // Decía siempre «La cotización no pudo completarse», también al CREAR la
+  // guía (#KP207465, #AUR901236): mandaba a buscar el problema en la cotización,
+  // que había salido bien un paso antes.
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const pedido = {
+    delivery: 18.5,
+    customer: { name: "X", phone: "51930924766" },
+    shipping: { address1: "A", lat: "-12.58", lng: "-69.18" },
+    products: [{ ean: "1400049752721", quantity: 1, price: 99 }],
+    courier: { transportId: 1, deliveryCost: 18.5, returnCost: 9.5, addDays: 3, flagDeliveryExpress: false },
+  };
+
+  it("cada endpoint tiene su nombre", () => {
+    expect(aliclikOperationLabel("POST", "/integration/order")).toBe("La creación de la guía");
+    expect(aliclikOperationLabel("POST", "/integration/order/agency")).toBe("La creación de la guía");
+    expect(aliclikOperationLabel("POST", "/integration/order/cancel")).toBe("La anulación de la guía");
+    expect(aliclikOperationLabel("POST", "/integration/order/agency/cancel")).toBe("La anulación de la guía");
+    expect(aliclikOperationLabel("GET", "/integration/order/shipping/cost?lat=1")).toBe("La cotización");
+    expect(aliclikOperationLabel("GET", "/integration/product/public")).toBe("La lectura del catálogo");
+    expect(aliclikOperationLabel("GET", "/integration/order")).toBe("La consulta de pedidos");
+    expect(aliclikOperationLabel("GET", "/algo/nuevo")).toBe("La operación");
+  });
+
+  it("sin operación conocida, el texto no inventa una", () => {
+    expect(aliclikErrorMessage(500, { message: "Internal server error" })).toBe(
+      "El endpoint de Aliclik respondió HTTP 500: «Internal server error». La operación no se completó en su API.",
+    );
+  });
+
+  it("crear la guía con un 500 dice «creación», no «cotización»", async () => {
+    const res = await createOrder(opts(async () => json(500, { message: "Internal server error" })), pedido);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBe(
+      "El endpoint de Aliclik respondió HTTP 500: «Internal server error». La creación de la guía no se completó en su API.",
+    );
+    expect(res.error).not.toContain("cotización");
+  });
+
+  it("cotizar con un 500 sigue diciendo «cotización»", async () => {
+    const res = await quoteShippingCost(
+      { ...opts(async () => json(500, { message: "Internal server error" })), retryBaseMs: 0 },
+      { warehouseId: 133, lat: "-12.58", lng: "-69.18" },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("La cotización no se completó en su API.");
+  });
+
+  it("los 4xx siguen tal cual", () => {
+    expect(aliclikErrorMessage(400, { message: "No hay stock disponible" }, null, null, "La creación de la guía")).toBe(
+      "No hay stock disponible",
+    );
   });
 });

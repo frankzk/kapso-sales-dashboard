@@ -228,8 +228,9 @@ export function stockCoversRef(stock: FenixStockRow, ref: ProductRef): boolean {
  * Evaluate whether a shipment can be re-routed to Fenix.
  *   - city must be in the covered set (a fenix_stock row for that city exists,
  *     or it's a known FENIX_CITY), AND
- *   - some stock row for that city covers the product and is available
+ *   - EVERY product is covered by an available stock row of that city
  *     (`stockDisponible`: quantity > 0, or the row is marked unlimited).
+ *     Until 20-11-2026 one product was enough (see the comment below).
  *
  * When the guide is linked to a Shopify order, pass its line items as
  * `orderProducts`: the stock sheet is keyed on the Shopify catalog (title +
@@ -271,9 +272,13 @@ export function evaluateFenix(
     orderProducts && orderProducts.length
       ? orderProducts
       : [{ title: shipment.product ?? null, sku: null }];
-  const hasStock = cityRows.some(
-    (r) => stockDisponible(r) && refs.some((ref) => stockCoversRef(r, ref)),
-  );
+  // CADA producto con stock (owner, 20-11-2026): la guía Swayp sale con el
+  // pedido entero. Con «alguno», #KP203721 (Ceylon Cinnamon + Nattokinase) salía
+  // «Swayp ok · con stock» en Juliaca, donde no hay Ceylon, y la creación lo
+  // rechazaba después (`evaluateDirectFenixStock`). Misma pregunta que el
+  // Master desde el 13-11-2026.
+  const available = cityRows.filter(stockDisponible);
+  const hasStock = refs.every((ref) => available.some((r) => stockCoversRef(r, ref)));
   if (!hasStock) {
     return { eligible: false, reason: "sin_stock", city };
   }
