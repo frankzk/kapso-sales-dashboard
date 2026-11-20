@@ -517,3 +517,19 @@ describe("evaluateDirectFenixStock (gate de guía directa: TODOS los ítems)", (
     expect(r.uncovered).toEqual(["(producto sin nombre)"]);
   });
 });
+
+describe("evaluateFenix: cada producto con stock (owner, 20-11-2026)", () => {
+  // #KP203721 en Juliaca: Nattokinase hay, Ceylon Cinnamon no.
+  const stock = [
+    { city: "juliaca", product: "Nattokinase - Mejora de Circulación Arterial (90 cápsulas)", sku: null, quantity: 10, unlimited: false },
+    { city: "juliaca", product: "SUPER HUMAN Ethiopian Black Seed Oil – Aceite de Semilla Negra Etíope Alta Potencia (60 Cápsulas)", sku: null, quantity: 52, unlimited: false },
+  ];
+  const ceylon = { title: "Ceylon Cinnamon 7200mg con MCT - Control Natural del Azúcar en Sangre (90 cápsulas)", sku: null };
+  const natto = { title: "Nattokinase - Mejora de Circulación Arterial (90 cápsulas)", sku: null };
+  it("un producto sin stock en la ciudad deja la guía en «sin stock»", () => {
+    expect(evaluateFenix({ city: "Juliaca" }, stock, [ceylon, natto])).toMatchObject({ eligible: false, reason: "sin_stock" });
+  });
+  it("todos con stock: ok", () => {
+    expect(evaluateFenix({ city: "Juliaca" }, stock, [natto])).toMatchObject({ eligible: true, reason: "ok" });
+  });
+});

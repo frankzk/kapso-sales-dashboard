@@ -12103,9 +12103,15 @@ la guía: ¿lo puede llevar Swayp hoy?
   > PUMPKIN SEED OIL) salía en «Swayp ok · con stock» y con «Swayp lo puede
   > llevar hoy», pero el PUMPKIN no está en Swayp y la guía no se podía crear.
   > Desde el Master el pedido sale ENTERO, así que la pregunta es la de la
-  > ventana de guía directa. Repro Provincia (sobre guías) sigue con
-  > `evaluateFenix`. Lo leen el filtro, el «Enviar por Swayp» de la ficha
-  > (§11.11), Leads y el envío automático desde Por confirmar.
+  > ventana de guía directa. Lo leen el filtro, el «Enviar por Swayp» de la
+  > ficha (§11.11), Leads y el envío automático desde Por confirmar.
+  > **Desde el 20-11-2026 Repro Provincia pregunta lo mismo** (owner: «estos
+  > productos me parece que no los tenemos en Swayp Juliaca»): `evaluateFenix`
+  > exige stock de **cada** producto del pedido, no de alguno. #KP203721
+  > (Ceylon Cinnamon + Nattokinase) salía «Swayp ok · con stock» en Juliaca, sin
+  > Ceylon en el almacén, y «Crear guía Swayp» lo rechazaba después. Ese día
+  > pasaron a «Sin stock Swayp» 10 de las 111 guías pendientes con varios
+  > productos. El vínculo al catálogo se sigue exigiendo al crear la guía.
 - **El destino** es el del Master: distrito y provincia del ubigeo, o el
   departamento si falta la provincia.
 - **Solo se calcula en Por confirmar, Preparación, Por despachar y En curso.**
