@@ -18,7 +18,7 @@ import { env } from "@/lib/env";
 import { decryptOrNull } from "@/lib/crypto";
 import { gfCourier, gfIdempotencyKey, type GfOrder } from "@/lib/gf-courier";
 import { gfCancelBlockedByRider, liveGfGuides } from "@/lib/gf-courier-status";
-import { buildGfOrderInput } from "@/lib/gf-courier-order";
+import { buildGfOrderInput, gfGuideConfirmed } from "@/lib/gf-courier-order";
 import { isWebPrepaid } from "@/lib/order-paid";
 import { applyGfSnapshot, GF_COURIER, GF_CREATED_VIA } from "@/lib/gf-courier-track";
 import { gfCancelRequestedText } from "@/lib/gf-courier-status";
@@ -92,13 +92,16 @@ export async function createGfGuideFor(
   const sequence = (shipments.data ?? []).length + 1;
   const externalId = `${row.order_name ?? order.data.name}${sequence > 1 ? `-S${sequence}` : ""}`.slice(0, 100);
   const lines = ((order.data.line_items ?? []) as any[]).map((l) => ({ sku: l.sku ?? null, title: l.title ?? null, quantity: Number(l.quantity), price: Number(l.price) }));
+  const day = scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
+    ?? await reproAgreedGfDay(admin, orderId);
   const built = buildGfOrderInput({
     externalId, customerName: row.customer_name, customerPhone: row.customer_phone, district: row.district,
     ubigeo: wooTerritorio(order.data.raw)?.code ?? null, address: row.address, reference: row.reference,
     latitude: row.latitude, longitude: row.longitude, orderTotal: Number(row.order_total), advancePaid: advance,
     webPrepaid: isWebPrepaid({ financialStatus: order.data.financial_status, totalRefunded: Number(order.data.total_refunded ?? 0), paymentGateway: order.data.payment_gateway }),
-    scheduledFor: scheduledFor ?? (row.dispatch_scheduled_on && row.dispatch_scheduled_on >= new Date().toISOString().slice(0, 10) ? row.dispatch_scheduled_on : null)
-      ?? await reproAgreedGfDay(admin, orderId),
+    scheduledFor: day,
+    // «Confirmado» en GF: la creó una persona o tiene un día acordado (owner, 20-11-2026).
+    confirmed: gfGuideConfirmed({ actor: ctx.userId, scheduledDate: day }),
     lines,
   });
   if (!built.ok) return { ok: false, error: built.reason };
@@ -199,6 +202,31 @@ export async function changeGfGuideDateFor(
     note: `Fecha de la guía ${trackingId} cambiada al ${ctx.day} en GF Courier, con la misma guía y la caja armada.`,
     payload: { new_date: ctx.day, label_kept: true } });
   return { ok: true, trackingId, newDate: ctx.day };
+}
+
+/**
+ * La clienta confirmó en Kapta (gestión de confirmación, «Confirmó el pedido»): si el pedido tiene una guía GF viva, se le
+ * avisa a GF para que salga «Confirmado» y no pase por «Por llamar» (owner, 20-11-2026: «desde los dos lados»). Sin guía GF
+ * viva no hace nada (`skipped`).
+ */
+export async function confirmGfGuideFor(
+  orderId: string,
+  ctx: { userId: string | null; note?: string | null },
+  admin: SupabaseClient = createAdminSupabase(),
+): Promise<{ ok: true; trackingId: string } | { ok: false; skipped?: boolean; error: string }> {
+  const live = await admin.from("shipments").select("guide_code,store_id,delivery_status,returned_at").eq("order_id", orderId).eq("courier", GF_COURIER);
+  if (live.error) return { ok: false, error: live.error.message };
+  const guide = (live.data ?? []).find((s) => s.delivery_status === "pendiente" && !s.returned_at && s.guide_code);
+  if (!guide) return { ok: false, skipped: true, error: "Sin guía GF viva." };
+  const store = await loadGfStore(admin, guide.store_id as string);
+  if (!store?.token) return { ok: false, error: "La tienda no tiene token de GF Courier." };
+  const trackingId = String(guide.guide_code);
+  const res = await gfCourier.confirmOrder({ apiToken: store.token }, trackingId, gfIdempotencyKey(orderId, `confirm-${trackingId}-${limaTodayKey()}`), ctx.note ?? undefined);
+  if (!res.ok) return { ok: false, error: res.error.message };
+  await admin.from("order_events").insert({ store_id: guide.store_id, order_id: orderId, kind: "courier_status", occurred_at: new Date().toISOString(),
+    actor: ctx.userId, source: GF_COURIER, courier: GF_COURIER, guide_code: trackingId,
+    note: `Confirmado en GF Courier (${trackingId}): sale sin volver a llamar a la clienta.`, payload: { gf_confirmed: true } });
+  return { ok: true, trackingId };
 }
 
 export async function cancelGfGuideFor(
