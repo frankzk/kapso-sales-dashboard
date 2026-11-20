@@ -85,6 +85,16 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 20-11-2026 · Repro Provincia: «Cliente cancela / anula» saca el pedido de la cola (sin migración, MOM §11.5)
+
+Sin migración ni variables. «Cliente cancela / anula» sobre una guía Aliclik que ya falló afuera la anulaba, pero eso
+abría la recuperación y el pedido volvía a «En gestión Reproprovincia» y a la cola de llamadas (#KP203721). Ahora, si
+queda activa, escribe el descarte (`recovery_discarded`, `payload.via = "cliente_cancela"`) con la nota como motivo,
+que pasa a ser obligatoria (8 caracteres).
+
+Verificar: después de «Cliente cancela / anula» con motivo, el pedido sale de Pendiente en Repro Provincia y el Master
+lo muestra en Por cerrar; su historial tiene «Recuperación de provincia descartada: …».
+
 ### 19-11-2026 · Devoluciones: el resultado en grande, la voz y la linterna (sin migración, MOM §9.4)
 
 Sin migración ni variables. En la cámara de Almacén → Devoluciones cada lectura sale en grande encima del visor
