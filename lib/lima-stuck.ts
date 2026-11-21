@@ -346,6 +346,9 @@ export function limaStuck(row: LimaPendingOrder, today: string): LimaStuckItem |
       return make("entregado_sin_cierre", `${courierDisplayName(row.ops.courierDelivered.courier)} lo reporta entregado.`);
     }
     if (isGfOutput(row)) return make("reparto_sin_resultado", riderDetail(row));
+    // GF ya la volvió a programar después de la novedad, con la misma guía: tiene su día, no hay a quién llamar
+    // (owner, 21-11-2026, #KP207270). Repro Lima la lleva en Programados.
+    if (row.gfRescheduled) return null;
     if (isCustomerNovelty(row.ops?.reportedStatus)) return make("novedad_con_clienta", reportedDetail(row));
     const courier = (row.ops?.liveCouriers.find((c) => !GF_COURIERS.has(c)) ?? row.courier ?? "").toLowerCase();
     return make("courier_sin_resultado", reportedDetail(row), courier === "tanders" ? TANDERS_THRESHOLD : undefined);

@@ -13,6 +13,8 @@ import { limaClock } from "@/lib/grupo-gf-courier";
 import { loadLimaManagement } from "@/lib/lima-management-access";
 import { GF_AUTO_GUIDE_REASON } from "@/lib/gf-auto-guide";
 import { loadLimaReportedHistory } from "@/lib/lima-route-history-access";
+import { gfRescheduleAfterIncident, type GfWebhookTimelineRow } from "@/lib/gf-reschedule";
+import { isCustomerNovelty } from "@/lib/lima-stuck";
 
 type Admin = ReturnType<typeof createAdminSupabase>;
 interface PendingMasterRow {
@@ -278,6 +280,7 @@ function opsFacts(outputs: readonly GfShipmentRow[], latestBox: ReadonlyMap<stri
     },
     liveCouriers: [...new Set(live.map((s) => s.courier ?? "").filter(Boolean))],
     reportedStatus: live[0]?.reported_status?.trim() || null,
+    gfGuide: live[0]?.courier === "gf_courier" ? live[0].guide_code?.trim() || null : null,
     courierDelivered: delivered ? { courier: delivered.courier ?? "" } : null,
     lastGfBox: box && { day: box.day, riderName: box.riderName },
   };
@@ -393,6 +396,36 @@ async function loadGfGuideDays(admin: Admin, guides: ReadonlyMap<string, string>
     }
   }
   return days;
+}
+
+/**
+ * El día en que GF Courier vuelve a sacar cada guía GF en novedad (`guides`:
+ * número de guía → pedido), por pedido (owner, 21-11-2026, #KP207270): su último
+ * cambio de fecha recibido después del último cambio de estado
+ * (`gfRescheduleAfterIncident`). Lee solo los avisos de esas guías
+ * (`gf_webhook_events_tracking_idx`), en lotes de 500 a la vez; sin guías, no pregunta.
+ */
+async function loadGfReschedules(admin: Admin, guides: ReadonlyMap<string, string>): Promise<Map<string, string>> {
+  const rows = await inBatchesOf500([...guides.keys()], async (batch) => {
+    const { data, error } = await admin.from("gf_webhook_events")
+      .select("tracking_id,type,received_at,new_date:payload->data->>new_date")
+      .in("tracking_id", batch)
+      .in("type", ["order.status_changed", "order.delivery_date_changed"]);
+    if (error) throw new Error(`No pudimos leer los avisos de GF Courier: ${error.message}`);
+    return (data ?? []) as Array<GfWebhookTimelineRow & { tracking_id: string | null }>;
+  });
+  const byGuide = new Map<string, GfWebhookTimelineRow[]>();
+  for (const r of rows) {
+    if (!r.tracking_id) continue;
+    byGuide.set(r.tracking_id, [...(byGuide.get(r.tracking_id) ?? []), r]);
+  }
+  const out = new Map<string, string>();
+  for (const [guide, events] of byGuide) {
+    const orderId = guides.get(guide);
+    const reschedule = gfRescheduleAfterIncident(events);
+    if (orderId && reschedule) out.set(orderId, reschedule.date);
+  }
+  return out;
 }
 
 /**
@@ -516,7 +549,15 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
     .filter((row) => row.macro_stage === "en_curso" && row.macro_substage === "por_reprogramar_lima"
       && !departures.has(row.order_id) && !row.dispatched_at && Number(row.attempt_count ?? 0) === 0)
     .map((row) => row.order_id);
-  const [gfPickups, gfAssigned, neverLeftRows] = await Promise.all([
+  // La guía GF en novedad que GF volvió a programar (owner, 21-11-2026,
+  // #KP207270): En curso, con la guía de GF Courier como salida viva más nueva y
+  // una novedad con la clienta.
+  const incidentGuides = new Map<string, string>();
+  for (const row of safe) {
+    const ops = stuckFacts.get(row.order_id);
+    if (row.macro_stage === "en_curso" && ops?.gfGuide && isCustomerNovelty(ops.reportedStatus)) incidentGuides.set(ops.gfGuide, row.order_id);
+  }
+  const [gfPickups, gfAssigned, neverLeftRows, gfReschedules] = await Promise.all([
     loadGfGuideDays(admin, gfGuides),
     // Best-effort: sin la lectura, la fila no dice el asignado (y sigue sugiriendo).
     loadGfAssigned(admin, gfGuides).catch(() => new Map<string, GfAssignedRider>()),
@@ -527,6 +568,8 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       if (error) throw new Error(`No pudimos leer las guías de los pedidos que nunca salieron: ${error.message}`);
       return (data ?? []) as Array<NeverLeftGuide & { order_id: string }>;
     }),
+    // Best-effort: sin la lectura, sigue como novedad del courier (lo de antes).
+    loadGfReschedules(admin, incidentGuides).catch(() => new Map<string, string>()),
   ]);
   const neverLeftGuides = new Map<string, NeverLeftGuide[]>();
   for (const g of neverLeftRows) neverLeftGuides.set(g.order_id, [...(neverLeftGuides.get(g.order_id) ?? []), g]);
@@ -535,9 +578,12 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
     // El filtro de arriba valida también la macroetapa de cada fila.
     const stage = row.macro_stage as LimaPendingOrder["stage"];
     const ops = stuckFacts.get(row.order_id) ?? null;
+    const rescheduled = gfReschedules.get(row.order_id) ?? null;
     const courierPickup: LimaPendingOrder["courierPickup"] = pickups.has(row.order_id)
       ? { courier: "aliclik", date: pickups.get(row.order_id)! }
-      : gfPickups.has(row.order_id) ? { courier: "gf_courier", date: gfPickups.get(row.order_id)! } : null;
+      : gfPickups.has(row.order_id) ? { courier: "gf_courier", date: gfPickups.get(row.order_id)! }
+        // GF la vuelve a sacar con la misma guía el día que acordó: la guía espera ese día.
+        : rescheduled ? { courier: "gf_courier", date: rescheduled } : null;
     return {
       orderId: row.order_id, storeId: row.store_id, storeName: names.get(row.store_id) ?? "Tienda",
       orderName: row.order_name ?? "Sin código", customerName: row.customer_name ?? "Sin nombre",
@@ -559,6 +605,7 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
       scheduledCourier: row.dispatch_courier ?? null,
       ops,
       courierPickup,
+      gfRescheduled: rescheduled ? { date: rescheduled } : null,
       // El que GF ya asignó a su guía viva (17-11-2026). Con asignado, ya no se sugiere.
       gfAssigned: gfAssigned.get(row.order_id) ?? null,
       // Solo con guía de GF Courier sin motorizado (17-11-2026): la fila lee esto; el filtro «Motorizado», esto o el asignado.

@@ -25,9 +25,13 @@ describe("Repro Lima carga sin esperas en fila", () => {
     expect(src).toContain("return (await Promise.all(batches.map(read))).flat();");
   });
 
-  it("los que nunca salieron se leen junto a los días de GF Courier", () => {
-    const last = body.slice(body.indexOf("const [gfPickups, gfAssigned, neverLeftRows] = await Promise.all(["));
+  it("los que nunca salieron y los reprogramados por GF se leen junto a los días de GF Courier", () => {
+    const start = body.indexOf("const [gfPickups, gfAssigned, neverLeftRows, gfReschedules] = await Promise.all([");
+    expect(start).toBeGreaterThan(-1);
+    const last = body.slice(start, body.indexOf("]);", start));
     expect(last).toContain("inBatchesOf500(neverLeftCandidates,");
+    // Reprogramado por GF tras la novedad (21-11-2026, #KP207270): en la misma espera, sin una más.
+    expect(last).toContain("loadGfReschedules(admin, incidentGuides).catch(() => new Map<string, string>())");
   });
 
   it("cada carga deja su tiempo en los logs", () => {

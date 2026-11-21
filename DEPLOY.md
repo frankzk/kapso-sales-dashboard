@@ -104,6 +104,24 @@ de No entregados cuando hay reintentos.
 Verificar: en Repro Lima, tocar «No entregados»; si hay reintentos, aparece «Reintentos Aliclik N» junto a «Trabados»,
 y al tocarlo se ve «Aprobar todos los listos».
 
+### 21-11-2026 · Repro Lima: lo que GF ya reprogramó después de la novedad pasa a Programados (sin migración, MOM §9.5, §9.6 y §29.17)
+
+Sin migración ni variables. Reporte de GF (#KP207270): GF dejó el pedido listo para salir el 24/11 con la misma guía,
+pero Repro Lima seguía mostrándolo en «Novedad del courier» y como trabado. Cuando GF reprograma una guía en
+incidencia, el estado se queda en `INCIDENT:NO_ANSWER` hasta que sale, y lo único que cambia es la fecha
+(`order.delivery_date_changed`, que Kapta guardaba en `gf_webhook_events` pero no leía).
+
+Ahora, si GF mandó un cambio de fecha después de su último cambio de estado, el pedido:
+- sale de «Novedad del courier» y del trabado «El courier reporta una novedad con la clienta»;
+- pasa a Programados con el día de GF;
+- la fila dice «GF Courier lo reprogramó después de la novedad: vuelve a salir el mar 24/11 con la misma guía».
+
+Si GF manda otro estado después, manda ese estado. Si el día de GF pasa sin que salga, va a No entregados. Una
+lectura más por carga: solo los avisos de las guías GF en novedad (unas 60), en la misma espera que las demás; si
+falla, quedan como antes. El 21-11 eran 22 pedidos.
+
+Verificar: en Repro Lima, #KP207270 ya no está en «Novedad del courier» y sí en Programados con el mar 24/11.
+
 ### 20-11-2026 · Repro Provincia: «Cliente cancela / anula» saca el pedido de la cola (sin migración, MOM §11.5)
 
 Sin migración ni variables. «Cliente cancela / anula» sobre una guía Aliclik que ya falló afuera la anulaba, pero eso

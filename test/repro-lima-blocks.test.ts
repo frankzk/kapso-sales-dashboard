@@ -131,6 +131,48 @@ describe("«Por gestionar hoy»: una tarea por pedido, la primera que aplica", (
   });
 });
 
+describe("GF Courier la volvió a programar después de la novedad (owner, 21-11-2026, #KP207270)", () => {
+  // Salió el jue 19/11, el motorizado no la encontró (INCIDENT:NO_ANSWER) y GF la cambió al mar 24/11 con la misma guía.
+  const incident = (over: Partial<LimaPendingOrder> = {}) => row({
+    stage: "en_curso", substage: "en_transito", courier: "gf_courier", hasPriorDispatch: true,
+    dispatchedAt: "2026-11-19T15:36:23Z", macroSince: "2026-11-19T15:36:23Z",
+    ops: ops({ liveCouriers: ["gf_courier"], reportedStatus: "INCIDENT:NO_ANSWER", custody: "courier", gfGuide: "KENKU-KP207270" }),
+    ...over,
+  });
+  const rescheduled = incident({ gfRescheduled: { date: "2026-11-24" }, courierPickup: { courier: "gf_courier", date: "2026-11-24" } });
+  const at = (r: LimaPendingOrder, day: string) => classifyLimaRow(r, undefined, day, agendaWindow(day));
+
+  it("sale de «Novedad del courier» y pasa a Programados con el día de GF", () => {
+    // Sin el cambio de fecha, sigue siendo una novedad por llamar (lo de antes).
+    expect(courierNovelty(incident())).toBe(true);
+    expect(at(incident(), "2026-11-21")).toMatchObject({ step: "novedad", task: "novedad" });
+    expect(courierNovelty(rescheduled)).toBe(false);
+    expect(limaTaskOf(rescheduled)).toBeNull();
+    expect(limaCourierState(rescheduled)).toBe("guia_creada");
+    expect(at(rescheduled, "2026-11-21")).toMatchObject({ step: "programados", task: null, courier: "guia_creada", agendaDay: "2026-11-24", missedPickup: false });
+  });
+
+  it("la fila lo dice: vuelve a salir el día de GF, con la misma guía", () => {
+    const c = at(rescheduled, "2026-11-21");
+    expect(limaNextStep(rescheduled, undefined, c, "2026-11-21")).toBe("GF Courier lo reprogramó después de la novedad: vuelve a salir el mar 24/11 con la misma guía. Sin gestión salvo que la clienta cambie algo.");
+    expect(courierRouteText(rescheduled, c, "2026-11-21")).toEqual({ day: "mar 24/11", detail: "GF Courier lo reprogramó", overdue: false });
+    expect(limaNextStep(rescheduled, undefined, at(rescheduled, "2026-11-24"), "2026-11-24")).toBe("GF Courier lo reprogramó después de la novedad: vuelve a salir hoy con la misma guía. Sin gestión salvo que la clienta cambie algo.");
+  });
+
+  it("deja de ser un trabado «El courier reporta una novedad con la clienta»", () => {
+    expect(limaStuck(incident(), "2026-11-21")).toMatchObject({ reason: "novedad_con_clienta" });
+    expect(limaStuck(rescheduled, "2026-11-21")).toBeNull();
+  });
+
+  it("si pasa un día de reparto entero después del día de GF sin que salga, es un no entregado por revisar", () => {
+    const late = at(rescheduled, "2026-11-26");
+    expect(late).toMatchObject({ step: "no_entregados", missedPickup: true });
+    expect(limaNextStep(rescheduled, undefined, late, "2026-11-26")).toBe("GF Courier debía volver a sacarlo el mar 24/11 con la misma guía y no salió: pregunta a GF o acuerda otro día con la clienta (Atender).");
+    // El día siguiente al de GF todavía espera: es su día de reparto, sin «Vencido» (como la guía que espera su recojo).
+    expect(at(rescheduled, "2026-11-25")).toMatchObject({ step: "programados", pickupRolled: true, agendaDay: "2026-11-25" });
+  });
+});
+
 describe("«En manos del courier»: solo seguimiento, por su estado", () => {
   it("guía creada antes de salir; en ruta en curso; retornando al volver", () => {
     expect(limaCourierState(row({ stage: "por_despachar", substage: "listo_para_recojo", ops: ops({ liveCouriers: ["gf_courier"], reportedStatus: "READY_FOR_PICKUP" }) }))).toBe("guia_creada");
