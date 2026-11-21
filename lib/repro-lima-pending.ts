@@ -115,6 +115,16 @@ export interface LimaPendingOrder {
    */
   courierPickup?: { courier: "aliclik" | "gf_courier"; date: string } | null;
   /**
+   * GF Courier volvió a programar su guía viva después de la novedad, con la
+   * misma guía (owner, 21-11-2026, #KP207270: «pedido ya listo en Grupo GF para
+   * que salga el 24/11… debería salirse de la lista y pasar a programados»): el
+   * día en que vuelve a salir. Es el último `order.delivery_date_changed`,
+   * recibido después del último cambio de estado (`gfRescheduleAfterIncident`).
+   * GF deja la incidencia viva hasta que sale (§29.17). Con él, el pedido
+   * también tiene su `courierPickup` de GF Courier con ese día. Sin eso, null.
+   */
+  gfRescheduled?: { date: string } | null;
+  /**
    * Quién lleva su distrito según el reparto de 30 días (`lib/lima-rider-suggest.ts`): uno, dos o null. Solo
    * con guía de GF Courier sin motorizado (`shownRiderSuggestion`): lo que se muestra; el filtro «Motorizado» lo usa sin asignado.
    */
@@ -164,6 +174,8 @@ export interface LimaPendingOps {
   liveCouriers: string[];
   /** Lo último que reportó el courier de la salida viva más nueva (`shipments.reported_status`). */
   reportedStatus: string | null;
+  /** La guía de esa salida viva más nueva si es de GF Courier (para leer sus avisos), o null. */
+  gfGuide?: string | null;
   /**
    * Una salida que el courier da por entregada con el pedido todavía abierto:
    * guía `entregado`, o viva con `DELIVERED` (Tanders lo deja `en_ruta` hasta

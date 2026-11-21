@@ -485,6 +485,8 @@ export function liveGuideCourier(row: Pick<LimaPendingOrder, "ops" | "courierPic
  *   solo si la guía sigue viva con su courier (GF deja la incidencia viva,
  *   §29.17): si no, el paquete ya no está en la calle.
  * - **Retornando**: en retorno, retorno solicitado o `RETURNING` del courier.
+ * - La guía GF que GF volvió a programar después de la novedad
+ *   (`gfRescheduled`, 21-11-2026): **Guía creada**, espera el día de GF.
  */
 export function limaCourierState(row: LimaPendingOrder): LimaCourierState | null {
   if (row.ops?.returnedToWarehouse) return null;
@@ -494,6 +496,8 @@ export function limaCourierState(row: LimaPendingOrder): LimaCourierState | null
     if (isPorReprogramarLima(row) && !guide) return null;
     // Un no entregado que ya tiene su guía nueva esperando recojo (owner, 16-11-2026, #KP204876): guía creada, no en ruta.
     if (isPorReprogramarLima(row) && row.courierPickup) return "guia_creada";
+    // GF la vuelve a sacar con la misma guía el día que acordó (owner, 21-11-2026, #KP207270).
+    if (row.gfRescheduled) return "guia_creada";
     const returning = RETURNING_SUBSTAGES.has(row.substage ?? "") || /^RETURNING\b/i.test(row.ops?.reportedStatus?.trim() ?? "");
     return returning ? "retornando" : "en_ruta";
   }
@@ -504,10 +508,14 @@ export function limaCourierState(row: LimaPendingOrder): LimaCourierState | null
  * «Novedad del courier»: En curso, con la guía viva de un courier que reporta
  * un problema con la clienta (`isCustomerNovelty`, la regla de «Lima
  * trabados»), sin que el paquete esté volviendo. Al momento: es una llamada,
- * no un trabado (el trabado espera un día de reparto entero).
+ * no un trabado (el trabado espera un día de reparto entero). Si GF ya la
+ * volvió a programar después de la novedad (`gfRescheduled`), no: tiene su día
+ * (owner, 21-11-2026, #KP207270: «debería salirse de la lista y pasar a
+ * programados»).
  */
 export function courierNovelty(row: LimaPendingOrder): boolean {
   if (row.stage !== "en_curso" || RETURNING_SUBSTAGES.has(row.substage ?? "")) return false;
+  if (row.gfRescheduled) return false;
   if (!row.ops?.liveCouriers.some((c) => !GF_INTERNAL.has(c))) return false;
   return isCustomerNovelty(row.ops.reportedStatus);
 }
@@ -1194,7 +1202,9 @@ export function courierRouteText(row: LimaPendingOrder, cls: Pick<LimaRowClass, 
   if (cls.courier === "guia_creada") {
     const pickup = row.courierPickup;
     const day = cls.agendaDay ?? pickup?.date;
-    const detail = pickup ? (pickup.courier === "aliclik" ? "Recojo de Aliclik" : "Sale con GF Courier") : "Guía creada";
+    const detail = pickup
+      ? (pickup.courier === "aliclik" ? "Recojo de Aliclik" : row.gfRescheduled ? "GF Courier lo reprogramó" : "Sale con GF Courier")
+      : "Guía creada";
     if (!day) return { day: "Guía creada", detail: "Sin día del courier", overdue: false };
     return { day: agendaDayText(day, today), detail, overdue: day < today };
   }
@@ -1261,6 +1271,9 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
       break;
   }
   if (cls.missedPickup) {
+    if (row.gfRescheduled) {
+      return `GF Courier debía volver a sacarlo el ${programDayLabel(row.gfRescheduled.date)} con la misma guía y no salió: pregunta a GF o acuerda otro día con la clienta (Atender).`;
+    }
     const who = row.courierPickup ? courierDisplayName(row.courierPickup.courier) : courierName;
     return `${who} debía recogerlo el ${programDayLabel(row.courierPickup?.date ?? cls.agendaDay ?? today)} y no lo recogió: coordina el recojo o crea la guía con otro courier (Mesa de ruta).`;
   }
@@ -1269,6 +1282,9 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
   if (cls.courier === "guia_creada") {
     // El día de recojo es el de la clase: si su día pasó sin recogerlo, el próximo día de reparto.
     const pickup = row.courierPickup && cls.agendaDay && cls.agendaDay >= today ? cls.agendaDay : null;
+    if (row.gfRescheduled && pickup) {
+      return `GF Courier lo reprogramó después de la novedad: vuelve a salir ${pickup === today ? "hoy" : `el ${programDayLabel(pickup)}`} con la misma guía. Sin gestión salvo que la clienta cambie algo.`;
+    }
     return row.courierPickup && pickup
       ? `Lo recoge ${courierDisplayName(row.courierPickup.courier)} ${pickup === today ? "hoy" : `el ${programDayLabel(pickup)}`}.`
       : `Lo prepara y lo recoge ${courierName}.`;

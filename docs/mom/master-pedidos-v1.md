@@ -7076,7 +7076,8 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     No entregados (un «Por reprogramar Lima» con su día en el programa de
     Grupo GF, aunque no haya acuerdo: #KP143245), de Sacar a reparto (lo
     agendado) o de la guía creada (el recojo del courier, como #KP204876 y
-    #KP204807). La novedad, «Llamar después» y «Por cerrar» mandan; la guía que
+    #KP204807), o de la guía GF que GF volvió a programar después de la
+    novedad (21-11-2026, #KP207270). La novedad, «Llamar después» y «Por cerrar» mandan; la guía que
     el courier no recogió en su día es un estancado de Sacar a reparto.
   - Sus partes son sus días (Hoy de lunes a sábado, Mañana y Después) y suman
     el paso; dentro van también «Hoy sin guía» (alerta desde las 10:30),
@@ -7239,6 +7240,25 @@ de la última llamada (`lima_repro_calls.note`, en la misma consulta).
       incidencia viva y sale con la misma guía si la reprograma (§29.17). Al
       momento, sin esperar el día de reparto entero del trabado: es una
       llamada.
+      **Salvo que GF ya la haya vuelto a programar** (owner, 21-11-2026,
+      #KP207270; Daysi, de GF: «pedido ya listo en Grupo GF para que salga el
+      24/11… debería salirse de la lista», y el owner: «y pasar a
+      programados»). Es decir, que GF haya mandado un cambio de fecha
+      (`order.delivery_date_changed`, `new_date`) **después** de su último
+      cambio de estado (`gfRescheduleAfterIncident`, `lib/gf-reschedule.ts`,
+      leído de `gf_webhook_events`). Entonces no es una novedad ni un trabado:
+      va a **Programados** con el día de GF, como su guía creada que espera
+      ese día (`gfRescheduled`, y `courierPickup` de GF Courier con ese día).
+      La fila dice «GF Courier lo reprogramó después de la novedad: vuelve a
+      salir el mar 24/11 con la misma guía». Si GF manda un estado después
+      (salió otra vez, otra visita fallida, una anulación), el cambio de fecha
+      ya no cuenta y manda ese estado. Si pasa un día de reparto entero
+      después del día de GF sin noticias, es una guía sin recoger (No
+      entregados): «GF Courier debía volver a sacarlo el mar 24/11 con la
+      misma guía y no salió». El 21-11-2026 eran 22 pedidos con
+      `INCIDENT:NO_ANSWER` que GF ya había reprogramado, todos para un día
+      por delante. Si la lectura de los avisos falla, quedan como novedad (lo
+      de antes).
    6. **No entregados**: lo demás de «Por reprogramar Lima» (sin acuerdo,
       acuerdo vencido, llamada que ya toca…), en el orden de «Por decidir»
       (`sortRepro`). Salvo la caja que nunca salió (`neverLeft`, 18-11-2026):
@@ -7354,8 +7374,9 @@ Implementación: `lib/repro-lima-blocks.ts` (las reglas),
 `moveReproAgreement` en `app/dashboard/pedidos/repro-lima/actions.ts`; en Grupo
 GF Courier, `components/gf-stuck-tray.tsx` y `loadGfStuckOrders` en
 `app/dashboard/courier/actions.ts`. Pruebas: `test/repro-lima-blocks.test.ts`,
-`test/repro-lima-pending.test.ts`, `test/repro-lima-actions.test.ts` y
-`test/lima-stuck.test.ts`.
+`test/repro-lima-pending.test.ts`, `test/repro-lima-actions.test.ts`,
+`test/lima-stuck.test.ts` y, para lo reprogramado por GF después de la
+novedad, `test/gf-reschedule.test.ts`.
 
 #### GF Courier en los acuerdos de Repro Lima (owner, 15-11-2026)
 
@@ -7885,7 +7906,9 @@ dice en «Próximo paso». GF Courier dice la novedad con sus códigos:
 `INCIDENT:NO_ANSWER`, `INCIDENT:CUSTOMER_ABSENT`, `INCIDENT:WRONG_ADDRESS` y
 `REFUSED` cuentan para «El courier reporta una novedad con la clienta»;
 `INCIDENT:RESCHEDULE_REQUESTED` es su «Reprogramado» y no (`isCustomerNovelty`).
-Los umbrales, el reloj y las reglas no cambian.
+Tampoco cuenta la guía GF que GF ya volvió a programar después de la novedad
+(`gfRescheduled`, 21-11-2026, #KP207270): tiene su día y está en Programados
+(§9.5). Los umbrales, el reloj y las reglas no cambian.
 
 **El reloj: días de reparto completos.** Grupo GF reparte de lunes a sábado
 (`isDeliveryDay`, §29.16); el domingo no cuenta. Se cuentan los días de
@@ -20784,7 +20807,9 @@ tiene guía GF viva, **Kapta anula sola la de GF** al crear la de Aliclik (`alic
 
 **No entregado: se espera a GF (owner, 15-11-2026).** Una visita fallida deja la guía GF en incidencia, que sigue
 viva. No se crea otra guía GF encima: sale con la misma si GF la reprograma, o se crea la siguiente (`-S2`) cuando GF
-la devuelva o la anule.
+la devuelva o la anule. Cuando GF la reprograma, el estado sigue en `INCIDENT` y llega un
+`order.delivery_date_changed` con el día nuevo; Repro Lima lo lleva a Programados con ese día y deja de pedir la
+llamada (21-11-2026, #KP207270, §9.5).
 
 **Catálogo sincronizado con GF (owner, 16-11-2026: «que los dos sistemas estén sincronizados»).** Lo que la tienda
 vende en Kapta existe en GF, sin importar archivos. GF lo permite con `POST /v1/products/batch` y el permiso
