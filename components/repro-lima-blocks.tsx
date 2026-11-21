@@ -428,6 +428,18 @@ export function ReproLimaBlocks({ counts, today, active, onPick, guideAlert = tr
                   />
                 );
               })}
+              {/* «Reintentos Aliclik» es una BANDEJA, no un desglose (owner, 21-11-2026: «¿dónde quedó lo
+                  que teníamos de Reintento Aliclik?»): ahí están «Aprobar todos los listos» y «Aprobar
+                  elegidos». El 18-11 el desglose de No entregados pasó al detalle y se llevó la entrada. */}
+              {stepCard.key === "no_entregados" && (counts.sub.reintentos_aliclik > 0 || active === "reintentos_aliclik") && (
+                <ChoiceChip
+                  label={LIMA_SUB_FILTERS.reintentos_aliclik.label}
+                  count={counts.sub.reintentos_aliclik}
+                  active={active === "reintentos_aliclik" && !stuckOn}
+                  title={LIMA_SUB_FILTERS.reintentos_aliclik.hint}
+                  onClick={() => onPick(active === "reintentos_aliclik" && !stuckOn ? "no_entregados" : "reintentos_aliclik")}
+                />
+              )}
               {stepCard.key === "programados" && (
                 <>
                   {(["hoy_sin_guia", "manana_sin_guia"] as const).filter((key) => (key !== "hoy_sin_guia" || dayKeys.has("hoy")) && (counts.sub[key] > 0 || active === key)).map((key) =>

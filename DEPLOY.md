@@ -85,6 +85,15 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 21-11-2026 · Repro Lima: vuelve el chip «Reintentos Aliclik» (sin migración, MOM §9.5)
+
+Sin migración ni variables. Desde el 18-11 «No entregados» no tenía la entrada a la bandeja de reintentos por Aliclik
+(«Aprobar todos los listos»); solo se llegaba escribiendo `?atencion=reintentos_aliclik`. Vuelve como chip en el pie
+de No entregados cuando hay reintentos.
+
+Verificar: en Repro Lima, tocar «No entregados»; si hay reintentos, aparece «Reintentos Aliclik N» junto a «Trabados»,
+y al tocarlo se ve «Aprobar todos los listos».
+
 ### 20-11-2026 · Repro Provincia: «Cliente cancela / anula» saca el pedido de la cola (sin migración, MOM §11.5)
 
 Sin migración ni variables. «Cliente cancela / anula» sobre una guía Aliclik que ya falló afuera la anulaba, pero eso
