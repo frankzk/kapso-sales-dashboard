@@ -87,7 +87,7 @@ describe("en Repro Lima es su primera salida (Nuevos), no un no entregado", () =
     const src = read("lib/repro-lima-pending-access.ts");
     expect(src).toContain('row.macro_stage === "en_curso" && row.macro_substage === "por_reprogramar_lima"');
     expect(src).toContain("!departures.has(row.order_id) && !row.dispatched_at && Number(row.attempt_count ?? 0) === 0");
-    expect(src).toContain("if (limaBoxNeverLeft(byOrder.get(id) ?? [])) neverLeft.add(id);");
+    expect(src).toContain("neverLeftCandidates.filter((id) => limaBoxNeverLeft(neverLeftGuides.get(id) ?? []))");
   });
 });
 
