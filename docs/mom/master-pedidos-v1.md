@@ -6657,6 +6657,15 @@ entre ruta y custodia, salidas sin fecha ni intentos comprobados, courier
 histórico faltante y acuerdos vencidos aún sin resolver, además de varios
 couriers. No se mueve un caso dudoso ni se anula automáticamente.
 
+**«Reintentos Aliclik» conserva su chip (21-11-2026, owner: «¿dónde quedó lo
+que teníamos de Reintento Aliclik?»).** El desglose pasó al detalle, pero se
+llevó la única entrada a la bandeja de aprobación, la que tiene «Aprobar todos
+los listos» y «Aprobar elegidos». El filtro del detalle solo filtra la lista,
+y la fila seguía diciendo «apruébalo en Reintentos Aliclik». Vuelve como chip
+en el pie de No entregados, junto a Todos y Trabados, cuando hay reintentos
+(o está elegido). Es una bandeja de trabajo, no una parte: el desglose por
+ubicación sigue en el detalle.
+
 **Revisión con Daysi (18-11-2026).** Sustituye la definición anterior de
 «Nuevos» y la separación entre «Sacar a reparto» y «No entregados»:
 

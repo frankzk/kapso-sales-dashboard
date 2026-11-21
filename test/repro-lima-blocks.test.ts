@@ -631,9 +631,15 @@ describe("las piezas en pantalla", () => {
     // Los plegados no llevan número de paso: solo los seis del trabajo («Nuevos», 17-11-2026).
     expect(html.match(/size-5 shrink-0 place-items-center rounded-full/g)).toHaveLength(6);
     expect(html).toMatch(/aria-pressed="true"[^>]*>.*No entregados/);
-    // No entregados expone ubicación/gestión en su detalle; la franja conserva solo Todos/Trabados.
+    // No entregados expone ubicación/gestión en su detalle; la franja conserva Todos/Trabados y,
+    // si hay, la bandeja «Reintentos Aliclik» (owner, 21-11-2026: «¿dónde quedó?»).
     expect(html).toContain("Dentro de <b");
     expect(html).not.toContain("Reintentos Aliclik");
+    const conReintentos = { ...counts, sub: { ...counts.sub, reintentos_aliclik: 3 } };
+    const retry = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts: conReintentos, today: TODAY, active: "no_entregados", onPick: () => {} }));
+    expect(retry.slice(retry.indexOf(">No entregados</b>:"))).toContain("Reintentos Aliclik");
+    const inRetry = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts: conReintentos, today: TODAY, active: "reintentos_aliclik", onPick: () => {} }));
+    expect(inRetry).toMatch(/aria-pressed="true"[^>]*>[^<]*Reintentos Aliclik/);
     // Sin un paso elegido, no hay chips de adentro sueltos debajo de la fila.
     const idle = renderToStaticMarkup(createElement(ReproLimaBlocks, { counts, today: TODAY, active: "todos", onPick: () => {} }));
     expect(idle).not.toContain("Dentro de");
