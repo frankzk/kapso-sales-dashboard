@@ -85,6 +85,16 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 21-11-2026 · Repro Lima carga más rápido (sin migración)
+
+Sin migración ni variables. `courierRowsByIds` (lib/courier-flow.ts) leía sus lotes de 100 ids uno tras otro; ahora
+lee hasta 4 a la vez, con las filas en el mismo orden y el primer error cortando igual. Lo usan 15 archivos, así que
+también aceleran Despacho y las demás pantallas que leen así. En Repro Lima, las salidas de Grupo GF, las guías por
+recoger y los que nunca salieron dejan de esperar etapas que no dependen de ellas. No cambia ninguna regla.
+
+Verificar: los logs de Vercel muestran una línea `[repro-lima] carga {"totalMs":…,"casos":…,"pendientes":…}` por carga;
+comparar `totalMs` con el de antes del despliegue (no había: es la primera medida).
+
 ### 21-11-2026 · Repro Lima: vuelve el chip «Reintentos Aliclik» (sin migración, MOM §9.5)
 
 Sin migración ni variables. Desde el 18-11 «No entregados» no tenía la entrada a la bandeja de reintentos por Aliclik

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { allCourierRows, courierRowsByIds, nextDispatchMode } from "../lib/courier-flow";
+import { allCourierRows, COURIER_ROWS_CONCURRENCY, courierRowsByIds, nextDispatchMode } from "../lib/courier-flow";
 
 describe("next task, not repeated assignment", () => {
   it("preserves load membership and custody against legacy route actions", () => {
@@ -48,5 +48,29 @@ describe("whole eligible universe", () => {
       return { data: batch, error: null };
     });
     expect(result.data).toEqual(ids);
+  });
+  // Owner, 21-11-2026: «Repro Lima anda cargando súper lento». Los lotes iban de a uno.
+  it("lee hasta cuatro lotes a la vez y devuelve las filas en el orden de los lotes", async () => {
+    const ids = Array.from({ length: 1000 }, (_, i) => String(i));
+    let inFlight = 0;
+    let peak = 0;
+    const result = await courierRowsByIds(ids, async (batch) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      // El primer lote tarda más: igual tiene que salir primero.
+      await new Promise((resolve) => setTimeout(resolve, batch[0] === "0" ? 20 : 1));
+      inFlight--;
+      return { data: batch, error: null };
+    });
+    expect(peak).toBe(COURIER_ROWS_CONCURRENCY);
+    expect(COURIER_ROWS_CONCURRENCY).toBe(4);
+    expect(result.data).toEqual(ids);
+  });
+  it("un lote con error corta la lectura: nunca una lista parcial", async () => {
+    const ids = Array.from({ length: 700 }, (_, i) => String(i));
+    await expect(courierRowsByIds(ids, async (batch) => (
+      batch[0] === "300" ? { data: null, error: { message: "caído" } } : { data: batch, error: null }
+    ))).rejects.toThrow("caído");
+    expect((await courierRowsByIds([], async () => ({ data: ["x"], error: null }))).data).toEqual([]);
   });
 });

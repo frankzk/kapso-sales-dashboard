@@ -423,6 +423,14 @@ async function loadGfAssigned(admin: Admin, guides: ReadonlyMap<string, string>)
   return out;
 }
 
+/** Lotes de 500 a la vez (los pendientes de Lima son ~1.500: tres o cuatro
+ *  lotes). Las filas salen en el orden de los lotes; el primer error corta. */
+async function inBatchesOf500<T>(ids: readonly string[], read: (batch: string[]) => Promise<T[]>): Promise<T[]> {
+  const batches: string[][] = [];
+  for (let offset = 0; offset < ids.length; offset += 500) batches.push(ids.slice(offset, offset + 500));
+  return (await Promise.all(batches.map(read))).flat();
+}
+
 /** Solo lectura, después de requireReproLima. Pagina todos los pedidos, sin
  * truncarlos a 1000 y sin cargar expedientes completos por cada fila. */
 export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date = new Date()): Promise<LimaPendingOrder[]> {
@@ -451,79 +459,78 @@ export async function loadLimaPending(admin: Admin, scope: ReproScope, now: Date
   const scheduled = new Map(programs.filter((p) => orderStore.get(p.order_id) === p.store_id).map((p) => [p.order_id, p.scheduled_for]));
   const departures = new Map<string, string>();
   const safeIds = [...orderStore.keys()];
-  const [{ gf: gfFacts, ops: stuckFacts, history }, courierDetails, riderSuggestions, management] = await Promise.all([
+  // UNA SOLA ESPERA para lo que no depende entre sí (owner, 21-11-2026: «anda
+  // cargando súper lento»). Las salidas de Grupo GF y las guías por recoger
+  // solo necesitan los ids, así que van junto a los hechos del plan, el detalle
+  // del courier y la gestión, en vez de esperar a que terminen. Sus lotes de
+  // 500 también van a la vez.
+  const [{ gf: gfFacts, ops: stuckFacts, history }, courierDetails, riderSuggestions, management, departureRows, pickupRows] = await Promise.all([
     loadGfPlanFacts(admin, safe, storeOrg, limaClock(now).day),
     loadCourierDetails(admin, safe),
     // Best-effort (17-11-2026): sin la lectura, la fila no sugiere motorizado.
     loadRiderSuggestions(admin).catch(() => new Map<string, string[]>()),
     loadLimaManagement(admin, safeIds, new Map(safe.map((row) => [row.order_id, row.order_created_at]))),
+    // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
+    // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
+    inBatchesOf500(safeIds, async (batch) => {
+      const { data, error } = await admin.rpc("gf_order_departures", { p_order_ids: batch });
+      if (error) throw new Error(`No pudimos leer el historial de salidas: ${error.message}`);
+      return (data ?? []) as Array<{ order_id: string; last_departure_at: string }>;
+    }),
+    // Las guías Aliclik que esperan su recojo (owner, 07-11-2026): viva, sin
+    // salida, sin reparto y sin retorno. Su día de recojo programa el pedido en
+    // Repro Lima; sin esto caía en «Nunca salieron» como si nadie lo hubiera
+    // gestionado. Un error se muestra, no se adivina. En la misma lectura, las
+    // guías de GF Courier que todavía no salieron (15-11-2026).
+    inBatchesOf500(safeIds, async (batch) => {
+      const { data, error } = await admin.from("shipments")
+        .select("order_id,courier,guide_code,delivery_status,aliclik_expected_dispatch_date,aliclik_reported_dispatch_date")
+        .in("order_id", batch)
+        .in("courier", ["aliclik", "gf_courier"]).eq("status_category", "pending")
+        .not("delivery_status", "in", "(anulado,transferido)")
+        .is("dispatched_at", null).is("out_for_delivery_at", null).is("returned_at", null);
+      if (error) throw new Error(`No pudimos leer las guías de Aliclik y GF Courier: ${error.message}`);
+      return (data ?? []) as PendingPickupRow[];
+    }),
   ]);
-  // La misma fuente de Grupo GF, en lotes de 500: una respuesta jamás puede
-  // quedar truncada en 1000 y convertir salidas reales en «Nunca salieron».
-  for (let offset = 0; offset < safeIds.length; offset += 500) {
-    const { data, error } = await admin.rpc("gf_order_departures", { p_order_ids: safeIds.slice(offset, offset + 500) });
-    if (error) throw new Error(`No pudimos leer el historial de salidas: ${error.message}`);
-    for (const d of (data ?? []) as Array<{ order_id: string; last_departure_at: string }>) {
-      if (orderStore.has(d.order_id) && d.last_departure_at) departures.set(d.order_id, d.last_departure_at);
+  for (const d of departureRows) {
+    if (orderStore.has(d.order_id) && d.last_departure_at) departures.set(d.order_id, d.last_departure_at);
+  }
+  const pickups = new Map<string, string>();
+  const gfGuides = new Map<string, string>();
+  for (const g of pickupRows) {
+    if (g.courier === "gf_courier") {
+      if (g.delivery_status === "pendiente" && g.guide_code && orderStore.has(g.order_id)) gfGuides.set(g.guide_code, g.order_id);
+      continue;
     }
+    const day = (g.aliclik_reported_dispatch_date ?? g.aliclik_expected_dispatch_date ?? "").slice(0, 10);
+    if (!orderStore.has(g.order_id) || !day) continue;
+    // Dos guías vivas a la vez no deberían existir; si existen, manda la más tardía.
+    if ((pickups.get(g.order_id) ?? "") < day) pickups.set(g.order_id, day);
   }
   // «Por reprogramar Lima» cuya caja nunca salió (owner, 18-11-2026, #KP206971):
   // el courier anuló la guía antes de recogerla. Solo se miran los que no tienen
-  // ninguna salida ni intento; un error se muestra, no se adivina.
-  const neverLeft = new Set<string>();
+  // ninguna salida ni intento; un error se muestra, no se adivina. Va junto a
+  // los días de las guías de GF Courier: ninguno depende del otro.
   const neverLeftCandidates = safe
     .filter((row) => row.macro_stage === "en_curso" && row.macro_substage === "por_reprogramar_lima"
       && !departures.has(row.order_id) && !row.dispatched_at && Number(row.attempt_count ?? 0) === 0)
     .map((row) => row.order_id);
-  for (let offset = 0; offset < neverLeftCandidates.length; offset += 500) {
-    const ids = neverLeftCandidates.slice(offset, offset + 500);
-    const { data, error } = await admin.from("shipments")
-      .select("order_id,courier,delivery_status,custody_state,dispatched_at,out_for_delivery_at,returned_at")
-      .in("order_id", ids);
-    if (error) throw new Error(`No pudimos leer las guías de los pedidos que nunca salieron: ${error.message}`);
-    const byOrder = new Map<string, NeverLeftGuide[]>();
-    for (const g of (data ?? []) as Array<NeverLeftGuide & { order_id: string }>) {
-      byOrder.set(g.order_id, [...(byOrder.get(g.order_id) ?? []), g]);
-    }
-    for (const id of ids) if (limaBoxNeverLeft(byOrder.get(id) ?? [])) neverLeft.add(id);
-  }
-  // Las guías Aliclik que esperan su recojo (owner, 07-11-2026): viva, sin
-  // salida, sin reparto y sin retorno. Su día de recojo programa el pedido en
-  // Repro Lima; sin esto caía en «Nunca salieron» como si nadie lo hubiera
-  // gestionado. Mismos lotes de 500; un error se muestra, no se adivina. En la
-  // misma lectura, las guías de GF Courier que todavía no salieron (15-11-2026).
-  const pickups = new Map<string, string>();
-  const gfGuides = new Map<string, string>();
-  for (let offset = 0; offset < safeIds.length; offset += 500) {
-    const { data, error } = await admin.from("shipments")
-      .select("order_id,courier,guide_code,delivery_status,aliclik_expected_dispatch_date,aliclik_reported_dispatch_date")
-      .in("order_id", safeIds.slice(offset, offset + 500))
-      .in("courier", ["aliclik", "gf_courier"]).eq("status_category", "pending")
-      .not("delivery_status", "in", "(anulado,transferido)")
-      .is("dispatched_at", null).is("out_for_delivery_at", null).is("returned_at", null);
-    if (error) throw new Error(`No pudimos leer las guías de Aliclik y GF Courier: ${error.message}`);
-    for (const g of (data ?? []) as PendingPickupRow[]) {
-      if (g.courier === "gf_courier") {
-        if (g.delivery_status === "pendiente" && g.guide_code && orderStore.has(g.order_id)) gfGuides.set(g.guide_code, g.order_id);
-        continue;
-      }
-      const day = (g.aliclik_reported_dispatch_date ?? g.aliclik_expected_dispatch_date ?? "").slice(0, 10);
-      if (!orderStore.has(g.order_id) || !day) continue;
-      // Dos guías vivas a la vez no deberían existir; si existen, manda la más tardía.
-      if ((pickups.get(g.order_id) ?? "") < day) pickups.set(g.order_id, day);
-    }
-  }
-  // Las guías de GF Courier que todavía no salieron, con el día que se le pidió
-  // a GF (`scheduled_date` de su intención enviada, §29.17): el de un acuerdo
-  // de Repro Lima o el de «Programar envío» (owner, 15-11-2026; §9.5). Sin
-  // esto, el acuerdo cuyo caso se cerró al crear la guía —el pedido dejó «Por
-  // reprogramar Lima»— perdía su día en la Agenda. Solo se pregunta por las
-  // guías que hay; un error se muestra, no se adivina.
-  const [gfPickups, gfAssigned] = await Promise.all([
+  const [gfPickups, gfAssigned, neverLeftRows] = await Promise.all([
     loadGfGuideDays(admin, gfGuides),
     // Best-effort: sin la lectura, la fila no dice el asignado (y sigue sugiriendo).
     loadGfAssigned(admin, gfGuides).catch(() => new Map<string, GfAssignedRider>()),
+    inBatchesOf500(neverLeftCandidates, async (batch) => {
+      const { data, error } = await admin.from("shipments")
+        .select("order_id,courier,delivery_status,custody_state,dispatched_at,out_for_delivery_at,returned_at")
+        .in("order_id", batch);
+      if (error) throw new Error(`No pudimos leer las guías de los pedidos que nunca salieron: ${error.message}`);
+      return (data ?? []) as Array<NeverLeftGuide & { order_id: string }>;
+    }),
   ]);
+  const neverLeftGuides = new Map<string, NeverLeftGuide[]>();
+  for (const g of neverLeftRows) neverLeftGuides.set(g.order_id, [...(neverLeftGuides.get(g.order_id) ?? []), g]);
+  const neverLeft = new Set(neverLeftCandidates.filter((id) => limaBoxNeverLeft(neverLeftGuides.get(id) ?? [])));
   return safe.map((row) => {
     // El filtro de arriba valida también la macroetapa de cada fila.
     const stage = row.macro_stage as LimaPendingOrder["stage"];

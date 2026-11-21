@@ -35,6 +35,17 @@ async function loadGfCourierStores(storeIds: readonly string[]): Promise<string[
   return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
 }
 
+/** Cuánto tarda cada lectura (owner, 21-11-2026: «anda cargando súper lento»):
+ *  una línea en los logs de Vercel por carga, para medir en vez de adivinar. */
+async function timed<T>(times: Record<string, number>, label: string, work: Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await work;
+  } finally {
+    times[label] = Date.now() - started;
+  }
+}
+
 export default function ReproLimaPage() {
   return (
     <Suspense fallback={<ReproLimaLoading />}>
@@ -64,12 +75,14 @@ async function ReproLimaContent() {
   let gfApiStores: string[] = [];
   // Las tiendas con la guía Aliclik y Swayp del día programado en Activo (0349).
   let courierAutoStores: string[] = [];
+  const times: Record<string, number> = {};
+  const started = Date.now();
   try {
     let permissions: Awaited<ReturnType<typeof getMasterPermissions>>;
     let gfStores: string[];
     [data, pending, permissions, autoGuideStores, gfStores, courierAutoStores] = await Promise.all([
-      loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true }),
-      loadLimaPending(createAdminSupabase(), scope),
+      timed(times, "casos", loadReproLima(createAdminSupabase(), scope, new Date(), { attention: true })),
+      timed(times, "pendientes", loadLimaPending(createAdminSupabase(), scope)),
       getMasterPermissions(),
       // Best-effort: sin la lectura, «Mañana sin guía» alarma como antes.
       loadGfAutoActiveStores(createAdminSupabase(), [...scope.storeIds]).catch(() => []),
@@ -88,6 +101,8 @@ async function ReproLimaContent() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return <EmptyState title="No pudimos cargar Repro Lima">{`${message} Recarga la página.`}</EmptyState>;
+  } finally {
+    console.info(`[repro-lima] carga ${JSON.stringify({ totalMs: Date.now() - started, ...times })}`);
   }
   return <ReproLimaBoard data={data} pending={pending} retriesOnly={scope.retriesOnly} canScheduleDispatch={!scope.retriesOnly && canScheduleDispatch} canReportForRider={!scope.retriesOnly && canReportForRider} autoGuideStores={autoGuideStores} quickGuide={scope.retriesOnly ? undefined : quickGuide} gfApiStores={gfApiStores} courierAutoStores={courierAutoStores} />;
 }
