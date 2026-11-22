@@ -71,7 +71,7 @@ export function RiderReceiveBox({ riderName, loads, previousRoutes = [] }: {
             id="previous-route"
             value=""
             onChange={(e) => { if (e.target.value) router.push(`/reparto?ruta=${encodeURIComponent(e.target.value)}`); }}
-            className="mt-3 h-12 w-full min-w-0 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="mt-3 h-12 w-full min-w-0 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-field focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             <option value="" disabled>Elegir un día anterior</option>
             {previousRoutes.map((route) => (

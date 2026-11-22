@@ -336,7 +336,7 @@ export function WarehouseStation({
                 spellCheck={false}
                 enterKeyHint="go"
                 placeholder="Escanea el rótulo o escribe la guía"
-                className="h-12 w-full rounded-md border-0 bg-white pl-11 pr-3 text-base font-medium text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:font-normal placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500"
+                className="h-12 w-full rounded-md border-0 bg-white pl-11 pr-3 text-base font-medium text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:font-normal placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500"
               />
             </label>
             <OpsButton size="lg" className="h-12" onClick={() => setCameraOpen(true)} disabled={busy}>
@@ -387,7 +387,7 @@ export function WarehouseStation({
               <label className="relative mb-4 block">
                 <span className="sr-only">Buscar paquete por armar</span>
                 <IconSearch aria-hidden className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-500" />
-                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por código, pedido, cliente o distrito" className="block h-9 pointer-coarse:h-11 w-full rounded-md border-0 bg-white pl-9 pr-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por código, pedido, cliente o distrito" className="block h-9 pointer-coarse:h-11 w-full rounded-md border-0 bg-white pl-9 pr-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
               </label>
             )}
             {queue.groups.length ? (

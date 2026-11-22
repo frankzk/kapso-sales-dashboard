@@ -216,7 +216,7 @@ export function AutomationsPanel({ orgs, writable }: { orgs: AutomationsOrgView[
             <select
               value={org.orgId}
               onChange={(e) => setOrgId(e.target.value)}
-              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 pointer-coarse:h-11"
+              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-field focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 pointer-coarse:h-11"
             >
               {orgs.map((o) => (
                 <option key={o.orgId} value={o.orgId}>
@@ -1014,7 +1014,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
                 if (next === requirement) return;
                 save(() => setPagoOnlineRequirement(org.orgId, next), () => setRequirement(next));
               }}
-              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-60 pointer-coarse:h-11"
+              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-field focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-60 pointer-coarse:h-11"
             >
               {PAGO_ONLINE_REQUIREMENTS.map((r) => (
                 <option key={r} value={r}>
@@ -1179,7 +1179,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
               onChange={(e) => setTestStore(e.target.value)}
               aria-label="Tienda de la prueba"
               disabled={!canEdit || testPending}
-              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong disabled:opacity-60 pointer-coarse:h-11"
+              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-field disabled:opacity-60 pointer-coarse:h-11"
             >
               {view.stores.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -1195,7 +1195,7 @@ function PagoOnlineGroup({ org, writable }: { org: AutomationsOrgView; writable:
               placeholder="Celular del equipo"
               aria-label="Celular del equipo"
               disabled={!canEdit || testPending}
-              className="h-9 w-44 rounded-md bg-white px-3 text-sm text-ink-900 ring-1 ring-inset ring-line-strong disabled:opacity-60 pointer-coarse:h-11"
+              className="h-9 w-44 rounded-md bg-white px-3 text-sm text-ink-900 ring-1 ring-inset ring-line-field disabled:opacity-60 pointer-coarse:h-11"
             />
             <OpsButton
               size="sm"

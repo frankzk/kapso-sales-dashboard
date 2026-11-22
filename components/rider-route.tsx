@@ -98,7 +98,7 @@ function limaDayPlus(days: number): string {
 
 /** Campo del motorizado: 48 px, texto de 16 px (Android no hace zoom), anillo fino y foco azul. */
 const RIDER_FIELD =
-  "block h-12 w-full min-w-0 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500";
+  "block h-12 w-full min-w-0 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500";
 
 /** Botón secundario del motorizado: blanco, anillo y sombra corta. */
 const RIDER_SECONDARY =
@@ -267,7 +267,7 @@ function RiderRouteScreenInner({
               value={route.id}
               onChange={(e) => router.push(`/reparto?ruta=${e.target.value}${coordinator ? "&modo=coordinacion" : ""}`)}
               aria-label="Ruta a reportar"
-              className="h-12 min-w-0 max-w-[60%] rounded-md border-0 bg-white px-2 text-xs text-ink-700 shadow-control ring-1 ring-inset ring-line-strong"
+              className="h-12 min-w-0 max-w-[60%] rounded-md border-0 bg-white px-2 text-xs text-ink-700 shadow-control ring-1 ring-inset ring-line-field"
             >
               {routes.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -1495,7 +1495,7 @@ export function ReportForm({ stop, onDone, delegated = false, vocabulary = null 
             onChange={(e) => setNote(e.target.value)}
             placeholder={noteRequired ? "Qué pasó, en una línea" : "Algo que coordinación deba saber"}
             rows={2}
-            className="mt-1.5 block w-full rounded-md border-0 bg-white px-3 py-2.5 text-base font-normal text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="mt-1.5 block w-full rounded-md border-0 bg-white px-3 py-2.5 text-base font-normal text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           />
         </label>
       </div>

@@ -21,9 +21,9 @@ type Icon = ComponentType<SVGProps<SVGSVGElement>>;
  * pone los tres.
  */
 export const FIELD_BOX =
-  "block min-w-0 rounded-md border-0 bg-white text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500";
+  "block min-w-0 rounded-md border-0 bg-white text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500";
 
-/** Campo de texto o selector: 36 px, anillo fino, foco azul. */
+/** Campo de texto o selector: 36 px, anillo `line-field` (3:1), foco azul. */
 export const FIELD = `${FIELD_BOX} h-9 w-full px-3`;
 
 /** Casilla nativa con el azul de la marca. */

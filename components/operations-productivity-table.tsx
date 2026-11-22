@@ -86,14 +86,14 @@ export function OperationsProductivityTable({
             placeholder="Buscar persona"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="h-9 w-44 rounded-md border border-line-strong bg-white px-3 text-[13px] outline-none focus:border-brand-600 focus:ring-1 focus:ring-brand-600"
+            className="h-9 w-44 rounded-md border border-line-field bg-white px-3 text-[13px] outline-none focus:border-brand-600 focus:ring-1 focus:ring-brand-600"
           />
           <label className="flex items-center gap-2 text-xs text-ink-500">
             Ordenar por
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value)}
-              className="h-9 rounded-md border border-line-strong bg-white px-2 text-[13px] text-ink-700 outline-none focus:ring-2 focus:ring-brand-600"
+              className="h-9 rounded-md border border-line-field bg-white px-2 text-[13px] text-ink-700 outline-none focus:ring-2 focus:ring-brand-600"
             >
               <option value="actions">Actividad</option>
               <option value="orders">Pedidos</option>

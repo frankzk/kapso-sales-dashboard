@@ -238,7 +238,7 @@ function RetryChainNote({ orderId, chain }: { orderId: string; chain: NonNullabl
             maxLength={500}
             placeholder="Por qué pasa a Repro Lima"
             onChange={(e) => setReason(e.target.value)}
-            className="h-8 min-w-48 flex-1 rounded-md bg-white px-2 text-xs ring-1 ring-inset ring-line-strong pointer-coarse:h-11"
+            className="h-8 min-w-48 flex-1 rounded-md bg-white px-2 text-xs ring-1 ring-inset ring-line-field pointer-coarse:h-11"
           />
           <OpsButton size="sm" type="submit" disabled={pending || reason.trim().length < 3} className="pointer-coarse:h-11">
             {pending ? "Guardando…" : "Pasar"}

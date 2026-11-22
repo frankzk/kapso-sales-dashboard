@@ -212,7 +212,7 @@ export function ReturnsReception({ initialData, nav }: {
                   spellCheck={false}
                   enterKeyHint="go"
                   placeholder="QR, guía o nº de pedido"
-                  className="h-12 w-full rounded-md border-0 bg-white pl-11 pr-3 text-base font-medium text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:font-normal placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500"
+                  className="h-12 w-full rounded-md border-0 bg-white pl-11 pr-3 text-base font-medium text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:font-normal placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500"
                 />
               </label>
               <OpsButton size="lg" className="h-12" onClick={() => setCameraOpen(true)} disabled={busy}>

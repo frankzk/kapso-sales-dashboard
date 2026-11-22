@@ -13,6 +13,7 @@ colors:
   ink-500: "#687385"
   ink-300: "#a3acba"
   line-strong: "#d5dbe1"
+  line-field: "#8690a0"
   line: "#ebeef1"
   wash: "#f6f8fa"
   white: "#ffffff"
@@ -271,7 +272,8 @@ Una paleta fría y contenida: tinta azulada, hairlines casi invisibles, un azul 
 - **Tinta de apoyo** (`ink-600`): encabezados de tabla, etiquetas de tarjetas de estado, texto de la chapa neutra y del botón fantasma.
 - **Tinta tenue** (`ink-500`): contexto, metadatos, marcadores de posición, iconos en reposo y pestañas inactivas.
 - **Tinta de borde activo** (`ink-300`): el anillo o borde de una píldora o chip al pasar el puntero.
-- **Línea fuerte** (`line-strong`): el anillo de 1 px de campos, botones secundarios y píldoras; el borde discontinuo de la píldora vacía.
+- **Línea fuerte** (`line-strong`): el anillo de 1 px de botones secundarios, píldoras, chips y tarjetas-opción; el borde discontinuo de la píldora vacía. Nunca en un campo: queda en 1,4:1 sobre blanco y esos controles ya se reconocen por su texto y su sombra.
+- **Línea de campo** (`line-field`, 22-11-2026): el anillo de 1 px de campos de texto, selectores y áreas de texto (`FIELD_BOX`), para que un campo vacío deje ver dónde empieza. Da 3,2:1 sobre blanco, 3,1:1 sobre el lienzo y 3,0:1 sobre `wash` (WCAG 1.4.11); con `line-strong` se quedaba en 1,4:1. `test/campos-contraste.test.ts` vigila que ningún campo vuelva a `line-strong`.
 - **Línea** (`line`): hairlines entre filas, bajo las pestañas y alrededor de tarjetas; también el fondo de la chapa neutra.
 - **Lavado** (`wash`): hover de filas y botones, pista del control segmentado, barra de acciones masivas, campos deshabilitados.
 - **Superficie** (`white`): tarjetas, tablas, hojas, controles.
@@ -397,7 +399,7 @@ Lo que se elige con un toque y tiene consecuencia (el resultado de una llamada, 
 Un registro en varios pasos dentro de una tarjeta (el cobro, la guía de Aliclik): una lista ordenada con un disco de 24 px por paso —su número en `ink-600` sobre blanco con anillo `line-strong`, o `ink-900` con visto al estar hecho— y una línea de 1 px que baja al siguiente, `line-strong` o `ink-500` si el paso ya está hecho. Título de 14 px peso 600 con su estado en chapa, la ayuda en 13 px `ink-500` y lo suyo debajo, sangrado tras el disco. El lector oye «Paso n» y «(hecho)».
 
 ### Inputs / Fields
-- **Style:** 36 px (40 px para el selector de motorizado), blanco, anillo interior `line-strong`, sombra de control, 6px, texto 14 px en `ink-900`, marcador en `ink-500`. En el escáner compacto el campo sube a 48 px en el teléfono con texto de 16 px.
+- **Style:** 36 px (40 px para el selector de motorizado), blanco, anillo interior `line-field`, sombra de control, 6px, texto 14 px en `ink-900`, marcador en `ink-500`. En el escáner compacto el campo sube a 48 px en el teléfono con texto de 16 px.
 - **Focus:** el anillo pasa a 2 px en `brand-500`, sin contorno exterior.
 - **Error / Disabled:** deshabilitado sobre `wash` con texto `ink-500`; los errores se dicen en un aviso `crit`, no pintando el campo.
 - **Casilla:** nativa, 16 px, `accent-color` en `brand-600`.

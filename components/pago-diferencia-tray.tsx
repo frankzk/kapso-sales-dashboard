@@ -254,7 +254,7 @@ export function PagoDiferenciaTray({ rows, storeNames }: { rows: PagoDiferenciaR
             }}
             placeholder="Buscar pedido, cliente, celular o guía"
             aria-label="Buscar pedido, cliente, celular o guía"
-            className="h-9 w-full rounded-md border border-line-strong bg-white px-3 text-sm text-ink-900 placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100 sm:ml-auto sm:w-72 pointer-coarse:h-11"
+            className="h-9 w-full rounded-md border border-line-field bg-white px-3 text-sm text-ink-900 placeholder:text-ink-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100 sm:ml-auto sm:w-72 pointer-coarse:h-11"
           />
         </div>
 
