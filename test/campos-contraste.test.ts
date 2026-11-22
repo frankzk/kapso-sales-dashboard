@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
 
 /**
  * Borde de los campos (22-11-2026). Los campos de texto, selectores y áreas de
@@ -15,21 +16,23 @@ const css = readFileSync(resolve(root, "app/globals.css"), "utf8");
 
 function token(name: string): string {
   const m = new RegExp(`--color-${name}:\\s*(#[0-9a-f]{6});`, "i").exec(css);
-  expect(m, name).not.toBeNull();
-  return m![1];
+  expect(m?.[1], name).toBeDefined();
+  return m?.[1] ?? "";
+}
+
+function channel(hex: string, i: number): number {
+  const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 }
 
 function luminance(hex: string): number {
-  const [r, g, b] = [1, 3, 5].map((i) => {
-    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return 0.2126 * channel(hex, 1) + 0.7152 * channel(hex, 3) + 0.0722 * channel(hex, 5);
 }
 
 function contrast(a: string, b: string): number {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
 describe("el borde de los campos se ve", () => {
