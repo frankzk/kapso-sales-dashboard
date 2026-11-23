@@ -67,7 +67,7 @@ export function CallbackReturnStack({
             key={keyOf(item)}
             aria-labelledby={headingId}
             // En el teléfono, uno solo: los demás se cuentan abajo.
-            className={`pointer-events-auto animate-toast-in overflow-hidden rounded-xl bg-white shadow-pop${index > 0 ? " max-sm:hidden" : ""}`}
+            className={`pointer-events-auto animate-toast-in overflow-hidden rounded-lg bg-white shadow-pop${index > 0 ? " max-sm:hidden" : ""}`}
           >
             {item.reserved && (
               <div className="h-[3px] bg-brand-50" aria-hidden="true">
@@ -99,7 +99,7 @@ export function CallbackReturnStack({
                 </div>
               </div>
 
-              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-lg bg-slate-50 px-3 py-2.5 text-[13px] leading-5">
+              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-lg bg-wash px-3 py-2.5 text-[13px] leading-5">
                 <dt className="text-ink-500">Agendaste</dt>
                 <dd className="min-w-0 truncate text-ink-900">Volver a llamar · {scheduled(item.followupAt, now)}</dd>
                 {item.reserved ? (
@@ -122,7 +122,7 @@ export function CallbackReturnStack({
                 <button
                   type="button"
                   onClick={() => dismiss(item)}
-                  className="rounded-md px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-slate-100 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+                  className="rounded-md px-3 py-1.5 text-sm font-medium text-ink-600 transition-colors hover:bg-wash hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
                 >
                   Más tarde
                 </button>

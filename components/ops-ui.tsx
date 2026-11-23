@@ -437,6 +437,20 @@ export function Step({
   );
 }
 
+/**
+ * Aviso flotante que interrumpe arriba de la página («Yape/Shalom por
+ * verificar», «No se pudo tomar el lead»): una sola cáscara para que se lean
+ * como el mismo objeto. Hoja blanca de 8 px con la sombra de popover y la
+ * entrada suave del aviso «Tu cliente respondió»; el tono va en el disco del
+ * icono, no en una franja (DESIGN.md: sombra corta, nada de rojo sólido).
+ */
+export const FLOATING_ALERT =
+  "pointer-events-auto w-full max-w-md overflow-hidden rounded-lg bg-white p-4 shadow-pop animate-toast-in";
+
+/** Disco del icono del aviso flotante, en el par del tono crítico. */
+export const FLOATING_ALERT_ICON =
+  "relative grid size-9 shrink-0 place-items-center rounded-full bg-crit-bg text-crit-fg";
+
 /** Esqueleto de carga: bloques en el lavado, sin brillo que se mueva. */
 export function Skeleton({ className }: { className?: string }) {
   return <div aria-hidden className={cn("animate-pulse rounded-lg bg-wash", className)} />;

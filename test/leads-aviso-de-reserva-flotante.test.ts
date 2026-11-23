@@ -28,11 +28,27 @@ describe("el mismo estado, dos sitios", () => {
   });
 
   it("es la misma cáscara que el aviso de Yape, no una tercera", () => {
+    // Desde el 23-11-2026 la cáscara vive en un solo sitio (`FLOATING_ALERT`,
+    // components/ops-ui.tsx) y los dos avisos la usan tal cual.
     const yape = readFileSync(resolve(process.cwd(), "components/yape-alerts.tsx"), "utf8");
-    const cascara =
-      'className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border-2 border-red-300 bg-white shadow-2xl ring-4 ring-red-500/10"';
-    expect(ui).toContain(cascara);
-    expect(yape).toContain(cascara);
+    for (const src of [ui, yape]) {
+      expect(src).toContain("className={FLOATING_ALERT}");
+      expect(src).toContain("className={FLOATING_ALERT_ICON}");
+    }
+  });
+
+  it("la cáscara es del mundo de operación: 8 px, sombra de popover y nada de rojo sólido", () => {
+    const ops = readFileSync(resolve(process.cwd(), "components/ops-ui.tsx"), "utf8");
+    const cascara = /export const FLOATING_ALERT =\s*"([^"]+)"/.exec(ops)?.[1] ?? "";
+    expect(cascara).toContain("rounded-lg");
+    expect(cascara).toContain("shadow-pop");
+    expect(cascara).not.toMatch(/rounded-(xl|2xl)|shadow-(md|lg|xl|2xl)|red-|border-2|ring-4/);
+  });
+
+  it("el aviso de Yape tampoco usa emoji", () => {
+    const yape = readFileSync(resolve(process.cwd(), "components/yape-alerts.tsx"), "utf8");
+    const popup = yape.slice(yape.indexOf('role="alertdialog"'), yape.indexOf("export function YapeAssign"));
+    expect(popup).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
   });
 });
 
