@@ -15,10 +15,10 @@ import { compactBoxLabel } from "@/lib/repro-lima";
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 const TODAY = "2026-11-23";
 const row = (over: Partial<LimaPendingOrder> = {}): LimaPendingOrder => ({
-  orderId: "o1", storeId: "a", storeName: "Kenku", orderName: "#KP207897", customerName: "Alán", customerPhone: "51960746254",
-  district: "Comas", orderTotal: 189, createdAt: "2026-11-21T13:00:00Z", macroSince: "2026-11-21T13:00:00Z",
+  orderId: "o1", storeId: "a", storeName: "Kenku", orderName: "#KP207897", customerName: "Ana", customerPhone: "51999000111",
+  district: "Surco", orderTotal: 189, createdAt: "2026-11-21T13:00:00Z", macroSince: "2026-11-21T13:00:00Z",
   stage: "por_despachar", substage: "listo_para_asignar", courier: "gf_courier", dispatchedAt: null, attempts: 0,
-  hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, salesChannel: null, address: "Jr. Los Pinos 947", reference: null,
+  hasPriorDispatch: false, lastDepartureAt: null, programmedFor: null, salesChannel: null, address: "Av. Ejemplo 123", reference: null,
   courierPickup: { courier: "gf_courier", date: "2026-11-25" }, gf: null, scheduledOn: null, ops: null, ...over,
 });
 const cls = (over: Partial<LimaRowClass> = {}): LimaRowClass => ({
