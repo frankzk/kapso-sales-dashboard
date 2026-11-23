@@ -7177,8 +7177,8 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     GF Courier dice «Caja en oficina» (`compactBoxLabel`) y la línea del
     fallo no repite lo que ya dicen «Qué pasa» y la fecha. El historial dice
     «0 intentos», «2 intentos · salió con Aliclik, GF Courier» o «1 intento ·
-    salida sin confirmar» (`limaHistoryShort`); la frase larga va en el
-    título. La ficha del pedido sigue diciéndolo todo.
+    salida sin confirmar», con «· reconstruido de rutas» si viene de las
+    rutas reportadas (`limaHistoryShort`); la frase larga va en el título. La ficha del pedido sigue diciéndolo todo.
 - **«Guía Aliclik y Swayp del día programado»: Kapta la crea** (decisión del
   owner: «Kapta la crea ese día»; 0349, `lib/lima-courier-auto.ts` y
   `lib/lima-courier-auto-server.ts`, Automatizaciones → Logística Lima, §40).

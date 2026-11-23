@@ -38,6 +38,11 @@ describe("el historial: los intentos sí, «Nunca salió a reparto» no", () => 
   it("salió: con quién", () => {
     expect(limaHistoryShort(row({ attempts: 2, hasPriorDispatch: true, dispatchedWith: ["aliclik"] }))).toMatch(/^2 intentos · salió con /);
   });
+
+  it("el historial reconstruido de rutas sigue a la vista en la fila", () => {
+    expect(limaHistoryShort(row({ attempts: 2, hasPriorDispatch: true, dispatchedWith: ["aliclik"], historyFromRoutes: true }))).toMatch(/ · reconstruido de rutas$/);
+    expect(limaHistoryShort(row())).not.toContain("rutas");
+  });
 });
 
 describe("la fecha dice el courier: «mié 25/11 · GF Courier»", () => {

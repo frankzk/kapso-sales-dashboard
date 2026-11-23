@@ -528,7 +528,7 @@ El panel del equipo de Lima (MOM §9.5, «Repro Lima por las tareas del equipo»
 - **Próximo paso:** solo si hay algo que hacer. Si el pedido solo espera su día, una raya «—» en 14 px `ink-400`; la frase va en el título y para el lector de pantalla.
 - **Fecha agendada:** el día en 13 px peso 500 («mié 25/11») y debajo, en 12 px `ink-500`, el courier y el origen en corto: «GF Courier · acordado», «Aliclik · recojo», «Grupo GF · programa». El origen largo va en el título.
 - **Qué pasa:** un chip por salida. El chip del acuerdo no se repite si la fecha ya lo dice («Programado», «Salida creada»); la caja en oficina de GF Courier dice «Caja en oficina»; la llamada, «Llamada hoy 19:00 · Daysi». Sin la línea «Listo: sale con…».
-- **Historial:** «0 intentos», «2 intentos · salió con Aliclik, GF Courier» en 12 px `ink-500`; la frase larga en el título. «Sugerido» ya no dice «por su distrito».
+- **Historial:** «0 intentos», «2 intentos · salió con Aliclik, GF Courier» en 12 px `ink-500`, con «· reconstruido de rutas» si viene de las rutas reportadas; la frase larga en el título. «Sugerido» ya no dice «por su distrito».
 
 **La lista, más clara (owner, 15-11-2026: «los colores y separaciones que se vean más claras»).**
 - **Cabecera de la tarjeta:** el título va en 16 px.
