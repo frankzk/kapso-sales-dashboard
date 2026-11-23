@@ -21,9 +21,9 @@ type Icon = ComponentType<SVGProps<SVGSVGElement>>;
  * pone los tres.
  */
 export const FIELD_BOX =
-  "block min-w-0 rounded-md border-0 bg-white text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500";
+  "block min-w-0 rounded-md border-0 bg-white text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:text-ink-500 transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500";
 
-/** Campo de texto o selector: 36 px, anillo fino, foco azul. */
+/** Campo de texto o selector: 36 px, anillo `line-field` (3:1), foco azul. */
 export const FIELD = `${FIELD_BOX} h-9 w-full px-3`;
 
 /** Casilla nativa con el azul de la marca. */
@@ -436,6 +436,20 @@ export function Step({
     </li>
   );
 }
+
+/**
+ * Aviso flotante que interrumpe arriba de la página («Yape/Shalom por
+ * verificar», «No se pudo tomar el lead»): una sola cáscara para que se lean
+ * como el mismo objeto. Hoja blanca de 8 px con la sombra de popover y la
+ * entrada suave del aviso «Tu cliente respondió»; el tono va en el disco del
+ * icono, no en una franja (DESIGN.md: sombra corta, nada de rojo sólido).
+ */
+export const FLOATING_ALERT =
+  "pointer-events-auto w-full max-w-md overflow-hidden rounded-lg bg-white p-4 shadow-pop animate-toast-in";
+
+/** Disco del icono del aviso flotante, en el par del tono crítico. */
+export const FLOATING_ALERT_ICON =
+  "relative grid size-9 shrink-0 place-items-center rounded-full bg-crit-bg text-crit-fg";
 
 /** Esqueleto de carga: bloques en el lavado, sin brillo que se mueva. */
 export function Skeleton({ className }: { className?: string }) {

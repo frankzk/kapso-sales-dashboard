@@ -272,7 +272,7 @@ function ScheduleEditor({
                   aria-describedby={windowError ? "hora-salida-error" : undefined}
                   className={cn(
                     // `cn` no resuelve conflictos: el anillo rojo reemplaza al gris, no se suma.
-                    windowError ? FIELD_BOX.replace("ring-line-strong", "ring-crit-fg") : FIELD_BOX,
+                    windowError ? FIELD_BOX.replace("ring-line-field", "ring-crit-fg") : FIELD_BOX,
                     "mt-1.5 block h-9 w-32 px-3 tabular-nums pointer-coarse:h-11",
                   )}
                 />

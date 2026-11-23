@@ -114,6 +114,8 @@ import {
   CHECKBOX,
   ChoiceChip,
   FIELD_BOX,
+  FLOATING_ALERT,
+  FLOATING_ALERT_ICON,
   FilterPill,
   OpsButton,
   Skeleton,
@@ -2103,26 +2105,23 @@ export function LeadsBoard({
           aria-labelledby="lead-claim-refused-title"
           aria-describedby="lead-claim-refused-text"
         >
-          <div className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border-2 border-red-300 bg-white shadow-2xl ring-4 ring-red-500/10">
-            <div className="flex items-center gap-2 bg-red-600 px-4 py-2 text-white">
-              <IconAlert className="h-5 w-5 shrink-0" aria-hidden="true" />
-              <span id="lead-claim-refused-title" className="text-sm font-semibold">
-                No se pudo tomar el lead
+          <div className={FLOATING_ALERT}>
+            <div className="flex items-start gap-3">
+              <span className={FLOATING_ALERT_ICON} aria-hidden="true">
+                <IconAlert className="size-[18px]" />
               </span>
+              <div className="min-w-0 flex-1 pt-2">
+                <h2 id="lead-claim-refused-title" className="text-[15px] font-semibold leading-5 text-ink-900">
+                  No se pudo tomar el lead
+                </h2>
+                <p id="lead-claim-refused-text" className="mt-1 text-sm leading-5 text-ink-700">
+                  {banner}
+                </p>
+              </div>
             </div>
-            <div className="px-4 py-3">
-              <p id="lead-claim-refused-text" className="text-sm text-slate-800">
-                {banner}
-              </p>
-              <button
-                ref={bannerDismissRef}
-                type="button"
-                onClick={() => setBanner(null)}
-                className="mt-3 w-full rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700"
-              >
-                Entendido
-              </button>
-            </div>
+            <OpsButton ref={bannerDismissRef} variant="primary" size="lg" className="mt-4 w-full" onClick={() => setBanner(null)}>
+              Entendido
+            </OpsButton>
           </div>
         </div>
       )}

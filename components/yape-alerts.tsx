@@ -16,6 +16,9 @@ import {
   type YapeAlert,
 } from "@/app/dashboard/leads/actions";
 import { listStoreVendedoras, listYapeAlerts } from "@/lib/leads-read-client";
+import { Badge, FIELD, FLOATING_ALERT, FLOATING_ALERT_ICON, OpsButton } from "@/components/ops-ui";
+import { IconMoney } from "@/components/icons";
+import { cn } from "@/components/ui";
 
 const POLL_MS = 15_000;
 
@@ -126,39 +129,34 @@ export function YapeAlerts({ enabled = true }: { enabled?: boolean }) {
       aria-live="assertive"
       aria-label="Yape/Shalom por verificar"
     >
-      <div className="pointer-events-auto w-full max-w-md overflow-hidden rounded-2xl border-2 border-red-300 bg-white shadow-2xl ring-4 ring-red-500/10">
-        <div className="flex items-center gap-2 bg-red-600 px-4 py-2 text-white">
-          <span className="animate-pulse-dot text-lg leading-none motion-reduce:animate-none" aria-hidden="true">
-            🔥
+      <div className={FLOATING_ALERT}>
+        <div className="flex items-start gap-3">
+          {/* La urgencia la dice el disco crítico con su punto que pulsa, no un emoji. */}
+          <span className={FLOATING_ALERT_ICON} aria-hidden="true">
+            <IconMoney className="size-[18px]" />
+            <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-urgent ring-2 ring-white animate-pulse-dot motion-reduce:animate-none" />
           </span>
-          <span className="text-sm font-semibold">Yape/Shalom por verificar</span>
-          {extra > 0 && (
-            <span className="ml-auto rounded-full bg-white/25 px-2 py-0.5 text-xs font-semibold tabular-nums">
-              +{extra} en cola
-            </span>
-          )}
-        </div>
-        <div className="px-4 py-3">
-          <p className="text-base font-semibold text-slate-900">{top.name || top.phone}</p>
-          <p className="text-sm tabular-nums text-slate-500">+{top.phone}</p>
-          {detail && <p className="mt-1.5 line-clamp-2 text-sm text-slate-600">{detail}</p>}
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => take(top)}
-              disabled={busyId === top.id}
-              className="flex-1 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
-            >
-              {busyId === top.id ? "Tomando…" : "Tomar y atender"}
-            </button>
-            <button
-              type="button"
-              onClick={() => pass(top)}
-              className="rounded-lg border border-slate-300 px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-            >
-              Ahora no
-            </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1">
+              <h2 className="text-[15px] font-semibold leading-5 text-ink-900">Yape/Shalom por verificar</h2>
+              {extra > 0 && (
+                <Badge tone="urgent" className="ml-auto tabular-nums">
+                  +{extra} en cola
+                </Badge>
+              )}
+            </div>
+            <p className="mt-2 text-base font-semibold leading-6 text-ink-900">{top.name || top.phone}</p>
+            <p className="text-[13px] leading-5 tabular-nums text-ink-500">+{top.phone}</p>
+            {detail && <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-ink-700">{detail}</p>}
           </div>
+        </div>
+        <div className="mt-4 flex items-center gap-2">
+          <OpsButton variant="primary" size="lg" className="flex-1" onClick={() => take(top)} disabled={busyId === top.id}>
+            {busyId === top.id ? "Tomando…" : "Tomar y atender"}
+          </OpsButton>
+          <OpsButton size="lg" onClick={() => pass(top)}>
+            Ahora no
+          </OpsButton>
         </div>
       </div>
     </div>
@@ -179,13 +177,13 @@ export function YapeAssign({
 }) {
   const [vendedoras, setVendedoras] = useState<{ id: string; name: string }[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     let alive = true;
     listStoreVendedoras(storeId).then((v) => {
       if (alive) setVendedoras(v);
-    }).catch(() => { if (alive) setMsg("No se pudieron cargar las asesoras."); });
+    }).catch(() => { if (alive) setMsg({ text: "No se pudieron cargar las asesoras.", ok: false }); });
     return () => {
       alive = false;
     };
@@ -198,18 +196,22 @@ export function YapeAssign({
     setBusy(true);
     const res = await assignYape(leadId, id);
     setBusy(false);
-    setMsg(res.error ?? "Asignado ✓");
+    setMsg(res.error ? { text: res.error, ok: false } : { text: "Asignado ✓", ok: true });
     onAssigned?.();
   }
 
+  // Zona sobre el lavado, sin anillo: va dentro del cajón y no es otra tarjeta.
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-      <p className="mb-1.5 text-xs font-semibold tracking-wide text-slate-400 uppercase">Asignar Yape a</p>
+    <div className="rounded-lg bg-wash px-3 py-2.5">
+      <label htmlFor={`yape-assign-${leadId}`} className="mb-1.5 block text-[13px] font-medium leading-5 text-ink-700">
+        Asignar Yape a
+      </label>
       <select
+        id={`yape-assign-${leadId}`}
         defaultValue=""
         disabled={busy}
         onChange={(e) => assign(e.currentTarget.value)}
-        className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm outline-none focus:border-brand-500"
+        className={FIELD}
       >
         <option value="">Elegir vendedora…</option>
         {vendedoras.map((v) => (
@@ -218,7 +220,11 @@ export function YapeAssign({
           </option>
         ))}
       </select>
-      {msg && <p className="mt-1 text-xs text-slate-500">{msg}</p>}
+      {msg && (
+        <p role={msg.ok ? "status" : "alert"} className={cn("mt-1.5 text-[13px] leading-5", msg.ok ? "text-ok-fg" : "text-crit-fg")}>
+          {msg.text}
+        </p>
+      )}
     </div>
   );
 }

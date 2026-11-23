@@ -24,6 +24,12 @@
   --color-ink-300: #a3acba;
   --color-line: #ebeef1;
   --color-line-strong: #d5dbe1;
+  /* Borde de los campos de texto, selectores y áreas de texto (22-11-2026).
+     `line-strong` quedaba en 1,4:1 sobre blanco: un campo vacío no dejaba ver
+     dónde empieza (WCAG 1.4.11 pide 3:1). Este gris de la misma tinta da 3,2:1
+     sobre blanco, 3,1:1 sobre el lienzo y 3,0:1 sobre `wash`. Botones, píldoras
+     y separadores siguen en `line-strong`: su texto ya los identifica. */
+  --color-line-field: #8690a0;
   --color-wash: #f6f8fa;
   --color-ok-bg: #d7f7c2;
   --color-ok-fg: #006908;

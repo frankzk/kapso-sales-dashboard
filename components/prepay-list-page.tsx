@@ -82,7 +82,7 @@ export function ListaNegraPage({ orgs, writable }: { orgs: PrepayOrgView[]; writ
             <select
               value={org.orgId}
               onChange={(e) => setOrgId(e.target.value)}
-              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 pointer-coarse:h-11"
+              className="block h-9 rounded-md border-0 bg-white px-3 text-sm text-ink-900 shadow-control ring-1 ring-inset ring-line-field focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 pointer-coarse:h-11"
             >
               {orgs.map((o) => (
                 <option key={o.orgId} value={o.orgId}>

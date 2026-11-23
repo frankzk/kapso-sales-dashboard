@@ -80,7 +80,7 @@ export function ExceptControl({
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder={LN_EXCEPT_REASON_PLACEHOLDER}
-              className={cn("h-8 min-w-0 flex-1 rounded-md bg-white px-2 text-[13px] text-ink-900 ring-1 ring-inset ring-line-strong pointer-coarse:h-11")}
+              className={cn("h-8 min-w-0 flex-1 rounded-md bg-white px-2 text-[13px] text-ink-900 ring-1 ring-inset ring-line-field pointer-coarse:h-11")}
             />
             <OpsButton
               size="sm"

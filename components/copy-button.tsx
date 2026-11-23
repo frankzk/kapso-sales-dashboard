@@ -140,10 +140,10 @@ export function CopyButton({
       aria-label={`Copiar ${label}`}
       className={`inline-flex shrink-0 items-center rounded p-0.5 align-middle transition-colors ${
         state === "ok"
-          ? "text-emerald-600"
+          ? "text-ok-fg"
           : state === "fail"
-            ? "text-rose-600"
-            : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            ? "text-crit-fg"
+            : "text-ink-500 hover:bg-wash hover:text-ink-900"
       } ${className}`}
     >
       {/* El acuse no puede ser SOLO el color: quien no distingue verde de gris

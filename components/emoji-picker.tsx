@@ -10,6 +10,8 @@ import {
   searchEmojis,
 } from "@/lib/emoji";
 import { IconSmile } from "@/components/icons";
+import { FIELD_BOX } from "@/components/ops-ui";
+import { cn } from "@/components/ui";
 
 /**
  * El selector de emojis del compositor de Leads.
@@ -115,21 +117,21 @@ export function EmojiPicker({
         <div
           role="dialog"
           aria-label="Selector de emojis"
-          className="absolute bottom-full left-0 z-30 mb-2 w-[min(20rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white shadow-xl"
+          className="absolute bottom-full left-0 z-30 mb-2 w-[min(20rem,calc(100vw-2rem))] rounded-lg bg-white shadow-pop"
         >
-          <div className="border-b border-slate-100 p-2">
+          <div className="border-b border-line p-2">
             <input
               ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.currentTarget.value)}
               placeholder="Buscar emoji"
               aria-label="Buscar emoji"
-              className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              className={cn(FIELD_BOX, "h-8 w-full px-2.5")}
             />
           </div>
 
           {!buscando && (
-            <div className="flex gap-0.5 border-b border-slate-100 px-2 py-1.5">
+            <div className="flex gap-0.5 border-b border-line px-2 py-1.5">
               {EMOJI_GROUPS.map((g) => (
                 <button
                   key={g.id}
@@ -138,10 +140,10 @@ export function EmojiPicker({
                   title={g.label}
                   aria-label={g.label}
                   aria-pressed={g.id === group}
-                  className={
-                    "flex-1 rounded-lg py-1 text-base leading-none " +
-                    (g.id === group ? "bg-emerald-50" : "hover:bg-slate-100")
-                  }
+                  className={cn(
+                    "flex-1 rounded-md py-1 text-base leading-none transition-shadow",
+                    g.id === group ? "bg-brand-50 ring-2 ring-inset ring-brand-600" : "hover:bg-wash",
+                  )}
                 >
                   {g.icon}
                 </button>
@@ -154,7 +156,7 @@ export function EmojiPicker({
               results.length ? (
                 <Grid items={results.map((r) => r.e)} onPick={choose} />
               ) : (
-                <p className="px-1 py-6 text-center text-xs text-slate-400">
+                <p className="px-1 py-6 text-center text-[13px] text-ink-500">
                   Sin resultados para «{query.trim()}»
                 </p>
               )
@@ -162,14 +164,14 @@ export function EmojiPicker({
               <>
                 {recientes.length > 0 && (
                   <>
-                    <p className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                    <p className="px-1 pb-1 text-xs font-semibold text-ink-500">
                       Recientes
                     </p>
                     <Grid items={recientes} onPick={choose} />
-                    <div className="my-2 border-t border-slate-100" />
+                    <div className="my-2 border-t border-line" />
                   </>
                 )}
-                <p className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                <p className="px-1 pb-1 text-xs font-semibold text-ink-500">
                   {activo.label}
                 </p>
                 <Grid items={activo.items.map((i) => i.e)} onPick={choose} />
@@ -197,7 +199,7 @@ function Grid({ items, onPick }: { items: string[]; onPick: (e: string) => void 
           onMouseDown={(ev) => ev.preventDefault()}
           onClick={() => onPick(e)}
           title={e}
-          className="rounded-lg py-1 text-xl leading-none hover:bg-slate-100"
+          className="rounded-md py-1 text-xl leading-none hover:bg-wash"
         >
           {e}
         </button>

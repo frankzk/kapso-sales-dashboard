@@ -109,7 +109,7 @@ export function PrepayListBanner({
                   value={result.link}
                   aria-label={result.kind === "diferencia" ? "Link de pago del saldo" : "Link de pago del total"}
                   onFocus={(e) => e.currentTarget.select()}
-                  className={cn("h-8 min-w-0 flex-1 rounded-md bg-white px-2 text-[13px] text-ink-900 ring-1 ring-inset ring-line-strong")}
+                  className={cn("h-8 min-w-0 flex-1 rounded-md bg-white px-2 text-[13px] text-ink-900 ring-1 ring-inset ring-line-field")}
                 />
                 <OpsButton size="sm" onClick={() => copy(result.link!)}>
                   {copyLabel(copyState)}

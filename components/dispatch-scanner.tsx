@@ -72,7 +72,7 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = fa
           autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} enterKeyHint="go" inputMode="text"
           aria-label="Código del paquete: QR, guía o número de pedido" placeholder="QR, guía o pedido"
           className={ops
-            ? "h-12 w-full min-w-0 flex-1 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 sm:h-10 sm:text-sm"
+            ? "h-12 w-full min-w-0 flex-1 rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 sm:h-10 sm:text-sm"
             : "min-h-12 w-full min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 focus-visible:outline-none focus-visible:border-brand-500 focus-visible:ring-4 focus-visible:ring-brand-500/15 disabled:opacity-50 sm:min-h-10 sm:text-sm"} />
         <button type="submit" disabled={busy || disabled || !code.trim()}
           className={ops
@@ -107,7 +107,7 @@ export function DispatchScanner({ busy, disabled, onScan, onCamera, compact = fa
           autoComplete="off" autoCapitalize="characters" spellCheck={false} enterKeyHint="go"
           placeholder="QR, guía o número de pedido"
           className={ops
-            ? "mt-1 h-12 w-full rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-strong placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500 sm:h-9 sm:text-sm"
+            ? "mt-1 h-12 w-full rounded-md border-0 bg-white px-3 text-base text-ink-900 shadow-control ring-1 ring-inset ring-line-field placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:bg-wash disabled:text-ink-500 sm:h-9 sm:text-sm"
             : "mt-1 min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 focus-visible:outline-none focus-visible:border-brand-500 focus-visible:ring-4 focus-visible:ring-brand-500/15 disabled:opacity-50"} />
       </label>
       <button disabled={busy || disabled || !code.trim()} className={ops
