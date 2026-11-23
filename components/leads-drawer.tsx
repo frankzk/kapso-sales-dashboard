@@ -10,6 +10,7 @@
 // `CallForm` y `WhatsappChat` se exportan con `variant="card"` para la tarjeta
 // del siguiente lead de la lista: la misma conducta sin el marco de la ficha.
 
+import { productPickerEmptyText } from "@/lib/product-picker-text";
 import { LeadAttemptBadge } from "@/components/lead-attempt-badge";
 import { mergeConversationMessages } from "@/lib/conversation-merge";
 import { canUseActiveChatPoll, chatContextAfterRead } from "@/lib/leads-chat-poll";
@@ -2850,6 +2851,8 @@ export function OrderFormPanel({
   // no se pudo leer: sin saberlo no se ofrece «Ítem manual», que WooCommerce
   // no puede crear (el servidor decide y frena igual).
   const [platform, setPlatform] = useState<"shopify" | "woocommerce" | null>(null);
+  // El nombre de la tienda del lead: el buscador dice en qué catálogo no está (23-11-2026).
+  const [storeName, setStoreName] = useState<string | null>(null);
   const requestIdRef = useRef(newRequestId());
   // ¿Este formulario ya mandó el `requestId` actual? Un reintento siempre busca
   // en WooCommerce el pedido del intento anterior (MOM §38.12).
@@ -2892,6 +2895,7 @@ export function OrderFormPanel({
         setMsg(res.error);
       } else {
         setPlatform(res.platform === "woocommerce" ? "woocommerce" : "shopify");
+        setStoreName(res.storeName ?? null);
         setItems(res.lineItems.map((li) => ({ ...li, sku: li.sku ?? null, key: rid() })));
         // Solo la parte nacional: el campo pinta el `+51` fijo al lado, y el
         // teléfono del lead viene de WhatsApp CON el 51 delante. Sin quitarlo se
@@ -3184,6 +3188,8 @@ export function OrderFormPanel({
               <ProductPicker
                 leadId={leadId}
                 currency={currency}
+                platform={platform}
+                storeName={storeName}
                 initialQuery={replaceKey ? items.find((it) => it.key === replaceKey)?.title ?? "" : ""}
                 onPick={(p) => {
                   const picked = { variantId: p.variantId, title: p.title, unitPrice: p.price, sku: p.sku };
@@ -3533,12 +3539,16 @@ function Field({
 function ProductPicker({
   leadId,
   currency,
+  platform = null,
+  storeName = null,
   initialQuery = "",
   onPick,
   onClose,
 }: {
   leadId: string;
   currency: string;
+  platform?: "shopify" | "woocommerce" | null;
+  storeName?: string | null;
   /** Lo que ya viene escrito: el producto de la línea cuya variante se elige. */
   initialQuery?: string;
   onPick: (v: PickedVariant) => void;
@@ -3606,7 +3616,7 @@ function ProductPicker({
       </div>
       {searching && <p className="mt-2 text-xs text-ink-500">Buscando…</p>}
       {results && results.length === 0 && !searching && (
-        <p className="mt-2 text-xs text-ink-500">Sin resultados (o falta el permiso read_products).</p>
+        <p className="mt-2 text-xs text-ink-500">{productPickerEmptyText(platform, storeName)}</p>
       )}
       {results && results.length > 0 && (
         <ul className="mt-2 max-h-56 overflow-y-auto overscroll-contain">

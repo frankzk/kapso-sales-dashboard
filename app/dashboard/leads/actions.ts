@@ -2557,6 +2557,12 @@ export interface OrderFormPrefill {
    * no hay ítems manuales: cada línea va por SKU.
    */
   platform: "shopify" | "woocommerce";
+  /**
+   * El nombre de la tienda del lead, para decir en qué catálogo no está un
+   * producto (owner, 23-11-2026: la astaxantina es de Kenku y el lead era de
+   * Aurela). Null si no se pudo leer: el buscador dice «esta tienda».
+   */
+  storeName: string | null;
   /** `sku`: solo en WooCommerce, el del carrito guardado (`draft_orders`). */
   /** `needsVariant`: la línea del carrito llegó sin su variante (`cartLineNeedsVariant`): hay que elegirla. */
   lineItems: { variantId: string | null; title: string; quantity: number; unitPrice: number | null; sku?: string | null; needsVariant?: boolean }[];
@@ -2601,11 +2607,14 @@ export async function loadOrderDraft(leadId: string): Promise<OrderFormPrefill |
   const plataforma = await loadStoreOrderPlatform(admin, ctx.storeId);
   if (!plataforma.ok) return { error: plataforma.error };
   const enWoo = plataforma.platform === "woocommerce";
+  // Best-effort: sin el nombre, el buscador dice «esta tienda».
+  const { data: storeRow } = await admin.from("stores").select("name").eq("id", ctx.storeId).maybeSingle();
 
   const out: OrderFormPrefill = {
     isCart: !!l.draft_order_gid,
     draftGid: l.draft_order_gid,
     platform: enWoo ? "woocommerce" : "shopify",
+    storeName: (storeRow as { name?: string | null } | null)?.name?.trim() || null,
     lineItems: [],
     customerName: l.name,
     phone: l.phone,
