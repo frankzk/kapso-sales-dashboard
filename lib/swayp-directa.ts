@@ -12,6 +12,7 @@
 // No se exporta desde el archivo de acciones a propósito: todo lo que exporta
 // un archivo `"use server"` es un endpoint que cualquiera puede llamar.
 
+import { withLastCourierChange } from "@/lib/salida-activa-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { legacySaleSendBlock } from "@/lib/legacy-sale-cancel-access";
 import { SWAYP_SUNDAY_ERROR, isSwaypDispatchDay } from "@/lib/swayp-dispatch-days";
@@ -84,7 +85,7 @@ export async function findGuidesOfOrder(
   order: { id: string; store_id: string; name: string | null },
 ): Promise<DirectGuideExisting[]> {
   const cols =
-    "id,guide_code,courier,delivery_status,created_via,custody_state,custody_transferred_at,output_number,output_code,reported_status";
+    "id,guide_code,courier,delivery_status,created_via,custody_state,custody_transferred_at,output_number,output_code,reported_status,swayp_state,returned_at,next_followup_at,out_for_delivery_at,dispatched_at";
   const { data: byOrder } = await admin.from("shipments").select(cols).eq("order_id", order.id).limit(50);
   let byName: DirectGuideExisting[] = [];
   if (order.name) {
@@ -208,7 +209,8 @@ export async function emitirGuiaSwaypDirecta(
   // principio 7 y §9 — no hay que esperar el reporte del otro courier). Una
   // «por definir» todavía en casa no cuenta: se rellena. Ver
   // `puertaDeSalidaAdicional`, la misma regla que Tanders.
-  const guides = await findGuidesOfOrder(admin, order);
+  // El último reporte de cada guía decide si sigue activa (owner, 23-11-2026, `salidaActiva`).
+  const guides = await withLastCourierChange(admin, order.id, await findGuidesOfOrder(admin, order));
   // La guía GF viva sin motorizado la anula Kapta justo antes de pedir la de Swayp (owner, 17-11-2026, #KP206994):
   // no pide motivo de salida adicional porque deja de estar viva. Solo cuando la crea una persona.
   const gfToCancel = input.actorId ? liveGfGuides(guides) : [];

@@ -1,6 +1,6 @@
 import { swaypGuiaDeVuelta } from "@/lib/swayp-desde-confirmacion";
 import {
-  gfNoEntregadaReportada, isFillableRouteOutput, MAX_OUTPUTS_PER_ORDER, puertaDeSalidaAdicional,
+  gfNoEntregadaReportada, isFillableRouteOutput, MAX_OUTPUTS_PER_ORDER, puertaDeSalidaAdicional, salidaActiva,
   type PuertaDeSalidaAdicional, type SalidaExistente,
 } from "@/lib/shipment-output";
 
@@ -54,12 +54,15 @@ export function aliclikOutputPolicy(input: {
     // al crear la guía queda «en devolución» (`gf_replace_output_with_aliclik`).
     !gfNoEntregadaReportada(output),
   );
+  // Salida activa de OTRO courier (owner, 23-11-2026): una guía GF con la visita fallida y sin reprogramar, o sin
+  // reporte pasado el día de su ruta, ya no se anula ni frena a Aliclik (`salidaActiva`). Otra de Aliclik sigue
+  // frenando como antes (abajo): no se crea una segunda guía de Aliclik sobre la que espera su reprogramación.
   // GF Courier por API → Aliclik (owner, 15-11-2026). Si una persona decide
   // mandarlo por Aliclik, Kapta anula sola la guía GF mientras GF todavía no la
   // asignó a un motorizado. Preparada sin asignar todavía se anula. Asignada
   // («en ruta» para Kapta) ya no, y entonces no se crea la de Aliclik. El
   // automático no anula guías de nadie.
-  const liveGf = live.filter((output) => isGfCourier(output.courier) && output.delivery_status !== "entregado");
+  const liveGf = live.filter((output) => isGfCourier(output.courier) && output.delivery_status !== "entregado" && salidaActiva(output));
   const assignedGf = liveGf.find((output) => output.delivery_status !== "pendiente");
   if (assignedGf) {
     return {

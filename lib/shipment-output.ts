@@ -3,6 +3,7 @@
 // que permite al equipo hablar de "la salida 2" sin confundirla con el pedido.
 
 import { etiquetaDiceRechazoEnPuerta, etiquetaDiceVuelveSinEntregar } from "@/lib/aliclik-status";
+import { tandersStatusCode } from "@/lib/tanders/status";
 
 export const MAX_OUTPUTS_PER_ORDER = 5;
 
@@ -422,6 +423,15 @@ export interface SalidaExistente {
    * (`delivery_stops`). Quien lee las salidas lo llena; sin leerlo, `undefined`.
    */
   no_entregado_reportado?: boolean;
+  /** Para «salida activa» (owner, 23-11-2026): quien no los lee no aplica esa parte de la regla (cuenta como activa). */
+  returned_at?: string | null;
+  swayp_state?: number | null;
+  /** Día agendado para volver a intentar (reprogramación de Envíos o del courier). */
+  next_followup_at?: string | null;
+  out_for_delivery_at?: string | null;
+  dispatched_at?: string | null;
+  /** Último cambio de estado que reportó su courier (Actividad, `courier_status`): `withLastCourierChange`. */
+  last_courier_change_at?: string | null;
 }
 
 /**
@@ -473,27 +483,91 @@ export function aliclikVuelveSinEntregar(o: Pick<SalidaExistente, "courier" | "r
   return etiquetaDiceVuelveSinEntregar(o.reported_status) || etiquetaDiceRechazoEnPuerta(o.reported_status);
 }
 
+// ───────── SALIDA ACTIVA: una sola definición para todos los couriers (owner, 23-11-2026, #KP207468) ─────────
+// «Salida activa se considera siempre y cuando el pedido esté en preparación, en ruta o reprogramado. Si ya reportaron
+// que el cliente no contesta, anulado, cancelado, cualquier motivo que implique que ya no lo van a entregar ese mismo
+// día de la ruta, ya no es activa. Tampoco cuando no hay reporte pasado el día de la ruta: si hoy no reportaron nada,
+// mañana deja de ser activa.» Y sus respuestas: reprogramada sigue activa; sin reporte, deja de serlo al día
+// siguiente; vale para todos (GF Courier, Aliclik, Swayp, Tanders, la mesa manual).
+const AGENCIA = new Set(["shalom", "olva"]);
+/** Intento fallido de Aliclik (misma lista que `FALLO_DEFINITIVO` de lib/aliclik-status.ts). */
+const ALICLIK_FALLO = new Set(["NOT_RESPOND", "REFUSED", "CANCEL", "ANNULLED"]);
+/** Devolución de Swayp (8, 9, 12): `SWAYP_RETURN_STATES` de lib/swayp.ts, sin importar su configuración de servidor. */
+const SWAYP_DEVOLUCION = new Set([8, 9, 12]);
+const limaDay = (iso: string | null | undefined): string | null => {
+  if (!iso) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(d);
+};
+const limaToday = (): string => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Lima" }).format(new Date());
+function canonCourier(c: string | null | undefined): string {
+  const k = (c ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+  if (k === "swayp") return "fenix";
+  if (k === "axel courier") return "axel";
+  if (k === "motorizado propio") return "propio";
+  if (k === "gf courier") return "gf_courier";
+  return k;
+}
+
+/** El courier ya reportó que no lo entregó (no contesta, rechazo, cancelado, vuelve…). */
+export function courierReportoNoEntrega(o: SalidaExistente): boolean {
+  const courier = canonCourier(o.courier);
+  const status = (o.reported_status ?? "").split(" · ")[0]!.trim().toUpperCase();
+  if (courier === "aliclik") return ALICLIK_FALLO.has(status) || aliclikVuelveSinEntregar(o);
+  if (courier === "fenix") return o.swayp_state != null && SWAYP_DEVOLUCION.has(Number(o.swayp_state));
+  if (courier === "tanders") return ["RETURNING", "RETURNED"].includes(tandersStatusCode(o.reported_status));
+  if (courier === "gf_courier") return /^(INCIDENT(?!:RESCHEDULE_REQUESTED)|REFUSED|RETURNING)\b/.test(status);
+  return gfNoEntregadaReportada(o);
+}
+
+/** Reprogramada: el courier o Envíos le pusieron otro día para volver a intentarlo. Sigue activa. */
+export function salidaReprogramada(o: SalidaExistente, today: string = limaToday()): boolean {
+  const status = (o.reported_status ?? "").split(" · ")[0]!.trim().toUpperCase();
+  if (canonCourier(o.courier) === "aliclik" && status === "RESCHEDULED") return true;
+  if (canonCourier(o.courier) === "gf_courier" && status === "INCIDENT:RESCHEDULE_REQUESTED") return true;
+  const again = limaDay(o.next_followup_at);
+  return Boolean(again && again >= today);
+}
+
+/** El día de su ruta: el último reporte de su courier o, sin él, cuando salió. */
+export function diaDeRutaDeSalida(o: SalidaExistente): string | null {
+  const days = [o.last_courier_change_at, o.out_for_delivery_at, o.dispatched_at, o.custody_transferred_at]
+    .map(limaDay).filter((d): d is string => Boolean(d));
+  return days.length ? days.sort()[days.length - 1]! : null;
+}
+
 /**
- * Las salidas que siguen vivas y que la guía nueva NO va a aprovechar.
- *
- * Una «por definir» todavía en casa no cuenta: la guía se le escribe encima.
- * Una devuelta tampoco: ya volvió.
+ * ¿Sigue ACTIVA? Activa: por preparar, pendiente o en ruta, sin devolver (reprogramada también). No activa:
+ *   · anulada, entregada, transferida o devuelta; o una «por definir» todavía en casa (la guía se le escribe encima);
+ *   · su courier ya reportó que no la entregó, salvo que esté reprogramada;
+ *   · en ruta sin reporte, pasado el día de su ruta (desde el día siguiente). No vale para agencia (Shalom, Olva).
+ * Lo que no se leyó (fechas, último reporte) no aplica: la salida cuenta como activa.
  */
-export function salidasQueEstorban<T extends SalidaExistente>(outputs: readonly T[]): T[] {
-  return outputs.filter(
-    (o) =>
-      ESTADOS_VIVOS.has(o.delivery_status) &&
-      o.custody_state !== "devuelto" &&
-      !aliclikVuelveSinEntregar(o) &&
-      !gfNoEntregadaReportada(o) &&
-      !isFillableRouteOutput({
-        courier: o.courier,
-        created_via: o.created_via ?? null,
-        delivery_status: o.delivery_status,
-        custody_state: o.custody_state ?? null,
-        custody_transferred_at: o.custody_transferred_at ?? null,
-      }),
-  );
+export function salidaActiva(o: SalidaExistente, today: string = limaToday()): boolean {
+  if (!ESTADOS_VIVOS.has(o.delivery_status) || o.custody_state === "devuelto" || o.returned_at) return false;
+  if (isFillableRouteOutput({
+    courier: o.courier, created_via: o.created_via ?? null, delivery_status: o.delivery_status,
+    custody_state: o.custody_state ?? null, custody_transferred_at: o.custody_transferred_at ?? null,
+  })) return false;
+  const reprogramada = salidaReprogramada(o, today);
+  if (courierReportoNoEntrega(o) && !reprogramada) return false;
+  if (reprogramada) return true;
+  // Los couriers con reporte por API vuelven a recoger la caja otro día (#KP207468): sin leer su último reporte
+  // (`withLastCourierChange`), la fecha de salida sola no la da por vencida.
+  const porApi = ["aliclik", "fenix", "tanders", "gf_courier"].includes(canonCourier(o.courier));
+  if (o.delivery_status === "en_ruta" && !AGENCIA.has(canonCourier(o.courier)) && (!porApi || o.last_courier_change_at !== undefined)) {
+    const day = diaDeRutaDeSalida(o);
+    if (day && day < today) return false;
+  }
+  return true;
+}
+
+/**
+ * Las salidas que siguen activas y que la guía nueva NO va a aprovechar (`salidaActiva`).
+ */
+export function salidasQueEstorban<T extends SalidaExistente>(outputs: readonly T[], today: string = limaToday()): T[] {
+  return outputs.filter((o) => salidaActiva(o, today));
 }
 
 function describirSalida(o: SalidaExistente): string {

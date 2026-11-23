@@ -564,6 +564,17 @@ describe("GF Courier por API en la mesa de ruta (MOM §29.17, owner 15-11-2026)"
     expect(plan.warnings.join(" ")).toContain("solo GF Courier admite otra");
   });
 
+  it("con una salida activa de otro courier la tarjeta de GF sale bloqueada y la nombra (owner, 23-11-2026, #KP207468)", () => {
+    const outputs = [gfGuide("anulado"), { id: "a1", courier: "aliclik", deliveryStatus: "en_ruta", guideCode: "AUR5XFICTICIO" }];
+    const gf = lima({ gfCourier: gfOn, outputs }).candidates.find((route) => route.key === "gf_courier");
+    expect(gf).toMatchObject({ availability: "blocked", recommended: false });
+    expect(gf?.reason).toBe("Aliclik ya tiene una salida activa en este pedido (guía AUR5XFICTICIO): no se crea la guía de GF Courier. Anúlala o ciérrala primero.");
+    expect(gf?.blockingOutput).toBeUndefined();
+    // Cerrada (entregada o devuelta), GF vuelve a estar disponible.
+    const closed = lima({ gfCourier: gfOn, outputs: [{ id: "a1", courier: "aliclik", deliveryStatus: "en_ruta", custodyState: "devuelto" }] });
+    expect(closed.candidates.find((route) => route.key === "gf_courier")?.availability).toBe("available");
+  });
+
   it("Grupo GF reaparece solo para nombrar una salida propia que sigue viva", () => {
     const plan = lima({ gfCourier: gfOn, outputs: [{ id: "p1", courier: "propio", deliveryStatus: "en_ruta", guideCode: "KP1-S01" }] });
     const propio = plan.candidates.find((route) => route.key === "propio");

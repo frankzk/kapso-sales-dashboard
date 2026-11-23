@@ -49,10 +49,16 @@ describe("la puerta de salida adicional fuera de Lima", () => {
   });
 
   it("una Aliclik que todavía puede entregar sigue bloqueando", () => {
-    for (const label of ["PENDING_DELIVERY · TO_RETURN · CONFIRMED", "PENDING_DELIVERY · PICKED · CONFIRMED", "NOT_RESPOND · PICKED · CONFIRMED"]) {
+    for (const label of ["PENDING_DELIVERY · TO_RETURN · CONFIRMED", "PENDING_DELIVERY · PICKED · CONFIRMED"]) {
       const r = puertaDeSalidaAdicional({ courier: "fenix", operation: "provincia_cod", outputs: [aliclik(label)], motivo: null });
       expect(r.ok, label).toBe(false);
     }
+  });
+
+  it("con el «no contesta» ya reportado deja de bloquear, salvo reprogramada (owner, 23-11-2026)", () => {
+    expect(puertaDeSalidaAdicional({ courier: "fenix", operation: "provincia_cod", outputs: [aliclik("NOT_RESPOND · PICKED · CONFIRMED")], motivo: null }).ok).toBe(true);
+    const reprogramada = { ...aliclik("NOT_RESPOND · PICKED · CONFIRMED"), next_followup_at: "2999-01-01" };
+    expect(puertaDeSalidaAdicional({ courier: "fenix", operation: "provincia_cod", outputs: [reprogramada], motivo: null }).ok).toBe(false);
   });
 
   it("la Swayp directa lee la etiqueta: sin ella la regla no vería nada", () => {
