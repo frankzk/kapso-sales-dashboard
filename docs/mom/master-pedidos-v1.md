@@ -7594,6 +7594,20 @@ cifras de Canal, Distrito, Courier y Motorizado sugerido cuentan la lista abiert
 paso y su parte, o los trabados), con los demás filtros puestos: en Nuevos (125)
 cuentan esos 125, no los 1,376 del panel.
 
+**«Ordenar» la lista (owner, 23-11-2026: «dame la opción para ordenar por
+fecha de creación, fecha de última ruta y lo que creas conveniente.
+Ascendente y descendente»).** Por defecto, el orden del flujo (`limaBoardRows`:
+primero lo que pide al equipo, después lo programado por día y lo que lleva el
+courier). La píldora «Ordenar» reordena la MISMA lista (el paso, su parte, los
+filtros o los trabados) por fecha de creación, fecha de la última ruta (la
+última salida a reparto o, si no, el despacho), fecha agendada (el día de la
+Agenda), tiempo en la etapa (desde cuándo está en su macroetapa), última
+llamada o intentos de entrega, ascendente o descendente
+(`lib/repro-lima-sort.ts`). Lo que no tiene ese dato va al final en las dos
+direcciones; los empates conservan el orden del flujo. No cambia qué pedidos
+hay ni las cifras; viaja en la URL (`orden=`, `dir=`), «Quitar filtros» no lo
+toca y «Guardar y pasar al siguiente» sigue el orden elegido.
+
 **El motorizado asignado (17-11-2026).** Cuando GF Courier ya asignó la guía
 viva, su aviso deja en el historial «GF Courier: asignado a Alexis para la ruta
 del 17/11.» (`lib/gf-webhook-note.ts`). La fila lo dice: **«Asignado: Alexis ·

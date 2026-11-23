@@ -67,6 +67,7 @@ import {
 } from "@/lib/repro-lima-blocks";
 import { DISPATCH_COURIER_LABEL, DISPATCH_DATE_MAX_DAYS, isDispatchCourier, type DispatchCourier } from "@/lib/dispatch-date";
 import { RESCHEDULE_MAX_DAYS } from "@/lib/gf-dispatch-program";
+import { LIMA_SORT_OPTIONS, limaSortLabel, limaSortMissingNote, readLimaSort, sortLimaRows, writeLimaSort, type LimaSort } from "@/lib/repro-lima-sort";
 import { createdPresets, emptyRowFilters, groupApprovalFailures, pendingKey, pendingMatches, readRowFilters, retryApprovalTargets, rowFilterOptions, rowFiltersParam, rowFiltersActive, rowFiltersMatch, togglePendingKeys, writeRowFilters, type LimaPendingOrder, type LimaRowFilters } from "@/lib/repro-lima-pending";
 
 const FOCUS_REFRESH_MS = 20_000;
@@ -128,6 +129,12 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const storePill = useRef<HTMLButtonElement>(null);
   const [stageSheet, setStageSheet] = useState(false);
   const stagePill = useRef<HTMLButtonElement>(null);
+  // «Ordenar» (owner, 23-11-2026): por creación, última ruta… ascendente o descendente; viaja en la URL.
+  const [sortSheet, setSortSheet] = useState(false);
+  const sortPill = useRef<HTMLButtonElement>(null);
+  const sortKey = searchParams.get("orden") ?? "";
+  const sortDir = searchParams.get("dir") ?? "";
+  const sort = useMemo(() => readLimaSort(new URLSearchParams({ orden: sortKey, dir: sortDir })), [sortKey, sortDir]);
   const openDrawer = useOpenOrderDrawer();
   const gfStores = useMemo(() => new Set(quickGuide?.gfStores ?? []), [quickGuide?.gfStores]);
   const gfApi = useMemo(() => new Set(gfApiStores), [gfApiStores]);
@@ -204,7 +211,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     () => scoped.filter((row) => classes.get(row.orderId)?.step === "llamar_despues" && callDue(caseById.get(row.orderId), now)).length,
     [scoped, classes, caseById, now],
   );
-  const inQueue = useMemo(() => {
+  const listInFlow = useMemo(() => {
     if (stuck) {
       // Los trabados, en su orden: por motivo y lo que más lleva primero; con un
       // paso elegido, solo los de ese paso.
@@ -216,6 +223,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const ordered = limaBoardRows(scoped, classes, key, caseOrder);
     return detail ? ordered.filter((row) => { const cls = classes.get(row.orderId); return cls && limaDetailMatches(row, cls, detail); }) : ordered;
   }, [stuck, stuckItems, scoped, classes, key, caseOrder, detail]);
+  const inQueue = useMemo(() => sortLimaRows(listInFlow, classes, sort), [listInFlow, classes, sort]);
   const storeName = data.stores.find((s) => s.id === store)?.name ?? null;
 
   // La selección es de una lista: al cambiar de tarjeta se vacía.
@@ -231,6 +239,12 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
     const params = new URLSearchParams(searchParams.toString());
     params.delete("ocultar");
     for (const k of [...next].sort()) params.append("ocultar", k);
+    replaceParams(params);
+  }
+
+  function changeSort(next: LimaSort) {
+    const params = new URLSearchParams(searchParams.toString());
+    writeLimaSort(params, next);
     replaceParams(params);
   }
 
@@ -523,9 +537,13 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
   const listTitle = stuck
     ? stuck !== "todos" ? `Trabados · ${limaStuckRule(stuck).label}` : stepCard ? `Trabados · ${stepCard.label}` : "Trabados"
     : detailLabel ? `${card?.label} · ${detailLabel}` : card?.label ?? "Todos los pendientes";
-  const listHelp = stuck
+  const flowHelp = stuck
     ? stuck === "todos" ? "Lo del equipo que se quedó quieto más de lo que debería, lo que más lleva primero." : `${limaStuckRule(stuck).hint} Siguiente paso: ${limaStuckRule(stuck).action}`
     : card?.hint ?? "Primero lo que pide al equipo; después lo programado por día y lo que lleva el courier.";
+  // Con otro orden, la ayuda lo dice (la de «Todos» habla del orden del flujo).
+  const sortOption = LIMA_SORT_OPTIONS.find((o) => o.key === sort.key)!;
+  const sortHelp = sort.key === "flujo" ? null : `Ordenado por ${sortOption.label.toLocaleLowerCase("es-PE")}: ${sortOption[sort.dir].toLocaleLowerCase("es-PE")}.`;
+  const listHelp = sortHelp ? (!stuck && !card ? sortHelp : `${flowHelp} ${sortHelp}`) : flowHelp;
   const emptyText = query.trim()
     ? `Ningún pedido coincide con «${query.trim()}».`
     : stuck ? "No hay pedidos trabados por este motivo con estos filtros."
@@ -673,6 +691,15 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           {activeRowFilters > 0 && (
             <OpsButton variant="ghost" size="sm" onClick={() => patchRowFilters(emptyRowFilters())} className="pointer-coarse:h-11">Quitar filtros</OpsButton>
           )}
+          {/* No es un filtro: reordena la misma lista y «Quitar filtros» no lo toca (owner, 23-11-2026). */}
+          <FilterPill
+            ref={sortPill}
+            label="Ordenar"
+            value={limaSortLabel(sort)}
+            expanded={sortSheet}
+            onClick={() => setSortSheet((v) => !v)}
+            onClear={() => changeSort({ key: "flujo", dir: "asc" })}
+          />
           {inRetries && (
             <>
               <OpsButton size="sm" variant="primary" disabled={!targets.rows.length || Boolean(bulk)} onClick={() => void approveAll()} className="pointer-coarse:h-11">
@@ -700,6 +727,38 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
             </div>
           </Sheet>
         )}
+        {sortSheet && (
+          <Sheet look="ops" title="Ordenar la lista" onClose={() => setSortSheet(false)} anchored anchorRef={sortPill}>
+            <div className="w-72 max-w-full space-y-3">
+              <div role="group" aria-label="Ordenar por" className="-mx-1 grid gap-0.5">
+                {LIMA_SORT_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    aria-pressed={option.key === sort.key}
+                    onClick={() => changeSort({ key: option.key, dir: sort.dir })}
+                    className={cn("flex h-9 items-center justify-between gap-2 rounded-md px-2 text-left text-sm hover:bg-wash pointer-coarse:h-11", option.key === sort.key ? "font-semibold text-ink-900" : "text-ink-700")}
+                  >
+                    <span className="truncate">{option.label}</span>
+                    {option.key === sort.key && <IconCheck className="size-4 shrink-0 text-brand-600" />}
+                  </button>
+                ))}
+              </div>
+              {sort.key !== "flujo" && (
+                <div className="space-y-2 border-t border-line pt-3">
+                  <div role="group" aria-label="Dirección" className="flex gap-2">
+                    <ChoiceChip label="Ascendente" active={sort.dir === "asc"} onClick={() => changeSort({ key: sort.key, dir: "asc" })} />
+                    <ChoiceChip label="Descendente" active={sort.dir === "desc"} onClick={() => changeSort({ key: sort.key, dir: "desc" })} />
+                  </div>
+                  <p className="text-xs leading-5 text-ink-500">
+                    {LIMA_SORT_OPTIONS.find((o) => o.key === sort.key)![sort.dir]}.{limaSortMissingNote(sort.key) ? ` ${limaSortMissingNote(sort.key)}` : ""}
+                  </p>
+                </div>
+              )}
+              {sort.key === "flujo" && <p className="border-t border-line pt-3 text-xs leading-5 text-ink-500">Primero lo que pide al equipo; después lo programado por día y lo que lleva el courier.</p>}
+            </div>
+          </Sheet>
+        )}
         {storeSheet && (
           <Sheet look="ops" title="Tienda" onClose={() => setStoreSheet(false)} anchored anchorRef={storePill}>
             <div role="group" className="-mx-1 grid max-h-72 gap-0.5 overflow-auto">
@@ -713,7 +772,7 @@ export function ReproLimaBoard({ data, pending, retriesOnly = false, canSchedule
           </Sheet>
         )}
         <LimaPendingList
-          key={`${key}:${stuck ?? ""}:${store}:${query}:${hiddenParam}:${rowFiltersKey}`}
+          key={`${key}:${stuck ?? ""}:${store}:${query}:${hiddenParam}:${rowFiltersKey}:${sort.key}:${sort.dir}`}
           rows={inQueue}
           reproRows={data.rows}
           today={today}

@@ -85,6 +85,15 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 23-11-2026 · Repro Lima: «Ordenar» la lista (sin migración, MOM §9.5)
+
+Sin migración ni variables. La barra de la lista suma «Ordenar»: el orden del flujo (por defecto), fecha de creación,
+fecha de la última ruta, fecha agendada, tiempo en la etapa, última llamada o intentos, ascendente o descendente. Lo que
+no tiene el dato va al final. Viaja en la URL (`orden=`, `dir=`).
+
+Verificar: en Repro Lima, «Ordenar» → «Fecha de la última ruta» → «Descendente»: arriba lo que salió más recientemente y
+al final los que nunca salieron.
+
 ### 23-11-2026 · Kapso: el aviso de un envío rechazado dice el motivo (sin migración, MOM §25)
 
 Sin migración ni variables. Responder por Kapso desde la ficha decía «Kapso no lo mandó: HTTP 422» sin el motivo
