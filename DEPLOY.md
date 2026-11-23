@@ -85,6 +85,14 @@ Verificar:
 5. `GET /api/cron/gf-auto-guide?dry=1` con `Authorization: Bearer $CRON_SECRET`: un pedido por generar rótulo con
    acuerdo de Repro Lima sale con `outcome: "acuerdo_repro_lima"` y no se crea su guía.
 
+### 23-11-2026 · Kapso: el aviso de un envío rechazado dice el motivo (sin migración, MOM §25)
+
+Sin migración ni variables. Responder por Kapso desde la ficha decía «Kapso no lo mandó: HTTP 422» sin el motivo
+(#KP208482): la respuesta de Kapso venía en una forma que no se leía. Ahora el aviso dice el motivo, si se intentó desde
+el número principal de la tienda, y la respuesta queda en los logs de Vercel como «[kapso] envío rechazado HTTP …».
+
+Verificar: volver a mandar el mensaje en #KP208482; si falla, el aviso dice por qué y el log lo trae.
+
 ### 23-11-2026 · Repro Lima: la lista con menos texto (sin migración, MOM §9.5)
 
 Sin migración ni variables. En la lista de Repro Lima cada dato va en un solo lugar: «Próximo paso» lleva una raya si

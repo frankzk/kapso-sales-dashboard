@@ -482,10 +482,8 @@ export async function sendOrderKapsoReply(
 
   // Desde el número de la tienda con que escribió la clienta.
   const conversations = await listConversationsByPhone(found.opts, found.phone);
-  const pnId =
-    conversations.find((c) => String(c.id) === found.conversationId)?.phone_number_id?.trim() ||
-    found.creds.whatsapp_phone_number_id ||
-    null;
+  const conversationPn = conversations.find((c) => String(c.id) === found.conversationId)?.phone_number_id?.trim() || null;
+  const pnId = conversationPn || found.creds.whatsapp_phone_number_id || null;
   if (!pnId) return { error: "La tienda no tiene un número de WhatsApp configurado en Kapso." };
 
   const attachment = opts.attachment ? await resolveChatbyAttachment(ctx, orderId, opts.attachment) : null;
@@ -504,13 +502,22 @@ export async function sendOrderKapsoReply(
         })
     : await sendWhatsappText(found.opts, { phoneNumberId: pnId, to: found.phone, body: reply.text });
   if (!sent.ok) {
-    const closed = sent.code === 131047 || /24\s*h|re-?engag|outside|window/i.test(sent.error);
+    const closed = sent.code === 131047 || /24\s*h|re-?engag|outside|window|ventana/i.test(sent.error);
+    // Sin el número de esta conversación se intenta con el principal de la
+    // tienda; si la clienta escribió a otro, WhatsApp no deja (owner,
+    // 23-11-2026, #KP208482: «Kapso no lo mandó: HTTP 422»). Se dice.
+    const fromMain = conversationPn
+      ? ""
+      : " Se intentó desde el número principal de la tienda porque Kapso no devolvió el número de esta conversación.";
+    if (!conversationPn) {
+      console.error("[kapso] respuesta desde el número principal", JSON.stringify({ orderId, conversationId: found.conversationId, source: found.source, pnId, found: conversations.length }));
+    }
     return {
       error: closed
-        ? "Se cerró la ventana de 24 h: la clienta tiene que volver a escribir para poder responderle."
+        ? `Se cerró la ventana de 24 h: la clienta tiene que volver a escribir para poder responderle.${fromMain}`
         : sent.ambiguous
           ? "No pudimos confirmar si salió. No lo reenvíes todavía: revisa con «Actualizar»."
-          : `Kapso no lo mandó: ${sent.error}`,
+          : `Kapso no lo mandó: ${sent.error.replace(/[.\s]+$/, "")}.${fromMain}`,
     };
   }
 

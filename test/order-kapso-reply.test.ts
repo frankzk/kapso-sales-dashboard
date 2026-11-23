@@ -37,7 +37,7 @@ describe("responder por Kapso desde la ficha", () => {
     const body = fn.slice(0, fn.indexOf("\n}\n"));
     expect(body).toContain('perms.can("master.edit")');
     expect(body).toContain("chatbyReplyWindow(kapsoThreadMessages(transcript)).open");
-    expect(body).toContain("String(c.id) === found.conversationId)?.phone_number_id");
+    expect(body).toContain("String(c.id) === found.conversationId)?.phone_number_id?.trim() || null;");
     expect(body).toContain("resolveChatbyAttachment(ctx, orderId, opts.attachment)");
     expect(body).toContain("sendWhatsappDocument");
     expect(body).toContain("sendWhatsappImage");
