@@ -7163,8 +7163,22 @@ no cambia `MOM_RESOLUTION_VERSION` ni necesita migración:
     abren con «Atender». «Kapta sugiere…» también propone, en No entregados,
     los por acordar para el próximo día de reparto: el equipo elige el courier
     y confirma.
-  - «Fecha agendada» dice el courier bajo el día: «Programar envío · Aliclik»,
-    «Acordado con la clienta · GF Courier» (`agendaOriginLine`).
+  - «Fecha agendada» dice el courier bajo el día: «Aliclik · programado»,
+    «GF Courier · acordado», «Grupo GF · programa», «Aliclik · recojo»
+    (`agendaCourierLine`; el origen largo, «Acordado con la clienta», queda
+    en el título y es lo que dice si no hay courier). Owner, 23-11-2026:
+    «reducir la cantidad de texto».
+  - **Cada dato en un solo lugar** (owner, 23-11-2026). En la lista:
+    «Próximo paso» dice algo solo si hay algo que hacer; si el pedido solo
+    espera su día (guía creada, en ruta, acordado o programado sin tarea),
+    lleva una raya y la frase queda para el lector de pantalla y el título
+    (`limaNextStepIsInfo`). El estado del acuerdo que ya dice la fecha
+    («Programado», «Salida creada») no repite su chip, la caja en oficina de
+    GF Courier dice «Caja en oficina» (`compactBoxLabel`) y la línea del
+    fallo no repite lo que ya dicen «Qué pasa» y la fecha. El historial dice
+    «0 intentos», «2 intentos · salió con Aliclik, GF Courier» o «1 intento ·
+    salida sin confirmar», con «· reconstruido de rutas» si viene de las
+    rutas reportadas (`limaHistoryShort`); la frase larga va en el título. La ficha del pedido sigue diciéndolo todo.
 - **«Guía Aliclik y Swayp del día programado»: Kapta la crea** (decisión del
   owner: «Kapta la crea ese día»; 0349, `lib/lima-courier-auto.ts` y
   `lib/lima-courier-auto-server.ts`, Automatizaciones → Logística Lima, §40).

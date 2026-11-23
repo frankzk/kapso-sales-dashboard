@@ -1306,6 +1306,44 @@ export function limaNextStep(row: LimaPendingOrder, c: PendingCase | undefined, 
   return `Sin día: Kapta sugiere el ${programDayLabel(limaSuggestedDay(today))} para que salga.`;
 }
 
+/**
+ * ¿El próximo paso solo informa? (owner, 23-11-2026: «menos texto»). Lo que
+ * sale solo —lo recoge el courier, lo tiene en ruta, sale el día agendado, la
+ * guía la crea Kapta— no pide nada al equipo: la fila muestra un guion y el
+ * texto queda al pasar el mouse. Mismo orden que `limaNextStep`. Pura.
+ */
+export function limaNextStepIsInfo(row: LimaPendingOrder, cls: LimaRowClass, today: string): boolean {
+  if (cls.step !== "por_cerrar" && limaReviewReasons(row, cls).includes("guides")) return false;
+  if (cls.needsToday || (cls.step === "por_sacar" && cls.departureUnknown)) return false;
+  if (cls.task !== null || cls.missedPickup || cls.courier === "retornando") return false;
+  if (cls.courier === "en_ruta" || cls.courier === "guia_creada") return true;
+  if (!cls.guide && cls.agenda === "hoy") return false;
+  if (!cls.guide && cls.agenda === "manana") return cls.autoGuideBy === "fenix" || cls.autoGuideBy === "aliclik" || cls.autoGuide;
+  if (cls.agendaDay && cls.agendaDay < today) return false;
+  return Boolean(cls.agendaDay);
+}
+
+/** Lo que dice «Fecha agendada» bajo el día: el courier primero y de dónde sale, en corto. */
+export const AGENDA_ORIGIN_SHORT: Record<LimaAgendaOrigin, string> = {
+  acuerdo: "acordado",
+  programa: "programa",
+  recojo: "recojo",
+  envio: "programado",
+};
+
+/**
+ * La línea bajo el día en «Fecha agendada» (owner, 23-11-2026: «mié 25/11 · GF
+ * Courier»): el courier con el que sale y, chico, de dónde sale el día. Sin
+ * courier conocido, el origen entero (`agendaOriginLine`). Pura.
+ */
+export function agendaCourierLine(origin: LimaAgendaOrigin, row: Pick<LimaPendingOrder, "scheduledCourier" | "courierPickup">, agreementCourierName?: string | null): string {
+  const courier = origin === "acuerdo" ? agreementCourierName ?? null
+    : origin === "envio" ? programCourierName(row.scheduledCourier)
+    : origin === "recojo" ? (row.courierPickup ? courierDisplayName(row.courierPickup.courier) : null)
+    : "Grupo GF";
+  return courier ? `${courier} · ${AGENDA_ORIGIN_SHORT[origin]}` : AGENDA_ORIGIN_LABEL[origin];
+}
+
 // ---------------------------------------------------------------------------
 // «Agendar» (owner, 15-11-2026): con qué camino se pone el día
 // ---------------------------------------------------------------------------

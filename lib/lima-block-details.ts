@@ -111,6 +111,24 @@ export function limaBlockDetails(rows: readonly LimaPendingOrder[], classes: Rea
   ];
 }
 
+/**
+ * El historial en la fila de la lista, corto (owner, 23-11-2026: «menos texto»;
+ * «0 intentos registrados: este sí me interesa»). Los intentos siempre; con
+ * quién salió si salió; «Nunca salió a reparto» no, porque eso ya lo dice el
+ * paso «Nuevos» o «Sacar a reparto». El texto entero va en `limaHistoryText`.
+ */
+export function limaHistoryShort(row: LimaPendingOrder): string {
+  const state = limaDepartureState(row);
+  const history = [...new Set(row.dispatchedWith ?? [])].sort(compareDispatchCodes).map(dispatchedWithLabel);
+  const attempts = `${row.attempts} ${row.attempts === 1 ? "intento" : "intentos"}`;
+  // El historial reconstruido solo se ve aquí en la fila (DESIGN, 19-11-2026): no se pierde al acortar.
+  const routes = row.historyFromRoutes ? " · reconstruido de rutas" : "";
+  if (history.length) return `${attempts} · salió con ${history.join(", ")}${routes}`;
+  if (state === "left") return `${attempts} · courier de salida sin registrar${routes}`;
+  if (state !== "never") return `${attempts} · salida sin confirmar${routes}`;
+  return attempts + routes;
+}
+
 /** Resumen por pedido, independiente del courier asignado para la próxima ruta. */
 export function limaHistoryText(row: LimaPendingOrder): string {
   const state = limaDepartureState(row);
